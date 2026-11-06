@@ -82,7 +82,7 @@ serviceCall domain service cpsr (Arguments [handle,argument,_,_])
     | state .&. 2 /= 0 = storeByte (task+12) (state .&. complement 4) >> finish record 0
     | otherwise = insertReady record task >>= \changed -> dispatch record changed (-23)
   dispatch record changed reason = do
-    (local,bank) <- if changed == 0 then pure (0,[]) else notifyService domain <$> load record
+    (local,bank) <- if changed == 0 then pure (0,[]) else notifyService domain . NotificationTarget <$> load record
     unlockService record
     pure (if local /= 0 then ServiceDispatch Save (fromIntegral (reason :: Int)) else ServiceReturn,
       Just (if local /= 0 then fromIntegral reason else 0),if local /= 0 then irqMasked cpsr else irqEnabled cpsr,bank)
@@ -131,7 +131,7 @@ serviceCall domain service cpsr (Arguments [handle,argument,_,_])
       pending <- load (task+16)
       store (task+16) (pending .|. argument)
       owner <- load record
-      let (local,bank) = notifyService domain owner
+      let (local,bank) = notifyService domain (NotificationTarget owner)
       flags <- byte (task+14)
       if local /= 0 && task == running && flags .&. 4 /= 0
         then if handler then do

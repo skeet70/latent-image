@@ -21,10 +21,20 @@ runService :: VM (ServiceCompletion,Maybe Word32,Word32,[(Address,Word32)]) -> M
 runService action memory = do
   ((completion,result,cpsr,bank),after,writes) <- runVM action memory
   pure (ServiceExpected (Expected (maybe 0 id result) after writes bank) completion cpsr result)
-notifyService :: Domain -> Word32 -> (Word32,[(Address,Word32)])
-notifyService domain owner
-  | owner == 0 || owner == (if domain == DomainA then 1 else 2) = (1,[])
+newtype NotificationTarget = NotificationTarget Word32 deriving (Eq,Show)
+data NotifyPredicate = PerDomainPredicate | PrimaryPredicate
+
+notifyService :: Domain -> NotificationTarget -> (Word32,[(Address,Word32)])
+notifyService = notifyWithPredicate PerDomainPredicate
+
+notifyWithPredicate :: NotifyPredicate -> Domain -> NotificationTarget -> (Word32,[(Address,Word32)])
+notifyWithPredicate predicate domain (NotificationTarget owner)
+  | local = (1,[])
   | otherwise = (0,[(Address (if owner `shiftR` 1 == 0 then 0xfffb30cc else 0xfffb40cc),0x1000000)])
+ where
+  local = case predicate of
+    PerDomainPredicate -> owner == 0 || owner == (if domain == DomainA then 1 else 2)
+    PrimaryPredicate -> owner <= 1
 
 serviceContextValid :: DomainState -> Bool -> Word32 -> VM Bool
 serviceContextValid words' handler cpsr = do

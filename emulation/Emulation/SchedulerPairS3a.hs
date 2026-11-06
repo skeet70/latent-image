@@ -92,7 +92,7 @@ serviceCall domain service cpsr (Arguments [r0,r1,_,_]) memory
       record <- selectRecord r0
       withLock record $ do
         (changed,_) <- helper Rotate record (r1-1) 0
-        (local,bank) <- if changed == 0 then pure (0,[]) else load record >>= pure . notifyService domain
+        (local,bank) <- if changed == 0 then pure (0,[]) else load record >>= pure . notifyService domain . NotificationTarget
         when (interrupt && changed /= 0) $ do
           reschedule <- if local /= 0 then pure 1 else load (rescheduleCell words')
           store (rescheduleCell words') reschedule

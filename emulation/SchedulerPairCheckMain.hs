@@ -30,7 +30,7 @@ main = do
       bytes <- B.readFile planPath
       plan <- either H.failH pure (J.eitherDecodeStrict bytes)
       observation <- B.readFile observationPath >>= either H.failH pure . J.eitherDecodeStrict
-      let expected = case planRole plan of Restored -> [Readback]; SilentNotify -> [BankWrites]; WrongPredicate -> [ReturnValue]; WakeNoInsert -> [MemoryResult,WrittenWords,ReturnValue]; _ -> []
+      let expected = controlRefusals (planRole plan)
       unless (not (null expected)) (H.failH "not a control role")
       case qualify bytes plan observation of
         Left refusal | refusal `elem` expected -> do

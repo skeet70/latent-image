@@ -11,6 +11,7 @@ import Emulation.SchedulerPairCheck
 import Emulation.SchedulerPairModel
 import Emulation.SchedulerPairPlan
 import qualified Emulation.SchedulerPairS2 as D
+import qualified Emulation.SchedulerPairService as V
 import Emulation.Sha256 (sha256,sha256Hex)
 import Replacement.RtosOwnFirst.Regions (Domain (..))
 import Replacement.RtosScheduler.Regions (Helper (..))
@@ -23,8 +24,10 @@ plan = Plan Owned "dat" [Entry DomainA (HelperSemantic Notify) (Address 0x44018)
 planBytes :: B.ByteString
 planBytes = "synthetic-plan"
 call :: Call
-call = Call DomainA (Address 0x44018) (HelperSemantic Notify) 0 0xd3 (Arguments [2,0,0,0]) M.empty M.empty 0 0xd3 [] [Written (Address 0xfffb40cc) 4 0x1000000] 1 30 (Just (CallTrace registers registers Returned [] Nothing))
+call = Call DomainA (Address 0x44018) (HelperSemantic Notify) 0 0xd3 (Arguments [2,0,0,0]) M.empty M.empty 0 0xd3 [] [Written (Address 0xfffb40cc) 4 0x1000000] 1 30 (Just (CallTrace registers registers Returned [] Nothing)) 0x9000 0 Nothing [] [ownOrigin]
  where registers = D.Registers (replicate 16 0) 0xd3 0 0 0
+ownOrigin :: WriteOrigin
+ownOrigin = WriteOrigin 0 (Address 0x44018) (Address 0x8000) 0xd3 (Address 0x9000) 0 1
 readback :: Q.Readback
 readback = Q.Readback 100 [range d lo hi digest | Guard d (Address lo) (Address hi) digest <- planGuards plan]
  where range d lo hi digest = Q.RangeReadback d lo hi digest [Q.ViewHash core a (Right digest) | core <- [0,1],a <- [lo,lo+0x40000000]]
@@ -33,7 +36,7 @@ observation = Observation Owned [sha256Hex (sha256 planBytes),Q.runDocumentSha25
   [Q.Arming DomainA (Q.Readback 10 (take 1 (Q.readbackRanges readback))),Q.Arming DomainB (Q.Readback 20 (drop 1 (Q.readbackRanges readback)))]
   [Q.Segment [DomainA] 10 20 0 Nothing [(0x44018,0x44044,writes)],Q.Segment [DomainA,DomainB] 20 100 0 Nothing [(0x44018,0x44044,writes),(0xd3fd4,0xd4004,writes)]]
   (Just readback) [call] [] [Q.Milestone phase Nothing menu (Just menu) True 100 | phase <- ["cold-start","shooting-menu","modal75-film","modal75-returned","modal75-film-repeated","modal75-returned-repeated","modal75-handback"]]
-  Nothing Nothing (BankCounts 0 1) [PcWatch 1 (Address 0xd0b00) 1]
+  Nothing Nothing (BankCounts 0 1) [PcWatch 1 (Address 0xd0b00) 1] []
  where writes = ["cpu-write","host-write","model-bus-write"]; menu = Q.MenuTriple 1 5 2
 refuses :: String -> Refusal -> Observation -> IO ()
 refuses label wanted obs = assert label (case qualify planBytes plan obs of Left actual -> actual==wanted; Right _ -> False)
@@ -56,20 +59,51 @@ main = do
   refuses "outside plan" CallOutsidePlan observation {obsCalls=[call {callSemantic=HelperSemantic Insert}]}
   refuses "return value" ReturnValue observation {obsCalls=[call {callR0=1}]}
   refuses "CPSR" ProcessorState observation {obsCalls=[call {callReturnCpsr=0x53}]}
+  refuses "direct helper retains A equality" ProcessorState observation {obsCalls=[call {callReturnCpsr=0x1d3}]}
+  let stackedCall=call {callTaskStack=Just (TaskStack (Address 0x7800) (Address 0x8000))}
+  assert "calling task stack top is admitted" (checkCall stackedCall==Right ())
+  assert "foreign stack cannot supply invocation bank effects" (checkCall stackedCall
+    {callBankOrigins=[ownOrigin {writerSp=Address 0x7000}]}==Left MissingTrace)
+  assert "foreign processor mode cannot supply invocation bank effects" (checkCall call
+    {callBankOrigins=[ownOrigin {writerCpsr=0x17}]}==Left MissingTrace)
+  let restoredRegisters pc sp cpsr = D.Registers (replicate 13 0++[sp,0,pc]) cpsr 0 0 0
+      saved = Boundary SaveBoundary (Address 0x43640) 31 0 (restoredRegisters 0x43640 0x8000 0xd3) M.empty [] [] Nothing 0x9000 [] []
+      resumed = Boundary ResumeBoundary (Address 0x43668) 32 0 (restoredRegisters 0x43668 0x7fdc 0x1d3) M.empty [] [] Nothing 0x9000 [] []
+      restoredCall history = call {callReturnCpsr=0x1d3,callTrace=Just (CallTrace (restoredRegisters 0 0x8100 0xd3)
+        (restoredRegisters 0 0x8100 0x1d3) Returned history Nothing)}
+  assert "observed task restore permits only asynchronous A change" (checkCall (restoredCall [saved,resumed])==Right ())
+  forM_ [0x80,0x40,0x20,1] $ \bit -> assert "I F T and mode remain checked after restore"
+    (checkCall (restoredCall [saved,resumed]) {callReturnCpsr=0x1d3+bit}==Left ProcessorState)
+  forM_ [[saved],[resumed],[saved,resumed {boundaryTask=0x9010}],[saved,resumed {boundaryCore=1}],
+      [saved,resumed {boundaryRegisters=restoredRegisters 0x43668 0x7fd8 0x1d3}],
+      [saved,resumed {boundaryRegisters=restoredRegisters 0x43668 0x7fdc 0x193}],
+      [saved,resumed {boundaryRegisters=restoredRegisters 0x4366c 0x7fdc 0x1d3}]] $ \history ->
+    assert "unproven restore retains A equality" (checkCall (restoredCall history)==Left ProcessorState)
+  let foreignWrite=Written (Address 0x2000) 4 1
+      foreignOrigin=ownOrigin {writerTask=Address 0xa000}
+      interleaved=(restoredCall [saved,resumed]) {callBefore=M.singleton (Address 0x2000) 0,
+        callAfter=M.singleton (Address 0x2000) 1,callWrites=[foreignWrite],callWriteOrigins=[foreignOrigin]}
+  assert "foreign writes remain replayed concurrency inputs after a validated restore" (checkCall interleaved==Right ())
+  assert "foreign effects require a same-core restore witness" (checkCall interleaved {callTrace=callTrace call,callReturnCpsr=0xd3}==Left MissingTrace)
+  assert "foreign writes must reconcile with final state" (checkCall interleaved {callAfter=callBefore interleaved}==Left MemoryResult)
+  assert "same-context extra writes still refuse" (checkCall interleaved {callWriteOrigins=[ownOrigin]}==Left WrittenWords)
+  let irqOrigin=ownOrigin {writerContext=1,writerSp=Address 0x70001f80,writerPc=Address 0x49610}
+  assert "IRQ writes retain their raw envelope after a witnessed restore" (checkCall interleaved {callWriteOrigins=[irqOrigin]}==Right ())
+  assert "IRQ writers cannot pass as ordinary service effects" (checkCall interleaved {callTrace=callTrace call,callReturnCpsr=0xd3,callWriteOrigins=[irqOrigin]}==Left MissingTrace)
   refuses "memory result" MemoryResult observation {obsCalls=[call {callAfter=M.singleton (Address 0x1000) 1}]}
   refuses "written words" WrittenWords observation {obsCalls=[call {callWrites=[Written (Address 0x1000) 4 1]}]}
-  refuses "silent notify" BankWrites observation {obsCalls=[call {callBank=[]}]}
+  refuses "silent notify" BankWrites observation {obsCalls=[call {callBank=[],callBankOrigins=[]}]}
   refuses "route" Route observation {obsMilestones=[]}
   refuses "observer error" ObserverError observation {obsError=Just "synthetic"}
   assert "model missing data" (stockCall DomainA Acquire (Arguments [0,0,0,0]) M.empty == Left (MissingWord (Address 0)))
-  assert "B id 1 is remote" (checkCall call {callDomain=DomainB,callCore=1,callArguments=Arguments [1,0,0,0],callBank=[Written (Address 0xfffb30cc) 4 0x1000000]} == Right ())
-  assert "B with A predicate refuses at id 1" (checkCall call {callDomain=DomainB,callCore=1,callArguments=Arguments [1,0,0,0],callR0=1,callBank=[]} == Left ReturnValue)
+  assert "B id 1 is remote" (checkCall call {callDomain=DomainB,callCore=1,callArguments=Arguments [1,0,0,0],callBank=[Written (Address 0xfffb30cc) 4 0x1000000],callBankOrigins=[ownOrigin {writerCore=1,writerPc=Address 0xd3fd4}]} == Right ())
+  assert "B with A predicate refuses at id 1" (checkCall call {callDomain=DomainB,callCore=1,callArguments=Arguments [1,0,0,0],callR0=1,callBank=[],callBankOrigins=[]} == Left ReturnValue)
   forM_ [(DomainA,0),(DomainA,1),(DomainB,0),(DomainB,2)] $ \(domain,id') -> assert "local notify" (stockCall domain Notify (Arguments [id',0,0,0]) M.empty == Right (Expected 1 M.empty mempty []))
   assert "route comparison ignores call interleavings" (compareRoutes observation {obsRole=Stock} observation {obsCalls=[call {callFirst=80}]} == Right ())
   refuses "model invalid arguments" (Model InvalidArguments) observation {obsCalls=[call {callArguments=Arguments []}]}
   let emptyQueues = M.fromList ([(Address 0x1020,0x2000),(Address 0x1024,0x3000),(Address 0x102c,0x3004),(Address 0x1030,0x3008),
         (Address 0x3000,0),(Address 0x3004,0xdead),(Address 0x3008,2)] ++ [(Address (0x2000+p*8+offset),0x2000+p*8) | p <- [0..15],offset <- [0,4]])
-      emptyRotate = call {callSemantic=HelperSemantic Rotate,callArguments=Arguments [0x1000,0,0,0],callBefore=emptyQueues,callAfter=emptyQueues,callBank=[]}
+      emptyRotate = call {callSemantic=HelperSemantic Rotate,callArguments=Arguments [0x1000,0,0,0],callBefore=emptyQueues,callAfter=emptyQueues,callBank=[],callBankOrigins=[]}
   assert "queue invariant" (checkCall emptyRotate == Left QueueInvariant)
   let unreadable = M.delete (Address 0x1024) emptyQueues
   assert "invariant data unreadable" (checkCall emptyRotate {callBefore=unreadable,callAfter=unreadable} == Left EntryUnreadable)
@@ -85,36 +119,170 @@ main = do
   assert "requeue another-task branch returns raw dispatch" (case newSelected of
     Right expected -> expectedR0 expected == 2 && M.lookup (Address 0x3004) (expectedMemory expected) == Just 0x4100
     Left _ -> False)
-  let silent = observation {obsCalls=[call {callBank=[]}]}
-      wrong = observation {obsCalls=[call {callDomain=DomainB,callCore=1,callArguments=Arguments [1,0,0,0],callR0=1,callBank=[]}]}
+  let silent = observation {obsCalls=[call {callBank=[],callBankOrigins=[]}]}
+      wrong = observation {obsCalls=[call {callDomain=DomainB,callCore=1,callArguments=Arguments [1,0,0,0],callR0=1,callBank=[],callBankOrigins=[]}]}
   assert "silent control fails at first remote notify" (controlFailure SilentNotify silent == Right ())
   assert "wrong predicate fails at first B id 1 notify" (controlFailure WrongPredicate wrong == Right ())
-  assert "later silent control is not the first remote notify" (controlFailure SilentNotify observation {obsCalls=[call,call {callFirst=50,callBank=[]}]} == Left BankWrites)
+  assert "later silent control is not the first remote notify" (controlFailure SilentNotify observation {obsCalls=[call,call {callFirst=50,callBank=[],callBankOrigins=[]}]} == Left BankWrites)
   let lockMemory = M.fromList [(Address 0x1000,0x2000),(Address 0x2000,1)]
       release = call {callSemantic=HelperSemantic Release,callArguments=Arguments [0x1000,0,0,0],callBefore=lockMemory,callAfter=lockMemory,
-        callR0=0x1000,callWrites=[Written (Address 0x2000) 4 0],callBank=[]}
+        callR0=0x1000,callWrites=[Written (Address 0x2000) 4 0,Written (Address 0x2000) 4 1],callBank=[],
+        callWriteOrigins=[ownOrigin,ownOrigin {writerCore=1,writerTask=Address 0xa000}],callBankOrigins=[]}
   assert "release permits a peer acquire before continuation" (checkCall release == Right ())
-  assert "release still requires its zero write" (checkCall release {callWrites=[]} == Left WrittenWords)
+  assert "release still requires its zero write" (checkCall release {callWrites=[Written (Address 0x2000) 4 1],
+    callWriteOrigins=[ownOrigin {writerCore=1,writerTask=Address 0xa000}]} == Left WrittenWords)
   let serviceMemory = M.fromList [(Address address,value) | (address,value) <-
         [(0x400545a4,0),(0x400545c8,0x1000),(0x1008,0x2000),(0x2000,1),
          (0x40054760,0x3000),(0x300c,1),(0x40054764,1)]]
       serviceFinal=M.insert (Address 0x40054764) 0 (M.insert (Address 0x2000) 0 serviceMemory)
       serviceRegisters=D.Registers (replicate 16 0) 0x13 0 0 0
-      acquired=Boundary AcquiredBoundary (Address 0x4000) 31 0 serviceRegisters serviceMemory [Written (Address 0x2000) 4 1] [] (Just 0)
+      acquired=Boundary AcquiredBoundary (Address 0x4000) 31 0 serviceRegisters serviceMemory [Written (Address 0x2000) 4 1] [] (Just 0) 0x9000 [ownOrigin] []
       returned=Boundary ReturnBoundary (Address 0x5000) 40 0 serviceRegisters serviceFinal
-        [Written (Address 0x40054764) 4 0,Written (Address 0x2000) 4 0] [] Nothing
+        [Written (Address 0x40054764) 4 0,Written (Address 0x2000) 4 0] [] Nothing 0x9000 [ownOrigin,ownOrigin] []
       disabled=call {callSemantic=ServiceSemantic DisableDispatch,callCpsr=0x13,callArguments=Arguments [0,0,0,0],
         callBefore=serviceMemory,callAfter=serviceFinal,callTrace=Just (CallTrace serviceRegisters serviceRegisters Returned [acquired,returned] Nothing)}
   assert "service judges state after contended acquisition" (checkCall disabled==Right ())
+  assert "direct service retains A equality" (checkCall disabled {callTrace=Just (CallTrace serviceRegisters serviceRegisters Returned
+    [acquired,returned {boundaryRegisters=serviceRegisters {D.processorState=0x113}}] Nothing)}==Left ProcessorState)
   assert "service still requires dispatch disable write" (checkCall disabled {callTrace=Just (CallTrace serviceRegisters serviceRegisters Returned
-    [acquired,returned {boundaryWrites=[Written (Address 0x2000) 4 0]}] Nothing)}==Left WrittenWords)
+    [acquired,returned {boundaryWrites=[Written (Address 0x2000) 4 0],boundaryWriteOrigins=[ownOrigin]}] Nothing)}==Left WrittenWords)
   let scratchMemory=M.union (M.fromList [(Address 0x3008,0x6000),(Address 0x6010,0x1000),(Address 0x6014,0x7000),(Address 0x77f0,9)]) serviceMemory
       scratchRegisters=serviceRegisters {D.registers=replicate 13 0 ++ [0x7800,0,0]}
-      scratchAcquired=acquired {boundaryMemory=scratchMemory,boundaryWrites=Written (Address 0x77f0) 4 7:boundaryWrites acquired}
-      scratchCall=disabled {callBefore=scratchMemory,callTrace=Just (CallTrace scratchRegisters scratchRegisters Returned [scratchAcquired,returned] Nothing)}
+      scratchAcquired=acquired {boundaryMemory=scratchMemory,boundaryWrites=Written (Address 0x77f0) 4 7:boundaryWrites acquired,
+        boundaryWriteOrigins=ownOrigin:boundaryWriteOrigins acquired}
+      scratchReturned=returned {boundaryMemory=M.union serviceFinal scratchMemory}
+      scratchCall=disabled {callBefore=scratchMemory,callAfter=boundaryMemory scratchReturned,
+        callTrace=Just (CallTrace scratchRegisters scratchRegisters Returned [scratchAcquired,scratchReturned] Nothing)}
   assert "service ignores its own downward stack scratch" (checkCall scratchCall==Right ())
   assert "service refuses unrelated non-stack writes" (checkCall scratchCall {callTrace=Just (CallTrace scratchRegisters scratchRegisters Returned
-    [scratchAcquired,returned {boundaryWrites=Written (Address 0x300c) 4 9:boundaryWrites returned}] Nothing)}==Left WrittenWords)
+    [scratchAcquired,returned {boundaryWrites=Written (Address 0x300c) 4 9:boundaryWrites returned,
+      boundaryWriteOrigins=ownOrigin:boundaryWriteOrigins returned}] Nothing)}==Left WrittenWords)
+  let concurrentFinal=M.insert (Address 0x300c) 5 serviceFinal
+      concurrentReturn=returned {boundaryMemory=concurrentFinal,boundaryWrites=boundaryWrites returned++[Written (Address 0x300c) 4 5],
+        boundaryWriteOrigins=boundaryWriteOrigins returned++[ownOrigin {writerCore=1,writerTask=Address 0xa000}]}
+      concurrentCall=disabled {callAfter=concurrentFinal,callTrace=Just (CallTrace serviceRegisters serviceRegisters Returned [acquired,concurrentReturn] Nothing)}
+  assert "shared task state reconciles all raw foreign writes" (checkCall concurrentCall==Right ())
+  assert "missing raw concurrent mutation refuses" (checkCall concurrentCall {callTrace=Just (CallTrace serviceRegisters serviceRegisters Returned
+    [acquired,returned {boundaryMemory=concurrentFinal}] Nothing)}==Left MemoryResult)
+  assert "foreign mutation cannot substitute for missing owned service write" (checkCall concurrentCall {callTrace=Just (CallTrace serviceRegisters serviceRegisters Returned
+    [acquired,concurrentReturn {boundaryWrites=[Written (Address 0x2000) 4 0,Written (Address 0x300c) 4 5],
+      boundaryWriteOrigins=[ownOrigin,ownOrigin {writerCore=1,writerTask=Address 0xa000}]}] Nothing)}==Left WrittenWords)
+  let nestedControlFixture domain =
+        let words'=V.domainWords domain
+            core=if domain==DomainA then 0 else 1
+            remoteOwner=if domain==DomainA then 2 else 1
+            record=V.contextTable words'+(remoteOwner-1)*0x84
+            heads=[(0x30000+p*8+offset,0x30000+p*8) | p<-[0..15],offset<-[0,4]]
+            memory=M.fromList [(Address at,value) | (at,value) <- heads++
+              [(V.contextWord words',0),(V.currentContext words',0x1000),(V.runningCell words',0x3000),
+               (record,remoteOwner),(record+8,0x20000),(record+0x20,0x30000),(record+0x24,0x40000),
+               (record+0x2c,0x40004),(record+0x30,0x40008),(record+0x44,0x50000),(record+0x48,1),
+               (0x20000,1),(0x40000,0x8000),(0x40004,0x51000),(0x40008,1),
+               (0x50000,0),(0x50004,0),(0x50008,0x60000),(0x5000c,10),(0x50014,0x70000),
+               (0x50024,0),(0x50028,0),(0x5002c,0),(0x60024,1),(0x70000,0),
+               (0x51000,0x30078),(0x51004,0x30078),(0x5100c,0xf01),(0x30078,0x51000),(0x3007c,0x51000)]]
+            effects=[Written (Address at) size value | (at,size,value) <-
+              [(0x70000,4,0),(0x5002c,4,0),(0x5000c,1,1),(0x50004,4,0x30000),(0x50000,4,0x30000),
+               (0x30000,4,0x50000),(0x30004,4,0x50000),(0x40000,4,0x8001),(0x40004,4,0x50000),(0x20000,4,0)]]
+            final=M.union (M.fromList [(Address at,value) | (at,value) <-
+              [(0x5000c,1),(0x50004,0x30000),(0x50000,0x30000),(0x30000,0x50000),
+               (0x30004,0x50000),(0x40000,0x8001),(0x40004,0x50000),(0x20000,0)]]) memory
+            origin=ownOrigin {writerCore=core,writerTask=Address 0x3000}
+            entered=D.Registers ([remoteOwner*0x10000+1]++replicate 12 0++[0x8100,0x600,0x500]) 0x53 0 0 0
+            finished=D.Registers (replicate 13 0++[0x8100,0x600,0x600]) 0x53 0 0 0
+            locked=D.Registers (replicate 13 0++[0x8000,0x550,0x550]) 0xd3 0 0 0
+            acquiredRemote=Boundary AcquiredBoundary (Address 0x550) 31 core locked memory
+              [Written (Address 0x20000) 4 1] [] (Just 0) 0x3000 [origin] []
+            returnedRemote=Boundary ReturnBoundary (Address 0x600) 40 core finished final effects [] Nothing 0x3000 (map (const origin) effects) []
+            parent=call {callDomain=domain,callAddress=Address 0x500,callSemantic=ServiceSemantic WakeTask,callCore=core,
+              callTask=0x3000,callCpsr=0x53,callReturnCpsr=0x53,callArguments=Arguments [remoteOwner*0x10000+1,0,0,0],
+              callBefore=memory,callAfter=final,callBank=[],callBankOrigins=[],
+              callTrace=Just (CallTrace entered finished Returned [acquiredRemote,returnedRemote] Nothing)}
+            target=call {callDomain=domain,callAddress=Address (if domain==DomainA then 0x44018 else 0xd3fd4),
+              callCore=core,callTask=0x3000,callFirst=35,callArguments=Arguments [remoteOwner,0,0,0],callBank=[],callBankOrigins=[]}
+        in (parent,target)
+      (remoteParent,remoteNotify)=nestedControlFixture DomainA
+      controlled parent target=observation {obsRole=SilentNotify,obsCalls=[parent,target]}
+      corruptedParent=remoteParent {callAfter=M.insert (Address 0x5000c) 7 (callAfter remoteParent)}
+      unfinishedParent=remoteParent {callTrace=fmap (\trace -> trace {traceCompletion=Discarded}) (callTrace remoteParent)}
+      (otherParent,otherNotify)=nestedControlFixture DomainB
+      independent=call {callFirst=32,callArguments=Arguments [0,0,0,0],callBank=[],callBankOrigins=[]}
+      bankedParent origin=remoteParent {callTrace=fmap (\trace -> trace {traceHistory=map
+        (\boundary -> if boundaryKind boundary==ReturnBoundary then boundary
+          {boundaryBank=[Written (Address 0xfffb30cc) 4 0x1000000],boundaryBankOrigins=[origin]} else boundary)
+        (traceHistory trace)}) (callTrace remoteParent)}
+      wrongNotify=otherNotify {callR0=1}
+      dispatchHistory boundary
+        | boundaryKind boundary/=ReturnBoundary = [boundary]
+        | otherwise =
+          [ boundary {boundaryKind=SaveBoundary,boundaryAddress=Address 0xd3640,boundaryInstructions=37,
+              boundaryRegisters=D.Registers ([0xffffffed]++replicate 12 0++[0x8000,0x580,0xd3640]) 0xd3 0 0 0,
+              boundaryValue=Just 0xffffffed}
+          , Boundary ResumeBoundary (Address 0xd3668) 38 1
+              (D.Registers (replicate 13 0++[0x7fdc,0x580,0xd3668]) 0xd3 0 0 0)
+              (boundaryMemory boundary) [] [] Nothing 0x3000 [] []
+          , boundary {boundaryWrites=[],boundaryWriteOrigins=[]} ]
+      wrongParent=otherParent {callTrace=fmap (\trace -> trace {traceHistory=concatMap dispatchHistory (traceHistory trace)}) (callTrace otherParent)}
+      wrongControlled parent target=(controlled parent target) {obsRole=WrongPredicate}
+      changeBoundary kind change parent=parent {callTrace=fmap (\trace -> trace
+        {traceHistory=map (\boundary -> if boundaryKind boundary==kind then change boundary else boundary) (traceHistory trace)}) (callTrace parent)}
+      changeFinal change parent=
+        let changed=fmap (\trace ->
+              let finished=change (traceAfter trace)
+              in trace {traceAfter=finished,traceHistory=map (\boundary -> if boundaryKind boundary==ReturnBoundary
+                then boundary {boundaryRegisters=finished} else boundary) (traceHistory trace)}) (callTrace parent)
+        in parent {callTrace=changed,callReturnCpsr=maybe (callReturnCpsr parent) (D.processorState . traceAfter) changed}
+      changeR4 state=case D.registers state of
+        r0:r1:r2:r3:_:following -> state {D.registers=r0:r1:r2:r3:1:following}
+        _ -> error "fixture registers must include r4"
+      wrongFrame=changeBoundary ResumeBoundary (\boundary -> boundary
+        {boundaryRegisters=D.Registers (replicate 13 0++[0x7fe0,0x580,0xd3668]) 0xd3 0 0 0}) wrongParent
+      wrongReason=changeBoundary SaveBoundary (\boundary -> boundary {boundaryValue=Just 0xfffffff9,
+        boundaryRegisters=(boundaryRegisters boundary) {D.registers=0xfffffff9:drop 1 (D.registers (boundaryRegisters boundary))}}) wrongParent
+      unrelatedWrites=changeBoundary SaveBoundary (\boundary -> boundary
+        {boundaryWrites=boundaryWrites boundary++[Written (Address (V.contextTable (V.domainWords DomainB))) 4 value | value <- [2,1]],
+         boundaryWriteOrigins=boundaryWriteOrigins boundary++replicate 2 ownOrigin {writerCore=1,writerTask=Address 0x3000}}) wrongParent
+  forM_ [(remoteParent,remoteNotify),(otherParent,otherNotify)] $ \(parent,target) -> do
+    assert "remote wake fixture refuses only its missing bank write" (checkCall parent==Left BankWrites)
+    assert "first missing notify also explains its enclosing service bank failure" (controlFailure SilentNotify (controlled parent target)==Right ())
+  assert "foreign bank effects remain separate from a missing invocation transaction" (controlFailure SilentNotify
+    (controlled (bankedParent ownOrigin {writerCore=1,writerTask=Address 0xa000,writerPc=Address 0xd3fd4}) remoteNotify)==Right ())
+  assert "unexpected owned bank effects are not missing-transaction propagation" (controlFailure SilentNotify
+    (controlled (bankedParent ownOrigin {writerTask=Address 0x3000}) remoteNotify)==Left BankWrites)
+  assert "notify after service return cannot explain an earlier bank failure" (controlFailure SilentNotify
+    (controlled remoteParent remoteNotify {callFirst=41})==Left BankWrites)
+  assert "enclosing bank failure cannot hide a corrupted snapshot" (controlFailure SilentNotify (controlled corruptedParent remoteNotify)==Left BankWrites)
+  assert "enclosing bank failure cannot hide wrong completion" (controlFailure SilentNotify (controlled unfinishedParent remoteNotify)==Left BankWrites)
+  assert "wrong predicate causes the modeled local save instead of the remote return" (checkCall wrongParent==Left ProcessorState
+    && controlFailure WrongPredicate (wrongControlled wrongParent wrongNotify)==Right ())
+  assert "wrong predicate does not excuse an omitted local save" (controlFailure WrongPredicate
+    (wrongControlled otherParent wrongNotify)==Left ReturnValue)
+  assert "wrong predicate does not excuse a returned IRQ mask" (controlFailure WrongPredicate
+    (wrongControlled (changeFinal (\state -> state {D.processorState=0xd3}) wrongParent) wrongNotify)==Left ReturnValue)
+  assert "wrong predicate does not excuse a changed caller register" (controlFailure WrongPredicate
+    (wrongControlled (changeFinal changeR4 wrongParent) wrongNotify)==Left ReturnValue)
+  assert "wrong predicate still requires the saved 36-byte frame" (controlFailure WrongPredicate
+    (wrongControlled wrongFrame wrongNotify)==Left ReturnValue)
+  assert "wrong predicate still requires the wake dispatch reason" (controlFailure WrongPredicate
+    (wrongControlled wrongReason wrongNotify)==Left ReturnValue)
+  assert "wrong predicate does not excuse unrelated writes" (controlFailure WrongPredicate
+    (wrongControlled unrelatedWrites wrongNotify)==Left ReturnValue)
+  assert "wrong predicate still requires the defective callee's preserved control state" (controlFailure WrongPredicate
+    (wrongControlled wrongParent (changeFinal (\state -> state {D.processorState=0x53}) wrongNotify))==Left ReturnValue)
+  assert "wrong predicate does not excuse a corrupted final snapshot" (controlFailure WrongPredicate
+    (wrongControlled wrongParent {callAfter=M.insert (Address 0x5000c) 7 (callAfter wrongParent)} wrongNotify)==Left ReturnValue)
+  assert "wrong predicate must produce the frozen mutant's return value" (controlFailure WrongPredicate
+    (wrongControlled wrongParent wrongNotify {callR0=2})==Left ReturnValue)
+  assert "wrong predicate does not excuse an independent earlier failure" (controlFailure WrongPredicate
+    (wrongControlled wrongParent wrongNotify) {obsCalls=[wrongParent,independent,wrongNotify]}==Left ReturnValue)
+  assert "enclosing service must miss the target notify transaction" (controlFailure SilentNotify
+    (controlled otherParent otherNotify {callArguments=Arguments [3,0,0,0]})==Left BankWrites)
+  assert "enclosing service must have the same actual task" (controlFailure SilentNotify
+    (controlled remoteParent remoteNotify {callTask=0xa000})==Left BankWrites)
+  assert "enclosing service must have the same kernel context" (controlFailure SilentNotify
+    (controlled remoteParent remoteNotify {callKernelContext=1})==Left BankWrites)
+  assert "independent earlier failures still refuse" (controlFailure SilentNotify
+    (controlled remoteParent remoteNotify) {obsCalls=[remoteParent,independent,remoteNotify]}==Left BankWrites)
   let outcome label helper args memory result cells = assert label (case stockCall DomainA helper (Arguments args) memory of
         Right expected -> expectedR0 expected==result && all (\(address,value) -> M.lookup (Address address) (expectedMemory expected)==Just value) cells
         Left _ -> False)
@@ -135,6 +303,50 @@ main = do
   outcome "insert does not preempt equal priority" Insert [0x1000,0x4200,0,0] equalPriority 0 [(0x3004,0x4000),(0x200c,0x4200),(0x4000,0x4200)]
   outcome "rotate selects the second task and appends the first" Rotate [0x1000,1,0,0] rotating 2 [(0x3004,0x4100),(0x2008,0x4100),(0x200c,0x4000),(0x4100,0x4000),(0x4000,0x2008)]
   assert "dispatch without boundary evidence refuses" (checkCall call {callSemantic=DispatchSemantic Save,callTrace=Nothing} == Left MissingTrace)
+  let demandContext pc sp lr cpsr clock = DemandContext 0 pc sp lr cpsr ([0..12]++[sp,lr,pc]) clock 0x4005ffb4
+      loadContext = demandContext 0x43758 0xa42200 0x453f0 0x53 10
+      abortContext = demandContext 0xc 0x70000c00 0x1215484 0x1d7 11
+      serviceContext = demandContext 0x45e54 0xa421b0 0x1234560 0x53 20
+      demand = DemandPaging loadContext 0x1215480 7 abortContext 8 0x53 0x1215480 13
+        (Just (DemandService serviceContext 0 (Address 0x4004db08) 0x45e54))
+      mutations =
+        [ \d -> d {demandLoad=(demandLoad d) {demandCore=1}}
+        , \d -> d {demandAbort=(demandAbort d) {demandTask=1}}
+        , \d -> d {demandLoad=(demandLoad d) {demandPc=0x43754}}
+        , \d -> d {demandAbort=(demandAbort d) {demandPc=0x10}}
+        , \d -> d {demandAbort=(demandAbort d) {demandCpsr=0x1d3}}
+        , \d -> d {demandAbortCount=9}
+        , \d -> d {demandSpsr=0xd3}
+        , \d -> d {demandIfsr=5}
+        , \d -> d {demandIfar=0x1215484}
+        , \d -> d {demandAbort=(demandAbort d) {demandLr=0x1215488}}
+        , \d -> d {demandAbort=(demandAbort d) {demandRegisters=replicate 16 0}}
+        , \d -> d {demandService=Nothing}
+        , \d -> d {demandService=Just (DemandService serviceContext 1 (Address 0x4004db08) 0x45e54)}
+        , \d -> d {demandService=Just (DemandService serviceContext {demandTask=1} 0 (Address 0x4004db08) 0x45e54)}
+        , \d -> d {demandService=Just (DemandService serviceContext {demandInstructions=10} 0 (Address 0x4004db08) 0x45e54)}
+        , \d -> d {demandService=Just (DemandService serviceContext 0 (Address 0x400ddb08) 0x45e54)}
+        , \d -> d {demandService=Just (DemandService serviceContext 0 (Address 0x4004db08) 0x45e58)}
+        ]
+  assert "permission-fault transfer with subsequent task service qualifies" (checkDemandPaging demand==Right ())
+  forM_ mutations $ \mutate -> assert "unproven permission-fault transfer refuses" (checkDemandPaging (mutate demand)==Left DemandPagingState)
+  refuses "unmatched demand-paging receipt" DemandPagingState observation {obsDemandPaging=[demand]}
+  let witness proof =
+        let loaded=demandLoad proof
+            aborted=demandAbort proof
+            raw=D.Registers (demandRegisters aborted) (demandCpsr aborted) 0 0 0
+            attempted=D.Registers (take 15 (demandRegisters loaded)++[demandTarget proof]) (demandSpsr proof) 0 0 0
+            boundary=Boundary PrefetchAbortBoundary (Address 0xc) (demandInstructions aborted) (demandCore aborted)
+              raw M.empty [] [] (Just (demandTarget proof)) (demandTask aborted) [] []
+        in call {callSemantic=DispatchSemantic FirstEntry,callCore=demandCore loaded,callTask=demandTask loaded,
+          callTrace=Just (CallTrace attempted attempted Dispatched [boundary] Nothing)}
+      later=demand {demandLoad=loadContext {demandInstructions=30},demandLoadCount=17,
+        demandAbort=abortContext {demandInstructions=31},demandAbortCount=18,
+        demandService=Just (DemandService serviceContext {demandInstructions=40} 0 (Address 0x4004db08) 0x45e54)}
+      paired=observation {obsCalls=[witness demand,witness later],obsDemandPaging=[demand,later]}
+  assert "each distinct attempted transfer has its own complete proof" (checkDemandCalls paired==Right ())
+  assert "duplicate proof cannot cover another unproved abort" (checkDemandCalls paired
+    {obsDemandPaging=[demand,demand]}==Left DemandPagingState)
   let firstCatalog = Catalog 0xe7f000f0 [Entry DomainA (HelperSemantic Notify) (Address 0x42000),Entry DomainB (HelperSemantic Notify) (Address 0xd2000)]
         [Window DomainA (Address 0x42000) (Address 0x42010),Window DomainB (Address 0xd2000) (Address 0xd2010)] []
       secondCatalog = Catalog 0xe7f000f0 [Entry DomainA (DispatchSemantic Save) (Address 0x42100)]
@@ -195,6 +407,7 @@ wireObservation = J.object
       "observed" J..= fmap menu (Q.milestoneObserved milestone),"reached" J..= (100::Int),"finished" J..= Q.milestoneFinished milestone] | milestone <- obsMilestones observation]
   , "error" J..= J.Null,"machine_failure" J..= J.Null,"bank_counts" J..= [primaryBankWrites (obsBankCounts observation),secondaryBankWrites (obsBankCounts observation)]
   , "pc_watches" J..= [J.object ["core" J..= core c,"address" J..= hex a,"count" J..= n] | PcWatch c (Address a) n <- obsPcWatches observation]
+  , "demand_paging" J..= ([]::[J.Value])
   ]
  where
   domain DomainA = "a" :: String
@@ -208,11 +421,15 @@ wireObservation = J.object
         "sha256" J..= either (const "") id (Q.viewDigest view)] | view <- Q.readbackViews range]] | range <- Q.readbackRanges value]]
   wireCall value = J.object ["entry" J..= J.object ["slot" J..= J.object ["domain" J..= domain (callDomain value),"entry" J..= addressOf (callAddress value),"semantic" J..= semanticValue (callSemantic value)],
       "core" J..= core (callCore value),"cpsr" J..= callCpsr value,"arguments" J..= arguments (callArguments value),"memory" J..= wordsOf (callBefore value),
-      "registers" J..= replicate (16::Int) (0::Int),"cpacr" J..= (0::Int),"fpexc" J..= (0::Int),"tpidrurw" J..= (0::Int)],
+      "registers" J..= replicate (16::Int) (0::Int),"cpacr" J..= (0::Int),"fpexc" J..= (0::Int),"tpidrurw" J..= (0::Int),
+      "task" J..= J.object ["view" J..= ("committed"::String),"value" J..= callTask value],
+      "kernel_context" J..= callKernelContext value,"task_stack" J..= J.Null],
     "result" J..= J.object ["r0" J..= callR0 value,"cpsr" J..= callReturnCpsr value,"memory" J..= wordsOf (callAfter value),
       "registers" J..= replicate (16::Int) (0::Int),"cpacr" J..= (0::Int),"fpexc" J..= (0::Int),"tpidrurw" J..= (0::Int),"completion" J..= ("return"::String),"history" J..= ([]::[J.Value]),
-      "writes" J..= map writeOf (callWrites value),"bank" J..= map writeOf (callBank value)],"count" J..= callCount value,"first" J..= callFirst value]
+      "writes" J..= map writeOf (zip (callWrites value) (callWriteOrigins value)),"bank" J..= map writeOf (zip (callBank value) (callBankOrigins value))],"count" J..= callCount value,"first" J..= callFirst value]
   arguments (Arguments values) = values
   wordsOf memory = [J.object ["address" J..= hex address,"value" J..= J.object ["view" J..= ("committed"::String),"value" J..= value]] | (Address address,value) <- M.toList memory]
-  writeOf (Written (Address address) size value) = J.object ["address" J..= hex address,"size" J..= size,"value" J..= value]
+  writeOf (Written (Address address) size value,origin) = J.object ["address" J..= hex address,"size" J..= size,"value" J..= value,
+    "origin" J..= J.object ["core" J..= core (writerCore origin),"pc" J..= addressOf (writerPc origin),"sp" J..= addressOf (writerSp origin),
+      "task" J..= addressOf (writerTask origin),"cpsr" J..= writerCpsr origin,"kernel_context" J..= writerContext origin,"instructions" J..= writerInstructions origin]]
   addressOf (Address address) = hex address

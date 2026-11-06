@@ -1,7 +1,7 @@
 
 use fujimod_emulator::board::factory::MemoryMap;
 use fujimod_emulator::board::observation::{MemoryWatch, ViewPolicy, WatchKinds, WatchRange};
-use fujimod_emulator_cpu::{Access, Hook, HookId, HookRange, Register, arm};
+use fujimod_emulator_cpu::{Access, Cpu, Hook, HookId, HookRange, InstructionEntryId, Register, arm};
 use fujimod_xm1::bridge::{read, sha256};
 use fujimod_xm1::guest::RouteKey;
 use fujimod_xm1::machine::{Hold, KeyPulse, Machine, RunOutcome, key_pulse};
@@ -9,6 +9,8 @@ use fujimod_xm1::run::{self, RunDocument, ValidatedUpdate};
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet};
 use std::cell::RefCell;
+use std::cell::Cell;
+use std::rc::Rc;
 use std::ffi::c_void;
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -237,12 +239,46 @@ impl Core {
         match index { 0 => Ok(Self::Primary), 1 => Ok(Self::Secondary), _ => Err("the pair expects two cores".into()) }
     }
     fn own_kernel_current_task(self) -> u32 { match self { Self::Primary => 0x4005_4760, Self::Secondary => 0x400e_4720 } }
+    fn own_kernel_context(self) -> u32 { match self { Self::Primary => 0x4005_45a4, Self::Secondary => 0x400e_4564 } }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize)]
 struct Context { core: Core, pc: u32, lr: u32, sp: u32, cpsr: u32, r0: u32, arguments: [u32; 4], registers: [u32; 16], instructions: u64, current: Read }
 impl Context {
     fn mode(&self) -> u32 { self.cpsr & 0x1f }
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+struct TrampolineLoad { context: Context, target: u32, core_instructions: u64 }
+
+#[derive(Serialize)]
+struct DemandService { context: Context, context_word: Read, root: WordValue }
+
+#[derive(Serialize)]
+struct DemandPaging {
+    load: TrampolineLoad, abort: Context, core_instructions: u64,
+    spsr: u32, ifar: u32, ifsr: u32, service: Option<DemandService>,
+}
+
+impl DemandPaging {
+    fn transfer(&self) -> Result<Context, String> {
+        let before = self.load.context;
+        let after = self.abort;
+        require(before.core == after.core && before.current == after.current, "prefetch abort changed trampoline task")?;
+        require(matches!(before.pc & !ALIAS, 0x43758 | 0xd3758) && after.pc == 0xc && after.mode() == 0x17,
+            "prefetch abort is not a trampoline transfer")?;
+        require(self.core_instructions == self.load.core_instructions + 1, "prefetch abort did not immediately follow trampoline load")?;
+        require(self.spsr == before.cpsr && self.spsr & 0xff == 0x53, "prefetch abort has the wrong trampoline status")?;
+        require(self.ifsr & 0x140f == 13, "trampoline prefetch abort is not a permission fault")?;
+        require(self.ifar == self.load.target && after.lr.checked_sub(4) == Some(self.load.target),
+            "prefetch abort is not at the trampoline target")?;
+        require(before.registers[..13] == after.registers[..13], "prefetch abort changed trampoline registers")?;
+        let mut transfer = before;
+        transfer.pc = self.ifar;
+        transfer.registers[15] = self.ifar;
+        transfer.instructions = after.instructions;
+        Ok(transfer)
+    }
 }
 
 struct Board<'a> { machine: &'a Machine, maps: &'a [MemoryMap] }
@@ -322,6 +358,8 @@ struct EntryState {
     fpexc: u32,
     tpidrurw: u32,
     origin: Option<DispatchPoint>,
+    kernel_context: u32,
+    task_stack: Option<TaskStack>,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -329,8 +367,8 @@ struct ReturnState {
     r0: u32,
     cpsr: u32,
     memory: Vec<WordValue>,
-    writes: Vec<Written>,
-    bank: Vec<Written>,
+    writes: Vec<CapturedWrite>,
+    bank: Vec<CapturedWrite>,
     completion: Completion,
     task: Read,
     sp: Hex,
@@ -352,7 +390,7 @@ enum Completion { Return, Discard, Dispatched }
 struct Boundary {
     kind: BoundaryKind, address: Hex, instructions: u64, core: Core, task: Read,
     sp: Hex, cpsr: u32, registers: [u32; 16], memory: Vec<WordValue>,
-    writes: Vec<Written>, bank: Vec<Written>, value: Option<u32>, cpacr: u32, fpexc: u32, tpidrurw: u32,
+    writes: Vec<CapturedWrite>, bank: Vec<CapturedWrite>, value: Option<u32>, cpacr: u32, fpexc: u32, tpidrurw: u32,
 }
 
 impl Ord for Boundary {
@@ -371,7 +409,7 @@ impl Eq for Boundary {}
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "kebab-case")]
-enum BoundaryKind { Save, Resume, NoSave, Retry, Callback, CallbackReturn, SelectedRead, DiscardedRead, EnabledRead, GlobalLockRead, SelectComplete, FirstEntryExit, IrqTail, Return, Acquired }
+enum BoundaryKind { Save, Resume, NoSave, Retry, Callback, CallbackReturn, SelectedRead, DiscardedRead, EnabledRead, GlobalLockRead, SelectComplete, FirstEntryExit, IrqTail, Return, Acquired, PrefetchAbort }
 
 #[derive(Serialize)]
 struct ClassCount { count: u64, first: u64, last: u64 }
@@ -389,12 +427,12 @@ impl ReturnKey {
             Read::Committed { value } if [0x10, 0x13, 0x1f].contains(&context.mode()) => Some(value),
             _ => None,
         };
-        Self { core: context.core, pc, sp: context.sp, task, mode: context.mode() }
+        Self { core: context.core, pc: pc & !ALIAS, sp: context.sp, task, mode: context.mode() }
     }
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct OpenCall { entry: EntryState, entered: u64, writes: Vec<Written>, bank: Vec<Written>, history: Vec<Boundary>, write_cursor: usize, bank_cursor: usize, suspended: bool }
+struct OpenCall { entry: EntryState, entered: u64, writes: Vec<CapturedWrite>, bank: Vec<CapturedWrite>, history: Vec<Boundary>, write_cursor: usize, bank_cursor: usize, suspended: bool }
 
 impl OpenCall {
     fn record(&mut self, mut boundary: Boundary) -> Result<(), String> {
@@ -423,9 +461,9 @@ impl OpenCall {
         };
         if let Some(bytes) = frame {
             self.entry.task == context.current && self.entry.sp.0.checked_add(bytes) == Some(context.sp)
-                && (key.pc == context.pc || (delivery && name == DispatchPoint::Resume))
+                && (key.pc & !ALIAS == context.pc & !ALIAS || (delivery && name == DispatchPoint::Resume))
         } else {
-            matches!(semantic, Some(Semantic::Dispatch { .. })) || key.pc == context.pc
+            matches!(semantic, Some(Semantic::Dispatch { .. })) || key.pc & !ALIAS == context.pc & !ALIAS
         }
     }
 }
@@ -545,10 +583,63 @@ impl<T> Sample<T> {
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 struct WordValue { address: Hex, value: Read }
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 struct Written { address: Hex, size: u32, value: u32 }
 
-struct DataCapture { active: BTreeSet<u32>, rows: Vec<(u32, u32, u32)>, overflow: bool }
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+struct TaskStack { start: Hex, end: Hex }
+
+#[derive(Clone, Copy, Debug, Serialize)]
+struct WriteOrigin { core: Core, pc: Hex, sp: Hex, cpsr: u32, task: Hex, kernel_context: u32, instructions: u64 }
+impl PartialEq for WriteOrigin { fn eq(&self, other: &Self) -> bool { self.cmp(other).is_eq() } }
+impl Eq for WriteOrigin {}
+impl PartialOrd for WriteOrigin { fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> { Some(self.cmp(other)) } }
+impl Ord for WriteOrigin {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (self.core,self.pc,self.sp,self.cpsr,self.task,self.kernel_context)
+            .cmp(&(other.core,other.pc,other.sp,other.cpsr,other.task,other.kernel_context))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+struct CapturedWrite { #[serde(flatten)] write: Written, origin: WriteOrigin }
+
+/// # Safety
+/// The CPU must outlive every callback that reads the returned pointer.
+unsafe fn callback_cpu(cpu: &dyn Cpu) -> *const dyn Cpu {
+    unsafe { std::mem::transmute::<*const (dyn Cpu + '_), *const dyn Cpu>(cpu as *const dyn Cpu) }
+}
+
+struct DataCapture {
+    cpu: *const dyn Cpu, core: Core, sequence: Rc<Cell<u64>>,
+    active: BTreeSet<u32>, rows: Vec<(u64,CapturedWrite)>, overflow: bool,
+    failure: Option<String>, cached: Option<(InstructionEntryId,WriteOrigin)>,
+}
+impl DataCapture {
+    fn origin(&mut self) -> Result<WriteOrigin, String> {
+        let cpu = unsafe { &*self.cpu };
+        let entry = cpu.instruction_entry().ok_or("scheduler writer has no instruction entry")?;
+        if let Some((id,origin)) = self.cached {
+            if id == entry.id { return Ok(origin); }
+        }
+        let register = |register| -> Result<u32,String> {
+            let mut bytes = [0;4];
+            require(cpu.read_register(Register::Arm32(register), &mut bytes)? == 4, "scheduler writer register width differs")?;
+            Ok(u32::from_le_bytes(bytes))
+        };
+        let word = |address: u32| -> Result<u32,String> {
+            let mut bytes = [0;4];
+            cpu.read_memory(u64::from(address), &mut bytes)?;
+            Ok(u32::from_le_bytes(bytes))
+        };
+        let origin = WriteOrigin { core: self.core, pc: Hex(u32::try_from(entry.address).map_err(|_| "scheduler writer PC exceeds 32 bits")?),
+            sp: Hex(register(arm::Register::R(13))?), cpsr: entry.pstate,
+            task: Hex(word(self.core.own_kernel_current_task())?), kernel_context: word(self.core.own_kernel_context())?,
+            instructions: entry.progress };
+        self.cached = Some((entry.id,origin));
+        Ok(origin)
+    }
+}
 
 unsafe fn data_write(_access: Access, address: u64, size: i32, value: i64, data: *mut c_void) {
     // The boxed context outlives its installed CPU hook.
@@ -560,7 +651,15 @@ unsafe fn data_write(_access: Access, address: u64, size: i32, value: i64, data:
         capture.overflow = true;
     } else {
         let mask = match size { 1 => 0xff, 2 => 0xffff, _ => u32::MAX };
-        capture.rows.push((address, size as u32, value as u32 & mask));
+        match capture.origin() {
+            Ok(origin) => {
+                let sequence = capture.sequence.get();
+                capture.sequence.set(sequence+1);
+                capture.rows.push((sequence,CapturedWrite { write: Written { address: Hex(address), size: size as u32,
+                    value: value as u32 & mask }, origin }));
+            }
+            Err(error) => { capture.failure = Some(error); }
+        }
     }
 }
 
@@ -739,6 +838,11 @@ struct Observer<'p> {
     pc_watches: BTreeMap<(Core, u32), PcWatch>,
     dispatched: [bool; 2],
     probe_hits: Vec<ProbeHit>,
+    trampoline_loads: [Option<TrampolineLoad>; 2],
+    demand_paging: Vec<DemandPaging>,
+    demand_services: BTreeMap<(Core, u32), u32>,
+    write_batch: Vec<(u64,CapturedWrite)>,
+    write_sequence: Rc<Cell<u64>>,
 }
 
 impl Observer<'_> {
@@ -807,7 +911,9 @@ impl Observer<'_> {
     fn begin_data(&mut self, machine: &Machine) -> Result<(), String> {
         if self.data_hooks.is_empty() {
             for core in 0..2 {
-                let context = Box::new(RefCell::new(DataCapture { active: BTreeSet::new(), rows: Vec::new(), overflow: false }));
+                let context = Box::new(RefCell::new(DataCapture { cpu: unsafe { callback_cpu(machine.session.board.cpu(core)?) },
+                    core: Core::from_index(core)?, sequence: self.write_sequence.clone(),
+                    active: BTreeSet::new(), rows: Vec::new(), overflow: false, failure: None, cached: None }));
                 let data = (&*context as *const RefCell<DataCapture>).cast_mut().cast();
                 // The context is retired only after remove_hook.
                 let hook = unsafe { machine.session.board.cpu(core)?.install_hook(Hook::Memory {
@@ -816,44 +922,54 @@ impl Observer<'_> {
                 self.data_hooks.push((core, hook, context));
             }
         }
-        for (core, _, capture) in &self.data_hooks {
-            capture.borrow_mut().active = self.open.pending.iter().filter(|(key,_)| key.core.index()==*core)
-                .flat_map(|(_,calls)| calls.iter().filter(|call| !call.suspended).flat_map(|call| call.entry.memory.iter().map(|word| word.address.0 & !ALIAS & !3))).collect();
+        for (_, _, capture) in &self.data_hooks {
+            let mut capture = capture.borrow_mut();
+            capture.active = self.open.pending.values()
+                .flat_map(|calls| calls.iter().filter(|call| !call.suspended)
+                    .flat_map(|call| call.entry.memory.iter().map(|word| word.address.0 & !ALIAS & !3))).collect();
+            capture.active.extend([0xfffb30cc,0xfffb40cc,0xfffb30ec,0xfffb40ec].map(|address| address & !ALIAS));
         }
         machine.session.board.transaction_watch_begin(vec![(0xfffb30cc, 0xfffb30d0), (0xfffb40cc, 0xfffb40d0),
             (0xfffb30ec, 0xfffb30f0), (0xfffb40ec, 0xfffb40f0)], WATCH_LIMIT)
     }
 
     fn drain_data(&mut self, machine: &Machine) -> Result<(), String> {
-        for (index, _, capture) in &self.data_hooks {
+        self.write_batch.clear();
+        for (_, _, capture) in &self.data_hooks {
             let mut capture = capture.borrow_mut();
             require(!capture.overflow, "scheduler write hook overflowed or saw an unsupported width")?;
-            let core = Core::from_index(*index)?;
-            for (address, size, value) in capture.rows.drain(..) {
-                for (key, calls) in &mut self.open.pending {
-                    if key.core != core { continue; }
-                    for call in calls {
-                        if call.suspended { continue; }
-                        if call.entry.memory.iter().any(|word| word.address.0 & !ALIAS & !3 == address & !ALIAS & !3) {
-                            call.writes.push(Written { address: Hex(address), size, value });
-                        }
+            if let Some(error) = &capture.failure { return Err(error.clone()); }
+            self.write_batch.extend(capture.rows.drain(..));
+        }
+        self.write_batch.sort_unstable_by_key(|(sequence,_)| *sequence);
+        for (_,write) in &self.write_batch {
+            if [0xfffb30cc,0xfffb40cc,0xfffb30ec,0xfffb40ec].contains(&write.write.address.0) { continue; }
+            for calls in self.open.pending.values_mut() {
+                for call in calls.iter_mut().filter(|call| !call.suspended) {
+                    if call.entry.memory.iter().any(|word| word.address.0 & !ALIAS & !3 == write.write.address.0 & !ALIAS & !3) {
+                        call.writes.push(*write);
                     }
                 }
             }
         }
         let batch = machine.session.board.transaction_watch_end()?;
         require(batch.omitted == 0, "scheduler bank watch overflowed")?;
+        let mut bank_writes = self.write_batch.iter().map(|(_,write)| write)
+            .filter(|write| [0xfffb30cc,0xfffb40cc,0xfffb30ec,0xfffb40ec].contains(&write.write.address.0));
         for transaction in batch.transactions {
             if transaction.operation.as_ref() != "write" { continue; }
             require(transaction.accepted && transaction.size == 4, "scheduler bank write was refused or not a word")?;
             let core = Core::from_index(transaction.cpu)?;
             self.bank_counts[core.index()] += 1;
-            let write = Written { address: Hex(u32::try_from(transaction.address).map_err(|_| "bank address overflow")?),
-                size: 4, value: u32::try_from(transaction.value).map_err(|_| "bank value overflow")? };
-            for (_, calls) in self.open.pending.iter_mut().filter(|(key,_)| key.core == core) {
-                for call in calls.iter_mut().filter(|call| !call.suspended) { call.bank.push(write.clone()); }
+            let write = bank_writes.next().ok_or("scheduler bank transaction has no writer envelope")?;
+            require(write.origin.core == core && u64::from(write.origin.pc.0) == transaction.pc
+                && u64::from(write.write.address.0) == transaction.address && write.write.size == 4
+                && u64::from(write.write.value) == transaction.value, "scheduler bank writer envelope differs from transaction")?;
+            for calls in self.open.pending.values_mut() {
+                for call in calls.iter_mut().filter(|call| !call.suspended) { call.bank.push(*write); }
             }
         }
+        require(bank_writes.next().is_none(), "scheduler bank writer has no transaction")?;
         Ok(())
     }
     fn end_data(&mut self, machine: &Machine) -> Result<(), String> {
@@ -880,12 +996,25 @@ impl Observer<'_> {
             fpexc: board.register(context.core, arm::Register::Fpexc)?,
             tpidrurw: board.cp15(context.core, 13, 0, 2)?,
             origin: origin.as_ref().map(|(point,_)| *point),
+            kernel_context: committed(board.word(context.core,tcm,context.core.own_kernel_context())?)?,
+            task_stack: None,
             memory: match slot.id.semantic {
                 Semantic::Helper { name } => snapshot(&board, context.core, tcm, name, context.arguments)?,
                 Semantic::Service { name } => service_snapshot(&board, context.core, tcm, domain, name, context.arguments)?,
                 _ => root_snapshot(&board, context.core, tcm, domain)?,
             },
         };
+        if entry.kernel_context == 0 && matches!(context.mode(),0x10 | 0x13 | 0x1f) {
+            if let Read::Committed { value: task } = context.current {
+                if task != 0 {
+                    let config = committed(board.word(context.core,tcm,task+8)?)?;
+                    let start = committed(board.word(context.core,tcm,config+0x14)?)?;
+                    let bytes = committed(board.word(context.core,tcm,config+0x10)?)?;
+                    let end = start.checked_add(bytes).ok_or("scheduler task stack wraps")?;
+                    entry.task_stack = Some(TaskStack { start: Hex(start), end: Hex(end) });
+                }
+            }
+        }
         if let Semantic::Dispatch { name } = entry.slot.semantic {
             let (start, bytes) = match name {
                 DispatchPoint::Save => (context.sp.saturating_sub(36), 36),
@@ -925,12 +1054,15 @@ impl Observer<'_> {
             self.untracked.push(call);
             return Ok(());
         }
-        if continuation != 0 && !self.return_sites.contains(&continuation) {
-            if !machine.traces.sites.contains_key(&continuation) {
-                require(machine.traces.sites.len() < SITE_LIMIT, "continuation site bound exceeded")?;
-                machine.traces.add_sites(&machine.session, [(continuation, CONTINUATION_LABEL.to_owned())].into_iter().collect())?;
+        if continuation != 0 {
+            for address in spellings(continuation & !ALIAS) {
+                if self.return_sites.contains(&address) { continue; }
+                if !machine.traces.sites.contains_key(&address) {
+                    require(machine.traces.sites.len() < SITE_LIMIT, "continuation site bound exceeded")?;
+                    machine.traces.add_sites(&machine.session, [(address, CONTINUATION_LABEL.to_owned())].into_iter().collect())?;
+                }
+                self.return_sites.insert(address);
             }
-            self.return_sites.insert(continuation);
         }
         if matches!(semantic, Semantic::Dispatch { .. }) {
             let mut key = ReturnKey::of(context, continuation);
@@ -1040,6 +1172,61 @@ impl Observer<'_> {
             if context.pc != point {
                 self.misplaced_stops += 1;
                 continue;
+            }
+            let low = context.pc & !ALIAS;
+            if low == 0xc {
+                if let Some(load) = self.trampoline_loads[core.index()].take() {
+                    let board = Board { machine, maps: &self.maps };
+                    let demand = DemandPaging { load, abort: context,
+                        core_instructions: machine.session.board.instruction_counts()[core.index()],
+                        spsr: board.register(core, arm::Register::Spsr)?,
+                        ifar: board.cp15(core, 6, 0, 2)?, ifsr: board.cp15(core, 5, 0, 1)?, service: None };
+                    let transfer = demand.transfer()?;
+                    let closed = self.open.take_where(|key, call| call.entry.slot.semantic == (Semantic::Dispatch { name: DispatchPoint::FirstEntry })
+                        && call.dispatch_complete(key, &transfer, None));
+                    require(closed.len() == 1, "prefetch abort has no unique trampoline call")?;
+                    let boundary = Boundary { kind: BoundaryKind::PrefetchAbort, address: Hex(context.pc),
+                        instructions: context.instructions, core, task: context.current, sp: Hex(context.sp),
+                        cpsr: context.cpsr, registers: context.registers, memory: Vec::new(), writes: Vec::new(),
+                        bank: Vec::new(), value: Some(transfer.pc),
+                        cpacr: board.register(core, arm::Register::Cpacr)?,
+                        fpexc: board.register(core, arm::Register::Fpexc)?, tpidrurw: board.cp15(core, 13, 0, 2)? };
+                    self.demand_paging.push(demand);
+                    for mut call in closed {
+                        call.record(boundary.clone())?;
+                        self.finish(machine, &transfer, tcm, vec![call], Completion::Dispatched)?;
+                    }
+                    let root = match core { Core::Primary => 0x4004dae0, Core::Secondary => 0x400ddaa0 };
+                    for offset in (0..=0x124).step_by(4) {
+                        let address = committed(Board { machine, maps: &self.maps }.word(core,tcm,root+offset)?)? & !1;
+                        for view in spellings(address & !ALIAS) {
+                            self.demand_services.insert((core,view),root+offset);
+                            if !machine.traces.sites.contains_key(&view) {
+                                require(machine.traces.sites.len() < SITE_LIMIT, "demand service site bound exceeded")?;
+                                machine.traces.add_sites(&machine.session, [(view,"scheduler-demand-service".into())].into_iter().collect())?;
+                            }
+                        }
+                    }
+                }
+            } else if matches!(low, 0x43758 | 0xd3758) {
+                let target = committed(Board { machine, maps: &self.maps }.word(core,tcm,context.registers[2]+8)?)?;
+                self.trampoline_loads[core.index()] = Some(TrampolineLoad { context, target,
+                    core_instructions: machine.session.board.instruction_counts()[core.index()] });
+            } else if self.trampoline_loads[core.index()].is_some_and(|load| {
+                context.pc & !ALIAS == load.target & !ALIAS && context.current == load.context.current
+            }) {
+                self.trampoline_loads[core.index()] = None;
+            }
+            if let Some(&root) = self.demand_services.get(&(core,context.pc)) {
+                let board = Board { machine, maps: &self.maps };
+                let context_word = board.word(core,tcm,match core { Core::Primary => 0x400545a4, Core::Secondary => 0x400e4564 })?;
+                if context_word == (Read::Committed { value: 0 }) && context.cpsr & 0x9f == 0x13 {
+                    for demand in self.demand_paging.iter_mut().filter(|demand| demand.service.is_none()
+                        && demand.load.context.core == core && demand.load.context.current == context.current) {
+                        demand.service = Some(DemandService { context, context_word,
+                            root: WordValue { address: Hex(root), value: board.word(core,tcm,root)? } });
+                    }
+                }
             }
             if PC_WATCHES.contains(&(context.pc & !ALIAS)) {
                 let address = context.pc & !ALIAS;
@@ -1258,6 +1445,7 @@ struct Report<'a> {
     bank_counts: [u64; 2],
     pc_watches: Vec<&'a PcWatch>,
     probes: &'a [ProbeHit],
+    demand_paging: &'a [DemandPaging],
 }
 
 fn arguments() -> Result<BTreeMap<String, PathBuf>, String> {
@@ -1336,6 +1524,8 @@ fn drive() -> Result<(), String> {
         bank_counts: [0; 2], pc_watches: BTreeMap::new(),
         dispatched: [false; 2],
         probe_hits: Vec::new(),
+        trampoline_loads: [None; 2], demand_paging: Vec::new(), demand_services: BTreeMap::new(),
+        write_batch: Vec::with_capacity(WATCH_LIMIT*2), write_sequence: Rc::new(Cell::new(0)),
     };
     machine.traces.bound_full_registers(NonZeroUsize::new(2).ok_or("zero hit bound")?);
     machine.traces.stop_labels = [ENTRY_LABEL, CONTINUATION_LABEL, FILL_LABEL, ARM_LABEL, "scheduler-pc-watch", "scheduler-probe"]
@@ -1344,6 +1534,9 @@ fn drive() -> Result<(), String> {
         let mut labels = validated.sites.labels();
         for address in PC_WATCHES.into_iter().chain(DISPATCH_LOADS.into_iter().filter(|&address| retained_dispatch_point(&validated.plan,address))).flat_map(spellings) {
             labels.insert(address, "scheduler-pc-watch".into());
+            for point in [0xc,0x43758,0xd3758].into_iter().flat_map(spellings) {
+                labels.insert(point, "scheduler-pc-watch".into());
+            }
         }
         machine.traces.arm_mutable(&machine.session, labels)?;
         observer.begin_data(&machine)?;
@@ -1387,6 +1580,7 @@ fn drive() -> Result<(), String> {
         bank_counts: observer.bank_counts,
         pc_watches: observer.pc_watches.values().collect(),
         probes: &observer.probe_hits,
+        demand_paging: &observer.demand_paging,
     };
     let file = File::create_new(output.join("observation.json")).map_err(|error| error.to_string())?;
     let mut writer = BufWriter::new(file);
@@ -1413,8 +1607,13 @@ mod tests {
         OpenCall { entry: EntryState { slot: SlotId { domain: Domain::A, entry: Hex(0x45cd4),
             semantic: Semantic::Service { name: Service::SleepTask } }, core: Core::Primary, cpsr: 0x53,
             arguments: [0;4], memory: vec![], r0: 0, lr: Hex(0x8000), task: Read::Committed { value: 0x9000 },
-            sp: Hex(0xa000), registers: [0;16], cpacr: 0, fpexc: 0, tpidrurw: 7, origin: None },
+            sp: Hex(0xa000), registers: [0;16], cpacr: 0, fpexc: 0, tpidrurw: 7, origin: None, kernel_context: 0, task_stack: None },
             entered: 1, writes: vec![], bank: vec![], history: vec![], write_cursor: 0, bank_cursor: 0, suspended: false }
+    }
+
+    fn captured(write: Written) -> CapturedWrite {
+        CapturedWrite { write, origin: WriteOrigin { core: Core::Primary, pc: Hex(0x45cd4), sp: Hex(0x9ff0),
+            cpsr: 0x53, task: Hex(0x9000), kernel_context: 0, instructions: 1 } }
     }
 
     fn boundary(kind: BoundaryKind) -> Boundary {
@@ -1442,6 +1641,8 @@ mod tests {
             assert!(!call.dispatch_complete(&key, &Context { current: Read::Committed { value: 0x9100 }, ..target }, None));
             assert!(!call.dispatch_complete(&key, &Context { sp: target.sp-4, ..target }, None));
             assert!(call.dispatch_complete(&key, &target, None));
+            let alias_target = Context { pc: 0x40008000, ..target };
+            assert!(call.dispatch_complete(&key, &alias_target, None));
         }
     }
 
@@ -1455,8 +1656,8 @@ mod tests {
             (BoundaryKind::SelectComplete,"select-complete"),(BoundaryKind::FirstEntryExit,"first-entry-exit"),
             (BoundaryKind::IrqTail,"irq-tail"),(BoundaryKind::Return,"return"),(BoundaryKind::Acquired,"acquired")] {
             let mut call = call();
-            call.writes.push(Written { address: Hex(0x9018), size: 4, value: 0x9fd0 });
-            call.bank.push(Written { address: Hex(0xfffb30ec), size: 4, value: 0x1000000 });
+            call.writes.push(captured(Written { address: Hex(0x9018), size: 4, value: 0x9fd0 }));
+            call.bank.push(captured(Written { address: Hex(0xfffb30ec), size: 4, value: 0x1000000 }));
             call.record(boundary(kind)).unwrap();
             let wire = serde_json::to_value(&call).unwrap();
             let event = &wire["history"][0];
@@ -1485,9 +1686,9 @@ mod tests {
     fn scheduler_completion_keeps_running_saved_frame_trampoline_and_doorbell_effects() {
         let mut call = call();
         for (address,value) in [(0x40054760,0x9100),(0x9018,0x9fd0),(0x901c,0x43668),(0x400546d8,1)] {
-            call.writes.push(Written { address: Hex(address),size:4,value });
+            call.writes.push(captured(Written { address: Hex(address),size:4,value }));
         }
-        call.bank.push(Written { address: Hex(0xfffb30ec),size:4,value:0x1000000 });
+        call.bank.push(captured(Written { address: Hex(0xfffb30ec),size:4,value:0x1000000 }));
         let mut event = boundary(BoundaryKind::FirstEntryExit);
         event.cpsr = 0x53;
         event.registers[15] = 0x8100;
@@ -1508,13 +1709,13 @@ mod tests {
     #[test]
     fn history_segments_effects_and_retains_save_resume_retry_callback_order() {
         let mut call = call();
-        call.writes.push(Written { address: Hex(0x900c), size: 1, value: 10 });
+        call.writes.push(captured(Written { address: Hex(0x900c), size: 1, value: 10 }));
         call.record(boundary(BoundaryKind::Save)).unwrap();
         assert!(call.suspended);
         call.record(boundary(BoundaryKind::Resume)).unwrap();
         assert!(!call.suspended);
         call.record(boundary(BoundaryKind::Retry)).unwrap();
-        call.bank.push(Written { address: Hex(0xfffb40cc), size: 4, value: 0x1000000 });
+        call.bank.push(captured(Written { address: Hex(0xfffb40cc), size: 4, value: 0x1000000 }));
         call.record(boundary(BoundaryKind::Callback)).unwrap();
         call.record(boundary(BoundaryKind::CallbackReturn)).unwrap();
         call.record(boundary(BoundaryKind::Return)).unwrap();
@@ -1552,6 +1753,109 @@ mod tests {
         assert_eq!(calls.close(&other).len(), 1);
         assert_eq!(serde_json::to_value(Completion::Discard).unwrap(), "discard");
         assert_eq!(serde_json::to_value(Completion::Dispatched).unwrap(), "dispatched");
+    }
+
+    fn demand_paging() -> DemandPaging {
+        let mut registers = std::array::from_fn(|index| index as u32);
+        registers[13] = 0xa42200;
+        registers[14] = 0x453f0;
+        registers[15] = 0x43758;
+        let context = Context { core: Core::Primary, pc: 0x43758, lr: registers[14], sp: registers[13],
+            cpsr: 0x53, r0: registers[0], arguments: [0,1,2,3], registers, instructions: 10,
+            current: Read::Committed { value: 0x4005ffb4 } };
+        let target = 0x1215480;
+        let mut abort = Context { pc: 0xc, lr: target+4, sp: 0x70000c00, cpsr: 0x1d7, instructions: 11, ..context };
+        abort.registers[13] = abort.sp;
+        abort.registers[14] = abort.lr;
+        abort.registers[15] = abort.pc;
+        DemandPaging { load: TrampolineLoad { context, target, core_instructions: 7 }, abort,
+            core_instructions: 8, spsr: context.cpsr, ifar: target, ifsr: 13, service: None }
+    }
+
+    #[test]
+    fn trampoline_permission_fault_preserves_the_attempted_task_entry_envelope() {
+        let demand = demand_paging();
+        let transfer = demand.transfer().unwrap();
+        assert_eq!(transfer.pc, demand.load.target);
+        assert_eq!(transfer.registers[..15], demand.load.context.registers[..15]);
+        assert_eq!(transfer.registers[15], demand.load.target);
+        assert_eq!(transfer.cpsr, 0x53);
+        assert_eq!(transfer.instructions, demand.abort.instructions);
+    }
+
+    #[test]
+    fn trampoline_fault_refuses_every_unproven_exception_transition() {
+        let mutations: [fn(&mut DemandPaging); 10] = [
+            |d| d.abort.core = Core::Secondary,
+            |d| d.abort.current = Read::Committed { value: 0x4005ffec },
+            |d| d.load.context.pc += 4,
+            |d| d.abort.pc = 0x10,
+            |d| d.abort.cpsr = 0x1d3,
+            |d| d.core_instructions += 1,
+            |d| d.spsr ^= 0x80,
+            |d| d.ifsr = 5,
+            |d| d.ifar += 4,
+            |d| d.abort.lr += 4,
+        ];
+        for mutate in mutations {
+            let mut demand = demand_paging();
+            mutate(&mut demand);
+            assert!(demand.transfer().is_err());
+        }
+        for index in 0..13 {
+            let mut demand = demand_paging();
+            demand.abort.registers[index] ^= 1;
+            assert!(demand.transfer().is_err());
+        }
+    }
+
+    #[test]
+    fn write_hooks_retain_task_irq_and_foreign_writer_envelopes() {
+        use fujimod_emulator::board::{bus::{Bus,Mode},factory::{self,Graph,Processor,Ram},memory::BusMapping};
+        use fujimod_emulator_cpu::{ExecutionPolicy,Model,timeline::Ratio};
+        fujimod_emulator_exr2_board::register_board_builder();
+        fujimod_emulator_models::register();
+        let graph = Graph {
+            processors: vec![Processor { model: Model::CortexR5F, rprofile: Some(Default::default()), mprofile: None,
+                released: true, registers: vec![(Register::Pc,0x1000),(Register::Pstate,0x13)] }],
+            ram: vec![Ram { base: 0, size: 0x60000 }], peripherals: vec![], decoders: vec![],
+            dma_mappings: vec![BusMapping::ram(0,0x60000)],
+            mappings: vec![MemoryMap { core: 0, address: 0, physical: 0, size: 0x60000, permissions: 7 },
+                MemoryMap { core: 0, address: 0x40000000, physical: 0, size: 0x60000, permissions: 7 },
+                MemoryMap { core: 0, address: 0xfffb3000, physical: 0x3000, size: 0x1000, permissions: 3 }],
+            instructions_per_tick: Ratio::new(24,1).unwrap(),
+        };
+        let mut board = graph.build(factory::Options { engine: factory::Engine::Unicorn, translation_cache_bytes: 1<<20 },
+            Bus::new(Mode::Strict),None).unwrap();
+        board.set_execution_policy(ExecutionPolicy::Exact).unwrap();
+        board.write_physical(0x1000,&[0xe5810000u32,0xeafffffe].into_iter().flat_map(u32::to_le_bytes).collect::<Vec<_>>()).unwrap();
+        let mut points = board.instruction_points_begin_mutable(0,Vec::new()).unwrap();
+        let capture = Box::new(RefCell::new(DataCapture { cpu: unsafe { callback_cpu(board.cpu(0).unwrap()) },
+            core: Core::Primary, sequence: Rc::new(Cell::new(0)), active: BTreeSet::from([0x3000,0xfffb30cc & !ALIAS]),
+            rows: Vec::new(), overflow: false, failure: None, cached: None }));
+        let data = (&*capture as *const RefCell<DataCapture>).cast_mut().cast();
+        let hook = unsafe { board.cpu(0).unwrap().install_hook(Hook::Memory {
+            callback: data_write, data, read: false, write: true, range: HookRange::All,
+        }).unwrap() };
+        for (index,(task,context,sp,address)) in [(0x9000u32,0u32,0x5000u32,0x3000u32),
+            (0x9000,1,0x7000,0x3000),(0xa000,0,0x6000,0xfffb30cc)].into_iter().enumerate() {
+            board.write_physical(0x54760,&task.to_le_bytes()).unwrap();
+            board.write_physical(0x545a4,&context.to_le_bytes()).unwrap();
+            for (register,value) in [(arm::Register::R(0),index as u64),(arm::Register::R(1),u64::from(address)),
+                (arm::Register::R(13),u64::from(sp)),(arm::Register::R(15),0x1000)] {
+                board.write_register(0,Register::Arm32(register),value).unwrap();
+            }
+            board.run_window(index as u64+1,1,None,None).unwrap();
+        }
+        board.cpu(0).unwrap().remove_hook(hook).unwrap();
+        board.instruction_points_end(0,&mut points).unwrap();
+        let captured = capture.borrow();
+        assert!(!captured.overflow && captured.failure.is_none(), "{:?}", captured.failure);
+        assert_eq!(captured.rows.len(),3);
+        let owners: Vec<_> = captured.rows.iter().map(|(_,row)| (row.origin.task.0,row.origin.kernel_context,row.origin.sp.0)).collect();
+        assert_eq!(owners,[(0x9000,0,0x5000),(0x9000,1,0x7000),(0xa000,0,0x6000)]);
+        assert_eq!(captured.rows.iter().map(|(_,row)| row.write.value).collect::<Vec<_>>(),[0,1,2]);
+        assert_eq!(captured.rows.iter().map(|(_,row)| row.write.address.0).collect::<Vec<_>>(),[0x3000,0x3000,0xfffb30cc]);
     }
 }
 

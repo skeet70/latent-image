@@ -1,4 +1,4 @@
-module Emulation.SchedulerPairS3b (serviceCall, supportsService, resumeService, releaseWait) where
+module Emulation.SchedulerPairS3b (NotifyPolicy (..), serviceCall, serviceCallWithNotify, supportsService, resumeService, releaseWait) where
 
 import Control.Monad (when)
 import Data.Bits ((.&.), (.|.), complement, shiftR)
@@ -12,8 +12,13 @@ import Replacement.RtosScheduler.Regions (Helper (..))
 supportsService :: Service -> Bool
 supportsService service = service `elem` [InterruptActivateTask,ActivateTask,CancelActivation,WakeTask,InterruptWakeTask,CancelWakeup]
 
+data NotifyPolicy = StockNotify | PredicateNotify NotificationTarget NotifyPredicate
+
 serviceCall :: Domain -> Service -> Word32 -> Arguments -> Memory -> Either ModelFailure ServiceExpected
-serviceCall domain service cpsr (Arguments [handle,_,_,_])
+serviceCall = serviceCallWithNotify StockNotify
+
+serviceCallWithNotify :: NotifyPolicy -> Domain -> Service -> Word32 -> Arguments -> Memory -> Either ModelFailure ServiceExpected
+serviceCallWithNotify policy domain service cpsr (Arguments [handle,_,_,_])
  | supportsService service = runService $ do
   valid <- serviceContextValid words' handler cpsr
   if not valid then returned cpsr (-25) else do
@@ -40,7 +45,7 @@ serviceCall domain service cpsr (Arguments [handle,_,_,_])
             returned (irqEnabled cpsr) (-41)
           else if (not wake && state == 0) || (wake && state .&. 8 /= 0) then do
             changed <- if wake then releaseWait domain record task else fst <$> helperAction domain Prepare (Arguments [record,task,0,0])
-            (local,bank) <- if changed == 0 then pure (0,[]) else notifyService domain <$> load record
+            (local,bank) <- if changed == 0 then pure (0,[]) else load record >>= notification . NotificationTarget
             when (handler && local /= 0) (store (rescheduleCell words') 1)
             unlockService record
             pure (if not handler && local /= 0 then ServiceDispatch Save reason else ServiceReturn,
@@ -56,7 +61,12 @@ serviceCall domain service cpsr (Arguments [handle,_,_,_])
   cancel = service `elem` [CancelActivation,CancelWakeup]
   bit = if wake then 2 else 1
   reason = fromIntegral (if wake then (-19 :: Int) else -7)
-serviceCall _ _ _ _ = const (Left InvalidArguments)
+  notification target = case policy of
+    StockNotify -> pure (notifyService domain target)
+    PredicateNotify expected predicate
+      | target==expected -> pure (notifyWithPredicate predicate domain target)
+      | otherwise -> VM (const (Left InvalidArguments))
+serviceCallWithNotify _ _ _ _ _ = const (Left InvalidArguments)
 
 returned :: Word32 -> Int -> VM (ServiceCompletion,Maybe Word32,Word32,[(Address,Word32)])
 returned cpsr result = pure (ServiceReturn,Just (fromIntegral result),cpsr,[])
