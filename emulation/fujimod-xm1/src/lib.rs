@@ -31,6 +31,7 @@ pub mod provenance;
 pub mod power_hold;
 pub mod r4f;
 pub mod render;
+pub mod render_provenance;
 pub mod run;
 pub mod record_medium;
 pub mod reset_observation;

@@ -70,6 +70,8 @@ impl Serialize for Hex {fn serialize<S:serde::Serializer>(&self,serializer:S)->R
 #[serde(deny_unknown_fields)]
 struct TraceHit {site:String,address:Hex,core:Core,instructions:owner::Count,registers:BTreeMap<Gpr,Hex>,sp:Hex,lr:Hex,cpsr:u32,
     #[serde(default,skip_serializing_if="Option::is_none")]
+    render_object_provenance_sequence:Option<owner::Count>,
+    #[serde(default,skip_serializing_if="Option::is_none")]
     code_word:Option<Frozen>}
 #[derive(Clone,Copy,Deserialize,Serialize)]
 #[serde(rename_all="kebab-case")]

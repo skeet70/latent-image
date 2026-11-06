@@ -340,6 +340,7 @@ mod tests {
     fn storage_code_refuses_aliases_writes_and_missing_observation() {
         let hit = Hit { site: "helper".into(), address: "0x725cc4".into(), core: 1,
             instructions: 1, registers: BTreeMap::new(), sp: "0x400f3388".into(),
+            render_object_provenance_sequence: None,
             lr: "0x725e78".into(), cpsr: 0xd3,
             code_word: Some(CodeWord { guest: 0xe320f000, physical: 0xe320f000,
                 expected: 0xe320f000, tcm: [[0; 2]; 2] }), memory: Vec::new() };

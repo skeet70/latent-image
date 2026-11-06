@@ -157,6 +157,7 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/src/record_medium.rs",
     "//emulation:fujimod-xm1/src/record_medium_main.rs",
     "//emulation:fujimod-xm1/src/render.rs",
+    "//emulation:fujimod-xm1/src/render_provenance.rs",
     "//emulation:fujimod-xm1/src/run.rs",
     "//emulation:fujimod-xm1/src/reset_observation.rs",
     "//emulation:fujimod-xm1/src/root_compact.rs",

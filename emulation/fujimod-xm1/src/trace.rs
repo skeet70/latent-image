@@ -22,6 +22,8 @@ pub struct Hit {
     pub address: String,
     pub core: usize,
     pub instructions: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub render_object_provenance_sequence: Option<u64>,
     pub registers: BTreeMap<&'static str, String>,
     pub sp: String,
     pub lr: String,
@@ -974,6 +976,7 @@ pub struct TraceSites {
     capture_memory: Option<CaptureMemory>,
     modal_observation: Option<ModalTrace>,
     stack_scope: Option<StackScope>,
+    pub(crate) render_object_provenance_sequence: Option<u64>,
 }
 
 /// The engine's address bound for one instruction point set.
@@ -1727,6 +1730,7 @@ impl TraceSites {
                     address: format!("{address:#x}"),
                     core: *core,
                     instructions,
+                    render_object_provenance_sequence: self.render_object_provenance_sequence,
                     registers,
                     sp: format!("{:#x}", register(session, *core, arm::Register::R(13))?),
                     lr: format!("{:#x}", register(session, *core, arm::Register::R(14))?),

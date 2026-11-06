@@ -133,6 +133,7 @@ pub struct Machine {
     /// The first strict stop; no input is admitted after it.
     pub failure: Option<String>,
     pub traces: TraceSites,
+    pub render_provenance: Option<crate::render_provenance::Collector>,
     pub guard: Guard,
     pub key_release_observations: Vec<KeyReleaseObservation>,
     release_context: ReleaseContext,
@@ -150,6 +151,7 @@ impl Machine {
         guard.arm(&session.board)?;
         Ok(Self {
             document, session, failure: None, traces: TraceSites::default(), guard,
+            render_provenance: None,
             key_release_observations: Vec::new(),
             release_context: ReleaseContext {
                 route: std::env::var("XM1_KEY_RELEASE_ROUTE").ok().map(ReleaseRoute),
@@ -157,6 +159,22 @@ impl Machine {
             },
             release_log: std::env::var_os("XM1_KEY_RELEASE_LOG").map(PathBuf::from),
         })
+    }
+
+    pub fn begin_render_provenance(&mut self) -> Result<(), String> {
+        if self.render_provenance.is_some() { return Err("render provenance already active".into()); }
+        let (_, graph) = crate::run::graph(&self.document)?;
+        self.render_provenance = Some(crate::render_provenance::Collector::begin(&self.session, graph.mappings)?);
+        self.traces.render_object_provenance_sequence = Some(0);
+        Ok(())
+    }
+
+    fn collect_render_provenance(&mut self) -> Result<(), String> {
+        if let Some(collector) = &mut self.render_provenance {
+            collector.collect(&self.session)?;
+            self.traces.render_object_provenance_sequence = Some(collector.sequence());
+        }
+        Ok(())
     }
 
     pub(crate) fn begin_capture_observation(&mut self, scope: CaptureScope) -> Result<(), String> {
@@ -198,12 +216,14 @@ impl Machine {
 
     /// Removes host instrumentation before a session checkpoint.
     pub fn disarm(&mut self) -> Result<(), String> {
+        if let Some(collector) = &mut self.render_provenance { collector.disarm(&self.session)?; }
         self.traces.teardown(&self.session)?;
         self.guard.disarm(&self.session.board)
     }
 
     pub fn rearm(&mut self) -> Result<(), String> {
         self.guard.arm(&self.session.board)?;
+        if let Some(collector) = &mut self.render_provenance { collector.rearm(&self.session)?; }
         self.traces.reinstall(&self.session)
     }
 
@@ -248,6 +268,12 @@ impl Machine {
                 return RunOutcome::Completed;
             }
             let window = end.min(current.value().saturating_add(GUARD_WINDOW));
+            if let Some(collector) = &self.render_provenance {
+                if let Err(error) = collector.begin_advance(&self.session) {
+                    self.failure = Some(error);
+                    return RunOutcome::Failed;
+                }
+            }
             self.traces.begin_advance();
             let result = self.session.board.run_window(window, self.document.execution.quantum, None, until);
             let refused = self.guard.scan(&self.session.board);
@@ -262,6 +288,10 @@ impl Machine {
                     return RunOutcome::Failed;
                 }
             };
+            if let Err(error) = self.collect_render_provenance() {
+                self.failure = Some(error);
+                return RunOutcome::Failed;
+            }
             match self.traces.collect(&self.session, current) {
                 Ok(CollectionOutcome::Stop) => return RunOutcome::Stopped,
                 Ok(CollectionOutcome::DrainRequired) => return RunOutcome::DrainRequired,
@@ -620,6 +650,79 @@ mod tests {
         let mut session = crate::run::open(&document, &update, &rom).unwrap();
         session.board.set_execution_policy(document.execution_policy.into()).unwrap();
         Machine::new(document, session).unwrap()
+    }
+
+    #[test]
+    fn render_provenance_refuses_unrelated_code_at_source_address() {
+        use fujimod_emulator_cpu::Register;
+        let mut machine = machine();
+        machine.begin_render_provenance().unwrap();
+        machine.session.board.write_physical(0x6dcc44, &SPIN.to_le_bytes()).unwrap();
+        machine.session.board.write_register(0, Register::Pc, 0x6dcc44).unwrap();
+        assert_eq!(machine.run(100), RunOutcome::Failed);
+        assert_eq!(render_batch(&mut machine)["coverage"], "refused");
+    }
+
+    fn render_event(machine: &mut Machine, site: u32, base: u32, object: u32) {
+        use fujimod_emulator_cpu::{Register, arm};
+        let branch = 0xea00_0000 | ((0u32.wrapping_sub(site + 12) >> 2) & 0x00ff_ffff);
+        let source: u32 = match site {
+            0x6dcc44 | 0x6dce5c | 0x6dcf20 => 0xe2505000,
+            0x117d804 | 0x117d760 => 0xe5840004,
+            0x89cdc4 => 0xe92d4008,
+            _ => panic!("unknown fixture site"),
+        };
+        machine.session.board.write_physical(u64::from(site), &source.to_le_bytes()).unwrap();
+        machine.session.board.write_physical(u64::from(site + 4), &branch.to_le_bytes()).unwrap();
+        for (register, value) in [(Register::Pc, site), (Register::Arm32(arm::Register::R(0)), base),
+            (Register::Arm32(arm::Register::R(4)), object), (Register::Arm32(arm::Register::R(13)), 0x00a00000)] {
+            machine.session.board.write_register(0, register, u64::from(value)).unwrap();
+        }
+        assert_eq!(machine.run(100), RunOutcome::Completed);
+    }
+
+    fn render_batch(machine: &mut Machine) -> serde_json::Value {
+        serde_json::to_value(machine.render_provenance.as_mut().unwrap().drain(&machine.session).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn render_provenance_covers_idle_gaps_and_preserves_free_reuse_identity() {
+        let mut machine = machine();
+        machine.begin_render_provenance().unwrap();
+        render_event(&mut machine, 0x6dcc44, 0x01000000, 0);
+        render_event(&mut machine, 0x117d804, 0x01000000, 0x02000000);
+        let first = render_batch(&mut machine);
+        assert_eq!(first["sequence_start"], 0);
+        assert_eq!(first["sequence_end"], 2);
+        assert_eq!(first["events"][0]["ordinal"], 1);
+        assert_eq!(machine.run(100), RunOutcome::Completed);
+        render_event(&mut machine, 0x89cdc4, 0x01000000, 0);
+        render_event(&mut machine, 0x6dcc44, 0x01000000, 0);
+        let second = render_batch(&mut machine);
+        assert_eq!(second["start"], first["end"]);
+        assert_eq!(second["sequence_start"], 2);
+        assert_eq!(second["sequence_end"], 4);
+        assert_eq!(second["coverage"], "continuous");
+        assert_eq!(second["events"][0]["kind"], "free");
+        assert_eq!(second["events"][1]["ordinal"], 2);
+        assert_eq!(second["events"][1]["allocation_base"], "0x01000000");
+        let empty = render_batch(&mut machine);
+        assert_eq!(empty["sequence_start"], 4);
+        assert_eq!(empty["sequence_end"], 4);
+        assert_eq!(empty["events"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn render_trace_hits_carry_the_exact_provenance_boundary() {
+        let mut machine = machine();
+        machine.begin_render_provenance().unwrap();
+        machine.traces.arm(&machine.session, [(0x117d804, "bind".into())].into()).unwrap();
+        render_event(&mut machine, 0x6dcc44, 0x01000000, 0);
+        render_event(&mut machine, 0x117d804, 0x01000000, 0x02000000);
+        let batch = render_batch(&mut machine);
+        let hit = serde_json::to_value(&machine.traces.hits[0]).unwrap();
+        assert_eq!(hit["render_object_provenance_sequence"], 2);
+        assert_eq!(hit["instructions"], batch["events"][1]["instructions"]);
     }
 
     fn write_row(machine: &Machine, row: u64, record: &[u8; 28]) {

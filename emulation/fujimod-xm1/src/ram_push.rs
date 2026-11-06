@@ -849,6 +849,7 @@ impl Server {
         let snapshot = machine.session.import_snapshot(bytes)?;
         machine.disarm()?;
         machine.session.restore(&snapshot)?;
+        if let Some(collector) = &mut machine.render_provenance { collector.refuse_coverage(); }
         let cleared = machine.failure.take();
         if cleared.is_some() {
             machine.guard = Default::default();
@@ -947,12 +948,17 @@ impl Server {
                 json!({"sites": count})
             }
             Request::TraceHits { from, limit } => {
+                if self.bridge.machine.failure.is_some() {
+                    if let Some(collector) = &mut self.bridge.machine.render_provenance { collector.refuse_coverage(); }
+                }
                 let hits = &self.bridge.machine.traces.hits;
                 if from > hits.len() {
                     return Err("trace-hits requires a hit index within the recorded hits".into());
                 }
                 let end = limit.map_or(hits.len(), |limit| hits.len().min(from.saturating_add(limit.get())));
-                json!({"count": hits.len(), "hits": &hits[from..end]})
+                let provenance = self.bridge.machine.render_provenance.as_mut()
+                    .map(|collector| collector.drain(&self.bridge.machine.session)).transpose()?;
+                json!({"count": hits.len(), "hits": &hits[from..end], "render_object_provenance": provenance})
             }
             Request::ModalObservationBegin(request) => {
                 let machine = &mut self.bridge.machine;
@@ -1327,6 +1333,7 @@ impl Server {
     }
 
     fn serve_io(&mut self, input: impl BufRead, mut output: impl Write) -> Result<(), String> {
+        self.bridge.machine.begin_render_provenance()?;
         let mut emit = |value: &Value| -> Result<(), String> {
             serde_json::to_writer(&mut output, value).map_err(|error| error.to_string())?;
             output.write_all(b"\n").and_then(|()| output.flush()).map_err(|error| error.to_string())

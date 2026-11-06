@@ -2031,6 +2031,7 @@ mod tests {
         ]});
         let hit = Hit {
             site: "instruction".into(), address: format!("{:#x}", WFI.0), core: 1, instructions: 42,
+            render_object_provenance_sequence: None,
             registers: BTreeMap::new(), sp: "0x0".into(), lr: "0x0".into(), cpsr: 0x53, code_word: None, memory: Vec::new(),
         };
         let mut cursor = 0;
