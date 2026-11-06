@@ -40,10 +40,11 @@ pub fn poll_flag<M: ObjectLock>(
         if m.load_word(control.queue().next()) != control.0 .0 {
             return Err(ObjectStatus::QueueOverflow);
         }
-        let clear_on_match = m.load_word(config.attributes()) & FlagConfig::CLEAR_ON_MATCH != 0;
         let mut pattern = Pattern(m.load_word(control.pattern()));
         match check(&mut pattern, want.pattern(), mode, false) {
             Some(reported) => {
+                let clear_on_match =
+                    m.load_word(config.attributes()) & FlagConfig::CLEAR_ON_MATCH != 0;
                 m.store_word(out.0, reported.0);
                 if clear_on_match {
                     m.store_word(control.pattern(), 0);
