@@ -362,6 +362,7 @@ enum Request {
     /// Runs the guest for `ticks` board ticks with no input.
     IdleTicks { ticks: BoardTicks },
     LocalUiDrain { ticks: BoardTicks },
+    UiState,
     SnapshotDrop { name: SnapshotName },
     Finish,
 }
@@ -405,6 +406,7 @@ enum RequestKind {
     Idle,
     IdleTicks,
     LocalUiDrain,
+    UiState,
     SnapshotDrop,
     Finish,
 }
@@ -448,6 +450,7 @@ impl Request {
             Request::Idle { .. } => RequestKind::Idle,
             Request::IdleTicks { .. } => RequestKind::IdleTicks,
             Request::LocalUiDrain { .. } => RequestKind::LocalUiDrain,
+            Request::UiState => RequestKind::UiState,
             Request::SnapshotDrop { .. } => RequestKind::SnapshotDrop,
             Request::Finish => RequestKind::Finish,
         }
@@ -994,7 +997,7 @@ impl Server {
         }
         let read_only = tail_request || matches!(&request, Request::List | Request::TraceHits { .. }
             | Request::ImageInputFingerprint { .. } | Request::ReadMemory { .. } | Request::MediaRead { .. } | Request::NandRead { .. }
-            | Request::WatchState | Request::PreservationState | Request::MediaState);
+            | Request::WatchState | Request::PreservationState | Request::MediaState | Request::UiState);
         if !read_only {
             if let Some(failure) = self.bridge.machine.traces.modal_observation_report().failure {
                 return Err(failure.to_owned());
@@ -1384,6 +1387,8 @@ impl Server {
                 serde_json::to_value(self.bridge.local_ui_drain(ticks)?)
                     .map_err(|error| format!("local-ui-drain endpoint: {error}"))?
             }
+            Request::UiState => serde_json::to_value(self.bridge.ui_state()?)
+                .map_err(|error| format!("ui-state snapshot: {error}"))?,
             Request::SnapshotDrop { name } => {
                 self.snapshots.remove(&name).ok_or_else(|| format!("snapshot {} is not held", name.0))?;
                 json!({"name": name, "held": self.snapshots.len()})
@@ -1897,6 +1902,28 @@ mod tests {
         }
     }
 
+    #[test]
+    fn ui_state_observes_pending_mode_without_advancing_or_writing_ram() {
+        let mut server = server(&[0xeaff_fffe]);
+        let mode = [4u32, 5, 3, 3, 5, 1, 0, 0, 1, 1];
+        for (index, word) in mode.into_iter().enumerate() {
+            server.bridge.machine.session.board.write_physical(0x9500ec + 4 * index as u64, &word.to_le_bytes()).unwrap();
+        }
+        let before = (server.bridge.machine.instructions(), server.bridge.machine.session.board.now());
+        let mut before_ram = [0; 40];
+        server.bridge.machine.session.board.read_physical(0x9500ec, &mut before_ram).unwrap();
+        let response = server.handle(request(json!({"command": "ui-state"}))).unwrap().unwrap();
+        let view: fujimod_xm1::application_observation::RawView = serde_json::from_value(response["source_mode"].clone()).unwrap();
+        assert!(view.agrees());
+        assert_eq!(view.words().collect::<Vec<_>>(), mode);
+        assert_eq!(response["instructions"].as_u64(), Some(before.0));
+        assert_eq!(response["tick"].as_u64(), Some(before.1));
+        assert_eq!((server.bridge.machine.instructions(), server.bridge.machine.session.board.now()), before);
+        let mut after_ram = [0; 40];
+        server.bridge.machine.session.board.read_physical(0x9500ec, &mut after_ram).unwrap();
+        assert_eq!(after_ram, before_ram);
+    }
+
     fn exchange(server: &mut Server, input: &str) -> (Vec<Response>, Receipt) {
         exchange_bytes(server, input.as_bytes())
     }
@@ -2017,6 +2044,31 @@ mod tests {
         server.bridge.machine.failure = Some("synthetic terminal fault".into());
         let final_state = server.handle(Request::WatchState).unwrap().unwrap();
         assert_eq!(final_state, state);
+    }
+
+    #[test]
+    fn ui_state_is_read_only_during_active_capture_continuation_and_published_page() {
+        let mut server = server(&[0xe3a00000, 0xe2800001, 0xe3500041, 0x9afffffc, 0xeafffffe]);
+        server.handle(request(json!({"command": "trace-sites", "sites": {"0x00000004": "loop"}}))).unwrap();
+        server.handle(request(json!({"command": "capture-observation-begin"}))).unwrap();
+        let snapshot = |server: &mut Server| {
+            let before = (server.bridge.machine.instructions(), server.bridge.machine.session.board.now());
+            let response = server.handle(request(json!({"command": "ui-state"}))).unwrap().unwrap();
+            assert_eq!(response["instructions"].as_u64(), Some(before.0));
+            assert_eq!(response["tick"].as_u64(), Some(before.1));
+            assert_eq!((server.bridge.machine.instructions(), server.bridge.machine.session.board.now()), before);
+            let view: fujimod_xm1::application_observation::RawView = serde_json::from_value(response["source_mode"].clone()).unwrap();
+            assert!(view.agrees());
+            assert!(server.handle(request(json!({"command": "idle", "instructions": 1}))).is_err());
+            response
+        };
+        snapshot(&mut server);
+        let paused = server.handle(request(json!({"command": "shutter-sequence"}))).unwrap().unwrap();
+        assert_eq!(paused["state"], "drain-required");
+        let pending_snapshot = snapshot(&mut server);
+        let page = server.handle(request(json!({"command": "capture-observation-hits", "from": 0}))).unwrap().unwrap();
+        assert_eq!(page["next"], 64);
+        assert_eq!(snapshot(&mut server), pending_snapshot);
     }
 
     const DRAIN_FIRST_PAUSE: &str = concat!(

@@ -53,6 +53,18 @@ pub struct LocalRenderState {
     graphics: crate::application_observation::GraphicsState,
 }
 
+#[derive(Serialize)]
+#[serde(transparent)]
+struct UiStateTick(u64);
+
+#[derive(Serialize)]
+pub struct UiState {
+    instructions: crate::composed_catalog::Instructions,
+    tick: UiStateTick,
+    ui: crate::application_observation::UiWorkViews,
+    source_mode: crate::application_observation::RawView,
+}
+
 /// Controller 74's state: 0x04 on the live-view root; live-view overlays, menus and SET-UP
 /// pages use other values (crawl-4, reports/recipe-bank-ui-ownership.md).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -392,6 +404,16 @@ impl Ff80 {
                 return Ok(RunOutcome::Completed);
             }
         }
+    }
+
+    pub fn ui_state(&self) -> Result<UiState, String> {
+        self.machine.require_running()?;
+        Ok(UiState {
+            instructions: crate::composed_catalog::Instructions(self.machine.instructions()),
+            tick: UiStateTick(self.machine.session.board.now()),
+            ui: crate::application_observation::UiWorkViews::read(&self.machine.session)?,
+            source_mode: crate::application_observation::RawView::read(&self.machine.session, crate::provenance::Guest(0x9500ec), 10)?,
+        })
     }
 
     /// Observes current deferred UI and render work, not future timer sends.
