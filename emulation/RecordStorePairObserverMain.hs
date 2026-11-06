@@ -74,9 +74,9 @@ entries = [0x6ac2b4,0x6ac328,0x6ac478,0x6ac4c8,0x6ac7d4,0x6ac984,0x6acab8,0x6acd
 rangesValue :: [(Word32, Word32)] -> Value
 rangesValue ranges = A.toJSON [[start,end] | (start,end) <- ranges]
 
-retiredData :: Role -> Word32 -> Word32 -> [(Word32, Word32)]
-retiredData selected state block =
-  [(0x89f8f0,state),(0x89fa60,0x89fa68),(0x8e0080,0x8e008c),(0x917fa8,0x917fe4)]
+retiredData :: Role -> Word32 -> Word32 -> Word32 -> [(Word32, Word32)]
+retiredData selected state block cacheTag =
+  [(cacheTag+4,state),(0x89fa60,0x89fa68),(0x8e0080,0x8e008c),(0x917fa8,0x917fe4)]
   ++ [(block+0x20000,0x8e0080) | selected == Owned]
 
 mergeRanges :: [(Word32, Word32)] -> [(Word32, Word32)]
@@ -185,12 +185,15 @@ observe options directory record = do
   let symbol name = maybe (ioError (userError ("missing symbol " ++ name))) pure (M.lookup name syms)
   state <- symbol "record_store_state"
   block <- symbol "record_store_block"
-  let ownedRam = [(state,0x89fa60),(block,block+0x20000)]
+  cacheTag <- symbol "record_store_cache_tag"
+  need (cacheTag == 0x89f8f0 && cacheTag+4 <= state) "owned cache tag placement differs"
+  let ownedRam = [(cacheTag,cacheTag+4),(state,0x89fa60),(block,block+0x20000)]
       ownedValue = object ["code" .= rangesValue owned,"ram" .= rangesValue ownedRam
         ,"unwatched_owned_ram" .= rangesValue ownedRam,"activation_fetch" .= ([0x6ac2b4,0x6ac2b8]::[Word32])
         ,"rule" .= ("Owned-role stock-only RAM accesses fail after the first open-veneer fetch; initial image publication is admitted. Unoccupied code fetches fail. Owned state and block buffer are not watched; the oracle, returned records and NAND effects cover them."::T.Text)]
   BL.writeFile (directory </> "owned-extents.json") (A.encode ownedValue <> "\n")
   contract <- B.readFile (paths M.! "contract") >>= either (ioError . userError) pure . A.eitherDecodeStrict'
+  need (field "owned_cache_tag" contract == object ["address" .= cacheTag,"bytes" .= (4::Int),"initial_value" .= (0xffffffff::Word32),"initialized_by" .= (0x6ac2b4::Word32)]) "owned cache tag contract differs"
   datDigest <- sha256Hex <$> sha256File (paths M.! "update")
   linkedDigest <- sha256Hex <$> sha256File (paths M.! "linked")
   symbolsDigest <- sha256Hex <$> sha256File (paths M.! "symbols")
@@ -202,7 +205,7 @@ observe options directory record = do
       residualSites = [(address,"residual") | candidate <- rawCandidates, Number n <- [field "site" candidate], let address = truncate n]
       siteMap = M.fromList (residualSites ++ [(address,"record-entry") | address <- entries] ++ [(0x6fb7c8,"nand-write"),(0x6fb57c,"nand-erase")])
       sites = object [K.fromString (hexWord address) .= (label::T.Text) | (address,label) <- M.toList siteMap]
-      dataRanges = retiredData (role options) state block
+      dataRanges = retiredData (role options) state block cacheTag
       writes = [(rangeStart range,rangeEnd range) | range <- settingsRanges] ++ dataRanges
       fetches = if role options == Owned then mergeRanges ((0x6ac2b4,0x6ac2b8) : complementSpan owned) else [(0x6ac2b4,0x6ae114)]
       spec = object ["schema" .= (1::Int),"sites" .= sites,"hit_limit" .= (1500000::Int),"captures" .= captureSpec

@@ -32,7 +32,9 @@ data Inputs = Inputs { update :: Binding, runDocument :: Binding, rom :: Binding
 data Source = Source { sourceInputs :: Inputs, sourceSpecDigest :: Sha256 }
 newtype RowLimit = RowLimit Int
 data Spec = Spec { writes :: [PhysicalRange], readRanges :: [PhysicalRange], fetches :: [PhysicalRange], limit :: RowLimit }
-data Options = Options { sourceDirectory :: FilePath, perturbation :: Instructions, outputDirectory :: FilePath }
+data PerturbationPoint = BeforeFinalUp | BeforePickerDown
+newtype PhaseShift = PhaseShift { phaseShiftValue :: Integer }
+data Options = Options { sourceDirectory :: FilePath, perturbation :: PhaseShift, outputDirectory :: FilePath, perturbationPoint :: PerturbationPoint }
 newtype HitCursor = HitCursor Int
 newtype LogicalBlock = LogicalBlock Word32
 newtype PhysicalBlock = PhysicalBlock Word32
@@ -96,10 +98,18 @@ bindingValue :: Binding -> Value
 bindingValue binding = object ["path" .= bindingPath binding,"sha256" .= sha256Hex (bindingDigest binding)]
 
 parseOptions :: [String] -> IO Options
-parseOptions [source,delta,output] = case readMaybe delta :: Maybe Integer of
-  Just count | count >= 0 && count <= toInteger (instructionsValue maxIdle) -> Options <$> makeAbsolute source <*> pure (Instructions (fromInteger count)) <*> makeAbsolute output
-  _ -> ioError (userError "DELTA must be an integer in [0,90000000]")
-parseOptions _ = ioError (userError "usage: record-store-timing-control COMPLETED_ERASED_STOCK_DIR DELTA NEW_OUTPUT_DIR")
+parseOptions arguments = case arguments of
+  [source,delta,output] -> parse BeforeFinalUp source delta output
+  [source,delta,output,"--before-picker-down"] -> parse BeforePickerDown source delta output
+  _ -> ioError (userError "usage: record-store-timing-control COMPLETED_ERASED_STOCK_DIR DELTA NEW_OUTPUT_DIR [--before-picker-down]")
+ where
+  parse point source delta output = case readMaybe delta :: Maybe Integer of
+    Just count | count > negate (toInteger (instructionsValue preKeyIdle)) && count <= toInteger (instructionsValue maxIdle) -> Options <$> makeAbsolute source <*> pure (PhaseShift count) <*> makeAbsolute output <*> pure point
+    _ -> ioError (userError "DELTA must be an integer in (-20000000,90000000]")
+
+perturbationStep :: PerturbationPoint -> Int
+perturbationStep BeforeFinalUp = 5
+perturbationStep BeforePickerDown = 4
 
 main :: IO ()
 main = do
@@ -116,6 +126,23 @@ main = do
       putStrLn (displayException failure)
       exitFailure
 
+phaseTraceSpec :: Value -> IO Value
+phaseTraceSpec (Object fields) = case (KM.lookup "sites" fields, KM.lookup "captures" fields) of
+  (Just (Object sites), Just (Object captures)) -> do
+    let phaseSites = [(0x62907c,"picker-writer"),(0x103fb50,"reserve-primary-group")
+          ,(0x1029f8c,"pending-arm"),(0x1029430,"pending-reply"),(0x1031ad4,"line39")
+          ,(0xdcb6c0,"record-notification"),(0xde6304,"apply-notification"),(0xe0a4dc,"completion-notification")
+          ,(0x103fcbc,"group-release"),(0x103fc34,"group-release"),(0x103fc0c,"group-release")
+          ,(0x103f294,"group-write"),(0x103f31c,"group-write"),(0x104002c,"group-write")
+          ,(0x1040064,"group-write"),(0x103ff14,"group-write")] :: [(Word32,T.Text)]
+        siteKey :: Word32 -> K.Key
+        siteKey address = K.fromString ("0x" ++ showHex address "")
+        sites' = foldr (\(address,label) -> KM.insert (siteKey address) (String label)) sites phaseSites
+        captures' = KM.insert (siteKey 0x103fb50) (object ["entry" .= ([] :: [Value]),"returns" .= ([] :: [Value])]) captures
+    pure (Object (KM.insert "sites" (Object sites') (KM.insert "captures" (Object captures') fields)))
+  _ -> ioError (userError "source spec lacks sites or captures")
+phaseTraceSpec _ = ioError (userError "source spec is not an object")
+
 prepare :: Options -> IO ()
 prepare options = do
   receiptBytes <- B.readFile (sourceDirectory options </> "receipt.json")
@@ -128,8 +155,10 @@ prepare options = do
     need (digest == bindingDigest binding) ("input checksum differs: " ++ bindingPath binding)
   specBytes <- B.readFile (sourceDirectory options </> "spec.json")
   need (sha256 specBytes == sourceSpecDigest source) "source spec checksum differs"
-  spec <- json specBytes
-  B.writeFile (directory </> "spec.json") specBytes
+  sourceSpec <- json specBytes
+  tracedSpec <- phaseTraceSpec sourceSpec
+  spec <- either (ioError . userError) pure (parseEither parseJSON tracedSpec)
+  writeJson (directory </> "spec.json") tracedSpec
   B.writeFile (directory </> "source-receipt.json") receiptBytes
   executable <- getExecutablePath
   executableDigest <- sha256File executable
@@ -137,7 +166,7 @@ prepare options = do
         ["source_receipt" .= object ["path" .= (sourceDirectory options </> "receipt.json"),"sha256" .= sha256Hex (sha256 receiptBytes)]
         ,"inputs" .= object [K.fromText name .= bindingValue binding | (name,binding) <- bindings inputs]
         ,"observer" .= object ["path" .= executable,"sha256" .= sha256Hex executableDigest]
-        ,"extra_before_final_up" .= instructionsValue (perturbation options),"pre_key_idle" .= instructionsValue preKeyIdle
+        ,"instruction_shift" .= phaseShiftValue (perturbation options),"before_step" .= perturbationStep (perturbationPoint options),"pre_key_idle" .= instructionsValue preKeyIdle
         ,"keys" .= map crawlKeyWire keys]
   writeJson (directory </> "inputs.json") provenance
   result <- try (observe options inputs spec)
@@ -210,8 +239,9 @@ observe options inputs spec = do
         before <- readouts emulator settingsRanges
         HitCursor first <- readIORef cursor
         _ <- emulatorBridgeCommand emulator (watchRequest spec)
-        extra <- if step == length keys && instructionsValue (perturbation options) > 0 then emulatorIdle emulator (perturbation options) else pure Null
-        idle <- emulatorIdle emulator preKeyIdle
+        let delta = if step == perturbationStep (perturbationPoint options) then phaseShiftValue (perturbation options) else 0
+        extra <- if delta > 0 then emulatorIdle emulator (Instructions (fromInteger delta)) else pure Null
+        idle <- emulatorIdle emulator (Instructions (fromInteger (toInteger (instructionsValue preKeyIdle) + min 0 delta)))
         press <- emulatorDisplayKey emulator key
         observed <- emulatorWatchEnd emulator
         lastHit <- drain emulator

@@ -129,7 +129,7 @@ addressValue (Address address) = address
 physical :: Word32 -> Address
 physical address = Address (address .&. 0xbfffffff)
 retired :: Role -> [(Word32,Word32)]
-retired role = [(0x89f8f0,0x89f8f8),(0x89fa60,0x89fa68),(0x8e0080,0x8e008c),(0x917fa8,0x917fe4)]
+retired role = [(0x89f8f4,0x89f8f8),(0x89fa60,0x89fa68),(0x8e0080,0x8e008c),(0x917fa8,0x917fe4)]
   ++ [(0x8c0080,0x8e0080) | role == Owned]
 guardFetches :: Role -> [(Word32,Word32)] -> [(Word32,Word32)]
 guardFetches Stock _ = [(0x6ac2b4,0x6ae114)]
@@ -177,6 +177,8 @@ validateInputs bindings role receipt = do
   linked <- field "linked_sha256" contract >>= parseDigest
   symbols <- field "symbols_sha256" contract >>= parseDigest
   need (linked == digest (linkedBytes bindings) && symbols == digest (symbolBytes bindings)) "contract does not bind linked carrier and symbols"
+  tag <- field "owned_cache_tag" contract
+  need (tag == object ["address" .= (0x89f8f0::Word32),"bytes" .= (4::Int),"initial_value" .= (0xffffffff::Word32),"initialized_by" .= (0x6ac2b4::Word32)]) "owned cache tag contract differs"
   update <- field (if role == Stock then "source_sha256" else "candidate_sha256") contract >>= parseDigest
   need (lookup (InputName "update") parsed == Just update) "DAT does not match role contract"
   pure (filter ((/= InputName "update") . fst) parsed)
@@ -192,8 +194,9 @@ ownedRanges bindings = do
   forM_ [minBound..maxBound] $ \entry -> need (within code (addressValue (entryAddress entry)) 4) "carrier misses public veneer"
   state <- symbol "record_store_state"
   block <- symbol "record_store_block"
-  need (state == 0x89f8f8 && block == 0x8a0080 && B.length (linkedBytes bindings) == 7776) "carrier placement differs"
-  pure (code,[(state,0x89fa60),(block,block+0x20000)])
+  cacheTag <- symbol "record_store_cache_tag"
+  need (state == 0x89f8f8 && block == 0x8a0080 && cacheTag == 0x89f8f0 && B.length (linkedBytes bindings) == 7776) "carrier placement differs"
+  pure (code,[(cacheTag,cacheTag+4),(state,0x89fa60),(block,block+0x20000)])
 
 data RegionSnapshot = SettingsSnapshot | ResetSnapshot Role deriving (Eq, Show)
 parseRegions :: RegionSnapshot -> Value -> Parse Regions
