@@ -5,6 +5,7 @@
 pub mod layout;
 
 pub mod admission;
+pub mod create;
 pub mod id;
 pub mod matching;
 pub mod message;
@@ -22,6 +23,7 @@ fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
 }
 
 pub use admission::{admit, flag_wait_locked, poll_result, Admitted, Entry, Facts, Object, Params, Records, Request, Service};
+pub use create::{create_flag, create_mailbox, FlagCreate, MailboxCreate, Machine};
 pub use id::{own_flag_slot, own_mailbox_slot, resolve_flag, resolve_mailbox, EncodedId, EntryDomain, FlagId, MailboxId};
 pub use layout::{Domain, DomainId, FlagSlot, MailboxSlot, TaskSlot};
 pub use matching::{check, KeepMask, MatchMode, Pattern};

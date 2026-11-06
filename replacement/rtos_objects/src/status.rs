@@ -6,6 +6,8 @@ pub enum ObjectStatus {
     InvalidClass,
     /// The index is outside the table.
     InvalidIndex,
+    /// The creation record's exists word is nonzero.
+    AlreadyExists,
     /// The creation record's exists word is zero.
     NotCreated,
     /// A family parameter is out of range.
@@ -19,6 +21,7 @@ impl ObjectStatus {
         match self {
             Self::Context => -25,
             Self::InvalidClass | Self::InvalidIndex => -18,
+            Self::AlreadyExists => -41,
             Self::NotCreated => -42,
             Self::Param => -17,
             Self::QueueOverflow => -28,

@@ -1,4 +1,7 @@
+use crate::layout::GuestAddress;
 use crate::*;
+use std::cell::{Cell, RefCell};
+use std::collections::BTreeMap;
 
 fn entry() -> Entry {
     Entry {
@@ -397,12 +400,13 @@ fn status_codes_are_the_stock_codes() {
             ObjectStatus::Context,
             ObjectStatus::InvalidClass,
             ObjectStatus::InvalidIndex,
+            ObjectStatus::AlreadyExists,
             ObjectStatus::NotCreated,
             ObjectStatus::Param,
             ObjectStatus::QueueOverflow,
         ]
         .map(ObjectStatus::code),
-        [-25, -18, -18, -42, -17, -28]
+        [-25, -18, -18, -41, -42, -17, -28]
     );
 }
 
@@ -419,4 +423,148 @@ fn a_poll_without_a_match_is_a_timeout() {
     assert_eq!(poll_result(None), WaitOutcome::TimedOut);
     assert_eq!(poll_result(Some(Pattern(3))), WaitOutcome::Satisfied(Pattern(3)));
     assert_eq!(poll_result(None).code(), -50);
+}
+
+#[derive(Default)]
+struct Mock {
+    words: RefCell<BTreeMap<u32, u32>>,
+    masks: Cell<u32>,
+    restores: Cell<u32>,
+}
+
+impl Mock {
+    fn word(&self, at: GuestAddress) -> u32 {
+        *self.words.borrow().get(&at.0).unwrap_or(&0)
+    }
+
+    fn set(&self, at: GuestAddress, value: u32) {
+        self.words.borrow_mut().insert(at.0, value);
+    }
+}
+
+impl Machine for Mock {
+    fn load_word(&self, at: GuestAddress) -> u32 {
+        self.word(at)
+    }
+
+    fn store_word(&self, at: GuestAddress, value: u32) {
+        self.set(at, value);
+    }
+
+    fn mask_interrupts(&self) -> u32 {
+        self.masks.set(self.masks.get() + 1);
+        0xc0
+    }
+
+    fn restore_interrupts(&self, saved: u32) {
+        assert_eq!(saved, 0xc0);
+        self.restores.set(self.restores.get() + 1);
+    }
+}
+
+#[test]
+fn create_flag_writes_the_record_and_self_links_the_queue() {
+    let m = Mock::default();
+    let words = Domain::A.words();
+    let slot = FlagSlot::new(3, 120).unwrap();
+    let id = FlagId {
+        domain: Domain::A,
+        slot,
+    };
+    assert_eq!(
+        create_flag(&m, id, FlagCreate { attributes: 4, initial: 0x21 }),
+        Ok(id)
+    );
+    let config = words.flag_config(slot);
+    assert_eq!(m.word(config.attributes()), 4);
+    assert_eq!(m.word(config.initial()), 0x21);
+    assert_eq!(m.word(config.exists()), 1);
+    let control = words.flag_control(slot);
+    assert_eq!(m.word(control.queue().next()), control.0 .0);
+    assert_eq!(m.word(control.queue().prev()), control.0 .0);
+    assert_eq!(m.word(control.pattern()), 0x21);
+    assert_eq!(m.word(control.queue().config()), 0);
+    assert_eq!((m.masks.get(), m.restores.get()), (1, 1));
+}
+
+#[test]
+fn create_flag_refuses_an_existing_record_without_writing() {
+    let m = Mock::default();
+    let words = Domain::A.words();
+    let slot = FlagSlot::new(3, 120).unwrap();
+    let config = words.flag_config(slot);
+    m.set(config.exists(), 1);
+    assert_eq!(
+        create_flag(
+            &m,
+            FlagId {
+                domain: Domain::A,
+                slot
+            },
+            FlagCreate {
+                attributes: 4,
+                initial: 0x21
+            }
+        ),
+        Err(ObjectStatus::AlreadyExists)
+    );
+    assert_eq!(m.word(config.attributes()), 0);
+    assert_eq!(m.word(config.initial()), 0);
+    assert_eq!((m.masks.get(), m.restores.get()), (1, 1));
+}
+
+#[test]
+fn create_mailbox_writes_the_record_and_clears_the_ends() {
+    let m = Mock::default();
+    let words = Domain::A.words();
+    let slot = MailboxSlot::new(1, 1).unwrap();
+    let id = MailboxId {
+        domain: Domain::A,
+        slot,
+    };
+    assert_eq!(
+        create_mailbox(
+            &m,
+            id,
+            MailboxCreate {
+                attributes: 2,
+                priority_limit: 32
+            }
+        ),
+        Ok(id)
+    );
+    let config = words.mailbox_config(slot);
+    assert_eq!(m.word(config.attributes()), 2);
+    assert_eq!(m.word(config.priority_limit()), 32);
+    assert_eq!(m.word(config.exists()), 1);
+    let control = words.mailbox_control(slot);
+    assert_eq!(m.word(control.queue().next()), control.0 .0);
+    assert_eq!(m.word(control.head()), 0);
+    assert_eq!(m.word(control.tail()), 0);
+    assert_eq!((m.masks.get(), m.restores.get()), (1, 1));
+}
+
+#[test]
+fn create_mailbox_refuses_an_existing_record() {
+    let m = Mock::default();
+    let words = Domain::A.words();
+    let slot = MailboxSlot::new(1, 1).unwrap();
+    let config = words.mailbox_config(slot);
+    m.set(config.exists(), 1);
+    assert_eq!(
+        create_mailbox(
+            &m,
+            MailboxId {
+                domain: Domain::A,
+                slot
+            },
+            MailboxCreate {
+                attributes: 2,
+                priority_limit: 32
+            }
+        ),
+        Err(ObjectStatus::AlreadyExists)
+    );
+    assert_eq!(m.word(config.attributes()), 0);
+    assert_eq!((m.masks.get(), m.restores.get()), (1, 1));
 }
