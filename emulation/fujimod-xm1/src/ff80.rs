@@ -35,6 +35,24 @@ const TOP_CONTROLLER_STATE: u64 = 0x0146_761c;
 const LIVE_SETTINGS: u64 = 0x0096_cc64;
 const LIVE_SETTINGS_BYTES: usize = 450;
 
+#[derive(Serialize)]
+pub struct LocalUiDrain {
+    pub instructions: u64,
+    pub ran: u64,
+    pub ticks: u64,
+    pub ui: crate::application_observation::UiWorkViews,
+    pub render: LocalRenderState,
+}
+
+#[derive(Serialize)]
+pub struct LocalRenderState {
+    initialized: u8,
+    idle: [u32; 7],
+    keys_released: Vec<bool>,
+    task_statuses: Vec<Option<u8>>,
+    graphics: crate::application_observation::GraphicsState,
+}
+
 /// Controller 74's state: 0x04 on the live-view root; live-view overlays, menus and SET-UP
 /// pages use other values (crawl-4, reports/recipe-bank-ui-ownership.md).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -353,6 +371,72 @@ impl Ff80 {
             }
             if self.machine.instructions() >= end {
                 return Ok(RunOutcome::Completed);
+            }
+        }
+    }
+
+    /// Bounded by the no-wait instruction count.
+    pub fn advance_ticks(&mut self, ticks: u64) -> Result<RunOutcome, String> {
+        let until = self.machine.session.board.now().saturating_add(ticks);
+        let end = self.machine.instructions().saturating_add(self.machine.hold_bound(ticks));
+        loop {
+            self.machine.require_running()?;
+            let remaining = end.saturating_sub(self.machine.instructions());
+            let outcome = self.machine.run_until(remaining, Some(until));
+            self.machine.require_running()?;
+            self.observe()?;
+            if outcome == RunOutcome::DrainRequired {
+                return Ok(outcome);
+            }
+            if self.machine.instructions() >= end || self.machine.session.board.now() >= until {
+                return Ok(RunOutcome::Completed);
+            }
+        }
+    }
+
+    /// Observes current deferred UI and render work, not future timer sends.
+    pub fn local_ui_drain(&mut self, ticks: u64) -> Result<LocalUiDrain, String> {
+        let before = self.machine.instructions();
+        let from = self.machine.session.board.now();
+        let until = from.saturating_add(ticks);
+        let end = before.saturating_add(self.machine.hold_bound(ticks));
+        loop {
+            self.machine.require_running()?;
+            let ui = crate::application_observation::UiWorkViews::read(&self.machine.session)?;
+            let facts = &self.machine.document.firmware.render;
+            if ui.drained() && facts.probe(&self.machine)?.drained {
+                let read = |address: crate::run::Address, bytes| {
+                    let address = address.0 & !0x4000_0000;
+                    self.machine.read(address, bytes).map(|raw| raw.iter().rev().fold(0u32, |value, byte| value << 8 | u32::from(*byte)))
+                };
+                let render = LocalRenderState {
+                    initialized: read(facts.initialized, 1)? as u8,
+                    idle: [
+                        read(facts.ui_pending, 4)?, read(facts.ui_busy, 1)?, read(facts.display_suppression, 4)?,
+                        read(facts.batch_busy, 4)?, read(facts.batch_callback, 4)?, read(facts.commands_dirty, 4)?,
+                        read(facts.display_pending, 4)?,
+                    ],
+                    keys_released: self.machine.document.firmware.keys.iter()
+                        .map(|binding| self.machine.document.firmware.released(&self.machine.session, binding.key))
+                        .collect::<Result<_, _>>()?,
+                    task_statuses: facts.task_statuses(&self.machine)?,
+                    graphics: crate::application_observation::GraphicsState::of(
+                        &self.machine.session.board.device_save(self.machine.session.node(&facts.graphics.0)?)?)?,
+                };
+                return Ok(LocalUiDrain {
+                    instructions: self.machine.instructions(), ran: self.machine.instructions() - before,
+                    ticks: self.machine.session.board.now() - from, ui, render,
+                });
+            }
+            let remaining = end.saturating_sub(self.machine.instructions());
+            if remaining == 0 || self.machine.session.board.now() >= until {
+                return Err("local-ui-drained endpoint not observed within its tick bound".into());
+            }
+            let outcome = self.machine.run_until(remaining.min(250_000), Some(until));
+            self.machine.require_running()?;
+            self.observe()?;
+            if outcome == RunOutcome::DrainRequired {
+                return Err("local-ui-drained cannot advance with a capture page outstanding".into());
             }
         }
     }

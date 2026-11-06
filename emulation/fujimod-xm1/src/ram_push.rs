@@ -359,6 +359,9 @@ enum Request {
     DisplayKey { key: PressName },
     /// Runs the guest for `instructions` with no input.
     Idle { instructions: GuestInstructions },
+    /// Runs the guest for `ticks` board ticks with no input.
+    IdleTicks { ticks: BoardTicks },
+    LocalUiDrain { ticks: BoardTicks },
     SnapshotDrop { name: SnapshotName },
     Finish,
 }
@@ -400,6 +403,8 @@ enum RequestKind {
     SnapshotKey,
     DisplayKey,
     Idle,
+    IdleTicks,
+    LocalUiDrain,
     SnapshotDrop,
     Finish,
 }
@@ -441,6 +446,8 @@ impl Request {
             Request::SnapshotKey { .. } => RequestKind::SnapshotKey,
             Request::DisplayKey { .. } => RequestKind::DisplayKey,
             Request::Idle { .. } => RequestKind::Idle,
+            Request::IdleTicks { .. } => RequestKind::IdleTicks,
+            Request::LocalUiDrain { .. } => RequestKind::LocalUiDrain,
             Request::SnapshotDrop { .. } => RequestKind::SnapshotDrop,
             Request::Finish => RequestKind::Finish,
         }
@@ -574,6 +581,10 @@ fn default_pulse(key: Press) -> KeyPulse {
 #[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(transparent)]
 struct GuestInstructions(u64);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(transparent)]
+struct BoardTicks(u64);
 
 const CAPTURE_OBSERVATION_WINDOW: GuestInstructions = GuestInstructions(MODE_DIAL_SETTLE);
 
@@ -1355,6 +1366,23 @@ impl Server {
                 self.bridge.machine.require_running()?;
                 let after = self.bridge.machine.instructions();
                 json!({"instructions": GuestInstructions(after), "ran": GuestInstructions(after - before)})
+            }
+            Request::IdleTicks { ticks: BoardTicks(ticks) } => {
+                if ticks == 0 || ticks > MAX_SETTLE || self.bridge.machine.hold_bound(ticks) > MAX_SETTLE {
+                    return Err(format!("idle ticks must be at least 1 and take at most {MAX_SETTLE} instructions"));
+                }
+                let (before, from) = (self.bridge.machine.instructions(), self.bridge.machine.session.board.now());
+                self.bridge.advance_ticks(ticks)?;
+                self.bridge.machine.require_running()?;
+                let (after, to) = (self.bridge.machine.instructions(), self.bridge.machine.session.board.now());
+                json!({"instructions": GuestInstructions(after), "ran": GuestInstructions(after - before), "ticks": BoardTicks(to - from)})
+            }
+            Request::LocalUiDrain { ticks: BoardTicks(ticks) } => {
+                if ticks == 0 || ticks > MAX_SETTLE || self.bridge.machine.hold_bound(ticks) > MAX_SETTLE {
+                    return Err(format!("local-ui-drain ticks must be at least 1 and take at most {MAX_SETTLE} instructions"));
+                }
+                serde_json::to_value(self.bridge.local_ui_drain(ticks)?)
+                    .map_err(|error| format!("local-ui-drain endpoint: {error}"))?
             }
             Request::SnapshotDrop { name } => {
                 self.snapshots.remove(&name).ok_or_else(|| format!("snapshot {} is not held", name.0))?;

@@ -109,7 +109,7 @@ fn value(machine: &Machine, address: Address, bytes: usize) -> Result<u32, Strin
 
 impl RenderFacts {
     /// Task statuses by entry, in `task_entries` order; absent tasks are None.
-    fn task_statuses(&self, machine: &Machine) -> Result<Vec<Option<u8>>, String> {
+    pub(crate) fn task_statuses(&self, machine: &Machine) -> Result<Vec<Option<u8>>, String> {
         let mut statuses = vec![None; self.task_entries.len()];
         for (_, record) in &self.task_tables {
             let table = value(machine, *record, 4)?;
