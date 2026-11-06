@@ -48,8 +48,8 @@ while IFS= read -r -d '' f; do
   while [[ "$f" == "$root/private-data/"* && -z "${fresh[$f]:-}" ]]; do fresh["$f"]=1; f="${f%/*}"; done
 done < <(find "$root/private-data/" -newermt "-${min_age_hours} hours" -print0 2>/dev/null)
 recent() {
-  if [[ "$1" == "$root/private-data/"* ]]; then [[ -n "${fresh[$1]:-}" ]]
-  else [[ -n "$(find "$1" -newermt "-${min_age_hours} hours" -print -quit 2>/dev/null)" ]]; fi
+  if [[ "$1" == "$root/private-data/"* && -n "${fresh[$1]:-}" ]]; then return 0; fi
+  [[ -n "$(find "$1" -newermt "-${min_age_hours} hours" -print -quit 2>/dev/null)" ]]
 }
 
 drop() {

@@ -58,3 +58,22 @@ for name in latent-image-old _bazel_reclaim-test/old; do
 done
 mapfile -t signals < "$SIGNAL_LOG"
 [[ "${signals[*]}" == '201 202' ]] || fail "unexpected server signals: ${signals[*]}"
+
+export REAL_GIT="$git_bin" LATE_OUTPUT="$PWD/private-data/scratch/created-during-scan"
+rm "$tmp/bin/git"
+# Git creates new output while supplying the citation inventory.
+cat > "$tmp/bin/git" <<'WRAPPER'
+#!/usr/bin/env bash
+set -euo pipefail
+for argument in "$@"; do
+  if [[ "$argument" == grep ]]; then
+    mkdir -p "$LATE_OUTPUT"
+    printf 'new output\n' > "$LATE_OUTPUT/result"
+    break
+  fi
+done
+exec "$REAL_GIT" "$@"
+WRAPPER
+chmod +x "$tmp/bin/git"
+bash "$script" --apply --min-age-hours 6 > "$tmp/concurrent.log"
+[[ -f "$LATE_OUTPUT/result" ]] || fail 'lost output created during the citation scan'
