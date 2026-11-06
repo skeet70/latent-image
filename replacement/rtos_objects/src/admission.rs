@@ -1,6 +1,7 @@
-use crate::id::{own_flag_slot, own_mailbox_slot, resolve_flag, resolve_mailbox, EncodedId, FlagId, MailboxId};
-use crate::layout::{Domain, MailboxConfig};
+use crate::id::{own_flag_slot, own_mailbox_slot, resolve_flag, resolve_mailbox, EncodedId, EntryDomain, FlagId, MailboxId};
+use crate::layout::MailboxConfig;
 use crate::matching::{MatchMode, Pattern};
+use crate::message::MessagePriority;
 use crate::status::{ObjectStatus, WaitOutcome};
 use crate::timeout::Timeout;
 
@@ -94,13 +95,13 @@ pub struct Admitted {
     pub want: Pattern,
     pub mode: MatchMode,
     pub timeout: Option<Timeout>,
-    pub priority: Option<u32>,
+    pub priority: Option<MessagePriority>,
 }
 
 pub struct Request {
     pub service: Service,
     pub entry: Entry,
-    pub executing: Domain,
+    pub entry_domain: EntryDomain,
     pub id: EncodedId,
     pub records: Records,
     pub facts: Facts,
@@ -124,12 +125,12 @@ pub fn admit(request: &Request) -> Result<Admitted, ObjectStatus> {
     }
     match request.service {
         Service::FlagSet | Service::FlagSetHandler | Service::FlagClear => {
-            let id = resolve_flag(request.executing, request.id, request.records.flags)?;
+            let id = resolve_flag(request.entry_domain, request.id, request.records.flags)?;
             exists(request.facts)?;
             Ok(flag(id, Pattern(0), MatchMode::All, None))
         }
         Service::FlagWait | Service::FlagPoll | Service::FlagTimedWait => {
-            let id = resolve_flag(request.executing, request.id, request.records.flags)?;
+            let id = resolve_flag(request.entry_domain, request.id, request.records.flags)?;
             if request.params.pattern.0 == 0 {
                 return Err(ObjectStatus::Param);
             }
@@ -144,14 +145,11 @@ pub fn admit(request: &Request) -> Result<Admitted, ObjectStatus> {
             Ok(flag(id, request.params.pattern, mode, timeout))
         }
         Service::MailboxSend => {
-            let id = resolve_mailbox(request.executing, request.id, request.records.mailboxes)?;
+            let id = resolve_mailbox(request.entry_domain, request.id, request.records.mailboxes)?;
             exists(request.facts)?;
             let priority = if request.facts.attributes & MailboxConfig::MESSAGE_PRIORITY != 0 {
-                let priority = request.params.message_priority.ok_or(ObjectStatus::Param)?;
-                if priority == 0 || priority > request.facts.priority_limit {
-                    return Err(ObjectStatus::Param);
-                }
-                Some(priority)
+                let raw = request.params.message_priority.ok_or(ObjectStatus::Param)?;
+                Some(MessagePriority::new(raw, request.facts.priority_limit)?)
             } else {
                 None
             };
@@ -164,7 +162,7 @@ pub fn admit(request: &Request) -> Result<Admitted, ObjectStatus> {
             })
         }
         Service::MailboxReceive | Service::MailboxPoll | Service::MailboxTimedReceive => {
-            let id = resolve_mailbox(request.executing, request.id, request.records.mailboxes)?;
+            let id = resolve_mailbox(request.entry_domain, request.id, request.records.mailboxes)?;
             let timeout = match request.service {
                 Service::MailboxTimedReceive => Some(Timeout::from_stock(
                     request.params.timeout.ok_or(ObjectStatus::Param)?,
@@ -202,13 +200,14 @@ pub fn poll_result(matched: Option<Pattern>) -> WaitOutcome<Pattern> {
 }
 
 fn own_table(request: &Request) -> Result<Admitted, ObjectStatus> {
+    let domain = request.entry_domain.domain();
     let object = match request.service {
         Service::FlagCreate | Service::FlagDelete => Object::Flag(FlagId {
-            domain: request.executing,
+            domain,
             slot: own_flag_slot(request.id, request.records.flags)?,
         }),
         _ => Object::Mailbox(MailboxId {
-            domain: request.executing,
+            domain,
             slot: own_mailbox_slot(request.id, request.records.mailboxes)?,
         }),
     };

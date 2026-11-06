@@ -780,6 +780,7 @@ Lifetime:
 
 ```rust
 pub struct EncodedId(i32);                      // the stock r0 word, boundary only
+pub struct EntryDomain(Domain);                 // the loader whose body runs, not the core
 pub struct FlagSlot(u16);                       // 1..=the flag count word, like TaskSlot
 pub struct MailboxSlot(u16);                    // 1..=the mailbox count word
 pub struct FlagId { pub domain: Domain, pub slot: FlagSlot }
@@ -792,13 +793,13 @@ pub enum WaitOutcome<T> { Satisfied(T), Released, Deleted, TimedOut }
 pub enum ObjectStatus { Context, InvalidClass, InvalidIndex, NotCreated, Param, QueueOverflow }
 ```
 
-`resolve_flag` and `resolve_mailbox` are the only constructors of `FlagId` and `MailboxId`. They take the executing `Domain`, the raw word and the live count, which the entry reads from the **selected context record** (`+0x58`/`+0x68`), never from the configuration table, because the record is what stock compares against. Raw layout stays at named consumers only: the 14 entry bodies, the image4 wrappers `0x724480`, `0x72503c`, `0x725318`, `0x724cdc`, `0x724f08`, `0x725dd8`, `0x72612c` (ids and the two `Message` words), the other domain's retained kernel, and the two initialisers.
+`resolve_flag` and `resolve_mailbox` are the only constructors of `FlagId` and `MailboxId`. They take the entry domain, the raw word and the live count, which the entry reads from the **selected context record** (`+0x58`/`+0x68`), never from the configuration table, because the record is what stock compares against. `EntryDomain` is the loader whose body runs, not the executing core: a loader-A slot runs on either core, and class 0, the create tables and the delete tables all follow the entry domain. `class_zero_is_the_entry_domain`, `a_class_two_id_from_an_a_body_names_b` and `create_names_the_entry_domain_whatever_the_class` are the counterexamples. Raw layout stays at named consumers only: the 14 entry bodies, the image4 wrappers `0x724480`, `0x72503c`, `0x725318`, `0x724cdc`, `0x724f08`, `0x725dd8`, `0x72612c` (ids and the two `Message` words), the other domain's retained kernel, and the two initialisers.
 
 `EncodedId` exists only at the stock ABI boundary, where the raw word arrives:
 
 ```rust
-fn resolve_flag(executing: Domain, id: EncodedId, count: u32) -> Result<FlagId, ObjectStatus>;
-fn resolve_mailbox(executing: Domain, id: EncodedId, count: u32) -> Result<MailboxId, ObjectStatus>;
+fn resolve_flag(entry: EntryDomain, id: EncodedId, count: u32) -> Result<FlagId, ObjectStatus>;
+fn resolve_mailbox(entry: EntryDomain, id: EncodedId, count: u32) -> Result<MailboxId, ObjectStatus>;
 fn own_flag_slot(id: EncodedId, count: u32) -> Result<FlagSlot, ObjectStatus>;      // class ignored
 fn own_mailbox_slot(id: EncodedId, count: u32) -> Result<MailboxSlot, ObjectStatus>;
 
@@ -836,7 +837,7 @@ pub struct Message(GuestAddress);        // +0x00 next, +0x04 priority; 0x08
 
 Add the eight table accessors on `DomainWords` (`flag_config`, `flag_control`, `flag_wait`, `flag_timer`, `mailbox_config`, `mailbox_control`, `mailbox_wait`, `mailbox_timer`) with the addresses of §4.14.1, and the attribute constants `PRIORITY_ORDER = 0x1`, `MESSAGE_PRIORITY = 0x2`, `CLEAR_ON_MATCH = 0x4`.
 
-**(d) Admission.** One ordered function per direction, returning `Result<_, ObjectStatus>` in the stock order, with the dispatch-enabled check as an explicit parameter because only the blocking forms read it. The four create/delete bodies use a separate resolver that keeps the stock "ignore the class half and index `uxth(id)-1`" behaviour **plus** a range check, which is the intentional difference below.
+**(d) Admission.** One ordered function per direction, returning `Result<_, ObjectStatus>` in the stock order, with the dispatch-enabled check as an explicit parameter because only the blocking forms read it. The four create/delete bodies use a separate resolver that keeps the stock "ignore the class half and index `uxth(id)-1`" behaviour **plus** a range check, which is the intentional difference below. The message priority is decoded at the boundary into `MessagePriority`: the raw word and the record's limit are both read as signed, so a negative word is refused whatever the limit says. `a_negative_priority_is_refused_whatever_the_limit` is the counterexample, and it fails under an unsigned comparison when the limit word is also negative.
 
 **(e) Lock order, including the retained paths.** The nested order is global (`0x400c0804`, held by a whole IRQ handler and by the image4 critical pair), then object lock, then scheduler lock. Every retained path that needs the opposite role holds nothing while it changes rank:
 

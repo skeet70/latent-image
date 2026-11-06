@@ -20,6 +20,21 @@ impl EncodedId {
     }
 }
 
+/// The loader whose slot body runs; a slot of loader A runs on either core.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct EntryDomain(Domain);
+
+impl EntryDomain {
+    pub const fn new(domain: Domain) -> Self {
+        Self(domain)
+    }
+
+    pub const fn domain(self) -> Domain {
+        self.0
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct FlagId {
     pub domain: Domain,
@@ -32,28 +47,28 @@ pub struct MailboxId {
     pub slot: MailboxSlot,
 }
 
-pub fn target(executing: Domain, class: i32) -> Result<Domain, ObjectStatus> {
+fn target(entry: EntryDomain, class: i32) -> Result<Domain, ObjectStatus> {
     match class {
-        0 => Ok(executing),
+        0 => Ok(entry.domain()),
         1 => Ok(Domain::A),
         2 => Ok(Domain::B),
         _ => Err(ObjectStatus::InvalidClass),
     }
 }
 
-pub fn resolve_flag(executing: Domain, id: EncodedId, count: u32) -> Result<FlagId, ObjectStatus> {
-    let domain = target(executing, id.class())?;
+pub fn resolve_flag(entry: EntryDomain, id: EncodedId, count: u32) -> Result<FlagId, ObjectStatus> {
+    let domain = target(entry, id.class())?;
     let slot = FlagSlot::new(index(id)?, count).ok_or(ObjectStatus::InvalidIndex)?;
     Ok(FlagId { domain, slot })
 }
 
-pub fn resolve_mailbox(executing: Domain, id: EncodedId, count: u32) -> Result<MailboxId, ObjectStatus> {
-    let domain = target(executing, id.class())?;
+pub fn resolve_mailbox(entry: EntryDomain, id: EncodedId, count: u32) -> Result<MailboxId, ObjectStatus> {
+    let domain = target(entry, id.class())?;
     let slot = MailboxSlot::new(index(id)?, count).ok_or(ObjectStatus::InvalidIndex)?;
     Ok(MailboxId { domain, slot })
 }
 
-/// Create and delete ignore the class half: `uxth(id)` indexes the executing kernel's own table.
+/// Create and delete ignore the class half: `uxth(id)` indexes the entry domain's own table.
 pub fn own_flag_slot(id: EncodedId, count: u32) -> Result<FlagSlot, ObjectStatus> {
     FlagSlot::new(uxth(id), count).ok_or(ObjectStatus::InvalidIndex)
 }

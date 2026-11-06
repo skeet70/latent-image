@@ -12,7 +12,7 @@ fn req(service: Service) -> Request {
     Request {
         service,
         entry: entry(),
-        executing: Domain::A,
+        entry_domain: EntryDomain::new(Domain::A),
         id: EncodedId::of(1, 1),
         records: Records {
             flags: 120,
@@ -42,29 +42,55 @@ fn mailbox1(domain: Domain) -> MailboxId {
 }
 
 #[test]
-fn class_zero_is_the_executing_domain() {
-    assert_eq!(resolve_flag(Domain::A, EncodedId::of(0, 1), 120), Ok(flag1(Domain::A)));
-    assert_eq!(resolve_flag(Domain::B, EncodedId::of(0, 1), 120), Ok(flag1(Domain::B)));
+fn class_zero_is_the_entry_domain() {
     assert_eq!(
-        resolve_mailbox(Domain::B, EncodedId::of(0, 1), 1),
+        resolve_flag(EntryDomain::new(Domain::A), EncodedId::of(0, 1), 120),
+        Ok(flag1(Domain::A))
+    );
+    assert_eq!(
+        resolve_flag(EntryDomain::new(Domain::B), EncodedId::of(0, 1), 120),
+        Ok(flag1(Domain::B))
+    );
+    assert_eq!(
+        resolve_mailbox(EntryDomain::new(Domain::B), EncodedId::of(0, 1), 1),
         Ok(mailbox1(Domain::B))
     );
 }
 
 #[test]
-fn class_one_and_two_name_a_and_b() {
-    assert_eq!(resolve_flag(Domain::B, EncodedId::of(1, 1), 120), Ok(flag1(Domain::A)));
-    assert_eq!(resolve_flag(Domain::A, EncodedId::of(2, 1), 120), Ok(flag1(Domain::B)));
+fn a_class_two_id_from_an_a_body_names_b() {
+    assert_eq!(
+        resolve_flag(EntryDomain::new(Domain::A), EncodedId::of(2, 1), 120),
+        Ok(flag1(Domain::B))
+    );
+    assert_eq!(
+        resolve_flag(EntryDomain::new(Domain::B), EncodedId::of(1, 1), 120),
+        Ok(flag1(Domain::A))
+    );
+}
+
+#[test]
+fn create_names_the_entry_domain_whatever_the_class() {
+    for (entry, expected) in [(Domain::A, Domain::A), (Domain::B, Domain::B)] {
+        let mut request = req(Service::FlagCreate);
+        request.entry_domain = EntryDomain::new(entry);
+        request.id = EncodedId::of(2, 1);
+        assert_eq!(
+            admit(&request).map(|admitted| admitted.object),
+            Ok(Object::Flag(flag1(expected))),
+            "{entry:?}"
+        );
+    }
 }
 
 #[test]
 fn a_foreign_class_is_refused_before_the_index() {
     assert_eq!(
-        resolve_flag(Domain::A, EncodedId::of(3, 0), 120),
+        resolve_flag(EntryDomain::new(Domain::A), EncodedId::of(3, 0), 120),
         Err(ObjectStatus::InvalidClass)
     );
     assert_eq!(
-        resolve_flag(Domain::A, EncodedId(0xffff_0001u32 as i32), 120),
+        resolve_flag(EntryDomain::new(Domain::A), EncodedId(0xffff_0001u32 as i32), 120),
         Err(ObjectStatus::InvalidClass)
     );
 }
@@ -75,27 +101,30 @@ fn the_index_is_a_signed_halfword() {
     assert_eq!(EncodedId::of(1, 0x8000).index(), -32768);
     assert_eq!(EncodedId::of(1, 0x8000).class(), 1);
     assert_eq!(
-        resolve_flag(Domain::A, EncodedId::of(1, 0x8000), 120),
+        resolve_flag(EntryDomain::new(Domain::A), EncodedId::of(1, 0x8000), 120),
         Err(ObjectStatus::InvalidIndex)
     );
     assert_eq!(
-        resolve_flag(Domain::A, EncodedId::of(0, 0), 120),
+        resolve_flag(EntryDomain::new(Domain::A), EncodedId::of(0, 0), 120),
         Err(ObjectStatus::InvalidIndex)
     );
 }
 
 #[test]
 fn the_index_is_bounded_by_the_live_count() {
-    assert_eq!(resolve_flag(Domain::A, EncodedId::of(1, 120), 120), Ok(FlagId {
-        domain: Domain::A,
-        slot: FlagSlot::new(120, 120).unwrap()
-    }));
     assert_eq!(
-        resolve_flag(Domain::A, EncodedId::of(1, 121), 120),
+        resolve_flag(EntryDomain::new(Domain::A), EncodedId::of(1, 120), 120),
+        Ok(FlagId {
+            domain: Domain::A,
+            slot: FlagSlot::new(120, 120).unwrap()
+        })
+    );
+    assert_eq!(
+        resolve_flag(EntryDomain::new(Domain::A), EncodedId::of(1, 121), 120),
         Err(ObjectStatus::InvalidIndex)
     );
     assert_eq!(
-        resolve_flag(Domain::A, EncodedId::of(1, 120), 119),
+        resolve_flag(EntryDomain::new(Domain::A), EncodedId::of(1, 120), 119),
         Err(ObjectStatus::InvalidIndex)
     );
 }
@@ -198,7 +227,30 @@ fn send_refuses_a_priority_outside_the_limit() {
     let mut accepted = req(Service::MailboxSend);
     accepted.facts.attributes = 2;
     accepted.params.message_priority = Some(32);
-    assert_eq!(admit(&accepted).map(|admitted| admitted.priority), Ok(Some(32)));
+    assert_eq!(
+        admit(&accepted).map(|admitted| admitted.priority),
+        Ok(Some(MessagePriority::new(32, 32).unwrap()))
+    );
+}
+
+#[test]
+fn a_negative_priority_is_refused_whatever_the_limit() {
+    assert_eq!(MessagePriority::new(0xffff_ffff, 0xffff_ffff), Err(ObjectStatus::Param));
+    assert_eq!(MessagePriority::new(0x8000_0000, 0xffff_ffff), Err(ObjectStatus::Param));
+    assert_eq!(MessagePriority::new(0, 0xffff_ffff), Err(ObjectStatus::Param));
+    assert_eq!(
+        MessagePriority::new(1, 0xffff_ffff),
+        Err(ObjectStatus::Param),
+        "a negative limit admits nothing"
+    );
+    let mut request = req(Service::MailboxSend);
+    request.facts = Facts {
+        exists: true,
+        attributes: 2,
+        priority_limit: 0xffff_ffff,
+    };
+    request.params.message_priority = Some(0xffff_ffff);
+    assert_eq!(admit(&request), Err(ObjectStatus::Param));
 }
 
 #[test]
