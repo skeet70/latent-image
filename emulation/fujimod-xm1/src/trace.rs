@@ -39,6 +39,14 @@ pub struct Hit {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SiteRead { pub address: u64, pub count: usize }
 
+#[derive(Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RegisterCapture {
+    #[default]
+    Arguments,
+    General,
+}
+
 pub fn parse_site_reads(
     sites: &BTreeMap<String, String>,
     reads: &BTreeMap<String, Vec<[u64; 2]>>,
@@ -1062,6 +1070,11 @@ impl TraceSites {
 
     pub fn bound_hits(&mut self, limit: std::num::NonZeroUsize) {
         self.hit_limit = Some(limit);
+    }
+
+    pub fn bound_registers(&mut self, limit: std::num::NonZeroUsize, registers: RegisterCapture) {
+        self.bound_hits(limit);
+        self.full_registers = matches!(registers, RegisterCapture::General);
     }
 
     pub fn bind_code_words(&mut self, limit: std::num::NonZeroUsize, start: Guest, bytes: Vec<u8>, maps: Vec<MemoryMap>) -> Result<(), String> {

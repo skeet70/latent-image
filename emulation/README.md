@@ -1896,6 +1896,8 @@ The viewer's RAM-push, flash-candidate, menu-crawl, RAM-diff and menu-observe ro
 
 `--reset-observation` accepts optional `reads` in the `trace-sites` format: map each requested site address to an ordered list of `[physical_address, byte_count]` pairs. Each hit records the bytes at instruction entry in its `memory` array, in that order. Reads must stay within the 32-bit physical address space and contain 1..4096 bytes each.
 
+The optional `registers` selector is `arguments` (the default, r0-r3) or `general` (r0-r12). Both sample the executing core at the trace site's instruction entry.
+
 FujiMod's shared `checkpoint::BootIdentity` hashes a schema-2 document containing the complete run-document bytes, installed DAT, boot ROM, adjustment NAND, optional card image digest, boot procedure and compiled model identity. The model identity covers the pinned engine derivation, owned model sources, build definition, target and features. Binary-local RAM-push, composed-startup and toggle observers and tests are excluded from that model digest. The attach procedure is extracted into `attach_boot.rs` and hashed with the held key, card-dependent rendezvous and save boundary. Runtime/output paths, observer commands and contracts do not change an attach key. Installed checkpoints additionally hash `ram_push.rs`, the manifest and runtime, so changed post-attach procedures cannot reuse an old install. `tests/checkpoint.rs` checks matching inputs find a saved key and changed run, DAT, ROM, NAND, card presence/content and procedure inputs miss.
 
 When `--record-nand` is supplied, its content digest is a separate `record_nand` identity field for both attach and initialized-reset checkpoints. Moving the same committed image does not change either key.

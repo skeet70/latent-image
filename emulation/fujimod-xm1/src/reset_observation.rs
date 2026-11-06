@@ -4,7 +4,7 @@ use crate::bridge::sha256;
 use crate::ff80::encode_hex;
 use crate::machine::Machine;
 use crate::run;
-use crate::trace::{SiteRead, parse_site_reads};
+use crate::trace::{RegisterCapture, SiteRead, parse_site_reads};
 use fujimod_emulator::board::factory::MemoryMap;
 use fujimod_emulator::board::observation::{MemoryWatch, ViewPolicy, WatchKinds, WatchRange};
 use serde::{Deserialize, Serialize};
@@ -25,6 +25,8 @@ struct RawSpec {
     sites: BTreeMap<String, String>,
     #[serde(default)]
     reads: BTreeMap<String, Vec<[u64; 2]>>,
+    #[serde(default)]
+    registers: RegisterCapture,
     hit_limit: NonZeroUsize,
     write_ranges: Vec<[u32; 2]>,
     watch_limit: usize,
@@ -33,6 +35,7 @@ struct RawSpec {
 pub struct Spec {
     sites: BTreeMap<u32, String>,
     site_reads: BTreeMap<u32, Vec<SiteRead>>,
+    registers: RegisterCapture,
     hit_limit: NonZeroUsize,
     write_ranges: Vec<[u32; 2]>,
     watch_limit: usize,
@@ -60,7 +63,8 @@ impl Spec {
         if !(1..=WATCH_LIMIT).contains(&raw.watch_limit) {
             return Err(format!("reset observation watch limit must be 1..{WATCH_LIMIT}"));
         }
-        Ok(Self { sites, site_reads, hit_limit: raw.hit_limit, write_ranges: raw.write_ranges, watch_limit: raw.watch_limit })
+        Ok(Self { sites, site_reads, registers: raw.registers, hit_limit: raw.hit_limit,
+            write_ranges: raw.write_ranges, watch_limit: raw.watch_limit })
     }
 
     pub fn sites(&self) -> &BTreeMap<u32, String> {
@@ -145,7 +149,7 @@ impl ResetObserver {
         if machine.instructions() != 0 {
             return Err("restored reset executed instructions".into());
         }
-        machine.traces.bound_hits(spec.hit_limit);
+        machine.traces.bound_registers(spec.hit_limit, spec.registers);
         machine.traces.arm(&machine.session, spec.sites.clone())?;
         machine.traces.site_reads = spec.site_reads.clone();
         let ranges: Vec<_> = spec.write_ranges.iter().map(|range| WatchRange {
@@ -213,6 +217,7 @@ mod tests {
             br#"{"schema":1,"sites":{"0x4":"loop"},"hit_limit":4,"write_ranges":[[16,16]],"watch_limit":8}"#,
             br#"{"schema":1,"sites":{"0x4":"loop"},"hit_limit":4,"write_ranges":[[0,16]],"watch_limit":0}"#,
             br#"{"schema":1,"sites":{"0x4":"loop"},"hit_limit":4,"write_ranges":[[0,16]],"watch_limit":8,"extra":1}"#,
+            br#"{"schema":1,"sites":{"0x4":"loop"},"registers":"r8","hit_limit":4,"write_ranges":[[0,16]],"watch_limit":8}"#,
         ] {
             assert!(Spec::parse(invalid).is_err());
         }

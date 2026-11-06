@@ -2337,6 +2337,33 @@ mod tests {
     }
 
     #[test]
+    fn reset_register_selection_captures_the_executed_r8_value() {
+        for registers in [None, Some("general")] {
+            let mut server = server(&[0xe3a0802a, 0xeafffffe]);
+            let mut document = json!({"schema": 1, "sites": {"0x4": "loop"},
+                "hit_limit": 64, "write_ranges": [[9437184, 9437188]], "watch_limit": 32});
+            if let Some(registers) = registers {
+                document["registers"] = json!(registers);
+            }
+            let spec = ResetObservationSpec::parse(&serde_json::to_vec(&document).unwrap()).unwrap();
+            let mut observer = ResetObserver::begin(&mut server.bridge.machine, &spec).unwrap();
+            assert_eq!(server.bridge.machine.run(20), RunOutcome::Completed);
+            let reply = server.handle(request(json!({"command": "trace-hits", "from": 0}))).unwrap().unwrap();
+            let observed = &reply["hits"][0]["registers"];
+            if registers.is_some() {
+                let r8 = observed["r8"].as_str().unwrap().strip_prefix("0x").unwrap();
+                assert_eq!(u32::from_str_radix(r8, 16).unwrap(), 42);
+            } else {
+                assert!(observed.get("r8").is_none());
+            }
+            for phase in [AttachPhase::FirstStart, AttachPhase::LiveView, AttachPhase::Attached] {
+                observer.boundary(&server.bridge.machine, phase).unwrap();
+            }
+            observer.finish().unwrap();
+        }
+    }
+
+    #[test]
     fn trace_sites_beyond_one_engine_point_set_record_hits() {
         let mut server = server(&[0xe2800001, 0xeafffffd]);
         let sites: BTreeMap<String, String> = std::iter::once(("0x00000004".to_owned(), "loop".to_owned()))
