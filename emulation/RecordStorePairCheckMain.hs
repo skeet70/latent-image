@@ -42,25 +42,29 @@ load directory = do
   pure (Observation receipt (M.fromList files))
 
 run :: [String] -> IO ()
-run [stockDirectory,ownedDirectory,contractPath,linkedPath,symbolPath,routesPath,outputPath] = do
+run [stockDirectory,ownedDirectory,contractPath,linkedPath,symbolPath,routesPath,comparisonPath,outputPath] = do
   exists <- doesPathExist outputPath
   need (not exists) "output must be new"
   result <- try $ do
     bindings <- Bindings <$> B.readFile contractPath <*> B.readFile linkedPath <*> B.readFile symbolPath <*> B.readFile routesPath
+    comparison <- B.readFile comparisonPath >>= either (ioError . userError) pure . parseComparisonContract
+    forM_ (comparisonEvidencePath comparison) $ \path -> do
+      evidence <- B.readFile path
+      either (ioError . userError) pure (validateComparisonEvidence comparison evidence)
     stock <- load stockDirectory
     owned <- load ownedDirectory
     case (qualify Stock bindings stock,qualify Owned bindings owned) of
-      (Left failure,_) -> pure (False,object ["schema" .= (1::Int),"outcome" .= ("refused"::T.Text),"role" .= ("stock"::T.Text),"error" .= failure])
-      (_,Left failure) -> pure (False,object ["schema" .= (1::Int),"outcome" .= ("refused"::T.Text),"role" .= ("owned"::T.Text),"error" .= failure])
+      (Left failure,_) -> pure (False,object ["schema" .= (2::Int),"outcome" .= ("refused"::T.Text),"role" .= ("stock"::T.Text),"error" .= failure])
+      (_,Left failure) -> pure (False,object ["schema" .= (2::Int),"outcome" .= ("refused"::T.Text),"role" .= ("owned"::T.Text),"error" .= failure])
       (Right retained,Right candidate) -> do
-        let compared = comparePair retained candidate
-        pure (either (const False) (const True) compared,comparisonValue retained candidate compared)
+        let compared = comparePair comparison retained candidate
+        pure (either (const False) (const True) compared,comparisonValue comparison retained candidate compared)
   let (matched,report) = case result of
         Right successful -> successful
-        Left failure -> (False,object ["schema" .= (1::Int),"outcome" .= ("refused"::T.Text),"error" .= displayException (failure::SomeException)])
+        Left failure -> (False,object ["schema" .= (2::Int),"outcome" .= ("refused"::T.Text),"error" .= displayException (failure::SomeException)])
   BL.writeFile outputPath (A.encode report <> "\n")
   when (not matched) exitFailure
-run _ = ioError (userError "usage: record-store-pair-check STOCK_DIR OWNED_DIR CONTRACT_JSON LINKED_BIN SYMBOLS ROUTES_JSON OUTPUT_JSON")
+run _ = ioError (userError "usage: record-store-pair-check STOCK_DIR OWNED_DIR CONTRACT_JSON LINKED_BIN SYMBOLS ROUTES_JSON COMPARISON_JSON OUTPUT_JSON")
 
 main :: IO ()
 main = getArgs >>= run

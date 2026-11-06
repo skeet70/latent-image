@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Emulation.RecordStorePairCheck
   ( Role (..), Sidecar (..), sidecarName, Observation (..), Bindings (..)
-  , Qualified, qualify, comparePair, comparisonValue, validateInputs, cacheContract, cacheSymbolLayout
+  , Qualified, qualify, ComparisonContract, parseComparisonContract, comparisonEvidencePath, validateComparisonEvidence, comparePair, comparisonValue, validateInputs, cacheContract, cacheSymbolLayout
   ) where
 
 import Control.Monad (foldM, forM, forM_, unless, when)
@@ -9,7 +9,7 @@ import Data.Aeson (Value (..), object, (.=))
 import qualified Data.Aeson as A
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
-import Data.Bits ((.&.), (.|.), shiftL)
+import Data.Bits ((.&.), (.|.), shiftL, shiftR)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import Data.List (sort, sortOn)
@@ -20,12 +20,12 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Vector as V
 import Data.Word (Word32, Word64)
-import Emulation.LocalUiMenu (LocalUiMenu, parseLocalUiMenu, LocalUiMode, parseLocalUiMode)
+import Emulation.LocalUiMenu (LocalUiMenu (..), MenuNodeAddress (..), MenuIdentifier (..), SettingIdentifier (..), MenuCursor (..), MenuDepth (..), parseLocalUiMenu, LocalUiMode, parseLocalUiMode)
 import Emulation.PropertyPairPlan (PhysicalRange (..), settingsRanges, preKeyIdle)
 import Emulation.PropertyPairRoutes
 import Emulation.Sha256 (sha256, sha256Hex)
 import Emulation.WatchObservation hiding (checkWatch)
-import EmulatorUsb (CrawlKey)
+import EmulatorUsb (CrawlKey (..))
 import Numeric (readHex, showHex)
 
 data Role = Stock | Owned deriving (Eq, Show)
@@ -72,8 +72,29 @@ data Pending = Pending Int Entry Hit CallContext deriving (Eq, Show)
 data Retirement = BeforeOpen | AfterOpen deriving (Eq, Show)
 data State = State Retirement Service (M.Map Handle Layout) (M.Map (Int, Address, Address) Pending) deriving (Eq, Show)
 data Interval = Interval T.Text [CrawlKey] [Call] [Nand] Regions Regions (Maybe Press) (Maybe Medium) deriving (Eq, Show)
-data Qualified = Qualified Role [(InputName,Digest)] [Interval] Medium deriving (Eq, Show)
-data Difference = Difference T.Text Value Value | AmbiguousOutput T.Text Value Value | PreservationViolation T.Text Value Value deriving (Eq, Show)
+data Qualified = Qualified Role [(InputName,Digest)] [Route] [Interval] Medium deriving (Eq, Show)
+data Difference = Difference T.Text Value Value | AmbiguousOutput T.Text Value Value | PreservationViolation T.Text Value Value | OracleViolation Role T.Text Value Value deriving (Eq, Show)
+newtype EvidencePath = EvidencePath FilePath deriving (Eq, Show)
+data SourceEvidence = SourceEvidence EvidencePath Digest deriving (Eq, Show)
+data ComparisonContract = StockEquality Digest | ImageSizePendingChoice Digest SourceEvidence deriving (Eq, Show)
+data ImageSizeCase = ImageSizeUp | ImageSizeBack deriving (Eq, Show, Enum, Bounded)
+data ImageSizeChoice = LargeThreeTwo | MediumThreeTwo deriving (Eq, Show)
+data ImageSizeFrame = ParentFrame | EntryFrame | PendingFrame deriving (Eq, Show)
+data ImageSizeTransition = EnterImageSize | PreviewMedium deriving (Eq, Show)
+data UiProjection = UiProjection Regions Menu LocalUiMenu deriving (Eq, Show)
+data ImageSizeBaseline = ImageSizeBaseline UiProjection UiProjection UiProjection
+data ReferenceDisposition = ReferenceIntended | ReferenceStalled deriving (Eq, Show)
+data ImageSizeCaseResult = ImageSizeCaseResult ImageSizeCase ReferenceDisposition deriving (Eq, Show)
+
+imageSizeKeys :: ImageSizeCase -> [CrawlKey]
+imageSizeKeys action = [KeyOk,KeyDown,KeyOk,KeyDown,case action of ImageSizeUp -> KeyUp; ImageSizeBack -> KeyBack]
+
+imageSizeTrial :: ImageSizeCase -> Int
+imageSizeTrial ImageSizeUp = 368
+imageSizeTrial ImageSizeBack = 371
+
+imageSizeFixture :: Digest
+imageSizeFixture = Digest "eb33ae15ec676f5dfd9465223500c89179af5c90f14047b4e528a7db741e8682"
 
 type Parse = Either String
 need :: Bool -> String -> Parse ()
@@ -124,6 +145,47 @@ parseDigest value = do
 exact :: [T.Text] -> Value -> Parse ()
 exact keys (Object fields) = need (sort (map K.toText (KM.keys fields)) == sort keys) "object fields differ"
 exact _ _ = Left "expected object"
+parseComparisonContract :: B.ByteString -> Parse ComparisonContract
+parseComparisonContract bytes = do
+  value <- json bytes
+  need (field "schema" value == Right (Number 1)) "unsupported comparison contract schema"
+  policy <- field "policy" value >>= text
+  case policy of
+    "stock-equality-v1" -> exact ["schema","policy"] value >> pure (StockEquality (digest bytes))
+    "image-size-pending-choice-v1" -> do
+      exact ["schema","policy","record_nand_sha256","source_evidence","cases"] value
+      fixture <- field "record_nand_sha256" value >>= parseDigest
+      need (fixture == imageSizeFixture) "image-size oracle fixture differs"
+      source <- field "source_evidence" value
+      exact ["path","sha256"] source
+      path <- field "path" source >>= text
+      need (not (T.null path) && not (T.any (== '\0') path)) "invalid source evidence path"
+      identity <- field "sha256" source >>= parseDigest
+      let evidence = SourceEvidence (EvidencePath (T.unpack path)) identity
+      cases <- field "cases" value >>= array >>= mapM parseCase
+      need (cases == [ImageSizeUp,ImageSizeBack]) "image-size oracle cases differ"
+      pure (ImageSizePendingChoice (digest bytes) evidence)
+    _ -> Left "unknown comparison policy"
+ where
+  parseCase value = do
+    exact ["crawl_trial","keys"] value
+    trial <- field "crawl_trial" value >>= int
+    action <- case trial of
+      368 -> Right ImageSizeUp
+      371 -> Right ImageSizeBack
+      _ -> Left "unknown image-size oracle case"
+    need (field "keys" value == Right (A.toJSON (imageSizeKeys action))) "image-size oracle key path differs"
+    pure action
+
+comparisonEvidencePath :: ComparisonContract -> Maybe FilePath
+comparisonEvidencePath (StockEquality _) = Nothing
+comparisonEvidencePath (ImageSizePendingChoice _ (SourceEvidence (EvidencePath path) _)) = Just path
+
+validateComparisonEvidence :: ComparisonContract -> B.ByteString -> Parse ()
+validateComparisonEvidence (StockEquality _) _ = pure ()
+validateComparisonEvidence (ImageSizePendingChoice _ (SourceEvidence _ expected)) bytes =
+  need (digest bytes == expected) "comparison source evidence digest differs"
+
 entryAddress :: Entry -> Address
 entryAddress entry = Address ([0x6ac2b4,0x6ac328,0x6ac478,0x6ac4c8,0x6ac7d4,0x6ac984,0x6acab8,0x6acda0,0x6ae0fc] !! fromEnum entry)
 entryAt :: Address -> Parse Entry
@@ -652,12 +714,12 @@ qualify role bindings observation = do
         Interval _ _ _ _ _ _ _ (Just blocks):_ -> blocks
         _ -> attachedMedium
   need (terminal == lastMedium) "terminal medium differs from final leaf"
-  pure (Qualified role cohort (phases ++ [Interval "attach-medium" [] [] [] rootRegions rootRegions Nothing (Just attachedMedium)] ++ results) terminal)
+  pure (Qualified role cohort (routeList routes) (phases ++ [Interval "attach-medium" [] [] [] rootRegions rootRegions Nothing (Just attachedMedium)] ++ results) terminal)
  where
   (>=>) first second value = first value >>= second
 
 coverageValue :: Qualified -> Value
-coverageValue (Qualified role cohort intervals _) = object
+coverageValue (Qualified role cohort _ intervals _) = object
   [ "role" .= (if role == Stock then "stock" else "owned" :: T.Text)
   , "record_nand_sha256" .= fmap (\(Digest value) -> value) (lookup (InputName "record-nand") cohort)
   , "external_entries" .= object [K.fromText (entryName entry) .= length [() | Call called _ _ _ <- calls, called == entry] | entry <- [minBound..maxBound]]
@@ -678,32 +740,145 @@ coverageValue (Qualified role cohort intervals _) = object
     ReadAt -> "record_store_read_at"
     Zero -> "record_store_zero"
 
-comparisonValue :: Qualified -> Qualified -> Either Difference () -> Value
-comparisonValue stock owned result = object
-  (["schema" .= (1::Int),"coverage" .= object ["stock" .= coverageValue stock,"owned" .= coverageValue owned]] ++ case result of
-    Right () -> ["outcome" .= ("matched"::T.Text)]
+comparisonValue :: ComparisonContract -> Qualified -> Qualified -> Either Difference [ImageSizeCaseResult] -> Value
+comparisonValue contract stock owned result = object
+  (["schema" .= (2::Int),"comparison_contract" .= contractValue,"coverage" .= object ["stock" .= coverageValue stock,"owned" .= coverageValue owned]] ++ case result of
+    Right cases -> ["outcome" .= (if any stalled cases then "accepted-functional-difference" else "matched"::T.Text),"intended_cases" .= map caseValue cases]
     Left (Difference path expected actual) -> ["outcome" .= ("different"::T.Text),"path" .= path,"stock" .= expected,"owned" .= actual]
     Left (AmbiguousOutput path expected actual) -> ["outcome" .= ("refused"::T.Text),"error" .= ("ambiguous stock output-write effect"::T.Text),"path" .= path,"stock" .= expected,"owned" .= actual]
-    Left (PreservationViolation path before after) -> ["outcome" .= ("refused"::T.Text),"error" .= ("contract-untouched owned output changed"::T.Text),"path" .= path,"before" .= before,"after" .= after])
+    Left (PreservationViolation path before after) -> ["outcome" .= ("refused"::T.Text),"error" .= ("contract-untouched owned output changed"::T.Text),"path" .= path,"before" .= before,"after" .= after]
+    Left (OracleViolation role path expected actual) -> ["outcome" .= ("different"::T.Text),"error" .= ("intended image-size oracle"::T.Text),"role" .= roleValue role,"path" .= path,"expected" .= expected,"actual" .= actual])
+ where
+  roleValue Stock = "stock" :: T.Text
+  roleValue Owned = "owned"
+  contractValue = case contract of
+    StockEquality (Digest identity) -> object ["policy" .= ("stock-equality-v1"::T.Text),"sha256" .= identity]
+    ImageSizePendingChoice (Digest identity) (SourceEvidence (EvidencePath path) (Digest evidence)) ->
+      let Digest fixture = imageSizeFixture in object
+        ["policy" .= ("image-size-pending-choice-v1"::T.Text),"sha256" .= identity,"record_nand_sha256" .= fixture
+        ,"source_evidence" .= object ["path" .= path,"sha256" .= evidence]]
+  stalled (ImageSizeCaseResult _ reference) = reference == ReferenceStalled
+  caseValue (ImageSizeCaseResult action reference) = object
+    ["crawl_trial" .= imageSizeTrial action,"keys" .= imageSizeKeys action
+    ,"owned" .= ("intended"::T.Text),"stock" .= (if reference == ReferenceStalled then "known-stalled-down-state" else "intended"::T.Text)
+    ,"expected_choice" .= object ["size" .= ("L"::T.Text),"aspect" .= ("3:2"::T.Text)]
+    ,"public_property" .= (0xf6::Word32),"ordinary_properties" .= ([0xf6,0xf9]::[Word32])
+    ,"property_161" .= object
+      ["classification" .= ("derived-image-size-synchronization"::T.Text),"before" .= (1::Int)
+      ,"after" .= (case action of ImageSizeUp -> 1; ImageSizeBack -> 0::Int)
+      ,"native_leave_restore" .= (action == ImageSizeBack)]]
 showValue :: Show a => a -> Value
 showValue = String . T.pack . show
-comparePair :: Qualified -> Qualified -> Either Difference ()
-comparePair (Qualified Stock stockInputs stock stockMedium) (Qualified Owned ownedInputs owned ownedMedium) = do
+comparePair :: ComparisonContract -> Qualified -> Qualified -> Either Difference [ImageSizeCaseResult]
+comparePair contract (Qualified Stock stockInputs stockRoutes stock stockMedium) (Qualified Owned ownedInputs ownedRoutes owned ownedMedium) = do
   equal "cohort" stockInputs ownedInputs
   equal "interval-count" (length stock) (length owned)
+  cases <- case contract of
+    StockEquality _ -> pure []
+    ImageSizePendingChoice _ _ -> case lookup (InputName "record-nand") stockInputs of
+      Nothing -> pure []
+      Just fixture -> do
+        equal "image-size-oracle.fixture" imageSizeFixture fixture
+        retained <- baseline Stock stockRoutes stock
+        candidate <- baseline Owned ownedRoutes owned
+        forM [ImageSizeUp,ImageSizeBack] $ \action -> do
+          retainedUi <- findInterval Stock (imageSizeKeys action) stock >>= projection Stock
+          candidateUi <- findInterval Owned (imageSizeKeys action) owned >>= projection Owned
+          let target (ImageSizeBaseline parent entry _) = case action of ImageSizeUp -> entry; ImageSizeBack -> parent
+              ImageSizeBaseline _ _ retainedPending = retained
+          expectProjection Owned "image-size-oracle.owned" (target candidate) candidateUi
+          reference <- if retainedUi == target retained then pure ReferenceIntended
+            else if retainedUi == retainedPending then pure ReferenceStalled
+            else Left (OracleViolation Stock "image-size-oracle.stock" (showValue [target retained,retainedPending]) (showValue retainedUi))
+          pure (ImageSizeCaseResult action reference)
   forM_ (zip3 [0::Int ..] stock owned) $ \(number,Interval name keys calls nand before after press medium,Interval other otherKeys otherCalls otherNand otherBefore otherAfter otherPress otherMedium) -> do
     let path suffix = "intervals." <> T.pack (show number) <> "." <> suffix
     equal (path "identity") (name,keys) (other,otherKeys)
     orderedWith compareCall (path "calls") calls otherCalls
     orderedWith compareNand (path "nand") nand otherNand
     compareRegions (path "settings-before") before otherBefore
-    compareRegions (path "settings-after") after otherAfter
-    equal (path "press") (fmap (\(Press menu _ _) -> menu) press) (fmap (\(Press menu _ _) -> menu) otherPress)
-    equal (path "endpoint-menu") (fmap (\(Press _ menu _) -> menu) press) (fmap (\(Press _ menu _) -> menu) otherPress)
+    unless (any (\(ImageSizeCaseResult action _) -> keys == imageSizeKeys action) cases) $ do
+      compareRegions (path "settings-after") after otherAfter
+      equal (path "press") (fmap (\(Press menu _ _) -> menu) press) (fmap (\(Press menu _ _) -> menu) otherPress)
+      equal (path "endpoint-menu") (fmap (\(Press _ menu _) -> menu) press) (fmap (\(Press _ menu _) -> menu) otherPress)
     equal (path "endpoint-source-mode") (fmap (\(Press _ _ mode) -> mode) press) (fmap (\(Press _ _ mode) -> mode) otherPress)
     compareMaybeMedium (path "medium") medium otherMedium
   compareMedium "terminal-medium" stockMedium ownedMedium
+  pure cases
  where
+  asOracle role result = case result of
+    Left (Difference path expected actual) -> Left (OracleViolation role path expected actual)
+    other -> other
+  oracleEqual role path expected actual = asOracle role (equal path expected actual)
+  findInterval role keys intervals = case [interval | interval@(Interval _ path _ _ _ _ _ _) <- intervals, path == keys] of
+    [interval] -> pure interval
+    found -> Left (OracleViolation role "image-size-oracle.interval" (A.toJSON keys) (showValue found))
+  projection _ (Interval _ _ _ _ _ after (Just (Press menu endpoint _)) _) = pure (UiProjection after menu endpoint)
+  projection role interval = Left (OracleViolation role "image-size-oracle.press" (String "key interval") (showValue interval))
+  expectProjection role path (UiProjection expected menu endpoint) (UiProjection actual otherMenu otherEndpoint) = do
+    asOracle role (compareRegions (path <> ".settings") expected actual)
+    oracleEqual role (path <> ".press") menu otherMenu
+    oracleEqual role (path <> ".endpoint") endpoint otherEndpoint
+  expectFrame role frame (UiProjection _ menu endpoint) = do
+    let setting = SettingIdentifier (if frame == ParentFrame then 5 else 246)
+        cursor = MenuCursor (case frame of ParentFrame -> 3; EntryFrame -> 0; PendingFrame -> 1)
+        node = MenuNodeAddress (if frame == ParentFrame then 0x78ea98 else 0x784014)
+        depth = MenuDepth (if frame == ParentFrame then 1 else 2)
+        SettingIdentifier settingWord = setting
+        MenuCursor cursorWord = cursor
+    oracleEqual role "image-size-oracle.press-frame" (Menu 1 settingWord cursorWord) menu
+    oracleEqual role "image-size-oracle.endpoint-frame"
+      (LocalUiMenu node (Just (MenuIdentifier 1)) (Just setting) cursor depth) endpoint
+  expectChoice role choice (Regions regions) = forM_ regions $ \(address,image) -> do
+    oracleEqual role "image-size-oracle.image-extent" True (B.length image >= 450)
+    let size = case choice of LargeThreeTwo -> 1; MediumThreeTwo -> 2
+    oracleEqual role ("image-size-oracle.ordinary-f6." <> T.pack (show address)) 0 ((B.index image 0x6f `shiftR` 5) .&. 3)
+    oracleEqual role ("image-size-oracle.ordinary-f9." <> T.pack (show address)) size ((B.index image 0x7d `shiftR` 5) .&. 3)
+  expectTransition role transition (Regions before) (Regions after) = asOracle role (orderedWith region "image-size-oracle.transition" before after)
+   where
+    region path (address,old) (other,new) = do
+      equal (path <> ".address") address other
+      equal (path <> ".length") (B.length old) (B.length new)
+      let offset = case transition of EnterImageSize -> 0x6e; PreviewMedium -> 0x7d
+          prior = case transition of EnterImageSize -> 0; PreviewMedium -> 1
+          next = case transition of EnterImageSize -> 1; PreviewMedium -> 2
+      equal (path <> ".prior-setting") prior ((B.index old offset `shiftR` 5) .&. 3)
+      forM_ [0..B.length old-1] $ \index -> do
+        let original = B.index old index
+            expected = if index == offset then original .&. 0x9f .|. (next `shiftL` 5) else original
+        equal (path <> ".bytes." <> T.pack (show index)) expected (B.index new index)
+  baseline role routes intervals = do
+    forM_ [ImageSizeUp,ImageSizeBack] $ \action -> do
+      let expected = Route (RouteName (case action of ImageSizeUp -> "crawl-trial-00368"; ImageSizeBack -> "crawl-trial-00371"))
+            (KeyRoute (imageSizeKeys action) (CrawlTrial (imageSizeTrial action) []))
+          declared = [route | route@(Route _ (KeyRoute _ (CrawlTrial trial _))) <- routes, trial == imageSizeTrial action]
+      oracleEqual role "image-size-oracle.declaration" [expected] declared
+    root@(Interval _ _ _ _ rootBefore rootAfter _ _) <- findInterval role [KeyOk] intervals
+    _ <- projection role root
+    parent <- findInterval role [KeyOk,KeyDown] intervals >>= projection role
+    entry <- findInterval role [KeyOk,KeyDown,KeyOk] intervals >>= projection role
+    pending <- findInterval role [KeyOk,KeyDown,KeyOk,KeyDown] intervals >>= projection role
+    let UiProjection parentSettings _ _ = parent
+        UiProjection entrySettings _ _ = entry
+        UiProjection pendingSettings _ _ = pending
+    asOracle role (compareRegions "image-size-oracle.root-entry" rootBefore rootAfter)
+    asOracle role (compareRegions "image-size-oracle.backup-baseline" rootAfter parentSettings)
+    case parentSettings of
+      Regions regions -> case lookup (Address 0x96cc64) regions of
+        Just image -> do
+          oracleEqual role "image-size-oracle.bank-pair-extent" 900 (B.length image)
+          forM_ [0..449] $ \index -> oracleEqual role ("image-size-oracle.published-backup." <> T.pack (show index))
+            (B.index image index) (B.index image (index+450))
+        Nothing -> Left (OracleViolation role "image-size-oracle.bank-pair" (String "0x96cc64") Null)
+    expectFrame role ParentFrame parent
+    expectFrame role EntryFrame entry
+    expectFrame role PendingFrame pending
+    expectChoice role LargeThreeTwo parentSettings
+    expectChoice role LargeThreeTwo entrySettings
+    expectChoice role MediumThreeTwo pendingSettings
+    expectTransition role EnterImageSize parentSettings entrySettings
+    expectTransition role PreviewMedium entrySettings pendingSettings
+    pure (ImageSizeBaseline parent entry pending)
   equal :: (Eq a, Show a) => T.Text -> a -> a -> Either Difference ()
   equal path a b = unless (a == b) (Left (Difference path (showValue a) (showValue b)))
   orderedWith :: (T.Text -> a -> a -> Either Difference ()) -> T.Text -> [a] -> [a] -> Either Difference ()
@@ -776,4 +951,4 @@ comparePair (Qualified Stock stockInputs stock stockMedium) (Qualified Owned own
       _ -> equal (path <> ".spare-present") (fmap B.length spare) (fmap B.length otherSpare)
   compareMaybeMedium path (Just a) (Just b) = compareMedium path a b
   compareMaybeMedium path a b = equal (path <> ".present") (fmap (const True) a) (fmap (const True) b)
-comparePair _ _ = Left (Difference "roles" (String "stock") (String "owned"))
+comparePair _ _ _ = Left (Difference "roles" (String "stock") (String "owned"))

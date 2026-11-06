@@ -26,6 +26,8 @@ import System.Exit (exitFailure)
 
 data Mutation = Original | PayloadByte | ReorderCalls | StrayFetch | ForeignRead | SavedDestinationWrite | ObsoleteTagWrite | BadSettings | BadMedium | MissingCapture | BadBinding | CollectionTail | ReturnedRecord | CloseScratch | OutputStorage | MissingResetRegion | RetiredSnapshotDifference | PreEntryPublication | PostEntryPublication | PreEntryBssWrite | PreEntryRead | MissingMarker | LaterPhaseWrite | MappedMedium | TruncatedSpare | ChangedSpareByte | PreservedLatest | ChangedPreservedPointer | ClearedPreservedPointer | ChangedPreservedSkipped | WrittenNullLatest | MissingWrittenNullLatest | ZeroSkippedLatest | ChangedZeroSkippedPreimage | PreservedRegister | ChangedPreservedRegister | InnerFailedRegister | UnopenedRegister | UnopenedRegisterNonNull | OutOfBankRead | ChangedOutOfBankTail | InvalidKindRead | FailedCollect | ChangedFailedCollectCount | ChangedFailedCollectBuffer deriving (Eq)
 
+data RecordSequence = WholeService | OpenAndRegister | ReadAndAppend
+
 changedObject :: K.Key -> Value -> Value -> Value
 changedObject name value (Object fields) = Object (KM.insert name value fields)
 changedObject _ _ value = value
@@ -122,10 +124,13 @@ hit entry address lr args event captures = object
   ,"observation" .= object ["event" .= event,"site" .= entry,"reads" .= captures]]
 call :: Word32 -> [Word32] -> [Value] -> Word32 -> [Value] -> [Value]
 call entry args input result output = [hit entry entry 0x700100 args "entry" input,hit entry 0x700100 0x700100 [result,0,0,0] "return" output]
-trace :: Role -> Mutation -> [Value]
-trace role mutation
-  | registerFailure = open ++ register
-  | otherwise = open ++ register ++ latest ++ order ++ erase ++ collect ++ positional ++ close
+trace :: Role -> Mutation -> RecordSequence -> [Value]
+trace role mutation scenario = case scenario of
+  OpenAndRegister -> open ++ register
+  ReadAndAppend -> latest ++ append
+  WholeService
+    | registerFailure -> open ++ register
+    | otherwise -> open ++ register ++ latest ++ order ++ erase ++ collect ++ positional ++ close
  where
   residue = if role == Stock then 0x11112222 else 0x33334444
   registerFailure = mutation `elem` [PreservedRegister,ChangedPreservedRegister,InnerFailedRegister,UnopenedRegister,UnopenedRegisterNonNull]
@@ -238,7 +243,7 @@ fixture role mutation = Observation receipt files where
   binding bytes = object ["path" .= ("fixture"::T.Text),"sha256" .= hash bytes]
   spec = object ["schema" .= (1::Int),"sites" .= object ([K.fromString (hexWord entry) .= ("record-entry"::T.Text) | entry <- entries] ++ ["0x6fb7c8" .= ("nand-write"::T.Text),"0x6fb57c" .= ("nand-erase"::T.Text)])
     ,"captures" .= (if mutation == MissingCapture then object [] else captureDeclarations),"hit_limit" .= (1500000::Int),"watch_limit" .= (1048576::Int),"write_ranges" .= writes role,"read_ranges" .= retired role,"fetch_ranges" .= fetches role]
-  events = trace role mutation
+  events = trace role mutation WholeService
   reset = object ["schema" .= (1::Int),"reset" .= object ["instructions" .= (0::Int)],"regions_at_reset" .= resetRegions role Original
     ,"segments" .= [object ["phase" .= phase,"instructions" .= (1::Int),"hits_end" .= length events,"watch" .= watch role phase mutation,"regions" .= resetRegions role mutation] | phase <- [minBound..maxBound]::[AttachPhase]]]
   files = M.fromList [(Spec,encode spec),(Extents,encode extents),(Reset,encode reset),(Hits,B.intercalate "\n" (map encode events) <> "\n"),(Steps,"[]"),(MediumFile,encode (medium mutation)),(Session,"{}")]
@@ -284,7 +289,7 @@ keyFixtureAtCursor :: Word32 -> Role -> ResetEvidence -> PrefixEvidence -> (Bind
 keyFixtureAtCursor cursor role evidence prefixEvidence = (bound, Observation receipt files) where
   bound = bindings { routeBytes = BL.toStrict (encodeRouteFile (RouteFile (replicate 64 '0') "reset fixture" CrawlEffectsSource []
     (phaseRoutes ++ [Route (RouteName (if evidence == BudgetedKey then "latched-key" else "custom-reset-defaults")) (KeyRoute [KeyOk] (if evidence == BudgetedKey then CrawlTrial 0 [CommitEffect] else Declared CustomResetDefaults))]))) }
-  events = filter keep (trace role Original)
+  events = filter keep (trace role Original WholeService)
   keep event = (evidence /= ResetWithoutAppend || not (any (\site -> get "site" (get "observation" event) == A.toJSON (site::Word32)) [0x6ac7d4,0x6fb7c8]))
     && not (prefixEvidence == IncompleteRecordCall && get "site" (get "observation" event) == A.toJSON (0x6ac7d4::Word32) && get "event" (get "observation" event) == String "return")
   Observation originalReceipt originalFiles = fixture role Original
@@ -306,34 +311,176 @@ keyFixtureAtCursor cursor role evidence prefixEvidence = (bound, Observation rec
   inputs = set "routes" (object ["path" .= ("fixture"::T.Text),"sha256" .= hash (routeBytes bound)]) (get "inputs" original)
   receipt = encode (set "inputs" inputs (set "files" (object [K.fromString (sidecarName name) .= hash bytes | (name,bytes) <- M.toList files]) original))
 
+data ImageSizePoint = RootPoint | ParentPoint | EntryPoint | DownPoint | UpPoint | BackPoint deriving (Eq, Show, Enum, Bounded)
+data ImageSizeEvidence = IntendedChoice | StalledChoice | ErasedStalledChoice | NoDownChange | WrongEntryCursor | WrongBackCursor | ChangedOtherSetting | ChangedAspect | UnpublishedBackup | ChangedImageSizeMode | WrongImageSizeTrial | WrongImageSizeFixture | ChangedUpRecord | ChangedBackRecord | ChangedUpNand | ChangedBackNand | ImageSizeRetiredFetch deriving (Eq, Show)
+
+imageSizePointKeys :: ImageSizePoint -> [CrawlKey]
+imageSizePointKeys point = case point of
+  RootPoint -> [KeyOk]
+  ParentPoint -> [KeyOk,KeyDown]
+  EntryPoint -> [KeyOk,KeyDown,KeyOk]
+  DownPoint -> [KeyOk,KeyDown,KeyOk,KeyDown]
+  UpPoint -> [KeyOk,KeyDown,KeyOk,KeyDown,KeyUp]
+  BackPoint -> [KeyOk,KeyDown,KeyOk,KeyDown,KeyBack]
+
+imageSizeComparisonBytes :: B.ByteString
+imageSizeComparisonBytes = encode (object
+  ["schema" .= (1::Int),"policy" .= ("image-size-pending-choice-v1"::T.Text)
+  ,"record_nand_sha256" .= ("eb33ae15ec676f5dfd9465223500c89179af5c90f14047b4e528a7db741e8682"::T.Text)
+  ,"source_evidence" .= object ["path" .= ("fixture-source-evidence"::T.Text),"sha256" .= hash "fixture-source-proof"]
+  ,"cases" .= [object ["crawl_trial" .= trial,"keys" .= imageSizePointKeys point] | (trial,point) <- [(368::Int,UpPoint),(371,BackPoint)]]])
+
+imageSizeComparison :: ComparisonContract
+imageSizeComparison = either error id (parseComparisonContract imageSizeComparisonBytes)
+
+imageSizeFixture :: Role -> ImageSizeEvidence -> (Bindings,Observation)
+imageSizeFixture role evidence = (bound,Observation receipt files)
+ where
+  (initialBounds,Observation initialReceipt initialFiles) = keyFixture role BudgetedKey Sampled
+  bound = initialBounds { routeBytes = BL.toStrict (encodeRouteFile (RouteFile (replicate 64 '0') "image-size intended behavior"
+    (RetainedObservationSource (sha256 "crawl-receipt") (sha256 "crawl-steps") (sha256 "crawl-hits")) []
+    (phaseRoutes ++ [Route (RouteName name) (KeyRoute (imageSizePointKeys point) (CrawlTrial trial []))
+      | (name,trial,point) <- [("crawl-trial-00368",if evidence == WrongImageSizeTrial then 369 else 368,UpPoint),("crawl-trial-00371",371,BackPoint)]]))) }
+  decode bytes = either error id (A.eitherDecodeStrict' bytes)
+  get key (Object fields) = maybe (error "fixture field missing") id (KM.lookup key fields)
+  get _ _ = error "fixture object required"
+  original = decode initialReceipt
+  rootEvents = trace role Original OpenAndRegister
+  effectEvents point = trace role (traceMutation point) ReadAndAppend
+  traceMutation point
+    | point == UpPoint && evidence == ChangedUpRecord || point == BackPoint && evidence == ChangedBackRecord = ReturnedRecord
+    | point == UpPoint && evidence == ChangedUpNand || point == BackPoint && evidence == ChangedBackNand = PayloadByte
+    | otherwise = Original
+  upEvents = effectEvents UpPoint
+  backEvents = effectEvents BackPoint
+  events = rootEvents ++ upEvents ++ backEvents
+  hitRange RootPoint = [0,length rootEvents]
+  hitRange UpPoint = [length rootEvents,length rootEvents+length upEvents]
+  hitRange BackPoint = [length rootEvents+length upEvents,length events]
+  hitRange _ = [length rootEvents,length rootEvents]
+  stalled = evidence `elem` [StalledChoice,ErasedStalledChoice]
+  pending point = point == DownPoint && evidence /= NoDownChange || point `elem` [UpPoint,BackPoint] && stalled
+  selecting point = point `elem` [EntryPoint,DownPoint,UpPoint] || point == BackPoint && stalled
+  rows point = [object ["start" .= rangeStart range,"bytes" .= hex (B.pack [at range index | index <- [0..fromIntegral (rangeEnd range-rangeStart range)-1]])] | range <- settingsRanges]
+   where
+    at range index
+      | index == 0x6e = if selecting point then 0x20 else 0
+      | index == 0x6f && evidence == ChangedAspect && point == UpPoint = 0x20
+      | index == 0x7d = if pending point then 0x40 else 0x20
+      | rangeStart range == 0x96cc64 && index == 450+0x7d = if evidence == UnpublishedBackup then 0x40 else 0x20
+      | index == 5 && evidence == ChangedOtherSetting && point == UpPoint = 0x5a
+      | otherwise = 0
+  region point = A.toJSON (rows point)
+  resetRows = A.toJSON (rows RootPoint ++ [object ["start" .= low,"bytes" .= hex (B.replicate (fromIntegral (high-low)) 0)] | [low,high] <- retired role])
+  reset = object ["schema" .= (1::Int),"reset" .= object ["instructions" .= (0::Int)],"regions_at_reset" .= resetRows
+    ,"segments" .= [object ["phase" .= phase,"instructions" .= (1::Int),"hits_end" .= (0::Int),"watch" .= watch role phase Original,"regions" .= resetRows] | phase <- [minBound..maxBound]::[AttachPhase]]]
+  frame point
+    | point `elem` [EntryPoint,DownPoint,UpPoint] || point == BackPoint && stalled =
+        (0x784014,246,if pending point || point == EntryPoint && evidence == WrongEntryCursor then 1 else 0,2)
+    | otherwise = (0x78ea98,5,if point == RootPoint || point == BackPoint && evidence == WrongBackCursor then 2 else 3,1)
+  view address bytes = object ["address" .= (address::Word32),"physical" .= hex bytes,"spellings" .= [[hex bytes,hex bytes],[hex bytes,hex bytes]]]
+  endpoint point = changedObject "state" state originalEndpoint
+   where
+    originalEndpoint = prefixEndpoint (if evidence == ChangedImageSizeMode && point == UpPoint then ChangedCurrent else Sampled) 0
+    (node,setting,cursor,depth) = frame point
+    state = changedObject "ui" (object
+      ["menu" .= view 0x9571d0 (wordBytes node <> wordBytes 0 <> wordBytes cursor)
+      ,"depth" .= view 0x9575f4 (wordBytes depth)
+      ,"node" .= view node (wordBytes 1 <> wordBytes 0 <> wordBytes setting)]) (get "state" originalEndpoint)
+  steps = [step number point | (number,point) <- zip [1::Int ..] [minBound..maxBound]]
+  step number point = object
+    ["step" .= number,"parent" .= (case point of RootPoint -> 0; ParentPoint -> 1; EntryPoint -> 2; DownPoint -> 3; UpPoint -> 4; BackPoint -> 4::Int)
+    ,"keys" .= imageSizePointKeys point,"hits" .= hitRange point
+    ,"idle" .= object ["ran" .= (20000000::Int)]
+    ,"press" .= object ["failure" .= Null,"settle" .= object ["status" .= ("packet-consumed"::T.Text)]
+      ,"menu" .= let (_,setting,cursor,_) = frame point in object ["menu_id" .= (1::Int),"setting_id" .= setting,"cursor" .= cursor]]
+    ,"bounded_post_settle_prefix" .= endpoint point
+    ,"regions_before" .= region (case point of RootPoint -> RootPoint; ParentPoint -> RootPoint; EntryPoint -> ParentPoint; DownPoint -> EntryPoint; UpPoint -> DownPoint; BackPoint -> DownPoint)
+    ,"regions_after" .= region point,"medium_after" .= (if point `elem` [UpPoint,BackPoint] then medium Original else Null)
+    ,"watch" .= changedObject "views" (String "fixed") (if point == UpPoint && evidence == ImageSizeRetiredFetch
+      then watch role FirstStartPhase StrayFetch else watch role LiveViewPhase Original)]
+  files = M.insert Reset (encode reset) (M.insert Hits (B.intercalate "\n" (map encode events) <> "\n") (M.insert Steps (encode (A.toJSON steps)) initialFiles))
+  sourceNand = if evidence == WrongImageSizeFixture then T.pack (hash "other-populated-fixture") else "eb33ae15ec676f5dfd9465223500c89179af5c90f14047b4e528a7db741e8682"
+  routeInputs = changedObject "routes" (object ["path" .= ("fixture"::T.Text),"sha256" .= hash (routeBytes bound)]) (get "inputs" original)
+  inputs = if evidence == ErasedStalledChoice then routeInputs
+    else changedObject "record-nand" (object ["path" .= ("fixture-record-nand"::T.Text),"sha256" .= sourceNand]) routeInputs
+  receipt = encode (changedObject "settings_at_attach" (region RootPoint)
+    (changedObject "inputs" inputs (changedObject "files" (object [K.fromString (sidecarName name) .= hash bytes | (name,bytes) <- M.toList files]) original)))
+
+imageSizeReport :: ComparisonContract -> ImageSizeEvidence -> ImageSizeEvidence -> Either String Value
+imageSizeReport comparison retained candidate = do
+  let (stockBindings,stockObservation) = imageSizeFixture Stock retained
+      (ownedBindings,ownedObservation) = imageSizeFixture Owned candidate
+  stock <- qualify Stock stockBindings stockObservation
+  owned <- qualify Owned ownedBindings ownedObservation
+  let result = comparePair comparison stock owned
+  either (Left . show) (const (Right (comparisonValue comparison stock owned result))) result
+
+imageSizeEffectsCompared :: ImageSizeEvidence -> Bool
+imageSizeEffectsCompared evidence =
+  let (stockBindings,stockObservation) = imageSizeFixture Stock StalledChoice
+      (ownedBindings,ownedObservation) = imageSizeFixture Owned evidence
+   in case (qualify Stock stockBindings stockObservation,qualify Owned ownedBindings ownedObservation) of
+        (Right stock,Right owned) -> isLeft (comparePair imageSizeComparison stock owned)
+        _ -> False
+
+reportField :: K.Key -> Either String Value -> Maybe Value
+reportField name result = case result of
+  Right (Object fields) -> KM.lookup name fields
+  _ -> Nothing
+
+changedImageSizeContract :: K.Key -> Value -> Either String ComparisonContract
+changedImageSizeContract name value = do
+  original <- A.eitherDecodeStrict' imageSizeComparisonBytes
+  parseComparisonContract (encode (changedObject name value original))
+
+strictComparison :: ComparisonContract
+strictComparison = either error id (parseComparisonContract "{\"schema\":1,\"policy\":\"stock-equality-v1\"}")
+
 main :: IO ()
 main = do
   let stock = qualify Stock bindings (fixture Stock Original)
+      intendedDifference = imageSizeReport imageSizeComparison StalledChoice IntendedChoice
+      intendedMatch = imageSizeReport imageSizeComparison IntendedChoice IntendedChoice
+      erasedFiniteMatch = imageSizeReport imageSizeComparison ErasedStalledChoice ErasedStalledChoice
+      intendedCasesReported = case reportField "intended_cases" intendedDifference of
+        Just (Array cases) -> length cases == 2 && all intended cases && any restoredSynchronization cases
+        _ -> False
+       where
+        intended (Object fields) = KM.lookup "owned" fields == Just (String "intended")
+          && KM.lookup "expected_choice" fields == Just (object ["size" .= ("L"::T.Text),"aspect" .= ("3:2"::T.Text)])
+        intended _ = False
+        restoredSynchronization (Object fields) = case KM.lookup "property_161" fields of
+          Just (Object property) -> KM.lookup "crawl_trial" fields == Just (Number 371)
+            && KM.lookup "classification" property == Just (String "derived-image-size-synchronization")
+            && KM.lookup "after" property == Just (Number 0) && KM.lookup "native_leave_restore" property == Just (Bool True)
+          _ -> False
+        restoredSynchronization _ = False
       endpointCursorDiffers = case (keyFixtureAtCursor 0 Stock ResetAppends Sampled,keyFixtureAtCursor 1 Owned ResetAppends Sampled) of
         ((stockBindings,stockObservation),(ownedBindings,ownedObservation)) ->
           case (qualify Stock stockBindings stockObservation,qualify Owned ownedBindings ownedObservation) of
-            (Right a,Right b) -> isLeft (comparePair a b)
+            (Right a,Right b) -> isLeft (comparePair strictComparison a b)
             _ -> False
       owned mutation = qualify Owned bindings (fixture Owned mutation)
       matchedAgainst baseline mutation = case (qualify Stock bindings (fixture Stock baseline),owned mutation) of
-        (Right a,Right b) -> not (isLeft (comparePair a b))
+        (Right a,Right b) -> not (isLeft (comparePair strictComparison a b))
         _ -> False
       failedAgainst baseline mutation = case (qualify Stock bindings (fixture Stock baseline),owned mutation) of
         (Right _,Left _) -> True
-        (Right a,Right b) -> isLeft (comparePair a b)
+        (Right a,Right b) -> isLeft (comparePair strictComparison a b)
         _ -> False
       matched mutation = case (stock,owned mutation) of
-        (Right a,Right b) -> not (isLeft (comparePair a b))
+        (Right a,Right b) -> not (isLeft (comparePair strictComparison a b))
         _ -> False
       differs mutation = case (stock,owned mutation) of
-        (Right a,Right b) -> isLeft (comparePair a b)
+        (Right a,Right b) -> isLeft (comparePair strictComparison a b)
         _ -> False
       refused mutation = isLeft (owned mutation)
       mappedMatched = case (qualify Stock bindings (fixture Stock MappedMedium),owned MappedMedium) of
-        (Right a,Right b) -> not (isLeft (comparePair a b))
+        (Right a,Right b) -> not (isLeft (comparePair strictComparison a b))
         _ -> False
       spareDifference = case (qualify Stock bindings (fixture Stock MappedMedium),owned ChangedSpareByte) of
-        (Right a,Right b) -> case comparisonValue a b (comparePair a b) of
+        (Right a,Right b) -> case comparisonValue strictComparison a b (comparePair strictComparison a b) of
           Object fields -> case KM.lookup "path" fields of
             Just (String path) -> ".spare.0" `T.isSuffixOf` path
             _ -> False
@@ -350,7 +497,7 @@ main = do
                     , "record_store_collect" .= (1::Int), "record_store_read_at" .= (1::Int)
                     , "record_store_zero" .= (1::Int)]
                 , "nand" .= object ["program" .= (1::Int),"erase" .= (1::Int)]]
-              report = comparisonValue a b (comparePair a b)
+              report = comparisonValue strictComparison a b (comparePair strictComparison a b)
            in case report of
                 Object fields -> KM.lookup "coverage" fields == Just (object ["stock" .= expected "stock","owned" .= expected "owned"])
                 _ -> False
@@ -358,7 +505,7 @@ main = do
       prefixAdmitted role evidence = let (bound,observation) = keyFixture role ResetAppends evidence in not (isLeft (qualify role bound observation))
       sampledPair = case (keyFixture Stock ResetAppends Sampled,keyFixture Owned ResetAppends Sampled) of
         ((bound,a),(_,b)) -> case (qualify Stock bound a,qualify Owned bound b) of
-          (Right left,Right right) -> not (isLeft (comparePair left right))
+          (Right left,Right right) -> not (isLeft (comparePair strictComparison left right))
           _ -> False
       wrongPrefixPolicy role policy =
         let (bound,observation) = keyFixture role ResetAppends Sampled
@@ -373,7 +520,7 @@ main = do
         in isLeft (qualify role bound observation {receiptBytes = encode (changedObject key value receipt)})
       changedModeDiffers evidence = case (keyFixture Stock ResetAppends Sampled,keyFixture Owned ResetAppends evidence) of
         ((bound,a),(_,b)) -> case (qualify Stock bound a,qualify Owned bound b) of
-          (Right left,Right right) -> isLeft (comparePair left right)
+          (Right left,Right right) -> isLeft (comparePair strictComparison left right)
           _ -> False
       validEvidence = [Sampled,ChangedCurrent,ChangedPrevious,ChangedPending,ChangedRequest,ChangedLatch]
       wrongCache value = rejectBinding (changedObject "owned_cache" value) id
@@ -449,12 +596,30 @@ main = do
         ,("missing or changed exact prefix ticks refuse both roles",and [wrongPrefixPolicy role policy | role <- [Stock,Owned], policy <- [Nothing,Just (Number 833333)]])
         ,("old receipt schema refuses both roles",all (\role -> wrongEndpointVersion role "schema" (Number 1)) [Stock,Owned])
         ,("old endpoint contract refuses both roles",all (\role -> wrongEndpointVersion role "endpoint_contract" (String "local-ui-drain")) [Stock,Owned])]
+        ++ [("intended image-size selection accepts the known stock stall without calling it equality",reportField "outcome" intendedDifference == Just (String "accepted-functional-difference"))
+           ,("intended image-size selection reports both declared cases and derived rollback",intendedCasesReported)
+           ,("a responsive stock image-size selection also satisfies the intended oracle",reportField "outcome" intendedMatch == Just (String "matched"))
+           ,("ordinary stock equality still detects the image-size difference",isLeft (imageSizeReport strictComparison StalledChoice IntendedChoice))
+           ,("an erased finite match makes no intended image-size claim",reportField "outcome" erasedFiniteMatch == Just (String "matched") && reportField "intended_cases" erasedFiniteMatch == Just (A.toJSON ([]::[Value])))
+           ,("stock image-size output must be intended or the exact stalled DOWN state",isLeft (imageSizeReport imageSizeComparison ChangedOtherSetting IntendedChoice))
+           ,("an undeclared populated fixture cannot bypass the intended oracle",isLeft (imageSizeReport imageSizeComparison WrongImageSizeFixture WrongImageSizeFixture))
+           ,("comparison source evidence binds its bytes",isRight (validateComparisonEvidence imageSizeComparison "fixture-source-proof") && isLeft (validateComparisonEvidence imageSizeComparison "changed-proof"))
+           ,("unknown comparison policies refuse",isLeft (parseComparisonContract "{\"schema\":1,\"policy\":\"unknown\"}"))
+           ,("changed intended-case paths refuse",isLeft (changedImageSizeContract "cases" (A.toJSON
+             [object ["crawl_trial" .= (368::Int),"keys" .= [KeyOk,KeyUp]],object ["crawl_trial" .= (371::Int),"keys" .= imageSizePointKeys BackPoint]])))]
+        ++ [("intended image-size oracle rejects " ++ show evidence,isLeft (imageSizeReport imageSizeComparison StalledChoice evidence))
+           | evidence <- [StalledChoice,NoDownChange,WrongEntryCursor,WrongBackCursor,ChangedOtherSetting,ChangedAspect,UnpublishedBackup,ChangedImageSizeMode,WrongImageSizeTrial,ImageSizeRetiredFetch]]
+        ++ [("protected image-size interval compares " ++ show evidence,imageSizeEffectsCompared evidence)
+           | evidence <- [ChangedUpRecord,ChangedBackRecord,ChangedUpNand,ChangedBackNand]]
         ++ [("changed source mode fails comparison: " ++ show evidence,changedModeDiffers evidence) | evidence <- drop 1 validEvidence]
         ++ [("finite prefix rejects " ++ show evidence ++ " for " ++ show role,not (prefixAdmitted role evidence))
            | role <- [Stock,Owned], evidence <- [minBound..maxBound], evidence `notElem` validEvidence]
   case (stock,owned Original) of
     (Left failure,_) -> putStrLn ("stock fixture: " ++ failure)
     (_,Left failure) -> putStrLn ("owned fixture: " ++ failure)
+    _ -> pure ()
+  case intendedDifference of
+    Left failure -> putStrLn ("image-size fixture: " ++ failure)
     _ -> pure ()
   mapM_ (\(name,passed) -> putStrLn ((if passed then "PASS " else "FAIL ") ++ name)) tests
   unless (all snd tests) exitFailure

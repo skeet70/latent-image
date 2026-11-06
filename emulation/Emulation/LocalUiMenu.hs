@@ -1,5 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Emulation.LocalUiMenu (LocalUiMenu, parseLocalUiMenu, LocalUiMode, parseLocalUiMode) where
+module Emulation.LocalUiMenu
+  ( LocalUiMenu (..), MenuNodeAddress (..), MenuIdentifier (..), SettingIdentifier (..), MenuCursor (..), MenuDepth (..)
+  , parseLocalUiMenu, LocalUiMode, parseLocalUiMode
+  ) where
 
 import Control.Monad (unless)
 import Data.Aeson (Value (..), ToJSON (..), object, (.=))
@@ -13,11 +16,16 @@ import qualified Data.Vector as V
 import Data.Word (Word32, Word8)
 import Numeric (readHex)
 
-data LocalUiMenu = LocalUiMenu Word32 (Maybe Word32) (Maybe Word32) Word32 Word32 deriving (Eq, Show)
+newtype MenuNodeAddress = MenuNodeAddress Word32 deriving (Eq, Show)
+newtype MenuIdentifier = MenuIdentifier Word32 deriving (Eq, Show)
+newtype SettingIdentifier = SettingIdentifier Word32 deriving (Eq, Show)
+newtype MenuCursor = MenuCursor Word32 deriving (Eq, Show)
+newtype MenuDepth = MenuDepth Word32 deriving (Eq, Show)
+data LocalUiMenu = LocalUiMenu MenuNodeAddress (Maybe MenuIdentifier) (Maybe SettingIdentifier) MenuCursor MenuDepth deriving (Eq, Show)
 
 instance ToJSON LocalUiMenu where
-  toJSON (LocalUiMenu node ident setting cursor level) = object
-    ["node" .= node, "id" .= ident, "setting" .= setting, "cursor" .= cursor, "level" .= level]
+  toJSON (LocalUiMenu (MenuNodeAddress node) ident setting (MenuCursor cursor) (MenuDepth level)) = object
+    ["node" .= node, "id" .= fmap (\(MenuIdentifier value) -> value) ident, "setting" .= fmap (\(SettingIdentifier value) -> value) setting, "cursor" .= cursor, "level" .= level]
 
 newtype Mode = Mode Word32 deriving (Eq, Show)
 newtype ModeRequest = ModeRequest Word32 deriving (Eq, Show)
@@ -51,7 +59,7 @@ parseLocalUiMenu ui = do
         bytes <- nodeBytes
         let index = fromIntegral (node .&. 3) + offset
         if index `mod` 4 == 0 && index + 4 <= B.length bytes then Just (word bytes index) else Nothing
-  pure (LocalUiMenu node (at 0) (at 8) (word menu 8) (word depth 0))
+  pure (LocalUiMenu (MenuNodeAddress node) (MenuIdentifier <$> at 0) (SettingIdentifier <$> at 8) (MenuCursor (word menu 8)) (MenuDepth (word depth 0)))
 
 word :: B.ByteString -> Int -> Word32
 word bytes offset = sum [fromIntegral (B.index bytes (offset + index)) `shiftL` (8 * index) | index <- [0..3]]
