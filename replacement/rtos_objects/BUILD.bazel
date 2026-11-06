@@ -17,6 +17,7 @@ xm1_rust_staticlib(
         "src/order.rs",
         "src/status.rs",
         "src/timeout.rs",
+        "src/wake.rs",
         "//replacement/rtos_layout:src/lib.rs",
     ],
 )
@@ -35,6 +36,7 @@ genrule(
         "src/status.rs",
         "src/tests.rs",
         "src/timeout.rs",
+        "src/wake.rs",
         "//replacement/rtos_layout:src/lib.rs",
     ],
     outs = ["objects-host-tests-bin"],

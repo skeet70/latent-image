@@ -432,6 +432,12 @@ struct Mock {
     interrupts: Cell<SavedInterrupts>,
     creation_mask: Cell<bool>,
     held: Cell<bool>,
+    scheduler_held: Cell<bool>,
+    selection: Cell<Selection>,
+    released: RefCell<Vec<(Domain, Task)>>,
+    cancelled: RefCell<Vec<(Domain, Task)>>,
+    notified: RefCell<Vec<Domain>>,
+    dispatched: Cell<bool>,
 }
 
 impl Default for Mock {
@@ -449,6 +455,12 @@ impl Mock {
             interrupts: Cell::new(SavedInterrupts(0x40)),
             creation_mask: Cell::new(false),
             held: Cell::new(false),
+            scheduler_held: Cell::new(false),
+            selection: Cell::new(Selection::Unchanged),
+            released: RefCell::new(Vec::new()),
+            cancelled: RefCell::new(Vec::new()),
+            notified: RefCell::new(Vec::new()),
+            dispatched: Cell::new(false),
         }
     }
 
@@ -458,6 +470,52 @@ impl Mock {
 
     fn set(&self, at: GuestAddress, value: u32) {
         self.words.borrow_mut().insert(at.0, value);
+    }
+
+    fn set_selection(&self, selection: Selection) {
+        self.selection.set(selection);
+    }
+}
+
+impl Wake for Mock {
+    fn with_scheduler_lock<R>(&self, _domain: Domain, body: impl FnOnce() -> R) -> R {
+        assert!(self.held.get(), "scheduler lock taken without the object lock");
+        assert!(!self.scheduler_held.get(), "scheduler lock taken twice");
+        self.scheduler_held.set(true);
+        let result = body();
+        self.scheduler_held.set(false);
+        result
+    }
+
+    fn waiter_domain(&self, task: Task) -> Domain {
+        match DomainId::from_word(self.word(task.domain())) {
+            Some(DomainId::A) => Domain::A,
+            Some(DomainId::B) => Domain::B,
+            _ => panic!("waiting task has no domain tag"),
+        }
+    }
+
+    fn release_wait(&self, owner: Domain, task: Task) -> Selection {
+        let wait = GuestAddress(self.word(task.wait()));
+        if self.word(wait) != 0 {
+            self.cancelled.borrow_mut().push((owner, task));
+        }
+        self.set(wait, 0);
+        self.released.borrow_mut().push((owner, task));
+        self.selection.get()
+    }
+
+    fn notify_dispatch(&self, owner: Domain) -> DispatchTarget {
+        self.notified.borrow_mut().push(owner);
+        if owner == Domain::A {
+            DispatchTarget::Local
+        } else {
+            DispatchTarget::Remote
+        }
+    }
+
+    fn dispatch(&self) {
+        self.dispatched.set(true);
     }
 }
 
@@ -979,4 +1037,212 @@ fn a_receive_output_aliasing_the_head_reads_the_next_message() {
         Ok(WaitOutcome::Satisfied(first))
     );
     assert_eq!(m.word(control.head()), second.0 .0);
+}
+
+fn wait_a_flag(m: &Mock, words: &DomainWords, task_slot: TaskSlot, domain: Domain, pattern: u32, mode: u32, timer: u32) -> (Task, FlagWait) {
+    let task = words.task(task_slot);
+    let wait = words.flag_wait(task_slot);
+    m.set(task.domain(), if domain == Domain::A { 1 } else { 2 });
+    m.set(task.wait(), wait.0 .0);
+    m.set(wait.pattern(), pattern);
+    m.set(wait.mode(), mode);
+    m.set(wait.base().result(), timer);
+    (task, wait)
+}
+
+fn wait_a_receiver(m: &Mock, words: &DomainWords, task_slot: TaskSlot, domain: Domain, timer: u32) -> (Task, MailboxWait) {
+    let task = words.task(task_slot);
+    let wait = words.mailbox_wait(task_slot);
+    m.set(task.domain(), if domain == Domain::A { 1 } else { 2 });
+    m.set(task.wait(), wait.0 .0);
+    m.set(wait.base().result(), timer);
+    (task, wait)
+}
+
+fn link_waiter(m: &Mock, control: GuestAddress, task: Task) {
+    m.set(control, task.0 .0);
+    m.set(control.offset(0x04), task.0 .0);
+    m.set(task.next(), control.0);
+    m.set(task.prev(), control.0);
+}
+
+#[test]
+fn set_flag_without_a_waiter_sets_the_pattern() {
+    let words = Domain::A.words();
+    let slot = FlagSlot::new(3, 120).unwrap();
+    let m = Mock::marking(words.flag_config(slot).exists().0);
+    let id = flag_fixture(&m, Domain::A, slot, 0, 0x01);
+    set_flag(&m, id, Pattern(0x10));
+    assert_eq!(m.word(words.flag_control(slot).pattern()), 0x11);
+    assert!(m.released.borrow().is_empty());
+    assert!(!m.dispatched.get());
+}
+
+#[test]
+fn set_flag_satisfies_a_waiter_and_reports_the_pattern() {
+    let words = Domain::A.words();
+    let slot = FlagSlot::new(3, 120).unwrap();
+    let task_slot = TaskSlot::new(7).unwrap();
+    let m = Mock::marking(words.flag_config(slot).exists().0);
+    let id = flag_fixture(&m, Domain::A, slot, 0, 0x01);
+    let control = words.flag_control(slot);
+    let (task, wait) = wait_a_flag(&m, &words, task_slot, Domain::A, 0x10, 0, 0);
+    link_waiter(&m, control.queue().next(), task);
+    m.set_selection(Selection::Changed);
+    set_flag(&m, id, Pattern(0x10));
+    assert_eq!(m.word(control.pattern()), 0x11);
+    assert_eq!(m.word(wait.result()), 0x11);
+    assert_eq!(m.word(control.queue().next()), control.0 .0);
+    assert!(m.released.borrow().contains(&(Domain::A, task)));
+    assert_eq!(m.notified.borrow().as_slice(), &[Domain::A]);
+    assert!(m.dispatched.get());
+}
+
+#[test]
+fn set_flag_leaves_an_unsatisfied_waiter_queued() {
+    let words = Domain::A.words();
+    let slot = FlagSlot::new(3, 120).unwrap();
+    let task_slot = TaskSlot::new(7).unwrap();
+    let m = Mock::marking(words.flag_config(slot).exists().0);
+    let id = flag_fixture(&m, Domain::A, slot, 0, 0x01);
+    let control = words.flag_control(slot);
+    let (task, wait) = wait_a_flag(&m, &words, task_slot, Domain::A, 0x40, 0, 0);
+    m.set(wait.result(), 0xdead);
+    link_waiter(&m, control.queue().next(), task);
+    set_flag(&m, id, Pattern(0x10));
+    assert_eq!(m.word(control.pattern()), 0x11);
+    assert_eq!(m.word(wait.result()), 0xdead);
+    assert_eq!(m.word(control.queue().next()), task.0 .0);
+    assert!(m.released.borrow().is_empty());
+    assert!(!m.dispatched.get());
+}
+
+#[test]
+fn set_flag_clears_the_whole_pattern_when_the_attribute_says_so() {
+    let words = Domain::A.words();
+    let slot = FlagSlot::new(3, 120).unwrap();
+    let task_slot = TaskSlot::new(7).unwrap();
+    let m = Mock::marking(words.flag_config(slot).exists().0);
+    let id = flag_fixture(&m, Domain::A, slot, FlagConfig::CLEAR_ON_MATCH, 0x01);
+    let control = words.flag_control(slot);
+    let (task, wait) = wait_a_flag(&m, &words, task_slot, Domain::A, 0x01, 0, 0);
+    link_waiter(&m, control.queue().next(), task);
+    m.set_selection(Selection::Changed);
+    set_flag(&m, id, Pattern(0x10));
+    assert_eq!(m.word(wait.result()), 0x11);
+    assert_eq!(m.word(control.pattern()), 0);
+}
+
+#[test]
+fn set_flag_to_a_cross_domain_waiter_does_not_dispatch() {
+    let words = Domain::A.words();
+    let slot = FlagSlot::new(3, 120).unwrap();
+    let task_slot = TaskSlot::new(7).unwrap();
+    let m = Mock::marking(words.flag_config(slot).exists().0);
+    let id = flag_fixture(&m, Domain::A, slot, 0, 0x01);
+    let control = words.flag_control(slot);
+    let (task, _) = wait_a_flag(&m, &words, task_slot, Domain::B, 0x10, 0, 0);
+    link_waiter(&m, control.queue().next(), task);
+    m.set_selection(Selection::Changed);
+    set_flag(&m, id, Pattern(0x10));
+    assert!(m.released.borrow().contains(&(Domain::B, task)));
+    assert_eq!(m.notified.borrow().as_slice(), &[Domain::B]);
+    assert!(!m.dispatched.get());
+}
+
+#[test]
+fn a_satisfied_set_cancels_the_waiters_timer() {
+    let words = Domain::A.words();
+    let slot = FlagSlot::new(3, 120).unwrap();
+    let task_slot = TaskSlot::new(7).unwrap();
+    let m = Mock::marking(words.flag_config(slot).exists().0);
+    let id = flag_fixture(&m, Domain::A, slot, 0, 0x01);
+    let control = words.flag_control(slot);
+    let (task, wait) = wait_a_flag(&m, &words, task_slot, Domain::A, 0x10, 0, 0x4000_0500);
+    link_waiter(&m, control.queue().next(), task);
+    m.set_selection(Selection::Changed);
+    set_flag(&m, id, Pattern(0x10));
+    assert!(m.cancelled.borrow().contains(&(Domain::A, task)));
+    assert_eq!(m.word(wait.base().result()), 0);
+}
+
+#[test]
+fn send_hands_the_message_to_a_blocked_receiver() {
+    let words = Domain::A.words();
+    let slot = MailboxSlot::new(1, 1).unwrap();
+    let task_slot = TaskSlot::new(7).unwrap();
+    let m = Mock::marking(words.mailbox_config(slot).exists().0);
+    let id = mailbox_fixture(&m, slot, 0, 32);
+    let control = words.mailbox_control(slot);
+    let message = Message(GuestAddress(0x4000_0300));
+    m.set(message.next(), 0xdead);
+    let (task, wait) = wait_a_receiver(&m, &words, task_slot, Domain::A, 0);
+    link_waiter(&m, control.queue().next(), task);
+    m.set_selection(Selection::Changed);
+    send(&m, id, message, None);
+    assert_eq!(m.word(wait.message()), message.0 .0);
+    assert_eq!(m.word(control.queue().next()), control.0 .0);
+    assert_eq!(m.word(message.next()), 0xdead);
+    assert!(m.released.borrow().contains(&(Domain::A, task)));
+    assert!(m.dispatched.get());
+}
+
+#[test]
+fn send_to_an_empty_mailbox_appends_fifo() {
+    let words = Domain::A.words();
+    let slot = MailboxSlot::new(1, 1).unwrap();
+    let m = Mock::marking(words.mailbox_config(slot).exists().0);
+    let id = mailbox_fixture(&m, slot, 0, 32);
+    let control = words.mailbox_control(slot);
+    let first = Message(GuestAddress(0x4000_0300));
+    let second = Message(GuestAddress(0x4000_0400));
+    send(&m, id, first, None);
+    send(&m, id, second, None);
+    assert_eq!(m.word(control.head()), first.0 .0);
+    assert_eq!(m.word(control.tail()), second.0 .0);
+    assert_eq!(m.word(first.next()), second.0 .0);
+    assert_eq!(m.word(second.next()), 0);
+    assert!(m.released.borrow().is_empty());
+    assert!(!m.dispatched.get());
+}
+
+#[test]
+fn send_with_priority_orders_the_queue() {
+    let words = Domain::A.words();
+    let slot = MailboxSlot::new(1, 1).unwrap();
+    let m = Mock::marking(words.mailbox_config(slot).exists().0);
+    let id = mailbox_fixture(&m, slot, 2, 32);
+    let control = words.mailbox_control(slot);
+    let a = Message(GuestAddress(0x4000_0300));
+    let b = Message(GuestAddress(0x4000_0400));
+    let c = Message(GuestAddress(0x4000_0500));
+    m.set(a.priority(), 3);
+    m.set(b.priority(), 1);
+    m.set(c.priority(), 3);
+    send(&m, id, a, Some(MessagePriority::new(3, PriorityLimit(32)).unwrap()));
+    send(&m, id, b, Some(MessagePriority::new(1, PriorityLimit(32)).unwrap()));
+    send(&m, id, c, Some(MessagePriority::new(3, PriorityLimit(32)).unwrap()));
+    assert_eq!(m.word(control.head()), b.0 .0);
+    assert_eq!(m.word(b.next()), a.0 .0);
+    assert_eq!(m.word(a.next()), c.0 .0);
+    assert_eq!(m.word(c.next()), 0);
+}
+
+#[test]
+fn send_to_a_cross_domain_receiver_does_not_dispatch() {
+    let words = Domain::A.words();
+    let slot = MailboxSlot::new(1, 1).unwrap();
+    let task_slot = TaskSlot::new(7).unwrap();
+    let m = Mock::marking(words.mailbox_config(slot).exists().0);
+    let id = mailbox_fixture(&m, slot, 0, 32);
+    let control = words.mailbox_control(slot);
+    let message = Message(GuestAddress(0x4000_0300));
+    let (task, wait) = wait_a_receiver(&m, &words, task_slot, Domain::B, 0);
+    link_waiter(&m, control.queue().next(), task);
+    m.set_selection(Selection::Changed);
+    send(&m, id, message, None);
+    assert_eq!(m.word(wait.message()), message.0 .0);
+    assert!(m.released.borrow().contains(&(Domain::B, task)));
+    assert_eq!(m.notified.borrow().as_slice(), &[Domain::B]);
+    assert!(!m.dispatched.get());
 }

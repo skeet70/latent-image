@@ -13,6 +13,7 @@ pub mod message;
 pub mod order;
 pub mod status;
 pub mod timeout;
+pub mod wake;
 
 #[cfg(test)]
 mod tests;
@@ -36,3 +37,4 @@ pub use message::{MessagePriority, PriorityLimit};
 pub use order::{precedes, QueueOrder};
 pub use status::{ObjectStatus, WaitOutcome};
 pub use timeout::Timeout;
+pub use wake::{send, set_flag, DispatchTarget, Selection, Wake};

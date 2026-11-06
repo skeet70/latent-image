@@ -34,6 +34,15 @@ pub enum MatchMode {
 }
 
 impl MatchMode {
+    /// The stored mode field of a wait record, which the wait bodies write as 0 or 1.
+    pub const fn from_stored(word: u32) -> Self {
+        if word & 1 != 0 {
+            Self::Any
+        } else {
+            Self::All
+        }
+    }
+
     pub const fn from_word(word: u32) -> Result<Self, ObjectStatus> {
         if word & !1 != 0 {
             return Err(ObjectStatus::Param);
