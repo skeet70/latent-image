@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Runs the F2 family cases in both entry domains and reports each case's differences.
+-- | Runs the F2 family cases in both entry domains against the stock loaders and the owned
+-- stage bins, and fails on any difference.
 module Main (main) where
 
 import Control.Monad (forM_, unless)
@@ -9,21 +10,27 @@ import System.Directory (createDirectoryIfMissing, getTemporaryDirectory)
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
 import System.FilePath ((</>))
-import Replacement.RtosObjects.Suite (FamilyEnv (..), FamilyRun (..), runFamily)
+import Replacement.RtosObjects.Layout (parseFacts)
+import Replacement.RtosObjects.Suite (FamilyRun (..), Image (..), extents, runFamily)
 import Replacement.RtosOwnFirst.Regions (Domain (..))
 
 main :: IO ()
 main = do
-  [runner, binA, binB] <- getArgs
+  [runner, layoutPath, loaderA, loaderB, ownedA, ownedB] <- getArgs
+  facts <- either fail pure . parseFacts =<< B.readFile layoutPath
+  loaderABytes <- B.readFile loaderA
+  loaderBBytes <- B.readFile loaderB
+  ownedABytes <- B.readFile ownedA
+  ownedBBytes <- B.readFile ownedB
   temporary <- getTemporaryDirectory
   let directory = temporary </> "rtos-objects-family"
   createDirectoryIfMissing True directory
-  bytesA <- B.readFile binA
-  bytesB <- B.readFile binB
-  let envA = FamilyEnv DomainA 0x40054648 0x4005ab10 0x400c9c0 0x400d1b0 0x40054700 0x4005ab30 0x4005ab38
-      envB = FamilyEnv DomainB 0x400d4648 0x400dab10 0x400dc9c0 0x400dd1b0 0x400d4700 0x400dab30 0x400dab38
-  runA <- runFamily runner (directory </> "a") envA bytesA
-  runB <- runFamily runner (directory </> "b") envB bytesB
+  let stockA = Image 0x40000 loaderABytes
+      stockB = Image 0xd0000 loaderBBytes
+      ownedAImage = Image (minimum (map fst (extents DomainA))) ownedABytes
+      ownedBImage = Image (minimum (map fst (extents DomainB))) ownedBBytes
+  runA <- runFamily runner directory facts DomainA stockA ownedAImage
+  runB <- runFamily runner directory facts DomainB stockB ownedBImage
   let runs = [runA, runB]
       failures =
         [(name, message) | run <- runs, (name, Left message) <- familyCases run]

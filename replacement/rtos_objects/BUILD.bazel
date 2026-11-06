@@ -128,7 +128,10 @@ sh_test(
 
 haskell_library(
     name = "family-suite",
-    srcs = ["native/Replacement/RtosObjects/Suite.hs"],
+    srcs = [
+        "native/Replacement/RtosObjects/Layout.hs",
+        "native/Replacement/RtosObjects/Suite.hs",
+    ],
     src_strip_prefix = "native",
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
@@ -144,21 +147,10 @@ haskell_library(
     ],
 )
 
-haskell_test(
-    name = "family-suite-test",
-    size = "small",
+haskell_binary(
+    name = "family-suite-runner",
     srcs = ["native/SuiteMain.hs"],
     main_file = "native/SuiteMain.hs",
-    args = [
-        "$(rootpath //emulation:native-runner)",
-        "$(rootpath //replacement/rtos_objects:objects-f2-stage-a.bin)",
-        "$(rootpath //replacement/rtos_objects:objects-f2-stage-b.bin)",
-    ],
-    data = [
-        "//emulation:native-runner",
-        "//replacement/rtos_objects:objects-f2-stage-a.bin",
-        "//replacement/rtos_objects:objects-f2-stage-b.bin",
-    ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":family-suite",
