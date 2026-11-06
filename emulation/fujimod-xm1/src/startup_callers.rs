@@ -319,7 +319,7 @@ mod tests {
             instructions: 1, registers: BTreeMap::new(), sp: "0x40063450".into(),
             render_object_provenance_sequence: None,
             lr: "0x409e0".into(), cpsr: 0xd3,
-            code_word: Some(CodeWord { guest: 0xe320f000, physical: 0xe320f000, expected: 0xe320f000, tcm: [[0; 2]; 2] }), memory: Vec::new() };
+            code_word: Some(CodeWord { guest: 0xe320f000, physical: 0xe320f000, expected: 0xe320f000, tcm: [[0; 2]; 2] }), memory: Vec::new(), observation: None };
         let canonical = json!({"records":[{"source":"cpu-fetch","core":0,"address":0x40430,"physical":0x40430,"size":4}]});
         let alias = json!({"records":[{"source":"cpu-fetch","core":0,"address":0x40040430,"physical":0x40430,"size":4}]});
         assert!(confinement(&canonical, std::slice::from_ref(&hit)).is_ok());

@@ -1,0 +1,25 @@
+[package]
+name = "xm1-record-store"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+guest = []
+control-1 = []
+control-2 = []
+control-3 = []
+control-4 = []
+control-5 = []
+control-6 = []
+control-7 = []
+control-8 = []
+control-9 = []
+control-unlock-before-copy = []
+
+[profile.release]
+opt-level = "z"
+panic = "abort"
+codegen-units = 1

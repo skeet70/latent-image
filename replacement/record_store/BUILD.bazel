@@ -1,0 +1,144 @@
+load("//replacement/toolchain:rust.bzl", "xm1_rust_staticlib")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+
+package(default_visibility = ["//visibility:public"])
+
+xm1_rust_staticlib(
+    name = "record-store-rust-unchecked",
+    src = "src/lib.rs",
+    data = ["src/guest.rs", "src/lifecycle.rs"],
+    crate_name = "xm1_record_store",
+    rustc_flags = ["'--cfg=feature=\"guest\"'"],
+    visibility = ["//visibility:private"],
+)
+
+[xm1_rust_staticlib(
+    name = "record-store-rust-control-" + str(control) + "-unchecked",
+    src = "src/lib.rs",
+    data = ["src/guest.rs", "src/lifecycle.rs"],
+    crate_name = "xm1_record_store",
+    rustc_flags = ["'--cfg=feature=\"guest\"'", "'--cfg=feature=\"control-" + str(control) + "\"'"],
+    visibility = ["//visibility:private"],
+) for control in range(1, 10)]
+
+haskell_binary(
+    name = "archive-check",
+    srcs = ["ArchiveCheckMain.hs"],
+    main_file = "ArchiveCheckMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = ["//host:base", "//host:containers", "//host:process"],
+)
+
+[genrule(
+    name = "record-store-rust" + variant,
+    srcs = [":record-store-rust" + variant + "-unchecked"],
+    tools = [":archive-check", "@lab_llvm//:bin/llvm-nm"],
+    outs = ["record-store-rust" + variant + ".a"],
+    cmd = "$(location :archive-check) $(location @lab_llvm//:bin/llvm-nm) $(location :record-store-rust" + variant + "-unchecked) && cp $(location :record-store-rust" + variant + "-unchecked) $@",
+) for variant in [""] + ["-control-" + str(control) for control in range(1, 10)]]
+
+genrule(
+    name = "host-tests",
+    srcs = ["src/lib.rs", "src/tests.rs", "src/lifecycle.rs"],
+    tools = ["@lab_xm1_rust//:bin/rustc"],
+    outs = ["host-tests.passed"],
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test $(location src/lib.rs) -o $(@D)/host-tests && $(@D)/host-tests && touch $@",
+)
+
+[genrule(
+    name = "host-control-" + str(control),
+    srcs = ["src/lib.rs", "src/tests.rs", "src/lifecycle.rs"],
+    tools = ["@lab_xm1_rust//:bin/rustc"],
+    outs = ["host-control-" + str(control) + ".detected"],
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test --cfg 'feature=\"control-" + str(control) + "\"' $(location src/lib.rs) -o $(@D)/host-control-" + str(control) + " && if $(@D)/host-control-" + str(control) + "; then exit 1; else touch $@; fi",
+) for control in range(1, 10)]
+
+genrule(
+    name = "host-adapter-tests",
+    srcs = ["src/lib.rs", "src/tests.rs", "src/lifecycle.rs", "src/guest.rs", "src/guest_tests.rs"],
+    tools = ["@lab_xm1_rust//:bin/rustc"],
+    outs = ["host-adapter-tests.passed"],
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test --cfg 'feature=\"guest\"' $(location src/lib.rs) -o $(@D)/host-adapter-tests && $(@D)/host-adapter-tests && touch $@",
+)
+
+genrule(
+    name = "host-adapter-control-6",
+    srcs = ["src/lib.rs", "src/tests.rs", "src/lifecycle.rs", "src/guest.rs", "src/guest_tests.rs"],
+    tools = ["@lab_xm1_rust//:bin/rustc"],
+    outs = ["host-adapter-control-6.detected"],
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test --cfg 'feature=\"guest\"' --cfg 'feature=\"control-6\"' $(location src/lib.rs) -o $(@D)/host-adapter-control-6 && if $(@D)/host-adapter-control-6 --exact guest::tests::rsc_nine_guest_entries_status_outputs_and_read_only_semaphore; then exit 1; else touch $@; fi",
+)
+
+genrule(
+    name = "host-adapter-control-unlock-before-copy",
+    srcs = ["src/lib.rs", "src/tests.rs", "src/lifecycle.rs", "src/guest.rs", "src/guest_tests.rs"],
+    tools = ["@lab_xm1_rust//:bin/rustc"],
+    outs = ["host-adapter-control-unlock-before-copy.detected"],
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test --cfg 'feature=\"guest\"' --cfg 'feature=\"control-unlock-before-copy\"' $(location src/lib.rs) -o $(@D)/host-adapter-control-unlock-before-copy && if $(@D)/host-adapter-control-unlock-before-copy --exact guest::tests::cross_kind_preemption_preserves_latest_collect_and_addressed_bytes; then exit 1; else touch $@; fi",
+)
+
+haskell_library(
+    name = "oracle-lib",
+    srcs = [
+        "Replacement/RecordStore/Arm.hs",
+        "Replacement/RecordStore/CachedObservation.hs",
+        "Replacement/RecordStore/Cases.hs",
+        "Replacement/RecordStore/Hardware.hs",
+        "Replacement/RecordStore/Harness.hs",
+        "Replacement/RecordStore/Model.hs",
+    ],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-O2"],
+    deps = [
+        "//emulation:case-sha256",
+        "//emulation:native-adapter",
+        "//emulation:native-observation",
+        "//emulation:owned-case",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:host-support",
+        "//host:text",
+    ],
+)
+
+haskell_binary(
+    name = "oracle-cases",
+    srcs = ["OracleMain.hs"],
+    main_file = "OracleMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-O2"],
+    deps = [
+        ":oracle-lib",
+        "//emulation:case-sha256",
+        "//emulation:native-observation",
+        "//emulation:native-adapter",
+        "//emulation:owned-case",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:deepseq",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+    ],
+)
+
+haskell_test(
+    name = "oracle-tests",
+    srcs = ["OracleTests.hs"],
+    main_file = "OracleTests.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-O2"],
+    deps = [
+        ":oracle-lib",
+        "//emulation:case-sha256",
+        "//emulation:native-observation",
+        "//host:aeson",
+        "//host:text",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+    ],
+)

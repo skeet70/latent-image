@@ -19,8 +19,9 @@ use fujimod_emulator::board::observation::{MemoryWatch, ViewPolicy, WatchKinds, 
 use fujimod_emulator::board::preservation::{
     PhysicalRange, Preservation, PreservationState, ProtectedRanges,
 };
-use fujimod_xm1::sd_host::{Backing, SectorAddress, SectorCount};
-use fujimod_xm1::trace::{CAPTURE_OBSERVATION_BOUNDS, CaptureCursor, CaptureScope, CaptureSnapshot, InstructionCount, parse_site_reads};
+use fujimod_xm1::sd_host::{Backing, MediaImage, SectorAddress, SectorCount};
+use fujimod_xm1::nand_read::{RowAddress, RowCount};
+use fujimod_xm1::trace::{CAPTURE_OBSERVATION_BOUNDS, CaptureCursor, CaptureScope, CaptureSnapshot, InstructionCount, SiteRead, parse_site_reads};
 use serde::{Deserialize, Serialize};
 use fujimod_emulator_devices::Device;
 use fujimod_emulator_exr2_isp_input::ImageInput;
@@ -266,11 +267,13 @@ enum Request {
     ModeDial { position: ModeDialPosition },
     ReadMemory { address: u64, count: usize },
     MediaRead { first: SectorAddress, count: SectorCount },
+    NandRead { first: RowAddress, count: RowCount },
     WatchBegin {
         ranges: Vec<[u64; 2]>, limit: usize,
         #[serde(default)] views: WatchViews,
         #[serde(default)] write_ranges: Vec<[u64; 2]>,
         #[serde(default)] fetch_ranges: Vec<[u64; 2]>,
+        #[serde(default)] read_ranges: Vec<[u64; 2]>,
     },
     WatchState,
     WatchEnd,
@@ -286,6 +289,10 @@ enum Request {
     DisplayKey { key: PressName },
     /// Runs the guest for `instructions` with no input.
     Idle { instructions: GuestInstructions },
+    /// Runs the guest for `ticks` board ticks with no input.
+    IdleTicks { ticks: BoardTicks },
+    LocalUiDrain { ticks: BoardTicks },
+    UiState,
     SnapshotDrop { name: SnapshotName },
     Finish,
 }
@@ -313,6 +320,7 @@ enum RequestKind {
     ModeDial,
     ReadMemory,
     MediaRead,
+    NandRead,
     WatchBegin,
     WatchState,
     WatchEnd,
@@ -326,6 +334,9 @@ enum RequestKind {
     SnapshotKey,
     DisplayKey,
     Idle,
+    IdleTicks,
+    LocalUiDrain,
+    UiState,
     SnapshotDrop,
     Finish,
 }
@@ -353,6 +364,7 @@ impl Request {
             Request::ModeDial { .. } => RequestKind::ModeDial,
             Request::ReadMemory { .. } => RequestKind::ReadMemory,
             Request::MediaRead { .. } => RequestKind::MediaRead,
+            Request::NandRead { .. } => RequestKind::NandRead,
             Request::WatchBegin { .. } => RequestKind::WatchBegin,
             Request::WatchState => RequestKind::WatchState,
             Request::WatchEnd => RequestKind::WatchEnd,
@@ -366,6 +378,9 @@ impl Request {
             Request::SnapshotKey { .. } => RequestKind::SnapshotKey,
             Request::DisplayKey { .. } => RequestKind::DisplayKey,
             Request::Idle { .. } => RequestKind::Idle,
+            Request::IdleTicks { .. } => RequestKind::IdleTicks,
+            Request::LocalUiDrain { .. } => RequestKind::LocalUiDrain,
+            Request::UiState => RequestKind::UiState,
             Request::SnapshotDrop { .. } => RequestKind::SnapshotDrop,
             Request::Finish => RequestKind::Finish,
         }
@@ -415,7 +430,7 @@ struct Server {
     pending_capture: Option<PendingCapture>,
     capture_evidence_error: Option<String>,
     /// In-memory guest snapshots by client name.
-    snapshots: BTreeMap<SnapshotName, Vec<u8>>,
+    snapshots: BTreeMap<SnapshotName, (Vec<u8>, fujimod_xm1::trace::calls::Calls)>,
 }
 
 /// About 120 MB per held snapshot of the X-M1 run document.
@@ -480,6 +495,10 @@ fn default_pulse(key: Press) -> KeyPulse {
 #[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(transparent)]
 struct GuestInstructions(u64);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(transparent)]
+struct BoardTicks(u64);
 
 const CAPTURE_OBSERVATION_WINDOW: GuestInstructions = GuestInstructions(MODE_DIAL_SETTLE);
 
@@ -815,6 +834,8 @@ impl Server {
         sites.extend(requested.iter().map(|(address, label)| (*address, label.clone())));
         let count = sites.len();
         let machine = &mut self.bridge.machine;
+        sites.extend(machine.traces.sites.iter().filter(|(_, label)| label.as_str() == "call-return")
+            .map(|(address, label)| (*address, label.clone())));
         machine.traces.arm(&machine.session, sites)?;
         machine.traces.stop_labels = [RENDEZVOUS_LOCKED.to_owned()].into();
         if !requested.is_empty() {
@@ -825,12 +846,16 @@ impl Server {
 
     /// Returns the replaced terminal stop. The guard's recorded refusal survives until reset.
     fn restore_snapshot(&mut self, name: &SnapshotName) -> Result<Option<String>, String> {
-        let bytes = self.snapshots.get(name).ok_or_else(|| format!("snapshot {} is not held", name.0))?;
+        let (bytes, calls) = self.snapshots.get(name).ok_or_else(|| format!("snapshot {} is not held", name.0))?;
         let machine = &mut self.bridge.machine;
         let snapshot = machine.session.import_snapshot(bytes)?;
         machine.disarm()?;
         machine.session.restore(&snapshot)?;
         if let Some(collector) = &mut machine.render_provenance { collector.refuse_coverage(); }
+        machine.traces.calls = calls.clone();
+        for address in machine.traces.calls.return_sites() {
+            machine.traces.sites.entry(address).or_insert_with(|| "call-return".into());
+        }
         let cleared = machine.failure.take();
         if cleared.is_some() {
             machine.guard = Default::default();
@@ -882,8 +907,8 @@ impl Server {
             return Err(self.bridge.machine.failure.as_ref().ok_or("terminal failure disappeared")?.clone());
         }
         let read_only = tail_request || matches!(&request, Request::List | Request::TraceHits { .. }
-            | Request::ImageInputFingerprint { .. } | Request::ReadMemory { .. } | Request::MediaRead { .. }
-            | Request::WatchState | Request::PreservationState | Request::MediaState);
+            | Request::ImageInputFingerprint { .. } | Request::ReadMemory { .. } | Request::MediaRead { .. } | Request::NandRead { .. }
+            | Request::WatchState | Request::PreservationState | Request::MediaState | Request::UiState);
         if !read_only {
             if let Some(failure) = self.bridge.machine.traces.modal_observation_report().failure {
                 return Err(failure.to_owned());
@@ -1073,7 +1098,11 @@ impl Server {
                 let read = self.bridge.machine.read_media(first, count)?;
                 json!({"first": read.first.0, "count": read.count.get(), "bytes": encode_hex(&read.bytes)})
             }
-            Request::WatchBegin { ranges, limit, views, write_ranges, fetch_ranges } => {
+            Request::NandRead { first, count } => {
+                let read = self.bridge.machine.read_nand(first, count)?;
+                json!({"first": read.first.0, "count": read.count.get(), "data": encode_hex(&read.data), "spare": encode_hex(&read.spare)})
+            }
+            Request::WatchBegin { ranges, limit, views, write_ranges, fetch_ranges, read_ranges } => {
                 if self.bridge.machine.traces.modal_observation_active() {
                     return Err("active modal observation refuses memory-watch replacement".into());
                 }
@@ -1083,18 +1112,18 @@ impl Server {
                 if self.preservation.is_some() {
                     return Err("a preservation observation conflicts with memory watch".into());
                 }
-                if ranges.is_empty() || ranges.len() > 8
+                if ranges.is_empty() || ranges.len() > 256
                     || !(1..=1 << 20).contains(&limit)
                     || ranges.iter().any(|range| range[0] >= range[1] || range[1] > u32::MAX as u64)
                 {
                     return Err("watch-begin requires bounded 32-bit ranges and a positive record limit".into());
                 }
                 match views {
-                    WatchViews::Observe if !write_ranges.is_empty() || !fetch_ranges.is_empty() =>
+                    WatchViews::Observe if !write_ranges.is_empty() || !fetch_ranges.is_empty() || !read_ranges.is_empty() =>
                         return Err("classified write/fetch ranges require fixed views".into()),
                     WatchViews::Fixed => {
-                        let mut classes: Vec<_> = write_ranges.iter().chain(&fetch_ranges).copied().collect();
-                        if classes.is_empty() || classes.len() > 16
+                        let mut classes: Vec<_> = write_ranges.iter().chain(&fetch_ranges).chain(&read_ranges).copied().collect();
+                        if classes.is_empty() || classes.len() > 256
                             || classes.iter().any(|range| range[0] >= range[1] || range[1] > u32::MAX as u64) {
                             return Err("fixed watch requires nonempty bounded write/fetch classes".into());
                         }
@@ -1118,7 +1147,8 @@ impl Server {
                         ranges.iter().map(|range| (range[0], range[1])).collect(), limit, maps)?,
                     WatchViews::Fixed => self.bridge.machine.session.board.memory_watch_begin_classified(
                         write_ranges.into_iter().map(|range| WatchRange { start: range[0], end: range[1], kinds: WatchKinds::WRITES })
-                            .chain(fetch_ranges.into_iter().map(|range| WatchRange { start: range[0], end: range[1], kinds: WatchKinds::CPU_FETCH })).collect(),
+                            .chain(fetch_ranges.into_iter().map(|range| WatchRange { start: range[0], end: range[1], kinds: WatchKinds::CPU_FETCH }))
+                            .chain(read_ranges.into_iter().map(|range| WatchRange { start: range[0], end: range[1], kinds: WatchKinds::CPU_READ })).collect(),
                         limit, maps, ViewPolicy::Fixed)?,
                 };
                 let acknowledgement = match views {
@@ -1230,7 +1260,7 @@ impl Server {
                 let bytes = exported?;
                 let response = json!({"name": name, "bytes": bytes.len(), "instructions": machine.instructions(),
                     "menu": menu_value(machine.menu()?)});
-                self.snapshots.insert(name, bytes);
+                self.snapshots.insert(name, (bytes, machine.traces.calls.clone()));
                 response
             }
             Request::SnapshotRestore { name } => {
@@ -1256,6 +1286,25 @@ impl Server {
                 let after = self.bridge.machine.instructions();
                 json!({"instructions": GuestInstructions(after), "ran": GuestInstructions(after - before)})
             }
+            Request::IdleTicks { ticks: BoardTicks(ticks) } => {
+                if ticks == 0 || ticks > MAX_SETTLE || self.bridge.machine.hold_bound(ticks) > MAX_SETTLE {
+                    return Err(format!("idle ticks must be at least 1 and take at most {MAX_SETTLE} instructions"));
+                }
+                let (before, from) = (self.bridge.machine.instructions(), self.bridge.machine.session.board.now());
+                self.bridge.advance_ticks(ticks)?;
+                self.bridge.machine.require_running()?;
+                let (after, to) = (self.bridge.machine.instructions(), self.bridge.machine.session.board.now());
+                json!({"instructions": GuestInstructions(after), "ran": GuestInstructions(after - before), "ticks": BoardTicks(to - from)})
+            }
+            Request::LocalUiDrain { ticks: BoardTicks(ticks) } => {
+                if ticks == 0 || ticks > MAX_SETTLE || self.bridge.machine.hold_bound(ticks) > MAX_SETTLE {
+                    return Err(format!("local-ui-drain ticks must be at least 1 and take at most {MAX_SETTLE} instructions"));
+                }
+                serde_json::to_value(self.bridge.local_ui_drain(ticks)?)
+                    .map_err(|error| format!("local-ui-drain endpoint: {error}"))?
+            }
+            Request::UiState => serde_json::to_value(self.bridge.ui_state()?)
+                .map_err(|error| format!("ui-state snapshot: {error}"))?,
             Request::SnapshotDrop { name } => {
                 self.snapshots.remove(&name).ok_or_else(|| format!("snapshot {} is not held", name.0))?;
                 json!({"name": name, "held": self.snapshots.len()})
@@ -1547,6 +1596,15 @@ mod tests {
     use fujimod_xm1::run::{RunDocument, ValidatedUpdate};
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    #[test]
+    fn nand_read_request_validates_row_count() {
+        let request: Request = serde_json::from_str(r#"{"command":"nand-read","first":60160,"count":64}"#).unwrap();
+        assert!(matches!(request, Request::NandRead { first: RowAddress(60160), count } if count.get() == 64));
+        for count in [0, 65] {
+            assert!(serde_json::from_str::<Request>(&format!(r#"{{"command":"nand-read","first":0,"count":{count}}}"#)).is_err());
+        }
+    }
+
     #[derive(Debug, Deserialize, Eq, PartialEq)]
     #[serde(rename_all = "kebab-case")]
     enum ProgressState {
@@ -1770,6 +1828,28 @@ mod tests {
         }
     }
 
+    #[test]
+    fn ui_state_observes_pending_mode_without_advancing_or_writing_ram() {
+        let mut server = server(&[0xeaff_fffe]);
+        let mode = [4u32, 5, 3, 3, 5, 1, 0, 0, 1, 1];
+        for (index, word) in mode.into_iter().enumerate() {
+            server.bridge.machine.session.board.write_physical(0x9500ec + 4 * index as u64, &word.to_le_bytes()).unwrap();
+        }
+        let before = (server.bridge.machine.instructions(), server.bridge.machine.session.board.now());
+        let mut before_ram = [0; 40];
+        server.bridge.machine.session.board.read_physical(0x9500ec, &mut before_ram).unwrap();
+        let response = server.handle(request(json!({"command": "ui-state"}))).unwrap().unwrap();
+        let view: fujimod_xm1::application_observation::RawView = serde_json::from_value(response["source_mode"].clone()).unwrap();
+        assert!(view.agrees());
+        assert_eq!(view.words().collect::<Vec<_>>(), mode);
+        assert_eq!(response["instructions"].as_u64(), Some(before.0));
+        assert_eq!(response["tick"].as_u64(), Some(before.1));
+        assert_eq!((server.bridge.machine.instructions(), server.bridge.machine.session.board.now()), before);
+        let mut after_ram = [0; 40];
+        server.bridge.machine.session.board.read_physical(0x9500ec, &mut after_ram).unwrap();
+        assert_eq!(after_ram, before_ram);
+    }
+
     fn exchange(server: &mut Server, input: &str) -> (Vec<Response>, Receipt) {
         exchange_bytes(server, input.as_bytes())
     }
@@ -1890,6 +1970,31 @@ mod tests {
         server.bridge.machine.failure = Some("synthetic terminal fault".into());
         let final_state = server.handle(Request::WatchState).unwrap().unwrap();
         assert_eq!(final_state, state);
+    }
+
+    #[test]
+    fn ui_state_is_read_only_during_active_capture_continuation_and_published_page() {
+        let mut server = server(&[0xe3a00000, 0xe2800001, 0xe3500041, 0x9afffffc, 0xeafffffe]);
+        server.handle(request(json!({"command": "trace-sites", "sites": {"0x00000004": "loop"}}))).unwrap();
+        server.handle(request(json!({"command": "capture-observation-begin"}))).unwrap();
+        let snapshot = |server: &mut Server| {
+            let before = (server.bridge.machine.instructions(), server.bridge.machine.session.board.now());
+            let response = server.handle(request(json!({"command": "ui-state"}))).unwrap().unwrap();
+            assert_eq!(response["instructions"].as_u64(), Some(before.0));
+            assert_eq!(response["tick"].as_u64(), Some(before.1));
+            assert_eq!((server.bridge.machine.instructions(), server.bridge.machine.session.board.now()), before);
+            let view: fujimod_xm1::application_observation::RawView = serde_json::from_value(response["source_mode"].clone()).unwrap();
+            assert!(view.agrees());
+            assert!(server.handle(request(json!({"command": "idle", "instructions": 1}))).is_err());
+            response
+        };
+        snapshot(&mut server);
+        let paused = server.handle(request(json!({"command": "shutter-sequence"}))).unwrap().unwrap();
+        assert_eq!(paused["state"], "drain-required");
+        let pending_snapshot = snapshot(&mut server);
+        let page = server.handle(request(json!({"command": "capture-observation-hits", "from": 0}))).unwrap().unwrap();
+        assert_eq!(page["next"], 64);
+        assert_eq!(snapshot(&mut server), pending_snapshot);
     }
 
     const DRAIN_FIRST_PAUSE: &str = concat!(
@@ -2361,6 +2466,26 @@ mod tests {
             }
             observer.finish().unwrap();
         }
+    }
+
+    #[test]
+    fn reset_capture_records_arguments_and_dynamic_caller_return() {
+        let mut server = server(&[0xe3a01018, 0xeb000001, 0xeafffffe, 0, 0xe3a0002a, 0xe12fff1e, 0x12345678]);
+        let spec = ResetObservationSpec::parse(br#"{"schema":1,"sites":{"0x10":"entry"},"hit_limit":16,
+            "write_ranges":[[24,28]],"read_ranges":[[24,28]],"fetch_ranges":[[16,24]],"watch_limit":64,
+            "captures":{"0x10":{"entry":[{"base":{"register":1},"count":4}],
+            "returns":[{"base":{"register":1},"count":4}]}}}"#).unwrap();
+        let mut observer = ResetObserver::begin(&mut server.bridge.machine, &spec).unwrap();
+        assert_eq!(server.bridge.machine.run(100), RunOutcome::Completed, "{:?}", server.bridge.machine.failure);
+        observer.boundary(&server.bridge.machine, AttachPhase::Attached).unwrap();
+        let record = serde_json::to_value(observer.finish().unwrap()).unwrap();
+        assert_eq!(record["reset"]["instructions"], 0);
+        let hits = serde_json::to_value(server.bridge.machine.traces.hits.iter().filter(|hit| hit.core == 0).collect::<Vec<_>>()).unwrap();
+        assert_eq!(hits[0]["observation"]["reads"][0]["bytes"], "78563412");
+        assert_eq!(hits[1]["observation"]["event"], "return");
+        assert_eq!(hits[1]["observation"]["site"], 16);
+        assert_eq!(hits[1]["registers"]["r0"], "0x2a");
+        assert_eq!(hits[1]["observation"]["reads"][0]["bytes"], "78563412");
     }
 
     #[test]

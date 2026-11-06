@@ -3694,3 +3694,113 @@ sh_binary(
     )
     for model, module in [("s2", "S2"), ("s3a", "S3a"), ("s3bc", "S3bc")]
 ]
+
+haskell_library(
+    name = "local-ui-menu",
+    srcs = ["Emulation/LocalUiMenu.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:scientific",
+        "//host:text",
+        "//host:vector",
+    ],
+)
+
+haskell_library(
+    name = "record-store-pair-check-lib",
+    srcs = ["Emulation/RecordStorePairCheck.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":case-sha256",
+        ":emulator-usb",
+        ":local-ui-menu",
+        ":property-pair-lib",
+        ":watch-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:scientific",
+        "//host:text",
+        "//host:vector",
+    ],
+)
+
+haskell_binary(
+    name = "record-store-pair-check",
+    srcs = ["RecordStorePairCheckMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":case-sha256",
+        ":record-store-pair-check-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
+    ],
+)
+
+haskell_test(
+    name = "record-store-pair-tests",
+    size = "small",
+    srcs = ["RecordStorePairTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":case-sha256",
+        ":emulator-usb",
+        ":local-ui-menu",
+        ":property-pair-lib",
+        ":record-store-pair-check-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:text",
+    ],
+)
+
+haskell_binary(
+    name = "record-store-pair-observe",
+    srcs = ["RecordStorePairObserverMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":case-sha256",
+        ":emulator-usb",
+        ":property-pair-lib",
+        ":watch-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
+        "//host:vector",
+    ],
+)
+
+haskell_binary(
+    name = "record-store-timing-control",
+    srcs = ["RecordStoreTimingControlMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":case-sha256",
+        ":emulator-usb",
+        ":property-pair-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
+        "//host:vector",
+    ],
+)

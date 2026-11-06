@@ -497,6 +497,110 @@ Milestone 3:
 - A write-only pair's largest set value is 0xff, its whole byte.
 - `c-setter-stub-exit` runs 0xe9's bank-0 sets: the shared exit adjusts 0x34 only when r7 is 1 (`0x6302e0`), and the setter stub sets r7 to `xm1_set_bracketed`'s 0 for 0x34, so 0x34's default requests cannot fail; 0xe9's record-0 write at `0x6308b4` runs for every set.
 
+## Owned record store
+
+### Core crate
+
+`replacement/record_store` implements the allocation-free `no_std` core and nine stock-ABI guest entries from [the owned record-store design](../reports/owned-record-store-design.md) over the retained raw NAND service. [The stock contract](../reports/record-service-stock-contract.md) supplies the search, callback, rotation, staging, collection and output-write expectations. `RecordMedium`, `Staging` and `Callbacks` separate the core from guest addresses. `Service` owns five registrations; `Entry` holds one caller-provided 128 KiB block buffer for one operation, invalidated after every program or erase. Program failure is an `Appended.persisted` value; an erase failure leaving a full destination produces `NotAppended::DestinationFull`. The adapter preserves stock's swallowed program/erase statuses.
+
+Build `//replacement/record_store:record-store-rust` for the ARMv7-R guest static archive (`cortex-r4f`, opt-level `z`, panic abort, one codegen unit). `record-store-rust-control-1` through `-9` each build the same guest adapter and core with one design §5 fault. Carrier linking and DAT staging are separate targets owned by the placement increment.
+
+Every public guest archive is gated by `:archive-check`: its owned crate's undefined symbols must contain neither an AEABI name nor a symbol defined by a bundled compiler-builtins member. The archive still bundles unused sysroot members; the carrier separately rejects reachable compiler-builtins sections at final link. Variable division uses an owned shift/subtract operation, wrapper lookup does not divide pointer differences, and guest initialization writes cell activity flags in place. The guest's owned fill loop and `no_builtins` attribute avoid memory-helper calls.
+
+`//replacement/record_store:host-tests` compiles and executes the core's behavioural host suite. `:host-adapter-tests` also exercises all nine exported entries, client-word nulling and preservation, fixed staging pointers, statuses and shared-buffer lifetime across reentry. Tag selection, fill and staging copy hold semaphore `0x4b`; callbacks and persistence calls run outside it. The host medium erases to `0xff` and programs by bitwise AND. `:host-control-1` through `-9` each compile the core suite with one control feature and succeed only when that executable fails. Build through the checked-in environment and Bazel.
+
+`:host-adapter-control-6` runs only the guest ABI test under `guest` plus `control-6` and requires a failure. The fixture fills bank zero to N records, appends, and reads back the medium through `record_store_read_at`: stock leaves the bytes at bank-zero offset N*S erased and rotates to bank one; control 6 programs at N*S without rotation. Control 6 changes inner append's refusal threshold from N-1 to N, not read latest's recovery-probe equality.
+
+The core has no fixed addresses. The guest imports the retained raw region-read, per-kind write/erase and semaphore entries. Its linker-defined storage holds initialization, wrappers, registration state, two cache buffers and their metadata, and per-kind staging. Compile-time sizing bounds the owned registration state to the retired slots' `0x168` bytes.
+
+The host cases cover the five stock geometries and defined registration/refusal paths. RSC's undefined zero-size division, malformed kinds entering helpers and invalid caller pointers are not promoted into a safe total guest contract. Host source tests and must-fail controls do not establish stock-byte equivalence, physical NAND laws or a full-system cutover.
+### Placement
+
+The nine stock entries occupy `[0x6ac2b4,0x6ae114)`. Minimal ARM branch veneers consume four bytes each; the remaining runs are 112, 332, 76, 776, 428, 304, 740, 4,952 and 20 bytes, totaling 7,740. Eight-byte veneers leave 7,704 bytes. The design's final 24-byte run includes the last entry and is not wholly free.
+
+The split carrier uses four-byte entry branches and linker assertions for every occupied run and veneer address. The flat default and control images retain the 7,776-byte stock extent, including gaps, and end at `0x6ae114`. Reachable compiler-builtins sections are forbidden. No RAM-push or image5-tail fallback is required.
+
+
+`//replacement/record_store_carrier:record-store-artifact` admits the linked span and scans canonical images 4, 5 and plain for references to retired code, wrappers/slots, cache buffers, cache ages/tags and saved program destinations. It rejects resolved A32 branches, MOVW/MOVT pairs, ADR and PC-relative literal/address references from the pinned decomp function ranges. The nine retained entry addresses remain callable. Its contract records the separate raw aligned-word census by image and retired range, classified as inside a function range or data/unmapped. Those numeric coincidences and unresolved computed references remain obligations for the cutover pair's fetch/access traps; a function range is not a complete code/data proof.
+
+`//replacement/record_store_carrier:stage-record-store` pins the DAT, decoded images and the `55436fc85c` decomp index, refuses resolved references, confines replacement bytes to the span and uses the shared image4 stager to recompress and read back one candidate DAT. Its contract binds source, linked code, symbols, candidate DAT, decoded image4 and the function index by SHA-256.
+
+The current two-slot carrier and its staged candidate are bound by `E-RECORD-STORE-CUTOVER-PAIR-150`. Admission refuses resolved references to retired code/data and the obsolete metadata gap. Raw aligned-word coincidences and unresolved computed references remain separate from resolved-reference admission and are covered only within the declared runtime guards.
+
+```sh
+devenv shell -- bazel build --jobs=2 //replacement/record_store_carrier:all
+devenv shell -- bazel test --jobs=2 //replacement/record_store_carrier:record-store-artifact-tests
+devenv shell -- bazel run --jobs=2 //replacement/record_store_carrier:stage-record-store -- DAT IMAGE4 IMAGE5 PLAIN FUNCTION_INDEX LINKED_BIN SYMBOLS PRIVATE_SCRATCH OUT_DAT OUT_CONTRACT
+```
+
+The default candidate is `:record-store-image`; each `:record-store-image-control-N` enables exactly one of the nine control features. Every target emits `.elf`, `.bin`, `.symbols` and `.disasm`. The `.bin` is 7,776 bytes at `0x6ac2b4`, suitable for the native-case code region; the symbols name each 4-byte veneer as `record_store_entry_NAME`.
+
+The linker collects reachable `compiler_builtins` archive-member sections in a forbidden output section and asserts it is empty. This rejects transitive compiler-builtins code before emitting any candidate artifact.
+
+### Native oracle
+
+`//replacement/record_store:oracle-cases` generates native-case batches from the independent Haskell model in `Replacement.RecordStore.Model`, the byte-read [stock contract](../reports/record-service-stock-contract.md) and design §5. Without `--runner` it writes and validates the case files. With `--runner` it executes the stock role, compares the model with stock and writes `summary.json`. `--candidate BIN --symbols SYMBOLS` emits the candidate batches and, with a runner, compares their boundary observations with stock. `--filter FAMILY` selects case identifiers containing that text. `--stock-output DIRECTORY` reuses recorded stock observations only when their execution inputs equal the regenerated case JSON, excluding the `expected` field. `--control` requires the supplied candidate to differ on at least one case, while still requiring model equals stock. Run each of the nine `record-store-image-control-N` artifacts in this mode.
+
+Cached native reports must also carry the SHA-256 of the supplied `--runner` executable. Missing, malformed or different runner identities refuse reuse; `summary.json` retains that identity.
+
+The cases execute the canonical record span, raw NAND service and runtime helpers, with loader divide helpers and a declared A32 medium model at the five NAND request entries. The medium is keyed by pool-relative logical blocks, erases to `0xff`, programs by AND, and supports a failed persistence request or a stop before a persistence step. Recovery cases open and read the resulting medium afresh. Checks and prepares are observed with their input and output bytes; the real kind-2 and kind-3 callbacks run on pinned hardware records and parity mutations. The independent parity model cites `id4.dis` at `0x6a83f4..0x6a8658` and `0x6a6b74..0x6a6dd8`.
+
+Compared observations are entry return statuses, preserved registers and SP, client words, caller memory including collection tails, returned staging pointers and record copies, skipped counts, ordered callback records, ordered program/erase requests including complete payloads, and the final medium. Void close's incidental r0, raw read requests, caches, wrapper/slot internals and non-observable staging bytes are excluded. Register-only stubs stand in for the two semaphore and two cache-maintenance entries. No registration uses kind 6 or above.
+
+`summary.json` is the boundary verdict. The generic native-case transport reports also compare private RAM and stub events, which this oracle excludes; their `mismatches` are not the record-store verdict. Each case JSON carries the model's expected caller buffers, returned records, program/erase journal and callback journal. The model tests are `//replacement/record_store:oracle-tests`.
+
+```sh
+devenv shell -- bazel --batch --host_jvm_args=-Xmx768m --output_base="$PWD/private-data/scratch/RecordStoreOracle/host-output" build --jobs=2 //replacement/record_store:oracle-cases //emulation:native-runner //emulation:emulator-slot
+devenv shell -- bazel --batch --host_jvm_args=-Xmx768m --output_base="$PWD/private-data/scratch/RecordStoreOracle/host-output" test --jobs=2 //replacement/record_store:oracle-tests
+XM1_EMULATOR_SLOTS=1 devenv shell -- bazel-bin/emulation/emulator-slot bazel-bin/replacement/record_store/oracle-cases --runner bazel-bin/emulation/native-runner --out PRIVATE_OUTPUT
+# Add --candidate CARRIER.bin --symbols CARRIER.symbols for the candidate.
+# Add --control with one control artifact for a must-fail comparison.
+```
+
+The current bounded native aggregate (`E-RECORD-STORE-ORACLE-NATIVE-150`) admits 378 cases with zero model/candidate differences: retained comparisons, two corrected candidate executions and eight persistent multi-kind cache/fault sequences. All nine focused controls and the old single-slot candidate control are detected. Reuse requires matching execution inputs, runner and candidate identities; the aggregate and per-case observations retain those identities.
+
+The stock run exposed 35 callback-order differences in the initial model. `0x6ac694..0x6ac69c` skips the following-bank check when the recovery-count output is null; append passes null. The model now distinguishes `OmitRecoveryCount` and `WriteRecoveryCount`. The stock contract and hardware fixtures were not changed.
+
+The comparator forces each verdict and writes `batch-N.json` after each four-case batch. Run native-only batches serially in a 2 GiB/no-swap scope with `--native-jobs 1`; full-system runs additionally require an emulator slot.
+
+```sh
+systemd-run --user --scope -p MemoryMax=2G -p MemorySwapMax=0 -- \
+  bazel-bin/replacement/record_store/oracle-cases --native-jobs 1 \
+  --runner bazel-bin/emulation/native-runner --out PRIVATE_OUTPUT \
+  --stock-output STOCK_OBSERVATIONS --candidate CARRIER.bin --symbols CARRIER.symbols
+```
+
+### Cutover pair
+
+`//emulation:record-store-pair-observe` runs the versioned `emulation/record-store-pair-finite-v2-routes.json` trie from a zero-instruction reset. Its route declarations and exclusions preserve `emulation/record-store-pair-routes.json`, including the declared defaults-reset sequence. It records all nine record-service entries, registration stack arguments, caller-LR returns, client words, returned pointers and records, skipped-count halfwords, collection/read-at outputs, NAND program payloads and erase descriptors. Every trie leaf reads the ten logical record-area blocks through the live pool map and `nand-read`; an unmapped logical block denotes erased bytes.
+
+Receipt schema 2 names `finite-post-settle-prefix-v2`. After the 20,000,000-instruction pre-idle and ordinary press settle, null press failure and either `packet-consumed` or `budget-exhausted` are required before exactly 833,334 board ticks and one read-only `ui-state` snapshot at the same instruction boundary. Both statuses follow successful injection and physical latching; only `packet-consumed` certifies the SDK render predicate. Neither is an independent application key-dispatch acknowledgement. A press failure or `prior-render-pending` refuses before the advance. Watches and trace capture stay active through the snapshot before settings and medium reads. The checker compares raw current/previous/pending mode, request and latch, endpoint menu/node/depth and the original press menu, in addition to all existing record/settings/NAND/media observations. Incomplete record operations still refuse. No quiescence or future-stability claim is made; generic local UI drain is unchanged.
+
+The reset spec arms read/write watches on forbidden retired RAM and fetch watches on retired code. Owned executable extents come from the bound carrier's sized text symbols, including the nine veneers. The owned role forbids the obsolete metadata gap `[0x89f8f0,0x89f8f8)` and saved program destinations `[0x917fa8,0x917fe4)`. An ordered fetch row at the open veneer marks the lifetime boundary: initial image publication before that row is admitted, and every later owned-role access to forbidden RAM fails. Any fetch outside the owned executable extents fails. Owned service state, both 128 KiB cache buffers and their declared metadata are not watched; native behavioral sequences, returned-record bytes and ordered NAND effects cover their correctness. Every watch must remain non-overflowed. The receipt records exact ranges, the lifetime marker and unwatched owned RAM. Raw aligned-word residual sites are traced separately.
+
+The two-slot carrier owns cache buffers `[0x8a0080,0x8c0080)` and `[0x8c0080,0x8e0080)`, two tags at `[0x8e0080,0x8e0088)`, timestamp at `[0x8e0088,0x8e008c)` and ages at `[0x89fa60,0x89fa68)`. Open sets tags to `0xffffffff` and ages/timestamp to zero. Tag selection, pre-read publication, fill, age update and copy to staging occur under semaphore `0x4b`; invalidation also holds it. Selection, unsigned-age wrap and failed-fill memoization preserve the stock contract. The previous single tag at `0x89f8f0` is obsolete and forbidden after activation.
+
+`//emulation:record-store-pair-check` independently consumes the receipts and sidecars. The comparison boundary is [design §6](../reports/owned-record-store-design.md#6-cutover-pair) and the [stock contract](../reports/record-service-stock-contract.md): ordered external calls and outputs, ordered NAND programs/erases and payloads, returned records, logical record blocks, settings and menus. Stock-internal calls back into a public entry are not external calls. Incidental registers, void-close r0, private stack addresses and raw read requests are outside that boundary; no instruction-count or call-sequence tolerance is implied.
+
+Output preimages are captured at entry. Outputs the stock contract writes for the returned status are compared across roles; outputs the contract leaves untouched must equal their own role's entry preimage. Untouched residue is not compared across roles. The motivating diagnostic was kind 3 read-latest returning `-255`: the stock caller skips its pointer load on failure, but its unwritten output word held `78 79 81 00` in stock and `cc 72 05 40` in owned. The final pair must prove preservation from preimages rather than ignore a changed output.
+
+Run each stock/owned session serially inside `devenv shell`, under `XM1_EMULATOR_SLOTS=1` and `//emulation:emulator-slot`. The shell supplies `XM1_OPENSSL` for hashing large observation sidecars. Qualify erased record areas and a `--record-nand` image composed from the hardware area-2 banks at logical `0x56`/`0x57`, physical `0x3ac`/`0x3b2`. Supply `--bridge IMMUTABLE_RAM_PUSH_EXECUTABLE`; the observer binds that executable, the DAT, linked carrier, symbols, staging contract, versioned routes, run document, ROM, adjustment NAND, optional populated NAND and observer by SHA-256. All four roles require one frozen cohort.
+
+Current admission of finite-v2 cohort2 reports erased `matched` and populated `accepted-functional-difference` under the separately bound intended IMAGE SIZE contract below (`E-RECORD-STORE-CUTOVER-PAIR-150`). Every role retains all 263 steps, three attach phases and terminal medium. The record/NAND, media, mode, retirement and other UI comparisons remain strict. This finite injected-input result does not establish render quiescence or independent application acknowledgement of every key.
+
+The separately versioned `emulation/record-store-image-size-pending-choice-v1.json` replaces stock equality only for populated fixture `eb33ae15…` at the exact Crawl 368/371 IMAGE SIZE paths. The owner specifies L 3:2, DOWN to M 3:2, UP back to L 3:2 and unconfirmed BACK cancelling to L 3:2; MENU/OK confirms M. This is an intended-functionality decision, not a new camera observation. Owned must satisfy the intended output; it cannot pass by matching a stalled stock choice. A source-backed accepted difference reports `accepted-functional-difference`.
+
+Public IMAGE SIZE `0xf6` maps both ordinary `0xf6` at byte `0x6f` and ordinary `0xf9` at byte `0x7d`. The extra byte-`0x6e` rollback is ordinary `0x161`, independently classified as synchronization and native leave restoration. Complete entry/DOWN guards and the independently published backup constrain the expected settings; unrelated changes fail. Exact record/NAND/media, modes, retirement and other UI comparisons remain in force. Erased finite matches make no intended-interaction claim.
+
+The checker requires `COMPARISON_JSON` before `OUTPUT_JSON` and rehashes the policy's declared source evidence. Current host checks, both saved-observation comparisons and the continuing technical cutover review pass for this boundary. The checker streams one step at a time, validates the complete array and preserves first-duplicate-key semantics. Completed firmware executions retain their original identities; current admission and comparisons run again.
+
+The defaults-reset route changes film simulation, stores the changed C record through CUSTOM SET, then confirms SET-UP CUSTOM RESET. The checker requires an injected confirmation, successful record append and NAND program at its final step. Reset is compare-before-commit, so confirming it against a C record already equal to defaults need not append. Its [mapped chain](../reports/custom-settings.md#41-the-custom-reset-action) reaches `0x6ac7d4`, not erase-all `0x6ac984`. Area-3 erase-all's wrapper `0x6a8bd0` has no identified natural higher-level trigger and remains a separate reachability obligation; native erase-all does not close the full-system defaults-reset row. Erased boot recovery and CUSTOM SET exercise area-3 append; populated boot also exercises area-2 read-latest. Kind 0, 1 and 4 writes and the area-2 lifecycle save have no identified full-system route.
+
+
+`//emulation:record-store-timing-control` fresh-boots stock and executes the same five-key prefix with a declared idle perturbation before the final UP. The stock-only shifts did not reproduce the old-owned continuation (`E-RECORD-STORE-PICKER246-CONTROL-150`). That negative result authorizes no generic menu/settings exclusion and does not replace the fixture-bound intended-functionality contract.
+
+The timing-control producer also accepts `--before-picker-down` after the output directory to place the declared idle before the fourth key, where the picker starts its asynchronous apply chain. A negative instruction shift shortens that key's ordinary 20,000,000-instruction pre-idle; its magnitude must be less than that pre-idle. Its diagnostic reset spec adds primary-group reservation entries and returns, line-39 dispatch, pending arm/reply, record notifications and the retained changed-field writer. These observations do not alter the pair comparator or replace the preserved pair verdicts. The earlier before-UP negative control does not test the phase at the DOWN trigger.
+
 ## Owned menu engine, increment 1 (#128)
 
 `menu_engine/` is the host part of increment 1 of [the engine design](../reports/owned-menu-engine-design.md): a `no_std` library with `MenuEvent`, `EngineState`, `Effect`, `EngineServices`, `Tree` and `apply`, plus `block::decode`/`block::mirror` over the 0x430-byte block at `0x009571d0` and the last-move pair `0x01467580`. It owns five event classes, each with an oracle case: kind 4 and kind 5 row steps on a wrapping node with queried availability, kind `0xe` push from a node whose remember write runs, kind `0xf` pop to a parent with the same id, and kind 1 open; `engine.rs` lists the exact conditions. `apply` makes every call to stock (notifications, snapshot stores, availability, initial row, and the stock kind switch for an empty node's nested pop) through `EngineServices` in stock's order, and returns `NotOwned` only before its first call. The pure classifier and snapshot of `FUN_0061ca2c`/`FUN_0061cd14` live in `menu_engine/src/frame.rs`; `owned_menu::frame` runs them over the live cells. The crate is an unconditional module of the bank crate; `llvm-nm -u` of the four bank archives is unchanged by it.

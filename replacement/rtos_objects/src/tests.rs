@@ -429,8 +429,8 @@ struct Mock {
     words: RefCell<BTreeMap<u32, u32>>,
     marker: u32,
     released: Cell<bool>,
-    masks: Cell<u32>,
-    restores: Cell<u32>,
+    interrupts: Cell<SavedInterrupts>,
+    creation_mask: Cell<bool>,
     held: Cell<bool>,
 }
 
@@ -446,8 +446,8 @@ impl Mock {
             words: RefCell::new(BTreeMap::new()),
             marker,
             released: Cell::new(false),
-            masks: Cell::new(0),
-            restores: Cell::new(0),
+            interrupts: Cell::new(SavedInterrupts(0x40)),
+            creation_mask: Cell::new(false),
             held: Cell::new(false),
         }
     }
@@ -467,6 +467,12 @@ impl Machine for Mock {
     }
 
     fn store_word(&self, at: GuestAddress, value: u32) {
+        let state = self.interrupts.get().0;
+        assert_ne!(state & 0x80, 0, "store with IRQ unmasked");
+        if self.creation_mask.get() {
+            assert_eq!(state & 0xc0, 0xc0, "creation store with FIQ unmasked");
+            self.creation_mask.set(false);
+        }
         if at.0 == self.marker && value != 0 {
             assert!(self.released.get(), "publication marker stored before the release");
         }
@@ -475,13 +481,12 @@ impl Machine for Mock {
     }
 
     fn mask_interrupts(&self) -> SavedInterrupts {
-        self.masks.set(self.masks.get() + 1);
-        SavedInterrupts(0xc0)
+        self.creation_mask.set(true);
+        self.interrupts.replace(SavedInterrupts(0xc0))
     }
 
     fn restore_interrupts(&self, saved: SavedInterrupts) {
-        assert_eq!(saved.0, 0xc0);
-        self.restores.set(self.restores.get() + 1);
+        self.interrupts.set(saved);
     }
 
     fn dmb(&self) {
@@ -492,10 +497,14 @@ impl Machine for Mock {
 impl ObjectLock for Mock {
     fn with_object_lock<R>(&self, _lock: LockRecord, body: impl FnOnce() -> R) -> R {
         assert!(!self.held.get(), "object lock acquired twice");
+        self.creation_mask.set(false);
+        let saved = self.interrupts.get();
+        self.interrupts.set(SavedInterrupts(saved.0 | 0x80));
         self.held.set(true);
         let result = body();
         assert!(self.held.get(), "object lock released while not held");
         self.held.set(false);
+        self.interrupts.set(saved);
         result
     }
 }
@@ -521,8 +530,7 @@ fn create_flag_writes_the_record_and_self_links_the_queue() {
     assert_eq!(m.word(control.queue().next()), control.0 .0);
     assert_eq!(m.word(control.queue().prev()), control.0 .0);
     assert_eq!(m.word(control.pattern()), 0x21);
-    assert_eq!(m.word(control.queue().config()), 0);
-    assert_eq!((m.masks.get(), m.restores.get()), (1, 1));
+    assert_eq!(m.interrupts.get(), SavedInterrupts(0x40));
 }
 
 #[test]
@@ -548,7 +556,7 @@ fn create_flag_refuses_an_existing_record_without_writing() {
     );
     assert_eq!(m.word(config.attributes()), 0);
     assert_eq!(m.word(config.initial()), 0);
-    assert_eq!((m.masks.get(), m.restores.get()), (1, 1));
+    assert_eq!(m.interrupts.get(), SavedInterrupts(0x40));
 }
 
 #[test]
@@ -579,7 +587,7 @@ fn create_mailbox_writes_the_record_and_clears_the_ends() {
     assert_eq!(m.word(control.queue().next()), control.0 .0);
     assert_eq!(m.word(control.head()), 0);
     assert_eq!(m.word(control.tail()), 0);
-    assert_eq!((m.masks.get(), m.restores.get()), (1, 1));
+    assert_eq!(m.interrupts.get(), SavedInterrupts(0x40));
 }
 
 #[test]
@@ -604,7 +612,7 @@ fn create_mailbox_refuses_an_existing_record() {
         Err(ObjectStatus::AlreadyExists)
     );
     assert_eq!(m.word(config.attributes()), 0);
-    assert_eq!((m.masks.get(), m.restores.get()), (1, 1));
+    assert_eq!(m.interrupts.get(), SavedInterrupts(0x40));
 }
 
 #[test]
@@ -621,7 +629,7 @@ fn create_flag_publishes_after_the_release() {
         Ok(id)
     );
     assert_eq!(m.word(words.flag_config(slot).exists()), 1);
-    assert_eq!(m.restores.get(), 1);
+    assert_eq!(m.interrupts.get(), SavedInterrupts(0x40));
 }
 
 #[test]
@@ -654,7 +662,7 @@ fn a_refused_create_leaves_the_record_unchanged() {
     assert_eq!(m.word(config.initial()), 0x2222);
     assert_eq!(m.word(control.pattern()), 0x3333);
     assert_eq!(m.word(control.queue().next()), 0x4444);
-    assert_eq!(m.restores.get(), 1);
+    assert_eq!(m.interrupts.get(), SavedInterrupts(0x40));
 }
 
 #[test]
@@ -697,6 +705,7 @@ fn clear_flag_masks_the_pattern_under_the_lock() {
     );
     assert_eq!(m.word(pattern), 0x11);
     assert!(!m.held.get());
+    assert_eq!(m.interrupts.get(), SavedInterrupts(0x40));
 }
 
 #[test]
@@ -732,6 +741,7 @@ fn poll_flag_reports_the_whole_pattern() {
     assert_eq!(m.word(out), 0x30);
     assert_eq!(m.word(pattern), 0x30);
     assert!(!m.held.get());
+    assert_eq!(m.interrupts.get(), SavedInterrupts(0x40));
 }
 
 #[test]
@@ -839,6 +849,7 @@ fn poll_receive_unlinks_the_head_message() {
     assert_eq!(m.word(out), first.0 .0);
     assert_eq!(m.word(control.head()), second.0 .0);
     assert!(!m.held.get());
+    assert_eq!(m.interrupts.get(), SavedInterrupts(0x40));
 }
 
 #[test]

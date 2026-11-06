@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "policy": "image-size-pending-choice-v1",
+  "record_nand_sha256": "eb33ae15ec676f5dfd9465223500c89179af5c90f14047b4e528a7db741e8682",
+  "source_evidence": {
+    "path": "private-data/scratch/RecordStorePair/image-size-intended-source-evidence-1.json",
+    "sha256": "31669ec89e194b6c432567d7f8d040469add71c3c5ea5c8b63e1f8ce6d52d494"
+  },
+  "cases": [
+    {"crawl_trial": 368, "keys": ["ok", "down", "ok", "down", "up"]},
+    {"crawl_trial": 371, "keys": ["ok", "down", "ok", "down", "back"]}
+  ]
+}

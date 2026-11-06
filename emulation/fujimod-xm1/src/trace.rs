@@ -15,6 +15,9 @@ mod save_lifecycle;
 pub use save_lifecycle::{CaptureScope, LifecycleProgram};
 use save_lifecycle::LifecycleContext;
 
+#[path = "trace_calls.rs"]
+pub mod calls;
+
 /// One entry into an armed site, before its instruction executes.
 #[derive(Clone, Debug, Serialize)]
 pub struct Hit {
@@ -33,6 +36,8 @@ pub struct Hit {
     /// The site's physical reads at entry, in hex, in `TraceSites::site_reads` order.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub memory: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub observation: Option<calls::Observation>,
 }
 
 /// A physical range a site's hits read at entry.
@@ -992,6 +997,7 @@ pub struct TraceSites {
     pub hits: Vec<Hit>,
     /// Physical ranges each site's hits read at entry, by site address.
     pub site_reads: BTreeMap<u32, Vec<SiteRead>>,
+    pub calls: calls::Calls,
     hit_limit: Option<std::num::NonZeroUsize>,
     /// Hits record r0-r12 rather than r0-r3.
     full_registers: bool,
@@ -1665,6 +1671,7 @@ impl TraceSites {
         }
         let mut stop = false;
         let mut new_returns = [None; 2];
+        let mut call_returns = Vec::new();
         let mut observed_modal = [None; 2];
         let counts = session.board.instruction_counts();
         self.take_events()?;
@@ -1761,6 +1768,8 @@ impl TraceSites {
                         register(session, *core, arm::Register::R(index)).map(|value| (name, format!("{value:#x}")))
                     })
                     .collect::<Result<_, String>>()?;
+                let (observation, call_return) = self.calls.observe(session, *core, address)?;
+                call_returns.extend(call_return);
                 self.hits.push(Hit {
                     site,
                     address: format!("{address:#x}"),
@@ -1777,6 +1786,7 @@ impl TraceSites {
                         session.board.read_physical(read.address, &mut bytes)?;
                         Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>())
                     }).collect::<Result<Vec<_>, String>>()).transpose()?.unwrap_or_default(),
+                    observation,
                 });
                 if let StackPoint::Inside { index, next } = scoped {
                     if let Some(scope) = &mut self.stack_scope {
@@ -1798,7 +1808,17 @@ impl TraceSites {
                 self.resumed.remove(core);
             }
         }
-        if new_returns.iter().any(Option::is_some) {
+        let mut calls_changed = false;
+        for address in call_returns {
+            if let std::collections::btree_map::Entry::Vacant(entry) = self.sites.entry(address) {
+                entry.insert("call-return".into());
+                calls_changed = true;
+            }
+        }
+        let sites_before = self.sites.len();
+        self.sites.retain(|address, label| label != "call-return" || self.calls.pending_return(*address));
+        calls_changed |= self.sites.len() != sites_before;
+        if calls_changed || new_returns.iter().any(Option::is_some) {
             if let Some(modal) = &mut self.modal_observation {
                 for (&core, marker) in &mut self.resumed {
                     if new_returns.contains(&Some(marker.pc)) && marker.modal == ModalPointState::Unobserved

@@ -10,6 +10,7 @@ module EmulatorUsb
   , emulatorUsbApi
   , BridgeExchange
   , bridgeUsbApi
+  , emulatorBridgeCommand
   , emulatorTraceSites
   , emulatorTraceSitesReading
   , TraceHit (..)
@@ -59,6 +60,9 @@ module EmulatorUsb
   , crawlKeyWire
   , emulatorDisplayKey
   , emulatorIdle
+  , emulatorIdleTicks
+  , emulatorLocalUiDrain
+  , emulatorUiState
   , emulatedClock
   ) where
 
@@ -151,6 +155,9 @@ rpc = bridgeRpc . exchangeLine
 
 watchRpc :: Emulator -> Value -> IO Value
 watchRpc = bridgeWatchRpc . exchangeLine
+
+emulatorBridgeCommand :: Emulator -> Value -> IO Value
+emulatorBridgeCommand emulator request = Object <$> rpc emulator request
 
 bridgeWatchRpc :: BridgeExchange -> Value -> IO Value
 bridgeWatchRpc exchange request = decodeBridgeWatchLine <$> exchange (encode request)
@@ -657,6 +664,17 @@ emulatorDisplayKey emulator key = Object <$> rpc emulator (object ["command" .= 
 -- | Runs the guest for the given instructions with no input; the reply is undecoded.
 emulatorIdle :: Emulator -> Instructions -> IO Value
 emulatorIdle emulator instructions = Object <$> rpc emulator (object ["command" .= String "idle", "instructions" .= instructionsValue instructions])
+
+-- | Runs the guest for the given board ticks with no input; the reply is undecoded.
+emulatorIdleTicks :: Emulator -> Tick -> IO Value
+emulatorIdleTicks emulator ticks = Object <$> rpc emulator (object ["command" .= String "idle-ticks", "ticks" .= tickValue ticks])
+
+-- | Observes current local UI and render drain within the board-tick cap.
+emulatorLocalUiDrain :: Emulator -> Tick -> IO Value
+emulatorLocalUiDrain emulator ticks = Object <$> rpc emulator (object ["command" .= String "local-ui-drain", "ticks" .= tickValue ticks])
+
+emulatorUiState :: Emulator -> IO Value
+emulatorUiState emulator = Object <$> rpc emulator (object ["command" .= String "ui-state"])
 
 menuReading :: M.KeyMap Value -> IO MenuReading
 menuReading fields = objectField "menu" fields >>= \value -> case value of

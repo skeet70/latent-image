@@ -227,6 +227,8 @@ Known workers include open `0x7115a4`, read `0x71edbc`, write `0x7116e4`, close 
 
 Recipe storage code/codec and its bounded synthetic completion cases, 17 stock producer/relay cases, selected queue failure experiment, #129 save facade/media-permission work and #124 media observations can fold into a file/media project. They do not own the stock filesystem, writable close/flush or scheduler. [Source: File report §6.7-6.8; Inventory §8.3 and lifecycle notes; E-XM1-QUEUE-CALLER-BOUNDARY-150; #127 storage runtime rank12.]
 
+The separate metadata record service is now an owned subsystem: image4 `[0x6ac2b4,0x6ae114)`, 31 functions and 7,776 bytes, over retained raw NAND. Its 378-case native qualification covers all five kinds; the finite erased/populated cutover reaches open, registration, latest-record reads and append/program effects, with strict retirement guards and the narrowly specified intended IMAGE SIZE difference. Unreached operations stay native-only. This does not own file handles, filesystem workers, close/flush, capture saves or playback. [The record-store design](owned-record-store-design.md) lists its remaining shims and physical persistence limits (E-RECORD-STORE-CUTOVER-PAIR-150).
+
 ### 4. Dependencies and unknowns
 
 Tags are allocation lifetimes, not durable identities. Producers can ignore enqueue/wait failures; absence of callback is not cancellation. Lock/wait/wake services, pending wake bits, shared callback reuse, media attach/detach serialization, volume identity, card errors, flush and physical storage recovery remain unresolved. Writable close requires an actually opened filesystem object; missing-file fixtures cannot qualify it. [Source: File report lines274-299; `emulation/README.md:498-514`.]
