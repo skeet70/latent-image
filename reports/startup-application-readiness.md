@@ -153,3 +153,25 @@ Host qualification uses `//emulation:task-constructors --image4 STOCK_ID4 --imag
 `E-STARTUP-J10-CONSTRUCTORS-HOST-150`: `private-data/scratch/j10/native-v1/qualification.json` records 256 passing stock/candidate pairs over all thirteen constructors and an executed, refused wrong-priority syscont control. The candidate ELF is `6111b8783401fafe5e7aea46228c5c4a77a8ff0e42568a5d3219dfc8cbae1804`. Both D+24 classes and task80's nonzero argument are seeded at the original caller-SP offsets, with callee-saved registers, return frame, service alignment, descriptor values, global initialization and service order independently checked.
 
 `//replacement/startup_artifact:startup-artifact-j10-canonical-tests` passes constructor/task-submission and actual J9 initializer/constructor composition, both missing-join refusals, retained hook-wrapper and syscont-seam preservation, truncated packed-image refusal and damaged-frame refusal. `//replacement/startup_artifact:startup-artifact-tests` passed before merging J9. The J8 manifest plus J9's `image5-initializer` at `3f91e2e6` and `task-constructors` is composed at `private-data/scratch/j10/manifest-j10-v2.json`; its staged DAT and contract are in `private-data/scratch/j10/staged-j10-v2/`. This is host admission and packaging, not a composed application execution claim.
+
+## 10. Composed startup qualification
+
+`E-STARTUP-STEP9-COMPOSED-NATURAL-150` qualifies the J1-J11+K1 composition on the seven supported settled-input routes. The packaged DAT is `cdd92b5e9826ba2ba2b023192a21af2f42e07080ecde600c79dd76118f82592a`; its contract is `cf115986406a6cf2a2de3becaff42ac0c2583f2db241545d149081dd2d970f85`, listed in `replacement/startup_artifact/qualifications.json`. Each role starts at admitted zero-instruction reset under the composite guard. All fourteen observations reach `observed` without a guard fault, all seven pairs compare `equal`, and each scenario rejects all 22 application controls at their named checks.
+
+| Scenario | Retained entered instructions | Composed entered instructions | Pair | Application controls |
+| --- | ---: | ---: | --- | --- |
+| `menu-inputs` | 457,889,264 | 457,676,093 | equal | 22/22 |
+| `shooting-menu` | 403,910,164 | 404,926,093 | equal | 22/22 |
+| `live-view` | 393,250,000 | 395,500,000 | equal | 22/22 |
+| `film-simulation` | 535,604,449 | 535,598,195 | equal | 22/22 |
+| `editor-cancel` | 503,330,209 | 507,364,613 | equal | 22/22 |
+| `editor-confirm` | 503,162,755 | 507,409,037 | equal | 22/22 |
+| `repeated-inputs` | 446,410,819 | 448,198,312 | equal | 22/22 |
+
+The route definitions and retained evidence are in the [application-phase command documentation](../emulation/README.md#application-phase-schema-5). First-ready is stable at 55,867,999 retained and 56,449,585 composed entered instructions. The comparison checks complete rendering per role and compares graphics planes, layout and the controller event header across roles. Timing-dependent generated main-plane pixels and uninitialized controller payload are not cross-role equalities.
+
+The final matrix is preserved under `private-data/scratch/step9/full-main-v1/`, including the frozen observer, manifest, staged contract/DAT, role receipts, evidence sidecars, verdicts and controls. The original driver completed `menu-inputs`; its replacement continued only the six unexecuted scenarios with the same observer and artifact bytes. Unrelated later AF changes did not trigger reruns.
+
+Localization also passes: full-K1 `menu-inputs` in `full-v2` and no-K1 `film-simulation` in `matrix-noK1-v2` each compare equal with 22 controls. The former release failure was a timebase error in the observer: Left debounce takes 574,819 retained versus 574,322 composed board ticks, but 6.75M versus 8.25M entered instructions. Whole-run scanner cadence remains approximately 300,000 board ticks in both roles (`E-RTOS-OWN-FIRST-NATURAL-150`). Settled releases now use 720,000 board ticks, two scanner periods plus the selected 120,000-tick margin; first-start release caps and press holds remain instruction-bounded.
+
+This is finite emulator qualification of the staged startup composition, not complete #154/#155 acceptance. Cold first-start language/date screens remain bootstrap rather than independently acknowledged-render scenarios. Input arriving while work is pending remains unsupported; `repeated-inputs` pre-drains each ordinary input. Editor confirmation accepts the unchanged date/time value. Retained-service, stack/resource, alternate/failure-route and global entry-closure premises remain, as do the owned-layout redesign, production cutover and hardware acceptance.
