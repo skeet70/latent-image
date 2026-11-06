@@ -1,24 +1,40 @@
 use crate::id::{FlagId, MailboxId};
 use crate::layout::GuestAddress;
+use crate::matching::Pattern;
+use crate::message::PriorityLimit;
 use crate::status::ObjectStatus;
 
-/// The words a create reads and writes, plus the stock I/F mask pair
-/// (A `0x42560` / B `0xd2560`, restored by A `0x42568` / B `0xd2568`).
+/// The I/F bits the stock mask pair returned.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct SavedInterrupts(pub u32);
+
+/// A flag creation record's attribute word, arbitrary bits preserved.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct FlagAttributes(pub u32);
+
+/// A mailbox creation record's attribute word, arbitrary bits preserved.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct MailboxAttributes(pub u32);
+
 pub trait Machine {
     fn load_word(&self, at: GuestAddress) -> u32;
     fn store_word(&self, at: GuestAddress, value: u32);
-    fn mask_interrupts(&self) -> u32;
-    fn restore_interrupts(&self, saved: u32);
+    fn mask_interrupts(&self) -> SavedInterrupts;
+    fn restore_interrupts(&self, saved: SavedInterrupts);
+    fn dmb(&self);
 }
 
 pub struct FlagCreate {
-    pub attributes: u32,
-    pub initial: u32,
+    pub attributes: FlagAttributes,
+    pub initial: Pattern,
 }
 
 pub struct MailboxCreate {
-    pub attributes: u32,
-    pub priority_limit: u32,
+    pub attributes: MailboxAttributes,
+    pub priority_limit: PriorityLimit,
 }
 
 /// `+0x80`. The table is the id's domain, which `admit` set to the entry domain.
@@ -29,13 +45,14 @@ pub fn create_flag<M: Machine>(m: &M, id: FlagId, create: FlagCreate) -> Result<
     let result = if m.load_word(config.exists()) != 0 {
         Err(ObjectStatus::AlreadyExists)
     } else {
-        m.store_word(config.attributes(), create.attributes);
-        m.store_word(config.initial(), create.initial);
-        m.store_word(config.exists(), 1);
+        m.store_word(config.attributes(), create.attributes.0);
+        m.store_word(config.initial(), create.initial.0);
         let control = words.flag_control(id.slot);
         m.store_word(control.queue().next(), control.0 .0);
         m.store_word(control.queue().prev(), control.0 .0);
         m.store_word(control.pattern(), m.load_word(config.initial()));
+        m.dmb();
+        m.store_word(config.exists(), 1);
         Ok(id)
     };
     m.restore_interrupts(saved);
@@ -54,14 +71,15 @@ pub fn create_mailbox<M: Machine>(
     let result = if m.load_word(config.exists()) != 0 {
         Err(ObjectStatus::AlreadyExists)
     } else {
-        m.store_word(config.attributes(), create.attributes);
-        m.store_word(config.priority_limit(), create.priority_limit);
-        m.store_word(config.exists(), 1);
+        m.store_word(config.attributes(), create.attributes.0);
+        m.store_word(config.priority_limit(), create.priority_limit.0);
         let control = words.mailbox_control(id.slot);
         m.store_word(control.queue().next(), control.0 .0);
         m.store_word(control.queue().prev(), control.0 .0);
         m.store_word(control.head(), 0);
         m.store_word(control.tail(), 0);
+        m.dmb();
+        m.store_word(config.exists(), 1);
         Ok(id)
     };
     m.restore_interrupts(saved);

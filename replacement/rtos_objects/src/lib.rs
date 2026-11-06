@@ -23,11 +23,14 @@ fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
 }
 
 pub use admission::{admit, flag_wait_locked, poll_result, Admitted, Entry, Facts, Object, Params, Records, Request, Service};
-pub use create::{create_flag, create_mailbox, FlagCreate, MailboxCreate, Machine};
+pub use create::{
+    create_flag, create_mailbox, FlagAttributes, FlagCreate, Machine, MailboxAttributes, MailboxCreate,
+    SavedInterrupts,
+};
 pub use id::{own_flag_slot, own_mailbox_slot, resolve_flag, resolve_mailbox, EncodedId, EntryDomain, FlagId, MailboxId};
 pub use layout::{Domain, DomainId, FlagSlot, MailboxSlot, TaskSlot};
 pub use matching::{check, KeepMask, MatchMode, Pattern};
-pub use message::MessagePriority;
+pub use message::{MessagePriority, PriorityLimit};
 pub use order::{precedes, QueueOrder};
 pub use status::{ObjectStatus, WaitOutcome};
 pub use timeout::Timeout;

@@ -430,6 +430,7 @@ struct Mock {
     words: RefCell<BTreeMap<u32, u32>>,
     masks: Cell<u32>,
     restores: Cell<u32>,
+    barriers: Cell<u32>,
 }
 
 impl Mock {
@@ -451,14 +452,18 @@ impl Machine for Mock {
         self.set(at, value);
     }
 
-    fn mask_interrupts(&self) -> u32 {
+    fn mask_interrupts(&self) -> SavedInterrupts {
         self.masks.set(self.masks.get() + 1);
-        0xc0
+        SavedInterrupts(0xc0)
     }
 
-    fn restore_interrupts(&self, saved: u32) {
-        assert_eq!(saved, 0xc0);
+    fn restore_interrupts(&self, saved: SavedInterrupts) {
+        assert_eq!(saved.0, 0xc0);
         self.restores.set(self.restores.get() + 1);
+    }
+
+    fn dmb(&self) {
+        self.barriers.set(self.barriers.get() + 1);
     }
 }
 
@@ -472,7 +477,7 @@ fn create_flag_writes_the_record_and_self_links_the_queue() {
         slot,
     };
     assert_eq!(
-        create_flag(&m, id, FlagCreate { attributes: 4, initial: 0x21 }),
+        create_flag(&m, id, FlagCreate { attributes: FlagAttributes(4), initial: Pattern(0x21) }),
         Ok(id)
     );
     let config = words.flag_config(slot);
@@ -502,8 +507,8 @@ fn create_flag_refuses_an_existing_record_without_writing() {
                 slot
             },
             FlagCreate {
-                attributes: 4,
-                initial: 0x21
+                attributes: FlagAttributes(4),
+                initial: Pattern(0x21)
             }
         ),
         Err(ObjectStatus::AlreadyExists)
@@ -527,8 +532,8 @@ fn create_mailbox_writes_the_record_and_clears_the_ends() {
             &m,
             id,
             MailboxCreate {
-                attributes: 2,
-                priority_limit: 32
+                attributes: MailboxAttributes(2),
+                priority_limit: PriorityLimit(32)
             }
         ),
         Ok(id)
@@ -559,12 +564,84 @@ fn create_mailbox_refuses_an_existing_record() {
                 slot
             },
             MailboxCreate {
-                attributes: 2,
-                priority_limit: 32
+                attributes: MailboxAttributes(2),
+                priority_limit: PriorityLimit(32)
             }
         ),
         Err(ObjectStatus::AlreadyExists)
     );
     assert_eq!(m.word(config.attributes()), 0);
     assert_eq!((m.masks.get(), m.restores.get()), (1, 1));
+}
+
+#[test]
+fn create_flag_publishes_last_and_restores_the_mask() {
+    let m = Mock::default();
+    let slot = FlagSlot::new(4, 120).unwrap();
+    let id = FlagId {
+        domain: Domain::A,
+        slot,
+    };
+    assert_eq!(
+        create_flag(&m, id, FlagCreate { attributes: FlagAttributes(0), initial: Pattern(0) }),
+        Ok(id)
+    );
+    let words = Domain::A.words();
+    assert_eq!(m.word(words.flag_config(slot).exists()), 1);
+    assert_eq!(m.barriers.get(), 1, "one publication barrier before the marker");
+    assert_eq!(m.restores.get(), 1);
+}
+
+#[test]
+fn a_refused_create_leaves_the_record_unchanged() {
+    let m = Mock::default();
+    let words = Domain::B.words();
+    let slot = FlagSlot::new(2, 120).unwrap();
+    let config = words.flag_config(slot);
+    let control = words.flag_control(slot);
+    m.set(config.exists(), 1);
+    m.set(config.attributes(), 0x1111);
+    m.set(config.initial(), 0x2222);
+    m.set(control.pattern(), 0x3333);
+    m.set(control.queue().next(), 0x4444);
+    assert_eq!(
+        create_flag(
+            &m,
+            FlagId {
+                domain: Domain::B,
+                slot
+            },
+            FlagCreate {
+                attributes: FlagAttributes(4),
+                initial: Pattern(0x21)
+            }
+        ),
+        Err(ObjectStatus::AlreadyExists)
+    );
+    assert_eq!(m.word(config.attributes()), 0x1111);
+    assert_eq!(m.word(config.initial()), 0x2222);
+    assert_eq!(m.word(control.pattern()), 0x3333);
+    assert_eq!(m.word(control.queue().next()), 0x4444);
+    assert_eq!(m.barriers.get(), 0);
+    assert_eq!(m.restores.get(), 1);
+}
+
+#[test]
+fn a_create_through_admit_writes_the_entry_domain_table() {
+    let m = Mock::default();
+    let mut request = req(Service::FlagCreate);
+    request.entry_domain = EntryDomain::new(Domain::B);
+    request.id = EncodedId::of(2, 5);
+    let admitted = admit(&request).unwrap();
+    let id = match admitted.object {
+        Object::Flag(id) => id,
+        Object::Mailbox(_) => panic!("flag create admitted a mailbox"),
+    };
+    assert_eq!(id.domain, Domain::B);
+    assert_eq!(
+        create_flag(&m, id, FlagCreate { attributes: FlagAttributes(4), initial: Pattern(1) }),
+        Ok(id)
+    );
+    assert_eq!(m.word(Domain::B.words().flag_config(id.slot).exists()), 1);
+    assert_eq!(m.word(Domain::A.words().flag_config(id.slot).exists()), 0);
 }
