@@ -82,11 +82,12 @@ instance ToJSON AttachPhase where
   toJSON = String . attachPhaseWire
 
 -- | Routes that confirm a dialog the crawl left on CANCEL.
-data DeclaredAction = CustomSetCopy deriving (Eq, Ord, Show, Enum, Bounded)
+data DeclaredAction = CustomSetCopy | CustomResetDefaults deriving (Eq, Ord, Show, Enum, Bounded)
 
 declaredWire :: DeclaredAction -> T.Text
 declaredWire action = case action of
   CustomSetCopy -> "custom-set-copy"
+  CustomResetDefaults -> "custom-reset-defaults"
 
 -- | A crawl route carries the crawl edge's ordered effects.
 data RouteOrigin = CrawlTrial Int [CrawlEffect] | Declared DeclaredAction deriving (Eq, Show)

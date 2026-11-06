@@ -1,0 +1,55 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf")
+
+package(default_visibility = ["//visibility:public"])
+
+[xm1_rust_elf(
+    name = "record-store-image" + suffix,
+    rust_staticlib = "//replacement/record_store:record-store-rust" + suffix,
+    asm_srcs = ["entry.S"],
+    entry = "record_store_entry_open",
+    link_script = "record-store.ld",
+    link_includes = ["imports.ld"],
+    extra_ldflags = ["-Wl,--gc-sections"],
+) for suffix in [""] + ["-control-" + str(control) for control in range(1, 10)]]
+
+haskell_library(
+    name = "record-store-artifact",
+    srcs = ["Replacement/RecordStore/Carrier.hs", "Replacement/RecordStore/References.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host:base", "//host:bytestring", "//host:containers",
+        "//host:aeson", "//host/firmware:bank-allowlist", "//host:update-container",
+        "//replacement/property_service:property-service-artifact",
+        "//replacement/media_permit:service-inventory",
+    ],
+)
+
+haskell_binary(
+    name = "stage-record-store",
+    srcs = ["StageMain.hs"],
+    main_file = "StageMain.hs",
+    args = ["$(rootpath //lz:lz-encode)", "$(rootpath //host/firmware:rebuild-update)", "$(rootpath //lz:fflzd)"],
+    data = ["//lz:lz-encode", "//host/firmware:rebuild-update", "//lz:fflzd"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":record-store-artifact", "//replacement/property_service:property-service-artifact",
+        "//replacement/media_permit:service-inventory", "//emulation:image4-staging-lib", "//emulation:case-sha256",
+        "//host:aeson", "//host:base", "//host:bytestring", "//host:directory", "//host:host-support",
+    ],
+)
+
+haskell_test(
+    name = "record-store-artifact-tests",
+    srcs = ["Tests.hs"],
+    main_file = "Tests.hs",
+    args = ["$(rootpath :record-store-image%s.%s)" % (suffix, extension) for suffix in [""] + ["-control-" + str(control) for control in range(1, 10)] for extension in ["bin", "symbols"]],
+    data = [":record-store-image%s.%s" % (suffix, extension) for suffix in [""] + ["-control-" + str(control) for control in range(1, 10)] for extension in ["bin", "symbols"]],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":record-store-artifact", "//host:base", "//host:bytestring",
+        "//replacement/property_service:property-service-artifact",
+        "//replacement/media_permit:service-inventory",
+    ],
+)
