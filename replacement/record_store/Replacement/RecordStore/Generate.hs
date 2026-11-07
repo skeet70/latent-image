@@ -14,7 +14,7 @@ import Control.Monad (forM_)
 import Data.Bits ((.&.), shiftR, xor)
 import qualified Data.ByteString as B
 import Data.Char (isAsciiLower, isDigit)
-import Data.List (sort, takeWhile)
+import Data.List (nub, sort, takeWhile)
 import qualified Data.Map.Strict as M
 import Data.Word (Word8, Word16, Word32, Word64)
 import Numeric (showHex)
@@ -84,7 +84,7 @@ generateCases :: GenerationConfig -> [ValidCase]
 generateCases config = [generateCase config index | index <- [0 .. generationCount config - 1]]
 
 generateCase :: GenerationConfig -> Int -> ValidCase
-generateCase config index = ensureValid candidate
+generateCase config index = selectValid [candidate { callbacks = chosen } | chosen <- nub (drawn : callbackChoices)]
   where
     seed = generationSeed config
     kind' = toEnum (index `mod` 5) :: Kind
@@ -92,9 +92,9 @@ generateCase config index = ensureValid candidate
     rng0 = caseRng seed index
     (bank0, rng1) = buildBank kind' (planBank0 (familyBanks family)) rng0
     (bank1, rng2) = buildBank kind' (planBank1 (familyBanks family)) rng1
-    (callback', rng3) = case familyCallback family of
+    (drawn, rng3) = case familyCallback family of
       Just chosen -> (chosen, rng2)
-      Nothing -> drawElement [NoCallback, MarkerCallback, CorrectingCallback] rng2
+      Nothing -> drawElement callbackChoices rng2
     plan = take (generationMaxOperations config - 2) (familyBody family)
     (body, _) = materializeBody kind' plan rng3
     g = geometry kind'
@@ -103,35 +103,19 @@ generateCase config index = ensureValid candidate
       , kind = kind'
       , initialMedium = Medium (M.fromList [(poolBlock g Bank0, bank0), (poolBlock g Bank1, bank1)])
       , operations = Open : Register Normal : body
-      , callbacks = callback'
+      , callbacks = drawn
       , injection = NoFault
       }
 
-ensureValid :: OracleCase -> ValidCase
-ensureValid candidate = case validCase candidate of
-  Right valid -> valid
-  Left _ -> case tryPrefixes (length body) of
-    Right valid -> valid
-    Left _ -> either (const (ValidCase fallback)) id (validCase fallback)
-  where
-    prefix = take 2 (operations candidate)
-    body = drop 2 (operations candidate)
-    tryPrefixes remaining
-      | remaining < 0 = Left ()
-      | otherwise = case validCase (candidate { operations = prefix ++ take remaining body }) of
-          Right valid -> Right valid
-          Left _ -> tryPrefixes (remaining - 1)
-    fallback = candidate
-      { operations = [Open, Register Normal]
-      , callbacks = NoCallback
-      , initialMedium = emptyMedium (kind candidate)
-      }
+callbackChoices :: [Callback]
+callbackChoices = [NoCallback, MarkerCallback, CorrectingCallback]
 
-emptyMedium :: Kind -> Medium
-emptyMedium kind' = Medium (M.fromList [(poolBlock g Bank0, erasedBank), (poolBlock g Bank1, erasedBank)])
-  where
-    g = geometry kind'
-    erasedBank = B.replicate blockBytes 0xff
+-- | First candidate the smart constructor accepts. Every planned body is valid
+-- with NoCallback, which is the final candidate.
+selectValid :: [OracleCase] -> ValidCase
+selectValid candidates = case [accepted | candidate <- candidates, Right accepted <- [validCase candidate]] of
+  first : _ -> first
+  [] -> error "generation found no valid callback choice"
 
 validCase :: OracleCase -> Either DomainError ValidCase
 validCase candidate = do
@@ -215,13 +199,18 @@ validateOperations g operations' = case operations' of
       | active = Right ()
       | otherwise = Left (LifecycleViolation label)
 
+-- | Positive length up to one record and a position inside the two banks,
+-- including the bank-past boundary at @2 * blockBytes@. Reads that cross a bank
+-- boundary or start at the boundary are supported negative cases: the stock and
+-- model refuse them with an invalid status.
 validateRead :: Geometry -> Word32 -> Int -> Either DomainError ()
 validateRead g position lengthBytes
   | lengthBytes <= 0 = Left (InvalidReadBounds "nonpositive length")
   | lengthBytes > recordBytes g = Left (InvalidReadBounds "length exceeds record bytes")
-  | toInteger position > 2 * toInteger blockBytes = Left (InvalidReadBounds "position past both banks")
-  | toInteger position + toInteger lengthBytes > 2 * toInteger blockBytes = Left (InvalidReadBounds "read crosses the bank space")
+  | toInteger position > bankSpace = Left (InvalidReadBounds "position past both banks")
   | otherwise = Right ()
+  where
+    bankSpace = 2 * toInteger blockBytes
 
 validateCapacity :: Geometry -> OracleCase -> Either DomainError ()
 validateCapacity g candidate
@@ -274,6 +263,7 @@ data PlanOp
   | PlanReadBankOne
   | PlanReadCrossing
   | PlanReadLast
+  | PlanReadPast
   | PlanZero
   | PlanClose
   | PlanRegister
@@ -295,7 +285,7 @@ families =
   , Family "collect-partial" (BankPlan (ShapePrefix 4) (ShapePrefix 2)) [PlanCollect] Nothing
   , Family "erase-all" (BankPlan (ShapePrefix 3) (ShapePrefix 2)) [PlanEraseAll, PlanLatest] Nothing
   , Family "read-bank1" (BankPlan ShapeEmpty (ShapePrefix 2)) [PlanReadBankOne] Nothing
-  , Family "read-last" (BankPlan ShapeEmpty ShapeEmpty) [PlanReadLast] Nothing
+  , Family "read-edges" (BankPlan ShapeEmpty ShapeEmpty) [PlanReadLast, PlanReadPast] Nothing
   , Family "read-crossing" (BankPlan ShapeEmpty ShapeEmpty) [PlanReadCrossing] Nothing
   , Family "zero-read" (BankPlan (ShapePrefix 1) ShapeEmpty) [PlanZero, PlanRead] Nothing
   , Family "close-reopen" (BankPlan (ShapePrefix 2) ShapeEmpty) [PlanClose, PlanRegister, PlanLatest] Nothing
@@ -374,6 +364,7 @@ materializeOp kind' step rng = case step of
   PlanReadBankOne -> (ReadAt (BytePosition (fromIntegral blockBytes)) 16, rng)
   PlanReadCrossing -> (ReadAt (BytePosition (fromIntegral blockBytes - 1)) 2, rng)
   PlanReadLast -> (ReadAt (BytePosition (fromIntegral (2 * blockBytes) - 1)) 1, rng)
+  PlanReadPast -> (ReadAt (BytePosition (fromIntegral (2 * blockBytes))) 1, rng)
   PlanZero -> (Zero, rng)
   PlanClose -> (Close, rng)
   PlanRegister -> (Register Normal, rng)
@@ -389,9 +380,9 @@ readOperation kind' rng = (ReadAt (BytePosition (fromIntegral position)) lengthB
   where
     g = geometry kind'
     (positionDraw, rng') = drawWord64 rng
-    choices = [0, 1, recordBytes g, blockBytes - 1, blockBytes, blockBytes + recordBytes g, 2 * blockBytes - 1]
+    choices = [0, 1, recordBytes g, blockBytes - 1, blockBytes, blockBytes + recordBytes g, 2 * blockBytes - 1, 2 * blockBytes]
     position = choices !! fromIntegral (positionDraw `mod` fromIntegral (length choices))
-    maxLength = min (recordBytes g) (2 * blockBytes - position)
+    maxLength = max 1 (min (recordBytes g) (2 * blockBytes - position))
     (lengthDraw, rng'') = drawWord64 rng'
     lengthBytes = 1 + fromIntegral (lengthDraw `mod` fromIntegral maxLength)
 

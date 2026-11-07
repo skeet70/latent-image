@@ -57,6 +57,7 @@ expectRefusal label predicate result = case result of
 main :: IO ()
 main = do
   determinismTests
+  constructionTests
   coverageTests
   boundaryTests
   refusalTests
@@ -80,6 +81,19 @@ determinismTests = do
   assert "operation bound below three refuses" (mkGenerationConfig (GenerationSeed 1) 1 2 == Left (InvalidOperationBound 2))
   assert "operation bound above twelve refuses" (mkGenerationConfig (GenerationSeed 1) 1 13 == Left (InvalidOperationBound 13))
 
+constructionTests :: IO ()
+constructionTests = do
+  let generated = map oracleCase (corpus 0x7f4 24 12)
+  assert "every generated case is its own validated form"
+    (all (\valid -> validCase (oracleCase valid) == Right valid) (corpus 0x7f4 24 12))
+  assert "no generated case is the init-only fallback" (all (\candidate -> length (operations candidate) > 2) generated)
+  assert "no generated case drops its planned body" (all (not . null . body) generated)
+  assert "the longest planned body survives the full operation bound" (maximum (map (length . body) generated) == 10)
+  assert "the longest planned body survives a shorter operation bound"
+    (maximum (map (length . body . oracleCase) (corpus 0x7f4 24 6)) == 4)
+  assert "every case in the corpus is distinct"
+    (length (nub (map semanticInputs (corpus 0x7f4 24 12))) == 24)
+
 coverageTests :: IO ()
 coverageTests = do
   let generated = map oracleCase (corpus 0xabc 64 12)
@@ -99,6 +113,8 @@ coverageTests = do
   assert "reads in bank one appear" (any (\(position, _) -> position >= fromIntegral blockBytes) (readOps generated))
   assert "a read at the last byte appears" (any (\(position, _) -> position == fromIntegral (2 * blockBytes - 1)) (readOps generated))
   assert "a read crossing a bank boundary appears" (any (\(position, lengthBytes) -> fromIntegral position `mod` blockBytes + lengthBytes > blockBytes) (readOps generated))
+  assert "a bank-past boundary read appears" (any (\(position, _) -> position == fromIntegral (2 * blockBytes)) (readOps generated))
+  assert "a rejected record marker appears" (any (\candidate -> any (hasRejectedRecord candidate) [Bank0, Bank1]) generated)
   assert "callback journal is exercised" (any (\candidate -> not (null (callbackEvents (expectedStore (model hardware candidate))))) generated)
   forM_ generated $ \candidate -> do
     let expected = model hardware candidate
@@ -124,10 +140,21 @@ boundaryTests = do
   let g0 = geometry Kind0
       overfull = mediumOf g0 [(fromIntegral p, False) | p <- [0 .. recordCount g0]] []
       readCase operations' = OracleCase (CaseName "gen-test-read") Kind0 (mediumOf (geometry Kind0) [] []) ([Open, Register Normal] ++ operations') NoCallback NoFault
+      readStore = expectedStore (model hardware (readCase []))
+      caller = B.replicate 16 0xa5
+      (lastStatus, lastBytes) = readAt (BytePosition (fromIntegral (2 * blockBytes) - 1)) 1 caller readStore
+      (pastStatus, pastBytes) = readAt (BytePosition (fromIntegral (2 * blockBytes))) 1 caller readStore
+      (crossStatus, crossBytes) = readAt (BytePosition (fromIntegral blockBytes - 1)) 2 caller readStore
   expectRefusal "an occupied prefix longer than the geometry refuses" isBankContents
     (validCase ((emptyCase Kind0) { initialMedium = overfull }))
   assert "a read at the last byte is valid" (isRight (validCase (readCase [ReadAt (BytePosition (fromIntegral (2 * blockBytes - 1))) 1])))
   assert "a read crossing a bank boundary is valid" (isRight (validCase (readCase [ReadAt (BytePosition (fromIntegral (blockBytes - 1))) 2])))
+  assert "a read at the bank-past boundary is a valid case" (isRight (validCase (readCase [ReadAt (BytePosition (fromIntegral (2 * blockBytes))) 1])))
+  expectRefusal "a read one byte past the bank-past boundary refuses" isReadBounds
+    (validCase (readCase [ReadAt (BytePosition (fromIntegral (2 * blockBytes) + 1)) 1]))
+  assert "the last byte of both banks reads successfully" (lastStatus == 0 && B.take 1 lastBytes == B.singleton 0xff)
+  assert "the bank-past boundary read is refused by the operation" (pastStatus == statusInvalid && B.take 1 pastBytes == B.singleton 0)
+  assert "a crossing read is refused by the operation" (crossStatus == statusInvalid && B.take 2 crossBytes == B.replicate 2 0)
   where
     maskedSuccessor (Program _ _ payload) = sequenceOf payload == Sequence 0
     maskedSuccessor _ = False
@@ -173,7 +200,7 @@ refusalTests = do
   expectRefusal "an oversized read refuses" isReadBounds
     (validCase (base [Open, Register Normal, ReadAt (BytePosition 0) (recordBytes g0 + 1)] NoCallback))
   expectRefusal "a read past both banks refuses" isReadBounds
-    (validCase (base [Open, Register Normal, ReadAt (BytePosition 0x40000) 1] NoCallback))
+    (validCase (base [Open, Register Normal, ReadAt (BytePosition 0x40001) 1] NoCallback))
   expectRefusal "too many operation slots refuse" isEventCapacity
     (validCase (base ([Open, Register Normal] ++ replicate 14 Latest) NoCallback))
   let rejectedRecords = [(fromIntegral p, True) | p <- [0 .. recordCount g0 - 1]]
@@ -184,19 +211,37 @@ refusalTests = do
 
 codecTests :: IO ()
 codecTests = do
-  let sample = head (corpus 0x55 4 6)
+  let samples = corpus 0x55 16 8
+      sample = head samples
       encoded = encodeCase sample
       value = either error id (eitherDecodeStrict' encoded)
-      mutated key replacement = case value of
-        Object fields -> encodeCanonical (Object (KM.insert key replacement fields))
+      mutated key replacementValue = case value of
+        Object fields -> encodeCanonical (Object (KM.insert key replacementValue fields))
         _ -> error "encoded case is not an object"
       deleted key = case value of
         Object fields -> encodeCanonical (Object (KM.delete key fields))
         _ -> error "encoded case is not an object"
+      known = either error id (validCase (OracleCase (CaseName "gen-test-codec") Kind0
+        (mediumOf (geometry Kind0) [(0x1234, False)] [(0x00ff, False)]) [Open, Register Normal] NoCallback NoFault))
+      knownEncoded = encodeCase known
+      banksPrefix = "{\"banks\":{\"bank0\":\""
+      digitOffset = B.length banksPrefix
+      replacement = if B.index knownEncoded digitOffset == 0x30 then 0x31 else 0x30
+      corrupted = B.take digitOffset knownEncoded <> B.singleton replacement <> B.drop (digitOffset + 1) knownEncoded
+  forM_ samples $ \generated ->
+    assert "every generated case roundtrips through the codec" (decodeCase (encodeCase generated) == Right generated)
   assert "the codec roundtrip preserves the case" (decodeCase encoded == Right sample)
+  assert "re-encoding a decoded case is canonical" (either (const False) (\generated -> encodeCase generated == encoded) (decodeCase encoded))
   assert "case JSON carries only typed input fields" $ case value of
     Object fields -> sort (map K.toText (KM.keys fields)) == sort ["version", "name", "kind", "banks", "operations", "callbacks", "fault"]
     _ -> False
+  assert "encoded case starts with canonical lowercase bank hex" (B.take digitOffset knownEncoded == banksPrefix)
+  assert "a corrupted bank digit changes the decoded sequence"
+    (case decodeCase corrupted of
+       Right decoded ->
+         let g' = geometry (kind (oracleCase decoded))
+         in sequenceOf (bankBytes g' Bank0 (initialMedium (oracleCase decoded))) == Sequence 0x1204
+       Left _ -> False)
   expectRefusal "an unsupported version refuses" isVersion (decodeCase (mutated "version" (toJSON (2 :: Int))))
   expectRefusal "an unknown field refuses" isMalformed (decodeCase (mutated "expected" (object [])))
   expectRefusal "a missing field refuses" isMalformed (decodeCase (deleted "banks"))
@@ -206,6 +251,10 @@ codecTests = do
   expectRefusal "an unsupported kind refuses" isMalformed (decodeCase (mutated "kind" (toJSON (9 :: Int))))
   expectRefusal "invalid bank hex refuses" isMalformed
     (decodeCase (mutated "banks" (object ["bank0" .= ("zz" :: String), "bank1" .= ("00" :: String)])))
+  expectRefusal "uppercase bank hex refuses" isMalformed
+    (decodeCase (mutated "banks" (object ["bank0" .= ("FF" :: String), "bank1" .= ("" :: String)])))
+  expectRefusal "odd-length bank hex refuses" isMalformed
+    (decodeCase (mutated "banks" (object ["bank0" .= ("abc" :: String), "bank1" .= ("" :: String)])))
   expectRefusal "a short bank refuses" isBankGeometry
     (decodeCase (mutated "banks" (object ["bank0" .= ("" :: String), "bank1" .= ("" :: String)])))
   expectRefusal "an encoded lifecycle violation refuses" isLifecycle
@@ -245,6 +294,20 @@ hasSequence target candidate = any bankHas [Bank0, Bank1]
   where
     g = geometry (kind candidate)
     bankHas bank' = any (\p -> sequenceOf (B.take 2 (B.drop (p * recordBytes g) (bankBytes g bank' (initialMedium candidate)))) == Sequence target) [0 .. recordCount g - 1]
+
+hasRejectedRecord :: OracleCase -> Bank -> Bool
+hasRejectedRecord candidate bank' = any rejected (occupiedRecords candidate bank')
+  where
+    g = geometry (kind candidate)
+    bytes = bankBytes g bank' (initialMedium candidate)
+    rejected p = B.index bytes (p * recordBytes g + 2) == 0xee
+
+occupiedRecords :: OracleCase -> Bank -> [Int]
+occupiedRecords candidate bank' =
+  [p | p <- [0 .. recordCount g - 1], sequenceOf (B.take 2 (B.drop (p * recordBytes g) bytes)) /= Sequence 0xffff]
+  where
+    g = geometry (kind candidate)
+    bytes = bankBytes g bank' (initialMedium candidate)
 
 readOps :: [OracleCase] -> [(Word32, Int)]
 readOps generated = [(position, lengthBytes) | candidate <- generated, ReadAt (BytePosition position) lengthBytes <- operations candidate]

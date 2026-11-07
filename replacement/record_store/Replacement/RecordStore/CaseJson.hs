@@ -9,11 +9,13 @@ import Data.Aeson (Result (..), Value (..), fromJSON, object, (.=))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Builder as BB
+import qualified Data.ByteString.Lazy as BL
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
 import Data.Word (Word16, Word32)
 import FujiAF.JSON (decodeStrictIntegers, encodeCanonical)
-import Numeric (showHex)
 import Replacement.RecordStore.Cases (CaseName (..), Operation (..), OracleCase (..), Registration (..), Source (..))
 import Replacement.RecordStore.Generate (DomainError (..), ValidCase, oracleCase, validCase)
 import Replacement.RecordStore.Model (Bank (..), BytePosition (..), Callback (..), Fault (..), Kind (..), Medium (..), Seed (..), bankBytes, geometry, poolBlock)
@@ -65,9 +67,7 @@ callbackText Hardware2 = "hardware2"
 callbackText Hardware3 = "hardware3"
 
 hexText :: B.ByteString -> T.Text
-hexText = T.pack . concatMap byteHex . B.unpack
-  where
-    byteHex value = let digits = showHex value "" in if length digits == 1 then '0' : digits else digits
+hexText = TE.decodeUtf8 . B.toStrict . BL.toLazyByteString . BB.byteStringHex
 
 decodeCase :: B.ByteString -> Either DomainError ValidCase
 decodeCase bytes = do
@@ -215,18 +215,16 @@ hexBytes label value = case value of
 
 decodeHex :: T.Text -> Either String B.ByteString
 decodeHex text
-  | odd (length characters) = Left "odd hex length"
-  | otherwise = B.pack <$> pairs characters
+  | odd byteCount = Left "odd hex length"
+  | not (B.all hexDigit bytes) = Left "invalid hex digit"
+  | otherwise = Right (B.unfoldrN (byteCount `div` 2) pair 0)
   where
-    characters = T.unpack text
-    pairs [] = Right []
-    pairs (high : low : rest) = do
-      highValue <- digit high
-      lowValue <- digit low
-      remaining <- pairs rest
-      Right (fromIntegral (highValue * 16 + lowValue) : remaining)
-    pairs _ = Left "odd hex length"
-    digit character = case character of
-      '0' .. '9' -> Right (fromEnum character - fromEnum '0')
-      'a' .. 'f' -> Right (fromEnum character - fromEnum 'a' + 10)
-      _ -> Left "invalid hex digit"
+    bytes = TE.encodeUtf8 text
+    byteCount = B.length bytes
+    pair index
+      | index >= byteCount = Nothing
+      | otherwise = Just (nibble (B.unsafeIndex bytes index) * 16 + nibble (B.unsafeIndex bytes (index + 1)), index + 2)
+    hexDigit word = (word >= 0x30 && word <= 0x39) || (word >= 0x61 && word <= 0x66)
+    nibble word
+      | word <= 0x39 = word - 0x30
+      | otherwise = word - 0x61 + 10
