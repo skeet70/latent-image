@@ -27,7 +27,8 @@ import Emulation.CandidateBaseline
 import Emulation.EmulatorSlot (SlotCount (..), SlotPolicy (..), insideSlot, slotPolicyFromEnvironment)
 import Emulation.KeyReleaseObservation (KeyReleaseObservation, readReleaseObservationLog, readReleaseObservationReceipt, writeReleaseObservationReceipt)
 import GHC.Clock (getMonotonicTime)
-import System.Directory (canonicalizePath, createDirectory, createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getCurrentDirectory, listDirectory, removeDirectoryRecursive)
+import FujiAF.StorageBudget (checkStorageBudget)
+import System.Directory (canonicalizePath, createDirectory, createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getCurrentDirectory, removeDirectoryRecursive)
 import System.Environment (getArgs, getEnvironment, getExecutablePath, lookupEnv)
 import System.Exit (ExitCode (..), exitFailure, exitSuccess)
 import System.FilePath (dropExtension, splitDirectories, takeDirectory, takeFileName, (</>))
@@ -533,9 +534,14 @@ execute context lock name invocation = do
   outcome <- try $ withFile logPath WriteMode $ \handle -> do
     hPutStrLn handle (unwords (invocationProgram invocation : invocationArguments invocation))
     hFlush handle
-    (_, _, _, process) <- createProcess (proc (invocationProgram invocation) (invocationArguments invocation))
-      { cwd = Just root, env = Just environment, std_in = NoStream, std_out = UseHandle handle, std_err = UseHandle handle }
-    waitForProcess process
+    attempted <- try $ do
+      checkStorageBudget (run </> "receipts" </> name)
+      (_, _, _, process) <- createProcess (proc (invocationProgram invocation) (invocationArguments invocation))
+        { cwd = Just root, env = Just environment, std_in = NoStream, std_out = UseHandle handle, std_err = UseHandle handle }
+      waitForProcess process
+    case attempted of
+      Left problem -> hPutStrLn handle (show (problem :: SomeException)) >> pure (ExitFailure 127)
+      Right code -> pure code
   ended <- getMonotonicTime
   let code = either (\problem -> ExitFailure (const 127 (problem :: SomeException))) id outcome
   say lock ("end " ++ name ++ ": " ++ showExit code ++ " after " ++ showSeconds (ended - started))
@@ -763,39 +769,15 @@ writeFindingsDiff judging route baseline receipt = do
   createDirectoryIfMissing True directory
   writeFile (directory </> (routeName route ++ ".findings.diff")) report
 
--- | Removes what a passing route staged beside its observed files: its viewer
--- runtime, native build directory, native case directories and updater
--- runtime. A full run's native case directories alone take about 10 GB.
+-- | Removes per-route build and runtime staging. Native evidence is retained
+-- by the producer's compact/full policy.
 prune :: RunDirectory -> Outcome -> IO ()
 prune (RunDirectory run) outcome = do
   let name = routeName (outcomeRoute outcome)
       receipt = outcomeReceipt outcome
-  caseDirectories <- if routeHost (outcomeRoute outcome) == NativeSuite
-    then do
-      present <- doesDirectoryExist receipt
-      entries <- if present then listDirectory receipt else pure []
-      pure (map (receipt </>) entries)
-    else pure []
-  forM_ ([run </> "runtimes" </> name, run </> "builds" </> name, receipt </> "runtime"] ++ caseDirectories) $ \path -> do
+  forM_ [run </> "runtimes" </> name, run </> "builds" </> name, receipt </> "runtime"] $ \path -> do
     directory <- doesDirectoryExist path
     when directory (removeDirectoryRecursive path)
-
-prunePassedCases :: Outcome -> IO ()
-prunePassedCases outcome = when (routeHost (outcomeRoute outcome) == NativeSuite) $ do
-  let receipt = outcomeReceipt outcome
-  present <- doesFileExist (receipt </> "results.json")
-  when present $ do
-    parsed <- eitherDecodeStrict' <$> B.readFile (receipt </> "results.json")
-    let passedIds = either (const []) id (parsed >>= parseEither (withObject "results" $ \o -> do
-          cases <- o .: "cases"
-          statuses <- forM cases $ \c -> withObject "case" (\v -> (,) <$> v .: "id" <*> v .: "status") c
-          pure [caseId | (caseId, status) <- statuses, status == ("passed" :: T.Text)]))
-    forM_ passedIds $ \caseId -> when (safeCaseId caseId) $ do
-      let path = receipt </> T.unpack caseId
-      directory <- doesDirectoryExist path
-      when directory (removeDirectoryRecursive path)
-  where
-    safeCaseId caseId = not (T.null caseId) && T.all (\c -> c `elem` ("-_." :: String) || c `elem` ['a' .. 'z'] || c `elem` ['A' .. 'Z'] || c `elem` ['0' .. '9']) caseId && caseId `notElem` [".", ".."]
 
 main :: IO ()
 main = do
@@ -818,6 +800,7 @@ main = do
     "verify-candidate runs each emulator route in a slot of its own; start it outside //emulation:emulator-slot"
   started <- stamp
   run <- beneathPrivate root (fromMaybe ("private-data/verify-candidate/runs" </> started) (optionOutput options)) "--output"
+  unless (null toExecute) (checkStorageBudget run)
   createDirectory run
   setFileMode run 0o700
   baselines <- beneathPrivate root (fromMaybe "private-data/verify-candidate/baselines" (optionBaselines options)) "--baselines"
@@ -852,10 +835,9 @@ main = do
         pure records
       else readReleaseObservationReceipt receipt
     pure outcome {outcomeIncompleteReleases = observations}
-  forM_ outcomes $ \outcome -> when (outcomeRoute outcome `elem` toExecute) $
-    if outcomeResult outcome `elem` ["pass", "recorded", "reference"]
-      then prune (RunDirectory run) outcome
-      else prunePassedCases outcome
+  forM_ outcomes $ \outcome ->
+    when (outcomeRoute outcome `elem` toExecute && outcomeResult outcome `elem` ["pass", "recorded", "reference"]) $
+      prune (RunDirectory run) outcome
   forM_ outcomes $ \outcome -> unless (null (outcomeDifferences outcome)) $ do
     createDirectoryIfMissing True (run </> "differences")
     BL.writeFile (run </> "differences" </> (routeName (outcomeRoute outcome) ++ ".json"))

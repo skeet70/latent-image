@@ -1,5 +1,6 @@
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
-load("//replacement/toolchain:rust.bzl", "xm1_rust_staticlib")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -9,22 +10,103 @@ xm1_rust_staticlib(
     crate_name = "xm1_rtos_objects",
     data = [
         "src/admission.rs",
+        "src/block.rs",
         "src/create.rs",
         "src/id.rs",
         "src/locked.rs",
         "src/matching.rs",
         "src/message.rs",
         "src/order.rs",
+        "src/sim.rs",
         "src/status.rs",
+        "src/teardown.rs",
         "src/timeout.rs",
+        "src/wake.rs",
         "//replacement/rtos_layout:src/lib.rs",
     ],
 )
 
+[
+    xm1_rust_staticlib(
+        name = "objects-f2-adapter-%s" % domain,
+        src = "stage/adapter.rs",
+        crate_name = "xm1_rtos_objects_f2_adapter",
+        data = [
+            "src/admission.rs",
+            "src/block.rs",
+            "src/create.rs",
+            "src/id.rs",
+            "src/lib.rs",
+            "src/locked.rs",
+            "src/matching.rs",
+            "src/message.rs",
+            "src/order.rs",
+            "src/status.rs",
+        "src/teardown.rs",
+            "src/timeout.rs",
+            "src/wake.rs",
+            "//replacement/rtos_layout:src/lib.rs",
+        ],
+        rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain, "--cfg", "'feature=\"stage\"'"],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    xm1_rust_rlib(
+        name = "scheduler-%s-component" % domain,
+        src = "//replacement/rtos_scheduler:src/lib.rs",
+        crate_name = "xm1_rtos_scheduler",
+        data = [
+            "//replacement/rtos_scheduler:src/entries.rs",
+            "//replacement/rtos_scheduler:src/s3a.rs",
+            "//replacement/rtos_scheduler:src/s3b.rs",
+            "//replacement/rtos_scheduler:src/tests.rs",
+            "//replacement/rtos_layout:src/lib.rs",
+        ],
+        rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain, "--cfg", "'feature=\"component\"'"],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    xm1_rust_rlib(
+        name = "scheduler-s2-%s-component" % domain,
+        src = "//replacement/rtos_scheduler:src/s2.rs",
+        crate_name = "xm1_rtos_scheduler_s2",
+        data = ["//replacement/rtos_layout:src/lib.rs"],
+        rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain, "--cfg", "'feature=\"component\"'"],
+    )
+    for domain in ["a", "b"]
+]
+
+
+
+[
+    xm1_rust_elf(
+        name = "objects-f2-stage-%s" % domain,
+        rust_staticlib = ":objects-f2-adapter-%s" % domain,
+        rust_components = [
+            ":scheduler-%s-component" % domain,
+            ":scheduler-s2-%s-component" % domain,
+        ],
+        link_script = "stage/f2-%s.ld" % domain,
+        extra_ldflags = ["-Wl,--gc-sections", "-Wl,--orphan-handling=error"],
+        link_includes = [
+            "//replacement/rtos_scheduler:scheduler-%s-placement.ld" % domain,
+            "//replacement/rtos_scheduler:scheduler-s2-%s-placement.ld" % domain,
+        ],
+        entry = "xm1_rtos_objects_f2_set_flag",
+    )
+    for domain in ["a", "b"]
+]
+
 genrule(
-    name = "objects-host-tests-build",
+    name = "objects-smoke-build",
     srcs = [
+        "smoke.rs",
         "src/admission.rs",
+        "src/block.rs",
         "src/create.rs",
         "src/id.rs",
         "src/lib.rs",
@@ -32,13 +114,43 @@ genrule(
         "src/matching.rs",
         "src/message.rs",
         "src/order.rs",
+        "src/sim.rs",
         "src/status.rs",
+        "src/teardown.rs",
+        "src/timeout.rs",
+        "src/wake.rs",
+        "//replacement/rtos_layout:src/lib.rs",
+        "//replacement/rtos_scheduler:scheduler-host-rlib",
+    ],
+    outs = ["objects-smoke-bin"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --cfg 'feature=\"sim\"' --extern xm1_rtos_scheduler=$(location //replacement/rtos_scheduler:scheduler-host-rlib) $(location smoke.rs) -o $@",
+    executable = True,
+    tools = ["@lab_rustc//:bin/rustc"],
+)
+
+genrule(
+    name = "objects-host-tests-build",
+    srcs = [
+        "src/admission.rs",
+        "src/block.rs",
+        "src/create.rs",
+        "src/id.rs",
+        "src/lib.rs",
+        "src/locked.rs",
+        "src/matching.rs",
+        "src/message.rs",
+        "src/order.rs",
+        "src/sim.rs",
+        "src/status.rs",
+        "src/teardown.rs",
         "src/tests.rs",
         "src/timeout.rs",
+        "src/wake.rs",
         "//replacement/rtos_layout:src/lib.rs",
+        "//replacement/rtos_scheduler:scheduler-host-rlib",
     ],
     outs = ["objects-host-tests-bin"],
-    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location src/lib.rs) -o $@",
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test --extern xm1_rtos_scheduler=$(location //replacement/rtos_scheduler:scheduler-host-rlib) -C linker=$(location @lab_clang//:bin/clang) $(location src/lib.rs) -o $@",
     executable = True,
     tools = [
         "@lab_clang//:bin/clang",
@@ -46,10 +158,61 @@ genrule(
     ],
 )
 
+
 sh_test(
     name = "objects-host-tests",
     size = "small",
     srcs = ["//emulation:recovery-task-state-tests.sh"],
     args = ["$(location :objects-host-tests-build)"],
-    data = [":objects-host-tests-build"],
+    data = [
+        ":objects-host-tests-build",
+        ":objects-rust",
+        ":objects-smoke-build",
+    ],
+)
+
+haskell_library(
+    name = "family-suite",
+    srcs = [
+        "native/Replacement/RtosObjects/Layout.hs",
+        "native/Replacement/RtosObjects/Suite.hs",
+    ],
+    src_strip_prefix = "native",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:cached-native-batch",
+        "//emulation:native-adapter",
+        "//emulation:native-observation",
+        "//emulation:owned-case",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:filepath",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+    ],
+)
+
+haskell_binary(
+    name = "family-suite-runner",
+    srcs = ["native/SuiteMain.hs"],
+    main_file = "native/SuiteMain.hs",
+    data = [
+        ":objects-f2-stage-a.bin",
+        ":objects-f2-stage-b.bin",
+        "//replacement/rtos_scheduler/oracle:layout.json",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":family-suite",
+        "//emulation:fujimod-paths",
+        "//host:aeson",
+        "//host:storage-budget",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+    ],
 )

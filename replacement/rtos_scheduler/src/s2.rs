@@ -27,6 +27,7 @@ global_asm!(
 global_asm!(
     r#"
     .arm
+    .fpu vfpv3
     .macro entry name
     .global xm1_rtos_scheduler_\name
     .type xm1_rtos_scheduler_\name, %function
@@ -199,6 +200,7 @@ xm1_rtos_scheduler_pool:
 "#
 );
 
+#[cfg(not(feature = "component"))]
 #[panic_handler]
 fn panic(_: &PanicInfo<'_>) -> ! {
     loop {}

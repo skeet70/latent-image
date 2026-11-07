@@ -3,7 +3,13 @@ load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
 
 package(default_visibility = ["//visibility:public"])
 
-exports_files(["regions.json"])
+exports_files([
+    "regions.json",
+    "scheduler-a-placement.ld",
+    "scheduler-b-placement.ld",
+    "scheduler-s2-a-placement.ld",
+    "scheduler-s2-b-placement.ld",
+])
 
 [
     xm1_rust_staticlib(
@@ -30,6 +36,7 @@ exports_files(["regions.json"])
             "-Wl,--orphan-handling=error",
         ],
         link_script = "scheduler-%s.ld" % domain,
+        link_includes = ["scheduler-%s-placement.ld" % domain],
     )
     for domain in ["a", "b"]
 ]
@@ -117,6 +124,7 @@ exports_files(["regions-s2.json", "regions-s3a.json"])
         entry = "xm1_rtos_scheduler_save",
         extra_ldflags = ["-Wl,--gc-sections", "-Wl,--orphan-handling=error"],
         link_script = "scheduler-s2-%s.ld" % domain,
+        link_includes = ["scheduler-s2-%s-placement.ld" % domain],
     )
     for domain in ["a", "b"]
 ]
@@ -179,3 +187,14 @@ exports_files(["regions-s3c.json"])
     )
     for domain in ["a", "b"]
 ]
+
+genrule(
+    name = "scheduler-host-rlib",
+    srcs = [
+        "src/lib.rs",
+        "//replacement/rtos_layout:src/lib.rs",
+    ],
+    outs = ["libxm1_rtos_scheduler.rlib"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --crate-name=xm1_rtos_scheduler --crate-type=rlib -o $@ $(location src/lib.rs)",
+    tools = ["@lab_rustc//:bin/rustc"],
+)

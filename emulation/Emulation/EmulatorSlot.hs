@@ -20,7 +20,8 @@ import qualified Data.ByteString as B
 import Data.Char (isDigit)
 import Data.List (isSuffixOf, stripPrefix)
 import Emulation.HostAdmission (MemoryMax (..), ResourceClass (Emulator), classConcurrency, classMemoryMax, memoryMaxBytes, parseMemoryMax, userScopeAvailable)
-import System.Directory (createDirectoryIfMissing, doesDirectoryExist, getHomeDirectory, listDirectory, removeFile)
+import FujiAF.StorageBudget (checkStorageBudget)
+import System.Directory (createDirectoryIfMissing, doesDirectoryExist, getCurrentDirectory, getHomeDirectory, listDirectory, removeFile)
 import System.Environment (getExecutablePath, lookupEnv, setEnv)
 import System.FilePath ((</>))
 import System.IO (Handle, IOMode (ReadMode, WriteMode), SeekMode (AbsoluteSeek), hFlush, hPutStrLn, stderr, withBinaryFile)
@@ -78,12 +79,15 @@ slotPolicyFromEnvironment = do
 -- path: a concurrent build relinks that path while the wait runs.
 reexecInSlot :: SlotPolicy -> [String] -> IO ()
 reexecInSlot policy arguments = do
+  storage <- lookupEnv "XM1_STORAGE_PATH" >>= maybe defaultStoragePath pure
+  checkStorageBudget storage
   inside <- lookupEnv slotVariable
   case inside of
     Just _ -> pure ()
     Nothing -> do
       directory <- slotDirectory
       Slot slot <- acquire directory
+      checkStorageBudget storage
       setEnv slotVariable (show slot)
       executable <- pinExecutable directory
       scoped <- userScopeAvailable
@@ -101,6 +105,12 @@ reexecInSlot policy arguments = do
           hFlush stderr
           executeFile executable False arguments Nothing
 
+defaultStoragePath :: IO FilePath
+defaultStoragePath = do
+  root <- getCurrentDirectory
+  let private = root </> "private-data"
+  exists <- doesDirectoryExist private
+  pure (if exists then private else root)
 slotDirectory :: IO FilePath
 slotDirectory = do
   directory <- (</> ".cache" </> "xm1-emulator-slots") <$> getHomeDirectory

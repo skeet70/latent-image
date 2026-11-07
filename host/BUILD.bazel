@@ -1,4 +1,4 @@
-load("@rules_haskell//haskell:defs.bzl", "haskell_library", "haskell_toolchain_library")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test", "haskell_toolchain_library")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -467,5 +467,57 @@ haskell_library(
         ":scientific",
         ":text",
         ":vector",
+    ],
+)
+
+haskell_library(
+    name = "storage-budget",
+    srcs = ["FujiAF/StorageBudget.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+    ],
+    src_strip_prefix = ".",
+    deps = [
+        ":base",
+        ":directory",
+        ":filepath",
+        ":process",
+        ":unix",
+    ],
+)
+
+haskell_binary(
+    name = "storage-budget-probe",
+    srcs = ["StorageBudgetProbe.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+    ],
+    deps = [
+        ":base",
+        ":storage-budget",
+    ],
+)
+
+haskell_test(
+    name = "storage-budget-tests",
+    srcs = ["StorageBudgetTests.hs"],
+    args = ["$(rootpath :storage-budget-probe)"],
+    data = [":storage-budget-probe"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+    ],
+    deps = [
+        ":base",
+        ":directory",
+        ":filepath",
+        ":process",
+        ":unix",
     ],
 )

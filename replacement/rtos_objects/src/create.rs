@@ -22,6 +22,8 @@ pub struct MailboxAttributes(pub u32);
 pub trait Machine {
     fn load_word(&self, at: GuestAddress) -> u32;
     fn store_word(&self, at: GuestAddress, value: u32);
+    fn load_byte(&self, at: GuestAddress) -> u8;
+    fn store_byte(&self, at: GuestAddress, value: u8);
     fn mask_interrupts(&self) -> SavedInterrupts;
     fn restore_interrupts(&self, saved: SavedInterrupts);
     fn dmb(&self);

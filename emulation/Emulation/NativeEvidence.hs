@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Emulation.NativeEvidence
   ( EvidenceMode (..), ComparisonScope (..), EvidenceStore, newEvidenceStore, writeEvidence
-  , InputPool, newInputPool, stageInput
+  , InputPool, withInputPool, stageInput
   ) where
 
 import Control.Concurrent.MVar
@@ -19,7 +19,7 @@ import qualified Data.Text as T
 import Data.Word (Word32)
 import qualified Emulation.NativeObservation as N
 import Emulation.Sha256 (Sha256, sha256, sha256Hex)
-import System.Directory (makeAbsolute, removeDirectoryRecursive, renameFile)
+import System.Directory (canonicalizePath, removeDirectoryRecursive, renameFile)
 import System.FilePath ((</>), takeDirectory)
 import System.Posix.Files (createLink, setFileMode)
 import System.Posix.Temp (mkdtemp)
@@ -55,6 +55,9 @@ newEvidenceStore mode = EvidenceStore mode <$> newMVar M.empty
 
 data InputPool = InputPool FilePath (MVar (M.Map Digest EvidencePath))
 
+withInputPool :: FilePath -> (InputPool -> IO a) -> IO a
+withInputPool out = bracket (newInputPool out) (\(InputPool root _) -> removeDirectoryRecursive root)
+
 newInputPool :: FilePath -> IO InputPool
 newInputPool out = do
   root <- mkdtemp (out </> ".native-inputs-")
@@ -85,7 +88,7 @@ writeEvidence :: EvidenceStore -> ComparisonScope -> FilePath -> Value -> Value 
 writeEvidence (EvidenceStore mode owners) scope dir caseValue report result =
   case (mode, scope, parseEither (parseDiagnostic caseValue result) report) of
     (CompactSuccesses, PublicSpans, Right diagnostic) -> modifyMVar_ owners $ \classes -> do
-      path <- makeAbsolute (dir </> "runner-report.json")
+      path <- (</> "runner-report.json") <$> canonicalizePath dir
       let key = classKey diagnostic
       case M.lookup key classes of
         Nothing -> do
