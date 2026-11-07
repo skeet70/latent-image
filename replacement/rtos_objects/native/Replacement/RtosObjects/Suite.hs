@@ -12,7 +12,7 @@ import Emulation.NativeCase (CaseId (..), caseIdText)
 import qualified Emulation.NativeObservation as N
 import Emulation.NativeObservation (Barrier (..), KernelObservation (..), NativeObservation (..), Ordered (..), RegionId (..), Register (..), RunnerStatus (..), Write (..), WriteValue (..))
 import Emulation.OwnedCase (CaseOutcome (..), CaseSpec (..), KernelCase (..), Permission (..), assemble, caseOutcome, mkRegion, plainLimit, readWordAt, word32le, writeBatch)
-import Replacement.RtosObjects.Layout
+import Replacement.RtosObjects.Layout hiding (record)
 import Replacement.RtosOwnFirst.Regions (Domain (..), GuestAddress (..))
 import System.FilePath ((</>))
 
@@ -138,7 +138,7 @@ taskAt :: Facts -> Domain -> Slot -> Word32
 taskAt facts domain = task facts domain . slotWord
 
 threadValue :: Domain -> Slot -> Word32
-threadValue domain slot = 0xc01d0000 + (if domain == DomainA then 0 else 0x100) + slotWord slot
+threadValue domain slot = ((if domain == DomainA then 1 else 2) `shiftL` 16) .|. slotWord slot
 
 packedState :: Word8 -> Word32 -> Word32
 packedState state priority = fromIntegral state .|. (priority `shiftL` 8)
