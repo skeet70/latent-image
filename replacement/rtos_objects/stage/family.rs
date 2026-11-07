@@ -75,6 +75,7 @@ impl Block for Cpu {
 #[repr(transparent)]
 struct LifecycleMask(u32);
 
+#[inline(never)]
 fn mask_lifecycle() -> LifecycleMask {
     let saved: u32;
     let set: u32;
@@ -91,6 +92,7 @@ fn mask_lifecycle() -> LifecycleMask {
     LifecycleMask(saved & 0xc0)
 }
 
+#[inline(never)]
 fn restore_lifecycle(saved: LifecycleMask) {
     let current: u32;
     let restored: u32;
@@ -109,6 +111,7 @@ fn restore_lifecycle(saved: LifecycleMask) {
 }
 
 /// Stock retry addresses `0x488e8` / `0x4892c`.
+#[inline(never)]
 fn unmask_i() {
     let current: u32;
     let cleared: u32;
