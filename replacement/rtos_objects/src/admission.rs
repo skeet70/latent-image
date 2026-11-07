@@ -183,15 +183,17 @@ impl EntryPolicy {
     }
 }
 
-#[cfg_attr(feature = "family", inline(never))]
-fn admit_entry(
-    entry: &Entry,
+#[derive(Clone, Copy)]
+struct EntryAdmission {
+    entry: Entry,
     entry_domain: EntryDomain,
     id: EncodedId,
-    policy: EntryPolicy,
-) -> Result<Domain, ObjectStatus> {
-    validate_entry(entry, policy)?;
-    target(entry_domain, id.class())
+}
+
+#[cfg_attr(feature = "family", inline(never))]
+fn admit_entry(header: &EntryAdmission, policy: EntryPolicy) -> Result<Domain, ObjectStatus> {
+    validate_entry(&header.entry, policy)?;
+    target(header.entry_domain, header.id.class())
 }
 
 /// The stock order: context, IRQ mask, dispatch word, class, index, family parameters, then the
@@ -202,6 +204,11 @@ pub fn admit_flag<R: Records, F: Facts>(
     records: &R,
     facts: &F,
 ) -> Result<AdmittedFlag, ObjectStatus> {
+    let header = EntryAdmission {
+        entry: request.entry,
+        entry_domain: request.entry_domain,
+        id: request.id,
+    };
     let policy = if service.handler() {
         EntryPolicy::Handler
     } else if service.blocks() {
@@ -209,7 +216,7 @@ pub fn admit_flag<R: Records, F: Facts>(
     } else {
         EntryPolicy::Task
     };
-    let domain = admit_entry(&request.entry, request.entry_domain, request.id, policy)?;
+    let domain = admit_entry(&header, policy)?;
     let id = resolve_flag_in(domain, request.id, records.flags(domain))?;
     let (want, mode, timeout) = match service {
         FlagService::Set | FlagService::SetHandler | FlagService::Clear => {
@@ -247,12 +254,17 @@ pub fn admit_mailbox<R: Records, F: Facts>(
     records: &R,
     facts: &F,
 ) -> Result<AdmittedMailbox, ObjectStatus> {
+    let header = EntryAdmission {
+        entry: request.entry,
+        entry_domain: request.entry_domain,
+        id: request.id,
+    };
     let policy = if service.blocks() {
         EntryPolicy::BlockingTask
     } else {
         EntryPolicy::Task
     };
-    let domain = admit_entry(&request.entry, request.entry_domain, request.id, policy)?;
+    let domain = admit_entry(&header, policy)?;
     let id = resolve_mailbox_in(domain, request.id, records.mailboxes(domain))?;
     let object = Object::Mailbox(id);
     let send = matches!(service, MailboxService::Send);
