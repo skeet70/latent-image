@@ -261,8 +261,6 @@ fn delete_mailbox_entry(id: i32) -> i32 {
 
 #[derive(Clone, Copy)]
 enum FlagInvocation {
-    Create { id: i32, request_pointer: u32 },
-    Delete { id: i32 },
     Set { id: i32, bits: u32 },
     SetHandler { id: i32, bits: u32 },
     Clear { id: i32, keep: u32 },
@@ -273,8 +271,6 @@ enum FlagInvocation {
 
 #[derive(Clone, Copy)]
 enum MailboxInvocation {
-    Create { id: i32, request_pointer: u32 },
-    Delete { id: i32 },
     Send { id: i32, message: u32 },
     Receive { id: i32, message_out: u32 },
     TimedReceive { id: i32, message_out: u32, timeout: i32 },
@@ -282,48 +278,46 @@ enum MailboxInvocation {
 }
 
 impl FlagInvocation {
-    fn admission(self) -> Option<(Service, FlagService, bool, i32, Params)> {
+    fn admission(self) -> (Service, FlagService, bool, i32, Params) {
         match self {
-            FlagInvocation::Create { .. } | FlagInvocation::Delete { .. } => None,
             FlagInvocation::Set { id, .. } => {
-                Some((Service::FlagSet, FlagService::Set, false, id, Params::NONE))
+                (Service::FlagSet, FlagService::Set, false, id, Params::NONE)
             }
             FlagInvocation::SetHandler { id, .. } => {
-                Some((Service::FlagSetHandler, FlagService::SetHandler, false, id, Params::NONE))
+                (Service::FlagSetHandler, FlagService::SetHandler, false, id, Params::NONE)
             }
             FlagInvocation::Clear { id, .. } => {
-                Some((Service::FlagClear, FlagService::Clear, false, id, Params::NONE))
+                (Service::FlagClear, FlagService::Clear, false, id, Params::NONE)
             }
-            FlagInvocation::Wait { id, pattern, mode, .. } => Some((
+            FlagInvocation::Wait { id, pattern, mode, .. } => (
                 Service::FlagWait,
                 FlagService::Wait,
                 true,
                 id,
                 Params { pattern: Pattern(pattern), mode, timeout: None, message: None },
-            )),
-            FlagInvocation::TimedWait { id, pattern, mode, timeout, .. } => Some((
+            ),
+            FlagInvocation::TimedWait { id, pattern, mode, timeout, .. } => (
                 Service::FlagTimedWait,
                 FlagService::TimedWait,
                 true,
                 id,
                 Params { pattern: Pattern(pattern), mode, timeout: Some(timeout), message: None },
-            )),
-            FlagInvocation::Poll { id, pattern, mode, .. } => Some((
+            ),
+            FlagInvocation::Poll { id, pattern, mode, .. } => (
                 Service::FlagPoll,
                 FlagService::Poll,
                 false,
                 id,
                 Params { pattern: Pattern(pattern), mode, timeout: None, message: None },
-            )),
+            ),
         }
     }
 }
 
 impl MailboxInvocation {
-    fn admission(self) -> Option<(Service, MailboxService, bool, i32, Params)> {
+    fn admission(self) -> (Service, MailboxService, bool, i32, Params) {
         match self {
-            MailboxInvocation::Create { .. } | MailboxInvocation::Delete { .. } => None,
-            MailboxInvocation::Send { id, message } => Some((
+            MailboxInvocation::Send { id, message } => (
                 Service::MailboxSend,
                 MailboxService::Send,
                 false,
@@ -334,28 +328,28 @@ impl MailboxInvocation {
                     timeout: None,
                     message: Some(Message(GuestAddress(message))),
                 },
-            )),
-            MailboxInvocation::Receive { id, .. } => Some((
+            ),
+            MailboxInvocation::Receive { id, .. } => (
                 Service::MailboxReceive,
                 MailboxService::Receive,
                 true,
                 id,
                 Params { pattern: Pattern(0), mode: 0, timeout: None, message: None },
-            )),
-            MailboxInvocation::TimedReceive { id, timeout, .. } => Some((
+            ),
+            MailboxInvocation::TimedReceive { id, timeout, .. } => (
                 Service::MailboxTimedReceive,
                 MailboxService::TimedReceive,
                 true,
                 id,
                 Params { pattern: Pattern(0), mode: 0, timeout: Some(timeout), message: None },
-            )),
-            MailboxInvocation::Poll { id, .. } => Some((
+            ),
+            MailboxInvocation::Poll { id, .. } => (
                 Service::MailboxPoll,
                 MailboxService::Poll,
                 false,
                 id,
                 Params { pattern: Pattern(0), mode: 0, timeout: None, message: None },
-            )),
+            ),
         }
     }
 }
@@ -430,12 +424,7 @@ fn receive_admitted(admitted: AdmittedMailbox, message_out: u32) -> i32 {
 
 #[inline(never)]
 fn flag_router(invocation: FlagInvocation) -> i32 {
-    match &invocation {
-        FlagInvocation::Create { id, request_pointer } => return create_flag_entry(*id, *request_pointer),
-        FlagInvocation::Delete { id } => return delete_flag_entry(*id),
-        _ => {}
-    }
-    let (service, flag_service, blocking, id, params) = invocation.admission().unwrap();
+    let (service, flag_service, blocking, id, params) = invocation.admission();
     let admitted = match admit_flag(
         &request(service, blocking, id, params),
         flag_service,
@@ -471,20 +460,12 @@ fn flag_router(invocation: FlagInvocation) -> i32 {
                 Err(status) => status.code(),
             }
         }
-        FlagInvocation::Create { .. } | FlagInvocation::Delete { .. } => unreachable!(),
     }
 }
 
 #[inline(never)]
 fn mailbox_router(invocation: MailboxInvocation) -> i32 {
-    match &invocation {
-        MailboxInvocation::Create { id, request_pointer } => {
-            return create_mailbox_entry(*id, *request_pointer)
-        }
-        MailboxInvocation::Delete { id } => return delete_mailbox_entry(*id),
-        _ => {}
-    }
-    let (service, mailbox_service, blocking, id, params) = invocation.admission().unwrap();
+    let (service, mailbox_service, blocking, id, params) = invocation.admission();
     let admitted = match admit_mailbox(
         &request(service, blocking, id, params),
         mailbox_service,
@@ -507,7 +488,6 @@ fn mailbox_router(invocation: MailboxInvocation) -> i32 {
                 Err(status) => status.code(),
             }
         }
-        MailboxInvocation::Create { .. } | MailboxInvocation::Delete { .. } => unreachable!(),
     }
 }
 
@@ -517,7 +497,7 @@ fn mailbox_router(invocation: MailboxInvocation) -> i32 {
 #[link_section = ".text.family_flag_create"]
 pub extern "C" fn xm1_rtos_objects_family_flag_create(id: i32, request_pointer: u32) -> i32 {
     let saved = mask_lifecycle();
-    let code = flag_router(FlagInvocation::Create { id, request_pointer });
+    let code = create_flag_entry(id, request_pointer);
     restore_lifecycle(saved);
     code
 }
@@ -528,7 +508,7 @@ pub extern "C" fn xm1_rtos_objects_family_flag_create(id: i32, request_pointer: 
 #[link_section = ".text.family_flag_delete"]
 pub extern "C" fn xm1_rtos_objects_family_flag_delete(id: i32) -> i32 {
     let saved = mask_lifecycle();
-    let code = flag_router(FlagInvocation::Delete { id });
+    let code = delete_flag_entry(id);
     restore_lifecycle(saved);
     code
 }
@@ -587,7 +567,7 @@ pub extern "C" fn xm1_rtos_objects_family_flag_poll(id: i32, pattern: u32, mode:
 #[link_section = ".text.family_mailbox_create"]
 pub extern "C" fn xm1_rtos_objects_family_mailbox_create(id: i32, request_pointer: u32) -> i32 {
     let saved = mask_lifecycle();
-    let code = mailbox_router(MailboxInvocation::Create { id, request_pointer });
+    let code = create_mailbox_entry(id, request_pointer);
     restore_lifecycle(saved);
     code
 }
@@ -598,7 +578,7 @@ pub extern "C" fn xm1_rtos_objects_family_mailbox_create(id: i32, request_pointe
 #[link_section = ".text.family_mailbox_delete"]
 pub extern "C" fn xm1_rtos_objects_family_mailbox_delete(id: i32) -> i32 {
     let saved = mask_lifecycle();
-    let code = mailbox_router(MailboxInvocation::Delete { id });
+    let code = delete_mailbox_entry(id);
     restore_lifecycle(saved);
     code
 }
