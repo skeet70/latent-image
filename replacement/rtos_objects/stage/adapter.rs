@@ -13,7 +13,7 @@ use objects::message::{MessagePriority, PriorityLimit};
 use objects::wake::{DispatchTarget, Selection, Wake};
 use objects::*;
 
-#[cfg(all(target_arch = "arm", not(test), not(feature = "component")))]
+#[cfg(all(target_arch = "arm", not(test)))]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
     loop {}

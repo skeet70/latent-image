@@ -25,8 +25,8 @@ xm1_rust_staticlib(
 )
 
 [
-    xm1_rust_rlib(
-        name = "objects-f2-adapter-%s-rlib" % domain,
+    xm1_rust_staticlib(
+        name = "objects-f2-adapter-%s" % domain,
         src = "stage/adapter.rs",
         crate_name = "xm1_rtos_objects_f2_adapter",
         data = [
@@ -43,7 +43,7 @@ xm1_rust_staticlib(
             "src/wake.rs",
             "//replacement/rtos_layout:src/lib.rs",
         ],
-        rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain, "--cfg", "'feature=\"component\"'"],
+        rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain],
     )
     for domain in ["a", "b"]
 ]
@@ -76,20 +76,15 @@ xm1_rust_staticlib(
     for domain in ["a", "b"]
 ]
 
-xm1_rust_rlib(
-    name = "objects-f2-panic",
-    src = "stage/panic.rs",
-    crate_name = "xm1_rtos_objects_f2_panic",
-)
+
 
 [
     xm1_rust_elf(
         name = "objects-f2-stage-%s" % domain,
-        rust_staticlib = ":objects-f2-adapter-%s-rlib" % domain,
+        rust_staticlib = ":objects-f2-adapter-%s" % domain,
         rust_components = [
             ":scheduler-%s-component" % domain,
             ":scheduler-s2-%s-component" % domain,
-            ":objects-f2-panic",
         ],
         link_script = "stage/f2-%s.ld" % domain,
         link_includes = [

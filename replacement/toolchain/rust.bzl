@@ -145,11 +145,15 @@ def xm1_rust_elf(
     if entry != None:
         link.append("-Wl,-e,%s" % entry)
     link += extra_ldflags
-    link += [
-        "$$objects",
-        "$(location %s)" % rust_staticlib,
-    ]
-    link += ["$(location %s)" % component for component in rust_components]
+    link += ["$$objects"]
+    if rust_components:
+        # The primary archive carries the Rust runtime; the group lets later component
+        # references resolve against it.
+        link += ["-Wl,--start-group", "$(location %s)" % rust_staticlib]
+        link += ["$(location %s)" % component for component in rust_components]
+        link += ["-Wl,--end-group"]
+    else:
+        link += ["$(location %s)" % rust_staticlib]
     link += [
         "-o",
         "$(@D)/%s.elf" % name,
