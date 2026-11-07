@@ -68,14 +68,6 @@ impl Mock {
     fn index(&self, entry: TimerEntry) -> u32 {
         self.word(entry.address().0)
     }
-
-    fn node_expiry(&self, slot: u32) -> u32 {
-        self.word(NODES + (slot - 1) * 8)
-    }
-
-    fn node_entry(&self, slot: u32) -> u32 {
-        self.word(NODES + (slot - 1) * 8 + 4)
-    }
 }
 
 impl Machine for Mock {
@@ -169,7 +161,6 @@ fn last_entry_and_empty_detached_cancel_change_nothing() {
     let before = mock.word(COUNT);
     assert_eq!(remove(&mock, heap, only), Ok(Removed::Noop));
     assert_eq!(mock.word(COUNT), before);
-    assert_eq!(mock.node_expiry(1), 0);
 }
 
 #[test]
