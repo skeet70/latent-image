@@ -194,6 +194,7 @@ haskell_binary(
         ":family-suite",
         "//emulation:fujimod-paths",
         "//host:aeson",
+        "//host:storage-budget",
         "//host:base",
         "//host:bytestring",
         "//host:directory",

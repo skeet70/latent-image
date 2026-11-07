@@ -152,6 +152,28 @@ CPU is process user plus system time. Cold process CPU falls 36.4% in this pair,
 
 Reproduction inputs, six exact child commands, time/load files, receipts, the selected control log and the paired summary are under `private-data/scratch/R4fGuardOnce/`, in `before-shared/`, `after-shared/`, `controls.txt` and `measurements.json`. The before package is `/nix/store/xrjb9hxbrr8rma96zhzhc6l20m03202b-fujimod-xm1-0.1.0`; the after package is `/nix/store/b64cdm2s1b6mpvf8mlcrbpzvzxmvg1ii-fujimod-xm1-0.1.0`. All runs use `XM1_EMULATOR_SLOTS=1` through `//emulation:emulator-slot`.
 
+### Upstream 4661bf97 qualification, #158
+
+The upstream `4661bf974b7213137d6d7b1a3a572612c97b83d5` candidate remains in qualification under [#158](https://github.com/skeet70/latent-image/issues/158). The results below are unmerged qualification evidence, not accepted main gates. No completed matrix qualifies the current canonical-backing-read engine, and retained acceptance routes remain authoritative.
+
+`E-FUJIMOD-UPSTREAM-PIN-REBASE-150` binds the compacted findings and retained counterexamples in the [evidence ledger](../docs/evidence.jsonl).
+
+| Frozen candidate | Complete matrix outcome | Differences and limits |
+| --- | --- | --- |
+| `9ef1944b`, SDK `0jg64b2piibck7whsrd0ww9nc8m8ap79` | 22 routes, failure | 512 differences: six wall-time fields, 305 added receipt-metadata fields, 181 removed true menu-result booleans, 16 missing native observations after an archive prerequisite failure, four guest-entry counts. Native SD has no receipt. |
+| `907fd9ad`, SDK `89ly90xr7r8fs7l835vlbwmf51q7jpmn` | 22 routes, failure | 522 differences: the same six wall-time, 305 metadata, 181 removed-boolean and four guest-entry fields; 26 native SD case-input identity differences replace the earlier native prerequisite failure. Native volatile passes with zero differences; native SD exits 0 but fails comparison. This engine lacks canonical backing reads. |
+| `e0ec66de` engine, coordinator generation `ee153f43`, SDK `l45fkj1x78s9cd387qkaqpzz7gimciv1` | Incomplete, protected continuation | Eleven routes have logged exits, updater-CC has a completed receipt awaiting coordinator reap, and ten routes remain. There is no final report or qualification verdict. |
+
+Both completed classified matrices retain 349 incomplete key-release observations across 14 routes, separate from comparator differences. The six RAM/USB FujiMod counterpart comparisons have zero differences, including the USB model's matching endpoint-detach blocks and exit 1; matching a blocked reference does not qualify the detached endpoint. The separate FujiMod flash-boot check still differs in four aggregate/milestone guest-entry counts despite matching frame hashes. Added metadata describes a schema change, not behavioral equivalence; the 181 removed booleans, native input identities, entry counts and incomplete release boundaries remain unwaived. No baseline or exclusion was changed to make these comparisons pass.
+
+The interrupted `matrix-qualified` run also contains a failed native `s-dial-base-restore-refused` case with `runner_status: unknown_call` and missing function `rb_avail_listed`. Its full case remains retained separately from successful native traces; the later candidate's successful suite does not erase that input-specific counterexample.
+
+The current frozen engine's default build and source reviews are recorded separately from execution qualification. The reviewed `bbd70f35` consumer-pin correction is outside the frozen `ee153f43` matrix and cannot inherit its results. Earlier cold-flash controls retain byte-identical sets of 23 PNGs after restoring the prior raster laws; those controls do not waive the remaining guest-entry differences.
+
+Private reproduction and retention are indexed by `private-data/scratch/FujiModPinBump/qualification-compaction.json`. Keep the entire `matrix-backing-ee153f43/` continuation, its receipts, key releases, runtimes, cache and pinned launcher inputs, `qualification-baselines/` and its manifest, `qualification-route-inputs.sha256`, `matrix-inputs/`, frozen source manifests/reviews and their referenced source generations. Keep the completed classified reports and actionable raw counterexamples until their last report, ledger, baseline and unmerged-branch citations are resolved. A compact summary is not permission to discard body-specific inputs or source snapshots.
+
+The next runnable action is the existing `backing-resume-plan.json`, not a fresh matrix: it requires explicit containment/lease clearance, a separately authorized build-only launcher preflight, then authorized continuation of the same stopped coordinator. Completed firmware routes must not be repeated. Historical completed emulator scopes used 8 GiB; the remaining queue is constrained to 2 GiB without swap, with the paused parent's recorded 2 GiB/512 MiB exception. A missing or resource-refused remaining comparison leaves qualification incomplete; this is not an all-2-GiB matrix proof.
+
 ## Retained capabilities still missing from the supported FujiMod path
 
 This is an integration inventory at main `9b169a3`, not a claim that the upstream Rust runtime cannot implement these features. Estimates are **[INFERENCE] engineering days** for one contributor familiar with this code, including behavioral tests, documentation and matched-input checks. They are ranges, not measured durations or commitments; upstream/legal waiting time is excluded. Several rows share work, so their totals are not a schedule.

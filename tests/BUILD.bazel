@@ -53,16 +53,3 @@ sh_test(
     ],
 )
 
-sh_test(
-    name = "reclaim-disk",
-    size = "small",
-    srcs = ["reclaim-disk.sh"],
-    args = [
-        "$(location //build-support:reclaim-disk.sh)",
-        "$(location @lab_git//:bin/git)",
-    ],
-    data = [
-        "//build-support:reclaim-disk.sh",
-        "@lab_git//:bin/git",
-    ],
-)

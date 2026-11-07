@@ -17,7 +17,7 @@ import System.IO (Handle, hClose, hGetLine, hWaitForInput)
 import System.Posix.Files (setFileMode)
 import System.Posix.Process (getProcessID)
 import System.Posix.User (getEffectiveUserID)
-import System.Process (CreateProcess (..), ProcessHandle, StdStream (CreatePipe), createProcess, getProcessExitCode, proc, waitForProcess)
+import System.Process (CreateProcess (..), ProcessHandle, StdStream (CreatePipe), createProcess, getProcessExitCode, proc, readCreateProcessWithExitCode, waitForProcess)
 import System.Timeout (timeout)
 
 expect :: String -> Bool -> IO Bool
@@ -99,7 +99,13 @@ run source = do
   aloneCode <- waitForProcess (probeProcess alone)
   sessionlessOk <- expect "without a user session the probe still runs in its slot"
     (aloneCode == ExitSuccess && admittedSlot aloneAdmission /= Nothing)
-  let outcomes = [bothOk, startedOk, waitedOk, takenOk, codeOk, originalOk, sessionlessOk]
+  let lowStorageEnvironment = ("XM1_STORAGE_MIN_FREE", "999999999999999999999T")
+        : filter ((/= "XM1_STORAGE_MIN_FREE") . fst) environment
+  (lowStorageCode, lowStorageOutput, _) <- readCreateProcessWithExitCode
+    (proc source []) {env = Just lowStorageEnvironment} ""
+  storageOk <- expect "insufficient disk reserve prevents an emulator-slot admission"
+    (lowStorageCode /= ExitSuccess && not (any (isInfixOf "probe-in-slot ") (lines lowStorageOutput)))
+  let outcomes = [bothOk, startedOk, waitedOk, takenOk, codeOk, originalOk, sessionlessOk, storageOk]
       shown (Admission seen slot) = show seen ++ " -> " ++ show slot
   unless (and outcomes) $ putStrLn ("probe admissions: " ++ unwords (map shown [firstAdmission, secondAdmission, thirdAdmission, aloneAdmission]))
   pure (and outcomes)
@@ -150,6 +156,6 @@ probeEnvironment home = do
   let runtime = "/run/user/" ++ show uid
       keep name value environment =
         if any ((== name) . fst) environment then environment else (name, value) : environment
-  pure (("HOME", home) : ("XM1_EMULATOR_SLOTS", "1")
-    : filter ((/= "XM1_EMULATOR_SLOT") . fst)
+  pure (("HOME", home) : ("XM1_EMULATOR_SLOTS", "1") : ("XM1_STORAGE_MIN_FREE", "1")
+    : filter ((`notElem` ["XM1_EMULATOR_SLOT", "XM1_STORAGE_MIN_FREE"]) . fst)
       (keep "XDG_RUNTIME_DIR" runtime (keep "DBUS_SESSION_BUS_ADDRESS" ("unix:path=" ++ runtime ++ "/bus") inherited)))

@@ -31,6 +31,8 @@ devenv shell -- bazel test --lockfile_mode=error --repository_disable_download -
 
 One Bazel server serves one output base, so two commands in the same checkout queue on its lock even when their targets do not overlap. Concurrent agents each use their own output base; `.bazelrc` points every base at the same local disk cache, `~/.cache/bazel-disk/latent-image`, so an action built in one base is reused by the others. The cache holds build outputs of private-data inputs and stays on this machine.
 
+Bazel 7.6's native disk-cache garbage collector keeps this cache within 20 GiB and expires entries older than 14 days after one idle minute. These bounds apply to Bazel's action cache, not output bases, Cargo targets or research artifacts. An active build can temporarily exceed the cache bound.
+
 Each output base starts its own server JVM. `.bazelrc` caps that heap at 2 GiB and stops a server after 10 idle minutes, which keeps several concurrent bases inside host memory.
 
 Concurrent agents also work in separate git worktrees, so an edit in one never invalidates another agent's build or emulator run. `build-support/agent-worktree.sh NAME [BASE]` creates `../latent-image-worktrees/NAME` on branch `agent/NAME`, symlinks the checkout's ignored `private-data/` into it and prints the output base to use. The agent commits on its `agent/NAME` branch; the integration owner merges it. Once the branch is merged into the main work branch, the integration owner removes the worktree (`git worktree remove ../latent-image-worktrees/NAME`), deletes the branch and deletes `~/.cache/bazel/latent-image-NAME`.
@@ -39,9 +41,30 @@ Concurrent agents also work in separate git worktrees, so an edit in one never i
 devenv shell -- bazel --output_base="$HOME/.cache/bazel/latent-image-$AGENT" test //emulation:native-runner-tests
 ```
 
-`build-support/reclaim-disk.sh` lists old, uncited run output and orphaned Bazel output bases; `--apply` deletes the queued paths. Current ignored files under `private-data/verify-candidate/baselines/` count as citations. Output bases are retained when their recorded workspace directory exists, regardless of the base name; unmarked bases are retained. Only servers belonging to bases queued for deletion are signalled, and only with `--apply`. `//tests:reclaim-disk` covers these guards with a synthetic repository and cache.
+Research output is compacted under the [evidence ledger rules](../docs/principles.md#evidence-ledger). A deletion plan names the current conclusions and failure classes preserved, the retained evidence and the exact redundant files to remove. Record path hashes and preservation checks under `private-data/scratch/reclaim/`, and recheck active runs, current baselines and unmerged work before applying it.
 
-The age index caches recent paths; a cache miss is checked against the live filesystem before queuing deletion. Output created during citation collection remains protected by the age window. Identify active research directories before applying a reclaim plan.
+Build cleanup is restricted to identified compiler or cache outputs whose consumers are idle. Preserve source, application databases, generated imports, reports and input artifacts even when they live under a build directory. Verify the preserved files after removal.
+
+`//build-support:storage-maintenance` provides explicit Cargo cache inventory, plan and apply operations. Inventory reads metadata, Cargo provenance and compiler headers without hashing application contents. A plan streams SHA-256 hashes of all regular files, including protected data; apply revalidates the complete snapshot under Cargo's BSD `flock` locks before unlinking selected compiler files. Source trees and Git metadata, databases, imports, reports, firmware inputs, top-level executables, examples, unknown files and hardlinked files are retained. Only validated success fingerprints associated with selected compiler artifacts are invalidated.
+
+```sh
+target="$(realpath /path/to/cargo/target)"
+plan="$PWD/private-data/scratch/reclaim/cargo-plan.json"
+mkdir -p "$(dirname "$plan")"
+devenv shell -- bazel run //build-support:storage-maintenance -- inventory --cargo-target "$target" | jq
+devenv shell -- bazel run //build-support:storage-maintenance -- plan --cargo-target "$target" --output "$plan"
+jq '[.bindings[] | .root as $root | .entries[] | select(.disposition != "Retain") | {root: $root, path, size, disposition}]' "$plan"
+# Apply only after reviewing the selected files and confirming the consumers are idle.
+devenv shell -- bazel run //build-support:storage-maintenance -- apply --plan "$plan"
+```
+
+Repeat `--cargo-target` for additional explicit roots. Roots require Cargo markers, profile locks, `deps` and `.fingerprint` structures; selected compiler files require validated fingerprints. Symlinked roots, symlinks within a root, protected root paths and overlapping roots are refused. A Cargo root may contain preserved source and Git trees. No command recursively deletes a target, worktree or research directory. `private-data`, `.git` and the Nix store cannot be managed roots.
+
+Both `activeUsers` and `uninspectableUsers` must be empty before deletion. Checks cover working directories, executables, mapped files, open descriptors and `CARGO_TARGET_DIR` values. Ordinary invocations inspect the target owner's processes; privileged invocations inspect all visible userspace processes. Inaccessible processes make apply refuse without removing files; inventory still reports them. Request an explicitly authorized privileged host inspection when ordinary permissions are insufficient. Do not run Bazel as root or hide existing consumers in a PID namespace to bypass the check. The isolated test process creates every root it manages.
+
+Apply writes `PLAN.audit.json` with its phase, exact removals, protected-file verification and measured available-space changes. `Applying` or `Interrupted` is not a completed cleanup; inspect the named paths before proceeding. Changed plans, files, owners, inventories or active consumers require a new review. `recognizedBytes` is a logical size, not a promised physical saving on reflinked filesystems, and the measured filesystem delta includes concurrent activity.
+
+Emulator-slot admission, new `verify-candidate` executions and native suite/case output creation require 100 GiB available on the output filesystem. `XM1_STORAGE_MIN_FREE` accepts a positive byte count with optional `K`, `M`, `G`, `T` or `KiB`/`MiB`/`GiB`/`TiB` suffix. A generic `//emulation:emulator-slot` wrapper checks the current workspace's `private-data` filesystem, or its working directory when none exists; set `XM1_STORAGE_PATH` to the actual output location when it differs. Offline receipt judging and help remain available below the reserve. This is admission control, not a quota or a monitor that terminates existing runs, and it does not cap another project's Cargo output.
 
 Nix keeps an observer only while something roots it, and the out-links in a worktree's Bazel output base go with the worktree, so a cited receipt can outlive the binary that produced it. `build-support/store-roots.sh list|check|pin` covers the store paths the ledger cites: every store path in `docs/evidence.jsonl` and every store path whose `bin/` or `lib/` a ledger artifact of at most 1 GiB names. `pin` adds an indirect GC root for each one present at `private-data/store-roots/<store basename>`; `check` exits 1 while any present cited path has none; `missing` lines name paths already collected, which only a rebuild from their recorded source commit restores. Run `pin` when a record citing a new observer or bridge lands.
 

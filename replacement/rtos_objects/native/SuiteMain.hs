@@ -9,6 +9,7 @@ import Data.Aeson (object, (.=), encode)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import FujiAF.Host (failH)
+import FujiAF.StorageBudget (checkStorageBudget)
 import FujiModPaths (fujimodNativeCase)
 import System.Directory (createDirectoryIfMissing, makeAbsolute)
 import System.Environment (getArgs)
@@ -37,6 +38,7 @@ main = do
   loaderBBytes <- B.readFile loaderB
   ownedABytes <- B.readFile ownedA
   ownedBBytes <- B.readFile ownedB
+  checkStorageBudget (takeDirectory resultsPath)
   createDirectoryIfMissing True cacheRoot
   let stockA = Image 0x40000 loaderABytes
       stockB = Image 0xd0000 loaderBBytes
