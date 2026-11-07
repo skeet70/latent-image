@@ -10,6 +10,7 @@ xm1_rust_staticlib(
     crate_name = "xm1_rtos_objects",
     data = [
         "src/admission.rs",
+        "src/block.rs",
         "src/create.rs",
         "src/id.rs",
         "src/locked.rs",
@@ -31,6 +32,7 @@ xm1_rust_staticlib(
         crate_name = "xm1_rtos_objects_f2_adapter",
         data = [
             "src/admission.rs",
+            "src/block.rs",
             "src/create.rs",
             "src/id.rs",
             "src/lib.rs",
@@ -102,6 +104,7 @@ genrule(
     srcs = [
         "smoke.rs",
         "src/admission.rs",
+        "src/block.rs",
         "src/create.rs",
         "src/id.rs",
         "src/lib.rs",
@@ -126,6 +129,7 @@ genrule(
     name = "objects-host-tests-build",
     srcs = [
         "src/admission.rs",
+        "src/block.rs",
         "src/create.rs",
         "src/id.rs",
         "src/lib.rs",

@@ -5,6 +5,7 @@
 pub mod layout;
 
 pub mod admission;
+pub mod block;
 pub mod create;
 pub mod id;
 pub mod locked;
@@ -28,6 +29,7 @@ fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
 }
 
 pub use admission::{admit, flag_wait_locked, poll_result, Admitted, Entry, Facts, Object, Params, Records, Request, Service};
+pub use block::{receive, wait_flag, Block, BlockOutcome};
 pub use create::{
     create_flag, create_mailbox, FlagAttributes, FlagCreate, Machine, MailboxAttributes, MailboxCreate,
     SavedInterrupts,
@@ -40,4 +42,4 @@ pub use message::{MessagePriority, PriorityLimit};
 pub use order::{precedes, QueueOrder};
 pub use status::{ObjectStatus, WaitOutcome};
 pub use timeout::Timeout;
-pub use wake::{send, set_flag, DispatchTarget, Selection, Wake};
+pub use wake::{send, set_flag, set_flag_handler, DispatchTarget, Selection, Wake, WakeMode};

@@ -21,6 +21,12 @@ pub enum DispatchTarget {
     Remote,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum WakeMode {
+    Task,
+    Handler,
+}
+
 /// The release's primitives, keyed by the owner record the ABI supplies.
 pub trait Release: Machine {
     fn context(&self, domain: Domain) -> KernelContext;
@@ -41,6 +47,8 @@ pub trait Wake: ObjectLock + Release {
     fn notify(&self, id: u32) -> DispatchTarget;
     /// A `0x43640` / B `0xd3640`, with the stock body's code in r0.
     fn dispatch(&self, code: i32);
+    /// The entry domain's reschedule word, consumed at the outermost IRQ exit.
+    fn request_delayed_dispatch(&self);
 }
 
 fn unlink<M: Machine>(m: &M, task: Task) {
@@ -89,6 +97,15 @@ fn dispatch_after<M: Wake>(m: &M, owner: KernelContext, released: Selection) -> 
 
 /// Slot `+0x88`.
 pub fn set_flag<M: Wake>(m: &M, id: FlagId, bits: Pattern) {
+    set_flag_mode(m, id, bits, WakeMode::Task);
+}
+
+/// Slot `+0x8c`.
+pub fn set_flag_handler<M: Wake>(m: &M, id: FlagId, bits: Pattern) {
+    set_flag_mode(m, id, bits, WakeMode::Handler);
+}
+
+fn set_flag_mode<M: Wake>(m: &M, id: FlagId, bits: Pattern, wake: WakeMode) {
     let words = id.domain.words();
     let control = words.flag_control(id.slot);
     let config = words.flag_config(id.slot);
@@ -124,7 +141,14 @@ pub fn set_flag<M: Wake>(m: &M, id: FlagId, bits: Pattern) {
                 None => false,
             }
         })
-    }, |dispatch| if *dispatch { m.dispatch(-43) });
+    }, |dispatch| {
+        if *dispatch {
+            match wake {
+                WakeMode::Task => m.dispatch(-43),
+                WakeMode::Handler => m.request_delayed_dispatch(),
+            }
+        }
+    });
 }
 
 fn append_fifo<M: Machine>(m: &M, control: MailboxControl, message: Message) {

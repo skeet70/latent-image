@@ -1,7 +1,9 @@
 //! Host backend over the owned S1/S2 bodies in `xm1_rtos_scheduler`; models memory, the timer
 //! boundary and the doorbell.
+use crate::block::Block;
 use crate::create::{Machine as CreateMachine, SavedInterrupts};
-use crate::layout::{Domain, DomainId, GuestAddress, KernelContext, LockRecord, Task};
+use crate::layout::{Domain, DomainId, GuestAddress, KernelContext, LockRecord, Task, WaitQueue};
+use crate::order::QueueOrder;
 use crate::locked::ObjectLock;
 use crate::wake::{DispatchTarget, Release, Selection, Wake};
 use std::cell::{Cell, RefCell};
@@ -12,6 +14,7 @@ pub struct Sim {
     words: RefCell<BTreeMap<u32, u32>>,
     entry: Domain,
     armed: RefCell<BTreeSet<u32>>,
+    deadlines: RefCell<BTreeMap<u32, u32>>,
     doorbell: [Cell<bool>; 2],
     held: Cell<bool>,
     interrupts: Cell<u32>,
@@ -50,6 +53,7 @@ impl Sim {
             words: RefCell::new(BTreeMap::new()),
             entry,
             armed: RefCell::new(BTreeSet::new()),
+            deadlines: RefCell::new(BTreeMap::new()),
             doorbell: [Cell::new(false), Cell::new(false)],
             held: Cell::new(false),
             interrupts: Cell::new(0x40),
@@ -108,6 +112,19 @@ impl Sim {
 
     pub fn armed(&self, entry: GuestAddress) -> bool {
         self.armed.borrow().contains(&entry.0)
+    }
+
+    pub fn deadline(&self, entry: GuestAddress) -> Option<u32> {
+        self.deadlines.borrow().get(&entry.0).copied()
+    }
+
+    pub fn set_running(&self, owner: Domain, task: Task) {
+        let cell = GuestAddress(self.word(self.context(owner).running()));
+        self.set(cell, task.0 .0);
+    }
+
+    pub fn delayed(&self) -> u32 {
+        self.word(self.entry.words().reschedule)
     }
 
     pub fn doorbell(&self, core: usize) -> bool {
@@ -326,5 +343,56 @@ impl Wake for Sim {
         let cell = GuestAddress(self.word(record.running()));
         let selected = self.pointed(record.selected());
         s1::Machine::store_word(self, at(cell), selected);
+    }
+
+    fn request_delayed_dispatch(&self) {
+        self.set(self.entry.words().reschedule, 1);
+    }
+}
+
+fn priority_byte(sim: &Sim, task: Task) -> u8 {
+    let GuestAddress(at) = task.priority();
+    (sim.word(GuestAddress(at & !3)) >> (8 * (at & 3))) as u8
+}
+
+impl Block for Sim {
+    fn current(&self) -> Task {
+        Task(GuestAddress(self.running(self.entry)))
+    }
+
+    fn remove_ready(&self, owner: KernelContext, task: Task) {
+        let record = context(at(owner.0));
+        s1::remove(self, record, task(at(task.0)), || s1::find(self, record));
+    }
+
+    fn queue_wait(&self, _owner: KernelContext, task: Task, queue: WaitQueue, order: QueueOrder) {
+        let head = queue.0;
+        let (mut at, mut next) = (GuestAddress(self.word(queue.prev())), head);
+        if order == QueueOrder::Priority {
+            at = head;
+            next = GuestAddress(self.word(head));
+            let candidate = priority_byte(self, task);
+            while next.0 != head.0 {
+                let existing = Task(next);
+                if priority_byte(self, existing) > candidate {
+                    break;
+                }
+                at = next;
+                next = GuestAddress(self.word(existing.next()));
+            }
+        }
+        self.set(task.next(), next.0);
+        self.set(task.prev(), at.0);
+        self.set(GuestAddress(at.0), task.0 .0);
+        self.set(GuestAddress(next.0).offset(0x04), task.0 .0);
+    }
+
+    fn arm_timer(&self, _owner: KernelContext, entry: GuestAddress, deadline: u32) {
+        self.arm(entry);
+        self.deadlines.borrow_mut().insert(entry.0, deadline);
+    }
+
+    fn now(&self, owner: KernelContext) -> u32 {
+        self.pointed(owner.tick_now())
     }
 }
