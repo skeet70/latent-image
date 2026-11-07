@@ -59,6 +59,13 @@ pub fn clear_flag<M: ObjectLock>(m: &M, id: FlagId, keep: KeepMask) -> Result<()
     Ok(())
 }
 
+/// The caller-output store order relative to the clear-on-match.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StoreOrder {
+    ClearThenOut,
+    OutThenClear,
+}
+
 /// The immediate match, clear and caller store under the object lock.
 #[cfg_attr(feature = "family", inline(never))]
 pub fn check_control<M: Machine>(
@@ -68,15 +75,26 @@ pub fn check_control<M: Machine>(
     want: Pattern,
     mode: MatchMode,
     out: OutWord,
+    order: StoreOrder,
 ) -> Option<Pattern> {
     let mut pattern = Pattern(m.load_word(control.pattern()));
     let clear_on_match = m.load_word(config.attributes()) & FlagConfig::CLEAR_ON_MATCH != 0;
     match check(&mut pattern, want, mode, clear_on_match) {
         Some(reported) => {
-            if clear_on_match {
-                m.store_word(control.pattern(), 0);
+            match order {
+                StoreOrder::ClearThenOut => {
+                    if clear_on_match {
+                        m.store_word(control.pattern(), 0);
+                    }
+                    m.store_word(out.0, reported.0);
+                }
+                StoreOrder::OutThenClear => {
+                    m.store_word(out.0, reported.0);
+                    if clear_on_match {
+                        m.store_word(control.pattern(), 0);
+                    }
+                }
             }
-            m.store_word(out.0, reported.0);
             Some(reported)
         }
         None => None,
@@ -101,7 +119,7 @@ pub fn poll_flag<M: ObjectLock>(
         if m.load_word(control.queue().next()) != control.0 .0 {
             return Err(ObjectStatus::QueueOverflow);
         }
-        match check_control(m, control, config, want.pattern(), mode, out) {
+        match check_control(m, control, config, want.pattern(), mode, out, StoreOrder::OutThenClear) {
             Some(reported) => Ok(WaitOutcome::Satisfied(reported)),
             None => Ok(WaitOutcome::TimedOut),
         }
