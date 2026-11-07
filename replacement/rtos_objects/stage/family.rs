@@ -1,14 +1,13 @@
 use super::{cpsr_masked, entry_words, load, target, xm1_rtos_scheduler_save, Cpu, Reschedule, ENTRY};
 use objects::block::{
-    receive, resume_flag, resume_receive, wait_flag, Block, Blocking, Deadline, FlagBlocking, FlagResume,
-    FlagWaitPending, IrqScope, ReceiveBlocking, ReceivePending, ReceiveResume, SavedMask, Tick,
-    TimerEntryAddress, TimeoutCallback,
+    receive, resume_flag, resume_receive, wait_flag, Block, Deadline, FlagBlocking, FlagResume, IrqScope,
+    ReceiveBlocking, ReceiveResume, SavedMask, Tick, TimerEntryAddress, TimeoutCallback,
 };
 use objects::create::{create_flag, create_mailbox, FlagAttributes, MailboxAttributes};
 use objects::id::{own_flag_slot, own_mailbox_slot, resolve_flag, resolve_mailbox, EncodedId, EntryDomain, FlagId, MailboxId};
 use objects::layout::{Domain, GuestAddress, Message, Task};
 use objects::locked::{clear_flag, poll_flag, poll_receive, OutWord};
-use objects::matching::{KeepMask, MatchMode, Pattern, WantedMask};
+use objects::matching::{KeepMask, Pattern, WantedMask};
 use objects::message::PriorityLimit;
 use objects::status::{ObjectStatus, WaitOutcome};
 use objects::teardown::{delete_flag, delete_mailbox};
@@ -22,9 +21,9 @@ extern "C" {
     static xm1_rtos_objects_stock_timeout: u32;
 }
 
-/// The S2 save returns only after a completion; a still-waiting or corrupt record is an invariant
-/// violation.
-const INVARIANT: i32 = -25;
+fn fail() -> ! {
+    panic!("the S2 save returned without a completed wait")
+}
 
 impl IrqScope for Cpu {
     fn mask_i(&self) -> SavedMask {
@@ -64,12 +63,29 @@ impl Block for Cpu {
     }
 }
 
+fn mask_creation() -> objects::create::SavedInterrupts {
+    let saved: u32;
+    unsafe { core::arch::asm!("mrs {saved}, cpsr", "cpsid if", saved = out(reg) saved, options(nostack)) };
+    objects::create::SavedInterrupts(saved)
+}
+
+fn restore_creation(saved: objects::create::SavedInterrupts) {
+    unsafe { core::arch::asm!("msr cpsr_fc, {saved}", saved = in(reg) saved.0, options(nostack)) };
+}
+
+fn selected_domain(id: i32) -> Domain {
+    target(ENTRY, id >> 16).unwrap_or(ENTRY)
+}
+
 fn facts_flag(id: i32) -> Facts {
     let words = entry_words();
-    let resolved = target(ENTRY, id >> 16).and_then(|domain| {
-        resolve_flag(EntryDomain::new(ENTRY), EncodedId(id), load(words.context(ENTRY).event_flag_count()))
-            .map(|flag| (domain, flag))
-    });
+    let domain = selected_domain(id);
+    let resolved = resolve_flag(
+        EntryDomain::new(ENTRY),
+        EncodedId(id),
+        load(words.context(domain).event_flag_count()),
+    )
+    .map(|flag| (domain, flag));
     match resolved {
         Ok((domain, flag)) => {
             let config = domain.words().flag_config(flag.slot);
@@ -81,10 +97,13 @@ fn facts_flag(id: i32) -> Facts {
 
 fn facts_mailbox(id: i32) -> Facts {
     let words = entry_words();
-    let resolved = target(ENTRY, id >> 16).and_then(|domain| {
-        resolve_mailbox(EntryDomain::new(ENTRY), EncodedId(id), load(words.context(ENTRY).mailbox_count()))
-            .map(|mailbox| (domain, mailbox))
-    });
+    let domain = selected_domain(id);
+    let resolved = resolve_mailbox(
+        EntryDomain::new(ENTRY),
+        EncodedId(id),
+        load(words.context(domain).mailbox_count()),
+    )
+    .map(|mailbox| (domain, mailbox));
     match resolved {
         Ok((domain, mailbox)) => {
             let config = domain.words().mailbox_config(mailbox.slot);
@@ -100,7 +119,7 @@ fn facts_mailbox(id: i32) -> Facts {
 
 fn request(service: Service, id: i32, params: Params, facts: Facts) -> Request {
     let words = entry_words();
-    let context = words.context(ENTRY);
+    let context = words.context(selected_domain(id));
     Request {
         service,
         entry: Entry {
@@ -137,38 +156,32 @@ fn want(admitted: &objects::admission::Admitted) -> Result<WantedMask, ObjectSta
     WantedMask::new(admitted.want)
 }
 
-fn blocking_flag(result: Result<FlagBlocking, ObjectStatus>) -> i32 {
-    match result {
-        Ok(FlagBlocking::Ready(outcome)) => outcome.code(),
-        Ok(FlagBlocking::Pending(pending)) => {
-            unsafe { xm1_rtos_scheduler_save(0) };
-            match resume_flag(&Cpu, pending) {
-                FlagResume::Completed(outcome) => outcome.code(),
-                FlagResume::Pending(_) | FlagResume::Corrupt(_) => INVARIANT,
-            }
-        }
-        Err(status) => status.code(),
-    }
-}
-
 /// Slot `+0x80`.
 #[no_mangle]
 #[inline(never)]
 #[link_section = ".text.family_flag_create"]
 pub extern "C" fn xm1_rtos_objects_family_flag_create(id: i32, request_pointer: u32) -> i32 {
-    let words = entry_words();
-    let slot = match own_flag_slot(EncodedId(id), load(words.context(ENTRY).event_flag_count())) {
-        Ok(slot) => slot,
-        Err(status) => return status.code(),
-    };
-    let create = objects::create::FlagCreate {
-        attributes: FlagAttributes(load(GuestAddress(request_pointer))),
-        initial: Pattern(load(GuestAddress(request_pointer + 4))),
-    };
-    match create_flag(&Cpu, FlagId { domain: ENTRY, slot }, create) {
-        Ok(_) => 0,
-        Err(status) => status.code(),
-    }
+    let saved = mask_creation();
+    let code = (|| -> i32 {
+        let words = entry_words();
+        let slot = match own_flag_slot(EncodedId(id), load(words.context(ENTRY).event_flag_count())) {
+            Ok(slot) => slot,
+            Err(status) => return status.code(),
+        };
+        if load(ENTRY.words().flag_config(slot).exists()) != 0 {
+            return ObjectStatus::AlreadyExists.code();
+        }
+        let create = objects::create::FlagCreate {
+            attributes: FlagAttributes(load(GuestAddress(request_pointer))),
+            initial: Pattern(load(GuestAddress(request_pointer + 4))),
+        };
+        match create_flag(&Cpu, FlagId { domain: ENTRY, slot }, create) {
+            Ok(_) => 0,
+            Err(status) => status.code(),
+        }
+    })();
+    restore_creation(saved);
+    code
 }
 
 /// Slot `+0x84`.
@@ -255,7 +268,8 @@ fn flag_wait_entry(id: i32, pattern: u32, mode: u32, result: u32, timeout: Optio
         Ok(wanted) => wanted,
         Err(status) => return status.code(),
     };
-    blocking_flag(wait_flag(
+    let saved = Cpu.mask_i();
+    let code = match wait_flag(
         &Cpu,
         EntryDomain::new(ENTRY),
         id,
@@ -263,7 +277,19 @@ fn flag_wait_entry(id: i32, pattern: u32, mode: u32, result: u32, timeout: Optio
         admitted.mode,
         OutWord(GuestAddress(result)),
         admitted.timeout.unwrap_or(Timeout::Forever),
-    ))
+    ) {
+        Ok(FlagBlocking::Ready(outcome)) => outcome.code(),
+        Ok(FlagBlocking::Pending(pending)) => {
+            unsafe { xm1_rtos_scheduler_save(0) };
+            match resume_flag(&Cpu, pending) {
+                FlagResume::Completed(outcome) => outcome.code(),
+                FlagResume::Pending(_) | FlagResume::Corrupt(_) => fail(),
+            }
+        }
+        Err(status) => status.code(),
+    };
+    Cpu.restore_i(saved);
+    code
 }
 
 /// Slot `+0x94`.
@@ -311,19 +337,27 @@ pub extern "C" fn xm1_rtos_objects_family_flag_poll(id: i32, pattern: u32, mode:
 #[inline(never)]
 #[link_section = ".text.family_mailbox_create"]
 pub extern "C" fn xm1_rtos_objects_family_mailbox_create(id: i32, request_pointer: u32) -> i32 {
-    let words = entry_words();
-    let slot = match own_mailbox_slot(EncodedId(id), load(words.context(ENTRY).mailbox_count())) {
-        Ok(slot) => slot,
-        Err(status) => return status.code(),
-    };
-    let create = objects::create::MailboxCreate {
-        attributes: MailboxAttributes(load(GuestAddress(request_pointer))),
-        priority_limit: PriorityLimit(load(GuestAddress(request_pointer + 4))),
-    };
-    match create_mailbox(&Cpu, MailboxId { domain: ENTRY, slot }, create) {
-        Ok(_) => 0,
-        Err(status) => status.code(),
-    }
+    let saved = mask_creation();
+    let code = (|| -> i32 {
+        let words = entry_words();
+        let slot = match own_mailbox_slot(EncodedId(id), load(words.context(ENTRY).mailbox_count())) {
+            Ok(slot) => slot,
+            Err(status) => return status.code(),
+        };
+        if load(ENTRY.words().mailbox_config(slot).exists()) != 0 {
+            return ObjectStatus::AlreadyExists.code();
+        }
+        let create = objects::create::MailboxCreate {
+            attributes: MailboxAttributes(load(GuestAddress(request_pointer))),
+            priority_limit: PriorityLimit(load(GuestAddress(request_pointer + 4))),
+        };
+        match create_mailbox(&Cpu, MailboxId { domain: ENTRY, slot }, create) {
+            Ok(_) => 0,
+            Err(status) => status.code(),
+        }
+    })();
+    restore_creation(saved);
+    code
 }
 
 /// Slot `+0xd0`; the raw ABI discards the drained pointers as stock does.
@@ -376,7 +410,8 @@ fn receive_entry(id: i32, message_out: u32, timeout: Option<i32>, service: Servi
         Some(id) => id,
         None => return INVARIANT,
     };
-    match receive(
+    let saved = Cpu.mask_i();
+    let code = match receive(
         &Cpu,
         EntryDomain::new(ENTRY),
         id,
@@ -388,11 +423,13 @@ fn receive_entry(id: i32, message_out: u32, timeout: Option<i32>, service: Servi
             unsafe { xm1_rtos_scheduler_save(0) };
             match resume_receive(&Cpu, pending) {
                 ReceiveResume::Completed(outcome) => outcome.code(),
-                ReceiveResume::Pending(_) | ReceiveResume::Corrupt(_) => INVARIANT,
+                ReceiveResume::Pending(_) | ReceiveResume::Corrupt(_) => fail(),
             }
         }
         Err(status) => status.code(),
-    }
+    };
+    Cpu.restore_i(saved);
+    code
 }
 
 /// Slot `+0xd8`.
