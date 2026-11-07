@@ -1,10 +1,8 @@
-/* Loader B, F2: the owned wake bodies at their stock extents over the owned scheduler
-   regions. Helper text must inline into the two entries; the scheduler script forbids
-   data and rodata, so the adapter keeps no statics. */
 INCLUDE scheduler-b-placement.ld
 INCLUDE scheduler-s2-b-placement.ld
 
 MEMORY {
+  f2_release (rx) : ORIGIN = 0xd4528, LENGTH = 0xcc
   f2_set_flag (rx) : ORIGIN = 0xd80fc, LENGTH = 0x260
   f2_send (rx) : ORIGIN = 0xdaa04, LENGTH = 0x304
 }

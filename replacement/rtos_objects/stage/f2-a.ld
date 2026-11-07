@@ -1,6 +1,3 @@
-/* Loader A, F2: the owned wake bodies at their stock extents over the owned scheduler
-   regions. Helper text must inline into the two entries; the scheduler script forbids
-   data and rodata, so the adapter keeps no statics. */
 INCLUDE scheduler-a-placement.ld
 INCLUDE scheduler-s2-a-placement.ld
 
