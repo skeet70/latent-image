@@ -1,6 +1,6 @@
 use super::{load, Cpu, ENTRY};
 use crate::objects::block::{block_locked, Block, Deadline, TimerEntryAddress};
-use crate::objects::layout::{FlagConfig, FlagControl, GuestAddress, KernelContext, Task, WaitQueue};
+use crate::objects::layout::{DomainId, FlagConfig, FlagControl, GuestAddress, KernelContext, Task, WaitQueue};
 use crate::objects::locked::{check_control, OutWord};
 use crate::objects::matching::{MatchMode, Pattern};
 use crate::objects::order::QueueOrder;
@@ -15,6 +15,7 @@ fn queue_order(queue: WaitQueue) -> QueueOrder {
 #[inline(never)]
 #[link_section = ".text.helper_block"]
 pub extern "C" fn xm1_rtos_objects_wait_block(owner: u32, queue: u32, wait: u32) {
+    let Some(owner) = DomainId::from_word(owner) else { return };
     let queue = WaitQueue(GuestAddress(queue));
     let task = Cpu.current(ENTRY);
     block_locked(
@@ -40,6 +41,7 @@ pub extern "C" fn xm1_rtos_objects_wait_block_timed(
     timer: u32,
     deadline: u32,
 ) {
+    let Some(owner) = DomainId::from_word(owner) else { return };
     let queue = WaitQueue(GuestAddress(queue));
     let task = Cpu.current(ENTRY);
     block_locked(

@@ -1,7 +1,7 @@
 use crate::create::Machine;
 use crate::id::{EntryDomain, FlagId, MailboxId};
 use crate::layout::{
-    Domain, FlagWait, GuestAddress, KernelContext, MailboxWait, Message, Task, TaskState, WaitBlock,
+    Domain, DomainId, FlagWait, GuestAddress, KernelContext, MailboxWait, Message, Task, TaskState, WaitBlock,
     WaitQueue,
 };
 use crate::locked::{check_control, OutWord};
@@ -84,7 +84,7 @@ pub enum ReceiveBlocking {
 pub fn block_locked<M: Block>(
     m: &M,
     entry: Domain,
-    owner: u32,
+    owner: DomainId,
     task: Task,
     wait: GuestAddress,
     queue: WaitQueue,
@@ -110,7 +110,7 @@ pub fn block_locked<M: Block>(
         None => m.store_word(wait, 0),
     }
     m.store_word(WaitBlock(wait).queue(), queue.0 .0);
-    m.store_word(WaitBlock(wait).owner(), owner);
+    m.store_word(WaitBlock(wait).owner(), owner.word());
     m.queue_wait(m.context(entry), task, queue, order);
 }
 
@@ -118,7 +118,7 @@ pub fn block_locked<M: Block>(
 fn block<M: Block>(
     m: &M,
     entry: Domain,
-    owner: u32,
+    owner: DomainId,
     task: Task,
     wait: GuestAddress,
     queue: WaitQueue,
@@ -181,7 +181,7 @@ pub fn wait_flag<M: Block>(
                     if !block(
                         m,
                         entry.domain(),
-                        id.domain.id().word(),
+                        id.domain.id(),
                         task,
                         wait.0,
                         control.queue(),
@@ -240,7 +240,7 @@ pub fn receive<M: Block>(
                 if !block(
                     m,
                     entry.domain(),
-                    id.domain.id().word(),
+                    id.domain.id(),
                     task,
                     wait.0,
                     control.queue(),
