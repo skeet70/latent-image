@@ -22,6 +22,7 @@ data Call = ObjectService Family Domain | OwnerRelease Domain deriving (Eq, Show
 data Invocation = TaskInvocation | HandlerCallback deriving (Eq, Show)
 data Boundary = CallerReturn | TaskArrival deriving (Eq, Show)
 data WakeOutcome = NoWaiter | Unsatisfied Domain | Released Domain deriving (Eq, Show)
+data ObservationRole = StockObservation | OwnedObservation deriving Eq
 data Expect = Equals GuestAddress Word32 | ByteEquals GuestAddress Word8 | Result Word32 deriving Show
 
 data Case = Case
@@ -429,9 +430,11 @@ readByte facts one observation address@(GuestAddress raw) = case
 
 compareFamily :: Facts -> Domain -> Case -> CaseSpec -> NativeObservation -> NativeObservation -> [String]
 compareFamily facts executing one description stock owned =
-  checks "stock" stock ++ checks "owned" owned ++ memoryDifferences
+  checks StockObservation stock ++ checks OwnedObservation owned ++ memoryDifferences
   where
-    checks role observation = map ((role ++ ": ") ++) (exitChecks observation ++ expectedChecks observation ++ registerChecks observation ++ continuationChecks observation ++ effectChecks observation)
+    roleName StockObservation = "stock"
+    roleName OwnedObservation = "owned"
+    checks role observation = map ((roleName role ++ ": ") ++) (exitChecks observation ++ expectedChecks observation ++ registerChecks observation ++ continuationChecks observation ++ effectChecks role observation)
     wantedOutcome = if caseBoundary one == CallerReturn then OutcomeReturned else OutcomeStopped (wireAddress (GuestAddress stopAddress))
     exitChecks observation = ["wrong exit " ++ show (caseOutcome description observation) | caseOutcome description observation /= wantedOutcome]
     expectedChecks observation = ["missing effect " ++ show expectation | expectation <- caseExpect one, not (holds observation expectation)]
@@ -470,34 +473,38 @@ compareFamily facts executing one description stock owned =
     memoryDifferences =
       ["missing state region " ++ show ident | ident <- compared, M.notMember ident (memory stock) || M.notMember ident (memory owned)]
         ++ ["state region " ++ show ident ++ " differs" | ident <- compared, M.lookup ident (memory stock) /= M.lookup ident (memory owned)]
-    effectChecks observation = case nativeKernel observation >>= observedOrder of
+    effectChecks role observation = case nativeKernel observation >>= observedOrder of
       Nothing -> ["ordered provenance is missing or truncated"]
-      Just events -> lockChecks events ++ notificationChecks events ++ timerChecks events
+      Just events -> lockChecks events ++ notificationChecks role events ++ timerChecks events
     writes events address = [(index,fromIntegral value :: Word32) | (index,OrderedWrite (Write actual _) (WriteValue value)) <- zip [0::Int ..] events, actual == wireAddress address]
+    lockInterval events address = do
+      acquired <- fst <$> first ((==1) . snd) (writes events address)
+      released <- fst <$> first ((==0) . snd) (writes events address)
+      if acquired < released && any (\(index,event) -> acquired < index && index < released && event == OrderedBarrier Dmb) (zip [0::Int ..] events) then Just (acquired,released) else Nothing
     lockChecks events = case caseCall one of
       OwnerRelease _ -> []
       ObjectService _ objectDomain ->
         let objectLock = GuestAddress (dfObjectLock (domainFacts facts objectDomain))
             scheduler = case caseWake one of NoWaiter -> Nothing; Unsatisfied owner -> Just owner; Released owner -> Just owner
-            interval address = do
-              acquired <- fst <$> first ((==1) . snd) (writes events address)
-              released <- fst <$> first ((==0) . snd) (writes events address)
-              if acquired < released && any (\(index,event) -> acquired < index && index < released && event == OrderedBarrier Dmb) (zip [0::Int ..] events) then Just (acquired,released) else Nothing
+            interval = lockInterval events
          in ["object lock or its release barrier differs" | interval objectLock == Nothing]
               ++ case scheduler of
                 Nothing -> []
                 Just owner -> case (interval objectLock, interval (GuestAddress (dfSchedulerLock (domainFacts facts owner)))) of
                   (Just (oa,oz), Just (sa,sz)) | oa < sa && sz < oz -> []
                   _ -> ["waiter scheduler lock is not nested inside the object lock"]
-    notificationChecks events =
+    notificationChecks role events =
       let target = case (caseCall one,caseWake one) of (ObjectService _ _,Released owner) | owner /= executing -> Just owner; _ -> Nothing
           expected domain = if target == Just domain then [0x01000000] else []
           bankChecks = ["notification bank " ++ show domain ++ " differs" | domain <- [DomainA,DomainB], map snd (writes events (bank domain)) /= expected domain]
        in bankChecks ++ case target of
           Nothing -> []
-          Just owner -> case writes events (bank owner) of
-            [(index,_)] | any (\(before,event) -> before < index && event == OrderedBarrier Dsb) (zip [0::Int ..] events) -> []
-            _ -> ["notification has no preceding DSB"]
+          Just owner -> case (writes events (bank owner), lockInterval events (GuestAddress (dfSchedulerLock (domainFacts facts owner)))) of
+            ([(index,_)], Just (acquired,released)) ->
+              ["notification is outside the waiter scheduler lock" | not (acquired < index && index < released)]
+                ++ ["notification has no completion DSB" | not (any (\(after,event) -> released < after && event == OrderedBarrier Dsb) (zip [0::Int ..] events))]
+                ++ ["owned notification has no preceding DSB" | role == OwnedObservation, not (any (\(before,event) -> before < index && event == OrderedBarrier Dsb) (zip [0::Int ..] events))]
+            _ -> ["notification or waiter scheduler lock is missing"]
     timerChecks events = case caseTimer one of
       Nothing -> ["unexpected timer removal" | not (null (writes events (GuestAddress receiptAddress))) || not (null (writes events (GuestAddress (receiptAddress+4))))]
       Just token ->
