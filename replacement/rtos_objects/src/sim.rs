@@ -77,8 +77,10 @@ impl Sim {
         self.set(record.dispatch_enabled(), base + 0x8c);
         self.set(GuestAddress(base + 0x8c), dispatch_enabled as u32);
         self.set(record.first_entry(), base + 0x90);
-        self.set(record.scheduler_lock().0, 0);
-        self.set(record.object_lock().0, 0);
+        self.set(record.scheduler_lock().0, base + 0x94);
+        self.set(GuestAddress(base + 0x94), 0);
+        self.set(record.object_lock().0, base + 0x98);
+        self.set(GuestAddress(base + 0x98), 0);
     }
 
     pub fn entry(&self) -> Domain {
