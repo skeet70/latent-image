@@ -7,6 +7,7 @@ import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Text as T
 import Emulation.CandidateBaseline
+import Emulation.Sha256 (sha256, sha256Hex)
 import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, removeDirectoryRecursive, removeFile)
 import System.Environment (lookupEnv)
 import System.Exit (exitFailure)
@@ -147,9 +148,54 @@ main = do
   nativeDuplicate <- nativeReceipt [a, a]
   BL.writeFile (root </> "results.json") (encode (object ["bank_mode" .= String "sd"]))
   nativeMissingCases <- observe nativeSpec receipt
-  let compareNative = compareNativeObservations (baselineFields nativeStored)
-      nativeDifferences = compareNative nativeChanged
+  let compareNative = compareNativeObservations Nothing (baselineFields nativeStored)
+      nativeDiff = fmap nativeDifferences . compareNative
+      changedNativeDifferences = nativeDiff nativeChanged
       caseField name = FieldName "results.json" (Just [Key "cases", Key name])
+
+  let baselineRunner = T.replicate 64 "b"
+      runnerPath = root </> "candidate-runner.bin"
+      runnerBytes = C.pack "candidate-runner"
+      candidateRunner = T.pack (sha256Hex (sha256 runnerBytes))
+  C.writeFile runnerPath runnerBytes
+  admitted <- admitNativeRunnerTransition runnerPath baselineRunner candidateRunner "synthetic-composition"
+  transition <- either (\problem -> putStrLn problem >> exitFailure) pure admitted
+  wrongCandidate <- admitNativeRunnerTransition runnerPath baselineRunner (T.replicate 64 "e") "synthetic-composition"
+  absentRunner <- admitNativeRunnerTransition (root </> "absent-runner.bin") baselineRunner candidateRunner "synthetic-composition"
+  equalRunner <- admitNativeRunnerTransition runnerPath candidateRunner candidateRunner "synthetic-composition"
+  let rich name runner wire statusValue = object
+        [ "id" .= (name :: T.Text)
+        , "status" .= (statusValue :: T.Text)
+        , "wire_sha256" .= (wire :: T.Text)
+        , "runner_sha256" .= (runner :: T.Text)
+        , "provenance_complete" .= True
+        , "artifacts" .= [object ["id" .= ("kernel" :: T.Text), "sha256" .= T.replicate 64 "a", "size" .= (1 :: Int)]]
+        ]
+      richBaseline = rich "rich" baselineRunner (T.replicate 64 "c") "passed"
+      richCandidate = rich "rich" candidateRunner (T.replicate 64 "c") "passed"
+      richThird = rich "rich" (T.replicate 64 "d") (T.replicate 64 "c") "passed"
+      richWire = rich "rich" candidateRunner (T.replicate 64 "e") "passed"
+      richBehavior = rich "rich" candidateRunner (T.replicate 64 "c") "failed"
+      richMissing = object
+        [ "id" .= ("rich" :: T.Text)
+        , "status" .= ("passed" :: T.Text)
+        , "wire_sha256" .= (T.replicate 64 "c" :: T.Text)
+        , "provenance_complete" .= True
+        , "artifacts" .= [object ["id" .= ("kernel" :: T.Text), "sha256" .= T.replicate 64 "a", "size" .= (1 :: Int)]]
+        ]
+      richMalformed = rich "rich" "not-a-digest" (T.replicate 64 "c") "passed"
+      richCaseField = FieldName "results.json" (Just [Key "cases", Key "rich"])
+  richBaselineObs <- nativeReceipt [richBaseline]
+  richCandidateObs <- nativeReceipt [richCandidate]
+  richThirdObs <- nativeReceipt [richThird]
+  richWireObs <- nativeReceipt [richWire]
+  richBehaviorObs <- nativeReceipt [richBehavior]
+  richMissingObs <- nativeReceipt [richMissing]
+  richMalformedObs <- nativeReceipt [richMalformed]
+  let reducedCase = object ["id" .= ("reduced" :: T.Text), "status" .= ("passed" :: T.Text), "mismatches" .= ([] :: [Value])]
+  reducedBaselineObs <- nativeReceipt [reducedCase]
+  reducedCandidateObs <- nativeReceipt [reducedCase]
+  let compareRich policy observedCase = compareNativeObservations policy richBaselineObs observedCase
 
   outcomes <- sequence
     [ check "a stored baseline matches the run it was recorded from" (null (compareObservations (baselineFields stored) recorded))
@@ -195,25 +241,58 @@ main = do
           (compareObservations (withoutExcluded cardSpec (baselineFields historicalCardBaseline)) coldCardMetadataChanged)
           == ["cold-restart/e2e-cold-restart.json#/card/present"])
     , check "a middle native insertion reports only the added case"
-        (compareNative nativeInserted == Right [AbsentFromBaseline (caseField "inserted") inserted])
+        (nativeDiff nativeInserted == Right [AbsentFromBaseline (caseField "inserted") inserted])
     , check "native cases report additions, removals and exact changes independently"
-        (nativeDifferences == Right
+        (changedNativeDifferences == Right
           [AbsentFromRun (caseField "b") b, Changed (caseField "c") c changed,
            AbsentFromBaseline (caseField "inserted") inserted])
     , check "native case ordering alone does not differ"
-        (compareNative nativeReordered == Right [])
+        (nativeDiff nativeReordered == Right [])
     , check "native duplicate identities are refused"
         (case compareNative nativeDuplicate of Left _ -> True; Right _ -> False)
     , check "native missing identities are refused"
         (case compareNative nativeMissingId of Left _ -> True; Right _ -> False)
     , check "removing every native case reports each removed case"
-        (compareNative nativeEmpty == Right
+        (nativeDiff nativeEmpty == Right
           [AbsentFromRun (caseField "a") a, AbsentFromRun (caseField "b") b, AbsentFromRun (caseField "c") c])
     , check "an empty native case array differs from a missing collection"
-        (compareNativeObservations nativeEmpty nativeMissingCases == Right
+        (fmap nativeDifferences (compareNativeObservations Nothing nativeEmpty nativeMissingCases) == Right
           [AbsentFromRun (FieldName "results.json" (Just [Key "cases"])) (toJSON ([] :: [Value]))])
     , check "a missing native case collection differs from an empty array"
-        (compareNativeObservations nativeMissingCases nativeEmpty == Right
-          [AbsentFromBaseline (FieldName "results.json" (Just [Key "cases"])) (toJSON ([] :: [Value]))]) ]
+        (fmap nativeDifferences (compareNativeObservations Nothing nativeMissingCases nativeEmpty) == Right
+          [AbsentFromBaseline (FieldName "results.json" (Just [Key "cases"])) (toJSON ([] :: [Value]))])
+    , check "a strict native comparison reports a runner identity change"
+        (case compareRich Nothing richCandidateObs of
+           Right (NativeComparison [Changed name _ _] []) -> name == richCaseField
+           _ -> False)
+    , check "an admitted runner transition reports the exact change separately"
+        (case compareRich (Just transition) richCandidateObs of
+           Right (NativeComparison [] [NativeProvenanceChange "rich" name (String before) (String after)]) ->
+             name == richCaseField && before == baselineRunner && after == candidateRunner
+           _ -> False)
+    , check "an admitted runner transition refuses a third runner digest"
+        (case compareRich (Just transition) richThirdObs of Left _ -> True; _ -> False)
+    , check "an admitted runner transition refuses a missing runner identity"
+        (case compareRich (Just transition) richMissingObs of Left _ -> True; _ -> False)
+    , check "an admitted runner transition refuses a malformed runner identity"
+        (case compareRich (Just transition) richMalformedObs of Left _ -> True; _ -> False)
+    , check "an admitted runner transition still reports wire changes"
+        (case compareRich (Just transition) richWireObs of
+           Right (NativeComparison [Changed name _ _] []) -> name == richCaseField
+           _ -> False)
+    , check "an admitted runner transition still reports behavior changes"
+        (case compareRich (Just transition) richBehaviorObs of
+           Right (NativeComparison [Changed name _ _] []) -> name == richCaseField
+           _ -> False)
+    , check "a reduced case without a runner field remains exact under an admitted transition"
+        (case compareNativeObservations (Just transition) reducedBaselineObs reducedCandidateObs of
+           Right (NativeComparison [] []) -> True
+           _ -> False)
+    , check "runner transition admission refuses a wrong candidate digest"
+        (case wrongCandidate of Left _ -> True; _ -> False)
+    , check "runner transition admission refuses an absent runner file"
+        (case absentRunner of Left _ -> True; _ -> False)
+    , check "runner transition admission refuses equal baseline and candidate digests"
+        (case equalRunner of Left _ -> True; _ -> False) ]
   unless (and outcomes) exitFailure
   putStrLn ("passed " ++ show (length outcomes) ++ " checks")
