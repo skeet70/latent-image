@@ -10,7 +10,7 @@ use objects::create::{Machine, SavedInterrupts};
 use objects::layout::{Domain, DomainId, DomainWords, GuestAddress, KernelContext, LockRecord, Task};
 use objects::locked::ObjectLock;
 use objects::message::{MessagePriority, PriorityLimit};
-use objects::wake::{DispatchTarget, Selection, Wake};
+use objects::wake::{release, DispatchTarget, Release, Selection, Wake};
 use objects::*;
 
 #[cfg(all(target_arch = "arm", not(test)))]
