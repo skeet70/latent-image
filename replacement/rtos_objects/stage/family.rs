@@ -165,19 +165,24 @@ impl objects::admission::Facts for StageTables {
     }
 }
 
-#[inline(always)]
-fn request(service: Service, blocking: bool, id: i32, params: Params) -> Request {
+#[inline(never)]
+fn entry_snapshot(blocking: bool) -> Entry {
     let words = entry_words();
     let handler_context = load(words.handler_context);
     let irq_masked = unsafe { cpsr_masked() };
     let refused = handler_context != 0 || irq_masked;
+    Entry {
+        handler_context,
+        irq_masked,
+        dispatch_enabled: if blocking && !refused { load(words.dispatch_enabled) } else { 0 },
+    }
+}
+
+#[inline(always)]
+fn request(service: Service, blocking: bool, id: i32, params: Params) -> Request {
     Request {
         service,
-        entry: Entry {
-            handler_context,
-            irq_masked,
-            dispatch_enabled: if blocking && !refused { load(words.dispatch_enabled) } else { 0 },
-        },
+        entry: entry_snapshot(blocking),
         entry_domain: EntryDomain::new(ENTRY),
         id: EncodedId(id),
         params,
@@ -364,7 +369,7 @@ fn flag_wait_admitted(id: FlagId, wanted: WantedMask, mode: MatchMode, result: O
             Err(status) => break status.code(),
         }
     };
-    unmask_i();
+    unsafe { core::arch::asm!("cpsie i", options(nostack)) };
     code
 }
 
@@ -395,7 +400,7 @@ fn receive_admitted(id: MailboxId, message_out: OutWord, timeout: Timeout) -> i3
             Err(status) => break status.code(),
         }
     };
-    unmask_i();
+    unsafe { core::arch::asm!("cpsie i", options(nostack)) };
     code
 }
 
