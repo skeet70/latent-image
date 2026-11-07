@@ -94,6 +94,7 @@ def xm1_rust_staticlib(
 def xm1_rust_elf(
         name,
         rust_staticlib,
+        rust_staticlibs = [],
         c_srcs = [],
         asm_srcs = [],
         asm_defines = [],
