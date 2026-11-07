@@ -1081,12 +1081,13 @@ fn set_flag_makes_a_satisfied_waiter_ready() {
         0,
         0,
     );
+    sim.set_byte(task.priority(), 0);
     set_flag(&sim, id, Pattern(0x10));
     assert_eq!(sim.word(control.pattern()), 0x11);
     assert_eq!(sim.word(wait.result()), 0x11);
     assert_eq!(sim.word(control.queue().next()), control.0 .0);
     assert_eq!(sim.word(task.state()) & 0xff, 1);
-    assert_eq!(sim.ready(Domain::A, 5), task.0 .0);
+    assert_eq!(sim.ready(Domain::A, 0), task.0 .0);
     assert_eq!(sim.selected(Domain::A), task.0 .0);
     assert_eq!(sim.running(Domain::A), task.0 .0);
     assert!(!sim.doorbell(0) && !sim.doorbell(1));

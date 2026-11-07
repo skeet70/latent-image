@@ -60,8 +60,8 @@ impl Sim {
     pub fn install(&self, owner: Domain, dispatch_enabled: bool) {
         let record = self.context(owner);
         let base = match owner {
-            Domain::A => 0x4006_0000,
-            Domain::B => 0x4006_0100,
+            Domain::A => 0x0096_0000,
+            Domain::B => 0x0096_0100,
         };
         let heads = GuestAddress(base);
         for priority in 0..16u32 {
@@ -77,6 +77,8 @@ impl Sim {
         self.set(record.dispatch_enabled(), base + 0x8c);
         self.set(GuestAddress(base + 0x8c), dispatch_enabled as u32);
         self.set(record.first_entry(), base + 0x90);
+        self.set(record.scheduler_lock().0, 0);
+        self.set(record.object_lock().0, 0);
     }
 
     pub fn entry(&self) -> Domain {
@@ -92,8 +94,10 @@ impl Sim {
     }
 
     pub fn set_byte(&self, address: GuestAddress, value: u8) {
-        let kept = self.word(address) & !0xff;
-        self.set(address, kept | value as u32);
+        let aligned = GuestAddress(address.0 & !3);
+        let shift = 8 * (address.0 & 3);
+        let kept = self.word(aligned) & !(0xff << shift);
+        self.set(aligned, kept | (value as u32) << shift);
     }
 
     pub fn arm(&self, entry: GuestAddress) {
@@ -117,7 +121,7 @@ impl Sim {
     }
 
     pub fn ready(&self, owner: Domain, priority: u32) -> u32 {
-        let heads = GuestAddress(self.pointed(self.context(owner).ready_heads()));
+        let heads = GuestAddress(self.word(self.context(owner).ready_heads()));
         self.word(heads.offset(priority * 8))
     }
 
@@ -149,7 +153,8 @@ impl s1::Machine for Sim {
     }
 
     fn load_byte(&self, address: s1::GuestAddress) -> u8 {
-        self.word(back(address)) as u8
+        let GuestAddress(at) = back(address);
+        (self.word(GuestAddress(at & !3)) >> (8 * (at & 3))) as u8
     }
 
     fn store_word(&self, address: s1::GuestAddress, value: u32) {
@@ -159,9 +164,11 @@ impl s1::Machine for Sim {
 
     fn store_byte(&self, address: s1::GuestAddress, value: u8) {
         assert_ne!(self.interrupts.get() & 0x80, 0, "store with IRQ unmasked");
-        let word = back(address);
-        let kept = self.word(word) & !0xff;
-        self.set(word, kept | value as u32);
+        let GuestAddress(at) = back(address);
+        let aligned = GuestAddress(at & !3);
+        let shift = 8 * (at & 3);
+        let kept = self.word(aligned) & !(0xff << shift);
+        self.set(aligned, kept | (value as u32) << shift);
     }
 
     fn try_claim(&self, word: s1::GuestAddress) -> bool {
