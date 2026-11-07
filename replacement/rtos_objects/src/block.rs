@@ -265,40 +265,58 @@ pub enum ReceiveResume {
     Corrupt(ReceivePending),
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ResumeState {
+    Pending,
+    Satisfied,
+    Released,
+    TimedOut,
+    Corrupt,
+}
+
+#[cfg_attr(feature = "family", inline(never))]
+fn resume_state<M: Machine>(m: &M, task: Task, wait: WaitBlock) -> ResumeState {
+    if m.load_byte(task.state()) & TaskState::WAIT.bits() != 0 {
+        return ResumeState::Pending;
+    }
+    match m.load_word(wait.result()) as i32 {
+        0 => ResumeState::Satisfied,
+        -49 => ResumeState::Released,
+        -50 => ResumeState::TimedOut,
+        _ => ResumeState::Corrupt,
+    }
+}
+
 #[cfg_attr(feature = "family", inline(never))]
 pub fn resume_flag<M: Machine + IrqScope>(m: &M, pending: FlagWaitPending) -> FlagResume {
-    if m.load_byte(pending.task.state()) & TaskState::WAIT.bits() != 0 {
-        return FlagResume::Pending(pending);
-    }
-    match m.load_word(pending.wait.base().result()) as i32 {
-        0 => {
+    match resume_state(m, pending.task, pending.wait.base()) {
+        ResumeState::Pending => FlagResume::Pending(pending),
+        ResumeState::Satisfied => {
             let pattern = Pattern(m.load_word(pending.wait.result()));
             let saved = m.mask_i();
             m.store_word(pending.out.0, pattern.0);
             m.restore_i(saved);
             FlagResume::Completed(WaitOutcome::Satisfied(pattern))
         }
-        -49 => FlagResume::Completed(WaitOutcome::Released),
-        -50 => FlagResume::Completed(WaitOutcome::TimedOut),
-        _ => FlagResume::Corrupt(pending),
+        ResumeState::Released => FlagResume::Completed(WaitOutcome::Released),
+        ResumeState::TimedOut => FlagResume::Completed(WaitOutcome::TimedOut),
+        ResumeState::Corrupt => FlagResume::Corrupt(pending),
     }
 }
 
 #[cfg_attr(feature = "family", inline(never))]
 pub fn resume_receive<M: Machine + IrqScope>(m: &M, pending: ReceivePending) -> ReceiveResume {
-    if m.load_byte(pending.task.state()) & TaskState::WAIT.bits() != 0 {
-        return ReceiveResume::Pending(pending);
-    }
-    match m.load_word(pending.wait.base().result()) as i32 {
-        0 => {
+    match resume_state(m, pending.task, pending.wait.base()) {
+        ResumeState::Pending => ReceiveResume::Pending(pending),
+        ResumeState::Satisfied => {
             let message = Message(GuestAddress(m.load_word(pending.wait.message())));
             let saved = m.mask_i();
             m.store_word(pending.out.0, message.0 .0);
             m.restore_i(saved);
             ReceiveResume::Completed(WaitOutcome::Satisfied(message))
         }
-        -49 => ReceiveResume::Completed(WaitOutcome::Released),
-        -50 => ReceiveResume::Completed(WaitOutcome::TimedOut),
-        _ => ReceiveResume::Corrupt(pending),
+        ResumeState::Released => ReceiveResume::Completed(WaitOutcome::Released),
+        ResumeState::TimedOut => ReceiveResume::Completed(WaitOutcome::TimedOut),
+        ResumeState::Corrupt => ReceiveResume::Corrupt(pending),
     }
 }
