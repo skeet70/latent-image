@@ -223,43 +223,29 @@ pub fn admit_mailbox<R: Records, F: Facts>(
     let domain = admit_entry(request, false, service.blocks())?;
     let id = resolve_mailbox_in(domain, request.id, records.mailboxes(domain))?;
     let object = Object::Mailbox(id);
-    match service {
-        MailboxService::Send => {
-            if !facts.exists(object) {
-                return Err(ObjectStatus::NotCreated);
-            }
-            let priority = if facts.attributes(object) & MailboxConfig::MESSAGE_PRIORITY != 0 {
-                let message = request.params.message.ok_or(ObjectStatus::Param)?;
-                let raw = facts.message_priority(message);
-                let limit = PriorityLimit::from_word(facts.priority_limit(object));
-                Some(MessagePriority::new(raw, limit)?)
-            } else {
-                None
-            };
-            Ok(AdmittedMailbox {
-                id,
-                timeout: None,
-                priority,
-            })
-        }
-        MailboxService::Receive | MailboxService::Poll | MailboxService::TimedReceive => {
-            let timeout = if service.timed() {
-                Some(Timeout::from_stock(
-                    request.params.timeout.ok_or(ObjectStatus::Param)?,
-                )?)
-            } else {
-                None
-            };
-            if !facts.exists(object) {
-                return Err(ObjectStatus::NotCreated);
-            }
-            Ok(AdmittedMailbox {
-                id,
-                timeout,
-                priority: None,
-            })
-        }
+    let send = matches!(service, MailboxService::Send);
+    if send && !facts.exists(object) {
+        return Err(ObjectStatus::NotCreated);
     }
+    let priority = if send && facts.attributes(object) & MailboxConfig::MESSAGE_PRIORITY != 0 {
+        let message = request.params.message.ok_or(ObjectStatus::Param)?;
+        let raw = facts.message_priority(message);
+        let limit = PriorityLimit::from_word(facts.priority_limit(object));
+        Some(MessagePriority::new(raw, limit)?)
+    } else {
+        None
+    };
+    let timeout = if !send && service.timed() {
+        Some(Timeout::from_stock(
+            request.params.timeout.ok_or(ObjectStatus::Param)?,
+        )?)
+    } else {
+        None
+    };
+    if !send && !facts.exists(object) {
+        return Err(ObjectStatus::NotCreated);
+    }
+    Ok(AdmittedMailbox { id, timeout, priority })
 }
 
 /// Runtime dispatch for the host tests; the stage calls the typed functions.
