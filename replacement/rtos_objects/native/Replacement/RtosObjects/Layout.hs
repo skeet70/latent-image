@@ -38,6 +38,7 @@ data DomainFacts = DomainFacts
   , dfContextA :: Word32
   , dfContextB :: Word32
   , dfHandlerContext :: Word32
+  , dfCurrentContext :: Word32
   , dfReschedule :: Word32
   , dfTimerBase :: Word32
   , dfTimerCount :: Word32
@@ -69,6 +70,12 @@ data Facts = Facts
   , factsContextSelected :: Word32
   , factsContextDispatchEnabled :: Word32
   , factsContextFirstEntry :: Word32
+  , factsContextTasks :: Word32
+  , factsContextTaskCount :: Word32
+  , factsContextFlags :: Word32
+  , factsContextFlagCount :: Word32
+  , factsContextMailboxes :: Word32
+  , factsContextMailboxCount :: Word32
   , factsLockWord :: Word32
   , factsLockAcquire :: Word32
   , factsLockRelease :: Word32
@@ -154,6 +161,7 @@ instance FromJSON DomainFacts where
       <*> o .: "context_a"
       <*> o .: "context_b"
       <*> o .: "handler_context"
+      <*> o .: "current_context"
       <*> o .: "reschedule"
       <*> o .: "timer_base"
       <*> o .: "timer_count"
@@ -202,6 +210,12 @@ instance FromJSON Facts where
       <*> c .: "selected"
       <*> c .: "dispatch_enabled"
       <*> c .: "first_entry"
+      <*> c .: "tasks"
+      <*> c .: "task_count"
+      <*> c .: "event_flags"
+      <*> c .: "event_flag_count"
+      <*> c .: "mailboxes"
+      <*> c .: "mailbox_count"
       <*> l .: "word"
       <*> l .: "acquire"
       <*> l .: "release"

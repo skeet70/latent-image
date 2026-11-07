@@ -182,7 +182,6 @@ haskell_library(
         "//host:containers",
         "//host:filepath",
         "//replacement/rtos_own_first/stage:own-first-artifact",
-        "//replacement/rtos_scheduler/oracle:scheduler-oracle-lib",
     ],
 )
 
@@ -190,6 +189,11 @@ haskell_binary(
     name = "family-suite-runner",
     srcs = ["native/SuiteMain.hs"],
     main_file = "native/SuiteMain.hs",
+    data = [
+        ":objects-f2-stage-a.bin",
+        ":objects-f2-stage-b.bin",
+        "//replacement/rtos_scheduler/oracle:layout.json",
+    ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":family-suite",

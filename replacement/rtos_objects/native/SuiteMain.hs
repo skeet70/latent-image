@@ -14,7 +14,7 @@ import FujiModPaths (fujimodNativeCase)
 import System.Directory (createDirectoryIfMissing, makeAbsolute)
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
-import System.FilePath (takeDirectory)
+import System.FilePath ((</>), takeDirectory)
 import Replacement.RtosObjects.Layout (parseFacts)
 import Replacement.RtosObjects.Suite (FamilyRun (..), Image (..), extents, runFamily)
 import Replacement.RtosOwnFirst.Regions (Domain (..))
@@ -44,8 +44,8 @@ main = do
       stockB = Image 0xd0000 loaderBBytes
       ownedAImage = Image (minimum (map fst (extents DomainA))) ownedABytes
       ownedBImage = Image (minimum (map fst (extents DomainB))) ownedBBytes
-  runA <- runFamily runner cacheRoot cacheRoot facts DomainA stockA ownedAImage
-  runB <- runFamily runner cacheRoot cacheRoot facts DomainB stockB ownedBImage
+  runA <- runFamily runner cacheRoot (takeDirectory resultsPath </> "domain-a") facts DomainA stockA ownedAImage
+  runB <- runFamily runner cacheRoot (takeDirectory resultsPath </> "domain-b") facts DomainB stockB ownedBImage
   let runs = [runA, runB]
       failures =
         [(name, message) | run <- runs, (name, Left message) <- familyCases run]

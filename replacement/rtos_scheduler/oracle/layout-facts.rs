@@ -9,7 +9,7 @@ use layout::*;
 fn domain(domain: Domain) -> String {
     let w = domain.words();
     format!(
-        "{{\"id\":{},\"scheduler_lock\":{},\"object_lock\":{},\"contexts\":{},\"ready_heads\":{},\"ready_bitmap\":{},\"running\":{},\"dispatch_enabled\":{},\"selected\":{},\"task_table\":{},\"context_a\":{},\"context_b\":{},\"handler_context\":{},\"reschedule\":{},\"timer_base\":{},\"timer_count\":{},\"timer_heap\":{},\"tick_now\":{},\"flag_configs\":{},\"flag_controls\":{},\"flag_waits\":{},\"flag_timers\":{},\"mailbox_configs\":{},\"mailbox_controls\":{},\"mailbox_waits\":{},\"mailbox_timers\":{}}}",
+        "{{\"id\":{},\"scheduler_lock\":{},\"object_lock\":{},\"contexts\":{},\"ready_heads\":{},\"ready_bitmap\":{},\"running\":{},\"dispatch_enabled\":{},\"selected\":{},\"task_table\":{},\"context_a\":{},\"context_b\":{},\"handler_context\":{},\"current_context\":{},\"reschedule\":{},\"timer_base\":{},\"timer_count\":{},\"timer_heap\":{},\"tick_now\":{},\"flag_configs\":{},\"flag_controls\":{},\"flag_waits\":{},\"flag_timers\":{},\"mailbox_configs\":{},\"mailbox_controls\":{},\"mailbox_waits\":{},\"mailbox_timers\":{}}}",
         domain.id().word(),
         w.scheduler_lock.0,
         w.object_lock.0,
@@ -23,6 +23,7 @@ fn domain(domain: Domain) -> String {
         w.context(Domain::A).0 .0,
         w.context(Domain::B).0 .0,
         w.handler_context.0,
+        w.current_context.0,
         w.reschedule.0,
         w.timer_base.0,
         w.timer_count.0,
@@ -47,7 +48,7 @@ fn main() {
     let h = ReadyHead(GuestAddress(0));
     let [sp0, sp1] = d.initial_sp_terms();
     let context = format!(
-        "{{\"size\":{},\"id\":{},\"owner\":{},\"scheduler_lock\":{},\"object_lock\":{},\"ready_heads\":{},\"ready_bitmap\":{},\"running\":{},\"selected\":{},\"dispatch_enabled\":{},\"first_entry\":{}}}",
+        "{{\"size\":{},\"id\":{},\"owner\":{},\"scheduler_lock\":{},\"object_lock\":{},\"ready_heads\":{},\"ready_bitmap\":{},\"running\":{},\"selected\":{},\"dispatch_enabled\":{},\"first_entry\":{},\"tasks\":{},\"task_count\":{},\"event_flags\":{},\"event_flag_count\":{},\"mailboxes\":{},\"mailbox_count\":{}}}",
         KernelContext::SIZE,
         c.id().0,
         c.owner().0,
@@ -59,10 +60,16 @@ fn main() {
         c.selected().0,
         c.dispatch_enabled().0,
         c.first_entry().0,
+        c.tasks().0,
+        c.task_count().0,
+        c.event_flags().0,
+        c.event_flag_count().0,
+        c.mailboxes().0,
+        c.mailbox_count().0,
     );
     let lock = format!("{{\"word\":{},\"acquire\":{},\"release\":{}}}", l.word().0, l.acquire().0, l.release().0);
     let task = format!(
-        "{{\"size\":{},\"next\":{},\"prev\":{},\"definition\":{},\"state\":{},\"priority\":{},\"flags\":{},\"exception_pattern\":{},\"saved_sp\":{},\"resume_pc\":{},\"domain\":{},\"terminate_pending\":{},\"priority_change_pending\":{},\"cancel_pending\":{},\"context_discarded\":{},\"pending_priority\":{}}}",
+        "{{\"size\":{},\"next\":{},\"prev\":{},\"definition\":{},\"state\":{},\"priority\":{},\"flags\":{},\"exception_pattern\":{},\"wait\":{},\"saved_sp\":{},\"resume_pc\":{},\"domain\":{},\"terminate_pending\":{},\"priority_change_pending\":{},\"cancel_pending\":{},\"context_discarded\":{},\"pending_priority\":{}}}",
         Task::SIZE,
         t.next().0,
         t.prev().0,
@@ -71,6 +78,7 @@ fn main() {
         t.priority().0,
         t.flags().0,
         t.exception_pattern().0,
+        t.wait().0,
         t.saved_sp().0,
         t.resume_pc().0,
         t.domain().0,
