@@ -180,7 +180,8 @@ haskell_library(
         "//host:base",
         "//host:bytestring",
         "//host:containers",
-        "//replacement/rtos_own_first/oracle:own-first-oracle-lib",
+        "//host:filepath",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
         "//replacement/rtos_scheduler/oracle:scheduler-oracle-lib",
     ],
 )
@@ -200,5 +201,6 @@ haskell_binary(
         "//host:directory",
         "//host:filepath",
         "//host:host-support",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
     ],
 )
