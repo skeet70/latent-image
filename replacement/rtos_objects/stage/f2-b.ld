@@ -18,11 +18,17 @@ SECTIONS {
   .f2_set_flag : {
     KEEP(*(.text.f2_set_flag))
     __f2_set_flag_body_end = .;
+    KEEP(*(.rodata..Lswitch.table.xm1_rtos_objects_f2_set_flag))
     . = ORIGIN(f2_set_flag) + LENGTH(f2_set_flag);
   } > f2_set_flag =0xf000f0e7
   .f2_send : {
     KEEP(*(.text.f2_send))
     __f2_send_body_end = .;
+    KEEP(*(.text._RNvNtNtCs2rtKTofzijI_27xm1_rtos_objects_f2_adapter7objects2id6target))
+    KEEP(*(.text._RNvXs1_Cs2rtKTofzijI_27xm1_rtos_objects_f2_adapterNtB5_3CpuNtNtNtB5_7objects4wake4Wake13waiter_domain))
+    KEEP(*(.rodata.str1.1))
+    KEEP(*(.rodata..Lanon.11dcd14709f36921fe42ceb8bc821f5b.1))
+    KEEP(*(.rodata..Lanon.11dcd14709f36921fe42ceb8bc821f5b.2))
     . = ORIGIN(f2_send) + LENGTH(f2_send);
   } > f2_send =0xf000f0e7
   .forbidden (NOLOAD) : { *(.text .text.* .rodata .rodata.* .data .data.* .bss .bss.* COMMON) } > acquire
