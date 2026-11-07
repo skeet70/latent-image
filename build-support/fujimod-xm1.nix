@@ -3,8 +3,15 @@
 , features ? [ ]
 }:
 # emulation/fujimod-xm1 built against the source of `fujimod`, which the
-# crate's path dependencies expect at ../fujimod.
+# crate's path dependencies expect at ../fujimod. `deps` is compiled from the
+# crate's manifest and lock alone and includes FujiMod's path crates and their
+# vendored Unicorn.
 let
+  craneSource = builtins.fetchTarball {
+    url = "https://github.com/ipetkov/crane/archive/32daa78aa882b7a43c508d1d5a5ad18a7968d731.tar.gz";
+    sha256 = "06y3dvs9ms4c70r2ia50k77650yrihc09jibqbqrzly23dn42s4m";
+  };
+  craneLib = (import craneSource { inherit pkgs; }).overrideToolchain fujimod.passthru.toolchain;
   crate = builtins.path {
     path = ../emulation/fujimod-xm1;
     name = "fujimod-xm1-source";
@@ -17,56 +24,65 @@ let
       "target" "tests" "ram_push.rs" "composed_startup.rs" "toggle.rs"
     ]);
   };
-  src = pkgs.runCommand "fujimod-xm1-workspace" { } ''
+  cargoLock = ../emulation/fujimod-xm1/Cargo.lock;
+  target = pkgs.stdenv.targetPlatform.rust.rustcTargetSpec;
+  # `deps` and the package must unpack to the same directory: path-dependency
+  # package ids and Unicorn's CMake paths include it.
+  workspace = crateSource: pkgs.runCommand "fujimod-xm1-workspace" { } ''
     mkdir -p $out
     ln -s ${fujimod.src} $out/fujimod
-    cp -r ${crate} $out/fujimod-xm1
+    cp -r ${crateSource} $out/fujimod-xm1
   '';
   featureFlag = pkgs.lib.optionalString (features != [ ]) " --features ${pkgs.lib.concatStringsSep "," features}";
+  cargoFlags = "--profile release --target ${target} --offline --locked${featureFlag}";
+  common = {
+    pname = "fujimod-xm1";
+    version = "0.1.0";
+    sourceRoot = "fujimod-xm1-workspace/fujimod-xm1";
+    inherit cargoLock;
+    cargoVendorDir = craneLib.vendorCargoDeps { inherit cargoLock; };
+    nativeBuildInputs = [ pkgs.cmake pkgs.pkg-config pkgs.jq ];
+    # nand_image.rs links zlib for retained-identical committed NAND exports.
+    buildInputs = [ pkgs.zlib ];
+    dontUseCmakeConfigure = true;
+  };
+  deps = craneLib.buildDepsOnly (common // {
+    dummySrc = workspace (craneLib.mkDummySrc { src = crate; inherit cargoLock; });
+    buildPhaseCargoCommand = ''
+      cargo build ${cargoFlags}
+      cargo test --no-run ${cargoFlags}
+    '';
+    doCheck = false;
+  });
 in
-fujimod.passthru.rustPlatform.buildRustPackage ({
-  pname = "fujimod-xm1";
-  version = "0.1.0";
-  inherit src;
-  sourceRoot = "fujimod-xm1-workspace/fujimod-xm1";
-  cargoLock.lockFile = ../emulation/fujimod-xm1/Cargo.lock;
-  CARGO_BUILD_JOBS = 2;
-  RUST_TEST_THREADS = 1;
-  dontUseCargoParallelTests = true;
+# //emulation:fujimod-xm1-tests runs every exported test harness; the crate
+# has no doctests.
+craneLib.mkCargoDerivation (common // {
+  src = workspace crate;
+  cargoArtifacts = deps;
+  doInstallCargoArtifacts = false;
   XM1_CHECKPOINT_MODEL_ID = builtins.hashString "sha256" (builtins.toJSON {
     engine = "${fujimod}";
     owned = "${checkpointModel}";
     build = builtins.readFile ./fujimod-xm1.nix;
-    inherit features;
-    target = pkgs.stdenv.targetPlatform.rust.rustcTargetSpec;
+    inherit features target;
   });
-  nativeBuildInputs = [ pkgs.cmake pkgs.pkg-config pkgs.jq ];
-  nativeCheckInputs = [ fujimod ];
-  # nand_image.rs links zlib for retained-identical committed NAND exports.
-  buildInputs = [ pkgs.zlib ];
-  dontUseCmakeConfigure = true;
-  preCheck = ''
-    cargo test --no-run --message-format=json -j "$CARGO_BUILD_JOBS" --profile release \
-      --target ${pkgs.stdenv.targetPlatform.rust.rustcTargetSpec} --offline${featureFlag} > test-artifacts.json || {
-        status=$?
-        jq -r 'select(.reason == "compiler-message") | .message.rendered // empty' test-artifacts.json
-        exit "$status"
-      }
+  buildPhaseCargoCommand = ''
+    cargo build ${cargoFlags} --message-format json-render-diagnostics > build-artifacts.json
+    cargo test --no-run ${cargoFlags} --message-format json-render-diagnostics > test-artifacts.json
   '';
   # store-path holds $out, so Bazel actions keyed on it change with the store path.
-  postInstall = ''
-    mkdir -p $out/share/fujimod-xm1
+  installPhaseCommand = ''
+    mkdir -p $out/bin $out/share/fujimod-xm1 $out/libexec/fujimod-xm1-tests
+    jq -r 'select(.reason == "compiler-artifact" and .target.kind == ["bin"] and .profile.test == false) | .executable' build-artifacts.json \
+      | while read -r executable; do cp "$executable" $out/bin/; done
     cp data/xm1-150.json $out/share/fujimod-xm1/
     printf '%s\n' "$out" > $out/share/fujimod-xm1/store-path
-    mkdir -p $out/libexec/fujimod-xm1-tests
-    ${pkgs.jq}/bin/jq -r 'select(.reason == "compiler-artifact" and .profile.test == true and .executable != null) | .executable' test-artifacts.json \
+    jq -r 'select(.reason == "compiler-artifact" and .profile.test == true and .executable != null) | .executable' test-artifacts.json \
       | while read -r executable; do
           cp "$executable" "$out/libexec/fujimod-xm1-tests/"
           basename "$executable" >> "$out/libexec/fujimod-xm1-tests/manifest"
         done
     test -s $out/libexec/fujimod-xm1-tests/manifest
   '';
-} // pkgs.lib.optionalAttrs (features != [ ]) {
-  buildFeatures = features;
-  checkFeatures = features;
 })

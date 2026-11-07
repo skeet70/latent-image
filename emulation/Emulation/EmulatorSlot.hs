@@ -1,7 +1,8 @@
--- | Host admission for full-system emulator runs. A run holds one of the host's
--- 'hostSlots' slot locks under @~/.cache/xm1-emulator-slots/@, whichever is free,
--- shared by every checkout and agent on the host, and runs inside a systemd user
--- scope with a memory cap and no swap when the host has a systemd user session.
+-- | Admission for full-system emulator runs, the 'Emulator' class of
+-- "Emulation.HostAdmission". A run holds one of the host's 'hostSlots' slot
+-- locks under @~/.cache/xm1-emulator-slots/@, whichever is free, shared by every
+-- checkout and agent on the host, and runs inside a systemd user scope with a
+-- memory cap and no swap when the host has a systemd user session.
 -- @XM1_EMULATOR_SLOTS@ is how many slots a caller such as verify-candidate may hold at once.
 module Emulation.EmulatorSlot
   ( SlotCount (..)
@@ -18,9 +19,9 @@ import Control.Monad (forM_, unless, when)
 import qualified Data.ByteString as B
 import Data.Char (isDigit)
 import Data.List (isSuffixOf, stripPrefix)
-import System.Directory (createDirectoryIfMissing, doesDirectoryExist, findExecutable, getHomeDirectory, listDirectory, removeFile)
+import Emulation.HostAdmission (MemoryMax (..), ResourceClass (Emulator), classConcurrency, classMemoryMax, memoryMaxBytes, parseMemoryMax, userScopeAvailable)
+import System.Directory (createDirectoryIfMissing, doesDirectoryExist, getHomeDirectory, listDirectory, removeFile)
 import System.Environment (getExecutablePath, lookupEnv, setEnv)
-import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath ((</>))
 import System.IO (Handle, IOMode (ReadMode, WriteMode), SeekMode (AbsoluteSeek), hFlush, hPutStrLn, stderr, withBinaryFile)
 import System.IO.Error (catchIOError, isDoesNotExistError)
@@ -28,14 +29,9 @@ import System.Posix.Files (createSymbolicLink, setFileMode)
 import System.Posix.IO (LockRequest (WriteLock), OpenFileFlags (creat), OpenMode (ReadWrite), closeFd, defaultFileFlags, openFd, setLock)
 import System.Posix.Process (executeFile, getProcessID)
 import System.Posix.Types (ProcessID)
-import System.Process (readProcessWithExitCode)
-import System.Timeout (timeout)
 import Text.Read (readMaybe)
 
 newtype SlotCount = SlotCount Int
-
--- | A systemd @MemoryMax=@ value: decimal bytes with an optional K, M, G or T suffix.
-newtype MemoryMax = MemoryMax String
 
 data SlotPolicy = SlotPolicy
   { slotCount :: SlotCount
@@ -51,14 +47,14 @@ memoryVariable = "XM1_EMULATOR_MEMORY_MAX"
 
 -- | The host budget: slot locks 1 and 2.
 hostSlots :: Int
-hostSlots = 2
+hostSlots = classConcurrency Emulator
 
 -- | Whether this process or an ancestor holds a slot.
 insideSlot :: IO Bool
 insideSlot = maybe False (const True) <$> lookupEnv slotVariable
 
 -- | All host slots at 2G by default; @XM1_EMULATOR_SLOTS@ (1..'hostSlots') and
--- @XM1_EMULATOR_MEMORY_MAX@ override them.
+-- @XM1_EMULATOR_MEMORY_MAX@ (at most the class cap) override them.
 slotPolicyFromEnvironment :: IO SlotPolicy
 slotPolicyFromEnvironment = do
   slots <- lookupEnv slotsVariable >>= maybe (pure (SlotCount hostSlots)) parseSlots
@@ -68,10 +64,10 @@ slotPolicyFromEnvironment = do
     parseSlots text = case readMaybe text of
       Just count | count >= 1 && count <= hostSlots -> pure (SlotCount count)
       _ -> ioError (userError (slotsVariable ++ " must be an integer 1.." ++ show hostSlots ++ ", the host's slots"))
-    parseMemory text = case span isDigit text of
-      (digits@(_ : _), suffix) | suffix `elem` ["", "K", "M", "G", "T"], read digits > (0 :: Integer) ->
-        pure (MemoryMax (digits ++ suffix))
-      _ -> ioError (userError (memoryVariable ++ " must be a positive byte count with an optional K, M, G or T suffix"))
+    MemoryMax cap = classMemoryMax Emulator
+    parseMemory text = case parseMemoryMax text of
+      Just memory | memoryMaxBytes memory <= memoryMaxBytes (MemoryMax cap) -> pure memory
+      _ -> ioError (userError (memoryVariable ++ " must be a positive byte count with an optional K, M, G or T suffix, at most " ++ cap))
 
 -- | Returns inside a slot. Outside one, waits for a free slot, then replaces
 -- the process with itself, under @systemd-run --user --scope@ when a user
@@ -104,20 +100,6 @@ reexecInSlot policy arguments = do
           hPutStrLn stderr ("No systemd user session: emulator slot " ++ show slot ++ " runs without the " ++ memory ++ " memory cap")
           hFlush stderr
           executeFile executable False arguments Nothing
-
--- | Whether @systemd-run --user@ can start a scope: the binary exists and the
--- user manager answers within five seconds.
-userScopeAvailable :: IO Bool
-userScopeAvailable = do
-  runner <- findExecutable "systemd-run"
-  case runner of
-    Nothing -> pure False
-    Just _ -> do
-      result <- timeout 5_000_000 (try (readProcessWithExitCode "systemctl" ["--user", "show-environment"] ""))
-        :: IO (Maybe (Either IOException (ExitCode, String, String)))
-      pure $ case result of
-        Just (Right (ExitSuccess, _, _)) -> True
-        _ -> False
 
 slotDirectory :: IO FilePath
 slotDirectory = do
