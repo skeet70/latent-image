@@ -13,11 +13,13 @@ module Replacement.RecordStore.Minimize
 import Data.List (nub)
 import qualified Data.ByteString as B
 import Data.Word (Word16)
+import Emulation.NativeObservation (Register)
 import Replacement.RecordStore.Cases
 import Replacement.RecordStore.Generate (ValidCase, oracleCase, validCase)
 import Replacement.RecordStore.Model
 
--- | Which observation differed. One tag per existing OracleMain comparison.
+-- | Which observation differed. One tag per existing OracleMain comparison;
+-- preserved registers identify the register that differs.
 data Boundary
   = Outcome
   | Results
@@ -26,8 +28,8 @@ data Boundary
   | Source
   | Requests
   | Callbacks
-  | PreservedRegister
-  deriving (Eq, Ord, Show, Enum, Bounded)
+  | Preserved Register
+  deriving (Eq, Ord, Show)
 
 -- | Why a trial did not decide the predicate.
 data TrialBlock

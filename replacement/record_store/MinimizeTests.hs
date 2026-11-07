@@ -14,7 +14,7 @@ assert :: String -> Bool -> IO ()
 assert message condition = unless condition (error message)
 
 fixture :: String -> [Operation] -> [(Word16, Bool)] -> [(Word16, Bool)] -> Callback -> OracleCase
-fixture label body bank0 bank1 callback = OracleCase (CaseName ("minimize-" ++ label)) Kind0 (mediumFor bank0 bank1) (Open : Register Normal : body) callback NoFault
+fixture label bodyOperations bank0 bank1 callback = OracleCase (CaseName ("minimize-" ++ label)) Kind0 (mediumFor bank0 bank1) (Open : Register Normal : bodyOperations) callback NoFault
   where
     g = geometry Kind0
     mediumFor a b = putBank g Bank1 (bankBytesFor b) (putBank g Bank0 (bankBytesFor a) (Medium M.empty))
