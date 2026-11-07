@@ -98,10 +98,10 @@ fn main() {
     let receive = words.mailbox_wait(TaskSlot::new(9).unwrap());
     send_sim.set(receiver.domain(), 1);
     send_sim.set(receiver.wait(), receive.0 .0);
-    sim.set_byte(receiver.priority(), 5);
-    sim.set_byte(receiver.state(), 0x32);
-    sim.set(mailbox_control.queue().next(), receiver.0 .0);
-    sim.set(mailbox_control.queue().prev(), receiver.0 .0);
+    send_sim.set_byte(receiver.priority(), 5);
+    send_sim.set_byte(receiver.state(), 0x32);
+    send_sim.set(mailbox_control.queue().next(), receiver.0 .0);
+    send_sim.set(mailbox_control.queue().prev(), receiver.0 .0);
     send_sim.set(receiver.next(), mailbox_control.0 .0);
     send_sim.set(receiver.prev(), mailbox_control.0 .0);
     let message = Message(GuestAddress(0x4000_0300));
