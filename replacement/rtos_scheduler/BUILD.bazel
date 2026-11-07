@@ -3,7 +3,13 @@ load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
 
 package(default_visibility = ["//visibility:public"])
 
-exports_files(["regions.json"])
+exports_files([
+    "regions.json",
+    "scheduler-a-placement.ld",
+    "scheduler-b-placement.ld",
+    "scheduler-s2-a-placement.ld",
+    "scheduler-s2-b-placement.ld",
+])
 
 [
     xm1_rust_staticlib(
