@@ -775,10 +775,11 @@ Lifetime:
   Current integration `9d527c7d` builds the staticlib and passes the object/layout suites and research contracts. Its model checks restored caller interrupt state and masked writes rather than counting mask calls. The explicitly reused qualified consumer again produces all four outcomes. The terminal and packet are `private-data/scratch/Issue117Integration/rtos-f1a-host-1/results.json` and `review-packet.json`.
 - **F1b, object-lock-only bodies.** `0x90`, `0x98`, `0xdc`: the object lock and a pattern or head read, with no scheduler lock and no timer. Implemented in source as `clear_flag`, `poll_flag` and `poll_receive` over an `ObjectLock` seam: the `Machine` words plus `with_object_lock(lock, body)`, which brackets the section with the I-only mask and the object domain's `+0x14` lock through `+0x18`/`+0x1c`. The scope owns the acquire and release, so no held token is handed out and there is no second lock argument. The lock and the table are the object domain's, so a class-2 id from an A body reads B's record and B's lock while the entry domain supplies only `admit`.
   **Inward types.** `poll_flag` takes a `WantedMask` whose constructor refuses zero with -17, the rule `admit` already applies, so the body cannot be called with the mask that `MatchMode::All` would satisfy trivially. Both polls take an `OutWord`, a typed guest word the body writes through the memory seam at the stock point: the reported pattern before the clear-on-match store, and the head before the head is advanced.
-  **Alias edge and two stock defects.** The stock edge permits an output word that aliases a record word, and both pinned bodies read a record word after writing through that output: `+0xdc` stores the head and then loads the message's next link (A `0x4b0a8`/`0x4b0ac`, B `0xdb068`/`0xdb06c`), and `event_flag_check` stores the pattern and then loads the creation attributes (A `0x48114`/`0x48118`, B `0xd80d4`/`0xd80d8`). With such an alias, stock self-cycles the mailbox queue or skips the clear-on-match. The owned bodies read the successor and the clear decision before the output write, so the queue pops and the clear happens; no pointer validation or no-alias rule was added. The two behavioural regressions fail on the stock order and pass on the owned one.
-  **Scope.** These are lock-only bodies: no scheduler, wakeup, timer or teardown path is implemented, and the increment closes no retained-alias or concurrency question. The object lock's cross-core effect depends on the unrecovered exclusive-monitor law, so a local spin and a per-domain word are not an exclusion proof.
-- **F2, task-context wake bodies.** `0x88` and `0xd4`: object lock, then the waiter's scheduler lock, then the release, notify and dispatcher. Implemented in source as `set_flag` and `send` over a `Wake` seam whose primitives are the owned S1 and S2 bodies: `with_scheduler_lock`, `waiter_domain` (T+0x20), `reset_task`, `prepare`, `insert` and `notify`, with `dispatch` as the S2 entry. The wait release is **owned**: `wake.rs` implements the `0x44568` algorithm itself over those primitives, including the timer cancel, the T+0x24/+0x28/+0x2c handshake, the suspended short-circuit and the ready insert, and takes only `kernel_remove_timer` (A `0x44ca8` / B `0xd4c68`) as a retained dependency. Locality comes from the notify record id, not from the object's domain: a flag in A with a waiter in B is remote from an A entry and local from a B entry, which the host cases exercise over one in-memory scheduler backend. The lock order is object then waiter scheduler, enforced by the scoped guards.
-  **Order and conditionals.** `set_flag` ORs the bits, reports the pre-clear pattern into the wait record, applies clear-on-match, unlinks the waiter, and dispatches only when the release changed the selection and the notify is local. `send` stores the message into the receiver's wait record before the scheduler lock, unlinks the receiver, and on the empty path appends FIFO or inserts by ascending message priority after equals; the message's link word is untouched on the receiver path.
+  **Alias edge and two stock defects.** `+0xdc` stores the head through the caller's word before loading the message's next link (A `0x4b0a8`/`0x4b0ac`, B `0xdb068`/`0xdb06c`). `event_flag_check` stores the pattern (A `0x48114`, B `0xd80d4`), then loads the control block's configuration pointer (`0x48118`/`0xd80d8`) and attributes (`0x4811c`/`0xd80dc`). An output at the message link makes stock self-cycle the queue; an output at the attributes can suppress the clear. The owned bodies capture the successful read before the store.
+  **Scope.** Source `35ad56c4` builds the staticlib and passes 55 object and 18 layout host cases. The seven-outcome consumer built and executed at `471aac9c` is explicitly reused, not relabeled as current-source evidence. Immutable proof and current integration remain separate. These generic bodies have no qualified A32 instantiation, native execution or firmware retirement. Scheduler, wakeup, timer, teardown, retained-alias closure and physical cross-core exclusion remain open (E-RTOS-OBJECTS-F0-HOST-1).
+- **F2, task-context wake bodies.** `0x88` and `0xd4`: object lock, then the waiter's scheduler lock, then the owned release, notify and dispatcher. Implemented in source as `set_flag` and `send` over a `Wake` seam whose primitives are the owned S1 and S2 bodies: `with_scheduler_lock`, `waiter_domain` (T+0x20), `reset_task`, `prepare`, `insert` and `notify`, with `dispatch` as the S2 entry. The wait release is owned: `wake.rs` implements the `0x44568` algorithm itself over those primitives, including the timer cancel, the T+0x24/+0x28/+0x2c handshake, the suspended short-circuit and the ready insert, and takes only `kernel_remove_timer` (A `0x44ca8` / B `0xd4c68`) as a retained stock seam.
+  **Unexecuted.** F2 source has no host, native or emulator run. Its host tests, the stage link and the family-suite runner are frozen commands only; this is distinct from the F1b host55 claim above.
+  **Order and conditionals.** `set_flag` ORs the bits, reports the pre-clear pattern into the wait record, applies clear-on-match, unlinks the waiter, and dispatches only when the release changed the selection and the notify is local. `send` stores the message into the receiver's wait record before the scheduler lock, unlinks the receiver, and on the empty path appends FIFO or inserts by ascending priority.
   **Not implemented.** No handler-context form (`0x8c`, F3), no timeout path and no teardown.
 - **F3, blocking bodies and the handler set.** `0x94`, `0x9c`, `0xd8`, `0xe0`, `0x8c`: the wait record, the stock timer insert, the cancellation handshake and the handler-side set. It depends on the stock tick `+0x104` and its callback, so it inherits the stock entry-clearing hazard (§4.14.5f).
 - **F4, teardown bodies.** `0x84` and `0xd0`. Stock has no scheduler interaction here because it strands waiters; the owned correction releases them, cancels their timers and notifies, so this increment depends on F2 and F3 and lands after them. It is not part of any "no scheduler interaction" bucket.
@@ -794,11 +795,13 @@ pub struct MailboxSlot(u16);                    // 1..=the mailbox count word
 pub struct FlagId { pub domain: Domain, pub slot: FlagSlot }
 pub struct MailboxId { pub domain: Domain, pub slot: MailboxSlot }
 pub struct Pattern(u32);
+pub struct WantedMask(Pattern);                 // nonzero requested bits
+pub struct OutWord(GuestAddress);               // writable stock-edge result word
 pub struct KeepMask(u32);
 pub enum MatchMode { All, Any }                 // mode bit 0
 pub enum Timeout { Forever, Poll, Units(u32) }
 pub enum WaitOutcome<T> { Satisfied(T), Released, Deleted, TimedOut }
-pub enum ObjectStatus { Context, InvalidClass, InvalidIndex, NotCreated, Param, QueueOverflow }
+pub enum ObjectStatus { Context, InvalidClass, InvalidIndex, AlreadyExists, NotCreated, Param, QueueOverflow }
 ```
 
 `resolve_flag` and `resolve_mailbox` are the only constructors of `FlagId` and `MailboxId`. They take the entry domain, the raw word and the live count, which the entry reads from the **selected context record** (`+0x58`/`+0x68`), never from the configuration table, because the record is what stock compares against. `EntryDomain` is the loader whose body runs, not the executing core: a loader-A slot runs on either core, and class 0, the create tables and the delete tables all follow the entry domain. `class_zero_is_the_entry_domain`, `a_class_two_id_from_an_a_body_names_b` and `create_names_the_entry_domain_whatever_the_class` are the counterexamples. Raw layout stays at named consumers only: the 14 entry bodies, the image4 wrappers `0x724480`, `0x72503c`, `0x725318`, `0x724cdc`, `0x724f08`, `0x725dd8`, `0x72612c` (ids and the two `Message` words), the other domain's retained kernel, and the two initialisers.
@@ -815,20 +818,22 @@ fn create_flag(m: &M, id: FlagId, create: FlagCreate) -> Result<FlagId, ObjectSt
 fn delete_flag(m: &M, id: FlagId) -> Result<(), ObjectStatus>;
 fn set_flag(m: &M, id: FlagId, bits: Pattern, from: Context) -> Result<(), ObjectStatus>;
 fn clear_flag(m: &M, id: FlagId, keep: KeepMask) -> Result<(), ObjectStatus>;
-fn wait_flag(m: &M, id: FlagId, want: Pattern, mode: MatchMode,
-             out: &mut Pattern, timeout: Timeout) -> Result<WaitOutcome<Pattern>, ObjectStatus>;
-fn poll_flag(m: &M, id: FlagId, want: Pattern, mode: MatchMode,
-             out: &mut Pattern) -> Result<WaitOutcome<Pattern>, ObjectStatus>;
+fn wait_flag(m: &M, id: FlagId, want: WantedMask, mode: MatchMode,
+             out: OutWord, timeout: Timeout) -> Result<WaitOutcome<Pattern>, ObjectStatus>;
+fn poll_flag(m: &M, id: FlagId, want: WantedMask, mode: MatchMode,
+             out: OutWord) -> Result<WaitOutcome<Pattern>, ObjectStatus>;
 
 fn create_mailbox(m: &M, id: MailboxId, create: MailboxCreate) -> Result<MailboxId, ObjectStatus>;
 fn delete_mailbox(m: &M, id: MailboxId) -> Result<MessageDrain, ObjectStatus>;
 fn send(m: &M, id: MailboxId, message: Message) -> Result<(), ObjectStatus>;
-fn receive(m: &M, id: MailboxId, out: &mut Option<Message>,
+fn receive(m: &M, id: MailboxId, out: OutWord,
            timeout: Timeout) -> Result<WaitOutcome<Message>, ObjectStatus>;
-fn poll_receive(m: &M, id: MailboxId, out: &mut Option<Message>) -> Result<WaitOutcome<Message>, ObjectStatus>;
+fn poll_receive(m: &M, id: MailboxId, out: OutWord) -> Result<WaitOutcome<Message>, ObjectStatus>;
 ```
 
-`Err` carries admission (`Context`, `InvalidClass`, `InvalidIndex`, `NotCreated`, `Param`, `QueueOverflow`); `Ok` carries the wait outcome, so `TimedOut` covers both the poll's `-50` and the expiry's `-50`, and the entries module holds the single typed-to-`i32` mapping (`Released` and `Deleted` both map to `-49`). `MessageDrain` is the teardown result: the messages still queued when the mailbox was deleted, in delivery order, so an owned caller cannot leak them.
+Create, clear and poll entries are implemented; wait, send and delete remain target interfaces. Stock adapters preserve admission precedence before constructing inward types.
+
+`Err` carries admission (`Context`, `InvalidClass`, `InvalidIndex`, `AlreadyExists`, `NotCreated`, `Param`, `QueueOverflow`); `Ok` carries the wait outcome, so `TimedOut` covers both the poll's `-50` and expiry's `-50`. The entries module maps typed results to stock `i32` statuses (`Released` and `Deleted` both map to `-49`). `MessageDrain` is the target teardown result: messages still queued when the mailbox is deleted, in delivery order.
 
 **(c) Record views to add to `replacement/rtos_layout`.**
 

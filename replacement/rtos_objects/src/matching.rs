@@ -8,8 +8,6 @@ pub struct Pattern(pub u32);
 #[repr(transparent)]
 pub struct KeepMask(pub u32);
 
-/// A nonzero wait mask. `admit` already refuses zero with -17, so this only carries that rule to
-/// the bodies that cannot re-check it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct WantedMask(Pattern);
 
