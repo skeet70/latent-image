@@ -454,7 +454,7 @@ compareFamily facts executing one description stock owned =
           Just saved ->
             ["suspended caller frame is outside its live stack" | saved < callerSp one - 0x400 || toInteger saved + 36 > toInteger (callerSp one) || saved .&. 3 /= 0]
               ++ ["suspended caller resume entry differs" | readWord facts one observation (GuestAddress savedPcAddress) /= Just (resumeEntry executing)]
-              ++ ["suspended S1 frame prefix differs" | (offset,value) <- [(0,0x13),(4,0x93),(8,dfHandlerContext (domainFacts facts executing))], readWord facts one observation (GuestAddress (saved+offset)) /= Just value]
+              ++ ["suspended callee-saved register " ++ show register ++ " differs" | (offset,register) <- zip [12,16 .. 28] [R7 .. R11], readWord facts one observation (GuestAddress (saved+offset)) /= N.lookupRegister register observation]
               ++ ["suspended continuation is not in the caller's code" | maybe True (not . inOwnedCode) (readWord facts one observation (GuestAddress (saved+32)))]
     savedSpAddress = taskAt facts executing runningSlot + factsTaskSavedSp facts
     savedPcAddress = taskAt facts executing runningSlot + factsTaskResumePc facts

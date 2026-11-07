@@ -84,7 +84,7 @@ impl Machine for Cpu {
 
     fn mask_interrupts(&self) -> SavedInterrupts {
         let saved: u32;
-        unsafe { asm!("mrs {saved}, cpsr", "cpsid if", saved = out(reg) saved, options(nostack)) };
+        unsafe { asm!("mrs {saved}, cpsr", "cpsid i", saved = out(reg) saved, options(nostack)) };
         SavedInterrupts(saved)
     }
 
