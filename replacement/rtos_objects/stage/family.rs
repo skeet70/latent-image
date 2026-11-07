@@ -11,7 +11,7 @@ use crate::objects::block::{
 use crate::objects::create::{create_flag, create_mailbox, FlagAttributes, MailboxAttributes};
 use crate::objects::id::{own_flag_slot, own_mailbox_slot, EncodedId, EntryDomain, FlagId, MailboxId};
 use crate::objects::layout::{Domain, GuestAddress, Message, Task};
-use crate::objects::locked::{clear_flag, poll_flag, poll_receive, OutWord};
+use crate::objects::locked::{clear_flag, OutWord};
 use crate::objects::matching::{KeepMask, Pattern, WantedMask};
 use crate::objects::message::PriorityLimit;
 use crate::objects::status::ObjectStatus;
@@ -355,7 +355,7 @@ impl MailboxInvocation {
 }
 
 #[inline(never)]
-fn flag_wait_admitted(admitted: AdmittedFlag, result: u32) -> i32 {
+fn flag_wait_admitted(admitted: AdmittedFlag, result: u32, timeout: Timeout) -> i32 {
     let wanted = match want(admitted.want) {
         Ok(wanted) => wanted,
         Err(status) => return status.code(),
@@ -369,7 +369,7 @@ fn flag_wait_admitted(admitted: AdmittedFlag, result: u32) -> i32 {
             wanted,
             admitted.mode,
             OutWord(GuestAddress(result)),
-            admitted.timeout.unwrap_or(Timeout::Forever),
+            timeout,
         ) {
             Ok(FlagBlocking::Ready(outcome)) => break outcome.code(),
             Ok(FlagBlocking::Pending(pending)) => {
@@ -392,7 +392,7 @@ fn flag_wait_admitted(admitted: AdmittedFlag, result: u32) -> i32 {
 }
 
 #[inline(never)]
-fn receive_admitted(admitted: AdmittedMailbox, message_out: u32) -> i32 {
+fn receive_admitted(admitted: AdmittedMailbox, message_out: u32, timeout: Timeout) -> i32 {
     let saved = Cpu.mask_i();
     let code = loop {
         match receive(
@@ -400,7 +400,7 @@ fn receive_admitted(admitted: AdmittedMailbox, message_out: u32) -> i32 {
             EntryDomain::new(ENTRY),
             admitted.id,
             OutWord(GuestAddress(message_out)),
-            admitted.timeout.unwrap_or(Timeout::Forever),
+            timeout,
         ) {
             Ok(ReceiveBlocking::Ready(outcome)) => break outcome.code(),
             Ok(ReceiveBlocking::Pending(pending)) => {
@@ -448,18 +448,9 @@ fn flag_router(invocation: FlagInvocation) -> i32 {
             Err(status) => status.code(),
         },
         FlagInvocation::Wait { result, .. } | FlagInvocation::TimedWait { result, .. } => {
-            flag_wait_admitted(admitted, result)
+            flag_wait_admitted(admitted, result, admitted.timeout.unwrap_or(Timeout::Forever))
         }
-        FlagInvocation::Poll { result, .. } => {
-            let wanted = match want(admitted.want) {
-                Ok(wanted) => wanted,
-                Err(status) => return status.code(),
-            };
-            match poll_flag(&Cpu, admitted.id, wanted, admitted.mode, OutWord(GuestAddress(result))) {
-                Ok(outcome) => outcome.code(),
-                Err(status) => status.code(),
-            }
-        }
+        FlagInvocation::Poll { result, .. } => flag_wait_admitted(admitted, result, Timeout::Poll),
     }
 }
 
@@ -481,12 +472,11 @@ fn mailbox_router(invocation: MailboxInvocation) -> i32 {
             0
         }
         MailboxInvocation::Receive { message_out, .. }
-        | MailboxInvocation::TimedReceive { message_out, .. } => receive_admitted(admitted, message_out),
+        | MailboxInvocation::TimedReceive { message_out, .. } => {
+            receive_admitted(admitted, message_out, admitted.timeout.unwrap_or(Timeout::Forever))
+        }
         MailboxInvocation::Poll { message_out, .. } => {
-            match poll_receive(&Cpu, admitted.id, OutWord(GuestAddress(message_out))) {
-                Ok(outcome) => outcome.code(),
-                Err(status) => status.code(),
-            }
+            receive_admitted(admitted, message_out, Timeout::Poll)
         }
     }
 }
