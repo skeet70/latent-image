@@ -71,3 +71,4 @@ SECTIONS {
     __rotate_body_end = .;
     . = ORIGIN(rotate) + LENGTH(rotate);
   } > rotate =0xf000f0e7
+}

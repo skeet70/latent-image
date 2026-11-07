@@ -21,3 +21,4 @@ SECTIONS {
   .s2_irq_return : { KEEP(*(.text.s2_irq_return)) __s2_irq_return_body_end = .; . = ORIGIN(s2_irq_return) + LENGTH(s2_irq_return); } > s2_irq_return =0xf000f0e7
   .s2_irq_resume : { KEEP(*(.text.s2_irq_resume)) __s2_irq_resume_body_end = .; . = ORIGIN(s2_irq_resume) + LENGTH(s2_irq_resume); } > s2_irq_resume =0xf000f0e7
   .s2_pool : { KEEP(*(.rodata.s2_pool)) __s2_pool_body_end = .; . = ORIGIN(s2_pool) + LENGTH(s2_pool); } > s2_pool =0xf000f0e7
+}
