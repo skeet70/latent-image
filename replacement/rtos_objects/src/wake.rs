@@ -93,6 +93,10 @@ pub fn release_with<M: Release>(
         m.remove_timer(owner, GuestAddress(entry));
     }
     m.store_word(wait, completion.code() as u32);
+    release_ready(m, owner, task)
+}
+
+fn release_ready<M: Release>(m: &M, owner: KernelContext, task: Task) -> Selection {
     if m.load_word(task.terminate_pending()) != 0 {
         m.reset_task(task);
         m.store_word(task.context_discarded(), 1);
