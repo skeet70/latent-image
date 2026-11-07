@@ -101,6 +101,59 @@ xm1_rust_staticlib(
     for domain in ["a", "b"]
 ]
 
+[
+    xm1_rust_staticlib(
+        name = "objects-family-adapter-%s" % domain,
+        src = "stage/adapter.rs",
+        crate_name = "xm1_rtos_objects_family_adapter",
+        data = [
+            "stage/family.rs",
+            "src/admission.rs",
+            "src/block.rs",
+            "src/create.rs",
+            "src/id.rs",
+            "src/lib.rs",
+            "src/locked.rs",
+            "src/matching.rs",
+            "src/message.rs",
+            "src/order.rs",
+            "src/status.rs",
+            "src/teardown.rs",
+            "src/timeout.rs",
+            "src/wake.rs",
+            "//replacement/rtos_layout:src/lib.rs",
+        ],
+        rustc_flags = [
+            "--cfg",
+            "'feature=\"domain-%s\"'" % domain,
+            "--cfg",
+            "'feature=\"stage\"'",
+            "--cfg",
+            "'feature=\"family\"'",
+        ],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    xm1_rust_elf(
+        name = "objects-family-stage-%s" % domain,
+        rust_staticlib = ":objects-family-adapter-%s" % domain,
+        rust_components = [
+            ":scheduler-%s-component" % domain,
+            ":scheduler-s2-%s-component" % domain,
+        ],
+        link_script = "stage/family-%s.ld" % domain,
+        extra_ldflags = ["-Wl,--gc-sections", "-Wl,--orphan-handling=error"],
+        link_includes = [
+            "//replacement/rtos_scheduler:scheduler-%s-placement.ld" % domain,
+            "//replacement/rtos_scheduler:scheduler-s2-%s-placement.ld" % domain,
+        ],
+        entry = "xm1_rtos_objects_family_flag_create",
+    )
+    for domain in ["a", "b"]
+]
+
 genrule(
     name = "objects-smoke-build",
     srcs = [

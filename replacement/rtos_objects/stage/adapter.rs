@@ -4,6 +4,9 @@
 #[path = "../src/lib.rs"]
 mod objects;
 
+#[cfg(feature = "family")]
+mod family;
+
 use core::arch::asm;
 use core::ptr::read_volatile;
 use objects::create::{Machine, SavedInterrupts};
