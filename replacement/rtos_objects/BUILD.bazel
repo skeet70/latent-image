@@ -60,7 +60,7 @@ xm1_rust_staticlib(
             "//replacement/rtos_scheduler:src/tests.rs",
             "//replacement/rtos_layout:src/lib.rs",
         ],
-        rustc_flags = ["--cfg", "'feature=\"component\"'"],
+        rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain, "--cfg", "'feature=\"component\"'"],
     )
     for domain in ["a", "b"]
 ]
@@ -71,7 +71,7 @@ xm1_rust_staticlib(
         src = "//replacement/rtos_scheduler:src/s2.rs",
         crate_name = "xm1_rtos_scheduler_s2",
         data = ["//replacement/rtos_layout:src/lib.rs"],
-        rustc_flags = ["--cfg", "'feature=\"component\"'"],
+        rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain, "--cfg", "'feature=\"component\"'"],
     )
     for domain in ["a", "b"]
 ]
