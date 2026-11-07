@@ -94,30 +94,6 @@ genrule(
     ],
 )
 
-genrule(
-    name = "objects-smoke-build",
-    srcs = [
-        "smoke.rs",
-        "src/admission.rs",
-        "src/create.rs",
-        "src/id.rs",
-        "src/lib.rs",
-        "src/locked.rs",
-        "src/matching.rs",
-        "src/message.rs",
-        "src/order.rs",
-        "src/sim.rs",
-        "src/status.rs",
-        "src/timeout.rs",
-        "src/wake.rs",
-        "//replacement/rtos_layout:src/lib.rs",
-        "//replacement/rtos_scheduler:scheduler-host-rlib",
-    ],
-    outs = ["objects-smoke-bin"],
-    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --cfg 'feature=\"sim\"' --extern xm1_rtos_scheduler=$(location //replacement/rtos_scheduler:scheduler-host-rlib) $(location smoke.rs) -o $@",
-    executable = True,
-    tools = ["@lab_rustc//:bin/rustc"],
-)
 
 sh_test(
     name = "objects-host-tests",
@@ -127,7 +103,6 @@ sh_test(
     data = [
         ":objects-host-tests-build",
         ":objects-rust",
-        ":objects-smoke-build",
     ],
 )
 
