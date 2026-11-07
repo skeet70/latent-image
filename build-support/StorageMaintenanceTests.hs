@@ -18,7 +18,7 @@ import System.Exit (ExitCode (..))
 import System.FilePath ((</>), takeDirectory, takeFileName)
 import System.IO (hClose, hFlush, openTempFile, stdout)
 import System.Posix.Files (createLink, createSymbolicLink, setFileMode)
-import System.Posix.IO (OpenMode (ReadOnly, ReadWrite), closeFd, defaultFileFlags, openFd)
+import System.Posix.IO (OpenFileFlags (cloexec), OpenMode (ReadOnly, ReadWrite), closeFd, defaultFileFlags, openFd)
 import System.Posix.Process (executeFile)
 import System.Posix.Types (Fd (..))
 import System.Process (CreateProcess (..), StdStream (CreatePipe), createProcess, proc, readProcessWithExitCode, terminateProcess, waitForProcess)
@@ -264,14 +264,19 @@ runFixtures argument = do
       withChild command $ do
         _ <- run executable False ["apply", "--plan", plan]
         doesPathExist (root </> library) >>= \exists -> check exists "relative environment target was not protected"
-    fresh "locked" $ \root plan -> do
-      makePlan executable root plan
-      expected <- snapshot root (compilerFiles ++ protectedFiles)
-      bracket (openFd (root </> lock) ReadWrite defaultFileFlags) closeFd $ \(Fd fd) -> do
-        result <- c_flock fd 6
-        check (result == 0) "cannot acquire fixture Cargo lock"
-        _ <- run executable False ["apply", "--plan", plan]
-        assertUnchanged root (compilerFiles ++ protectedFiles) expected
+    forM_ [".cargo-lock", ".cargo-build-lock", ".cargo-artifact-lock"] $ \lockName ->
+      fresh ("locked-" ++ lockName) $ \root plan -> do
+        let held = root </> "debug" </> lockName
+        put held ""
+        makePlan executable root plan
+        expected <- snapshot root (compilerFiles ++ protectedFiles)
+        bracket (openFd held ReadWrite defaultFileFlags {cloexec = True}) closeFd $ \(Fd fd) -> do
+          result <- c_flock fd 6
+          check (result == 0) "cannot acquire fixture Cargo lock"
+          -- The lock holder is outside this probe's PID namespace.
+          _ <- run "unshare" False
+            ["--pid", "--fork", "--mount-proc", executable, "apply", "--plan", plan]
+          assertUnchanged root (compilerFiles ++ protectedFiles) expected
     fresh "multi-a" $ \root plan -> do
       let other = workspace </> "multi-b"
       fixture other
