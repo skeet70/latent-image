@@ -245,3 +245,65 @@ fn corrupt_count_fails_with_the_lock_released_and_irq_cleared() {
     assert!(!mock.masked.get());
     assert_eq!(mock.index(entry), 1);
 }
+
+#[test]
+fn upward_repair_delivers_remaining_timers_in_expiry_order() {
+    let mock = Mock::new();
+    let heap = mock.heap(32);
+    let expiries = [0u32, 100, 1, 101, 102, 2, 3, 201, 202, 203, 204, 4, 5, 6, 7];
+    let mut entries = Vec::new();
+    for (position, expiry) in expiries.iter().enumerate() {
+        let entry = mock.entry(position as u32 + 1, *expiry);
+        insert(&mock, heap, entry, Expiry(*expiry)).unwrap();
+        entries.push(entry);
+    }
+    let canceled = entries[7];
+    assert_eq!(remove(&mock, heap, canceled), Ok(Removed::Detached));
+    mock.set_word(TICK, 1000);
+    let callbacks = RefCell::new(Vec::new());
+    tick(&mock, heap, |_m, callback, _argument| {
+        callbacks.borrow_mut().push(callback.0);
+    })
+    .unwrap();
+    assert_eq!(
+        callbacks.into_inner(),
+        vec![0, 1, 2, 3, 4, 5, 6, 7, 100, 101, 102, 202, 203, 204]
+    );
+    assert_eq!(mock.count(), 0);
+    for entry in entries.iter() {
+        assert_eq!(mock.index(*entry), 0);
+    }
+    assert!(!mock.lock_held.get());
+    assert!(!mock.masked.get());
+}
+
+#[test]
+fn downward_repair_delivers_remaining_timers_in_expiry_order() {
+    let mock = Mock::new();
+    let heap = mock.heap(32);
+    let expiries = [0u32, 1, 100, 2, 3, 101, 102, 4, 5, 6, 7, 103, 104, 105, 106];
+    let mut entries = Vec::new();
+    for (position, expiry) in expiries.iter().enumerate() {
+        let entry = mock.entry(position as u32 + 1, *expiry);
+        insert(&mock, heap, entry, Expiry(*expiry)).unwrap();
+        entries.push(entry);
+    }
+    let canceled = entries[1];
+    assert_eq!(remove(&mock, heap, canceled), Ok(Removed::Detached));
+    mock.set_word(TICK, 1000);
+    let callbacks = RefCell::new(Vec::new());
+    tick(&mock, heap, |_m, callback, _argument| {
+        callbacks.borrow_mut().push(callback.0);
+    })
+    .unwrap();
+    assert_eq!(
+        callbacks.into_inner(),
+        vec![0, 2, 3, 4, 5, 6, 7, 100, 101, 102, 103, 104, 105, 106]
+    );
+    assert_eq!(mock.count(), 0);
+    for entry in entries.iter() {
+        assert_eq!(mock.index(*entry), 0);
+    }
+    assert!(!mock.lock_held.get());
+    assert!(!mock.masked.get());
+}
