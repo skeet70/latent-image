@@ -1,6 +1,6 @@
 use super::{load, Cpu, ENTRY};
-use crate::objects::block::{block_locked, Block, Deadline, TimerEntryAddress};
-use crate::objects::layout::{DomainId, FlagConfig, FlagControl, GuestAddress, KernelContext, Task, WaitQueue};
+use crate::objects::block::{block_locked, Block, Deadline, TimerEntryAddress, WaitPreparation, WaitTimer};
+use crate::objects::layout::{DomainId, FlagConfig, FlagControl, GuestAddress, KernelContext, Task, WaitBlock, WaitQueue};
 use crate::objects::locked::{check_control, OutWord};
 use crate::objects::matching::{MatchMode, Pattern};
 use crate::objects::order::QueueOrder;
@@ -18,16 +18,16 @@ pub extern "C" fn xm1_rtos_objects_wait_block(owner: u32, queue: u32, wait: u32)
     let Some(owner) = DomainId::from_word(owner) else { return };
     let queue = WaitQueue(GuestAddress(queue));
     let task = Cpu.current(ENTRY);
-    block_locked(
-        &Cpu,
-        ENTRY,
+    let prep = WaitPreparation {
+        entry: ENTRY,
         owner,
         task,
-        GuestAddress(wait),
+        wait: WaitBlock(GuestAddress(wait)),
         queue,
-        queue_order(queue),
-        None,
-    );
+        order: queue_order(queue),
+        timer: None,
+    };
+    block_locked(&Cpu, &prep);
 }
 
 /// `0x448e4` / `0xd48a4`; the caller holds the object and scheduler locks.
@@ -44,19 +44,19 @@ pub extern "C" fn xm1_rtos_objects_wait_block_timed(
     let Some(owner) = DomainId::from_word(owner) else { return };
     let queue = WaitQueue(GuestAddress(queue));
     let task = Cpu.current(ENTRY);
-    block_locked(
-        &Cpu,
-        ENTRY,
+    let prep = WaitPreparation {
+        entry: ENTRY,
         owner,
         task,
-        GuestAddress(wait),
+        wait: WaitBlock(GuestAddress(wait)),
         queue,
-        queue_order(queue),
-        Some((
-            TimerEntryAddress(GuestAddress(timer)),
-            Deadline(deadline),
-        )),
-    );
+        order: queue_order(queue),
+        timer: Some(WaitTimer {
+            entry: TimerEntryAddress(GuestAddress(timer)),
+            deadline: Deadline(deadline),
+        }),
+    };
+    block_locked(&Cpu, &prep);
 }
 
 /// `0x44744` / `0xd4704`; the caller holds the object and scheduler locks.

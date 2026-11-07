@@ -36,7 +36,7 @@ pub use admission::{
 pub use block::{
     receive, resume_flag, resume_receive, wait_flag, Block, Deadline, FlagBlocking, FlagWaitPending,
     FlagResume, IrqScope, ReceiveBlocking, ReceivePending, ReceiveResume, SavedMask, Tick,
-    TimerEntryAddress, TimeoutCallback,
+    TimerEntryAddress, TimeoutCallback, WaitPreparation, WaitTimer,
 };
 pub use create::{
     create_flag, create_mailbox, FlagAttributes, FlagCreate, Machine, MailboxAttributes, MailboxCreate,
