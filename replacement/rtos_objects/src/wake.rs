@@ -57,10 +57,10 @@ fn release<M: Wake>(m: &M, owner: Domain, task: Task) -> Selection {
         m.reset_task(task);
         m.store_word(task.context_discarded(), 1);
         let flags = m.load_word(task.flags());
-        if flags & TaskFlags::QUEUED_ACTIVATION.bits() as u32 == 0 {
+        if flags & TaskFlags::QUEUED_ACTIVATION.0 as u32 == 0 {
             return Selection::Unchanged;
         }
-        m.store_word(task.flags(), flags & !(TaskFlags::QUEUED_ACTIVATION.bits() as u32));
+        m.store_word(task.flags(), flags & !(TaskFlags::QUEUED_ACTIVATION.0 as u32));
         return m.prepare(owner, task);
     }
     if m.load_word(task.priority_change_pending()) != 0 {

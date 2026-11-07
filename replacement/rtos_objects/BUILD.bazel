@@ -77,6 +77,7 @@ genrule(
         "src/matching.rs",
         "src/message.rs",
         "src/order.rs",
+        "src/sim.rs",
         "src/status.rs",
         "src/tests.rs",
         "src/timeout.rs",
