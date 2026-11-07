@@ -471,6 +471,16 @@ impl Machine for Mock {
         self.word(at)
     }
 
+    fn load_byte(&self, at: GuestAddress) -> u8 {
+        let aligned = GuestAddress(at.0 & !3);
+        (self.word(aligned) >> (8 * (at.0 & 3))) as u8
+    }
+
+    fn store_byte(&self, at: GuestAddress, value: u8) {
+        assert_ne!(self.interrupts.get().0 & 0x80, 0, "store with IRQ unmasked");
+        self.set_byte(at, value);
+    }
+
     fn store_word(&self, at: GuestAddress, value: u32) {
         let state = self.interrupts.get().0;
         assert_ne!(state & 0x80, 0, "store with IRQ unmasked");

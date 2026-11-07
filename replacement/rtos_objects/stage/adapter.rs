@@ -74,6 +74,14 @@ impl Machine for Cpu {
         unsafe { core::ptr::write_volatile(at.0 as *mut u32, value) }
     }
 
+    fn load_byte(&self, at: GuestAddress) -> u8 {
+        unsafe { core::ptr::read_volatile(at.0 as *const u8) }
+    }
+
+    fn store_byte(&self, at: GuestAddress, value: u8) {
+        unsafe { core::ptr::write_volatile(at.0 as *mut u8, value) }
+    }
+
     fn mask_interrupts(&self) -> SavedInterrupts {
         let saved: u32;
         unsafe { asm!("mrs {saved}, cpsr", "cpsid if", saved = out(reg) saved, options(nostack)) };
@@ -131,6 +139,13 @@ impl Release for Cpu {
 
     fn remove_timer(&self, owner: KernelContext, entry: GuestAddress) {
         unsafe { xm1_rtos_objects_stock_remove_timer(owner, entry) };
+    }
+
+    fn release(&self, owner: KernelContext, task: Task) -> Selection {
+        match unsafe { xm1_rtos_objects_release(owner, task) } {
+            0 => Selection::Unchanged,
+            _ => Selection::Changed,
+        }
     }
 }
 

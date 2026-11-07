@@ -195,6 +195,16 @@ impl CreateMachine for Sim {
         self.word(address)
     }
 
+    fn load_byte(&self, address: GuestAddress) -> u8 {
+        let aligned = GuestAddress(address.0 & !3);
+        (self.word(aligned) >> (8 * (address.0 & 3))) as u8
+    }
+
+    fn store_byte(&self, address: GuestAddress, value: u8) {
+        assert_ne!(self.interrupts.get() & 0x80, 0, "store with IRQ unmasked");
+        self.set_byte(address, value);
+    }
+
     fn store_word(&self, address: GuestAddress, value: u32) {
         assert_ne!(self.interrupts.get() & 0x80, 0, "store with IRQ unmasked");
         self.set(address, value);
@@ -268,6 +278,10 @@ impl Release for Sim {
 
     fn remove_timer(&self, _owner: KernelContext, entry: GuestAddress) {
         assert!(self.armed.borrow_mut().remove(&entry.0), "timer was not armed");
+    }
+
+    fn release(&self, owner: KernelContext, task: Task) -> Selection {
+        crate::wake::release(self, owner, task)
     }
 }
 

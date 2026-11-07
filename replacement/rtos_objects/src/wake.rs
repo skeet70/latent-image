@@ -1,8 +1,8 @@
 use crate::create::Machine;
 use crate::id::{FlagId, MailboxId};
 use crate::layout::{
-    Domain, FlagConfig, FlagWait, GuestAddress, MailboxControl, MailboxWait, Message, Task, TaskFlags,
-    TaskState,
+    Domain, FlagConfig, FlagWait, GuestAddress, KernelContext, MailboxControl, MailboxWait, Message,
+    Task, TaskFlags, TaskState,
 };
 use crate::locked::ObjectLock;
 use crate::matching::{check, MatchMode, Pattern};
@@ -27,6 +27,7 @@ pub trait Release: Machine {
     fn prepare(&self, owner: KernelContext, task: Task) -> Selection;
     fn insert(&self, owner: KernelContext, task: Task) -> Selection;
     fn remove_timer(&self, owner: KernelContext, entry: GuestAddress);
+    fn release(&self, owner: KernelContext, task: Task) -> Selection;
 }
 
 pub trait Wake: ObjectLock + Release {
@@ -59,20 +60,20 @@ pub fn release<M: Release>(m: &M, owner: KernelContext, task: Task) -> Selection
     if m.load_word(task.terminate_pending()) != 0 {
         m.reset_task(task);
         m.store_word(task.context_discarded(), 1);
-        let flags = m.load_word(task.flags());
-        if flags & TaskFlags::QUEUED_ACTIVATION.0 as u32 == 0 {
+        let flags = m.load_byte(task.flags());
+        if flags & TaskFlags::QUEUED_ACTIVATION.0 == 0 {
             return Selection::Unchanged;
         }
-        m.store_word(task.flags(), flags & !(TaskFlags::QUEUED_ACTIVATION.0 as u32));
+        m.store_byte(task.flags(), flags & !TaskFlags::QUEUED_ACTIVATION.0);
         return m.prepare(owner, task);
     }
     if m.load_word(task.priority_change_pending()) != 0 {
-        m.store_word(task.priority(), m.load_word(task.pending_priority()));
+        m.store_byte(task.priority(), m.load_word(task.pending_priority()) as u8);
         m.store_word(task.priority_change_pending(), 0);
     }
     m.store_word(task.cancel_pending(), 0);
-    if m.load_word(task.state()) & TaskState::SUSPENDED.bits() as u32 != 0 {
-        m.store_word(task.state(), TaskState::SUSPENDED.bits() as u32);
+    if m.load_byte(task.state()) & TaskState::SUSPENDED.bits() != 0 {
+        m.store_byte(task.state(), TaskState::SUSPENDED.bits());
         return Selection::Unchanged;
     }
     m.insert(owner, task)
@@ -117,7 +118,7 @@ pub fn set_flag<M: Wake>(m: &M, id: FlagId, bits: Pattern) {
                         m.store_word(control.pattern(), 0);
                     }
                     unlink(m, task);
-                    dispatch_after(m, owner, release(m, owner, task))
+                    dispatch_after(m, owner, m.release(owner, task))
                 }
                 None => false,
             }
@@ -178,7 +179,7 @@ pub fn send<M: Wake>(m: &M, id: MailboxId, message: Message, priority: Option<Me
         m.store_word(wait.message(), message.0 .0);
         m.with_scheduler_lock(owner_domain, || {
             unlink(m, task);
-            dispatch_after(m, owner, release(m, owner, task))
+            dispatch_after(m, owner, m.release(owner, task))
         })
     }, |dispatch| if *dispatch { m.dispatch(-63) });
 }
