@@ -5,7 +5,6 @@ module Replacement.RtosObjects.Suite
 import Control.Monad (forM, unless)
 import Data.Bits ((.&.), (.|.), shiftL)
 import qualified Data.ByteString as B
-import Data.List (foldl')
 import qualified Data.Map.Strict as M
 import Data.Word (Word32, Word8)
 import Emulation.CachedNativeBatch (BatchReuse, cachedObservedBatch)
