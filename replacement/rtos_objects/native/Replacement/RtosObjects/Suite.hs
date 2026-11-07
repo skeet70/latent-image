@@ -5,6 +5,7 @@ module Replacement.RtosObjects.Suite
 import Control.Monad (forM, unless)
 import Data.Bits ((.&.), (.|.), shiftL)
 import qualified Data.ByteString as B
+import Data.List (foldl')
 import qualified Data.Map.Strict as M
 import Data.Word (Word32, Word8)
 import Emulation.CachedNativeBatch (BatchReuse, cachedObservedBatch)
@@ -23,6 +24,7 @@ data Invocation = TaskInvocation | HandlerCallback deriving (Eq, Show)
 data Boundary = CallerReturn | TaskArrival deriving (Eq, Show)
 data WakeOutcome = NoWaiter | Unsatisfied Domain | Released Domain deriving (Eq, Show)
 data ObservationRole = StockObservation | OwnedObservation deriving Eq
+data LockFence = AwaitAcquireFence | AwaitReleaseFence | PublishedLock | InvalidLockOrder deriving Eq
 data Expect = Equals GuestAddress Word32 | ByteEquals GuestAddress Word8 | Result Word32 deriving Show
 
 data Case = Case
@@ -477,10 +479,25 @@ compareFamily facts executing one description stock owned =
       Nothing -> ["ordered provenance is missing or truncated"]
       Just events -> lockChecks events ++ notificationChecks role events ++ timerChecks events
     writes events address = [(index,fromIntegral value :: Word32) | (index,OrderedWrite (Write actual _) (WriteValue value)) <- zip [0::Int ..] events, actual == wireAddress address]
+    privateRegions =
+      [(toInteger base,toInteger base + toInteger size) | Page ident (GuestAddress base) size _ _ <- pages facts one, ident `elem` map RegionId ["stack","caller-frame","target-stack"]]
+    privateWrite (Write (N.GuestAddress address) (N.WriteBytes size)) =
+      any (\(lo,hi) -> lo <= toInteger address && toInteger address + toInteger size <= hi) privateRegions
+    advanceFence state event = case event of
+      OrderedBarrier Dmb -> case state of
+        AwaitAcquireFence -> AwaitReleaseFence
+        AwaitReleaseFence -> PublishedLock
+        _ -> state
+      OrderedWrite write _ | not (privateWrite write) -> case state of
+        AwaitAcquireFence -> InvalidLockOrder
+        InvalidLockOrder -> InvalidLockOrder
+        _ -> AwaitReleaseFence
+      _ -> state
     lockInterval events address = do
       acquired <- fst <$> first ((==1) . snd) (writes events address)
       released <- fst <$> first ((==0) . snd) (writes events address)
-      if acquired < released && any (\(index,event) -> acquired < index && index < released && event == OrderedBarrier Dmb) (zip [0::Int ..] events) then Just (acquired,released) else Nothing
+      let finalFence = foldl' (\state (index,event) -> if acquired < index && index < released then advanceFence state event else state) AwaitAcquireFence (zip [0::Int ..] events)
+      if acquired < released && finalFence == PublishedLock then Just (acquired,released) else Nothing
     lockChecks events = case caseCall one of
       OwnerRelease _ -> []
       ObjectService _ objectDomain ->
