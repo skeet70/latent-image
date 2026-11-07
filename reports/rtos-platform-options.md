@@ -835,7 +835,7 @@ fn receive(m: &M, id: MailboxId, out: OutWord,
 fn poll_receive(m: &M, id: MailboxId, out: OutWord) -> Result<WaitOutcome<Message>, ObjectStatus>;
 ```
 
-Create, clear and poll entries are implemented; wait, send and delete remain target interfaces. Stock adapters preserve admission precedence before constructing inward types.
+Create, clear, poll, task-context set and send entries are implemented; blocking waits, handler set and delete remain target interfaces.
 
 `Err` carries admission (`Context`, `InvalidClass`, `InvalidIndex`, `AlreadyExists`, `NotCreated`, `Param`, `QueueOverflow`); `Ok` carries the wait outcome, so `TimedOut` covers both the poll's `-50` and expiry's `-50`. The entries module maps typed results to stock `i32` statuses (`Released` and `Deleted` both map to `-49`). `MessageDrain` is the target teardown result: messages still queued when the mailbox is deleted, in delivery order.
 
