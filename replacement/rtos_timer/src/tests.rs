@@ -65,6 +65,12 @@ impl Mock {
         TimerEntry::at(GuestAddress(address))
     }
 
+    fn timed_entry(&self, slot: u32, callback: u32) -> TimerEntry {
+        let entry = self.entry(slot);
+        self.set_word(entry.address().0 + 4, callback);
+        entry
+    }
+
     fn index(&self, entry: TimerEntry) -> u32 {
         self.word(entry.address().0)
     }
@@ -253,7 +259,7 @@ fn upward_repair_delivers_remaining_timers_in_expiry_order() {
     let expiries = [0u32, 100, 1, 101, 102, 2, 3, 201, 202, 203, 204, 4, 5, 6, 7];
     let mut entries = Vec::new();
     for (position, expiry) in expiries.iter().enumerate() {
-        let entry = mock.entry(position as u32 + 1, *expiry);
+        let entry = mock.timed_entry(position as u32 + 1, *expiry);
         insert(&mock, heap, entry, Expiry(*expiry)).unwrap();
         entries.push(entry);
     }
@@ -284,7 +290,7 @@ fn downward_repair_delivers_remaining_timers_in_expiry_order() {
     let expiries = [0u32, 1, 100, 2, 3, 101, 102, 4, 5, 6, 7, 103, 104, 105, 106];
     let mut entries = Vec::new();
     for (position, expiry) in expiries.iter().enumerate() {
-        let entry = mock.entry(position as u32 + 1, *expiry);
+        let entry = mock.timed_entry(position as u32 + 1, *expiry);
         insert(&mock, heap, entry, Expiry(*expiry)).unwrap();
         entries.push(entry);
     }
