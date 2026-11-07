@@ -1,6 +1,6 @@
 use super::{cpsr_masked, entry_words, load, xm1_rtos_scheduler_save, Cpu, Reschedule, ENTRY};
 use crate::objects;
-use crate::objects::admission::{admit, Entry, Object, Params, Request, Service};
+use crate::objects::admission::{admit_op, Entry, Object, Params, Request, Service};
 use crate::objects::block::{
     receive, resume_flag, resume_receive, wait_flag, Block, Deadline, FlagBlocking, FlagResume,
     IrqScope, ReceiveBlocking, ReceiveResume, SavedMask, Tick, TimerEntryAddress, TimeoutCallback,
@@ -165,6 +165,7 @@ impl objects::admission::Facts for StageTables {
     }
 }
 
+#[inline(always)]
 fn request(service: Service, id: i32, params: Params) -> Request {
     let words = entry_words();
     Request {
@@ -252,7 +253,7 @@ pub extern "C" fn xm1_rtos_objects_family_flag_delete(id: i32) -> i32 {
 #[inline(never)]
 #[link_section = ".text.family_flag_set"]
 pub extern "C" fn xm1_rtos_objects_family_flag_set(id: i32, bits: u32) -> i32 {
-    let admitted = match admit(
+    let admitted = match admit_op::<{ Service::FlagSet as u8 }, _, _>(
         &request(Service::FlagSet, id, Params::NONE),
         &StageTables,
         &StageTables,
@@ -274,7 +275,7 @@ pub extern "C" fn xm1_rtos_objects_family_flag_set(id: i32, bits: u32) -> i32 {
 #[inline(never)]
 #[link_section = ".text.family_flag_set_handler"]
 pub extern "C" fn xm1_rtos_objects_family_flag_set_handler(id: i32, bits: u32) -> i32 {
-    let admitted = match admit(
+    let admitted = match admit_op::<{ Service::FlagSetHandler as u8 }, _, _>(
         &request(Service::FlagSetHandler, id, Params::NONE),
         &StageTables,
         &StageTables,
@@ -296,7 +297,7 @@ pub extern "C" fn xm1_rtos_objects_family_flag_set_handler(id: i32, bits: u32) -
 #[inline(never)]
 #[link_section = ".text.family_flag_clear"]
 pub extern "C" fn xm1_rtos_objects_family_flag_clear(id: i32, keep: u32) -> i32 {
-    let admitted = match admit(
+    let admitted = match admit_op::<{ Service::FlagClear as u8 }, _, _>(
         &request(Service::FlagClear, id, Params::NONE),
         &StageTables,
         &StageTables,
@@ -313,9 +314,13 @@ pub extern "C" fn xm1_rtos_objects_family_flag_clear(id: i32, keep: u32) -> i32 
     }
 }
 
-fn flag_wait_entry(id: i32, pattern: u32, mode: u32, result: u32, timeout: Option<i32>, service: Service) -> i32 {
+fn flag_wait_entry<const SERVICE: u8>(id: i32, pattern: u32, mode: u32, result: u32, timeout: Option<i32>) -> i32 {
     let params = Params { pattern: Pattern(pattern), mode, timeout, message: None };
-    let admitted = match admit(&request(service, id, params), &StageTables, &StageTables) {
+    let admitted = match admit_op::<SERVICE, _, _>(
+        &request(Service::from_u8(SERVICE), id, params),
+        &StageTables,
+        &StageTables,
+    ) {
         Ok(admitted) => admitted,
         Err(status) => return status.code(),
     };
@@ -363,7 +368,7 @@ fn flag_wait_entry(id: i32, pattern: u32, mode: u32, result: u32, timeout: Optio
 #[inline(never)]
 #[link_section = ".text.family_flag_wait"]
 pub extern "C" fn xm1_rtos_objects_family_flag_wait(id: i32, pattern: u32, mode: u32, result: u32) -> i32 {
-    flag_wait_entry(id, pattern, mode, result, None, Service::FlagWait)
+    flag_wait_entry::<{ Service::FlagWait as u8 }>(id, pattern, mode, result, None)
 }
 
 /// Slot `+0x9c`.
@@ -371,7 +376,7 @@ pub extern "C" fn xm1_rtos_objects_family_flag_wait(id: i32, pattern: u32, mode:
 #[inline(never)]
 #[link_section = ".text.family_flag_timed_wait"]
 pub extern "C" fn xm1_rtos_objects_family_flag_timed_wait(id: i32, pattern: u32, mode: u32, result: u32, timeout: i32) -> i32 {
-    flag_wait_entry(id, pattern, mode, result, Some(timeout), Service::FlagTimedWait)
+    flag_wait_entry::<{ Service::FlagTimedWait as u8 }>(id, pattern, mode, result, Some(timeout))
 }
 
 /// Slot `+0x98`.
@@ -380,7 +385,7 @@ pub extern "C" fn xm1_rtos_objects_family_flag_timed_wait(id: i32, pattern: u32,
 #[link_section = ".text.family_flag_poll"]
 pub extern "C" fn xm1_rtos_objects_family_flag_poll(id: i32, pattern: u32, mode: u32, result: u32) -> i32 {
     let params = Params { pattern: Pattern(pattern), mode, timeout: None, message: None };
-    let admitted = match admit(
+    let admitted = match admit_op::<{ Service::FlagPoll as u8 }, _, _>(
         &request(Service::FlagPoll, id, params),
         &StageTables,
         &StageTables,
@@ -465,7 +470,7 @@ pub extern "C" fn xm1_rtos_objects_family_mailbox_send(id: i32, message: u32) ->
         timeout: None,
         message: Some(Message(GuestAddress(message))),
     };
-    let admitted = match admit(
+    let admitted = match admit_op::<{ Service::MailboxSend as u8 }, _, _>(
         &request(Service::MailboxSend, id, params),
         &StageTables,
         &StageTables,
@@ -482,9 +487,13 @@ pub extern "C" fn xm1_rtos_objects_family_mailbox_send(id: i32, message: u32) ->
     }
 }
 
-fn receive_entry(id: i32, message_out: u32, timeout: Option<i32>, service: Service) -> i32 {
+fn receive_entry<const SERVICE: u8>(id: i32, message_out: u32, timeout: Option<i32>) -> i32 {
     let params = Params { pattern: Pattern(0), mode: 0, timeout, message: None };
-    let admitted = match admit(&request(service, id, params), &StageTables, &StageTables) {
+    let admitted = match admit_op::<SERVICE, _, _>(
+        &request(Service::from_u8(SERVICE), id, params),
+        &StageTables,
+        &StageTables,
+    ) {
         Ok(admitted) => admitted,
         Err(status) => return status.code(),
     };
@@ -526,7 +535,7 @@ fn receive_entry(id: i32, message_out: u32, timeout: Option<i32>, service: Servi
 #[inline(never)]
 #[link_section = ".text.family_mailbox_receive"]
 pub extern "C" fn xm1_rtos_objects_family_mailbox_receive(id: i32, message_out: u32) -> i32 {
-    receive_entry(id, message_out, None, Service::MailboxReceive)
+    receive_entry::<{ Service::MailboxReceive as u8 }>(id, message_out, None)
 }
 
 /// Slot `+0xe0`.
@@ -534,7 +543,7 @@ pub extern "C" fn xm1_rtos_objects_family_mailbox_receive(id: i32, message_out: 
 #[inline(never)]
 #[link_section = ".text.family_mailbox_timed_receive"]
 pub extern "C" fn xm1_rtos_objects_family_mailbox_timed_receive(id: i32, message_out: u32, timeout: i32) -> i32 {
-    receive_entry(id, message_out, Some(timeout), Service::MailboxTimedReceive)
+    receive_entry::<{ Service::MailboxTimedReceive as u8 }>(id, message_out, Some(timeout))
 }
 
 /// Slot `+0xdc`.
@@ -543,7 +552,7 @@ pub extern "C" fn xm1_rtos_objects_family_mailbox_timed_receive(id: i32, message
 #[link_section = ".text.family_mailbox_poll"]
 pub extern "C" fn xm1_rtos_objects_family_mailbox_poll(id: i32, message_out: u32) -> i32 {
     let params = Params { pattern: Pattern(0), mode: 0, timeout: None, message: None };
-    let admitted = match admit(
+    let admitted = match admit_op::<{ Service::MailboxPoll as u8 }, _, _>(
         &request(Service::MailboxPoll, id, params),
         &StageTables,
         &StageTables,
