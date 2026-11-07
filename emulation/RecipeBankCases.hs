@@ -6,6 +6,7 @@ module Main where
 
 import Control.Monad
 import FujiAF.Host (get, str)
+import FujiAF.StorageBudget (checkStorageBudget)
 import FujiAF.RecipeBank (BootCrc32 (..), bootCrc32)
 import Data.Aeson hiding (encodeFile)
 import Data.Aeson.Types (Parser, parseEither, parseMaybe)
@@ -25,6 +26,7 @@ import Emulation.NativeCase (functionCount, runCase)
 import Emulation.Sha256 (sha256, sha256Hex)
 import Emulation.ParallelCases (mapBounded, readJobs)
 import qualified Emulation.NativeObservation as N
+import qualified Emulation.NativeEvidence as E
 import qualified Replacement.Service.Qualify as S
 import Numeric
 import System.Directory
@@ -403,6 +405,7 @@ main = do
   arguments <- getArgs
   case arguments of
     ["--boot-package", package, "--runner", runner, "--out", out] -> do
+      checkStorageBudget out
       createDirectoryIfMissing True out
       results <- runBootCases 1 out runner package
       BL.writeFile (out </> "results.json") (encode (object ["cases" .= results]))
@@ -414,7 +417,8 @@ main = do
 kernelMain :: [String] -> IO ()
 kernelMain rawArgs = do
   let serviceQualification = "--service-qualification" `elem` rawArgs
-      args = filter (/= "--service-qualification") rawArgs
+      fullDiagnostics = "--full-native-diagnostics" `elem` rawArgs
+      args = filter (`notElem` ["--service-qualification", "--full-native-diagnostics"]) rawArgs
       opt n = lookup n [(drop 2 a, b) | (a, b) <- pair args]
       pair (a:b:r) = (a, b) : pair r
       pair _ = []
@@ -426,6 +430,7 @@ kernelMain rawArgs = do
   id5Path <- maybe (fail "--id5") pure (opt "id5")
   hostFix <- maybe (fail "--host-fixtures") pure (opt "host-fixtures")
   jobs <- readJobs (opt "jobs")
+  evidence <- E.newEvidenceStore (if fullDiagnostics then E.FullDiagnostics else E.CompactSuccesses)
   filmEncoding <- case fromMaybe "d3" (opt "film-encoding") of
     "d3" -> pure D3Films
     "classic-chrome" -> pure ClassicChromeFilms
@@ -433,6 +438,7 @@ kernelMain rawArgs = do
   let candidateDir = fromMaybe "private-data/analysis/x-m1-1.50/recipes/rc-complete-20261013/package-20261024b/image" (opt "candidate")
       kernelBase = hexI (fromMaybe "0x00be0000" (opt "rb-base"))
       id4Base = hexI (fromMaybe "0x0061c400" (opt "id4-base"))
+  checkStorageBudget out
   createDirectoryIfMissing True out
   ks <- parseSyms (build </> "kernel.syms")
   unless (addr ks "__rb_image_start" == kernelBase) (fail "--rb-base differs from linked __rb_image_start")
@@ -534,7 +540,7 @@ kernelMain rawArgs = do
   when (null specs) (fail "--case did not name a case")
   results <- mapBounded jobs (\sp -> do
     let loop s fuel = do
-          r <- runSpec bankMode build out runner ks ms dataSpan kbin ktextLen kdataLen mdataRaw fTable getter setter mediaImg tabImg mediaLo s
+          r <- runSpec evidence bankMode build out runner ks ms dataSpan kbin ktextLen kdataLen mdataRaw fTable getter setter mediaImg tabImg mediaLo s
           let missing = parseMaybe (withObject "r" (\o -> o .: "missing_fn" >>= withText "t" (pure . T.unpack))) r
           case missing of
             -- a volatile case declares its foreign boundary; an undeclared call fails it
@@ -2571,9 +2577,10 @@ specSet filmEncoding ks ms fields tabs hostBank (StockFailureRedraw failureRedra
       , volSelectC1, volSelectNone, volSelectAtC, volSelectUnset
       , volStaleSession, volInvalidStageCode ]
 
-runSpec :: BankMode -> FilePath -> FilePath -> FilePath -> Syms -> Syms -> ModelDataSpan -> B.ByteString -> Int -> Int -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> Integer -> Spec -> IO Value
-runSpec bankMode build out runner ks ms dataSpan kbin ktextLen kdataLen mdataRaw fTable getter setter mediaImg tabImg mediaLo sp = do
+runSpec :: E.EvidenceStore -> BankMode -> FilePath -> FilePath -> FilePath -> Syms -> Syms -> ModelDataSpan -> B.ByteString -> Int -> Int -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> Integer -> Spec -> IO Value
+runSpec evidence bankMode build out runner ks ms dataSpan kbin ktextLen kdataLen mdataRaw fTable getter setter mediaImg tabImg mediaLo sp = do
   let dir = out </> spId sp
+  checkStorageBudget dir
   createDirectoryIfMissing True dir
   let modeCell = B.replicate 0x24 0 <> u32le (mMode (spModel sp))
       GuestAddress dataBase = dataSpanBase dataSpan
@@ -2697,14 +2704,12 @@ runSpec bankMode build out runner ks ms dataSpan kbin ktextLen kdataLen mdataRaw
             , "Foreign media completion is synchronous; stock queue, scheduler and physical SD controller are not executed"
             ]
   BL.writeFile (dir </> "case.json") (encode caseObj)
-  result <- if direct
+  (report, result) <- if direct
     then do
       (serviceReport, result) <- S.runServiceCase runner (dir </> "case.json")
-      BL.writeFile (dir </> "runner-report.json") (encode serviceReport)
-      pure result
+      pure (serviceReport, result)
     else do
       (_, report) <- runCase runner (dir </> "case.json")
-      BL.writeFile (dir </> "runner-report.json") (encode report)
       let claimedRegions = [RegionId rid | (rid, _, _) <- eClaims (spExpect sp)]
           regionIds = M.fromList
             [(GuestAddress (hexI (str (getRegionField region "address"))), rid)
@@ -2729,8 +2734,9 @@ runSpec bankMode build out runner ks ms dataSpan kbin ktextLen kdataLen mdataRaw
             (["id" .= spId sp, "status" .= status, "mismatches" .= mismatches,
               "runner_status" .= runnerStatus]
               ++ maybe [] (\n -> ["missing_fn" .= n]) missing)
-      pure result
+      pure (report, result)
   BL.writeFile (dir </> "behavioral-result.json") (encode result)
+  E.writeEvidence evidence (if direct then E.ExactDiagnostics else E.PublicSpans) dir caseObj report result
   pure result
 
 -- the undeclared call target of an unknown_call failure, mapped back to its
@@ -2921,6 +2927,7 @@ runBootCases jobs out runner package = do
           if published then object ["r0" .= hex 0, "pc" .= hex (addr syms "rb_store_entry" + 28)]
           else object (["lr" .= hex 0x0069d2e4, "sp" .= hex 0x009a0040]
             ++ [fromString ("r" ++ show i) .= hex (if i == 3 then exit else 0xa0 + toInteger i) | i <- [0 .. 12 :: Int]])
+    checkStorageBudget dir
     createDirectoryIfMissing True dir
     digests <- forM imageRegions $ \(n, _, bytes, _) -> do
       B.writeFile (dir </> (n ++ ".bin")) bytes
@@ -2966,6 +2973,7 @@ runAllocatorCases jobs out runner package = do
         regions = [("code", 0x0072b110, code, "rx" :: String), ("allocator", 0x00829a08, bytes, "rw"),
                    ("stack", 0x009a0000, B.replicate 32 0, "rw"), ("exit", 0x009b0000, B.pack [0x1e,0xff,0x2f,0xe1], "rx")]
         expectedState = u32le (if fits then 0x00be19e0 else originalCursor) <> u32le (if fits then 9 else 12)
+    checkStorageBudget dir
     createDirectoryIfMissing True dir
     digests <- forM regions $ \(n, _, raw, _) -> B.writeFile (dir </> (n ++ ".bin")) raw >> pure (n, sha256Hex (sha256 raw))
     let caseValue = object
