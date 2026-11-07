@@ -103,11 +103,57 @@ filegroup(
 )
 
 haskell_library(
+    name = "host-admission-lib",
+    srcs = ["Emulation/HostAdmission.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:base",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//host:unix",
+    ],
+)
+
+# devenv puts the same sources on PATH as `host-build` through
+# build-support/host-build.nix.
+haskell_binary(
+    name = "host-build",
+    srcs = ["HostBuildRun.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":host-admission-lib",
+        "//host:base",
+    ],
+)
+
+# Runs systemd-run against the host's user manager, like emulator-slot-tests.
+haskell_test(
+    name = "host-build-tests",
+    size = "small",
+    srcs = ["HostBuildTests.hs"],
+    args = ["$(rootpath :host-build)"],
+    data = [":host-build"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
+    tags = ["no-sandbox"],
+    deps = [
+        "//host:base",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//host:unix",
+    ],
+)
+
+haskell_library(
     name = "emulator-slot-lib",
     srcs = ["Emulation/EmulatorSlot.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     src_strip_prefix = ".",
     deps = [
+        ":host-admission-lib",
         "//host:base",
         "//host:bytestring",
         "//host:directory",

@@ -99,3 +99,37 @@ haskell_test(
         "//host:unix",
     ],
 )
+
+# Coarse token and host-grant accounting over omp session transcripts.
+haskell_binary(
+    name = "model-usage",
+    srcs = ["ModelUsage.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
+        "//host:time",
+    ],
+)
+
+haskell_test(
+    name = "model-usage-tests",
+    size = "small",
+    srcs = ["ModelUsageTests.hs"],
+    args = ["$(location :model-usage)"],
+    data = [":model-usage"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+    ],
+)

@@ -236,11 +236,11 @@ classicChromeIconTrajectories = "emulation/ram-push-cc-icon-e2e-trajectories.jso
 fujimodVariant :: FilePath -> FilePath
 fujimodVariant path = dropExtension path ++ ".fujimod.json"
 
--- | @bazel run@ of an emulator launcher on this output base, at niceness 10 so
--- the native suites' wall-clock case deadlines keep CPU priority.
+-- | Admitted @host-build run@ of an emulator launcher on this output base, at
+-- niceness 10 so the native suites' wall-clock case deadlines keep CPU priority.
 bazelRun :: Context -> String -> [String] -> Invocation
 bazelRun context target arguments = Invocation "nice"
-  (["-n", "10", "bazel", "--output_base=" ++ base, "run"] ++ contextBazelOptions context ++ [target, "--"] ++ arguments) []
+  (["-n", "10", "host-build", "--output_base=" ++ base, "run"] ++ contextBazelOptions context ++ [target, "--"] ++ arguments) []
   where OutputBase base = contextOutputBase context
 
 routeInvocation :: Context -> Route -> FilePath -> Invocation

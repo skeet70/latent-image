@@ -3,12 +3,15 @@ let
   xm1Python = pkgs.python3.withPackages (p: [ p.numpy p.unicorn ]);
   xm1Native = import ./build-support/xm1-native.nix { inherit pkgs; };
   unicornX70 = import ./build-support/unicorn-x70.nix { inherit pkgs; };
+  hostBuild = import ./build-support/host-build.nix;
 in {
   packages = with pkgs; [
     git
     ripgrep
     jq
     bazel_7
+    # Admitted Bazel commands (build-support/README.md#commands).
+    hostBuild
     buildifier
     coreutils
     diffutils
