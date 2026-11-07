@@ -4,7 +4,7 @@ use crate::layout::{
     Domain, FlagConfig, FlagWait, GuestAddress, KernelContext, MailboxWait, Message, Task, TaskState,
     WaitBlock, WaitQueue,
 };
-use crate::locked::{ObjectLock, OutWord};
+use crate::locked::OutWord;
 use crate::matching::{check, MatchMode, Pattern, WantedMask};
 use crate::order::QueueOrder;
 use crate::status::{ObjectStatus, WaitOutcome};
@@ -245,7 +245,9 @@ pub fn resume_flag<M: Machine>(m: &M, pending: FlagWaitPending) -> FlagResume {
     match m.load_word(pending.wait.base().result()) as i32 {
         0 => {
             let pattern = Pattern(m.load_word(pending.wait.result()));
+            let saved = m.mask_interrupts();
             m.store_word(pending.out.0, pattern.0);
+            m.restore_interrupts(saved);
             FlagResume::Completed(WaitOutcome::Satisfied(pattern))
         }
         -49 => FlagResume::Completed(WaitOutcome::Released),
@@ -262,7 +264,9 @@ pub fn resume_receive<M: Machine>(m: &M, pending: ReceivePending) -> ReceiveResu
     match m.load_word(pending.wait.base().result()) as i32 {
         0 => {
             let message = Message(GuestAddress(m.load_word(pending.wait.message())));
+            let saved = m.mask_interrupts();
             m.store_word(pending.out.0, message.0 .0);
+            m.restore_interrupts(saved);
             ReceiveResume::Completed(WaitOutcome::Satisfied(message))
         }
         -49 => ReceiveResume::Completed(WaitOutcome::Released),

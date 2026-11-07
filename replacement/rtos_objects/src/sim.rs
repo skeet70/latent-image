@@ -364,9 +364,9 @@ impl Block for Sim {
         Task(GuestAddress(self.running(self.entry)))
     }
 
-    fn remove_ready(&self, owner: KernelContext, task: Task) {
+    fn remove_ready(&self, owner: KernelContext, waiter: Task) {
         let record = context(at(owner.0));
-        s1::remove(self, record, task(at(task.0)), || s1::find(self, record));
+        s1::remove(self, record, task(at(waiter.0)), || s1::find(self, record));
     }
 
     fn queue_wait(&self, _owner: KernelContext, task: Task, queue: WaitQueue, order: QueueOrder) {

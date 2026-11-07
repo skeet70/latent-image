@@ -1416,6 +1416,7 @@ fn send_rings_the_peer_for_a_remote_receiver() {
 fn running_task(sim: &Sim, words: &DomainWords, domain: Domain, slot: u32) -> (Task, TaskSlot) {
     let task_slot = TaskSlot::new(slot).unwrap();
     let task = words.task(task_slot);
+    sim.set(task.domain(), if domain == Domain::A { 1 } else { 2 });
     sim.set_running(domain, task);
     (task, task_slot)
 }
@@ -1512,7 +1513,7 @@ fn timed_wait_arms_the_per_task_timer_entry() {
     ));
     let wait = words.flag_wait(task_slot);
     let entry = words.flag_timer(task_slot);
-    assert_eq!(sim.word(wait.base().result()), entry.0 .0);
+    assert_eq!(sim.word(wait.base().result()), entry.0);
     assert_eq!(sim.word(entry.offset(0x04)), sim.timeout_callback().0);
     assert_eq!(sim.word(entry.offset(0x08)), task.0 .0);
     assert!(sim.armed(entry));
@@ -1595,7 +1596,7 @@ fn receive_pops_the_head_before_the_output_write() {
 }
 
 #[test]
-fn a_receive_output_aliasing_the_next_link_still_pops() {
+fn a_blocking_receive_output_aliasing_the_next_link_still_pops() {
     let words = Domain::A.words();
     let slot = MailboxSlot::new(1, 1).unwrap();
     let sim = Sim::new(Domain::A);
@@ -1795,11 +1796,11 @@ fn per_task_timer_entries_are_distinct() {
     assert_ne!(entry_first, entry_second);
     assert_eq!(
         sim.word(words.flag_wait(TaskSlot::new(7).unwrap()).base().result()),
-        entry_first.0 .0
+        entry_first.0
     );
     assert_eq!(
         sim.word(words.flag_wait(TaskSlot::new(8).unwrap()).base().result()),
-        entry_second.0 .0
+        entry_second.0
     );
     assert!(sim.armed(entry_first) && sim.armed(entry_second));
     assert_eq!(sim.deadline(entry_first), Some(105));
