@@ -2,13 +2,23 @@
 
 ## 1. Scope and integrity
 
-**Hardware-observed:** the owner's act-logged session is `private-data/sessions/20261009T064945Z-read-log`, paired with the filled note sheet in [input-map-session-script.md](input-map-session-script.md#3-the-note-sheet). The body showed a black screen and green LED throughout the recorded acts; the flash physically popped up. This analysis is host-only. E-PRESS-MAP-150 records the result. **Byte-read** labels captured or firmware bytes; **static-inference** labels their interpretation; **unproved** labels unresolved attribution or effects.
+**Hardware-observed:** the owner's act-logged session is `private-data/sessions/20261009T064945Z-read-log`, with the filled act log summarized at the end of this section. The body showed a black screen and green LED throughout the recorded acts; the flash physically popped up. This analysis is host-only. E-PRESS-MAP-150 records the result. **Byte-read** labels captured or firmware bytes; **static-inference** labels their interpretation; **unproved** labels unresolved attribution or effects.
 
 **Byte-read, integrity PASS before interpretation:** all 17,097 journal lines and 3,104 outgoing lines parse as version-1 camera tuples. The 4,140 dispatched transfers equal the fixed `FujiAF.Log.logRequests` plan in kind, bytes, lengths and order, including C0, gate enable/readback, 1,030 debug half-reads, gate restore/readback and C4. Every native outcome has status 0 and its requested count. Every outgoing `bytes=` field agrees with its bracketed bytes and the plan. All 1,030 accepted half-replies decode against their requested addresses and equal their 128-byte captured slices. All 515 window hashes and both gate-file hashes match the files. `read-log` journals hashes per 256-byte window, not per half-request; the per-request check is reply-to-slice equality. There is one `515 windows` completion and no refusal or uncertainty record.
 
 **Byte-read:** the two 256-byte gate readbacks are the known pair from the earlier captures: enabled SHA-256 `2264fcfdb55e94372ae267100ef670066e48f64f76101d00b100ea078efa0c4b`, restored SHA-256 `409d56adca05fb4f8d2353f152a60c53b2904bb806ab18076ede6f62f6af98a3`, with index `0xf7` reading 1 then 0. There is no transport-integrity deviation.
 
 **Byte-read:** the ring capacity is 8,188; its captured header next index is 1,212, while the rolling read contains 1,219 contiguous occupied slots, 0 through 1,218, followed by zeros. The twelve bytes beyond the store are zero. **Static-inference:** the seven-slot difference is consistent with traffic appended after the header was read, not wrap or missing early acts. All named acts precede the read. Of the 1,219 typed records, 1,162 are type `0x0f`; that type is a multiplexed event record, not a guarantee that the packed field is a physical input code.
+
+### The recorded act log
+
+**Hardware-observed:** the owner's note sheet (2026-10-09 06:36 UTC, X-M1 1.50, dial at AUTO) holds one row per act in the order section 3 lists, with the wall-clock minute and what the camera showed. Every row reads black screen with green LED on, the expected maintenance-mode answer (E-SERVICE-SHOOT-150); the flash-lever row adds the mechanical pop-up. The sheet labels rotation directions A and B rather than clockwise or counterclockwise, and that is the evidence scope for sections 3 and 4.
+
+**Byte-read, capacity:** the store is 8,188 entries cleared at every boot (E-LOG-STORE-150), so the acts and the read share one boot.
+
+**Hardware-observed:** the named control acts contribute 59 input publications: 44 keytimer, three shutter press records and twelve mode copies. A button tap costs two records, a full shutter act four, a rotation one per direction, a pop one, and a mode change two across keytimer and usbcont. The read passes over the store, so anything pressed after it is outside the capture. The heaviest earlier boot observed, twenty-one dump sessions, held 7,602 records.
+
+**Hardware-observed, ending:** the owner cut the dummy-battery supply, and the sheet records no POWER-switch ending. A POWER-switch ending writes a defaults record and resets date, time, language and the C slot (E-JIG-CYCLE-D-150). The ending of any later session is a camera-run decision under [governance](../spec/07-governance-and-handoff.md#3-camera-runs), not a step of this record.
 
 ## 2. Main correction: the ring has several input sources
 
