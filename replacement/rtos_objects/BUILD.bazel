@@ -1,6 +1,6 @@
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
-load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -25,8 +25,8 @@ xm1_rust_staticlib(
 )
 
 [
-    xm1_rust_staticlib(
-        name = "objects-f2-adapter-%s" % domain,
+    xm1_rust_rlib(
+        name = "objects-f2-adapter-%s-rlib" % domain,
         src = "stage/adapter.rs",
         crate_name = "xm1_rtos_objects_f2_adapter",
         data = [
@@ -43,18 +43,53 @@ xm1_rust_staticlib(
             "src/wake.rs",
             "//replacement/rtos_layout:src/lib.rs",
         ],
-        rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain, "--cfg", "'feature=\"stage\"'"],
+        rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain, "--cfg", "'feature=\"component\"'"],
     )
     for domain in ["a", "b"]
 ]
 
 [
+    xm1_rust_rlib(
+        name = "scheduler-%s-component" % domain,
+        src = "//replacement/rtos_scheduler:src/lib.rs",
+        crate_name = "xm1_rtos_scheduler",
+        data = [
+            "//replacement/rtos_scheduler:src/entries.rs",
+            "//replacement/rtos_scheduler:src/s3a.rs",
+            "//replacement/rtos_scheduler:src/s3b.rs",
+            "//replacement/rtos_scheduler:src/tests.rs",
+            "//replacement/rtos_layout:src/lib.rs",
+        ],
+        rustc_flags = ["--cfg", "'feature=\"component\"'"],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    xm1_rust_rlib(
+        name = "scheduler-s2-%s-component" % domain,
+        src = "//replacement/rtos_scheduler:src/s2.rs",
+        crate_name = "xm1_rtos_scheduler_s2",
+        data = ["//replacement/rtos_layout:src/lib.rs"],
+        rustc_flags = ["--cfg", "'feature=\"component\"'"],
+    )
+    for domain in ["a", "b"]
+]
+
+xm1_rust_rlib(
+    name = "objects-f2-panic",
+    src = "stage/panic.rs",
+    crate_name = "xm1_rtos_objects_f2_panic",
+)
+
+[
     xm1_rust_elf(
         name = "objects-f2-stage-%s" % domain,
-        rust_staticlib = ":objects-f2-adapter-%s" % domain,
-        rust_staticlibs = [
-            "//replacement/rtos_scheduler:scheduler-%s-rust" % domain,
-            "//replacement/rtos_scheduler:scheduler-s2-%s-rust" % domain,
+        rust_staticlib = ":objects-f2-adapter-%s-rlib" % domain,
+        rust_components = [
+            ":scheduler-%s-component" % domain,
+            ":scheduler-s2-%s-component" % domain,
+            ":objects-f2-panic",
         ],
         link_script = "stage/f2-%s.ld" % domain,
         link_includes = [
@@ -65,6 +100,31 @@ xm1_rust_staticlib(
     )
     for domain in ["a", "b"]
 ]
+
+genrule(
+    name = "objects-smoke-build",
+    srcs = [
+        "smoke.rs",
+        "src/admission.rs",
+        "src/create.rs",
+        "src/id.rs",
+        "src/lib.rs",
+        "src/locked.rs",
+        "src/matching.rs",
+        "src/message.rs",
+        "src/order.rs",
+        "src/sim.rs",
+        "src/status.rs",
+        "src/timeout.rs",
+        "src/wake.rs",
+        "//replacement/rtos_layout:src/lib.rs",
+        "//replacement/rtos_scheduler:scheduler-host-rlib",
+    ],
+    outs = ["objects-smoke-bin"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --cfg 'feature=\"sim\"' --extern xm1_rtos_scheduler=$(location //replacement/rtos_scheduler:scheduler-host-rlib) $(location smoke.rs) -o $@",
+    executable = True,
+    tools = ["@lab_rustc//:bin/rustc"],
+)
 
 genrule(
     name = "objects-host-tests-build",
@@ -103,6 +163,7 @@ sh_test(
     data = [
         ":objects-host-tests-build",
         ":objects-rust",
+        ":objects-smoke-build",
     ],
 )
 

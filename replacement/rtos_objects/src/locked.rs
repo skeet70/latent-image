@@ -13,6 +13,9 @@ pub struct OutWord(pub GuestAddress);
 /// implementation owns the pairing.
 pub trait ObjectLock: Machine {
     fn with_object_lock<R>(&self, lock: LockRecord, body: impl FnOnce() -> R) -> R;
+    /// As 'with_object_lock', with `after` run between the release and the restore, so a
+    /// dispatch stays inside the masked section.
+    fn with_object_lock_after<R>(&self, lock: LockRecord, body: impl FnOnce() -> R, after: impl FnOnce(&R)) -> R;
 }
 
 /// Slot `+0x90`.

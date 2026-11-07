@@ -154,6 +154,7 @@ pub extern "C" fn xm1_rtos_scheduler_rotate(record: KernelContext, p: u32) -> Re
     rotate(&Cpu, record, unsafe { stored_priority(p) })
 }
 
+#[cfg(not(feature = "component"))]
 #[panic_handler]
 fn panic(_: &PanicInfo<'_>) -> ! {
     loop {}

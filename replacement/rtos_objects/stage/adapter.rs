@@ -13,7 +13,7 @@ use objects::message::{MessagePriority, PriorityLimit};
 use objects::wake::{DispatchTarget, Selection, Wake};
 use objects::*;
 
-#[cfg(all(target_arch = "arm", not(test)))]
+#[cfg(all(target_arch = "arm", not(test), not(feature = "component")))]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
     loop {}
@@ -90,6 +90,16 @@ impl Machine for Cpu {
 }
 
 impl ObjectLock for Cpu {
+    fn with_object_lock_after<R>(&self, lock: LockRecord, body: impl FnOnce() -> R, after: impl FnOnce(&R)) -> R {
+        let saved = self.mask_interrupts();
+        unsafe { xm1_rtos_scheduler_acquire(lock) };
+        let result = body();
+        unsafe { xm1_rtos_scheduler_release(lock) };
+        after(&result);
+        self.restore_interrupts(saved);
+        result
+    }
+
     fn with_object_lock<R>(&self, lock: LockRecord, body: impl FnOnce() -> R) -> R {
         let saved = self.mask_interrupts();
         unsafe { xm1_rtos_scheduler_acquire(lock) };

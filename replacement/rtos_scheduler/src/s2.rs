@@ -199,6 +199,7 @@ xm1_rtos_scheduler_pool:
 "#
 );
 
+#[cfg(not(feature = "component"))]
 #[panic_handler]
 fn panic(_: &PanicInfo<'_>) -> ! {
     loop {}

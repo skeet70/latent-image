@@ -214,6 +214,20 @@ impl CreateMachine for Sim {
 }
 
 impl ObjectLock for Sim {
+    fn with_object_lock_after<R>(&self, record: LockRecord, body: impl FnOnce() -> R, after: impl FnOnce(&R)) -> R {
+        assert!(!self.held.get(), "object lock acquired twice");
+        let saved = self.interrupts.get();
+        self.interrupts.set(saved | 0x80);
+        self.held.set(true);
+        s1::acquire(self, lock(record.0));
+        let result = body();
+        s1::release(self, lock(record.0));
+        after(&result);
+        self.held.set(false);
+        self.interrupts.set(saved);
+        result
+    }
+
     fn with_object_lock<R>(&self, record: LockRecord, body: impl FnOnce() -> R) -> R {
         assert!(!self.held.get(), "object lock acquired twice");
         let saved = self.interrupts.get();
@@ -293,6 +307,6 @@ impl Wake for Sim {
         let record = self.context(self.entry);
         let cell = GuestAddress(self.word(record.running()));
         let selected = self.pointed(record.selected());
-        self.set(cell, selected);
+        s1::Machine::store_word(self, at(cell), selected);
     }
 }

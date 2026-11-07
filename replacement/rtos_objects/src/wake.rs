@@ -88,7 +88,7 @@ pub fn set_flag<M: Wake>(m: &M, id: FlagId, bits: Pattern) {
     let control = words.flag_control(id.slot);
     let config = words.flag_config(id.slot);
     let lock = words.context(id.domain).object_lock();
-    let dispatch = m.with_object_lock(lock, || {
+    m.with_object_lock_after(lock, || {
         let waiter = m.load_word(control.queue().next());
         if waiter == control.0 .0 {
             let pattern = m.load_word(control.pattern()) | bits.0;
@@ -118,10 +118,7 @@ pub fn set_flag<M: Wake>(m: &M, id: FlagId, bits: Pattern) {
                 None => false,
             }
         })
-    });
-    if dispatch {
-        m.dispatch(-43);
-    }
+    }, |dispatch| if *dispatch { m.dispatch(-43) });
 }
 
 fn append_fifo<M: Machine>(m: &M, control: MailboxControl, message: Message) {
@@ -161,7 +158,7 @@ pub fn send<M: Wake>(m: &M, id: MailboxId, message: Message, priority: Option<Me
     let words = id.domain.words();
     let control = words.mailbox_control(id.slot);
     let lock = words.context(id.domain).object_lock();
-    let dispatch = m.with_object_lock(lock, || {
+    m.with_object_lock_after(lock, || {
         let waiter = m.load_word(control.queue().next());
         if waiter == control.0 .0 {
             match priority {
@@ -178,8 +175,5 @@ pub fn send<M: Wake>(m: &M, id: MailboxId, message: Message, priority: Option<Me
             unlink(m, task);
             dispatch_after(m, owner, release(m, owner, task))
         })
-    });
-    if dispatch {
-        m.dispatch(-43);
-    }
+    }, |dispatch| if *dispatch { m.dispatch(-63) });
 }

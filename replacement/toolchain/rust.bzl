@@ -94,7 +94,7 @@ def xm1_rust_staticlib(
 def xm1_rust_elf(
         name,
         rust_staticlib,
-        rust_staticlibs = [],
+        rust_components = [],
         c_srcs = [],
         asm_srcs = [],
         asm_defines = [],
@@ -111,7 +111,7 @@ def xm1_rust_elf(
     the preprocessed assembly sources. The outputs are <name>.elf, <name>.bin,
     <name>.symbols and <name>.disasm in the caller's package.
     """
-    srcs = [rust_staticlib] + rust_staticlibs + c_srcs + asm_srcs + link_includes
+    srcs = [rust_staticlib] + rust_components + c_srcs + asm_srcs + link_includes
     if link_script != None:
         srcs.append(link_script)
 
@@ -149,7 +149,7 @@ def xm1_rust_elf(
         "$$objects",
         "$(location %s)" % rust_staticlib,
     ]
-    link += ["$(location %s)" % staticlib for staticlib in rust_staticlibs]
+    link += ["$(location %s)" % component for component in rust_components]
     link += [
         "-o",
         "$(@D)/%s.elf" % name,
@@ -175,5 +175,47 @@ def xm1_rust_elf(
         message = "Linking %s for armv7r-none-eabi" % name,
         testonly = testonly,
         tools = [_CLANG, _LLD, _OBJCOPY, _NM, _OBJDUMP],
+        visibility = visibility,
+    )
+
+def xm1_rust_rlib(
+        name,
+        src,
+        crate_name = None,
+        edition = "2021",
+        opt_level = "z",
+        rustc_flags = [],
+        data = [],
+        testonly = False,
+        visibility = None):
+    """Compiles one no_std crate root to an rlib for armv7r-none-eabi.
+
+    The rlib carries no panic handler unless its root declares one, so a final
+    image can own the single handler.
+    """
+    if crate_name == None:
+        crate_name = name.replace("-", "_")
+    cmd = " ".join(
+        [
+            "$(location %s)" % _RUSTC,
+            "--crate-name=%s" % crate_name,
+            "--edition=%s" % edition,
+            "--crate-type=rlib",
+            "-C",
+            "opt-level=%s" % opt_level,
+        ] + _TARGET_FLAGS + rustc_flags + [
+            "$(location %s)" % src,
+            "-o",
+            "$@",
+        ],
+    )
+    native.genrule(
+        name = name,
+        srcs = [src] + data,
+        outs = [name + ".rlib"],
+        cmd = cmd,
+        message = "Cross-compiling %s as an rlib" % crate_name,
+        testonly = testonly,
+        tools = [_RUSTC],
         visibility = visibility,
     )
