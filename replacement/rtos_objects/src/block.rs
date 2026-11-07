@@ -31,7 +31,7 @@ const TIMER_ENTRY_CALLBACK: u32 = 0x04;
 const TIMER_ENTRY_ARGUMENT: u32 = 0x08;
 
 pub trait Block: Wake {
-    fn current(&self) -> Task;
+    fn current(&self, entry: Domain) -> Task;
     fn remove_ready(&self, owner: KernelContext, task: Task);
     fn queue_wait(&self, owner: KernelContext, task: Task, queue: WaitQueue, order: QueueOrder);
     fn arm_timer(&self, owner: KernelContext, entry: TimerEntryAddress, deadline: Deadline);
@@ -144,7 +144,7 @@ pub fn wait_flag<M: Block>(
             None => match timeout {
                 Timeout::Poll => Ok(FlagBlocking::Ready(WaitOutcome::TimedOut)),
                 Timeout::Forever | Timeout::Units(_) => {
-                    let task = m.current();
+                    let task = m.current(entry.domain());
                     let slot = entry
                         .domain()
                         .words()
@@ -201,7 +201,7 @@ pub fn receive<M: Block>(
         match timeout {
             Timeout::Poll => Ok(ReceiveBlocking::Ready(WaitOutcome::TimedOut)),
             Timeout::Forever | Timeout::Units(_) => {
-                let task = m.current();
+                let task = m.current(entry.domain());
                 let slot = entry
                     .domain()
                     .words()

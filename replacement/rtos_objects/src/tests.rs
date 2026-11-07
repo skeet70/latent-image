@@ -1927,7 +1927,7 @@ fn delete_flag_releases_a_queued_waiter_with_minus_49() {
     let sim = Sim::new(Domain::A);
     install(&sim, Domain::A);
     let id = create_flag_at(&sim, slot, 0, 0x01);
-    let (task, task_slot) = queue_flag_waiter(
+    let (task, wait) = queue_flag_waiter(
         &sim,
         &words,
         words.flag_control(slot),
@@ -1938,7 +1938,6 @@ fn delete_flag_releases_a_queued_waiter_with_minus_49() {
         0,
     );
     assert_eq!(delete_flag(&sim, id), Ok(()));
-    let wait = words.flag_wait(task_slot);
     assert_eq!(sim.word(wait.base().result()), 0xffff_ffcf);
     assert_eq!(sim.word(task.state()) & 0xff, 0x01);
     assert_eq!(sim.ready(Domain::A, 5), task.0 .0);
@@ -1959,7 +1958,7 @@ fn delete_flag_cancels_the_timed_waiters_timer() {
     install(&sim, Domain::A);
     let id = create_flag_at(&sim, slot, 0, 0);
     let timer = GuestAddress(0x4000_0500);
-    let (_, task_slot) = queue_flag_waiter(
+    let (_, wait) = queue_flag_waiter(
         &sim,
         &words,
         words.flag_control(slot),
@@ -1972,7 +1971,7 @@ fn delete_flag_cancels_the_timed_waiters_timer() {
     sim.arm(timer);
     assert_eq!(delete_flag(&sim, id), Ok(()));
     assert!(!sim.armed(timer));
-    assert_eq!(sim.word(words.flag_wait(task_slot).base().result()), 0xffff_ffcf);
+    assert_eq!(sim.word(wait.base().result()), 0xffff_ffcf);
 }
 
 #[test]
@@ -2007,6 +2006,7 @@ fn delete_mailbox_releases_a_queued_receiver() {
     install(&sim, Domain::A);
     let id = create_mailbox_at(&sim, slot, 0);
     let (task, task_slot) = running_task(&sim, &words, Domain::A, 7);
+    sim.set_byte(task.priority(), 5);
     let receiver = pending_receive(receive(
         &sim,
         EntryDomain::new(Domain::A),

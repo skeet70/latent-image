@@ -386,8 +386,8 @@ impl IrqScope for Sim {
 }
 
 impl Block for Sim {
-    fn current(&self) -> Task {
-        Task(GuestAddress(self.running(self.entry)))
+    fn current(&self, entry: Domain) -> Task {
+        Task(GuestAddress(self.running(entry)))
     }
 
     fn remove_ready(&self, owner: KernelContext, waiter: Task) {
