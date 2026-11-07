@@ -1,6 +1,6 @@
 use crate::layout::{
     DomainWords, FlagConfig, FlagControl, FlagWait, GuestAddress, LockRecord, MailboxControl, MailboxWait,
-    Message, Task,
+    Message, Task, TaskState,
 };
 use crate::sim::Sim;
 use crate::*;
@@ -1456,6 +1456,7 @@ fn running_task(sim: &Sim, words: &DomainWords, domain: Domain, slot: u32) -> (T
     let task_slot = TaskSlot::new(slot).unwrap();
     let task = words.task(task_slot);
     sim.set(task.domain(), if domain == Domain::A { 1 } else { 2 });
+    sim.set_byte(task.state(), TaskState::READY.bits());
     sim.set_running(domain, task);
     (task, task_slot)
 }
