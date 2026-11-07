@@ -123,6 +123,10 @@ impl Release for Cpu {
         record(domain)
     }
 
+    fn reset_task(&self, waiter: Task) {
+        unsafe { xm1_rtos_scheduler_reset(waiter) };
+    }
+
     fn prepare(&self, owner: KernelContext, waiter: Task) -> Selection {
         match unsafe { xm1_rtos_scheduler_prepare(owner, waiter) } {
             Reschedule(0) => Selection::Unchanged,
