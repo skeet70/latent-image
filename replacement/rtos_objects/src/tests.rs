@@ -1533,6 +1533,31 @@ fn wait_flag_without_a_match_arms_the_waiter() {
 }
 
 #[test]
+fn wait_flag_clear_on_match_writes_the_caller_output_after_the_clear() {
+    let words = Domain::A.words();
+    let slot = FlagSlot::new(3, 120).unwrap();
+    let sim = Sim::new(Domain::A);
+    install(&sim, Domain::A);
+    let id = create_flag_at(&sim, slot, FlagConfig::CLEAR_ON_MATCH, 0x11);
+    let control = words.flag_control(slot);
+    let out = control.pattern();
+    assert_eq!(
+        wait_flag(
+            &sim,
+            EntryDomain::new(Domain::A),
+            id,
+            WantedMask::new(Pattern(0x01)).unwrap(),
+            MatchMode::All,
+            OutWord(out),
+            Timeout::Forever,
+        ),
+        Ok(FlagBlocking::Ready(WaitOutcome::Satisfied(Pattern(0x11))))
+    );
+    assert_eq!(sim.word(out), 0x11);
+    assert_eq!(sim.word(control.pattern()), 0x11);
+}
+
+#[test]
 fn timed_wait_arms_the_per_task_timer_entry() {
     let words = Domain::A.words();
     let slot = FlagSlot::new(3, 120).unwrap();

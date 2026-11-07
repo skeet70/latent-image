@@ -48,10 +48,10 @@ pub fn poll_flag<M: ObjectLock>(
             Some(reported) => {
                 let clear_on_match =
                     m.load_word(config.attributes()) & FlagConfig::CLEAR_ON_MATCH != 0;
-                m.store_word(out.0, reported.0);
                 if clear_on_match {
                     m.store_word(control.pattern(), 0);
                 }
+                m.store_word(out.0, reported.0);
                 Ok(WaitOutcome::Satisfied(reported))
             }
             None => Ok(WaitOutcome::TimedOut),

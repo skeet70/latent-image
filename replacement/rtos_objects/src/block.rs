@@ -143,10 +143,10 @@ pub fn wait_flag<M: Block>(
         let clear_on_match = m.load_word(config.attributes()) & FlagConfig::CLEAR_ON_MATCH != 0;
         match check(&mut pattern, want.pattern(), mode, clear_on_match) {
             Some(reported) => {
-                m.store_word(out.0, reported.0);
                 if clear_on_match {
                     m.store_word(control.pattern(), 0);
                 }
+                m.store_word(out.0, reported.0);
                 Ok(FlagBlocking::Ready(WaitOutcome::Satisfied(reported)))
             }
             None => match timeout {
