@@ -24,6 +24,7 @@ pub enum DispatchTarget {
 /// The release's primitives, keyed by the owner record the ABI supplies.
 pub trait Release: Machine {
     fn context(&self, domain: Domain) -> KernelContext;
+    fn reset_task(&self, task: Task);
     fn prepare(&self, owner: KernelContext, task: Task) -> Selection;
     fn insert(&self, owner: KernelContext, task: Task) -> Selection;
     fn remove_timer(&self, owner: KernelContext, entry: GuestAddress);
