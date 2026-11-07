@@ -184,6 +184,10 @@ impl Wake for Cpu {
     fn dispatch(&self, code: i32) {
         unsafe { xm1_rtos_scheduler_save(code) };
     }
+
+    fn request_delayed_dispatch(&self) {
+        self.store_word(ENTRY.words().reschedule, 1);
+    }
 }
 
 #[inline(always)]

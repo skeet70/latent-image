@@ -1,6 +1,6 @@
 //! Host backend over the owned S1/S2 bodies in `xm1_rtos_scheduler`; models memory, the timer
 //! boundary and the doorbell.
-use crate::block::Block;
+use crate::block::{Block, Deadline, Tick, TimerEntryAddress, TimeoutCallback};
 use crate::create::{Machine as CreateMachine, SavedInterrupts};
 use crate::layout::{Domain, DomainId, GuestAddress, KernelContext, LockRecord, Task, WaitQueue};
 use crate::order::QueueOrder;
@@ -387,12 +387,19 @@ impl Block for Sim {
         self.set(GuestAddress(next.0).offset(0x04), task.0 .0);
     }
 
-    fn arm_timer(&self, _owner: KernelContext, entry: GuestAddress, deadline: u32) {
-        self.arm(entry);
-        self.deadlines.borrow_mut().insert(entry.0, deadline);
+    fn arm_timer(&self, _owner: KernelContext, entry: TimerEntryAddress, deadline: Deadline) {
+        self.arm(entry.0);
+        self.deadlines.borrow_mut().insert(entry.0 .0, deadline.0);
     }
 
-    fn now(&self, owner: KernelContext) -> u32 {
-        self.pointed(owner.tick_now())
+    fn tick(&self, owner: KernelContext) -> Tick {
+        Tick(self.pointed(owner.tick_now()))
+    }
+
+    fn timeout_callback(&self) -> TimeoutCallback {
+        TimeoutCallback(match self.entry {
+            Domain::A => 0x44318,
+            Domain::B => 0xd42d8,
+        })
     }
 }
