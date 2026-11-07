@@ -6,11 +6,12 @@
 -- the current case expectation is re-judged on every read.
 module Emulation.CachedNativeBatch
   ( BatchReuse (..)
+  , CacheEscape
   , cachedObservedBatch
   ) where
 
-import Control.Exception (IOException, catch, onException, throwIO, try)
-import Control.Monad (forM, forM_)
+import Control.Exception (Exception, IOException, catch, onException, throwIO, try)
+import Control.Monad (forM, forM_, when)
 import Data.Aeson (Value (..))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
@@ -69,7 +70,9 @@ import System.Directory
   , renameDirectory
   )
 import System.Exit (ExitCode (..))
-import System.FilePath (takeDirectory, takeFileName, (</>))
+import System.FilePath (addTrailingPathSeparator, takeDirectory, (</>))
+import System.IO.Error (isDoesNotExistError, tryIOError)
+import System.Posix.Files (getSymbolicLinkStatus, isDirectory, isSymbolicLink)
 import System.Posix.Process (getProcessID)
 
 data BatchReuse = BatchExecuted | BatchReused
@@ -80,6 +83,102 @@ newtype CacheKey = CacheKey DigestHex
 
 cacheKeyText :: CacheKey -> String
 cacheKeyText (CacheKey key) = digestHex key
+
+-- | The caller-selected cache root, resolved once so an intentional alias (a
+-- symlinked cache directory) keeps working while everything below it is owned.
+newtype CacheRoot = CacheRoot FilePath
+
+-- | A cache-owned path carrying its canonical root and the relative components
+-- already admitted as non-symbolic directories.
+data OwnedPath = OwnedPath CacheRoot [FilePath]
+
+ownedPath :: OwnedPath -> FilePath
+ownedPath (OwnedPath (CacheRoot base) components) = foldl (</>) base components
+
+ownedCacheRoot :: OwnedPath -> CacheRoot
+ownedCacheRoot (OwnedPath root _) = root
+
+ownedRelative :: OwnedPath -> [FilePath]
+ownedRelative (OwnedPath _ components) = components
+
+ownedChild :: OwnedPath -> [FilePath] -> OwnedPath
+ownedChild (OwnedPath root components) extra = OwnedPath root (components ++ extra)
+
+rootPath :: CacheRoot -> OwnedPath
+rootPath root = OwnedPath root []
+
+-- | A cache-owned path that would resolve outside the canonical root. The call
+-- refuses rather than following the link, so no outside path is read, written,
+-- renamed or quarantined.
+newtype CacheEscape = CacheEscape String
+  deriving (Show)
+
+instance Exception CacheEscape
+
+refuseEscape :: String -> IO a
+refuseEscape = throwIO . CacheEscape
+
+withinRoot :: CacheRoot -> FilePath -> Bool
+withinRoot (CacheRoot base) resolved =
+  resolved == base || addTrailingPathSeparator base `isPrefixOf` resolved
+
+-- | Check every existing component for a symbolic link. A missing component
+-- ends the walk because nothing below it can exist.
+admitComponents :: FilePath -> [FilePath] -> IO ()
+admitComponents parent = go parent
+  where
+    go _ [] = pure ()
+    go base (component : rest) = do
+      let path = base </> component
+      status <- tryIOError (getSymbolicLinkStatus path)
+      case status of
+        Left problem | isDoesNotExistError problem -> pure ()
+        Left problem -> throwIO problem
+        Right entry -> do
+          when (isSymbolicLink entry) (refuseEscape ("cache path is a symbolic link: " ++ path))
+          ensure (isDirectory entry) ("cache path is not a directory: " ++ path)
+          go path rest
+
+-- | Admit an existing directory below an owned parent. Missing components report
+-- absence; a symbolic link refuses the call.
+admitDirectory :: OwnedPath -> [FilePath] -> IO (Maybe OwnedPath)
+admitDirectory parent components = do
+  present <- go (ownedPath (rootPath (ownedCacheRoot parent))) (ownedRelative parent ++ components)
+  pure (if present then Just (ownedChild parent components) else Nothing)
+  where
+    go _ [] = pure True
+    go base (component : rest) = do
+      let path = base </> component
+      status <- tryIOError (getSymbolicLinkStatus path)
+      case status of
+        Left problem | isDoesNotExistError problem -> pure False
+        Left problem -> throwIO problem
+        Right entry -> do
+          when (isSymbolicLink entry) (refuseEscape ("cache path is a symbolic link: " ++ path))
+          ensure (isDirectory entry) ("cache path is not a directory: " ++ path)
+          go path rest
+
+-- | Admit or create a directory below an owned parent. Symbolic links are
+-- refused before and after creation, and the resolved path must stay under the
+-- canonical root.
+ownedDirectory :: OwnedPath -> [FilePath] -> IO OwnedPath
+ownedDirectory parent components = do
+  let root = ownedCacheRoot parent
+      full = ownedRelative parent ++ components
+  admitComponents (ownedPath (rootPath root)) full
+  let target = ownedChild parent components
+  createDirectoryIfMissing True (ownedPath target)
+  admitComponents (ownedPath (rootPath root)) full
+  resolved <- canonicalizePath (ownedPath target)
+  ensure
+    (withinRoot root resolved)
+    ("cache path resolves outside its root: " ++ resolved)
+  pure target
+
+canonicalRoot :: FilePath -> IO CacheRoot
+canonicalRoot path = do
+  createDirectoryIfMissing True path
+  CacheRoot <$> canonicalizePath path
 
 data RunnerIdentity = RunnerIdentity
   { identityPath :: FilePath
@@ -184,15 +283,14 @@ parseExit bytes =
 
 cachedObservedBatch :: FilePath -> FilePath -> FilePath -> IO (BatchReuse, [(CaseId, NativeObservation)])
 cachedObservedBatch cacheRoot runner batchPath = do
-  createDirectoryIfMissing True cacheRoot
+  root <- canonicalRoot cacheRoot
   (batchSha256, cases) <- prepareCurrent batchPath
   identity <- runnerIdentity runner
   let key = cacheKey identity cases
-      entry = cacheRoot </> "v1" </> cacheKeyText key
       executed = do
         temporary <-
           if identityImmutable identity
-            then Just <$> createAttempt cacheRoot key
+            then Just <$> createAttempt root key
             else pure Nothing
         let cleanup = maybe (pure ()) removeAttempt temporary
         (observed, manifests) <-
@@ -201,7 +299,7 @@ cachedObservedBatch cacheRoot runner batchPath = do
           then case temporary of
             Just directory -> do
               published <-
-                publishAttempt cacheRoot identity key batchSha256 directory manifests
+                publishAttempt root identity key batchSha256 directory manifests
                   `onException` cleanup
               if published then pure () else cleanup
             Nothing -> pure ()
@@ -210,12 +308,12 @@ cachedObservedBatch cacheRoot runner batchPath = do
   if not (identityImmutable identity)
     then executed
     else do
-      cached <- readCached identity key cases entry batchPath
+      cached <- readCached root identity key cases batchPath
       case cached of
         CacheHit observed -> pure (BatchReused, observed)
         CacheAbsent -> executed
         CacheInvalid _reason -> do
-          quarantine cacheRoot entry
+          quarantine root key
           executed
 
 prepareCurrent :: FilePath -> IO (DigestHex, [CurrentCase])
@@ -269,7 +367,7 @@ cacheKey identity cases =
     [cacheVersion, identityPath identity, digestHex (identitySha256 identity)]
       ++ map (digestHex . currentWireSha256) cases
 
-executeValidated :: RunnerIdentity -> DigestHex -> FilePath -> [CurrentCase] -> Maybe FilePath -> IO ([(CaseId, NativeObservation)], [ManifestCase])
+executeValidated :: RunnerIdentity -> DigestHex -> FilePath -> [CurrentCase] -> Maybe OwnedPath -> IO ([(CaseId, NativeObservation)], [ManifestCase])
 executeValidated identity batchSha256 batchPath cases temporary = do
   observations <- newIORef []
   manifests <- newIORef []
@@ -304,13 +402,12 @@ executeValidated identity batchSha256 batchPath cases temporary = do
         case temporary of
           Nothing -> pure ()
           Just directory -> do
-            let caseDirectory = directory </> "cases" </> ident
-                provenance = provenanceValue identity batchSha256 current exit
+            caseDirectory <- ownedDirectory directory ["cases", ident]
+            let provenance = provenanceValue identity batchSha256 current exit
                 provenanceBytes = encodeCanonical provenance
-            createDirectoryIfMissing True caseDirectory
-            B.writeFile (caseDirectory </> "runner.json") rawBytes
-            B.writeFile (caseDirectory </> "exit") (exitBytes exit)
-            B.writeFile (caseDirectory </> "provenance.json") provenanceBytes
+            B.writeFile (ownedPath caseDirectory </> "runner.json") rawBytes
+            B.writeFile (ownedPath caseDirectory </> "exit") (exitBytes exit)
+            B.writeFile (ownedPath caseDirectory </> "provenance.json") provenanceBytes
             modifyIORef' manifests (manifestCase current exit rawBytes provenanceBytes :)
         writeIORef remaining rest
   observed <- reverse <$> readIORef observations
@@ -392,20 +489,20 @@ writeResult batchPath current judged =
     (takeDirectory batchPath </> (caseIdText (currentId current) ++ ".native-result.json"))
     (encodeCanonical judged)
 
-readCached :: RunnerIdentity -> CacheKey -> [CurrentCase] -> FilePath -> FilePath -> IO CacheRead
-readCached identity key cases entry batchPath = do
-  exists <- doesDirectoryExist entry
-  if not exists
-    then pure CacheAbsent
-    else do
-      result <- try (validateCached identity key cases entry batchPath)
+readCached :: CacheRoot -> RunnerIdentity -> CacheKey -> [CurrentCase] -> FilePath -> IO CacheRead
+readCached root identity key cases batchPath = do
+  entry <- admitDirectory (rootPath root) ["v1", cacheKeyText key]
+  case entry of
+    Nothing -> pure CacheAbsent
+    Just ownedEntry -> do
+      result <- try (validateCached identity key cases ownedEntry batchPath)
       pure $ case result of
         Left (problem :: IOException) -> CacheInvalid (show problem)
         Right observed -> CacheHit observed
 
-validateCached :: RunnerIdentity -> CacheKey -> [CurrentCase] -> FilePath -> FilePath -> IO [(CaseId, NativeObservation)]
+validateCached :: RunnerIdentity -> CacheKey -> [CurrentCase] -> OwnedPath -> FilePath -> IO [(CaseId, NativeObservation)]
 validateCached identity key cases entry batchPath = do
-  encodedManifest <- readRegularWith (pure ()) False manifestLimit (entry </> "manifest.json")
+  encodedManifest <- readRegularWith (pure ()) True manifestLimit (ownedPath entry </> "manifest.json")
   manifest <- parseManifest =<< jsonRead encodedManifest
   ensure (manifestKey manifest == key) "cache manifest key differs"
   ensure
@@ -415,18 +512,21 @@ validateCached identity key cases entry batchPath = do
   ensure (length items == length cases) "cache manifest case count differs"
   let originalIds = map manifestCaseId items
   ensure (length (nub originalIds) == length originalIds) "cache manifest case ids duplicate"
-  forM (zip cases items) $ \(current, item) -> do
+  caseDirectories <-
+    forM items $ \item -> do
+      admitted <- admitDirectory entry ["cases", caseIdText (manifestCaseId item)]
+      maybe (failH "cache case directory is missing") pure admitted
+  forM (zip3 cases items caseDirectories) $ \(current, item, caseDirectory) -> do
     ensure
       (manifestCaseWireSha256 item == currentWireSha256 current)
       "cache manifest wire differs"
-    let caseDirectory = entry </> "cases" </> caseIdText (manifestCaseId item)
-    exitBytes' <- readRegularWith (pure ()) False 16 (caseDirectory </> "exit")
+    exitBytes' <- readRegularWith (pure ()) True 16 (ownedPath caseDirectory </> "exit")
     ensure
       (digestBytes exitBytes' == manifestCaseExitSha256 item)
       "cache recorded runner exit digest differs"
     exit <- either failH pure (parseExit exitBytes')
     ensure (exit == manifestCaseRunnerExit item) "cache recorded runner exit differs from its manifest"
-    rawBytes <- readRegularWith (pure ()) False payloadLimit (caseDirectory </> "runner.json")
+    rawBytes <- readRegularWith (pure ()) True payloadLimit (ownedPath caseDirectory </> "runner.json")
     ensure
       (B.length rawBytes == manifestCaseRawBytes item)
       "cache raw runner observation length differs"
@@ -434,7 +534,7 @@ validateCached identity key cases entry batchPath = do
       (digestBytes rawBytes == manifestCaseRawSha256 item)
       "cache raw runner observation digest differs"
     raw <- jsonRead rawBytes
-    provenanceBytes <- readRegularWith (pure ()) False payloadLimit (caseDirectory </> "provenance.json")
+    provenanceBytes <- readRegularWith (pure ()) True payloadLimit (ownedPath caseDirectory </> "provenance.json")
     ensure
       (digestBytes provenanceBytes == manifestCaseProvenanceSha256 item)
       "cache provenance digest differs"
@@ -544,25 +644,39 @@ voidInteger value expected label = do
   actual <- integer value expected expected label
   ensure (actual == expected) (label ++ ": unexpected value")
 
-createAttempt :: FilePath -> CacheKey -> IO FilePath
-createAttempt cacheRoot key = do
-  let base = cacheRoot </> "v1" </> "tmp"
-  createDirectoryIfMissing True base
+createAttempt :: CacheRoot -> CacheKey -> IO OwnedPath
+createAttempt root key = do
+  base <- ownedDirectory (rootPath root) ["v1", "tmp"]
   uniqueDirectory base (cacheKeyText key)
 
-removeAttempt :: FilePath -> IO ()
-removeAttempt directory = removeDirectoryRecursive directory `catch` \(_ :: IOException) -> pure ()
+removeAttempt :: OwnedPath -> IO ()
+removeAttempt directory =
+  ( do
+      admitted <- admitDirectory (rootPath (ownedCacheRoot directory)) (ownedRelative directory)
+      case admitted of
+        Just owned -> removeDirectoryRecursive (ownedPath owned)
+        Nothing -> pure ()
+  )
+    `catch` (\(_ :: IOException) -> pure ())
+    `catch` (\(_ :: CacheEscape) -> pure ())
 
-publishAttempt :: FilePath -> RunnerIdentity -> CacheKey -> DigestHex -> FilePath -> [ManifestCase] -> IO Bool
-publishAttempt cacheRoot identity key batchSha256 temporary manifests = do
-  B.writeFile (temporary </> "manifest.json") (manifestBytes identity key batchSha256 manifests)
-  let final = cacheRoot </> "v1" </> cacheKeyText key
-  result <- try (renameDirectory temporary final)
-  case result of
-    Right () -> pure True
-    Left (problem :: IOException) -> do
-      existing <- doesDirectoryExist final
-      if existing then pure False else throwIO problem
+publishAttempt :: CacheRoot -> RunnerIdentity -> CacheKey -> DigestHex -> OwnedPath -> [ManifestCase] -> IO Bool
+publishAttempt root identity key batchSha256 temporary manifests = do
+  attempt <-
+    admitDirectory (rootPath (ownedCacheRoot temporary)) (ownedRelative temporary)
+      >>= maybe (failH "cache attempt directory is missing") pure
+  B.writeFile (ownedPath attempt </> "manifest.json") (manifestBytes identity key batchSha256 manifests)
+  existing <- admitDirectory (rootPath root) ["v1", cacheKeyText key]
+  case existing of
+    Just _ -> pure False
+    Nothing -> do
+      let final = ownedPath (rootPath root) </> "v1" </> cacheKeyText key
+      result <- try (renameDirectory (ownedPath attempt) final)
+      case result of
+        Right () -> pure True
+        Left (problem :: IOException) -> do
+          present <- doesDirectoryExist final
+          if present then pure False else throwIO problem
 
 manifestBytes :: RunnerIdentity -> CacheKey -> DigestHex -> [ManifestCase] -> B.ByteString
 manifestBytes identity key batchSha256 manifests =
@@ -588,35 +702,38 @@ manifestBytes identity key batchSha256 manifests =
         , ("provenance_sha256", s (digestHex (manifestCaseProvenanceSha256 item)))
         ]
 
-uniqueDirectory :: FilePath -> String -> IO FilePath
+uniqueDirectory :: OwnedPath -> String -> IO OwnedPath
 uniqueDirectory base label = go (0 :: Int)
   where
     go attempt = do
       pid <- getProcessID
       stamp <- getMonotonicTimeNSec
-      let path =
-            base
-              </> ( ".tmp-"
-                      ++ take 16 label
-                      ++ "-"
-                      ++ show pid
-                      ++ "-"
-                      ++ show stamp
-                      ++ "-"
-                      ++ show attempt
-                  )
-      result <- try (createDirectory path)
+      let name =
+            ".tmp-"
+              ++ take 16 label
+              ++ "-"
+              ++ show pid
+              ++ "-"
+              ++ show stamp
+              ++ "-"
+              ++ show attempt
+      result <- try (createDirectory (ownedPath base </> name))
       case result of
-        Right () -> pure path
+        Right () -> pure (ownedChild base [name])
         Left (problem :: IOException)
           | attempt < 100 -> go (attempt + 1)
           | otherwise -> throwIO problem
 
-quarantine :: FilePath -> FilePath -> IO ()
-quarantine cacheRoot entry = do
-  let root = cacheRoot </> "v1" </> "quarantine"
-  createDirectoryIfMissing True root
-  pid <- getProcessID
-  stamp <- getMonotonicTimeNSec
-  let destination = root </> (takeFileName entry ++ "-" ++ show pid ++ "-" ++ show stamp)
-  renameDirectory entry destination `catch` \(_ :: IOException) -> pure ()
+quarantine :: CacheRoot -> CacheKey -> IO ()
+quarantine root key = do
+  destinationRoot <- ownedDirectory (rootPath root) ["v1", "quarantine"]
+  entry <- admitDirectory (rootPath root) ["v1", cacheKeyText key]
+  case entry of
+    Nothing -> pure ()
+    Just ownedEntry -> do
+      pid <- getProcessID
+      stamp <- getMonotonicTimeNSec
+      let destination =
+            ownedPath destinationRoot
+              </> (cacheKeyText key ++ "-" ++ show pid ++ "-" ++ show stamp)
+      renameDirectory (ownedPath ownedEntry) destination `catch` \(_ :: IOException) -> pure ()
