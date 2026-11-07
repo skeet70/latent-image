@@ -106,6 +106,7 @@ xm1_rust_staticlib(
         name = "objects-family-adapter-%s" % domain,
         src = "stage/adapter.rs",
         crate_name = "xm1_rtos_objects_family_adapter",
+        opt_level = "s",
         data = [
             "stage/abi.rs",
             "stage/family.rs",
@@ -145,7 +146,11 @@ xm1_rust_staticlib(
             ":scheduler-s2-%s-component" % domain,
         ],
         link_script = "stage/family-%s.ld" % domain,
-        extra_ldflags = ["-Wl,--gc-sections", "-Wl,--orphan-handling=error"],
+        extra_ldflags = [
+            "-Wl,-Map=$(@D)/objects-family-stage-%s.map" % domain,
+            "-Wl,--gc-sections",
+            "-Wl,--orphan-handling=error",
+        ],
         link_includes = [
             "//replacement/rtos_scheduler:scheduler-%s-placement.ld" % domain,
             "//replacement/rtos_scheduler:scheduler-s2-%s-placement.ld" % domain,

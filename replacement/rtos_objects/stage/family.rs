@@ -189,30 +189,82 @@ fn want(pattern: Pattern) -> Result<WantedMask, ObjectStatus> {
     WantedMask::new(pattern)
 }
 
+#[inline(never)]
+fn create_flag_entry(id: i32, request_pointer: u32) -> i32 {
+    let words = entry_words();
+    let slot = match own_flag_slot(EncodedId(id), load(words.context(ENTRY).event_flag_count())) {
+        Ok(slot) => slot,
+        Err(status) => return status.code(),
+    };
+    if load(ENTRY.words().flag_config(slot).exists()) != 0 {
+        return ObjectStatus::AlreadyExists.code();
+    }
+    let create = objects::create::FlagCreate {
+        attributes: FlagAttributes(load(GuestAddress(request_pointer))),
+        initial: Pattern(load(GuestAddress(request_pointer + 4))),
+    };
+    match create_flag(&Cpu, FlagId { domain: ENTRY, slot }, create) {
+        Ok(_) => 0,
+        Err(status) => status.code(),
+    }
+}
+
+#[inline(never)]
+fn delete_flag_entry(id: i32) -> i32 {
+    let words = entry_words();
+    let slot = match own_flag_slot(EncodedId(id), load(words.context(ENTRY).event_flag_count())) {
+        Ok(slot) => slot,
+        Err(status) => return status.code(),
+    };
+    match delete_flag(&Cpu, FlagId { domain: ENTRY, slot }) {
+        Ok(()) => 0,
+        Err(status) => status.code(),
+    }
+}
+
+#[inline(never)]
+fn create_mailbox_entry(id: i32, request_pointer: u32) -> i32 {
+    let words = entry_words();
+    let slot = match own_mailbox_slot(EncodedId(id), load(words.context(ENTRY).mailbox_count())) {
+        Ok(slot) => slot,
+        Err(status) => return status.code(),
+    };
+    if load(ENTRY.words().mailbox_config(slot).exists()) != 0 {
+        return ObjectStatus::AlreadyExists.code();
+    }
+    let create = objects::create::MailboxCreate {
+        attributes: MailboxAttributes(load(GuestAddress(request_pointer))),
+        priority_limit: PriorityLimit(load(GuestAddress(request_pointer + 4))),
+    };
+    match create_mailbox(&Cpu, MailboxId { domain: ENTRY, slot }, create) {
+        Ok(_) => 0,
+        Err(status) => status.code(),
+    }
+}
+
+#[inline(never)]
+fn delete_mailbox_entry(id: i32) -> i32 {
+    let words = entry_words();
+    let slot = match own_mailbox_slot(EncodedId(id), load(words.context(ENTRY).mailbox_count())) {
+        Ok(slot) => slot,
+        Err(status) => return status.code(),
+    };
+    match delete_mailbox(&Cpu, MailboxId { domain: ENTRY, slot }) {
+        Ok(drain) => {
+            core::mem::drop(drain);
+            0
+        }
+        Err(status) => status.code(),
+    }
+}
+
 /// Slot `+0x80`.
 #[no_mangle]
 #[inline(never)]
 #[link_section = ".text.family_flag_create"]
 pub extern "C" fn xm1_rtos_objects_family_flag_create(id: i32, request_pointer: u32) -> i32 {
     let saved = mask_lifecycle();
-    let code = (|| -> i32 {
-        let words = entry_words();
-        let slot = match own_flag_slot(EncodedId(id), load(words.context(ENTRY).event_flag_count())) {
-            Ok(slot) => slot,
-            Err(status) => return status.code(),
-        };
-        if load(ENTRY.words().flag_config(slot).exists()) != 0 {
-            return ObjectStatus::AlreadyExists.code();
-        }
-        let create = objects::create::FlagCreate {
-            attributes: FlagAttributes(load(GuestAddress(request_pointer))),
-            initial: Pattern(load(GuestAddress(request_pointer + 4))),
-        };
-        match create_flag(&Cpu, FlagId { domain: ENTRY, slot }, create) {
-            Ok(_) => 0,
-            Err(status) => status.code(),
-        }
-    })();
+    let code = create_flag_entry(id, request_pointer);
     restore_lifecycle(saved);
     code
 }
@@ -223,17 +275,7 @@ pub extern "C" fn xm1_rtos_objects_family_flag_create(id: i32, request_pointer: 
 #[link_section = ".text.family_flag_delete"]
 pub extern "C" fn xm1_rtos_objects_family_flag_delete(id: i32) -> i32 {
     let saved = mask_lifecycle();
-    let code = (|| -> i32 {
-        let words = entry_words();
-        let slot = match own_flag_slot(EncodedId(id), load(words.context(ENTRY).event_flag_count())) {
-            Ok(slot) => slot,
-            Err(status) => return status.code(),
-        };
-        match delete_flag(&Cpu, FlagId { domain: ENTRY, slot }) {
-            Ok(()) => 0,
-            Err(status) => status.code(),
-        }
-    })();
+    let code = delete_flag_entry(id);
     restore_lifecycle(saved);
     code
 }
@@ -388,24 +430,7 @@ pub extern "C" fn xm1_rtos_objects_family_flag_poll(id: i32, pattern: u32, mode:
 #[link_section = ".text.family_mailbox_create"]
 pub extern "C" fn xm1_rtos_objects_family_mailbox_create(id: i32, request_pointer: u32) -> i32 {
     let saved = mask_lifecycle();
-    let code = (|| -> i32 {
-        let words = entry_words();
-        let slot = match own_mailbox_slot(EncodedId(id), load(words.context(ENTRY).mailbox_count())) {
-            Ok(slot) => slot,
-            Err(status) => return status.code(),
-        };
-        if load(ENTRY.words().mailbox_config(slot).exists()) != 0 {
-            return ObjectStatus::AlreadyExists.code();
-        }
-        let create = objects::create::MailboxCreate {
-            attributes: MailboxAttributes(load(GuestAddress(request_pointer))),
-            priority_limit: PriorityLimit(load(GuestAddress(request_pointer + 4))),
-        };
-        match create_mailbox(&Cpu, MailboxId { domain: ENTRY, slot }, create) {
-            Ok(_) => 0,
-            Err(status) => status.code(),
-        }
-    })();
+    let code = create_mailbox_entry(id, request_pointer);
     restore_lifecycle(saved);
     code
 }
@@ -416,20 +441,7 @@ pub extern "C" fn xm1_rtos_objects_family_mailbox_create(id: i32, request_pointe
 #[link_section = ".text.family_mailbox_delete"]
 pub extern "C" fn xm1_rtos_objects_family_mailbox_delete(id: i32) -> i32 {
     let saved = mask_lifecycle();
-    let code = (|| -> i32 {
-        let words = entry_words();
-        let slot = match own_mailbox_slot(EncodedId(id), load(words.context(ENTRY).mailbox_count())) {
-            Ok(slot) => slot,
-            Err(status) => return status.code(),
-        };
-        match delete_mailbox(&Cpu, MailboxId { domain: ENTRY, slot }) {
-            Ok(drain) => {
-                core::mem::drop(drain);
-                0
-            }
-            Err(status) => status.code(),
-        }
-    })();
+    let code = delete_mailbox_entry(id);
     restore_lifecycle(saved);
     code
 }

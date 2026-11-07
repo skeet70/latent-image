@@ -1,6 +1,6 @@
 use crate::id::{
-    own_flag_slot, own_mailbox_slot, resolve_flag_with, resolve_mailbox_with, EncodedId, EntryDomain,
-    FlagId, MailboxId,
+    own_flag_slot, own_mailbox_slot, resolve_flag_in, resolve_mailbox_in, target, EncodedId,
+    EntryDomain, FlagId, MailboxId,
 };
 use crate::layout::{Domain, MailboxConfig, Message};
 use crate::matching::{MatchMode, Pattern};
@@ -166,6 +166,12 @@ pub struct Request {
     pub params: Params,
 }
 
+#[cfg_attr(feature = "family", inline(never))]
+fn admit_entry(request: &Request, handler: bool, blocks: bool) -> Result<Domain, ObjectStatus> {
+    validate_entry(handler, blocks, request)?;
+    target(request.entry_domain, request.id.class())
+}
+
 /// The stock order: context, IRQ mask, dispatch word, class, index, family parameters, then the
 /// creation record. Create and delete have no admission at all.
 #[cfg_attr(feature = "family", inline(never))]
@@ -175,8 +181,8 @@ pub fn admit_flag<R: Records, F: Facts>(
     records: &R,
     facts: &F,
 ) -> Result<AdmittedFlag, ObjectStatus> {
-    validate_entry(service.handler(), service.blocks(), request)?;
-    let id = resolve_flag_with(request.entry_domain, request.id, |domain| records.flags(domain))?;
+    let domain = admit_entry(request, service.handler(), service.blocks())?;
+    let id = resolve_flag_in(domain, request.id, records.flags(domain))?;
     let (want, mode, timeout) = match service {
         FlagService::Set | FlagService::SetHandler | FlagService::Clear => {
             (Pattern(0), MatchMode::All, None)
@@ -214,10 +220,8 @@ pub fn admit_mailbox<R: Records, F: Facts>(
     records: &R,
     facts: &F,
 ) -> Result<AdmittedMailbox, ObjectStatus> {
-    validate_entry(false, service.blocks(), request)?;
-    let id = resolve_mailbox_with(request.entry_domain, request.id, |domain| {
-        records.mailboxes(domain)
-    })?;
+    let domain = admit_entry(request, false, service.blocks())?;
+    let id = resolve_mailbox_in(domain, request.id, records.mailboxes(domain))?;
     let object = Object::Mailbox(id);
     match service {
         MailboxService::Send => {
