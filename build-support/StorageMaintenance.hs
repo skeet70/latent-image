@@ -344,7 +344,7 @@ apply file = do
         modifyIORef' deleted ((r, path entry):)
       verifyProtected
       persist True) `onException` persist False
-    B.readFile auditPath >>= B.putStr
+    BL.readFile auditPath >>= BL.putStr
 
 parseRoots :: [String] -> IO [Root]
 parseRoots arguments = do
