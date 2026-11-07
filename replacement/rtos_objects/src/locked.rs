@@ -1,6 +1,6 @@
 use crate::create::Machine;
 use crate::id::{FlagId, MailboxId};
-use crate::layout::{FlagConfig, GuestAddress, LockRecord, Message};
+use crate::layout::{FlagConfig, FlagControl, GuestAddress, LockRecord, Message};
 use crate::matching::{check, KeepMask, MatchMode, Pattern, WantedMask};
 use crate::status::{ObjectStatus, WaitOutcome};
 
@@ -27,6 +27,29 @@ pub fn clear_flag<M: ObjectLock>(m: &M, id: FlagId, keep: KeepMask) -> Result<()
     Ok(())
 }
 
+/// The immediate match, clear and caller store under the object lock.
+pub fn check_control<M: Machine>(
+    m: &M,
+    control: FlagControl,
+    config: FlagConfig,
+    want: Pattern,
+    mode: MatchMode,
+    out: OutWord,
+) -> Option<Pattern> {
+    let mut pattern = Pattern(m.load_word(control.pattern()));
+    let clear_on_match = m.load_word(config.attributes()) & FlagConfig::CLEAR_ON_MATCH != 0;
+    match check(&mut pattern, want, mode, clear_on_match) {
+        Some(reported) => {
+            if clear_on_match {
+                m.store_word(control.pattern(), 0);
+            }
+            m.store_word(out.0, reported.0);
+            Some(reported)
+        }
+        None => None,
+    }
+}
+
 /// Slot `+0x98`.
 pub fn poll_flag<M: ObjectLock>(
     m: &M,
@@ -43,17 +66,8 @@ pub fn poll_flag<M: ObjectLock>(
         if m.load_word(control.queue().next()) != control.0 .0 {
             return Err(ObjectStatus::QueueOverflow);
         }
-        let mut pattern = Pattern(m.load_word(control.pattern()));
-        match check(&mut pattern, want.pattern(), mode, false) {
-            Some(reported) => {
-                let clear_on_match =
-                    m.load_word(config.attributes()) & FlagConfig::CLEAR_ON_MATCH != 0;
-                if clear_on_match {
-                    m.store_word(control.pattern(), 0);
-                }
-                m.store_word(out.0, reported.0);
-                Ok(WaitOutcome::Satisfied(reported))
-            }
+        match check_control(m, control, config, want.pattern(), mode, out) {
+            Some(reported) => Ok(WaitOutcome::Satisfied(reported)),
             None => Ok(WaitOutcome::TimedOut),
         }
     })

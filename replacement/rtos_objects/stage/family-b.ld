@@ -2,6 +2,10 @@ INCLUDE scheduler-b-placement.ld
 INCLUDE scheduler-s2-b-placement.ld
 
 MEMORY {
+  helper_release (rx) : ORIGIN = 0xd4704, LENGTH = 0xbc
+  helper_block (rx) : ORIGIN = 0xd47c0, LENGTH = 0xe4
+  helper_block_timed (rx) : ORIGIN = 0xd48a4, LENGTH = 0xdc
+  helper_check (rx) : ORIGIN = 0xd808c, LENGTH = 0x70
   family_release (rx) : ORIGIN = 0xd4528, LENGTH = 0xcc
   family_flag_create (rx) : ORIGIN = 0xdd360, LENGTH = 0x98
   family_flag_delete (rx) : ORIGIN = 0xdd3f8, LENGTH = 0x68
@@ -24,6 +28,26 @@ xm1_rtos_objects_stock_remove_timer = 0xd4c68;
 xm1_rtos_objects_stock_timeout = 0xd42d8;
 
 SECTIONS {
+  .helper_release : {
+    KEEP(*(.text.helper_release))
+    __helper_release_body_end = .;
+    . = ORIGIN(helper_release) + LENGTH(helper_release);
+  } > helper_release =0xf000f0e7
+  .helper_block : {
+    KEEP(*(.text.helper_block))
+    __helper_block_body_end = .;
+    . = ORIGIN(helper_block) + LENGTH(helper_block);
+  } > helper_block =0xf000f0e7
+  .helper_block_timed : {
+    KEEP(*(.text.helper_block_timed))
+    __helper_block_timed_body_end = .;
+    . = ORIGIN(helper_block_timed) + LENGTH(helper_block_timed);
+  } > helper_block_timed =0xf000f0e7
+  .helper_check : {
+    KEEP(*(.text.helper_check))
+    __helper_check_body_end = .;
+    . = ORIGIN(helper_check) + LENGTH(helper_check);
+  } > helper_check =0xf000f0e7
   .family_release : {
     KEEP(*(.text.f2_release))
     __family_release_body_end = .;
@@ -130,6 +154,14 @@ SECTIONS {
   .strtab 0 : { *(.strtab) }
   /DISCARD/ : { *(.ARM.exidx .ARM.exidx.* .ARM.extab .ARM.extab.* .comment .note .note.*) }
 }
+ASSERT(xm1_rtos_objects_wait_release == ORIGIN(helper_release), "helper_release entry is not at its stock address")
+ASSERT(__helper_release_body_end <= ORIGIN(helper_release) + LENGTH(helper_release), "helper_release body exceeds its stock extent")
+ASSERT(xm1_rtos_objects_wait_block == ORIGIN(helper_block), "helper_block entry is not at its stock address")
+ASSERT(__helper_block_body_end <= ORIGIN(helper_block) + LENGTH(helper_block), "helper_block body exceeds its stock extent")
+ASSERT(xm1_rtos_objects_wait_block_timed == ORIGIN(helper_block_timed), "helper_block_timed entry is not at its stock address")
+ASSERT(__helper_block_timed_body_end <= ORIGIN(helper_block_timed) + LENGTH(helper_block_timed), "helper_block_timed body exceeds its stock extent")
+ASSERT(xm1_rtos_objects_check == ORIGIN(helper_check), "helper_check entry is not at its stock address")
+ASSERT(__helper_check_body_end <= ORIGIN(helper_check) + LENGTH(helper_check), "helper_check body exceeds its stock extent")
 ASSERT(xm1_rtos_objects_release == ORIGIN(family_release), "family_release entry is not at its stock address")
 ASSERT(__family_release_body_end <= ORIGIN(family_release) + LENGTH(family_release), "family_release body exceeds its stock extent")
 ASSERT(xm1_rtos_objects_family_flag_create == ORIGIN(family_flag_create), "family_flag_create entry is not at its stock address")

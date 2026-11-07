@@ -1,11 +1,11 @@
 use crate::create::Machine;
 use crate::id::{EntryDomain, FlagId, MailboxId};
 use crate::layout::{
-    Domain, FlagConfig, FlagWait, GuestAddress, KernelContext, MailboxWait, Message, Task, TaskState,
-    WaitBlock, WaitQueue,
+    Domain, FlagWait, GuestAddress, KernelContext, MailboxWait, Message, Task, TaskState, WaitBlock,
+    WaitQueue,
 };
-use crate::locked::OutWord;
-use crate::matching::{check, MatchMode, Pattern, WantedMask};
+use crate::locked::{check_control, OutWord};
+use crate::matching::{MatchMode, Pattern, WantedMask};
 use crate::order::QueueOrder;
 use crate::status::{ObjectStatus, WaitOutcome};
 use crate::timeout::Timeout;
@@ -79,44 +79,55 @@ pub enum ReceiveBlocking {
     Retry,
 }
 
-/// The wake writes the wait block's completion word before the task becomes runnable; the
-/// caller output is written by the resumed entry.
+/// The wait preparation a caller runs with the object and scheduler locks held.
+pub fn block_locked<M: Block>(
+    m: &M,
+    entry: Domain,
+    owner: u32,
+    task: Task,
+    wait: GuestAddress,
+    queue: WaitQueue,
+    order: QueueOrder,
+    timer: Option<(TimerEntryAddress, Deadline)>,
+) {
+    m.store_byte(
+        task.state(),
+        TaskState::WAIT
+            .union(TaskState::OBJECT_QUEUED)
+            .union(TaskState::OWNER_LOCK_QUEUED)
+            .bits(),
+    );
+    m.remove_ready(m.context(entry), task);
+    m.store_word(task.wait(), wait.0);
+    match timer {
+        Some((timer_entry, deadline)) => {
+            m.store_word(wait, timer_entry.0 .0);
+            m.store_word(timer_entry.0.offset(TIMER_ENTRY_CALLBACK), m.timeout_callback().0);
+            m.store_word(timer_entry.0.offset(TIMER_ENTRY_ARGUMENT), task.0 .0);
+            m.arm_timer(m.context(entry), timer_entry, deadline);
+        }
+        None => m.store_word(wait, 0),
+    }
+    m.store_word(WaitBlock(wait).queue(), queue.0 .0);
+    m.store_word(WaitBlock(wait).owner(), owner);
+    m.queue_wait(m.context(entry), task, queue, order);
+}
+
 fn block<M: Block>(
     m: &M,
     entry: Domain,
-    object: Domain,
+    owner: u32,
     task: Task,
     wait: GuestAddress,
     queue: WaitQueue,
     order: QueueOrder,
     timer: Option<(TimerEntryAddress, Deadline)>,
 ) -> bool {
-    let owner = m.context(object);
     m.with_scheduler_lock(entry, || {
         if m.load_byte(task.state()) & TaskState::READY.bits() == 0 {
             return false;
         }
-        m.store_byte(
-            task.state(),
-            TaskState::WAIT
-                .union(TaskState::OBJECT_QUEUED)
-                .union(TaskState::OWNER_LOCK_QUEUED)
-                .bits(),
-        );
-        m.remove_ready(m.context(entry), task);
-        m.store_word(task.wait(), wait.0);
-        match timer {
-            Some((timer_entry, deadline)) => {
-                m.store_word(wait, timer_entry.0 .0);
-                m.store_word(timer_entry.0.offset(TIMER_ENTRY_CALLBACK), m.timeout_callback().0);
-                m.store_word(timer_entry.0.offset(TIMER_ENTRY_ARGUMENT), task.0 .0);
-                m.arm_timer(m.context(entry), timer_entry, deadline);
-            }
-            None => m.store_word(wait, 0),
-        }
-        m.store_word(WaitBlock(wait).queue(), queue.0 .0);
-        m.store_word(WaitBlock(wait).owner(), object.id().word());
-        m.queue_wait(owner, task, queue, order);
+        block_locked(m, entry, owner, task, wait, queue, order, timer);
         true
     })
 }
@@ -139,16 +150,8 @@ pub fn wait_flag<M: Block>(
         if m.load_word(control.queue().next()) != control.0 .0 {
             return Err(ObjectStatus::QueueOverflow);
         }
-        let mut pattern = Pattern(m.load_word(control.pattern()));
-        let clear_on_match = m.load_word(config.attributes()) & FlagConfig::CLEAR_ON_MATCH != 0;
-        match check(&mut pattern, want.pattern(), mode, clear_on_match) {
-            Some(reported) => {
-                if clear_on_match {
-                    m.store_word(control.pattern(), 0);
-                }
-                m.store_word(out.0, reported.0);
-                Ok(FlagBlocking::Ready(WaitOutcome::Satisfied(reported)))
-            }
+        match check_control(m, control, config, want.pattern(), mode, out) {
+            Some(reported) => Ok(FlagBlocking::Ready(WaitOutcome::Satisfied(reported))),
             None => match timeout {
                 Timeout::Poll => Ok(FlagBlocking::Ready(WaitOutcome::TimedOut)),
                 Timeout::Forever | Timeout::Units(_) => {
@@ -171,7 +174,7 @@ pub fn wait_flag<M: Block>(
                     if !block(
                         m,
                         entry.domain(),
-                        id.domain,
+                        id.domain.id().word(),
                         task,
                         wait.0,
                         control.queue(),
@@ -228,7 +231,7 @@ pub fn receive<M: Block>(
                 if !block(
                     m,
                     entry.domain(),
-                    id.domain,
+                    id.domain.id().word(),
                     task,
                     wait.0,
                     control.queue(),

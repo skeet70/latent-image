@@ -9,7 +9,6 @@ use crate::status::{ObjectStatus, WaitOutcome};
 use crate::timeout::Timeout;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[repr(u8)]
 pub enum Service {
     FlagCreate,
     FlagDelete,
@@ -27,43 +26,65 @@ pub enum Service {
     MailboxTimedReceive,
 }
 
-impl Service {
-    pub const fn from_u8(value: u8) -> Self {
-        match value {
-            0 => Self::FlagCreate,
-            1 => Self::FlagDelete,
-            2 => Self::FlagSet,
-            3 => Self::FlagSetHandler,
-            4 => Self::FlagClear,
-            5 => Self::FlagWait,
-            6 => Self::FlagPoll,
-            7 => Self::FlagTimedWait,
-            8 => Self::MailboxCreate,
-            9 => Self::MailboxDelete,
-            10 => Self::MailboxSend,
-            11 => Self::MailboxReceive,
-            12 => Self::MailboxPoll,
-            13 => Self::MailboxTimedReceive,
-            _ => panic!("service discriminant out of range"),
-        }
-    }
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FlagService {
+    Set,
+    SetHandler,
+    Clear,
+    Wait,
+    Poll,
+    TimedWait,
+}
 
-    fn in_handler(self) -> bool {
-        self == Self::FlagSetHandler
+impl FlagService {
+    pub const fn handler(self) -> bool {
+        matches!(self, Self::SetHandler)
     }
 
     pub const fn blocks(self) -> bool {
-        matches!(
-            self,
-            Self::FlagWait | Self::FlagTimedWait | Self::MailboxReceive | Self::MailboxTimedReceive
-        )
+        matches!(self, Self::Wait | Self::TimedWait)
     }
 
-    fn owns_its_table(self) -> bool {
-        matches!(
-            self,
-            Self::FlagCreate | Self::FlagDelete | Self::MailboxCreate | Self::MailboxDelete
-        )
+    pub const fn timed(self) -> bool {
+        matches!(self, Self::TimedWait)
+    }
+
+    pub const fn service(self) -> Service {
+        match self {
+            Self::Set => Service::FlagSet,
+            Self::SetHandler => Service::FlagSetHandler,
+            Self::Clear => Service::FlagClear,
+            Self::Wait => Service::FlagWait,
+            Self::Poll => Service::FlagPoll,
+            Self::TimedWait => Service::FlagTimedWait,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MailboxService {
+    Send,
+    Receive,
+    Poll,
+    TimedReceive,
+}
+
+impl MailboxService {
+    pub const fn blocks(self) -> bool {
+        matches!(self, Self::Receive | Self::TimedReceive)
+    }
+
+    pub const fn timed(self) -> bool {
+        matches!(self, Self::TimedReceive)
+    }
+
+    pub const fn service(self) -> Service {
+        match self {
+            Self::Send => Service::MailboxSend,
+            Self::Receive => Service::MailboxReceive,
+            Self::Poll => Service::MailboxPoll,
+            Self::TimedReceive => Service::MailboxTimedReceive,
+        }
     }
 }
 
@@ -114,6 +135,21 @@ pub enum Object {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct AdmittedFlag {
+    pub id: FlagId,
+    pub want: Pattern,
+    pub mode: MatchMode,
+    pub timeout: Option<Timeout>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct AdmittedMailbox {
+    pub id: MailboxId,
+    pub timeout: Option<Timeout>,
+    pub priority: Option<MessagePriority>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Admitted {
     pub object: Object,
     pub want: Pattern,
@@ -132,55 +168,57 @@ pub struct Request {
 
 /// The stock order: context, IRQ mask, dispatch word, class, index, family parameters, then the
 /// creation record. Create and delete have no admission at all.
-#[inline(always)]
-pub fn admit_op<const SERVICE: u8, R: Records, F: Facts>(
+pub fn admit_flag<R: Records, F: Facts>(
     request: &Request,
+    service: FlagService,
     records: &R,
     facts: &F,
-) -> Result<Admitted, ObjectStatus> {
-    let service = Service::from_u8(SERVICE);
-    if service.owns_its_table() {
-        return own_table(request, records, service);
-    }
-    if (request.entry.handler_context != 0) != service.in_handler() {
-        return Err(ObjectStatus::Context);
-    }
-    if request.entry.irq_masked {
-        return Err(ObjectStatus::Context);
-    }
-    if service.blocks() && request.entry.dispatch_enabled == 0 {
-        return Err(ObjectStatus::Context);
-    }
-    match service {
-        Service::FlagSet | Service::FlagSetHandler | Service::FlagClear => {
-            let id = resolve_flag_with(request.entry_domain, request.id, |domain| records.flags(domain))?;
-            if !facts.exists(Object::Flag(id)) {
-                return Err(ObjectStatus::NotCreated);
-            }
-            Ok(flag(id, Pattern(0), MatchMode::All, None))
+) -> Result<AdmittedFlag, ObjectStatus> {
+    validate_entry(service.handler(), service.blocks(), request)?;
+    let id = resolve_flag_with(request.entry_domain, request.id, |domain| records.flags(domain))?;
+    let (want, mode, timeout) = match service {
+        FlagService::Set | FlagService::SetHandler | FlagService::Clear => {
+            (Pattern(0), MatchMode::All, None)
         }
-        Service::FlagWait | Service::FlagPoll | Service::FlagTimedWait => {
-            let id = resolve_flag_with(request.entry_domain, request.id, |domain| records.flags(domain))?;
+        FlagService::Wait | FlagService::Poll | FlagService::TimedWait => {
             if request.params.pattern.0 == 0 {
                 return Err(ObjectStatus::Param);
             }
             let mode = MatchMode::from_word(request.params.mode)?;
-            let timeout = match service {
-                Service::FlagTimedWait => Some(Timeout::from_stock(
+            let timeout = if service.timed() {
+                Some(Timeout::from_stock(
                     request.params.timeout.ok_or(ObjectStatus::Param)?,
-                )?),
-                _ => None,
+                )?)
+            } else {
+                None
             };
-            if !facts.exists(Object::Flag(id)) {
-                return Err(ObjectStatus::NotCreated);
-            }
-            Ok(flag(id, request.params.pattern, mode, timeout))
+            (request.params.pattern, mode, timeout)
         }
-        Service::MailboxSend => {
-            let id = resolve_mailbox_with(request.entry_domain, request.id, |domain| {
-                records.mailboxes(domain)
-            })?;
-            let object = Object::Mailbox(id);
+    };
+    if !facts.exists(Object::Flag(id)) {
+        return Err(ObjectStatus::NotCreated);
+    }
+    Ok(AdmittedFlag {
+        id,
+        want,
+        mode,
+        timeout,
+    })
+}
+
+pub fn admit_mailbox<R: Records, F: Facts>(
+    request: &Request,
+    service: MailboxService,
+    records: &R,
+    facts: &F,
+) -> Result<AdmittedMailbox, ObjectStatus> {
+    validate_entry(false, service.blocks(), request)?;
+    let id = resolve_mailbox_with(request.entry_domain, request.id, |domain| {
+        records.mailboxes(domain)
+    })?;
+    let object = Object::Mailbox(id);
+    match service {
+        MailboxService::Send => {
             if !facts.exists(object) {
                 return Err(ObjectStatus::NotCreated);
             }
@@ -192,63 +230,108 @@ pub fn admit_op<const SERVICE: u8, R: Records, F: Facts>(
             } else {
                 None
             };
-            Ok(Admitted {
-                object,
-                want: Pattern(0),
-                mode: MatchMode::All,
+            Ok(AdmittedMailbox {
+                id,
                 timeout: None,
                 priority,
             })
         }
-        Service::MailboxReceive | Service::MailboxPoll | Service::MailboxTimedReceive => {
-            let id = resolve_mailbox_with(request.entry_domain, request.id, |domain| {
-                records.mailboxes(domain)
-            })?;
-            let timeout = match service {
-                Service::MailboxTimedReceive => Some(Timeout::from_stock(
+        MailboxService::Receive | MailboxService::Poll | MailboxService::TimedReceive => {
+            let timeout = if service.timed() {
+                Some(Timeout::from_stock(
                     request.params.timeout.ok_or(ObjectStatus::Param)?,
-                )?),
-                _ => None,
+                )?)
+            } else {
+                None
             };
-            if !facts.exists(Object::Mailbox(id)) {
+            if !facts.exists(object) {
                 return Err(ObjectStatus::NotCreated);
             }
-            Ok(Admitted {
-                object: Object::Mailbox(id),
-                want: Pattern(0),
-                mode: MatchMode::All,
+            Ok(AdmittedMailbox {
+                id,
                 timeout,
                 priority: None,
             })
         }
-        Service::FlagCreate | Service::FlagDelete | Service::MailboxCreate | Service::MailboxDelete => {
-            unreachable!()
-        }
     }
 }
 
-/// Runtime dispatch for the host tests; the stage calls `admit_op` with a constant service.
+/// Runtime dispatch for the host tests; the stage calls the typed functions.
 pub fn admit<R: Records, F: Facts>(
     request: &Request,
     records: &R,
     facts: &F,
 ) -> Result<Admitted, ObjectStatus> {
     match request.service {
-        Service::FlagCreate => admit_op::<0, _, _>(request, records, facts),
-        Service::FlagDelete => admit_op::<1, _, _>(request, records, facts),
-        Service::FlagSet => admit_op::<2, _, _>(request, records, facts),
-        Service::FlagSetHandler => admit_op::<3, _, _>(request, records, facts),
-        Service::FlagClear => admit_op::<4, _, _>(request, records, facts),
-        Service::FlagWait => admit_op::<5, _, _>(request, records, facts),
-        Service::FlagPoll => admit_op::<6, _, _>(request, records, facts),
-        Service::FlagTimedWait => admit_op::<7, _, _>(request, records, facts),
-        Service::MailboxCreate => admit_op::<8, _, _>(request, records, facts),
-        Service::MailboxDelete => admit_op::<9, _, _>(request, records, facts),
-        Service::MailboxSend => admit_op::<10, _, _>(request, records, facts),
-        Service::MailboxReceive => admit_op::<11, _, _>(request, records, facts),
-        Service::MailboxPoll => admit_op::<12, _, _>(request, records, facts),
-        Service::MailboxTimedReceive => admit_op::<13, _, _>(request, records, facts),
+        Service::FlagCreate | Service::FlagDelete | Service::MailboxCreate | Service::MailboxDelete => {
+            own_table(request, records, request.service)
+        }
+        Service::FlagSet => {
+            admit_flag(request, FlagService::Set, records, facts).map(Admitted::from_flag)
+        }
+        Service::FlagSetHandler => {
+            admit_flag(request, FlagService::SetHandler, records, facts).map(Admitted::from_flag)
+        }
+        Service::FlagClear => {
+            admit_flag(request, FlagService::Clear, records, facts).map(Admitted::from_flag)
+        }
+        Service::FlagWait => {
+            admit_flag(request, FlagService::Wait, records, facts).map(Admitted::from_flag)
+        }
+        Service::FlagPoll => {
+            admit_flag(request, FlagService::Poll, records, facts).map(Admitted::from_flag)
+        }
+        Service::FlagTimedWait => {
+            admit_flag(request, FlagService::TimedWait, records, facts).map(Admitted::from_flag)
+        }
+        Service::MailboxSend => {
+            admit_mailbox(request, MailboxService::Send, records, facts).map(Admitted::from_mailbox)
+        }
+        Service::MailboxReceive => admit_mailbox(request, MailboxService::Receive, records, facts)
+            .map(Admitted::from_mailbox),
+        Service::MailboxPoll => {
+            admit_mailbox(request, MailboxService::Poll, records, facts).map(Admitted::from_mailbox)
+        }
+        Service::MailboxTimedReceive => {
+            admit_mailbox(request, MailboxService::TimedReceive, records, facts)
+                .map(Admitted::from_mailbox)
+        }
     }
+}
+
+impl Admitted {
+    fn from_flag(flag: AdmittedFlag) -> Self {
+        Self {
+            object: Object::Flag(flag.id),
+            want: flag.want,
+            mode: flag.mode,
+            timeout: flag.timeout,
+            priority: None,
+        }
+    }
+
+    fn from_mailbox(mailbox: AdmittedMailbox) -> Self {
+        Self {
+            object: Object::Mailbox(mailbox.id),
+            want: Pattern(0),
+            mode: MatchMode::All,
+            timeout: mailbox.timeout,
+            priority: mailbox.priority,
+        }
+    }
+}
+
+fn validate_entry(handler: bool, blocking: bool, request: &Request) -> Result<(), ObjectStatus> {
+    if (request.entry.handler_context != 0) != handler {
+        return Err(ObjectStatus::Context);
+    }
+    if request.entry.irq_masked {
+        return Err(ObjectStatus::Context);
+    }
+    if blocking && request.entry.dispatch_enabled == 0 {
+        return Err(ObjectStatus::Context);
+    }
+    Ok(())
 }
 
 /// The flag bodies' first post-lock check: a second waiter is refused before the match is tried.
@@ -291,14 +374,4 @@ fn own_table<R: Records>(
         timeout: None,
         priority: None,
     })
-}
-
-fn flag(id: FlagId, want: Pattern, mode: MatchMode, timeout: Option<Timeout>) -> Admitted {
-    Admitted {
-        object: Object::Flag(id),
-        want,
-        mode,
-        timeout,
-        priority: None,
-    }
 }

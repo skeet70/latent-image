@@ -11,6 +11,9 @@ pub use objects::{
 };
 
 #[cfg(feature = "family")]
+mod abi;
+
+#[cfg(feature = "family")]
 mod family;
 
 use core::arch::asm;
