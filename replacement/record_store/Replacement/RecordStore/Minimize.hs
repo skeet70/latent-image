@@ -54,6 +54,7 @@ mkShrinkBudget count
 
 data ReductionStatus
   = FixedPoint
+  | UnresolvedTrials
   | BudgetExhausted
   | OriginalDoesNotReproduce
   deriving (Eq, Show)
@@ -110,8 +111,12 @@ mediumWeight :: Geometry -> Bank -> Medium -> Int
 mediumWeight g bank medium =
   sum [fromIntegral sequenceNumber | position <- [0 .. bankOccupancy g bank medium - 1], let Sequence sequenceNumber = sequenceOf (recordAt g bank (Position position) medium)]
 
--- | Fixed point here means no implemented proposal is accepted, not global
--- minimality and not a claim about the underlying root cause.
+-- | 'FixedPoint' means every strictly smaller proposal for the final case had a
+-- complete predicate outcome and none reproduced the original boundary; the
+-- claim is minimality under the implemented reductions only. 'UnresolvedTrials'
+-- means at least one such proposal stayed 'Inconclusive', so local minimality is
+-- not established. The returned case is always the last one that reproduced the
+-- boundary.
 shrinkCase :: ShrinkBudget -> Boundary -> (ValidCase -> IO Trial) -> ValidCase -> IO ShrinkResult
 shrinkCase (ShrinkBudget budget) originalBoundary oracle original = do
   baseline <- oracle original
@@ -119,20 +124,24 @@ shrinkCase (ShrinkBudget budget) originalBoundary oracle original = do
     Differs boundaries | originalBoundary `elem` boundaries -> descend 1 original
     _ -> pure (ShrinkResult original 1 OriginalDoesNotReproduce)
   where
-    descend used current = search used current (proposals current)
+    -- Unresolved status belongs to the current case; accepting a smaller case
+    -- discards it.
+    descend used current = search used current False (proposals current)
 
-    search used current [] = pure (ShrinkResult current used FixedPoint)
-    search used current (candidate:rest) =
+    search used current unresolved [] =
+      pure (ShrinkResult current used (if unresolved then UnresolvedTrials else FixedPoint))
+    search used current unresolved (candidate:rest) =
       case validCase candidate of
-        Left _ -> search used current rest
+        Left _ -> search used current unresolved rest
         Right valid
-          | semanticSize (oracleCase valid) >= semanticSize (oracleCase current) -> search used current rest
+          | semanticSize (oracleCase valid) >= semanticSize (oracleCase current) -> search used current unresolved rest
           | used >= budget -> pure (ShrinkResult current used BudgetExhausted)
           | otherwise -> do
               result <- oracle valid
               case result of
                 Differs boundaries | originalBoundary `elem` boundaries -> descend (used + 1) valid
-                _ -> search (used + 1) current rest
+                Inconclusive _ -> search (used + 1) current True rest
+                _ -> search (used + 1) current unresolved rest
 
 proposals :: ValidCase -> [OracleCase]
 proposals valid =

@@ -3,11 +3,12 @@ module Main (main) where
 
 import Control.Monad (unless)
 import qualified Data.ByteString as B
+import Data.IORef (newIORef, readIORef, writeIORef)
 import qualified Data.Map.Strict as M
 import Data.Word (Word16)
 import Replacement.RecordStore.Cases
 import Replacement.RecordStore.Generate (ValidCase, oracleCase, validCase)
-import Replacement.RecordStore.Minimize
+import Replacement.RecordStore.Minimize hiding (Medium)
 import Replacement.RecordStore.Model
 
 assert :: String -> Bool -> IO ()
@@ -88,7 +89,11 @@ main = do
   callbackReduction
   baselineNonreproduction
   differentFailure
+  completeRejectionReachesFixedPoint
   inconclusiveRejection
+  unresolvedClasses
+  unresolvedAfterPartialReduction
+  acceptanceResetsUnresolved
   budgetEnforcement
   idempotentFixedPoint
   putStrLn "record-store minimization tests passed"
@@ -168,6 +173,19 @@ differentFailure = do
   assert "different boundary is the only trial" (trialCount result == 1)
   assert "different boundary is returned unchanged" (minimizedCase result == originalCase)
 
+-- Complete rejected outcomes are sufficient for FixedPoint.
+completeRejectionReachesFixedPoint :: IO ()
+completeRejectionReachesFixedPoint = do
+  budget <- either error pure (mkShrinkBudget 256)
+  let oracle candidate
+        | oracleCase candidate == oracleCase originalCase = pure (Differs [Results])
+        | even (length (operations (oracleCase candidate))) = pure (Differs [Caller])
+        | otherwise = pure Matches
+  result <- shrinkCase budget Results oracle originalCase
+  assert "complete rejections establish fixed point" (reductionStatus result == FixedPoint)
+  assert "complete rejections keep the original" (minimizedCase result == originalCase)
+  assert "complete rejections were tried" (trialCount result > 1)
+
 inconclusiveRejection :: IO ()
 inconclusiveRejection = do
   budget <- either error pure (mkShrinkBudget 256)
@@ -176,7 +194,7 @@ inconclusiveRejection = do
         | otherwise = pure (Inconclusive (DomainRefusal "synthetic refusal"))
   result <- shrinkCase budget Results oracle originalCase
   assert "inconclusive candidate is never accepted" (minimizedCase result == originalCase)
-  assert "inconclusive candidates still exhaust proposals" (reductionStatus result == FixedPoint)
+  assert "inconclusive candidates leave minimality unresolved" (reductionStatus result == UnresolvedTrials)
   assert "inconclusive candidates were tried" (trialCount result > 1)
   let different candidate
         | oracleCase candidate == oracleCase originalCase = pure (Differs [Results])
@@ -185,13 +203,67 @@ inconclusiveRejection = do
   assert "different candidate failure is never accepted" (minimizedCase result' == originalCase)
   assert "different candidate failure still exhausts proposals" (reductionStatus result' == FixedPoint)
   assert "different candidate failure was tried" (trialCount result' > 1)
-  let disagreement candidate
+
+-- Every way a trial can stay unresolved blocks local minimality.
+unresolvedClasses :: IO ()
+unresolvedClasses = do
+  budget <- either error pure (mkShrinkBudget 256)
+  mapM_ (check budget)
+    [ StockModelDisagreement "synthetic stock/model disagreement"
+    , UnsupportedNativeStatus "synthetic unsupported native status"
+    , DomainRefusal "synthetic refusal"
+    , InfrastructureFailure "synthetic infrastructure failure"
+    ]
+  where
+    check budget block = do
+      let oracle candidate
+            | oracleCase candidate == oracleCase originalCase = pure (Differs [Results])
+            | otherwise = pure (Inconclusive block)
+      result <- shrinkCase budget Results oracle originalCase
+      assert ("blocked class is never accepted: " ++ show block) (minimizedCase result == originalCase)
+      assert ("blocked class leaves minimality unresolved: " ++ show block) (reductionStatus result == UnresolvedTrials)
+      assert ("blocked class was tried: " ++ show block) (trialCount result > 1)
+
+-- The last proven case is retained when remaining proposals stay unresolved.
+unresolvedAfterPartialReduction :: IO ()
+unresolvedAfterPartialReduction = do
+  budget <- either error pure (mkShrinkBudget 256)
+  let predicate = any isStagingAppend . operations
+      oracle candidate
+        | predicate (oracleCase candidate) = pure (Differs [Results])
+        | otherwise = pure (Inconclusive (DomainRefusal "synthetic refusal"))
+  result <- shrinkCase budget Results oracle originalCase
+  let minimized = minimizedCase result
+  reproduced <- oracle minimized
+  assert "partial reduction keeps a proven counterexample"
+    (case reproduced of Differs boundaries -> Results `elem` boundaries; _ -> False)
+  assert "partial reduction is strictly smaller"
+    (length (operations (oracleCase minimized)) < length (operations (oracleCase originalCase)))
+  assert "partial reduction reports unresolved minimality" (reductionStatus result == UnresolvedTrials)
+  assert "partial reduction stays inside budget" (trialCount result <= 256)
+  assert "partial reduction keeps the mandatory prefix" (take 2 (operations (oracleCase minimized)) == [Open, Register Normal])
+
+-- Unresolved proposals for an earlier current case do not affect the final
+-- status.
+acceptanceResetsUnresolved :: IO ()
+acceptanceResetsUnresolved = do
+  budget <- either error pure (mkShrinkBudget 256)
+  blocked <- newIORef False
+  let latestCount c = length (filter (== Latest) (operations c))
+      oracle candidate
         | oracleCase candidate == oracleCase originalCase = pure (Differs [Results])
-        | otherwise = pure (Inconclusive (StockModelDisagreement "synthetic stock/model disagreement"))
-  result'' <- shrinkCase budget Results disagreement originalCase
-  assert "model disagreement is never accepted" (minimizedCase result'' == originalCase)
-  assert "model disagreement still exhausts proposals" (reductionStatus result'' == FixedPoint)
-  assert "model disagreement was tried" (trialCount result'' > 1)
+        | latestCount (oracleCase candidate) >= 2 =
+            writeIORef blocked True >> pure (Inconclusive (DomainRefusal "synthetic refusal"))
+        | any isStagingAppend (operations (oracleCase candidate)) = pure (Differs [Results])
+        | otherwise = pure Matches
+  result <- shrinkCase budget Results oracle originalCase
+  sawBlocked <- readIORef blocked
+  let minimized = minimizedCase result
+  assert "an unresolved proposal was tried during reduction" sawBlocked
+  assert "accepting a smaller case clears earlier unresolved status" (reductionStatus result == FixedPoint)
+  assert "reset run keeps a proven counterexample" (any isStagingAppend (operations (oracleCase minimized)))
+  assert "reset run is strictly smaller"
+    (length (operations (oracleCase minimized)) < length (operations (oracleCase originalCase)))
 
 budgetEnforcement :: IO ()
 budgetEnforcement = do
@@ -204,6 +276,13 @@ budgetEnforcement = do
   result' <- shrinkCase three Results (checkedOracle (const True)) originalCase
   assert "budget three exhausts after two accepted trials" (reductionStatus result' == BudgetExhausted)
   assert "budget three counts exactly three trials" (trialCount result' == 3)
+  let blocked candidate
+        | oracleCase candidate == oracleCase originalCase = pure (Differs [Results])
+        | otherwise = pure (Inconclusive (DomainRefusal "synthetic refusal"))
+  result'' <- shrinkCase three Results blocked originalCase
+  assert "budget takes precedence over unresolved proposals" (reductionStatus result'' == BudgetExhausted)
+  assert "blocked budget run counts exactly three trials" (trialCount result'' == 3)
+  assert "blocked budget run keeps the original" (minimizedCase result'' == originalCase)
 
 idempotentFixedPoint :: IO ()
 idempotentFixedPoint = do
