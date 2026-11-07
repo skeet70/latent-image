@@ -212,7 +212,6 @@ pub fn admit_flag<R: Records, F: Facts>(
     })
 }
 
-#[cfg_attr(feature = "family", inline(never))]
 pub fn admit_mailbox<R: Records, F: Facts>(
     request: &Request,
     service: MailboxService,
