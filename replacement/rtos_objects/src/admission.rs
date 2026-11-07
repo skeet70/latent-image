@@ -166,10 +166,32 @@ pub struct Request {
     pub params: Params,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum EntryPolicy {
+    Task,
+    BlockingTask,
+    Handler,
+}
+
+impl EntryPolicy {
+    fn handler(self) -> bool {
+        self == EntryPolicy::Handler
+    }
+
+    fn blocking(self) -> bool {
+        self == EntryPolicy::BlockingTask
+    }
+}
+
 #[cfg_attr(feature = "family", inline(never))]
-fn admit_entry(request: &Request, handler: bool, blocks: bool) -> Result<Domain, ObjectStatus> {
-    validate_entry(handler, blocks, request)?;
-    target(request.entry_domain, request.id.class())
+fn admit_entry(
+    entry: &Entry,
+    entry_domain: EntryDomain,
+    id: EncodedId,
+    policy: EntryPolicy,
+) -> Result<Domain, ObjectStatus> {
+    validate_entry(entry, policy)?;
+    target(entry_domain, id.class())
 }
 
 /// The stock order: context, IRQ mask, dispatch word, class, index, family parameters, then the
@@ -180,7 +202,14 @@ pub fn admit_flag<R: Records, F: Facts>(
     records: &R,
     facts: &F,
 ) -> Result<AdmittedFlag, ObjectStatus> {
-    let domain = admit_entry(request, service.handler(), service.blocks())?;
+    let policy = if service.handler() {
+        EntryPolicy::Handler
+    } else if service.blocks() {
+        EntryPolicy::BlockingTask
+    } else {
+        EntryPolicy::Task
+    };
+    let domain = admit_entry(&request.entry, request.entry_domain, request.id, policy)?;
     let id = resolve_flag_in(domain, request.id, records.flags(domain))?;
     let (want, mode, timeout) = match service {
         FlagService::Set | FlagService::SetHandler | FlagService::Clear => {
@@ -218,7 +247,12 @@ pub fn admit_mailbox<R: Records, F: Facts>(
     records: &R,
     facts: &F,
 ) -> Result<AdmittedMailbox, ObjectStatus> {
-    let domain = admit_entry(request, false, service.blocks())?;
+    let policy = if service.blocks() {
+        EntryPolicy::BlockingTask
+    } else {
+        EntryPolicy::Task
+    };
+    let domain = admit_entry(&request.entry, request.entry_domain, request.id, policy)?;
     let id = resolve_mailbox_in(domain, request.id, records.mailboxes(domain))?;
     let object = Object::Mailbox(id);
     let send = matches!(service, MailboxService::Send);
@@ -311,14 +345,14 @@ impl Admitted {
     }
 }
 
-fn validate_entry(handler: bool, blocking: bool, request: &Request) -> Result<(), ObjectStatus> {
-    if (request.entry.handler_context != 0) != handler {
+fn validate_entry(entry: &Entry, policy: EntryPolicy) -> Result<(), ObjectStatus> {
+    if (entry.handler_context != 0) != policy.handler() {
         return Err(ObjectStatus::Context);
     }
-    if request.entry.irq_masked {
+    if entry.irq_masked {
         return Err(ObjectStatus::Context);
     }
-    if blocking && request.entry.dispatch_enabled == 0 {
+    if policy.blocking() && entry.dispatch_enabled == 0 {
         return Err(ObjectStatus::Context);
     }
     Ok(())
