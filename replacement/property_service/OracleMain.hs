@@ -25,6 +25,7 @@ import Emulation.OwnedCase (CaseId (..), CaseSpec, loadObservedBatch, readWordAt
 import Emulation.Sha256 (sha256, sha256File, sha256Hex)
 import FujiAF.Host (ensure, failH, get, readRegular, str)
 import FujiAF.JSON (encodeCanonical)
+import FujiModPaths (fujimodNativeCase)
 import Numeric (readHex, showHex)
 import PropertyFields (PropertyId (..))
 import Replacement.PropertyService.Admission (FunctionExtent (..), FunctionName (..))
@@ -249,7 +250,10 @@ controlHolds control failed = case controlKind control of
 main :: IO ()
 main = do
   arguments <- getArgs
-  runner <- required arguments "--runner" >>= makeAbsolute
+  runner <- case dropWhile (/= "--runner") arguments of
+    [] -> pure fujimodNativeCase
+    [_] -> failH "--runner needs a value"
+    _ : value : _ -> makeAbsolute value
   bundled <- if "--smoke" `elem` arguments then pure Nothing else Just <$> mapM (\name -> required arguments name >>= makeAbsolute) ["--linked", "--symbols"]
   lookupEnv "BUILD_WORKSPACE_DIRECTORY" >>= mapM_ setCurrentDirectory
   case bundled of
