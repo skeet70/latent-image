@@ -440,7 +440,6 @@ kernelMain rawArgs = do
       id4Base = hexI (fromMaybe "0x0061c400" (opt "id4-base"))
   checkStorageBudget out
   createDirectoryIfMissing True out
-  inputs <- E.newInputPool out
   ks <- parseSyms (build </> "kernel.syms")
   unless (addr ks "__rb_image_start" == kernelBase) (fail "--rb-base differs from linked __rb_image_start")
   ms <- parseSyms (build </> "model.syms")
@@ -539,7 +538,7 @@ kernelMain rawArgs = do
           | serviceQualification -> filter (S.isServiceCaseId . spId) suite
           | otherwise -> suite
   when (null specs) (fail "--case did not name a case")
-  results <- mapBounded jobs (\sp -> do
+  results <- E.withInputPool out $ \inputs -> mapBounded jobs (\sp -> do
     let loop s fuel = do
           r <- runSpec inputs evidence bankMode build out runner ks ms dataSpan kbin ktextLen kdataLen mdataRaw fTable getter setter mediaImg tabImg mediaLo s
           let missing = parseMaybe (withObject "r" (\o -> o .: "missing_fn" >>= withText "t" (pure . T.unpack))) r

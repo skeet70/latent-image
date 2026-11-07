@@ -1,5 +1,6 @@
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE ForeignFunctionInterface #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -21,6 +22,8 @@ import Foreign.C.Types (CInt (..))
 import GHC.Generics (Generic)
 import Numeric (showHex)
 import System.Directory (canonicalizePath, doesDirectoryExist, doesPathExist, listDirectory, makeAbsolute, removeFile)
+import qualified GHC.Foreign as GHC
+import GHC.IO.Encoding (getFileSystemEncoding)
 import System.Environment (getArgs)
 import System.Exit (ExitCode (..), die)
 import System.FilePath ((</>), isAbsolute, splitDirectories, takeDirectory, takeExtension, takeFileName)
@@ -33,22 +36,26 @@ import System.Posix.Types (Fd (..))
 import System.Posix.User (getEffectiveUserID)
 import System.Process (readProcessWithExitCode)
 
-newtype Root = Root FilePath deriving (Eq, Show, Generic, ToJSON, FromJSON)
-newtype RelativePath = RelativePath FilePath deriving (Eq, Show, Generic, ToJSON, FromJSON)
-newtype Bytes = Bytes Integer deriving (Eq, Show, Generic, ToJSON, FromJSON)
-newtype Digest = Digest String deriving (Eq, Show, Generic, ToJSON, FromJSON)
-newtype ProcessId = ProcessId String deriving (Eq, Show, Generic, ToJSON, FromJSON)
+newtype Root = Root FilePath deriving stock (Eq, Show, Generic) deriving anyclass (ToJSON, FromJSON)
+newtype RelativePath = RelativePath FilePath deriving stock (Eq, Show, Generic) deriving anyclass (ToJSON, FromJSON)
+newtype Bytes = Bytes Integer deriving stock (Eq, Show, Generic) deriving anyclass (ToJSON, FromJSON)
+newtype Digest = Digest String deriving stock (Eq, Show, Generic) deriving anyclass (ToJSON, FromJSON)
+newtype ProcessId = ProcessId String deriving stock (Eq, Show, Generic) deriving anyclass (ToJSON, FromJSON)
+newtype OwnerUID = OwnerUID Integer deriving stock (Eq, Show, Generic) deriving anyclass (ToJSON, FromJSON)
+data InspectionIssue = InspectionIssue { inspectionPid :: ProcessId, inspectionFailure :: String } deriving (Generic, ToJSON)
+data Activity = Activity Root [ProcessId] [InspectionIssue]
+data ProcessScope = OwnerProcesses | AllProcesses deriving Eq
 data Disposition = Retain | CompilerArtifact | FingerprintSuccess deriving (Eq, Show, Generic, ToJSON, FromJSON)
 data EntryType = RegularFile | Directory deriving (Eq, Show, Generic, ToJSON, FromJSON)
-data Entry = Entry { path :: RelativePath, device :: Integer, inode :: Integer, size :: Bytes, digest :: Maybe Digest, disposition :: Disposition, entryType :: EntryType } deriving (Eq, Show, Generic, ToJSON, FromJSON)
+data Entry = Entry { path :: RelativePath, device :: Integer, inode :: Integer, ownerUID :: OwnerUID, size :: Bytes, digest :: Maybe Digest, disposition :: Disposition, entryType :: EntryType } deriving (Eq, Show, Generic, ToJSON, FromJSON)
 data Binding = Binding { root :: Root, entries :: [Entry] } deriving (Eq, Show, Generic, ToJSON, FromJSON)
 data Plan = Plan { schemaVersion :: Int, bindings :: [Binding] } deriving (Eq, Show, Generic, ToJSON, FromJSON)
-newtype FileCount = FileCount Integer deriving (Generic, ToJSON)
-data InventoryGuidance = ExplicitCanonicalCargoTargetRequired deriving (Generic, ToJSON)
+newtype FileCount = FileCount Integer deriving stock (Generic) deriving anyclass (ToJSON)
 data RootSummary = RootSummary { canonicalCargoTarget :: Root, recognizedFileCount :: FileCount, recognizedBytes :: Bytes, retainedFileCount :: FileCount, retainedBytes :: Bytes } deriving (Generic, ToJSON)
-data Inventory = Inventory { rootSummaries :: [RootSummary], availableBytes :: [(Root, Bytes)], activeUsers :: [(Root, [ProcessId])], inputGuidance :: InventoryGuidance } deriving (Generic, ToJSON)
+data Inventory = Inventory { rootSummaries :: [RootSummary], availableBytes :: [(Root, Bytes)], activeUsers :: [(Root, [ProcessId])], uninspectableUsers :: [(Root, [InspectionIssue])] } deriving (Generic, ToJSON)
 data ScanMode = MetadataOnly | HashContents deriving Eq
-data Audit = Audit { auditSchemaVersion :: Int, appliedPlan :: Plan, removed :: [(Root, RelativePath)], beforeAvailable :: [(Root, Bytes)], afterAvailable :: [(Root, Bytes)], actualAvailableDelta :: [(Root, Bytes)], protectedFilesVerified :: Bool } deriving (Generic, ToJSON)
+data AuditPhase = Applying | Complete | Interrupted deriving (Generic, ToJSON)
+data Audit = Audit { auditSchemaVersion :: Int, auditPhase :: AuditPhase, appliedPlan :: Plan, removed :: [(Root, RelativePath)], beforeAvailable :: [(Root, Bytes)], afterAvailable :: [(Root, Bytes)], actualAvailableDelta :: [(Root, Bytes)], protectedFilesVerified :: Bool } deriving (Generic, ToJSON)
 
 data CargoFingerprint = CargoFingerprint Integer String Integer Integer Integer [(Integer, String, Bool, Integer)]
 instance FromJSON CargoFingerprint where
@@ -103,7 +110,6 @@ walk :: FilePath -> IO [FilePath]
 walk base = go ""
  where
   go relative = do
-    ensure (not (any (`elem` ["private-data", ".git"]) (splitDirectories relative))) "protected directory within Cargo root"
     status <- getSymbolicLinkStatus (base </> relative)
     ensure (not (isSymbolicLink status)) "symlinks in Cargo roots are not admitted"
     if isDirectory status then do
@@ -116,7 +122,7 @@ walk base = go ""
 
 -- Cargo's success fingerprint is invalidated together with its compiler outputs.
 validFingerprints :: FilePath -> [FilePath] -> IO [FilePath]
-validFingerprints base files = filterM valid [p | p <- files, ".fingerprint" `elem` splitDirectories p, any (`isPrefixOf` takeFileName p) ["lib-", "bin-"] || takeFileName p == "build-script-build-script-build"]
+validFingerprints base files = filterM valid [p | p <- files, not (any (`elem` ["private-data", ".git"]) (splitDirectories p)), ".fingerprint" `elem` splitDirectories p, any (`isPrefixOf` takeFileName p) ["lib-", "bin-"] || takeFileName p == "build-script-build-script-build"]
  where
   valid p = do
     let components = splitDirectories p
@@ -171,7 +177,7 @@ scan mode binding@(Root base) = do
     hash <- if mode == HashContents && isRegularFile status then Just <$> hashFile (base </> relative) else pure Nothing
     let proposed = if isRegularFile status && linkCount status == 1 && not (null (owners relative)) then CompilerArtifact else Retain
     recognized <- if proposed == CompilerArtifact then compilerHeader (base </> relative) else pure True
-    pure (Entry (RelativePath relative) (fromIntegral (deviceID status)) (fromIntegral (fileID status)) (Bytes (if isRegularFile status then fromIntegral (fileSize status) else 0)) hash (if recognized then proposed else Retain) (if isRegularFile status then RegularFile else Directory))
+    pure (Entry (RelativePath relative) (fromIntegral (deviceID status)) (fromIntegral (fileID status)) (OwnerUID (fromIntegral (fileOwner status))) (Bytes (if isRegularFile status then fromIntegral (fileSize status) else 0)) hash (if recognized then proposed else Retain) (if isRegularFile status then RegularFile else Directory))
   let selectedOwners = Set.fromList [owner | entry <- records, disposition entry == CompilerArtifact, let RelativePath relative = path entry, owner <- owners relative]
       selectFingerprint entry = let RelativePath relative = path entry in if Set.member relative selectedOwners then entry { disposition = FingerprintSuccess } else entry
   pure (Binding binding (map selectFingerprint records))
@@ -202,31 +208,47 @@ space r@(Root p) = do
     (ExitSuccess, [_, n]) | [(count, "")] <- reads n -> pure (r, Bytes count)
     _ -> ioError (userError "cannot measure available disk space")
 
-activity :: Root -> IO (Root, [ProcessId])
+activity :: Root -> IO Activity
 activity r@(Root base) = do
-  uid <- getEffectiveUserID
+  uid <- fileOwner <$> getSymbolicLinkStatus base
+  caller <- getEffectiveUserID
+  let scope = if caller == 0 then AllProcesses else OwnerProcesses
+  encoding <- getFileSystemEncoding
+  encodedPrefix <- GHC.withCStringLen encoding (base ++ "/") B.packCStringLen
+  let mappedPrefix = if B.elem 10 encodedPrefix then B.intercalate "\\012" (B.split 10 encodedPrefix) else encodedPrefix
   self <- show <$> getProcessID
   pids <- filter (\p -> not (null p) && all isDigit p && p /= self) <$> listDirectory "/proc"
-  users <- filterM (inspect uid) pids
-  pure (r, map ProcessId users)
+  inspected <- forM pids $ \pid -> (,) (ProcessId pid) <$> inspect scope uid encoding mappedPrefix pid
+  pure (Activity r [pid | (pid, Right True) <- inspected] [issue | (_, Left issue) <- inspected])
  where
-  inspect uid pid = do
+  inspect scope uid encoding mappedPrefix pid = do
     let proc = "/proc" </> pid
     let check = do
           status <- getFileStatus proc
-          if fileOwner status /= uid then pure False else do
+          if scope == OwnerProcesses && fileOwner status /= uid then pure False else do
             processStatus <- BC.readFile (proc </> "status")
-            if any (BC.pack "State:\tZ" `B.isPrefixOf`) (BC.lines processStatus) then pure False else do
+            if any (\line -> any (`B.isPrefixOf` line) ["State:\tZ", "Kthread:\t1"]) (BC.lines processStatus) then pure False else do
               cwd <- readSymbolicLink (proc </> "cwd")
               exe <- readSymbolicLink (proc </> "exe")
               environment <- B.readFile (proc </> "environ")
-              targets <- forM [BC.unpack (B.drop 17 field) | field <- B.split 0 environment, BC.pack "CARGO_TARGET_DIR=" `B.isPrefixOf` field] $ \target -> canonicalizePath (if isAbsolute target then target else cwd </> target)
+              targets <- forM [B.drop 17 field | field <- B.split 0 environment, "CARGO_TARGET_DIR=" `B.isPrefixOf` field] $ \raw -> do
+                target <- B.useAsCStringLen raw (GHC.peekCStringLen encoding)
+                canonicalizePath (if isAbsolute target then target else cwd </> target)
               fds <- listDirectory (proc </> "fd")
               links <- forM fds $ \fd -> readSymbolicLink (proc </> "fd" </> fd) `catch` \(err :: IOException) -> if isDoesNotExistError err then pure "" else ioError err
-              pure (any (inside base) (cwd : exe : targets ++ links))
-    check `catch` \(err :: IOException) -> do
+              mappings <- BC.lines <$> B.readFile (proc </> "maps")
+              let mapped = any (\line -> mappedPrefix `B.isInfixOf` line && mappedPrefix `B.isPrefixOf` mappingPath line) mappings
+              pure (mapped || any (inside base) (cwd : exe : targets ++ links))
+    (Right <$> check) `catch` \(err :: IOException) -> do
       exists <- doesDirectoryExist proc
-      if not exists && isDoesNotExistError err then pure False else ioError err
+      if not exists && isDoesNotExistError err then pure (Right False)
+        else pure (Left (InspectionIssue (ProcessId pid) (show err)))
+  mappingPath = skip 5
+    where
+      fieldSpace byte = byte == 32 || byte == 9
+      skip :: Int -> B.ByteString -> B.ByteString
+      skip 0 line = line
+      skip count line = skip (count - 1) (B.dropWhile fieldSpace (B.dropWhile (not . fieldSpace) line))
 
 withLocks :: [Binding] -> IO a -> IO a
 withLocks roots action = acquire lockPaths
@@ -270,9 +292,9 @@ verifyRemoval (Root base) identities entry = do
     let key = if directory == "." then "" else directory
     expected <- maybe (ioError (userError "unbound ancestor")) pure (Map.lookup key identities)
     status <- getSymbolicLinkStatus (base </> key)
-    ensure (isDirectory status && fromIntegral (deviceID status) == device expected && fromIntegral (fileID status) == inode expected) "compiler output ancestor changed"
+    ensure (isDirectory status && fromIntegral (deviceID status) == device expected && fromIntegral (fileID status) == inode expected && OwnerUID (fromIntegral (fileOwner status)) == ownerUID expected) "compiler output ancestor changed"
   status <- getSymbolicLinkStatus (base </> relative)
-  ensure (isRegularFile status && linkCount status == 1 && fromIntegral (deviceID status) == device entry && fromIntegral (fileID status) == inode entry && Bytes (fromIntegral (fileSize status)) == size entry) "compiler output identity changed"
+  ensure (isRegularFile status && linkCount status == 1 && fromIntegral (deviceID status) == device entry && fromIntegral (fileID status) == inode entry && OwnerUID (fromIntegral (fileOwner status)) == ownerUID entry && Bytes (fromIntegral (fileSize status)) == size entry) "compiler output identity changed"
 
 apply :: FilePath -> IO ()
 apply file = do
@@ -292,7 +314,9 @@ apply file = do
     current <- validatePlan plan
     hPutStrLn stderr "Checking active target users"
     users <- mapM (activity . root) current
-    ensure (all (null . snd) users) "active users of Cargo target"
+    ensure (all (\(Activity _ _ unavailable) -> null unavailable) users)
+      "active-use inspection is incomplete; no files removed. Obtain an explicitly authorized privileged host scan instead of bypassing process checks"
+    ensure (all (\(Activity _ active _) -> null active) users) "active users of Cargo target"
     before <- mapM (space . root) current
     deleted <- newIORef []
     let removalBindings = [(r, records, Map.fromList [(relative, entry) | entry <- records, let RelativePath relative = path entry]) | Binding r records <- current]
@@ -301,15 +325,15 @@ apply file = do
           forM_ records $ \entry -> when (disposition entry == Retain && digest entry /= Nothing) $ do
             let RelativePath relative = path entry
             status <- getSymbolicLinkStatus (base </> relative)
-            ensure (isRegularFile status && fromIntegral (deviceID status) == device entry && fromIntegral (fileID status) == inode entry && Bytes (fromIntegral (fileSize status)) == size entry) "protected file identity changed"
+            ensure (isRegularFile status && fromIntegral (deviceID status) == device entry && fromIntegral (fileID status) == inode entry && OwnerUID (fromIntegral (fileOwner status)) == ownerUID entry && Bytes (fromIntegral (fileSize status)) == size entry) "protected file identity changed"
             actual <- hashFile (base </> relative)
             ensure (Just actual == digest entry) "protected file changed"
         persist ok = do
           after <- mapM (space . root) current
           let deltas = [(r, Bytes (a-b)) | ((r,Bytes b),(_,Bytes a)) <- zip before after]
           actualRemoved <- reverse <$> readIORef deleted
-          writeJson auditPath (Audit 1 plan actualRemoved before after deltas ok)
-    writeJson auditPath (Audit 1 plan [] before before [(r,Bytes 0) | (r,_) <- before] False)
+          writeJson auditPath (Audit 1 (if ok then Complete else Interrupted) plan actualRemoved before after deltas ok)
+    writeJson auditPath (Audit 1 Applying plan [] before before [(r,Bytes 0) | (r,_) <- before] False)
     (do
       hPutStrLn stderr "Removing individually selected compiler artifacts"
       -- Invalidate success markers before removing compiler outputs.
@@ -343,7 +367,7 @@ main = (getArgs >>= run) `catch` \(err :: IOException) -> die (show err)
     records <- mapM (scan MetadataOnly) roots
     free <- mapM space roots
     users <- mapM activity roots
-    BL.putStr (encode (Inventory (map summarize records) free users ExplicitCanonicalCargoTargetRequired))
+    BL.putStr (encode (Inventory (map summarize records) free [(r, active) | Activity r active _ <- users] [(r, unavailable) | Activity r _ unavailable <- users]))
   run ("plan":arguments) = case reverse arguments of
     output:"--output":rest -> do
       roots <- parseRoots (reverse rest)

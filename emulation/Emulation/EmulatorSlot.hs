@@ -18,7 +18,8 @@ import Control.Monad (forM_, unless, when)
 import qualified Data.ByteString as B
 import Data.Char (isDigit)
 import Data.List (isSuffixOf, stripPrefix)
-import System.Directory (createDirectoryIfMissing, doesDirectoryExist, findExecutable, getHomeDirectory, listDirectory, removeFile)
+import FujiAF.StorageBudget (checkStorageBudget)
+import System.Directory (createDirectoryIfMissing, doesDirectoryExist, findExecutable, getCurrentDirectory, getHomeDirectory, listDirectory, removeFile)
 import System.Environment (getExecutablePath, lookupEnv, setEnv)
 import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath ((</>))
@@ -82,12 +83,15 @@ slotPolicyFromEnvironment = do
 -- path: a concurrent build relinks that path while the wait runs.
 reexecInSlot :: SlotPolicy -> [String] -> IO ()
 reexecInSlot policy arguments = do
+  storage <- lookupEnv "XM1_STORAGE_PATH" >>= maybe defaultStoragePath pure
+  checkStorageBudget storage
   inside <- lookupEnv slotVariable
   case inside of
     Just _ -> pure ()
     Nothing -> do
       directory <- slotDirectory
       Slot slot <- acquire directory
+      checkStorageBudget storage
       setEnv slotVariable (show slot)
       executable <- pinExecutable directory
       scoped <- userScopeAvailable
@@ -104,6 +108,13 @@ reexecInSlot policy arguments = do
           hPutStrLn stderr ("No systemd user session: emulator slot " ++ show slot ++ " runs without the " ++ memory ++ " memory cap")
           hFlush stderr
           executeFile executable False arguments Nothing
+
+defaultStoragePath :: IO FilePath
+defaultStoragePath = do
+  root <- getCurrentDirectory
+  let private = root </> "private-data"
+  exists <- doesDirectoryExist private
+  pure (if exists then private else root)
 
 -- | Whether @systemd-run --user@ can start a scope: the binary exists and the
 -- user manager answers within five seconds.

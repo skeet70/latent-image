@@ -26,6 +26,7 @@ ensure condition message = unless condition (fail message)
 main :: IO ()
 main = bracket temporary removeDirectoryRecursive $ \root -> do
   poolTests root
+  _ <- loadCase (root </> "input-second/case.json")
   store <- newEvidenceStore CompactSuccesses
   first <- emit root store "first" caseFixture (report 1) passed
   ensure (first == report 1) "first diagnostic was not retained exactly"
@@ -83,11 +84,20 @@ main = bracket temporary removeDirectoryRecursive $ \root -> do
   forM_ references $ \path -> do
     raw <- readJson path
     ensure (get raw "runner" /= Null) "parallel reference is not a full diagnostic"
+  linkedStore <- newEvidenceStore CompactSuccesses
+  let physical = root </> "physical-output"
+      alias = root </> "worktree-output"
+  createDirectory physical
+  createDirectoryLink physical alias
+  retained <- emit alias linkedStore "witness" caseFixture (report 1) passed
+  projected <- emit alias linkedStore "projection" caseFixture (report 2) passed
+  removeDirectoryLink alias
+  resolved <- readJson (str (get projected "full_diagnostic_exemplar"))
+  ensure (resolved == retained) "removing a worktree symlink broke its retained diagnostic reference"
   putStrLn "native evidence retention tests passed"
 
 poolTests :: FilePath -> IO ()
-poolTests root = do
-  pool <- newInputPool root
+poolTests root = withInputPool root $ \pool -> do
   let first = root </> "input-first"
       second = root </> "input-second"
       third = root </> "input-third"
@@ -120,7 +130,6 @@ poolTests root = do
   _ <- stageInput pool (third </> "code.bin") code
   restaged <- B.readFile (third </> "code.bin")
   ensure (restaged == code) "retry mutated the immutable input pool"
-  _ <- loadCase (second </> "case.json")
   pure ()
 
 pooledFixture :: String -> Value

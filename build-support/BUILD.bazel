@@ -1,4 +1,4 @@
-load("@rules_haskell//haskell:defs.bzl", "haskell_binary")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_test")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 
 exports_files([
@@ -52,4 +52,50 @@ sh_binary(
     srcs = ["xm1-decomp.sh"],
     data = [":xm1-decomp-index"],
     visibility = ["//visibility:public"],
+)
+
+haskell_binary(
+    name = "storage-maintenance",
+    srcs = ["StorageMaintenance.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:cryptohash-sha256",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//host:unix",
+    ],
+)
+
+haskell_test(
+    name = "storage-maintenance-tests",
+    srcs = ["StorageMaintenanceTests.hs"],
+    args = ["$(rootpath :storage-maintenance)"],
+    data = [":storage-maintenance"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+    ],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//host:text",
+        "//host:unix",
+    ],
 )
