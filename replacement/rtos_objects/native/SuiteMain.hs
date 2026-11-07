@@ -54,11 +54,14 @@ main = do
         [ object
             [ "domain" .= show (familyDomain run)
             , "case" .= name
-            , "result" .= either ("failed: " ++) (const "ok") result
+            , "result" .= outcomeText result
             ]
         | run <- runs
         , (name, result) <- familyCases run
         ]
+      outcomeText (Left message) = "failed: " ++ message
+      outcomeText (Right []) = "ok"
+      outcomeText (Right differences) = "failed: " ++ unlines differences
       reuse =
         [ object ["domain" .= show (familyDomain run), "stock" .= show (fst (familyReuse run)), "owned" .= show (snd (familyReuse run))]
         | run <- runs
@@ -66,7 +69,7 @@ main = do
       document = object ["cases" .= cases, "reuse" .= reuse, "failures" .= length failures]
   BL.writeFile resultsPath (encode document)
   forM_ runs $ \run -> forM_ (familyCases run) $ \(name, result) ->
-    putStrLn (show (familyDomain run) ++ " " ++ name ++ ": " ++ either ("failed: " ++) (const "ok") result)
+    putStrLn (show (familyDomain run) ++ " " ++ name ++ ": " ++ outcomeText result)
   forM_ failures $ \(name, message) -> putStrLn (name ++ ": " ++ message)
   unless (null failures) exitFailure
 
