@@ -28,11 +28,17 @@ SECTIONS {
     __f2_send_body_end = .;
     . = ORIGIN(f2_send) + LENGTH(f2_send);
   } > f2_send =0xf000f0e7
-  .forbidden (NOLOAD) : { *(.rodata .rodata.* .data .data.* .bss .bss.* COMMON) } > acquire
+  .forbidden (NOLOAD) : { *(.text .text.* .rodata .rodata.* .data .data.* .bss .bss.* COMMON) } > acquire
+  .ARM.attributes 0 : { *(.ARM.attributes) }
+  .symtab 0 : { *(.symtab) }
+  .shstrtab 0 : { *(.shstrtab) }
+  .strtab 0 : { *(.strtab) }
+  /DISCARD/ : { *(.ARM.exidx .ARM.exidx.* .ARM.extab .ARM.extab.* .comment .note .note.*) }
 }
 
 ASSERT(xm1_rtos_objects_release == ORIGIN(f2_release), "release entry is not at its stock address")
 ASSERT(__f2_release_body_end <= ORIGIN(f2_release) + LENGTH(f2_release), "release body exceeds its stock extent")
+ASSERT(SIZEOF(.forbidden) == 0, "unplaced text or data remains")
 ASSERT(xm1_rtos_objects_f2_set_flag == ORIGIN(f2_set_flag), "set_flag entry is not at its stock address")
 ASSERT(__f2_set_flag_body_end <= ORIGIN(f2_set_flag) + LENGTH(f2_set_flag), "set_flag body exceeds its stock extent")
 ASSERT(xm1_rtos_objects_f2_send == ORIGIN(f2_send), "send entry is not at its stock address")
