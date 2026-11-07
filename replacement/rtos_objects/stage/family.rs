@@ -1,19 +1,20 @@
 use super::{cpsr_masked, entry_words, load, xm1_rtos_scheduler_save, Cpu, Reschedule, ENTRY};
-use objects::admission::{admit, Entry, Object, Params, Request, Service};
-use objects::block::{
+use crate::objects;
+use crate::objects::admission::{admit, Entry, Object, Params, Request, Service};
+use crate::objects::block::{
     receive, resume_flag, resume_receive, wait_flag, Block, Deadline, FlagBlocking, FlagResume,
     IrqScope, ReceiveBlocking, ReceiveResume, SavedMask, Tick, TimerEntryAddress, TimeoutCallback,
 };
-use objects::create::{create_flag, create_mailbox, FlagAttributes, MailboxAttributes};
-use objects::id::{own_flag_slot, own_mailbox_slot, EncodedId, EntryDomain, FlagId, MailboxId};
-use objects::layout::{Domain, GuestAddress, Message, Task};
-use objects::locked::{clear_flag, poll_flag, poll_receive, OutWord};
-use objects::matching::{KeepMask, Pattern, WantedMask};
-use objects::message::PriorityLimit;
-use objects::status::ObjectStatus;
-use objects::teardown::{delete_flag, delete_mailbox};
-use objects::timeout::Timeout;
-use objects::wake::{send, set_flag, set_flag_handler};
+use crate::objects::create::{create_flag, create_mailbox, FlagAttributes, MailboxAttributes};
+use crate::objects::id::{own_flag_slot, own_mailbox_slot, EncodedId, EntryDomain, FlagId, MailboxId};
+use crate::objects::layout::{Domain, GuestAddress, Message, Task};
+use crate::objects::locked::{clear_flag, poll_flag, poll_receive, OutWord};
+use crate::objects::matching::{KeepMask, Pattern, WantedMask};
+use crate::objects::message::PriorityLimit;
+use crate::objects::status::ObjectStatus;
+use crate::objects::teardown::{delete_flag, delete_mailbox};
+use crate::objects::timeout::Timeout;
+use crate::objects::wake::{send, set_flag, set_flag_handler};
 
 extern "C" {
     fn xm1_rtos_scheduler_remove(record: objects::layout::KernelContext, task: Task) -> Reschedule;

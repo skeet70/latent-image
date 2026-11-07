@@ -4,6 +4,12 @@
 #[path = "../src/lib.rs"]
 mod objects;
 
+#[allow(unused_imports)]
+pub use objects::{
+    admission, block, create, id, layout, locked, matching, message, order, status, teardown,
+    timeout, wake,
+};
+
 #[cfg(feature = "family")]
 mod family;
 
