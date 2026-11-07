@@ -13,7 +13,7 @@ MEMORY {
   family_flag_timed_wait (rx) : ORIGIN = 0xd8af0, LENGTH = 0x308
   family_mailbox_create (rx) : ORIGIN = 0xdd580, LENGTH = 0x98
   family_mailbox_delete (rx) : ORIGIN = 0xdd618, LENGTH = 0x70
-  family_mailbox_send (rx) : ORIGIN = 0xdaa44, LENGTH = 0x304
+  family_mailbox_send (rx) : ORIGIN = 0xdaa04, LENGTH = 0x304
   family_mailbox_receive (rx) : ORIGIN = 0xdad08, LENGTH = 0x254
   family_mailbox_poll (rx) : ORIGIN = 0xdaf5c, LENGTH = 0x148
   family_mailbox_timed_receive (rx) : ORIGIN = 0xdb0a4, LENGTH = 0x2a8

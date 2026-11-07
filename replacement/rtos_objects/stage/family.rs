@@ -71,15 +71,58 @@ impl Block for Cpu {
     }
 }
 
-/// The I/F pair the stock create and delete bodies hold across their table edits.
-fn mask_lifecycle() -> objects::create::SavedInterrupts {
+/// Stock create/delete set I+F through `0x42560` and restore only those bits through `0x42568`.
+#[derive(Clone, Copy)]
+#[repr(transparent)]
+struct LifecycleMask(u32);
+
+fn mask_lifecycle() -> LifecycleMask {
     let saved: u32;
-    unsafe { core::arch::asm!("mrs {saved}, cpsr", "cpsid if", saved = out(reg) saved, options(nostack)) };
-    objects::create::SavedInterrupts(saved)
+    let set: u32;
+    unsafe {
+        core::arch::asm!(
+            "mrs {saved}, cpsr",
+            "orr {set}, {saved}, #0xc0",
+            "msr cpsr_c, {set}",
+            saved = out(reg) saved,
+            set = out(reg) set,
+            options(nostack),
+        )
+    };
+    LifecycleMask(saved & 0xc0)
 }
 
-fn restore_lifecycle(saved: objects::create::SavedInterrupts) {
-    unsafe { core::arch::asm!("msr cpsr_fc, {saved}", saved = in(reg) saved.0, options(nostack)) };
+fn restore_lifecycle(saved: LifecycleMask) {
+    let current: u32;
+    let restored: u32;
+    unsafe {
+        core::arch::asm!(
+            "mrs {current}, cpsr",
+            "bic {restored}, {current}, #0xc0",
+            "orr {restored}, {restored}, {saved}",
+            "msr cpsr_c, {restored}",
+            current = out(reg) current,
+            restored = out(reg) restored,
+            saved = in(reg) saved.0,
+            options(nostack),
+        )
+    };
+}
+
+/// Stock retry addresses `0x488e8` / `0x4892c`.
+fn unmask_i() {
+    let current: u32;
+    let cleared: u32;
+    unsafe {
+        core::arch::asm!(
+            "mrs {current}, cpsr",
+            "bic {cleared}, {current}, #0x80",
+            "msr cpsr_c, {cleared}",
+            current = out(reg) current,
+            cleared = out(reg) cleared,
+            options(nostack),
+        )
+    };
 }
 
 struct StageTables;
@@ -284,25 +327,31 @@ fn flag_wait_entry(id: i32, pattern: u32, mode: u32, result: u32, timeout: Optio
         Err(status) => return status.code(),
     };
     let saved = Cpu.mask_i();
-    let code = match wait_flag(
-        &Cpu,
-        EntryDomain::new(ENTRY),
-        id,
-        wanted,
-        admitted.mode,
-        OutWord(GuestAddress(result)),
-        admitted.timeout.unwrap_or(Timeout::Forever),
-    ) {
-        Ok(FlagBlocking::Ready(outcome)) => outcome.code(),
-        Ok(FlagBlocking::Pending(pending)) => {
-            unsafe { xm1_rtos_scheduler_save(0) };
-            match resume_flag(&Cpu, pending) {
-                FlagResume::Completed(outcome) => outcome.code(),
-                FlagResume::Pending(_) => still_waiting(),
-                FlagResume::Corrupt(_) => unknown_result(),
+    let code = loop {
+        match wait_flag(
+            &Cpu,
+            EntryDomain::new(ENTRY),
+            id,
+            wanted,
+            admitted.mode,
+            OutWord(GuestAddress(result)),
+            admitted.timeout.unwrap_or(Timeout::Forever),
+        ) {
+            Ok(FlagBlocking::Ready(outcome)) => break outcome.code(),
+            Ok(FlagBlocking::Pending(pending)) => {
+                unsafe { xm1_rtos_scheduler_save(0) };
+                break match resume_flag(&Cpu, pending) {
+                    FlagResume::Completed(outcome) => outcome.code(),
+                    FlagResume::Pending(_) => still_waiting(),
+                    FlagResume::Corrupt(_) => unknown_result(),
+                };
             }
+            Ok(FlagBlocking::Retry) => {
+                unmask_i();
+                Cpu.mask_i();
+            }
+            Err(status) => break status.code(),
         }
-        Err(status) => status.code(),
     };
     Cpu.restore_i(saved);
     code
@@ -443,23 +492,29 @@ fn receive_entry(id: i32, message_out: u32, timeout: Option<i32>, service: Servi
         None => wrong_object(),
     };
     let saved = Cpu.mask_i();
-    let code = match receive(
-        &Cpu,
-        EntryDomain::new(ENTRY),
-        id,
-        OutWord(GuestAddress(message_out)),
-        admitted.timeout.unwrap_or(Timeout::Forever),
-    ) {
-        Ok(ReceiveBlocking::Ready(outcome)) => outcome.code(),
-        Ok(ReceiveBlocking::Pending(pending)) => {
-            unsafe { xm1_rtos_scheduler_save(0) };
-            match resume_receive(&Cpu, pending) {
-                ReceiveResume::Completed(outcome) => outcome.code(),
-                ReceiveResume::Pending(_) => still_waiting(),
-                ReceiveResume::Corrupt(_) => unknown_result(),
+    let code = loop {
+        match receive(
+            &Cpu,
+            EntryDomain::new(ENTRY),
+            id,
+            OutWord(GuestAddress(message_out)),
+            admitted.timeout.unwrap_or(Timeout::Forever),
+        ) {
+            Ok(ReceiveBlocking::Ready(outcome)) => break outcome.code(),
+            Ok(ReceiveBlocking::Pending(pending)) => {
+                unsafe { xm1_rtos_scheduler_save(0) };
+                break match resume_receive(&Cpu, pending) {
+                    ReceiveResume::Completed(outcome) => outcome.code(),
+                    ReceiveResume::Pending(_) => still_waiting(),
+                    ReceiveResume::Corrupt(_) => unknown_result(),
+                };
             }
+            Ok(ReceiveBlocking::Retry) => {
+                unmask_i();
+                Cpu.mask_i();
+            }
+            Err(status) => break status.code(),
         }
-        Err(status) => status.code(),
     };
     Cpu.restore_i(saved);
     code

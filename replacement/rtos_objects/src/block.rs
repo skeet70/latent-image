@@ -67,12 +67,16 @@ pub struct ReceivePending {
 pub enum FlagBlocking {
     Ready(WaitOutcome<Pattern>),
     Pending(FlagWaitPending),
+    /// The running task was not READY; the caller drops the object lock and retries.
+    Retry,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ReceiveBlocking {
     Ready(WaitOutcome<Message>),
     Pending(ReceivePending),
+    /// The running task was not READY; the caller drops the object lock and retries.
+    Retry,
 }
 
 /// The wake writes the wait block's completion word before the task becomes runnable; the
@@ -86,9 +90,12 @@ fn block<M: Block>(
     queue: WaitQueue,
     order: QueueOrder,
     timer: Option<(TimerEntryAddress, Deadline)>,
-) {
+) -> bool {
     let owner = m.context(object);
     m.with_scheduler_lock(entry, || {
+        if m.load_byte(task.state()) & TaskState::READY.bits() == 0 {
+            return false;
+        }
         m.store_byte(
             task.state(),
             TaskState::WAIT
@@ -110,7 +117,8 @@ fn block<M: Block>(
         m.store_word(WaitBlock(wait).queue(), queue.0 .0);
         m.store_word(WaitBlock(wait).owner(), owner.0 .0);
         m.queue_wait(owner, task, queue, order);
-    });
+        true
+    })
 }
 
 /// Slots `+0x94` and `+0x9c`.
@@ -160,7 +168,7 @@ pub fn wait_flag<M: Block>(
                         )),
                         _ => None,
                     };
-                    block(
+                    if !block(
                         m,
                         entry.domain(),
                         id.domain,
@@ -169,7 +177,9 @@ pub fn wait_flag<M: Block>(
                         control.queue(),
                         QueueOrder::from_attribute(m.load_word(config.attributes())),
                         timer,
-                    );
+                    ) {
+                        return Ok(FlagBlocking::Retry);
+                    }
                     Ok(FlagBlocking::Pending(FlagWaitPending { task, wait, out }))
                 }
             },
@@ -215,7 +225,7 @@ pub fn receive<M: Block>(
                     )),
                     _ => None,
                 };
-                block(
+                if !block(
                     m,
                     entry.domain(),
                     id.domain,
@@ -224,7 +234,9 @@ pub fn receive<M: Block>(
                     control.queue(),
                     QueueOrder::from_attribute(m.load_word(config.attributes())),
                     timer,
-                );
+                ) {
+                    return Ok(ReceiveBlocking::Retry);
+                }
                 Ok(ReceiveBlocking::Pending(ReceivePending { task, wait, out }))
             }
         }
