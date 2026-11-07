@@ -172,6 +172,9 @@ impl Wake for Cpu {
         match DomainId::from_word(load(waiter.domain())) {
             Some(DomainId::A) => Domain::A,
             Some(DomainId::B) => Domain::B,
+            #[cfg(feature = "family")]
+            _ => family::xm1_rtos_objects_fault(family::KernelFault::WaiterDomain),
+            #[cfg(not(feature = "family"))]
             _ => panic!("waiting task has no domain tag"),
         }
     }

@@ -110,6 +110,18 @@ The output directory must be new. The tool works out which firmware parts the ex
 
 [The install procedure](reports/install-procedure.md#6-the-procedure-step-by-step) explains each step, the [abort points](reports/install-procedure.md#7-abort-points-and-the-point-of-no-return), and what an [interrupted update](reports/install-procedure.md#8-interruption-residues-and-which-are-recoverable-by-repeating-the-update) leaves behind. To return to stock, install the official base DAT the same way. That direction has not yet been tried on hardware. If the camera no longer starts, read [the recovery kit](recovery/README.md) before trying anything else.
 
+### Family stage kernel faults
+
+The RTOS objects family stage replaces three fatal kernel conditions with a typed `KernelFault` and a non-returning A32 trap loop. The fault code is the enum discriminant, held in r0 when the loop is reached:
+
+| Code | Condition |
+| --- | --- |
+| 1 | The waiting task's domain word is neither A nor B. |
+| 2 | The S2 save returned with the wait still queued. |
+| 3 | The S2 save returned an unknown wait result. |
+
+All three are fatal. The trap never returns, never falls back to a status code and never writes camera state. The ordinary compiler panic handler is unchanged for every other panic. An observer at the loop reads r0 to distinguish the three conditions.
+
 ## Contribute
 
 Use [GitHub Issues](https://github.com/skeet70/latent-image/issues) to find open work, report bugs, or propose research. Check existing issues before starting, and include the tool, firmware version where relevant, and a reproducible example that does not disclose proprietary inputs or private camera data.

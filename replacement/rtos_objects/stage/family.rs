@@ -19,18 +19,30 @@ use crate::objects::teardown::{delete_flag, delete_mailbox};
 use crate::objects::timeout::Timeout;
 use crate::objects::wake::{send, set_flag, set_flag_handler};
 
+/// Fatal kernel conditions; the discriminant is the A32 diagnostic code retained in r0 at the trap loop.
+#[repr(u32)]
+#[derive(Clone, Copy)]
+pub(super) enum KernelFault {
+    /// The waiting task's domain word is neither A nor B.
+    WaiterDomain = 1,
+    /// The S2 save returned with the wait still queued.
+    StillQueued = 2,
+    /// The S2 save returned an unknown wait result.
+    UnknownResult = 3,
+}
+
+#[inline(always)]
+#[no_mangle]
+pub(super) fn xm1_rtos_objects_fault(fault: KernelFault) -> ! {
+    unsafe {
+        core::arch::asm!("2: b 2b", in("r0") fault as u32, options(noreturn, nostack));
+    }
+}
+
 extern "C" {
     fn xm1_rtos_scheduler_remove(record: objects::layout::KernelContext, task: Task) -> Reschedule;
     fn xm1_rtos_objects_stock_insert_timer(record: objects::layout::KernelContext, entry: GuestAddress, expiry: u32);
     static xm1_rtos_objects_stock_timeout: u32;
-}
-
-fn still_waiting() -> ! {
-    panic!("the S2 save returned with the wait still queued")
-}
-
-fn unknown_result() -> ! {
-    panic!("the S2 save returned an unknown wait result")
 }
 
 impl IrqScope for Cpu {
@@ -376,8 +388,8 @@ fn flag_wait_admitted(admitted: AdmittedFlag, result: u32, timeout: Timeout) -> 
                 unsafe { xm1_rtos_scheduler_save(0) };
                 break match resume_flag(&Cpu, pending) {
                     FlagResume::Completed(outcome) => outcome.code(),
-                    FlagResume::Pending(_) => still_waiting(),
-                    FlagResume::Corrupt(_) => unknown_result(),
+                    FlagResume::Pending(_) => xm1_rtos_objects_fault(KernelFault::StillQueued),
+                    FlagResume::Corrupt(_) => xm1_rtos_objects_fault(KernelFault::UnknownResult),
                 };
             }
             Ok(FlagBlocking::Retry) => {
@@ -407,8 +419,8 @@ fn receive_admitted(admitted: AdmittedMailbox, message_out: u32, timeout: Timeou
                 unsafe { xm1_rtos_scheduler_save(0) };
                 break match resume_receive(&Cpu, pending) {
                     ReceiveResume::Completed(outcome) => outcome.code(),
-                    ReceiveResume::Pending(_) => still_waiting(),
-                    ReceiveResume::Corrupt(_) => unknown_result(),
+                    ReceiveResume::Pending(_) => xm1_rtos_objects_fault(KernelFault::StillQueued),
+                    ReceiveResume::Corrupt(_) => xm1_rtos_objects_fault(KernelFault::UnknownResult),
                 };
             }
             Ok(ReceiveBlocking::Retry) => {
