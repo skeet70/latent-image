@@ -127,6 +127,10 @@ impl Sim {
         self.word(self.entry.words().reschedule)
     }
 
+    pub fn interrupts(&self) -> u32 {
+        self.interrupts.get()
+    }
+
     pub fn doorbell(&self, core: usize) -> bool {
         self.doorbell[core].get()
     }
