@@ -13,6 +13,7 @@ exports_files(
         "//replacement/rtos_objects:__pkg__",
         "//replacement/rtos_own_first:__pkg__",
         "//replacement/rtos_scheduler:__pkg__",
+        "//replacement/rtos_timer:__pkg__",
     ],
 )
 
