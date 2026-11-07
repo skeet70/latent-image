@@ -258,86 +258,35 @@ fn delete_mailbox_entry(id: i32) -> i32 {
     }
 }
 
-/// Slot `+0x80`.
-#[no_mangle]
-#[inline(never)]
-#[link_section = ".text.family_flag_create"]
-pub extern "C" fn xm1_rtos_objects_family_flag_create(id: i32, request_pointer: u32) -> i32 {
-    let saved = mask_lifecycle();
-    let code = create_flag_entry(id, request_pointer);
-    restore_lifecycle(saved);
-    code
+enum FlagInvocation {
+    Create { id: i32, request_pointer: u32 },
+    Delete { id: i32 },
+    Set { id: i32, bits: u32 },
+    SetHandler { id: i32, bits: u32 },
+    Clear { id: i32, keep: u32 },
+    Wait { id: i32, pattern: u32, mode: u32, result: u32 },
+    TimedWait { id: i32, pattern: u32, mode: u32, result: u32, timeout: i32 },
+    Poll { id: i32, pattern: u32, mode: u32, result: u32 },
 }
 
-/// Slot `+0x84`.
-#[no_mangle]
-#[inline(never)]
-#[link_section = ".text.family_flag_delete"]
-pub extern "C" fn xm1_rtos_objects_family_flag_delete(id: i32) -> i32 {
-    let saved = mask_lifecycle();
-    let code = delete_flag_entry(id);
-    restore_lifecycle(saved);
-    code
-}
-
-/// Slot `+0x88`.
-#[no_mangle]
-#[inline(never)]
-#[link_section = ".text.family_flag_set"]
-pub extern "C" fn xm1_rtos_objects_family_flag_set(id: i32, bits: u32) -> i32 {
-    let admitted = match admit_flag(
-        &request(Service::FlagSet, false, id, Params::NONE),
-        FlagService::Set,
-        &StageTables,
-        &StageTables,
-    ) {
-        Ok(admitted) => admitted,
-        Err(status) => return status.code(),
-    };
-    set_flag(&Cpu, admitted.id, Pattern(bits));
-    0
-}
-
-/// Slot `+0x8c`.
-#[no_mangle]
-#[inline(never)]
-#[link_section = ".text.family_flag_set_handler"]
-pub extern "C" fn xm1_rtos_objects_family_flag_set_handler(id: i32, bits: u32) -> i32 {
-    let admitted = match admit_flag(
-        &request(Service::FlagSetHandler, false, id, Params::NONE),
-        FlagService::SetHandler,
-        &StageTables,
-        &StageTables,
-    ) {
-        Ok(admitted) => admitted,
-        Err(status) => return status.code(),
-    };
-    set_flag_handler(&Cpu, admitted.id, Pattern(bits));
-    0
-}
-
-/// Slot `+0x90`.
-#[no_mangle]
-#[inline(never)]
-#[link_section = ".text.family_flag_clear"]
-pub extern "C" fn xm1_rtos_objects_family_flag_clear(id: i32, keep: u32) -> i32 {
-    let admitted = match admit_flag(
-        &request(Service::FlagClear, false, id, Params::NONE),
-        FlagService::Clear,
-        &StageTables,
-        &StageTables,
-    ) {
-        Ok(admitted) => admitted,
-        Err(status) => return status.code(),
-    };
-    match clear_flag(&Cpu, admitted.id, KeepMask(keep)) {
-        Ok(()) => 0,
-        Err(status) => status.code(),
-    }
+enum MailboxInvocation {
+    Create { id: i32, request_pointer: u32 },
+    Delete { id: i32 },
+    Send { id: i32, message: u32 },
+    Receive { id: i32, message_out: u32 },
+    TimedReceive { id: i32, message_out: u32, timeout: i32 },
+    Poll { id: i32, message_out: u32 },
 }
 
 #[inline(never)]
-fn flag_wait_entry(service: FlagService, id: i32, pattern: u32, mode: u32, result: u32, timeout: Option<i32>) -> i32 {
+fn flag_wait_router(
+    service: FlagService,
+    id: i32,
+    pattern: u32,
+    mode: u32,
+    result: u32,
+    timeout: Option<i32>,
+) -> i32 {
     let params = Params { pattern: Pattern(pattern), mode, timeout, message: None };
     let admitted = match admit_flag(
         &request(service.service(), service.blocks(), id, params),
@@ -383,95 +332,13 @@ fn flag_wait_entry(service: FlagService, id: i32, pattern: u32, mode: u32, resul
     code
 }
 
-/// Slot `+0x94`.
-#[no_mangle]
 #[inline(never)]
-#[link_section = ".text.family_flag_wait"]
-pub extern "C" fn xm1_rtos_objects_family_flag_wait(id: i32, pattern: u32, mode: u32, result: u32) -> i32 {
-    flag_wait_entry(FlagService::Wait, id, pattern, mode, result, None)
-}
-
-/// Slot `+0x9c`.
-#[no_mangle]
-#[inline(never)]
-#[link_section = ".text.family_flag_timed_wait"]
-pub extern "C" fn xm1_rtos_objects_family_flag_timed_wait(id: i32, pattern: u32, mode: u32, result: u32, timeout: i32) -> i32 {
-    flag_wait_entry(FlagService::TimedWait, id, pattern, mode, result, Some(timeout))
-}
-
-/// Slot `+0x98`.
-#[no_mangle]
-#[inline(never)]
-#[link_section = ".text.family_flag_poll"]
-pub extern "C" fn xm1_rtos_objects_family_flag_poll(id: i32, pattern: u32, mode: u32, result: u32) -> i32 {
-    let params = Params { pattern: Pattern(pattern), mode, timeout: None, message: None };
-    let admitted = match admit_flag(
-        &request(Service::FlagPoll, false, id, params),
-        FlagService::Poll,
-        &StageTables,
-        &StageTables,
-    ) {
-        Ok(admitted) => admitted,
-        Err(status) => return status.code(),
-    };
-    let wanted = match want(admitted.want) {
-        Ok(wanted) => wanted,
-        Err(status) => return status.code(),
-    };
-    match poll_flag(&Cpu, admitted.id, wanted, admitted.mode, OutWord(GuestAddress(result))) {
-        Ok(outcome) => outcome.code(),
-        Err(status) => status.code(),
-    }
-}
-
-/// Slot `+0xcc`.
-#[no_mangle]
-#[inline(never)]
-#[link_section = ".text.family_mailbox_create"]
-pub extern "C" fn xm1_rtos_objects_family_mailbox_create(id: i32, request_pointer: u32) -> i32 {
-    let saved = mask_lifecycle();
-    let code = create_mailbox_entry(id, request_pointer);
-    restore_lifecycle(saved);
-    code
-}
-
-/// Slot `+0xd0`; the raw ABI discards the drained pointers as stock does.
-#[no_mangle]
-#[inline(never)]
-#[link_section = ".text.family_mailbox_delete"]
-pub extern "C" fn xm1_rtos_objects_family_mailbox_delete(id: i32) -> i32 {
-    let saved = mask_lifecycle();
-    let code = delete_mailbox_entry(id);
-    restore_lifecycle(saved);
-    code
-}
-
-/// Slot `+0xd4`.
-#[no_mangle]
-#[inline(never)]
-#[link_section = ".text.family_mailbox_send"]
-pub extern "C" fn xm1_rtos_objects_family_mailbox_send(id: i32, message: u32) -> i32 {
-    let params = Params {
-        pattern: Pattern(0),
-        mode: 0,
-        timeout: None,
-        message: Some(Message(GuestAddress(message))),
-    };
-    let admitted = match admit_mailbox(
-        &request(Service::MailboxSend, false, id, params),
-        MailboxService::Send,
-        &StageTables,
-        &StageTables,
-    ) {
-        Ok(admitted) => admitted,
-        Err(status) => return status.code(),
-    };
-    send(&Cpu, admitted.id, Message(GuestAddress(message)), admitted.priority);
-    0
-}
-
-#[inline(never)]
-fn receive_entry(service: MailboxService, id: i32, message_out: u32, timeout: Option<i32>) -> i32 {
+fn receive_router(
+    service: MailboxService,
+    id: i32,
+    message_out: u32,
+    timeout: Option<i32>,
+) -> i32 {
     let params = Params { pattern: Pattern(0), mode: 0, timeout, message: None };
     let admitted = match admit_mailbox(
         &request(service.service(), service.blocks(), id, params),
@@ -511,12 +378,236 @@ fn receive_entry(service: MailboxService, id: i32, message_out: u32, timeout: Op
     code
 }
 
+#[inline(never)]
+fn flag_router(invocation: FlagInvocation) -> i32 {
+    match invocation {
+        FlagInvocation::Create { id, request_pointer } => create_flag_entry(id, request_pointer),
+        FlagInvocation::Delete { id } => delete_flag_entry(id),
+        FlagInvocation::Set { id, bits } => {
+            let admitted = match admit_flag(
+                &request(Service::FlagSet, false, id, Params::NONE),
+                FlagService::Set,
+                &StageTables,
+                &StageTables,
+            ) {
+                Ok(admitted) => admitted,
+                Err(status) => return status.code(),
+            };
+            set_flag(&Cpu, admitted.id, Pattern(bits));
+            0
+        }
+        FlagInvocation::SetHandler { id, bits } => {
+            let admitted = match admit_flag(
+                &request(Service::FlagSetHandler, false, id, Params::NONE),
+                FlagService::SetHandler,
+                &StageTables,
+                &StageTables,
+            ) {
+                Ok(admitted) => admitted,
+                Err(status) => return status.code(),
+            };
+            set_flag_handler(&Cpu, admitted.id, Pattern(bits));
+            0
+        }
+        FlagInvocation::Clear { id, keep } => {
+            let admitted = match admit_flag(
+                &request(Service::FlagClear, false, id, Params::NONE),
+                FlagService::Clear,
+                &StageTables,
+                &StageTables,
+            ) {
+                Ok(admitted) => admitted,
+                Err(status) => return status.code(),
+            };
+            match clear_flag(&Cpu, admitted.id, KeepMask(keep)) {
+                Ok(()) => 0,
+                Err(status) => status.code(),
+            }
+        }
+        FlagInvocation::Wait { id, pattern, mode, result } => {
+            flag_wait_router(FlagService::Wait, id, pattern, mode, result, None)
+        }
+        FlagInvocation::TimedWait { id, pattern, mode, result, timeout } => {
+            flag_wait_router(FlagService::TimedWait, id, pattern, mode, result, Some(timeout))
+        }
+        FlagInvocation::Poll { id, pattern, mode, result } => {
+            let params = Params { pattern: Pattern(pattern), mode, timeout: None, message: None };
+            let admitted = match admit_flag(
+                &request(Service::FlagPoll, false, id, params),
+                FlagService::Poll,
+                &StageTables,
+                &StageTables,
+            ) {
+                Ok(admitted) => admitted,
+                Err(status) => return status.code(),
+            };
+            let wanted = match want(admitted.want) {
+                Ok(wanted) => wanted,
+                Err(status) => return status.code(),
+            };
+            match poll_flag(&Cpu, admitted.id, wanted, admitted.mode, OutWord(GuestAddress(result))) {
+                Ok(outcome) => outcome.code(),
+                Err(status) => status.code(),
+            }
+        }
+    }
+}
+
+#[inline(never)]
+fn mailbox_router(invocation: MailboxInvocation) -> i32 {
+    match invocation {
+        MailboxInvocation::Create { id, request_pointer } => create_mailbox_entry(id, request_pointer),
+        MailboxInvocation::Delete { id } => delete_mailbox_entry(id),
+        MailboxInvocation::Send { id, message } => {
+            let params = Params {
+                pattern: Pattern(0),
+                mode: 0,
+                timeout: None,
+                message: Some(Message(GuestAddress(message))),
+            };
+            let admitted = match admit_mailbox(
+                &request(Service::MailboxSend, false, id, params),
+                MailboxService::Send,
+                &StageTables,
+                &StageTables,
+            ) {
+                Ok(admitted) => admitted,
+                Err(status) => return status.code(),
+            };
+            send(&Cpu, admitted.id, Message(GuestAddress(message)), admitted.priority);
+            0
+        }
+        MailboxInvocation::Receive { id, message_out } => {
+            receive_router(MailboxService::Receive, id, message_out, None)
+        }
+        MailboxInvocation::TimedReceive { id, message_out, timeout } => {
+            receive_router(MailboxService::TimedReceive, id, message_out, Some(timeout))
+        }
+        MailboxInvocation::Poll { id, message_out } => {
+            let params = Params { pattern: Pattern(0), mode: 0, timeout: None, message: None };
+            let admitted = match admit_mailbox(
+                &request(Service::MailboxPoll, false, id, params),
+                MailboxService::Poll,
+                &StageTables,
+                &StageTables,
+            ) {
+                Ok(admitted) => admitted,
+                Err(status) => return status.code(),
+            };
+            match poll_receive(&Cpu, admitted.id, OutWord(GuestAddress(message_out))) {
+                Ok(outcome) => outcome.code(),
+                Err(status) => status.code(),
+            }
+        }
+    }
+}
+
+/// Slot `+0x80`.
+#[no_mangle]
+#[inline(never)]
+#[link_section = ".text.family_flag_create"]
+pub extern "C" fn xm1_rtos_objects_family_flag_create(id: i32, request_pointer: u32) -> i32 {
+    let saved = mask_lifecycle();
+    let code = flag_router(FlagInvocation::Create { id, request_pointer });
+    restore_lifecycle(saved);
+    code
+}
+
+/// Slot `+0x84`.
+#[no_mangle]
+#[inline(never)]
+#[link_section = ".text.family_flag_delete"]
+pub extern "C" fn xm1_rtos_objects_family_flag_delete(id: i32) -> i32 {
+    let saved = mask_lifecycle();
+    let code = flag_router(FlagInvocation::Delete { id });
+    restore_lifecycle(saved);
+    code
+}
+
+/// Slot `+0x88`.
+#[no_mangle]
+#[inline(never)]
+#[link_section = ".text.family_flag_set"]
+pub extern "C" fn xm1_rtos_objects_family_flag_set(id: i32, bits: u32) -> i32 {
+    flag_router(FlagInvocation::Set { id, bits })
+}
+
+/// Slot `+0x8c`.
+#[no_mangle]
+#[inline(never)]
+#[link_section = ".text.family_flag_set_handler"]
+pub extern "C" fn xm1_rtos_objects_family_flag_set_handler(id: i32, bits: u32) -> i32 {
+    flag_router(FlagInvocation::SetHandler { id, bits })
+}
+
+/// Slot `+0x90`.
+#[no_mangle]
+#[inline(never)]
+#[link_section = ".text.family_flag_clear"]
+pub extern "C" fn xm1_rtos_objects_family_flag_clear(id: i32, keep: u32) -> i32 {
+    flag_router(FlagInvocation::Clear { id, keep })
+}
+
+/// Slot `+0x94`.
+#[no_mangle]
+#[inline(never)]
+#[link_section = ".text.family_flag_wait"]
+pub extern "C" fn xm1_rtos_objects_family_flag_wait(id: i32, pattern: u32, mode: u32, result: u32) -> i32 {
+    flag_router(FlagInvocation::Wait { id, pattern, mode, result })
+}
+
+/// Slot `+0x9c`.
+#[no_mangle]
+#[inline(never)]
+#[link_section = ".text.family_flag_timed_wait"]
+pub extern "C" fn xm1_rtos_objects_family_flag_timed_wait(id: i32, pattern: u32, mode: u32, result: u32, timeout: i32) -> i32 {
+    flag_router(FlagInvocation::TimedWait { id, pattern, mode, result, timeout })
+}
+
+/// Slot `+0x98`.
+#[no_mangle]
+#[inline(never)]
+#[link_section = ".text.family_flag_poll"]
+pub extern "C" fn xm1_rtos_objects_family_flag_poll(id: i32, pattern: u32, mode: u32, result: u32) -> i32 {
+    flag_router(FlagInvocation::Poll { id, pattern, mode, result })
+}
+
+/// Slot `+0xcc`.
+#[no_mangle]
+#[inline(never)]
+#[link_section = ".text.family_mailbox_create"]
+pub extern "C" fn xm1_rtos_objects_family_mailbox_create(id: i32, request_pointer: u32) -> i32 {
+    let saved = mask_lifecycle();
+    let code = mailbox_router(MailboxInvocation::Create { id, request_pointer });
+    restore_lifecycle(saved);
+    code
+}
+
+/// Slot `+0xd0`; the raw ABI discards the drained pointers as stock does.
+#[no_mangle]
+#[inline(never)]
+#[link_section = ".text.family_mailbox_delete"]
+pub extern "C" fn xm1_rtos_objects_family_mailbox_delete(id: i32) -> i32 {
+    let saved = mask_lifecycle();
+    let code = mailbox_router(MailboxInvocation::Delete { id });
+    restore_lifecycle(saved);
+    code
+}
+
+/// Slot `+0xd4`.
+#[no_mangle]
+#[inline(never)]
+#[link_section = ".text.family_mailbox_send"]
+pub extern "C" fn xm1_rtos_objects_family_mailbox_send(id: i32, message: u32) -> i32 {
+    mailbox_router(MailboxInvocation::Send { id, message })
+}
+
 /// Slot `+0xd8`.
 #[no_mangle]
 #[inline(never)]
 #[link_section = ".text.family_mailbox_receive"]
 pub extern "C" fn xm1_rtos_objects_family_mailbox_receive(id: i32, message_out: u32) -> i32 {
-    receive_entry(MailboxService::Receive, id, message_out, None)
+    mailbox_router(MailboxInvocation::Receive { id, message_out })
 }
 
 /// Slot `+0xe0`.
@@ -524,7 +615,7 @@ pub extern "C" fn xm1_rtos_objects_family_mailbox_receive(id: i32, message_out: 
 #[inline(never)]
 #[link_section = ".text.family_mailbox_timed_receive"]
 pub extern "C" fn xm1_rtos_objects_family_mailbox_timed_receive(id: i32, message_out: u32, timeout: i32) -> i32 {
-    receive_entry(MailboxService::TimedReceive, id, message_out, Some(timeout))
+    mailbox_router(MailboxInvocation::TimedReceive { id, message_out, timeout })
 }
 
 /// Slot `+0xdc`.
@@ -532,18 +623,5 @@ pub extern "C" fn xm1_rtos_objects_family_mailbox_timed_receive(id: i32, message
 #[inline(never)]
 #[link_section = ".text.family_mailbox_poll"]
 pub extern "C" fn xm1_rtos_objects_family_mailbox_poll(id: i32, message_out: u32) -> i32 {
-    let params = Params { pattern: Pattern(0), mode: 0, timeout: None, message: None };
-    let admitted = match admit_mailbox(
-        &request(Service::MailboxPoll, false, id, params),
-        MailboxService::Poll,
-        &StageTables,
-        &StageTables,
-    ) {
-        Ok(admitted) => admitted,
-        Err(status) => return status.code(),
-    };
-    match poll_receive(&Cpu, admitted.id, OutWord(GuestAddress(message_out))) {
-        Ok(outcome) => outcome.code(),
-        Err(status) => status.code(),
-    }
+    mailbox_router(MailboxInvocation::Poll { id, message_out })
 }
