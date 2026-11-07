@@ -123,8 +123,8 @@ fn main() {
     let wait_queue = format!("{{\"size\":{},\"next\":{},\"prev\":{},\"config\":{}}}", WaitQueue::SIZE, wq.next().0, wq.prev().0, wq.config().0);
     let flag_wait = format!("{{\"size\":{},\"pattern\":{},\"mode\":{},\"result\":{}}}", FlagWait::SIZE, fw.pattern().0, fw.mode().0, fw.result().0);
     let mailbox_wait = format!("{{\"size\":{},\"message\":{}}}", MailboxWait::SIZE, mw.message().0);
-    let flag_control = format!("{{\"size\":{},\"queue\":{},\"pattern\":{}}}", FlagControl::SIZE, fc.queue().0, fc.pattern().0);
-    let mailbox_control = format!("{{\"size\":{},\"queue\":{},\"head\":{},\"tail\":{}}}", MailboxControl::SIZE, mc.queue().0, mc.head().0, mc.tail().0);
+    let flag_control = format!("{{\"size\":{},\"queue\":{},\"pattern\":{}}}", FlagControl::SIZE, fc.queue().0 .0, fc.pattern().0);
+    let mailbox_control = format!("{{\"size\":{},\"queue\":{},\"head\":{},\"tail\":{}}}", MailboxControl::SIZE, mc.queue().0 .0, mc.head().0, mc.tail().0);
     println!(
         "{{\"a\":{},\"b\":{},\"own_id\":{},\"context\":{},\"lock\":{},\"task\":{},\"definition\":{},\"ready_head\":{},\"priorities\":{},\"task_slots\":{},\"task_states\":[{}],\"flag_config\":{},\"mailbox_config\":{},\"wait_block\":{},\"wait_queue\":{},\"flag_wait\":{},\"mailbox_wait\":{},\"flag_control\":{},\"mailbox_control\":{},\"timer_entry_size\":{},\"state_ready\":{},\"state_wait\":{},\"state_suspended\":{},\"state_sleeping\":{},\"state_object_queued\":{},\"state_owner_lock_queued\":{}}}",
         domain(Domain::A),
