@@ -36,10 +36,9 @@ End maintenance sessions by cutting the dummy-battery supply. A POWER-switch end
 
 ## 4. Reproduction
 
-Both commands read host files only. `read-media` captures the two area-2 banks and their journals; the checker prints the fill and the capacity gate from a capture folder.
+With an existing capture, the host-only checker prints fill and the capacity gate. A new `read-media` capture is a live camera operation requiring the owner's scoped go under [governance](../spec/07-governance-and-handoff.md#3-camera-runs).
 
 ```sh
-devenv shell -- bazel run //transport:camera -- read-media
 devenv shell -- runghc private-data/analysis/x-m1-1.50/read-media/LogDiffCheck.hs <session-folder>
 ```
 

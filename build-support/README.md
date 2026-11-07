@@ -49,26 +49,43 @@ Research output is compacted under the [evidence ledger rules](../docs/principle
 
 Build cleanup is restricted to identified compiler or cache outputs whose consumers are idle. Preserve source, application databases, generated imports, reports and input artifacts even when they live under a build directory. Verify the preserved files after removal.
 
-`//build-support:storage-maintenance` provides explicit Cargo cache inventory, plan and apply operations. Inventory reads metadata, Cargo provenance and compiler headers without hashing application contents. A plan streams SHA-256 hashes of all regular files, including protected data; apply revalidates the complete snapshot under Cargo's BSD `flock` locks before unlinking selected compiler files. Source trees and Git metadata, databases, imports, reports, firmware inputs, top-level executables, examples, unknown files and hardlinked files are retained. Only validated success fingerprints associated with selected compiler artifacts are invalidated.
+`//build-support:storage-maintenance` provides explicit Cargo cache inventory, plan and apply operations. Inventory reads metadata, Cargo provenance and compiler headers without hashing application contents. A plan validates its output location, acquires Cargo's BSD `flock` guards without waiting, then streams SHA-256 hashes of all regular files, including protected data. Apply checks process visibility and consumers before hashing, revalidates the complete snapshot under the guards, then checks consumers again before unlinking selected compiler files. Source trees and Git metadata, databases, imports, reports, firmware inputs, top-level executables, examples, unknown files and hardlinked files are retained. Test executables require an exact unit-hash match to a validated Cargo test fingerprint and an ELF header; an executable-looking filename alone is insufficient. Only validated success fingerprints associated with selected compiler artifacts are invalidated.
+
+Content hashing advances SHA-256 state strictly with input chunks no larger than 1 MiB, sized down for small files. Plan metadata scales with file count; the heap cap must leave room for that metadata. Add `+RTS -M2G -RTS` to bound the Haskell heap; the host-build scope separately limits total memory. Quiesce Cargo and other writers before planning a large target.
 
 ```sh
 target="$(realpath /path/to/cargo/target)"
 plan="$PWD/private-data/scratch/reclaim/cargo-plan.json"
 mkdir -p "$(dirname "$plan")"
-devenv shell -- bazel run //build-support:storage-maintenance -- inventory --cargo-target "$target" | jq
-devenv shell -- bazel run //build-support:storage-maintenance -- plan --cargo-target "$target" --output "$plan"
+devenv shell -- host-build run --jobs=2 //build-support:storage-maintenance -- inventory --cargo-target "$target" | jq
+devenv shell -- host-build run --jobs=2 //build-support:storage-maintenance -- plan --cargo-target "$target" --output "$plan" +RTS -M2G -RTS
 jq '[.bindings[] | .root as $root | .entries[] | select(.disposition != "Retain") | {root: $root, path, size, disposition}]' "$plan"
 # Apply only after reviewing the selected files and confirming the consumers are idle.
-devenv shell -- bazel run //build-support:storage-maintenance -- apply --plan "$plan"
+devenv shell -- host-build run --jobs=2 //build-support:storage-maintenance -- apply --plan "$plan" +RTS -M2G -RTS
 ```
 
 Repeat `--cargo-target` for additional explicit roots. Roots require Cargo markers, profile locks, `deps` and `.fingerprint` structures; selected compiler files require validated fingerprints. Symlinked roots, symlinks within a root, protected root paths and overlapping roots are refused. A Cargo root may contain preserved source and Git trees. No command recursively deletes a target, worktree or research directory. `private-data`, `.git` and the Nix store cannot be managed roots.
 
 Both `activeUsers` and `uninspectableUsers` must be empty before deletion. Checks cover working directories, executables, mapped files, open descriptors and `CARGO_TARGET_DIR` values. Ordinary invocations inspect the target owner's processes; privileged invocations inspect all visible userspace processes. Inaccessible processes make apply refuse without removing files; inventory still reports them. Request an explicitly authorized privileged host inspection when ordinary permissions are insufficient. Do not run Bazel as root or hide existing consumers in a PID namespace to bypass the check. The isolated test process creates every root it manages.
 
-All present `.cargo-lock`, `.cargo-build-lock` and `.cargo-artifact-lock` guards are acquired exclusively. Lock-interoperability tests hold each guard outside the maintenance probe's PID namespace, so a process-activity refusal cannot mask the wrong lock domain. These namespace probes manage fresh synthetic fixtures only. Maintenance is for host-local target trees, not remote/shared build caches.
+Planning and apply acquire all present `.cargo-lock`, `.cargo-build-lock` and `.cargo-artifact-lock` guards exclusively and refuse a held guard. A planning refusal publishes no plan. Planning holds the guards for the content snapshot, so new Cargo builds wait until it finishes. Lock-interoperability tests hold each guard outside the maintenance probe's PID namespace, so a process-activity refusal cannot mask the wrong lock domain. These namespace probes manage fresh synthetic fixtures only. Maintenance is for host-local target trees, not remote/shared build caches.
 
 Apply writes `PLAN.audit.json` with its phase, exact removals, protected-file verification and measured available-space changes. `Applying` or `Interrupted` is not a completed cleanup; inspect the named paths before proceeding. Changed plans, files, owners, inventories or active consumers require a new review. `recognizedBytes` is a logical size, not a promised physical saving on reflinked filesystems, and the measured filesystem delta includes concurrent activity.
+
+The shared Bazel action cache keeps its `.bazelrc` 20 GiB/14-day policy. `host-build` runs in batch mode, which does not execute Bazel's idle GC tasks. The checked-in [user service](systemd/latent-image-cache-gc.service) and [daily timer](systemd/latent-image-cache-gc.timer) start a separate non-batch server in `~/.cache/bazel/latent-image-gc`, run `build --nobuild //build-support:host`, and retain the service through the server's idle window. The service is capped at 2 GiB with no swap. No separate collector is built.
+
+The units assume this checkout is at `~/Code/latent-image` and devenv is installed at `~/.nix-profile/bin/devenv`. Override `WorkingDirectory` or `ExecStart` with a user drop-in for other locations. Install from the checkout root:
+
+```sh
+mkdir -p "$HOME/.config/systemd/user"
+ln -s "$PWD/build-support/systemd/latent-image-cache-gc.service" "$HOME/.config/systemd/user/"
+ln -s "$PWD/build-support/systemd/latent-image-cache-gc.timer" "$HOME/.config/systemd/user/"
+systemctl --user daemon-reload
+systemctl --user enable --now latent-image-cache-gc.timer
+systemctl --user start latent-image-cache-gc.service
+```
+
+Inspect `systemctl --user status latent-image-cache-gc.timer` for the next run and `journalctl --user -u latent-image-cache-gc.service` for failures. This collects only Bazel's configured disk cache; it does not prune output bases, Cargo targets, Nix staging or research data. The policy is not a hard filesystem quota, and the cache can exceed its target between collections.
 
 Emulator-slot admission, new `verify-candidate` executions and native suite/case output creation require 100 GiB available on the output filesystem. `XM1_STORAGE_MIN_FREE` accepts a positive byte count with optional `K`, `M`, `G`, `T` or `KiB`/`MiB`/`GiB`/`TiB` suffix. A generic `//emulation:emulator-slot` wrapper checks the current workspace's `private-data` filesystem, or its working directory when none exists; set `XM1_STORAGE_PATH` to the actual output location when it differs. Offline receipt judging and help remain available below the reserve. This is admission control, not a quota or a monitor that terminates existing runs, and it does not cap another project's Cargo output.
 

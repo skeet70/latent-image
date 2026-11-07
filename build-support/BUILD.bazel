@@ -62,6 +62,7 @@ haskell_binary(
         "-Wall",
         "-Werror",
         "-O2",
+        "-rtsopts",
     ],
     visibility = ["//visibility:public"],
     deps = [
