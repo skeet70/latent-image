@@ -191,6 +191,7 @@ haskell_library(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         "//emulation:case-sha256",
+        "//emulation:fujimod-paths",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -211,8 +212,6 @@ haskell_binary(
     srcs = ["QualifyMain.hs"],
     main_file = "QualifyMain.hs",
     args = [
-        "--runner",
-        "$(rootpath //emulation:native-runner)",
         "--emulator-slot",
         "$(rootpath //emulation:emulator-slot)",
         "--oracle",
@@ -244,7 +243,6 @@ haskell_binary(
         ":property-service-image.bin",
         ":property-service-image.symbols",
         ":stage-property-service",
-        "//emulation:native-runner",
         "//emulation:emulator-slot",
         "//host/firmware:rebuild-update",
         "//lz:fflzd",
@@ -287,8 +285,6 @@ haskell_binary(
     srcs = ["OracleMain.hs"],
     main_file = "OracleMain.hs",
     args = [
-        "--runner",
-        "$(rootpath //emulation:native-runner)",
         "--linked",
         "$(rootpath :property-service-image.bin)",
         "--symbols",
@@ -306,7 +302,6 @@ haskell_binary(
     data = [
         ":property-service-image.bin",
         ":property-service-image.symbols",
-        "//emulation:native-runner",
     ] + [
         ":property-service-defect-%s.%s" % (defect.replace("_", "-"), suffix)
         for defect in _DEFECTS
@@ -318,6 +313,7 @@ haskell_binary(
         ":property-oracle-lib",
         ":property-service-artifact",
         "//emulation:cached-native-batch",
+        "//emulation:fujimod-paths",
         "//emulation:case-sha256",
         "//emulation:native-observation",
         "//emulation:owned-case",

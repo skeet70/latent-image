@@ -37,6 +37,7 @@ import qualified Data.Text as T
 import Emulation.Sha256 (sha256, sha256Hex, sha256File)
 import FujiAF.Host (failH, readRegular, runBounded)
 import FujiAF.JSON (encodeCanonical)
+import FujiModPaths (fujimodNativeCase)
 import Numeric (readHex, showHex)
 import PropertyFields (PropertyId (..))
 import System.Directory
@@ -112,7 +113,7 @@ defaultOptions =
     , optOut = ""
     , optCache = ""
     , optIds = Nothing
-    , optRunner = ""
+    , optRunner = fujimodNativeCase
     , optSlot = ""
     , optOracle = ""
     , optStage = ""

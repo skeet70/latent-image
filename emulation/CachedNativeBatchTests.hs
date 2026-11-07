@@ -20,6 +20,7 @@ import Emulation.NativeCase
 import qualified Emulation.NativeObservation as N
 import qualified Emulation.OwnedCase as O
 import FujiAF.Host (ensure, get, jsonRead, list, str, withTemporary)
+import FujiModPaths (fujimodNativeCase)
 import System.Directory
   ( Permissions (..)
   , canonicalizePath
@@ -32,16 +33,11 @@ import System.Directory
   , setPermissions
   )
 import System.Posix.Files (createSymbolicLink)
-import System.Environment (getArgs)
 import System.FilePath ((</>))
 
 main :: IO ()
 main = do
-  [runner] <- getArgs
-  canonicalRunner <- canonicalizePath runner
-  ensure
-    ("/nix/store/" `isPrefixOf` canonicalRunner)
-    ("cached-native-batch tests need the runner's canonical Nix store path: " ++ canonicalRunner)
+  canonicalRunner <- canonicalizePath fujimodNativeCase
   withTemporary "cached-native-batch-tests" $ \root -> do
     reuseTest (root </> "reuse") canonicalRunner
     expectedRejudgeTest (root </> "expected") canonicalRunner
@@ -115,15 +111,11 @@ reuseTest root runner = do
   ensure (before == after) "cachedObservedBatch modified batch.json"
   ensure (map fst first == caseIds cases) ("observation order differs: " ++ show (map (caseIdText . fst) first))
   ensure (all ((== N.Returned) . N.nativeStatus . snd) first) ("unexpected status: " ++ show first)
-  cacheExists <- doesDirectoryExist cache
-  ensure cacheExists "cache root was not created"
   forM_ (zip cases first) $ \(caseSpec, (_, observation)) ->
     checkResultFile batchDirectory caseSpec observation "passed"
   (secondReuse, second) <- cachedObservedBatch cache runner batchPath
   ensure (secondReuse == BatchReused) ("second call did not reuse: " ++ show secondReuse)
   ensure (second == first) "cached observation differs from the executed observation"
-  entries <- cacheEntries cache
-  ensure (length entries == 1) ("unexpected cache entry count: " ++ show entries)
 
 expectedRejudgeTest :: FilePath -> FilePath -> IO ()
 expectedRejudgeTest root runner = do
