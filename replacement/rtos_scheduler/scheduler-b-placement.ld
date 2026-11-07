@@ -54,7 +54,7 @@ SECTIONS {
   .prepare : {
     KEEP(*(.text.prepare))
     __prepare_branch_end = .;
-    KEEP(*(.text.unlikely._RNvNtCsjw6Ar5Xz5I4_4core9panicking9panic_fmt))
+    *(.text.*panicking9panic_fmt)
     . = ORIGIN(prepare) + LENGTH(prepare);
   } > prepare =0xf000f0e7
   .notify : {
@@ -70,7 +70,7 @@ SECTIONS {
   .rotate : {
     KEEP(*(.text.rotate))
     __rotate_body_end = .;
-    KEEP(*(.text._RNvCshfJ12k0ydlO_7___rustc17rust_begin_unwind))
+    *(.text.*___rustc17rust_begin_unwind)
     . = ORIGIN(rotate) + LENGTH(rotate);
   } > rotate =0xf000f0e7
 }
