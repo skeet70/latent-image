@@ -1,12 +1,14 @@
 # FILMSIM prefix widening: descriptor-aware ownership of the widened decode window (1.50)
 
 Host-only ownership test of the window between the retained table content and the accepted decode prefix, run so that a combined film-simulation and recipe image (RC0 plus D3) has a home or is known not to. No camera was touched; every input is a pinned host artifact.
+
 Evidence labels: **byte-read** for a direct read of a pinned artifact in this pass, **inherited** for a named record reused without re-derivation, **hardware-observed** for captured camera state, **static-inference** for a conclusion drawn from those bytes, **unproved** for a named missing fact.
 
 ## 1. The window and the corrected floor
 
-**Byte-read, correction.** The retained table content ends at RAM `0x0061c1fb`, so the free window is `[0x0061c1fc, 0x0061c400)`, 516 bytes (`0x204`). The reported floor `0x0061c244` (E-RECIPE-REACH-150, [the reach report](named-recipe-reach.md) section 3) is `0x48` too high, the payload-versus-media offset of the export it was read from.
+**Byte-read, correction.** The retained table content ends at RAM `0x0061c1fb`, so the free window is `[0x0061c1fc,0x0061c400)`, 516 bytes (`0x204`). The reported floor `0x0061c244` (E-RECIPE-REACH-150, [the reach report](named-recipe-reach.md) section 3) is `0x48` too high, the payload-versus-media offset of the export it was read from.
 The reading: `payload-complement.bin` maps RAM `0x0061c000` at file offset `0x140048`, and payload = media + `0x48`; the reach report's `od -j 0x140200` command therefore shows the terminator's *file* offset `0x140240`, whose RAM address is `0x0061c1f8`, not `0x0061c244`. The reach census itself prints the RAM addresses correctly (`ALIGNED_PAIR 0061c1a4 raw=4061c1b0,01100000` for the extent descriptor at RAM `0x0061c1a4`), and FILMSIM-PATCH-01 section 5.3 already records the last plain-extent terminator at `0x0061c1f8`.
+
 The table structures over RAM `0x0061c000`-`0x0061c1fb`: header words at `0x0061c000`-`0x0061c00f`; eight 9-word segment records `0x0061c040`-`0x0061c15f`; the `0xffffffff` segment terminator at `0x0061c160`; the `0x1234` marker at `0x0061c184`; the extent descriptor `{0x4061c1b0, 0x01100000, 0x00360000}` at `0x0061c1a4`; three 6-word extent entries from `0x0061c1b0` (the last resource word `0x47` at `0x0061c1f4`); the `0xffffffff` extent terminator at `0x0061c1f8`. Nothing follows it.
 
 | Reading | Artifact and range | Result |
@@ -24,7 +26,7 @@ The test is the accepted prefix's test: a candidate is rejected if any shipped b
 
 | Descriptor family and source | Fields | Span | Covers `[0x61c1fc,0x61c400)`? |
 | --- | --- | --- | --- |
-| Boot table-block copy, boot record 0 `0x1f5c` -> `0x1dc4` -> `0x218c`: media `0x140000` -> RAM `0x0061c000`, one 128 KiB unit | src `0x140000`, dst `0x61c000`, 1 | `[0x61c000,0x63c000)` | **Yes**, as a writer; the single mapped copy of the block, ordered before the image-4 decode (section 4) |
+| Boot table-block copy, boot record 0 `0x1f5c` -> `0x1dc4` -> `0x218c`: media `0x140000` -> RAM `0x0061c000`, one 128 KiB unit | src `0x140000`, dst `0x61c000`, 1 | `[0x61c000,0x63c000)` | **Yes**, as a writer; the single mapped copy of the block, ordered before the image-4 decode (section 5.1) |
 | Segment record 0, RAM `0x61c040` / media `0x140040` | load `0x40000`, size `0xdae0`; flash `0x80000`/`0x20000` | `[0x40000,0x4dae0)`; `[0x80000,0xa0000)` | No |
 | Segment record 1 | load `0xd0000`, size `0xdaa0`; flash `0xa0000`/`0x20000` | `[0xd0000,0xddaa0)`; `[0xa0000,0xc0000)` | No |
 | Segment record 2 | load `0x130000`, size `0x24bac8`; flash `0xca0000`/`0x260000` | `[0x130000,0x37bac8)`; `[0xca0000,0xf00000)` | No |
@@ -42,18 +44,18 @@ The test is the accepted prefix's test: a candidate is rejected if any shipped b
 | Restore lists, raw `0x24a027c`/`0x24a0404` | `(offset,length)` pairs into the `0x42000`-byte adjustment cache | adjustment-cache offsets, not this RAM space | No |
 | Image loads on the boot path: ids 0, 1 to `0x40000`/`0xd0000`; image 4 to `0x4061c400`; image 5 to `0x40bf1a00`; plain image to `0x41100000` and sub-extents `0x11c0000`/`0x11e0000`; language blocks to `0x39c000`/`0x5bc000` | load/size as above | none reaches `0x61c1fc`-`0x61c400` | No |
 
-No consumer-bound descriptor covers the window. The boot table-block copy does, and it is the reason the region is reachable rather than free: the copy is the block's only mapped writer and it completes before the image-4 decode, which the prefix decode joins (section 4).
+No consumer-bound descriptor covers the window. The boot table-block copy does, and it is the reason the region is reachable rather than free: the copy is the block's only mapped writer and it completes before the image-4 decode, which the prefix decode joins (section 5.1).
 
 ## 3. Raw pair census and the six pairs anchored in the table block
 
-**Byte-read** of the new census `private-data/analysis/x-m1-1.50/filmsim/patch-01/widened-window-coverage.txt` (all eleven of the accepted run's inputs, extended to the corrected window; the tool is `window-coverage.c` beside it).
-1,401,242 raw pair interpretations across the eleven inputs intersect `[0x61c1fc,0x61c400)` under the `{base,size}` or `{base,end}` reading (the per-input `pairs=` counts); 321,050 of them are resource-shaped (base at least `0x10000`, span end at most `0x2000000`) and cover it, and 3,005 `ANCHORED_PAIR` lines have a base in the block's neighbourhood `[0x600000,0x640000)`. A raw pair is a lead, not ownership evidence; the six anchored pairs whose base lies inside the table block `[0x61c000,0x61c400)` are the set to classify, and here they are with verdicts:
+**Byte-read** of the census `private-data/analysis/x-m1-1.50/filmsim/patch-01/widened-window-coverage.txt` (all eleven of the accepted run's inputs, extended to the corrected window; tool `window-coverage.c` beside it).
+1,401,242 raw pair interpretations across the eleven inputs intersect `[0x61c1fc,0x61c400)` under the `{base,size}` or `{base,end}` reading (the per-input `pairs=` counts); 321,050 are resource-shaped (base at least `0x10000`, span end at most `0x2000000`) and cover it, and 3,005 `ANCHORED_PAIR` lines have a base in the block's neighbourhood `[0x600000,0x640000)`. A raw pair is a lead, not ownership evidence; the six anchored pairs whose base lies inside the table block `[0x61c000,0x61c400)` are the set to classify:
 
 | Pair site | Raw words | Span reading | Verdict |
 | --- | --- | --- | --- |
 | id4 RAM `0x0082d5f2` (file `0x2111f2`) | `0x0061c352`, `0x0000da00` | `[0x61c352,0x629d52)` | unaligned straddle of the instructions `cmpgt r2,#0` at `0x82d5f0` and `ble` at `0x82d5f4`; no reference |
 | id5 RAM `0x00f4ba7e` (file `0x35a07e`) | `0x0061c3a0`, `0x8830da00` | `[0x61c3a0,0xe9929a9e)` | unaligned straddle of `movgt r0,#0` at `0xf4ba7c` and `ble` at `0xf4ba80`; no reference |
-| id5 RAM `0x0101808b` (file `0x4d668b`) | `0x0061c200`, `0x0061c800` | `[0x61c200,0xc38a00)` | unaligned straddle of two entries of the ascending offset table around `0x01018060` (aligned words `0x000061bd`/`0x000061c2`/`0x000061c8`, values in the `0x5cc8`-`0x6707` range); no reference. The only new hit the widening finds (section 5.2) |
+| id5 RAM `0x0101808b` (file `0x4d668b`) | `0x0061c200`, `0x0061c800` | `[0x61c200,0xc38a00)` | unaligned straddle of two entries of the ascending offset table around `0x01018060` (aligned words `0x000061bd`/`0x000061c2`/`0x000061c8`, values in the `0x5cc8`-`0x6707` range); no reference. The only new hit the widening finds (section 4) |
 | id5 RAM `0x010c94f1` (file `0x4d7af1`) | `0x0061c055`, `0xad871f7c` | `[0x61c055,0xae48dfd1)` | unaligned straddle inside a high-entropy data region (aligned words `0x61c055ab`, `0x871f7c00`); no reference |
 | payload RAM `0x0061c000`, aligned | `0x4061c040`, `0x4061c1a4` | size reading `[0x61c040,0x40c381e4)` | the two header pointers (table base, extent-list head); consumers read them as pointers (`0x6571a0` returns `[0x61c004]`), never as a size; consumer-excluded |
 | payload RAM `0x0061c1a4`, aligned | `0x4061c1b0`, `0x01100000` | end reading `[0x61c1b0,0x1100000)` | the extent descriptor's pointer and plain-image destination; `0x6a9890` reads `[+4]` as the destination, so the second word is not a size or end; consumer-excluded |
@@ -76,7 +78,8 @@ The third hit is the widening's only new reference finding, and the first two ma
 
 **Byte-read and static-inference.** The boot record at flash `0x40000` copies the table block with a single call chain: `0x1f5c bl 0x1dc4` -> `0x1dcc`/`0x1dd4` form the source `0x140000` and destination `0x0061c000` with one `mov r2,#1` unit -> `0x1de0 bl 0x218c` -> `0x213c`. The boot's block addressing converts an address to a 128 KiB unit with `lsr r0,#17` and advances a multi-unit copy by `#131072` (`0x21b8`-`0x2244`), so one requested block covers `[0x61c000,0x63c000)`, including the whole window.
 No other mapped artifact copies into the block: `bl 0x1dc4` appears once in `boot-40048.dis` and nowhere in `boot-50048.dis`, `loader-40000.dis` or `loader-d0000.dis`; the only other formations of `0x0061c000`/`0x0061c400` in the pinned images are reads (boot `0x1f60`-`0x1f78`, `0x1f9c`-`0x1fac`, `0x1dac`, `0x417c`; second boot record `0x1fa4`, `0x357c`; image 4's accessor family rooted at `FUN_006570f4`, which returns `0x0061c000` for the read-only getters `FUN_00657114`/`FUN_006571a0`/`FUN_00657184`/`FUN_006571bc`).
-The kernel-level order is fixed by the boot's own sequence: `0x1f5c` copies the block, `0x1f60`-`0x1f78` publish the skip-list count at `0x61c188`, `0x1f7c` checks the trailer (`0x1cc0` returns 1 only on the halt path, so the good path continues at `0x1fb4`), and `0x1fc8` calls `FUN_00001d08`, whose only image-4 call site is `0x1d5c bl 0x2250`. The copy therefore precedes the image-4 decompression to `0x4061c400` in every path, and the prefix decode writes last inside that order, exactly as the accepted prefix does.
+
+The kernel-level order is fixed by the boot's own sequence: `0x1f5c` copies the block, `0x1f60`-`0x1f78` publish the skip-list count at `0x61c188`, `0x1f7c` checks the trailer (`0x1cc0` returns 1 only on the halt path, so the good path continues at `0x1fb4`), and `0x1fc8` calls `FUN_00001d08`, whose only image-4 call site is `0x1d5c bl 0x2250`. The copy therefore precedes the image-4 decompression to `0x4061c400` in every path, and the prefix decode writes last inside that order, as the accepted prefix does.
 
 ### 5.2 Observed runtime writes inside the block
 
@@ -88,14 +91,12 @@ The accepted window's falsifier extends unchanged to the larger region: a later 
 
 ### 5.4 The historical software request-path trace
 
-**Emulated, recovered historical observation.** `//emulation:load-window-cases` emits six cases. The 2026-10-09 refused run remains in `private-data/analysis/x-m1-1.50/native-case/load-window/`: `load-window-copy` stopped as `unsupported_instruction` at `bfi r3,r2,#12,#2`, PC `0x2b5c`, after 302 instructions and 142 provenance records (result SHA-256 `ed014a813d7a076dab1b6d5ea84dbcfe3024e092682977549a71cfe6a871169a`). No historical receipt is replaced.
-
-The recovered held receipt in `private-data/analysis/x-m1-1.50/native-case/load-window-complete/` records the later sentinel return below. The directory name does not establish copy success. These are retained observations, not runs performed for this correction; the current source expectations now require the observed error-valued return as well as the request stores.
+**Emulated, recovered historical observation.** `//emulation:load-window-cases` emits six cases; the held receipt is in `private-data/analysis/x-m1-1.50/native-case/load-window-complete/`, and the directory name does not establish copy success. These are retained observations, not runs performed for this correction; the current source expectations require the observed error-valued return as well as the request stores.
 
 | Case | Executed | Result (emulated) |
 | --- | --- | --- |
 | `load-init-storage` | stock storage initialization `FUN_0000325c` with its closure | `returned`, 223 instructions, 123 provenance records; writes confined to RAM `0x42xx`-`0x4axx` and the declared controller windows; none in the table block |
-| `load-window-copy` | the table-block request chain `0x1dc4` -> `0x218c` -> `0x213c` -> `0x30d8` -> `0x35c4` -> `0x2fc8`/`0x3408` -> `0x3528` -> `0x2ab8`, started from the state `load-init-storage` produced | `returned` at sentinel `0x3c000000`, **r0 = `0xffffff01` (error-valued)**, exactly 488 instructions, 241 provenance records and 128 writes; none in `[0x61c000,0x61c400)` |
+| `load-window-copy` | the table-block request chain `0x1dc4` -> `0x218c` -> `0x213c` -> `0x30d8` -> `0x35c4` -> `0x2fc8`/`0x3408` -> `0x3528` -> `0x2ab8`, started from the state `load-init-storage` produced | `returned` at sentinel `0x3c000000`, **r0 = `0xffffff01` (error-valued)**, 488 instructions, 241 provenance records and 128 writes; none in `[0x61c000,0x61c400)` |
 | `load-segment-walk-0/1/4` | stock segment-record walk `FUN_00004174` over the installed container's table block, read through `0x4061c000` | `returned` `0x4061c040`, `0x4061c064`, `0x4061c0d0`; stack frame only, no write in the block |
 | `load-segment-walk-9` | the same walk for an absent id | `returned` `0`, after the `0xffffffff` terminator at `0x61c160`; no write in the block |
 
@@ -147,7 +148,7 @@ The stock plain bytes supply finite constructor seeds: one target at the first e
 
 - **LZ:** the segment-5 loader supplies decoded base `0x40bf1a00` to `FUN_006ae360`; `0x43e40000` is compressed staging. The decoded-destination store is at `0xfff43048`. A running decoded offset is added to the base; a nonnegative unsigned offset does not prove nonwrapping addition. Its actual stream/offset bound and the ordinary submitter set remain unproved.
 - **SD:** the second argument of `FUN_006f3268` reaches the RAM-base store at `0xfff50000` through thin wrappers. The decompiler's zero-argument wrapper does not erase that A32 register flow. The 32-bit store at `0xfff5000c` is command/control submission, not a RAM destination. Native halfword stores at `+8`/`+0xa` and combined 32-bit `+0xc` submission are not qualified by the early ROM model's narrower width grammar. Section 5.7 binds the six direct setup callers and selected scratch origins, but not the generic bulk-buffer capacity or native transfer extent.
-- **Media and fill:** the media RAM destination is `0xfff528a4`; `0xfff52020`/`0xfff52024` are NAND column/row. The prefix address fits 24 bits and has bit 30 clear, so neither property excludes it. Section 5.7 identifies the actual later-runtime media programmer and its selected buffer origins. The fill destination writer remains unresolved.
+- **Media and fill:** the media RAM destination is `0xfff528a4`; `0xfff52020`/`0xfff52024` are NAND column/row. The prefix address fits 24 bits and has bit 30 clear, so neither property excludes it. Section 5.7 identifies the later-runtime media programmer and its selected buffer origins. The fill destination writer remains unresolved.
 
 Evidence `E-PREFIX-RUNTIME-DMA-BOUNDS-150` retains these cuts' source identities and independent byte checks, and the section 5.7 bounds. No ordinary reachable post-decode prefix overwrite was established, and #43 remains open. The remaining host task is to bind ordinary CPU/device writer reachability, destination ownership, maximum lengths, nonwrapping arithmetic and initialization/lifecycle state. A source-bound ordinary runtime overwrite after the prefix becomes live would be a valid negative placement result for #17; an arbitrary service RAM write, reinstall or reboot is not substituted for that counterexample. No camera or SD-card input is needed for these source cuts.
 
@@ -170,9 +171,9 @@ The actual media programmer is `0x6eeb04`: it stores descriptor words 2 and 3 to
 
 There is a concrete runtime/model boundary: `0x6f1440` submits a **`0x100000`-byte DMA remaining budget**, independently of its at-most-`0x20000` per-block payload progression. For a full profile-3 block, the software sector count is 256, but `0x6f160c` truncates it to a byte before `0x6dde18` programs NAND setup. The resulting setup is `0x00300000`, not `0x00300100`. The early recovery model's positive nine-bit count grammar does not qualify that native zero-count encoding. Start, stop and close calls are present, but the native zero-count meaning and active-DMA stop/reprogram extent remain unqualified. Neither a one-MiB overwrite nor whole-transfer disjointness follows from these source constants.
 
-The explicit CPU auxiliary effects are separate. The selected bad-block/spare call passes fixed `0x96ca54` to `0x6f1aa8`, whose four word stores cover `[0x96ca54,0x96ca64)`. The receive PIO branch copies exactly 512 bytes from the controller aperture to scratch `[0x96ca64,0x96cc64)`, then 512 bytes from that scratch to the current caller buffer. The fixed scratch intervals do not wrap or reach the prefix; the final payload copy retains the caller-buffer obligation. Four alternate page-read callers use initialized scratch `0x940280` or `0x96bfc0`; the other three (`0x6fcaa0`, `0x6fce40`, `0x6fed00`) retain request-descriptor word 2 as their buffer. The fixed scratch callers do not supply a prefix pointer. The generic descriptor owners and total capacity/nonwrap checks are not closed.
+The explicit CPU auxiliary effects are separate. The selected bad-block/spare call passes fixed `0x96ca54` to `0x6f1aa8`, whose four word stores cover `[0x96ca54,0x96ca64)`. The receive PIO branch copies 512 bytes from the controller aperture to scratch `[0x96ca64,0x96cc64)`, then 512 bytes from that scratch to the current caller buffer. The fixed scratch intervals do not wrap or reach the prefix; the final payload copy retains the caller-buffer obligation. Four alternate page-read callers use initialized scratch `0x940280` or `0x96bfc0`; the other three (`0x6fcaa0`, `0x6fce40`, `0x6fed00`) retain request-descriptor word 2 as their buffer. The fixed scratch callers do not supply a prefix pointer. The generic descriptor owners and total capacity/nonwrap checks are not closed.
 
-The SD setup inventory has exactly six named direct calls to `0x6f3268` in the mapped source:
+The SD setup inventory has six named direct calls to `0x6f3268` in the mapped source:
 
 | Direct caller | Actual submitted buffer | Software request |
 |---|---|---|
@@ -189,7 +190,6 @@ Bulk receive reaches the sector APIs `0x6f4f04`/`0x6f4fa8` through `0x6fa278` an
 
 This selected ownership cut is complete at those explicit source boundaries. Remaining prerequisites are native media zero-count and active-DMA stop/reprogram semantics, native SD width/count/progression semantics, generic bulk-buffer capacity/nonwrap, and retained table/profile/scratch lifecycle. No ordinary source-bound post-install prefix overwrite or lifetime exclusion is established. #43 remains open; no SD input, camera operation or new controller implementation is a prerequisite for recording this result.
 
-
 ## 6. Combined prefix geometry
 
 **Static-inference** over the accepted contract (FILMSIM-PATCH-01 sections 5.1-5.3). The invariant is unchanged for every size: `load + decoded_size = 0x0089ec00` (stock bss start) and `load + segment_size = 0x0089ec28`; the segment size keeps the stock `0x28`-byte excess over the decoded size; entry 4's bss words, image 5's load, the plain image's extents, the entry point and the preserved 32-byte embedded header do not move.
@@ -202,12 +202,14 @@ D3 adds about 154 bytes on top of RC0's 192-byte prefix and reuses RC0's shared 
 | `0x0061c280` | `0x180` = 384 | `0x282980` | `0x2829a8` | 192 | 64-byte aligned with the earlier reported floor; the "about 384" shape |
 | `0x0061c1fc` | `0x204` = 516 | `0x282a04` | `0x282a2c` | 324 | the corrected floor, unaligned |
 
-Every row satisfies the bss relation: `0x61c240 + 0x2829c0 = 0x61c244 + 0x2829bc = 0x61c280 + 0x282980 = 0x61c1fc + 0x282a04 = 0x0089ec00`, the stock bss start, and every segment end lands on the stock `0x0089ec28`. The recorded values to propagate on a build are the two table words (load and size), trailer words 5/6, record header words 0-2 and the main checksum, exactly the accepted chain.
-D3's data need is about 100-140 bytes (two arrays grown by 48, two 6-byte parameter records, and a 40-80-byte hook body), which fits the 192-byte-or-more lower section of every row, with the two names still in place in image 2. The row to build is a choice for the design, not a constraint from ownership: `0x0061c240` if the 64-byte base convention is kept, `0x0061c1fc` if it is not.
+Every row satisfies the bss relation: `0x61c240 + 0x2829c0 = 0x61c244 + 0x2829bc = 0x61c280 + 0x282980 = 0x61c1fc + 0x282a04 = 0x0089ec00`, the stock bss start, and every segment end lands on the stock `0x0089ec28`. The recorded values to propagate on a build are the two table words (load and size), trailer words 5/6, record header words 0-2 and the main checksum, the accepted chain.
+
+D3's data need is about 100-140 bytes (two arrays grown by 48, two 6-byte parameter records, and a 40-80-byte hook body), which fits the 192-byte-or-more lower section of every row, with the two names still in place in image 2. The row to build is a design choice, not a constraint from ownership: `0x0061c240` if the 64-byte base convention is kept, `0x0061c1fc` if it is not.
 
 ## 7. Verdict
 
 The widened window is **accepted by the same descriptor-aware test the 192-byte prefix passed**, with the floor corrected to `0x0061c1fc`. No consumer-bound descriptor covers it, no aligned literal or formed constant names it, no confirmed reference points into it, the observed application writes inside the block stop below the floor, and the region is zero in the shipped container, in the payload export and in three boots of captured RAM. The boundary is the terminator word at `0x61c1f8`: everything below is retained table content. The successful stock/RC0 early-load audits observe the table transfer before decode and RC0's expected decode-prefix write, including the table transfer's value-identical prefix overlap, with no additional overlapping writer through original close. Absence of an indirect or later runtime-issued writer remains unproved for both the accepted prefix and added bytes.
+
 This is not installation authorization for the widened window: the 2026-10-09 install used the accepted 192-byte prefix at `0x0061c340` (E-FILMSIM-INSTALL-150), and any use of `[0x0061c1fc,0x0061c400)` beyond it is a separate decision. The arrays being live in an ordinary menu narrows effective-overwrite concerns on that observed boot path only; it does not exclude a value-identical write or a write between observations.
 
 ## 8. Reproduction
