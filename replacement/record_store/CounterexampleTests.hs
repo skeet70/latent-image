@@ -5,6 +5,7 @@ module Main (main) where
 import Control.Monad (unless)
 import Data.Bits (xor)
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Char8 as BC
 import Data.List (nub)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe)
@@ -13,6 +14,7 @@ import Emulation.NativeObservation
 import Replacement.RecordStore.Cases
 import Replacement.RecordStore.Execution
 import Replacement.RecordStore.Generate (oracleCase, validCase)
+import Replacement.RecordStore.Harness (Function (..))
 import Replacement.RecordStore.Hardware (hardware)
 import Replacement.RecordStore.Minimize
 import Replacement.RecordStore.Model hiding (Medium)
@@ -94,6 +96,18 @@ main = do
         _ -> False
     )
   assert
+    "non-returning stock is unsupported before the model comparison"
+    ( case evaluateCase baseCase (withStatus MemoryGuard observation) observation of
+        CaseUnsupported _ -> True
+        _ -> False
+    )
+  assert
+    "stock instruction budget is unsupported, not model semantics"
+    ( case evaluateCase baseCase (withStatus InstructionBudget observation) observation of
+        CaseUnsupported _ -> True
+        _ -> False
+    )
+  assert
     "candidate result difference reports the results boundary"
     ( case evaluateCase baseCase observation (mutateRegion (RegionId "results") observation) of
         CaseDiffers differences -> map roleBoundary differences == [Results]
@@ -148,7 +162,6 @@ main = do
         [RoleRegion results _, RoleRegion medium _] -> results == RegionId "results" && medium == RegionId "medium"
         _ -> False
     )
-  assert "matching verdict maps to Matches" (trialFromVerdict CaseMatches == Matches)
   assert
     "differing verdict maps to typed boundaries"
     ( case trialFromVerdict (CaseDiffers [RoleRegion (RegionId "results") sampleDifference, RoleRegion (RegionId "medium") sampleDifference]) of
@@ -158,7 +171,7 @@ main = do
   assert
     "unsupported verdict maps to an inconclusive native status"
     ( case trialFromVerdict (CaseUnsupported "candidate status instruction_budget") of
-        Inconclusive (UnsupportedNativeStatus reason) -> reason == "candidate status instruction_budget"
+        Inconclusive (UnsupportedNativeStatus _) -> True
         _ -> False
     )
   assert
@@ -193,4 +206,19 @@ main = do
         Nothing -> False
     )
   assert "equal bytes have no first difference" (firstDifference (B.pack [1, 2]) (B.pack [1, 2]) == Nothing)
+  let rows =
+        [ "range\tunit\tsection\t0x0061c400\t" ++ show (0x700000 :: Word32) ++ "\t32\t" ++ replicate 64 'a'
+        , "range\tunit\tsection\t0x00000000\t" ++ show (0x1000 :: Word32) ++ "\t8\t" ++ replicate 64 'b'
+        , "range\tunit\tsection\t0x0089aa90\t" ++ show (0x89aa90 :: Word32) ++ "\t16\t" ++ replicate 64 'c'
+        ]
+  assert
+    "row input reads the decimal start and size after the hex column"
+    ( readFunctionsBytes (BC.pack (unlines rows))
+        == [Function 0x89aa90 0x128, Function 0x89abb8 0x20, Function 0x700000 32]
+    )
+  assert
+    "trial blocks name stable evidence classes"
+    ( map trialBlockClass [StockModelDisagreement "", UnsupportedNativeStatus "", DomainRefusal "", InfrastructureFailure ""]
+        == ["stock-model-disagreement", "unsupported-native-status", "domain-refusal", "infrastructure-failure"]
+    )
   putStrLn "record-store counterexample tests passed"

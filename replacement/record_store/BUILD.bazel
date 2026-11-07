@@ -187,6 +187,7 @@ haskell_library(
         ":generate",
         ":minimize",
         ":oracle-lib",
+        "//emulation:cached-native-batch",
         "//emulation:case-sha256",
         "//emulation:native-adapter",
         "//emulation:native-observation",
@@ -205,10 +206,6 @@ haskell_binary(
     name = "counterexample-loop",
     srcs = ["CounterexampleMain.hs"],
     main_file = "CounterexampleMain.hs",
-    args = [
-        "--candidate", "$(rootpath //replacement/record_store_carrier:record-store-image.bin)",
-        "--symbols", "$(rootpath //replacement/record_store_carrier:record-store-image.symbols)",
-    ],
     data = [
         "//replacement/record_store_carrier:record-store-image.bin",
         "//replacement/record_store_carrier:record-store-image.symbols",
@@ -219,7 +216,9 @@ haskell_binary(
         ":generate",
         ":minimize",
         ":oracle-lib",
+        "//emulation:cached-native-batch",
         "//emulation:case-sha256",
+        "//emulation:emulator-slot-lib",
         "//emulation:fujimod-paths",
         "//emulation:native-observation",
         "//emulation:owned-case",
@@ -230,6 +229,7 @@ haskell_binary(
         "//host:directory",
         "//host:filepath",
         "//host:json",
+        "//host:unix",
     ],
 )
 
@@ -269,6 +269,7 @@ haskell_test(
     name = "counterexample-tests",
     srcs = ["CounterexampleTests.hs"],
     main_file = "CounterexampleTests.hs",
+    data = [":counterexample-loop"],
     ghcopts = ["-XGHC2021", "-Wall", "-O2"],
     deps = [
         ":execution",

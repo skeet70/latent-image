@@ -12,10 +12,12 @@ module Replacement.RecordStore.Execution
   , loadStockInputs
   , pinned
   , readFunctions
+  , readFunctionsBytes
     -- * Case construction
   , patchStubs
   , candidateSpec
   , symbolFunctions
+  , parseSymbolFunctions
     -- * Typed comparison
   , RegionDifference (..)
   , ModelDifference (..)
@@ -36,36 +38,42 @@ module Replacement.RecordStore.Execution
     -- * Native pair execution
   , PairOutcome (..)
   , runCasePair
+  , trySync
   , TrialRunner (..)
   , mkTrial
+  , trialBlockClass
+  , trialBlockText
     -- * Observation cache
   , cachedCaseInputs
   , cachedObserved
   , executionInput
   ) where
 
-import Control.Exception (SomeException, displayException, try)
+import Control.Exception (AsyncException, SomeException, displayException, fromException, throwIO, try)
 import Control.Monad (unless)
 import Data.Aeson (Value (..), eitherDecodeStrict', object, toJSON, (.=))
 import qualified Data.Aeson.KeyMap as K
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Char8 as BC
 import Data.Char (isUpper, toLower)
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', readIORef)
 import Data.List (isPrefixOf, nub)
 import qualified Data.Map.Strict as M
-import Data.Word (Word8)
+import Data.Word (Word32, Word8)
+import Emulation.CachedNativeBatch (cachedObservedBatch)
 import Emulation.NativeCase (BatchEntry (..), Region (..), loadCase, readBatch)
 import Emulation.NativeObservation
 import Emulation.OwnedCase
 import Emulation.Sha256 (Sha256, sha256, sha256Hex)
 import FujiAF.JSON (encodeCanonical)
 import Replacement.RecordStore.CachedObservation
+import Replacement.RecordStore.CaseJson (encodeCase)
 import Replacement.RecordStore.Cases
 import Replacement.RecordStore.Generate (ValidCase, oracleCase)
 import Replacement.RecordStore.Hardware (hardware)
 import Replacement.RecordStore.Harness
 import Replacement.RecordStore.Minimize
-import Replacement.RecordStore.Model
+import Replacement.RecordStore.Model hiding (Medium)
 import System.Directory
   ( createDirectoryIfMissing
   , doesDirectoryExist
@@ -97,6 +105,7 @@ data StockInputs = StockInputs
   { stockImage :: B.ByteString
   , stockLoader :: B.ByteString
   , stockFunctions :: [Function]
+  , stockIndexBytes :: B.ByteString
   }
 
 data StockInputError
@@ -116,8 +125,8 @@ loadStockInputs paths = do
       if not indexExists
         then pure (Left (StockInputMissing (stockIndexPath paths)))
         else do
-          functions <- readFunctions (stockIndexPath paths)
-          pure (Right (StockInputs imageBytes loaderBytes functions))
+          indexBytes <- B.readFile (stockIndexPath paths)
+          pure (Right (StockInputs imageBytes loaderBytes (readFunctionsBytes indexBytes) indexBytes))
   where
     imageDigest = "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"
     loaderDigest = "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882"
@@ -138,19 +147,24 @@ pinned path expected = do
   pure bytes
 
 readFunctions :: FilePath -> IO [Function]
-readFunctions path = do
-  rows <- lines <$> readFile path
-  let parsed =
-        [ Function address size
-        | row <- rows
-        , ("range" : _ : _ : start : lengthBytes : _) <- [words row]
-        , Just address <- [readMaybe start]
-        , Just size <- [readMaybe lengthBytes]
-        , address >= 0x61c400
-        , address < 0x89ec28
-        ]
-      outside (Function address _) = address < 0x89aa90 || address >= 0x89abe0
-  pure (Function 0x89aa90 0x128 : Function 0x89abb8 0x20 : filter outside parsed)
+readFunctions path = readFunctionsBytes <$> B.readFile path
+
+-- | Decomp index row: range, unit, section, hexadecimal address, decimal address,
+-- decimal size, SHA-256.
+readFunctionsBytes :: B.ByteString -> [Function]
+readFunctionsBytes bytes =
+  Function 0x89aa90 0x128 : Function 0x89abb8 0x20 : filter outside parsed
+  where
+    parsed =
+      [ Function address size
+      | row <- BC.lines bytes
+      , ("range" : _ : _ : _ : start : lengthBytes : _) <- [words (BC.unpack row)]
+      , Just address <- [readMaybe start]
+      , Just size <- [readMaybe lengthBytes]
+      , address >= 0x61c400
+      , address < 0x89ec28
+      ]
+    outside (Function address _) = address < 0x89aa90 || address >= 0x89abe0
 
 patchStubs :: FilePath -> [CaseSpec] -> IO ()
 patchStubs directory specs =
@@ -339,8 +353,8 @@ data CaseVerdict
 
 evaluateCase :: OracleCase -> NativeObservation -> NativeObservation -> CaseVerdict
 evaluateCase c stock candidate
-  | not (null modelProblems) = CaseStockModelMismatch modelProblems
   | nativeStatus stock /= Returned = CaseUnsupported ("stock status " ++ runnerStatusLabel (nativeStatus stock))
+  | not (null modelProblems) = CaseStockModelMismatch modelProblems
   | nativeStatus candidate == MemoryGuard || nativeStatus candidate == FetchGuard =
       CaseDiffers [RoleStatus (nativeStatus stock) (nativeStatus candidate)]
   | nativeStatus candidate /= Returned = CaseUnsupported ("candidate status " ++ runnerStatusLabel (nativeStatus candidate))
@@ -367,27 +381,39 @@ data PairOutcome
 
 -- | Runs one stock case and its candidate under the same batch and returns both
 -- observations. The case ids are fixed so the pair can share one runner process.
-runCasePair :: FilePath -> FilePath -> CaseSpec -> CaseSpec -> IO PairOutcome
-runCasePair runner directory stockSpec candidateSpec0 = do
+runCasePair :: FilePath -> Maybe FilePath -> FilePath -> CaseSpec -> CaseSpec -> IO PairOutcome
+runCasePair runner cache directory stockSpec candidateSpec0 = do
   let stockCase = stockSpec {caseId = "stock"}
       candidateCase = candidateSpec0 {caseId = "candidate"}
       specs = [stockCase, candidateCase]
   outcome <-
-    try
+    trySync
       ( do
           createDirectoryIfMissing True directory
           batchPath <- writeBatch directory specs
           patchStubs directory specs
-          observed <- loadObservedBatch runner batchPath
+          observed <- case cache of
+            Nothing -> loadObservedBatch runner batchPath
+            Just root -> snd <$> cachedObservedBatch root runner batchPath
           let table = M.fromList [(caseIdText ident, observation) | (ident, observation) <- observed]
           case (M.lookup "stock" table, M.lookup "candidate" table) of
             (Just stock, Just candidate) -> pure (PairObserved stock candidate)
             _ -> pure (PairFailed "native batch did not return both roles")
       )
-      :: IO (Either SomeException PairOutcome)
   case outcome of
     Left exception -> pure (PairFailed (displayException exception))
     Right result -> pure result
+
+-- | 'try' that lets asynchronous cancellation through instead of turning it into
+-- a continued trial.
+trySync :: IO a -> IO (Either SomeException a)
+trySync action = do
+  result <- try action
+  case result of
+    Left exception -> case fromException exception :: Maybe AsyncException of
+      Just async -> throwIO async
+      Nothing -> pure (Left exception)
+    Right value -> pure (Right value)
 
 data TrialRunner = TrialRunner
   { trialRunnerPath :: FilePath
@@ -397,6 +423,7 @@ data TrialRunner = TrialRunner
   , trialRoot :: FilePath
   , trialInconclusiveRoot :: FilePath
   , trialRetained :: IORef [String]
+  , trialCache :: Maybe FilePath
   , trialCounter :: IORef Int
   }
 
@@ -409,18 +436,35 @@ mkTrial config valid = do
       c = oracleCase valid
       spec = caseSpec (stockImage (trialStockInputs config)) (stockLoader (trialStockInputs config)) (stockFunctions (trialStockInputs config)) c
       candidate = candidateSpec (trialCandidateBytes config) (trialCandidateFunctions config) spec
-  outcome <- runCasePair (trialRunnerPath config) directory spec candidate
+  outcome <- runCasePair (trialRunnerPath config) (trialCache config) directory spec candidate
   let verdict = case outcome of
         PairFailed message -> Inconclusive (InfrastructureFailure message)
         PairObserved stock candidateObservation -> trialFromVerdict (evaluateCase c stock candidateObservation)
-      caseLabel = caseName (name c)
   case verdict of
-    Inconclusive block -> retainInconclusive config directory caseLabel block
+    Inconclusive block -> do
+      createDirectoryIfMissing True directory
+      B.writeFile (directory </> "case.json") (encodeCase valid)
+      B.writeFile (directory </> "diagnostic.json") (encodeCanonical (diagnosticValue block outcome))
+      retainInconclusive config directory block
     _ -> removeDirectoryIfPresent directory
   pure verdict
 
-retainInconclusive :: TrialRunner -> FilePath -> String -> TrialBlock -> IO ()
-retainInconclusive config directory caseLabel block = do
+diagnosticValue :: TrialBlock -> PairOutcome -> Value
+diagnosticValue block outcome =
+  object
+    [ "class" .= trialBlockClass block
+    , "diagnostic" .= trialBlockText block
+    , "pair" .= case outcome of
+        PairFailed message -> object ["failure" .= message]
+        PairObserved stock candidate ->
+          object
+            [ "stock_status" .= runnerStatusLabel (nativeStatus stock)
+            , "candidate_status" .= runnerStatusLabel (nativeStatus candidate)
+            ]
+    ]
+
+retainInconclusive :: TrialRunner -> FilePath -> TrialBlock -> IO ()
+retainInconclusive config directory block = do
   retained <- readIORef (trialRetained config)
   let label = trialBlockClass block
       target = trialInconclusiveRoot config </> label
@@ -436,19 +480,19 @@ retainInconclusive config directory caseLabel block = do
           if sourceExists
             then renameDirectory directory target
             else createDirectoryIfMissing True target
-          writeFile (target </> "case-name.txt") caseLabel
-          writeFile (target </> "diagnostic.txt") (show block)
           modifyIORef' (trialRetained config) (label :)
 
 trialBlockClass :: TrialBlock -> String
-trialBlockClass block = kebab (takeWhile (/= ' ') (show block))
-  where
-    kebab [] = []
-    kebab (first : rest) = toLower first : go rest
-    go [] = []
-    go (character : rest)
-      | isUpper character = '-' : toLower character : go rest
-      | otherwise = character : go rest
+trialBlockClass (StockModelDisagreement _) = "stock-model-disagreement"
+trialBlockClass (UnsupportedNativeStatus _) = "unsupported-native-status"
+trialBlockClass (DomainRefusal _) = "domain-refusal"
+trialBlockClass (InfrastructureFailure _) = "infrastructure-failure"
+
+trialBlockText :: TrialBlock -> String
+trialBlockText (StockModelDisagreement text) = text
+trialBlockText (UnsupportedNativeStatus text) = text
+trialBlockText (DomainRefusal text) = text
+trialBlockText (InfrastructureFailure text) = text
 
 removeDirectoryIfPresent :: FilePath -> IO ()
 removeDirectoryIfPresent path = do
@@ -475,18 +519,18 @@ candidateSpec code functions spec =
       | otherwise = region
 
 symbolFunctions :: FilePath -> IO [Function]
-symbolFunctions path = do
-  rows <- lines <$> readFile path
-  pure
-    ( nub
-        [ Function (parseAddress "symbol address" ("0x" ++ address)) (parseAddress "symbol size" ("0x" ++ size))
-        | row <- rows
-        , [address, size, kind', _] <- [words row]
-        , kind' `elem` ["T", "t"]
-        , size /= "00000000"
-        , size /= "0"
-        ]
-    )
+symbolFunctions path = parseSymbolFunctions <$> B.readFile path
+
+parseSymbolFunctions :: B.ByteString -> [Function]
+parseSymbolFunctions bytes =
+  nub
+    [ Function (parseAddress "symbol address" ("0x" ++ address)) (parseAddress "symbol size" ("0x" ++ size))
+    | row <- BC.lines bytes
+    , [address, size, kind', _] <- [words (BC.unpack row)]
+    , kind' `elem` ["T", "t"]
+    , size /= "00000000"
+    , size /= "0"
+    ]
 
 cachedCaseInputs :: String -> Maybe FilePath -> IO (M.Map CaseId FilePath)
 cachedCaseInputs _ Nothing = pure M.empty
