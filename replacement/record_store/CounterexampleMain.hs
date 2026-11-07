@@ -5,7 +5,7 @@
 -- counterexample, 2 invalid/prerequisite/infrastructure/unsupported.
 module Main (main) where
 
-import Control.Exception (Exception, displayException, fromException, throwIO)
+import Control.Exception (Exception, IOException, displayException, fromException, throwIO, try)
 import Control.Monad (filterM, forM_, unless, when)
 import Data.Aeson (Value, object, (.=))
 import qualified Data.ByteString as B
@@ -21,18 +21,19 @@ import Emulation.NativeObservation (NativeObservation (..), RunnerStatus (..), r
 import Emulation.OwnedCase (CaseId, CaseSpec, loadObservedBatch, writeBatch)
 import Emulation.Sha256 (Sha256, sha256, sha256File, sha256Hex)
 import FujiAF.JSON (encodeCanonical)
+import FujiAF.StorageBudget (checkStorageBudget)
 import FujiModPaths (fujimodNativeCase)
 import Replacement.RecordStore.CaseJson (decodeCase, encodeCase)
 import Replacement.RecordStore.Cases (caseName, name)
 import Replacement.RecordStore.Execution
 import Replacement.RecordStore.Generate (GenerationSeed (..), ValidCase, generateCases, mkGenerationConfig, oracleCase)
 import Replacement.RecordStore.Harness (Function, caseSpec)
-import Replacement.RecordStore.Minimize
+import Replacement.RecordStore.Minimize hiding (Inconclusive)
 import System.Directory
 import System.Environment (getArgs, getExecutablePath, lookupEnv, setCurrentDirectory, setEnv)
 import System.Exit (ExitCode (..), exitWith)
-import System.FilePath (isAbsolute, splitDirectories, takeDirectory, takeFileName, (</>))
-import System.Posix.Files (setFileMode)
+import System.FilePath (isAbsolute, normalise, splitDirectories, takeDirectory, (</>))
+import System.Posix.Files (FileStatus, getSymbolicLinkStatus, isDirectory, isSymbolicLink, readSymbolicLink, setFileMode)
 import Text.Read (readMaybe)
 
 candidateRelative, symbolsRelative :: FilePath
@@ -97,10 +98,50 @@ data CorpusResult
   | CorpusStockMismatch ValidCase [ModelDifference]
   | CorpusAborted String
 
-data ToolFailure = ToolFailure String String
+data Verdict
+  = Pass
+  | Matched
+  | Counterexample
+  | Prerequisite
+  | Unsupported
+  | Inconclusive
+  | Invalid
+  | Infrastructure
+  deriving (Eq, Show)
+
+verdictLabel :: Verdict -> String
+verdictLabel Pass = "pass"
+verdictLabel Matched = "matched"
+verdictLabel Counterexample = "counterexample"
+verdictLabel Prerequisite = "prerequisite"
+verdictLabel Unsupported = "unsupported"
+verdictLabel Inconclusive = "inconclusive"
+verdictLabel Invalid = "invalid"
+verdictLabel Infrastructure = "infrastructure"
+
+verdictExitCode :: Verdict -> Int
+verdictExitCode Pass = 0
+verdictExitCode Matched = 0
+verdictExitCode Counterexample = 1
+verdictExitCode _ = 2
+
+data ToolFailureKind
+  = FailureInvalid
+  | FailurePrerequisite
+  | FailureUnsupported
+  | FailureInfrastructure
+  deriving (Eq, Show)
+
+toolFailureVerdict :: ToolFailureKind -> Verdict
+toolFailureVerdict FailureInvalid = Invalid
+toolFailureVerdict FailurePrerequisite = Prerequisite
+toolFailureVerdict FailureUnsupported = Unsupported
+toolFailureVerdict FailureInfrastructure = Infrastructure
+
+data ToolFailure = ToolFailure ToolFailureKind String
 
 instance Show ToolFailure where
-  show (ToolFailure verdict reason) = verdict ++ ": " ++ reason
+  show (ToolFailure kind reason) = verdictLabel (toolFailureVerdict kind) ++ ": " ++ reason
 
 instance Exception ToolFailure
 
@@ -109,28 +150,28 @@ main = do
   args <- getArgs
   anchorResult <- trySync captureAnchor
   anchor <- case anchorResult of
-    Left exception -> terminalFailure Nothing "infrastructure" (displayException exception)
+    Left exception -> terminalFailure Nothing FailureInfrastructure (displayException exception)
     Right value -> pure value
   workspaceResult <- trySync (lookupEnv "BUILD_WORKSPACE_DIRECTORY" >>= mapM_ setCurrentDirectory)
   case workspaceResult of
-    Left exception -> terminalFailure Nothing "infrastructure" (displayException exception)
+    Left exception -> terminalFailure Nothing FailureInfrastructure (displayException exception)
     Right () -> pure ()
   raw <- case parseOptions args of
-    Left message -> terminalFailure Nothing "invalid" message
+    Left message -> terminalFailure Nothing FailureInvalid message
     Right value -> pure value
   resolved <- trySync (resolveOptions anchor raw)
   options <- case resolved of
-    Left exception -> terminalFailure Nothing "invalid" (displayException exception)
-    Right (Left message) -> terminalFailure Nothing "invalid" message
+    Left exception -> terminalFailure Nothing FailureInvalid (displayException exception)
+    Right (Left message) -> terminalFailure Nothing FailureInvalid message
     Right (Right value) -> pure value
   setEnv "XM1_STORAGE_PATH" (takeDirectory (optionOut options))
   admitted <- trySync (slotPolicyFromEnvironment >>= \policy -> reexecInSlot policy (reexecArguments options))
   case admitted of
-    Left exception -> terminalFailure Nothing "infrastructure" (displayException exception)
+    Left exception -> terminalFailure Nothing FailureInfrastructure (displayException exception)
     Right () -> run options
 
 invalid :: String -> IO a
-invalid message = throwIO (ToolFailure "invalid" message)
+invalid message = throwIO (ToolFailure FailureInvalid message)
 
 captureAnchor :: IO Anchor
 captureAnchor = do
@@ -147,6 +188,7 @@ captureAnchor = do
 
 resolveOptions :: Anchor -> RawOptions -> IO (Either String Options)
 resolveOptions anchor raw = do
+  roots <- privateRoots
   candidate <- resolveInput anchor (rawCandidate raw) candidateRelative
   symbols <- resolveInput anchor (rawSymbols raw) symbolsRelative
   runner <- resolveRunner anchor (rawRunner raw)
@@ -154,40 +196,48 @@ resolveOptions anchor raw = do
   loader <- makeAbsolute (rawLoader raw)
   index <- makeAbsolute (rawIndex raw)
   replay <- traverse makeAbsolute (rawReplay raw)
-  cache <- traverse makeAbsolute (rawCache raw)
-  admittedOut <- outputAdmission (rawOut raw)
-  case (candidate, symbols, runner, admittedOut) of
-    (Right candidatePath, Right symbolsPath, Right runnerPath, Right outPath) -> do
-      let files =
-            [ ("candidate", candidatePath)
-            , ("symbols", symbolsPath)
-            , ("runner", runnerPath)
-            , ("image", image)
-            , ("loader", loader)
-            , ("index", index)
-            ]
-              ++ maybe [] (\path -> [("replay", path)]) replay
-      missing <- filterM (fmap not . doesFileExist . snd) files
-      case missing of
-        (label, path) : _ -> pure (Left ("missing " ++ label ++ ": " ++ path))
-        [] ->
-          pure
-            ( Right
-                Options
-                  { optionCandidate = candidatePath
-                  , optionSymbols = symbolsPath
-                  , optionRunner = runnerPath
-                  , optionSeed = rawSeed raw
-                  , optionCaseCount = rawCaseCount raw
-                  , optionOperationBound = rawOperationBound raw
-                  , optionBudget = rawBudget raw
-                  , optionOut = outPath
-                  , optionReplay = replay
-                  , optionStockPaths = StockPaths image loader index
-                  , optionCache = cache
-                  }
-            )
-    _ -> pure (Left (firstLeft [candidate, symbols, runner, admittedOut]))
+  cache <- case rawCache raw of
+    Nothing -> pure (Right Nothing)
+    Just path -> fmap (fmap Just) (admitCache roots path)
+  admittedOut <- admitOutput roots (rawOut raw)
+  case (candidate, symbols, runner) of
+    (Right candidatePath, Right symbolsPath, Right runnerPath) ->
+      case admittedOut of
+        Left message -> pure (Left message)
+        Right outPath ->
+          case cache of
+            Left message -> pure (Left message)
+            Right cachePath -> do
+              let files =
+                    [ ("candidate", candidatePath)
+                    , ("symbols", symbolsPath)
+                    , ("runner", runnerPath)
+                    , ("image", image)
+                    , ("loader", loader)
+                    , ("index", index)
+                    ]
+                      ++ maybe [] (\path -> [("replay", path)]) replay
+              missing <- filterM (fmap not . doesFileExist . snd) files
+              case missing of
+                (label, path) : _ -> pure (Left ("missing " ++ label ++ ": " ++ path))
+                [] ->
+                  pure
+                    ( Right
+                        Options
+                          { optionCandidate = candidatePath
+                          , optionSymbols = symbolsPath
+                          , optionRunner = runnerPath
+                          , optionSeed = rawSeed raw
+                          , optionCaseCount = rawCaseCount raw
+                          , optionOperationBound = rawOperationBound raw
+                          , optionBudget = rawBudget raw
+                          , optionOut = outPath
+                          , optionReplay = replay
+                          , optionStockPaths = StockPaths image loader index
+                          , optionCache = cachePath
+                          }
+                    )
+    _ -> pure (Left (firstLeft [candidate, symbols, runner]))
 
 firstLeft :: [Either String a] -> String
 firstLeft values = case [message | Left message <- values] of
@@ -232,43 +282,94 @@ resolveBundled anchor relative = do
     path : _ -> Right <$> makeAbsolute path
     [] -> pure (Left ("bundled input not found: " ++ relative ++ " (looked in " ++ intercalate ", " candidates ++ ")"))
 
-outputAdmission :: FilePath -> IO (Either String FilePath)
-outputAdmission path = do
-  absolute <- makeAbsolute path
+data PrivateRoots = PrivateRoots
+  { scratchRoot :: FilePath
+  , runRoot :: FilePath
+  }
+
+privateRoots :: IO PrivateRoots
+privateRoots = do
   workspace <- getCurrentDirectory >>= canonicalizePath
-  private <- canonicalizePath (workspace </> "private-data")
-  destination <- canonicalExisting absolute
-  let components = splitDirectories destination
-      admitted =
-        splitDirectories (private </> "scratch") `isPrefixOf` components
-          || splitDirectories (private </> "verify-candidate" </> "runs") `isPrefixOf` components
-  if not admitted
-    then pure (Left (destination ++ " must be under private-data/scratch or private-data/verify-candidate/runs"))
-    else do
-      exists <- doesPathExist destination
-      pure (if exists then Left (destination ++ " already exists") else Right destination)
+  private <- canonicalExisting (workspace </> "private-data")
+  scratch <- canonicalExisting (private </> "scratch")
+  runs <- canonicalExisting (private </> "verify-candidate" </> "runs")
+  let inside root = splitDirectories private `isPrefixOf` splitDirectories root
+  unless (inside scratch && inside runs) $
+    throwIO (ToolFailure FailureInvalid "scratch and run roots resolve outside private-data")
+  pure (PrivateRoots scratch runs)
 
 canonicalExisting :: FilePath -> IO FilePath
 canonicalExisting path = do
-  exists <- doesPathExist path
-  if exists
-    then canonicalizePath path
-    else do
-      let parent = takeDirectory path
-      if parent == path
-        then pure path
-        else do
-          resolved <- canonicalExisting parent
-          pure (resolved </> takeFileName path)
+  absolute <- makeAbsolute path
+  resolve 0 (splitDirectories absolute) "/"
+  where
+    resolve depth _ _ | depth > 64 = ioError (userError "symlink depth exceeded")
+    resolve _ [] current = pure current
+    resolve depth (component : rest) current = do
+      let candidate = current </> component
+      status <- try (getSymbolicLinkStatus candidate) :: IO (Either IOException FileStatus)
+      case status of
+        Left _ -> pure (foldl (</>) candidate rest)
+        Right entry
+          | isSymbolicLink entry -> do
+              target <- readSymbolicLink candidate
+              let resolved = if isAbsolute target then target else current </> target
+              resolve (depth + 1) (splitDirectories (normalise resolved) ++ rest) "/"
+          | isDirectory entry -> resolve depth rest candidate
+          | otherwise -> pure (foldl (</>) candidate rest)
 
-freshOutput :: FilePath -> IO FilePath
-freshOutput path = do
-  admitted <- outputAdmission path
-  destination <- either (throwIO . ToolFailure "invalid") pure admitted
+-- | Canonicalize a path that must stay beneath a named private root. Traversal
+-- components are refused before resolution, and a symlink in the existing
+-- prefix resolves before the prefix check, so a suffix that does not exist yet
+-- cannot carry the destination outside the root.
+admitPrivatePath :: PrivateRoots -> String -> Bool -> FilePath -> IO (Either String FilePath)
+admitPrivatePath roots label allowRoot path = do
+  absolute <- makeAbsolute path
+  if ".." `elem` splitDirectories absolute
+    then pure (Left (label ++ " must not contain '..' components: " ++ absolute))
+    else do
+      destination <- canonicalExisting absolute
+      let components = splitDirectories destination
+          rootComponents = map splitDirectories [scratchRoot roots, runRoot roots]
+          strict = any (\root -> root `isPrefixOf` components && length components > length root) rootComponents
+          equal = any (== components) rootComponents
+      pure
+        ( if strict || (allowRoot && equal)
+            then Right destination
+            else Left (label ++ " must resolve under private-data/scratch or private-data/verify-candidate/runs: " ++ destination)
+        )
+
+admitOutput :: PrivateRoots -> FilePath -> IO (Either String FilePath)
+admitOutput roots path = do
+  admitted <- admitPrivatePath roots "output" False path
+  case admitted of
+    Left message -> pure (Left message)
+    Right destination -> do
+      exists <- doesPathExist destination
+      pure (if exists then Left (destination ++ " already exists") else Right destination)
+
+admitCache :: PrivateRoots -> FilePath -> IO (Either String FilePath)
+admitCache roots path = admitPrivatePath roots "cache" True path
+
+overlaps :: FilePath -> FilePath -> Bool
+overlaps left right =
+  splitDirectories left `isPrefixOf` splitDirectories right
+    || splitDirectories right `isPrefixOf` splitDirectories left
+
+revalidatePrivate :: PrivateRoots -> String -> Bool -> FilePath -> IO FilePath
+revalidatePrivate roots label allowRoot path = do
+  resolved <- canonicalizePath path
+  admitted <- admitPrivatePath roots label allowRoot resolved
+  either (throwIO . ToolFailure FailureInvalid) pure admitted
+
+freshOutput :: PrivateRoots -> FilePath -> IO FilePath
+freshOutput roots path = do
+  destination <- admitOutput roots path >>= either (throwIO . ToolFailure FailureInvalid) pure
+  checkStorageBudget destination
   createDirectoryIfMissing True (takeDirectory destination)
   createDirectory destination
   setFileMode destination 0o700
-  pure destination
+  revalidatePrivate roots "output" False destination
 
 reexecArguments :: Options -> [String]
 reexecArguments options =
@@ -317,8 +418,8 @@ collectOptions = go M.empty
               | value `elem` valuedFlags || "--" `isPrefixOf` value -> Left (argument ++ " needs a value")
               | M.member argument seen -> Left ("duplicate " ++ argument)
               | otherwise -> go (M.insert argument value seen) more
-      | "--" `isPrefixOf` argument -> Left ("unknown argument " ++ argument)
-      | otherwise -> Left ("unexpected argument " ++ argument)
+      | "--" `isPrefixOf` argument = Left ("unknown argument " ++ argument)
+      | otherwise = Left ("unexpected argument " ++ argument)
 
 parseWord64 :: String -> Either String Word64
 parseWord64 text = maybe (Left ("invalid unsigned integer: " ++ text)) Right (readMaybe text)
@@ -370,8 +471,8 @@ run options = do
   context <- case setup of
     Right value -> pure value
     Left exception -> case fromException exception :: Maybe ToolFailure of
-      Just (ToolFailure verdict reason) -> terminalFailure Nothing verdict reason
-      Nothing -> terminalFailure Nothing "invalid" (displayException exception)
+      Just (ToolFailure kind reason) -> terminalFailure Nothing kind reason
+      Nothing -> terminalFailure Nothing FailureInfrastructure (displayException exception)
   guardExit options context $ case optionReplay options of
     Just file -> runReplay options context file
     Nothing -> runLoop options context
@@ -382,30 +483,56 @@ guardExit options context action = do
   case outcome of
     Right () -> pure ()
     Left exception -> case fromException exception :: Maybe ToolFailure of
-      Just (ToolFailure verdict reason) -> terminalFailure (Just (options, context)) verdict reason
+      Just (ToolFailure kind reason) -> terminalFailure (Just (options, context)) kind reason
       Nothing -> case fromException exception :: Maybe ExitCode of
         Just exitCode -> throwIO exitCode
-        Nothing -> terminalFailure (Just (options, context)) "infrastructure" (displayException exception)
+        Nothing -> terminalFailure (Just (options, context)) FailureInfrastructure (displayException exception)
 
 buildContext :: Options -> IO RunContext
 buildContext options = do
-  stockResult <- loadStockInputs (optionStockPaths options)
-  stock <- either (throwIO . ToolFailure "prerequisite" . show) pure stockResult
-  candidateBytes <- B.readFile (optionCandidate options)
-  unless (B.length candidateBytes == 0x1e60) $
-    throwIO (ToolFailure "invalid" ("candidate span size " ++ show (B.length candidateBytes)))
-  symbolsBytes <- B.readFile (optionSymbols options)
+  roots <- privateRoots
+  stockLoad <- trySync (loadStockInputs (optionStockPaths options))
+  stock <- case stockLoad of
+    Left exception -> throwIO (ToolFailure FailurePrerequisite ("stock: " ++ displayException exception))
+    Right (Left problem) -> throwIO (ToolFailure FailurePrerequisite (show problem))
+    Right (Right value) -> pure value
+  candidateRead <- trySync (readBoundedInput candidateLimit (optionCandidate options))
+  candidateBytes <- case candidateRead of
+    Left exception -> throwIO (ToolFailure FailureInvalid ("candidate: " ++ displayException exception))
+    Right bytes -> pure bytes
+  unless (B.length candidateBytes == candidateLimit) $
+    throwIO (ToolFailure FailureInvalid ("candidate span size " ++ show (B.length candidateBytes)))
+  symbolsRead <- trySync (readBoundedInput symbolsLimit (optionSymbols options))
+  symbolsBytes <- case symbolsRead of
+    Left exception -> throwIO (ToolFailure FailureInvalid ("symbols: " ++ displayException exception))
+    Right value -> pure value
   runner <- canonicalizePath (optionRunner options)
   runnerDigest <- sha256File runner
-  forM_ (optionCache options) $ \root -> do
-    cachedRoot <- canonicalExisting root
-    outputRoot <- canonicalExisting (optionOut options)
-    when
-      ( splitDirectories outputRoot `isPrefixOf` splitDirectories cachedRoot
-          || splitDirectories cachedRoot `isPrefixOf` splitDirectories outputRoot
-      )
-      (throwIO (ToolFailure "invalid" "output directory overlaps cache"))
-  out <- freshOutput (optionOut options)
+  outAdmission <- trySync (admitOutput roots (optionOut options))
+  outDestination <- case outAdmission of
+    Left exception -> throwIO (ToolFailure FailureInvalid ("output: " ++ displayException exception))
+    Right (Left message) -> throwIO (ToolFailure FailureInvalid message)
+    Right (Right value) -> pure value
+  cacheAdmission <- case optionCache options of
+    Nothing -> pure (Right (Right Nothing))
+    Just configured -> do
+      admitted <- trySync (admitCache roots configured)
+      pure (fmap (fmap Just) admitted)
+  cacheDestination <- case cacheAdmission of
+    Left exception -> throwIO (ToolFailure FailureInvalid ("cache: " ++ displayException exception))
+    Right (Left message) -> throwIO (ToolFailure FailureInvalid message)
+    Right (Right value) -> pure value
+  forM_ cacheDestination $ \cachedRoot ->
+    when (overlaps outDestination cachedRoot) (throwIO (ToolFailure FailureInvalid "output directory overlaps cache"))
+  cache <- case cacheDestination of
+    Nothing -> pure Nothing
+    Just destination -> do
+      checkStorageBudget destination
+      existed <- doesDirectoryExist destination
+      createDirectoryIfMissing True destination
+      unless existed (setFileMode destination 0o700)
+      Just <$> revalidatePrivate roots "cache" True destination
+  out <- freshOutput roots outDestination
   let indexDigest = sha256 (stockIndexBytes stock)
   pure
     RunContext
@@ -422,7 +549,7 @@ buildContext options = do
       , contextRunnerImmutable = "/nix/store/" `isPrefixOf` runner
       , contextIndexPath = stockIndexPath (optionStockPaths options)
       , contextIndexDigest = indexDigest
-      , contextCache = optionCache options
+      , contextCache = cache
       }
 
 identityObject :: Options -> RunContext -> Value
@@ -458,10 +585,10 @@ countsValue generated compared matched inconclusive differed =
     , "differed" .= differed
     ]
 
-terminalValue :: String -> Int -> Int -> Int -> Int -> Int -> [String] -> [Value] -> Maybe FilePath -> Maybe FilePath -> FilePath -> Value
+terminalValue :: Verdict -> Int -> Int -> Int -> Int -> Int -> [String] -> [Value] -> Maybe FilePath -> Maybe FilePath -> FilePath -> Value
 terminalValue verdict generated compared matched inconclusive differed boundaries evidence originalCase minimizedCase reportPath =
   object
-    [ "verdict" .= verdict
+    [ "verdict" .= verdictLabel verdict
     , "generated" .= generated
     , "compared" .= compared
     , "matched" .= matched
@@ -506,26 +633,28 @@ reductionValue result =
     , "minimality" .= minimalityLabel (reductionStatus result)
     ]
 
-listInconclusive :: FilePath -> IO [Value]
+listInconclusive :: FilePath -> IO [(InconclusiveClass, FilePath)]
 listInconclusive root = do
   present <- doesDirectoryExist root
   if not present
     then pure []
     else do
       names <- sort <$> listDirectory root
-      pure
-        [ object
-            [ "class" .= name
-            , "case" .= (root </> name </> "case.json")
-            , "diagnostic" .= (root </> name </> "diagnostic.json")
-            , "native" .= (root </> name)
-            ]
-        | name <- names
-        ]
+      pure [(cls, root </> name) | name <- names, Just cls <- [inconclusiveClassFromLabel name]]
 
-terminalFailure :: Maybe (Options, RunContext) -> String -> String -> IO a
-terminalFailure scope verdict reason = do
+inconclusiveEvidence :: (InconclusiveClass, FilePath) -> Value
+inconclusiveEvidence (cls, path) =
+  object
+    [ "class" .= inconclusiveClassLabel cls
+    , "case" .= (path </> "case.json")
+    , "diagnostic" .= (path </> "diagnostic.json")
+    , "native" .= path
+    ]
+
+terminalFailure :: Maybe (Options, RunContext) -> ToolFailureKind -> String -> IO a
+terminalFailure scope kind reason = do
   let bounded = boundedText 2048 reason
+      verdict = verdictLabel (toolFailureVerdict kind)
   case scope of
     Nothing -> do
       B.putStrLn
@@ -568,15 +697,15 @@ boundedText limit text
   | length text <= limit = text
   | otherwise = take limit text ++ "..."
 
-finish :: Options -> RunContext -> Value -> Value -> Int -> IO ()
-finish options context report terminal code = do
+finish :: Options -> RunContext -> Value -> Value -> Verdict -> IO ()
+finish options context report terminal verdict = do
   drift <- runnerDrift context
   case drift of
-    Just reason -> terminalFailure (Just (options, context)) "infrastructure" reason
+    Just reason -> terminalFailure (Just (options, context)) FailureInfrastructure reason
     Nothing -> do
       B.writeFile (contextOut context </> "report.json") (encodeCanonical report)
       B.putStrLn (encodeCanonical terminal)
-      exitWith (if code == 0 then ExitSuccess else ExitFailure code)
+      exitWith (if verdictExitCode verdict == 0 then ExitSuccess else ExitFailure (verdictExitCode verdict))
 
 runnerDrift :: RunContext -> IO (Maybe String)
 runnerDrift context
@@ -607,41 +736,41 @@ runLoop options context = do
             object
               [ "schema_version" .= (1 :: Int)
               , "tool" .= ("record-store-counterexample" :: String)
-              , "verdict" .= ("infrastructure" :: String)
+              , "verdict" .= verdictLabel Infrastructure
               , "reason" .= message
               , "identity" .= identityObject options context
               ]
-          terminal = terminalValue "infrastructure" (length validCases) 0 0 0 0 [] [] Nothing Nothing (contextOut context </> "report.json")
-      finish options context report terminal 2
+          terminal = terminalValue Infrastructure (length validCases) 0 0 0 0 [] [] Nothing Nothing (contextOut context </> "report.json")
+      finish options context report terminal Infrastructure
     CorpusStockMismatch valid problems -> do
       B.writeFile (contextOut context </> "failure.case.json") (encodeCase valid)
       let report =
             object
               [ "schema_version" .= (1 :: Int)
               , "tool" .= ("record-store-counterexample" :: String)
-              , "verdict" .= ("prerequisite" :: String)
+              , "verdict" .= verdictLabel Prerequisite
               , "case" .= caseName (name (oracleCase valid))
               , "model_differences" .= map modelDifferenceJson problems
               , "saved_case" .= (contextOut context </> "failure.case.json")
               , "identity" .= identityObject options context
               ]
-          terminal = terminalValue "prerequisite" (length validCases) 0 0 0 0 [] [] Nothing Nothing (contextOut context </> "report.json")
-      finish options context report terminal 2
+          terminal = terminalValue Prerequisite (length validCases) 0 0 0 0 [] [] Nothing Nothing (contextOut context </> "report.json")
+      finish options context report terminal Prerequisite
     CorpusPassed matched inconclusive -> do
       let reasons = inconclusive
-          verdict = if null reasons then "pass" else "inconclusive"
+          verdict = if null reasons then Pass else Inconclusive
           compared = matched + length reasons
           report =
             object
               [ "schema_version" .= (1 :: Int)
               , "tool" .= ("record-store-counterexample" :: String)
-              , "verdict" .= verdict
+              , "verdict" .= verdictLabel verdict
               , "counts" .= countsValue (length validCases) compared matched (length reasons) 0
               , "inconclusive_reasons" .= reasons
               , "identity" .= identityObject options context
               ]
           terminal = terminalValue verdict (length validCases) compared matched (length reasons) 0 [] [] Nothing Nothing (contextOut context </> "report.json")
-      finish options context report terminal (if null reasons then 0 else 2)
+      finish options context report terminal verdict
     CorpusFound matched inconclusive valid differences _ _ -> do
       budget <- either (invalid . ("shrink budget: " ++)) pure (mkShrinkBudget (optionBudget options))
       counter <- newIORef 0
@@ -665,15 +794,15 @@ runLoop options context = do
         Nothing -> invalid "candidate difference has no comparison boundary"
       shrunk <- trySync (shrinkCase budget primary (mkTrial trialRunner) valid)
       result <- case shrunk of
-        Left exception -> throwIO (ToolFailure "infrastructure" ("minimization failed: " ++ displayException exception))
+        Left exception -> throwIO (ToolFailure FailureInfrastructure ("minimization failed: " ++ displayException exception))
         Right value -> pure value
       removeDirectoryIfPresent (contextOut context </> "trials")
-      inconclusiveExamples <- listInconclusive (contextOut context </> "inconclusive")
+      inconclusiveExamples <- map inconclusiveEvidence <$> listInconclusive (contextOut context </> "inconclusive")
       let originalCasePath = contextOut context </> "original.case.json"
       B.writeFile originalCasePath (encodeCase valid)
       originalOutcome <- runPairAt context "original" valid
       (originalStock', originalCandidate') <- case originalOutcome of
-        PairFailed message -> throwIO (ToolFailure "infrastructure" ("original replay failed: " ++ message))
+        PairFailed message -> throwIO (ToolFailure FailureInfrastructure ("original replay failed: " ++ message))
         PairObserved stockObservation candidateObservation -> pure (stockObservation, candidateObservation)
       let originalVerdict = replayVerdict valid originalStock' originalCandidate'
       originalDifferences <- case originalVerdict of
@@ -685,9 +814,9 @@ runLoop options context = do
                 CaseStockModelMismatch _ -> "original case stock differs from the model"
                 CaseUnsupported text -> "original case is unsupported: " ++ text
               verdict = case originalVerdict of
-                CaseStockModelMismatch _ -> "prerequisite"
-                CaseUnsupported _ -> "unsupported"
-                _ -> "inconclusive"
+                CaseStockModelMismatch _ -> Prerequisite
+                CaseUnsupported _ -> Unsupported
+                _ -> Inconclusive
               observed = case originalVerdict of
                 CaseDiffers observedDifferences -> observedDifferences
                 _ -> []
@@ -701,7 +830,7 @@ runLoop options context = do
                 object
                   [ "schema_version" .= (1 :: Int)
                   , "tool" .= ("record-store-counterexample" :: String)
-                  , "verdict" .= verdict
+                  , "verdict" .= verdictLabel verdict
                   , "reason" .= reason
                   , "counts" .= countsFor differed
                   , "case" .= caseName (name (oracleCase valid))
@@ -736,7 +865,7 @@ runLoop options context = do
                   (Just originalCasePath)
                   Nothing
                   (contextOut context </> "report.json")
-          finish options context report terminal 2
+          finish options context report terminal verdict
       case reductionStatus result of
         OriginalDoesNotReproduce -> do
           let reportPath = contextOut context </> "report.json"
@@ -744,7 +873,7 @@ runLoop options context = do
                 object
                   [ "schema_version" .= (1 :: Int)
                   , "tool" .= ("record-store-counterexample" :: String)
-                  , "verdict" .= ("inconclusive" :: String)
+                  , "verdict" .= verdictLabel Inconclusive
                   , "reason" .= ("reduction baseline did not reproduce" :: String)
                   , "counts" .= countsFor 1
                   , "failure" .=
@@ -765,7 +894,7 @@ runLoop options context = do
                   ]
               terminal =
                 terminalValue
-                  "inconclusive"
+                  Inconclusive
                   (length validCases)
                   (matched + length inconclusive + 1)
                   matched
@@ -776,14 +905,14 @@ runLoop options context = do
                   (Just originalCasePath)
                   Nothing
                   reportPath
-          finish options context report terminal 2
+          finish options context report terminal Inconclusive
         _ -> pure ()
       let minimized = minimizedCase result
           minimizedCasePath = contextOut context </> "minimized.case.json"
       B.writeFile minimizedCasePath (encodeCase minimized)
       minimizedOutcome <- runPairAt context "minimized" minimized
       (minimizedStock, minimizedCandidate) <- case minimizedOutcome of
-        PairFailed message -> throwIO (ToolFailure "infrastructure" ("minimized replay failed: " ++ message))
+        PairFailed message -> throwIO (ToolFailure FailureInfrastructure ("minimized replay failed: " ++ message))
         PairObserved stockObservation candidateObservation -> pure (stockObservation, candidateObservation)
       let minimizedVerdict = replayVerdict minimized minimizedStock minimizedCandidate
       minimizedDifferences <- case minimizedVerdict of
@@ -795,9 +924,9 @@ runLoop options context = do
                 CaseStockModelMismatch _ -> "minimized case stock differs from the model"
                 CaseUnsupported text -> "minimized case is unsupported: " ++ text
               verdict = case minimizedVerdict of
-                CaseStockModelMismatch _ -> "prerequisite"
-                CaseUnsupported _ -> "unsupported"
-                _ -> "inconclusive"
+                CaseStockModelMismatch _ -> Prerequisite
+                CaseUnsupported _ -> Unsupported
+                _ -> Inconclusive
               observed = case minimizedVerdict of
                 CaseDiffers observedDifferences -> observedDifferences
                 _ -> []
@@ -808,7 +937,7 @@ runLoop options context = do
                 object
                   [ "schema_version" .= (1 :: Int)
                   , "tool" .= ("record-store-counterexample" :: String)
-                  , "verdict" .= verdict
+                  , "verdict" .= verdictLabel verdict
                   , "reason" .= reason
                   , "counts" .= countsFor 1
                   , "case" .= caseName (name (oracleCase minimized))
@@ -844,13 +973,13 @@ runLoop options context = do
                   (Just originalCasePath)
                   (Just minimizedCasePath)
                   (contextOut context </> "report.json")
-          finish options context report terminal 2
+          finish options context report terminal verdict
       let reportPath = contextOut context </> "report.json"
           report =
             object
               [ "schema_version" .= (1 :: Int)
               , "tool" .= ("record-store-counterexample" :: String)
-              , "verdict" .= ("counterexample" :: String)
+              , "verdict" .= verdictLabel Counterexample
               , "counts" .= countsFor 1
               , "inconclusive_reasons" .= inconclusive
               , "failure" .=
@@ -874,7 +1003,7 @@ runLoop options context = do
               ]
           terminal =
             terminalValue
-              "counterexample"
+              Counterexample
               (length validCases)
               (matched + length inconclusive + 1)
               matched
@@ -885,15 +1014,18 @@ runLoop options context = do
               (Just originalCasePath)
               (Just minimizedCasePath)
               reportPath
-      finish options context report terminal 1
+      finish options context report terminal Counterexample
 
 runReplay :: Options -> RunContext -> FilePath -> IO ()
 runReplay options context file = do
-  bytes <- B.readFile file
+  replayRead <- trySync (readBoundedInput caseFileLimit file)
+  bytes <- case replayRead of
+    Left exception -> invalid ("case: " ++ displayException exception)
+    Right value -> pure value
   valid <- either (invalid . ("case: " ++) . show) pure (decodeCase bytes)
   outcome <- runPairAt context "replay" valid
   (stockObservation, candidateObservation) <- case outcome of
-    PairFailed message -> throwIO (ToolFailure "infrastructure" ("replay failed: " ++ message))
+    PairFailed message -> throwIO (ToolFailure FailureInfrastructure ("replay failed: " ++ message))
     PairObserved stock candidate -> pure (stock, candidate)
   let reportPath = contextOut context </> "report.json"
   case replayVerdict valid stockObservation candidateObservation of
@@ -902,20 +1034,20 @@ runReplay options context file = do
             object
               [ "schema_version" .= (1 :: Int)
               , "tool" .= ("record-store-counterexample" :: String)
-              , "verdict" .= ("matched" :: String)
+              , "verdict" .= verdictLabel Matched
               , "case" .= caseName (name (oracleCase valid))
               , "counts" .= countsValue 1 1 1 0 0
               , "identity" .= identityObject options context
               ]
-          terminal = terminalValue "matched" 1 1 1 0 0 [] [] Nothing Nothing reportPath
-      finish options context report terminal 0
+          terminal = terminalValue Matched 1 1 1 0 0 [] [] Nothing Nothing reportPath
+      finish options context report terminal Matched
     CaseDiffers differences -> do
       let boundaries = nub (map roleBoundary differences)
           report =
             object
               [ "schema_version" .= (1 :: Int)
               , "tool" .= ("record-store-counterexample" :: String)
-              , "verdict" .= ("counterexample" :: String)
+              , "verdict" .= verdictLabel Counterexample
               , "case" .= caseName (name (oracleCase valid))
               , "counts" .= countsValue 1 1 0 0 1
               , "failure" .=
@@ -925,34 +1057,34 @@ runReplay options context file = do
                     ]
               , "identity" .= identityObject options context
               ]
-          terminal = terminalValue "counterexample" 1 1 0 0 1 (map boundaryLabel boundaries) [] Nothing Nothing reportPath
-      finish options context report terminal 1
+          terminal = terminalValue Counterexample 1 1 0 0 1 (map boundaryLabel boundaries) [] Nothing Nothing reportPath
+      finish options context report terminal Counterexample
     CaseStockModelMismatch problems -> do
       B.writeFile (contextOut context </> "failure.case.json") (encodeCase valid)
       let report =
             object
               [ "schema_version" .= (1 :: Int)
               , "tool" .= ("record-store-counterexample" :: String)
-              , "verdict" .= ("prerequisite" :: String)
+              , "verdict" .= verdictLabel Prerequisite
               , "case" .= caseName (name (oracleCase valid))
               , "model_differences" .= map modelDifferenceJson problems
               , "saved_case" .= (contextOut context </> "failure.case.json")
               , "identity" .= identityObject options context
               ]
-      finish options context report (terminalValue "prerequisite" 1 1 0 0 0 [] [] Nothing Nothing reportPath) 2
+      finish options context report (terminalValue Prerequisite 1 1 0 0 0 [] [] Nothing Nothing reportPath) Prerequisite
     CaseUnsupported reason -> do
       B.writeFile (contextOut context </> "failure.case.json") (encodeCase valid)
       let report =
             object
               [ "schema_version" .= (1 :: Int)
               , "tool" .= ("record-store-counterexample" :: String)
-              , "verdict" .= ("unsupported" :: String)
+              , "verdict" .= verdictLabel Unsupported
               , "case" .= caseName (name (oracleCase valid))
               , "reason" .= reason
               , "saved_case" .= (contextOut context </> "failure.case.json")
               , "identity" .= identityObject options context
               ]
-      finish options context report (terminalValue "unsupported" 1 1 0 1 0 [] [] Nothing Nothing reportPath) 2
+      finish options context report (terminalValue Unsupported 1 1 0 1 0 [] [] Nothing Nothing reportPath) Unsupported
 
 runCorpus :: RunContext -> [ValidCase] -> IO CorpusResult
 runCorpus context validCases =

@@ -13,6 +13,13 @@ module Replacement.RecordStore.Execution
   , pinned
   , readFunctions
   , readFunctionsBytes
+    -- * Bounded external reads
+  , readBoundedInput
+  , candidateLimit
+  , symbolsLimit
+  , caseFileLimit
+  , indexLimit
+  , maximumPinnedBytes
     -- * Case construction
   , patchStubs
   , candidateSpec
@@ -41,6 +48,9 @@ module Replacement.RecordStore.Execution
   , trySync
   , TrialRunner (..)
   , mkTrial
+  , InconclusiveClass (..)
+  , inconclusiveClassLabel
+  , inconclusiveClassFromLabel
   , trialBlockClass
   , trialBlockText
     -- * Observation cache
@@ -65,6 +75,7 @@ import Emulation.NativeCase (BatchEntry (..), Region (..), loadCase, readBatch)
 import Emulation.NativeObservation
 import Emulation.OwnedCase
 import Emulation.Sha256 (Sha256, sha256, sha256Hex)
+import FujiAF.Host (readRegularWith)
 import FujiAF.JSON (encodeCanonical)
 import Replacement.RecordStore.CachedObservation
 import Replacement.RecordStore.CaseJson (encodeCase)
@@ -92,6 +103,18 @@ data StockPaths = StockPaths
   , stockIndexPath :: FilePath
   }
   deriving (Eq, Show)
+
+-- | Finite byte budgets for every file this tool reads from outside its own
+-- freshly written output. The stock index is the largest pinned input.
+candidateLimit, symbolsLimit, caseFileLimit, indexLimit, maximumPinnedBytes :: Int
+candidateLimit = 0x1e60
+symbolsLimit = 16 * 1024 * 1024
+caseFileLimit = 16 * 1024 * 1024
+indexLimit = 32 * 1024 * 1024
+maximumPinnedBytes = 4 * 1024 * 1024
+
+readBoundedInput :: Int -> FilePath -> IO B.ByteString
+readBoundedInput limit = readRegularWith (pure ()) False limit
 
 defaultStockPaths :: StockPaths
 defaultStockPaths =
@@ -125,7 +148,7 @@ loadStockInputs paths = do
       if not indexExists
         then pure (Left (StockInputMissing (stockIndexPath paths)))
         else do
-          indexBytes <- B.readFile (stockIndexPath paths)
+          indexBytes <- readBoundedInput indexLimit (stockIndexPath paths)
           pure (Right (StockInputs imageBytes loaderBytes (readFunctionsBytes indexBytes) indexBytes))
   where
     imageDigest = "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"
@@ -137,17 +160,17 @@ pinnedEither path expected = do
   if not present
     then pure (Left (StockInputMissing path))
     else do
-      bytes <- B.readFile path
+      bytes <- readBoundedInput maximumPinnedBytes path
       pure (if sha256Hex (sha256 bytes) == expected then Right bytes else Left (StockInputDigestMismatch path))
 
 pinned :: FilePath -> String -> IO B.ByteString
 pinned path expected = do
-  bytes <- B.readFile path
+  bytes <- readBoundedInput maximumPinnedBytes path
   unless (sha256Hex (sha256 bytes) == expected) (error (path ++ ": SHA-256 mismatch"))
   pure bytes
 
 readFunctions :: FilePath -> IO [Function]
-readFunctions path = readFunctionsBytes <$> B.readFile path
+readFunctions path = readFunctionsBytes <$> readBoundedInput indexLimit path
 
 -- | Decomp index row: range, unit, section, hexadecimal address, decimal address,
 -- decimal size, SHA-256.
@@ -422,7 +445,7 @@ data TrialRunner = TrialRunner
   , trialCandidateFunctions :: [Function]
   , trialRoot :: FilePath
   , trialInconclusiveRoot :: FilePath
-  , trialRetained :: IORef [String]
+  , trialRetained :: IORef [InconclusiveClass]
   , trialCache :: Maybe FilePath
   , trialCounter :: IORef Int
   }
@@ -452,7 +475,7 @@ mkTrial config valid = do
 diagnosticValue :: TrialBlock -> PairOutcome -> Value
 diagnosticValue block outcome =
   object
-    [ "class" .= trialBlockClass block
+    [ "class" .= inconclusiveClassLabel (trialBlockClass block)
     , "diagnostic" .= trialBlockText block
     , "pair" .= case outcome of
         PairFailed message -> object ["failure" .= message]
@@ -467,7 +490,7 @@ retainInconclusive :: TrialRunner -> FilePath -> TrialBlock -> IO ()
 retainInconclusive config directory block = do
   retained <- readIORef (trialRetained config)
   let label = trialBlockClass block
-      target = trialInconclusiveRoot config </> label
+      target = trialInconclusiveRoot config </> inconclusiveClassLabel label
   if label `elem` retained
     then removeDirectoryIfPresent directory
     else do
@@ -482,11 +505,30 @@ retainInconclusive config directory block = do
             else createDirectoryIfMissing True target
           modifyIORef' (trialRetained config) (label :)
 
-trialBlockClass :: TrialBlock -> String
-trialBlockClass (StockModelDisagreement _) = "stock-model-disagreement"
-trialBlockClass (UnsupportedNativeStatus _) = "unsupported-native-status"
-trialBlockClass (DomainRefusal _) = "domain-refusal"
-trialBlockClass (InfrastructureFailure _) = "infrastructure-failure"
+data InconclusiveClass
+  = StockModelDisagreementClass
+  | UnsupportedNativeStatusClass
+  | DomainRefusalClass
+  | InfrastructureFailureClass
+  deriving (Eq, Ord, Show, Enum, Bounded)
+
+inconclusiveClassLabel :: InconclusiveClass -> String
+inconclusiveClassLabel StockModelDisagreementClass = "stock-model-disagreement"
+inconclusiveClassLabel UnsupportedNativeStatusClass = "unsupported-native-status"
+inconclusiveClassLabel DomainRefusalClass = "domain-refusal"
+inconclusiveClassLabel InfrastructureFailureClass = "infrastructure-failure"
+
+inconclusiveClassFromLabel :: String -> Maybe InconclusiveClass
+inconclusiveClassFromLabel label =
+  case [candidate | candidate <- [minBound .. maxBound], inconclusiveClassLabel candidate == label] of
+    candidate : _ -> Just candidate
+    [] -> Nothing
+
+trialBlockClass :: TrialBlock -> InconclusiveClass
+trialBlockClass (StockModelDisagreement _) = StockModelDisagreementClass
+trialBlockClass (UnsupportedNativeStatus _) = UnsupportedNativeStatusClass
+trialBlockClass (DomainRefusal _) = DomainRefusalClass
+trialBlockClass (InfrastructureFailure _) = InfrastructureFailureClass
 
 trialBlockText :: TrialBlock -> String
 trialBlockText (StockModelDisagreement text) = text
@@ -519,7 +561,7 @@ candidateSpec code functions spec =
       | otherwise = region
 
 symbolFunctions :: FilePath -> IO [Function]
-symbolFunctions path = parseSymbolFunctions <$> B.readFile path
+symbolFunctions path = parseSymbolFunctions <$> readBoundedInput symbolsLimit path
 
 parseSymbolFunctions :: B.ByteString -> [Function]
 parseSymbolFunctions bytes =
@@ -548,11 +590,11 @@ cachedObserved role runnerDigest inputs directory specs = mapM observe specs
       let stem = caseId spec
           originalCase = M.findWithDefault (error ("cached " ++ role ++ " case missing: " ++ stem)) (CaseId stem) inputs
           generatedCase = directory </> stem ++ ".case.json"
-      original <- B.readFile originalCase >>= either error pure . executionInput
-      generated <- B.readFile generatedCase >>= either error pure . executionInput
+      original <- readBoundedInput caseFileLimit originalCase >>= either error pure . executionInput
+      generated <- readBoundedInput caseFileLimit generatedCase >>= either error pure . executionInput
       unless (original == generated) (error ("cached " ++ role ++ " input differs: " ++ stem))
       (_, regions, _, _) <- loadCase generatedCase
-      report <- B.readFile (takeDirectory originalCase </> stem ++ ".native-result.json") >>= either error pure . eitherDecodeStrict'
+      report <- readBoundedInput caseFileLimit (takeDirectory originalCase </> stem ++ ".native-result.json") >>= either error pure . eitherDecodeStrict'
       digest <- maybe (error ("cached " ++ role ++ " requires --runner")) pure runnerDigest
       observation <- either (error . ((stem ++ ": ") ++) . show) pure (observeCachedStock digest regions report)
       pure (CaseId stem, observation)

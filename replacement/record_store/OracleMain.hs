@@ -11,7 +11,7 @@ import Data.List (isInfixOf, isPrefixOf)
 import qualified Data.Map.Strict as M
 import Emulation.NativeCase (loadCase)
 import Emulation.NativeObservation
-import Emulation.OwnedCase (caseId, loadObservedBatch, writeBatch)
+import Emulation.OwnedCase (caseId, loadObservedBatch, required, writeBatch)
 import Emulation.Sha256
 import FujiAF.JSON (encodeCanonical)
 import Replacement.RecordStore.Cases
@@ -73,7 +73,7 @@ main = do
   candidateInputs <- case (candidate, candidateSymbols) of
     (Nothing, Nothing) -> pure Nothing
     (Just bin, Just symbols) -> do
-      bytes <- B.readFile bin
+      bytes <- readBoundedInput candidateLimit bin
       functions <- symbolFunctions symbols
       unless (B.length bytes == 0x1e60) (error "candidate span size")
       pure (Just (bytes, functions))

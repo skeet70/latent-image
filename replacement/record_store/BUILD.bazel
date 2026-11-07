@@ -198,6 +198,7 @@ haskell_library(
         "//host:containers",
         "//host:directory",
         "//host:filepath",
+        "//host:host-support",
         "//host:json",
     ],
 )
@@ -229,6 +230,7 @@ haskell_binary(
         "//host:directory",
         "//host:filepath",
         "//host:json",
+        "//host:storage-budget",
         "//host:unix",
     ],
 )
@@ -269,6 +271,7 @@ haskell_test(
     name = "counterexample-tests",
     srcs = ["CounterexampleTests.hs"],
     main_file = "CounterexampleTests.hs",
+    args = ["$(rootpath :counterexample-loop)"],
     data = [":counterexample-loop"],
     ghcopts = ["-XGHC2021", "-Wall", "-O2"],
     deps = [
@@ -277,8 +280,15 @@ haskell_test(
         ":minimize",
         ":oracle-lib",
         "//emulation:native-observation",
+        "//host:aeson",
         "//host:base",
         "//host:bytestring",
         "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:process",
+        "//host:text",
+        "//host:unix",
     ],
 )
