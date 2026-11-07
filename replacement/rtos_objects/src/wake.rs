@@ -45,7 +45,7 @@ pub trait Wake: ObjectLock + Release {
     fn record_id(&self, owner: KernelContext) -> u32;
     /// A `0x44018` / B `0xd3fd4`.
     fn notify(&self, id: u32) -> DispatchTarget;
-    /// A `0x43640` / B `0xd3640`, with the stock body's code in r0.
+    /// A `0x43640` / B `0xd3640`; entry overwrites r0 before selecting a task.
     fn dispatch(&self, code: i32);
     /// The entry domain's reschedule word, consumed at the outermost IRQ exit.
     fn request_delayed_dispatch(&self);
