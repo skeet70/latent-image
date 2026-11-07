@@ -1,5 +1,5 @@
 ENTRY(xm1_rtos_scheduler_save)
-INCLUDE s2-b-placement.ld
+INCLUDE scheduler-s2-b-placement.ld
 
 SECTIONS {
   .forbidden (NOLOAD) : { *(.rodata .rodata.* .data .data.* .bss .bss.* COMMON) } > s2_save

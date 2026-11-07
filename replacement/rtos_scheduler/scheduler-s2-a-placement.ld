@@ -1,4 +1,3 @@
-ENTRY(xm1_rtos_scheduler_save)
 MEMORY {
   s2_doorbell (rx) : ORIGIN = 0x40b00, LENGTH = 0x24
   s2_save (rx) : ORIGIN = 0x43640, LENGTH = 0x28
