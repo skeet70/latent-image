@@ -2,7 +2,7 @@ use crate::create::Machine;
 use crate::id::{FlagId, MailboxId};
 use crate::layout::{
     Domain, FlagConfig, FlagWait, GuestAddress, KernelContext, MailboxControl, MailboxWait, Message,
-    Task, TaskFlags, TaskState,
+    Task, TaskFlags, TaskState, WaitQueue,
 };
 use crate::locked::ObjectLock;
 use crate::matching::{check, MatchMode, Pattern};
