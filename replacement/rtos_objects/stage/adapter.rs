@@ -119,6 +119,7 @@ impl Wake for Cpu {
         result
     }
 
+    #[inline(always)]
     fn waiter_domain(&self, waiter: Task) -> Domain {
         match DomainId::from_word(load(waiter.domain())) {
             Some(DomainId::A) => Domain::A,

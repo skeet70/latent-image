@@ -47,6 +47,8 @@ fn main() {
     sim.set(task.next(), control.0 .0);
     sim.set(task.prev(), control.0 .0);
     set_flag(&sim, flag, Pattern(0x10));
+    assert_eq!(sim.word(control.pattern()), 0x11);
+    assert_eq!(sim.word(wait.result()), 0x11);
     assert_eq!(sim.ready(Domain::A, 5), task.0 .0);
     assert_eq!(sim.running(Domain::A), task.0 .0);
     println!(
@@ -106,6 +108,7 @@ fn main() {
     send_sim.set(receiver.prev(), mailbox_control.0 .0);
     let message = Message(GuestAddress(0x4000_0300));
     send(&send_sim, mailbox, message, None);
+    assert_eq!(send_sim.word(receive.message()), message.0 .0);
     assert_eq!(send_sim.ready(Domain::A, 5), receiver.0 .0);
     assert_eq!(send_sim.running(Domain::A), receiver.0 .0);
     println!(
