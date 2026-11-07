@@ -3,7 +3,7 @@
 use crate::create::{Machine as CreateMachine, SavedInterrupts};
 use crate::layout::{Domain, DomainId, GuestAddress, KernelContext, LockRecord, Task};
 use crate::locked::ObjectLock;
-use crate::wake::{DispatchTarget, Selection, Wake};
+use crate::wake::{DispatchTarget, Release, Selection, Wake};
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use xm1_rtos_scheduler as s1;
