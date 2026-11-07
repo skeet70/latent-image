@@ -60,6 +60,8 @@ The platform depends on actual dual-core identity, mapped code/data and aliases,
 
 **Current qualified increment.** The 17 own-first slots and S1/S2/S3 scheduler bodies are owned in both loaders, with native qualification and bounded natural reset-to-menu comparisons. The scheduler route reaches 48 of 86 planned entries per role; its three intended defect corrections have native counterexamples but are untriggered on that route. Task creation/deletion, global locking, object/timer services, vector/context closure and hardware laws remain platform obligations. The [RTOS report](rtos-platform-options.md#413-owned-thread-layer-and-stock-abi-shim-design-input-from-the-decomp) records the exact boundary and E-RTOS-SCHED-CUTOVER-NATURAL-150; E-RTOS-SCHED-CURRENT-HOST-150 rechecks current admission and the retained evidence without repeating firmware execution.
 
+The flag/mailbox family separately has host-qualified typed policy/layout, serialized creation, flag clear/poll and mailbox poll (E-RTOS-OBJECTS-F0-HOST-150). Its four output-alias counterexamples include two corrected stock defects. Those generic host operations do not add emitted A32 bodies or firmware retirement to the scheduler result; wake, blocking, teardown and the family cutover remain open.
+
 ## B. General heap and distinct allocator/resource families
 
 ### 1. Interface, count, ABI and errors
