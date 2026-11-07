@@ -253,7 +253,7 @@ activity r@(Root base) = do
 withLocks :: [Binding] -> IO a -> IO a
 withLocks roots action = acquire lockPaths
  where
-  lockPaths = nub [base </> relative | Binding (Root base) records <- roots, entry <- records, let RelativePath relative = path entry, takeFileName relative == ".cargo-lock", entryType entry == RegularFile]
+  lockPaths = nub [base </> relative | Binding (Root base) records <- roots, entry <- records, let RelativePath relative = path entry, takeFileName relative `elem` [".cargo-lock", ".cargo-build-lock", ".cargo-artifact-lock"], entryType entry == RegularFile]
   acquire [] = action
   acquire (p:ps) = bracket (openFd p ReadWrite defaultFileFlags { nofollow = True, cloexec = True }) closeFd $ \(Fd fd) -> do
     result <- c_flock fd 6
@@ -344,7 +344,7 @@ apply file = do
         modifyIORef' deleted ((r, path entry):)
       verifyProtected
       persist True) `onException` persist False
-    B.readFile auditPath >>= B.putStr
+    BL.readFile auditPath >>= BL.putStr
 
 parseRoots :: [String] -> IO [Root]
 parseRoots arguments = do
