@@ -21,20 +21,27 @@ fn at(address: GuestAddress) -> s1::GuestAddress {
     s1::GuestAddress(address.0)
 }
 
+fn domain(value: Domain) -> s1::Domain {
+    match value {
+        Domain::A => s1::Domain::A,
+        Domain::B => s1::Domain::B,
+    }
+}
+
 fn back(address: s1::GuestAddress) -> GuestAddress {
     GuestAddress(address.0)
 }
 
 fn context(address: s1::GuestAddress) -> s1::KernelContext {
-    s1::KernelContext(address.0)
+    s1::KernelContext(address)
 }
 
 fn task(address: s1::GuestAddress) -> s1::Task {
-    s1::Task(address.0)
+    s1::Task(address)
 }
 
 fn lock(address: GuestAddress) -> s1::LockRecord {
-    s1::LockRecord(address.0)
+    s1::LockRecord(at(address))
 }
 
 impl Sim {
@@ -267,7 +274,7 @@ impl Wake for Sim {
     }
 
     fn notify(&self, id: u32) -> DispatchTarget {
-        match s1::notify(self, self.entry, s1::RecordId(id)) {
+        match s1::notify(self, domain(self.entry), s1::RecordId(id)) {
             s1::Notified::Local => DispatchTarget::Local,
             s1::Notified::Remote => DispatchTarget::Remote,
         }
