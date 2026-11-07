@@ -112,6 +112,7 @@ haskell_library(
         "//host:directory",
         "//host:filepath",
         "//host:process",
+        "//host:storage-budget",
         "//host:unix",
     ],
 )
@@ -2372,6 +2373,7 @@ haskell_binary(
     deps = [
         ":case-sha256",
         ":native-adapter",
+        ":native-evidence",
         ":native-observation",
         "//host:aeson",
         "//host:base",
@@ -2382,6 +2384,7 @@ haskell_binary(
         "//host:host-support",
         "//host:json",
         "//host:recipe-bank",
+        "//host:storage-budget",
         "//host:text",
         "//replacement/service:qualification",
     ],
@@ -2780,6 +2783,7 @@ haskell_binary(
         "//host:directory",
         "//host:filepath",
         "//host:process",
+        "//host:storage-budget",
         "//host:text",
         "//host:time",
         "//host:unix",
@@ -3802,5 +3806,55 @@ haskell_binary(
         "//host:filepath",
         "//host:text",
         "//host:vector",
+    ],
+)
+
+haskell_library(
+    name = "native-evidence",
+    srcs = ["Emulation/NativeEvidence.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+    ],
+    src_strip_prefix = ".",
+    deps = [
+        ":case-sha256",
+        ":native-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
+        "//host:unix",
+    ],
+)
+
+haskell_test(
+    name = "native-evidence-tests",
+    srcs = [
+        "Emulation/ParallelCases.hs",
+        "NativeEvidenceTests.hs",
+    ],
+    ghcopts = [
+        "-XGHC2021",
+        "-threaded",
+    ],
+    main_file = "NativeEvidenceTests.hs",
+    deps = [
+        ":case-sha256",
+        ":native-adapter",
+        ":native-evidence",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:text",
+        "//host:unix",
     ],
 )

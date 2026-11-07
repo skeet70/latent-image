@@ -5,6 +5,9 @@ build --enable_runfiles
 test --test_output=errors
 # Shared across output bases, so a concurrent agent on its own --output_base reuses actions.
 build --disk_cache=~/.cache/bazel-disk/latent-image
+build --experimental_disk_cache_gc_max_size=20G
+build --experimental_disk_cache_gc_max_age=14d
+build --experimental_disk_cache_gc_idle_delay=1m
 # Every output base runs its own server; idle ones exit instead of holding memory for 3 h.
 startup --max_idle_secs=600
 startup --host_jvm_args=-Xmx2g

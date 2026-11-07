@@ -56,6 +56,8 @@ Agents add one record per new claim as they work. The integration owner curates 
 
 A private artifact that no current record, report or baseline names may be deleted once the change that dropped its last citation is on the main work branch and no unmerged `agent/` branch adds a citation of it since its merge base; the integration owner checks and deletes. Paths and hashes in earlier ledger versions identify artifact versions that may no longer exist. Previously tracked public files can be consulted in this repository's Git history; files from the private research archive are not provided here.
 
+Research compaction retains current findings, unresolved failures, reproduction inputs and the minimum supporting evidence in their authoritative homes before removing superseded raw output. Age or missing textual citations alone never establish that a file is disposable. Keep a full counterexample for each unresolved failure class; distinguish raw diagnostics from the narrower public behavior a comparator accepts. Build/cache cleanup and research compaction are separate operations.
+
 ## Issues and comments
 
 Issues and their comments are a public record for people who were not in the session: a contributor deciding what to pick up, someone following the project, or an agent starting a task. Write them as a maintainer of an ordinary open-source project would: the problem, what changed, what was found, what it means for the project, the decision needed and what blocks progress. Detail lives in the report, ledger entry or commit, and the comment links to it; a comment is a few sentences or a short list.
