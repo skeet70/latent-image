@@ -39,6 +39,15 @@ pub trait Block: Wake {
     fn timeout_callback(&self) -> TimeoutCallback;
 }
 
+/// The resume tail's I-only mask; the F1a creation mask pair is a separate contract.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct SavedMask(pub u32);
+
+pub trait IrqScope: Machine {
+    fn mask_i(&self) -> SavedMask;
+    fn restore_i(&self, saved: SavedMask);
+}
+
 /// A single-use continuation: the armed wait and the caller's output word.
 #[derive(Debug, PartialEq, Eq)]
 pub struct FlagWaitPending {
@@ -67,7 +76,7 @@ pub enum ReceiveBlocking {
 }
 
 /// The wake writes the wait block's completion word before the task becomes runnable; the
-/// caller output is read by the resumed entry.
+/// caller output is written by the resumed entry.
 fn block<M: Block>(
     m: &M,
     entry: Domain,
@@ -236,18 +245,16 @@ pub enum ReceiveResume {
     Corrupt(ReceivePending),
 }
 
-/// The family value is captured before the output write, so an output aliasing the family field
-/// reads the old value.
-pub fn resume_flag<M: Machine>(m: &M, pending: FlagWaitPending) -> FlagResume {
+pub fn resume_flag<M: Machine + IrqScope>(m: &M, pending: FlagWaitPending) -> FlagResume {
     if m.load_byte(pending.task.state()) & TaskState::WAIT.bits() != 0 {
         return FlagResume::Pending(pending);
     }
     match m.load_word(pending.wait.base().result()) as i32 {
         0 => {
             let pattern = Pattern(m.load_word(pending.wait.result()));
-            let saved = m.mask_interrupts();
+            let saved = m.mask_i();
             m.store_word(pending.out.0, pattern.0);
-            m.restore_interrupts(saved);
+            m.restore_i(saved);
             FlagResume::Completed(WaitOutcome::Satisfied(pattern))
         }
         -49 => FlagResume::Completed(WaitOutcome::Released),
@@ -256,17 +263,16 @@ pub fn resume_flag<M: Machine>(m: &M, pending: FlagWaitPending) -> FlagResume {
     }
 }
 
-/// The message pointer is the wait record's own field.
-pub fn resume_receive<M: Machine>(m: &M, pending: ReceivePending) -> ReceiveResume {
+pub fn resume_receive<M: Machine + IrqScope>(m: &M, pending: ReceivePending) -> ReceiveResume {
     if m.load_byte(pending.task.state()) & TaskState::WAIT.bits() != 0 {
         return ReceiveResume::Pending(pending);
     }
     match m.load_word(pending.wait.base().result()) as i32 {
         0 => {
             let message = Message(GuestAddress(m.load_word(pending.wait.message())));
-            let saved = m.mask_interrupts();
+            let saved = m.mask_i();
             m.store_word(pending.out.0, message.0 .0);
-            m.restore_interrupts(saved);
+            m.restore_i(saved);
             ReceiveResume::Completed(WaitOutcome::Satisfied(message))
         }
         -49 => ReceiveResume::Completed(WaitOutcome::Released),

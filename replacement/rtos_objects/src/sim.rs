@@ -1,6 +1,6 @@
 //! Host backend over the owned S1/S2 bodies in `xm1_rtos_scheduler`; models memory, the timer
 //! boundary and the doorbell.
-use crate::block::{Block, Deadline, Tick, TimerEntryAddress, TimeoutCallback};
+use crate::block::{Block, Deadline, IrqScope, SavedMask, Tick, TimerEntryAddress, TimeoutCallback};
 use crate::create::{Machine as CreateMachine, SavedInterrupts};
 use crate::layout::{Domain, DomainId, GuestAddress, KernelContext, LockRecord, Task, WaitQueue};
 use crate::order::QueueOrder;
@@ -18,6 +18,7 @@ pub struct Sim {
     doorbell: [Cell<bool>; 2],
     held: Cell<bool>,
     interrupts: Cell<u32>,
+    last_store_mask: Cell<u32>,
 }
 
 fn at(address: GuestAddress) -> s1::GuestAddress {
@@ -57,6 +58,7 @@ impl Sim {
             doorbell: [Cell::new(false), Cell::new(false)],
             held: Cell::new(false),
             interrupts: Cell::new(0x40),
+            last_store_mask: Cell::new(0),
         }
     }
 
@@ -131,6 +133,14 @@ impl Sim {
         self.interrupts.get()
     }
 
+    pub fn set_interrupts(&self, value: u32) {
+        self.interrupts.set(value);
+    }
+
+    pub fn last_store_mask(&self) -> u32 {
+        self.last_store_mask.get()
+    }
+
     pub fn doorbell(&self, core: usize) -> bool {
         self.doorbell[core].get()
     }
@@ -181,11 +191,13 @@ impl s1::Machine for Sim {
     }
 
     fn store_word(&self, address: s1::GuestAddress, value: u32) {
+        self.last_store_mask.set(self.interrupts.get());
         assert_ne!(self.interrupts.get() & 0x80, 0, "store with IRQ unmasked");
         self.set(back(address), value);
     }
 
     fn store_byte(&self, address: s1::GuestAddress, value: u8) {
+        self.last_store_mask.set(self.interrupts.get());
         assert_ne!(self.interrupts.get() & 0x80, 0, "store with IRQ unmasked");
         let GuestAddress(at) = back(address);
         let aligned = GuestAddress(at & !3);
@@ -222,11 +234,13 @@ impl CreateMachine for Sim {
     }
 
     fn store_byte(&self, address: GuestAddress, value: u8) {
+        self.last_store_mask.set(self.interrupts.get());
         assert_ne!(self.interrupts.get() & 0x80, 0, "store with IRQ unmasked");
         self.set_byte(address, value);
     }
 
     fn store_word(&self, address: GuestAddress, value: u32) {
+        self.last_store_mask.set(self.interrupts.get());
         assert_ne!(self.interrupts.get() & 0x80, 0, "store with IRQ unmasked");
         self.set(address, value);
     }
@@ -357,6 +371,18 @@ impl Wake for Sim {
 fn priority_byte(sim: &Sim, task: Task) -> u8 {
     let GuestAddress(at) = task.priority();
     (sim.word(GuestAddress(at & !3)) >> (8 * (at & 3))) as u8
+}
+
+impl IrqScope for Sim {
+    fn mask_i(&self) -> SavedMask {
+        let saved = self.interrupts.get();
+        self.interrupts.set(saved | 0x80);
+        SavedMask(saved)
+    }
+
+    fn restore_i(&self, saved: SavedMask) {
+        self.interrupts.set(saved.0);
+    }
 }
 
 impl Block for Sim {

@@ -1883,3 +1883,39 @@ fn handler_set_releases_through_the_waiters_domain_and_defers_dispatch() {
         }
     }
 }
+
+#[test]
+fn the_resume_output_write_masks_only_i() {
+    for initial in [0u32, 0x40] {
+        let words = Domain::A.words();
+        let slot = FlagSlot::new(3, 120).unwrap();
+        let sim = Sim::new(Domain::A);
+        install(&sim, Domain::A);
+        sim.set_interrupts(initial);
+        let id = create_flag_at(&sim, slot, 0, 0x01);
+        running_task(&sim, &words, Domain::A, 7);
+        let out = GuestAddress(0x4000_0600);
+        sim.set(out, 0xdead_beef);
+        let armed = pending_flag(wait_flag(
+            &sim,
+            EntryDomain::new(Domain::A),
+            id,
+            WantedMask::new(Pattern(0x10)).unwrap(),
+            MatchMode::All,
+            OutWord(out),
+            Timeout::Forever,
+        ));
+        let armed = match resume_flag(&sim, armed) {
+            FlagResume::Pending(pending) => pending,
+            other => panic!("expected the pending continuation, got {other:?}"),
+        };
+        set_flag(&sim, id, Pattern(0x10));
+        assert_eq!(
+            resume_flag(&sim, armed),
+            FlagResume::Completed(WaitOutcome::Satisfied(Pattern(0x11)))
+        );
+        assert_eq!(sim.word(out), 0x11);
+        assert_eq!(sim.last_store_mask(), initial | 0x80);
+        assert_eq!(sim.interrupts(), initial);
+    }
+}
