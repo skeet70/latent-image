@@ -2766,6 +2766,33 @@ haskell_test(
 )
 
 haskell_library(
+    name = "candidate-route-lib",
+    srcs = ["Emulation/CandidateRoute.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//emulation:__pkg__"],
+    deps = [
+        "//host:base",
+    ],
+)
+
+haskell_library(
+    name = "execution-journal-lib",
+    srcs = ["Emulation/ExecutionJournal.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//emulation:__pkg__"],
+    deps = [
+        ":candidate-route-lib",
+        ":case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
+    ],
+)
+
+haskell_library(
     name = "candidate-baseline-lib",
     srcs = ["Emulation/CandidateBaseline.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
@@ -2791,6 +2818,7 @@ haskell_test(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":candidate-baseline-lib",
+        ":case-sha256",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -2819,7 +2847,10 @@ haskell_binary(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
     deps = [
         ":candidate-baseline-lib",
+        ":candidate-route-lib",
+        ":case-sha256",
         ":emulator-slot-lib",
+        ":execution-journal-lib",
         ":key-release-observations",
         ":watch-observation",
         ":ui-trajectory-lib",
@@ -2835,6 +2866,7 @@ haskell_binary(
         "//host:text",
         "//host:time",
         "//host:unix",
+        "//host:vector",
     ],
 )
 
@@ -2847,6 +2879,7 @@ haskell_test(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":candidate-baseline-lib",
+        ":case-sha256",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -2855,6 +2888,7 @@ haskell_test(
         "//host:process",
         "//host:text",
         "//host:unix",
+        "//host:vector",
     ],
 )
 
