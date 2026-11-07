@@ -185,6 +185,13 @@ inconclusiveRejection = do
   assert "different candidate failure is never accepted" (minimizedCase result' == originalCase)
   assert "different candidate failure still exhausts proposals" (reductionStatus result' == FixedPoint)
   assert "different candidate failure was tried" (trialCount result' > 1)
+  let disagreement candidate
+        | oracleCase candidate == oracleCase originalCase = pure (Differs [Results])
+        | otherwise = pure (Inconclusive (StockModelDisagreement "synthetic stock/model disagreement"))
+  result'' <- shrinkCase budget Results disagreement originalCase
+  assert "model disagreement is never accepted" (minimizedCase result'' == originalCase)
+  assert "model disagreement still exhausts proposals" (reductionStatus result'' == FixedPoint)
+  assert "model disagreement was tried" (trialCount result'' > 1)
 
 budgetEnforcement :: IO ()
 budgetEnforcement = do
