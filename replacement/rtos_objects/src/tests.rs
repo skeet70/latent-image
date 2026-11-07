@@ -1937,7 +1937,7 @@ fn delete_flag_releases_a_queued_waiter_with_minus_49() {
         0,
         0,
     );
-    assert_eq!(delete_flag(&sim, id, 0), Ok(()));
+    assert_eq!(delete_flag(&sim, id), Ok(()));
     let wait = words.flag_wait(task_slot);
     assert_eq!(sim.word(wait.base().result()), 0xffff_ffcf);
     assert_eq!(sim.word(task.state()) & 0xff, 0x01);
@@ -1970,7 +1970,7 @@ fn delete_flag_cancels_the_timed_waiters_timer() {
         timer.0,
     );
     sim.arm(timer);
-    assert_eq!(delete_flag(&sim, id, 0), Ok(()));
+    assert_eq!(delete_flag(&sim, id), Ok(()));
     assert!(!sim.armed(timer));
     assert_eq!(sim.word(words.flag_wait(task_slot).base().result()), 0xffff_ffcf);
 }
@@ -1986,7 +1986,7 @@ fn delete_mailbox_drains_queued_messages_in_delivery_order() {
     let second = Message(GuestAddress(0x4000_0310));
     send(&sim, id, first, None);
     send(&sim, id, second, None);
-    let drained: Vec<Message> = delete_mailbox(&sim, id, 0).unwrap().collect();
+    let drained: Vec<Message> = delete_mailbox(&sim, id).unwrap().collect();
     assert_eq!(drained, vec![first, second]);
     let control = words.mailbox_control(slot);
     assert_eq!(sim.word(control.head()), 0);
@@ -2014,7 +2014,7 @@ fn delete_mailbox_releases_a_queued_receiver() {
         OutWord(GuestAddress(0x4000_0600)),
         Timeout::Forever,
     ));
-    let drained: Vec<Message> = delete_mailbox(&sim, id, 0).unwrap().collect();
+    let drained: Vec<Message> = delete_mailbox(&sim, id).unwrap().collect();
     assert!(drained.is_empty());
     let wait = words.mailbox_wait(task_slot);
     assert_eq!(sim.word(wait.base().result()), 0xffff_ffcf);
@@ -2047,8 +2047,68 @@ fn delete_releases_a_cross_domain_waiter_in_its_domain() {
         0,
         0,
     );
-    assert_eq!(delete_flag(&sim, id, 0), Ok(()));
+    assert_eq!(delete_flag(&sim, id), Ok(()));
     assert_eq!(sim.ready(Domain::B, 5), task.0 .0);
     assert_eq!(sim.ready(Domain::A, 5), 0);
     assert!(sim.doorbell(1));
+}
+
+#[test]
+fn delete_mailbox_releases_two_receivers_in_their_domains() {
+    let a = Domain::A.words();
+    let b = Domain::B.words();
+    let sim = Sim::new(Domain::A);
+    install(&sim, Domain::A);
+    install(&sim, Domain::B);
+    let mailbox = create_mailbox_at(&sim, MailboxSlot::new(1, 1).unwrap(), 0);
+    let (task_a, slot_a) = running_task(&sim, &a, Domain::A, 7);
+    sim.set_byte(task_a.priority(), 5);
+    let out_a = GuestAddress(0x4000_0600);
+    sim.set(out_a, 0xdead_beef);
+    let receiver_a = pending_receive(receive(
+        &sim,
+        EntryDomain::new(Domain::A),
+        mailbox,
+        OutWord(out_a),
+        Timeout::Forever,
+    ));
+    let (task_b, slot_b) = running_task(&sim, &b, Domain::B, 8);
+    sim.set_byte(task_b.priority(), 5);
+    sim.set(a.context(Domain::B).tick_now(), b.tick_now.0);
+    sim.set(b.tick_now, 100);
+    let out_b = GuestAddress(0x4000_0610);
+    sim.set(out_b, 0xdead_beef);
+    let receiver_b = pending_receive(receive(
+        &sim,
+        EntryDomain::new(Domain::B),
+        mailbox,
+        OutWord(out_b),
+        Timeout::Units(5),
+    ));
+    let timer_b = b.mailbox_timer(slot_b);
+    assert!(sim.armed(timer_b));
+    let drained: Vec<Message> = delete_mailbox(&sim, mailbox).unwrap().collect();
+    assert!(drained.is_empty());
+    assert_eq!(sim.word(a.mailbox_wait(slot_a).base().result()), 0xffff_ffcf);
+    assert_eq!(sim.word(b.mailbox_wait(slot_b).base().result()), 0xffff_ffcf);
+    assert_eq!(
+        resume_receive(&sim, receiver_a),
+        ReceiveResume::Completed(WaitOutcome::Released)
+    );
+    assert_eq!(
+        resume_receive(&sim, receiver_b),
+        ReceiveResume::Completed(WaitOutcome::Released)
+    );
+    assert_eq!(sim.word(out_a), 0xdead_beef);
+    assert_eq!(sim.word(out_b), 0xdead_beef);
+    assert!(!sim.armed(timer_b));
+    assert_eq!(sim.ready(Domain::A, 5), task_a.0 .0);
+    assert_eq!(sim.ready(Domain::B, 5), task_b.0 .0);
+    assert_eq!(sim.running(Domain::A), task_a.0 .0);
+    assert!(sim.doorbell(1));
+    let control = a.mailbox_control(mailbox.slot);
+    assert_eq!(sim.word(control.queue().next()), control.0 .0);
+    assert_eq!(sim.word(control.head()), 0);
+    assert_eq!(sim.word(control.tail()), 0);
+    assert_eq!(sim.word(a.mailbox_config(mailbox.slot).exists()), 0);
 }

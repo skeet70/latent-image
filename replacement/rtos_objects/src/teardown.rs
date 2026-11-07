@@ -47,7 +47,7 @@ fn release_all<M: Wake>(m: &M, queue: WaitQueue) -> bool {
 }
 
 /// Slot `+0x84`.
-pub fn delete_flag<M: Wake>(m: &M, id: FlagId, code: i32) -> Result<(), ObjectStatus> {
+pub fn delete_flag<M: Wake>(m: &M, id: FlagId) -> Result<(), ObjectStatus> {
     let words = id.domain.words();
     let control = words.flag_control(id.slot);
     let config = words.flag_config(id.slot);
@@ -64,7 +64,7 @@ pub fn delete_flag<M: Wake>(m: &M, id: FlagId, code: i32) -> Result<(), ObjectSt
             m.store_word(control.pattern(), 0);
             dispatch
         },
-        |dispatch| if *dispatch { m.dispatch(code) },
+        |dispatch| if *dispatch { m.dispatch(WaitCompletion::Released.code()) },
     );
     Ok(())
 }
@@ -73,7 +73,6 @@ pub fn delete_flag<M: Wake>(m: &M, id: FlagId, code: i32) -> Result<(), ObjectSt
 pub fn delete_mailbox<'a, M: Wake>(
     m: &'a M,
     id: MailboxId,
-    code: i32,
 ) -> Result<MessageDrain<'a, M>, ObjectStatus> {
     let words = id.domain.words();
     let control = words.mailbox_control(id.slot);
@@ -94,7 +93,7 @@ pub fn delete_mailbox<'a, M: Wake>(
             m.store_word(control.tail(), 0);
             dispatch
         },
-        |dispatch| if *dispatch { m.dispatch(code) },
+        |dispatch| if *dispatch { m.dispatch(WaitCompletion::Released.code()) },
     );
     Ok(MessageDrain { machine: m, next: head })
 }
