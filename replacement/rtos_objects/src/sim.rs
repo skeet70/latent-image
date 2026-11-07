@@ -290,7 +290,9 @@ impl Wake for Sim {
     }
 
     fn dispatch(&self, _code: i32) {
-        let selected = self.pointed(self.context(self.entry).selected());
-        self.set(self.context(self.entry).running(), selected);
+        let record = self.context(self.entry);
+        let cell = GuestAddress(self.word(record.running()));
+        let selected = self.pointed(record.selected());
+        self.set(cell, selected);
     }
 }
