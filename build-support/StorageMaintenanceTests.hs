@@ -14,7 +14,7 @@ import System.Environment (getArgs, getEnvironment)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>), takeDirectory, takeFileName)
 import System.IO (hClose, openTempFile)
-import System.Posix.Files (createSymbolicLink)
+import System.Posix.Files (createLink, createSymbolicLink, setFileMode)
 import System.Posix.IO (OpenMode (ReadWrite), closeFd, defaultFileFlags, openFd)
 import System.Posix.Types (Fd (..))
 import System.Process (CreateProcess (..), StdStream (CreatePipe), createProcess, proc, readProcessWithExitCode, terminateProcess, waitForProcess)
@@ -34,6 +34,13 @@ instance FromJSON InventorySummary where
     available <- o .: "availableBytes"
     users <- o .: "activeUsers"
     pure (InventorySummary (map snd (available :: [(FilePath, Integer)])) (map snd (users :: [(FilePath, [String])])))
+
+data Counts = Counts Integer Integer Integer Integer
+instance FromJSON Counts where
+  parseJSON = withObject "root counts" $ \o -> Counts <$> o .: "recognizedFileCount" <*> o .: "recognizedBytes" <*> o .: "retainedFileCount" <*> o .: "retainedBytes"
+newtype CountSummary = CountSummary [Counts]
+instance FromJSON CountSummary where
+  parseJSON = withObject "inventory counts" $ \o -> CountSummary <$> o .: "rootSummaries"
 
 check :: Bool -> String -> IO ()
 check ok message = unless ok (ioError (userError message))
@@ -110,9 +117,18 @@ main = do
     fresh "preview" $ \root plan -> do
       let files = compilerFiles ++ protectedFiles ++ [fingerprint]
       expected <- snapshot root files
-      _ <- run executable True ["inventory", "--cargo-target", root]
+      inventory <- run executable True ["inventory", "--cargo-target", root]
+      case eitherDecodeStrict' inventory of
+        Right (CountSummary [Counts selected selectedBytes kept keptBytes]) -> check (selected == fromIntegral (length compilerFiles + 2) && selectedBytes > 0 && kept == fromIntegral (length protectedFiles + 4) && keptBytes > 0) "inventory file counts or byte totals differ"
+        Right _ -> ioError (userError "inventory omitted root summary")
+        Left err -> ioError (userError err)
       makePlan executable root plan
       assertUnchanged root files expected
+    fresh "metadata-only" $ \root _ -> do
+      let unreadable = root </> "debug/deps/database.db"
+      bracket (setFileMode unreadable 0) (const (setFileMode unreadable 0o600)) $ \_ -> do
+        _ <- run executable True ["inventory", "--cargo-target", root]
+        pure ()
     fresh "apply" $ \root plan -> do
       expected <- snapshot root protectedFiles
       makePlan executable root plan
@@ -122,6 +138,11 @@ main = do
       audit <- B.readFile (plan ++ ".audit.json")
       case eitherDecodeStrict' audit of
         Right (AuditSummary verified deltas) -> check (verified && length deltas == 1) "missing measured audit or protected verification"
+        Left err -> ioError (userError err)
+      inventory <- run executable True ["inventory", "--cargo-target", root]
+      case eitherDecodeStrict' inventory of
+        Right (CountSummary [Counts selected selectedBytes _ _]) -> check (selected == 0 && selectedBytes == 0) "post-maintenance inventory selected retained data"
+        Right _ -> ioError (userError "post-maintenance inventory omitted root summary")
         Left err -> ioError (userError err)
     fresh "stale" $ \root plan -> do
       makePlan executable root plan
@@ -142,6 +163,21 @@ main = do
       makePlan executable root plan
       _ <- run executable True ["apply", "--plan", plan]
       B.readFile (root </> file) >>= \bytes -> check (bytes == "firmware data with a compiler-shaped name") "non-compiler content removed"
+    fresh "retained-unit" $ \root plan -> do
+      forM_ compilerFiles $ \file -> put (root </> file) "application content, not a compiler artifact"
+      let files = compilerFiles ++ protectedFiles ++ [fingerprint, "debug/.fingerprint/builder-" ++ hashSuffix ++ "/build-script-build-script-build"]
+      expected <- snapshot root files
+      makePlan executable root plan
+      _ <- run executable True ["apply", "--plan", plan]
+      assertUnchanged root files expected
+    fresh "hardlinked-unit" $ \root plan -> do
+      let external = workspace </> "external-hardlinks"
+      createDirectory external
+      forM_ (zip [0 :: Int ..] compilerFiles) $ \(index, file) -> createLink (root </> file) (external </> show index)
+      expected <- snapshot root (compilerFiles ++ [fingerprint])
+      makePlan executable root plan
+      _ <- run executable True ["apply", "--plan", plan]
+      assertUnchanged root (compilerFiles ++ [fingerprint]) expected
     fresh "tampered" $ \root plan -> do
       makePlan executable root plan
       bytes <- B.readFile plan
