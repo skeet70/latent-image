@@ -6,6 +6,9 @@ module Main (main) where
 
 import Control.Monad (forM_, unless)
 import Data.Aeson (object, (.=), encode)
+import qualified Data.Aeson as J
+import Data.Text (pack)
+import Data.Text.Encoding (encodeUtf8)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import FujiAF.Host (failH)
@@ -66,10 +69,32 @@ main = do
         [ object ["domain" .= show (familyDomain run), "stock" .= show (fst (familyReuse run)), "owned" .= show (snd (familyReuse run))]
         | run <- runs
         ]
-      document = object ["cases" .= cases, "reuse" .= reuse, "failures" .= length failures]
+      firstFailure = case failures of
+        (name, message) : _ -> object ["case" .= name, "message" .= message]
+        [] -> J.Null
+      casesPath = resultsPath ++ ".cases.txt"
+      document =
+        object
+          [ "passed" .= null failures
+          , "execution" .= ("host" :: String)
+          , "comparison" .= ("current" :: String)
+          , "labels"
+              .= object
+                [ "subset" .= ("f2-historical" :: String)
+                , "native" .= False
+                , "system" .= False
+                , "hardware" .= False
+                ]
+          , "cases" .= cases
+          , "reuse" .= reuse
+          , "failures" .= length failures
+          , "firstFailure" .= firstFailure
+          , "artifact" .= casesPath
+          , "reviewPacket" .= resultsPath
+          ]
+      casesText = unlines [show (familyDomain run) ++ " " ++ name ++ ": " ++ outcomeText result | run <- runs, (name, result) <- familyCases run]
   BL.writeFile resultsPath (encode document)
-  forM_ runs $ \run -> forM_ (familyCases run) $ \(name, result) ->
-    putStrLn (show (familyDomain run) ++ " " ++ name ++ ": " ++ outcomeText result)
+  B.writeFile casesPath (encodeUtf8 (pack casesText))
   forM_ failures $ \(name, message) -> putStrLn (name ++ ": " ++ message)
   unless (null failures) exitFailure
 
