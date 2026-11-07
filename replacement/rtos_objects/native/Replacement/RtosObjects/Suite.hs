@@ -103,6 +103,7 @@ handlerStackPointer = 0x00959900
 callerTop = 0x00959810
 exitAddress = 0x00958f00
 receiptAddress = 0x00960000
+lockWordBase = 0x00962000
 
 waiterSlot, runningSlot :: Slot
 waiterSlot = Slot 2
@@ -177,8 +178,11 @@ layoutPokes facts executing =
       let record = recordAddress facts executing of'
           w = domainFacts facts of'
           (acquire, release) = lockEntries block
+          lockIndex = if of' == DomainA then 0 else 1
+          lockWord offset = lockWordBase + 8 * lockIndex + (if offset == factsContextObjectLock facts then 4 else 0)
           lockRecord offset =
-            [ (GuestAddress (record + offset + factsLockWord facts), 0)
+            [ (GuestAddress (record + offset + factsLockWord facts), lockWord offset)
+            , (GuestAddress (lockWord offset), 0)
             , (GuestAddress (record + offset + factsLockAcquire facts), acquire)
             , (GuestAddress (record + offset + factsLockRelease facts), release)
             ]
@@ -254,6 +258,9 @@ cases facts domain =
         , (GuestAddress (t + factsTaskWait facts), wait)
         ]
       queued = fromIntegral (factsStateWait facts) + fromIntegral (factsStateObjectQueued facts)
+      heldLocks record =
+        let idx = if record == record facts domain DomainA then 0 else 1
+         in [ (GuestAddress (lockWordBase + 8 * idx), 1), (GuestAddress (lockWordBase + 8 * idx + 4), 1) ]
       peerFlag = flagConfig facts peerDomain 1
       peerControl = flagControl facts peerDomain 1
       peerWait = flagWait facts peerDomain (slotWord waiterSlot)
@@ -280,15 +287,15 @@ cases facts domain =
       , Case "send_empty_fifo" (ObjectService Send (serviceOf facts domain (Slot 1))) TaskInvocation [(R1, messageAddress)] [(GuestAddress (mailbox + factsMailboxConfigExists facts), 1), (GuestAddress (mailControl + factsMailboxControlHead facts), 0), (GuestAddress (mailControl + factsMailboxControlTail facts), 0), (GuestAddress (mailControl + factsWaitQueueNext facts), mailControl), (GuestAddress (mailControl + factsWaitQueuePrev facts), mailControl), (GuestAddress messageAddress, 0), (GuestAddress (messageAddress + 4), 0)] 0 Returns [Result 0, Equals (GuestAddress (mailControl + factsMailboxControlHead facts)) messageAddress, Equals (GuestAddress (mailControl + factsMailboxControlTail facts)) messageAddress, Equals (GuestAddress messageAddress) 0]
       , Case "send_priority_equal" (ObjectService Send (serviceOf facts domain (Slot 1))) TaskInvocation [(R1, messageAddress)] [(GuestAddress (mailbox + factsMailboxConfigExists facts), 1), (GuestAddress (mailbox + factsMailboxConfigAttributes facts), fromIntegral (factsMailboxMessagePriority facts)), (GuestAddress (mailControl + factsMailboxControlHead facts), queuedMessage), (GuestAddress (mailControl + factsMailboxControlTail facts), queuedMessage), (GuestAddress (mailControl + factsWaitQueueNext facts), mailControl), (GuestAddress queuedMessage, 0), (GuestAddress (queuedMessage + 4), 5), (GuestAddress messageAddress, 0), (GuestAddress (messageAddress + 4), 5)] 0 Returns [Result 0, Equals (GuestAddress queuedMessage) messageAddress, Equals (GuestAddress messageAddress) 0]
       , Case "send_waiter_peer" (ObjectService Send (serviceOf facts domain (Slot 1))) TaskInvocation [(R1, messageAddress)] ([(GuestAddress (mailbox + factsMailboxConfigExists facts), 1), (GuestAddress (mailControl + factsWaitQueueNext facts), t), (GuestAddress (mailWait + factsWaitBlockQueue facts), mailControl), (GuestAddress messageAddress, 0)] ++ [(GuestAddress (t + factsTaskNext facts), t), (GuestAddress (t + factsTaskPrev facts), t), (GuestAddress (t + factsTaskState facts), queued .|. (3 `shiftL` 8)), (GuestAddress (t + factsTaskDomain facts), peer), (GuestAddress (t + factsTaskWait facts), mailWait)]) 0 Returns [Result 0, Nonzero doorbell]
-      , Case "release_plain_insert" (OwnerRelease (Owner (GuestAddress (record facts domain (dfId w)))) TaskInvocation) [(R1, t)] ((waiter queued) ++ [(GuestAddress (wait + factsWaitBlockResult facts), 0)]) 0 Returns [Result 1, Equals (GuestAddress (t + factsTaskState facts)) (fromIntegral (factsStateReady facts) .|. (3 `shiftL` 8))]
-      , Case "release_terminate_reset" (OwnerRelease (Owner (GuestAddress (record facts domain (dfId w)))) TaskInvocation) [(R1, t)] ((waiter queued) ++ [(GuestAddress (t + factsTaskTerminatePending facts), 1)]) 0 Returns [Result 0, Equals (GuestAddress (t + factsTaskContextDiscarded facts)) 1]
-      , Case "release_terminate_prepare" (OwnerRelease (Owner (GuestAddress (record facts domain (dfId w)))) TaskInvocation) [(R1, t)] ((waiter queued) ++ [(GuestAddress (t + factsTaskTerminatePending facts), 1), (GuestAddress (t + factsTaskState facts), queued .|. (3 `shiftL` 8) .|. (1 `shiftL` 16))]) 0 Returns [Result 1, Equals (GuestAddress (t + factsTaskState facts)) (fromIntegral (factsStateReady facts) .|. (3 `shiftL` 8))]
-      , Case "release_priority" (OwnerRelease (Owner (GuestAddress (record facts domain (dfId w)))) TaskInvocation) [(R1, t)] ((waiter queued) ++ [(GuestAddress (t + factsTaskPriorityChangePending facts), 1), (GuestAddress (t + factsTaskPendingPriority facts), 7)]) 0 Returns [Result 1, Equals (GuestAddress (t + factsTaskState facts)) (fromIntegral (factsStateReady facts) .|. (7 `shiftL` 8))]
-      , Case "release_suspended" (OwnerRelease (Owner (GuestAddress (record facts domain (dfId w)))) TaskInvocation) [(R1, t)] ((waiter queued) ++ [(GuestAddress (t + factsTaskState facts), fromIntegral (factsStateSuspended facts) .|. (3 `shiftL` 8))]) 0 Returns [Result 0, Equals (GuestAddress (t + factsTaskState facts)) (fromIntegral (factsStateSuspended facts) .|. (3 `shiftL` 8))]
-      , Case "release_timer" (OwnerRelease (Owner (GuestAddress (record facts domain (dfId w)))) TaskInvocation) [(R1, t)] ((waiter queued) ++ [(GuestAddress (wait + factsWaitBlockResult facts), timerEntry domain)]) 0 Returns [Result 1, Equals (GuestAddress (wait + factsWaitBlockResult facts)) 0, Equals (GuestAddress (receiptAddress + 4)) (timerEntry domain)]
-      , Case "release_owner_peer" (OwnerRelease (Owner (GuestAddress (record facts domain peer)))) TaskInvocation [(R1, t)] (waiter queued) 0 Returns [Result 1, Equals (GuestAddress (dfSelected (domainFacts facts peer))) t]
-      , Case "release_plain_insert_handler" (OwnerRelease (Owner (GuestAddress (record facts domain (dfId w))))) HandlerInvocation [(R1, t)] ((waiter queued) ++ [(GuestAddress (wait + factsWaitBlockResult facts), 0)]) 0 Returns [Result 1, Equals (GuestAddress (t + factsTaskState facts)) (fromIntegral (factsStateReady facts) .|. (3 `shiftL` 8))]
-      , Case "release_timer_handler" (OwnerRelease (Owner (GuestAddress (record facts domain (dfId w))))) HandlerInvocation [(R1, t)] ((waiter queued) ++ [(GuestAddress (wait + factsWaitBlockResult facts), timerEntry domain)]) 0 Returns [Result 1, Equals (GuestAddress (wait + factsWaitBlockResult facts)) 0, Equals (GuestAddress (receiptAddress + 4)) (timerEntry domain)]
+      , Case "release_plain_insert" (OwnerRelease (Owner (GuestAddress (record facts domain (dfId w)))) TaskInvocation) [(R1, t)] (heldLocks (record facts domain (dfId w)) ++ (waiter queued) ++ [(GuestAddress (wait + factsWaitBlockResult facts), 0)]) 0 Returns [Result 1, Equals (GuestAddress (t + factsTaskState facts)) (fromIntegral (factsStateReady facts) .|. (3 `shiftL` 8))]
+      , Case "release_terminate_reset" (OwnerRelease (Owner (GuestAddress (record facts domain (dfId w)))) TaskInvocation) [(R1, t)] (heldLocks (record facts domain (dfId w)) ++ (waiter queued) ++ [(GuestAddress (t + factsTaskTerminatePending facts), 1)]) 0 Returns [Result 0, Equals (GuestAddress (t + factsTaskContextDiscarded facts)) 1]
+      , Case "release_terminate_prepare" (OwnerRelease (Owner (GuestAddress (record facts domain (dfId w)))) TaskInvocation) [(R1, t)] (heldLocks (record facts domain (dfId w)) ++ (waiter queued) ++ [(GuestAddress (t + factsTaskTerminatePending facts), 1), (GuestAddress (t + factsTaskState facts), queued .|. (3 `shiftL` 8) .|. (1 `shiftL` 16))]) 0 Returns [Result 1, Equals (GuestAddress (t + factsTaskState facts)) (fromIntegral (factsStateReady facts) .|. (3 `shiftL` 8))]
+      , Case "release_priority" (OwnerRelease (Owner (GuestAddress (record facts domain (dfId w)))) TaskInvocation) [(R1, t)] (heldLocks (record facts domain (dfId w)) ++ (waiter queued) ++ [(GuestAddress (t + factsTaskPriorityChangePending facts), 1), (GuestAddress (t + factsTaskPendingPriority facts), 7)]) 0 Returns [Result 1, Equals (GuestAddress (t + factsTaskState facts)) (fromIntegral (factsStateReady facts) .|. (7 `shiftL` 8))]
+      , Case "release_suspended" (OwnerRelease (Owner (GuestAddress (record facts domain (dfId w)))) TaskInvocation) [(R1, t)] (heldLocks (record facts domain (dfId w)) ++ (waiter queued) ++ [(GuestAddress (t + factsTaskState facts), fromIntegral (factsStateSuspended facts) .|. (3 `shiftL` 8))]) 0 Returns [Result 0, Equals (GuestAddress (t + factsTaskState facts)) (fromIntegral (factsStateSuspended facts) .|. (3 `shiftL` 8))]
+      , Case "release_timer" (OwnerRelease (Owner (GuestAddress (record facts domain (dfId w)))) TaskInvocation) [(R1, t)] (heldLocks (record facts domain (dfId w)) ++ (waiter queued) ++ [(GuestAddress (wait + factsWaitBlockResult facts), timerEntry domain)]) 0 Returns [Result 1, Equals (GuestAddress (wait + factsWaitBlockResult facts)) 0, Equals (GuestAddress (receiptAddress + 4)) (timerEntry domain)]
+      , Case "release_owner_peer" (OwnerRelease (Owner (GuestAddress (record facts domain peer)))) TaskInvocation [(R1, t)] (heldLocks (record facts domain peer) ++ waiter queued) 0 Returns [Result 1, Equals (GuestAddress (dfSelected (domainFacts facts peer))) t]
+      , Case "release_plain_insert_handler" (OwnerRelease (Owner (GuestAddress (record facts domain (dfId w))))) HandlerInvocation [(R1, t)] (heldLocks (record facts domain (dfId w)) ++ (waiter queued) ++ [(GuestAddress (wait + factsWaitBlockResult facts), 0)]) 0 Returns [Result 1, Equals (GuestAddress (t + factsTaskState facts)) (fromIntegral (factsStateReady facts) .|. (3 `shiftL` 8))]
+      , Case "release_timer_handler" (OwnerRelease (Owner (GuestAddress (record facts domain (dfId w))))) HandlerInvocation [(R1, t)] (heldLocks (record facts domain (dfId w)) ++ (waiter queued) ++ [(GuestAddress (wait + factsWaitBlockResult facts), timerEntry domain)]) 0 Returns [Result 1, Equals (GuestAddress (wait + factsWaitBlockResult facts)) 0, Equals (GuestAddress (receiptAddress + 4)) (timerEntry domain)]
       ]
   where
     queuedMessage = messageAddress + 8
@@ -343,6 +350,7 @@ casePages facts domain one =
       , Page (RegionId "caller-frame") stackPointer (fromIntegral (callerTop - stackPointer)) ReadWrite []
       , Page (RegionId "exit") exitAddress 4 ReadExecute []
       , Page (RegionId "receipt") receiptAddress 8 ReadWrite []
+      , Page (RegionId "locks") lockWordBase 0x100 ReadWrite words'
       , Page (RegionId "doorbell") 0xfffb4000 0x1000 Device []
       , Page (RegionId "doorbell-1") 0xfffb3000 0x1000 Device []
       ]
