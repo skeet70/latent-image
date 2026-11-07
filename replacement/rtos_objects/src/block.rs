@@ -138,7 +138,6 @@ fn block<M: Block>(
 }
 
 /// Slots `+0x94` and `+0x9c`.
-#[cfg_attr(feature = "family", inline(never))]
 pub fn wait_flag<M: Block>(
     m: &M,
     entry: EntryDomain,
@@ -198,7 +197,6 @@ pub fn wait_flag<M: Block>(
 }
 
 /// Slots `+0xd8` and `+0xe0`.
-#[cfg_attr(feature = "family", inline(never))]
 pub fn receive<M: Block>(
     m: &M,
     entry: EntryDomain,
