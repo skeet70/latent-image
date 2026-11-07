@@ -87,6 +87,7 @@ xm1_rust_staticlib(
             ":scheduler-s2-%s-component" % domain,
         ],
         link_script = "stage/f2-%s.ld" % domain,
+        extra_ldflags = ["-Wl,--gc-sections", "-Wl,--orphan-handling=error"],
         link_includes = [
             "//replacement/rtos_scheduler:scheduler-%s.ld" % domain,
             "//replacement/rtos_scheduler:scheduler-s2-%s.ld" % domain,
