@@ -954,10 +954,10 @@ haskell_test(
     name = "fujimod-xm1-tests",
     size = "medium",
     srcs = ["FujimodXm1Tests.hs"],
-    args = ["$(rootpath @lab_fujimod_xm1//:test-manifest)"],
+    args = ["$(rootpath @lab_fujimod_xm1_tests//:test-manifest)"],
     data = [
-        "@lab_fujimod_xm1//:test-manifest",
-        "@lab_fujimod_xm1//:test-harnesses",
+        "@lab_fujimod_xm1_tests//:test-manifest",
+        "@lab_fujimod_xm1_tests//:test-harnesses",
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [

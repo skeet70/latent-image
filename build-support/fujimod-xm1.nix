@@ -59,6 +59,7 @@ in
 # has no doctests.
 craneLib.mkCargoDerivation (common // {
   src = workspace crate;
+  outputs = [ "out" "tests" ];
   cargoArtifacts = deps;
   doInstallCargoArtifacts = false;
   XM1_CHECKPOINT_MODEL_ID = builtins.hashString "sha256" (builtins.toJSON {
@@ -73,16 +74,16 @@ craneLib.mkCargoDerivation (common // {
   '';
   # store-path holds $out, so Bazel actions keyed on it change with the store path.
   installPhaseCommand = ''
-    mkdir -p $out/bin $out/share/fujimod-xm1 $out/libexec/fujimod-xm1-tests
+    mkdir -p $out/bin $out/share/fujimod-xm1 $tests/libexec/fujimod-xm1-tests
     jq -r 'select(.reason == "compiler-artifact" and .target.kind == ["bin"] and .profile.test == false) | .executable' build-artifacts.json \
       | while read -r executable; do cp "$executable" $out/bin/; done
     cp data/xm1-150.json $out/share/fujimod-xm1/
     printf '%s\n' "$out" > $out/share/fujimod-xm1/store-path
     jq -r 'select(.reason == "compiler-artifact" and .profile.test == true and .executable != null) | .executable' test-artifacts.json \
       | while read -r executable; do
-          cp "$executable" "$out/libexec/fujimod-xm1-tests/"
-          basename "$executable" >> "$out/libexec/fujimod-xm1-tests/manifest"
+          cp "$executable" "$tests/libexec/fujimod-xm1-tests/"
+          basename "$executable" >> "$tests/libexec/fujimod-xm1-tests/manifest"
         done
-    test -s $out/libexec/fujimod-xm1-tests/manifest
+    test -s $tests/libexec/fujimod-xm1-tests/manifest
   '';
 })
