@@ -555,31 +555,18 @@ impl Machine for Mock {
 }
 
 impl ObjectLock for Mock {
-    fn with_object_lock_after<R>(&self, _lock: LockRecord, body: impl FnOnce() -> R, after: impl FnOnce(&R)) -> R {
+    fn lock_object(&self, lock: LockRecord) -> ObjectGuard<'_, Self> {
         assert!(!self.held.get(), "object lock acquired twice");
         self.creation_mask.set(false);
         let saved = self.interrupts.get();
         self.interrupts.set(SavedInterrupts(saved.0 | 0x80));
         self.held.set(true);
-        let result = body();
-        assert!(self.held.get(), "object lock released while not held");
-        self.held.set(false);
-        after(&result);
-        self.interrupts.set(saved);
-        result
+        ObjectGuard::new(self, lock, saved)
     }
 
-    fn with_object_lock<R>(&self, _lock: LockRecord, body: impl FnOnce() -> R) -> R {
-        assert!(!self.held.get(), "object lock acquired twice");
-        self.creation_mask.set(false);
-        let saved = self.interrupts.get();
-        self.interrupts.set(SavedInterrupts(saved.0 | 0x80));
-        self.held.set(true);
-        let result = body();
+    fn release_object(&self, _lock: LockRecord) {
         assert!(self.held.get(), "object lock released while not held");
         self.held.set(false);
-        self.interrupts.set(saved);
-        result
     }
 }
 

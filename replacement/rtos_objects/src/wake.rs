@@ -1,4 +1,4 @@
-use crate::create::Machine;
+use crate::create::{Machine, SavedInterrupts};
 use crate::id::{FlagId, MailboxId};
 use crate::layout::{
     Domain, FlagConfig, FlagWait, GuestAddress, KernelContext, MailboxControl, MailboxWait, Message,
@@ -38,8 +38,42 @@ pub trait Release: Machine {
     fn release(&self, owner: KernelContext, task: Task) -> Selection;
 }
 
+/// Releases and restores any saved mask on drop.
+pub struct SchedulerGuard<'a, M: Wake + ?Sized> {
+    machine: &'a M,
+    domain: Domain,
+    saved: Option<SavedInterrupts>,
+    released: bool,
+}
+
+impl<'a, M: Wake + ?Sized> SchedulerGuard<'a, M> {
+    pub(crate) fn new(machine: &'a M, domain: Domain, saved: Option<SavedInterrupts>) -> Self {
+        Self { machine, domain, saved, released: false }
+    }
+
+    /// Idempotent.
+    pub fn release(&mut self) {
+        if !self.released {
+            self.machine.release_scheduler(self.domain);
+            self.released = true;
+        }
+    }
+}
+
+impl<M: Wake + ?Sized> Drop for SchedulerGuard<'_, M> {
+    fn drop(&mut self) {
+        self.release();
+        if let Some(saved) = self.saved {
+            self.machine.restore_interrupts(saved);
+        }
+    }
+}
+
 pub trait Wake: ObjectLock + Release {
-    fn with_scheduler_lock<R>(&self, domain: Domain, body: impl FnOnce() -> R) -> R;
+    fn lock_scheduler(&self, domain: Domain) -> SchedulerGuard<'_, Self>
+    where
+        Self: Sized;
+    fn release_scheduler(&self, domain: Domain);
     /// T+0x20.
     fn waiter_domain(&self, task: Task) -> Domain;
     /// The owner record's `+0x00` id word.
@@ -77,7 +111,6 @@ impl WaitCompletion {
 }
 
 /// The stock wait release, A `0x44568` / B `0xd4528`, over the S1 primitives.
-#[cfg_attr(feature = "family", inline(never))]
 pub fn release<M: Release>(m: &M, owner: KernelContext, task: Task) -> Selection {
     release_with(m, owner, task, WaitCompletion::Satisfied)
 }
@@ -155,13 +188,11 @@ fn dispatch_after<M: Wake>(m: &M, owner: KernelContext, released: Selection) -> 
 }
 
 /// Slot `+0x88`.
-#[cfg_attr(feature = "family", inline(never))]
 pub fn set_flag<M: Wake>(m: &M, id: FlagId, bits: Pattern) {
     set_flag_mode(m, id, bits, WakeMode::Task);
 }
 
 /// Slot `+0x8c`.
-#[cfg_attr(feature = "family", inline(never))]
 pub fn set_flag_handler<M: Wake>(m: &M, id: FlagId, bits: Pattern) {
     set_flag_mode(m, id, bits, WakeMode::Handler);
 }
@@ -172,7 +203,8 @@ fn set_flag_mode<M: Wake>(m: &M, id: FlagId, bits: Pattern, wake: WakeMode) {
     let control = words.flag_control(id.slot);
     let config = words.flag_config(id.slot);
     let lock = words.context(id.domain).object_lock();
-    m.with_object_lock_after(lock, || {
+    let mut object = m.lock_object(lock);
+    let dispatch = (|| {
         let waiter = m.load_word(control.queue().next());
         if waiter == control.0 .0 {
             let pattern = m.load_word(control.pattern()) | bits.0;
@@ -182,7 +214,8 @@ fn set_flag_mode<M: Wake>(m: &M, id: FlagId, bits: Pattern, wake: WakeMode) {
         let task = Task(GuestAddress(waiter));
         let owner_domain = m.waiter_domain(task);
         let owner = m.context(owner_domain);
-        m.with_scheduler_lock(owner_domain, || {
+        let mut scheduler = m.lock_scheduler(owner_domain);
+        let result = (|| {
             let pattern = m.load_word(control.pattern()) | bits.0;
             m.store_word(control.pattern(), pattern);
             let wait = FlagWait(GuestAddress(m.load_word(task.wait())));
@@ -202,15 +235,17 @@ fn set_flag_mode<M: Wake>(m: &M, id: FlagId, bits: Pattern, wake: WakeMode) {
                 }
                 None => false,
             }
-        })
-    }, |dispatch| {
-        if *dispatch {
-            match wake {
-                WakeMode::Task => m.dispatch(-43),
-                WakeMode::Handler => m.request_delayed_dispatch(),
-            }
+        })();
+        scheduler.release();
+        result
+    })();
+    object.release();
+    if dispatch {
+        match wake {
+            WakeMode::Task => m.dispatch(-43),
+            WakeMode::Handler => m.request_delayed_dispatch(),
         }
-    });
+    }
 }
 
 fn append_fifo<M: Machine>(m: &M, control: MailboxControl, message: Message) {
@@ -251,7 +286,8 @@ pub fn send<M: Wake>(m: &M, id: MailboxId, message: Message, priority: Option<Me
     let words = id.domain.words();
     let control = words.mailbox_control(id.slot);
     let lock = words.context(id.domain).object_lock();
-    m.with_object_lock_after(lock, || {
+    let mut object = m.lock_object(lock);
+    let dispatch = (|| {
         let waiter = m.load_word(control.queue().next());
         if waiter == control.0 .0 {
             match priority {
@@ -265,9 +301,16 @@ pub fn send<M: Wake>(m: &M, id: MailboxId, message: Message, priority: Option<Me
         let owner = m.context(owner_domain);
         let wait = MailboxWait(GuestAddress(m.load_word(task.wait())));
         m.store_word(wait.message(), message.0 .0);
-        m.with_scheduler_lock(owner_domain, || {
+        let mut scheduler = m.lock_scheduler(owner_domain);
+        let result = (|| {
             unlink(m, task);
             dispatch_after(m, owner, m.release(owner, task))
-        })
-    }, |dispatch| if *dispatch { m.dispatch(-63) });
+        })();
+        scheduler.release();
+        result
+    })();
+    object.release();
+    if dispatch {
+        m.dispatch(-63);
+    }
 }

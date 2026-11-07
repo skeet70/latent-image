@@ -1,4 +1,4 @@
-use crate::create::Machine;
+use crate::create::{Machine, SavedInterrupts};
 use crate::id::{FlagId, MailboxId};
 use crate::layout::{FlagConfig, FlagControl, GuestAddress, LockRecord, Message};
 use crate::matching::{check, KeepMask, MatchMode, Pattern, WantedMask};
@@ -9,13 +9,43 @@ use crate::status::{ObjectStatus, WaitOutcome};
 #[repr(transparent)]
 pub struct OutWord(pub GuestAddress);
 
-/// The object domain's `+0x14` lock through `+0x18`/`+0x1c`, with the I-only mask; the
-/// implementation owns the pairing.
+/// Releases and restores on drop.
+pub struct ObjectGuard<'a, M: ObjectLock + ?Sized> {
+    machine: &'a M,
+    lock: LockRecord,
+    saved: SavedInterrupts,
+    released: bool,
+}
+
+impl<'a, M: ObjectLock + ?Sized> ObjectGuard<'a, M> {
+    pub(crate) fn new(machine: &'a M, lock: LockRecord, saved: SavedInterrupts) -> Self {
+        Self { machine, lock, saved, released: false }
+    }
+
+    /// The `+0x1c` release; idempotent.
+    pub fn release(&mut self) {
+        if !self.released {
+            self.machine.release_object(self.lock);
+            self.released = true;
+        }
+    }
+}
+
+impl<M: ObjectLock + ?Sized> Drop for ObjectGuard<'_, M> {
+    fn drop(&mut self) {
+        self.release();
+        self.machine.restore_interrupts(self.saved);
+    }
+}
+
+/// `+0x14` through `+0x18`/`+0x1c`, masked I-only.
 pub trait ObjectLock: Machine {
-    fn with_object_lock<R>(&self, lock: LockRecord, body: impl FnOnce() -> R) -> R;
-    /// As 'with_object_lock', with `after` run between the release and the restore, so a
-    /// dispatch stays inside the masked section.
-    fn with_object_lock_after<R>(&self, lock: LockRecord, body: impl FnOnce() -> R, after: impl FnOnce(&R)) -> R;
+    /// Masks I.
+    fn lock_object(&self, lock: LockRecord) -> ObjectGuard<'_, Self>
+    where
+        Self: Sized;
+    /// The `+0x1c` release; the guard calls it once.
+    fn release_object(&self, lock: LockRecord);
 }
 
 /// Slot `+0x90`.
@@ -24,7 +54,8 @@ pub fn clear_flag<M: ObjectLock>(m: &M, id: FlagId, keep: KeepMask) -> Result<()
     let words = id.domain.words();
     let pattern = words.flag_control(id.slot).pattern();
     let lock = words.context(id.domain).object_lock();
-    m.with_object_lock(lock, || m.store_word(pattern, m.load_word(pattern) & keep.0));
+    let _guard = m.lock_object(lock);
+    m.store_word(pattern, m.load_word(pattern) & keep.0);
     Ok(())
 }
 
@@ -65,7 +96,8 @@ pub fn poll_flag<M: ObjectLock>(
     let control = words.flag_control(id.slot);
     let config = words.flag_config(id.slot);
     let lock = words.context(id.domain).object_lock();
-    m.with_object_lock(lock, || {
+    let _guard = m.lock_object(lock);
+    (|| {
         if m.load_word(control.queue().next()) != control.0 .0 {
             return Err(ObjectStatus::QueueOverflow);
         }
@@ -73,7 +105,7 @@ pub fn poll_flag<M: ObjectLock>(
             Some(reported) => Ok(WaitOutcome::Satisfied(reported)),
             None => Ok(WaitOutcome::TimedOut),
         }
-    })
+    })()
 }
 
 /// Slot `+0xdc`.
@@ -86,7 +118,8 @@ pub fn poll_receive<M: ObjectLock>(
     let words = id.domain.words();
     let control = words.mailbox_control(id.slot);
     let lock = words.context(id.domain).object_lock();
-    m.with_object_lock(lock, || {
+    let _guard = m.lock_object(lock);
+    (|| {
         let head = m.load_word(control.head());
         if head == 0 {
             return Ok(WaitOutcome::TimedOut);
@@ -96,5 +129,5 @@ pub fn poll_receive<M: ObjectLock>(
         m.store_word(out.0, head);
         m.store_word(control.head(), successor);
         Ok(WaitOutcome::Satisfied(message))
-    })
+    })()
 }

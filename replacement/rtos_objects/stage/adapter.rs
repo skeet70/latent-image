@@ -20,9 +20,9 @@ use core::arch::asm;
 use core::ptr::read_volatile;
 use objects::create::{Machine, SavedInterrupts};
 use objects::layout::{Domain, DomainId, DomainWords, GuestAddress, KernelContext, LockRecord, Task};
-use objects::locked::ObjectLock;
+use objects::locked::{ObjectGuard, ObjectLock};
 use objects::message::{MessagePriority, PriorityLimit};
-use objects::wake::{release, DispatchTarget, Release, Selection, Wake};
+use objects::wake::{release, DispatchTarget, Release, SchedulerGuard, Selection, Wake};
 use objects::*;
 
 #[cfg(all(target_arch = "arm", not(test)))]
@@ -110,23 +110,14 @@ impl Machine for Cpu {
 }
 
 impl ObjectLock for Cpu {
-    fn with_object_lock_after<R>(&self, lock: LockRecord, body: impl FnOnce() -> R, after: impl FnOnce(&R)) -> R {
+    fn lock_object(&self, lock: LockRecord) -> ObjectGuard<'_, Self> {
         let saved = self.mask_interrupts();
         unsafe { xm1_rtos_scheduler_acquire(lock) };
-        let result = body();
-        unsafe { xm1_rtos_scheduler_release(lock) };
-        after(&result);
-        self.restore_interrupts(saved);
-        result
+        ObjectGuard::new(self, lock, saved)
     }
 
-    fn with_object_lock<R>(&self, lock: LockRecord, body: impl FnOnce() -> R) -> R {
-        let saved = self.mask_interrupts();
-        unsafe { xm1_rtos_scheduler_acquire(lock) };
-        let result = body();
+    fn release_object(&self, lock: LockRecord) {
         unsafe { xm1_rtos_scheduler_release(lock) };
-        self.restore_interrupts(saved);
-        result
     }
 }
 
@@ -166,12 +157,15 @@ impl Release for Cpu {
 }
 
 impl Wake for Cpu {
-    fn with_scheduler_lock<R>(&self, owner: Domain, body: impl FnOnce() -> R) -> R {
+    fn lock_scheduler(&self, owner: Domain) -> SchedulerGuard<'_, Self> {
         let lock = record(owner).scheduler_lock();
         unsafe { xm1_rtos_scheduler_acquire(lock) };
-        let result = body();
+        SchedulerGuard::new(self, owner, None)
+    }
+
+    fn release_scheduler(&self, owner: Domain) {
+        let lock = record(owner).scheduler_lock();
         unsafe { xm1_rtos_scheduler_release(lock) };
-        result
     }
 
     fn waiter_domain(&self, waiter: Task) -> Domain {
@@ -203,7 +197,7 @@ impl Wake for Cpu {
 }
 
 #[inline(always)]
-fn entry_words() -> DomainWords {
+fn entry_words() -> &'static DomainWords {
     ENTRY.words()
 }
 

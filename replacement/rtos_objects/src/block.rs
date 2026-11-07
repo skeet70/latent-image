@@ -125,13 +125,16 @@ fn block<M: Block>(
     order: QueueOrder,
     timer: Option<(TimerEntryAddress, Deadline)>,
 ) -> bool {
-    m.with_scheduler_lock(entry, || {
+    let mut scheduler = m.lock_scheduler(entry);
+    let ready = (|| {
         if m.load_byte(task.state()) & TaskState::READY.bits() == 0 {
             return false;
         }
         block_locked(m, entry, owner, task, wait, queue, order, timer);
         true
-    })
+    })();
+    scheduler.release();
+    ready
 }
 
 /// Slots `+0x94` and `+0x9c`.
@@ -149,7 +152,8 @@ pub fn wait_flag<M: Block>(
     let control = words.flag_control(id.slot);
     let config = words.flag_config(id.slot);
     let lock = words.context(id.domain).object_lock();
-    m.with_object_lock(lock, || {
+    let _guard = m.lock_object(lock);
+    (|| {
         if m.load_word(control.queue().next()) != control.0 .0 {
             return Err(ObjectStatus::QueueOverflow);
         }
@@ -190,7 +194,7 @@ pub fn wait_flag<M: Block>(
                 }
             },
         }
-    })
+    })()
 }
 
 /// Slots `+0xd8` and `+0xe0`.
@@ -206,7 +210,8 @@ pub fn receive<M: Block>(
     let control = words.mailbox_control(id.slot);
     let config = words.mailbox_config(id.slot);
     let lock = words.context(id.domain).object_lock();
-    m.with_object_lock(lock, || {
+    let _guard = m.lock_object(lock);
+    (|| {
         let head = m.load_word(control.head());
         if head != 0 {
             let message = Message(GuestAddress(head));
@@ -247,7 +252,7 @@ pub fn receive<M: Block>(
                 Ok(ReceiveBlocking::Pending(ReceivePending { task, wait, out }))
             }
         }
-    })
+    })()
 }
 
 #[derive(Debug, PartialEq, Eq)]

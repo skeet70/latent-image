@@ -35,13 +35,15 @@ fn release_all<M: Wake>(m: &M, queue: WaitQueue) -> bool {
         let task = Task(GuestAddress(waiter));
         let owner_domain = m.waiter_domain(task);
         let owner = m.context(owner_domain);
-        let changed = m.with_scheduler_lock(owner_domain, || {
+        let mut scheduler = m.lock_scheduler(owner_domain);
+        let changed = (|| {
             unlink(m, task);
             match release_with(m, owner, task, WaitCompletion::Released) {
                 Selection::Changed => m.notify(m.record_id(owner)) == DispatchTarget::Local,
                 Selection::Unchanged => false,
             }
-        });
+        })();
+        scheduler.release();
         dispatch |= changed;
     }
     dispatch
@@ -54,20 +56,21 @@ pub fn delete_flag<M: Wake>(m: &M, id: FlagId) -> Result<(), ObjectStatus> {
     let control = words.flag_control(id.slot);
     let config = words.flag_config(id.slot);
     let lock = words.context(id.domain).object_lock();
-    m.with_object_lock_after(
-        lock,
-        || {
-            let dispatch = release_all(m, control.queue());
-            m.store_word(config.attributes(), 0);
-            m.store_word(config.initial(), 0);
-            m.store_word(config.exists(), 0);
-            m.store_word(control.queue().next(), control.0 .0);
-            m.store_word(control.queue().prev(), control.0 .0);
-            m.store_word(control.pattern(), 0);
-            dispatch
-        },
-        |dispatch| if *dispatch { m.dispatch(0) },
-    );
+    let mut object = m.lock_object(lock);
+    let dispatch = (|| {
+        let dispatch = release_all(m, control.queue());
+        m.store_word(config.attributes(), 0);
+        m.store_word(config.initial(), 0);
+        m.store_word(config.exists(), 0);
+        m.store_word(control.queue().next(), control.0 .0);
+        m.store_word(control.queue().prev(), control.0 .0);
+        m.store_word(control.pattern(), 0);
+        dispatch
+    })();
+    object.release();
+    if dispatch {
+        m.dispatch(0);
+    }
     Ok(())
 }
 
@@ -81,22 +84,23 @@ pub fn delete_mailbox<'a, M: Wake>(
     let control = words.mailbox_control(id.slot);
     let config = words.mailbox_config(id.slot);
     let lock = words.context(id.domain).object_lock();
+    let mut object = m.lock_object(lock);
     let mut head = GuestAddress(0);
-    m.with_object_lock_after(
-        lock,
-        || {
-            let dispatch = release_all(m, control.queue());
-            head = GuestAddress(m.load_word(control.head()));
-            m.store_word(config.attributes(), 2);
-            m.store_word(config.priority_limit(), 32);
-            m.store_word(config.exists(), 0);
-            m.store_word(control.queue().next(), control.0 .0);
-            m.store_word(control.queue().prev(), control.0 .0);
-            m.store_word(control.head(), 0);
-            m.store_word(control.tail(), 0);
-            dispatch
-        },
-        |dispatch| if *dispatch { m.dispatch(0) },
-    );
+    let dispatch = (|| {
+        let dispatch = release_all(m, control.queue());
+        head = GuestAddress(m.load_word(control.head()));
+        m.store_word(config.attributes(), 2);
+        m.store_word(config.priority_limit(), 32);
+        m.store_word(config.exists(), 0);
+        m.store_word(control.queue().next(), control.0 .0);
+        m.store_word(control.queue().prev(), control.0 .0);
+        m.store_word(control.head(), 0);
+        m.store_word(control.tail(), 0);
+        dispatch
+    })();
+    object.release();
+    if dispatch {
+        m.dispatch(0);
+    }
     Ok(MessageDrain { machine: m, next: head })
 }

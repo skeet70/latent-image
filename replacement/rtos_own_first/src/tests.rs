@@ -193,10 +193,10 @@ fn task_ids_follow_the_stock_index_formula() {
 
 #[test]
 fn null_running_task_is_zero_only_in_handler_form() {
-    assert_eq!(task_id_through(Service::HandlerTaskId, &Domain::A.words(), 0), 0);
-    assert_eq!(task_id_through(Service::HandlerTaskId, &Domain::B.words(), 0), 0);
-    assert_eq!(task_id_through(Service::TaskId, &Domain::A.words(), 0), 0x236d_9b73);
-    assert_eq!(task_id_through(Service::TaskId, &Domain::B.words(), 0), 0xfedb_292b);
+    assert_eq!(task_id_through(Service::HandlerTaskId, Domain::A.words(), 0), 0);
+    assert_eq!(task_id_through(Service::HandlerTaskId, Domain::B.words(), 0), 0);
+    assert_eq!(task_id_through(Service::TaskId, Domain::A.words(), 0), 0x236d_9b73);
+    assert_eq!(task_id_through(Service::TaskId, Domain::B.words(), 0), 0xfedb_292b);
 }
 
 #[test]

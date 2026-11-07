@@ -863,6 +863,62 @@ impl DomainWords {
 /// A heap entry: one-based slot, callback and argument.
 pub const TIMER_ENTRY_SIZE: u32 = 0x0c;
 
+static A_WORDS: DomainWords = DomainWords {
+    handler_context: GuestAddress(0x4005_45a4),
+    scheduler_lock: GuestAddress(0x4005_45c0),
+    object_lock: GuestAddress(0x4005_45c4),
+    current_context: GuestAddress(0x4005_45c8),
+    contexts: GuestAddress(0x4005_45cc),
+    reschedule: GuestAddress(0x4005_46d8),
+    ready_heads: GuestAddress(0x4005_46dc),
+    ready_bitmap: GuestAddress(0x4005_475c),
+    running: GuestAddress(0x4005_4760),
+    dispatch_enabled: GuestAddress(0x4005_4764),
+    selected: GuestAddress(0x4005_4768),
+    timer_base: GuestAddress(0x4005_476c),
+    tick_now: GuestAddress(0x4005_4770),
+    time_offset: GuestAddress(0x4005_4774),
+    timer_count: GuestAddress(0x4005_4778),
+    timer_heap: GuestAddress(0x4005_d718),
+    task_table: GuestAddress(0x4005_ff0c),
+    flag_configs: GuestAddress(0x4005_d178),
+    flag_controls: GuestAddress(0x4006_24b4),
+    flag_waits: GuestAddress(0x4005_5fdc),
+    flag_timers: GuestAddress(0x4005_5a3c),
+    mailbox_configs: GuestAddress(0x4005_d16c),
+    mailbox_controls: GuestAddress(0x4006_2c34),
+    mailbox_waits: GuestAddress(0x4005_783c),
+    mailbox_timers: GuestAddress(0x4005_7fbc),
+};
+
+static B_WORDS: DomainWords = DomainWords {
+    handler_context: GuestAddress(0x400e_4564),
+    scheduler_lock: GuestAddress(0x400e_4580),
+    object_lock: GuestAddress(0x400e_4584),
+    current_context: GuestAddress(0x400e_4588),
+    contexts: GuestAddress(0x400e_458c),
+    reschedule: GuestAddress(0x400e_4698),
+    ready_heads: GuestAddress(0x400e_469c),
+    ready_bitmap: GuestAddress(0x400e_471c),
+    running: GuestAddress(0x400e_4720),
+    dispatch_enabled: GuestAddress(0x400e_4724),
+    selected: GuestAddress(0x400e_4728),
+    timer_base: GuestAddress(0x400e_472c),
+    tick_now: GuestAddress(0x400e_4730),
+    time_offset: GuestAddress(0x400e_4734),
+    timer_count: GuestAddress(0x400e_4738),
+    timer_heap: GuestAddress(0x400e_d6d8),
+    task_table: GuestAddress(0x400e_fecc),
+    flag_configs: GuestAddress(0x400e_d138),
+    flag_controls: GuestAddress(0x400f_2474),
+    flag_waits: GuestAddress(0x400e_5f9c),
+    flag_timers: GuestAddress(0x400e_59fc),
+    mailbox_configs: GuestAddress(0x400e_d12c),
+    mailbox_controls: GuestAddress(0x400f_2bf4),
+    mailbox_waits: GuestAddress(0x400e_77fc),
+    mailbox_timers: GuestAddress(0x400e_7f7c),
+};
+
 impl Domain {
     #[inline(always)]
     pub const fn id(self) -> DomainId {
@@ -873,62 +929,10 @@ impl Domain {
     }
 
     #[inline(always)]
-    pub const fn words(self) -> DomainWords {
+    pub const fn words(self) -> &'static DomainWords {
         match self {
-            Domain::A => DomainWords {
-                handler_context: GuestAddress(0x4005_45a4),
-                scheduler_lock: GuestAddress(0x4005_45c0),
-                object_lock: GuestAddress(0x4005_45c4),
-                current_context: GuestAddress(0x4005_45c8),
-                contexts: GuestAddress(0x4005_45cc),
-                reschedule: GuestAddress(0x4005_46d8),
-                ready_heads: GuestAddress(0x4005_46dc),
-                ready_bitmap: GuestAddress(0x4005_475c),
-                running: GuestAddress(0x4005_4760),
-                dispatch_enabled: GuestAddress(0x4005_4764),
-                selected: GuestAddress(0x4005_4768),
-                timer_base: GuestAddress(0x4005_476c),
-                tick_now: GuestAddress(0x4005_4770),
-                time_offset: GuestAddress(0x4005_4774),
-                timer_count: GuestAddress(0x4005_4778),
-                timer_heap: GuestAddress(0x4005_d718),
-                task_table: GuestAddress(0x4005_ff0c),
-                flag_configs: GuestAddress(0x4005_d178),
-                flag_controls: GuestAddress(0x4006_24b4),
-                flag_waits: GuestAddress(0x4005_5fdc),
-                flag_timers: GuestAddress(0x4005_5a3c),
-                mailbox_configs: GuestAddress(0x4005_d16c),
-                mailbox_controls: GuestAddress(0x4006_2c34),
-                mailbox_waits: GuestAddress(0x4005_783c),
-                mailbox_timers: GuestAddress(0x4005_7fbc),
-            },
-            Domain::B => DomainWords {
-                handler_context: GuestAddress(0x400e_4564),
-                scheduler_lock: GuestAddress(0x400e_4580),
-                object_lock: GuestAddress(0x400e_4584),
-                current_context: GuestAddress(0x400e_4588),
-                contexts: GuestAddress(0x400e_458c),
-                reschedule: GuestAddress(0x400e_4698),
-                ready_heads: GuestAddress(0x400e_469c),
-                ready_bitmap: GuestAddress(0x400e_471c),
-                running: GuestAddress(0x400e_4720),
-                dispatch_enabled: GuestAddress(0x400e_4724),
-                selected: GuestAddress(0x400e_4728),
-                timer_base: GuestAddress(0x400e_472c),
-                tick_now: GuestAddress(0x400e_4730),
-                time_offset: GuestAddress(0x400e_4734),
-                timer_count: GuestAddress(0x400e_4738),
-                timer_heap: GuestAddress(0x400e_d6d8),
-                task_table: GuestAddress(0x400e_fecc),
-                flag_configs: GuestAddress(0x400e_d138),
-                flag_controls: GuestAddress(0x400f_2474),
-                flag_waits: GuestAddress(0x400e_5f9c),
-                flag_timers: GuestAddress(0x400e_59fc),
-                mailbox_configs: GuestAddress(0x400e_d12c),
-                mailbox_controls: GuestAddress(0x400f_2bf4),
-                mailbox_waits: GuestAddress(0x400e_77fc),
-                mailbox_timers: GuestAddress(0x400e_7f7c),
-            },
+            Domain::A => &A_WORDS,
+            Domain::B => &B_WORDS,
         }
     }
 }

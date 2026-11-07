@@ -4,8 +4,8 @@ use crate::block::{Block, Deadline, IrqScope, SavedMask, Tick, TimerEntryAddress
 use crate::create::{Machine as CreateMachine, SavedInterrupts};
 use crate::layout::{Domain, DomainId, GuestAddress, KernelContext, LockRecord, Task, WaitQueue};
 use crate::order::QueueOrder;
-use crate::locked::ObjectLock;
-use crate::wake::{DispatchTarget, Release, Selection, Wake};
+use crate::locked::{ObjectGuard, ObjectLock};
+use crate::wake::{DispatchTarget, Release, SchedulerGuard, Selection, Wake};
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use xm1_rtos_scheduler as s1;
@@ -259,31 +259,19 @@ impl CreateMachine for Sim {
 }
 
 impl ObjectLock for Sim {
-    fn with_object_lock_after<R>(&self, record: LockRecord, body: impl FnOnce() -> R, after: impl FnOnce(&R)) -> R {
+    fn lock_object(&self, record: LockRecord) -> ObjectGuard<'_, Self> {
         assert!(!self.held.get(), "object lock acquired twice");
         let saved = self.interrupts.get();
         self.interrupts.set(saved | 0x80);
         self.held.set(true);
         s1::acquire(self, lock(record.0));
-        let result = body();
-        s1::release(self, lock(record.0));
-        after(&result);
-        self.held.set(false);
-        self.interrupts.set(saved);
-        result
+        ObjectGuard::new(self, record, SavedInterrupts(saved))
     }
 
-    fn with_object_lock<R>(&self, record: LockRecord, body: impl FnOnce() -> R) -> R {
-        assert!(!self.held.get(), "object lock acquired twice");
-        let saved = self.interrupts.get();
-        self.interrupts.set(saved | 0x80);
-        self.held.set(true);
-        s1::acquire(self, lock(record.0));
-        let result = body();
+    fn release_object(&self, record: LockRecord) {
+        assert!(self.held.get(), "object lock released without the lock");
         s1::release(self, lock(record.0));
         self.held.set(false);
-        self.interrupts.set(saved);
-        result
     }
 }
 
@@ -325,16 +313,18 @@ impl Release for Sim {
 }
 
 impl Wake for Sim {
-    fn with_scheduler_lock<R>(&self, owner: Domain, body: impl FnOnce() -> R) -> R {
+    fn lock_scheduler(&self, owner: Domain) -> SchedulerGuard<'_, Self> {
         assert!(self.held.get(), "scheduler lock taken without the object lock");
         let saved = self.interrupts.get();
         self.interrupts.set(saved | 0x80);
         let record = self.context(owner).scheduler_lock();
         s1::acquire(self, lock(record.0));
-        let result = body();
+        SchedulerGuard::new(self, owner, Some(SavedInterrupts(saved)))
+    }
+
+    fn release_scheduler(&self, owner: Domain) {
+        let record = self.context(owner).scheduler_lock();
         s1::release(self, lock(record.0));
-        self.interrupts.set(saved);
-        result
     }
 
     fn waiter_domain(&self, waiter: Task) -> Domain {

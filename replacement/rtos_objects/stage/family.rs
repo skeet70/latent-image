@@ -169,12 +169,15 @@ impl objects::admission::Facts for StageTables {
 #[inline(always)]
 fn request(service: Service, blocking: bool, id: i32, params: Params) -> Request {
     let words = entry_words();
+    let handler_context = load(words.handler_context);
+    let irq_masked = unsafe { cpsr_masked() };
+    let refused = handler_context != 0 || irq_masked;
     Request {
         service,
         entry: Entry {
-            handler_context: load(words.handler_context),
-            irq_masked: unsafe { cpsr_masked() },
-            dispatch_enabled: if blocking { load(words.dispatch_enabled) } else { 0 },
+            handler_context,
+            irq_masked,
+            dispatch_enabled: if blocking && !refused { load(words.dispatch_enabled) } else { 0 },
         },
         entry_domain: EntryDomain::new(ENTRY),
         id: EncodedId(id),
