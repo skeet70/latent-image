@@ -1,5 +1,3 @@
-{-# LANGUAGE no_std #-}
-
 //! Allocation-free TIMER host core: the stock 1-based min-heap and the zero-token
 //! membership protocol. `KernelContext` fields hold pointers to the node array, count,
 //! base and tick; the capacity is a validated caller parameter.
@@ -21,16 +19,26 @@ pub trait Scheduler: Machine {
     fn handler_context(&self) -> u32;
     fn irq_masked(&self) -> bool;
     fn release_lock(&self);
-    fn acquire_lock(&self) -> bool;
+    fn acquire_lock(&self);
     fn irq_clear(&self);
     fn irq_set(&self);
 }
+
+const NODE_SIZE: u32 = 0x08;
+const NODE_EXPIRY: u32 = 0x00;
+const NODE_ENTRY: u32 = 0x04;
+
+/// The largest capacity whose `(index - 1) * 8` node offset and doubled child index stay in u32.
+const MAX_CAPACITY: u32 = (u32::MAX / NODE_SIZE) + 1;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Capacity(NonZeroU32);
 
 impl Capacity {
     pub fn new(value: u32) -> Option<Self> {
+        if value == 0 || value > MAX_CAPACITY {
+            return None;
+        }
         NonZeroU32::new(value).map(Self)
     }
 
@@ -122,7 +130,6 @@ pub enum TimerError {
     CorruptIndex,
     CorruptCount,
     AlreadyLinked,
-    LockLost,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -130,7 +137,6 @@ pub enum Removed {
     Noop,
     Detached,
 }
-
 
 #[derive(Clone, Copy, Debug)]
 pub struct TimerHeap {
@@ -185,41 +191,35 @@ impl TimerHeap {
     }
 }
 
-const NODE_SIZE: u32 = 0x08;
-const NODE_EXPIRY: u32 = 0x00;
-const NODE_ENTRY: u32 = 0x04;
-
-fn node_expiry<M: Machine>(m: &M, heap: TimerHeap, index: Index) -> u32 {
-    m.load_word(heap.node(index))
+fn node_expiry<M: Machine>(m: &M, heap: TimerHeap, index: Index) -> Expiry {
+    Expiry(m.load_word(heap.node(index)))
 }
 
-fn node_entry<M: Machine>(m: &M, heap: TimerHeap, index: Index) -> u32 {
-    m.load_word(heap.node(index).offset(NODE_ENTRY))
+fn node_entry<M: Machine>(m: &M, heap: TimerHeap, index: Index) -> TimerEntry {
+    TimerEntry(GuestAddress(m.load_word(heap.node(index).offset(NODE_ENTRY))))
 }
 
 fn relative(value: u32, base: Base) -> u32 {
     value.wrapping_sub(base.0)
 }
 
-/// Returns the slot where a node with this expiry belongs.
 fn sift_up<M: Machine>(m: &M, heap: TimerHeap, mut index: Index, expiry: Expiry, base: Base) -> Index {
     while index.get() > 1 {
         let parent = Index::new(index.get() >> 1, heap.capacity).expect("parent slot is in range");
         let parent_expiry = node_expiry(m, heap, parent);
-        if relative(parent_expiry, base) <= relative(expiry.0, base) {
+        if relative(parent_expiry.0, base) <= relative(expiry.0, base) {
             break;
         }
         let parent_entry = node_entry(m, heap, parent);
         let node = heap.node(index);
-        m.store_word(node.offset(NODE_EXPIRY), parent_expiry);
-        m.store_word(node.offset(NODE_ENTRY), parent_entry);
-        TimerEntry(GuestAddress(parent_entry)).set_index(m, TimerIndex::Linked(index));
+        m.store_word(node.offset(NODE_EXPIRY), parent_expiry.0);
+        m.store_word(node.offset(NODE_ENTRY), parent_entry.address().0);
+        parent_entry.set_index(m, TimerIndex::Linked(index));
         index = parent;
     }
     index
 }
 
-/// Returns the slot where a node with this expiry belongs.
 fn sift_down<M: Machine>(m: &M, heap: TimerHeap, mut index: Index, expiry: Expiry, base: Base, count: u32) -> Index {
     loop {
         let child = index.get() * 2;
@@ -227,27 +227,26 @@ fn sift_down<M: Machine>(m: &M, heap: TimerHeap, mut index: Index, expiry: Expir
             break;
         }
         let left = Index::new(child, heap.capacity).expect("child slot is in range");
-        let right = Index::new(child + 1, heap.capacity);
-        let smaller = match right {
-            None => left,
-            Some(right) if child + 1 > count => left,
-            Some(right) => {
-                if relative(node_expiry(m, heap, right), base) >= relative(node_expiry(m, heap, left), base) {
-                    left
+        let left_expiry = node_expiry(m, heap, left);
+        let (smaller, smaller_expiry) = match Index::new(child + 1, heap.capacity) {
+            Ok(right) if child + 1 <= count => {
+                let right_expiry = node_expiry(m, heap, right);
+                if relative(right_expiry.0, base) < relative(left_expiry.0, base) {
+                    (right, right_expiry)
                 } else {
-                    right
+                    (left, left_expiry)
                 }
             }
+            _ => (left, left_expiry),
         };
-        if relative(expiry.0, base) <= relative(node_expiry(m, heap, smaller), base) {
+        if relative(expiry.0, base) <= relative(smaller_expiry.0, base) {
             break;
         }
-        let smaller_expiry = node_expiry(m, heap, smaller);
         let smaller_entry = node_entry(m, heap, smaller);
         let node = heap.node(index);
-        m.store_word(node.offset(NODE_EXPIRY), smaller_expiry);
-        m.store_word(node.offset(NODE_ENTRY), smaller_entry);
-        TimerEntry(GuestAddress(smaller_entry)).set_index(m, TimerIndex::Linked(index));
+        m.store_word(node.offset(NODE_EXPIRY), smaller_expiry.0);
+        m.store_word(node.offset(NODE_ENTRY), smaller_entry.address().0);
+        smaller_entry.set_index(m, TimerIndex::Linked(index));
         index = smaller;
     }
     index
@@ -263,8 +262,8 @@ pub fn insert<M: Machine>(m: &M, heap: TimerHeap, entry: TimerEntry, expiry: Exp
         return Err(TimerError::CorruptCount);
     }
     let count = count + 1;
-    heap.set_count(m, count);
     let index = Index::new(count, heap.capacity)?;
+    heap.set_count(m, count);
     let base = heap.base(m);
     let index = sift_up(m, heap, index, expiry, base);
     let node = heap.node(index);
@@ -281,10 +280,10 @@ pub fn remove<M: Machine>(m: &M, heap: TimerHeap, entry: TimerEntry) -> Result<R
         TimerIndex::Linked(index) => index,
     };
     let count = heap.count(m);
-    if count == 0 || index.get() > count {
+    if count > heap.capacity.get() || count == 0 || index.get() > count {
         return Err(TimerError::CorruptCount);
     }
-    if node_entry(m, heap, index) != entry.address().0 {
+    if node_entry(m, heap, index).address().0 != entry.address().0 {
         return Err(TimerError::CorruptIndex);
     }
     entry.set_index(m, TimerIndex::Detached);
@@ -299,24 +298,23 @@ pub fn remove<M: Machine>(m: &M, heap: TimerHeap, entry: TimerEntry) -> Result<R
     let base = heap.base(m);
     let index = if index.get() > 1 {
         let parent = Index::new(index.get() >> 1, heap.capacity)?;
-        if relative(last_expiry, base) < relative(node_expiry(m, heap, parent), base) {
-            sift_up(m, heap, index, Expiry(last_expiry), base)
+        if relative(last_expiry.0, base) < relative(node_expiry(m, heap, parent).0, base) {
+            sift_up(m, heap, index, last_expiry, base)
         } else {
-            sift_down(m, heap, index, Expiry(last_expiry), base, new_count)
+            sift_down(m, heap, index, last_expiry, base, new_count)
         }
     } else {
-        sift_down(m, heap, index, Expiry(last_expiry), base, new_count)
+        sift_down(m, heap, index, last_expiry, base, new_count)
     };
     let node = heap.node(index);
-    m.store_word(node.offset(NODE_EXPIRY), last_expiry);
-    m.store_word(node.offset(NODE_ENTRY), last_entry);
-    TimerEntry(GuestAddress(last_entry)).set_index(m, TimerIndex::Linked(index));
+    m.store_word(node.offset(NODE_EXPIRY), last_expiry.0);
+    m.store_word(node.offset(NODE_ENTRY), last_entry.address().0);
+    last_entry.set_index(m, TimerIndex::Linked(index));
     Ok(Removed::Detached)
 }
 
-/// The caller holds the lock at entry. The callback runs with it held; afterwards the lock is
-/// released, IRQ is cleared and set, and the lock is reacquired. Base, tick and count reload
-/// after every callback.
+/// The callback receives the lock held and must return it held; it may release and reacquire
+/// meanwhile.
 pub fn tick<M: Scheduler>(
     m: &M,
     heap: TimerHeap,
@@ -328,44 +326,63 @@ pub fn tick<M: Scheduler>(
     if m.irq_masked() {
         return Err(TimerError::InterruptMasked);
     }
+    m.irq_set();
+    m.acquire_lock();
     loop {
         let count = heap.count(m);
         if count == 0 {
             break;
         }
+        if count > heap.capacity.get() {
+            m.release_lock();
+            m.irq_clear();
+            return Err(TimerError::CorruptCount);
+        }
         let base = heap.base(m);
         let tick = heap.tick_now(m);
-        let head = Index::new(1, heap.capacity)?;
-        if relative(node_expiry(m, heap, head), base) > relative(tick.0, base) {
+        let head = match Index::new(1, heap.capacity) {
+            Ok(head) => head,
+            Err(error) => {
+                m.release_lock();
+                m.irq_clear();
+                return Err(error);
+            }
+        };
+        if relative(node_expiry(m, heap, head).0, base) > relative(tick.0, base) {
             break;
         }
-        let entry = TimerEntry(GuestAddress(node_entry(m, heap, head)));
+        let entry = node_entry(m, heap, head);
         let callback = entry.callback(m);
         let argument = entry.argument(m);
         entry.set_index(m, TimerIndex::Detached);
         let new_count = count - 1;
         heap.set_count(m, new_count);
         if new_count != 0 {
-            let last = Index::new(count, heap.capacity)?;
+            let last = match Index::new(count, heap.capacity) {
+                Ok(last) => last,
+                Err(error) => {
+                    m.release_lock();
+                    m.irq_clear();
+                    return Err(error);
+                }
+            };
             let last_expiry = node_expiry(m, heap, last);
             let last_entry = node_entry(m, heap, last);
-            let index = sift_down(m, heap, head, Expiry(last_expiry), base, new_count);
+            let index = sift_down(m, heap, head, last_expiry, base, new_count);
             let node = heap.node(index);
-            m.store_word(node.offset(NODE_EXPIRY), last_expiry);
-            m.store_word(node.offset(NODE_ENTRY), last_entry);
-            TimerEntry(GuestAddress(last_entry)).set_index(m, TimerIndex::Linked(index));
+            m.store_word(node.offset(NODE_EXPIRY), last_expiry.0);
+            m.store_word(node.offset(NODE_ENTRY), last_entry.address().0);
+            last_entry.set_index(m, TimerIndex::Linked(index));
         }
         invoke(m, callback, argument);
         m.release_lock();
         m.irq_clear();
         m.irq_set();
-        if !m.acquire_lock() {
-            return Err(TimerError::LockLost);
-        }
+        m.acquire_lock();
     }
     let tick = heap.tick_now(m);
     heap.set_base(m, Base(tick.0));
-    heap.set_tick_now(m, Now(tick.0 + 10));
+    heap.set_tick_now(m, Now(tick.0.wrapping_add(10)));
     m.release_lock();
     m.irq_clear();
     Ok(())

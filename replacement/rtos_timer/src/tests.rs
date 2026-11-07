@@ -14,7 +14,6 @@ struct Mock {
     lock_held: Cell<bool>,
     masked: Cell<bool>,
     handler: Cell<u32>,
-    reacquire: Cell<bool>,
     events: RefCell<Vec<(u32, u32)>>,
 }
 
@@ -22,10 +21,9 @@ impl Mock {
     fn new() -> Self {
         let mock = Self {
             words: RefCell::new(BTreeMap::new()),
-            lock_held: Cell::new(true),
+            lock_held: Cell::new(false),
             masked: Cell::new(false),
             handler: Cell::new(1),
-            reacquire: Cell::new(true),
             events: RefCell::new(Vec::new()),
         };
         let context = KernelContext(GuestAddress(CONTEXT));
@@ -100,18 +98,11 @@ impl Scheduler for Mock {
     }
 
     fn release_lock(&self) {
-        assert!(self.lock_held.get(), "release without the lock");
         self.lock_held.set(false);
     }
 
-    fn acquire_lock(&self) -> bool {
-        if self.reacquire.get() {
-            assert!(!self.lock_held.get(), "acquire while held");
-            self.lock_held.set(true);
-            true
-        } else {
-            false
-        }
+    fn acquire_lock(&self) {
+        self.lock_held.set(true);
     }
 
     fn irq_clear(&self) {
@@ -207,6 +198,7 @@ fn callback_rearm_keeps_fresh_membership() {
     insert(&mock, heap, entry, Expiry(10)).unwrap();
     mock.set_word(TICK, 10);
     tick(&mock, heap, |m, _callback, _argument| {
+        assert!(m.lock_held.get());
         insert(m, heap, entry, Expiry(40)).unwrap();
     })
     .unwrap();
@@ -241,23 +233,24 @@ fn invalid_context_or_irq_changes_nothing() {
     mock.handler.set(0);
     assert_eq!(tick(&mock, heap, |_, _, _| {}), Err(TimerError::Context));
     assert_eq!(mock.count(), 1);
-    assert!(mock.lock_held.get());
+    assert!(!mock.lock_held.get());
     mock.handler.set(1);
     mock.masked.set(true);
     assert_eq!(tick(&mock, heap, |_, _, _| {}), Err(TimerError::InterruptMasked));
     assert_eq!(mock.count(), 1);
-    assert!(mock.lock_held.get());
+    assert!(!mock.lock_held.get());
 }
 
 #[test]
-fn lock_loss_is_reported_after_the_callback() {
+fn corrupt_count_fails_with_the_lock_released_and_irq_cleared() {
     let mock = Mock::new();
     let heap = mock.heap(8);
     let entry = mock.entry(1);
     insert(&mock, heap, entry, Expiry(10)).unwrap();
     mock.set_word(TICK, 10);
-    mock.reacquire.set(false);
-    assert_eq!(tick(&mock, heap, |_, _, _| {}), Err(TimerError::LockLost));
+    mock.set_count(9);
+    assert_eq!(tick(&mock, heap, |_, _, _| {}), Err(TimerError::CorruptCount));
     assert!(!mock.lock_held.get());
-    assert!(mock.masked.get());
+    assert!(!mock.masked.get());
+    assert_eq!(mock.index(entry), 1);
 }
