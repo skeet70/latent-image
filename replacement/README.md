@@ -763,6 +763,8 @@ At `ec3e28a6`, all 87 object and 18 layout cases pass, including one mailbox wit
 
 The fourteen family entry adapters and retained wait helpers are implemented in `stage/family.rs` and `stage/abi.rs`. `:objects-family-stage-a` and `:objects-family-stage-b` use the existing owned extents and the owned S1/S2 components; the family adapter uses `opt-level=2` and LLVM machine outlining for shared A32 instruction sequences. The F2 build flags are unchanged. Polling shares the waiting execution cores without acquiring blocking admission requirements, and lifecycle entries keep their separate I+F scope. Wait-block ownership is a typed one-based object-domain ID; timer cancellation and readiness use the waiter's scheduler domain. Host behavior passes, but strict linking still refuses the family placement. This is not full native, integrated-system or hardware qualification. The current failed predicate and measured map are in `private-data/scratch/RtosFamilyStage/link-fit/summary.json`.
 
+Task wait admission requires I clear. The family wait bodies mask I and re-enable it on return without restoring an earlier full CPSR; lifecycle create/delete retain their separate saved I+F scope. Fatal kernel conditions remain non-returning: r0 is 1 for an invalid waiter domain, 2 for a still-queued resume and 3 for an unknown wait result.
+
 ## Owned timer heap host increment (#156)
 
 `replacement/rtos_timer` implements an allocation-free timer heap over the canonical `rtos_layout` guest views. `TimerHeap::from_context` resolves the context's node, count, base and clock pointers; the caller supplies a validated `Capacity`. Entry identity, membership, callback, argument and clock values have distinct types.
