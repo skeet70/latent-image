@@ -265,7 +265,7 @@ pub enum ReceiveResume {
     Corrupt(ReceivePending),
 }
 
-#[cfg_attr(feature = "family", inline(never))]
+#[cfg_attr(feature = "family", inline(always))]
 pub fn resume_flag<M: Machine + IrqScope>(m: &M, pending: FlagWaitPending) -> FlagResume {
     if m.load_byte(pending.task.state()) & TaskState::WAIT.bits() != 0 {
         return FlagResume::Pending(pending);
@@ -284,7 +284,7 @@ pub fn resume_flag<M: Machine + IrqScope>(m: &M, pending: FlagWaitPending) -> Fl
     }
 }
 
-#[cfg_attr(feature = "family", inline(never))]
+#[cfg_attr(feature = "family", inline(always))]
 pub fn resume_receive<M: Machine + IrqScope>(m: &M, pending: ReceivePending) -> ReceiveResume {
     if m.load_byte(pending.task.state()) & TaskState::WAIT.bits() != 0 {
         return ReceiveResume::Pending(pending);
