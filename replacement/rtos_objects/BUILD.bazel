@@ -132,6 +132,8 @@ xm1_rust_staticlib(
             "'feature=\"stage\"'",
             "--cfg",
             "'feature=\"family\"'",
+            "-C",
+            "llvm-args=-enable-machine-outliner=always",
         ],
     )
     for domain in ["a", "b"]
