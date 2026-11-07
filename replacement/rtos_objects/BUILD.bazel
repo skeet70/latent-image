@@ -106,7 +106,7 @@ xm1_rust_staticlib(
         name = "objects-family-adapter-%s" % domain,
         src = "stage/adapter.rs",
         crate_name = "xm1_rtos_objects_family_adapter",
-        opt_level = "s",
+        opt_level = "2",
         data = [
             "stage/abi.rs",
             "stage/family.rs",
