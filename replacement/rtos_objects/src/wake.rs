@@ -21,17 +21,20 @@ pub enum DispatchTarget {
     Remote,
 }
 
-pub trait Wake: ObjectLock {
+/// The release's primitives, keyed by the owner record the ABI supplies.
+pub trait Release: Machine {
+    fn context(&self, domain: Domain) -> KernelContext;
+    fn prepare(&self, owner: KernelContext, task: Task) -> Selection;
+    fn insert(&self, owner: KernelContext, task: Task) -> Selection;
+    fn remove_timer(&self, owner: KernelContext, entry: GuestAddress);
+}
+
+pub trait Wake: ObjectLock + Release {
     fn with_scheduler_lock<R>(&self, domain: Domain, body: impl FnOnce() -> R) -> R;
     /// T+0x20.
     fn waiter_domain(&self, task: Task) -> Domain;
-    /// `kernel_remove_timer`, A `0x44ca8` / B `0xd4c68`.
-    fn remove_timer(&self, owner: Domain, entry: GuestAddress);
-    fn reset_task(&self, task: Task);
-    fn prepare(&self, owner: Domain, task: Task) -> Selection;
-    fn insert(&self, owner: Domain, task: Task) -> Selection;
     /// The owner record's `+0x00` id word.
-    fn record_id(&self, owner: Domain) -> u32;
+    fn record_id(&self, owner: KernelContext) -> u32;
     /// A `0x44018` / B `0xd3fd4`.
     fn notify(&self, id: u32) -> DispatchTarget;
     /// A `0x43640` / B `0xd3640`, with the stock body's code in r0.
@@ -46,7 +49,7 @@ fn unlink<M: Machine>(m: &M, task: Task) {
 }
 
 /// The stock wait release, A `0x44568` / B `0xd4528`, over the S1 primitives.
-fn release<M: Wake>(m: &M, owner: Domain, task: Task) -> Selection {
+pub fn release<M: Release>(m: &M, owner: KernelContext, task: Task) -> Selection {
     let wait = GuestAddress(m.load_word(task.wait()));
     let entry = m.load_word(wait);
     if entry != 0 {
@@ -75,7 +78,7 @@ fn release<M: Wake>(m: &M, owner: Domain, task: Task) -> Selection {
     m.insert(owner, task)
 }
 
-fn dispatch_after<M: Wake>(m: &M, owner: Domain, released: Selection) -> bool {
+fn dispatch_after<M: Wake>(m: &M, owner: KernelContext, released: Selection) -> bool {
     match released {
         Selection::Unchanged => false,
         Selection::Changed => m.notify(m.record_id(owner)) == DispatchTarget::Local,
@@ -96,8 +99,9 @@ pub fn set_flag<M: Wake>(m: &M, id: FlagId, bits: Pattern) {
             return false;
         }
         let task = Task(GuestAddress(waiter));
-        let owner = m.waiter_domain(task);
-        m.with_scheduler_lock(owner, || {
+        let owner_domain = m.waiter_domain(task);
+        let owner = m.context(owner_domain);
+        m.with_scheduler_lock(owner_domain, || {
             let pattern = m.load_word(control.pattern()) | bits.0;
             m.store_word(control.pattern(), pattern);
             let wait = FlagWait(GuestAddress(m.load_word(task.wait())));
@@ -168,10 +172,11 @@ pub fn send<M: Wake>(m: &M, id: MailboxId, message: Message, priority: Option<Me
             return false;
         }
         let task = Task(GuestAddress(waiter));
-        let owner = m.waiter_domain(task);
+        let owner_domain = m.waiter_domain(task);
+        let owner = m.context(owner_domain);
         let wait = MailboxWait(GuestAddress(m.load_word(task.wait())));
         m.store_word(wait.message(), message.0 .0);
-        m.with_scheduler_lock(owner, || {
+        m.with_scheduler_lock(owner_domain, || {
             unlink(m, task);
             dispatch_after(m, owner, release(m, owner, task))
         })

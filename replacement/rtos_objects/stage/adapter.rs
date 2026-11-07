@@ -110,6 +110,30 @@ impl ObjectLock for Cpu {
     }
 }
 
+impl Release for Cpu {
+    fn context(&self, domain: Domain) -> KernelContext {
+        record(domain)
+    }
+
+    fn prepare(&self, owner: KernelContext, waiter: Task) -> Selection {
+        match unsafe { xm1_rtos_scheduler_prepare(owner, waiter) } {
+            Reschedule(0) => Selection::Unchanged,
+            _ => Selection::Changed,
+        }
+    }
+
+    fn insert(&self, owner: KernelContext, waiter: Task) -> Selection {
+        match unsafe { xm1_rtos_scheduler_insert(owner, waiter) } {
+            Reschedule(0) => Selection::Unchanged,
+            _ => Selection::Changed,
+        }
+    }
+
+    fn remove_timer(&self, owner: KernelContext, entry: GuestAddress) {
+        unsafe { xm1_rtos_objects_stock_remove_timer(owner, entry) };
+    }
+}
+
 impl Wake for Cpu {
     fn with_scheduler_lock<R>(&self, owner: Domain, body: impl FnOnce() -> R) -> R {
         let lock = record(owner).scheduler_lock();
@@ -127,30 +151,8 @@ impl Wake for Cpu {
         }
     }
 
-    fn remove_timer(&self, owner: Domain, entry: GuestAddress) {
-        unsafe { xm1_rtos_objects_stock_remove_timer(record(owner), entry) };
-    }
-
-    fn reset_task(&self, waiter: Task) {
-        unsafe { xm1_rtos_scheduler_reset(waiter) };
-    }
-
-    fn prepare(&self, owner: Domain, waiter: Task) -> Selection {
-        match unsafe { xm1_rtos_scheduler_prepare(record(owner), waiter) } {
-            Reschedule(0) => Selection::Unchanged,
-            _ => Selection::Changed,
-        }
-    }
-
-    fn insert(&self, owner: Domain, waiter: Task) -> Selection {
-        match unsafe { xm1_rtos_scheduler_insert(record(owner), waiter) } {
-            Reschedule(0) => Selection::Unchanged,
-            _ => Selection::Changed,
-        }
-    }
-
-    fn record_id(&self, owner: Domain) -> u32 {
-        load(record(owner).id())
+    fn record_id(&self, owner: KernelContext) -> u32 {
+        load(owner.id())
     }
 
     fn notify(&self, id: u32) -> DispatchTarget {
@@ -260,4 +262,15 @@ pub extern "C" fn xm1_rtos_objects_f2_send(id: i32, message: u32) -> i32 {
     };
     send(&cpu, slot, objects::layout::Message(GuestAddress(message)), priority);
     0
+}
+
+/// The wait release at its stock entry, A `0x44568` / B `0xd4528`.
+#[no_mangle]
+#[inline(never)]
+#[link_section = ".text.f2_release"]
+pub extern "C" fn xm1_rtos_objects_release(owner: KernelContext, task: Task) -> u32 {
+    match release(&Cpu, owner, task) {
+        Selection::Unchanged => 0,
+        Selection::Changed => 1,
+    }
 }

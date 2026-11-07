@@ -242,6 +242,35 @@ impl ObjectLock for Sim {
     }
 }
 
+impl Release for Sim {
+    fn context(&self, domain: Domain) -> KernelContext {
+        Sim::context(self, domain)
+    }
+
+    fn prepare(&self, owner: KernelContext, waiter: Task) -> Selection {
+        let inserted = s1::prepare(self, context(at(owner.0)), task(at(waiter.0)), || {
+            s1::insert(self, context(at(owner.0)), task(at(waiter.0)))
+        });
+        if inserted == s1::Reschedule::NONE {
+            Selection::Unchanged
+        } else {
+            Selection::Changed
+        }
+    }
+
+    fn insert(&self, owner: KernelContext, waiter: Task) -> Selection {
+        if s1::insert(self, context(at(owner.0)), task(at(waiter.0))) == s1::Reschedule::NONE {
+            Selection::Unchanged
+        } else {
+            Selection::Changed
+        }
+    }
+
+    fn remove_timer(&self, _owner: KernelContext, entry: GuestAddress) {
+        assert!(self.armed.borrow_mut().remove(&entry.0), "timer was not armed");
+    }
+}
+
 impl Wake for Sim {
     fn with_scheduler_lock<R>(&self, owner: Domain, body: impl FnOnce() -> R) -> R {
         assert!(self.held.get(), "scheduler lock taken without the object lock");
@@ -263,37 +292,8 @@ impl Wake for Sim {
         }
     }
 
-    fn remove_timer(&self, _owner: Domain, entry: GuestAddress) {
-        assert!(self.armed.borrow_mut().remove(&entry.0), "timer was not armed");
-    }
-
-    fn reset_task(&self, waiter: Task) {
-        s1::reset(self, task(at(waiter.0)));
-    }
-
-    fn prepare(&self, owner: Domain, waiter: Task) -> Selection {
-        let record = self.context(owner);
-        let inserted = s1::prepare(self, context(at(record.0)), task(at(waiter.0)), || {
-            s1::insert(self, context(at(record.0)), task(at(waiter.0)))
-        });
-        if inserted == s1::Reschedule::NONE {
-            Selection::Unchanged
-        } else {
-            Selection::Changed
-        }
-    }
-
-    fn insert(&self, owner: Domain, waiter: Task) -> Selection {
-        let record = self.context(owner);
-        if s1::insert(self, context(at(record.0)), task(at(waiter.0))) == s1::Reschedule::NONE {
-            Selection::Unchanged
-        } else {
-            Selection::Changed
-        }
-    }
-
-    fn record_id(&self, owner: Domain) -> u32 {
-        self.word(self.context(owner).id())
+    fn record_id(&self, owner: KernelContext) -> u32 {
+        self.word(owner.id())
     }
 
     fn notify(&self, id: u32) -> DispatchTarget {

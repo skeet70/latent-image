@@ -5,6 +5,7 @@ INCLUDE scheduler-a-placement.ld
 INCLUDE scheduler-s2-a-placement.ld
 
 MEMORY {
+  f2_release (rx) : ORIGIN = 0x44568, LENGTH = 0xcc
   f2_set_flag (rx) : ORIGIN = 0x4813c, LENGTH = 0x260
   f2_send (rx) : ORIGIN = 0x4aa44, LENGTH = 0x304
 }
@@ -12,6 +13,11 @@ MEMORY {
 xm1_rtos_objects_stock_remove_timer = 0x44ca8;
 
 SECTIONS {
+  .f2_release : {
+    KEEP(*(.text.f2_release))
+    __f2_release_body_end = .;
+    . = ORIGIN(f2_release) + LENGTH(f2_release);
+  } > f2_release =0xf000f0e7
   .f2_set_flag : {
     KEEP(*(.text.f2_set_flag))
     __f2_set_flag_body_end = .;
@@ -25,6 +31,8 @@ SECTIONS {
   .forbidden (NOLOAD) : { *(.rodata .rodata.* .data .data.* .bss .bss.* COMMON) } > acquire
 }
 
+ASSERT(xm1_rtos_objects_release == ORIGIN(f2_release), "release entry is not at its stock address")
+ASSERT(__f2_release_body_end <= ORIGIN(f2_release) + LENGTH(f2_release), "release body exceeds its stock extent")
 ASSERT(xm1_rtos_objects_f2_set_flag == ORIGIN(f2_set_flag), "set_flag entry is not at its stock address")
 ASSERT(__f2_set_flag_body_end <= ORIGIN(f2_set_flag) + LENGTH(f2_set_flag), "set_flag body exceeds its stock extent")
 ASSERT(xm1_rtos_objects_f2_send == ORIGIN(f2_send), "send entry is not at its stock address")
