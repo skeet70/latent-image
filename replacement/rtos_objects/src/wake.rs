@@ -6,6 +6,7 @@ use crate::layout::{
 };
 use crate::locked::ObjectLock;
 use crate::matching::{check, MatchMode, Pattern};
+use crate::order::QueueOrder;
 use crate::message::MessagePriority;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -112,6 +113,30 @@ pub fn release_with<M: Release>(
         return Selection::Unchanged;
     }
     m.insert(owner, task)
+}
+
+/// Inserts the waiter at the tail (FIFO) or before the first strictly greater priority, so equal
+/// priorities keep arrival order.
+pub fn queue_insert<M: Machine>(m: &M, task: Task, queue: WaitQueue, order: QueueOrder) {
+    let head = queue.0;
+    let (mut at, mut next) = (GuestAddress(m.load_word(queue.prev())), head);
+    if order == QueueOrder::Priority {
+        at = head;
+        next = GuestAddress(m.load_word(head));
+        let candidate = m.load_byte(task.priority());
+        while next.0 != head.0 {
+            let existing = Task(next);
+            if m.load_byte(existing.priority()) > candidate {
+                break;
+            }
+            at = next;
+            next = GuestAddress(m.load_word(existing.next()));
+        }
+    }
+    m.store_word(task.next(), next.0);
+    m.store_word(task.prev(), at.0);
+    m.store_word(GuestAddress(at.0), task.0 .0);
+    m.store_word(GuestAddress(next.0).offset(0x04), task.0 .0);
 }
 
 fn dispatch_after<M: Wake>(m: &M, owner: KernelContext, released: Selection) -> bool {

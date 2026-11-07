@@ -368,11 +368,6 @@ impl Wake for Sim {
     }
 }
 
-fn priority_byte(sim: &Sim, task: Task) -> u8 {
-    let GuestAddress(at) = task.priority();
-    (sim.word(GuestAddress(at & !3)) >> (8 * (at & 3))) as u8
-}
-
 impl IrqScope for Sim {
     fn mask_i(&self) -> SavedMask {
         let saved = self.interrupts.get();
@@ -396,25 +391,7 @@ impl Block for Sim {
     }
 
     fn queue_wait(&self, _owner: KernelContext, task: Task, queue: WaitQueue, order: QueueOrder) {
-        let head = queue.0;
-        let (mut at, mut next) = (GuestAddress(self.word(queue.prev())), head);
-        if order == QueueOrder::Priority {
-            at = head;
-            next = GuestAddress(self.word(head));
-            let candidate = priority_byte(self, task);
-            while next.0 != head.0 {
-                let existing = Task(next);
-                if priority_byte(self, existing) > candidate {
-                    break;
-                }
-                at = next;
-                next = GuestAddress(self.word(existing.next()));
-            }
-        }
-        self.set(task.next(), next.0);
-        self.set(task.prev(), at.0);
-        self.set(GuestAddress(at.0), task.0 .0);
-        self.set(GuestAddress(next.0).offset(0x04), task.0 .0);
+        crate::wake::queue_insert(self, task, queue, order);
     }
 
     fn arm_timer(&self, _owner: KernelContext, entry: TimerEntryAddress, deadline: Deadline) {
