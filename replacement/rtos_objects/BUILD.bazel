@@ -43,7 +43,7 @@ xm1_rust_staticlib(
             "src/wake.rs",
             "//replacement/rtos_layout:src/lib.rs",
         ],
-        rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain],
+        rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain, "--cfg", "'feature=\"stage\"'"],
     )
     for domain in ["a", "b"]
 ]
