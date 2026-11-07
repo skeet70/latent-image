@@ -174,7 +174,6 @@ fn admit_entry(request: &Request, handler: bool, blocks: bool) -> Result<Domain,
 
 /// The stock order: context, IRQ mask, dispatch word, class, index, family parameters, then the
 /// creation record. Create and delete have no admission at all.
-#[cfg_attr(feature = "family", inline(never))]
 pub fn admit_flag<R: Records, F: Facts>(
     request: &Request,
     service: FlagService,
