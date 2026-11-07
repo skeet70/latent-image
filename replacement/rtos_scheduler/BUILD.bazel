@@ -36,6 +36,7 @@ exports_files([
             "-Wl,--orphan-handling=error",
         ],
         link_script = "scheduler-%s.ld" % domain,
+        link_includes = ["scheduler-%s-placement.ld" % domain],
     )
     for domain in ["a", "b"]
 ]
@@ -123,6 +124,7 @@ exports_files(["regions-s2.json", "regions-s3a.json"])
         entry = "xm1_rtos_scheduler_save",
         extra_ldflags = ["-Wl,--gc-sections", "-Wl,--orphan-handling=error"],
         link_script = "scheduler-s2-%s.ld" % domain,
+        link_includes = ["scheduler-s2-%s-placement.ld" % domain],
     )
     for domain in ["a", "b"]
 ]
