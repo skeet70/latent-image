@@ -135,6 +135,7 @@ haskell_library(
     src_strip_prefix = "native",
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
+        "//emulation:cached-native-batch",
         "//emulation:native-case",
         "//emulation:native-observation",
         "//emulation:owned-case",
@@ -154,6 +155,7 @@ haskell_binary(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":family-suite",
+        "//host:aeson",
         "//host:base",
         "//host:bytestring",
         "//host:directory",
