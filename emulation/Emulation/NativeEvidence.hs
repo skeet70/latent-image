@@ -2,9 +2,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Emulation.NativeEvidence
   ( EvidenceMode (..), ComparisonScope (..), EvidenceStore, newEvidenceStore, writeEvidence
+  , InputPool, newInputPool, stageInput
   ) where
 
 import Control.Concurrent.MVar
+import Control.Exception (bracket)
 import Control.Monad (unless, when)
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
@@ -16,15 +18,17 @@ import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import Data.Word (Word32)
 import qualified Emulation.NativeObservation as N
-import Emulation.Sha256 (sha256, sha256Hex)
-import System.Directory (makeAbsolute)
-import System.FilePath ((</>))
+import Emulation.Sha256 (Sha256, sha256, sha256Hex)
+import System.Directory (makeAbsolute, removeDirectoryRecursive, renameFile)
+import System.FilePath ((</>), takeDirectory)
+import System.Posix.Files (createLink, setFileMode)
+import System.Posix.Temp (mkdtemp)
 
 data EvidenceMode = CompactSuccesses | FullDiagnostics deriving (Eq, Show)
 data ComparisonScope = PublicSpans | ExactDiagnostics deriving (Eq, Show)
 newtype ClassKey = ClassKey String deriving (Eq, Ord)
 newtype EvidencePath = EvidencePath FilePath
-newtype Digest = Digest String
+newtype Digest = Digest String deriving (Eq, Ord)
 newtype Mismatch = Mismatch T.Text
 newtype Exclusion = Exclusion T.Text
 newtype ByteOffset = ByteOffset Int
@@ -48,6 +52,33 @@ data EvidenceStore = EvidenceStore EvidenceMode (MVar (M.Map ClassKey EvidencePa
 
 newEvidenceStore :: EvidenceMode -> IO EvidenceStore
 newEvidenceStore mode = EvidenceStore mode <$> newMVar M.empty
+
+data InputPool = InputPool FilePath (MVar (M.Map Digest EvidencePath))
+
+newInputPool :: FilePath -> IO InputPool
+newInputPool out = do
+  root <- mkdtemp (out </> ".native-inputs-")
+  InputPool root <$> newMVar M.empty
+
+stageInput :: InputPool -> FilePath -> B.ByteString -> IO Sha256
+stageInput (InputPool root inputs) path content = do
+  let hash = sha256 content
+      label = sha256Hex hash
+      key = Digest label
+  modifyMVar_ inputs $ \known -> do
+    source <- case M.lookup key known of
+      Just (EvidencePath existing) -> pure existing
+      Nothing -> do
+        let pooled = root </> label
+        B.writeFile pooled content
+        setFileMode pooled 0o400
+        pure pooled
+    bracket (mkdtemp (takeDirectory path </> ".native-stage-")) removeDirectoryRecursive $ \temporary -> do
+      let staged = temporary </> "input"
+      createLink source staged
+      renameFile staged path
+    pure (M.insert key (EvidencePath source) known)
+  pure hash
 
 -- Class ownership is published only after the full report has been written.
 writeEvidence :: EvidenceStore -> ComparisonScope -> FilePath -> Value -> Value -> Value -> IO ()
@@ -175,6 +206,7 @@ compact :: ClassKey -> Diagnostic -> FilePath -> Value
 compact (ClassKey key) d exemplar = let Facts status r0 spans = publicFacts d in object
   [ "schema_version" .= (1 :: Int)
   , "representation" .= ("compact-public-output-v1" :: T.Text)
+  , "input_retention" .= ("case-descriptor-artifact-paths" :: T.Text)
   , "status" .= verdictLabel (rawVerdict d)
   , "behavioral_status" .= ("passed" :: T.Text)
   , "mismatches" .= [text | Mismatch text <- rawMismatches d]

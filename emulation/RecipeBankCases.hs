@@ -440,6 +440,7 @@ kernelMain rawArgs = do
       id4Base = hexI (fromMaybe "0x0061c400" (opt "id4-base"))
   checkStorageBudget out
   createDirectoryIfMissing True out
+  inputs <- E.newInputPool out
   ks <- parseSyms (build </> "kernel.syms")
   unless (addr ks "__rb_image_start" == kernelBase) (fail "--rb-base differs from linked __rb_image_start")
   ms <- parseSyms (build </> "model.syms")
@@ -540,7 +541,7 @@ kernelMain rawArgs = do
   when (null specs) (fail "--case did not name a case")
   results <- mapBounded jobs (\sp -> do
     let loop s fuel = do
-          r <- runSpec evidence bankMode build out runner ks ms dataSpan kbin ktextLen kdataLen mdataRaw fTable getter setter mediaImg tabImg mediaLo s
+          r <- runSpec inputs evidence bankMode build out runner ks ms dataSpan kbin ktextLen kdataLen mdataRaw fTable getter setter mediaImg tabImg mediaLo s
           let missing = parseMaybe (withObject "r" (\o -> o .: "missing_fn" >>= withText "t" (pure . T.unpack))) r
           case missing of
             -- a volatile case declares its foreign boundary; an undeclared call fails it
@@ -2577,8 +2578,8 @@ specSet filmEncoding ks ms fields tabs hostBank (StockFailureRedraw failureRedra
       , volSelectC1, volSelectNone, volSelectAtC, volSelectUnset
       , volStaleSession, volInvalidStageCode ]
 
-runSpec :: E.EvidenceStore -> BankMode -> FilePath -> FilePath -> FilePath -> Syms -> Syms -> ModelDataSpan -> B.ByteString -> Int -> Int -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> Integer -> Spec -> IO Value
-runSpec evidence bankMode build out runner ks ms dataSpan kbin ktextLen kdataLen mdataRaw fTable getter setter mediaImg tabImg mediaLo sp = do
+runSpec :: E.InputPool -> E.EvidenceStore -> BankMode -> FilePath -> FilePath -> FilePath -> Syms -> Syms -> ModelDataSpan -> B.ByteString -> Int -> Int -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> Integer -> Spec -> IO Value
+runSpec inputs evidence bankMode build out runner ks ms dataSpan kbin ktextLen kdataLen mdataRaw fTable getter setter mediaImg tabImg mediaLo sp = do
   let dir = out </> spId sp
   checkStorageBudget dir
   createDirectoryIfMissing True dir
@@ -2613,8 +2614,9 @@ runSpec evidence bankMode build out runner ks ms dataSpan kbin ktextLen kdataLen
       arts = [("kernel.bin", kbin), ("media.bin", mediaImg'), ("getter.bin", getter), ("setter.bin", setter), ("model-data.bin", mdata'), ("tables.bin", tabImg), ("card.bin", cardImg), ("live.bin", liveImg')]
         ++ (if B.null caseImg then [] else [("case.bin", caseImg)])
         ++ [(rid ++ ".bin", b) | (rid, _, b) <- extrasPatch, not (B.null b)]
-  forM_ (arts ++ [("mode.bin", modeCell)]) $ \(n, b) -> B.writeFile (dir </> n) b
-  let digests = M.fromList [(n, sha256Hex (sha256 b)) | (n, b) <- arts ++ [("mode.bin", modeCell)]]
+  digests <- M.fromList <$> forM (arts ++ [("mode.bin", modeCell)]) (\(n, b) -> do
+    hash <- E.stageInput inputs (dir </> n) b
+    pure (n, sha256Hex hash))
   let reg :: String -> Integer -> Int -> String -> Maybe String -> Int -> Int -> Value
       kernelBase = addr ks "__rb_image_start"
       reg rid a sz perm art off len = object ["id" .= rid, "address" .= hex a, "size" .= (toInteger sz :: Integer), "permissions" .= (perm :: String),

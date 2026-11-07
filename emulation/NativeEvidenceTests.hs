@@ -5,9 +5,12 @@ module Main where
 import Control.Exception (bracket)
 import Control.Monad (forM_, unless)
 import Data.Aeson
+import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.List (nub)
+import Data.String (fromString)
 import qualified Data.Text as T
+import Emulation.NativeCase (loadCase)
 import Emulation.NativeEvidence
 import Emulation.ParallelCases (mapBounded)
 import Emulation.Sha256 (sha256, sha256Hex)
@@ -15,12 +18,14 @@ import FujiAF.Host (get, set, str)
 import System.Directory
 import System.FilePath
 import System.IO (hClose, openTempFile)
+import System.Posix.Files (fileID, getFileStatus, isRegularFile, linkCount)
 
 ensure :: Bool -> String -> IO ()
 ensure condition message = unless condition (fail message)
 
 main :: IO ()
 main = bracket temporary removeDirectoryRecursive $ \root -> do
+  poolTests root
   store <- newEvidenceStore CompactSuccesses
   first <- emit root store "first" caseFixture (report 1) passed
   ensure (first == report 1) "first diagnostic was not retained exactly"
@@ -79,6 +84,65 @@ main = bracket temporary removeDirectoryRecursive $ \root -> do
     raw <- readJson path
     ensure (get raw "runner" /= Null) "parallel reference is not a full diagnostic"
   putStrLn "native evidence retention tests passed"
+
+poolTests :: FilePath -> IO ()
+poolTests root = do
+  pool <- newInputPool root
+  let first = root </> "input-first"
+      second = root </> "input-second"
+      third = root </> "input-third"
+      code = B.pack [0x1e, 0xff, 0x2f, 0xe1, 0x1e, 0xff, 0x2f, 0xe1]
+      other = B.replicate 8 0
+  mapM_ createDirectory [first, second, third]
+  hash <- stageInput pool (first </> "code.bin") code
+  sharedHash <- stageInput pool (second </> "code.bin") code
+  _ <- stageInput pool (third </> "code.bin") other
+  firstStat <- getFileStatus (first </> "code.bin")
+  secondStat <- getFileStatus (second </> "code.bin")
+  thirdStat <- getFileStatus (third </> "code.bin")
+  ensure (hash == sharedHash && fileID firstStat == fileID secondStat && linkCount firstStat >= 3) "identical input bytes were not shared with the pool"
+  ensure (fileID firstStat /= fileID thirdStat) "distinct input bytes shared an inode"
+  ensure (isRegularFile firstStat) "staged input is not a regular file"
+  parallelStats <- mapBounded 8 (\i -> do
+    let dir = root </> ("pooled-parallel-" ++ show i)
+    createDirectory dir
+    _ <- stageInput pool (dir </> "code.bin") code
+    getFileStatus (dir </> "code.bin")) ([1 .. 16] :: [Int])
+  ensure (all ((== fileID firstStat) . fileID) parallelStats) "parallel input staging duplicated immutable bytes"
+  let descriptor = pooledFixture (sha256Hex hash)
+  BL.writeFile (second </> "case.json") (encode descriptor)
+  (loaded, _, _, _) <- loadCase (second </> "case.json")
+  ensure (loaded == descriptor) "hardlinked descriptor failed NativeCase admission"
+  _ <- stageInput pool (first </> "code.bin") other
+  retained <- B.readFile (second </> "code.bin")
+  replaced <- B.readFile (first </> "code.bin")
+  ensure (retained == code && replaced == other) "retry mutated another case's input"
+  _ <- stageInput pool (third </> "code.bin") code
+  restaged <- B.readFile (third </> "code.bin")
+  ensure (restaged == code) "retry mutated the immutable input pool"
+  _ <- loadCase (second </> "case.json")
+  pure ()
+
+pooledFixture :: String -> Value
+pooledFixture hash = object
+  [ "schema_version" .= (1 :: Int), "id" .= ("pooled-synthetic" :: T.Text)
+  , "origin" .= ("synthetic" :: T.Text), "provenance" .= ("Synthetic BX LR bytes and zero stack" :: T.Text)
+  , "cpu" .= object ["architecture" .= ("arm" :: T.Text), "model" .= ("cortex-r5f" :: T.Text), "mode" .= ("arm" :: T.Text), "endian" .= ("little" :: T.Text)]
+  , "artifacts" .= [object ["id" .= ("code" :: T.Text), "path" .= ("code.bin" :: T.Text), "size" .= (8 :: Int), "sha256" .= hash]]
+  , "entry" .= ("0x00001000" :: T.Text), "exit" .= ("0x00001004" :: T.Text)
+  , "registers" .= object
+      ([fromString ("r" ++ show i) .= ("0x00000000" :: T.Text) | i <- [0 .. 12 :: Int]]
+      ++ ["sp" .= ("0x00002008" :: T.Text), "lr" .= ("0x00001004" :: T.Text), "cpsr" .= ("0x00000010" :: T.Text)])
+  , "regions" .=
+      [ object ["id" .= ("code" :: T.Text), "address" .= ("0x00001000" :: T.Text), "size" .= (8 :: Int), "permissions" .= ("rx" :: T.Text),
+          "initial" .= object ["artifact" .= ("code" :: T.Text), "offset" .= (0 :: Int), "length" .= (8 :: Int)]]
+      , object ["id" .= ("stack" :: T.Text), "address" .= ("0x00002000" :: T.Text), "size" .= (8 :: Int), "permissions" .= ("rw" :: T.Text), "initial" .= object ["zero" .= True]]
+      ]
+  , "functions" .= [object ["address" .= ("0x00001000" :: T.Text), "size" .= (4 :: Int)]]
+  , "stubs" .= ([] :: [Value]), "limits" .= object ["instructions" .= (10 :: Int), "wall_ms" .= (100 :: Int)]
+  , "expected" .= object ["status" .= ("returned" :: T.Text), "registers" .= object ["r0" .= ("0x00000000" :: T.Text)], "memory" .= ([] :: [Value]), "events" .= ([] :: [Value])]
+  , "exclusions" .= (["Synthetic input admission only"] :: [T.Text])
+  ]
 
 temporary :: IO FilePath
 temporary = do
