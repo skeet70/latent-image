@@ -257,6 +257,10 @@ impl Release for Sim {
         Sim::context(self, domain)
     }
 
+    fn reset_task(&self, waiter: Task) {
+        s1::reset(self, task(at(waiter.0)));
+    }
+
     fn prepare(&self, owner: KernelContext, waiter: Task) -> Selection {
         let inserted = s1::prepare(self, context(at(owner.0)), task(at(waiter.0)), || {
             s1::insert(self, context(at(owner.0)), task(at(waiter.0)))
