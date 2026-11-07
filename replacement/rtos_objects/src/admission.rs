@@ -190,7 +190,7 @@ struct EntryAdmission {
     id: EncodedId,
 }
 
-#[cfg_attr(feature = "family", inline(never))]
+#[cfg_attr(feature = "family", inline(always))]
 fn admit_entry(header: &EntryAdmission, policy: EntryPolicy) -> Result<Domain, ObjectStatus> {
     validate_entry(&header.entry, policy)?;
     target(header.entry_domain, header.id.class())
