@@ -17,7 +17,6 @@ pub enum ObjectStatus {
 }
 
 impl ObjectStatus {
-    #[inline(always)]
     pub const fn code(self) -> i32 {
         match self {
             Self::Context => -25,

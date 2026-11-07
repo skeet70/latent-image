@@ -872,7 +872,6 @@ impl Domain {
         }
     }
 
-    #[inline(always)]
     pub const fn words(self) -> DomainWords {
         match self {
             Domain::A => DomainWords {
