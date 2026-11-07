@@ -68,6 +68,7 @@ data Facts = Facts
   , factsContextRunning :: Word32
   , factsContextSelected :: Word32
   , factsContextDispatchEnabled :: Word32
+  , factsContextFirstEntry :: Word32
   , factsLockWord :: Word32
   , factsLockAcquire :: Word32
   , factsLockRelease :: Word32
@@ -200,6 +201,7 @@ instance FromJSON Facts where
       <*> c .: "running"
       <*> c .: "selected"
       <*> c .: "dispatch_enabled"
+      <*> c .: "first_entry"
       <*> l .: "word"
       <*> l .: "acquire"
       <*> l .: "release"
