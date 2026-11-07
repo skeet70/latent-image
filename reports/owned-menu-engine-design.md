@@ -16,6 +16,8 @@ The current private review packet is `private-data/scratch/ControllerStrategy/en
 
 `compact-evidence.json` under that same private root preserves the original 110 complete roles, 22 failures and two fatal roles, scoped counterexamples, retention dependencies and repeated original-picker watch summaries. It does not replace raw evidence for current failures or the frozen matrix.
 
+`E-MENU-ENGINE-CUTOVER-150` binds the current qualification limits and retained counterexamples in the [evidence ledger](../docs/evidence.jsonl).
+
 | Frozen matrix `final-2db1e64a`, mechanism `2db1e64a`, source `0964c6c9` | Result |
 | --- | --- |
 | Required cohort | 67 pairs, 134 roles |

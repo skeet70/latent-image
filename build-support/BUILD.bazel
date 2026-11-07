@@ -5,7 +5,6 @@ exports_files([
     "ghc.nix",
     "ledger-apply.sh",
     "nixpkgs.nix",
-    "reclaim-disk.sh",
     "repositories.bzl",
     "rules-haskell-nix.patch",
 ])

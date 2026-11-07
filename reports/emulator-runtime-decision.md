@@ -156,6 +156,8 @@ Reproduction inputs, six exact child commands, time/load files, receipts, the se
 
 The upstream `4661bf974b7213137d6d7b1a3a572612c97b83d5` candidate remains in qualification under [#158](https://github.com/skeet70/latent-image/issues/158). The results below are unmerged qualification evidence, not accepted main gates. No completed matrix qualifies the current canonical-backing-read engine, and retained acceptance routes remain authoritative.
 
+`E-FUJIMOD-UPSTREAM-PIN-REBASE-150` binds the compacted findings and retained counterexamples in the [evidence ledger](../docs/evidence.jsonl).
+
 | Frozen candidate | Complete matrix outcome | Differences and limits |
 | --- | --- | --- |
 | `9ef1944b`, SDK `0jg64b2piibck7whsrd0ww9nc8m8ap79` | 22 routes, failure | 512 differences: six wall-time fields, 305 added receipt-metadata fields, 181 removed true menu-result booleans, 16 missing native observations after an archive prerequisite failure, four guest-entry counts. Native SD has no receipt. |
