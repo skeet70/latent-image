@@ -64,7 +64,8 @@ pub fn delete_flag<M: Wake>(m: &M, id: FlagId) -> Result<(), ObjectStatus> {
             m.store_word(control.pattern(), 0);
             dispatch
         },
-        |dispatch| if *dispatch { m.dispatch(WaitCompletion::Released.code()) },
+        // s2.rs overwrites r0 with the pool address; the delete passes the unused legacy word.
+        |dispatch| if *dispatch { m.dispatch(0) },
     );
     Ok(())
 }
@@ -93,7 +94,8 @@ pub fn delete_mailbox<'a, M: Wake>(
             m.store_word(control.tail(), 0);
             dispatch
         },
-        |dispatch| if *dispatch { m.dispatch(WaitCompletion::Released.code()) },
+        // s2.rs overwrites r0 with the pool address; the delete passes the unused legacy word.
+        |dispatch| if *dispatch { m.dispatch(0) },
     );
     Ok(MessageDrain { machine: m, next: head })
 }
