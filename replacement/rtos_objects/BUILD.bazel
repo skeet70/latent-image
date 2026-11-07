@@ -1,5 +1,6 @@
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
-load("//replacement/toolchain:rust.bzl", "xm1_rust_staticlib")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -123,7 +124,11 @@ sh_test(
     size = "small",
     srcs = ["//emulation:recovery-task-state-tests.sh"],
     args = ["$(location :objects-host-tests-build)"],
-    data = [":objects-host-tests-build"],
+    data = [
+        ":objects-host-tests-build",
+        ":objects-rust",
+        ":objects-smoke-build",
+    ],
 )
 
 haskell_library(
