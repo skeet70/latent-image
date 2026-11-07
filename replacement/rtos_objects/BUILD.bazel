@@ -173,7 +173,7 @@ haskell_library(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         "//emulation:cached-native-batch",
-        "//emulation:native-case",
+        "//emulation:native-adapter",
         "//emulation:native-observation",
         "//emulation:owned-case",
         "//host:aeson",
