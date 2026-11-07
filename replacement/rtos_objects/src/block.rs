@@ -115,7 +115,7 @@ fn block<M: Block>(
             None => m.store_word(wait, 0),
         }
         m.store_word(WaitBlock(wait).queue(), queue.0 .0);
-        m.store_word(WaitBlock(wait).owner(), owner.0 .0);
+        m.store_word(WaitBlock(wait).owner(), object.id().word());
         m.queue_wait(owner, task, queue, order);
         true
     })

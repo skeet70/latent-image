@@ -1558,6 +1558,38 @@ fn wait_flag_clear_on_match_writes_the_caller_output_after_the_clear() {
 }
 
 #[test]
+fn cross_domain_timed_wait_records_the_one_based_owner() {
+    let a = Domain::A.words();
+    let slot = FlagSlot::new(3, 120).unwrap();
+    let sim = Sim::new(Domain::A);
+    install(&sim, Domain::A);
+    let id = FlagId {
+        domain: Domain::B,
+        slot,
+    };
+    assert_eq!(
+        create_flag(&sim, id, FlagCreate { attributes: FlagAttributes(0), initial: Pattern(0) }),
+        Ok(id)
+    );
+    let (task, task_slot) = running_task(&sim, &a, Domain::A, 7);
+    sim.set(a.context(Domain::A).tick_now(), a.tick_now.0);
+    sim.set(a.tick_now, 100);
+    pending_flag(wait_flag(
+        &sim,
+        EntryDomain::new(Domain::A),
+        id,
+        WantedMask::new(Pattern(0x10)).unwrap(),
+        MatchMode::All,
+        OutWord(GuestAddress(0x4000_0600)),
+        Timeout::Units(5),
+    ));
+    let wait = a.flag_wait(task_slot);
+    assert_eq!(sim.word(wait.base().owner()), 2);
+    assert_eq!(sim.word(wait.base().queue()), Domain::B.words().flag_control(slot).0 .0);
+    assert_eq!(sim.word(task.wait()), wait.0 .0);
+}
+
+#[test]
 fn timed_wait_arms_the_per_task_timer_entry() {
     let words = Domain::A.words();
     let slot = FlagSlot::new(3, 120).unwrap();
