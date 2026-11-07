@@ -464,6 +464,12 @@ impl Mock {
         self.words.borrow_mut().insert(at.0, value);
     }
 
+    fn set_byte(&self, at: GuestAddress, value: u8) {
+        let aligned = GuestAddress(at.0 & !3);
+        let shift = 8 * (at.0 & 3);
+        let kept = self.word(aligned) & !(0xff << shift);
+        self.set(aligned, kept | (value as u32) << shift);
+    }
 }
 
 impl Machine for Mock {
