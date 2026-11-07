@@ -1,19 +1,19 @@
-use super::{cpsr_masked, entry_words, load, target, xm1_rtos_scheduler_save, Cpu, Reschedule, ENTRY};
+use super::{cpsr_masked, entry_words, load, xm1_rtos_scheduler_save, Cpu, Reschedule, ENTRY};
+use objects::admission::{admit, Entry, Object, Params, Request, Service};
 use objects::block::{
-    receive, resume_flag, resume_receive, wait_flag, Block, Deadline, FlagBlocking, FlagResume, IrqScope,
-    ReceiveBlocking, ReceiveResume, SavedMask, Tick, TimerEntryAddress, TimeoutCallback,
+    receive, resume_flag, resume_receive, wait_flag, Block, Deadline, FlagBlocking, FlagResume,
+    IrqScope, ReceiveBlocking, ReceiveResume, SavedMask, Tick, TimerEntryAddress, TimeoutCallback,
 };
 use objects::create::{create_flag, create_mailbox, FlagAttributes, MailboxAttributes};
-use objects::id::{own_flag_slot, own_mailbox_slot, resolve_flag, resolve_mailbox, EncodedId, EntryDomain, FlagId, MailboxId};
+use objects::id::{own_flag_slot, own_mailbox_slot, EncodedId, EntryDomain, FlagId, MailboxId};
 use objects::layout::{Domain, GuestAddress, Message, Task};
 use objects::locked::{clear_flag, poll_flag, poll_receive, OutWord};
 use objects::matching::{KeepMask, Pattern, WantedMask};
 use objects::message::PriorityLimit;
-use objects::status::{ObjectStatus, WaitOutcome};
+use objects::status::ObjectStatus;
 use objects::teardown::{delete_flag, delete_mailbox};
 use objects::timeout::Timeout;
 use objects::wake::{send, set_flag, set_flag_handler};
-use objects::admission::{admit, Entry, Facts, Object, Params, Records, Request, Service};
 
 extern "C" {
     fn xm1_rtos_scheduler_remove(record: objects::layout::KernelContext, task: Task) -> Reschedule;
@@ -21,8 +21,16 @@ extern "C" {
     static xm1_rtos_objects_stock_timeout: u32;
 }
 
-fn fail() -> ! {
-    panic!("the S2 save returned without a completed wait")
+fn wrong_object() -> ! {
+    panic!("admission returned the wrong object family")
+}
+
+fn still_waiting() -> ! {
+    panic!("the S2 save returned with the wait still queued")
+}
+
+fn unknown_result() -> ! {
+    panic!("the S2 save returned an unknown wait result")
 }
 
 impl IrqScope for Cpu {
@@ -63,77 +71,67 @@ impl Block for Cpu {
     }
 }
 
-fn mask_creation() -> objects::create::SavedInterrupts {
+/// The I/F pair the stock create and delete bodies hold across their table edits.
+fn mask_lifecycle() -> objects::create::SavedInterrupts {
     let saved: u32;
     unsafe { core::arch::asm!("mrs {saved}, cpsr", "cpsid if", saved = out(reg) saved, options(nostack)) };
     objects::create::SavedInterrupts(saved)
 }
 
-fn restore_creation(saved: objects::create::SavedInterrupts) {
+fn restore_lifecycle(saved: objects::create::SavedInterrupts) {
     unsafe { core::arch::asm!("msr cpsr_fc, {saved}", saved = in(reg) saved.0, options(nostack)) };
 }
 
-fn selected_domain(id: i32) -> Domain {
-    target(ENTRY, id >> 16).unwrap_or(ENTRY)
-}
+struct StageTables;
 
-fn facts_flag(id: i32) -> Facts {
-    let words = entry_words();
-    let domain = selected_domain(id);
-    let resolved = resolve_flag(
-        EntryDomain::new(ENTRY),
-        EncodedId(id),
-        load(words.context(domain).event_flag_count()),
-    )
-    .map(|flag| (domain, flag));
-    match resolved {
-        Ok((domain, flag)) => {
-            let config = domain.words().flag_config(flag.slot);
-            Facts { exists: load(config.exists()) != 0, attributes: load(config.attributes()), priority_limit: 0 }
-        }
-        Err(_) => Facts { exists: false, attributes: 0, priority_limit: 0 },
+impl objects::admission::Records for StageTables {
+    fn flags(&self, domain: Domain) -> u32 {
+        load(entry_words().context(domain).event_flag_count())
+    }
+
+    fn mailboxes(&self, domain: Domain) -> u32 {
+        load(entry_words().context(domain).mailbox_count())
     }
 }
 
-fn facts_mailbox(id: i32) -> Facts {
-    let words = entry_words();
-    let domain = selected_domain(id);
-    let resolved = resolve_mailbox(
-        EntryDomain::new(ENTRY),
-        EncodedId(id),
-        load(words.context(domain).mailbox_count()),
-    )
-    .map(|mailbox| (domain, mailbox));
-    match resolved {
-        Ok((domain, mailbox)) => {
-            let config = domain.words().mailbox_config(mailbox.slot);
-            Facts {
-                exists: load(config.exists()) != 0,
-                attributes: load(config.attributes()),
-                priority_limit: load(config.priority_limit()),
-            }
+impl objects::admission::Facts for StageTables {
+    fn exists(&self, object: Object) -> bool {
+        match object {
+            Object::Flag(id) => load(id.domain.words().flag_config(id.slot).exists()) != 0,
+            Object::Mailbox(id) => load(id.domain.words().mailbox_config(id.slot).exists()) != 0,
         }
-        Err(_) => Facts { exists: false, attributes: 0, priority_limit: 0 },
+    }
+
+    fn attributes(&self, object: Object) -> u32 {
+        match object {
+            Object::Flag(id) => load(id.domain.words().flag_config(id.slot).attributes()),
+            Object::Mailbox(id) => load(id.domain.words().mailbox_config(id.slot).attributes()),
+        }
+    }
+
+    fn priority_limit(&self, object: Object) -> u32 {
+        match object {
+            Object::Mailbox(id) => load(id.domain.words().mailbox_config(id.slot).priority_limit()),
+            Object::Flag(_) => 0,
+        }
+    }
+
+    fn message_priority(&self, message: Message) -> u32 {
+        load(message.priority())
     }
 }
 
-fn request(service: Service, id: i32, params: Params, facts: Facts) -> Request {
+fn request(service: Service, id: i32, params: Params) -> Request {
     let words = entry_words();
-    let context = words.context(selected_domain(id));
     Request {
         service,
         entry: Entry {
             handler_context: load(words.handler_context),
-            irq_masked: cpsr_masked(),
-            dispatch_enabled: load(GuestAddress(load(context.dispatch_enabled()))),
+            irq_masked: unsafe { cpsr_masked() },
+            dispatch_enabled: if service.blocks() { load(words.dispatch_enabled) } else { 0 },
         },
         entry_domain: EntryDomain::new(ENTRY),
         id: EncodedId(id),
-        records: Records {
-            flags: load(context.event_flag_count()),
-            mailboxes: load(context.mailbox_count()),
-        },
-        facts,
         params,
     }
 }
@@ -161,7 +159,7 @@ fn want(admitted: &objects::admission::Admitted) -> Result<WantedMask, ObjectSta
 #[inline(never)]
 #[link_section = ".text.family_flag_create"]
 pub extern "C" fn xm1_rtos_objects_family_flag_create(id: i32, request_pointer: u32) -> i32 {
-    let saved = mask_creation();
+    let saved = mask_lifecycle();
     let code = (|| -> i32 {
         let words = entry_words();
         let slot = match own_flag_slot(EncodedId(id), load(words.context(ENTRY).event_flag_count())) {
@@ -180,7 +178,7 @@ pub extern "C" fn xm1_rtos_objects_family_flag_create(id: i32, request_pointer: 
             Err(status) => status.code(),
         }
     })();
-    restore_creation(saved);
+    restore_lifecycle(saved);
     code
 }
 
@@ -189,15 +187,20 @@ pub extern "C" fn xm1_rtos_objects_family_flag_create(id: i32, request_pointer: 
 #[inline(never)]
 #[link_section = ".text.family_flag_delete"]
 pub extern "C" fn xm1_rtos_objects_family_flag_delete(id: i32) -> i32 {
-    let words = entry_words();
-    let slot = match own_flag_slot(EncodedId(id), load(words.context(ENTRY).event_flag_count())) {
-        Ok(slot) => slot,
-        Err(status) => return status.code(),
-    };
-    match delete_flag(&Cpu, FlagId { domain: ENTRY, slot }) {
-        Ok(()) => 0,
-        Err(status) => status.code(),
-    }
+    let saved = mask_lifecycle();
+    let code = (|| -> i32 {
+        let words = entry_words();
+        let slot = match own_flag_slot(EncodedId(id), load(words.context(ENTRY).event_flag_count())) {
+            Ok(slot) => slot,
+            Err(status) => return status.code(),
+        };
+        match delete_flag(&Cpu, FlagId { domain: ENTRY, slot }) {
+            Ok(()) => 0,
+            Err(status) => status.code(),
+        }
+    })();
+    restore_lifecycle(saved);
+    code
 }
 
 /// Slot `+0x88`.
@@ -205,7 +208,11 @@ pub extern "C" fn xm1_rtos_objects_family_flag_delete(id: i32) -> i32 {
 #[inline(never)]
 #[link_section = ".text.family_flag_set"]
 pub extern "C" fn xm1_rtos_objects_family_flag_set(id: i32, bits: u32) -> i32 {
-    let admitted = match admit(&request(Service::FlagSet, id, Params::NONE, facts_flag(id))) {
+    let admitted = match admit(
+        &request(Service::FlagSet, id, Params::NONE),
+        &StageTables,
+        &StageTables,
+    ) {
         Ok(admitted) => admitted,
         Err(status) => return status.code(),
     };
@@ -214,7 +221,7 @@ pub extern "C" fn xm1_rtos_objects_family_flag_set(id: i32, bits: u32) -> i32 {
             set_flag(&Cpu, id, Pattern(bits));
             0
         }
-        None => INVARIANT,
+        None => wrong_object(),
     }
 }
 
@@ -223,7 +230,11 @@ pub extern "C" fn xm1_rtos_objects_family_flag_set(id: i32, bits: u32) -> i32 {
 #[inline(never)]
 #[link_section = ".text.family_flag_set_handler"]
 pub extern "C" fn xm1_rtos_objects_family_flag_set_handler(id: i32, bits: u32) -> i32 {
-    let admitted = match admit(&request(Service::FlagSetHandler, id, Params::NONE, facts_flag(id))) {
+    let admitted = match admit(
+        &request(Service::FlagSetHandler, id, Params::NONE),
+        &StageTables,
+        &StageTables,
+    ) {
         Ok(admitted) => admitted,
         Err(status) => return status.code(),
     };
@@ -232,7 +243,7 @@ pub extern "C" fn xm1_rtos_objects_family_flag_set_handler(id: i32, bits: u32) -
             set_flag_handler(&Cpu, id, Pattern(bits));
             0
         }
-        None => INVARIANT,
+        None => wrong_object(),
     }
 }
 
@@ -241,7 +252,11 @@ pub extern "C" fn xm1_rtos_objects_family_flag_set_handler(id: i32, bits: u32) -
 #[inline(never)]
 #[link_section = ".text.family_flag_clear"]
 pub extern "C" fn xm1_rtos_objects_family_flag_clear(id: i32, keep: u32) -> i32 {
-    let admitted = match admit(&request(Service::FlagClear, id, Params::NONE, facts_flag(id))) {
+    let admitted = match admit(
+        &request(Service::FlagClear, id, Params::NONE),
+        &StageTables,
+        &StageTables,
+    ) {
         Ok(admitted) => admitted,
         Err(status) => return status.code(),
     };
@@ -250,19 +265,19 @@ pub extern "C" fn xm1_rtos_objects_family_flag_clear(id: i32, keep: u32) -> i32 
             Ok(()) => 0,
             Err(status) => status.code(),
         },
-        None => INVARIANT,
+        None => wrong_object(),
     }
 }
 
 fn flag_wait_entry(id: i32, pattern: u32, mode: u32, result: u32, timeout: Option<i32>, service: Service) -> i32 {
-    let params = Params { pattern: Pattern(pattern), mode, timeout, message_priority: None };
-    let admitted = match admit(&request(service, id, params, facts_flag(id))) {
+    let params = Params { pattern: Pattern(pattern), mode, timeout, message: None };
+    let admitted = match admit(&request(service, id, params), &StageTables, &StageTables) {
         Ok(admitted) => admitted,
         Err(status) => return status.code(),
     };
     let id = match flag(&admitted) {
         Some(id) => id,
-        None => return INVARIANT,
+        None => wrong_object(),
     };
     let wanted = match want(&admitted) {
         Ok(wanted) => wanted,
@@ -283,7 +298,8 @@ fn flag_wait_entry(id: i32, pattern: u32, mode: u32, result: u32, timeout: Optio
             unsafe { xm1_rtos_scheduler_save(0) };
             match resume_flag(&Cpu, pending) {
                 FlagResume::Completed(outcome) => outcome.code(),
-                FlagResume::Pending(_) | FlagResume::Corrupt(_) => fail(),
+                FlagResume::Pending(_) => still_waiting(),
+                FlagResume::Corrupt(_) => unknown_result(),
             }
         }
         Err(status) => status.code(),
@@ -313,14 +329,18 @@ pub extern "C" fn xm1_rtos_objects_family_flag_timed_wait(id: i32, pattern: u32,
 #[inline(never)]
 #[link_section = ".text.family_flag_poll"]
 pub extern "C" fn xm1_rtos_objects_family_flag_poll(id: i32, pattern: u32, mode: u32, result: u32) -> i32 {
-    let params = Params { pattern: Pattern(pattern), mode, timeout: None, message_priority: None };
-    let admitted = match admit(&request(Service::FlagPoll, id, params, facts_flag(id))) {
+    let params = Params { pattern: Pattern(pattern), mode, timeout: None, message: None };
+    let admitted = match admit(
+        &request(Service::FlagPoll, id, params),
+        &StageTables,
+        &StageTables,
+    ) {
         Ok(admitted) => admitted,
         Err(status) => return status.code(),
     };
     let id = match flag(&admitted) {
         Some(id) => id,
-        None => return INVARIANT,
+        None => wrong_object(),
     };
     let wanted = match want(&admitted) {
         Ok(wanted) => wanted,
@@ -337,7 +357,7 @@ pub extern "C" fn xm1_rtos_objects_family_flag_poll(id: i32, pattern: u32, mode:
 #[inline(never)]
 #[link_section = ".text.family_mailbox_create"]
 pub extern "C" fn xm1_rtos_objects_family_mailbox_create(id: i32, request_pointer: u32) -> i32 {
-    let saved = mask_creation();
+    let saved = mask_lifecycle();
     let code = (|| -> i32 {
         let words = entry_words();
         let slot = match own_mailbox_slot(EncodedId(id), load(words.context(ENTRY).mailbox_count())) {
@@ -356,7 +376,7 @@ pub extern "C" fn xm1_rtos_objects_family_mailbox_create(id: i32, request_pointe
             Err(status) => status.code(),
         }
     })();
-    restore_creation(saved);
+    restore_lifecycle(saved);
     code
 }
 
@@ -365,18 +385,23 @@ pub extern "C" fn xm1_rtos_objects_family_mailbox_create(id: i32, request_pointe
 #[inline(never)]
 #[link_section = ".text.family_mailbox_delete"]
 pub extern "C" fn xm1_rtos_objects_family_mailbox_delete(id: i32) -> i32 {
-    let words = entry_words();
-    let slot = match own_mailbox_slot(EncodedId(id), load(words.context(ENTRY).mailbox_count())) {
-        Ok(slot) => slot,
-        Err(status) => return status.code(),
-    };
-    match delete_mailbox(&Cpu, MailboxId { domain: ENTRY, slot }) {
-        Ok(drain) => {
-            core::mem::drop(drain);
-            0
+    let saved = mask_lifecycle();
+    let code = (|| -> i32 {
+        let words = entry_words();
+        let slot = match own_mailbox_slot(EncodedId(id), load(words.context(ENTRY).mailbox_count())) {
+            Ok(slot) => slot,
+            Err(status) => return status.code(),
+        };
+        match delete_mailbox(&Cpu, MailboxId { domain: ENTRY, slot }) {
+            Ok(drain) => {
+                core::mem::drop(drain);
+                0
+            }
+            Err(status) => status.code(),
         }
-        Err(status) => status.code(),
-    }
+    })();
+    restore_lifecycle(saved);
+    code
 }
 
 /// Slot `+0xd4`.
@@ -384,10 +409,17 @@ pub extern "C" fn xm1_rtos_objects_family_mailbox_delete(id: i32) -> i32 {
 #[inline(never)]
 #[link_section = ".text.family_mailbox_send"]
 pub extern "C" fn xm1_rtos_objects_family_mailbox_send(id: i32, message: u32) -> i32 {
-    let facts = facts_mailbox(id);
-    let priority = if facts.attributes & objects::layout::MailboxConfig::MESSAGE_PRIORITY != 0 { Some(load(GuestAddress(message + 4))) } else { None };
-    let params = Params { pattern: Pattern(0), mode: 0, timeout: None, message_priority: priority };
-    let admitted = match admit(&request(Service::MailboxSend, id, params, facts)) {
+    let params = Params {
+        pattern: Pattern(0),
+        mode: 0,
+        timeout: None,
+        message: Some(Message(GuestAddress(message))),
+    };
+    let admitted = match admit(
+        &request(Service::MailboxSend, id, params),
+        &StageTables,
+        &StageTables,
+    ) {
         Ok(admitted) => admitted,
         Err(status) => return status.code(),
     };
@@ -396,19 +428,19 @@ pub extern "C" fn xm1_rtos_objects_family_mailbox_send(id: i32, message: u32) ->
             send(&Cpu, id, Message(GuestAddress(message)), admitted.priority);
             0
         }
-        None => INVARIANT,
+        None => wrong_object(),
     }
 }
 
 fn receive_entry(id: i32, message_out: u32, timeout: Option<i32>, service: Service) -> i32 {
-    let params = Params { pattern: Pattern(0), mode: 0, timeout, message_priority: None };
-    let admitted = match admit(&request(service, id, params, facts_mailbox(id))) {
+    let params = Params { pattern: Pattern(0), mode: 0, timeout, message: None };
+    let admitted = match admit(&request(service, id, params), &StageTables, &StageTables) {
         Ok(admitted) => admitted,
         Err(status) => return status.code(),
     };
     let id = match mailbox(&admitted) {
         Some(id) => id,
-        None => return INVARIANT,
+        None => wrong_object(),
     };
     let saved = Cpu.mask_i();
     let code = match receive(
@@ -423,7 +455,8 @@ fn receive_entry(id: i32, message_out: u32, timeout: Option<i32>, service: Servi
             unsafe { xm1_rtos_scheduler_save(0) };
             match resume_receive(&Cpu, pending) {
                 ReceiveResume::Completed(outcome) => outcome.code(),
-                ReceiveResume::Pending(_) | ReceiveResume::Corrupt(_) => fail(),
+                ReceiveResume::Pending(_) => still_waiting(),
+                ReceiveResume::Corrupt(_) => unknown_result(),
             }
         }
         Err(status) => status.code(),
@@ -453,14 +486,18 @@ pub extern "C" fn xm1_rtos_objects_family_mailbox_timed_receive(id: i32, message
 #[inline(never)]
 #[link_section = ".text.family_mailbox_poll"]
 pub extern "C" fn xm1_rtos_objects_family_mailbox_poll(id: i32, message_out: u32) -> i32 {
-    let params = Params { pattern: Pattern(0), mode: 0, timeout: None, message_priority: None };
-    let admitted = match admit(&request(Service::MailboxPoll, id, params, facts_mailbox(id))) {
+    let params = Params { pattern: Pattern(0), mode: 0, timeout: None, message: None };
+    let admitted = match admit(
+        &request(Service::MailboxPoll, id, params),
+        &StageTables,
+        &StageTables,
+    ) {
         Ok(admitted) => admitted,
         Err(status) => return status.code(),
     };
     let id = match mailbox(&admitted) {
         Some(id) => id,
-        None => return INVARIANT,
+        None => wrong_object(),
     };
     match poll_receive(&Cpu, id, OutWord(GuestAddress(message_out))) {
         Ok(outcome) => outcome.code(),

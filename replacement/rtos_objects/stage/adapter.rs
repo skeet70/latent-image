@@ -198,6 +198,7 @@ fn entry_words() -> DomainWords {
     ENTRY.words()
 }
 
+#[cfg(not(feature = "family"))]
 #[inline(always)]
 fn entry_state() -> Entry {
     Entry {
@@ -214,6 +215,7 @@ unsafe fn cpsr_masked() -> bool {
     cpsr & 0x80 != 0
 }
 
+#[cfg(not(feature = "family"))]
 #[inline(always)]
 fn target(domain: Domain, class: i32) -> Result<Domain, ObjectStatus> {
     match class {
@@ -225,6 +227,7 @@ fn target(domain: Domain, class: i32) -> Result<Domain, ObjectStatus> {
 }
 
 /// Slot `+0x88`, in stock admission order.
+#[cfg(not(feature = "family"))]
 #[no_mangle]
 #[inline(never)]
 #[link_section = ".text.f2_set_flag"]
@@ -251,6 +254,7 @@ pub extern "C" fn xm1_rtos_objects_f2_set_flag(id: i32, bits: u32) -> i32 {
 }
 
 /// Slot `+0xd4`, in stock admission order: the creation record is read before the message priority.
+#[cfg(not(feature = "family"))]
 #[no_mangle]
 #[inline(never)]
 #[link_section = ".text.f2_send"]

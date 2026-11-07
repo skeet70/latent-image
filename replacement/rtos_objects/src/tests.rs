@@ -15,23 +15,69 @@ fn entry() -> Entry {
     }
 }
 
+struct Tables {
+    flags: u32,
+    mailboxes: u32,
+    exists: bool,
+    attributes: u32,
+    priority_limit: u32,
+    priority: u32,
+}
+
+impl Tables {
+    fn ready() -> Self {
+        Self {
+            flags: 120,
+            mailboxes: 1,
+            exists: true,
+            attributes: 0,
+            priority_limit: 32,
+            priority: 0,
+        }
+    }
+}
+
+impl Records for Tables {
+    fn flags(&self, _: Domain) -> u32 {
+        self.flags
+    }
+
+    fn mailboxes(&self, _: Domain) -> u32 {
+        self.mailboxes
+    }
+}
+
+impl Facts for Tables {
+    fn exists(&self, _: Object) -> bool {
+        self.exists
+    }
+
+    fn attributes(&self, _: Object) -> u32 {
+        self.attributes
+    }
+
+    fn priority_limit(&self, _: Object) -> u32 {
+        self.priority_limit
+    }
+
+    fn message_priority(&self, _: Message) -> u32 {
+        self.priority
+    }
+}
+
 fn req(service: Service) -> Request {
     Request {
         service,
         entry: entry(),
         entry_domain: EntryDomain::new(Domain::A),
         id: EncodedId::of(1, 1),
-        records: Records {
-            flags: 120,
-            mailboxes: 1,
-        },
-        facts: Facts {
-            exists: true,
-            attributes: 0,
-            priority_limit: 32,
-        },
         params: Params::NONE,
     }
+}
+
+fn admit_req(request: &Request) -> Result<Admitted, ObjectStatus> {
+    let tables = Tables::ready();
+    admit(request, &tables, &tables)
 }
 
 fn flag1(domain: Domain) -> FlagId {
@@ -83,7 +129,7 @@ fn create_names_the_entry_domain_whatever_the_class() {
         request.entry_domain = EntryDomain::new(entry);
         request.id = EncodedId::of(2, 1);
         assert_eq!(
-            admit(&request).map(|admitted| admitted.object),
+            admit_req(&request).map(|admitted| admitted.object),
             Ok(Object::Flag(flag1(expected))),
             "{entry:?}"
         );
@@ -159,7 +205,7 @@ fn create_has_no_context_check() {
         dispatch_enabled: 0,
     };
     assert_eq!(
-        admit(&request).map(|admitted| admitted.object),
+        admit_req(&request).map(|admitted| admitted.object),
         Ok(Object::Flag(flag1(Domain::A)))
     );
 }
@@ -168,22 +214,22 @@ fn create_has_no_context_check() {
 fn task_forms_refuse_handler_context() {
     let mut request = req(Service::FlagSet);
     request.entry.handler_context = 1;
-    assert_eq!(admit(&request), Err(ObjectStatus::Context));
+    assert_eq!(admit_req(&request), Err(ObjectStatus::Context));
 }
 
 #[test]
 fn the_handler_form_refuses_task_context() {
-    assert_eq!(admit(&req(Service::FlagSetHandler)), Err(ObjectStatus::Context));
+    assert_eq!(admit_req(&req(Service::FlagSetHandler)), Err(ObjectStatus::Context));
     let mut handler = req(Service::FlagSetHandler);
     handler.entry.handler_context = 1;
-    assert!(admit(&handler).is_ok());
+    assert!(admit_req(&handler).is_ok());
 }
 
 #[test]
 fn masked_irq_is_refused() {
     let mut request = req(Service::FlagClear);
     request.entry.irq_masked = true;
-    assert_eq!(admit(&request), Err(ObjectStatus::Context));
+    assert_eq!(admit_req(&request), Err(ObjectStatus::Context));
 }
 
 #[test]
@@ -197,7 +243,7 @@ fn only_the_blocking_forms_read_the_dispatch_word() {
         let mut request = req(service);
         request.entry.dispatch_enabled = 0;
         request.params.pattern = Pattern(1);
-        assert_eq!(admit(&request), Err(ObjectStatus::Context), "{service:?}");
+        assert_eq!(admit_req(&request), Err(ObjectStatus::Context), "{service:?}");
     }
     for service in [
         Service::FlagSet,
@@ -209,35 +255,34 @@ fn only_the_blocking_forms_read_the_dispatch_word() {
         let mut request = req(service);
         request.entry.dispatch_enabled = 0;
         request.params.pattern = Pattern(1);
-        assert!(admit(&request).is_ok(), "{service:?}");
+        assert!(admit_req(&request).is_ok(), "{service:?}");
     }
+}
+
+fn send_request() -> Request {
+    let mut request = req(Service::MailboxSend);
+    request.params.message = Some(Message(GuestAddress(0)));
+    request
 }
 
 #[test]
 fn send_checks_existence_before_the_priority() {
-    let mut request = req(Service::MailboxSend);
-    request.facts = Facts {
-        exists: false,
-        attributes: 2,
-        priority_limit: 32,
-    };
-    request.params.message_priority = Some(0);
-    assert_eq!(admit(&request), Err(ObjectStatus::NotCreated));
+    let request = send_request();
+    let tables = Tables { exists: false, attributes: 2, ..Tables::ready() };
+    assert_eq!(admit(&request, &tables, &tables), Err(ObjectStatus::NotCreated));
 }
 
 #[test]
 fn send_refuses_a_priority_outside_the_limit() {
     for priority in [0, 33, 0xffff_ffff] {
-        let mut request = req(Service::MailboxSend);
-        request.facts.attributes = 2;
-        request.params.message_priority = Some(priority);
-        assert_eq!(admit(&request), Err(ObjectStatus::Param), "{priority}");
+        let request = send_request();
+        let tables = Tables { attributes: 2, priority, ..Tables::ready() };
+        assert_eq!(admit(&request, &tables, &tables), Err(ObjectStatus::Param), "{priority}");
     }
-    let mut accepted = req(Service::MailboxSend);
-    accepted.facts.attributes = 2;
-    accepted.params.message_priority = Some(32);
+    let accepted = send_request();
+    let tables = Tables { attributes: 2, priority: 32, ..Tables::ready() };
     assert_eq!(
-        admit(&accepted).map(|admitted| admitted.priority),
+        admit(&accepted, &tables, &tables).map(|admitted| admitted.priority),
         Ok(Some(MessagePriority::new(32, PriorityLimit(32)).unwrap()))
     );
 }
@@ -252,61 +297,55 @@ fn a_negative_priority_is_refused_whatever_the_limit() {
         Err(ObjectStatus::Param),
         "a negative limit admits nothing"
     );
-    let mut request = req(Service::MailboxSend);
-    request.facts = Facts {
-        exists: true,
-        attributes: 2,
-        priority_limit: 0xffff_ffff,
-    };
-    request.params.message_priority = Some(0xffff_ffff);
-    assert_eq!(admit(&request), Err(ObjectStatus::Param));
+    let request = send_request();
+    let tables = Tables { attributes: 2, priority_limit: 0xffff_ffff, priority: 0xffff_ffff, ..Tables::ready() };
+    assert_eq!(admit(&request, &tables, &tables), Err(ObjectStatus::Param));
 }
 
 #[test]
 fn send_ignores_the_priority_without_the_attribute() {
-    let mut request = req(Service::MailboxSend);
-    request.params.message_priority = Some(0);
-    assert_eq!(admit(&request).map(|admitted| admitted.priority), Ok(None));
+    let request = send_request();
+    assert_eq!(admit_req(&request).map(|admitted| admitted.priority), Ok(None));
 }
 
 #[test]
 fn timed_receive_checks_the_timeout_before_existence() {
     let mut request = req(Service::MailboxTimedReceive);
-    request.facts.exists = false;
     request.params.timeout = Some(-2);
-    assert_eq!(admit(&request), Err(ObjectStatus::Param));
+    let tables = Tables { exists: false, ..Tables::ready() };
+    assert_eq!(admit(&request, &tables, &tables), Err(ObjectStatus::Param));
 }
 
 #[test]
 fn flag_wait_refuses_a_zero_pattern_before_existence() {
-    let mut request = req(Service::FlagWait);
-    request.facts.exists = false;
-    assert_eq!(admit(&request), Err(ObjectStatus::Param));
+    let request = req(Service::FlagWait);
+    let tables = Tables { exists: false, ..Tables::ready() };
+    assert_eq!(admit(&request, &tables, &tables), Err(ObjectStatus::Param));
 }
 
 #[test]
 fn flag_timed_wait_checks_the_mode_before_existence() {
     let mut request = req(Service::FlagTimedWait);
-    request.facts.exists = false;
     request.params.pattern = Pattern(1);
     request.params.mode = 2;
     request.params.timeout = Some(-1);
-    assert_eq!(admit(&request), Err(ObjectStatus::Param));
+    let tables = Tables { exists: false, ..Tables::ready() };
+    assert_eq!(admit(&request, &tables, &tables), Err(ObjectStatus::Param));
 }
 
 #[test]
 fn flag_set_accepts_zero_bits() {
     let mut request = req(Service::FlagSet);
     request.params.pattern = Pattern(0);
-    assert!(admit(&request).is_ok());
+    assert!(admit_req(&request).is_ok());
 }
 
 #[test]
 fn the_index_is_checked_before_the_creation_record() {
     let mut request = req(Service::FlagSet);
     request.id = EncodedId::of(1, 121);
-    request.facts.exists = false;
-    assert_eq!(admit(&request), Err(ObjectStatus::InvalidIndex));
+    let tables = Tables { exists: false, ..Tables::ready() };
+    assert_eq!(admit(&request, &tables, &tables), Err(ObjectStatus::InvalidIndex));
 }
 
 #[test]
@@ -315,7 +354,7 @@ fn admit_returns_the_validated_parameters() {
     request.params.pattern = Pattern(0x10);
     request.params.mode = 1;
     request.params.timeout = Some(5);
-    let admitted = admit(&request).unwrap();
+    let admitted = admit_req(&request).unwrap();
     assert_eq!(admitted.object, Object::Flag(flag1(Domain::A)));
     assert_eq!(admitted.want, Pattern(0x10));
     assert_eq!(admitted.mode, MatchMode::Any);
@@ -706,7 +745,7 @@ fn a_create_through_admit_writes_the_entry_domain_table() {
     let m = Mock::marking(Domain::B.words().flag_config(FlagSlot::new(5, 120).unwrap()).exists().0);
     request.entry_domain = EntryDomain::new(Domain::B);
     request.id = EncodedId::of(2, 5);
-    let admitted = admit(&request).unwrap();
+    let admitted = admit_req(&request).unwrap();
     let id = match admitted.object {
         Object::Flag(id) => id,
         Object::Mailbox(_) => panic!("flag create admitted a mailbox"),

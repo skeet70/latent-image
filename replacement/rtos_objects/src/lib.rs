@@ -29,7 +29,10 @@ fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
     loop {}
 }
 
-pub use admission::{admit, flag_wait_locked, poll_result, Admitted, Entry, Facts, Object, Params, Records, Request, Service};
+pub use admission::{
+    admit, flag_wait_locked, poll_result, Admitted, Entry, Facts, Object, Params, Records, Request,
+    Service,
+};
 pub use block::{
     receive, resume_flag, resume_receive, wait_flag, Block, Deadline, FlagBlocking, FlagWaitPending,
     FlagResume, IrqScope, ReceiveBlocking, ReceivePending, ReceiveResume, SavedMask, Tick,
@@ -39,7 +42,10 @@ pub use create::{
     create_flag, create_mailbox, FlagAttributes, FlagCreate, Machine, MailboxAttributes, MailboxCreate,
     SavedInterrupts,
 };
-pub use id::{own_flag_slot, own_mailbox_slot, resolve_flag, resolve_mailbox, EncodedId, EntryDomain, FlagId, MailboxId};
+pub use id::{
+    own_flag_slot, own_mailbox_slot, resolve_flag, resolve_flag_with, resolve_mailbox,
+    resolve_mailbox_with, EncodedId, EntryDomain, FlagId, MailboxId,
+};
 pub use layout::{Domain, DomainId, FlagSlot, MailboxSlot, TaskSlot};
 pub use locked::{clear_flag, poll_flag, poll_receive, ObjectLock, OutWord};
 pub use matching::{check, KeepMask, MatchMode, Pattern, WantedMask};

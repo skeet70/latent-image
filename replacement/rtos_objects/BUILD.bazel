@@ -255,6 +255,7 @@ haskell_binary(
         ":objects-f2-stage-b.bin",
         ":objects-family-stage-a.bin",
         ":objects-family-stage-b.bin",
+        "//replacement/media_permit:rtos_slot_contracts.json",
         "//replacement/rtos_scheduler/oracle:layout.json",
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],

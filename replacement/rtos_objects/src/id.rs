@@ -62,9 +62,30 @@ pub fn resolve_flag(entry: EntryDomain, id: EncodedId, count: u32) -> Result<Fla
     Ok(FlagId { domain, slot })
 }
 
+/// Reads the count only after the class and index are valid, and only for the selected domain.
+pub fn resolve_flag_with(
+    entry: EntryDomain,
+    id: EncodedId,
+    count: impl FnOnce(Domain) -> u32,
+) -> Result<FlagId, ObjectStatus> {
+    let domain = target(entry, id.class())?;
+    let slot = FlagSlot::new(index(id)?, count(domain)).ok_or(ObjectStatus::InvalidIndex)?;
+    Ok(FlagId { domain, slot })
+}
+
 pub fn resolve_mailbox(entry: EntryDomain, id: EncodedId, count: u32) -> Result<MailboxId, ObjectStatus> {
     let domain = target(entry, id.class())?;
     let slot = MailboxSlot::new(index(id)?, count).ok_or(ObjectStatus::InvalidIndex)?;
+    Ok(MailboxId { domain, slot })
+}
+
+pub fn resolve_mailbox_with(
+    entry: EntryDomain,
+    id: EncodedId,
+    count: impl FnOnce(Domain) -> u32,
+) -> Result<MailboxId, ObjectStatus> {
+    let domain = target(entry, id.class())?;
+    let slot = MailboxSlot::new(index(id)?, count(domain)).ok_or(ObjectStatus::InvalidIndex)?;
     Ok(MailboxId { domain, slot })
 }
 

@@ -1,5 +1,8 @@
-use crate::id::{own_flag_slot, own_mailbox_slot, resolve_flag, resolve_mailbox, EncodedId, EntryDomain, FlagId, MailboxId};
-use crate::layout::MailboxConfig;
+use crate::id::{
+    own_flag_slot, own_mailbox_slot, resolve_flag_with, resolve_mailbox_with, EncodedId, EntryDomain,
+    FlagId, MailboxId,
+};
+use crate::layout::{Domain, MailboxConfig, Message};
 use crate::matching::{MatchMode, Pattern};
 use crate::message::{MessagePriority, PriorityLimit};
 use crate::status::{ObjectStatus, WaitOutcome};
@@ -28,7 +31,7 @@ impl Service {
         self == Self::FlagSetHandler
     }
 
-    fn blocks(self) -> bool {
+    pub const fn blocks(self) -> bool {
         matches!(
             self,
             Self::FlagWait | Self::FlagTimedWait | Self::MailboxReceive | Self::MailboxTimedReceive
@@ -51,18 +54,18 @@ pub struct Entry {
     pub dispatch_enabled: u32,
 }
 
-/// The selected context record's published table counts.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Records {
-    pub flags: u32,
-    pub mailboxes: u32,
+/// The selected domain record's published table counts, read when the class is resolved.
+pub trait Records {
+    fn flags(&self, domain: Domain) -> u32;
+    fn mailboxes(&self, domain: Domain) -> u32;
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Facts {
-    pub exists: bool,
-    pub attributes: u32,
-    pub priority_limit: u32,
+/// The creation record and message words a body reads at its stock points.
+pub trait Facts {
+    fn exists(&self, object: Object) -> bool;
+    fn attributes(&self, object: Object) -> u32;
+    fn priority_limit(&self, object: Object) -> u32;
+    fn message_priority(&self, message: Message) -> u32;
 }
 
 /// The raw parameters a body reads before its first lock.
@@ -71,7 +74,7 @@ pub struct Params {
     pub pattern: Pattern,
     pub mode: u32,
     pub timeout: Option<i32>,
-    pub message_priority: Option<u32>,
+    pub message: Option<Message>,
 }
 
 impl Params {
@@ -79,7 +82,7 @@ impl Params {
         pattern: Pattern(0),
         mode: 0,
         timeout: None,
-        message_priority: None,
+        message: None,
     };
 }
 
@@ -103,16 +106,18 @@ pub struct Request {
     pub entry: Entry,
     pub entry_domain: EntryDomain,
     pub id: EncodedId,
-    pub records: Records,
-    pub facts: Facts,
     pub params: Params,
 }
 
 /// The stock order: context, IRQ mask, dispatch word, class, index, family parameters, then the
 /// creation record. Create and delete have no admission at all.
-pub fn admit(request: &Request) -> Result<Admitted, ObjectStatus> {
+pub fn admit<R: Records, F: Facts>(
+    request: &Request,
+    records: &R,
+    facts: &F,
+) -> Result<Admitted, ObjectStatus> {
     if request.service.owns_its_table() {
-        return own_table(request);
+        return own_table(request, records);
     }
     if (request.entry.handler_context != 0) != request.service.in_handler() {
         return Err(ObjectStatus::Context);
@@ -125,12 +130,14 @@ pub fn admit(request: &Request) -> Result<Admitted, ObjectStatus> {
     }
     match request.service {
         Service::FlagSet | Service::FlagSetHandler | Service::FlagClear => {
-            let id = resolve_flag(request.entry_domain, request.id, request.records.flags)?;
-            exists(request.facts)?;
+            let id = resolve_flag_with(request.entry_domain, request.id, |domain| records.flags(domain))?;
+            if !facts.exists(Object::Flag(id)) {
+                return Err(ObjectStatus::NotCreated);
+            }
             Ok(flag(id, Pattern(0), MatchMode::All, None))
         }
         Service::FlagWait | Service::FlagPoll | Service::FlagTimedWait => {
-            let id = resolve_flag(request.entry_domain, request.id, request.records.flags)?;
+            let id = resolve_flag_with(request.entry_domain, request.id, |domain| records.flags(domain))?;
             if request.params.pattern.0 == 0 {
                 return Err(ObjectStatus::Param);
             }
@@ -141,23 +148,29 @@ pub fn admit(request: &Request) -> Result<Admitted, ObjectStatus> {
                 )?),
                 _ => None,
             };
-            exists(request.facts)?;
+            if !facts.exists(Object::Flag(id)) {
+                return Err(ObjectStatus::NotCreated);
+            }
             Ok(flag(id, request.params.pattern, mode, timeout))
         }
         Service::MailboxSend => {
-            let id = resolve_mailbox(request.entry_domain, request.id, request.records.mailboxes)?;
-            exists(request.facts)?;
-            let priority = if request.facts.attributes & MailboxConfig::MESSAGE_PRIORITY != 0 {
-                let raw = request.params.message_priority.ok_or(ObjectStatus::Param)?;
-                Some(MessagePriority::new(
-                    raw,
-                    PriorityLimit::from_word(request.facts.priority_limit),
-                )?)
+            let id = resolve_mailbox_with(request.entry_domain, request.id, |domain| {
+                records.mailboxes(domain)
+            })?;
+            let object = Object::Mailbox(id);
+            if !facts.exists(object) {
+                return Err(ObjectStatus::NotCreated);
+            }
+            let priority = if facts.attributes(object) & MailboxConfig::MESSAGE_PRIORITY != 0 {
+                let message = request.params.message.ok_or(ObjectStatus::Param)?;
+                let raw = facts.message_priority(message);
+                let limit = PriorityLimit::from_word(facts.priority_limit(object));
+                Some(MessagePriority::new(raw, limit)?)
             } else {
                 None
             };
             Ok(Admitted {
-                object: Object::Mailbox(id),
+                object,
                 want: Pattern(0),
                 mode: MatchMode::All,
                 timeout: None,
@@ -165,14 +178,18 @@ pub fn admit(request: &Request) -> Result<Admitted, ObjectStatus> {
             })
         }
         Service::MailboxReceive | Service::MailboxPoll | Service::MailboxTimedReceive => {
-            let id = resolve_mailbox(request.entry_domain, request.id, request.records.mailboxes)?;
+            let id = resolve_mailbox_with(request.entry_domain, request.id, |domain| {
+                records.mailboxes(domain)
+            })?;
             let timeout = match request.service {
                 Service::MailboxTimedReceive => Some(Timeout::from_stock(
                     request.params.timeout.ok_or(ObjectStatus::Param)?,
                 )?),
                 _ => None,
             };
-            exists(request.facts)?;
+            if !facts.exists(Object::Mailbox(id)) {
+                return Err(ObjectStatus::NotCreated);
+            }
             Ok(Admitted {
                 object: Object::Mailbox(id),
                 want: Pattern(0),
@@ -181,7 +198,9 @@ pub fn admit(request: &Request) -> Result<Admitted, ObjectStatus> {
                 priority: None,
             })
         }
-        _ => unreachable!(),
+        Service::FlagCreate | Service::FlagDelete | Service::MailboxCreate | Service::MailboxDelete => {
+            unreachable!()
+        }
     }
 }
 
@@ -202,16 +221,16 @@ pub fn poll_result(matched: Option<Pattern>) -> WaitOutcome<Pattern> {
     }
 }
 
-fn own_table(request: &Request) -> Result<Admitted, ObjectStatus> {
+fn own_table<R: Records>(request: &Request, records: &R) -> Result<Admitted, ObjectStatus> {
     let domain = request.entry_domain.domain();
     let object = match request.service {
         Service::FlagCreate | Service::FlagDelete => Object::Flag(FlagId {
             domain,
-            slot: own_flag_slot(request.id, request.records.flags)?,
+            slot: own_flag_slot(request.id, records.flags(domain))?,
         }),
         _ => Object::Mailbox(MailboxId {
             domain,
-            slot: own_mailbox_slot(request.id, request.records.mailboxes)?,
+            slot: own_mailbox_slot(request.id, records.mailboxes(domain))?,
         }),
     };
     Ok(Admitted {
@@ -221,14 +240,6 @@ fn own_table(request: &Request) -> Result<Admitted, ObjectStatus> {
         timeout: None,
         priority: None,
     })
-}
-
-fn exists(facts: Facts) -> Result<(), ObjectStatus> {
-    if facts.exists {
-        Ok(())
-    } else {
-        Err(ObjectStatus::NotCreated)
-    }
 }
 
 fn flag(id: FlagId, want: Pattern, mode: MatchMode, timeout: Option<Timeout>) -> Admitted {
