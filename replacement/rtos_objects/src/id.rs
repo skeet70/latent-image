@@ -47,6 +47,7 @@ pub struct MailboxId {
     pub slot: MailboxSlot,
 }
 
+#[inline(always)]
 fn target(entry: EntryDomain, class: i32) -> Result<Domain, ObjectStatus> {
     match class {
         0 => Ok(entry.domain()),
