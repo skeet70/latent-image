@@ -25,7 +25,8 @@ import Data.Word (Word32, Word8)
 import Replacement.RtosOwnFirst.Regions (Domain (..))
 
 data DomainFacts = DomainFacts
-  { dfSchedulerLock :: Word32
+  { dfId :: Word32
+  , dfSchedulerLock :: Word32
   , dfObjectLock :: Word32
   , dfContexts :: Word32
   , dfReadyHeads :: Word32
@@ -56,6 +57,7 @@ data DomainFacts = DomainFacts
 data Facts = Facts
   { factsA :: DomainFacts
   , factsB :: DomainFacts
+  , factsOwnId :: Word32
   , factsContextSize :: Word32
   , factsContextId :: Word32
   , factsContextOwner :: Word32
@@ -125,6 +127,7 @@ data Facts = Facts
   , factsMailboxControlHead :: Word32
   , factsMailboxControlTail :: Word32
   , factsTimerEntrySize :: Word32
+  , factsStateDormant :: Word8
   , factsStateReady :: Word8
   , factsStateWait :: Word8
   , factsStateSuspended :: Word8
@@ -137,7 +140,8 @@ data Facts = Facts
 instance FromJSON DomainFacts where
   parseJSON = withObject "domain facts" $ \o ->
     DomainFacts
-      <$> o .: "scheduler_lock"
+      <$> o .: "id"
+      <*> o .: "scheduler_lock"
       <*> o .: "object_lock"
       <*> o .: "contexts"
       <*> o .: "ready_heads"
@@ -185,6 +189,7 @@ instance FromJSON Facts where
     Facts
       <$> o .: "a"
       <*> o .: "b"
+      <*> o .: "own_id"
       <*> c .: "size"
       <*> c .: "id"
       <*> c .: "owner"
@@ -254,6 +259,7 @@ instance FromJSON Facts where
       <*> mc .: "head"
       <*> mc .: "tail"
       <*> o .: "timer_entry_size"
+      <*> pure _dormant
       <*> pure ready
       <*> pure wait
       <*> pure suspended
