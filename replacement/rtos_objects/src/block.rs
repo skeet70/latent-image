@@ -66,12 +66,6 @@ pub enum ReceiveBlocking {
     Pending(ReceivePending),
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum ResumeError {
-    /// The task still has the wait bit, or the completion word is not a completion code.
-    NotCompleted,
-}
-
 /// The wake writes the wait block's completion word before the task becomes runnable; the
 /// caller output is read by the resumed entry.
 fn block<M: Block>(
@@ -228,37 +222,51 @@ pub fn receive<M: Block>(
     })
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum FlagResume {
+    Completed(WaitOutcome<Pattern>),
+    Pending(FlagWaitPending),
+    Corrupt(FlagWaitPending),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ReceiveResume {
+    Completed(WaitOutcome<Message>),
+    Pending(ReceivePending),
+    Corrupt(ReceivePending),
+}
+
 /// The family value is captured before the output write, so an output aliasing the family field
 /// reads the old value.
-pub fn resume_flag<M: Machine>(m: &M, pending: FlagWaitPending) -> Result<WaitOutcome<Pattern>, ResumeError> {
+pub fn resume_flag<M: Machine>(m: &M, pending: FlagWaitPending) -> FlagResume {
     if m.load_byte(pending.task.state()) & TaskState::WAIT.bits() != 0 {
-        return Err(ResumeError::NotCompleted);
+        return FlagResume::Pending(pending);
     }
     match m.load_word(pending.wait.base().result()) as i32 {
         0 => {
             let pattern = Pattern(m.load_word(pending.wait.result()));
             m.store_word(pending.out.0, pattern.0);
-            Ok(WaitOutcome::Satisfied(pattern))
+            FlagResume::Completed(WaitOutcome::Satisfied(pattern))
         }
-        -49 => Ok(WaitOutcome::Released),
-        -50 => Ok(WaitOutcome::TimedOut),
-        _ => Err(ResumeError::NotCompleted),
+        -49 => FlagResume::Completed(WaitOutcome::Released),
+        -50 => FlagResume::Completed(WaitOutcome::TimedOut),
+        _ => FlagResume::Corrupt(pending),
     }
 }
 
 /// The message pointer is the wait record's own field.
-pub fn resume_receive<M: Machine>(m: &M, pending: ReceivePending) -> Result<WaitOutcome<Message>, ResumeError> {
+pub fn resume_receive<M: Machine>(m: &M, pending: ReceivePending) -> ReceiveResume {
     if m.load_byte(pending.task.state()) & TaskState::WAIT.bits() != 0 {
-        return Err(ResumeError::NotCompleted);
+        return ReceiveResume::Pending(pending);
     }
     match m.load_word(pending.wait.base().result()) as i32 {
         0 => {
             let message = Message(GuestAddress(m.load_word(pending.wait.message())));
             m.store_word(pending.out.0, message.0 .0);
-            Ok(WaitOutcome::Satisfied(message))
+            ReceiveResume::Completed(WaitOutcome::Satisfied(message))
         }
-        -49 => Ok(WaitOutcome::Released),
-        -50 => Ok(WaitOutcome::TimedOut),
-        _ => Err(ResumeError::NotCompleted),
+        -49 => ReceiveResume::Completed(WaitOutcome::Released),
+        -50 => ReceiveResume::Completed(WaitOutcome::TimedOut),
+        _ => ReceiveResume::Corrupt(pending),
     }
 }

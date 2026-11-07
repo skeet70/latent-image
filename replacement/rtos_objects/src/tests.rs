@@ -1638,7 +1638,7 @@ fn receive_on_an_empty_mailbox_arms_the_receiver() {
 }
 
 #[test]
-fn a_premature_resume_of_a_forever_wait_is_refused() {
+fn a_premature_resume_keeps_the_continuation() {
     let words = Domain::A.words();
     let slot = FlagSlot::new(3, 120).unwrap();
     let sim = Sim::new(Domain::A);
@@ -1656,35 +1656,17 @@ fn a_premature_resume_of_a_forever_wait_is_refused() {
         OutWord(out),
         Timeout::Forever,
     ));
-    assert_eq!(resume_flag(&sim, armed), Err(ResumeError::NotCompleted));
+    let armed = match resume_flag(&sim, armed) {
+        FlagResume::Pending(pending) => pending,
+        other => panic!("expected the pending continuation, got {other:?}"),
+    };
     assert_eq!(sim.word(out), 0xdead_beef);
     assert_eq!(sim.word(task.state()) & 0xff, 0x32);
-}
-
-#[test]
-fn resume_after_wake_writes_the_callers_output() {
-    let words = Domain::A.words();
-    let slot = FlagSlot::new(3, 120).unwrap();
-    let sim = Sim::new(Domain::A);
-    install(&sim, Domain::A);
-    let id = create_flag_at(&sim, slot, 0, 0x01);
-    let (_, task_slot) = running_task(&sim, &words, Domain::A, 7);
-    let out = GuestAddress(0x4000_0600);
-    sim.set(out, 0xdead_beef);
-    let armed = pending_flag(wait_flag(
-        &sim,
-        EntryDomain::new(Domain::A),
-        id,
-        WantedMask::new(Pattern(0x10)).unwrap(),
-        MatchMode::All,
-        OutWord(out),
-        Timeout::Forever,
-    ));
     set_flag(&sim, id, Pattern(0x10));
-    let wait = words.flag_wait(task_slot);
-    assert_eq!(sim.word(wait.base().result()), 0);
-    assert_eq!(sim.word(wait.result()), 0x11);
-    assert_eq!(resume_flag(&sim, armed), Ok(WaitOutcome::Satisfied(Pattern(0x11))));
+    assert_eq!(
+        resume_flag(&sim, armed),
+        FlagResume::Completed(WaitOutcome::Satisfied(Pattern(0x11)))
+    );
     assert_eq!(sim.word(out), 0x11);
 }
 
@@ -1707,11 +1689,14 @@ fn resume_after_timeout_reports_timed_out_and_leaves_the_output() {
         OutWord(out),
         Timeout::Units(5),
     ));
+    let armed = match resume_flag(&sim, armed) {
+        FlagResume::Pending(pending) => pending,
+        other => panic!("expected the pending continuation, got {other:?}"),
+    };
     let wait = words.flag_wait(task_slot);
-    assert_eq!(resume_flag(&sim, armed), Err(ResumeError::NotCompleted));
     sim.set(wait.base().result(), 0xffff_ffce);
     sim.set_byte(task.state(), 0x01);
-    assert_eq!(resume_flag(&sim, armed), Ok(WaitOutcome::TimedOut));
+    assert_eq!(resume_flag(&sim, armed), FlagResume::Completed(WaitOutcome::TimedOut));
     assert_eq!(sim.word(out), 0xdead_beef);
 }
 
@@ -1734,10 +1719,14 @@ fn resume_after_forced_release_reports_released_and_leaves_the_output() {
         OutWord(out),
         Timeout::Forever,
     ));
+    let armed = match resume_flag(&sim, armed) {
+        FlagResume::Pending(pending) => pending,
+        other => panic!("expected the pending continuation, got {other:?}"),
+    };
     let wait = words.flag_wait(task_slot);
     sim.set(wait.base().result(), 0xffff_ffcf);
     sim.set_byte(task.state(), 0x01);
-    assert_eq!(resume_flag(&sim, armed), Ok(WaitOutcome::Released));
+    assert_eq!(resume_flag(&sim, armed), FlagResume::Completed(WaitOutcome::Released));
     assert_eq!(sim.word(out), 0xdead_beef);
 }
 
@@ -1758,9 +1747,17 @@ fn resume_receive_after_wake_writes_the_message() {
         OutWord(out),
         Timeout::Forever,
     ));
+    let armed = match resume_receive(&sim, armed) {
+        ReceiveResume::Pending(pending) => pending,
+        other => panic!("expected the pending continuation, got {other:?}"),
+    };
+    assert_eq!(sim.word(out), 0xdead_beef);
     let message = Message(GuestAddress(0x4000_0300));
     send(&sim, id, message, None);
-    assert_eq!(resume_receive(&sim, armed), Ok(WaitOutcome::Satisfied(message)));
+    assert_eq!(
+        resume_receive(&sim, armed),
+        ReceiveResume::Completed(WaitOutcome::Satisfied(message))
+    );
     assert_eq!(sim.word(out), message.0 .0);
 }
 
