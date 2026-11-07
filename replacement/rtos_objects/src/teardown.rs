@@ -24,6 +24,7 @@ impl<'a, M: Machine> Iterator for MessageDrain<'a, M> {
     }
 }
 
+#[cfg_attr(feature = "family", inline(never))]
 fn release_all<M: Wake>(m: &M, queue: WaitQueue) -> bool {
     let mut dispatch = false;
     loop {
@@ -47,6 +48,7 @@ fn release_all<M: Wake>(m: &M, queue: WaitQueue) -> bool {
 }
 
 /// Slot `+0x84`.
+#[cfg_attr(feature = "family", inline(never))]
 pub fn delete_flag<M: Wake>(m: &M, id: FlagId) -> Result<(), ObjectStatus> {
     let words = id.domain.words();
     let control = words.flag_control(id.slot);
@@ -70,6 +72,7 @@ pub fn delete_flag<M: Wake>(m: &M, id: FlagId) -> Result<(), ObjectStatus> {
 }
 
 /// Slot `+0xd0`.
+#[cfg_attr(feature = "family", inline(never))]
 pub fn delete_mailbox<'a, M: Wake>(
     m: &'a M,
     id: MailboxId,

@@ -77,10 +77,12 @@ impl WaitCompletion {
 }
 
 /// The stock wait release, A `0x44568` / B `0xd4528`, over the S1 primitives.
+#[cfg_attr(feature = "family", inline(never))]
 pub fn release<M: Release>(m: &M, owner: KernelContext, task: Task) -> Selection {
     release_with(m, owner, task, WaitCompletion::Satisfied)
 }
 
+#[cfg_attr(feature = "family", inline(never))]
 pub fn release_with<M: Release>(
     m: &M,
     owner: KernelContext,
@@ -96,6 +98,7 @@ pub fn release_with<M: Release>(
     release_ready(m, owner, task)
 }
 
+#[cfg_attr(feature = "family", inline(never))]
 fn release_ready<M: Release>(m: &M, owner: KernelContext, task: Task) -> Selection {
     if m.load_word(task.terminate_pending()) != 0 {
         m.reset_task(task);
@@ -121,6 +124,7 @@ fn release_ready<M: Release>(m: &M, owner: KernelContext, task: Task) -> Selecti
 
 /// Inserts the waiter at the tail (FIFO) or before the first strictly greater priority, so equal
 /// priorities keep arrival order.
+#[cfg_attr(feature = "family", inline(never))]
 pub fn queue_insert<M: Machine>(m: &M, task: Task, queue: WaitQueue, order: QueueOrder) {
     let head = queue.0;
     let (mut at, mut next) = (GuestAddress(m.load_word(queue.prev())), head);
@@ -151,15 +155,18 @@ fn dispatch_after<M: Wake>(m: &M, owner: KernelContext, released: Selection) -> 
 }
 
 /// Slot `+0x88`.
+#[cfg_attr(feature = "family", inline(never))]
 pub fn set_flag<M: Wake>(m: &M, id: FlagId, bits: Pattern) {
     set_flag_mode(m, id, bits, WakeMode::Task);
 }
 
 /// Slot `+0x8c`.
+#[cfg_attr(feature = "family", inline(never))]
 pub fn set_flag_handler<M: Wake>(m: &M, id: FlagId, bits: Pattern) {
     set_flag_mode(m, id, bits, WakeMode::Handler);
 }
 
+#[cfg_attr(feature = "family", inline(never))]
 fn set_flag_mode<M: Wake>(m: &M, id: FlagId, bits: Pattern, wake: WakeMode) {
     let words = id.domain.words();
     let control = words.flag_control(id.slot);
@@ -239,6 +246,7 @@ fn insert_by_priority<M: Machine>(
 }
 
 /// Slot `+0xd4`.
+#[cfg_attr(feature = "family", inline(never))]
 pub fn send<M: Wake>(m: &M, id: MailboxId, message: Message, priority: Option<MessagePriority>) {
     let words = id.domain.words();
     let control = words.mailbox_control(id.slot);

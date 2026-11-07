@@ -19,6 +19,7 @@ pub trait ObjectLock: Machine {
 }
 
 /// Slot `+0x90`.
+#[cfg_attr(feature = "family", inline(never))]
 pub fn clear_flag<M: ObjectLock>(m: &M, id: FlagId, keep: KeepMask) -> Result<(), ObjectStatus> {
     let words = id.domain.words();
     let pattern = words.flag_control(id.slot).pattern();
@@ -28,6 +29,7 @@ pub fn clear_flag<M: ObjectLock>(m: &M, id: FlagId, keep: KeepMask) -> Result<()
 }
 
 /// The immediate match, clear and caller store under the object lock.
+#[cfg_attr(feature = "family", inline(never))]
 pub fn check_control<M: Machine>(
     m: &M,
     control: FlagControl,
@@ -51,6 +53,7 @@ pub fn check_control<M: Machine>(
 }
 
 /// Slot `+0x98`.
+#[cfg_attr(feature = "family", inline(never))]
 pub fn poll_flag<M: ObjectLock>(
     m: &M,
     id: FlagId,
@@ -74,6 +77,7 @@ pub fn poll_flag<M: ObjectLock>(
 }
 
 /// Slot `+0xdc`.
+#[cfg_attr(feature = "family", inline(never))]
 pub fn poll_receive<M: ObjectLock>(
     m: &M,
     id: MailboxId,

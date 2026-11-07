@@ -168,6 +168,7 @@ pub struct Request {
 
 /// The stock order: context, IRQ mask, dispatch word, class, index, family parameters, then the
 /// creation record. Create and delete have no admission at all.
+#[cfg_attr(feature = "family", inline(never))]
 pub fn admit_flag<R: Records, F: Facts>(
     request: &Request,
     service: FlagService,
@@ -206,6 +207,7 @@ pub fn admit_flag<R: Records, F: Facts>(
     })
 }
 
+#[cfg_attr(feature = "family", inline(never))]
 pub fn admit_mailbox<R: Records, F: Facts>(
     request: &Request,
     service: MailboxService,

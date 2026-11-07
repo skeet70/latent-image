@@ -288,6 +288,7 @@ pub extern "C" fn xm1_rtos_objects_family_flag_clear(id: i32, keep: u32) -> i32 
     }
 }
 
+#[inline(never)]
 fn flag_wait_entry(service: FlagService, id: i32, pattern: u32, mode: u32, result: u32, timeout: Option<i32>) -> i32 {
     let params = Params { pattern: Pattern(pattern), mode, timeout, message: None };
     let admitted = match admit_flag(
@@ -451,6 +452,7 @@ pub extern "C" fn xm1_rtos_objects_family_mailbox_send(id: i32, message: u32) ->
     0
 }
 
+#[inline(never)]
 fn receive_entry(service: MailboxService, id: i32, message_out: u32, timeout: Option<i32>) -> i32 {
     let params = Params { pattern: Pattern(0), mode: 0, timeout, message: None };
     let admitted = match admit_mailbox(

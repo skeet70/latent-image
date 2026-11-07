@@ -80,6 +80,7 @@ pub enum ReceiveBlocking {
 }
 
 /// The wait preparation a caller runs with the object and scheduler locks held.
+#[cfg_attr(feature = "family", inline(never))]
 pub fn block_locked<M: Block>(
     m: &M,
     entry: Domain,
@@ -113,6 +114,7 @@ pub fn block_locked<M: Block>(
     m.queue_wait(m.context(entry), task, queue, order);
 }
 
+#[cfg_attr(feature = "family", inline(never))]
 fn block<M: Block>(
     m: &M,
     entry: Domain,
@@ -133,6 +135,7 @@ fn block<M: Block>(
 }
 
 /// Slots `+0x94` and `+0x9c`.
+#[cfg_attr(feature = "family", inline(never))]
 pub fn wait_flag<M: Block>(
     m: &M,
     entry: EntryDomain,
@@ -191,6 +194,7 @@ pub fn wait_flag<M: Block>(
 }
 
 /// Slots `+0xd8` and `+0xe0`.
+#[cfg_attr(feature = "family", inline(never))]
 pub fn receive<M: Block>(
     m: &M,
     entry: EntryDomain,
@@ -260,6 +264,7 @@ pub enum ReceiveResume {
     Corrupt(ReceivePending),
 }
 
+#[cfg_attr(feature = "family", inline(never))]
 pub fn resume_flag<M: Machine + IrqScope>(m: &M, pending: FlagWaitPending) -> FlagResume {
     if m.load_byte(pending.task.state()) & TaskState::WAIT.bits() != 0 {
         return FlagResume::Pending(pending);
@@ -278,6 +283,7 @@ pub fn resume_flag<M: Machine + IrqScope>(m: &M, pending: FlagWaitPending) -> Fl
     }
 }
 
+#[cfg_attr(feature = "family", inline(never))]
 pub fn resume_receive<M: Machine + IrqScope>(m: &M, pending: ReceivePending) -> ReceiveResume {
     if m.load_byte(pending.task.state()) & TaskState::WAIT.bits() != 0 {
         return ReceiveResume::Pending(pending);
