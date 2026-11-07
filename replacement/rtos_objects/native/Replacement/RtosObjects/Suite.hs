@@ -13,7 +13,7 @@ import qualified Emulation.NativeObservation as N
 import Emulation.NativeObservation (Barrier (..), KernelObservation (..), NativeObservation (..), Ordered (..), RegionId (..), Register (..), RunnerStatus (..), Write (..), WriteValue (..))
 import Emulation.OwnedCase (CaseOutcome (..), CaseSpec (..), KernelCase (..), Permission (..), assemble, caseOutcome, mkRegion, plainLimit, readWordAt, word32le, writeBatch)
 import Replacement.RtosObjects.Layout hiding (record)
-import Replacement.RtosOwnFirst.Regions (Domain (..), GuestAddress (..))
+import Replacement.RtosOwnFirst.Regions (Domain (..), GuestAddress (..), domainLabel)
 import System.FilePath ((</>))
 
 newtype Slot = Slot Word32 deriving (Eq, Show)
@@ -148,37 +148,37 @@ poke address value = (GuestAddress address, value)
 
 cases :: Facts -> Domain -> [Case]
 cases facts executing =
-  [ service "set_no_waiter" SetFlag executing NoWaiter CallerReturn [] [Result 0, eq patternCell 1]
-  , service "set_satisfied" SetFlag executing (Released executing) TaskArrival (flagWaiter executing executing 1) [eq reportCell 1, ready executing]
-  , service "set_unsatisfied" SetFlag executing (Unsatisfied executing) CallerReturn (flagWaiter executing executing 2) [Result 0, eq patternCell 1, state executing queued]
-  , service "set_clear_on_match" SetFlag executing (Released executing) TaskArrival (flagWaiter executing executing 1 ++ [poke (flag + factsFlagConfigAttributes facts) (factsFlagClearOnMatch facts)]) [eq patternCell 0, eq reportCell 1]
-  , service "set_waiter_peer" SetFlag executing (Released remote) CallerReturn (flagWaiter remote executing 1)
+  [ service "set-no-waiter" SetFlag executing NoWaiter CallerReturn [] [Result 0, eq patternCell 1]
+  , service "set-satisfied" SetFlag executing (Released executing) TaskArrival (flagWaiter executing executing 1) [eq reportCell 1, ready executing]
+  , service "set-unsatisfied" SetFlag executing (Unsatisfied executing) CallerReturn (flagWaiter executing executing 2) [Result 0, eq patternCell 1, state executing queued]
+  , service "set-clear-on-match" SetFlag executing (Released executing) TaskArrival (flagWaiter executing executing 1 ++ [poke (flag + factsFlagConfigAttributes facts) (factsFlagClearOnMatch facts)]) [eq patternCell 0, eq reportCell 1]
+  , service "set-waiter-peer" SetFlag executing (Released remote) CallerReturn (flagWaiter remote executing 1)
       [Result 0, ready remote, eq (dfSelected remoteWords) remoteTask, Equals (bank remote) 0x01000000, Equals (bank executing) 0]
-  , service "set_object_peer" SetFlag remote (Released executing) TaskArrival (flagWaiter executing remote 1) [ready executing, eq (dfSelected ownWords) localTask, Equals (bank remote) 0, Equals (bank executing) 0]
-  , withTimer (service "set_timer_cancel" SetFlag executing (Released executing) TaskArrival (flagWaiter executing executing 1) [ready executing])
-  , service "send_blocked" Send executing (Released executing) TaskArrival (mailWaiter executing ++ [poke message sentinel]) [eq mailResult message, eq message sentinel]
-  , service "send_empty_fifo" Send executing NoWaiter CallerReturn [poke message sentinel] [Result 0, eq (mailControl + factsMailboxControlHead facts) message, eq (mailControl + factsMailboxControlTail facts) message, eq message 0]
-  , service "send_priority_equal" Send executing NoWaiter CallerReturn
+  , service "set-object-peer" SetFlag remote (Released executing) TaskArrival (flagWaiter executing remote 1) [ready executing, eq (dfSelected ownWords) localTask, Equals (bank remote) 0, Equals (bank executing) 0]
+  , withTimer (service "set-timer-cancel" SetFlag executing (Released executing) TaskArrival (flagWaiter executing executing 1) [ready executing])
+  , service "send-blocked" Send executing (Released executing) TaskArrival (mailWaiter executing ++ [poke message sentinel]) [eq mailResult message, eq message sentinel]
+  , service "send-empty-fifo" Send executing NoWaiter CallerReturn [poke message sentinel] [Result 0, eq (mailControl + factsMailboxControlHead facts) message, eq (mailControl + factsMailboxControlTail facts) message, eq message 0]
+  , service "send-priority-equal" Send executing NoWaiter CallerReturn
       [ poke (mailbox + factsMailboxConfigAttributes facts) (factsMailboxMessagePriority facts)
       , poke (mailControl + factsMailboxControlHead facts) oldMessage
       , poke (mailControl + factsMailboxControlTail facts) oldMessage
       , poke oldMessage 0, poke (oldMessage + 4) 5, poke message sentinel, poke (message + 4) 5
       ] [Result 0, eq oldMessage message, eq message 0, eq (mailControl + factsMailboxControlTail facts) oldMessage]
-  , service "send_waiter_peer" Send executing (Released remote) CallerReturn (mailWaiter remote) [Result 0, ready remote, eq (mailboxWait facts remote 2 + factsMailboxWaitMessage facts) message, Equals (bank remote) 0x01000000, Equals (bank executing) 0]
-  , release "release_plain_insert" executing TaskInvocation [] [Result 1, ready executing]
-  , release "release_terminate_reset" executing TaskInvocation [poke (localTask + factsTaskTerminatePending facts) 1] [Result 0, state executing (factsStateDormant facts), eq (localTask + factsTaskContextDiscarded facts) 1]
-  , release "release_terminate_prepare" executing TaskInvocation
+  , service "send-waiter-peer" Send executing (Released remote) CallerReturn (mailWaiter remote) [Result 0, ready remote, eq (mailboxWait facts remote 2 + factsMailboxWaitMessage facts) message, Equals (bank remote) 0x01000000, Equals (bank executing) 0]
+  , release "release-plain-insert" executing TaskInvocation [] [Result 1, ready executing]
+  , release "release-terminate-reset" executing TaskInvocation [poke (localTask + factsTaskTerminatePending facts) 1] [Result 0, state executing (factsStateDormant facts), eq (localTask + factsTaskContextDiscarded facts) 1]
+  , release "release-terminate-prepare" executing TaskInvocation
       [poke (localTask + factsTaskTerminatePending facts) 1, poke (localTask + factsTaskState facts) (packedState queued 3 .|. 0x10000)]
       [Result 1, ready executing, byte (localTask + factsTaskFlags facts) 0, eq (localTask + factsTaskSavedSp facts) targetStackPointer, eq (localTask + factsTaskResumePc facts) (trampoline executing)]
-  , release "release_priority" executing TaskInvocation [poke (localTask + factsTaskPriorityChangePending facts) 1, poke (localTask + factsTaskPendingPriority facts) 7]
+  , release "release-priority" executing TaskInvocation [poke (localTask + factsTaskPriorityChangePending facts) 1, poke (localTask + factsTaskPendingPriority facts) 7]
       [Result 1, byte (localTask + factsTaskPriority facts) 7, eq (localTask + factsTaskPriorityChangePending facts) 0]
-  , release "release_suspended" executing TaskInvocation [poke (localTask + factsTaskState facts) (packedState (queued .|. factsStateSuspended facts) 3)] [Result 0, state executing (factsStateSuspended facts)]
-  , withTimer (release "release_timer" executing TaskInvocation [] [Result 1, ready executing])
-  , release "release_owner_peer" remote TaskInvocation [] [Result 1, ready remote, eq (dfSelected remoteWords) remoteTask]
-  , release "release_plain_insert_handler" executing HandlerCallback [] [Result 1, ready executing]
-  , withTimer (release "release_timer_handler" executing HandlerCallback [] [Result 1, ready executing])
-  , service "set_satisfied_no_dispatch" SetFlag executing (Released executing) CallerReturn (flagWaiter executing executing 1 ++ noDispatch) [Result 0, ready executing, eq reportCell 1]
-  , service "send_blocked_no_dispatch" Send executing (Released executing) CallerReturn (mailWaiter executing ++ [poke message sentinel] ++ noDispatch) [Result 0, ready executing, eq mailResult message, eq message sentinel]
+  , release "release-suspended" executing TaskInvocation [poke (localTask + factsTaskState facts) (packedState (queued .|. factsStateSuspended facts) 3)] [Result 0, state executing (factsStateSuspended facts)]
+  , withTimer (release "release-timer" executing TaskInvocation [] [Result 1, ready executing])
+  , release "release-owner-peer" remote TaskInvocation [] [Result 1, ready remote, eq (dfSelected remoteWords) remoteTask]
+  , release "release-plain-insert-handler" executing HandlerCallback [] [Result 1, ready executing]
+  , withTimer (release "release-timer-handler" executing HandlerCallback [] [Result 1, ready executing])
+  , service "set-satisfied-no-dispatch" SetFlag executing (Released executing) CallerReturn (flagWaiter executing executing 1 ++ noDispatch) [Result 0, ready executing, eq reportCell 1]
+  , service "send-blocked-no-dispatch" Send executing (Released executing) CallerReturn (mailWaiter executing ++ [poke message sentinel] ++ noDispatch) [Result 0, ready executing, eq mailResult message, eq message sentinel]
   ]
   where
     ownWords = domainFacts facts executing
@@ -413,7 +413,7 @@ initialRegisters facts executing one =
     value register = maybe (seed register) id (lookup register (caseArguments one))
 
 emittedId :: Domain -> Case -> String
-emittedId executing one = caseIdText (caseName one) ++ "-" ++ show executing
+emittedId executing one = caseIdText (caseName one) ++ "-" ++ domainLabel executing
 
 readWord :: Facts -> Case -> NativeObservation -> GuestAddress -> Maybe Word32
 readWord facts one observation address@(GuestAddress raw) = case
