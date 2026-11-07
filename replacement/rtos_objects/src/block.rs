@@ -4,7 +4,7 @@ use crate::layout::{
     Domain, FlagConfig, FlagWait, GuestAddress, KernelContext, MailboxWait, Message, Task, TaskState,
     WaitBlock, WaitQueue,
 };
-use crate::locked::ObjectLock;
+use crate::locked::{ObjectLock, OutWord};
 use crate::matching::{check, MatchMode, Pattern, WantedMask};
 use crate::order::QueueOrder;
 use crate::status::{ObjectStatus, WaitOutcome};
@@ -39,23 +39,37 @@ pub trait Block: Wake {
     fn timeout_callback(&self) -> TimeoutCallback;
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Pending {
-    Flag { task: Task, wait: FlagWait },
-    Mailbox { task: Task, wait: MailboxWait },
+/// A single-use continuation: the armed wait and the caller's output word.
+#[derive(Debug, PartialEq, Eq)]
+pub struct FlagWaitPending {
+    task: Task,
+    wait: FlagWait,
+    out: OutWord,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Blocking<T> {
-    Ready(WaitOutcome<T>),
-    Pending(Pending),
+#[derive(Debug, PartialEq, Eq)]
+pub struct ReceivePending {
+    task: Task,
+    wait: MailboxWait,
+    out: OutWord,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum FlagBlocking {
+    Ready(WaitOutcome<Pattern>),
+    Pending(FlagWaitPending),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ReceiveBlocking {
+    Ready(WaitOutcome<Message>),
+    Pending(ReceivePending),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ResumeError {
-    /// The wait block still carries the timer entry, so the wait has not completed.
+    /// The task still has the wait bit, or the completion word is not a completion code.
     NotCompleted,
-    WrongFamily,
 }
 
 /// The wake writes the wait block's completion word before the task becomes runnable; the
@@ -103,9 +117,9 @@ pub fn wait_flag<M: Block>(
     id: FlagId,
     want: WantedMask,
     mode: MatchMode,
-    out: crate::locked::OutWord,
+    out: OutWord,
     timeout: Timeout,
-) -> Result<Blocking<Pattern>, ObjectStatus> {
+) -> Result<FlagBlocking, ObjectStatus> {
     let words = id.domain.words();
     let control = words.flag_control(id.slot);
     let config = words.flag_config(id.slot);
@@ -122,10 +136,10 @@ pub fn wait_flag<M: Block>(
                 if clear_on_match {
                     m.store_word(control.pattern(), 0);
                 }
-                Ok(Blocking::Ready(WaitOutcome::Satisfied(reported)))
+                Ok(FlagBlocking::Ready(WaitOutcome::Satisfied(reported)))
             }
             None => match timeout {
-                Timeout::Poll => Ok(Blocking::Ready(WaitOutcome::TimedOut)),
+                Timeout::Poll => Ok(FlagBlocking::Ready(WaitOutcome::TimedOut)),
                 Timeout::Forever | Timeout::Units(_) => {
                     let task = m.current();
                     let slot = entry
@@ -153,7 +167,7 @@ pub fn wait_flag<M: Block>(
                         QueueOrder::from_attribute(m.load_word(config.attributes())),
                         timer,
                     );
-                    Ok(Blocking::Pending(Pending::Flag { task, wait }))
+                    Ok(FlagBlocking::Pending(FlagWaitPending { task, wait, out }))
                 }
             },
         }
@@ -165,9 +179,9 @@ pub fn receive<M: Block>(
     m: &M,
     entry: EntryDomain,
     id: MailboxId,
-    out: crate::locked::OutWord,
+    out: OutWord,
     timeout: Timeout,
-) -> Result<Blocking<Message>, ObjectStatus> {
+) -> Result<ReceiveBlocking, ObjectStatus> {
     let words = id.domain.words();
     let control = words.mailbox_control(id.slot);
     let config = words.mailbox_config(id.slot);
@@ -179,10 +193,10 @@ pub fn receive<M: Block>(
             let successor = m.load_word(message.next());
             m.store_word(out.0, head);
             m.store_word(control.head(), successor);
-            return Ok(Blocking::Ready(WaitOutcome::Satisfied(message)));
+            return Ok(ReceiveBlocking::Ready(WaitOutcome::Satisfied(message)));
         }
         match timeout {
-            Timeout::Poll => Ok(Blocking::Ready(WaitOutcome::TimedOut)),
+            Timeout::Poll => Ok(ReceiveBlocking::Ready(WaitOutcome::TimedOut)),
             Timeout::Forever | Timeout::Units(_) => {
                 let task = m.current();
                 let slot = entry
@@ -208,19 +222,24 @@ pub fn receive<M: Block>(
                     QueueOrder::from_attribute(m.load_word(config.attributes())),
                     timer,
                 );
-                Ok(Blocking::Pending(Pending::Mailbox { task, wait }))
+                Ok(ReceiveBlocking::Pending(ReceivePending { task, wait, out }))
             }
         }
     })
 }
 
-/// The wait block's word is 0 on a wake, -49 on a forced release and -50 on expiry.
-pub fn resume_flag<M: Machine>(m: &M, pending: Pending) -> Result<WaitOutcome<Pattern>, ResumeError> {
-    let Pending::Flag { wait, .. } = pending else {
-        return Err(ResumeError::WrongFamily);
-    };
-    match m.load_word(wait.base().result()) as i32 {
-        0 => Ok(WaitOutcome::Satisfied(Pattern(m.load_word(wait.result())))),
+/// The family value is captured before the output write, so an output aliasing the family field
+/// reads the old value.
+pub fn resume_flag<M: Machine>(m: &M, pending: FlagWaitPending) -> Result<WaitOutcome<Pattern>, ResumeError> {
+    if m.load_byte(pending.task.state()) & TaskState::WAIT.bits() != 0 {
+        return Err(ResumeError::NotCompleted);
+    }
+    match m.load_word(pending.wait.base().result()) as i32 {
+        0 => {
+            let pattern = Pattern(m.load_word(pending.wait.result()));
+            m.store_word(pending.out.0, pattern.0);
+            Ok(WaitOutcome::Satisfied(pattern))
+        }
         -49 => Ok(WaitOutcome::Released),
         -50 => Ok(WaitOutcome::TimedOut),
         _ => Err(ResumeError::NotCompleted),
@@ -228,14 +247,16 @@ pub fn resume_flag<M: Machine>(m: &M, pending: Pending) -> Result<WaitOutcome<Pa
 }
 
 /// The message pointer is the wait record's own field.
-pub fn resume_receive<M: Machine>(m: &M, pending: Pending) -> Result<WaitOutcome<Message>, ResumeError> {
-    let Pending::Mailbox { wait, .. } = pending else {
-        return Err(ResumeError::WrongFamily);
-    };
-    match m.load_word(wait.base().result()) as i32 {
-        0 => Ok(WaitOutcome::Satisfied(Message(GuestAddress(
-            m.load_word(wait.message()),
-        )))),
+pub fn resume_receive<M: Machine>(m: &M, pending: ReceivePending) -> Result<WaitOutcome<Message>, ResumeError> {
+    if m.load_byte(pending.task.state()) & TaskState::WAIT.bits() != 0 {
+        return Err(ResumeError::NotCompleted);
+    }
+    match m.load_word(pending.wait.base().result()) as i32 {
+        0 => {
+            let message = Message(GuestAddress(m.load_word(pending.wait.message())));
+            m.store_word(pending.out.0, message.0 .0);
+            Ok(WaitOutcome::Satisfied(message))
+        }
         -49 => Ok(WaitOutcome::Released),
         -50 => Ok(WaitOutcome::TimedOut),
         _ => Err(ResumeError::NotCompleted),

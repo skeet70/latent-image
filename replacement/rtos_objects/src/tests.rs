@@ -1446,10 +1446,17 @@ fn create_mailbox_at(sim: &Sim, slot: MailboxSlot, attributes: u32) -> MailboxId
     id
 }
 
-fn pending<T: core::fmt::Debug>(result: Result<Blocking<T>, ObjectStatus>) -> Pending {
+fn pending_flag(result: Result<FlagBlocking, ObjectStatus>) -> FlagWaitPending {
     match result {
-        Ok(Blocking::Pending(pending)) => pending,
-        other => panic!("expected a pending wait, got {other:?}"),
+        Ok(FlagBlocking::Pending(pending)) => pending,
+        other => panic!("expected a pending flag wait, got {other:?}"),
+    }
+}
+
+fn pending_receive(result: Result<ReceiveBlocking, ObjectStatus>) -> ReceivePending {
+    match result {
+        Ok(ReceiveBlocking::Pending(pending)) => pending,
+        other => panic!("expected a pending receive, got {other:?}"),
     }
 }
 
@@ -1462,7 +1469,7 @@ fn wait_flag_without_a_match_arms_the_waiter() {
     let id = create_flag_at(&sim, slot, 0, 0);
     let (task, task_slot) = running_task(&sim, &words, Domain::A, 7);
     let out = GuestAddress(0x4000_0600);
-    let armed = pending(wait_flag(
+    pending_flag(wait_flag(
         &sim,
         EntryDomain::new(Domain::A),
         id,
@@ -1471,7 +1478,6 @@ fn wait_flag_without_a_match_arms_the_waiter() {
         OutWord(out),
         Timeout::Forever,
     ));
-    assert_eq!(armed, Pending::Flag { task, wait: words.flag_wait(task_slot) });
     let wait = words.flag_wait(task_slot);
     let control = words.flag_control(slot);
     assert_eq!(sim.word(wait.pattern()), 0x10);
@@ -1495,7 +1501,7 @@ fn timed_wait_arms_the_per_task_timer_entry() {
     let (task, task_slot) = running_task(&sim, &words, Domain::A, 7);
     sim.set(words.context(Domain::A).tick_now(), words.tick_now.0);
     sim.set(words.tick_now, 100);
-    pending(wait_flag(
+    pending_flag(wait_flag(
         &sim,
         EntryDomain::new(Domain::A),
         id,
@@ -1532,7 +1538,7 @@ fn wait_flag_with_a_match_reports_the_pattern() {
             OutWord(out),
             Timeout::Forever,
         ),
-        Ok(Blocking::Ready(WaitOutcome::Satisfied(Pattern(0x11))))
+        Ok(FlagBlocking::Ready(WaitOutcome::Satisfied(Pattern(0x11))))
     );
     assert_eq!(sim.word(out), 0x11);
     assert_eq!(sim.word(task.wait()), 0);
@@ -1582,7 +1588,7 @@ fn receive_pops_the_head_before_the_output_write() {
     let out = GuestAddress(0x4000_0600);
     assert_eq!(
         receive(&sim, EntryDomain::new(Domain::A), id, OutWord(out), Timeout::Forever),
-        Ok(Blocking::Ready(WaitOutcome::Satisfied(message)))
+        Ok(ReceiveBlocking::Ready(WaitOutcome::Satisfied(message)))
     );
     assert_eq!(sim.word(out), message.0 .0);
     assert_eq!(sim.word(words.mailbox_control(slot).head()), 0);
@@ -1599,7 +1605,7 @@ fn a_receive_output_aliasing_the_next_link_still_pops() {
     send(&sim, id, message, None);
     assert_eq!(
         receive(&sim, EntryDomain::new(Domain::A), id, OutWord(message.next()), Timeout::Forever),
-        Ok(Blocking::Ready(WaitOutcome::Satisfied(message)))
+        Ok(ReceiveBlocking::Ready(WaitOutcome::Satisfied(message)))
     );
     assert_eq!(sim.word(words.mailbox_control(slot).head()), 0);
 }
@@ -1613,14 +1619,13 @@ fn receive_on_an_empty_mailbox_arms_the_receiver() {
     let id = create_mailbox_at(&sim, slot, 0);
     let (task, task_slot) = running_task(&sim, &words, Domain::A, 7);
     let out = GuestAddress(0x4000_0600);
-    let armed = pending(receive(
+    pending_receive(receive(
         &sim,
         EntryDomain::new(Domain::A),
         id,
         OutWord(out),
         Timeout::Forever,
     ));
-    assert_eq!(armed, Pending::Mailbox { task, wait: words.mailbox_wait(task_slot) });
     let wait = words.mailbox_wait(task_slot);
     let control = words.mailbox_control(slot);
     assert_eq!(sim.word(task.state()) & 0xff, 0x32);
@@ -1633,20 +1638,46 @@ fn receive_on_an_empty_mailbox_arms_the_receiver() {
 }
 
 #[test]
-fn resume_after_wake_reports_the_pattern() {
+fn a_premature_resume_of_a_forever_wait_is_refused() {
+    let words = Domain::A.words();
+    let slot = FlagSlot::new(3, 120).unwrap();
+    let sim = Sim::new(Domain::A);
+    install(&sim, Domain::A);
+    let id = create_flag_at(&sim, slot, 0, 0x01);
+    let (task, _) = running_task(&sim, &words, Domain::A, 7);
+    let out = GuestAddress(0x4000_0600);
+    sim.set(out, 0xdead_beef);
+    let armed = pending_flag(wait_flag(
+        &sim,
+        EntryDomain::new(Domain::A),
+        id,
+        WantedMask::new(Pattern(0x10)).unwrap(),
+        MatchMode::All,
+        OutWord(out),
+        Timeout::Forever,
+    ));
+    assert_eq!(resume_flag(&sim, armed), Err(ResumeError::NotCompleted));
+    assert_eq!(sim.word(out), 0xdead_beef);
+    assert_eq!(sim.word(task.state()) & 0xff, 0x32);
+}
+
+#[test]
+fn resume_after_wake_writes_the_callers_output() {
     let words = Domain::A.words();
     let slot = FlagSlot::new(3, 120).unwrap();
     let sim = Sim::new(Domain::A);
     install(&sim, Domain::A);
     let id = create_flag_at(&sim, slot, 0, 0x01);
     let (_, task_slot) = running_task(&sim, &words, Domain::A, 7);
-    let armed = pending(wait_flag(
+    let out = GuestAddress(0x4000_0600);
+    sim.set(out, 0xdead_beef);
+    let armed = pending_flag(wait_flag(
         &sim,
         EntryDomain::new(Domain::A),
         id,
         WantedMask::new(Pattern(0x10)).unwrap(),
         MatchMode::All,
-        OutWord(GuestAddress(0x4000_0600)),
+        OutWord(out),
         Timeout::Forever,
     ));
     set_flag(&sim, id, Pattern(0x10));
@@ -1654,71 +1685,83 @@ fn resume_after_wake_reports_the_pattern() {
     assert_eq!(sim.word(wait.base().result()), 0);
     assert_eq!(sim.word(wait.result()), 0x11);
     assert_eq!(resume_flag(&sim, armed), Ok(WaitOutcome::Satisfied(Pattern(0x11))));
+    assert_eq!(sim.word(out), 0x11);
 }
 
 #[test]
-fn resume_after_timeout_reports_timed_out() {
+fn resume_after_timeout_reports_timed_out_and_leaves_the_output() {
     let words = Domain::A.words();
     let slot = FlagSlot::new(3, 120).unwrap();
     let sim = Sim::new(Domain::A);
     install(&sim, Domain::A);
     let id = create_flag_at(&sim, slot, 0, 0);
-    let (_, task_slot) = running_task(&sim, &words, Domain::A, 7);
-    let armed = pending(wait_flag(
+    let (task, task_slot) = running_task(&sim, &words, Domain::A, 7);
+    let out = GuestAddress(0x4000_0600);
+    sim.set(out, 0xdead_beef);
+    let armed = pending_flag(wait_flag(
         &sim,
         EntryDomain::new(Domain::A),
         id,
         WantedMask::new(Pattern(0x10)).unwrap(),
         MatchMode::All,
-        OutWord(GuestAddress(0x4000_0600)),
+        OutWord(out),
         Timeout::Units(5),
     ));
     let wait = words.flag_wait(task_slot);
     assert_eq!(resume_flag(&sim, armed), Err(ResumeError::NotCompleted));
     sim.set(wait.base().result(), 0xffff_ffce);
+    sim.set_byte(task.state(), 0x01);
     assert_eq!(resume_flag(&sim, armed), Ok(WaitOutcome::TimedOut));
+    assert_eq!(sim.word(out), 0xdead_beef);
 }
 
 #[test]
-fn resume_after_forced_release_reports_released() {
+fn resume_after_forced_release_reports_released_and_leaves_the_output() {
     let words = Domain::A.words();
     let slot = FlagSlot::new(3, 120).unwrap();
     let sim = Sim::new(Domain::A);
     install(&sim, Domain::A);
     let id = create_flag_at(&sim, slot, 0, 0);
-    let (_, task_slot) = running_task(&sim, &words, Domain::A, 7);
-    let armed = pending(wait_flag(
+    let (task, task_slot) = running_task(&sim, &words, Domain::A, 7);
+    let out = GuestAddress(0x4000_0600);
+    sim.set(out, 0xdead_beef);
+    let armed = pending_flag(wait_flag(
         &sim,
         EntryDomain::new(Domain::A),
         id,
         WantedMask::new(Pattern(0x10)).unwrap(),
         MatchMode::All,
-        OutWord(GuestAddress(0x4000_0600)),
+        OutWord(out),
         Timeout::Forever,
     ));
     let wait = words.flag_wait(task_slot);
     sim.set(wait.base().result(), 0xffff_ffcf);
+    sim.set_byte(task.state(), 0x01);
     assert_eq!(resume_flag(&sim, armed), Ok(WaitOutcome::Released));
+    assert_eq!(sim.word(out), 0xdead_beef);
 }
 
 #[test]
-fn a_flag_pending_token_is_not_a_receive_token() {
+fn resume_receive_after_wake_writes_the_message() {
     let words = Domain::A.words();
-    let slot = FlagSlot::new(3, 120).unwrap();
+    let slot = MailboxSlot::new(1, 1).unwrap();
     let sim = Sim::new(Domain::A);
     install(&sim, Domain::A);
-    let id = create_flag_at(&sim, slot, 0, 0);
+    let id = create_mailbox_at(&sim, slot, 0);
     running_task(&sim, &words, Domain::A, 7);
-    let armed = pending(wait_flag(
+    let out = GuestAddress(0x4000_0600);
+    sim.set(out, 0xdead_beef);
+    let armed = pending_receive(receive(
         &sim,
         EntryDomain::new(Domain::A),
         id,
-        WantedMask::new(Pattern(0x10)).unwrap(),
-        MatchMode::All,
-        OutWord(GuestAddress(0x4000_0600)),
+        OutWord(out),
         Timeout::Forever,
     ));
-    assert_eq!(resume_receive(&sim, armed), Err(ResumeError::WrongFamily));
+    let message = Message(GuestAddress(0x4000_0300));
+    send(&sim, id, message, None);
+    assert_eq!(resume_receive(&sim, armed), Ok(WaitOutcome::Satisfied(message)));
+    assert_eq!(sim.word(out), message.0 .0);
 }
 
 #[test]
@@ -1731,7 +1774,7 @@ fn per_task_timer_entries_are_distinct() {
     sim.set(words.context(Domain::A).tick_now(), words.tick_now.0);
     sim.set(words.tick_now, 100);
     running_task(&sim, &words, Domain::A, 7);
-    pending(wait_flag(
+    pending_flag(wait_flag(
         &sim,
         EntryDomain::new(Domain::A),
         first,
@@ -1741,7 +1784,7 @@ fn per_task_timer_entries_are_distinct() {
         Timeout::Units(5),
     ));
     running_task(&sim, &words, Domain::A, 8);
-    pending(wait_flag(
+    pending_flag(wait_flag(
         &sim,
         EntryDomain::new(Domain::A),
         second,
@@ -1775,10 +1818,10 @@ fn receive_queue_orders_receivers_by_priority() {
     let id = create_mailbox_at(&sim, slot, 1);
     let (first, _) = running_task(&sim, &words, Domain::A, 7);
     sim.set_byte(first.priority(), 5);
-    pending(receive(&sim, EntryDomain::new(Domain::A), id, OutWord(GuestAddress(0x4000_0600)), Timeout::Forever));
+    pending_receive(receive(&sim, EntryDomain::new(Domain::A), id, OutWord(GuestAddress(0x4000_0600)), Timeout::Forever));
     let (second, _) = running_task(&sim, &words, Domain::A, 8);
     sim.set_byte(second.priority(), 3);
-    pending(receive(&sim, EntryDomain::new(Domain::A), id, OutWord(GuestAddress(0x4000_0610)), Timeout::Forever));
+    pending_receive(receive(&sim, EntryDomain::new(Domain::A), id, OutWord(GuestAddress(0x4000_0610)), Timeout::Forever));
     let control = words.mailbox_control(slot);
     assert_eq!(sim.word(control.queue().next()), second.0 .0);
     assert_eq!(sim.word(second.next()), first.0 .0);
@@ -1793,9 +1836,9 @@ fn receive_queue_appends_receivers_in_fifo() {
     install(&sim, Domain::A);
     let id = create_mailbox_at(&sim, slot, 0);
     let (first, _) = running_task(&sim, &words, Domain::A, 7);
-    pending(receive(&sim, EntryDomain::new(Domain::A), id, OutWord(GuestAddress(0x4000_0600)), Timeout::Forever));
+    pending_receive(receive(&sim, EntryDomain::new(Domain::A), id, OutWord(GuestAddress(0x4000_0600)), Timeout::Forever));
     let (second, _) = running_task(&sim, &words, Domain::A, 8);
-    pending(receive(&sim, EntryDomain::new(Domain::A), id, OutWord(GuestAddress(0x4000_0610)), Timeout::Forever));
+    pending_receive(receive(&sim, EntryDomain::new(Domain::A), id, OutWord(GuestAddress(0x4000_0610)), Timeout::Forever));
     let control = words.mailbox_control(slot);
     assert_eq!(sim.word(control.queue().next()), first.0 .0);
     assert_eq!(sim.word(first.next()), second.0 .0);

@@ -30,8 +30,8 @@ fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
 
 pub use admission::{admit, flag_wait_locked, poll_result, Admitted, Entry, Facts, Object, Params, Records, Request, Service};
 pub use block::{
-    receive, resume_flag, resume_receive, wait_flag, Block, Blocking, Deadline, Pending, ResumeError, Tick,
-    TimerEntryAddress, TimeoutCallback,
+    receive, resume_flag, resume_receive, wait_flag, Block, Deadline, FlagBlocking, FlagWaitPending,
+    ReceiveBlocking, ReceivePending, ResumeError, Tick, TimerEntryAddress, TimeoutCallback,
 };
 pub use create::{
     create_flag, create_mailbox, FlagAttributes, FlagCreate, Machine, MailboxAttributes, MailboxCreate,
