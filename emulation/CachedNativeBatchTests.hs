@@ -3,14 +3,15 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 module Main (main) where
 
-import Control.Monad (filterM, forM_)
+import Control.Exception (try)
+import Control.Monad (filterM, forM, forM_)
 import Data.Aeson (Value (..))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
-import Data.List (isInfixOf, isPrefixOf)
+import Data.List (isInfixOf, isPrefixOf, sort)
 import Data.Maybe (fromMaybe)
 import Data.Word (Word32)
-import Emulation.CachedNativeBatch (BatchReuse (..), cachedObservedBatch)
+import Emulation.CachedNativeBatch (BatchReuse (..), CacheEscape, cachedObservedBatch)
 import Emulation.NativeCase
   ( CaseId (..)
   , LoadedCase (..)
@@ -29,10 +30,11 @@ import System.Directory
   , doesDirectoryExist
   , getPermissions
   , listDirectory
+  , removeDirectoryRecursive
   , removeFile
   , setPermissions
   )
-import System.Posix.Files (createSymbolicLink)
+import System.Posix.Files (createSymbolicLink, getSymbolicLinkStatus, isSymbolicLink)
 import System.FilePath ((</>))
 
 main :: IO ()
@@ -47,6 +49,11 @@ main = do
     corruptionTest (root </> "corruption") canonicalRunner
     interruptedTest (root </> "interrupted") canonicalRunner
     faultyTest (root </> "faulty") canonicalRunner
+    rootAliasTest (root </> "root-alias") canonicalRunner
+    escapeV1Test (root </> "escape-v1") canonicalRunner
+    escapeTmpTest (root </> "escape-tmp") canonicalRunner
+    escapeKeyTest (root </> "escape-key") canonicalRunner
+    escapeCaseTest (root </> "escape-case") canonicalRunner
 
 spec :: String -> [Word32] -> [(N.Register, Word32)] -> [(N.Register, Word32)] -> [(N.RegionId, B.ByteString)] -> O.CaseSpec
 spec ident code initial expected memory =
@@ -288,6 +295,126 @@ faultyTest root runner = do
   ensure (reused == BatchReused) ("faulty batch was not reusable: " ++ show reused)
   ensure (reusedObservations == observations) "faulty batch reuse changed the observation"
   checkResultFiles batchDirectory cases reusedObservations ["failed"]
+
+rootAliasTest :: FilePath -> FilePath -> IO ()
+rootAliasTest root runner = do
+  let cache = root </> "cache"
+      alias = root </> "cache-alias"
+      batchDirectory = root </> "batch"
+      cases = specs 0xdeadbeef 0xdeadbeef 0x11223344
+  batchPath <- O.writeBatch batchDirectory cases
+  (executed, baseline) <- cachedObservedBatch cache runner batchPath
+  ensure (executed == BatchExecuted) "alias baseline did not execute"
+  createSymbolicLink cache alias
+  (reused, observations) <- cachedObservedBatch alias runner batchPath
+  ensure (reused == BatchReused) ("cache root alias did not reuse: " ++ show reused)
+  ensure (observations == baseline) "cache root alias changed the observation"
+  entries <- cacheEntries cache
+  ensure (length entries == 1) ("cache root alias created extra entries: " ++ show entries)
+
+escapeV1Test :: FilePath -> FilePath -> IO ()
+escapeV1Test root runner = do
+  let cache = root </> "cache"
+      outside = root </> "outside"
+      batchDirectory = root </> "batch"
+      cases = specs 0xdeadbeef 0xdeadbeef 0x11223344
+  batchPath <- O.writeBatch batchDirectory cases
+  createDirectoryIfMissing True cache
+  seedOutside outside
+  before <- snapshotTree outside
+  createSymbolicLink outside (cache </> "v1")
+  refused cache runner batchPath
+  after <- snapshotTree outside
+  ensure (before == after) "escaping v1 symlink changed the outside tree"
+  link <- getSymbolicLinkStatus (cache </> "v1")
+  ensure (isSymbolicLink link) "escaping v1 symlink was removed"
+
+escapeTmpTest :: FilePath -> FilePath -> IO ()
+escapeTmpTest root runner = do
+  let cache = root </> "cache"
+      outside = root </> "outside"
+      batchDirectory = root </> "batch"
+      cases = specs 0xdeadbeef 0xdeadbeef 0x11223344
+  batchPath <- O.writeBatch batchDirectory cases
+  createDirectoryIfMissing True (cache </> "v1")
+  seedOutside outside
+  before <- snapshotTree outside
+  createSymbolicLink outside (cache </> "v1" </> "tmp")
+  refused cache runner batchPath
+  after <- snapshotTree outside
+  ensure (before == after) "escaping tmp symlink changed the outside tree"
+  link <- getSymbolicLinkStatus (cache </> "v1" </> "tmp")
+  ensure (isSymbolicLink link) "escaping tmp symlink was removed"
+
+escapeKeyTest :: FilePath -> FilePath -> IO ()
+escapeKeyTest root runner = do
+  let cache = root </> "cache"
+      outside = root </> "outside"
+      batchDirectory = root </> "batch"
+      cases = specs 0xdeadbeef 0xdeadbeef 0x11223344
+  batchPath <- O.writeBatch batchDirectory cases
+  (executed, _) <- cachedObservedBatch cache runner batchPath
+  ensure (executed == BatchExecuted) "key baseline did not execute"
+  entry <- singleEntry cache
+  removeDirectoryRecursive entry
+  seedOutside outside
+  before <- snapshotTree outside
+  createSymbolicLink outside entry
+  refused cache runner batchPath
+  after <- snapshotTree outside
+  ensure (before == after) "escaping entry symlink changed the outside tree"
+  link <- getSymbolicLinkStatus entry
+  ensure (isSymbolicLink link) "escaping entry symlink was removed"
+
+escapeCaseTest :: FilePath -> FilePath -> IO ()
+escapeCaseTest root runner = do
+  let cache = root </> "cache"
+      outside = root </> "outside"
+      batchDirectory = root </> "batch"
+      cases = specs 0xdeadbeef 0xdeadbeef 0x11223344
+  batchPath <- O.writeBatch batchDirectory cases
+  (executed, _) <- cachedObservedBatch cache runner batchPath
+  ensure (executed == BatchExecuted) "case baseline did not execute"
+  entry <- singleEntry cache
+  let caseDirectory = entry </> "cases" </> "writer"
+  removeDirectoryRecursive caseDirectory
+  seedOutside outside
+  before <- snapshotTree outside
+  createSymbolicLink outside caseDirectory
+  refused cache runner batchPath
+  after <- snapshotTree outside
+  ensure (before == after) "escaping case symlink changed the outside tree"
+  link <- getSymbolicLinkStatus caseDirectory
+  ensure (isSymbolicLink link) "escaping case symlink was removed"
+  still <- singleEntry cache
+  ensure (still == entry) "refusing a case symlink moved the committed entry"
+
+refused :: FilePath -> FilePath -> FilePath -> IO ()
+refused cache runner batchPath = do
+  result <-
+    try (cachedObservedBatch cache runner batchPath)
+      :: IO (Either CacheEscape (BatchReuse, [(CaseId, N.NativeObservation)]))
+  case result of
+    Left _ -> pure ()
+    Right (reuse, _) -> fail ("escaping cache path was followed: " ++ show reuse)
+
+seedOutside :: FilePath -> IO ()
+seedOutside outside = do
+  createDirectoryIfMissing True (outside </> "nested")
+  B.writeFile (outside </> "sentinel") (BC.pack "outside")
+  B.writeFile (outside </> "nested" </> "payload") (BC.pack "untouched")
+
+snapshotTree :: FilePath -> IO [(FilePath, B.ByteString)]
+snapshotTree directory = do
+  names <- sort <$> listDirectory directory
+  fmap concat . forM names $ \name -> do
+    let path = directory </> name
+    isDirectory <- doesDirectoryExist path
+    if isDirectory
+      then map (\(relative, bytes) -> (name </> relative, bytes)) <$> snapshotTree path
+      else do
+        bytes <- B.readFile path
+        pure [(name, bytes)]
 
 checkResultFiles :: FilePath -> [O.CaseSpec] -> [(CaseId, N.NativeObservation)] -> [String] -> IO ()
 checkResultFiles directory cases observations statuses = do
