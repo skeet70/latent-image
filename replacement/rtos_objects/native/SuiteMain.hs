@@ -8,7 +8,9 @@ import Control.Monad (forM_, unless)
 import Data.Aeson (object, (.=), encode)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
-import System.Directory (createDirectoryIfMissing)
+import FujiAF.Host (failH)
+import FujiModPaths (fujimodNativeCase)
+import System.Directory (createDirectoryIfMissing, makeAbsolute)
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
 import System.FilePath ((</>))
@@ -18,7 +20,18 @@ import Replacement.RtosOwnFirst.Regions (Domain (..))
 
 main :: IO ()
 main = do
-  [runner, cacheRoot, layoutPath, loaderA, loaderB, ownedA, ownedB, resultsPath] <- getArgs
+  arguments <- getArgs
+  runner <- case dropWhile (/= "--runner") arguments of
+    [] -> pure fujimodNativeCase
+    [_] -> failH "--runner needs a value"
+    _ : value : _ -> makeAbsolute value
+  cacheRoot <- required "--cache-root"
+  layoutPath <- required "--layout"
+  loaderA <- required "--loader-a"
+  loaderB <- required "--loader-b"
+  ownedA <- required "--owned-a-bin"
+  ownedB <- required "--owned-b-bin"
+  resultsPath <- required "--results"
   facts <- either fail pure . parseFacts =<< B.readFile layoutPath
   loaderABytes <- B.readFile loaderA
   loaderBBytes <- B.readFile loaderB
@@ -54,3 +67,11 @@ main = do
     putStrLn (show (familyDomain run) ++ " " ++ name ++ ": " ++ either ("failed: " ++) (const "ok") result)
   forM_ failures $ \(name, message) -> putStrLn (name ++ ": " ++ message)
   unless (null failures) exitFailure
+
+required :: String -> IO FilePath
+required flag = do
+  arguments <- getArgs
+  case dropWhile (/= flag) arguments of
+    [] -> failH (flag ++ " is required")
+    [_] -> failH (flag ++ " needs a value")
+    _ : value : _ -> pure value

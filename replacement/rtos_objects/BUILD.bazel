@@ -191,10 +191,12 @@ haskell_binary(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":family-suite",
+        "//emulation:fujimod-paths",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
         "//host:directory",
         "//host:filepath",
+        "//host:host-support",
     ],
 )
