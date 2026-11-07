@@ -187,6 +187,8 @@ cases facts domain =
   let w = domainFacts facts domain
       own = dfId w
       peer = case domain of DomainA -> 2; DomainB -> 1
+      peerDomain = case domain of DomainA -> DomainB; DomainB -> DomainA
+      peerClass = dfId (domainFacts facts peerDomain)
       flag = flagConfig facts domain 1
       control = flagControl facts domain 1
       wait = flagWait facts domain waiterSlot
@@ -200,11 +202,16 @@ cases facts domain =
       flagBase = [(flag + factsFlagConfigExists facts, 1), (control + factsWaitQueueNext facts, control), (control + factsWaitQueuePrev facts, control), (control + factsFlagControlPattern facts, 0)]
       waiter state = [(t + factsTaskNext facts, t), (t + factsTaskPrev facts, t), (t + factsTaskState facts, state), (t + factsTaskPriority facts, 3), (t + factsTaskDomain facts, own), (t + factsTaskWait facts, wait)]
       queued = fromIntegral (factsStateWait facts) + fromIntegral (factsStateObjectQueued facts)
+      peerFlagBase = [(peerFlag + factsFlagConfigExists facts, 1), (peerControl + factsWaitQueueNext facts, peerControl), (peerControl + factsWaitQueuePrev facts, peerControl), (peerControl + factsFlagControlPattern facts, 0)]
+      peerFlag = flagConfig facts peerDomain 1
+      peerControl = flagControl facts peerDomain 1
+      peerWait = flagWait facts peerDomain waiterSlot
    in [ Case "set_no_waiter" SetFlag 1 [(R1, 1)] flagBase 0 [Equals (control + factsFlagControlPattern facts) 1]
       , Case "set_satisfied" SetFlag 1 [(R1, 1)] (flagBase ++ [(control + factsWaitQueueNext facts, t), (wait + factsWaitBlockQueue facts, control), (wait + factsFlagWaitPattern facts, 1), (wait + factsFlagWaitMode facts, 1)] ++ waiter queued) 0 [Equals (wait + factsFlagWaitResult facts) 1, Equals (t + factsTaskState facts) (fromIntegral (factsStateReady facts)), Nonzero (dfSelected w), Equals (dfReadyBitmap w .&. (1 `shiftL` 3)) (1 `shiftL` 3)]
       , Case "set_unsatisfied" SetFlag 1 [(R1, 1)] (flagBase ++ [(control + factsWaitQueueNext facts, t), (wait + factsWaitBlockQueue facts, control), (wait + factsFlagWaitPattern facts, 2), (wait + factsFlagWaitMode facts, 1)] ++ waiter queued) 0 [Equals (control + factsFlagControlPattern facts) 1, Equals (t + factsTaskState facts) queued]
       , Case "set_clear_on_match" SetFlag 1 [(R1, 1)] (flagBase ++ [(flag + factsFlagConfigAttributes facts, fromIntegral (factsFlagClearOnMatch facts)), (control + factsWaitQueueNext facts, t), (wait + factsWaitBlockQueue facts, control), (wait + factsFlagWaitPattern facts, 1), (wait + factsFlagWaitMode facts, 1)] ++ waiter queued) 0 [Equals (control + factsFlagControlPattern facts) 0, Equals (wait + factsFlagWaitResult facts) 1]
-      , Case "set_cross_domain" SetFlag 1 [(R1, 1)] (flagBase ++ [(control + factsWaitQueueNext facts, t), (wait + factsWaitBlockQueue facts, control), (wait + factsFlagWaitPattern facts, 1), (wait + factsFlagWaitMode facts, 1)] ++ waiter queued ++ [(t + factsTaskDomain facts, peer)]) 0 [Nonzero doorbell]
+      , Case "set_waiter_peer" SetFlag 1 [(R1, 1)] (flagBase ++ [(control + factsWaitQueueNext facts, t), (wait + factsWaitBlockQueue facts, control), (wait + factsFlagWaitPattern facts, 1), (wait + factsFlagWaitMode facts, 1)] ++ waiter queued ++ [(t + factsTaskDomain facts, peer)]) 0 [Nonzero doorbell]
+      , Case "set_object_peer" SetFlag (peerClass `shiftL` 16 .|. 1) [(R1, 1)] (peerFlagBase ++ [(peerControl + factsWaitQueueNext facts, t), (peerWait + factsWaitBlockQueue facts, peerControl), (peerWait + factsFlagWaitPattern facts, 1), (peerWait + factsFlagWaitMode facts, 1)] ++ [(t + factsTaskNext facts, t), (t + factsTaskPrev facts, t), (t + factsTaskState facts, queued), (t + factsTaskPriority facts, 3), (t + factsTaskDomain facts, own), (t + factsTaskWait facts, peerWait)]) 0 [Nonzero doorbell]
       , Case "set_timer_cancel" SetFlag 1 [(R1, 1)] (flagBase ++ [(control + factsWaitQueueNext facts, t), (wait + factsWaitBlockResult facts, timerEntry domain), (wait + factsWaitBlockQueue facts, control), (wait + factsFlagWaitPattern facts, 1), (wait + factsFlagWaitMode facts, 1)] ++ waiter queued) 0 [Equals (wait + factsWaitBlockResult facts) 0, Equals (receiptAddress + 4) (timerEntry domain)]
       , Case "send_blocked" Send 1 [(R1, messageAddress)] ([(mailbox + factsMailboxConfigExists facts, 1), (mailControl + factsWaitQueueNext facts, t), (mailWait + factsWaitBlockQueue facts, mailControl), (messageAddress, sentinel), (messageAddress + 4, 0)] ++ [(t + factsTaskNext facts, t), (t + factsTaskPrev facts, t), (t + factsTaskState facts, queued), (t + factsTaskPriority facts, 3), (t + factsTaskDomain facts, own), (t + factsTaskWait facts, mailWait)]) 0 [Equals (mailWait + factsMailboxWaitMessage facts) messageAddress, Equals messageAddress sentinel]
       , Case "send_empty_fifo" Send 1 [(R1, messageAddress)] ([(mailbox + factsMailboxConfigExists facts, 1), (mailControl + factsMailboxControlHead facts, 0), (mailControl + factsMailboxControlTail facts, 0), (mailControl + factsWaitQueueNext facts, mailControl), (mailControl + factsWaitQueuePrev facts, mailControl), (messageAddress, 0), (messageAddress + 4, 0)]) 0 [Equals (mailControl + factsMailboxControlHead facts) messageAddress, Equals (mailControl + factsMailboxControlTail facts) messageAddress, Equals (messageAddress, 0)]
