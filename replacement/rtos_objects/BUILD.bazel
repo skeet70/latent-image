@@ -30,7 +30,6 @@ xm1_rust_staticlib(
         src = "stage/adapter.rs",
         crate_name = "xm1_rtos_objects_f2_adapter",
         data = [
-            "stage/adapter.rs",
             "src/admission.rs",
             "src/create.rs",
             "src/id.rs",
