@@ -158,7 +158,7 @@ truncations c = concat [truncationsIn bank | bank <- [Bank0, Bank1]]
     g = geometry (kind c)
     truncationsIn bank =
       [c {initialMedium = truncateBank g bank kept (initialMedium c)}
-      | kept <- [bankOccupancy g bank (initialMedium c) - 1, bankOccupancy g bank (initialMedium c) - 2 .. 0]
+      | kept <- [0 .. bankOccupancy g bank (initialMedium c) - 1]
       ]
 
 truncateBank :: Geometry -> Bank -> Int -> Medium -> Medium
