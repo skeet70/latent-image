@@ -1,7 +1,7 @@
 use super::{load, Cpu, ENTRY};
 use crate::objects::block::{block_locked, Block, Deadline, TimerEntryAddress};
 use crate::objects::layout::{FlagConfig, FlagControl, GuestAddress, KernelContext, Task, WaitQueue};
-use crate::objects::locked::{check_control, OutWord, StoreOrder};
+use crate::objects::locked::{check_control, OutWord};
 use crate::objects::matching::{MatchMode, Pattern};
 use crate::objects::order::QueueOrder;
 use crate::objects::wake::{release_with, Selection, WaitCompletion};
@@ -82,7 +82,6 @@ pub extern "C" fn xm1_rtos_objects_check(control: u32, want: u32, mode: u32, out
         Pattern(want),
         MatchMode::from_stored(mode),
         OutWord(GuestAddress(out)),
-        StoreOrder::ClearThenOut,
     ) {
         Some(_) => 1,
         None => 0,

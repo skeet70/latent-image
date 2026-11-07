@@ -1005,7 +1005,7 @@ fn a_poll_output_aliasing_the_attributes_keeps_the_clear() {
 }
 
 #[test]
-fn a_poll_output_aliasing_the_pattern_loses_to_the_clear() {
+fn a_poll_output_aliasing_the_pattern_writes_the_output() {
     let words = Domain::A.words();
     let slot = FlagSlot::new(3, 120).unwrap();
     let m = Mock::marking(words.flag_config(slot).exists().0);
@@ -1021,7 +1021,7 @@ fn a_poll_output_aliasing_the_pattern_loses_to_the_clear() {
         ),
         Ok(WaitOutcome::Satisfied(Pattern(0x31)))
     );
-    assert_eq!(m.word(pattern), 0);
+    assert_eq!(m.word(pattern), 0x31);
 }
 
 #[test]
@@ -1512,7 +1512,7 @@ fn wait_flag_without_a_match_arms_the_waiter() {
     assert_eq!(sim.word(wait.mode()), 0);
     assert_eq!(sim.word(wait.base().result()), 0);
     assert_eq!(sim.word(wait.base().queue()), control.0 .0);
-    assert_eq!(sim.word(wait.base().owner()), words.context(Domain::A).0 .0);
+    assert_eq!(sim.word(wait.base().owner()), 1);
     assert_eq!(sim.word(task.state()) & 0xff, 0x32);
     assert_eq!(sim.word(task.wait()), wait.0 .0);
     assert_eq!(sim.word(control.queue().next()), task.0 .0);
@@ -1717,7 +1717,7 @@ fn receive_on_an_empty_mailbox_arms_the_receiver() {
     assert_eq!(sim.word(task.wait()), wait.0 .0);
     assert_eq!(sim.word(wait.base().result()), 0);
     assert_eq!(sim.word(wait.base().queue()), control.0 .0);
-    assert_eq!(sim.word(wait.base().owner()), words.context(Domain::A).0 .0);
+    assert_eq!(sim.word(wait.base().owner()), 1);
     assert_eq!(sim.word(control.queue().next()), task.0 .0);
     assert_eq!(sim.word(out), 0);
 }

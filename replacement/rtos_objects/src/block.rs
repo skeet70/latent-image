@@ -4,7 +4,7 @@ use crate::layout::{
     Domain, FlagWait, GuestAddress, KernelContext, MailboxWait, Message, Task, TaskState, WaitBlock,
     WaitQueue,
 };
-use crate::locked::{check_control, OutWord, StoreOrder};
+use crate::locked::{check_control, OutWord};
 use crate::matching::{MatchMode, Pattern, WantedMask};
 use crate::order::QueueOrder;
 use crate::status::{ObjectStatus, WaitOutcome};
@@ -157,7 +157,7 @@ pub fn wait_flag<M: Block>(
         if m.load_word(control.queue().next()) != control.0 .0 {
             return Err(ObjectStatus::QueueOverflow);
         }
-        match check_control(m, control, config, want.pattern(), mode, out, StoreOrder::ClearThenOut) {
+        match check_control(m, control, config, want.pattern(), mode, out) {
             Some(reported) => Ok(FlagBlocking::Ready(WaitOutcome::Satisfied(reported))),
             None => match timeout {
                 Timeout::Poll => Ok(FlagBlocking::Ready(WaitOutcome::TimedOut)),
@@ -178,15 +178,10 @@ pub fn wait_flag<M: Block>(
                         )),
                         _ => None,
                     };
-                    let owner = if id.domain == entry.domain() {
-                        words.context(id.domain).0 .0
-                    } else {
-                        id.domain.id().word()
-                    };
                     if !block(
                         m,
                         entry.domain(),
-                        owner,
+                        id.domain.id().word(),
                         task,
                         wait.0,
                         control.queue(),
@@ -242,15 +237,10 @@ pub fn receive<M: Block>(
                     )),
                     _ => None,
                 };
-                let owner = if id.domain == entry.domain() {
-                    words.context(id.domain).0 .0
-                } else {
-                    id.domain.id().word()
-                };
                 if !block(
                     m,
                     entry.domain(),
-                    owner,
+                    id.domain.id().word(),
                     task,
                     wait.0,
                     control.queue(),
