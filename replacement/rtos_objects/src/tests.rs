@@ -1919,3 +1919,136 @@ fn the_resume_output_write_masks_only_i() {
         assert_eq!(sim.interrupts(), initial);
     }
 }
+
+#[test]
+fn delete_flag_releases_a_queued_waiter_with_minus_49() {
+    let words = Domain::A.words();
+    let slot = FlagSlot::new(3, 120).unwrap();
+    let sim = Sim::new(Domain::A);
+    install(&sim, Domain::A);
+    let id = create_flag_at(&sim, slot, 0, 0x01);
+    let (task, task_slot) = queue_flag_waiter(
+        &sim,
+        &words,
+        words.flag_control(slot),
+        TaskSlot::new(7).unwrap(),
+        Domain::A,
+        0x10,
+        0,
+        0,
+    );
+    assert_eq!(delete_flag(&sim, id, 0), Ok(()));
+    let wait = words.flag_wait(task_slot);
+    assert_eq!(sim.word(wait.base().result()), 0xffff_ffcf);
+    assert_eq!(sim.word(task.state()) & 0xff, 0x01);
+    assert_eq!(sim.ready(Domain::A, 5), task.0 .0);
+    assert_eq!(sim.running(Domain::A), task.0 .0);
+    let control = words.flag_control(slot);
+    assert_eq!(sim.word(control.queue().next()), control.0 .0);
+    assert_eq!(sim.word(control.queue().prev()), control.0 .0);
+    assert_eq!(sim.word(control.pattern()), 0);
+    assert_eq!(sim.word(words.flag_config(slot).exists()), 0);
+    assert_eq!(create_flag_at(&sim, slot, 0, 0), id);
+}
+
+#[test]
+fn delete_flag_cancels_the_timed_waiters_timer() {
+    let words = Domain::A.words();
+    let slot = FlagSlot::new(3, 120).unwrap();
+    let sim = Sim::new(Domain::A);
+    install(&sim, Domain::A);
+    let id = create_flag_at(&sim, slot, 0, 0);
+    let timer = GuestAddress(0x4000_0500);
+    let (_, task_slot) = queue_flag_waiter(
+        &sim,
+        &words,
+        words.flag_control(slot),
+        TaskSlot::new(7).unwrap(),
+        Domain::A,
+        0x10,
+        0,
+        timer.0,
+    );
+    sim.arm(timer);
+    assert_eq!(delete_flag(&sim, id, 0), Ok(()));
+    assert!(!sim.armed(timer));
+    assert_eq!(sim.word(words.flag_wait(task_slot).base().result()), 0xffff_ffcf);
+}
+
+#[test]
+fn delete_mailbox_drains_queued_messages_in_delivery_order() {
+    let words = Domain::A.words();
+    let slot = MailboxSlot::new(1, 1).unwrap();
+    let sim = Sim::new(Domain::A);
+    install(&sim, Domain::A);
+    let id = create_mailbox_at(&sim, slot, 0);
+    let first = Message(GuestAddress(0x4000_0300));
+    let second = Message(GuestAddress(0x4000_0310));
+    send(&sim, id, first, None);
+    send(&sim, id, second, None);
+    let drained: Vec<Message> = delete_mailbox(&sim, id, 0).unwrap().collect();
+    assert_eq!(drained, vec![first, second]);
+    let control = words.mailbox_control(slot);
+    assert_eq!(sim.word(control.head()), 0);
+    assert_eq!(sim.word(control.tail()), 0);
+    assert_eq!(sim.word(control.queue().next()), control.0 .0);
+    let config = words.mailbox_config(slot);
+    assert_eq!(sim.word(config.attributes()), 2);
+    assert_eq!(sim.word(config.priority_limit()), 32);
+    assert_eq!(sim.word(config.exists()), 0);
+    assert_eq!(create_mailbox_at(&sim, slot, 0), id);
+}
+
+#[test]
+fn delete_mailbox_releases_a_queued_receiver() {
+    let words = Domain::A.words();
+    let slot = MailboxSlot::new(1, 1).unwrap();
+    let sim = Sim::new(Domain::A);
+    install(&sim, Domain::A);
+    let id = create_mailbox_at(&sim, slot, 0);
+    let (task, task_slot) = running_task(&sim, &words, Domain::A, 7);
+    let receiver = pending_receive(receive(
+        &sim,
+        EntryDomain::new(Domain::A),
+        id,
+        OutWord(GuestAddress(0x4000_0600)),
+        Timeout::Forever,
+    ));
+    let drained: Vec<Message> = delete_mailbox(&sim, id, 0).unwrap().collect();
+    assert!(drained.is_empty());
+    let wait = words.mailbox_wait(task_slot);
+    assert_eq!(sim.word(wait.base().result()), 0xffff_ffcf);
+    assert_eq!(sim.word(task.state()) & 0xff, 0x01);
+    assert_eq!(sim.ready(Domain::A, 5), task.0 .0);
+    assert_eq!(
+        resume_receive(&sim, receiver),
+        ReceiveResume::Completed(WaitOutcome::Released)
+    );
+}
+
+#[test]
+fn delete_releases_a_cross_domain_waiter_in_its_domain() {
+    let words = Domain::A.words();
+    let slot = FlagSlot::new(3, 120).unwrap();
+    let sim = Sim::new(Domain::A);
+    install(&sim, Domain::B);
+    let id = FlagId { domain: Domain::A, slot };
+    assert_eq!(
+        create_flag(&sim, id, FlagCreate { attributes: FlagAttributes(0), initial: Pattern(0x01) }),
+        Ok(id)
+    );
+    let (task, _) = queue_flag_waiter(
+        &sim,
+        &words,
+        words.flag_control(slot),
+        TaskSlot::new(7).unwrap(),
+        Domain::B,
+        0x10,
+        0,
+        0,
+    );
+    assert_eq!(delete_flag(&sim, id, 0), Ok(()));
+    assert_eq!(sim.ready(Domain::B, 5), task.0 .0);
+    assert_eq!(sim.ready(Domain::A, 5), 0);
+    assert!(sim.doorbell(1));
+}

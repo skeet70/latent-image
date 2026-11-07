@@ -51,21 +51,47 @@ pub trait Wake: ObjectLock + Release {
     fn request_delayed_dispatch(&self);
 }
 
-fn unlink<M: Machine>(m: &M, task: Task) {
+pub(crate) fn unlink<M: Machine>(m: &M, task: Task) {
     let prev = m.load_word(task.prev());
     let next = m.load_word(task.next());
     m.store_word(GuestAddress(prev), next);
     m.store_word(GuestAddress(next).offset(0x04), prev);
 }
 
+/// The wait-block completion the release stores.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum WaitCompletion {
+    Satisfied,
+    /// A forced release or delete; the raw ABI code is -49 and carries no further cause.
+    Released,
+}
+
+impl WaitCompletion {
+    pub const fn code(self) -> i32 {
+        match self {
+            Self::Satisfied => 0,
+            Self::Released => -49,
+        }
+    }
+}
+
 /// The stock wait release, A `0x44568` / B `0xd4528`, over the S1 primitives.
 pub fn release<M: Release>(m: &M, owner: KernelContext, task: Task) -> Selection {
+    release_with(m, owner, task, WaitCompletion::Satisfied)
+}
+
+pub fn release_with<M: Release>(
+    m: &M,
+    owner: KernelContext,
+    task: Task,
+    completion: WaitCompletion,
+) -> Selection {
     let wait = GuestAddress(m.load_word(task.wait()));
     let entry = m.load_word(wait);
     if entry != 0 {
         m.remove_timer(owner, GuestAddress(entry));
     }
-    m.store_word(wait, 0);
+    m.store_word(wait, completion.code() as u32);
     if m.load_word(task.terminate_pending()) != 0 {
         m.reset_task(task);
         m.store_word(task.context_discarded(), 1);
