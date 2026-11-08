@@ -365,55 +365,7 @@ main = do
 
   -- Manifest.
   let manifestText = manifestWith "first-stage/entry" emptyRules onePiece
-  ok "a manifest parses"
-    (parseManifest manifestText == Right (Manifest entryLabel emptyAttachRules [SingleImagePiece FirstStage (LinkedPaths "a.bin" "a.symbols")] WithoutApplication))
-  let withApplication section = B.init manifestText <> ",\"application\":" <> section <> "}"
-  ok "an empty application member asks for the application section"
-    (fmap manifestApplication (parseManifest (withApplication "{}")) == Right WithApplication)
-  ok "an application member with a key refuses"
-    (refusal (parseManifest (withApplication "{\"settle\":1}")) == Just (ManifestRefused (ManifestUnknownKey "application.settle")))
-  ok "an application member that is not an object refuses"
-    (refusal (parseManifest (withApplication "true")) == Just (ManifestRefused (ManifestMalformed "application is not an object")))
-  let linkedJson name = "{\"image\":\"" <> name <> ".bin\",\"symbols\":\"" <> name <> ".symbols\"}"
-      startupInputs = "{\"loader_a\":" <> linkedJson "a" <> ",\"loader_b\":" <> linkedJson "b" <> ",\"dispatcher\":"
-        <> linkedJson "d" <> ",\"installer\":" <> linkedJson "i" <> "}"
-      linkedPaths name = LinkedPaths (name <> ".bin") (name <> ".symbols")
-  ok "a loader-startup piece parses its four linked images"
-    (fmap manifestPieces (parseManifest (manifestWith "first-stage/entry" emptyRules ("[{\"kind\":\"loader-startup\",\"inputs\":" <> startupInputs <> "}]")))
-      == Right [LoaderStartupPiece (LoaderStartupPaths (linkedPaths "a") (linkedPaths "b") (linkedPaths "d") (linkedPaths "i"))])
-  ok "a task-constructors piece parses its packed image and symbols"
-    (fmap manifestPieces (parseManifest (manifestWith "first-stage/entry" emptyRules
-      "[{\"kind\":\"task-constructors\",\"inputs\":{\"image\":\"ctors.bin\",\"symbols\":\"ctors.symbols\"}}]"))
-      == Right [SingleImagePiece TaskConstructors (LinkedPaths "ctors.bin" "ctors.symbols")])
-  let unknownKey parsed = case refusal parsed of
-        Just (ManifestRefused (ManifestUnknownKey _)) -> True
-        _ -> False
-  ok "a loader-startup piece with one linked image refuses"
-    (unknownKey (parseManifest (manifestWith "first-stage/entry" emptyRules "[{\"kind\":\"loader-startup\",\"inputs\":{\"image\":\"a.bin\",\"symbols\":\"a.symbols\"}}]")))
-  ok "a single-image piece with four linked images refuses"
-    (unknownKey (parseManifest (manifestWith "first-stage/entry" emptyRules ("[{\"kind\":\"loader-orchestration-b\",\"inputs\":" <> startupInputs <> "}]"))))
-  ok "an unknown top-level key refuses"
-    (refusal (parseManifest "{\"schema\":4,\"guard\":{\"attach\":\"first-stage/entry\",\"attach_state\":{}},\"pieces\":[],\"extra\":1}")
-      == Just (ManifestRefused (ManifestUnknownKey "manifest.extra")))
-  ok "an unknown input key refuses"
-    (refusal (parseManifest (manifestWith "first-stage/entry" emptyRules "[{\"kind\":\"first-stage\",\"inputs\":{\"image\":\"a\",\"symbols\":\"b\",\"dat\":\"c\"}}]"))
-      == Just (ManifestRefused (ManifestUnknownKey "piece.inputs.dat")))
-  ok "an unknown kind refuses"
-    (refusal (parseManifest (manifestWith "first-stage/entry" emptyRules "[{\"kind\":\"unregistered-piece\",\"inputs\":{\"image\":\"a\",\"symbols\":\"b\"}}]"))
-      == Just (ManifestRefused (ManifestUnknownKind "unregistered-piece")))
-  ok "another schema refuses"
-    (refusal (parseManifest "{\"schema\":2,\"guard\":{\"attach\":\"first-stage/entry\"},\"pieces\":[]}") == Just (ManifestRefused ManifestSchemaUnsupported))
-  ok "a manifest without attach_state refuses"
-    (refusal (parseManifest "{\"schema\":4,\"guard\":{\"attach\":\"first-stage/entry\"},\"pieces\":[]}")
-      == Just (ManifestRefused (ManifestMalformed "guard lacks attach_state")))
-  ok "a schema-3 manifest refuses"
-    (refusal (parseManifest "{\"schema\":3,\"guard\":{\"attach\":\"first-stage/entry\",\"attach_state\":{}},\"pieces\":[]}")
-      == Just (ManifestRefused ManifestSchemaUnsupported))
-  ok "duplicate manifest kinds refuse"
-    (refusal (parseManifest (manifestWith "first-stage/entry" emptyRules "[{\"kind\":\"first-stage\",\"inputs\":{\"image\":\"a\",\"symbols\":\"b\"}},{\"kind\":\"first-stage\",\"inputs\":{\"image\":\"c\",\"symbols\":\"d\"}}]"))
-      == Just (DuplicatePieceKind FirstStage))
-  ok "an attach that is not a label refuses"
-    (refusal (parseManifest (manifestWith "nowhere" emptyRules onePiece)) == Just (ManifestRefused (GuardAttachUnknown "nowhere")))
+  manifestChecks ok entryLabel manifestText
 
   -- Footprint normalization and write resolution.
   ok "overlapping footprints normalize to disjoint spans with merged citations"
@@ -777,7 +729,70 @@ main = do
     (member "schema" withSection == J.toJSON (5 :: Int) && member "application" withSection == applicationValue sectioned
       && without "schema" (without "application" withSection) == without "schema" contractJson)
 
-  -- Image5 producer reads under an image5 edit.
+  producerReadChecks ok source first
+
+  passed <- readIORef counter
+  putStrLn ("startup-artifact-tests: " ++ show passed ++ " checks passed")
+
+{-# NOINLINE manifestChecks #-}
+manifestChecks :: (String -> Bool -> IO ()) -> Label -> B.ByteString -> IO ()
+manifestChecks ok entryLabel manifestText = do
+  ok "a manifest parses"
+    (parseManifest manifestText == Right (Manifest entryLabel emptyAttachRules [SingleImagePiece FirstStage (LinkedPaths "a.bin" "a.symbols")] WithoutApplication))
+  let withApplication section = B.init manifestText <> ",\"application\":" <> section <> "}"
+  ok "an empty application member asks for the application section"
+    (fmap manifestApplication (parseManifest (withApplication "{}")) == Right WithApplication)
+  ok "an application member with a key refuses"
+    (refusal (parseManifest (withApplication "{\"settle\":1}")) == Just (ManifestRefused (ManifestUnknownKey "application.settle")))
+  ok "an application member that is not an object refuses"
+    (refusal (parseManifest (withApplication "true")) == Just (ManifestRefused (ManifestMalformed "application is not an object")))
+  let linkedJson name = "{\"image\":\"" <> name <> ".bin\",\"symbols\":\"" <> name <> ".symbols\"}"
+      startupInputs = "{\"loader_a\":" <> linkedJson "a" <> ",\"loader_b\":" <> linkedJson "b" <> ",\"dispatcher\":"
+        <> linkedJson "d" <> ",\"installer\":" <> linkedJson "i" <> "}"
+      linkedPaths name = LinkedPaths (name <> ".bin") (name <> ".symbols")
+  ok "a loader-startup piece parses its four linked images"
+    (fmap manifestPieces (parseManifest (manifestWith "first-stage/entry" emptyRules ("[{\"kind\":\"loader-startup\",\"inputs\":" <> startupInputs <> "}]")))
+      == Right [LoaderStartupPiece (LoaderStartupPaths (linkedPaths "a") (linkedPaths "b") (linkedPaths "d") (linkedPaths "i"))])
+  ok "a task-constructors piece parses its packed image and symbols"
+    (fmap manifestPieces (parseManifest (manifestWith "first-stage/entry" emptyRules
+      "[{\"kind\":\"task-constructors\",\"inputs\":{\"image\":\"ctors.bin\",\"symbols\":\"ctors.symbols\"}}]"))
+      == Right [SingleImagePiece TaskConstructors (LinkedPaths "ctors.bin" "ctors.symbols")])
+  let unknownKey parsed = case refusal parsed of
+        Just (ManifestRefused (ManifestUnknownKey _)) -> True
+        _ -> False
+  ok "a loader-startup piece with one linked image refuses"
+    (unknownKey (parseManifest (manifestWith "first-stage/entry" emptyRules "[{\"kind\":\"loader-startup\",\"inputs\":{\"image\":\"a.bin\",\"symbols\":\"a.symbols\"}}]")))
+  ok "a single-image piece with four linked images refuses"
+    (unknownKey (parseManifest (manifestWith "first-stage/entry" emptyRules ("[{\"kind\":\"loader-orchestration-b\",\"inputs\":" <> startupInputs <> "}]"))))
+  ok "an unknown top-level key refuses"
+    (refusal (parseManifest "{\"schema\":4,\"guard\":{\"attach\":\"first-stage/entry\",\"attach_state\":{}},\"pieces\":[],\"extra\":1}")
+      == Just (ManifestRefused (ManifestUnknownKey "manifest.extra")))
+  ok "an unknown input key refuses"
+    (refusal (parseManifest (manifestWith "first-stage/entry" emptyRules "[{\"kind\":\"first-stage\",\"inputs\":{\"image\":\"a\",\"symbols\":\"b\",\"dat\":\"c\"}}]"))
+      == Just (ManifestRefused (ManifestUnknownKey "piece.inputs.dat")))
+  ok "an unknown kind refuses"
+    (refusal (parseManifest (manifestWith "first-stage/entry" emptyRules "[{\"kind\":\"unregistered-piece\",\"inputs\":{\"image\":\"a\",\"symbols\":\"b\"}}]"))
+      == Just (ManifestRefused (ManifestUnknownKind "unregistered-piece")))
+  ok "another schema refuses"
+    (refusal (parseManifest "{\"schema\":2,\"guard\":{\"attach\":\"first-stage/entry\"},\"pieces\":[]}") == Just (ManifestRefused ManifestSchemaUnsupported))
+  ok "a manifest without attach_state refuses"
+    (refusal (parseManifest "{\"schema\":4,\"guard\":{\"attach\":\"first-stage/entry\"},\"pieces\":[]}")
+      == Just (ManifestRefused (ManifestMalformed "guard lacks attach_state")))
+  ok "a schema-3 manifest refuses"
+    (refusal (parseManifest "{\"schema\":3,\"guard\":{\"attach\":\"first-stage/entry\",\"attach_state\":{}},\"pieces\":[]}")
+      == Just (ManifestRefused ManifestSchemaUnsupported))
+  ok "duplicate manifest kinds refuse"
+    (refusal (parseManifest (manifestWith "first-stage/entry" emptyRules "[{\"kind\":\"first-stage\",\"inputs\":{\"image\":\"a\",\"symbols\":\"b\"}},{\"kind\":\"first-stage\",\"inputs\":{\"image\":\"c\",\"symbols\":\"d\"}}]"))
+      == Just (DuplicatePieceKind FirstStage))
+  ok "an attach that is not a label refuses"
+    (refusal (parseManifest (manifestWith "nowhere" emptyRules onePiece)) == Just (ManifestRefused (GuardAttachUnknown "nowhere")))
+
+{-# NOINLINE producerReadChecks #-}
+producerReadChecks :: (String -> Bool -> IO ()) -> Canonical -> Piece -> IO ()
+producerReadChecks ok source first = do
+  let targets = canonicalTargets source
+      composeWith :: [Join TestJoin] -> [Piece] -> Either Refusal (Composition TestJoin)
+      composeWith joins = compose joins source
   producerReturn <- labelled Image5Producer "caller-return"
   destinationLabel <- labelled Image5Producer "destination"
   stagingLabel <- labelled Image5Producer "staging"
@@ -802,6 +817,3 @@ main = do
     (fmap producerReads (composeWith [] [producerPiece, pumpPiece, initializerPiece]) == Right
       [ ("image5-producer/destination", 0xbf1a00, 0x4f1e60, Just (ExpectTarget Image5))
       , ("image5-producer/staging", 0x43e40000, 0x2e0000, Just ExpectRecord5Media) ])
-
-  passed <- readIORef counter
-  putStrLn ("startup-artifact-tests: " ++ show passed ++ " checks passed")

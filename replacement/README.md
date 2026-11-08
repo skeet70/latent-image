@@ -761,9 +761,9 @@ The `image5-initializer` stager piece takes `image` and `symbols` inputs, stages
 
 `//replacement/image5_init:image5-init-oracle-tests` runs the linked owned bytes against contract cases and rejects a swapped-call mutant without private firmware inputs. The manual `//replacement/image5_init:image5-init-oracle` takes `STOCK_IMAGE5 REPORT_JSON` after `--` and compares the pinned stock carrier with the linked image through the native-case runner. Its cases cover zero results, each checked failure, ignored nonzero results and shortened hook tables; the report records call registers, stack offsets, return/spin outcomes and control refusals. It does not run a full-system guest.
 
-Run `bazel test //replacement/image5_init:all //replacement/startup_artifact:startup-artifact-tests`. The manual `//replacement/startup_artifact:startup-artifact-j9-canonical-tests` target takes the canonical DAT path and a fresh scratch directory after `--`, like the J8 target. Neither starts a full-system guest.
+Run `devenv shell -- host-build test --jobs=2 --local_test_jobs=1 //replacement/image5_init:all`. The manual `//replacement/startup_artifact:startup-artifact-j9-canonical-tests` target takes the canonical DAT path and a fresh scratch directory after `--`, like the J8 target. Neither starts a full-system guest.
 
-Run `bazel test //replacement/image5_init:all //replacement/startup_artifact:startup-artifact-tests`. The manual `//replacement/startup_artifact:startup-artifact-j9-canonical-tests` target takes the canonical DAT path and a fresh scratch directory after `--`, like the J8 target. Neither target runs a guest.
+Run the full synthetic composition suite with `devenv shell -- host-build test --jobs=1 --local_test_jobs=1 //replacement/startup_artifact:startup-artifact-tests` under the 6 GiB host scope. Canonical and guest qualification remain separate.
 
 ## Owned scheduler dispatcher, step S2 (#156)
 
