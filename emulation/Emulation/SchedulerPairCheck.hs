@@ -390,7 +390,8 @@ qualify bytes plan observation = do
   checkDemandCalls observation
   let calls = sortOn callFirst (obsCalls observation)
   forM_ calls $ \call -> checkCallEnvelope plan call >> checkCallForIn calls (obsRole observation) call
-  qualifySuffix plan observation (CallTotals (not (null calls)) (sum (map callCount calls)))
+  let releases = [F.ReleaseWitness (familyTask call) [address | (address,_,_) <- familyWrites call] | call <- calls, familyService call `elem` [Just FamilyRelease, Just HelperRelease]]
+  qualifySuffix plan releases observation (CallTotals (not (null calls)) (sum (map callCount calls)))
   pure (summary observation)
 
 qualifyPrefix :: B.ByteString -> Plan -> Observation -> Either Refusal ()
@@ -417,15 +418,15 @@ checkPendingEnvelope :: Plan -> F.Pending -> Either Refusal ()
 checkPendingEnvelope plan pending =
   expect CallOutsidePlan (any (\entry -> entryDomain entry == F.pendingDomain pending && entryAddress entry == Address (F.pendingEntry pending) && entrySemantic entry == F.pendingSemantic pending) (planEntries plan))
 
-qualifySuffix :: Plan -> Observation -> CallTotals -> Either Refusal ()
-qualifySuffix plan observation totals = do
+qualifySuffix :: Plan -> [F.ReleaseWitness] -> Observation -> CallTotals -> Either Refusal ()
+qualifySuffix plan releases observation totals = do
   let (familyPending, otherPending) = obsPending observation
-      releases = [F.ReleaseWitness (familyTask call) [address | (address,_,_) <- familyWrites call] | call <- obsCalls observation, familyService call == Just FamilyRelease]
   expect Incomplete (hasCompletedClasses totals && obsReturns observation == completedCallCount totals
     && obsEntries observation == obsReturns observation + length familyPending + length otherPending
     && all (\entered -> entered <= obsInstructions observation && obsInstructions observation-entered <= Q.pendingWindow) otherPending)
   forM_ familyPending $ \pending -> do
     checkPendingEnvelope plan pending
+    expect Incomplete (F.pendingEntered pending <= obsInstructions observation)
     either (Left . familyRefusal) Right (F.checkPendingFamily releases pending)
   expect ObserverError (obsError observation == Nothing && obsMachineError observation == Nothing)
   let milestones = obsMilestones observation

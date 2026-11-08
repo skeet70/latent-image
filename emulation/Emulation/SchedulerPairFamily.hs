@@ -4,7 +4,7 @@
 -- layout and the independent expected-state rules.
 module Emulation.SchedulerPairFamily
   ( FamilyCall (..), FamilyTrace (..), FamilyBoundary (..), FamilyBoundaryKind (..), FamilyCompletion (..)
-  , TimerKind (..), TimerWitness (..), Pending (..), ReleaseWitness (..), FamilyRefusal (..), checkFamilyCall, checkPendingFamily ) where
+  , TimerKind (..), TimerWitness (..), Pending (..), ReleaseWitness (..), FamilyRefusal (..), checkFamilyCall, checkPendingFamily, familyTimerDeferred ) where
 
 import Control.Monad (foldM, forM, forM_, unless, when)
 import Data.Bits ((.&.), (.|.), complement, shiftL, shiftR)
@@ -150,13 +150,20 @@ checkPendingFamily releases pending = case (pendingSemantic pending, pendingTerm
       (object, slot) <- resolveFlag domain idWord
       let family = layout object
           control = flagControl family slot
+          config = flagConfig family slot
           task = pendingTask pending
+          lockWord = if object == DomainA then 0x400545c4 else 0x400e4584
+          lockAddress = Address lockWord
+          schedulerLockAddress = if domain == DomainA then 0x400545c0 else 0x400e4580
       timeout <- wordAt (pendingSp pending) before
       expect FamilyLifetime (signedWord timeout == -1)
-      patternBefore <- wordAt (control+0x0c) before
       want <- argAt args 1
       mode <- argAt args 2
       expect FamilyReturn (mode .&. 0xfffffffe == 0)
+      expect FamilyReturn (want /= 0)
+      exists <- wordAt (config+8) before
+      expect FamilyReturn (exists /= 0)
+      patternBefore <- wordAt (control+0x0c) before
       expect FamilyLifetime (not (matches mode want patternBefore))
       wait <- wordAt (task+0x14) terminal
       expect FamilyLifetime (wait /= 0)
@@ -174,29 +181,31 @@ checkPendingFamily releases pending = case (pendingSemantic pending, pendingTerm
       beforeOut <- wordAt out before
       afterOut <- wordAt out terminal
       expect FamilyEffect (beforeOut == afterOut)
-      schedulerLock <- wordAt (if domain == DomainA then 0x400545c0 else 0x400e4580) terminal
-      objectLock <- wordAt (if object == DomainA then 0x400545c4 else 0x400e4584) terminal
-      expect FamilyLifetime (schedulerLock == 0 && objectLock == 0)
+      schedulerLock <- wordAt schedulerLockAddress terminal
+      objectLock <- wordAt lockWord terminal
+      expect FamilyLifetime (schedulerLock /= task && objectLock /= task)
       saveCpsr <- maybe (Left FamilyLifetime) Right (pendingSaveCpsr pending)
       expect FamilyLifetime (saveCpsr .&. 0x80 /= 0)
-      expect FamilyLifetime (saveCpsr .&. complement 0x80 == pendingCpsr pending .&. complement 0x80)
-      let own = [w | w <- releases, releaseTask w == task, Address objectLock `elem` releaseAddresses w]
-          elsewhere = [w | w <- releases, releaseTask w /= task, Address objectLock `elem` releaseAddresses w]
-      expect FamilyLifetime (not (null own) && null elsewhere)
+      expect FamilyLifetime (saveCpsr .&. 0x1e0 == pendingCpsr pending .&. 0x1e0)
+      let own = [w | w <- releases, releaseTask w == task, lockAddress `elem` releaseAddresses w]
+      expect FamilyLifetime (not (null own))
       savedSp <- wordAt (task+0x18) terminal
       savedPc <- wordAt (task+0x1c) terminal
-      stackBase <- wordAt (task+0x20) terminal
-      stackSize <- wordAt (task+0x24) terminal
-      let base = stackBase .&. complement 3
+      definition <- wordAt (task+8) terminal
+      stackSize <- wordAt (definition+0x10) terminal
+      stackBase <- wordAt (definition+0x14) terminal
+      let alias x = x .&. complement 0x40000000
+          base = alias stackBase
           limit = base + stackSize
-          saved = savedSp .&. complement 3
-          entrySp = pendingSp pending .&. complement 3
+          saved = alias savedSp
+          entrySp = alias (pendingSp pending)
           resumeEntry = if domain == DomainA then 0x43668 else 0xd3668
+      expect FamilyLifetime (savedSp .&. 3 == 0 && pendingSp pending .&. 3 == 0)
       expect FamilyLifetime (stackSize >= 36 && stackSize <= 0x10000 && base /= 0)
       expect FamilyLifetime (saved >= base && saved + 36 <= limit)
       expect FamilyLifetime (entrySp >= base && entrySp < limit)
-      expect FamilyLifetime (savedPc .&. complement 1 == resumeEntry .&. complement 1)
-      continuation <- wordAt (saved+32) terminal
+      expect FamilyLifetime (alias savedPc .&. complement 1 == alias resumeEntry .&. complement 1)
+      continuation <- wordAt (savedSp+32) terminal
       expect FamilyContinuation (inFamilyWindow domain continuation)
 
 flagConfig :: FamilyLayout -> Word32 -> Word32
@@ -242,6 +251,15 @@ replayWrite memory (Address address,size,value) = do
       mask = if size==4 then maxBound else (1 `shiftL` (size*8))-1
   expect FamilyEffect (value .&. complement mask == 0)
   pure (M.insert (Address aligned) ((old .&. complement (mask `shiftL` shift)) .|. (value `shiftL` shift)) memory)
+
+-- | True when the call's timer contract can only be resolved after later calls' witnesses arrive.
+familyTimerDeferred :: FamilyCall c => c -> Bool
+familyTimerDeferred call = case familyExpected call of
+  Right expected ->
+    let path = expectedTimer expected
+    in not (timerForbid path)
+      && (not (null (timerArm path)) || not (null (timerWake path)) || not (null (timerExpire path)) || timerInsertRequired path)
+  Left _ -> False
 
 checkFamilyCall :: FamilyCall c => c -> [TimerWitness] -> Either FamilyRefusal ()
 checkFamilyCall call witnesses = do
@@ -295,12 +313,13 @@ checkTimerPath call witnesses expected trace = do
       ownRemoves = [(value,boundary) | boundary <- history,familyBoundaryKind boundary==FamilyTimerRemoveKind,Just value <- [familyBoundaryValue boundary]]
       ownConsumes = [(value,boundary) | boundary <- history,familyBoundaryKind boundary==FamilyTimerConsumeKind,Just value <- [familyBoundaryValue boundary]]
       returnAt = maximum (0 : map familyBoundaryInstructions history)
+      callStart = familyEpoch call
       armStart = case ownInserts of
         ((_,boundary):_) -> familyBoundaryInstructions boundary
         [] -> case [timerArmedAt w | w <- witnesses, timerKind w==TimerInserted, timerTask w==task, timerArmedAt w <= returnAt] of
-          [] -> 0
-          values -> minimum values
-      within w = timerArmedAt w >= armStart && timerArmedAt w <= returnAt
+          [] -> callStart
+          values -> maximum (callStart : values)
+      within w = timerArmedAt w >= max armStart callStart && timerArmedAt w <= returnAt
       inserts = map fst ownInserts ++ [timerEntry w | w <- witnesses, timerKind w==TimerInserted, timerTask w==task, within w]
       removes = map fst ownRemoves ++ [timerEntry w | w <- witnesses, timerKind w==TimerRemoved, timerTask w==task, within w]
       consumes = map fst ownConsumes ++ [timerEntry w | w <- witnesses, timerKind w==TimerConsumed, timerTask w==task, within w]
@@ -350,7 +369,7 @@ familyExpected call = do
   service <- maybe (Left FamilyReturn) Right (familyService call)
   case service of
     FamilyRelease -> carrierRelease call
-    HelperRelease -> carrierRelease call
+    HelperRelease -> carrierForcedRelease call
     HelperBlock -> carrierBlock call
     HelperBlockTimed -> carrierBlockTimed call
     HelperCheck -> carrierCheck call
@@ -439,6 +458,18 @@ carrierRelease call = do
   timer <- wordAt wait (familyBefore call)
   pure FamilyExpected
     { expectedR0=familyR0 call
+    , expectedWords=[(wait,0)]
+    , expectedOutput=Nothing
+    , expectedTimer=if timer==0 then forbidTimer else TimerPath [] [timer] [] False False False False
+    }
+
+carrierForcedRelease :: FamilyCall c => c -> Either FamilyRefusal FamilyExpected
+carrierForcedRelease call = do
+  task <- argAt (familyArguments call) 1
+  wait <- wordAt (task+0x14) (familyBefore call)
+  timer <- wordAt wait (familyBefore call)
+  pure FamilyExpected
+    { expectedR0=0xffffffcf
     , expectedWords=[(wait,0)]
     , expectedOutput=Nothing
     , expectedTimer=if timer==0 then forbidTimer else TimerPath [] [timer] [] False False False False

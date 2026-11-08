@@ -5,11 +5,12 @@ module Emulation.SchedulerPairEvidence
   , ControlEvidence, emptyControlEvidence, accumulateControlEvidence, qualifyControlEvidence
   , checkControlEvidence, controlFailureValue ) where
 
+import Control.Monad (forM_)
 import qualified Data.Aeson as J
 import qualified Data.ByteString as B
 import Data.Word (Word64)
 import Emulation.SchedulerPairCheck
-import Emulation.SchedulerPairFamily (TimerWitness)
+import Emulation.SchedulerPairFamily (FamilyCall (..), ReleaseWitness (..), TimerWitness, familyTimerDeferred)
 import Emulation.SchedulerPairPlan
 import Replacement.RtosOwnFirst.Regions (Domain, domainLabel)
 
@@ -22,26 +23,45 @@ data CallEvidence = CallEvidence
   , evidenceSummary :: !CallSummary
   , evidenceDemand :: ![DemandWitness]
   , evidenceTimers :: ![TimerWitness]
+  , evidenceUnlocks :: ![ReleaseWitness]
+  , evidenceDeferred :: ![Call]
+  , evidenceOverflow :: !Bool
   }
 
 emptyCallEvidence :: CallEvidence
-emptyCallEvidence = CallEvidence Nothing Nothing (CallTotals False 0) emptyCallSummary [] []
+emptyCallEvidence = CallEvidence Nothing Nothing (CallTotals False 0) emptyCallSummary [] [] [] [] False
+
+unlockWitnesses :: Call -> [ReleaseWitness]
+unlockWitnesses call = case familyService call of
+  Just HelperRelease -> [ReleaseWitness (familyTask call) [address | (address,_,_) <- familyWrites call]]
+  Just FamilyRelease -> [ReleaseWitness (familyTask call) [address | (address,_,_) <- familyWrites call]]
+  _ -> []
 
 accumulateEvidence :: Plan -> CallEvidence -> Call -> CallEvidence
 accumulateEvidence plan prior call =
-  let timers = take 64 (evidenceTimers prior ++ timerWitnesses [call])
-  in accumulateKnown timers plan (checkCallForInWitnesses timers (planRole plan) call) prior call
+  let timers = evidenceTimers prior ++ timerWitnesses [call]
+      unlocks = evidenceUnlocks prior ++ unlockWitnesses call
+      semantic = checkCallForInWitnesses (take 64 timers) (planRole plan) call
+      deferred = case semantic of
+        Left FamilyTimer | familyTimerDeferred call -> [call]
+        _ -> []
+      overflow = evidenceOverflow prior || length timers > 64 || length unlocks > 64 || length (evidenceDeferred prior) + length deferred > 64
+  in accumulateKnown timers unlocks deferred overflow plan semantic prior call
 
-accumulateKnown :: [TimerWitness] -> Plan -> Either Refusal () -> CallEvidence -> Call -> CallEvidence
-accumulateKnown timers plan semanticResult prior call = CallEvidence firstFailure firstSemantic totals counts witnesses timers
+accumulateKnown :: [TimerWitness] -> [ReleaseWitness] -> [Call] -> Bool -> Plan -> Either Refusal () -> CallEvidence -> Call -> CallEvidence
+accumulateKnown timers unlocks deferred overflow plan semanticResult prior call = CallEvidence firstFailure firstSemantic totals counts witnesses (take 64 timers) (take 64 unlocks) (take 64 (evidenceDeferred prior ++ deferred)) (evidenceOverflow prior || overflow)
  where
-  plannedResult = checkCallEnvelope plan call >> semanticResult
+  deferredFailure = case semanticResult of
+    Left FamilyTimer -> not (null deferred)
+    _ -> False
+  checkedResult = if deferredFailure then Right () else semanticResult
+  plannedResult = checkCallEnvelope plan call >> checkedResult
   firstFailure = case plannedResult of
     Right () -> evidenceFailure prior
     Left refusal ->
       let failure = CallFailure (callFirst call) refusal
       in failure `seq` earlierFailure (evidenceFailure prior) failure
-  firstSemantic = case semanticResult of
+  firstSemantic = case checkedResult of
     Right () -> evidenceSemanticFailure prior
     Left refusal ->
       let failure = SemanticFailureDetails (callFirst call) (callDomain call) (callAddress call)
@@ -67,10 +87,13 @@ qualifyEvidence :: B.ByteString -> Plan -> Observation -> CallEvidence -> Either
 qualifyEvidence bytes plan observation evidence = do
   qualifyPrefix bytes plan observation
   checkDemandWitnesses (obsDemandPaging observation) (evidenceDemand evidence)
+  expect Incomplete (not (evidenceOverflow evidence))
   case evidenceFailure evidence of
     Nothing -> pure ()
     Just (CallFailure _ refusal) -> Left refusal
-  qualifySuffix plan observation (evidenceTotals evidence)
+  forM_ (evidenceDeferred evidence) $ \call ->
+    either Left (const (pure ())) (checkCallForInWitnesses (evidenceTimers evidence) (planRole plan) call)
+  qualifySuffix plan (evidenceUnlocks evidence) observation (evidenceTotals evidence)
   pure (summaryWith observation (evidenceSummary evidence))
 
 evidenceFailureValue :: CallEvidence -> J.Value
@@ -95,10 +118,15 @@ emptyControlEvidence plan = ControlEvidence emptyCallEvidence $ case planRole pl
 
 accumulateControlEvidence :: Plan -> ControlEvidence -> Call -> ControlEvidence
 accumulateControlEvidence plan (ControlEvidence compact retained) call =
-  ControlEvidence (accumulateKnown timers plan checked compact call) (retainControl (planRole plan) checked retained call)
+  ControlEvidence (accumulateKnown timers unlocks deferred overflow plan checked compact call) (retainControl (planRole plan) checked retained call)
  where
-  timers = take 64 (evidenceTimers compact ++ timerWitnesses [call])
-  checked = checkCallForInWitnesses timers (planRole plan) call
+  timers = evidenceTimers compact ++ timerWitnesses [call]
+  unlocks = evidenceUnlocks compact ++ unlockWitnesses call
+  checked = checkCallForInWitnesses (take 64 timers) (planRole plan) call
+  deferred = case checked of
+    Left FamilyTimer | familyTimerDeferred call -> [call]
+    _ -> []
+  overflow = evidenceOverflow compact || length timers > 64 || length unlocks > 64 || length (evidenceDeferred compact) + length deferred > 64
 
 -- Notify adjudication retains its earliest target and preceding failed contracts.
 retainControl :: Role -> Either Refusal () -> RetainedControl -> Call -> RetainedControl

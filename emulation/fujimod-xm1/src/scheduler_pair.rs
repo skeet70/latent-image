@@ -1275,7 +1275,7 @@ impl Observer<'_> {
         for (_, _, capture) in &self.data_hooks {
             let mut capture = capture.borrow_mut();
             capture.active = self.open.pending.values()
-                .flat_map(|calls| calls.iter().filter(|call| !call.suspended)
+                .flat_map(|calls| calls.iter()
                     .flat_map(|call| call.entry.memory.iter().map(|word| word.address.0 & !ALIAS & !3))).collect();
             capture.active.extend([0xfffb30cc,0xfffb40cc,0xfffb30ec,0xfffb40ec].map(|address| address & !ALIAS));
         }
@@ -1464,6 +1464,28 @@ impl Observer<'_> {
         self.finish(machine, context, tcm, closed, Completion::Return)
     }
 
+    /// A timer expiry belongs to the parked owner, not to the callback's current call.
+    fn consume_timer(&mut self, machine: &Machine, context: &Context, tcm: [u32; 2], entry: u32, task: u32) -> Result<(), String> {
+        let board = Board { machine, maps: &self.maps };
+        let keys: Vec<ReturnKey> = self.open.pending.iter()
+            .filter(|(_, calls)| calls.iter().any(|call| matches!(call.entry.slot.semantic, Semantic::Family { .. }) && call.entry.task == Read::Committed { value: task }))
+            .map(|(key, _)| *key).collect();
+        for key in keys {
+            if let Some(calls) = self.open.pending.get_mut(&key) {
+                for call in calls.iter_mut().filter(|call| matches!(call.entry.slot.semantic, Semantic::Family { .. }) && call.entry.task == Read::Committed { value: task }) {
+                    let memory = call.entry.memory.iter().map(|word| Ok(WordValue { address: word.address, value: board.word(context.core, tcm, word.address.0)? })).collect::<Result<Vec<_>, String>>()?;
+                    call.record(Boundary { kind: BoundaryKind::TimerConsume, address: Hex(context.pc), instructions: context.instructions,
+                        core: context.core, task: Read::Committed { value: task }, sp: Hex(context.sp), cpsr: context.cpsr,
+                        registers: context.registers, memory, writes: Vec::new(), bank: Vec::new(), value: Some(entry),
+                        cpacr: board.register(context.core, arm::Register::Cpacr)?,
+                        fpexc: board.register(context.core, arm::Register::Fpexc)?,
+                        tpidrurw: board.cp15(context.core, 13, 0, 2)? })?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn boundary(&mut self, machine: &Machine, context: &Context, tcm: [u32; 2], kind: BoundaryKind, value: Option<u32>) -> Result<(), String> {
         let board = Board { machine, maps: &self.maps };
         for (key, calls) in &mut self.open.pending {
@@ -1598,8 +1620,18 @@ impl Observer<'_> {
                     self.probe_hits.push(ProbeHit { domain: probe.domain, core, address: probe.address, kind: probe.kind,
                         register: probe.register, value, cpsr: context.cpsr, sp: Hex(context.sp), lr: Hex(context.lr), instructions: context.instructions });
                     let kind = probe.kind.boundary();
-                    let boundary_value = if let Some(register) = probe.kind.timer_value_register() { board.register(core, arm::Register::R(register))? } else { value };
-                    self.boundary(machine, &context, tcm, kind, Some(boundary_value))?;
+                    let callback_task = board.register(core, arm::Register::R(0))?;
+                    let boundary_value = if probe.kind == ProbeKind::TimerConsume {
+                        let wait = committed(board.word(core, tcm, callback_task + 0x14)?)?;
+                        let entry = committed(board.word(core, tcm, wait)?)?;
+                        require(committed(board.word(core, tcm, entry + 8)?)? == callback_task, "timer callback task differs from entry owner")?;
+                        entry
+                    } else if let Some(register) = probe.kind.timer_value_register() { board.register(core, arm::Register::R(register))? } else { value };
+                    if kind == BoundaryKind::TimerConsume {
+                        self.consume_timer(machine, &context, tcm, boundary_value, callback_task)?;
+                    } else {
+                        self.boundary(machine, &context, tcm, kind, Some(boundary_value))?;
+                    }
                     if kind == BoundaryKind::DiscardedRead && value == 1 && self.validated.plan.probes[index].register.0 == 3 {
                         let discarded = self.open.take_where(|key,call| key.core==core && call.entry.task==context.current && matches!(call.entry.slot.semantic,Semantic::Service { .. } | Semantic::Family { .. }));
                         self.finish(machine,&context,tcm,discarded,Completion::Discard)?;
@@ -2183,7 +2215,7 @@ mod tests {
         assert!(!pending.owns_boundary(&key, &context(0x9100)));
         let mut family = family_call(FamilyService::FamilyFlagWait);
         family.record(boundary(BoundaryKind::Save)).unwrap();
-        assert!(!family.suspended);
+        assert!(family.suspended);
         let service = call();
         assert!(service.owns_boundary(&ReturnKey { task: None, ..key }, &context(0x9100)));
         assert!(!service.owns_boundary(&key, &context(0x9100)));

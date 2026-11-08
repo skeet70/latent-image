@@ -243,10 +243,11 @@ main = do
   assertRight "wake removes timer" (checkFamilyCall (flagWaitCall waitWrites 0 [timerBoundary TimerInsertBoundary flagTimerAddress 0x9000,timerBoundary TimerRemoveBoundary flagTimerAddress 0x9000]) [])
   assertLeft "expiry without pop" FamilyTimer (checkFamilyCall (flagWaitCall expiryWrites 0xffffffce [timerBoundary TimerInsertBoundary flagTimerAddress 0x9000]) [])
   assertRight "expiry tick pop" (checkFamilyCall (flagWaitCall expiryWrites 0xffffffce [timerBoundary TimerInsertBoundary flagTimerAddress 0x9000,tickBoundary flagTimerAddress]) [])
-  let expiryCall = flagWaitCall expiryWrites 0xffffffce [timerBoundary TimerInsertBoundary flagTimerAddress 0x9000]
-      consumeWitness armedAt = TimerWitness flagTimerAddress 0x9000 0 armedAt TimerConsumed
-  assertRight "consume witness inside arm-to-return" (checkFamilyCall expiryCall [consumeWitness 1])
-  assertLeft "consume witness after return" FamilyTimer (checkFamilyCall expiryCall [consumeWitness 2])
+  let returnBoundary = Boundary ReturnBoundary (Address 0x43640) 20 0 (registers [0]) M.empty [] [] Nothing 0x9000 [] []
+      expiryCall = flagWaitCall expiryWrites 0xffffffce [timerBoundary TimerInsertBoundary flagTimerAddress 0x9000,returnBoundary]
+      consumeWitness armedAt = TimerWitness flagTimerAddress 0x9000 10 armedAt TimerConsumed
+  assertRight "consume witness inside arm-to-return" (checkFamilyCall expiryCall [consumeWitness 10])
+  assertLeft "consume witness after return" FamilyTimer (checkFamilyCall expiryCall [consumeWitness 21])
   assertRight "flag delete releases waiter" (checkFamilyCall (flagDeleteCall flagDeleteWrites) [])
   assertRight "delete removes waiter timer" (checkFamilyCall (flagDeleteTimerCall flagDeleteWrites [timerBoundary TimerRemoveBoundary flagTimerAddress 0x9000]) [])
   assertLeft "delete leaves waiter timer" FamilyTimer (checkFamilyCall (flagDeleteTimerCall flagDeleteWrites []) [])
