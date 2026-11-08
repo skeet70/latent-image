@@ -5,6 +5,13 @@ use crate::locked::ObjectLock;
 use crate::status::ObjectStatus;
 use crate::wake::{release_with, unlink, DispatchTarget, Selection, WaitCompletion, Wake};
 
+/// Whether the released waiters require a dispatch after the caller restores its mask.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum DispatchDecision {
+    Required,
+    NotRequired,
+}
+
 /// The queued messages of a deleted mailbox in delivery order; the messages are caller-owned.
 pub struct MessageDrain<'a, M: Machine> {
     machine: &'a M,
@@ -49,9 +56,9 @@ fn release_all<M: Wake>(m: &M, queue: WaitQueue) -> bool {
     dispatch
 }
 
-/// Slot `+0x84`.
+/// Slot `+0x84`; the caller dispatches after restoring the mask it held across the call.
 #[cfg_attr(feature = "family", inline(never))]
-pub fn delete_flag<M: Wake>(m: &M, id: FlagId) -> Result<(), ObjectStatus> {
+pub fn delete_flag<M: Wake>(m: &M, id: FlagId) -> DispatchDecision {
     let words = id.domain.words();
     let control = words.flag_control(id.slot);
     let config = words.flag_config(id.slot);
@@ -68,18 +75,15 @@ pub fn delete_flag<M: Wake>(m: &M, id: FlagId) -> Result<(), ObjectStatus> {
         dispatch
     })();
     object.release();
-    if dispatch {
-        m.dispatch(0);
-    }
-    Ok(())
+    if dispatch { DispatchDecision::Required } else { DispatchDecision::NotRequired }
 }
 
-/// Slot `+0xd0`.
+/// Slot `+0xd0`; the caller dispatches after restoring the mask it held across the call.
 #[cfg_attr(feature = "family", inline(never))]
 pub fn delete_mailbox<'a, M: Wake>(
     m: &'a M,
     id: MailboxId,
-) -> Result<MessageDrain<'a, M>, ObjectStatus> {
+) -> (MessageDrain<'a, M>, DispatchDecision) {
     let words = id.domain.words();
     let control = words.mailbox_control(id.slot);
     let config = words.mailbox_config(id.slot);
@@ -99,8 +103,6 @@ pub fn delete_mailbox<'a, M: Wake>(
         dispatch
     })();
     object.release();
-    if dispatch {
-        m.dispatch(0);
-    }
-    Ok(MessageDrain { machine: m, next: head })
+    let decision = if dispatch { DispatchDecision::Required } else { DispatchDecision::NotRequired };
+    (MessageDrain { machine: m, next: head }, decision)
 }

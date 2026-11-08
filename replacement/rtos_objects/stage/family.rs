@@ -15,9 +15,9 @@ use crate::objects::locked::{clear_flag, OutWord};
 use crate::objects::matching::{KeepMask, MatchMode, Pattern, WantedMask};
 use crate::objects::message::PriorityLimit;
 use crate::objects::status::ObjectStatus;
-use crate::objects::teardown::{delete_flag, delete_mailbox};
+use crate::objects::teardown::{delete_flag, delete_mailbox, DispatchDecision};
 use crate::objects::timeout::Timeout;
-use crate::objects::wake::{send, set_flag, set_flag_handler};
+use crate::objects::wake::{send, set_flag, set_flag_handler, Wake};
 
 /// Fatal kernel conditions; the discriminant is the A32 diagnostic code retained in r0 at the trap loop.
 #[repr(u32)]
@@ -211,16 +211,13 @@ fn create_flag_entry(id: i32, request_pointer: u32) -> i32 {
 }
 
 #[inline(never)]
-fn delete_flag_entry(id: i32) -> i32 {
+fn delete_flag_entry(id: i32) -> (i32, DispatchDecision) {
     let words = entry_words();
     let slot = match own_flag_slot(EncodedId(id), load(words.context(ENTRY).event_flag_count())) {
         Ok(slot) => slot,
-        Err(status) => return status.code(),
+        Err(status) => return (status.code(), DispatchDecision::NotRequired),
     };
-    match delete_flag(&Cpu, FlagId { domain: ENTRY, slot }) {
-        Ok(()) => 0,
-        Err(status) => status.code(),
-    }
+    (0, delete_flag(&Cpu, FlagId { domain: ENTRY, slot }))
 }
 
 #[inline(never)]
@@ -244,19 +241,15 @@ fn create_mailbox_entry(id: i32, request_pointer: u32) -> i32 {
 }
 
 #[inline(never)]
-fn delete_mailbox_entry(id: i32) -> i32 {
+fn delete_mailbox_entry(id: i32) -> (i32, DispatchDecision) {
     let words = entry_words();
     let slot = match own_mailbox_slot(EncodedId(id), load(words.context(ENTRY).mailbox_count())) {
         Ok(slot) => slot,
-        Err(status) => return status.code(),
+        Err(status) => return (status.code(), DispatchDecision::NotRequired),
     };
-    match delete_mailbox(&Cpu, MailboxId { domain: ENTRY, slot }) {
-        Ok(drain) => {
-            core::mem::drop(drain);
-            0
-        }
-        Err(status) => status.code(),
-    }
+    let (drain, decision) = delete_mailbox(&Cpu, MailboxId { domain: ENTRY, slot });
+    core::mem::drop(drain);
+    (0, decision)
 }
 
 #[derive(Clone, Copy)]
@@ -487,8 +480,11 @@ pub extern "C" fn xm1_rtos_objects_family_flag_create(id: i32, request_pointer: 
 #[link_section = ".text.family_flag_delete"]
 pub extern "C" fn xm1_rtos_objects_family_flag_delete(id: i32) -> i32 {
     let saved = mask_lifecycle();
-    let code = delete_flag_entry(id);
+    let (code, decision) = delete_flag_entry(id);
     restore_lifecycle(saved);
+    if decision == DispatchDecision::Required {
+        Cpu.dispatch(0);
+    }
     code
 }
 
@@ -557,8 +553,11 @@ pub extern "C" fn xm1_rtos_objects_family_mailbox_create(id: i32, request_pointe
 #[link_section = ".text.family_mailbox_delete"]
 pub extern "C" fn xm1_rtos_objects_family_mailbox_delete(id: i32) -> i32 {
     let saved = mask_lifecycle();
-    let code = delete_mailbox_entry(id);
+    let (code, decision) = delete_mailbox_entry(id);
     restore_lifecycle(saved);
+    if decision == DispatchDecision::Required {
+        Cpu.dispatch(0);
+    }
     code
 }
 

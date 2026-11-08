@@ -217,7 +217,7 @@ placementOther DomainB =
   [ (0xd0b00, 0x24), (0xd3640, 0x28), (0xd3668, 0x20), (0xd3688, 0xa0)
   , (0xd3728, 0x34), (0xd375c, 0x48), (0xd37a4, 0x38), (0xd37fc, 0x14)
   , (0xd398c, 0x3c), (0xd39c8, 0x28), (0xd3c04, 0x5c), (0xd3c60, 0x7c)
-  , (0xd3cdc, 0xb0), (0xd3d8c, 0x48), (0xd3f2c, 0x2c), (0xd3fd4, 0x2c)
+  , (0xd3cdc, 0xb0), (0xd3d8c, 0x48), (0xd3f2c, 0x2c), (0xd3fd4, 0x30)
   , (0xd4004, 0xf0), (0xd40f4, 0x80), (0xd4528, 0xcc)
   , (0xd4704, 0xbc), (0xd47c0, 0xe4), (0xd48a4, 0xdc), (0xd808c, 0x70)
   ]
@@ -290,13 +290,13 @@ retainedEntry kind domain = case (kind, domain) of
 
 retainedExtents :: Domain -> [(Word32, Word32)]
 retainedExtents DomainA =
-  [ (0x47604, 0x240), (0x47844, 0x210), (0x47a54, 0x240), (0x47c94, 0x13c), (0x47dd0, 0x270)
+  [ (0x47604, 0x240), (0x47844, 0x210), (0x47a54, 0x240), (0x47c94, 0x13c), (0x47dd0, 0x274)
   , (0x48e38, 0xa4), (0x48edc, 0xc8), (0x48fa4, 0x54), (0x49308, 0x220)
   , (0x49f2c, 0x3c4), (0x4a2f0, 0x27c), (0x4a56c, 0x44c)
   , (0x4b38c, 0x90), (0x4b41c, 0x64), (0x4b480, 0x250), (0x4b6d0, 0x144), (0x4b814, 0x2a4), (0x4bab8, 0x30c)
   ]
 retainedExtents DomainB =
-  [ (0xd75c4, 0x240), (0xd7804, 0x210), (0xd7a14, 0x240), (0xd7c54, 0x13c), (0xd7d90, 0x270)
+  [ (0xd75c4, 0x240), (0xd7804, 0x210), (0xd7a14, 0x240), (0xd7c54, 0x13c), (0xd7d90, 0x274)
   , (0xd8df8, 0xa4), (0xd8e9c, 0xc8), (0xd8f64, 0x54), (0xd92c8, 0x220)
   , (0xd9eec, 0x3c4), (0xda2b0, 0x27c), (0xda52c, 0x44c)
   , (0xdb34c, 0x90), (0xdb3dc, 0x64), (0xdb440, 0x250), (0xdb690, 0x144), (0xdb7d4, 0x2a4), (0xdba78, 0x30c)
@@ -509,12 +509,14 @@ retainedWords facts executing one = case caseRetained one of
           RetainedFixedPoolGet -> fixedPoolWords t ++ (if timed then timerWords (rtPoolTimer t) else [])
           RetainedFixedPoolTimedGet -> fixedPoolWords t ++ timerWords (rtPoolTimer t)
   where
+    classRecord = recordAddress facts executing executing
     semaphoreWords t =
       [ poke (rtSemConfig t + 0x0) 0, poke (rtSemConfig t + 0x4) 0, poke (rtSemConfig t + 0x8) 1, poke (rtSemConfig t + 0xc) 1
       , poke (rtSemControl t) (rtSemControl t), poke (rtSemControl t + 0x4) (rtSemControl t)
       , poke (rtSemControl t + 0x8) (rtSemConfig t), poke (rtSemControl t + 0xc) 0
       , poke (rtSemWait t) 0, poke (rtSemWait t + 0x4) 0, poke (rtSemWait t + 0x8) 0
       , poke (rtSemTimer t) 0
+      , poke (classRecord + 0x4c) (rtSemControl t), poke (classRecord + 0x50) 1
       ]
     dataQueueWords t =
       [ poke (rtDqConfig t + 0x0) 0, poke (rtDqConfig t + 0x4) 1, poke (rtDqConfig t + 0x8) 0, poke (rtDqConfig t + 0xc) 1
@@ -524,6 +526,7 @@ retainedWords facts executing one = case caseRetained one of
       , poke (rtDqRuntime t + 0x14) 0, poke (rtDqRuntime t + 0x18) 0, poke (rtDqRuntime t + 0x1c) 0
       , poke (rtDqWait t) 0, poke (rtDqWait t + 0x4) 0, poke (rtDqWait t + 0x8) 0, poke (rtDqWait t + 0xc) 0
       , poke (rtDqTimer t) 0
+      , poke (classRecord + 0x5c) (rtDqRuntime t), poke (classRecord + 0x60) 1
       ]
     -- The fixed-pool caller loads r0 from [class_record+4], the one-based owner word, and
     -- passes r2 = 0x4005855c + (slot-1)*16; r0 is the word stored at WaitBlock+8, not the record address.
@@ -535,6 +538,7 @@ retainedWords facts executing one = case caseRetained one of
       , poke (rtPoolControl t + 0xc) poolStart, poke (rtPoolControl t + 0x10) 0
       , poke (rtPoolWait t) 0, poke (rtPoolWait t + 0x4) 0, poke (rtPoolWait t + 0x8) 0, poke (rtPoolWait t + 0xc) 0
       , poke (rtPoolTimer t) 0
+      , poke (classRecord + 0x6c) (rtPoolControl t), poke (classRecord + 0x70) 1
       ]
 
 retainedCases :: Facts -> Domain -> [Case]
@@ -1511,9 +1515,9 @@ cases facts _entries executing =
 
     -- Mailbox send, receive and poll.
   , (mk "mailbox-send-empty" MailboxSend) { caseArgs = [(R0, id0 1), (R1, messageAddress 0)], caseMailboxes = [mailbox 1 0 32 0 0], caseMessages = [msg 0 0 0], caseExpect = [res 0, eq (mailControl 1 + factsMailboxControlHead facts) (messageAddress 0), eq (mailControl 1 + factsMailboxControlTail facts) (messageAddress 0), eq (messageAddress 0) 0] }
-  , (mk "mailbox-send-fifo" MailboxSend) { caseArgs = [(R0, id0 1), (R1, messageAddress 1)], caseMailboxes = [mailbox 1 0 32 (messageAddress 0) (messageAddress 0)], caseMessages = [msg 0 0 0, msg 1 0 0], caseExpect = [res 0, eq (messageAddress 0) (messageAddress 1), eq (mailControl 1 + factsMailboxControlTail facts) (messageAddress 1), eq (messageAddress 1) 0] }
+  , (mk "mailbox-send-fifo" MailboxSend) { caseArgs = [(R0, id0 1), (R1, messageAddress 1)], caseMailboxes = [mailbox 1 0 32 (messageAddress 0) (messageAddress 0)], caseMessages = [msg 0 0 0, msg 1 0 0], caseExpect = [res 0, eq (messageAddress 0) (messageAddress 1), eq (messageAddress 1) 0] }
   , (mk "mailbox-send-priority" MailboxSend) { caseArgs = [(R0, id0 1), (R1, messageAddress 1)], caseMailboxes = [mailbox 1 2 32 (messageAddress 0) (messageAddress 2)], caseMessages = [msg 0 (messageAddress 2) 5, msg 1 0 6, msg 2 0 7], caseExpect = [res 0, eq (messageAddress 0) (messageAddress 1), eq (messageAddress 1) (messageAddress 2), eq (mailControl 1 + factsMailboxControlTail facts) (messageAddress 2), eq (messageAddress 2) 0] }
-  , (mk "mailbox-send-priority-equal" MailboxSend) { caseArgs = [(R0, id0 1), (R1, messageAddress 1)], caseMailboxes = [mailbox 1 2 32 (messageAddress 0) (messageAddress 0)], caseMessages = [msg 0 0 5, msg 1 0 5], caseExpect = [res 0, eq (messageAddress 0) (messageAddress 1), eq (mailControl 1 + factsMailboxControlTail facts) (messageAddress 1), eq (messageAddress 1) 0] }
+  , (mk "mailbox-send-priority-equal" MailboxSend) { caseArgs = [(R0, id0 1), (R1, messageAddress 1)], caseMailboxes = [mailbox 1 2 32 (messageAddress 0) (messageAddress 0)], caseMessages = [msg 0 0 5, msg 1 0 5], caseExpect = [res 0, eq (messageAddress 0) (messageAddress 1), eq (messageAddress 1) 0] }
   , (mk "mailbox-send-bad-priority" MailboxSend) { caseArgs = [(R0, id0 1), (R1, messageAddress 0)], caseMailboxes = [mailbox 1 2 32 0 0], caseMessages = [msg 0 0 0], caseExpect = [res (0xffffffef), eq (mailControl 1 + factsMailboxControlHead facts) 0] }
   , (mk "mailbox-send-waiter-arrival" MailboxSend) { caseArgs = [(R0, id0 1), (R1, messageAddress 0)], caseMailboxes = [mailbox 1 0 32 0 0], caseMessages = [msg 0 0 0], caseWaiters = [waiterPeer 5 0 0], caseExpect = [res 0, eq (mailboxWait facts (peer executing) 2 + factsMailboxWaitMessage facts) (messageAddress 0), readyCheck (peer executing) 5 (taskOf (peer executing) 2), eq (bankAddress (peer executing)) 0x01000000, eq (bankAddress executing) 0] }
   , (mk "mailbox-receive-ready" MailboxReceive) { caseArgs = [(R0, id0 1), (R1, outWord)], caseMailboxes = [mailbox 1 0 32 (messageAddress 0) (messageAddress 0)], caseMessages = [msg 0 0 0], caseWords = [poke outWord 0xdead], caseExpect = [res 0, eq outWord (messageAddress 0), eq (mailControl 1 + factsMailboxControlHead facts) 0] }

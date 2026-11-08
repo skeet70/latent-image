@@ -89,8 +89,8 @@ SECTIONS {
   .family_flag_set : {
     KEEP(*(.text.family_flag_set))
     __family_flag_set_body_end = .;
-    *(.text._RINvNtNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter7objects6create11create_flagNtB6_3CpuEB6_)
     *(.text._RINvNtNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter7objects4wake13set_flag_modeNtB6_3CpuEB6_)
+    *(.text._RINvNtNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter7objects8teardown11delete_flagNtB6_3CpuEB6_)
     __family_flag_set_shared_end = .;
     . = ORIGIN(family_flag_set) + LENGTH(family_flag_set);
   } > family_flag_set =0xf000f0e7
@@ -98,7 +98,7 @@ SECTIONS {
     KEEP(*(.text.family_flag_set_handler))
     __family_flag_set_handler_body_end = .;
     *(.text._RINvNtNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter7objects4wake12queue_insertNtB6_3CpuEB6_)
-    *(.text._RINvNtNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter7objects8teardown11delete_flagNtB6_3CpuEB6_)
+    *(.text._RINvNtNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter7objects6create11create_flagNtB6_3CpuEB6_)
     *(.text._RINvNtNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter7objects8teardown14delete_mailboxNtB6_3CpuEB6_)
     *(.text._RNvNtNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter7objects2id18resolve_mailbox_in)
     __family_flag_set_handler_shared_end = .;
@@ -133,13 +133,14 @@ SECTIONS {
     KEEP(*(.text.family_flag_timed_wait))
     __family_flag_timed_wait_body_end = .;
     *(.text._RNvNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter6family11flag_router)
-    *(.text.OUTLINED_FUNCTION_7)
     __family_flag_timed_wait_shared_end = .;
     . = ORIGIN(family_flag_timed_wait) + LENGTH(family_flag_timed_wait);
   } > family_flag_timed_wait =0xf000f0e7
   .family_mailbox_create : {
     KEEP(*(.text.family_mailbox_create))
     __family_mailbox_create_body_end = .;
+    *(.text.OUTLINED_FUNCTION_7)
+    *(.rodata .rodata.*)
 
     __family_mailbox_create_shared_end = .;
     . = ORIGIN(family_mailbox_create) + LENGTH(family_mailbox_create);

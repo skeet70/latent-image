@@ -52,6 +52,6 @@ pub use matching::{check, KeepMask, MatchMode, Pattern, WantedMask};
 pub use message::{MessagePriority, PriorityLimit};
 pub use order::{precedes, QueueOrder};
 pub use status::{ObjectStatus, WaitOutcome};
-pub use teardown::{delete_flag, delete_mailbox, MessageDrain};
+pub use teardown::{delete_flag, delete_mailbox, DispatchDecision, MessageDrain};
 pub use timeout::Timeout;
 pub use wake::{send, set_flag, set_flag_handler, DispatchTarget, SchedulerGuard, Selection, Wake, WakeMode};

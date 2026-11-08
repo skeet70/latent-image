@@ -2021,7 +2021,11 @@ fn delete_flag_releases_a_queued_waiter_with_minus_49() {
         0,
         0,
     );
-    assert_eq!(delete_flag(&sim, id), Ok(()));
+    if delete_flag(&sim, id) == DispatchDecision::Required {
+        let saved = sim.mask_interrupts();
+        sim.dispatch(0);
+        sim.restore_interrupts(saved);
+    }
     assert_eq!(sim.word(wait.base().result()), 0xffff_ffcf);
     assert_eq!(sim.word(task.state()) & 0xff, 0x01);
     assert_eq!(sim.ready(Domain::A, 5), task.0 .0);
@@ -2053,7 +2057,11 @@ fn delete_flag_cancels_the_timed_waiters_timer() {
         timer.0,
     );
     sim.arm(timer);
-    assert_eq!(delete_flag(&sim, id), Ok(()));
+    if delete_flag(&sim, id) == DispatchDecision::Required {
+        let saved = sim.mask_interrupts();
+        sim.dispatch(0);
+        sim.restore_interrupts(saved);
+    }
     assert!(!sim.armed(timer));
     assert_eq!(sim.word(wait.base().result()), 0xffff_ffcf);
 }
@@ -2069,7 +2077,13 @@ fn delete_mailbox_drains_queued_messages_in_delivery_order() {
     let second = Message(GuestAddress(0x4000_0310));
     send(&sim, id, first, None);
     send(&sim, id, second, None);
-    let drained: Vec<Message> = delete_mailbox(&sim, id).unwrap().collect();
+    let (drain, decision) = delete_mailbox(&sim, id);
+    if decision == DispatchDecision::Required {
+        let saved = sim.mask_interrupts();
+        sim.dispatch(0);
+        sim.restore_interrupts(saved);
+    }
+    let drained: Vec<Message> = drain.collect();
     assert_eq!(drained, vec![first, second]);
     let control = words.mailbox_control(slot);
     assert_eq!(sim.word(control.head()), 0);
@@ -2098,7 +2112,13 @@ fn delete_mailbox_releases_a_queued_receiver() {
         OutWord(GuestAddress(0x4000_0600)),
         Timeout::Forever,
     ));
-    let drained: Vec<Message> = delete_mailbox(&sim, id).unwrap().collect();
+    let (drain, decision) = delete_mailbox(&sim, id);
+    if decision == DispatchDecision::Required {
+        let saved = sim.mask_interrupts();
+        sim.dispatch(0);
+        sim.restore_interrupts(saved);
+    }
+    let drained: Vec<Message> = drain.collect();
     assert!(drained.is_empty());
     let wait = words.mailbox_wait(task_slot);
     assert_eq!(sim.word(wait.base().result()), 0xffff_ffcf);
@@ -2131,7 +2151,11 @@ fn delete_releases_a_cross_domain_waiter_in_its_domain() {
         0,
         0,
     );
-    assert_eq!(delete_flag(&sim, id), Ok(()));
+    if delete_flag(&sim, id) == DispatchDecision::Required {
+        let saved = sim.mask_interrupts();
+        sim.dispatch(0);
+        sim.restore_interrupts(saved);
+    }
     assert_eq!(sim.ready(Domain::B, 5), task.0 .0);
     assert_eq!(sim.ready(Domain::A, 5), 0);
     assert!(sim.doorbell(1));
@@ -2171,7 +2195,13 @@ fn delete_mailbox_releases_two_receivers_in_their_domains() {
     ));
     let timer_b = b.mailbox_timer(slot_b);
     assert!(sim.armed(timer_b));
-    let drained: Vec<Message> = delete_mailbox(&sim, mailbox).unwrap().collect();
+    let (drain, decision) = delete_mailbox(&sim, mailbox);
+    if decision == DispatchDecision::Required {
+        let saved = sim.mask_interrupts();
+        sim.dispatch(0);
+        sim.restore_interrupts(saved);
+    }
+    let drained: Vec<Message> = drain.collect();
     assert!(drained.is_empty());
     assert_eq!(sim.word(a.mailbox_wait(slot_a).base().result()), 0xffff_ffcf);
     assert_eq!(sim.word(b.mailbox_wait(slot_b).base().result()), 0xffff_ffcf);
