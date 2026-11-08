@@ -30,7 +30,7 @@ import System.Directory
   , removeFile
   )
 import System.Exit (exitFailure)
-import System.FilePath ((</>), takeFileName)
+import System.FilePath ((</>), takeDirectory, takeFileName)
 import System.Posix.Process (getProcessID)
 
 check :: String -> Bool -> IO Bool
@@ -124,6 +124,10 @@ runRoot root (label, role) = do
   B.appendFile (tamperedReceipt </> "e2e-observation-0.json") "\n"
   tampered <- verifyReceipt (fixtureExpected fixture) tamperedReceipt
   tamperedOk <- expectLeft (label ++ " tampered observation document refuses reuse") tampered
+  missingList <- observationListControl fixture receipt Nothing
+  missingListOk <- expectLeft (label ++ " missing observation list refuses reuse") missingList
+  emptyList <- observationListControl fixture receipt (Just [])
+  emptyListOk <- expectLeft (label ++ " empty observation list refuses reuse") emptyList
   changed <- mutateAndVerify fixture receipt "e2e-result.json" (\bytes -> bytes <> "\n")
   changedOk <- expectLeft (label ++ " changed receipt file refuses reuse") changed
   missing <- partialReceipt fixture
@@ -164,6 +168,8 @@ runRoot root (label, role) = do
   alteredArchiveOk <- if role == OwnedRole then expectLeft (label ++ " altered owned archive refuses") alteredArchive else pure True
   alteredSource <- if role == OwnedRole then badSourceIdentityDigest fixture else pure (Right ())
   alteredSourceOk <- if role == OwnedRole then expectLeft (label ++ " altered source identity refuses") alteredSource else pure True
+  unboundSidecar <- if role == OwnedRole then badSourceIdentityBytes fixture else pure (Right ())
+  unboundSidecarOk <- if role == OwnedRole then expectLeft (label ++ " source sidecar bytes are not bound to the manifest") unboundSidecar else pure True
   missingChecker <- if role == OwnedRole then verifyInputs ((fixtureExpected fixture) { expectedChecker = Just (fixtureRoot fixture </> "missing-checker") }) else pure (Right ())
   missingCheckerOk <- if role == OwnedRole then expectLeft (label ++ " missing allowlist checker refuses") missingChecker else pure True
   failingReport <- if role == OwnedRole then badPrelinkedFailingReport fixture else pure (Right ())
@@ -184,7 +190,7 @@ runRoot root (label, role) = do
     [ ("mismatched qualification", "e2e-result.json", "outcome", J.String mismatchedOutcome)
     , ("missing lifetime coverage", "e2e-modal-observation.json", "whole_installed_lifetime_coverage", J.Bool False)
     ]
-  pure ([admitted, admittedFile, reusedOk, tamperedOk, unboundSourcesOk, changedOk, missingOk, wrongTrajectoryOk, wrongRoleOk, malformedOk, emptyOk, prelinkedBaseOk, prelinkedSizeOk, mutatedPrelinkedOk
+  pure ([admitted, admittedFile, reusedOk, tamperedOk, missingListOk, emptyListOk, unboundSidecarOk, unboundSourcesOk, changedOk, missingOk, wrongTrajectoryOk, wrongRoleOk, malformedOk, emptyOk, prelinkedBaseOk, prelinkedSizeOk, mutatedPrelinkedOk
        , alteredElfOk, alteredRuntimeOk, alteredInputOk, alteredReportOk, alteredProofOk, alteredCheckerOk, alteredArchiveOk, alteredSourceOk, missingCheckerOk, failingReportOk, imported] ++ refused)
 
 buildFixture :: FilePath -> FilePath -> Role -> IO Fixture
@@ -227,7 +233,12 @@ buildFixture directory receipt role = do
     , "fujimodRamPushBridge = \"" ++ sdk ++ "/bin/fujimod-xm1-ram-push\""
     , "fujimodRun = \"" ++ sdk ++ "/share/fujimod-xm1/xm1-150.json\""
     ])
-  BL.writeFile sourceIdentityPath (J.encode (J.object [K.fromString textPath J..= digestBytes code]) <> "\n")
+  let sources = [(relative, B.pack [fromIntegral index, 0]) | (index, relative) <- zip [1 :: Int ..] renderSourceIdentityPaths]
+  forM_ sources $ \(relative, bytes) -> do
+    let path = directory </> relative
+    createDirectoryIfMissing True (takeDirectory path)
+    B.writeFile path bytes
+  BL.writeFile sourceIdentityPath (J.encode (J.object [K.fromString relative J..= digestBytes bytes | (relative, bytes) <- sources]) <> "\n")
   let config = J.object
         [ "version" J..= (1 :: Word32)
         , "role" J..= role
@@ -487,6 +498,35 @@ badSourceIdentityDigest fixture = case expectedSourceIdentity (fixtureExpected f
     B.writeFile copy wrong
     verifyInputs ((fixtureExpected fixture) { expectedSourceIdentity = Just copy })
   Nothing -> pure (Right ())
+
+observationListControl :: Fixture -> FilePath -> Maybe [J.Value] -> IO (Either String ReceiptIdentity)
+observationListControl fixture receipt change = do
+  let copy = fixtureRoot fixture </> ("observation-list-" ++ maybe "missing" (const "empty") change)
+  copyTreeForTest receipt copy
+  let path = copy </> "e2e-result.json"
+  bytes <- B.readFile path
+  case J.eitherDecodeStrict' bytes of
+    Right (J.Object fields) -> do
+      let updated = case change of
+            Nothing -> KM.delete "observations" fields
+            Just rows -> KM.insert "observations" (J.toJSON rows) fields
+      BL.writeFile path (J.encode (J.Object updated) <> "\n")
+    _ -> pure ()
+  verifyReceipt (fixtureExpected fixture) copy
+
+badSourceIdentityBytes :: Fixture -> IO (Either String ())
+badSourceIdentityBytes fixture = case expectedSourceIdentity (fixtureExpected fixture) of
+  Nothing -> pure (Right ())
+  Just path -> do
+    let copy = fixtureRoot fixture </> "unbound-source-sidecar.json"
+    bytes <- B.readFile path
+    case J.eitherDecodeStrict' bytes of
+      Right (J.Object fields) -> case KM.toList fields of
+        (key, _) : _ -> do
+          BL.writeFile copy (J.encode (J.Object (KM.insert key (J.String (T.replicate 64 "0")) fields)) <> "\n")
+          verifyInputs ((fixtureExpected fixture) { expectedSourceIdentity = Just copy })
+        [] -> pure (Right ())
+      _ -> pure (Right ())
 
 mutateRenderSources :: B.ByteString -> B.ByteString
 mutateRenderSources bytes = case J.eitherDecodeStrict' bytes of

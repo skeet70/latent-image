@@ -33,6 +33,7 @@ module Emulation.RenderPairAdmission
   , writeOwnedConfig
   , ownedConfigFromElf
   , readDiagnosticConfig
+  , renderSourceIdentityPaths
   ) where
 
 import qualified ArmElf as ELF
@@ -68,7 +69,7 @@ import System.Directory
   , removeFile
   , renameFile
   )
-import System.FilePath ((</>), isAbsolute, splitDirectories, takeDirectory, takeFileName)
+import System.FilePath ((</>), splitDirectories, takeDirectory, takeFileName)
 import System.IO.Error (catchIOError, isDoesNotExistError)
 
 data Role = StockRole | OwnedRole deriving (Eq, Show)
@@ -392,24 +393,26 @@ checkSourceIdentity expected = case (expectedRole expected, expectedSourceIdenti
           Right bindings | M.null (M.fromList bindings) -> pure (Left "source identity is empty")
           Right bindings
             | expectedRole expected == OwnedRole
-            , all (not . isAbsolute) (map fst bindings)
             , sort (map fst bindings) /= sort renderSourceIdentityPaths ->
                 pure (Left "source identity does not name the renderer sources")
-            | otherwise -> go (M.toList (M.fromList bindings))
+            | otherwise -> go path (M.toList (M.fromList bindings))
         Right _ -> pure (Left "source identity is not an object")
  where
   parseBinding (key, J.String text) = do
     digest <- either Left Right (parseDigest text)
     pure (T.unpack (K.toText key), digest)
   parseBinding (key, _) = Left ("source identity value is not a string: " ++ T.unpack (K.toText key))
-  go [] = pure (Right ())
-  go ((relative, expectedDigest) : rest) = do
-    present <- doesFileExist relative
-    if not present then pure (Left ("source identity names missing file " ++ relative)) else do
-      actual <- digestFile relative
+  go _ [] = pure (Right ())
+  go sidecarPath ((relative, expectedDigest) : rest) = do
+    let local = takeDirectory sidecarPath </> relative
+    localPresent <- doesFileExist local
+    let resolved = if localPresent then local else relative
+    present <- doesFileExist resolved
+    if not present then pure (Left ("source identity names missing file " ++ resolved)) else do
+      actual <- digestFile resolved
       if actual /= expectedDigest then pure (Left
         ("source identity of " ++ relative ++ " is " ++ T.unpack (digestText actual)
-          ++ ", the frozen build used " ++ T.unpack (digestText expectedDigest))) else go rest
+          ++ ", the frozen build used " ++ T.unpack (digestText expectedDigest))) else go sidecarPath rest
 
 checkOwnedInputs :: Expected -> IO (Either String ())
 checkOwnedInputs expected = case expectedRole expected of
@@ -972,8 +975,7 @@ verifyContents expected directory = do
                     case bound of
                       Left problem -> pure (Left problem)
                       Right verified
-                        | not (null verified)
-                        , map (takeFileName . fst) verified
+                        | map (takeFileName . fst) verified
                             /= ["e2e-observation-" ++ show index ++ ".json" | index <- indices] ->
                             pure (Left "observation references do not match the receipt's numbered documents")
                         | otherwise -> do
