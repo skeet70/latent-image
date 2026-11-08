@@ -1,6 +1,18 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_staticlib")
 
 package(default_visibility = ["//visibility:public"])
+
+[
+    xm1_rust_staticlib(
+        name = "s3d-%s-rust" % domain,
+        src = "s3d_abi.rs",
+        crate_name = "xm1_rtos_scheduler_s3d",
+        data = ["//replacement/rtos_scheduler:src/s3d.rs", "//replacement/rtos_layout:src/lib.rs", "//replacement/rtos_reservation:src/lib.rs"],
+        rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain],
+    )
+    for domain in ["a", "b"]
+]
 
 haskell_library(
     name = "scheduler-artifact",

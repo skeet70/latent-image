@@ -14,7 +14,8 @@ fn unlink<M: Machine>(m: &M, task: Task) {
 
 /// Slot `+0xf8`. Range and stride are checked before the lock as stock does; the owned body also
 /// refuses a block that is above the bump frontier or already on the free list.
-#[inline(always)]
+#[inline(never)]
+#[link_section = ".text.fp_body_release"]
 pub fn release<M: Wake + DivMod>(m: &M, id: PoolId, block: BlockAddress) -> Result<(), PoolStatus> {
     let words = id.domain.words();
     let config = words.fixed_pool_config(id.slot);
@@ -45,7 +46,8 @@ pub fn release<M: Wake + DivMod>(m: &M, id: PoolId, block: BlockAddress) -> Resu
     result.map(|_| ())
 }
 
-#[inline(always)]
+#[inline(never)]
+#[link_section = ".text.fp_body_release_locked"]
 fn release_locked<M: Wake + DivMod>(
     m: &M,
     address: u32,

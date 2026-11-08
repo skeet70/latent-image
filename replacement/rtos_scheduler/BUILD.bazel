@@ -198,3 +198,44 @@ genrule(
     cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --crate-name=xm1_rtos_scheduler --crate-type=rlib -o $@ $(location src/lib.rs)",
     tools = ["@lab_rustc//:bin/rustc"],
 )
+
+exports_files(["regions-s3d.json", "s3d-a.ld", "s3d-b.ld"])
+
+[
+    xm1_rust_elf(
+        name = "s3d-%s" % domain,
+        rust_staticlib = "//replacement/rtos_scheduler/stage:s3d-%s-rust" % domain,
+        entry = "s3d_terminate",
+        extra_ldflags = [
+            "-Wl,--gc-sections",
+            "-Wl,--orphan-handling=error",
+        ],
+        link_script = "s3d-%s.ld" % domain,
+    )
+    for domain in ["a", "b"]
+]
+
+genrule(
+    name = "s3d-host-tests-build",
+    srcs = [
+        "src/s3d.rs",
+        "src/s3d_tests.rs",
+        "//replacement/rtos_layout:src/lib.rs",
+        "//replacement/rtos_reservation:src/lib.rs",
+    ],
+    outs = ["s3d-host-tests-bin"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location src/s3d.rs) -o $@",
+    executable = True,
+    tools = [
+        "@lab_clang//:bin/clang",
+        "@lab_rustc//:bin/rustc",
+    ],
+)
+
+sh_test(
+    name = "s3d-host-tests",
+    size = "small",
+    srcs = ["//emulation:recovery-task-state-tests.sh"],
+    args = ["$(location :s3d-host-tests-build)"],
+    data = [":s3d-host-tests-build"],
+)

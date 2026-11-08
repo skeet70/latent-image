@@ -1,0 +1,25 @@
+{
+  "fill_word": "0xe7f000f0",
+  "domains": {
+    "a": {
+      "regions": [
+        {"start": "0x412cc", "end": "0x412e8", "entries": []},
+        {"start": "0x412e8", "end": "0x41304", "entries": []},
+        {"start": "0x41304", "end": "0x41320", "entries": []},
+        {"start": "0x427d4", "end": "0x427fc", "entries": []},
+        {"start": "0x427fc", "end": "0x42828", "entries": []},
+        {"start": "0x42828", "end": "0x42830", "entries": []}
+      ]
+    },
+    "b": {
+      "regions": [
+        {"start": "0xd12cc", "end": "0xd12e8", "entries": []},
+        {"start": "0xd12e8", "end": "0xd1304", "entries": []},
+        {"start": "0xd1304", "end": "0xd1320", "entries": []},
+        {"start": "0xd27d4", "end": "0xd27fc", "entries": []},
+        {"start": "0xd27fc", "end": "0xd2828", "entries": []},
+        {"start": "0xd2828", "end": "0xd2830", "entries": []}
+      ]
+    }
+  }
+}

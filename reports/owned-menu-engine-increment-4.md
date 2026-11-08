@@ -83,7 +83,7 @@ Each bound refuses with `NotOwned::RowBounds` before any call.
 
 - `openable FramedRefused` is replaced by the three framed checks above for kinds 1, `0xe` and `0xf`; `FramedTarget` names a framed step whose target fails them; `FramedSource` stays for kinds `0xa` and `0xb`.
 - The guest checker fails a run on an entry to the adapter's `seek` call site (`rb_menu_engine_call_seek`, `replacement/menu_engine/adapter/mod.rs:166`) for an event its derivation owns, as it does for the fallback call, except for a `seek` entry that follows a `kind_switch` service entry in the same event (the shim "Stock kind switch and seek as services").
-- `oracle.jq` renders each config as for increment 3. The `framed-open` paths start from the live view and dispatch no owned controller-75 action before the key, so they take `--argjson sample` (OK, BACK) like `frame-pop-down` (`replacement/README.md`, increment 3) **[INFERENCE]**.
+- `oracle.jq` renders each config as for increment 3. The `framed-open` paths start from the live view and dispatch no owned controller-75 action before the key, so they take `--argjson sample` (OK, BACK) like `frame-pop-down` ([increment-3 results](owned-menu-engine-increment-3.md)) **[INFERENCE]**.
 
 ### Extractor
 
