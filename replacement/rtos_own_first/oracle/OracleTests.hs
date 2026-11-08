@@ -4,11 +4,13 @@
 -- owned body on at least one case, and the owned body and the equivalents match it on every case.
 module Main (main) where
 
-import Control.Exception (SomeException, try)
+import Control.Exception (IOException, try)
 import Control.Monad (forM, forM_, unless)
-import Data.Aeson (Value (Null), eitherDecodeStrict', object, (.=))
+import Data.Aeson (Value (Null, Object, String), eitherDecodeStrict', encode, object, (.=))
+import qualified Data.Aeson.KeyMap as KM
 import Data.Bits (complement, (.&.))
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Lazy as BL
 import Data.Char (isAsciiLower, isDigit)
 import Data.Either (isLeft, isRight)
 import Data.List (nub, sort)
@@ -29,7 +31,10 @@ import Emulation.NativeObservation
   , WriteBytes (..)
   , registerLabels
   )
+import Emulation.OwnedCase (CaseId (..))
+import Emulation.Sha256 (parseSha256Hex)
 import FujiAF.Host (get, list)
+import qualified FujiAF.Host as Host
 import Replacement.RtosOwnFirst.Artifact (LinkedDomain (..))
 import Replacement.RtosOwnFirst.Assembly
 import Replacement.RtosOwnFirst.Command
@@ -333,8 +338,8 @@ generatedChecks runner temporary fill domain table owned =
                   recordedOriginal = RecordedCase (ControlRole control) domain RecordedOriginal (shrinkOriginalLabel report) originalKinds (map differenceText (shrinkOriginalDifferences report)) (shrinkOriginalBatches report)
                   recordedReduced = RecordedCase (ControlRole control) domain RecordedReduced (shrinkReducedLabel report) replayKinds (map differenceText (shrinkReducedDifferences report)) (shrinkReducedBatches report)
                   replayWork = temporary </> "replay-" ++ domainLabel domain
-                  originalReport = replayReferenceBatch (shrinkOriginalBatches report) </> shrinkOriginalLabel report ++ ".native-result.json"
-                  reducedReport = replayReferenceBatch (shrinkReducedBatches report) </> shrinkReducedLabel report ++ ".native-result.json"
+                  originalReport = replayReferenceBatch (shrinkOriginalBatches report) </> caseIdText (shrinkOriginalLabel report) ++ ".native-result.json"
+                  reducedReport = replayReferenceBatch (shrinkReducedBatches report) </> caseIdText (shrinkReducedLabel report) ++ ".native-result.json"
               originalBytes <- B.readFile originalReport
               reducedBytes <- B.readFile reducedReport
               let fixtureName = "unrelated-fixture-" ++ domainLabel domain ++ ".txt"
@@ -348,7 +353,7 @@ generatedChecks runner temporary fill domain table owned =
               fixturePreserved <- doesFileExist (fixtureSource </> fixtureName)
               fixtureCopied <- containsFileNamed replayWork fixtureName
               wrongBoundary <- replayCase runner (temporary </> "replay-wrong-" ++ domainLabel domain) recordedReduced {recordedBoundary = [StatusKind]}
-              runnerHash <- runnerDigest runner
+              runnerHash <- runnerDigest runner >>= either fail pure . parseSha256Hex
               let incompleteSource = temporary </> "replay-incomplete-source-" ++ domainLabel domain
               copyDirectory (replaySubjectBatch (shrinkReducedBatches report)) incompleteSource
               preparedIncomplete <- preflightCase runnerHash recordedReduced {recordedBatches = ReplayBatches (replayReferenceBatch (shrinkReducedBatches report)) incompleteSource}
@@ -357,17 +362,22 @@ generatedChecks runner temporary fill domain table owned =
                 artifact : _ -> removeFile (incompleteSource </> artifact)
                 [] -> fail ("no artifact to remove in " ++ incompleteSource)
               incompleteResult <- executeCase runner (temporary </> "replay-incomplete-work-" ++ domainLabel domain) preparedIncomplete
+              let changedSource = temporary </> "replay-changed-source-" ++ domainLabel domain
+              copyDirectory (replaySubjectBatch (shrinkReducedBatches report)) changedSource
+              preparedChanged <- preflightCase runnerHash recordedReduced {recordedBatches = ReplayBatches (replayReferenceBatch (shrinkReducedBatches report)) changedSource}
+              changeInitialR0 changedSource
+              changedAfterPreflight <- executeCase runner (temporary </> "replay-changed-work-" ++ domainLabel domain) preparedChanged
               renamed <-
                 try
-                  (loadBatchRuns runner (replayReferenceBatch (shrinkReducedBatches report)) (const "changed-binding") domain [(shrinkOriginalKey report, shrinkReducedRow report)])
-                  :: IO (Either SomeException (M.Map CaseKey Run))
+                  (loadBatchRuns runner (replayReferenceBatch (shrinkReducedBatches report)) (const (CaseId "changed-binding")) domain [(shrinkOriginalKey report, shrinkReducedRow report)])
+                  :: IO (Either IOException (M.Map CaseKey Run))
               corrupted <- corruptBatch (replaySubjectBatch (shrinkReducedBatches report)) (temporary </> "corrupt-" ++ domainLabel domain)
               changedCase <-
                 try
                   (replayCase runner replayWork recordedReduced {recordedBatches = ReplayBatches (replayReferenceBatch (shrinkReducedBatches report)) corrupted})
-                  :: IO (Either SomeException ReplayCaseResult)
-              changedRunner <- try (replayCase "/bin/true" replayWork recordedReduced) :: IO (Either SomeException ReplayCaseResult)
-              missing <- try (replayCase runner replayWork recordedReduced {recordedCaseId = "missing-case"}) :: IO (Either SomeException ReplayCaseResult)
+                  :: IO (Either IOException ReplayCaseResult)
+              changedRunner <- try (replayCase "/bin/true" replayWork recordedReduced) :: IO (Either IOException ReplayCaseResult)
+              missing <- try (replayCase runner replayWork recordedReduced {recordedCaseId = CaseId "missing-case"}) :: IO (Either IOException ReplayCaseResult)
               sequence
                 [ check "generated corpus: the reference returns" (generatedReferenceReturned result)
                 , check "generated corpus: the +0x16c control differs on a returned case" (outcomeDifferingReturned (subjectOutcome subject) > 0)
@@ -381,6 +391,7 @@ generatedChecks runner temporary fill domain table owned =
                 , check "replay: unrelated source files are not copied" (fixturePreserved && not fixtureCopied)
                 , check "replay: a wrong typed boundary does not reproduce" (not (replayReproduces wrongBoundary))
                 , check "replay: an execution failure is incomplete and not reproduced" (case replayStatus incompleteResult of ReplayIncomplete _ -> True; _ -> False)
+                , check "replay: an input changed after preflight is incomplete" (case replayStatus changedAfterPreflight of ReplayIncomplete _ -> True; _ -> False)
                 , check "replay: a changed case byte is rejected before execution" (case changedCase of Left _ -> True; Right _ -> False)
                 , check "replay: a changed runner is rejected before execution" (case changedRunner of Left _ -> True; Right _ -> False)
                 , check "replay: a missing recorded case is rejected" (case missing of Left _ -> True; Right _ -> False)
@@ -390,6 +401,21 @@ generatedChecks runner temporary fill domain table owned =
           _ -> (: []) <$> check "generated corpus: one subject result" False
     (Right _, []) -> (: []) <$> check "generated corpus: no +0x16c control" False
     (Left problem, _) -> (: []) <$> check ("generated corpus: " ++ problem) False
+
+changeInitialR0 :: FilePath -> IO ()
+changeInitialR0 directory = do
+  batch <- B.readFile (directory </> "batch.json") >>= either fail pure . eitherDecodeStrict'
+  entry <- case list (get batch "cases") of
+    [single] -> pure single
+    _ -> fail "expected one reduced case"
+  let path = directory </> Host.str (get entry "path")
+  value <- B.readFile path >>= either fail pure . eitherDecodeStrict'
+  case value of
+    Object fields -> case KM.lookup "registers" fields of
+      Just (Object registers) ->
+        BL.writeFile path (encode (Object (KM.insert "registers" (Object (KM.insert "r0" (String "0x12345678") registers)) fields)))
+      _ -> fail "case has no register object"
+    _ -> fail "case is not an object"
 
 copyDirectory :: FilePath -> FilePath -> IO ()
 copyDirectory source destination = do

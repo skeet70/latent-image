@@ -716,18 +716,18 @@ runSlot runner directory role domain slot = runRows runner directory role domain
 -- | 'runSlot' over the given rows of the slot's grid.
 runRows :: FilePath -> FilePath -> String -> Domain -> Slot -> [CaseKey] -> Body -> IO (M.Map CaseKey Run)
 runRows runner directory role domain slot selected =
-  runRowsWith runner directory (caseLabel role domain slot) domain slot
+  runRowsWith runner directory (CaseId . caseLabel role domain slot) domain slot
     [(key, row) | key <- selected, Just row <- [M.lookup key grid]]
   where
     grid = M.fromList (zip (map CaseKey [0 ..]) (caseGrid slot))
 
 -- | Runs explicit rows against @body@, one runner session per 4096 cases, with @labelOf@ naming each
 -- case inside its batch directory.
-runRowsWith :: FilePath -> FilePath -> (CaseKey -> String) -> Domain -> Slot -> [(CaseKey, Row)] -> Body -> IO (M.Map CaseKey Run)
+runRowsWith :: FilePath -> FilePath -> (CaseKey -> CaseId) -> Domain -> Slot -> [(CaseKey, Row)] -> Body -> IO (M.Map CaseKey Run)
 runRowsWith runner directory labelOf domain slot rows body = do
   results <- forM (zip [0 :: Int ..] (chunks' batchLimit rows)) $ \(batch, batchRows) -> do
     let batchDirectory = directory </> ("batch-" ++ show batch)
-    _ <- writeBatch batchDirectory [caseSpec domain body (labelOf key) slot row | (key, row) <- batchRows]
+    _ <- writeBatch batchDirectory [caseSpec domain body (caseIdText (labelOf key)) slot row | (key, row) <- batchRows]
     loadBatchRuns runner batchDirectory labelOf domain batchRows
   pure (M.unions results)
   where
@@ -736,22 +736,23 @@ runRowsWith runner directory labelOf domain slot rows body = do
       (chunk, rest) -> chunk : chunks' size rest
 
 -- | Re-executes an existing batch directory, which rejects a case the expected labels do not name.
-loadBatchRuns :: FilePath -> FilePath -> (CaseKey -> String) -> Domain -> [(CaseKey, Row)] -> IO (M.Map CaseKey Run)
+loadBatchRuns :: FilePath -> FilePath -> (CaseKey -> CaseId) -> Domain -> [(CaseKey, Row)] -> IO (M.Map CaseKey Run)
 loadBatchRuns runner batchDirectory labelOf domain rows = do
   observed <- loadObservedBatch runner (batchDirectory </> "batch.json")
   unless (length observed == length rows) (fail (batchDirectory ++ ": observation count differs from the case count"))
-  M.fromList <$> forM observed (\(CaseId label, observation) -> do
-    key <- maybe (fail (batchDirectory ++ ": unknown case " ++ label)) pure (lookup label labelled)
+  M.fromList <$> forM observed (\(ident, observation) -> do
+    key <- maybe (fail (batchDirectory ++ ": unknown case " ++ caseIdText ident)) pure (lookup ident labelled)
     row <- maybe (fail (batchDirectory ++ ": unknown row " ++ show key)) pure (lookup key rows)
-    run <- observedRun batchDirectory label domain (callerSp (rowStack row)) observation
+    run <- observedRun batchDirectory ident domain (N.GuestAddress (fromIntegral (callerSp (rowStack row)))) observation
     pure (key, run))
   where
     labelled = [(labelOf key, key) | (key, _) <- rows]
 
 -- | The compared run of one observation, using the report's ordered write log.
-observedRun :: FilePath -> String -> Domain -> Word32 -> N.NativeObservation -> IO Run
-observedRun batchDirectory label domain incomingSp observation = do
-  let reportPath = batchDirectory </> label ++ ".native-result.json"
+observedRun :: FilePath -> CaseId -> Domain -> N.GuestAddress -> N.NativeObservation -> IO Run
+observedRun batchDirectory ident domain entrySp observation = do
+  let reportPath = batchDirectory </> caseIdText ident ++ ".native-result.json"
+      incomingSp = fromIntegral (N.guestAddress entrySp)
       failWith problem = fail (reportPath ++ ": " ++ problem)
   reportBytes <- B.readFile reportPath
   report <- either failWith pure (eitherDecodeStrict' reportBytes :: Either String Value)

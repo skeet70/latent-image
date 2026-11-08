@@ -8,7 +8,7 @@ module Replacement.RtosOwnFirst.Replay
   ( RecordedKind (..)
   , recordedKindText
   , RecordedCase (..)
-  , PreparedCase (..)
+  , PreparedCase
   , ReplayStatus (..)
   , ReplayCaseResult (..)
   , replayReproduces
@@ -19,16 +19,16 @@ module Replacement.RtosOwnFirst.Replay
   , replayCase
   ) where
 
-import Control.Exception (IOException, SomeException, try)
+import Control.Exception (IOException, SomeAsyncException, SomeException, fromException, try, tryJust)
 import Control.Monad (forM_, unless)
 import Data.Aeson (Value (..), eitherDecodeStrict', object, (.=))
 import qualified Data.ByteString as B
 import Data.List (find, isPrefixOf, stripPrefix)
 import Data.Text (unpack)
-import Data.Word (Word32)
 import Emulation.NativeCase (Region (..), loadCase, runnerDigest)
-import Emulation.NativeObservation (NativeObservation, RegionId (..), RunnerStatus (..), parseWord32, registerLabels)
+import Emulation.NativeObservation (GuestAddress (..), NativeObservation, RegionId (..), RunnerStatus (..), parseWord32, registerLabels)
 import Emulation.OwnedCase (CaseId (..), loadObservedBatch)
+import Emulation.Sha256 (Sha256, parseSha256Hex)
 import FujiAF.Host (ensure, failH, get, keys, list, str)
 import FujiAF.JSON (encodeCanonical)
 import Replacement.RtosOwnFirst.Controls (controlName, controlSlot, mutants)
@@ -37,7 +37,7 @@ import Replacement.RtosOwnFirst.Generated (BodyRole (..), ReplayBatches (..), ro
 import Replacement.RtosOwnFirst.Oracle (DifferenceKind (..), Run (..), compareRuns, differenceKind, differenceText, observedRun, slotOffset)
 import Replacement.RtosOwnFirst.Regions (Domain (..), SlotOffset (..), domainLabel, hexText)
 import System.Directory (canonicalizePath, copyFile, createDirectoryIfMissing, doesFileExist)
-import System.FilePath (isRelative, splitDirectories, (</>))
+import System.FilePath (isRelative, splitDirectories, takeDirectory, takeFileName, (</>))
 
 data RecordedKind = RecordedOriginal | RecordedReduced
   deriving (Eq, Show)
@@ -50,20 +50,38 @@ data RecordedCase = RecordedCase
   { recordedRole :: BodyRole
   , recordedDomain :: Domain
   , recordedKind :: RecordedKind
-  , recordedCaseId :: String
+  , recordedCaseId :: CaseId
   , recordedBoundary :: [DifferenceKind]
   , -- | Display text only; the typed boundary decides whether a replay reproduces.
     recordedDifferences :: [String]
   , recordedBatches :: ReplayBatches
   }
 
+data CaseIdentity = CaseIdentity
+  { identityCase :: Sha256
+  , identityWire :: Sha256
+  }
+  deriving Eq
+
+data CaseFiles = CaseFiles
+  { filesCase :: FilePath
+  , filesArtifacts :: [FilePath]
+  }
+
+data AdmittedCase = AdmittedCase
+  { admittedValue :: Value
+  , admittedRegions :: [Region]
+  , admittedIdentity :: CaseIdentity
+  , admittedFiles :: CaseFiles
+  }
+
 data PreparedCase = PreparedCase
   { preparedRecorded :: RecordedCase
-  , preparedReferenceValue :: Value
-  , preparedSubjectValue :: Value
-  , preparedEntrySp :: Word32
-  , preparedReferenceIdentity :: String
-  , preparedSubjectIdentity :: String
+  , preparedReferenceFiles :: CaseFiles
+  , preparedSubjectFiles :: CaseFiles
+  , preparedEntrySp :: GuestAddress
+  , preparedReferenceIdentity :: CaseIdentity
+  , preparedSubjectIdentity :: CaseIdentity
   }
 
 data ReplayStatus
@@ -74,8 +92,8 @@ data ReplayStatus
 
 data ReplayCaseResult = ReplayCaseResult
   { replayRecorded :: RecordedCase
-  , replayReferenceIdentity :: String
-  , replaySubjectIdentity :: String
+  , replayReferenceIdentity :: Sha256
+  , replaySubjectIdentity :: Sha256
   , replayKinds :: [DifferenceKind]
   , replayDifferences :: [String]
   , replayStatus :: ReplayStatus
@@ -132,7 +150,7 @@ readRecordedCases summary = do
       let batches = get value "batches"
       reference <- textField batches "reference"
       subject <- textField batches "subject"
-      Right (RecordedCase role domainId kind ident boundary differences (ReplayBatches reference subject))
+      Right (RecordedCase role domainId kind (CaseId ident) boundary differences (ReplayBatches reference subject))
     textField value key = text (get value key)
     text (String value) = Right (unpack value)
     text _ = Left "recorded case field must be a string"
@@ -155,45 +173,50 @@ parseDifferenceKind text = case text of
     stripSuffix suffix value = reverse <$> stripPrefix (reverse suffix) (reverse value)
 
 -- | Checks every binding and the entry SP of one pair without running a guest batch.
-preflightCase :: String -> RecordedCase -> IO PreparedCase
+preflightCase :: Sha256 -> RecordedCase -> IO PreparedCase
 preflightCase runnerHash recorded = do
   let batches = recordedBatches recorded
       expected = recordedCaseId recorded
-  (referenceValue, referenceRegions, referenceIdentity) <- loadPairCase (replayReferenceBatch batches) expected
-  (subjectValue, subjectRegions, subjectIdentity) <- loadPairCase (replaySubjectBatch batches) expected
-  let problems = bindingDifferences referenceValue referenceRegions subjectValue subjectRegions
+      label = caseIdText expected
+  reference <- loadPairCase (replayReferenceBatch batches) expected
+  subject <- loadPairCase (replaySubjectBatch batches) expected
+  let problems = bindingDifferences (admittedValue reference) (admittedRegions reference) (admittedValue subject) (admittedRegions subject)
   unless (null problems) $
-    failH ("recorded case " ++ expected ++ " changed its " ++ unwords problems ++ " binding")
-  checkReport (replayReferenceBatch batches) expected runnerHash (identityField "case_sha256" referenceIdentity) (identityField "wire_sha256" referenceIdentity)
-  checkReport (replaySubjectBatch batches) expected runnerHash (identityField "case_sha256" subjectIdentity) (identityField "wire_sha256" subjectIdentity)
-  entrySp <- case parseWord32 (str (get (get referenceValue "registers") "sp")) of
-    Just value -> pure value
-    Nothing -> failH ("recorded case " ++ expected ++ " has no entry sp")
+    failH ("recorded case " ++ label ++ " changed its " ++ unwords problems ++ " binding")
+  checkReport (replayReferenceBatch batches) expected runnerHash (admittedIdentity reference)
+  checkReport (replaySubjectBatch batches) expected runnerHash (admittedIdentity subject)
+  entrySp <- case parseWord32 (str (get (get (admittedValue reference) "registers") "sp")) of
+    Just value -> pure (GuestAddress (fromIntegral value))
+    Nothing -> failH ("recorded case " ++ label ++ " has no entry sp")
   pure
     PreparedCase
       { preparedRecorded = recorded
-      , preparedReferenceValue = referenceValue
-      , preparedSubjectValue = subjectValue
+      , preparedReferenceFiles = admittedFiles reference
+      , preparedSubjectFiles = admittedFiles subject
       , preparedEntrySp = entrySp
-      , preparedReferenceIdentity = identityField "case_sha256" referenceIdentity
-      , preparedSubjectIdentity = identityField "case_sha256" subjectIdentity
+      , preparedReferenceIdentity = admittedIdentity reference
+      , preparedSubjectIdentity = admittedIdentity subject
       }
 
 -- | Copies the selected case and its declared artifacts, then re-executes the pair. A copy or
 -- execution failure becomes an incomplete result rather than aborting before summary publication.
 executeCase :: FilePath -> FilePath -> PreparedCase -> IO ReplayCaseResult
 executeCase runner work prepared = do
-  outcome <- try (executePair runner work prepared) :: IO (Either SomeException ReplayCaseResult)
+  outcome <- tryJust synchronous (executePair runner work prepared) :: IO (Either SomeException ReplayCaseResult)
   pure $ case outcome of
     Right result -> result
-    Left problem -> incomplete prepared (show problem)
+    Left problem -> incomplete prepared (take 4096 (show problem))
+  where
+    synchronous problem = case fromException problem :: Maybe SomeAsyncException of
+      Just _ -> Nothing
+      Nothing -> Just problem
 
 incomplete :: PreparedCase -> String -> ReplayCaseResult
 incomplete prepared reason =
   ReplayCaseResult
     { replayRecorded = preparedRecorded prepared
-    , replayReferenceIdentity = preparedReferenceIdentity prepared
-    , replaySubjectIdentity = preparedSubjectIdentity prepared
+    , replayReferenceIdentity = identityCase (preparedReferenceIdentity prepared)
+    , replaySubjectIdentity = identityCase (preparedSubjectIdentity prepared)
     , replayKinds = []
     , replayDifferences = []
     , replayStatus = ReplayIncomplete reason
@@ -203,18 +226,21 @@ executePair :: FilePath -> FilePath -> PreparedCase -> IO ReplayCaseResult
 executePair runner work prepared = do
   let recorded = preparedRecorded prepared
       expected = recordedCaseId recorded
-      batches = recordedBatches recorded
-      directory = roleLabel (recordedRole recorded) ++ "-" ++ domainLabel (recordedDomain recorded) ++ "-" ++ recordedKindText (recordedKind recorded) ++ "-" ++ expected
+      directory = roleLabel (recordedRole recorded) ++ "-" ++ domainLabel (recordedDomain recorded) ++ "-" ++ recordedKindText (recordedKind recorded) ++ "-" ++ caseIdText expected
       freshReference = work </> directory </> "reference" </> "batch-0"
       freshSubject = work </> directory </> "subject" </> "batch-0"
-  copyCaseFor (replayReferenceBatch batches) freshReference expected (preparedReferenceValue prepared)
-  copyCaseFor (replaySubjectBatch batches) freshSubject expected (preparedSubjectValue prepared)
+  copyCaseFor freshReference expected (preparedReferenceFiles prepared)
+  copyCaseFor freshSubject expected (preparedSubjectFiles prepared)
+  referenceCopy <- loadPairCase freshReference expected
+  subjectCopy <- loadPairCase freshSubject expected
+  ensure (admittedIdentity referenceCopy == preparedReferenceIdentity prepared) "copied reference case differs from its preflight identity"
+  ensure (admittedIdentity subjectCopy == preparedSubjectIdentity prepared) "copied subject case differs from its preflight identity"
   referenceObserved <- loadObservedBatch runner (freshReference </> "batch.json")
   subjectObserved <- loadObservedBatch runner (freshSubject </> "batch.json")
   (referenceLabel, referenceObservation) <- oneObservation freshReference referenceObserved
   (subjectLabel, subjectObservation) <- oneObservation freshSubject subjectObserved
   unless (referenceLabel == expected && subjectLabel == expected) $
-    failH ("replayed labels " ++ show (referenceLabel, subjectLabel) ++ " differ from the recorded case " ++ expected)
+    failH ("replayed labels " ++ show (referenceLabel, subjectLabel) ++ " differ from the recorded case " ++ caseIdText expected)
   referenceRun <- observedRun freshReference referenceLabel (recordedDomain recorded) (preparedEntrySp prepared) referenceObservation
   subjectRun <- observedRun freshSubject subjectLabel (recordedDomain recorded) (preparedEntrySp prepared) subjectObservation
   if runStatus referenceRun /= Returned
@@ -226,8 +252,8 @@ executePair runner work prepared = do
       pure
         ReplayCaseResult
           { replayRecorded = recorded
-          , replayReferenceIdentity = preparedReferenceIdentity prepared
-          , replaySubjectIdentity = preparedSubjectIdentity prepared
+          , replayReferenceIdentity = identityCase (preparedReferenceIdentity prepared)
+          , replaySubjectIdentity = identityCase (preparedSubjectIdentity prepared)
           , replayKinds = kinds
           , replayDifferences = map differenceText differences
           , replayStatus = status
@@ -236,19 +262,22 @@ executePair runner work prepared = do
 -- | Preflight then execute one pair, for callers that replay a single case.
 replayCase :: FilePath -> FilePath -> RecordedCase -> IO ReplayCaseResult
 replayCase runner work recorded = do
-  runnerHash <- runnerDigest runner
+  runnerHash <- runnerDigest runner >>= either failH pure . parseSha256Hex
   prepared <- preflightCase runnerHash recorded
   executeCase runner work prepared
 
-loadPairCase :: FilePath -> String -> IO (Value, [Region], [(String, Value)])
+loadPairCase :: FilePath -> CaseId -> IO AdmittedCase
 loadPairCase directory expected = do
-  path <- batchCasePath directory expected
+  path <- batchCasePath directory (caseIdText expected)
   loaded <- try (loadCase path) :: IO (Either IOException (Value, [Region], B.ByteString, [(String, Value)]))
   case loaded of
     Left problem -> failH (path ++ ": " ++ show problem)
     Right (value, regions, _, identity) -> do
-      ensure (str (get value "id") == expected) (path ++ ": case id differs from " ++ expected)
-      pure (value, regions, identity)
+      ensure (str (get value "id") == caseIdText expected) (path ++ ": case id differs from " ++ caseIdText expected)
+      caseHash <- either failH pure (parseSha256Hex (identityField "case_sha256" identity))
+      wireHash <- either failH pure (parseSha256Hex (identityField "wire_sha256" identity))
+      let files = CaseFiles path [str (get artifact "path") | artifact <- list (get value "artifacts")]
+      pure (AdmittedCase value regions (CaseIdentity caseHash wireHash) files)
 
 batchCasePath :: FilePath -> String -> IO FilePath
 batchCasePath directory expected = do
@@ -281,21 +310,23 @@ identityField name identity = maybe "" str (lookup name identity)
 
 -- | The report a generation run froze beside the batch: its runner, case and wire identities must
 -- still describe the current runner and the case files about to be replayed.
-checkReport :: FilePath -> String -> String -> String -> String -> IO ()
-checkReport directory expected runnerHash caseHash wireHash = do
-  let path = directory </> expected ++ ".native-result.json"
+checkReport :: FilePath -> CaseId -> Sha256 -> CaseIdentity -> IO ()
+checkReport directory expected runnerHash identity = do
+  let label = caseIdText expected
+      path = directory </> label ++ ".native-result.json"
   exists <- doesFileExist path
   unless exists (failH (path ++ ": missing preserved report"))
   bytes <- B.readFile path
   report <- either (\problem -> failH (path ++ ": " ++ problem)) pure (eitherDecodeStrict' bytes)
-  let recordedRunner = str (get report "runner_sha256")
-      recordedCase = str (get report "case_sha256")
-      recordedWire = str (get report "wire_sha256")
-      recordedId = str (get report "case_id")
-  ensure (recordedId == expected) (path ++ ": report case id " ++ show recordedId ++ " differs from " ++ expected)
+  let digestField key = either (\problem -> failH (path ++ ": " ++ problem)) pure (parseSha256Hex (str (get report key)))
+      recordedId = CaseId (str (get report "case_id"))
+  recordedRunner <- digestField "runner_sha256"
+  recordedCase <- digestField "case_sha256"
+  recordedWire <- digestField "wire_sha256"
+  ensure (recordedId == expected) (path ++ ": report case id " ++ show recordedId ++ " differs from " ++ label)
   ensure (recordedRunner == runnerHash) (path ++ ": runner binding differs from the current runner")
-  ensure (recordedCase == caseHash) (path ++ ": case binding differs from the case file")
-  ensure (recordedWire == wireHash) (path ++ ": wire binding differs from the case file")
+  ensure (recordedCase == identityCase identity) (path ++ ": case binding differs from the case file")
+  ensure (recordedWire == identityWire identity) (path ++ ": wire binding differs from the case file")
 
 bindingDifferences :: Value -> [Region] -> Value -> [Region] -> [String]
 bindingDifferences referenceValue referenceRegions subjectValue subjectRegions =
@@ -329,23 +360,19 @@ bindingDifferences referenceValue referenceRegions subjectValue subjectRegions =
     permission region = str (get (description region) "permissions")
 
 -- | Copies the selected case entry, its case file and only the artifacts it declares.
-copyCaseFor :: FilePath -> FilePath -> String -> Value -> IO ()
-copyCaseFor source destination expected caseValue = do
+copyCaseFor :: FilePath -> CaseId -> CaseFiles -> IO ()
+copyCaseFor destination expected files = do
   createDirectoryIfMissing True destination
-  let batchPath = source </> "batch.json"
-  bytes <- B.readFile batchPath
-  batch <- either (\problem -> failH (batchPath ++ ": " ++ problem)) pure (eitherDecodeStrict' bytes)
-  case recordedEntries batch expected of
-    [entry] -> do
-      let caseFile = str (get entry "path")
-      B.writeFile (destination </> "batch.json") (encodeCanonical (object ["schema_version" .= (1 :: Int), "cases" .= [entry]]))
-      copyFile (source </> caseFile) (destination </> caseFile)
-    _ -> failH (batchPath ++ ": the recorded case " ++ expected ++ " is not present exactly once")
-  forM_ (list (get caseValue "artifacts")) $ \artifact -> do
-    let path = str (get artifact "path")
-    copyFile (source </> path) (destination </> path)
+  let caseFile = takeFileName (filesCase files)
+      entry = object ["id" .= caseIdText expected, "path" .= caseFile]
+  B.writeFile (destination </> "batch.json") (encodeCanonical (object ["schema_version" .= (1 :: Int), "cases" .= [entry]]))
+  copyFile (filesCase files) (destination </> caseFile)
+  forM_ (filesArtifacts files) $ \path -> do
+    let target = destination </> path
+    createDirectoryIfMissing True (takeDirectory target)
+    copyFile (takeDirectory (filesCase files) </> path) target
 
-oneObservation :: FilePath -> [(CaseId, NativeObservation)] -> IO (String, NativeObservation)
+oneObservation :: FilePath -> [(CaseId, NativeObservation)] -> IO (CaseId, NativeObservation)
 oneObservation directory observed = case observed of
-  [(CaseId label, observation)] -> pure (label, observation)
+  [(ident, observation)] -> pure (ident, observation)
   _ -> failH (directory ++ ": expected one observation, found " ++ show (length observed))

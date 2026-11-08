@@ -15,6 +15,7 @@ module Replacement.RtosOwnFirst.Generated
 import Control.Monad (forM, unless, when)
 import qualified Data.Map.Strict as M
 import Emulation.NativeObservation (RunnerStatus (..))
+import Emulation.OwnedCase (CaseId (..))
 import FujiAF.Host (failH)
 import Replacement.RtosOwnFirst.Controls (Control, controlName)
 import Replacement.RtosOwnFirst.Generate
@@ -66,8 +67,8 @@ data ReplayBatches = ReplayBatches
 data ShrinkReport = ShrinkReport
   { shrinkRole :: BodyRole
   , shrinkOriginalKey :: CaseKey
-  , shrinkOriginalLabel :: String
-  , shrinkReducedLabel :: String
+  , shrinkOriginalLabel :: CaseId
+  , shrinkReducedLabel :: CaseId
   , shrinkOriginalRow :: Row
   , shrinkReducedRow :: Row
   , shrinkOriginalDifferences :: [Difference]
@@ -116,7 +117,7 @@ shrinkAndReplay work input row key originalDifferences subjectRole subjectBody =
       originalKinds = map differenceKind originalDifferences
       CaseKey index = key
       scratch = work </> "shrink-scratch" </> (roleText ++ "-" ++ domainLabel domain)
-      trialLabel = "trial-" ++ roleText ++ "-" ++ domainLabel domain ++ "-" ++ slotTag slot ++ "-" ++ show index
+      trialLabel = CaseId ("trial-" ++ roleText ++ "-" ++ domainLabel domain ++ "-" ++ slotTag slot ++ "-" ++ show index)
       predicate candidate = do
         expected <- runRowsWith runner (scratch </> "reference") (const trialLabel) domain slot [(key, candidate)] referenceBody
         actual <- runRowsWith runner (scratch </> "subject") (const trialLabel) domain slot [(key, candidate)] subjectBody
@@ -139,7 +140,7 @@ shrinkAndReplay work input row key originalDifferences subjectRole subjectBody =
   actualRuns <- runRowsWith runner subjectDirectory (const reducedId) domain slot [(key, reducedRow)] subjectBody
   let reducedDifferences = differencesOf key expectedRuns actualRuns
   unless (not (null reducedDifferences) && map differenceKind reducedDifferences == originalKinds) $
-    failH ("reduced case " ++ reducedId ++ " does not reproduce the original boundary")
+    failH ("reduced case " ++ caseIdText reducedId ++ " does not reproduce the original boundary")
   replayedExpected <- loadBatchRuns runner (replayReferenceBatch reducedBatches) (const reducedId) domain [(key, reducedRow)]
   replayedActual <- loadBatchRuns runner (replaySubjectBatch reducedBatches) (const reducedId) domain [(key, reducedRow)]
   let replayDifferences = differencesOf key replayedExpected replayedActual
@@ -149,7 +150,7 @@ shrinkAndReplay work input row key originalDifferences subjectRole subjectBody =
             && not (null replayDifferences)
             && map differenceKind replayDifferences == originalKinds
         _ -> False
-  unless replayHolds (failH ("replay of " ++ reducedId ++ " does not reproduce the original boundary"))
+  unless replayHolds (failH ("replay of " ++ caseIdText reducedId ++ " does not reproduce the original boundary"))
   removeScratch scratch
   pure
     ShrinkReport

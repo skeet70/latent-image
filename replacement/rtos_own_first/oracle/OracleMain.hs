@@ -8,17 +8,16 @@
 module Main (main) where
 
 import Control.Monad (filterM, forM, forM_, unless, when)
-import Data.Aeson (Value (Null), eitherDecodeStrict', object, (.=))
+import Data.Aeson (ToJSON (..), Value (Null), eitherDecodeStrict', object, (.=))
 import qualified Data.ByteString as B
-import Data.List (intercalate)
+import Data.List (intercalate, sort)
 import qualified Data.Map.Strict as M
 import Data.Maybe (listToMaybe)
 import Data.String (fromString)
 import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
-import Emulation.NativeCase (runnerDigest)
-import Emulation.OwnedCase (required)
-import Emulation.Sha256 (sha256, sha256Hex)
-import FujiAF.Host (ensure, failH, get, keys, readRegular)
+import Emulation.OwnedCase (caseIdText, required)
+import Emulation.Sha256 (Sha256, parseSha256Hex, sha256, sha256Hex)
+import FujiAF.Host (ensure, failH, get, keys, readRegular, str)
 import FujiAF.JSON (encodeCanonical)
 import Replacement.RtosOwnFirst.Artifact (LinkedDomain (..), loaderSha256)
 import Replacement.RtosOwnFirst.Command
@@ -133,7 +132,7 @@ shrinkValue report =
     , "reduced" .= boundaryValue (shrinkReducedLabel report) (shrinkReducedRow report) (shrinkReducedDifferences report) (shrinkReducedBatches report)
     , "replay"
         .= object
-          [ "case" .= shrinkReducedLabel report
+          [ "case" .= caseIdText (shrinkReducedLabel report)
           , "differences" .= map differenceText (shrinkReplayDifferences report)
           , "same_boundary" .= (map differenceKind (shrinkReplayDifferences report) == map differenceKind (shrinkOriginalDifferences report))
           ]
@@ -142,7 +141,7 @@ shrinkValue report =
     reduction = shrinkReduction report
     boundaryValue label row differences batches =
       object
-        [ "case" .= label
+        [ "case" .= caseIdText label
         , "row" .= show row
         , "differences" .= map differenceText differences
         , "boundary" .= map (show . differenceKind) differences
@@ -181,7 +180,7 @@ generatedExit results
   | not (all generatedOwnedMatches results) = ExitFailure 2
   | otherwise = ExitSuccess
 
-generatedSummary :: FilePath -> Value -> GenerateOptions -> [GeneratedDomain] -> Value
+generatedSummary :: FilePath -> InputIdentities -> GenerateOptions -> [GeneratedDomain] -> Value
 generatedSummary work inputs options results =
   object
     [ "schema" .= (1 :: Int)
@@ -205,7 +204,7 @@ generatedTerminal summaryPath options results = do
       controls = [subjectOutcome subject | result <- results, subject <- generatedResults result, isControlRole (subjectRole subject)]
       reductions = [report | result <- results, subject <- generatedResults result, Just report <- [subjectReduction subject]]
       boundary report = intercalate "," (map (show . differenceKind) (shrinkOriginalDifferences report))
-      reduced = [shrinkReducedLabel report ++ " (" ++ boundary report ++ ", " ++ reductionStatusText (reductionStatus (shrinkReduction report)) ++ ")" | report <- reductions]
+      reduced = [caseIdText (shrinkReducedLabel report) ++ " (" ++ boundary report ++ ", " ++ reductionStatusText (reductionStatus (shrinkReduction report)) ++ ")" | report <- reductions]
       prefix =
         "own-first generate: +0x16c seed 0x" ++ seedText (optionSeed options)
           ++ " " ++ show (generationCountValue (optionCount options)) ++ " cases x 2 loaders"
@@ -230,7 +229,7 @@ replayCaseValue result =
     [ "role" .= roleLabel (recordedRole recorded)
     , "domain" .= domainLabel (recordedDomain recorded)
     , "kind" .= recordedKindText (recordedKind recorded)
-    , "case" .= recordedCaseId recorded
+    , "case" .= caseIdText (recordedCaseId recorded)
     , "batches"
         .= object
           [ "reference" .= replayReferenceBatch batches
@@ -238,8 +237,8 @@ replayCaseValue result =
           ]
     , "identity"
         .= object
-          [ "reference_sha256" .= replayReferenceIdentity result
-          , "subject_sha256" .= replaySubjectIdentity result
+          [ "reference_sha256" .= sha256Hex (replayReferenceIdentity result)
+          , "subject_sha256" .= sha256Hex (replaySubjectIdentity result)
           ]
     , "expected_boundary" .= map show (recordedBoundary recorded)
     , "kinds" .= map show (replayKinds result)
@@ -253,7 +252,7 @@ replayCaseValue result =
     recorded = replayRecorded result
     batches = recordedBatches recorded
 
-replaySummary :: FilePath -> FilePath -> Value -> [ReplayCaseResult] -> Value
+replaySummary :: FilePath -> FilePath -> InputIdentities -> [ReplayCaseResult] -> Value
 replaySummary source work inputs results =
   object
     [ "schema" .= (1 :: Int)
@@ -277,7 +276,7 @@ replayTerminal summaryPath results =
   case [result | result <- results, not (replayReproduces result)] of
     result : _ ->
       putStrLn
-        ( "own-first replay: " ++ recordedCaseId (replayRecorded result)
+        ( "own-first replay: " ++ caseIdText (recordedCaseId (replayRecorded result))
             ++ " (" ++ recordedKindText (recordedKind (replayRecorded result)) ++ ") " ++ detail result
             ++ "; summary " ++ summaryPath
         )
@@ -290,10 +289,50 @@ replayTerminal summaryPath results =
       ReplayIncomplete reason -> "incomplete: " ++ reason
       _ -> "did not reproduce its recorded boundary"
 
-verifyInputs :: Value -> Value -> IO ()
+data InputIdentities = InputIdentities
+  { inputRegions :: Sha256
+  , inputRunner :: Sha256
+  , inputLoaderA :: Sha256
+  , inputLoaderB :: Sha256
+  , inputOwnedABin :: Sha256
+  , inputOwnedASymbols :: Sha256
+  , inputOwnedBBin :: Sha256
+  , inputOwnedBSymbols :: Sha256
+  }
+
+inputIdentityFields :: [(String, InputIdentities -> Sha256)]
+inputIdentityFields =
+  [ ("regions_sha256", inputRegions)
+  , ("runner_sha256", inputRunner)
+  , ("loader_a_sha256", inputLoaderA)
+  , ("loader_b_sha256", inputLoaderB)
+  , ("owned_a_bin_sha256", inputOwnedABin)
+  , ("owned_a_symbols_sha256", inputOwnedASymbols)
+  , ("owned_b_bin_sha256", inputOwnedBBin)
+  , ("owned_b_symbols_sha256", inputOwnedBSymbols)
+  ]
+
+instance ToJSON InputIdentities where
+  toJSON identities = object [fromString key .= sha256Hex (field identities) | (key, field) <- inputIdentityFields]
+
+parseInputIdentities :: Value -> Either String InputIdentities
+parseInputIdentities value = do
+  unless (sort (keys value) == sort (map fst inputIdentityFields)) (Left "replay summary input set differs from the current inputs")
+  InputIdentities
+    <$> field "regions_sha256"
+    <*> field "runner_sha256"
+    <*> field "loader_a_sha256"
+    <*> field "loader_b_sha256"
+    <*> field "owned_a_bin_sha256"
+    <*> field "owned_a_symbols_sha256"
+    <*> field "owned_b_bin_sha256"
+    <*> field "owned_b_symbols_sha256"
+  where
+    field key = parseSha256Hex (str (get value key))
+
+verifyInputs :: InputIdentities -> InputIdentities -> IO ()
 verifyInputs recorded current = do
-  ensure (keys recorded == keys current) "replay summary input set differs from the current inputs"
-  let differing = [key | key <- keys recorded, get recorded key /= get current key]
+  let differing = [key | (key, field) <- inputIdentityFields, field recorded /= field current]
   unless (null differing) (failH ("replay inputs differ: " ++ unwords differing))
 
 enterSlot :: [String] -> IO ()
@@ -348,16 +387,8 @@ main = do
           ++ zip ["--loader-a", "--loader-b"] loaderPaths
           ++ zip ["--owned-a-bin", "--owned-a-symbols", "--owned-b-bin", "--owned-b-symbols"] ownedPaths
           ++ maybe [] (\source -> [("--replay", source)]) replaySource
-  case command of
-    GenerateCommand _ -> do
-      setEnv "XM1_STORAGE_PATH" (takeDirectory work)
-      enterSlot (rewriteFlags replacements arguments)
-    ReplayCommand _ -> do
-      setEnv "XM1_STORAGE_PATH" (takeDirectory work)
-      enterSlot (rewriteFlags replacements arguments)
-    GridCommand -> do
-      setEnv "XM1_STORAGE_PATH" (takeDirectory work)
-      enterSlot (rewriteFlags replacements arguments)
+  setEnv "XM1_STORAGE_PATH" (takeDirectory work)
+  enterSlot (rewriteFlags replacements arguments)
   lookupEnv "BUILD_WORKSPACE_DIRECTORY" >>= mapM_ setCurrentDirectory
   forM_ [work, summaryPath] $ \path -> do
     exists <- doesPathExist path
@@ -378,14 +409,20 @@ main = do
   canonicalWork <- canonicalizePath work
   createDirectoryIfMissing True (takeDirectory summaryPath)
   canonicalSummary <- canonicalizePath summaryPath
-  let inputs =
-        object
-          ( [ "regions_sha256" .= digest regionsBytes
-            , "runner_sha256" .= digest runnerBytes
-            ]
-              ++ [fromString ("loader_" ++ domainLabel domain ++ "_sha256") .= digest loader | (domain, loader) <- zip domains loaders]
-              ++ [fromString name .= digest bytes | (name, bytes) <- zip ["owned_a_bin_sha256", "owned_a_symbols_sha256", "owned_b_bin_sha256", "owned_b_symbols_sha256"] ownedBytes]
-          )
+  inputs <- case (loaders, ownedBytes) of
+    ([loaderA, loaderB], [binA, symbolsA, binB, symbolsB]) ->
+      pure
+        InputIdentities
+          { inputRegions = sha256 regionsBytes
+          , inputRunner = sha256 runnerBytes
+          , inputLoaderA = sha256 loaderA
+          , inputLoaderB = sha256 loaderB
+          , inputOwnedABin = sha256 binA
+          , inputOwnedASymbols = sha256 symbolsA
+          , inputOwnedBBin = sha256 binB
+          , inputOwnedBSymbols = sha256 symbolsB
+          }
+    _ -> failH "unreachable input shape"
   case command of
     GenerateCommand options -> do
       let control = optionControl options
@@ -415,9 +452,9 @@ main = do
       sourceValue <- either (\problem -> failH (source ++ ": " ++ problem)) pure (eitherDecodeStrict' sourceBytes)
       recorded <- orFailText "replay summary" (readRecordedCases sourceValue)
       ensure (not (null recorded)) "replay summary records no original or reduced case"
-      verifyInputs (get sourceValue "inputs") inputs
-      runnerHash <- runnerDigest runner
-      prepared <- forM recorded (preflightCase runnerHash)
+      recordedInputs <- orFailText "recorded inputs" (parseInputIdentities (get sourceValue "inputs"))
+      verifyInputs recordedInputs inputs
+      prepared <- forM recorded (preflightCase (inputRunner inputs))
       results <- forM prepared (executeCase runner canonicalWork)
       B.writeFile canonicalSummary (encodeCanonical (replaySummary source canonicalWork inputs results))
       replayTerminal canonicalSummary results

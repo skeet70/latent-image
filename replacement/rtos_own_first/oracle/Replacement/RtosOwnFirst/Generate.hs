@@ -20,6 +20,7 @@ module Replacement.RtosOwnFirst.Generate
 import Data.Bits (complement, shiftR, testBit, xor, (.&.))
 import Data.Char (isHexDigit)
 import Data.Word (Word32, Word64)
+import Emulation.OwnedCase (CaseId (..))
 import Numeric (readDec, readHex, showHex)
 import Replacement.RtosOwnFirst.Oracle
 import Replacement.RtosOwnFirst.Regions (Domain, domainLabel)
@@ -66,14 +67,14 @@ parseGenerationCount text = case readDec text of
   _ -> Left ("count must be 1.." ++ show maxGeneratedRows ++ ": " ++ text)
 
 -- | A case id of the generated corpus, unique within a batch directory.
-generatedLabel :: GenerationSeed -> Domain -> CaseKey -> String
+generatedLabel :: GenerationSeed -> Domain -> CaseKey -> CaseId
 generatedLabel seed domain (CaseKey index) =
-  "gen-" ++ seedText seed ++ "-" ++ domainLabel domain ++ "-" ++ slotTag generationSlot ++ "-" ++ show index
+  CaseId ("gen-" ++ seedText seed ++ "-" ++ domainLabel domain ++ "-" ++ slotTag generationSlot ++ "-" ++ show index)
 
 -- | A case id of a reduced case, distinct from the generated id it came from.
-reducedLabel :: String -> GenerationSeed -> Domain -> CaseKey -> String
+reducedLabel :: String -> GenerationSeed -> Domain -> CaseKey -> CaseId
 reducedLabel role seed domain (CaseKey index) =
-  "reduced-" ++ role ++ "-" ++ seedText seed ++ "-" ++ domainLabel domain ++ "-" ++ slotTag generationSlot ++ "-" ++ show index
+  CaseId ("reduced-" ++ role ++ "-" ++ seedText seed ++ "-" ++ domainLabel domain ++ "-" ++ slotTag generationSlot ++ "-" ++ show index)
 
 seedText :: GenerationSeed -> String
 seedText (GenerationSeed seed) = showHex seed ""

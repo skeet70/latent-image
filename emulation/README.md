@@ -557,15 +557,18 @@ The media effect mutant returns with the wrong bitmap bit, the ABI mutant return
 
 The supported media qualification command builds the current candidate, the defect candidate, the seven retained service models, the pinned native runner and the emulator-slot wrapper from the Bazel graph, admits every consumer input, then runs the selected original/candidate pairs and all four controls. The default is the full 20-pair set; `--scenario NAME` narrows it for routine native work. The stock ELF defaults to `private-data/analysis/x-m1-1.50/lz/id5.elf`; `--stock-elf`, `--build-root` and `--runner` override the resolved paths. `--cache DIR` keeps the shared native-observation cache across attempts. `--candidate defect` selects the declared defect as the production candidate for a labeled known-control run; the default is `--candidate current`.
 
+Use the worker's normal `BAZEL_OUTPUT_BASE` and a fresh `RUN_ID` for each attempt. Output directories must be new.
+
 ```sh
+RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
 devenv shell -- env XM1_EMULATOR_SLOTS=1 host-build --output_base="$BAZEL_OUTPUT_BASE" run --jobs=2 \
   //replacement/media_permit:media-permit-qualification -- \
-  --out private-data/scratch/RewriteAutomation/media-full-<rev> \
+  --out "private-data/scratch/RewriteAutomation/media-full-$RUN_ID" \
   --cache private-data/scratch/RewriteAutomation/media-cache
 
 devenv shell -- env XM1_EMULATOR_SLOTS=1 host-build --output_base="$BAZEL_OUTPUT_BASE" run --jobs=2 \
   //replacement/media_permit:media-permit-qualification -- \
-  --out private-data/scratch/RewriteAutomation/media-kind1-<rev> \
+  --out "private-data/scratch/RewriteAutomation/media-kind1-$RUN_ID" \
   --cache private-data/scratch/RewriteAutomation/media-cache \
   --scenario kind1-subframes
 ```
@@ -583,7 +586,7 @@ An actionable control failure uses the existing defect image without editing sou
 ```sh
 devenv shell -- env XM1_EMULATOR_SLOTS=1 host-build --output_base="$BAZEL_OUTPUT_BASE" run --jobs=2 \
   //replacement/media_permit:media-permit-qualification -- \
-  --out private-data/scratch/RewriteAutomation/media-control-<rev> \
+  --out "private-data/scratch/RewriteAutomation/media-control-$RUN_ID" \
   --cache private-data/scratch/RewriteAutomation/media-cache \
   --scenario kind0-zero --candidate defect
 ```
