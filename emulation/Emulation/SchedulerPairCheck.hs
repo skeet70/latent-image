@@ -80,7 +80,7 @@ data Refusal = Binding | Arming | Readback | Watch | FillFetch | Incomplete | Un
   | FamilyReturn | FamilyEffect | FamilyLifetime | FamilyTimer | FamilyDestructor | FamilyContinuation | FamilyAssociation deriving (Eq,Show)
 
 data Completion = Returned | Discarded | Dispatched deriving (Eq,Show)
-data BoundaryKind = SaveBoundary | ResumeBoundary | NoSaveBoundary | RetryBoundary | CallbackBoundary | CallbackReturnBoundary | SelectedBoundary | DiscardedBoundary | EnabledBoundary | GlobalLockBoundary | AcquiredBoundary | SelectCompleteBoundary | FirstEntryBoundary | IrqTailBoundary | ReturnBoundary | PrefetchAbortBoundary | TimerInsertBoundary | TimerRemoveBoundary deriving (Eq,Show)
+data BoundaryKind = SaveBoundary | ResumeBoundary | NoSaveBoundary | RetryBoundary | CallbackBoundary | CallbackReturnBoundary | SelectedBoundary | DiscardedBoundary | EnabledBoundary | GlobalLockBoundary | AcquiredBoundary | SelectCompleteBoundary | FirstEntryBoundary | IrqTailBoundary | ReturnBoundary | PrefetchAbortBoundary | TimerInsertBoundary | TimerRemoveBoundary | TimerConsumeBoundary deriving (Eq,Show)
 data Boundary = Boundary { boundaryKind :: BoundaryKind, boundaryAddress :: Address, boundaryInstructions :: Word64, boundaryCore :: Int, boundaryRegisters :: D.Registers, boundaryMemory :: Memory, boundaryWrites :: [Written], boundaryBank :: [Written], boundaryValue :: Maybe Word32, boundaryTask :: Word32,
   boundaryWriteOrigins :: [WriteOrigin], boundaryBankOrigins :: [WriteOrigin] } deriving (Eq,Show)
 data CallTrace = CallTrace { traceBefore :: D.Registers, traceAfter :: D.Registers, traceCompletion :: Completion, traceHistory :: [Boundary], traceOrigin :: Maybe DispatchPoint } deriving (Eq,Show)
@@ -110,6 +110,7 @@ instance FromJSON BoundaryKind where
     "prefetch-abort" -> pure PrefetchAbortBoundary
     "timer-insert" -> pure TimerInsertBoundary
     "timer-remove" -> pure TimerRemoveBoundary
+    "timer-consume" -> pure TimerConsumeBoundary
     _ -> fail "unsupported scheduler boundary"
 instance FromJSON Completion where
   parseJSON = J.withText "completion" $ \kind -> case kind of
@@ -582,6 +583,7 @@ checkCallFor = checkCallForIn []
 
 checkCallForIn :: [Call] -> Role -> Call -> Either Refusal ()
 checkCallForIn calls role call = do
+  let witnesses = timerWitnesses calls
   case callSemantic call of
     FamilySemantic _ -> pure ()
     _ -> expect WrongCore (callCore call == if callDomain call==DomainA then 0 else 1)
@@ -597,11 +599,26 @@ checkCallForIn calls role call = do
       expect ProcessorState (callCpsr call .&. 0x1ff==callReturnCpsr call .&. 0x1ff)
     DispatchSemantic point -> dispatchTags role point call >> pure ()
     FamilySemantic _ | role == Stock -> pure ()
-    FamilySemantic _ -> checkFamilyCall call calls
+    FamilySemantic _ -> checkFamilyCall call witnesses
     ServiceSemantic service -> checkServiceCall service call
 
-checkFamilyCall :: Call -> [Call] -> Either Refusal ()
-checkFamilyCall call others = case F.checkFamilyCall call others of
+timerWitnesses :: [Call] -> [F.TimerWitness]
+timerWitnesses calls =
+  [ F.TimerWitness entry task (callFirst call) (boundaryInstructions boundary) kind
+  | call <- calls
+  , boundary <- maybe [] traceHistory (callTrace call)
+  , (kind, entry) <- case boundaryKind boundary of
+      TimerInsertBoundary -> [(F.TimerInserted, value) | Just value <- [boundaryValue boundary]]
+      TimerRemoveBoundary -> [(F.TimerRemoved, value) | Just value <- [boundaryValue boundary]]
+      TimerConsumeBoundary -> [(F.TimerConsumed, value) | Just value <- [boundaryValue boundary]]
+      _ -> []
+  , let task = case kind of
+          F.TimerConsumed -> maybe (boundaryTask boundary) id (M.lookup (Address (entry+8)) (boundaryMemory boundary))
+          _ -> boundaryTask boundary
+  ]
+
+checkFamilyCall :: Call -> [F.TimerWitness] -> Either Refusal ()
+checkFamilyCall call witnesses = case F.checkFamilyCall call witnesses of
   Right () -> Right ()
   Left refusal -> Left (familyRefusal refusal)
 
@@ -623,6 +640,7 @@ instance F.FamilyCall Call where
   familyR0 = callR0
   familyWrites call = [(address,size,value) | Written address size value <- callWrites call]
   familyTask = callTask
+  familyEpoch = callFirst
   familyService call = case callSemantic call of FamilySemantic service -> Just service; _ -> Nothing
   familyTrace call = fmap familyTraceOf (callTrace call)
 
@@ -634,6 +652,8 @@ familyTraceOf trace = F.FamilyTrace
       Dispatched -> F.FamilyDispatchedCompletion
   , F.familyTraceBefore = D.registers (traceBefore trace)
   , F.familyTraceAfter = D.registers (traceAfter trace)
+  , F.familyTraceBeforeCpsr = D.processorState (traceBefore trace)
+  , F.familyTraceAfterCpsr = D.processorState (traceAfter trace)
   , F.familyTraceHistory = map familyBoundaryOf (traceHistory trace)
   }
 
@@ -645,6 +665,7 @@ familyBoundaryOf boundary = F.FamilyBoundary
       ReturnBoundary -> F.FamilyReturnKind
       TimerInsertBoundary -> F.FamilyTimerInsertKind
       TimerRemoveBoundary -> F.FamilyTimerRemoveKind
+      TimerConsumeBoundary -> F.FamilyTimerConsumeKind
       _ -> F.FamilyOtherKind
   , F.familyBoundaryAddress = boundaryAddress boundary
   , F.familyBoundaryInstructions = boundaryInstructions boundary

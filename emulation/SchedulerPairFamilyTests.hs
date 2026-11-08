@@ -123,7 +123,7 @@ timerBoundary kind entry task =
     (registers [1,entry]) M.empty [] [] (Just entry) task [] []
 
 tickBoundary :: Word32 -> Boundary
-tickBoundary entry = Boundary ReturnBoundary (Address 0x44d8c) 2 0 (registers [entry]) M.empty [] [] (Just entry) 0x9000 [] []
+tickBoundary entry = Boundary TimerConsumeBoundary (Address 0x44d8c) 2 0 (registers [entry]) M.empty [] [] (Just entry) 0x9000 [] []
 
 flagWaitCall :: [Written] -> Word32 -> [Boundary] -> Call
 flagWaitCall writes r0 history =

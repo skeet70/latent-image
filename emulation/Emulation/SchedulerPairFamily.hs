@@ -4,7 +4,7 @@
 -- layout and the independent expected-state rules.
 module Emulation.SchedulerPairFamily
   ( FamilyCall (..), FamilyTrace (..), FamilyBoundary (..), FamilyBoundaryKind (..), FamilyCompletion (..)
-  , Pending (..), FamilyRefusal (..), checkFamilyCall, checkPendingFamily ) where
+  , TimerKind (..), TimerWitness (..), Pending (..), FamilyRefusal (..), checkFamilyCall, checkPendingFamily ) where
 
 import Control.Monad (foldM, forM, forM_, unless, when)
 import Data.Bits ((.&.), (.|.), complement, shiftL, shiftR)
@@ -15,7 +15,7 @@ import Emulation.SchedulerPairModel (Memory)
 import Replacement.RtosOwnFirst.Regions (Domain (..))
 
 data FamilyCompletion = FamilyReturnedCompletion | FamilyDiscardedCompletion | FamilyDispatchedCompletion deriving (Eq,Show)
-data FamilyBoundaryKind = FamilySaveKind | FamilyResumeKind | FamilyReturnKind | FamilyTimerInsertKind | FamilyTimerRemoveKind | FamilyOtherKind deriving (Eq,Show)
+data FamilyBoundaryKind = FamilySaveKind | FamilyResumeKind | FamilyReturnKind | FamilyTimerInsertKind | FamilyTimerRemoveKind | FamilyTimerConsumeKind | FamilyOtherKind deriving (Eq,Show)
 data FamilyBoundary = FamilyBoundary
   { familyBoundaryKind :: FamilyBoundaryKind
   , familyBoundaryAddress :: Address
@@ -29,6 +29,8 @@ data FamilyTrace = FamilyTrace
   { familyTraceCompletion :: FamilyCompletion
   , familyTraceBefore :: [Word32]
   , familyTraceAfter :: [Word32]
+  , familyTraceBeforeCpsr :: Word32
+  , familyTraceAfterCpsr :: Word32
   , familyTraceHistory :: [FamilyBoundary]
   } deriving (Eq,Show)
 
@@ -41,10 +43,20 @@ class FamilyCall c where
   familyR0 :: c -> Word32
   familyWrites :: c -> [(Address,Int,Word32)]
   familyTask :: c -> Word32
+  familyEpoch :: c -> Word64
   familyService :: c -> Maybe FamilyService
   familyTrace :: c -> Maybe FamilyTrace
 
 data FamilyRefusal = FamilyReturn | FamilyEffect | FamilyLifetime | FamilyTimer | FamilyDestructor | FamilyContinuation | FamilyAssociation deriving (Eq,Show)
+
+data TimerKind = TimerInserted | TimerRemoved | TimerConsumed deriving (Eq,Show)
+data TimerWitness = TimerWitness
+  { timerEntry :: Word32
+  , timerTask :: Word32
+  , timerEpoch :: Word64
+  , timerArmedAt :: Word64
+  , timerKind :: TimerKind
+  } deriving (Eq,Show)
 
 expect :: FamilyRefusal -> Bool -> Either FamilyRefusal ()
 expect refusal valid = unless valid (Left refusal)
@@ -137,8 +149,14 @@ checkPendingFamily pending = case (pendingSemantic pending, pendingTerminal pend
           task = pendingTask pending
       timeout <- wordAt (pendingSp pending) before
       expect FamilyLifetime (signedWord timeout == -1)
+      patternBefore <- wordAt (control+0x0c) before
+      want <- argAt args 1
+      mode <- argAt args 2
+      expect FamilyLifetime (not (matches mode want patternBefore))
       wait <- wordAt (task+0x14) terminal
       expect FamilyLifetime (wait /= 0)
+      queueWord <- wordAt (wait+4) terminal
+      expect FamilyLifetime (queueWord == control)
       timer <- wordAt wait terminal
       expect FamilyTimer (timer == 0)
       state <- wordAt (task+0x0c) terminal
@@ -152,7 +170,7 @@ checkPendingFamily pending = case (pendingSemantic pending, pendingTerminal pend
       afterOut <- wordAt out terminal
       expect FamilyEffect (beforeOut == afterOut)
       schedulerLock <- wordAt (if domain == DomainA then 0x400545c0 else 0x400e4580) terminal
-      objectLock <- wordAt (if domain == DomainA then 0x400545c4 else 0x400e4584) terminal
+      objectLock <- wordAt (if object == DomainA then 0x400545c4 else 0x400e4584) terminal
       expect FamilyLifetime (schedulerLock == 0 && objectLock == 0)
       expect FamilyLifetime (pendingCpsr pending .&. 0x80 == 0)
       savedSp <- wordAt (task+0x18) terminal
@@ -199,14 +217,15 @@ errorExpected code = FamilyExpected code [] Nothing forbidTimer
 replayWrite :: Memory -> (Address,Int,Word32) -> Either FamilyRefusal Memory
 replayWrite memory (Address address,size,value) = do
   expect FamilyEffect (size `elem` [1,2,4] && address `mod` fromIntegral size == 0)
-  old <- wordAt address memory
+  let aligned = address .&. complement 3
+  old <- wordAt aligned memory
   let shift = fromIntegral (address .&. 3)*8
       mask = if size==4 then maxBound else (1 `shiftL` (size*8))-1
   expect FamilyEffect (value .&. complement mask == 0)
-  pure (M.insert (Address address) ((old .&. complement (mask `shiftL` shift)) .|. (value `shiftL` shift)) memory)
+  pure (M.insert (Address aligned) ((old .&. complement (mask `shiftL` shift)) .|. (value `shiftL` shift)) memory)
 
-checkFamilyCall :: FamilyCall c => c -> [c] -> Either FamilyRefusal ()
-checkFamilyCall call others = do
+checkFamilyCall :: FamilyCall c => c -> [TimerWitness] -> Either FamilyRefusal ()
+checkFamilyCall call witnesses = do
   trace <- maybe (Left FamilyContinuation) Right (familyTrace call)
   expect FamilyContinuation (familyTraceCompletion trace==FamilyReturnedCompletion)
   replayed <- foldM replayWrite (familyBefore call) (familyWrites call)
@@ -215,11 +234,11 @@ checkFamilyCall call others = do
   forM_ (expectedWords expected) $ \(address,value) -> wordAt address (familyAfter call) >>= expect FamilyEffect . (==value)
   forM_ (expectedOutput expected) $ \(address,value) -> wordAt address (familyAfter call) >>= expect FamilyEffect . (==value)
   expect FamilyReturn (familyR0 call==expectedR0 expected)
-  checkContinuation call others trace
-  checkTimerPath call others expected trace
+  checkContinuation call trace
+  checkTimerPath call witnesses expected trace
 
-checkContinuation :: FamilyCall c => c -> [c] -> FamilyTrace -> Either FamilyRefusal ()
-checkContinuation call others trace = do
+checkContinuation :: FamilyCall c => c -> FamilyTrace -> Either FamilyRefusal ()
+checkContinuation call trace = do
   let history = familyTraceHistory trace
       task = familyTask call
       core = familyCore call
@@ -244,41 +263,36 @@ checkContinuation call others trace = do
   case familyTraceAfter trace of
     first : rest | length rest == 15 -> expect FamilyReturn (first==familyR0 call)
     _ -> Left FamilyContinuation
-  forM_ others $ \other -> when (familyTask other/=task) $
-    forM_ (maybe [] familyTraceHistory (familyTrace other)) $ \boundary ->
-      when (familyBoundaryKind boundary==FamilyReturnKind
-        && any (\mine' -> familyBoundaryKind mine'==familyBoundaryKind boundary
-          && familyBoundaryAddress mine'==familyBoundaryAddress boundary
-          && familyBoundaryInstructions mine'==familyBoundaryInstructions boundary) history)
-        (Left FamilyAssociation)
-
-checkTimerPath :: FamilyCall c => c -> [c] -> FamilyExpected -> FamilyTrace -> Either FamilyRefusal ()
-checkTimerPath call others expected trace = do
+  case (familyTraceBefore trace, familyTraceAfter trace) of
+    (beforeRegisters, afterRegisters) | length beforeRegisters==16 && length afterRegisters==16 -> do
+      expect FamilyContinuation (all (\register -> beforeRegisters !! register == afterRegisters !! register) [4..11])
+      expect FamilyContinuation (familyTraceBeforeCpsr trace .&. 0xc0 == familyTraceAfterCpsr trace .&. 0xc0)
+    _ -> Left FamilyContinuation
+checkTimerPath :: FamilyCall c => c -> [TimerWitness] -> FamilyExpected -> FamilyTrace -> Either FamilyRefusal ()
+checkTimerPath call witnesses expected trace = do
   let history = familyTraceHistory trace
-      domain = familyDomain call
+      task = familyTask call
+      epoch = familyEpoch call
       ownInserts = [(value,boundary) | boundary <- history,familyBoundaryKind boundary==FamilyTimerInsertKind,Just value <- [familyBoundaryValue boundary]]
       ownRemoves = [(value,boundary) | boundary <- history,familyBoundaryKind boundary==FamilyTimerRemoveKind,Just value <- [familyBoundaryValue boundary]]
-      ownTickPops = [boundary | boundary <- history,isTickPop domain boundary]
-      siblingBoundaries = concat [maybe [] familyTraceHistory (familyTrace other) | other <- others]
-      siblingInserts = [value | boundary <- siblingBoundaries,familyBoundaryKind boundary==FamilyTimerInsertKind,Just value <- [familyBoundaryValue boundary]]
-      siblingRemoves = [value | boundary <- siblingBoundaries,familyBoundaryKind boundary==FamilyTimerRemoveKind,Just value <- [familyBoundaryValue boundary]]
-      siblingTickPops = [boundary | boundary <- siblingBoundaries,isTickPop domain boundary]
-      inserts = map fst ownInserts ++ siblingInserts
-      removes = map fst ownRemoves ++ siblingRemoves
-      tickPops = ownTickPops ++ siblingTickPops
+      ownConsumes = [(value,boundary) | boundary <- history,familyBoundaryKind boundary==FamilyTimerConsumeKind,Just value <- [familyBoundaryValue boundary]]
+      inserts = map fst ownInserts ++ [timerEntry w | w <- witnesses, timerKind w==TimerInserted, timerTask w==task, timerEpoch w==epoch]
+      removes = map fst ownRemoves ++ [timerEntry w | w <- witnesses, timerKind w==TimerRemoved, timerTask w==task, timerEpoch w>epoch]
+      consumes = map fst ownConsumes ++ [timerEntry w | w <- witnesses, timerKind w==TimerConsumed, timerTask w==task, timerEpoch w>epoch]
       path = expectedTimer expected
   forM_ ownInserts $ \(value,boundary) -> checkTimerBoundary call value boundary True
   forM_ ownRemoves $ \(value,boundary) -> checkTimerBoundary call value boundary False
-  when (timerForbid path) $ expect FamilyTimer (null ownInserts && null ownRemoves)
+  when (timerForbid path) $ expect FamilyTimer (null ownInserts && null ownRemoves && null [w | w <- witnesses, timerTask w==task, timerEpoch w==epoch])
   forM_ (timerArm path) $ \value -> expect FamilyTimer (value `elem` inserts)
   forM_ (timerWake path) $ \value -> expect FamilyTimer (value `elem` removes)
-  forM_ (timerExpire path) $ \value -> expect FamilyTimer (value `elem` removes || any (tickPopMatches value) tickPops)
+  forM_ (timerExpire path) $ \value -> expect FamilyTimer (value `elem` removes || value `elem` consumes)
   when (timerInsertRequired path) $ expect FamilyTimer (not (null inserts))
   unless (timerInsertRequired path) $ forM_ (map fst ownInserts) $ \value -> expect FamilyTimer (value `elem` timerArm path)
   when (timerRemoveAll path) $ forM_ (map fst ownInserts) $ \value -> expect FamilyTimer (value `elem` removes)
-  when (timerExpireAll path) $ forM_ (map fst ownInserts) $ \value -> expect FamilyTimer (value `elem` removes || any (tickPopMatches value) tickPops)
+  when (timerExpireAll path) $ forM_ (map fst ownInserts) $ \value -> expect FamilyTimer (value `elem` removes || value `elem` consumes)
   let allowed = timerWake path ++ timerExpire path ++ inserts
   forM_ (map fst ownRemoves) $ \value -> expect FamilyTimer (value `elem` allowed)
+  forM_ (map fst ownConsumes) $ \value -> expect FamilyTimer (value `elem` allowed)
 
 checkTimerBoundary :: FamilyCall c => c -> Word32 -> FamilyBoundary -> Bool -> Either FamilyRefusal ()
 checkTimerBoundary call value boundary inserting = do
@@ -305,9 +319,6 @@ isTimerEntry _ value =
 isTickPop :: Domain -> FamilyBoundary -> Bool
 isTickPop _ boundary = case familyBoundaryAddress boundary of
   Address address -> address `elem` [0x44d8c,0xd4d4c]
-
-tickPopMatches :: Word32 -> FamilyBoundary -> Bool
-tickPopMatches value boundary = familyBoundaryValue boundary==Just value || value `elem` familyBoundaryRegisters boundary
 
 familyExpected :: FamilyCall c => c -> Either FamilyRefusal FamilyExpected
 familyExpected call = do

@@ -490,7 +490,7 @@ impl OpenCall {
         boundary.bank = self.bank[self.bank_cursor..].to_vec();
         self.write_cursor = self.writes.len();
         self.bank_cursor = self.bank.len();
-        if matches!(self.entry.slot.semantic, Semantic::Service { .. }) {
+        if matches!(self.entry.slot.semantic, Semantic::Service { .. } | Semantic::Family { .. }) {
             if boundary.kind == BoundaryKind::Save { self.suspended = true; }
             if boundary.kind == BoundaryKind::Resume { self.suspended = false; }
         }
@@ -1388,7 +1388,7 @@ impl Observer<'_> {
             let memory = call.entry.memory.iter().map(|word| Ok(WordValue {
                 address: word.address, value: board.word(context.core, tcm, word.address.0)?,
             })).collect::<Result<Vec<_>, String>>()?;
-            if matches!(call.entry.slot.semantic, Semantic::Service { .. }) && completion == Completion::Return {
+            if matches!(call.entry.slot.semantic, Semantic::Service { .. } | Semantic::Family { .. }) && completion == Completion::Return {
                 call.record(Boundary { kind: BoundaryKind::Return, address: Hex(context.pc), instructions: context.instructions,
                     core: context.core, task: context.current, sp: Hex(context.sp), cpsr: context.cpsr,
                     registers: context.registers, memory: memory.clone(), writes: Vec::new(),
@@ -1461,7 +1461,7 @@ impl Observer<'_> {
         };
         if let Some(kind) = kind { self.boundary(machine, context, tcm, kind, Some(context.r0))?; }
         if kind == Some(BoundaryKind::NoSave) {
-            let discarded = self.open.take_where(|key, call| key.core == context.core && call.entry.task == context.current && matches!(call.entry.slot.semantic, Semantic::Service { .. }));
+            let discarded = self.open.take_where(|key, call| key.core == context.core && call.entry.task == context.current && matches!(call.entry.slot.semantic, Semantic::Service { .. } | Semantic::Family { .. }));
             self.finish(machine, context, tcm, discarded, Completion::Discard)?;
         }
         Ok(origin)
@@ -1556,7 +1556,7 @@ impl Observer<'_> {
                     let boundary_value = if probe.kind.timer() { board.register(core, arm::Register::R(1))? } else { value };
                     self.boundary(machine, &context, tcm, kind, Some(boundary_value))?;
                     if kind == BoundaryKind::DiscardedRead && value == 1 && self.validated.plan.probes[index].register.0 == 3 {
-                        let discarded = self.open.take_where(|key,call| key.core==core && call.entry.task==context.current && matches!(call.entry.slot.semantic,Semantic::Service { .. }));
+                        let discarded = self.open.take_where(|key,call| key.core==core && call.entry.task==context.current && matches!(call.entry.slot.semantic,Semantic::Service { .. } | Semantic::Family { .. }));
                         self.finish(machine,&context,tcm,discarded,Completion::Discard)?;
                     }
                     if kind == BoundaryKind::SelectedRead && self.validated.plan.probes[index].register.0 == 1 {
@@ -1843,17 +1843,48 @@ fn drive() -> Result<(), String> {
     };
     let drained = observer.drain_data(&machine);
     let unhooked = observer.end_data(&machine);
-    let error = observed.err().or(ended.err()).or(read_error).or(drained.err()).or(unhooked.err());
+    let mut error = observed.err().or(ended.err()).or(read_error).or(drained.err()).or(unhooked.err());
     let maps = observer.maps.clone();
     {
         let board = Board { machine: &machine, maps: &maps };
         for call in observer.open.pending.values_mut().flatten() {
-            let tcm = board.tcm(call.entry.core)?;
-            let mut memory = Vec::with_capacity(call.entry.memory.len());
-            for word in &call.entry.memory {
-                memory.push(WordValue { address: word.address, value: board.word(call.entry.core, tcm, word.address.0)? });
+            let result = (|| -> Result<Vec<WordValue>, String> {
+                let tcm = board.tcm(call.entry.core)?;
+                let mut addresses: BTreeSet<u32> = call.entry.memory.iter().map(|word| word.address.0).collect();
+                if let Semantic::Family { name } = call.entry.slot.semantic {
+                    if name.blocks() {
+                        if let Some(family) = name.family() {
+                            if let Read::Committed { value: task } = &call.entry.task {
+                                if *task != 0 {
+                                    for offset in [0x14, 0x18, 0x1c, 8] { addresses.insert(*task + offset); }
+                                    if let Read::Committed { value: definition } = board.word(call.entry.core, tcm, *task + 8)? {
+                                        if definition != 0 { addresses.insert(definition + 0x10); addresses.insert(definition + 0x14); }
+                                    }
+                                    if let Some((waiter, slot)) = family_task(*task) {
+                                        let tables = FamilyTables::of(waiter);
+                                        if let Some(wait) = tables.waits(family).record(slot) {
+                                            for offset in (0..tables.waits(family).size).step_by(4) { addresses.insert(wait + offset); }
+                                            if let Read::Committed { value: entry } = board.word(call.entry.core, tcm, wait)? {
+                                                if entry != 0 && tables.timers(family).slot(entry).is_some() {
+                                                    for offset in (0..tables.timers(family).size).step_by(4) { addresses.insert(entry + offset); }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if let Read::Committed { value: saved } = board.word(call.entry.core, tcm, *task + 0x18)? {
+                                        if saved % 4 == 0 { for offset in (0..36).step_by(4) { addresses.insert(saved + offset); } }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                addresses.into_iter().map(|address| Ok(WordValue { address: Hex(address), value: board.word(call.entry.core, tcm, address)? })).collect()
+            })();
+            match result {
+                Ok(memory) => call.terminal_memory = Some(memory),
+                Err(failure) => if error.is_none() { error = Some(failure); },
             }
-            call.terminal_memory = Some(memory);
         }
     }
     let report = Report {

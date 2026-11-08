@@ -38,7 +38,7 @@ observation :: Observation
 observation = Observation Owned [sha256Hex (sha256 planBytes),Q.runDocumentSha256,"dat",Q.bootRomSha256,trajectorySha256,"observer"] 100 1 1 0 0 Nothing
   [Q.Arming DomainA (Q.Readback 10 (take 1 (Q.readbackRanges readback))),Q.Arming DomainB (Q.Readback 20 (drop 1 (Q.readbackRanges readback)))]
   [Q.Segment [DomainA] 10 20 0 Nothing [(0x44018,0x44044,writes)],Q.Segment [DomainA,DomainB] 20 100 0 Nothing [(0x44018,0x44044,writes),(0xd3fd4,0xd4004,writes)]]
-  (Just readback) [call] [] [Q.Milestone phase Nothing menu (Just menu) True 100 | phase <- ["cold-start","shooting-menu","modal75-film","modal75-returned","modal75-film-repeated","modal75-returned-repeated","modal75-handback"]]
+  (Just readback) [call] ([],[]) [Q.Milestone phase Nothing menu (Just menu) True 100 | phase <- ["cold-start","shooting-menu","modal75-film","modal75-returned","modal75-film-repeated","modal75-returned-repeated","modal75-handback"]]
   Nothing Nothing (BankCounts 0 1) [PcWatch 1 (Address 0xd0b00) 1] []
  where writes = ["cpu-write","host-write","model-bus-write"]; menu = Q.MenuTriple 1 5 2
 refuses :: String -> Refusal -> Observation -> IO ()
