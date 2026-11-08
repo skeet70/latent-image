@@ -311,7 +311,7 @@ cases facts executing =
   , caseOf "refuse-invalid-id" SendPoll [(R0, 0x30001), (R1, 0xbbbb)] (queue 1 0 2) [ResultIs (-18), eq "kernel" (count 1) 0]
   , handler "handler-force" ForceSendHandler [(R0, 1), (R1, 3)] (queue 1 0 2 ++ full [1, 2] 2) [ResultIs 0, eq "ring" ringBase 3, eq "kernel" (read 1) 1, eq "kernel" (count 1) 2]
   , handler "handler-class-refused" ForceSendHandler [(R0, 0x10001), (R1, 3)] (queue 1 0 2 ++ full [1, 2] 2) [ResultIs (-18), eq "ring" ringBase 1, eq "kernel" (read 1) 0]
-  , handler "handler-poll-handoff" SendPollHandler [(R0, 1), (R1, 0x5a5a)] (queue 1 0 2 ++ receiverWaiter ++ [poke (dfSelected (domainFacts facts executing)) (taskAt 3)])
+  , handler "handler-poll-handoff" SendPollHandler [(R0, 1), (R1, 0x5a5a)] (queue 1 0 2 ++ receiverWaiter ++ currentAtPriorityFive)
       [ ResultIs 0
       , eq "kernel" (waitData 2) 0x5a5a
       , ByteIs "kernel" (taskState 2) (stateReady facts)
@@ -364,6 +364,19 @@ cases facts executing =
           head3 = dfReadyHeads words' + 3 * 8
           bitmap = dfReadyBitmap words'
        in [poke head3 head3, poke (head3 + 4) head3, poke bitmap ((1 `shiftL` 0) .|. (1 `shiftL` 5))]
+    -- Running task 1 READY at priority 5, alone in the ready set, so a released priority-3
+    -- waiter outranks the selection.
+    currentAtPriorityFive =
+      let words' = domainFacts facts executing
+          task1 = taskAt 1
+          head0 = dfReadyHeads words'
+          head5 = head0 + 5 * 8
+       in [ poke head0 head0, poke (head0 + 4) head0
+          , poke head5 task1, poke (head5 + 4) task1, poke task1 head5, poke (task1 + factsTaskPrev facts) head5
+          , poke (task1 + factsTaskState facts) (packedState (stateReady facts) 5)
+          , poke (dfReadyBitmap words') (1 `shiftL` 5)
+          , poke (dfSelected words') task1, poke (dfRunning words') task1
+          ]
     caseOf name call args words' checks =
       Case (CaseId name) call args words' checks [] [] False Nothing
     difference name call args words' common stockChecks ownedChecks =
