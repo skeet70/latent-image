@@ -55,6 +55,11 @@ relocOffset (Reloc spans) offset = case [agg + (offset - src) | (src, agg, size,
 relocRegions :: Reloc -> [(Word32, Word32)]
 relocRegions (Reloc spans) = [(agg, agg + size) | (_, agg, _, size) <- spans]
 
+relocEnd :: Reloc -> Word32 -> Word32
+relocEnd (Reloc spans) offset = case [agg + aggSize | (src, agg, s2Size, aggSize) <- spans, offset > src, offset <= src + s2Size] of
+  (value : _) -> value
+  [] -> offset
+
 parsePlatformSymbols :: FilePath -> IO (M.Map String (Word32, Word32))
 parsePlatformSymbols path = do
   lines' <- lines <$> readFile path
@@ -298,8 +303,7 @@ spec image role (CaseIndex index) row = CaseSpec
           | not (null (trigger d row)) = 400
           | otherwise = (if isStock role then 22 else 21) + case entry row of NoSave -> if isStock role then 9 else 7; Save -> 10; _ -> 0
     ignored = [R1,R2,R3,R12,Lr,Cpsr] ++ [r | entry row `elem` [Save,NoSave,Select,IrqReturn] && not (loops row), r <- [R4,R5,R6]] ++ [Pc | loops row]
-    relocSpans = relocRegions (imageReloc image)
-    ownedFunctions = if isAggregate image then mergeSpans (baseFunctions ++ relocSpans ++ imageExtras image) else baseFunctions
+    ownedFunctions = if isAggregate image then mergeSpans ([(entryOffset False e, entryOffset False e + 4) | e <- [minBound .. maxBound]] ++ [(relocOffset (imageReloc image) a, relocEnd (imageReloc image) z) | (a,z) <- baseFunctions] ++ imageExtras image) else baseFunctions
     mergeSpans spans = go (sortOn fst spans)
       where
         go [] = []
@@ -401,7 +405,7 @@ main = do
         stockHolds=and [expected image Stock row (observed Stock key row) | (key,row)<-indexed]
         checks=[(key,row,matches Owned key row) | (key,row)<-indexed]
         controls=[(show role,case role of Mutant _ -> any (\(key,row)->not (matches role key row)) chosen; Revert _ -> any (\(key,row)->not (matches role key row)) chosen; _ -> all (\(key,row)->matches role key row) chosen) | role<-drop 2 roles, let chosen=filter (applicable role . snd) indexed]
-        failures=[object ["case" .= show key,"row" .= show row,"tags" .= map redesignId (trigger d row),"stock_status" .= show (nativeStatus (observed Stock key row)),"owned_status" .= show (nativeStatus (observed Owned key row)),"stock_expected" .= expected image Stock row (observed Stock key row),"owned_expected" .= expected image Owned row (observed Owned key row),"differences" .= map show (comparison image row (spec image Owned key row) (observed Stock key row) (observed Owned key row))] | (key,row,ok)<-checks, not ok || not (expected image Stock row (observed Stock key row))]
+        failures=[object ["case" .= show key,"row" .= show row,"tags" .= map redesignId (trigger d row),"stock_status" .= show (nativeStatus (observed Stock key row)),"owned_status" .= show (nativeStatus (observed Owned key row)),"stock_pc" .= show (reg Pc (observed Stock key row)),"owned_pc" .= show (reg Pc (observed Owned key row)),"owned_sp" .= show (reg Sp (observed Owned key row)),"owned_lr" .= show (reg Lr (observed Owned key row)),"owned_r0" .= show (reg R0 (observed Owned key row)),"declared_stop" .= show (stop image Owned d row),"owned_order_tail" .= show (take 8 (reverse (order (observed Owned key row)))),"stock_expected" .= expected image Stock row (observed Stock key row),"owned_expected" .= expected image Owned row (observed Owned key row),"differences" .= map show (comparison image row (spec image Owned key row) (observed Stock key row) (observed Owned key row))] | (key,row,ok)<-checks, not ok || not (expected image Stock row (observed Stock key row))]
         holds=stockHolds && all (\(_,_,ok)->ok) checks && all snd controls
         report=object ["domain" .= domainLabel d,"cases" .= length indexed,"untagged" .= length [() | (_,r)<-indexed,null (trigger d r)],"expected_differences" .= [object ["id" .= redesignId r,"count" .= length [() | (_,row)<-indexed,r `elem` trigger d row]] | r<-[NullOwnRegisters,NullUnlock,RemoteRestart]],"stock_holds" .= stockHolds,"owned_holds" .= all (\(_,_,ok)->ok) checks,"controls" .= [object ["name" .= name,"holds" .= ok] | (name,ok)<-controls],"failures" .= failures,"holds" .= holds]
     when holds (removeDirectoryRecursive directory)
