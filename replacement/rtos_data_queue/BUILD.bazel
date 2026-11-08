@@ -1,0 +1,134 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+_DATA = [
+    "src/admission.rs",
+    "src/create.rs",
+    "src/env.rs",
+    "src/id.rs",
+    "src/ops.rs",
+    "src/ring.rs",
+    "src/sim.rs",
+    "src/status.rs",
+    "src/tests.rs",
+    "src/timeout.rs",
+    "//replacement/rtos_layout:src/lib.rs",
+]
+
+xm1_rust_staticlib(
+    name = "data-queue-rust",
+    src = "src/lib.rs",
+    crate_name = "xm1_rtos_data_queue",
+    data = _DATA,
+)
+
+[
+    xm1_rust_staticlib(
+        name = "data-queue-abi-%s-rust" % domain,
+        src = "stage/adapter.rs",
+        crate_name = "xm1_rtos_data_queue_abi",
+        data = ["src/lib.rs"] + _DATA,
+        rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain, "--cfg", "'feature=\"stage\"'" ],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    xm1_rust_elf(
+        name = "data-queue-%s" % domain,
+        rust_staticlib = ":data-queue-abi-%s-rust" % domain,
+        rust_components = [
+            "//replacement/rtos_objects:scheduler-%s-component" % domain,
+            "//replacement/rtos_objects:scheduler-s2-%s-component" % domain,
+        ],
+        link_script = "dq-%s.ld" % domain,
+        extra_ldflags = ["-Wl,--gc-sections", "-Wl,--orphan-handling=error"],
+        link_includes = [
+            "//replacement/rtos_scheduler:scheduler-%s-placement.ld" % domain,
+            "//replacement/rtos_scheduler:scheduler-s2-%s-placement.ld" % domain,
+        ],
+        entry = "xm1_rtos_data_queue_create",
+    )
+    for domain in ["a", "b"]
+]
+
+genrule(
+    name = "data-queue-host-tests-build",
+    srcs = ["src/lib.rs"] + _DATA + ["//replacement/rtos_scheduler:scheduler-host-rlib"],
+    outs = ["data-queue-host-tests-bin"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test --extern xm1_rtos_scheduler=$(location //replacement/rtos_scheduler:scheduler-host-rlib) -C linker=$(location @lab_clang//:bin/clang) $(location src/lib.rs) -o $@",
+    executable = True,
+    tools = [
+        "@lab_clang//:bin/clang",
+        "@lab_rustc//:bin/rustc",
+    ],
+)
+
+sh_test(
+    name = "data-queue-host-tests",
+    size = "small",
+    srcs = ["run-host-tests.sh"],
+    args = ["$(location :data-queue-host-tests-build)"],
+    data = [":data-queue-host-tests-build"],
+)
+
+haskell_library(
+    name = "data-queue-suite",
+    srcs = [
+        "native/Replacement/RtosDataQueue/Layout.hs",
+        "native/Replacement/RtosDataQueue/Suite.hs",
+    ],
+    src_strip_prefix = "native",
+    ghcopts = ["-XGHC2021", "-Wall", "-O2"],
+    deps = [
+        "//emulation:cached-native-batch",
+        "//emulation:native-adapter",
+        "//emulation:native-observation",
+        "//emulation:owned-case",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:filepath",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+    ],
+)
+
+haskell_binary(
+    name = "data-queue-oracle",
+    srcs = ["native/SuiteMain.hs"],
+    main_file = "native/SuiteMain.hs",
+    args = [
+        "--runner", "$(rootpath //emulation:native-runner)",
+        "--layout", "$(rootpath //replacement/rtos_scheduler/oracle:layout.json)",
+        "--owned-a-bin", "$(rootpath :data-queue-a.bin)",
+        "--owned-a-symbols", "$(rootpath :data-queue-a.symbols)",
+        "--owned-b-bin", "$(rootpath :data-queue-b.bin)",
+        "--owned-b-symbols", "$(rootpath :data-queue-b.symbols)",
+    ],
+    data = [
+        "//emulation:native-runner",
+        "//replacement/rtos_scheduler/oracle:layout.json",
+        ":data-queue-a.bin",
+        ":data-queue-a.symbols",
+        ":data-queue-b.bin",
+        ":data-queue-b.symbols",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-O2"],
+    deps = [
+        ":data-queue-suite",
+        "//emulation:case-sha256",
+        "//emulation:native-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:storage-budget",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+    ],
+)
