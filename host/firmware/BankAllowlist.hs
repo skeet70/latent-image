@@ -18,6 +18,7 @@ module BankAllowlist
   , Region (..)
   , Verdict (..)
   , Report (..)
+  , allowlistAnalysisIdentity
   , checkBank
   , checkBankFile
   , violations
@@ -30,9 +31,10 @@ module BankAllowlist
 import A32
 import ArmElf
 import Control.Monad (unless, when)
-import Data.Aeson (Value (..))
+import Data.Aeson (FromJSON (..), Value (..), withObject, (.:), (.:?))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
+import Data.Aeson.Types (Parser)
 import Data.Bits (complement, shiftL, shiftR, testBit, xor, (.&.), (.|.))
 import qualified Data.ByteString as B
 import Data.Char (isDigit, isHexDigit)
@@ -46,7 +48,7 @@ import qualified Data.Vector as V
 import Data.Word (Word32)
 import FujiAF.JSON (decodeStrictIntegers)
 import Numeric (readHex, showHex)
-import RamPushLayout (PublicationGroup (MenuEnginePublication), hasPublicationGroup, standardBankVariant, modalScopedBankVariant, modalEngineBankVariant, lifecycleBankVariant, modalLifecycleBankVariant, menuEngineRegionExtent, menuEngineRegionStart, runtimeAllocationSizeFor, runtimeBankEnd, runtimeDataBase, runtimeExecutableBase, runtimeInstallerBase)
+import RamPushLayout (BankVariant, PublicationGroup (MenuEnginePublication), hasPublicationGroup, bankVariantFromIdentity, bankVariantTag, modalRenderBankVariant, menuEngineRegionExtentFor, menuEngineRegionStartFor, runtimeAllocationSizeFor, runtimeBankEnd, runtimeDataBase, runtimeExecutableBase, runtimeInstallerBase)
 
 -- * Allowlist
 
@@ -197,6 +199,8 @@ data Reason
   | TargetNotCode Word32
   | Unreached
   | UnknownDeclaredFunction
+  | -- | The durable report does not carry the structured reason.
+    ReportReason
   deriving (Eq, Show)
 
 data Report = Report
@@ -252,6 +256,34 @@ reportValue report =
 hex :: Word32 -> String
 hex value = let digits = showHex value "" in "0x" ++ replicate (8 - length digits) '0' ++ digits
 
+-- | Identity of the bank allowlist analysis that produced a durable report.
+allowlistAnalysisIdentity :: String
+allowlistAnalysisIdentity = "bank-allowlist-check-r1"
+
+instance FromJSON Report where
+  parseJSON = withObject "bank allowlist report" $ \fields -> do
+    result <- fields .: "result" :: Parser T.Text
+    unless (result == "pass" || result == "overridden") (fail "allowlist report result is not pass or overridden")
+    functions <- fields .: "functions"
+    instructions <- fields .: "instructions"
+    stores <- fields .: "proven_stores"
+    branches <- fields .: "proven_branches"
+    violationFindings <- fields .: "violations" >>= mapM parseFinding
+    declaredFindings <- fields .: "declared" >>= mapM parseFinding
+    unused <- fields .: "unused_declarations" :: Parser [Value]
+    unless (null unused) (fail "prelinked allowlist report carries unused declarations")
+    pure (Report (violationFindings ++ declaredFindings) [] stores branches instructions functions)
+   where
+    parseFinding = withObject "allowlist finding" $ \finding -> do
+      address <- finding .: "address" >>= parseAddress
+      function <- finding .: "function"
+      detail <- finding .: "detail"
+      reason <- finding .:? "reason"
+      pure (Finding address function (maybe Violation DeclaredBy reason) ReportReason detail)
+    parseAddress text = case T.unpack text of
+      '0' : 'x' : digits | length digits == 8, [(value, "")] <- readHex digits -> pure value
+      _ -> fail "allowlist finding address is not eight-digit hex"
+
 renderDeclaration :: Declaration -> String
 renderDeclaration d =
   declarationFunction d ++ " " ++ (if declarationAccess d == StoreAccess then "store" else "branch") ++ " through "
@@ -272,6 +304,7 @@ data Layout = Layout
   , runtimeEnd :: Word32
   , -- | The menu engine region of a modal75,menu-engine package.
     engineCode :: Maybe (Word32, Word32)
+  , layoutBankVariant :: BankVariant
   }
 
 data Region
@@ -349,13 +382,11 @@ readLayout elf = do
   installer <- symbol "__ram_push_installer_start"
   runtime <- symbol "__ram_push_end"
   count <- absolute "RAM_PUSH_LINK_PUBLICATION_COUNT"
-  variant <- case count of
-    223 -> Right standardBankVariant
-    224 -> Right modalScopedBankVariant
-    225 -> Right modalEngineBankVariant
-    226 -> Right lifecycleBankVariant
-    227 -> Right modalLifecycleBankVariant
-    _ -> Left "layout: unsupported bank publication count"
+  tag <- case [symbolValue s | s <- elfSymbols elf, symbolName s == "RAM_PUSH_BANK_VARIANT", symbolSection s == Absolute] of
+    [] -> Right Nothing
+    [1] -> Right (Just (bankVariantTag modalRenderBankVariant))
+    _ -> Left "layout: unsupported bank variant identity"
+  variant <- bankVariantFromIdentity tag (fromIntegral count)
   let allocationSize = runtimeAllocationSizeFor variant
   dataSection <- case [s | s <- elfSections elf, sectionName s == ".data"] of
     [s] -> Right s
@@ -377,6 +408,7 @@ readLayout elf = do
       , installerStart = installer
       , runtimeEnd = runtime
       , engineCode = engine
+      , layoutBankVariant = variant
       }
  where
   absolute name = case [s | s <- elfSymbols elf, symbolName s == name, symbolSection s == Absolute] of
@@ -405,8 +437,8 @@ layoutFindings elf layout =
     , case engineCode layout of
         Nothing -> []
         Just (start, end) -> concat
-          [ check (start == menuEngineRegionStart (allocationBase layout) && start >= runtimeEnd layout
-              && end <= menuEngineRegionStart (allocationBase layout) + menuEngineRegionExtent && end <= allocationEnd layout)
+          [ check (start == menuEngineRegionStartFor (layoutBankVariant layout) (allocationBase layout) && start >= runtimeEnd layout
+              && end <= menuEngineRegionStartFor (layoutBankVariant layout) (allocationBase layout) + menuEngineRegionExtentFor (layoutBankVariant layout) && end <= allocationEnd layout)
               start "menu engine region differs from the layout"
           , sectionCheck ".menu_engine" $ \s ->
               sectionAddress s == start && sectionAddress s + sectionSize s == end

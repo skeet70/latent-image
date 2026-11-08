@@ -1,0 +1,166 @@
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+filegroup(
+    name = "module",
+    srcs = ["src/lib.rs", "src/value_picker.rs", "src/tree_list.rs", "src/pane_drawer.rs"],
+    visibility = ["//visibility:public"],
+)
+
+xm1_rust_staticlib(
+    name = "value-picker-case",
+    src = "cases/value_picker.rs",
+    data = [":module", "//replacement/render_commands:module"],
+    opt_level = "2",
+    testonly = True,
+)
+
+xm1_rust_elf(
+    name = "value-picker-case-image",
+    rust_staticlib = ":value-picker-case",
+    link_script = "cases/picker.ld",
+    entry = "rb_value_picker_case",
+    extra_ldflags = ["-Wl,--gc-sections"],
+    testonly = True,
+)
+
+xm1_rust_staticlib(
+    name = "value-picker-bank-case",
+    src = "cases/value_picker.rs",
+    data = [":module", "//replacement/render_commands:module"],
+    rustc_flags = ["--cfg=picker_recipe_bank"],
+    opt_level = "2",
+    testonly = True,
+)
+
+xm1_rust_elf(
+    name = "value-picker-bank-case-image",
+    rust_staticlib = ":value-picker-bank-case",
+    link_script = "cases/picker.ld",
+    entry = "rb_value_picker_case",
+    extra_ldflags = ["-Wl,--gc-sections"],
+    testonly = True,
+)
+
+genrule(
+    name = "value-picker-tests-build",
+    srcs = [":module", "tests/picker.rs", "src/tree_list_tests.rs", "//replacement/render_commands:module"],
+    outs = ["value-picker-tests-bin"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location tests/picker.rs) -o $@",
+    executable = True,
+    tools = ["@lab_rustc//:bin/rustc", "@lab_clang//:bin/clang"],
+)
+
+sh_test(
+    name = "value-picker-tests",
+    size = "small",
+    srcs = ["tests/run.sh"],
+    args = ["$(location :value-picker-tests-build)"],
+    data = [":value-picker-tests-build"],
+)
+
+[xm1_rust_staticlib(
+    name = "value-picker-control-" + control,
+    src = "cases/value_picker.rs",
+    data = [":module", "//replacement/render_commands:module"],
+    rustc_flags = ["--cfg=picker_" + control.replace("-", "_")],
+    opt_level = "2",
+    testonly = True,
+) for control in ["selected-unstyled", "scroll-ignored", "hidden-drawn", "disabled-offered", "report-offset-wrong"]]
+
+[xm1_rust_elf(
+    name = "value-picker-control-" + control + "-image",
+    rust_staticlib = ":value-picker-control-" + control,
+    link_script = "cases/picker.ld",
+    entry = "rb_value_picker_case",
+    extra_ldflags = ["-Wl,--gc-sections"],
+    testonly = True,
+) for control in ["selected-unstyled", "scroll-ignored", "hidden-drawn", "disabled-offered", "report-offset-wrong"]]
+
+xm1_rust_staticlib(
+    name = "tree-list-case",
+    src = "native/tree.rs",
+    data = [":module", "//replacement/render_commands:module"],
+    opt_level = "2",
+    testonly = True,
+)
+
+xm1_rust_elf(
+    name = "tree-list-case-image",
+    rust_staticlib = ":tree-list-case",
+    link_script = "native/tree.ld",
+    entry = "tree_list_entry",
+    extra_ldflags = ["-Wl,--gc-sections"],
+    testonly = True,
+)
+
+genrule(
+    name = "tree-list-tests-build",
+    srcs = [":module", "src/lib.rs", "src/tree_list_tests.rs", "//replacement/render_commands:module"],
+    outs = ["tree-list-tests-bin"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location src/lib.rs) -o $@",
+    executable = True,
+    tools = ["@lab_rustc//:bin/rustc", "@lab_clang//:bin/clang"],
+)
+
+sh_test(
+    name = "tree-list-tests",
+    size = "small",
+    srcs = ["tests/run.sh"],
+    args = ["$(location :tree-list-tests-build)"],
+    data = [":tree-list-tests-build"],
+)
+
+[xm1_rust_staticlib(
+    name = "tree-list-control-" + control,
+    src = "native/tree.rs",
+    data = [":module", "//replacement/render_commands:module"],
+    rustc_flags = ["--cfg=tree_" + control.replace("-", "_")],
+    opt_level = "2",
+    testonly = True,
+) for control in ["selected-unstyled", "page-off-by-one", "side-state-wrong"]]
+
+[xm1_rust_elf(
+    name = "tree-list-control-" + control + "-image",
+    rust_staticlib = ":tree-list-control-" + control,
+    link_script = "native/tree.ld",
+    entry = "tree_list_entry",
+    extra_ldflags = ["-Wl,--gc-sections"],
+    testonly = True,
+) for control in ["selected-unstyled", "page-off-by-one", "side-state-wrong"]]
+
+xm1_rust_staticlib(
+    name = "pane-drawer-case",
+    src = "native/pane_drawer.rs",
+    data = [":module", "//replacement/render_commands:module", "//replacement/render_adapter:module"],
+    rustc_flags = ["--cfg=rb_pane_native"],
+    opt_level = "2",
+    testonly = True,
+)
+
+xm1_rust_elf(
+    name = "pane-drawer-case-image",
+    rust_staticlib = ":pane-drawer-case",
+    link_script = "native/pane_drawer.ld",
+    entry = "owned_pane_drawer",
+    extra_ldflags = ["-Wl,--gc-sections"],
+    testonly = True,
+)
+
+[xm1_rust_staticlib(
+    name = "pane-drawer-control-" + control,
+    src = "native/pane_drawer.rs",
+    data = [":module", "//replacement/render_commands:module", "//replacement/render_adapter:module"],
+    rustc_flags = ["--cfg=rb_pane_native", "--cfg=" + ("rb_pane_preview_mutant" if control == "preview-label-wrong" else "pane_" + control.replace("-", "_"))],
+    opt_level = "2",
+    testonly = True,
+) for control in ["selected-unstyled", "page-off-by-one", "scroll-ignored", "hidden-drawn", "preview-label-wrong"]]
+
+[xm1_rust_elf(
+    name = "pane-drawer-control-" + control + "-image",
+    rust_staticlib = ":pane-drawer-control-" + control,
+    link_script = "native/pane_drawer.ld",
+    entry = "owned_pane_drawer",
+    extra_ldflags = ["-Wl,--gc-sections"],
+    testonly = True,
+) for control in ["selected-unstyled", "page-off-by-one", "scroll-ignored", "hidden-drawn", "preview-label-wrong"]]

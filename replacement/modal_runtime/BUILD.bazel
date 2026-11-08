@@ -619,12 +619,13 @@ haskell_library(
 haskell_binary(
     name = "menu-engine-pair-check",
     srcs = ["MenuEnginePairCheckMain.hs"],
-    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-rtsopts", "-with-rtsopts=-A8m -M1400m"],
     visibility = ["//visibility:public"],
     deps = [
         ":menu-engine-pair-lib",
         ":menu-engine-tree-lib",
         ":render-stack-evidence-lib",
+        "//emulation:observation-stream-lib",
         "//host/firmware:bank-allowlist",
         "//host/firmware:ram-push-layout",
         "//host:aeson",

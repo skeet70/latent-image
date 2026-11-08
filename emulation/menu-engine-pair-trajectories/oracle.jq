@@ -61,9 +61,10 @@ $graph[0].graph as $g
     "trace_sites": engine_sites($role),
     "before_unload": (
       [ {"phase": "package-menu-prefix", "capture": "oracle-live-view", "steps": [], "reads": reads} ]
-      + (if $ARGS.named.sample != null then [segment("modal-sample"; "modal-sample"; $ARGS.named.sample)] else [] end)
+      + (if $ARGS.named.sample != null then [segment("modal-sample"; "modal-sample"; ($ARGS.named.sample | presented_handoff))] else [] end)
       + (if ($c.path | length) > 0 then [segment("oracle-path"; "oracle-path"; $steps[0:-1])] else [] end)
-      + [segment("oracle-key"; "oracle-key"; $steps[-1:])]
+      + [segment("oracle-key"; "oracle-key"; (if live($landed) then $steps[-1:] | presented_handoff else $steps[-1:] end))]
       + (if ($closing | length) > 0 then [segment("close-menu"; "close-menu"; $closing)] else [] end)),
     "after_unload": []
   }
+| render_trajectory

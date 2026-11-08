@@ -10,6 +10,7 @@ exports_files(
         "//replacement/modal_runtime:__pkg__",
         "//replacement/recipe_ui:__pkg__",
         "//replacement/rtos_layout:__pkg__",
+        "//replacement/rtos_global_lock:__pkg__",
         "//replacement/rtos_objects:__pkg__",
         "//replacement/rtos_own_first:__pkg__",
         "//replacement/rtos_scheduler:__pkg__",
@@ -284,7 +285,7 @@ genrule(
     }),
     outs = ["FujiModPaths.hs"],
     cmd = " && ".join([
-        "read -r store < $(location @lab_fujimod_xm1//:share/fujimod-xm1/store-path)",
+        "read -r store < $(SRCS)",
         "printf 'module FujiModPaths (fujimodDriver, fujimodRamPushBridge, fujimodToggleBridge, fujimodRun) where\\n\\nfujimodDriver :: FilePath\\nfujimodDriver = \"%s\"\\n\\nfujimodRamPushBridge :: FilePath\\nfujimodRamPushBridge = \"%s\"\\n\\nfujimodToggleBridge :: FilePath\\nfujimodToggleBridge = \"%s\"\\n\\nfujimodRun :: FilePath\\nfujimodRun = \"%s\"\\n' \"$$store/bin/fujimod-xm1\" \"$$store/bin/fujimod-xm1-ram-push\" \"$$store/bin/fujimod-xm1-toggle\" \"$$store/share/fujimod-xm1/xm1-150.json\" > $@",
     ]),
 )
@@ -4175,7 +4176,7 @@ haskell_library(
 haskell_binary(
     name = "render-observation-bounded",
     srcs = ["RenderObservationBounded.hs"],
-    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-rtsopts", "-with-rtsopts=-A8m -M1400m"],
     deps = [
         ":emulator-usb",
         ":observation-stream-lib",
@@ -4216,6 +4217,7 @@ haskell_library(
     visibility = ["//visibility:public"],
     deps = [
         ":case-sha256",
+        ":observation-stream-lib",
         "//host/firmware:bank-allowlist",
         "//host:aeson",
         "//host:base",

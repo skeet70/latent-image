@@ -1,0 +1,63 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
+
+package(default_visibility = ["//visibility:public"])
+
+_GHCOPTS = ["-XGHC2021", "-Wall", "-Werror", "-O2"]
+
+haskell_library(
+    name = "global-lock-oracle-lib",
+    srcs = ["Replacement/RtosGlobalLock/Suite.hs"],
+    src_strip_prefix = ".",
+    ghcopts = _GHCOPTS,
+    deps = [
+        "//emulation:cached-native-batch",
+        "//emulation:native-adapter",
+        "//emulation:native-observation",
+        "//emulation:owned-case",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:filepath",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+    ],
+)
+
+_INPUTS = [
+    "//emulation:native-runner",
+    "//replacement/rtos_global_lock:global-lock-a.bin",
+    "//replacement/rtos_global_lock:global-lock-a.symbols",
+    "//replacement/rtos_global_lock:global-lock-b.bin",
+    "//replacement/rtos_global_lock:global-lock-b.symbols",
+]
+
+haskell_binary(
+    name = "global-lock-oracle",
+    srcs = ["GlobalLockMain.hs"],
+    main_file = "GlobalLockMain.hs",
+    args = [
+        "--runner",
+        "$(rootpath //emulation:native-runner)",
+        "--owned-a-bin",
+        "$(rootpath //replacement/rtos_global_lock:global-lock-a.bin)",
+        "--owned-a-symbols",
+        "$(rootpath //replacement/rtos_global_lock:global-lock-a.symbols)",
+        "--owned-b-bin",
+        "$(rootpath //replacement/rtos_global_lock:global-lock-b.bin)",
+        "--owned-b-symbols",
+        "$(rootpath //replacement/rtos_global_lock:global-lock-b.symbols)",
+    ],
+    data = _INPUTS,
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":global-lock-oracle-lib",
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:storage-budget",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+    ],
+)

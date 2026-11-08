@@ -1,0 +1,149 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+_MODULES = [
+    "src/admission.rs",
+    "src/create.rs",
+    "src/get.rs",
+    "src/id.rs",
+    "src/machine.rs",
+    "src/release.rs",
+    "src/status.rs",
+    "src/take.rs",
+    "src/teardown.rs",
+    "src/timeout.rs",
+]
+
+xm1_rust_staticlib(
+    name = "fixed-pool-rust",
+    src = "src/lib.rs",
+    crate_name = "xm1_rtos_fixed_pool",
+    data = _MODULES + ["//replacement/rtos_layout:src/lib.rs", "//replacement/rtos_reservation:src/lib.rs"],
+)
+
+[
+    xm1_rust_staticlib(
+        name = "fixed-pool-stage-%s" % domain,
+        src = "stage/adapter.rs",
+        crate_name = "xm1_rtos_fixed_pool_stage",
+        data = _MODULES + ["src/lib.rs", "//replacement/rtos_layout:src/lib.rs", "//replacement/rtos_reservation:src/lib.rs"],
+        rustc_flags = [
+            "--cfg",
+            "'feature=\"domain-%s\"'" % domain,
+            "--cfg",
+            "'feature=\"stage\"'",
+        ],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    xm1_rust_elf(
+        name = "fixed-pool-%s" % domain,
+        rust_staticlib = ":fixed-pool-stage-%s" % domain,
+        asm_srcs = ["stage/entries.S"],
+        link_script = "stage/fp-%s.ld" % domain,
+        extra_ldflags = [
+            "-Wl,--gc-sections",
+            "-Wl,--orphan-handling=error",
+        ],
+        entry = "xm1_rtos_fixed_pool_poll_unchecked",
+    )
+    for domain in ["a", "b"]
+]
+
+genrule(
+    name = "fixed-pool-host-tests-build",
+    srcs = _MODULES + [
+        "src/lib.rs",
+        "src/sim.rs",
+        "src/tests.rs",
+        "//replacement/rtos_layout:src/lib.rs",
+        "//replacement/rtos_reservation:src/lib.rs",
+    ],
+    outs = ["fixed-pool-host-tests-bin"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test --crate-name=xm1_rtos_fixed_pool -C linker=$(location @lab_clang//:bin/clang) $(location src/lib.rs) -o $@",
+    executable = True,
+    tools = [
+        "@lab_clang//:bin/clang",
+        "@lab_rustc//:bin/rustc",
+    ],
+)
+
+sh_test(
+    name = "fixed-pool-host-tests",
+    size = "small",
+    srcs = ["stage/host-tests.sh"],
+    args = ["$(location :fixed-pool-host-tests-build)"],
+    data = [":fixed-pool-host-tests-build"],
+)
+
+genrule(
+    name = "layout-facts-build",
+    srcs = [
+        "native/layout-facts.rs",
+        "//replacement/rtos_layout:src/lib.rs",
+        "//replacement/rtos_reservation:src/lib.rs",
+    ],
+    outs = ["layout-facts-bin"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 -A dead_code -C linker=$(location @lab_clang//:bin/clang) $(location native/layout-facts.rs) -o $@",
+    executable = True,
+    tools = [
+        "@lab_clang//:bin/clang",
+        "@lab_rustc//:bin/rustc",
+    ],
+)
+
+genrule(
+    name = "layout-facts",
+    outs = ["layout.json"],
+    cmd = "$(location :layout-facts-build) > $@",
+    tools = [":layout-facts-build"],
+)
+
+haskell_library(
+    name = "family-oracle",
+    srcs = ["native/Replacement/RtosFixedPool/Oracle.hs"],
+    src_strip_prefix = "native",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:cached-native-batch",
+        "//emulation:native-adapter",
+        "//emulation:native-observation",
+        "//emulation:owned-case",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:filepath",
+    ],
+)
+
+haskell_binary(
+    name = "family-suite",
+    srcs = ["native/SuiteMain.hs"],
+    main_file = "native/SuiteMain.hs",
+    data = [
+        ":layout.json",
+        ":fixed-pool-a.bin",
+        ":fixed-pool-b.bin",
+        ":fixed-pool-a.symbols",
+        ":fixed-pool-b.symbols",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":family-oracle",
+        "//emulation:fujimod-native-paths",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:storage-budget",
+    ],
+)

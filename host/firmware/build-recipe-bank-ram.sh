@@ -2,6 +2,7 @@
 # Host-only base-relinked recipe-bank and installer build, run by
 # `//transport:camera` from the workspace root with Bazel-provided tool paths.
 set -euo pipefail
+umask 077
 
 builder_mode=(--ram-push)
 allocation_size=0x1dc98
@@ -67,9 +68,9 @@ RC0_ID5="${RC0_ID5:?}"
 RC0_PLAIN="${RC0_PLAIN:?}"
 RB_RUST_ARCHIVE="${RB_RUST_ARCHIVE:?}"
 
-case "$OUT" in
-  private-data/analysis/x-m1-1.50/ram-push/*) ;;
-  *) printf 'output must stay under the host-only RAM-push directory\n' >&2; exit 1 ;;
+case "$(realpath -m -- "$OUT")" in
+  "$(realpath -m -- private-data/scratch)"/*|"$(realpath -m -- private-data/analysis/x-m1-1.50/ram-push)"/*) ;;
+  *) printf 'output must stay under a named private-data/scratch directory or the host-only RAM-push directory\n' >&2; exit 1 ;;
 esac
 [[ -d "$OUT" && ! -L "$OUT" ]] || { printf 'output directory must exist\n' >&2; exit 1; }
 [[ -f "$RB_RUST_ARCHIVE" ]] || { printf 'service archive must be a regular file\n' >&2; exit 1; }

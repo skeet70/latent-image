@@ -116,7 +116,7 @@ main = do
 
   stateDir <- privateDirectory (root </> "state")
   statePath <- writeStateFile stateDir
-    (RamPushState (replicate 64 'a') (sha256 (runtime payload)) (Address base) (payloadAllocationSize payload) (entries offset) (publications payload) callbackStockWord bootstrapBytes 1)
+    (RamPushState (replicate 64 'a') (sha256 (runtime payload)) (Address base) (payloadAllocationSize payload) (entries offset) (publications payload) callbackStockWord bootstrapBytes 1 (payloadBankVariant payload))
   let unloadReason = case payloadKind payload of
         UsbToggle -> "ram-unload refused: USB toggle requires full battery removal"
         _ -> "installed state publication contract differs from the compiled reviewed contract"
@@ -145,7 +145,7 @@ main = do
     selectedStateDir <- privateDirectory (selectedRoot </> "state")
     selectedStatePath <- writeStateFile selectedStateDir
       (RamPushState (replicate 64 'a') (sha256 selectedRuntime) (Address base)
-        (payloadAllocationSize selected) (entries offset) (publications selected) callbackStockWord bootstrapBytes 1)
+        (payloadAllocationSize selected) (entries offset) (publications selected) callbackStockWord bootstrapBytes 1 (payloadBankVariant selected))
     _ <- readRamPushState selectedStatePath
     refuses camera (name ++ ": live allocation is refused")
       ["ram-alloc", show (payloadAllocationSize selected), selectedRoot </> "allocate-refused"] refusal

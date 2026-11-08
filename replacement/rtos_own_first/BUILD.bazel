@@ -15,7 +15,7 @@ exports_files([
         crate_name = "xm1_rtos_own_first",
         data = [
             "src/entries.rs",
-            "//replacement/rtos_layout:src/lib.rs",
+            "//replacement/rtos_layout:src/lib.rs", "//replacement/rtos_reservation:src/lib.rs",
         ],
         rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain],
     )
@@ -41,7 +41,7 @@ genrule(
     srcs = [
         "src/lib.rs",
         "src/tests.rs",
-        "//replacement/rtos_layout:src/lib.rs",
+        "//replacement/rtos_layout:src/lib.rs", "//replacement/rtos_reservation:src/lib.rs",
     ],
     outs = ["own-first-host-tests-bin"],
     cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location src/lib.rs) -o $@",

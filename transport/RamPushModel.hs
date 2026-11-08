@@ -46,7 +46,7 @@ runtime = B.pack [fromIntegral (index `mod` 251) | index <- [0..reviewedAllocati
 manifest :: RamPushManifest
 manifest = RamPushManifest "/manifest.json" "/runtime.bin" (replicate 64 'a')
   [("menu/recipe_bank_hook.c",replicate 64 'b')] (Address base) (B.length runtime)
-  (sha256 runtime) runtime (RamPushEntries (Address (base+0xa200)) (Address (base+0xa204)) (Address (base+0xa208))) publications
+  (sha256 runtime) runtime (RamPushEntries (Address (base+0xa200)) (Address (base+0xa204)) (Address (base+0xa208))) publications (payloadBankVariant bankD3Payload)
 
 allocation :: RamAllocState
 allocation = RamAllocState (Address base) reviewedAllocationSize 0x4003 callbackTableAddress callbackStockWord bootstrapBytes (sha256 (B.replicate reviewedAllocationSize 0)) "X-M1" 1

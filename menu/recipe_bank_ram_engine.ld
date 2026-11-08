@@ -3,6 +3,9 @@
  * menuEngineRegionStart, past the installer). build-recipe-bank-ram.sh renames
  * the engine's input sections to .menu_engine.* so .text's wildcards miss them. */
 __rb_menu_engine_stock_resume = 0x00bf95cc;
+PROVIDE(__rb_render_tree_stock_resume = 0x01164e20);
+PROVIDE(__rb_render_picker_stock_resume = 0x01163f30);
+PROVIDE(__rb_render_pane_stock_resume = 0x011662a4);
 
 SECTIONS {
   .menu_engine RAM_PUSH_MENU_ENGINE_START : {
@@ -16,3 +19,5 @@ SECTIONS {
 ASSERT(__rb_menu_engine_start == RAM_PUSH_MENU_ENGINE_START, "menu engine region placement changed")
 ASSERT(__rb_menu_engine_end <= RAM_PUSH_MENU_ENGINE_END, "menu engine overflows its region")
 ASSERT(RAM_PUSH_MENU_ENGINE_START >= __ram_push_end, "menu engine region overlaps the installer")
+ASSERT(!DEFINED(RAM_PUSH_BANK_VARIANT) || RAM_PUSH_MENU_ENGINE_START == RAM_PUSH_BASE + 0x1dd00, "render region start differs")
+ASSERT(!DEFINED(RAM_PUSH_BANK_VARIANT) || RAM_PUSH_MENU_ENGINE_END == RAM_PUSH_BASE + 0x2dcc0, "render allocation end differs")

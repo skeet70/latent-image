@@ -20,6 +20,7 @@ import Data.List (nub, sort, sortOn, stripPrefix)
 import qualified Data.Map.Strict as M
 import Data.Word (Word32)
 import qualified EngineStack as S
+import Emulation.ObservationStream (countObservationDrawersValue, loadReceiptObservationValues)
 import qualified RenderStack as R
 import Numeric (readHex)
 import RamPushLayout (PublicationAddress (..), menuEngineHookAddress, modalEngineBankVariant, modalRenderBankVariant, renderHookAddresses, runtimeAllocationSizeFor, safePublicationOrderForVariant)
@@ -31,7 +32,7 @@ import qualified Replacement.ModalRuntime.RenderStackEvidence as E
 import System.Directory (doesFileExist, listDirectory)
 import System.Environment (getArgs)
 import System.Exit (exitFailure, exitSuccess)
-import System.FilePath ((</>))
+import System.FilePath ((</>), takeFileName)
 import System.IO (hPutStrLn, stderr)
 
 data RenderSelection = OwnedRender RenderConfig | RetainedRender RenderConfig deriving (Eq)
@@ -45,15 +46,19 @@ mapSelection f (RetainedRender config) = RetainedRender (f config)
 observations :: FilePath -> IO [ObservationReader]
 observations directory = do
   resultBytes <- B.readFile (directory </> "e2e-result.json")
+  resultValue <- either (fail . ((directory </> "e2e-result.json: ") ++)) pure (J.eitherDecodeStrict' resultBytes)
   phases <- either (fail . ((directory </> "e2e-result.json: ") ++)) pure
-    (J.eitherDecodeStrict' resultBytes >>= J.parseEither (J.withObject "e2e result" $ \fields ->
-      fields J..: "phases" >>= mapM (J.withObject "phase" (J..: "name"))))
+    (J.parseEither (J.withObject "e2e result" $ \fields ->
+      fields J..: "phases" >>= mapM (J.withObject "phase" (J..: "name"))) resultValue)
   let segments = segmentResidencies phases
   names <- listDirectory directory
   let numbered = sortOn fst [(read digits :: Int, name) | name <- names, Just rest <- [stripPrefix "e2e-observation-" name]
         , let digits = takeWhile isDigit rest, not (null digits), drop (length digits) rest == ".json"]
   unless (map fst numbered == [0 .. length segments - 1])
     (fail (directory ++ ": observation files " ++ show (map fst numbered) ++ " are not one per segment of the run's " ++ show (length segments)))
+  verified <- either (fail . ((directory ++ ": ") ++)) pure =<< loadReceiptObservationValues directory resultValue
+  unless (map (takeFileName . fst) verified == map snd numbered)
+    (fail (directory ++ ": observation references do not name its numbered documents"))
   forM numbered $ \(index, name) -> do
     let path = directory </> name
     bytes <- B.readFile path
@@ -187,6 +192,20 @@ validateEngineOnlyManifest = J.withObject "engine-only manifest" $ \fields -> do
 main :: IO ()
 main = do
   arguments <- getArgs
+  case arguments of
+    ["--count-drawers", directory] -> countDrawers directory
+    _ -> runCheck arguments
+
+countDrawers :: FilePath -> IO ()
+countDrawers directory = do
+  bytes <- B.readFile (directory </> "e2e-result.json")
+  value <- either (ioError . userError) pure (J.eitherDecodeStrict' bytes)
+  verified <- either (ioError . userError) pure =<< loadReceiptObservationValues directory value
+  counts <- mapM (\(_, document) -> either (ioError . userError) pure =<< countObservationDrawersValue directory document) verified
+  print (sum counts)
+
+runCheck :: [String] -> IO ()
+runCheck arguments = do
   (render, tablesPath, planPath, stockPath, ownedPath) <- either fail pure (options arguments)
   stockTables <- B.readFile tablesPath >>= either fail pure . (J.eitherDecodeStrict' :: B.ByteString -> Either String TablesDocument)
   plan <- B.readFile planPath >>= either fail pure . J.eitherDecodeStrict'
