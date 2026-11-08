@@ -22,7 +22,7 @@ import Emulation.OwnedCase (CaseId, CaseSpec, caseId, loadObservedBatch, writeBa
 import Emulation.Sha256 (Sha256, sha256, sha256File, sha256Hex)
 import FujiAF.JSON (encodeCanonical)
 import FujiAF.StorageBudget (checkStorageBudget)
-import FujiModPaths (fujimodNativeCase)
+import FujiModNativePaths (fujimodNativeCase)
 import Replacement.RecordStore.CaseJson (decodeCase, encodeCase)
 import Replacement.RecordStore.Cases (caseName, name)
 import Replacement.RecordStore.Execution

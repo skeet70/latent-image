@@ -316,6 +316,23 @@ def _lab_dependencies_impl(_ctx):
         repository = "@lab_nixpkgs",
         build_file_content = 'filegroup(name = "test-harnesses", srcs = glob(["libexec/fujimod-xm1-tests/*"]), visibility = ["//visibility:public"])\nfilegroup(name = "test-manifest", srcs = ["libexec/fujimod-xm1-tests/manifest"], visibility = ["//visibility:public"])',
     )
+    nixpkgs_package(
+        name = "lab_fujimod_native",
+        nix_file = "//build-support:fujimod-xm1.nix",
+        nix_file_deps = _FUJIMOD_NIX_DEPS + _FUJIMOD_XM1_CRATE,
+        nixopts = _RUST_NIX_BUILD_CAP + ["--arg", "nativeOnly", "true"],
+        repository = "@lab_nixpkgs",
+        build_file_content = 'exports_files(["bin/fujimod-xm1-native-case", "share/fujimod-xm1/store-path"], visibility = ["//visibility:public"])',
+    )
+    nixpkgs_package(
+        name = "lab_fujimod_native_tests",
+        nix_file = "//build-support:fujimod-xm1.nix",
+        attribute_path = "tests",
+        nix_file_deps = _FUJIMOD_NIX_DEPS + _FUJIMOD_XM1_CRATE,
+        nixopts = _RUST_NIX_BUILD_CAP + ["--arg", "nativeOnly", "true"],
+        repository = "@lab_nixpkgs",
+        build_file_content = 'filegroup(name = "test-harnesses", srcs = glob(["libexec/fujimod-xm1-tests/*"]), visibility = ["//visibility:public"])\nfilegroup(name = "test-manifest", srcs = ["libexec/fujimod-xm1-tests/manifest"], visibility = ["//visibility:public"])',
+    )
 
     # The RAM-push relinker's tools; ram-push-toolchain-paths records their
     # store paths.

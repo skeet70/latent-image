@@ -191,7 +191,7 @@ haskell_library(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         "//emulation:case-sha256",
-        "//emulation:fujimod-paths",
+        "//emulation:fujimod-native-paths",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -313,7 +313,7 @@ haskell_binary(
         ":property-oracle-lib",
         ":property-service-artifact",
         "//emulation:cached-native-batch",
-        "//emulation:fujimod-paths",
+        "//emulation:fujimod-native-paths",
         "//emulation:case-sha256",
         "//emulation:native-observation",
         "//emulation:owned-case",
