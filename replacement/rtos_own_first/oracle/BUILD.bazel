@@ -15,7 +15,10 @@ haskell_library(
     srcs = [
         "Replacement/RtosOwnFirst/Assembly.hs",
         "Replacement/RtosOwnFirst/Controls.hs",
+        "Replacement/RtosOwnFirst/Generate.hs",
+        "Replacement/RtosOwnFirst/Generated.hs",
         "Replacement/RtosOwnFirst/Oracle.hs",
+        "Replacement/RtosOwnFirst/Shrink.hs",
         "Replacement/RtosOwnFirst/Verdict.hs",
     ],
     src_strip_prefix = ".",
@@ -27,6 +30,7 @@ haskell_library(
         "//host:base",
         "//host:bytestring",
         "//host:containers",
+        "//host:directory",
         "//host:filepath",
         "//host:host-support",
         "//replacement/rtos_own_first/stage:own-first-artifact",

@@ -4,10 +4,12 @@
 -- owned body on at least one case, and the owned body and the equivalents match it on every case.
 module Main (main) where
 
+import Control.Exception (SomeException, try)
 import Control.Monad (forM, unless)
 import Data.Bits (complement, (.&.))
 import qualified Data.ByteString as B
 import Data.Char (isAsciiLower, isDigit)
+import Data.Either (isLeft, isRight)
 import Data.List (nub, sort)
 import qualified Data.Map.Strict as M
 import Data.Word (Word32)
@@ -28,8 +30,11 @@ import Emulation.NativeObservation
 import Replacement.RtosOwnFirst.Artifact (LinkedDomain (..))
 import Replacement.RtosOwnFirst.Assembly
 import Replacement.RtosOwnFirst.Controls
+import Replacement.RtosOwnFirst.Generate
+import Replacement.RtosOwnFirst.Generated
 import Replacement.RtosOwnFirst.Oracle
 import Replacement.RtosOwnFirst.Regions hiding (GuestAddress (..))
+import Replacement.RtosOwnFirst.Shrink
 import Replacement.RtosOwnFirst.Verdict
 import System.Directory (removeDirectoryRecursive)
 import System.Environment (getArgs, getEnv)
@@ -81,6 +86,11 @@ observation overrides callerFrame writes =
 
 runFrom :: [(Register, Word32)] -> B.ByteString -> [WriteEvent] -> Either String Run
 runFrom overrides callerFrame writes = runOf DomainA (observation overrides callerFrame [(eventAddress e, eventWidth e) | e <- writes]) writes
+
+firstGeneratedRow :: Row
+firstGeneratedRow = case generateRows (GenerationSeed 1) (GenerationCount 1) of
+  row : _ -> row
+  [] -> error "generateRows returned no row"
 
 pureChecks :: DomainTable -> [IO Bool]
 pureChecks tableA =
@@ -140,6 +150,34 @@ pureChecks tableA =
             == Right [0xeb002e8e, 0xe3043760, 0xe5d3000e, 0x13e00018, 0xe3130080, 0xe121f001, 0xee121e10, 0xe0020392, 0xe1a031c3, 0xe92d4800, 0xe8bd8800, 0xe12fff1e]
       , check "labels resolve forward and backward" (assembleAt 0x1000 [mark (Label "top"), on CondEq (branch (Label "end")), branch (Label "top"), mark (Label "end")] == Right [0x0a000000, 0xeafffffd])
       , check "one mutant per slot and two equivalents" (sort (map controlSlot mutants) == slots && length equivalents == 2 && all ((== MustFail) . controlExpectation) mutants && all ((== MustPass) . controlExpectation) equivalents)
+      , check "generated rows are deterministic, counted and valid" $
+          let seed = GenerationSeed 0x2545f4914f6cdd1d
+              rows = generateRows seed (GenerationCount 32)
+           in length rows == 32 && rows == generateRows seed (GenerationCount 32) && all validRow rows
+      , check "the seed changes the generated corpus" (generateRows (GenerationSeed 1) (GenerationCount 8) /= generateRows (GenerationSeed 2) (GenerationCount 8))
+      , check "a generated task word is a record start of the 120-record table" $
+          let row = firstGeneratedRow
+           in validRow row
+                && all (\offset -> validRow row {rowTask = TaskAt offset} == (offset `elem` [0, 119 * recordBytes])) [0, 4, 8, 119 * recordBytes, 120 * recordBytes, -recordBytes]
+      , check "generation, budget and control inputs are bounded" $
+          all isLeft [parseGenerationCount "0", parseGenerationCount "257"]
+            && all isLeft [parseGenerationSeed "zz", parseGenerationSeed "0x"]
+            && all isLeft [parseShrinkBudget "0", parseShrinkBudget "257"]
+            && all isRight [parseGenerationCount "1", parseGenerationCount "256"]
+            && all isRight [parseGenerationSeed "0x2545f4914f6cdd1d", parseGenerationSeed "17"]
+            && isRight (parseShrinkBudget "32")
+      , do
+          let row = firstGeneratedRow
+          reduction <- shrinkRow (ShrinkBudget 32) (const (pure False)) row
+          check "reduction stops at a fixed point when no candidate reproduces" (reductionStatus reduction == FixedPoint && reductionReduced reduction == row)
+      , do
+          let row = firstGeneratedRow
+          reduction <- shrinkRow (ShrinkBudget 1) (const (pure True)) row
+          check "reduction reports an exhausted budget" (reductionStatus reduction == BudgetExhausted)
+      , do
+          let row = firstGeneratedRow
+          reduction <- shrinkRow (ShrinkBudget 32) (\candidate -> pure (taskSlotOf candidate == 0)) row
+          check "reduction accepts only valid smaller inputs" (reductionStatus reduction == FixedPoint && taskSlotOf (reductionReduced reduction) == 0 && validRow (reductionReduced reduction))
       ]
 
 -- | Every grid row with the controls alone, or 'sampleKeys' with the reference repeated as a control too.
@@ -205,6 +243,49 @@ stoppingChecks scope runner temporary fill table owned =
         , check "a mutant that never returns does not hold" (not (holds asMutant) && outcomeDifferingStopped (resultOutcome asMutant) == outcomeCases (resultOutcome asMutant))
         ]
 
+-- | The generated corpus and its first reduced difference against the existing +0x16c control,
+-- with the owned body as the reference the native tests can build without a loader file.
+generatedChecks :: FilePath -> FilePath -> Word32 -> Domain -> DomainTable -> OwnedDomain -> IO [Bool]
+generatedChecks runner temporary fill domain table owned =
+  case (ownedBody owned S16c, [control | control <- mutants, controlSlot control == S16c]) of
+    (Right body, control : _) -> case controlCode domain table control >>= \code -> replaceEntry fill code body of
+      Left problem -> (: []) <$> check ("generated corpus: " ++ problem) False
+      Right controlBody -> do
+        let input =
+              GeneratedInput
+                { generatedRunner = runner
+                , generatedWork = temporary </> "generated-" ++ domainLabel domain
+                , generatedDomainId = domain
+                , generatedReferenceName = "owned"
+                , generatedReferenceBody = body
+                , generatedSubjects = [(controlName control, controlBody)]
+                , generatedSeed = GenerationSeed 0x2545f4914f6cdd1d
+                , generatedCount = GenerationCount 12
+                , generatedBudget = ShrinkBudget 32
+                }
+        result <- runGeneratedDomain input
+        case generatedResults result of
+          [subject] -> case subjectReduction subject of
+            Just report -> do
+              let originalKinds = map differenceKind (shrinkOriginalDifferences report)
+                  replayKinds = map differenceKind (shrinkReplayDifferences report)
+              rejected <-
+                try
+                  (loadBatchRuns runner (replayReferenceBatch (shrinkReducedBatches report)) (const "changed-binding") domain [(shrinkOriginalKey report, shrinkReducedRow report)])
+                  :: IO (Either SomeException (M.Map CaseKey Run))
+              sequence
+                [ check "generated corpus: the reference returns" (generatedReferenceReturned result)
+                , check "generated corpus: the +0x16c control differs on a returned case" (outcomeDifferingReturned (subjectOutcome subject) > 0)
+                , check "generated corpus: the reduction preserves the compared boundary" (not (null originalKinds) && replayKinds == originalKinds)
+                , check "generated corpus: the reduction reaches a smaller valid task record" (validRow (shrinkReducedRow report) && taskSlotOf (shrinkReducedRow report) < taskSlotOf (shrinkOriginalRow report))
+                , check "generated corpus: the replay reproduces the reduced case" (shrinkReplayDifferences report == shrinkReducedDifferences report)
+                , check "generated corpus: the replay rejects a changed case binding" (case rejected of Left _ -> True; Right _ -> False)
+                ]
+            Nothing -> (: []) <$> check "generated corpus: the control difference was reduced" False
+          _ -> (: []) <$> check "generated corpus: one subject result" False
+    (Right _, []) -> (: []) <$> check "generated corpus: no +0x16c control" False
+    (Left problem, _) -> (: []) <$> check ("generated corpus: " ++ problem) False
+
 main :: IO ()
 main = do
   hSetBuffering stdout LineBuffering
@@ -227,10 +308,12 @@ main = do
         [] -> pure [False]
       checked <- fmap concat . forM (zip domains owned) $ \(domain, ownedRows) ->
         mapM (nativeChecks scope runner temporary (tableFill table) domain (domainTable table domain) ownedRows) slots
+      generated <- fmap concat . forM (zip domains owned) $ \(domain, ownedRows) ->
+        generatedChecks runner temporary (tableFill table) domain (domainTable table domain) ownedRows
       let failures = concatMap fst checked
           reports = [report | (_, Just report) <- checked]
       nativeResult <- check "owned bodies return and the controls hold in both loaders" (null failures && length reports == 2 * length slots)
       mapM_ (putStrLn . ("     " ++)) failures
       verdictResult <- check "the verdict over every slot report exits 0" (verdictExit reports == ExitSuccess)
-      unless (and (nativeResult : verdictResult : sampleResult : pureResults ++ stopping)) exitFailure
+      unless (and (nativeResult : verdictResult : sampleResult : pureResults ++ stopping ++ generated)) exitFailure
     _ -> fail "usage: own-first-oracle-tests full|sample RUNNER REGIONS BIN_A SYMBOLS_A BIN_B SYMBOLS_B"
