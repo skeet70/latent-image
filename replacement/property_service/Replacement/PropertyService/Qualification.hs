@@ -37,7 +37,7 @@ import qualified Data.Text as T
 import Emulation.Sha256 (sha256, sha256Hex, sha256File)
 import FujiAF.Host (failH, readRegular, runBounded)
 import FujiAF.JSON (encodeCanonical)
-import FujiModPaths (fujimodNativeCase)
+import FujiModNativePaths (fujimodNativeCase)
 import Numeric (readHex, showHex)
 import PropertyFields (PropertyId (..))
 import System.Directory

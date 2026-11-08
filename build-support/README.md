@@ -42,7 +42,7 @@ Bazel 7.6's native disk-cache garbage collector keeps this cache within 20 GiB a
 Concurrent agents also work in separate git worktrees, so an edit in one never invalidates another agent's build or emulator run. `build-support/agent-worktree.sh NAME [BASE]` creates `../latent-image-worktrees/NAME` on branch `agent/NAME`, symlinks the checkout's ignored `private-data/` into it and prints the output base to use. The agent commits on its `agent/NAME` branch; the integration owner merges it. Once the branch is merged into the main work branch, the integration owner removes the worktree (`git worktree remove ../latent-image-worktrees/NAME`), deletes the branch and deletes `~/.cache/bazel/latent-image-NAME`.
 
 ```sh
-devenv shell -- host-build test //emulation:native-runner-tests
+devenv shell -- host-build test --jobs=2 --local_test_jobs=1 //emulation:native-sdk-tests //emulation:native-runner-tests
 ```
 
 Research output is compacted under the [evidence ledger rules](../docs/principles.md#evidence-ledger). A deletion plan names the current conclusions and failure classes preserved, the retained evidence and the exact redundant files to remove. Record path hashes and preservation checks under `private-data/scratch/reclaim/`, and recheck active runs, current baselines and unmerged work before applying it.
@@ -163,7 +163,21 @@ The adapter's `r4f::Guard` uses translation admission on every core, without a b
 
 The SDK's `out` output contains runtime executables and `share/fujimod-xm1/`; its `tests` output contains `libexec/fujimod-xm1-tests/` and the harness manifest. `lab_fujimod_xm1` selects `out`, while `lab_fujimod_xm1_tests` selects `tests` from the same derivation. Runtime evidence roots should retain `out`; retain `tests` when citing test executables. The runtime closure excludes the test output. Existing rooted monolithic SDKs remain unchanged, so the split reduces future retention rather than reclaiming historical storage. The checkpoint model identity includes `fujimod-xm1.nix`; packaging edits invalidate incompatible checkpoints through the existing restore check.
 
-Packaging and compiled-code edit measurements are recorded in `E-FUJIMOD-SDK-OUTPUTS-150`. The split changes retention rather than compilation scope; the SDK still builds every binary and exported harness.
+Packaging and compiled-code edit measurements are recorded in `E-FUJIMOD-SDK-OUTPUTS-150`. The split changes retention rather than compilation scope; the default SDK still builds every binary and exported harness.
+
+Routine native qualification uses `fujimod-xm1.nix` with `nativeOnly = true`, exposed by `lab_fujimod_native` and `lab_fujimod_native_tests`. It builds `fujimod-xm1-native-case` and the `native_case` integration harness from a generated manifest that preserves the original dependencies and features but declares only that binary. [Cargo otherwise builds binary targets when an integration test is selected](https://doc.rust-lang.org/cargo/commands/cargo-test.html#target-selection). The variant reuses the full SDK's Crane dependency archive. `//emulation:native-sdk-tests` executes its complete harness manifest; `//emulation:native-runner-tests` exercises the caller-facing native contract. The full integration boundary remains `//emulation:fujimod-xm1-tests`, which executes every full-SDK harness.
+
+`FujiModNativePaths` binds native-only Haskell consumers to this variant. `FujiModPaths` continues to bind full-system drivers and bridges to the full SDK. Native qualification does not require the full SDK through the generated path module.
+
+`E-FUJIMOD-NATIVE-TARGETS-150` records one matched compiled-code edit and the same 74 native Rust cases plus the same native-runner suite. End-to-end time includes shell activation, admission, dependency realization, compilation and tests. Both variants reuse existing dependency artifacts; the targeted sample also realizes its new manifest generator input.
+
+| Seconds | Full SDK | Native targets |
+| --- | ---: | ---: |
+| End-to-end | 466.9 | 85.8 |
+| Admitted build and tests | 228.0 | 75.4 |
+| Host-build lock wait | 234.3 | 6.0 |
+
+The admitted saving is 152.6 seconds, about 67%, exceeding the experiment's 30% and 60-second adoption threshold independently of the different queue waits. This is one pair on a contended host, not a statistical speed estimate. The temporary Rust probe is removed; full integration coverage and test deadlines are unchanged.
 
 `fujimod.nix`'s Cargo check hook derives `RUST_TEST_THREADS` from `NIX_BUILD_CORES`; the package sets `dontUseCargoParallelTests`, which makes that hook use one test thread.
 

@@ -21,7 +21,7 @@ import Emulation.NativeCase
 import qualified Emulation.NativeObservation as N
 import qualified Emulation.OwnedCase as O
 import FujiAF.Host (ensure, get, jsonRead, list, str, withTemporary)
-import FujiModPaths (fujimodNativeCase)
+import FujiModNativePaths (fujimodNativeCase)
 import System.Directory
   ( Permissions (..)
   , canonicalizePath

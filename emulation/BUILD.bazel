@@ -272,13 +272,31 @@ genrule(
     outs = ["FujiModPaths.hs"],
     cmd = " && ".join([
         "read -r store < $(location @lab_fujimod_xm1//:share/fujimod-xm1/store-path)",
-        "printf 'module FujiModPaths (fujimodDriver, fujimodRamPushBridge, fujimodToggleBridge, fujimodRun, fujimodNativeCase) where\\n\\nfujimodDriver :: FilePath\\nfujimodDriver = \"%s\"\\n\\nfujimodRamPushBridge :: FilePath\\nfujimodRamPushBridge = \"%s\"\\n\\nfujimodToggleBridge :: FilePath\\nfujimodToggleBridge = \"%s\"\\n\\nfujimodRun :: FilePath\\nfujimodRun = \"%s\"\\n\\nfujimodNativeCase :: FilePath\\nfujimodNativeCase = \"%s\"\\n' \"$$store/bin/fujimod-xm1\" \"$$store/bin/fujimod-xm1-ram-push\" \"$$store/bin/fujimod-xm1-toggle\" \"$$store/share/fujimod-xm1/xm1-150.json\" \"$$store/bin/fujimod-xm1-native-case\" > $@",
+        "printf 'module FujiModPaths (fujimodDriver, fujimodRamPushBridge, fujimodToggleBridge, fujimodRun) where\\n\\nfujimodDriver :: FilePath\\nfujimodDriver = \"%s\"\\n\\nfujimodRamPushBridge :: FilePath\\nfujimodRamPushBridge = \"%s\"\\n\\nfujimodToggleBridge :: FilePath\\nfujimodToggleBridge = \"%s\"\\n\\nfujimodRun :: FilePath\\nfujimodRun = \"%s\"\\n' \"$$store/bin/fujimod-xm1\" \"$$store/bin/fujimod-xm1-ram-push\" \"$$store/bin/fujimod-xm1-toggle\" \"$$store/share/fujimod-xm1/xm1-150.json\" > $@",
     ]),
 )
 
 haskell_library(
     name = "fujimod-paths",
     srcs = [":fujimod-paths-module"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror"],
+    visibility = ["//visibility:public"],
+    deps = ["//host:base"],
+)
+
+genrule(
+    name = "fujimod-native-paths-module",
+    srcs = ["@lab_fujimod_native//:share/fujimod-xm1/store-path"],
+    outs = ["FujiModNativePaths.hs"],
+    cmd = " && ".join([
+        "read -r store < $(location @lab_fujimod_native//:share/fujimod-xm1/store-path)",
+        "printf 'module FujiModNativePaths (fujimodNativeCase) where\\n\\nfujimodNativeCase :: FilePath\\nfujimodNativeCase = \"%s\"\\n' \"$$store/bin/fujimod-xm1-native-case\" > $@",
+    ]),
+)
+
+haskell_library(
+    name = "fujimod-native-paths",
+    srcs = [":fujimod-native-paths-module"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror"],
     visibility = ["//visibility:public"],
     deps = ["//host:base"],
@@ -967,6 +985,23 @@ haskell_test(
     ],
 )
 
+haskell_test(
+    name = "native-sdk-tests",
+    size = "medium",
+    srcs = ["FujimodXm1Tests.hs"],
+    args = ["$(rootpath @lab_fujimod_native_tests//:test-manifest)"],
+    data = [
+        "@lab_fujimod_native_tests//:test-manifest",
+        "@lab_fujimod_native_tests//:test-harnesses",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host:base",
+        "//host:filepath",
+        "//host:process",
+    ],
+)
+
 haskell_binary(
     name = "fujimod-ram-push-check",
     srcs = ["FujiModRamPushCheck.hs"],
@@ -1565,7 +1600,7 @@ cc_binary(
 # The bounded native-case runner: FUJI_NATIVE_V1 on stdin, one observation on stdout.
 sh_binary(
     name = "native-runner",
-    srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-native-case"],
+    srcs = ["@lab_fujimod_native//:bin/fujimod-xm1-native-case"],
     visibility = ["//visibility:public"],
 )
 
@@ -2288,7 +2323,7 @@ haskell_test(
     ],
     deps = [
         ":cached-native-batch",
-        ":fujimod-paths",
+        ":fujimod-native-paths",
         ":native-adapter",
         ":native-observation",
         ":owned-case",
