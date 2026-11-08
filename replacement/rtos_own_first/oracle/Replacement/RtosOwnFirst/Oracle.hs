@@ -13,13 +13,16 @@ module Replacement.RtosOwnFirst.Oracle
   , EntryState (..)
   , entryCpsr
   , entryStates
+  , flagMask
   , TaskChoice (..)
   , taskChoices
+  , recordBytes
   , Row (..)
   , CallerStack (..)
   , CallSequence (..)
   , caseGrid
   , xorshift
+  , stream
   , contextValues
   , dispatchValues
   , flagBytes
@@ -38,6 +41,8 @@ module Replacement.RtosOwnFirst.Oracle
   , WriteEvent (..)
   , Run (..)
   , Difference (..)
+  , DifferenceKind (..)
+  , differenceKind
   , differenceText
   , compareRuns
   , comparedRegions
@@ -47,6 +52,9 @@ module Replacement.RtosOwnFirst.Oracle
   , CaseKey (..)
   , runSlot
   , runRows
+  , runRowsWith
+  , loadBatchRuns
+  , observedRun
   , sampleKeys
   , Outcome (..)
   , outcomeOf
@@ -601,6 +609,27 @@ data Difference
   | SubjectTruncated
   deriving (Eq, Show)
 
+-- | The part of a difference a reduction preserves: its kind, not the compared values.
+data DifferenceKind
+  = StatusKind
+  | RegisterKind Register
+  | ControlKind
+  | MemoryKind RegionId
+  | WritesKind
+  | ReferenceTruncatedKind
+  | SubjectTruncatedKind
+  deriving (Eq, Ord, Show)
+
+differenceKind :: Difference -> DifferenceKind
+differenceKind difference = case difference of
+  StatusDiffers {} -> StatusKind
+  RegisterDiffers register _ _ -> RegisterKind register
+  ControlDiffers {} -> ControlKind
+  MemoryDiffers ident -> MemoryKind ident
+  WritesDiffer -> WritesKind
+  ReferenceTruncated -> ReferenceTruncatedKind
+  SubjectTruncated -> SubjectTruncatedKind
+
 hex32 :: Word32 -> String
 hex32 = N.hexWord32
 
@@ -686,31 +715,50 @@ runSlot runner directory role domain slot = runRows runner directory role domain
 
 -- | 'runSlot' over the given rows of the slot's grid.
 runRows :: FilePath -> FilePath -> String -> Domain -> Slot -> [CaseKey] -> Body -> IO (M.Map CaseKey Run)
-runRows runner directory role domain slot selected body = do
-  let grid = M.fromList (zip (map CaseKey [0 ..]) (caseGrid slot))
-      keyed = [(key, row) | key <- selected, Just row <- [M.lookup key grid]]
-  results <- forM (zip [0 :: Int ..] (chunks' batchLimit keyed)) $ \(batch, rows) -> do
+runRows runner directory role domain slot selected =
+  runRowsWith runner directory (CaseId . caseLabel role domain slot) domain slot
+    [(key, row) | key <- selected, Just row <- [M.lookup key grid]]
+  where
+    grid = M.fromList (zip (map CaseKey [0 ..]) (caseGrid slot))
+
+-- | Runs explicit rows against @body@, one runner session per 4096 cases, with @labelOf@ naming each
+-- case inside its batch directory.
+runRowsWith :: FilePath -> FilePath -> (CaseKey -> CaseId) -> Domain -> Slot -> [(CaseKey, Row)] -> Body -> IO (M.Map CaseKey Run)
+runRowsWith runner directory labelOf domain slot rows body = do
+  results <- forM (zip [0 :: Int ..] (chunks' batchLimit rows)) $ \(batch, batchRows) -> do
     let batchDirectory = directory </> ("batch-" ++ show batch)
-        labelled = [(caseLabel role domain slot key, key) | (key, _) <- rows]
-    batchPath <- writeBatch batchDirectory [caseSpec domain body (caseLabel role domain slot key) slot row | (key, row) <- rows]
-    observed <- loadObservedBatch runner batchPath
-    unless (length observed == length rows) (fail (batchPath ++ ": observation count differs from the case count"))
-    forM observed $ \(CaseId label, observation) -> do
-      let reportPath = batchDirectory </> label ++ ".native-result.json"
-          failWith problem = fail (reportPath ++ ": " ++ problem)
-      key <- maybe (failWith "unknown case") pure (lookup label labelled)
-      reportBytes <- B.readFile reportPath
-      report <- either failWith pure (eitherDecodeStrict' reportBytes :: Either String Value)
-      writes <- either failWith pure (reportWrites report)
-      row <- maybe (failWith "unknown row") pure (lookup key rows)
-      run <- either failWith pure (runOfAt domain (callerSp (rowStack row)) observation writes)
-      forced <- evaluate (forceRun run)
-      pure (key, forced)
-  pure (M.fromList (concat results))
+    _ <- writeBatch batchDirectory [caseSpec domain body (caseIdText (labelOf key)) slot row | (key, row) <- batchRows]
+    loadBatchRuns runner batchDirectory labelOf domain batchRows
+  pure (M.unions results)
   where
     chunks' size items = case splitAt size items of
       (chunk, []) -> [chunk | not (null chunk)]
       (chunk, rest) -> chunk : chunks' size rest
+
+-- | Re-executes an existing batch directory, which rejects a case the expected labels do not name.
+loadBatchRuns :: FilePath -> FilePath -> (CaseKey -> CaseId) -> Domain -> [(CaseKey, Row)] -> IO (M.Map CaseKey Run)
+loadBatchRuns runner batchDirectory labelOf domain rows = do
+  observed <- loadObservedBatch runner (batchDirectory </> "batch.json")
+  unless (length observed == length rows) (fail (batchDirectory ++ ": observation count differs from the case count"))
+  M.fromList <$> forM observed (\(ident, observation) -> do
+    key <- maybe (fail (batchDirectory ++ ": unknown case " ++ caseIdText ident)) pure (lookup ident labelled)
+    row <- maybe (fail (batchDirectory ++ ": unknown row " ++ show key)) pure (lookup key rows)
+    run <- observedRun batchDirectory ident domain (N.GuestAddress (fromIntegral (callerSp (rowStack row)))) observation
+    pure (key, run))
+  where
+    labelled = [(labelOf key, key) | (key, _) <- rows]
+
+-- | The compared run of one observation, using the report's ordered write log.
+observedRun :: FilePath -> CaseId -> Domain -> N.GuestAddress -> N.NativeObservation -> IO Run
+observedRun batchDirectory ident domain entrySp observation = do
+  let reportPath = batchDirectory </> caseIdText ident ++ ".native-result.json"
+      incomingSp = fromIntegral (N.guestAddress entrySp)
+      failWith problem = fail (reportPath ++ ": " ++ problem)
+  reportBytes <- B.readFile reportPath
+  report <- either failWith pure (eitherDecodeStrict' reportBytes :: Either String Value)
+  writes <- either failWith pure (reportWrites report)
+  run <- either failWith pure (runOfAt domain incomingSp observation writes)
+  evaluate (forceRun run)
 
 forceRun :: Run -> Run
 forceRun run =

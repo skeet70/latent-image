@@ -677,6 +677,34 @@ The structured rows also run every slot on the modeled IRQ-stack address range `
 
 Add `--timing-only` to run just the structured single-call rows of +0x128, +0x148, +0x164, +0x168, +0x16c and +0x1618, without repeat/equivalent/mutant controls. This mode retains its raw native reports and writes `timing-LOADER-SLOT.json` with each input row and stock/owned instruction counts. Counts include the helper/callees and the return instruction but exclude the exit stub. Conditional instructions that fail their condition still count as entered instructions. These are native-runner instruction costs, not hardware cycles.
 
+Add `--generate COUNT --seed SEED` to the same oracle to compare a deterministic valid +0x16c corpus against stock, the owned body and `mutant-s16c` in both loaders. Counts are 1..256 per loader. Current-task words are record starts in the domain's 120-record table; entries use SVC or SYS, and context words are zero or nonzero. Null, misaligned and negative task offsets are outside this generated domain. The unsigned 64-bit decimal or hexadecimal seed folds to a 32-bit xorshift seed; distinct seeds can collide.
+
+Use the worker's normal `BAZEL_OUTPUT_BASE` and canonical X-M1 1.50 extracted loaders. The Bazel graph supplies the linked candidates, regions and pinned native runner. Each work directory and summary must be new:
+
+```sh
+LOADER_A=private-data/analysis/x-m1-1.50/decode/loader-40000.bin
+LOADER_B=private-data/analysis/x-m1-1.50/decode/loader-d0000.bin
+RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
+SUMMARY="private-data/scratch/OwnFirstGenerated/generated-$RUN_ID.json"
+devenv shell -- env XM1_EMULATOR_SLOTS=1 host-build --output_base="$BAZEL_OUTPUT_BASE" run --jobs=2 \
+  //replacement/rtos_own_first/oracle:own-first-oracle -- \
+  --loader-a "$LOADER_A" --loader-b "$LOADER_B" \
+  --generate 32 --seed 0x2545f4914f6cdd1d --shrink-budget 32 \
+  --work "private-data/scratch/OwnFirstGenerated/generated-$RUN_ID" --summary "$SUMMARY"
+
+devenv shell -- env XM1_EMULATOR_SLOTS=1 host-build --output_base="$BAZEL_OUTPUT_BASE" run --jobs=2 \
+  //replacement/rtos_own_first/oracle:own-first-oracle -- \
+  --loader-a "$LOADER_A" --loader-b "$LOADER_B" --replay "$SUMMARY" \
+  --work "private-data/scratch/OwnFirstGenerated/replay-$RUN_ID" \
+  --summary "private-data/scratch/OwnFirstGenerated/replay-$RUN_ID.json"
+```
+
+Reduction preserves validity and the original typed comparison boundary, such as `RegisterKind R0`, while lowering task record, entry flags, F, mode and context form. `--shrink-budget` bounds trials to 1..256, default 32. Flags are cleared together rather than searched by subset. `fixed-point` is local to these reductions; `budget-exhausted` establishes no minimum. The summary names original and reduced rows, differences, identities and native batch paths; the reduced case is re-executed through the same comparator.
+
+`--replay` re-executes both saved cases for each recorded discrepancy. All pairs' runner, loader, linked-input, case and wire identities are admitted before the first execution. Paired cases must agree on non-code state and metadata. Replay copies only each selected case and its declared artifacts, verifies the copied identities and leaves the preserved reports unchanged. Typed nonempty boundary kinds decide reproduction; diagnostic wording does not. Work and summary paths are canonical across the `private-data` symlink.
+
+Every oracle mode uses the existing emulator slot with the 2 GiB cap and unchanged 100 GiB reserve. Completed generate and replay attempts print a compact terminal result and summary path. Generate exits 1 for a stock stop or missing returned control witness, 2 for an owned difference, and 0 for scoped agreement with the control refused. Replay exits 1 for an incomplete execution or changed boundary, 2 for a reproduced owned discrepancy, and 0 for reproduced controls. Input or admission refusals stop before execution. This corpus is additional native coverage, not full subsystem, firmware or hardware acceptance.
+
 ### Owned scheduler helpers, step S1 (#156)
 
 `replacement/rtos_scheduler` (crate `xm1_rtos_scheduler`, `no_std`, no statics) owns the nine SCHED helpers of both loaders behind their stock entries: lock acquire and release (A `0x439d8`/`0x43a14`, B `0xd398c`/`0xd39c8`), find (`0x43c48`/`0xd3c04`), insert (`0x43ca4`/`0xd3c60`), remove (`0x43d20`/`0xd3cdc`), reset (`0x43dd0`/`0xd3d8c`), prepare (`0x43f70`/`0xd3f2c`), notify (`0x44018`/`0xd3fd4`), requeue (`0x44044`/`0xd4004`) and rotate (`0x44134`/`0xd40f4`). Each helper is one `Machine`-generic function in `src/lib.rs` over the `rtos_layout` views (`KernelContext`, `LockRecord`, `ReadyHead`, `Task`, `TaskDefinition`) and `src/entries.rs` runs it as a `#[no_mangle] extern "C"` A32 entry in `.text.<helper>`, built per domain by `--cfg feature="domain-a"` or `"domain-b"`. Every helper keeps the stock A32 register ABI: arguments, the r0 result (release returns its argument, reset its task, requeue `*dispatch_enabled != 0` in its branch for the selected task and the raw word otherwise), callee-saved registers and sp, and the T-field, list, bitmap and selected-cell stores in stock order with stock values. The lock pair is `ldrex`/`cmp`/`strexeq` then `dmb sy`, and `dmb sy`, store 0, `dsb sy`; prepare issues `dmb sy` between its T+0x18/+0x1c stores and its tail call into insert; notify keeps each loader's local-id predicate (A `id <= 1`, B `id == 0 || id == 2`), and for a remote id issues `dsb sy` and calls the stock raise-IRQ function (`0x433e4`/`0xd33e4`) with `id asr 1` and 120. Priority bytes and arguments are taken unmasked as stock does, under the invariant that they are below 16; find masks its trailing-zero count to four bits, so an empty bitmap selects list 0 where stock reads a byte before its table.
