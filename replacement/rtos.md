@@ -1,0 +1,107 @@
+# RTOS platform workflows
+
+[Replacement index](README.md). [RTOS project #156](https://github.com/skeet70/latent-image/issues/156) owns open work. The [platform report](../reports/rtos-platform-options.md), [manifest draft](../reports/rtos-platform-manifest-draft.md) and [slot contracts](media_permit/rtos_slot_contracts.json) own semantics, intended corrections, retained dependencies and qualification limits.
+
+Use `devenv shell -- host-build` for every Bazel build/test/run, normally with `--jobs=2` and `XM1_EMULATOR_SLOTS=1`. Native firmware execution takes the declared emulator slot; file-only admission/comparison does not. Fresh work, cache and result paths belong under named `private-data/scratch/` directories. A native-only scratch carrier is not admitted live placement.
+
+## Shared layout and family entry points
+
+[`rtos_layout/`](rtos_layout/) supplies typed domain/task/priority identities and the canonical guest record views to RTOS families. Loader domain, task class and executing core are distinct. Use the shared views and each family's region metadata instead of copying addresses or layouts into a new package.
+
+| Family | Build/test/oracle entry points | Human contract |
+| --- | --- | --- |
+| Own-first slots | `//replacement/rtos_own_first:own-first-a`, `:own-first-b`, `:own-first-host-tests`; oracle/stager below | [Manifest](../reports/rtos-platform-manifest-draft.md), [regions](rtos_own_first/regions.json) |
+| Scheduler | `//replacement/rtos_scheduler:all`; oracle/stager below | [Thread/shim design](../reports/rtos-platform-options.md#413-owned-thread-layer-and-stock-abi-shim-design-input-from-the-decomp) |
+| Flags/mailboxes | `//replacement/rtos_objects:objects-rust`, `:objects-host-tests`, `:family-suite-runner` | [Family contract](../reports/rtos-platform-options.md#414-owned-eventflag-and-mailbox-family-the-recovered-0xd4-body-and-the-family-design) |
+| Data queues | [RTOS project #156](https://github.com/skeet70/latent-image/issues/156) | [Slot contracts](media_permit/rtos_slot_contracts.json) |
+| Task records | `//replacement/rtos_task_records:task-records-host-tests`; [native targets](rtos_task_records/BUILD.bazel) | [Create/delete contract](../reports/rtos-task-records.md) |
+| Timer heap | `//replacement/rtos_timer:timer-rust`, `:timer-host-tests`; [native targets](rtos_timer/oracle/BUILD.bazel) | [Membership and arenas](../reports/rtos-platform-options.md#415-owned-timer-heap-membership-host-increment) |
+| Global lock | `//replacement/rtos_global_lock:global-lock-rust`, `:global-lock-a`, `:global-lock-b`, `:global-lock-host-tests`; `//replacement/rtos_global_lock/oracle:global-lock-oracle` | [Package/staging](rtos_global_lock/), [platform contract](../reports/rtos-platform-options.md) |
+| Exception entry/exit | `//replacement/rtos_exception:exception-a`, `:exception-b`, `:exception-host-tests`, `:exception-artifact-tests`; `//replacement/rtos_exception/stage:stage-exception` | [Exception contract](../reports/rtos-exception-entry-exit.md) |
+| IRQ control | `//replacement/rtos_irq_control:irq-host-tests`, `:irq-a`, `:irq-b`, `:irq-native-suite` | [IRQ contract](../reports/rtos-platform-options.md#422-owned-irq-control-and-handler-registration-host-and-native-increment) |
+| Cyclic handlers | `//replacement/rtos_cyclic/oracle:cyclic-oracle`; [host/native targets](rtos_cyclic/BUILD.bazel) | [Lifecycle, expiry and reentrancy](../reports/rtos-platform-options.md#421-owned-cyclic-handler-family-lifecycle-expiry-and-reentrancy) |
+
+Current results belong in these technical homes and the ledger. A host model, native return, dispatcher stop and resumed caller establish different scopes; matching unsupported stops are not acceptance.
+
+## Own-first staging and oracle
+
+```sh
+devenv shell -- host-build run //replacement/rtos_own_first/stage:stage-own-first -- \
+  SOURCE_DAT LOADER_A LOADER_B NEW_OUTPUT_DIRECTORY
+XM1_EMULATOR_SLOTS=1 devenv shell -- host-build run --jobs=2 \
+  //replacement/rtos_own_first/oracle:own-first-oracle -- \
+  --loader-a LOADER_A --loader-b LOADER_B --work NEW_DIRECTORY --summary NEW_JSON
+```
+
+Bazel supplies linked candidates, regions and the pinned runner. Staging checks canonical loader/DAT identities, entries, extents, fill and composed frame demand, confines patches/checksum and requires exact restore. It writes `candidate.DAT`, `loader-a.bin`, `loader-b.bin` and `contract.json`.
+
+The oracle compares returned status, r0, preserved registers/SP, CPSR control bits, public data/caller bytes and ordered writes. Private stack, flags, LR and scratch registers are excluded. Its SVC/SYS native cases do not establish IRQ-mode execution, private TCM or concurrent cores. `:own-first-oracle-tests` is the sample; manual `:own-first-oracle-full-tests` runs the full grid. `--timing-only` selects structured cost rows without controls; instruction counts are not silicon cycles.
+
+### Generate and replay
+
+```sh
+XM1_EMULATOR_SLOTS=1 devenv shell -- host-build run --jobs=2 \
+  //replacement/rtos_own_first/oracle:own-first-oracle -- \
+  --loader-a LOADER_A --loader-b LOADER_B \
+  --generate 32 --seed 0x2545f4914f6cdd1d --shrink-budget 32 \
+  --work private-data/scratch/OwnFirst/NEW_GENERATED \
+  --summary private-data/scratch/OwnFirst/NEW_GENERATED.json
+XM1_EMULATOR_SLOTS=1 devenv shell -- host-build run --jobs=2 \
+  //replacement/rtos_own_first/oracle:own-first-oracle -- \
+  --loader-a LOADER_A --loader-b LOADER_B \
+  --replay private-data/scratch/OwnFirst/NEW_GENERATED.json \
+  --work private-data/scratch/OwnFirst/NEW_REPLAY \
+  --summary private-data/scratch/OwnFirst/NEW_REPLAY.json
+```
+
+`--generate COUNT --seed SEED` compares valid current-task-query inputs against stock, owned and the mutant in both loaders. Counts are 1..256 per loader. Inputs use actual task-record starts, SVC/SYS and zero/nonzero context; null, misaligned and negative task offsets are outside this corpus. Unsigned 64-bit decimal/hex seeds fold to a 32-bit xorshift seed, so distinct seeds may collide.
+
+`--shrink-budget` is 1..256, default 32. Reduction preserves validity and the original typed boundary while lowering task record, flags, F, mode and context. `fixed-point` means local minimality; budget exhaustion proves no minimum. Replay re-executes original/reduced cases after admitting runner, loaders, linked input, cases and wires; it copies/verifies selected artifacts without altering preserved reports. Nonempty typed boundaries, not diagnostic text, determine reproduction. Work and summary paths are canonical across the private-data symlink.
+
+Every mode uses the existing slot, 2 GiB cap and unchanged storage reserve. Generate exits 1 for a stock stop or missing returned control witness, 2 for an owned difference, 0 for scoped agreement with the control refused. Replay exits 1 for incomplete execution or changed boundary, 2 for reproduced owned discrepancy, 0 for reproduced controls. Admission refusals stop before execution. Completed attempts print a compact result and summary path.
+
+## Scheduler oracles and staging
+
+The [scheduler report](../reports/rtos-platform-options.md#413-owned-thread-layer-and-stock-abi-shim-design-input-from-the-decomp) owns ABI/comparison details, intentional corrections and system coverage. [Region files and linker scripts](rtos_scheduler/) own entry placement and frame declarations. Do not treat a pinned local frame size as a composed bound across callbacks or context switches.
+
+| Oracle target under `//replacement/rtos_scheduler/oracle` | Arguments after Bazel-supplied inputs |
+| --- | --- |
+| `:scheduler-oracle` (S1) | `--loader-a LOADER_A --loader-b LOADER_B --work NEW_DIRECTORY --summary NEW_JSON` |
+| `:scheduler-s2-oracle` | `--loader-a LOADER_A --loader-b LOADER_B --work NEW_DIRECTORY --summary NEW_JSON` |
+| `:s3a-oracle` | `--loader-a LOADER_A --loader-b LOADER_B --work NEW_DIRECTORY --summary NEW_JSON` |
+| `:s3b-oracle` | `RUNNER STOCK_LOADER_A STOCK_LOADER_B OWNED_A_BIN OWNED_B_BIN NEW_WORK_DIRECTORY` (all positional, including under Bazel) |
+| `:s3c-oracle` | `--loader-a LOADER_A --loader-b LOADER_B --work NEW_DIRECTORY` |
+
+S1 compares lock/ready/notification behavior and checks barrier order separately. S2 stops before exception-return execution beyond the runner's admitted subset and uses independent expected repairs for tagged defects. S3 services may stop at a dispatcher entry with an active frame; private active frames are not returned-call ABI. Blocking stops alone do not establish scheduling or resumed callers.
+
+```sh
+devenv shell -- host-build run //replacement/rtos_scheduler/stage:stage-scheduler -- \
+  candidate SOURCE_DAT LOADER_A LOADER_B NEW_OUTPUT_DIRECTORY
+devenv shell -- host-build run //replacement/rtos_scheduler/stage:stage-cutover -- \
+  all SOURCE_DAT LOADER_A LOADER_B NEW_OUTPUT_DIRECTORY
+```
+
+The first stages S1 alone, not own-first. It also accepts `stock-insert`, `silent-notify`, `wrong-predicate`. The combined stager joins S1/S2/S3a/S3b/S3c with disjoint own-first slots. `all` writes the candidate and six controls; individual modes are `candidate`, `restore-s1`, `restore-s2`, `restore-s3`, `silent-notify`, `wrong-predicate`, `wake-no-insert`. Each candidate/control has a DAT, loaders and contract. The output root's `own-first-guards.json` is a guard-only table, not semantic-entry evidence. Restored controls retain candidate readback expectations; semantic controls must fail the semantic checker.
+
+## Cached family oracles
+
+Family CLIs use `Emulation.CachedNativeBatch`: completed raw observations can be reused while current artifact admission and semantic comparison run again. Bazel supplies the runner, generated layout, owned images/symbols and timer dependencies where needed. Inspect the family's `BUILD.bazel` and CLI when overriding those inputs; their argument sets differ.
+
+- Flags/mailboxes: `//replacement/rtos_objects:family-suite-runner` takes `--layout`, `--loader-a`, `--loader-b`, `--owned-a-bin`, `--owned-b-bin`, `--cache-root`, `--results`. The usual layout is `bazel-bin/replacement/rtos_scheduler/oracle/layout.json`. Its [family contract](../reports/rtos-platform-options.md#414-owned-eventflag-and-mailbox-family-the-recovered-0xd4-body-and-the-family-design) distinguishes host pending-token semantics, selected-task arrival and actual suspended-service resumption.
+- Global lock: `//replacement/rtos_global_lock/oracle:global-lock-oracle --loader-a LOADER_A --loader-b LOADER_B --cache-root CACHE --results RESULTS`. Direct-helper ABI, stamp conventions and exclusive-monitor limits are in its [package](rtos_global_lock/) and platform report.
+- Data queues: [RTOS project #156](https://github.com/skeet70/latent-image/issues/156) owns the implementation and qualification work. Its family contract must distinguish actual blocking caller returns, per-role timer membership, the retry IRQ window and the task-context caller requirement.
+- Cyclic: `//replacement/rtos_cyclic/oracle:cyclic-oracle` supplies the current cyclic/timer dependencies through [its build target](rtos_cyclic/oracle/BUILD.bazel). The [lifecycle contract](../reports/rtos-platform-options.md#421-owned-cyclic-handler-family-lifecycle-expiry-and-reentrancy) covers callback reentrancy and zero-period policy. Native scratch placement does not admit installation over overlapping stock code.
+
+## Manual timer composition
+
+The [timer contract](../reports/rtos-platform-options.md#415-owned-timer-heap-membership-host-increment) owns arenas, capacity, membership and callback/lock premises. The manual composition target requires private canonical inputs and an existing scratch directory:
+
+```sh
+mkdir -p private-data/scratch/timer-compose
+XM1_EMULATOR_SLOTS=1 devenv shell -- host-build run --jobs=1 \
+  //replacement/startup_artifact:timer-compose-tests -- \
+  "$PWD/private-data/firmware/x-m1-1.50/FWUP0002.DAT" \
+  "$PWD/private-data/scratch/timer-compose"
+```
+
+Bazel supplies linked images; the command admits the actual Timer and LoaderStartup pieces and bounded joins. A plain test invocation without the private arguments fails its contract. Host composition and a role-grounded native oracle do not establish runtime arena ownership, independent-lock ownership or integrated hardware behavior.

@@ -28,6 +28,7 @@ New full-system emulator development uses the FujiMod Rust runtime fetched at an
 | Your own camera features | [Build and test your own X-M1 feature](docs/experimenting-on-your-x-m1.md), [experiment template](experiments/hello/) |
 | Autofocus models and observations | [Sensor-backed process](spec/05-autofocus.md), [AF simulation](af/README.md), [low-interaction session kit](reports/af-session-kit.md), [recovered AF interfaces](reports/autofocus-static-map.md) |
 | Firmware analysis | [Extraction and format findings](reports/firmware-extraction.md), [update-container contract](reports/update-container-rebuild.md), [matching-C pilot](matching/README.md) |
+| Replacement firmware | [Package workflows](replacement/README.md), [replacement process](spec/11-incremental-firmware-replacement.md), [ownership inventory](reports/replacement-inventory-baseline.md#8-current-ownership-and-retirement-view) |
 | ARM execution and emulation | [Bounded native harness](emulation/README.md), [full-system findings and limits](reports/full-system-emulation.md) |
 | Recovery preparation | [X-M1 recovery kit and limits](recovery/README.md) |
 | Film recipes | [Recipe specification](spec/10-film-recipes.md), [editable-bank design](reports/recipe-design.md), [shareable recipe text](#share-recipes-as-text) |
