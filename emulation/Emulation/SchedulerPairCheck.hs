@@ -555,7 +555,9 @@ checkCallFor = checkCallForIn []
 
 checkCallForIn :: [Call] -> Role -> Call -> Either Refusal ()
 checkCallForIn calls role call = do
-  expect WrongCore (callCore call == if callDomain call==DomainA then 0 else 1)
+  case callSemantic call of
+    FamilySemantic _ -> pure ()
+    _ -> expect WrongCore (callCore call == if callDomain call==DomainA then 0 else 1)
   case callSemantic call of
     HelperSemantic _ -> checkHelperCall call
     DoorbellSemantic -> do
@@ -567,6 +569,7 @@ checkCallForIn calls role call = do
       expect WrittenWords (any (\(Written (Address address) size value) -> address .&. complement 0x40000000==reschedule .&. complement 0x40000000 && size==4 && value==1) writes)
       expect ProcessorState (callCpsr call .&. 0x1ff==callReturnCpsr call .&. 0x1ff)
     DispatchSemantic point -> dispatchTags role point call >> pure ()
+    FamilySemantic _ | role == Stock -> pure ()
     FamilySemantic _ -> checkFamilyCall call calls
     ServiceSemantic service -> checkServiceCall service call
 
