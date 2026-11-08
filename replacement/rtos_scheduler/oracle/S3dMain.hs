@@ -399,7 +399,7 @@ specFor d role one loader owned = CaseSpec
     fixture = setW (handlerCell d) (if caseHandler one then 1 else 0) (caseSetup one d (baseFixture d))
     bodyBase = if d == DomainA then 0x50000 else 0xe0000
     code = case role of
-      Stock -> patchStub d (loaderBytes d loader) Nothing
+      Stock -> patchStub d (loaderBytes d loader) (caseLifecycle one)
       Owned -> patchStub d (patchOwned d loader (if d == DomainA then 0x454f0 else 0xd54b0) owned) (caseLifecycle one)
     bodies = if role == Owned then slice owned (if d == DomainA then 0x454f0 else 0xd54b0) bodyBase 0x1300 else B.replicate 0x2000 0
     stub = case caseLifecycle one of
@@ -484,7 +484,7 @@ main = do
             differences = [ (caseName one, compareOne reference left right, left, right)
                           | (one, reference, left, right) <- zip4 grid specs stockObs ownedObservations ]
             contracts =
-              [ (caseName one, nativeStatus observation, registerValue observation R0, caseExpect one)
+              [ (caseName one, nativeStatus observation, registerValue observation R0, caseExpect one, registerValue observation Pc)
               | (one, observation) <- zip grid stockObs
               , caseExpect one /= 0
               , registerValue observation R0 /= caseExpect one || nativeStatus observation /= Returned
@@ -494,7 +494,7 @@ main = do
           , "cases" .= length grid
           , "differences" .= length failures
           , "failures" .= [A.object ["case" .= name, "differences" .= show diff, "first" .= first] | (name, diff, first) <- failures]
-          , "contract_failures" .= [A.object ["case" .= name, "status" .= show status, "r0" .= r0, "expected" .= expected] | (name, status, r0, expected) <- contracts]
+          , "contract_failures" .= [A.object ["case" .= name, "status" .= show status, "r0" .= r0, "expected" .= expected, "pc" .= pc] | (name, status, r0, expected, pc) <- contracts]
           ]))
         pure (d, length grid, null failures, null contracts)
       _ -> error "role count"
