@@ -556,7 +556,7 @@ retainedCases facts executing =
       [(R0, id0 1), (R1, outWord), (R2, 5)] (TargetTimerTick 2) [] True
       (dataQueueChecks True)
   , caseForRetained "fixedpool-get-release" RetainedFixedPoolGet FlagWait
-      [(R0, id0 1), (R1, outWord)] (TargetAddress (retainedRelease executing)) [(R0, poolStart)] False
+      [(R0, id0 1), (R1, outWord)] (TargetAddress (retainedRelease executing)) [(R0, id0 1), (R1, poolStart)] False
       (fixedPoolChecks False)
   , caseForRetained "fixedpool-timed-tick" RetainedFixedPoolTimedGet FlagTimedWait
       [(R0, id0 1), (R1, outWord), (R2, 5)] (TargetTimerTick 2) [] True
