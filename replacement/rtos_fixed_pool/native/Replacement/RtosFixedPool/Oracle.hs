@@ -402,7 +402,7 @@ retained DomainA =
   , (0x43728, 0x34), (0x4375c, 0x48), (0x437a4, 0x38), (0x437fc, 0x14)
   , (0x439d8, 60), (0x43a14, 40)
   , (0x43c48, 92), (0x43ca4, 124), (0x43d20, 176), (0x43dd0, 72), (0x43f70, 44)
-  , (0x44018, 44), (0x44044, 240), (0x44134, 128)
+  , (0x44018, 44), (0x44044, 240), (0x44134, 128), (0x44318, 460)
   , (0x444e4, 132), (0x44568, 204), (0x44634, 200), (0x446fc, 72), (0x44744, 188)
   , (0x44800, 228), (0x448e4, 220), (0x4b41c, 100)
   , (0x44ac0, 196), (0x44b84, 220), (0x44c60, 72), (0x44ca8, 228)
@@ -415,7 +415,7 @@ retained DomainB =
   , (0xd3728, 0x34), (0xd375c, 0x48), (0xd37a4, 0x38), (0xd37fc, 0x14)
   , (0xd398c, 60), (0xd39c8, 40)
   , (0xd3c04, 92), (0xd3c60, 124), (0xd3cdc, 176), (0xd3d8c, 72), (0xd3f2c, 44)
-  , (0xd3fd4, 48), (0xd4004, 240), (0xd40f4, 128)
+  , (0xd3fd4, 48), (0xd4004, 240), (0xd40f4, 128), (0xd42d8, 460)
   , (0xd44a4, 132), (0xd4528, 204), (0xd45f4, 200), (0xd46bc, 72), (0xd4704, 188)
   , (0xd47c0, 228), (0xd48a4, 220), (0xdb3dc, 100)
   , (0xd4a80, 196), (0xd4b44, 220), (0xd4c20, 72), (0xd4c68, 228)
@@ -471,13 +471,28 @@ lowestBitAddress :: Domain -> Word32
 lowestBitAddress DomainA = 0x0004_daa0
 lowestBitAddress DomainB = 0x000d_da64
 
-driverEntry, driverStack, driverSize :: Word32
+driverEntry, expiryEntry, deleteEntry, driverStack, driverSize, expirySize, deleteSize :: Word32
 driverEntry = 0x0005_4000
+expiryEntry = 0x0005_4040
+deleteEntry = 0x0005_4080
 driverStack = 0x0095_9e00
 driverSize = 32
+expirySize = 52
+deleteSize = 12
 
 branchLink :: Word32 -> Word32 -> Word32
 branchLink from to = 0xeb00_0000 .|. ((to - (from + 8)) `shiftR` 2 .&. 0x00ff_ffff)
+
+branch :: Word32 -> Word32 -> Word32
+branch from to = 0xea00_0000 .|. ((to - (from + 8)) `shiftR` 2 .&. 0x00ff_ffff)
+
+movw :: Word32 -> Word32 -> Word32
+movw register immediate =
+  0xe300_0000 .|. ((immediate .&. 0xf000) `shiftL` 4) .|. (register `shiftL` 12) .|. (immediate .&. 0x0fff)
+
+movt :: Word32 -> Word32 -> Word32
+movt register immediate =
+  0xe340_0000 .|. ((immediate .&. 0xf000) `shiftL` 4) .|. (register `shiftL` 12) .|. (immediate .&. 0x0fff)
 
 driverBytes :: Domain -> B.ByteString
 driverBytes domain = assemble
@@ -489,6 +504,34 @@ driverBytes domain = assemble
   , 0xe121_f002
   , branchLink (driverEntry + 24) (entries domain Release)
   , 0xeaff_fffe
+  ]
+
+expiryBytes :: Domain -> B.ByteString
+expiryBytes domain = assemble
+  [ movw 0 (task `shiftR` 0 .&. 0xffff)
+  , movt 0 (task `shiftR` 16)
+  , movw 0 (lock `shiftR` 0 .&. 0xffff)
+  , movt 0 (lock `shiftR` 16)
+  , branchLink (expiryEntry + 16) acquire
+  , movw 0 (task `shiftR` 0 .&. 0xffff)
+  , movt 0 (task `shiftR` 16)
+  , branchLink (expiryEntry + 28) callback
+  , movw 0 (lock `shiftR` 0 .&. 0xffff)
+  , movt 0 (lock `shiftR` 16)
+  , branchLink (expiryEntry + 40) release
+  , branchLink (expiryEntry + 44) dispatcher
+  , 0xeaff_fffe
+  ]
+  where
+    (task, lock, acquire, release, callback, dispatcher) = case domain of
+      DomainA -> (0x4005_ff0c, 0x4005_45d4, 0x439d8, 0x43a14, 0x44318, 0x43640)
+      DomainB -> (0x400e_fecc, 0x400e_4594, 0xd398c, 0xd39c8, 0xd42d8, 0xd3640)
+
+deleteBytes :: Domain -> B.ByteString
+deleteBytes domain = assemble
+  [ 0xe3a0_0001
+  , branchLink (deleteEntry + 4) (entries domain Delete)
+  , branch (deleteEntry + 8) stopAddress
   ]
 
 runningSlot, idleSlot, waiterSlot, secondWaiterSlot :: Word32
@@ -602,15 +645,18 @@ twoWaiters facts owner objectSlot objectDomain (first, firstPriority) (second, s
   , poke (waitOwner facts owner second) (dfId (domainFacts facts objectDomain))
   ]
 
-resumeWords :: Facts -> Domain -> [(GuestAddress, Word32)]
-resumeWords facts domain =
+resumeWordsWith :: Facts -> Domain -> Word32 -> [(GuestAddress, Word32)]
+resumeWordsWith facts domain entry =
   created facts domain 1 0 1 8 poolRegion
     ++ [ poke (nextFreeCell facts domain 1) (poolRegion + 8)
        , poke (recycledCell facts domain 1) 0
        , poke (taskAddress facts domain idleSlot + tfSavedSp (factsTask facts)) driverStack
-       , poke (taskAddress facts domain idleSlot + tfResumePc (factsTask facts)) driverEntry
+       , poke (taskAddress facts domain idleSlot + tfResumePc (factsTask facts)) entry
        , poke (taskAddress facts domain idleSlot + tfState (factsTask facts)) (packedState (stReady (factsStates facts)) 15)
        ]
+
+resumeWords :: Facts -> Domain -> [(GuestAddress, Word32)]
+resumeWords facts domain = resumeWordsWith facts domain driverEntry
 
 createWords :: Word32 -> Word32 -> Word32 -> Word32 -> [(GuestAddress, Word32)]
 createWords attributes count size buffer =
@@ -882,6 +928,17 @@ cases facts executing =
       { caseResume = True
       , caseReceipt = Just (recordAddress facts executing executing, timerAddress facts executing runningSlot)
       }
+  , (plain "timed-resume-expiry" TimedGet executing 1
+      (resumeWordsWith facts executing expiryEntry) 30 (fromIntegral (-50 :: Int)) False
+      [noWrite outAddress])
+      { caseResume = True }
+  , (plain "get-resume-delete" Get executing 1
+      (resumeWordsWith facts executing deleteEntry) 0 0 False [])
+      { caseResume = True
+      , caseStock = Expectation 0 True []
+      , caseOwned = Just (Expectation (fromIntegral (-49 :: Int)) False [noWrite outAddress])
+      , caseDifference = Just "fixed-pool-delete-releases-suspended-get"
+      }
   ]
 
 data Role = StockRole | OwnedRole deriving (Eq, Show)
@@ -1071,7 +1128,7 @@ overlay (GuestAddress start) initial words' = B.concat (pieces 0 ordered)
             : pieces (offset + 4) rest
 
 codeBytes :: Domain -> Role -> Image -> Image -> B.ByteString
-codeBytes domain role loader owned = withDriver $ case role of
+codeBytes domain role loader owned = withDrivers $ case role of
   StockRole -> stockBytes
   OwnedRole -> foldl patch stockBytes (extents domain ++ [(bodyRegion, bodyLength)])
   where
@@ -1082,6 +1139,8 @@ codeBytes domain role loader owned = withDriver $ case role of
       , bodyRegion + bodyLength
       , lowestBitAddress domain + 16
       , driverEntry + driverSize
+      , expiryEntry + expirySize
+      , deleteEntry + deleteSize
       ]
     slice image address size =
       if address < imageBase image
@@ -1092,7 +1151,10 @@ codeBytes domain role loader owned = withDriver $ case role of
       (install (lowestBitAddress domain) lowestBitTable
         (foldl (\current (address, size) -> install address (slice loader address size) current)
           (B.replicate (fromIntegral (top - base)) 0) bounds))
-    withDriver current = install driverEntry (driverBytes domain) current
+    withDrivers current =
+      install deleteEntry (deleteBytes domain)
+        (install expiryEntry (expiryBytes domain)
+          (install driverEntry (driverBytes domain) current))
     install address bytes current =
       let offset = fromIntegral (address - base)
        in B.take offset current <> bytes <> B.drop (offset + B.length bytes) current
@@ -1115,11 +1177,11 @@ caseSpec facts executing role loader owned one
           [mkRegion (RegionId "code") (wire codeBase) (fromIntegral (codeTop - codeBase)) ReadExecute (codeBytes executing role loader owned)]
             ++ [mkRegion ident (wire (guestWord address)) size permission (overlay address background words') | Page ident address size permission background <- dataPages]
             ++ [mkRegion (RegionId "continuations") (wire exitAddress) (fromIntegral (stopAddress - exitAddress + 4)) ReadExecute (B.replicate (fromIntegral (stopAddress - exitAddress + 4)) 0)]
-      , caseFunctions = [(wire address, size) | (address, size) <- extents executing ++ retained executing ++ [(bodyRegion, bodyLength), (driverEntry, driverSize)]]
+      , caseFunctions = [(wire address, size) | (address, size) <- extents executing ++ retained executing ++ [(bodyRegion, bodyLength), (driverEntry, driverSize), (expiryEntry, expirySize), (deleteEntry, deleteSize)]]
       , caseInitial = initialRegisters executing one
       , caseExpectedStatus = if arrival then StopAddress else Returned
       , caseExpectedRegisters = if arrival
-          then [(Pc, stopAddress), (Sp, targetStack)]
+          then [(Pc, stopAddress), (Sp, arrivalSp role)]
           else (R0, expectationResult expectation) : [(register, seed register) | register <- [R4 .. R11]] ++ [(Sp, callerSp one)]
       , caseExpectedMemory = [(RegionId "caller-frame", callerBytes)]
       , caseCp14Identity = Just (if executing == DomainA then 0x4003 else 0x4004)
@@ -1134,6 +1196,8 @@ caseSpec facts executing role loader owned one
       , bodyRegion + bodyLength
       , lowestBitAddress executing + 16
       , driverEntry + driverSize
+      , expiryEntry + expirySize
+      , deleteEntry + deleteSize
       ]
     dataPages = pages facts one
     words' = layoutWords facts
@@ -1144,18 +1208,20 @@ caseSpec facts executing role loader owned one
     outside = [address | (address, _) <- words', not (any (contains address 4) dataPages)]
     ignored = if arrival then [R0 .. R12] ++ [Lr] else [R1 .. R12] ++ [Lr]
     contexts
-      | arrival =
-          [ stackContext (callerSp one - 0x400) (callerSp one)
-          , stackContext (targetStack - 0x100) targetStack
-          ]
       | caseResume one =
           [ stackContext (callerSp one - 0x400) (callerSp one)
           , stackContext (driverStack - 0x100) driverStack
+          ]
+      | arrival =
+          [ stackContext (callerSp one - 0x400) (callerSp one)
+          , stackContext (targetStack - 0x100) targetStack
           ]
       | otherwise = []
     stackContext low high = case mkStackContext (wire low) (wire high) of
       Left problem -> error problem
       Right context -> context
+    arrivalSp StockRole | caseResume one = driverStack
+    arrivalSp _ = targetStack
 
 seed :: Register -> Word32
 seed register = 0xa5a50000 + fromIntegral (fromEnum register)
@@ -1234,8 +1300,8 @@ holds facts one observation check = case check of
   ByteEquals address value -> readByte facts one observation address == Just value
   NoWrite address -> null (writesAt observation address)
 
-compareRole :: Facts -> CaseSpec -> Case -> Expectation -> NativeObservation -> [String]
-compareRole facts spec one expectation observation =
+compareRole :: Facts -> Role -> CaseSpec -> Case -> Expectation -> NativeObservation -> [String]
+compareRole facts role spec one expectation observation =
   [ "wrong exit " ++ show (caseOutcome spec observation)
   | caseOutcome spec observation /= wanted
   ]
@@ -1251,8 +1317,8 @@ compareRole facts spec one expectation observation =
     ++ [ "arrival pc " ++ show actual ++ " is not " ++ show stopAddress
        | expectationArrival expectation, let actual = N.lookupRegister Pc observation, actual /= Just stopAddress
        ]
-    ++ [ "arrival sp " ++ show actual ++ " is not " ++ show targetStack
-       | expectationArrival expectation, let actual = N.lookupRegister Sp observation, actual /= Just targetStack
+    ++ [ "arrival sp " ++ show actual ++ " is not " ++ show expectedArrivalSp
+       | expectationArrival expectation, let actual = N.lookupRegister Sp observation, actual /= Just expectedArrivalSp
        ]
     ++ [ "return sp " ++ show actual ++ " is not " ++ show (callerSp one)
        | not (expectationArrival expectation), let actual = N.lookupRegister Sp observation, actual /= Just (callerSp one)
@@ -1286,6 +1352,9 @@ compareRole facts spec one expectation observation =
     wanted = if expectationArrival expectation then OutcomeStopped (wire stopAddress) else OutcomeReturned
     resultActual = N.lookupRegister R0 observation
     controlActual = fmap (.&. 0x1ff) (N.lookupRegister Cpsr observation)
+    expectedArrivalSp
+      | role == StockRole && caseResume one = driverStack
+      | otherwise = targetStack
     expectedControl
       | expectationArrival expectation = 0x93
       | caseMasked one = 0x93
@@ -1297,13 +1366,13 @@ compareRole facts spec one expectation observation =
 
 compareFamily :: Facts -> Domain -> Case -> CaseSpec -> CaseSpec -> NativeObservation -> NativeObservation -> [String]
 compareFamily facts executing one stockSpec ownedSpec stock owned =
-  compareRole facts stockSpec one (caseStock one) stock
-    ++ compareRole facts ownedSpec one ownedExpectation owned
+  compareRole facts StockRole stockSpec one (caseStock one) stock
+    ++ compareRole facts OwnedRole ownedSpec one ownedExpectation owned
     ++ ( if caseOwned one == Nothing
           then memoryDifferences
           else
             [ "the owned role did not differ from the defective stock expectation"
-            | null (compareRole facts ownedSpec one (caseStock one) owned)
+            | null (compareRole facts OwnedRole ownedSpec one (caseStock one) owned)
             ]
        )
   where
