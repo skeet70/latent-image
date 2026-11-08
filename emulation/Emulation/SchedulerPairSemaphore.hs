@@ -434,9 +434,9 @@ checkPendingSemaphore releases pending = case (pendingSemantic pending, pendingT
       let unlocked lock = [witness | witness <- releases, releaseTask witness == task
             , releaseCore witness == pendingCore pending, releaseCall witness >= pendingEntered pending
             , releaseAt witness < saveAt, releaseAddress witness == Address lock, releaseValue witness == 0]
-          callerUnlockAt = maximum (0 : map releaseAt (unlocked lockWord) ++ map releaseAt (unlocked schedulerLockAddress))
+          callerUnlockAt lock = maximum (0 : map releaseAt (unlocked lock))
           acquired lock = [witness | witness <- releases, releaseTask witness /= task
-            , releaseAt witness > callerUnlockAt, releaseAddress witness == Address lock, releaseValue witness == 1]
+            , releaseAt witness > callerUnlockAt lock, releaseAddress witness == Address lock, releaseValue witness == 1]
           lockOk lock value = not (null (unlocked lock)) && (value == 0 || (value == 1 && not (null (acquired lock))))
       expect FamilyLifetime (lockOk lockWord objectLock && lockOk schedulerLockAddress schedulerLock)
       savedSp <- wordAt (task + 0x18) terminal

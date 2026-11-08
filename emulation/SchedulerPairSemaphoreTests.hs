@@ -24,7 +24,8 @@ semPlan :: Plan
 semPlan = Plan Owned "dat" entries guards [] []
  where
   entries =
-    [ Entry DomainA (HelperSemantic Release) (Address 0x43a14)
+    [ Entry DomainA (HelperSemantic Acquire) (Address 0x439d8)
+    , Entry DomainA (HelperSemantic Release) (Address 0x43a14)
     , Entry DomainA (SemaphoreSemantic SemaphoreSignal) (Address 0x47604)
     , Entry DomainA (SemaphoreSemantic SemaphoreInterruptSignal) (Address 0x47844)
     , Entry DomainA (SemaphoreSemantic SemaphoreWait) (Address 0x47a54)
@@ -33,7 +34,8 @@ semPlan = Plan Owned "dat" entries guards [] []
     , Entry DomainB (SemaphoreSemantic SemaphorePoll) (Address 0xd7a14)
     ]
   guards =
-    [ Guard DomainA (Address 0x43a14) (Address 0x43a50) "gr"
+    [ Guard DomainA (Address 0x439d8) (Address 0x43a14) "gac"
+    , Guard DomainA (Address 0x43a14) (Address 0x43a50) "gr"
     , Guard DomainA (Address 0x47604) (Address 0x47844) "g-1"
     , Guard DomainA (Address 0x47844) (Address 0x47a54) "g0"
     , Guard DomainA (Address 0x47a54) (Address 0x47c94) "ga"
@@ -63,7 +65,10 @@ callOfTask task domain address semantic arguments before after r0 writes trace =
     before after r0 0x13 writes [] 1 10 (Just trace) task 1 Nothing (map (const (originAtFor task address)) writes) []
 
 originAtFor :: Word32 -> Word32 -> WriteOrigin
-originAtFor task address = WriteOrigin 0 (Address address) (Address 0x9000) 0x13 (Address task) 1 1
+originAtFor task address = originAtForWith task 1 address
+
+originAtForWith :: Word32 -> Word32 -> Word32 -> WriteOrigin
+originAtForWith task instructions address = WriteOrigin 0 (Address address) (Address 0x9000) 0x13 (Address task) 1 (fromIntegral instructions)
 
 signalAddress, pollAddress, timedAddress, callbackA, timerA :: Word32
 signalAddress = 0x47604
@@ -253,16 +258,26 @@ pendingForever timeout stackWord = Pending (SemaphoreSemantic SemaphoreTimedWait
     , (Address 0x400545c4, 0)
     ]
 
-releaseAddress :: Word32
+releaseAddress, acquireAddress :: Word32
 releaseAddress = 0x43a14
+acquireAddress = 0x439d8
 
-releaseCall :: Word32 -> Word64 -> Call
-releaseCall lock first = (callOfTask taskA DomainA releaseAddress (HelperSemantic Release) [pointer,0,0,0]
-  before after pointer [Written (Address lock) 4 0] (traceOf (replicate 16 0) [] Returned)) { callFirst = first }
+helperCall :: Word32 -> Word32 -> Semantic -> Word32 -> Word32 -> Word64 -> Word32 -> Word32 -> Call
+helperCall task address semantic lock instructions callFirst value r0 = call
  where
   pointer = 0x9000
-  before = M.fromList [(Address handlerA, 0), (Address dispatchA, 1), (Address pointer, lock), (Address lock, 1)]
-  after = M.insert (Address lock) 0 before
+  before = M.fromList [(Address handlerA, 0), (Address dispatchA, 1), (Address pointer, lock), (Address lock, 1 - value)]
+  after = M.insert (Address lock) value before
+  call = (callOfTask task DomainA address semantic [pointer,0,0,0] before after r0 [Written (Address lock) 4 value]
+    (traceOf (replicate 16 0) [] Returned)) { callFirst = callFirst, callWriteOrigins = [originAtForWith task instructions lock] }
+
+releaseCall :: Word32 -> Word64 -> Call
+releaseCall lock first = helperCall taskA releaseAddress (HelperSemantic Release) lock 1 first 0 0x9000
+
+pendingInterleaved :: Pending
+pendingInterleaved = (pendingForever (fromIntegral (-1 :: Int)) 0) { pendingSaveAt = Just 110, pendingTerminal = Just terminal }
+ where
+  terminal = M.insert (Address 0x400545c0) 1 (maybe M.empty id (pendingTerminal (pendingForever (fromIntegral (-1 :: Int)) 0)))
 
 pendingStaleRelease :: Pending
 pendingStaleRelease = (pendingForever (fromIntegral (-1 :: Int)) 0) { pendingEntered = 50 }
@@ -312,8 +327,8 @@ observation calls pendings = J.object
   , "untracked" J..= J.object ["count" J..= (0::Int)], "unarmed_entries" J..= J.object ["count" J..= (0::Int)]
   , "fill_fetch" J..= J.Null
   , "armings" J..= [arming DomainA, arming DomainB]
-  , "segments" J..= [segment [DomainA] 10 20 [(0x43a14,0x43a50),(0x47604,0x47844),(0x47844,0x47a54),(0x47a54,0x47c94),(0x47c94,0x47dd0),(0x47dd0,0x48044)]
-                    , segment [DomainA,DomainB] 20 100 [(0x43a14,0x43a50),(0x47604,0x47844),(0x47844,0x47a54),(0x47a54,0x47c94),(0x47c94,0x47dd0),(0x47dd0,0x48044),(0xd7a14,0xd7c54)]]
+  , "segments" J..= [segment [DomainA] 10 20 [(0x439d8,0x43a14),(0x43a14,0x43a50),(0x47604,0x47844),(0x47844,0x47a54),(0x47a54,0x47c94),(0x47c94,0x47dd0),(0x47dd0,0x48044)]
+                    , segment [DomainA,DomainB] 20 100 [(0x439d8,0x43a14),(0x43a14,0x43a50),(0x47604,0x47844),(0x47844,0x47a54),(0x47a54,0x47c94),(0x47c94,0x47dd0),(0x47dd0,0x48044),(0xd7a14,0xd7c54)]]
   , "final_readback" J..= rb semReadback
   , "classes" J..= map wireCall calls
   , "pending" J..= map wirePending pendings
@@ -387,6 +402,11 @@ main = do
   refuses "completed call cannot clobber r4" [restoredClobber] []
   refuses "stale release does not satisfy pending" [releaseCall 0x400545c0 10, releaseCall 0x400545c4 11, pollCall 1 0 0] [pendingStaleRelease]
   refuses "untimed wait cannot time out" [waitTimeoutUntimed] []
+  accepts "interleaved cross-core lock acquisition"
+    [helperCall taskA releaseAddress (HelperSemantic Release) 0x400545c0 100 100 0 0x9000
+    ,helperCall 0x9000 acquireAddress (HelperSemantic Acquire) 0x400545c0 101 101 1 0
+    ,helperCall taskA releaseAddress (HelperSemantic Release) 0x400545c4 102 102 0 0x9000
+    ,pollCall 1 0 0] [pendingInterleaved]
   refuses "pending save without I masked" [releaseCall 0x400545c0 10, releaseCall 0x400545c4 11, pollCall 1 0 0] [(pendingForever (fromIntegral (-1 :: Int)) 0) { pendingSaveCpsr = Just 0x13 }]
   putStrLn "scheduler-pair semaphore tests passed"
 
@@ -434,7 +454,7 @@ wirePending pending = J.object
       , "sp" J..= hex (pendingSp pending), "cpsr" J..= pendingCpsr pending
       ]
   , "entered" J..= pendingEntered pending, "terminal_memory" J..= maybe [] wordsOf (pendingTerminal pending)
-  , "history" J..= [J.object ["kind" J..= ("save"::String),"cpsr" J..= cpsr,"instructions" J..= (50::Int)] | cpsr <- maybe [] pure (pendingSaveCpsr pending)]
+  , "history" J..= [J.object ["kind" J..= ("save"::String),"cpsr" J..= cpsr,"instructions" J..= at] | cpsr <- maybe [] pure (pendingSaveCpsr pending), at <- maybe [] pure (pendingSaveAt pending)]
   ]
 
 kindName :: BoundaryKind -> String
