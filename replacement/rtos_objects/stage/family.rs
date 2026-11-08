@@ -470,6 +470,18 @@ fn mailbox_router(invocation: MailboxInvocation) -> i32 {
     }
 }
 
+/// A handler-context teardown sets the delayed-dispatch word instead of switching stacks.
+fn dispatch_teardown(saved: LifecycleMask) {
+    if load(ENTRY.words().handler_context) != 0 {
+        Cpu.request_delayed_dispatch();
+        restore_lifecycle(saved);
+    } else {
+        restore_lifecycle(saved.dispatch_mask());
+        Cpu.dispatch(0);
+        restore_lifecycle(saved);
+    }
+}
+
 /// Slot `+0x80`.
 #[no_mangle]
 #[inline(never)]
@@ -489,11 +501,7 @@ pub extern "C" fn xm1_rtos_objects_family_flag_delete(id: i32) -> i32 {
     let saved = mask_lifecycle();
     let (code, decision) = delete_flag_entry(id);
     match decision {
-        DispatchDecision::Required => {
-            restore_lifecycle(saved.dispatch_mask());
-            Cpu.dispatch(0);
-            restore_lifecycle(saved);
-        }
+        DispatchDecision::Required => dispatch_teardown(saved),
         DispatchDecision::NotRequired => restore_lifecycle(saved),
     }
     code
@@ -566,11 +574,7 @@ pub extern "C" fn xm1_rtos_objects_family_mailbox_delete(id: i32) -> i32 {
     let saved = mask_lifecycle();
     let (code, decision) = delete_mailbox_entry(id);
     match decision {
-        DispatchDecision::Required => {
-            restore_lifecycle(saved.dispatch_mask());
-            Cpu.dispatch(0);
-            restore_lifecycle(saved);
-        }
+        DispatchDecision::Required => dispatch_teardown(saved),
         DispatchDecision::NotRequired => restore_lifecycle(saved),
     }
     code
