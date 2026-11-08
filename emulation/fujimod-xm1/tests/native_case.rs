@@ -51,6 +51,8 @@ struct Case {
     identity: Option<String>,
     /// The wire's kernel row of a kernel case.
     kernel: Option<String>,
+    /// The wire's stack-context row of an opted-in kernel case.
+    stack_contexts: Option<String>,
 }
 
 /// A kernel case's wire row; `None` is `n`.
@@ -95,6 +97,7 @@ impl Case {
             stubs: Vec::new(),
             identity: None,
             kernel: None,
+            stack_contexts: None,
         }
     }
 
@@ -119,6 +122,10 @@ impl Case {
         self
     }
 
+    fn stack_b(self) -> Self {
+        self.region(STACK_B, READ_WRITE, &[0; 0x100])
+    }
+
     fn stub(mut self, address: u32, inputs: &[(u8, u32)], outputs: &[(u8, u32)]) -> Self {
         self.stubs.push(Stub { address, inputs: inputs.to_vec(), outputs: outputs.to_vec() });
         self
@@ -135,6 +142,19 @@ impl Case {
     fn kernel(mut self, kernel: Kernel) -> Self {
         self = self.privileged(SVC_ENTRY, None);
         self.kernel = Some(kernel.row());
+        self
+    }
+
+    /// Declares the private stacks of an opted-in kernel case.
+    fn stacks(mut self, bounds: &[(u32, u32)]) -> Self {
+        let pairs: Vec<String> = bounds.iter().map(|(low, high)| format!(" {low:x} {high:x}")).collect();
+        self.stack_contexts = Some(format!("c {}{}", bounds.len(), pairs.concat()));
+        self
+    }
+
+    /// A raw stack-context row, for malformed declarations.
+    fn context_row(mut self, row: &str) -> Self {
+        self.stack_contexts = Some(row.to_owned());
         self
     }
 
@@ -158,6 +178,9 @@ impl Case {
         }
         if let Some(kernel) = &self.kernel {
             text += &format!("\n{kernel}");
+        }
+        if let Some(contexts) = &self.stack_contexts {
+            text += &format!("\n{contexts}");
         }
         text += &format!("\n{} {} {}\n", self.regions.len(), self.functions.len(), self.stubs.len());
         for region in &self.regions {
@@ -343,6 +366,10 @@ impl Observed {
 
     fn instructions(&self) -> u64 {
         self.observation.instructions.parse().unwrap()
+    }
+
+    fn trace(&self) -> Vec<u32> {
+        self.observation.trace.iter().map(|entry| word(&entry.pc)).collect()
     }
 
     fn assert_stopped(&self, status: Status, pc: u32) {
@@ -1782,6 +1809,323 @@ fn malformed_kernel_cases_are_invalid() {
     let mut malformed = valid.clone();
     malformed.kernel = Some("k n n n".to_owned());
     cases.extend([wide, malformed]);
+    for case in cases {
+        let observed = case.run();
+        assert_eq!(observed.status(), Status::InvalidCase, "{}", case.wire());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Stack contexts
+
+const WORKER: u32 = 0x1020;
+const INNER: u32 = 0x1040;
+const STACK_B: u32 = 0x3200;
+const SP_B: u32 = 0x3300;
+
+const PUSH_R4_R11_LR: u32 = 0xe92d_4ff0;
+const POP_R4_R11_PC: u32 = 0xe8bd_8ff0;
+const POP_R4_R11_LR: u32 = 0xe8bd_4ff0;
+const MOV_PC_LR: u32 = 0xe1a0_f00e;
+/// `ldr sp, [r4, #n]`, `ldr pc, [r4, #n]` and `ldr lr, [r4, #n]`.
+const LDR_SP_R4_0: u32 = 0xe594_d000;
+const LDR_PC_R4_0: u32 = 0xe594_f000;
+const LDR_PC_R4_4: u32 = 0xe594_f004;
+const LDR_SP_R4_8: u32 = 0xe594_d008;
+const LDR_PC_R4_12: u32 = 0xe594_f00c;
+const LDR_LR_R4_16: u32 = 0xe594_e010;
+const LDR_LR_R4_20: u32 = 0xe594_e014;
+
+/// `main` at `CODE`, `worker` at `WORKER` and `inner` at `INNER`.
+fn two_stack_program(main: [u32; 3], worker: [u32; 4], inner: [u32; 4]) -> Vec<u32> {
+    let mut code = vec![0u32; 20];
+    code[..3].copy_from_slice(&main);
+    code[8..12].copy_from_slice(&worker);
+    code[16..20].copy_from_slice(&inner);
+    code
+}
+
+/// Two declared stacks below `SP` and `SP_B`, with `data` readable at `DATA`.
+fn two_stack_case(code: &[u32], data: &[u32]) -> Case {
+    let mut case = Case::new(code);
+    case.functions = vec![(CODE, 0x10), (WORKER, 0x10), (INNER, 0x10)];
+    case.kernel(Kernel::default())
+        .stacks(&[(STACK, SP), (STACK_B, SP_B)])
+        .stack_b()
+        .region(DATA, READ, &words(data))
+        .register(4, DATA)
+}
+
+#[test]
+fn two_stack_contexts_switch_away_and_back_through_nested_frames() {
+    let code = two_stack_program(
+        [branch(CODE, INNER, true), LDR_LR_R4_16, BX_LR],
+        [PUSH_R4_R11_LR, LDR_SP_R4_0, LDR_PC_R4_4, 0],
+        [PUSH_R4_R11_LR, LDR_SP_R4_8, LDR_PC_R4_12, POP_R4_R11_PC],
+    );
+    let data = [SP - 36, INNER + 12, SP_B, WORKER, EXIT, CODE];
+    let observed = two_stack_case(&code, &data).run();
+    observed.assert_returned();
+    assert_eq!(observed.register("sp"), SP);
+    assert_eq!(
+        observed.trace(),
+        [CODE, INNER, INNER + 4, INNER + 8, WORKER, WORKER + 4, WORKER + 8, INNER + 12, CODE + 4, CODE + 8]
+    );
+}
+
+#[test]
+fn a_resumed_context_retires_the_frame_whose_return_address_it_resumes() {
+    let code = two_stack_program(
+        [branch(CODE, INNER, true), LDR_LR_R4_16, BX_LR],
+        [LDR_SP_R4_0, LDR_PC_R4_4, 0, 0],
+        [LDR_SP_R4_8, LDR_PC_R4_12, 0, 0],
+    );
+    let data = [SP, CODE + 4, SP_B, WORKER, EXIT];
+    let observed = two_stack_case(&code, &data).run();
+    observed.assert_returned();
+    assert_eq!(observed.register("sp"), SP);
+    assert_eq!(observed.trace(), [CODE, INNER, INNER + 4, WORKER, WORKER + 4, CODE + 4, CODE + 8]);
+}
+
+const RESUME: u32 = 0x1040;
+const DISPATCH: u32 = 0x1060;
+const SELECT: u32 = 0x1080;
+const MANY: u32 = 0x5000;
+
+/// The `SP` stack plus `count - 1` disjoint eight-byte stacks at `MANY`.
+fn many_stacks(count: usize) -> Vec<(u32, u32)> {
+    let mut bounds = vec![(STACK, SP)];
+    bounds.extend((0..count - 1).map(|index| {
+        let low = MANY + 8 * index as u32;
+        (low, low + 8)
+    }));
+    bounds
+}
+
+#[test]
+fn sixteen_stack_contexts_are_the_declared_limit() {
+    let observed = Case::new(&[BX_LR])
+        .kernel(Kernel::default())
+        .stacks(&many_stacks(16))
+        .region(MANY, READ_WRITE, &[0; 0x100])
+        .run();
+    observed.assert_returned();
+}
+
+#[test]
+fn two_stack_contexts_follow_the_stock_resume_stub_shape() {
+    let mut code = vec![0u32; 36];
+    code[0] = branch(CODE, DISPATCH, true);
+    code[1] = LDR_LR_R4_16;
+    code[2] = BX_LR;
+    code[8] = LDR_SP_R4_0;
+    code[9] = LDR_PC_R4_4;
+    code[16] = POP_R4_R11_LR;
+    code[17] = MOV_PC_LR;
+    code[24] = PUSH_R4_R11_LR;
+    code[25] = branch(DISPATCH + 4, SELECT, false);
+    code[32] = LDR_SP_R4_8;
+    code[33] = LDR_PC_R4_12;
+    let data = [SP - 36, RESUME, SP_B, WORKER, EXIT];
+    let mut case = two_stack_case(&code, &data);
+    case.functions = vec![(CODE, 0x10), (WORKER, 0x10), (RESUME, 0x10), (DISPATCH, 0x10), (SELECT, 0x10)];
+    let observed = case.run();
+    observed.assert_returned();
+    assert_eq!(observed.register("sp"), SP);
+    assert_eq!(
+        observed.trace(),
+        [
+            CODE,
+            DISPATCH,
+            DISPATCH + 4,
+            SELECT,
+            SELECT + 4,
+            WORKER,
+            WORKER + 4,
+            RESUME,
+            RESUME + 4,
+            CODE + 4,
+            CODE + 8,
+        ]
+    );
+}
+
+#[test]
+fn a_fresh_context_starts_at_the_loaded_function_on_its_own_stack() {
+    let code = two_stack_program(
+        [branch(CODE, INNER, true), LDR_LR_R4_16, BX_LR],
+        [PUSH_R4_R11_LR, LDR_LR_R4_16, BX_LR, 0],
+        [LDR_SP_R4_8, LDR_PC_R4_12, BX_LR, 0],
+    );
+    let data = [SP, INNER + 8, SP_B, WORKER, EXIT, CODE];
+    let observed = two_stack_case(&code, &data).run();
+    observed.assert_returned();
+    assert_eq!(observed.register("sp"), SP_B - 36);
+    assert_eq!(observed.trace(), [CODE, INNER, INNER + 4, WORKER, WORKER + 4, WORKER + 8]);
+}
+
+#[test]
+fn a_wrong_return_in_a_restored_context_is_refused() {
+    let code = two_stack_program(
+        [branch(CODE, INNER, true), LDR_LR_R4_16, BX_LR],
+        [LDR_LR_R4_20, LDR_SP_R4_0, LDR_PC_R4_4, 0],
+        [LDR_SP_R4_8, LDR_PC_R4_12, BX_LR, 0],
+    );
+    let data = [SP, INNER + 8, SP_B, WORKER, EXIT, CODE];
+    let observed = two_stack_case(&code, &data).run();
+    observed.assert_stopped(Status::UnknownCall, INNER + 8);
+    assert_eq!(observed.register("sp"), SP);
+}
+
+#[test]
+fn a_single_stack_self_dispatch_resumes_its_own_context() {
+    let mut code = vec![0u32; 36];
+    code[0] = branch(CODE, DISPATCH, true);
+    code[1] = LDR_LR_R4_16;
+    code[2] = BX_LR;
+    code[16] = POP_R4_R11_LR;
+    code[17] = MOV_PC_LR;
+    code[24] = PUSH_R4_R11_LR;
+    code[25] = branch(DISPATCH + 4, SELECT, false);
+    code[32] = LDR_SP_R4_8;
+    code[33] = LDR_PC_R4_12;
+    let data = [SP - 36, RESUME, SP - 36, RESUME, EXIT];
+    let mut case = Case::new(&code);
+    case.functions = vec![(CODE, 0x10), (RESUME, 0x10), (DISPATCH, 0x10), (SELECT, 0x10)];
+    let observed = case
+        .kernel(Kernel::default())
+        .stacks(&[(STACK, SP)])
+        .region(DATA, READ, &words(&data))
+        .register(4, DATA)
+        .run();
+    observed.assert_returned();
+    assert_eq!(observed.register("sp"), SP);
+    assert_eq!(
+        observed.trace(),
+        [CODE, DISPATCH, DISPATCH + 4, SELECT, SELECT + 4, RESUME, RESUME + 4, CODE + 4, CODE + 8]
+    );
+}
+
+#[test]
+fn a_self_dispatch_wrong_return_is_refused() {
+    let mut code = vec![0u32; 36];
+    code[0] = branch(CODE, DISPATCH, true);
+    code[1] = LDR_LR_R4_16;
+    code[2] = BX_LR;
+    code[16] = LDR_LR_R4_20;
+    code[17] = MOV_PC_LR;
+    code[24] = PUSH_R4_R11_LR;
+    code[25] = branch(DISPATCH + 4, SELECT, false);
+    code[32] = LDR_SP_R4_8;
+    code[33] = LDR_PC_R4_12;
+    let data = [SP - 36, RESUME, SP - 36, RESUME, EXIT, CODE];
+    let mut case = Case::new(&code);
+    case.functions = vec![(CODE, 0x10), (RESUME, 0x10), (DISPATCH, 0x10), (SELECT, 0x10)];
+    let observed = case
+        .kernel(Kernel::default())
+        .stacks(&[(STACK, SP)])
+        .region(DATA, READ, &words(&data))
+        .register(4, DATA)
+        .run();
+    observed.assert_stopped(Status::UnknownCall, RESUME + 4);
+    assert_eq!(observed.register("sp"), SP - 36);
+}
+
+#[test]
+fn a_pc_load_outside_every_declared_stack_domain_is_refused() {
+    let case = Case::new(&[LDR_SP_R4_0, LDR_PC_R4_4, BX_LR])
+        .function(WORKER, 4)
+        .kernel(Kernel::default())
+        .stacks(&[(STACK, SP), (STACK_B, SP_B)])
+        .stack_b()
+        .region(DATA, READ, &words(&[SP_B + 0x100, WORKER]))
+        .register(4, DATA);
+    let observed = case.run();
+    observed.assert_stopped(Status::UnsupportedInstruction, CODE + 4);
+}
+
+#[test]
+fn a_context_switch_needs_an_aligned_declared_function_target() {
+    for (target, status) in [(WORKER + 2, Status::UnsupportedInstruction), (INNER + 0x40, Status::UnknownCall)] {
+        let case = Case::new(&[LDR_SP_R4_0, LDR_PC_R4_4, BX_LR])
+            .kernel(Kernel::default())
+            .stacks(&[(STACK, SP), (STACK_B, SP_B)])
+            .stack_b()
+            .region(DATA, READ, &words(&[SP_B, target]))
+            .register(4, DATA);
+        let observed = case.run();
+        observed.assert_stopped(status, CODE + 4);
+    }
+}
+
+#[test]
+fn a_context_load_from_unbacked_memory_is_a_memory_guard() {
+    let case = Case::new(&[LDR_PC_R4_4, BX_LR])
+        .function(WORKER, 4)
+        .kernel(Kernel::default())
+        .stacks(&[(STACK, SP), (STACK_B, SP_B)])
+        .stack_b()
+        .region(DATA + 8, READ, &words(&[WORKER]))
+        .register(4, DATA);
+    let observed = case.run();
+    observed.assert_stopped(Status::MemoryGuard, CODE);
+}
+
+#[test]
+fn a_context_case_still_stops_at_its_declared_stop_address() {
+    let observed = Case::new(&[LDR_PC_R4_0, BX_LR])
+        .kernel(Kernel { stop: Some(STOP), ..Kernel::default() })
+        .stacks(&[(STACK, SP), (STACK_B, SP_B)])
+        .stack_b()
+        .region(DATA, READ, &words(&[STOP]))
+        .register(4, DATA)
+        .run();
+    observed.assert_stopped(Status::StopAddress, STOP);
+}
+
+#[test]
+fn a_pc_load_without_declared_contexts_stays_refused() {
+    let case = Case::new(&[LDR_SP_R4_0, LDR_PC_R4_4, BX_LR])
+        .function(WORKER, 4)
+        .kernel(Kernel::default())
+        .region(STACK_B, READ_WRITE, &[0; 0x100])
+        .region(DATA, READ, &words(&[SP_B, WORKER]))
+        .register(4, DATA);
+    let observed = case.run();
+    observed.assert_stopped(Status::UnsupportedInstruction, CODE + 4);
+}
+
+#[test]
+fn malformed_stack_context_declarations_are_invalid() {
+    let valid = Case::new(&[BX_LR])
+        .kernel(Kernel::default())
+        .stacks(&[(STACK, SP), (STACK_B, SP_B)])
+        .region(STACK_B, READ_WRITE, &[0; 0x100]);
+    valid.run().assert_returned();
+    let row = |row: &str| valid.clone().context_row(row);
+    let seventeen: String =
+        many_stacks(17).iter().map(|(low, high)| format!(" {low:x} {high:x}")).collect();
+    let mut cases = vec![
+        row("c 0"),
+        row("c 3000 3100"),
+        row("c 1 3001 3100"),
+        row("c 1 3000 3104"),
+        row("c 1 3100 3000"),
+        row("c 1 3000 3200"),
+        row("c 2 3000 3100 3080 3100"),
+        row("c 1 1000 1080"),
+        row("c 1 3200 3300"),
+        row("c 1 3000 3100 3200 3300"),
+        row("c 1 3000 3100 x"),
+    ];
+    cases.push(valid.clone().region(MANY, READ_WRITE, &[0; 0x100]).context_row(&format!("c 17{seventeen}")));
+    let mut user = valid.clone();
+    user.registers[15] = 0x10;
+    user.identity = None;
+    cases.push(user);
+    let mut privileged = valid.clone();
+    privileged.kernel = None;
+    cases.push(privileged);
     for case in cases {
         let observed = case.run();
         assert_eq!(observed.status(), Status::InvalidCase, "{}", case.wire());
