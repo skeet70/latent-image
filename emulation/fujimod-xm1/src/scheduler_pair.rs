@@ -92,17 +92,32 @@ enum Service {
     DisableTaskException, EnableTaskException, DeliverTaskException, DeliverTaskExceptionEntry,
 }
 
+/// The family bodies and their shared helpers, in the catalog's kebab-case spelling.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum FamilyService {
+    FamilyRelease, HelperRelease, HelperBlock, HelperBlockTimed, HelperCheck,
+    FamilyFlagCreate, FamilyFlagDelete, FamilyFlagSet, FamilyFlagSetHandler, FamilyFlagClear,
+    FamilyFlagWait, FamilyFlagPoll, FamilyFlagTimedWait,
+    FamilyMailboxCreate, FamilyMailboxDelete, FamilyMailboxSend, FamilyMailboxReceive,
+    FamilyMailboxPoll, FamilyMailboxTimedReceive,
+}
+
+/// The object table a family service names.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Family { Flag, Mailbox }
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "kebab-case")]
 enum IrqKind { Doorbell }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
-enum Semantic { Helper { name: Helper }, Dispatch { name: DispatchPoint }, Service { name: Service }, Irq { name: IrqKind } }
+enum Semantic { Helper { name: Helper }, Dispatch { name: DispatchPoint }, Service { name: Service }, Irq { name: IrqKind }, Family { name: FamilyService } }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "kebab-case")]
-enum ProbeKind { SelectedRead, DiscardedRead, EnabledRead, GlobalLockRead, Retry, Callback, CallbackReturn, SelectComplete, FirstEntryExit, IrqTail }
+enum ProbeKind { SelectedRead, DiscardedRead, EnabledRead, GlobalLockRead, Retry, Callback, CallbackReturn, SelectComplete, FirstEntryExit, IrqTail, TimerInsert, TimerRemove }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(try_from = "String", into = "String")]
@@ -409,13 +424,47 @@ impl Eq for Boundary {}
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "kebab-case")]
-enum BoundaryKind { Save, Resume, NoSave, Retry, Callback, CallbackReturn, SelectedRead, DiscardedRead, EnabledRead, GlobalLockRead, SelectComplete, FirstEntryExit, IrqTail, Return, Acquired, PrefetchAbort }
+enum BoundaryKind { Save, Resume, NoSave, Retry, Callback, CallbackReturn, SelectedRead, DiscardedRead, EnabledRead, GlobalLockRead, SelectComplete, FirstEntryExit, IrqTail, Return, Acquired, PrefetchAbort, TimerInsert, TimerRemove }
+
+impl ProbeKind {
+    fn boundary(self) -> BoundaryKind {
+        match self {
+            Self::SelectedRead => BoundaryKind::SelectedRead,
+            Self::DiscardedRead => BoundaryKind::DiscardedRead,
+            Self::EnabledRead => BoundaryKind::EnabledRead,
+            Self::GlobalLockRead => BoundaryKind::GlobalLockRead,
+            Self::Retry => BoundaryKind::Retry,
+            Self::Callback => BoundaryKind::Callback,
+            Self::CallbackReturn => BoundaryKind::CallbackReturn,
+            Self::SelectComplete => BoundaryKind::SelectComplete,
+            Self::FirstEntryExit => BoundaryKind::FirstEntryExit,
+            Self::IrqTail => BoundaryKind::IrqTail,
+            Self::TimerInsert => BoundaryKind::TimerInsert,
+            Self::TimerRemove => BoundaryKind::TimerRemove,
+        }
+    }
+
+    /// A timer probe's boundary value is the entry argument in `r1`.
+    fn timer(self) -> bool { matches!(self, Self::TimerInsert | Self::TimerRemove) }
+}
 
 #[derive(Serialize)]
 struct ClassCount { count: u64, first: u64, last: u64 }
 
 #[derive(Serialize)]
 struct ClassRow<'a> { #[serde(flatten)] class: &'a CallClass, #[serde(flatten)] count: &'a ClassCount }
+
+/// Counts one completed call; `entered` bounds the class's first and last entry.
+fn classify(classes: &mut BTreeMap<CallClass, ClassCount>, class: CallClass, entered: u64) -> Result<(), String> {
+    if let Some(count) = classes.get_mut(&class) {
+        count.count += 1;
+        count.last = entered;
+        return Ok(());
+    }
+    require(classes.len() < CLASS_LIMIT, "call class bound exceeded")?;
+    classes.insert(class, ClassCount { count: 1, first: entered, last: entered });
+    Ok(())
+}
 
 /// A call completes when its core next stops at its continuation with the entry's stack pointer
 /// and processor mode; usr, svc and sys calls also need the entry's executing-core current task.
@@ -464,6 +513,14 @@ impl OpenCall {
                 && (key.pc & !ALIAS == context.pc & !ALIAS || (delivery && name == DispatchPoint::Resume))
         } else {
             matches!(semantic, Some(Semantic::Dispatch { .. })) || key.pc & !ALIAS == context.pc & !ALIAS
+        }
+    }
+
+    /// A family call is tied to the task that entered it; another task's stop is not its boundary.
+    fn owns_boundary(&self, key: &ReturnKey, context: &Context) -> bool {
+        match self.entry.slot.semantic {
+            Semantic::Family { .. } => self.entry.task == context.current,
+            _ => key.task.is_none() || self.entry.task == context.current,
         }
     }
 }
@@ -757,6 +814,249 @@ fn service_snapshot(board: &Board, core: Core, tcm: [u32; 2], domain: Domain, se
     Ok(words)
 }
 
+/// Family record sizes and table extents of one loader (`replacement/rtos_layout`).
+const TASK_RECORD_BYTES: u32 = 0x38;
+const TASK_RECORD_COUNT: u32 = 120;
+const FLAG_RECORD_COUNT: u32 = 120;
+const MAILBOX_RECORD_COUNT: u32 = 1;
+const TIMER_ENTRY_BYTES: u32 = 0x0c;
+const MESSAGE_BYTES: u32 = 0x08;
+
+/// A family wait queue or message chain longer than this is truncated.
+const FAMILY_QUEUE_LIMIT: usize = 256;
+const FAMILY_MESSAGE_LIMIT: usize = 256;
+
+/// One fixed family table: base, record size and record count.
+#[derive(Clone, Copy, Debug)]
+struct Table { base: u32, size: u32, count: u32 }
+impl Table {
+    /// The record's address for a one-based slot inside the table.
+    fn record(self, slot: u32) -> Option<u32> {
+        (1..=self.count).contains(&slot).then(|| self.base + (slot - 1) * self.size)
+    }
+    /// The record's one-based slot when `address` starts one.
+    fn slot(self, address: u32) -> Option<u32> {
+        let offset = address.checked_sub(self.base)?;
+        (offset % self.size == 0).then(|| offset / self.size + 1).filter(|slot| *slot <= self.count)
+    }
+}
+
+/// The family tables of one loader (`replacement/rtos_layout::Domain::words`).
+#[derive(Clone, Copy, Debug)]
+struct FamilyTables {
+    tasks: Table,
+    flag_configs: Table,
+    flag_controls: Table,
+    flag_waits: Table,
+    flag_timers: Table,
+    mailbox_configs: Table,
+    mailbox_controls: Table,
+    mailbox_waits: Table,
+    mailbox_timers: Table,
+}
+
+impl FamilyTables {
+    fn of(domain: Domain) -> Self {
+        let table = |base, size, count| Table { base, size, count };
+        match domain {
+            Domain::A => Self {
+                tasks: table(0x4005_ff0c, TASK_RECORD_BYTES, TASK_RECORD_COUNT),
+                flag_configs: table(0x4005_d178, 0x0c, FLAG_RECORD_COUNT),
+                flag_controls: table(0x4006_24b4, 0x10, FLAG_RECORD_COUNT),
+                flag_waits: table(0x4005_5fdc, 0x18, TASK_RECORD_COUNT),
+                flag_timers: table(0x4005_5a3c, TIMER_ENTRY_BYTES, TASK_RECORD_COUNT),
+                mailbox_configs: table(0x4005_d16c, 0x0c, MAILBOX_RECORD_COUNT),
+                mailbox_controls: table(0x4006_2c34, 0x14, MAILBOX_RECORD_COUNT),
+                mailbox_waits: table(0x4005_783c, 0x10, TASK_RECORD_COUNT),
+                mailbox_timers: table(0x4005_7fbc, TIMER_ENTRY_BYTES, TASK_RECORD_COUNT),
+            },
+            Domain::B => Self {
+                tasks: table(0x400e_fecc, TASK_RECORD_BYTES, TASK_RECORD_COUNT),
+                flag_configs: table(0x400e_d138, 0x0c, FLAG_RECORD_COUNT),
+                flag_controls: table(0x400f_2474, 0x10, FLAG_RECORD_COUNT),
+                flag_waits: table(0x400e_5f9c, 0x18, TASK_RECORD_COUNT),
+                flag_timers: table(0x400e_59fc, TIMER_ENTRY_BYTES, TASK_RECORD_COUNT),
+                mailbox_configs: table(0x400e_d12c, 0x0c, MAILBOX_RECORD_COUNT),
+                mailbox_controls: table(0x400f_2bf4, 0x14, MAILBOX_RECORD_COUNT),
+                mailbox_waits: table(0x400e_77fc, 0x10, TASK_RECORD_COUNT),
+                mailbox_timers: table(0x400e_7f7c, TIMER_ENTRY_BYTES, TASK_RECORD_COUNT),
+            },
+        }
+    }
+
+    fn configs(self, family: Family) -> Table {
+        match family { Family::Flag => self.flag_configs, Family::Mailbox => self.mailbox_configs }
+    }
+    fn controls(self, family: Family) -> Table {
+        match family { Family::Flag => self.flag_controls, Family::Mailbox => self.mailbox_controls }
+    }
+    fn waits(self, family: Family) -> Table {
+        match family { Family::Flag => self.flag_waits, Family::Mailbox => self.mailbox_waits }
+    }
+    fn timers(self, family: Family) -> Table {
+        match family { Family::Flag => self.flag_timers, Family::Mailbox => self.mailbox_timers }
+    }
+}
+
+impl FamilyService {
+    /// The object table the service names; the release and block helpers take raw records.
+    fn family(self) -> Option<Family> {
+        match self {
+            Self::FamilyFlagCreate | Self::FamilyFlagDelete | Self::FamilyFlagSet | Self::FamilyFlagSetHandler
+            | Self::FamilyFlagClear | Self::FamilyFlagWait | Self::FamilyFlagPoll | Self::FamilyFlagTimedWait => Some(Family::Flag),
+            Self::FamilyMailboxCreate | Self::FamilyMailboxDelete | Self::FamilyMailboxSend
+            | Self::FamilyMailboxReceive | Self::FamilyMailboxPoll | Self::FamilyMailboxTimedReceive => Some(Family::Mailbox),
+            Self::FamilyRelease | Self::HelperRelease | Self::HelperBlock | Self::HelperBlockTimed | Self::HelperCheck => None,
+        }
+    }
+
+    fn object_argument(self) -> Option<usize> { self.family().map(|_| 0) }
+
+    /// The flag waits and polls take the output word fourth, the mailbox receives and polls second.
+    fn output_argument(self) -> Option<usize> {
+        match self {
+            Self::FamilyFlagWait | Self::FamilyFlagPoll | Self::FamilyFlagTimedWait => Some(3),
+            Self::FamilyMailboxReceive | Self::FamilyMailboxPoll | Self::FamilyMailboxTimedReceive => Some(1),
+            _ => None,
+        }
+    }
+
+    fn message_argument(self) -> Option<usize> { (self == Self::FamilyMailboxSend).then_some(1) }
+
+    /// The flag timed wait passes its timeout as the fifth argument, on the caller's stack.
+    fn stack_timeout(self) -> bool { self == Self::FamilyFlagTimedWait }
+
+    /// A wait or receive arms the executing task's own timer entry.
+    fn blocks(self) -> bool {
+        matches!(self, Self::FamilyFlagWait | Self::FamilyFlagTimedWait | Self::FamilyMailboxReceive | Self::FamilyMailboxTimedReceive)
+    }
+
+    /// Create and delete index the entry domain's own table whatever the class half says.
+    fn owns_its_table(self) -> bool {
+        matches!(self, Self::FamilyFlagCreate | Self::FamilyFlagDelete | Self::FamilyMailboxCreate | Self::FamilyMailboxDelete)
+    }
+
+    /// Every mailbox service reads or writes the message chain.
+    fn messages(self) -> bool { self.family() == Some(Family::Mailbox) }
+
+    /// Class 0 is the entry domain, 1 is A and 2 is B.
+    fn resolve(self, entry: Domain, id: u32) -> Option<(Domain, u32)> {
+        let count = match self.family()? { Family::Flag => FLAG_RECORD_COUNT, Family::Mailbox => MAILBOX_RECORD_COUNT };
+        let slot = id & 0xffff;
+        if !(1..=count).contains(&slot) { return None; }
+        if self.owns_its_table() { return Some((entry, slot)); }
+        match (id >> 16) & 0xffff {
+            0 => Some((entry, slot)),
+            1 => Some((Domain::A, slot)),
+            2 => Some((Domain::B, slot)),
+            _ => None,
+        }
+    }
+}
+
+/// The family snapshot's word set, read through the executing core's view.
+struct FamilyWalk<'a> {
+    addresses: BTreeSet<u32>,
+    read: &'a mut dyn FnMut(u32) -> Result<Read, String>,
+}
+
+impl FamilyWalk<'_> {
+    fn pointer(&mut self, address: u32) -> Result<Option<u32>, String> {
+        if address % 4 != 0 { return Ok(None); }
+        match (self.read)(address)? { Read::Committed { value } => Ok(Some(value)), _ => Ok(None) }
+    }
+
+    fn capture_word(&mut self, address: u32) {
+        if address != 0 && address % 4 == 0 { self.addresses.insert(address); }
+    }
+
+    fn record(&mut self, address: u32, bytes: u32) {
+        if address == 0 || address % 4 != 0 { return; }
+        let Some(end) = address.checked_add(bytes) else { return };
+        for word in (address..end).step_by(4) { self.addresses.insert(word); }
+    }
+}
+
+/// The task's domain and one-based slot when `task` starts a record in either table.
+fn family_task(task: u32) -> Option<(Domain, u32)> {
+    [Domain::A, Domain::B].into_iter().find_map(|domain| FamilyTables::of(domain).tasks.slot(task).map(|slot| (domain, slot)))
+}
+
+/// Walks an object's wait queue from the control block's self-linked head.
+fn family_queue(walk: &mut FamilyWalk, family: Family, control: u32) -> Result<(), String> {
+    let mut node = walk.pointer(control)?;
+    for _ in 0..FAMILY_QUEUE_LIMIT {
+        let Some(task) = node.filter(|&task| task != control) else { return Ok(()) };
+        for offset in [0x0c, 0x14, 0x18, 0x1c, 0x20] { walk.capture_word(task + offset); }
+        if let Some((waiter, slot)) = family_task(task) {
+            let tables = FamilyTables::of(waiter);
+            if let Some(wait) = tables.waits(family).record(slot) {
+                walk.record(wait, tables.waits(family).size);
+                if let Some(entry) = walk.pointer(wait)? {
+                    if tables.timers(family).slot(entry).is_some() { walk.record(entry, tables.timers(family).size); }
+                }
+            }
+        }
+        node = walk.pointer(task)?;
+    }
+    Ok(())
+}
+
+/// Walks a mailbox's message chain from the control block's head.
+fn family_messages(walk: &mut FamilyWalk, control: u32) -> Result<(), String> {
+    let mut node = walk.pointer(control + 0x0c)?;
+    for _ in 0..FAMILY_MESSAGE_LIMIT {
+        let Some(message) = node.filter(|&message| message != 0) else { return Ok(()) };
+        walk.record(message, MESSAGE_BYTES);
+        node = walk.pointer(message)?;
+    }
+    Ok(())
+}
+
+/// The family words one call involves: the caller's output and stack argument, the object's
+/// records, its wait queue and its message chain, bounded by the family limits.
+fn family_words(read: &mut dyn FnMut(u32) -> Result<Read, String>, domain: Domain, name: FamilyService,
+    arguments: [u32; 4], caller_sp: u32, running: Option<u32>) -> Result<Vec<u32>, String> {
+    let entry_tables = FamilyTables::of(domain);
+    let mut walk = FamilyWalk { addresses: BTreeSet::new(), read };
+    if let Some(index) = name.output_argument() { walk.capture_word(arguments[index]); }
+    if name.stack_timeout() { walk.capture_word(caller_sp); }
+    if let Some(index) = name.message_argument() { walk.record(arguments[index], MESSAGE_BYTES); }
+    let Some(family) = name.family() else { return Ok(walk.addresses.into_iter().collect()) };
+    if name.blocks() {
+        if let Some(entry) = running.and_then(|task| entry_tables.tasks.slot(task)).and_then(|slot| entry_tables.timers(family).record(slot)) {
+            walk.record(entry, entry_tables.timers(family).size);
+        }
+    }
+    if let Some((object, slot)) = name.object_argument().and_then(|index| name.resolve(domain, arguments[index])) {
+        let tables = FamilyTables::of(object);
+        if let Some(config) = tables.configs(family).record(slot) { walk.record(config, tables.configs(family).size); }
+        if let Some(control) = tables.controls(family).record(slot) {
+            walk.record(control, tables.controls(family).size);
+            family_queue(&mut walk, family, control)?;
+            if name.messages() { family_messages(&mut walk, control)?; }
+        }
+    }
+    Ok(walk.addresses.into_iter().collect())
+}
+
+fn family_snapshot(board: &Board, core: Core, tcm: [u32; 2], domain: Domain, name: FamilyService,
+    arguments: [u32; 4], caller_sp: u32) -> Result<Vec<WordValue>, String> {
+    let running_cell = match domain { Domain::A => 0x4005_4760, Domain::B => 0x400e_4720 };
+    let running = match board.word(core, tcm, running_cell)? {
+        Read::Committed { value } if value != 0 => Some(value),
+        _ => None,
+    };
+    let mut read = |address: u32| board.word(core, tcm, address);
+    let mut words = root_snapshot(board, core, tcm, domain)?;
+    for address in family_words(&mut read, domain, name, arguments, caller_sp, running)? {
+        words.push(WordValue { address: Hex(address), value: board.word(core, tcm, address)? });
+    }
+    words.sort_by_key(|word| word.address);
+    words.dedup_by_key(|word| word.address);
+    Ok(words)
+}
+
 const PC_WATCHES: [u32; 5] = [0x436ec, 0xd36ec, 0xec8014, 0x40b00, 0xd0b00];
 const DISPATCH_LOADS: [u32; 2] = [0x436e4, 0xd36e4];
 
@@ -1001,6 +1301,7 @@ impl Observer<'_> {
             memory: match slot.id.semantic {
                 Semantic::Helper { name } => snapshot(&board, context.core, tcm, name, context.arguments)?,
                 Semantic::Service { name } => service_snapshot(&board, context.core, tcm, domain, name, context.arguments)?,
+                Semantic::Family { name } => family_snapshot(&board, context.core, tcm, domain, name, context.arguments, context.sp)?,
                 _ => root_snapshot(&board, context.core, tcm, domain)?,
             },
         };
@@ -1096,13 +1397,7 @@ impl Observer<'_> {
                 fpexc: board.register(context.core, arm::Register::Fpexc)?,
                 tpidrurw: board.cp15(context.core, 13, 0, 2)? } };
             self.returns += 1;
-            if let Some(count) = self.classes.get_mut(&class) {
-                count.count += 1;
-                count.last = call.entered;
-            } else {
-                require(self.classes.len() < CLASS_LIMIT, "call class bound exceeded")?;
-                self.classes.insert(class, ClassCount { count: 1, first: call.entered, last: call.entered });
-            }
+            classify(&mut self.classes, class, call.entered)?;
         }
         Ok(())
     }
@@ -1122,7 +1417,7 @@ impl Observer<'_> {
         for (key, calls) in &mut self.open.pending {
             if key.core != context.core { continue; }
             for call in calls {
-                if key.task.is_some() && call.entry.task != context.current { continue; }
+                if !call.owns_boundary(key, context) { continue; }
                 if call.suspended && kind != BoundaryKind::Resume
                     && !(kind==BoundaryKind::DiscardedRead && matches!(context.pc & !ALIAS,0x43650 | 0xd3650)) { continue; }
                 let memory = call.entry.memory.iter().map(|word| Ok(WordValue {
@@ -1250,19 +1545,9 @@ impl Observer<'_> {
                     } else { board.register(core, arm::Register::R(probe.register.0))? };
                     self.probe_hits.push(ProbeHit { domain: probe.domain, core, address: probe.address, kind: probe.kind,
                         register: probe.register, value, cpsr: context.cpsr, sp: Hex(context.sp), lr: Hex(context.lr), instructions: context.instructions });
-                    let kind = match probe.kind {
-                        ProbeKind::SelectedRead => BoundaryKind::SelectedRead,
-                        ProbeKind::DiscardedRead => BoundaryKind::DiscardedRead,
-                        ProbeKind::EnabledRead => BoundaryKind::EnabledRead,
-                        ProbeKind::GlobalLockRead => BoundaryKind::GlobalLockRead,
-                        ProbeKind::Retry => BoundaryKind::Retry,
-                        ProbeKind::Callback => BoundaryKind::Callback,
-                        ProbeKind::CallbackReturn => BoundaryKind::CallbackReturn,
-                        ProbeKind::SelectComplete => BoundaryKind::SelectComplete,
-                        ProbeKind::FirstEntryExit => BoundaryKind::FirstEntryExit,
-                        ProbeKind::IrqTail => BoundaryKind::IrqTail,
-                    };
-                    self.boundary(machine, &context, tcm, kind, Some(value))?;
+                    let kind = probe.kind.boundary();
+                    let boundary_value = if probe.kind.timer() { board.register(core, arm::Register::R(1))? } else { value };
+                    self.boundary(machine, &context, tcm, kind, Some(boundary_value))?;
                     if kind == BoundaryKind::DiscardedRead && value == 1 && self.validated.plan.probes[index].register.0 == 3 {
                         let discarded = self.open.take_where(|key,call| key.core==core && call.entry.task==context.current && matches!(call.entry.slot.semantic,Semantic::Service { .. }));
                         self.finish(machine,&context,tcm,discarded,Completion::Discard)?;
@@ -1625,6 +1910,182 @@ mod tests {
             task: Read::Committed { value: 0x9000 }, sp: Hex(0x9fd0), cpsr: 0xd3, registers,
             memory: vec![WordValue { address: Hex(0x9018), value: Read::Committed { value: 0x9fd0 } }],
             writes: vec![], bank: vec![], value: Some(0xffff_ffef), cpacr: 0xf00000, fpexc: 0, tpidrurw: 7 }
+    }
+
+    fn family_call(name: FamilyService) -> OpenCall {
+        let mut call = call();
+        call.entry.slot.semantic = Semantic::Family { name };
+        call
+    }
+
+    fn family_read(words: &BTreeMap<u32, u32>) -> impl FnMut(u32) -> Result<Read, String> + '_ {
+        move |address| Ok(words.get(&address).map_or(Read::Unresolved, |&value| Read::Committed { value }))
+    }
+
+    fn context(task: u32) -> Context {
+        Context { core: Core::Primary, pc: 0, lr: 0, sp: 0, cpsr: 0x13, r0: 0, arguments: [0; 4],
+            registers: [0; 16], instructions: 0, current: Read::Committed { value: task } }
+    }
+
+    #[test]
+    fn family_semantics_serialize_with_the_catalog_names() {
+        let services = [FamilyService::FamilyRelease, FamilyService::HelperRelease, FamilyService::HelperBlock,
+            FamilyService::HelperBlockTimed, FamilyService::HelperCheck, FamilyService::FamilyFlagCreate,
+            FamilyService::FamilyFlagDelete, FamilyService::FamilyFlagSet, FamilyService::FamilyFlagSetHandler,
+            FamilyService::FamilyFlagClear, FamilyService::FamilyFlagWait, FamilyService::FamilyFlagPoll,
+            FamilyService::FamilyFlagTimedWait, FamilyService::FamilyMailboxCreate, FamilyService::FamilyMailboxDelete,
+            FamilyService::FamilyMailboxSend, FamilyService::FamilyMailboxReceive, FamilyService::FamilyMailboxPoll,
+            FamilyService::FamilyMailboxTimedReceive];
+        let names = ["family-release", "helper-release", "helper-block", "helper-block-timed", "helper-check",
+            "family-flag-create", "family-flag-delete", "family-flag-set", "family-flag-set-handler", "family-flag-clear",
+            "family-flag-wait", "family-flag-poll", "family-flag-timed-wait", "family-mailbox-create",
+            "family-mailbox-delete", "family-mailbox-send", "family-mailbox-receive", "family-mailbox-poll",
+            "family-mailbox-timed-receive"];
+        for (service, name) in services.into_iter().zip(names) {
+            let wire = serde_json::json!({ "kind": "family", "name": name });
+            assert_eq!(serde_json::to_value(Semantic::Family { name: service }).unwrap(), wire);
+            assert_eq!(serde_json::from_value::<Semantic>(wire).unwrap(), Semantic::Family { name: service });
+        }
+        let entry: PlanEntry = serde_json::from_value(serde_json::json!({ "domain": "a", "entry": "0x44568",
+            "semantic": { "kind": "family", "name": "family-release" } })).unwrap();
+        assert_eq!(entry.semantic, Semantic::Family { name: FamilyService::FamilyRelease });
+    }
+
+    #[test]
+    fn family_snapshot_is_bounded_and_keeps_the_involved_words() {
+        let tables = FamilyTables::of(Domain::A);
+        let config = tables.flag_configs.record(3).unwrap();
+        let control = tables.flag_controls.record(3).unwrap();
+        let tasks: Vec<u32> = [1, 2].into_iter().map(|slot| tables.tasks.record(slot).unwrap()).collect();
+        let waits: Vec<u32> = [1, 2].into_iter().map(|slot| tables.flag_waits.record(slot).unwrap()).collect();
+        let synthetic: Vec<u32> = (0..300).map(|index| 0x5000_0000 + index * TASK_RECORD_BYTES).collect();
+        let mut nodes = tasks.clone();
+        nodes.extend(&synthetic);
+        let mut words = BTreeMap::new();
+        words.insert(control, nodes[0]);
+        words.insert(control + 4, *nodes.last().unwrap());
+        words.insert(control + 8, config);
+        words.insert(control + 0x0c, 0x11);
+        for (index, &node) in nodes.iter().enumerate() {
+            words.insert(node, nodes.get(index + 1).copied().unwrap_or(control));
+        }
+        for (index, (&task, &wait)) in tasks.iter().zip(&waits).enumerate() {
+            words.insert(task + 0x0c, 0x32);
+            words.insert(task + 0x14, wait);
+            words.insert(wait, tables.flag_timers.record(index as u32 + 1).unwrap());
+            words.insert(wait + 0x0c, 0x10);
+            words.insert(wait + 0x10, 1);
+            words.insert(wait + 0x14, 0x11);
+        }
+        let out = 0x6000_0000;
+        let caller_sp = 0x6000_1000;
+        let mut read = family_read(&words);
+        let addresses = family_words(&mut read, Domain::A, FamilyService::FamilyFlagTimedWait,
+            [0x0000_0003, 0x10, 1, out], caller_sp, Some(tables.tasks.record(5).unwrap())).unwrap();
+        assert!(addresses.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(addresses.contains(&config) && addresses.contains(&control) && addresses.contains(&(control + 0x0c)));
+        assert!(addresses.contains(&out) && addresses.contains(&caller_sp));
+        assert!(addresses.contains(&waits[0]) && addresses.contains(&(waits[0] + 0x14)));
+        assert!(addresses.contains(&tables.flag_timers.record(1).unwrap()));
+        assert!(addresses.contains(&tables.flag_timers.record(5).unwrap()));
+        for offset in [0x0c, 0x14, 0x18, 0x1c, 0x20] { assert!(addresses.contains(&(tasks[0] + offset))); }
+        let last = FAMILY_QUEUE_LIMIT - tasks.len() - 1;
+        for offset in [0x0c, 0x14, 0x18, 0x1c, 0x20] {
+            assert!(addresses.contains(&(synthetic[last] + offset)));
+            assert!(!addresses.contains(&(synthetic[last + 1] + offset)));
+        }
+        assert!(!addresses.contains(&tables.flag_controls.record(4).unwrap()));
+        assert!(addresses.len() <= FAMILY_QUEUE_LIMIT * 5 + 64);
+    }
+
+    #[test]
+    fn family_snapshot_follows_the_message_chain_in_the_resolved_domain() {
+        let tables = FamilyTables::of(Domain::B);
+        let config = tables.mailbox_configs.record(1).unwrap();
+        let control = tables.mailbox_controls.record(1).unwrap();
+        let messages = [0x7000_0000u32, 0x7000_0010, 0x7000_0020];
+        let mut words = BTreeMap::new();
+        for (index, &message) in messages.iter().enumerate() {
+            words.insert(message, messages.get(index + 1).copied().unwrap_or(0));
+            words.insert(message + 4, index as u32);
+        }
+        words.insert(control + 0x0c, messages[0]);
+        words.insert(control + 0x10, messages[2]);
+        let caller = 0x7000_0100;
+        words.insert(caller, 0);
+        words.insert(caller + 4, 7);
+        let mut read = family_read(&words);
+        let addresses = family_words(&mut read, Domain::A, FamilyService::FamilyMailboxSend,
+            [0x0002_0001, caller, 0, 0], 0, None).unwrap();
+        assert!(addresses.contains(&config) && addresses.contains(&control) && addresses.contains(&(control + 0x10)));
+        for message in messages { assert!(addresses.contains(&message) && addresses.contains(&(message + 4))); }
+        assert!(addresses.contains(&caller) && addresses.contains(&(caller + 4)));
+        assert!(!addresses.contains(&FamilyTables::of(Domain::A).mailbox_controls.record(1).unwrap()));
+    }
+
+    #[test]
+    fn timer_probes_record_the_entry_as_a_family_boundary() {
+        assert_eq!(serde_json::to_value(ProbeKind::TimerInsert).unwrap(), "timer-insert");
+        assert_eq!(serde_json::to_value(ProbeKind::TimerRemove).unwrap(), "timer-remove");
+        assert_eq!(serde_json::to_value(BoundaryKind::TimerInsert).unwrap(), "timer-insert");
+        assert_eq!(serde_json::to_value(BoundaryKind::TimerRemove).unwrap(), "timer-remove");
+        assert_eq!(ProbeKind::TimerInsert.boundary(), BoundaryKind::TimerInsert);
+        assert_eq!(ProbeKind::TimerRemove.boundary(), BoundaryKind::TimerRemove);
+        assert_eq!(ProbeKind::Retry.boundary(), BoundaryKind::Retry);
+        assert!(ProbeKind::TimerInsert.timer() && ProbeKind::TimerRemove.timer() && !ProbeKind::Callback.timer());
+        let entry = FamilyTables::of(Domain::A).flag_timers.record(1).unwrap();
+        let mut call = family_call(FamilyService::FamilyFlagTimedWait);
+        for kind in [BoundaryKind::TimerInsert, BoundaryKind::TimerRemove, BoundaryKind::TimerInsert] {
+            let mut event = boundary(kind);
+            event.registers[1] = entry;
+            event.value = Some(entry);
+            call.record(event).unwrap();
+        }
+        assert!(!call.suspended);
+        let wire = serde_json::to_value(&call).unwrap();
+        let history = wire["history"].as_array().unwrap();
+        assert_eq!(history.iter().map(|event| event["kind"].as_str().unwrap()).collect::<Vec<_>>(),
+            ["timer-insert", "timer-remove", "timer-insert"]);
+        assert_eq!(history[0]["value"], entry);
+        assert_eq!(history[0]["registers"][1], entry);
+    }
+
+    #[test]
+    fn a_family_call_stays_open_until_its_own_task_returns() {
+        let key = ReturnKey { core: Core::Primary, pc: 0x8000, sp: 0xa000, task: Some(0x9000), mode: 0x13 };
+        let mut calls = OpenCalls::default();
+        calls.open(key, family_call(FamilyService::FamilyFlagWait)).unwrap();
+        assert!(calls.close(&ReturnKey { task: Some(0x9100), ..key }).is_empty());
+        assert_eq!((calls.count, calls.pending.values().flatten().count()), (1, 1));
+        let pending = calls.pending.get(&key).unwrap().first().unwrap();
+        assert!(pending.owns_boundary(&key, &context(0x9000)));
+        assert!(!pending.owns_boundary(&key, &context(0x9100)));
+        let mut family = family_call(FamilyService::FamilyFlagWait);
+        family.record(boundary(BoundaryKind::Save)).unwrap();
+        assert!(!family.suspended);
+        let service = call();
+        assert!(service.owns_boundary(&ReturnKey { task: None, ..key }, &context(0x9100)));
+        assert!(!service.owns_boundary(&key, &context(0x9100)));
+        assert_eq!(calls.close(&key).len(), 1);
+        assert_eq!(calls.count, 0);
+    }
+
+    #[test]
+    fn repeated_family_invocations_keep_one_call_class() {
+        let entry = family_call(FamilyService::FamilyFlagSet).entry;
+        let class = CallClass { entry: entry.clone(), result: ReturnState { r0: 0, cpsr: 0x53,
+            memory: entry.memory.clone(), writes: Vec::new(), bank: Vec::new(), completion: Completion::Return,
+            task: entry.task, sp: entry.sp, registers: [0; 16], cpacr: 0, fpexc: 0, tpidrurw: 0, history: Vec::new() } };
+        let mut classes = BTreeMap::new();
+        classify(&mut classes, class.clone(), 10).unwrap();
+        classify(&mut classes, class.clone(), 20).unwrap();
+        assert_eq!(classes.len(), 1);
+        let count = classes.values().next().unwrap();
+        assert_eq!((count.count, count.first, count.last), (2, 10, 20));
+        let mut other = class;
+        other.entry.memory.push(WordValue { address: Hex(0x4006_24b4), value: Read::Committed { value: 1 } });
+        classify(&mut classes, other, 30).unwrap();
+        assert_eq!(classes.len(), 2);
     }
 
     #[test]

@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# OPTIONS_GHC -Wno-orphans #-}
 module Emulation.SchedulerPairCheck where
 
 import Control.Monad (foldM, forM_, unless)
@@ -21,6 +22,8 @@ import qualified Emulation.SchedulerPairService as V
 import qualified Emulation.SchedulerPairS3a as A
 import qualified Emulation.SchedulerPairS3b as C
 import qualified Emulation.SchedulerPairS3c as E
+import Emulation.SchedulerPairFamily (FamilyCall (..))
+import qualified Emulation.SchedulerPairFamily as F
 import Emulation.Sha256 (sha256, sha256Hex)
 import Replacement.RtosOwnFirst.Regions (Domain (..), domains, domainLabel)
 import Replacement.RtosScheduler.Regions (Helper (..))
@@ -72,10 +75,11 @@ data Observation = Observation { obsRole :: Role, obsInputs :: [String], obsInst
   obsUntracked :: Int, obsUnarmed :: Int, obsFill :: Maybe Value, obsArmings :: [Q.Arming], obsSegments :: [Q.Segment], obsFinal :: Maybe Q.Readback,
   obsCalls :: [Call], obsPending :: [Word64], obsMilestones :: [Q.Milestone], obsError :: Maybe T.Text, obsMachineError :: Maybe T.Text,
   obsBankCounts :: BankCounts, obsPcWatches :: [PcWatch], obsDemandPaging :: [DemandPaging] } deriving (Eq,Show)
-data Refusal = Binding | Arming | Readback | Watch | FillFetch | Incomplete | Untracked | Unarmed | WrongCore | CallOutsidePlan | EntryUnreadable | Model ModelFailure | ReturnValue | ProcessorState | MemoryResult | WrittenWords | BankWrites | QueueInvariant | Route | ObserverError | UnsupportedSemantic Semantic | MissingTrace | CompletionMismatch | DispatchModel D.DispatchFailure | DemandPagingState deriving (Eq,Show)
+data Refusal = Binding | Arming | Readback | Watch | FillFetch | Incomplete | Untracked | Unarmed | WrongCore | CallOutsidePlan | EntryUnreadable | Model ModelFailure | ReturnValue | ProcessorState | MemoryResult | WrittenWords | BankWrites | QueueInvariant | Route | ObserverError | UnsupportedSemantic Semantic | MissingTrace | CompletionMismatch | DispatchModel D.DispatchFailure | DemandPagingState
+  | FamilyReturn | FamilyEffect | FamilyLifetime | FamilyTimer | FamilyDestructor | FamilyContinuation | FamilyAssociation deriving (Eq,Show)
 
 data Completion = Returned | Discarded | Dispatched deriving (Eq,Show)
-data BoundaryKind = SaveBoundary | ResumeBoundary | NoSaveBoundary | RetryBoundary | CallbackBoundary | CallbackReturnBoundary | SelectedBoundary | DiscardedBoundary | EnabledBoundary | GlobalLockBoundary | AcquiredBoundary | SelectCompleteBoundary | FirstEntryBoundary | IrqTailBoundary | ReturnBoundary | PrefetchAbortBoundary deriving (Eq,Show)
+data BoundaryKind = SaveBoundary | ResumeBoundary | NoSaveBoundary | RetryBoundary | CallbackBoundary | CallbackReturnBoundary | SelectedBoundary | DiscardedBoundary | EnabledBoundary | GlobalLockBoundary | AcquiredBoundary | SelectCompleteBoundary | FirstEntryBoundary | IrqTailBoundary | ReturnBoundary | PrefetchAbortBoundary | TimerInsertBoundary | TimerRemoveBoundary deriving (Eq,Show)
 data Boundary = Boundary { boundaryKind :: BoundaryKind, boundaryAddress :: Address, boundaryInstructions :: Word64, boundaryCore :: Int, boundaryRegisters :: D.Registers, boundaryMemory :: Memory, boundaryWrites :: [Written], boundaryBank :: [Written], boundaryValue :: Maybe Word32, boundaryTask :: Word32,
   boundaryWriteOrigins :: [WriteOrigin], boundaryBankOrigins :: [WriteOrigin] } deriving (Eq,Show)
 data CallTrace = CallTrace { traceBefore :: D.Registers, traceAfter :: D.Registers, traceCompletion :: Completion, traceHistory :: [Boundary], traceOrigin :: Maybe DispatchPoint } deriving (Eq,Show)
@@ -103,6 +107,8 @@ instance FromJSON BoundaryKind where
     "irq-tail" -> pure IrqTailBoundary
     "return" -> pure ReturnBoundary
     "prefetch-abort" -> pure PrefetchAbortBoundary
+    "timer-insert" -> pure TimerInsertBoundary
+    "timer-remove" -> pure TimerRemoveBoundary
     _ -> fail "unsupported scheduler boundary"
 instance FromJSON Completion where
   parseJSON = J.withText "completion" $ \kind -> case kind of
@@ -354,7 +360,7 @@ qualify bytes plan observation = do
   qualifyPrefix bytes plan observation
   checkDemandCalls observation
   let calls = sortOn callFirst (obsCalls observation)
-  forM_ calls $ \call -> checkCallEnvelope plan call >> checkCallFor (obsRole observation) call
+  forM_ calls $ \call -> checkCallEnvelope plan call >> checkCallForIn calls (obsRole observation) call
   qualifySuffix observation (CallTotals (not (null calls)) (sum (map callCount calls)))
   pure (summary observation)
 
@@ -538,13 +544,17 @@ modelled semantic = case semantic of
   HelperSemantic _ -> True
   DispatchSemantic _ -> True
   DoorbellSemantic -> True
+  FamilySemantic _ -> True
   ServiceSemantic service -> A.supportsService service || C.supportsService service || E.supportsService service
 
 checkCall :: Call -> Either Refusal ()
 checkCall = checkCallFor Owned
 
 checkCallFor :: Role -> Call -> Either Refusal ()
-checkCallFor role call = do
+checkCallFor = checkCallForIn []
+
+checkCallForIn :: [Call] -> Role -> Call -> Either Refusal ()
+checkCallForIn calls role call = do
   expect WrongCore (callCore call == if callDomain call==DomainA then 0 else 1)
   case callSemantic call of
     HelperSemantic _ -> checkHelperCall call
@@ -557,7 +567,62 @@ checkCallFor role call = do
       expect WrittenWords (any (\(Written (Address address) size value) -> address .&. complement 0x40000000==reschedule .&. complement 0x40000000 && size==4 && value==1) writes)
       expect ProcessorState (callCpsr call .&. 0x1ff==callReturnCpsr call .&. 0x1ff)
     DispatchSemantic point -> dispatchTags role point call >> pure ()
+    FamilySemantic _ -> checkFamilyCall call calls
     ServiceSemantic service -> checkServiceCall service call
+
+checkFamilyCall :: Call -> [Call] -> Either Refusal ()
+checkFamilyCall call others = case F.checkFamilyCall call others of
+  Right () -> Right ()
+  Left refusal -> Left (familyRefusal refusal)
+
+familyRefusal :: F.FamilyRefusal -> Refusal
+familyRefusal F.FamilyReturn = FamilyReturn
+familyRefusal F.FamilyEffect = FamilyEffect
+familyRefusal F.FamilyLifetime = FamilyLifetime
+familyRefusal F.FamilyTimer = FamilyTimer
+familyRefusal F.FamilyDestructor = FamilyDestructor
+familyRefusal F.FamilyContinuation = FamilyContinuation
+familyRefusal F.FamilyAssociation = FamilyAssociation
+
+instance F.FamilyCall Call where
+  familyDomain = callDomain
+  familyCore = callCore
+  familyArguments call = case callArguments call of Arguments arguments -> arguments
+  familyBefore = callBefore
+  familyAfter = callAfter
+  familyR0 = callR0
+  familyWrites call = [(address,size,value) | Written address size value <- callWrites call]
+  familyTask = callTask
+  familyService call = case callSemantic call of FamilySemantic service -> Just service; _ -> Nothing
+  familyTrace call = fmap familyTraceOf (callTrace call)
+
+familyTraceOf :: CallTrace -> F.FamilyTrace
+familyTraceOf trace = F.FamilyTrace
+  { F.familyTraceCompletion = case traceCompletion trace of
+      Returned -> F.FamilyReturnedCompletion
+      Discarded -> F.FamilyDiscardedCompletion
+      Dispatched -> F.FamilyDispatchedCompletion
+  , F.familyTraceBefore = D.registers (traceBefore trace)
+  , F.familyTraceAfter = D.registers (traceAfter trace)
+  , F.familyTraceHistory = map familyBoundaryOf (traceHistory trace)
+  }
+
+familyBoundaryOf :: Boundary -> F.FamilyBoundary
+familyBoundaryOf boundary = F.FamilyBoundary
+  { F.familyBoundaryKind = case boundaryKind boundary of
+      SaveBoundary -> F.FamilySaveKind
+      ResumeBoundary -> F.FamilyResumeKind
+      ReturnBoundary -> F.FamilyReturnKind
+      TimerInsertBoundary -> F.FamilyTimerInsertKind
+      TimerRemoveBoundary -> F.FamilyTimerRemoveKind
+      _ -> F.FamilyOtherKind
+  , F.familyBoundaryAddress = boundaryAddress boundary
+  , F.familyBoundaryInstructions = boundaryInstructions boundary
+  , F.familyBoundaryCore = boundaryCore boundary
+  , F.familyBoundaryRegisters = D.registers (boundaryRegisters boundary)
+  , F.familyBoundaryValue = boundaryValue boundary
+  , F.familyBoundaryTask = boundaryTask boundary
+  }
 
 dispatchTags :: Role -> DispatchPoint -> Call -> Either Refusal [D.Redesign]
 dispatchTags role point call = do

@@ -3719,6 +3719,7 @@ haskell_library(
         "Emulation/SchedulerPairCheck.hs",
         "Emulation/SchedulerPairDecode.hs",
         "Emulation/SchedulerPairEvidence.hs",
+        "Emulation/SchedulerPairFamily.hs",
         "Emulation/SchedulerPairModel.hs",
         "Emulation/SchedulerPairPlan.hs",
         "Emulation/SchedulerPairS2.hs",
@@ -3815,6 +3816,22 @@ sh_binary(
     )
     for model, module in [("s2", "S2"), ("s3a", "S3a"), ("s3bc", "S3bc")]
 ]
+
+haskell_test(
+    name = "scheduler-pair-family-tests",
+    size = "small",
+    srcs = ["SchedulerPairFamilyTests.hs"],
+    main_file = "SchedulerPairFamilyTests.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":scheduler-pair-lib",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//replacement/rtos_scheduler/oracle:scheduler-oracle-lib",
+    ],
+)
 
 haskell_library(
     name = "local-ui-menu",

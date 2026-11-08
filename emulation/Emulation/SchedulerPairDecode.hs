@@ -132,6 +132,7 @@ forceSemantic (HelperSemantic helper) = helper `seq` ()
 forceSemantic (DispatchSemantic point) = point `seq` ()
 forceSemantic DoorbellSemantic = ()
 forceSemantic (ServiceSemantic service) = service `seq` ()
+forceSemantic (FamilySemantic service) = service `seq` ()
 
 -- Classes are fully evaluated before advancing the token stream.
 forceCall :: Call -> ()
