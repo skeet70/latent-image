@@ -1,8 +1,8 @@
 //! Key presses bounded by the X-M1 UI's render boundary, after the retained
 //! `tools/menu_render_settle.py`: drain the preceding packet before pressing,
 //! then run until the press's UILIB packet is consumed and the UI drains. The
-//! graphics-accelerator counters and selected-plane publication that the
-//! retained settle also requires are not read here.
+//! selected-plane publication that the retained settle also requires is not
+//! read here.
 
 use crate::guest::Press;
 use crate::machine::{KeyPulse, Machine};
@@ -90,12 +90,92 @@ pub enum SettleStatus {
     BudgetExhausted,
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
+/// The gate's inputs at one sample.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct GateSample {
+    pub keys_released: bool,
+    pub ui_pending: u32,
+    pub ui_busy: u32,
+    pub display_suppression: u32,
+    pub batch_busy: u32,
+    pub batch_callback: u32,
+    pub commands_dirty: u32,
+    pub display_pending: u32,
+    pub initialized: u32,
+    /// Status bytes in `task_entries` order; `None` for an absent task.
+    pub tasks: Vec<Option<u8>>,
+    pub graphics: GraphicsGate,
+    pub probe: Probe,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct GraphicsGate {
+    pub busy: bool,
+    pub command_pending: bool,
+    pub status: u32,
+    pub started: u64,
+    pub completed: u64,
+    pub acknowledgments: u64,
+}
+
+/// Per gate condition, the samples of one drain or settle loop in which it was unmet.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct GateTally {
+    pub samples: u64,
+    pub keys_held: u64,
+    pub ui_pending: u64,
+    pub ui_busy: u64,
+    pub display_suppression: u64,
+    pub batch_busy: u64,
+    pub batch_callback: u64,
+    pub commands_dirty: u64,
+    pub display_pending: u64,
+    pub uninitialized: u64,
+    pub graphics_busy: u64,
+    /// In `task_entries` order.
+    pub tasks_not_waiting: Vec<u64>,
+    pub consumer_unfinished: u64,
+}
+
+impl GateTally {
+    fn add(&mut self, sample: &GateSample) {
+        let count = |held: bool, counter: &mut u64| *counter += u64::from(held);
+        self.samples += 1;
+        count(!sample.keys_released, &mut self.keys_held);
+        count(sample.ui_pending != 0, &mut self.ui_pending);
+        count(sample.ui_busy != 0, &mut self.ui_busy);
+        count(sample.display_suppression != 0, &mut self.display_suppression);
+        count(sample.batch_busy != 0, &mut self.batch_busy);
+        count(sample.batch_callback != 0, &mut self.batch_callback);
+        count(sample.commands_dirty != 0, &mut self.commands_dirty);
+        count(sample.display_pending != 0, &mut self.display_pending);
+        count(sample.initialized != 1, &mut self.uninitialized);
+        count(!sample.probe.graphics.idle, &mut self.graphics_busy);
+        self.tasks_not_waiting.resize(sample.tasks.len(), 0);
+        for (counter, status) in self.tasks_not_waiting.iter_mut().zip(&sample.tasks) {
+            count(*status != Some(QUEUE_WAIT), counter);
+        }
+        count(!sample.probe.consumer_finished(), &mut self.consumer_unfinished);
+    }
+}
+
+/// The gate's inputs over a loop that ran out of budget.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct GateReport {
+    pub tally: GateTally,
+    pub first: GateSample,
+    pub last: GateSample,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct Settle {
     pub status: SettleStatus,
     pub prior_instructions: u64,
     pub key_instructions: u64,
     pub settle_instructions: u64,
+    /// Present when the budget ran out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gate: Option<GateReport>,
 }
 
 fn physical(address: Address) -> u64 {
@@ -187,6 +267,85 @@ impl RenderFacts {
             graphics,
         })
     }
+
+    pub fn sample(&self, machine: &Machine) -> Result<GateSample, String> {
+        let read = |address: Address, bytes: usize| value(machine, address, bytes);
+        let tasks = self.task_statuses(machine)?;
+        let keys_released = machine
+            .document
+            .firmware
+            .keys
+            .iter()
+            .map(|binding| machine.document.firmware.released(&machine.session, binding.key))
+            .collect::<Result<Vec<bool>, String>>()?
+            .into_iter()
+            .all(|released| released);
+        let (ui_pending, ui_busy, display_suppression) =
+            (read(self.ui_pending, 4)?, read(self.ui_busy, 1)?, read(self.display_suppression, 4)?);
+        let (batch_busy, batch_callback, commands_dirty, display_pending) = (
+            read(self.batch_busy, 4)?,
+            read(self.batch_callback, 4)?,
+            read(self.commands_dirty, 4)?,
+            read(self.display_pending, 4)?,
+        );
+        let idle = [ui_pending, ui_busy, display_suppression, batch_busy, batch_callback, commands_dirty, display_pending]
+            .iter()
+            .all(|word| *word == 0);
+        let node = machine.session.node(&self.graphics.0)?;
+        let engine = serde_json::from_value::<GraphicsSave>(machine.session.board.device_save(node)?)
+            .map_err(|e| format!("graphics state: {e}"))?
+            .engine;
+        let engine_gate = GraphicsGate {
+            busy: engine.busy,
+            command_pending: !engine.command_pending.is_null(),
+            status: engine.regs.iter().find(|(offset, _)| *offset == 0x34).map_or(0, |(_, value)| *value),
+            started: engine.jobs_started,
+            completed: engine.jobs_completed,
+            acknowledgments: engine.acknowledgments,
+        };
+        let graphics = Graphics {
+            idle: !engine_gate.busy
+                && !engine_gate.command_pending
+                && engine_gate.status == 0
+                && engine.jobs_started == engine.jobs_completed
+                && engine.acknowledgments >= engine.jobs_completed,
+            started: engine.jobs_started,
+            completed: engine.jobs_completed,
+            bytes_completed: engine.bytes_completed,
+        };
+        let initialized = read(self.initialized, 1)?;
+        let drained = keys_released
+            && idle
+            && graphics.idle
+            && initialized == 1
+            && tasks.iter().all(|status| *status == Some(QUEUE_WAIT));
+        let probe = Probe {
+            copied_command: read(self.copied_command, 2)? as u16,
+            packet_token: read(self.packet_token, 1)? as u8,
+            sender_token: read(self.sender_token, 1)? as u8,
+            consumer_token: read(self.consumer_token, 1)? as u8,
+            sender_command: read(self.sender_command, 2)? as u16,
+            staged_render_command: read(self.staged_render_command, 2)? as u16,
+            staged_render_token: read(self.staged_render_token, 1)? as u8,
+            drained,
+            uilib_waiting: tasks.last().copied().flatten() == Some(QUEUE_WAIT),
+            graphics,
+        };
+        Ok(GateSample {
+            keys_released,
+            ui_pending,
+            ui_busy,
+            display_suppression,
+            batch_busy,
+            batch_callback,
+            commands_dirty,
+            display_pending,
+            initialized,
+            tasks,
+            graphics: engine_gate,
+            probe,
+        })
+    }
 }
 
 impl Probe {
@@ -212,27 +371,54 @@ impl Probe {
 /// Presses `key` once the preceding render has drained, then settles; `budget`
 /// caps the instructions run for both. An unlatched press fails before the settle.
 pub fn settled_key(machine: &mut Machine, key: Press, pulse: KeyPulse, budget: u64) -> Result<Settle, String> {
-    let probe = |machine: &Machine| machine.document.firmware.render.probe(machine);
+    let sample = |machine: &Machine| machine.document.firmware.render.sample(machine);
     let start = machine.instructions();
-    let mut before = probe(machine)?;
-    while !(before.drained && before.consumer_finished()) {
+    let mut tally = GateTally::default();
+    let first = sample(machine)?;
+    tally.add(&first);
+    let mut latest: Option<GateSample> = None;
+    loop {
+        let current = latest.as_ref().unwrap_or(&first);
+        if current.probe.drained && current.probe.consumer_finished() {
+            break;
+        }
         machine.require_running()?;
         let spent = machine.instructions() - start;
         if spent >= budget {
-            return Ok(Settle { status: SettleStatus::PriorRenderPending, prior_instructions: spent, key_instructions: 0, settle_instructions: 0 });
+            let last = latest.unwrap_or_else(|| first.clone());
+            return Ok(Settle {
+                status: SettleStatus::PriorRenderPending,
+                prior_instructions: spent,
+                key_instructions: 0,
+                settle_instructions: 0,
+                gate: Some(GateReport { tally, first, last }),
+            });
         }
         machine.run((budget - spent).min(CHUNK));
-        before = probe(machine)?;
+        let next = sample(machine)?;
+        tally.add(&next);
+        latest = Some(next);
     }
+    let before = latest.as_ref().unwrap_or(&first).probe;
     let prior = machine.instructions() - start;
     let old_frame = machine.frame()?;
     let key_start = machine.instructions();
     machine.press_latched(key, pulse)?;
     let settle_start = machine.instructions();
     let mut requested = None;
+    let mut tally = GateTally::default();
+    let mut first: Option<GateSample> = None;
+    let mut latest: Option<GateSample> = None;
     let status = loop {
         machine.require_running()?;
-        let after = probe(machine)?;
+        let sampled = sample(machine)?;
+        tally.add(&sampled);
+        let after = sampled.probe;
+        if first.is_none() {
+            first = Some(sampled);
+        } else {
+            latest = Some(sampled);
+        }
         if after.sender_token != before.sender_token {
             requested = Some(after.sender_token);
         }
@@ -262,5 +448,82 @@ pub fn settled_key(machine: &mut Machine, key: Press, pulse: KeyPulse, budget: u
         prior_instructions: prior,
         key_instructions: settle_start - key_start,
         settle_instructions: machine.instructions() - settle_start,
+        gate: match (status, first) {
+            (SettleStatus::BudgetExhausted, Some(first)) => {
+                let last = latest.unwrap_or_else(|| first.clone());
+                Some(GateReport { tally, first, last })
+            }
+            _ => None,
+        },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample() -> GateSample {
+        GateSample {
+            keys_released: true,
+            ui_pending: 0,
+            ui_busy: 0,
+            display_suppression: 0,
+            batch_busy: 0,
+            batch_callback: 0,
+            commands_dirty: 0,
+            display_pending: 0,
+            initialized: 1,
+            tasks: vec![Some(QUEUE_WAIT); 4],
+            graphics: GraphicsGate { busy: false, command_pending: false, status: 0, started: 3, completed: 3, acknowledgments: 3 },
+            probe: Probe {
+                copied_command: 0x4001,
+                packet_token: 1,
+                sender_token: 1,
+                consumer_token: 1,
+                sender_command: 0x4001,
+                staged_render_command: 0,
+                staged_render_token: 0,
+                drained: true,
+                uilib_waiting: true,
+                graphics: Graphics { idle: true, started: 3, completed: 3, bytes_completed: 30 },
+            },
+        }
+    }
+
+    #[test]
+    fn tally_counts_each_condition_that_held_the_gate() {
+        let mut tally = GateTally::default();
+        tally.add(&sample());
+        let mut held = sample();
+        held.display_pending = 1;
+        held.tasks[1] = Some(0x02);
+        held.probe.graphics.idle = false;
+        held.probe.consumer_token = 0;
+        tally.add(&held);
+        tally.add(&held);
+        assert_eq!(
+            tally,
+            GateTally {
+                samples: 3,
+                display_pending: 2,
+                graphics_busy: 2,
+                tasks_not_waiting: vec![0, 2, 0, 0],
+                consumer_unfinished: 2,
+                ..GateTally::default()
+            }
+        );
+    }
+
+    #[test]
+    fn settle_omits_the_gate_when_absent() {
+        let settle = Settle {
+            status: SettleStatus::PacketConsumed,
+            prior_instructions: 1,
+            key_instructions: 2,
+            settle_instructions: 3,
+            gate: None,
+        };
+        let value = serde_json::to_value(&settle).expect("settle serializes");
+        assert_eq!(value, serde_json::json!({"status": "packet-consumed", "prior_instructions": 1, "key_instructions": 2, "settle_instructions": 3}));
+    }
 }

@@ -2,10 +2,16 @@
 module Main (main) where
 
 import Control.Monad (unless)
-import Data.Aeson (Value, object, (.=))
+import Data.Aeson (Value, encode, object, (.=))
+import qualified Data.ByteString as B
+import qualified Data.ByteString.Lazy as BL
 import qualified Data.Text as T
-import Emulation.ObservationCompare (differences, e2eIgnored, normalize, toggleIgnored)
+import Emulation.ObservationCompare (compareObservationFiles, differences, e2eIgnored, normalize, toggleIgnored)
+import Emulation.Sha256 (sha256, sha256Hex)
+import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, removeDirectoryRecursive)
 import System.Exit (exitFailure)
+import System.FilePath (takeFileName, (</>))
+import System.Posix.Process (getProcessID)
 
 segment :: [T.Text] -> Value
 segment entries = object ["segment" .= ("cc-film-list" :: T.Text), "classic_chrome_site_entries" .= entries]
@@ -85,9 +91,110 @@ cases =
         (normalize toggleIgnored (object ["result" .= ("blocked" :: T.Text)])))) )
   ]
 
+row :: T.Text -> T.Text -> Value
+row site memory = rowAt site memory "0x1"
+
+rowAt :: T.Text -> T.Text -> T.Text -> Value
+rowAt site memory r0 = object
+  [ "site" .= site, "core" .= (0 :: Int), "instructions" .= (10 :: Int)
+  , "r0" .= r0, "r1" .= ("0x2" :: T.Text), "r2" .= ("0x3" :: T.Text), "r3" .= ("0x4" :: T.Text)
+  , "lr" .= ("0x5" :: T.Text), "sp" .= ("0x6" :: T.Text), "memory" .= [memory]
+  , "render_object_provenance_sequence" .= (7 :: Int) ]
+
+observation :: [Value] -> Value
+observation hits = object ["phase" .= ("replay" :: T.Text), "reads" .= ([] :: [Value]), "trace_hits" .= hits]
+
+sidecarObservation :: FilePath -> [Value] -> IO Value
+sidecarObservation path hits = do
+  let bytes = BL.toStrict (BL.intercalate "\n" (map encode hits) <> "\n")
+  B.writeFile path bytes
+  pure (object
+    [ "phase" .= ("replay" :: T.Text), "reads" .= ([] :: [Value])
+    , "trace_hits" .= object
+        [ "schema" .= (1 :: Int), "path" .= takeFileName path, "sha256" .= sha256Hex (sha256 bytes), "count" .= length hits ] ])
+
+writeObservation :: FilePath -> Value -> IO ()
+writeObservation path value = B.writeFile path (BL.toStrict (encode value) <> "\n")
+
+rowCases :: IO Bool
+rowCases = do
+  temporary <- getTemporaryDirectory
+  pid <- getProcessID
+  let root = temporary </> ("observation-compare-rows-" ++ show pid)
+  createDirectoryIfMissing True root
+  let base = row "render-pane-entry" "01020304"
+      other = row "render-pane-entry" "05060708"
+      registerOther = rowAt "render-pane-entry" "01020304" "0x9"
+      inlinePath = root </> "inline.json"
+      inlineCopyPath = root </> "inline-copy.json"
+      sidecarPath = root </> "sidecar.json"
+      renamedPath = root </> "renamed.json"
+      changedPath = root </> "changed.json"
+      registerPath = root </> "register.json"
+      badDigestPath = root </> "bad-digest.json"
+      badCountPath = root </> "bad-count.json"
+      changedBadDigestPath = root </> "changed-bad-digest.json"
+      missingPath = root </> "missing.json"
+      truncatedPath = root </> "truncated.json"
+  writeObservation inlinePath (observation [base, base])
+  writeObservation inlineCopyPath (observation [base, base])
+  sidecar <- sidecarObservation (root </> "a.trace-hits.jsonl") [base, base]
+  writeObservation sidecarPath sidecar
+  renamed <- sidecarObservation (root </> "b.trace-hits.jsonl") [base, base]
+  writeObservation renamedPath renamed
+  changed <- sidecarObservation (root </> "changed.trace-hits.jsonl") [base, other]
+  writeObservation changedPath changed
+  register <- sidecarObservation (root </> "register.trace-hits.jsonl") [base, registerOther]
+  writeObservation registerPath register
+  let validDigest = sha256Hex (sha256 (BL.toStrict (BL.intercalate "\n" (map encode [base, base]) <> "\n")))
+      ref digest count = object ["schema" .= (1 :: Int), "path" .= ("a.trace-hits.jsonl" :: T.Text), "sha256" .= digest, "count" .= count]
+  writeObservation badDigestPath (object ["phase" .= ("replay" :: T.Text), "reads" .= ([] :: [Value]), "trace_hits" .= ref (T.replicate 64 "0") (2 :: Int)])
+  writeObservation badCountPath (object ["phase" .= ("replay" :: T.Text), "reads" .= ([] :: [Value]), "trace_hits" .= ref validDigest (1 :: Int)])
+  writeObservation changedBadDigestPath (object
+    [ "phase" .= ("replay" :: T.Text), "reads" .= ([] :: [Value])
+    , "trace_hits" .= object
+        [ "schema" .= (1 :: Int), "path" .= ("changed.trace-hits.jsonl" :: T.Text)
+        , "sha256" .= T.replicate 64 "0", "count" .= (2 :: Int) ] ])
+  writeObservation missingPath (object
+    [ "phase" .= ("replay" :: T.Text), "reads" .= ([] :: [Value])
+    , "trace_hits" .= object
+        [ "schema" .= (1 :: Int), "path" .= ("absent.trace-hits.jsonl" :: T.Text)
+        , "sha256" .= validDigest, "count" .= (2 :: Int) ] ])
+  let oneRow = BL.toStrict (BL.intercalate "\n" (map encode [base]) <> "\n")
+  B.writeFile (root </> "truncated.trace-hits.jsonl") oneRow
+  writeObservation truncatedPath (object
+    [ "phase" .= ("replay" :: T.Text), "reads" .= ([] :: [Value])
+    , "trace_hits" .= object
+        [ "schema" .= (1 :: Int), "path" .= ("truncated.trace-hits.jsonl" :: T.Text)
+        , "sha256" .= sha256Hex (sha256 oneRow), "count" .= (2 :: Int) ] ])
+  results <- mapM (\(label, left, right) -> do
+    found <- compareObservationFiles left right "observation"
+    pure (label, found)) ([
+      ("inline equals sidecar", inlinePath, sidecarPath)
+    , ("inline equals inline under a different name", inlinePath, inlineCopyPath)
+    , ("equal rows under a different sidecar name", sidecarPath, renamedPath)
+    , ("changed read byte fails", sidecarPath, changedPath)
+    , ("changed register fails", sidecarPath, registerPath)
+    , ("bad sidecar digest fails", sidecarPath, badDigestPath)
+    , ("bad sidecar count fails", sidecarPath, badCountPath)
+    , ("a row difference and a bad digest both fail", sidecarPath, changedBadDigestPath)
+    , ("missing sidecar fails", sidecarPath, missingPath)
+    , ("truncated sidecar fails", sidecarPath, truncatedPath)
+    ] :: [(String, FilePath, FilePath)])
+  mapM_ (\(label, found) -> putStrLn (label ++ ": " ++ show (null found) ++ (if null found then "" else " " ++ show found))) results
+  removeDirectoryRecursive root
+  pure (all check results)
+ where
+  check ("inline equals sidecar", found) = null found
+  check ("inline equals inline under a different name", found) = null found
+  check ("equal rows under a different sidecar name", found) = null found
+  check ("a row difference and a bad digest both fail", found) = length found >= 2
+  check (_, found) = not (null found)
 main :: IO ()
 main = do
   let failed = [name | (name, ok) <- cases, not ok]
   mapM_ (putStrLn . ("FAIL: " ++)) failed
   unless (null failed) exitFailure
-  putStrLn (show (length cases) ++ " observation-compare cases passed")
+  rows <- rowCases
+  unless rows exitFailure
+  putStrLn (show (length cases) ++ " observation-compare cases and 10 row-reference cases passed")

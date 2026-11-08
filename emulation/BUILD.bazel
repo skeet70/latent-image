@@ -107,6 +107,7 @@ haskell_library(
     srcs = ["Emulation/HostAdmission.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     src_strip_prefix = ".",
+    visibility = ["//replacement/modal_runtime:__pkg__"],
     deps = [
         "//host:base",
         "//host:directory",
@@ -152,7 +153,7 @@ haskell_library(
     srcs = ["Emulation/EmulatorSlot.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     src_strip_prefix = ".",
-    visibility = ["//replacement/record_store:__pkg__"],
+    visibility = ["//replacement/record_store:__pkg__", "//replacement/modal_runtime:__pkg__"],
     deps = [
         ":host-admission-lib",
         "//host:base",
@@ -266,9 +267,17 @@ haskell_binary(
 )
 
 # The paths come from the package's store-path file, whose bytes change with the store path.
+config_setting(
+    name = "pfra-fujimod-store",
+    define_values = {"fujimod_store": "pfra"},
+)
+
 genrule(
     name = "fujimod-paths-module",
-    srcs = ["@lab_fujimod_xm1//:share/fujimod-xm1/store-path"],
+    srcs = select({
+        ":pfra-fujimod-store": ["fujimod-pfra-store-path.txt"],
+        "//conditions:default": ["@lab_fujimod_xm1//:share/fujimod-xm1/store-path"],
+    }),
     outs = ["FujiModPaths.hs"],
     cmd = " && ".join([
         "read -r store < $(location @lab_fujimod_xm1//:share/fujimod-xm1/store-path)",
@@ -1127,6 +1136,7 @@ haskell_binary(
         "//host:directory",
         "//host:filepath",
         "//host:text",
+        "//host:unix",
     ],
 )
 
@@ -1136,9 +1146,11 @@ haskell_library(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     src_strip_prefix = ".",
     deps = [
+        ":observation-stream-lib",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
+        "//host:filepath",
         "//host:text",
         "//host:vector",
     ],
@@ -1150,20 +1162,27 @@ haskell_test(
     srcs = ["ObservationCompareTests.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
+        ":case-sha256",
         ":observation-compare-lib",
+        ":observation-stream-lib",
         "//host:aeson",
         "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
         "//host:text",
+        "//host:unix",
     ],
 )
 
 haskell_library(
     name = "render-comparison-lib",
-    srcs = ["Emulation/RenderComparison.hs"],
+    srcs = ["Emulation/RenderComparison.hs", "Emulation/RenderNormalization.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     src_strip_prefix = ".",
     deps = [
         ":case-sha256",
+        "//host:JuicyPixels",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -1198,6 +1217,7 @@ haskell_binary(
         ":case-sha256",
         ":emulator-usb",
         ":modal-observation",
+        ":modal-watch-stream",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -1215,6 +1235,7 @@ haskell_test(
     deps = [
         ":case-sha256",
         ":render-comparison-lib",
+        "//host:JuicyPixels",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -1287,6 +1308,9 @@ haskell_binary(
         ":ff80-rehearsal-lib",
         ":viewer-runtime-lib",
         ":emulator-usb",
+        ":observation-stream-lib",
+        ":modal-watch-stream",
+        "//replacement/modal_runtime:render-object-provenance-lib",
         ":preservation-observation",
         ":watch-observation",
         ":modal-observation",
@@ -1332,6 +1356,9 @@ haskell_test(
         ":ff80-rehearsal-lib",
         ":viewer-runtime-lib",
         ":emulator-usb",
+        ":observation-stream-lib",
+        ":modal-watch-stream",
+        "//replacement/modal_runtime:render-object-provenance-lib",
         ":preservation-observation",
         ":watch-observation",
         ":modal-observation",
@@ -2647,12 +2674,17 @@ haskell_test(
         ":emulator-usb",
         ":case-sha256",
         ":modal-observation",
+        ":modal-watch-stream",
         ":ui-trajectory-lib",
         ":watch-observation",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
         "//host:text",
+        "//host:unix",
+        "//host/firmware:ram-push-layout",
         "//transport:camera-core",
     ],
 )
@@ -2660,7 +2692,7 @@ haskell_test(
 # The emulator bridge's USB provider; //transport:provider-parity drives it.
 haskell_library(
     name = "emulator-usb",
-    srcs = ["EmulatorUsb.hs"],
+    srcs = ["EmulatorUsb.hs", "Emulation/RenderStackDiagnostic.hs"],
     ghcopts = [
         "-XGHC2021",
         "-Wall",
@@ -2682,6 +2714,8 @@ haskell_library(
         "//host:bytestring",
         "//host:process",
         "//host:text",
+        "//replacement/modal_runtime:render-object-provenance-lib",
+        "//replacement/modal_runtime:render-stack-evidence-lib",
         "//transport:camera-core",
     ],
 )
@@ -2699,8 +2733,17 @@ haskell_library(
     ],
     src_strip_prefix = ".",
     deps = [
+        ":case-sha256",
+        "//host:aeson",
         "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host/firmware:bank-allowlist",
+        "//host/firmware:bank-allowlist-composition",
+        "//host/firmware:ram-push-layout",
         "//transport:camera-core",
+        "//broker:core",
     ],
 )
 
@@ -3975,3 +4018,336 @@ haskell_test(
         "//host:unix",
     ],
 )
+
+haskell_library(
+    name = "modal-watch-stream",
+    srcs = ["Emulation/ModalWatchStream.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":modal-observation",
+        ":watch-observation",
+        "//host:aeson",
+        "//host:attoparsec",
+        "//host:base",
+        "//host:bytestring",
+        "//host:json",
+    ],
+)
+
+haskell_test(
+    name = "modal-watch-stream-tests",
+    size = "small",
+    srcs = ["ModalWatchStreamTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":emulator-usb",
+        ":modal-observation",
+        ":modal-watch-stream",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
+
+haskell_library(
+    name = "observation-stream-lib",
+    srcs = ["Emulation/ObservationStream.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":case-sha256",
+        ":emulator-usb",
+        "//host:aeson",
+        "//host:attoparsec",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
+    ],
+)
+
+haskell_binary(
+    name = "pane-drawer-cases",
+    srcs = ["PaneDrawerCases.hs"],
+    main_file = "PaneDrawerCases.hs",
+    main_function = "PaneDrawerCases.main",
+    ghcopts = ["-XGHC2021", "-threaded", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":case-sha256",
+        ":native-adapter",
+        ":render-cases-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+    ],
+)
+
+haskell_binary(
+    name = "render-adapter-class-cases",
+    srcs = ["RenderAdapterClassCases.hs", "TreeListCases.hs"],
+    main_file = "RenderAdapterClassCases.hs",
+    ghcopts = ["-XGHC2021", "-threaded", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":case-sha256",
+        ":native-adapter",
+        ":render-cases-lib",
+        ":value-picker-cases-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+    ],
+)
+
+genrule(
+    name = "render-adapter-class-test-build",
+    srcs = ["//replacement/render_adapter:class.rs"],
+    outs = [
+        "render-adapter-class-cases.json",
+        "render-adapter-class-cases.rs",
+        "librender_adapter_class.rlib",
+        "render-adapter-class-tests-bin",
+    ],
+    cmd = """
+      $(location :render-adapter-class-cases) --json $(@D)/render-adapter-class-cases.json --rust $(@D)/render-adapter-class-cases.rs &&
+      $(location @lab_rustc//:bin/rustc) --edition=2021 --crate-name render_adapter_class --crate-type=rlib $(location //replacement/render_adapter:class.rs) -o $(@D)/librender_adapter_class.rlib &&
+      $(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) --extern render_adapter_class=$(@D)/librender_adapter_class.rlib $(@D)/render-adapter-class-cases.rs -o $(@D)/render-adapter-class-tests-bin
+    """,
+    testonly = True,
+    tools = [
+        ":render-adapter-class-cases",
+        "@lab_rustc//:bin/rustc",
+        "@lab_clang//:bin/clang",
+    ],
+)
+
+sh_test(
+    name = "render-adapter-class-tests",
+    size = "small",
+    srcs = ["render-adapter-class-tests.sh"],
+    args = ["$(location :render-adapter-class-tests-bin)"],
+    data = [":render-adapter-class-tests-bin"],
+)
+
+haskell_library(
+    name = "render-cases-lib",
+    srcs = ["Emulation/RenderCases.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = ["//host:base", "//host:aeson", "//host:bytestring"],
+)
+
+haskell_binary(
+    name = "render-observation-bounded",
+    srcs = ["RenderObservationBounded.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":emulator-usb",
+        ":observation-stream-lib",
+        "//replacement/modal_runtime:menu-engine-pair-lib",
+        "//replacement/modal_runtime:render-object-provenance-lib",
+        "//replacement/modal_runtime:render-stack-evidence-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
+    ],
+)
+
+haskell_binary(
+    name = "render-pair-admission",
+    srcs = ["RenderPairAdmissionMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":render-pair-admission-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
+    ],
+)
+
+haskell_library(
+    name = "render-pair-admission-lib",
+    srcs = ["Emulation/RenderPairAdmission.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":case-sha256",
+        "//host/firmware:bank-allowlist",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
+        "//replacement/modal_runtime:render-stack-evidence-lib",
+    ],
+)
+
+haskell_test(
+    name = "render-pair-admission-tests",
+    size = "small",
+    srcs = ["RenderPairAdmissionTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":render-pair-admission-lib",
+        "//host/firmware:bank-allowlist",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
+        "//host:unix",
+    ],
+)
+
+sh_test(
+    name = "render-pair-trajectory-tests",
+    size = "small",
+    srcs = ["menu-engine-pair-trajectories/tests.sh"],
+    args = [
+        "$(rootpath @lab_jq//:bin/jq)",
+        "$(rootpath @lab_coreutils//:bin/sha256sum)",
+    ],
+    data = glob([
+        "menu-engine-pair-trajectories/*.jq",
+        "modal75-picker-trajectories/picker-*.json",
+    ]) + [
+        "menu-engine-pair-trajectories/default-sha256.json",
+        "menu-oracle-fn.json",
+        "menu-oracle-fn-down.json",
+        "menu-oracle-fn-auto-open.json",
+        "@lab_jq//:bin/jq",
+        "@lab_coreutils//:bin/sha256sum",
+    ],
+)
+
+haskell_test(
+    name = "observation-stream-tests",
+    size = "small",
+    srcs = ["ObservationStreamTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":case-sha256",
+        ":emulator-usb",
+        ":observation-stream-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+    ],
+)
+
+haskell_binary(
+    name = "render-trace-hit-memory",
+    srcs = ["RenderTraceHitMemory.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":case-sha256",
+        ":emulator-usb",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:text",
+    ],
+)
+
+haskell_binary(
+    name = "tree-list-cases",
+    srcs = ["TreeListCases.hs"],
+    main_file = "TreeListCases.hs",
+    main_function = "TreeListCases.main",
+    ghcopts = ["-XGHC2021", "-threaded", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":case-sha256",
+        ":native-adapter",
+        ":render-cases-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+    ],
+)
+
+haskell_test(
+    name = "tree-list-cases-tests",
+    size = "small",
+    srcs = ["TreeListCases.hs", "TreeListCasesTest.hs"],
+    main_file = "TreeListCasesTest.hs",
+    ghcopts = ["-XGHC2021", "-threaded", "-O2"],
+    deps = [
+        ":case-sha256",
+        ":native-adapter",
+        ":render-cases-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+    ],
+)
+
+haskell_binary(
+    name = "value-picker-cases",
+    srcs = ["ValuePickerCases.hs"],
+    main_file = "ValuePickerCases.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":value-picker-cases-lib",
+        ":render-cases-lib",
+        ":case-sha256",
+        "//host:base",
+        "//host:aeson",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+    ],
+)
+
+haskell_library(
+    name = "value-picker-cases-lib",
+    srcs = ["Emulation/ValuePickerCases.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [":render-cases-lib", "//host:base", "//host:bytestring"],
+)
+
+haskell_test(
+    name = "value-picker-cases-tests",
+    srcs = ["ValuePickerCasesTests.hs"],
+    main_file = "ValuePickerCasesTests.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [":value-picker-cases-lib", ":render-cases-lib", "//host:base", "//host:bytestring"],
+)
+

@@ -69,8 +69,8 @@ fake start step = do
         , driverPress = \name key -> do
             guest <- held name
             modifyIORef' clock (+ 1)
-            modifyIORef' hits (++ [TraceHit "crawl-dispatch-context" 0 0 (fromIntegral (syntheticMenu (guestScreen guest))) 0 (fromIntegral (fromEnum key)) 0 Nothing Nothing []
-                                  , TraceHit "crawl-dispatch-action" 0 0 0 0 0 (0x00c00000 + fromIntegral (fromEnum key)) Nothing Nothing []])
+            modifyIORef' hits (++ [TraceHit "crawl-dispatch-context" 0 0 (fromIntegral (syntheticMenu (guestScreen guest))) 0 (fromIntegral (fromEnum key)) 0 Nothing Nothing [] Nothing
+                                  , TraceHit "crawl-dispatch-action" 0 0 0 0 0 (0x00c00000 + fromIntegral (fromEnum key)) Nothing Nothing [] Nothing])
             case step (guestDial guest) (guestScreen guest) key of
               Just next -> do
                 writeIORef current guest { guestScreen = next }
@@ -234,13 +234,13 @@ main = do
   check "each root starts from the boot snapshot" (sort [menu | node <- graphNodes dialGraph, nodeDepth node == 0, Just menu <- [menuOf node]] == [0, 50])
 
   let activity = stepActivity
-        [ TraceHit "crawl-dispatch-context" 0 1 75 0 2 0 Nothing Nothing []
-        , TraceHit "crawl-dispatch-context" 1 2 30 0 4 0 Nothing Nothing []
-        , TraceHit "crawl-dispatch-action" 0 3 0 0 0 0xc72e10 Nothing Nothing []
-        , TraceHit "crawl-dispatch-context" 0 4 100 0 0 0 Nothing Nothing []
-        , TraceHit "crawl-dispatch-action" 0 5 0 0 0 0xc12aac Nothing Nothing []
-        , TraceHit "crawl-dispatch-action" 0 6 0 0 0 0xdead00 Nothing Nothing []
-        , TraceHit "crawl-property-write" 0 7 0xfe 3 0 0 Nothing Nothing []
+        [ TraceHit "crawl-dispatch-context" 0 1 75 0 2 0 Nothing Nothing [] Nothing
+        , TraceHit "crawl-dispatch-context" 1 2 30 0 4 0 Nothing Nothing [] Nothing
+        , TraceHit "crawl-dispatch-action" 0 3 0 0 0 0xc72e10 Nothing Nothing [] Nothing
+        , TraceHit "crawl-dispatch-context" 0 4 100 0 0 0 Nothing Nothing [] Nothing
+        , TraceHit "crawl-dispatch-action" 0 5 0 0 0 0xc12aac Nothing Nothing [] Nothing
+        , TraceHit "crawl-dispatch-action" 0 6 0 0 0 0xdead00 Nothing Nothing [] Nothing
+        , TraceHit "crawl-property-write" 0 7 0xfe 3 0 0 Nothing Nothing [] Nothing
         ]
   check "actions pair with their own core's latest context" (map (\d -> (dispatchController d, dispatchAction d)) (activityDispatches activity)
     == [(75, Just 0xc72e10), (30, Nothing), (100, Just 0xc12aac)])
@@ -272,6 +272,14 @@ main = do
   check "a menu observe site decodes its entry reads"
     (fmap MenuObserve.observeSites (observeConfig "[{\"address\":\"0xd4dd2c\",\"label\":\"stage-entry\",\"reads\":[{\"address\":\"0x9571d0\",\"length\":1072}]}]" "[{\"start\":\"0x100\",\"end\":\"0x200\"}]")
       == Right [MenuObserve.TraceSite 0xd4dd2c "stage-entry" [MenuObserve.SiteRead 0x9571d0 1072]])
+  check "a menu observe site decodes a negative stack-relative read"
+    (fmap MenuObserve.observeSites (observeConfig "[{\"address\":\"0xd4dd2c\",\"label\":\"stage-entry\",\"reads\":[{\"sp\":-8,\"bytes\":4}]}]" "[{\"start\":\"0x100\",\"end\":\"0x200\"}]")
+      == Right [MenuObserve.TraceSite 0xd4dd2c "stage-entry" [MenuObserve.StackRead (-8) 4]])
+  check "menu observe configs refuse malformed stack reads"
+    (all (\read_ -> either (const True) (const False) (observeConfig
+      ("[{\"address\":\"0xd4dd2c\",\"label\":\"stage-entry\",\"reads\":[" ++ read_ ++ "]}]")
+      "[{\"start\":\"0x100\",\"end\":\"0x200\"}]"))
+      ["{\"sp\":0}", "{\"bytes\":4}", "{\"sp\":0,\"bytes\":0}", "{\"sp\":0,\"bytes\":4097}"])
   check "menu observe configs refuse an empty site read"
     (either (const True) (const False) (observeConfig "[{\"address\":\"0xd4dd2c\",\"label\":\"stage-entry\",\"reads\":[{\"address\":\"0x9571d0\",\"length\":0}]}]" "[{\"start\":\"0x100\",\"end\":\"0x200\"}]"))
   check "menu observe configs refuse adjacent write ranges"

@@ -14,6 +14,7 @@ import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
 import Data.Char (isAsciiLower, isDigit)
 import Data.List (sort)
+import Data.Int (Int32)
 import qualified Data.Text as T
 import Data.Word (Word32)
 import Emulation.MenuCrawl (CrawlKey, GuestRange (..))
@@ -23,8 +24,7 @@ import Numeric (readHex)
 -- lowercase ASCII letters, digits or '-'), and the physical ranges each entry reads.
 data TraceSite = TraceSite { traceSiteAddress :: Word32, traceSiteLabel :: String, traceSiteReads :: [SiteRead] } deriving (Eq, Show)
 
--- | A physical range a trace site reads at each entry: start and 1..4096 bytes.
-data SiteRead = SiteRead { siteReadStart :: Word32, siteReadCount :: Int } deriving (Eq, Show)
+data SiteRead = SiteRead Word32 Int | StackRead Int32 Int deriving (Eq, Show)
 
 hexWord :: T.Text -> Maybe Word32
 hexWord text = case T.unpack text of
@@ -33,12 +33,20 @@ hexWord text = case T.unpack text of
 
 instance FromJSON SiteRead where
   parseJSON = withObject "trace site read" $ \fields -> do
-    unless (sort (KM.keys fields) == ["address", "length"]) (fail "a trace site read takes exactly address and length")
-    start <- fields .: "address" >>= maybe (fail "expected a 0x-prefixed hex address") pure . hexWord
-    count <- fields .: "length"
-    unless (count >= 1 && count <= 4096 && toInteger start + toInteger count <= 0x100000000)
-      (fail "a trace site read is 1..4096 bytes inside the 32-bit space")
-    pure (SiteRead start count)
+    if sort (KM.keys fields) == ["bytes", "sp"] then do
+      offset <- fields .: "sp"
+      count <- fields .: "bytes"
+      unless (count >= 1 && count <= 4096) (fail "a stack-relative read requires 1..4096 bytes")
+      pure (StackRead offset count)
+    else absolute fields
+    where
+      absolute fields = do
+        unless (sort (KM.keys fields) == ["address", "length"]) (fail "a trace site read takes exactly address and length or sp and bytes")
+        start <- fields .: "address" >>= maybe (fail "expected a 0x-prefixed hex address") pure . hexWord
+        count <- fields .: "length"
+        unless (count >= 1 && count <= 4096 && toInteger start + toInteger count <= 0x100000000)
+          (fail "a trace site read is 1..4096 bytes inside the 32-bit space")
+        pure (SiteRead start count)
 
 instance FromJSON TraceSite where
   parseJSON = withObject "trace site" $ \fields -> do

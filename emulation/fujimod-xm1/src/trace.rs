@@ -36,13 +36,32 @@ pub struct Hit {
     /// The site's physical reads at entry, in hex, in `TraceSites::site_reads` order.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub memory: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub stack_memory: Vec<StackRead>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub observation: Option<calls::Observation>,
 }
 
-/// A physical range a site's hits read at entry.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SiteRead { pub address: u64, pub count: usize }
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum SiteRead {
+    Absolute([u64; 2]),
+    Stack { sp: i32, bytes: usize },
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct StackRead {
+    kind: StackReadKind,
+    sp: i32,
+    address: String,
+    bytes: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+enum StackReadKind {
+    #[serde(rename = "sp")]
+    Sp,
+}
 
 #[derive(Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -54,7 +73,7 @@ pub enum RegisterCapture {
 
 pub fn parse_site_reads(
     sites: &BTreeMap<String, String>,
-    reads: &BTreeMap<String, Vec<[u64; 2]>>,
+    reads: &BTreeMap<String, Vec<SiteRead>>,
 ) -> Result<BTreeMap<u32, Vec<SiteRead>>, String> {
     reads.iter().map(|(site, ranges)| {
         if !sites.contains_key(site) {
@@ -63,13 +82,21 @@ pub fn parse_site_reads(
         let address = site.strip_prefix("0x")
             .and_then(|digits| u32::from_str_radix(digits, 16).ok())
             .ok_or_else(|| format!("invalid trace site address {site}"))?;
-        let ranges = ranges.iter().map(|&[address, count]| {
-            let count = usize::try_from(count).map_err(|_| "trace site read count exceeds the host")?;
-            if !(1..=4096).contains(&count)
-                || address.checked_add(count as u64).is_none_or(|end| end > 1 << 32) {
-                return Err("a trace site read requires an address and 1..4096 bytes".to_owned());
+        let ranges = ranges.iter().map(|read| match *read {
+            SiteRead::Absolute([address, count]) => {
+                let count = usize::try_from(count).map_err(|_| "trace site read count exceeds the host")?;
+                if !(1..=4096).contains(&count)
+                    || address.checked_add(count as u64).is_none_or(|end| end > 1 << 32) {
+                    return Err("a trace site read requires an address and 1..4096 bytes".to_owned());
+                }
+                Ok(SiteRead::Absolute([address, count as u64]))
             }
-            Ok(SiteRead { address, count })
+            SiteRead::Stack { sp, bytes } => {
+                if !(1..=4096).contains(&bytes) {
+                    return Err("a stack-relative trace read requires 1..4096 bytes".to_owned());
+                }
+                Ok(SiteRead::Stack { sp, bytes })
+            }
         }).collect::<Result<Vec<_>, String>>()?;
         Ok((address, ranges))
     }).collect()
@@ -1013,6 +1040,7 @@ pub struct TraceSites {
     capture_memory: Option<CaptureMemory>,
     modal_observation: Option<ModalTrace>,
     stack_scope: Option<StackScope>,
+    presentation: Option<crate::presentation::Tracker>,
     pub(crate) render_object_provenance_sequence: Option<u64>,
 }
 
@@ -1025,6 +1053,27 @@ fn register(session: &Session, core: usize, register: arm::Register) -> Result<u
 }
 
 impl TraceSites {
+    pub(crate) fn begin_presentation_tracking(&mut self, session: &Session) -> Result<(), String> {
+        if self.presentation.is_some() { return Err("presentation tracking already active".into()); }
+        self.presentation = Some(crate::presentation::Tracker::default());
+        self.rearm_points(session, PointScope::UserAndModal)
+    }
+    pub(crate) fn presentation_tracking_active(&self) -> bool { self.presentation.is_some() }
+
+    pub(crate) fn invalidate_presentation(&mut self) {
+        if let Some(tracker) = &mut self.presentation { tracker.invalidate(); }
+    }
+
+    pub(crate) fn select_presentation_target(&mut self) -> Result<Option<crate::presentation::FrameToken>, String> {
+        self.presentation.as_mut().ok_or("presentation tracking is not active")?
+            .select_target().map_err(str::to_owned)
+    }
+
+    pub(crate) fn presentation_acknowledgement(&self, token: crate::presentation::FrameToken) -> Result<Option<crate::presentation::Acknowledgement>, String> {
+        self.presentation.as_ref().ok_or("presentation tracking is not active")?
+            .acknowledgement(token).map_err(str::to_owned)
+    }
+
     pub fn begin_stack_scope(&mut self, config: TraceStackScopeConfig) -> Result<(), String> {
         if self.stack_scope.is_some() || self.modal_observation_active() || self.capture_observation_active() {
             return Err("stack scope requires no existing stack, modal or capture observation".into());
@@ -1116,9 +1165,8 @@ impl TraceSites {
     }
 
     /// The installed-lifetime guard's memory watch, which the modal observation owns exclusively.
-    pub fn modal_watch_state(&self) -> Option<Result<serde_json::Value, String>> {
+    pub fn modal_watch_state(&self) -> Option<impl Serialize + '_> {
         self.modal_observation.as_ref().and_then(ModalTrace::watch_evidence)
-            .map(|evidence| serde_json::to_value(evidence).map_err(|failure| format!("modal watch state: {failure}")))
     }
 
     pub fn begin_modal_observation(&mut self, session: &Session, config: ModalConfig) -> Result<(), String> {
@@ -1388,6 +1436,7 @@ impl TraceSites {
         if self.modal_observation_active() {
             return Err("modal observation sites cannot be disarmed before successful finish".into());
         }
+        self.invalidate_presentation();
         match (self.point_set_mode, self.disarmed_points) {
             (PointSetMode::Fixed, _) => self.end_points(session),
             (PointSetMode::Persistent(_), DisarmedPoints::Release) => {
@@ -1416,6 +1465,7 @@ impl TraceSites {
 
     /// Removes every installed point before a session checkpoint, keeping the arming for `reinstall`.
     pub fn teardown(&mut self, session: &Session) -> Result<(), String> {
+        self.invalidate_presentation();
         match self.point_set_mode {
             PointSetMode::Fixed => self.disarm(session),
             PointSetMode::Persistent(_) => {
@@ -1471,7 +1521,7 @@ impl TraceSites {
             let remaining = self.sites.keys().copied().filter(|site| !addresses.iter().any(|removed| removed.0 == *site));
             let memberships = self.memberships(session, remaining, self.cores, PointScope::UserAndModal);
             self.apply(session, memberships)?;
-        } else { self.disarm(session)?; }
+        } else { self.end_points(session)?; }
         for address in addresses {
             if let Some(label) = self.sites.remove(&address.0) {
                 if !self.sites.values().any(|other| other == &label) {
@@ -1501,7 +1551,7 @@ impl TraceSites {
             }
             let memberships = self.memberships(session, self.sites.keys().chain(sites.keys()).copied(), self.cores, PointScope::UserAndModal);
             self.apply(session, memberships)?;
-        } else { self.disarm(session)?; }
+        } else { self.end_points(session)?; }
         for label in sites.values() {
             if !self.stop_labels.contains(label) {
                 self.stop_labels.insert(label.clone());
@@ -1561,10 +1611,13 @@ impl TraceSites {
         if let Some(modal) = modal {
             addresses.extend(modal.sites().map(|pc| u64::from(pc.0)));
         }
+        if self.presentation.is_some() {
+            addresses.extend(crate::presentation::Site::ALL.map(|site| u64::from(site.address())));
+        }
         if addresses.is_empty() { return Ok(()); }
         let addresses: Vec<u64> = addresses.into_iter().collect();
         for core in 0..session.board.instruction_counts().len() {
-            let selected = modal.is_some() || match self.cores {
+            let selected = modal.is_some() || self.presentation.is_some() || match self.cores {
                 CoreSelection::All => true,
                 CoreSelection::Primary => core == 0,
             };
@@ -1588,9 +1641,12 @@ impl TraceSites {
         if let Some(modal) = modal {
             addresses.extend(modal.sites().map(|pc| u64::from(pc.0)));
         }
+        if self.presentation.is_some() {
+            addresses.extend(crate::presentation::Site::ALL.map(|site| u64::from(site.address())));
+        }
         let addresses: Vec<u64> = addresses.into_iter().collect();
         (0..session.board.instruction_counts().len())
-            .map(|core| if modal.is_some() || cores.includes(core) { addresses.clone() } else { Vec::new() })
+            .map(|core| if modal.is_some() || self.presentation.is_some() || cores.includes(core) { addresses.clone() } else { Vec::new() })
             .collect()
     }
 
@@ -1679,6 +1735,28 @@ impl TraceSites {
             let Some(pending) = self.pending_points[point_index] else { continue };
             let address = pending.pc.0;
             let pc = u64::from(address);
+            if let Some(tracker) = &mut self.presentation {
+                if let Some(site) = crate::presentation::Site::at(address) {
+                    let mut word = [0; 4];
+                    session.board.read_physical(u64::from(address), &mut word)?;
+                    let cpsr = register(session, *core, arm::Register::Cpsr)?;
+                    if u32::from_le_bytes(word) != site.word() || cpsr & 0x0100_0220 != 0 {
+                        return Err("presentation instruction differs from X-M1 1.50 A32 source".into());
+                    }
+                    let frame = match site {
+                        crate::presentation::Site::Enter => register(session, *core, arm::Register::R(13))?
+                            .checked_sub(4).ok_or("presentation entry stack underflow")?,
+                        _ => register(session, *core, arm::Register::R(11))?,
+                    };
+                    let result = match site {
+                        crate::presentation::Site::AfterWait => register(session, *core, arm::Register::R(0))?,
+                        crate::presentation::Site::Finish => register(session, *core, arm::Register::R(4))?,
+                        crate::presentation::Site::Enter => 0,
+                    };
+                    tracker.observe(site, crate::presentation::Core::from_index(*core)?,
+                        crate::presentation::FramePointer(frame), crate::presentation::CoreInstructions(counts[*core]), result);
+                }
+            }
             if let Some(modal) = self.modal_observation.as_mut().filter(|modal| modal.active()) {
                 if modal.contains(Guest(address)) {
                     new_returns[*core] = modal.observe(session, *core, Guest(address), instructions, pending.point)?;
@@ -1770,6 +1848,30 @@ impl TraceSites {
                     .collect::<Result<_, String>>()?;
                 let (observation, call_return) = self.calls.observe(session, *core, address)?;
                 call_returns.extend(call_return);
+                let sp = register(session, *core, arm::Register::R(13))?;
+                let mut memory = Vec::new();
+                let mut stack_memory = Vec::new();
+                for read in self.site_reads.get(&address).into_iter().flatten() {
+                    let (resolved, count) = match *read {
+                        SiteRead::Absolute([address, count]) => (address, count as usize),
+                        SiteRead::Stack { sp: offset, bytes } => {
+                            let address = i64::from(sp) + i64::from(offset);
+                            if address < 0 || address + bytes as i64 > 1i64 << 32 {
+                                return Err("stack-relative trace read exceeds the guest address space".into());
+                            }
+                            (address as u64, bytes)
+                        }
+                    };
+                    let mut bytes = vec![0; count];
+                    session.board.read_physical(resolved, &mut bytes)?;
+                    let bytes = bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+                    match *read {
+                        SiteRead::Absolute(_) => memory.push(bytes),
+                        SiteRead::Stack { sp, .. } => stack_memory.push(StackRead {
+                            kind: StackReadKind::Sp, sp, address: format!("{resolved:#x}"), bytes,
+                        }),
+                    }
+                }
                 self.hits.push(Hit {
                     site,
                     address: format!("{address:#x}"),
@@ -1777,15 +1879,12 @@ impl TraceSites {
                     instructions,
                     render_object_provenance_sequence: self.render_object_provenance_sequence,
                     registers,
-                    sp: format!("{:#x}", register(session, *core, arm::Register::R(13))?),
+                    sp: format!("{sp:#x}"),
                     lr: format!("{:#x}", register(session, *core, arm::Register::R(14))?),
                     cpsr: register(session, *core, arm::Register::Cpsr)?,
                     code_word: self.code_binding.as_ref().map(|binding| binding.sample(session, *core, address)).transpose()?.flatten(),
-                    memory: self.site_reads.get(&address).map(|reads| reads.iter().map(|read| {
-                        let mut bytes = vec![0; read.count];
-                        session.board.read_physical(read.address, &mut bytes)?;
-                        Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>())
-                    }).collect::<Result<Vec<_>, String>>()).transpose()?.unwrap_or_default(),
+                    memory,
+                    stack_memory,
                     observation,
                 });
                 if let StackPoint::Inside { index, next } = scoped {

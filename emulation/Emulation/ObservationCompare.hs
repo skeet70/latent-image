@@ -6,17 +6,23 @@ module Emulation.ObservationCompare
   , toggleIgnored
   , normalize
   , differences
+  , compareObservationFiles
   ) where
 
-import Data.Aeson (Value (..), encode, object, (.=))
+import Control.Exception (IOException, try)
+import Control.Monad (forM_)
+import Data.Aeson (Value (..), eitherDecodeFileStrict', encode, object, (.=))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString.Lazy.Char8 as BL
+import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (sort)
 import qualified Data.List.NonEmpty as NE
 import Data.Maybe (fromMaybe)
 import qualified Data.Text as T
 import qualified Data.Vector as V
+import Emulation.ObservationStream (RowReader, rowNext, withRowReader)
+import System.FilePath (takeDirectory)
 
 -- | Fields left out at any depth. Only FujiMod menu receipts carry @scanout_evidence@.
 e2eIgnored :: [K.Key]
@@ -99,3 +105,91 @@ differences at a b
   | a == b = []
   | otherwise = [at ++ ": " ++ short a ++ " != " ++ short b]
   where short = take 160 . BL.unpack . encode
+
+-- | Compares two observation files, including the trace hits each records inline or in a
+-- sidecar its reference names. Row fields keep 'e2eIgnored' semantics, so registers and read
+-- bytes are compared; a reference's path is not compared, but its sidecar is read to EOF and
+-- checked against its count and digest. Both streams are read to EOF even after a row differs.
+compareObservationFiles :: FilePath -> FilePath -> String -> IO [String]
+compareObservationFiles left right prefix = do
+  loadedLeft <- loadObservation left
+  loadedRight <- loadObservation right
+  case (loadedLeft, loadedRight) of
+    (Right leftValue, Right rightValue) -> do
+      let base = differences prefix
+            (normalize e2eIgnored (withoutTraceHits leftValue))
+            (normalize e2eIgnored (withoutTraceHits rightValue))
+      traced <- compareTraceHits (takeDirectory left) leftValue (takeDirectory right) rightValue prefix
+      pure (base ++ traced)
+    (Left problem, Left other) -> pure [prefix ++ ": " ++ problem, prefix ++ ": " ++ other]
+    (Left problem, _) -> pure [prefix ++ ": " ++ problem]
+    (_, Left problem) -> pure [prefix ++ ": " ++ problem]
+
+loadObservation :: FilePath -> IO (Either String Value)
+loadObservation path = do
+  loaded <- try (eitherDecodeFileStrict' path) :: IO (Either IOException (Either String Value))
+  pure $ case loaded of
+    Left problem -> Left (path ++ ": " ++ show problem)
+    Right (Left problem) -> Left (path ++ ": " ++ problem)
+    Right (Right value) -> Right value
+
+withoutTraceHits :: Value -> Value
+withoutTraceHits (Object fields) = Object (KM.delete "trace_hits" fields)
+withoutTraceHits value = value
+
+-- | A stream that reports a problem stops being read here; 'withRowReader' still finishes it,
+-- which drains a sidecar and checks its count and digest. A problem observed while walking is
+-- not reported a second time by the finish.
+compareTraceHits :: FilePath -> Value -> FilePath -> Value -> String -> IO [String]
+compareTraceHits leftDirectory leftValue rightDirectory rightValue prefix = do
+  found <- newIORef []
+  entered <- newIORef False
+  let record message = modifyIORef' found (message :)
+      problem stream message = record (prefix ++ ".trace_hits: " ++ stream ++ ": " ++ message)
+      rowPath index = prefix ++ ".trace_hits[" ++ show index ++ "]"
+      rows index leftRow rightRow =
+        forM_ (differences (rowPath index) (normalize e2eIgnored leftRow) (normalize e2eIgnored rightRow)) record
+  compared <- withRowReader leftDirectory leftValue $ \leftReader ->
+    withRowReader rightDirectory rightValue $ \rightReader -> do
+      writeIORef entered True
+      let walk leftDone rightDone index = do
+            leftNext <- if leftDone then pure (Right Nothing) else rowNext leftReader
+            rightNext <- if rightDone then pure (Right Nothing) else rowNext rightReader
+            case (leftNext, rightNext) of
+              (Right Nothing, Right Nothing) -> pure ()
+              (Right (Just leftRow), Right (Just rightRow)) -> rows index leftRow rightRow >> walk False False (index + 1)
+              (Right Nothing, Right (Just _)) ->
+                record (prefix ++ ".trace_hits: row counts differ") >> drainRows rightReader (problem "candidate")
+              (Right (Just _), Right Nothing) ->
+                record (prefix ++ ".trace_hits: row counts differ") >> drainRows leftReader (problem "retained")
+              (Left message, Left other) -> problem "retained" message >> problem "candidate" other
+              (Left message, Right Nothing) -> problem "retained" message
+              (Left message, Right (Just _)) -> problem "retained" message >> drainRows rightReader (problem "candidate")
+              (Right Nothing, Left message) -> problem "candidate" message
+              (Right (Just _), Left message) -> problem "candidate" message >> drainRows leftReader (problem "retained")
+      walk False False (0 :: Int)
+      pure (Right ())
+  walked <- readIORef entered
+  case compared of
+    Right () -> pure ()
+    Left message
+      | walked -> pure ()
+      | otherwise -> do
+          before <- length <$> readIORef found
+          rightOnly <- withRowReader rightDirectory rightValue $ \rightReader ->
+            drainRows rightReader (problem "candidate") >> pure (Right ())
+          after <- length <$> readIORef found
+          case rightOnly of
+            Left other
+              | after == before -> record (prefix ++ ".trace_hits: " ++ other)
+            _ | after == before -> record (prefix ++ ".trace_hits: " ++ message)
+            _ -> pure ()
+  reverse <$> readIORef found
+
+drainRows :: RowReader -> (String -> IO ()) -> IO ()
+drainRows reader report = do
+  next <- rowNext reader
+  case next of
+    Right Nothing -> pure ()
+    Right (Just _) -> drainRows reader report
+    Left message -> report message

@@ -3,19 +3,21 @@
 module Main (main) where
 
 import Control.Monad (unless, when)
-import Data.Aeson (Value (..), encode, object, (.=))
+import Data.Aeson (Value (..), encode, object, toJSON, (.=))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
 import qualified Data.ByteString.Lazy as BL
+import Data.List (isPrefixOf)
 import qualified Data.Text as T
 import Emulation.Sha256 (sha256, sha256Hex)
 import FujiAF.Host (withTemporary)
 import FujiAF.RamPush (Address (..), RamPushEntries (..), afRingPayload, payloadAllocationSize, payloadEntries)
 import Replacement.Service.Packaged
 import Numeric (showHex)
-import System.Directory (createDirectoryIfMissing)
+import System.Directory (createDirectoryIfMissing, listDirectory, removeFile)
+import System.Environment (getArgs)
 import System.Posix.Files (setFileMode)
 import System.Exit (exitFailure)
 import System.FilePath ((</>))
@@ -32,29 +34,70 @@ data Variant = Variant
   , variantControlFile :: Bool
   , variantStartDat :: Maybe String
   , variantMutatePackage :: Maybe (FilePath -> IO ())
+  , variantForm :: ObservationForm
   }
 
+-- | How the receipt names its observations: the legacy inline array, or the current reference to an
+-- observation document plus its trace-hit sidecar.
+data ObservationForm = InlineForm | ReferenceForm ReferenceDefect
+
+data ReferenceDefect
+  = ReferenceClean
+  | ReferenceChangedEvent
+  | ReferenceBadDigest
+  | ReferenceBadBytes
+  | ReferenceBadTraceCount
+  | ReferenceBadTraceDigest
+  | ReferenceBadInlineTraceCount
+  | ReferenceMissingFile
+  | ReferenceTruncatedFile
+  | ReferenceEscapingPath
+  deriving (Eq)
+
 main :: IO ()
-main = withTemporary "packaged-qualification" $ \root -> do
-  baselineCheck root
-  refuses root "missing Rust entry" (baselineVariant { variantHits = dropFirstEntry baselineHits })
-  refuses root "wrong order" (baselineVariant { variantHits = swapFirstTwo baselineHits })
-  refuses root "wrong entry arguments" (baselineVariant { variantHits = wrongArguments baselineHits })
-  refuses root "missing return" (baselineVariant { variantHits = removeFirstReturn baselineHits })
-  refuses root "missing reopen row entry" (baselineVariant { variantReopenHits = dropFirstEntry reopenHits })
-  refuses root "valid rows with an orphan owned event" (baselineVariant { variantHits = appendOrphan baselineHits })
-  refuses root "wrong symbol binding" (baselineVariant { variantSites = badSites })
-  refuses root "control outcome" (baselineVariant { variantOutcome = "control-refused" })
-  refuses root "missing runtime symbol metadata" (baselineVariant { variantOmitSymbols = True })
-  refuses root "sibling control result" (baselineVariant { variantControlFile = True })
-  refuses root "mutated package DAT" (baselineVariant { variantMutatePackage = Just mutatePackage })
-  refuses root "start DAT differs from typed reference" (baselineVariant { variantStartDat = Just (digest (BC.pack "other-reference")) })
-  refuses root "owned entry after service-after-unload" (baselineVariant { variantAfterHits = afterUnloadOwned })
-  refuses root "owned entry in a later unrelated phase" (baselineVariant { variantUnrelatedHits = afterUnloadOwned })
-  putStrLn "packaged qualification tests: passed"
+main = do
+  arguments <- getArgs
+  case arguments of
+    ["--fixture-dir", directory] -> emitFixture directory
+    [] -> withTemporary "packaged-qualification" $ \root -> do
+      baselineCheck root
+      refuses root "missing Rust entry" (baselineVariant { variantHits = dropFirstEntry baselineHits })
+      refuses root "wrong order" (baselineVariant { variantHits = swapFirstTwo baselineHits })
+      refuses root "wrong entry arguments" (baselineVariant { variantHits = wrongArguments baselineHits })
+      refuses root "missing return" (baselineVariant { variantHits = removeFirstReturn baselineHits })
+      refuses root "missing reopen row entry" (baselineVariant { variantReopenHits = dropFirstEntry reopenHits })
+      refuses root "valid rows with an orphan owned event" (baselineVariant { variantHits = appendOrphan baselineHits })
+      refuses root "wrong symbol binding" (baselineVariant { variantSites = badSites })
+      refuses root "control outcome" (baselineVariant { variantOutcome = "control-refused" })
+      refuses root "missing runtime symbol metadata" (baselineVariant { variantOmitSymbols = True })
+      refuses root "sibling control result" (baselineVariant { variantControlFile = True })
+      refuses root "mutated package DAT" (baselineVariant { variantMutatePackage = Just mutatePackage })
+      refuses root "start DAT differs from typed reference" (baselineVariant { variantStartDat = Just (digest (BC.pack "other-reference")) })
+      refuses root "owned entry after service-after-unload" (baselineVariant { variantAfterHits = afterUnloadOwned })
+      refuses root "owned entry in a later unrelated phase" (baselineVariant { variantUnrelatedHits = afterUnloadOwned })
+      referenceChecks root
+      putStrLn "packaged qualification tests: passed"
+    _ -> fail "usage: packaged-qualification-tests [--fixture-dir DIR]"
+
+-- | Writes both receipt forms for out-of-process CLI checks.
+emitFixture :: FilePath -> IO ()
+emitFixture directory = do
+  createDirectoryIfMissing True directory
+  writeFixture (directory </> "referenced") (baselineVariant { variantForm = ReferenceForm ReferenceClean })
+  writeFixture (directory </> "inline") baselineVariant
+  putStrLn ("synthetic fixtures written to " ++ directory)
+
+writeFixture :: FilePath -> Variant -> IO ()
+writeFixture directory variant = do
+  outcome <- load directory variant
+  case outcome of
+    Right report
+      | packagedStatus report == PackagedQualified -> pure ()
+      | otherwise -> fail ("fixture did not qualify: " ++ show (packagedProblems report))
+    Left problem -> fail problem
 
 baselineVariant :: Variant
-baselineVariant = Variant baselineHits reopenHits declaredSites "candidate-qualified" [] [] False False Nothing Nothing
+baselineVariant = Variant baselineHits reopenHits declaredSites "candidate-qualified" [] [] False False Nothing Nothing InlineForm
 
 baselineCheck :: FilePath -> IO ()
 baselineCheck root = do
@@ -70,6 +113,45 @@ refuses root label variant = do
     Left _ -> putStrLn ("ok " ++ label ++ " is refused")
     Right report -> check (label ++ " is refused") (packagedStatus report == PackagedRefused)
 
+referenceChecks :: FilePath -> IO ()
+referenceChecks root = do
+  inline <- load root baselineVariant
+  referenced <- load root (baselineVariant { variantForm = ReferenceForm ReferenceClean })
+  case (inline, referenced) of
+    (Right inlineReport, Right referencedReport) -> do
+      check "a referenced receipt qualifies" (packagedStatus referencedReport == PackagedQualified)
+      check "inline and referenced receipts report the same service evidence"
+        (sameEvidence inlineReport referencedReport)
+    (Left problem, _) -> fail problem
+    (_, Left problem) -> fail problem
+  refusesReference root "changed service event in a referenced receipt" ReferenceChangedEvent
+  refusesReference root "changed observation digest" ReferenceBadDigest
+  refusesReference root "changed observation byte count" ReferenceBadBytes
+  refusesReference root "changed trace-hit count" ReferenceBadTraceCount
+  refusesReference root "changed trace-hit digest" ReferenceBadTraceDigest
+  refusesReference root "changed inline trace-hit count" ReferenceBadInlineTraceCount
+  refusesReference root "missing observation document" ReferenceMissingFile
+  refusesReference root "truncated observation document" ReferenceTruncatedFile
+  refusesReference root "observation path outside the receipt" ReferenceEscapingPath
+
+sameEvidence :: PackagedReport -> PackagedReport -> Bool
+sameEvidence left right =
+  and
+    [ packagedStatus left == packagedStatus right
+    , packagedRows left == packagedRows right
+    , packagedSequences left == packagedSequences right
+    , packagedRetainedHits left == packagedRetainedHits right
+    , packagedProblems left == packagedProblems right
+    , packagedPhases left == packagedPhases right
+    ]
+
+refusesReference :: FilePath -> String -> ReferenceDefect -> IO ()
+refusesReference root label defect = do
+  outcome <- load root (baselineVariant { variantForm = ReferenceForm defect })
+  case outcome of
+    Left problem -> fail (label ++ " was not a reportable refusal: " ++ problem)
+    Right report -> check (label ++ " is refused") (packagedStatus report == PackagedRefused)
+
 check :: String -> Bool -> IO ()
 check label ok = unless ok (putStrLn ("FAIL " ++ label) >> exitFailure) >> putStrLn ("ok " ++ label)
 
@@ -79,6 +161,7 @@ load root variant = do
       package = root </> "package"
   createDirectoryIfMissing True (receipt </> "relinked")
   createDirectoryIfMissing True (package </> "kernel")
+  clearReceipt receipt
   privateWrite (receipt </> "relinked" </> "kernel.syms") symbols
   privateWrite (receipt </> "relinked" </> "runtime.bin") runtime
   privateWriteLazy (receipt </> "relinked" </> "ram-push-manifest.json") (encode relinkManifest)
@@ -92,11 +175,109 @@ load root variant = do
   case variantMutatePackage variant of
     Nothing -> pure ()
     Just mutation -> mutation package
-  privateWriteLazy (receipt </> "e2e-result.json") (encode (e2eResult variant))
+  observations <- observationsValue receipt variant
+  privateWriteLazy (receipt </> "e2e-result.json") (encode (e2eResult variant observations))
   when (variantControlFile variant) $
     privateWriteLazy (receipt </> "e2e-control.json") (encode (object ["outcome" .= ("control-refused" :: String)]))
   reference <- loadReferenceDat (root </> "reference.DAT")
   qualifyPackaged (PackagedInputs receipt package reference)
+
+clearReceipt :: FilePath -> IO ()
+clearReceipt directory = do
+  names <- listDirectory directory
+  mapM_ (removeFile . (directory </>))
+    [ name
+    | name <- names
+    , "e2e-observation-" `isPrefixOf` name
+        || name `elem` ["e2e-control.json", "e2e-result.json", "e2e-failure.json"]
+    ]
+
+namedObservations :: Variant -> [(String, [Value])]
+namedObservations variant =
+  [ ("service-field-list", variantHits variant)
+  , ("service-field-reopen", variantReopenHits variant)
+  , ("service-after-unload", [])
+  , ("service-after-unload-stock", hit "stock-row-probe" 9000 0 0 : variantAfterHits variant)
+  , ("service-unrelated-after-unload", variantUnrelatedHits variant)
+  ]
+
+observationsValue :: FilePath -> Variant -> IO Value
+observationsValue receipt variant = case variantForm variant of
+  InlineForm ->
+    pure (toJSON [object ["phase" .= phase, "trace_hits" .= hits] | (phase, hits) <- namedObservations variant])
+  ReferenceForm defect ->
+    toJSON <$> mapM (writeObservation receipt defect) (zip [0 :: Int ..] (namedObservations variant))
+
+-- | Writes one observation document in the producer's current form, then returns the receipt
+-- reference. A sidecar reference names the sidecar; an inline document reference names the
+-- document itself. A defect applies to the observation its case names.
+writeObservation :: FilePath -> ReferenceDefect -> (Int, (String, [Value])) -> IO Value
+writeObservation receipt defect (index, (phase, hits)) = do
+  let stem = "e2e-observation-" ++ show index
+      chosen = if index == 0 then defectHits defect hits else hits
+      sidecar = stem ++ ".trace-hits.jsonl"
+      document = stem ++ ".json"
+      useSidecar = length chosen > 16
+  documentTrace <-
+    if useSidecar
+      then do
+        let rows = BL.toStrict (mconcat [encode value <> "\n" | value <- chosen])
+            digestText' = if index == 0 && defect == ReferenceBadTraceDigest then replicate 64 '0' else digest rows
+            count = length chosen + (if index == 0 && defect == ReferenceBadTraceCount then 1 else 0)
+        privateWrite (receipt </> sidecar) rows
+        pure (object ["schema" .= (1 :: Int), "path" .= sidecar, "sha256" .= digestText', "count" .= count])
+      else pure (toJSON chosen)
+  let documentBytes = BL.toStrict (encode (object ["phase" .= phase, "trace_hits" .= documentTrace]))
+      documentDigest = digest documentBytes
+      selfTrace =
+        object
+          [ "schema" .= (1 :: Int)
+          , "path" .= document
+          , "sha256" .= documentDigest
+          , "count" .= (length chosen + (if index == 3 && defect == ReferenceBadInlineTraceCount then 1 else 0))
+          ]
+      referenceTrace = if useSidecar then documentTrace else selfTrace
+      reference =
+        object
+          [ "phase" .= phase
+          , "path" .= document
+          , "sha256" .= documentDigest
+          , "bytes" .= B.length documentBytes
+          , "trace_hits" .= referenceTrace
+          ]
+  case (index == 0, defect) of
+    (True, ReferenceMissingFile) -> pure reference
+    (True, ReferenceTruncatedFile) -> do
+      privateWrite (receipt </> document) (B.take (B.length documentBytes `div` 2) documentBytes)
+      pure reference
+    (True, ReferenceBadDigest) -> pure (replaceField "sha256" (String (T.replicate 64 "0")) reference)
+    (True, ReferenceBadBytes) -> pure (replaceField "bytes" (toJSON (B.length documentBytes + 1)) reference)
+    (True, ReferenceEscapingPath) -> do
+      privateWrite (receipt </> document) documentBytes
+      pure (replaceField "path" (String (T.pack ("../" ++ document))) reference)
+    _ -> do
+      privateWrite (receipt </> document) documentBytes
+      pure reference
+
+defectHits :: ReferenceDefect -> [Value] -> [Value]
+defectHits ReferenceChangedEvent = changedEvent
+defectHits _ = id
+
+-- | Changes one service event so the receipt stays internally consistent and only the service
+-- predicate refuses it.
+changedEvent :: [Value] -> [Value]
+changedEvent [] = []
+changedEvent (value : rest)
+  | field value "site" == Just (String "svc-stock-return") = setField value "r0" (String "0x00000009") : rest
+  | otherwise = value : changedEvent rest
+
+replaceField :: String -> Value -> Value -> Value
+replaceField name value (Object fields) = Object (KM.insert (K.fromString name) value fields)
+replaceField _ _ other = other
+
+setField :: Value -> String -> Value -> Value
+setField (Object fields) name value = Object (KM.insert (K.fromString name) value fields)
+setField other _ _ = other
 
 privateWrite :: FilePath -> B.ByteString -> IO ()
 privateWrite path bytes = B.writeFile path bytes >> setFileMode path 0o600
@@ -292,10 +473,11 @@ packageManifest =
         ]
     ]
 
-e2eResult :: Variant -> Value
-e2eResult variant =
+e2eResult :: Variant -> Value -> Value
+e2eResult variant observations =
   object
     [ "schema" .= (1 :: Int)
+    , "scope" .= ("synthetic packaged-qualification fixture; no guest execution" :: String)
     , "outcome" .= variantOutcome variant
     , "runtime" .=
         object
@@ -318,17 +500,7 @@ e2eResult variant =
                 ]
             ]
         ]
-    , "observations" .=
-        [ object ["phase" .= ("service-field-list" :: String), "trace_hits" .= variantHits variant]
-        , object ["phase" .= ("service-field-reopen" :: String), "trace_hits" .= variantReopenHits variant]
-        , object ["phase" .= ("service-after-unload" :: String), "trace_hits" .= ([] :: [Value])]
-        , object [ "phase" .= ("service-after-unload-stock" :: String)
-                 , "trace_hits" .= ([hit "stock-row-probe" 9000 0 0] ++ variantAfterHits variant)
-                 ]
-        , object [ "phase" .= ("service-unrelated-after-unload" :: String)
-                 , "trace_hits" .= variantUnrelatedHits variant
-                 ]
-        ]
+    , "observations" .= observations
     , "trajectories" .=
         [ object ["name" .= ("service-page-cancel" :: String), "result" .= ("matched" :: String)]
         , object ["name" .= ("service-field-reopen" :: String), "result" .= ("matched" :: String)]

@@ -244,12 +244,15 @@ enum WatchViews {
     Fixed,
 }
 
+#[derive(Clone, Copy)]
+enum DisplayCompletion { AvailablePlane, AcknowledgedFrame }
+
 #[derive(Deserialize)]
 #[serde(tag = "command", rename_all = "kebab-case")]
 enum Request {
     List,
     Transfer(Transfer),
-    TraceSites { sites: BTreeMap<String, String>, #[serde(default)] reads: BTreeMap<String, Vec<[u64; 2]>> },
+    TraceSites { sites: BTreeMap<String, String>, #[serde(default)] reads: BTreeMap<String, Vec<SiteRead>> },
     TraceHits { from: usize, #[serde(default)] limit: Option<std::num::NonZeroUsize> },
     ModalObservationBegin(ModalBeginRequest),
     ModalObservationReport,
@@ -864,37 +867,48 @@ impl Server {
         Ok(cleared)
     }
 
-    /// Advances in DISPLAY_STEP slices until a scanout instance presents graphics and returns the
-    /// instructions spent; a press can settle while no plane is presented.
-    fn await_display_plane(&mut self) -> Result<u64, String> {
+    fn await_display_plane(&mut self, completion: DisplayCompletion) -> Result<(u64, Option<fujimod_xm1::presentation::Acknowledgement>), String> {
         let mut waited = 0;
-        while !self.bridge.machine.presents_display_plane()? {
+        let mut target = None;
+        loop {
+            let available = self.bridge.machine.presents_display_plane()?;
+            match completion {
+                DisplayCompletion::AvailablePlane if available => return Ok((waited, None)),
+                DisplayCompletion::AcknowledgedFrame => {
+                    if target.is_none() && available { target = self.bridge.machine.select_presentation_target()?; }
+                    if let Some(token) = target {
+                        if let Some(acknowledgement) = self.bridge.machine.presentation_acknowledgement(token)? {
+                            if available { return Ok((waited, Some(acknowledgement))); }
+                        }
+                    }
+                }
+                DisplayCompletion::AvailablePlane => {}
+            }
             if waited >= DISPLAY_WAIT {
-                return Err(format!("no display plane after {waited} instructions"));
+                return Err(format!("no acknowledged display plane after {waited} instructions"));
             }
             self.bridge.advance(DISPLAY_STEP)?;
             self.bridge.machine.require_running()?;
             waited += DISPLAY_STEP;
         }
-        Ok(waited)
     }
 
     /// Presses `key`, then waits for a presented plane; a failed press is returned as its `failure`.
-    fn display_press(&mut self, key: &PressName, snapshot: Option<&SnapshotName>) -> Result<Value, String> {
+    fn display_press(&mut self, key: &PressName, snapshot: Option<&SnapshotName>, completion: DisplayCompletion) -> Result<Value, String> {
         let started = Instant::now();
         let before = self.bridge.machine.instructions();
         let pressed = self.bridge.settled_key(key.press, default_pulse(key.press), MAX_SETTLE)
             .and_then(|settle| self.bridge.machine.require_running().map(|()| settle))
-            .and_then(|settle| self.await_display_plane().map(|waited| (settle, waited)));
+            .and_then(|settle| self.await_display_plane(completion).map(|(waited, acknowledgement)| (settle, waited, acknowledgement)));
         let instructions = self.bridge.machine.instructions() - before;
-        let (settle, display_wait, menu, failure) = match pressed {
-            Ok((settle, waited)) => (json!(settle), json!(waited), menu_value(self.bridge.machine.menu()?), Value::Null),
-            Err(failure) => (Value::Null, Value::Null, Value::Null, json!(failure)),
+        let (settle, display_wait, presentation, menu, failure) = match pressed {
+            Ok((settle, waited, acknowledgement)) => (json!(settle), json!(waited), json!(acknowledgement), menu_value(self.bridge.machine.menu()?), Value::Null),
+            Err(failure) => (Value::Null, Value::Null, Value::Null, Value::Null, json!(failure)),
         };
         self.key_log.push(json!({"key": key.name, "snapshot": snapshot, "seconds": started.elapsed().as_secs_f64(),
-            "instructions": instructions, "settle": settle, "display_wait_instructions": display_wait, "failure": failure}));
+            "instructions": instructions, "settle": settle, "display_wait_instructions": display_wait, "presentation": presentation, "failure": failure}));
         Ok(json!({"snapshot": snapshot, "key": key.name, "menu": menu, "settle": settle, "instructions": instructions,
-            "display_wait_instructions": display_wait, "failure": failure}))
+            "display_wait_instructions": display_wait, "presentation": presentation, "failure": failure}))
     }
 
     fn handle(&mut self, request: Request) -> Result<Option<Value>, String> {
@@ -1164,7 +1178,7 @@ impl Server {
             Request::WatchState => match &self.watch {
                 Some(watch) => watch.records.borrow().state(),
                 None => match self.bridge.machine.traces.modal_watch_state() {
-                    Some(state) => state?,
+                    Some(state) => serde_json::to_value(state).map_err(|failure| failure.to_string())?,
                     None => return Err("watch-state requires an armed memory watch".into()),
                 },
             },
@@ -1271,11 +1285,11 @@ impl Server {
             }
             Request::SnapshotKey { name, key } => {
                 let cleared_failure = self.restore_snapshot(&name)?;
-                let mut response = self.display_press(&key, Some(&name))?;
+                let mut response = self.display_press(&key, Some(&name), DisplayCompletion::AvailablePlane)?;
                 response["cleared_failure"] = json!(cleared_failure);
                 response
             }
-            Request::DisplayKey { key } => self.display_press(&key, None)?,
+            Request::DisplayKey { key } => self.display_press(&key, None, DisplayCompletion::AcknowledgedFrame)?,
             Request::Idle { instructions: GuestInstructions(instructions) } => {
                 if !(1..=MAX_SETTLE).contains(&instructions) {
                     return Err(format!("idle instructions must be 1..{MAX_SETTLE}"));

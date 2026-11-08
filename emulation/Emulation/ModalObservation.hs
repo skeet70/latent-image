@@ -49,6 +49,7 @@ module Emulation.ModalObservation
   , modalLifetimeSourceJson
   , lifetimeModalRequest
   , withRetiredExecution
+  , withTask33StackGuard
   , parseModalLifetimeWatchAck
   , parseModalLifetimeWatch
   , checkCompletedModalLifetime
@@ -59,6 +60,7 @@ module Emulation.ModalObservation
   , compareSettingsWrites
   , FinalModalWatch
   , parseFinalModalWatch
+  , finalModalWatchFromRecords
   , finalModalWatchSummary
   , modalReportDescribesFinalWatch
   , modalLifetimeCoverage
@@ -77,7 +79,7 @@ module Emulation.ModalObservation
   , modalLifetimeWriterLimit
   ) where
 
-import Control.Monad (foldM, forM, forM_, unless)
+import Control.Monad (foldM, forM, forM_, unless, when)
 import qualified ArmElf as ELF
 import Data.Aeson (Value (..), object, (.=))
 import qualified Data.Aeson.Key as K
@@ -85,6 +87,7 @@ import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
 import Data.List (find, nub, sort, sortOn)
 import qualified Data.Map.Strict as M
+import Data.Maybe (isJust)
 import Data.Scientific (toBoundedInteger)
 import qualified Data.Text as T
 import qualified Data.Vector as V
@@ -302,7 +305,10 @@ stockPublicationCount :: Int
 stockPublicationCount = Layout.publicationCountFor Layout.standardBankVariant
 
 scopedPublicationCounts :: [Int]
-scopedPublicationCounts = map Layout.publicationCountFor [Layout.modalScopedBankVariant, Layout.modalEngineBankVariant]
+scopedPublicationCounts = map Layout.publicationCountFor scopedBankVariants
+
+scopedBankVariants :: [Layout.BankVariant]
+scopedBankVariants = [Layout.modalScopedBankVariant, Layout.modalEngineBankVariant, Layout.modalRenderBankVariant]
 
 guardPublicationCounts :: [Int]
 guardPublicationCounts = stockPublicationCount : scopedPublicationCounts
@@ -491,7 +497,9 @@ checkModalBegin (ModalRequest _ scoped _ lifetime) report = do
   unless (modalReportPolicy report == maybe StockBaseline (const ScopedOwned75) scoped) (Left "modal policy differs from the request")
   unless (countValue (modalContextSourceSpans report) == maybe 0 (fromIntegral . length . lifetimeContext) lifetime)
     (Left "modal report context source count differs from request")
-  forM_ lifetime $ \_ -> unless (modalPhysicalCoverage report) (Left "modal lifetime physical guard did not arm")
+  forM_ lifetime $ \binding -> do
+    unless (modalPhysicalCoverage report) (Left "modal lifetime physical guard did not arm")
+    checkTask33StackGuardReceipt binding (modalLifetimeReceipt report)
   forM_ (modalReportFailure report) (Left . T.unpack)
 
 checkModalEnd :: ModalReport -> Either String ()
@@ -666,7 +674,8 @@ data SourceInstruction = SourceInstruction WatchAddress InstructionWord deriving
 data PublicationBinding = PublicationBinding WatchAddress Ram.WordValue Ram.WordValue deriving (Eq, Show)
 data PublicationRoutine = PublicationRoutine SourceInstruction SourceInstruction deriving (Eq, Show)
 data ModalLifetimeSource = ModalLifetimeSource
-  { lifetimeRuntime :: WatchRange
+  { lifetimeVariant :: Layout.BankVariant
+  , lifetimeRuntime :: WatchRange
   , lifetimeResident :: WatchRange
   , lifetimeReadonly :: [SourceImage]
   , lifetimeInstall :: PublicationRoutine
@@ -682,7 +691,65 @@ data ModalLifetimeSource = ModalLifetimeSource
   , lifetimeSettingsWriters :: [WatchRange]
   -- | Reloads whose copy stores the guard admits between a core's call and return fetches.
   , lifetimeSettingsReloads :: [SettingsReload]
+  , lifetimeTask33StackGuard :: Maybe Task33StackGuard
   } deriving (Eq)
+
+newtype Task33StackGuard = Task33StackGuard B.ByteString deriving (Eq, Show)
+
+withTask33StackGuard :: B.ByteString -> ModalLifetimeSource -> Either String ModalLifetimeSource
+withTask33StackGuard baseline source = do
+  unless (B.length baseline == 64) (Left "task33 stack guard requires exactly 64 baseline bytes")
+  pure source { lifetimeTask33StackGuard = Just (Task33StackGuard baseline) }
+
+task33StackGuardRange :: WatchRange
+task33StackGuardRange = either error id (watchRange (watchAddress 0x00a4ce00) (watchAddress 0x00a4ce40))
+
+task33StackGuardProfile :: [(K.Key, Word32)]
+task33StackGuardProfile =
+  [ ("node", 0x4006060c), ("creation", 0x4005c3ac), ("entry", 0x01109130)
+  , ("base", 0x00a4ce00), ("size", 4096), ("guard_bytes", 64) ]
+
+task33StackGuardFields :: Task33StackGuard -> [(K.Key, Value)]
+task33StackGuardFields (Task33StackGuard baseline) =
+  [key .= value | (key, value) <- task33StackGuardProfile] ++ ["baseline" .= B.unpack baseline]
+
+task33StackGuardJson :: Task33StackGuard -> Value
+task33StackGuardJson = object . task33StackGuardFields
+
+parseTask33StackGuard :: Value -> Either String Task33StackGuard
+parseTask33StackGuard value = do
+  modalKeys ("baseline" : map fst task33StackGuardProfile) value
+  forM_ task33StackGuardProfile $ \(key, expected) -> do
+    actual <- modalField key value >>= modalWord32
+    unless (actual == expected) (Left "task33 stack guard differs from the pinned task profile")
+  baseline <- modalField "baseline" value >>= parseModalBytes 64
+  unless (B.length baseline == 64) (Left "task33 stack guard requires exactly 64 baseline bytes")
+  pure (Task33StackGuard baseline)
+
+newtype Task33StackGuardReceipt = Task33StackGuardReceipt Task33StackGuard deriving (Eq, Show)
+
+task33StackGuardReceiptJson :: Task33StackGuardReceipt -> Value
+task33StackGuardReceiptJson (Task33StackGuardReceipt guard) = object
+  (task33StackGuardFields guard ++
+    [ "scope" .= String "diagnostic_only_bottom_guard_write_attempts"
+    , "priority" .= (8 :: Word32), "task_id" .= (33 :: Word32), "created" .= (1 :: Word32) ])
+
+parseTask33StackGuardReceipt :: Value -> Either String Task33StackGuardReceipt
+parseTask33StackGuardReceipt value = do
+  let extra = ["scope", "priority", "task_id", "created"]
+  modalKeys (extra ++ ("baseline" : map fst task33StackGuardProfile)) value
+  scope <- modalField "scope" value
+  unless (scope == String "diagnostic_only_bottom_guard_write_attempts") (Left "unknown task33 guard receipt scope")
+  forM_ [("priority", 8), ("task_id", 33), ("created", 1)] $ \(key, expected) -> do
+    actual <- modalField key value >>= modalWord32
+    unless (actual == expected) (Left "task33 guard receipt differs from the pinned descriptor")
+  fields <- case value of Object entries -> Right entries; _ -> Left "task33 guard receipt is not an object"
+  Task33StackGuardReceipt <$> parseTask33StackGuard (Object (foldr KM.delete fields extra))
+
+checkTask33StackGuardReceipt :: ModalLifetimeSource -> Maybe LifetimeReceipt -> Either String ()
+checkTask33StackGuardReceipt binding receipt = unless
+  ((receipt >>= receiptTask33StackGuard) == (Task33StackGuardReceipt <$> lifetimeTask33StackGuard binding))
+  (Left "task33 guard receipt differs from its source-bound request")
 
 -- | The stock property setter `0x624694` with its jump-table arms, fenced by the
 -- next settings-manifest entry `0x6309c4` (E-SETTINGS-SERVICE-MANIFEST-150 claims
@@ -775,8 +842,9 @@ rangesOverlap left right =
   in leftLow < rightHigh && rightLow < leftHigh
 
 lifetimeRequestJson :: ModalLifetimeSource -> Value
-lifetimeRequestJson source = object
-  [ "runtime" .= extentJson (lifetimeRuntime source)
+lifetimeRequestJson source = object $
+  [ "bank_variant" .= Layout.bankVariantTag (lifetimeVariant source)
+  , "runtime" .= extentJson (lifetimeRuntime source)
   , "resident" .= extentJson (lifetimeResident source)
   , "readonly" .= map sourceImageJson (lifetimeReadonly source)
   , "install" .= routine (lifetimeInstall source)
@@ -787,6 +855,7 @@ lifetimeRequestJson source = object
   , "settings_writers" .= map extentJson (lifetimeSettingsWriters source)
   , "settings_reloads" .= map settingsReloadJson (lifetimeSettingsReloads source)
   ]
+  ++ ["task33_stack_guard" .= task33StackGuardJson guard | Just guard <- [lifetimeTask33StackGuard source]]
  where
   instruction (SourceInstruction pc (InstructionWord word)) = object ["pc" .= watchAddressValue pc, "word" .= word]
   routine (PublicationRoutine entry writer) = object ["entry" .= instruction entry, "writer" .= instruction writer]
@@ -829,6 +898,11 @@ modalRuntimeSourceJson (ModalRuntimeSource source) = object
 
 bindModalRuntimeSource :: Ram.RamPushManifest -> B.ByteString -> Either String ModalRuntimeSource
 bindModalRuntimeSource manifest elfBytes = do
+  variant <- maybe (Left "modal lifetime requires a typed bank variant") Right (Ram.manifestBankVariant manifest)
+  unless (variant `elem` (Layout.standardBankVariant : scopedBankVariants)
+    && length (Ram.manifestPublications manifest) == Layout.publicationCountFor variant
+    && Ram.allocationSize manifest == fromIntegral (Layout.runtimeAllocationSizeFor variant))
+    (Left "modal lifetime bank variant, publication count or allocation differs")
   let runtime = Ram.runtimeBytes manifest
       runtimeDigest = sha256 runtime
       base = Ram.unAddress (Ram.allocationBase manifest)
@@ -901,7 +975,7 @@ bindModalRuntimeSource manifest elfBytes = do
   rollback <- routine "ram_push_rollback" (Ram.unAddress (Ram.rollbackEntry (Ram.manifestEntries manifest))) "restore_old_words"
   let bindings = [PublicationBinding (watchAddress (Ram.unAddress (Ram.publicationAddress publication)))
         (Ram.publicationOld publication) (Ram.publicationNew publication) | publication <- publications]
-  pure (ModalRuntimeSource (ModalLifetimeSource runtimeExtent residentExtent readonly install rollback bindings [] (Just (sha256 elfBytes)) (Just runtimeDigest) [] [stockPropertySetter] [stockSettingsReload, stockSettingsRestore]))
+  pure (ModalRuntimeSource (ModalLifetimeSource variant runtimeExtent residentExtent readonly install rollback bindings [] (Just (sha256 elfBytes)) (Just runtimeDigest) [] [stockPropertySetter] [stockSettingsReload, stockSettingsRestore] Nothing))
 
 littleWord :: Word32 -> B.ByteString
 littleWord word = B.pack [fromIntegral (word `div` (256 ^ index)) | index <- [0 .. 3 :: Int]]
@@ -909,8 +983,13 @@ littleWord word = B.pack [fromIntegral (word `div` (256 ^ index)) | index <- [0 
 lifetimeModalRequest :: ModalRequest -> ModalLifetimeSource -> Either String ModalRequest
 lifetimeModalRequest (ModalRequest stock scoped _ _) source = do
   unless (length (lifetimeContext source) == 16) (Left "modal lifetime requires complete loader context binding")
-  unless (length (lifetimePublications source) `elem` routePublicationCounts scoped)
-    (Left "modal lifetime publication count differs from stock or scoped route")
+  unless (lifetimeVariant source `elem` maybe [Layout.standardBankVariant] (const scopedBankVariants) scoped
+    && length (lifetimePublications source) == Layout.publicationCountFor (lifetimeVariant source))
+    (Left "modal lifetime bank variant or publication count differs from stock or scoped route")
+  when (lifetimeVariant source == Layout.modalRenderBankVariant) $
+    unless (all (\(Layout.PublicationAddress hook) -> any (\(PublicationBinding address old _) ->
+      watchAddressValue address == hook && old == Ram.WordValue 0xe92d4ff0) (lifetimePublications source)) Layout.renderHookAddresses)
+      (Left "modal render lifetime lacks a required render hook")
   forM_ scoped $ \(ModalLinked start bytes, _) ->
     unless (SourceImage start bytes `elem` lifetimeReadonly source)
       (Left "modal linked source differs from the bound runtime readonly section")
@@ -975,6 +1054,16 @@ parseFinalModalWatch value = do
     Object fields -> let !summary = KM.delete "records" fields in Right (FinalModalWatch observation (Object summary))
     _ -> Left "modal lifetime watch is not an object"
 
+finalModalWatchFromRecords :: Value -> [WatchRecord] -> Either String FinalModalWatch
+finalModalWatchFromRecords summary records = do
+  _ <- parseModalWatchSummary summary
+  WatchRowDigest count _ <- parseWatchRowDigest summary
+  unless (toInteger (length records) == toInteger count)
+    (Left "modal lifetime watch row count differs from its rows")
+  header <- projectCacheOnlyWatch summary
+  observation <- parseFixedWatchObservationFromRecords modalLifetimeWriterLimit header records
+  pure (FinalModalWatch observation summary)
+
 finalModalWatchSummary :: FinalModalWatch -> Value
 finalModalWatchSummary (FinalModalWatch _ summary) = summary
 
@@ -1017,6 +1106,7 @@ data LifetimeReceipt = LifetimeReceipt
   , receiptSettingsWrites :: ModalCount
   , receiptReloadWrites :: ModalCount
   , receiptFailure :: Maybe LifetimeFailure
+  , receiptTask33StackGuard :: Maybe Task33StackGuardReceipt
   } deriving (Eq, Show)
 
 lifetimePhaseText :: LifetimePhase -> T.Text
@@ -1057,10 +1147,12 @@ coreValue Core1 = 1
 
 parseLifetimeReceipt :: Value -> Either String LifetimeReceipt
 parseLifetimeReceipt value = do
-  modalKeys ["phase", "publication_count", "forward_writes", "reverse_writes", "pending_stores",
+  let guardValue = optionalField "task33_stack_guard" value
+  modalKeys (["phase", "publication_count", "forward_writes", "reverse_writes", "pending_stores",
     "install_core", "rollback_core", "checked_resource_writes", "checked_identity_writes",
     "checked_scheduler_writes", "checked_context_writes", "checked_vfp_owner_writes", "audited_writes", "admitted_settings_writes",
-    "admitted_reload_writes", "failure"] value
+    "admitted_reload_writes", "failure"] ++ ["task33_stack_guard" | isJust guardValue]) value
+  stackGuard <- traverse parseTask33StackGuardReceipt guardValue
   let count key = ModalCount <$> (modalField key value >>= modalWord)
   phase <- modalField "phase" value >>= parseClosed lifetimePhaseText
   failure <- modalField "failure" value >>= parseNullable (\entry -> do
@@ -1071,10 +1163,10 @@ parseLifetimeReceipt value = do
     <*> (modalField "rollback_core" value >>= parseNullable parseCore)
     <*> count "checked_resource_writes" <*> count "checked_identity_writes"
     <*> count "checked_scheduler_writes" <*> count "checked_context_writes" <*> count "checked_vfp_owner_writes"
-    <*> count "audited_writes" <*> count "admitted_settings_writes" <*> count "admitted_reload_writes" <*> pure failure
+    <*> count "audited_writes" <*> count "admitted_settings_writes" <*> count "admitted_reload_writes" <*> pure failure <*> pure stackGuard
 
 lifetimeReceiptJson :: LifetimeReceipt -> Value
-lifetimeReceiptJson receipt = object
+lifetimeReceiptJson receipt = object $
   [ "phase" .= lifetimePhaseText (receiptPhase receipt)
   , "publication_count" .= countValue (receiptPublicationCount receipt)
   , "forward_writes" .= countValue (receiptForwardWrites receipt)
@@ -1092,6 +1184,7 @@ lifetimeReceiptJson receipt = object
   , "admitted_reload_writes" .= countValue (receiptReloadWrites receipt)
   , "failure" .= fmap (\failure -> object ["kind" .= lifetimeFailureText failure]) (receiptFailure receipt)
   ]
+  ++ ["task33_stack_guard" .= task33StackGuardReceiptJson guard | Just guard <- [receiptTask33StackGuard receipt]]
 
 data PhysicalGuard = PhysicalGuard ModalCount ModalCount ModalCount ModalCount (Maybe ModalFailure) deriving (Eq, Show)
 
@@ -1209,6 +1302,7 @@ checkCompletedModalLifetime (ModalRequest (ModalStock stock) scoped _ source) au
     (Left "completed modal policy differs from the source-bound request")
   binding <- maybe (Left "modal request has no installed lifetime binding") Right source
   receipt <- maybe (Left "modal report has no lifetime receipt") Right (modalLifetimeReceipt report)
+  checkTask33StackGuardReceipt binding (Just receipt)
   unless (modalLifetimeCoverage report && countValue (receiptPublicationCount receipt) == fromIntegral (length (lifetimePublications binding)))
     (Left "modal lifetime did not complete exact publication and reverse rollback")
   unless (modalPhysicalCoverage report) (Left "modal lifetime lacks healthy physical fetch coverage")
@@ -1229,6 +1323,12 @@ checkCompletedModalLifetime (ModalRequest (ModalStock stock) scoped _ source) au
         [receiptForwardWrites receipt, receiptReverseWrites receipt, receiptResourceWrites receipt
         , receiptSchedulerWrites receipt, receiptContextWrites receipt, receiptVfpOwnerWrites receipt, receiptAuditedWrites receipt])
       writes = [row | row@CpuRecord { cpuAccess = CpuWrite } <- rows]
+  forM_ (lifetimeTask33StackGuard binding) $ \_ -> do
+    let (low, high) = watchRangeBounds task33StackGuardRange
+        touches row = case writeAttribution row of
+          Just (_, address, bytes) -> address < toInteger high && toInteger low < address + bytes
+          Nothing -> False
+    unless (not (any touches rows)) (Left "modal lifetime attempted a write to the task33 bottom guard")
   stockFetches <- lifetimeFetchRows binding rows
   unless (toInteger (length writes) == expectedWrites && length writes + stockFetches == length rows
     && toInteger (length (arrayWrites audit)) == toInteger (countValue (receiptAuditedWrites receipt)))
@@ -1390,7 +1490,13 @@ parseSourceImage value = do
 
 parseLifetimeBinding :: Maybe (ModalLinked, ModalScope) -> Value -> Value -> Either String ModalLifetimeSource
 parseLifetimeBinding scoped contextValue value = do
-  modalKeys ["runtime", "resident", "readonly", "install", "rollback", "publications", "retired", "settings_writers", "settings_reloads"] value
+  let guardValue = optionalField "task33_stack_guard" value
+  modalKeys (["bank_variant", "runtime", "resident", "readonly", "install", "rollback", "publications", "retired", "settings_writers", "settings_reloads"]
+    ++ ["task33_stack_guard" | isJust guardValue]) value
+  stackGuard <- traverse parseTask33StackGuard guardValue
+  variant <- modalField "bank_variant" value >>= \entry -> case entry of
+    String tag -> Layout.parseBankVariantTag (T.unpack tag)
+    _ -> Left "modal lifetime bank_variant must be text"
   runtime <- modalField "runtime" value >>= parseModalExtent
   resident <- modalField "resident" value >>= parseModalExtent
   let (runtimeLow, runtimeHigh) = watchRangeBounds runtime
@@ -1457,7 +1563,7 @@ parseLifetimeBinding scoped contextValue value = do
   unless (length (nub reloadSites) == length reloadSites && not (any (rangesOverlap runtime) reloadSites)
     && not (any (inWriter . watchAddressValue . reloadCopyStore) settingsReloads))
     (Left "modal settings reload sites repeat or enter the runtime, or a copy store lies in a settings writer")
-  pure (ModalLifetimeSource runtime resident allImages install rollback publications context Nothing Nothing retired settingsWriters settingsReloads)
+  pure (ModalLifetimeSource variant runtime resident allImages install rollback publications context Nothing Nothing retired settingsWriters settingsReloads stackGuard)
 
 modalLifetimeWatchRanges :: ModalRequest -> Either String [WatchRange]
 modalLifetimeWatchRanges (ModalRequest _ scoped _ source) = do
@@ -1473,7 +1579,8 @@ modalLifetimeWatchRanges (ModalRequest _ scoped _ source) = do
     , (0x54760,0x54764), (0x54768,0x5476c), (0x545a4,0x545a8), (0x5ff0c,0x6194c), (0x5beac,0x5d16c)
     , (0xe4720,0xe4724), (0xe4728,0xe472c), (0xe4564,0xe4568), (0xefecc,0xf190c), (0xebe6c,0xed12c) ]
   publications <- mapM (\(PublicationBinding address _ _) -> range (watchAddressValue address) (watchAddressValue address + 4)) (lifetimePublications binding)
-  let watched = unionWatchRanges (lifetimeResident binding : fixed ++ imageRanges ++ publications)
+  let guards = [task33StackGuardRange | isJust (lifetimeTask33StackGuard binding)]
+      watched = unionWatchRanges (lifetimeResident binding : fixed ++ imageRanges ++ publications ++ guards)
   unless (not (or [rangesOverlap retired span_ | retired <- lifetimeRetired binding, span_ <- watched]))
     (Left "modal retired extents overlap a write-watched extent")
   let reloadSites = concatMap reloadSiteRanges (lifetimeSettingsReloads binding)

@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 -- Strict bounded JSON shared by host-only tools. No filesystem or native I/O.
-module FujiAF.JSON (decodeStrict, decodeStrictIntegers, encodeCanonical) where
+module FujiAF.JSON (decodeStrict, decodeStrictIntegers, encodeCanonical, valueParser, valueParserAtomic) where
 import Control.Applicative ((<|>))
 import Control.Monad (unless)
 import Data.Aeson (Value(..), eitherDecodeStrict')
@@ -25,14 +25,30 @@ decodeStrictIntegers :: B.ByteString -> Either String Value
 decodeStrictIntegers = decode True
 
 decode :: Bool -> B.ByteString -> Either String Value
-decode integers bytes = A.parseOnly (space *> value 0 <* space <* A.endOfInput) bytes
+decode integers bytes = A.parseOnly (jsonParser integers <* A.endOfInput) bytes
+
+valueParser :: AB.Parser Value
+valueParser = jsonParser False
+
+-- | A single value without leading or trailing whitespace, for callers that
+-- skip whitespace outside Attoparsec between tokens.
+valueParserAtomic :: AB.Parser Value
+valueParserAtomic = jsonParserAtomic False
+
+jsonParser :: Bool -> AB.Parser Value
+jsonParser integers = jsonSpace *> jsonParserAtomic integers <* jsonSpace
+
+jsonParserAtomic :: Bool -> AB.Parser Value
+jsonParserAtomic integers = valueAtomic 0
  where
-  space = A.skipWhile (`elem` [' ','\t','\n','\r'])
+  space = jsonSpace
   token p = p <* space
   value :: Int -> A.Parser Value
-  value depth = do
+  value depth = token (valueAtomic depth)
+  valueAtomic :: Int -> A.Parser Value
+  valueAtomic depth = do
     unless (depth <= 64) (fail "JSON nesting cap exceeded")
-    token (object depth <|> array depth <|> (String <$> str) <|> literal "true" (Bool True) <|> literal "false" (Bool False) <|> literal "null" Null <|> number)
+    object depth <|> array depth <|> (String <$> str) <|> literal "true" (Bool True) <|> literal "false" (Bool False) <|> literal "null" Null <|> number
   literal s v = A.string s *> pure v
   str = do
     (raw,()) <- A.match (A.char '"' *> chars)
@@ -76,6 +92,9 @@ decode integers bytes = A.parseOnly (space *> value 0 <* space <* A.endOfInput) 
     xs <- A.sepBy (value (depth+1)) (token (A.char ','))
     _ <- A.char ']'
     pure (Array (V.fromList xs))
+
+jsonSpace :: AB.Parser ()
+jsonSpace = A.skipWhile (`elem` [' ','\t','\n','\r'])
 
 -- Python json.dumps(sort_keys=True,separators=(",",":"),ensure_ascii=True)
 -- compatible for the integer-only reviewed profiles, including UTF-16 escapes.

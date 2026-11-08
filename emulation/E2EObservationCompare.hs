@@ -18,7 +18,7 @@ import Control.Exception (IOException, try)
 import qualified Data.ByteString as B
 import qualified Data.Vector as V
 import Emulation.SegmentReceipt (SegmentName, decodeDeclaredSegments, segmentNameText)
-import Emulation.ObservationCompare (differences, e2eIgnored, normalize, toggleIgnored)
+import Emulation.ObservationCompare (compareObservationFiles, differences, e2eIgnored, normalize, toggleIgnored)
 import System.Directory (doesFileExist, listDirectory)
 import System.Environment (getArgs, lookupEnv)
 import System.Exit (exitFailure)
@@ -49,7 +49,7 @@ observationFiles before after = do
   names <- sort . filter (\name -> "e2e-observation-" `isPrefixOf` name && ".json" `isSuffixOf` name) <$> listDirectory before
   concat <$> forM names (\name -> do
     present <- doesFileExist (after </> name)
-    if present then differences name <$> load e2eIgnored (before </> name) <*> load e2eIgnored (after </> name) else pure [name ++ ": missing"])
+    if present then compareObservationFiles (before </> name) (after </> name) name else pure [name ++ ": missing"])
 
 compareFlat :: FilePath -> FilePath -> IO (Int, [String])
 compareFlat old new = do

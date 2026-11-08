@@ -40,6 +40,7 @@ module Emulation.WatchObservation
   , CpuAccess (..)
   , TransferAccess (..)
   , WatchRecord (..)
+  , parseWatchRecord
   , WatchObservation (..)
   , WatchAck
   , parseWatchAck
@@ -51,6 +52,7 @@ module Emulation.WatchObservation
   , fixedWatchRecords
   , parseFixedWatchAck
   , parseFixedWatchObservation
+  , parseFixedWatchObservationFromRecords
   , ForbiddenFetch (..)
   , ExecutionGate (..)
   , ExecutionInterval (..)
@@ -163,23 +165,23 @@ data TransferAccess = HostRead | HostWrite | ModelBusRead | ModelBusWrite derivi
 -- CPU records describe attempts, not committed readback.
 data WatchRecord
   = CpuRecord
-      { cpuAccess :: CpuAccess
-      , cpuAddress :: WatchAddress
-      , cpuPhysical :: WatchAddress
-      , cpuBytes :: WatchBytes
-      , cpuValue :: Maybe Word64
-      , cpuBefore :: Maybe B.ByteString
-      , cpuByteOrder :: ByteOrder
-      , cpuCore :: CoreId
-      , cpuPc :: WatchAddress
-      , cpuInstructions :: Instructions
-      , cpuTick :: Tick
+      { cpuAccess :: !CpuAccess
+      , cpuAddress :: !WatchAddress
+      , cpuPhysical :: !WatchAddress
+      , cpuBytes :: !WatchBytes
+      , cpuValue :: !(Maybe Word64)
+      , cpuBefore :: !(Maybe B.ByteString)
+      , cpuByteOrder :: !ByteOrder
+      , cpuCore :: !CoreId
+      , cpuPc :: !WatchAddress
+      , cpuInstructions :: !Instructions
+      , cpuTick :: !Tick
       }
   | TransferRecord
-      { transferAccess :: TransferAccess
-      , transferAddress :: WatchAddress
-      , transferPhysical :: WatchAddress
-      , transferBytes :: WatchBytes
+      { transferAccess :: !TransferAccess
+      , transferAddress :: !WatchAddress
+      , transferPhysical :: !WatchAddress
+      , transferBytes :: !WatchBytes
       }
   deriving (Eq, Show)
 
@@ -306,7 +308,9 @@ asText (String text) = Right (T.unpack text)
 asText _ = Left "watch field is not text"
 
 asWord64 :: Value -> Either String Word64
-asWord64 (Number number) = maybe (Left "watch number is out of range") Right (toBoundedInteger number)
+asWord64 (Number number) = case toBoundedInteger number of
+  Nothing -> Left "watch number is out of range"
+  Just parsed -> parsed `seq` Right parsed
 asWord64 _ = Left "watch number is not an integer"
 
 asWord32 :: Value -> Either String Word32
@@ -438,8 +442,8 @@ parseTransferRecord access value = do
     when (hasField name value) (Left ("transfer record carries " ++ name))
   pure (TransferRecord access (WatchAddress address) (WatchAddress physical) bytes)
 
-parseRecord :: Value -> Either String WatchRecord
-parseRecord value = do
+parseWatchRecord :: Value -> Either String WatchRecord
+parseWatchRecord value = do
   source <- field "source" value >>= asText
   case source of
     "cpu-write" -> parseCpuRecord CpuWrite value
@@ -461,9 +465,16 @@ parseWatchAck value = do
 parseWatchObservation :: WatchLimit -> Value -> Either String WatchObservation
 parseWatchObservation limit value = do
   exactKeys ["enabled", "ranges", "records", "violation"] value
+  records <- field "records" value >>= asArray >>= mapM parseWatchRecord
+  case value of
+    Object fields -> watchObservationFromRecords limit (Object (KM.delete "records" fields)) records
+    _ -> Left "watch observation is not an object"
+
+watchObservationFromRecords :: WatchLimit -> Value -> [WatchRecord] -> Either String WatchObservation
+watchObservationFromRecords limit value records = do
+  exactKeys ["enabled", "ranges", "violation"] value
   enabled <- field "enabled" value >>= asBool
   ranges <- field "ranges" value >>= parseRanges
-  records <- field "records" value >>= asArray >>= mapM parseRecord
   violation <- case field "violation" value of
     Right Null -> Right Nothing
     Right (String text) -> Right (Just (T.unpack text))
@@ -496,10 +507,18 @@ parseFixedWatchAck value = do
 parseFixedWatchObservation :: WatchLimit -> Value -> Either String FixedWatchObservation
 parseFixedWatchObservation limit value = do
   exactKeys ["enabled", "ranges", "records", "violation", "classes", "views"] value
+  records <- field "records" value >>= asArray >>= mapM parseWatchRecord
+  case value of
+    Object fields -> parseFixedWatchObservationFromRecords limit (Object (KM.delete "records" fields)) records
+    _ -> Left "execution watch is not an object"
+
+parseFixedWatchObservationFromRecords :: WatchLimit -> Value -> [WatchRecord] -> Either String FixedWatchObservation
+parseFixedWatchObservationFromRecords limit value records = do
+  exactKeys ["enabled", "ranges", "violation", "classes", "views"] value
   unless (field "views" value == Right (String "fixed")) (Left "execution watch is not fixed-view")
   classes <- field "classes" value >>= parseGuardClasses
   case value of
-    Object row -> FixedWatchObservation <$> parseWatchObservation limit (Object (KM.delete "classes" (KM.delete "views" row))) <*> pure classes
+    Object row -> FixedWatchObservation <$> watchObservationFromRecords limit (Object (KM.delete "classes" (KM.delete "views" row))) records <*> pure classes
     _ -> Left "execution watch is not an object"
 
 checkExecutionWrites :: WritePolicy -> WatchLimit -> [WatchRange] -> [WatchRange] -> FixedWatchAck -> FixedWatchObservation -> Either String ExecutionWriteGate

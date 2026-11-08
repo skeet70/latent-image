@@ -6,6 +6,8 @@ haskell_toolchain_library(name = "base")
 
 haskell_toolchain_library(name = "aeson")
 
+haskell_toolchain_library(name = "JuicyPixels")
+
 haskell_toolchain_library(name = "attoparsec")
 
 haskell_toolchain_library(name = "bytestring")
@@ -21,6 +23,7 @@ haskell_toolchain_library(
         "//host/firmware:__pkg__",
         "//matching:__pkg__",
         "//replacement/media_permit:__pkg__",
+        "//replacement/modal_runtime:__pkg__",
         "//transport:__pkg__",
     ],
 )
@@ -61,6 +64,20 @@ haskell_library(
         ":scientific",
         ":text",
         ":vector",
+    ],
+)
+
+haskell_test(
+    name = "json-tests",
+    size = "small",
+    srcs = ["JsonTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":json",
+        "//host:aeson",
+        "//host:attoparsec",
+        "//host:base",
+        "//host:bytestring",
     ],
 )
 

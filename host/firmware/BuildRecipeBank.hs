@@ -15,6 +15,7 @@ import Data.List (elemIndex, nub, sort, sortOn)
 import Data.Word (Word16, Word32)
 import Numeric (showHex)
 import System.Environment (getArgs, lookupEnv)
+import System.Directory (doesFileExist)
 import System.Exit (exitSuccess)
 import System.Posix.Files (setFileMode)
 
@@ -28,6 +29,7 @@ import RamPushLayout
 import RamPushToolchain
 import qualified ArmElf as ELF
 import EngineStack (StackReport (..), checkEngineStack, taskOneBudget)
+import qualified RenderStack as Render
 import BankAllowlistComposition (bankAllowlistSourcePaths, composeBankAllowlist)
 
 -- | The four label texts the submenu pages carry, in the order the actions
@@ -86,7 +88,7 @@ main = do
     exitSuccess
   case arguments of
     ["--ram-push-variant-allocation-size", groups] -> do
-      variant <- either H.failH pure (parseBankVariant groups)
+      variant <- either H.failH pure (parseBankVariantTag groups)
       putStrLn (hex32 (runtimeAllocationSizeFor variant))
       exitSuccess
     _ -> pure ()
@@ -98,12 +100,12 @@ main = do
       requirePinnedToolchain
       pure (s, o, d, RamPush standardBankVariant (hexValue base) linkedDir rc0Id4 rc0Id5 rc0Plain)
     ["--ram-push-variant", groups, base, s, o, d, linkedDir, rc0Id4, rc0Id5, rc0Plain] -> do
-      variant <- either H.failH pure (parseBankVariant groups)
+      variant <- either H.failH pure (parseBankVariantTag groups)
       requirePinnedToolchain
       pure (s, o, d, RamPush variant (hexValue base) linkedDir rc0Id4 rc0Id5 rc0Plain)
     _ ->
       H.failH
-        "usage: build-recipe-bank SPEC.json OUT.json OUT_DIR | --complete SPEC.json OUT.json OUT_DIR KERNEL_DIR BOOT_DIR D3_DIR STOCK_DAT | --ram-push-allocation-size | --ram-push-variant-allocation-size GROUPS | --ram-push BASE SPEC.json OUT.json OUT_DIR LINKED_DIR RC0_ID4 RC0_ID5 RC0_PLAIN | --ram-push-variant GROUPS BASE SPEC.json OUT.json OUT_DIR LINKED_DIR RC0_ID4 RC0_ID5 RC0_PLAIN (GROUPS: lifecycle | modal75 | lifecycle,modal75 | modal75,menu-engine)"
+        "usage: build-recipe-bank SPEC.json OUT.json OUT_DIR | --complete SPEC.json OUT.json OUT_DIR KERNEL_DIR BOOT_DIR D3_DIR STOCK_DAT | --ram-push-allocation-size | --ram-push-variant-allocation-size GROUPS | --ram-push BASE SPEC.json OUT.json OUT_DIR LINKED_DIR RC0_ID4 RC0_ID5 RC0_PLAIN | --ram-push-variant GROUPS BASE SPEC.json OUT.json OUT_DIR LINKED_DIR RC0_ID4 RC0_ID5 RC0_PLAIN (GROUPS: lifecycle | modal75 | lifecycle,modal75 | modal75,menu-engine | modal75,menu-engine,render)"
   original <- H.jsonRead =<< B.readFile specPath
   spec <- case buildMode of
     PreBootstrap -> pure original
@@ -1156,8 +1158,8 @@ emitRamPush variant base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainP
       engineStart <- linked symbols "__rb_menu_engine_start"
       engineEnd <- linked symbols "__rb_menu_engine_end"
       resume <- linked symbols "__rb_menu_engine_stock_resume"
-      unless (engineStart == menuEngineRegionStart base && engineStart >= linkedEnd
-          && engineEnd <= menuEngineRegionStart base + menuEngineRegionExtent && resume == 0x00bf95cc) $
+      unless (engineStart == menuEngineRegionStartFor variant base && engineStart >= linkedEnd
+          && engineEnd <= menuEngineRegionStartFor variant base + menuEngineRegionExtentFor variant && resume == 0x00bf95cc) $
         H.failH "ram-push: menu engine region differs from the layout contract"
       elf <- B.readFile (linkedDir ++ "/kernel.elf") >>= either H.failH pure . ELF.parseElf
       let inRuntime address = base <= address && address - base < runtimeAllocationSizeFor variant
@@ -1165,6 +1167,12 @@ emitRamPush variant base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainP
       putStrLn
         ( "menu engine stack: engine " ++ show (reportEngine stack) ++ " + modal dispatcher "
             ++ show (reportModal stack) ++ " bytes, limit " ++ show (reportLimit stack) )
+      when (hasPublicationGroup RenderPublication variant) $ do
+        render <- either (H.failH . ("ram-push: " ++)) pure (Render.checkRenderStack elf inRuntime)
+        forM_ [("tree", Render.reportTree render), ("picker", Render.reportPicker render), ("pane", Render.reportPane render)] $ \(name, entry) ->
+          putStrLn ("render " ++ name ++ " stack: " ++ show (Render.entryDepth entry)
+            ++ " bytes + stock margin " ++ show (Render.entryStockMargin entry)
+            ++ ", headroom " ++ show (Render.entryHeadroom entry))
       pure engineEnd
     else do
       when (any ((== "__rb_menu_engine_start") . symbolName) symbols) $
@@ -1305,6 +1313,17 @@ emitRamPush variant base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainP
       when (any ((== "rb_menu_engine_entry") . symbolName) symbols) $
         H.failH "ram-push: unselected menu engine entry is linked"
       pure []
+  renderPublications <- if hasPublicationGroup RenderPublication variant
+    then forM (zip3 renderHookAddresses ["rb_render_tree_entry", "rb_render_picker_entry", "rb_render_pane_entry"]
+      ["__rb_render_tree_stock_resume", "__rb_render_picker_stock_resume", "__rb_render_pane_stock_resume"]) $ \(hook, entry, resumeSymbol) -> do
+      target <- linked symbols entry
+      let address = publicationAddress hook
+      resume <- linked symbols resumeSymbol
+      unless (resume == address + 4) $
+        H.failH "ram-push: render stock resume differs from the hook continuation"
+      word <- either H.failH pure (renderHookWordFor variant base hook target (readWord rc0Plain 0x01100000 address))
+      pure (RamPublication address 0xe92d4ff0 word)
+    else pure []
   let capturePublication = RamPublication 0x00e9e038 0xe92d4870 captureWord
       reserved = map ramAddress (legacyOrdered ++ lifecycleOrdered ++ d3Activation)
       ccKept = [p | p <- ccPublications, let CC.Address address = CC.publicationAddress p,
@@ -1313,7 +1332,7 @@ emitRamPush variant base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainP
                    in RamPublication address (CC.publicationOld p) (CC.publicationNew p)
       ccSetup = map convert [p | p <- ccKept, CC.publicationPhase p == CC.Setup]
       ccActivation = map convert [p | p <- ccKept, CC.publicationPhase p == CC.Activation]
-      logical = legacyOrdered <> ccSetup <> ccActivation <> d3Activation <> extra <> [capturePublication] <> lifecycleOrdered <> modalPublications <> enginePublications
+      logical = legacyOrdered <> ccSetup <> ccActivation <> d3Activation <> extra <> [capturePublication] <> lifecycleOrdered <> modalPublications <> enginePublications <> renderPublications
   safeOrder <- either H.failH pure (safePublicationOrderForVariant variant (map (PublicationAddress . ramAddress) logical))
   let ordered = [logical !! publicationIndex index | index <- safeOrder]
       allocationEnd = toInteger base + toInteger size
@@ -1369,7 +1388,23 @@ emitRamPush variant base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainP
   composedAllowlistHash <- H.sha256 composedAllowlist
   B.writeFile (out ++ "/bank-allowlist-input.json") composedAllowlist
   setFileMode (out ++ "/bank-allowlist-input.json") 0o600
-  let sourcePaths =
+  let renderSourcePaths =
+        [ "replacement/render_adapter/mod.rs"
+        , "replacement/render_adapter/entry.S"
+        , "replacement/render_adapter/class.rs"
+        , "replacement/render_adapter/calls.rs"
+        , "replacement/render_adapter/picker.rs"
+        , "replacement/render_adapter/tree.rs"
+        , "replacement/render_adapter/pane.rs"
+        , "replacement/render_adapter/build.sh"
+        , "replacement/render_commands/src/lib.rs"
+        , "replacement/menu_widgets/src/lib.rs"
+        , "replacement/menu_widgets/src/value_picker.rs"
+        , "replacement/menu_widgets/src/tree_list.rs"
+        , "replacement/menu_widgets/src/pane_drawer.rs"
+        , "host/firmware/RenderStack.hs"
+        ]
+      sourcePaths =
         [ "menu/recipe_bank_arm.S"
         , "menu/recipe_bank_probe.c"
         , "menu/recipe_bank_hook.c"
@@ -1424,11 +1459,13 @@ emitRamPush variant base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainP
             , "replacement/menu_engine/adapter/entry.S"
             , "menu/recipe_bank_ram_engine.ld"
             ]]
+          ++ [path | hasPublicationGroup RenderPublication variant, path <- renderSourcePaths]
           ++ case publicationGroups variant of
             [] -> []
             [Modal75Publication] -> ["host/firmware/build-recipe-bank-modal-ram.sh"]
             [LifecyclePublications] -> ["host/firmware/build-recipe-bank-lifecycle-ram.sh"]
             [Modal75Publication, MenuEnginePublication] -> ["host/firmware/build-recipe-bank-modal-engine-ram.sh"]
+            [Modal75Publication, MenuEnginePublication, RenderPublication] -> ["host/firmware/build-recipe-bank-modal-render-ram.sh"]
             _ -> ["host/firmware/build-recipe-bank-modal-lifecycle-ram.sh"]
           ++ [path | hasPublicationGroup LifecyclePublications variant, path <-
           [ "replacement/save/src/lib.rs"
@@ -1444,9 +1481,25 @@ emitRamPush variant base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainP
           , "replacement/media_permit/rb_media_permit_stock.S"
           , "replacement/media_permit/stock_calls.json"
           ]]
-  sourceIdentity <- forM (nub sourcePaths) $ \path -> do
+  individualSourceIdentity <- forM (nub sourcePaths) $ \path -> do
     digest <- H.sha256 =<< B.readFile path
     pure (path, H.s digest)
+  sourceIdentity <- if not (hasPublicationGroup RenderPublication variant)
+    then pure individualSourceIdentity
+    else do
+      let renderIdentity = filter ((`elem` renderSourcePaths) . fst) individualSourceIdentity
+          renderDocument = encodeCanonical (H.obj renderIdentity)
+          renderIdentityPath = out ++ "/render-source-identity.json"
+      present <- doesFileExist renderIdentityPath
+      when present $ do
+        recorded <- B.readFile renderIdentityPath
+        unless (recorded == renderDocument) $
+          H.failH "ram-push: render-source-identity.json differs from recomputed sources"
+      B.writeFile renderIdentityPath renderDocument
+      setFileMode renderIdentityPath 0o600
+      digest <- H.sha256 renderDocument
+      pure (filter ((`notElem` renderSourcePaths) . fst) individualSourceIdentity
+        ++ [("render_sources_sha256", H.s digest)])
   rc0Identity <- forM
     [("recipe_bank_spec", specPath), ("rc0_image4", rc0Id4Path), ("rc0_image5", rc0Id5Path), ("rc0_plain", rc0PlainPath)] $
     \(label, path) -> do
@@ -1464,6 +1517,9 @@ emitRamPush variant base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainP
         [ ("build-recipe-bank", H.s recipeBankBuilderDigest)
         , ("ram-push-toolchain", H.s ramPushToolchainDigest)
         ]
+  when (hasPublicationGroup RenderPublication variant
+    && length sourceIdentity + length rc0Identity + length rustIdentity + length toolIdentity + 1 > 68) $
+    H.failH "ram-push: source_identity exceeds 68 entries"
   installEntry <- linked symbols "ram_push_install"
   rollbackEntry <- linked symbols "ram_push_rollback"
   statusEntry <- linked symbols "ram_push_status"
@@ -1473,7 +1529,7 @@ emitRamPush variant base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainP
     emitSaveLifecycleProgram symbols
       (LifecycleImageExtent base (base + fromIntegral (B.length runtime))) out
     setFileMode (out ++ "/save-lifecycle-program.json") 0o600
-  B.writeFile (out ++ "/ram-push-manifest.json") (encodeCanonical (H.obj
+  B.writeFile (out ++ "/ram-push-manifest.json") (encodeCanonical (H.obj $
     [ ("schema", H.n 1)
     , ("source_identity", H.obj (sourceIdentity <> rc0Identity <> rustIdentity <> toolIdentity
         <> [("bank_allowlist_composed_sha256", H.s composedAllowlistHash)]))
@@ -1496,7 +1552,7 @@ emitRamPush variant base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainP
             ]
         | (position, logicalIndex, publication) <- zip3 [0 :: Int ..] safeOrder ordered
         ])
-    ]))
+    ] <> [("bank_variant", H.s (bankVariantTag variant)) | hasPublicationGroup RenderPublication variant]))
   setFileMode (out ++ "/ram-push-manifest.json") 0o600
   forM_ modalScope $ \scope -> do
     B.writeFile (out ++ "/modal-scope.json") (encodeCanonical (H.obj
@@ -1545,14 +1601,6 @@ modalScopeMetadata base linkedDir symbols linkedStart linkedBytes = do
   unless (resume == 0x00bfb02c) $
     H.failH "ram-push: modal stock resume moved"
   pure (H.obj [("sha256", H.s elfHash), ("functions", H.obj ranges)])
-
-parseBankVariant :: String -> Either String BankVariant
-parseBankVariant text = case text of
-  "lifecycle" -> bankVariant [LifecyclePublications]
-  "modal75" -> bankVariant [Modal75Publication]
-  "lifecycle,modal75" -> bankVariant [LifecyclePublications, Modal75Publication]
-  "modal75,menu-engine" -> bankVariant [Modal75Publication, MenuEnginePublication]
-  _ -> Left "publication groups must be lifecycle, modal75, lifecycle,modal75 or modal75,menu-engine"
 
 assemble :: Word32 -> [(Word32, B.ByteString)] -> IO B.ByteString
 assemble size chunks = do

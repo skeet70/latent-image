@@ -475,6 +475,15 @@ Order of work:
 
 **Emulated result (E-EMBASSY-PHASE1-EMULATED-150).** One run of the demonstration and one of each control on the stock DAT, cardless FujiMod RAM-push route under the up-counting default model, with the modal75 FILM SIMULATION trajectory, all at main `82a8af1b`. The demonstration object is the `counter-up` build `8888b6d1…`. The reviewed checker `replacement/embassy_platform/check-demo.jq` accepts all four runs. They link their named objects with the same prelinked source digests, trajectory, hooks and builder identity, and they start from one checkpoint key (two cold, two restored).
 
+The current host entry point is `//replacement/embassy_platform:check-demo`. It accepts embedded observations and verified observation-document/trace-sidecar references. Wake events are streamed into the same demonstration and control predicates.
+
+```sh
+devenv shell -- host-build run --jobs=2 //replacement/embassy_platform:check-demo -- \
+  --demo DEMO_RECEIPT --no-executors NO_EXECUTORS_RECEIPT \
+  --no-pender-kernel NO_PENDER_RECEIPT --counter-down COUNTER_DOWN_RECEIPT \
+  --objects OBJECT_DIGESTS_FILE
+```
+
 - **Demonstration:**
   - Install, route and unload pass with every step matched and no forbidden fetch.
   - The allocator returned id 120 for A, B's three statuses are 0, and both host tasks entered.
