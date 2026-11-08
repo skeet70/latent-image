@@ -559,20 +559,20 @@ xm1_platform_veneer_global_lock_observe:
 .global xm1_platform_veneer_global_lock_helper_try
 .type xm1_platform_veneer_global_lock_helper_try,%function
 xm1_platform_veneer_global_lock_helper_try:
-    b xm1_rtos_global_lock_try_body
+    b helper_try
 .size xm1_platform_veneer_global_lock_helper_try, .-xm1_platform_veneer_global_lock_helper_try
 
 .section .veneer.global_lock_helper_release,"ax",%progbits
 .global xm1_platform_veneer_global_lock_helper_release
 .type xm1_platform_veneer_global_lock_helper_release,%function
 xm1_platform_veneer_global_lock_helper_release:
-    b xm1_rtos_global_lock_release_body
+    b helper_release
 .size xm1_platform_veneer_global_lock_helper_release, .-xm1_platform_veneer_global_lock_helper_release
 
 .section .veneer.global_lock_helper_observe,"ax",%progbits
 .global xm1_platform_veneer_global_lock_helper_observe
 .type xm1_platform_veneer_global_lock_helper_observe,%function
 xm1_platform_veneer_global_lock_helper_observe:
-    b xm1_rtos_global_lock_observe_body
+    b helper_observe
 .size xm1_platform_veneer_global_lock_helper_observe, .-xm1_platform_veneer_global_lock_helper_observe
 

@@ -234,6 +234,7 @@ haskell_library(
     name = "platform-artifact",
     srcs = [
         "stage/Replacement/RtosPlatform/Artifact.hs",
+        "stage/Replacement/RtosPlatform/Place.hs",
         "stage/Replacement/RtosPlatform/Union.hs",
     ],
     src_strip_prefix = "stage",
@@ -276,6 +277,7 @@ haskell_binary(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":platform-artifact",
+        "//host:aeson",
         "//host:base",
         "//host:bytestring",
         "//replacement/rtos_own_first/stage:own-first-artifact",
