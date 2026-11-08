@@ -931,6 +931,27 @@ classifyCacheFailure message
   | "must be a capped regular file" `isInfixOf` message = ResultInvalidCase
   | otherwise = ResultInvalidOutput
 
+readFailureReport :: FilePath -> IO (Maybe Value)
+readFailureReport path = do
+  present <- doesFileExist path
+  if not present
+    then pure Nothing
+    else do
+      parsed <- try (B.readFile path >>= jsonRead) :: IO (Either IOException Value)
+      pure (either (const Nothing) Just parsed)
+
+classifyFailureReport :: Maybe Value -> String -> ResultStatus
+classifyFailureReport failure fallback =
+  case failure >>= statusOf of
+    Just "host_timeout" -> ResultHostTimeout
+    Just "invalid_case" -> ResultInvalidCase
+    Just "runner_failure" -> ResultInvalidOutput
+    _ -> classifyCacheFailure fallback
+  where
+    statusOf value = case str (get value "status") of
+      "" -> Nothing
+      status -> Just status
+
 removeIfPresent :: FilePath -> IO ()
 removeIfPresent path = do
   present <- doesFileExist path
@@ -958,10 +979,18 @@ executeCase attempt directory caseId value regions = do
   case outcome of
     Left problem -> do
       removeIfPresent batchPath
+      failure <- readFailureReport resultPath
       let message = exceptionText problem
-      B.writeFile (directory </> "diagnostic.txt") (BC.pack message)
+          detail =
+            case failure of
+              Just failureValue ->
+                let status = str (get failureValue "status")
+                    reason = str (get failureValue "reason")
+                 in "status " ++ status ++ (if null reason then "" else ": " ++ reason) ++ "; failure report " ++ resultPath
+              Nothing -> message
+      B.writeFile (directory </> "diagnostic.txt") (BC.pack detail)
       modifyIORef' (attemptFailed attempt) (+ 1)
-      pure (CaseRun (classifyCacheFailure message) [message] Nothing (Just FailedExecution))
+      pure (CaseRun (classifyFailureReport failure message) [detail] Nothing (Just FailedExecution))
     Right (reuse, observations) ->
       case [observation | (ident, observation) <- observations, caseIdText ident == caseId] of
         [] -> do
@@ -973,7 +1002,7 @@ executeCase attempt directory caseId value regions = do
           case extracted of
             Left problem -> do
               removeIfPresent batchPath
-              let message = "cannot retain the native response: " ++ exceptionText problem
+              let message = "cannot retain the native response: " ++ exceptionText problem ++ "; failure report " ++ resultPath
               B.writeFile (directory </> "diagnostic.txt") (BC.pack message)
               modifyIORef' (attemptFailed attempt) (+ 1)
               pure (CaseRun ResultInvalidOutput [message] Nothing (Just FailedExecution))
@@ -1045,9 +1074,19 @@ runForbiddenBody attempt inputs scenario =
 forbiddenWitness :: Result -> Bool
 forbiddenWitness result = resultStatus result == ResultPassed
 
+data ControlStatus = ControlRefused | ControlAccepted | ControlInvalidCase | ControlHostTimeout | ControlInvalidOutput
+  deriving (Eq, Show)
+
+controlStatusLabel :: ControlStatus -> String
+controlStatusLabel ControlRefused = "refused"
+controlStatusLabel ControlAccepted = "accepted"
+controlStatusLabel ControlInvalidCase = "invalid_case"
+controlStatusLabel ControlHostTimeout = "host_timeout"
+controlStatusLabel ControlInvalidOutput = "invalid_output"
+
 data Control = Control
   { controlName :: String
-  , controlStatus :: String
+  , controlStatus :: ControlStatus
   , controlProblems :: [String]
   , controlExecution :: Maybe Execution
   , controlArtifact :: Maybe FilePath
@@ -1057,7 +1096,7 @@ controlJson :: Control -> Value
 controlJson control =
   object
     [ "name" .= controlName control
-    , "status" .= controlStatus control
+    , "status" .= controlStatusLabel (controlStatus control)
     , "problems" .= controlProblems control
     , "execution" .= fmap executionLabel (controlExecution control)
     , "artifact" .= controlArtifact control
@@ -1079,14 +1118,14 @@ faultWitness scenario result =
           && effects == expectedDefect scenario
       _ -> False
 
-controlStatusFor :: Bool -> Result -> String
+controlStatusFor :: Bool -> Result -> ControlStatus
 controlStatusFor refused result
-  | refused = "refused"
+  | refused = ControlRefused
   | otherwise = case resultStatus result of
-      ResultInvalidCase -> "invalid_case"
-      ResultHostTimeout -> "host_timeout"
-      ResultInvalidOutput -> "invalid_output"
-      _ -> "accepted"
+      ResultInvalidCase -> ControlInvalidCase
+      ResultHostTimeout -> ControlHostTimeout
+      ResultInvalidOutput -> ControlInvalidOutput
+      _ -> ControlAccepted
 
 runBoundaryControls :: Attempt -> Inputs -> IO [Control]
 runBoundaryControls attempt inputs = do
@@ -1132,33 +1171,72 @@ headOr :: String -> [String] -> String
 headOr fallback [] = fallback
 headOr _ (value : _) = value
 
-report :: Int -> Bool -> ExecutionCounts -> Maybe FilePath -> [(Scenario, Result, Result)] -> Scenario -> Result -> Result -> [Control] -> Value
-report expectedPairs subset counts cachePath results faultScenario fault forbidden boundaryControls =
-  object
-    [ "schema_version" .= (1 :: Int)
-    , "profile" .= ("media-permit" :: String)
-    , "subset" .= subset
-    , "cases" .=
-        [ object
-            [ "id" .= scId scenario
-            , "model" .= show (scExpect scenario)
-            , "original" .= resultJson original
-            , "candidate" .= resultJson candidate
-            , "status" .= pairStatus original candidate
-            ]
-        | (scenario, original, candidate) <- results
-        ]
-    , "controls" .= map controlJson allControls
-    , "execution" .=
+data CaseStatus = CasePassed | CaseFailed | CaseInvalidCase | CaseHostTimeout | CaseInvalidOutput
+  deriving (Eq, Show)
+
+caseStatusLabel :: CaseStatus -> String
+caseStatusLabel CasePassed = "passed"
+caseStatusLabel CaseFailed = "failed"
+caseStatusLabel CaseInvalidCase = "invalid_case"
+caseStatusLabel CaseHostTimeout = "host_timeout"
+caseStatusLabel CaseInvalidOutput = "invalid_output"
+
+data OutcomeStatus = OutcomeQualified | OutcomeFailed | OutcomePrerequisite | OutcomeInfrastructure
+  deriving (Eq, Show)
+
+outcomeStatusLabel :: OutcomeStatus -> String
+outcomeStatusLabel OutcomeQualified = "qualified"
+outcomeStatusLabel OutcomeFailed = "failed"
+outcomeStatusLabel OutcomePrerequisite = "prerequisite"
+outcomeStatusLabel OutcomeInfrastructure = "infrastructure"
+
+outcomeExitCode :: OutcomeStatus -> ExitCode
+outcomeExitCode OutcomeQualified = ExitSuccess
+outcomeExitCode OutcomeFailed = ExitFailure 1
+outcomeExitCode OutcomePrerequisite = ExitFailure 2
+outcomeExitCode OutcomeInfrastructure = ExitFailure 75
+
+data Report = Report
+  { reportStatus :: OutcomeStatus
+  , reportProblems :: [String]
+  , reportCandidate :: CandidateSelection
+  , reportValue :: Value
+  }
+
+report :: CandidateSelection -> Int -> Bool -> ExecutionCounts -> Maybe FilePath -> [(Scenario, Result, Result)] -> Scenario -> Result -> Result -> [Control] -> Report
+report candidateMode expectedPairs subset counts cachePath results faultScenario fault forbidden boundaryControls =
+  Report
+    { reportStatus = outcome
+    , reportProblems = problems
+    , reportCandidate = candidateMode
+    , reportValue =
         object
-          [ "executed" .= countExecuted counts
-          , "reused" .= countReused counts
-          , "failed" .= countFailed counts
-          , "cache" .= cachePath
+          [ "schema_version" .= (1 :: Int)
+          , "profile" .= ("media-permit" :: String)
+          , "candidate" .= candidateModeLabel candidateMode
+          , "subset" .= subset
+          , "cases" .=
+              [ object
+                  [ "id" .= scId scenario
+                  , "model" .= show (scExpect scenario)
+                  , "original" .= resultJson original
+                  , "candidate" .= resultJson candidate
+                  , "status" .= caseStatusLabel (pairStatus original candidate)
+                  ]
+              | (scenario, original, candidate) <- results
+              ]
+          , "controls" .= map controlJson allControls
+          , "execution" .=
+              object
+                [ "executed" .= countExecuted counts
+                , "reused" .= countReused counts
+                , "failed" .= countFailed counts
+                , "cache" .= cachePath
+                ]
+          , "status" .= outcomeStatusLabel outcome
+          , "problems" .= problems
           ]
-    , "status" .= status
-    , "problems" .= problems
-    ]
+    }
   where
     defectControl =
       Control
@@ -1182,14 +1260,14 @@ report expectedPairs subset counts cachePath results faultScenario fault forbidd
         && all (\(_, original, candidate) -> resultStatus original == ResultPassed && resultStatus candidate == ResultPassed) results
         && faultWitness faultScenario fault
         && forbiddenWitness forbidden
-        && all ((== "refused") . controlStatus) boundaryControls
-    status :: String
-    status
-      | any ((== ResultInvalidCase) . resultStatus) allResults || any ((== "invalid_case") . controlStatus) allControls = "prerequisite"
+        && all ((== ControlRefused) . controlStatus) boundaryControls
+    outcome :: OutcomeStatus
+    outcome
+      | any ((== ResultInvalidCase) . resultStatus) allResults || any ((== ControlInvalidCase) . controlStatus) allControls = OutcomePrerequisite
       | any ((`elem` [ResultHostTimeout, ResultInvalidOutput]) . resultStatus) allResults
-          || any ((`elem` ["host_timeout", "invalid_output"]) . controlStatus) allControls = "infrastructure"
-      | qualified = "qualified"
-      | otherwise = "failed"
+          || any ((`elem` [ControlHostTimeout, ControlInvalidOutput]) . controlStatus) allControls = OutcomeInfrastructure
+      | qualified = OutcomeQualified
+      | otherwise = OutcomeFailed
     problems :: [String]
     problems = caseProblems ++ controlProblemsList
     caseProblems :: [String]
@@ -1201,23 +1279,23 @@ report expectedPairs subset counts cachePath results faultScenario fault forbidd
       ]
     controlProblemsList :: [String]
     controlProblemsList =
-      [ "control " ++ controlName control ++ ": " ++ headOr (controlStatus control) (controlProblems control)
+      [ "control " ++ controlName control ++ ": " ++ headOr (controlStatusLabel (controlStatus control)) (controlProblems control)
           ++ artifactSuffix (controlArtifact control)
       | control <- allControls
-      , controlStatus control /= "refused"
+      , controlStatus control /= ControlRefused
       ]
     decisiveProblem :: Result -> String
     decisiveProblem result =
       headOr (resultStatusLabel (resultStatus result)) (resultProblems result) ++ artifactSuffix (resultArtifact result)
     artifactSuffix :: Maybe FilePath -> String
     artifactSuffix = maybe "" (\directory -> " (artifact " ++ directory ++ ")")
-    pairStatus :: Result -> Result -> String
+    pairStatus :: Result -> Result -> CaseStatus
     pairStatus original candidate
-      | resultStatus original == ResultPassed && resultStatus candidate == ResultPassed = "passed"
-      | any ((== ResultInvalidCase) . resultStatus) [original, candidate] = "invalid_case"
-      | any ((== ResultHostTimeout) . resultStatus) [original, candidate] = "host_timeout"
-      | any ((== ResultInvalidOutput) . resultStatus) [original, candidate] = "invalid_output"
-      | otherwise = "failed"
+      | resultStatus original == ResultPassed && resultStatus candidate == ResultPassed = CasePassed
+      | any ((== ResultInvalidCase) . resultStatus) [original, candidate] = CaseInvalidCase
+      | any ((== ResultHostTimeout) . resultStatus) [original, candidate] = CaseHostTimeout
+      | any ((== ResultInvalidOutput) . resultStatus) [original, candidate] = CaseInvalidOutput
+      | otherwise = CaseFailed
     resultJson :: Result -> Value
     resultJson result =
       object
@@ -1227,6 +1305,13 @@ report expectedPairs subset counts cachePath results faultScenario fault forbidd
         , "artifact" .= resultArtifact result
         ]
 
+data CandidateSelection = CurrentCandidate | KnownDefectCandidate
+  deriving (Eq, Show)
+
+candidateModeLabel :: CandidateSelection -> String
+candidateModeLabel CurrentCandidate = "current"
+candidateModeLabel KnownDefectCandidate = "known-defect"
+
 data Options = Options
   { optionRunner :: Maybe FilePath
   , optionBuildRoot :: Maybe FilePath
@@ -1234,6 +1319,7 @@ data Options = Options
   , optionOut :: FilePath
   , optionCache :: Maybe FilePath
   , optionScenarios :: [String]
+  , optionCandidate :: CandidateSelection
   }
 
 data Command = Inventory FilePath | Qualify Options | Help
@@ -1242,7 +1328,7 @@ usage :: String
 usage =
   unlines
     [ "usage: media-permit-qualification [--runner PATH] [--build-root DIR] [--stock-elf PATH]"
-    , "       --out DIR [--cache DIR] [--scenario NAME]..."
+    , "       --out DIR [--cache DIR] [--scenario NAME]... [--candidate current|defect]"
     , "       media-permit-qualification --inventory-only STOCK_ELF"
     ]
 
@@ -1252,14 +1338,16 @@ parseCommand arguments
   | otherwise = case arguments of
       ["--inventory-only", stockElf] -> Right (Inventory stockElf)
       _ -> do
-        (options, positionals) <- collect arguments (Options Nothing Nothing Nothing "" Nothing [])
+        (options, positionals) <- collect arguments (Options Nothing Nothing Nothing "" Nothing [] CurrentCandidate)
         unless (null positionals) (Left ("unexpected positional argument " ++ headOr "argument" positionals ++ "; use --out, --cache and --scenario"))
         unless (not (null (optionOut options))) (Left "--out DIR is required")
         pure (Qualify options)
   where
     collect [] options = Right (options, [])
     collect (flag : value : rest) options
-      | flag `elem` valueFlags = collect rest (setOption flag value options)
+      | flag `elem` valueFlags = do
+          next <- setOption flag value options
+          collect rest next
     collect (flag : []) _
       | flag `elem` valueFlags = Left (flag ++ " needs a value")
     collect (flag : _) _
@@ -1268,15 +1356,19 @@ parseCommand arguments
     collect (value : rest) options = do
       (final, positionals) <- collect rest options
       pure (final, value : positionals)
-    valueFlags = ["--runner", "--build-root", "--stock-elf", "--out", "--cache", "--scenario"]
+    valueFlags = ["--runner", "--build-root", "--stock-elf", "--out", "--cache", "--scenario", "--candidate"]
     setOption flag value options = case flag of
-      "--runner" -> options {optionRunner = Just value}
-      "--build-root" -> options {optionBuildRoot = Just value}
-      "--stock-elf" -> options {optionStockElf = Just value}
-      "--out" -> options {optionOut = value}
-      "--cache" -> options {optionCache = Just value}
-      "--scenario" -> options {optionScenarios = optionScenarios options ++ [value]}
-      _ -> options
+      "--runner" -> Right options {optionRunner = Just value}
+      "--build-root" -> Right options {optionBuildRoot = Just value}
+      "--stock-elf" -> Right options {optionStockElf = Just value}
+      "--out" -> Right options {optionOut = value}
+      "--cache" -> Right options {optionCache = Just value}
+      "--scenario" -> Right options {optionScenarios = optionScenarios options ++ [value]}
+      "--candidate" -> case value of
+        "current" -> Right options {optionCandidate = CurrentCandidate}
+        "defect" -> Right options {optionCandidate = KnownDefectCandidate}
+        _ -> Left "--candidate must be current or defect"
+      _ -> Right options
 
 data Paths = Paths
   { pathRunner :: FilePath
@@ -1317,21 +1409,28 @@ acquireSlot originalArguments = do
         then executeFile wrapper False (executable : originalArguments) Nothing
         else prerequisite ("emulator slot wrapper missing at " ++ wrapper ++ "; run through bazel run or set XM1_EMULATOR_SLOT")
 
-writeResults :: FilePath -> Value -> IO ()
-writeResults out value = BL.writeFile (out </> "results.json") (encode value)
+writeResults :: FilePath -> Report -> IO ()
+writeResults out attemptReport = BL.writeFile (out </> "results.json") (encode (reportValue attemptReport))
 
-prerequisiteReport :: Maybe FilePath -> String -> Value
-prerequisiteReport cachePath message =
-  object
-    [ "schema_version" .= (1 :: Int)
-    , "profile" .= ("media-permit" :: String)
-    , "subset" .= False
-    , "cases" .= ([] :: [Value])
-    , "controls" .= ([] :: [Value])
-    , "execution" .= object ["executed" .= (0 :: Int), "reused" .= (0 :: Int), "failed" .= (0 :: Int), "cache" .= cachePath]
-    , "status" .= ("prerequisite" :: String)
-    , "problems" .= [message]
-    ]
+prerequisiteReport :: CandidateSelection -> Maybe FilePath -> String -> Report
+prerequisiteReport candidateMode cachePath message =
+  Report
+    { reportStatus = OutcomePrerequisite
+    , reportProblems = [message]
+    , reportCandidate = candidateMode
+    , reportValue =
+        object
+          [ "schema_version" .= (1 :: Int)
+          , "profile" .= ("media-permit" :: String)
+          , "candidate" .= candidateModeLabel candidateMode
+          , "subset" .= False
+          , "cases" .= ([] :: [Value])
+          , "controls" .= ([] :: [Value])
+          , "execution" .= object ["executed" .= (0 :: Int), "reused" .= (0 :: Int), "failed" .= (0 :: Int), "cache" .= cachePath]
+          , "status" .= outcomeStatusLabel OutcomePrerequisite
+          , "problems" .= [message]
+          ]
+    }
 
 cleanupEphemeral :: Options -> FilePath -> IO ()
 cleanupEphemeral options cachePath =
@@ -1341,28 +1440,32 @@ cleanupEphemeral options cachePath =
       present <- doesDirectoryExist cachePath
       when present (removeDirectoryRecursive cachePath)
 
-terminalMessage :: FilePath -> [Scenario] -> Bool -> ExecutionCounts -> Value -> String
-terminalMessage out selected subset counts output =
-  case str (get output "status") of
-    "qualified" ->
-      "media-permit: qualified ("
-        ++ scope
-        ++ "; "
-        ++ show (length selected)
-        ++ " pair(s), 4 controls refused; executed="
-        ++ show (countExecuted counts)
-        ++ " reused="
-        ++ show (countReused counts)
-        ++ "); results="
-        ++ results
-    "failed" -> "media-permit: failed: " ++ firstProblem ++ "; results=" ++ results
-    "prerequisite" -> "media-permit: prerequisite: " ++ firstProblem ++ "; results=" ++ results
-    "infrastructure" -> "media-permit: infrastructure: " ++ firstProblem ++ "; results=" ++ results
-    other -> "media-permit: " ++ other ++ "; results=" ++ results
+terminalMessage :: FilePath -> [Scenario] -> Bool -> ExecutionCounts -> Report -> String
+terminalMessage out selected subset counts attemptReport =
+  "media-permit: "
+    ++ knownPrefix
+    ++ case reportStatus attemptReport of
+      OutcomeQualified ->
+        "qualified ("
+          ++ scope
+          ++ "; "
+          ++ show (length selected)
+          ++ " pair(s), 4 controls refused; executed="
+          ++ show (countExecuted counts)
+          ++ " reused="
+          ++ show (countReused counts)
+          ++ "); results="
+          ++ results
+      OutcomeFailed -> "failed: " ++ firstProblem ++ "; results=" ++ results
+      OutcomePrerequisite -> "prerequisite: " ++ firstProblem ++ "; results=" ++ results
+      OutcomeInfrastructure -> "infrastructure: " ++ firstProblem ++ "; results=" ++ results
   where
     results = out </> "results.json"
     scope = if subset then "subset " ++ show (length selected) ++ "/" ++ show (length scenarios) else "full"
-    firstProblem = headOr "see results.json" (map str (list (get output "problems")))
+    firstProblem = headOr "see results.json" (reportProblems attemptReport)
+    knownPrefix = case reportCandidate attemptReport of
+      CurrentCandidate -> ""
+      KnownDefectCandidate -> "known-defect candidate; "
 
 runQualification :: Options -> IO (ExitCode, String)
 runQualification options = do
@@ -1375,13 +1478,15 @@ runQualification options = do
   loaded <- try (loadInputs (pathBuildRoot paths) (pathStockElf paths)) :: IO (Either Prerequisite Inputs)
   case loaded of
     Left (Prerequisite message) -> do
-      writeResults (pathOut paths) (prerequisiteReport (pathCache paths) message)
-      pure (ExitFailure 2, "media-permit: prerequisite: " ++ message)
+      let failureReport = prerequisiteReport (optionCandidate options) (pathCache paths) message
+      writeResults (pathOut paths) failureReport
+      pure (outcomeExitCode (reportStatus failureReport), "media-permit: prerequisite: " ++ message)
     Right inputs ->
       case selectScenarios (optionScenarios options) of
         Left message -> do
-          writeResults (pathOut paths) (prerequisiteReport (pathCache paths) message)
-          pure (ExitFailure 2, "media-permit: prerequisite: " ++ message)
+          let failureReport = prerequisiteReport (optionCandidate options) (pathCache paths) message
+          writeResults (pathOut paths) failureReport
+          pure (outcomeExitCode (reportStatus failureReport), "media-permit: prerequisite: " ++ message)
         Right (selected, subset) -> do
           executed <- newIORef 0
           reused <- newIORef 0
@@ -1395,24 +1500,23 @@ runQualification options = do
                   , attemptReused = reused
                   , attemptFailed = failed
                   }
-          results <- runCases attempt inputs selected []
+              selectedInputs = case optionCandidate options of
+                CurrentCandidate -> inputs
+                KnownDefectCandidate -> inputs {inCandidate = inDefect inputs}
+          results <- runCases attempt selectedInputs selected []
           let faultScenario = scenarioById "kind0-zero"
               forbiddenScenario = scenarioById "message-known"
               faultRoot = pathOut paths </> "defect"
           createDirectoryIfMissing True faultRoot
-          fault <- runSide attempt faultRoot inputs faultScenario DefectCandidate
-          forbidden <- runForbiddenBody attempt inputs forbiddenScenario
-          boundaryControls <- runBoundaryControls attempt inputs
+          fault <- runSide attempt faultRoot selectedInputs faultScenario DefectCandidate
+          forbidden <- runForbiddenBody attempt selectedInputs forbiddenScenario
+          boundaryControls <- runBoundaryControls attempt selectedInputs
           counts <- ExecutionCounts <$> readIORef executed <*> readIORef reused <*> readIORef failed
-          let output = report (length selected) subset counts (pathCache paths) results faultScenario fault forbidden boundaryControls
-              code = case str (get output "status") of
-                "qualified" -> ExitSuccess
-                "prerequisite" -> ExitFailure 2
-                "infrastructure" -> ExitFailure 75
-                _ -> ExitFailure 1
-          writeResults (pathOut paths) output
+          let attemptReport = report (optionCandidate options) (length selected) subset counts (pathCache paths) results faultScenario fault forbidden boundaryControls
+              code = outcomeExitCode (reportStatus attemptReport)
+          writeResults (pathOut paths) attemptReport
           cleanupEphemeral options cachePath `catch` \(_ :: IOException) -> pure ()
-          pure (code, terminalMessage (pathOut paths) selected subset counts output)
+          pure (code, terminalMessage (pathOut paths) selected subset counts attemptReport)
 
 runInventory :: FilePath -> IO ()
 runInventory stockElf = do
