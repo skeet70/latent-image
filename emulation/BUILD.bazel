@@ -4207,6 +4207,23 @@ sh_test(
     ],
 )
 
+haskell_test(
+    name = "observation-stream-tests",
+    size = "small",
+    srcs = ["ObservationStreamTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":case-sha256",
+        ":emulator-usb",
+        ":observation-stream-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+    ],
+)
+
 haskell_binary(
     name = "render-trace-hit-memory",
     srcs = ["RenderTraceHitMemory.hs"],

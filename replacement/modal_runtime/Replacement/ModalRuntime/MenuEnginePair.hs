@@ -37,6 +37,7 @@ module Replacement.ModalRuntime.MenuEnginePair
   , taskStackStart
   ) where
 
+import Control.Exception (evaluate)
 import Control.Monad (foldM, forM, unless, when)
 import qualified Data.Attoparsec.ByteString.Char8 as A
 import Data.Aeson ((.:), (.:?))
@@ -312,7 +313,12 @@ readObservationReader residency path = do
 foldHitLines :: FilePath -> J.Value -> (a -> Hit -> Either String a) -> a -> IO (Either String a)
 foldHitLines directory value step initial = do
   result <- foldTraceHitLines directory value
-    (\acc line -> pure (acc >>= \state -> parseHitLine line >>= \hit -> step state hit))
+    (\acc line -> do
+      let next = acc >>= \state -> parseHitLine line >>= \hit -> step state hit
+      forced <- evaluate next
+      case forced of
+        Left problem -> pure (Left problem)
+        Right value_ -> evaluate value_ >> pure forced)
     (Right initial)
   pure (result >>= id)
 
@@ -367,17 +373,17 @@ data Coverage = Coverage {coverageResidency :: Residency, coverageOwned :: Bool,
 
 -- | A role's events by class and its fallback-site entries.
 data RoleSummary = RoleSummary
-  { summaryClasses :: M.Map Coverage Int
-  , summaryFallbackEntries :: Int
-  , summaryEvents :: Int
+  { summaryClasses :: !(M.Map Coverage Int)
+  , summaryFallbackEntries :: !Int
+  , summaryEvents :: !Int
   }
   deriving (Eq, Show)
 
 -- | The latest stage entry's class on a core, and whether `0xbfa234` has since been entered as the
 -- `kind_switch` service.
-data Latest = Latest {latestClass :: EventClass, latestServiceSwitch :: Bool}
+data Latest = Latest {latestClass :: !EventClass, latestServiceSwitch :: !Bool}
 
-data Walk = Walk {walkLatest :: M.Map Int Latest, walkSummary :: RoleSummary, walkFailures :: [String]}
+data Walk = Walk {walkLatest :: !(M.Map Int Latest), walkSummary :: !RoleSummary, walkFailures :: ![String]}
 
 -- | Classifies each stage entry from its registers and its block read; for the owned role while the
 -- engine is published, an entry to `0xbfa234` returning to 'fallbackReturn' fails when the latest

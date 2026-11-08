@@ -22,7 +22,7 @@ module Emulation.ObservationStream
   , withRowReader
   ) where
 
-import Control.Exception (bracket)
+import Control.Exception (bracket, evaluate)
 import Control.Monad (foldM, forM_, unless)
 import Data.Aeson (Value (..), eitherDecodeStrict', encode, object, toJSON, withObject, (.:), (.=))
 import qualified Data.Aeson as J
@@ -136,7 +136,7 @@ foldTraceHitSources sources step initial = do
                         else do
                           current <- readIORef state
                           next <- foldM step current (tracePageHits page)
-                          writeIORef state next
+                          writeIORef state $! next
                           writeIORef cursor (TraceHitCursor (from + length (tracePageHits page)))
                           loop
       loop
@@ -149,7 +149,10 @@ foldTraceHitSources sources step initial = do
 foldTraceHitLines :: FilePath -> Value -> (a -> B.ByteString -> IO a) -> a -> IO (Either String a)
 foldTraceHitLines directory value step initial = case value of
   Object fields -> case KM.lookup "trace_hits" fields of
-    Just (Array rows) -> Right <$> foldM (\state row -> step state (BL.toStrict (encode row))) initial (foldr (:) [] rows)
+    Just (Array rows) -> Right <$> foldM (\state row -> do
+      next <- step state (BL.toStrict (encode row))
+      _ <- evaluate next
+      pure next) initial (foldr (:) [] rows)
     Just raw@(Object _) -> case parseEither (J.parseJSON :: Value -> Parser TraceHitRef) raw of
       Left problem -> pure (Left ("trace_hits reference: " ++ problem))
       Right ref -> foldSidecarLines directory ref step initial
@@ -191,9 +194,10 @@ foldSidecarLines directory ref step initial
                 else do
                   currentState <- readIORef state
                   next <- step currentState line
+                  _ <- evaluate next
                   writeIORef state next
                   current <- readIORef count
-                  writeIORef count (current + 1)
+                  writeIORef count $! (current + 1)
                 loop
     loop
     problem <- readIORef failure
@@ -419,9 +423,10 @@ foldSidecar directory ref step initial
                     case step currentState row of
                       Left stepProblem -> writeIORef failure (Just stepProblem)
                       Right next -> do
+                        _ <- evaluate next
                         writeIORef state next
                         current <- readIORef count
-                        writeIORef count (current + 1)
+                        writeIORef count $! (current + 1)
                 loop
     loop
     problem <- readIORef failure
