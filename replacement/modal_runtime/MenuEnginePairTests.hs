@@ -4,10 +4,13 @@
 module Main (main) where
 
 import Control.Monad (unless)
+import Data.Aeson (Value (..), object, (.=))
+import Data.Aeson.Types (parseEither)
 import qualified Data.ByteString as B
 import Data.Bits (shiftR)
 import Data.Either (isLeft)
 import qualified Data.Map.Strict as M
+import qualified Data.Text as T
 import Data.Word (Word32)
 import Replacement.ModalRuntime.MenuEngineClass
 import Replacement.ModalRuntime.MenuEnginePair
@@ -78,24 +81,24 @@ stage kind slot ident = StageEvent kind slot ident 0
 
 entry :: Int -> Word32 -> Word32 -> StageEvent -> Hit
 entry core record cursor (StageEvent kind slot ident extra) =
-  Hit StageEntry core (kind, slot, ident, extra) (Just 0xca4680) Nothing [blockBytesFor record cursor (rowsIn record), B.replicate 8 0]
+  Hit StageEntry core (kind, slot, ident, extra) (Just 0xca4680) Nothing [blockBytesFor record cursor (rowsIn record), B.replicate 8 0] Nothing Nothing
 
 fallback :: Int -> Hit
-fallback core = Hit KindSwitch core (0, 0, 0, 0) (Just fallbackReturn) Nothing []
+fallback core = Hit KindSwitch core (0, 0, 0, 0) (Just fallbackReturn) Nothing [] Nothing Nothing
 
 -- | An entry to `0xbfa234` as the adapter's `kind_switch` service.
 serviceSwitch :: Int -> Hit
-serviceSwitch core = Hit KindSwitch core (0xf, 3, 0x15, 0) (Just 0x00bfa8f0) Nothing []
+serviceSwitch core = Hit KindSwitch core (0xf, 3, 0x15, 0) (Just 0x00bfa8f0) Nothing [] Nothing Nothing
 
 seek :: Int -> Hit
-seek core = Hit Seek core (0xe, 3, 5, 0x1d) (Just 0x00c40100) Nothing []
+seek core = Hit Seek core (0xe, 3, 5, 0x1d) (Just 0x00c40100) Nothing [] Nothing Nothing
 
 post :: Word32 -> Hit
-post token = Hit EventPost 0 (0x1d, 0xf6, token, 0xf000) (Just 0xca47f0) Nothing []
+post token = Hit EventPost 0 (0x1d, 0xf6, token, 0xf000) (Just 0xca47f0) Nothing [] Nothing Nothing
 
 segment :: [(B.ByteString)] -> [Hit] -> Observation
 segment blocks hits = Observation "picker-keys" EngineResident
-  ([(label, B.replicate 8 1) | label <- drop 1 engineReads] ++ [("menu-block", block) | block <- blocks]) hits
+  ([(label, B.replicate 8 1) | label <- drop 1 engineReads] ++ [("menu-block", block) | block <- blocks]) hits Nothing
 
 unloaded :: Observation -> Observation
 unloaded observation = observation {observationResidency = EngineUnloaded}
@@ -105,12 +108,37 @@ entryAt sp = (entry 0 0x1000 0 (stage 4 3 1)) {hitSp = Just sp}
 
 -- | A segment whose task-1 stack read has one word changed at `offset` (none for 0).
 stacked :: Int -> [Hit] -> Observation
-stacked offset hits = Observation "picker-keys" EngineResident [("task1-stack", stack)] hits
+stacked offset hits = Observation "picker-keys" EngineResident [("task1-stack", stack)] hits Nothing
  where
   stack = if offset == 0 then B.replicate 0xc00 0 else B.replicate offset 0 <> B.pack [1, 0, 0, 0] <> B.replicate (0xc00 - offset - 4) 0
 
 main :: IO ()
 main = do
+  let fixture extra = object
+        ["phase" .= String "picker-keys", "reads" .= ([] :: [Value]),
+         "trace_hits" .= [object (["site" .= String "menu-stage-entry", "core" .= (0 :: Int),
+           "r0" .= String "0x4", "r1" .= String "0x3", "r2" .= String "0x1", "r3" .= String "0x0",
+           "memory" .= [String "01020304"]] ++ extra)]]
+      legacy = parseEither (parseObservation EngineResident) (fixture [])
+      withStack = parseEither (parseObservation EngineResident) (fixture
+        ["stack_memory" .= [object ["kind" .= String "sp", "sp" .= (-4 :: Int),
+          "address" .= String "0x1000", "bytes" .= String "05060708"]]])
+  unless (fmap observationHits legacy == Right [Hit StageEntry 0 (4, 3, 1, 0) Nothing Nothing [B.pack [1, 2, 3, 4]] Nothing Nothing]
+      && withStack == legacy) $ do
+    putStrLn "FAIL: existing receipt reads survive optional stack-relative records"
+    exitFailure
+  let memoryFixture :: T.Text -> Value
+      memoryFixture bytes = object
+        ["phase" .= String "bytes","reads" .= [object ["label" .= String "payload","bytes" .= bytes]]
+        ,"trace_hits" .= ([] :: [Value])]
+      decodeBytes bytes = fmap observationReads (parseEither (parseObservation EngineResident) (memoryFixture bytes))
+      largeHex = T.replicate 262144 "00ffA57c"
+      expectedBytes = B.concat (replicate 262144 (B.pack [0,255,165,124]))
+  unless (decodeBytes largeHex == Right [("payload",expectedBytes)]
+    && decodeBytes "" == Right [("payload",B.empty)]
+    && all (isLeft . decodeBytes) ["0","gg","é0","00ffA57cx"]) $ do
+      putStrLn "FAIL: large mixed-case byte fields or malformed hex decoding"
+      exitFailure
   let cases =
         [ ("a row step on a wrapping queried node is owned", classOf 0x1000 0 (stage 4 3 1) == Right (OwnedEvent (RowMove Down)))
         , ("a step of the node's rows per page is a page move", classOf 0x1000 0 (stage 5 3 9) == Right (FallbackEvent PageStep))
@@ -188,7 +216,7 @@ main = do
             fmap summaryFallbackEntries (checkRole tree OwnedRole
               [unloaded (segment [] [entry 0 0x1000 0 (stage 0xe 3 0x1d), fallback 0, entry 0 0x2000 0 (stage 0xf 3 0x1d), fallback 0])]) == Right 2)
         , ("a guard-trap entry fails the owned role after unload too",
-            isLeft (checkRole tree OwnedRole [unloaded (segment [] [Hit GuardTrap 0 (0, 0, 0, 0) (Just 0) Nothing []])]))
+            isLeft (checkRole tree OwnedRole [unloaded (segment [] [Hit GuardTrap 0 (0, 0, 0, 0) (Just 0) Nothing [] Nothing Nothing])]))
         , ("a segment's residency is that of its position, so a phase repeated after ram-unload is unloaded there",
             let segments = segmentResidencies ["ram-push", "segment keys", "segment check", "ram-unload", "segment keys"]
              in map (\(index, phase) -> residencyAt segments index phase) [(0, "keys"), (1, "check"), (2, "keys")]
@@ -198,9 +226,9 @@ main = do
         , ("an observation past the run's segments refuses",
             isLeft (residencyAt (segmentResidencies ["segment keys"]) 1 "keys"))
         , ("an entry to the adapter's guard trap fails the role",
-            isLeft (checkRole tree OwnedRole [segment [] [Hit GuardTrap 0 (0, 0, 0, 0) (Just 0) Nothing []]]))
+            isLeft (checkRole tree OwnedRole [segment [] [Hit GuardTrap 0 (0, 0, 0, 0) (Just 0) Nothing [] Nothing Nothing]]))
         , ("a stage entry without its block read refuses",
-            isLeft (checkRole tree OwnedRole [segment [] [Hit StageEntry 0 (4, 3, 1, 0) Nothing Nothing []]]))
+            isLeft (checkRole tree OwnedRole [segment [] [Hit StageEntry 0 (4, 3, 1, 0) Nothing Nothing [] Nothing Nothing]]))
         , ("entries within the bound and an unchanged stack pass the stack check",
             checkStack 2000 [stacked 0 [entryAt 0x00a4cc78], stacked 0 []] == Right (StackReport (Just (0x00a4cc78 - 2000)) Nothing))
         , ("an entry whose sp less the bound falls below task 1's stack fails",

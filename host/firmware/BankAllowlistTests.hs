@@ -36,6 +36,12 @@ main = do
     check (path ++ " passes the allowlist; violations: " ++ show (map renderFinding (violations report))) (null (violations report))
 
   cleanElf <- either fail pure (parseElf clean)
+  let tagged identity = cleanElf
+        { elfSymbols = Symbol "RAM_PUSH_BANK_VARIANT" identity 0 OtherSymbol Absolute : elfSymbols cleanElf }
+  check "render ELF identity refuses the standard publication count"
+    (case checkBank allowlist (tagged 1) of Left _ -> True; Right _ -> False)
+  check "unknown ELF bank identity refuses"
+    (case checkBank allowlist (tagged 2) of Left _ -> True; Right _ -> False)
   let symbol name = maybe (error ("no symbol " ++ name)) symbolValue (find ((== name) . symbolName) (elfSymbols cleanElf))
       function name =
         case find (\s -> symbolName s == name && symbolKind s == FunctionSymbol) (elfSymbols cleanElf) of

@@ -15,11 +15,6 @@ pub use layout::GuestAddress;
 #[repr(transparent)]
 pub struct LockStamp(pub u32);
 
-impl LockStamp {
-    pub const fn raw(self) -> u32 {
-        self.0
-    }
-}
 
 /// The word an entry operates on. The stock entry takes `r0` and substitutes
 /// [`Self::DEFAULT_GLOBAL`] when it is zero.

@@ -1,7 +1,8 @@
 module Main (main) where
 
 import Control.Monad (forM_, unless)
-import Data.Aeson (Value, encode, object, (.=))
+import Data.Aeson (Value (..), eitherDecodeStrict', encode, object, (.=))
+import qualified Data.Aeson.KeyMap as KM
 import Data.Bits (shiftL, shiftR, (.&.), (.|.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
@@ -54,6 +55,16 @@ main = do
   check "both scoped activation words are retained" (length (comparisonModal scopedReport) == 2)
   check "the standard image reports no modal hook" (null (comparisonModal report))
   check "cross-variant comparison refuses" (refused (comparePackages left (scoped rightPlacement Clean)))
+  let tagged tag (PackageBytes subjectElf subjectRuntime document subjectPlan) =
+        case eitherDecodeStrict' document of
+          Right (Object fields) -> PackageBytes subjectElf subjectRuntime (BL.toStrict (encode (Object (KM.insert "bank_variant" (String tag) fields)))) subjectPlan
+          _ -> error "fixture manifest object required"
+  check "explicit standard identity parses without changing comparison behavior"
+    (accepted (comparePackages (tagged "standard" left) (tagged "standard" right)))
+  check "manifest identity refuses publication count disagreement"
+    (refused (comparePackages (tagged "modal75" left) (tagged "modal75" right)))
+  check "unknown manifest identity refuses"
+    (refused (comparePackages (tagged "unknown" left) (tagged "unknown" right)))
   mapM_ (\damage -> check (show damage ++ " refuses even when both relocated selectors match")
       (refused (comparePackages (scoped leftPlacement damage) (scoped rightPlacement damage))))
     [ModalWrongController,ModalWrongFlags,ModalStockResume,ModalOwnedTarget,ModalBL,ModalWrongPush,ModalWrongSize,MissingModalHook]

@@ -113,6 +113,27 @@ walk elf inRuntime isData function = go S.empty [functionStart function] 0 []
                           maybe unresolved Right (ELF.wordAt elf (fromIntegral (toInteger at + 8 + toInteger offset)))
                     _ | register `elem` W.written instruction -> unresolved
                     _ -> resolve register (at - 4) (budget - 1) high
+            boundedTable = do
+              let decoded at = A32.decode at <$> ELF.wordAt elf at
+              (index, limit) <- case (decoded address, decoded (address - 4), decoded (address - 8), decoded (address - 12)) of
+                ( Just (A32.Load (A32.Cond 14) A32.Word False destination table (A32.OffsetRegister True index A32.LSL 2) A32.OffsetOnly)
+                  , Just (A32.DataProcessing (A32.Cond 14) A32.ADD False table' source (A32.Immediate 0))
+                  , Just (A32.Branch (A32.Cond 8) False fallback)
+                  , Just (A32.DataProcessing (A32.Cond 14) A32.CMP True _ compared (A32.Immediate limit)))
+                  | destination == A32.pc && table == table' && table /= index && source == A32.pc && compared == index
+                    && address >= functionStart function + 12 && inside fallback && not (isData fallback) -> Right (index, limit)
+                _ -> Left (name ++ ": unbounded loaded branch at " ++ hex address)
+              let tableStart = address + 4
+                  tableEnd = toInteger tableStart + 4 * (toInteger limit + 1)
+              unless (tableEnd <= toInteger (functionEnd function) && index /= A32.pc)
+                (Left (name ++ ": branch table leaves function"))
+              targets <- mapM (\at -> do
+                unless (isData at) (Left (name ++ ": branch table lacks data mapping"))
+                target <- maybe (Left (name ++ ": missing branch table word")) Right (ELF.wordAt elf at)
+                unless (target `mod` 4 == 0 && inside target && not (isData target))
+                  (Left (name ++ ": branch table target leaves function code"))
+                pure target) [tableStart, tableStart + 4 .. fromInteger tableEnd - 4]
+              pure targets
             unaccounted = Left (name ++ ": stack pointer write at " ++ hex address ++ " is neither an immediate adjustment nor a restore from r11")
         case W.classify W.Permissive address word of
           W.Reserve amount -> continue amount []
@@ -137,7 +158,9 @@ walk elf inRuntime isData function = go S.empty [functionStart function] 0 []
           W.Refuse reason -> case reason of
             W.VariableReservation -> Left (name ++ ": variable stack reservation at " ++ hex address)
             W.ComputedBranch -> Left (name ++ ": computed branch at " ++ hex address)
-            W.LoadedBranch -> Left (name ++ ": loaded branch at " ++ hex address)
+            W.LoadedBranch -> do
+              targets <- boundedTable
+              go seen' (targets ++ rest) frame exits
             W.FloatingPoint -> Left (name ++ ": floating-point instruction at " ++ hex address ++ " is not accounted")
             _ -> unaccounted
 
