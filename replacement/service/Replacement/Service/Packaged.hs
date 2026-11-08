@@ -17,15 +17,21 @@ module Replacement.Service.Packaged
   ) where
 
 import Control.Exception (IOException, try)
-import Data.Aeson (FromJSON (..), Value (..), eitherDecodeStrict', withObject, withText, (.:), (.:?), (.!=))
-import Data.Aeson.Types (Parser)
+import Data.Aeson (FromJSON (..), Value (..), eitherDecodeStrict', withObject, withText, (.:), (.:?))
+import qualified Data.Aeson.KeyMap as KM
+import Data.Aeson.Types (Parser, parseEither)
 import qualified Data.ByteString as B
 import Data.Char (isHexDigit)
 import Data.List (find, findIndex, nub)
 import qualified Data.Map.Strict as M
+import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Word (Word32, Word64)
+import Emulation.ObservationStream
+  ( ObservationRef (..), TraceHitRef (..), VerifiedObservation (..)
+  , decodeObservationRef, foldTraceHitRows, loadVerifiedObservation
+  )
 import Emulation.Sha256 (sha256, sha256File, sha256Hex)
 import Emulation.Symbols (SymbolTable, parseSymbolTable, resolveSymbol)
 import Emulation.SegmentReceipt (SegmentName, segmentName, segmentNameText)
@@ -137,16 +143,27 @@ instance FromJSON TraceHit where
       <*> (hit .: "r2" >>= parseRegister)
       <*> (hit .: "r3" >>= parseRegister)
 
-data Observation = Observation
-  { observationPhase :: SegmentName
-  , observationHits :: [TraceHit]
-  } deriving (Eq, Show)
+-- | A receipt observation is either the legacy inline trace-hit array or the current reference to
+-- an observation document whose own @trace_hits@ field names a sidecar.
+data ObservationEntry
+  = InlineObservation SegmentName [TraceHit]
+  | ReferencedObservation SegmentName ObservationRef
+  deriving (Eq)
 
-instance FromJSON Observation where
-  parseJSON = withObject "observation" $ \observation ->
-    Observation
-      <$> observation .: "phase"
-      <*> observation .:? "trace_hits" .!= []
+observationEntryPhase :: ObservationEntry -> SegmentName
+observationEntryPhase (InlineObservation phase _) = phase
+observationEntryPhase (ReferencedObservation phase _) = phase
+
+instance FromJSON ObservationEntry where
+  parseJSON = withObject "observation" $ \fields -> do
+    phase <- fields .: "phase"
+    trace <- (fields .:? "trace_hits" :: Parser (Maybe Value))
+    case trace of
+      Nothing -> pure (InlineObservation phase [])
+      Just (Array _) -> InlineObservation phase <$> fields .: "trace_hits"
+      Just (Object _) ->
+        either fail (pure . ReferencedObservation phase) (decodeObservationRef (Object fields))
+      Just _ -> fail "trace_hits is neither an array nor a reference"
 
 data RelinkMode = RelinkReviewed | RelinkUnreviewed deriving (Eq, Show)
 
@@ -281,12 +298,12 @@ data E2E = E2E
   , e2eRuntime :: RuntimeFacts
   , e2eRelink :: RelinkFacts
   , e2eStart :: StartFacts
-  , e2eObservations :: [Observation]
+  , e2eObservations :: [ObservationEntry]
   , e2eTrajectories :: [TrajectoryResult]
   , e2eUnload :: Maybe String
   , e2eMailbox :: Mailbox
   , e2eDeclaredSites :: [DeclaredTraceSite]
-  } deriving (Eq, Show)
+  } deriving (Eq)
 
 instance FromJSON E2E where
   parseJSON = withObject "e2e result" $ \result ->
@@ -444,16 +461,19 @@ qualifyPackaged (PackagedInputs receipt packageDirectory referenceDat) = do
                             , packagedRelinkMode = relinkMode (e2eRelink result)
                             , packagedOutcome = e2eOutcome result
                             }
-                          (sequences, retained, traceProblems) = analyzeObservations result
+                      evidence <- analyzeObservations receipt result
+                      let sequences = evidenceSequences evidence
+                          retained = evidenceRetained evidence
+                          phases = map observationEntryPhase (e2eObservations result)
                           rowResults = rowEvidence sequences
                           problems = nub
                             (schemaProblems result
                               ++ modeProblems result
                               ++ identityProblems package manifest result actualDat actualKernel actualArchive actualFacts referenceDat symbolsDigest
                               ++ validateDeclaredSites table (e2eDeclaredSites result)
-                              ++ traceProblems
+                              ++ evidenceProblems evidence
                               ++ rowProblemsFor rowResults
-                              ++ lifecycleChecks result
+                              ++ lifecycleChecks phases (evidenceAfterUnloadStock evidence) result
                               ++ crossSequenceProblems sequences)
                       pure (Right PackagedReport
                         { packagedStatus = if null problems then PackagedQualified else PackagedRefused
@@ -462,7 +482,7 @@ qualifyPackaged (PackagedInputs receipt packageDirectory referenceDat) = do
                         , packagedRetainedHits = retained
                         , packagedProblems = problems
                         , packagedIdentities = identities
-                        , packagedPhases = nub (map observationPhase (e2eObservations result) ++ map trajectoryName (e2eTrajectories result))
+                        , packagedPhases = nub (phases ++ map trajectoryName (e2eTrajectories result))
                         , packagedUnload = e2eUnload result
                         })
                     _ -> pure (Left "package requires exactly one bank.a and one build-facts.txt input")
@@ -586,113 +606,247 @@ validateDeclaredSites table sites =
         | otherwise -> Right (TraceAddress (address + offset))
     duplicates values = [ value | value <- nub values, length (filter (== value) values) > 1 ]
 
-data PositionedHit = PositionedHit
-  { positionedObservation :: Int
-  , positionedPhase :: SegmentName
-  , positionedHit :: TraceHit
+-- | One owned 0x110 interval under construction. The entry validates once, then each expected site
+-- is consumed in order, so hits stream through instead of collecting into a list.
+data OpenSequence = OpenSequence
+  { openPhase :: SegmentName
+  , openEntry :: TraceHit
+  , openRow :: Word32
+  , openExpected :: Word32
+  , openTrampoline :: Maybe TraceHit
+  , openStock :: Maybe TraceHit
+  , openNested :: [TraceHit]
+  , openNestedCount :: Int
+  , openCore :: CoreId
+  , openCoresMatch :: Bool
+  , openLastInstructions :: Word64
+  , openIncreasing :: Bool
   }
 
-analyzeObservations :: E2E -> ([OwnedSequence], [TraceHit], [String])
-analyzeObservations result =
+data HitAnalysis = HitAnalysis
+  { analysisSequences :: [OwnedSequence]
+  , analysisRetained :: [TraceHit]
+  , analysisProblem :: Maybe String
+  , analysisFailure :: Maybe String
+  , analysisPending :: Maybe OpenSequence
+  , analysisLastInstructions :: Maybe Word64
+  , analysisRegressed :: Bool
+  , analysisAfterUnloadStock :: Bool
+  }
+
+data ObservationEvidence = ObservationEvidence
+  { evidenceSequences :: [OwnedSequence]
+  , evidenceRetained :: [TraceHit]
+  , evidenceProblems :: [String]
+  , evidenceAfterUnloadStock :: Bool
+  }
+
+-- | Fold every observation's trace rows, inline or through the shared verified-reference reader,
+-- into the owned-interval evidence the report exposes.
+analyzeObservations :: FilePath -> E2E -> IO ObservationEvidence
+analyzeObservations receipt result = do
   let observations = e2eObservations result
-      boundary = findIndex ((== serviceAfterUnloadPhase) . observationPhase) observations
-      positions = concat
-        [ [PositionedHit observationIndex (observationPhase observation) hit
-          | hit <- observationHits observation]
-        | (observationIndex, observation) <- zip [0 :: Int ..] observations
-        ]
-      (sequences, retained, problems) = analyzeHits boundary positions
-      orderProblems =
-        [ "trace instruction counts regress across retained or owned events"
-        | not (nondecreasing (map (instructionCountValue . hitInstructions . positionedHit) positions)) ]
-   in (sequences, retained, problems ++ orderProblems)
-
-analyzeHits :: Maybe Int -> [PositionedHit] -> ([OwnedSequence], [TraceHit], [String])
-analyzeHits boundary = go [] [] []
+      boundary = findIndex ((== serviceAfterUnloadPhase) . observationEntryPhase) observations
+      initial = HitAnalysis [] [] Nothing Nothing Nothing Nothing False False
+  final <- collectObservations boundary receipt 0 initial observations
+  pure ObservationEvidence
+    { evidenceSequences = reverse (analysisSequences final)
+    , evidenceRetained = reverse (analysisRetained final)
+    , evidenceProblems =
+        catMaybes [analysisProblem final, analysisFailure final]
+          ++ [ "trace instruction counts regress across retained or owned events"
+             | analysisRegressed final ]
+    , evidenceAfterUnloadStock = analysisAfterUnloadStock final
+    }
   where
-    go sequences retained problems [] = (reverse sequences, reverse retained, reverse problems)
-    go sequences retained problems (position : rest)
-      | hitSite hit == entryLabel =
-          if maybe False (positionedObservation position >=) boundary
-            then (reverse sequences, reverse retained, reverse ("svc-rust-entry occurs after service-after-unload" : problems))
-            else case parseSequence (position : rest) of
-              Left problem -> (reverse sequences, reverse retained, reverse (problem : problems))
-              Right (ownedSequence, remaining) -> go (ownedSequence : sequences) retained problems remaining
-      | hitSite hit == stockLabel = go sequences (hit : retained) problems rest
-      | otherwise = (reverse sequences, reverse retained, reverse (("unexpected trace event outside an owned interval: " ++ traceSiteLabelText (hitSite hit)) : problems))
-      where
-        hit = positionedHit position
+    collectObservations _ _ _ analysis [] =
+      pure $ case analysisFailure analysis of
+        Just _ -> analysis
+        Nothing -> maybe analysis (finishOpen analysis) (analysisPending analysis)
+    collectObservations boundary directory index analysis (observation : rest) = do
+      next <- case analysisFailure analysis of
+        Just _ -> pure analysis
+        Nothing -> collectObservation directory boundary index analysis observation
+      collectObservations boundary directory (index + 1) next rest
 
-parseSequence :: [PositionedHit] -> Either String (OwnedSequence, [PositionedHit])
-parseSequence (entryPosition : rest) =
-  let entry = positionedHit entryPosition
-   in case selectedRow (hitR1 entry) of
-        Just row | hitR0 entry == 0x110 ->
-          case expect trampolineLabel rest of
-            Left problem -> Left problem
-            Right (trampoline, rest1) ->
-              case expect stockLabel rest1 of
-                Left problem -> Left problem
-                Right (stock, rest2) ->
-                  -- private-data/analysis/x-m1-1.50/filmsim/fn_d52684.c:2539-2547:
-                  -- case 0x110 calls FUN_00d52684(5,0x1a); the second call is conditional.
-                  let (nestedPositions, rest3) = span isNested rest2
-                      nested = map positionedHit nestedPositions
-                      ordered = entry : trampoline : stock : nested
-                      expected = rowStateWord (serviceRowExpected row)
-                   in case expect returnLabel rest3 of
-                        Left problem -> Left problem
-                        Right (returned, rest4) ->
-                          let problems =
-                                [ "svc-stock-trampoline arguments differ from svc-rust-entry"
-                                | argumentPair trampoline /= argumentPair entry ]
-                                  ++ [ "stock-row-probe outer arguments differ from svc-rust-entry"
-                                     | argumentPair stock /= argumentPair entry ]
-                                  ++ [ "0x110 owned call must contain one or two FUN_00d52684(5,0x1a) nested calls"
-                                     | length nested < 1 || length nested > 2 ]
-                                  ++ [ "owned service trace crosses cores"
-                                     | length (nub (map hitCore (returned : ordered))) /= 1 ]
-                                  ++ [ "owned service trace instruction counts are not strictly increasing"
-                                     | not (strictlyIncreasing (map (instructionCountValue . hitInstructions) (ordered ++ [returned]))) ]
-                                  ++ [ "svc-stock-return returned " ++ show (hitR0 returned) ++ ", expected " ++ show expected
-                                     | hitR0 returned /= expected ]
-                           in case problems of
-                                [] -> Right
-                                  ( OwnedSequence
-                                      { ownedPhase = positionedPhase entryPosition
-                                      , ownedRow = serviceRowToken row
-                                      , ownedCore = hitCore entry
-                                      , ownedEntry = entry
-                                      , ownedTrampoline = trampoline
-                                      , ownedStock = stock
-                                      , ownedNested = nested
-                                      , ownedReturn = returned
-                                      }
-                                  , rest4
-                                  )
-                                problem : _ -> Left problem
-        _ -> Left "svc-rust-entry arguments are outside the five selected 0x110 rows"
-parseSequence _ = Left "svc-rust-entry is missing"
+collectObservation :: FilePath -> Maybe Int -> Int -> HitAnalysis -> ObservationEntry -> IO HitAnalysis
+collectObservation _ boundary index analysis (InlineObservation phase hits) =
+  pure (foldl' (ingestHit boundary index phase) analysis hits)
+collectObservation receipt boundary index analysis (ReferencedObservation phase reference) = do
+  loaded <- loadVerifiedObservation receipt reference
+  case loaded of
+    Left problem -> pure analysis { analysisFailure = Just problem }
+    Right verified ->
+      case traceReferenceProblem reference (verifiedObservationValue verified) of
+        Left problem -> pure analysis { analysisFailure = Just problem }
+        Right () -> do
+          folded <- foldTraceHitRows receipt (verifiedObservationValue verified) step analysis
+          pure $ either (\problem -> analysis { analysisFailure = Just problem }) id folded
+  where
+    step state row = do
+      hit <- either (Left . ("trace-hit row: " ++)) Right (parseEither (parseJSON :: Value -> Parser TraceHit) row)
+      pure (ingestHit boundary index phase state hit)
 
-expect :: TraceSiteLabel -> [PositionedHit] -> Either String (TraceHit, [PositionedHit])
-expect label (position : rest)
-  | hitSite (positionedHit position) == label = Right (positionedHit position, rest)
-  | otherwise = Left ("expected " ++ traceSiteLabelText label ++ ", observed " ++ traceSiteLabelText (hitSite (positionedHit position)))
-expect label [] = Left ("missing " ++ traceSiteLabelText label)
+-- | The receipt's trace-hit reference must name what the document carries. Row integrity, including
+-- a sidecar's digest and count, stays with the shared fold.
+traceReferenceProblem :: ObservationRef -> Value -> Either String ()
+traceReferenceProblem reference document = case document of
+  Object fields -> case KM.lookup "trace_hits" fields of
+    Just (Array rows) ->
+      let expected = observationRefTraceHits reference
+       in if traceHitRefCount expected /= length rows
+            then Left "inline trace-hit count differs from the observation reference"
+            else if traceHitRefPath expected /= observationRefPath reference
+              then Left "inline trace-hit reference names another file"
+              else if traceHitRefSha256 expected /= observationRefSha256 reference
+                then Left "inline trace-hit reference digest differs from the observation digest"
+                else Right ()
+    Just raw@(Object _) -> do
+      expected <- either (\problem -> Left ("trace_hits reference: " ++ problem)) Right (parseEither (parseJSON :: Value -> Parser TraceHitRef) raw)
+      if expected == observationRefTraceHits reference
+        then Right ()
+        else Left "trace-hit reference differs from the observation reference"
+    Just _ -> Left "trace_hits is neither an array nor a reference"
+    Nothing -> Left "trace_hits is missing"
+  _ -> Left "observation document is not an object"
 
-isNested :: PositionedHit -> Bool
-isNested position =
-  let hit = positionedHit position
-   in hitSite hit == stockLabel && argumentPair hit == (5, 0x1a)
+ingestHit :: Maybe Int -> Int -> SegmentName -> HitAnalysis -> TraceHit -> HitAnalysis
+ingestHit boundary index phase analysis hit
+  | Just _ <- analysisProblem analysis = observed
+  | otherwise = case analysisPending observed of
+      Nothing -> startOrRetain phase boundary index observed hit
+      Just open -> continueOpen observed open hit
+  where
+    observed = observe phase analysis hit
+
+observe :: SegmentName -> HitAnalysis -> TraceHit -> HitAnalysis
+observe phase analysis hit =
+  analysis
+    { analysisLastInstructions = Just instructions
+    , analysisRegressed = analysisRegressed analysis
+        || maybe False (> instructions) (analysisLastInstructions analysis)
+    , analysisAfterUnloadStock = analysisAfterUnloadStock analysis
+        || (phase == serviceAfterUnloadStockPhase && hitSite hit == stockLabel)
+    }
+  where
+    instructions = instructionCountValue (hitInstructions hit)
+
+startOrRetain :: SegmentName -> Maybe Int -> Int -> HitAnalysis -> TraceHit -> HitAnalysis
+startOrRetain phase boundary index analysis hit
+  | hitSite hit == entryLabel =
+      if maybe False (index >=) boundary
+        then stopWith "svc-rust-entry occurs after service-after-unload" analysis
+        else case selectedRow (hitR1 hit) of
+          Just row | hitR0 hit == 0x110 ->
+            analysis { analysisPending = Just (openSequence phase row hit) }
+          _ -> stopWith "svc-rust-entry arguments are outside the five selected 0x110 rows" analysis
+  | hitSite hit == stockLabel =
+      analysis { analysisRetained = hit : analysisRetained analysis }
+  | otherwise =
+      stopWith ("unexpected trace event outside an owned interval: " ++ traceSiteLabelText (hitSite hit)) analysis
+
+openSequence :: SegmentName -> ServiceRow -> TraceHit -> OpenSequence
+openSequence phase row entry =
+  OpenSequence
+    { openPhase = phase
+    , openEntry = entry
+    , openRow = serviceRowToken row
+    , openExpected = rowStateWord (serviceRowExpected row)
+    , openTrampoline = Nothing
+    , openStock = Nothing
+    , openNested = []
+    , openNestedCount = 0
+    , openCore = hitCore entry
+    , openCoresMatch = True
+    , openLastInstructions = instructionCountValue (hitInstructions entry)
+    , openIncreasing = True
+    }
+
+continueOpen :: HitAnalysis -> OpenSequence -> TraceHit -> HitAnalysis
+continueOpen analysis open hit = case (openTrampoline open, openStock open) of
+  (Nothing, _) -> case expectHit trampolineLabel open hit of
+    Left problem -> stopWith problem analysis
+    Right open' -> analysis { analysisPending = Just open' { openTrampoline = Just hit } }
+  (Just _, Nothing) -> case expectHit stockLabel open hit of
+    Left problem -> stopWith problem analysis
+    Right open' -> analysis { analysisPending = Just open' { openStock = Just hit } }
+  (Just trampoline, Just stock)
+    -- private-data/analysis/x-m1-1.50/filmsim/fn_d52684.c:2539-2547:
+    -- case 0x110 calls FUN_00d52684(5,0x1a); the second call is conditional.
+    | hitSite hit == stockLabel, argumentPair hit == (5, 0x1a) ->
+        analysis { analysisPending = Just (nestedOpen open hit) }
+    | otherwise -> case expectHit returnLabel open hit of
+        Left problem -> stopWith problem analysis
+        Right open' -> finishSequence analysis open' trampoline stock hit
+
+expectHit :: TraceSiteLabel -> OpenSequence -> TraceHit -> Either String OpenSequence
+expectHit label open hit
+  | hitSite hit == label = Right (extendOpen open hit)
+  | otherwise = Left ("expected " ++ traceSiteLabelText label ++ ", observed " ++ traceSiteLabelText (hitSite hit))
+
+extendOpen :: OpenSequence -> TraceHit -> OpenSequence
+extendOpen open hit =
+  let instructions = instructionCountValue (hitInstructions hit)
+   in open
+        { openCoresMatch = openCoresMatch open && hitCore hit == openCore open
+        , openIncreasing = openIncreasing open && openLastInstructions open < instructions
+        , openLastInstructions = instructions
+        }
+
+nestedOpen :: OpenSequence -> TraceHit -> OpenSequence
+nestedOpen open hit =
+  (extendOpen open hit)
+    { openNested = if length (openNested open) < 3 then openNested open ++ [hit] else openNested open
+    , openNestedCount = openNestedCount open + 1
+    }
+
+finishSequence :: HitAnalysis -> OpenSequence -> TraceHit -> TraceHit -> TraceHit -> HitAnalysis
+finishSequence analysis open trampoline stock returned =
+  case problems of
+    [] -> analysis
+      { analysisPending = Nothing
+      , analysisSequences =
+          OwnedSequence
+            { ownedPhase = openPhase open
+            , ownedRow = openRow open
+            , ownedCore = openCore open
+            , ownedEntry = openEntry open
+            , ownedTrampoline = trampoline
+            , ownedStock = stock
+            , ownedNested = openNested open
+            , ownedReturn = returned
+            } : analysisSequences analysis
+      }
+    problem : _ -> stopWith problem analysis
+  where
+    entry = openEntry open
+    expected = openExpected open
+    problems =
+      [ "svc-stock-trampoline arguments differ from svc-rust-entry"
+      | argumentPair trampoline /= argumentPair entry ]
+        ++ [ "stock-row-probe outer arguments differ from svc-rust-entry"
+           | argumentPair stock /= argumentPair entry ]
+        ++ [ "0x110 owned call must contain one or two FUN_00d52684(5,0x1a) nested calls"
+           | openNestedCount open < 1 || openNestedCount open > 2 ]
+        ++ [ "owned service trace crosses cores" | not (openCoresMatch open) ]
+        ++ [ "owned service trace instruction counts are not strictly increasing"
+           | not (openIncreasing open) ]
+        ++ [ "svc-stock-return returned " ++ show (hitR0 returned) ++ ", expected " ++ show expected
+           | hitR0 returned /= expected ]
+
+finishOpen :: HitAnalysis -> OpenSequence -> HitAnalysis
+finishOpen analysis open =
+  let label = case (openTrampoline open, openStock open) of
+        (Nothing, _) -> trampolineLabel
+        (Just _, Nothing) -> stockLabel
+        (Just _, Just _) -> returnLabel
+   in stopWith ("missing " ++ traceSiteLabelText label) analysis
+
+stopWith :: String -> HitAnalysis -> HitAnalysis
+stopWith problem analysis = analysis { analysisProblem = Just problem, analysisPending = Nothing }
 
 argumentPair :: TraceHit -> (Word32, Word32)
 argumentPair hit = (hitR0 hit, hitR1 hit)
-
-strictlyIncreasing :: [Word64] -> Bool
-strictlyIncreasing values = and (zipWith (<) values (drop 1 values))
-
-nondecreasing :: [Word64] -> Bool
-nondecreasing values = and (zipWith (<=) values (drop 1 values))
 
 crossSequenceProblems :: [OwnedSequence] -> [String]
 crossSequenceProblems sequences =
@@ -739,18 +893,16 @@ rowEvidence sequences =
   , let owned = [ownedSequence | ownedSequence <- sequences, ownedRow ownedSequence == serviceRowToken row]
   ]
 
-lifecycleChecks :: E2E -> [String]
-lifecycleChecks result =
+lifecycleChecks :: [SegmentName] -> Bool -> E2E -> [String]
+lifecycleChecks phases afterUnloadStock result =
   [ "packaged trajectory did not match service-page-cancel" | not (trajectoryMatched servicePageCancelPhase) ]
     ++ [ "packaged trajectory did not match service-field-reopen" | not (trajectoryMatched serviceFieldReopenPhase) ]
     ++ [ "packaged trajectory has no service-after-unload observation"
-       | not (any ((== serviceAfterUnloadPhase) . observationPhase) (e2eObservations result)) ]
+       | serviceAfterUnloadPhase `notElem` phases ]
     ++ [ "packaged trajectory has no post-unload stock observation"
-       | not (any ((== serviceAfterUnloadStockPhase) . observationPhase) (e2eObservations result)) ]
+       | serviceAfterUnloadStockPhase `notElem` phases ]
     ++ [ "post-unload stock observation has no stock probe activity"
-       | not (any (\observation -> observationPhase observation == serviceAfterUnloadStockPhase
-                     && any ((== stockLabel) . hitSite) (observationHits observation))
-              (e2eObservations result)) ]
+       | not afterUnloadStock ]
     ++ [ "packaged run has no unload outcome" | maybe True (null) (e2eUnload result) ]
     ++ mailboxProblems
   where
