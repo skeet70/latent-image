@@ -199,7 +199,11 @@ pendingOf = withObject "pending" $ \p -> do
       entryValue <- withObject "slot" (.: "entry") slot
       entryAddress <- parseHex entryValue
       terminal <- p .:? "terminal_memory" >>= traverse memoryOf
-      pure (Left (F.Pending semantic domain arguments before terminal task sp cpsr entryAddress entered))
+      history <- p .:? "history" >>= maybe (pure []) (mapM (withObject "boundary" $ \b -> (,) <$> b .: "kind" <*> b .: "cpsr"))
+      let saveCpsr = case [savedCpsr | (kind,savedCpsr) <- history, kind == ("save" :: T.Text)] of
+            [] -> Nothing
+            values -> Just (last values)
+      pure (Left (F.Pending semantic domain arguments before terminal task sp cpsr entryAddress entered saveCpsr))
     _ -> pure (Right entered)
 
 expect :: Refusal -> Bool -> Either Refusal ()
@@ -386,7 +390,7 @@ qualify bytes plan observation = do
   checkDemandCalls observation
   let calls = sortOn callFirst (obsCalls observation)
   forM_ calls $ \call -> checkCallEnvelope plan call >> checkCallForIn calls (obsRole observation) call
-  qualifySuffix observation (CallTotals (not (null calls)) (sum (map callCount calls)))
+  qualifySuffix plan observation (CallTotals (not (null calls)) (sum (map callCount calls)))
   pure (summary observation)
 
 qualifyPrefix :: B.ByteString -> Plan -> Observation -> Either Refusal ()
@@ -409,13 +413,20 @@ checkCallEnvelope plan call = do
   expect CallOutsidePlan (any (\entry -> entryDomain entry == callDomain call && entryAddress entry == callAddress call && entrySemantic entry == callSemantic call) (planEntries plan))
   expect Incomplete (callCount call > 0)
 
-qualifySuffix :: Observation -> CallTotals -> Either Refusal ()
-qualifySuffix observation totals = do
+checkPendingEnvelope :: Plan -> F.Pending -> Either Refusal ()
+checkPendingEnvelope plan pending =
+  expect CallOutsidePlan (any (\entry -> entryDomain entry == F.pendingDomain pending && entryAddress entry == Address (F.pendingEntry pending) && entrySemantic entry == F.pendingSemantic pending) (planEntries plan))
+
+qualifySuffix :: Plan -> Observation -> CallTotals -> Either Refusal ()
+qualifySuffix plan observation totals = do
   let (familyPending, otherPending) = obsPending observation
+      releases = [F.ReleaseWitness (familyTask call) [address | (address,_,_) <- familyWrites call] | call <- obsCalls observation, familyService call == Just FamilyRelease]
   expect Incomplete (hasCompletedClasses totals && obsReturns observation == completedCallCount totals
     && obsEntries observation == obsReturns observation + length familyPending + length otherPending
     && all (\entered -> entered <= obsInstructions observation && obsInstructions observation-entered <= Q.pendingWindow) otherPending)
-  forM_ familyPending $ \pending -> either (Left . familyRefusal) Right (F.checkPendingFamily pending)
+  forM_ familyPending $ \pending -> do
+    checkPendingEnvelope plan pending
+    either (Left . familyRefusal) Right (F.checkPendingFamily releases pending)
   expect ObserverError (obsError observation == Nothing && obsMachineError observation == Nothing)
   let milestones = obsMilestones observation
       phases = S.fromList (map Q.milestonePhase milestones)
@@ -579,11 +590,13 @@ checkCall :: Call -> Either Refusal ()
 checkCall = checkCallFor Owned
 
 checkCallFor :: Role -> Call -> Either Refusal ()
-checkCallFor = checkCallForIn []
+checkCallFor = checkCallForInWitnesses []
 
 checkCallForIn :: [Call] -> Role -> Call -> Either Refusal ()
-checkCallForIn calls role call = do
-  let witnesses = timerWitnesses calls
+checkCallForIn calls = checkCallForInWitnesses (timerWitnesses calls)
+
+checkCallForInWitnesses :: [F.TimerWitness] -> Role -> Call -> Either Refusal ()
+checkCallForInWitnesses witnesses role call = do
   case callSemantic call of
     FamilySemantic _ -> pure ()
     _ -> expect WrongCore (callCore call == if callDomain call==DomainA then 0 else 1)
@@ -614,6 +627,7 @@ timerWitnesses calls =
       _ -> []
   , let task = case kind of
           F.TimerConsumed -> maybe (boundaryTask boundary) id (M.lookup (Address (entry+8)) (boundaryMemory boundary))
+          F.TimerRemoved -> maybe (boundaryTask boundary) id (M.lookup (Address (entry+8)) (boundaryMemory boundary))
           _ -> boundaryTask boundary
   ]
 

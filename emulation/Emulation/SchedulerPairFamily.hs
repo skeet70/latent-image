@@ -4,7 +4,7 @@
 -- layout and the independent expected-state rules.
 module Emulation.SchedulerPairFamily
   ( FamilyCall (..), FamilyTrace (..), FamilyBoundary (..), FamilyBoundaryKind (..), FamilyCompletion (..)
-  , TimerKind (..), TimerWitness (..), Pending (..), FamilyRefusal (..), checkFamilyCall, checkPendingFamily ) where
+  , TimerKind (..), TimerWitness (..), Pending (..), ReleaseWitness (..), FamilyRefusal (..), checkFamilyCall, checkPendingFamily ) where
 
 import Control.Monad (foldM, forM, forM_, unless, when)
 import Data.Bits ((.&.), (.|.), complement, shiftL, shiftR)
@@ -129,11 +129,15 @@ data Pending = Pending
   , pendingCpsr :: Word32
   , pendingEntry :: Word32
   , pendingEntered :: Word64
+  , pendingSaveCpsr :: Maybe Word32
   } deriving (Eq,Show)
 
+-- | A completed release call's task and the addresses it wrote.
+data ReleaseWitness = ReleaseWitness { releaseTask :: Word32, releaseAddresses :: [Address] } deriving (Eq,Show)
+
 -- | Only a forever timed flag wait is modeled; every other pending family call fails closed.
-checkPendingFamily :: Pending -> Either FamilyRefusal ()
-checkPendingFamily pending = case (pendingSemantic pending, pendingTerminal pending) of
+checkPendingFamily :: [ReleaseWitness] -> Pending -> Either FamilyRefusal ()
+checkPendingFamily releases pending = case (pendingSemantic pending, pendingTerminal pending) of
   (FamilySemantic FlagTimedWait, Just terminal) -> foreverTimedWait terminal
   _ -> Left FamilyLifetime
   where
@@ -152,6 +156,7 @@ checkPendingFamily pending = case (pendingSemantic pending, pendingTerminal pend
       patternBefore <- wordAt (control+0x0c) before
       want <- argAt args 1
       mode <- argAt args 2
+      expect FamilyReturn (mode .&. 0xfffffffe == 0)
       expect FamilyLifetime (not (matches mode want patternBefore))
       wait <- wordAt (task+0x14) terminal
       expect FamilyLifetime (wait /= 0)
@@ -172,12 +177,26 @@ checkPendingFamily pending = case (pendingSemantic pending, pendingTerminal pend
       schedulerLock <- wordAt (if domain == DomainA then 0x400545c0 else 0x400e4580) terminal
       objectLock <- wordAt (if object == DomainA then 0x400545c4 else 0x400e4584) terminal
       expect FamilyLifetime (schedulerLock == 0 && objectLock == 0)
-      expect FamilyLifetime (pendingCpsr pending .&. 0x80 == 0)
+      saveCpsr <- maybe (Left FamilyLifetime) Right (pendingSaveCpsr pending)
+      expect FamilyLifetime (saveCpsr .&. 0x80 /= 0)
+      expect FamilyLifetime (saveCpsr .&. complement 0x80 == pendingCpsr pending .&. complement 0x80)
+      let own = [w | w <- releases, releaseTask w == task, Address objectLock `elem` releaseAddresses w]
+          elsewhere = [w | w <- releases, releaseTask w /= task, Address objectLock `elem` releaseAddresses w]
+      expect FamilyLifetime (not (null own) && null elsewhere)
       savedSp <- wordAt (task+0x18) terminal
       savedPc <- wordAt (task+0x1c) terminal
-      let resumeEntry = if domain == DomainA then 0x43668 else 0xd3668
-      expect FamilyLifetime (savedSp /= 0 && savedSp .&. 3 == 0 && savedPc == resumeEntry)
-      continuation <- wordAt (savedSp+32) terminal
+      stackBase <- wordAt (task+0x20) terminal
+      stackSize <- wordAt (task+0x24) terminal
+      let base = stackBase .&. complement 3
+          limit = base + stackSize
+          saved = savedSp .&. complement 3
+          entrySp = pendingSp pending .&. complement 3
+          resumeEntry = if domain == DomainA then 0x43668 else 0xd3668
+      expect FamilyLifetime (stackSize >= 36 && stackSize <= 0x10000 && base /= 0)
+      expect FamilyLifetime (saved >= base && saved + 36 <= limit)
+      expect FamilyLifetime (entrySp >= base && entrySp < limit)
+      expect FamilyLifetime (savedPc .&. complement 1 == resumeEntry .&. complement 1)
+      continuation <- wordAt (saved+32) terminal
       expect FamilyContinuation (inFamilyWindow domain continuation)
 
 flagConfig :: FamilyLayout -> Word32 -> Word32
@@ -272,17 +291,23 @@ checkTimerPath :: FamilyCall c => c -> [TimerWitness] -> FamilyExpected -> Famil
 checkTimerPath call witnesses expected trace = do
   let history = familyTraceHistory trace
       task = familyTask call
-      epoch = familyEpoch call
       ownInserts = [(value,boundary) | boundary <- history,familyBoundaryKind boundary==FamilyTimerInsertKind,Just value <- [familyBoundaryValue boundary]]
       ownRemoves = [(value,boundary) | boundary <- history,familyBoundaryKind boundary==FamilyTimerRemoveKind,Just value <- [familyBoundaryValue boundary]]
       ownConsumes = [(value,boundary) | boundary <- history,familyBoundaryKind boundary==FamilyTimerConsumeKind,Just value <- [familyBoundaryValue boundary]]
-      inserts = map fst ownInserts ++ [timerEntry w | w <- witnesses, timerKind w==TimerInserted, timerTask w==task, timerEpoch w==epoch]
-      removes = map fst ownRemoves ++ [timerEntry w | w <- witnesses, timerKind w==TimerRemoved, timerTask w==task, timerEpoch w>epoch]
-      consumes = map fst ownConsumes ++ [timerEntry w | w <- witnesses, timerKind w==TimerConsumed, timerTask w==task, timerEpoch w>epoch]
+      returnAt = maximum (0 : map familyBoundaryInstructions history)
+      armStart = case ownInserts of
+        ((_,boundary):_) -> familyBoundaryInstructions boundary
+        [] -> case [timerArmedAt w | w <- witnesses, timerKind w==TimerInserted, timerTask w==task, timerArmedAt w <= returnAt] of
+          [] -> 0
+          values -> minimum values
+      within w = timerArmedAt w >= armStart && timerArmedAt w <= returnAt
+      inserts = map fst ownInserts ++ [timerEntry w | w <- witnesses, timerKind w==TimerInserted, timerTask w==task, within w]
+      removes = map fst ownRemoves ++ [timerEntry w | w <- witnesses, timerKind w==TimerRemoved, timerTask w==task, within w]
+      consumes = map fst ownConsumes ++ [timerEntry w | w <- witnesses, timerKind w==TimerConsumed, timerTask w==task, within w]
       path = expectedTimer expected
   forM_ ownInserts $ \(value,boundary) -> checkTimerBoundary call value boundary True
   forM_ ownRemoves $ \(value,boundary) -> checkTimerBoundary call value boundary False
-  when (timerForbid path) $ expect FamilyTimer (null ownInserts && null ownRemoves && null [w | w <- witnesses, timerTask w==task, timerEpoch w==epoch])
+  when (timerForbid path) $ expect FamilyTimer (null ownInserts && null ownRemoves && null [w | w <- witnesses, timerTask w==task, within w])
   forM_ (timerArm path) $ \value -> expect FamilyTimer (value `elem` inserts)
   forM_ (timerWake path) $ \value -> expect FamilyTimer (value `elem` removes)
   forM_ (timerExpire path) $ \value -> expect FamilyTimer (value `elem` removes || value `elem` consumes)

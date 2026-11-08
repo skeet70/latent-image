@@ -6,6 +6,7 @@ import qualified Data.ByteString.Char8 as B
 import qualified Data.Map.Strict as M
 import Data.Word (Word32)
 import Emulation.SchedulerPairCheck
+import Emulation.SchedulerPairFamily (TimerKind (..), TimerWitness (..))
 import Emulation.SchedulerPairModel (Arguments (..), Memory)
 import Emulation.SchedulerPairPlan
 import qualified Emulation.SchedulerPairS2 as D
@@ -242,6 +243,10 @@ main = do
   assertRight "wake removes timer" (checkFamilyCall (flagWaitCall waitWrites 0 [timerBoundary TimerInsertBoundary flagTimerAddress 0x9000,timerBoundary TimerRemoveBoundary flagTimerAddress 0x9000]) [])
   assertLeft "expiry without pop" FamilyTimer (checkFamilyCall (flagWaitCall expiryWrites 0xffffffce [timerBoundary TimerInsertBoundary flagTimerAddress 0x9000]) [])
   assertRight "expiry tick pop" (checkFamilyCall (flagWaitCall expiryWrites 0xffffffce [timerBoundary TimerInsertBoundary flagTimerAddress 0x9000,tickBoundary flagTimerAddress]) [])
+  let expiryCall = flagWaitCall expiryWrites 0xffffffce [timerBoundary TimerInsertBoundary flagTimerAddress 0x9000]
+      consumeWitness armedAt = TimerWitness flagTimerAddress 0x9000 0 armedAt TimerConsumed
+  assertRight "consume witness inside arm-to-return" (checkFamilyCall expiryCall [consumeWitness 1])
+  assertLeft "consume witness after return" FamilyTimer (checkFamilyCall expiryCall [consumeWitness 2])
   assertRight "flag delete releases waiter" (checkFamilyCall (flagDeleteCall flagDeleteWrites) [])
   assertRight "delete removes waiter timer" (checkFamilyCall (flagDeleteTimerCall flagDeleteWrites [timerBoundary TimerRemoveBoundary flagTimerAddress 0x9000]) [])
   assertLeft "delete leaves waiter timer" FamilyTimer (checkFamilyCall (flagDeleteTimerCall flagDeleteWrites []) [])
@@ -270,10 +275,11 @@ main = do
   case derivePlan Owned B.empty [guardedFamily] loaders of
     Left failure -> error ("guarded family plan: " ++ failure)
     Right plan -> do
-      let familyProbes' = [probe | probe <- planProbes plan,probeDomain probe==DomainA,probeKind probe `elem` [TimerInsert,TimerRemove]]
-      assert "family timer probe count" (length familyProbes'==4)
+      let familyProbes' = [probe | probe <- planProbes plan,probeDomain probe==DomainA,probeKind probe `elem` [TimerInsert,TimerRemove,TimerConsume]]
+      assert "family timer probe count" (length familyProbes'==5)
       assert "family timer insert address" (any (\probe -> probeAddress probe==Address 0x44c60 && probeKind probe==TimerInsert) familyProbes')
       assert "family timer remove address" (any (\probe -> probeAddress probe==Address 0x44ca8 && probeKind probe==TimerRemove) familyProbes')
+      assert "family timer consume address" (any (\probe -> probeAddress probe==Address 0x44318 && probeKind probe==TimerConsume && probeRegister probe==Register 0) familyProbes')
   case derivePlan Owned B.empty [schedulerOnly] loaders of
     Left failure -> error ("scheduler-only plan: " ++ failure)
-    Right plan -> assert "scheduler plan has no family probes" (null [probe | probe <- planProbes plan,probeKind probe `elem` [TimerInsert,TimerRemove]])
+    Right plan -> assert "scheduler plan has no family probes" (null [probe | probe <- planProbes plan,probeKind probe `elem` [TimerInsert,TimerRemove,TimerConsume]])

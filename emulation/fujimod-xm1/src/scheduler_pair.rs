@@ -117,7 +117,7 @@ enum Semantic { Helper { name: Helper }, Dispatch { name: DispatchPoint }, Servi
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "kebab-case")]
-enum ProbeKind { SelectedRead, DiscardedRead, EnabledRead, GlobalLockRead, Retry, Callback, CallbackReturn, SelectComplete, FirstEntryExit, IrqTail, TimerInsert, TimerRemove }
+enum ProbeKind { SelectedRead, DiscardedRead, EnabledRead, GlobalLockRead, Retry, Callback, CallbackReturn, SelectComplete, FirstEntryExit, IrqTail, TimerInsert, TimerRemove, TimerConsume }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(try_from = "String", into = "String")]
@@ -424,7 +424,7 @@ impl Eq for Boundary {}
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "kebab-case")]
-enum BoundaryKind { Save, Resume, NoSave, Retry, Callback, CallbackReturn, SelectedRead, DiscardedRead, EnabledRead, GlobalLockRead, SelectComplete, FirstEntryExit, IrqTail, Return, Acquired, PrefetchAbort, TimerInsert, TimerRemove }
+enum BoundaryKind { Save, Resume, NoSave, Retry, Callback, CallbackReturn, SelectedRead, DiscardedRead, EnabledRead, GlobalLockRead, SelectComplete, FirstEntryExit, IrqTail, Return, Acquired, PrefetchAbort, TimerInsert, TimerRemove, TimerConsume }
 
 impl ProbeKind {
     fn boundary(self) -> BoundaryKind {
@@ -441,11 +441,17 @@ impl ProbeKind {
             Self::IrqTail => BoundaryKind::IrqTail,
             Self::TimerInsert => BoundaryKind::TimerInsert,
             Self::TimerRemove => BoundaryKind::TimerRemove,
+            Self::TimerConsume => BoundaryKind::TimerConsume,
         }
     }
 
-    /// A timer probe's boundary value is the entry argument in `r1`.
-    fn timer(self) -> bool { matches!(self, Self::TimerInsert | Self::TimerRemove) }
+    /// A timer probe's boundary value is the entry argument.
+    fn timer(self) -> bool { matches!(self, Self::TimerInsert | Self::TimerRemove | Self::TimerConsume) }
+
+    /// Insert and remove carry the entry in `r1`; the expiry callback carries it in `r0`.
+    fn timer_value_register(self) -> Option<u8> {
+        match self { Self::TimerInsert | Self::TimerRemove => Some(1), Self::TimerConsume => Some(0), _ => None }
+    }
 }
 
 #[derive(Serialize)]
@@ -1027,7 +1033,11 @@ fn family_words(read: &mut dyn FnMut(u32) -> Result<Read, String>, domain: Domai
     if let Some(index) = name.output_argument() { walk.capture_word(arguments[index]); }
     if name.stack_timeout() { walk.capture_word(caller_sp); }
     if let Some(index) = name.message_argument() { walk.record(arguments[index], MESSAGE_BYTES); }
-    let Some(family) = name.family() else { return Ok(walk.addresses.into_iter().collect()) };
+    if name.family().is_none() {
+        helper_words(&mut walk, name, arguments, running)?;
+        return Ok(walk.addresses.into_iter().collect());
+    }
+    let family = name.family().unwrap();
     if name.blocks() {
         if let Some(entry) = running.and_then(|task| entry_tables.tasks.slot(task)).and_then(|slot| entry_tables.timers(family).record(slot)) {
             walk.record(entry, entry_tables.timers(family).size);
@@ -1035,6 +1045,10 @@ fn family_words(read: &mut dyn FnMut(u32) -> Result<Read, String>, domain: Domai
     }
     if let Some((object, slot)) = name.object_argument().and_then(|index| name.resolve(domain, arguments[index])) {
         let tables = FamilyTables::of(object);
+        for domain in [domain, object] {
+            walk.capture_word(if domain==Domain::A { 0x4005_45c0 } else { 0x400e_4580 });
+            walk.capture_word(if domain==Domain::A { 0x4005_45c4 } else { 0x400e_4584 });
+        }
         if let Some(config) = tables.configs(family).record(slot) { walk.record(config, tables.configs(family).size); }
         if let Some(control) = tables.controls(family).record(slot) {
             walk.record(control, tables.controls(family).size);
@@ -1043,6 +1057,37 @@ fn family_words(read: &mut dyn FnMut(u32) -> Result<Read, String>, domain: Domai
         }
     }
     Ok(walk.addresses.into_iter().collect())
+}
+
+fn helper_words(walk: &mut FamilyWalk, name: FamilyService, arguments: [u32; 4], running: Option<u32>) -> Result<(), String> {
+    match name {
+        FamilyService::FamilyRelease | FamilyService::HelperRelease => {
+            walk.capture_word(arguments[1] + 0x14);
+            if let Some(wait) = walk.pointer(arguments[1] + 0x14)? {
+                walk.record(wait, 0x18);
+                if let Some(timer) = walk.pointer(wait)? { walk.capture_word(timer + 8); }
+            }
+        }
+        FamilyService::HelperBlock => {
+            walk.capture_word(arguments[1]);
+            walk.record(arguments[2], 0x18);
+            if let Some(task) = running { walk.capture_word(task + 0x14); }
+        }
+        FamilyService::HelperBlockTimed => {
+            walk.capture_word(arguments[1]);
+            walk.record(arguments[2], 0x18);
+            walk.capture_word(arguments[3] + 8);
+            if let Some(task) = running { walk.capture_word(task + 0x14); }
+        }
+        FamilyService::HelperCheck => {
+            walk.capture_word(arguments[0] + 0x0c);
+            walk.capture_word(arguments[0] + 8);
+            walk.capture_word(arguments[3]);
+            if let Some(config) = walk.pointer(arguments[0] + 8)? { walk.capture_word(config); }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn family_snapshot(board: &Board, core: Core, tcm: [u32; 2], domain: Domain, name: FamilyService,
@@ -1250,7 +1295,7 @@ impl Observer<'_> {
         for (_,write) in &self.write_batch {
             if [0xfffb30cc,0xfffb40cc,0xfffb30ec,0xfffb40ec].contains(&write.write.address.0) { continue; }
             for calls in self.open.pending.values_mut() {
-                for call in calls.iter_mut().filter(|call| !call.suspended) {
+                for call in calls.iter_mut() {
                     if call.entry.memory.iter().any(|word| word.address.0 & !ALIAS & !3 == write.write.address.0 & !ALIAS & !3) {
                         call.writes.push(*write);
                     }
@@ -1271,7 +1316,7 @@ impl Observer<'_> {
                 && u64::from(write.write.address.0) == transaction.address && write.write.size == 4
                 && u64::from(write.write.value) == transaction.value, "scheduler bank writer envelope differs from transaction")?;
             for calls in self.open.pending.values_mut() {
-                for call in calls.iter_mut().filter(|call| !call.suspended) { call.bank.push(*write); }
+                for call in calls.iter_mut() { call.bank.push(*write); }
             }
         }
         require(bank_writes.next().is_none(), "scheduler bank writer has no transaction")?;
@@ -1553,7 +1598,7 @@ impl Observer<'_> {
                     self.probe_hits.push(ProbeHit { domain: probe.domain, core, address: probe.address, kind: probe.kind,
                         register: probe.register, value, cpsr: context.cpsr, sp: Hex(context.sp), lr: Hex(context.lr), instructions: context.instructions });
                     let kind = probe.kind.boundary();
-                    let boundary_value = if probe.kind.timer() { board.register(core, arm::Register::R(1))? } else { value };
+                    let boundary_value = if let Some(register) = probe.kind.timer_value_register() { board.register(core, arm::Register::R(register))? } else { value };
                     self.boundary(machine, &context, tcm, kind, Some(boundary_value))?;
                     if kind == BoundaryKind::DiscardedRead && value == 1 && self.validated.plan.probes[index].register.0 == 3 {
                         let discarded = self.open.take_where(|key,call| key.core==core && call.entry.task==context.current && matches!(call.entry.slot.semantic,Semantic::Service { .. } | Semantic::Family { .. }));
@@ -1856,7 +1901,7 @@ fn drive() -> Result<(), String> {
                         if let Some(family) = name.family() {
                             if let Read::Committed { value: task } = &call.entry.task {
                                 if *task != 0 {
-                                    for offset in [0x14, 0x18, 0x1c, 8] { addresses.insert(*task + offset); }
+                                    for offset in [0x14, 0x18, 0x1c, 0x20, 0x24, 8] { addresses.insert(*task + offset); }
                                     if let Read::Committed { value: definition } = board.word(call.entry.core, tcm, *task + 8)? {
                                         if definition != 0 { addresses.insert(definition + 0x10); addresses.insert(definition + 0x14); }
                                     }
@@ -2002,6 +2047,27 @@ mod tests {
     }
 
     #[test]
+    fn helper_snapshots_capture_argument_records() {
+        let task = 0x9000u32;
+        let wait = 0x9100u32;
+        let timer = 0x9200u32;
+        let control = 0x9300u32;
+        let config = 0x9400u32;
+        let mut words = BTreeMap::new();
+        words.insert(task + 0x14, wait);
+        words.insert(wait, timer);
+        words.insert(control + 0x0c, 0x11);
+        words.insert(control + 8, config);
+        words.insert(config, 0x4);
+        let mut read = family_read(&words);
+        let release = family_words(&mut read, Domain::A, FamilyService::FamilyRelease, [0, task, 0, 0], 0, None).unwrap();
+        assert!(release.contains(&(task + 0x14)) && release.contains(&wait) && release.contains(&(wait + 4)) && release.contains(&(timer + 8)));
+        let mut read = family_read(&words);
+        let check = family_words(&mut read, Domain::A, FamilyService::HelperCheck, [control, 0, 0, 0x9500], 0, None).unwrap();
+        assert!(check.contains(&(control + 0x0c)) && check.contains(&(control + 8)) && check.contains(&config) && check.contains(&0x9500));
+    }
+
+    #[test]
     fn family_snapshot_is_bounded_and_keeps_the_involved_words() {
         let tables = FamilyTables::of(Domain::A);
         let config = tables.flag_configs.record(3).unwrap();
@@ -2077,12 +2143,17 @@ mod tests {
     fn timer_probes_record_the_entry_as_a_family_boundary() {
         assert_eq!(serde_json::to_value(ProbeKind::TimerInsert).unwrap(), "timer-insert");
         assert_eq!(serde_json::to_value(ProbeKind::TimerRemove).unwrap(), "timer-remove");
+        assert_eq!(serde_json::to_value(ProbeKind::TimerConsume).unwrap(), "timer-consume");
         assert_eq!(serde_json::to_value(BoundaryKind::TimerInsert).unwrap(), "timer-insert");
         assert_eq!(serde_json::to_value(BoundaryKind::TimerRemove).unwrap(), "timer-remove");
+        assert_eq!(serde_json::to_value(BoundaryKind::TimerConsume).unwrap(), "timer-consume");
         assert_eq!(ProbeKind::TimerInsert.boundary(), BoundaryKind::TimerInsert);
         assert_eq!(ProbeKind::TimerRemove.boundary(), BoundaryKind::TimerRemove);
+        assert_eq!(ProbeKind::TimerConsume.boundary(), BoundaryKind::TimerConsume);
         assert_eq!(ProbeKind::Retry.boundary(), BoundaryKind::Retry);
-        assert!(ProbeKind::TimerInsert.timer() && ProbeKind::TimerRemove.timer() && !ProbeKind::Callback.timer());
+        assert!(ProbeKind::TimerInsert.timer() && ProbeKind::TimerRemove.timer() && ProbeKind::TimerConsume.timer() && !ProbeKind::Callback.timer());
+        assert_eq!(ProbeKind::TimerConsume.timer_value_register(), Some(0));
+        assert_eq!(ProbeKind::TimerRemove.timer_value_register(), Some(1));
         let entry = FamilyTables::of(Domain::A).flag_timers.record(1).unwrap();
         let mut call = family_call(FamilyService::FamilyFlagTimedWait);
         for kind in [BoundaryKind::TimerInsert, BoundaryKind::TimerRemove, BoundaryKind::TimerInsert] {

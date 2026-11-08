@@ -9,6 +9,7 @@ import qualified Data.Aeson as J
 import qualified Data.ByteString as B
 import Data.Word (Word64)
 import Emulation.SchedulerPairCheck
+import Emulation.SchedulerPairFamily (TimerWitness)
 import Emulation.SchedulerPairPlan
 import Replacement.RtosOwnFirst.Regions (Domain, domainLabel)
 
@@ -20,16 +21,19 @@ data CallEvidence = CallEvidence
   , evidenceTotals :: !CallTotals
   , evidenceSummary :: !CallSummary
   , evidenceDemand :: ![DemandWitness]
+  , evidenceTimers :: ![TimerWitness]
   }
 
 emptyCallEvidence :: CallEvidence
-emptyCallEvidence = CallEvidence Nothing Nothing (CallTotals False 0) emptyCallSummary []
+emptyCallEvidence = CallEvidence Nothing Nothing (CallTotals False 0) emptyCallSummary [] []
 
 accumulateEvidence :: Plan -> CallEvidence -> Call -> CallEvidence
-accumulateEvidence plan prior call = accumulateKnown plan (checkCallFor (planRole plan) call) prior call
+accumulateEvidence plan prior call =
+  let timers = take 64 (evidenceTimers prior ++ timerWitnesses [call])
+  in accumulateKnown timers plan (checkCallForInWitnesses timers (planRole plan) call) prior call
 
-accumulateKnown :: Plan -> Either Refusal () -> CallEvidence -> Call -> CallEvidence
-accumulateKnown plan semanticResult prior call = CallEvidence firstFailure firstSemantic totals counts witnesses
+accumulateKnown :: [TimerWitness] -> Plan -> Either Refusal () -> CallEvidence -> Call -> CallEvidence
+accumulateKnown timers plan semanticResult prior call = CallEvidence firstFailure firstSemantic totals counts witnesses timers
  where
   plannedResult = checkCallEnvelope plan call >> semanticResult
   firstFailure = case plannedResult of
@@ -66,7 +70,7 @@ qualifyEvidence bytes plan observation evidence = do
   case evidenceFailure evidence of
     Nothing -> pure ()
     Just (CallFailure _ refusal) -> Left refusal
-  qualifySuffix observation (evidenceTotals evidence)
+  qualifySuffix plan observation (evidenceTotals evidence)
   pure (summaryWith observation (evidenceSummary evidence))
 
 evidenceFailureValue :: CallEvidence -> J.Value
@@ -91,9 +95,10 @@ emptyControlEvidence plan = ControlEvidence emptyCallEvidence $ case planRole pl
 
 accumulateControlEvidence :: Plan -> ControlEvidence -> Call -> ControlEvidence
 accumulateControlEvidence plan (ControlEvidence compact retained) call =
-  ControlEvidence (accumulateKnown plan checked compact call) (retainControl (planRole plan) checked retained call)
+  ControlEvidence (accumulateKnown timers plan checked compact call) (retainControl (planRole plan) checked retained call)
  where
-  checked = checkCallFor (planRole plan) call
+  timers = take 64 (evidenceTimers compact ++ timerWitnesses [call])
+  checked = checkCallForInWitnesses timers (planRole plan) call
 
 -- Notify adjudication retains its earliest target and preceding failed contracts.
 retainControl :: Role -> Either Refusal () -> RetainedControl -> Call -> RetainedControl

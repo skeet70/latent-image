@@ -87,10 +87,11 @@ familyProbes domain =
   [Probe domain (Address address) kind (Register register)
   | (address,kind) <- [(timerInsert, TimerInsert),(timerRemove, TimerRemove)]
   , register <- [0,1]]
+  ++ [Probe domain (Address consume) TimerConsume (Register 0)]
  where
-  (timerInsert,timerRemove) = case domain of
-    DomainA -> (0x44c60,0x44ca8)
-    DomainB -> (0xd4c20,0xd4c68)
+  (timerInsert,timerRemove,consume) = case domain of
+    DomainA -> (0x44c60,0x44ca8,0x44318)
+    DomainB -> (0xd4c20,0xd4c68,0xd42d8)
 
 planValue :: Plan -> Value
 planValue plan = object
