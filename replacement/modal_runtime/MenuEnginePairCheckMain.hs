@@ -123,10 +123,9 @@ runRetained config tree stockTables document stockPath ownedPath = do
       Right () -> putStrLn "pair: engine reads and 0x1d posts equal" >> pure True
   stockHits <- sessionHits stockPath >>= either fail pure
   ownedHits <- sessionHits ownedPath >>= either fail pure
-  forM_ [(StockRole,stockPath,stock),(OwnedRole,ownedPath,owned)] $ \(_,path,segments) -> do
+  forM_ [(StockRole,stockPath,stock),(OwnedRole,ownedPath,owned)] $ \(_,path,_) -> do
     value <- B.readFile (path </> "e2e-result.json") >>= either fail pure . J.eitherDecodeStrict'
     either fail pure (J.parseEither (validateRetainedRenderDeclarations config) value)
-    writeRenderReceipt path segments
   let renderFailure problem = hPutStrLn stderr ("render: " ++ problem) >> pure False
   unless (map readerPhase stock == map readerPhase owned) (fail "render segment phases differ")
   coverage <- checkRenderCoverageReader config stock owned
