@@ -273,8 +273,7 @@ fn resumed(pending: Pending) -> i32 {
     }
 }
 
-#[inline(never)]
-#[link_section = ".text.fp_bodies"]
+#[inline(always)]
 fn create_body(pool: PoolId, request: u32) -> i32 {
     let create = PoolCreate {
         attributes: PoolAttributes(load(GuestAddress(request))),
@@ -288,8 +287,7 @@ fn create_body(pool: PoolId, request: u32) -> i32 {
     }
 }
 
-#[inline(never)]
-#[link_section = ".text.fp_bodies"]
+#[inline(always)]
 fn delete_body(pool: PoolId, handler: bool) -> i32 {
     match delete_pool(&Cpu, pool, handler) {
         Ok(()) => 0,
@@ -299,7 +297,7 @@ fn delete_body(pool: PoolId, handler: bool) -> i32 {
 
 #[no_mangle]
 #[inline(never)]
-#[link_section = ".text.fp_bodies"]
+#[link_section = ".text.fp_body_create_entry"]
 pub extern "C" fn xm1_rtos_fixed_pool_create_body(id: u32, request: u32) -> i32 {
     match admitted(id as i32, Service::Create, 0) {
         Ok(admitted) => create_body(admitted.pool, request),
@@ -309,7 +307,7 @@ pub extern "C" fn xm1_rtos_fixed_pool_create_body(id: u32, request: u32) -> i32 
 
 #[no_mangle]
 #[inline(never)]
-#[link_section = ".text.fp_bodies"]
+#[link_section = ".text.fp_body_delete_entry"]
 pub extern "C" fn xm1_rtos_fixed_pool_delete_body(id: u32) -> i32 {
     match admitted(id as i32, Service::Delete, 0) {
         Ok(admitted) => delete_body(admitted.pool, load(ENTRY.words().handler_context) != 0),
@@ -319,7 +317,7 @@ pub extern "C" fn xm1_rtos_fixed_pool_delete_body(id: u32) -> i32 {
 
 #[no_mangle]
 #[inline(never)]
-#[link_section = ".text.fp_bodies"]
+#[link_section = ".text.fp_body_get_entry"]
 pub extern "C" fn xm1_rtos_fixed_pool_get_body(id: i32, out: u32) -> i32 {
     match admitted(id, Service::Get, 0) {
         Ok(admitted) => match get(
@@ -339,7 +337,7 @@ pub extern "C" fn xm1_rtos_fixed_pool_get_body(id: i32, out: u32) -> i32 {
 
 #[no_mangle]
 #[inline(never)]
-#[link_section = ".text.fp_bodies"]
+#[link_section = ".text.fp_body_poll_entry"]
 pub extern "C" fn xm1_rtos_fixed_pool_poll_body(id: i32, out: u32) -> i32 {
     match admitted(id, Service::Poll, 0) {
         Ok(admitted) => match poll(&Cpu, admitted.pool, OutWord(GuestAddress(out))) {
@@ -352,7 +350,7 @@ pub extern "C" fn xm1_rtos_fixed_pool_poll_body(id: i32, out: u32) -> i32 {
 
 #[no_mangle]
 #[inline(never)]
-#[link_section = ".text.fp_bodies"]
+#[link_section = ".text.fp_body_timed_entry"]
 pub extern "C" fn xm1_rtos_fixed_pool_timed_get_body(id: i32, out: u32, timeout: i32) -> i32 {
     match admitted(id, Service::TimedGet, timeout) {
         Ok(admitted) => match get(
@@ -372,7 +370,7 @@ pub extern "C" fn xm1_rtos_fixed_pool_timed_get_body(id: i32, out: u32, timeout:
 
 #[no_mangle]
 #[inline(never)]
-#[link_section = ".text.fp_bodies"]
+#[link_section = ".text.fp_body_release_entry"]
 pub extern "C" fn xm1_rtos_fixed_pool_release_body(id: i32, block: u32) -> i32 {
     match admitted(id, Service::Release, 0) {
         Ok(admitted) => match release(
@@ -389,7 +387,7 @@ pub extern "C" fn xm1_rtos_fixed_pool_release_body(id: i32, block: u32) -> i32 {
 
 #[no_mangle]
 #[inline(never)]
-#[link_section = ".text.fp_bodies"]
+#[link_section = ".text.fp_body_unchecked_entry"]
 pub extern "C" fn xm1_rtos_fixed_pool_poll_unchecked_body(id: i32, out: u32) -> i32 {
     match admitted(id, Service::PollUnchecked, 0) {
         Ok(admitted) => match poll_unchecked(&Cpu, admitted.pool, OutWord(GuestAddress(out))) {
