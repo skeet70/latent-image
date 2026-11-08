@@ -167,6 +167,11 @@ impl Release for Cpu {
 
 impl Wake for Cpu {
     #[inline(always)]
+    fn in_handler(&self) -> bool {
+        load(ENTRY.words().handler_context) != 0
+    }
+
+    #[inline(always)]
     fn waiter_domain(&self, task: Task) -> Domain {
         match DomainId::from_word(load(task.domain())) {
             Some(DomainId::A) => Domain::A,
@@ -197,6 +202,21 @@ impl Wake for Cpu {
     #[inline(always)]
     fn request_delayed_dispatch(&self) {
         store(ENTRY.words().reschedule, 1);
+    }
+
+    #[inline(always)]
+    fn finish_dispatch(&self, code: i32) {
+        unsafe { xm1_semaphore_stage_dispatch(code) };
+    }
+}
+
+#[inline(never)]
+#[link_section = ".text.sem_signal_body"]
+extern "C" fn xm1_semaphore_stage_dispatch(code: i32) {
+    if load(ENTRY.words().handler_context) != 0 {
+        store(ENTRY.words().reschedule, 1);
+    } else {
+        unsafe { xm1_semaphore_stock_dispatch(code) };
     }
 }
 

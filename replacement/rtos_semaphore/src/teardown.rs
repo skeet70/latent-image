@@ -38,7 +38,7 @@ pub fn delete_semaphore<M: Wake>(m: &M, id: SemaphoreId) -> Result<(), Semaphore
     m.unlock(object_lock);
     m.restore_f(saved);
     if dispatch {
-        m.dispatch(0);
+        m.finish_dispatch(0);
     }
     m.restore_interrupts(saved);
     Ok(())

@@ -100,6 +100,8 @@ pub trait Release: Machine {
 }
 
 pub trait Wake: Release + Locks {
+    /// The entry domain's handler-context word.
+    fn in_handler(&self) -> bool;
     /// T+0x20.
     fn waiter_domain(&self, task: Task) -> Domain;
     /// The owner record's `+0x00` word.
@@ -110,6 +112,15 @@ pub trait Wake: Release + Locks {
     fn dispatch(&self, code: i32);
     /// The entry domain's reschedule word, consumed at the outermost IRQ exit.
     fn request_delayed_dispatch(&self);
+    /// Dispatch from task context, or defer through the reschedule word in a handler.
+    #[inline(always)]
+    fn finish_dispatch(&self, code: i32) {
+        if self.in_handler() {
+            self.request_delayed_dispatch();
+        } else {
+            self.dispatch(code);
+        }
+    }
 }
 
 #[inline(always)]

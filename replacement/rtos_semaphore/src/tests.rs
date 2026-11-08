@@ -236,6 +236,26 @@ fn delete_releases_every_waiter_with_released() {
 }
 
 #[test]
+fn delete_in_handler_context_defers_the_local_dispatch() {
+    let fixture = Fixture::new(Domain::A);
+    fixture.running(Domain::A, 1);
+    fixture.create(Domain::A, 1, 0, 0, 1);
+    fixture.queue_waiter(Domain::A, 2, Domain::A, 1);
+    fixture.sim.set_interrupts(0);
+    fixture.sim.set(Domain::A.words().handler_context, 1);
+    delete_semaphore(&fixture.sim, fixture.id(Domain::A, 1)).unwrap();
+    assert!(fixture.sim.dispatches().is_empty());
+    assert_eq!(fixture.sim.delayed(), 1);
+    assert_eq!(state(&fixture, Domain::A, 2), TaskState::READY.bits());
+    assert_eq!(result(&fixture, Domain::A, 2), -49);
+    let (config, control) = fixture.object(Domain::A, 1);
+    assert_eq!(fixture.sim.word(config.exists()), 0);
+    assert_eq!(fixture.sim.word(control.queue().next()), control.0 .0);
+    assert_eq!(fixture.sim.word(control.queue().prev()), control.0 .0);
+    assert_eq!(fixture.sim.interrupts(), 0);
+}
+
+#[test]
 fn signal_increments_below_the_maximum() {
     let fixture = Fixture::new(Domain::A);
     fixture.create(Domain::A, 1, 0, 0, 2);

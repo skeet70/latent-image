@@ -31,9 +31,10 @@ module Replacement.RtosSemaphore.Oracle
 
 import Control.Monad (forM, unless)
 import Data.Aeson (FromJSON (..), eitherDecodeStrict', withObject, (.:))
-import Data.Bits ((.&.), (.|.), complement, shiftL)
+import Data.Bits ((.&.), (.|.), complement, shiftL, shiftR)
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
+import Data.Maybe (isJust)
 import Data.Word (Word32, Word8)
 import Emulation.CachedNativeBatch (BatchReuse, cachedObservedBatch)
 import Emulation.NativeCase (caseIdText)
@@ -51,10 +52,12 @@ import Emulation.NativeObservation
 import Emulation.OwnedCase
   ( CaseOutcome (..)
   , CaseSpec (..)
+  , InstructionLimit (..)
   , KernelCase (..)
   , Permission (..)
   , caseOutcome
   , mkRegion
+  , mkStackContext
   , plainLimit
   , readWordAt
   , word32le
@@ -312,8 +315,18 @@ data Expectation = Expectation
   , expectationSlot :: Word32
   , expectationChecks :: [Check]
   , expectationRefusal :: Maybe RunnerStatus
+  , expectationBudget :: Maybe InstructionLimit
   }
   deriving (Eq, Show)
+
+data Boundary = TaskArrival | CallerReturn deriving (Eq, Show)
+
+data WakerTarget = WakerSignal | WakerDelete | WakerTick Int deriving (Eq, Show)
+
+data Waker = Waker
+  { wakerTarget :: WakerTarget
+  , wakerArgs :: [(Register, Word32)]
+  }
 
 data Case = Case
   { caseName :: String
@@ -331,6 +344,11 @@ data Case = Case
   , caseDispatchEnabled :: Bool
   , caseBank :: Maybe (Domain, Word32)
   , caseReceipt :: Maybe (Word32, Word32)
+  , caseBoundary :: Boundary
+  , caseWaker :: Maybe Waker
+  , caseMask :: Maybe Word32
+  , caseEntryControl :: Maybe Word32
+  , caseRestoresMask :: Bool
   }
 
 data Image = Image {imageBase :: Word32, imageBytes :: B.ByteString}
@@ -413,6 +431,13 @@ stopAddress = 0x00959200
 receiptAddress = 0x00960000
 requestAddress = 0x0095a000
 globalLock = 0x400c0804
+
+wakerSlot, wakerPriority, wakerStack, wakerStubBase, maskAddress :: Word32
+wakerSlot = 2
+wakerPriority = 14
+wakerStack = 0x00970000
+wakerStubBase = 0x00959080
+maskAddress = receiptAddress + 0x10
 
 definitionBase, definitionStride :: Word32
 definitionBase = 0x0096c000
@@ -516,8 +541,9 @@ waiterAt facts owner objectSlot objectDomain slot priority =
 plain :: String -> Service -> Domain -> Word32 -> [(GuestAddress, Word32)] -> Word32 -> Word32 -> Bool -> Word32 -> [Check] -> Case
 plain name service domain slot wordList timeout result arrival selected checks =
   Case name service domain slot Nothing wordList timeout
-    (Expectation result arrival selected checks Nothing) Nothing Nothing
+    (Expectation result arrival selected checks Nothing Nothing) Nothing Nothing
     (service == InterruptSignal) False True Nothing Nothing
+    TaskArrival Nothing Nothing Nothing (service == Create || service == Delete)
 
 cases :: Facts -> Domain -> [Case]
 cases facts executing =
@@ -540,8 +566,8 @@ cases facts executing =
       , poke requestAddress 1, poke (requestAddress + 4) 1, poke (requestAddress + 8) 1
       ]
       0 0 False 0 [])
-      { caseStock = Expectation 0 False 0 [] (Just MemoryGuard) }
-      { caseOwned = Just (Expectation (fromIntegral (-18 :: Int)) False 0 [] Nothing)
+      { caseStock = Expectation 0 False 0 [] (Just MemoryGuard) Nothing }
+      { caseOwned = Just (Expectation (fromIntegral (-18 :: Int)) False 0 [] Nothing Nothing)
       , caseDifference = Just "semaphore-create-range-refused"
       }
   , plain "delete-plain" Delete executing 1 (created facts executing 1 1 4 6) 0 0 False 0
@@ -560,7 +586,7 @@ cases facts executing =
           , byte (taskAddress facts executing 2 + tfState (factsTask facts)) (stReady (factsStates facts))
           , eq (waitResult facts executing 2) (fromIntegral (-49 :: Int))
           , eq (queueCell facts executing 1) (controlAddress facts executing 1)
-          ] Nothing)
+          ] Nothing Nothing)
       , caseDifference = Just "semaphore-delete-releases-waiters"
       }
   , plain "signal-below-max" Signal executing 1 (created facts executing 1 0 0 2) 0 0 False 0
@@ -643,18 +669,81 @@ cases facts executing =
   , (plain "signal-not-created" Signal executing 1
       (created facts executing 1 0 0 2 ++ [poke (existsCell facts executing 1) 0])
       0 (fromIntegral (-42 :: Int)) False 0 [ eq (countCell facts executing 1) 0 ])
+  , (plain "delete-handler-defers" Delete executing 1
+      (created facts executing 1 0 0 1 ++ waiterAt facts executing 1 executing 2 3)
+      0 0 False 0
+      [ eq (existsCell facts executing 1) 0, eq (countCell facts executing 1) 1
+      , byte (taskAddress facts executing 2 + tfState (factsTask facts)) (queuedState facts)
+      , eq (dfReschedule (domainFacts facts executing)) 0
+      ])
+      { caseHandler = True
+      , caseRestoresMask = True
+      , caseOwned = Just (Expectation 0 False 0
+          [ eq (existsCell facts executing 1) 0, eq (countCell facts executing 1) 1
+          , byte (taskAddress facts executing 2 + tfState (factsTask facts)) (stReady (factsStates facts))
+          , eq (waitResult facts executing 2) (fromIntegral (-49 :: Int))
+          , eq (queueCell facts executing 1) (controlAddress facts executing 1)
+          , eq (dfReschedule (domainFacts facts executing)) 1
+          ] Nothing Nothing)
+      , caseDifference = Just "semaphore-delete-releases-waiters"
+      }
+  , resumed "wait-signal-return" Wait 0 (Waker WakerSignal [(R0, 1)]) 0 0x93 Nothing
+      (Expectation 0 False 0 (returnChecks 0 False) Nothing Nothing) Nothing Nothing
+  , resumed "wait-signal-return-f" Wait 0 (Waker WakerSignal [(R0, 1)]) 0 0xD3 (Just 0x53)
+      (Expectation 0 False 0 (returnChecks 0 False) Nothing Nothing) Nothing Nothing
+  , resumed "timed-timeout-return" TimedWait 5 (Waker (WakerTick 2) []) timedOut 0x93 Nothing
+      (Expectation timedOut False 0 (returnChecks timedOut False ++ timeoutChecks) Nothing Nothing) Nothing Nothing
+  , resumed "wait-delete-return" Wait 0 (Waker WakerDelete [(R0, 1)]) released 0x93 Nothing
+      (Expectation 0 False 0 [] Nothing (Just (InstructionLimit 20000)))
+      (Just (Expectation released False 0 (returnChecks released True) Nothing Nothing))
+      (Just "semaphore-delete-releases-waiters")
   ]
+  where
+    timedOut = fromIntegral (-50 :: Int)
+    released = fromIntegral (-49 :: Int)
+    resumed name service timeout waker result mask entryControl stock owned difference =
+      (plain name service executing 1 (created facts executing 1 0 0 1) timeout result False 0
+        (expectationChecks stock))
+        { caseBoundary = CallerReturn
+        , caseWaker = Just waker
+        , caseMask = Just mask
+        , caseEntryControl = entryControl
+        , caseRestoresMask = False
+        , caseStock = stock
+        , caseOwned = owned
+        , caseDifference = difference
+        }
+    returnChecks result deleted =
+      [ eq (waitResult facts executing runningSlot) result
+      , eq (waitOwner facts executing runningSlot) (dfId (domainFacts facts executing))
+      , eq (waitQueueCell facts executing runningSlot) (queueCell facts executing 1)
+      , eq (queueCell facts executing 1) (controlAddress facts executing 1)
+      , eq (queueCell facts executing 1 + wqPrev (factsWaitQueue facts)) (controlAddress facts executing 1)
+      , byte (taskAddress facts executing runningSlot + tfState (factsTask facts)) (stReady (factsStates facts))
+      , eq (readyHeadAt 10) (taskAddress facts executing runningSlot)
+      , eq (dfRunning (domainFacts facts executing)) (taskAddress facts executing runningSlot)
+      , eq (dfSelected (domainFacts facts executing)) (taskAddress facts executing runningSlot)
+      ] ++ (if deleted
+              then [eq (existsCell facts executing 1) 0, eq (countCell facts executing 1) 1]
+              else [eq (countCell facts executing 1) 0])
+    timeoutChecks =
+      [ eq (dfTimerCount (domainFacts facts executing)) 0
+      , eq (dfReschedule (domainFacts facts executing)) 1
+      ]
+    readyHeadAt priority =
+      dfReadyHeads (domainFacts facts executing) + priority * hfSize (factsHead facts)
 
 data Role = StockRole | OwnedRole deriving (Eq, Show)
 
-layoutWords :: Facts -> Domain -> [(GuestAddress, Word32)]
-layoutWords facts _executing =
+layoutWords :: Facts -> Domain -> Case -> [(GuestAddress, Word32)]
+layoutWords facts _executing one =
   concat [recordPokes block described | block <- domains, described <- domains]
     ++ concatMap taskPokes domains
     ++ concatMap objectPokes domains
     ++ concatMap readyPokes domains
   where
     domains = [DomainA, DomainB]
+    waker = isJust (caseWaker one)
     recordPokes block described =
       let record = recordAddress facts block described
           describedWords = domainFacts facts described
@@ -689,16 +778,18 @@ layoutWords facts _executing =
             definition = definitionAddress facts domain slot
             priority = case slot of
               1 -> 10
+              2 | waker -> wakerPriority
               2 -> 3
               3 -> 15
               _ -> slot `mod` factsPriorities facts
+            isWaker = waker && slot == wakerSlot && domain == _executing
          in [ poke address address
             , poke (address + tfPrev (factsTask facts)) address
             , poke (address + tfDefinition (factsTask facts)) definition
             , poke (address + tfDomain (factsTask facts)) (dfId (domainFacts facts domain))
             , poke (address + tfState (factsTask facts)) (packedState facts 0 priority)
-            , poke (address + tfSavedSp (factsTask facts)) targetStack
-            , poke (address + tfResumePc (factsTask facts)) stopAddress
+            , poke (address + tfSavedSp (factsTask facts)) (if isWaker then wakerStack else targetStack)
+            , poke (address + tfResumePc (factsTask facts)) (if isWaker then wakerStubBase else stopAddress)
             , poke (definition + defPriority (factsDefinition facts)) priority
             , poke (definition + 4) (0xa5510000 + slot)
             , poke (definition + 8) stopAddress
@@ -740,7 +831,9 @@ layoutWords facts _executing =
             ]
             ++ member runningSlot 10
             ++ member idleSlot 15
-            ++ [ poke (dfReadyBitmap dw) ((1 `shiftL` 10) .|. (1 `shiftL` 15))
+            ++ concat [ member wakerSlot wakerPriority | waker && domain == _executing ]
+            ++ [ poke (dfReadyBitmap dw) ((1 `shiftL` 10) .|. (1 `shiftL` 15)
+                  .|. (if waker && domain == _executing then 1 `shiftL` fromIntegral wakerPriority else 0))
                , poke (dfRunning dw) (taskAddress facts domain runningSlot)
                , poke (dfSelected dw) (taskAddress facts domain runningSlot)
                , poke (dfDispatchEnabled dw) 1
@@ -819,6 +912,9 @@ pages facts loaderImage one =
           in Page (RegionId "loader-data") (GuestAddress base) (fromIntegral loaderDataSize) ReadOnly
                (loaderDataBytes loaderImage base)
        ]
+    ++ [ Page (RegionId "waker-stack") (GuestAddress (wakerStack - 0x400)) 0x400 ReadWrite (B.replicate 0x400 0)
+       | isJust (caseWaker one)
+       ]
 
 contains :: GuestAddress -> Int -> Page -> Bool
 contains (GuestAddress address) width (Page _ (GuestAddress base) size _ _) =
@@ -840,10 +936,10 @@ overlay (GuestAddress start) initial words' = B.concat (pieces 0 ordered)
             : word32le value
             : pieces (offset + 4) rest
 
-codeBytes :: Domain -> Image -> Image -> B.ByteString
-codeBytes domain loader owned = install (timerRemoval domain) timerStub (foldl patch original (extents domain))
+codeBytes :: Domain -> Image -> Image -> [(Word32, Word32)] -> B.ByteString
+codeBytes domain loader owned extra = install (timerRemoval domain) timerStub (foldl patch original (extents domain))
   where
-    bounds = extents domain ++ retained domain
+    bounds = extents domain ++ retained domain ++ extra
     base = minimum (map fst bounds)
     top = maximum [address + size | (address, size) <- bounds]
     slice image address size =
@@ -857,6 +953,103 @@ codeBytes domain loader owned = install (timerRemoval domain) timerStub (foldl p
        in B.take offset current <> bytes <> B.drop (offset + B.length bytes) current
     patch current (address, size) = install address (slice owned address size) current
 
+tickEntry :: Domain -> Word32
+tickEntry DomainA = 0x44d8c
+tickEntry DomainB = 0xd4d4c
+
+dispatcher :: Domain -> Word32
+dispatcher DomainA = 0x43640
+dispatcher DomainB = 0xd3640
+
+timeoutExtents :: Domain -> [(Word32, Word32)]
+timeoutExtents DomainA = [(0x44318, 0x1cc), (0x44d8c, 0x1a0)]
+timeoutExtents DomainB = [(0xd42d8, 0x1cc), (0xd4d4c, 0x1a0)]
+
+wakerCodeExtents :: Domain -> Case -> [(Word32, Word32)]
+wakerCodeExtents domain one = case caseWaker one of
+  Just (Waker (WakerTick _) _) -> timeoutExtents domain
+  _ -> []
+
+data StubInstruction = StubWord Word32 | StubBranchLink Word32
+
+stubWords :: Facts -> Domain -> Waker -> [Word32]
+stubWords facts domain waker = assembleStub wakerStubBase (stubProgram facts domain waker)
+  where
+    stubProgram facts' domain' waker' =
+      [ StubWord 0xe10fc000
+      , StubWord (movw 3 (maskAddress .&. 0xffff))
+      , StubWord (movt 3 (maskAddress `shiftR` 16))
+      , StubWord 0xe583c000
+      , StubWord 0xf1080080
+      ]
+        ++ handlerPrelude facts' domain' waker'
+        ++ concatMap argWords (wakerArgs waker')
+        ++ wakeCalls facts' domain' waker'
+    handlerPrelude facts' domain' waker' = case wakerTarget waker' of
+      WakerTick _ ->
+        let handler = dfHandlerContext (domainFacts facts' domain')
+         in [ StubWord (movw 3 (handler .&. 0xffff))
+            , StubWord (movt 3 (handler `shiftR` 16))
+            , StubWord 0xe3a00001
+            , StubWord 0xe5830000
+            ]
+      _ -> []
+    wakeCalls facts' domain' waker' = case wakerTarget waker' of
+      WakerTick count -> tickCalls facts' domain' count
+      WakerSignal -> tailCalls domain' (entries domain' Signal)
+      WakerDelete -> tailCalls domain' (entries domain' Delete)
+    tickCalls facts' domain' count =
+      replicate count (StubBranchLink (tickEntry domain'))
+        ++ [ StubWord (movw 3 (handler .&. 0xffff))
+           , StubWord (movt 3 (handler `shiftR` 16))
+           , StubWord 0xe3a00000
+           , StubWord 0xe5830000
+           , StubBranchLink (dispatcher domain')
+           , StubWord 0xeafffffe
+           ]
+      where
+        handler = dfHandlerContext (domainFacts facts' domain')
+    tailCalls domain' target =
+      [StubBranchLink target, StubBranchLink (dispatcher domain'), StubWord 0xeafffffe]
+    argWords (register, value) =
+      [ StubWord (movw (registerNumber register) (value .&. 0xffff))
+      , StubWord (movt (registerNumber register) (value `shiftR` 16))
+      ]
+    registerNumber register = case register of
+      R0 -> 0
+      R1 -> 1
+      R2 -> 2
+      R3 -> 3
+      _ -> error "a waker argument is not in r0-r3"
+
+assembleStub :: Word32 -> [StubInstruction] -> [Word32]
+assembleStub base = go base
+  where
+    go _ [] = []
+    go address (StubWord word : rest) = word : go (address + 4) rest
+    go address (StubBranchLink target : rest) =
+      (0xeb000000 .|. (((target - address - 8) `shiftR` 2) .&. 0xffffff)) : go (address + 4) rest
+
+movw :: Word32 -> Word32 -> Word32
+movw register immediate =
+  0xe3000000 .|. ((immediate .&. 0xf000) `shiftL` 4) .|. (register `shiftL` 12) .|. (immediate .&. 0xfff)
+
+movt :: Word32 -> Word32 -> Word32
+movt register immediate =
+  0xe3400000 .|. ((immediate .&. 0xf000) `shiftL` 4) .|. (register `shiftL` 12) .|. (immediate .&. 0xfff)
+
+continuationBytes :: Facts -> Domain -> Case -> B.ByteString
+continuationBytes facts executing one = installWaker zero
+  where
+    size = fromIntegral (stopAddress - exitAddress + 4)
+    zero = B.replicate size 0
+    installWaker image = case caseWaker one of
+      Nothing -> image
+      Just waker -> installAt wakerStubBase (B.concat (map word32le (stubWords facts executing waker))) image
+    installAt address bytes image =
+      B.take offset image <> bytes <> B.drop (offset + B.length bytes) image
+      where offset = fromIntegral (address - exitAddress)
+
 expectationOf :: Role -> Case -> Expectation
 expectationOf StockRole one = caseStock one
 expectationOf OwnedRole one = maybe (caseStock one) id (caseOwned one)
@@ -868,35 +1061,51 @@ caseSpec facts executing role loader owned one
       { caseId = emittedId executing one
       , caseProvenance = "X-M1 1.50 semaphore family, pinned x70view 55436fc85c0560dd252b0410af6f2427fe198cd3; synthetic task/object state and timer argument seam"
       , caseExclusion = "Private compiler frames are not byte-compared. Dispatch checks the selected-task arrival and the live stock continuation. The timer removal entry is a recording stub; it proves arguments, not heap removal."
+          ++ (if isJust (caseWaker one) then " The resumed caller owns the caller stack context; a synthetic waker task on its own declared stack calls the stock signal, delete or timer tick, and the suspended caller resumes through its saved dispatcher frame into the wait epilogue. The waker stub records the caller's dispatch CPSR; its flags are excluded and the I/F/mode bits are compared." else "")
       , caseEntry = wire (entries executing (caseService one))
       , caseExit = wire exitAddress
       , caseRegions =
-          [mkRegion (RegionId "code") (wire codeBase) (fromIntegral (codeTop - codeBase)) ReadExecute (codeBytes executing loader owned)]
+          [mkRegion (RegionId "code") (wire codeBase) (fromIntegral (codeTop - codeBase)) ReadExecute (codeBytes executing loader owned extra)]
             ++ [mkRegion ident (wire (guestWord address)) size permission (overlay address background words') | Page ident address size permission background <- dataPages]
-            ++ [mkRegion (RegionId "continuations") (wire exitAddress) (fromIntegral (stopAddress - exitAddress + 4)) ReadExecute (B.replicate (fromIntegral (stopAddress - exitAddress + 4)) 0)]
-      , caseFunctions = [(wire address, size) | (address, size) <- extents executing ++ retained executing]
+            ++ [mkRegion (RegionId "continuations") (wire exitAddress) (fromIntegral (stopAddress - exitAddress + 4)) ReadExecute (continuationBytes facts executing one)]
+      , caseFunctions =
+          [(wire address, size) | (address, size) <- extents executing ++ retained executing ++ extra]
+            ++ [(wire wakerStubBase, 0x80) | isJust (caseWaker one)]
       , caseInitial = initialRegisters executing one
-      , caseExpectedStatus = if arrival then StopAddress else Returned
-      , caseExpectedRegisters = if arrival
-          then [(Pc, stopAddress), (Sp, targetStack)]
-          else [(R0, expectationResult expectation)]
+      , caseExpectedStatus = if isJust budget then InstructionBudget else if arrival then StopAddress else Returned
+      , caseExpectedRegisters = expectedRegisters
       , caseExpectedMemory = [(RegionId "caller-frame", callerBytes)]
       , caseCp14Identity = Just (if executing == DomainA then 0x4003 else 0x4004)
-      , caseKernel = Just (KernelCase plainLimit (if arrival then Just (wire stopAddress) else Nothing) (Just 0x80001234) (Just 0) (Just 0) ignored [])
+      , caseKernel = Just (KernelCase (maybe plainLimit id budget) (if arrival then Just (wire stopAddress) else Nothing) (Just 0x80001234) (Just 0) (Just 0) ignored stacks)
       }
   where
     expectation = expectationOf role one
     arrival = expectationArrival expectation
-    codeBase = minimum (map fst (extents executing ++ retained executing))
-    codeTop = maximum [address + size | (address, size) <- extents executing ++ retained executing]
+    budget = expectationBudget expectation
+    expectedRegisters
+      | isJust budget = [(R0, 0)]
+      | arrival = [(Pc, stopAddress), (Sp, targetStack)]
+      | otherwise = [(R0, expectationResult expectation)]
+    extra = wakerCodeExtents executing one
+    codeBase = minimum (map fst (extents executing ++ retained executing ++ extra))
+    codeTop = maximum [address + size | (address, size) <- extents executing ++ retained executing ++ extra]
     dataPages = pages facts loader one
-    words' = layoutWords facts executing
+    words' = layoutWords facts executing one
       ++ [ poke (dfHandlerContext (domainFacts facts executing)) (if caseHandler one then 1 else 0)
          , poke (dfDispatchEnabled (domainFacts facts executing)) (if caseDispatchEnabled one then 1 else 0)
          ]
       ++ caseWords one
     outside = [address | (address, _) <- words', not (any (contains address 4) dataPages)]
-    ignored = if arrival then [R0 .. R12] ++ [Lr] else [R1 .. R12] ++ [Lr]
+    ignored
+      | isJust budget = [R0 .. R12] ++ [Lr]
+      | caseBoundary one == CallerReturn = [R1, R2, R3, R12, Lr]
+      | arrival = [R0 .. R12] ++ [Lr]
+      | otherwise = [R1 .. R12] ++ [Lr]
+    stacks
+      | isJust (caseWaker one) =
+          map stack [(callerSp one - 0x400, callerSp one), (wakerStack - 0x400, wakerStack)]
+      | otherwise = []
+    stack (low, high) = either error id (mkStackContext (N.GuestAddress (fromIntegral low)) (N.GuestAddress (fromIntegral high)))
 
 initialRegisters :: Domain -> Case -> [(Register, Word32)]
 initialRegisters executing one =
@@ -904,6 +1113,7 @@ initialRegisters executing one =
     ++ [(Sp, callerSp one), (Lr, exitAddress), (Cpsr, cpsr)]
   where
     cpsr
+      | Just control <- caseEntryControl one = control
       | caseMasked one = 0x93
       | otherwise = 0x13
     value R0 = handle
@@ -976,12 +1186,33 @@ compareRole facts loader _ spec one expectation observation =
        ]
     ++ [ "result " ++ show resultActual ++ " is not " ++ show (expectationResult expectation)
        | expectationRefusal expectation == Nothing
+       , expectationBudget expectation == Nothing
        , not (expectationArrival expectation)
        , resultActual /= Just (expectationResult expectation)
+       ]
+    ++ [ "register " ++ show register ++ " is " ++ show actual ++ " not " ++ show expected
+       | expectationRefusal expectation == Nothing
+       , expectationBudget expectation == Nothing
+       , (register, expected) <- caseExpectedRegisters spec
+       , let actual = N.lookupRegister register observation
+       , actual /= Just expected
+       ]
+    ++ [ "caller register " ++ show register ++ " is " ++ show actual ++ " not " ++ show expected
+       | expectationRefusal expectation == Nothing
+       , expectationBudget expectation == Nothing
+       , not (expectationArrival expectation)
+       , (register, expected) <- callerAbi
+       , let actual = N.lookupRegister register observation
+       , actual /= Just expected
        ]
     ++ [ "CPSR control " ++ show controlActual ++ " is not " ++ show expectedControl
        | expectationRefusal expectation == Nothing
        , controlActual /= Just expectedControl
+       ]
+    ++ [ "saved caller mask " ++ show savedMask ++ " is not " ++ show mask
+       | Just mask <- [caseMask one]
+       , let savedMask = fmap (.&. 0x1ff) (readWord facts loader one observation (GuestAddress maskAddress))
+       , savedMask /= Just mask
        ]
     ++ [ "caller frame changed"
        | lookup (RegionId "caller-frame") (nativeMemory observation) /= Just callerBytes
@@ -1009,14 +1240,24 @@ compareRole facts loader _ spec one expectation observation =
   where
     wanted = case expectationRefusal expectation of
       Just _ -> OutcomeRefused (nativeStatus observation)
-      Nothing -> if expectationArrival expectation then OutcomeStopped (wire stopAddress) else OutcomeReturned
+      Nothing -> case expectationBudget expectation of
+        Just limit -> OutcomeNoReturnWithin limit (nativeKernel observation >>= observedReserved)
+        Nothing -> if expectationArrival expectation then OutcomeStopped (wire stopAddress) else OutcomeReturned
     resultActual = N.lookupRegister R0 observation
+    callerAbi =
+      [(Sp, callerSp one)]
+        ++ [ (register, 0xa5a50000 + fromIntegral (fromEnum register))
+           | isJust (caseWaker one)
+           , register <- [R4 .. R11]
+           ]
     controlActual = fmap (.&. 0x1ff) (N.lookupRegister Cpsr observation)
     expectedControl
       | expectationArrival expectation = 0x93
       | admissionRefusal = entryControl
+      | caseRestoresMask one = entryControl
       | otherwise = entryControl .&. complement 0x80
     entryControl
+      | Just control <- caseEntryControl one = control
       | caseMasked one = 0x93
       | otherwise = 0x13
     admissionRefusal = expectationResult expectation `elem` map (fromIntegral :: Int -> Word32) [-25, -18, -42]
@@ -1037,19 +1278,26 @@ compareFamily facts executing loader one stockSpec ownedSpec stock owned =
        )
   where
     ownedExpectation = maybe (caseStock one) id (caseOwned one)
-    compared = [ident | Page ident _ _ _ _ <- pages facts loader one, ident `notElem` map RegionId ["stack", "target-stack"]]
+    compared = [ident | Page ident _ _ _ _ <- pages facts loader one, ident `notElem` map RegionId ["stack", "target-stack", "waker-stack"]]
     memory observation = M.fromList [(ident, normalize ident bytes) | (ident, bytes) <- nativeMemory observation, ident `elem` compared]
     normalize ident bytes
       | expectationArrival (caseStock one) || maybe False expectationArrival (caseOwned one) =
-          let region = if executing == DomainA then RegionId "kernel-a" else RegionId "kernel-b"
-           in if ident == region then clear (clear bytes savedSpOffset) resumeOffset else bytes
+          if ident == region then clear (clear bytes savedSpOffset) resumeOffset else bytes
+      | isJust (caseWaker one), ident == region =
+          foldl clear bytes [callerSavedSp, callerResume, wakerSavedSp, wakerResume]
       | otherwise = bytes
     clear bytes offset
       | offset + 4 > B.length bytes = bytes
       | otherwise = B.take offset bytes <> word32le 0 <> B.drop (offset + 4) bytes
+    region = if executing == DomainA then RegionId "kernel-a" else RegionId "kernel-b"
     kernelLow = fst (kernelBounds facts executing)
-    savedSpOffset = fromIntegral (taskAddress facts executing runningSlot + tfSavedSp (factsTask facts) - guestWord kernelLow)
-    resumeOffset = fromIntegral (taskAddress facts executing runningSlot + tfResumePc (factsTask facts) - guestWord kernelLow)
+    offsetOf address = fromIntegral (address - guestWord kernelLow)
+    savedSpOffset = offsetOf (taskAddress facts executing runningSlot + tfSavedSp (factsTask facts))
+    resumeOffset = offsetOf (taskAddress facts executing runningSlot + tfResumePc (factsTask facts))
+    callerSavedSp = savedSpOffset
+    callerResume = resumeOffset
+    wakerSavedSp = offsetOf (taskAddress facts executing wakerSlot + tfSavedSp (factsTask facts))
+    wakerResume = offsetOf (taskAddress facts executing wakerSlot + tfResumePc (factsTask facts))
     memoryDifferences =
       ["missing state region " ++ show ident | ident <- compared, M.notMember ident (memory stock) || M.notMember ident (memory owned)]
         ++ ["state region " ++ show ident ++ " differs" | ident <- compared, M.lookup ident (memory stock) /= M.lookup ident (memory owned)]

@@ -345,6 +345,10 @@ impl Release for Sim {
 }
 
 impl Wake for Sim {
+    fn in_handler(&self) -> bool {
+        self.word(self.entry.words().handler_context) != 0
+    }
+
     fn waiter_domain(&self, task: Task) -> Domain {
         match DomainId::from_word(self.word(task.domain())) {
             Some(DomainId::A) => Domain::A,
