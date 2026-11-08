@@ -274,6 +274,16 @@ helperCall task address semantic lock instructions callFirst value r0 = call
 releaseCall :: Word32 -> Word64 -> Call
 releaseCall lock first = helperCall taskA releaseAddress (HelperSemantic Release) lock 1 first 0 0x9000
 
+releaseEvents :: [J.Value]
+releaseEvents = [lockEvent taskA 0 10 1 0x400545c0 0, lockEvent taskA 0 11 1 0x400545c4 0]
+
+interleavedEvents :: [J.Value]
+interleavedEvents =
+  [ lockEvent taskA 0 100 100 0x400545c0 0
+  , lockEvent 0x9000 0 101 101 0x400545c0 1
+  , lockEvent taskA 0 102 102 0x400545c4 0
+  ]
+
 pendingInterleaved :: Pending
 pendingInterleaved = (pendingForever (fromIntegral (-1 :: Int)) 0) { pendingSaveAt = Just 110, pendingTerminal = Just terminal }
  where
@@ -318,8 +328,12 @@ pendingStranded = (pendingForever (fromIntegral (-1 :: Int)) 0) { pendingTermina
     , (Address (taskA+4), taskA)
     ]) (maybe M.empty id (pendingTerminal (pendingForever (fromIntegral (-1 :: Int)) 0)))
 
-observation :: [Call] -> [Pending] -> J.Value
-observation calls pendings = J.object
+lockEvent :: Word32 -> Int -> Word64 -> Word64 -> Word32 -> Word32 -> J.Value
+lockEvent task core call at address value = J.object
+  ["task" J..= task, "core" J..= coreName core, "call" J..= call, "at" J..= at, "address" J..= hex address, "value" J..= value]
+
+observation :: [J.Value] -> [Call] -> [Pending] -> J.Value
+observation events calls pendings = J.object
   [ "schema" J..= (3::Int), "role" J..= roleName Owned
   , "inputs" J..= [J.object ["sha256" J..= digest]
       | digest <- [sha256Hex (sha256 planBytes), Q.runDocumentSha256, "dat", Q.bootRomSha256, trajectorySha256, "observer"]]
@@ -331,6 +345,7 @@ observation calls pendings = J.object
                     , segment [DomainA,DomainB] 20 100 [(0x439d8,0x43a14),(0x43a14,0x43a50),(0x47604,0x47844),(0x47844,0x47a54),(0x47a54,0x47c94),(0x47c94,0x47dd0),(0x47dd0,0x48044),(0xd7a14,0xd7c54)]]
   , "final_readback" J..= rb semReadback
   , "classes" J..= map wireCall calls
+  , "lock_events" J..= events
   , "pending" J..= map wirePending pendings
   , "milestones" J..= [milestone phase | phase <- phases]
   , "error" J..= J.Null, "machine_failure" J..= J.Null, "bank_counts" J..= [0::Int,1::Int]
@@ -357,20 +372,26 @@ observation calls pendings = J.object
 phases :: [String]
 phases = ["cold-start","shooting-menu","modal75-film","modal75-returned","modal75-film-repeated","modal75-returned-repeated","modal75-handback"]
 
-streamingVerdict :: [Call] -> [Pending] -> Either String J.Value
-streamingVerdict calls pendings = case decodeCheckedObservation semPlan (J.encode (observation calls pendings)) of
+streamingVerdict :: [J.Value] -> [Call] -> [Pending] -> Either String J.Value
+streamingVerdict events calls pendings = case decodeCheckedObservation semPlan (J.encode (observation events calls pendings)) of
   Left failure -> Left failure
   Right (decoded, evidence) -> case qualifyEvidence planBytes semPlan decoded evidence of
     Left refusal -> Left (show refusal)
     Right value -> Right value
 
 accepts :: String -> [Call] -> [Pending] -> IO ()
-accepts label calls pendings = case streamingVerdict calls pendings of
+accepts label = acceptsWith label []
+
+acceptsWith :: String -> [J.Value] -> [Call] -> [Pending] -> IO ()
+acceptsWith label events calls pendings = case streamingVerdict events calls pendings of
   Right _ -> pure ()
   Left failure -> error (label ++ ": " ++ failure)
 
 refuses :: String -> [Call] -> [Pending] -> IO ()
-refuses label calls pendings = case streamingVerdict calls pendings of
+refuses label = refusesWith label []
+
+refusesWith :: String -> [J.Value] -> [Call] -> [Pending] -> IO ()
+refusesWith label events calls pendings = case streamingVerdict events calls pendings of
   Left _ -> pure ()
   Right _ -> error (label ++ ": expected refusal")
 
@@ -393,21 +414,21 @@ main = do
   accepts "timed expiry uses callback evidence" [timedExpiryCall] []
   accepts "cross-domain wait uses entry task records" [crossTimedCall] []
   accepts "interrupt signal cancels armed timer" [timedAcquireWithTimer, interruptWake] []
-  accepts "negative r1 timeout is forever" [releaseCall 0x400545c0 10, releaseCall 0x400545c4 11, pollCall 1 0 0] [pendingForever (fromIntegral (-1 :: Int)) 0]
-  refuses "positive r1 timeout is not forever" [releaseCall 0x400545c0 10, releaseCall 0x400545c4 11, pollCall 1 0 0] [pendingForever 5 (fromIntegral (-1 :: Int))]
-  refuses "stranded caller is not a member" [releaseCall 0x400545c0 10, releaseCall 0x400545c4 11, pollCall 1 0 0] [pendingStranded]
-  refuses "corrupted queue tail" [releaseCall 0x400545c0 10, releaseCall 0x400545c4 11, pollCall 1 0 0] [pendingBadTail]
+  acceptsWith "negative r1 timeout is forever" releaseEvents [releaseCall 0x400545c0 10, releaseCall 0x400545c4 11, pollCall 1 0 0] [pendingForever (fromIntegral (-1 :: Int)) 0]
+  refusesWith "positive r1 timeout is not forever" releaseEvents [releaseCall 0x400545c0 10, releaseCall 0x400545c4 11, pollCall 1 0 0] [pendingForever 5 (fromIntegral (-1 :: Int))]
+  refusesWith "stranded caller is not a member" releaseEvents [releaseCall 0x400545c0 10, releaseCall 0x400545c4 11, pollCall 1 0 0] [pendingStranded]
+  refusesWith "corrupted queue tail" releaseEvents [releaseCall 0x400545c0 10, releaseCall 0x400545c4 11, pollCall 1 0 0] [pendingBadTail]
   refuses "refused poll cannot write" [pollRefusalWrite] []
   refuses "empty wait cannot acquire" [waitAcquireEmpty] []
   refuses "completed call cannot clobber r4" [restoredClobber] []
-  refuses "stale release does not satisfy pending" [releaseCall 0x400545c0 10, releaseCall 0x400545c4 11, pollCall 1 0 0] [pendingStaleRelease]
+  refusesWith "stale release does not satisfy pending" releaseEvents [releaseCall 0x400545c0 10, releaseCall 0x400545c4 11, pollCall 1 0 0] [pendingStaleRelease]
   refuses "untimed wait cannot time out" [waitTimeoutUntimed] []
-  accepts "interleaved cross-core lock acquisition"
+  acceptsWith "interleaved cross-core lock acquisition" interleavedEvents
     [helperCall taskA releaseAddress (HelperSemantic Release) 0x400545c0 100 100 0 0x9000
     ,helperCall 0x9000 acquireAddress (HelperSemantic Acquire) 0x400545c0 101 101 1 0
     ,helperCall taskA releaseAddress (HelperSemantic Release) 0x400545c4 102 102 0 0x9000
     ,pollCall 1 0 0] [pendingInterleaved]
-  refuses "pending save without I masked" [releaseCall 0x400545c0 10, releaseCall 0x400545c4 11, pollCall 1 0 0] [(pendingForever (fromIntegral (-1 :: Int)) 0) { pendingSaveCpsr = Just 0x13 }]
+  refusesWith "pending save without I masked" releaseEvents [releaseCall 0x400545c0 10, releaseCall 0x400545c4 11, pollCall 1 0 0] [(pendingForever (fromIntegral (-1 :: Int)) 0) { pendingSaveCpsr = Just 0x13 }]
   putStrLn "scheduler-pair semaphore tests passed"
 
 wireCall :: Call -> J.Value
