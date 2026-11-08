@@ -59,7 +59,7 @@ SECTIONS {
     . = ORIGIN(fp_delete) + LENGTH(fp_delete);
   } > fp_delete =0xf000f0e7
   .fp_bodies : {
-    KEEP(*(.text.fp_bodies))
+    KEEP(*(.text.fp_body_*))
     *(.text .text.*)
     *(.rodata .rodata.*)
     __fp_bodies_end = .;
