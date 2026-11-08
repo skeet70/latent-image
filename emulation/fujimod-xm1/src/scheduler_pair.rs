@@ -1158,6 +1158,8 @@ fn family_snapshot(board: &Board, core: Core, tcm: [u32; 2], domain: Domain, nam
 /// The semaphore tables of one loader (`replacement/rtos_layout::Domain::words`).
 #[derive(Clone, Copy, Debug)]
 struct SemaphoreTables { tasks: Table, configs: Table, controls: Table, waits: Table, timers: Table }
+fn object_lock(domain: Domain) -> u32 { match domain { Domain::A => 0x4005_45c4, Domain::B => 0x400e_4584 } }
+
 impl SemaphoreTables {
     fn of(domain: Domain) -> Self {
         let table = |base, size, count| Table { base, size, count };
@@ -1233,6 +1235,7 @@ fn semaphore_words(read: &mut dyn FnMut(u32) -> Result<Read, String>, domain: Do
     }
     if let Some((object, slot)) = name.resolve(domain, arguments[0]) {
         let tables = SemaphoreTables::of(object);
+        walk.capture_word(object_lock(object));
         if let Some(config) = tables.configs.record(slot) { walk.record(config, tables.configs.size); }
         if let Some(control) = tables.controls.record(slot) {
             walk.record(control, tables.controls.size);
@@ -2160,6 +2163,17 @@ fn drive() -> Result<(), String> {
                                 if let Read::Committed { value: saved } = board.word(call.entry.core, tcm, *task + 0x18)? {
                                     if saved % 4 == 0 { for offset in (0..36).step_by(4) { addresses.insert(saved + offset); } }
                                 }
+                            }
+                        }
+                        if let Some((object, slot)) = name.resolve(call.entry.slot.domain, call.entry.arguments[0]) {
+                            addresses.insert(object_lock(object));
+                            let tables = SemaphoreTables::of(object);
+                            if let Some(control) = tables.controls.record(slot) {
+                                addresses.insert(control);
+                                let mut read = |address: u32| board.word(call.entry.core, tcm, address);
+                                let mut walk = FamilyWalk { addresses: BTreeSet::new(), read: &mut read };
+                                semaphore_queue(&mut walk, tables, control)?;
+                                addresses.extend(walk.addresses);
                             }
                         }
                     }

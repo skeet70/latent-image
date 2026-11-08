@@ -4,7 +4,7 @@ module Main (main) where
 import qualified Data.Aeson as J
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
-import Data.Word (Word32)
+import Data.Word (Word32, Word64)
 import Emulation.SchedulerPairCheck
 import Emulation.SchedulerPairDecode (decodeCheckedObservation)
 import Emulation.SchedulerPairEvidence (qualifyEvidence)
@@ -15,6 +15,7 @@ import qualified Emulation.OwnFirstPairCheck as Q
 import qualified Emulation.SchedulerPairS2 as D
 import Emulation.Sha256 (sha256, sha256Hex)
 import Replacement.RtosOwnFirst.Regions (Domain (..))
+import Replacement.RtosScheduler.Regions (Helper (..))
 
 planBytes :: B.ByteString
 planBytes = "semaphore-plan"
@@ -23,14 +24,18 @@ semPlan :: Plan
 semPlan = Plan Owned "dat" entries guards [] []
  where
   entries =
-    [ Entry DomainA (SemaphoreSemantic SemaphoreInterruptSignal) (Address 0x47844)
-    , Entry DomainA (SemaphoreSemantic SemaphoreSignal) (Address 0x47a54)
+    [ Entry DomainA (HelperSemantic Release) (Address 0x43a14)
+    , Entry DomainA (SemaphoreSemantic SemaphoreSignal) (Address 0x47604)
+    , Entry DomainA (SemaphoreSemantic SemaphoreInterruptSignal) (Address 0x47844)
+    , Entry DomainA (SemaphoreSemantic SemaphoreWait) (Address 0x47a54)
     , Entry DomainA (SemaphoreSemantic SemaphorePoll) (Address 0x47c94)
     , Entry DomainA (SemaphoreSemantic SemaphoreTimedWait) (Address 0x47dd0)
     , Entry DomainB (SemaphoreSemantic SemaphorePoll) (Address 0xd7a14)
     ]
   guards =
-    [ Guard DomainA (Address 0x47844) (Address 0x47a54) "g0"
+    [ Guard DomainA (Address 0x43a14) (Address 0x43a50) "gr"
+    , Guard DomainA (Address 0x47604) (Address 0x47844) "g-1"
+    , Guard DomainA (Address 0x47844) (Address 0x47a54) "g0"
     , Guard DomainA (Address 0x47a54) (Address 0x47c94) "ga"
     , Guard DomainA (Address 0x47c94) (Address 0x47dd0) "gb"
     , Guard DomainA (Address 0x47dd0) (Address 0x48044) "gc"
@@ -55,13 +60,13 @@ callOf = callOfTask 0x9000
 callOfTask :: Word32 -> Domain -> Word32 -> Semantic -> [Word32] -> Memory -> Memory -> Word32 -> [Written] -> CallTrace -> Call
 callOfTask task domain address semantic arguments before after r0 writes trace =
   Call domain (Address address) semantic (if domain==DomainA then 0 else 1) 0x13 (Arguments arguments)
-    before after r0 0x13 writes [] 1 10 (Just trace) task 1 Nothing (map (const (originAt address)) writes) []
+    before after r0 0x13 writes [] 1 10 (Just trace) task 1 Nothing (map (const (originAtFor task address)) writes) []
 
-originAt :: Word32 -> WriteOrigin
-originAt address = WriteOrigin 0 (Address address) (Address 0x9000) 0x13 (Address 0x9000) 1 1
+originAtFor :: Word32 -> Word32 -> WriteOrigin
+originAtFor task address = WriteOrigin 0 (Address address) (Address 0x9000) 0x13 (Address task) 1 1
 
 signalAddress, pollAddress, timedAddress, callbackA, timerA :: Word32
-signalAddress = 0x47a54
+signalAddress = 0x47604
 pollAddress = 0x47c94
 timedAddress = 0x47dd0
 callbackA = 0x44318
@@ -172,6 +177,9 @@ timerInsertBoundary = Boundary TimerInsertBoundary (Address 0x44c60) 1 0 (regist
 timerMemory :: Memory
 timerMemory = M.fromList [(Address (timerA+4), callbackA), (Address (timerA+8), taskA)]
 
+timerRemoveBoundary :: Boundary
+timerRemoveBoundary = Boundary TimerRemoveBoundary (Address 0x44ca8) 1 0 (registers (replicate 16 0)) timerMemory [] [] (Just timerA) taskA [] []
+
 expiryBoundary :: Boundary
 expiryBoundary = Boundary TimerConsumeBoundary (Address callbackA) 3 0 (registers (replicate 16 0)) timerMemory [] [] (Just timerA) taskA [] []
 
@@ -182,9 +190,16 @@ zeroTimeoutCall r0 history = callOfTask taskA DomainA timedAddress (SemaphoreSem
 timedAcquireWithTimer :: Call
 timedAcquireWithTimer = timedWaitCall 100 [saveBoundary 0x47dd0, timerInsertBoundary]
 
+restoredClobber :: Call
+restoredClobber = (timedWaitCall 100 [saveBoundary 0x47dd0, timerInsertBoundary, timerRemoveBoundary])
+  { callTrace = Just (CallTrace before after Returned [saveBoundary 0x47dd0, timerInsertBoundary, timerRemoveBoundary] Nothing) }
+ where
+  before = registers (replicate 16 0)
+  after = registers (replicate 4 0 ++ [1] ++ replicate 11 0)
+
 crossTimedCall :: Call
 crossTimedCall = callOfTask taskA DomainA timedAddress (SemaphoreSemantic SemaphoreTimedWait) [0x00020001, 100, 0, 0]
-  crossBefore crossBefore 0 [] (traceOf (withLr 0x47dd0) [saveBoundary 0x47dd0, timerInsertBoundary] Returned)
+  crossBefore crossBefore 0 [] (traceOf (withLr 0x47dd0) [saveBoundary 0x47dd0, timerInsertBoundary, timerRemoveBoundary] Returned)
  where
   configB = 0x400edf98
   controlB = 0x400eaecc
@@ -217,7 +232,7 @@ timedExpiryCall = callOfTask taskA DomainA timedAddress (SemaphoreSemantic Semap
   [Written (Address waitA) 4 (fromIntegral (-50 :: Int))] (traceOf (withLr 0x47dd0) [saveBoundary 0x47dd0, timerInsertBoundary, expiryBoundary] Returned)
 
 pendingForever :: Word32 -> Word32 -> Pending
-pendingForever timeout stackWord = Pending (SemaphoreSemantic SemaphoreTimedWait) DomainA [1, timeout, 0, 0] before (Just terminal) taskA 0x7000 0x13 timedAddress 50 (Just 0x93)
+pendingForever timeout stackWord = Pending (SemaphoreSemantic SemaphoreTimedWait) DomainA [1, timeout, 0, 0] before (Just terminal) taskA 0x7000 0x13 timedAddress 50 (Just 0x93) (Just 50) 0
  where
   before = M.fromList [(Address 0x7000, stackWord)]
   terminal = M.union (baseBefore 0 5 taskA) $ M.fromList
@@ -237,6 +252,36 @@ pendingForever timeout stackWord = Pending (SemaphoreSemantic SemaphoreTimedWait
     , (Address 0x400545c0, 0)
     , (Address 0x400545c4, 0)
     ]
+
+releaseAddress :: Word32
+releaseAddress = 0x43a14
+
+releaseCall :: Word32 -> Word64 -> Call
+releaseCall lock first = (callOfTask taskA DomainA releaseAddress (HelperSemantic Release) [pointer,0,0,0]
+  before after pointer [Written (Address lock) 4 0] (traceOf (replicate 16 0) [] Returned)) { callFirst = first }
+ where
+  pointer = 0x9000
+  before = M.fromList [(Address handlerA, 0), (Address dispatchA, 1), (Address pointer, lock), (Address lock, 1)]
+  after = M.insert (Address lock) 0 before
+
+pollRefusalWrite :: Call
+pollRefusalWrite = callOf DomainA pollAddress (SemaphoreSemantic SemaphorePoll) [1,0,0,0] before after (fromIntegral (-42 :: Int)) [Written (Address (configA+0x0c)) 4 1] trace
+ where
+  before = M.insert (Address (configA+0x0c)) 0 (baseBefore 1 5 controlA)
+  after = M.insert (Address (configA+0x0c)) 1 before
+  trace = traceOf (replicate 16 0) [] Returned
+
+waitAcquireEmpty :: Call
+waitAcquireEmpty = callOf DomainA 0x47a54 (SemaphoreSemantic SemaphoreWait) [1,0,0,0] before after 0 [Written (Address (controlA+0x0c)) 4 0xffffffff] trace
+ where
+  before = baseBefore 0 5 controlA
+  after = M.insert (Address (controlA+0x0c)) 0xffffffff before
+  trace = traceOf (replicate 16 0) [] Returned
+
+pendingBadTail :: Pending
+pendingBadTail = (pendingForever (fromIntegral (-1 :: Int)) 0) { pendingTerminal = Just terminal }
+ where
+  terminal = M.insert (Address (controlA+4)) taskB (maybe M.empty id (pendingTerminal (pendingForever (fromIntegral (-1 :: Int)) 0)))
 
 pendingStranded :: Pending
 pendingStranded = (pendingForever (fromIntegral (-1 :: Int)) 0) { pendingTerminal = Just terminal }
@@ -259,8 +304,8 @@ observation calls pendings = J.object
   , "untracked" J..= J.object ["count" J..= (0::Int)], "unarmed_entries" J..= J.object ["count" J..= (0::Int)]
   , "fill_fetch" J..= J.Null
   , "armings" J..= [arming DomainA, arming DomainB]
-  , "segments" J..= [segment [DomainA] 10 20 [(0x47844,0x47a54),(0x47a54,0x47c94),(0x47c94,0x47dd0),(0x47dd0,0x48044)]
-                    , segment [DomainA,DomainB] 20 100 [(0x47844,0x47a54),(0x47a54,0x47c94),(0x47c94,0x47dd0),(0x47dd0,0x48044),(0xd7a14,0xd7c54)]]
+  , "segments" J..= [segment [DomainA] 10 20 [(0x43a14,0x43a50),(0x47604,0x47844),(0x47844,0x47a54),(0x47a54,0x47c94),(0x47c94,0x47dd0),(0x47dd0,0x48044)]
+                    , segment [DomainA,DomainB] 20 100 [(0x43a14,0x43a50),(0x47604,0x47844),(0x47844,0x47a54),(0x47a54,0x47c94),(0x47c94,0x47dd0),(0x47dd0,0x48044),(0xd7a14,0xd7c54)]]
   , "final_readback" J..= rb semReadback
   , "classes" J..= map wireCall calls
   , "pending" J..= map wirePending pendings
@@ -315,8 +360,8 @@ main = do
   refuses "signal overflow -28 refuses" [signalOverflow (fromIntegral (-28 :: Int))] []
   accepts "zero timeout returns -50 without save" [zeroTimeoutCall (fromIntegral (-50 :: Int)) []] []
   refuses "zero timeout with save refuses" [zeroTimeoutCall (fromIntegral (-50 :: Int)) [saveBoundary 0x47dd0]] []
-  accepts "restored continuation ignores resume entry PC" [timedWaitCall 100 [saveBoundary 0x47dd0, resumeBoundary]] []
-  refuses "save without semaphore continuation refuses" [timedWaitCall 100 [saveBoundary 0x40000]] []
+  accepts "restored continuation ignores resume entry PC" [timedWaitCall 100 [saveBoundary 0x47dd0, timerInsertBoundary, timerRemoveBoundary, resumeBoundary]] []
+  refuses "save without semaphore continuation refuses" [timedWaitCall 100 [saveBoundary 0x40000, timerInsertBoundary, timerRemoveBoundary]] []
   accepts "suspended waiter stays suspended" [suspendedWake 4] []
   refuses "suspended waiter ready refuses" [suspendedWake 1] []
   accepts "signal removes sibling timer" [timedAcquireWithTimer, signalWakeCall] []
@@ -325,10 +370,14 @@ main = do
   accepts "timed expiry uses callback evidence" [timedExpiryCall] []
   accepts "cross-domain wait uses entry task records" [crossTimedCall] []
   accepts "interrupt signal cancels armed timer" [timedAcquireWithTimer, interruptWake] []
-  accepts "negative r1 timeout is forever" [pollCall 1 0 0] [pendingForever (fromIntegral (-1 :: Int)) 0]
-  refuses "positive r1 timeout is not forever" [pollCall 1 0 0] [pendingForever 5 (fromIntegral (-1 :: Int))]
-  refuses "stranded caller is not a member" [pollCall 1 0 0] [pendingStranded]
-  refuses "pending save without I masked" [pollCall 1 0 0] [(pendingForever (fromIntegral (-1 :: Int)) 0) { pendingSaveCpsr = Just 0x13 }]
+  accepts "negative r1 timeout is forever" [releaseCall 0x400545c0 10, releaseCall 0x400545c4 11, pollCall 1 0 0] [pendingForever (fromIntegral (-1 :: Int)) 0]
+  refuses "positive r1 timeout is not forever" [releaseCall 0x400545c0 10, releaseCall 0x400545c4 11, pollCall 1 0 0] [pendingForever 5 (fromIntegral (-1 :: Int))]
+  refuses "stranded caller is not a member" [releaseCall 0x400545c0 10, releaseCall 0x400545c4 11, pollCall 1 0 0] [pendingStranded]
+  refuses "corrupted queue tail" [releaseCall 0x400545c0 10, releaseCall 0x400545c4 11, pollCall 1 0 0] [pendingBadTail]
+  refuses "refused poll cannot write" [pollRefusalWrite] []
+  refuses "empty wait cannot acquire" [waitAcquireEmpty] []
+  refuses "completed call cannot clobber r4" [restoredClobber] []
+  refuses "pending save without I masked" [releaseCall 0x400545c0 10, releaseCall 0x400545c4 11, pollCall 1 0 0] [(pendingForever (fromIntegral (-1 :: Int)) 0) { pendingSaveCpsr = Just 0x13 }]
   putStrLn "scheduler-pair semaphore tests passed"
 
 wireCall :: Call -> J.Value
@@ -336,14 +385,16 @@ wireCall value = J.object
   [ "entry" J..= J.object
       [ "slot" J..= J.object ["domain" J..= domainName (callDomain value),"entry" J..= hex (addressOf (callAddress value)),"semantic" J..= semanticValue (callSemantic value)]
       , "core" J..= coreName (callCore value), "cpsr" J..= callCpsr value, "arguments" J..= args (callArguments value)
-      , "memory" J..= wordsOf (callBefore value), "registers" J..= replicate (16::Int) (0::Int)
+      , "memory" J..= wordsOf (callBefore value)
+      , "registers" J..= maybe (replicate (16::Int) (0::Int)) (map fromIntegral . D.registers . traceBefore) (callTrace value)
       , "cpacr" J..= (0::Int), "fpexc" J..= (0::Int), "tpidrurw" J..= (0::Int)
       , "task" J..= J.object ["view" J..= ("committed"::String),"value" J..= callTask value]
       , "kernel_context" J..= callKernelContext value, "task_stack" J..= J.Null
       ]
   , "result" J..= J.object
       [ "r0" J..= callR0 value, "cpsr" J..= callReturnCpsr value, "memory" J..= wordsOf (callAfter value)
-      , "registers" J..= replicate (16::Int) (0::Int), "cpacr" J..= (0::Int), "fpexc" J..= (0::Int), "tpidrurw" J..= (0::Int)
+      , "registers" J..= maybe (replicate (16::Int) (0::Int)) (map fromIntegral . D.registers . traceAfter) (callTrace value)
+      , "cpacr" J..= (0::Int), "fpexc" J..= (0::Int), "tpidrurw" J..= (0::Int)
       , "completion" J..= ("return"::String)
       , "history" J..= map wireBoundary (maybe [] traceHistory (callTrace value))
       , "writes" J..= map writeOf (zip (callWrites value) (callWriteOrigins value))
@@ -367,12 +418,13 @@ wirePending :: Pending -> J.Value
 wirePending pending = J.object
   [ "entry" J..= J.object
       [ "slot" J..= J.object ["domain" J..= domainName (pendingDomain pending),"entry" J..= hex (pendingEntry pending),"semantic" J..= semanticValue (pendingSemantic pending)]
+      , "core" J..= coreName 0
       , "arguments" J..= pendingArguments pending, "memory" J..= wordsOf (pendingBefore pending)
       , "task" J..= J.object ["view" J..= ("committed"::String),"value" J..= pendingTask pending]
       , "sp" J..= hex (pendingSp pending), "cpsr" J..= pendingCpsr pending
       ]
   , "entered" J..= pendingEntered pending, "terminal_memory" J..= maybe [] wordsOf (pendingTerminal pending)
-  , "history" J..= [J.object ["kind" J..= ("save"::String),"cpsr" J..= cpsr] | cpsr <- maybe [] pure (pendingSaveCpsr pending)]
+  , "history" J..= [J.object ["kind" J..= ("save"::String),"cpsr" J..= cpsr,"instructions" J..= (50::Int)] | cpsr <- maybe [] pure (pendingSaveCpsr pending)]
   ]
 
 kindName :: BoundaryKind -> String

@@ -12,7 +12,7 @@ import Data.Word (Word32, Word64)
 import Emulation.SchedulerPairCatalog (Address (..), Semantic (..), SemaphoreService (..))
 import Emulation.SchedulerPairFamily
   ( FamilyBoundary (..), FamilyBoundaryKind (..), FamilyCompletion (..), FamilyRefusal (..), FamilyTrace (..), Pending (..)
-  , TimerKind (..), TimerWitness (..) )
+  , TimerKind (..), TimerWitness (..), ReleaseWitness (..) )
 import Emulation.SchedulerPairModel (Memory)
 import Emulation.SchedulerPairPlan (Role (..))
 import Replacement.RtosOwnFirst.Regions (Domain (..))
@@ -190,7 +190,16 @@ checkSemaphoreCallFor role call witnesses = do
   let domain = semaphoreDomain call
   admitted <- admission role call service domain idWord
   case admitted of
-    Refused expected -> expect FamilyReturn (semaphoreR0 call == expected)
+    Refused expected -> do
+      expect FamilyReturn (semaphoreR0 call == expected)
+      let history = familyTraceHistory trace
+          before = semaphoreBefore call
+          after = semaphoreAfter call
+      expect FamilyEffect (null (semaphoreWrites call))
+      expect FamilyEffect (M.keys after == M.keys before
+        && all (\address -> M.lookup address after == M.lookup address before) (M.keys before))
+      expect FamilyTimer (null [boundary | boundary <- history, familyBoundaryKind boundary `elem` [FamilyTimerInsertKind, FamilyTimerRemoveKind, FamilyTimerConsumeKind]])
+      expect FamilyContinuation (null [boundary | boundary <- history, familyBoundaryKind boundary == FamilySaveKind])
     Admitted (object, slot) -> case service of
       SemaphoreCreate -> checkCreate call object slot
       SemaphoreDelete -> checkDelete role call object slot
@@ -303,6 +312,7 @@ checkWait call entryDomain object slot timed trace = do
           wordAt (control + 0x0c) (semaphoreAfter call) >>= expect FamilyEffect . (== count - 1)
     else if not saved
       then do
+        expect FamilyReturn (count > 0)
         expect FamilyReturn (semaphoreR0 call == 0)
         wordAt (control + 0x0c) (semaphoreAfter call) >>= expect FamilyEffect . (== count - 1)
       else do
@@ -326,20 +336,38 @@ checkContinuation call trace = do
     case familyBoundaryRegisters boundary of
       registers | length registers == 16 -> expect FamilyContinuation (inSemaphoreWindow domain (registers !! 14))
       _ -> Left FamilyContinuation
+  case (familyTraceBefore trace, familyTraceAfter trace) of
+    (beforeRegisters, afterRegisters) | length beforeRegisters == 16 && length afterRegisters == 16 -> do
+      expect FamilyContinuation (all (\register -> beforeRegisters !! register == afterRegisters !! register) [4..11])
+      expect FamilyContinuation (familyTraceBeforeCpsr trace .&. 0xc0 == familyTraceAfterCpsr trace .&. 0xc0)
+    _ -> Left FamilyContinuation
 
 checkTimer :: SemaphoreCall c => c -> [TimerWitness] -> FamilyTrace -> SemaphoreService -> Either FamilyRefusal ()
-checkTimer call witnesses _trace service = do
-  let domain = semaphoreDomain call
+checkTimer call witnesses trace service = do
+  let history = familyTraceHistory trace
+      domain = semaphoreDomain call
       task = semaphoreTask call
       epoch = semaphoreEpoch call
-      own = [witness | witness <- witnesses, timerEpoch witness == epoch]
-      ownInserts = [witness | witness <- own, timerKind witness == TimerInserted]
-      ownEvents = [witness | witness <- own, timerKind witness `elem` [TimerRemoved, TimerConsumed]]
+      returnAt = maximum (0 : map familyBoundaryInstructions history)
+      ownInserts = [witness | witness <- witnesses, timerEpoch witness == epoch, timerKind witness == TimerInserted]
+      ownEvents = [witness | witness <- witnesses, timerEpoch witness == epoch, timerKind witness `elem` [TimerRemoved, TimerConsumed]]
       earlier witness = [insert | insert <- witnesses, timerKind insert == TimerInserted
         , timerEntry insert == timerEntry witness
         , timerArmedAt insert <= timerArmedAt witness]
+      armStart = case ownInserts of
+        (witness:_) -> timerArmedAt witness
+        [] -> case [timerArmedAt witness | witness <- witnesses, timerKind witness == TimerInserted
+                    , timerTask witness == task, timerArmedAt witness <= returnAt] of
+          [] -> 0
+          values -> minimum values
+      within witness = timerArmedAt witness >= armStart && timerArmedAt witness <= returnAt
+      inserts = ownInserts ++ [witness | witness <- witnesses, timerKind witness == TimerInserted
+        , timerTask witness == task, within witness]
+      retire insert = [witness | witness <- witnesses, timerKind witness `elem` [TimerRemoved, TimerConsumed]
+        , timerEntry witness == timerEntry insert, timerArmedAt witness >= timerArmedAt insert]
       expiry = [witness | witness <- witnesses, timerKind witness == TimerConsumed
         , timerTask witness == task, not (null (earlier witness))]
+      saved = any ((== FamilySaveKind) . familyBoundaryKind) history
   forM_ ownInserts $ \witness -> do
     expect FamilyTimer (isSemaphoreTimer domain (timerEntry witness))
     wordAt (timerEntry witness + 4) (semaphoreAfter call) >>= expect FamilyTimer . (== timeoutCallback domain)
@@ -348,6 +376,10 @@ checkTimer call witnesses _trace service = do
   case service of
     SemaphoreTimedWait -> do
       timeout <- argAt (semaphoreArguments call) 1
+      let positive = signedWord timeout > 0
+      when (positive && saved) $ do
+        expect FamilyTimer (not (null inserts))
+        forM_ inserts $ \insert -> expect FamilyTimer (not (null (retire insert)))
       let expired = semaphoreR0 call == statusTimeout && timeout /= 0
       expect FamilyTimer (timeout == 0 || not expired || not (null ownInserts))
       when expired $ expect FamilyTimer (not (null expiry))
@@ -361,8 +393,8 @@ signedWord value = if value .&. 0x80000000 /= 0 then fromIntegral value - 0x1000
 
 -- | A semaphore wait still blocked at route end. Only the untimed wait and the negative
 -- timed wait are forever; a finite timeout still armed fails closed.
-checkPendingSemaphore :: Pending -> Either FamilyRefusal ()
-checkPendingSemaphore pending = case (pendingSemantic pending, pendingTerminal pending) of
+checkPendingSemaphore :: [ReleaseWitness] -> Pending -> Either FamilyRefusal ()
+checkPendingSemaphore releases pending = case (pendingSemantic pending, pendingTerminal pending) of
   (SemaphoreSemantic SemaphoreWait, Just terminal) -> foreverWait terminal False
   (SemaphoreSemantic SemaphoreTimedWait, Just terminal) -> foreverWait terminal True
   _ -> Left FamilyLifetime
@@ -390,24 +422,38 @@ checkPendingSemaphore pending = case (pendingSemantic pending, pendingTerminal p
       expect FamilyLifetime (state .&. 0xff == 0x32)
       members <- queueWalk terminal control
       expect FamilyLifetime (task `elem` members)
-      schedulerLock <- wordAt (if domain == DomainA then 0x400545c0 else 0x400e4580) terminal
-      objectLock <- wordAt (if object == DomainA then 0x400545c4 else 0x400e4584) terminal
-      expect FamilyLifetime (schedulerLock == 0 && objectLock == 0)
+      let lockWord = if object == DomainA then 0x400545c4 else 0x400e4584
+          schedulerLockAddress = if domain == DomainA then 0x400545c0 else 0x400e4580
+      schedulerLock <- wordAt schedulerLockAddress terminal
+      objectLock <- wordAt lockWord terminal
       saveCpsr <- maybe (Left FamilyLifetime) Right (pendingSaveCpsr pending)
+      saveAt <- maybe (Left FamilyLifetime) Right (pendingSaveAt pending)
       expect FamilyLifetime (saveCpsr .&. 0x80 /= 0)
-      expect FamilyLifetime (saveCpsr .&. 0x40 == pendingCpsr pending .&. 0x40)
-      expect FamilyLifetime (saveCpsr .&. 0x1f == pendingCpsr pending .&. 0x1f)
+      expect FamilyLifetime (saveCpsr .&. 0x160 == pendingCpsr pending .&. 0x160)
       expect FamilyLifetime (pendingCpsr pending .&. 0x80 == 0)
+      let unlocked lock = [witness | witness <- releases, releaseTask witness == task
+            , releaseCore witness == pendingCore pending, releaseAt witness < saveAt
+            , (Address lock,0) `elem` releaseWrites witness]
+          acquired lock = [witness | witness <- releases, releaseTask witness /= task
+            , releaseFirst witness >= saveAt, (Address lock,1) `elem` releaseWrites witness]
+          lockOk lock value = not (null (unlocked lock)) && (value == 0 || (value == 1 && not (null (acquired lock))))
+      expect FamilyLifetime (lockOk lockWord objectLock && lockOk schedulerLockAddress schedulerLock)
       savedSp <- wordAt (task + 0x18) terminal
       savedPc <- wordAt (task + 0x1c) terminal
-      let resumeEntry = if domain == DomainA then 0x43668 else 0xd3668
-      expect FamilyLifetime (savedSp /= 0 && savedSp .&. 3 == 0 && savedPc == resumeEntry)
       definition <- wordAt (task + 8) terminal
-      size <- wordAt (definition + 0x10) terminal
-      base <- wordAt (definition + 0x14) terminal
-      let high = base + size
-      expect FamilyLifetime (savedSp > base && savedSp <= high)
-      expect FamilyLifetime (savedSp + 36 <= high)
+      stackSize <- wordAt (definition + 0x10) terminal
+      stackBase <- wordAt (definition + 0x14) terminal
+      let alias x = x .&. complement 0x40000000
+          base = alias stackBase
+          limit = base + stackSize
+          saved = alias savedSp
+          entrySp = alias (pendingSp pending)
+          resumeEntry = if domain == DomainA then 0x43668 else 0xd3668
+      expect FamilyLifetime (savedSp .&. 3 == 0 && pendingSp pending .&. 3 == 0)
+      expect FamilyLifetime (stackSize >= 36 && stackSize <= 0x10000 && base /= 0)
+      expect FamilyLifetime (saved >= base && saved + 36 <= limit)
+      expect FamilyLifetime (entrySp >= base && entrySp < limit)
+      expect FamilyLifetime (alias savedPc .&. complement 1 == alias resumeEntry .&. complement 1)
       continuation <- wordAt (savedSp + 32) terminal
       expect FamilyContinuation (inSemaphoreWindow domain continuation)
 
@@ -427,6 +473,8 @@ queueWalk memory control = do
           next <- wordAt node memory
           prev <- wordAt (node + 4) memory
           expect FamilyLifetime (next /= 0 && prev /= 0)
+          when (next == control) $ wordAt (control + 4) memory >>= expect FamilyLifetime . (== node)
+          when (prev == control) $ wordAt control memory >>= expect FamilyLifetime . (== node)
           when (next /= control) $ wordAt (next + 4) memory >>= expect FamilyLifetime . (== node)
           when (prev /= control) $ wordAt prev memory >>= expect FamilyLifetime . (== node)
           rest <- go (depth + 1) next

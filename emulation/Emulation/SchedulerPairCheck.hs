@@ -442,7 +442,7 @@ qualifySuffix plan releases observation totals = do
     expect Incomplete (F.pendingEntered pending <= obsInstructions observation)
     case F.pendingSemantic pending of
       FamilySemantic _ -> either (Left . familyRefusal) Right (F.checkPendingFamily releases pending)
-      SemaphoreSemantic _ -> either (Left . familyRefusal) Right (Sem.checkPendingSemaphore pending)
+      SemaphoreSemantic _ -> either (Left . familyRefusal) Right (Sem.checkPendingSemaphore releases pending)
       _ -> Left FamilyLifetime
   expect ObserverError (obsError observation == Nothing && obsMachineError observation == Nothing)
   let milestones = obsMilestones observation
