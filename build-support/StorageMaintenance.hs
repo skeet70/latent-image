@@ -10,55 +10,74 @@ import Control.Applicative ((<|>))
 import Control.Exception (IOException, bracket, catch, onException)
 import Control.Monad (forM, forM_, unless, when)
 import qualified Crypto.Hash.SHA256 as SHA
-import Data.Aeson (FromJSON (parseJSON), ToJSON, eitherDecodeStrict', encode, withObject, (.:))
+import Data.Aeson (FromJSON (parseJSON), ToJSON (toJSON), eitherDecodeStrict', encode, object, withObject, (.:), (.=))
+import Data.Bits ((.&.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
 import qualified Data.ByteString.Lazy as BL
 import Data.Char (isAlphaNum, isDigit, isHexDigit)
-import Data.List (isPrefixOf, nub, sort, stripPrefix)
+import Data.List (isPrefixOf, nub, sort, sortOn, stripPrefix)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes)
 import qualified Data.Set as Set
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
 import Data.IORef (modifyIORef', newIORef, readIORef)
+import Data.Time.Clock.POSIX (getPOSIXTime)
 import Foreign.C.Types (CInt (..))
+import Foreign.C.Error (eAGAIN, eWOULDBLOCK, getErrno)
+import Foreign.C.String (CString)
 import GHC.Generics (Generic)
 import Numeric (showHex)
-import System.Directory (canonicalizePath, doesDirectoryExist, doesPathExist, listDirectory, makeAbsolute, removeFile)
+import System.Directory (canonicalizePath, createDirectoryIfMissing, doesDirectoryExist, doesPathExist, listDirectory, makeAbsolute, removeFile, renameFile)
 import qualified GHC.Foreign as GHC
 import GHC.IO.Encoding (getFileSystemEncoding)
 import System.Environment (getArgs)
 import System.Exit (ExitCode (..), die)
-import System.FilePath ((</>), isAbsolute, splitDirectories, takeDirectory, takeExtension, takeFileName)
+import System.FilePath ((</>), isAbsolute, makeRelative, normalise, splitDirectories, takeDirectory, takeExtension, takeFileName)
 import System.IO (IOMode (ReadMode), hPutStrLn, stderr, withBinaryFile)
 import System.IO.Error (isDoesNotExistError)
-import System.Posix.Files (deviceID, fileID, fileOwner, fileSize, getFileStatus, getSymbolicLinkStatus, isDirectory, isRegularFile, isSymbolicLink, linkCount, readSymbolicLink)
+import System.Posix.Files (deviceID, fileID, fileGroup, fileMode, fileOwner, fileSize, getFileStatus, getSymbolicLinkStatus, isDirectory, isRegularFile, isSymbolicLink, linkCount, modificationTimeHiRes, readSymbolicLink, setFileMode)
 import System.Posix.IO (OpenFileFlags (cloexec, nofollow), OpenMode (ReadWrite), closeFd, defaultFileFlags, openFd)
 import System.Posix.Process (getProcessID)
 import System.Posix.Types (Fd (..))
-import System.Posix.User (getEffectiveUserID)
+import System.Posix.User (getEffectiveGroupID, getEffectiveUserID, getGroups, setEffectiveGroupID, setEffectiveUserID, setGroups)
 import System.Process (readProcessWithExitCode)
 
-newtype Root = Root FilePath deriving stock (Eq, Show, Generic) deriving anyclass (ToJSON, FromJSON)
+newtype Root = Root FilePath deriving stock (Eq, Ord, Show, Generic) deriving anyclass (ToJSON, FromJSON)
 newtype RelativePath = RelativePath T.Text deriving stock (Eq, Ord, Show, Generic) deriving anyclass (ToJSON, FromJSON)
-newtype Bytes = Bytes Integer deriving stock (Eq, Show, Generic) deriving anyclass (ToJSON, FromJSON)
+newtype Bytes = Bytes Integer deriving stock (Eq, Ord, Show, Generic) deriving anyclass (ToJSON, FromJSON)
+newtype FileTimeNanoseconds = FileTimeNanoseconds Integer deriving stock (Eq, Ord, Show, Generic) deriving anyclass (ToJSON, FromJSON)
+newtype AgeSeconds = AgeSeconds Integer deriving stock (Eq, Ord, Show, Generic) deriving anyclass (ToJSON, FromJSON)
 newtype Digest = Digest T.Text deriving stock (Eq, Show, Generic) deriving anyclass (ToJSON, FromJSON)
 newtype ProcessId = ProcessId String deriving stock (Eq, Show, Generic) deriving anyclass (ToJSON, FromJSON)
 newtype OwnerUID = OwnerUID Integer deriving stock (Eq, Show, Generic) deriving anyclass (ToJSON, FromJSON)
 data InspectionIssue = InspectionIssue { inspectionPid :: ProcessId, inspectionFailure :: String } deriving (Generic, ToJSON)
-data Activity = Activity Root [ProcessId] [InspectionIssue]
+data TargetUse = TargetContext | FileReference RelativePath
+data Activity = Activity Root [(ProcessId, [TargetUse])] [InspectionIssue]
 data ProcessScope = OwnerProcesses | AllProcesses deriving Eq
 data Disposition = Retain | CompilerArtifact | FingerprintSuccess deriving (Eq, Show, Generic, ToJSON, FromJSON)
-data EntryType = RegularFile | Directory deriving (Eq, Show, Generic, ToJSON, FromJSON)
-data Entry = Entry { path :: !RelativePath, device :: !Integer, inode :: !Integer, ownerUID :: !OwnerUID, size :: !Bytes, digest :: !(Maybe Digest), disposition :: !Disposition, entryType :: !EntryType } deriving (Eq, Show, Generic, ToJSON, FromJSON)
+data EntryType = RegularFile | Directory | SymbolicLink deriving (Eq, Show, Generic, ToJSON, FromJSON)
+data Entry = Entry { path :: !RelativePath, device :: !Integer, inode :: !Integer, ownerUID :: !OwnerUID, size :: !Bytes, digest :: !(Maybe Digest), disposition :: !Disposition, entryType :: !EntryType, mtimeNanoseconds :: !FileTimeNanoseconds } deriving (Eq, Show, Generic, ToJSON, FromJSON)
 data Binding = Binding { root :: Root, entries :: [Entry] } deriving (Eq, Show, Generic, ToJSON, FromJSON)
-data Plan = Plan { schemaVersion :: Int, bindings :: [Binding] } deriving (Eq, Show, Generic, ToJSON, FromJSON)
+data CoherentUnit = CoherentUnit { unitRoot :: Root, unitFingerprint :: RelativePath, unitArtifacts :: [RelativePath], unitControl :: RelativePath } deriving (Eq, Show, Generic, ToJSON, FromJSON)
+
+unitRemovals :: CoherentUnit -> [RelativePath]
+unitRemovals unit = unitFingerprint unit : unitArtifacts unit
+
+unitInputs :: CoherentUnit -> [RelativePath]
+unitInputs unit = unitControl unit : unitRemovals unit
+
+data RetentionContext = RetentionContext { authorizedPolicySha256 :: Digest, authorizedRootPolicy :: RetentionRootPolicy, authorizedArtifactClasses :: [RetentionClass] } deriving (Eq, Show, Generic, ToJSON, FromJSON)
+data Plan = Plan { schemaVersion :: Int, bindings :: [Binding], coherentUnits :: [CoherentUnit], retentionAuthorization :: Maybe RetentionContext } deriving (Eq, Show, Generic, ToJSON, FromJSON)
 newtype FileCount = FileCount Integer deriving stock (Generic) deriving anyclass (ToJSON)
 data RootSummary = RootSummary { canonicalCargoTarget :: Root, recognizedFileCount :: FileCount, recognizedBytes :: Bytes, retainedFileCount :: FileCount, retainedBytes :: Bytes } deriving (Generic, ToJSON)
 data Inventory = Inventory { rootSummaries :: [RootSummary], availableBytes :: [(Root, Bytes)], activeUsers :: [(Root, [ProcessId])], uninspectableUsers :: [(Root, [InspectionIssue])] } deriving (Generic, ToJSON)
-data ScanMode = MetadataOnly | HashContents deriving Eq
+data ScanMode = MetadataOnly | HashContents | RetentionMetadata deriving Eq
 data AuditPhase = Applying | Complete | Interrupted deriving (Generic, ToJSON)
-data Audit = Audit { auditSchemaVersion :: Int, auditPhase :: AuditPhase, appliedPlan :: Plan, removed :: [(Root, RelativePath)], beforeAvailable :: [(Root, Bytes)], afterAvailable :: [(Root, Bytes)], actualAvailableDelta :: [(Root, Bytes)], protectedFilesVerified :: Bool } deriving (Generic, ToJSON)
+data SkipReason = Missing | Changed | InUse | OwnerUnavailable | NoSelectedArtifact | UnitUnavailable deriving (Generic, ToJSON)
+data Skipped = Skipped Root RelativePath SkipReason deriving (Generic, ToJSON)
+data Audit = Audit { auditSchemaVersion :: Int, auditPhase :: AuditPhase, appliedPlan :: Plan, removed :: [(Root, RelativePath)], skipped :: [Skipped], beforeAvailable :: [(Root, Bytes)], afterAvailable :: [(Root, Bytes)], actualAvailableDelta :: [(Root, Bytes)], deletionScopeVerified :: Bool } deriving (Generic, ToJSON)
 
 newtype CrateName = CrateName String deriving stock (Eq, Ord)
 newtype UnitHash = UnitHash String
@@ -74,6 +93,7 @@ instance FromJSON RustMetadata where
   parseJSON = withObject "rustc metadata" $ \o -> RustMetadata <$> o .: "rustc_fingerprint"
 
 foreign import ccall unsafe "flock" c_flock :: CInt -> CInt -> IO CInt
+foreign import ccall unsafe "euidaccess" c_euidaccess :: CString -> CInt -> IO CInt
 
 ensure :: Bool -> String -> IO ()
 ensure ok message = unless ok (ioError (userError message))
@@ -124,15 +144,19 @@ safeRoot input = do
     ensure (case eitherDecodeStrict' bytes :: Either String RustMetadata of Right _ -> True; Left _ -> False) "invalid rustc metadata"
   pure (Root canonical)
 
-walk :: FilePath -> IO [RelativePath]
-walk base = go ""
+walk :: ScanMode -> FilePath -> IO [RelativePath]
+walk mode base = go ""
  where
-  go relative = do
+  go relative = visit relative `catch` \(err :: IOException) ->
+    if not (null relative) && isDoesNotExistError err then pure [] else ioError err
+  visit relative = do
     ensure (all (\c -> c < '\xD800' || c > '\xDFFF') relative) "Cargo path cannot be represented losslessly in a JSON plan"
     let !packed = relativePath relative
     status <- getSymbolicLinkStatus (base </> relative)
-    ensure (not (isSymbolicLink status)) "symlinks in Cargo roots are not admitted"
-    if isDirectory status then do
+    ensure (mode == RetentionMetadata || not (isSymbolicLink status)) ("symlinks in Cargo roots are not admitted: " ++ (base </> relative))
+    if isSymbolicLink status then pure [packed]
+    else if isDirectory status && any (`elem` ["source", ".git", "private-data"]) (splitDirectories relative) then pure [packed]
+    else if isDirectory status then do
       children <- sort <$> listDirectory (base </> relative)
       descendants <- concat <$> mapM (go . (relative </>)) children
       pure (packed : descendants)
@@ -159,10 +183,11 @@ parseCargoUnit marker
 validFingerprints :: Root -> [RelativePath] -> IO [ValidatedFingerprint]
 validFingerprints (Root base) files = fmap catMaybes $ forM files $ \relative ->
   let p = relativeFilePath relative
-  in if any (`elem` ["private-data", ".git"]) (splitDirectories p) then pure Nothing else
+  in (if any (`elem` ["private-data", ".git"]) (splitDirectories p) then pure Nothing else
     case parseCargoUnit (takeFileName p) of
       Nothing -> pure Nothing
-      Just unit -> valid relative unit
+      Just unit -> valid relative unit) `catch` \(err :: IOException) ->
+        if isDoesNotExistError err then pure Nothing else ioError err
  where
   valid relative unit = do
     let p = relativeFilePath relative
@@ -176,10 +201,12 @@ validFingerprints (Root base) files = fmap catMaybes $ forM files $ \relative ->
         let json = base </> (p ++ ".json")
         exists <- doesPathExist json
         if not (all isHexDigit marker && exists) then pure Nothing else do
-          bytes <- B.readFile json
-          pure $ case eitherDecodeStrict' bytes :: Either String CargoFingerprint of
-            Right _ -> Just (ValidatedFingerprint relative unit (UnitHash suffix))
-            Left _ -> Nothing
+          jsonStatus <- getSymbolicLinkStatus json
+          if not (isRegularFile jsonStatus) then pure Nothing else do
+            bytes <- B.readFile json
+            pure $ case eitherDecodeStrict' bytes :: Either String CargoFingerprint of
+              Right _ -> Just (ValidatedFingerprint relative unit (UnitHash suffix))
+              Left _ -> Nothing
 
 artifactOwners :: [ValidatedFingerprint] -> RelativePath -> [RelativePath]
 artifactOwners fingerprints = lookupOwners
@@ -209,14 +236,12 @@ artifactOwners fingerprints = lookupOwners
 snapshot :: Root -> IO Binding
 snapshot = scan HashContents
 
-withoutHashes :: Binding -> Binding
-withoutHashes binding = binding { entries = [entry { digest = Nothing } | entry <- entries binding] }
 
 scan :: ScanMode -> Root -> IO Binding
 scan mode binding@(Root base) = do
   when (mode == HashContents) $ hPutStrLn stderr ("Hashing Cargo target contents: " ++ base)
   _ <- safeRoot base
-  files <- walk base
+  files <- walk mode base
   let fileSet = Set.fromList files
   let profiles = Set.fromList [relativePath (takeDirectory relative) | packed <- files, let relative = relativeFilePath packed, takeFileName relative == ".cargo-lock", Set.member (relativePath (takeDirectory relative </> "deps")) fileSet, Set.member (relativePath (takeDirectory relative </> ".fingerprint")) fileSet]
   ensure (not (Set.null profiles)) "no verified Cargo profile structures"
@@ -226,17 +251,26 @@ scan mode binding@(Root base) = do
   fingerprints <- validFingerprints binding files
   forM_ fingerprints $ \(ValidatedFingerprint fp _ _) -> ensure (Set.member (relativePath (takeDirectory (takeDirectory (takeDirectory (relativeFilePath fp))))) profiles) "Cargo fingerprint has no verified profile"
   let owners = artifactOwners fingerprints
-  records <- forM files $ \packedPath -> do
-    let relative = relativeFilePath packedPath
-    status <- getSymbolicLinkStatus (base </> relative)
-    let bytes = Bytes (if isRegularFile status then fromIntegral (fileSize status) else 0)
-    hash <- if mode == HashContents && isRegularFile status then Just <$> hashFile bytes (base </> relative) else pure Nothing
-    let proposed = if isRegularFile status && linkCount status == 1 && not (null (owners packedPath)) then CompilerArtifact else Retain
-    recognized <- if proposed == CompilerArtifact then compilerHeader (base </> relative) else pure True
-    pure (Entry packedPath (fromIntegral (deviceID status)) (fromIntegral (fileID status)) (OwnerUID (fromIntegral (fileOwner status))) bytes hash (if recognized then proposed else Retain) (if isRegularFile status then RegularFile else Directory))
+  records <- fmap catMaybes $ forM files $ \packedPath ->
+    (do
+      let relative = relativeFilePath packedPath
+      status <- getSymbolicLinkStatus (base </> relative)
+      ensure ((mode == RetentionMetadata && isSymbolicLink status) || (not (isSymbolicLink status) && (isDirectory status || isRegularFile status))) "special file or symlink in Cargo root"
+      let bytes = Bytes (if isRegularFile status then fromIntegral (fileSize status) else 0)
+          proposed = if isRegularFile status && linkCount status == 1 && not (null (owners packedPath)) then CompilerArtifact else Retain
+      recognized <- if proposed == CompilerArtifact then compilerHeader (base </> relative) else pure True
+      let selected = recognized && proposed == CompilerArtifact
+      hash <- if mode == HashContents && selected then Just <$> hashFile bytes (base </> relative) else pure Nothing
+      let modified = FileTimeNanoseconds (floor (toRational (modificationTimeHiRes status) * 1_000_000_000))
+      pure (Just (Entry packedPath (fromIntegral (deviceID status)) (fromIntegral (fileID status)) (OwnerUID (fromIntegral (fileOwner status))) bytes hash (if selected then CompilerArtifact else Retain) (if isSymbolicLink status then SymbolicLink else if isRegularFile status then RegularFile else Directory) modified)))
+      `catch` \(err :: IOException) -> if not (null (relativeFilePath packedPath)) && isDoesNotExistError err then pure Nothing else ioError err
   let selectedOwners = Set.fromList [owner | entry <- records, disposition entry == CompilerArtifact, owner <- owners (path entry)]
-      selectFingerprint entry = if Set.member (path entry) selectedOwners then entry { disposition = FingerprintSuccess } else entry
-  pure (Binding binding (map selectFingerprint records))
+  selected <- forM records $ \entry ->
+    if Set.member (path entry) selectedOwners then do
+      hash <- if mode == HashContents then Just <$> hashFile (size entry) (base </> relativeFilePath (path entry)) else pure Nothing
+      pure entry { disposition = FingerprintSuccess, digest = hash }
+    else pure entry
+  pure (Binding binding selected)
 
 summarize :: Binding -> RootSummary
 summarize (Binding binding records) =
@@ -275,15 +309,15 @@ activity r@(Root base) = do
   self <- show <$> getProcessID
   pids <- filter (\p -> not (null p) && all isDigit p && p /= self) <$> listDirectory "/proc"
   inspected <- forM pids $ \pid -> (,) (ProcessId pid) <$> inspect scope uid encoding mappedPrefix pid
-  pure (Activity r [pid | (pid, Right True) <- inspected] [issue | (_, Left issue) <- inspected])
+  pure (Activity r [(pid, uses) | (pid, Right uses) <- inspected, not (null uses)] [issue | (_, Left issue) <- inspected])
  where
   inspect scope uid encoding mappedPrefix pid = do
     let proc = "/proc" </> pid
     let check = do
           status <- getFileStatus proc
-          if scope == OwnerProcesses && fileOwner status /= uid then pure False else do
+          if scope == OwnerProcesses && fileOwner status /= uid then pure [] else do
             processStatus <- BC.readFile (proc </> "status")
-            if any (\line -> any (`B.isPrefixOf` line) ["State:\tZ", "Kthread:\t1"]) (BC.lines processStatus) then pure False else do
+            if any (\line -> any (`B.isPrefixOf` line) ["State:\tZ", "Kthread:\t1"]) (BC.lines processStatus) then pure [] else do
               cwd <- readSymbolicLink (proc </> "cwd")
               exe <- readSymbolicLink (proc </> "exe")
               environment <- B.readFile (proc </> "environ")
@@ -293,11 +327,15 @@ activity r@(Root base) = do
               fds <- listDirectory (proc </> "fd")
               links <- forM fds $ \fd -> readSymbolicLink (proc </> "fd" </> fd) `catch` \(err :: IOException) -> if isDoesNotExistError err then pure "" else ioError err
               mappings <- BC.lines <$> B.readFile (proc </> "maps")
-              let mapped = any (\line -> mappedPrefix `B.isInfixOf` line && mappedPrefix `B.isPrefixOf` mappingPath line) mappings
-              pure (mapped || any (inside base) (cwd : exe : targets ++ links))
+              mapped <- forM [mappingPath line | line <- mappings, mappedPrefix `B.isPrefixOf` mappingPath line] $ \raw ->
+                B.useAsCStringLen raw (GHC.peekCStringLen encoding)
+              let mappedNames = concatMap (\file -> [file, T.unpack (T.replace "\\012" "\n" (T.pack file))]) mapped
+                  references = [FileReference (relativePath (makeRelative base file)) | file <- exe : links ++ mappedNames, inside base file]
+                  context = [TargetContext | any (inside base) (cwd : targets)]
+              pure (context ++ references)
     (Right <$> check) `catch` \(err :: IOException) -> do
       exists <- doesDirectoryExist proc
-      if not exists && isDoesNotExistError err then pure (Right False)
+      if not exists && isDoesNotExistError err then pure (Right [])
         else pure (Left (InspectionIssue (ProcessId pid) (show err)))
   mappingPath = skip 5
     where
@@ -306,15 +344,20 @@ activity r@(Root base) = do
       skip 0 line = line
       skip count line = skip (count - 1) (B.dropWhile fieldSpace (B.dropWhile (not . fieldSpace) line))
 
-withLocks :: [Binding] -> IO a -> IO a
-withLocks roots action = acquire lockPaths
+data LockMode = WaitForLocks | DeferBusyLocks deriving Eq
+data LockResult a = LocksBusy | LocksAcquired a
+
+withLocks :: LockMode -> [Binding] -> IO a -> IO (LockResult a)
+withLocks mode roots action = acquire lockPaths
  where
-  lockPaths = nub [base </> relative | Binding (Root base) records <- roots, entry <- records, let relative = relativeFilePath (path entry), takeFileName relative `elem` [".cargo-lock", ".cargo-build-lock", ".cargo-artifact-lock"], entryType entry == RegularFile]
-  acquire [] = action
+  lockPaths = sort (nub [base </> relative | Binding (Root base) records <- roots, entry <- records, let relative = relativeFilePath (path entry), takeFileName relative `elem` [".cargo-lock", ".cargo-build-lock", ".cargo-artifact-lock"], entryType entry == RegularFile])
+  acquire [] = LocksAcquired <$> action
   acquire (p:ps) = bracket (openFd p ReadWrite defaultFileFlags { nofollow = True, cloexec = True }) closeFd $ \(Fd fd) -> do
-    result <- c_flock fd 6
-    ensure (result == 0) "Cargo lock is held"
-    acquire ps
+    result <- c_flock fd (if mode == WaitForLocks then 2 else 6)
+    if result == 0 then acquire ps else do
+      failure <- getErrno
+      if mode == DeferBusyLocks && (failure == eAGAIN || failure == eWOULDBLOCK) then pure LocksBusy
+      else ioError (userError "cannot acquire Cargo lock")
 
 writeJson :: ToJSON a => FilePath -> a -> IO ()
 writeJson p = BL.writeFile p . encode
@@ -326,19 +369,29 @@ readPlan file = do
 
 validateBindings :: Plan -> IO [Root]
 validateBindings plan = do
-  ensure (schemaVersion plan == 1 && not (null (bindings plan))) "unsupported or empty plan"
+  ensure (schemaVersion plan == 3 && not (null (bindings plan))) "unsupported or empty plan"
   let roots = map root (bindings plan)
   ensure (length roots == length (nub roots)) "duplicate root"
   forM_ [(a,b) | a@(Root pa) <- roots, b@(Root pb) <- roots, a /= b, inside pa pb] $ \_ -> ensure False "overlapping roots"
-  forM_ roots $ \(Root base) -> safeRoot base >> pure ()
+  forM_ (bindings plan) $ \(Binding (Root base) records) -> do
+    _ <- safeRoot base
+    let paths = map path records
+    ensure (length paths == Set.size (Set.fromList paths)) "duplicate planned path"
+    forM_ records $ \entry -> do
+      let relative = relativeFilePath (path entry)
+      ensure (not (isAbsolute relative) && '\0' `notElem` relative && not (any (`elem` [".", ".."]) (splitDirectories relative)) && (null relative || normalise relative == relative)) "invalid planned relative path"
+      when (disposition entry /= Retain) $
+        ensure (entryType entry == RegularFile && case digest entry of Just (Digest text) -> T.length text == 64 && T.all isHexDigit text; Nothing -> False) "selected file lacks a content binding"
+  let selected = Set.fromList [(r, path entry) | Binding r records <- bindings plan, entry <- records, disposition entry /= Retain]
+      grouped = [(unitRoot unit, file) | unit <- coherentUnits plan, file <- unitFingerprint unit : unitArtifacts unit]
+  when (not (null (coherentUnits plan))) $ do
+    ensure (length grouped == Set.size (Set.fromList grouped) && Set.fromList grouped == selected) "coherent units do not partition selected artifacts"
+    forM_ (coherentUnits plan) $ \unit -> do
+      ensure (not (null (unitArtifacts unit))) "empty coherent unit"
+      ensure (unitControl unit == relativePath (relativeFilePath (unitFingerprint unit) ++ ".json")) "invalid unit control path"
+      ensure (any (\(Binding r records) -> r == unitRoot unit && any ((== unitControl unit) . path) records) (bindings plan)) "missing unit control binding"
   pure roots
 
-validatePlan :: Plan -> IO [Binding]
-validatePlan plan = do
-  roots <- validateBindings plan
-  current <- mapM snapshot roots
-  ensure (current == bindings plan) "plan inputs changed or plan was tampered with"
-  pure current
 
 verifyRemoval :: Root -> Map.Map RelativePath Entry -> Entry -> IO ()
 verifyRemoval (Root base) identities entry = do
@@ -350,61 +403,380 @@ verifyRemoval (Root base) identities entry = do
     status <- getSymbolicLinkStatus (base </> key)
     ensure (isDirectory status && fromIntegral (deviceID status) == device expected && fromIntegral (fileID status) == inode expected && OwnerUID (fromIntegral (fileOwner status)) == ownerUID expected) "compiler output ancestor changed"
   status <- getSymbolicLinkStatus (base </> relative)
-  ensure (isRegularFile status && linkCount status == 1 && fromIntegral (deviceID status) == device entry && fromIntegral (fileID status) == inode entry && OwnerUID (fromIntegral (fileOwner status)) == ownerUID entry && Bytes (fromIntegral (fileSize status)) == size entry) "compiler output identity changed"
+  ensure (isRegularFile status && linkCount status == 1 && fromIntegral (deviceID status) == device entry && fromIntegral (fileID status) == inode entry && OwnerUID (fromIntegral (fileOwner status)) == ownerUID entry && Bytes (fromIntegral (fileSize status)) == size entry &&
+    FileTimeNanoseconds (floor (toRational (modificationTimeHiRes status) * 1_000_000_000)) == mtimeNanoseconds entry) "compiler output identity changed"
 
-requireIdle :: [Binding] -> IO ()
-requireIdle records = do
-  hPutStrLn stderr "Checking active target users"
-  users <- mapM (activity . root) records
-  ensure (all (\(Activity _ _ unavailable) -> null unavailable) users)
+unitDeletable :: Root -> Map.Map RelativePath Entry -> CoherentUnit -> IO Bool
+unitDeletable r@(Root base) original group =
+  (do
+    forM_ (unitInputs group) $ \member -> do
+      entry <- maybe (ioError (userError "unbound unit member")) pure (Map.lookup member original)
+      verifyRemoval r original entry
+    and <$> mapM deletable (unitRemovals group)) `catch` \(_ :: IOException) -> pure False
+ where
+  deletable member = do
+    let file = base </> relativeFilePath member
+        parent = takeDirectory file
+    encoding <- getFileSystemEncoding
+    permitted <- GHC.withCString encoding parent (\encoded -> (== 0) <$> c_euidaccess encoded 3)
+    parentStatus <- getSymbolicLinkStatus parent
+    fileStatus <- getSymbolicLinkStatus file
+    caller <- getEffectiveUserID
+    pure (permitted && (fileMode parentStatus .&. 0o1000 == 0 || caller == 0 || caller == fileOwner parentStatus || caller == fileOwner fileStatus))
+
+busyArtifacts :: [Binding] -> IO (Set.Set (Root, RelativePath))
+busyArtifacts records = do
+  uses <- mapM (activity . root) records
+  ensure (all (\(Activity _ _ unavailable) -> null unavailable) uses)
     "active-use inspection is incomplete; no files removed. Obtain an explicitly authorized privileged host scan instead of bypassing process checks"
-  ensure (all (\(Activity _ active _) -> null active) users) "active users of Cargo target"
+  pure (Set.fromList [(r, file) | Activity r users _ <- uses, (_, references) <- users, FileReference file <- references])
 
 apply :: FilePath -> IO ()
 apply file = do
   plan <- readPlan file
-  roots <- validateBindings plan
-  hPutStrLn stderr "Inspecting target metadata before acquiring Cargo locks"
-  metadata <- mapM (scan MetadataOnly) roots
-  ensure (metadata == map withoutHashes (bindings plan)) "plan metadata changed or plan was tampered with"
-  let auditPath = file ++ ".audit.json"
-  auditAbsolute <- makeAbsolute auditPath
-  forM_ roots $ \(Root base) -> ensure (not (inside base auditAbsolute)) "audit must be outside managed roots"
-  exists <- doesPathExist auditPath
-  ensure (not exists) "audit already exists"
-  hPutStrLn stderr "Acquiring Cargo locks and revalidating planned contents"
-  withLocks metadata $ do
-    requireIdle metadata
-    current <- validatePlan plan
-    requireIdle current
+  _ <- validateBindings plan
+  hPutStrLn stderr "Waiting for Cargo locks; agents and applications may remain running"
+  result <- withLocks WaitForLocks (bindings plan) $ do
+    current <- mapM (scan MetadataOnly . root) (bindings plan)
+    applyLocked file plan current
+  case result of
+    LocksAcquired audit -> BL.putStr (encode audit)
+    LocksBusy -> ioError (userError "cannot acquire Cargo locks")
+
+applyLocked :: FilePath -> Plan -> [Binding] -> IO Audit
+applyLocked planFile plan current = do
+    let auditPath = planFile ++ ".audit.json"
+    auditAbsolute <- makeAbsolute auditPath
+    forM_ (bindings plan) $ \(Binding (Root base) _) -> ensure (not (inside base auditAbsolute)) "audit must be outside managed roots"
+    exists <- doesPathExist auditPath
+    ensure (not exists) "audit already exists"
+    busyBefore <- busyArtifacts current
+    let identity entry = (device entry, inode entry, ownerUID entry, entryType entry)
+    candidates <- forM (zip (bindings plan) current) $ \(Binding r planned, Binding _ actual) -> do
+      let original = Map.fromList [(path entry, entry) | entry <- planned]
+          latest = Map.fromList [(path entry, entry) | entry <- actual]
+          rootEntry records = Map.lookup (relativePath "") records
+          sameRoot = case (rootEntry original, rootEntry latest) of
+            (Just old, Just new) -> identity old == identity new
+            _ -> False
+          sameAncestors entry =
+            let parents p = p : if null p || p == "." then [] else parents (takeDirectory p)
+            in all (\p -> let key = relativePath (if p == "." then "" else p)
+                          in case (Map.lookup key original, Map.lookup key latest) of
+                            (Just old, Just new) -> identity old == identity new
+                            _ -> False) (parents (takeDirectory (relativeFilePath (path entry))))
+      ensure sameRoot "managed root identity changed"
+      fingerprints <- validFingerprints r (map path actual)
+      let freshUnits = Map.fromList [(unitFingerprint group, (group, safe)) | UnitMetadata group _ _ safe <- ownedUnits [LibraryUnits, CargoTestUnits, BuildScriptUnits] (Binding r actual) fingerprints]
+          groups = filter ((== r) . unitRoot) (coherentUnits plan)
+          version records file = (\entry -> entry {digest = Nothing}) <$> Map.lookup file records
+          groupMatches group = case Map.lookup (unitFingerprint group) freshUnits of
+            Just (fresh, True) -> fresh == group && all (\file -> version original file == version latest file) (unitInputs group)
+            _ -> False
+          unavailable = Set.fromList [file | group <- groups,
+            not (groupMatches group) || any (\member -> Set.member (r, member) busyBefore) (unitInputs group),
+            file <- unitRemovals group]
+      checked <- forM [entry | entry <- planned, disposition entry /= Retain] $ \entry -> do
+        let reject reason = pure (entry, Just reason)
+        case Map.lookup (path entry) latest of
+          Nothing -> reject Missing
+          Just now
+            | entry {digest = Nothing} /= now {digest = Nothing} || not (sameAncestors entry) -> reject Changed
+            | Set.member (path entry) unavailable -> reject UnitUnavailable
+            | Set.member (r, path entry) busyBefore -> reject InUse
+            | otherwise -> do
+                actualHash <- hashFile (size entry) (let Root base = r in base </> relativeFilePath (path entry))
+                pure (entry, if Just actualHash == digest entry then Nothing else Just Changed)
+      let unlockedProfiles = Set.fromList [relativePath (takeDirectory (relativeFilePath (path entry))) |
+            entry <- actual, takeFileName (relativeFilePath (path entry)) `elem` [".cargo-lock", ".cargo-build-lock", ".cargo-artifact-lock"],
+            case Map.lookup (path entry) original of Just old -> identity old /= identity entry; Nothing -> True]
+      pure (r, original, artifactOwners fingerprints, unlockedProfiles, checked, groups)
+    busyAfter <- busyArtifacts current
+    let selections = [choose r original owners unlockedProfiles checked groups | (r, original, owners, unlockedProfiles, checked, groups) <- candidates]
+        choose r original owners unlockedProfiles checked groups =
+          let usable = Map.fromList [(path entry, entry) | (entry, Nothing) <- checked, not (Set.member (r, path entry) busyAfter)]
+              unavailableGroups = Set.fromList [file | group <- groups,
+                not (all (`Map.member` usable) (unitRemovals group)) || Set.member (r, unitControl group) busyAfter,
+                file <- unitRemovals group]
+              available = Map.withoutKeys usable unavailableGroups
+              usableOwner marker = Map.member marker available &&
+                not (Set.member (relativePath (takeDirectory (takeDirectory (takeDirectory (relativeFilePath marker))))) unlockedProfiles)
+              outputs = [entry | entry <- Map.elems available, disposition entry == CompilerArtifact,
+                          not (null (owners (path entry))), all usableOwner (owners (path entry))]
+              markers = Set.fromList (concatMap (owners . path) outputs)
+              chosen = outputs ++ [entry | entry <- Map.elems available, disposition entry == FingerprintSuccess, Set.member (path entry) markers]
+              selected = Set.fromList (map path chosen)
+              omitted = [Skipped r (path entry) (case reason of
+                            Just why -> why
+                            Nothing | Set.member (r, path entry) busyAfter -> InUse
+                                    | Set.member (path entry) unavailableGroups -> UnitUnavailable
+                                    | disposition entry == CompilerArtifact -> OwnerUnavailable
+                                    | otherwise -> NoSelectedArtifact)
+                        | (entry, reason) <- checked, not (Set.member (path entry) selected)]
+          in (r, original, chosen, omitted)
+        omissions = concat [items | (_, _, _, items) <- selections]
+    forM_ selections $ \(r, original, chosen, _) ->
+      when (null (coherentUnits plan)) (mapM_ (verifyRemoval r original) chosen)
     before <- mapM (space . root) current
     deleted <- newIORef []
-    let removalBindings = [(r, records, Map.fromList [(path entry, entry) | entry <- records]) | Binding r records <- current]
-        verifyProtected = forM_ current $ \(Binding (Root base) records) -> do
-          hPutStrLn stderr ("Verifying protected target contents: " ++ base)
-          forM_ records $ \entry -> when (disposition entry == Retain && digest entry /= Nothing) $ do
-            let relative = relativeFilePath (path entry)
-            status <- getSymbolicLinkStatus (base </> relative)
-            ensure (isRegularFile status && fromIntegral (deviceID status) == device entry && fromIntegral (fileID status) == inode entry && OwnerUID (fromIntegral (fileOwner status)) == ownerUID entry && Bytes (fromIntegral (fileSize status)) == size entry) "protected file identity changed"
-            actual <- hashFile (size entry) (base </> relative)
-            ensure (Just actual == digest entry) "protected file changed"
-        persist ok = do
+    skippedDuringRemoval <- newIORef omissions
+    let persist ok = do
           after <- mapM (space . root) current
           let deltas = [(r, Bytes (a-b)) | ((r,Bytes b),(_,Bytes a)) <- zip before after]
           actualRemoved <- reverse <$> readIORef deleted
-          writeJson auditPath (Audit 1 (if ok then Complete else Interrupted) plan actualRemoved before after deltas ok)
-    writeJson auditPath (Audit 1 Applying plan [] before before [(r,Bytes 0) | (r,_) <- before] False)
+          actualSkipped <- readIORef skippedDuringRemoval
+          let audit = Audit 3 (if ok then Complete else Interrupted) plan actualRemoved actualSkipped before after deltas ok
+          writeJson auditPath audit
+          pure audit
+    writeJson auditPath (Audit 3 Applying plan [] omissions before before [(r,Bytes 0) | (r,_) <- before] False)
     (do
-      hPutStrLn stderr "Removing individually selected compiler artifacts"
-      -- Invalidate success markers before removing compiler outputs.
-      forM_ [FingerprintSuccess, CompilerArtifact] $ \kind -> forM_ removalBindings $ \(r@(Root base), records, identities) -> forM_ records $ \entry -> when (disposition entry == kind) $ do
-        verifyRemoval r identities entry
-        let relative = relativeFilePath (path entry)
-        removeFile (base </> relative)
-        modifyIORef' deleted ((r, path entry):)
-      verifyProtected
+      hPutStrLn stderr "Removing only unchanged, unused, approved compiler artifacts"
+      forM_ selections $ \(r@(Root base), original, chosen, _) -> withDeletionCredentials r $ do
+        let available = Map.fromList [(path entry, entry) | entry <- chosen]
+            groups = [group | group <- coherentUnits plan, unitRoot group == r, all (`Map.member` available) (unitRemovals group)]
+            grouped = Set.fromList (concatMap unitRemovals groups)
+            remove entry = do
+              verifyRemoval r original entry
+              removeFile (base </> relativeFilePath (path entry))
+              modifyIORef' deleted ((r, path entry):)
+        forM_ groups $ \group -> do
+          ready <- unitDeletable r original group
+          if ready then mapM_ (remove . (available Map.!)) (unitRemovals group)
+          else modifyIORef' skippedDuringRemoval (++ [Skipped r member UnitUnavailable | member <- unitRemovals group])
+        forM_ [FingerprintSuccess, CompilerArtifact] $ \kind ->
+          mapM_ remove [entry | entry <- chosen, disposition entry == kind, not (Set.member (path entry) grouped)]
       persist True) `onException` persist False
-    BL.readFile auditPath >>= BL.putStr
+
+withDeletionCredentials :: Root -> IO a -> IO a
+withDeletionCredentials (Root base) action = do
+  caller <- getEffectiveUserID
+  target <- getSymbolicLinkStatus base
+  if caller /= 0 || fileOwner target == 0 then action else do
+    originalGroup <- getEffectiveGroupID
+    originalGroups <- getGroups
+    let restore _ = do
+          setEffectiveUserID caller
+          setEffectiveGroupID originalGroup
+          setGroups originalGroups
+    bracket (pure ()) restore $ \_ -> do
+      setGroups []
+      setEffectiveGroupID (fileGroup target)
+      setEffectiveUserID (fileOwner target)
+      action
+
+data RetentionClass = LibraryUnits | CargoTestUnits | BuildScriptUnits deriving (Eq, Show, Generic, ToJSON, FromJSON)
+newtype AuditDirectory = AuditDirectory FilePath deriving stock (Generic) deriving anyclass (FromJSON)
+data RetentionRootPolicy = RetentionRootPolicy Root Bytes Bytes AgeSeconds deriving (Eq, Show)
+instance FromJSON RetentionRootPolicy where
+  parseJSON = withObject "retention root" $ \o -> RetentionRootPolicy <$> o .: "cargoTarget" <*> o .: "budgetBytes" <*> o .: "targetBytes" <*> o .: "minimumAgeSeconds"
+instance ToJSON RetentionRootPolicy where
+  toJSON (RetentionRootPolicy r high low age) = object
+    ["cargoTarget" .= r, "budgetBytes" .= high, "targetBytes" .= low, "minimumAgeSeconds" .= age]
+data RetentionPolicy = RetentionPolicy Int [RetentionRootPolicy] [RetentionClass] AuditDirectory
+instance FromJSON RetentionPolicy where
+  parseJSON = withObject "retention policy" $ \o -> RetentionPolicy <$> o .: "policyVersion" <*> o .: "roots" <*> o .: "artifactClasses" <*> o .: "auditDirectory"
+data RetentionMode = PreviewRetention | ApplyRetention Digest
+data RetentionStatus = BelowBudget | PreviewSelection | RetentionComplete | TargetUnmet | DeferredBusy
+instance ToJSON RetentionStatus where
+  toJSON result = toJSON (case result of
+    BelowBudget -> "BelowBudget"
+    PreviewSelection -> "Preview"
+    RetentionComplete -> "Complete"
+    TargetUnmet -> "TargetUnmet"
+    DeferredBusy -> "DeferredBusy" :: T.Text)
+data UnitMetadata = UnitMetadata CoherentUnit [Entry] FileTimeNanoseconds Bool
+data RetentionRootReport = RetentionRootReport Root RetentionStatus Bytes Bytes Bytes Bytes [UnitMetadata] FileCount FileCount FileCount Bool (Maybe FilePath) (Maybe Bool) [RelativePath]
+instance ToJSON RetentionRootReport where
+  toJSON (RetentionRootReport r result before after high low units removedCount recentCount blockedCount met audit inspected removedMarkers) = object
+    [ "cargoTarget" .= r, "status" .= result, "beforeBytes" .= before, "afterBytes" .= after
+    , "budgetBytes" .= high, "targetBytes" .= low, "selectedUnitCount" .= countItems units
+    , "removedUnitCount" .= removedCount, "selectedBytes" .= totalUnitBytes units
+    , "removedUnitFingerprints" .= removedMarkers
+    , "recentUnitCount" .= recentCount, "blockedUnitCount" .= blockedCount
+    , "targetMet" .= met, "auditPath" .= audit, "inspectionComplete" .= inspected
+    , "units" .= [object ["fingerprint" .= unitFingerprint group, "members" .= (unitFingerprint group : unitArtifacts group),
+                         "bytes" .= totalUnitBytes [unit], "newestMtimeNanoseconds" .= newest]
+                | unit@(UnitMetadata group _ newest _) <- units]]
+
+countItems :: [a] -> FileCount
+countItems = FileCount . fromIntegral . length
+
+sumBytes :: [Bytes] -> Bytes
+sumBytes values = Bytes (sum [value | Bytes value <- values])
+
+totalUnitBytes :: [UnitMetadata] -> Bytes
+totalUnitBytes units = sumBytes [size entry | UnitMetadata group records _ _ <- units, entry <- records,
+  path entry `elem` (unitFingerprint group : unitArtifacts group)]
+
+unitClass :: CargoUnit -> Maybe RetentionClass
+unitClass unit = case unit of
+  LibraryUnit _ -> Just LibraryUnits
+  TestUnit _ -> Just CargoTestUnits
+  BuildScriptUnit -> Just BuildScriptUnits
+  BinaryUnit _ -> Nothing
+
+ownedUnits :: [RetentionClass] -> Binding -> [ValidatedFingerprint] -> [UnitMetadata]
+ownedUnits classes (Binding r records) fingerprints =
+  [makeUnit marker outputs | ValidatedFingerprint marker unit _ <- fingerprints,
+    maybe False (`elem` classes) (unitClass unit), Just outputs <- [Map.lookup marker byOwner]]
+ where
+  identities = Map.fromList [(path entry, entry) | entry <- records]
+  owners = artifactOwners fingerprints
+  byOwner = Map.fromListWith (++) [(marker, [entry]) | entry <- records,
+    "incremental" `notElem` splitDirectories (relativeFilePath (path entry)), [marker] <- [owners (path entry)]]
+  makeUnit marker outputs =
+    let control = relativePath (relativeFilePath marker ++ ".json")
+        controls = catMaybes [Map.lookup marker identities, Map.lookup control identities]
+        group = CoherentUnit r marker (sort (map path outputs)) control
+        unitEntries = outputs ++ controls
+        newest = maximum (map mtimeNanoseconds unitEntries)
+        safe = length controls == 2 && all ((== CompilerArtifact) . disposition) outputs
+               && maybe False ((== FingerprintSuccess) . disposition) (Map.lookup marker identities)
+               && all ((== RegularFile) . entryType) controls
+    in UnitMetadata group unitEntries newest safe
+
+rootApparentBytes :: Root -> IO Bytes
+rootApparentBytes (Root base) = do
+  (code, out, err) <- readProcessWithExitCode "du" ["--apparent-size", "--summarize", "--block-size=1", "--", base] ""
+  case (code, words out) of
+    (ExitSuccess, value:_) | [(count, "")] <- reads value -> pure (Bytes count)
+    _ -> ioError (userError ("cannot measure Cargo root metadata: " ++ err))
+
+digestBytes :: B.ByteString -> Digest
+digestBytes bytes = Digest (T.pack (concatMap hex (B.unpack (SHA.hash bytes))))
+ where
+  hex byte = let value = showHex byte "" in replicate (2 - length value) '0' ++ value
+
+digestText :: Digest -> FilePath
+digestText (Digest value) = T.unpack value
+
+guardIdentities :: Binding -> [(RelativePath, Integer, Integer, OwnerUID)]
+guardIdentities (Binding _ records) =
+  [(path entry, device entry, inode entry, ownerUID entry) | entry <- records,
+    takeFileName (relativeFilePath (path entry)) `elem` [".cargo-lock", ".cargo-build-lock", ".cargo-artifact-lock"]]
+
+validateRetentionPolicy :: RetentionPolicy -> IO ()
+validateRetentionPolicy (RetentionPolicy version policies classes (AuditDirectory directory)) = do
+  ensure (version == 1 && not (null policies) && not (null classes)) "unsupported or empty retention policy"
+  ensure (length classes == length (nub classes)) "duplicate retention artifact class"
+  let roots = [r | RetentionRootPolicy r _ _ _ <- policies]
+  ensure (length roots == length (nub roots)) "duplicate retention root"
+  forM_ [(a,b) | a@(Root pa) <- roots, b@(Root pb) <- roots, a /= b, inside pa pb] $ \_ ->
+    ensure False "overlapping retention roots"
+  forM_ policies $ \(RetentionRootPolicy (Root base) (Bytes high) (Bytes low) (AgeSeconds age)) -> do
+    _ <- safeRoot base
+    ensure (high > 0 && low >= 0 && low < high && age > 0) "invalid retention budget, lower target or minimum age"
+  absolute <- makeAbsolute directory
+  canonical <- canonicalizePath directory
+  ensure (isAbsolute directory && directory == absolute && directory == canonical) "audit directory must be canonical and absolute"
+  forM_ roots $ \(Root base) -> ensure (not (inside base directory)) "retention audit directory is inside a managed root"
+
+inspectionReferences :: [Binding] -> IO (Set.Set (Root, RelativePath), Bool)
+inspectionReferences records = do
+  uses <- mapM (activity . root) records
+  pure (Set.fromList [(r, file) | Activity r users _ <- uses, (_, references) <- users, FileReference file <- references],
+        all (\(Activity _ _ issues) -> null issues) uses)
+
+retention :: FilePath -> RetentionMode -> IO ()
+retention policyFile mode = do
+  raw <- B.readFile policyFile
+  policy@(RetentionPolicy _ policies classes directory) <- either (ioError . userError) pure (eitherDecodeStrict' raw)
+  validateRetentionPolicy policy
+  let policyHash = digestBytes raw
+  case mode of
+    PreviewRetention -> pure ()
+    ApplyRetention approved -> ensure (approved == policyHash) "standing approval does not match policy SHA-256"
+  results <- mapM (retainRoot mode classes directory) policies
+  let modeName = case mode of PreviewRetention -> "Preview"; ApplyRetention _ -> "Apply" :: T.Text
+  BL.putStr (encode (object ["policySha256" .= policyHash, "runMode" .= modeName, "rootReports" .= results]))
+
+retainRoot :: RetentionMode -> [RetentionClass] -> AuditDirectory -> RetentionRootPolicy -> IO RetentionRootReport
+retainRoot mode classes directory policy@(RetentionRootPolicy r high low _) = do
+  measured <- rootApparentBytes r
+  let report result after units removedCount recentCount blockedCount met audit inspected =
+        RetentionRootReport r result measured after high low units removedCount recentCount blockedCount met audit inspected []
+  if measured <= high then pure (report BelowBudget measured [] (FileCount 0) (FileCount 0) (FileCount 0) (measured <= low) Nothing Nothing)
+  else do
+    metadata <- scan RetentionMetadata r
+    locked <- withLocks DeferBusyLocks [metadata] $ do
+      current <- scan RetentionMetadata r
+      if guardIdentities current /= guardIdentities metadata then
+        pure (report DeferredBusy measured [] (FileCount 0) (FileCount 0) (FileCount 0) False Nothing Nothing)
+      else retainLocked mode classes directory policy current
+    case locked of
+      LocksBusy -> pure (report DeferredBusy measured [] (FileCount 0) (FileCount 0) (FileCount 0) False Nothing Nothing)
+      LocksAcquired result -> pure result
+
+retainLocked :: RetentionMode -> [RetentionClass] -> AuditDirectory -> RetentionRootPolicy -> Binding -> IO RetentionRootReport
+retainLocked mode classes directory (RetentionRootPolicy r high low@(Bytes target) (AgeSeconds age)) current = do
+  before@(Bytes initial) <- rootApparentBytes r
+  let report result after units removedCount recentCount blockedCount met audit inspected =
+        RetentionRootReport r result before after high low units removedCount recentCount blockedCount met audit inspected []
+  if before <= high then pure (report BelowBudget before [] (FileCount 0) (FileCount 0) (FileCount 0) (before <= low) Nothing Nothing)
+  else do
+    fingerprints <- validFingerprints r (map path (entries current))
+    now <- floor . (* 1_000_000_000) . toRational <$> getPOSIXTime
+    (busy, inspected) <- inspectionReferences [current]
+    case mode of
+      ApplyRetention _ -> ensure inspected "active-use inspection is incomplete; retention removed no files"
+      PreviewRetention -> pure ()
+    let units = ownedUnits classes current fingerprints
+        recent (UnitMetadata _ _ (FileTimeNanoseconds newest) _) = newest > now - age * 1_000_000_000
+        blocked (UnitMetadata group _ _ safe) = not safe || any (\member -> Set.member (r, member) busy) (unitInputs group)
+        eligible = sortOn (\(UnitMetadata group _ newest _) -> (newest, unitFingerprint group)) [unit | unit <- units, not (recent unit), not (blocked unit)]
+        select _ [] = []
+        select remaining (unit:rest)
+          | remaining <= target = []
+          | otherwise = unit : select (remaining - let Bytes bytes = totalUnitBytes [unit] in bytes) rest
+        selectedUnits = select initial eligible
+        recentCount = countItems (filter recent units)
+        blockedCount = countItems (filter blocked units)
+        Bytes selectedTotal = totalUnitBytes selectedUnits
+        projectedMet = initial - selectedTotal <= target
+    case mode of
+      PreviewRetention -> pure (report PreviewSelection before selectedUnits (FileCount 0) recentCount blockedCount projectedMet Nothing (Just inspected))
+      ApplyRetention approved
+        | null selectedUnits -> pure (report TargetUnmet before [] (FileCount 0) recentCount blockedCount False Nothing (Just inspected))
+        | otherwise -> do
+            (planFile, finalAudit) <- retentionPaths directory r
+            let groups = [group | UnitMetadata group _ _ _ <- selectedUnits]
+                selectedPaths = Set.fromList [member | group <- groups, member <- unitFingerprint group : unitArtifacts group]
+            records <- forM (entries current) $ \entry ->
+              if Set.member (path entry) selectedPaths then do
+                hash <- hashFile (size entry) (let Root base = r in base </> relativeFilePath (path entry))
+                pure entry {digest = Just hash}
+              else pure entry {disposition = Retain, digest = Nothing}
+            let plan = Plan 3 [Binding r records] groups (Just (RetentionContext approved (RetentionRootPolicy r high low (AgeSeconds age)) classes))
+            _ <- validateBindings plan
+            writeJson planFile plan
+            latest <- scan RetentionMetadata r
+            audit <- applyLocked planFile plan [latest]
+            let removedPaths = Set.fromList (removed audit)
+                completedUnits = [group | group <- groups, all (\member -> Set.member (r, member) removedPaths) (unitFingerprint group : unitArtifacts group)]
+            renameFile (planFile ++ ".audit.json") finalAudit
+            removeFile planFile
+            after <- rootApparentBytes r
+            pure (RetentionRootReport r (if after <= low then RetentionComplete else TargetUnmet) before after high low selectedUnits (countItems completedUnits) recentCount blockedCount (after <= low) (Just finalAudit) (Just inspected) (map unitFingerprint completedUnits))
+
+retentionPaths :: AuditDirectory -> Root -> IO (FilePath, FilePath)
+retentionPaths (AuditDirectory directory) (Root base) = do
+  createDirectoryIfMissing True directory
+  canonical <- canonicalizePath directory
+  ensure (canonical == directory) "retention audit directory changed"
+  auditStatus <- getSymbolicLinkStatus directory
+  caller <- getEffectiveUserID
+  ensure (isDirectory auditStatus && not (isSymbolicLink auditStatus) && fileOwner auditStatus == caller) "retention audit directory must be owned by the invoking account"
+  setFileMode directory 0o700
+  let bucket = directory </> digestText (digestBytes (TE.encodeUtf8 (T.pack base)))
+  createDirectoryIfMissing False bucket
+  bucketStatus <- getSymbolicLinkStatus bucket
+  ensure (isDirectory bucketStatus && not (isSymbolicLink bucketStatus) && fileOwner bucketStatus == caller) "invalid retention audit bucket"
+  setFileMode bucket 0o700
+  let planFile = bucket </> "pending.plan.json"
+  forM_ [planFile, planFile ++ ".audit.json"] $ \checkpoint -> do
+    exists <- doesPathExist checkpoint
+    ensure (not exists) "unfinished retention checkpoint requires inspection before another automatic deletion"
+  pure (planFile, bucket </> "last-complete.audit.json")
 
 parseRoots :: [String] -> IO [Root]
 parseRoots arguments = do
@@ -427,7 +799,7 @@ main = (getArgs >>= run) `catch` \(err :: IOException) -> die (show err)
     records <- mapM (scan MetadataOnly) roots
     free <- mapM space roots
     users <- mapM activity roots
-    BL.putStr (encode (Inventory (map summarize records) free [(r, active) | Activity r active _ <- users] [(r, unavailable) | Activity r _ unavailable <- users]))
+    BL.putStr (encode (Inventory (map summarize records) free [(r, map fst active) | Activity r active _ <- users] [(r, unavailable) | Activity r _ unavailable <- users]))
   run ("plan":arguments) = case reverse arguments of
     output:"--output":rest -> do
       roots <- parseRoots (reverse rest)
@@ -439,15 +811,21 @@ main = (getArgs >>= run) `catch` \(err :: IOException) -> die (show err)
       requireNewOutput
       hPutStrLn stderr "Inspecting target metadata before acquiring Cargo locks"
       metadata <- mapM (scan MetadataOnly) roots
-      _ <- validateBindings (Plan 1 metadata)
-      hPutStrLn stderr "Acquiring Cargo locks before hashing planned contents"
-      withLocks metadata $ do
+      ensure (not (null metadata)) "empty target list"
+      hPutStrLn stderr "Waiting for Cargo locks before planning compiler artifacts"
+      result <- withLocks WaitForLocks metadata $ do
         records <- mapM snapshot roots
-        ensure (map withoutHashes records == metadata) "target metadata changed while planning"
         requireNewOutput
         hPutStrLn stderr ("Writing exact maintenance plan: " ++ output)
-        writeJson output (Plan 1 records)
+        writeJson output (Plan 3 records [] Nothing)
+      case result of
+        LocksAcquired () -> pure ()
+        LocksBusy -> ioError (userError "cannot acquire Cargo locks")
     _ -> usage
   run ["apply", "--plan", file] = apply file
+  run ["retain", "--policy", file] = retention file PreviewRetention
+  run ["retain", "--policy", file, "--apply", "--approved-policy-sha256", approved] = do
+    ensure (length approved == 64 && all isHexDigit approved) "invalid standing-policy SHA-256"
+    retention file (ApplyRetention (Digest (T.pack approved)))
   run _ = usage
-  usage = die "usage: storage-maintenance inventory --cargo-target DIR ... | plan --cargo-target DIR ... --output PLAN | apply --plan PLAN"
+  usage = die "usage: storage-maintenance inventory --cargo-target DIR ... | plan --cargo-target DIR ... --output PLAN | apply --plan PLAN | retain --policy FILE [--apply --approved-policy-sha256 HEX]"
