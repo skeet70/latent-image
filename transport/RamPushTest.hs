@@ -21,7 +21,7 @@ import FujiAF.SHA256 (sha256)
 import FujiAF.Rehearsal (rehearseRamAlloc, rehearseRamPush, rehearseRamFree, rehearseRamUnload)
 import FujiAF.Transport
 import qualified FujiAF.Broker as P
-import RamPushLayout (installerInstallOffset, installerRollbackOffset, installerStatusOffset, runtimeAllocationSize, runtimeAllocationSizeFor, runtimeInstallerBase, standardBankVariant, modalScopedBankVariant, lifecycleBankVariant, modalLifecycleBankVariant, modalEngineBankVariant)
+import RamPushLayout (installerInstallOffset, installerRollbackOffset, installerStatusOffset, runtimeAllocationSize, runtimeAllocationSizeFor, runtimeInstallerBase, standardBankVariant, modalScopedBankVariant, lifecycleBankVariant, modalLifecycleBankVariant, modalEngineBankVariant, modalRenderBankVariant, bankVariantTag)
 import RamPushModel
 
 contract :: ReviewedContract
@@ -84,7 +84,7 @@ checkUnpublished label model = do
   check (label ++ ": installer callback has not been sent") (installerRetarget `notElem` sent)
 
 manifestDocument :: RamPushManifest -> B.ByteString
-manifestDocument candidate = BL.toStrict (encode (object
+manifestDocument candidate = BL.toStrict (encode (object $
   [ "schema" .= (1 :: Int)
   , "base" .= unAddressHex (allocationBase candidate)
   , "size" .= allocationSize candidate
@@ -94,7 +94,8 @@ manifestDocument candidate = BL.toStrict (encode (object
       [ "install" .= unAddressHex (installEntry entries)
       , "rollback" .= unAddressHex (rollbackEntry entries)
       , "status" .= unAddressHex (statusEntry entries) ]
-  , "publications" .= map publication (manifestPublications candidate) ]))
+  , "publications" .= map publication (manifestPublications candidate) ]
+  ++ ["bank_variant" .= bankVariantTag modalRenderBankVariant | manifestBankVariant candidate == Just modalRenderBankVariant]))
   where
     entries = manifestEntries candidate
     unAddressHex = hexWord . unAddress
@@ -172,14 +173,39 @@ main = do
         [ (bankModal75Payload, modalScopedBankVariant, RecipeBankModal75, 0x1dcb8, 224, "build-recipe-bank-modal-ram.sh", "bank-modal.a")
         , (bankLifecyclePayload, lifecycleBankVariant, RecipeBankLifecycle, 0x1dcd8, 226, "build-recipe-bank-lifecycle-ram.sh", "bank-lifecycle.a")
         , (bankModalLifecyclePayload, modalLifecycleBankVariant, RecipeBankModalLifecycle, 0x1dcf8, 227, "build-recipe-bank-modal-lifecycle-ram.sh", "bank-modal-lifecycle.a")
-        , (bankModalEnginePayload, modalEngineBankVariant, RecipeBankModal75MenuEngine, 0x2dcc0, 225, "build-recipe-bank-modal-engine-ram.sh", "bank-modal.a") ]
+        , (bankModalEnginePayload, modalEngineBankVariant, RecipeBankModal75MenuEngine, 0x2dcc0, 225, "build-recipe-bank-modal-engine-ram.sh", "bank-modal.a")
+        , (bankModalRenderPayload, modalRenderBankVariant, RecipeBankModal75MenuEngine, 0x2dcc0, 228, "build-recipe-bank-modal-render-ram.sh", "bank-modal.a") ]
   _ <- parse standard
+  let renderRuntime = B.replicate 0x2dcc0 0
+      renderPublications = publications ++
+        [Publication index Activation (Address (0x00630000 + 4 * fromIntegral index))
+          (WordValue 0xe92d4ff0) (WordValue 0xea000010) Both | index <- [223 .. 227]]
+      renderManifest = standard
+        { allocationSize = 0x2dcc0, runtimeBytes = renderRuntime, runtimeDigest = sha256 renderRuntime
+        , manifestPublications = renderPublications, manifestBankVariant = Just modalRenderBankVariant }
+  renderParsed <- parse renderManifest
+  check "render manifest retains explicit identity in the shared engine allocation"
+    (manifestBankVariant renderParsed == Just modalRenderBankVariant)
+  refusesManifest "render manifest refuses a tag with the engine count"
+    (renderManifest { manifestPublications = take 225 renderPublications })
+  refusesManifest "untagged render-sized vector cannot masquerade as modal lifecycle"
+    (renderManifest { manifestBankVariant = Just modalLifecycleBankVariant })
+  let renderState = RamPushState (manifestDigest renderParsed) (runtimeDigest renderParsed) (Address base) 0x2dcc0
+        (manifestEntries renderParsed) renderPublications callbackStockWord bootstrapBytes 1 (Just modalRenderBankVariant)
+  renderStateDirectory <- pure (root </> "render-state")
+  makeDir renderStateDirectory
+  renderStatePath <- writeStateFile renderStateDirectory renderState
+  readRamPushState renderStatePath >>= check "render state retains its explicit identity and 228 publications" . (== renderState)
   let fullIdentity = [("synthetic-source-" ++ show index, replicate 64 'a') | index <- [1..68 :: Int]]
   fullIdentityManifest <- parse (standard { sourceIdentity = fullIdentity })
   check "manifest accepts the complete 68-entry source identity"
     (length (sourceIdentity fullIdentityManifest) == 68)
-  refusesManifest "manifest refuses 69 source identities"
-    (standard { sourceIdentity = ("synthetic-extra", replicate 64 'a') : fullIdentity })
+  tooMany <- try (parse (standard { sourceIdentity = ("synthetic-extra", replicate 64 'a') : fullIdentity })) :: IO (Either SomeException RamPushManifest)
+  check "69 source identities report the count bound"
+    (case tooMany of Left failure -> "source_identity exceeds 68 entries" `isInfixOf` show failure; Right _ -> False)
+  emptyIdentity <- try (parse (standard {sourceIdentity = []})) :: IO (Either SomeException RamPushManifest)
+  check "empty source identity reports emptiness"
+    (case emptyIdentity of Left failure -> "source_identity must be nonempty" `isInfixOf` show failure; Right _ -> False)
   validateReviewedContract (matchingContract standard) standard
   let withIdentityEntry entry = standard { sourceIdentity = entry : sourceIdentity standard }
   composedAccepted <- try (validateReviewedContract (matchingContract standard) (withIdentityEntry ("bank_allowlist_composed_sha256", replicate 64 'c'))) :: IO (Either SomeException ())
@@ -189,7 +215,7 @@ main = do
   check "the contract refuses a source identity it does not pin"
     (case unpinnedRefused of Left _ -> True; Right () -> False)
   forM_ variants $ \(selected, variant, kind, size, count, script, archive) -> do
-    let label = show kind
+    let label = show kind ++ "-" ++ bankVariantTag variant
         checkVariant suffix = check (label ++ ": " ++ suffix)
     checkVariant "has a distinct allocation size and kind"
       (fmap payloadKind (payloadOfSize size) == Just kind
@@ -213,10 +239,11 @@ main = do
             (WordValue 0xe1000000) (WordValue 0xea000010) Both | index <- [223..count-1]]
         candidate = manifest
           { allocationSize = size, runtimeBytes = selectedRuntime, runtimeDigest = sha256 selectedRuntime
-          , manifestEntries = payloadEntries selected (Address base), manifestPublications = selectedPublications }
+          , manifestEntries = payloadEntries selected (Address base), manifestPublications = selectedPublications
+          , manifestBankVariant = Just variant }
         selectedAllocation = allocation { allocSize = size }
         selectedState = RamPushState (manifestDigest candidate) (runtimeDigest candidate) (Address base) size
-          (manifestEntries candidate) selectedPublications callbackStockWord bootstrapBytes 1
+          (manifestEntries candidate) selectedPublications callbackStockWord bootstrapBytes 1 (Just variant)
     parsed <- parse candidate
     checkVariant "manifest retains its size and publication contract"
       (allocationSize parsed == size && manifestPublications parsed == selectedPublications)

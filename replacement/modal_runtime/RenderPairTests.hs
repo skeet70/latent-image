@@ -75,7 +75,7 @@ provenanceCases = do
       withBatch value provenanceSequence pointer = do
         parsed <- J.parseEither parseProvenanceBatch value
         let memory = hitMemory returned
-            result = returned {hitMemory=take 6 memory ++ [put 4 pointer (memory !! 6)] ++ drop 7 memory}
+            result = returned {hitMemory=take 3 memory ++ [put 8 0x15edf38 (memory !! 3)] ++ take 2 (drop 4 memory) ++ [put 4 pointer (memory !! 6)] ++ drop 7 memory}
             hits = [entry TreeDraw,hit "render-tree-adapter",result]
         pure ((observation [h {hitProvenanceSequence=Just (ProvenanceSequence provenanceSequence)} | h <- hits]) {observationProvenance=Just parsed})
       draw value provenanceSequence pointer = do
@@ -92,7 +92,7 @@ provenanceCases = do
           values <- right
           pure [value {drawMemory=take 6 (drawMemory value) ++ [put offset 1 (drawMemory value !! 6)] ++ drop 7 (drawMemory value)} | value <- values]
     check "provenance does not exempt other object fields" (not (passes (compareRoles left mutated)))
-  let unknown pointer = run [entry TreeDraw,hit "render-tree-adapter",returned {hitMemory=take 6 (hitMemory returned) ++ [put 4 pointer (hitMemory returned !! 6)] ++ drop 7 (hitMemory returned)}]
+  let unknown pointer = run [entry TreeDraw,hit "render-tree-adapter",returned {hitMemory=take 3 (hitMemory returned) ++ [put 8 0x15edf38 (hitMemory returned !! 3)] ++ take 2 (drop 4 (hitMemory returned)) ++ [put 4 pointer (hitMemory returned !! 6)] ++ drop 7 (hitMemory returned)}]
   check "unknown different handles remain raw" (not (passes (compareRoles (unknown 0x100000) (unknown 0x200000))))
   check "unknown equal handles remain raw-equal" (passes (compareRoles (unknown 0x100000) (unknown 0x100000)))
   let wrongObject = batch 0 3 0 10
@@ -215,17 +215,35 @@ main = do
   check "unread bank head change fails" (not (passes (run [entry TreeDraw,hit "render-tree-adapter",altered])))
   draws <- either fail pure (run owned)
   check "equal per draw state passes" (passes (compareDraws config draws draws))
-  forM_ [0..length (hitMemory returned)-1] $ \index -> do
+  forM_ [0..5] $ \index -> do
     let change bytes = B.cons 1 (B.drop 1 bytes)
         memory = hitMemory returned
         mutation = Draw (OwnedDraw TreeDraw) (take index memory ++ [change (memory !! index)] ++ drop (index+1) memory) M.empty
-    check ("state byte difference fails " ++ show index) (not (passes (compareDraws config draws [mutation])))
+    check ("prefix state byte difference fails " ++ show index) (not (passes (compareDraws config draws [mutation])))
+  forM_ [6..length (hitMemory returned)-1] $ \index -> do
+    let change bytes = B.cons 1 (B.drop 1 bytes)
+        memory = hitMemory returned
+        mutation = Draw (OwnedDraw TreeDraw) (take index memory ++ [change (memory !! index)] ++ drop (index+1) memory) M.empty
+    check ("free bank byte outside the draw list passes " ++ show index) (passes (compareDraws config draws [mutation]))
+  let bankBase = 0x15edf38
+      liveMemory liveKey freeKey =
+        let memory = hitMemory returned
+            heads = put 8 bankBase (put 12 bankBase (memory !! 3))
+            bank = foldr (\(offset,value) bytes -> put offset value bytes) (B.replicate 4096 0)
+              [(0,0),(16,0),(110,liveKey),(212,0),(228,2),(322,freeKey)]
+        in take 3 memory ++ [heads] ++ take 2 (drop 4 memory) ++ [bank] ++ drop 7 memory
+      liveDraw = Draw (OwnedDraw TreeDraw) (liveMemory 0x30 0x30) M.empty
+      freeSlotDiffers = Draw (OwnedDraw TreeDraw) (liveMemory 0x30 0x31) M.empty
+      liveObjectDiffers = Draw (OwnedDraw TreeDraw) (liveMemory 0x31 0x30) M.empty
+  check "free bank slot bytes are not draw state" (passes (compareDraws config [liveDraw] [freeSlotDiffers]))
+  check "live bank object bytes are draw state" (not (passes (compareDraws config [liveDraw] [liveObjectDiffers])))
   check "unpaired draws fail" (not (passes (compareDraws config draws [])))
   let resource = 0x12345678
       clockConfig = config {renderClock = Just (ResourceId resource)}
+      clockPrefix = take 3 (hitMemory returned) ++ [put 8 0x15edf38 (hitMemory returned !! 3)] ++ take 2 (drop 4 (hitMemory returned))
       clockBank = put 8 resource (B.replicate 27136 0)
-      clockA = Draw (OwnedDraw TreeDraw) (take 6 (hitMemory returned) ++ [clockBank]) M.empty
-      clockB = Draw (OwnedDraw TreeDraw) (take 6 (hitMemory returned) ++ [put 12 1 clockBank]) M.empty
+      clockA = Draw (OwnedDraw TreeDraw) (clockPrefix ++ [clockBank]) M.empty
+      clockB = Draw (OwnedDraw TreeDraw) (clockPrefix ++ [put 12 1 clockBank]) M.empty
   check "clock resource exempts object" (passes (compareDraws clockConfig [clockA] [clockB]))
   check "clock unset refuses object difference" (not (passes (compareDraws config [clockA] [clockB])))
   check "clock-only duplicate draw accepted" (passes (compareDraws clockConfig [clockA,clockB] [clockB]))

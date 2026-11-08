@@ -26,6 +26,26 @@ use crate::menu_engine::{
 include!(env!("RB_MENU_ENGINE_TREE"));
 include!(env!("RB_MENU_ENGINE_RECORDS"));
 
+#[cfg(rb_render_owned)]
+pub(crate) fn render_node_origin(record_id: NodeId, current: RecordAddress) -> crate::render_adapter::class::NodeOrigin {
+    use crate::render_adapter::class::NodeOrigin;
+    for (node, &address) in TREE.nodes.iter().zip(RECORDS.records) {
+        if node.id == record_id && address == current {
+            return NodeOrigin::Stock;
+        }
+    }
+    for node in TREE.nodes {
+        if let Some(rows) = node.rows {
+            for row in rows {
+                if row.child == RowChild::Package && row.token.get() == record_id.get() {
+                    return NodeOrigin::Package;
+                }
+            }
+        }
+    }
+    NodeOrigin::Unknown
+}
+
 /// The token returned by `FUN_00d588b8` for no selection.
 const NO_SELECTION: u32 = 0x7fff_fffe;
 

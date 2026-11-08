@@ -37,7 +37,7 @@ indirect name reason = object
 
 main :: IO ()
 main = do
-  [sourceBasePath, sourceModalPath, modalLow, modalHigh] <- getArgs
+  [sourceBasePath, sourceModalPath, modalLow, modalHigh, sourceRenderPath] <- getArgs
   frozenBase <- B.readFile sourceBasePath
   let basePath = "menu/recipe_bank_allowlist.json"
       lifecyclePath = "menu/recipe_bank_allowlist.lifecycle.json"
@@ -74,6 +74,18 @@ main = do
   canonicalVariant <- either fail pure (bankVariant [Modal75Publication, LifecyclePublications])
   check "equivalent typed selections emit identical composed bytes"
     (composeBankAllowlist canonicalVariant sources == composed)
+  sourceRender <- B.readFile sourceRenderPath
+  let enginePath = "menu/recipe_bank_menu_engine_allowlist_fragment.json"
+      renderPath = "menu/recipe_bank_render_allowlist_fragment.json"
+      renderSources = [(basePath, base), (modalPath, modal), (enginePath, document [] [] []), (renderPath, sourceRender)]
+  renderPolicy <- either fail pure (composeBankAllowlist modalRenderBankVariant renderSources >>= parseAllowlist)
+  renderFragment <- either fail pure (parseAllowlist sourceRender)
+  check "render composition retains the overlay44 stock resumes and draw services after modal"
+    (map stockCallAddress (stockCalls renderPolicy) == 0x00700008 : map stockCallAddress (stockCalls renderFragment)
+      && all (`elem` map stockCallAddress (stockCalls renderPolicy)) [0x01164e20, 0x01163f30])
+  check "render composition refuses a missing engine fragment"
+    (isLeft (composeBankAllowlist modalRenderBankVariant
+      [(basePath, base), (modalPath, modal), (renderPath, sourceRender)]))
   check "missing selected fragments are refused"
     (isLeft (composeBankAllowlist modalLifecycleBankVariant (take 2 sources)))
   check "reordered selected fragments are refused"

@@ -6,3 +6,4 @@ include "engine";
 .trace_sites += engine_sites($role)
 | .before_unload |= map(.reads += engine_reads)
 | .after_unload |= map(.reads += engine_reads)
+| render_trajectory

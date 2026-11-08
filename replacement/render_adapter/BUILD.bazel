@@ -1,0 +1,7 @@
+exports_files(["class.rs"])
+
+filegroup(
+    name = "module",
+    srcs = ["mod.rs", "class.rs", "calls.rs", "picker.rs", "tree.rs", "pane.rs", "entry.S"],
+    visibility = ["//visibility:public"],
+)

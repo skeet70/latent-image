@@ -440,6 +440,26 @@ haskell_test(
     ],
 )
 
+haskell_binary(
+    name = "render-manifest-admission-tests",
+    srcs = ["RenderManifestAdmissionTests.hs"],
+    main_file = "RenderManifestAdmissionTests.hs",
+    ghcopts = _GHCOPTS,
+    visibility = ["//visibility:public"],
+    deps = [
+        ":camera-core",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//broker:core",
+        "//host:filepath",
+        "//host:json",
+        "//host/firmware:ram-push-layout",
+    ],
+)
+
+
 # Every camera operation through the native provider, with native_usb.c's
 # entry points answered by a scripted device, and through the emulator bridge
 # provider, with the bridge's JSON lines answered by the same device; the two
@@ -595,6 +615,7 @@ filegroup(
         "//host/firmware:build-recipe-bank-lifecycle-ram.sh",
         "//host/firmware:build-recipe-bank-modal-lifecycle-ram.sh",
         "//host/firmware:build-recipe-bank-modal-engine-ram.sh",
+        "//host/firmware:build-recipe-bank-modal-render-ram.sh",
         "//host/firmware:classic-chrome-liveview-image5.json",
         "//host/firmware:classic-chrome-frames-image5.json",
         "//host:FujiAF/ClassicChrome.hs",

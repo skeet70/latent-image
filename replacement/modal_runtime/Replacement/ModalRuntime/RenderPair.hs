@@ -19,9 +19,11 @@ import Data.Bits ((.&.), shiftL, shiftR)
 import qualified Data.ByteString as B
 import Data.List (nub, sort)
 import qualified Data.Map.Strict as M
+import Data.Maybe (listToMaybe)
+import qualified Data.Set as S
 import qualified Data.Text as T
-import Data.Word (Word32)
-import Numeric (readHex)
+import Data.Word (Word8, Word32)
+import Numeric (readHex, showHex)
 import qualified RenderStack as S
 import Replacement.ModalRuntime.MenuEnginePair
 import Replacement.ModalRuntime.MenuEngineTree
@@ -229,7 +231,11 @@ compareDraws :: RenderConfig -> [Draw] -> [Draw] -> Either String ()
 compareDraws config stock owned =
   let left = collapseDraws config stock
       right = collapseDraws config owned
-  in unless (length left == length right && and (zipWith (sameDrawValue config) left right)) (Left "render draw order/state differs")
+      mismatches = [(index, drawDifference config a b) | (index, a, b) <- zip3 [0 :: Int ..] left right, not (sameDrawValue config a b)]
+  in case (mismatches, length left == length right) of
+    ((index, detail) : _, _) -> Left ("render draw order/state differs at draw " ++ show index ++ ": " ++ detail)
+    ([], False) -> Left ("render draw order/state differs: " ++ show (length left) ++ " stock draws for " ++ show (length right) ++ " owned draws")
+    ([], True) -> Right ()
 
 drawVisibleHandles :: RenderConfig -> Draw -> M.Map ObjectAddress HandleIdentity
 drawVisibleHandles config draw = case renderClock config of
@@ -245,25 +251,113 @@ drawVisibleHandles config draw = case renderClock config of
 sameDrawValue :: RenderConfig -> Draw -> Draw -> Bool
 sameDrawValue config left right = drawClass left == drawClass right && sameMemoryValue config left right
 
+memorySegments :: RenderConfig -> [B.ByteString] -> [(Int,Int,B.ByteString)]
+memorySegments config memory = case renderClock config of
+  Nothing -> [(bank,chunk*4096,bytes) | ((bank,chunk),bytes) <- zip [(bank,chunk) | bank <- renderBanks config, chunk <- [0..6]] (drop 6 memory)]
+  Just _ -> [(bank,0,bytes) | (bank,bytes) <- zip (renderBanks config) (drop 5 memory)]
+
+bankWord :: RenderConfig -> [B.ByteString] -> Int -> Int -> Either String Word32
+bankWord config memory position offset =
+  let (index, within) = case renderClock config of
+        Nothing -> (6 + position*7 + offset `div` 4096, offset `mod` 4096)
+        Just _ -> (5 + position, offset)
+  in word (memory !! index) within
+
+-- A state-2 slot outside the bank's list retains the last allocation's key bytes, not draw state.
+liveObjects :: RenderConfig -> [B.ByteString] -> Int -> Either String [Int]
+liveObjects config memory position = do
+  let bank = renderBanks config !! position
+      base = 0x15e7538 + fromIntegral bank*27136
+  first <- word (memory !! 3) (bank*8)
+  go base first [] (128 :: Int)
+ where
+  go base address seen remaining
+    | address == 0 = Right (reverse seen)
+    | remaining == 0 = Left "render bank list exceeds its 128 objects"
+    | address < base = Left "render bank list leaves its pool"
+    | otherwise = do
+        let offset = fromIntegral (address - base) :: Int
+        unless (offset `mod` 212 == 0 && offset `div` 212 < 128) (Left "render bank list leaves its pool")
+        let index = offset `div` 212
+        when (index `elem` seen) (Left "render bank list cycles")
+        next <- bankWord config memory position offset
+        go base next (index:seen) (remaining - 1)
+
+liveObjectSets :: RenderConfig -> [B.ByteString] -> Either String [[Int]]
+liveObjectSets config memory = mapM (liveObjects config memory) [0 .. length (renderBanks config) - 1]
+
+liveAddresses :: RenderConfig -> [[Int]] -> S.Set ObjectAddress
+liveAddresses config sets = S.fromList
+  [ObjectAddress (0x15e7538 + fromIntegral bank*27136 + fromIntegral index*212) | (position, bank) <- zip [0..] (renderBanks config), index <- sets !! position]
+
+liveHandles :: RenderConfig -> [[Int]] -> M.Map ObjectAddress HandleIdentity -> M.Map ObjectAddress HandleIdentity
+liveHandles config sets handles = M.filterWithKey (\object _ -> S.member object (liveAddresses config sets)) handles
+
 sameMemoryValue :: RenderConfig -> Draw -> Draw -> Bool
 sameMemoryValue config left right =
   let a = normalized config left
       b = normalized config right
       prefix = if renderClock config == Nothing then 6 else 5
-      segments :: [B.ByteString] -> [(Int,Int,B.ByteString)]
-      segments memory = case renderClock config of
-        Nothing -> [(bank,chunk*4096,bytes) | ((bank,chunk),bytes) <- zip [(bank,chunk) | bank <- renderBanks config,chunk <- [0..6]] (drop prefix memory)]
-        Just _ -> [(bank,0,bytes) | (bank,bytes) <- zip (renderBanks config) (drop prefix memory)]
       expected = length (renderBanks config) * (if renderClock config == Nothing then 7 else 1)
       leftHandles = drawVisibleHandles config left
       rightHandles = drawVisibleHandles config right
-      identitiesEqual = M.foldrWithKey (\object identity rest -> rest && maybe True (== identity) (M.lookup object rightHandles)) True leftHandles
   in take prefix a == take prefix b && length (drop prefix a) == expected && length (drop prefix b) == expected
-    && identitiesEqual && and (zipWith (sameSegmentValue config leftHandles rightHandles) (segments a) (segments b))
+    && case (liveObjectSets config a, liveObjectSets config b) of
+        (Right liveLeft, Right liveRight) | liveLeft == liveRight ->
+          let rightVisible = liveHandles config liveRight rightHandles
+          in M.foldrWithKey (\object identity rest -> rest && maybe True (== identity) (M.lookup object rightVisible)) True (liveHandles config liveLeft leftHandles)
+            && and (zipWith3 (sameSegmentValue config leftHandles rightHandles) liveLeft (memorySegments config a) (memorySegments config b))
+        _ -> False
 
-sameSegmentValue :: RenderConfig -> M.Map ObjectAddress HandleIdentity -> M.Map ObjectAddress HandleIdentity -> (Int,Int,B.ByteString) -> (Int,Int,B.ByteString) -> Bool
-sameSegmentValue config left right (bank,offset,a) (_,_,b) = B.length a == B.length b && (a == b || and
-  [ B.index a i == B.index b i || sameHandleByte config left right bank (offset+i) | i <- [0..B.length a-1] ])
+drawDifference :: RenderConfig -> Draw -> Draw -> String
+drawDifference config left right
+  | drawClass left /= drawClass right = "class stock=" ++ show (drawClass left) ++ " owned=" ++ show (drawClass right)
+  | Just detail <- handleDifference = detail
+  | Just detail <- prefixDifference = detail
+  | length (drop prefix a) /= length (drop prefix b) = "state chunk count stock=" ++ show (length (drop prefix a)) ++ " owned=" ++ show (length (drop prefix b))
+  | Just detail <- segmentDifference = detail
+  | otherwise = "draw state differs"
+ where
+  a = normalized config left
+  b = normalized config right
+  prefix = if renderClock config == Nothing then 6 else 5
+  leftHandles = drawVisibleHandles config left
+  rightHandles = drawVisibleHandles config right
+  handleDifference = case (liveObjectSets config a, liveObjectSets config b) of
+    (Right liveLeft, Right liveRight) ->
+      let rightVisible = liveHandles config liveRight rightHandles
+      in case [(object, identity, M.lookup object rightVisible) | (object, identity) <- M.toList (liveHandles config liveLeft leftHandles), M.lookup object rightVisible /= Just identity] of
+        (object, identity, other) : _ -> Just ("handle " ++ show object ++ " stock=" ++ show identity ++ " owned=" ++ show other)
+        [] -> Nothing
+    _ -> Nothing
+  prefixDifference = case firstChunkDifference (take prefix a) (take prefix b) of
+    Just (offset, x, y) -> Just ("prefix offset " ++ show offset ++ " stock=" ++ hexByte x ++ " owned=" ++ hexByte y)
+    Nothing -> Nothing
+  segmentDifference = case (liveObjectSets config a, liveObjectSets config b) of
+    (Right liveLeft, Right liveRight) | liveLeft == liveRight -> listToMaybe
+      ["bank " ++ show bank ++ " offset " ++ show (offset + i) ++ " stock=" ++ hexByte (B.index x i) ++ " owned=" ++ hexByte (B.index y i)
+      | (live,(bank,offset,x),(_,_,y)) <- zip3 liveLeft (memorySegments config a) (memorySegments config b)
+      , i <- take 1 [i | i <- [0 .. min (B.length x) (B.length y) - 1], B.index x i /= B.index y i, (offset+i) `div` 212 `elem` live, not (sameHandleByte config leftHandles rightHandles bank (offset+i))]]
+    (Right _, Right _) -> Just "render bank lists differ"
+    (Left problem, _) -> Just ("stock render bank list: " ++ problem)
+    (_, Left problem) -> Just ("owned render bank list: " ++ problem)
+
+hexByte :: Word8 -> String
+hexByte value = let digits = showHex value "" in if length digits < 2 then '0' : digits else digits
+
+firstChunkDifference :: [B.ByteString] -> [B.ByteString] -> Maybe (Int, Word8, Word8)
+firstChunkDifference = go 0
+ where
+  go _ [] [] = Nothing
+  go offset (x:xs) (y:ys) = case [i | i <- [0 .. min (B.length x) (B.length y) - 1], B.index x i /= B.index y i] of
+    i : _ -> Just (offset + i, B.index x i, B.index y i)
+    [] | B.length x /= B.length y -> Just (offset + min (B.length x) (B.length y), 0, 0)
+       | otherwise -> go (offset + B.length x) xs ys
+  go offset _ _ = Just (offset, 0, 0)
+
+sameSegmentValue :: RenderConfig -> M.Map ObjectAddress HandleIdentity -> M.Map ObjectAddress HandleIdentity -> [Int] -> (Int,Int,B.ByteString) -> (Int,Int,B.ByteString) -> Bool
+sameSegmentValue config left right live (bank,offset,a) (_,_,b) = B.length a == B.length b && (a == b || and
+  [ B.index a i == B.index b i || not ((offset+i) `div` 212 `elem` live) || sameHandleByte config left right bank (offset+i) | i <- [0..B.length a-1] ])
 
 sameHandleByte :: RenderConfig -> M.Map ObjectAddress HandleIdentity -> M.Map ObjectAddress HandleIdentity -> Int -> Int -> Bool
 sameHandleByte _ left right bank offset =
