@@ -103,6 +103,7 @@ def xm1_rust_elf(
         entry = None,
         extra_ldflags = [],
         testonly = False,
+        tags = [],
         visibility = None):
     """Links a Rust staticlib with C/assembly into an ELF, flat image and symbol list.
 
@@ -178,6 +179,7 @@ def xm1_rust_elf(
         cmd = "\n".join(commands),
         message = "Linking %s for armv7r-none-eabi" % name,
         testonly = testonly,
+        tags = tags,
         tools = [_CLANG, _LLD, _OBJCOPY, _NM, _OBJDUMP],
         visibility = visibility,
     )

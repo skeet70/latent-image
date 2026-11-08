@@ -8,7 +8,7 @@ use core::arch::asm;
 use fixed_pool::layout::*;
 use fixed_pool::*;
 
-#[cfg(all(target_arch = "arm", not(test)))]
+#[cfg(all(target_arch = "arm", not(test), not(feature = "component")))]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
     loop {}

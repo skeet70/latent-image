@@ -100,7 +100,7 @@ entry!(try, try_body);
 entry!(release, release_body);
 entry!(observe, observe_body);
 
-#[cfg(all(target_arch = "arm", not(test)))]
+#[cfg(all(target_arch = "arm", not(test), not(feature = "component")))]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
     loop {}
