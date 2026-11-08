@@ -52,9 +52,10 @@ main = do
       stockB = Image 0xd0000 loaderBBytes
       ownedAImage = Image (minimum (map fst ownedASymbols)) ownedABytes
       ownedBImage = Image (minimum (map fst ownedBSymbols)) ownedBBytes
-  runA <- runDomain runner cacheRoot (takeDirectory resultsPath </> "domain-a") facts DomainA stockA ownedAImage ownedASymbols
-  runB <- runDomain runner cacheRoot (takeDirectory resultsPath </> "domain-b") facts DomainB stockB ownedBImage ownedBSymbols
+  (runA, controlsA) <- runDomain runner cacheRoot (takeDirectory resultsPath </> "domain-a") facts DomainA stockA ownedAImage ownedASymbols
+  (runB, controlsB) <- runDomain runner cacheRoot (takeDirectory resultsPath </> "domain-b") facts DomainB stockB ownedBImage ownedBSymbols
   let runs = runA ++ runB
+      controls = controlsA ++ controlsB
       failures =
         [ (domainLabel (caseDomain run), runName run, message)
         | run <- runs
@@ -65,14 +66,27 @@ main = do
         | run <- runs
         , (description, False) <- runChecks run
         ]
+      failedControls =
+        [ (controlCohort control, controlCase control, controlName control)
+        | control <- controls
+        , not (controlHolds control)
+        ]
       caseValue run =
         object
           [ "domain" .= domainLabel (caseDomain run)
+          , "cohort" .= runCohort run
           , "case" .= runName run
           , "kind" .= show (runKind run)
           , "checks" .= [object ["check" .= description, "holds" .= holds] | (description, holds) <- runChecks run]
           , "differences" .= runDifferences run
           , "reuse" .= show (runReuse run)
+          ]
+      controlValue control =
+        object
+          [ "cohort" .= controlCohort control
+          , "case" .= controlCase control
+          , "control" .= controlName control
+          , "holds" .= controlHolds control
           ]
       document =
         object
@@ -86,14 +100,18 @@ main = do
                 , "owned_b_bin_sha256" .= sha256Hex ownedBDigest
                 ]
           , "cases" .= map caseValue runs
-          , "failures" .= (length failures + length failedChecks)
+          , "controls" .= map controlValue controls
+          , "failures" .= (length failures + length failedChecks + length failedControls)
           ]
   BL.writeFile resultsPath (encode document)
   forM_ runs $ \run -> forM_ (runChecks run) $ \(description, holds) ->
-    putStrLn (domainLabel (caseDomain run) ++ " " ++ runName run ++ ": " ++ description ++ " " ++ (if holds then "ok" else "FAILED"))
+    putStrLn (domainLabel (caseDomain run) ++ " " ++ runCohort run ++ " " ++ runName run ++ ": " ++ description ++ " " ++ (if holds then "ok" else "FAILED"))
+  forM_ controls $ \control ->
+    putStrLn (controlCohort control ++ " " ++ controlCase control ++ ": control " ++ controlName control ++ " " ++ (if controlHolds control then "ok" else "FAILED"))
   forM_ failures $ \(domain, name, message) -> putStrLn (domain ++ " " ++ name ++ ": " ++ message)
   forM_ failedChecks $ \(domain, name, description) -> putStrLn (domain ++ " " ++ name ++ ": check failed: " ++ description)
-  unless (null failures && null failedChecks) exitFailure
+  forM_ failedControls $ \(cohort, name, control) -> putStrLn (cohort ++ " " ++ name ++ ": control failed: " ++ control)
+  unless (null failures && null failedChecks && null failedControls) exitFailure
 
 required :: String -> IO FilePath
 required flag = do

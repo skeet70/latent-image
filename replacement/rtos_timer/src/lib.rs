@@ -35,19 +35,22 @@ const MAX_CAPACITY: u32 = (u32::MAX / NODE_SIZE) + 1;
 pub struct Capacity(NonZeroU32);
 
 impl Capacity {
-    pub fn new(value: u32) -> Option<Self> {
+    pub const fn new(value: u32) -> Option<Self> {
         if value == 0 || value > MAX_CAPACITY {
             return None;
         }
-        NonZeroU32::new(value).map(Self)
+        match NonZeroU32::new(value) {
+            Some(value) => Some(Self(value)),
+            None => None,
+        }
     }
 
-    /// The caller guarantees the value is in range.
+    /// Panics at compile time or runtime when `value` is zero or above `MAX_CAPACITY`.
     pub const fn from_static(value: u32) -> Self {
-        Self(match NonZeroU32::new(value) {
-            Some(value) => value,
-            None => unsafe { core::hint::unreachable_unchecked() },
-        })
+        match Self::new(value) {
+            Some(capacity) => capacity,
+            None => panic!("timer capacity is out of range"),
+        }
     }
 
     pub fn get(self) -> u32 {
@@ -331,10 +334,10 @@ pub fn remove<M: Machine>(m: &M, heap: TimerHeap, entry: TimerEntry) -> Result<R
 }
 
 /// The callback receives the lock held and must return it held; it may release and reacquire
-/// meanwhile.
+/// meanwhile. `resolve` runs at the top of every iteration.
 pub fn tick<M: Scheduler>(
     m: &M,
-    heap: TimerHeap,
+    mut resolve: impl FnMut(&M) -> TimerHeap,
     mut invoke: impl FnMut(&M, CallbackAddress, CallbackArgument),
 ) -> Result<(), TimerError> {
     if m.handler_context() == 0 {
@@ -346,9 +349,11 @@ pub fn tick<M: Scheduler>(
     m.irq_set();
     m.acquire_lock();
     loop {
+        let heap = resolve(m);
         let count = heap.count(m);
         if count == 0 {
-            break;
+            finish(m, heap);
+            return Ok(());
         }
         if count > heap.capacity.get() {
             m.release_lock();
@@ -366,7 +371,8 @@ pub fn tick<M: Scheduler>(
             }
         };
         if relative(node_expiry(m, heap, head).0, base) > relative(tick.0, base) {
-            break;
+            finish(m, heap);
+            return Ok(());
         }
         let entry = node_entry(m, heap, head);
         let callback = entry.callback(m);
@@ -397,12 +403,14 @@ pub fn tick<M: Scheduler>(
         m.irq_set();
         m.acquire_lock();
     }
+}
+
+fn finish<M: Scheduler>(m: &M, heap: TimerHeap) {
     let tick = heap.tick_now(m);
     heap.set_base(m, Base(tick.0));
     heap.set_tick_now(m, Now(tick.0.wrapping_add(10)));
     m.release_lock();
     m.irq_clear();
-    Ok(())
 }
 
 #[cfg(test)]

@@ -15,8 +15,9 @@ const ENTRY: Domain = Domain::A;
 #[cfg(feature = "domain-b")]
 const ENTRY: Domain = Domain::B;
 
-/// The heap span at `g_timer_heap` is 0x5c0 bytes, 184 eight-byte nodes.
-const FIRMWARE_CAPACITY: u32 = 184;
+/// The native fixture's heap bound. The pinned firmware declares `g_timer_heap` unsized, so this
+/// bounds the fixture only.
+const FIXTURE_CAPACITY: Capacity = Capacity::from_static(184);
 
 #[inline(always)]
 fn read(address: GuestAddress) -> u32 {
@@ -130,11 +131,7 @@ impl Scheduler for Cpu {
 
 #[inline(always)]
 fn heap(context: KernelContext) -> TimerHeap {
-    TimerHeap::from_context(
-        &Cpu,
-        context,
-        Capacity::from_static(FIRMWARE_CAPACITY),
-    )
+    TimerHeap::from_context(&Cpu, context, FIXTURE_CAPACITY)
 }
 
 #[no_mangle]
@@ -155,8 +152,7 @@ pub extern "C" fn xm1_rtos_timer_remove_body(context: KernelContext, entry: Time
 #[inline(never)]
 #[link_section = ".text.timer_body_tick"]
 pub extern "C" fn xm1_rtos_timer_tick_body() -> i32 {
-    let context = current_context();
-    match tick(&Cpu, heap(context), |_m, callback, argument| unsafe {
+    match tick(&Cpu, |_| heap(current_context()), |_m, callback, argument| unsafe {
         let invoke: extern "C" fn(u32) = core::mem::transmute::<u32, extern "C" fn(u32)>(callback.0);
         invoke(argument.0);
     }) {
