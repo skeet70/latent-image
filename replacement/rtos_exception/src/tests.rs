@@ -302,6 +302,26 @@ fn record_fault_publishes_the_record_log_and_hook() {
     assert_eq!(machine.get(d.resume_gate.0), 0x55);
 }
 
+fn restore_fc(saved: u32, current: u32) -> u32 {
+    let merged = restore_status(saved, current);
+    (current & !0x41) | (merged & 0x41)
+}
+
+#[test]
+fn restore_status_preserves_saved_a_and_uses_current_f() {
+    let saved = 0x2000_0153;
+    assert_eq!(restore_status(saved, 0), saved & !0x40);
+    assert_eq!(restore_status(saved, 0x40), saved);
+    assert_eq!(restore_status(saved, 0) & 0x100, 0x100);
+}
+
+#[test]
+fn fc_only_restore_loses_saved_a() {
+    let saved = 0x2000_0153;
+    assert_eq!(restore_status(saved, 0) & 0x100, 0x100);
+    assert_eq!(restore_fc(saved, 0) & 0x100, 0);
+}
+
 #[test]
 fn absent_hooks_are_not_called() {
     let machine = TestMachine::new(true);
