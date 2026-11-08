@@ -41,11 +41,8 @@ pub fn poll<M: Machine + Locks + Irq>(
     let lock = words.context(id.domain).object_lock();
     m.disable_irq();
     m.lock(lock);
-    let result = match take(m, id) {
-        Some(block) => {
-            m.store_word(out.0, block.0 .0);
-            WaitOutcome::Satisfied(block)
-        }
+    let result = match take(m, id, out.0) {
+        Some(block) => WaitOutcome::Satisfied(block),
         None => WaitOutcome::TimedOut,
     };
     m.unlock(lock);
@@ -72,8 +69,7 @@ pub fn get<M: Block>(
     m.disable_irq();
     loop {
         m.lock(object_lock);
-        if let Some(block) = take(m, id) {
-            m.store_word(out.0, block.0 .0);
+        if let Some(block) = take(m, id, out.0) {
             m.unlock(object_lock);
             m.enable_irq();
             return Ok(PoolBlocking::Ready(WaitOutcome::Satisfied(block)));
@@ -137,11 +133,8 @@ pub fn poll_unchecked<M: Machine + Locks + SaveIrq>(
     let result = if m.load_word(config.exists()) == 0 {
         Err(PoolStatus::NotCreated)
     } else {
-        Ok(match take(m, id) {
-            Some(block) => {
-                m.store_word(out.0, block.0 .0);
-                WaitOutcome::Satisfied(block)
-            }
+        Ok(match take(m, id, out.0) {
+            Some(block) => WaitOutcome::Satisfied(block),
             None => WaitOutcome::TimedOut,
         })
     };

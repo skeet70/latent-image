@@ -41,6 +41,7 @@ pub fn delete_pool<M: Wake>(m: &M, id: PoolId, handler: bool) -> Result<(), Pool
         if handler {
             m.request_delayed_dispatch();
         } else {
+            m.prepare_dispatch(saved);
             m.dispatch(0);
         }
     }

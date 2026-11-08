@@ -34,7 +34,7 @@ module Replacement.RtosFixedPool.Oracle
 
 import Control.Monad (forM, unless)
 import Data.Aeson (FromJSON (..), eitherDecodeStrict', withObject, (.:))
-import Data.Bits ((.&.), (.|.), complement, shiftL)
+import Data.Bits ((.&.), (.|.), complement, shiftL, shiftR)
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
 import Data.Word (Word32, Word8)
@@ -56,6 +56,7 @@ import Emulation.OwnedCase
   , CaseSpec (..)
   , KernelCase (..)
   , Permission (..)
+  , assemble
   , caseOutcome
   , mkRegion
   , mkStackContext
@@ -351,6 +352,7 @@ data Case = Case
   , caseBank :: Maybe (Domain, Word32)
   , caseReceipt :: Maybe (Word32, Word32)
   , caseR1 :: Maybe Word32
+  , caseResume :: Bool
   }
 
 data Image = Image {imageBase :: Word32, imageBytes :: B.ByteString}
@@ -469,6 +471,26 @@ lowestBitAddress :: Domain -> Word32
 lowestBitAddress DomainA = 0x0004_daa0
 lowestBitAddress DomainB = 0x000d_da64
 
+driverEntry, driverStack, driverSize :: Word32
+driverEntry = 0x0005_4000
+driverStack = 0x0095_9e00
+driverSize = 32
+
+branchLink :: Word32 -> Word32 -> Word32
+branchLink from to = 0xeb00_0000 .|. ((to - (from + 8)) `shiftR` 2 .&. 0x00ff_ffff)
+
+driverBytes :: Domain -> B.ByteString
+driverBytes domain = assemble
+  [ 0xe3a0_0001
+  , 0xe300_1000
+  , 0xe344_1000
+  , 0xe10f_2000
+  , 0xe3c2_2080
+  , 0xe121_f002
+  , branchLink (driverEntry + 24) (entries domain Release)
+  , 0xeaff_fffe
+  ]
+
 runningSlot, idleSlot, waiterSlot, secondWaiterSlot :: Word32
 runningSlot = 1
 idleSlot = 3
@@ -580,6 +602,16 @@ twoWaiters facts owner objectSlot objectDomain (first, firstPriority) (second, s
   , poke (waitOwner facts owner second) (dfId (domainFacts facts objectDomain))
   ]
 
+resumeWords :: Facts -> Domain -> [(GuestAddress, Word32)]
+resumeWords facts domain =
+  created facts domain 1 0 1 8 poolRegion
+    ++ [ poke (nextFreeCell facts domain 1) (poolRegion + 8)
+       , poke (recycledCell facts domain 1) 0
+       , poke (taskAddress facts domain idleSlot + tfSavedSp (factsTask facts)) driverStack
+       , poke (taskAddress facts domain idleSlot + tfResumePc (factsTask facts)) driverEntry
+       , poke (taskAddress facts domain idleSlot + tfState (factsTask facts)) (packedState (stReady (factsStates facts)) 15)
+       ]
+
 createWords :: Word32 -> Word32 -> Word32 -> Word32 -> [(GuestAddress, Word32)]
 createWords attributes count size buffer =
   [ poke requestAddress attributes
@@ -592,7 +624,7 @@ plain :: String -> Service -> Domain -> Word32 -> [(GuestAddress, Word32)] -> Wo
 plain name service objectDomain slot fixture timeout result arrival checks =
   Case name service objectDomain slot Nothing fixture timeout
     (Expectation result arrival checks) Nothing Nothing
-    False False True Nothing Nothing Nothing
+    False False True Nothing Nothing Nothing False
 
 cases :: Facts -> Domain -> [Case]
 cases facts executing =
@@ -842,6 +874,14 @@ cases facts executing =
         ++ [poke (nextFreeCell facts executing 1) (poolRegion + 8)])
       0 (fromIntegral (-25 :: Int)) False [eq (recycledCell facts executing 1) 0])
       { caseHandler = True }
+  , (plain "get-resume-wake" Get executing 1 (resumeWords facts executing) 0 0 False
+      [eq outAddress poolRegion])
+      { caseResume = True }
+  , (plain "timed-resume-wake" TimedGet executing 1 (resumeWords facts executing) 30 0 False
+      [eq outAddress poolRegion])
+      { caseResume = True
+      , caseReceipt = Just (recordAddress facts executing executing, timerAddress facts executing runningSlot)
+      }
   ]
 
 data Role = StockRole | OwnedRole deriving (Eq, Show)
@@ -1005,6 +1045,7 @@ pages facts one =
        , Page (RegionId "stack") (GuestAddress (callerSp one - 0x400)) 0x400 ReadWrite (B.replicate 0x400 0)
        , Page (RegionId "caller-frame") (GuestAddress (callerSp one)) (B.length callerBytes) ReadWrite callerBytes
        , Page (RegionId "target-stack") (GuestAddress (targetStack - 0x100)) 0x100 ReadWrite (B.replicate 0x100 0)
+       , Page (RegionId "driver-stack") (GuestAddress (driverStack - 0x100)) 0x100 ReadWrite (B.replicate 0x100 0)
        , Page (RegionId "bank-a") (bank DomainA) 4 Device (B.replicate 4 0)
        , Page (RegionId "bank-b") (bank DomainB) 4 Device (B.replicate 4 0)
        ]
@@ -1030,7 +1071,7 @@ overlay (GuestAddress start) initial words' = B.concat (pieces 0 ordered)
             : pieces (offset + 4) rest
 
 codeBytes :: Domain -> Role -> Image -> Image -> B.ByteString
-codeBytes domain role loader owned = case role of
+codeBytes domain role loader owned = withDriver $ case role of
   StockRole -> stockBytes
   OwnedRole -> foldl patch stockBytes (extents domain ++ [(bodyRegion, bodyLength)])
   where
@@ -1040,6 +1081,7 @@ codeBytes domain role loader owned = case role of
       [ maximum [address + size | (address, size) <- bounds]
       , bodyRegion + bodyLength
       , lowestBitAddress domain + 16
+      , driverEntry + driverSize
       ]
     slice image address size =
       if address < imageBase image
@@ -1050,6 +1092,7 @@ codeBytes domain role loader owned = case role of
       (install (lowestBitAddress domain) lowestBitTable
         (foldl (\current (address, size) -> install address (slice loader address size) current)
           (B.replicate (fromIntegral (top - base)) 0) bounds))
+    withDriver current = install driverEntry (driverBytes domain) current
     install address bytes current =
       let offset = fromIntegral (address - base)
        in B.take offset current <> bytes <> B.drop (offset + B.length bytes) current
@@ -1065,14 +1108,14 @@ caseSpec facts executing role loader owned one
   | otherwise = CaseSpec
       { caseId = emittedId executing one
       , caseProvenance = "X-M1 1.50 fixed-pool family, pinned x70view 55436fc85c0560dd252b0410af6f2427fe198cd3; synthetic task/object state and timer argument seam"
-      , caseExclusion = "Private compiler frames are not byte-compared. Dispatch checks the selected-task arrival and the live stock continuation. The timer removal entry is a recording stub; it proves arguments, not heap removal."
+      , caseExclusion = "Private compiler frames are not byte-compared. Dispatch rows check the selected-task arrival; resumed rows check the original caller's service return, output word, SP, callee-saved registers and CPSR control. The timer removal entry is a recording stub; it proves arguments, not heap removal."
       , caseEntry = wire (entries executing (caseService one))
       , caseExit = wire exitAddress
       , caseRegions =
           [mkRegion (RegionId "code") (wire codeBase) (fromIntegral (codeTop - codeBase)) ReadExecute (codeBytes executing role loader owned)]
             ++ [mkRegion ident (wire (guestWord address)) size permission (overlay address background words') | Page ident address size permission background <- dataPages]
             ++ [mkRegion (RegionId "continuations") (wire exitAddress) (fromIntegral (stopAddress - exitAddress + 4)) ReadExecute (B.replicate (fromIntegral (stopAddress - exitAddress + 4)) 0)]
-      , caseFunctions = [(wire address, size) | (address, size) <- extents executing ++ retained executing ++ [(bodyRegion, bodyLength)]]
+      , caseFunctions = [(wire address, size) | (address, size) <- extents executing ++ retained executing ++ [(bodyRegion, bodyLength), (driverEntry, driverSize)]]
       , caseInitial = initialRegisters executing one
       , caseExpectedStatus = if arrival then StopAddress else Returned
       , caseExpectedRegisters = if arrival
@@ -1090,6 +1133,7 @@ caseSpec facts executing role loader owned one
       [ maximum [address + size | (address, size) <- extents executing ++ retained executing]
       , bodyRegion + bodyLength
       , lowestBitAddress executing + 16
+      , driverEntry + driverSize
       ]
     dataPages = pages facts one
     words' = layoutWords facts
@@ -1103,6 +1147,10 @@ caseSpec facts executing role loader owned one
       | arrival =
           [ stackContext (callerSp one - 0x400) (callerSp one)
           , stackContext (targetStack - 0x100) targetStack
+          ]
+      | caseResume one =
+          [ stackContext (callerSp one - 0x400) (callerSp one)
+          , stackContext (driverStack - 0x100) driverStack
           ]
       | otherwise = []
     stackContext low high = case mkStackContext (wire low) (wire high) of
@@ -1239,7 +1287,6 @@ compareRole facts spec one expectation observation =
     resultActual = N.lookupRegister R0 observation
     controlActual = fmap (.&. 0x1ff) (N.lookupRegister Cpsr observation)
     expectedControl
-      | expectationArrival expectation && caseService one == Delete = 0xd3
       | expectationArrival expectation = 0x93
       | caseMasked one = 0x93
       | caseHandler one = 0x93
@@ -1261,14 +1308,17 @@ compareFamily facts executing one stockSpec ownedSpec stock owned =
        )
   where
     ownedExpectation = maybe (caseStock one) id (caseOwned one)
-    compared = [ident | Page ident _ _ _ _ <- pages facts one, ident `notElem` map RegionId ["stack", "target-stack"]]
+    compared = [ident | Page ident _ _ _ _ <- pages facts one, ident `notElem` map RegionId ["stack", "target-stack", "driver-stack"]]
     memory observation = M.fromList [(ident, normalize ident bytes) | (ident, bytes) <- nativeMemory observation, ident `elem` compared]
     kernelIdent = RegionId (if executing == DomainA then "kernel-a" else "kernel-b")
     normalize ident bytes
-      | expectationArrival (caseStock one) && ident == kernelIdent =
+      | ident == kernelIdent && (expectationArrival (caseStock one) || caseResume one) =
           let (GuestAddress base, _) = kernelBounds facts executing
-              offset = fromIntegral (taskAddress facts executing runningSlot + tfSavedSp (factsTask facts) - base)
-           in B.take offset bytes <> word32le 0 <> B.drop (offset + 4) bytes
+              slots = if caseResume one then [runningSlot, idleSlot] else [runningSlot]
+              zero current saved =
+                let offset = fromIntegral (taskAddress facts executing saved + tfSavedSp (factsTask facts) - base)
+                 in B.take offset current <> word32le 0 <> B.drop (offset + 4) current
+           in foldl zero bytes slots
       | otherwise = bytes
     memoryDifferences =
       ["missing state region " ++ show ident | ident <- compared, M.notMember ident (memory stock) || M.notMember ident (memory owned)]

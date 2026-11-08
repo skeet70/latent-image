@@ -92,6 +92,14 @@ impl Machine for Cpu {
     }
 
     #[inline(always)]
+    fn prepare_dispatch(&self, saved: SavedInterrupts) {
+        let cpsr: u32;
+        unsafe { asm!("mrs {cpsr}, cpsr", cpsr = out(reg) cpsr, options(nostack)) };
+        let value = (cpsr & !0xc0) | (saved.0 & 0x40) | 0x80;
+        unsafe { asm!("msr cpsr_c, {value}", value = in(reg) value, options(nostack)) };
+    }
+
+    #[inline(always)]
     fn dmb(&self) {
         unsafe { asm!("dmb", options(nostack)) };
     }

@@ -221,6 +221,11 @@ impl Machine for Sim {
         self.interrupts.set(saved.0);
     }
 
+    fn prepare_dispatch(&self, saved: SavedInterrupts) {
+        let current = self.interrupts.get();
+        self.interrupts.set((current & !0xc0) | (saved.0 & 0x40) | 0x80);
+    }
+
     fn dmb(&self) {}
 }
 

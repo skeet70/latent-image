@@ -14,6 +14,8 @@ pub trait Machine {
     fn store_byte(&self, at: GuestAddress, value: u8);
     fn mask_interrupts(&self) -> SavedInterrupts;
     fn restore_interrupts(&self, saved: SavedInterrupts);
+    /// Restore the saved F bit with I forced masked.
+    fn prepare_dispatch(&self, saved: SavedInterrupts);
     fn dmb(&self);
 }
 

@@ -555,9 +555,55 @@ fn a_release_with_an_armed_timer_cancels_it() {
 }
 
 #[test]
+fn an_output_word_aliasing_the_bump_frontier_does_not_repeat_a_block() {
+    let sim = sim(Domain::A);
+    install(&sim, Domain::A, 1, 2, 8, 0);
+    let control = Domain::A.words().fixed_pool_control(pool_slot(1));
+    let aliased = OutWord(control.next_free());
+    assert_eq!(
+        poll(&sim, pool(Domain::A, 1), aliased).unwrap(),
+        WaitOutcome::Satisfied(BlockAddress(GuestAddress(BUFFER)))
+    );
+    assert_eq!(sim.word(control.next_free()), BUFFER + 8);
+    assert_eq!(
+        poll(&sim, pool(Domain::A, 1), out(0)).unwrap(),
+        WaitOutcome::Satisfied(BlockAddress(GuestAddress(BUFFER + 8)))
+    );
+}
+
+#[test]
+fn get_and_unchecked_store_before_the_bump_advance() {
+    let get_sim = sim(Domain::A);
+    install(&get_sim, Domain::A, 1, 1, 8, 0);
+    let control = Domain::A.words().fixed_pool_control(pool_slot(1));
+    let aliased = OutWord(control.next_free());
+    assert_eq!(
+        get(
+            &get_sim,
+            EntryDomain::new(Domain::A),
+            pool(Domain::A, 1),
+            aliased,
+            Timeout::Forever,
+        )
+        .unwrap(),
+        PoolBlocking::Ready(WaitOutcome::Satisfied(BlockAddress(GuestAddress(BUFFER))))
+    );
+    assert_eq!(get_sim.word(control.next_free()), BUFFER + 8);
+
+    let unchecked_sim = sim(Domain::A);
+    install(&unchecked_sim, Domain::A, 1, 1, 8, 0);
+    let control = Domain::A.words().fixed_pool_control(pool_slot(1));
+    assert_eq!(
+        poll_unchecked(&unchecked_sim, pool(Domain::A, 1), OutWord(control.next_free())).unwrap(),
+        WaitOutcome::Satisfied(BlockAddress(GuestAddress(BUFFER)))
+    );
+    assert_eq!(unchecked_sim.word(control.next_free()), BUFFER + 8);
+}
+
+#[test]
 fn an_uncreated_pool_has_no_block_and_admission_refuses_it() {
     let sim = sim(Domain::A);
-    assert_eq!(take(&sim, pool(Domain::A, 1)), None);
+    assert_eq!(take(&sim, pool(Domain::A, 1), out(9).0), None);
     let request = Request {
         service: Service::Get,
         entry: Some(entry_state(&sim, 0, false, 1)),
