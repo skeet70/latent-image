@@ -35,7 +35,7 @@
       "not": {"required": ["pc"]}
     },
     "regions": {
-      "type": "array", "minItems": 1, "maxItems": 16,
+      "type": "array", "minItems": 1, "maxItems": 64,
       "items": {
         "type": "object", "additionalProperties": false,
         "required": ["id", "address", "size", "permissions", "initial"],
