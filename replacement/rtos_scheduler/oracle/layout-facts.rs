@@ -9,7 +9,7 @@ use layout::*;
 fn domain(domain: Domain) -> String {
     let w = domain.words();
     format!(
-        "{{\"id\":{},\"scheduler_lock\":{},\"object_lock\":{},\"contexts\":{},\"ready_heads\":{},\"ready_bitmap\":{},\"running\":{},\"dispatch_enabled\":{},\"selected\":{},\"task_table\":{},\"context_a\":{},\"context_b\":{},\"handler_context\":{},\"current_context\":{},\"reschedule\":{},\"timer_base\":{},\"timer_count\":{},\"timer_heap\":{},\"tick_now\":{},\"flag_configs\":{},\"flag_controls\":{},\"flag_waits\":{},\"flag_timers\":{},\"mailbox_configs\":{},\"mailbox_controls\":{},\"mailbox_waits\":{},\"mailbox_timers\":{}}}",
+        "{{\"id\":{},\"scheduler_lock\":{},\"object_lock\":{},\"contexts\":{},\"ready_heads\":{},\"ready_bitmap\":{},\"running\":{},\"dispatch_enabled\":{},\"selected\":{},\"task_table\":{},\"context_a\":{},\"context_b\":{},\"handler_context\":{},\"current_context\":{},\"reschedule\":{},\"timer_base\":{},\"timer_count\":{},\"timer_heap\":{},\"tick_now\":{},\"flag_configs\":{},\"flag_controls\":{},\"flag_waits\":{},\"flag_timers\":{},\"mailbox_configs\":{},\"mailbox_controls\":{},\"mailbox_waits\":{},\"mailbox_timers\":{},\"data_queue_configs\":{},\"data_queue_controls\":{},\"data_queue_waits\":{},\"data_queue_timers\":{},\"data_queue_placeholder\":{}}}",
         domain.id().word(),
         w.scheduler_lock.0,
         w.object_lock.0,
@@ -37,6 +37,11 @@ fn domain(domain: Domain) -> String {
         w.mailbox_controls.0,
         w.mailbox_waits.0,
         w.mailbox_timers.0,
+        w.data_queue_configs.0,
+        w.data_queue_controls.0,
+        w.data_queue_waits.0,
+        w.data_queue_timers.0,
+        w.data_queue_placeholder.0,
     )
 }
 
@@ -48,7 +53,7 @@ fn main() {
     let h = ReadyHead(GuestAddress(0));
     let [sp0, sp1] = d.initial_sp_terms();
     let context = format!(
-        "{{\"size\":{},\"id\":{},\"owner\":{},\"scheduler_lock\":{},\"object_lock\":{},\"ready_heads\":{},\"ready_bitmap\":{},\"running\":{},\"selected\":{},\"dispatch_enabled\":{},\"first_entry\":{},\"tasks\":{},\"task_count\":{},\"event_flags\":{},\"event_flag_count\":{},\"mailboxes\":{},\"mailbox_count\":{}}}",
+        "{{\"size\":{},\"id\":{},\"owner\":{},\"scheduler_lock\":{},\"object_lock\":{},\"ready_heads\":{},\"ready_bitmap\":{},\"running\":{},\"selected\":{},\"dispatch_enabled\":{},\"tick_now\":{},\"first_entry\":{},\"tasks\":{},\"task_count\":{},\"event_flags\":{},\"event_flag_count\":{},\"data_queues\":{},\"data_queue_count\":{},\"mailboxes\":{},\"mailbox_count\":{}}}",
         KernelContext::SIZE,
         c.id().0,
         c.owner().0,
@@ -59,11 +64,14 @@ fn main() {
         c.running().0,
         c.selected().0,
         c.dispatch_enabled().0,
+        c.tick_now().0,
         c.first_entry().0,
         c.tasks().0,
         c.task_count().0,
         c.event_flags().0,
         c.event_flag_count().0,
+        c.data_queues().0,
+        c.data_queue_count().0,
         c.mailboxes().0,
         c.mailbox_count().0,
     );
@@ -109,6 +117,9 @@ fn main() {
     let mw = MailboxWait(GuestAddress(0));
     let fc = FlagControl(GuestAddress(0));
     let mc = MailboxControl(GuestAddress(0));
+    let dq = DataQueueConfig(GuestAddress(0));
+    let dc = DataQueueControl(GuestAddress(0));
+    let dw = DataQueueWait(GuestAddress(0));
     let flag_config = format!(
         "{{\"size\":{},\"attributes\":{},\"initial\":{},\"exists\":{},\"priority_order\":{},\"clear_on_match\":{}}}",
         FlagConfig::SIZE,
@@ -133,8 +144,28 @@ fn main() {
     let mailbox_wait = format!("{{\"size\":{},\"message\":{}}}", MailboxWait::SIZE, mw.message().0);
     let flag_control = format!("{{\"size\":{},\"queue\":{},\"pattern\":{}}}", FlagControl::SIZE, fc.queue().0 .0, fc.pattern().0);
     let mailbox_control = format!("{{\"size\":{},\"queue\":{},\"head\":{},\"tail\":{}}}", MailboxControl::SIZE, mc.queue().0 .0, mc.head().0, mc.tail().0);
+    let data_queue_config = format!(
+        "{{\"size\":{},\"attributes\":{},\"capacity\":{},\"ring_base\":{},\"exists\":{},\"sender_priority_order\":{}}}",
+        DataQueueConfig::SIZE,
+        dq.attributes().0,
+        dq.capacity().0,
+        dq.ring_base().0,
+        dq.exists().0,
+        DataQueueConfig::SENDER_PRIORITY_ORDER,
+    );
+    let data_queue_control = format!(
+        "{{\"size\":{},\"sender_queue\":{},\"creation\":{},\"receivers\":{},\"count\":{},\"read\":{},\"write\":{}}}",
+        DataQueueControl::SIZE,
+        dc.sender_queue().0 .0,
+        dc.creation().0,
+        dc.receivers().0 .0,
+        dc.count().0,
+        dc.read().0,
+        dc.write().0,
+    );
+    let data_queue_wait = format!("{{\"size\":{},\"data\":{}}}", DataQueueWait::SIZE, dw.data().0);
     println!(
-        "{{\"a\":{},\"b\":{},\"own_id\":{},\"context\":{},\"lock\":{},\"task\":{},\"definition\":{},\"ready_head\":{},\"priorities\":{},\"task_slots\":{},\"task_states\":[{}],\"flag_config\":{},\"mailbox_config\":{},\"wait_block\":{},\"wait_queue\":{},\"flag_wait\":{},\"mailbox_wait\":{},\"flag_control\":{},\"mailbox_control\":{},\"timer_entry_size\":{},\"state_ready\":{},\"state_wait\":{},\"state_suspended\":{},\"state_sleeping\":{},\"state_object_queued\":{},\"state_owner_lock_queued\":{}}}",
+        "{{\"a\":{},\"b\":{},\"own_id\":{},\"context\":{},\"lock\":{},\"task\":{},\"definition\":{},\"ready_head\":{},\"priorities\":{},\"task_slots\":{},\"task_states\":[{}],\"flag_config\":{},\"mailbox_config\":{},\"wait_block\":{},\"wait_queue\":{},\"flag_wait\":{},\"mailbox_wait\":{},\"flag_control\":{},\"mailbox_control\":{},\"data_queue_config\":{},\"data_queue_control\":{},\"data_queue_wait\":{},\"timer_entry_size\":{},\"state_ready\":{},\"state_wait\":{},\"state_suspended\":{},\"state_sleeping\":{},\"state_object_queued\":{},\"state_owner_lock_queued\":{}}}",
         domain(Domain::A),
         domain(Domain::B),
         DomainId::Own.word(),
@@ -154,6 +185,9 @@ fn main() {
         mailbox_wait,
         flag_control,
         mailbox_control,
+        data_queue_config,
+        data_queue_control,
+        data_queue_wait,
         TIMER_ENTRY_SIZE,
         TaskState::READY.bits(),
         TaskState::WAIT.bits(),

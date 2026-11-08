@@ -208,6 +208,47 @@ impl CyclicSlot {
     }
 }
 
+/// 1..=the data-queue count word.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
+#[repr(transparent)]
+pub struct DataQueueSlot(u16);
+
+impl DataQueueSlot {
+    pub const COUNT: u32 = 120;
+
+    #[inline(always)]
+    pub const fn new(slot: u32, count: u32) -> Option<Self> {
+        if slot >= 1 && slot <= count && slot <= Self::COUNT {
+            Some(Self(slot as u16))
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub const fn get(self) -> u32 {
+        self.0 as u32
+    }
+}
+
+/// A two-word circular task list without a configuration pointer.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct TaskList(pub GuestAddress);
+
+impl TaskList {
+    pub const SIZE: u32 = 0x08;
+
+    #[inline(always)]
+    pub const fn next(self) -> GuestAddress {
+        self.0
+    }
+
+    #[inline(always)]
+    pub const fn prev(self) -> GuestAddress {
+        self.0.offset(0x04)
+    }
+}
 /// Head of an object's waiter queue, linked through T+0x00/+0x04.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(transparent)]
@@ -537,6 +578,95 @@ impl CyclicControl {
 
     #[inline(always)]
     pub const fn timer(self) -> GuestAddress {
+        self.0.offset(0x0c)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct DataQueueConfig(pub GuestAddress);
+
+impl DataQueueConfig {
+    pub const SIZE: u32 = 0x10;
+    pub const SENDER_PRIORITY_ORDER: u32 = 0x01;
+
+    #[inline(always)]
+    pub const fn attributes(self) -> GuestAddress {
+        self.0
+    }
+
+    #[inline(always)]
+    pub const fn capacity(self) -> GuestAddress {
+        self.0.offset(0x04)
+    }
+
+    #[inline(always)]
+    pub const fn ring_base(self) -> GuestAddress {
+        self.0.offset(0x08)
+    }
+
+    #[inline(always)]
+    pub const fn exists(self) -> GuestAddress {
+        self.0.offset(0x0c)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct DataQueueControl(pub GuestAddress);
+
+impl DataQueueControl {
+    pub const SIZE: u32 = 0x20;
+
+    #[inline(always)]
+    pub const fn sender_queue(self) -> WaitQueue {
+        WaitQueue(self.0)
+    }
+
+    /// Aliases [`WaitQueue::config`].
+    #[inline(always)]
+    pub const fn creation(self) -> GuestAddress {
+        self.0.offset(0x08)
+    }
+
+    /// Blocked receivers are appended in arrival order.
+    #[inline(always)]
+    pub const fn receivers(self) -> TaskList {
+        TaskList(self.0.offset(0x0c))
+    }
+
+    #[inline(always)]
+    pub const fn count(self) -> GuestAddress {
+        self.0.offset(0x14)
+    }
+
+    #[inline(always)]
+    pub const fn read(self) -> GuestAddress {
+        self.0.offset(0x18)
+    }
+
+    #[inline(always)]
+    pub const fn write(self) -> GuestAddress {
+        self.0.offset(0x1c)
+    }
+}
+
+/// A task's data-queue wait record, in a table indexed by the task slot.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct DataQueueWait(pub GuestAddress);
+
+impl DataQueueWait {
+    pub const SIZE: u32 = 0x10;
+
+    #[inline(always)]
+    pub const fn base(self) -> WaitBlock {
+        WaitBlock(self.0)
+    }
+
+    /// The value to send, or the value received when the wait is satisfied.
+    #[inline(always)]
+    pub const fn data(self) -> GuestAddress {
         self.0.offset(0x0c)
     }
 }
@@ -1165,6 +1295,13 @@ pub struct DomainWords {
     pub cyclic_configs: GuestAddress,
     /// [`CyclicSlot::COUNT`] control records.
     pub cyclic_controls: GuestAddress,
+    /// [`DataQueueSlot::COUNT`] creation records.
+    pub data_queue_configs: GuestAddress,
+    pub data_queue_controls: GuestAddress,
+    pub data_queue_waits: GuestAddress,
+    pub data_queue_timers: GuestAddress,
+    /// The one-word dummy ring base a deleted queue names.
+    pub data_queue_placeholder: GuestAddress,
 }
 
 impl DomainWords {
@@ -1296,6 +1433,26 @@ impl DomainWords {
     pub const fn cyclic_control(&self, slot: CyclicSlot) -> CyclicControl {
         CyclicControl(self.cyclic_controls.offset((slot.get() - 1) * CyclicControl::SIZE))
     }
+
+    #[inline(always)]
+    pub const fn data_queue_config(&self, slot: DataQueueSlot) -> DataQueueConfig {
+        DataQueueConfig(self.data_queue_configs.offset((slot.get() - 1) * DataQueueConfig::SIZE))
+    }
+
+    #[inline(always)]
+    pub const fn data_queue_control(&self, slot: DataQueueSlot) -> DataQueueControl {
+        DataQueueControl(self.data_queue_controls.offset((slot.get() - 1) * DataQueueControl::SIZE))
+    }
+
+    #[inline(always)]
+    pub const fn data_queue_wait(&self, task: TaskSlot) -> DataQueueWait {
+        DataQueueWait(self.data_queue_waits.offset((task.get() - 1) * DataQueueWait::SIZE))
+    }
+
+    #[inline(always)]
+    pub const fn data_queue_timer(&self, task: TaskSlot) -> GuestAddress {
+        self.data_queue_timers.offset((task.get() - 1) * TIMER_ENTRY_SIZE)
+    }
 }
 
 /// A heap entry: one-based slot, callback and argument.
@@ -1361,6 +1518,11 @@ impl Domain {
                 mailbox_timers: GuestAddress(0x4005_7fbc),
                 cyclic_configs: GuestAddress(0x4005_ef78),
                 cyclic_controls: GuestAddress(0x4005_928c),
+                data_queue_configs: GuestAddress(0x4005_988c),
+                data_queue_controls: GuestAddress(0x4005_a00c),
+                data_queue_waits: GuestAddress(0x4005_70bc),
+                data_queue_timers: GuestAddress(0x4005_6b1c),
+                data_queue_placeholder: GuestAddress(0x4006_2c48),
             },
             Domain::B => DomainWords {
                 handler_context: GuestAddress(0x400e_4564),
@@ -1402,6 +1564,11 @@ impl Domain {
                 mailbox_timers: GuestAddress(0x400e_7f7c),
                 cyclic_configs: GuestAddress(0x400e_ef38),
                 cyclic_controls: GuestAddress(0x400e_924c),
+                data_queue_configs: GuestAddress(0x400e_984c),
+                data_queue_controls: GuestAddress(0x400e_9fcc),
+                data_queue_waits: GuestAddress(0x400e_707c),
+                data_queue_timers: GuestAddress(0x400e_6adc),
+                data_queue_placeholder: GuestAddress(0x400f_2c08),
             },
         }
     }
