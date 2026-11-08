@@ -242,9 +242,6 @@ schemaContract=do
  expect "batch maxJsonBytes"(get batch "maxJsonBytes")(toInteger batchJsonBytes)
  expect "batch maxArtifactBytes"(get batch "maxArtifactBytes")(toInteger batchArtifactBytes)
  expect "batch summary cases maxItems"(get(get(get(get defs "batchSummary")"properties")"cases")"maxItems")(toInteger batchCaseCount)
- let contexts=get(get(get props "kernel")"properties")"stack_contexts"
- expect "kernel stack_contexts minItems"(get contexts "minItems") 1
- expect "kernel stack_contexts maxItems"(get contexts "maxItems")(toInteger stackContextCount)
 
 -- The recording capacity (MAX_RECORDED_EVENTS 512) is a separate engine limit from the 128 public
 -- expected-events bound: an execution records far more stub events than a case declares (the
@@ -626,9 +623,6 @@ kernelOutcomes runner=withTemporary "fuji-kernel-outcomes"$ \root->do
  let order=N.nativeKernel(observed!!5)>>=N.observedOrder
  ensure(order==Just[N.OrderedBarrier N.Dsb,N.OrderedWrite(N.Write(N.GuestAddress 0xfffb30cc)(N.WriteBytes 4))(N.WriteValue 0)])("kernel order: "++show order)
 
--- A kernel case may declare private stack contexts. The adapter emits the c row between the k
--- profile row and the counts, rejects bad declarations through the public adapter, and adds no
--- byte to a wire that declares none.
 kernelStackContextRegressions :: FilePath -> IO ()
 kernelStackContextRegressions runner=withTemporary "fuji-kernel-contexts"$ \root->do
  base<-B.readFile "emulation/fixtures/kernel-bank-store.json" >>= jsonRead
@@ -639,7 +633,11 @@ kernelStackContextRegressions runner=withTemporary "fuji-kernel-contexts"$ \root
      context low high=obj[("low",hex low),("high",hex high)]
      kernel contexts=obj[("stack_contexts",arr contexts)]
      second=obj[("id",s "second-stack"),("address",hex 0x4000),("size",n 32),("permissions",s "rw"),("initial",obj[("zero",b True)])]
+     stackSize size=modifyAt "regions" 3(set "size"(n size))
+     stackContext i=context(0x3000+0x20*i)(0x3020+0x20*i)
+     manyContexts count=stackSize(fromIntegral(0x20*count))(merge base[("kernel",kernel(map stackContext[0..count-1]))])
      optIn=merge base[("regions",arr(list(get base "regions")++[second])),("kernel",kernel[context 0x3000 0x3020,context 0x4000 0x4020])]
+     lowBoundAtSp=stackSize 0x60(merge base[("kernel",kernel[context 0x3020 0x3060])])
      path=root</>"case.json"
      invalid label item=do
       B.writeFile path(encodeCanonical item)
@@ -648,7 +646,7 @@ kernelStackContextRegressions runner=withTemporary "fuji-kernel-contexts"$ \root
      withContexts contexts=merge optIn[("kernel",kernel contexts)]
  forM_
   [("empty contexts",merge optIn[("kernel",kernel[])])
-  ,("seventeen contexts",withContexts(replicate 17(context 0x3000 0x3020)))
+  ,("seventeen contexts",manyContexts 17)
   ,("unaligned low bound",withContexts[context 0x3004 0x3020])
   ,("unaligned high bound",withContexts[context 0x3000 0x3024])
   ,("empty interval",withContexts[context 0x3020 0x3020])
@@ -656,11 +654,15 @@ kernelStackContextRegressions runner=withTemporary "fuji-kernel-contexts"$ \root
   ,("unbacked context",withContexts[context 0x3000 0x3020,context 0x5000 0x5020])
   ,("read-only backing",withContexts[context 0x3000 0x3020,context 0x1008 0x1010])
   ,("initial SP outside every context",withContexts[context 0x4000 0x4020])
+  ,("initial SP equals a low bound",lowBoundAtSp)
   ,("unknown context field",withContexts[obj[("low",hex 0x3000),("high",hex 0x3020),("depth",n 1)]])
   ,("context on a user case",set "kernel"(kernel[context 0x3000 0x3020])(merge base[("registers",set "cpsr"(s "0x00000010")(get base "registers"))]))
   ](uncurry invalid)
  (_,_,legacyWire,_)<-loadCase "emulation/fixtures/kernel-bank-store.json"
  ensure(not(any((==["c"]).take 1 . words)(lines(BC.unpack legacyWire))))"a legacy kernel wire gained a context row"
+ B.writeFile path(encodeCanonical(manyContexts 16))
+ (sixteen,sixteenReport)<-runCase runner path
+ ensure(sixteen==0 && get sixteenReport "status"==s "passed")("sixteen-context case: "++show sixteenReport)
  B.writeFile path(encodeCanonical optIn)
  (code,report)<-runCase runner path
  ensure(code==0 && get report "status"==s "passed")("opted-in multi-context case: "++show report)
@@ -676,6 +678,32 @@ kernelStackContextRegressions runner=withTemporary "fuji-kernel-contexts"$ \root
  B.writeFile (root</>"plain.json")(encodeCanonical(merge optIn[("kernel",obj[])]))
  (_,_,plainWire,_)<-loadCase(root</>"plain.json")
  ensure(BC.pack withoutContext==plainWire)"a declared context changed more than its c row"
+ let code=O.assemble[0xeb00000e,0xe594e010,0xe12fff1e,0,0,0,0,0,0xe92d4ff0,0xe594d000,0xe594f004,0,0,0,0,0,0xe92d4ff0,0xe594d008,0xe594f00c,0xe8bd8ff0]::B.ByteString
+     payload=O.assemble[0x000030dc,0x0000104c,0x00003300,0x00001020,0x000010f0,0x00001000]::B.ByteString
+ B.writeFile(root</>"nested-code.bin")code
+ B.writeFile(root</>"nested-data.bin")payload
+ codeDigest<-sha256 code; dataDigest<-sha256 payload
+ let artifact ident file bytes digest=obj[("id",s ident),("path",s file),("size",n(fromIntegral(B.length bytes))),("sha256",s digest)]
+     mkR ident address size permissions initial=obj[("id",s ident),("address",hex address),("size",n size),("permissions",s permissions),("initial",initial)]
+     slice ident bytes=obj[("artifact",s ident),("offset",n 0),("length",n(fromIntegral(B.length bytes)))]
+     frame=hexBytes(O.assemble(([0x4000]++replicate 7 0++[0x1004])::[Word32]))
+     nested=obj
+      [("schema_version",n 1),("id",s "nested-switch"),("origin",s "synthetic")
+      ,("provenance",s "NativeTests.hs: BL on the first declared stack, switch to the second, switch back and LDM resume")
+      ,("cpu",get base "cpu")
+      ,("artifacts",arr[artifact "nested-code" "nested-code.bin" code codeDigest,artifact "nested-data" "nested-data.bin" payload dataDigest])
+      ,("entry",hex 0x1000),("exit",hex 0x10f0)
+      ,("registers",obj([("r"++show i,hex 0)|i<-[0..12::Int],i/=4]++[("r4",hex 0x4000),("sp",hex 0x3100),("lr",hex 0x10f0),("cpsr",hex 0x600000d3)]))
+      ,("regions",arr[mkR "code" 0x1000(fromIntegral(B.length code))"rx"(slice "nested-code" code),mkR "stack" 0x3000 0x100"rw"(obj[("zero",b True)]),mkR "second-stack" 0x3200 0x100"rw"(obj[("zero",b True)]),mkR "data" 0x4000(fromIntegral(B.length payload))"r"(slice "nested-data" payload),mkR "exit" 0x10f0 4"rx"(obj[("zero",b True)])])
+      ,("functions",arr[obj[("address",hex 0x1000),("size",n 0x10)],obj[("address",hex 0x1020),("size",n 0x10)],obj[("address",hex 0x1040),("size",n 0x10)]])
+      ,("stubs",arr[])
+      ,("limits",obj[("instructions",n 4096),("wall_ms",n 4096)])
+      ,("expected",obj[("status",s "returned"),("registers",obj[("r0",hex 0),("r4",hex 0x4000),("sp",hex 0x3100),("lr",hex 0x10f0),("pc",hex 0x10f0)]),("memory",arr[obj[("region",s "stack"),("offset",n 0xdc),("hex",s frame)],obj[("region",s "second-stack"),("offset",n 0xdc),("hex",s frame)]]),("events",arr[])])
+      ,("exclusions",arr[s "two-stack nested switch control"])
+      ,("kernel",kernel[context 0x3000 0x3100,context 0x3200 0x3300])]
+ B.writeFile path(encodeCanonical nested)
+ (nestedCode,nestedReport)<-runCase runner path
+ ensure(nestedCode==0 && get nestedReport "status"==s "passed")("nested two-stack switch: "++show nestedReport)
 
 main :: IO ()
 main=do

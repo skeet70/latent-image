@@ -49,7 +49,6 @@ functionCount=256
 stubCount=32
 eventCount=128
 memoryCount=64
--- Stack contexts one kernel case may declare.
 stackContextCount :: Int
 stackContextCount=16
 hex :: Integer -> String

@@ -198,7 +198,6 @@ plainLimit = InstructionLimit 4000000
 -- | One declared private stack: @low < SP <= high@, both bounds eight-byte aligned.
 newtype StackContext = StackContext (GuestAddress, GuestAddress)
 
--- | A context whose bounds are eight-byte aligned and @low < high@.
 mkStackContext :: GuestAddress -> GuestAddress -> Either String StackContext
 mkStackContext low high
   | guestAddress low .&. 7 /= 0 = Left "stack context low bound must be eight-byte aligned"
