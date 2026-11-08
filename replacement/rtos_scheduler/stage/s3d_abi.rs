@@ -110,13 +110,13 @@ impl Machine for Cpu {
     fn lock_acquire(&self, lock: LockRecord) -> bool {
         let acquire: unsafe extern "C" fn(u32) -> u32 =
             unsafe { core::mem::transmute(load(lock.acquire())) };
-        unsafe { acquire(load(lock.word())) == 0 }
+        unsafe { acquire(lock.0 .0) == 0 }
     }
 
     #[inline(always)]
     fn lock_release(&self, lock: LockRecord) {
         let release: unsafe extern "C" fn(u32) = unsafe { core::mem::transmute(load(lock.release())) };
-        unsafe { release(load(lock.word())) };
+        unsafe { release(lock.0 .0) };
     }
 
     #[inline(always)]

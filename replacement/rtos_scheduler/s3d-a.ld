@@ -6,7 +6,7 @@ MEMORY {
   release_wait_entry (rx) : ORIGIN = 0x46534, LENGTH = 0x04
   interrupt_release_wait_entry (rx) : ORIGIN = 0x467b4, LENGTH = 0x04
   delay_entry (rx) : ORIGIN = 0x46e48, LENGTH = 0x04
-  delay_body (rx) : ORIGIN = 0x46e4c, LENGTH = 0x168
+  delay_body (rx) : ORIGIN = 0x46e4c, LENGTH = 0x180
   bodies (rx) : ORIGIN = 0x50000, LENGTH = 0x2000
 }
 s3d_remove_ready = 0x43d20;

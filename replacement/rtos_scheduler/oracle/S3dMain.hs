@@ -8,6 +8,7 @@ import Control.Monad (forM, forM_, unless)
 import Data.Aeson ((.=))
 import Data.Bits ((.&.), (.|.), complement, shiftL, shiftR)
 import qualified Data.ByteString as B
+import Data.List (find)
 import qualified Data.Map.Strict as M
 import Data.Word (Word32)
 import Emulation.CachedNativeBatch (cachedObservedBatch)
@@ -341,8 +342,8 @@ patchOwned d ownedBase owned =
   let base = loaderBase d
       patches =
         [(entryOf d service, 4, entryOf d service) | service <- [Terminate, ChangePriority, TimedSleep, ReleaseWait, HandlerRelease, Delay]]
-        ++ [(0x46e4c + if d == DomainB then 0x8ffc0 else 0, 0x168, 0x46e4c + if d == DomainB then 0x8ffc0 else 0)]
-        ++ [(if d == DomainA then 0x50000 else 0xe0000, 0x12cc, if d == DomainA then 0x50000 else 0xe0000)]
+        ++ [(0x46e4c + if d == DomainB then 0x8ffc0 else 0, 0x180, 0x46e4c + if d == DomainB then 0x8ffc0 else 0)]
+        ++ [(if d == DomainA then 0x50000 else 0xe0000, 0x1300, if d == DomainA then 0x50000 else 0xe0000)]
    in foldl (\bytes (address, size, source) -> poke bytes (address - base) (slice owned ownedBase source size)) (B.replicate 0x12000 0) patches
 
 loaderBytes :: Domain -> B.ByteString -> B.ByteString
@@ -378,7 +379,7 @@ specFor d role one loader owned = CaseSpec
       ]
   , caseFunctions =
       [(GuestAddress (fromIntegral (entryOf d service)), extentOf service) | service <- [Terminate, ChangePriority, TimedSleep, ReleaseWait, HandlerRelease, Delay]]
-      ++ [(GuestAddress (fromIntegral bodyBase), 0x12cc), (GuestAddress (fromIntegral stubBase), 0x100)]
+      ++ [(GuestAddress (fromIntegral bodyBase), 0x1300), (GuestAddress (fromIntegral stubBase), 0x100)]
       ++ [(GuestAddress (fromIntegral (acquireFn d)), 0x3c), (GuestAddress (fromIntegral (releaseFn d)), 0x40)]
       ++ [(GuestAddress (fromIntegral (base + (if d == DomainB then 0x8ffc0 else 0))), size)
          | (base, size) <- ([(0x43ca4, 0x7c), (0x43d20, 0xb0), (0x43dd0, 0x1a0), (0x43f70, 0xa8), (0x44018, 0x2c), (0x44c60, 0x48), (0x44ca8, 0x58)] :: [(Word32, Word32)])]
@@ -398,7 +399,7 @@ specFor d role one loader owned = CaseSpec
     code = case role of
       Stock -> patchStub d (loaderBytes d loader) Nothing
       Owned -> patchStub d (patchOwned d (if d == DomainA then 0x454f0 else 0xd54b0) owned) (caseLifecycle one)
-    bodies = if role == Owned then slice owned (if d == DomainA then 0x454f0 else 0xd54b0) bodyBase 0x12cc else B.replicate 0x2000 0
+    bodies = if role == Owned then slice owned (if d == DomainA then 0x454f0 else 0xd54b0) bodyBase 0x1300 else B.replicate 0x2000 0
     stub = case caseLifecycle one of
       Nothing -> B.replicate 0x100 0
       Just result -> B.concat (map word32le (stubWords d result)) <> B.replicate 0x40 0
@@ -414,6 +415,18 @@ patchStub d loader lifecycle = case lifecycle of
 
 branch :: Word32 -> Word32 -> Word32
 branch from to = 0xea000000 .|. (((to - from - 8) `shiftR` 2) .&. 0xffffff)
+
+firstDifference :: NativeObservation -> NativeObservation -> String
+firstDifference stock owned =
+  case [ (ident, index, x, y) | ident <- [RegionId "data-a", RegionId "data-b"], Just (index, x, y) <- [firstByte ident] ] of
+    ((ident, index, x, y) : _) -> show (regionName ident, index, x, y)
+    [] -> "no data difference"
+  where
+    firstByte ident = do
+      a <- lookup ident (nativeMemory stock)
+      b <- lookup ident (nativeMemory owned)
+      (index, (x, y)) <- find (\(_, (x, y)) -> x /= y) (zip [0 :: Int ..] (zip (B.unpack a) (B.unpack b)))
+      pure (index, x, y)
 
 normalize :: NativeObservation -> NativeObservation
 normalize observation = observation
@@ -462,9 +475,9 @@ main = do
                     OutcomeReturned -> reference
                     _ -> reference { caseKernel = fmap (\k -> k { kernelUncompared = kernelUncompared k ++ [R0, R4, R5, R6, R7, R8, R9, R10, R11, Sp] }) (caseKernel reference) }
                in compareKernelCase adjusted (normalize left) (normalize right)
-            differences = [ (caseName one, compareOne reference left right)
+            failures = [ (name, diff, firstDifference left right) | (name, diff, left, right) <- differences, not (null diff) ]
+            differences = [ (caseName one, compareOne reference left right, left, right)
                           | (one, reference, left, right) <- zip4 grid specs stockObs ownedObservations ]
-            failures = [ (name, diff) | (name, diff) <- differences, not (null diff) ]
             contracts =
               [ (caseName one, nativeStatus observation, registerValue observation R0, caseExpect one)
               | (one, observation) <- zip grid stockObs
@@ -475,7 +488,7 @@ main = do
           [ "domain" .= domainLabel d
           , "cases" .= length grid
           , "differences" .= length failures
-          , "failures" .= [A.object ["case" .= name, "differences" .= show diff] | (name, diff) <- failures]
+          , "failures" .= [A.object ["case" .= name, "differences" .= show diff, "first" .= first] | (name, diff, first) <- failures]
           , "contract_failures" .= [A.object ["case" .= name, "status" .= show status, "r0" .= r0, "expected" .= expected] | (name, status, r0, expected) <- contracts]
           ]))
         pure (d, length grid, null failures, null contracts)
