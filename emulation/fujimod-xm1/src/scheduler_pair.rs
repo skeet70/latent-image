@@ -772,7 +772,7 @@ struct PcWatch { core: Core, address: Hex, count: u64, first: u64 }
 struct ProbeHit { domain: Domain, core: Core, address: Hex, kind: ProbeKind, register: ProbeRegister,
     value: u32, cpsr: u32, sp: Hex, lr: Hex, instructions: u64 }
 
-/// Raw lock-store occurrence budget, not the call-class limit: the natural route reaches 5,455 Acquire and 5,455 Release calls in domain A plus the B-domain helpers; 64K owned stores serialize to a few megabytes.
+/// Raw lock-store occurrence budget, not the call-class limit: the natural route reaches 5,455 Acquire and 5,455 Release calls in domain A plus the B-domain helpers.
 const LOCK_LIMIT: usize = 1 << 16;
 #[derive(Clone, Copy, Debug, Serialize)]
 struct LockEvent { task: u32, core: Core, call: u64, at: u64, address: Hex, value: u32 }
