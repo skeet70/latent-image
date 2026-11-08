@@ -13,7 +13,7 @@ import Emulation.CachedNativeBatch (BatchReuse, cachedObservedBatch)
 import Emulation.NativeCase (CaseId (..), caseIdText)
 import qualified Emulation.NativeObservation as N
 import Emulation.NativeObservation (Barrier (..), KernelObservation (..), NativeObservation (..), Ordered (..), RegionId (..), Register (..), RunnerStatus (..), Write (..), WriteValue (..))
-import Emulation.OwnedCase (CaseSpec (..), InstructionLimit (..), KernelCase (..), Permission (..), assemble, mkRegion, plainLimit, readWordAt, word32le, writeBatch)
+import Emulation.OwnedCase (CaseSpec (..), InstructionLimit (..), KernelCase (..), Permission (..), assemble, mkRegion, mkStackContext, plainLimit, readWordAt, word32le, writeBatch)
 import Replacement.RtosObjects.Layout hiding (record)
 import Replacement.RtosOwnFirst.Regions (Domain (..), GuestAddress (..), domainLabel)
 import System.FilePath ((</>))
@@ -750,10 +750,8 @@ pages facts one =
      , page "pool" (GuestAddress poolStart) 0x100 ReadWrite
      , page "bank-a" (bank DomainA) 4 Device
      , page "bank-b" (bank DomainB) 4 Device
-     , let controlA = dfFlagControls (domainFacts facts DomainA) + 122 * factsFlagControlSize facts
-       in page "out-of-range-a" (GuestAddress controlA) 0x100 ReadWrite
-     , let controlB = dfFlagControls (domainFacts facts DomainB) + 122 * factsFlagControlSize facts
-       in page "out-of-range-b" (GuestAddress controlB) 0x100 ReadWrite
+     , let outOfRange = dfFlagControls (domainFacts facts (caseObject one)) + 122 * factsFlagControlSize facts
+       in page (if caseObject one == DomainA then "out-of-range-a" else "out-of-range-b") (GuestAddress outOfRange) 0x100 ReadWrite
      ]
   where page name address size permission = Page (RegionId name) address size permission (B.replicate size 0)
 
@@ -1031,7 +1029,7 @@ caseFor role facts entries executing loader owned one = CaseSpec
   , caseExpectedRegisters = expectedRegisters role one
   , caseExpectedMemory = []
   , caseCp14Identity = Just (if executing == DomainA then 0x4003 else 0x4004)
-  , caseKernel = Just (KernelCase (caseLimit one) (if caseBoundary one == TaskArrival then Just (wireAddress (GuestAddress stopAddress)) else Nothing) (Just 0x80001234) (Just 0) (Just 0) ignored [])
+  , caseKernel = Just (KernelCase (caseLimit one) (if caseBoundary one == TaskArrival then Just (wireAddress (GuestAddress stopAddress)) else Nothing) (Just 0x80001234) (Just 0) (Just 0) ignored (continuationStacks one))
   }
   where
     codeBase = minimum (map fst (extents executing))
@@ -1048,6 +1046,18 @@ caseFor role facts entries executing loader owned one = CaseSpec
         ++ [ (wireAddress (GuestAddress wakerStubBase), 0x80) | isJust (caseWaker one) ]
         ++ [ (wireAddress (GuestAddress chainStubBase), 0x80) | not (null (mapMaybe pwChain (caseWaiters one))) ]
     ignored = if caseBoundary one == CallerReturn then [R1, R2, R3, R12, Lr] else [R0 .. R12] ++ [Lr]
+    -- A waker resumes the blocked caller through the saved frame, so its four synthetic
+    -- stacks are declared; a single-context or declared-stop case keeps the empty list.
+    continuationStacks one'
+      | isJust (caseWaker one') =
+          map stack
+            [ (callerSp one' - 0x400, callerSp one')
+            , (targetStackPointer - 0x100, targetStackPointer)
+            , (wakerStack - 0x400, wakerStack)
+            , (wakerStack, chainStack)
+            ]
+      | otherwise = []
+    stack (low, high) = either error id (mkStackContext (N.GuestAddress (fromIntegral low)) (N.GuestAddress (fromIntegral high)))
     provenance = "X-M1 1.50 stock slot ABI at pinned x70view 55436fc85c0560dd252b0410af6f2427fe198cd3; manifest entries from replacement/media_permit/rtos_slot_contracts.json, extents from stage/family-{a,b}.ld; synthetic caller, waker, waiter, message and timer-entry fixtures; retained stock insert-timer, remove-timer, timeout-callback and timer-tick seams; retained semaphore, data-queue and fixed-pool caller entries, wait/timer tables and the fixed-pool wait table recovered from the pinned disassembly (A 0x4005855c / B 0x400e851c, stride 16)"
     exclusion one' = baseExclusion ++ differenceExclusion (caseDifference one') ++ retainedExclusion one'
     retainedExclusion one'
