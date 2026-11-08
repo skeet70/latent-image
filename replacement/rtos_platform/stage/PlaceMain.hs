@@ -3,7 +3,8 @@
 
 module Main (main) where
 
-import Data.List (isPrefixOf, sortOn)
+import Data.List (isPrefixOf, minimumBy, sortOn)
+import Data.Ord (comparing)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import Data.Word (Word32)
@@ -46,7 +47,7 @@ alignTo :: Int -> Int -> Int
 alignTo value alignment = if alignment <= 1 then value else ((value + alignment - 1) `div` alignment) * alignment
 
 pack :: [Extent] -> [Sec] -> Either (String, Int, Int) [Placement]
-pack runs sections = go initial (sortOn (negate . secSize) sections) []
+pack runs sections = go initial (sortOn secSize sections) []
   where
     initial = [RunState i extent 0 | (i, extent) <- zip [0 ..] runs]
     go _ [] placed = Right (reverse placed)
@@ -54,14 +55,11 @@ pack runs sections = go initial (sortOn (negate . secSize) sections) []
       Nothing -> Left (secName sec, secSize sec, maximum (0 : map (extentBytes . runExtent) states))
       Just (updated, placement) -> go updated rest (placement : placed)
       where
-        tryStates [] = Nothing
-        tryStates (state : others) =
-          let start = alignTo (runCursor state) (secAlign sec)
-          in if start + secSize sec <= extentBytes (runExtent state)
-               then Just (state {runCursor = start + secSize sec} : others, Placement (runIndex state) sec)
-               else case tryStates others of
-                 Just (remaining, placement) -> Just (state : remaining, placement)
-                 Nothing -> Nothing
+        tryStates states = case [(start, state) | state <- states, let start = alignTo (runCursor state) (secAlign sec), start + secSize sec <= extentBytes (runExtent state)] of
+          [] -> Nothing
+          candidates ->
+            let (start, state) = minimumBy (comparing (\(s, st) -> extentBytes (runExtent st) - (s + secSize sec))) candidates
+            in Just ([if runIndex st == runIndex state then state {runCursor = start + secSize sec} else st | st <- states], Placement (runIndex state) sec)
 
 groupPlacements :: [Placement] -> [(Int, [Sec])]
 groupPlacements placements = [(i, [placeSec p | p <- placements, placeRun p == i]) | i <- [0 .. maximum (-1 : map placeRun placements)]]

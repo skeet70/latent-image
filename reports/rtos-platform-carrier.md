@@ -2,7 +2,7 @@
 
 `replacement/rtos_platform` declares the retired-carrier union of the source-reviewed live-placement groups: S1, S2, S3a, S3b, S3c, own-first, semaphore, fixed-pool, task records and the global-lock roots and helpers. The union is the stock extents of those groups, not their native scratch. `carriers.json` records the stock extents, the fixed entry addresses and veneer symbols, the retained/owned absolute callees and the emitted demand of every whole function section.
 
-## Fit passes after the fixed-pool factoring
+## Symbol demand fits; actual section packing does not yet
 
 The fixed-pool author's `db90918b` replaces the shared `.text.fp_bodies` section with whole-function sections, all at most 672 bytes, and factors the broad `inline(always)` at real boundaries (`release_locked` retained). The aggregate demand list was regenerated from the new A and B symbol tables.
 
@@ -14,7 +14,7 @@ The fixed-pool author's `db90918b` replaces the shared `.text.fp_bodies` section
 | largest entry-free carrier run | 672 (`0x2a0`) | 672 (`0x2a0`) |
 | largest emitted section | 588 (`0x24c`, `admit`) | 588 |
 
-`//replacement/rtos_platform:stage-platform -- fit CARRIERS` reports `fits` for both domains and exits 0. The task-record `0x11c` create body is well inside the 672-byte run and needs no mid-function split.
+`//replacement/rtos_platform:stage-platform -- fit CARRIERS` reports `fits` for both domains and exits 0 on the symbol demand. That is a necessary bound, not a packing proof: the actual relocatable object has 116 alloc sections totalling 16,120 bytes in A against 16,668 carrier-run bytes, and the deterministic packer (`//replacement/rtos_platform:place-platform`) returns a typed deficit, `.text.s3b_activate` 356 bytes with the ascending best-fit order (`.text.s3a_disable` 152 with descending). The 548-byte slack is too fragmented for the greedy assignment; a stronger whole-section search or a slightly larger proved carrier set is required. The S3c seed was corrected to `s3c_get_priority` (the adapter exports `s3c_*`, not `xm1_s3c_*`), so the relocatable object now includes the S3c object. The task-record `0x11c` create body is well inside the 672-byte run and needs no mid-function split.
 
 The fixed-pool frame demand from `b143abab` (`private-data/scratch/RtosFixedPoolsSections/section-frames.json`, SHA-256 `d0bf22c6…46f7b19`) is local/worst-case owned-chain bytes: admit 24/24, get 56/64, delete_pool 56/56, release 40/72, release_locked 32/32, create_pool 32/32, poll_unchecked 40/48, resume 8/8, take 8/8, poll 32/40, timed_entry 96/160, get_entry 96/160, poll_entry 64/104, unchecked_entry 64/112, create_entry 64/96, release_entry 64/136, delete_entry 64/120. Owned edges: get/poll/poll_unchecked to take; release to release_locked; every entry to admit plus its core; get and timed entry also to resume. Retained stock calls are outside the owned emitted chain.
 
