@@ -22,7 +22,10 @@ mod tests;
 pub use id::{target_context, target_domain, own_cyclic_slot, EncodedId};
 pub use layout::{CyclicConfig, CyclicControl, CyclicSlot, Domain, GuestAddress, KernelContext};
 pub use machine::Machine;
-pub use ops::{configure, create, delete, expire, initialize, schedule, start, stop};
+pub use ops::{
+    configure, create, create_from_request, create_with_request, delete, expire, initialize,
+    schedule, start, stop,
+};
 pub use status::CyclicStatus;
 pub use types::{
     CyclicArgument, CyclicAttributes, CyclicCreate, CyclicHandler, CyclicPeriod, CyclicPhase,

@@ -5,7 +5,7 @@ use crate::layout::{
 use crate::machine::Machine;
 use crate::status::CyclicStatus;
 use crate::types::{
-    CyclicArgument, CyclicCreate, CyclicHandler, Expiry, PeriodWord,
+    CyclicArgument, CyclicAttributes, CyclicCreate, CyclicHandler, CyclicPhase, Expiry, PeriodWord,
 };
 
 #[inline(always)]
@@ -106,11 +106,11 @@ pub fn initialize<M: Machine>(
 
 #[cfg_attr(feature = "stage", inline(never))]
 #[cfg_attr(feature = "stage", link_section = ".text.cyclic_create_core")]
-pub fn create<M: Machine>(
+pub fn create_with_request<M: Machine, R: FnOnce() -> Result<CyclicCreate, CyclicStatus>>(
     m: &M,
     entry: Domain,
     id: EncodedId,
-    request: CyclicCreate,
+    request: R,
 ) -> CyclicStatus {
     let slot = match own_cyclic_slot(id) {
         Ok(slot) => slot,
@@ -121,21 +121,47 @@ pub fn create<M: Machine>(
     let status = if m.load_word(config.exists()) != 0 {
         CyclicStatus::AlreadyExists
     } else {
-        match request.period.checked() {
-            None => CyclicStatus::Param,
-            Some(period) => {
-                m.store_word(config.attributes(), request.attributes.0);
-                m.store_word(config.argument(), request.argument.0);
-                m.store_word(config.handler(), request.handler.0);
-                m.store_word(config.period(), period.get());
-                m.store_word(config.phase(), request.phase.0);
-                m.store_word(config.exists(), 1);
-                CyclicStatus::Ok
-            }
+        match request() {
+            Err(status) => status,
+            Ok(request) => match request.period.checked() {
+                None => CyclicStatus::Param,
+                Some(period) => {
+                    m.store_word(config.attributes(), request.attributes.0);
+                    m.store_word(config.argument(), request.argument.0);
+                    m.store_word(config.handler(), request.handler.0);
+                    m.store_word(config.period(), period.get());
+                    m.store_word(config.phase(), request.phase.0);
+                    m.store_word(config.exists(), 1);
+                    CyclicStatus::Ok
+                }
+            },
         }
     };
     m.restore_interrupts(saved);
     status
+}
+
+#[inline(always)]
+pub fn create<M: Machine>(m: &M, entry: Domain, id: EncodedId, request: CyclicCreate) -> CyclicStatus {
+    create_with_request(m, entry, id, || Ok(request))
+}
+
+#[inline(always)]
+pub fn create_from_request<M: Machine>(
+    m: &M,
+    entry: Domain,
+    id: EncodedId,
+    request: GuestAddress,
+) -> CyclicStatus {
+    create_with_request(m, entry, id, || {
+        Ok(CyclicCreate {
+            attributes: CyclicAttributes(m.load_word(request)),
+            argument: CyclicArgument(m.load_word(request.offset(0x04))),
+            handler: CyclicHandler(m.load_word(request.offset(0x08))),
+            period: PeriodWord(m.load_word(request.offset(0x0c))),
+            phase: CyclicPhase(m.load_word(request.offset(0x10))),
+        })
+    })
 }
 
 #[cfg_attr(feature = "stage", inline(never))]

@@ -360,9 +360,9 @@ coreCases _facts domain =
       [] [] Returned Returned
   , Case "create-zero-period" Create (Repair "the replacement refuses a zero period without a write") [(1, emptyConfig)] [] [] 4 0 0 0x13 1
       (Just (0x2, 0x11111111, 0x22222222, 0, 0)) Receipt
-      [ RegisterIs R0 0, ConfigWord 1 0x0c 0, ConfigWord 1 0x14 1 ]
-      [ RegisterIs R0 0, ConfigWord 1 0x0c 0, ConfigWord 1 0x14 1 ]
-      [ RegisterIs R0 0xffffffef, ConfigWord 1 0x0c 0, ConfigWord 1 0x14 0 ]
+      [ RegisterIs R0 0, ConfigWord 1 0x00 0x2, ConfigWord 1 0x04 0x11111111, ConfigWord 1 0x08 0x22222222, ConfigWord 1 0x0c 0, ConfigWord 1 0x10 0, ConfigWord 1 0x14 1 ]
+      [ RegisterIs R0 0, ConfigWord 1 0x00 0x2, ConfigWord 1 0x04 0x11111111, ConfigWord 1 0x08 0x22222222, ConfigWord 1 0x0c 0, ConfigWord 1 0x10 0, ConfigWord 1 0x14 1 ]
+      [ RegisterIs R0 0xffffffef, ConfigWord 1 0x00 0, ConfigWord 1 0x04 0, ConfigWord 1 0x08 0, ConfigWord 1 0x0c 0, ConfigWord 1 0x10 0, ConfigWord 1 0x14 0 ]
       Returned Returned
   , Case "delete-inactive" Delete Equal [(1, Config 0x2 0x11111111 0x22222222 30 0 1)] [(1, Control 0 0 0 0 0)] [] 4 0 0 0x13 1
       Nothing Receipt
@@ -436,22 +436,22 @@ coreCases _facts domain =
       ]
       [] [] Returned Returned
   , Case "expire-zero-period" Tick (Repair "the replacement delivers one expiry instead of looping") [(1, Config 0x2 0x11111111 0x22222222 0 0 1)] [(1, Control 1 10 1 0 0)] [] 4 10 1 0x13 1
-      Nothing Sink
+      Nothing Receipt
       []
-      [ RegisterIs R0 0, ControlWord 1 0x04 0, ControlWord 1 0x0c 0, CountIs 0, BaseIs 10, TickIs 20 ]
-      [ RegisterIs R0 0, ControlWord 1 0x04 0, ControlWord 1 0x0c 0, CountIs 0, BaseIs 10, TickIs 20 ]
+      [ RegisterIs R0 0, ReceiptsAre [(0x11111111, 0, 0x13)], ControlWord 1 0x04 0, ControlWord 1 0x0c 0, CountIs 0, BaseIs 10, TickIs 20 ]
+      [ RegisterIs R0 0, ReceiptsAre [(0x11111111, 0, 0x13)], ControlWord 1 0x04 0, ControlWord 1 0x0c 0, CountIs 0, BaseIs 10, TickIs 20 ]
       InstructionBudget Returned
   , Case "expire-handler-delete" Tick (Repair "deleting from the handler stops the re-armed entry") [(1, Config 0x2 0x11111111 0x22222222 30 0 1)] [(1, Control 1 10 1 0 0)] [] 4 10 1 0x13 1
       Nothing HandlerDelete
       []
-      [ RegisterIs R0 0, ConfigWord 1 0x14 0, ControlWord 1 0x04 1, ControlWord 1 0x0c 1, CountIs 1 ]
-      [ RegisterIs R0 0, ConfigWord 1 0x14 0, ControlWord 1 0x04 0, ControlWord 1 0x0c 0, CountIs 0 ]
+      [ RegisterIs R0 0, ReceiptsAre [(0x11111111, 0, 0x13)], ConfigWord 1 0x14 0, ControlWord 1 0x04 1, ControlWord 1 0x0c 1, CountIs 1 ]
+      [ RegisterIs R0 0, ReceiptsAre [(0x11111111, 0, 0x13)], ConfigWord 1 0x14 0, ControlWord 1 0x04 0, ControlWord 1 0x0c 0, CountIs 0 ]
       Returned Returned
   , Case "expire-handler-delete-recreate" Tick (Repair "a recreated registration is not re-armed by the old expiry") [(1, Config 0x2 0x11111111 0x22222222 30 0 1)] [(1, Control 1 10 1 0 0)] [] 4 10 1 0x13 1
       (Just (0x2, 0x33333333, 0x9999, 50, 0)) HandlerDeleteRecreate
       []
-      [ RegisterIs R0 0, ConfigWord 1 0x0c 50, ConfigWord 1 0x08 0x9999, ControlWord 1 0x04 1, ControlWord 1 0x0c 1, CountIs 1 ]
-      [ RegisterIs R0 0, ConfigWord 1 0x0c 50, ConfigWord 1 0x08 0x9999, ControlWord 1 0x04 0, ControlWord 1 0x0c 0, CountIs 0 ]
+      [ RegisterIs R0 0, ReceiptsAre [(0x11111111, 0, 0x13)], ConfigWord 1 0x0c 50, ConfigWord 1 0x08 0x9999, ControlWord 1 0x04 1, ControlWord 1 0x0c 1, CountIs 1 ]
+      [ RegisterIs R0 0, ReceiptsAre [(0x11111111, 0, 0x13)], ConfigWord 1 0x0c 50, ConfigWord 1 0x08 0x9999, ControlWord 1 0x04 0, ControlWord 1 0x0c 0, CountIs 0 ]
       Returned Returned
   , Case "initialize" Initialize (Repair "a zero period is not started at boot") [(1, Config 0x2 0x11111111 0x22222222 30 7 1), (2, Config 0 0 0 30 0 1), (3, Config 0x2 0x33333333 0x44444444 0 0 1)] [] [] 3 100 0 0x13 0
       Nothing Receipt
@@ -471,6 +471,18 @@ coreCases _facts domain =
       Nothing Receipt
       [ ControlWord 1 0x08 55, ControlWord 1 0x0c 1, ControlWord 1 0x10 (expireEntry domain)
       , ControlArgumentIs 1, HeapWord 1 0x00 55, CountIs 1
+      ]
+      [] [] Returned Returned
+  , Case "configure-unpublished" Configure Equal [] [] [] 4 0 0 0x13 0
+      Nothing Receipt
+      [ ConfigurationPublished, RegionsUnchanged ["words", "configs", "controls", "count", "heap", "entries"] ]
+      [] [] Returned Returned
+  , Case "create-unreadable-existing" Create Equal [(1, Config 0x2 0x11111111 0x22222222 30 0 1)] [] [] 4 0 0 0x13 1
+      Nothing Receipt
+      [ RegisterIs R0 0xffffffd7
+      , ConfigWord 1 0x0c 30
+      , ConfigWord 1 0x14 1
+      , RegionsUnchanged ["words", "configs", "controls", "count", "heap", "entries"]
       ]
       [] [] Returned Returned
   ]
@@ -510,7 +522,7 @@ expectedCpsrControl one = case caseCall one of
   _ -> cpsrControl (caseCpsr one)
 
 check :: Facts -> Domain -> Case -> Role -> NativeObservation -> Check -> Either String ()
-check facts domain one _role observation check' = case check' of
+check facts domain one role observation check' = case check' of
   ConfigWord slot offset value -> expectWord "configs" (configAddress facts domain slot + offset) value
   ControlWord slot offset value -> expectWord "controls" (controlAddress facts domain slot + offset) value
   SecondControlWord slot offset value -> expectWord "entries" (secondControls + fromIntegral (slot - 1) * 0x18 + offset) value
@@ -565,7 +577,7 @@ check facts domain one _role observation check' = case check' of
       Just bytes -> Right bytes
     initialRegion region = case region of
       "words" -> overlay (wordsBase domain) 0x1000 (wordsWords facts domain one)
-      "configs" -> overlay (configBase facts domain) 0x60 (configWords facts domain one)
+      "configs" -> overlay (configBase facts domain) 0x60 (configWords facts domain one (handlerFor role one))
       "controls" -> overlay (controlBase facts domain) 0x60 (controlWords facts domain one)
       "count" -> overlay (countWord facts domain) 4 [(countWord facts domain, caseCount one)]
       "heap" -> overlay (heapAddress facts domain) 0x100 (heapWords facts domain one)
@@ -609,7 +621,7 @@ overlay base size words' = B.concat (pieces 0 ordered)
 wordsWords :: Facts -> Domain -> Case -> [(Word32, Word32)]
 wordsWords facts domain one =
   [ (dfHandlerContext d, caseHandlerContext one)
-  , (dfCurrentContext d, dfContexts d)
+  , (dfCurrentContext d, if caseName one == "configure-unpublished" then 0 else dfContexts d)
   , (dfSchedulerLock d, 0)
   ]
     ++ contextWords (factsContext facts) d (dfContexts d) (controlBase facts domain) (caseCount one) (expireEntry domain)
@@ -637,20 +649,23 @@ contextWords offsets d context controls count callback =
   , (context + contextCyclicCallback offsets, callback)
   ]
 
-configWords :: Facts -> Domain -> Case -> [(Word32, Word32)]
-configWords facts domain one =
+configWords :: Facts -> Domain -> Case -> Word32 -> [(Word32, Word32)]
+configWords facts domain one handler =
   concat
     [ [ (configAddress facts domain slot, cfgAttributes config)
       , (configAddress facts domain slot + 0x04, cfgArgument config)
-      , (configAddress facts domain slot + 0x08, handler)
+      , (configAddress facts domain slot + 0x08, if cfgExists config /= 0 then handler else cfgHandler config)
       , (configAddress facts domain slot + 0x0c, cfgPeriod config)
       , (configAddress facts domain slot + 0x10, cfgPhase config)
       , (configAddress facts domain slot + 0x14, cfgExists config)
       ]
     | (slot, config) <- caseConfigs one
     ]
-  where
-    handler = case caseCallback one of
+
+handlerFor :: Role -> Case -> Word32
+handlerFor role one
+  | caseName one == "expire-zero-period" && role == Stock = stubBase + 0x180
+  | otherwise = case caseCallback one of
       Receipt -> stubReceipt
       Sink -> stubBase + 0x180
       HandlerDelete -> stubDelete
@@ -724,7 +739,7 @@ caseArgs facts domain one = case caseCall one of
   Expire -> [(R0, controlAddress facts domain 1)]
   Start -> [(R0, caseNumber one)]
   Stop -> [(R0, caseNumber one)]
-  Create -> [(R0, caseNumber one), (R1, requestBase)]
+  Create -> [(R0, caseNumber one), (R1, if caseName one == "create-unreadable-existing" then 0x0eadbe0 else requestBase)]
   Delete -> [(R0, caseNumber one)]
   where
     d = domainFacts facts domain
@@ -742,7 +757,7 @@ caseFor facts domain role stockImage ownedImage timerOwned ownedSymbols timerSym
         , mkRegion (RegionId "timer") (GuestAddress (fromIntegral timerBase)) (fromIntegral (B.length timerBytes)) ReadExecute timerBytes
         , mkRegion (RegionId "stubs") (GuestAddress (fromIntegral stubBase)) (fromIntegral stubSize) ReadExecute (stubBytes domain one)
         , mkRegion (RegionId "words") (GuestAddress (fromIntegral (wordsBase domain))) 0x1000 ReadWrite (overlay (wordsBase domain) 0x1000 (wordsWords facts domain one))
-        , mkRegion (RegionId "configs") (GuestAddress (fromIntegral (configBase facts domain))) 0x60 ReadWrite (overlay (configBase facts domain) 0x60 (configWords facts domain one))
+        , mkRegion (RegionId "configs") (GuestAddress (fromIntegral (configBase facts domain))) 0x60 ReadWrite (overlay (configBase facts domain) 0x60 (configWords facts domain one handler))
         , mkRegion (RegionId "controls") (GuestAddress (fromIntegral (controlBase facts domain))) 0x60 ReadWrite (overlay (controlBase facts domain) 0x60 (controlWords facts domain one))
         , mkRegion (RegionId "count") (GuestAddress (fromIntegral (countWord facts domain))) 4 ReadWrite (overlay (countWord facts domain) 4 [(countWord facts domain, caseCount one)])
         , mkRegion (RegionId "heap") (GuestAddress (fromIntegral (heapAddress facts domain))) 0x100 ReadWrite (overlay (heapAddress facts domain) 0x100 (heapWords facts domain one))
@@ -784,6 +799,7 @@ caseFor facts domain role stockImage ownedImage timerOwned ownedSymbols timerSym
   where
     entry = callEntry domain (caseCall one)
     status = if role == Stock then caseStockStatus one else caseOwnedStatus one
+    handler = handlerFor role one
     (codeBase, codeBytes) = case role of
       Stock -> (cyclicLow domain, slice (imageBase stockImage) (imageBytes stockImage) (cyclicLow domain) (cyclicSize domain))
       Owned -> (imageBase ownedImage, imageBytes ownedImage)
@@ -921,6 +937,9 @@ controlRuns facts domain one observation =
     ++ [ ControlRun "core" ("unchanged-" ++ region) (caseName one) (refused (RegionsUnchanged [region]) (mutateRegion region observation))
        | region <- declaredRegions
        ]
+    ++ [ ControlRun "core" "receipt-argument" (caseName one) (refused (ReceiptsAre expectedReceipt) (mutateReceipt observation))
+       | ReceiptsAre expectedReceipt <- checksFor Owned one
+       ]
   where
     expected = expectedCpsrControl one
     refused check' mutated = case check facts domain one Owned mutated check' of
@@ -935,6 +954,14 @@ controlRuns facts domain one observation =
             | (ident, bytes) <- nativeMemory observed
             ]
         }
+    mutateReceipt observed =
+      observed
+        { nativeMemory =
+            [ (ident, if regionName ident == "entries" then flipAt 0x200 bytes else bytes)
+            | (ident, bytes) <- nativeMemory observed
+            ]
+        }
+    flipAt offset bytes = let (before, after) = B.splitAt offset bytes in before <> flipHead after
     flipHead bytes = case B.uncons bytes of
       Just (first, rest) -> B.cons (first `xor` (0xff :: Word8)) rest
       Nothing -> bytes

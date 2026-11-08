@@ -3,9 +3,8 @@
 use core::arch::{asm, global_asm};
 use crate::layout::{Domain, GuestAddress, KernelContext};
 use crate::{
-    configure, create, delete, expire, initialize, schedule, start, stop, CyclicArgument,
-    CyclicAttributes, CyclicControl, CyclicCreate, CyclicHandler, CyclicPhase, EncodedId, Expiry,
-    Machine, PeriodWord, SavedInterrupts,
+    configure, create_from_request, delete, expire, initialize, schedule, start, stop,
+    CyclicArgument, CyclicControl, CyclicHandler, EncodedId, Expiry, Machine, SavedInterrupts,
 };
 
 #[cfg(feature = "domain-a")]
@@ -31,6 +30,11 @@ const TIMER_REMOVE: u32 = 0xd4c68;
 const EXPIRE_ENTRY: u32 = 0x4beb0;
 #[cfg(feature = "domain-b")]
 const EXPIRE_ENTRY: u32 = 0xdbe70;
+
+#[cfg(feature = "domain-a")]
+const CYCLIC_COUNT_WORD: u32 = 0x0004_dacc;
+#[cfg(feature = "domain-b")]
+const CYCLIC_COUNT_WORD: u32 = 0x000d_da90;
 
 #[inline(always)]
 fn read(address: u32) -> u32 {
@@ -161,12 +165,11 @@ impl Machine for Cpu {
 #[inline(never)]
 #[link_section = ".text.cyclic_body_configure"]
 pub extern "C" fn xm1_rtos_cyclic_configure_body() {
-    let context = current_context();
     configure(
         &Cpu,
         CONFIGURATION,
         ENTRY.words().cyclic_controls,
-        read(context.cyclic_count().0),
+        read(CYCLIC_COUNT_WORD),
         EXPIRE_ENTRY,
     );
 }
@@ -222,14 +225,7 @@ pub extern "C" fn xm1_rtos_cyclic_stop_body(id: i32) -> i32 {
 #[inline(never)]
 #[link_section = ".text.cyclic_body_create"]
 pub extern "C" fn xm1_rtos_cyclic_create_body(id: u32, request: u32) -> i32 {
-    let request = CyclicCreate {
-        attributes: CyclicAttributes(read(request)),
-        argument: CyclicArgument(read(request + 0x04)),
-        handler: CyclicHandler(read(request + 0x08)),
-        period: PeriodWord(read(request + 0x0c)),
-        phase: CyclicPhase(read(request + 0x10)),
-    };
-    create(&Cpu, ENTRY, EncodedId(id as i32), request).code()
+    create_from_request(&Cpu, ENTRY, EncodedId(id as i32), GuestAddress(request)).code()
 }
 
 #[no_mangle]
