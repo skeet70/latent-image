@@ -12,8 +12,8 @@
 //! and are refused.
 //!
 //! The case's call contract is tracked from the decoded control-flow words
-//! (B, BL, BX, BLX, LDM with PC and the two LDR-to-PC dispatch forms). All
-//! other instruction semantics belong to the backend, which executes the
+//! (B, BL, BX, BLX, single-register POP with PC, LDM with PC and the two LDR-to-PC
+//! dispatch forms). All other instruction semantics belong to the backend, which executes the
 //! Cortex-R5F instruction set. The user-ARM case profile refuses coprocessor,
 //! supervisor-call, unconditional-space, non-APSR status writes, hint and
 //! synchronization-primitive words, and ARMv7 UNPREDICTABLE transfer and
@@ -1991,6 +1991,7 @@ impl State {
                 self.tail(cpu, case, target)
             }
             Control::Dispatch(table) => self.dispatch(cpu, case, pc, word, table),
+            Control::PopSingleReturn => self.pop_single_return(cpu, case),
             Control::LoadMultipleReturn => self.load_multiple_return(cpu, case, word),
             Control::UntrackedPcWrite if case.profile.kernel().is_some() && word & 0x0fff_ffff == MOV_PC_LR => {
                 let link = arm_target(cpu, 14)?;
@@ -2170,6 +2171,15 @@ impl State {
             return Err(Step::Stop(Status::UnsupportedInstruction));
         }
         self.tail(cpu, case, target)
+    }
+
+    fn pop_single_return(&mut self, cpu: &dyn Cpu, case: &Case) -> Result<(), Step> {
+        let address = read(cpu, arm::CORE[13])?;
+        if !(Transfer { words: 1, need: Need::Read }).admitted(case, u64::from(address)) {
+            return Ok(());
+        }
+        let loaded = read_word(cpu, u64::from(address))?;
+        self.return_to(case, loaded)
     }
 
     /// LDM with PC: the loaded PC must be the tracked return address. An
@@ -2386,6 +2396,7 @@ enum Control {
     BranchRegister(u32),
     BranchLinkRegister(u32),
     Dispatch(Table),
+    PopSingleReturn,
     LoadMultipleReturn,
     UntrackedPcWrite,
     None,
@@ -2396,6 +2407,9 @@ fn control(word: u32) -> Control {
     let top = word >> 25 & 7;
     let destination = word >> 12 & 15;
     let load = word & 1 << 20 != 0;
+    if word & 0x0fff_ffff == 0x049d_f004 {
+        return Control::PopSingleReturn;
+    }
     match word & 0x0f00_0000 {
         0x0a00_0000 => return Control::Branch,
         0x0b00_0000 => return Control::BranchLink,
