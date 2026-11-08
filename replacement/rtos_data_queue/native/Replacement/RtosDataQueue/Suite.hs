@@ -88,10 +88,25 @@ removeStub = assemble [0xe3003000, 0xe3403100, 0xe5830010, 0xe5831014, 0xe3a0000
 serviceActor :: Domain -> Call -> Word32 -> Word32 -> Actor
 serviceActor domain call id argument = Actor (assemble [0xf1080080, movSmall 0 id, movw 1 (argument .&. 0xffff), movt 1 (argument `shiftR` 16), branchLink 4 (entryAddress domain call), branch 5 stopAddress])
 
--- | Reads the armed timer entry, calls its real timeout callback, then dispatches.
-timeoutActor :: Domain -> Word32 -> Actor
-timeoutActor domain timer =
-  Actor (assemble [0xf1080080, movw 0 (timer .&. 0xffff), movt 0 (timer `shiftR` 16), 0xe5901004, 0xe5900008, 0xe12fff31, 0xe3a00000, branchLink 7 (saveAddress domain), branch 8 stopAddress])
+-- | Takes the tick's scheduler lock, consumes the armed timer entry, calls its real timeout
+-- | callback, releases the lock, then dispatches.
+timeoutActor :: Domain -> Word32 -> Word32 -> Actor
+timeoutActor domain context timer =
+  Actor (assemble
+    [ 0xf1080080
+    , movw 0 (context .&. 0xffff), movt 0 (context `shiftR` 16), 0xe2800008
+    , branchLink 4 (acquireAddress domain)
+    , movw 0 (context .&. 0xffff), movt 0 (context `shiftR` 16)
+    , movw 1 (timer .&. 0xffff), movt 1 (timer `shiftR` 16)
+    , branchLink 9 (timerRemove domain)
+    , movw 0 (timer .&. 0xffff), movt 0 (timer `shiftR` 16)
+    , 0xe5901004, 0xe5900008, 0xe12fff31
+    , movw 0 (context .&. 0xffff), movt 0 (context `shiftR` 16), 0xe2800008
+    , branchLink 18 (releaseAddress domain)
+    , 0xe3a00000
+    , branchLink 20 (saveAddress domain)
+    , branch 21 stopAddress
+    ])
 
 -- | The instruction word at a slot of the actor's own body.
 actorAt :: Int -> Word32
@@ -108,9 +123,13 @@ branchLink, branch :: Int -> Word32 -> Word32
 branchLink index target = 0xeb000000 .|. (((target - actorAt index - 8) `shiftR` 2) .&. 0xffffff)
 branch index target = 0xea000000 .|. (((target - actorAt index - 8) `shiftR` 2) .&. 0xffffff)
 
-saveAddress, timeoutCallback :: Domain -> Word32
+saveAddress, acquireAddress, releaseAddress, timeoutCallback :: Domain -> Word32
 saveAddress DomainA = 0x43640
 saveAddress DomainB = 0xd3640
+acquireAddress DomainA = 0x439d8
+acquireAddress DomainB = 0xd398c
+releaseAddress DomainA = 0x43a14
+releaseAddress DomainB = 0xd39c8
 timeoutCallback DomainA = 0x44318
 timeoutCallback DomainB = 0xd42d8
 
@@ -223,6 +242,7 @@ cases facts executing =
       , eq "kernel" (waitQueue 1) (sendSelf 1), eq "kernel" (waitOwner 1) (dfId (domainFacts facts executing))
       , eq "kernel" (sendNext 1) (sendSelf 1), eq "kernel" (sendPrev 1) (sendSelf 1)
       , ByteIs "kernel" (taskState 1) (stateReady facts)
+      , eq "kernel" objectLock 0, eq "kernel" schedulerLock 0
       , CpsrIs 0x13
       ]
   , blocking "receive-blocks" Receive [(R0, 1), (R1, outBase)] (queue 1 0 2 ++ [poke outBase 0x5e4d1e00])
@@ -234,10 +254,11 @@ cases facts executing =
       , eq "kernel" (waitQueue 1) (sendSelf 1), eq "kernel" (waitOwner 1) (dfId (domainFacts facts executing))
       , eq "kernel" (recvNext 1) (recvSelf 1), eq "kernel" (recvPrev 1) (recvSelf 1)
       , ByteIs "kernel" (taskState 1) (stateReady facts)
+      , eq "kernel" objectLock 0, eq "kernel" schedulerLock 0
       , CpsrIs 0x13
       ]
   , blocking "send-timeout-blocks" SendTimeout [(R0, 1), (R1, 0x2222), (R2, 5)] (queue 1 0 1 ++ full [0xaaaa] 1)
-      (timeoutActor executing (timerEntry 1))
+      (timeoutActor executing (contextRecord facts executing executing) (timerEntry 1))
       [ ResultIs (-50)
       , eq "ring" ringBase 0xaaaa
       , eq "kernel" (count 1) 1, eq "kernel" (read 1) 0, eq "kernel" (write 1) 0
@@ -247,10 +268,13 @@ cases facts executing =
       , eq "timer-stub" stubBase (contextRecord facts executing executing)
       , eq "timer-stub" (stubBase + 4) (timerEntry 1)
       , eq "timer-stub" (stubBase + 8) (clockValue + 5)
+      , eq "timer-stub" (stubBase + 0x10) (contextRecord facts executing executing)
+      , eq "timer-stub" (stubBase + 0x14) (timerEntry 1)
+      , eq "kernel" objectLock 0, eq "kernel" schedulerLock 0
       , CpsrIs 0x13
       ]
   , blocking "receive-timeout-blocks" ReceiveTimeout [(R0, 1), (R1, outBase), (R2, 5)] (queue 1 0 2 ++ [poke outBase 0x5e4d1e00])
-      (timeoutActor executing (timerEntry 1))
+      (timeoutActor executing (contextRecord facts executing executing) (timerEntry 1))
       [ ResultIs (-50)
       , eq "out" outBase 0x5e4d1e00
       , eq "kernel" (count 1) 0, eq "kernel" (read 1) 0, eq "kernel" (write 1) 0
@@ -260,6 +284,9 @@ cases facts executing =
       , eq "timer-stub" stubBase (contextRecord facts executing executing)
       , eq "timer-stub" (stubBase + 4) (timerEntry 1)
       , eq "timer-stub" (stubBase + 8) (clockValue + 5)
+      , eq "timer-stub" (stubBase + 0x10) (contextRecord facts executing executing)
+      , eq "timer-stub" (stubBase + 0x14) (timerEntry 1)
+      , eq "kernel" objectLock 0, eq "kernel" schedulerLock 0
       , CpsrIs 0x13
       ]
   , blocking "send-timeout-wake" SendTimeout [(R0, 1), (R1, 0x3333), (R2, 5)] (queue 1 0 1 ++ full [0xbbbb] 1)
@@ -275,6 +302,7 @@ cases facts executing =
       , eq "timer-stub" (stubBase + 8) (clockValue + 5)
       , eq "timer-stub" (stubBase + 0x10) (contextRecord facts executing executing)
       , eq "timer-stub" (stubBase + 0x14) (timerEntry 1)
+      , eq "kernel" objectLock 0, eq "kernel" schedulerLock 0
       , CpsrIs 0x13
       ]
   , blocking "receive-timeout-wake" ReceiveTimeout [(R0, 1), (R1, outBase), (R2, 5)] (queue 1 0 2 ++ [poke outBase 0x5e4d1e00])
@@ -290,6 +318,7 @@ cases facts executing =
       , eq "timer-stub" (stubBase + 8) (clockValue + 5)
       , eq "timer-stub" (stubBase + 0x10) (contextRecord facts executing executing)
       , eq "timer-stub" (stubBase + 0x14) (timerEntry 1)
+      , eq "kernel" objectLock 0, eq "kernel" schedulerLock 0
       , CpsrIs 0x13
       ]
   , difference "delete-stranded-receiver" Delete [(R0, 1)] (queue 1 0 2 ++ receiverWaiter)
@@ -318,6 +347,7 @@ cases facts executing =
       , eq "kernel" (recvNext 1) (recvSelf 1), eq "kernel" (recvPrev 1) (recvSelf 1)
       , eq "kernel" (dfReschedule (domainFacts facts executing)) 1
       , eq "kernel" (count 1) 0
+      , eq "kernel" objectLock 0, eq "kernel" schedulerLock 0
       , CpsrIs 0x13
       ]
   , caseOf "timed-receive-poll" ReceiveTimeout [(R0, 1), (R1, outBase), (R2, 0)] (queue 1 0 2 ++ [poke outBase 0x5e4d1e00]) [ResultIs (-50), eq "out" outBase 0x5e4d1e00]
@@ -389,6 +419,8 @@ cases facts executing =
     blocking name call args words' actor checks =
       Case (CaseId name) call args words' checks [] [] False (Just actor)
     timerEntry slot = dataQueueTimer facts executing slot
+    objectLock = dfObjectLock (domainFacts facts executing)
+    schedulerLock = dfSchedulerLock (domainFacts facts executing)
     peerDomain = if executing == DomainA then DomainB else DomainA
     peerQueue slot attributes capacity =
       let config = dataQueueConfig facts peerDomain slot
