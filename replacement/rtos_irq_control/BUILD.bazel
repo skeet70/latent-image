@@ -1,0 +1,127 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+xm1_rust_staticlib(
+    name = "irq-rust",
+    src = "src/lib.rs",
+    crate_name = "xm1_rtos_irq_control",
+    data = [
+        "src/tests.rs",
+        "//replacement/rtos_layout:src/lib.rs",
+    ],
+)
+
+[
+    xm1_rust_staticlib(
+        name = "irq-abi-%s-rust" % domain,
+        src = "stage/abi.rs",
+        crate_name = "xm1_rtos_irq_control_abi",
+        data = [
+            "src/lib.rs",
+            "src/tests.rs",
+            "//replacement/rtos_layout:src/lib.rs",
+        ],
+        rustc_flags = [
+            "--cfg",
+            "'feature=\"domain-%s\"'" % domain,
+            "--cfg",
+            "'feature=\"stage\"'",
+        ],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    xm1_rust_elf(
+        name = "irq-%s" % domain,
+        rust_staticlib = ":irq-abi-%s-rust" % domain,
+        entry = "xm1_rtos_irq_enable",
+        extra_ldflags = ["-Wl,--gc-sections", "-Wl,--orphan-handling=error"],
+        link_script = "irq-%s.ld" % domain,
+    )
+    for domain in ["a", "b"]
+]
+
+genrule(
+    name = "irq-host-tests-build",
+    srcs = [
+        "src/lib.rs",
+        "src/tests.rs",
+        "//replacement/rtos_layout:src/lib.rs",
+    ],
+    outs = ["irq-host-tests-bin"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location src/lib.rs) -o $@",
+    executable = True,
+    tools = [
+        "@lab_clang//:bin/clang",
+        "@lab_rustc//:bin/rustc",
+    ],
+)
+
+sh_test(
+    name = "irq-host-tests",
+    size = "small",
+    srcs = ["run-host-tests.sh"],
+    args = ["$(location :irq-host-tests-build)"],
+    data = [":irq-host-tests-build"],
+)
+
+haskell_library(
+    name = "irq-suite",
+    srcs = ["native/Replacement/RtosIrqControl/Suite.hs"],
+    src_strip_prefix = "native",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:cached-native-batch",
+        "//emulation:native-adapter",
+        "//emulation:native-observation",
+        "//emulation:owned-case",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:filepath",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+    ],
+)
+
+haskell_binary(
+    name = "irq-native-suite",
+    srcs = ["native/SuiteMain.hs"],
+    main_file = "native/SuiteMain.hs",
+    args = [
+        "--runner",
+        "$(rootpath //emulation:native-runner)",
+        "--owned-a-bin",
+        "$(rootpath :irq-a.bin)",
+        "--owned-a-symbols",
+        "$(rootpath :irq-a.symbols)",
+        "--owned-b-bin",
+        "$(rootpath :irq-b.bin)",
+        "--owned-b-symbols",
+        "$(rootpath :irq-b.symbols)",
+    ],
+    data = [
+        ":irq-a.bin",
+        ":irq-a.symbols",
+        ":irq-b.bin",
+        ":irq-b.symbols",
+        "//emulation:native-runner",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":irq-suite",
+        "//emulation:case-sha256",
+        "//emulation:native-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:storage-budget",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+    ],
+)
