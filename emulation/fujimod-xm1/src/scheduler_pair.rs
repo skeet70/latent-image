@@ -1648,12 +1648,12 @@ impl Observer<'_> {
     fn consume_timer(&mut self, machine: &Machine, context: &Context, tcm: [u32; 2], entry: u32, task: u32) -> Result<(), String> {
         let board = Board { machine, maps: &self.maps };
         let keys: Vec<ReturnKey> = self.open.pending.iter()
-            .filter(|(_, calls)| calls.iter().any(|call| matches!(call.entry.slot.semantic, Semantic::Family { .. }) && call.entry.task == Read::Committed { value: task }))
+            .filter(|(_, calls)| calls.iter().any(|call| matches!(call.entry.slot.semantic, Semantic::Family { .. } | Semantic::Semaphore { .. }) && call.entry.task == Read::Committed { value: task }))
             .map(|(key, _)| *key).collect();
         let order = self.next_order();
         for key in keys {
             if let Some(calls) = self.open.pending.get_mut(&key) {
-                for call in calls.iter_mut().filter(|call| matches!(call.entry.slot.semantic, Semantic::Family { .. }) && call.entry.task == Read::Committed { value: task }) {
+                for call in calls.iter_mut().filter(|call| matches!(call.entry.slot.semantic, Semantic::Family { .. } | Semantic::Semaphore { .. }) && call.entry.task == Read::Committed { value: task }) {
                     let memory = call.entry.memory.iter().map(|word| Ok(WordValue { address: word.address, value: board.word(context.core, tcm, word.address.0)? })).collect::<Result<Vec<_>, String>>()?;
                     call.record(Boundary { kind: BoundaryKind::TimerConsume, address: Hex(context.pc), instructions: context.instructions,
                         order, core: context.core, task: Read::Committed { value: task }, sp: Hex(context.sp), cpsr: context.cpsr,
