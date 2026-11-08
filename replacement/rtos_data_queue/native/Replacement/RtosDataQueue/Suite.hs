@@ -696,8 +696,11 @@ compareCase facts domain one stock owned = statusDifferences ++ declaredRegister
       [ "region " ++ name ++ " differs"
       | valid
       , null (caseStockExpect one)
-      , name <- ["kernel", "ring", "out"]
-      , let view = if name == "kernel" then fmap (withoutContinuations facts domain) else id
+      , name <- ["kernel", "peer-kernel", "ring", "out"]
+      , let view = case name of
+              "kernel" -> fmap (withoutContinuations facts domain)
+              "peer-kernel" -> fmap (withoutContinuations facts (peer domain))
+              _ -> id
       , view (regionBytes stock name) /= view (regionBytes owned name)
       ]
     registerDifferences =
