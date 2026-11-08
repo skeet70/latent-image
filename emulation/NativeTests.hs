@@ -242,6 +242,9 @@ schemaContract=do
  expect "batch maxJsonBytes"(get batch "maxJsonBytes")(toInteger batchJsonBytes)
  expect "batch maxArtifactBytes"(get batch "maxArtifactBytes")(toInteger batchArtifactBytes)
  expect "batch summary cases maxItems"(get(get(get(get defs "batchSummary")"properties")"cases")"maxItems")(toInteger batchCaseCount)
+ let contexts=get(get(get props "kernel")"properties")"stack_contexts"
+ expect "kernel stack_contexts minItems"(get contexts "minItems") 1
+ expect "kernel stack_contexts maxItems"(get contexts "maxItems")(toInteger stackContextCount)
 
 -- The recording capacity (MAX_RECORDED_EVENTS 512) is a separate engine limit from the 128 public
 -- expected-events bound: an execution records far more stub events than a case declares (the
@@ -567,7 +570,7 @@ ownedBatchApi runner=withTemporary "fuji-owned-batch"$ \root->do
 kernelOutcomes :: FilePath -> IO ()
 kernelOutcomes runner=withTemporary "fuji-kernel-outcomes"$ \root->do
  let acquire=[0xe1921f9f,0xe3510000,0x1afffffc,0xe3a01001,0xe1823f91,0xe3530000,0x1afffff8,0xe12fff1e]
-     kernel=O.KernelCase{O.kernelLimit=O.InstructionLimit 50,O.kernelStop=Just(N.GuestAddress 0xa100),O.kernelTpidrurw=Nothing,O.kernelCpacr=Nothing,O.kernelFpexc=Nothing,O.kernelUncompared=[N.Pc,N.Cpsr]}
+     kernel=O.KernelCase{O.kernelLimit=O.InstructionLimit 50,O.kernelStop=Just(N.GuestAddress 0xa100),O.kernelTpidrurw=Nothing,O.kernelCpacr=Nothing,O.kernelFpexc=Nothing,O.kernelUncompared=[N.Pc,N.Cpsr],O.kernelStackContexts=[]}
      spec ident code lock word status=O.CaseSpec
       { O.caseId=ident
       , O.caseProvenance="NativeTests.hs: kernel-case outcomes"
@@ -623,6 +626,57 @@ kernelOutcomes runner=withTemporary "fuji-kernel-outcomes"$ \root->do
  let order=N.nativeKernel(observed!!5)>>=N.observedOrder
  ensure(order==Just[N.OrderedBarrier N.Dsb,N.OrderedWrite(N.Write(N.GuestAddress 0xfffb30cc)(N.WriteBytes 4))(N.WriteValue 0)])("kernel order: "++show order)
 
+-- A kernel case may declare private stack contexts. The adapter emits the c row between the k
+-- profile row and the counts, rejects bad declarations through the public adapter, and adds no
+-- byte to a wire that declares none.
+kernelStackContextRegressions :: FilePath -> IO ()
+kernelStackContextRegressions runner=withTemporary "fuji-kernel-contexts"$ \root->do
+ base<-B.readFile "emulation/fixtures/kernel-bank-store.json" >>= jsonRead
+ copyFile "emulation/fixtures/kernel-bank-store.bin"(root </>"kernel-bank-store.bin")
+ let checked low high=case O.mkStackContext(N.GuestAddress low)(N.GuestAddress high)of Left _->False;Right _->True
+ ensure(checked 0x3000 0x3020 && not(any(\(low,high)->checked low high)[(0x3004,0x3020),(0x3000,0x3024),(0x3020,0x3020),(0x3020,0x3000)]))"mkStackContext bounds"
+ let hex value=s("0x"++replicate(8-length text)'0'++text) where text=showHex(value::Word32)""
+     context low high=obj[("low",hex low),("high",hex high)]
+     kernel contexts=obj[("stack_contexts",arr contexts)]
+     second=obj[("id",s "second-stack"),("address",hex 0x4000),("size",n 32),("permissions",s "rw"),("initial",obj[("zero",b True)])]
+     optIn=merge base[("regions",arr(list(get base "regions")++[second])),("kernel",kernel[context 0x3000 0x3020,context 0x4000 0x4020])]
+     path=root</>"case.json"
+     invalid label item=do
+      B.writeFile path(encodeCanonical item)
+      (code,report)<-runCase runner path
+      ensure(code==1 && get report "status"==s "invalid_case")(label++": "++show report)
+     withContexts contexts=merge optIn[("kernel",kernel contexts)]
+ forM_
+  [("empty contexts",merge optIn[("kernel",kernel[])])
+  ,("seventeen contexts",withContexts(replicate 17(context 0x3000 0x3020)))
+  ,("unaligned low bound",withContexts[context 0x3004 0x3020])
+  ,("unaligned high bound",withContexts[context 0x3000 0x3024])
+  ,("empty interval",withContexts[context 0x3020 0x3020])
+  ,("overlapping contexts",withContexts[context 0x3000 0x3020,context 0x3010 0x3020])
+  ,("unbacked context",withContexts[context 0x3000 0x3020,context 0x5000 0x5020])
+  ,("read-only backing",withContexts[context 0x3000 0x3020,context 0x1008 0x1010])
+  ,("initial SP outside every context",withContexts[context 0x4000 0x4020])
+  ,("unknown context field",withContexts[obj[("low",hex 0x3000),("high",hex 0x3020),("depth",n 1)]])
+  ,("context on a user case",set "kernel"(kernel[context 0x3000 0x3020])(merge base[("registers",set "cpsr"(s "0x00000010")(get base "registers"))]))
+  ](uncurry invalid)
+ (_,_,legacyWire,_)<-loadCase "emulation/fixtures/kernel-bank-store.json"
+ ensure(not(any((==["c"]).take 1 . words)(lines(BC.unpack legacyWire))))"a legacy kernel wire gained a context row"
+ B.writeFile path(encodeCanonical optIn)
+ (code,report)<-runCase runner path
+ ensure(code==0 && get report "status"==s "passed")("opted-in multi-context case: "++show report)
+ (_,_,wire,_)<-loadCase path
+ let rows=lines(BC.unpack wire)
+     at tag=findIndex((==[tag]).take 1 . words)rows
+     withoutContext=unlines(filter((/=["c"]).take 1 . words)rows)
+ case (at "k",at "c") of
+  (Just profile,Just declared)->do
+   ensure(declared==profile+1 && words(rows!!declared)==["c","2","3000","3020","4000","4020"])("context wire row: "++show rows)
+   ensure(case drop(declared+1)rows of counts:rest->length(words counts)==3 && all(all(\ch->ch>='0'&&ch<='9'))(words counts) && not(any((==["c"]).take 1 . words)rest); _->False)("context wire placement: "++show rows)
+  _->failH("opted-in wire has no c row: "++show rows)
+ B.writeFile (root</>"plain.json")(encodeCanonical(merge optIn[("kernel",obj[])]))
+ (_,_,plainWire,_)<-loadCase(root</>"plain.json")
+ ensure(BC.pack withoutContext==plainWire)"a declared context changed more than its c row"
+
 main :: IO ()
 main=do
  [runner,generator,checker]<-getArgs
@@ -658,6 +712,7 @@ main=do
  batchLimits runner
  ownedBatchApi runner
  kernelOutcomes runner
+ kernelStackContextRegressions runner
  withTemporary "fuji-native-tests"$ \root->do
   artifacts<-filter((==".bin").takeExtension) <$> listDirectory "emulation/fixtures"
   forM_ artifacts$ \name->copyFile("emulation/fixtures" </> name)(root </> name)
@@ -742,5 +797,5 @@ main=do
   (timed,code,out,_)<-runBounded 3000000 (8*1024*1024) runner[](BC.pack input)
   result<-jsonRead out
   ensure(not timed && code==ExitFailure 1 && get result "status"==s "invalid_case")"independent wire rejection failed"
- putStrLn(show(length names)++" hand-derived execution fixtures, 29 JSON rejections, 7 privileged-entry rejections, 10 kernel-case rejections, "++show(length bad)++" independent wire rejections, execute-never boundary, stub/output/deadline checks, contract limit boundaries and schema agreement passed")
+ putStrLn(show(length names)++" hand-derived execution fixtures, 29 JSON rejections, 7 privileged-entry rejections, 10 kernel-case rejections, kernel stack-context declaration boundaries, "++show(length bad)++" independent wire rejections, execute-never boundary, stub/output/deadline checks, contract limit boundaries and schema agreement passed")
  putStrLn(show batched++"-case fixture batch, 9 isolation controls, batch failure and framing controls, batch limit boundaries, the owned-case batch API and kernel-case outcomes passed")

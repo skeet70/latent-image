@@ -42,7 +42,7 @@ fixture image index route = CaseSpec
   , caseExpectedStatus = if busy then InstructionBudget else Returned
   , caseExpectedRegisters = if busy then [(R2, 0xfff52890)] else [(R0, expected), (Sp, 0x308000)]
   , caseExpectedMemory = [], caseCp14Identity = Nothing
-  , caseKernel = Just (KernelCase (InstructionLimit budget) Nothing Nothing Nothing Nothing [])
+  , caseKernel = Just (KernelCase (InstructionLimit budget) Nothing Nothing Nothing Nothing [] [])
   }
   where
     aggregate = case route of Aggregate _ _ -> True; Joined _ -> True; _ -> False

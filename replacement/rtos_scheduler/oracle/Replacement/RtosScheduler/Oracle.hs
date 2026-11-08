@@ -803,7 +803,7 @@ caseSpec env domain body label helper row =
     , caseExpectedRegisters = [(R4, sentinel R4)]
     , caseExpectedMemory = []
     , caseCp14Identity = Nothing
-    , caseKernel = Just (KernelCase instructionLimit Nothing Nothing Nothing Nothing (uncomparedRegisters helper row))
+    , caseKernel = Just (KernelCase instructionLimit Nothing Nothing Nothing Nothing (uncomparedRegisters helper row) [])
     }
   where
     layout = envLayout env

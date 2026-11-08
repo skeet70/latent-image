@@ -78,7 +78,7 @@ poke at value region@(CaseRegion raw permission)
 makeSpec :: Env -> Domain -> B.ByteString -> Maybe B.ByteString -> Service -> Scenario -> String -> CaseSpec
 makeSpec env domain loader owned service scenario label = spec
   { caseId=label, caseEntry=address entry, caseRegions=regions, caseFunctions=functions
-  , caseInitial=initial, caseExpectedStatus=endStatus, caseKernel=Just (KernelCase (InstructionLimit 1600) stop Nothing Nothing Nothing excluded)
+  , caseInitial=initial, caseExpectedStatus=endStatus, caseKernel=Just (KernelCase (InstructionLimit 1600) stop Nothing Nothing Nothing excluded [])
   , caseExpectedRegisters=[(R0,expectedR0 service scenario endStatus)], caseProvenance="X-M1 1.50 exact S3a contracts, x70view 55436fc85c", caseExclusion="One service call; retained helpers execute at stock addresses; dispatcher entry is a stop boundary."
   }
   where
