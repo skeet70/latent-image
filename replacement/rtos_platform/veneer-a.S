@@ -576,3 +576,80 @@ xm1_platform_veneer_global_lock_helper_observe:
     b helper_observe
 .size xm1_platform_veneer_global_lock_helper_observe, .-xm1_platform_veneer_global_lock_helper_observe
 
+
+.section .veneer.data_queue_create,"ax",%progbits
+.global xm1_platform_veneer_data_queue_create
+.type xm1_platform_veneer_data_queue_create,%function
+xm1_platform_veneer_data_queue_create:
+    b xm1_rtos_data_queue_create
+.size xm1_platform_veneer_data_queue_create, .-xm1_platform_veneer_data_queue_create
+
+.section .veneer.data_queue_delete,"ax",%progbits
+.global xm1_platform_veneer_data_queue_delete
+.type xm1_platform_veneer_data_queue_delete,%function
+xm1_platform_veneer_data_queue_delete:
+    b xm1_rtos_data_queue_delete
+.size xm1_platform_veneer_data_queue_delete, .-xm1_platform_veneer_data_queue_delete
+
+.section .veneer.data_queue_send,"ax",%progbits
+.global xm1_platform_veneer_data_queue_send
+.type xm1_platform_veneer_data_queue_send,%function
+xm1_platform_veneer_data_queue_send:
+    b xm1_rtos_data_queue_send
+.size xm1_platform_veneer_data_queue_send, .-xm1_platform_veneer_data_queue_send
+
+.section .veneer.data_queue_send_poll,"ax",%progbits
+.global xm1_platform_veneer_data_queue_send_poll
+.type xm1_platform_veneer_data_queue_send_poll,%function
+xm1_platform_veneer_data_queue_send_poll:
+    b xm1_rtos_data_queue_send_poll
+.size xm1_platform_veneer_data_queue_send_poll, .-xm1_platform_veneer_data_queue_send_poll
+
+.section .veneer.data_queue_send_poll_handler,"ax",%progbits
+.global xm1_platform_veneer_data_queue_send_poll_handler
+.type xm1_platform_veneer_data_queue_send_poll_handler,%function
+xm1_platform_veneer_data_queue_send_poll_handler:
+    b xm1_rtos_data_queue_send_poll_handler
+.size xm1_platform_veneer_data_queue_send_poll_handler, .-xm1_platform_veneer_data_queue_send_poll_handler
+
+.section .veneer.data_queue_send_timeout,"ax",%progbits
+.global xm1_platform_veneer_data_queue_send_timeout
+.type xm1_platform_veneer_data_queue_send_timeout,%function
+xm1_platform_veneer_data_queue_send_timeout:
+    b xm1_rtos_data_queue_send_timeout
+.size xm1_platform_veneer_data_queue_send_timeout, .-xm1_platform_veneer_data_queue_send_timeout
+
+.section .veneer.data_queue_force_send,"ax",%progbits
+.global xm1_platform_veneer_data_queue_force_send
+.type xm1_platform_veneer_data_queue_force_send,%function
+xm1_platform_veneer_data_queue_force_send:
+    b xm1_rtos_data_queue_force_send
+.size xm1_platform_veneer_data_queue_force_send, .-xm1_platform_veneer_data_queue_force_send
+
+.section .veneer.data_queue_force_send_handler,"ax",%progbits
+.global xm1_platform_veneer_data_queue_force_send_handler
+.type xm1_platform_veneer_data_queue_force_send_handler,%function
+xm1_platform_veneer_data_queue_force_send_handler:
+    b xm1_rtos_data_queue_force_send_handler
+.size xm1_platform_veneer_data_queue_force_send_handler, .-xm1_platform_veneer_data_queue_force_send_handler
+
+.section .veneer.data_queue_receive,"ax",%progbits
+.global xm1_platform_veneer_data_queue_receive
+.type xm1_platform_veneer_data_queue_receive,%function
+xm1_platform_veneer_data_queue_receive:
+    b xm1_rtos_data_queue_receive
+.size xm1_platform_veneer_data_queue_receive, .-xm1_platform_veneer_data_queue_receive
+
+.section .veneer.data_queue_receive_poll,"ax",%progbits
+.global xm1_platform_veneer_data_queue_receive_poll
+.type xm1_platform_veneer_data_queue_receive_poll,%function
+xm1_platform_veneer_data_queue_receive_poll:
+    b xm1_rtos_data_queue_receive_poll
+.size xm1_platform_veneer_data_queue_receive_poll, .-xm1_platform_veneer_data_queue_receive_poll
+
+.section .veneer.data_queue_receive_timeout,"ax",%progbits
+.global xm1_platform_veneer_data_queue_receive_timeout
+.type xm1_platform_veneer_data_queue_receive_timeout,%function
+xm1_platform_veneer_data_queue_receive_timeout:
+    b xm1_rtos_data_queue_receive_timeout
+.size xm1_platform_veneer_data_queue_receive_timeout, .-xm1_platform_veneer_data_queue_receive_timeout

@@ -16,6 +16,7 @@ import Control.Monad (foldM)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import Data.List (isPrefixOf, sortOn)
+import Data.Maybe (catMaybes)
 import Data.Word (Word32)
 import Numeric (readHex)
 
@@ -34,12 +35,13 @@ data AggregateImage = AggregateImage
   deriving (Eq, Show)
 
 parseAggregateSymbols :: B.ByteString -> Either String [AggregateSymbol]
-parseAggregateSymbols bytes = mapM parseLine (filter (not . C.null) (C.lines bytes))
+parseAggregateSymbols bytes = catMaybes <$> mapM parseLine (filter (not . C.null) (C.lines bytes))
   where
     parseLine line = case C.words line of
       [address, size, kind, name] | kind `elem` ["T", "t"] ->
-        AggregateSymbol (C.unpack name) <$> hexWord address <*> hexWord size
-      _ -> Left ("aggregate symbol row is not ADDR SIZE T NAME: " ++ C.unpack line)
+        Just <$> (AggregateSymbol (C.unpack name) <$> hexWord address <*> hexWord size)
+      [_, _, _, _] -> Right Nothing
+      _ -> Left ("aggregate symbol row is not ADDR SIZE KIND NAME: " ++ C.unpack line)
     hexWord text = case readHex (C.unpack text) of
       [(value, "")] | value <= toInteger (maxBound :: Word32) -> Right (fromInteger value)
       _ -> Left ("aggregate symbol field is not a 32-bit hex word: " ++ C.unpack text)
@@ -48,8 +50,9 @@ parseAggregateSymbols bytes = mapM parseLine (filter (not . C.null) (C.lines byt
 aggregateImage :: [AggregateSymbol] -> B.ByteString -> Either String AggregateImage
 aggregateImage symbols bytes = case sortOn symbolAddress symbols of
   [] -> Left "aggregate image has no code symbols"
-  rows ->
-    let base = symbolAddress (head rows)
+  first : rest ->
+    let rows = first : rest
+        base = symbolAddress first
         top = maximum [symbolAddress row + symbolSize row | row <- rows]
      in if top - base /= fromIntegral (B.length bytes)
           then Left ("aggregate image spans " ++ show (B.length bytes) ++ " bytes, symbols span " ++ show (top - base))
@@ -61,7 +64,7 @@ symbolsWithPrefixes prefixes = filter (\row -> any (`isPrefixOf` symbolName row)
 sliceAggregate :: AggregateImage -> Word32 -> Word32 -> Either String B.ByteString
 sliceAggregate image address size
   | address < imageBase image = Left "aggregate slice starts below its image"
-  | address + size > imageBase image + fromIntegral (B.length (imageBytes image)) = Left "aggregate slice ends above its image"
+  | address + size > imageBase image + fromIntegral (B.length (imageBytes image)) = Left ("aggregate slice ends above its image: " ++ show (address, size, imageBase image, B.length (imageBytes image)))
   | otherwise =
       Right (B.take (fromIntegral size) (B.drop (fromIntegral (address - imageBase image)) (imageBytes image)))
 

@@ -43,8 +43,8 @@ main = do
   symbolsB <- traverse (readSymbols) symbolsBPath
   checkStorageBudget (takeDirectory resultsPath)
   createDirectoryIfMissing True cacheRoot
-  let stockA = Image 0x40000 loaderABytes
-      stockB = Image 0xd0000 loaderBBytes
+  let stockA = Image 0x40000 loaderABytes []
+      stockB = Image 0xd0000 loaderBBytes []
       ownedAImage = ownedImage DomainA ownedABytes symbolsA
       ownedBImage = ownedImage DomainB ownedBBytes symbolsB
   runA <- runFamily runner cacheRoot (takeDirectory resultsPath </> "domain-a") facts DomainA stockA ownedAImage
@@ -79,7 +79,7 @@ main = do
 ownedImage :: Domain -> B.ByteString -> Maybe [Agg.AggregateSymbol] -> Image
 ownedImage domain bytes Nothing = Image (minimum (map fst (extents domain))) bytes []
 ownedImage _ bytes (Just symbols) =
-  let image = either fail pure (Agg.aggregateImage symbols bytes)
+  let image = either error id (Agg.aggregateImage symbols bytes)
       selected = Agg.symbolsWithPrefixes ["xm1_rtos_semaphore_", "xm1_platform_veneer_semaphore_"] symbols
    in Image (Agg.imageBase image) (Agg.imageBytes image) selected
 

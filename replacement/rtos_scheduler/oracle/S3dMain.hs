@@ -426,14 +426,6 @@ specFor d role one loaderA loaderB aggregate owned = CaseSpec
       ]
   , caseFunctions =
       [(GuestAddress (fromIntegral address), size) | (address, size) <- mergeSpans (ownedFunctions ++ aggregateFunctions)]
-  where
-    ownedFunctions =
-      [(entryOf d service, extentOf service) | service <- [Terminate, ChangePriority, TimedSleep, ReleaseWait, HandlerRelease, Delay]]
-      ++ [(bodyBase, 0x1300), (stubBase, 0x80), (switchOf d, 4)]
-      ++ helperRanges d ++ helperRanges other
-    aggregateFunctions = case (role, aggregate) of
-      (Owned, Just (Aggregate _ symbols)) -> [(Agg.symbolAddress symbol, Agg.symbolSize symbol) | symbol <- symbols]
-      _ -> []
   , caseInitial =
       [(R0, caseArgument one), (R1, caseArgument1 one), (R2, 0), (R3, 0), (R12, 0)]
       ++ [(register, 0xabc00000 + fromIntegral (fromEnum register)) | register <- [R4 .. R11]]
@@ -449,6 +441,13 @@ specFor d role one loaderA loaderB aggregate owned = CaseSpec
     loader = if d == DomainA then loaderA else loaderB
     otherLoader = if other == DomainA then loaderA else loaderB
     fixture = setW (handlerCell d) (if caseHandler one then 1 else 0) (caseSetup one d (baseFixture d))
+    ownedFunctions =
+      [(entryOf d service, extentOf service) | service <- [Terminate, ChangePriority, TimedSleep, ReleaseWait, HandlerRelease, Delay]]
+      ++ [(bodyBase, 0x1300), (stubBase, 0x80), (switchOf d, 4)]
+      ++ helperRanges d ++ helperRanges other
+    aggregateFunctions = case (role, aggregate) of
+      (Owned, Just (Aggregate _ symbols)) -> [(Agg.symbolAddress symbol, Agg.symbolSize symbol) | symbol <- symbols]
+      _ -> []
     bodyBase = if d == DomainA then 0x50000 else 0xe0000
     code = case role of
       Stock -> patchStub d (loaderBytes d loader) (caseLifecycle one)

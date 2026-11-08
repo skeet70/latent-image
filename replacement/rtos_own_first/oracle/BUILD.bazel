@@ -36,6 +36,7 @@ haskell_library(
         "//host:containers",
         "//host:directory",
         "//host:filepath",
+        "//host:first-stage",
         "//host:host-support",
         "//host:json",
         "//host:text",

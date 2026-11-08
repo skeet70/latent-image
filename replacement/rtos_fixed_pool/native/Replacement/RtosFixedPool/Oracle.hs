@@ -37,6 +37,7 @@ import Data.Aeson (FromJSON (..), eitherDecodeStrict', withObject, (.:))
 import Data.Bits ((.&.), (.|.), complement, shiftL, shiftR)
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
+import Data.List (sortOn)
 import Data.Word (Word32, Word8)
 import Emulation.CachedNativeBatch (BatchReuse, cachedObservedBatch)
 import Emulation.NativeCase (caseIdText)

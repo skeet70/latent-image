@@ -130,8 +130,8 @@ ownedImage domain bytes symbols = case [Agg.symbolAddress symbol | symbol <- sym
     base <- origin domain (M.fromList [(Agg.symbolName symbol, Agg.symbolAddress symbol) | symbol <- symbols])
     pure (Image base bytes [])
   _ -> do
-    let image = either fail pure (Agg.aggregateImage symbols bytes)
-        selected = Agg.symbolsWithPrefixes ["xm1_rtos_fixed_pool_", "xm1_platform_veneer_fixed_pool_", "_RINvNtNtCs8O56LNNgKAo_25xm1_rtos_fixed_pool_stage"] symbols
+    image <- either fail pure (Agg.aggregateImage symbols bytes)
+    let selected = Agg.symbolsWithPrefixes ["xm1_rtos_fixed_pool_", "xm1_platform_veneer_fixed_pool_", "_RINvNtNtCs8O56LNNgKAo_25xm1_rtos_fixed_pool_stage"] symbols
     pure (Image (Agg.imageBase image) (Agg.imageBytes image) selected)
 
 required :: String -> IO FilePath

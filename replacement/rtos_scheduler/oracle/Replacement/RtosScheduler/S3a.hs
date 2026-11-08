@@ -111,7 +111,7 @@ makeSpec env domain loader owned service scenario label = spec
       Just (Aggregate _ _) -> foldl' installSymbol loader selected
         where
           installSymbol old symbol = case aggregateImage of
-            Just image -> either error id (Agg.installSymbol loader old image symbol)
+            Just image -> either error id (Agg.installSymbol loaderBase old image symbol)
             Nothing -> old
     slice :: Word32 -> Word32 -> B.ByteString
     slice at size=B.take (fromIntegral size) (B.drop (fromIntegral (at-loaderBase)) bytes)
@@ -152,7 +152,7 @@ makeSpec env domain loader owned service scenario label = spec
     regions=foldl' (\rs (at,value)->map (poke at value) rs) (rawRegions++fixtureRegions) patches
     helpers=if domain==DomainA then [(0x439d8,0x3c),(0x43a14,0x28),(0x43c48,0x5c),(0x43ca4,0x7c),(0x43d20,0xb0),(0x43dd0,0x48),(0x43f70,0x2c),(0x44018,0x2c),(0x44134,0x80),(0x433e4,0x60)] else [(0xd398c,0x3c),(0xd39c8,0x28),(0xd3c04,0x5c),(0xd3c60,0x7c),(0xd3cdc,0xb0),(0xd3d8c,0x48),(0xd3f2c,0x2c),(0xd3fd4,0x30),(0xd40f4,0x80),(0xd33e4,0x60)]
     functions=(case owned of
-      Just (Aggregate _ _) -> mergeSpans (symbolSpans ++ helpers)
+      Just (Aggregate _ _) -> [(address at,size) | (at,size)<-mergeSpans (symbolSpans ++ helpers)]
       _ -> [(address at,size) | (at,size)<-serviceExtent domain service:helpers]) ++ fixtureFunctions
     (endStatus,stop)=expected env domain service scenario
     excluded=Cpsr : (if endStatus==InstructionBudget then [R0,R1,R2,R3,R4,R5,R6,R7,R8,R9,R10,R11,R12,Sp,Lr,Pc] else if stop/=Nothing then [R1,R2,R3,R4,R5,R6,R7,R8,R9,R10,R11,R12,Sp,Lr] else [R1,R2,R3,R12,Lr])

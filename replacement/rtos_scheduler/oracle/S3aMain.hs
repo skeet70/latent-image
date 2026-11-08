@@ -42,7 +42,7 @@ main=do
   lookupEnv "BUILD_WORKSPACE_DIRECTORY" >>= mapM_ setCurrentDirectory
   loaders<-mapM (\name->input name >>= B.readFile) ["--loader-a","--loader-b"]
   owned<-mapM B.readFile ownedPaths
-  symbols<-mapM (traverse (\path->either fail pure . Agg.parseAggregateSymbols =<< B.readFile path)) symbolsPaths
+  parsedSymbols<-mapM (traverse (\path->either fail pure . Agg.parseAggregateSymbols =<< B.readFile path)) symbolsPaths
   work<-required args "--work" >>= makeAbsolute
   summary<-required args "--summary" >>= makeAbsolute
   exists<-doesPathExist work
@@ -51,13 +51,13 @@ main=do
   layout<-B.readFile layoutPath >>= orFail . parseLayout
   env<-orFail (mkEnv layout regions)
   createDirectoryIfMissing True work
-  reports<-fmap concat . forM (zip3 domains loaders (zip owned symbols)) $ \(domain,loader,(bin,symbols))->do
+  reports<-fmap concat . forM (zip3 domains loaders (zip owned parsedSymbols)) $ \(domain,loader,(bin,symbolRows))->do
     unless (sha256Hex (sha256 loader)==loaderSha256 domain) (fail "loader identity differs")
     forM services $ \service->do
       let rows=zip [0::Int ..] (scenarios service)
           label role index=role++"-"++show index
-          linked = case symbols of
-            Just rows -> Just (Aggregate bin rows)
+          linked = case symbolRows of
+            Just parsed -> Just (Aggregate bin parsed)
             Nothing -> Just (Standalone bin)
           spec role index row=makeSpec env domain loader (if role `elem` ["owned","mutant"] then linked else Nothing) service row (label role index)
           build role index row=let raw=spec role index row in case role of "equivalent"->controlSpec True raw; "mutant"->controlSpec False raw; _->raw

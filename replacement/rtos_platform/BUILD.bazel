@@ -194,6 +194,36 @@ xm1_rust_staticlib(
     for domain in ["a", "b"]
 ]
 
+[
+    xm1_rust_rlib(
+        name = "data-queue-%s-rlib" % domain,
+        src = "//replacement/rtos_data_queue:stage/adapter.rs",
+        crate_name = "xm1_rtos_data_queue_abi",
+        data = [
+            "//replacement/rtos_data_queue:src/admission.rs",
+            "//replacement/rtos_data_queue:src/create.rs",
+            "//replacement/rtos_data_queue:src/env.rs",
+            "//replacement/rtos_data_queue:src/id.rs",
+            "//replacement/rtos_data_queue:src/lib.rs",
+            "//replacement/rtos_data_queue:src/ops.rs",
+            "//replacement/rtos_data_queue:src/ring.rs",
+            "//replacement/rtos_data_queue:src/status.rs",
+            "//replacement/rtos_data_queue:src/timeout.rs",
+            "//replacement/rtos_layout:src/lib.rs",
+            "//replacement/rtos_reservation:src/lib.rs",
+        ],
+        rustc_flags = [
+            "--cfg",
+            "'feature=\"domain-%s\"'" % domain,
+            "--cfg",
+            "'feature=\"stage\"'",
+            "--cfg",
+            "'feature=\"component\"'",
+        ],
+    )
+    for domain in ["a", "b"]
+]
+
 xm1_rust_rlib(
     name = "global-lock-rlib",
     src = "//replacement/rtos_global_lock:stage/abi.rs",
@@ -217,6 +247,7 @@ _ARCHIVES = {
         ":scheduler-a-rlib",
         ":scheduler-s2-a-rlib",
         ":scheduler-s3c-a-rlib",
+        ":data-queue-a-rlib",
         ":own-first-a-rlib",
         ":semaphore-a-rlib",
         ":fixed-pool-a-rlib",
@@ -228,6 +259,7 @@ _ARCHIVES = {
         ":scheduler-b-rlib",
         ":scheduler-s2-b-rlib",
         ":scheduler-s3c-b-rlib",
+        ":data-queue-b-rlib",
         ":own-first-b-rlib",
         ":semaphore-b-rlib",
         ":fixed-pool-b-rlib",

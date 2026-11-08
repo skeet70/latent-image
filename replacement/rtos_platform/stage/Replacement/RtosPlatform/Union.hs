@@ -32,7 +32,7 @@ import Data.Word (Word32)
 import Numeric (readHex)
 import Replacement.RtosOwnFirst.Regions (Domain (..), Extent (..), GuestAddress (..), domains, extentBytes, extentContains)
 
-data Group = OwnFirst | S1 | S2 | S3a | S3b | S3c | Semaphore | FixedPool | TaskRecords | GlobalLock
+data Group = OwnFirst | S1 | S2 | S3a | S3b | S3c | Semaphore | FixedPool | TaskRecords | DataQueue | GlobalLock
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 groupLabel :: Group -> String
@@ -46,6 +46,7 @@ groupLabel value = case value of
   Semaphore -> "semaphore"
   FixedPool -> "fixed-pool"
   TaskRecords -> "task-records"
+  DataQueue -> "data-queue"
   GlobalLock -> "global-lock"
 
 data Entry = Entry

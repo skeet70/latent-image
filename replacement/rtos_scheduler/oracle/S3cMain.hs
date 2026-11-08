@@ -116,7 +116,7 @@ callbackCode domain row = wordsBytes (capture ++ mode ++ [0xe12fff1e])
       _ -> []
 
 spec :: (Word32, Word32) -> [(Word32, Word32)] -> Domain -> Entry -> Row -> B.ByteString -> String -> CaseSpec
-spec (codeLo, codeHi) functionSpans domain entry row code ident = CaseSpec ident "X-M1 1.50 S3c contracts at 55436fc85c, synthetic typed scheduler state" "one native service call, no concurrent CPU or devices beyond IRQ pending words" (ga (entryAt domain entry)) (ga 0x920000) (regions ++ [exitRegion]) functionSpans initial Returned [(R4,0xabc00004)] [] Nothing (Just kernel)
+spec (codeLo, codeHi) functionSpans domain entry row code ident = CaseSpec ident "X-M1 1.50 S3c contracts at 55436fc85c, synthetic typed scheduler state" "one native service call, no concurrent CPU or devices beyond IRQ pending words" (ga (entryAt domain entry)) (ga 0x920000) (regions ++ [exitRegion]) [(ga at,size) | (at,size) <- functionSpans] initial Returned [(R4,0xabc00004)] [] Nothing (Just kernel)
   where
     ga = GuestAddress . fromIntegral
     codeRegions = [mkRegion (RegionId "code-loader") (ga codeLo) (fromIntegral(codeHi-codeLo)) ReadExecute (B.take (fromIntegral(codeHi-codeLo)) (B.drop (fromIntegral(codeLo-loaderBase domain)) code))]
@@ -188,10 +188,10 @@ contractHolds entry row reference observation = case caseOutcome reference obser
 
 
 branchTarget :: Word32 -> Word32 -> Word32
-branchTarget at word = at + 8 + delta * 4
+branchTarget at word = at + 8 + fromIntegral (delta * 4)
   where
-    immediate = word .&. 0xffffff
-    delta = if immediate .&. 0x800000 /= 0 then fromIntegral (immediate - 0x1000000 :: Int) else fromIntegral immediate
+    immediate = fromIntegral (word .&. 0xffffff) :: Int
+    delta = if immediate .&. 0x800000 /= 0 then immediate - 0x1000000 else immediate
 
 mergeSpans :: [(Word32, Word32)] -> [(Word32, Word32)]
 mergeSpans spans = go (sortOn fst spans)
@@ -232,14 +232,14 @@ main = do
     symbols <- traverse readSymbols symbolsPath
     let digest = sha256Hex . sha256
         aggregate = case symbols of
-          Just rows -> not (null rows)
+          Just parsed -> not (null parsed)
           Nothing -> False
     unless (digest loader == loaderSha256 (if domain == A then R.DomainA else R.DomainB)) (fail "loader is not the pinned X-M1 1.50 image")
     unless (aggregate || B.length owned == fromIntegral(entryAt domain Enable - entryAt domain DeliveryLoop) + extent Enable) (fail "owned binary extent differs")
     B.writeFile (work </> ("inputs-" ++ show domain ++ ".json")) (encodeCanonical(object ["loader_sha256" .= digest loader,"owned_sha256" .= digest owned,"runner_sha256" .= digest runnerBytes]))
     let ownedBase = entryAt domain DeliveryLoop
         selected = maybe [] (Agg.symbolsWithPrefixes ["s3c_", "xm1_platform_veneer_s3c_"]) symbols
-        aggregateImage = fmap (\rows -> Agg.AggregateImage (minimum (map Agg.symbolAddress rows)) owned) symbols
+        aggregateImage = fmap (\parsed -> Agg.AggregateImage (minimum (map Agg.symbolAddress parsed)) owned) symbols
         standaloneLoader = foldl (\bytes entry -> let address=entryAt domain entry in poke bytes (address-loaderBase domain) (B.take (extent entry) (B.drop (fromIntegral(address-ownedBase)) owned))) loader [minBound..maxBound]
         ownedLoader = case aggregateImage of
           Nothing -> standaloneLoader

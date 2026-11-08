@@ -74,7 +74,7 @@ spec domainB service (Row handle context cpsr state flags exists discarded self 
   ga = GuestAddress . fromIntegral
   delta = if domainB then 0x8ffc0 else 0
   base = if domainB then 0xd0000 else 0x40000
-  codeRegions = [mkRegion (RegionId ("code-"++show at)) (ga at) size ReadExecute (B.take size (B.drop (fromIntegral (at-base)) code)) | (at,size) <- codeSpans]
+  codeRegions = [mkRegion (RegionId ("code-"++show at)) (ga at) (fromIntegral size) ReadExecute (B.take (fromIntegral size) (B.drop (fromIntegral (at-base)) code)) | (at,size) <- codeSpans]
   localRam = if domainB then 0x400e0000 else 0x40050000
   table = localRam + if domainB then 0x458c else 0x45cc
   own = if domainB then 2 else 1
