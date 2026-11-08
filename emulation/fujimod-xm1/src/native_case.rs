@@ -21,9 +21,10 @@
 //!
 //! A privileged case enters in SVC or SYS with its own I and F bits and must
 //! stay in that mode with T clear. Beyond the user profile it admits
-//! `cpsid i`, `cpsie i` and register-form `msr CPSR_c`/`msr CPSR_fc` whose
-//! source keeps the entry mode and T clear, and refuses SPSR and banked status
-//! access, user-bank LDM/STM and ERET. With a case CP14 identity it serves
+//! `cpsie`/`cpsid` naming I, F or both with the A bit and mode field clear, and
+//! register-form `msr CPSR_c`/`msr CPSR_fc` whose source keeps the entry mode
+//! and T clear, and refuses SPSR and banked status access, user-bank LDM/STM
+//! and ERET. With a case CP14 identity it serves
 //! `mrc p14, 0, Rt, c2, c0, 0` (Rt not PC) in the instruction hook by the law of
 //! FujiMod's `rprofile::core::Core` (crates/emulator-cpu-unicorn/src/rprofile/core.rs:783-790):
 //! a passing condition writes the identity to Rt, and the PC advances either way.
@@ -84,8 +85,11 @@ const CPSR_MODE: u32 = 0x1f;
 const CPSR_THUMB: u32 = 1 << 5;
 /// NZCVQ, GE, I, F and the mode: the bits a privileged entry CPSR may set.
 const PRIVILEGED_ENTRY_BITS: u32 = 0xf80f_00df;
-const CPSIE_I: u32 = 0xf108_0080;
-const CPSID_I: u32 = 0xf10c_0080;
+/// The imod field and the I and F mask bits of `cpsie`/`cpsid`.
+const CPS_IMOD: u32 = 3 << 18;
+const CPS_FLAGS: u32 = 1 << 7 | 1 << 6;
+/// `cpsie`/`cpsid` without imod, A, I, F, M or the mode field.
+const CPS_BASE: u32 = 0xf100_0000;
 /// `msr CPSR_c, Rn` and `msr CPSR_fc, Rn` without cond and Rn.
 const MSR_CPSR_C: u32 = 0x0121_f000;
 const MSR_CPSR_FC: u32 = 0x0129_f000;
@@ -470,6 +474,32 @@ enum ProfileWord {
     Kernel(KernelWord),
 }
 
+/// A `cpsie`/`cpsid` word that changes only the I and F mask bits.
+#[derive(Clone, Copy, Debug)]
+enum CpsMask {
+    EnableI,
+    EnableF,
+    EnableIf,
+    DisableI,
+    DisableF,
+    DisableIf,
+}
+
+impl CpsMask {
+    fn of(word: u32) -> Option<Self> {
+        let form = match (word >> 18 & 3, word >> 6 & 3) {
+            (0b10, 0b10) => Self::EnableI,
+            (0b10, 0b01) => Self::EnableF,
+            (0b10, 0b11) => Self::EnableIf,
+            (0b11, 0b10) => Self::DisableI,
+            (0b11, 0b01) => Self::DisableF,
+            (0b11, 0b11) => Self::DisableIf,
+            _ => return None,
+        };
+        (word & !(CPS_IMOD | CPS_FLAGS) == CPS_BASE).then_some(form)
+    }
+}
+
 impl Profile {
     fn mode(self) -> u32 {
         match self {
@@ -489,7 +519,7 @@ impl Profile {
         let Self::Privileged { identity, kernel, .. } = self else {
             return if excluded(word) { ProfileWord::Excluded } else { ProfileWord::Ordinary };
         };
-        if matches!(word, CPSIE_I | CPSID_I) {
+        if CpsMask::of(word).is_some() {
             return ProfileWord::Ordinary;
         }
         let conditional = word >> 28 != 15;
