@@ -269,6 +269,19 @@ haskell_binary(
     ],
 )
 
+haskell_binary(
+    name = "place-platform",
+    srcs = ["stage/PlaceMain.hs"],
+    main_file = "stage/PlaceMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":platform-artifact",
+        "//host:base",
+        "//host:bytestring",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+    ],
+)
+
 haskell_test(
     name = "platform-tests",
     size = "small",
