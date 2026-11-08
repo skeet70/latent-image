@@ -152,6 +152,7 @@ haskell_binary(
     ghcopts = _GHCOPTS,
     deps = [
         ":scheduler-oracle-lib",
+        "//emulation:cached-native-batch",
         "//emulation:case-sha256",
         "//emulation:native-observation",
         "//emulation:owned-case",

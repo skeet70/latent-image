@@ -2,7 +2,7 @@
 module Replacement.RtosScheduler.S2 (main) where
 
 import Control.Monad (forM, forM_, unless, when)
-import Data.Aeson (object, (.=))
+import Data.Aeson (Value, object, (.=))
 import Data.Bits ((.&.), (.|.), shiftL)
 import qualified Data.ByteString as B
 import Data.Char (toLower)
@@ -10,6 +10,7 @@ import Data.List (sortOn)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe)
 import Data.Word (Word32)
+import Emulation.CachedNativeBatch (cachedObservedBatch)
 import Emulation.NativeObservation
 import Emulation.OwnedCase
 import Emulation.Sha256 (sha256, sha256Hex)
@@ -326,6 +327,11 @@ order o = fromMaybe (error "truncated kernel order") (nativeKernel o >>= observe
 writes :: Word32 -> NativeObservation -> [Word32]
 writes address o = [fromIntegral v | OrderedWrite (Write a _) (WriteValue v) <- order o, a==guest address]
 
+firstWriteDiff :: NativeObservation -> NativeObservation -> Value
+firstWriteDiff s o = case [ (i,a,b) | (i,a,b) <- zip3 [0 :: Int ..] (order s) (order o), a /= b ] of
+  (i,a,b):_ -> object ["index" .= i, "stock" .= show a, "owned" .= show b]
+  [] -> object ["index" .= length (order s), "stock" .= ("-"::String), "owned" .= ("-"::String)]
+
 filtered :: NativeObservation -> NativeObservation
 filtered o = o { nativeMemory=filter (not . excluded . fst) (nativeMemory o), nativeKernel=fmap (\k -> k {observedOrder=fmap (filter keep) (observedOrder k)}) (nativeKernel o) }
   where
@@ -377,6 +383,7 @@ main = do
   paths <- mapM input ["--loader-a","--loader-b","--owned-a","--owned-b","--symbols-a","--symbols-b"]
   work <- required args "--work" >>= makeAbsolute
   summary <- required args "--summary" >>= makeAbsolute
+  cache <- required args "--cache-root" >>= makeAbsolute
   lookupEnv "BUILD_WORKSPACE_DIRECTORY" >>= mapM_ setCurrentDirectory
   forM_ [work,summary] $ \p -> doesPathExist p >>= \exists -> when exists (fail (p++" already exists"))
   images <- case paths of
@@ -395,19 +402,22 @@ main = do
         indexed=if "--sample" `elem` args then concat [take 3 [pair | pair@(_,row)<-grid,entry row==e] | e<-[minBound..maxBound]] ++ concat [take 1 [pair | pair@(_,row)<-grid,r `elem` trigger d row] | r<-[NullOwnRegisters,NullUnlock,RemoteRestart]] else grid
         roles=[Stock,Owned,StockRepeat] ++ map Equivalent [minBound..maxBound] ++ map Mutant [minBound..maxBound] ++ map Revert [NullOwnRegisters,NullUnlock,RemoteRestart]
         applicable role row = case role of Equivalent e -> entry row==e; Mutant e -> entry row==e; Revert r -> r `elem` trigger d row; _ -> True
-        descriptions=[(caseId s,s) | (key,row)<-indexed, role<-roles, applicable role row, let s=spec image role key row]
+        groups=[(show role,[(caseId s,s) | (key,row)<-indexed, applicable role row, let s=spec image role key row]) | role<-roles]
         directory=work </> domainLabel d
-    path <- writeBatch directory (map snd descriptions)
-    results <- loadObservedBatch runner path
-    let observations = M.fromList [(name,o) | (CaseId name,o) <- results]
+    outcomes <- forM groups $ \(label,descriptions) -> do
+      batch <- writeBatch (directory </> label) (map snd descriptions)
+      (reuse,raw) <- cachedObservedBatch cache runner batch
+      pure (label,reuse,raw)
+    let results = concat [raw | (_,_,raw) <- outcomes]
+        observations = M.fromList [(name,o) | (CaseId name,o) <- results]
     let observed role key row = observations M.! caseId (spec image role key row)
         matches role key row = expected image role row (observed role key row)
         stockHolds=and [expected image Stock row (observed Stock key row) | (key,row)<-indexed]
         checks=[(key,row,matches Owned key row) | (key,row)<-indexed]
         controls=[(show role,case role of Mutant _ -> any (\(key,row)->not (matches role key row)) chosen; Revert _ -> any (\(key,row)->not (matches role key row)) chosen; _ -> all (\(key,row)->matches role key row) chosen) | role<-drop 2 roles, let chosen=filter (applicable role . snd) indexed]
-        failures=[object ["case" .= show key,"row" .= show row,"tags" .= map redesignId (trigger d row),"stock_status" .= show (nativeStatus (observed Stock key row)),"owned_status" .= show (nativeStatus (observed Owned key row)),"stock_pc" .= show (reg Pc (observed Stock key row)),"owned_pc" .= show (reg Pc (observed Owned key row)),"owned_sp" .= show (reg Sp (observed Owned key row)),"owned_lr" .= show (reg Lr (observed Owned key row)),"owned_r0" .= show (reg R0 (observed Owned key row)),"declared_stop" .= show (stop image Owned d row),"owned_order_tail" .= show (take 8 (reverse (order (observed Owned key row)))),"owned_task18" .= show (word "tasks" 0x18 (observed Owned key row)),"owned_task1c" .= show (word "tasks" 0x1c (observed Owned key row)),"stock_task18" .= show (word "tasks" 0x18 (observed Stock key row)),"stock_task1c" .= show (word "tasks" 0x1c (observed Stock key row)),"stock_expected" .= expected image Stock row (observed Stock key row),"owned_expected" .= expected image Owned row (observed Owned key row),"differences" .= map show (comparison image row (spec image Owned key row) (observed Stock key row) (observed Owned key row))] | (key,row,ok)<-checks, not ok || not (expected image Stock row (observed Stock key row))]
+        failures=[object ["case" .= show key,"row" .= show row,"tags" .= map redesignId (trigger d row),"stock_status" .= show (nativeStatus (observed Stock key row)),"owned_status" .= show (nativeStatus (observed Owned key row)),"stock_pc" .= show (reg Pc (observed Stock key row)),"owned_pc" .= show (reg Pc (observed Owned key row)),"owned_sp" .= show (reg Sp (observed Owned key row)),"owned_lr" .= show (reg Lr (observed Owned key row)),"owned_r0" .= show (reg R0 (observed Owned key row)),"stock_r0" .= show (reg R0 (observed Stock key row)),"first_write_diff" .= firstWriteDiff (observed Stock key row) (observed Owned key row),"stock_global" .= show (word "global" 0 (observed Stock key row)),"owned_global" .= show (word "global" 0 (observed Owned key row)),"declared_stop" .= show (stop image Owned d row),"owned_order_tail" .= show (take 8 (reverse (order (observed Owned key row)))),"owned_task18" .= show (word "tasks" 0x18 (observed Owned key row)),"owned_task1c" .= show (word "tasks" 0x1c (observed Owned key row)),"stock_task18" .= show (word "tasks" 0x18 (observed Stock key row)),"stock_task1c" .= show (word "tasks" 0x1c (observed Stock key row)),"stock_expected" .= expected image Stock row (observed Stock key row),"owned_expected" .= expected image Owned row (observed Owned key row),"differences" .= map show (comparison image row (spec image Owned key row) (observed Stock key row) (observed Owned key row))] | (key,row,ok)<-checks, not ok || not (expected image Stock row (observed Stock key row))]
         holds=stockHolds && all (\(_,_,ok)->ok) checks && all snd controls
-        report=object ["domain" .= domainLabel d,"cases" .= length indexed,"untagged" .= length [() | (_,r)<-indexed,null (trigger d r)],"expected_differences" .= [object ["id" .= redesignId r,"count" .= length [() | (_,row)<-indexed,r `elem` trigger d row]] | r<-[NullOwnRegisters,NullUnlock,RemoteRestart]],"stock_holds" .= stockHolds,"owned_holds" .= all (\(_,_,ok)->ok) checks,"controls" .= [object ["name" .= name,"holds" .= ok] | (name,ok)<-controls],"failures" .= failures,"holds" .= holds]
+        report=object ["domain" .= domainLabel d,"cases" .= length indexed,"untagged" .= length [() | (_,r)<-indexed,null (trigger d r)],"expected_differences" .= [object ["id" .= redesignId r,"count" .= length [() | (_,row)<-indexed,r `elem` trigger d row]] | r<-[NullOwnRegisters,NullUnlock,RemoteRestart]],"stock_holds" .= stockHolds,"owned_holds" .= all (\(_,_,ok)->ok) checks,"controls" .= [object ["name" .= name,"holds" .= ok] | (name,ok)<-controls],"batch_reuse" .= [object ["role" .= label,"reuse" .= show reuse] | (label,reuse,_)<-outcomes],"failures" .= failures,"holds" .= holds]
     when holds (removeDirectoryRecursive directory)
     pure (holds,report)
   createDirectoryIfMissing True (takeDirectory summary)
