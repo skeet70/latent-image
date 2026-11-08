@@ -4199,6 +4199,7 @@ haskell_library(
     visibility = ["//visibility:public"],
     deps = [
         ":case-sha256",
+        ":observation-stream-lib",
         "//host/firmware:bank-allowlist",
         "//host:aeson",
         "//host:base",

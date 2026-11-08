@@ -119,6 +119,11 @@ runRoot root (label, role) = do
   admittedFile <- check (label ++ " bind writes its admission record") admissionFile
   reused <- verifyReceipt (fixtureExpected fixture) receipt
   reusedOk <- accepts (label ++ " admitted receipt reuses") reused
+  let tamperedReceipt = fixtureRoot fixture </> "tampered-observation"
+  copyTreeForTest receipt tamperedReceipt
+  B.appendFile (tamperedReceipt </> "e2e-observation-0.json") "\n"
+  tampered <- verifyReceipt (fixtureExpected fixture) tamperedReceipt
+  tamperedOk <- expectLeft (label ++ " tampered observation document refuses reuse") tampered
   changed <- mutateAndVerify fixture receipt "e2e-result.json" (\bytes -> bytes <> "\n")
   changedOk <- expectLeft (label ++ " changed receipt file refuses reuse") changed
   missing <- partialReceipt fixture
@@ -138,6 +143,10 @@ runRoot root (label, role) = do
   mutatedPrelinked <- badPrelinked fixture mutatePrelinkedManifest
   mutatedPrelinkedOk <- if role == OwnedRole
     then expectLeft (label ++ " mutated prelinked manifest refuses") mutatedPrelinked
+    else pure True
+  unboundSources <- if role == OwnedRole then badPrelinkedFile fixture "ram-push-manifest.json" mutateRenderSources else pure (Right ())
+  unboundSourcesOk <- if role == OwnedRole
+    then expectLeft (label ++ " prelinked manifest render source identity refuses") unboundSources
     else pure True
   alteredElf <- if role == OwnedRole then badPrelinkedFile fixture "kernel.elf" (\bytes -> bytes <> B.singleton 0) else pure (Right ())
   alteredElfOk <- if role == OwnedRole then expectLeft (label ++ " altered prelinked ELF refuses") alteredElf else pure True
@@ -175,7 +184,7 @@ runRoot root (label, role) = do
     [ ("mismatched qualification", "e2e-result.json", "outcome", J.String mismatchedOutcome)
     , ("missing lifetime coverage", "e2e-modal-observation.json", "whole_installed_lifetime_coverage", J.Bool False)
     ]
-  pure ([admitted, admittedFile, reusedOk, changedOk, missingOk, wrongTrajectoryOk, wrongRoleOk, malformedOk, emptyOk, prelinkedBaseOk, prelinkedSizeOk, mutatedPrelinkedOk
+  pure ([admitted, admittedFile, reusedOk, tamperedOk, unboundSourcesOk, changedOk, missingOk, wrongTrajectoryOk, wrongRoleOk, malformedOk, emptyOk, prelinkedBaseOk, prelinkedSizeOk, mutatedPrelinkedOk
        , alteredElfOk, alteredRuntimeOk, alteredInputOk, alteredReportOk, alteredProofOk, alteredCheckerOk, alteredArchiveOk, alteredSourceOk, missingCheckerOk, failingReportOk, imported] ++ refused)
 
 buildFixture :: FilePath -> FilePath -> Role -> IO Fixture
@@ -244,10 +253,19 @@ buildFixture directory receipt role = do
             , "procedure" J..= ("procedure" :: T.Text)
             ]
         ]
-  let result = J.object
+  let observationBytes = "{\"phase\":\"render-baseline\",\"trace_hits\":[]}\n" :: B.ByteString
+      observationRef = J.object
+        [ "phase" J..= ("render-baseline" :: T.Text), "path" J..= ("e2e-observation-0.json" :: FilePath)
+        , "sha256" J..= digestBytes observationBytes, "bytes" J..= (fromIntegral (B.length observationBytes) :: Integer)
+        , "trace_hits" J..= J.object
+            [ "schema" J..= (1 :: Int), "path" J..= ("e2e-observation-0.json" :: FilePath)
+            , "sha256" J..= digestBytes observationBytes, "count" J..= (0 :: Int) ]
+        ]
+      result = J.object
         [ "outcome" J..= (case role of StockRole -> "candidate-qualified"; OwnedRole -> "qualified-scoped-lifetime-diagnostic" :: T.Text)
         , "trajectory_failure" J..= (Nothing :: Maybe T.Text)
         , "forbidden_execution" J..= (Nothing :: Maybe T.Text)
+        , "observations" J..= [observationRef]
         , "phases" J..= [J.object ["name" J..= ("segment render-baseline" :: T.Text)]]
         ]
   let verified = role == OwnedRole
@@ -289,7 +307,7 @@ buildFixture directory receipt role = do
   BL.writeFile (receipt </> "e2e-render-stack-diagnostic.json") (J.encode diagnostic <> "\n")
   BL.writeFile (receipt </> "e2e-render-stack-diagnostic-request.json") (J.encode request <> "\n")
   BL.writeFile (receipt </> "e2e-modal-watch-final.json") "{}\n"
-  BL.writeFile (receipt </> "e2e-observation-0.json") "{}\n"
+  B.writeFile (receipt </> "e2e-observation-0.json") observationBytes
   BL.writeFile (receipt </> "relinked/kernel.elf") (BL.fromStrict elfBytes)
   BL.writeFile (receipt </> "relinked/ram-push-manifest.json") (J.encode manifest <> "\n")
   BL.writeFile (receipt </> "relinked/runtime.bin") (BL.fromStrict (B.pack [18, 19]))
@@ -299,14 +317,17 @@ buildFixture directory receipt role = do
   prelinkedPath <- if role == OwnedRole then do
     let prelinked = directory </> "prelinked"
         proofVariant = "modal75,menu-engine,render" :: T.Text
-        prelinkedManifest = J.object
+        prelinkedManifest sourceIdentityBytes = J.object
           [ "base" J..= ("0x00c40000" :: T.Text)
           , "size" J..= (32 :: Word32)
           , "bank_variant" J..= proofVariant
           , "runtime_sha256" J..= digestBytes (B.pack [18, 19])
-          , "source_identity" J..= J.object ["rust_object_replacement_bank" J..= archiveSha]
+          , "source_identity" J..= J.object
+              [ "rust_object_replacement_bank" J..= archiveSha
+              , "render_sources_sha256" J..= digestBytes sourceIdentityBytes ]
           ]
-        manifestBytes = BL.toStrict (J.encode prelinkedManifest <> "\n")
+    sourceIdentityBytes <- B.readFile sourceIdentityPath
+    let manifestBytes = BL.toStrict (J.encode (prelinkedManifest sourceIdentityBytes) <> "\n")
         inputBytes = B.pack [21, 22]
         report = J.object
           [ "result" J..= ("pass" :: T.Text), "functions" J..= (1 :: Int), "instructions" J..= (1 :: Int)
@@ -466,6 +487,14 @@ badSourceIdentityDigest fixture = case expectedSourceIdentity (fixtureExpected f
     B.writeFile copy wrong
     verifyInputs ((fixtureExpected fixture) { expectedSourceIdentity = Just copy })
   Nothing -> pure (Right ())
+
+mutateRenderSources :: B.ByteString -> B.ByteString
+mutateRenderSources bytes = case J.eitherDecodeStrict' bytes of
+  Right (J.Object fields) -> case KM.lookup "source_identity" fields of
+    Just (J.Object source) -> BL.toStrict (J.encode (J.Object (KM.insert "source_identity"
+      (J.Object (KM.insert "render_sources_sha256" (J.String (T.replicate 64 "f")) source)) fields)) <> "\n")
+    _ -> bytes
+  _ -> bytes
 
 mutatePrelinkedManifest :: FilePath -> IO ()
 mutatePrelinkedManifest directory = do

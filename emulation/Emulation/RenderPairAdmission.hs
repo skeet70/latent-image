@@ -52,6 +52,7 @@ import Data.String (IsString (..))
 import qualified Data.Text as T
 import Data.Word (Word32)
 import Emulation.Sha256 (Sha256, parseSha256Hex, sha256, sha256File, sha256Hex)
+import qualified Emulation.ObservationStream as OS
 import Numeric (readHex, showHex)
 import qualified RenderStack as R
 import qualified Replacement.ModalRuntime.RenderStackEvidence as E
@@ -67,7 +68,7 @@ import System.Directory
   , removeFile
   , renameFile
   )
-import System.FilePath ((</>), splitDirectories, takeDirectory, takeFileName)
+import System.FilePath ((</>), isAbsolute, splitDirectories, takeDirectory, takeFileName)
 import System.IO.Error (catchIOError, isDoesNotExistError)
 
 data Role = StockRole | OwnedRole deriving (Eq, Show)
@@ -356,6 +357,26 @@ checkFujiModPaths expected = do
     pure (if all (`isInfixOf` text) wanted then Right () else Left
       ("built viewer does not name SDK " ++ sdk ++ " for its bridge and run document"))
 
+-- | The renderer sources a frozen owned build binds, in the order host/firmware/BuildRecipeBank.hs
+-- emits them.
+renderSourceIdentityPaths :: [FilePath]
+renderSourceIdentityPaths =
+  [ "replacement/render_adapter/mod.rs"
+  , "replacement/render_adapter/entry.S"
+  , "replacement/render_adapter/class.rs"
+  , "replacement/render_adapter/calls.rs"
+  , "replacement/render_adapter/picker.rs"
+  , "replacement/render_adapter/tree.rs"
+  , "replacement/render_adapter/pane.rs"
+  , "replacement/render_adapter/build.sh"
+  , "replacement/render_commands/src/lib.rs"
+  , "replacement/menu_widgets/src/lib.rs"
+  , "replacement/menu_widgets/src/value_picker.rs"
+  , "replacement/menu_widgets/src/tree_list.rs"
+  , "replacement/menu_widgets/src/pane_drawer.rs"
+  , "host/firmware/RenderStack.hs"
+  ]
+
 checkSourceIdentity :: Expected -> IO (Either String ())
 checkSourceIdentity expected = case (expectedRole expected, expectedSourceIdentity expected) of
   (OwnedRole, Nothing) -> pure (Left "owned frozen admission needs the archive's source identity")
@@ -369,7 +390,12 @@ checkSourceIdentity expected = case (expectedRole expected, expectedSourceIdenti
         Right (J.Object fields) -> case traverse parseBinding (KM.toList fields) of
           Left problem -> pure (Left ("source identity: " ++ problem))
           Right bindings | M.null (M.fromList bindings) -> pure (Left "source identity is empty")
-          Right bindings -> go (M.toList (M.fromList bindings))
+          Right bindings
+            | expectedRole expected == OwnedRole
+            , all (not . isAbsolute) (map fst bindings)
+            , sort (map fst bindings) /= sort renderSourceIdentityPaths ->
+                pure (Left "source identity does not name the renderer sources")
+            | otherwise -> go (M.toList (M.fromList bindings))
         Right _ -> pure (Left "source identity is not an object")
  where
   parseBinding (key, J.String text) = do
@@ -406,7 +432,7 @@ checkOwnedInputs expected = case expectedRole expected of
                 ("diagnostic source " ++ sourcePath source ++ " differs from its recorded bytes"))
           prelinkedCheck <- case (expectedPrelinked expected, expectedPrelinkedBase expected, expectedPrelinkedSize expected, expectedArchiveSha expected) of
             (Nothing, _, _, _) -> pure (Right ())
-            (Just directory, Just base, Just size, Just archiveSha) -> checkPrelinked directory base size archiveSha (expectedChecker expected)
+            (Just directory, Just base, Just size, Just archiveSha) -> checkPrelinked directory base size archiveSha (expectedChecker expected) (expectedSourceIdentity expected)
             _ -> pure (Left "prelinked admission needs --prelinked-base, --prelinked-size and --archive-sha256")
           pure $ do
             unless (configRole parsed == OwnedRole) (Left "owned role was given a non-owned diagnostic configuration")
@@ -441,8 +467,8 @@ instance J.FromJSON PrelinkedProof where
       <*> fields J..: "kernel_elf_sha256" <*> fields J..: "archive_sha256" <*> fields J..: "allowlist_input_sha256"
       <*> fields J..: "report_sha256"
 
-checkPrelinked :: FilePath -> Word32 -> Word32 -> Digest -> Maybe FilePath -> IO (Either String ())
-checkPrelinked directory base size archiveSha checkerPath = do
+checkPrelinked :: FilePath -> Word32 -> Word32 -> Digest -> Maybe FilePath -> Maybe FilePath -> IO (Either String ())
+checkPrelinked directory base size archiveSha checkerPath sourceIdentityPath = do
   manifest <- jsonFile (directory </> "ram-push-manifest.json")
   runtime <- digestFile (directory </> "runtime.bin")
   kernel <- doesFileExist (directory </> "kernel.elf")
@@ -476,29 +502,39 @@ checkPrelinked directory base size archiveSha checkerPath = do
         runtimeSha <- fields J..: "runtime_sha256" :: J.Parser Digest
         variantText <- fields J..: "bank_variant" :: J.Parser T.Text
         identity <- fields J..: "source_identity" >>= J.withObject "source identity" (\source -> source J..: "rust_object_replacement_bank" :: J.Parser Digest)
-        pure (baseValue, sizeValue, runtimeSha, variantText, identity))) value of
+        sources <- fields J..: "source_identity" >>= J.withObject "source identity" (\source -> source J..: "render_sources_sha256" :: J.Parser Digest)
+        pure (baseValue, sizeValue, runtimeSha, variantText, identity, sources))) value of
       Left problem -> pure (Left ("prelinked manifest: " ++ problem))
-      Right (baseValue, sizeValue, runtimeSha, variantText, identity) -> pure $ do
-        unless (baseValue == base) (Left "prelinked manifest base differs from the admitted base")
-        unless (sizeValue == size) (Left "prelinked manifest size differs from the admitted size")
-        unless (runtime == runtimeSha) (Left "prelinked runtime differs from its manifest")
-        unless (identity == archiveSha) (Left "prelinked manifest archive differs from the admitted archive")
-        unless kernel (Left "prelinked kernel.elf is missing")
-        unless scope (Left "prelinked modal-scope.json is missing")
-        unless (admissionProofAnalysis checked == allowlistAnalysisIdentity) (Left "prelinked proof analysis differs")
-        unless (admissionProofChecker checked == T.unpack (digestText checkerDigest))
-          (Left "prelinked proof checker identity differs from the admitted checker")
-        unless (admissionProofVariant checked == T.unpack variantText) (Left "prelinked proof bank variant differs")
-        unless (admissionProofPolicy checked == "enforce") (Left "prelinked proof policy differs")
-        unless (admissionProofManifest checked == T.unpack (digestText (digestBytes manifestBytes)))
-          (Left "prelinked proof manifest identity differs")
-        unless (admissionProofRuntime checked == T.unpack (digestText (digestBytes runtimeBytes)))
-          (Left "prelinked proof runtime identity differs")
-        unless (admissionProofElf checked == T.unpack (digestText (digestBytes elfBytes))) (Left "prelinked proof kernel ELF identity differs")
-        unless (admissionProofArchive checked == T.unpack (digestText archiveSha)) (Left "prelinked proof archive identity differs")
-        unless (admissionProofInput checked == T.unpack (digestText (digestBytes inputBytes))) (Left "prelinked proof allowlist input identity differs")
-        unless (admissionProofReport checked == T.unpack (digestText (digestBytes reportBytes))) (Left "prelinked proof report identity differs")
-        unless (result == "pass" && null (violations parsedReport)) (Left "prelinked allowlist report is not a pass")
+      Right (baseValue, sizeValue, runtimeSha, variantText, identity, sources) -> do
+        sourceSidecar <- case sourceIdentityPath of
+          Nothing -> pure (Left "prelinked admission needs the render source identity sidecar")
+          Just path -> do
+            present <- doesFileExist path
+            if present then Right <$> digestFile path else pure (Left ("render source identity is missing: " ++ path))
+        case sourceSidecar of
+          Left problem -> pure (Left problem)
+          Right sourceDigest -> pure $ do
+            unless (sourceDigest == sources) (Left "render source identity differs from the prelinked manifest")
+            unless (baseValue == base) (Left "prelinked manifest base differs from the admitted base")
+            unless (sizeValue == size) (Left "prelinked manifest size differs from the admitted size")
+            unless (runtime == runtimeSha) (Left "prelinked runtime differs from its manifest")
+            unless (identity == archiveSha) (Left "prelinked manifest archive differs from the admitted archive")
+            unless kernel (Left "prelinked kernel.elf is missing")
+            unless scope (Left "prelinked modal-scope.json is missing")
+            unless (admissionProofAnalysis checked == allowlistAnalysisIdentity) (Left "prelinked proof analysis differs")
+            unless (admissionProofChecker checked == T.unpack (digestText checkerDigest))
+              (Left "prelinked proof checker identity differs from the admitted checker")
+            unless (admissionProofVariant checked == T.unpack variantText) (Left "prelinked proof bank variant differs")
+            unless (admissionProofPolicy checked == "enforce") (Left "prelinked proof policy differs")
+            unless (admissionProofManifest checked == T.unpack (digestText (digestBytes manifestBytes)))
+              (Left "prelinked proof manifest identity differs")
+            unless (admissionProofRuntime checked == T.unpack (digestText (digestBytes runtimeBytes)))
+              (Left "prelinked proof runtime identity differs")
+            unless (admissionProofElf checked == T.unpack (digestText (digestBytes elfBytes))) (Left "prelinked proof kernel ELF identity differs")
+            unless (admissionProofArchive checked == T.unpack (digestText archiveSha)) (Left "prelinked proof archive identity differs")
+            unless (admissionProofInput checked == T.unpack (digestText (digestBytes inputBytes))) (Left "prelinked proof allowlist input identity differs")
+            unless (admissionProofReport checked == T.unpack (digestText (digestBytes reportBytes))) (Left "prelinked proof report identity differs")
+            unless (result == "pass" && null (violations parsedReport)) (Left "prelinked allowlist report is not a pass")
  where
   hexWord text = case stripPrefix "0x" (T.unpack text) of
     Just digits | [(value, "")] <- readHex digits -> Right (value :: Word32)
@@ -932,26 +968,35 @@ verifyContents expected directory = do
                 case decodeReceipt expected configValue' elf result session modal diagnostic request indices of
                   Left problem -> pure (Left problem)
                   Right identity -> do
-                    hashes <- receiptHashes directory
-                    case hashes of
+                    bound <- OS.loadReceiptObservationValues directory result
+                    case bound of
                       Left problem -> pure (Left problem)
-                      Right (kernel, resultSha, sessionSha, modalSha, diagnosticSha, requestSha, watchSha, manifestSha, runtimeSha) -> do
-                        prelinked <- case (expectedRole expected, expectedPrelinked expected) of
-                          (OwnedRole, Just prelinkedDirectory) -> comparePrelinked prelinkedDirectory directory
-                          _ -> pure (Right ())
-                        pure $ do
-                          prelinked
-                          pure identity
-                            { identityKernelElf = kernel
-                            , identityResult = resultSha
-                            , identitySession = sessionSha
-                            , identityModal = modalSha
-                            , identityDiagnostic = diagnosticSha
-                            , identityRequest = requestSha
-                            , identityWatchFinal = watchSha
-                            , identityManifest = manifestSha
-                            , identityRuntime = runtimeSha
-                            }
+                      Right verified
+                        | not (null verified)
+                        , map (takeFileName . fst) verified
+                            /= ["e2e-observation-" ++ show index ++ ".json" | index <- indices] ->
+                            pure (Left "observation references do not match the receipt's numbered documents")
+                        | otherwise -> do
+                            hashes <- receiptHashes directory
+                            case hashes of
+                              Left problem -> pure (Left problem)
+                              Right (kernel, resultSha, sessionSha, modalSha, diagnosticSha, requestSha, watchSha, manifestSha, runtimeSha) -> do
+                                prelinked <- case (expectedRole expected, expectedPrelinked expected) of
+                                  (OwnedRole, Just prelinkedDirectory) -> comparePrelinked prelinkedDirectory directory
+                                  _ -> pure (Right ())
+                                pure $ do
+                                  prelinked
+                                  pure identity
+                                    { identityKernelElf = kernel
+                                    , identityResult = resultSha
+                                    , identitySession = sessionSha
+                                    , identityModal = modalSha
+                                    , identityDiagnostic = diagnosticSha
+                                    , identityRequest = requestSha
+                                    , identityWatchFinal = watchSha
+                                    , identityManifest = manifestSha
+                                    , identityRuntime = runtimeSha
+                                    }
 
 observationFiles :: FilePath -> IO (Either String [Int])
 observationFiles directory = do

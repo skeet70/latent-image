@@ -318,9 +318,9 @@ check() {
   fi
   local clock=()
   local stock_draws owned_draws mode=required reason='At least one role reached a render drawer entry.'
-  local drawer_count='[.[].trace_hits[]? | select(.site == "render-tree-entry" or .site == "render-picker-entry" or .site == "render-pane-entry")] | length'
-  stock_draws=$(jq -s "$drawer_count" "$runs/$name-stock$s"/e2e-observation-*.json) || return 1
-  owned_draws=$(jq -s "$drawer_count" "$runs/$name-owned$s"/e2e-observation-*.json) || return 1
+  local pair_check=bazel-bin/replacement/modal_runtime/menu-engine-pair-check
+  stock_draws=$("$pair_check" --count-drawers "$runs/$name-stock$s") || { printf '%s stock observation count refused\n' "$name$s" >&2; return 2; }
+  owned_draws=$("$pair_check" --count-drawers "$runs/$name-owned$s") || { printf '%s owned observation count refused\n' "$name$s" >&2; return 2; }
   local render_mode=(--render)
   if (( stock_draws == 0 && owned_draws == 0 )); then
     render_mode+=(--render-draw-free)

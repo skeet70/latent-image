@@ -625,6 +625,7 @@ haskell_binary(
         ":menu-engine-pair-lib",
         ":menu-engine-tree-lib",
         ":render-stack-evidence-lib",
+        "//emulation:observation-stream-lib",
         "//host/firmware:bank-allowlist",
         "//host/firmware:ram-push-layout",
         "//host:aeson",
