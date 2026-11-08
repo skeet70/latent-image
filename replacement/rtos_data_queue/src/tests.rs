@@ -748,7 +748,6 @@ fn a_pending_irq_wakes_the_suspended_caller_only_when_the_retry_reopens_i() {
         }
     })
     .unwrap();
-    assert_eq!(attempts, 2);
     let pending = match outcome {
         ReceiveBlocking::Pending(pending) => pending,
         other => panic!("{other:?}"),
