@@ -25,8 +25,8 @@ import FujiAF.JSON (encodeCanonical)
 import FujiModNativePaths (fujimodNativeCase)
 import Numeric (showHex)
 import StockInventory (FunctionDeclaration (..), FunctionDerivation (..), FunctionSize (..), GuestAddress (..), PremiseUse (..), ProgramCounter (..), checkedStockFunctions, requiredReturnPremises, returnPremiseLabel)
-import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getCurrentDirectory, listDirectory, removeDirectoryRecursive, removeFile)
-import System.Environment (getArgs, getExecutablePath, lookupEnv)
+import System.Directory (canonicalizePath, createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getCurrentDirectory, listDirectory, removeDirectoryRecursive, removeFile)
+import System.Environment (getArgs, getExecutablePath, lookupEnv, setEnv)
 import System.Exit (ExitCode (..), exitWith)
 import System.FilePath ((</>), isAbsolute)
 import System.Posix.Process (executeFile)
@@ -1409,6 +1409,31 @@ acquireSlot originalArguments = do
         then executeFile wrapper False (executable : originalArguments) Nothing
         else prerequisite ("emulator slot wrapper missing at " ++ wrapper ++ "; run through bazel run or set XM1_EMULATOR_SLOT")
 
+prepareOutputPaths :: Paths -> IO Paths
+prepareOutputPaths paths = do
+  let out = pathOut paths
+  createDirectoryIfMissing True out
+  canonicalOut <- canonicalizePath out
+  stale <- listDirectory canonicalOut
+  unless (null stale) (prerequisite ("output directory must be fresh: " ++ canonicalOut))
+  cache <- case pathCache paths of
+    Nothing -> pure Nothing
+    Just path -> do
+      createDirectoryIfMissing True path
+      Just <$> canonicalizePath path
+  pure paths {pathOut = canonicalOut, pathCache = cache}
+
+setStoragePath :: Paths -> IO ()
+setStoragePath paths = setEnv "XM1_STORAGE_PATH" (pathOut paths)
+
+prepareAndRun :: Options -> [String] -> IO (ExitCode, String)
+prepareAndRun options arguments = do
+  paths <- resolvePaths options
+  prepared <- prepareOutputPaths paths
+  setStoragePath prepared
+  acquireSlot arguments
+  runQualification prepared options
+
 writeResults :: FilePath -> Report -> IO ()
 writeResults out attemptReport = BL.writeFile (out </> "results.json") (encode (reportValue attemptReport))
 
@@ -1467,13 +1492,8 @@ terminalMessage out selected subset counts attemptReport =
       CurrentCandidate -> ""
       KnownDefectCandidate -> "known-defect candidate; "
 
-runQualification :: Options -> IO (ExitCode, String)
-runQualification options = do
-  paths <- resolvePaths options
-  present <- doesDirectoryExist (pathOut paths)
-  stale <- if present then listDirectory (pathOut paths) else pure []
-  unless (null stale) (prerequisite ("output directory must be fresh: " ++ pathOut paths))
-  createDirectoryIfMissing True (pathOut paths)
+runQualification :: Paths -> Options -> IO (ExitCode, String)
+runQualification paths options = do
   let cachePath = maybe (pathOut paths </> ".cache") id (pathCache paths)
   loaded <- try (loadInputs (pathBuildRoot paths) (pathStockElf paths)) :: IO (Either Prerequisite Inputs)
   case loaded of
@@ -1546,7 +1566,7 @@ main = do
         Right () -> pure ()
         Left problem -> handleException problem
     Right (Qualify options) -> do
-      outcome <- try (acquireSlot arguments >> runQualification options) :: IO (Either SomeException (ExitCode, String))
+      outcome <- try (prepareAndRun options arguments) :: IO (Either SomeException (ExitCode, String))
       case outcome of
         Right (code, message) -> putStrLn message >> exitWith code
         Left problem -> handleException problem
