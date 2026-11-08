@@ -2299,16 +2299,27 @@ mod tests {
     #[test]
     fn repeated_family_invocations_keep_one_call_class() {
         let base = family_call(FamilyService::FamilyFlagSet).entry;
-        let class = |order: u64| CallClass { entry: EntryState { order, ..base.clone() }, result: ReturnState { r0: 0, cpsr: 0x53,
-            memory: base.memory.clone(), writes: Vec::new(), bank: Vec::new(), completion: Completion::Return,
-            task: base.task, sp: base.sp, registers: [0;16], history: Vec::new(), cpacr: 0, fpexc: 0, tpidrurw: 0 } };
+        let write = captured(Written { address: Hex(0x9018), size: 4, value: 0x9fd0 });
+        let saved = boundary(BoundaryKind::Return);
+        let class = |order: u64, writeOrder: u64, boundaryOrder: u64| CallClass {
+            entry: EntryState { order, ..base.clone() },
+            result: ReturnState { r0: 0, cpsr: 0x53, memory: base.memory.clone(),
+                writes: vec![CapturedWrite { order: writeOrder, ..write }], bank: Vec::new(), completion: Completion::Return,
+                task: base.task, sp: base.sp, registers: [0;16],
+                history: vec![Boundary { order: boundaryOrder, ..saved.clone() }], cpacr: 0, fpexc: 0, tpidrurw: 0 } };
         let mut classes = BTreeMap::new();
-        classify(&mut classes, class(10), 10).unwrap();
-        classify(&mut classes, class(20), 20).unwrap();
+        classify(&mut classes, class(10, 100, 1000), 10).unwrap();
+        classify(&mut classes, class(20, 200, 2000), 20).unwrap();
         assert_eq!(classes.len(), 1);
+        let rows: Vec<ClassRow> = classes.iter().map(|(class, count)| ClassRow { class, count }).collect();
+        let wire = serde_json::to_value(&rows).unwrap();
+        assert_eq!(wire[0]["count"], serde_json::json!(2));
+        assert_eq!(wire[0]["entry"]["order"], serde_json::json!(10));
+        assert_eq!(wire[0]["result"]["writes"][0]["order"], serde_json::json!(100));
+        assert_eq!(wire[0]["result"]["history"][0]["order"], serde_json::json!(1000));
         let count = classes.values().next().unwrap();
         assert_eq!((count.count, count.first, count.last), (2, 10, 20));
-        let mut other = class(30);
+        let mut other = class(30, 300, 3000);
         other.entry.memory.push(WordValue { address: Hex(0x4006_24b4), value: Read::Committed { value: 1 } });
         classify(&mut classes, other, 30).unwrap();
         assert_eq!(classes.len(), 2);
