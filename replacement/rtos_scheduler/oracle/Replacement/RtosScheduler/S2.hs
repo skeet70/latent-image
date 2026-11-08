@@ -40,7 +40,12 @@ isAggregate image = not (null (imageExtras image)) || any (\(a, _) -> not (any (
 extraRegions :: M.Map String (Word32, Word32) -> Domain -> [(Word32, Word32)]
 extraRegions symbols domain =
   [ (start, start + size)
-  | name <- ["helper_try", "helper_release", "helper_observe"]
+  | name <-
+      [ "helper_try", "helper_release", "helper_observe"
+      , "xm1_platform_veneer_global_lock_helper_try"
+      , "xm1_platform_veneer_global_lock_helper_release"
+      , "xm1_platform_veneer_global_lock_helper_observe"
+      ]
   , Just (address, size) <- [M.lookup name symbols]
   , let start = address - base domain
   ]
