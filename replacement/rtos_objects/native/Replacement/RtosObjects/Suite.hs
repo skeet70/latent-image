@@ -40,6 +40,8 @@ data Role = StockRole | OwnedRole deriving (Eq, Show)
 data Boundary = CallerReturn | TaskArrival deriving (Eq, Show)
 data Invocation = TaskInvocation | HandlerCallback deriving (Eq, Show)
 
+data Delta = WordDelta GuestAddress | ByteDelta GuestAddress deriving (Eq)
+
 data StockDifference
   = NoDifference
   | DeleteStrandsWaiter
@@ -547,6 +549,9 @@ retainedCases facts executing =
   , caseForRetained "semaphore-timed-tick" RetainedSemaphoreTimedWait FlagTimedWait
       [(R0, id0 1), (R1, 5)] (TargetTimerTick 2) [] True
       (semaphoreWaitChecks True)
+  , caseForRetained "semaphore-timed-forever" RetainedSemaphoreTimedWait FlagTimedWait
+      [(R0, id0 1), (R1, 0xffffffff)] (TargetAddress (retainedSignal executing)) [(R0, id0 1)] False
+      (semaphoreWaitChecks False ++ [eq (rtSemTimer t) 0])
   , caseForRetained "dataqueue-receive-send" RetainedDataQueueReceive FlagWait
       [(R0, id0 1), (R1, outWord)] (TargetAddress (retainedSend executing)) [(R0, id0 1), (R1, 0x1234)] False
       (dataQueueChecks False)
@@ -1326,13 +1331,23 @@ effectChecks facts role one observation = lockChecks ++ notificationChecks
       | domain <- [DomainA, DomainB]
       ]
 
-compareFamily :: Role -> Domain -> Facts -> Case -> NativeObservation -> NativeObservation -> [String]
+data FamilyDifference
+  = RoleDifference Role String
+  | MissingRegion RegionId
+  | StateDifference RegionId
+  deriving (Eq, Show)
+
+renderDifference :: FamilyDifference -> String
+renderDifference difference = case difference of
+  RoleDifference OwnedRole message -> "owned: " ++ message
+  RoleDifference StockRole message -> "stock: " ++ message
+  MissingRegion ident -> "missing state region " ++ show ident
+  StateDifference ident -> "state region " ++ show ident ++ " differs"
+
+compareFamily :: Role -> Domain -> Facts -> Case -> NativeObservation -> NativeObservation -> [FamilyDifference]
 compareFamily _role executing facts one stock owned =
-  prefixed OwnedRole ownedChecks ++ prefixed StockRole stockChecks ++ memoryDifferences
+  map (RoleDifference OwnedRole) ownedChecks ++ map (RoleDifference StockRole) stockChecks ++ memoryDifferences
   where
-    prefixed currentRole = map (\message -> roleText currentRole ++ ": " ++ message)
-    roleText StockRole = "stock"
-    roleText OwnedRole = "owned"
     ownedChecks = roleChecks OwnedRole owned
     stockChecks = roleChecks StockRole stock
     roleChecks currentRole observation
@@ -1350,37 +1365,61 @@ compareFamily _role executing facts one stock owned =
             ++ ["stop address differs" | wanted == StopAddress, N.lookupRegister Pc observation /= Just stopAddress]
     memoryDifferences = compareSelected owned stock
     compareSelected reference subject =
-      ["missing state region " ++ show ident | ident <- compared, M.notMember ident (memory reference) || M.notMember ident (memory subject)]
-        ++ ["state region " ++ show ident ++ " differs" | ident <- compared, M.lookup ident (memory reference) /= M.lookup ident (memory subject)]
+      [MissingRegion ident | ident <- compared, M.notMember ident (memory reference) || M.notMember ident (memory subject)]
+        ++ [StateDifference ident | ident <- compared, M.lookup ident (memory reference) /= M.lookup ident (memory subject)]
     compared =
       [ident | Page ident _ _ _ _ <- pages facts one, ident `notElem` map RegionId ["stack", "target-stack", "waker-stack", "chain-stack"]]
     memory observation = M.fromList [(ident, normalize ident bytes) | (ident, bytes) <- nativeMemory observation, ident `elem` compared]
-    -- Only words whose owned and stock expectations differ are deliberate deltas; every other
-    -- word of a tagged case is compared.
+    -- Only the bytes whose owned and stock expectations differ are deliberate deltas; every
+    -- other byte of a tagged case is compared.
     deliberateDeltas one' =
       let ownedEquals = [(a, v) | Equals a v <- caseExpect one']
           stockEquals = [(a, v) | Equals a v <- caseStockExpectations one']
-          different = [a | (a, v) <- ownedEquals, Just w <- [lookup a stockEquals], v /= w]
-          stockOnly = [a | (a, _) <- stockEquals, a `notElem` map fst ownedEquals]
-       in nub (different ++ stockOnly)
+          ownedBytes = [(a, v) | ByteEquals a v <- caseExpect one']
+          stockBytes = [(a, v) | ByteEquals a v <- caseStockExpectations one']
+          ownedLog = [(c, es) | TimerLog (TimerLogExpect c es) <- caseExpect one']
+          stockLog = [(c, es) | TimerLog (TimerLogExpect c es) <- caseStockExpectations one']
+          wordDeltas =
+            [WordDelta a | (a, v) <- ownedEquals, Just w <- [lookup a stockEquals], v /= w]
+              ++ [WordDelta a | (a, _) <- stockEquals, a `notElem` map fst ownedEquals]
+          byteDeltas =
+            [ByteDelta a | (a, v) <- ownedBytes, Just w <- [lookup a stockBytes], v /= w]
+              ++ [ByteDelta a | (a, _) <- stockBytes, a `notElem` map fst ownedBytes]
+          logDeltas =
+            if ownedLog == stockLog
+              then []
+              else [WordDelta (GuestAddress (timerLogBase + 4 + fromIntegral i * 8)) | i <- [0 .. logCount - 1]]
+                ++ [WordDelta (GuestAddress (timerLogBase + 8 + fromIntegral i * 8)) | i <- [0 .. logCount - 1]]
+                ++ [WordDelta (GuestAddress timerLogBase)]
+          logCount = maximum (0 : [max c (length es) | (c, es) <- ownedLog ++ stockLog])
+       in nub (wordDeltas ++ byteDeltas ++ logDeltas)
     deltaWords = deliberateDeltas one
-    zeroWord current (GuestAddress address, GuestAddress base) =
-      let offset = fromIntegral (address - base)
-       in B.take offset current <> word32le 0 <> B.drop (offset + 4) current
-    normalize ident bytes
-      | caseBoundary one == TaskArrival && ident == RegionId (if executing == DomainA then "kernel-a" else "kernel-b") =
+    inPage delta base size = case delta of
+      WordDelta (GuestAddress a) -> a >= base && a + 4 <= base + fromIntegral size
+      ByteDelta (GuestAddress a) -> a >= base && a < base + fromIntegral size
+    applyDelta current delta base = case delta of
+      WordDelta (GuestAddress a) ->
+        let offset = fromIntegral (a - base) in B.take offset current <> word32le 0 <> B.drop (offset + 4) current
+      ByteDelta (GuestAddress a) ->
+        let offset = fromIntegral (a - base) in B.take offset current <> B.singleton 0 <> B.drop (offset + 1) current
+    zeroIfInPage ident current delta =
+      case [base | Page i (GuestAddress base) size _ _ <- pages facts one, i == ident, inPage delta base size] of
+        (base : _) -> applyDelta current delta base
+        [] -> current
+    kernelRegion = RegionId (if executing == DomainA then "kernel-a" else "kernel-b")
+    privateMask ident current
+      | caseBoundary one == TaskArrival && ident == kernelRegion =
           let (GuestAddress base, _) = kernelBounds facts executing
               offset = fromIntegral (taskAt facts executing runningSlot + factsTaskSavedSp facts - base)
-           in B.take offset bytes <> word32le 0 <> B.drop (offset + 4) bytes
-      | isJust (caseWaker one) && ident == RegionId (if executing == DomainA then "kernel-a" else "kernel-b") =
+           in B.take offset current <> word32le 0 <> B.drop (offset + 4) current
+      | isJust (caseWaker one) && ident == kernelRegion =
           let (GuestAddress base, _) = kernelBounds facts executing
-              zeroSavedSp current slot =
+              zeroSavedSp body slot =
                 let offset = fromIntegral (taskAt facts executing slot + factsTaskSavedSp facts - base)
-                 in B.take offset current <> word32le 0 <> B.drop (offset + 4) current
-           in foldl zeroSavedSp bytes [1 .. factsTaskSlots facts]
-      | otherwise =
-          case [(a, b) | a <- deltaWords, Page i b@(GuestAddress _) size _ _ <- pages facts one, i == ident, contains a 4 (Page i b size ReadWrite B.empty)] of
-            hits -> foldl zeroWord bytes hits
+                 in B.take offset body <> word32le 0 <> B.drop (offset + 4) body
+           in foldl zeroSavedSp current [1 .. factsTaskSlots facts]
+      | otherwise = current
+    normalize ident bytes = foldl (zeroIfInPage ident) (privateMask ident bytes) deltaWords
 
 controls :: Domain -> Facts -> Case -> NativeObservation -> NativeObservation -> [(String, Bool)]
 controls executing facts one stock owned =
@@ -1401,7 +1440,7 @@ controls executing facts one stock owned =
                , ("must-fail-owned-difference", not (null (stockAgainstOwnedExpectations stock)))
                ]
        )
-    ++ [ ("must-fail-unrelated-kernel-word", ("state region " ++ show (RegionId region) ++ " differs") `elem` compareFamily OwnedRole executing facts one stock (perturbKernel owned))
+    ++ [ ("must-fail-unrelated-kernel-word", any (\difference -> case difference of StateDifference ident -> ident == RegionId region; _ -> False) (compareFamily OwnedRole executing facts one stock (perturbKernel owned)))
        | caseDifference one == DeleteLeavesQueueTail
        ]
   where
@@ -1438,7 +1477,7 @@ runFamily runner cacheRoot directory facts entries executing stock owned = do
     let ident = emittedId executing one
     pure (caseIdText (caseName one), case (M.lookup ident reference, M.lookup ident subject) of
       (Just original, Just replacement) ->
-        let differences = compareFamily OwnedRole executing facts one original replacement
+        let differences = map renderDifference (compareFamily OwnedRole executing facts one original replacement)
             caseControls = controls executing facts one original replacement
          in Right (differences ++ ["control " ++ name ++ " not detected" | (name, False) <- caseControls])
       (Nothing, _) -> Left "stock case did not run"
@@ -1494,8 +1533,8 @@ cases facts _entries executing =
   , (mk "mailbox-delete-drains" MailboxDelete) { caseArgs = [(R0, id0 1)], caseMailboxes = [mailbox 1 0 32 (messageAddress 0) (messageAddress 1)], caseMessages = [msg 0 (messageAddress 1) 0, msg 1 0 0], caseExpect = [res 0, eq (mailboxConfig facts executing 1 + factsMailboxConfigExists facts) 0, eq (mailboxConfig facts executing 1 + factsMailboxConfigAttributes facts) 2, eq (mailboxConfig facts executing 1 + factsMailboxConfigPriorityLimit facts) 32, eq (mailControl 1 + factsMailboxControlHead facts) 0, eq (mailControl 1 + factsMailboxControlTail facts) 0, eq (messageAddress 0) (messageAddress 1), eq (messageAddress 1) 0], caseStockExpect = Just [res 0, eq (mailboxConfig facts executing 1 + factsMailboxConfigExists facts) 0, eq (mailboxConfig facts executing 1 + factsMailboxConfigAttributes facts) 2, eq (mailboxConfig facts executing 1 + factsMailboxConfigPriorityLimit facts) 32, eq (mailControl 1 + factsMailboxControlHead facts) 0, eq (mailControl 1 + factsMailboxControlTail facts) (messageAddress 1), eq (messageAddress 0) (messageAddress 1), eq (messageAddress 1) 0], caseDifference = DeleteLeavesQueueTail }
   , (mk "flag-delete-recreate" FlagDelete) { caseArgs = [(R0, id0 1)], caseFlags = [flag 1 0 0 1], caseSteps = [StepStore (GuestAddress resultCell), StepCall FlagCreate [(R0, id0 1), (R1, requestAddress)]], caseWords = [poke requestAddress 0, poke (requestAddress + 4) 5], caseExpect = [res 0, eq resultCell 0, eq (flagConfig facts executing 1 + factsFlagConfigExists facts) 1, eq (patternOf 1) 5] }
   , (mk "mailbox-delete-recreate" MailboxDelete) { caseArgs = [(R0, id0 1)], caseMailboxes = [mailbox 1 0 32 0 0], caseSteps = [StepStore (GuestAddress resultCell), StepCall MailboxCreate [(R0, id0 1), (R1, requestAddress)]], caseWords = [poke requestAddress 0, poke (requestAddress + 4) 32], caseExpect = [res 0, eq resultCell 0, eq (mailboxConfig facts executing 1 + factsMailboxConfigExists facts) 1, eq (mailboxConfig facts executing 1 + factsMailboxConfigPriorityLimit facts) 32] }
-  , (mk "flag-create-out-of-range" FlagCreate) { caseArgs = [(R0, 121), (R1, requestAddress)], caseWords = [poke requestAddress 4, poke (requestAddress + 4) 5], caseExpect = [res (0xffffffee), eq (flagConfig facts executing 121 + factsFlagConfigExists facts) 0, eq (flagControl facts executing 121 + factsFlagControlPattern facts) 0], caseStockExpect = Just [res 0, eq (flagConfig facts executing 121 + factsFlagConfigExists facts) 1, eq (flagControl facts executing 121 + factsFlagControlPattern facts) 0], caseDifference = OutOfRangeWrite }
-  , (mk "flag-delete-out-of-range" FlagDelete) { caseArgs = [(R0, 121)], caseExpect = [res (0xffffffee), eq (flagControl facts executing 121) (flagControl facts executing 121)], caseStockExpect = Just [res 0, eq (flagControl facts executing 121) (flagControl facts executing 121)], caseDifference = OutOfRangeWrite }
+  , (mk "flag-create-out-of-range" FlagCreate) { caseArgs = [(R0, 121), (R1, requestAddress)], caseWords = [poke requestAddress 4, poke (requestAddress + 4) 5], caseExpect = [res (0xffffffee), eq (flagConfig facts executing 121 + factsFlagConfigAttributes facts) 0, eq (flagConfig facts executing 121 + factsFlagConfigInitial facts) 0, eq (flagConfig facts executing 121 + factsFlagConfigExists facts) 0, eq (flagControl facts executing 121 + factsWaitQueueNext facts) (flagControl facts executing 121), eq (flagControl facts executing 121 + factsWaitQueuePrev facts) (flagControl facts executing 121), eq (flagControl facts executing 121 + factsWaitQueueConfig facts) (mailboxConfig facts executing 1), eq (flagControl facts executing 121 + factsFlagControlPattern facts) 0], caseStockExpect = Just [res 0, eq (flagConfig facts executing 121 + factsFlagConfigAttributes facts) 4, eq (flagConfig facts executing 121 + factsFlagConfigInitial facts) 5, eq (flagConfig facts executing 121 + factsFlagConfigExists facts) 1, eq (flagControl facts executing 121 + factsWaitQueueNext facts) (flagControl facts executing 121), eq (flagControl facts executing 121 + factsWaitQueuePrev facts) (flagControl facts executing 121), eq (flagControl facts executing 121 + factsWaitQueueConfig facts) (mailboxConfig facts executing 1), eq (flagControl facts executing 121 + factsFlagControlPattern facts) 0], caseDifference = OutOfRangeWrite }
+  , (mk "flag-delete-out-of-range" FlagDelete) { caseArgs = [(R0, 121)], caseExpect = [res (0xffffffee), eq (flagConfig facts executing 121 + factsFlagConfigAttributes facts) 0, eq (flagConfig facts executing 121 + factsFlagConfigInitial facts) 0, eq (flagConfig facts executing 121 + factsFlagConfigExists facts) 0, eq (flagControl facts executing 121 + factsWaitQueueNext facts) (flagControl facts executing 121), eq (flagControl facts executing 121 + factsWaitQueuePrev facts) (flagControl facts executing 121), eq (flagControl facts executing 121 + factsWaitQueueConfig facts) (mailboxConfig facts executing 1), eq (flagControl facts executing 121 + factsFlagControlPattern facts) 0], caseStockExpect = Just [res 0, eq (flagConfig facts executing 121 + factsFlagConfigAttributes facts) 0, eq (flagConfig facts executing 121 + factsFlagConfigInitial facts) 0, eq (flagConfig facts executing 121 + factsFlagConfigExists facts) 0, eq (flagControl facts executing 121 + factsWaitQueueNext facts) (flagControl facts executing 121), eq (flagControl facts executing 121 + factsWaitQueuePrev facts) (flagControl facts executing 121), eq (flagControl facts executing 121 + factsWaitQueueConfig facts) (mailboxConfig facts executing 1), eq (flagControl facts executing 121 + factsFlagControlPattern facts) 0], caseDifference = OutOfRangeWrite }
 
     -- Flag set, handler, clear, poll.
   , (mk "flag-set-no-waiter" FlagSet) { caseArgs = [(R0, id0 1), (R1, 2)], caseFlags = [flag 1 0 0 1], caseExpect = [res 0, eq (patternOf 1) 3] }
@@ -1516,7 +1555,7 @@ cases facts _entries executing =
 
     -- Flag waits, including the real waker and S2 caller-frame return.
   , (mk "flag-wait-untimed-wake" FlagWait) { caseArgs = [(R0, id0 1), (R1, 3), (R2, 0), (R3, outWord)], caseFlags = [flag 1 0 0 1], caseWords = [poke outWord 0xdead], caseWaker = Just (Waker (TargetSlot FlagSet) [(R0, id0 1), (R1, 2)]), caseExpect = [res 0, eq outWord 3, eq (patternOf 1) 3, eq (flagWaitResult executing 1) 0, readyCheck executing 10 (taskOf executing 1)] }
-  , (mk "flag-wait-untimed-delete" FlagWait) { caseArgs = [(R0, id0 1), (R1, 3), (R2, 0), (R3, outWord)], caseFlags = [flag 1 0 0 1], caseWords = [poke outWord 0xdead], caseWaker = Just (Waker (TargetSlot FlagDelete) [(R0, id0 1)]), caseExpect = [res (0xffffffcf), eq outWord 0xdead, eq (flagWaitResult executing 1) (0xffffffcf), eq (flagConfig facts executing 1 + factsFlagConfigExists facts) 0], caseStockExpect = Just [], caseStockStatus = Just InstructionBudget, caseDifference = DeleteStrandsWaiter, caseLimit = InstructionLimit 50000 }
+  , (mk "flag-wait-untimed-delete" FlagWait) { caseArgs = [(R0, id0 1), (R1, 3), (R2, 0), (R3, outWord)], caseFlags = [flag 1 0 0 1], caseWords = [poke outWord 0xdead], caseWaker = Just (Waker (TargetSlot FlagDelete) [(R0, id0 1)]), caseExpect = [res (0xffffffcf), eq outWord 0xdead, eq (flagWaitResult executing 1) (0xffffffcf), eq (flagConfig facts executing 1 + factsFlagConfigExists facts) 0, readyCheck executing 10 (taskOf executing 1), eq (readyHead facts executing 10 + factsHeadPrev facts) (taskOf executing 1), eq (dfReadyBitmap (domainFacts facts executing)) ((1 `shiftL` 14) .|. (1 `shiftL` 15) .|. (1 `shiftL` 10)), eq (dfRunning (domainFacts facts executing)) (taskAt facts executing runningSlot), eq (dfSelected (domainFacts facts executing)) (taskAt facts executing runningSlot), eq (taskOf executing 1 + factsTaskNext facts) (readyHead facts executing 10), eq (taskOf executing 1 + factsTaskPrev facts) (readyHead facts executing 10), byte (taskOf executing 1 + factsTaskState facts) (factsStateReady facts)], caseStockExpect = Just [eq outWord 0xdead, eq (flagWaitResult executing 1) 0, eq (readyHead facts executing 10) (readyHead facts executing 10), eq (readyHead facts executing 10 + factsHeadPrev facts) (readyHead facts executing 10), eq (dfReadyBitmap (domainFacts facts executing)) ((1 `shiftL` 14) .|. (1 `shiftL` 15)), eq (dfRunning (domainFacts facts executing)) (taskAt facts executing 4), eq (dfSelected (domainFacts facts executing)) (taskAt facts executing 4), eq (taskOf executing 1 + factsTaskNext facts) (flagControl facts executing 1), eq (taskOf executing 1 + factsTaskPrev facts) (flagControl facts executing 1), byte (taskOf executing 1 + factsTaskState facts) (factsStateWait facts .|. factsStateObjectQueued facts .|. factsStateOwnerLockQueued facts)], caseStockStatus = Just InstructionBudget, caseDifference = DeleteStrandsWaiter, caseLimit = InstructionLimit 50000 }
   , (mk "flag-wait-timed-wake" FlagTimedWait) { caseArgs = [(R0, id0 1), (R1, 3), (R2, 0), (R3, outWord), (R4, 5)], caseFlags = [flag 1 0 0 1], caseTick = 100, caseWords = [poke outWord 0xdead], caseWaker = Just (Waker (TargetSlot FlagSet) [(R0, id0 1), (R1, 2)]), caseExpect = [res 0, eq outWord 3, eq (flagWaitResult executing 1) 0, eq (flagTimerOf executing 1 + 4) (seam executing "stock-timeout-callback"), eq (flagTimerOf executing 1 + 8) (taskOf executing 1), timerLog 1 [(recordAddress facts executing executing, flagTimerOf executing 1)]] }
   , (mk "flag-wait-timed-expire" FlagTimedWait) { caseArgs = [(R0, id0 1), (R1, 3), (R2, 0), (R3, outWord), (R4, 5)], caseFlags = [flag 1 0 0 1], caseTick = 100, caseWords = [poke outWord 0xdead], caseWaker = Just (Waker (TargetTimerTick 2) []), caseExpect = [res (0xffffffce), eq outWord 0xdead, eq (flagWaitResult executing 1) (0xffffffce), eq (flagWait facts executing 1 + factsWaitBlockOwner facts) (dfId (domainFacts facts executing)), eq (flagWait facts executing 1 + factsWaitBlockQueue facts) (flagControl facts executing 1), eq (taskAt facts executing runningSlot + factsTaskWait facts) (flagWait facts executing 1)], caseSkipTimerLog = True }
   , (mk "flag-wait-timed-cross-expire" FlagTimedWait) { caseObject = DomainB, caseArgs = [(R0, idB 1), (R1, 3), (R2, 0), (R3, outWord), (R4, 5)], caseFlags = [(DomainB, 1, 0, 0, 1)], caseTick = 100, caseWords = [poke outWord 0xdead], caseWaker = Just (Waker (TargetTimerTick 2) []), caseExpect = [res (0xffffffce), eq outWord 0xdead, eq (flagWait facts executing 1 + factsWaitBlockOwner facts) (dfId (domainFacts facts DomainB)), eq (flagWait facts executing 1 + factsWaitBlockQueue facts) (flagControl facts DomainB 1), eq (taskAt facts executing runningSlot + factsTaskWait facts) (flagWait facts executing 1), eq (flagWaitResult executing 1) (0xffffffce), eq (flagTimerOf executing 1 + 4) (seam executing "stock-timeout-callback"), eq (flagTimerOf executing 1 + 8) (taskOf executing 1)], caseSkipTimerLog = True }
@@ -1540,7 +1579,7 @@ cases facts _entries executing =
   , (mk "mailbox-receive-timed-zero" MailboxTimedReceive) { caseArgs = [(R0, id0 1), (R1, outWord), (R2, 0)], caseMailboxes = [mailbox 1 0 32 0 0], caseWords = [poke outWord 0xdead], caseExpect = [res (0xffffffce), eq outWord 0xdead] }
   , (mk "mailbox-receive-fifo" MailboxReceive) { caseArgs = [(R0, id0 1), (R1, outWord)], caseMailboxes = [mailbox 1 0 32 0 0], caseMessages = [msg 0 0 0, msg 1 0 0], caseWaiters = [chainWaiter 12], caseWords = [poke outWord 0xdead], caseWaker = Just (Waker (TargetSlot MailboxSend) [(R0, id0 1), (R1, messageAddress 0)]), caseExpect = [res 0, eq outWord (messageAddress 1), eq (mailControl 1 + factsMailboxControlHead facts) 0, eq (mailboxWait facts executing 2 + factsMailboxWaitMessage facts) (messageAddress 0), byte (taskOf executing 2 + factsTaskState facts) (factsStateReady facts)] }
   , (mk "mailbox-receive-priority" MailboxReceive) { caseArgs = [(R0, id0 1), (R1, outWord)], caseMailboxes = [mailbox 1 1 32 0 0], caseMessages = [msg 0 0 0], caseWaiters = [waiterWith 12 0 0], caseWords = [poke outWord 0xdead], caseWaker = Just (Waker (TargetSlot MailboxSend) [(R0, id0 1), (R1, messageAddress 0)]), caseExpect = [res 0, eq outWord (messageAddress 0), eq (mailControl 1 + factsMailboxControlHead facts) 0, byte (taskOf executing 2 + factsTaskState facts) (factsStateWait facts .|. factsStateObjectQueued facts .|. factsStateOwnerLockQueued facts), eq (mailboxWait facts executing 2 + factsMailboxWaitMessage facts) 0] }
-  , (mk "mailbox-delete-multiwaiter" MailboxReceive) { caseArgs = [(R0, id0 1), (R1, outWord)], caseMailboxes = [mailbox 1 0 32 0 0], caseWaiters = [waiterPeerTimed 5], caseWords = [poke outWord 0xdead, poke requestAddress 0, poke (requestAddress + 4) 32], caseWaker = Just (Waker (TargetSlot MailboxDelete) [(R0, id0 1)]), caseSteps = [StepStore (GuestAddress resultCell), StepCall MailboxCreate [(R0, id0 1), (R1, requestAddress)]], caseExpect = multiwaiterOwned, caseStockExpect = Just [], caseStockStatus = Just InstructionBudget, caseDifference = DeleteStrandsWaiter, caseLimit = InstructionLimit 50000 }
+  , (mk "mailbox-delete-multiwaiter" MailboxReceive) { caseArgs = [(R0, id0 1), (R1, outWord)], caseMailboxes = [mailbox 1 0 32 0 0], caseWaiters = [waiterPeerTimed 5], caseWords = [poke outWord 0xdead, poke requestAddress 0, poke (requestAddress + 4) 32], caseWaker = Just (Waker (TargetSlot MailboxDelete) [(R0, id0 1)]), caseSteps = [StepStore (GuestAddress resultCell), StepCall MailboxCreate [(R0, id0 1), (R1, requestAddress)]], caseExpect = multiwaiterOwned, caseStockExpect = Just multiwaiterStock, caseStockStatus = Just InstructionBudget, caseDifference = DeleteStrandsWaiter, caseLimit = InstructionLimit 50000 }
 
     -- Remaining class-ignored mailbox row.
   , (mk "mailbox-delete-class-ignored" MailboxDelete) { caseArgs = [(R0, foreignId 1)], caseMailboxes = [mailbox 1 0 32 0 0, (peer executing, 1, 0, 32, 0, 0)], caseExpect = [res 0, eq (mailboxConfig facts executing 1 + factsMailboxConfigExists facts) 0, eq (mailboxConfig facts (peer executing) 1 + factsMailboxConfigExists facts) 1] }
@@ -1573,16 +1612,46 @@ cases facts _entries executing =
     createMailboxOwned = [res 0, eq (mailboxConfig facts executing 1 + factsMailboxConfigAttributes facts) 0, eq (mailboxConfig facts executing 1 + factsMailboxConfigPriorityLimit facts) 32, eq (mailboxConfig facts executing 1 + factsMailboxConfigExists facts) 1, eq (mailControl 1 + factsMailboxControlHead facts) 0, eq (mailControl 1 + factsMailboxControlTail facts) 0, OrderBefore (GuestAddress (mailControl 1)) (GuestAddress (mailboxConfig facts executing 1 + factsMailboxConfigExists facts)), OrderBarrierBefore Dmb (GuestAddress (mailboxConfig facts executing 1 + factsMailboxConfigExists facts))]
     createMailboxStock = [res 0, eq (mailboxConfig facts executing 1 + factsMailboxConfigAttributes facts) 0, eq (mailboxConfig facts executing 1 + factsMailboxConfigPriorityLimit facts) 32, eq (mailboxConfig facts executing 1 + factsMailboxConfigExists facts) 1, eq (mailControl 1 + factsMailboxControlHead facts) 0, eq (mailControl 1 + factsMailboxControlTail facts) 0, OrderBefore (GuestAddress (mailboxConfig facts executing 1 + factsMailboxConfigExists facts)) (GuestAddress (mailControl 1))]
     deleteFlagState slot = [res 0, eq (flagConfig facts executing slot + factsFlagConfigAttributes facts) 0, eq (flagConfig facts executing slot + factsFlagConfigInitial facts) 0, eq (flagConfig facts executing slot + factsFlagConfigExists facts) 0, eq (flagControl facts executing slot) (flagControl facts executing slot), eq (patternOf slot) 0]
+    strandedBitmap = (1 `shiftL` 10) .|. (1 `shiftL` 15)
     deleteStrandedOwned family' =
       let timer = case family' of FlagFamily -> flagTimerOf executing 2; MailboxFamily -> mailboxTimerOf executing 2
           waitResult = case family' of FlagFamily -> flagWaitResult executing 2; MailboxFamily -> mailboxWaitResult executing 2
-       in [res 0, byte (taskOf executing 2 + factsTaskState facts) (factsStateReady facts), eq waitResult (0xffffffcf), readyCheck executing 14 (taskOf executing 2), timerLog 1 [(recordAddress facts executing executing, timer)]]
+       in [res 0, byte (taskOf executing 2 + factsTaskState facts) (factsStateReady facts), eq waitResult (0xffffffcf), readyCheck executing 14 (taskOf executing 2), eq (readyHead facts executing 14 + factsHeadPrev facts) (taskOf executing 2), eq (taskOf executing 2 + factsTaskNext facts) (readyHead facts executing 14), eq (taskOf executing 2 + factsTaskPrev facts) (readyHead facts executing 14), eq (dfReadyBitmap (domainFacts facts executing)) (strandedBitmap .|. (1 `shiftL` 14)), timerLog 1 [(recordAddress facts executing executing, timer)]]
     deleteStrandedStock family' =
       let timer = case family' of FlagFamily -> flagTimerOf executing 2; MailboxFamily -> mailboxTimerOf executing 2
           waitResult = case family' of FlagFamily -> flagWaitResult executing 2; MailboxFamily -> mailboxWaitResult executing 2
-       in [res 0, byte (taskOf executing 2 + factsTaskState facts) (factsStateWait facts .|. factsStateObjectQueued facts .|. factsStateOwnerLockQueued facts), eq waitResult timer, readyCheck executing 14 (readyHead facts executing 14)]
-    handlerOwned = [res 0, eq (flagPattern (peer executing) 2) 3, readyCheck (peer executing) 5 (taskOf (peer executing) 2), eq (bankAddress (peer executing)) 0x01000000, eq (rescheduleAddress executing) 0, eq (bankAddress executing) 0, eq (readyHead facts executing 5) (readyHead facts executing 5)]
-    handlerStock = [res 0, eq (flagPattern (peer executing) 2) 3, readyCheck executing 5 (taskOf (peer executing) 2), eq (rescheduleAddress executing) 0, eq (bankAddress executing) 0, eq (bankAddress (peer executing)) 0x01000000, eq (readyHead facts (peer executing) 5) (readyHead facts (peer executing) 5)]
+          queue = case family' of FlagFamily -> flagControl facts executing 1; MailboxFamily -> mailControl 1
+       in [res 0, byte (taskOf executing 2 + factsTaskState facts) (factsStateWait facts .|. factsStateObjectQueued facts .|. factsStateOwnerLockQueued facts), eq waitResult timer, readyCheck executing 14 (readyHead facts executing 14), eq (readyHead facts executing 14 + factsHeadPrev facts) (readyHead facts executing 14), eq (taskOf executing 2 + factsTaskNext facts) queue, eq (taskOf executing 2 + factsTaskPrev facts) queue, eq (dfReadyBitmap (domainFacts facts executing)) strandedBitmap]
+    multiwaiterStock =
+      [ eq (mailboxConfig facts executing 1 + factsMailboxConfigAttributes facts) 2
+      , eq (mailboxConfig facts executing 1 + factsMailboxConfigPriorityLimit facts) 32
+      , eq (mailboxConfig facts executing 1 + factsMailboxConfigExists facts) 0
+      , eq (mailControl 1 + factsMailboxControlHead facts) 0
+      , eq (mailControl 1 + factsMailboxControlTail facts) 0
+      , eq (mailboxWaitResult executing 1) 0
+      , eq (mailboxWaitResult (peer executing) 2) (mailboxTimerOf (peer executing) 2)
+      , byte (taskOf executing 1 + factsTaskState facts) (factsStateWait facts .|. factsStateObjectQueued facts .|. factsStateOwnerLockQueued facts)
+      , byte (taskOf (peer executing) 2 + factsTaskState facts) (factsStateWait facts .|. factsStateObjectQueued facts .|. factsStateOwnerLockQueued facts)
+      , eq (readyHead facts executing 10) (readyHead facts executing 10)
+      , eq (readyHead facts executing 10 + factsHeadPrev facts) (readyHead facts executing 10)
+      , eq (readyHead facts (peer executing) 5) (readyHead facts (peer executing) 5)
+      , eq (readyHead facts (peer executing) 5 + factsHeadPrev facts) (readyHead facts (peer executing) 5)
+      , eq (dfReadyBitmap (domainFacts facts executing)) ((1 `shiftL` 14) .|. (1 `shiftL` 15))
+      , eq (dfReadyBitmap (domainFacts facts (peer executing))) strandedBitmap
+      , eq (dfRunning (domainFacts facts executing)) (taskAt facts executing 4)
+      , eq (dfSelected (domainFacts facts executing)) (taskAt facts executing 4)
+      , eq (dfRunning (domainFacts facts (peer executing))) (taskAt facts (peer executing) runningSlot)
+      , eq (dfSelected (domainFacts facts (peer executing))) (taskAt facts (peer executing) runningSlot)
+      , eq (taskOf executing 1 + factsTaskNext facts) (mailControl 1)
+      , eq (taskOf executing 1 + factsTaskPrev facts) (mailControl 1)
+      , eq (taskOf (peer executing) 2 + factsTaskNext facts) (taskOf executing 1)
+      , eq (taskOf (peer executing) 2 + factsTaskPrev facts) (mailControl 1)
+      , eq (outWord + 8) 0
+      , eq (bankAddress executing) 0
+      , eq (bankAddress (peer executing)) 0
+      ]
+    handlerOwned = [res 0, eq (flagPattern (peer executing) 2) 3, readyCheck (peer executing) 5 (taskOf (peer executing) 2), eq (bankAddress (peer executing)) 0x01000000, eq (rescheduleAddress executing) 0, eq (bankAddress executing) 0, eq (readyHead facts executing 5) (readyHead facts executing 5), eq (readyHead facts executing 5 + factsHeadPrev facts) (readyHead facts executing 5), eq (dfReadyBitmap (domainFacts facts executing)) strandedBitmap, eq (dfSelected (domainFacts facts executing)) (taskAt facts executing runningSlot), eq (readyHead facts (peer executing) 5 + factsHeadPrev facts) (taskOf (peer executing) 2), eq (dfReadyBitmap (domainFacts facts (peer executing))) (strandedBitmap .|. (1 `shiftL` 5)), eq (dfSelected (domainFacts facts (peer executing))) (taskOf (peer executing) 2), eq (taskOf (peer executing) 2 + factsTaskNext facts) (readyHead facts (peer executing) 5), eq (taskOf (peer executing) 2 + factsTaskPrev facts) (readyHead facts (peer executing) 5)]
+    handlerStock = [res 0, eq (flagPattern (peer executing) 2) 3, readyCheck executing 5 (taskOf (peer executing) 2), eq (rescheduleAddress executing) 0, eq (bankAddress executing) 0, eq (bankAddress (peer executing)) 0x01000000, eq (readyHead facts (peer executing) 5) (readyHead facts (peer executing) 5), eq (readyHead facts executing 5 + factsHeadPrev facts) (taskOf (peer executing) 2), eq (dfReadyBitmap (domainFacts facts executing)) (strandedBitmap .|. (1 `shiftL` 5)), eq (dfSelected (domainFacts facts executing)) (taskOf (peer executing) 2), eq (readyHead facts (peer executing) 5 + factsHeadPrev facts) (readyHead facts (peer executing) 5), eq (dfReadyBitmap (domainFacts facts (peer executing))) strandedBitmap, eq (dfSelected (domainFacts facts (peer executing))) (taskAt facts (peer executing) runningSlot), eq (taskOf (peer executing) 2 + factsTaskNext facts) (readyHead facts executing 5), eq (taskOf (peer executing) 2 + factsTaskPrev facts) (readyHead facts executing 5)]
     multiwaiterOwned =
       [ res 0, eq resultCell (0xffffffcf), eq outWord 0xdead
       , eq (mailboxConfig facts executing 1 + factsMailboxConfigExists facts) 1
@@ -1597,5 +1666,18 @@ cases facts _entries executing =
       , readyCheck executing 10 (taskOf executing 1)
       , eq (bankAddress (peer executing)) 0x01000000
       , eq (bankAddress executing) 0
+      , eq (readyHead facts executing 10 + factsHeadPrev facts) (taskOf executing 1)
+      , eq (dfReadyBitmap (domainFacts facts executing)) ((1 `shiftL` 14) .|. (1 `shiftL` 15) .|. (1 `shiftL` 10))
+      , eq (dfRunning (domainFacts facts executing)) (taskAt facts executing runningSlot)
+      , eq (dfSelected (domainFacts facts executing)) (taskAt facts executing runningSlot)
+      , eq (taskOf executing 1 + factsTaskNext facts) (readyHead facts executing 10)
+      , eq (taskOf executing 1 + factsTaskPrev facts) (readyHead facts executing 10)
+      , byte (taskOf executing 1 + factsTaskState facts) (factsStateReady facts)
+      , eq (outWord + 8) 0xffffffcf
+      , eq (readyHead facts (peer executing) 5 + factsHeadPrev facts) (taskOf (peer executing) 2)
+      , eq (dfReadyBitmap (domainFacts facts (peer executing))) (strandedBitmap .|. (1 `shiftL` 5))
+      , eq (dfSelected (domainFacts facts (peer executing))) (taskOf (peer executing) 2)
+      , eq (taskOf (peer executing) 2 + factsTaskNext facts) (readyHead facts (peer executing) 5)
+      , eq (taskOf (peer executing) 2 + factsTaskPrev facts) (readyHead facts (peer executing) 5)
       , timerLog 1 [(recordAddress facts executing (peer executing), mailboxTimerOf (peer executing) 2)]
       ]

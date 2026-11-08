@@ -1,10 +1,28 @@
+use core::num::NonZeroU32;
+
 use super::{load, Cpu, ENTRY};
-use crate::objects::block::{block_locked, Block, Deadline, TimerEntryAddress, WaitPreparation, WaitTimer};
+use crate::objects::block::{block_locked, Block, Deadline, Tick, TimerEntryAddress, WaitPreparation, WaitTimer};
 use crate::objects::layout::{DomainId, FlagConfig, FlagControl, GuestAddress, KernelContext, Task, WaitBlock, WaitQueue};
 use crate::objects::locked::{check_control, OutWord};
 use crate::objects::matching::{MatchMode, Pattern};
 use crate::objects::order::QueueOrder;
 use crate::objects::wake::{release_with, Selection, WaitCompletion};
+
+struct RelativeTicks(NonZeroU32);
+
+impl RelativeTicks {
+    fn from_abi(ticks: i32) -> Option<Self> {
+        if ticks > 0 {
+            NonZeroU32::new(ticks as u32).map(Self)
+        } else {
+            None
+        }
+    }
+
+    fn deadline(self, now: Tick) -> Deadline {
+        Deadline(now.0.wrapping_add(self.0.get()))
+    }
+}
 
 fn queue_order(queue: WaitQueue) -> QueueOrder {
     QueueOrder::from_attribute(load(GuestAddress(load(queue.config()))))
@@ -39,7 +57,7 @@ pub extern "C" fn xm1_rtos_objects_wait_block_timed(
     queue: u32,
     wait: u32,
     timer: u32,
-    deadline: u32,
+    timeout: i32,
 ) {
     let Some(owner) = DomainId::from_word(owner) else { return };
     let queue = WaitQueue(GuestAddress(queue));
@@ -51,9 +69,9 @@ pub extern "C" fn xm1_rtos_objects_wait_block_timed(
         wait: WaitBlock(GuestAddress(wait)),
         queue,
         order: queue_order(queue),
-        timer: Some(WaitTimer {
+        timer: RelativeTicks::from_abi(timeout).map(|delay| WaitTimer {
             entry: TimerEntryAddress(GuestAddress(timer)),
-            deadline: Deadline(deadline),
+            deadline: delay.deadline(Cpu.tick(ENTRY.words().context(ENTRY))),
         }),
     };
     block_locked(&Cpu, &prep);

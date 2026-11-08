@@ -2,7 +2,6 @@ use crate::create::Machine;
 use crate::id::{FlagId, MailboxId};
 use crate::layout::{GuestAddress, Message, Task, WaitQueue};
 use crate::locked::ObjectLock;
-use crate::status::ObjectStatus;
 use crate::wake::{release_with, unlink, DispatchTarget, Selection, WaitCompletion, Wake};
 
 /// Whether the released waiters require a dispatch after the caller restores its mask.

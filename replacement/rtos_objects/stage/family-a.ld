@@ -54,13 +54,13 @@ SECTIONS {
     *(.text.OUTLINED_FUNCTION_2)
     *(.text.OUTLINED_FUNCTION_4)
     *(.text.OUTLINED_FUNCTION_8)
-    *(.text.OUTLINED_FUNCTION_9)
     __helper_block_timed_shared_end = .;
     . = ORIGIN(helper_block_timed) + LENGTH(helper_block_timed);
   } > helper_block_timed =0xf000f0e7
   .helper_check : {
     KEEP(*(.text.helper_check))
     __helper_check_body_end = .;
+    *(.text.OUTLINED_FUNCTION_9)
 
     __helper_check_shared_end = .;
     . = ORIGIN(helper_check) + LENGTH(helper_check);
