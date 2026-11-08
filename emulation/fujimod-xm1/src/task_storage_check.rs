@@ -84,7 +84,7 @@ fn validate(observation: &Observation, role: Role, original: &[u8], linked: &[u8
     require((observation.case == Case::Natural) == observation.perturbation.is_none(), "control labelling differs from perturbation")?;
     require(observation.identity.update.0 == match role {
         Role::Retained => "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490",
-        Role::Owned => "cb3834a423d288d8acc0af9d7977d919945068ffae807d1ad7a940963cde3c00",
+        Role::Owned => "cd01285f06cbc983baf6e2124bed01427c04389071ad7c1f751b7bcd376d5726",
     } && observation.identity.run.0 == "efa32ff8d2a378ba9e098ac28015faf82856765c866d5db5b97cb1c38342deef"
         && observation.identity.rom.0 == "4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be"
         && observation.identity.original_image4.0 == sha256(original)
@@ -130,7 +130,13 @@ fn validate(observation: &Observation, role: Role, original: &[u8], linked: &[u8
     }
     for name in ["r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11"] { require(register(entry, name)? == register(returned, name)?, "callee-saved register differs")?; }
     require((entry.cpsr ^ returned.cpsr) & 0x0fff_ffff == 0, "helper changed non-NZCV CPSR state")?;
-    let expected_status = match observation.case { Case::SizeError | Case::CapacityError => (-33i32) as u32, Case::ReservedError => (-18i32) as u32, _ => 0 };
+    let expected_status = match (observation.case, role) {
+        (Case::SizeError, _) => (-33i32) as u32,
+        (Case::ReservedError, _) => (-18i32) as u32,
+        (Case::CapacityError, Role::Retained) => 0,
+        (Case::CapacityError, Role::Owned) => (-33i32) as u32,
+        _ => 0,
+    };
     require(register(returned, "r0")? == expected_status, "helper returned wrong status")?;
     require(value(post, OUTPUT + 4)? == 0x400, "wrapper size publication was lost")?;
     if observation.case != Case::Natural {
@@ -138,7 +144,10 @@ fn validate(observation: &Observation, role: Role, original: &[u8], linked: &[u8
             Case::Reuse => (0xa10200, [0xa10200, 0x400, 1], 0x40a10600),
             Case::SizeError => (0, [0xa10200, 0x404, 0], 0x40a10600),
             Case::ReservedError => (0, [0xa10200, 0x400, 1], 0x40a10600),
-            Case::CapacityError => (0, [0, 0, 0], 0x40a5a200),
+            Case::CapacityError => match role {
+                Role::Retained => (0xa5a200, [0xa5a200, 0x400, 1], 0x40a5a600),
+                Role::Owned => (0, [0, 0, 0], 0x40a5a200),
+            },
             Case::Unaligned => (0xa10200, [0xa10200, 3, 1], 0x40a10200),
             Case::Wrapping => (0xa101fc, [0xa101fc, 4, 1], 0x40a10200),
             Case::AliasCursor => (0, [0xa10600, 0x400, 1], 0xa10600),
@@ -197,7 +206,7 @@ pub(super) fn compare(retained: &Path, owned: &Path, analysis: &Path, linked_pat
     let original = read(&analysis.join("lz/id4-0061c400.bin"))?;
     let linked = read(linked_path)?;
     require(sha256(&original) == "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"
-        && linked.len() == 228 && sha256(&linked) == "3f9d7945e3adc43d3e7edbbfd3cbdbece6db66fc99cf0724e7722f36086c1768", "consumer source inputs differ")?;
+        && linked.len() == 228 && sha256(&linked) == "c8f0fe6e2ca2578acefb7484c908a68308f5e4ab0b1c6f5e95afc06d0a9eaf45", "consumer source inputs differ")?;
     let rb = read(&retained.join("task-storage.json"))?;
     let ob = read(&owned.join("task-storage.json"))?;
     let r: Observation = serde_json::from_slice(&rb).map_err(|error| error.to_string())?;
@@ -225,8 +234,17 @@ pub(super) fn compare(retained: &Path, owned: &Path, analysis: &Path, linked_pat
         comparison.original_source_matches = true;
         let (rh, rs) = snapshot(&r, 0x725e78)?;
         let (oh, os) = snapshot(&o, 0x725e78)?;
-        require(register(rh, "r0")? == register(oh, "r0")?, "original/owned statuses differ")?;
-        for word in &rs.words { require(value(rs, word.guest.0)? == value(os, word.guest.0)?, "original/owned output, record, cursor, lock or surrounding memory differs")?; }
+        if r.case == Case::CapacityError {
+            require(register(rh, "r0")? == 0 && register(oh, "r0")? == (-33i32) as u32, "capacity-error role statuses differ")?;
+            require(value(rs, OUTPUT)? == 0xa5a200 && value(os, OUTPUT)? == 0
+                && value(rs, CURSOR)? == 0x40a5a600 && value(os, CURSOR)? == 0x40a5a200
+                && [value(rs, STATE)?, value(rs, STATE + 4)?, value(rs, STATE + 8)?] == [0xa5a200, 0x400, 1]
+                && [value(os, STATE)?, value(os, STATE + 4)?, value(os, STATE + 8)?] == [0, 0, 0],
+                "capacity-error intended role difference differs")?;
+        } else {
+            require(register(rh, "r0")? == register(oh, "r0")?, "original/owned statuses differ")?;
+            for word in &rs.words { require(value(rs, word.guest.0)? == value(os, word.guest.0)?, "original/owned output, record, cursor, lock or surrounding memory differs")?; }
+        }
         if r.case == Case::Natural {
             let (_, re) = snapshot(&r, 0x69cf38)?;
             let (_, oe) = snapshot(&o, 0x69cf38)?;

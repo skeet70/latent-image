@@ -243,8 +243,8 @@ fn drive() -> Result<(), String> {
         || identity.original_image4.0 != "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"
         || identity.loader_a.0 != "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882"
         || identity.loader_b.0 != "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec"
-        || identity.linked.0 != "3f9d7945e3adc43d3e7edbbfd3cbdbece6db66fc99cf0724e7722f36086c1768"
-        || identity.update.0 != match role { Role::Retained => "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490", Role::Owned => "cb3834a423d288d8acc0af9d7977d919945068ffae807d1ad7a940963cde3c00" }
+        || identity.linked.0 != "c8f0fe6e2ca2578acefb7484c908a68308f5e4ab0b1c6f5e95afc06d0a9eaf45"
+        || identity.update.0 != match role { Role::Retained => "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490", Role::Owned => "cd01285f06cbc983baf6e2124bed01427c04389071ad7c1f751b7bcd376d5726" }
         || linked.len() != 228 { return Err("noncanonical source, staged candidate or linked input".into()); }
     let mut helper = image[(START - 0x61c400) as usize..(END - 0x61c400) as usize].to_vec();
     if role == Role::Owned { helper[(0x725cc4 - START) as usize..(0x725da8 - START) as usize].copy_from_slice(&linked); }

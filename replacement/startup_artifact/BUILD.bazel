@@ -117,6 +117,41 @@ _TEST_DEPS = [
 ]
 
 haskell_test(
+    name = "timer-compose-tests",
+    srcs = ["TimerComposeTests.hs"],
+    args = [
+        "$(rootpath //lz:lz-encode)",
+        "$(rootpath //host/firmware:rebuild-update)",
+        "$(rootpath //lz:fflzd)",
+        "$(rootpath //replacement/rtos_timer:timer-a.bin)",
+        "$(rootpath //replacement/rtos_timer:timer-a.symbols)",
+        "$(rootpath //replacement/rtos_timer:timer-b.bin)",
+        "$(rootpath //replacement/rtos_timer:timer-b.symbols)",
+    ],
+    data = [
+        "//lz:lz-encode",
+        "//host/firmware:rebuild-update",
+        "//lz:fflzd",
+        "//replacement/rtos_timer:timer-a.bin",
+        "//replacement/rtos_timer:timer-a.symbols",
+        "//replacement/rtos_timer:timer-b.bin",
+        "//replacement/rtos_timer:timer-b.symbols",
+    ],
+    tags = ["manual"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":startup-artifact",
+        "//emulation:image4-staging-lib",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:update-container",
+    ],
+)
+
+haskell_test(
     name = "timer-arena-join-tests",
     srcs = ["TimerArenaJoinTests.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],

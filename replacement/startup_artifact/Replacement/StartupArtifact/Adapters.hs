@@ -742,7 +742,10 @@ deriveTimer source (LinkedImage (ImageBytes a) (SymbolBytes symbolsA)) (LinkedIm
       entriesB = [("xm1_rtos_timer_initialize",0xd4a10),("xm1_rtos_timer_insert",0xd4c20)
                  ,("xm1_rtos_timer_remove",0xd4c68),("xm1_rtos_timer_tick",0xd4d4c)]
       extent (low, high) = fromIntegral (high - low)
-      entryWord image (low, _) address = B.index image (fromIntegral (address - low))
+      entryWord image (low, _) address = U.word32At image (fromIntegral (address - low))
+      inModuleBranch address word low high = case A.decode address word of
+        A.Branch (A.Cond 14) False target -> target >= low && target < high
+        _ -> False
   unless (B.length a == extent moduleA && B.length b == extent moduleB)
     (Left (AdapterRefused kind "timer linked image does not fill its module span"))
   rowsA <- shown (F.parseSymbols symbolsA)
@@ -751,7 +754,7 @@ deriveTimer source (LinkedImage (ImageBytes a) (SymbolBytes symbolsA)) (LinkedIm
         symbol <- shown (F.lookupSymbol rows name)
         unless (F.symbolAddress symbol == address && F.symbolSize symbol == 4)
           (Left (AdapterRefused kind (T.pack ("timer entry moved: " ++ name))))
-        unless (address >= low && address + 4 <= high && entryWord image (low, high) address == 0xea)
+        unless (address >= low && address + 4 <= high && inModuleBranch address (entryWord image (low, high) address) low high)
           (Left (AdapterRefused kind (T.pack ("timer entry is not an in-module branch: " ++ name))))
   check rowsA a moduleA entriesA
   check rowsB b moduleB entriesB

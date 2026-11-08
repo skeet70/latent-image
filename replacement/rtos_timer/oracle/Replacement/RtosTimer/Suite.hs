@@ -366,7 +366,8 @@ coreCases facts domain =
       [CountIs 1, EntryIndexIs 1 1, KernelWord (heapNode facts domain 1) 10, KernelWord (heapNode facts domain 1 + 4) (entryAddress 1)]
       [] [] [] []
   , Case "insert-second-up" Insert [(10, 1)] 1 2 5 0 10 0 0x13 Receipt Equal
-      [CountIs 2, EntryIndexIs 2 1, EntryIndexIs 1 2, KernelWord (heapNode facts domain 1) 5, KernelWord (heapNode facts domain 2) 10]
+      [CountIs 2, EntryIndexIs 2 1, EntryIndexIs 1 2, KernelWord (heapNode facts domain 1) 5, KernelWord (heapNode facts domain 2) 10
+      , KernelWord (heapNode facts domain 1 + 4) (entryAddress 2), KernelWord (heapNode facts domain 2 + 4) (entryAddress 1)]
       [] [] [] []
   , Case "insert-third-up" Insert [(10, 1), (20, 2)] 2 3 5 0 10 0 0x13 Receipt Equal
       [CountIs 3, EntryIndexIs 3 1, EntryIndexIs 1 3, KernelWord (heapNode facts domain 1) 5, KernelWord (heapNode facts domain 2) 20, KernelWord (heapNode facts domain 3) 10]
@@ -412,12 +413,12 @@ coreCases facts domain =
   , Case "insert-already-linked" Insert [(10, 1)] 1 1 20 0 10 0 0x13 Receipt (Repair "a linked entry is refused without a write")
       []
       [CountIs 2, EntryIndexIs 1 2, KernelWord (heapNode facts domain 2) 20, KernelWord (heapNode facts domain 2 + 4) (entryAddress 1)]
-      [CountIs 1, EntryIndexIs 1 1, RegionsUnchanged ["kernel", "entries"]]
+      [CountIs 1, EntryIndexIs 1 1, RegionsUnchanged ["kernel", "entries", "arena"]]
       [] []
   , Case "insert-full" Insert (replicate 184 (100, 1)) 184 2 200 0 10 0 0x13 Receipt (Fixture "the fixture refuses an insertion above its 184-node bound")
       []
       [CountIs 185, EntryIndexIs 2 185, KernelWord (heapNode facts domain 185) 200]
-      [CountIs 184, EntryIndexIs 2 0, KernelWord (heapNode facts domain 185) 0, RegionsUnchanged ["kernel", "entries"]]
+      [CountIs 184, EntryIndexIs 2 0, KernelWord (heapNode facts domain 185) 0, RegionsUnchanged ["kernel", "entries", "arena"]]
       [] []
   ]
 
@@ -602,6 +603,16 @@ regionDifferences facts domain regions stock owned =
     d = domainFacts facts domain
     c = factsContext facts
 
+relocatedHeapDifferences :: Facts -> Domain -> NativeObservation -> NativeObservation -> [String]
+relocatedHeapDifferences facts domain stock owned =
+  case (lookup (RegionId "kernel") (nativeMemory stock), lookup (RegionId "arena") (nativeMemory owned)) of
+    (Just kernel, Just arena)
+      | offset + 0x5c0 <= B.length kernel ->
+          [ "relocated owned heap differs" | B.take 0x5c0 (B.drop offset kernel) /= B.take 0x5c0 arena ]
+    _ -> ["relocated owned heap region is missing"]
+  where
+    offset = fromIntegral (dfTimerHeap (domainFacts facts domain) - kernelLow facts domain)
+
 -- | Zero a subrange so a role-specific pointer or the relocated node array compares equal.
 maskRange :: Int -> Int -> B.ByteString -> B.ByteString
 maskRange offset size bytes
@@ -737,6 +748,7 @@ runDomain runner cacheRoot directory facts domain stockImage ownedImage ownedSym
             errorsFor role observation = [message | Left message <- statusCheck observation : roleChecks role observation]
             equalDifferences stock' owned' = case caseKind one of
               Equal -> regionDifferences facts domain [RegionId "kernel", RegionId "entries"] stock' owned'
+                ++ relocatedHeapDifferences facts domain stock' owned'
               _ -> []
         let run = CaseRun
               { caseDomain = domain
@@ -789,6 +801,10 @@ controlRuns facts domain cohort one observation =
     ++ [ ControlRun cohort ("unchanged-" ++ region) (caseName one) (refused (RegionsUnchanged [region]) (mutateRegion region observation))
        | region <- declaredRegions
        ]
+    ++ [ ControlRun cohort "relocated-heap-entry" (caseName one)
+           (refused (KernelWord (heapNodeRole facts domain Owned 1 + 4) (entryAddress 2)) (mutateArenaWord (heapNodeRole facts domain Owned 1 + 4) 0 observation))
+       | caseName one == "insert-second-up"
+       ]
   where
     expected = expectedCpsrControl one
     refused check' mutated = case check facts domain one Owned mutated check' of
@@ -800,6 +816,15 @@ controlRuns facts domain cohort one observation =
       observed
         { nativeMemory =
             [ (ident, if ident == configurationRegion then B.take 0x20 bytes <> flipHead (B.drop 0x20 bytes) else bytes)
+            | (ident, bytes) <- nativeMemory observed
+            ]
+        }
+    mutateArenaWord address value observed =
+      let (low, _) = arenaSpan facts domain
+          offset = fromIntegral (address - low)
+      in observed
+        { nativeMemory =
+            [ (ident, if regionName ident == "arena" then B.take offset bytes <> word32le value <> B.drop (offset + 4) bytes else bytes)
             | (ident, bytes) <- nativeMemory observed
             ]
         }

@@ -70,6 +70,7 @@ data JoinKind = FirstStageSecondaryRendezvous | CriticalPairPublisherBindings | 
   | KernelSlotTaskSubmission | KernelSlotTaskStorage | KernelSlotRootTask | KernelSlotImage5Producer | KernelSlotPlainProducer
   | KernelSlotGeneralHeap
   | TimerTaskArenaReservation
+  | TimerPrimaryPublisher | TimerRecord2Link | TimerLoaderStartup | TimerKernelSlotBodies
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 instance JoinName JoinKind where
@@ -110,6 +111,10 @@ instance JoinName JoinKind where
   joinName KernelSlotPlainProducer = "kernel-slot-plain-producer"
   joinName KernelSlotGeneralHeap = "kernel-slot-general-heap"
   joinName TimerTaskArenaReservation = "timer-task-arena-reservation"
+  joinName TimerPrimaryPublisher = "timer-primary-publisher"
+  joinName TimerRecord2Link = "timer-record2-link"
+  joinName TimerLoaderStartup = "timer-loader-startup"
+  joinName TimerKernelSlotBodies = "timer-kernel-slot-bodies"
 
 at :: Target -> Word32 -> Word32 -> Span
 at target start end = Span target (Guest start) (Guest end)
@@ -409,7 +414,45 @@ registeredJoins =
   , image5ProducerServices, plainProducerServices, generalHeapImage5Publication, generalHeapArenaClear
   , applicationPumpServices, task1ActorProducer, task1ActorPump, image5InitializerServices
   , constructorTaskSubmission, constructorImage5Producer, constructorInitializer Image5Initializer
-  , timerTaskArenaReservation ] ++ kernelSlotJoins
+  , timerTaskArenaReservation, timerPrimaryPublisher, timerRecord2Link, timerLoaderStartup, timerKernelSlotBodies ] ++ kernelSlotJoins
+
+timerCarrierAt :: JoinEvidence -> Target -> Word32 -> Word32 -> Bool
+timerCarrierAt evidence target low high = case [pieceCarriers piece | piece <- evidencePieces evidence, pieceKind piece == Timer] of
+  [spans] -> any (\(Span own (Guest start) (Guest end)) -> own == target && start == low && end == high) spans
+  _ -> False
+
+timerAdmissionRead :: PieceKind -> Target -> Word32 -> Word32 -> JoinEvidence -> Bool
+timerAdmissionRead other target low high evidence =
+  all (\(Footprint (Span own (Guest start) (Guest end)) basis _) ->
+        own /= target || end <= low || high <= start || basis == AdmissionRead)
+    (concatMap pieceFootprint [piece | piece <- evidencePieces evidence, pieceKind piece == other])
+
+-- | The timer module is the only loader difference inside a whole-loader admission read.
+timerLoaderJoin :: JoinKind -> PieceKind -> Target -> Word32 -> Word32 -> Join JoinKind
+timerLoaderJoin kind other target low high = Join kind (Set.fromList [Timer, other])
+  [at target low high]
+  (HostProof "the timer piece replaces exactly its module span; the other piece's whole-loader footprint is an admission read of the canonical loader, and every byte outside the timer module remains canonical. The composed contract retains both canonical and composed digests.")
+  [ HostCheck "timer-module-carrier" $ \evidence -> timerCarrierAt evidence target low high
+  , HostCheck "whole-loader-footprint-is-admission-read" $ \evidence -> timerAdmissionRead other target low high evidence
+  ]
+
+timerPrimaryPublisher, timerRecord2Link, timerLoaderStartup, timerKernelSlotBodies :: Join JoinKind
+timerPrimaryPublisher = timerLoaderJoin TimerPrimaryPublisher PrimaryPublisher LoaderA 0x44a50 0x44f2c
+timerRecord2Link = timerLoaderJoin TimerRecord2Link Record2Link LoaderB 0xd4a10 0xd4eec
+timerLoaderStartup = Join TimerLoaderStartup (Set.fromList [Timer, LoaderStartup])
+  [at LoaderA 0x44a50 0x44f2c, at LoaderB 0xd4a10 0xd4eec]
+  (HostProof "the timer piece replaces exactly its two module spans; the loader-startup whole-loader footprints are admission reads of the canonical loaders, and every byte outside the timer modules remains canonical. The composed contract retains both canonical and composed digests.")
+  [ HostCheck "timer-a-module-carrier" $ \e -> timerCarrierAt e LoaderA 0x44a50 0x44f2c
+  , HostCheck "timer-b-module-carrier" $ \e -> timerCarrierAt e LoaderB 0xd4a10 0xd4eec
+  , HostCheck "loader-startup-footprints-are-admission-reads" $ \e ->
+      timerAdmissionRead LoaderStartup LoaderA 0x44a50 0x44f2c e && timerAdmissionRead LoaderStartup LoaderB 0xd4a10 0xd4eec e ]
+timerKernelSlotBodies = Join TimerKernelSlotBodies (Set.fromList [Timer, KernelSlotBodies])
+  [at LoaderA 0x44a50 0x44f2c, at LoaderB 0xd4a10 0xd4eec]
+  (HostProof "the timer piece replaces exactly its two module spans; the kernel-slot whole-loader footprints are admission reads of the canonical loaders, and every byte outside the timer modules remains canonical. The composed contract retains both canonical and composed digests.")
+  [ HostCheck "timer-a-module-carrier" $ \e -> timerCarrierAt e LoaderA 0x44a50 0x44f2c
+  , HostCheck "timer-b-module-carrier" $ \e -> timerCarrierAt e LoaderB 0xd4a10 0xd4eec
+  , HostCheck "kernel-slot-footprints-are-admission-reads" $ \e ->
+      timerAdmissionRead KernelSlotBodies LoaderA 0x44a50 0x44f2c e && timerAdmissionRead KernelSlotBodies LoaderB 0xd4a10 0xd4eec e ]
 
 -- | The timer arenas and the reduced task-storage producer reserve disjoint pool bytes.
 timerTaskArenaReservation :: Join JoinKind
