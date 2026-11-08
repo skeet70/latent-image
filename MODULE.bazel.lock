@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "dMGd2vgTKyQ32qaz+Ksf/+woFb2st/WOjbk+NGTbdjs=",
+        "bzlTransitiveDigest": "HgtJE0FHnlj8b+n/7+nJLv2ccU2nZ/w18lislC1a9xQ=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -599,6 +599,7 @@
                 "@@//emulation:fujimod-xm1/src/peer_witness_wait.rs": "//emulation:fujimod-xm1/src/peer_witness_wait.rs",
                 "@@//emulation:fujimod-xm1/src/pool_allocation.rs": "//emulation:fujimod-xm1/src/pool_allocation.rs",
                 "@@//emulation:fujimod-xm1/src/power_hold.rs": "//emulation:fujimod-xm1/src/power_hold.rs",
+                "@@//emulation:fujimod-xm1/src/presentation.rs": "//emulation:fujimod-xm1/src/presentation.rs",
                 "@@//emulation:fujimod-xm1/src/provenance.rs": "//emulation:fujimod-xm1/src/provenance.rs",
                 "@@//emulation:fujimod-xm1/src/provenance_main.rs": "//emulation:fujimod-xm1/src/provenance_main.rs",
                 "@@//emulation:fujimod-xm1/src/queue_boundary.rs": "//emulation:fujimod-xm1/src/queue_boundary.rs",
@@ -775,6 +776,7 @@
                 "@@//emulation:fujimod-xm1/src/peer_witness_wait.rs": "//emulation:fujimod-xm1/src/peer_witness_wait.rs",
                 "@@//emulation:fujimod-xm1/src/pool_allocation.rs": "//emulation:fujimod-xm1/src/pool_allocation.rs",
                 "@@//emulation:fujimod-xm1/src/power_hold.rs": "//emulation:fujimod-xm1/src/power_hold.rs",
+                "@@//emulation:fujimod-xm1/src/presentation.rs": "//emulation:fujimod-xm1/src/presentation.rs",
                 "@@//emulation:fujimod-xm1/src/provenance.rs": "//emulation:fujimod-xm1/src/provenance.rs",
                 "@@//emulation:fujimod-xm1/src/provenance_main.rs": "//emulation:fujimod-xm1/src/provenance_main.rs",
                 "@@//emulation:fujimod-xm1/src/queue_boundary.rs": "//emulation:fujimod-xm1/src/queue_boundary.rs",
@@ -951,6 +953,7 @@
                 "@@//emulation:fujimod-xm1/src/peer_witness_wait.rs": "//emulation:fujimod-xm1/src/peer_witness_wait.rs",
                 "@@//emulation:fujimod-xm1/src/pool_allocation.rs": "//emulation:fujimod-xm1/src/pool_allocation.rs",
                 "@@//emulation:fujimod-xm1/src/power_hold.rs": "//emulation:fujimod-xm1/src/power_hold.rs",
+                "@@//emulation:fujimod-xm1/src/presentation.rs": "//emulation:fujimod-xm1/src/presentation.rs",
                 "@@//emulation:fujimod-xm1/src/provenance.rs": "//emulation:fujimod-xm1/src/provenance.rs",
                 "@@//emulation:fujimod-xm1/src/provenance_main.rs": "//emulation:fujimod-xm1/src/provenance_main.rs",
                 "@@//emulation:fujimod-xm1/src/queue_boundary.rs": "//emulation:fujimod-xm1/src/queue_boundary.rs",
@@ -1130,6 +1133,7 @@
                 "@@//emulation:fujimod-xm1/src/peer_witness_wait.rs": "//emulation:fujimod-xm1/src/peer_witness_wait.rs",
                 "@@//emulation:fujimod-xm1/src/pool_allocation.rs": "//emulation:fujimod-xm1/src/pool_allocation.rs",
                 "@@//emulation:fujimod-xm1/src/power_hold.rs": "//emulation:fujimod-xm1/src/power_hold.rs",
+                "@@//emulation:fujimod-xm1/src/presentation.rs": "//emulation:fujimod-xm1/src/presentation.rs",
                 "@@//emulation:fujimod-xm1/src/provenance.rs": "//emulation:fujimod-xm1/src/provenance.rs",
                 "@@//emulation:fujimod-xm1/src/provenance_main.rs": "//emulation:fujimod-xm1/src/provenance_main.rs",
                 "@@//emulation:fujimod-xm1/src/queue_boundary.rs": "//emulation:fujimod-xm1/src/queue_boundary.rs",
