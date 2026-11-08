@@ -144,7 +144,7 @@ impl Machine for Cpu {
 
     #[inline(always)]
     fn notify_dispatch(&self, context: KernelContext) -> bool {
-        unsafe { s3d_notify_dispatch(context.0 .0) != 0 }
+        unsafe { s3d_notify_dispatch(load(context.id())) != 0 }
     }
 
     #[inline(always)]

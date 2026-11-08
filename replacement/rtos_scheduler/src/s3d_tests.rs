@@ -214,15 +214,22 @@ impl Model {
         let count = self.word(words.timer_count);
         self.set_word(words.timer_count, count + 1);
         self.set_word(GuestAddress(TIMER), count + 1);
-        self.set_word(GuestAddress(words.timer_heap.0 + count * TIMER_STRIDE), 0);
-        self.set_word(
-            GuestAddress(words.timer_heap.0 + count * TIMER_STRIDE + 4),
-            0,
-        );
-        self.set_word(
-            GuestAddress(words.timer_heap.0 + count * TIMER_STRIDE + 8),
-            TIMER,
-        );
+        let node = GuestAddress(words.timer_heap.0 + count * TIMER_NODE_STRIDE);
+        self.set_word(node, 0);
+        self.set_word(node.offset(TIMER_NODE_ENTRY), TIMER);
+    }
+
+    fn expire_if_active(&self, domain: Domain, slot: u32, result: i32) {
+        let task = self.task(domain, slot);
+        let wait = GuestAddress(self.word(task.wait()));
+        let receipt = self.word(wait);
+        if receipt != 0 {
+            let entry = TimerEntry(GuestAddress(receipt));
+            let context = domain.words().context(domain);
+            if timer_heap_active(self, context, entry) {
+                self.finish_wait(domain, slot, result);
+            }
+        }
     }
 
     fn finish_wait(&self, domain: Domain, slot: u32, result: i32) {
@@ -230,7 +237,11 @@ impl Model {
         let wait = GuestAddress(self.word(task.wait()));
         let receipt = self.word(wait);
         if receipt != 0 {
-            self.timers.borrow_mut().remove(&receipt);
+            let entry = TimerEntry(GuestAddress(receipt));
+            let context = domain.words().context(domain);
+            if timer_heap_active(self, context, entry) {
+                self.timer_remove(context, entry);
+            }
         }
         self.set_word(wait, result as u32);
         if self.word(task.terminate_pending()) != 0 {
@@ -423,10 +434,9 @@ impl Machine for Model {
         );
         let count_word = GuestAddress(self.word(context.timer_count()));
         let count = self.word(count_word);
-        let node = GuestAddress(self.word(context.timer_heap()) + count * TIMER_STRIDE);
+        let node = GuestAddress(self.word(context.timer_heap()) + count * TIMER_NODE_STRIDE);
         self.set_word(node, expiry);
-        self.set_word(node.offset(4), 0);
-        self.set_word(node.offset(8), entry.0 .0);
+        self.set_word(node.offset(TIMER_NODE_ENTRY), entry.0 .0);
         self.set_word(entry.index(), count + 1);
         self.set_word(count_word, count + 1);
         self.timers.borrow_mut().insert(entry.0 .0);
@@ -441,21 +451,20 @@ impl Machine for Model {
         let count_word = GuestAddress(self.word(context.timer_count()));
         let count = self.word(count_word);
         if index != 0 && index <= count {
-            let last = GuestAddress(self.word(context.timer_heap()) + (count - 1) * TIMER_STRIDE);
-            let node = GuestAddress(self.word(context.timer_heap()) + (index - 1) * TIMER_STRIDE);
-            let last_entry = self.word(last.offset(8));
+            let last = GuestAddress(self.word(context.timer_heap()) + (count - 1) * TIMER_NODE_STRIDE);
+            let node = GuestAddress(self.word(context.timer_heap()) + (index - 1) * TIMER_NODE_STRIDE);
+            let last_entry = self.word(last.offset(TIMER_NODE_ENTRY));
             if index != count {
                 self.set_word(node, self.word(last));
-                self.set_word(node.offset(4), self.word(last.offset(4)));
-                self.set_word(node.offset(8), last_entry);
+                self.set_word(node.offset(TIMER_NODE_ENTRY), last_entry);
                 self.set_word(GuestAddress(last_entry), index);
             }
             self.set_word(count_word, count - 1);
         }
     }
 
-    fn timer_active(&self, _context: KernelContext, entry: TimerEntry) -> bool {
-        self.timers.borrow().contains(&entry.0 .0)
+    fn timer_active(&self, context: KernelContext, entry: TimerEntry) -> bool {
+        timer_heap_active(self, context, entry)
     }
 
     fn handshake_window(&self, _task: Task) {
@@ -978,4 +987,45 @@ fn remote_records_notify_and_do_not_switch() {
     assert_eq!(status(terminate(&model, Domain::A, id(Domain::B, 2))), 0);
     assert_eq!(model.events.borrow().as_slice(), &[Event::Notify(2)]);
     assert!(!model.irq.get());
+}
+
+#[test]
+fn release_removes_the_timer_and_expiry_does_not_revive_the_task() {
+    let model = Model::new(Domain::A);
+    model.make_running(Domain::A, 1);
+    model.set_object_wait(Domain::A, 2, 10);
+    model.arm_test_timer(Domain::A, 2);
+    let context = Domain::A.words().context(Domain::A);
+    let entry = TimerEntry(GuestAddress(TIMER));
+    assert!(timer_heap_active(&model, context, entry));
+    assert_eq!(status(release_wait(&model, Domain::A, id(Domain::A, 2))), 0);
+    assert!(!timer_heap_active(&model, context, entry));
+    assert_eq!(model.word(Domain::A.words().timer_count), 0);
+    model.expire_if_active(Domain::A, 2, -50);
+    let task = model.task(Domain::A, 2);
+    assert_eq!(model.byte(task.state()), 1);
+    assert_eq!(model.word(GuestAddress(WAIT)), (-49i32) as u32);
+    let head = ReadyHead(GuestAddress(Domain::A.words().ready_heads.0));
+    let first = model.word(head.next());
+    assert_eq!(model.word(Task(GuestAddress(first)).next()), task.0 .0);
+    assert_eq!(model.word(task.next()), head.0 .0);
+}
+
+#[test]
+fn terminate_removes_the_timer_and_expiry_does_not_revive_the_task() {
+    let model = Model::new(Domain::A);
+    model.make_running(Domain::A, 1);
+    model.set_object_wait(Domain::A, 2, 10);
+    model.arm_test_timer(Domain::A, 2);
+    let context = Domain::A.words().context(Domain::A);
+    let entry = TimerEntry(GuestAddress(TIMER));
+    assert!(timer_heap_active(&model, context, entry));
+    assert_eq!(status(terminate(&model, Domain::A, id(Domain::A, 2))), 0);
+    assert!(!timer_heap_active(&model, context, entry));
+    model.expire_if_active(Domain::A, 2, -50);
+    let task = model.task(Domain::A, 2);
+    assert_eq!(model.byte(task.state()), 0);
+    assert_eq!(model.word(task.context_discarded()), 1);
+    assert_eq!(model.word(Domain::A.words().ready_bitmap), 1);
+    assert_eq!(model.word(Domain::A.words().timer_count), 0);
 }

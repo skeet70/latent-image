@@ -18,7 +18,9 @@ use layout::{
 mod tests;
 
 pub const TASK_STRIDE: u32 = Task::SIZE;
-pub const TIMER_STRIDE: u32 = 0x0c;
+pub const TIMER_ENTRY_STRIDE: u32 = 0x0c;
+pub const TIMER_NODE_STRIDE: u32 = 0x08;
+pub const TIMER_NODE_ENTRY: u32 = 0x04;
 pub const SLEEP_RESULT_STRIDE: u32 = 0x04;
 pub const TASK_SLOT_WORD: u32 = 0x20;
 pub const TASK_COUNT: u32 = 120;
@@ -465,8 +467,8 @@ pub fn timer_heap_active<M: Machine>(
         return false;
     }
     let nodes = GuestAddress(word(m, record.timer_heap()));
-    let slot = nodes.offset(index.wrapping_sub(1) * TIMER_STRIDE);
-    word(m, slot.offset(0x08)) == entry.0 .0
+    let slot = nodes.offset(index.wrapping_sub(1) * TIMER_NODE_STRIDE);
+    word(m, slot.offset(TIMER_NODE_ENTRY)) == entry.0 .0
 }
 
 #[inline(always)]
@@ -502,7 +504,7 @@ fn sleep_timer(domain: Domain, slot: u32) -> TimerEntry {
         Domain::A => GuestAddress(0x4005_495c),
         Domain::B => GuestAddress(0x400e_491c),
     };
-    TimerEntry(base.offset(slot.wrapping_sub(1) * TIMER_STRIDE))
+    TimerEntry(base.offset(slot.wrapping_sub(1) * TIMER_ENTRY_STRIDE))
 }
 
 #[inline(always)]

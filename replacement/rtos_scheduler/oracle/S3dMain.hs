@@ -35,17 +35,18 @@ data Role = Stock | Owned deriving (Eq, Show)
 data Service = Terminate | ChangePriority | TimedSleep | ReleaseWait | HandlerRelease | Delay
   deriving (Eq, Show)
 
+data Expected = ReturnedR0 Word32 | StoppedAt Word32 deriving (Eq, Show)
+
 data Case = Case
   { caseName :: String
   , caseService :: Service
   , caseArgument :: Word32
   , caseArgument1 :: Word32
   , caseSetup :: Domain -> W -> W
-  , caseStop :: Bool
   , caseCpsr :: Word32
   , caseHandler :: Bool
   , caseLifecycle :: Maybe Word32
-  , caseExpect :: Word32
+  , caseExpected :: Expected
   }
 
 entryOf :: Domain -> Service -> Word32
@@ -183,7 +184,8 @@ seedTasks d =
 seedRecord :: Domain -> Domain -> W -> W
 seedRecord executing target =
   let record = contexts executing + if target == DomainA then 0 else 0x84
-   in setW (record + 0x00) (domainId target)
+      recordId = if target == executing then 0 else domainId target
+   in setW (record + 0x00) recordId
       >>> setW (record + 0x08) (lockWord target)
       >>> setW (record + 0x0c) (acquireFn target)
       >>> setW (record + 0x10) (releaseFn target)
@@ -267,8 +269,7 @@ armTimer d slot =
       >>> setW (timer + 8) task
       >>> setW (timerCount d) 1
       >>> setW heap 0
-      >>> setW (heap + 4) 0
-      >>> setW (heap + 8) timer
+      >>> setW (heap + 4) timer
       >>> setW (taskField task 0x14) 0x40059100
       >>> setW (0x40059100) timer
       >>> setW (0x40059100 + 4) 0x40059000
@@ -282,24 +283,29 @@ setupRunning d = makeRunning d 1
 
 cases :: Domain -> [Case]
 cases d =
-  [ Case "terminate-ready" Terminate (idOf d 2) 0 (\e -> setupRunning e >>> makeReady d 2 3 False) False 0x53 False Nothing 0
-  , Case "terminate-dormant" Terminate (idOf d 2) 0 setupRunning False 0x53 False Nothing 0xffffffd7
-  , Case "terminate-invalid-class" Terminate (3 `shiftL` 16) 0 setupRunning False 0x53 False Nothing 0xffffffee
-  , Case "terminate-masked" Terminate (idOf d 2) 0 (\e -> setupRunning e >>> makeReady d 2 3 False) False 0xd3 False Nothing 0xffffffe7
-  , Case "priority-ready" ChangePriority (idOf d 2) 2 (\e -> setupRunning e >>> makeReady d 2 5 False) False 0x53 False Nothing 0
-  , Case "priority-invalid" ChangePriority (idOf d 2) 17 setupRunning False 0x53 False Nothing 0xffffffef
-  , Case "timed-sleep-wakeup" TimedSleep 5 0 (\e -> setupRunning e >>> setB (taskField (taskAt d 1) 0x0e) 2) False 0x53 False Nothing 0
-  , Case "timed-sleep-zero" TimedSleep 0 0 setupRunning False 0x53 False Nothing 0xffffffce
-  , Case "timed-sleep-block" TimedSleep 50 0 setupRunning True 0x53 False Nothing 0
-  , Case "release-sleeping" ReleaseWait (idOf d 2) 0 (\e -> setupRunning e >>> setWait d 2 0x40059100 0x40059000 (domainId d) >>> armTimer d 2) False 0x53 False Nothing 0
-  , Case "release-ready" ReleaseWait (idOf d 2) 0 (\e -> setupRunning e >>> makeReady d 2 3 False) False 0x53 False Nothing 0xffffffd7
-  , Case "handler-release" HandlerRelease (idOf d 2) 0 (\e -> setupRunning e >>> setWait d 2 0x40059100 0x40059000 (domainId d) >>> armTimer d 2 >>> setW (handlerCell d) 1) False 0x53 True Nothing 0
-  , Case "delay-block" Delay 30 0 setupRunning True 0x53 False Nothing 0
-  , Case "delay-negative" Delay 0xffffffff 0 setupRunning False 0x53 False Nothing 0xffffffef
-  , Case "timed-sleep-return" TimedSleep 50 0 setupRunning False 0x53 False (Just 50) 0xffffffce
-  , Case "delay-return" Delay 30 0 setupRunning False 0x53 False (Just 0) 0
-  , Case "release-cross-domain" Terminate (idOf DomainB 2) 0 (\e -> setupRunning e >>> makeReady DomainB 2 3 True >>> setW (dispatchCell DomainB) 1) False 0x53 False Nothing 0
+  [ Case "terminate-ready" Terminate (idOf d 2) 0 (\e -> setupRunning e >>> makeReady d 2 3 False) 0x53 False Nothing (ReturnedR0 0)
+  , Case "terminate-dormant" Terminate (idOf d 2) 0 setupRunning 0x53 False Nothing (ReturnedR0 0xffffffd7)
+  , Case "terminate-invalid-class" Terminate (3 `shiftL` 16) 0 setupRunning 0x53 False Nothing (ReturnedR0 0xffffffee)
+  , Case "terminate-masked" Terminate (idOf d 2) 0 (\e -> setupRunning e >>> makeReady d 2 3 False) 0xd3 False Nothing (ReturnedR0 0xffffffe7)
+  , Case "priority-ready" ChangePriority (idOf d 2) 2 (\e -> setupRunning e >>> makeReady d 2 5 False) 0x53 False Nothing (ReturnedR0 0)
+  , Case "priority-invalid" ChangePriority (idOf d 2) 17 setupRunning 0x53 False Nothing (ReturnedR0 0xffffffef)
+  , Case "timed-sleep-wakeup" TimedSleep 5 0 (\e -> setupRunning e >>> setB (taskField (taskAt d 1) 0x0e) 2) 0x53 False Nothing (ReturnedR0 0)
+  , Case "timed-sleep-zero" TimedSleep 0 0 setupRunning 0x53 False Nothing (ReturnedR0 0xffffffce)
+  , Case "timed-sleep-block" TimedSleep 50 0 setupRunning 0x53 False Nothing (StoppedAt (switchOf d))
+  , Case "release-sleeping" ReleaseWait (idOf d 2) 0 (\e -> setupRunning e >>> setWait d 2 0x40059100 0x40059000 (domainId d) >>> armTimer d 2) 0x53 False Nothing (ReturnedR0 0)
+  , Case "release-ready" ReleaseWait (idOf d 2) 0 (\e -> setupRunning e >>> makeReady d 2 3 False) 0x53 False Nothing (ReturnedR0 0xffffffd7)
+  , Case "handler-release" HandlerRelease (idOf d 2) 0 (\e -> setupRunning e >>> setWait d 2 0x40059100 0x40059000 (domainId d) >>> armTimer d 2 >>> setW (handlerCell d) 1) 0x53 True Nothing (ReturnedR0 0)
+  , Case "delay-block" Delay 30 0 setupRunning 0x53 False Nothing (StoppedAt (switchOf d))
+  , Case "delay-negative" Delay 0xffffffff 0 setupRunning 0x53 False Nothing (ReturnedR0 0xffffffef)
+  , Case "timed-sleep-return" TimedSleep 50 0 setupRunning 0x53 False (Just 50) (ReturnedR0 0xffffffce)
+  , Case "delay-return" Delay 30 0 setupRunning 0x53 False (Just 0) (ReturnedR0 0)
+  , Case "release-cross-domain" Terminate (idOf (other d) 2) 0 (\e -> setupRunning e >>> makeReady (other d) 2 3 True >>> setW (dispatchCell (other d)) 1) 0x53 False Nothing (ReturnedR0 0)
+  , Case "terminate-local-dispatch" Terminate (idOf d 2) 0 (\e -> setupRunning e >>> makeReady d 2 0 True) 0x53 False Nothing (StoppedAt (switchOf d))
+  , Case "release-local-dispatch" ReleaseWait (idOf d 2) 0 (\e -> setupRunning e >>> setB (taskField (taskAt e 1) 0x0d) 5 >>> setWait d 2 0x40059100 0x40059000 (domainId d) >>> armTimer d 2) 0x53 False Nothing (StoppedAt (switchOf d))
+  , Case "release-cross-dispatch" ReleaseWait (idOf (other d) 2) 0 (\e -> setupRunning e >>> setWait (other d) 2 0x40059100 0x40059000 (domainId (other d)) >>> armTimer (other d) 2 >>> setW (dispatchCell (other d)) 1) 0x53 False Nothing (ReturnedR0 0)
   ]
+  where
+    other domain = if domain == DomainA then DomainB else DomainA
 
 -- | A four-byte branch to the stub, and the stub's save/wake/resume body.
 stubWords :: Domain -> Word32 -> [Word32]
@@ -355,15 +361,40 @@ serialize base size m = foldl write (B.replicate (fromIntegral size) 0) (M.toLis
       | address >= base && address + 4 <= base + size = poke bytes (address - base) (word32le value)
       | otherwise = bytes
 
-specFor :: Domain -> Role -> Case -> B.ByteString -> B.ByteString -> CaseSpec
-specFor d role one loader owned = CaseSpec
+stopReason :: Service -> Word32
+stopReason service = case service of
+  Terminate -> 0xfffffff4
+  ChangePriority -> 0xfffffff3
+  TimedSleep -> 0xffffffee
+  ReleaseWait -> 0xffffffeb
+  HandlerRelease -> 0
+  Delay -> 0xffffffe7
+
+helperRanges :: Domain -> [(Word32, Word32)]
+helperRanges d =
+  [(acquireFn d, 0x3c), (releaseFn d, 0x40),
+   (if d == DomainA then 0x44744 else 0xd4704, if d == DomainA then 0xbc else 0xc0),
+   (if d == DomainA then 0x43c48 else 0xd3c04, 0x5c),
+   (if d == DomainA then 0x433e4 else 0xd33e4, 0x60),
+   (if d == DomainA then 0x44018 else 0xd3fd4, if d == DomainA then 0x2c else 0x30)]
+  ++ [(base + early, size)
+     | (base, size) <- ([(0x43ca4, 0x7c), (0x43d20, 0xb0), (0x43dd0, 0x1a0), (0x43f70, 0xa8)] :: [(Word32, Word32)])]
+  ++ [(base + late, size)
+     | (base, size) <- ([(0x44044, 0xf0), (0x44318, 0x1cc), (0x444e4, 0x84), (0x44568, 0xcc), (0x44634, 0xc8), (0x446fc, 0x48), (0x449c0, 0x100), (0x44ac0, 0xc4), (0x44b84, 0xdc), (0x44c60, 0x48), (0x44ca8, 0xe4)] :: [(Word32, Word32)])]
+  where
+    early = if d == DomainB then 0x8ffbc else 0
+    late = if d == DomainB then 0x8ffc0 else 0
+
+specFor :: Domain -> Role -> Case -> B.ByteString -> B.ByteString -> B.ByteString -> CaseSpec
+specFor d role one loaderA loaderB owned = CaseSpec
   { caseId = caseName one ++ "-" ++ domainLabel d
   , caseProvenance = "X-M1 1.50 S3d lifecycle services, x70view 55436fc85c0560dd252b0410af6f2427fe198cd3; synthetic scheduler state"
-  , caseExclusion = "One service call. Blocking cases stop at the dispatcher entry; lifecycle cases replace the dispatcher with a save/wake/resume stub so the original caller returns."
+  , caseExclusion = "One service call. Blocking cases stop at the dispatcher entry; lifecycle cases replace the dispatcher with a save/wake/return stub so the original caller returns."
   , caseEntry = GuestAddress (fromIntegral (entryOf d (caseService one)))
   , caseExit = GuestAddress (fromIntegral exitAddress)
   , caseRegions =
       [ mkRegion (RegionId "code") (GuestAddress (fromIntegral (loaderBase d))) 0x10000 ReadExecute (B.take 0x10000 code)
+      , mkRegion (RegionId "code-other") (GuestAddress (fromIntegral (loaderBase other))) 0x10000 ReadExecute (B.take 0x10000 otherLoader)
       , mkRegion (RegionId "bodies") (GuestAddress (fromIntegral bodyBase)) 0x2000 ReadExecute bodies
       , mkRegion (RegionId "stub") (GuestAddress (fromIntegral stubBase)) 0x100 ReadExecute stub
       , mkRegion (RegionId "data-a") (GuestAddress (fromIntegral (globalsBase DomainA))) (fromIntegral globalsSize) ReadWrite (dataCode DomainA fixture)
@@ -377,23 +408,21 @@ specFor d role one loader owned = CaseSpec
       [(GuestAddress (fromIntegral (entryOf d service)), extentOf service) | service <- [Terminate, ChangePriority, TimedSleep, ReleaseWait, HandlerRelease, Delay]]
       ++ [(GuestAddress (fromIntegral bodyBase), 0x1300), (GuestAddress (fromIntegral stubBase), 0x80)]
       ++ [(GuestAddress (fromIntegral (switchOf d)), 4)]
-      ++ [(GuestAddress (fromIntegral (acquireFn d)), 0x3c), (GuestAddress (fromIntegral (releaseFn d)), 0x40)]
-      ++ [(GuestAddress (fromIntegral (if d == DomainA then (0x44744 :: Word32) else 0xd4704)), if d == DomainA then 0xbc else 0xc0)]
-      ++ [(GuestAddress (fromIntegral (base + (if d == DomainB then 0x8ffbc else 0))), size)
-         | (base, size) <- ([(0x43ca4, 0x7c), (0x43d20, 0xb0), (0x43dd0, 0x1a0), (0x43f70, 0xa8), (0x44018, 0x2c)] :: [(Word32, Word32)])]
-      ++ [(GuestAddress (fromIntegral (base + (if d == DomainB then 0x8ffc0 else 0))), size)
-         | (base, size) <- ([(0x44044, 0xf0), (0x44318, 0x1cc), (0x444e4, 0x84), (0x44568, 0xcc), (0x44634, 0xc8), (0x446fc, 0x48), (0x449c0, 0x100), (0x44ac0, 0xc4), (0x44b84, 0xdc), (0x44c60, 0x48), (0x44ca8, 0xe4)] :: [(Word32, Word32)])]
+      ++ [(GuestAddress (fromIntegral address), size) | (address, size) <- helperRanges d ++ helperRanges other]
   , caseInitial =
       [(R0, caseArgument one), (R1, caseArgument1 one), (R2, 0), (R3, 0), (R12, 0)]
       ++ [(register, 0xabc00000 + fromIntegral (fromEnum register)) | register <- [R4 .. R11]]
       ++ [(Sp, stackTop), (Lr, exitAddress), (Cpsr, caseCpsr one)]
-  , caseExpectedStatus = Returned
-  , caseExpectedRegisters = [(R0, caseExpect one)]
+  , caseExpectedStatus = expectedStatus
+  , caseExpectedRegisters = expectedRegisters
   , caseExpectedMemory = []
   , caseCp14Identity = Just (if d == DomainA then 0x4003 else 0x4004)
   , caseKernel = Just (KernelCase (InstructionLimit 4000) stop (Just 0x80001234) (Just 0) (Just 0) uncompared [])
   }
   where
+    other = if d == DomainA then DomainB else DomainA
+    loader = if d == DomainA then loaderA else loaderB
+    otherLoader = if other == DomainA then loaderA else loaderB
     fixture = setW (handlerCell d) (if caseHandler one then 1 else 0) (caseSetup one d (baseFixture d))
     bodyBase = if d == DomainA then 0x50000 else 0xe0000
     code = case role of
@@ -405,10 +434,10 @@ specFor d role one loader owned = CaseSpec
       Just result ->
         let stubCode = B.concat (map word32le (stubWords d result))
          in stubCode <> B.replicate (0x100 - B.length stubCode) 0
-    stop = if caseStop one then Just (GuestAddress (fromIntegral (switchOf d))) else Nothing
-    uncompared
-      | caseStop one = [R1, R2, R3, R12, Lr, Pc, Cpsr]
-      | otherwise = [R1, R2, R3, R12, Lr, Pc, Cpsr]
+    (stop, expectedStatus, expectedRegisters) = case caseExpected one of
+      ReturnedR0 value -> (Nothing, Returned, [(R0, value)])
+      StoppedAt address -> (Just (GuestAddress (fromIntegral address)), StopAddress, [(R0, stopReason (caseService one))])
+    uncompared = [R1, R2, R3, R12, Lr, Pc, Cpsr]
 
 patchStub :: Domain -> B.ByteString -> Maybe Word32 -> B.ByteString
 patchStub d loader lifecycle = case lifecycle of
@@ -441,6 +470,21 @@ normalize observation = observation
     keep (OrderedWrite (Write (GuestAddress address) _) _) = not (address >= fromIntegral stackBase && address < fromIntegral (stackBase + 0x1000))
     keep _ = True
 
+judgeOutcome :: Expected -> RunnerStatus -> Word32 -> Word32 -> Bool
+judgeOutcome (ReturnedR0 value) Returned r0 _ = r0 == value
+judgeOutcome (StoppedAt address) StopAddress _ pc = pc == address
+judgeOutcome _ _ _ _ = False
+
+judgeSelfTest :: Bool
+judgeSelfTest = and
+  [ not (judgeOutcome (ReturnedR0 0) UnknownCall 0 0)
+  , not (judgeOutcome (ReturnedR0 0) Returned 1 0)
+  , not (judgeOutcome (StoppedAt 0x1000) StopAddress 0 0x1004)
+  , not (judgeOutcome (StoppedAt 0x1000) Returned 0 0x1000)
+  , judgeOutcome (ReturnedR0 0) Returned 0 0
+  , judgeOutcome (StoppedAt 0x1000) StopAddress 0 0x1000
+  ]
+
 main :: IO ()
 main = do
   runner <- argument "--runner" >>= makeAbsolute
@@ -460,12 +504,12 @@ main = do
   unless (sha256Hex digestB == "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec") (fail "loader B is not the pinned image")
   createDirectoryIfMissing True cacheRoot
   createDirectoryIfMissing True (takeDirectory results)
-  reports <- forM [(DomainA, loaderABytes, ownedABytes), (DomainB, loaderBBytes, ownedBBytes)] $ \(d, loader, owned) -> do
+  reports <- forM [(DomainA, loaderABytes, ownedABytes), (DomainB, loaderBBytes, ownedBBytes)] $ \(d, _loader, owned) -> do
     let grid = cases d
         directory = takeDirectory results </> ("s3d-" ++ domainLabel d)
     createDirectoryIfMissing True directory
     observed <- forM [Stock, Owned] $ \role -> do
-      let specs = [specFor d role one loader owned | one <- grid]
+      let specs = [specFor d role one loaderABytes loaderBBytes owned | one <- grid]
       batch <- writeBatch (directory </> show role) specs
       outcomes <- cachedObservedBatch cacheRoot runner batch
       pure (specs, snd outcomes)
@@ -474,27 +518,29 @@ main = do
         let stockObs = map snd stock
             ownedObservations = map snd ownedObs
             compareOne reference left right =
-              let adjusted = case caseOutcome reference left of
-                    OutcomeReturned -> reference
+              let adjusted = case caseKernel reference of
+                    Just kernel | null (kernelStop kernel) -> reference
                     _ -> reference { caseKernel = fmap (\k -> k { kernelUncompared = kernelUncompared k ++ [R0, R4, R5, R6, R7, R8, R9, R10, R11, Sp] }) (caseKernel reference) }
                in compareKernelCase adjusted (normalize left) (normalize right)
             failures = [ (name, diff, firstDifference left right) | (name, diff, left, right) <- differences, not (null diff) ]
             differences = [ (caseName one, compareOne reference left right, left, right)
                           | (one, reference, left, right) <- zip4 grid specs stockObs ownedObservations ]
             contracts =
-              [ (caseName one, nativeStatus observation, registerValue observation R0, caseExpect one, registerValue observation Pc)
-              | (one, observation) <- zip grid stockObs
-              , caseExpect one /= 0
-              , registerValue observation R0 /= caseExpect one || nativeStatus observation /= Returned
+              [ (caseName one, roleName, caseExpected one, nativeStatus observation, registerValue observation R0, registerValue observation Pc)
+              | (one, roleName, observation) <-
+                  [ (one, "stock" :: String, observation) | (one, observation) <- zip grid stockObs ]
+                  ++ [ (one, "owned" :: String, observation) | (one, observation) <- zip grid ownedObservations ]
+              , not (judgeOutcome (caseExpected one) (nativeStatus observation) (registerValue observation R0) (registerValue observation Pc))
               ]
         B.writeFile (directory </> "report.json") (encodeCanonical (A.object
           [ "domain" .= domainLabel d
           , "cases" .= length grid
           , "differences" .= length failures
           , "failures" .= [A.object ["case" .= name, "differences" .= show diff, "first" .= first] | (name, diff, first) <- failures]
-          , "contract_failures" .= [A.object ["case" .= name, "status" .= show status, "r0" .= r0, "expected" .= expected, "pc" .= pc] | (name, status, r0, expected, pc) <- contracts]
+          , "contract_failures" .= [A.object ["case" .= name, "role" .= roleName, "expected" .= show expected, "status" .= show status, "r0" .= r0, "pc" .= pc] | (name, roleName, expected, status, r0, pc) <- contracts]
+          , "judge_self_test" .= judgeSelfTest
           ]))
-        pure (d, length grid, null failures, null contracts)
+        pure (d, length grid, null failures, null contracts && judgeSelfTest)
       _ -> error "role count"
   let passed = all (\(_,_,a,b) -> a && b) reports
   B.writeFile results (encodeCanonical (A.object
