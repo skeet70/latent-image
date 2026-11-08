@@ -90,7 +90,7 @@ globalsSize = 0x14000
 contexts, currentCell, handlerCell, _schedulerLock, _objectLock, readyHeads, bitmapCell,
   runningCell, dispatchCell, selectedCell, tickCell, timerCount, timerHeap, taskBase,
   definitionBase, _sleepResults, _sleepTimers, _rescheduleCell, lockWord, objectWord,
-  acquireFn, releaseFn, firstEntry, lockAcquire, lockRelease, timeoutCallback,
+  acquireFn, releaseFn, firstEntry, timeoutCallback,
   _delayCallback :: Domain -> Word32
 contexts d = (if d == DomainA then 0x400545cc else 0x400e458c)
 currentCell d = contexts d - 4
@@ -115,8 +115,6 @@ objectWord d = lockWord d + 4
 acquireFn d = if d == DomainA then 0x439d8 else 0xd398c
 releaseFn d = if d == DomainA then 0x43a14 else 0xd39c8
 firstEntry d = if d == DomainA then 0x43728 else 0xd3728
-lockAcquire d = acquireFn d
-lockRelease d = releaseFn d
 timeoutCallback d = if d == DomainA then 0x44318 else 0xd42d8
 _delayCallback d = if d == DomainA then 0x44634 else 0xd45f4
 
@@ -368,7 +366,7 @@ specFor d role one loader owned = CaseSpec
   , caseEntry = GuestAddress (fromIntegral (entryOf d (caseService one)))
   , caseExit = GuestAddress (fromIntegral exitAddress)
   , caseRegions =
-      [ mkRegion (RegionId "code") (GuestAddress (fromIntegral (loaderBase d))) 0x10000 ReadExecute code
+      [ mkRegion (RegionId "code") (GuestAddress (fromIntegral (loaderBase d))) 0x10000 ReadExecute (B.take 0x10000 code)
       , mkRegion (RegionId "bodies") (GuestAddress (fromIntegral bodyBase)) 0x2000 ReadExecute bodies
       , mkRegion (RegionId "stub") (GuestAddress (fromIntegral stubBase)) 0x100 ReadExecute stub
       , mkRegion (RegionId "data-a") (GuestAddress (fromIntegral (globalsBase DomainA))) (fromIntegral globalsSize) ReadWrite (dataCode DomainA fixture)
@@ -381,9 +379,11 @@ specFor d role one loader owned = CaseSpec
   , caseFunctions =
       [(GuestAddress (fromIntegral (entryOf d service)), extentOf service) | service <- [Terminate, ChangePriority, TimedSleep, ReleaseWait, HandlerRelease, Delay]]
       ++ [(GuestAddress (fromIntegral bodyBase), 0x12cc), (GuestAddress (fromIntegral stubBase), 0x100)]
-      ++ [(GuestAddress (fromIntegral (lockAcquire d)), 0x40), (GuestAddress (fromIntegral (lockRelease d)), 0x40)]
+      ++ [(GuestAddress (fromIntegral (acquireFn d)), 0x3c), (GuestAddress (fromIntegral (releaseFn d)), 0x40)]
+      ++ [(GuestAddress (fromIntegral (base + (if d == DomainB then 0x8ffc0 else 0))), size)
+         | (base, size) <- ([(0x43ca4, 0x7c), (0x43d20, 0xb0), (0x43dd0, 0x1a0), (0x43f70, 0xa8), (0x44018, 0x2c), (0x44c60, 0x48), (0x44ca8, 0x58)] :: [(Word32, Word32)])]
   , caseInitial =
-      [(R0, caseArgument one), (R1, caseArgument1 one), (R2, 0), (R3, 0)]
+      [(R0, caseArgument one), (R1, caseArgument1 one), (R2, 0), (R3, 0), (R12, 0)]
       ++ [(register, 0xabc00000 + fromIntegral (fromEnum register)) | register <- [R4 .. R11]]
       ++ [(Sp, stackTop), (Lr, exitAddress), (Cpsr, caseCpsr one)]
   , caseExpectedStatus = Returned
@@ -405,7 +405,7 @@ specFor d role one loader owned = CaseSpec
     stop = if caseStop one then Just (GuestAddress (fromIntegral (switchOf d))) else Nothing
     uncompared
       | caseStop one = [R1, R2, R3, R12, Lr, Pc, Cpsr]
-      | otherwise = []
+      | otherwise = [R1, R2, R3, R12, Lr, Pc]
 
 patchStub :: Domain -> B.ByteString -> Maybe Word32 -> B.ByteString
 patchStub d loader lifecycle = case lifecycle of
@@ -475,8 +475,8 @@ main = do
           [ "domain" .= domainLabel d
           , "cases" .= length grid
           , "differences" .= length failures
-          , "failures" .= [A.object ["case" .= name] | (name, _) <- failures]
-          , "contract_failures" .= length contracts
+          , "failures" .= [A.object ["case" .= name, "differences" .= show diff] | (name, diff) <- failures]
+          , "contract_failures" .= [A.object ["case" .= name, "status" .= show status, "r0" .= r0, "expected" .= expected] | (name, status, r0, expected) <- contracts]
           ]))
         pure (d, length grid, null failures, null contracts)
       _ -> error "role count"
