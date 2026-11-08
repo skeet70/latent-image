@@ -28,6 +28,8 @@ put :: Int -> Word32 -> B.ByteString -> B.ByteString
 put offset n bytes = B.take offset bytes <> le n <> B.drop (offset+4) bytes
 config :: RenderConfig
 config = RenderConfig [1] Nothing 0xa4ce00 DrawsRequired
+config18 :: RenderConfig
+config18 = RenderConfig [0..18] Nothing 0xa4ce00 DrawsRequired
 node :: TableNode
 node = TableNode (Address 0x776000) 0x25 0 5 1 0 0 0 Nothing 0 (Just [TableRow 0 LeafChild]) Nothing
 document :: TablesDocument
@@ -75,7 +77,7 @@ provenanceCases = do
       withBatch value provenanceSequence pointer = do
         parsed <- J.parseEither parseProvenanceBatch value
         let memory = hitMemory returned
-            result = returned {hitMemory=take 6 memory ++ [put 4 pointer (memory !! 6)] ++ drop 7 memory}
+            result = returned {hitMemory=take 3 memory ++ [put 8 0x15edf38 (memory !! 3)] ++ take 2 (drop 4 memory) ++ [put 4 pointer (memory !! 6)] ++ drop 7 memory}
             hits = [entry TreeDraw,hit "render-tree-adapter",result]
         pure ((observation [h {hitProvenanceSequence=Just (ProvenanceSequence provenanceSequence)} | h <- hits]) {observationProvenance=Just parsed})
       draw value provenanceSequence pointer = do
@@ -92,7 +94,7 @@ provenanceCases = do
           values <- right
           pure [value {drawMemory=take 6 (drawMemory value) ++ [put offset 1 (drawMemory value !! 6)] ++ drop 7 (drawMemory value)} | value <- values]
     check "provenance does not exempt other object fields" (not (passes (compareRoles left mutated)))
-  let unknown pointer = run [entry TreeDraw,hit "render-tree-adapter",returned {hitMemory=take 6 (hitMemory returned) ++ [put 4 pointer (hitMemory returned !! 6)] ++ drop 7 (hitMemory returned)}]
+  let unknown pointer = run [entry TreeDraw,hit "render-tree-adapter",returned {hitMemory=take 3 (hitMemory returned) ++ [put 8 0x15edf38 (hitMemory returned !! 3)] ++ take 2 (drop 4 (hitMemory returned)) ++ [put 4 pointer (hitMemory returned !! 6)] ++ drop 7 (hitMemory returned)}]
   check "unknown different handles remain raw" (not (passes (compareRoles (unknown 0x100000) (unknown 0x200000))))
   check "unknown equal handles remain raw-equal" (passes (compareRoles (unknown 0x100000) (unknown 0x100000)))
   let wrongObject = batch 0 3 0 10
@@ -215,17 +217,51 @@ main = do
   check "unread bank head change fails" (not (passes (run [entry TreeDraw,hit "render-tree-adapter",altered])))
   draws <- either fail pure (run owned)
   check "equal per draw state passes" (passes (compareDraws config draws draws))
-  forM_ [0..length (hitMemory returned)-1] $ \index -> do
+  forM_ [0..5] $ \index -> do
     let change bytes = B.cons 1 (B.drop 1 bytes)
         memory = hitMemory returned
         mutation = Draw (OwnedDraw TreeDraw) (take index memory ++ [change (memory !! index)] ++ drop (index+1) memory) M.empty
-    check ("state byte difference fails " ++ show index) (not (passes (compareDraws config draws [mutation])))
+    check ("prefix state byte difference fails " ++ show index) (not (passes (compareDraws config draws [mutation])))
+  let bank15Base = 0x15e7538 + 15*27136
+      heads18 = put 120 bank15Base (put 124 bank15Base (hitMemory returned !! 3))
+      bank15 liveKey freeKey liveState freeState liveGeometry =
+        foldr (\(offset,value) bytes -> put offset value bytes) (B.replicate 4096 0)
+          [(0,0),(16,liveState),(52,liveGeometry),(110,liveKey),(212,0),(228,freeState),(322,freeKey)]
+      memory18 liveKey freeKey liveState freeState liveGeometry =
+        let bankChunks = concat
+              [ if bank == 15
+                  then bank15 liveKey freeKey liveState freeState liveGeometry : replicate 5 (B.replicate 4096 0) ++ [B.replicate 2560 0]
+                  else replicate 6 (B.replicate 4096 0) ++ [B.replicate 2560 0]
+              | bank <- [0 :: Int .. 18] ]
+        in take 3 (hitMemory returned) ++ [heads18] ++ take 2 (drop 4 (hitMemory returned)) ++ bankChunks
+      draw18 liveKey freeKey liveState freeState liveGeometry =
+        Draw (OwnedDraw TreeDraw) (memory18 liveKey freeKey liveState freeState liveGeometry) M.empty
+      live18 = draw18 0x30 0x30 0 2 0
+      reader18 liveKey freeKey liveState freeState liveGeometry =
+        [entry TreeDraw,hit "render-tree-adapter",returned {hitMemory=memory18 liveKey freeKey liveState freeState liveGeometry}]
+      compareReader18 draw = compareDrawsReader config18 document document [draw]
+  check "live bank15 key difference fails" (not (passes (compareDraws config18 [live18] [draw18 0x31 0x30 0 2 0])))
+  check "live bank15 geometry difference fails" (not (passes (compareDraws config18 [live18] [draw18 0x30 0x30 0 2 1])))
+  check "live bank15 allocation state difference fails" (not (passes (compareDraws config18 [live18] [draw18 0x30 0x30 1 2 0])))
+  check "off-list allocation state change fails" (not (passes (compareDraws config18 [live18] [draw18 0x30 0x30 0 0 0])))
+  check "off-list stale key difference passes" (passes (compareDraws config18 [live18] [draw18 0x30 0x31 0 2 0]))
+  readerKey <- compareReader18 live18 [readerFor (observation (reader18 0x31 0x30 0 2 0))]
+  check "reader live bank15 key difference fails" (not (passes readerKey))
+  readerGeometry <- compareReader18 live18 [readerFor (observation (reader18 0x30 0x30 0 2 1))]
+  check "reader live bank15 geometry difference fails" (not (passes readerGeometry))
+  readerState <- compareReader18 live18 [readerFor (observation (reader18 0x30 0x30 1 2 0))]
+  check "reader live bank15 allocation state difference fails" (not (passes readerState))
+  readerFreeState <- compareReader18 live18 [readerFor (observation (reader18 0x30 0x30 0 0 0))]
+  check "reader off-list allocation state change fails" (not (passes readerFreeState))
+  readerFreeKey <- compareReader18 live18 [readerFor (observation (reader18 0x30 0x31 0 2 0))]
+  check "reader off-list stale key difference passes" (passes readerFreeKey)
   check "unpaired draws fail" (not (passes (compareDraws config draws [])))
   let resource = 0x12345678
       clockConfig = config {renderClock = Just (ResourceId resource)}
+      clockPrefix = take 3 (hitMemory returned) ++ [put 8 0x15edf38 (hitMemory returned !! 3)] ++ take 2 (drop 4 (hitMemory returned))
       clockBank = put 8 resource (B.replicate 27136 0)
-      clockA = Draw (OwnedDraw TreeDraw) (take 6 (hitMemory returned) ++ [clockBank]) M.empty
-      clockB = Draw (OwnedDraw TreeDraw) (take 6 (hitMemory returned) ++ [put 12 1 clockBank]) M.empty
+      clockA = Draw (OwnedDraw TreeDraw) (clockPrefix ++ [clockBank]) M.empty
+      clockB = Draw (OwnedDraw TreeDraw) (clockPrefix ++ [put 12 1 clockBank]) M.empty
   check "clock resource exempts object" (passes (compareDraws clockConfig [clockA] [clockB]))
   check "clock unset refuses object difference" (not (passes (compareDraws config [clockA] [clockB])))
   check "clock-only duplicate draw accepted" (passes (compareDraws clockConfig [clockA,clockB] [clockB]))

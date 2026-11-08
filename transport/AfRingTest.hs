@@ -63,10 +63,10 @@ allocation = RamAllocState base 0x6800 0x4003 callbackTableAddress callbackStock
 
 manifest :: RamPushManifest
 manifest = RamPushManifest "synthetic.json" "synthetic.bin" (replicate 64 '0') [] base 0x6800 (replicate 64 '0') B.empty
-  (RamPushEntries (Address 0x00c41600) (Address 0x00c41834) (Address 0x00c41860)) []
+  (RamPushEntries (Address 0x00c41600) (Address 0x00c41834) (Address 0x00c41860)) [] Nothing
 
 installed :: RamPushState
-installed = RamPushState (replicate 64 '0') (replicate 64 '0') base 0x6800 (manifestEntries manifest) [] callbackStockWord bootstrapBytes 1
+installed = RamPushState (replicate 64 '0') (replicate 64 '0') base 0x6800 (manifestEntries manifest) [] callbackStockWord bootstrapBytes 1 Nothing
 
 -- A synthetic USB peer supplies the fixed read-bulk session's replies.
 peer :: B.ByteString -> IO (UsbApi, IO [P.Transfer])

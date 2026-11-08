@@ -309,8 +309,12 @@ ramPushSpec extra = ObservationSpec
     , exclude "segment-*/e2e-result.json" "/states" RunLocation
     , exclude "segment-*/e2e-result.json" "/runtime/manifest" RunLocation
     , exclude "e2e-segments.json" "/*/seconds" Timing
+    , exclude "e2e-observation-*.json" "/steps/*/seconds" Timing
+    , exclude "e2e-observation-*.json" "/trace_hits/*/instructions" Timing
+    , exclude "e2e-observation-*.json" "/classic_chrome_site_entries" Scheduling
     , exclude "segment-*/e2e-observation-*.json" "/steps/*/seconds" Timing
-    , exclude "segment-*/e2e-observation-*.json" "/trace_hits/*/instructions" Timing ])
+    , exclude "segment-*/e2e-observation-*.json" "/trace_hits/*/instructions" Timing
+    , exclude "segment-*/e2e-observation-*.json" "/classic_chrome_site_entries" Scheduling ])
   (map filePattern
     [ "e2e-result.json", "e2e-fetch-watch.json", "e2e-observation-*.json", "cold-restart/e2e-cold-restart.json"
     , "relinked/runtime.bin", "relinked/ram-push-manifest.json", "relinked/bank-allowlist.json", "relinked/kernel.syms"
@@ -1424,7 +1428,7 @@ main = do
   routeInputDrift <- maybe (pure []) (manifestDrift rootPath) routeInputManifest
   baselineDrift <- maybe (pure []) (manifestDrift rootPath) baselineManifest
   forM_ sourceDrift $ \drift -> do
-    require (driftPath drift `elem` ["emulation/VerifyCandidate.hs", "emulation/Emulation/CandidateBaseline.hs"])
+    require (driftPath drift `elem` ["emulation/VerifyCandidate.hs", "emulation/Emulation/CandidateBaseline.hs", "emulation/E2EObservationCompare.hs", "emulation/Emulation/ObservationCompare.hs", "emulation/Emulation/ObservationStream.hs"])
       ("source drift outside the reviewed host verifier: " ++ driftPath drift)
     require (isJust (driftCurrent drift))
       ("the reviewed coordinator source is missing: " ++ driftPath drift)
@@ -1432,7 +1436,7 @@ main = do
   require (null baselineDrift) ("baseline drift: " ++ renderDrift baselineDrift)
   hostVerifierSources <- case sourceManifest of
     Nothing -> pure []
-    Just _ -> forM ["emulation/VerifyCandidate.hs", "emulation/Emulation/ExecutionJournal.hs", "emulation/Emulation/CandidateRoute.hs", "emulation/Emulation/CandidateBaseline.hs"] $ \path -> do
+    Just _ -> forM ["emulation/VerifyCandidate.hs", "emulation/Emulation/ExecutionJournal.hs", "emulation/Emulation/CandidateRoute.hs", "emulation/Emulation/CandidateBaseline.hs", "emulation/E2EObservationCompare.hs", "emulation/Emulation/ObservationCompare.hs", "emulation/Emulation/ObservationStream.hs"] $ \path -> do
       present <- doesFileExist (rootPath </> path)
       require present ("reviewed host verifier source is missing: " ++ path)
       manifestDigest (rootPath </> path)
