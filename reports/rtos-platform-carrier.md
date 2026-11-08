@@ -32,14 +32,24 @@ The A and B images are linked from a `ld.lld -r --gc-sections` relocatable objec
 | loader-a staged | `60611658357d25030d3c0cbd055e9e42f308a169de2b2e7248e99b318d5ed0b3` |
 | loader-b staged | `632d9dd4ac8764f9d43cd6bc20331108493861fd2fbbccbbdd9f31dcdbcef19a` |
 
+The Bazel `platform-a/b` ELFs carry different file hashes from the preserved manual link (`c8d53cd0…` / `868049f9…`) because of link metadata, while their `.bin` outputs are byte-identical to the table above.
+
 Inputs are preserved under `private-data/scratch/PlatformPlacement/current-20261108/`: the two relocatable objects, section tables, generated scripts, placement manifests, ELF/bin/symbols/disassembly and the staged candidate. The staged DAT was produced by `stage-platform stage` against the canonical `stock-roundtrip.DAT` (`43d67afa…cd1490`) and both loaders; `stage` rebuilds, confines every changed DAT byte to the carrier union and the main checksum, re-parses the staged loaders and restores the canonical DAT byte-for-byte.
 
 ## Frame and callee binding
 
 The fixed-pool frame demand from `b143abab` is bound to the emitted image: local/worst-case owned-chain bytes are admit 24/24, get 56/64, delete_pool 56/56, release 40/72, release_locked 32/32, create_pool 32/32, poll_unchecked 40/48, resume 8/8, take 8/8, poll 32/40, timed_entry 96/160, get_entry 96/160, poll_entry 64/104, unchecked_entry 64/112, create_entry 64/96, release_entry 64/136, delete_entry 64/120. The retained full owned+examined maxima excluding async nesting are create 96, delete 196, get 212, timed_get 240, poll 104, release 196, unchecked 112; suspended get 188 and transfer peak 212. The generic FP judge's 176 failed role expectations are not 176 passed judgments; the family comparator is the scoped authority.
 
-`admit` walks the owned runs from the declared entries. The current walk records two external-call premises rather than full call-graph closure. The demand list checks every emitted whole function's size and every non-veneer symbol's run containment.
+`admit` walks the owned runs from the emitted body entry symbols (not the veneer addresses) and treats the declared retained/owned externals as leaves. The current walk records two premises rather than full call-graph closure: the S2 exception-save path reaches a conditional cross-extent branch the A32 walker models as a tail call and reports `StackUnbalanced` at `0x43f88` A / `0xd3f84` B. The demand list checks every emitted whole function's size and every non-veneer symbol's run containment.
+
+## Bazel wiring and neighbor artifacts
+
+`//replacement/rtos_platform:platform-a` and `:platform-b` now build the relocatable object (`bodies-*.o`), run `place-platform`, and link with the generated explicit script; the `.bin` outputs reproduce the preserved images byte-for-byte (`b63a9753…c1037` / `5b778fcf…3e6bd`). The old `--enable-non-contiguous-regions` spill path is gone.
+
+The exception carrier's fixed extents (A `0x40100..0x40410`, `0x40cac..0x40d98`, `0x430a8..0x432f8`, `0x43810..0x43834`; B `0xd0100..0xd0410`, `0xd0cac..0xd0d98`, `0xd30a8..0xd32f8`, `0xd3810..0xd3834`) are disjoint from every platform carrier and entry address, so the two artifacts can coexist. Cyclic is not adoptable as supply: its qualified core bodies occupy native scratch A `0x4c28c..0x4c94c` / B `0xdc24c..0xdc90c`, which overlaps the platform's S3c/scheduler carriers. IRQ's shared body is at scratch `0x50000`, outside the declared union and not a stock extent; its entries at `0x41108/0x41124/0x4d8fc` (A) and `0xd1108/0xd1124/0xdd8c0` (B) are outside the platform carriers. Both remain separate artifacts rather than being silently folded into the union.
+
+The per-subsystem oracles still admit their own contiguous stock extents. The global-lock suite, for example, requires exactly the six stock extents at `0x412cc/0x412e8/0x41304` and `0x427d4/0x427fc/0x42828`; the aggregate placement moves the entry bodies to `0x47820/0x4cbdc/0x4cc20`, so the suite refuses with `owned symbols are not the six stock extents` before any case runs. Running these suites on the relocated image needs each suite's case construction to take the entry and helper addresses from the platform symbols; that relocation is not done in this pass, so no subsystem native verdict is claimed.
 
 ## Limits
 
-No subsystem-specific native comparison has been run on these relocated inputs yet; the staged candidate is not executed. The cyclic family and the IRQ-control root remain outside the admitted union, S3d is unqualified and excluded, and the S3c/S3b/S3a source review is unchanged. No live, system, MPU, timer, cross-core or hardware behavior is established, and the full 97-contract RTOS/firmware acceptance is not claimed.
+No subsystem-specific native comparison has been run on these relocated inputs; the staged candidate is not executed. The owned-run frame walk starts at the emitted body entries and treats declared externals as leaves, but the S2 exception-save path is not modeled by the walker (`StackUnbalanced` at `0x43f88` A / `0xd3f84` B); the contract records those as premises rather than claiming closure. Cyclic and IRQ remain outside the union for the reasons above, S3d is unqualified and excluded, and no live, system, MPU, timer, cross-core or hardware behavior is established. Full 97-contract RTOS/firmware acceptance is not claimed.

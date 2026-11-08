@@ -27,12 +27,13 @@ import qualified Data.ByteString.Char8 as C
 import Data.Char (isDigit)
 import Data.List (find)
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import Data.Word (Word32)
 import qualified Emulation.Sha256 as SHA
 import qualified FujiAF.FirstStage as F
 import qualified FujiAF.UpdateContainer as U
 import Numeric (readHex)
-import Replacement.RtosOwnFirst.Frame (Frame, FrameError, frames, OwnedCode (..))
+import Replacement.RtosOwnFirst.Frame (Frame, FrameError, framesWith, OwnedCode (..))
 import Replacement.RtosOwnFirst.Regions (Domain (..), Extent (..), GuestAddress (..), domains, domainLabel, domainLoaderBase, domainLoaderId, domainLoaderSize, extentBytes, extentContains, hexText)
 import Replacement.RtosPlatform.Union
 
@@ -227,9 +228,17 @@ admit union source linked = do
       let inUnion = any (\c -> extentContains (carrierExtent c) (GuestAddress target)) (mapCarriers dm)
           declared = [e | e <- mapExternals dm, externalAddress e == GuestAddress target]
       in unless (inUnion || not (null declared)) (Left (ExternalCall domain (GuestAddress target)))
-    let (walked, premises) = case frames (OwnedCode binBase bin runExtents) (map entryAddress (mapEntries dm)) of
-          Left err -> (M.empty, [show err])
-          Right result -> (result, [])
+    let bodyEntries =
+          [ F.symbolAddress s
+          | e <- mapEntries dm
+          , s <- symbols
+          , F.symbolName s == entrySymbol e
+          ]
+        externals = S.fromList [addr | e <- mapExternals dm, let GuestAddress addr = externalAddress e]
+        walkedResult = framesWith externals (OwnedCode binBase bin runExtents) (map GuestAddress bodyEntries)
+    (walked, premises) <- case walkedResult of
+      Left err -> pure (M.empty, [show err])
+      Right (walkedFrames, externalEdges) -> pure (walkedFrames, map show externalEdges)
     pure (domain, DomainAdmitted symbols installed walked premises)
   pure (Admitted union source linked (M.fromList admitted))
 

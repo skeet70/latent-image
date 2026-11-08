@@ -200,32 +200,97 @@ xm1_rust_rlib(
     ],
 )
 
+_ARCHIVES = {
+    "a": [
+        ":platform-root",
+        ":scheduler-a-rlib",
+        ":scheduler-s2-a-rlib",
+        ":scheduler-s3c-a-rlib",
+        ":own-first-a-rlib",
+        ":semaphore-a-rlib",
+        ":fixed-pool-a-rlib",
+        ":task-records-a-rlib",
+        ":global-lock-rlib",
+    ],
+    "b": [
+        ":platform-root",
+        ":scheduler-b-rlib",
+        ":scheduler-s2-b-rlib",
+        ":scheduler-s3c-b-rlib",
+        ":own-first-b-rlib",
+        ":semaphore-b-rlib",
+        ":fixed-pool-b-rlib",
+        ":task-records-b-rlib",
+        ":global-lock-rlib",
+    ],
+}
+
 [
-    xm1_rust_elf(
-        name = "platform-%s" % domain,
-        rust_staticlib = ":platform-root",
-        rust_components = [
-            ":scheduler-%s-rlib" % domain,
-            ":scheduler-s2-%s-rlib" % domain,
-            ":scheduler-s3c-%s-rlib" % domain,
-            ":own-first-%s-rlib" % domain,
-            ":semaphore-%s-rlib" % domain,
-            ":fixed-pool-%s-rlib" % domain,
-            ":task-records-%s-rlib" % domain,
-            ":global-lock-rlib",
-        ],
-        asm_srcs = [
+    genrule(
+        name = "bodies-%s" % domain,
+        srcs = _ARCHIVES[domain] + [
             "veneer-%s.S" % domain,
             "//replacement/rtos_fixed_pool:stage/entries.S",
+            "carriers.json",
         ],
-        link_script = "platform-%s.ld" % domain,
-        entry = "xm1_platform_veneer_s1_acquire",
-        extra_ldflags = [
-            "-Wl,--gc-sections",
-            "-Wl,--orphan-handling=error",
-            "-Wl,--enable-non-contiguous-regions",
+        outs = ["bodies-%s.o" % domain, "sections-%s.txt" % domain],
+        cmd = """
+set -e
+tmp=$$(mktemp -d)
+trap 'rm -rf "$$tmp"' EXIT
+$(location @lab_clang//:bin/clang) --target=armv7r-none-eabi -march=armv7-r -marm -c $(location veneer-%s.S) -o $$tmp/veneer.o
+$(location @lab_clang//:bin/clang) --target=armv7r-none-eabi -march=armv7-r -marm -c $(location //replacement/rtos_fixed_pool:stage/entries.S) -o $$tmp/entries.o
+$(location @lab_jq//:bin/jq) -r '.domains.%s | (.entries[].symbol, .entries[].veneer, .demand[].symbol)' $(location carriers.json) | sort -u > $$tmp/seeds
+$(location @lab_lld//:bin/ld.lld) -m armelf -r --gc-sections $$(awk '{printf " -u %%s", $$1}' $$tmp/seeds) --start-group %s --end-group $$tmp/veneer.o $$tmp/entries.o -o $(location :bodies-%s.o)
+$(location @lab_llvm//:bin/llvm-readelf) -S $(location :bodies-%s.o) > $(location :sections-%s.txt)
+""" % (domain, domain, " ".join(["$(location %s)" % archive for archive in _ARCHIVES[domain]]), domain, domain, domain),
+        tools = [
+            "@lab_clang//:bin/clang",
+            "@lab_jq//:bin/jq",
+            "@lab_lld//:bin/ld.lld",
+            "@lab_llvm//:bin/llvm-readelf",
         ],
-        tags = ["manual"],
+        visibility = ["//visibility:public"],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    genrule(
+        name = "platform-script-%s" % domain,
+        srcs = ["carriers.json", ":sections-%s.txt" % domain],
+        outs = ["platform-%s.gen.ld" % domain, "placement-%s.json" % domain],
+        tools = [":place-platform"],
+        cmd = "$(location :place-platform) $(location carriers.json) %s $(location :sections-%s.txt) $(location :platform-%s.gen.ld) $(location :placement-%s.json)" % (domain, domain, domain, domain),
+        visibility = ["//visibility:public"],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    genrule(
+        name = "platform-%s" % domain,
+        srcs = [":bodies-%s.o" % domain, ":platform-%s.gen.ld" % domain],
+        outs = [
+            "platform-%s.elf" % domain,
+            "platform-%s.bin" % domain,
+            "platform-%s.symbols" % domain,
+            "platform-%s.disasm" % domain,
+        ],
+        cmd = """
+set -e
+$(location @lab_lld//:bin/ld.lld) -m armelf -T $(location :platform-%s.gen.ld) $(location :bodies-%s.o) -o $(location :platform-%s.elf)
+$(location @lab_llvm//:bin/llvm-objcopy) -O binary $(location :platform-%s.elf) $(location :platform-%s.bin)
+$(location @lab_llvm//:bin/llvm-nm) -S --defined-only --numeric-sort $(location :platform-%s.elf) > $(location :platform-%s.symbols)
+$(location @lab_llvm//:bin/llvm-objdump) -d --no-show-raw-insn --triple=armv7r-none-eabi --mcpu=cortex-r4f $(location :platform-%s.elf) > $(location :platform-%s.disasm)
+""" % (domain, domain, domain, domain, domain, domain, domain, domain, domain),
+        tools = [
+            "@lab_lld//:bin/ld.lld",
+            "@lab_llvm//:bin/llvm-objcopy",
+            "@lab_llvm//:bin/llvm-nm",
+            "@lab_llvm//:bin/llvm-objdump",
+        ],
+        visibility = ["//visibility:public"],
     )
     for domain in ["a", "b"]
 ]
