@@ -386,7 +386,7 @@ caseFor facts executing loader owned one
           else [(Pc, stopAddress), (Sp, targetStackPointer)]
       , caseExpectedMemory = [(RegionId "caller-frame", callerBytes)]
       , caseCp14Identity = Just (if executing == DomainA then 0x4003 else 0x4004)
-      , caseKernel = Just (KernelCase plainLimit (if caseBoundary one == TaskArrival then Just (wireAddress (GuestAddress stopAddress)) else Nothing) (Just 0x80001234) (Just 0) (Just 0) ignored)
+      , caseKernel = Just (KernelCase plainLimit (if caseBoundary one == TaskArrival then Just (wireAddress (GuestAddress stopAddress)) else Nothing) (Just 0x80001234) (Just 0) (Just 0) ignored [])
       }
   where
     entry = case caseCall one of ObjectService family _ -> entryAddress executing family; OwnerRelease _ -> releaseEntry executing
