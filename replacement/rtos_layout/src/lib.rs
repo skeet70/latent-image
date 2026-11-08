@@ -546,6 +546,109 @@ impl TaskDefinition {
     }
 }
 
+/// 1..=the fixed-pool count word.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
+#[repr(transparent)]
+pub struct FixedPoolSlot(u16);
+
+impl FixedPoolSlot {
+    pub const COUNT: u32 = 122;
+
+    #[inline(always)]
+    pub const fn new(slot: u32, count: u32) -> Option<Self> {
+        if slot >= 1 && slot <= count && slot <= Self::COUNT {
+            Some(Self(slot as u16))
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub const fn get(self) -> u32 {
+        self.0 as u32
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct FixedPoolConfig(pub GuestAddress);
+
+impl FixedPoolConfig {
+    pub const SIZE: u32 = 0x14;
+    pub const PRIORITY_ORDER: u32 = 0x01;
+
+    #[inline(always)]
+    pub const fn attributes(self) -> GuestAddress {
+        self.0
+    }
+
+    /// The rounded stride, `(size + 3) & !3`.
+    #[inline(always)]
+    pub const fn block_size(self) -> GuestAddress {
+        self.0.offset(0x04)
+    }
+
+    #[inline(always)]
+    pub const fn begin(self) -> GuestAddress {
+        self.0.offset(0x08)
+    }
+
+    #[inline(always)]
+    pub const fn end(self) -> GuestAddress {
+        self.0.offset(0x0c)
+    }
+
+    #[inline(always)]
+    pub const fn exists(self) -> GuestAddress {
+        self.0.offset(0x10)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct FixedPoolControl(pub GuestAddress);
+
+impl FixedPoolControl {
+    pub const SIZE: u32 = 0x14;
+
+    #[inline(always)]
+    pub const fn queue(self) -> WaitQueue {
+        WaitQueue(self.0)
+    }
+
+    /// Next block the bump allocator has never handed out.
+    #[inline(always)]
+    pub const fn next_free(self) -> GuestAddress {
+        self.0.offset(0x0c)
+    }
+
+    /// Head of the released-block list; each block's first word links the next.
+    #[inline(always)]
+    pub const fn recycled(self) -> GuestAddress {
+        self.0.offset(0x10)
+    }
+}
+
+/// A task's fixed-pool wait record, in a table indexed by the task slot.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct FixedPoolWait(pub GuestAddress);
+
+impl FixedPoolWait {
+    pub const SIZE: u32 = 0x10;
+
+    #[inline(always)]
+    pub const fn base(self) -> WaitBlock {
+        WaitBlock(self.0)
+    }
+
+    /// Receives the block address when the wait is satisfied.
+    #[inline(always)]
+    pub const fn block(self) -> GuestAddress {
+        self.0.offset(0x0c)
+    }
+}
+
 /// Head of one circular ready list, linked through T+0x00/+0x04; an empty head points at itself.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(transparent)]
@@ -774,6 +877,13 @@ pub struct DomainWords {
     pub time_offset: GuestAddress,
     pub timer_count: GuestAddress,
     pub timer_heap: GuestAddress,
+    /// [`FixedPoolSlot::COUNT`] creation records.
+    pub fixed_pool_configs: GuestAddress,
+    pub fixed_pool_controls: GuestAddress,
+    pub fixed_pool_waits: GuestAddress,
+    pub fixed_pool_timers: GuestAddress,
+    /// The one-word block a deleted pool's creation record spans.
+    pub default_pool_storage: GuestAddress,
     /// [`TaskSlot::COUNT`] [`Task`] records.
     pub task_table: GuestAddress,
     /// [`FlagSlot::COUNT`] creation records.
@@ -817,6 +927,26 @@ impl DomainWords {
     #[inline(always)]
     pub const fn ready_head(&self, priority: Priority) -> ReadyHead {
         ReadyHead(self.ready_heads.offset(priority.get() * ReadyHead::SIZE))
+    }
+
+    #[inline(always)]
+    pub const fn fixed_pool_config(&self, slot: FixedPoolSlot) -> FixedPoolConfig {
+        FixedPoolConfig(self.fixed_pool_configs.offset((slot.get() - 1) * FixedPoolConfig::SIZE))
+    }
+
+    #[inline(always)]
+    pub const fn fixed_pool_control(&self, slot: FixedPoolSlot) -> FixedPoolControl {
+        FixedPoolControl(self.fixed_pool_controls.offset((slot.get() - 1) * FixedPoolControl::SIZE))
+    }
+
+    #[inline(always)]
+    pub const fn fixed_pool_wait(&self, task: TaskSlot) -> FixedPoolWait {
+        FixedPoolWait(self.fixed_pool_waits.offset((task.get() - 1) * FixedPoolWait::SIZE))
+    }
+
+    #[inline(always)]
+    pub const fn fixed_pool_timer(&self, task: TaskSlot) -> GuestAddress {
+        self.fixed_pool_timers.offset((task.get() - 1) * TIMER_ENTRY_SIZE)
     }
 
     #[inline(always)]
@@ -892,6 +1022,11 @@ impl Domain {
                 time_offset: GuestAddress(0x4005_4774),
                 timer_count: GuestAddress(0x4005_4778),
                 timer_heap: GuestAddress(0x4005_d718),
+                fixed_pool_configs: GuestAddress(0x4006_194c),
+                fixed_pool_controls: GuestAddress(0x4005_f584),
+                fixed_pool_waits: GuestAddress(0x4005_855c),
+                fixed_pool_timers: GuestAddress(0x4005_8cdc),
+                default_pool_storage: GuestAddress(0x4006_2c4c),
                 task_table: GuestAddress(0x4005_ff0c),
                 flag_configs: GuestAddress(0x4005_d178),
                 flag_controls: GuestAddress(0x4006_24b4),
@@ -919,6 +1054,11 @@ impl Domain {
                 time_offset: GuestAddress(0x400e_4734),
                 timer_count: GuestAddress(0x400e_4738),
                 timer_heap: GuestAddress(0x400e_d6d8),
+                fixed_pool_configs: GuestAddress(0x400f_190c),
+                fixed_pool_controls: GuestAddress(0x400e_f544),
+                fixed_pool_waits: GuestAddress(0x400e_851c),
+                fixed_pool_timers: GuestAddress(0x400e_8c9c),
+                default_pool_storage: GuestAddress(0x400f_2c0c),
                 task_table: GuestAddress(0x400e_fecc),
                 flag_configs: GuestAddress(0x400e_d138),
                 flag_controls: GuestAddress(0x400f_2474),
