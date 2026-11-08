@@ -42,6 +42,14 @@ impl Capacity {
         NonZeroU32::new(value).map(Self)
     }
 
+    /// The caller guarantees the value is in range.
+    pub const fn from_static(value: u32) -> Self {
+        Self(match NonZeroU32::new(value) {
+            Some(value) => value,
+            None => unsafe { core::hint::unreachable_unchecked() },
+        })
+    }
+
     pub fn get(self) -> u32 {
         self.0.get()
     }
@@ -71,6 +79,7 @@ pub enum TimerIndex {
 
 /// A view identity of the 12-byte entry record: index +0x00, callback +0x04, argument +0x08.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
 pub struct TimerEntry(GuestAddress);
 
 impl TimerEntry {
@@ -203,9 +212,17 @@ fn relative(value: u32, base: Base) -> u32 {
     value.wrapping_sub(base.0)
 }
 
+/// Callers bound the slot by the heap count.
+fn in_range(value: u32, capacity: Capacity) -> Index {
+    match Index::new(value, capacity) {
+        Ok(index) => index,
+        Err(_) => unsafe { core::hint::unreachable_unchecked() },
+    }
+}
+
 fn sift_up<M: Machine>(m: &M, heap: TimerHeap, mut index: Index, expiry: Expiry, base: Base) -> Index {
     while index.get() > 1 {
-        let parent = Index::new(index.get() >> 1, heap.capacity).expect("parent slot is in range");
+        let parent = in_range(index.get() >> 1, heap.capacity);
         let parent_expiry = node_expiry(m, heap, parent);
         if relative(parent_expiry.0, base) <= relative(expiry.0, base) {
             break;
@@ -226,7 +243,7 @@ fn sift_down<M: Machine>(m: &M, heap: TimerHeap, mut index: Index, expiry: Expir
         if child > count {
             break;
         }
-        let left = Index::new(child, heap.capacity).expect("child slot is in range");
+        let left = in_range(child, heap.capacity);
         let left_expiry = node_expiry(m, heap, left);
         let (smaller, smaller_expiry) = match Index::new(child + 1, heap.capacity) {
             Ok(right) if child + 1 <= count => {
@@ -391,7 +408,7 @@ pub fn tick<M: Scheduler>(
 #[cfg(test)]
 mod tests;
 
-#[cfg(all(target_arch = "arm", not(test)))]
+#[cfg(all(target_arch = "arm", not(test), not(feature = "stage")))]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
     loop {}
