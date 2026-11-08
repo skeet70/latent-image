@@ -8,11 +8,13 @@ pub mod layout;
 
 pub use layout::GuestAddress;
 
-/// The value `+0x161c` stores: the acquirer's identity. The stock body stores `r1`
-/// unchanged and checks nothing about it.
+/// The value `+0x161c` stores: the acquirer's identity, taken from the caller's `r1`.
+/// The retained spellings are the IRQ vector's `(core + 1) | 0x10` and the image4
+/// critical pair's `(core + 1) | 0x20`; the body checks neither.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(transparent)]
 pub struct LockStamp(pub u32);
+
 
 /// The word an entry operates on. The stock entry takes `r0` and substitutes
 /// [`Self::DEFAULT_GLOBAL`] when it is zero.
