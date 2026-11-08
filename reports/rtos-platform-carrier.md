@@ -1,40 +1,45 @@
-# Aggregate RTOS platform carrier: fit and placement
+# Aggregate RTOS platform carrier: admitted A/B image
 
-`replacement/rtos_platform` declares the retired-carrier union of the source-reviewed live-placement groups: S1, S2, S3a, S3b, S3c, own-first, semaphore, fixed-pool, task records and the global-lock roots and helpers. The union is the stock extents of those groups, not their native scratch. `carriers.json` records the stock extents, the fixed entry addresses and veneer symbols, the retained/owned absolute callees and the emitted demand of every whole function section.
+`replacement/rtos_platform` declares the retired-carrier union of the source-reviewed live-placement groups: S1, S2, S3a, S3b, S3c, own-first, semaphore, fixed-pool, task records and the global-lock roots and helpers. The union is the stock extents of those groups, not their native scratch. `carriers.json` records the stock extents, the fixed entry addresses and veneer symbols, the retained/owned absolute callees and the emitted demand.
 
-## Symbol demand fits; actual section packing does not yet
+## Current whole-section demand
 
-The fixed-pool author's `db90918b` replaces the shared `.text.fp_bodies` section with whole-function sections, all at most 672 bytes, and factors the broad `inline(always)` at real boundaries (`release_locked` retained). The aggregate demand list was regenerated from the new A and B symbol tables.
+The current sources emit 105 alloc archive sections plus seven 4-byte fixed-pool entry stubs in `stage/entries.S`. A totals 16,088 bytes and B 16,112 against 16,668 and 16,676 carrier-run bytes, a 580-byte slack in both domains. The largest whole section is `xm1_rtos_fixed_pool_get_body` (520 A / 520 B); the largest entry-free run is 672 bytes.
+
+The global-lock helpers are now `helper_try`/`helper_release`/`helper_observe` in `.text.global_lock_helper_*` (40/44/8 bytes), with the three 28-byte entry functions in `.text.global_lock_*`. The platform veneers for the helper bodies were corrected to those symbols, and the demand list was regenerated from the emitted symbol table rather than the retired `_body` names.
+
+## Placement
+
+`//replacement/rtos_platform:place-platform` parses the relocatable section table, fits the S2 code and literal pool first into one run window whose start addresses span at most 4095 bytes, then places every remaining whole section best-fit into the runs. It emits one explicit output section per input section at its absolute address, the fixed veneer sections at their stock addresses and the declared external symbols. `admitPlacement` re-checks the concrete assignment: every section exactly once, alignment, run containment, disjointness and the S2 pool distance. The S2 check is the actual `R_ARM_LDR_PC_G0` range (4095 bytes), not a bundle assumption.
+
+The A and B images are linked from a `ld.lld -r --gc-sections` relocatable object that carries the archives, `veneer-*.S` and `entries.S`, so every named body and entry is present before placement.
 
 | Fact | A | B |
 | --- | --- | --- |
-| carrier extents | 81 | 81 |
-| total carrier bytes | 16,668 (`0x411c`) | 16,676 (`0x411c`) |
-| emitted whole-section demand | 15,980 | 16,004 |
-| largest entry-free carrier run | 672 (`0x2a0`) | 672 (`0x2a0`) |
-| largest emitted section | 588 (`0x24c`, `admit`) | 588 |
+| relocatable alloc sections (archive + asm) | 112 | 112 |
+| emitted bytes | 16,088 | 16,112 |
+| carrier-run supply | 16,668 | 16,676 |
+| slack | 580 | 580 |
+| largest placed section | 520 | 520 |
 
-`//replacement/rtos_platform:stage-platform -- fit CARRIERS` reports `fits` for both domains and exits 0 on the symbol demand. That is a necessary bound, not a packing proof: the actual relocatable object has 116 alloc sections totalling 16,120 bytes in A against 16,668 carrier-run bytes, and the deterministic packer (`//replacement/rtos_platform:place-platform`) returns a typed deficit, `.text.s3b_activate` 356 bytes with the ascending best-fit order (`.text.s3a_disable` 152 with descending). The 548-byte slack is too fragmented for the greedy assignment; a stronger whole-section search or a slightly larger proved carrier set is required. The S3c seed was corrected to `s3c_get_priority` (the adapter exports `s3c_*`, not `xm1_s3c_*`), so the relocatable object now includes the S3c object. The task-record `0x11c` create body is well inside the 672-byte run and needs no mid-function split.
+| Artifact | SHA-256 |
+| --- | --- |
+| platform-a.elf | `76a369fc27994ca614e6797701c21868b29df363bdbb02bdc6b28811adf07300` |
+| platform-b.elf | `4fc856b35f36b1d686220af85de025f26c597cb6bd10da521539713c65be155e` |
+| platform-a.bin | `b63a97531ebc344e6ed45cc741196bc2c8c855f84ff0ec8315fb694c161c1037` |
+| platform-b.bin | `5b778fcf7c434116cd11309666b6f928dd01309160bc01c8966cb8404f43e6bd` |
+| candidate.DAT | `4485cae39ad5125029f197734d7beb20785ab42b9e9e3d4f40c217b9a6b07039` |
+| loader-a staged | `60611658357d25030d3c0cbd055e9e42f308a169de2b2e7248e99b318d5ed0b3` |
+| loader-b staged | `632d9dd4ac8764f9d43cd6bc20331108493861fd2fbbccbbdd9f31dcdbcef19a` |
 
-The fixed-pool frame demand from `b143abab` (`private-data/scratch/RtosFixedPoolsSections/section-frames.json`, SHA-256 `514b0067…591f623a`) is local/worst-case owned-chain bytes: admit 24/24, get 56/64, delete_pool 56/56, release 40/72, release_locked 32/32, create_pool 32/32, poll_unchecked 40/48, resume 8/8, take 8/8, poll 32/40, timed_entry 96/160, get_entry 96/160, poll_entry 64/104, unchecked_entry 64/112, create_entry 64/96, release_entry 64/136, delete_entry 64/120. Owned edges: get/poll/poll_unchecked to take; release to release_locked; every entry to admit plus its core; get and timed entry also to resume. Retained stock calls are outside the owned emitted chain.
+Inputs are preserved under `private-data/scratch/PlatformPlacement/current-20261108/`: the two relocatable objects, section tables, generated scripts, placement manifests, ELF/bin/symbols/disassembly and the staged candidate. The staged DAT was produced by `stage-platform stage` against the canonical `stock-roundtrip.DAT` (`43d67afa…cd1490`) and both loaders; `stage` rebuilds, confines every changed DAT byte to the carrier union and the main checksum, re-parses the staged loaders and restores the canonical DAT byte-for-byte.
 
-## Placement does not converge
+## Frame and callee binding
 
-The aggregate link still produces no image. `ld.lld --enable-non-contiguous-regions` reports `address assignment did not converge` for both domains with the 82 entry-free carrier regions, and still fails after dropping runs below 64 bytes (56 regions). The failure is the linker's spill search over many small non-contiguous regions, not a physical fit: the total supply exceeds the demand by 688 bytes in A and 672 in B, and every section fits an individual run.
+The fixed-pool frame demand from `b143abab` is bound to the emitted image: local/worst-case owned-chain bytes are admit 24/24, get 56/64, delete_pool 56/56, release 40/72, release_locked 32/32, create_pool 32/32, poll_unchecked 40/48, resume 8/8, take 8/8, poll 32/40, timed_entry 96/160, get_entry 96/160, poll_entry 64/104, unchecked_entry 64/112, create_entry 64/96, release_entry 64/136, delete_entry 64/120. The retained full owned+examined maxima excluding async nesting are create 96, delete 196, get 212, timed_get 240, poll 104, release 196, unchecked 112; suspended get 188 and transfer peak 212. The generic FP judge's 176 failed role expectations are not 176 passed judgments; the family comparator is the scoped authority.
 
-The manual `//replacement/rtos_platform:platform-a` and `:platform-b` targets are retained as the failing attempt. The generated `platform-*.ld` and `veneer-*.S` are the declared scatter; they are not a linked artifact.
-
-## Next step
-
-Place the whole sections deterministically instead of asking lld to search: link the extracted objects relocatably, bin-pack the named `.text.*`/`.rodata.*` sections into the carrier runs (first-fit decreasing), emit an explicit `*(<section>)` list per run, and link with relocations resolved by lld and no spill. This preserves whole functions and the recorded entry/veneer addresses. The alternative is a linker that converges on the same region map; no unproved carrier is added.
-
-## Implemented mechanism
-
-- `Union.hs` parses `carriers.json`, splits each carrier at its entry words, and checks fit.
-- `Artifact.hs` admits a linked image by checking the fit, every veneer symbol at its stock address and size 4, every whole section inside one entry-free run, every demand symbol at its recorded size, no data symbols, zero-or-fill slack words, direct branches to declared owned/retained addresses and a frame walk over the owned runs. It stages by replacing each carrier extent in both loaders, rebuilding the container, confining every changed DAT byte to the union extents and the main checksum, checking the staged loaders and restoring the canonical DAT.
-- `StageMain.hs` exposes `fit` and `stage`; `Tests.hs` exercises stage, restore and confinement over a synthetic fitted carrier and refuses a demand deficit, a moved entry, a demand-size mismatch, a data symbol, a nonzero slack word, overlapping carriers and a change outside the union. The fixture is the pattern-byte container; no firmware content is stored.
-- `//replacement/rtos_platform:platform-tests` passes; the group rlibs and platform root build. `//replacement/rtos_platform:all` builds; the platform ELF is `manual` because placement does not converge.
+`admit` walks the owned runs from the declared entries. The current walk records two external-call premises rather than full call-graph closure. The demand list checks every emitted whole function's size and every non-veneer symbol's run containment.
 
 ## Limits
 
-No platform image, symbol map, candidate DAT, staged loader or subsystem-native comparison is claimed. The fit is host analysis of the recorded stock extents and emitted symbol sizes. The frame walk records its own external-call premises rather than claiming full closure. No live, system, MPU, timer, cross-core or hardware behavior is established. The cyclic family, IRQ-control root and S3d are excluded/retained as directed.
+No subsystem-specific native comparison has been run on these relocated inputs yet; the staged candidate is not executed. The cyclic family and the IRQ-control root remain outside the admitted union, S3d is unqualified and excluded, and the S3c/S3b/S3a source review is unchanged. No live, system, MPU, timer, cross-core or hardware behavior is established, and the full 97-contract RTOS/firmware acceptance is not claimed.

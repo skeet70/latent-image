@@ -23,7 +23,7 @@ synthetic = Union 0xe7f000f0 domainA domainB
     entry at symbol veneer = Entry FixedPool "test" (GuestAddress at) symbol veneer
 
 linkedFor :: Union -> Linked
-linkedFor _ = Linked (bin (GuestAddress 0x40430)) (symbols (GuestAddress 0x40430) "veneer_a" "body_a") "" (bin (GuestAddress 0xd0430)) (symbols (GuestAddress 0xd0430) "veneer_b" "body_b") ""
+linkedFor _ = Linked (bin (GuestAddress 0x40430)) (symbols (GuestAddress 0x40430) "veneer_a" "body_a") "" [] (bin (GuestAddress 0xd0430)) (symbols (GuestAddress 0xd0430) "veneer_b" "body_b") "" []
 
 bin :: GuestAddress -> B.ByteString
 bin (GuestAddress _base) =

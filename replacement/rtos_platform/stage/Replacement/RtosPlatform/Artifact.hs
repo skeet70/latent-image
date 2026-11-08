@@ -46,9 +46,11 @@ data Linked = Linked
   { linkedBinA :: B.ByteString
   , linkedSymbolsA :: B.ByteString
   , linkedDisasmA :: B.ByteString
+  , linkedPlacementsA :: [(Word32, Int)]
   , linkedBinB :: B.ByteString
   , linkedSymbolsB :: B.ByteString
   , linkedDisasmB :: B.ByteString
+  , linkedPlacementsB :: [(Word32, Int)]
   }
 
 data DomainAdmitted = DomainAdmitted
@@ -155,11 +157,12 @@ put :: GuestAddress -> Extent -> B.ByteString -> B.ByteString -> B.ByteString
 put (GuestAddress base) extent@(Extent (GuestAddress start) _) replacement original =
   let at = fromIntegral (start - base) in B.take at original <> replacement <> B.drop (at + extentBytes extent) original
 
-installCarrier :: Domain -> Word32 -> [F.Symbol] -> B.ByteString -> Extent -> Either StageError B.ByteString
-installCarrier domain fill symbols raw extent = do
+installCarrier :: Domain -> Word32 -> [F.Symbol] -> [(Word32, Int)] -> B.ByteString -> Extent -> Either StageError B.ByteString
+installCarrier domain fill symbols placements raw extent = do
   let padded = raw <> B.replicate (extentBytes extent - B.length raw) 0
       spans = [(F.symbolAddress s, F.symbolAddress s + F.symbolSize s) | s <- symbols, F.symbolSize s > 0]
       covered at = any (\(lo, hi) -> lo <= at && at < hi) spans
+        || any (\(lo, len) -> lo <= at && at < lo + fromIntegral len) placements
       words32 = [U.word32At padded off | off <- [0, 4 .. extentBytes extent - 4]]
   forM_ (zip [0, 4 .. extentBytes extent - 4] words32) $ \(off, word) ->
     when (not (covered (startAddress + fromIntegral off)) && word /= 0 && word /= fill) (Left (SlackNotFillOrZero domain (GuestAddress (startAddress + fromIntegral off))))
@@ -200,6 +203,7 @@ admit union source linked = do
         linkedBin = if domain == DomainA then linkedBinA linked else linkedBinB linked
         linkedSymbols = if domain == DomainA then linkedSymbolsA linked else linkedSymbolsB linked
         linkedDisasm = if domain == DomainA then linkedDisasmA linked else linkedDisasmB linked
+        placements = if domain == DomainA then linkedPlacementsA linked else linkedPlacementsB linked
         binBase = minimum (map (extentStart . carrierExtent) (mapCarriers dm))
         bin = linkedBin
         runExtents = runs dm
@@ -217,7 +221,7 @@ admit union source linked = do
       (s : _) -> require (fromIntegral (F.symbolSize s) == demandBytes d) (DemandSize domain d (fromIntegral (F.symbolSize s)))
     installed <- forM (mapCarriers dm) $ \c -> do
       let extent = carrierExtent c
-      bytes <- installCarrier domain (unionFill union) symbols (slice binBase extent bin) extent
+      bytes <- installCarrier domain (unionFill union) symbols placements (slice binBase extent bin) extent
       pure (extent, bytes)
     forM_ (branchTargets linkedDisasm) $ \target ->
       let inUnion = any (\c -> extentContains (carrierExtent c) (GuestAddress target)) (mapCarriers dm)
