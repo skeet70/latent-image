@@ -245,13 +245,24 @@ fn sample(machine: &Machine, maps: &[MemoryMap], sources: &[Code], hit: usize, s
     views.push(observed);
     Ok(Sample { hit, boundary, context: state, code_word: expected, watch_cursor, views, kernels, interrupt_stack: None })
 }
-fn sources(root: &Path) -> Result<Vec<Code>, String> {
-    [("decode/loader-40000.bin", 0x40000, "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882"),
-     ("decode/loader-d0000.bin", 0xd0000, "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec"),
-     ("lz/id4-0061c400.bin", IMAGE_BASE, ORIGINAL_IMAGE)].into_iter().map(|(name, base, expected)| {
-        let bytes = read(&root.join(name))?;
-        require(sha256(&bytes) == expected, "noncanonical source image")?;
-        Ok(Code { name, base, bytes })
+fn sources(root: &Path, overrides: &[Option<PathBuf>; 2]) -> Result<Vec<Code>, String> {
+    [("decode/loader-40000.bin", "candidate-loader-a", 0x40000, "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882", 0xdae0),
+     ("decode/loader-d0000.bin", "candidate-loader-b", 0xd0000, "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec", 0xdaa0),
+     ("lz/id4-0061c400.bin", "image4", IMAGE_BASE, ORIGINAL_IMAGE, 0)].into_iter().enumerate().map(|(index, (name, candidate, base, expected, length))| {
+        let bytes = match overrides.get(index).and_then(|override_path| override_path.as_ref()) {
+            Some(path) => read(path)?,
+            None => read(&root.join(name))?,
+        };
+        match overrides.get(index).and_then(|override_path| override_path.as_ref()) {
+            Some(_) => {
+                require(length != 0 && bytes.len() == length, "candidate loader length differs")?;
+                Ok(Code { name: candidate, base, bytes })
+            }
+            None => {
+                require(sha256(&bytes) == expected, "noncanonical source image")?;
+                Ok(Code { name, base, bytes })
+            }
+        }
     }).collect()
 }
 fn idle_loop(bytes: &[u8]) -> Result<(Address, Address), String> {
@@ -1762,18 +1773,21 @@ fn drive() -> Result<(), String> {
     let mut arguments = BTreeMap::new(); let mut args = std::env::args_os().skip(1);
     while let Some(flag) = args.next() {
         let flag = flag.into_string().map_err(|_| USAGE)?;
-        if !["--task", "--role", "--run", "--update", "--boot-rom", "--analysis", "--linked", "--symbols", "--contract", "--output"].contains(&flag.as_str())
+        if !["--task", "--role", "--run", "--update", "--boot-rom", "--analysis", "--linked", "--symbols", "--contract", "--output", "--loader-a", "--loader-b"].contains(&flag.as_str())
             || arguments.insert(flag, PathBuf::from(args.next().ok_or(USAGE)?)).is_some() { return Err(USAGE.into()); }
     }
     let task = match arguments.remove("--task") {
         None => TaskScope::Idle,
         Some(value) => TaskScope::parse(value.to_str().ok_or(USAGE)?)?,
     };
+    let loader_a = arguments.remove("--loader-a");
+    let loader_b = arguments.remove("--loader-b");
     let mut take = |flag| arguments.remove(flag).ok_or_else(|| USAGE.to_owned());
     let role_path = take("--role")?;
     let role = Role::parse(role_path.to_str().ok_or(USAGE)?)?;
     let run_bytes = read(&take("--run")?)?; let update = read(&take("--update")?)?; let rom = read(&take("--boot-rom")?)?;
-    let mut code = sources(&take("--analysis")?)?;
+    let analysis = take("--analysis")?;
+    let mut code = sources(&analysis, &[loader_a, loader_b])?;
     let linked = read(&take("--linked")?)?; let symbols = read(&take("--symbols")?)?; let contract = read(&take("--contract")?)?;
     let output = take("--output")?;
     let identity = Identity {

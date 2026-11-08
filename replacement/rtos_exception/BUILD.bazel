@@ -1,0 +1,78 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["exception-a.ld", "exception-b.ld"])
+
+[
+    xm1_rust_staticlib(
+        name = "exception-%s-rust" % domain,
+        src = "//replacement/rtos_exception/stage:abi.rs",
+        crate_name = "xm1_rtos_exception_%s" % domain,
+        data = [
+            "src/lib.rs",
+            "//replacement/rtos_layout:src/lib.rs",
+        ],
+        rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    xm1_rust_elf(
+        name = "exception-%s" % domain,
+        rust_staticlib = ":exception-%s-rust" % domain,
+        asm_srcs = ["//replacement/rtos_exception/stage:carrier.S"],
+        asm_defines = ["DOMAIN_%s" % domain.upper()],
+        entry = "xm1_exception_irq",
+        extra_ldflags = [
+            "-Wl,--gc-sections",
+            "-Wl,--orphan-handling=error",
+        ],
+        link_script = "exception-%s.ld" % domain,
+    )
+    for domain in ["a", "b"]
+]
+
+genrule(
+    name = "exception-host-tests-build",
+    srcs = [
+        "src/lib.rs",
+        "src/tests.rs",
+        "//replacement/rtos_layout:src/lib.rs",
+    ],
+    outs = ["exception-host-tests-bin"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location src/lib.rs) -o $@",
+    executable = True,
+    tools = [
+        "@lab_clang//:bin/clang",
+        "@lab_rustc//:bin/rustc",
+    ],
+)
+
+sh_test(
+    name = "exception-host-tests",
+    size = "small",
+    srcs = ["run-host-tests.sh"],
+    args = ["$(location :exception-host-tests-build)"],
+    data = [":exception-host-tests-build"],
+)
+
+sh_test(
+    name = "exception-artifact-tests",
+    size = "small",
+    srcs = ["check-artifact.sh"],
+    args = [
+        "$(location :exception-a.symbols)",
+        "$(location :exception-b.symbols)",
+        "$(location :exception-a.disasm)",
+        "$(location :exception-b.disasm)",
+    ],
+    data = [
+        ":exception-a.disasm",
+        ":exception-a.symbols",
+        ":exception-b.disasm",
+        ":exception-b.symbols",
+    ],
+)

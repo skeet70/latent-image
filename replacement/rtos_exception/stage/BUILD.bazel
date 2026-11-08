@@ -1,0 +1,39 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["abi.rs", "carrier.S"])
+
+haskell_library(
+    name = "exception-stage",
+    srcs = ["Replacement/RtosException/Stage.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:first-stage",
+        "//host:update-container",
+    ],
+)
+
+haskell_binary(
+    name = "stage-exception",
+    srcs = ["StageMain.hs"],
+    main_file = "StageMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":exception-stage",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+    ],
+)
