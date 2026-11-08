@@ -93,6 +93,25 @@ haskell_binary(
     name = "media-permit-qualification",
     srcs = ["MediaPermitQualifyMain.hs"],
     main_file = "MediaPermitQualifyMain.hs",
+    data = [
+        ":media-permit-candidate.bin",
+        ":media-permit-defect.bin",
+        "//emulation:emulator-slot",
+        "//replacement/media_permit/services:cancel.bin",
+        "//replacement/media_permit/services:cancel.elf",
+        "//replacement/media_permit/services:command.bin",
+        "//replacement/media_permit/services:command.elf",
+        "//replacement/media_permit/services:count.bin",
+        "//replacement/media_permit/services:count.elf",
+        "//replacement/media_permit/services:fatal2.bin",
+        "//replacement/media_permit/services:fatal2.elf",
+        "//replacement/media_permit/services:low.bin",
+        "//replacement/media_permit/services:low.elf",
+        "//replacement/media_permit/services:side-a.bin",
+        "//replacement/media_permit/services:side-a.elf",
+        "//replacement/media_permit/services:side-b.bin",
+        "//replacement/media_permit/services:side-b.elf",
+    ],
     ghcopts = [
         "-XGHC2021",
         "-Wall",
@@ -103,7 +122,9 @@ haskell_binary(
     visibility = ["//visibility:public"],
     deps = [
         ":stock-inventory",
+        "//emulation:cached-native-batch",
         "//emulation:case-sha256",
+        "//emulation:fujimod-native-paths",
         "//emulation:native-adapter",
         "//emulation:native-observation",
         "//host:aeson",
@@ -116,6 +137,7 @@ haskell_binary(
         "//host:json",
         "//host/firmware:bank-allowlist",
         "//host:text",
+        "//host:unix",
     ],
 )
 

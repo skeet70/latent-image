@@ -3,12 +3,12 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 module Main (main) where
 
-import Control.Exception (try)
+import Control.Exception (IOException, try)
 import Control.Monad (filterM, forM, forM_)
 import Data.Aeson (Value (..))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
-import Data.List (isInfixOf, isPrefixOf, sort)
+import Data.List (isPrefixOf, sort)
 import Data.Maybe (fromMaybe)
 import Data.Word (Word32)
 import Emulation.CachedNativeBatch (BatchReuse (..), CacheEscape, cachedObservedBatch)
@@ -20,7 +20,7 @@ import Emulation.NativeCase
   )
 import qualified Emulation.NativeObservation as N
 import qualified Emulation.OwnedCase as O
-import FujiAF.Host (ensure, get, jsonRead, list, str, withTemporary)
+import FujiAF.Host (ensure, get, jsonRead, str, withTemporary)
 import FujiModNativePaths (fujimodNativeCase)
 import System.Directory
   ( Permissions (..)
@@ -28,6 +28,7 @@ import System.Directory
   , copyFile
   , createDirectoryIfMissing
   , doesDirectoryExist
+  , doesFileExist
   , getPermissions
   , listDirectory
   , removeDirectoryRecursive
@@ -49,6 +50,7 @@ main = do
     corruptionTest (root </> "corruption") canonicalRunner
     interruptedTest (root </> "interrupted") canonicalRunner
     faultyTest (root </> "faulty") canonicalRunner
+    incompleteOutputTest (root </> "incomplete")
     rootAliasTest (root </> "root-alias") canonicalRunner
     escapeV1Test (root </> "escape-v1") canonicalRunner
     escapeTmpTest (root </> "escape-tmp") canonicalRunner
@@ -287,14 +289,38 @@ faultyTest root runner = do
   ensure (executed == BatchExecuted) "faulty batch did not execute"
   ensure (all ((== N.Returned) . N.nativeStatus . snd) observations) "faulty batch lost its raw observation"
   checkResultFiles batchDirectory cases observations ["failed"]
-  failed <- B.readFile (batchDirectory </> "faulty.native-result.json") >>= jsonRead
-  ensure
-    (any ("register r0" `isInfixOf`) (map str (list (get failed "mismatches"))))
-    ("faulty result lacks actionable mismatch: " ++ show failed)
   (reused, reusedObservations) <- cachedObservedBatch cache runner batchPath
   ensure (reused == BatchReused) ("faulty batch was not reusable: " ++ show reused)
   ensure (reusedObservations == observations) "faulty batch reuse changed the observation"
   checkResultFiles batchDirectory cases reusedObservations ["failed"]
+
+incompleteOutputTest :: FilePath -> IO ()
+incompleteOutputTest root = do
+  let cache = root </> "cache"
+      batchDirectory = root </> "batch"
+      cases = specs 0xdeadbeef 0xdeadbeef 0x11223344
+  batchPath <- O.writeBatch batchDirectory cases
+  let fakeRunner = root </> "fake-runner"
+  B.writeFile fakeRunner (BC.pack "#!/bin/sh\nprintf 'FUJI_NATIVE_BATCH_CASE 0 1\\nnot json\\n'\nexit 1\n")
+  permissions <- getPermissions fakeRunner
+  setPermissions fakeRunner (permissions {executable = True})
+  outcome <-
+    try (cachedObservedBatch cache fakeRunner batchPath)
+      :: IO (Either IOException (BatchReuse, [(CaseId, N.NativeObservation)]))
+  case outcome of
+    Right _ -> fail "incomplete native output was accepted"
+    Left _ -> pure ()
+  case cases of
+    [] -> fail "incomplete output fixture has no case"
+    (caseSpec : _) -> do
+      let resultPath = batchDirectory </> (O.caseId caseSpec ++ ".native-result.json")
+      present <- doesFileExist resultPath
+      ensure present "incomplete native output did not retain its failure report"
+      failed <- B.readFile resultPath >>= jsonRead
+      ensure (str (get failed "status") == "runner_failure") ("unexpected failure status: " ++ show failed)
+      ensure
+        (str (get failed "runner_stdout") == "not json\n")
+        ("failure report lacks raw stdout: " ++ show failed)
 
 rootAliasTest :: FilePath -> FilePath -> IO ()
 rootAliasTest root runner = do

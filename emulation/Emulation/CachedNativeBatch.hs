@@ -382,34 +382,43 @@ executeValidated identity batchSha256 batchPath cases temporary = do
           (caseIdText (currentId current) ++ ": native batch report is out of order")
         let value = reportValue report
             ident = caseIdText (currentId current)
-        ensure
-          (str (get value "wire_sha256") == digestHex (currentWireSha256 current))
-          (ident ++ ": executed wire identity differs from the admitted case")
-        ensure
-          (str (get value "case_sha256") == digestHex (currentCaseSha256 current))
-          (ident ++ ": executed case identity differs from the admitted case")
-        ensure
-          (str (get value "runner_sha256") == digestHex (identitySha256 identity))
-          (ident ++ ": executed runner identity differs from the effective runner")
-        ensure (get value "runner" /= Null) (ident ++ ": native batch report has no runner observation")
-        exit <- case reportRunnerExit value of
-          Left problem -> failH (ident ++ ": " ++ renderObservationError problem)
-          Right code -> pure code
-        let rawBytes = encodeCanonical (get value "runner")
-        (observation, judged) <- judgeRaw identity current exit (get value "runner") rawBytes
-        writeResult batchPath current judged
-        modifyIORef' observations ((currentId current, observation) :)
-        case temporary of
-          Nothing -> pure ()
-          Just directory -> do
-            caseDirectory <- ownedDirectory directory ["cases", ident]
-            let provenance = provenanceValue identity batchSha256 current exit
-                provenanceBytes = encodeCanonical provenance
-            B.writeFile (ownedPath caseDirectory </> "runner.json") rawBytes
-            B.writeFile (ownedPath caseDirectory </> "exit") (exitBytes exit)
-            B.writeFile (ownedPath caseDirectory </> "provenance.json") provenanceBytes
-            modifyIORef' manifests (manifestCase current exit rawBytes provenanceBytes :)
-        writeIORef remaining rest
+            validate = do
+              ensure
+                (str (get value "wire_sha256") == digestHex (currentWireSha256 current))
+                (ident ++ ": executed wire identity differs from the admitted case")
+              ensure
+                (str (get value "case_sha256") == digestHex (currentCaseSha256 current))
+                (ident ++ ": executed case identity differs from the admitted case")
+              ensure
+                (str (get value "runner_sha256") == digestHex (identitySha256 identity))
+                (ident ++ ": executed runner identity differs from the effective runner")
+              ensure (get value "runner" /= Null) (ident ++ ": native batch report has no runner observation")
+              exit <- case reportRunnerExit value of
+                Left problem -> failH (ident ++ ": " ++ renderObservationError problem)
+                Right code -> pure code
+              let rawBytes = encodeCanonical (get value "runner")
+              (observation, judged) <- judgeRaw identity current exit (get value "runner") rawBytes
+              pure (observation, judged, exit, rawBytes)
+        validated <- try validate
+        case validated of
+          Left (problem :: IOException) -> do
+            preserveFailureReport batchPath (currentId current) value
+              `catch` \(_ :: IOException) -> pure ()
+            throwIO problem
+          Right (observation, judged, exit, rawBytes) -> do
+            writeResult batchPath current judged
+            modifyIORef' observations ((currentId current, observation) :)
+            case temporary of
+              Nothing -> pure ()
+              Just directory -> do
+                caseDirectory <- ownedDirectory directory ["cases", ident]
+                let provenance = provenanceValue identity batchSha256 current exit
+                    provenanceBytes = encodeCanonical provenance
+                B.writeFile (ownedPath caseDirectory </> "runner.json") rawBytes
+                B.writeFile (ownedPath caseDirectory </> "exit") (exitBytes exit)
+                B.writeFile (ownedPath caseDirectory </> "provenance.json") provenanceBytes
+                modifyIORef' manifests (manifestCase current exit rawBytes provenanceBytes :)
+            writeIORef remaining rest
   observed <- reverse <$> readIORef observations
   manifested <- reverse <$> readIORef manifests
   unprocessed <- readIORef remaining
@@ -488,6 +497,14 @@ writeResult batchPath current judged =
   B.writeFile
     (takeDirectory batchPath </> (caseIdText (currentId current) ++ ".native-result.json"))
     (encodeCanonical judged)
+
+-- The incomplete report is retained beside the batch in the existing CaseReport format; a failed
+-- validation never reaches publishAttempt.
+preserveFailureReport :: FilePath -> CaseId -> Value -> IO ()
+preserveFailureReport batchPath ident value =
+  B.writeFile
+    (takeDirectory batchPath </> (caseIdText ident ++ ".native-result.json"))
+    (encodeCanonical value)
 
 readCached :: CacheRoot -> RunnerIdentity -> CacheKey -> [CurrentCase] -> FilePath -> IO CacheRead
 readCached root identity key cases batchPath = do
