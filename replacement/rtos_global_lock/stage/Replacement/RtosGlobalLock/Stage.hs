@@ -64,6 +64,7 @@ data StageError
   | StockMismatch Domain String
   | SlackNotFill Domain GuestAddress
   | OwnedByteOutsideExtents Domain GuestAddress
+  | ImageTruncated Domain Int Int
   | PatchRejected String
   | ChangeOutside Int
   | StagedLoaderMismatch Domain
@@ -181,12 +182,17 @@ admitDomain source domain (Linked bin symbolsBytes) = do
       contained = sourceContained source M.! domain
       table = rows domain
   require (given == contained) (LoaderMismatch domain)
+  let binLow = minimum (map rowStart table)
+      binHigh = maximum (map rowEnd table)
+      spanBytes = fromIntegral (binHigh - binLow)
+  require (B.length bin == spanBytes) (ImageTruncated domain (B.length bin) spanBytes)
   forM_ table $ \row -> do
     symbol <- case filter ((== rowSymbol row) . F.symbolName) symbols of
       [found] -> Right found
       _ -> Left (SymbolMissing domain (rowSymbol row))
     require (F.symbolAddress symbol == rowStart row) (EntryNotAtStart domain (rowSymbol row))
     require (F.symbolSize symbol <= rowLength row) (EntryNotAtStart domain (rowSymbol row))
+    require (rowStart row + F.symbolSize symbol <= binLow + fromIntegral (B.length bin)) (ImageTruncated domain (B.length bin) spanBytes)
     require (slice base row given == B.concat (map U.putWord32 (rowStock row))) (StockMismatch domain (rowSymbol row))
   let extents = [(rowStart row, rowEnd row) | row <- table]
       inside symbol =
@@ -195,11 +201,8 @@ admitDomain source domain (Linked bin symbolsBytes) = do
             within (start, end) = low >= start && high <= toInteger end && (F.symbolSize symbol == 0 || low < end)
          in any within extents
   forM_ symbols $ \symbol -> require (inside symbol) (SymbolOutsideExtents domain (F.symbolName symbol))
-  let binLow = minimum (map rowStart table)
-      binHigh = maximum (map rowEnd table)
-      offset address = fromIntegral (address - binLow)
+  let offset address = fromIntegral (address - binLow)
       gaps = zip (map rowEnd table) (map rowStart (drop 1 table))
-  require (B.length bin <= fromIntegral (binHigh - binLow)) (OwnedByteOutsideExtents domain (GuestAddress binHigh))
   forM_ gaps $ \(gapStart, gapEnd) ->
     forM_ (firstNonzero gapStart (B.take (offset gapEnd - offset gapStart) (B.drop (offset gapStart) bin))) $
       Left . OwnedByteOutsideExtents domain

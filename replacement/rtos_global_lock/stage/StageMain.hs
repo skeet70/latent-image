@@ -69,25 +69,42 @@ writeStaged linkedA linkedB source output = do
   L.writeFile (output </> "contract.json") (J.encode (contractValue staged) <> L.singleton 10)
   putStrLn ("staged " ++ output)
 
+data ControlResult = ControlOk | ControlRefused StageError | ControlAccepted | ControlWrong StageError
+
 controlMode :: Linked -> Linked -> FilePath -> FilePath -> FilePath -> IO ()
 controlMode linkedA linkedB datPath loaderAPath loaderBPath = do
   source <- readSource datPath loaderAPath loaderBPath
   swapped <- readSwapped datPath loaderAPath loaderBPath
   let Linked bin symbols = linkedA
       gapped = B.take 0x54 bin <> B.singleton 1 <> B.drop 0x55 bin
+      truncated = B.take 0x54 bin
       moved = moveSymbol symbols "xm1_rtos_global_lock_try" 0x412d0
       extra = symbols <> "00050000 00000004 T extra\n"
       controls =
-        [ ("baseline-stage", isRight (admit source linkedA linkedB >>= stage source))
-        , ("gap-byte", refuses (\case OwnedByteOutsideExtents DomainA _ -> True; _ -> False) (admit source (Linked gapped symbols) linkedB))
-        , ("moved-symbol", refuses (\case EntryNotAtStart DomainA _ -> True; SymbolMissing DomainA _ -> True; _ -> False) (admit source (Linked bin moved) linkedB))
-        , ("symbol-outside", refuses (\case SymbolOutsideExtents DomainA _ -> True; _ -> False) (admit source (Linked bin extra) linkedB))
-        , ("swapped-loaders", refuses (\case LoaderMismatch _ -> True; _ -> False) (swapped >>= \s -> admit s linkedA linkedB))
+        [ ("baseline-stage", case admit source linkedA linkedB >>= stage source of Right _ -> ControlOk; Left err -> ControlWrong err)
+        , ("truncated-bin", refusal (\case ImageTruncated DomainA _ _ -> True; _ -> False) (admit source (Linked truncated symbols) linkedB))
+        , ("gap-byte", refusal (\case OwnedByteOutsideExtents DomainA _ -> True; _ -> False) (admit source (Linked gapped symbols) linkedB))
+        , ("moved-symbol", refusal (\case EntryNotAtStart DomainA _ -> True; SymbolMissing DomainA _ -> True; _ -> False) (admit source (Linked bin moved) linkedB))
+        , ("symbol-outside", refusal (\case SymbolOutsideExtents DomainA _ -> True; _ -> False) (admit source (Linked bin extra) linkedB))
+        , ("swapped-loaders", refusal (\case LoaderMismatch _ -> True; _ -> False) (swapped >>= \s -> admit s linkedA linkedB))
         ]
-  mapM_ (\(name, holds) -> putStrLn (name ++ ": " ++ if holds then "ok" else "FAILED")) controls
-  if all snd controls then pure () else exitFailure
+  mapM_ printControl controls
+  if all (holds . snd) controls then pure () else exitFailure
   where
-    refuses predicate result = case result of Left err -> predicate err; Right _ -> False
+    refusal predicate result = case result of
+      Left err -> if predicate err then ControlRefused err else ControlWrong err
+      Right _ -> ControlAccepted
+    holds ControlOk = True
+    holds (ControlRefused _) = True
+    holds _ = False
+    printControl (name, result) =
+      putStrLn
+        ( name ++ ": " ++ case result of
+            ControlOk -> "ok"
+            ControlRefused err -> "ok (refused: " ++ show err ++ ")"
+            ControlAccepted -> "FAILED: accepted"
+            ControlWrong err -> "FAILED: wrong outcome: " ++ show err
+        )
 
 planMode :: FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO ()
 planMode basePlanPath candidatePath loaderAPath loaderBPath output = do
@@ -163,10 +180,6 @@ moveSymbol symbols name address =
     [ if C.unpack (C.drop 20 line) == name then C.pack (showHexWord address) <> C.drop 8 line else line
     | line <- C.lines symbols
     ]
-
-isRight :: Either a b -> Bool
-isRight (Right _) = True
-isRight (Left _) = False
 
 readInput :: [String] -> String -> IO B.ByteString
 readInput arguments flag = case dropWhile (/= flag) arguments of
