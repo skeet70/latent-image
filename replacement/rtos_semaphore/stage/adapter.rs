@@ -250,6 +250,7 @@ extern "C" fn xm1_rtos_semaphore_admit(
     service: Service,
 ) -> Result<SemaphoreId, SemaphoreStatus> {
     match admitted(id, service) {
+        Ok(semaphore) if service.owns_its_table() => Ok(semaphore),
         Ok(semaphore) => match created(semaphore) {
             Ok(()) => Ok(semaphore),
             Err(status) => Err(status),

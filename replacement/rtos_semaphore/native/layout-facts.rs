@@ -44,7 +44,7 @@ fn main() {
     let h = ReadyHead(GuestAddress(0));
     let [sp0, sp1] = d.initial_sp_terms();
     let context = format!(
-        "{{\"size\":{},\"id\":{},\"owner\":{},\"scheduler_lock\":{},\"object_lock\":{},\"ready_heads\":{},\"ready_bitmap\":{},\"running\":{},\"selected\":{},\"dispatch_enabled\":{},\"first_entry\":{},\"tasks\":{},\"task_count\":{},\"semaphores\":{},\"semaphore_count\":{}}}",
+        "{{\"size\":{},\"id\":{},\"owner\":{},\"scheduler_lock\":{},\"object_lock\":{},\"ready_heads\":{},\"ready_bitmap\":{},\"running\":{},\"selected\":{},\"dispatch_enabled\":{},\"first_entry\":{},\"tasks\":{},\"task_count\":{},\"semaphores\":{},\"semaphore_count\":{},\"timer_heap\":{},\"timer_count\":{},\"timer_base\":{},\"tick_now\":{}}}",
         KernelContext::SIZE,
         c.id().0,
         c.owner().0,
@@ -60,6 +60,10 @@ fn main() {
         c.task_count().0,
         c.semaphores().0,
         c.semaphore_count().0,
+        c.timer_heap().0,
+        c.timer_count().0,
+        c.timer_base().0,
+        c.tick_now().0,
     );
     let lock = format!(
         "{{\"word\":{},\"acquire\":{},\"release\":{}}}",

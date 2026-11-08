@@ -31,7 +31,7 @@ module Replacement.RtosSemaphore.Oracle
 
 import Control.Monad (forM, unless)
 import Data.Aeson (FromJSON (..), eitherDecodeStrict', withObject, (.:))
-import Data.Bits ((.&.), (.|.), shiftL)
+import Data.Bits ((.&.), (.|.), complement, shiftL)
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
 import Data.Word (Word32, Word8)
@@ -129,6 +129,10 @@ data ContextFacts = ContextFacts
   , cfTaskCount :: Word32
   , cfSemaphores :: Word32
   , cfSemaphoreCount :: Word32
+  , cfTimerHeap :: Word32
+  , cfTimerCount :: Word32
+  , cfTimerBase :: Word32
+  , cfTickNow :: Word32
   }
   deriving (Eq, Show)
 
@@ -140,6 +144,7 @@ instance FromJSON ContextFacts where
       <*> o .: "running" <*> o .: "selected" <*> o .: "dispatch_enabled"
       <*> o .: "first_entry" <*> o .: "tasks" <*> o .: "task_count"
       <*> o .: "semaphores" <*> o .: "semaphore_count"
+      <*> o .: "timer_heap" <*> o .: "timer_count" <*> o .: "timer_base" <*> o .: "tick_now"
 
 data LockFacts = LockFacts {lfWord :: Word32, lfAcquire :: Word32, lfRelease :: Word32}
   deriving (Eq, Show)
@@ -306,6 +311,7 @@ data Expectation = Expectation
   , expectationArrival :: Bool
   , expectationSlot :: Word32
   , expectationChecks :: [Check]
+  , expectationRefusal :: Maybe RunnerStatus
   }
   deriving (Eq, Show)
 
@@ -368,16 +374,24 @@ extents DomainB =
 
 retained :: Domain -> [(Word32, Word32)]
 retained DomainA =
-  [ (0x4252c, 40), (0x42560, 8), (0x42568, 12), (0x433e4, 96), (0x43444, 96)
-  , (0x439d8, 60), (0x43a14, 40), (0x44018, 44), (0x43640, 40)
-  , (0x44568, 204), (0x44744, 188), (0x44800, 228), (0x448e4, 220)
+  [ (0x4252c, 40), (0x42560, 8), (0x42568, 12), (0x4259c, 20), (0x425b0, 24)
+  , (0x433e4, 96), (0x43444, 96), (0x444e4, 132)
+  , (0x43640, 40), (0x43668, 32), (0x43688, 28), (0x436a4, 8), (0x436ac, 124), (0x43728, 52), (0x4375c, 72)
+  , (0x437a4, 56), (0x437fc, 20), (0x439d8, 60), (0x43a14, 40), (0x44018, 44)
+  , (0x44044, 240), (0x44134, 128)
+  , (0x44568, 204), (0x446fc, 72), (0x44744, 188), (0x44800, 228), (0x448e4, 220)
+  , (0x44ac0, 196), (0x44b84, 220)
   , (0x43c48, 92), (0x43ca4, 124), (0x43d20, 176), (0x43dd0, 72), (0x43f70, 44)
   , (0x44c60, 72), (0x44ca8, 24)
   ]
 retained DomainB =
-  [ (0xd252c, 40), (0xd2560, 8), (0xd2568, 12), (0xd33e4, 96), (0xd3444, 96)
-  , (0xd398c, 60), (0xd39c8, 40), (0xd3fd4, 48), (0xd3640, 40)
-  , (0xd4528, 204), (0xd4704, 188), (0xd47c0, 228), (0xd48a4, 220)
+  [ (0xd252c, 40), (0xd2560, 8), (0xd2568, 12), (0xd259c, 20), (0xd25b0, 24)
+  , (0xd33e4, 96), (0xd3444, 96), (0xd44a4, 132)
+  , (0xd3640, 40), (0xd3668, 32), (0xd3688, 28), (0xd36a4, 8), (0xd36ac, 124), (0xd3728, 52), (0xd375c, 72)
+  , (0xd37a4, 56), (0xd37fc, 20), (0xd398c, 60), (0xd39c8, 40), (0xd3fd4, 48)
+  , (0xd4004, 240), (0xd40f4, 128)
+  , (0xd4528, 204), (0xd46bc, 72), (0xd4704, 188), (0xd47c0, 228), (0xd48a4, 220)
+  , (0xd4a80, 196), (0xd4b44, 220)
   , (0xd3c04, 92), (0xd3c60, 124), (0xd3cdc, 176), (0xd3d8c, 72), (0xd3f2c, 44)
   , (0xd4c20, 72), (0xd4c68, 24)
   ]
@@ -502,7 +516,7 @@ waiterAt facts owner objectSlot objectDomain slot priority =
 plain :: String -> Service -> Domain -> Word32 -> [(GuestAddress, Word32)] -> Word32 -> Word32 -> Bool -> Word32 -> [Check] -> Case
 plain name service domain slot wordList timeout result arrival selected checks =
   Case name service domain slot Nothing wordList timeout
-    (Expectation result arrival selected checks) Nothing Nothing
+    (Expectation result arrival selected checks Nothing) Nothing Nothing
     (service == InterruptSignal) False True Nothing Nothing
 
 cases :: Facts -> Domain -> [Case]
@@ -517,9 +531,8 @@ cases facts executing =
       , eq (countCell facts executing 1) 3
       ]
   , plain "create-exists" Create executing 1
-      [ poke (existsCell facts executing 1) 1
-      , poke requestAddress 7, poke (requestAddress + 4) 9, poke (requestAddress + 8) 9
-      ]
+      (created facts executing 1 0 1 1
+        ++ [poke requestAddress 7, poke (requestAddress + 4) 9, poke (requestAddress + 8) 9])
       0 (fromIntegral (-41 :: Int)) False 0
       [ eq (attributeCell facts executing 1) 0, eq (countCell facts executing 1) 1 ]
   , (plain "create-range-refused" Create executing 251
@@ -527,7 +540,8 @@ cases facts executing =
       , poke requestAddress 1, poke (requestAddress + 4) 1, poke (requestAddress + 8) 1
       ]
       0 0 False 0 [])
-      { caseOwned = Just (Expectation (fromIntegral (-18 :: Int)) False 0 [])
+      { caseStock = Expectation 0 False 0 [] (Just MemoryGuard) }
+      { caseOwned = Just (Expectation (fromIntegral (-18 :: Int)) False 0 [] Nothing)
       , caseDifference = Just "semaphore-create-range-refused"
       }
   , plain "delete-plain" Delete executing 1 (created facts executing 1 1 4 6) 0 0 False 0
@@ -546,7 +560,7 @@ cases facts executing =
           , byte (taskAddress facts executing 2 + tfState (factsTask facts)) (stReady (factsStates facts))
           , eq (waitResult facts executing 2) (fromIntegral (-49 :: Int))
           , eq (queueCell facts executing 1) (controlAddress facts executing 1)
-          ])
+          ] Nothing)
       , caseDifference = Just "semaphore-delete-releases-waiters"
       }
   , plain "signal-below-max" Signal executing 1 (created facts executing 1 0 0 2) 0 0 False 0
@@ -570,7 +584,7 @@ cases facts executing =
       ])
       { caseHandler = True }
   , (plain "signal-waiter-peer" Signal executing 1
-      (created facts executing 1 0 0 2 ++ waiterAt facts executing 1 (peer executing) 2 3)
+      (created facts executing 1 0 0 2 ++ waiterAt facts (peer executing) 1 executing 2 3)
       0 0 False 0 [ eq (countCell facts executing 1) 0 ])
       { caseBank = Just (peer executing, 0x01000000) }
   , (plain "signal-armed-waiter" Signal executing 1
@@ -662,6 +676,10 @@ layoutWords facts _executing =
           , poke (record + cfTaskCount (factsContext facts)) (factsTaskSlots facts)
           , poke (record + cfSemaphores (factsContext facts)) (dfSemaphoreControls describedWords)
           , poke (record + cfSemaphoreCount (factsContext facts)) (factsSemaphoreSlots facts)
+          , poke (record + cfTimerHeap (factsContext facts)) (dfTimerHeap describedWords)
+          , poke (record + cfTimerCount (factsContext facts)) (dfTimerCount describedWords)
+          , poke (record + cfTimerBase (factsContext facts)) (dfTimerBase describedWords)
+          , poke (record + cfTickNow (factsContext facts)) (dfTickNow describedWords)
           ]
           ++ lock (cfSchedulerLock (factsContext facts)) (dfSchedulerLock describedWords)
           ++ lock (cfObjectLock (factsContext facts)) (dfObjectLock describedWords)
@@ -762,14 +780,24 @@ kernelBounds facts domain = (GuestAddress low, fromIntegral (high - low))
       , dfSemaphoreWaits dw + factsTaskSlots facts * wbSize (factsWaitBlock facts)
       , dfSemaphoreTimers dw + factsTaskSlots facts * factsTimerEntrySize facts
       , dfTimerHeap dw + 0x1000
+      , dfSemaphoreConfigs dw + (factsSemaphoreSlots facts + 1) * cfgSize (factsConfig facts) + 0x200
       , dfTickNow dw + 4
       ]
+
+loaderDataSize :: Word32
+loaderDataSize = 0x0000_0060
+
+-- | `kernel_find_ready`'s nibble table, bytes `0x4da9f..0x4daae` of loader A as the pinned
+-- disassembly lists the words at `0x4da9c..0x4daac`. Loader B's prefix ends before the table and
+-- the cross-domain design states one C for both kernels.
+loaderDataBytes :: B.ByteString
+loaderDataBytes = B.replicate 0x1f 0 <> B.pack [0, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0] <> B.replicate 0x31 0
 
 callerSp :: Case -> Word32
 callerSp one = if caseHandler one then handlerStack else callerStack
 
-pages :: Facts -> Case -> [Page]
-pages facts one =
+pages :: Facts -> Image -> Case -> [Page]
+pages facts loaderImage one =
   [ let (address, size) = kernelBounds facts domain
      in Page (if domain == DomainA then RegionId "kernel-a" else RegionId "kernel-b") address size ReadWrite (B.replicate size 0)
   | domain <- [DomainA, DomainB]
@@ -783,6 +811,8 @@ pages facts one =
        , Page (RegionId "target-stack") (GuestAddress (targetStack - 0x100)) 0x100 ReadWrite (B.replicate 0x100 0)
        , Page (RegionId "bank-a") (bank DomainA) 4 Device (B.replicate 4 0)
        , Page (RegionId "bank-b") (bank DomainB) 4 Device (B.replicate 4 0)
+       , let base = imageBase loaderImage + 0xda80
+          in Page (RegionId "loader-data") (GuestAddress base) (fromIntegral loaderDataSize) ReadOnly loaderDataBytes
        ]
 
 contains :: GuestAddress -> Int -> Page -> Bool
@@ -854,9 +884,11 @@ caseSpec facts executing role loader owned one
     arrival = expectationArrival expectation
     codeBase = minimum (map fst (extents executing ++ retained executing))
     codeTop = maximum [address + size | (address, size) <- extents executing ++ retained executing]
-    dataPages = pages facts one
+    dataPages = pages facts loader one
     words' = layoutWords facts executing
-      ++ [poke (dfHandlerContext (domainFacts facts executing)) (if caseHandler one then 1 else 0)]
+      ++ [ poke (dfHandlerContext (domainFacts facts executing)) (if caseHandler one then 1 else 0)
+         , poke (dfDispatchEnabled (domainFacts facts executing)) (if caseDispatchEnabled one then 1 else 0)
+         ]
       ++ caseWords one
     outside = [address | (address, _) <- words', not (any (contains address 4) dataPages)]
     ignored = if arrival then [R0 .. R12] ++ [Lr] else [R1 .. R12] ++ [Lr]
@@ -868,7 +900,6 @@ initialRegisters executing one =
   where
     cpsr
       | caseMasked one = 0x93
-      | caseHandler one = 0x93
       | otherwise = 0x13
     value R0 = handle
     value R1 = case caseService one of
@@ -888,10 +919,10 @@ emittedId executing one = caseName one ++ "-" ++ domainLabel executing
 wire :: Word32 -> N.GuestAddress
 wire = N.GuestAddress . fromIntegral
 
-readWord :: Facts -> Case -> NativeObservation -> GuestAddress -> Maybe Word32
-readWord facts one observation address@(GuestAddress raw) = case
+readWord :: Facts -> Image -> Case -> NativeObservation -> GuestAddress -> Maybe Word32
+readWord facts loader one observation address@(GuestAddress raw) = case
   [ (base, bytes)
-  | page@(Page ident (GuestAddress base) _ _ _) <- pages facts one
+  | page@(Page ident (GuestAddress base) _ _ _) <- pages facts loader one
   , contains address 4 page
   , Just bytes <- [lookup ident (nativeMemory observation)]
   ]
@@ -899,10 +930,10 @@ readWord facts one observation address@(GuestAddress raw) = case
     (base, bytes) : _ -> Just (readWordAt bytes (fromIntegral (raw - base)))
     [] -> Nothing
 
-readByte :: Facts -> Case -> NativeObservation -> GuestAddress -> Maybe Word8
-readByte facts one observation address@(GuestAddress raw) = case
+readByte :: Facts -> Image -> Case -> NativeObservation -> GuestAddress -> Maybe Word8
+readByte facts loader one observation address@(GuestAddress raw) = case
   [ (base, bytes)
-  | page@(Page ident (GuestAddress base) _ _ _) <- pages facts one
+  | page@(Page ident (GuestAddress base) _ _ _) <- pages facts loader one
   , contains address 1 page
   , Just bytes <- [lookup ident (nativeMemory observation)]
   ]
@@ -922,73 +953,98 @@ writesAt observation address = case nativeKernel observation >>= observedOrder o
 guestWord :: GuestAddress -> Word32
 guestWord (GuestAddress raw) = raw
 
-holds :: Facts -> Case -> NativeObservation -> Check -> Bool
-holds facts one observation check = case check of
-  Equals address value -> readWord facts one observation address == Just value
-  ByteEquals address value -> readByte facts one observation address == Just value
+holds :: Facts -> Image -> Case -> NativeObservation -> Check -> Bool
+holds facts loader one observation check = case check of
+  Equals address value -> readWord facts loader one observation address == Just value
+  ByteEquals address value -> readByte facts loader one observation address == Just value
   NoWrite address -> null (writesAt observation address)
 
-compareRole :: Facts -> Domain -> CaseSpec -> Case -> Expectation -> NativeObservation -> [String]
-compareRole facts _ spec one expectation observation =
+compareRole :: Facts -> Image -> Domain -> CaseSpec -> Case -> Expectation -> NativeObservation -> [String]
+compareRole facts loader _ spec one expectation observation =
   [ "wrong exit " ++ show (caseOutcome spec observation)
   | caseOutcome spec observation /= wanted
   ]
+    ++ [ "refused " ++ show status ++ " is not " ++ show expectedRefusal
+       | Just expectedRefusal <- [expectationRefusal expectation]
+       , nativeStatus observation /= expectedRefusal
+       , let status = nativeStatus observation
+       ]
     ++ [ "result " ++ show resultActual ++ " is not " ++ show (expectationResult expectation)
-       | resultActual /= Just (expectationResult expectation)
+       | expectationRefusal expectation == Nothing
+       , not (expectationArrival expectation)
+       , resultActual /= Just (expectationResult expectation)
        ]
     ++ [ "CPSR control " ++ show controlActual ++ " is not " ++ show expectedControl
-       | controlActual /= Just expectedControl
+       | expectationRefusal expectation == Nothing
+       , controlActual /= Just expectedControl
        ]
     ++ [ "caller frame changed"
        | lookup (RegionId "caller-frame") (nativeMemory observation) /= Just callerBytes
        ]
     ++ [ "missing effect " ++ show check
        | check <- expectationChecks expectation
-       , not (holds facts one observation check)
+       , not (holds facts loader one observation check)
        ]
     ++ [ "bank " ++ show domain ++ " holds " ++ show actual
        | domain <- [DomainA, DomainB]
-       , let actual = readWord facts one observation (bank domain)
+       , let actual = readWord facts loader one observation (bank domain)
        , actual /= Just (expectedBank domain)
        ]
     ++ [ "timer receipt differs"
        | (expectedOwner, expectedEntry) <- maybe [] pure (caseReceipt one)
-       , ( readWord facts one observation (GuestAddress receiptAddress)
-         , readWord facts one observation (GuestAddress (receiptAddress + 4))
+       , ( readWord facts loader one observation (GuestAddress receiptAddress)
+         , readWord facts loader one observation (GuestAddress (receiptAddress + 4))
          ) /= (Just expectedOwner, Just expectedEntry)
        ]
     ++ [ "unexpected timer receipt"
        | caseReceipt one == Nothing
-       , readWord facts one observation (GuestAddress receiptAddress) /= Just 0
-         || readWord facts one observation (GuestAddress (receiptAddress + 4)) /= Just 0
+       , readWord facts loader one observation (GuestAddress receiptAddress) /= Just 0
+         || readWord facts loader one observation (GuestAddress (receiptAddress + 4)) /= Just 0
        ]
   where
-    wanted = if expectationArrival expectation then OutcomeStopped (wire stopAddress) else OutcomeReturned
+    wanted = case expectationRefusal expectation of
+      Just _ -> OutcomeRefused (nativeStatus observation)
+      Nothing -> if expectationArrival expectation then OutcomeStopped (wire stopAddress) else OutcomeReturned
     resultActual = N.lookupRegister R0 observation
     controlActual = fmap (.&. 0x1ff) (N.lookupRegister Cpsr observation)
     expectedControl
       | expectationArrival expectation = 0x93
+      | admissionRefusal = entryControl
+      | otherwise = entryControl .&. complement 0x80
+    entryControl
       | caseMasked one = 0x93
       | otherwise = 0x13
+    admissionRefusal = expectationResult expectation `elem` map (fromIntegral :: Int -> Word32) [-25, -18, -42]
     expectedBank domain = case caseBank one of
       Just (target, value) | target == domain -> value
       _ -> 0
 
-compareFamily :: Facts -> Domain -> Case -> CaseSpec -> CaseSpec -> NativeObservation -> NativeObservation -> [String]
-compareFamily facts executing one stockSpec ownedSpec stock owned =
-  compareRole facts executing stockSpec one (caseStock one) stock
-    ++ compareRole facts executing ownedSpec one ownedExpectation owned
+compareFamily :: Facts -> Domain -> Image -> Case -> CaseSpec -> CaseSpec -> NativeObservation -> NativeObservation -> [String]
+compareFamily facts executing loader one stockSpec ownedSpec stock owned =
+  compareRole facts loader executing stockSpec one (caseStock one) stock
+    ++ compareRole facts loader executing ownedSpec one ownedExpectation owned
     ++ ( if caseOwned one == Nothing
           then memoryDifferences
           else
             [ "the owned role did not differ from the defective stock expectation"
-            | null (compareRole facts executing ownedSpec one (caseStock one) owned)
+            | null (compareRole facts loader executing ownedSpec one (caseStock one) owned)
             ]
        )
   where
     ownedExpectation = maybe (caseStock one) id (caseOwned one)
-    compared = [ident | Page ident _ _ _ _ <- pages facts one, ident `notElem` map RegionId ["stack", "target-stack"]]
-    memory observation = M.fromList [(ident, bytes) | (ident, bytes) <- nativeMemory observation, ident `elem` compared]
+    compared = [ident | Page ident _ _ _ _ <- pages facts loader one, ident `notElem` map RegionId ["stack", "target-stack"]]
+    memory observation = M.fromList [(ident, normalize ident bytes) | (ident, bytes) <- nativeMemory observation, ident `elem` compared]
+    normalize ident bytes
+      | expectationArrival (caseStock one) || maybe False expectationArrival (caseOwned one) =
+          let region = if executing == DomainA then RegionId "kernel-a" else RegionId "kernel-b"
+           in if ident == region then clear (clear bytes savedSpOffset) resumeOffset else bytes
+      | otherwise = bytes
+    clear bytes offset
+      | offset + 4 > B.length bytes = bytes
+      | otherwise = B.take offset bytes <> word32le 0 <> B.drop (offset + 4) bytes
+    kernelLow = fst (kernelBounds facts executing)
+    savedSpOffset = fromIntegral (taskAddress facts executing runningSlot + tfSavedSp (factsTask facts) - guestWord kernelLow)
+    resumeOffset = fromIntegral (taskAddress facts executing runningSlot + tfResumePc (factsTask facts) - guestWord kernelLow)
     memoryDifferences =
       ["missing state region " ++ show ident | ident <- compared, M.notMember ident (memory stock) || M.notMember ident (memory owned)]
         ++ ["state region " ++ show ident ++ " differs" | ident <- compared, M.lookup ident (memory stock) /= M.lookup ident (memory owned)]
@@ -1010,7 +1066,7 @@ runFamily runner cacheRoot directory facts executing stock owned = do
           Just spec -> spec
           Nothing -> error "the owned spec is missing for a case" 
     pure (caseName one, case (M.lookup ident reference, M.lookup ident subject) of
-      (Just original, Just replacement) -> Right (compareFamily facts executing one stockSpec ownedSpec original replacement)
+      (Just original, Just replacement) -> Right (compareFamily facts executing stock one stockSpec ownedSpec original replacement)
       (Nothing, _) -> Left "stock case did not run"
       (_, Nothing) -> Left "owned case did not run")
   unless (length stockRaw == length selected && length ownedRaw == length selected) (fail "native observations do not cover the current semaphore case set")

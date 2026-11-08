@@ -36,9 +36,9 @@ pub fn delete_semaphore<M: Wake>(m: &M, id: SemaphoreId) -> Result<(), Semaphore
     m.store_word(config.exists(), 0);
     m.store_word(control.count(), Count::from_word(1).get());
     m.unlock(object_lock);
+    m.restore_interrupts(saved);
     if dispatch {
         m.dispatch(0);
     }
-    m.restore_interrupts(saved);
     Ok(())
 }
