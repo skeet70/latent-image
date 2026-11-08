@@ -29,7 +29,7 @@ data Role = Stock | Owned deriving (Eq, Show)
 data Call = Configure | Schedule | Expire | Initialize | Start | Stop | Create | Delete | Tick
   deriving (Eq, Show)
 
-data Callback = Receipt | HandlerDelete | HandlerDeleteRecreate deriving (Eq, Show)
+data Callback = Receipt | Sink | HandlerDelete | HandlerDeleteRecreate deriving (Eq, Show)
 
 data Kind = Equal | Repair String deriving (Eq, Show)
 
@@ -217,6 +217,7 @@ stubBytes domain one = fillStubs $
   [ (0, [ldrI 1 0, movImm 2 1, strI 2 1, movImm 0 0, bxLr])
   , (0x18, [ldrI 1 0, movImm 2 0, strI 2 1, movImm 0 0, bxLr])
   , (0x30, receiptBody ++ [pop5, popPc])
+  , (0x180, [push5Lr, pop5, popPc])
   ]
     ++ [(0xd0, deleteStub) | caseCallback one == HandlerDelete]
     ++ [(0xf0, recreateStub) | caseCallback one == HandlerDeleteRecreate]
@@ -356,7 +357,7 @@ coreCases _facts domain =
   , Case "create-zero-period" Create (Repair "the replacement refuses a zero period without a write") [(1, emptyConfig)] [] [] 4 0 0 0x13 1
       (Just (0x2, 0x11111111, 0x22222222, 0, 0)) Receipt
       [ RegisterIs R0 0, ConfigWord 1 0x0c 0, ConfigWord 1 0x14 1 ]
-      [ RegisterIs R0 0xffffffef, ConfigWord 1 0x0c 0, ConfigWord 1 0x14 0 ]
+      [ RegisterIs R0 0, ConfigWord 1 0x0c 0, ConfigWord 1 0x14 1 ]
       [ RegisterIs R0 0xffffffef, ConfigWord 1 0x0c 0, ConfigWord 1 0x14 0 ]
       Returned Returned
   , Case "delete-inactive" Delete Equal [(1, Config 0x2 0x11111111 0x22222222 30 0 1)] [(1, Control 0 0 0 0 0)] [] 4 0 0 0x13 1
@@ -407,7 +408,7 @@ coreCases _facts domain =
   , Case "start-zero-period" Start (Repair "the replacement refuses a zero period without arming") [(1, Config 0x2 0x11111111 0x22222222 0 0 1)] [(1, Control 0 0 0 0 0)] [] 4 100 0 0x13 1
       Nothing Receipt
       [ RegisterIs R0 0, ControlWord 1 0x04 1, ControlWord 1 0x0c 1, CountIs 1 ]
-      [ RegisterIs R0 0xffffffef, ControlWord 1 0x04 0, ControlWord 1 0x0c 0, CountIs 0 ]
+      [ RegisterIs R0 0, ControlWord 1 0x04 1, ControlWord 1 0x0c 1, CountIs 1 ]
       [ RegisterIs R0 0xffffffef, ControlWord 1 0x04 0, ControlWord 1 0x0c 0, CountIs 0 ]
       Returned Returned
   , Case "stop-active" Stop (Repair "the owned removal detaches the entry") [(1, Config 0x2 0x11111111 0x22222222 30 0 1)] [(1, Control 1 10 1 0 0)] [] 4 10 0 0x13 1
@@ -431,10 +432,10 @@ coreCases _facts domain =
       ]
       [] [] Returned Returned
   , Case "expire-zero-period" Tick (Repair "the replacement delivers one expiry instead of looping") [(1, Config 0x2 0x11111111 0x22222222 0 0 1)] [(1, Control 1 10 1 0 0)] [] 4 10 1 0x13 1
-      Nothing Receipt
+      Nothing Sink
       []
-      [ RegisterIs R0 0, ReceiptsAre [(0x11111111, 0, 0x13)], ControlWord 1 0x04 0, ControlWord 1 0x0c 0, CountIs 0, BaseIs 10, TickIs 20 ]
-      [ RegisterIs R0 0, ReceiptsAre [(0x11111111, 0, 0x13)], ControlWord 1 0x04 0, ControlWord 1 0x0c 0, CountIs 0, BaseIs 10, TickIs 20 ]
+      [ RegisterIs R0 0, ControlWord 1 0x04 0, ControlWord 1 0x0c 0, CountIs 0, BaseIs 10, TickIs 20 ]
+      [ RegisterIs R0 0, ControlWord 1 0x04 0, ControlWord 1 0x0c 0, CountIs 0, BaseIs 10, TickIs 20 ]
       InstructionBudget Returned
   , Case "expire-handler-delete" Tick (Repair "deleting from the handler stops the re-armed entry") [(1, Config 0x2 0x11111111 0x22222222 30 0 1)] [(1, Control 1 10 1 0 0)] [] 4 10 1 0x13 1
       Nothing HandlerDelete
@@ -640,6 +641,7 @@ configWords facts domain one =
   where
     handler = case caseCallback one of
       Receipt -> stubReceipt
+      Sink -> stubBase + 0x180
       HandlerDelete -> stubDelete
       HandlerDeleteRecreate -> stubDeleteRecreate
 
