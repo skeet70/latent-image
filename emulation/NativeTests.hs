@@ -704,6 +704,32 @@ kernelStackContextRegressions runner=withTemporary "fuji-kernel-contexts"$ \root
  B.writeFile path(encodeCanonical nested)
  (nestedCode,nestedReport)<-runCase runner path
  ensure(nestedCode==0 && get nestedReport "status"==s "passed")("nested two-stack switch: "++show nestedReport)
+ let smoke ident dispatchWords payloadWords functions contexts=do
+      let codeBytes=O.assemble(([0xeb000016,0xe594e010,0xe12fff1e]++replicate 5 0++dispatchWords++replicate 6 0++[0xe8bd4ff0,0xe1a0f00e]++replicate 6 0++[0xe92d4ff0,0xea000005]++replicate 6 0++[0xe594d008,0xe594f00c]++replicate 2 0)::[Word32])
+          payloadBytes=O.assemble(payloadWords::[Word32])
+      B.writeFile(root</>(ident++"-code.bin"))codeBytes
+      B.writeFile(root</>(ident++"-data.bin"))payloadBytes
+      codeDigest<-sha256 codeBytes; payloadDigest<-sha256 payloadBytes
+      let extra=[mkR "second-stack" 0x3200 0x100"rw"(obj[("zero",b True)])|length contexts>1]
+          item=obj
+           [("schema_version",n 1),("id",s ident),("origin",s "synthetic")
+           ,("provenance",s "NativeTests.hs: save-36B, resume stub, tail dispatcher and LDR-pc over declared stacks")
+           ,("cpu",get base "cpu")
+           ,("artifacts",arr[artifact(ident++"-code")(ident++"-code.bin")codeBytes codeDigest,artifact(ident++"-data")(ident++"-data.bin")payloadBytes payloadDigest])
+           ,("entry",hex 0x1000),("exit",hex 0x10f0)
+           ,("registers",obj([("r"++show i,hex 0)|i<-[0..12::Int],i/=4]++[("r4",hex 0x4000),("sp",hex 0x3100),("lr",hex 0x10f0),("cpsr",hex 0x600000d3)]))
+           ,("regions",arr([mkR "code" 0x1000(fromIntegral(B.length codeBytes))"rx"(slice(ident++"-code")codeBytes),mkR "stack" 0x3000 0x100"rw"(obj[("zero",b True)])]++extra++[mkR "data" 0x4000(fromIntegral(B.length payloadBytes))"r"(slice(ident++"-data")payloadBytes),mkR "exit" 0x10f0 4"rx"(obj[("zero",b True)])]))
+           ,("functions",arr[obj[("address",hex address),("size",n size)]|(address,size)<-functions])
+           ,("stubs",arr[])
+           ,("limits",obj[("instructions",n 4096),("wall_ms",n 4096)])
+           ,("expected",obj[("status",s "returned"),("registers",obj[("r0",hex 0),("r4",hex 0x4000),("sp",hex 0x3100),("lr",hex 0x10f0),("pc",hex 0x10f0)]),("memory",arr[obj[("region",s "stack"),("offset",n 0xdc),("hex",s frame)]]),("events",arr[])])
+           ,("exclusions",arr[s "save, dispatcher and resume-stub control"])
+           ,("kernel",kernel contexts)]
+      B.writeFile path(encodeCanonical item)
+      (code',report')<-runCase runner path
+      ensure(code'==0 && get report' "status"==s "passed")(ident++": "++show report')
+ smoke "self-dispatch" [0,0] [0x30dc,0x1040,0x30dc,0x1040,0x10f0] [(0x1000,0x10),(0x1040,0x10),(0x1060,0x10),(0x1080,0x10)] [context 0x3000 0x3100]
+ smoke "resume-stub" [0xe594d000,0xe594f004] [0x30dc,0x1040,0x3300,0x1020,0x10f0,0x1000] [(0x1000,0x10),(0x1020,0x10),(0x1040,0x10),(0x1060,0x10),(0x1080,0x10)] [context 0x3000 0x3100,context 0x3200 0x3300]
 
 main :: IO ()
 main=do
