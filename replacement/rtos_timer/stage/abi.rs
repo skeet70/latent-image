@@ -15,8 +15,25 @@ const ENTRY: Domain = Domain::A;
 #[cfg(feature = "domain-b")]
 const ENTRY: Domain = Domain::B;
 
-/// The native fixture's heap bound. The pinned firmware declares `g_timer_heap` unsized, so this
-/// bounds the fixture only.
+#[cfg(feature = "domain-a")]
+const CONFIGURATION_WORD: GuestAddress = GuestAddress(0x4005_46d4);
+#[cfg(feature = "domain-b")]
+const CONFIGURATION_WORD: GuestAddress = GuestAddress(0x400e_4694);
+
+struct TimerConfiguration(GuestAddress);
+
+impl TimerConfiguration {
+    #[inline(always)]
+    fn publish(self, domain: Domain) {
+        let words = domain.words();
+        write(self.0.offset(0x20), words.timer_heap.0);
+        write(self.0.offset(0x24), words.timer_count.0);
+        write(self.0.offset(0x28), words.timer_base.0);
+        write(self.0.offset(0x2c), words.tick_now.0);
+    }
+}
+
+/// The firmware declares the backing array without a bound.
 const FIXTURE_CAPACITY: Capacity = Capacity::from_static(184);
 
 #[inline(always)]
@@ -116,6 +133,7 @@ impl Scheduler for Cpu {
         release_lock()
     }
 
+    #[link_section = ".text.timer_lock_acquire"]
     fn acquire_lock(&self) {
         acquire_lock()
     }
@@ -132,6 +150,18 @@ impl Scheduler for Cpu {
 #[inline(always)]
 fn heap(context: KernelContext) -> TimerHeap {
     TimerHeap::from_context(&Cpu, context, FIXTURE_CAPACITY)
+}
+
+#[no_mangle]
+#[inline(never)]
+#[link_section = ".text.timer_body_initialize"]
+pub extern "C" fn xm1_rtos_timer_initialize_body() {
+    let words = ENTRY.words();
+    write(words.time_offset, 0);
+    write(words.timer_base, 0);
+    write(words.tick_now, 10);
+    write(words.timer_count, 0);
+    TimerConfiguration(GuestAddress(read(CONFIGURATION_WORD))).publish(ENTRY);
 }
 
 #[no_mangle]
@@ -163,6 +193,14 @@ pub extern "C" fn xm1_rtos_timer_tick_body() -> i32 {
 }
 
 global_asm!(
+    ".pushsection .text.timer_initialize, \"ax\", %progbits",
+    ".arm",
+    ".global xm1_rtos_timer_initialize",
+    ".type xm1_rtos_timer_initialize, %function",
+    "xm1_rtos_timer_initialize:",
+    "b xm1_rtos_timer_initialize_body",
+    ".size xm1_rtos_timer_initialize, . - xm1_rtos_timer_initialize",
+    ".popsection",
     ".pushsection .text.timer_insert, \"ax\", %progbits",
     ".arm",
     ".global xm1_rtos_timer_insert",

@@ -223,6 +223,7 @@ fn in_range(value: u32, capacity: Capacity) -> Index {
     }
 }
 
+#[cfg_attr(feature = "stage", link_section = ".text.timer_sift_up")]
 fn sift_up<M: Machine>(m: &M, heap: TimerHeap, mut index: Index, expiry: Expiry, base: Base) -> Index {
     while index.get() > 1 {
         let parent = in_range(index.get() >> 1, heap.capacity);
@@ -240,6 +241,7 @@ fn sift_up<M: Machine>(m: &M, heap: TimerHeap, mut index: Index, expiry: Expiry,
     index
 }
 
+#[cfg_attr(feature = "stage", link_section = ".text.timer_sift_down")]
 fn sift_down<M: Machine>(m: &M, heap: TimerHeap, mut index: Index, expiry: Expiry, base: Base, count: u32) -> Index {
     loop {
         let child = index.get() * 2;
@@ -405,6 +407,7 @@ pub fn tick<M: Scheduler>(
     }
 }
 
+#[cfg_attr(feature = "stage", link_section = ".text.timer_finish")]
 fn finish<M: Scheduler>(m: &M, heap: TimerHeap) {
     let tick = heap.tick_now(m);
     heap.set_base(m, Base(tick.0));
