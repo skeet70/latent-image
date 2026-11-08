@@ -37,12 +37,12 @@ main = do
                 ]
               externalLines =
                 [ externalName e ++ " = " ++ addressText (externalAddress e) ++ ";" | e <- mapExternals dm ]
+              scriptLines = lines (renderScript runExtents placements)
               body = unlines $
-                [ "ENTRY(" ++ entryVeneer firstEntry ++ ")"
-                , "SECTIONS {"
-                ]
+                [ "ENTRY(" ++ entryVeneer firstEntry ++ ")" ]
+                  ++ take 2 scriptLines
                   ++ entryLines
-                  ++ drop 1 (lines (renderScript runExtents placements))
+                  ++ drop 2 scriptLines
                   ++ externalLines
           writeFile output body
           L.writeFile manifest (J.encode (placementValue runExtents placements) <> L.singleton 10)

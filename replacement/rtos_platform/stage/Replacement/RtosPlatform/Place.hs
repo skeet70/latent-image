@@ -86,27 +86,34 @@ solveSections :: Int -> [Extent] -> [Section] -> Either PlaceError [Placement]
 solveSections budget runExtents sections = do
   let caps = map extentBytes runExtents
       ordered = sortOn (negate . sectionBytes) sections
-      (s2, rest) = partitionS2 ordered
-  when (null s2) (Left (SearchExhausted ["no S2 sections"]))
-  tryWindows caps windows s2 rest
+      (s2Code, s2Other, rest) = partitionS2 ordered
+  when (null s2Code) (Left (SearchExhausted ["no S2 sections"]))
+  tryWindows caps windows s2Code s2Other rest
   where
     windows = addressWindows runExtents
-    tryWindows _ [] _ _ = Left (SearchExhausted ["no S2 window fits"])
-    tryWindows caps (window : others) s2 rest =
-      case preplace caps window s2 of
-        Nothing -> tryWindows caps others s2 rest
-        Just (cursors, preplaced) ->
-          case greedy budget caps rest cursors [] of
-            Nothing -> tryWindows caps others s2 rest
-            Just (_, placed) -> do
-              let placements = preplaced ++ placed
-              admitPlacement runExtents sections placements
-              pure placements
+    tryWindows _ [] _ _ _ = Left (SearchExhausted ["no S2 window fits"])
+    tryWindows caps (window : others) s2Code s2Other rest =
+      case preplaceBundle caps window s2Code of
+        Nothing -> tryWindows caps others s2Code s2Other rest
+        Just (cursors, preplacedCode) ->
+          case preplace caps window cursors s2Other of
+            Nothing -> tryWindows caps others s2Code s2Other rest
+            Just (cursors', preplacedOther) ->
+              case greedy budget caps rest cursors' [] of
+                Nothing -> tryWindows caps others s2Code s2Other rest
+                Just (_, placed) -> do
+                  let placements = preplacedCode ++ preplacedOther ++ placed
+                  admitPlacement runExtents sections placements
+                  pure placements
 
-partitionS2 :: [Section] -> ([Section], [Section])
+partitionS2 :: [Section] -> ([Section], [Section], [Section])
 partitionS2 xs =
   let isS2 s = any (`isPrefixOf` sectionName s) [".text.s2_", ".rodata.s2_pool"]
-  in ([x | x <- xs, isS2 x], [x | x <- xs, not (isS2 x)])
+      codeNames = [".text.s2_save", ".text.s2_resume", ".text.s2_select", ".text.s2_first_entry", ".text.s2_irq_return", ".text.s2_irq_resume"]
+      code = [s | name <- codeNames, s <- xs, sectionName s == name]
+      other = [s | s <- xs, isS2 s, sectionName s `notElem` codeNames]
+      rest = [s | s <- xs, not (isS2 s)]
+  in (code, other, rest)
 
 -- | Maximal windows of runs whose start addresses span at most 4095 bytes.
 addressWindows :: [Extent] -> [[Int]]
@@ -117,8 +124,27 @@ addressWindows runExtents = go (zip [0 ..] (sortOn extentStart runExtents))
       let (inside, outside) = span (\(_, Extent (GuestAddress s) _) -> s - start <= 4095) rest
       in (i : map fst inside) : go outside
 
-preplace :: [Int] -> [Int] -> [Section] -> Maybe ([Int], [Placement])
-preplace caps window sections = go (sortOn (negate . sectionBytes) sections) (replicate (length caps) 0) []
+preplaceBundle :: [Int] -> [Int] -> [Section] -> Maybe ([Int], [Placement])
+preplaceBundle caps window sections
+  | null sections = Just (replicate (length caps) 0, [])
+  | otherwise =
+      let cursors = replicate (length caps) 0
+          size = sum (map sectionBytes sections)
+          fits = [(k, alignTo (cursors !! k) 4) | k <- window, alignTo (cursors !! k) 4 + size <= caps !! k]
+      in case sortOn (\(k, off) -> (caps !! k - (off + size), k)) fits of
+           [] -> Nothing
+           ((k, off) : _) ->
+             let (final, placed) = placeAt k off sections []
+             in Just (update k final cursors, placed)
+  where
+    placeAt _ _ [] placed = (0, reverse placed)
+    placeAt k off (s : rest) placed =
+      let off' = alignTo off (sectionAlign s)
+          (final, placed') = placeAt k (off' + sectionBytes s) rest (Placement s k off' : placed)
+      in (if null rest then off' + sectionBytes s else final, placed')
+
+preplace :: [Int] -> [Int] -> [Int] -> [Section] -> Maybe ([Int], [Placement])
+preplace caps window cursors0 sections = go (sortOn (negate . sectionBytes) sections) cursors0 []
   where
     go [] cursors placed = Just (cursors, reverse placed)
     go (s : rest) cursors placed =
@@ -219,8 +245,9 @@ hexText value = let digits = showHex value "" in replicate (8 - length digits) '
 
 renderScript :: [Extent] -> [Placement] -> String
 renderScript runExtents placements = unlines $
-  [ "SECTIONS {" ]
-    ++ [ "  " ++ outputName p ++ " " ++ addressText (GuestAddress (addressOf runExtents p)) ++ " : { KEEP(*(" ++ sectionName (placementSection p) ++ ")) }"
+  [ "PHDRS { all PT_LOAD FLAGS(7); }"
+  , "SECTIONS {" ]
+    ++ [ "  " ++ outputName p ++ " " ++ addressText (GuestAddress (addressOf runExtents p)) ++ " : { KEEP(*(" ++ sectionName (placementSection p) ++ ")) } :all"
        | p <- sortedPlacements
        ]
     ++ [ "  /DISCARD/ : { *(.text) *(.rodata) *(.ARM.exidx) *(.ARM.exidx.*) *(.ARM.extab) *(.ARM.extab.*) *(.comment) *(.note) *(.note.*) *(.debug*) *(.llvm_addrsig) *(.ARM.attributes) *(.llvmbc) *(.llvmcmd) }"

@@ -13,6 +13,7 @@ import Emulation.NativeObservation
 import Emulation.OwnedCase
 import Emulation.Sha256 (sha256, sha256Hex)
 import FujiAF.JSON (encodeCanonical)
+import Numeric (readHex)
 import Replacement.RtosOwnFirst.Artifact (loaderSha256)
 import Replacement.RtosOwnFirst.Regions (Domain (..), domainLabel)
 import Replacement.RtosScheduler.Oracle (stackBase, stackPointer)
@@ -29,7 +30,62 @@ data Role = Stock | StockRepeat | Owned | Equivalent Entry | Mutant Entry | Reve
 newtype CaseIndex = CaseIndex Int deriving (Eq, Ord, Show)
 newtype LockTag = LockTag Word32 deriving (Eq, Show)
 data Row = Row { entry :: Entry, selection :: Selection, discarded :: Word32, enabled :: Word32, flags :: Word32, pending :: Word32, cpacr :: Word32, fpexc :: Word32, cpsr :: Word32, lockTag :: LockTag } deriving (Show)
-data Image = Image { imageDomain :: Domain, stockBytes :: B.ByteString, ownedBytes :: B.ByteString }
+data Image = Image { imageDomain :: Domain, stockBytes :: B.ByteString, ownedBytes :: B.ByteString, imageReloc :: Reloc }
+
+-- | (S2-linked offset, aggregate offset, S2 size, aggregate size) for each body.
+data Reloc = Reloc [(Word32, Word32, Word32, Word32)]
+
+relocOffset :: Reloc -> Word32 -> Word32
+relocOffset (Reloc spans) offset = case [agg + (offset - src) | (src, agg, size, _) <- spans, offset >= src, offset < src + size] of
+  (value : _) -> value
+  [] -> offset
+
+relocRegions :: Reloc -> [(Word32, Word32)]
+relocRegions (Reloc spans) = [(agg, agg + size) | (_, agg, _, size) <- spans]
+
+parsePlatformSymbols :: FilePath -> IO (M.Map String (Word32, Word32))
+parsePlatformSymbols path = do
+  lines' <- lines <$> readFile path
+  pure (M.fromList [(name, (address, size)) | row <- lines', Just (name, address, size) <- [parseRow row]])
+  where
+    parseRow row = case words row of
+      [a, z, kind, name] | kind `elem` ["T", "t"], Just address <- hexWord a, Just size <- hexWord z -> Just (name, address, size)
+      _ -> Nothing
+    hexWord text = case text of
+      '0' : 'x' : digits -> hexDigits digits
+      _ -> hexDigits text
+    hexDigits digits = case readHex digits of
+      [(value, "")] | value <= toInteger (maxBound :: Word32) -> Just (fromInteger value)
+      _ -> Nothing
+
+relocation :: Domain -> M.Map String (Word32, Word32) -> Reloc
+relocation domain symbols = Reloc
+  [ (entryOffset False e, offsetOf (symbolName e), entrySize e, symbolSize (symbolName e))
+  | e <- [minBound .. maxBound]
+  ]
+  where
+    offsetOf name = maybe (error ("missing S2 symbol " ++ name)) (\(address, _) -> address - base domain) (M.lookup name symbols)
+    symbolSize name = maybe 0 snd (M.lookup name symbols)
+    symbolName e = case e of
+      Save -> "xm1_rtos_scheduler_save"
+      Resume -> "xm1_rtos_scheduler_resume"
+      NoSave -> "xm1_rtos_scheduler_no_save"
+      Select -> "xm1_rtos_scheduler_select"
+      FirstEntry -> "xm1_rtos_scheduler_first_entry"
+      IrqReturn -> "xm1_rtos_scheduler_irq_return"
+      IrqResume -> "xm1_rtos_scheduler_irq_resume"
+      IrqTail -> "xm1_rtos_scheduler_irq_tail"
+      Doorbell -> "xm1_rtos_scheduler_doorbell"
+    entrySize e = case e of
+      Save -> 0x28
+      Resume -> 0x20
+      NoSave -> 0x1c
+      Select -> 0x84
+      FirstEntry -> 0x34
+      IrqReturn -> 0x48
+      IrqResume -> 0x4
+      IrqTail -> 0x34
+      Doorbell -> 0x24
 
 redesignId :: Redesign -> String
 redesignId NullOwnRegisters = "null-selection-own-registers"
@@ -42,6 +98,9 @@ base DomainB = 0xd0000
 
 at :: Domain -> Word32 -> Word32
 at d offset = base d + offset
+
+ownedAt :: Image -> Role -> Word32 -> Word32
+ownedAt image role offset = at (imageDomain image) (if isStock role then offset else relocOffset (imageReloc image) offset)
 
 entryOffset :: Bool -> Entry -> Word32
 entryOffset stock e = case e of
@@ -108,7 +167,7 @@ isStock _ = False
 
 slice :: Word32 -> Word32 -> B.ByteString -> Word32 -> Word32 -> B.ByteString
 slice imageBase imageEnd bytes start end
-  | start < imageBase || end > imageEnd || end <= start = error "S2 slice outside image"
+  | start < imageBase || end > imageEnd || end <= start = error ("S2 slice outside image " ++ show (imageBase, imageEnd, start, end))
   | otherwise = B.take (fromIntegral (end-start)) (B.drop (fromIntegral (start-imageBase)) bytes)
 
 replace :: Word32 -> B.ByteString -> Word32 -> B.ByteString -> B.ByteString
@@ -148,10 +207,15 @@ regions image role row = code ++ dat
     raw = if isStock role then stock else own
     imageBase = if isStock role then b else at d 0xb00
     imageEnd = imageBase + fromIntegral (B.length raw)
-    blocks = [(0xb00,0xb24),(0x3640,0x37dc),(0x37fc,0x3810)]
+    blocks = [(0xb00,0xb24),(0x3640,0x37dc),(0x37fc,0x3810)] ++ relocated
+    relocated = if isStock role then [] else mergedRelocated
+    mergedRelocated = case relocRegions (imageReloc image) of
+      [] -> []
+      spans -> [(minimum (map fst spans), maximum (map snd spans))]
     installed = if isStock role then stock else foldl install stock blocks
     install bytes (a,z) = replace b bytes (b+a) (slice imageBase imageEnd raw (b+a) (b+z))
-    code = [mk ("code-"++show a) (b+a) ReadExecute (slice b (b+fromIntegral (B.length stock)) installed (b+a) (b+z)) | (a,z) <- [(0xb00,0xb24),(0x252c,0x3810)]]
+    codeSpans = [(0xb00,0xb24),(0x252c, if isStock role then 0x3810 else 0x403c)]
+    code = [mk ("code-"++show a) (b+a) ReadExecute (slice b (b+fromIntegral (B.length stock)) installed (b+a) (b+z)) | (a,z) <- codeSpans]
     (low,high) = (context d, running d + 12)
     LockTag tag = lockTag row
     pokes = [(context d,1),(running d,task d),(running d+4,enabled row),(running d+8,selected d row),(reschedule d,0)]
@@ -178,12 +242,12 @@ regions image role row = code ++ dat
 guest :: Word32 -> GuestAddress
 guest = GuestAddress . fromIntegral
 
-stop :: Role -> Domain -> Row -> Word32
-stop role d row
-  | entry row==Save && selection row==Same && (isStock role || discarded row/=1) = at d 0x3668
+stop :: Image -> Role -> Domain -> Row -> Word32
+stop image role d row
+  | entry row==Save && selection row==Same && (isStock role || discarded row/=1) = ownedAt image role 0x3668
   | entry row `elem` [Resume,IrqResume,IrqTail], flags row .&. 4 /= 0, pending row /= 0 = at d (if d==DomainA then 0x4288 else 0x4248)
-  | entry row `elem` [IrqResume,IrqTail] = at d 0x37d4
-  | entry row == IrqReturn && (enabled row==0 || (selection row==Same && discarded row/=1)) = at d 0x37d4
+  | entry row `elem` [IrqResume,IrqTail] = ownedAt image role 0x37d4
+  | entry row == IrqReturn && (enabled row==0 || (selection row==Same && discarded row/=1)) = ownedAt image role 0x37d4
   | otherwise = target d
 
 spec :: Image -> Role -> CaseIndex -> Row -> CaseSpec
@@ -194,13 +258,13 @@ spec image role (CaseIndex index) row = CaseSpec
   , caseEntry = guest (at d (entryOffset (isStock role) (entry row)))
   , caseExit = guest 0x958e00
   , caseRegions = regions image role row
-  , caseFunctions = [(guest (at d a),z-a) | (a,z) <- [(0xb00,0xb24),(0x3640,0x3668),(0x3668,0x3688),(if entry row==Select then entryOffset (isStock role) Select else 0x3688,0x3728),(0x3728,0x375c),(0x375c,0x37a4),(if entry row==IrqTail then 0x37a8 else 0x37a4,0x37dc),(0x252c,0x2554),(0x27b8,0x27d4),(0x27fc,0x2828),(0x2854,0x286c),(0x3444,0x34a4)]]
+  , caseFunctions = [(guest (at d a),z-a) | (a,z) <- [(0xb00,0xb24),(0x3640,0x3668),(0x3668,0x3688),(if entry row==Select then entryOffset (isStock role) Select else 0x3688,0x3728),(0x3728,0x375c),(0x375c,0x37a4),(if entry row==IrqTail then 0x37a8 else 0x37a4,0x37dc),(0x252c,0x2554),(0x27b8,0x27d4),(0x27fc,0x2828),(0x2854,0x286c),(0x3444,0x34a4)] ++ (if isStock role then [] else relocRegions (imageReloc image))]
   , caseInitial = [(r,initial r) | r <- [R0 .. R12]] ++ [(Sp,stackPointer),(Lr,0x958e00),(Cpsr,cpsr row)]
   , caseExpectedStatus = if loops row then InstructionBudget else StopAddress
   , caseExpectedRegisters = [(R8,0xa5a50000 + if entry row `elem` [Resume,IrqResume] then 4 else 8)]
   , caseExpectedMemory = []
   , caseCp14Identity = Just (if d==DomainA then 0x4003 else 0x4004)
-  , caseKernel = Just (KernelCase (InstructionLimit limit) (if loops row || (isStock role && entry row==IrqReturn && RemoteRestart `elem` trigger d row) then Nothing else Just (guest (stop role d row))) (Just 0x80001234) (Just (cpacr row)) (Just (fpexc row)) ignored [])
+  , caseKernel = Just (KernelCase (InstructionLimit limit) (if loops row || (isStock role && entry row==IrqReturn && RemoteRestart `elem` trigger d row) then Nothing else Just (guest (stop image role d row))) (Just 0x80001234) (Just (cpacr row)) (Just (fpexc row)) ignored [])
   }
   where
     d = imageDomain image
@@ -243,7 +307,7 @@ expected :: Image -> Role -> Row -> NativeObservation -> Bool
 expected image role row o
   | NullOwnRegisters `elem` tags = if stock then nativeStatus o==UnsupportedInstruction && reg Pc o==at d 0x3704 && word "sentinel" 0 o==1 else nativeStatus o==InstructionBudget && word "sentinel" 0 o==0xfeedcafe && reg Cpsr o .&. 0x1f==0x13 && 1 `elem` writes (context d) o
   | NullUnlock `elem` tags = nativeStatus o==InstructionBudget && if stock then word "global" 0 o==localTag d else word "global" 0 o==0 && writes (globalLock d) o==[0] && barrierBeforeUnlock
-  | RemoteRestart `elem` tags = if stock then if entry row==Save then nativeStatus o==StopAddress && reg Pc o==stop role d row && word "tasks" 0x1c o==at d 0x3668 else nativeStatus o==UnsupportedInstruction && reg Pc o==at d 0x37d4 else nativeStatus o==StopAddress && reg Pc o==target d && reg Sp o==savedStack d && word "tasks" 0x18 o==savedStack d && word "tasks" 0x1c o==target d
+  | RemoteRestart `elem` tags = if stock then if entry row==Save then nativeStatus o==StopAddress && reg Pc o==stop image role d row && word "tasks" 0x1c o==at d 0x3668 else nativeStatus o==UnsupportedInstruction && reg Pc o==at d 0x37d4 else nativeStatus o==StopAddress && reg Pc o==target d && reg Sp o==savedStack d && word "tasks" 0x18 o==savedStack d && word "tasks" 0x1c o==target d
   | otherwise = ordinary
   where
     d=imageDomain image
@@ -256,7 +320,7 @@ expected image role row o
       | loops row = nativeStatus o==InstructionBudget && word "global" 0 o==let LockTag t=lockTag row in t
       | entry row==Doorbell = nativeStatus o==Returned && word "domain" (fromIntegral (reschedule d-context d)) o==1 && word (if d==DomainA then "bank-a" else "bank-b") 0 o==0x1000000
       | entry row==Resume = if flags row .&. 4 /=0 && pending row/=0 then nativeStatus o==StopAddress else nativeStatus o==Returned
-      | otherwise = nativeStatus o==StopAddress && reg Pc o==stop role d row && systemHolds && frameHolds
+      | otherwise = nativeStatus o==StopAddress && reg Pc o==stop image role d row && systemHolds && frameHolds
     systemHolds
       | entry row `elem` [Save,NoSave,Select] || (entry row==IrqReturn && enabled row/=0 && selection row/=Same) =
           (nativeKernel o >>= observedTpidrurw)==Just 0x10002 && (nativeKernel o >>= observedFpexc)==Just (if cpacr row .&. 0xf00000/=0 then 0 else fpexc row) && reg Sp o==(if entry row==Save && selection row==Same then stackPointer-36 else savedStack d)
@@ -267,7 +331,7 @@ expected image role row o
       | entry row==IrqReturn && enabled row/=0 && selection row==Other && discarded row/=1 = saved 32 0x37a4
       | otherwise = True
     saved bytes resume =
-      word "tasks" 0x18 o==stackPointer-bytes && word "tasks" 0x1c o==at d resume
+      word "tasks" 0x18 o==stackPointer-bytes && word "tasks" 0x1c o==ownedAt image role resume
       && and [word "stack" (fromIntegral (stackPointer-stackBase-bytes+4*n)) o==value | (n,value)<-zip [0..] values]
       where values = [0x13,0x93,context d] ++ [0xa5a50000+n | n<-[7..11]] ++ [0x958e00 | bytes==36]
 
@@ -276,18 +340,19 @@ main = do
   args <- getArgs
   let input name = required args name >>= canonicalizePath
   runner <- input "--runner"
-  paths <- mapM input ["--loader-a","--loader-b","--owned-a","--owned-b"]
+  paths <- mapM input ["--loader-a","--loader-b","--owned-a","--owned-b","--symbols-a","--symbols-b"]
   work <- required args "--work" >>= makeAbsolute
   summary <- required args "--summary" >>= makeAbsolute
   lookupEnv "BUILD_WORKSPACE_DIRECTORY" >>= mapM_ setCurrentDirectory
   forM_ [work,summary] $ \p -> doesPathExist p >>= \exists -> when exists (fail (p++" already exists"))
   images <- case paths of
-    [la,lb,oa,ob] -> forM [(DomainA,la,oa),(DomainB,lb,ob)] $ \(d,l,p) -> do
+    [la,lb,oa,ob,sa,sb] -> forM [(DomainA,la,oa,sa),(DomainB,lb,ob,sb)] $ \(d,l,p,s) -> do
       loader <- B.readFile l
       owned <- B.readFile p
+      symbols <- parsePlatformSymbols s
       unless (sha256Hex (sha256 loader)==loaderSha256 d) (fail "not pinned X-M1 1.50 loader")
-      unless (B.length owned==0x2d10) (fail "S2 owned image size differs")
-      pure (Image d loader owned)
+      unless (B.length owned > 0x4000) (fail "aggregate image is too small")
+      pure (Image d loader owned (relocation d symbols))
     _ -> fail "input arity"
   createDirectoryIfMissing True work
   reports <- forM images $ \image -> do
