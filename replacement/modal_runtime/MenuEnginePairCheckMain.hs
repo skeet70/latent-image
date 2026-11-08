@@ -9,20 +9,25 @@
 module Main (main) where
 
 import qualified ArmElf as ELF
-import Control.Monad (forM, unless)
+import Control.Monad (forM, forM_, unless)
 import qualified Data.Aeson as J
 import qualified Data.Aeson.Types as J
+import qualified Data.Aeson.KeyMap as KM
+import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString as B
 import Data.Char (isDigit)
-import Data.List (sortOn, stripPrefix)
+import Data.List (nub, sort, sortOn, stripPrefix)
 import qualified Data.Map.Strict as M
 import Data.Word (Word32)
 import qualified EngineStack as S
+import qualified RenderStack as R
 import Numeric (readHex)
-import RamPushLayout (modalEngineBankVariant, runtimeAllocationSizeFor)
+import RamPushLayout (modalEngineBankVariant, modalRenderBankVariant, runtimeAllocationSizeFor)
 import Replacement.ModalRuntime.MenuEngineClass (menuTree)
 import Replacement.ModalRuntime.MenuEnginePair
 import Replacement.ModalRuntime.MenuEngineTree (TablesDocument, composePackage, parsePackagePlan)
+import Replacement.ModalRuntime.RenderPair
+import qualified Replacement.ModalRuntime.RenderStackEvidence as E
 import System.Directory (listDirectory)
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
@@ -31,7 +36,7 @@ import System.IO (hPutStrLn, stderr)
 
 -- | The receipt's observations, `e2e-observation-N.json` for each of its N segments in run order;
 -- each takes the residency of the segment at its position.
-observations :: FilePath -> IO [Observation]
+observations :: FilePath -> IO [ObservationReader]
 observations directory = do
   resultBytes <- B.readFile (directory </> "e2e-result.json")
   phases <- either (fail . ((directory </> "e2e-result.json: ") ++)) pure
@@ -44,19 +49,30 @@ observations directory = do
   unless (map fst numbered == [0 .. length segments - 1])
     (fail (directory ++ ": observation files " ++ show (map fst numbered) ++ " are not one per segment of the run's " ++ show (length segments)))
   forM numbered $ \(index, name) -> do
-    bytes <- B.readFile (directory </> name)
-    either (fail . ((directory </> name ++ ": ") ++)) pure $ do
-      value <- J.eitherDecodeStrict' bytes
-      phase <- J.parseEither observationPhaseOf value
-      residency <- residencyAt segments index phase
-      J.parseEither (parseObservation residency) value
+    let path = directory </> name
+    bytes <- B.readFile path
+    value <- either (fail . ((path ++ ": ") ++)) pure (J.eitherDecodeStrict' bytes)
+    phase <- either (fail . ((path ++ ": ") ++)) pure (J.parseEither observationPhaseOf value)
+    residency <- either (fail . ((path ++ ": ") ++)) pure (residencyAt segments index phase)
+    either (fail . ((path ++ ": ") ++)) pure =<< readObservationReader residency path
+
+renderEvidence :: Role -> FilePath -> IO E.RenderStackEvidence
+renderEvidence role directory = do
+  let json name = B.readFile (directory </> name) >>= either fail pure . J.eitherDecodeStrict'
+      stackRole = case role of StockRole -> E.StockStack; OwnedRole -> E.OwnedStack
+  request <- json "e2e-render-stack-diagnostic-request.json"
+  report <- json "e2e-render-stack-diagnostic.json"
+  evidence <- either fail pure (E.parseRenderStackEvidence stackRole request report)
+  lifetime <- json "e2e-modal-observation.json"
+  either fail pure (E.checkLifetimeGuard lifetime)
+  roleElf <- B.readFile (directory </> "relinked" </> "kernel.elf") >>= either fail pure . ELF.parseElf
+  either fail pure (E.checkOwnedSources roleElf evidence)
+  pure evidence
 
 main :: IO ()
 main = do
   arguments <- getArgs
-  (tablesPath, planPath, stockPath, ownedPath) <- case arguments of
-    ["--tables", tables, "--package-plan", plan, "--stock", stock, "--owned", owned] -> pure (tables, plan, stock, owned)
-    _ -> hPutStrLn stderr "usage: menu-engine-pair-check --tables MENU-TABLES.json --package-plan BANK-PLAN.json --stock RECEIPT --owned RECEIPT" >> exitFailure
+  (render, tablesPath, planPath, stockPath, ownedPath) <- either fail pure (options arguments)
   stockTables <- B.readFile tablesPath >>= either fail pure . (J.eitherDecodeStrict' :: B.ByteString -> Either String TablesDocument)
   plan <- B.readFile planPath >>= either fail pure . J.eitherDecodeStrict'
   overlay <- either (fail . ("package plan: " ++)) pure (parsePackagePlan plan)
@@ -65,9 +81,11 @@ main = do
   stock <- observations stockPath
   owned <- observations ownedPath
   unless (not (null stock) && not (null owned)) (fail "a role has no e2e observations")
-  results <- forM [(StockRole, stock), (OwnedRole, owned)] $ \(role, segments) -> case checkRole tree role segments of
-    Left failure -> hPutStrLn stderr (show role ++ ": " ++ failure) >> pure False
-    Right summary -> do
+  results <- forM [(StockRole, stock), (OwnedRole, owned)] $ \(role, segments) -> do
+    checked <- checkRoleReader tree role segments
+    case checked of
+     Left failure -> hPutStrLn stderr (show role ++ ": " ++ failure) >> pure False
+     Right summary -> do
       putStrLn (show role ++ ": " ++ show (summaryEvents summary) ++ " stage events, "
         ++ show (summaryFallbackEntries summary) ++ " fallback-site entries")
       let classes = M.toList (summaryClasses summary)
@@ -86,19 +104,107 @@ main = do
       Just digits | [(value, "")] <- readHex digits -> pure (value :: Word32)
       _ -> fail "manifest base is not hex"))
   elf <- B.readFile (ownedPath </> "relinked" </> "kernel.elf") >>= either fail pure . ELF.parseElf
-  let size = runtimeAllocationSizeFor modalEngineBankVariant
+  let size = runtimeAllocationSizeFor (if render == Nothing then modalEngineBankVariant else modalRenderBankVariant)
   bound <- either fail pure (S.checkEngineStack S.taskOneBudget elf (\address -> base <= address && address - base < size))
   let margin = S.budgetStockMargin S.taskOneBudget
       required = S.reportEngine bound + S.reportModal bound + margin
   putStrLn ("stack: engine " ++ show (S.reportEngine bound) ++ " + modal dispatcher " ++ show (S.reportModal bound)
     ++ " + stock margin " ++ show margin ++ " = " ++ show required ++ " bytes")
-  stacks <- forM [(StockRole, stock), (OwnedRole, owned)] $ \(role, segments) -> case checkStack required segments of
-    Left failure -> hPutStrLn stderr (show role ++ " stack: " ++ failure) >> pure False
-    Right report -> do
+  stacks <- forM [(StockRole, stock), (OwnedRole, owned)] $ \(role, segments) -> do
+    checked <- checkStackReader required segments
+    case checked of
+     Left failure -> hPutStrLn stderr (show role ++ " stack: " ++ failure) >> pure False
+     Right report -> do
       putStrLn (show role ++ " stack: lowest bound floor " ++ maybe "none" show (stackFloor report)
         ++ ", measured high-water mark " ++ maybe "none" show (stackHighWater report))
       pure True
-  paired <- case comparePair stock owned of
+  pairChecked <- comparePairReader stock owned
+  paired <- case pairChecked of
     Left failure -> hPutStrLn stderr ("pair: " ++ failure) >> pure False
     Right () -> putStrLn "pair: engine reads and 0x1d posts equal" >> pure True
-  unless (and (paired : results ++ stacks)) exitFailure
+  rendered <- case render of
+    Nothing -> pure True
+    Just config -> do
+      forM_ [(StockRole,stockPath,stock),(OwnedRole,ownedPath,owned)] $ \(role,path,segments) -> do
+        value <- B.readFile (path </> "e2e-result.json") >>= either fail pure . J.eitherDecodeStrict'
+        either fail pure (J.parseEither (validateRenderDeclarations config role) value)
+        writeRenderReceipt path segments
+      renderBounds <- either fail pure (R.checkRenderStack elf (\address -> base <= address && address - base < size))
+      evidence <- forM [(StockRole,stockPath,stock),(OwnedRole,ownedPath,owned)] $ \(role,path,segments) -> do
+        proof <- renderEvidence role path
+        pure (path,segments,proof)
+      checked <- (if map readerPhase stock /= map readerPhase owned
+        then pure (Left "render segment phases differ")
+        else do
+          coverage <- checkRenderCoverageReader config stock owned
+          case coverage of
+            Left failure -> pure (Left failure)
+            Right () -> do
+              stockDrawsResult <- collectDrawsReader config stockTables document StockRole stock
+              case stockDrawsResult of
+                Left failure -> pure (Left failure)
+                Right stockDraws -> do
+                  drawsChecked <- compareDrawsReader config stockTables document stockDraws owned
+                  case drawsChecked of
+                    Left failure -> pure (Left failure)
+                    Right () -> do
+                      stockStackResult <- checkRenderStackObservationsReader config renderBounds stockTables document stock
+                      ownedStackResult <- checkRenderStackObservationsReader config renderBounds stockTables document owned
+                      banksResult <- discoveredBanksReader config stockTables document owned
+                      let stockBanksResult = discoveredBanks config stockDraws
+                      case (stockStackResult, ownedStackResult, banksResult, stockBanksResult) of
+                        (Left failure, _, _, _) -> pure (Left failure)
+                        (_, Left failure, _, _) -> pure (Left failure)
+                        (_, _, Left failure, _) -> pure (Left failure)
+                        (_, _, _, Left failure) -> pure (Left failure)
+                        (Right stockStack, Right ownedStack, Right ownedBanks, Right stockBanks) -> do
+                          allocation <- forM evidence $ \(path,segments,proof) -> do
+                            verdict <- checkRenderInvocationEvidenceReader renderBounds segments proof
+                            pure (path,verdict)
+                          case sequence [fmap (\value -> (path,value)) verdict | (path,verdict) <- allocation] of
+                            Left failure -> pure (Left failure)
+                            Right verdicts -> pure (Right (stockStack, ownedStack, sort (nub (stockBanks ++ ownedBanks)), verdicts)))
+      case checked of
+        Left failure -> hPutStrLn stderr ("render: " ++ failure) >> pure False
+        Right (stockStack,ownedStack,banks,allocation) -> do
+          putStrLn ("render: " ++ show (renderCoverage config) ++ " changed-word lower-bound reports "
+            ++ show (stockStack,ownedStack) ++ ", allocation-based invocation verdicts " ++ show (map snd allocation))
+          forM_ allocation $ \(path,verdict) ->
+            BL.writeFile (path </> "e2e-render-stack-allocation-check.json") (J.encode (E.allocationVerdictJson verdict) <> "\n")
+          BL.writeFile (ownedPath </> "render-banks.json") (J.encode banks <> "\n")
+          pure True
+  unless (and (rendered : paired : results ++ stacks)) exitFailure
+
+options :: [String] -> Either String (Maybe RenderConfig,FilePath,FilePath,FilePath,FilePath)
+options = go Nothing
+ where
+  go _ ("--render":rest) = go (Just (RenderConfig [0..18] Nothing 0xa4ce00 DrawsRequired)) rest
+  go (Just config) ("--render-draw-free":rest) = go (Just config {renderCoverage = DeclaredDrawFree}) rest
+  go (Just config) ("--render-banks":banks:rest) = do
+    parsed <- J.eitherDecodeStrict' (B.pack (map (fromIntegral . fromEnum) banks))
+    go (Just config {renderBanks = parsed}) rest
+  go (Just config) ("--render-clock-resource":resource:rest) = case stripPrefix "0x" resource of
+    Just digits | [(value,"")] <- readHex digits -> go (Just config {renderClock = Just (ResourceId value)}) rest
+    _ -> Left "render clock resource requires a hex word"
+  go (Just config) ("--render-stack-base":address:rest) = case stripPrefix "0x" address of
+    Just digits | [(value,"")] <- readHex digits -> go (Just config {renderStackBase = value}) rest
+    _ -> Left "render stack base requires a hex word"
+  go config ["--tables",tables,"--package-plan",plan,"--stock",stock,"--owned",owned] = Right (config,tables,plan,stock,owned)
+  go _ _ = Left "usage: menu-engine-pair-check [--render [--render-draw-free] [--render-banks JSON] [--render-clock-resource 0xID] [--render-stack-base 0xBASE]] --tables TABLES --package-plan PLAN --stock RECEIPT --owned RECEIPT"
+
+writeRenderReceipt :: FilePath -> [ObservationReader] -> IO ()
+writeRenderReceipt directory segments = do
+  fronts <- either fail pure =<< osdInputsReader segments
+  labels <- fmap concat $ forM (zip [0 :: Int ..] segments) $ \(index,segment) -> do
+    bytes <- B.readFile (directory </> ("e2e-observation-" ++ show index ++ ".json"))
+    label <- either fail pure (J.eitherDecodeStrict' bytes >>= J.parseEither (J.withObject "observation" (\fields -> fields J..:? "capture" :: J.Parser (Maybe String))))
+    pure [(name,input) | Just name <- [label], Just input <- [lookup (readerPhase segment) fronts]]
+  value <- B.readFile (directory </> "e2e-result.json") >>= either fail pure . J.eitherDecodeStrict'
+  annotated <- either fail pure (J.parseEither (J.withObject "e2e result" $ \fields -> do
+    captures <- fields J..: "menu_receipts" :: J.Parser [J.Value]
+    updated <- forM captures $ J.withObject "capture" $ \capture -> do
+      label <- capture J..: "label"
+      input <- maybe (fail "capture lacks complete OSD front inputs") pure (lookup label labels)
+      pure (J.Object (KM.insert "osd_front" input capture))
+    pure (J.Object (KM.insert "menu_receipts" (J.toJSON updated) fields))) value)
+  BL.writeFile (directory </> "e2e-result-render.json") (J.encode annotated <> "\n")

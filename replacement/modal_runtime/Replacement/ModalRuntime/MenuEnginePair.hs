@@ -12,6 +12,11 @@ module Replacement.ModalRuntime.MenuEnginePair
   , Observation (..)
   , Residency (..)
   , parseObservation
+  , ObservationReader (..)
+  , readObservationReader
+  , checkRoleReader
+  , checkStackReader
+  , comparePairReader
   , observationPhaseOf
   , segmentResidencies
   , residencyAt
@@ -32,12 +37,18 @@ import Control.Monad (foldM, forM, unless, when)
 import Data.Aeson ((.:), (.:?))
 import qualified Data.Aeson as J
 import qualified Data.Aeson.Types as J
+import Data.Bits (shiftL, (.|.))
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
 import Data.Word (Word32)
+import Emulation.ObservationStream (foldTraceHitRows)
 import Numeric (readHex)
 import Replacement.ModalRuntime.MenuEngineClass
+import Replacement.ModalRuntime.RenderObjectProvenance
+import Replacement.ModalRuntime.RenderStackEvidence (InstructionCounter)
+import System.FilePath (takeDirectory)
 
 data Role = StockRole | OwnedRole deriving (Eq, Show)
 
@@ -63,6 +74,8 @@ data Hit = Hit
   , hitLr :: Maybe Word32
   , hitSp :: Maybe Word32
   , hitMemory :: [B.ByteString]
+  , hitProvenanceSequence :: Maybe ProvenanceSequence
+  , hitInstructions :: Maybe InstructionCounter
   }
   deriving (Eq, Show)
 
@@ -76,6 +89,7 @@ data Observation = Observation
   , observationResidency :: Residency
   , observationReads :: [(T.Text, B.ByteString)]
   , observationHits :: [Hit]
+  , observationProvenance :: Maybe ProvenanceBatch
   }
   deriving (Eq, Show)
 
@@ -90,12 +104,24 @@ engineReads =
   [ "menu-block", "menu-last-move", "snapshot-root"
   , "snapshot-depth1-0", "snapshot-depth1-1", "snapshot-depth2-0", "snapshot-depth2-1" ]
 
-hexBytes :: String -> J.Parser B.ByteString
-hexBytes text = B.pack <$> go text
+hexBytes :: T.Text -> J.Parser B.ByteString
+hexBytes text
+  | odd (B.length raw) = fail "not hex bytes"
+  | B.length decoded /= count = fail "not hex bytes"
+  | otherwise = pure decoded
  where
-  go (high : low : rest) | [(byte, "")] <- readHex [high, low] = (byte :) <$> go rest
-  go [] = pure []
-  go _ = fail "not hex bytes"
+  raw = TE.encodeUtf8 text
+  count = B.length raw `div` 2
+  decoded = fst (B.unfoldrN count step 0)
+  nibble byte
+    | byte >= 48 && byte <= 57 = Just (byte - 48)
+    | byte >= 65 && byte <= 70 = Just (byte - 55)
+    | byte >= 97 && byte <= 102 = Just (byte - 87)
+    | otherwise = Nothing
+  step offset = do
+    high <- nibble (B.index raw offset)
+    low <- nibble (B.index raw (offset + 1))
+    pure (high `shiftL` 4 .|. low,offset + 2)
 
 hexWord :: String -> J.Parser Word32
 hexWord text = case text of
@@ -118,18 +144,52 @@ residencyAt segments index phase = case drop index segments of
   (listed, _) : _ -> Left ("observation " ++ show index ++ " has phase " ++ T.unpack phase ++ ", the run's segment " ++ show index ++ " is " ++ T.unpack listed)
   [] -> Left ("observation " ++ show index ++ " has no segment phase in the run")
 
-parseObservation :: Residency -> J.Value -> J.Parser Observation
-parseObservation residency = J.withObject "e2e observation" $ \fields -> do
+parseHitValue :: J.Value -> J.Parser Hit
+parseHitValue = J.withObject "trace hit" $ \hit -> do
+  let register name = hexWord =<< hit .: name
+  registers <- (,,,) <$> register "r0" <*> register "r1" <*> register "r2" <*> register "r3"
+  lr <- traverse hexWord =<< hit .:? "lr"
+  sp <- traverse hexWord =<< hit .:? "sp"
+  memory <- maybe (pure []) (mapM hexBytes) =<< hit .:? "memory"
+  provenanceSequence <- fmap ProvenanceSequence <$> hit .:? "render_object_provenance_sequence"
+  instructions <- hit .:? "instructions"
+  Hit <$> (parseSite <$> hit .: "site") <*> hit .: "core" <*> pure registers <*> pure lr <*> pure sp <*> pure memory <*> pure provenanceSequence <*> pure instructions
+
+parseObservationHeader :: Residency -> J.Value -> J.Parser (T.Text, [(T.Text, B.ByteString)], Maybe ProvenanceBatch)
+parseObservationHeader _ value = J.withObject "e2e observation" (\fields -> do
   phase <- fields .: "phase"
   segmentReads <- fields .: "reads" >>= mapM (J.withObject "read" $ \read_ -> (,) <$> read_ .: "label" <*> (hexBytes =<< read_ .: "bytes"))
-  hits <- fields .: "trace_hits" >>= mapM (J.withObject "trace hit" $ \hit -> do
-    let register name = hexWord =<< hit .: name
-    registers <- (,,,) <$> register "r0" <*> register "r1" <*> register "r2" <*> register "r3"
-    lr <- traverse hexWord =<< hit .:? "lr"
-    sp <- traverse hexWord =<< hit .:? "sp"
-    memory <- maybe (pure []) (mapM hexBytes) =<< hit .:? "memory"
-    Hit <$> (parseSite <$> hit .: "site") <*> hit .: "core" <*> pure registers <*> pure lr <*> pure sp <*> pure memory)
-  pure (Observation phase residency segmentReads hits)
+  provenance <- traverse parseProvenanceBatch =<< fields .:? "render_object_provenance"
+  pure (phase, segmentReads, provenance)) value
+
+parseObservation :: Residency -> J.Value -> J.Parser Observation
+parseObservation residency value = do
+  (phase, segmentReads, provenance) <- parseObservationHeader residency value
+  hits <- J.withObject "e2e observation" (\fields -> fields .: "trace_hits" >>= mapM parseHitValue) value
+  pure (Observation phase residency segmentReads hits provenance)
+
+data ObservationReader = ObservationReader
+  { readerPhase :: T.Text
+  , readerResidency :: Residency
+  , readerReads :: [(T.Text, B.ByteString)]
+  , readerProvenance :: Maybe ProvenanceBatch
+  , readerFoldHits :: forall a. (a -> Hit -> Either String a) -> a -> IO (Either String a)
+  }
+
+readObservationReader :: Residency -> FilePath -> IO (Either String ObservationReader)
+readObservationReader residency path = do
+  bytes <- B.readFile path
+  case J.eitherDecodeStrict' bytes of
+    Left problem -> pure (Left problem)
+    Right value -> case J.parseEither (parseObservationHeader residency) value of
+      Left problem -> pure (Left problem)
+      Right (phase, segmentReads, provenance) -> do
+        let foldHits step initial = do
+              result <- foldTraceHitRows (takeDirectory path) value
+                (\acc row -> acc >>= \state -> J.parseEither parseHitValue row >>= \hit -> Right <$> step state hit)
+                (Right initial)
+              pure (result >>= id)
+        pure (Right (ObservationReader phase residency segmentReads provenance foldHits))
 
 -- | An observation's phase, read before its residency is known.
 observationPhaseOf :: J.Value -> J.Parser T.Text
@@ -259,3 +319,120 @@ comparePair stock owned = do
         , hitSite hit == EventPost, let (r0, r1, r2, r3) = hitRegisters hit, r0 == 0x1d]
   unless (posts stock == posts owned)
     (Left ("0x1d posts differ: stock " ++ show (posts stock) ++ ", owned " ++ show (posts owned)))
+
+checkRoleReader :: MenuTree -> Role -> [ObservationReader] -> IO (Either String RoleSummary)
+checkRoleReader tree role readers = go (Walk M.empty (RoleSummary M.empty 0 0) []) readers
+ where
+  go walk [] = pure (case walkFailures walk of [] -> Right (walkSummary walk); failures -> Left (unlines (reverse failures)))
+  go walk (reader : rest) = do
+    result <- readerFoldHits reader (\state hit -> step (readerPhase reader) (readerResidency reader) state hit) walk
+    case result of
+      Left problem -> pure (Left problem)
+      Right next -> go next rest
+  step phase residency walk hit
+    | hitSite hit == StageEntry = do
+        block <- case hitMemory hit of
+          bytes : _ -> menuBlock bytes
+          [] -> Left ("stage entry without its block read in " ++ T.unpack phase)
+        let (kind, node, ident, extra) = hitRegisters hit
+            class_ = deriveClass tree block (StageEvent kind node ident extra)
+            summary = walkSummary walk
+        pure walk
+          { walkLatest = M.insert (hitCore hit) (Latest class_ False) (walkLatest walk)
+          , walkSummary = summary
+              { summaryClasses = M.insertWith (+) (Coverage residency (isOwned class_) (show class_)) 1 (summaryClasses summary)
+              , summaryEvents = summaryEvents summary + 1 } }
+    | hitSite hit == KindSwitch && hitLr hit == Just fallbackReturn = do
+        let summary = walkSummary walk
+            counted = walk {walkSummary = summary {summaryFallbackEntries = summaryFallbackEntries summary + 1}}
+        pure $ case (role, residency, latestClass <$> M.lookup (hitCore hit) (walkLatest walk)) of
+          (OwnedRole, EngineResident, Just class_) | isOwned class_ ->
+            counted {walkFailures = ("fallback entry for owned class " ++ show class_ ++ " in " ++ T.unpack phase) : walkFailures walk}
+          (OwnedRole, EngineResident, Nothing) ->
+            counted {walkFailures = ("fallback entry with no stage entry on its core in " ++ T.unpack phase) : walkFailures walk}
+          _ -> counted
+    | hitSite hit == KindSwitch && hitLr hit == Nothing =
+        Left ("kind-switch entry without lr in " ++ T.unpack phase)
+    | hitSite hit == KindSwitch =
+        pure walk {walkLatest = M.adjust (\latest -> latest {latestServiceSwitch = True}) (hitCore hit) (walkLatest walk)}
+    | hitSite hit == Seek = pure $ case (role, residency, M.lookup (hitCore hit) (walkLatest walk)) of
+        (OwnedRole, EngineResident, Just (Latest class_ False)) | isOwned class_ ->
+          walk {walkFailures = ("seek entry for owned class " ++ show class_ ++ " in " ++ T.unpack phase) : walkFailures walk}
+        _ -> walk
+    | hitSite hit == GuardTrap =
+        pure walk {walkFailures = ("adapter guard trap entered in " ++ T.unpack phase) : walkFailures walk}
+    | otherwise = pure walk
+
+checkStackReader :: Word32 -> [ObservationReader] -> IO (Either String StackReport)
+checkStackReader required readers = do
+  floorsResult <- goFloors [] readers
+  case floorsResult of
+    Left problem -> pure (Left problem)
+    Right floors -> case [floor_ | floor_ <- floors, floor_ < toInteger taskStackStart] of
+      floor_ : _ -> pure (Left ("a stage entry leaves the bound " ++ show (toInteger taskStackStart - floor_) ++ " bytes below task 1's stack"))
+      [] -> do
+        let stacks = [bytes | reader <- readers, (name, bytes) <- readerReads reader, name == taskStackRead]
+            valid = and [B.length bytes == fromIntegral taskStackBytes | bytes <- stacks]
+            phases = [readerPhase reader | reader <- readers]
+            missingPhase = case drop (length stacks) phases of phase : _ -> phase; [] -> "unknown"
+        if length stacks /= length readers || not valid
+          then pure (Left ("task 1's stack read is missing or short in " ++ T.unpack missingPhase))
+          else do
+            let changed = case stacks of
+                  first : rest -> [offset | offset <- [0, 4 .. fromIntegral taskStackBytes - 4], any (\later -> B.take 4 (B.drop offset later) /= B.take 4 (B.drop offset first)) rest]
+                  [] -> []
+                highWater = case changed of
+                  offset : _ -> Just (taskStackStart + fromIntegral offset)
+                  [] -> Nothing
+                lowest = if null floors then Nothing else Just (minimum floors)
+            pure $ case (highWater, lowest) of
+              (Just mark, Just floor_) | toInteger mark < floor_ ->
+                Left ("task 1's stack changed at " ++ show mark ++ ", below the bound's floor " ++ show floor_)
+              _ -> Right (StackReport lowest highWater)
+ where
+  goFloors floors [] = pure (Right floors)
+  goFloors floors (reader : rest) = do
+    result <- readerFoldHits reader step floors
+    case result of
+      Left problem -> pure (Left problem)
+      Right next -> goFloors next rest
+  step floors hit
+    | hitSite hit == StageEntry = case hitSp hit of
+        Nothing -> Left "stage entry without sp"
+        Just sp -> Right (toInteger sp - toInteger required : floors)
+    | otherwise = Right floors
+
+comparePairReader :: [ObservationReader] -> [ObservationReader] -> IO (Either String ())
+comparePairReader stock owned = case readsCheck of
+  Left problem -> pure (Left problem)
+  Right () -> do
+    leftPosts <- postsOf stock
+    rightPosts <- postsOf owned
+    pure $ case (leftPosts, rightPosts) of
+      (Left problem, _) -> Left problem
+      (_, Left problem) -> Left problem
+      (Right a, Right b) -> if a == b then Right () else Left ("0x1d posts differ: stock " ++ show a ++ ", owned " ++ show b)
+ where
+  readsCheck = do
+    unless (map readerPhase stock == map readerPhase owned)
+      (Left "the roles' observations have different phases")
+    differences <- fmap concat . forM (zip stock owned) $ \(left, right) ->
+      forM engineReads (\label -> do
+        let lookupRead reader = case [bytes | (name, bytes) <- readerReads reader, name == label] of
+              [bytes] -> Right bytes
+              _ -> Left ("read " ++ T.unpack label ++ " is missing or repeated in " ++ T.unpack (readerPhase reader))
+        a <- lookupRead left
+        b <- lookupRead right
+        pure [T.unpack (readerPhase left) ++ " " ++ T.unpack label | a /= b])
+    when (concat differences /= []) (Left ("engine reads differ: " ++ unwords (concat differences)))
+  postsOf readers = go [] readers
+   where
+    go posts [] = pure (Right (reverse posts))
+    go posts (reader : rest) = do
+      result <- readerFoldHits reader step posts
+      case result of
+        Left problem -> pure (Left problem)
+        Right next -> go next rest
+    step posts hit = case hitSite hit of
+      EventPost | let (r0, r1, r2, r3) = hitRegisters hit, r0 == 0x1d -> Right ((r1, r2, r3) : posts)
+      _ -> Right posts
