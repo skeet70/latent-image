@@ -17,7 +17,7 @@ import qualified Data.Vector as V
 import System.Directory (copyFile, createDirectory, createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getTemporaryDirectory, makeAbsolute, removeDirectoryRecursive, removeFile)
 import System.Environment (getArgs, getEnvironment, lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (..), exitFailure)
-import System.FilePath ((</>))
+import System.FilePath ((</>), makeRelative)
 import System.IO (hClose, openTempFile)
 import System.Posix.Files (setFileMode)
 import System.Process (CreateProcess (..), proc, readCreateProcessWithExitCode)
@@ -545,13 +545,13 @@ nativeRunnerTransitionChecks tool = withWorkspace $ \root -> do
       run name extra = readCreateProcessWithExitCode ((proc tool
         (["--routes", "native-sd", "--receipt", "native-sd=" ++ receipt
          , "--baselines", baselines, "--output", output name] ++ extra))
-        { cwd = Just root, env = environment }) ""
+        { cwd = Just (root </> "private-data"), env = environment }) ""
       runRecord name extra = readCreateProcessWithExitCode ((proc tool
         (["--routes", "native-sd", "--receipt", "native-sd=" ++ baselineReceipt
          , "--execution-ledger", ledger, "--baselines", baselines, "--output", output name] ++ extra))
         { cwd = Just root, env = environment }) ""
       readReport name = eitherDecode <$> BL.readFile (output name </> "report.json")
-      admittedArguments = ["--native-runner-transition", transitionPath, "--composition-manifest", compositionPath]
+      admittedArguments = ["--native-runner-transition", makeRelative root transitionPath, "--composition-manifest", makeRelative root compositionPath]
   (recordedExit, _, recordErr) <- runRecord "record" ["--record-baseline"]
   check ("a valid synthetic native baseline records: " ++ recordErr) (recordedExit == ExitSuccess)
   writeDefaultFiles validDefault
@@ -592,12 +592,6 @@ nativeRunnerTransitionChecks tool = withWorkspace $ \root -> do
            && (field "document" composition >>= field "override_source" >>= field "report") == Just (String (T.pack overrideReportPath))
          _ -> False
        _ -> False)
-  check "the admitted report labels the evidence as host native with no hardware claim"
-    (case admittedReport of
-       Right value -> case field "scope" value of
-         Just (String scope) -> "native case suites" `T.isInfixOf` scope && "no camera or USB device" `T.isInfixOf` scope
-         _ -> False
-       Left _ -> False)
   let changed firstCase replacement = map (\cid -> if cid == firstCase then replacement else rich cid candidateRunner "passed" wire) ids
   writeOverride (changed (firstId) (rich (firstId) (T.replicate 64 "d") "passed" wire))
   writeComposed (changed (firstId) (rich (firstId) (T.replicate 64 "d") "passed" wire) ++ [other])

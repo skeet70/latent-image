@@ -1355,7 +1355,7 @@ main = do
 
   (nativeTransition, composition) <- case (optionNativeTransition options, optionCompositionManifest options) of
     (Nothing, Nothing) -> pure (Nothing, Nothing)
-    (Just transitionPath, Just compositionPath) -> do
+    (Just transitionArgument, Just compositionArgument) -> do
       require (selected == [NativeSd]) "--native-runner-transition requires --routes native-sd"
       require (isJust (lookup NativeSd (optionReceipts options)))
         "--composition-manifest requires --receipt native-sd=DIR"
@@ -1363,6 +1363,8 @@ main = do
       require (not (isJust (optionLedger options))) "--composition-manifest does not accept --execution-ledger"
       require (not (isJust (optionFromRun options))) "--composition-manifest does not accept --from-run"
       require (not (optionResume options)) "--composition-manifest does not accept --resume"
+      transitionPath <- canonicalizePath (resolve root transitionArgument)
+      compositionPath <- canonicalizePath (resolve root compositionArgument)
       document <- parseNativeTransitionDocument transitionPath >>= either (ioError . userError) pure
       compositionBytes <- B.readFile compositionPath
       let compositionDigest = T.pack (sha256Hex (sha256 compositionBytes))
