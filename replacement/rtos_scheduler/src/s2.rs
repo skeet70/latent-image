@@ -152,7 +152,7 @@ xm1_rtos_scheduler_irq_selected_read:
     beq xm1_rtos_scheduler_irq_tail
     push {{r4-r11}}
     str sp, [r1, #0x18]
-    add r0, pc, #4
+    adr r0, xm1_rtos_scheduler_irq_resume
     str r0, [r1, #0x1c]
     b xm1_rtos_scheduler_select
     endentry irq_return
