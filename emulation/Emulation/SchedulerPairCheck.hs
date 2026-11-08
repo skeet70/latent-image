@@ -187,7 +187,7 @@ pendingOf = withObject "pending" $ \p -> do
   semantic <- withObject "slot" (.: "semantic") slot
   entered <- p .: "entered"
   case semantic of
-    FamilySemantic service -> do
+    FamilySemantic _ -> do
       domain <- withObject "slot" (.: "domain") slot >>= parseDomain
       arguments <- entry .: "arguments"
       before <- entry .: "memory" >>= memoryOf
@@ -198,7 +198,7 @@ pendingOf = withObject "pending" $ \p -> do
       entryValue <- withObject "slot" (.: "entry") slot
       entryAddress <- parseHex entryValue
       terminal <- p .:? "terminal_memory" >>= traverse memoryOf
-      pure (Left (F.Pending service domain arguments before terminal task sp cpsr entryAddress entered))
+      pure (Left (F.Pending semantic domain arguments before terminal task sp cpsr entryAddress entered))
     _ -> pure (Right entered)
 
 expect :: Refusal -> Bool -> Either Refusal ()

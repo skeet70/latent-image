@@ -10,7 +10,7 @@ import Control.Monad (foldM, forM, forM_, unless, when)
 import Data.Bits ((.&.), (.|.), complement, shiftL, shiftR)
 import qualified Data.Map.Strict as M
 import Data.Word (Word32, Word64)
-import Emulation.SchedulerPairCatalog (Address (..), FamilyService (..))
+import Emulation.SchedulerPairCatalog (Address (..), FamilyService (..), Semantic (..))
 import Emulation.SchedulerPairModel (Memory)
 import Replacement.RtosOwnFirst.Regions (Domain (..))
 
@@ -107,7 +107,7 @@ inFamilyWindow domain pc = any (\(lo,hi) -> pc>=lo && pc<hi) (familyWindows doma
 
 -- | A family call still open at route end, with its entry and terminal words.
 data Pending = Pending
-  { pendingService :: FamilyService
+  { pendingSemantic :: Semantic
   , pendingDomain :: Domain
   , pendingArguments :: [Word32]
   , pendingBefore :: Memory
@@ -121,8 +121,8 @@ data Pending = Pending
 
 -- | Only a forever timed flag wait is modeled; every other pending family call fails closed.
 checkPendingFamily :: Pending -> Either FamilyRefusal ()
-checkPendingFamily pending = case (pendingService pending, pendingTerminal pending) of
-  (FlagTimedWait, Just terminal) -> foreverTimedWait terminal
+checkPendingFamily pending = case (pendingSemantic pending, pendingTerminal pending) of
+  (FamilySemantic FlagTimedWait, Just terminal) -> foreverTimedWait terminal
   _ -> Left FamilyLifetime
   where
     domain = pendingDomain pending
