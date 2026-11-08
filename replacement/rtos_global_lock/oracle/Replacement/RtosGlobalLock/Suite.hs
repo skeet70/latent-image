@@ -11,6 +11,7 @@ module Replacement.RtosGlobalLock.Suite
 
 import Control.Monad (forM, forM_, unless)
 import Data.Bits (xor)
+import Data.List (isPrefixOf)
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
 import Data.Word (Word32, Word8)
@@ -131,7 +132,21 @@ cases =
   , Case "observe-explicit" Observe explicitWord 0 0 0x5a5a5a5a 0x13 0x5a5a5a5a 0 0x5a5a5a5a
   , Case "observe-masked" Observe 0 0 0x11 0 0x93 0x11 0x11 0
   , Case "observe-arbitrary" Observe 0 0 0xdeadbeef 0 0x13 0xdeadbeef 0xdeadbeef 0
+  , Case "try-free-default-critical" Try 0 0x21 0 0 0x13 0 0x21 0
+  , Case "release-held-default-critical" Release 0 0 0x21 0 0x13 0 0 0
+  , Case "direct-try-free" Try 0x400c0804 0x11 0 0 0x13 0 0x11 0
+  , Case "direct-try-held" Try 0x400c0804 0x12 0x11 0 0x13 refused 0x11 0
+  , Case "direct-try-explicit" Try explicitWord 0x21 0 0 0x13 0 0 0x21
+  , Case "direct-try-free-masked" Try 0x400c0804 0x11 0 0 0x93 0 0x11 0
+  , Case "direct-release-held" Release 0x400c0804 0 0x11 0 0x13 0 0 0
+  , Case "direct-release-free" Release 0x400c0804 0 0 0 0x13 refused 0 0
+  , Case "direct-release-held-fiq" Release 0x400c0804 0 0x11 0 0x53 0 0 0
+  , Case "direct-observe-irq" Observe 0x400c0804 0 0x11 0 0x13 0x11 0x11 0
+  , Case "direct-observe-explicit" Observe explicitWord 0 0 0x5a5a5a5a 0x13 0x5a5a5a5a 0 0x5a5a5a5a
   ]
+
+isDirect :: Case -> Bool
+isDirect one = "direct-" `isPrefixOf` caseName one
 
 lockAddress :: Case -> Word32
 lockAddress one
@@ -271,16 +286,25 @@ caseFor domain role stockImage ownedImage symbols one =
     , caseExpectedMemory =
         [ (RegionId "global", overlay globalBase globalSize [(globalWord, caseFinalDefault one)])
         , (RegionId "explicit", overlay explicitBase explicitSize [(explicitWord, caseFinalExplicit one)])
-        , (RegionId "stack", overlay stackBase stackSize [(stackPointer - 8, seedRegister R11), (stackPointer - 4, exitAddress)])
         ]
+          ++ [ (RegionId "stack", overlay stackBase stackSize [(stackPointer - 8, seedRegister R11), (stackPointer - 4, exitAddress)])
+             | not direct
+             ]
     , caseCp14Identity = Just (if domain == DomainA then 0x4003 else 0x4004)
     , caseKernel = Just (KernelCase plainLimit Nothing (Just 0x8000_1234) (Just 0) (Just 0) [R1, R2, R3, R12, Lr] [])
     }
   where
-    entry = case caseService one of
-      Try -> tryEntry domain
-      Release -> releaseEntry domain
-      Observe -> observeEntry domain
+    entry
+      | direct = helperEntry
+      | otherwise = case caseService one of
+          Try -> tryEntry domain
+          Release -> releaseEntry domain
+          Observe -> observeEntry domain
+    helperEntry = case caseService one of
+      Try -> atomicsBase domain
+      Release -> atomicsBase domain + 0x28
+      Observe -> atomicsBase domain + 0x54
+    direct = isDirect one
     codeRegions = case role of
       Stock ->
         [ mkRegion (RegionId "slots") (GuestAddress (fromIntegral (entryBase domain))) (fromIntegral (entrySize domain)) ReadExecute (slice stockImage (entryBase domain) (entrySize domain))
@@ -354,6 +378,12 @@ checkStockBytes domain loader = do
   unless (slice loader (entryBase domain) (entrySize domain) == assemble stockSlotWords) (Left "stock slot bytes differ")
   unless (slice loader (atomicsBase domain) (atomicsSize domain) == assemble stockAtomicWords) (Left "stock atomic bytes differ")
 
+cohortOf :: Case -> String
+cohortOf one
+  | isDirect one = "conventions"
+  | caseName one `elem` ["try-free-default-critical", "release-held-default-critical"] = "conventions"
+  | otherwise = "root"
+
 runDomain :: FilePath -> FilePath -> FilePath -> Domain -> Image -> Image -> [(Word32, Word32)] -> IO ([CaseRun], [ControlRun])
 runDomain runner cacheRoot directory domain stockImage ownedImage symbols = do
   either error pure (checkStockBytes domain stockImage)
@@ -362,41 +392,46 @@ runDomain runner cacheRoot directory domain stockImage ownedImage symbols = do
         , atomicsBase domain, atomicsBase domain + 0x28, atomicsBase domain + 0x54
         ]
   unless (map fst symbols == origins) (error "owned symbols are not the six stock extents")
-  let stockSpecs = map (caseFor domain Stock stockImage ownedImage symbols) cases
-      ownedSpecs = map (caseFor domain Owned stockImage ownedImage symbols) cases
-  stockBatch <- writeBatch (directory </> "stock") stockSpecs
-  ownedBatch <- writeBatch (directory </> "owned") ownedSpecs
-  (stockReuse, stockRaw) <- cachedObservedBatch cacheRoot runner stockBatch
-  (ownedReuse, ownedRaw) <- cachedObservedBatch cacheRoot runner ownedBatch
-  let reference = M.fromList [(caseIdText ident, observation) | (ident, observation) <- stockRaw]
-      subject = M.fromList [(caseIdText ident, observation) | (ident, observation) <- ownedRaw]
-  results <- forM cases $ \one -> do
-    let ident = caseName one ++ "-" ++ domainLabel domain
-        stock = M.lookup ident reference
-        owned = M.lookup ident subject
-        roleChecks observation = map (check one observation) (checksFor one)
-        errorsFor observation = [message | Left message <- roleChecks observation]
-    let run = CaseRun
-          { caseDomain = domain
-          , runName = caseName one
-          , runChecks = case (stock, owned) of
-              (Just stock', Just owned') ->
-                [("stock: " ++ describe check', either (const False) (const True) (check one stock' check')) | check' <- checksFor one]
-                  ++ [("owned: " ++ describe check', either (const False) (const True) (check one owned' check')) | check' <- checksFor one]
-              _ -> []
-          , runDifferences = case (stock, owned) of
-              (Just stock', Just owned') ->
-                ["stock: " ++ message | message <- errorsFor stock']
-                  ++ ["owned: " ++ message | message <- errorsFor owned']
-                  ++ regionDifferences stock' owned'
-              (Nothing, _) -> ["stock case did not run"]
-              (_, Nothing) -> ["owned case did not run"]
-          , runReuse = (stockReuse, ownedReuse)
-          }
-        controls = maybe [] (controlRuns one) owned
-    pure (run, controls)
-  unless (length stockRaw == length cases && length ownedRaw == length cases) (error "native observations do not cover the current case set")
-  pure (map fst results, concatMap snd results)
+  (rootRuns, rootControls) <- runCohort [one | one <- cases, cohortOf one == "root"] directory
+  (conventionRuns, conventionControls) <- runCohort [one | one <- cases, cohortOf one == "conventions"] (directory </> "conventions")
+  pure (rootRuns ++ conventionRuns, rootControls ++ conventionControls)
+  where
+    runCohort chosen base = do
+      let stockSpecs = map (caseFor domain Stock stockImage ownedImage symbols) chosen
+          ownedSpecs = map (caseFor domain Owned stockImage ownedImage symbols) chosen
+      stockBatch <- writeBatch (base </> "stock") stockSpecs
+      ownedBatch <- writeBatch (base </> "owned") ownedSpecs
+      (stockReuse, stockRaw) <- cachedObservedBatch cacheRoot runner stockBatch
+      (ownedReuse, ownedRaw) <- cachedObservedBatch cacheRoot runner ownedBatch
+      let reference = M.fromList [(caseIdText ident, observation) | (ident, observation) <- stockRaw]
+          subject = M.fromList [(caseIdText ident, observation) | (ident, observation) <- ownedRaw]
+      results <- forM chosen $ \one -> do
+        let ident = caseName one ++ "-" ++ domainLabel domain
+            stock = M.lookup ident reference
+            owned = M.lookup ident subject
+            roleChecks observation = map (check one observation) (checksFor one)
+            errorsFor observation = [message | Left message <- roleChecks observation]
+        let run = CaseRun
+              { caseDomain = domain
+              , runName = caseName one
+              , runChecks = case (stock, owned) of
+                  (Just stock', Just owned') ->
+                    [("stock: " ++ describe check', either (const False) (const True) (check one stock' check')) | check' <- checksFor one]
+                      ++ [("owned: " ++ describe check', either (const False) (const True) (check one owned' check')) | check' <- checksFor one]
+                  _ -> []
+              , runDifferences = case (stock, owned) of
+                  (Just stock', Just owned') ->
+                    ["stock: " ++ message | message <- errorsFor stock']
+                      ++ ["owned: " ++ message | message <- errorsFor owned']
+                      ++ regionDifferences stock' owned'
+                  (Nothing, _) -> ["stock case did not run"]
+                  (_, Nothing) -> ["owned case did not run"]
+              , runReuse = (stockReuse, ownedReuse)
+              }
+            controls = maybe [] (controlRuns one) owned
+        pure (run, controls)
+      unless (length stockRaw == length chosen && length ownedRaw == length chosen) (error "native observations do not cover the current case set")
+      pure (map fst results, concatMap snd results)
 
 controlRuns :: Case -> NativeObservation -> [ControlRun]
 controlRuns one observation =
