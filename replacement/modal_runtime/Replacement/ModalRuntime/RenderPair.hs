@@ -537,8 +537,19 @@ checkRenderInvocationEvidenceReader bounds readers evidence = do
     | otherwise = Right witnesses
 
 osdInputsReader :: [ObservationReader] -> IO (Either String [(T.Text,J.Value)])
-osdInputsReader readers = go M.empty readers []
+osdInputsReader readers = do
+  -- Captures may precede the first observation of both stage-0 buffer addresses.
+  complete <- collectBuffers M.empty readers
+  case complete of
+    Left problem -> pure (Left problem)
+    Right buffers -> go buffers readers []
  where
+  collectBuffers known [] = pure (Right known)
+  collectBuffers known (reader:rest) = do
+    result <- window known reader
+    case result of
+      Left problem -> pure (Left problem)
+      Right (buffers,_,_) -> collectBuffers buffers rest
   go _ [] acc = pure (Right acc)
   go known (reader:rest) acc = do
     result <- window known reader
@@ -645,7 +656,9 @@ renderStackObservations config admission observations = do
         (_,first):rest -> [renderStackBase config + fromIntegral offset | offset <- [0,4..4092], any (\(_,later) -> B.take 4 (B.drop offset first) /= B.take 4 (B.drop offset later)) rest]
         [] -> []
       highWater = safeFirst changed
-  case (lowest,highWater) of (Just floor_,Just mark) -> when (toInteger mark < floor_) (Left "task 33 changed below admitted floor"); _ -> Right ()
+  case highWater of
+    Just mark | mark < renderStackBase config + 64 -> Left "task 33 changed inside existing bottom guard"
+    _ -> Right ()
   pure (StackReport lowest highWater)
  where
   safeFirst (a:_) = Just a

@@ -1,7 +1,7 @@
 {-# LANGUAGE GHC2021 #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Main (main) where
-import Control.Monad (forM_, unless)
+import Control.Monad (foldM, forM_, unless)
 import qualified Data.Aeson as J
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Aeson.Types as J
@@ -50,6 +50,9 @@ emptyBatch = either error id (J.parseEither parseProvenanceBatch (J.object
  where boundary = J.object ["instructions" J..= (0 :: Int),"tick" J..= (0 :: Int)]
 observation :: [Hit] -> Observation
 observation hits = Observation "segment" EngineResident [("render-task-node",le 0x4005c3ac),("render-task-record",record),("render-task-stack",B.replicate 4096 0),("render-osd-front",B.singleton 0)] hits (Just emptyBatch)
+readerFor :: Observation -> ObservationReader
+readerFor (Observation phase residency memoryReads hits provenance) =
+  ObservationReader phase residency memoryReads provenance (\step initial -> pure (foldM step initial hits))
 owned :: [Hit]
 owned = [entry TreeDraw,hit "render-tree-adapter",returned]
 run :: [Hit] -> Either String [Draw]
@@ -263,5 +266,13 @@ main = do
   check "OSD duplicate handoff before increment fails" (not (passes (osdInputs [endingOne [handoff 0x4228c800,handoff 0x4228c800,increment 1]])))
   check "OSD increment without buffer fails" (not (passes (osdInputs [observation [increment 1]])))
   check "OSD buffer replacement fails" (not (passes (osdInputs [osd,endingOne [handoff 0x4228d000,increment 1]])))
+  let beforeDraw = (observation []) {observationPhase = "before"}
+      afterDraw = osd {observationPhase = "after"}
+  earlyFront <- osdInputsReader (map readerFor [beforeDraw,afterDraw])
+  check "earlier captures use the subsequently observed stable buffer pair" (earlyFront == Right
+    [ ("before",J.object ["front_byte" J..= (0 :: Int),"buffers" J..= ([0x423de000,0x4228c800] :: [Word32]),"increments" J..= (0 :: Int)])
+    , ("after",J.object ["front_byte" J..= (0 :: Int),"buffers" J..= ([0x423de000,0x4228c800] :: [Word32]),"increments" J..= (2 :: Int)]) ])
+  bufferDrift <- osdInputsReader (map readerFor [beforeDraw,osd,endingOne [handoff 0x4228d000,increment 1]])
+  check "later buffer replacement refuses streaming front evidence" (not (passes bufferDrift))
   provenanceCases
   putStrLn "render pair synthetic receipts pass"
