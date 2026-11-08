@@ -1,0 +1,12 @@
+[Unit]
+Description=Apply the approved selective Cargo retention policy
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/latent-image/cargo-retention.env
+ExecStart=/usr/bin/sudo -n /usr/local/libexec/latent-image/storage-maintenance retain --policy /etc/latent-image/cargo-retention.json --apply --approved-policy-sha256 ${CARGO_RETENTION_POLICY_SHA256} +RTS -M2G -RTS
+MemoryMax=4G
+MemorySwapMax=0
+OOMPolicy=stop
+TimeoutStartSec=30min
+Nice=10

@@ -89,7 +89,90 @@ systemctl --user enable --now latent-image-cache-gc.timer
 systemctl --user start latent-image-cache-gc.service
 ```
 
-Inspect `systemctl --user status latent-image-cache-gc.timer` for the next run and `journalctl --user -u latent-image-cache-gc.service` for failures. This collects only Bazel's configured disk cache; it does not prune output bases, Cargo targets, Nix staging or research data. The policy is not a hard filesystem quota, and the cache can exceed its target between collections.
+Inspect `systemctl --user status latent-image-cache-gc.timer` for the next run and `journalctl --user -u latent-image-cache-gc.service` for failures. This collects only Bazel's configured disk cache; it does not prune output bases, Cargo targets, Nix staging or research data. The policy is not a hard filesystem quota, and the cache can exceed its target between collections. A separate, disabled-by-default timer applies a reviewed selective retention policy to explicit Cargo roots; [selective Cargo retention](#selective-cargo-retention) covers its policy, privilege and installation.
+
+### Selective Cargo retention
+
+`//build-support:storage-maintenance` can also apply a reviewed retention policy to explicit Cargo targets, deleting whole fingerprint-owned units oldest first until a root returns under its target. This is not the Bazel cache collector above and not the ordinary inventory/plan/apply workflow: it never runs Bazel or `host-build`, never discovers roots from the filesystem, and does not broaden the ordinary binary/example deletion classes. A disabled-by-default [user service](systemd/latent-image-cargo-retention.service) and [six-hour timer](systemd/latent-image-cargo-retention.timer) run it after explicit policy approval.
+
+`storage-maintenance retain --policy FILE` is a read-only metadata preview. `storage-maintenance retain --policy FILE --apply --approved-policy-sha256 HEX +RTS -M2G -RTS` deletes only when `HEX` is the SHA-256 of the policy bytes; a missing or different digest refuses before deletion. Below a root's budget the run hashes no artifacts, deletes nothing and writes no plan or audit. Artifact mtime is the age, not last use and not LRU. Above budget, the tool derives coherent units owned by one fingerprint and removes only complete eligible units, oldest first, until the projected lower target; a unit whose eligible member or control changes, becomes protected or becomes in use is retained whole. Recent, protected and in-use content can keep a root above target: the report says `TargetUnmet` and the tool does not escalate or loop. A contended Cargo guard returns `DeferredBusy` with no deletion. Shared ambiguous incremental state is outside the automatic artifact classes.
+
+The reviewed policy fixes each explicit canonical `cargoTarget`, its `budgetBytes`, `targetBytes` and `minimumAgeSeconds` (`0 <= targetBytes < budgetBytes`), a nonempty `artifactClasses` subset of `LibraryUnits`, `CargoTestUnits` and `BuildScriptUnits`, and an `auditDirectory` outside every managed root. Production roots, classes, budgets, minimum ages and the timer interval are pending explicit owner approval; take them from the reviewed policy file and do not treat this document as approval.
+
+Before a unit's first unlink, the tool checks its live bindings and parent deletion permissions under the managed root owner's credentials. Artifact and success-marker unlinks use those credentials; process inspection and auditing remain privileged. Compiler writers must honor Cargo's guards; shared filesystems and uncoordinated writers are unsupported. Unlinks are not transactional: an unexpected filesystem failure can leave partial approved removals and an interrupted checkpoint. The root-owned audit directory retains that checkpoint for review and one last-complete audit, not an unbounded per-timer history.
+
+#### Installation and approval
+
+Install the binary, policy, environment file and sudoers rule separately from enabling the timer. The service invokes the root-owned installed copy, never `bazel-bin`, and the installed copy's actual Nix loader and library store paths need a root-owned GC root; a copied ELF alone is not pinned.
+
+The policy format is:
+
+```json
+{
+  "policyVersion": 1,
+  "roots": [{
+    "cargoTarget": "/absolute/reviewed/target",
+    "budgetBytes": 107374182400,
+    "targetBytes": 85899345920,
+    "minimumAgeSeconds": 86400
+  }],
+  "artifactClasses": ["LibraryUnits", "CargoTestUnits", "BuildScriptUnits"],
+  "auditDirectory": "/var/lib/latent-image/cargo-retention"
+}
+```
+
+Measure each root's protected working set before choosing budgets; these example values are not approval. `minimumAgeSeconds` must be positive. Run the metadata preview first. Approval of an earlier exact plan does not authorize this policy's future selections.
+
+Build once with `devenv shell -- host-build build --jobs=2 //build-support:storage-maintenance //build-support/retention-qualification:normal-build-measure`. After owner confirmation, an administrator installs the reviewed executable at `/usr/local/libexec/latent-image/storage-maintenance` and the reviewed production policy at `/etc/latent-image/cargo-retention.json`. The directories and both files must be root-owned; use mode 0755 for the executable and 0644 for the policy. Do not point a privileged rule at a user-writable Bazel output, wrapper, policy or environment file.
+
+Inspect `ldd` on the exact executable to be installed. Record each distinct loader/library `/nix/store/<basename>` and retain that list with the installation inputs. Pin those actual runtime roots with a root-owned prefix, for example `sudo -- /nix/var/nix/profiles/default/bin/nix-store --realise --add-root /var/lib/latent-image/cargo-retention-runtime/runtime --indirect ROOT1 ROOT2`. Multiple roots create `runtime`, `runtime-2` and subsequent links. Use the absolute administrator-owned Nix executable for the host. Do not retain an entire compiler or development shell just to keep these libraries alive. Refresh the reviewed runtime list when replacing the executable.
+
+After explicit policy approval, compute its SHA-256 and create the root-owned mode-0644 `/etc/latent-image/cargo-retention.env` containing `CARGO_RETENTION_POLICY_SHA256=APPROVED_SHA256`. Use `sudo visudo -f /etc/sudoers.d/latent-image-cargo-retention` to install the following exact-command rule, replacing `OWNER` and `APPROVED_SHA256` with the owning account and literal 64-digit approved digest. No wildcard arguments:
+
+```sudoers
+Cmnd_Alias LATENT_IMAGE_CARGO_RETENTION = /usr/local/libexec/latent-image/storage-maintenance retain --policy /etc/latent-image/cargo-retention.json --apply --approved-policy-sha256 APPROVED_SHA256 +RTS -M2G -RTS
+Defaults!LATENT_IMAGE_CARGO_RETENTION env_reset, secure_path="/usr/sbin:/usr/bin:/sbin:/bin"
+OWNER ALL=(root) NOPASSWD: NOSETENV: LATENT_IMAGE_CARGO_RETENTION
+```
+
+A policy-byte change needs a new owner approval, environment digest and exact-command grant. Keep the timer disabled through qualification.
+
+#### Normal-build qualification
+
+Use a separately reviewed single-root policy at `/etc/latent-image/cargo-retention-qualification.json` for a supervised trial. Scope the exact privileged rule to that policy's path and digest, not the production two-root policy. The captured build starts a new session: do not rely on a tty-scoped `sudo -v` ticket. An explicitly approved fixed-command grant permits the qualifier's noninteractive invocation; remove the trial grant after the comparison.
+
+The qualifier requires the ordinary Looklab source-capture wrapper and exactly its `CARGO_TARGET_DIR` in the trial policy. It verifies the schema-2 captured-input byte generation around each phase. The normal build includes all three WASM preparations and `cargo test --locked --workspace --features looklab-fit/synth --no-run --jobs 2`, not a narrow crate substitute. A failed prime attempts no deletion.
+
+```sh
+looklab=/absolute/reviewed/looklab
+qualifier="$(realpath bazel-bin/build-support/retention-qualification/normal-build-measure)"
+report="$PWD/private-data/scratch/reclaim/cargo-retention-qualification.json"
+trial=/etc/latent-image/cargo-retention-qualification.json
+approved_trial="$(sha256sum "$trial" | cut -d ' ' -f 1)"
+env CARGO_BUILD_JOBS=2 systemd-run --user --scope --quiet \
+  --unit=latent-image-retention-qualification -p MemoryMax=6G -p MemorySwapMax=0 \
+  nix develop "$looklab" -c "$looklab/tools/build.sh" --lane native -- \
+  "$qualifier" qualify /usr/local/libexec/latent-image/storage-maintenance \
+  "$trial" "$approved_trial" "$report"
+```
+
+Review filesystem availability before/immediately after retention and after the next normal build; the measurements include concurrent activity and deferred filesystem accounting. Wall time includes WASM preparation; `nativeFreshEvents` and `nativeCompiledEvents` describe only native Cargo messages. Acceptance requires actual eviction, no recreated removed path, zero native recompilation and a successful repeat with no further deletion. A below-budget no-op or busy repeat is not qualification. Do not manufacture ages on live artifacts. This matched comparison uses the normal source guard; the periodic retention service does not acquire a project-wide source-generation lock.
+
+#### Activation
+
+Only after successful live build-cost review and explicit standing approval, install the user units and enable the timer:
+
+```sh
+install -Dm0644 build-support/systemd/latent-image-cargo-retention.service "$HOME/.config/systemd/user/latent-image-cargo-retention.service"
+install -Dm0644 build-support/systemd/latent-image-cargo-retention.timer "$HOME/.config/systemd/user/latent-image-cargo-retention.timer"
+systemctl --user daemon-reload
+systemctl --user enable --now latent-image-cargo-retention.timer
+```
+
+Inspect `systemctl --user status latent-image-cargo-retention.timer` and `journalctl --user -u latent-image-cargo-retention.service`. The timer has up to 30 minutes of jitter and can catch up a missed invocation. `TargetUnmet` is a retention result, not permission to delete protected files. Stop future automatic runs with `systemctl --user disable --now latent-image-cargo-retention.timer`; removing an active run's grant does not undo completed removals.
+
+### Research-output admission and observer retention
+
 
 Emulator-slot admission, new `verify-candidate` executions and native suite/case output creation require 100 GiB available on the output filesystem. `XM1_STORAGE_MIN_FREE` accepts a positive byte count with optional `K`, `M`, `G`, `T` or `KiB`/`MiB`/`GiB`/`TiB` suffix. A generic `//emulation:emulator-slot` wrapper checks the current workspace's `private-data` filesystem, or its working directory when none exists; set `XM1_STORAGE_PATH` to the actual output location when it differs. Offline receipt judging and help remain available below the reserve. This is admission control, not a quota or a monitor that terminates existing runs, and it does not cap another project's Cargo output.
 
