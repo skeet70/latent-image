@@ -1,0 +1,70 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+xm1_rust_staticlib(
+    name = "task-records-rust",
+    src = "src/lib.rs",
+    crate_name = "xm1_rtos_task_records",
+    data = [
+        "src/tests.rs",
+        "//replacement/rtos_layout:src/lib.rs",
+        "//replacement/rtos_reservation:src/lib.rs",
+    ],
+)
+
+[
+    xm1_rust_staticlib(
+        name = "task-records-abi-%s-rust" % domain,
+        src = "stage/abi.rs",
+        crate_name = "xm1_rtos_task_records_abi",
+        data = [
+            "src/lib.rs",
+            "src/tests.rs",
+            "//replacement/rtos_layout:src/lib.rs",
+            "//replacement/rtos_reservation:src/lib.rs",
+        ],
+        rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain, "--cfg", "'feature=\"stage\"'"],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    xm1_rust_elf(
+        name = "task-records-%s-native" % domain,
+        rust_staticlib = ":task-records-abi-%s-rust" % domain,
+        entry = "xm1_rtos_task_create",
+        extra_ldflags = [
+            "-Wl,--gc-sections",
+            "-Wl,--orphan-handling=error",
+        ],
+        link_script = "task-records-%s-native.ld" % domain,
+    )
+    for domain in ["a", "b"]
+]
+
+genrule(
+    name = "task-records-host-tests-build",
+    srcs = [
+        "src/lib.rs",
+        "src/tests.rs",
+        "//replacement/rtos_layout:src/lib.rs",
+        "//replacement/rtos_reservation:src/lib.rs",
+    ],
+    outs = ["task-records-host-tests-bin"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location src/lib.rs) -o $@",
+    executable = True,
+    tools = [
+        "@lab_clang//:bin/clang",
+        "@lab_rustc//:bin/rustc",
+    ],
+)
+
+sh_test(
+    name = "task-records-host-tests",
+    size = "small",
+    srcs = ["host-test.sh"],
+    args = ["$(location :task-records-host-tests-build)"],
+    data = [":task-records-host-tests-build"],
+)

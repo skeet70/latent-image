@@ -1,0 +1,247 @@
+{
+  "schema": 1,
+  "stock_calls": [
+    {
+      "address": "0x011662a4",
+      "name": "__rb_render_pane_stock_resume",
+      "source": "replacement/render_adapter/entry.S; pane after push r4-r11,lr"
+    },
+    {
+      "address": "0x01165aa0",
+      "name": "rb_render_call_1165aa0",
+      "source": "replacement/render_adapter/pane.rs; retained pane preparation"
+    },
+    {
+      "address": "0x0111278c",
+      "name": "rb_render_call_111278c",
+      "source": "replacement/render_adapter/pane.rs; aligned grid resource"
+    },
+    {
+      "address": "0x011121d4",
+      "name": "rb_render_call_11121d4",
+      "source": "replacement/render_adapter/pane.rs; label grid resource"
+    },
+    {
+      "address": "0x0116d4e4",
+      "name": "rb_render_call_116d4e4",
+      "source": "replacement/render_adapter/pane.rs; selected detail"
+    },
+    {
+      "address": "0x01112d64",
+      "name": "rb_render_call_1112d64",
+      "source": "replacement/render_adapter/pane.rs; drawing bounds"
+    },
+    {
+      "address": "0x0113f1e8",
+      "name": "rb_render_call_113f1e8",
+      "source": "replacement/render_adapter/pane.rs; title resource"
+    },
+    {
+      "address": "0x00bf9614",
+      "name": "rb_render_call_bf9614",
+      "source": "replacement/render_adapter/pane.rs; tab getter"
+    },
+    {
+      "address": "0x00bf963c",
+      "name": "rb_render_call_bf963c",
+      "source": "replacement/render_adapter/pane.rs; tab getter"
+    },
+    {
+      "address": "0x00bf9660",
+      "name": "rb_render_call_bf9660",
+      "source": "replacement/render_adapter/pane.rs; tab getter"
+    },
+    {
+      "address": "0x00bf9688",
+      "name": "rb_render_call_bf9688",
+      "source": "replacement/render_adapter/pane.rs; tab getter"
+    },
+    {
+      "address": "0x0112eb38",
+      "name": "rb_render_call_112eb38",
+      "source": "replacement/render_adapter/pane.rs; final grid text"
+    },
+    {
+      "address": "0x01163f30",
+      "name": "__rb_render_picker_stock_resume",
+      "source": "replacement/render_adapter/entry.S; picker after push r4-r11,lr"
+    },
+    {
+      "address": "0x01164e20",
+      "name": "__rb_render_tree_stock_resume",
+      "source": "replacement/render_adapter/entry.S; tree after push r4-r11,lr"
+    },
+    {
+      "address": "0x00043550",
+      "name": "rb_render_call_43550",
+      "source": "replacement/render_adapter/picker.rs; stock draw service ABI"
+    },
+    {
+      "address": "0x0061ce1c",
+      "name": "rb_render_call_61ce1c",
+      "source": "replacement/render_adapter/picker.rs; stock draw service ABI"
+    },
+    {
+      "address": "0x0061cd14",
+      "name": "rb_render_call_61cd14",
+      "source": "replacement/render_adapter/picker.rs; stock draw service ABI"
+    },
+    {
+      "address": "0x00bf8f4c",
+      "name": "rb_render_call_bf8f4c",
+      "source": "replacement/render_adapter/picker.rs; stock draw service ABI"
+    },
+    {
+      "address": "0x00bf90f0",
+      "name": "rb_render_call_bf90f0",
+      "source": "replacement/render_adapter/picker.rs; stock draw service ABI"
+    },
+    {
+      "address": "0x01112a6c",
+      "name": "rb_render_call_1112a6c",
+      "source": "replacement/render_adapter/picker.rs; stock draw service ABI"
+    },
+    {
+      "address": "0x011391a0",
+      "name": "rb_render_call_11391a0",
+      "source": "replacement/render_adapter/picker.rs; stock draw service ABI"
+    },
+    {
+      "address": "0x01137d2c",
+      "name": "rb_render_call_1137d2c",
+      "source": "replacement/render_adapter/picker.rs; stock draw service ABI"
+    },
+    {
+      "address": "0x0116f948",
+      "name": "rb_render_call_116f948",
+      "source": "replacement/render_adapter/picker.rs; stock draw service ABI"
+    },
+    {
+      "address": "0x01112e78",
+      "name": "rb_render_call_1112e78",
+      "source": "replacement/render_adapter/picker.rs; stock draw service ABI"
+    },
+    {
+      "address": "0x01112e38",
+      "name": "rb_render_call_1112e38",
+      "source": "replacement/render_adapter/picker.rs; stock draw service ABI"
+    },
+    {
+      "address": "0x01112e58",
+      "name": "rb_render_call_1112e58",
+      "source": "replacement/render_adapter/picker.rs; stock draw service ABI"
+    },
+    {
+      "address": "0x01138a00",
+      "name": "rb_render_call_1138a00",
+      "source": "replacement/render_adapter/picker.rs; stock draw service ABI"
+    },
+    {
+      "address": "0x011130e0",
+      "name": "rb_render_call_11130e0",
+      "source": "replacement/render_adapter/picker.rs; stock draw service ABI"
+    },
+    {
+      "address": "0x01177e10",
+      "name": "rb_render_call_1177e10",
+      "source": "replacement/render_adapter/picker.rs; stock draw service ABI"
+    },
+    {
+      "address": "0x0111258c",
+      "name": "rb_render_call_111258c",
+      "source": "replacement/render_adapter/picker.rs; stock draw service ABI"
+    },
+    {
+      "address": "0x00bf96b0",
+      "name": "rb_render_call_bf96b0",
+      "source": "replacement/render_adapter/picker.rs; stock draw service ABI"
+    },
+    {
+      "address": "0x01139a68",
+      "name": "rb_render_call_1139a68",
+      "source": "replacement/render_adapter/picker.rs; stock draw service ABI"
+    },
+    {
+      "address": "0x01159168",
+      "name": "rb_render_call_1159168",
+      "source": "replacement/render_adapter/picker.rs; stock draw service ABI"
+    },
+    {
+      "address": "0x00bf8e64",
+      "name": "rb_render_call_bf8e64",
+      "source": "replacement/render_adapter/tree.rs; stock draw service ABI"
+    },
+    {
+      "address": "0x00bf8d20",
+      "name": "rb_render_call_bf8d20",
+      "source": "replacement/render_adapter/tree.rs; stock draw service ABI"
+    },
+    {
+      "address": "0x00bf9360",
+      "name": "rb_render_call_bf9360",
+      "source": "replacement/render_adapter/tree.rs; stock draw service ABI"
+    },
+    {
+      "address": "0x01163e04",
+      "name": "rb_render_call_1163e04",
+      "source": "replacement/render_adapter/tree.rs; stock draw service ABI"
+    },
+    {
+      "address": "0x01112da4",
+      "name": "rb_render_call_1112da4",
+      "source": "replacement/render_adapter/tree.rs; stock draw service ABI"
+    },
+    {
+      "address": "0x01112d84",
+      "name": "rb_render_call_1112d84",
+      "source": "replacement/render_adapter/tree.rs; stock draw service ABI"
+    },
+    {
+      "address": "0x0116dce0",
+      "name": "rb_render_call_116dce0",
+      "source": "replacement/render_adapter/tree.rs; stock draw service ABI"
+    },
+    {
+      "address": "0x01163c1c",
+      "name": "rb_render_call_1163c1c",
+      "source": "replacement/render_adapter/tree.rs; stock draw service ABI"
+    },
+    {
+      "address": "0x0116cf50",
+      "name": "rb_render_call_116cf50",
+      "source": "replacement/render_adapter/tree.rs; stock draw service ABI"
+    },
+    {
+      "address": "0x01112ce4",
+      "name": "rb_render_call_1112ce4",
+      "source": "replacement/render_adapter/tree.rs; stock draw service ABI"
+    },
+    {
+      "address": "0x0116e264",
+      "name": "rb_render_call_116e264",
+      "source": "replacement/render_adapter/tree.rs; stock draw service ABI"
+    },
+    {
+      "address": "0x0061ca2c",
+      "name": "rb_render_call_61ca2c",
+      "source": "replacement/render_adapter/mod.rs; read-only live kind getter, stock snapshot readers shim"
+    },
+    {
+      "address": "0x0004da6c",
+      "name": "rb_render_remainder",
+      "source": "replacement/render_adapter/tree.rs; quotient and remainder, remainder in r1"
+    }
+  ],
+  "stock_stores": [
+    {"address":"0x015e64d8","bytes":4,"name":"render side-state kind","source":"replacement/render_adapter/tree.rs; tree-list contract side-state kind = 3"},
+    {"address":"0x015e64e0","bytes":4,"name":"render side-state alternate font","source":"replacement/render_adapter/tree.rs; tree-list contract alternate-font flag"}
+  ],
+  "unproven": [
+    {"function":"rb_render_picker_apply","access":"store","through":{"argument":"r3"},"reason":"writes the caller's 0x44-byte DrawReport supplied as argument 3 by the entry seam"},
+    {"function":"rb_render_tree_apply","access":"store","through":{"argument":"r3"},"reason":"writes the caller's 0x44-byte DrawReport supplied as argument 3 by the entry seam"},
+    {"function":"rb_render_picker_entry","access":"store","through":{"caller-frame":24},"reason":"passes the caller's report pointer at entry SP+24 to the Rust adapter"},
+    {"function":"rb_render_tree_entry","access":"store","through":{"caller-frame":24},"reason":"passes the caller's report pointer at entry SP+24 to the Rust adapter"},
+    {"function":"_RNvNtCsg14nhH9qOYj_4bank14render_adapter8classify","access":"store","through":{"argument":"r0"},"reason":"returns EntryClass into the adapter-owned AAPCS result buffer"},
+    {"function":"_RNvXNtNtCsg14nhH9qOYj_4bank14render_adapter6pickerNtB2_13StockServicesNtNtNtB6_12menu_widgets12value_picker14PickerServices5child","access":"store","through":{"argument":"r0"},"reason":"returns the stock child description into the widget-owned AAPCS result buffer"}
+  ]
+}

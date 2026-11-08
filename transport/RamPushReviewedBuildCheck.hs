@@ -255,7 +255,7 @@ main = do
         expect caseLabel wanted (case unloaded of RamUnloadRefused reason -> Left reason; other -> Right (show other))
         expectAccess access NotAttempted
       stateWith digest entries = RamPushState (manifestDigest reviewed) digest base (allocationSize reviewed) entries
-        (manifestPublications reviewed) callbackStockWord bootstrapBytes 1
+        (manifestPublications reviewed) callbackStockWord bootstrapBytes 1 (manifestBankVariant reviewed)
       shifted (RamPushEntries install rollback status) = RamPushEntries (Address (unAddress install + 4)) rollback status
   unloadCase "state" "ram-unload with an altered runtime_sha256" "installed state runtime hash differs from the pinned builder output"
     (stateWith altered (manifestEntries reviewed))

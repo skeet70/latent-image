@@ -65,6 +65,8 @@ main = do
       -- callee: push {r4-r7, lr}; bl stock; pop {r4-r7, pc}
       callee = [push47lr, bl (base + 24) 0x00d52684, pop47pc]
       functions = [("root", base, 20), ("callee", base + 20, 12)]
+      table = [0xe3500001,0x8a000007,0xe28f1000,0xe791f100,base+24,base+32,sub16,0xe12fff1e,0xe24dd008,0xe12fff1e,0xe12fff1e]
+      tableSymbols = [("table",base,44),("$d",base+16,0),("$a",base+24,0)]
       cases =
         [ ("a frame adds its pushes, its reservation and its deepest callee", depthOf (root ++ callee) functions "root" == Right 44)
         , ("a stock callee adds nothing", depthOf (root ++ callee) functions "callee" == Right 20)
@@ -76,6 +78,10 @@ main = do
         , ("a call into the middle of a function refuses",
             isLeft (depthOf ([push4lr, sub16, bl (base + 8) (base + 24), add16, pop4pc] ++ callee) functions "root"))
         , ("a missing root refuses", isLeft (depthOf (root ++ callee) functions "absent"))
+        , ("a bounded mapped branch table accounts for every arm", depthOf table tableSymbols "table" == Right 24)
+        , ("an unmapped branch table refuses", isLeft (depthOf table [("table",base,44)] "table"))
+        , ("a branch table target outside its function refuses", isLeft (depthOf (take 4 table ++ [base+44] ++ drop 5 table) tableSymbols "table"))
+        , ("a branch table without its unsigned upper bound refuses", isLeft (depthOf (take 1 table ++ [0x3a000007] ++ drop 2 table) tableSymbols "table"))
         ]
       failures = [label | (label, passed) <- cases, not passed]
   mapM_ (putStrLn . ("FAIL: " ++)) failures

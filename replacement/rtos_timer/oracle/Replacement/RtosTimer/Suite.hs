@@ -26,7 +26,7 @@ data Image = Image { imageBase :: Word32, imageBytes :: B.ByteString }
 
 data Role = Stock | Owned deriving (Eq, Show)
 
-data Call = Insert | Remove | Tick deriving (Eq, Show)
+data Call = Initialize | Insert | Remove | Tick deriving (Eq, Show)
 
 data Callback = Receipt | Cancel | Rearm | Switch deriving (Eq, Show)
 
@@ -45,6 +45,8 @@ data Check
   | CpsrControlIs Word32
   | WordIs String Word32 Word32
   | RegionsUnchanged [String]
+  | ConfigurationPublished
+  | ArenaOwned
   deriving (Eq, Show)
 
 data Case = Case
@@ -125,6 +127,20 @@ tickEntry DomainB = 0xd4d4c
 stockBase :: Domain -> (Word32, Word32)
 stockBase DomainA = (0x44ac0, 0x46c)
 stockBase DomainB = (0xd4a80, 0x46c)
+
+initializeAddress, configurationAddress, configurationWordAddress :: Domain -> GuestAddress
+initializeAddress DomainA = GuestAddress 0x44a50
+initializeAddress DomainB = GuestAddress 0xd4a10
+configurationAddress DomainA = GuestAddress 0x400c0818
+configurationAddress DomainB = GuestAddress 0x400c0888
+configurationWordAddress DomainA = GuestAddress 0x400546d4
+configurationWordAddress DomainB = GuestAddress 0x400e4694
+
+wordAddress :: GuestAddress -> Word32
+wordAddress (GuestAddress address) = fromIntegral address
+
+configurationRegion :: RegionId
+configurationRegion = RegionId "configuration"
 
 seedRegister :: Register -> Word32
 seedRegister register = 0xa5a50000 + fromIntegral (fromEnum register)
@@ -209,15 +225,44 @@ callbackAddress one = case caseCallback one of
   Rearm -> stubRearm
   Switch -> stubSwitch
 
-kernelLow, kernelHigh :: Facts -> Domain -> Word32
+kernelLow :: Facts -> Domain -> Word32
 kernelLow facts domain = dfHandlerContext (domainFacts facts domain)
-kernelHigh facts domain = dfTimerHeap (domainFacts facts domain) + 0x5c0 + 0x20
 
-kernelSize :: Facts -> Domain -> Word32
-kernelSize facts domain = kernelHigh facts domain - kernelLow facts domain
+-- | Both roles declare the same kernel extent; the owned role places its nodes in the arena
+-- region, so its stock-heap subrange stays zero and is masked when the roles are compared.
+kernelHigh :: Facts -> Domain -> Role -> Word32
+kernelHigh facts domain _role = dfTimerHeap (domainFacts facts domain) + 0x5c0 + 0x20
 
+kernelSize :: Facts -> Domain -> Role -> Word32
+kernelSize facts domain role = kernelHigh facts domain role - kernelLow facts domain
+
+arenaSpan :: Facts -> Domain -> (Word32, Word32)
+arenaSpan facts domain = (spanStart (arenaGuest (arenaFor facts domain)), spanEnd (arenaGuest (arenaFor facts domain)))
+
+arenaSize :: Facts -> Domain -> Word32
+arenaSize facts domain = let (low, high) = arenaSpan facts domain in high - low
+
+heapBase :: Facts -> Domain -> Role -> Word32
+heapBase facts domain Stock = dfTimerHeap (domainFacts facts domain)
+heapBase facts domain Owned = spanStart (arenaGuest (arenaFor facts domain))
+
+heapNodeRole :: Facts -> Domain -> Role -> Int -> Word32
+heapNodeRole facts domain role index = heapBase facts domain role + fromIntegral (index - 1) * 8
+
+-- | Case checks are written against the stock heap; the owned role shifts only node addresses.
 heapNode :: Facts -> Domain -> Int -> Word32
-heapNode facts domain index = dfTimerHeap (domainFacts facts domain) + fromIntegral (index - 1) * 8
+heapNode facts domain = heapNodeRole facts domain Stock
+
+retargetCheck :: Facts -> Domain -> Role -> Check -> Check
+retargetCheck facts domain role check' = case check' of
+  KernelWord address value -> KernelWord (retarget address) value
+  _ -> check'
+  where
+    stock = dfTimerHeap (domainFacts facts domain)
+    delta = heapBase facts domain role - stock
+    retarget address
+      | address >= stock && address < stock + 0x5c0 + 8 = address + delta
+      | otherwise = address
 
 entryIndexIn :: Case -> Int -> Word32
 entryIndexIn one slot = case lookup slot (caseIndices one) of
@@ -226,8 +271,8 @@ entryIndexIn one slot = case lookup slot (caseIndices one) of
     (index : _) -> index
     [] -> 0
 
-kernelWords :: Facts -> Domain -> Case -> [(Word32, Word32)]
-kernelWords facts domain one =
+kernelWords :: Facts -> Domain -> Role -> Case -> [(Word32, Word32)]
+kernelWords facts domain role one =
   [ (dfHandlerContext d, caseHandler one)
   , (dfCurrentContext d, contextBase)
   , (dfSchedulerLock d, 0)
@@ -235,15 +280,19 @@ kernelWords facts domain one =
   , (dfTimerBase d, caseBase one)
   , (dfTickNow d, caseTick one)
   ]
+  ++ [ (wordAddress (configurationWordAddress domain), wordAddress (configurationAddress domain))
+     | caseCall one == Initialize
+     ]
+  ++ [(dfTickNow d + 4, 0xa5a5a5a5) | caseCall one == Initialize]
   ++ concat
-    [ [(heapNode facts domain index, expiry), (heapNode facts domain index + 4, entryAddress slot)]
+    [ [(heapNodeRole facts domain role index, expiry), (heapNodeRole facts domain role index + 4, entryAddress slot)]
     | (index, (expiry, slot)) <- zip [1 :: Int ..] (caseHeap one)
     ]
   where
     d = domainFacts facts domain
 
-entriesWords :: Facts -> Domain -> Case -> [(Word32, Word32)]
-entriesWords facts domain one =
+entriesWords :: Facts -> Domain -> Role -> Case -> [(Word32, Word32)]
+entriesWords facts domain role one =
   contextWords
     ++ concat
       [ [ (entryAddress slot, entryIndexIn one slot)
@@ -268,7 +317,7 @@ entriesWords facts domain one =
       , (contextBase + contextSchedulerLock c + lockWord (factsLock facts), dfSchedulerLock d)
       , (contextBase + contextSchedulerLock c + lockAcquire (factsLock facts), stubAcquire)
       , (contextBase + contextSchedulerLock c + lockRelease (factsLock facts), stubRelease)
-      , (contextBase + contextTimerHeap c, dfTimerHeap d)
+      , (contextBase + contextTimerHeap c, heapBase facts domain role)
       , (contextBase + contextTimerCount c, dfTimerCount d)
       , (contextBase + contextTimerBase c, dfTimerBase d)
       , (contextBase + contextTickNow c, dfTickNow d)
@@ -308,10 +357,8 @@ overlay base size words' = B.concat (pieces 0 ordered)
     pieces cursor ((offset, value) : rest) =
       B.replicate (offset - cursor) 0 : word32le value : pieces (offset + 4) rest
 
--- | The core cohort is the previously recorded wire; the extra cohort holds the new initial
--- conditions.
 cases :: Facts -> Domain -> [Case]
-cases facts domain = coreCases facts domain ++ extraCases facts domain
+cases facts domain = coreCases facts domain ++ extraCases facts domain ++ initializeCases facts domain
 
 coreCases :: Facts -> Domain -> [Case]
 coreCases facts domain =
@@ -319,7 +366,8 @@ coreCases facts domain =
       [CountIs 1, EntryIndexIs 1 1, KernelWord (heapNode facts domain 1) 10, KernelWord (heapNode facts domain 1 + 4) (entryAddress 1)]
       [] [] [] []
   , Case "insert-second-up" Insert [(10, 1)] 1 2 5 0 10 0 0x13 Receipt Equal
-      [CountIs 2, EntryIndexIs 2 1, EntryIndexIs 1 2, KernelWord (heapNode facts domain 1) 5, KernelWord (heapNode facts domain 2) 10]
+      [CountIs 2, EntryIndexIs 2 1, EntryIndexIs 1 2, KernelWord (heapNode facts domain 1) 5, KernelWord (heapNode facts domain 2) 10
+      , KernelWord (heapNode facts domain 1 + 4) (entryAddress 2), KernelWord (heapNode facts domain 2 + 4) (entryAddress 1)]
       [] [] [] []
   , Case "insert-third-up" Insert [(10, 1), (20, 2)] 2 3 5 0 10 0 0x13 Receipt Equal
       [CountIs 3, EntryIndexIs 3 1, EntryIndexIs 1 3, KernelWord (heapNode facts domain 1) 5, KernelWord (heapNode facts domain 2) 20, KernelWord (heapNode facts domain 3) 10]
@@ -365,12 +413,12 @@ coreCases facts domain =
   , Case "insert-already-linked" Insert [(10, 1)] 1 1 20 0 10 0 0x13 Receipt (Repair "a linked entry is refused without a write")
       []
       [CountIs 2, EntryIndexIs 1 2, KernelWord (heapNode facts domain 2) 20, KernelWord (heapNode facts domain 2 + 4) (entryAddress 1)]
-      [CountIs 1, EntryIndexIs 1 1, RegionsUnchanged ["kernel", "entries"]]
+      [CountIs 1, EntryIndexIs 1 1, RegionsUnchanged ["kernel", "entries", "arena"]]
       [] []
   , Case "insert-full" Insert (replicate 184 (100, 1)) 184 2 200 0 10 0 0x13 Receipt (Fixture "the fixture refuses an insertion above its 184-node bound")
       []
       [CountIs 185, EntryIndexIs 2 185, KernelWord (heapNode facts domain 185) 200]
-      [CountIs 184, EntryIndexIs 2 0, KernelWord (heapNode facts domain 185) 0, RegionsUnchanged ["kernel", "entries"]]
+      [CountIs 184, EntryIndexIs 2 0, KernelWord (heapNode facts domain 185) 0, RegionsUnchanged ["kernel", "entries", "arena"]]
       [] []
   ]
 
@@ -410,6 +458,16 @@ extraCases facts domain =
       [] [(2, 1), (4, 2)]
   ]
 
+initializeCases :: Facts -> Domain -> [Case]
+initializeCases facts domain =
+  [ Case "initialize" Initialize [] 9 1 0 77 99 0 0xd3 Receipt Equal
+      [ CountIs 0, BaseIs 0, TickIs 10
+      , KernelWord (dfTickNow (domainFacts facts domain) + 4) 0
+      , ConfigurationPublished, RegionsUnchanged ["entries"]
+      ]
+      [] [] [] []
+  ]
+
 expectedCpsrControl :: Case -> Word32
 expectedCpsrControl one = case caseCall one of
   Tick
@@ -417,27 +475,29 @@ expectedCpsrControl one = case caseCall one of
     | otherwise -> cpsrControl (caseCpsr one .&. complement 0x80)
   _ -> cpsrControl (caseCpsr one)
 
-checksFor :: Role -> Case -> [Check]
-checksFor role one =
-  [ RegisterIs R4 (seedRegister R4)
-  , RegisterIs R5 (seedRegister R5)
-  , RegisterIs R6 (seedRegister R6)
-  , RegisterIs R7 (seedRegister R7)
-  , RegisterIs R8 (seedRegister R8)
-  , RegisterIs R9 (seedRegister R9)
-  , RegisterIs R10 (seedRegister R10)
-  , RegisterIs R11 (seedRegister R11)
-  , RegisterIs Sp stackPointer
-  , CpsrControlIs (expectedCpsrControl one)
-  ]
-    ++ case caseKind one of
-      Equal -> caseEqualChecks one
-      Repair _ -> if role == Stock then caseStockChecks one else caseOwnedChecks one
-      Fixture _ -> if role == Stock then caseStockChecks one else caseOwnedChecks one
+checksFor :: Facts -> Domain -> Role -> Case -> [Check]
+checksFor facts domain role one =
+  map (retargetCheck facts domain role) (
+    [ RegisterIs R4 (seedRegister R4)
+    , RegisterIs R5 (seedRegister R5)
+    , RegisterIs R6 (seedRegister R6)
+    , RegisterIs R7 (seedRegister R7)
+    , RegisterIs R8 (seedRegister R8)
+    , RegisterIs R9 (seedRegister R9)
+    , RegisterIs R10 (seedRegister R10)
+    , RegisterIs R11 (seedRegister R11)
+    , RegisterIs Sp stackPointer
+    , CpsrControlIs (expectedCpsrControl one)
+    ]
+      ++ case caseKind one of
+        Equal -> caseEqualChecks one
+        Repair _ -> if role == Stock then caseStockChecks one else caseOwnedChecks one
+        Fixture _ -> if role == Stock then caseStockChecks one else caseOwnedChecks one)
+    ++ (if role == Owned && caseCall one == Initialize then [RegionsUnchanged ["arena"], ArenaOwned] else [])
 
 check :: Facts -> Domain -> Case -> Role -> NativeObservation -> Check -> Either String ()
-check facts domain _one _role observation check' = case check' of
-  KernelWord address value -> expectWord "kernel" address value
+check facts domain _one role observation check' = case check' of
+  KernelWord address value -> expectWord (nodeRegion address) address value
   EntryWord slot offset value -> expectWord "entries" (entryAddress slot + offset) value
   CountIs value -> expectWord "kernel" (dfTimerCount (domainFacts facts domain)) value
   BaseIs value -> expectWord "kernel" (dfTimerBase (domainFacts facts domain)) value
@@ -465,6 +525,28 @@ check facts domain _one _role observation check' = case check' of
         | otherwise -> Left ("cpsr control " ++ showHexWord (cpsrControl actual) ++ ", expected " ++ showHexWord (cpsrControl value))
       Nothing -> Left "missing register cpsr"
   WordIs region address value -> expectWord region address value
+  ConfigurationPublished -> do
+    let d = domainFacts facts domain
+        region = regionName configurationRegion
+        base = wordAddress (configurationAddress domain)
+    expectWord region (base + 0x20) (heapBase facts domain role)
+    expectWord region (base + 0x24) (dfTimerCount d)
+    expectWord region (base + 0x28) (dfTimerBase d)
+    expectWord region (base + 0x2c) (dfTickNow d)
+  ArenaOwned -> do
+    let arena = arenaFor facts domain
+        (low, high) = arenaSpan facts domain
+        pool = reservationTaskPool (factsReservation facts)
+        region = regionName configurationRegion
+        base = wordAddress (configurationAddress domain)
+    unless (low == spanStart (arenaGuest arena)
+      && spanSize (arenaGuest arena) == 0x800
+      && spanStart (arenaGuest arena) `mod` 32 == 0
+      && arenaNodeBytes arena <= spanSize (arenaGuest arena)
+      && spanStart (arenaPhysical arena) >= spanEnd (poolAllocatablePhysical pool)
+      && spanStart (poolReserved pool) <= low && high <= spanEnd (poolReserved pool))
+      (Left "owned timer arena leaves its reserved span or capacity")
+    expectWord region (base + 0x20) low
   RegionsUnchanged regions -> do
     forM_ regions $ \region -> do
       actual <- readRegion region
@@ -484,12 +566,19 @@ check facts domain _one _role observation check' = case check' of
       Nothing -> Left ("missing region " ++ region)
       Just bytes -> Right bytes
     initialRegion region = case region of
-      "kernel" -> overlay (kernelLow facts domain) (kernelSize facts domain) (kernelWords facts domain _one)
-      "entries" -> overlay entriesBase entriesSize (entriesWords facts domain _one)
+      "kernel" -> overlay (kernelLow facts domain) (kernelSize facts domain role) (kernelWords facts domain role _one)
+      "entries" -> overlay entriesBase entriesSize (entriesWords facts domain role _one)
+      "arena" -> let (low, size) = (fst (arenaSpan facts domain), arenaSize facts domain)
+                 in overlay low size (kernelWords facts domain role _one)
       _ -> B.empty
     regionBase "kernel" = kernelLow facts domain
     regionBase "entries" = entriesBase
+    regionBase "arena" = fst (arenaSpan facts domain)
+    regionBase region | RegionId region == configurationRegion = wordAddress (configurationAddress domain)
     regionBase _ = 0
+    nodeRegion address
+      | role == Owned, let (low, high) = arenaSpan facts domain, address >= low, address < high = "arena"
+      | otherwise = "kernel"
 
 showHexWord :: Word32 -> String
 showHexWord value = "0x" ++ showHex' value
@@ -500,11 +589,35 @@ showHexWord value = "0x" ++ showHex' value
     go n = let (q, r) = n `divMod` 16 in "0123456789abcdef" !! fromIntegral r : go q
 
 regionDifferences :: Facts -> Domain -> [RegionId] -> NativeObservation -> NativeObservation -> [String]
-regionDifferences _ _ regions stock owned =
+regionDifferences facts domain regions stock owned =
   [ "region " ++ regionName ident ++ " differs"
   | ident <- regions
-  , M.lookup ident (M.fromList (nativeMemory stock)) /= M.lookup ident (M.fromList (nativeMemory owned))
+  , masked stock ident /= masked owned ident
   ]
+  where
+    masked observation ident = fmap (normalize ident) (M.lookup ident (M.fromList (nativeMemory observation)))
+    normalize ident bytes = case regionName ident of
+      "kernel" -> maskRange (fromIntegral (dfTimerHeap d - kernelLow facts domain)) (0x5c0 + 0x20) bytes
+      "entries" -> maskRange (fromIntegral (contextBase + contextTimerHeap c - entriesBase)) 4 bytes
+      _ -> bytes
+    d = domainFacts facts domain
+    c = factsContext facts
+
+relocatedHeapDifferences :: Facts -> Domain -> NativeObservation -> NativeObservation -> [String]
+relocatedHeapDifferences facts domain stock owned =
+  case (lookup (RegionId "kernel") (nativeMemory stock), lookup (RegionId "arena") (nativeMemory owned)) of
+    (Just kernel, Just arena)
+      | offset + 0x5c0 <= B.length kernel ->
+          [ "relocated owned heap differs" | B.take 0x5c0 (B.drop offset kernel) /= B.take 0x5c0 arena ]
+    _ -> ["relocated owned heap region is missing"]
+  where
+    offset = fromIntegral (dfTimerHeap (domainFacts facts domain) - kernelLow facts domain)
+
+-- | Zero a subrange so a role-specific pointer or the relocated node array compares equal.
+maskRange :: Int -> Int -> B.ByteString -> B.ByteString
+maskRange offset size bytes
+  | offset < 0 || size < 0 || offset + size > B.length bytes = bytes
+  | otherwise = B.take offset bytes <> B.replicate size 0 <> B.drop (offset + size) bytes
 
 caseFor :: Facts -> Domain -> Role -> Image -> Image -> [(Word32, Word32)] -> Case -> CaseSpec
 caseFor facts domain role stockImage ownedImage ownedSymbols one =
@@ -517,11 +630,17 @@ caseFor facts domain role stockImage ownedImage ownedSymbols one =
     , caseRegions =
         [ mkRegion (RegionId "code") (GuestAddress (fromIntegral codeBase)) (fromIntegral (B.length codeBytes)) ReadExecute codeBytes
         , mkRegion (RegionId "stubs") (GuestAddress (fromIntegral stubBase)) (fromIntegral stubSize) ReadExecute (stubBytes facts domain one)
-        , mkRegion (RegionId "kernel") (GuestAddress (fromIntegral (kernelLow facts domain))) (fromIntegral (kernelSize facts domain)) ReadWrite (overlay (kernelLow facts domain) (kernelSize facts domain) (kernelWords facts domain one))
-        , mkRegion (RegionId "entries") (GuestAddress (fromIntegral entriesBase)) (fromIntegral entriesSize) ReadWrite (overlay entriesBase entriesSize (entriesWords facts domain one))
+        , mkRegion (RegionId "kernel") (GuestAddress (fromIntegral (kernelLow facts domain))) (fromIntegral (kernelSize facts domain role)) ReadWrite (overlay (kernelLow facts domain) (kernelSize facts domain role) (kernelWords facts domain role one))
+        , mkRegion (RegionId "entries") (GuestAddress (fromIntegral entriesBase)) (fromIntegral entriesSize) ReadWrite (overlay entriesBase entriesSize (entriesWords facts domain role one))
         , mkRegion (RegionId "stack") (GuestAddress (fromIntegral stackBase)) (fromIntegral stackSize) ReadWrite (B.replicate (fromIntegral stackSize) 0)
         , mkRegion (RegionId "exit") (GuestAddress (fromIntegral exitAddress)) 0x10 ReadExecute (B.replicate 0x10 0)
         ]
+          ++ [ mkRegion (RegionId "arena") (GuestAddress (fromIntegral (fst (arenaSpan facts domain)))) (fromIntegral (arenaSize facts domain)) ReadWrite (overlay (fst (arenaSpan facts domain)) (arenaSize facts domain) (kernelWords facts domain role one))
+             | role == Owned
+             ]
+          ++ [ mkRegion configurationRegion (configurationAddress domain) 0x70 ReadWrite (B.replicate 0x70 0xa5)
+             | caseCall one == Initialize
+             ]
     , caseFunctions = [(GuestAddress (fromIntegral address), size) | (address, size) <- functions]
     , caseInitial = initialRegisters
     , caseExpectedStatus = Returned
@@ -539,16 +658,21 @@ caseFor facts domain role stockImage ownedImage ownedSymbols one =
     }
   where
     entry = case caseCall one of
+      Initialize -> wordAddress (initializeAddress domain)
       Insert -> insertEntry domain
       Remove -> removeEntry domain
       Tick -> tickEntry domain
     (codeBase, codeBytes) = case role of
-      Stock -> let (base, size) = stockBase domain in (base, slice (imageBase stockImage) (imageBytes stockImage) base size)
+      Stock ->
+        let (base, size) = stockBase domain
+            (start, extent) = if caseCall one == Initialize then (base - 0x70, size + 0x70) else (base, size)
+         in (start, slice (imageBase stockImage) (imageBytes stockImage) start extent)
       Owned -> (imageBase ownedImage, imageBytes ownedImage)
     functions = case role of
       Stock ->
         let (base, _) = stockBase domain
          in [(base, 0xc4), (base + 0xc4, 0xdc), (insertEntry domain, 0x48), (removeEntry domain, 0xe4), (tickEntry domain, 0x1a0), (stubBase, stubSize)]
+              ++ [(wordAddress (initializeAddress domain), 0x70) | caseCall one == Initialize]
       Owned -> ownedSymbols ++ [(stubBase, stubSize)]
     initialRegisters =
       [ (register, case lookup register arguments of
@@ -558,6 +682,7 @@ caseFor facts domain role stockImage ownedImage ownedSymbols one =
       ]
         ++ [(Sp, stackPointer), (Lr, exitAddress), (Cpsr, caseCpsr one)]
     arguments = case caseCall one of
+      Initialize -> []
       Insert -> [(R0, contextBase), (R1, entryAddress (caseSlot one)), (R2, caseExpiry one)]
       Remove -> [(R0, contextBase), (R1, entryAddress (caseSlot one))]
       Tick -> [(R0, 0), (R1, 0), (R2, 0)]
@@ -578,14 +703,17 @@ parseOwnedSymbols path = do
   pure (concatMap row rows)
   where
     row line = case words line of
-      [a, z, _, _] -> case (parseWord32 a, parseWord32 z) of
+      [a, z, kind, _] -> case (parseWord32 a, parseWord32 z) of
         (Just address, Just size)
-          | size > 0 && address >= 0x44c60 && address < stubBase -> [(address, size)]
+          | kind `elem` ["T", "t"], size > 0
+          , (address >= 0x44a50 && address < 0x44f2c && size <= 0x44f2c - address)
+            || (address >= 0xd4a10 && address < 0xd4eec && size <= 0xd4eec - address) -> [(address, size)]
         _ -> []
       _ -> []
 
 cohortOf :: Case -> String
 cohortOf one = case caseName one of
+  "initialize" -> "initialize"
   "insert-second-fiq" -> "extra"
   "tick-ordered-fiq" -> "extra"
   "tick-masked-fiq" -> "extra"
@@ -597,7 +725,8 @@ runDomain runner cacheRoot directory facts domain stockImage ownedImage ownedSym
   let selected = cases facts domain
   (coreRuns, coreControls) <- runCohort "core" (filter ((== "core") . cohortOf) selected) directory
   (extraRuns, extraControls) <- runCohort "extra" (filter ((== "extra") . cohortOf) selected) (directory </> "extra")
-  pure (coreRuns ++ extraRuns, coreControls ++ extraControls)
+  (initializeRuns, initializeControls) <- runCohort "initialize" (filter ((== "initialize") . cohortOf) selected) (directory </> "initialize")
+  pure (coreRuns ++ extraRuns ++ initializeRuns, coreControls ++ extraControls ++ initializeControls)
   where
     runCohort cohort chosen base = do
       let stockSpecs = map (caseFor facts domain Stock stockImage ownedImage ownedSymbols) chosen
@@ -612,13 +741,14 @@ runDomain runner cacheRoot directory facts domain stockImage ownedImage ownedSym
         let ident = caseName one ++ "-" ++ domainLabel domain
             stock = M.lookup ident reference
             owned = M.lookup ident subject
-            roleChecks role observation = map (check facts domain one role observation) (checksFor role one)
+            roleChecks role observation = map (check facts domain one role observation) (checksFor facts domain role one)
             statusCheck observation = case nativeStatus observation of
               Returned -> Right ()
               status -> Left ("status " ++ runnerStatusLabel status)
             errorsFor role observation = [message | Left message <- statusCheck observation : roleChecks role observation]
             equalDifferences stock' owned' = case caseKind one of
               Equal -> regionDifferences facts domain [RegionId "kernel", RegionId "entries"] stock' owned'
+                ++ relocatedHeapDifferences facts domain stock' owned'
               _ -> []
         let run = CaseRun
               { caseDomain = domain
@@ -628,10 +758,10 @@ runDomain runner cacheRoot directory facts domain stockImage ownedImage ownedSym
               , runChecks = case (stock, owned) of
                   (Just stock', Just owned') ->
                     [ ("stock: " ++ describe check', either (const False) (const True) (check facts domain one Stock stock' check'))
-                    | check' <- checksFor Stock one
+                    | check' <- checksFor facts domain Stock one
                     ]
                       ++ [ ("owned: " ++ describe check', either (const False) (const True) (check facts domain one Owned owned' check'))
-                         | check' <- checksFor Owned one
+                         | check' <- checksFor facts domain Owned one
                          ]
                   _ -> []
               , runDifferences = case (stock, owned) of
@@ -656,8 +786,24 @@ controlRuns facts domain cohort one observation =
   [ ControlRun cohort "cpsr-i" (caseName one) (refused (CpsrControlIs expected) (mutateCpsr (`xor` 0x80) observation))
   , ControlRun cohort "cpsr-f" (caseName one) (refused (CpsrControlIs expected) (mutateCpsr (`xor` 0x40) observation))
   ]
+    ++ [ ControlRun cohort "configuration-publication" (caseName one) (refused ConfigurationPublished (mutateConfiguration observation))
+       | caseCall one == Initialize
+       ]
+    ++ [ ControlRun cohort name (caseName one) (refused ArenaOwned (mutateConfigurationWord value observation))
+       | caseCall one == Initialize
+       , (name, value) <-
+           [ ("owned-stock-heap", dfTimerHeap d)
+           , ("owned-arena-alias", spanStart (arenaGuest (arenaFor facts other)))
+           , ("owned-arena-boundary", spanStart (arenaGuest (arenaFor facts domain)) + arenaSize facts domain)
+           , ("owned-arena-capacity", spanStart (arenaGuest (arenaFor facts domain)) + 0x240)
+           ]
+       ]
     ++ [ ControlRun cohort ("unchanged-" ++ region) (caseName one) (refused (RegionsUnchanged [region]) (mutateRegion region observation))
        | region <- declaredRegions
+       ]
+    ++ [ ControlRun cohort "relocated-heap-entry" (caseName one)
+           (refused (KernelWord (heapNodeRole facts domain Owned 1 + 4) (entryAddress 2)) (mutateArenaWord (heapNodeRole facts domain Owned 1 + 4) 0 observation))
+       | caseName one == "insert-second-up"
        ]
   where
     expected = expectedCpsrControl one
@@ -665,7 +811,32 @@ controlRuns facts domain cohort one observation =
       Left _ -> True
       Right () -> False
     mutateCpsr f observed = observed {nativeRegisters = M.adjust f Cpsr (nativeRegisters observed)}
-    declaredRegions = [region | RegionsUnchanged regions <- checksFor Owned one, region <- regions]
+    declaredRegions = [region | RegionsUnchanged regions <- checksFor facts domain Owned one, region <- regions]
+    mutateConfiguration observed =
+      observed
+        { nativeMemory =
+            [ (ident, if ident == configurationRegion then B.take 0x20 bytes <> flipHead (B.drop 0x20 bytes) else bytes)
+            | (ident, bytes) <- nativeMemory observed
+            ]
+        }
+    mutateArenaWord address value observed =
+      let (low, _) = arenaSpan facts domain
+          offset = fromIntegral (address - low)
+      in observed
+        { nativeMemory =
+            [ (ident, if regionName ident == "arena" then B.take offset bytes <> word32le value <> B.drop (offset + 4) bytes else bytes)
+            | (ident, bytes) <- nativeMemory observed
+            ]
+        }
+    mutateConfigurationWord value observed =
+      observed
+        { nativeMemory =
+            [ (ident, if ident == configurationRegion then B.take 0x20 bytes <> word32le value <> B.drop 0x24 bytes else bytes)
+            | (ident, bytes) <- nativeMemory observed
+            ]
+        }
+    d = domainFacts facts domain
+    other = case domain of DomainA -> DomainB; DomainB -> DomainA
     mutateRegion region observed =
       observed
         { nativeMemory =
@@ -691,3 +862,5 @@ describe check' = case check' of
   CpsrControlIs value -> "cpsr control = " ++ showHexWord (cpsrControl value)
   WordIs region address value -> region ++ " " ++ showHexWord address ++ " = " ++ showHexWord value
   RegionsUnchanged regions -> "unchanged " ++ unwords regions
+  ConfigurationPublished -> "timer configuration pointers"
+  ArenaOwned -> "owned timer arena publication"

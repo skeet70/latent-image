@@ -15,7 +15,7 @@ import Emulation.CheckpointKey (CheckpointRoute (..), Interpreter (..), RouteKey
 import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
 import Emulation.LiveSettings (describeLiveSettingChange, liveSettingChange, readLiveSettings)
 import Emulation.Sha256 (sha256File, sha256Hex)
-import Emulation.UiTrajectory (ReadAddress (..), Segment (..), Step (..), TraceSite (..), Trajectories (..), decodeTrajectories, instructionPinnedPhases)
+import Emulation.UiTrajectory (ReadAddress (..), Segment (..), Step (..), StepCompletion (..), TraceSite (..), Trajectories (..), decodeTrajectories, instructionPinnedPhases)
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), Python (..), StagedRuntime (..), StockOriginal (..), Workspace (..), require, resolve, stageViewerRuntime, stagedFirmwarePath)
 import qualified Emulation.ViewerRuntime as Runtime
 import FujiModPaths (fujimodRamPushBridge, fujimodRun)
@@ -182,6 +182,8 @@ triggerSynthetic (SyntheticEntry entry) (Address ringAddress) clock api director
 
 runTrajectory :: Emulator -> [Segment] -> IO ([Value], Bool)
 runTrajectory emulator segments = do
+  require (all ((== PacketCompletion) . stepCompletion) (concatMap segmentSteps segments))
+    "AF-ring trajectories do not admit presented-frame completion"
   results <- forM segments $ \segment -> do
     mode <- traverse (emulatorModeDial emulator) (segmentModeDial segment)
     steps <- forM (segmentSteps segment) $ \step -> do

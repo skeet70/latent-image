@@ -1,0 +1,283 @@
+{
+  "source_commit": "b16a244a",
+  "outputs": [
+    [
+      "stock",
+      "picker-15",
+      "f7ad3f8501bb33ec1c36d5a0d0abb62ef8a2c288e28c46ded01115ac506c15e5"
+    ],
+    [
+      "stock",
+      "picker-26",
+      "0901a93a7dc6fcd5b150b6e03ee86e244bc7795a4e896aa82bd734f01a84078f"
+    ],
+    [
+      "stock",
+      "picker-36",
+      "f3a6f58a7091aa81348c091a0f00a74c15e0a60818763bf596cca0ab7748526f"
+    ],
+    [
+      "stock",
+      "picker-163",
+      "830ca507b27b2b6e239dc0279edd0cde1f2e0f98c83903c5b3eee34434fdf254"
+    ],
+    [
+      "stock",
+      "picker-211",
+      "fd99a87161156b9f824253a0ed02b6fb8dd49d05484e39b2a2e0f325574c4f15"
+    ],
+    [
+      "stock",
+      "picker-214",
+      "697589fa0dcc0aa85c6dffce7a736d1e9fd739faa77385d6521641c09af3770b"
+    ],
+    [
+      "stock",
+      "picker-239",
+      "3793fbd760a8d737f01cab580c3fe2ac0127bc030d7a625fe247f59286549626"
+    ],
+    [
+      "stock",
+      "picker-250",
+      "86925fa6df10d492de1953d6858afb47287ff36d1e20426325b10c33190accb9"
+    ],
+    [
+      "stock",
+      "picker-260",
+      "65337e0e0f18d5bc66df8c6e4971b5a5a04dfe6d56e7e5fd66c0a3db01ad3146"
+    ],
+    [
+      "stock",
+      "picker-270",
+      "f95544abd67d47eb2b8061a5308db8ad57b30581bc3e05fae0e1eb2c6104b8c6"
+    ],
+    [
+      "stock",
+      "picker-271",
+      "5b9b43b45ead58060467ca2310f46c1cba34296fcb03acd835e81df0b1336d91"
+    ],
+    [
+      "stock",
+      "picker-272",
+      "bd1169f4b24b1803eefe240fb80750d700ee84c21b2acd1f4c7bb1c63c114593"
+    ],
+    [
+      "stock",
+      "picker-273",
+      "4d3edee73733d66e8da541baaa7593916725c97c84ff7ff4c23d5d6fe7db92be"
+    ],
+    [
+      "stock",
+      "picker-297",
+      "6946bd8642d906973ec7ae8b581e319a7860c5ac63de4342f79fce2c8a05cd9e"
+    ],
+    [
+      "stock",
+      "picker-312",
+      "05e244bedacec99a1057b12e0652b8fee573de060c311422ecb4323e6120788d"
+    ],
+    [
+      "stock",
+      "picker-314",
+      "81251f45b2946dd060e7f2b371795cafddd59de08af9e8f97d7cbb83809947e1"
+    ],
+    [
+      "stock",
+      "picker-320",
+      "2aba2679ed9413fd79c08c2dd4c327999b279a7314e22f9824ab0ac4cfa31adc"
+    ],
+    [
+      "stock",
+      "picker-450",
+      "5cd1f851e59d5e9dba08ee999c39cb5b29f79528077baeea88e3f8744e01f786"
+    ],
+    [
+      "stock",
+      "picker-488",
+      "9dc4982166b4c77835c281d6992bb978d6b02f19739ddbca85d97f61ac35ee5e"
+    ],
+    [
+      "owned",
+      "picker-15",
+      "a8f48943750b497a5dabc1f2eee1bf29f1106de230b3f13eb5058bc1354dc6c5"
+    ],
+    [
+      "owned",
+      "picker-26",
+      "6397385f996833dae795886369e90e50cfc78ec8d8526b9456688e67df7eb252"
+    ],
+    [
+      "owned",
+      "picker-36",
+      "bd32e1bebe1aa6c45d916320c0107c5e46917e70be8c95bb9582f3d33233fa61"
+    ],
+    [
+      "owned",
+      "picker-163",
+      "44b3bbfdd1ee9b162cefe976d4e1136c4d2c9d94f8d6bb887c9901774e080781"
+    ],
+    [
+      "owned",
+      "picker-211",
+      "8a56da51547ee21ef5597386b306a99572bbdb2787ef8a33a8ff5a67e7a0e7ab"
+    ],
+    [
+      "owned",
+      "picker-214",
+      "f1ccff791290b8dfcfd5c9ce82ad8688f011c3e06a867ecbfe0470ea16927457"
+    ],
+    [
+      "owned",
+      "picker-239",
+      "6d104b564dca9186cef83f3a5fb974d0dbd10b9508c15a2fbed44e52e789792c"
+    ],
+    [
+      "owned",
+      "picker-250",
+      "3ef8a229fba0e4563b4dd8fe3cc05c10f0d47913d0cd265169e08d8de8a60654"
+    ],
+    [
+      "owned",
+      "picker-260",
+      "1e7500c1190b8238d67dd2816aab3250a33ca5fbdbb2afa83a4bed29ca77100f"
+    ],
+    [
+      "owned",
+      "picker-270",
+      "b7ae3b350702da0a7775eeb0d2868f23f35f2c6057b35c1f6501c094e7ca1182"
+    ],
+    [
+      "owned",
+      "picker-271",
+      "a17a637c4f8ac8e80b2b3ee3dc5fe5dcc0eaa013657db0772e7681c1109630bf"
+    ],
+    [
+      "owned",
+      "picker-272",
+      "d420fcdfb438aeff1d8429da8de5421ab6400a0da340815bf49b382d46e0cae0"
+    ],
+    [
+      "owned",
+      "picker-273",
+      "dbff131c70773ec27bd9a1068061ff5df5e61d9e91b0c8a5a9fec44e60f6e3ce"
+    ],
+    [
+      "owned",
+      "picker-297",
+      "6b46ad0a23645870a71a3cf88e2516a46e877ad3a7420247e50bd525f243eb0f"
+    ],
+    [
+      "owned",
+      "picker-312",
+      "21a90d426bdda57bdb53fa6626b926a194885fab1b053b894f26accdf423096b"
+    ],
+    [
+      "owned",
+      "picker-314",
+      "fb99b5d9ae09bc2689561e6fc0da17bccd9e7ba14bcb8bc4999443b9e7489555"
+    ],
+    [
+      "owned",
+      "picker-320",
+      "8e7da85065676e0b4e7744075bb88a93162e49ca3533e453416b26c75095d0e7"
+    ],
+    [
+      "owned",
+      "picker-450",
+      "386462e39481482b8051dae2135cca09dafa2d8debd2b1b853a1f1033f0e76ee"
+    ],
+    [
+      "owned",
+      "picker-488",
+      "dab583f37a4527e9f187a488b9344cac87ed3748f41c934e3f7ced74e95b3e39"
+    ]
+  ],
+  "oracle_graph": [
+    {
+      "graph": {
+        "nodes": [
+          {
+            "id": 0,
+            "menu": {
+              "menu_id": 67,
+              "setting_id": 56,
+              "cursor": 0
+            },
+            "states": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000400"
+          },
+          {
+            "id": 1,
+            "menu": {
+              "menu_id": 1,
+              "setting_id": 5,
+              "cursor": 2
+            },
+            "states": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+          }
+        ],
+        "edges": [
+          {
+            "from": 0,
+            "key": "ok",
+            "to": 1
+          },
+          {
+            "from": 1,
+            "key": "back",
+            "to": 0
+          }
+        ]
+      }
+    }
+  ],
+  "oracle_config": [
+    {
+      "path": [
+        "ok"
+      ],
+      "key": "back"
+    }
+  ],
+  "oracles": [
+    [
+      "stock",
+      "plain",
+      "6357e1cc6c174a0850546b1e0ac52a9d41ebbb3ff79031930d29f2629acffe19"
+    ],
+    [
+      "stock",
+      "landing",
+      "4c78795a1bcf5a323f5828323d263236c7611be7090acef7ad2957136f58ebc1"
+    ],
+    [
+      "stock",
+      "sample",
+      "71d7df76f8ebb5c82c5d7863fab34011c8251325288967837c907de47e83a59a"
+    ],
+    [
+      "stock",
+      "both",
+      "7b4634a7960971036c7e300a0881785e5d747882ea36b992502a14fb94039613"
+    ],
+    [
+      "owned",
+      "plain",
+      "8affbacedcf4983414e22983c4cfefbb9b2e0408fa234d1ef2fc11b07c3c2f0b"
+    ],
+    [
+      "owned",
+      "landing",
+      "5c5def7d1804adf15aaafd88e0348bab385138ffea64cccf7f222f219852afb0"
+    ],
+    [
+      "owned",
+      "sample",
+      "b5e446f05a640219352a37a42825833b6beda56341745f88c27d65d0f81fe21b"
+    ],
+    [
+      "owned",
+      "both",
+      "5a317b5dde23892c7ab5789083c2575a33c9b3dd05ceeacd28148c6aa5e91605"
+    ]
+  ]
+}

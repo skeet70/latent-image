@@ -8,14 +8,16 @@ module Main (main) where
 
 import Control.Exception (SomeException, try)
 import Control.Monad (unless)
-import Data.Aeson (object, (.=))
+import Data.Aeson (encode, object, (.=))
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Lazy as BL
 import Data.Either (isLeft)
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Emulation.ObservationStream
   ( ObservationRef (..), TraceHitRef (..), TraceHitSnapshot (..), TraceHitSource (..)
   , VerifiedObservation (..)
-  , decodeObservationRef, foldTraceHitSources, loadVerifiedObservation, resolveReference
+  , countObservationDrawers, decodeObservationRef, foldTraceHitSources
+  , loadReceiptObservations, loadVerifiedObservation, resolveReference
   , rowNext, withRowReader )
 import Emulation.Sha256 (sha256, sha256Hex)
 import EmulatorUsb (TraceHit (..), TraceHitCursor (..), TraceHitLimit (..), TraceHitPage (..))
@@ -57,6 +59,7 @@ main = do
   unless (isLeft (changed :: Either SomeException [TraceHit])) (putStrLn "FAIL: a changed page total was accepted" >> exitFailure)
   stickySidecar
   verifiedDocument
+  receiptBinding
   putStrLn "observation-stream interval/snapshot and verified-document counterexamples passed"
 
 stickySidecar :: IO ()
@@ -130,4 +133,35 @@ verifiedDocument = do
   refused "a missing document" (ObservationRef "replay" "absent.json" (sha256 document) (fromIntegral size) hits)
   unless (resolveReference directory "obs.json" == Right path) (putStrLn "FAIL: plain reference path did not resolve" >> exitFailure)
   unless (isLeft (resolveReference directory "sub/obs.json" :: Either String FilePath)) (putStrLn "FAIL: nested reference path resolved" >> exitFailure)
+  removeDirectoryRecursive directory
+
+receiptBinding :: IO ()
+receiptBinding = do
+  root <- getTemporaryDirectory
+  let directory = root </> "observation-stream-receipt"
+  createDirectoryIfMissing True directory
+  let sidecar = "{\"site\":\"render-tree-entry\"}\n{\"site\":\"timeline\"}\n{\"site\":\"render-picker-entry\"}\n"
+      hitRef = object ["schema" .= (1 :: Int), "path" .= ("rows.jsonl" :: FilePath), "sha256" .= sha256Hex (sha256 sidecar), "count" .= (3 :: Int)]
+      document = BL.toStrict (encode (object ["phase" .= ("replay" :: String), "trace_hits" .= hitRef]))
+      reference = object
+        [ "phase" .= ("replay" :: String), "path" .= ("obs.json" :: FilePath)
+        , "sha256" .= sha256Hex (sha256 document), "bytes" .= (fromIntegral (B.length document) :: Integer)
+        , "trace_hits" .= hitRef ]
+      receipt = object ["observations" .= [reference]]
+  B.writeFile (directory </> "rows.jsonl") sidecar
+  B.writeFile (directory </> "obs.json") document
+  loaded <- loadReceiptObservations directory receipt
+  case loaded of
+    Left problem -> putStrLn ("FAIL: streamed receipt observation refused: " ++ problem) >> exitFailure
+    Right [verified] -> do
+      count <- countObservationDrawers verified
+      unless (count == Right 2) (putStrLn ("FAIL: streamed drawer count " ++ show count) >> exitFailure)
+    Right _ -> putStrLn "FAIL: receipt observation count differs" >> exitFailure
+  B.appendFile (directory </> "rows.jsonl") "{\"site\":\"render-tree-entry\"}\n"
+  tampered <- loadReceiptObservations directory receipt
+  unless (isLeft tampered) (putStrLn "FAIL: changed sidecar was accepted" >> exitFailure)
+  B.writeFile (directory </> "rows.jsonl") sidecar
+  B.appendFile (directory </> "obs.json") "\n"
+  tamperedDocument <- loadReceiptObservations directory receipt
+  unless (isLeft tamperedDocument) (putStrLn "FAIL: changed observation document was accepted" >> exitFailure)
   removeDirectoryRecursive directory

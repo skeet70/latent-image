@@ -29,7 +29,7 @@ import System.Posix.Files (setFileMode)
 import System.Posix.Temp (mkdtemp)
 import Text.Read (readMaybe)
 import Emulation.CheckpointKey (CheckpointRoute (..), Interpreter (..), RouteKey (..), UnicornLibrary (..), guestState, hostProcedure, procedureHex, routeKey, routeKeyHex)
-import Emulation.Sha256 (sha256, sha256File, sha256Hex)
+import Emulation.Sha256 (parseSha256Hex, sha256, sha256File, sha256Hex)
 import Emulation.SegmentReceipt (SegmentReceipt (..), SegmentResult (..), elapsedSeconds, segmentName, segmentNameText)
 import Emulation.Symbols (SymbolTable, parseSymbolTable, resolveSymbol)
 import Emulation.PreservationObservation
@@ -51,7 +51,7 @@ import Emulation.ViewerRuntime (FixedSceneFrame (..), fixedSceneFrameArguments)
 import EmulatorUsb
 import FujiAF.RamPush
 import FujiAF.Transport (ensurePrivateDirectory, writePrivateBytes)
-import Xm1UnreviewedRelink (runUnreviewedRamPush, runUnreviewedRamUnload, withUnreviewedBuild, withUnreviewedBuildArchive)
+import Xm1UnreviewedRelink (runUnreviewedRamPush, runUnreviewedRamUnload, withPrelinkedBuild, withUnreviewedBuild, withUnreviewedBuildArchive)
 import RamPushReviewedPins (reviewedContract)
 import RamPushProcedure (procedureSourcesDigest)
 import RamPushCcReviewedPins (reviewedCcContract)
@@ -772,7 +772,11 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
         | otherwise = case relinkMode settings of
             ReviewedRelink -> withPinnedReviewedBuild (payloadContract selected) selected base action
             UnreviewedRelink policy -> case modalOwnedPackage settings of
-              Just owned -> withUnreviewedBuildArchive (ownedArchivePath owned) selected policy base action
+              Just owned -> case prelinkedModalBuild settings of
+                Just directory -> do
+                  archive <- either (ioError . userError) pure (parseSha256Hex (ownedArchiveDigest owned))
+                  withPrelinkedBuild directory archive selected policy base action
+                Nothing -> withUnreviewedBuildArchive (ownedArchivePath owned) selected policy base action
               Nothing -> withUnreviewedBuild selected policy base action
       pushWith observer retained
         | experimental = runRamPushWith xm1PeerCacheAvailability observer (retainedAllocation retained)

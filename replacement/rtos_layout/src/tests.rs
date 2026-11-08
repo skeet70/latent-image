@@ -147,8 +147,44 @@ fn task_fields_are_the_stock_offsets() {
 #[test]
 fn task_definition_fields_are_the_stock_offsets() {
     let d = TaskDefinition(GuestAddress(0x0070_0000));
-    assert_eq!(d.priority().0, 0x0070_000c);
+    assert_eq!(
+        [
+            d.attributes(),
+            d.argument(),
+            d.entry(),
+            d.priority(),
+            d.stack_size(),
+            d.stack(),
+            d.exception_attributes(),
+            d.exception_handler(),
+            d.slot(),
+            d.exists(),
+        ]
+        .map(|a| a.0),
+        [
+            0x0070_0000, 0x0070_0004, 0x0070_0008, 0x0070_000c, 0x0070_0010, 0x0070_0014, 0x0070_0018, 0x0070_001c,
+            0x0070_0020, 0x0070_0024,
+        ]
+    );
     assert_eq!(d.initial_sp_terms().map(|a| a.0), [0x0070_0010, 0x0070_0014]);
+    assert_eq!(TaskDefinition::SIZE, 0x28);
+}
+
+#[test]
+fn task_tables_are_the_stock_addresses() {
+    let a = Domain::A.words();
+    assert_eq!(
+        [a.task_definitions, a.task_slot_ids, a.default_stack_word.address()].map(|a| a.0),
+        [0x4005_beac, 0x4006_22d4, 0x4006_2c50]
+    );
+    let b = Domain::B.words();
+    assert_eq!(
+        [b.task_definitions, b.task_slot_ids, b.default_stack_word.address()].map(|a| a.0),
+        [0x400e_be6c, 0x400f_2294, 0x400f_2c10]
+    );
+    let slot = TaskSlot::new(120).unwrap();
+    assert_eq!(a.task_definition(slot).0 .0, 0x4005_beac + 119 * 0x28);
+    assert_eq!(a.task_creation_id(slot).word().0, 0x4006_22d4 + 119 * 4);
 }
 
 #[test]
@@ -386,4 +422,31 @@ fn fixed_pool_slot_accessors_stride_from_the_table() {
     assert_eq!(FixedPoolSlot::new(122, 122).map(FixedPoolSlot::get), Some(122));
     assert_eq!(FixedPoolSlot::new(123, 122), None);
     assert_eq!(FixedPoolSlot::new(1, 0), None);
+}
+
+#[test]
+fn task_pool_reserves_the_timer_arena_tail() {
+    assert_eq!(TASK_POOL.guest.start(), 0x40a1_0200);
+    assert_eq!(TASK_POOL.guest.end(), 0x40a5_b200);
+    assert_eq!(TASK_POOL.allocatable.end(), 0x40a5_a200);
+    assert_eq!(TASK_POOL.allocatable_bytes(), 0x4a000);
+    assert_eq!(TASK_POOL.reserved.len(), 0x1000);
+    assert_eq!(TASK_POOL.physical().start(), 0xa1_0200);
+    assert_eq!(TASK_POOL.physical().end(), 0xa5_b200);
+}
+
+#[test]
+fn timer_arenas_are_aligned_disjoint_and_fit_their_capacity() {
+    let a = Domain::A.timer_arena();
+    let b = Domain::B.timer_arena();
+    assert_eq!((a.guest.start(), a.guest.end()), (0x40a5_a200, 0x40a5_aa00));
+    assert_eq!((b.guest.start(), b.guest.end()), (0x40a5_aa00, 0x40a5_b200));
+    assert_eq!((a.physical.start(), a.physical.end()), (0xa5_a200, 0xa5_aa00));
+    assert!(a.guest.aligned(32) && b.guest.aligned(32));
+    assert!(!a.guest.overlaps(b.guest));
+    assert!(TASK_POOL.reserved.contains(a.guest) && TASK_POOL.reserved.contains(b.guest));
+    assert_eq!(a.node_bytes(), 0x5c0);
+    assert!(a.fits() && b.fits());
+    assert_eq!(GuestAddress(0x40a5_a200).physical(), 0xa5_a200);
+    assert_eq!(GuestAddress(0x0005_a200).physical(), 0x0005_a200);
 }

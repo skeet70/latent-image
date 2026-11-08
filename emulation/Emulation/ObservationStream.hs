@@ -18,6 +18,10 @@ module Emulation.ObservationStream
   , decodeObservationRef
   , resolveReference
   , loadVerifiedObservation
+  , loadReceiptObservations
+  , loadReceiptObservationValues
+  , countObservationDrawers
+  , countObservationDrawersValue
   , writeObservationStream
   , foldTraceHitRows
   , foldTraceHitLines
@@ -168,6 +172,115 @@ loadVerifiedObservation directory ref = case resolveReference directory (observa
                         Right (VerifiedObservation ref path value)
                     | otherwise -> Left ("observation document phase " ++ T.unpack phase
                         ++ " differs from its reference " ++ T.unpack (observationRefPhase ref))
+
+-- | Every observation document a receipt result names, in order. Each document is checked
+-- against its reference's byte count, digest and phase, and a referenced sidecar is read to its
+-- declared row count and digest before the observation is returned.
+loadReceiptObservations :: FilePath -> Value -> IO (Either String [VerifiedObservation])
+loadReceiptObservations directory value = case references value of
+  Left problem -> pure (Left problem)
+  Right refs -> go [] refs
+ where
+  references (Object fields) = case KM.lookup "observations" fields of
+    Nothing -> Right []
+    Just (Array refs) -> mapM decodeObservationRef (foldr (:) [] refs)
+    Just _ -> Left "receipt observations is not an array"
+  references _ = Left "receipt result is not an object"
+  go seen [] = pure (Right (reverse seen))
+  go seen (ref : rest) = do
+    loaded <- loadVerifiedObservation directory ref
+    case loaded of
+      Left problem -> pure (Left problem)
+      Right verified -> do
+        drained <- drain verified
+        case drained of
+          Left problem -> pure (Left problem)
+          Right () -> go (verified : seen) rest
+  drain verified = withRowReader directory (verifiedObservationValue verified) $ \reader -> do
+    let loop = do
+          next <- rowNext reader
+          case next of
+            Left problem -> pure (Left problem)
+            Right Nothing -> readerFinish reader
+            Right (Just _) -> loop
+    loop
+
+-- | Every observation a receipt result names, in order, as the document a consumer reads.
+-- A reference is verified against its document and sidecar; an inline observation is matched to
+-- the numbered document it stands for and that document's sidecar is verified.
+loadReceiptObservationValues :: FilePath -> Value -> IO (Either String [(FilePath, Value)])
+loadReceiptObservationValues directory value = case references value of
+  Left problem -> pure (Left problem)
+  Right refs -> go (0 :: Int) [] refs
+ where
+  references (Object fields) = case KM.lookup "observations" fields of
+    Nothing -> Right []
+    Just (Array refs) -> Right (foldr (:) [] refs)
+    Just _ -> Left "receipt observations is not an array"
+  references _ = Left "receipt result is not an object"
+  go _ seen [] = pure (Right (reverse seen))
+  go index seen (element : rest) = case inline element of
+    Just inlineValue -> do
+      let name = "e2e-observation-" ++ show index ++ ".json"
+      case resolveReference directory name of
+        Left problem -> pure (Left problem)
+        Right path -> do
+          present <- doesFileExist path
+          if not present then pure (Left ("observation document is missing: " ++ path)) else do
+            decoded <- try (eitherDecodeFileStrict' path) :: IO (Either IOException (Either String Value))
+            case decoded of
+              Left problem -> pure (Left (path ++ ": " ++ show problem))
+              Right (Left problem) -> pure (Left (path ++ ": " ++ problem))
+              Right (Right fileValue)
+                | fileValue /= inlineValue -> pure (Left "inline observation differs from its numbered document")
+                | otherwise -> do
+                    drained <- drain directory fileValue
+                    case drained of
+                      Left problem -> pure (Left problem)
+                      Right () -> go (index + 1) ((path, fileValue) : seen) rest
+    Nothing -> case decodeObservationRef element of
+      Left problem -> pure (Left problem)
+      Right ref -> do
+        loaded <- loadVerifiedObservation directory ref
+        case loaded of
+          Left problem -> pure (Left problem)
+          Right verified -> do
+            drained <- drain directory (verifiedObservationValue verified)
+            case drained of
+              Left problem -> pure (Left problem)
+              Right () -> go (index + 1) ((verifiedObservationPath verified, verifiedObservationValue verified) : seen) rest
+  inline (Object fields) = if KM.member "path" fields then Nothing else Just (Object fields)
+  inline _ = Nothing
+  drain dir document = withRowReader dir document $ \reader -> do
+    let loop = do
+          next <- rowNext reader
+          case next of
+            Left problem -> pure (Left problem)
+            Right Nothing -> readerFinish reader
+            Right (Just _) -> loop
+    loop
+
+-- | Declared render drawer entry rows in one verified observation, read through the same
+-- inline/sidecar reader the comparison uses.
+countObservationDrawers :: VerifiedObservation -> IO (Either String Int)
+countObservationDrawers verified =
+  countObservationDrawersValue (takeDirectory (verifiedObservationPath verified)) (verifiedObservationValue verified)
+
+countObservationDrawersValue :: FilePath -> Value -> IO (Either String Int)
+countObservationDrawersValue directory document =
+  withRowReader directory document $ \reader -> do
+    let loop count = do
+          next <- rowNext reader
+          case next of
+            Left problem -> pure (Left problem)
+            Right Nothing -> readerFinish reader >> pure (Right count)
+            Right (Just row) -> loop (if drawer row then count + 1 else count)
+    loop 0
+ where
+  drawer (Object fields) = case KM.lookup "site" fields of
+    Just (String site) -> site `elem` ["render-tree-entry", "render-picker-entry", "render-pane-entry"]
+    _ -> False
+  drawer _ = False
 
 phaseOf :: Value -> Maybe T.Text
 phaseOf (Object fields) = case KM.lookup "phase" fields of
