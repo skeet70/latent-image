@@ -346,7 +346,7 @@ watchPlan plan = sharedPlan plan {planGuards=filter outermost (planGuards plan)}
   outermost guard = not (any (\outer -> guardDomain outer==guardDomain guard && guardStart outer<=guardStart guard &&
     guardEnd guard<=guardEnd outer && (guardStart outer/=guardStart guard || guardEnd outer/=guardEnd guard)) (planGuards plan))
 trajectorySha256 :: String
-trajectorySha256 = "7497182560f1d971cf17b23429dee5d3257a0263267ddcb3680da9ba78eb2002"
+trajectorySha256 = "43134e99c48715ca58e6838347f164e3458dbd986ad2f854e6788371422f0a8d"
 data CallTotals = CallTotals { hasCompletedClasses :: !Bool, completedCallCount :: !Int } deriving (Eq,Show)
 
 qualify :: B.ByteString -> Plan -> Observation -> Either Refusal Value

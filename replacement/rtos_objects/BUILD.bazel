@@ -263,6 +263,8 @@ haskell_binary(
     data = [
         ":objects-family-stage-a.bin",
         ":objects-family-stage-b.bin",
+        "//replacement/rtos_scheduler:s3b-a.bin",
+        "//replacement/rtos_scheduler:s3b-b.bin",
         "//replacement/rtos_scheduler/oracle:layout.json",
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],

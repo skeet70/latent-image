@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Replacement.RtosObjects.Suite
-  ( Image (..), FamilyRun (..), Entries, buildEntries, extents, runFamily ) where
+  ( Image (..), FamilyRun (..), JoinedRun (..), Entries, buildEntries, extents, s3bBase, runFamily, runJoined ) where
 
 import Control.Monad (forM, unless)
 import Data.Bits ((.&.), (.|.), shiftL, shiftR, xor)
@@ -119,6 +119,10 @@ data Case = Case
   , caseLimit :: InstructionLimit
   , caseStockStatus :: Maybe RunnerStatus
   , caseSkipTimerLog :: Bool
+  -- | The S3b caller's scheduler-lock domain; only joined cases set it.
+  , caseSchedulerLock :: Maybe Domain
+  -- | A direct entry's initial registers; absent cases enter through the wrapper.
+  , caseDirectInitial :: Maybe [(Register, Word32)]
   }
 
 data Image = Image { imageBase :: Word32, imageBytes :: B.ByteString }
@@ -226,6 +230,42 @@ placementOther DomainB =
 extents :: Domain -> [(Word32, Word32)]
 extents domain =
   [ slotExtent slot domain | slot <- [minBound .. maxBound] ] ++ placementOther domain
+
+-- | The six qualified S3b service extents, from @regions-s3b.json@. The linked bin is
+-- contiguous from its first extent and fills the gaps with the UDF word.
+s3bPlacement :: Domain -> [(Word32, Word32)]
+s3bPlacement DomainA =
+  [ (0x44f2c, 0x1c4), (0x450f0, 0x180), (0x45270, 0x180)
+  , (0x46004, 0x1fc), (0x46200, 0x198), (0x46398, 0x19c)
+  ]
+s3bPlacement DomainB =
+  [ (0xd4eec, 0x1c4), (0xd50b0, 0x180), (0xd5230, 0x180)
+  , (0xd5fc4, 0x1fc), (0xd61c0, 0x198), (0xd6358, 0x19c)
+  ]
+
+s3bBase :: Domain -> Word32
+s3bBase domain = minimum (map fst (s3bPlacement domain))
+
+data S3bService = S3bWake | S3bInterruptWake deriving (Eq, Show)
+
+s3bEntry :: Domain -> S3bService -> Word32
+s3bEntry DomainA S3bWake = 0x46004
+s3bEntry DomainA S3bInterruptWake = 0x46200
+s3bEntry DomainB S3bWake = 0xd5fc4
+s3bEntry DomainB S3bInterruptWake = 0xd61c0
+
+-- | The wait release the qualified S3b callers resolve.
+s3bRelease :: Domain -> Word32
+s3bRelease DomainA = 0x44568
+s3bRelease DomainB = 0xd4528
+
+data JoinedRun = JoinedRun
+  { joinedDomain :: Domain
+  , joinedRows :: [(String, Either String [String])]
+  , joinedReuse :: (BatchReuse, BatchReuse, BatchReuse)
+  , joinedControls :: [(String, Bool)]
+  , joinedCounterexamples :: [(String, String)]
+  }
 
 retained :: Domain -> [(Word32, Word32)]
 retained DomainA = [(0x4252c, 0x28), (0x433e4, 0x60), (0x43444, 0x60)]
@@ -490,6 +530,8 @@ baseCase executing =
     , caseLimit = plainLimit
     , caseStockStatus = Nothing
     , caseSkipTimerLog = False
+    , caseSchedulerLock = Nothing
+    , caseDirectInitial = Nothing
     }
 
 retainedWords :: Facts -> Domain -> Case -> [(GuestAddress, Word32)]
@@ -804,7 +846,15 @@ kernelBounds facts domain = (GuestAddress low, fromIntegral (high - low))
       ]
 
 codeBytes :: Domain -> Image -> Image -> B.ByteString
-codeBytes domain loader owned = installAt timerAddress timerStub (foldl patch original (extents domain))
+codeBytes domain loader owned = codeBytesWith domain loader [(owned, extents domain)]
+
+-- | The staged family candidate plus the qualified S3b callers, each over its own image.
+codeBytesJoined :: Domain -> Image -> Image -> Image -> B.ByteString
+codeBytesJoined domain loader owned s3b =
+  codeBytesWith domain loader [(owned, extents domain), (s3b, s3bPlacement domain)]
+
+codeBytesWith :: Domain -> Image -> [(Image, [(Word32, Word32)])] -> B.ByteString
+codeBytesWith domain loader patches = installAt timerAddress timerStub (foldl patchImage original patches)
   where
     base = imageBase loader
     timerAddress = timerEntry domain
@@ -814,7 +864,7 @@ codeBytes domain loader owned = installAt timerAddress timerStub (foldl patch or
         else B.take (fromIntegral size) (B.drop (fromIntegral (address - imageBase image)) (imageBytes image))
     original = slice loader base (B.length (imageBytes loader))
     installAt address bytes current = let offset = fromIntegral (address - base) in B.take offset current <> bytes <> B.drop (offset + B.length bytes) current
-    patch current (address, size) = installAt address (slice owned address size) current
+    patchImage current (image, placement) = foldl (\bytes (address, size) -> installAt address (slice image address size) bytes) current placement
 
 fixtureWords :: Facts -> Domain -> Case -> [(GuestAddress, Word32)]
 fixtureWords facts executing one =
@@ -1024,19 +1074,24 @@ layoutWords facts executing one =
                ]
 
 caseFor :: Role -> Facts -> Entries -> Domain -> Image -> Image -> Case -> CaseSpec
-caseFor role facts entries executing loader owned one = CaseSpec
+caseFor role facts entries executing loader owned = caseForCode role facts entries executing loader (codeBytes executing loader owned) []
+
+caseForCode :: Role -> Facts -> Entries -> Domain -> Image -> B.ByteString -> [(Word32, Word32)] -> Case -> CaseSpec
+caseForCode role facts entries executing loader code extraFunctions one = CaseSpec
   { caseId = emittedId executing one
   , caseProvenance = provenance
   , caseExclusion = exclusion one
   , caseEntry = wireAddress (GuestAddress (fromMaybe wrapperBase (caseEntryAddress one)))
   , caseExit = wireAddress (GuestAddress exitAddress)
   , caseRegions =
-      [ mkRegion (RegionId "code") (wireAddress (GuestAddress (imageBase loader))) (fromIntegral (B.length (imageBytes loader))) ReadExecute (codeBytes executing loader owned)
+      [ mkRegion (RegionId "code") (wireAddress (GuestAddress (imageBase loader))) (fromIntegral (B.length (imageBytes loader))) ReadExecute code
       ]
         ++ [ mkRegion ident (wireAddress address) size permission (overlay address background words') | Page ident address size permission background <- dataPages ]
         ++ [ mkRegion (RegionId "continuations") (wireAddress (GuestAddress exitAddress)) (fromIntegral (stopAddress - exitAddress + 4)) ReadExecute (continuationBytes facts entries executing one) ]
   , caseFunctions = functionList
-  , caseInitial = if isJust (caseRetained one) then retainedInitialRegisters one else initialRegisters one
+  , caseInitial = case caseDirectInitial one of
+      Just registers -> registers
+      Nothing -> if isJust (caseRetained one) then retainedInitialRegisters one else initialRegisters one
   , caseExpectedStatus = roleStatus role one
   , caseExpectedRegisters = expectedRegisters role one
   , caseExpectedMemory = []
@@ -1053,7 +1108,7 @@ caseFor role facts entries executing loader owned one = CaseSpec
           outside = [address | (address, _) <- fixture, not (any (contains address 4) dataPages)]
        in if null outside then fixture else error (caseIdText (caseName one) ++ ": unmapped fixture words " ++ show outside)
     functionList =
-      [ (wireAddress (GuestAddress address), size) | (address, size) <- extents executing ++ retained executing ++ retainedExtents executing ]
+      [ (wireAddress (GuestAddress address), size) | (address, size) <- extents executing ++ retained executing ++ retainedExtents executing ++ extraFunctions ]
         ++ [ (wireAddress (GuestAddress address), size) | (address, size) <- stockHelpers executing ]
         ++ [ (wireAddress (GuestAddress address), size) | Seam _ _ address size <- retainedSeams executing ]
         ++ [ (wireAddress (GuestAddress wrapperBase), 0x100) ]
@@ -1078,7 +1133,11 @@ caseFor role facts entries executing loader owned one = CaseSpec
       | otherwise = []
     stack (low, high) = either error id (mkStackContext (N.GuestAddress (fromIntegral low)) (N.GuestAddress (fromIntegral high)))
     provenance = "X-M1 1.50 stock slot ABI at pinned x70view 55436fc85c0560dd252b0410af6f2427fe198cd3; manifest entries from replacement/media_permit/rtos_slot_contracts.json, extents from stage/family-{a,b}.ld; synthetic caller, waker, waiter, message and timer-entry fixtures; retained stock insert-timer, remove-timer, timeout-callback and timer-tick seams; retained semaphore, data-queue and fixed-pool caller entries, wait/timer tables and the fixed-pool wait table recovered from the pinned disassembly (A 0x4005855c / B 0x400e851c, stride 16)"
-    exclusion one' = baseExclusion ++ differenceExclusion (caseDifference one') ++ retainedExclusion one'
+      ++ (if isJust (caseSchedulerLock one) then "; the six S3b service extents from regions-s3b.json and the qualified s3b-{a,b}.bin" else "")
+    exclusion one' = baseExclusion ++ differenceExclusion (caseDifference one') ++ retainedExclusion one' ++ joinedExclusion one'
+    joinedExclusion one'
+      | isJust (caseSchedulerLock one') = " The qualified S3b caller executes over the staged family release at the stock wait-release entry; the release's timer removal runs through the stock remove-timer logging seam. The task is a fixture sleeping task; the S3b caller, not the fixture, performs the release."
+      | otherwise = ""
     retainedExclusion one'
       | isJust (caseRetained one') = " The retained caller executes at its pinned stock slot entry and uses the stock caller body; the shared wait/check helper is stock or owned at the same ABI. The object wait/timer tables are the pinned slot-contract addresses. The fixed-pool wait table is recovered from the pinned disassembly, not guessed."
       | otherwise = ""
@@ -1245,7 +1304,8 @@ continuationChecks executing facts one observation
   where
     savedSpAddress = taskAt facts executing runningSlot + factsTaskSavedSp facts
     savedPcAddress = taskAt facts executing runningSlot + factsTaskResumePc facts
-    inOwnedCode address = any (\(base, size) -> base <= address && address < base + size) (extents executing)
+    inOwnedCode address = any (\(base, size) -> base <= address && address < base + size) ownedExtents
+    ownedExtents = extents executing ++ (if isJust (caseSchedulerLock one) then s3bPlacement executing else [])
 
 data LockFence = AwaitAcquireFence | AwaitReleaseFence | PublishedLock | InvalidLockOrder deriving Eq
 
@@ -1295,6 +1355,10 @@ effectChecks facts role one observation = lockChecks ++ notificationChecks
     lockChecks
       | not takesLock = []
       | multiStep = []
+      | Just lockDomain <- caseSchedulerLock one =
+          case lockInterval observation (GuestAddress (dfSchedulerLock (domainFacts facts lockDomain))) of
+            Nothing -> ["scheduler lock or its release barrier differs"]
+            Just _ -> []
       | otherwise = case lockInterval observation objectLock of
           Nothing -> ["object lock or its release barrier differs"]
           Just (objectAcquire, objectRelease) ->
@@ -1517,6 +1581,164 @@ runFamily runner cacheRoot directory facts entries executing stock owned = do
       tagged = [(caseIdText (caseName one), show (caseDifference one)) | one <- selected, caseDifference one /= NoDifference]
   unless (length stockRaw == length selected && length ownedRaw == length selected) (fail "native observations do not cover the current family case set")
   pure (FamilyRun executing results (length [() | (_, Right []) <- results]) (stockReuse, ownedReuse) allControls tagged)
+
+-- | The S3b task entry's definition-existence word, read at @definition + 0x24@.
+definitionExistsOffset :: Word32
+definitionExistsOffset = 0x24
+
+joinedPriority :: Facts -> TaskSlot -> Word32
+joinedPriority facts slot
+  | slot == runningSlot = 10
+  | slot == idleSlot = 15
+  | slot == waiterSlot = 3
+  | otherwise = slot `mod` factsPriorities facts
+
+joinedHandle :: Domain -> Domain -> TaskSlot -> Word32
+joinedHandle executing target slot
+  | target == executing = slot
+  | otherwise = (domainId target `shiftL` 16) .|. slot
+
+-- | One qualified S3b caller over a sleeping task. The task's wait block carries the timer entry
+-- while waiting; the release stores zero there. A changed selection notifies, and the task entry
+-- dispatches while the interrupt entry defers through the reschedule word.
+joinedCase :: Facts -> Domain -> String -> Domain -> TaskSlot -> S3bService -> Bool -> Boundary -> Case
+joinedCase facts executing name target slot service timed boundary = (baseCase executing)
+  { caseName = CaseId name
+  , caseSlot = FlagWait
+  , caseEntryAddress = Just (s3bEntry executing service)
+  , caseObject = executing
+  , caseInvocation = if service == S3bInterruptWake then HandlerCallback else TaskInvocation
+  , caseHandler = if service == S3bInterruptWake then 1 else 0
+  , caseBoundary = boundary
+  , caseSchedulerLock = Just target
+  , caseArgs = []
+  , caseDirectInitial = Just directRegisters
+  , caseWaiters = []
+  , caseWords = caseWords'
+  , caseExpect = expectations
+  , caseLimit = InstructionLimit 50000
+  }
+  where
+    priority = joinedPriority facts slot
+    changed = priority < joinedPriority facts runningSlot
+    remote = target /= executing
+    handler = service == S3bInterruptWake
+    targetTask = taskAt facts target slot
+    wait = flagWait facts target slot
+    timer = objectTimer facts FlagWait target slot
+    definition = definitionAddress facts target slot
+    directRegisters =
+      [(R0, joinedHandle executing target slot)]
+        ++ [(register, seed register) | register <- [R1 .. R12]]
+        ++ [ (Sp, if handler then handlerStackPointer else stackPointer)
+           , (Lr, exitAddress)
+           , (Cpsr, 0x13)
+           ]
+    caseWords' =
+      [ poke (targetTask + factsTaskState facts) (packedState (factsStateWait facts .|. factsStateSleeping facts) priority)
+      , poke (targetTask + factsTaskWait facts) wait
+      , poke (wait + factsWaitBlockResult facts) (if timed then timer else 0)
+      , poke (definition + definitionExistsOffset) 1
+      ]
+        ++ ( if timed
+               then [ poke (timer + 4) (seam target "stock-timeout-callback")
+                    , poke (timer + 8) targetTask
+                    ]
+               else []
+           )
+    expectations =
+      (if boundary == TaskArrival then [] else [res 0])
+        ++ [ eq (wait + factsWaitBlockResult facts) 0
+           , byte (targetTask + factsTaskState facts) (factsStateReady facts)
+           , eq (readyHead facts target priority) targetTask
+           , eq (readyHead facts target priority + factsHeadPrev facts) targetTask
+           , eq (targetTask + factsTaskNext facts) (readyHead facts target priority)
+           , eq (targetTask + factsTaskPrev facts) (readyHead facts target priority)
+           , eq (dfReadyBitmap (domainFacts facts target)) expectedBitmap
+           , eq (dfRunning (domainFacts facts target)) expectedRunning
+           , eq (dfSelected (domainFacts facts target)) expectedSelected
+           , eq (pointerWord (bank target)) (if remote then 0x01000000 else 0)
+           , eq (pointerWord (bank executing)) 0
+           , eq (dfReschedule (domainFacts facts executing)) (if handler && not remote then 1 else 0)
+           , timerLog (if timed then 1 else 0) (if timed then [(recordAddress facts executing target, timer)] else [])
+           ]
+        ++ [control 0x13 | handler]
+    expectedBitmap = (1 `shiftL` 10) .|. (1 `shiftL` 15) .|. (1 `shiftL` fromIntegral priority)
+    expectedRunning = if boundary == TaskArrival then targetTask else taskAt facts target runningSlot
+    expectedSelected = if changed then targetTask else taskAt facts target runningSlot
+
+joinedCases :: Facts -> Domain -> [Case]
+joinedCases facts executing =
+  [ joinedCase facts executing "s3b-wake-local-timed" executing waiterSlot S3bWake True TaskArrival
+  , joinedCase facts executing "s3b-wake-local-untimed" executing waiterSlot S3bWake False TaskArrival
+  , joinedCase facts executing "s3b-wake-unchanged-timed" executing 11 S3bWake True CallerReturn
+  , joinedCase facts executing "s3b-wake-unchanged-untimed" executing 11 S3bWake False CallerReturn
+  , joinedCase facts executing "s3b-wake-remote-timed" (peer executing) waiterSlot S3bWake True CallerReturn
+  , joinedCase facts executing "s3b-wake-remote-untimed" (peer executing) waiterSlot S3bWake False CallerReturn
+  , joinedCase facts executing "s3b-interrupt-wake-local-timed" executing waiterSlot S3bInterruptWake True CallerReturn
+  , joinedCase facts executing "s3b-interrupt-wake-local-untimed" executing waiterSlot S3bInterruptWake False CallerReturn
+  , joinedCase facts executing "s3b-interrupt-wake-remote-timed" (peer executing) waiterSlot S3bInterruptWake True CallerReturn
+  , joinedCase facts executing "s3b-interrupt-wake-remote-untimed" (peer executing) waiterSlot S3bInterruptWake False CallerReturn
+  ]
+
+replaceImage :: Word32 -> B.ByteString -> Image -> Image
+replaceImage address bytes image =
+  let offset = fromIntegral (address - imageBase image)
+   in image { imageBytes = B.take offset (imageBytes image) <> bytes <> B.drop (offset + B.length bytes) (imageBytes image) }
+
+-- | The qualified S3b callers over the staged family code. The stub role replaces the family
+-- release with a changed-returning body so the joined predicate must reject a callee that does
+-- not release the task.
+runJoined :: FilePath -> FilePath -> FilePath -> Facts -> Entries -> Domain -> Image -> Image -> Image -> IO JoinedRun
+runJoined runner cacheRoot directory facts entries executing stock owned s3b = do
+  let selected = joinedCases facts executing
+      extra = s3bPlacement executing
+      stockCases = [(one, caseForCode StockRole facts entries executing stock (codeBytes executing stock stock) extra one) | one <- selected]
+      ownedCases = [(one, caseForCode OwnedRole facts entries executing stock (codeBytesJoined executing stock owned s3b) extra one) | one <- selected]
+      stubOwned = replaceImage (s3bRelease executing) (assemble [0xe3a00001, 0xe12fff1e]) owned
+      stubCases = [(one, caseForCode OwnedRole facts entries executing stock (codeBytesJoined executing stock stubOwned s3b) extra one) | one <- selected]
+  stockBatch <- writeBatch (directory </> "stock") (map snd stockCases)
+  ownedBatch <- writeBatch (directory </> "owned") (map snd ownedCases)
+  stubBatch <- writeBatch (directory </> "stub") (map snd stubCases)
+  (stockReuse, stockRaw) <- cachedObservedBatch cacheRoot runner stockBatch
+  (ownedReuse, ownedRaw) <- cachedObservedBatch cacheRoot runner ownedBatch
+  (stubReuse, stubRaw) <- cachedObservedBatch cacheRoot runner stubBatch
+  let reference = M.fromList [(caseIdText ident, observation) | (ident, observation) <- stockRaw]
+      subject = M.fromList [(caseIdText ident, observation) | (ident, observation) <- ownedRaw]
+      stub = M.fromList [(caseIdText ident, observation) | (ident, observation) <- stubRaw]
+      ownedFailure difference = case difference of RoleDifference OwnedRole _ -> True; _ -> False
+      firstOwned one original stubObservation =
+        case filter ownedFailure (compareFamily OwnedRole executing facts one original stubObservation) of
+          difference : _ -> Just (renderDifference difference)
+          [] -> Nothing
+  results <- forM stockCases $ \(one, _) -> do
+    let ident = emittedId executing one
+    pure (caseIdText (caseName one), case (M.lookup ident reference, M.lookup ident subject, M.lookup ident stub) of
+      (Just original, Just replacement, Just stubObservation) ->
+        let differences = map renderDifference (compareFamily OwnedRole executing facts one original replacement)
+            caseControls = controls executing facts one original replacement
+            counterexample = case firstOwned one original stubObservation of
+              Just _ -> []
+              Nothing -> ["joined counterexample not rejected"]
+         in Right (differences ++ ["control " ++ name ++ " not detected" | (name, False) <- caseControls] ++ counterexample)
+      (Nothing, _, _) -> Left "stock joined case did not run"
+      (_, Nothing, _) -> Left "owned joined case did not run"
+      (_, _, Nothing) -> Left "stub joined case did not run")
+  let allControls = concat
+        [ [(caseIdText (caseName one) ++ "/" ++ domainLabel executing ++ "/" ++ name, ok) | (name, ok) <- controls executing facts one original replacement]
+        | (one, _) <- stockCases
+        , Just original <- [M.lookup (emittedId executing one) reference]
+        , Just replacement <- [M.lookup (emittedId executing one) subject]
+        ]
+      counterexamples =
+        [ (caseIdText (caseName one), difference)
+        | (one, _) <- stockCases
+        , Just original <- [M.lookup (emittedId executing one) reference]
+        , Just stubObservation <- [M.lookup (emittedId executing one) stub]
+        , Just difference <- [firstOwned one original stubObservation]
+        ]
+  unless (length stockRaw == length selected && length ownedRaw == length selected && length stubRaw == length selected) (fail "native observations do not cover the current joined case set")
+  pure (JoinedRun executing results (stockReuse, ownedReuse, stubReuse) allControls counterexamples)
 
 cases :: Facts -> Entries -> Domain -> [Case]
 cases facts _entries executing =

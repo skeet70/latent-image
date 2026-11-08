@@ -19,7 +19,7 @@ import System.Environment (getArgs)
 import System.Exit (exitFailure)
 import System.FilePath ((</>), takeDirectory)
 import Replacement.RtosObjects.Layout (parseFacts, parseManifest)
-import Replacement.RtosObjects.Suite (FamilyRun (..), Image (..), buildEntries, extents, runFamily)
+import Replacement.RtosObjects.Suite (FamilyRun (..), JoinedRun (..), Image (..), buildEntries, extents, s3bBase, runFamily, runJoined)
 import Replacement.RtosOwnFirst.Regions (Domain (..))
 
 main :: IO ()
@@ -36,6 +36,8 @@ main = do
   loaderB <- required "--loader-b"
   familyA <- required "--family-a-bin"
   familyB <- required "--family-b-bin"
+  s3bA <- required "--s3b-a-bin"
+  s3bB <- required "--s3b-b-bin"
   resultsPath <- required "--results"
   facts <- either fail pure . parseFacts =<< B.readFile layoutPath
   manifest <- either fail pure . parseManifest =<< B.readFile manifestPath
@@ -44,18 +46,27 @@ main = do
   loaderBBytes <- B.readFile loaderB
   familyABytes <- B.readFile familyA
   familyBBytes <- B.readFile familyB
+  s3bABytes <- B.readFile s3bA
+  s3bBBytes <- B.readFile s3bB
   checkStorageBudget (takeDirectory resultsPath)
   createDirectoryIfMissing True cacheRoot
   let stockA = Image 0x40000 loaderABytes
       stockB = Image 0xd0000 loaderBBytes
       familyAImage = Image (minimum (map fst (extents DomainA))) familyABytes
       familyBImage = Image (minimum (map fst (extents DomainB))) familyBBytes
+      s3bAImage = Image (s3bBase DomainA) s3bABytes
+      s3bBImage = Image (s3bBase DomainB) s3bBBytes
   runA <- runFamily runner cacheRoot (takeDirectory resultsPath </> "domain-a") facts entries DomainA stockA familyAImage
   runB <- runFamily runner cacheRoot (takeDirectory resultsPath </> "domain-b") facts entries DomainB stockB familyBImage
+  joinedA <- runJoined runner cacheRoot (takeDirectory resultsPath </> "joined-a") facts entries DomainA stockA familyAImage s3bAImage
+  joinedB <- runJoined runner cacheRoot (takeDirectory resultsPath </> "joined-b") facts entries DomainB stockB familyBImage s3bBImage
   let runs = [runA, runB]
+      joinedRuns = [joinedA, joinedB]
       failures =
         [(name, message) | run <- runs, (name, Left message) <- familyCases run]
           ++ [(failingName, unlines failureLines) | run <- runs, (failingName, Right failureLines) <- familyCases run, not (null failureLines)]
+          ++ [(name, message) | run <- joinedRuns, (name, Left message) <- joinedRows run]
+          ++ [(failingName, unlines failureLines) | run <- joinedRuns, (failingName, Right failureLines) <- joinedRows run, not (null failureLines)]
       cases =
         [ object
             [ "domain" .= show (familyDomain run)
@@ -82,6 +93,26 @@ main = do
         | run <- runs
         , (name, tag) <- familyDifferences run
         ]
+      joinedCasesValue =
+        [ object ["domain" .= show (joinedDomain run), "case" .= name, "result" .= outcomeText result]
+        | run <- joinedRuns
+        , (name, result) <- joinedRows run
+        ]
+      joinedReuseValue =
+        [ let (stockReuse, ownedReuse, stubReuse) = joinedReuse run
+           in object ["domain" .= show (joinedDomain run), "stock" .= show stockReuse, "owned" .= show ownedReuse, "stub" .= show stubReuse]
+        | run <- joinedRuns
+        ]
+      joinedControlsValue =
+        [ object ["control" .= name, "holds" .= ok]
+        | run <- joinedRuns
+        , (name, ok) <- joinedControls run
+        ]
+      joinedCounterexamplesValue =
+        [ object ["domain" .= show (joinedDomain run), "case" .= name, "difference" .= difference]
+        | run <- joinedRuns
+        , (name, difference) <- joinedCounterexamples run
+        ]
       firstFailure = case failures of
         (name, message) : _ -> object ["case" .= name, "message" .= message]
         [] -> J.Null
@@ -103,6 +134,10 @@ main = do
           , "reuse" .= reuse
           , "controls" .= controls
           , "differences" .= differences
+          , "joinedCases" .= joinedCasesValue
+          , "joinedReuse" .= joinedReuseValue
+          , "joinedControls" .= joinedControlsValue
+          , "joinedCounterexamples" .= joinedCounterexamplesValue
           , "timerSeams"
               .= ( [ "stock-insert-timer A 0x44c60 B 0xd4c20"
                    , "stock-remove-timer A 0x44ca8 B 0xd4c68"
@@ -114,8 +149,14 @@ main = do
           , "artifact" .= casesPath
           , "reviewPacket" .= resultsPath
           ]
-      casesText = unlines [show (familyDomain run) ++ " " ++ name ++ ": " ++ outcomeText result | run <- runs, (name, result) <- familyCases run]
-      controlText = unlines [show (familyDomain run) ++ " control " ++ name ++ ": " ++ (if ok then "ok" else "failed") | run <- runs, (name, ok) <- familyControls run]
+      casesText = unlines
+        ( [show (familyDomain run) ++ " " ++ name ++ ": " ++ outcomeText result | run <- runs, (name, result) <- familyCases run]
+            ++ [show (joinedDomain run) ++ " joined " ++ name ++ ": " ++ outcomeText result | run <- joinedRuns, (name, result) <- joinedRows run]
+        )
+      controlText = unlines
+        ( [show (familyDomain run) ++ " control " ++ name ++ ": " ++ (if ok then "ok" else "failed") | run <- runs, (name, ok) <- familyControls run]
+            ++ [show (joinedDomain run) ++ " joined control " ++ name ++ ": " ++ (if ok then "ok" else "failed") | run <- joinedRuns, (name, ok) <- joinedControls run]
+        )
   BL.writeFile resultsPath (encode document)
   B.writeFile casesPath (encodeUtf8 (pack (casesText ++ controlText)))
   forM_ failures $ \(name, message) -> putStrLn (name ++ ": " ++ message)
