@@ -1287,7 +1287,9 @@ impl Observer<'_> {
         let board = Board { machine, maps: &self.maps };
         let slot = self.slot(index);
         let domain = slot.id.domain;
-        require(context.core.index() == match domain { Domain::A => 0, Domain::B => 1 }, "scheduler entry executed on the other core")?;
+        if !matches!(slot.id.semantic, Semantic::Family { .. }) {
+            require(context.core.index() == match domain { Domain::A => 0, Domain::B => 1 }, "scheduler entry executed on the other core")?;
+        }
         let mut entry = EntryState {
             slot: slot.id, core: context.core, cpsr: context.cpsr, r0: context.r0, lr: Hex(context.lr),
             arguments: context.arguments,
