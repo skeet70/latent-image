@@ -1101,12 +1101,8 @@ pages facts one =
   [ let (address, size) = kernelBounds facts DomainA
      in Page (RegionId "kernel-a") address size ReadWrite (B.replicate size 0)
   ]
-    ++ [ let (GuestAddress low, _size) = kernelBounds facts DomainB
-             split = dfTickNow (factsB facts) - 4
-         in Page (RegionId "kernel-b") (GuestAddress low) (fromIntegral (split - low)) ReadWrite (B.replicate (fromIntegral (split - low)) 0)
-       , let (GuestAddress low, size) = kernelBounds facts DomainB
-             split = dfTickNow (factsB facts) - 4
-         in Page (RegionId "kernel-b-high") (GuestAddress split) (fromIntegral (low + fromIntegral size - split)) ReadWrite (B.replicate (fromIntegral (low + fromIntegral size - split)) 0)
+    ++ [ let (address, size) = kernelBounds facts DomainB
+         in Page (RegionId "kernel-b") address size ReadWrite (B.replicate size 0)
        ]
     ++ [ Page (RegionId "definitions") (GuestAddress definitionBase) (fromIntegral (2 * factsTaskSlots facts * definitionStride)) ReadWrite (B.replicate (fromIntegral (2 * factsTaskSlots facts * definitionStride)) 0)
        , Page (RegionId "request") (GuestAddress requestAddress) 0x20 ReadWrite (B.replicate 0x20 0)
@@ -1393,7 +1389,7 @@ compareFamily facts executing one stockSpec ownedSpec stock owned =
     ownedExpectation = maybe (caseStock one) id (caseOwned one)
     compared = [ident | Page ident _ _ _ _ <- pages facts one, ident `notElem` map RegionId ["stack", "target-stack", "driver-stack"]]
     memory observation = M.fromList [(ident, normalize ident bytes) | (ident, bytes) <- nativeMemory observation, ident `elem` compared]
-    kernelIdents = if executing == DomainA then [RegionId "kernel-a"] else [RegionId "kernel-b", RegionId "kernel-b-high"]
+    kernelIdents = if executing == DomainA then [RegionId "kernel-a"] else [RegionId "kernel-b"]
     normalize ident bytes
       | ident `elem` kernelIdents && (expectationArrival (caseStock one) || caseResume one) =
           case [base | Page region (GuestAddress base) _ _ _ <- pages facts one, region == ident] of
