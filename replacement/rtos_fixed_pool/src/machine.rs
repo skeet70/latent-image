@@ -66,6 +66,8 @@ pub trait Wake: Machine + Locks + Irq {
     fn notify(&self, id: u32) -> DispatchTarget;
     /// A `0x43640` / B `0xd3640`; the entry overwrites r0 before selecting a task.
     fn dispatch(&self, code: i32);
+    /// The entry domain's reschedule word, consumed at the outermost IRQ exit.
+    fn request_delayed_dispatch(&self);
     /// A `0x44568` / B `0xd4528`.
     fn release(&self, owner: KernelContext, task: Task) -> Selection;
     /// A `0x44744` / B `0xd4704`.

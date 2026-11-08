@@ -18,6 +18,7 @@ pub struct Sim {
     locks: Cell<u32>,
     armed: RefCell<BTreeMap<u32, u32>>,
     last_dispatch: Cell<Option<i32>>,
+    delayed: Cell<bool>,
     doorbell: [Cell<bool>; 2],
 }
 
@@ -30,6 +31,7 @@ impl Sim {
             locks: Cell::new(0),
             armed: RefCell::new(BTreeMap::new()),
             last_dispatch: Cell::new(None),
+            delayed: Cell::new(false),
             doorbell: [Cell::new(false), Cell::new(false)],
         }
     }
@@ -139,6 +141,10 @@ impl Sim {
 
     pub fn dispatched(&self) -> Option<i32> {
         self.last_dispatch.get()
+    }
+
+    pub fn delayed(&self) -> bool {
+        self.delayed.get()
     }
 
     pub fn doorbell(&self, core: usize) -> bool {
@@ -285,6 +291,10 @@ impl Wake for Sim {
 
     fn dispatch(&self, code: i32) {
         self.last_dispatch.set(Some(code));
+    }
+
+    fn request_delayed_dispatch(&self) {
+        self.delayed.set(true);
     }
 
     fn release(&self, _owner: KernelContext, task: Task) -> Selection {

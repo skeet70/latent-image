@@ -179,6 +179,10 @@ impl Wake for Cpu {
         unsafe { xm1_fixed_pool_stock_dispatch(code) };
     }
 
+    fn request_delayed_dispatch(&self) {
+        store(ENTRY.words().reschedule, 1);
+    }
+
     #[inline(always)]
     fn release(&self, owner: KernelContext, task: Task) -> Selection {
         match unsafe { xm1_fixed_pool_stock_wait_release(owner, task) } {
@@ -278,8 +282,8 @@ fn create_body(pool: PoolId, request: u32) -> i32 {
 
 #[inline(never)]
 #[link_section = ".text.fp_bodies"]
-fn delete_body(pool: PoolId) -> i32 {
-    match delete_pool(&Cpu, pool) {
+fn delete_body(pool: PoolId, handler: bool) -> i32 {
+    match delete_pool(&Cpu, pool, handler) {
         Ok(()) => 0,
         Err(status) => status.code(),
     }
@@ -300,7 +304,7 @@ pub extern "C" fn xm1_rtos_fixed_pool_create_body(id: u32, request: u32) -> i32 
 #[link_section = ".text.fp_bodies"]
 pub extern "C" fn xm1_rtos_fixed_pool_delete_body(id: u32) -> i32 {
     match admitted(id as i32, Service::Delete, 0) {
-        Ok(admitted) => delete_body(admitted.pool),
+        Ok(admitted) => delete_body(admitted.pool, load(ENTRY.words().handler_context) != 0),
         Err(status) => status.code(),
     }
 }

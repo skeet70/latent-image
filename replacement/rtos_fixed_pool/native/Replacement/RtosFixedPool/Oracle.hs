@@ -58,6 +58,7 @@ import Emulation.OwnedCase
   , Permission (..)
   , caseOutcome
   , mkRegion
+  , mkStackContext
   , plainLimit
   , readWordAt
   , word32le
@@ -132,6 +133,10 @@ data ContextFacts = ContextFacts
   , cfFirstEntry :: Word32
   , cfTasks :: Word32
   , cfTaskCount :: Word32
+  , cfTimerHeap :: Word32
+  , cfTimerCount :: Word32
+  , cfTimerBase :: Word32
+  , cfTick :: Word32
   , cfPools :: Word32
   , cfPoolCount :: Word32
   }
@@ -144,6 +149,7 @@ instance FromJSON ContextFacts where
       <*> o .: "object_lock" <*> o .: "ready_heads" <*> o .: "ready_bitmap"
       <*> o .: "running" <*> o .: "selected" <*> o .: "dispatch_enabled"
       <*> o .: "first_entry" <*> o .: "tasks" <*> o .: "task_count"
+      <*> o .: "timer_heap" <*> o .: "timer_count" <*> o .: "timer_base" <*> o .: "tick_now"
       <*> o .: "fixed_pools" <*> o .: "fixed_pool_count"
 
 data LockFacts = LockFacts {lfWord :: Word32, lfAcquire :: Word32, lfRelease :: Word32}
@@ -407,10 +413,10 @@ retained DomainB =
   , (0xd3728, 0x34), (0xd375c, 0x48), (0xd37a4, 0x38), (0xd37fc, 0x14)
   , (0xd398c, 60), (0xd39c8, 40)
   , (0xd3c04, 92), (0xd3c60, 124), (0xd3cdc, 176), (0xd3d8c, 72), (0xd3f2c, 44)
-  , (0xd3fd4, 44), (0xd4004, 240), (0xd40f4, 128)
+  , (0xd3fd4, 48), (0xd4004, 240), (0xd40f4, 128)
   , (0xd44a4, 132), (0xd4528, 204), (0xd45f4, 200), (0xd46bc, 72), (0xd4704, 188)
   , (0xd47c0, 228), (0xd48a4, 220), (0xdb3dc, 100)
-  , (0xd4ac0, 196), (0xd4b84, 220), (0xd4c60, 72), (0xd4ca8, 228)
+  , (0xd4a80, 196), (0xd4b44, 220), (0xd4c20, 72), (0xd4c68, 228)
   , (0xdd93c, 244), (0xdda30, 32)
   ]
 
@@ -420,7 +426,7 @@ bodyLength = 0x3000
 
 timerRemoval :: Domain -> Word32
 timerRemoval DomainA = 0x44ca8
-timerRemoval DomainB = 0xd4ca8
+timerRemoval DomainB = 0xd4c68
 
 timeoutCallback :: Domain -> Word32
 timeoutCallback DomainA = 0x44318
@@ -455,6 +461,13 @@ bank DomainB = GuestAddress 0xfffb40cc
 
 callerBytes :: B.ByteString
 callerBytes = B.concat [word32le (0xca11e500 + value) | value <- [0 .. 15]]
+
+lowestBitTable :: B.ByteString
+lowestBitTable = B.pack [0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 0]
+
+lowestBitAddress :: Domain -> Word32
+lowestBitAddress DomainA = 0x0004_daa0
+lowestBitAddress DomainB = 0x000d_da64
 
 runningSlot, idleSlot, waiterSlot, secondWaiterSlot :: Word32
 runningSlot = 1
@@ -756,6 +769,7 @@ cases facts executing =
       { caseOwned = Just (Expectation (fromIntegral (-17 :: Int)) False
           [eq (recycledCell facts executing 1) 0])
       , caseDifference = Just "fixed-pool-unallocated-release"
+      , caseR1 = Just (poolRegion + 8)
       }
   , plain "unchecked-created" PollUnchecked executing 1
       (created facts executing 1 0 1 8 poolRegion)
@@ -859,6 +873,10 @@ layoutWords facts =
           , poke (record + cfFirstEntry (factsContext facts)) (trampoline described)
           , poke (record + cfTasks (factsContext facts)) (dfTaskTable describedWords)
           , poke (record + cfTaskCount (factsContext facts)) (factsTaskSlots facts)
+          , poke (record + cfTimerHeap (factsContext facts)) (dfTimerHeap describedWords)
+          , poke (record + cfTimerCount (factsContext facts)) (dfTimerCount describedWords)
+          , poke (record + cfTimerBase (factsContext facts)) (dfTimerBase describedWords)
+          , poke (record + cfTick (factsContext facts)) (dfTickNow describedWords)
           , poke (record + cfPools (factsContext facts)) (dfPoolControls describedWords)
           , poke (record + cfPoolCount (factsContext facts)) (factsPoolSlots facts)
           ]
@@ -1018,15 +1036,20 @@ codeBytes domain role loader owned = case role of
   where
     bounds = extents domain ++ retained domain
     base = minimum (bodyRegion : map fst bounds)
-    top = max (maximum [address + size | (address, size) <- bounds]) (bodyRegion + bodyLength)
+    top = maximum
+      [ maximum [address + size | (address, size) <- bounds]
+      , bodyRegion + bodyLength
+      , lowestBitAddress domain + 16
+      ]
     slice image address size =
       if address < imageBase image
         || toInteger address + toInteger size > toInteger (imageBase image) + toInteger (B.length (imageBytes image))
         then error "fixed-pool code slice is outside its image"
         else B.take (fromIntegral size) (B.drop (fromIntegral (address - imageBase image)) (imageBytes image))
     stockBytes = install (timerRemoval domain) timerStub
-      (foldl (\current (address, size) -> install address (slice loader address size) current)
-        (B.replicate (fromIntegral (top - base)) 0) bounds)
+      (install (lowestBitAddress domain) lowestBitTable
+        (foldl (\current (address, size) -> install address (slice loader address size) current)
+          (B.replicate (fromIntegral (top - base)) 0) bounds))
     install address bytes current =
       let offset = fromIntegral (address - base)
        in B.take offset current <> bytes <> B.drop (offset + B.length bytes) current
@@ -1054,16 +1077,20 @@ caseSpec facts executing role loader owned one
       , caseExpectedStatus = if arrival then StopAddress else Returned
       , caseExpectedRegisters = if arrival
           then [(Pc, stopAddress), (Sp, targetStack)]
-          else [(R0, expectationResult expectation)]
+          else (R0, expectationResult expectation) : [(register, seed register) | register <- [R4 .. R11]] ++ [(Sp, callerSp one)]
       , caseExpectedMemory = [(RegionId "caller-frame", callerBytes)]
       , caseCp14Identity = Just (if executing == DomainA then 0x4003 else 0x4004)
-      , caseKernel = Just (KernelCase plainLimit (if arrival then Just (wire stopAddress) else Nothing) (Just 0x80001234) (Just 0) (Just 0) ignored [])
+      , caseKernel = Just (KernelCase plainLimit (if arrival then Just (wire stopAddress) else Nothing) (Just 0x80001234) (Just 0) (Just 0) ignored contexts)
       }
   where
     expectation = expectationOf role one
     arrival = expectationArrival expectation
     codeBase = minimum (bodyRegion : map fst (extents executing ++ retained executing))
-    codeTop = max (maximum [address + size | (address, size) <- extents executing ++ retained executing]) (bodyRegion + bodyLength)
+    codeTop = maximum
+      [ maximum [address + size | (address, size) <- extents executing ++ retained executing]
+      , bodyRegion + bodyLength
+      , lowestBitAddress executing + 16
+      ]
     dataPages = pages facts one
     words' = layoutWords facts
       ++ [ poke (dfHandlerContext (domainFacts facts executing)) (if caseHandler one then 1 else 0)
@@ -1072,6 +1099,18 @@ caseSpec facts executing role loader owned one
       ++ caseWords one
     outside = [address | (address, _) <- words', not (any (contains address 4) dataPages)]
     ignored = if arrival then [R0 .. R12] ++ [Lr] else [R1 .. R12] ++ [Lr]
+    contexts
+      | arrival =
+          [ stackContext (callerSp one - 0x400) (callerSp one)
+          , stackContext (targetStack - 0x100) targetStack
+          ]
+      | otherwise = []
+    stackContext low high = case mkStackContext (wire low) (wire high) of
+      Left problem -> error problem
+      Right context -> context
+
+seed :: Register -> Word32
+seed register = 0xa5a50000 + fromIntegral (fromEnum register)
 
 initialRegisters :: Domain -> Case -> [(Register, Word32)]
 initialRegisters executing one =
@@ -1094,7 +1133,7 @@ initialRegisters executing one =
         PollUnchecked -> outAddress
         Delete -> 0xa5a50001
     value R2 = if caseService one == TimedGet then caseTimeout one else 0xa5a50002
-    value register = 0xa5a50000 + fromIntegral (fromEnum register)
+    value register = seed register
     handle = case caseClass one of
       Just cls -> (cls `shiftL` 16) .|. caseSlot one
       Nothing
@@ -1161,6 +1200,20 @@ compareRole facts spec one expectation observation =
     ++ [ "caller frame changed"
        | lookup (RegionId "caller-frame") (nativeMemory observation) /= Just callerBytes
        ]
+    ++ [ "arrival pc " ++ show actual ++ " is not " ++ show stopAddress
+       | expectationArrival expectation, let actual = N.lookupRegister Pc observation, actual /= Just stopAddress
+       ]
+    ++ [ "arrival sp " ++ show actual ++ " is not " ++ show targetStack
+       | expectationArrival expectation, let actual = N.lookupRegister Sp observation, actual /= Just targetStack
+       ]
+    ++ [ "return sp " ++ show actual ++ " is not " ++ show (callerSp one)
+       | not (expectationArrival expectation), let actual = N.lookupRegister Sp observation, actual /= Just (callerSp one)
+       ]
+    ++ [ "caller register " ++ show register ++ " changed"
+       | not (expectationArrival expectation)
+       , register <- [R4 .. R11]
+       , N.lookupRegister register observation /= Just (seed register)
+       ]
     ++ [ "missing effect " ++ show check
        | check <- expectationChecks expectation
        , not (holds facts one observation check)
@@ -1196,7 +1249,7 @@ compareRole facts spec one expectation observation =
       _ -> 0
 
 compareFamily :: Facts -> Domain -> Case -> CaseSpec -> CaseSpec -> NativeObservation -> NativeObservation -> [String]
-compareFamily facts _executing one stockSpec ownedSpec stock owned =
+compareFamily facts executing one stockSpec ownedSpec stock owned =
   compareRole facts stockSpec one (caseStock one) stock
     ++ compareRole facts ownedSpec one ownedExpectation owned
     ++ ( if caseOwned one == Nothing
@@ -1209,7 +1262,14 @@ compareFamily facts _executing one stockSpec ownedSpec stock owned =
   where
     ownedExpectation = maybe (caseStock one) id (caseOwned one)
     compared = [ident | Page ident _ _ _ _ <- pages facts one, ident `notElem` map RegionId ["stack", "target-stack"]]
-    memory observation = M.fromList [(ident, bytes) | (ident, bytes) <- nativeMemory observation, ident `elem` compared]
+    memory observation = M.fromList [(ident, normalize ident bytes) | (ident, bytes) <- nativeMemory observation, ident `elem` compared]
+    kernelIdent = RegionId (if executing == DomainA then "kernel-a" else "kernel-b")
+    normalize ident bytes
+      | expectationArrival (caseStock one) && ident == kernelIdent =
+          let (GuestAddress base, _) = kernelBounds facts executing
+              offset = fromIntegral (taskAddress facts executing runningSlot + tfSavedSp (factsTask facts) - base)
+           in B.take offset bytes <> word32le 0 <> B.drop (offset + 4) bytes
+      | otherwise = bytes
     memoryDifferences =
       ["missing state region " ++ show ident | ident <- compared, M.notMember ident (memory stock) || M.notMember ident (memory owned)]
         ++ ["state region " ++ show ident ++ " differs" | ident <- compared, M.lookup ident (memory stock) /= M.lookup ident (memory owned)]

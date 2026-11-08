@@ -318,7 +318,7 @@ fn delete_releases_every_waiter_and_resets_the_record() {
         Timeout::Forever,
     )
     .unwrap();
-    delete_pool(&sim, pool(Domain::A, 1)).unwrap();
+    delete_pool(&sim, pool(Domain::A, 1), false).unwrap();
     let words = Domain::A.words();
     let config = words.fixed_pool_config(pool_slot(1));
     let control = words.fixed_pool_control(pool_slot(1));
@@ -341,10 +341,29 @@ fn delete_releases_every_waiter_and_resets_the_record() {
 }
 
 #[test]
+fn delete_from_handler_requests_delayed_dispatch() {
+    let sim = sim(Domain::A);
+    install(&sim, Domain::A, 1, 0, 8, 0);
+    running(&sim, Domain::A, 2);
+    get(
+        &sim,
+        EntryDomain::new(Domain::A),
+        pool(Domain::A, 1),
+        out(0),
+        Timeout::Forever,
+    )
+    .unwrap();
+    let before = sim.dispatched();
+    delete_pool(&sim, pool(Domain::A, 1), true).unwrap();
+    assert!(sim.delayed());
+    assert_eq!(sim.dispatched(), before);
+}
+
+#[test]
 fn delete_and_recreate_use_the_new_region() {
     let sim = sim(Domain::A);
     install(&sim, Domain::A, 1, 1, 8, 0);
-    delete_pool(&sim, pool(Domain::A, 1)).unwrap();
+    delete_pool(&sim, pool(Domain::A, 1), false).unwrap();
     let request = create(2, 8, BUFFER + 0x100);
     create_pool(&sim, pool(Domain::A, 1), request).unwrap();
     assert_eq!(
@@ -361,7 +380,7 @@ fn delete_and_recreate_use_the_new_region() {
 fn the_unchecked_extension_refuses_a_deleted_pool() {
     let sim = sim(Domain::A);
     install(&sim, Domain::A, 1, 1, 8, 0);
-    delete_pool(&sim, pool(Domain::A, 1)).unwrap();
+    delete_pool(&sim, pool(Domain::A, 1), false).unwrap();
     sim.set(out(0).0, 0xdead_beef);
     assert_eq!(
         poll_unchecked(&sim, pool(Domain::A, 1), out(0)),
