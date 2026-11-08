@@ -78,7 +78,7 @@ fn translation(maps: &[MemoryMap], core: usize, address: u32) -> Result<u32, Str
     u32::try_from(map.physical + u64::from(address) - map.address).map_err(|error| error.to_string())
 }
 fn buffer(machine: &Machine, maps: &[MemoryMap], physical: u32, tcm: &[[u32; 2]; 2]) -> Result<Buffer, String> {
-    if physical < 0xa10200 || physical.checked_add(0x400).is_none_or(|end| end > 0xa5b200) { return Err("task103 buffer leaves bounded pool".into()); }
+    if physical < 0xa10200 || physical.checked_add(0x400).is_none_or(|end| end > 0xa5a200) { return Err("task103 buffer leaves bounded pool".into()); }
     for value in tcm.iter().flatten() {
         let size = (value >> 2) & 31;
         if value & 1 != 0 && size != 0 {
@@ -154,7 +154,7 @@ fn perturb(machine: &mut Machine, case: Case, core: usize, hit: usize) -> Result
         Case::Reuse => (0xa10200, 0x400, 0, 0x40a10600, 0x400, OUTPUT, 0),
         Case::SizeError => (0xa10200, 0x404, 0, 0x40a10600, 0x400, OUTPUT, 0),
         Case::ReservedError => (0xa10200, 0x400, 1, 0x40a10600, 0x400, OUTPUT, 0),
-        Case::CapacityError => (0, 0, 0, 0x40a5b200, 0x400, OUTPUT, 0),
+        Case::CapacityError => (0, 0, 0, 0x40a5a200, 0x400, OUTPUT, 0),
         Case::Unaligned => (0, 0, 0, 0x40a10200, 3, OUTPUT, 0),
         Case::Wrapping => (0, 0, 0, 0x40a101fc, 4, OUTPUT, 0),
         Case::AliasCursor => (0, 0, 0, 0x40a10200, 0x400, CURSOR, 0),
@@ -243,8 +243,8 @@ fn drive() -> Result<(), String> {
         || identity.original_image4.0 != "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"
         || identity.loader_a.0 != "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882"
         || identity.loader_b.0 != "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec"
-        || identity.linked.0 != "3f9d7945e3adc43d3e7edbbfd3cbdbece6db66fc99cf0724e7722f36086c1768"
-        || identity.update.0 != match role { Role::Retained => "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490", Role::Owned => "cb3834a423d288d8acc0af9d7977d919945068ffae807d1ad7a940963cde3c00" }
+        || identity.linked.0 != "c8f0fe6e2ca2578acefb7484c908a68308f5e4ab0b1c6f5e95afc06d0a9eaf45"
+        || identity.update.0 != match role { Role::Retained => "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490", Role::Owned => "cd01285f06cbc983baf6e2124bed01427c04389071ad7c1f751b7bcd376d5726" }
         || linked.len() != 228 { return Err("noncanonical source, staged candidate or linked input".into()); }
     let mut helper = image[(START - 0x61c400) as usize..(END - 0x61c400) as usize].to_vec();
     if role == Role::Owned { helper[(0x725cc4 - START) as usize..(0x725da8 - START) as usize].copy_from_slice(&linked); }
@@ -267,7 +267,7 @@ fn drive() -> Result<(), String> {
     machine.traces.stop_labels.extend(sites.values().cloned());
     machine.traces.arm(&machine.session, sites)?;
     let mut classes: Vec<_> = [(0xa0fc44, 0xa101e4), (0xa5b200, 0xa5b5c0), (0x89ea94, 0x89eaa0),
-        (0x9c2808, 0x9c2814), (0xf3300, 0xf3420), (0xa10200, 0xa5b200)].into_iter().map(|(start, end)| WatchRange {
+        (0x9c2808, 0x9c2814), (0xf3300, 0xf3420), (0xa10200, 0xa5a200)].into_iter().map(|(start, end)| WatchRange {
             start, end, kinds: WatchKinds::CPU_READ.union(WatchKinds::WRITES),
         }).collect();
     classes.push(WatchRange { start: u64::from(START), end: u64::from(END), kinds: WatchKinds::CPU_FETCH.union(WatchKinds::WRITES) });

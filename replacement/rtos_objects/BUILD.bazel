@@ -22,7 +22,7 @@ xm1_rust_staticlib(
         "src/teardown.rs",
         "src/timeout.rs",
         "src/wake.rs",
-        "//replacement/rtos_layout:src/lib.rs",
+        "//replacement/rtos_layout:src/lib.rs", "//replacement/rtos_reservation:src/lib.rs",
     ],
 )
 
@@ -45,7 +45,7 @@ xm1_rust_staticlib(
         "src/teardown.rs",
             "src/timeout.rs",
             "src/wake.rs",
-            "//replacement/rtos_layout:src/lib.rs",
+            "//replacement/rtos_layout:src/lib.rs", "//replacement/rtos_reservation:src/lib.rs",
         ],
         rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain, "--cfg", "'feature=\"stage\"'"],
     )
@@ -62,7 +62,7 @@ xm1_rust_staticlib(
             "//replacement/rtos_scheduler:src/s3a.rs",
             "//replacement/rtos_scheduler:src/s3b.rs",
             "//replacement/rtos_scheduler:src/tests.rs",
-            "//replacement/rtos_layout:src/lib.rs",
+            "//replacement/rtos_layout:src/lib.rs", "//replacement/rtos_reservation:src/lib.rs",
         ],
         rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain, "--cfg", "'feature=\"component\"'"],
     )
@@ -74,7 +74,7 @@ xm1_rust_staticlib(
         name = "scheduler-s2-%s-component" % domain,
         src = "//replacement/rtos_scheduler:src/s2.rs",
         crate_name = "xm1_rtos_scheduler_s2",
-        data = ["//replacement/rtos_layout:src/lib.rs"],
+        data = ["//replacement/rtos_layout:src/lib.rs", "//replacement/rtos_reservation:src/lib.rs"],
         rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain, "--cfg", "'feature=\"component\"'"],
     )
     for domain in ["a", "b"]
@@ -119,7 +119,7 @@ genrule(
         "src/teardown.rs",
         "src/timeout.rs",
         "src/wake.rs",
-        "//replacement/rtos_layout:src/lib.rs",
+        "//replacement/rtos_layout:src/lib.rs", "//replacement/rtos_reservation:src/lib.rs",
         "//replacement/rtos_scheduler:scheduler-host-rlib",
     ],
     outs = ["objects-smoke-bin"],
@@ -146,7 +146,7 @@ genrule(
         "src/tests.rs",
         "src/timeout.rs",
         "src/wake.rs",
-        "//replacement/rtos_layout:src/lib.rs",
+        "//replacement/rtos_layout:src/lib.rs", "//replacement/rtos_reservation:src/lib.rs",
         "//replacement/rtos_scheduler:scheduler-host-rlib",
     ],
     outs = ["objects-host-tests-bin"],

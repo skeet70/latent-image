@@ -1,0 +1,94 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
+
+package(default_visibility = ["//visibility:public"])
+
+genrule(
+    name = "layout-facts-build",
+    srcs = [
+        "layout-facts.rs",
+        "//replacement/rtos_layout:src/lib.rs",
+        "//replacement/rtos_reservation:src/lib.rs",
+    ],
+    outs = ["layout-facts-bin"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 -A dead_code -C linker=$(location @lab_clang//:bin/clang) $(location layout-facts.rs) -o $@",
+    executable = True,
+    tools = [
+        "@lab_clang//:bin/clang",
+        "@lab_rustc//:bin/rustc",
+    ],
+)
+
+genrule(
+    name = "layout",
+    outs = ["layout.json"],
+    cmd = "$(location :layout-facts-build) > $@",
+    tools = [":layout-facts-build"],
+)
+
+_GHCOPTS = ["-XGHC2021", "-Wall", "-Werror", "-O2"]
+
+haskell_library(
+    name = "task-records-oracle-lib",
+    srcs = [
+        "Replacement/RtosTaskRecords/Layout.hs",
+        "Replacement/RtosTaskRecords/Suite.hs",
+    ],
+    src_strip_prefix = ".",
+    ghcopts = _GHCOPTS,
+    deps = [
+        "//emulation:cached-native-batch",
+        "//emulation:native-adapter",
+        "//emulation:native-observation",
+        "//emulation:owned-case",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:filepath",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+    ],
+)
+
+_INPUTS = [
+    ":layout.json",
+    "//emulation:native-runner",
+    "//replacement/rtos_task_records:task-records-a-native.bin",
+    "//replacement/rtos_task_records:task-records-a-native.symbols",
+    "//replacement/rtos_task_records:task-records-b-native.bin",
+    "//replacement/rtos_task_records:task-records-b-native.symbols",
+]
+
+haskell_binary(
+    name = "task-records-oracle",
+    srcs = ["TaskRecordsMain.hs"],
+    main_file = "TaskRecordsMain.hs",
+    args = [
+        "--runner",
+        "$(rootpath //emulation:native-runner)",
+        "--layout",
+        "$(rootpath :layout.json)",
+        "--owned-a-bin",
+        "$(rootpath //replacement/rtos_task_records:task-records-a-native.bin)",
+        "--owned-a-symbols",
+        "$(rootpath //replacement/rtos_task_records:task-records-a-native.symbols)",
+        "--owned-b-bin",
+        "$(rootpath //replacement/rtos_task_records:task-records-b-native.bin)",
+        "--owned-b-symbols",
+        "$(rootpath //replacement/rtos_task_records:task-records-b-native.symbols)",
+    ],
+    data = _INPUTS,
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":task-records-oracle-lib",
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//host:storage-budget",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+    ],
+)

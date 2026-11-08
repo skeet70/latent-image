@@ -276,7 +276,7 @@ callerBacking sample binding
       current <- required SnapshotRejected (case filter ((==kernelCurrent kernel) . taskNode) (kernelTasks kernel) of [task] -> Just task; _ -> Nothing)
       let low = physical (address (taskStackBase current)); high = toInteger low+toInteger (value (taskStackBytes current))
       require (taskId current == TaskId 104 && taskStackBytes current == W.WordValue 1024
-        && low >= 0xa10200 && high <= 0xa5b200 && toInteger (physical (address (bindingSp binding)))+16 == high) SnapshotRejected
+        && low >= 0xa10200 && high <= 0xa5a200 && toInteger (physical (address (bindingSp binding)))+16 == high) SnapshotRejected
       pure (CallerBacking (W.Address low) (W.Address (fromInteger high)))
   where
     core = contextCore (sampleContext sample)
@@ -298,7 +298,7 @@ currentLocalShape inputs@(Inputs _ _ program) receipt probe sample memory = do
       let publishing = size == 0 && reserved == 0 && case pending of
             Just store -> physical (address (P.guestStoreAddress store)) == 0xa0fc48+12*i && P.guestStoreValue store == W.WordValue 1024
             Nothing -> False
-      require (pool == 0 || ((size == 1024 || publishing) && physical pool >= 0xa10200 && toInteger (physical pool)+1024 <= 0xa5b200)) SnapshotRejected
+      require (pool == 0 || ((size == 1024 || publishing) && physical pool >= 0xa10200 && toInteger (physical pool)+1024 <= 0xa5a200)) SnapshotRejected
       backing <- callerBacking sample current
       let low = address (backingLow backing); high = address (backingHigh backing)
           pools = if pool == 0 || publishing then [] else [(Stack,physical pool,1024)]
@@ -764,7 +764,7 @@ checkSubmission (Inputs _ _ program) receipt submitted = do
   let (cbase,tbase,_,auxBase,nodeBase,_,_,_,_,_) = layout core; i = fromIntegral number-1; c = physical (cbase+40*i); t = physical (tbase+56*i)
   pool <- readWord SubmissionRejected after (0xa5b204+8*i)
   size <- readWord SubmissionRejected after (0xa5b208+8*i)
-  require (pool >= 0xa10200 && toInteger pool+1024 <= 0xa5b200 && size == 1024) SubmissionRejected
+  require (pool >= 0xa10200 && toInteger pool+1024 <= 0xa5a200 && size == 1024) SubmissionRejected
   let classNumber = case core of PrimaryKernel -> 1; SecondaryKernel -> 2
       encoded = classNumber `shiftL` 16 .|. fromIntegral number
       constructor = case core of PrimaryKernel -> 0x4d094; SecondaryKernel -> 0xdd054

@@ -11,7 +11,24 @@ impl GuestAddress {
     pub const fn offset(self, bytes: u32) -> Self {
         Self(self.0.wrapping_add(bytes))
     }
+
+    /// The physical spelling of a `0x40000000`-aliased guest address.
+    #[inline(always)]
+    pub const fn physical(self) -> u32 {
+        if self.0 >= 0x4000_0000 && self.0 < 0x6000_0000 {
+            self.0 - 0x4000_0000
+        } else {
+            self.0
+        }
+    }
 }
+
+#[path = "../../rtos_reservation/src/lib.rs"]
+pub mod reservation;
+
+pub use reservation::{
+    Span, TaskPool, TimerArena, TimerArenas, TASK_POOL, TIMER_ARENA_CAPACITY, TIMER_ARENAS, TIMER_NODE_BYTES,
+};
 
 /// The loader whose kernel owns the data.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -736,10 +753,59 @@ impl Task {
 pub struct TaskDefinition(pub GuestAddress);
 
 impl TaskDefinition {
+    pub const SIZE: u32 = 0x28;
+
+    #[inline(always)]
+    pub const fn attributes(self) -> GuestAddress {
+        self.0
+    }
+
+    #[inline(always)]
+    pub const fn argument(self) -> GuestAddress {
+        self.0.offset(0x04)
+    }
+
+    #[inline(always)]
+    pub const fn entry(self) -> GuestAddress {
+        self.0.offset(0x08)
+    }
+
     /// Word whose low byte is the initial [`Priority`].
     #[inline(always)]
     pub const fn priority(self) -> GuestAddress {
         self.0.offset(0x0c)
+    }
+
+    /// Rounded stack bytes.
+    #[inline(always)]
+    pub const fn stack_size(self) -> GuestAddress {
+        self.0.offset(0x10)
+    }
+
+    #[inline(always)]
+    pub const fn stack(self) -> GuestAddress {
+        self.0.offset(0x14)
+    }
+
+    #[inline(always)]
+    pub const fn exception_attributes(self) -> GuestAddress {
+        self.0.offset(0x18)
+    }
+
+    #[inline(always)]
+    pub const fn exception_handler(self) -> GuestAddress {
+        self.0.offset(0x1c)
+    }
+
+    /// One-based creation id.
+    #[inline(always)]
+    pub const fn slot(self) -> GuestAddress {
+        self.0.offset(0x20)
+    }
+
+    #[inline(always)]
+    pub const fn exists(self) -> GuestAddress {
+        self.0.offset(0x24)
     }
 
     /// Two words whose wrapping sum is the initial saved SP.
@@ -747,11 +813,132 @@ impl TaskDefinition {
     pub const fn initial_sp_terms(self) -> [GuestAddress; 2] {
         [self.0.offset(0x10), self.0.offset(0x14)]
     }
+}
 
-    /// The one-based task slot.
+/// 1..=the fixed-pool count word.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
+#[repr(transparent)]
+pub struct FixedPoolSlot(u16);
+
+impl FixedPoolSlot {
+    pub const COUNT: u32 = 122;
+
     #[inline(always)]
-    pub const fn slot(self) -> GuestAddress {
-        self.0.offset(0x20)
+    pub const fn new(slot: u32, count: u32) -> Option<Self> {
+        if slot >= 1 && slot <= count && slot <= Self::COUNT {
+            Some(Self(slot as u16))
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub const fn get(self) -> u32 {
+        self.0 as u32
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct FixedPoolConfig(pub GuestAddress);
+
+impl FixedPoolConfig {
+    pub const SIZE: u32 = 0x14;
+    pub const PRIORITY_ORDER: u32 = 0x01;
+
+    #[inline(always)]
+    pub const fn attributes(self) -> GuestAddress {
+        self.0
+    }
+
+    /// The rounded stride, `(size + 3) & !3`.
+    #[inline(always)]
+    pub const fn block_size(self) -> GuestAddress {
+        self.0.offset(0x04)
+    }
+
+    #[inline(always)]
+    pub const fn begin(self) -> GuestAddress {
+        self.0.offset(0x08)
+    }
+
+    #[inline(always)]
+    pub const fn end(self) -> GuestAddress {
+        self.0.offset(0x0c)
+    }
+
+    #[inline(always)]
+    pub const fn exists(self) -> GuestAddress {
+        self.0.offset(0x10)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct FixedPoolControl(pub GuestAddress);
+
+impl FixedPoolControl {
+    pub const SIZE: u32 = 0x14;
+
+    #[inline(always)]
+    pub const fn queue(self) -> WaitQueue {
+        WaitQueue(self.0)
+    }
+
+    /// Next block the bump allocator has never handed out.
+    #[inline(always)]
+    pub const fn next_free(self) -> GuestAddress {
+        self.0.offset(0x0c)
+    }
+
+    /// Head of the released-block list; each block's first word links the next.
+    #[inline(always)]
+    pub const fn recycled(self) -> GuestAddress {
+        self.0.offset(0x10)
+    }
+}
+
+/// A task's fixed-pool wait record, in a table indexed by the task slot.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct FixedPoolWait(pub GuestAddress);
+
+impl FixedPoolWait {
+    pub const SIZE: u32 = 0x10;
+
+    #[inline(always)]
+    pub const fn base(self) -> WaitBlock {
+        WaitBlock(self.0)
+    }
+
+    /// Receives the block address when the wait is satisfied.
+    #[inline(always)]
+    pub const fn block(self) -> GuestAddress {
+        self.0.offset(0x0c)
+    }
+}
+
+/// The creation-id map entry for one task slot; the stored word is the id.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct TaskCreationId(pub GuestAddress);
+
+impl TaskCreationId {
+    #[inline(always)]
+    pub const fn word(self) -> GuestAddress {
+        self.0
+    }
+}
+
+/// The stock word `&g_default_stack_word` a reset definition points its stack at.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct DefaultStackWord(pub GuestAddress);
+
+impl DefaultStackWord {
+    #[inline(always)]
+    pub const fn address(self) -> GuestAddress {
+        self.0
     }
 }
 
@@ -983,6 +1170,13 @@ pub struct DomainWords {
     pub time_offset: GuestAddress,
     pub timer_count: GuestAddress,
     pub timer_heap: GuestAddress,
+    /// [`FixedPoolSlot::COUNT`] creation records.
+    pub fixed_pool_configs: GuestAddress,
+    pub fixed_pool_controls: GuestAddress,
+    pub fixed_pool_waits: GuestAddress,
+    pub fixed_pool_timers: GuestAddress,
+    /// The one-word block a deleted pool's creation record spans.
+    pub default_pool_storage: GuestAddress,
     /// [`TaskSlot::COUNT`] [`Task`] records.
     pub task_table: GuestAddress,
     /// [`SemaphoreSlot::COUNT`] creation records.
@@ -991,6 +1185,12 @@ pub struct DomainWords {
     /// [`TaskSlot::COUNT`] [`WaitBlock`]s, indexed by the waiting task.
     pub semaphore_waits: GuestAddress,
     pub semaphore_timers: GuestAddress,
+    /// [`TaskSlot::COUNT`] [`TaskDefinition`] records.
+    pub task_definitions: GuestAddress,
+    /// [`TaskSlot::COUNT`] [`TaskCreationId`] words.
+    pub task_slot_ids: GuestAddress,
+    /// `&g_default_stack_word`.
+    pub default_stack_word: DefaultStackWord,
     /// [`FlagSlot::COUNT`] creation records.
     pub flag_configs: GuestAddress,
     pub flag_controls: GuestAddress,
@@ -1026,6 +1226,16 @@ impl DomainWords {
         Task(self.task_table.offset((slot.get() - 1) * Task::SIZE))
     }
 
+    #[inline(always)]
+    pub const fn task_definition(&self, slot: TaskSlot) -> TaskDefinition {
+        TaskDefinition(self.task_definitions.offset((slot.get() - 1) * TaskDefinition::SIZE))
+    }
+
+    #[inline(always)]
+    pub const fn task_creation_id(&self, slot: TaskSlot) -> TaskCreationId {
+        TaskCreationId(self.task_slot_ids.offset((slot.get() - 1) * 4))
+    }
+
     /// `None` unless `task` is a record start in this table.
     #[inline(always)]
     pub const fn task_slot(&self, task: Task) -> Option<TaskSlot> {
@@ -1059,6 +1269,26 @@ impl DomainWords {
     #[inline(always)]
     pub const fn semaphore_timer(&self, task: TaskSlot) -> GuestAddress {
         self.semaphore_timers.offset((task.get() - 1) * TIMER_ENTRY_SIZE)
+    }
+
+    #[inline(always)]
+    pub const fn fixed_pool_config(&self, slot: FixedPoolSlot) -> FixedPoolConfig {
+        FixedPoolConfig(self.fixed_pool_configs.offset((slot.get() - 1) * FixedPoolConfig::SIZE))
+    }
+
+    #[inline(always)]
+    pub const fn fixed_pool_control(&self, slot: FixedPoolSlot) -> FixedPoolControl {
+        FixedPoolControl(self.fixed_pool_controls.offset((slot.get() - 1) * FixedPoolControl::SIZE))
+    }
+
+    #[inline(always)]
+    pub const fn fixed_pool_wait(&self, task: TaskSlot) -> FixedPoolWait {
+        FixedPoolWait(self.fixed_pool_waits.offset((task.get() - 1) * FixedPoolWait::SIZE))
+    }
+
+    #[inline(always)]
+    pub const fn fixed_pool_timer(&self, task: TaskSlot) -> GuestAddress {
+        self.fixed_pool_timers.offset((task.get() - 1) * TIMER_ENTRY_SIZE)
     }
 
     #[inline(always)]
@@ -1135,6 +1365,14 @@ impl Domain {
     }
 
     #[inline(always)]
+    pub const fn timer_arena(self) -> TimerArena {
+        match self {
+            Domain::A => TIMER_ARENAS.a,
+            Domain::B => TIMER_ARENAS.b,
+        }
+    }
+
+    #[inline(always)]
     pub const fn words(self) -> DomainWords {
         match self {
             Domain::A => DomainWords {
@@ -1154,11 +1392,19 @@ impl Domain {
                 time_offset: GuestAddress(0x4005_4774),
                 timer_count: GuestAddress(0x4005_4778),
                 timer_heap: GuestAddress(0x4005_d718),
+                fixed_pool_configs: GuestAddress(0x4006_194c),
+                fixed_pool_controls: GuestAddress(0x4005_f584),
+                fixed_pool_waits: GuestAddress(0x4005_855c),
+                fixed_pool_timers: GuestAddress(0x4005_8cdc),
+                default_pool_storage: GuestAddress(0x4006_2c4c),
                 task_table: GuestAddress(0x4005_ff0c),
                 semaphore_configs: GuestAddress(0x4005_dfd8),
                 semaphore_controls: GuestAddress(0x4005_af0c),
                 semaphore_waits: GuestAddress(0x4005_4efc),
                 semaphore_timers: GuestAddress(0x4005_549c),
+                task_definitions: GuestAddress(0x4005_beac),
+                task_slot_ids: GuestAddress(0x4006_22d4),
+                default_stack_word: DefaultStackWord(GuestAddress(0x4006_2c50)),
                 flag_configs: GuestAddress(0x4005_d178),
                 flag_controls: GuestAddress(0x4006_24b4),
                 flag_waits: GuestAddress(0x4005_5fdc),
@@ -1190,11 +1436,19 @@ impl Domain {
                 time_offset: GuestAddress(0x400e_4734),
                 timer_count: GuestAddress(0x400e_4738),
                 timer_heap: GuestAddress(0x400e_d6d8),
+                fixed_pool_configs: GuestAddress(0x400f_190c),
+                fixed_pool_controls: GuestAddress(0x400e_f544),
+                fixed_pool_waits: GuestAddress(0x400e_851c),
+                fixed_pool_timers: GuestAddress(0x400e_8c9c),
+                default_pool_storage: GuestAddress(0x400f_2c0c),
                 task_table: GuestAddress(0x400e_fecc),
                 semaphore_configs: GuestAddress(0x400e_df98),
                 semaphore_controls: GuestAddress(0x400e_aecc),
                 semaphore_waits: GuestAddress(0x400e_4ebc),
                 semaphore_timers: GuestAddress(0x400e_545c),
+                task_definitions: GuestAddress(0x400e_be6c),
+                task_slot_ids: GuestAddress(0x400f_2294),
+                default_stack_word: DefaultStackWord(GuestAddress(0x400f_2c10)),
                 flag_configs: GuestAddress(0x400e_d138),
                 flag_controls: GuestAddress(0x400f_2474),
                 flag_waits: GuestAddress(0x400e_5f9c),

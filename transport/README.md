@@ -377,6 +377,9 @@ A pass does not establish:
 - What a stock callee does with the arguments the bank passes, including whether it writes persistent state. `stock_calls` is the reviewed list of callees.
 - Values, timing, concurrency, cache coherence and cross-core effects; the publications, the installer and the generated data contents; loads through unbounded pointers. Calls are assumed to follow the AAPCS: r4 to r11 and sp survive them, r0 to r3, r12 and lr do not.
 
+The render adapter's separate static admission is `RenderStack.checkRenderStack` in `//host/firmware:bank-allowlist`. It takes the linked ELF and the full owned-runtime address predicate, bounds `rb_render_tree_entry` and `rb_render_picker_entry` through `EngineStack.stackDepth`, and reserves the engine's 1024-byte stock margin against UILIB task 33's 3416/3720-byte seam headrooms. [R1 prerequisite 2](../reports/display-render-increment-r1.md#prerequisite-2-uilib-stack-admission) records the byte-derived caller frames and the cutover pair's descriptor/stack-read specification. Run `bazel test //host/firmware:render-stack-tests //host/firmware:engine-stack-tests`. This static check does not measure the guest stack's high-water mark.
+
+
 A declaration no site matches still passes; the checker lists it as unused.
 
 ```sh

@@ -427,7 +427,7 @@ main = do
     ok "the record-2 link enumerates its destinations per core, pre-boundary core-1 stores included"
       ([field "basis" writes | writes <- writesOf "record2-link"] == [Just (J.String "premised")]
         && all (`elem` allowOf "record2-link")
-          [ physicalOn (Just J.Null) 0xa0f824 0xa0f828, physicalOn (Just J.Null) 0xa10200 0xa5b200
+          [ physicalOn (Just J.Null) 0xa0f824 0xa0f828, physicalOn (Just J.Null) 0xa10200 0xa5a200
           , physicalOn (number 0) 0x62c54 0x63460, physicalOn (number 1) 0xddaa0 0xf3420
           , (Just (J.String "tcm"), number 0, number 0, number 0x2000), (Just (J.String "tcm"), number 1, number 0, number 0x2000)
           , physicalOn (number 1) 0x14c60 0x14c64, physicalOn (number 1) 0x14c80 0x14ca0, physicalOn (number 1) 0x20004 0x20008

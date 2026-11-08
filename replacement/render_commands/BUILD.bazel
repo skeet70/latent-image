@@ -1,0 +1,5 @@
+filegroup(
+    name = "module",
+    srcs = ["src/lib.rs"],
+    visibility = ["//visibility:public"],
+)

@@ -76,10 +76,10 @@ withinSubmission receipt submission kind = do
 pointer :: TaskId -> W.Address -> Word32 -> W.Address -> Either ComparisonError Pointer
 pointer ident base size actual
   | actual == W.Address 0 = Right (Absolute actual)
-  | physical (addr base) < 0xa10200 || physical (addr base) >= 0xa5b200 = Right (Absolute actual)
+  | physical (addr base) < 0xa10200 || physical (addr base) >= 0xa5a200 = Right (Absolute actual)
   | physical (addr actual) >= physical (addr base) && toInteger (physical (addr actual)) <= toInteger (physical (addr base))+toInteger size = do
       ensure ComparisonStackRejected (size > 0 && physical (addr base) >= 0xa10200
-        && toInteger (physical (addr base))+toInteger size <= 0xa5b200
+        && toInteger (physical (addr base))+toInteger size <= 0xa5a200
         && addr actual .&. 0x80000000 == 0 && addr base .&. 0x80000000 == 0)
       pure (OwnStack ident (if addr actual .&. 0x40000000 == 0 then PhysicalStack else CachedStack)
         (physical (addr actual)-physical (addr base)))

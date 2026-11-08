@@ -11,7 +11,7 @@ module RuntimeRelocationCompare
 import qualified A32 as A
 import qualified ArmElf as E
 import Control.Monad (forM, forM_, unless, when)
-import Data.Aeson (FromJSON (..), Value, eitherDecodeStrict', object, withObject, withText, (.:), (.=))
+import Data.Aeson (FromJSON (..), Value, eitherDecodeStrict', object, withObject, withText, (.:), (.:?), (.=))
 import Data.Aeson.Types (Parser)
 import Data.Bits (complement, shiftL, shiftR, (.&.), (.|.))
 import qualified Data.ByteString as B
@@ -104,12 +104,14 @@ instance FromJSON Manifest where
     entries <- o .: "entry" >>= withObject "entry" (\e -> sequence
       [EntryPoint InstallEntry <$> e .: "install", EntryPoint RollbackEntry <$> e .: "rollback", EntryPoint StatusEntry <$> e .: "status"])
     size <- o .: "size"
-    variant <- case [variant | variant <- [L.standardBankVariant, L.modalScopedBankVariant, L.lifecycleBankVariant, L.modalLifecycleBankVariant], size == fromIntegral (L.runtimeAllocationSizeFor variant)] of
-      [variant] -> pure variant
-      _ | size == fromIntegral (L.runtimeAllocationSizeFor L.modalEngineBankVariant) ->
-            fail "the menu-engine package is not compared: its .menu_engine section and engine region are outside this comparison"
-      _ -> fail "unknown composed bank allocation extent"
-    Manifest <$> o .: "base" <*> pure size <*> o .: "publications" <*> pure entries <*> pure variant
+    publications <- o .: "publications"
+    tag <- o .:? "bank_variant"
+    variant <- either fail pure (L.bankVariantFromIdentity tag (length publications))
+    unless (size == fromIntegral (L.runtimeAllocationSizeFor variant)) $
+      fail "bank variant and allocation extent disagree"
+    when (L.hasPublicationGroup L.MenuEnginePublication variant) $
+      fail "the menu-engine package is not compared: its .menu_engine section and engine region are outside this comparison"
+    Manifest <$> o .: "base" <*> pure size <*> pure publications <*> pure entries <*> pure variant
 instance FromJSON PlanRegion where
   parseJSON = withText "plan region" $ \text -> case T.unpack text of
     "menu_values" -> pure MenuValues

@@ -4,6 +4,7 @@ import Control.Exception (IOException, try)
 import Control.Monad (forM_, unless)
 import qualified Xm1Viewer as Viewer
 import Xm1RamPushE2E (ModalDiagnostic (..), ModalLifetimeGuard (..), ModalOwnedPackage (..), loadModalOwnedPackage)
+import FujiAF.RamPush (payloadPublicationCount)
 import Emulation.LiveSettings (LiveSettingChange (..), liveSettingChange, liveSettings)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
@@ -88,6 +89,14 @@ main = do
   forM_ [stock ++ [scoped, engine] ++ owned, engine : owned ++ scoped : stock] $ \arguments -> do
     candidate <- acceptedOptions arguments
     check "the owned engine selects the scoped payload with the engine" (Viewer.menuEngineOwnedOption candidate && Viewer.ramPayloadOption candidate == Viewer.BankModal75Choice)
+    check "default engine selection excludes render" (not (Viewer.renderOwnedOption candidate))
+    check "default engine role retains 225 publications" (payloadPublicationCount (Viewer.selectedPayload candidate) == 225)
+  render <- acceptedOptions (stock ++ [scoped, engine, "--render-owned"] ++ owned)
+  check "render flag selects the composed render role" (Viewer.renderOwnedOption render && Viewer.menuEngineOwnedOption render)
+  check "render role selects 228 publications" (payloadPublicationCount (Viewer.selectedPayload render) == 228)
+  refuses "render requires engine" (stock ++ [scoped,"--render-owned"] ++ owned)
+  refuses "render requires archive" (stock ++ [scoped,engine,"--render-owned"])
+  refuses "render flag refuses duplicates" (stock ++ [scoped,engine,"--render-owned","--render-owned"] ++ owned)
   scopedOwned <- acceptedOptions (stock ++ [scoped] ++ owned)
   check "the owned modal role alone carries no engine" (not (Viewer.menuEngineOwnedOption scopedOwned))
   refuses "the owned engine requires the scoped selection" (stock ++ [guard, engine] ++ owned)
