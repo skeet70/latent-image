@@ -204,8 +204,10 @@ declarationValue declaration = case declaration of
 -- when task storage is composed too; the contract omits the key otherwise.
 poolAllocationValue :: [Piece] -> Maybe Value
 poolAllocationValue pieces = case ([pool | TaskSubmissionFacts _ pool <- facts], any ((== TaskStorage) . pieceKind) pieces) of
-  ([PoolAllocation (PoolSpan start end) records cursor positions tops owners (Citation citation)], True) -> Just $ object
+  ([PoolAllocation (PoolSpan start end) allocatableEnd (PoolSpan reservedStart reservedEnd) records cursor positions tops owners (Citation citation)], True) -> Just $ object
     [ "pool" .= object ["start" .= start, "end" .= end]
+    , "allocatable_end" .= allocatableEnd
+    , "reserved" .= object ["start" .= reservedStart, "end" .= reservedEnd]
     , "records" .= labelText records, "cursor" .= labelText cursor
     , "words" .= [ object [ "read" .= labelText (allocationRead position), "offset" .= allocationOffset position
                           , "stride" .= allocationStride position, "position" .= allocationPositionName (allocationPosition position) ]

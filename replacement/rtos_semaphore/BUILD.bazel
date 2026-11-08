@@ -23,7 +23,7 @@ xm1_rust_staticlib(
     name = "semaphore-rust",
     src = "src/lib.rs",
     crate_name = "xm1_rtos_semaphore",
-    data = _MODULES + ["//replacement/rtos_layout:src/lib.rs"],
+    data = _MODULES + ["//replacement/rtos_layout:src/lib.rs", "//replacement/rtos_reservation:src/lib.rs"],
 )
 
 [
@@ -31,7 +31,7 @@ xm1_rust_staticlib(
         name = "semaphore-stage-%s" % domain,
         src = "stage/adapter.rs",
         crate_name = "xm1_rtos_semaphore_stage",
-        data = _MODULES + ["src/lib.rs", "//replacement/rtos_layout:src/lib.rs"],
+        data = _MODULES + ["src/lib.rs", "//replacement/rtos_layout:src/lib.rs", "//replacement/rtos_reservation:src/lib.rs"],
         rustc_flags = [
             "--cfg",
             "'feature=\"domain-%s\"'" % domain,
@@ -63,6 +63,7 @@ genrule(
         "src/sim.rs",
         "src/tests.rs",
         "//replacement/rtos_layout:src/lib.rs",
+        "//replacement/rtos_reservation:src/lib.rs",
         "//replacement/rtos_scheduler:scheduler-host-rlib",
     ],
     outs = ["semaphore-host-tests-bin"],
@@ -87,6 +88,7 @@ genrule(
     srcs = [
         "native/layout-facts.rs",
         "//replacement/rtos_layout:src/lib.rs",
+        "//replacement/rtos_reservation:src/lib.rs",
     ],
     outs = ["layout-facts-bin"],
     cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 -A dead_code -C linker=$(location @lab_clang//:bin/clang) $(location native/layout-facts.rs) -o $@",

@@ -129,8 +129,9 @@ main = do
         _ -> False
   relation <- maybe (H.failH "J4 pieces emit no pool-allocation relation") pure (poolAllocationValue [first, pair, publisher, startup, submission, storage])
   ok "the relation carries exactly the consumer's keys"
-    (keysOf relation == Set.fromList ["pool", "records", "cursor", "words", "stack_tops", "owners", "citation"]
+    (keysOf relation == Set.fromList ["pool", "allocatable_end", "reserved", "records", "cursor", "words", "stack_tops", "owners", "citation"]
       && maybe False ((== Set.fromList ["start", "end"]) . keysOf) (member "pool" relation)
+      && maybe False ((== Set.fromList ["start", "end"]) . keysOf) (member "reserved" relation)
       && all ((== Set.fromList ["read", "offset", "stride", "position"]) . keysOf) (items "words" relation)
       && all ((== Set.fromList ["core", "read", "offset", "stride"]) . keysOf) (items "owners" relation))
   ok "the relation names the piece's reads with whole records, a one-word cursor and words inside their strides"
