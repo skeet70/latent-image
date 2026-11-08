@@ -632,7 +632,9 @@ checkRenderInvocationEvidenceReader bounds readers evidence = do
       let frames = [(E.TreeStack,E.FrameBytes (S.entryDepth (S.reportTree bounds)))
             ,(E.PickerStack,E.FrameBytes (S.entryDepth (S.reportPicker bounds)))
             ,(E.PaneStack,E.FrameBytes (S.entryDepth (S.reportPane bounds)))]
-      E.checkEntryWitnesses frames witnesses evidence
+          (start, end) = E.evidenceInterval evidence
+          scoped = [witness | witness@(E.EntryWitness _ counter _ _) <- witnesses, counter >= start, counter <= end]
+      E.checkEntryWitnesses frames scoped evidence
       pure (E.allocationVerdict evidence)
  where
   go witnesses [] = pure (Right (reverse witnesses))
@@ -800,7 +802,9 @@ checkRenderInvocationEvidence bounds observations evidence = do
   let frames = [(E.TreeStack,E.FrameBytes (S.entryDepth (S.reportTree bounds)))
         ,(E.PickerStack,E.FrameBytes (S.entryDepth (S.reportPicker bounds)))
         ,(E.PaneStack,E.FrameBytes (S.entryDepth (S.reportPane bounds)))]
-  E.checkEntryWitnesses frames witnesses evidence
+      (start, end) = E.evidenceInterval evidence
+      scoped = [witness | witness@(E.EntryWitness _ counter _ _) <- witnesses, counter >= start, counter <= end]
+  E.checkEntryWitnesses frames scoped evidence
   pure (E.allocationVerdict evidence)
 
 osdInputs :: [Observation] -> Either String [(T.Text,J.Value)]

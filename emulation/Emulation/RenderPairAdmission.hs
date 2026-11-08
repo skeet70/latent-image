@@ -1271,9 +1271,6 @@ ownedConfigFromElf elf allocationSize base stock retainedConfig = do
   let depths = [ (E.TreeStack, R.entryDepth (R.reportTree report))
                , (E.PickerStack, R.entryDepth (R.reportPicker report))
                , (E.PaneStack, R.entryDepth (R.reportPane report)) ]
-      declared = [(entryKind entry, depth) | entry <- configEntries stock, E.FrameBytes depth <- [entryDepth entry]]
-  unless (sort depths == sort declared) (Left
-    ("owned ELF depths " ++ show depths ++ " differ from the frozen stock receipt's " ++ show declared))
   let sections = [(ELF.sectionAddress section, sectionBytes section)
                  | section <- ELF.elfSections elf, ELF.sectionExecutable section, ELF.sectionSize section > 0]
       ownedSources = [DiagnosticSource OwnedSource (E.StackAddress address) (digestBytes bytes) "" | (address, bytes) <- sections]

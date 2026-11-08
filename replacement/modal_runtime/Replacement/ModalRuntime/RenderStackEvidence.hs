@@ -5,7 +5,7 @@ module Replacement.ModalRuntime.RenderStackEvidence
   ( StackRole(..), StackKind(..), InstructionCounter(..), StackBoundary(..)
   , RenderStackEvidence, AllocationVerdict, EntryWitness(..)
   , StackAddress(..), CodeAddress(..), FrameBytes(..)
-  , parseRenderStackEvidence, allocationVerdict, checkEntryWitnesses
+  , parseRenderStackEvidence, allocationVerdict, checkEntryWitnesses, evidenceInterval
   , checkLifetimeGuard, checkOwnedSources, allocationVerdictJson
   ) where
 
@@ -80,6 +80,10 @@ data Invocation = Invocation
 newtype ActiveObservations = ActiveObservations Word64 deriving newtype (J.FromJSON, Eq, Show)
 data RenderStackEvidence = RenderStackEvidence StackRole StackBoundary StackBoundary ActiveObservations [SourceBinding] [Invocation] AllocationVerdict deriving (Eq, Show)
 data EntryWitness = EntryWitness StackKind InstructionCounter StackAddress CodeAddress deriving (Eq, Show)
+
+-- | The diagnostic interval a report covers; entries outside it are post-unload activity.
+evidenceInterval :: RenderStackEvidence -> (InstructionCounter, InstructionCounter)
+evidenceInterval (RenderStackEvidence _ (StackBoundary start _) (StackBoundary end _) _ _ _ _) = (start, end)
 data AllocationVerdict = AllocationVerdict StackRole InvocationCount InvocationCount InvocationCount (Maybe StackAddress) deriving (Eq, Show)
 
 instance J.FromJSON CpuCore where
