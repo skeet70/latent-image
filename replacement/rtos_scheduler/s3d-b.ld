@@ -7,6 +7,8 @@ MEMORY {
   interrupt_release_wait_entry (rx) : ORIGIN = 0xd6774, LENGTH = 0x04
   delay_entry (rx) : ORIGIN = 0xd6e08, LENGTH = 0x04
   delay_body (rx) : ORIGIN = 0xd6e0c, LENGTH = 0x180
+  timeout_entry (rx) : ORIGIN = 0xd42d8, LENGTH = 0x04
+  delay_completion_entry (rx) : ORIGIN = 0xd45f4, LENGTH = 0x04
   bodies (rx) : ORIGIN = 0xe0000, LENGTH = 0x4000
 }
 s3d_remove_ready = 0xd3cdc;
@@ -25,6 +27,8 @@ SECTIONS {
   .s3d_interrupt_release_wait_entry : { KEEP(*(.text.s3d_interrupt_release_wait_entry)) } > interrupt_release_wait_entry =0xf000f0e7
   .s3d_delay_entry : { KEEP(*(.text.s3d_delay_entry)) } > delay_entry =0xf000f0e7
   .s3d_delay_body : { KEEP(*(.text.s3d_delay_body)) __s3d_delay_body_end = .; } > delay_body =0xf000f0e7
+  .scheduler_timeout_entry : { KEEP(*(.text.scheduler_timeout_entry)) } > timeout_entry =0xf000f0e7
+  .scheduler_delay_completion_entry : { KEEP(*(.text.scheduler_delay_completion_entry)) } > delay_completion_entry =0xf000f0e7
   .s3d_bodies : {
     KEEP(*(.text.s3d_terminate_body))
     __s3d_terminate_body_end = .;
@@ -44,6 +48,12 @@ SECTIONS {
     __s3d_release_queued_end = .;
     KEEP(*(.text.*release*))
     __s3d_release_core_end = .;
+    KEEP(*(.text.scheduler_timeout_body))
+    __scheduler_timeout_body_end = .;
+    KEEP(*(.text.scheduler_delay_completion_body))
+    __scheduler_delay_completion_body_end = .;
+    KEEP(*(.text.scheduler_timeout_core))
+    __scheduler_timeout_core_end = .;
     KEEP(*(.text))
     KEEP(*(.rodata .rodata.*))
     . = ORIGIN(bodies) + LENGTH(bodies);
@@ -61,6 +71,8 @@ ASSERT(s3d_timed_sleep == ORIGIN(timed_sleep_entry), "timed sleep entry moved")
 ASSERT(s3d_release_wait == ORIGIN(release_wait_entry), "release entry moved")
 ASSERT(s3d_interrupt_release_wait == ORIGIN(interrupt_release_wait_entry), "handler release entry moved")
 ASSERT(s3d_delay == ORIGIN(delay_entry), "delay entry moved")
+ASSERT(xm1_rtos_scheduler_timeout == ORIGIN(timeout_entry), "timeout callback entry moved")
+ASSERT(xm1_rtos_scheduler_delay_completion == ORIGIN(delay_completion_entry), "delay callback entry moved")
 ASSERT(s3d_delay_body == ORIGIN(delay_body), "delay body is not grounded after its entry")
 ASSERT(__s3d_delay_body_end <= ORIGIN(delay_body) + LENGTH(delay_body), "delay body overflow")
 ASSERT(s3d_terminate_body == ORIGIN(bodies), "terminate body moved")
@@ -69,4 +81,7 @@ ASSERT(__s3d_change_priority_body_end <= ORIGIN(bodies) + LENGTH(bodies), "prior
 ASSERT(__s3d_timed_sleep_body_end <= ORIGIN(bodies) + LENGTH(bodies), "timed sleep body overflow")
 ASSERT(__s3d_release_wait_body_end <= ORIGIN(bodies) + LENGTH(bodies), "release body overflow")
 ASSERT(__s3d_interrupt_release_wait_body_end <= ORIGIN(bodies) + LENGTH(bodies), "handler release body overflow")
+ASSERT(__scheduler_timeout_body_end <= ORIGIN(bodies) + LENGTH(bodies), "timeout body overflow")
+ASSERT(__scheduler_delay_completion_body_end <= ORIGIN(bodies) + LENGTH(bodies), "delay completion body overflow")
+ASSERT(__scheduler_timeout_core_end <= ORIGIN(bodies) + LENGTH(bodies), "timeout core overflow")
 ASSERT(SIZEOF(.forbidden) == 0, "unplaced code or data")

@@ -6,7 +6,7 @@ module Main (main) where
 import Control.Category ((>>>))
 import Control.Monad (forM, forM_, unless)
 import Data.Aeson ((.=))
-import Data.Bits ((.&.), (.|.), complement, shiftL, shiftR)
+import Data.Bits ((.&.), (.|.), complement, shiftL, shiftR, xor)
 import qualified Data.ByteString as B
 import Data.List (find, sortOn)
 import qualified Data.Map.Strict as M
@@ -36,6 +36,7 @@ data Role = Stock | Owned deriving (Eq, Show)
 data Aggregate = Aggregate Agg.AggregateImage [Agg.AggregateSymbol]
 
 data Service = Terminate | ChangePriority | TimedSleep | ReleaseWait | HandlerRelease | Delay
+  | Timeout | DelayCallback
   deriving (Eq, Show)
 
 data Expected = ReturnedR0 Word32 | StoppedAt Word32 Word32 deriving (Eq, Show)
@@ -62,6 +63,8 @@ entryOf domain service = base + if domain == DomainB then 0x8ffc0 else 0
       ReleaseWait -> 0x46534
       HandlerRelease -> 0x467b4
       Delay -> 0x46e48
+      Timeout -> 0x44318
+      DelayCallback -> 0x44634
 
 extentOf :: Service -> Word32
 extentOf service = case service of
@@ -71,6 +74,8 @@ extentOf service = case service of
   ReleaseWait -> 0x280
   HandlerRelease -> 0x24c
   Delay -> 0x184
+  Timeout -> 0x1cc
+  DelayCallback -> 0xc8
 
 switchOf :: Domain -> Word32
 switchOf domain = (if domain == DomainA then 0x43640 else 0xd3640)
@@ -96,7 +101,7 @@ contexts, currentCell, handlerCell, _schedulerLock, _objectLock, readyHeads, bit
   runningCell, dispatchCell, selectedCell, tickCell, timerCount, timerHeap, taskBase,
   definitionBase, _sleepResults, _sleepTimers, _rescheduleCell, lockWord, objectWord,
   acquireFn, releaseFn, firstEntry, timeoutCallback,
-  _delayCallback :: Domain -> Word32
+  delayCallback :: Domain -> Word32
 contexts d = (if d == DomainA then 0x400545cc else 0x400e458c)
 currentCell d = contexts d - 4
 handlerCell d = if d == DomainA then 0x400545a4 else 0x400e4564
@@ -121,7 +126,7 @@ acquireFn d = if d == DomainA then 0x439d8 else 0xd398c
 releaseFn d = if d == DomainA then 0x43a14 else 0xd39c8
 firstEntry d = if d == DomainA then 0x43728 else 0xd3728
 timeoutCallback d = if d == DomainA then 0x44318 else 0xd42d8
-_delayCallback d = if d == DomainA then 0x44634 else 0xd45f4
+delayCallback d = if d == DomainA then 0x44634 else 0xd45f4
 
 domainId :: Domain -> Word32
 domainId DomainA = 1
@@ -306,9 +311,104 @@ cases d =
   , Case "terminate-local-dispatch" Terminate (idOf d 2) 0 (\e -> setupRunning e >>> makeReady d 2 0 True) 0x53 False Nothing (StoppedAt (switchOf d) (stopReason Terminate))
   , Case "release-local-dispatch" ReleaseWait (idOf d 2) 0 (\e -> setupRunning e >>> setB (taskField (taskAt e 1) 0x0d) 5 >>> setWait d 2 0x40059100 0x40059000 (domainId d) >>> armTimer d 2) 0x53 False Nothing (StoppedAt (switchOf d) (stopReason ReleaseWait))
   , Case "release-cross-dispatch" ReleaseWait (idOf (other d) 2) 0 (\e -> setupRunning e >>> setWait (other d) 2 0x40059100 0x40059000 (domainId (other d)) >>> armTimer (other d) 2 >>> setW (dispatchCell (other d)) 1) 0x53 False Nothing (ReturnedR0 0)
-  ]
+  ] ++ timeoutCases d
   where
     other domain = if domain == DomainA then DomainB else DomainA
+
+fixtureWait, fixtureQueue, fixtureTimer :: Domain -> Word32
+fixtureWait d = globalsBase d + 0xa100
+fixtureQueue d = globalsBase d + 0xa200
+fixtureTimer d = globalsBase d + 0xa300
+
+objectWaitTask :: Domain -> Word32 -> W -> W
+objectWaitTask d slot =
+  let task = taskAt d slot
+      wait = fixtureWait d
+      queue = fixtureQueue d
+      timer = fixtureTimer d
+   in setB (taskField task 0x0c) 0x12
+      >>> setB (taskField task 0x0d) 3
+      >>> setW (taskField task 0x14) wait
+      >>> setW (taskField task 0x00) queue
+      >>> setW (taskField task 0x04) queue
+      >>> setW (taskField task 0x24) 0
+      >>> setW (taskField task 0x28) 0
+      >>> setW (taskField task 0x2c) 0
+      >>> setW (taskField task 0x30) 0
+      >>> setW wait timer
+      >>> setW (wait + 4) queue
+      >>> setW (wait + 8) (domainId d)
+      >>> setW queue task
+      >>> setW (queue + 4) task
+      >>> setW timer 1
+      >>> setW (timer + 4) (timeoutCallback d)
+      >>> setW (timer + 8) task
+      >>> setW (lockWord d) 1
+
+sleepingWait :: Domain -> Word32 -> Word32 -> W -> W
+sleepingWait d slot callback =
+  let task = taskAt d slot
+      wait = fixtureWait d
+      timer = fixtureTimer d
+   in setB (taskField task 0x0c) 0x0a
+      >>> setB (taskField task 0x0d) 3
+      >>> setW (taskField task 0x14) wait
+      >>> setW (taskField task 0x24) 0
+      >>> setW (taskField task 0x28) 0
+      >>> setW (taskField task 0x2c) 0
+      >>> setW (taskField task 0x30) 0
+      >>> setW wait timer
+      >>> setW (wait + 4) 0
+      >>> setW (wait + 8) (domainId d)
+      >>> setW timer 1
+      >>> setW (timer + 4) callback
+      >>> setW (timer + 8) task
+      >>> setW (lockWord d) 1
+
+timeoutCases :: Domain -> [Case]
+timeoutCases d =
+  [ Case "timeout-object-queued" Timeout (taskAt d 2) 0 objectTimeout 0x93 False Nothing (ReturnedR0 1)
+  , Case "timeout-sleeping" Timeout (taskAt d 2) 0 sleepingTimeout 0x93 False Nothing (ReturnedR0 1)
+  , Case "timeout-terminate-pending" Timeout (taskAt d 2) 0 terminatePending 0x93 False Nothing (ReturnedR0 1)
+  , Case "timeout-priority-pending" Timeout (taskAt d 2) 0 priorityPending 0x93 False Nothing (ReturnedR0 1)
+  , Case "delay-elapsed" DelayCallback (taskAt d 2) 0 delayElapsed 0x93 False Nothing (ReturnedR0 1)
+  ]
+  where
+    objectTimeout e = setupRunning e >>> setW (selectedCell e) 0 >>> objectWaitTask e 2
+    sleepingTimeout e = setupRunning e >>> setW (selectedCell e) 0 >>> sleepingWait e 2 (timeoutCallback e)
+    terminatePending e = objectTimeout e >>> setW (taskField (taskAt e 2) 0x24) 1 >>> setB (taskField (taskAt e 2) 0x0e) 1
+    priorityPending e = objectTimeout e >>> setW (taskField (taskAt e 2) 0x28) 1 >>> setW (taskField (taskAt e 2) 0x34) 7
+    delayElapsed e = setupRunning e >>> setW (selectedCell e) 0 >>> sleepingWait e 2 (delayCallback e)
+
+data ControlRun = ControlRun
+  { controlName :: String
+  , controlHolds :: Bool
+  }
+
+controlRuns :: Domain -> Case -> CaseSpec -> NativeObservation -> NativeObservation -> [ControlRun]
+controlRuns d one spec stock owned
+  | caseService one `notElem` [Timeout, DelayCallback] = []
+  | otherwise = [ControlRun name (refused (mutate offset owned)) | (name, offset) <- targets]
+  where
+    refused mutated = not (null (compareKernelCase adjusted (normalize stock) (normalize mutated)))
+    adjusted = case caseKernel spec of
+      Just kernel | null (kernelStop kernel) -> spec
+      _ -> spec { caseKernel = fmap (\k -> k { kernelUncompared = kernelUncompared k ++ [R4, R5, R6, R7, R8, R9, R10, R11, Sp] }) (caseKernel spec) }
+    offsetOf address = fromIntegral (address - globalsBase d)
+    targets =
+      [ ("wait-result-mutation", offsetOf (fixtureWait d))
+      , ("task-state-mutation", offsetOf (taskAt d 2 + 0x0c))
+      , ("object-lock-mutation", offsetOf (objectWord d))
+      ]
+    mutate offset observed =
+      observed
+        { nativeMemory =
+            [ (ident, if ident == fixtureRegion then flipAt offset bytes else bytes)
+            | (ident, bytes) <- nativeMemory observed
+            ]
+        }
+    fixtureRegion = RegionId (if d == DomainA then "data-a" else "data-b")
+    flipAt offset bytes = B.take offset bytes <> B.cons (B.index bytes offset `xor` 0xff) (B.drop (offset + 1) bytes)
 
 -- | A four-byte branch to the stub, and the stub's save/wake/resume body.
 stubWords :: Domain -> Word32 -> [Word32]
@@ -342,11 +442,15 @@ poke bytes offset value = B.take index bytes <> value <> B.drop (index + B.lengt
 slice :: B.ByteString -> Word32 -> Word32 -> Word32 -> B.ByteString
 slice owned ownedBase address size = B.take (fromIntegral size) (B.drop (fromIntegral (address - ownedBase)) owned)
 
+ownedBaseOf :: Domain -> Word32
+ownedBaseOf DomainA = 0x44318
+ownedBaseOf DomainB = 0xd42d8
+
 patchOwned :: Domain -> B.ByteString -> Word32 -> B.ByteString -> B.ByteString
 patchOwned d loader ownedBase owned =
   let base = loaderBase d
       patches =
-        [(entryOf d service, 4, entryOf d service) | service <- [Terminate, ChangePriority, TimedSleep, ReleaseWait, HandlerRelease, Delay]]
+        [(entryOf d service, 4, entryOf d service) | service <- [Terminate, ChangePriority, TimedSleep, ReleaseWait, HandlerRelease, Delay, Timeout, DelayCallback]]
         ++ [(0x46e4c + if d == DomainB then 0x8ffc0 else 0, 0x180, 0x46e4c + if d == DomainB then 0x8ffc0 else 0)]
         ++ [(if d == DomainA then 0x50000 else 0xe0000, 0x4000, if d == DomainA then 0x50000 else 0xe0000)]
    in foldl (\bytes (address, size, source) -> poke bytes (address - base) (slice owned ownedBase source size)) (loader <> B.replicate 0x12000 0) patches
@@ -372,6 +476,8 @@ stopReason service = case service of
   ReleaseWait -> 0xffffffeb
   HandlerRelease -> 0
   Delay -> 0xffffffe7
+  Timeout -> 0
+  DelayCallback -> 0
 
 helperRanges :: Domain -> [(Word32, Word32)]
 helperRanges d =
@@ -383,7 +489,7 @@ helperRanges d =
   ++ [(base + early, size)
      | (base, size) <- ([(0x43ca4, 0x7c), (0x43d20, 0xb0), (0x43dd0, 0x1a0), (0x43f70, 0xa8)] :: [(Word32, Word32)])]
   ++ [(base + late, size)
-     | (base, size) <- ([(0x44044, 0xf0), (0x44318, 0x1cc), (0x444e4, 0x84), (0x44568, 0xcc), (0x44634, 0xc8), (0x446fc, 0x48), (0x449c0, 0x100), (0x44ac0, 0xc4), (0x44b84, 0xdc), (0x44c60, 0x48), (0x44ca8, 0xe4)] :: [(Word32, Word32)])]
+     | (base, size) <- ([(0x44044, 0xf0), (0x444e4, 0x84), (0x44568, 0xcc), (0x446fc, 0x48), (0x449c0, 0x100), (0x44ac0, 0xc4), (0x44b84, 0xdc), (0x44c60, 0x48), (0x44ca8, 0xe4)] :: [(Word32, Word32)])]
   where
     early = if d == DomainB then 0x8ffbc else 0
     late = if d == DomainB then 0x8ffc0 else 0
@@ -442,7 +548,7 @@ specFor d role one loaderA loaderB aggregate owned = CaseSpec
     otherLoader = if other == DomainA then loaderA else loaderB
     fixture = setW (handlerCell d) (if caseHandler one then 1 else 0) (caseSetup one d (baseFixture d))
     ownedFunctions =
-      [(entryOf d service, extentOf service) | service <- [Terminate, ChangePriority, TimedSleep, ReleaseWait, HandlerRelease, Delay]]
+      [(entryOf d service, extentOf service) | service <- [Terminate, ChangePriority, TimedSleep, ReleaseWait, HandlerRelease, Delay, Timeout, DelayCallback]]
       ++ [(bodyBase, 0x4000), (stubBase, 0x80), (switchOf d, 4)]
       ++ helperRanges d ++ helperRanges other
     aggregateFunctions = case (role, aggregate) of
@@ -451,8 +557,8 @@ specFor d role one loaderA loaderB aggregate owned = CaseSpec
     bodyBase = if d == DomainA then 0x50000 else 0xe0000
     code = case role of
       Stock -> patchStub d (loaderBytes d loader) (caseLifecycle one)
-      Owned -> patchStub d (installAggregate d (patchOwned d loader (if d == DomainA then 0x454f0 else 0xd54b0) owned) aggregate) (caseLifecycle one)
-    bodies = if role == Owned then slice owned (if d == DomainA then 0x454f0 else 0xd54b0) bodyBase 0x4000 else B.replicate 0x4000 0
+      Owned -> patchStub d (installAggregate d (patchOwned d loader (ownedBaseOf d) owned) aggregate) (caseLifecycle one)
+    bodies = if role == Owned then slice owned (ownedBaseOf d) bodyBase 0x4000 else B.replicate 0x4000 0
     stub = case caseLifecycle one of
       Nothing -> B.replicate 0x100 0
       Just result ->
@@ -580,15 +686,23 @@ main = do
                   ++ [ (one, "owned" :: String, observation) | (one, observation) <- zip grid ownedObservations ]
               , not (judgeOutcome (caseExpected one) (nativeStatus observation) (registerValue observation R0) (registerValue observation Pc))
               ]
+            controls =
+              [ (caseName one, control)
+              | (one, spec, left, right) <- zip4 grid specs stockObs ownedObservations
+              , control <- controlRuns d one spec left right
+              ]
+            failedControls = [ (name, controlName control) | (name, control) <- controls, not (controlHolds control) ]
         B.writeFile (directory </> "report.json") (encodeCanonical (A.object
           [ "domain" .= domainLabel d
           , "cases" .= length grid
           , "differences" .= length failures
           , "failures" .= [A.object ["case" .= name, "differences" .= show diff, "first" .= first] | (name, diff, first) <- failures]
           , "contract_failures" .= [A.object ["case" .= name, "role" .= roleName, "expected" .= show expected, "status" .= show status, "r0" .= r0, "pc" .= pc] | (name, roleName, expected, status, r0, pc) <- contracts]
+          , "controls" .= [A.object ["case" .= name, "control" .= controlName control, "holds" .= controlHolds control] | (name, control) <- controls]
+          , "control_failures" .= [A.object ["case" .= name, "control" .= control] | (name, control) <- failedControls]
           , "judge_self_test" .= judgeSelfTest
           ]))
-        pure (d, length grid, null failures, null contracts && judgeSelfTest)
+        pure (d, length grid, null failures, null contracts && null failedControls && judgeSelfTest)
       _ -> error "role count"
   let passed = all (\(_,_,a,b) -> a && b) reports
   B.writeFile results (encodeCanonical (A.object

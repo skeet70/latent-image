@@ -146,6 +146,10 @@ impl Mock {
         timer::tick(
             self,
             |m| m.heap(),
+            |m| {
+                timer::layout::KernelContext(timer::layout::GuestAddress(m.current.get()))
+                    .scheduler_lock()
+            },
             |m, callback, argument| {
                 assert_eq!(callback.0, EXPIRE_CALLBACK);
                 let _ = expire(m, CyclicControl(GuestAddress(argument.0)));
@@ -273,12 +277,12 @@ impl timer::Scheduler for Mock {
         self.i_masked.get()
     }
 
-    fn release_lock(&self) {
+    fn release_lock(&self, _lock: timer::layout::LockRecord) {
         self.lock_held.set(0);
     }
 
-    fn acquire_lock(&self) {
-        self.lock_held.set(self.current.get());
+    fn acquire_lock(&self, lock: timer::layout::LockRecord) {
+        self.lock_held.set(lock.0 .0);
     }
 
     fn irq_clear(&self) {

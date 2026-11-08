@@ -336,6 +336,14 @@ impl Machine for Model {
         self.irq.get()
     }
 
+    fn irq_enable(&self) {
+        self.irq.set(false);
+    }
+
+    fn irq_disable(&self) {
+        self.irq.set(true);
+    }
+
     fn lock_acquire(&self, lock: LockRecord) -> bool {
         let word = self.word(lock.word());
         if self.locks.borrow().contains(&word) {
@@ -1079,4 +1087,130 @@ fn terminate_cancels_the_timer_before_the_consumer_runs() {
     assert_eq!(model.byte(task.state()), 0);
     assert_eq!(model.word(task.context_discarded()), 1);
     assert_eq!(model.word(words.ready_bitmap), 1);
+}
+
+fn hold_scheduler_lock(model: &Model) {
+    let context = Domain::A.words().context(Domain::A);
+    model.lock_acquire(context.scheduler_lock());
+    model.irq.set(true);
+    model.set_word(Domain::A.words().selected, 0);
+}
+
+#[test]
+fn timeout_object_wait_unlinks_and_readies_the_task() {
+    let model = Model::new(Domain::A);
+    model.make_running(Domain::A, 1);
+    let task = model.task(Domain::A, 2);
+    model.set_object_wait(Domain::A, 2, 0x12);
+    model.link_queue(Domain::A, 2);
+    model.set_word(GuestAddress(WAIT), TIMER);
+    model.set_byte(task.priority(), 3);
+    hold_scheduler_lock(&model);
+    assert_eq!(timeout::timeout(&model, Domain::A, task), 1);
+    assert_eq!(model.word(GuestAddress(WAIT)), (-50i32) as u32);
+    assert_eq!(model.word(GuestAddress(QUEUE)), QUEUE);
+    assert_eq!(model.word(GuestAddress(QUEUE + 4)), QUEUE);
+    assert_eq!(model.byte(task.state()), 1);
+    assert_eq!(model.word(Domain::A.words().selected), task.0 .0);
+    assert_eq!(model.word(Domain::A.words().reschedule), 1);
+    assert!(model.locks.borrow().contains(&LOCK_A));
+    assert!(!model.locks.borrow().contains(&OBJECT_LOCK_A));
+    let context = Domain::A.words().context(Domain::A);
+    model.lock_release(context.scheduler_lock());
+    assert!(model.locks.borrow().is_empty());
+}
+
+#[test]
+fn timeout_terminate_pending_restarts_and_requests_dispatch() {
+    let model = Model::new(Domain::A);
+    model.make_running(Domain::A, 1);
+    let task = model.task(Domain::A, 2);
+    model.set_object_wait(Domain::A, 2, 0x12);
+    model.link_queue(Domain::A, 2);
+    model.set_word(GuestAddress(WAIT), TIMER);
+    model.set_word(task.terminate_pending(), 1);
+    model.set_byte(task.flags(), 1);
+    model.set_byte(task.priority(), 3);
+    hold_scheduler_lock(&model);
+    assert_eq!(timeout::timeout(&model, Domain::A, task), 1);
+    assert_eq!(model.word(GuestAddress(WAIT)), (-50i32) as u32);
+    assert_eq!(model.word(task.context_discarded()), 1);
+    assert_eq!(model.byte(task.flags()), 0);
+    assert_eq!(model.byte(task.state()), 1);
+    assert_eq!(model.word(task.saved_sp()), 0x100 + STACK);
+    assert_eq!(model.word(task.resume_pc()), RESUME);
+    assert_eq!(model.word(Domain::A.words().reschedule), 1);
+    assert!(model.locks.borrow().contains(&LOCK_A));
+}
+
+#[test]
+fn timeout_priority_pending_restores_the_priority() {
+    let model = Model::new(Domain::A);
+    model.make_running(Domain::A, 1);
+    let task = model.task(Domain::A, 2);
+    model.set_object_wait(Domain::A, 2, 0x12);
+    model.link_queue(Domain::A, 2);
+    model.set_word(GuestAddress(WAIT), TIMER);
+    model.set_word(task.priority_change_pending(), 1);
+    model.set_word(task.pending_priority(), 7);
+    model.set_byte(task.priority(), 3);
+    hold_scheduler_lock(&model);
+    assert_eq!(timeout::timeout(&model, Domain::A, task), 1);
+    assert_eq!(model.byte(task.priority()), 7);
+    assert_eq!(model.word(task.priority_change_pending()), 0);
+    assert_eq!(model.byte(task.state()), 1);
+}
+
+#[test]
+fn timeout_suspended_task_stays_suspended() {
+    let model = Model::new(Domain::A);
+    model.make_running(Domain::A, 1);
+    let task = model.task(Domain::A, 2);
+    model.set_byte(task.state(), 0x06);
+    model.set_word(task.wait(), WAIT);
+    model.set_word(GuestAddress(WAIT), TIMER);
+    hold_scheduler_lock(&model);
+    assert_eq!(timeout::timeout(&model, Domain::A, task), 0);
+    assert_eq!(model.word(GuestAddress(WAIT)), (-50i32) as u32);
+    assert_eq!(model.byte(task.state()), 4);
+    assert_eq!(model.word(Domain::A.words().reschedule), 0);
+    assert!(model.locks.borrow().contains(&LOCK_A));
+}
+
+#[test]
+fn timeout_competing_release_returns_before_the_result() {
+    let model = Model::new(Domain::A);
+    model.make_running(Domain::A, 1);
+    let task = model.task(Domain::A, 2);
+    model.set_object_wait(Domain::A, 2, 0x12);
+    model.link_queue(Domain::A, 2);
+    model.set_word(GuestAddress(WAIT), TIMER);
+    hold_scheduler_lock(&model);
+    *model.handshake.borrow_mut() = Some(Box::new(|m: &Model| {
+        let task = m.task(Domain::A, 2);
+        m.set_word(task.cancel_pending(), 0);
+    }));
+    assert_eq!(timeout::timeout(&model, Domain::A, task), 0);
+    assert_eq!(model.word(GuestAddress(WAIT)), TIMER);
+    assert_eq!(model.byte(task.state()), 0x12);
+    assert_eq!(model.word(GuestAddress(QUEUE)), task.0 .0);
+    assert!(model.locks.borrow().contains(&LOCK_A));
+    assert!(!model.locks.borrow().contains(&OBJECT_LOCK_A));
+}
+
+#[test]
+fn delay_completion_sets_zero_and_readies_the_task() {
+    let model = Model::new(Domain::A);
+    model.make_running(Domain::A, 1);
+    let task = model.task(Domain::A, 2);
+    model.set_byte(task.state(), 0x0a);
+    model.set_word(task.wait(), WAIT);
+    model.set_word(GuestAddress(WAIT), TIMER);
+    model.set_byte(task.priority(), 3);
+    hold_scheduler_lock(&model);
+    assert_eq!(timeout::delay(&model, Domain::A, task), 1);
+    assert_eq!(model.word(GuestAddress(WAIT)), 0);
+    assert_eq!(model.byte(task.state()), 1);
+    assert_eq!(model.word(Domain::A.words().reschedule), 1);
+    assert!(model.locks.borrow().contains(&LOCK_A));
 }

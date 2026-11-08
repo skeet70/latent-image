@@ -2,10 +2,9 @@ ENTRY(xm1_rtos_timer_insert)
 
 MEMORY {
   timer_initialize (rx) : ORIGIN = 0x44a50, LENGTH = 4
-  tick_body (rx) : ORIGIN = 0x44a54, LENGTH = 0x19c
-  initialize_body (rx) : ORIGIN = 0x44bf0, LENGTH = 0x70
+  tick_and_initialize (rx) : ORIGIN = 0x44a54, LENGTH = 0x20c
   timer_insert (rx) : ORIGIN = 0x44c60, LENGTH = 4
-  lock_body (rx) : ORIGIN = 0x44c64, LENGTH = 0x44
+  finish_body (rx) : ORIGIN = 0x44c64, LENGTH = 0x44
   timer_remove (rx) : ORIGIN = 0x44ca8, LENGTH = 4
   insert_body (rx) : ORIGIN = 0x44cac, LENGTH = 0x84
   sift_up_body (rx) : ORIGIN = 0x44d30, LENGTH = 0x5c
@@ -18,25 +17,21 @@ SECTIONS {
   .timer_initialize : {
     KEEP(*(.text.timer_initialize))
   } > timer_initialize
-  .tick_body : {
+  .tick_and_initialize : {
     KEEP(*(.text.timer_body_tick))
-    *(.text.timer_finish)
-    __tick_body_end = .;
-    . = ORIGIN(tick_body) + LENGTH(tick_body);
-  } > tick_body =0xf000f0e7
-  .initialize_body : {
     KEEP(*(.text.timer_body_initialize))
-    __initialize_body_end = .;
-    . = ORIGIN(initialize_body) + LENGTH(initialize_body);
-  } > initialize_body =0xf000f0e7
+    *(.text.timer_lock_acquire)
+    __tick_and_initialize_end = .;
+    . = ORIGIN(tick_and_initialize) + LENGTH(tick_and_initialize);
+  } > tick_and_initialize =0xf000f0e7
   .timer_insert : {
     KEEP(*(.text.timer_insert))
   } > timer_insert
-  .lock_body : {
-    *(.text.timer_lock_acquire)
-    __lock_body_end = .;
-    . = ORIGIN(lock_body) + LENGTH(lock_body);
-  } > lock_body =0xf000f0e7
+  .timer_finish_body : {
+    KEEP(*(.text.timer_finish))
+    __timer_finish_end = .;
+    . = ORIGIN(finish_body) + LENGTH(finish_body);
+  } > finish_body =0xf000f0e7
   .timer_remove : {
     KEEP(*(.text.timer_remove))
   } > timer_remove
@@ -77,9 +72,8 @@ ASSERT(xm1_rtos_timer_insert == 0x44c60, "insert entry moved")
 ASSERT(xm1_rtos_timer_remove == 0x44ca8, "remove entry moved")
 ASSERT(xm1_rtos_timer_tick == 0x44d8c, "tick entry moved")
 ASSERT(SIZEOF(.timer_initialize) == 4 && SIZEOF(.timer_insert) == 4 && SIZEOF(.timer_remove) == 4 && SIZEOF(.timer_tick) == 4, "entry veneer size differs")
-ASSERT(__tick_body_end <= ORIGIN(tick_body) + LENGTH(tick_body), "tick exceeds carrier")
-ASSERT(__initialize_body_end <= ORIGIN(initialize_body) + LENGTH(initialize_body), "initializer exceeds carrier")
-ASSERT(__lock_body_end <= ORIGIN(lock_body) + LENGTH(lock_body), "lock helper exceeds carrier")
+ASSERT(__tick_and_initialize_end <= ORIGIN(tick_and_initialize) + LENGTH(tick_and_initialize), "tick and initializer exceed carrier")
+ASSERT(__timer_finish_end <= ORIGIN(finish_body) + LENGTH(finish_body), "finish exceeds carrier")
 ASSERT(__insert_body_end <= ORIGIN(insert_body) + LENGTH(insert_body), "insert exceeds carrier")
 ASSERT(__sift_up_body_end <= ORIGIN(sift_up_body) + LENGTH(sift_up_body), "sift-up exceeds carrier")
 ASSERT(__remove_body_end <= ORIGIN(remove_body) + LENGTH(remove_body), "remove exceeds carrier")
