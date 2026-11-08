@@ -418,8 +418,8 @@ chainStubBase = 0x00959180
 
 actorBase, actorStackLow, actorStackHigh :: Word32
 actorBase = 0x00959180
-actorStackLow = targetStackPointer - 0x100
-actorStackHigh = targetStackPointer
+actorStackLow = wakerStack - 0x400
+actorStackHigh = wakerStack
 
 outWord, resultCell, requestAddress, unreadable :: Word32
 outWord = 0x40000080
@@ -1521,6 +1521,8 @@ compareFamily _role executing facts one stock owned =
     privateWords ident
       | ident /= kernelRegion = []
       | caseBoundary one == TaskArrival = [taskAt facts executing runningSlot + factsTaskSavedSp facts]
+      | isJust (caseSelectedWait one) =
+          [taskAt facts executing slot + factsTaskSavedSp facts | slot <- [runningSlot, waiterSlot]]
       | isJust (caseWaker one) =
           [taskAt facts executing slot + factsTaskSavedSp facts | slot <- runningSlot : wakerSlot : [pwSlot waiter | waiter <- caseWaiters one, pwDomain waiter == executing, isJust (pwChain waiter)]]
       | otherwise = []
