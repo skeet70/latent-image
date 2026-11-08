@@ -1,6 +1,7 @@
 { pkgs ? import ./nixpkgs.nix { config = { }; overlays = [ ]; }
 , fujimod ? import ./fujimod.nix { inherit pkgs; }
 , features ? [ ]
+, nativeOnly ? false
 }:
 # emulation/fujimod-xm1 built against the source of `fujimod`, which the
 # crate's path dependencies expect at ../fujimod. `deps` is compiled from the
@@ -25,6 +26,15 @@ let
     ]);
   };
   cargoLock = ../emulation/fujimod-xm1/Cargo.lock;
+  nativeTarget = "fujimod-xm1-native-case";
+  manifest = builtins.fromTOML (builtins.readFile ../emulation/fujimod-xm1/Cargo.toml);
+  # Cargo builds declared binaries when an integration test is selected.
+  nativeManifest = (pkgs.formats.toml { }).generate "fujimod-xm1-native-Cargo.toml" (manifest // {
+    package = manifest.package // { autobins = false; };
+    bin = builtins.filter (binary: binary.name == nativeTarget) manifest.bin;
+  });
+  binaryFlags = pkgs.lib.optionalString nativeOnly " --bin ${nativeTarget}";
+  testFlags = pkgs.lib.optionalString nativeOnly " --bin ${nativeTarget} --test native_case";
   target = pkgs.stdenv.targetPlatform.rust.rustcTargetSpec;
   # `deps` and the package must unpack to the same directory: path-dependency
   # package ids and Unicorn's CMake paths include it.
@@ -59,6 +69,11 @@ in
 # has no doctests.
 craneLib.mkCargoDerivation (common // {
   src = workspace crate;
+  pname = common.pname + pkgs.lib.optionalString nativeOnly "-native";
+  postPatch = pkgs.lib.optionalString nativeOnly ''
+    cp ${nativeManifest} Cargo.toml
+  '';
+  outputs = [ "out" "tests" ];
   cargoArtifacts = deps;
   doInstallCargoArtifacts = false;
   XM1_CHECKPOINT_MODEL_ID = builtins.hashString "sha256" (builtins.toJSON {
@@ -68,21 +83,21 @@ craneLib.mkCargoDerivation (common // {
     inherit features target;
   });
   buildPhaseCargoCommand = ''
-    cargo build ${cargoFlags} --message-format json-render-diagnostics > build-artifacts.json
-    cargo test --no-run ${cargoFlags} --message-format json-render-diagnostics > test-artifacts.json
+    cargo build ${cargoFlags}${binaryFlags} --message-format json-render-diagnostics > build-artifacts.json
+    cargo test --no-run ${cargoFlags}${testFlags} --message-format json-render-diagnostics > test-artifacts.json
   '';
   # store-path holds $out, so Bazel actions keyed on it change with the store path.
   installPhaseCommand = ''
-    mkdir -p $out/bin $out/share/fujimod-xm1 $out/libexec/fujimod-xm1-tests
+    mkdir -p $out/bin $out/share/fujimod-xm1 $tests/libexec/fujimod-xm1-tests
     jq -r 'select(.reason == "compiler-artifact" and .target.kind == ["bin"] and .profile.test == false) | .executable' build-artifacts.json \
       | while read -r executable; do cp "$executable" $out/bin/; done
     cp data/xm1-150.json $out/share/fujimod-xm1/
     printf '%s\n' "$out" > $out/share/fujimod-xm1/store-path
     jq -r 'select(.reason == "compiler-artifact" and .profile.test == true and .executable != null) | .executable' test-artifacts.json \
       | while read -r executable; do
-          cp "$executable" "$out/libexec/fujimod-xm1-tests/"
-          basename "$executable" >> "$out/libexec/fujimod-xm1-tests/manifest"
+          cp "$executable" "$tests/libexec/fujimod-xm1-tests/"
+          basename "$executable" >> "$tests/libexec/fujimod-xm1-tests/manifest"
         done
-    test -s $out/libexec/fujimod-xm1-tests/manifest
+    test -s $tests/libexec/fujimod-xm1-tests/manifest
   '';
 })

@@ -13,7 +13,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import FujiAF.Host (failH)
 import FujiAF.StorageBudget (checkStorageBudget)
-import FujiModPaths (fujimodNativeCase)
+import FujiModNativePaths (fujimodNativeCase)
 import System.Directory (createDirectoryIfMissing, makeAbsolute)
 import System.Environment (getArgs)
 import System.Exit (exitFailure)

@@ -24,6 +24,14 @@ module Emulation.CandidateBaseline
   , Difference (..)
   , differenceField
   , compareObservations
+  , NativeRunnerTransition
+  , transitionBaseline
+  , transitionCandidate
+  , transitionRunnerPath
+  , transitionBinding
+  , NativeProvenanceChange (..)
+  , NativeComparison (..)
+  , admitNativeRunnerTransition
   , compareNativeObservations
   , renderFieldName
   , Baseline (..)
@@ -45,7 +53,7 @@ import Data.Scientific (toBoundedInteger)
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import Emulation.SegmentReceipt (SegmentName, decodeDeclaredSegments, segmentNameText)
-import Emulation.Sha256 (sha256, sha256Hex)
+import Emulation.Sha256 (parseSha256Hex, sha256, sha256Hex)
 import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
 import System.FilePath (splitDirectories, (</>))
 
@@ -238,10 +246,110 @@ compareObservations baseline observed = go (sortOn fieldName baseline) (sortOn f
 newtype NativeCaseId = NativeCaseId T.Text
   deriving (Eq, Ord)
 
+-- | An admitted SDK-pin runner transition. Construct only through
+-- 'admitNativeRunnerTransition', which proves the candidate digest names the
+-- runner at the immutable path.
+data NativeRunnerTransition = NativeRunnerTransition
+  { transitionBaseline :: T.Text
+  , transitionCandidate :: T.Text
+  , transitionRunnerPath :: FilePath
+  , transitionBinding :: T.Text
+  } deriving (Eq, Show)
+
+-- | One case-root runner identity accepted as an execution-provenance change.
+data NativeProvenanceChange = NativeProvenanceChange
+  { provenanceCase :: T.Text
+  , provenanceField :: FieldName
+  , provenanceBaseline :: Value
+  , provenanceCandidate :: Value
+  } deriving (Eq, Show)
+
+data NativeComparison = NativeComparison
+  { nativeDifferences :: [Difference]
+  , nativeProvenanceChanges :: [NativeProvenanceChange]
+  } deriving (Eq, Show)
+
+-- | Admits an explicit SDK-pin runner transition. The candidate digest must
+-- name the runner at @runnerPath@, and the binding must be nonempty.
+admitNativeRunnerTransition :: FilePath -> T.Text -> T.Text -> T.Text -> IO (Either String NativeRunnerTransition)
+admitNativeRunnerTransition runnerPath baselineText candidateText binding =
+  case (parseSha256Hex (T.unpack baselineText), parseSha256Hex (T.unpack candidateText)) of
+    (Left problem, _) -> pure (Left ("baseline runner digest: " ++ problem))
+    (_, Left problem) -> pure (Left ("candidate runner digest: " ++ problem))
+    (Right _, Right _)
+      | baselineText == candidateText -> pure (Left "runner transition requires distinct baseline and candidate digests")
+      | T.null binding -> pure (Left "runner transition binding is empty")
+      | otherwise -> do
+          present <- doesFileExist runnerPath
+          if not present
+            then pure (Left ("runner path is not a file: " ++ runnerPath))
+            else do
+              bytes <- B.readFile runnerPath
+              let actual = T.pack (sha256Hex (sha256 bytes))
+              pure $ if actual == candidateText
+                then Right (NativeRunnerTransition baselineText candidateText runnerPath binding)
+                else Left ("runner path digest " ++ T.unpack actual ++ " is not the candidate digest " ++ T.unpack candidateText)
+
 -- | Aligns native cases by id, including baselines recorded with positional pointers.
-compareNativeObservations :: Observation -> Observation -> Either String [Difference]
-compareNativeObservations baseline observed =
-  compareObservations <$> nativeCases baseline <*> nativeCases observed
+-- An admitted transition classifies only an exact case-root runner identity change
+-- from its baseline digest to its candidate digest. Every other leaf remains
+-- strict, and a missing, malformed or unexpected runner identity is refused.
+compareNativeObservations :: Maybe NativeRunnerTransition -> Observation -> Observation -> Either String NativeComparison
+compareNativeObservations transition baseline observed = do
+  expected <- nativeCases baseline
+  actual <- nativeCases observed
+  (differences, changes) <- go (sortOn fieldName expected) (sortOn fieldName actual)
+  pure (NativeComparison differences changes)
+  where
+    go [] [] = pure ([], [])
+    go (Field name value : rest) [] = do
+      (differences, changes) <- go rest []
+      pure (AbsentFromRun name value : differences, changes)
+    go [] (Field name value : rest) = do
+      (differences, changes) <- go [] rest
+      pure (AbsentFromBaseline name value : differences, changes)
+    go (Field name expectedValue : lefts) (Field name' actualValue : rights) = case compare name name' of
+      EQ -> do
+        (caseDifferences, caseChanges) <- handleCase name expectedValue actualValue
+        (differences, changes) <- go lefts rights
+        pure (caseDifferences ++ differences, caseChanges ++ changes)
+      LT -> do
+        (differences, changes) <- go lefts (Field name' actualValue : rights)
+        pure (AbsentFromRun name expectedValue : differences, changes)
+      GT -> do
+        (differences, changes) <- go (Field name expectedValue : lefts) rights
+        pure (AbsentFromBaseline name' actualValue : differences, changes)
+    handleCase name expectedValue actualValue
+      | stripRunner expectedValue /= stripRunner actualValue =
+          pure ([Changed name expectedValue actualValue], [])
+      | otherwise = case transition of
+          Nothing -> pure (if expectedValue == actualValue then ([], []) else ([Changed name expectedValue actualValue], []))
+          Just admitted -> case (runnerOf expectedValue, runnerOf actualValue) of
+            (Nothing, Nothing) -> pure ([], [])
+            (Just (String baselineDigest), Just (String candidateDigest))
+              | isDigest baselineDigest && isDigest candidateDigest ->
+                  if baselineDigest == transitionBaseline admitted && candidateDigest == transitionCandidate admitted
+                    then pure ([], [NativeProvenanceChange (caseName name) name (String baselineDigest) (String candidateDigest)])
+                    else if baselineDigest == candidateDigest
+                      then pure ([], [])
+                      else Left ("native case " ++ T.unpack (caseName name) ++ " has an unexpected runner identity")
+              | otherwise -> Left ("native case " ++ T.unpack (caseName name) ++ " has a malformed runner identity")
+            _ -> Left ("native case " ++ T.unpack (caseName name) ++ " has a missing runner identity under the admitted transition")
+
+stripRunner :: Value -> Value
+stripRunner (Object members) = Object (KM.delete "runner_sha256" members)
+stripRunner value = value
+
+runnerOf :: Value -> Maybe Value
+runnerOf (Object members) = KM.lookup "runner_sha256" members
+runnerOf _ = Nothing
+
+caseName :: FieldName -> T.Text
+caseName (FieldName "results.json" (Just [Key "cases", Key name])) = name
+caseName name = renderFieldName name
+
+isDigest :: T.Text -> Bool
+isDigest text = either (const False) (const True) (parseSha256Hex (T.unpack text))
 
 nativeCases :: Observation -> Either String Observation
 nativeCases fields = do

@@ -1,0 +1,11 @@
+[Unit]
+Description=Run latent-image Bazel cache collection daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=15min
+Unit=latent-image-cache-gc.service
+
+[Install]
+WantedBy=timers.target

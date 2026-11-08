@@ -8,8 +8,8 @@
 //! The memory hook admits each access against exact logical regions and
 //! alignment, and refuses any other through `Cpu::refuse_access` before the
 //! access happens. At the first access of an LDM/STM or a
-//! LDRD/STRD it admits the instruction's whole transfer, so a
-//! refused transfer has no effect. Unmapped accesses fault and are refused.
+//! LDRD/STRD it admits the instruction's whole transfer. Unmapped accesses fault
+//! and are refused.
 //!
 //! The case's call contract is tracked from the decoded control-flow words
 //! (B, BL, BX, BLX, LDM with PC and the two LDR-to-PC dispatch forms). All
@@ -21,13 +21,13 @@
 //!
 //! A privileged case enters in SVC or SYS with its own I and F bits and must
 //! stay in that mode with T clear. Beyond the user profile it admits
-//! `cpsid i`, `cpsie i` and register-form `msr CPSR_c`/`msr CPSR_fc` whose
-//! source keeps the entry mode and T clear, and refuses SPSR and banked status
-//! access, user-bank LDM/STM and ERET. With a case CP14 identity it serves
+//! `cpsie`/`cpsid` naming I, F or both with the A bit and mode field clear, and
+//! register-form `msr CPSR_c`/`msr CPSR_fc` whose source keeps the entry mode
+//! and T clear, and refuses SPSR and banked status access, user-bank LDM/STM
+//! and ERET. With a case CP14 identity it serves
 //! `mrc p14, 0, Rt, c2, c0, 0` (Rt not PC) in the instruction hook by the law of
 //! FujiMod's `rprofile::core::Core` (crates/emulator-cpu-unicorn/src/rprofile/core.rs:783-790):
 //! a passing condition writes the identity to Rt, and the PC advances either way.
-//! The wrapper itself is not used: it lacks `Cpu::refuse_access` and host watchdogs.
 //!
 //! A privileged case may also be a kernel case. Beyond the privileged profile it
 //! admits `nop` (the only hint), word `ldrex`/`strex`/`clrex` against a single-core
@@ -38,6 +38,9 @@
 //! bank words taking word writes only. Barriers and TPIDRURW/FPEXC writes are rows
 //! of the provenance log in execution order. The code hook performs the exclusives,
 //! barriers and register accesses and advances the PC itself.
+//!
+//! A kernel case may declare up to sixteen private stacks; its `ldr pc, [Rn, #imm]`
+//! then also resumes the context holding SP, which may be the active one.
 
 use crate::r4f;
 use fujimod_emulator_cpu::{
@@ -71,6 +74,7 @@ const MAX_WALL_MS: u32 = 10_000;
 /// Engine limit on recorded stub events, separate from the 128 expected events.
 const MAX_RECORDED_EVENTS: usize = 512;
 const MAX_DEPTH: usize = 32;
+const MAX_STACK_CONTEXTS: usize = 16;
 const LOG_SIZE: usize = 64;
 const PROVENANCE_SIZE: usize = 4096;
 const PAGE: u64 = 4096;
@@ -84,8 +88,11 @@ const CPSR_MODE: u32 = 0x1f;
 const CPSR_THUMB: u32 = 1 << 5;
 /// NZCVQ, GE, I, F and the mode: the bits a privileged entry CPSR may set.
 const PRIVILEGED_ENTRY_BITS: u32 = 0xf80f_00df;
-const CPSIE_I: u32 = 0xf108_0080;
-const CPSID_I: u32 = 0xf10c_0080;
+/// The imod field and the I and F mask bits of `cpsie`/`cpsid`.
+const CPS_IMOD: u32 = 3 << 18;
+const CPS_FLAGS: u32 = 1 << 7 | 1 << 6;
+/// `cpsie`/`cpsid` without imod, A, I, F, M or the mode field.
+const CPS_BASE: u32 = 0xf100_0000;
 /// `msr CPSR_c, Rn` and `msr CPSR_fc, Rn` without cond and Rn.
 const MSR_CPSR_C: u32 = 0x0121_f000;
 const MSR_CPSR_FC: u32 = 0x0129_f000;
@@ -237,6 +244,68 @@ impl Span {
     fn overlaps(self, other: Span) -> bool {
         u64::from(self.base) < other.end() && u64::from(other.base) < self.end()
     }
+}
+
+/// A declared private stack, downward growing from `high` to `low`.
+#[derive(Clone, Copy, Debug)]
+struct StackBounds {
+    low: u32,
+    high: u32,
+}
+
+impl StackBounds {
+    /// `low < sp <= high`.
+    fn holds(self, sp: u32) -> bool {
+        self.low < sp && sp <= self.high
+    }
+
+    fn overlaps(self, other: Self) -> bool {
+        self.low < other.high && other.low < self.high
+    }
+}
+
+/// A validated index of one declared stack context.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ContextId(usize);
+
+impl ContextId {
+    fn index(self) -> usize {
+        self.0
+    }
+}
+
+/// The declared private stacks of an opted-in kernel case, in wire order.
+#[derive(Debug)]
+struct StackContexts {
+    bounds: Box<[StackBounds]>,
+    initial: ContextId,
+}
+
+impl StackContexts {
+    fn len(&self) -> usize {
+        self.bounds.len()
+    }
+}
+
+/// `COUNT LOW HIGH ...`, one pair per declared stack, pending admission.
+fn parse_bounds(tokens: &mut Tokens<'_>) -> Result<Box<[StackBounds]>, WireError> {
+    let count = tokens.count(MAX_STACK_CONTEXTS as u32)?;
+    if count == 0 {
+        return Err(WireError("a stack-context row needs at least one context"));
+    }
+    let mut bounds = Vec::with_capacity(count as usize);
+    for _ in 0..count {
+        bounds.push(StackBounds { low: tokens.word()?, high: tokens.word()? });
+    }
+    Ok(bounds.into())
+}
+
+/// `None` unless exactly one declared stack holds `sp`; adjacent declarations
+/// can share a boundary.
+fn context_of(bounds: &[StackBounds], sp: u32) -> Option<ContextId> {
+    let mut held = bounds.iter().enumerate().filter(|(_, stack)| stack.holds(sp)).map(|(index, _)| ContextId(index));
+    let id = held.next()?;
+    held.next().is_none().then_some(id)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -470,6 +539,32 @@ enum ProfileWord {
     Kernel(KernelWord),
 }
 
+/// A `cpsie`/`cpsid` word that changes only the I and F mask bits.
+#[derive(Clone, Copy, Debug)]
+enum CpsMask {
+    EnableI,
+    EnableF,
+    EnableIf,
+    DisableI,
+    DisableF,
+    DisableIf,
+}
+
+impl CpsMask {
+    fn of(word: u32) -> Option<Self> {
+        let form = match (word >> 18 & 3, word >> 6 & 3) {
+            (0b10, 0b10) => Self::EnableI,
+            (0b10, 0b01) => Self::EnableF,
+            (0b10, 0b11) => Self::EnableIf,
+            (0b11, 0b10) => Self::DisableI,
+            (0b11, 0b01) => Self::DisableF,
+            (0b11, 0b11) => Self::DisableIf,
+            _ => return None,
+        };
+        (word & !(CPS_IMOD | CPS_FLAGS) == CPS_BASE).then_some(form)
+    }
+}
+
 impl Profile {
     fn mode(self) -> u32 {
         match self {
@@ -489,7 +584,7 @@ impl Profile {
         let Self::Privileged { identity, kernel, .. } = self else {
             return if excluded(word) { ProfileWord::Excluded } else { ProfileWord::Ordinary };
         };
-        if matches!(word, CPSIE_I | CPSID_I) {
+        if CpsMask::of(word).is_some() {
             return ProfileWord::Ordinary;
         }
         let conditional = word >> 28 != 15;
@@ -527,6 +622,7 @@ struct Case {
     regions: Box<[Region]>,
     functions: Box<[Span]>,
     stubs: Box<[Stub]>,
+    stack_contexts: Option<StackContexts>,
 }
 
 impl Case {
@@ -736,8 +832,8 @@ fn parse_case(
         *value = tokens.word()?;
     }
     let cpsr = tokens.word()?;
-    let profile = if cpsr & 0x0fff_ffff == USER_MODE {
-        Profile::User
+    let (profile, stack_contexts) = if cpsr & 0x0fff_ffff == USER_MODE {
+        (Profile::User, None)
     } else {
         let mode = PrivilegedMode::of(cpsr).ok_or(WireError(
             "CPSR must be user-mode ARM with flags only, or SVC or SYS ARM with flags, Q, GE, I and F only",
@@ -753,7 +849,13 @@ fn parse_case(
         } else {
             None
         };
-        Profile::Privileged { mode, identity, kernel }
+        let stack_contexts = if kernel.is_some() && tokens.peek() == Some(b"c") {
+            tokens.next()?;
+            Some(parse_bounds(&mut tokens)?)
+        } else {
+            None
+        };
+        (Profile::Privileged { mode, identity, kernel }, stack_contexts)
     };
     if core[13] % 8 != 0 || core[14] != exit.0 {
         return Err(WireError("SP must be eight-byte aligned and LR must be the exit"));
@@ -826,7 +928,7 @@ fn parse_case(
     }
     tokens.finish()?;
 
-    let case = Case {
+    let mut case = Case {
         entry,
         exit,
         registers: EntryRegisters { core, cpsr: Cpsr(cpsr) },
@@ -836,8 +938,12 @@ fn parse_case(
         regions: regions.into(),
         functions: functions.into(),
         stubs: stubs.into(),
+        stack_contexts: None,
     };
     validate(&case)?;
+    if let Some(bounds) = stack_contexts {
+        case.stack_contexts = Some(validate_stack_contexts(&case, bounds)?);
+    }
     Ok(case)
 }
 
@@ -891,6 +997,28 @@ fn validate(case: &Case) -> Result<(), WireError> {
         return Err(WireError("stop address must be aligned, executable and differ from the entry, the exit and every stub"));
     }
     Ok(())
+}
+
+/// Each declared stack is aligned, nonempty, disjoint and wholly writable case
+/// memory; the initial SP's context is admitted with them.
+fn validate_stack_contexts(case: &Case, bounds: Box<[StackBounds]>) -> Result<StackContexts, WireError> {
+    for (index, stack) in bounds.iter().enumerate() {
+        if stack.low % 8 != 0 || stack.high % 8 != 0 || stack.low >= stack.high {
+            return Err(WireError("stack context bounds must be eight-byte aligned with low below high"));
+        }
+        if !case.regions.iter().any(|region| {
+            region.permission == Permission::ReadWrite
+                && region.span.contains(u64::from(stack.low), u64::from(stack.high - stack.low))
+        }) {
+            return Err(WireError("stack context is not wholly backed by writable case memory"));
+        }
+        if bounds[..index].iter().any(|prior| prior.overlaps(*stack)) {
+            return Err(WireError("stack contexts overlap"));
+        }
+    }
+    let initial = context_of(&bounds, case.registers.core[13])
+        .ok_or(WireError("the initial SP must belong to exactly one declared stack context"))?;
+    Ok(StackContexts { bounds, initial })
 }
 
 struct Batch<'a> {
@@ -1487,6 +1615,71 @@ struct Frame {
     caller: usize,
 }
 
+/// The shadow call state of one stack context.
+#[derive(Clone, Copy)]
+struct Shadow {
+    current: usize,
+    frames: [Frame; MAX_DEPTH],
+    depth: usize,
+    returning: bool,
+}
+
+impl Shadow {
+    /// A context entered at `function` with no frames and no root return.
+    fn at(function: usize) -> Self {
+        Self { current: function, frames: [Frame::default(); MAX_DEPTH], depth: 0, returning: false }
+    }
+}
+
+/// The active context's shadow state, and for an opted-in case the state of
+/// every other declared context as last switched away from.
+enum ShadowContexts {
+    Single(Shadow),
+    Declared { active: ContextId, states: Box<[Shadow]> },
+}
+
+impl ShadowContexts {
+    fn new(case: &Case) -> Self {
+        let shadow = Shadow::at(case.function_at(case.entry.0).unwrap_or(0));
+        let Some(contexts) = &case.stack_contexts else {
+            return Self::Single(shadow);
+        };
+        Self::Declared { active: contexts.initial, states: vec![shadow; contexts.len()].into_boxed_slice() }
+    }
+
+    fn state(&self) -> &Shadow {
+        match self {
+            Self::Single(shadow) => shadow,
+            Self::Declared { active, states } => &states[active.index()],
+        }
+    }
+
+    fn state_mut(&mut self) -> &mut Shadow {
+        match self {
+            Self::Single(shadow) => shadow,
+            Self::Declared { active, states } => &mut states[active.index()],
+        }
+    }
+
+    /// Resumes `dest` at `resume` with its saved frames, retiring a pending
+    /// frame whose return address is `resume`. `dest` may be the active context.
+    fn switch(&mut self, dest: ContextId, function: usize, resume: u32) {
+        let Self::Declared { active, states } = self else {
+            return;
+        };
+        *active = dest;
+        let shadow = &mut states[dest.index()];
+        match shadow.depth {
+            0 => shadow.current = function,
+            depth if shadow.frames[depth - 1].return_address == resume => {
+                shadow.current = shadow.frames[depth - 1].caller;
+                shadow.depth -= 1;
+            }
+            _ => shadow.current = function,
+        }
+    }
+}
+
 /// The words of an LDM/STM or LDRD/STRD, admitted
 /// together at the first address, which the engine accesses first.
 #[derive(Clone, Copy)]
@@ -1563,10 +1756,7 @@ struct State {
     unicorn_error: u32,
     started: Instant,
     entered: u64,
-    current: usize,
-    frames: [Frame; MAX_DEPTH],
-    depth: usize,
-    returning: bool,
+    shadow: ShadowContexts,
     events: Vec<usize>,
     trace: [TraceEntry; LOG_SIZE],
     accesses: [AccessEntry; LOG_SIZE],
@@ -1590,10 +1780,7 @@ impl State {
             unicorn_error: 0,
             started: Instant::now(),
             entered: 0,
-            current: case.function_at(case.entry.0).unwrap_or(0),
-            frames: [Frame::default(); MAX_DEPTH],
-            depth: 0,
-            returning: false,
+            shadow: ShadowContexts::new(case),
             events: Vec::with_capacity(MAX_RECORDED_EVENTS),
             captures: Vec::new(),
             snapshots: Vec::new(),
@@ -1675,13 +1862,14 @@ impl State {
         }
         let pc = address as u32;
         if pc == case.exit.0 {
-            let status = if self.returning && self.depth == 0 { Status::Returned } else { Status::UnknownCall };
+            let shadow = self.shadow.state();
+            let status = if shadow.returning && shadow.depth == 0 { Status::Returned } else { Status::UnknownCall };
             return Err(Step::Stop(status));
         }
         if case.stops_at(pc) {
             return Err(Step::Stop(Status::StopAddress));
         }
-        if !case.functions[self.current].contains(address, 4) {
+        if !case.functions[self.shadow.state().current].contains(address, 4) {
             return Err(Step::Stop(Status::UnknownCall));
         }
         if self.entered >= u64::from(case.budget.0) {
@@ -1813,25 +2001,45 @@ impl State {
         }
     }
 
-    /// `ldr pc, [Rn, #+/-imm12]` is admitted only when it loads a kernel case's stop
-    /// address; an inadmissible load is left to its own refusal.
+    /// `ldr pc, [Rn, #+/-imm12]`: the declared stop address, or the resume address of
+    /// the stack context holding SP. An inadmissible load is left to its own refusal.
     fn load_stop(&mut self, cpu: &dyn Cpu, case: &Case, pc: u32, word: u32) -> Result<(), Step> {
-        let Some(stop) = case.profile.kernel().and_then(|kernel| kernel.stop) else {
+        let Some(kernel) = case.profile.kernel() else {
             return Err(Step::Stop(Status::UnsupportedInstruction));
         };
         if word & 0x0f70_f000 != 0x0510_f000 {
             return Err(Step::Stop(Status::UnsupportedInstruction));
         }
-        let base = match word >> 16 & 15 {
-            15 => pc.wrapping_add(8),
-            register => read(cpu, arm::CORE[register as usize])?,
+        let Some(contexts) = &case.stack_contexts else {
+            let Some(stop) = kernel.stop else {
+                return Err(Step::Stop(Status::UnsupportedInstruction));
+            };
+            let address = pc_load_address(cpu, pc, word)?;
+            return if case.admits(u64::from(address), 4, Need::Read) && read_word(cpu, u64::from(address))? == stop.0 {
+                Ok(())
+            } else {
+                Err(Step::Stop(Status::UnsupportedInstruction))
+            };
         };
-        let offset = word & 0xfff;
-        let address = if word & 1 << 23 != 0 { base.wrapping_add(offset) } else { base.wrapping_sub(offset) };
-        if !case.admits(u64::from(address), 4, Need::Read) || read_word(cpu, u64::from(address))? == stop.0 {
+        let address = pc_load_address(cpu, pc, word)?;
+        if !case.admits(u64::from(address), 4, Need::Read) {
             return Ok(());
         }
-        Err(Step::Stop(Status::UnsupportedInstruction))
+        let target = read_word(cpu, u64::from(address))?;
+        if kernel.stop.is_some_and(|stop| stop.0 == target) {
+            return Ok(());
+        }
+        if target % 4 != 0 {
+            return Err(Step::Stop(Status::UnsupportedInstruction));
+        }
+        let Some(function) = case.function_at(target) else {
+            return Err(Step::Stop(Status::UnknownCall));
+        };
+        let Some(dest) = context_of(&contexts.bounds, read(cpu, arm::CORE[13])?) else {
+            return Err(Step::Stop(Status::UnsupportedInstruction));
+        };
+        self.shadow.switch(dest, function, target);
+        Ok(())
     }
 
     fn call(&mut self, cpu: &dyn Cpu, case: &Case, target: u32, return_address: u32) -> Result<(), Step> {
@@ -1847,22 +2055,23 @@ impl State {
         let Some(function) = case.function_at(target) else {
             return Err(Step::Stop(Status::UnknownCall));
         };
-        if self.depth == MAX_DEPTH {
+        let shadow = self.shadow.state_mut();
+        if shadow.depth == MAX_DEPTH {
             return Err(Step::Stop(Status::UnknownCall));
         }
-        self.frames[self.depth] = Frame { return_address, caller: self.current };
-        self.depth += 1;
-        self.current = function;
+        shadow.frames[shadow.depth] = Frame { return_address, caller: shadow.current };
+        shadow.depth += 1;
+        shadow.current = function;
         Ok(())
     }
 
     /// B, BX or a dispatch: stays in or changes function; a stub returns to LR.
     fn tail(&mut self, cpu: &dyn Cpu, case: &Case, target: u32) -> Result<(), Step> {
-        if case.functions[self.current].contains(u64::from(target), 4) {
+        if case.functions[self.shadow.state().current].contains(u64::from(target), 4) {
             return Ok(());
         }
         if let Some(function) = case.function_at(target) {
-            self.current = function;
+            self.shadow.state_mut().current = function;
             return Ok(());
         }
         let Some(index) = case.stub_at(target) else {
@@ -1879,9 +2088,10 @@ impl State {
     }
 
     fn expected_return(&self, case: &Case) -> u32 {
-        match self.depth {
+        let shadow = self.shadow.state();
+        match shadow.depth {
             0 => case.exit.0,
-            depth => self.frames[depth - 1].return_address,
+            depth => shadow.frames[depth - 1].return_address,
         }
     }
 
@@ -1889,11 +2099,12 @@ impl State {
         if target != self.expected_return(case) {
             return if case.stops_at(target) { Ok(()) } else { Err(Step::Stop(Status::UnknownCall)) };
         }
-        match self.depth {
-            0 => self.returning = true,
+        let shadow = self.shadow.state_mut();
+        match shadow.depth {
+            0 => shadow.returning = true,
             depth => {
-                self.current = self.frames[depth - 1].caller;
-                self.depth -= 1;
+                shadow.current = shadow.frames[depth - 1].caller;
+                shadow.depth -= 1;
             }
         }
         Ok(())
@@ -2320,4 +2531,14 @@ fn arm_target(cpu: &dyn Cpu, register: u32) -> Result<u32, Step> {
         return Err(Step::Stop(Status::UnsupportedInstruction));
     }
     Ok(target)
+}
+
+/// The address `ldr pc, [Rn, #+/-imm12]` reads.
+fn pc_load_address(cpu: &dyn Cpu, pc: u32, word: u32) -> Result<u32, Step> {
+    let base = match word >> 16 & 15 {
+        15 => pc.wrapping_add(8),
+        register => read(cpu, arm::CORE[register as usize])?,
+    };
+    let offset = word & 0xfff;
+    Ok(if word & 1 << 23 != 0 { base.wrapping_add(offset) } else { base.wrapping_sub(offset) })
 }

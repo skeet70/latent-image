@@ -12,6 +12,8 @@ module Emulation.OwnedCase
   , mkRegion
   , CaseSpec (..)
   , KernelCase (..)
+  , StackContext
+  , mkStackContext
   , InstructionLimit (..)
   , plainLimit
   , CaseOutcome (..)
@@ -193,6 +195,16 @@ newtype InstructionLimit = InstructionLimit Word32
 plainLimit :: InstructionLimit
 plainLimit = InstructionLimit 4000000
 
+-- | One declared private stack: @low < SP <= high@, both bounds eight-byte aligned.
+newtype StackContext = StackContext (GuestAddress, GuestAddress)
+
+mkStackContext :: GuestAddress -> GuestAddress -> Either String StackContext
+mkStackContext low high
+  | guestAddress low .&. 7 /= 0 = Left "stack context low bound must be eight-byte aligned"
+  | guestAddress high .&. 7 /= 0 = Left "stack context high bound must be eight-byte aligned"
+  | guestAddress low >= guestAddress high = Left "stack context low bound must be below its high bound"
+  | otherwise = Right (StackContext (low, high))
+
 -- | A kernel case additionally executes word exclusives, barriers and @nop@, reads the declared
 -- system registers, may end at a stop address and may map device regions.
 data KernelCase = KernelCase
@@ -206,6 +218,8 @@ data KernelCase = KernelCase
   , -- | Registers 'compareKernelCase' leaves out, such as a spinning loop's scratch and PC. 'Cpsr'
     -- here drops only its flags: mode, T, F, I and A (bits 8:0) are always compared.
     kernelUncompared :: [Register]
+  , -- | Declared private stack contexts; empty for a single-context case.
+    kernelStackContexts :: [StackContext]
   }
 
 caseLimit :: CaseSpec -> InstructionLimit
@@ -346,6 +360,10 @@ kernelJson kernel =
   object $
     ["stop" .= hexAddress stop | Just stop <- [kernelStop kernel]]
       ++ [fromString name .= hexWord32 value | (name, Just value) <- [("tpidrurw", kernelTpidrurw kernel), ("cpacr", kernelCpacr kernel), ("fpexc", kernelFpexc kernel)]]
+      ++ [ "stack_contexts"
+             .= [object ["low" .= hexAddress low, "high" .= hexAddress high] | StackContext (low, high) <- kernelStackContexts kernel]
+         | not (null (kernelStackContexts kernel))
+         ]
 
 writeCase :: FilePath -> CaseSpec -> IO FilePath
 writeCase directory spec = do

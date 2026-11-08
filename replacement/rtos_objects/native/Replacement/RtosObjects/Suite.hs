@@ -1031,7 +1031,7 @@ caseFor role facts entries executing loader owned one = CaseSpec
   , caseExpectedRegisters = expectedRegisters role one
   , caseExpectedMemory = []
   , caseCp14Identity = Just (if executing == DomainA then 0x4003 else 0x4004)
-  , caseKernel = Just (KernelCase (caseLimit one) (if caseBoundary one == TaskArrival then Just (wireAddress (GuestAddress stopAddress)) else Nothing) (Just 0x80001234) (Just 0) (Just 0) ignored)
+  , caseKernel = Just (KernelCase (caseLimit one) (if caseBoundary one == TaskArrival then Just (wireAddress (GuestAddress stopAddress)) else Nothing) (Just 0x80001234) (Just 0) (Just 0) ignored [])
   }
   where
     codeBase = minimum (map fst (extents executing))

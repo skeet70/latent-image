@@ -16,7 +16,7 @@ import System.Directory (canonicalizePath, createDirectory, createDirectoryIfMis
 import System.Environment (getArgs, getEnvironment, getExecutablePath)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>), takeDirectory, takeFileName)
-import System.IO (hClose, hFlush, openTempFile, stdout)
+import System.IO (IOMode (ReadMode, ReadWriteMode, WriteMode), SeekMode (AbsoluteSeek), hClose, hFlush, hSeek, hSetFileSize, openTempFile, stdout, withBinaryFile)
 import System.Posix.Files (createLink, createSymbolicLink, setFileMode)
 import System.Posix.IO (OpenFileFlags (cloexec), OpenMode (ReadOnly, ReadWrite), closeFd, defaultFileFlags, openFd)
 import System.Posix.Process (executeFile)
@@ -65,7 +65,7 @@ compilerFiles :: [FilePath]
 compilerFiles = [library, "debug/deps/libfixture-" ++ hashSuffix ++ ".rmeta", "debug/deps/libfixture-" ++ hashSuffix ++ ".so"] ++ ["debug/incremental/fixture-123/s-456/" ++ name | name <- ["dep-graph.bin", "query-cache.bin", "work-products.bin"]] ++ ["debug/build/builder-" ++ hashSuffix ++ "/build-script-build"]
 
 protectedFiles :: [FilePath]
-protectedFiles = ["main.rs", "case.json", "results/report.html", "image.DAT", "imports/raw.bin", "debug/fixture", "debug/examples/fixture"] ++ ["debug/deps/" ++ name | name <- ["source.rs", "report.json", "report.html", "database.db", "database.sqlite", "firmware.DAT", "custom.bin", "import.rlib", "libunclaimed-0123456789abcdef.rlib", "libfixture-0123456789abcdef.d"]]
+protectedFiles = ["main.rs", "case.json", "results/report.html", "image.DAT", "imports/raw.bin", "imports/\955-\x4e2d.bin", "debug/fixture", "debug/examples/fixture"] ++ ["debug/deps/" ++ name | name <- ["source.rs", "report.json", "report.html", "database.db", "database.sqlite", "firmware.DAT", "custom.bin", "import.rlib", "libunclaimed-0123456789abcdef.rlib", "libfixture-0123456789abcdef.d"]]
 
 fixture :: FilePath -> IO ()
 fixture root = do
@@ -149,6 +149,76 @@ runFixtures argument = do
         Left err -> ioError (userError err)
       makePlan executable root plan
       assertUnchanged root files expected
+    fresh "cargo-test-executables" $ \root plan -> do
+      let units = [("test-lib-fixture_tests", "fixture_tests"), ("test-bin-fixture_cli", "fixture_cli"), ("test-integration-test-consumer_flow", "consumer_flow")]
+          marker crate kind = "debug/.fingerprint/" ++ crate ++ "-" ++ hashSuffix ++ "/" ++ kind
+          executablePath crate = "debug/deps/" ++ crate ++ "-" ++ hashSuffix
+          elf = B.pack [127,69,76,70,1,2,3,4]
+          fingerprintJson = "{\"rustc\":1,\"features\":\"[]\",\"target\":2,\"profile\":3,\"path\":4,\"deps\":[]}"
+          lookalikes = ["debug/deps/recovery_payload-" ++ hashSuffix, "debug/deps/consumer_flow-fedcba9876543210", "debug/recovery-payload"]
+          invalidMarker = marker "not_compiler" "test-integration-test-not_compiler"
+          invalidPayload = executablePath "not_compiler"
+      forM_ units $ \(kind, crate) -> do
+        put (root </> marker crate kind) "0123456789abcdef"
+        put (root </> (marker crate kind ++ ".json")) fingerprintJson
+        put (root </> executablePath crate) elf
+      forM_ lookalikes $ \file -> put (root </> file) elf
+      put (root </> invalidMarker) "0123456789abcdef"
+      put (root </> (invalidMarker ++ ".json")) fingerprintJson
+      put (root </> invalidPayload) "synthetic recovery data with a Cargo-shaped name"
+      let hardlinkedMarker = marker "hardlinked_test" "test-bin-hardlinked_test"
+          hardlinkedPayload = executablePath "hardlinked_test"
+      put (root </> hardlinkedMarker) "0123456789abcdef"
+      put (root </> (hardlinkedMarker ++ ".json")) fingerprintJson
+      put (root </> hardlinkedPayload) elf
+      createLink (root </> hardlinkedPayload) (workspace </> "hardlinked-test-executable")
+      let protected = protectedFiles ++ lookalikes ++ [invalidPayload, invalidMarker, hardlinkedPayload, hardlinkedMarker]
+      expected <- snapshot root protected
+      makePlan executable root plan
+      _ <- run executable True ["apply", "--plan", plan]
+      forM_ units $ \(kind, crate) -> do
+        doesPathExist (root </> executablePath crate) >>= \exists -> check (not exists) "Cargo test executable was not reclaimed"
+        doesPathExist (root </> marker crate kind) >>= \exists -> check (not exists) "removed test executable kept its success marker"
+      assertUnchanged root protected expected
+    fresh "bounded-content-hashing" $ \root plan -> do
+      let payload = root </> "imports/sparse.sqlite"
+          payloadBytes = 256 * 1024 * 1024
+          bounded arguments = arguments ++ ["+RTS", "-M64m", "-RTS"]
+      withBinaryFile payload WriteMode $ \handle -> hSetFileSize handle payloadBytes
+      _ <- run executable True (bounded ["plan", "--cargo-target", root, "--output", plan])
+      withBinaryFile payload ReadWriteMode $ \handle -> do
+        hSeek handle AbsoluteSeek (payloadBytes - 1)
+        B.hPut handle "\1"
+      _ <- run executable False (bounded ["apply", "--plan", plan])
+      doesPathExist (root </> library) >>= \exists -> check exists "changed retained payload permitted deletion"
+      withBinaryFile payload ReadWriteMode $ \handle -> do
+        hSeek handle AbsoluteSeek (payloadBytes - 1)
+        B.hPut handle "\0"
+      _ <- run executable True (bounded ["apply", "--plan", plan])
+      withBinaryFile payload ReadMode $ \handle -> do
+        hSeek handle AbsoluteSeek (payloadBytes - 1)
+        B.hGet handle 1 >>= \byte -> check (byte == "\0") "retained payload changed"
+    fresh "bounded-wide-snapshot" $ \root plan -> do
+      let payloads = [(index, root </> "imports" </> replicate 80 'p' </> ("part-" ++ show index ++ replicate 110 'x' ++ ".bin")) | index <- [0 :: Int .. 8191]]
+          bounded arguments = arguments ++ ["+RTS", "-M128m", "-RTS"]
+      forM_ payloads $ \(index, payload) -> put payload (B.singleton (fromIntegral index))
+      _ <- run executable True (bounded ["plan", "--cargo-target", root, "--output", plan])
+      let (_, lastPayload) = last payloads
+      put lastPayload "\254"
+      _ <- run executable False (bounded ["apply", "--plan", plan])
+      doesPathExist (root </> library) >>= \exists -> check exists "changed wide snapshot permitted deletion"
+      put lastPayload "\255"
+      _ <- run executable True (bounded ["apply", "--plan", plan])
+      forM_ payloads $ \(index, payload) ->
+        B.readFile payload >>= \byte -> check (byte == B.singleton (fromIntegral index)) "retained wide-snapshot payload changed"
+    fresh "nonunicode-filename" $ \root plan -> do
+      let invalidPath = "imports/\xdcff.bin"
+          protected = compilerFiles ++ protectedFiles ++ [invalidPath]
+      put (root </> invalidPath) "synthetic non-Unicode filename fixture"
+      expected <- snapshot root protected
+      _ <- run executable False ["plan", "--cargo-target", root, "--output", plan]
+      doesPathExist plan >>= \exists -> check (not exists) "non-roundtripping filename produced a plan"
+      assertUnchanged root protected expected
     fresh "metadata-only" $ \root _ -> do
       let unreadable = root </> "debug/deps/database.db"
       bracket (setFileMode unreadable 0) (const (setFileMode unreadable 0o600)) $ \_ -> do
@@ -273,6 +343,9 @@ runFixtures argument = do
         bracket (openFd held ReadWrite defaultFileFlags {cloexec = True}) closeFd $ \(Fd fd) -> do
           result <- c_flock fd 6
           check (result == 0) "cannot acquire fixture Cargo lock"
+          let blockedPlan = plan ++ ".locked"
+          _ <- run executable False ["plan", "--cargo-target", root, "--output", blockedPlan]
+          doesPathExist blockedPlan >>= \exists -> check (not exists) "planning published a manifest while Cargo held a lock"
           -- The lock holder is outside this probe's PID namespace.
           _ <- run "unshare" False
             ["--pid", "--fork", "--mount-proc", executable, "apply", "--plan", plan]

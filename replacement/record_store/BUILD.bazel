@@ -109,6 +109,7 @@ haskell_binary(
     main_file = "OracleMain.hs",
     ghcopts = ["-XGHC2021", "-Wall", "-O2"],
     deps = [
+        ":execution",
         ":oracle-lib",
         "//emulation:case-sha256",
         "//emulation:native-observation",
@@ -140,5 +141,154 @@ haskell_test(
         "//host:base",
         "//host:bytestring",
         "//host:containers",
+    ],
+)
+
+haskell_library(
+    name = "generate",
+    srcs = [
+        "Replacement/RecordStore/CaseJson.hs",
+        "Replacement/RecordStore/Generate.hs",
+    ],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-O2"],
+    deps = [
+        ":oracle-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:json",
+        "//host:text",
+    ],
+)
+
+haskell_library(
+    name = "minimize",
+    srcs = ["Replacement/RecordStore/Minimize.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-O2"],
+    deps = [
+        ":generate",
+        ":oracle-lib",
+        "//emulation:native-observation",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+    ],
+)
+
+haskell_library(
+    name = "execution",
+    srcs = ["Replacement/RecordStore/Execution.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-O2"],
+    deps = [
+        ":generate",
+        ":minimize",
+        ":oracle-lib",
+        "//emulation:cached-native-batch",
+        "//emulation:case-sha256",
+        "//emulation:native-adapter",
+        "//emulation:native-observation",
+        "//emulation:owned-case",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+    ],
+)
+
+haskell_binary(
+    name = "counterexample-loop",
+    srcs = ["CounterexampleMain.hs"],
+    main_file = "CounterexampleMain.hs",
+    data = [
+        "//replacement/record_store_carrier:record-store-image.bin",
+        "//replacement/record_store_carrier:record-store-image.symbols",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-O2"],
+    deps = [
+        ":execution",
+        ":generate",
+        ":minimize",
+        ":oracle-lib",
+        "//emulation:cached-native-batch",
+        "//emulation:case-sha256",
+        "//emulation:emulator-slot-lib",
+        "//emulation:fujimod-native-paths",
+        "//emulation:native-observation",
+        "//emulation:owned-case",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:json",
+        "//host:storage-budget",
+        "//host:unix",
+    ],
+)
+
+haskell_test(
+    name = "generate-tests",
+    srcs = ["GenerateTests.hs"],
+    main_file = "GenerateTests.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-O2"],
+    deps = [
+        ":generate",
+        ":oracle-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:json",
+    ],
+)
+
+haskell_test(
+    name = "minimize-tests",
+    srcs = ["MinimizeTests.hs"],
+    main_file = "MinimizeTests.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-O2"],
+    deps = [
+        ":generate",
+        ":minimize",
+        ":oracle-lib",
+        "//emulation:native-observation",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+    ],
+)
+
+haskell_test(
+    name = "counterexample-tests",
+    srcs = ["CounterexampleTests.hs"],
+    main_file = "CounterexampleTests.hs",
+    args = ["$(rootpath :counterexample-loop)"],
+    data = [":counterexample-loop"],
+    ghcopts = ["-XGHC2021", "-Wall", "-O2"],
+    deps = [
+        ":execution",
+        ":generate",
+        ":minimize",
+        ":oracle-lib",
+        "//emulation:native-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:process",
+        "//host:text",
+        "//host:unix",
     ],
 )

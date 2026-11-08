@@ -572,6 +572,29 @@ systemd-run --user --scope -p MemoryMax=2G -p MemorySwapMax=0 -- \
   --stock-output STOCK_OBSERVATIONS --candidate CARRIER.bin --symbols CARRIER.symbols
 ```
 
+### Generated counterexamples
+
+`//replacement/record_store:counterexample-loop` generates a deterministic bounded corpus, checks stock against the independent model, compares the candidate at the native-oracle boundary, then minimizes the first candidate difference while preserving its original boundary. The existing 378-case oracle remains a separate regression corpus.
+
+```sh
+XM1_EMULATOR_SLOTS=1 devenv shell -- host-build run --jobs=2 \
+  //replacement/record_store:counterexample-loop -- \
+  --seed 0 --cases 8 --operations 6 --budget 32 \
+  --out private-data/scratch/RecordCounterexample/RUN
+XM1_EMULATOR_SLOTS=1 devenv shell -- host-build run --jobs=2 \
+  //replacement/record_store:counterexample-loop -- \
+  --candidate CANDIDATE.bin --symbols CANDIDATE.symbols \
+  --replay SAVED.case.json --out private-data/scratch/RecordCounterexample/REPLAY
+```
+
+Bazel supplies the current carrier, symbols and pinned native runner by default. `--candidate BIN --symbols SYMBOLS` selects another carrier, including the existing `record-store-image-control-1` unmasked-successor mutation. `--image`, `--loader` and `--index` override stock input paths; image and loader identities remain pinned. `--runner` overrides the native executable. `--cache ROOT` optionally reuses integrity-checked raw observations, rejudged against current expectations. Output must be fresh, and output/cache paths must resolve under `private-data/scratch/` or `private-data/verify-candidate/runs/`; overlapping paths are refused. Cache-owned symlinks are refused beneath the canonical cache root.
+
+The seed is an unsigned 64-bit integer. Case count is 1..64, operation bound is 3..12, and shrink budget is 1..256 actual oracle calls, including the baseline. Each generated case fixes one of the five geometries, two valid banks, the `Open`/normal-registration prefix and a lifecycle-valid sequence. Operations cover latest, append, collection, erase, bounded addressed reads, zero and close/re-registration; callbacks are synthetic. The versioned saved-case codec validates the same domain on replay.
+
+The terminal JSON names the verdict, counts and report. Exit 0 means no difference in the generated domain, or a matching replay; exit 1 means a behavioral counterexample; exit 2 means invalid input or an undecided prerequisite/execution outcome. A counterexample retains original and reduced cases, decisive corpus observations, native replay inputs/results and source/candidate/runner identities. Inconclusive corpus and shrink trials retain the first complete example per class. A blocked baseline retains its cause and never claims non-reproduction.
+
+Reduction stops at the budget or a fixed point under the implemented reductions. `fixed-point` establishes local minimality only; `budget-exhausted` and `unresolved-trials` leave minimality unestablished. Candidate memory/fetch guards against successful stock are outcome differences; unsupported execution and stock/model disagreement remain undecided.
+
 ### Cutover pair
 
 `//emulation:record-store-pair-observe` runs the versioned `emulation/record-store-pair-finite-v2-routes.json` trie from a zero-instruction reset. Its route declarations and exclusions preserve `emulation/record-store-pair-routes.json`, including the declared defaults-reset sequence. It records all nine record-service entries, registration stack arguments, caller-LR returns, client words, returned pointers and records, skipped-count halfwords, collection/read-at outputs, NAND program payloads and erase descriptors. Every trie leaf reads the ten logical record-area blocks through the live pool map and `nand-read`; an unmapped logical block denotes erased bytes.

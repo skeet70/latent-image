@@ -200,7 +200,7 @@ spec image role (CaseIndex index) row = CaseSpec
   , caseExpectedRegisters = [(R8,0xa5a50000 + if entry row `elem` [Resume,IrqResume] then 4 else 8)]
   , caseExpectedMemory = []
   , caseCp14Identity = Just (if d==DomainA then 0x4003 else 0x4004)
-  , caseKernel = Just (KernelCase (InstructionLimit limit) (if loops row || (isStock role && entry row==IrqReturn && RemoteRestart `elem` trigger d row) then Nothing else Just (guest (stop role d row))) (Just 0x80001234) (Just (cpacr row)) (Just (fpexc row)) ignored)
+  , caseKernel = Just (KernelCase (InstructionLimit limit) (if loops row || (isStock role && entry row==IrqReturn && RemoteRestart `elem` trigger d row) then Nothing else Just (guest (stop role d row))) (Just 0x80001234) (Just (cpacr row)) (Just (fpexc row)) ignored [])
   }
   where
     d = imageDomain image

@@ -1,0 +1,14 @@
+[Unit]
+Description=Collect the shared latent-image Bazel disk cache
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Code/latent-image
+ExecStart=%h/.nix-profile/bin/devenv shell -- bazel --output_base=%h/.cache/bazel/latent-image-gc --max_idle_secs=120 build --jobs=2 --nobuild //build-support:host
+# Bazel's server remains in this unit after the client exits.
+ExecStartPost=/usr/bin/sleep 130
+MemoryMax=2G
+MemorySwapMax=0
+OOMPolicy=stop
+TimeoutStartSec=5min
+Nice=10

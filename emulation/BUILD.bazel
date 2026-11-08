@@ -152,6 +152,7 @@ haskell_library(
     srcs = ["Emulation/EmulatorSlot.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     src_strip_prefix = ".",
+    visibility = ["//replacement/record_store:__pkg__"],
     deps = [
         ":host-admission-lib",
         "//host:base",
@@ -271,13 +272,31 @@ genrule(
     outs = ["FujiModPaths.hs"],
     cmd = " && ".join([
         "read -r store < $(location @lab_fujimod_xm1//:share/fujimod-xm1/store-path)",
-        "printf 'module FujiModPaths (fujimodDriver, fujimodRamPushBridge, fujimodToggleBridge, fujimodRun, fujimodNativeCase) where\\n\\nfujimodDriver :: FilePath\\nfujimodDriver = \"%s\"\\n\\nfujimodRamPushBridge :: FilePath\\nfujimodRamPushBridge = \"%s\"\\n\\nfujimodToggleBridge :: FilePath\\nfujimodToggleBridge = \"%s\"\\n\\nfujimodRun :: FilePath\\nfujimodRun = \"%s\"\\n\\nfujimodNativeCase :: FilePath\\nfujimodNativeCase = \"%s\"\\n' \"$$store/bin/fujimod-xm1\" \"$$store/bin/fujimod-xm1-ram-push\" \"$$store/bin/fujimod-xm1-toggle\" \"$$store/share/fujimod-xm1/xm1-150.json\" \"$$store/bin/fujimod-xm1-native-case\" > $@",
+        "printf 'module FujiModPaths (fujimodDriver, fujimodRamPushBridge, fujimodToggleBridge, fujimodRun) where\\n\\nfujimodDriver :: FilePath\\nfujimodDriver = \"%s\"\\n\\nfujimodRamPushBridge :: FilePath\\nfujimodRamPushBridge = \"%s\"\\n\\nfujimodToggleBridge :: FilePath\\nfujimodToggleBridge = \"%s\"\\n\\nfujimodRun :: FilePath\\nfujimodRun = \"%s\"\\n' \"$$store/bin/fujimod-xm1\" \"$$store/bin/fujimod-xm1-ram-push\" \"$$store/bin/fujimod-xm1-toggle\" \"$$store/share/fujimod-xm1/xm1-150.json\" > $@",
     ]),
 )
 
 haskell_library(
     name = "fujimod-paths",
     srcs = [":fujimod-paths-module"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror"],
+    visibility = ["//visibility:public"],
+    deps = ["//host:base"],
+)
+
+genrule(
+    name = "fujimod-native-paths-module",
+    srcs = ["@lab_fujimod_native//:share/fujimod-xm1/store-path"],
+    outs = ["FujiModNativePaths.hs"],
+    cmd = " && ".join([
+        "read -r store < $(location @lab_fujimod_native//:share/fujimod-xm1/store-path)",
+        "printf 'module FujiModNativePaths (fujimodNativeCase) where\\n\\nfujimodNativeCase :: FilePath\\nfujimodNativeCase = \"%s\"\\n' \"$$store/bin/fujimod-xm1-native-case\" > $@",
+    ]),
+)
+
+haskell_library(
+    name = "fujimod-native-paths",
+    srcs = [":fujimod-native-paths-module"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror"],
     visibility = ["//visibility:public"],
     deps = ["//host:base"],
@@ -953,10 +972,27 @@ haskell_test(
     name = "fujimod-xm1-tests",
     size = "medium",
     srcs = ["FujimodXm1Tests.hs"],
-    args = ["$(rootpath @lab_fujimod_xm1//:test-manifest)"],
+    args = ["$(rootpath @lab_fujimod_xm1_tests//:test-manifest)"],
     data = [
-        "@lab_fujimod_xm1//:test-manifest",
-        "@lab_fujimod_xm1//:test-harnesses",
+        "@lab_fujimod_xm1_tests//:test-manifest",
+        "@lab_fujimod_xm1_tests//:test-harnesses",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host:base",
+        "//host:filepath",
+        "//host:process",
+    ],
+)
+
+haskell_test(
+    name = "native-sdk-tests",
+    size = "medium",
+    srcs = ["FujimodXm1Tests.hs"],
+    args = ["$(rootpath @lab_fujimod_native_tests//:test-manifest)"],
+    data = [
+        "@lab_fujimod_native_tests//:test-manifest",
+        "@lab_fujimod_native_tests//:test-harnesses",
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
@@ -1564,7 +1600,7 @@ cc_binary(
 # The bounded native-case runner: FUJI_NATIVE_V1 on stdin, one observation on stdout.
 sh_binary(
     name = "native-runner",
-    srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-native-case"],
+    srcs = ["@lab_fujimod_native//:bin/fujimod-xm1-native-case"],
     visibility = ["//visibility:public"],
 )
 
@@ -2287,7 +2323,7 @@ haskell_test(
     ],
     deps = [
         ":cached-native-batch",
-        ":fujimod-paths",
+        ":fujimod-native-paths",
         ":native-adapter",
         ":native-observation",
         ":owned-case",
@@ -2765,6 +2801,33 @@ haskell_test(
 )
 
 haskell_library(
+    name = "candidate-route-lib",
+    srcs = ["Emulation/CandidateRoute.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//emulation:__pkg__"],
+    deps = [
+        "//host:base",
+    ],
+)
+
+haskell_library(
+    name = "execution-journal-lib",
+    srcs = ["Emulation/ExecutionJournal.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//emulation:__pkg__"],
+    deps = [
+        ":candidate-route-lib",
+        ":case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
+    ],
+)
+
+haskell_library(
     name = "candidate-baseline-lib",
     srcs = ["Emulation/CandidateBaseline.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
@@ -2790,6 +2853,7 @@ haskell_test(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":candidate-baseline-lib",
+        ":case-sha256",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -2818,7 +2882,10 @@ haskell_binary(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
     deps = [
         ":candidate-baseline-lib",
+        ":candidate-route-lib",
+        ":case-sha256",
         ":emulator-slot-lib",
+        ":execution-journal-lib",
         ":key-release-observations",
         ":watch-observation",
         ":ui-trajectory-lib",
@@ -2834,6 +2901,7 @@ haskell_binary(
         "//host:text",
         "//host:time",
         "//host:unix",
+        "//host:vector",
     ],
 )
 
@@ -2846,6 +2914,7 @@ haskell_test(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":candidate-baseline-lib",
+        ":case-sha256",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -2854,6 +2923,7 @@ haskell_test(
         "//host:process",
         "//host:text",
         "//host:unix",
+        "//host:vector",
     ],
 )
 

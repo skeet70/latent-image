@@ -67,7 +67,7 @@ spec domainB service (Row handle context cpsr state flags exists discarded self 
   , caseFunctions=[(ga at,size) | (at,size) <- functions]
   , caseInitial=[(r,if r==R0 then handle else 0xa5a50000 + fromIntegral (fromEnum r)) | r <- [R0 .. R12]] ++ [(Sp,0x959800),(Lr,0x958f00),(Cpsr,cpsr)]
   , caseExpectedStatus=fst expectation, caseExpectedRegisters=[(R0,snd expectation)], caseExpectedMemory=[], caseCp14Identity=Nothing
-  , caseKernel=Just (KernelCase (InstructionLimit 4000) (Just (ga (if domainB then 0xd3640 else 0x43640))) Nothing Nothing Nothing [R1,R2,R3,R12,Lr,Pc,Cpsr]) }
+  , caseKernel=Just (KernelCase (InstructionLimit 4000) (Just (ga (if domainB then 0xd3640 else 0x43640))) Nothing Nothing Nothing [R1,R2,R3,R12,Lr,Pc,Cpsr] []) }
  where
   expectation = expected domainB service (Row handle context cpsr state flags exists discarded self dispatch)
   ga = GuestAddress . fromIntegral
