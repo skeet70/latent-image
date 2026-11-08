@@ -142,13 +142,13 @@ runRetained config tree stockTables document stockPath ownedPath = do
           case stockDrawsResult of
             Left problem -> renderFailure problem
             Right stockDraws -> do
-              drawsChecked <- compareDrawsReader config stockTables document stockDraws owned
+              drawsChecked <- compareDrawsReaderRole StockRole config stockTables document stockDraws owned
               case drawsChecked of
                 Left problem -> renderFailure problem
                 Right () -> do
                   stockStackResult <- checkRetainedRenderStackObservationsReader config stock
                   ownedStackResult <- checkRetainedRenderStackObservationsReader config owned
-                  banksResult <- discoveredBanksReader config stockTables document owned
+                  banksResult <- discoveredBanksReaderRole StockRole config stockTables document owned
                   case (stockStackResult, ownedStackResult, banksResult) of
                     (Left problem, _, _) -> renderFailure problem
                     (_, Left problem, _) -> renderFailure problem

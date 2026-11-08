@@ -6,7 +6,7 @@ module Replacement.ModalRuntime.RenderPair
   , validateRenderDeclarations, validateRetainedRenderDeclarations, DeclarationScope (..), checkRenderCoverage
   , checkRenderInvocationEvidence
   , osdInputs, discoveredBanks
-  , foldRenderDraws, collectDrawsReader, compareDrawsReader, discoveredBanksReader
+  , foldRenderDraws, collectDrawsReader, compareDrawsReader, compareDrawsReaderRole, discoveredBanksReader, discoveredBanksReaderRole
   , checkRenderCoverageReader, checkRenderStackObservationsReader
   , checkRetainedRenderStackObservationsReader
   , checkRenderInvocationEvidenceReader, osdInputsReader
@@ -349,9 +349,12 @@ collectDrawsReader config stock composed role readers =
   fmap (fmap reverse) (foldRenderDraws config stock composed role readers (\acc draw -> Right (draw:acc)) [])
 
 compareDrawsReader :: RenderConfig -> TablesDocument -> TablesDocument -> [Draw] -> [ObservationReader] -> IO (Either String ())
-compareDrawsReader config stock composed stockDraws ownedReaders = do
+compareDrawsReader = compareDrawsReaderRole OwnedRole
+
+compareDrawsReaderRole :: Role -> RenderConfig -> TablesDocument -> TablesDocument -> [Draw] -> [ObservationReader] -> IO (Either String ())
+compareDrawsReaderRole role config stock composed stockDraws ownedReaders = do
   let left = collapseDraws config stockDraws
-  result <- foldRenderDraws config stock composed OwnedRole ownedReaders step (left, Nothing, 0, 0, Nothing)
+  result <- foldRenderDraws config stock composed role ownedReaders step (left, Nothing, 0, 0, Nothing)
   pure $ case result of
     Left problem -> Left problem
     Right (remaining, previous, leftCount, rightCount, failure) ->
@@ -375,8 +378,11 @@ compareDrawsReader config stock composed stockDraws ownedReaders = do
     _ -> (remaining, leftCount, Just "render draw order/state differs")
 
 discoveredBanksReader :: RenderConfig -> TablesDocument -> TablesDocument -> [ObservationReader] -> IO (Either String [Int])
-discoveredBanksReader config stock composed readers = do
-  result <- foldRenderDraws config stock composed OwnedRole readers step []
+discoveredBanksReader = discoveredBanksReaderRole OwnedRole
+
+discoveredBanksReaderRole :: Role -> RenderConfig -> TablesDocument -> TablesDocument -> [ObservationReader] -> IO (Either String [Int])
+discoveredBanksReaderRole role config stock composed readers = do
+  result <- foldRenderDraws config stock composed role readers step []
   pure result
  where
   step banks draw = fmap (\found -> sort (nub (banks ++ found))) (discoveredBanks config [draw])
