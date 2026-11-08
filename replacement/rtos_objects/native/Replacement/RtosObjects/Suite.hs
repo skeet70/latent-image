@@ -1042,12 +1042,16 @@ caseFor role facts entries executing loader owned one = CaseSpec
   }
   where
     dataPages = pages facts one
+    -- The loader's divide helper, called by the retained pool release.
+    stockHelpers DomainA = [(0x4da6c, 0x34), (0x4d978, 0xe8)]
+    stockHelpers DomainB = [(0xdda30, 0x30), (0xdd93c, 0xe8)]
     words' =
       let fixture = fixtureWords facts executing one
           outside = [address | (address, _) <- fixture, not (any (contains address 4) dataPages)]
        in if null outside then fixture else error (caseIdText (caseName one) ++ ": unmapped fixture words " ++ show outside)
     functionList =
       [ (wireAddress (GuestAddress address), size) | (address, size) <- extents executing ++ retained executing ++ retainedExtents executing ]
+        ++ [ (wireAddress (GuestAddress address), size) | (address, size) <- stockHelpers executing ]
         ++ [ (wireAddress (GuestAddress address), size) | Seam _ _ address size <- retainedSeams executing ]
         ++ [ (wireAddress (GuestAddress wrapperBase), 0x100) ]
         ++ [ (wireAddress (GuestAddress wakerStubBase), 0x80) | isJust (caseWaker one) ]
