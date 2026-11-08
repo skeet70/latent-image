@@ -100,7 +100,16 @@ main = do
         ]
       joinedReuseValue =
         [ let (stockReuse, ownedReuse, stubReuse) = joinedReuse run
-           in object ["domain" .= show (joinedDomain run), "stock" .= show stockReuse, "owned" .= show ownedReuse, "stub" .= show stubReuse]
+           in object ["domain" .= show (joinedDomain run), "cohort" .= ("original" :: String), "stock" .= show stockReuse, "owned" .= show ownedReuse, "stub" .= show stubReuse]
+        | run <- joinedRuns
+        ]
+      joinedReturnReuseValue =
+        [ let (stockReuse, ownedReuse, stubReuse) = joinedReturnReuse run
+           in object ["domain" .= show (joinedDomain run), "cohort" .= ("return" :: String), "stock" .= show stockReuse, "owned" .= show ownedReuse, "stub" .= show stubReuse]
+        | run <- joinedRuns
+        ]
+      joinedFalseReuseValue =
+        [ object ["domain" .= show (joinedDomain run), "false" .= show (joinedFalseReuse run)]
         | run <- joinedRuns
         ]
       joinedControlsValue =
@@ -112,6 +121,11 @@ main = do
         [ object ["domain" .= show (joinedDomain run), "case" .= name, "difference" .= difference]
         | run <- joinedRuns
         , (name, difference) <- joinedCounterexamples run
+        ]
+      joinedFalseCounterexamplesValue =
+        [ object ["domain" .= show (joinedDomain run), "case" .= name, "difference" .= difference]
+        | run <- joinedRuns
+        , (name, difference) <- joinedFalseCounterexamples run
         ]
       firstFailure = case failures of
         (name, message) : _ -> object ["case" .= name, "message" .= message]
@@ -136,8 +150,11 @@ main = do
           , "differences" .= differences
           , "joinedCases" .= joinedCasesValue
           , "joinedReuse" .= joinedReuseValue
+          , "joinedReturnReuse" .= joinedReturnReuseValue
+          , "joinedFalseReuse" .= joinedFalseReuseValue
           , "joinedControls" .= joinedControlsValue
           , "joinedCounterexamples" .= joinedCounterexamplesValue
+          , "joinedFalseCounterexamples" .= joinedFalseCounterexamplesValue
           , "timerSeams"
               .= ( [ "stock-insert-timer A 0x44c60 B 0xd4c20"
                    , "stock-remove-timer A 0x44ca8 B 0xd4c68"

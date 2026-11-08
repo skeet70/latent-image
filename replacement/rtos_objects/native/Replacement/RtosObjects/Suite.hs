@@ -9,7 +9,7 @@ import Data.List (find)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isJust, mapMaybe, maybeToList)
 import Data.Word (Word32, Word8)
-import Emulation.CachedNativeBatch (BatchReuse, cachedObservedBatch)
+import Emulation.CachedNativeBatch (BatchReuse (..), cachedObservedBatch)
 import Emulation.NativeCase (CaseId (..), caseIdText)
 import qualified Emulation.NativeObservation as N
 import Emulation.NativeObservation (Barrier (..), KernelObservation (..), NativeObservation (..), Ordered (..), RegionId (..), Register (..), RunnerStatus (..), Write (..), WriteValue (..))
@@ -123,6 +123,8 @@ data Case = Case
   , caseSchedulerLock :: Maybe Domain
   -- | A direct entry's initial registers; absent cases enter through the wrapper.
   , caseDirectInitial :: Maybe [(Register, Word32)]
+  -- | A selected-task stub that blocks through the family wait at this entry.
+  , caseSelectedWait :: Maybe Word32
   }
 
 data Image = Image { imageBase :: Word32, imageBytes :: B.ByteString }
@@ -263,8 +265,11 @@ data JoinedRun = JoinedRun
   { joinedDomain :: Domain
   , joinedRows :: [(String, Either String [String])]
   , joinedReuse :: (BatchReuse, BatchReuse, BatchReuse)
+  , joinedReturnReuse :: (BatchReuse, BatchReuse, BatchReuse)
+  , joinedFalseReuse :: BatchReuse
   , joinedControls :: [(String, Bool)]
   , joinedCounterexamples :: [(String, String)]
+  , joinedFalseCounterexamples :: [(String, String)]
   }
 
 retained :: Domain -> [(Word32, Word32)]
@@ -532,6 +537,7 @@ baseCase executing =
     , caseSkipTimerLog = False
     , caseSchedulerLock = Nothing
     , caseDirectInitial = Nothing
+    , caseSelectedWait = Nothing
     }
 
 retainedWords :: Facts -> Domain -> Case -> [(GuestAddress, Word32)]
@@ -772,7 +778,7 @@ stubCode facts entries executing base target args = assembleCode (case target of
        in emit c8 0xeafffffe
 
 continuationBytes :: Facts -> Entries -> Domain -> Case -> B.ByteString
-continuationBytes facts entries executing one = installedChain
+continuationBytes facts entries executing one = installedSelected
   where
     zero = B.replicate (fromIntegral (stopAddress - exitAddress + 4)) 0
     installedExit = install exitAddress (assemble [0xe12fff1e]) zero
@@ -783,6 +789,14 @@ continuationBytes facts entries executing one = installedChain
     installedChain = case [chain | Just chain <- map pwChain (caseWaiters one)] of
       (chain : _) -> install chainStubBase (stubCode facts entries executing chainStubBase (wakerTarget chain) (wakerArgs chain)) installedWaker
       [] -> installedWaker
+    installedSelected = case caseSelectedWait one of
+      Nothing -> installedChain
+      Just entry -> install wakerStubBase (selectedWaitCode entry) installedChain
+    selectedWaitCode entry = assembleCode stubTail
+      where
+        start = emit (emit (codeAt wakerStubBase) 0xe52de004) 0xe24dd00c
+        called = blTo (loadArgsCode start (map (\(register, value) -> RegArg register value) [(R0, id0 1), (R1, 1), (R2, 0), (R3, outWord)])) entry
+        stubTail = emit (emit (emit called 0xe28dd00c) 0xe49de004) 0xe12fff1e
 
 install :: Word32 -> B.ByteString -> B.ByteString -> B.ByteString
 install address bytes image = B.take offset image <> bytes <> B.drop (offset + B.length bytes) image
@@ -1010,7 +1024,10 @@ layoutWords facts executing one =
             , poke (address + factsTaskDefinition facts) definition, poke (address + factsTaskDomain facts) (dfId (domainFacts facts domain))
             , poke (address + factsTaskState facts) (packedState (factsStateDormant facts) priority)
             , poke (address + factsTaskSavedSp facts) (if slot == wakerSlot && isJust (caseWaker one) && domain == executing then wakerStack else targetStackPointer)
-            , poke (address + factsTaskResumePc facts) (if slot == wakerSlot && isJust (caseWaker one) && domain == executing then wakerStubBase else stopAddress)
+            , poke (address + factsTaskResumePc facts)
+                (if domain == executing && ((slot == wakerSlot && isJust (caseWaker one)) || (slot == waiterSlot && isJust (caseSelectedWait one)))
+                   then wakerStubBase
+                   else stopAddress)
             , poke (definition + factsDefinitionPriority facts) priority
             , poke (definition + 4) (0xa5510000 + slot), poke (definition + 8) stopAddress
             , poke (definition + 0x10) (targetStackPointer - 0x100), poke (definition + 0x14) 0x100
@@ -1112,7 +1129,7 @@ caseForCode role facts entries executing loader code extraFunctions one = CaseSp
         ++ [ (wireAddress (GuestAddress address), size) | (address, size) <- stockHelpers executing ]
         ++ [ (wireAddress (GuestAddress address), size) | Seam _ _ address size <- retainedSeams executing ]
         ++ [ (wireAddress (GuestAddress wrapperBase), 0x100) ]
-        ++ [ (wireAddress (GuestAddress wakerStubBase), 0x80) | isJust (caseWaker one) ]
+        ++ [ (wireAddress (GuestAddress wakerStubBase), 0x80) | isJust (caseWaker one) || isJust (caseSelectedWait one) ]
         ++ [ (wireAddress (GuestAddress chainStubBase), 0x80) | not (null (mapMaybe pwChain (caseWaiters one))) ]
     ignored = if caseBoundary one == CallerReturn then [R1, R2, R3, R12, Lr] else [R0 .. R12] ++ [Lr]
     -- TPIDRURW holds the one-based local slot; bit 31 marks the handler context.
@@ -1667,6 +1684,38 @@ joinedCase facts executing name target slot service timed boundary = (baseCase e
     expectedRunning = if boundary == TaskArrival then targetTask else taskAt facts target runningSlot
     expectedSelected = if changed then targetTask else taskAt facts target runningSlot
 
+joinedReturnCases :: Facts -> Entries -> Domain -> [Case]
+joinedReturnCases facts entries executing =
+  [ joinedReturnCase "s3b-wake-local-timed-return" True
+  , joinedReturnCase "s3b-wake-local-untimed-return" False
+  ]
+  where
+    joinedReturnCase name timed =
+      (joinedCase facts executing name executing waiterSlot S3bWake timed CallerReturn)
+        { caseSelectedWait = Just (entryAddress entries executing FlagWait)
+        , caseFlags = [(executing, 1, 0, 0, 0)]
+        , caseExpect = returnExpectations timed
+        }
+    targetTask = taskAt facts executing waiterSlot
+    wait = flagWait facts executing waiterSlot
+    timer = objectTimer facts FlagWait executing waiterSlot
+    flagControlAddress = flagControl facts executing 1
+    returnExpectations timed =
+      [ res 0
+      , byte (targetTask + factsTaskState facts) (factsStateWait facts .|. factsStateObjectQueued facts .|. factsStateOwnerLockQueued facts)
+      , eq (wait + factsWaitBlockResult facts) 0
+      , eq (flagControlAddress + factsWaitQueueNext facts) targetTask
+      , eq (flagControlAddress + factsWaitQueuePrev facts) targetTask
+      , eq (targetTask + factsTaskNext facts) flagControlAddress
+      , eq (targetTask + factsTaskPrev facts) flagControlAddress
+      , eq (dfSelected (domainFacts facts executing)) (taskAt facts executing runningSlot)
+      , eq (dfRunning (domainFacts facts executing)) (taskAt facts executing runningSlot)
+      , eq (dfReadyBitmap (domainFacts facts executing)) ((1 `shiftL` 10) .|. (1 `shiftL` 15))
+      , eq (pointerWord (bank executing)) 0
+      , eq (dfReschedule (domainFacts facts executing)) 0
+      , timerLog (if timed then 1 else 0) (if timed then [(recordAddress facts executing executing, timer)] else [])
+      ]
+
 joinedCases :: Facts -> Domain -> [Case]
 joinedCases facts executing =
   [ joinedCase facts executing "s3b-wake-local-timed" executing waiterSlot S3bWake True TaskArrival
@@ -1686,13 +1735,27 @@ replaceImage address bytes image =
   let offset = fromIntegral (address - imageBase image)
    in image { imageBytes = B.take offset (imageBytes image) <> bytes <> B.drop (offset + B.length bytes) (imageBytes image) }
 
--- | The qualified S3b callers over the staged family code. The stub role replaces the family
--- release with a changed-returning body so the joined predicate must reject a callee that does
--- not release the task.
-runJoined :: FilePath -> FilePath -> FilePath -> Facts -> Entries -> Domain -> Image -> Image -> Image -> IO JoinedRun
-runJoined runner cacheRoot directory facts entries executing stock owned s3b = do
-  let selected = joinedCases facts executing
-      extra = s3bPlacement executing
+-- | One joined cohort's rows, reuse and counterexamples.
+data CohortRun = CohortRun
+  { cohortRows :: [(String, Either String [String])]
+  , cohortReuse :: (BatchReuse, BatchReuse, BatchReuse)
+  , cohortFalseReuse :: Maybe BatchReuse
+  , cohortControls :: [(String, Bool)]
+  , cohortCounterexamples :: [(String, String)]
+  , cohortFalseCounterexamples :: [(String, String)]
+  }
+
+firstOwnedDifference :: Domain -> Facts -> Case -> NativeObservation -> NativeObservation -> Maybe String
+firstOwnedDifference executing facts one original subject =
+  case filter ownedFailure (compareFamily OwnedRole executing facts one original subject) of
+    difference : _ -> Just (renderDifference difference)
+    [] -> Nothing
+  where
+    ownedFailure difference = case difference of RoleDifference OwnedRole _ -> True; _ -> False
+
+runCohort :: FilePath -> FilePath -> FilePath -> Facts -> Entries -> Domain -> Image -> Image -> Image -> Bool -> [Case] -> IO CohortRun
+runCohort runner cacheRoot directory facts entries executing stock owned s3b withFalse selected = do
+  let extra = s3bPlacement executing
       stockCases = [(one, caseForCode StockRole facts entries executing stock (codeBytes executing stock stock) extra one) | one <- selected]
       ownedCases = [(one, caseForCode OwnedRole facts entries executing stock (codeBytesJoined executing stock owned s3b) extra one) | one <- selected]
       stubOwned = replaceImage (s3bRelease executing) (assemble [0xe3a00001, 0xe12fff1e]) owned
@@ -1706,18 +1769,13 @@ runJoined runner cacheRoot directory facts entries executing stock owned s3b = d
   let reference = M.fromList [(caseIdText ident, observation) | (ident, observation) <- stockRaw]
       subject = M.fromList [(caseIdText ident, observation) | (ident, observation) <- ownedRaw]
       stub = M.fromList [(caseIdText ident, observation) | (ident, observation) <- stubRaw]
-      ownedFailure difference = case difference of RoleDifference OwnedRole _ -> True; _ -> False
-      firstOwned one original stubObservation =
-        case filter ownedFailure (compareFamily OwnedRole executing facts one original stubObservation) of
-          difference : _ -> Just (renderDifference difference)
-          [] -> Nothing
   results <- forM stockCases $ \(one, _) -> do
     let ident = emittedId executing one
     pure (caseIdText (caseName one), case (M.lookup ident reference, M.lookup ident subject, M.lookup ident stub) of
       (Just original, Just replacement, Just stubObservation) ->
         let differences = map renderDifference (compareFamily OwnedRole executing facts one original replacement)
             caseControls = controls executing facts one original replacement
-            counterexample = case firstOwned one original stubObservation of
+            counterexample = case firstOwnedDifference executing facts one original stubObservation of
               Just _ -> []
               Nothing -> ["joined counterexample not rejected"]
          in Right (differences ++ ["control " ++ name ++ " not detected" | (name, False) <- caseControls] ++ counterexample)
@@ -1735,10 +1793,44 @@ runJoined runner cacheRoot directory facts entries executing stock owned s3b = d
         | (one, _) <- stockCases
         , Just original <- [M.lookup (emittedId executing one) reference]
         , Just stubObservation <- [M.lookup (emittedId executing one) stub]
-        , Just difference <- [firstOwned one original stubObservation]
+        , Just difference <- [firstOwnedDifference executing facts one original stubObservation]
         ]
   unless (length stockRaw == length selected && length ownedRaw == length selected && length stubRaw == length selected) (fail "native observations do not cover the current joined case set")
-  pure (JoinedRun executing results (stockReuse, ownedReuse, stubReuse) allControls counterexamples)
+  (falseReuse, falseCounterexamples) <-
+    if withFalse
+      then do
+        let falseOwned = replaceImage (s3bRelease executing) (assemble [0xe3a00000, 0xe12fff1e]) owned
+            falseCases = [(one, caseForCode OwnedRole facts entries executing stock (codeBytesJoined executing stock falseOwned s3b) extra one) | one <- selected]
+        falseBatch <- writeBatch (directory </> "false") (map snd falseCases)
+        (reuse, falseRaw) <- cachedObservedBatch cacheRoot runner falseBatch
+        let falseMap = M.fromList [(caseIdText ident, observation) | (ident, observation) <- falseRaw]
+            differences =
+              [ (caseIdText (caseName one), difference)
+              | (one, _) <- stockCases
+              , Just original <- [M.lookup (emittedId executing one) reference]
+              , Just falseObservation <- [M.lookup (emittedId executing one) falseMap]
+              , Just difference <- [firstOwnedDifference executing facts one original falseObservation]
+              ]
+        unless (length falseRaw == length selected) (fail "false-stub observations do not cover the current joined case set")
+        pure (Just reuse, differences)
+      else pure (Nothing, [])
+  pure (CohortRun results (stockReuse, ownedReuse, stubReuse) falseReuse allControls counterexamples falseCounterexamples)
+
+-- | The qualified S3b callers over the staged family code. The original twenty rows keep their
+-- batches. The return cohort adds a selected-task wait body that resumes the original caller, and
+-- the false stub returns unchanged without releasing the task.
+runJoined :: FilePath -> FilePath -> FilePath -> Facts -> Entries -> Domain -> Image -> Image -> Image -> IO JoinedRun
+runJoined runner cacheRoot directory facts entries executing stock owned s3b = do
+  original <- runCohort runner cacheRoot directory facts entries executing stock owned s3b True (joinedCases facts executing)
+  returns <- runCohort runner cacheRoot (directory </> "return") facts entries executing stock owned s3b False (joinedReturnCases facts entries executing)
+  pure (JoinedRun executing
+    (cohortRows original ++ cohortRows returns)
+    (cohortReuse original)
+    (cohortReuse returns)
+    (fromMaybe BatchReused (cohortFalseReuse original))
+    (cohortControls original ++ cohortControls returns)
+    (cohortCounterexamples original ++ cohortCounterexamples returns)
+    (cohortFalseCounterexamples original))
 
 cases :: Facts -> Entries -> Domain -> [Case]
 cases facts _entries executing =
