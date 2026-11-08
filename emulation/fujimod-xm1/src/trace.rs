@@ -1013,6 +1013,7 @@ pub struct TraceSites {
     capture_memory: Option<CaptureMemory>,
     modal_observation: Option<ModalTrace>,
     stack_scope: Option<StackScope>,
+    presentation: Option<crate::presentation::Tracker>,
     pub(crate) render_object_provenance_sequence: Option<u64>,
 }
 
@@ -1025,6 +1026,27 @@ fn register(session: &Session, core: usize, register: arm::Register) -> Result<u
 }
 
 impl TraceSites {
+    pub(crate) fn begin_presentation_tracking(&mut self, session: &Session) -> Result<(), String> {
+        if self.presentation.is_some() { return Err("presentation tracking already active".into()); }
+        self.presentation = Some(crate::presentation::Tracker::default());
+        self.rearm_points(session, PointScope::UserAndModal)
+    }
+    pub(crate) fn presentation_tracking_active(&self) -> bool { self.presentation.is_some() }
+
+    pub(crate) fn invalidate_presentation(&mut self) {
+        if let Some(tracker) = &mut self.presentation { tracker.invalidate(); }
+    }
+
+    pub(crate) fn select_presentation_target(&mut self) -> Result<Option<crate::presentation::FrameToken>, String> {
+        self.presentation.as_mut().ok_or("presentation tracking is not active")?
+            .select_target().map_err(str::to_owned)
+    }
+
+    pub(crate) fn presentation_acknowledgement(&self, token: crate::presentation::FrameToken) -> Result<Option<crate::presentation::Acknowledgement>, String> {
+        self.presentation.as_ref().ok_or("presentation tracking is not active")?
+            .acknowledgement(token).map_err(str::to_owned)
+    }
+
     pub fn begin_stack_scope(&mut self, config: TraceStackScopeConfig) -> Result<(), String> {
         if self.stack_scope.is_some() || self.modal_observation_active() || self.capture_observation_active() {
             return Err("stack scope requires no existing stack, modal or capture observation".into());
@@ -1388,6 +1410,7 @@ impl TraceSites {
         if self.modal_observation_active() {
             return Err("modal observation sites cannot be disarmed before successful finish".into());
         }
+        self.invalidate_presentation();
         match (self.point_set_mode, self.disarmed_points) {
             (PointSetMode::Fixed, _) => self.end_points(session),
             (PointSetMode::Persistent(_), DisarmedPoints::Release) => {
@@ -1416,6 +1439,7 @@ impl TraceSites {
 
     /// Removes every installed point before a session checkpoint, keeping the arming for `reinstall`.
     pub fn teardown(&mut self, session: &Session) -> Result<(), String> {
+        self.invalidate_presentation();
         match self.point_set_mode {
             PointSetMode::Fixed => self.disarm(session),
             PointSetMode::Persistent(_) => {
@@ -1471,7 +1495,7 @@ impl TraceSites {
             let remaining = self.sites.keys().copied().filter(|site| !addresses.iter().any(|removed| removed.0 == *site));
             let memberships = self.memberships(session, remaining, self.cores, PointScope::UserAndModal);
             self.apply(session, memberships)?;
-        } else { self.disarm(session)?; }
+        } else { self.end_points(session)?; }
         for address in addresses {
             if let Some(label) = self.sites.remove(&address.0) {
                 if !self.sites.values().any(|other| other == &label) {
@@ -1501,7 +1525,7 @@ impl TraceSites {
             }
             let memberships = self.memberships(session, self.sites.keys().chain(sites.keys()).copied(), self.cores, PointScope::UserAndModal);
             self.apply(session, memberships)?;
-        } else { self.disarm(session)?; }
+        } else { self.end_points(session)?; }
         for label in sites.values() {
             if !self.stop_labels.contains(label) {
                 self.stop_labels.insert(label.clone());
@@ -1561,10 +1585,13 @@ impl TraceSites {
         if let Some(modal) = modal {
             addresses.extend(modal.sites().map(|pc| u64::from(pc.0)));
         }
+        if self.presentation.is_some() {
+            addresses.extend(crate::presentation::Site::ALL.map(|site| u64::from(site.address())));
+        }
         if addresses.is_empty() { return Ok(()); }
         let addresses: Vec<u64> = addresses.into_iter().collect();
         for core in 0..session.board.instruction_counts().len() {
-            let selected = modal.is_some() || match self.cores {
+            let selected = modal.is_some() || self.presentation.is_some() || match self.cores {
                 CoreSelection::All => true,
                 CoreSelection::Primary => core == 0,
             };
@@ -1588,9 +1615,12 @@ impl TraceSites {
         if let Some(modal) = modal {
             addresses.extend(modal.sites().map(|pc| u64::from(pc.0)));
         }
+        if self.presentation.is_some() {
+            addresses.extend(crate::presentation::Site::ALL.map(|site| u64::from(site.address())));
+        }
         let addresses: Vec<u64> = addresses.into_iter().collect();
         (0..session.board.instruction_counts().len())
-            .map(|core| if modal.is_some() || cores.includes(core) { addresses.clone() } else { Vec::new() })
+            .map(|core| if modal.is_some() || self.presentation.is_some() || cores.includes(core) { addresses.clone() } else { Vec::new() })
             .collect()
     }
 
@@ -1679,6 +1709,28 @@ impl TraceSites {
             let Some(pending) = self.pending_points[point_index] else { continue };
             let address = pending.pc.0;
             let pc = u64::from(address);
+            if let Some(tracker) = &mut self.presentation {
+                if let Some(site) = crate::presentation::Site::at(address) {
+                    let mut word = [0; 4];
+                    session.board.read_physical(u64::from(address), &mut word)?;
+                    let cpsr = register(session, *core, arm::Register::Cpsr)?;
+                    if u32::from_le_bytes(word) != site.word() || cpsr & 0x0100_0220 != 0 {
+                        return Err("presentation instruction differs from X-M1 1.50 A32 source".into());
+                    }
+                    let frame = match site {
+                        crate::presentation::Site::Enter => register(session, *core, arm::Register::R(13))?
+                            .checked_sub(4).ok_or("presentation entry stack underflow")?,
+                        _ => register(session, *core, arm::Register::R(11))?,
+                    };
+                    let result = match site {
+                        crate::presentation::Site::AfterWait => register(session, *core, arm::Register::R(0))?,
+                        crate::presentation::Site::Finish => register(session, *core, arm::Register::R(4))?,
+                        crate::presentation::Site::Enter => 0,
+                    };
+                    tracker.observe(site, crate::presentation::Core::from_index(*core)?,
+                        crate::presentation::FramePointer(frame), crate::presentation::CoreInstructions(counts[*core]), result);
+                }
+            }
             if let Some(modal) = self.modal_observation.as_mut().filter(|modal| modal.active()) {
                 if modal.contains(Guest(address)) {
                     new_returns[*core] = modal.observe(session, *core, Guest(address), instructions, pending.point)?;

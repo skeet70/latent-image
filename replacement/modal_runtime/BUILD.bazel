@@ -597,6 +597,29 @@ haskell_test(
     ],
 )
 
+haskell_binary(
+    name = "menu-engine-qualify-bounded",
+    srcs = ["QualifyBoundedMain.hs"],
+    main_file = "QualifyBoundedMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//emulation:case-sha256",
+        "//emulation:emulator-slot-lib",
+        "//emulation:host-admission-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//host:storage-budget",
+        "//host:process",
+        "//host:unix",
+    ],
+)
+
 haskell_library(
     name = "picker-table-lib",
     srcs = ["Replacement/ModalRuntime/PickerTable.hs"],

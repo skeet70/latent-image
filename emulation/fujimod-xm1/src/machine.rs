@@ -165,6 +165,7 @@ impl Machine {
         if self.render_provenance.is_some() { return Err("render provenance already active".into()); }
         let (_, graph) = crate::run::graph(&self.document)?;
         self.render_provenance = Some(crate::render_provenance::Collector::begin(&self.session, graph.mappings)?);
+        self.traces.begin_presentation_tracking(&self.session)?;
         self.traces.render_object_provenance_sequence = Some(0);
         Ok(())
     }
@@ -252,7 +253,7 @@ impl Machine {
             }
         };
         let end = current.value().saturating_add(count);
-        if self.traces.capture_observation_active() || self.traces.modal_observation_active() {
+        if self.traces.capture_observation_active() || self.traces.modal_observation_active() || self.traces.presentation_tracking_active() {
             match self.traces.collect(&self.session, current) {
                 Ok(CollectionOutcome::DrainRequired) => return RunOutcome::DrainRequired,
                 Ok(CollectionOutcome::Stop) => return RunOutcome::Stopped,
@@ -552,6 +553,14 @@ impl Machine {
         Ok(self.observed_frame()?.is_some())
     }
 
+    pub fn select_presentation_target(&mut self) -> Result<Option<crate::presentation::FrameToken>, String> {
+        self.traces.select_presentation_target()
+    }
+
+    pub fn presentation_acknowledgement(&self, token: crate::presentation::FrameToken) -> Result<Option<crate::presentation::Acknowledgement>, String> {
+        self.traces.presentation_acknowledgement(token)
+    }
+
     fn observed_frame(&self) -> Result<Option<(serde_json::Value, usize, ScanoutFrame)>, String> {
         let name = &self.document.scanout.0;
         let state = self.session.scanout_state(name)?;
@@ -731,6 +740,68 @@ mod tests {
         let hit = serde_json::to_value(&machine.traces.hits[0]).unwrap();
         assert_eq!(hit["render_object_provenance_sequence"], 2);
         assert_eq!(hit["instructions"], batch["events"][1]["instructions"]);
+    }
+
+    fn presentation_event(machine: &mut Machine, site: crate::presentation::Site, result: u32) -> RunOutcome {
+        use fujimod_emulator_cpu::{Register, arm};
+        let pc = site.address();
+        let branch = 0xea00_0000 | ((0u32.wrapping_sub(pc + 12) >> 2) & 0x00ff_ffff);
+        machine.session.board.write_physical(u64::from(pc), &site.word().to_le_bytes()).unwrap();
+        machine.session.board.write_physical(u64::from(pc + 4), &branch.to_le_bytes()).unwrap();
+        let fp = if site == crate::presentation::Site::Enter { 0x12345678 } else { 0x009ffffc };
+        for (register, value) in [
+            (Register::Pc, pc), (Register::Arm32(arm::Register::R(13)), 0x00a00000),
+            (Register::Arm32(arm::Register::R(11)), fp),
+            (Register::Arm32(arm::Register::R(0)), result), (Register::Arm32(arm::Register::R(4)), result),
+        ] {
+            machine.session.board.write_register(0, register, u64::from(value)).unwrap();
+        }
+        machine.run(100)
+    }
+
+    #[test]
+    fn presentation_completion_preserves_overlapping_user_capture_across_a_page_retry() {
+        use crate::presentation::Site;
+        use crate::trace::{CaptureCursor, CaptureScope};
+        let mut machine = machine();
+        machine.begin_render_provenance().unwrap();
+        machine.traces.arm(&machine.session, Site::ALL.map(|site| (site.address(), format!("user-{:x}", site.address()))).into()).unwrap();
+        machine.begin_capture_observation(CaptureScope::Capture).unwrap();
+        for _ in 0..64 {
+            for site in Site::ALL {
+                assert_eq!(presentation_event(&mut machine, site, 0), RunOutcome::Completed);
+            }
+        }
+        assert_eq!(presentation_event(&mut machine, Site::Enter, 0), RunOutcome::DrainRequired);
+        let target = machine.select_presentation_target().unwrap().unwrap();
+        assert!(machine.presentation_acknowledgement(target).unwrap().is_none());
+        let page = serde_json::to_value(machine.traces.capture_observation_page(CaptureCursor::new(0)).unwrap()).unwrap();
+        let mut hits = page["hits"].as_array().unwrap().clone();
+        let mut cursor = page["next"].as_u64().unwrap();
+        machine.traces.acknowledge_capture_observation(CaptureCursor::new(cursor)).unwrap();
+        assert_eq!(machine.run(100), RunOutcome::Completed);
+        for site in [Site::AfterWait, Site::Finish] {
+            assert_eq!(presentation_event(&mut machine, site, 0), RunOutcome::Completed);
+        }
+        loop {
+            let page = serde_json::to_value(machine.traces.capture_observation_page(CaptureCursor::new(cursor)).unwrap()).unwrap();
+            let entries = page["hits"].as_array().unwrap();
+            if entries.is_empty() { break; }
+            hits.extend(entries.iter().cloned());
+            cursor = page["next"].as_u64().unwrap();
+            machine.traces.acknowledge_capture_observation(CaptureCursor::new(cursor)).unwrap();
+        }
+        assert_eq!(hits.len(), 195);
+        for frame in hits.chunks_exact(3) {
+            assert_eq!(frame.iter().map(|hit| hit["site"].as_str().unwrap()).collect::<Vec<_>>(),
+                ["user-6d7920", "user-6d7da4", "user-6d7df4"]);
+        }
+        let proof = serde_json::to_value(machine.presentation_acknowledgement(target).unwrap().unwrap()).unwrap();
+        assert_eq!(proof["selected_frame"], 65);
+        assert_eq!(proof["completed_frame"], 65);
+        machine.disarm().unwrap();
+        machine.rearm().unwrap();
+        assert!(machine.select_presentation_target().unwrap().is_none());
     }
 
     fn write_row(machine: &Machine, row: u64, record: &[u8; 28]) {

@@ -107,6 +107,7 @@ haskell_library(
     srcs = ["Emulation/HostAdmission.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     src_strip_prefix = ".",
+    visibility = ["//replacement/modal_runtime:__pkg__"],
     deps = [
         "//host:base",
         "//host:directory",
@@ -152,7 +153,7 @@ haskell_library(
     srcs = ["Emulation/EmulatorSlot.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     src_strip_prefix = ".",
-    visibility = ["//replacement/record_store:__pkg__"],
+    visibility = ["//replacement/record_store:__pkg__", "//replacement/modal_runtime:__pkg__"],
     deps = [
         ":host-admission-lib",
         "//host:base",
