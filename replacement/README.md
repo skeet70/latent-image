@@ -814,6 +814,10 @@ F4 adds host `delete_flag` and `delete_mailbox`: every queued waiter is released
 
 At `ec3e28a6`, all 87 object and 18 layout cases pass, including one mailbox with untimed A and timed B receivers; both resume released with unchanged outputs. A separate public consumer exercises deletion, ordered draining and recreation (E-RTOS-OBJECTS-F4-HOST-150). Strict F2 stages again remain byte-identical to their baseline. Cross-core create/delete serialization remains open under F1a's lifecycle preconditions; generic host teardown does not establish emitted entries, full native qualification or the family cutover.
 
+## Owned task-record create/delete (#156)
+
+`replacement/rtos_task_records` owns the task create `+0x0` and delete `+0x4` root slots in both loaders with the canonical `rtos_layout` views. The [task-record contract](../reports/rtos-task-records.md) records the typed boundaries, the nine named differences, the host and cached-native results and the native-only carrier status. The artifact is linked at `0x50000`/`0x50200` for the native oracle; live placement remains open.
+
 ## Owned timer heap host increment (#156)
 
 `replacement/rtos_timer` implements an allocation-free timer heap over the canonical `rtos_layout` guest views. `TimerHeap::from_context` resolves the context's node, count, base and clock pointers; `Capacity::new` and const `Capacity::from_static` share validation of zero and the arithmetic upper bound. Entry identity, membership, callback, argument and clock values have distinct types.

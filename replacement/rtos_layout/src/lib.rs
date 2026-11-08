@@ -604,22 +604,65 @@ impl Task {
 pub struct TaskDefinition(pub GuestAddress);
 
 impl TaskDefinition {
+    pub const SIZE: u32 = 0x28;
+
+    #[inline(always)]
+    pub const fn attributes(self) -> GuestAddress {
+        self.0
+    }
+
+    #[inline(always)]
+    pub const fn argument(self) -> GuestAddress {
+        self.0.offset(0x04)
+    }
+
+    #[inline(always)]
+    pub const fn entry(self) -> GuestAddress {
+        self.0.offset(0x08)
+    }
+
     /// Word whose low byte is the initial [`Priority`].
     #[inline(always)]
     pub const fn priority(self) -> GuestAddress {
         self.0.offset(0x0c)
     }
 
+    /// Rounded stack bytes.
+    #[inline(always)]
+    pub const fn stack_size(self) -> GuestAddress {
+        self.0.offset(0x10)
+    }
+
+    #[inline(always)]
+    pub const fn stack(self) -> GuestAddress {
+        self.0.offset(0x14)
+    }
+
+    #[inline(always)]
+    pub const fn exception_attributes(self) -> GuestAddress {
+        self.0.offset(0x18)
+    }
+
+    #[inline(always)]
+    pub const fn exception_handler(self) -> GuestAddress {
+        self.0.offset(0x1c)
+    }
+
+    /// One-based creation id.
+    #[inline(always)]
+    pub const fn slot(self) -> GuestAddress {
+        self.0.offset(0x20)
+    }
+
+    #[inline(always)]
+    pub const fn exists(self) -> GuestAddress {
+        self.0.offset(0x24)
+    }
+
     /// Two words whose wrapping sum is the initial saved SP.
     #[inline(always)]
     pub const fn initial_sp_terms(self) -> [GuestAddress; 2] {
         [self.0.offset(0x10), self.0.offset(0x14)]
-    }
-
-    /// The one-based task slot.
-    #[inline(always)]
-    pub const fn slot(self) -> GuestAddress {
-        self.0.offset(0x20)
     }
 }
 
@@ -723,6 +766,30 @@ impl FixedPoolWait {
     #[inline(always)]
     pub const fn block(self) -> GuestAddress {
         self.0.offset(0x0c)
+    }
+}
+
+/// The creation-id map entry for one task slot; the stored word is the id.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct TaskCreationId(pub GuestAddress);
+
+impl TaskCreationId {
+    #[inline(always)]
+    pub const fn word(self) -> GuestAddress {
+        self.0
+    }
+}
+
+/// The stock word `&g_default_stack_word` a reset definition points its stack at.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct DefaultStackWord(pub GuestAddress);
+
+impl DefaultStackWord {
+    #[inline(always)]
+    pub const fn address(self) -> GuestAddress {
+        self.0
     }
 }
 
@@ -969,6 +1036,12 @@ pub struct DomainWords {
     /// [`TaskSlot::COUNT`] [`WaitBlock`]s, indexed by the waiting task.
     pub semaphore_waits: GuestAddress,
     pub semaphore_timers: GuestAddress,
+    /// [`TaskSlot::COUNT`] [`TaskDefinition`] records.
+    pub task_definitions: GuestAddress,
+    /// [`TaskSlot::COUNT`] [`TaskCreationId`] words.
+    pub task_slot_ids: GuestAddress,
+    /// `&g_default_stack_word`.
+    pub default_stack_word: DefaultStackWord,
     /// [`FlagSlot::COUNT`] creation records.
     pub flag_configs: GuestAddress,
     pub flag_controls: GuestAddress,
@@ -995,6 +1068,16 @@ impl DomainWords {
     #[inline(always)]
     pub const fn task(&self, slot: TaskSlot) -> Task {
         Task(self.task_table.offset((slot.get() - 1) * Task::SIZE))
+    }
+
+    #[inline(always)]
+    pub const fn task_definition(&self, slot: TaskSlot) -> TaskDefinition {
+        TaskDefinition(self.task_definitions.offset((slot.get() - 1) * TaskDefinition::SIZE))
+    }
+
+    #[inline(always)]
+    pub const fn task_creation_id(&self, slot: TaskSlot) -> TaskCreationId {
+        TaskCreationId(self.task_slot_ids.offset((slot.get() - 1) * 4))
     }
 
     /// `None` unless `task` is a record start in this table.
@@ -1135,6 +1218,9 @@ impl Domain {
                 semaphore_controls: GuestAddress(0x4005_af0c),
                 semaphore_waits: GuestAddress(0x4005_4efc),
                 semaphore_timers: GuestAddress(0x4005_549c),
+                task_definitions: GuestAddress(0x4005_beac),
+                task_slot_ids: GuestAddress(0x4006_22d4),
+                default_stack_word: DefaultStackWord(GuestAddress(0x4006_2c50)),
                 flag_configs: GuestAddress(0x4005_d178),
                 flag_controls: GuestAddress(0x4006_24b4),
                 flag_waits: GuestAddress(0x4005_5fdc),
@@ -1171,6 +1257,9 @@ impl Domain {
                 semaphore_controls: GuestAddress(0x400e_aecc),
                 semaphore_waits: GuestAddress(0x400e_4ebc),
                 semaphore_timers: GuestAddress(0x400e_545c),
+                task_definitions: GuestAddress(0x400e_be6c),
+                task_slot_ids: GuestAddress(0x400f_2294),
+                default_stack_word: DefaultStackWord(GuestAddress(0x400f_2c10)),
                 flag_configs: GuestAddress(0x400e_d138),
                 flag_controls: GuestAddress(0x400f_2474),
                 flag_waits: GuestAddress(0x400e_5f9c),
