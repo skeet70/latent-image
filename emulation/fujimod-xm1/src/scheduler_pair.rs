@@ -654,6 +654,20 @@ struct TaskStack { start: Hex, end: Hex }
 
 #[derive(Clone, Copy, Debug, Serialize)]
 struct WriteOrigin { core: Core, pc: Hex, sp: Hex, cpsr: u32, task: Hex, kernel_context: u32, instructions: u64 }
+
+fn owns_origin(entry: &EntryState, origin: &WriteOrigin) -> bool {
+    let task = matches!(entry.task, Read::Committed { value } if value == origin.task.0);
+    let in_stack = match entry.task_stack {
+        None => true,
+        Some(TaskStack { start, end }) => start.0 <= origin.sp.0 && origin.sp.0 <= end.0,
+    };
+    let pc = origin.pc.0 & !ALIAS;
+    let transition = !matches!(entry.slot.semantic, Semantic::Dispatch { .. })
+        && [0x40000u32, 0xd0000].iter().any(|&loader|
+            (loader+0x204 <= pc && pc < loader+0x368) || (loader+0x3640 <= pc && pc < loader+0x3810));
+    entry.core == origin.core && task && origin.kernel_context == entry.kernel_context
+        && origin.cpsr & 0x1f == entry.cpsr & 0x1f && in_stack && !transition
+}
 impl PartialEq for WriteOrigin { fn eq(&self, other: &Self) -> bool { self.cmp(other).is_eq() } }
 impl Eq for WriteOrigin {}
 impl PartialOrd for WriteOrigin { fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> { Some(self.cmp(other)) } }
@@ -677,6 +691,7 @@ struct DataCapture {
     cpu: *const dyn Cpu, core: Core, sequence: Rc<Cell<u64>>,
     active: BTreeSet<u32>, rows: Vec<(u64,CapturedWrite)>, overflow: bool,
     failure: Option<String>, cached: Option<(InstructionEntryId,WriteOrigin)>,
+    base: Rc<Cell<u64>>, progress: Rc<[Cell<u64>;2]>,
 }
 impl DataCapture {
     fn origin(&mut self) -> Result<WriteOrigin, String> {
@@ -685,6 +700,9 @@ impl DataCapture {
         if let Some((id,origin)) = self.cached {
             if id == entry.id { return Ok(origin); }
         }
+        let index = self.core.index();
+        self.progress[index].set(entry.progress);
+        let instructions = self.base.get() + entry.progress + self.progress[1-index].get();
         let register = |register| -> Result<u32,String> {
             let mut bytes = [0;4];
             require(cpu.read_register(Register::Arm32(register), &mut bytes)? == 4, "scheduler writer register width differs")?;
@@ -698,7 +716,7 @@ impl DataCapture {
         let origin = WriteOrigin { core: self.core, pc: Hex(u32::try_from(entry.address).map_err(|_| "scheduler writer PC exceeds 32 bits")?),
             sp: Hex(register(arm::Register::R(13))?), cpsr: entry.pstate,
             task: Hex(word(self.core.own_kernel_current_task())?), kernel_context: word(self.core.own_kernel_context())?,
-            instructions: entry.progress };
+            instructions };
         self.cached = Some((entry.id,origin));
         Ok(origin)
     }
@@ -1198,7 +1216,8 @@ struct Observer<'p> {
     write_batch: Vec<(u64,CapturedWrite)>,
     write_sequence: Rc<Cell<u64>>,
     lock_events: Vec<LockEvent>,
-    last_instructions: u64,
+    clock_base: Rc<Cell<u64>>,
+    clock_progress: Rc<[Cell<u64>;2]>,
 }
 
 impl Observer<'_> {
@@ -1269,7 +1288,8 @@ impl Observer<'_> {
             for core in 0..2 {
                 let context = Box::new(RefCell::new(DataCapture { cpu: unsafe { callback_cpu(machine.session.board.cpu(core)?) },
                     core: Core::from_index(core)?, sequence: self.write_sequence.clone(),
-                    active: BTreeSet::new(), rows: Vec::new(), overflow: false, failure: None, cached: None }));
+                    active: BTreeSet::new(), rows: Vec::new(), overflow: false, failure: None, cached: None,
+                    base: self.clock_base.clone(), progress: self.clock_progress.clone() }));
                 let data = (&*context as *const RefCell<DataCapture>).cast_mut().cast();
                 // The context is retired only after remove_hook.
                 let hook = unsafe { machine.session.board.cpu(core)?.install_hook(Hook::Memory {
@@ -1285,7 +1305,8 @@ impl Observer<'_> {
                     .flat_map(|call| call.entry.memory.iter().map(|word| word.address.0 & !ALIAS & !3))).collect();
             capture.active.extend([0xfffb30cc,0xfffb40cc,0xfffb30ec,0xfffb40ec].map(|address| address & !ALIAS));
         }
-        self.last_instructions = machine.instructions();
+        self.clock_base.set(machine.instructions());
+        for cell in self.clock_progress.iter() { cell.set(0); }
         machine.session.board.transaction_watch_begin(vec![(0xfffb30cc,0xfffb30d0), (0xfffb40cc,0xfffb40d0),
             (0xfffb30ec, 0xfffb30f0), (0xfffb40ec, 0xfffb40f0)], WATCH_LIMIT)
     }
@@ -1299,7 +1320,6 @@ impl Observer<'_> {
             self.write_batch.extend(capture.rows.drain(..));
         }
         self.write_batch.sort_unstable_by_key(|(sequence,_)| *sequence);
-        for (_,write) in &mut self.write_batch { write.origin.instructions += self.last_instructions; }
         for (_,write) in &self.write_batch {
             if [0xfffb30cc,0xfffb40cc,0xfffb30ec,0xfffb40ec].contains(&write.write.address.0) { continue; }
             for calls in self.open.pending.values_mut() {
@@ -1328,7 +1348,8 @@ impl Observer<'_> {
             }
         }
         require(bank_writes.next().is_none(), "scheduler bank writer has no transaction")?;
-        self.last_instructions = machine.instructions();
+        self.clock_base.set(machine.instructions());
+        for cell in self.clock_progress.iter() { cell.set(0); }
         Ok(())
     }
     fn end_data(&mut self, machine: &Machine) -> Result<(), String> {
@@ -1453,7 +1474,7 @@ impl Observer<'_> {
             }
             if matches!(call.entry.slot.semantic, Semantic::Helper { name: Helper::Release } | Semantic::Helper { name: Helper::Acquire }) {
                 for write in &call.writes {
-                    if write.origin.core == call.entry.core && call.entry.task == (Read::Committed { value: write.origin.task.0 }) {
+                    if owns_origin(&call.entry, &write.origin) {
                         require(self.lock_events.len() < LOCK_LIMIT, "lock event bound exceeded")?;
                         self.lock_events.push(LockEvent { task: write.origin.task.0, core: write.origin.core,
                             call: call.entered, at: write.origin.instructions, address: write.write.address, value: write.write.value });
@@ -1914,7 +1935,8 @@ fn drive() -> Result<(), String> {
         probe_hits: Vec::new(),
         trampoline_loads: [None; 2], demand_paging: Vec::new(), demand_services: BTreeMap::new(),
         write_batch: Vec::with_capacity(WATCH_LIMIT*2), write_sequence: Rc::new(Cell::new(0)),
-        lock_events: Vec::new(), last_instructions: 0,
+        lock_events: Vec::new(), clock_base: Rc::new(Cell::new(0)),
+        clock_progress: Rc::new([Cell::new(0), Cell::new(0)]),
     };
     machine.traces.bound_full_registers(NonZeroUsize::new(2).ok_or("zero hit bound")?);
     machine.traces.stop_labels = [ENTRY_LABEL, CONTINUATION_LABEL, FILL_LABEL, ARM_LABEL, "scheduler-pc-watch", "scheduler-probe"]
@@ -2467,7 +2489,8 @@ mod tests {
         let mut points = board.instruction_points_begin_mutable(0,Vec::new()).unwrap();
         let capture = Box::new(RefCell::new(DataCapture { cpu: unsafe { callback_cpu(board.cpu(0).unwrap()) },
             core: Core::Primary, sequence: Rc::new(Cell::new(0)), active: BTreeSet::from([0x3000,0xfffb30cc & !ALIAS]),
-            rows: Vec::new(), overflow: false, failure: None, cached: None }));
+            rows: Vec::new(), overflow: false, failure: None, cached: None,
+            base: Rc::new(Cell::new(0)), progress: Rc::new([Cell::new(0),Cell::new(0)]) }));
         let data = (&*capture as *const RefCell<DataCapture>).cast_mut().cast();
         let hook = unsafe { board.cpu(0).unwrap().install_hook(Hook::Memory {
             callback: data_write, data, read: false, write: true, range: HookRange::All,

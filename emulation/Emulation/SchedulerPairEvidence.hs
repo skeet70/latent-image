@@ -101,18 +101,18 @@ data RetainedControl
   = NoControlCalls
   | WakeFailure ![Call]
   | NotifyFailures !(Maybe Call) ![Call]
-data ControlEvidence = ControlEvidence !CallEvidence !RetainedControl
+data ControlEvidence = ControlEvidence !CallEvidence !RetainedControl !Bool
 
 emptyControlEvidence :: Plan -> ControlEvidence
-emptyControlEvidence plan = ControlEvidence emptyCallEvidence $ case planRole plan of
+emptyControlEvidence plan = ControlEvidence emptyCallEvidence (case planRole plan of
   SilentNotify -> NotifyFailures Nothing []
   WrongPredicate -> NotifyFailures Nothing []
   WakeNoInsert -> WakeFailure []
-  _ -> NoControlCalls
+  _ -> NoControlCalls) False
 
 accumulateControlEvidence :: Plan -> ControlEvidence -> Call -> ControlEvidence
-accumulateControlEvidence plan (ControlEvidence compact retained) call =
-  ControlEvidence (accumulateKnown timers deferred overflow plan checked compact call) (retainControl (planRole plan) checked retained call)
+accumulateControlEvidence plan (ControlEvidence compact retained retainedOverflow) call =
+  ControlEvidence (accumulateKnown timers deferred overflow plan checked compact call) (retainControl (planRole plan) checked retained call) (retainedOverflow || nextCandidates > 64)
  where
   timers = evidenceTimers compact ++ timerWitnesses [call]
   checked = checkCallForInWitnesses (take 64 timers) (planRole plan) call
@@ -120,6 +120,11 @@ accumulateControlEvidence plan (ControlEvidence compact retained) call =
     Left FamilyTimer -> [call]
     _ -> []
   overflow = evidenceOverflow compact || length timers > 64 || length (evidenceDeferred compact) + length deferred > 64
+  candidates = case retained of
+    WakeFailure previous -> length previous
+    NotifyFailures _ failures -> length failures
+    NoControlCalls -> 0
+  nextCandidates = candidates + (case checked of Left _ -> 1; Right () -> 0)
 
 -- Notify adjudication retains its earliest target and preceding failed contracts.
 retainControl :: Role -> Either Refusal () -> RetainedControl -> Call -> RetainedControl
@@ -148,10 +153,13 @@ earlierCall previous candidate = case previous of
   _ -> Just candidate
 
 qualifyControlEvidence :: B.ByteString -> Plan -> Observation -> ControlEvidence -> Either Refusal J.Value
-qualifyControlEvidence bytes plan observation (ControlEvidence compact _) = qualifyEvidence bytes plan observation compact
+qualifyControlEvidence bytes plan observation (ControlEvidence compact _ overflow) = do
+  expect Incomplete (not overflow)
+  qualifyEvidence bytes plan observation compact
 
 checkControlEvidence :: Role -> Observation -> ControlEvidence -> Either Refusal ()
-checkControlEvidence role observation (ControlEvidence compact retained) =
+checkControlEvidence role observation (ControlEvidence compact retained overflow) = do
+  expect Incomplete (not overflow)
   controlFailure role (observation {obsCalls=calls})
  where
   rawCalls = case retained of
@@ -166,4 +174,4 @@ checkControlEvidence role observation (ControlEvidence compact retained) =
   calls = filter (not . resolved) rawCalls
 
 controlFailureValue :: ControlEvidence -> J.Value
-controlFailureValue (ControlEvidence compact _) = evidenceFailureValue compact
+controlFailureValue (ControlEvidence compact _ _) = evidenceFailureValue compact
