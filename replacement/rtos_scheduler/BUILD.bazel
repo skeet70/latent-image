@@ -221,6 +221,7 @@ genrule(
         "src/s3d.rs",
         "src/s3d_tests.rs",
         "//replacement/rtos_layout:src/lib.rs",
+        "//replacement/rtos_reservation:src/lib.rs",
     ],
     outs = ["s3d-host-tests-bin"],
     cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location src/s3d.rs) -o $@",
