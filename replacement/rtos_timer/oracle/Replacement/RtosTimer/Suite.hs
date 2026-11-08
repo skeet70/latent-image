@@ -26,7 +26,7 @@ data Image = Image { imageBase :: Word32, imageBytes :: B.ByteString }
 
 data Role = Stock | Owned deriving (Eq, Show)
 
-data Call = Insert | Remove | Tick deriving (Eq, Show)
+data Call = Initialize | Insert | Remove | Tick deriving (Eq, Show)
 
 data Callback = Receipt | Cancel | Rearm | Switch deriving (Eq, Show)
 
@@ -45,6 +45,7 @@ data Check
   | CpsrControlIs Word32
   | WordIs String Word32 Word32
   | RegionsUnchanged [String]
+  | ConfigurationPublished
   deriving (Eq, Show)
 
 data Case = Case
@@ -125,6 +126,20 @@ tickEntry DomainB = 0xd4d4c
 stockBase :: Domain -> (Word32, Word32)
 stockBase DomainA = (0x44ac0, 0x46c)
 stockBase DomainB = (0xd4a80, 0x46c)
+
+initializeAddress, configurationAddress, configurationWordAddress :: Domain -> GuestAddress
+initializeAddress DomainA = GuestAddress 0x44a50
+initializeAddress DomainB = GuestAddress 0xd4a10
+configurationAddress DomainA = GuestAddress 0x400c0818
+configurationAddress DomainB = GuestAddress 0x400c0888
+configurationWordAddress DomainA = GuestAddress 0x400546d4
+configurationWordAddress DomainB = GuestAddress 0x400e4694
+
+wordAddress :: GuestAddress -> Word32
+wordAddress (GuestAddress address) = fromIntegral address
+
+configurationRegion :: RegionId
+configurationRegion = RegionId "configuration"
 
 seedRegister :: Register -> Word32
 seedRegister register = 0xa5a50000 + fromIntegral (fromEnum register)
@@ -235,6 +250,10 @@ kernelWords facts domain one =
   , (dfTimerBase d, caseBase one)
   , (dfTickNow d, caseTick one)
   ]
+  ++ [ (wordAddress (configurationWordAddress domain), wordAddress (configurationAddress domain))
+     | caseCall one == Initialize
+     ]
+  ++ [(dfTickNow d + 4, 0xa5a5a5a5) | caseCall one == Initialize]
   ++ concat
     [ [(heapNode facts domain index, expiry), (heapNode facts domain index + 4, entryAddress slot)]
     | (index, (expiry, slot)) <- zip [1 :: Int ..] (caseHeap one)
@@ -308,10 +327,8 @@ overlay base size words' = B.concat (pieces 0 ordered)
     pieces cursor ((offset, value) : rest) =
       B.replicate (offset - cursor) 0 : word32le value : pieces (offset + 4) rest
 
--- | The core cohort is the previously recorded wire; the extra cohort holds the new initial
--- conditions.
 cases :: Facts -> Domain -> [Case]
-cases facts domain = coreCases facts domain ++ extraCases facts domain
+cases facts domain = coreCases facts domain ++ extraCases facts domain ++ initializeCases facts domain
 
 coreCases :: Facts -> Domain -> [Case]
 coreCases facts domain =
@@ -410,6 +427,16 @@ extraCases facts domain =
       [] [(2, 1), (4, 2)]
   ]
 
+initializeCases :: Facts -> Domain -> [Case]
+initializeCases facts domain =
+  [ Case "initialize" Initialize [] 9 1 0 77 99 0 0xd3 Receipt Equal
+      [ CountIs 0, BaseIs 0, TickIs 10
+      , KernelWord (dfTickNow (domainFacts facts domain) + 4) 0
+      , ConfigurationPublished, RegionsUnchanged ["entries"]
+      ]
+      [] [] [] []
+  ]
+
 expectedCpsrControl :: Case -> Word32
 expectedCpsrControl one = case caseCall one of
   Tick
@@ -465,6 +492,14 @@ check facts domain _one _role observation check' = case check' of
         | otherwise -> Left ("cpsr control " ++ showHexWord (cpsrControl actual) ++ ", expected " ++ showHexWord (cpsrControl value))
       Nothing -> Left "missing register cpsr"
   WordIs region address value -> expectWord region address value
+  ConfigurationPublished -> do
+    let d = domainFacts facts domain
+        region = regionName configurationRegion
+        base = wordAddress (configurationAddress domain)
+    expectWord region (base + 0x20) (dfTimerHeap d)
+    expectWord region (base + 0x24) (dfTimerCount d)
+    expectWord region (base + 0x28) (dfTimerBase d)
+    expectWord region (base + 0x2c) (dfTickNow d)
   RegionsUnchanged regions -> do
     forM_ regions $ \region -> do
       actual <- readRegion region
@@ -489,6 +524,7 @@ check facts domain _one _role observation check' = case check' of
       _ -> B.empty
     regionBase "kernel" = kernelLow facts domain
     regionBase "entries" = entriesBase
+    regionBase region | RegionId region == configurationRegion = wordAddress (configurationAddress domain)
     regionBase _ = 0
 
 showHexWord :: Word32 -> String
@@ -522,6 +558,9 @@ caseFor facts domain role stockImage ownedImage ownedSymbols one =
         , mkRegion (RegionId "stack") (GuestAddress (fromIntegral stackBase)) (fromIntegral stackSize) ReadWrite (B.replicate (fromIntegral stackSize) 0)
         , mkRegion (RegionId "exit") (GuestAddress (fromIntegral exitAddress)) 0x10 ReadExecute (B.replicate 0x10 0)
         ]
+          ++ [ mkRegion configurationRegion (configurationAddress domain) 0x70 ReadWrite (B.replicate 0x70 0xa5)
+             | caseCall one == Initialize
+             ]
     , caseFunctions = [(GuestAddress (fromIntegral address), size) | (address, size) <- functions]
     , caseInitial = initialRegisters
     , caseExpectedStatus = Returned
@@ -539,16 +578,21 @@ caseFor facts domain role stockImage ownedImage ownedSymbols one =
     }
   where
     entry = case caseCall one of
+      Initialize -> wordAddress (initializeAddress domain)
       Insert -> insertEntry domain
       Remove -> removeEntry domain
       Tick -> tickEntry domain
     (codeBase, codeBytes) = case role of
-      Stock -> let (base, size) = stockBase domain in (base, slice (imageBase stockImage) (imageBytes stockImage) base size)
+      Stock ->
+        let (base, size) = stockBase domain
+            (start, extent) = if caseCall one == Initialize then (base - 0x70, size + 0x70) else (base, size)
+         in (start, slice (imageBase stockImage) (imageBytes stockImage) start extent)
       Owned -> (imageBase ownedImage, imageBytes ownedImage)
     functions = case role of
       Stock ->
         let (base, _) = stockBase domain
          in [(base, 0xc4), (base + 0xc4, 0xdc), (insertEntry domain, 0x48), (removeEntry domain, 0xe4), (tickEntry domain, 0x1a0), (stubBase, stubSize)]
+              ++ [(wordAddress (initializeAddress domain), 0x70) | caseCall one == Initialize]
       Owned -> ownedSymbols ++ [(stubBase, stubSize)]
     initialRegisters =
       [ (register, case lookup register arguments of
@@ -558,6 +602,7 @@ caseFor facts domain role stockImage ownedImage ownedSymbols one =
       ]
         ++ [(Sp, stackPointer), (Lr, exitAddress), (Cpsr, caseCpsr one)]
     arguments = case caseCall one of
+      Initialize -> []
       Insert -> [(R0, contextBase), (R1, entryAddress (caseSlot one)), (R2, caseExpiry one)]
       Remove -> [(R0, contextBase), (R1, entryAddress (caseSlot one))]
       Tick -> [(R0, 0), (R1, 0), (R2, 0)]
@@ -578,14 +623,17 @@ parseOwnedSymbols path = do
   pure (concatMap row rows)
   where
     row line = case words line of
-      [a, z, _, _] -> case (parseWord32 a, parseWord32 z) of
+      [a, z, kind, _] -> case (parseWord32 a, parseWord32 z) of
         (Just address, Just size)
-          | size > 0 && address >= 0x44c60 && address < stubBase -> [(address, size)]
+          | kind `elem` ["T", "t"], size > 0
+          , (address >= 0x44a50 && address < 0x44f2c && size <= 0x44f2c - address)
+            || (address >= 0xd4a10 && address < 0xd4eec && size <= 0xd4eec - address) -> [(address, size)]
         _ -> []
       _ -> []
 
 cohortOf :: Case -> String
 cohortOf one = case caseName one of
+  "initialize" -> "initialize"
   "insert-second-fiq" -> "extra"
   "tick-ordered-fiq" -> "extra"
   "tick-masked-fiq" -> "extra"
@@ -597,7 +645,8 @@ runDomain runner cacheRoot directory facts domain stockImage ownedImage ownedSym
   let selected = cases facts domain
   (coreRuns, coreControls) <- runCohort "core" (filter ((== "core") . cohortOf) selected) directory
   (extraRuns, extraControls) <- runCohort "extra" (filter ((== "extra") . cohortOf) selected) (directory </> "extra")
-  pure (coreRuns ++ extraRuns, coreControls ++ extraControls)
+  (initializeRuns, initializeControls) <- runCohort "initialize" (filter ((== "initialize") . cohortOf) selected) (directory </> "initialize")
+  pure (coreRuns ++ extraRuns ++ initializeRuns, coreControls ++ extraControls ++ initializeControls)
   where
     runCohort cohort chosen base = do
       let stockSpecs = map (caseFor facts domain Stock stockImage ownedImage ownedSymbols) chosen
@@ -618,7 +667,7 @@ runDomain runner cacheRoot directory facts domain stockImage ownedImage ownedSym
               status -> Left ("status " ++ runnerStatusLabel status)
             errorsFor role observation = [message | Left message <- statusCheck observation : roleChecks role observation]
             equalDifferences stock' owned' = case caseKind one of
-              Equal -> regionDifferences facts domain [RegionId "kernel", RegionId "entries"] stock' owned'
+              Equal -> regionDifferences facts domain ([RegionId "kernel", RegionId "entries"] ++ [configurationRegion | caseCall one == Initialize]) stock' owned'
               _ -> []
         let run = CaseRun
               { caseDomain = domain
@@ -656,6 +705,9 @@ controlRuns facts domain cohort one observation =
   [ ControlRun cohort "cpsr-i" (caseName one) (refused (CpsrControlIs expected) (mutateCpsr (`xor` 0x80) observation))
   , ControlRun cohort "cpsr-f" (caseName one) (refused (CpsrControlIs expected) (mutateCpsr (`xor` 0x40) observation))
   ]
+    ++ [ ControlRun cohort "configuration-publication" (caseName one) (refused ConfigurationPublished (mutateConfiguration observation))
+       | caseCall one == Initialize
+       ]
     ++ [ ControlRun cohort ("unchanged-" ++ region) (caseName one) (refused (RegionsUnchanged [region]) (mutateRegion region observation))
        | region <- declaredRegions
        ]
@@ -666,6 +718,13 @@ controlRuns facts domain cohort one observation =
       Right () -> False
     mutateCpsr f observed = observed {nativeRegisters = M.adjust f Cpsr (nativeRegisters observed)}
     declaredRegions = [region | RegionsUnchanged regions <- checksFor Owned one, region <- regions]
+    mutateConfiguration observed =
+      observed
+        { nativeMemory =
+            [ (ident, if ident == configurationRegion then B.take 0x20 bytes <> flipHead (B.drop 0x20 bytes) else bytes)
+            | (ident, bytes) <- nativeMemory observed
+            ]
+        }
     mutateRegion region observed =
       observed
         { nativeMemory =
@@ -691,3 +750,4 @@ describe check' = case check' of
   CpsrControlIs value -> "cpsr control = " ++ showHexWord (cpsrControl value)
   WordIs region address value -> region ++ " " ++ showHexWord address ++ " = " ++ showHexWord value
   RegionsUnchanged regions -> "unchanged " ++ unwords regions
+  ConfigurationPublished -> "timer configuration pointers"
