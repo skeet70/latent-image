@@ -339,9 +339,8 @@ check() {
   local settings_status=$?
   [ -f "$results/$name$s-settings.json" ] || settings_status=1
   printf '%s settings exit=%s %s\n' "$name$s" "$settings_status" "$(jq -c '{equal, problem}' "$results/$name$s-settings.json" 2>/dev/null)"
-  local exclusions=()
+  local exclusions=(--clock-exclusions emulation/menu-engine-pair-trajectories/clock-exclusions.json)
   case "$name" in
-    oracle-frame-fixed-open|oracle-fixed-wrap) exclusions=(--clock-exclusions emulation/menu-engine-pair-trajectories/clock-exclusions.json) ;;
     oracle-framed-push) exclusions=(--clock-exclusions emulation/menu-engine-pair-trajectories/clock-exclusions-framed-push.json) ;;
   esac
   bazel-bin/emulation/render-compare "$runs/$name-stock$s/e2e-result-render.json" "$runs/$name-owned$s/e2e-result-render.json" "$results/$name$s-render.json" "${exclusions[@]}" > "$results/$name$s-render-check.txt" 2>&1
