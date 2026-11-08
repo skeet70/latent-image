@@ -659,6 +659,8 @@ The builder bounds the stack statically for this package (`host/firmware/EngineS
 
 Trace sites may take options (`[address, label, {"reads": [[start, length], ...], "lr": true, "sp": true}]` in a trajectory, `"reads"` in a `--menu-observe` site): the bridge records each read at every entry, and the e2e keeps a hit's lr only for a site with reads or `"lr": true` and its sp only for `"sp": true`, so receipts of configs without options are unchanged. `emulation/menu-engine-pair-trajectories/` renders the pair inputs: `picker.jq` adds the engine reads (block, last-move pair, root, depth-1 and depth-2 snapshot areas, and task 1's whole stack) and sites (stage entry `0xd4dd2c` with the block and sp, kind switch `0xbfa234` and seek `0xbfad04` with lr, event post `0x0063270c`, and in the owned role the guard trap) to a picker trajectory, and `oracle.jq` turns a menu-oracle config into a RAM-push trajectory over crawl-5's landings. `//replacement/modal_runtime:menu-engine-pair-check --package-plan` derives each stage event's class from the composed menu tables, its registers and its block (`MenuEngineClass`, independent of the adapter), fails the owned role on a guard-trap entry or, in a segment before the receipt's `ram-unload` phase, on a kind-switch entry returning to `0xbf95d4` for an owned class (unload restores `0xbf95c8`'s stock word, so later segments run stock in both roles), and requires both roles' engine reads and `0x1d` posts to be equal. It also recomputes the stack bound from the owned receipt's relinked `kernel.elf` and, in both roles, fails a stage entry whose sp less the bound plus the margin falls below `0x00a4c200`, and reports the lowest task-1 stack word that changed across the run as the measured high-water mark, failing if it lies below the lowest such floor; the stack read is not compared between roles. `//replacement/modal_runtime:menu-engine-pair-tests` covers it on synthetic input. `modal-settings-compare` and `render-compare` complete each pair. `RuntimeRelocationCompare` refuses the menu-engine package.
 
+The render-enabled pair checker resolves OSD buffer identities across all observation phases before checking individual captures. A later phase may identify a buffer used by an earlier capture; conflicting buffer identities still refuse. Streaming and inline readers apply the same 64-byte bottom-of-stack guard check. `xm1-viewer` accepts GHC runtime options for bounded host execution.
+
 The 29 guest pairs (19 picker trajectories without 246, plus the ten menu-oracle paths) ran through `private-data/scratch/ControllerStrategy/menu-engine/run-pairs.sh`, and all pass `menu-engine-pair-check`, `modal-settings-compare` and render content (E-MENU-ENGINE-GUEST-PAIRS-150). Each role ran once, except oracle-wrap: its first pair failed at install with the host-time transfer deadline, and it ran once more per role after 39d9a682. Picker 246 and observe run 1 remain outside, so #128's acceptance is not yet met.
 
 ## Own-first RTOS slot bodies (#156)
@@ -676,6 +678,34 @@ The 29 guest pairs (19 picker trajectories without 246, plus the ten menu-oracle
 The structured rows also run every slot on the modeled IRQ-stack address range `[0x70000000,0x70002000)`, with SP `0x70001ff0`, for CP14 c2 identities `0x8003` and `0x4003`. This is flat native-case memory, not an emulation of private TCM or two concurrent cores. The native runner admits SVC and SYS, not IRQ mode; both modes include I-set entries. The +0x164 grid additionally runs original caller stubs for `save -> restore -> save` and an outer save containing an inner save/restore followed by the outer restore. Each call records r0 and the complete CPSR in `call-trace`, whose bytes and ordered writes are compared. Failing slots retain `differences-LOADER-SLOT.json` with every differing row, input context, compared registers, memory bytes and writes for stock and owned, alongside the native batch artifacts.
 
 Add `--timing-only` to run just the structured single-call rows of +0x128, +0x148, +0x164, +0x168, +0x16c and +0x1618, without repeat/equivalent/mutant controls. This mode retains its raw native reports and writes `timing-LOADER-SLOT.json` with each input row and stock/owned instruction counts. Counts include the helper/callees and the return instruction but exclude the exit stub. Conditional instructions that fail their condition still count as entered instructions. These are native-runner instruction costs, not hardware cycles.
+
+Add `--generate COUNT --seed SEED` to the same oracle to compare a deterministic valid +0x16c corpus against stock, the owned body and `mutant-s16c` in both loaders. Counts are 1..256 per loader. Current-task words are record starts in the domain's 120-record table; entries use SVC or SYS, and context words are zero or nonzero. Null, misaligned and negative task offsets are outside this generated domain. The unsigned 64-bit decimal or hexadecimal seed folds to a 32-bit xorshift seed; distinct seeds can collide.
+
+Use the worker's normal `BAZEL_OUTPUT_BASE` and canonical X-M1 1.50 extracted loaders. The Bazel graph supplies the linked candidates, regions and pinned native runner. Each work directory and summary must be new:
+
+```sh
+LOADER_A=private-data/analysis/x-m1-1.50/decode/loader-40000.bin
+LOADER_B=private-data/analysis/x-m1-1.50/decode/loader-d0000.bin
+RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
+SUMMARY="private-data/scratch/OwnFirstGenerated/generated-$RUN_ID.json"
+devenv shell -- env XM1_EMULATOR_SLOTS=1 host-build --output_base="$BAZEL_OUTPUT_BASE" run --jobs=2 \
+  //replacement/rtos_own_first/oracle:own-first-oracle -- \
+  --loader-a "$LOADER_A" --loader-b "$LOADER_B" \
+  --generate 32 --seed 0x2545f4914f6cdd1d --shrink-budget 32 \
+  --work "private-data/scratch/OwnFirstGenerated/generated-$RUN_ID" --summary "$SUMMARY"
+
+devenv shell -- env XM1_EMULATOR_SLOTS=1 host-build --output_base="$BAZEL_OUTPUT_BASE" run --jobs=2 \
+  //replacement/rtos_own_first/oracle:own-first-oracle -- \
+  --loader-a "$LOADER_A" --loader-b "$LOADER_B" --replay "$SUMMARY" \
+  --work "private-data/scratch/OwnFirstGenerated/replay-$RUN_ID" \
+  --summary "private-data/scratch/OwnFirstGenerated/replay-$RUN_ID.json"
+```
+
+Reduction preserves validity and the original typed comparison boundary, such as `RegisterKind R0`, while lowering task record, entry flags, F, mode and context form. `--shrink-budget` bounds trials to 1..256, default 32. Flags are cleared together rather than searched by subset. `fixed-point` is local to these reductions; `budget-exhausted` establishes no minimum. The summary names original and reduced rows, differences, identities and native batch paths; the reduced case is re-executed through the same comparator.
+
+`--replay` re-executes both saved cases for each recorded discrepancy. All pairs' runner, loader, linked-input, case and wire identities are admitted before the first execution. Paired cases must agree on non-code state and metadata. Replay copies only each selected case and its declared artifacts, verifies the copied identities and leaves the preserved reports unchanged. Typed nonempty boundary kinds decide reproduction; diagnostic wording does not. Work and summary paths are canonical across the `private-data` symlink.
+
+Every oracle mode uses the existing emulator slot with the 2 GiB cap and unchanged 100 GiB reserve. Completed generate and replay attempts print a compact terminal result and summary path. Generate exits 1 for a stock stop or missing returned control witness, 2 for an owned difference, and 0 for scoped agreement with the control refused. Replay exits 1 for an incomplete execution or changed boundary, 2 for a reproduced owned discrepancy, and 0 for reproduced controls. Input or admission refusals stop before execution. This corpus is additional native coverage, not full subsystem, firmware or hardware acceptance.
 
 ### Owned scheduler helpers, step S1 (#156)
 
@@ -801,9 +831,9 @@ At `ec3e28a6`, all 87 object and 18 layout cases pass, including one mailbox wit
 
 ## Owned timer heap host increment (#156)
 
-`replacement/rtos_timer` implements an allocation-free timer heap over the canonical `rtos_layout` guest views. `TimerHeap::from_context` resolves the context's node, count, base and clock pointers; the caller supplies a validated `Capacity`. Entry identity, membership, callback, argument and clock values have distinct types.
+`replacement/rtos_timer` implements an allocation-free timer heap over the canonical `rtos_layout` guest views. `TimerHeap::from_context` resolves the context's node, count, base and clock pointers; `Capacity::new` and const `Capacity::from_static` share validation of zero and the arithmetic upper bound. Entry identity, membership, callback, argument and clock values have distinct types.
 
-Build `//replacement/rtos_timer:timer-rust` and run `//replacement/rtos_timer:timer-host-tests` through the checked-in environment with jobs at most 2. Ten host cases and a separate public-API caller exercise removal, expiration, cancellation after pop, callback rearming, wrapping clock order and lock/I cleanup (E-RTOS-TIMER-HOST-150). The [timer contract](../reports/rtos-platform-options.md#415-owned-timer-heap-membership-host-increment) describes the retained boundaries.
+Build `//replacement/rtos_timer:timer-rust` and run `//replacement/rtos_timer:timer-host-tests` through `devenv shell -- host-build`, with jobs at most 2. Fifteen host cases cover removal, expiration, cancellation after pop, callback rearming, wrapping clock order, capacity boundaries, lock/I cleanup and a callback that changes the current context. The [timer contract](../reports/rtos-platform-options.md#415-owned-timer-heap-membership-host-increment) records the scope.
 
-Pop and removal invalidate membership; removal of a detached entry does not change the heap. The callback runs with the scheduler lock held and may rearm its entry. The generic ARM archive does not qualify emitted stock-address bodies. Firmware heap capacity, native placement/ABI, callback and wait-result integration, the integrated subsystem comparison and hardware behavior remain open.
+Pop and removal invalidate membership; removing a detached entry does not change the heap. The callback runs with the scheduler lock held and may rearm its entry. Tick re-resolves the current heap each iteration. The initializer resets time offset, base and count, sets tick to 10 and publishes the four timer pointers. All four entries and their bodies fit the original 1244-byte module in each domain, without scratch code. The native oracle passes 40 stock/owned comparisons and 92 controls, including initialization, IRQ/FIQ preservation, complete declared-memory no-write refusals and heap reload under an aliased-lock context switch; all 38 existing stock observations are reused. Capacity184 remains fixture-only. Firmware heap ownership, real callback/wait-result integration, independent-lock ownership, the integrated subsystem comparison and hardware behavior remain open (E-RTOS-TIMER-HOST-150).
 

@@ -1,0 +1,11 @@
+[Unit]
+Description=Run selective Cargo retention every six hours
+
+[Timer]
+OnCalendar=*-*-* 00/6:00:00
+RandomizedDelaySec=30min
+Persistent=true
+Unit=latent-image-cargo-retention.service
+
+[Install]
+WantedBy=timers.target

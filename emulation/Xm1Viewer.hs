@@ -500,7 +500,7 @@ launch options = do
               case (relinkModeOption options, allowlistOverrideOption options) of
                 (UnreviewedRelink _, Just reason) -> UnreviewedRelink (OverrideAllowlist reason)
                 (mode, _) -> mode
-            settings = E2ESettings relinkMode (bootModeOption options)
+            e2eSettings = E2ESettings relinkMode (bootModeOption options)
               checkpointRootPath (segmentsOption options)
               (pushModeOption options)
               (case ramPayloadOption options of
@@ -514,7 +514,7 @@ launch options = do
                 ExperimentChoice (ExperimentName name) -> experimentPayload name)
               (attachHoldOption options)
               (uiConversionProfileOption options) cardInput (fixedSceneFrameOption options) Nothing runtime dat (readSymbolsOption options) (modalDiagnosticOption options)
-              (modalLifetimeGuardOption options) owned
+              (modalLifetimeGuardOption options) owned Nothing
         trajectory <- case trajectoriesOption options of
           Just (TrajectoryFile path) -> pure (Just (resolve root path))
           Nothing -> do
@@ -524,14 +524,14 @@ launch options = do
             present <- doesFileExist (resolve root selected)
             pure (if experiment && not present then Nothing else Just (resolve root selected))
         case (warmCheckpointOption options, screenProbeOption options) of
-          (True, _) -> warmAttachCheckpoint settings executable stagedFirmwarePath nandPath (destination </> "warm-attach")
+          (True, _) -> warmAttachCheckpoint e2eSettings executable stagedFirmwarePath nandPath (destination </> "warm-attach")
           (False, Just (MenuCrawlProbe path)) ->
-            runMenuCrawlE2E settings executable workspacePath (resolve root path) stagedFirmwarePath nandPath receiptPath
+            runMenuCrawlE2E e2eSettings executable workspacePath (resolve root path) stagedFirmwarePath nandPath receiptPath
           (False, Just (RamDiffProbe path)) ->
-            runRamDiffE2E settings executable workspacePath (resolve root path) stagedFirmwarePath nandPath receiptPath
+            runRamDiffE2E e2eSettings executable workspacePath (resolve root path) stagedFirmwarePath nandPath receiptPath
           (False, Just (MenuObserveProbe path)) ->
-            runMenuObserveE2E settings executable workspacePath (resolve root path) stagedFirmwarePath nandPath receiptPath
-          (False, Nothing) -> runRamPushE2E settings executable workspacePath trajectory stagedFirmwarePath nandPath receiptPath
+            runMenuObserveE2E e2eSettings executable workspacePath (resolve root path) stagedFirmwarePath nandPath receiptPath
+          (False, Nothing) -> runRamPushE2E e2eSettings executable workspacePath trajectory stagedFirmwarePath nandPath receiptPath
       else do
         let Port port = portOption options
             mediaArguments = case media of

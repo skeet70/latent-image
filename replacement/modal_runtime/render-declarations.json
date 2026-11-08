@@ -1,0 +1,301 @@
+{
+  "declared_trace_sites": [
+    {
+      "label": "render-pane-entry", "address": "011662a0",
+      "reads": [
+        {"sp": 0, "bytes": 28}, {"address": "009571d0", "length": 1072},
+        {"address": "015e64d8", "length": 40}, {"address": "015e46c0", "length": 4},
+        {"address": "015e748c", "length": 152}, {"address": "40054760", "length": 4},
+        {"address": "40060614", "length": 4}, {"address": "4005c3ac", "length": 40}
+      ]
+    },
+    {
+      "label": "render-pane-return", "address": "01158184",
+      "reads": [
+        {"address": "015e650c", "length": 68}, {"address": "015e64d8", "length": 40},
+        {"address": "015e6680", "length": 64}, {"address": "015e748c", "length": 152},
+        {"address": "00958d7c", "length": 4096}, {"address": "00959d7c", "length": 704},
+        {"address": "015edf38", "length": 4096}, {"address": "015eef38", "length": 4096},
+        {"address": "015eff38", "length": 4096}, {"address": "015f0f38", "length": 4096},
+        {"address": "015f1f38", "length": 4096}, {"address": "015f2f38", "length": 4096},
+        {"address": "015f3f38", "length": 2560}
+      ]
+    },
+    {"label": "render-pane-stock", "address": "011662a4"},
+    {"label": "render-pane-adapter", "address": "00c5dd00"},
+    {
+      "label": "render-tree-entry",
+      "address": "01164e1c",
+      "reads": [
+        {
+          "sp": 0,
+          "bytes": 28
+        },
+        {
+          "address": "009571d0",
+          "length": 1072
+        },
+        {
+          "address": "015e64d8",
+          "length": 24
+        },
+        {
+          "address": "015e46c0",
+          "length": 4
+        },
+        {
+          "address": "015e748c",
+          "length": 152
+        },
+        {
+          "address": "40054760",
+          "length": 4
+        },
+        {
+          "address": "40060614",
+          "length": 4
+        },
+        {
+          "address": "4005c3ac",
+          "length": 40
+        }
+      ]
+    },
+    {
+      "label": "render-picker-entry",
+      "address": "01163f2c",
+      "reads": [
+        {
+          "sp": 0,
+          "bytes": 28
+        },
+        {
+          "address": "009571d0",
+          "length": 1072
+        },
+        {
+          "address": "015e64d8",
+          "length": 24
+        },
+        {
+          "address": "015e46c0",
+          "length": 4
+        },
+        {
+          "address": "015e748c",
+          "length": 152
+        },
+        {
+          "address": "40054760",
+          "length": 4
+        },
+        {
+          "address": "40060614",
+          "length": 4
+        },
+        {
+          "address": "4005c3ac",
+          "length": 40
+        }
+      ]
+    },
+    {
+      "label": "render-tree-return",
+      "address": "01167a60",
+      "reads": [
+        {
+          "sp": 196,
+          "bytes": 68
+        },
+        {
+          "address": "015e64d8",
+          "length": 24
+        },
+        {
+          "address": "015e6680",
+          "length": 64
+        },
+        {
+          "address": "015e748c",
+          "length": 152
+        },
+        {
+          "address": "00958d7c",
+          "length": 4096
+        },
+        {
+          "address": "00959d7c",
+          "length": 704
+        },
+        {
+          "address": "015edf38",
+          "length": 4096
+        },
+        {
+          "address": "015eef38",
+          "length": 4096
+        },
+        {
+          "address": "015eff38",
+          "length": 4096
+        },
+        {
+          "address": "015f0f38",
+          "length": 4096
+        },
+        {
+          "address": "015f1f38",
+          "length": 4096
+        },
+        {
+          "address": "015f2f38",
+          "length": 4096
+        },
+        {
+          "address": "015f3f38",
+          "length": 2560
+        }
+      ]
+    },
+    {
+      "label": "render-picker-return",
+      "address": "01168ce4",
+      "reads": [
+        {
+          "sp": 156,
+          "bytes": 68
+        },
+        {
+          "address": "015e64d8",
+          "length": 24
+        },
+        {
+          "address": "015e6680",
+          "length": 64
+        },
+        {
+          "address": "015e748c",
+          "length": 152
+        },
+        {
+          "address": "00958d7c",
+          "length": 4096
+        },
+        {
+          "address": "00959d7c",
+          "length": 704
+        },
+        {
+          "address": "015edf38",
+          "length": 4096
+        },
+        {
+          "address": "015eef38",
+          "length": 4096
+        },
+        {
+          "address": "015eff38",
+          "length": 4096
+        },
+        {
+          "address": "015f0f38",
+          "length": 4096
+        },
+        {
+          "address": "015f1f38",
+          "length": 4096
+        },
+        {
+          "address": "015f2f38",
+          "length": 4096
+        },
+        {
+          "address": "015f3f38",
+          "length": 2560
+        }
+      ]
+    },
+    {
+      "label": "render-picker-fn-return",
+      "address": "0116c588",
+      "reads": [
+        {
+          "sp": 76,
+          "bytes": 68
+        },
+        {
+          "address": "015e64d8",
+          "length": 24
+        },
+        {
+          "address": "015e6680",
+          "length": 64
+        },
+        {
+          "address": "015e748c",
+          "length": 152
+        },
+        {
+          "address": "00958d7c",
+          "length": 4096
+        },
+        {
+          "address": "00959d7c",
+          "length": 704
+        },
+        {
+          "address": "015edf38",
+          "length": 4096
+        },
+        {
+          "address": "015eef38",
+          "length": 4096
+        },
+        {
+          "address": "015eff38",
+          "length": 4096
+        },
+        {
+          "address": "015f0f38",
+          "length": 4096
+        },
+        {
+          "address": "015f1f38",
+          "length": 4096
+        },
+        {
+          "address": "015f2f38",
+          "length": 4096
+        },
+        {
+          "address": "015f3f38",
+          "length": 2560
+        }
+      ]
+    },
+    {
+      "label": "render-tree-stock",
+      "address": "01164e20"
+    },
+    {
+      "label": "render-picker-stock",
+      "address": "01163f30"
+    },
+    {
+      "label": "render-osd-increment",
+      "address": "006d7d44"
+    },
+    {
+      "label": "render-osd-buffer",
+      "address": "006d76ec"
+    },
+    {
+      "label": "render-tree-adapter",
+      "address": "02000020"
+    },
+    {
+      "label": "render-picker-adapter",
+      "address": "02000024"
+    }
+  ]
+}

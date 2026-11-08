@@ -4,7 +4,7 @@ module Main (main) where
 
 import Control.Monad (unless)
 import qualified Data.ByteString.Char8 as C
-import Data.Aeson (Value (..), object, toJSON, (.=))
+import Data.Aeson (Value (..), eitherDecode, encode, object, toJSON, (.=))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import Data.List (intercalate, isInfixOf, isPrefixOf, isSuffixOf, sort)
@@ -12,7 +12,7 @@ import Emulation.PreservationObservation
 import Emulation.Symbols
 import Emulation.UiTrajectory
 import Emulation.WatchObservation
-import EmulatorUsb (KeyPulse (..), KeyTiming (..), ModeDial (..), SettleBudget (..), defaultKeyTiming)
+import EmulatorUsb (CrawlKey (..), KeyPulse (..), KeyTiming (..), ModeDial (..), SettleBudget (..), defaultKeyTiming)
 import Numeric (showHex)
 import System.Directory (listDirectory)
 import System.Exit (exitFailure)
@@ -139,6 +139,16 @@ main = do
     , expect "a trace site decodes its entry reads, keeps lr and asks for sp" $
         sitesOf (document "[[\"00d4dd2c\",\"stage-entry\",{\"reads\":[[\"009571d0\",1072],[\"01467580\",8]],\"sp\":true}]]" "[]")
           == Just [TraceSite (FixedAddress 0x00d4dd2c) "stage-entry" [SiteRead 0x009571d0 1072, SiteRead 0x01467580 8] RecordsLr RecordsSp]
+    , expect "stack-relative site reads accept signed offsets" $
+        sitesOf (document "[[\"00d4dd2c\",\"stage-entry\",{\"reads\":[{\"sp\":-16,\"bytes\":4},{\"sp\":8,\"bytes\":8}]}]]" "[]")
+          == Just [TraceSite (FixedAddress 0x00d4dd2c) "stage-entry" [StackRead (-16) 4, StackRead 8 8] RecordsLr OmitsSp]
+    , expect "site reads round-trip both forms" $
+        let readSpecs = [SiteRead 0x009571d0 4, StackRead (-16) 8, StackRead 0 4096]
+        in eitherDecode (encode readSpecs) == Right readSpecs
+    , expect "malformed stack-relative reads are refused" $
+        all (\read_ -> refused (document ("[[\"00d4dd2c\",\"stage-entry\",{\"reads\":[" ++ read_ ++ "]}]]") "[]"))
+          ["{\"sp\":0,\"bytes\":0}", "{\"sp\":0,\"bytes\":4097}", "{\"sp\":0}", "{\"bytes\":4}",
+           "{\"sp\":2147483648,\"bytes\":4}", "{\"sp\":0,\"bytes\":4,\"address\":\"00000000\"}"]
     , expect "a trace site may ask for lr alone" $
         sitesOf (document "[[\"00bfa234\",\"kind-switch\",{\"lr\":true}]]" "[]")
           == Just [TraceSite (FixedAddress 0x00bfa234) "kind-switch" [] RecordsLr OmitsSp]
@@ -190,6 +200,28 @@ main = do
           == [Just ["a"], Just []]
     , expect "a step without timing leaves the bridge defaults" $
         fmap (map stepTiming) (stepsOf "[\"menu\",1,5,2]") == Just [defaultKeyTiming]
+    , expect "ordinary steps keep packet completion" $
+        fmap (map stepCompletion) (stepsOf "[\"back\",63,5,0]") == Just [PacketCompletion]
+    , expect "presented-frame parses a closed physical key" $
+        fmap (map stepCompletion) (stepsOf "[\"back\",63,5,0,{\"completion\":\"presented-frame\"}]") == Just [PresentedFrameCompletion KeyBack]
+    , expect "unknown completion and synthetic seek keys are refused" $
+        stepsOf "[\"back\",63,5,0,{\"completion\":\"eventually\"}]" == Nothing
+          && stepsOf "[\"seek:back:5:2\",63,5,0,{\"completion\":\"presented-frame\"}]" == Nothing
+    , expect "presented-frame does not accept instruction timing" $
+        stepsOf "[\"back\",63,5,0,{\"completion\":\"presented-frame\",\"settle_instructions\":5}]" == Nothing
+    , expect "completion is an assertion, not a timing variant" $
+        case (sidesTrajectory (["[\"back\",63,5,0]"], []), sidesTrajectory (["[\"back\",63,5,0,{\"completion\":\"presented-frame\"}]"], [])) of
+          (Just retained, Just changed) -> not (null (variantMismatches retained changed))
+          _ -> False
+    , expect "presented-frame accepts only an acknowledged physical key and completed display wait" $
+        let reply status failure = object
+              ["failure" .= failure, "settle" .= object ["status" .= (status :: String)],
+               "display_wait_instructions" .= (0 :: Int),
+               "menu" .= object ["menu_id" .= (63 :: Int), "setting_id" .= (5 :: Int), "cursor" .= (0 :: Int)]]
+        in presentedFrameMenu (reply "packet-consumed" Null) == Right (MenuState 63 5 0)
+          && either (const True) (const False) (presentedFrameMenu (reply "prior-render-pending" Null))
+          && either (const True) (const False) (presentedFrameMenu (reply "budget-exhausted" Null))
+          && either (isInfixOf "no display plane") (const False) (presentedFrameMenu (reply "packet-consumed" (String "no display plane")))
     , expect "a step's timing object decodes to its pulse and settle cap" $
         fmap (map stepTiming) (stepsOf "[\"menu\",67,56,0,{\"hold_instructions\":3,\"release_instructions\":4,\"settle_instructions\":5000000}]")
           == Just [KeyTiming (Just (KeyPulse 3 4)) (Just (SettleBudget 5000000))]

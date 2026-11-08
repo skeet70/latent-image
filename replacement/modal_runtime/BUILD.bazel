@@ -548,19 +548,70 @@ haskell_test(
 )
 
 haskell_library(
+    name = "render-object-provenance-lib",
+    srcs = ["Replacement/ModalRuntime/RenderObjectProvenance.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:containers",
+    ],
+)
+
+haskell_library(
+    name = "render-stack-evidence-lib",
+    srcs = ["Replacement/ModalRuntime/RenderStackEvidence.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//host/firmware:bank-allowlist",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:cryptohash-sha256",
+        "//host:text",
+    ],
+)
+
+haskell_test(
+    name = "render-stack-evidence-tests",
+    srcs = ["RenderStackEvidenceTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror"],
+    deps = [
+        ":render-stack-evidence-lib",
+        "//host/firmware:bank-allowlist",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:text",
+    ],
+)
+
+haskell_library(
     name = "menu-engine-pair-lib",
     srcs = [
         "Replacement/ModalRuntime/MenuEngineClass.hs",
         "Replacement/ModalRuntime/MenuEnginePair.hs",
+        "Replacement/ModalRuntime/RenderPair.hs",
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
     deps = [
         ":menu-engine-tree-lib",
+        ":render-object-provenance-lib",
+        ":render-stack-evidence-lib",
+        "//emulation:observation-stream-lib",
+        "//host/firmware:bank-allowlist",
         "//host:aeson",
+        "//host:attoparsec",
         "//host:base",
         "//host:bytestring",
         "//host:containers",
+        "//host:filepath",
         "//host:text",
     ],
 )
@@ -573,6 +624,7 @@ haskell_binary(
     deps = [
         ":menu-engine-pair-lib",
         ":menu-engine-tree-lib",
+        ":render-stack-evidence-lib",
         "//host/firmware:bank-allowlist",
         "//host/firmware:ram-push-layout",
         "//host:aeson",
@@ -591,9 +643,34 @@ haskell_test(
     deps = [
         ":menu-engine-pair-lib",
         ":menu-engine-tree-lib",
+        "//host:aeson",
         "//host:base",
         "//host:bytestring",
         "//host:containers",
+        "//host:text",
+    ],
+)
+
+haskell_binary(
+    name = "menu-engine-qualify-bounded",
+    srcs = ["QualifyBoundedMain.hs"],
+    main_file = "QualifyBoundedMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//emulation:case-sha256",
+        "//emulation:emulator-slot-lib",
+        "//emulation:host-admission-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//host:storage-budget",
+        "//host:process",
+        "//host:unix",
     ],
 )
 
@@ -635,5 +712,26 @@ haskell_test(
         "//host:base",
         "//host:bytestring",
         "//host:containers",
+    ],
+)
+
+haskell_test(
+    name = "render-pair-tests",
+    srcs = ["RenderPairTests.hs"],
+    main_file = "RenderPairTests.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror"],
+    args = ["$(rootpath :render-declarations.json)"],
+    data = ["render-declarations.json"],
+    deps = [
+        ":menu-engine-pair-lib",
+        ":menu-engine-tree-lib",
+        ":render-object-provenance-lib",
+        ":render-stack-evidence-lib",
+        "//host/firmware:bank-allowlist",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:text",
     ],
 )

@@ -35,11 +35,22 @@ const MAX_CAPACITY: u32 = (u32::MAX / NODE_SIZE) + 1;
 pub struct Capacity(NonZeroU32);
 
 impl Capacity {
-    pub fn new(value: u32) -> Option<Self> {
+    pub const fn new(value: u32) -> Option<Self> {
         if value == 0 || value > MAX_CAPACITY {
             return None;
         }
-        NonZeroU32::new(value).map(Self)
+        match NonZeroU32::new(value) {
+            Some(value) => Some(Self(value)),
+            None => None,
+        }
+    }
+
+    /// Panics at compile time or runtime when `value` is zero or above `MAX_CAPACITY`.
+    pub const fn from_static(value: u32) -> Self {
+        match Self::new(value) {
+            Some(capacity) => capacity,
+            None => panic!("timer capacity is out of range"),
+        }
     }
 
     pub fn get(self) -> u32 {
@@ -71,6 +82,7 @@ pub enum TimerIndex {
 
 /// A view identity of the 12-byte entry record: index +0x00, callback +0x04, argument +0x08.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
 pub struct TimerEntry(GuestAddress);
 
 impl TimerEntry {
@@ -203,9 +215,18 @@ fn relative(value: u32, base: Base) -> u32 {
     value.wrapping_sub(base.0)
 }
 
+/// Callers bound the slot by the heap count.
+fn in_range(value: u32, capacity: Capacity) -> Index {
+    match Index::new(value, capacity) {
+        Ok(index) => index,
+        Err(_) => unsafe { core::hint::unreachable_unchecked() },
+    }
+}
+
+#[cfg_attr(feature = "stage", link_section = ".text.timer_sift_up")]
 fn sift_up<M: Machine>(m: &M, heap: TimerHeap, mut index: Index, expiry: Expiry, base: Base) -> Index {
     while index.get() > 1 {
-        let parent = Index::new(index.get() >> 1, heap.capacity).expect("parent slot is in range");
+        let parent = in_range(index.get() >> 1, heap.capacity);
         let parent_expiry = node_expiry(m, heap, parent);
         if relative(parent_expiry.0, base) <= relative(expiry.0, base) {
             break;
@@ -220,13 +241,14 @@ fn sift_up<M: Machine>(m: &M, heap: TimerHeap, mut index: Index, expiry: Expiry,
     index
 }
 
+#[cfg_attr(feature = "stage", link_section = ".text.timer_sift_down")]
 fn sift_down<M: Machine>(m: &M, heap: TimerHeap, mut index: Index, expiry: Expiry, base: Base, count: u32) -> Index {
     loop {
         let child = index.get() * 2;
         if child > count {
             break;
         }
-        let left = Index::new(child, heap.capacity).expect("child slot is in range");
+        let left = in_range(child, heap.capacity);
         let left_expiry = node_expiry(m, heap, left);
         let (smaller, smaller_expiry) = match Index::new(child + 1, heap.capacity) {
             Ok(right) if child + 1 <= count => {
@@ -314,10 +336,10 @@ pub fn remove<M: Machine>(m: &M, heap: TimerHeap, entry: TimerEntry) -> Result<R
 }
 
 /// The callback receives the lock held and must return it held; it may release and reacquire
-/// meanwhile.
+/// meanwhile. `resolve` runs at the top of every iteration.
 pub fn tick<M: Scheduler>(
     m: &M,
-    heap: TimerHeap,
+    mut resolve: impl FnMut(&M) -> TimerHeap,
     mut invoke: impl FnMut(&M, CallbackAddress, CallbackArgument),
 ) -> Result<(), TimerError> {
     if m.handler_context() == 0 {
@@ -329,9 +351,11 @@ pub fn tick<M: Scheduler>(
     m.irq_set();
     m.acquire_lock();
     loop {
+        let heap = resolve(m);
         let count = heap.count(m);
         if count == 0 {
-            break;
+            finish(m, heap);
+            return Ok(());
         }
         if count > heap.capacity.get() {
             m.release_lock();
@@ -349,7 +373,8 @@ pub fn tick<M: Scheduler>(
             }
         };
         if relative(node_expiry(m, heap, head).0, base) > relative(tick.0, base) {
-            break;
+            finish(m, heap);
+            return Ok(());
         }
         let entry = node_entry(m, heap, head);
         let callback = entry.callback(m);
@@ -380,18 +405,21 @@ pub fn tick<M: Scheduler>(
         m.irq_set();
         m.acquire_lock();
     }
+}
+
+#[cfg_attr(feature = "stage", link_section = ".text.timer_finish")]
+fn finish<M: Scheduler>(m: &M, heap: TimerHeap) {
     let tick = heap.tick_now(m);
     heap.set_base(m, Base(tick.0));
     heap.set_tick_now(m, Now(tick.0.wrapping_add(10)));
     m.release_lock();
     m.irq_clear();
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests;
 
-#[cfg(all(target_arch = "arm", not(test)))]
+#[cfg(all(target_arch = "arm", not(test), not(feature = "stage")))]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
     loop {}

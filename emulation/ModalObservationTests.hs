@@ -3,23 +3,36 @@
 
 module Main (main) where
 
-import Control.Monad (unless)
+import Control.Exception (IOException, bracket, try)
+import Control.Monad (forM_, unless)
 import Data.Aeson (Value (..), eitherDecode, encode, object, (.=))
+import Data.IORef (atomicModifyIORef', newIORef)
 import qualified Data.Aeson.Key as K
 import qualified Data.Text as T
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
-import Data.Bits (shiftR)
+import Data.Bits ((.&.), shiftR)
 import Data.Either (isLeft)
 import Data.Word (Word32)
 import Emulation.ModalObservation
+import Emulation.ModalWatchStream (readFinalModalWatchFrom)
 import Emulation.WatchObservation
-import EmulatorUsb (BridgeExchange, ModalResponse (..), bridgeModalObservationBegin, bridgeModalObservationReport, bridgeModalObservationEnd)
+import EmulatorUsb (BridgeExchange, ModalResponse (..), bridgeModalObservationBegin, bridgeModalObservationReport, bridgeModalObservationEnd, startEmulator, stopEmulator, emulatorWatchStateToFile, emulatorWatchStateRaw, emulatorWatchEnd)
 import Emulation.Sha256 (sha256, sha256Hex)
 import Emulation.UiTrajectory (checkModalObserverConfiguration, decodeTrajectories)
+import Emulation.RenderStackDiagnostic
 import qualified FujiAF.RamPush as Ram
-import System.Exit (exitFailure)
+import qualified RamPushLayout as Layout
+import Numeric (showHex)
+import System.Directory (getTemporaryDirectory, removePathForcibly)
+import System.Environment (getArgs, getExecutablePath)
+import System.FilePath ((</>), takeDirectory)
+import System.Exit (ExitCode (..), exitFailure, exitWith)
+import System.IO (IOMode (ReadMode), hFlush, hIsEOF, stdin, stdout, withBinaryFile)
+import System.Posix.Files (createSymbolicLink, fileMode, getFileStatus, isRegularFile)
+import System.Posix.Temp (mkdtemp)
 
 range :: Word32 -> Word32 -> WatchRange
 range low high = either error id (watchRange (watchAddress low) (watchAddress high))
@@ -266,7 +279,207 @@ check :: String -> Bool -> IO ()
 check label ok = unless ok (putStrLn label >> exitFailure)
 
 main :: IO ()
-main = do
+main = getArgs >>= \arguments -> case arguments of
+  ["--shutdown-fixture-success"] -> shutdownBridgeFixture ExitSuccess
+  ["--shutdown-fixture-failure"] -> shutdownBridgeFixture (ExitFailure 7)
+  ["--watch-spool-fixture", mode] -> watchSpoolFixture mode
+  _ -> runTests arguments
+
+shutdownBridgeFixture :: ExitCode -> IO ()
+shutdownBridgeFixture status = do
+  let send value = BL.hPut stdout (encode value <> "\n") >> hFlush stdout
+      command expected = do
+        line <- C.hGetLine stdin
+        case eitherDecode (BL.fromStrict line) of
+          Right value | get "command" value == String expected -> pure ()
+          _ -> exitFailure
+  send (object ["ok" .= True, "event" .= ("start-options" :: T.Text), "installed" .= ([] :: [Value])])
+  command "start"
+  send (object ["ok" .= True, "event" .= ("ready" :: T.Text), "checkpoint" .= object ["start" .= ("cold" :: T.Text)]])
+  command "finish"
+  send (object ["ok" .= True])
+  exitWith status
+
+shutdownTests :: IO ()
+shutdownTests = do
+  executable <- getExecutablePath
+  forM_ [ExitSuccess, ExitFailure 7] $ \status -> do
+    let argument = case status of
+          ExitSuccess -> "--shutdown-fixture-success"
+          ExitFailure _ -> "--shutdown-fixture-failure"
+    (emulator, _, ()) <- startEmulator executable "." [argument] (\_ -> pure (Nothing, ()))
+    first <- try (stopEmulator emulator) :: IO (Either IOException ())
+    second <- try (stopEmulator emulator) :: IO (Either IOException ())
+    case status of
+      ExitSuccess -> check "stopping an already stopped bridge succeeds" (not (isLeft first) && not (isLeft second))
+      ExitFailure _ -> check "stopping a failed bridge retains its failure" (isLeft first && isLeft second)
+
+
+data WatchSpoolFixture = ChunkedWatch | TruncatedWatch | MalformedWatch | UnsolicitedWatch
+  deriving (Eq, Show, Read)
+
+watchSpoolPrefix :: B.ByteString
+watchSpoolPrefix = "{\"ok\":true,\"records\":["
+
+watchSpoolRow :: B.ByteString
+watchSpoolRow = "{\"raw\":\"" <> B.replicate 1031 120 <> "\195\169\",\"tick\":18446744073709551615}"
+
+fixtureSend :: Value -> IO ()
+fixtureSend value = BL.hPut stdout (encode value <> "\n") >> hFlush stdout
+
+fixtureCommand :: T.Text -> IO ()
+fixtureCommand expected = do
+  line <- C.hGetLine stdin
+  check "fixture receives expected synchronous request" $
+    case eitherDecode (BL.fromStrict line) of
+      Right value -> get "command" value == String expected
+      Left _ -> False
+
+watchSpoolFixture :: String -> IO ()
+watchSpoolFixture argument = do
+  let mode = read argument :: WatchSpoolFixture
+      chunk bytes = B.hPut stdout bytes >> hFlush stdout
+  fixtureSend (object ["ok" .= True, "event" .= ("start-options" :: T.Text), "installed" .= ([] :: [Value])])
+  fixtureCommand "start"
+  fixtureSend (object ["ok" .= True, "event" .= ("ready" :: T.Text), "checkpoint" .= object ["start" .= ("cold" :: T.Text)]])
+  fixtureCommand "watch-state"
+  case mode of
+    ChunkedWatch -> do
+      chunk watchSpoolPrefix
+      forM_ [1..8192 :: Int] $ \index -> do
+        unless (index == 1) (chunk ",")
+        let (first, lastBytes) = B.splitAt 1040 watchSpoolRow
+        chunk first
+        chunk lastBytes
+      chunk "]}\r"
+      chunk "\n"
+    TruncatedWatch -> chunk (watchSpoolPrefix <> watchSpoolRow) >> exitSuccessFixture
+    MalformedWatch -> chunk "{not-json}\n"
+    UnsolicitedWatch -> chunk "{\"ok\":true}\nunsolicited"
+  if mode == UnsolicitedWatch
+    then fixtureCommand "finish"
+    else do
+      fixtureCommand "watch-state"
+      fixtureSend (object ["ok" .= True, "summary" .= ("after-spool" :: T.Text)])
+      fixtureCommand "watch-end"
+      fixtureSend (object ["ok" .= True, "enabled" .= False])
+      fixtureCommand "finish"
+  fixtureSend (object ["ok" .= True])
+  where
+    exitSuccessFixture = exitWith ExitSuccess
+
+watchSpoolTests :: IO ()
+watchSpoolTests = do
+  executable <- getExecutablePath
+  temporary <- getTemporaryDirectory
+  bracket (mkdtemp (temporary </> "watch-spool-")) removePathForcibly $ \directory ->
+    forM_ [ChunkedWatch, TruncatedWatch, MalformedWatch, UnsolicitedWatch] $ \mode -> do
+      let artifact = directory </> show mode
+      (emulator, _, ()) <- startEmulator executable "." ["--watch-spool-fixture", show mode] (\_ -> pure (Nothing, ()))
+      -- Refused output paths must not send a watch-state request.
+      B.writeFile artifact "existing"
+      existing <- try (emulatorWatchStateToFile emulator artifact) :: IO (Either IOException ())
+      check "watch spool refuses existing artifact" (isLeft existing)
+      preserved <- B.readFile artifact
+      check "watch spool preserves existing artifact" (preserved == "existing")
+      let symlink = artifact ++ ".link"
+      createSymbolicLink artifact symlink
+      linked <- try (emulatorWatchStateToFile emulator symlink) :: IO (Either IOException ())
+      check "watch spool refuses symlink artifact" (isLeft linked)
+      let output = artifact ++ ".reply"
+      outcome <- try (emulatorWatchStateToFile emulator output) :: IO (Either IOException ())
+      status <- getFileStatus output
+      check "watch artifact is private regular file" (isRegularFile status && fileMode status .&. 0o777 == 0o600)
+      case mode of
+        ChunkedWatch -> do
+          check "large chunked watch reply succeeds" (not (isLeft outcome))
+          withBinaryFile output ReadMode $ \handle -> do
+            let expect bytes = B.hGet handle (B.length bytes) >>= check "watch artifact retains exact reply bytes" . (== bytes)
+            expect watchSpoolPrefix
+            forM_ [1..8192 :: Int] $ \index -> do
+              unless (index == 1) (expect ",")
+              expect watchSpoolRow
+            expect "]}\r"
+            hIsEOF handle >>= check "watch artifact excludes consumed LF"
+        TruncatedWatch -> do
+          check "unterminated watch reply refuses" (isLeft outcome)
+          bytes <- B.readFile output
+          check "truncated watch artifact retains partial bytes" (bytes == watchSpoolPrefix <> watchSpoolRow)
+        MalformedWatch -> do
+          check "transport preserves complete malformed reply for consumer" (not (isLeft outcome))
+          bytes <- B.readFile output
+          check "malformed artifact retains exact bytes" (bytes == "{not-json}")
+        UnsolicitedWatch -> do
+          check "unsolicited reply suffix refuses" (isLeft outcome)
+          bytes <- B.readFile output
+          check "unsolicited bytes remain in failed artifact" (bytes == "{\"ok\":true}unsolicited")
+      unless (mode == TruncatedWatch || mode == UnsolicitedWatch) $ do
+        summary <- emulatorWatchStateRaw emulator
+        check "summary RPC framing survives streamed reply" (get "summary" summary == String "after-spool")
+        ended <- emulatorWatchEnd emulator
+        check "end RPC framing survives streamed reply" (get "enabled" ended == Bool False)
+      _ <- try (stopEmulator emulator) :: IO (Either IOException ())
+      pure ()
+
+runTests :: [String] -> IO ()
+runTests arguments = do
+  shutdownTests
+  watchSpoolTests
+  let diagnosticSource = object
+        [ "kind" .= String "retained", "start" .= (0x01100000 :: Word32)
+        , "path" .= String "retained.bin", "sha256" .= T.replicate 64 "0" ]
+      diagnosticEntries =
+        [ object ["kind" .= String kind, "address" .= address, "frame_depth" .= depth]
+        | (kind, address, depth) <- [("tree", 0x01164e1c, 556), ("picker", 0x01163f2c, 636), ("pane", 0x011662a0, 452)] :: [(T.Text, Word32, Word32)] ]
+      diagnosticConfig = object
+        [ "version" .= (1 :: Word32), "role" .= String "owned"
+        , "sources" .= [diagnosticSource], "entries" .= diagnosticEntries
+        , "returns" .= ([0x01167a60, 0x01168ce4, 0x0116c588, 0x01158184] :: [Word32])
+        , "retained_services" .= ([] :: [Word32]) ]
+      decodeDiagnostic value = eitherDecode (encode value) :: Either String RenderStackDiagnosticConfig
+  parsedDiagnostic <- either error pure (decodeDiagnostic diagnosticConfig)
+  check "diagnostic request preserves the source-bound configuration"
+    (renderStackDiagnosticBeginJson parsedDiagnostic == set "command" (String "render-stack-diagnostic-begin") diagnosticConfig)
+  forM_ [ set "version" (Number 2) diagnosticConfig, set "role" (String "other") diagnosticConfig
+        , set "sources" (array []) diagnosticConfig
+        , set "sources" (array (replicate 129 diagnosticSource)) diagnosticConfig
+        , set "sources" (array [set "sha256" (String (T.replicate 64 "A")) diagnosticSource]) diagnosticConfig
+        , set "sources" (array [set "start" (Number 3) diagnosticSource]) diagnosticConfig
+        , set "entries" (array (concat (replicate 3 (take 1 diagnosticEntries)))) diagnosticConfig
+        , set "entries" (array (drop 1 diagnosticEntries)) diagnosticConfig
+        , set "returns" (array []) diagnosticConfig, set "extra" Null diagnosticConfig ] $ \invalid ->
+    check "malformed diagnostic configuration refuses" (isLeft (decodeDiagnostic invalid))
+  let diagnosticBegin = object ["version" .= (1 :: Word32), "diagnostic_only" .= True, "active" .= True]
+  check "native diagnostic begin acknowledgement is distinct from its terminal report"
+    (checkRenderStackDiagnosticBegin diagnosticBegin == Right () && isLeft (checkRenderStackDiagnosticReport parsedDiagnostic diagnosticBegin))
+  forM_ [set "active" (Bool False) diagnosticBegin, set "version" (Number 2) diagnosticBegin
+        , set "diagnostic_only" (Bool False) diagnosticBegin, set "ok" (Bool False) diagnosticBegin] $ \invalid ->
+    check "refused diagnostic activation fails" (isLeft (checkRenderStackDiagnosticBegin invalid))
+  let diagnosticReport = object
+        [ "version" .= (1 :: Word32), "diagnostic_only" .= True, "scope" .= String "installed-before-unload"
+        , "whole_route_stack_minimum_proven" .= False, "coverage" .= String "continuous"
+        , "failure" .= Null, "active_invocations" .= (0 :: Word32), "incomplete_intervals" .= False, "finished" .= True
+        , "role" .= String "owned", "start" .= object ["instructions" .= (8 :: Word32), "tick" .= (10 :: Word32)]
+        , "end" .= object ["instructions" .= (12 :: Word32), "tick" .= (20 :: Word32)]
+        , "sources" .= [diagnosticSource], "invocations" .= ([] :: [Value])
+        , "retained_service_coverage" .= String "partial-observed-source-transitions"
+        , "retained_service_spans_informational" .= True
+        , "performance" .= object ["active_instructions" .= (0 :: Word32)
+            , "invocation_count" .= (0 :: Word32), "hook_transitions" .= (0 :: Word32)] ]
+  check "finished invocation measurement remains explicitly diagnostic"
+    (checkRenderStackDiagnosticReport parsedDiagnostic diagnosticReport == Right ())
+  forM_ [ set "coverage" (String "refused") diagnosticReport, set "failure" (String "overflow") diagnosticReport
+        , set "active_invocations" (Number 1) diagnosticReport, set "scope" (String "whole-route") diagnosticReport
+        , set "whole_route_stack_minimum_proven" (Bool True) diagnosticReport
+        , set "finished" (Bool False) diagnosticReport, set "incomplete_intervals" (Bool True) diagnosticReport
+        , set "role" (String "stock") diagnosticReport, set "start" Null diagnosticReport, set "end" Null diagnosticReport
+        , set "end" (object ["instructions" .= (7 :: Word32), "tick" .= (20 :: Word32)]) diagnosticReport
+        , set "end" (object ["instructions" .= (12 :: Word32), "tick" .= (9 :: Word32)]) diagnosticReport
+        , set "diagnostic_only" (Bool False) diagnosticReport
+        , set "invocations" Null diagnosticReport, set "sources" (array []) diagnosticReport
+        , set "performance" (object ["active_instructions" .= (0 :: Word32)
+            , "invocation_count" .= (1 :: Word32), "hook_transitions" .= (0 :: Word32)]) diagnosticReport ] $ \invalid ->
+    check "refused unfinished or overclaimed diagnostic report fails" (isLeft (checkRenderStackDiagnosticReport parsedDiagnostic invalid))
   let actual = observe [modalArrayRange]
         [ cpu 0 0x4146777a 0x0146777a 2 1
         , cpu 1 0x0146761e 0x0146761e 2 2
@@ -341,7 +554,19 @@ main = do
   observerConfigurationTests
   lifetimeTests
   runtimeBindingTests
+  mapM_ legacyReceiptBindingTests arguments
   putStrLn "modal array writer observations passed"
+
+legacyReceiptBindingTests :: FilePath -> IO ()
+legacyReceiptBindingTests path = do
+  document <- eitherDecode . BL.fromStrict <$> B.readFile path >>= either error pure
+  check ("saved receipt manifest is untagged: " ++ path) (get "bank_variant" document == Null)
+  manifest <- Ram.readRamPushManifest path
+  check ("saved receipt retains legacy engine identity: " ++ path)
+    (Ram.manifestBankVariant manifest == Just Layout.modalEngineBankVariant)
+  elf <- B.readFile (takeDirectory path </> "kernel.elf")
+  _ <- either error pure (bindModalRuntimeSource manifest elf)
+  putStrLn ("legacy receipt runtime binding passed: " ++ path)
 
 frameBoundsTests :: IO ()
 frameBoundsTests = do
@@ -651,12 +876,13 @@ runtimeManifestFixture runtime = Ram.RamPushManifest
   , Ram.manifestEntries = Ram.RamPushEntries (Ram.Address 0x10000) (Ram.Address 0x10010) (Ram.Address 0x10060)
   , Ram.manifestPublications =
       [ Ram.Publication index Ram.Setup (Ram.Address address) (Ram.WordValue 0x11111111) (Ram.WordValue 0x22222222) Ram.Both
-      | (index,address) <- zip [222,221 .. 0] [0x20000,0x20004 .. 0x20378] ] }
+      | (index,address) <- zip [222,221 .. 0] [0x20000,0x20004 .. 0x20378] ]
+  , Ram.manifestBankVariant = Just Layout.standardBankVariant }
 
 runtimeBindingTests :: IO ()
 runtimeBindingTests = do
   let text = runtimeTextFixture
-      runtime = text <> B.pack [1 .. 16] <> B.replicate (0x500 - 144) 0
+      runtime = text <> B.pack [1 .. 16] <> B.replicate (0x1dc98 - 144) 0
       elf = runtimeElfFixture text runtimeSymbolsFixture
       manifest = runtimeManifestFixture runtime
       bind = bindModalRuntimeSource
@@ -696,6 +922,38 @@ runtimeBindingTests = do
   check "source binding retains runtime and complete ELF digests" $
     get "bound_elf_sha256" evidence == get "digest" (object ["digest" .= sha256Hex (sha256 elf)])
       && get "runtime_sha256" evidence == get "digest" (object ["digest" .= sha256Hex (sha256 runtime)])
+  let renderRuntime = runtime <> B.replicate (0x2dcc0 - B.length runtime) 0
+      render = manifest
+        { Ram.runtimeBytes = renderRuntime, Ram.allocationSize = B.length renderRuntime
+        , Ram.runtimeDigest = sha256Hex (sha256 renderRuntime)
+        , Ram.manifestBankVariant = Just Layout.modalRenderBankVariant
+        , Ram.manifestPublications = Ram.manifestPublications manifest <>
+          [Ram.Publication index Ram.Activation (Ram.Address address) (Ram.WordValue 0xe92d4ff0) (Ram.WordValue 0xea000000) Ram.Both
+          | (index,address) <- zip [223 .. 227] [0x2037c,0x20380 .. 0x2038c]] }
+  check "render variant binds its derived 228 publication vector" (not (isLeft (bind render elf)))
+  check "modal lifecycle cannot claim the render lifetime vector"
+    (isLeft (bind (render { Ram.manifestBankVariant = Just Layout.modalLifecycleBankVariant }) elf))
+  check "render lifetime identity refuses an engine-sized vector"
+    (isLeft (bind (render { Ram.manifestPublications = take 225 (Ram.manifestPublications render) }) elf))
+  let hexAddress address = "0x" ++ replicate (8 - length digits) '0' ++ digits
+        where digits = showHex (address :: Word32) ""
+      legacyDocument = object
+        [ "schema" .= (1 :: Int), "base" .= hexAddress 0x10000, "size" .= B.length renderRuntime
+        , "runtime_sha256" .= sha256Hex (sha256 renderRuntime)
+        , "source_identity" .= object ["fixture" .= replicate 64 '0']
+        , "entry" .= object ["install" .= hexAddress 0x10000, "rollback" .= hexAddress 0x10010, "status" .= hexAddress 0x10060]
+        , "publications" .=
+          [ object
+            [ "index" .= index, "address" .= hexAddress (0x50000 + 4 * fromIntegral index)
+            , "old" .= ("0x11111111" :: String), "new" .= ("0x22222222" :: String)
+            , "phase" .= (if index < 131 then "setup" else "activation" :: String), "core" .= ("both" :: String)
+            ]
+          | index <- [0 .. 224 :: Int]]
+        ]
+  legacy <- Ram.parseRamPushManifest "legacy-engine-manifest.json" (BL.toStrict (encode legacyDocument)) renderRuntime
+  check "untagged legacy engine manifest retains its typed identity through runtime binding"
+    (get "bank_variant" legacyDocument == Null && Ram.manifestBankVariant legacy == Just Layout.modalEngineBankVariant
+      && not (isLeft (bind legacy elf)))
   mapM_ (\(label,description,source) -> check ("runtime source refuses " ++ label) (isLeft (bind description source))) malformed
   check "whole loader pins reject same-size changed source" $
     isLeft (bindModalLifetimeSource manifest elf (B.replicate 0xdae0 0) (B.replicate 0xdaa0 0))
@@ -717,7 +975,7 @@ runtimeBindingTests = do
         , ("reordered context",set "context_sources" (array (reverse context)) declaration)
         , ("mutable vector included",set "context_sources" (array (map (set "bytes" (array (replicate 0x3a4 (Number 0)))) (take 1 context) ++ drop 1 context)) declaration)
         , ("resident extent1020",changeLifetime "resident" (array [Number 0x10100,Number 0x104fc]))
-        , ("resident outside runtime",changeLifetime "resident" (array [Number 0x20000,Number 0x20400]))
+        , ("resident outside runtime",changeLifetime "resident" (array [Number 0x30000,Number 0x30400]))
         , ("runtime alias",changeLifetime "runtime" (array [Number 0x40010000,Number 0x40010500]))
         , ("missing readonly source",changeLifetime "readonly" (array (drop 1 images)))
         , ("duplicate readonly source",changeLifetime "readonly" (array (images ++ take 1 images)))
@@ -726,6 +984,8 @@ runtimeBindingTests = do
         , ("publication duplicate",changeLifetime "publications" (array (take 1 rows ++ take 1 rows ++ drop 2 rows)))
         , ("publication partial vector",changeLifetime "publications" (array (drop 1 rows)))
         , ("publication alias",changeLifetime "publications" (array (map (set "address" (Number 0x40020000)) (take 1 rows) ++ drop 1 rows)))
+        , ("missing bank variant",set "lifetime" (case lifetime of Object fields -> Object (KM.delete "bank_variant" fields); other -> other) declaration)
+        , ("unsupported bank variant",changeLifetime "bank_variant" (String "lifecycle,modal75"))
         , ("missing settings reloads",set "lifetime" (case lifetime of Object fields -> Object (KM.delete "settings_reloads" fields); other -> other) declaration)
         , ("unaligned reload call",changeReload "call" (Number 0x006309ee))
         , ("reload return equal to its call",changeReload "return" (Number 0x006309ec))
@@ -745,6 +1005,29 @@ runtimeBindingTests = do
   check "typed lifetime request preserves source images and physical vector order" (modalBeginRequestJson request == declaration)
   mapM_ (\(label,value) -> check ("lifetime request refuses " ++ label) (isLeft (parseModalBeginRequest value))) malformedDeclarations
   expectedWrites <- either error pure (modalLifetimeWatchRanges request)
+  let stackGuard = object
+        [ "node" .= (0x4006060c :: Word32), "creation" .= (0x4005c3ac :: Word32)
+        , "entry" .= (0x01109130 :: Word32), "base" .= (0x00a4ce00 :: Word32)
+        , "size" .= (4096 :: Word32), "guard_bytes" .= (64 :: Word32)
+        , "baseline" .= ([0 .. 63] :: [Word32]) ]
+      guardedDeclaration value = changeLifetime "task33_stack_guard" value
+  guardedRequest <- either error pure (parseModalBeginRequest (guardedDeclaration stackGuard))
+  check "task33 guard request preserves its pinned identity and baseline"
+    (modalBeginRequestJson guardedRequest == guardedDeclaration stackGuard)
+  guardedWrites <- either error pure (modalLifetimeWatchRanges guardedRequest)
+  check "task33 guard adds exactly its bottom 64 bytes to continuous write coverage"
+    (guardedWrites == unionWatchRanges (range 0x00a4ce00 0x00a4ce40 : expectedWrites))
+  forM_ ["node", "creation", "entry", "base", "size", "guard_bytes"] $ \key ->
+    check ("task33 guard refuses a different " ++ show key)
+      (isLeft (parseModalBeginRequest (guardedDeclaration (set key (Number 0) stackGuard))))
+  forM_ [Null, array [], array (replicate 63 (Number 0)), array (replicate 65 (Number 0))
+        , array (Number 256 : replicate 63 (Number 0))] $ \baseline ->
+    check "task33 guard refuses a malformed baseline"
+      (isLeft (parseModalBeginRequest (guardedDeclaration (set "baseline" baseline stackGuard))))
+  check "task33 guard refuses an unknown field"
+    (isLeft (parseModalBeginRequest (guardedDeclaration (set "extra" Null stackGuard))))
+  check "task33 guard refuses null"
+    (isLeft (parseModalBeginRequest (guardedDeclaration Null)))
   let fetches = unionWatchRanges (range 0x00bfb028 0x00bfb124 :
         [range pc (pc+4) | pc <- [0x10000,0x10010,0x10024,0x10044,0x40240,0x4031c,0x436b8,0x43690,0x436f0
           ,0x43720,0x43848,0x42440,0xd0240,0xd031c,0xd36b8,0xd3690,0xd36f0,0xd3720,0xd3848,0xd2440]])
@@ -784,6 +1067,49 @@ runtimeBindingTests = do
   report <- either error pure (parseModalReport permitLimit clean)
   finalFull <- either error pure (parseFinalModalWatch fullWatch)
   check "stock223 full lifetime binds to its request and every raw write" (checkCompletedModalLifetime request audit finalFull report == Right ())
+  let guardReceipt = foldr (uncurry set) stackGuard
+        [ ("scope", String "diagnostic_only_bottom_guard_write_attempts")
+        , ("priority", Number 8), ("task_id", Number 33), ("created", Number 1) ]
+      guardedWatch = watch guardedWrites writes
+      guardedClean = set "watch" (withoutRecords guardedWatch)
+        (set "lifetime" (set "task33_stack_guard" guardReceipt exactReceipt) clean)
+  guardedReport <- either error pure (parseModalReport permitLimit guardedClean)
+  check "typed lifetime report preserves the complete optional guard receipt"
+    (modalReportJson guardedReport == guardedClean)
+  guardedBegin <- either error pure (parseModalReport permitLimit (set "enabled" (Bool True) guardedClean))
+  check "guarded begin binds its receipt baseline and descriptor to the request"
+    (checkModalBegin guardedRequest guardedBegin == Right ())
+  check "unrequested guard receipt refuses"
+    (isLeft (checkModalBegin request guardedBegin))
+  unguardedBegin <- either error pure (parseModalReport permitLimit (set "enabled" (Bool True) clean))
+  check "requested guard receipt may not disappear"
+    (isLeft (checkModalBegin guardedRequest unguardedBegin))
+  forM_ [ set "scope" (String "whole-task-safe") guardReceipt, set "priority" (Number 9) guardReceipt
+        , set "task_id" (Number 34) guardReceipt, set "created" (Number 0) guardReceipt
+        , set "baseline" (array []) guardReceipt, Null ] $ \invalid ->
+    check "malformed guard receipt refuses"
+      (isLeft (parseModalReport permitLimit (set "lifetime" (set "task33_stack_guard" invalid exactReceipt) clean)))
+  changedGuardBegin <- either error pure (parseModalReport permitLimit
+    (set "enabled" (Bool True) (set "lifetime"
+      (set "task33_stack_guard" (set "baseline" (array (replicate 64 (Number 0))) guardReceipt) exactReceipt) clean)))
+  check "different guard baseline refuses before installation"
+    (isLeft (checkModalBegin guardedRequest changedGuardBegin))
+  guardedFinal <- either error pure (parseFinalModalWatch guardedWatch)
+  guardedAudit <- either error pure (checkLifetimeArrayAudit guardedRequest (Right guardedWatch) (Right guardedFinal))
+  check "completed guarded lifetime keeps the exact source and raw write coverage"
+    (checkCompletedModalLifetime guardedRequest guardedAudit guardedFinal guardedReport == Right ())
+  let guardWrite = set "before" (array (map Number [0,1,2,3])) (set "value" (Number 0x03020100)
+        (cpu 0 0x00a4ce00 0x00a4ce00 4 550))
+      attemptedGuardWatch = watch guardedWrites (writes ++ [guardWrite])
+      balancedGuardReceipt = set "checked_context_writes"
+        (case get "checked_context_writes" exactReceipt of Number count -> Number (count + 1); _ -> error "context counter fixture")
+        (set "task33_stack_guard" guardReceipt exactReceipt)
+      attemptedGuardClean = set "watch" (withoutRecords attemptedGuardWatch) (set "lifetime" balancedGuardReceipt clean)
+  attemptedGuardReport <- either error pure (parseModalReport permitLimit attemptedGuardClean)
+  attemptedGuardFinal <- either error pure (parseFinalModalWatch attemptedGuardWatch)
+  attemptedGuardAudit <- either error pure (checkLifetimeArrayAudit guardedRequest (Right attemptedGuardWatch) (Right attemptedGuardFinal))
+  check "same-value guard write refuses independently of claimed healthy native counters"
+    (isLeft (checkCompletedModalLifetime guardedRequest attemptedGuardAudit attemptedGuardFinal attemptedGuardReport))
   otherDigest <- either error pure (parseFinalModalWatch (set "records_sha256" (String (T.replicate 64 "0")) fullWatch))
   check "an equal row count with another row digest refuses" (isLeft (checkCompletedModalLifetime request audit otherDigest report))
   check "source-bound cache-only attribution binds every protected point" (checkModalLifetimeWatchSources request fullWatch == Right ())
@@ -795,11 +1121,27 @@ runtimeBindingTests = do
   scopedBase <- either error pure (modalRequest stock (Just (linked, scope)) permitLimit)
   let installedBranch = 0xea000abc :: Word32
       scopedPublications = rows ++ [object ["address" .= (0x00bfb028 :: Word32), "old" .= (0 :: Word32), "new" .= installedBranch]]
-      scopedLifetime = set "publications" (array scopedPublications) (set "readonly" (array (drop 1 images)) lifetime)
+      scopedLifetime = set "bank_variant" (String "modal75") (set "publications" (array scopedPublications) (set "readonly" (array (drop 1 images)) lifetime))
       scopedDeclaration = set "limit" lifetimeLimit (set "context_sources" (array context) (set "lifetime" scopedLifetime (modalBeginRequestJson scopedBase)))
       helperFetches = unionWatchRanges (range 0x10000 0x10080 : fetches)
       truncatedHelperFetches = unionWatchRanges (range 0x10000 0x1007c : fetches)
   scopedRequest <- either error pure (parseModalBeginRequest scopedDeclaration)
+  let renderHooks = [0x01164e1c,0x01163f2c,0x011662a0] :: [Word32]
+      renderRows = rows ++
+        [object ["address" .= address,"old" .= (0xe92d4ff0 :: Word32),"new" .= (0xea000000 :: Word32)]
+        | address <- [0x00bfb028,0x00bf95c8] ++ renderHooks]
+      renderDeclaration publications_ = set "lifetime"
+        (set "bank_variant" (String "modal75,menu-engine,render") (set "publications" (array publications_) scopedLifetime)) scopedDeclaration
+  renderRequest <- either (error . ("render lifetime declaration: " ++)) pure (parseModalBeginRequest (renderDeclaration renderRows))
+  renderRanges <- either error pure (modalLifetimeWatchRanges renderRequest)
+  check "all three render hooks enter the Haskell lifetime write watches"
+    (all (\address -> any (\span_ -> let (low,high) = watchRangeBounds span_ in low <= fromIntegral address && fromIntegral address + 4 <= high) renderRanges) renderHooks)
+  forM_ [225,226,227] $ \index -> do
+    let change row = take index renderRows ++ [row] ++ drop (index+1) renderRows
+    check "missing render hook refuses in Haskell"
+      (isLeft (parseModalBeginRequest (renderDeclaration (change (set "address" (Number 0x1201000) (renderRows !! index))))))
+    check "wrong render hook stock word refuses in Haskell"
+      (isLeft (parseModalBeginRequest (renderDeclaration (change (set "old" (Number 0xe1a00000) (renderRows !! index))))))
   check "continuous static fetch coverage includes every helper instruction" $
     checkModalLifetimeWatchSources scopedRequest (set "fetch_attribution" (fetchJson helperFetches) fullWatch) == Right ()
   check "missing final call-helper instruction refuses source coverage" $
@@ -899,6 +1241,14 @@ runtimeBindingTests = do
   check "the completed settings writes order setter and reload rows with their writer kinds"
     (fmap (map (\write -> (get "writer" write, get "pc" write)) . values . get "writes" . settingsWritesJson)
       (parseFinalModalWatch (reloadWatch setterThenReload) >>= completedSettingsWrites scopedRequest)
+      == Right [(String "setter", Number 0x0062ff54), (String "reload", Number 0x00722134)])
+  pieces <- newIORef (BL.toChunks (encode (reloadWatch setterThenReload)))
+  streamedSettings <- readFinalModalWatchFrom (atomicModifyIORef' pieces $ \remaining -> case remaining of
+    [] -> ([], B.empty)
+    part : rest -> (rest, part))
+  check "streamed raw watch preserves ordered setter and reload consumer effects"
+    (fmap (map (\write -> (get "writer" write, get "pc" write)) . values . get "writes" . settingsWritesJson)
+      (streamedSettings >>= completedSettingsWrites scopedRequest)
       == Right [(String "setter", Number 0x0062ff54), (String "reload", Number 0x00722134)])
   mapM_ (\(label, rows_) -> check ("a reload copy store refuses " ++ label) (not (settingsCompletesWith 1 0 1 (reloadWatch rows_))))
     [ ("without its call fetch", [reloadStore 0 0x0096ccd2, fetchOn 0 0x006309f0])

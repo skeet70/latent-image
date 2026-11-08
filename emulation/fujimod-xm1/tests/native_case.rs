@@ -17,6 +17,7 @@ const DEVICE: u8 = 10;
 const BX_LR: u32 = 0xe12f_ff1e;
 const PUSH_LR: u32 = 0xe92d_4000;
 const POP_PC: u32 = 0xe8bd_8000;
+const POP_SINGLE_PC: u32 = 0xe49d_f004;
 const ADD_R0_1: u32 = 0xe280_0001;
 const STR_R0_R1_POST_4: u32 = 0xe481_0004;
 const LDR_R0_R1: u32 = 0xe591_0000;
@@ -722,6 +723,38 @@ fn a_load_from_an_unmapped_page_leaves_its_destination_and_base() {
     observed.assert_stopped(Status::MemoryGuard, CODE);
     assert_eq!(observed.register("r0"), 0x77);
     assert_eq!(observed.register("r1"), 0x5000);
+}
+
+#[test]
+fn a_single_register_pop_returns_through_nested_call_frames() {
+    let case = Case::new(&[PUSH_LR, branch(CODE + 4, 0x1040, true), ADD_R0_1, POP_SINGLE_PC])
+        .code(0x1040, &[PUSH_LR, ADD_R0_1, POP_SINGLE_PC])
+        .function(0x1040, 12)
+        .register(0, 40);
+    for case in [case.clone(), case.kernel(Kernel::default())] {
+        let observed = case.run();
+        observed.assert_returned();
+        assert_eq!(observed.register("r0"), 42);
+        assert_eq!(observed.register("sp"), SP);
+    }
+}
+
+#[test]
+fn a_single_register_pop_cannot_return_to_another_declared_function() {
+    let observed = Case::new(&[PUSH_LR, 0xe58d_0000, POP_SINGLE_PC])
+        .code(0x1040, &[BX_LR])
+        .function(0x1040, 4)
+        .register(0, 0x1040)
+        .run();
+    observed.assert_stopped(Status::UnknownCall, CODE + 8);
+    assert_eq!(observed.register("sp"), SP - 4);
+}
+
+#[test]
+fn a_single_register_pop_cannot_read_past_its_stack_region() {
+    let observed = Case::new(&[POP_SINGLE_PC]).run();
+    observed.assert_stopped(Status::MemoryGuard, CODE);
+    assert_eq!(observed.register("sp"), SP);
 }
 
 fn stub_call(r0: u32) -> Observed {

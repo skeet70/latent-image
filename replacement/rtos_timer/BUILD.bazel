@@ -1,5 +1,5 @@
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
-load("//replacement/toolchain:rust.bzl", "xm1_rust_staticlib")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -12,6 +12,32 @@ xm1_rust_staticlib(
         "//replacement/rtos_layout:src/lib.rs",
     ],
 )
+
+[
+    xm1_rust_staticlib(
+        name = "timer-abi-%s-rust" % domain,
+        src = "stage/abi.rs",
+        crate_name = "xm1_rtos_timer_abi",
+        data = [
+            "src/lib.rs",
+            "src/tests.rs",
+            "//replacement/rtos_layout:src/lib.rs",
+        ],
+        rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain, "--cfg", "'feature=\"stage\"'"],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    xm1_rust_elf(
+        name = "timer-%s" % domain,
+        rust_staticlib = ":timer-abi-%s-rust" % domain,
+        entry = "xm1_rtos_timer_insert",
+        extra_ldflags = ["-Wl,--gc-sections", "-Wl,--orphan-handling=error"],
+        link_script = "timer-%s.ld" % domain,
+    )
+    for domain in ["a", "b"]
+]
 
 genrule(
     name = "timer-host-tests-build",

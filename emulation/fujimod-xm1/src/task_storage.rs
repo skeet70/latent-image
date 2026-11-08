@@ -343,7 +343,7 @@ mod tests {
             render_object_provenance_sequence: None,
             lr: "0x725e78".into(), cpsr: 0xd3,
             code_word: Some(CodeWord { guest: 0xe320f000, physical: 0xe320f000,
-                expected: 0xe320f000, tcm: [[0; 2]; 2] }), memory: Vec::new(), observation: None };
+                expected: 0xe320f000, tcm: [[0; 2]; 2] }), memory: Vec::new(), stack_memory: Vec::new(), observation: None };
         let canonical = json!({"enabled":true,"violation":null,"records":[
             {"source":"cpu-fetch","core":1,"address":0x725cc4,"physical":0x725cc4,"size":4}]});
         assert!(confinement(&canonical, std::slice::from_ref(&hit)).is_ok());

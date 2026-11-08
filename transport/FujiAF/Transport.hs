@@ -207,13 +207,16 @@ ensurePrivateDirectory dir = do
   unless (isDirectory st && not (isSymbolicLink st) && fileOwner st == uid && fileMode st .&. 0o077 == 0) (P.reject "owned private nonsymlink state directory required")
 
 writePrivateBytes :: FilePath -> B.ByteString -> IO ()
-writePrivateBytes path bytes = bracket (openFd path WriteOnly defaultFileFlags {creat=Just 0o600,exclusive=True,nofollow=True,cloexec=True}) closeFd $ \fd -> do
+writePrivateBytes path bytes = withPrivateOutput path ($ bytes)
+
+withPrivateOutput :: FilePath -> ((B.ByteString -> IO ()) -> IO a) -> IO a
+withPrivateOutput path action = bracket (openFd path WriteOnly defaultFileFlags {creat=Just 0o600,exclusive=True,nofollow=True,cloexec=True}) closeFd $ \fd -> do
   status <- getFdStatus fd
   unless (isRegularFile status) (P.reject "capture must be regular")
-  B.useAsCStringLen bytes $ \(buffer,size) -> do
-    count <- fdWriteBuf fd (castPtr buffer) (fromIntegral size)
-    unless (count == fromIntegral size) (P.reject "short private capture write")
-  fileSynchronise fd
+  let write bytes = B.useAsCStringLen bytes $ \(buffer,size) -> do
+        count <- fdWriteBuf fd (castPtr buffer) (fromIntegral size)
+        unless (count == fromIntegral size) (P.reject "short private capture write")
+  action write `finally` fileSynchronise fd
 
 safeIdentifier :: String -> Bool
 safeIdentifier s = not (null s) && length s <= 80 && all (`elem` (['a'..'z']++['A'..'Z']++['0'..'9']++"-_")) s

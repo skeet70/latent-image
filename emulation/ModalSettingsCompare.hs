@@ -9,9 +9,9 @@ import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Text as T
-import EmulatorUsb (decodeBridgeWatchLine)
-import Emulation.ModalObservation (SettingsWrite, compareSettingsWrites, completedSettingsWrites, parseFinalModalWatch, parseModalBeginRequest, settingsWritesJson)
-import Emulation.Sha256 (sha256, sha256Hex)
+import Emulation.ModalObservation (SettingsWrite, compareSettingsWrites, completedSettingsWrites, parseModalBeginRequest, settingsWritesJson)
+import Emulation.ModalWatchStream (readFinalModalWatch)
+import Emulation.Sha256 (sha256File, sha256Hex)
 import System.Directory (doesPathExist)
 import System.Environment (getArgs, lookupEnv)
 import System.Exit (die, exitFailure)
@@ -110,10 +110,11 @@ loadRole scoped directory = do
   case binding of
     Left problem -> pure (Left problem)
     Right (request, writers, reloads, finalName, finalDigest, steps, package) -> do
-      line <- B.readFile (directory </> takeFileName (T.unpack finalName))
-      let digest = sha256Hex (sha256 line)
+      let finalPath = directory </> takeFileName (T.unpack finalName)
+      digest <- sha256Hex <$> sha256File finalPath
+      parsed <- readFinalModalWatch finalPath
       pure $ do
         unless (T.unpack finalDigest == digest) (Left "the final watch file differs from its observation binding")
-        final <- parseFinalModalWatch (decodeBridgeWatchLine line)
+        final <- parsed
         writes <- completedSettingsWrites request final
         pure (Role directory writes writers reloads steps digest package)

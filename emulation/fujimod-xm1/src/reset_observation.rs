@@ -25,7 +25,7 @@ struct RawSpec {
     schema: u32,
     sites: BTreeMap<String, String>,
     #[serde(default)]
-    reads: BTreeMap<String, Vec<[u64; 2]>>,
+    reads: BTreeMap<String, Vec<SiteRead>>,
     #[serde(default)]
     registers: RegisterCapture,
     hit_limit: NonZeroUsize,

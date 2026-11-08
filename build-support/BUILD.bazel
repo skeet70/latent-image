@@ -75,6 +75,7 @@ haskell_binary(
         "//host:filepath",
         "//host:process",
         "//host:text",
+        "//host:time",
         "//host:unix",
     ],
 )
@@ -98,6 +99,31 @@ haskell_test(
         "//host:filepath",
         "//host:process",
         "//host:text",
+        "//host:unix",
+    ],
+)
+
+haskell_test(
+    name = "storage-retention-tests",
+    srcs = ["StorageRetentionTests.hs"],
+    args = ["$(rootpath :storage-maintenance)"],
+    data = [":storage-maintenance"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+    ],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:cryptohash-sha256",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//host:text",
+        "//host:time",
         "//host:unix",
     ],
 )
