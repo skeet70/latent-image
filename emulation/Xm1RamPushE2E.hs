@@ -7,7 +7,7 @@ import Control.Monad (forM, forM_, unless, when)
 import Data.Aeson (FromJSON (..), Value (..), eitherDecodeStrict', encode, object, toJSON, withObject, (.:), (.=))
 import Data.Aeson.Types (parseEither)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
-import Data.List (nub, sort)
+import Data.List (find, nub, sort)
 import Data.Maybe (catMaybes, isJust)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -1479,10 +1479,10 @@ traceSiteValues sites =
     readValue (StackRead offset count) = object ["sp" .= offset, "bytes" .= count]
 
 data HitEffects = HitEffects
-  { effectDrawn :: [Word32]
-  , effectHookRows :: [Word32]
-  , effectCcHits :: [String]
-  , effectDeclared :: Int
+  { effectDrawn :: ![Word32]
+  , effectHookRows :: ![Word32]
+  , effectCcHits :: ![String]
+  , effectDeclared :: !Int
   }
 
 emptyEffects :: HitEffects
@@ -1490,9 +1490,11 @@ emptyEffects = HitEffects [] [] [] 0
 
 addHitEffect :: SegmentRunner -> HitEffects -> TraceHit -> HitEffects
 addHitEffect runner effects hit = HitEffects
-  { effectDrawn = if traceSite hit == menuMessageSite then traceR0 hit : effectDrawn effects else effectDrawn effects
-  , effectHookRows = if traceSite hit == d3HookSite then traceR0 hit : effectHookRows effects else effectHookRows effects
-  , effectCcHits = if traceSite hit `elem` map snd classicChromeFetchSites then traceSite hit : effectCcHits effects else effectCcHits effects
+  { effectDrawn = if traceSite hit == menuMessageSite then let value = traceR0 hit in value `seq` (value : effectDrawn effects) else effectDrawn effects
+  , effectHookRows = if traceSite hit == d3HookSite then let value = traceR0 hit in value `seq` (value : effectHookRows effects) else effectHookRows effects
+  , effectCcHits = case find ((== traceSite hit) . snd) classicChromeFetchSites of
+      Just (_, label) -> label : effectCcHits effects
+      Nothing -> effectCcHits effects
   , effectDeclared = effectDeclared effects + if traceSite hit `elem` runnerTraceLabels runner then 1 else 0
   }
 
