@@ -6,6 +6,7 @@ import Data.Aeson (object, (.=))
 import Data.Bits ((.&.), (.|.), shiftL)
 import qualified Data.ByteString as B
 import Data.Char (toLower)
+import Data.List (sortOn)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe)
 import Data.Word (Word32)
@@ -30,7 +31,18 @@ data Role = Stock | StockRepeat | Owned | Equivalent Entry | Mutant Entry | Reve
 newtype CaseIndex = CaseIndex Int deriving (Eq, Ord, Show)
 newtype LockTag = LockTag Word32 deriving (Eq, Show)
 data Row = Row { entry :: Entry, selection :: Selection, discarded :: Word32, enabled :: Word32, flags :: Word32, pending :: Word32, cpacr :: Word32, fpexc :: Word32, cpsr :: Word32, lockTag :: LockTag } deriving (Show)
-data Image = Image { imageDomain :: Domain, stockBytes :: B.ByteString, ownedBytes :: B.ByteString, imageReloc :: Reloc }
+data Image = Image { imageDomain :: Domain, stockBytes :: B.ByteString, ownedBytes :: B.ByteString, imageReloc :: Reloc, imageExtras :: [(Word32, Word32)] }
+
+isAggregate :: Image -> Bool
+isAggregate image = not (null (imageExtras image)) || any (\(a, _) -> not (any (\(lo, hi) -> a >= lo && a < hi) [(0xb00,0xb24),(0x3640,0x37dc),(0x37fc,0x3810)])) (relocRegions (imageReloc image))
+
+extraRegions :: M.Map String (Word32, Word32) -> Domain -> [(Word32, Word32)]
+extraRegions symbols domain =
+  [ (start, start + size)
+  | name <- ["helper_try", "helper_release", "helper_observe"]
+  , Just (address, size) <- [M.lookup name symbols]
+  , let start = address - base domain
+  ]
 
 -- | (S2-linked offset, aggregate offset, S2 size, aggregate size) for each body.
 data Reloc = Reloc [(Word32, Word32, Word32, Word32)]
@@ -210,15 +222,16 @@ regions image role row = code ++ dat
     raw = if isStock role then stock else own
     imageBase = if isStock role then b else at d 0xb00
     imageEnd = imageBase + fromIntegral (B.length raw)
-    blocks = [(0xb00,0xb24),(0x3640,0x37dc),(0x37fc,0x3810)] ++ relocated
+    blocks = [(0xb00,0xb24),(0x3640,0x37dc),(0x37fc,0x3810)] ++ relocated ++ extras
     relocated = if isStock role || not aggregate then [] else mergedRelocated
+    extras = if isStock role || not aggregate then [] else imageExtras image
     mergedRelocated = case relocRegions (imageReloc image) of
       [] -> []
       spans -> [(minimum (map fst spans), maximum (map snd spans))]
-    aggregate = any (\(a, _) -> not (any (\(lo, hi) -> a >= lo && a < hi) [(0xb00,0xb24),(0x3640,0x37dc),(0x37fc,0x3810)])) (relocRegions (imageReloc image))
+    aggregate = isAggregate image
     installed = if isStock role then stock else foldl install stock blocks
     install bytes (a,z) = replace b bytes (b+a) (slice imageBase imageEnd raw (b+a) (b+z))
-    codeSpans = [(0xb00,0xb24),(0x252c, if isStock role || not aggregate then 0x3810 else maximum (0x403c : map snd (relocRegions (imageReloc image))))]
+    codeSpans = [(0xb00,0xb24),(if isStock role || not aggregate then 0x252c else 0x12b4, if isStock role || not aggregate then 0x3810 else maximum (0x403c : map snd (relocRegions (imageReloc image)) ++ map snd (imageExtras image)))]
     code = [mk ("code-"++show a) (b+a) ReadExecute (slice b (b+fromIntegral (B.length stock)) installed (b+a) (b+z)) | (a,z) <- codeSpans]
     (low,high) = (context d, running d + 12)
     LockTag tag = lockTag row
@@ -239,8 +252,8 @@ regions image role row = code ++ dat
       ,mk "bank-a" 0xfffb30ec Device (word32le 0)
       ,mk "bank-b" 0xfffb40ec Device (word32le 0)
       ,mk "exit" 0x958e00 ReadExecute (word32le 0xe12fff1e)
-      ,mk "dispatch-target" (target d) ReadExecute (word32le 0xe12fff1e)
-      ,mk "delivery-stop" (at d (if d==DomainA then 0x4288 else 0x4248)) ReadExecute (word32le 0xe12fff1e)]
+      ,mk "dispatch-target" (target d) ReadExecute (word32le 0xe12fff1e)]
+      ++ [mk "delivery-stop" (at d (if d==DomainA then 0x4288 else 0x4248)) ReadExecute (word32le 0xe12fff1e) | isStock role || not aggregate]
     mk name address permission bytes = mkRegion (RegionId name) (guest address) (B.length bytes) permission bytes
 
 guest :: Word32 -> GuestAddress
@@ -286,7 +299,14 @@ spec image role (CaseIndex index) row = CaseSpec
           | otherwise = (if isStock role then 22 else 21) + case entry row of NoSave -> if isStock role then 9 else 7; Save -> 10; _ -> 0
     ignored = [R1,R2,R3,R12,Lr,Cpsr] ++ [r | entry row `elem` [Save,NoSave,Select,IrqReturn] && not (loops row), r <- [R4,R5,R6]] ++ [Pc | loops row]
     relocSpans = relocRegions (imageReloc image)
-    ownedFunctions = if any (\(a, _) -> any (\(b, w) -> a >= b && a < w) baseFunctions) relocSpans then baseFunctions else baseFunctions ++ relocSpans
+    ownedFunctions = if isAggregate image then mergeSpans (baseFunctions ++ relocSpans ++ imageExtras image) else baseFunctions
+    mergeSpans spans = go (sortOn fst spans)
+      where
+        go [] = []
+        go ((a,z) : rest) = let (a', z', rest') = extend a z rest in (a', z') : go rest'
+        extend a z [] = (a, z, [])
+        extend a z ((lo, hi) : rs) | lo < z = extend a (max z hi) rs
+                                   | otherwise = (a, z, (lo, hi) : rs)
     baseFunctions = [(0xb00,0xb24),(0x3640,0x3668),(0x3668,0x3688),(if entry row==Select then entryOffset (isStock role) Select else 0x3688,0x3728),(0x3728,0x375c),(0x375c,0x37a4),(if entry row==IrqTail then 0x37a8 else 0x37a4,0x37dc),(0x252c,0x2554),(0x27b8,0x27d4),(0x27fc,0x2828),(0x2854,0x286c),(0x3444,0x34a4)]
     label r n = domainLabel d ++ "-" ++ map (\c -> if c==' ' then '-' else toLower c) (show r) ++ "-" ++ show n
 
@@ -362,7 +382,7 @@ main = do
       symbols <- parsePlatformSymbols s
       unless (sha256Hex (sha256 loader)==loaderSha256 d) (fail "not pinned X-M1 1.50 loader")
       unless (B.length owned > 0x1000) (fail "owned image is too small")
-      pure (Image d loader owned (relocation d symbols))
+      pure (Image d loader owned (relocation d symbols) (extraRegions symbols d))
     _ -> fail "input arity"
   createDirectoryIfMissing True work
   reports <- forM images $ \image -> do
