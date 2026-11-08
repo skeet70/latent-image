@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "Im+T0TrCAl7IHSH4+5GGd+/qf08PErvOFb/ZJ7k8pcE=",
+        "bzlTransitiveDigest": "05+8m9Y4UczOeruHBIJZgG5IelOwoz1HlfnFUpHinuc=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -474,6 +474,7 @@
                 "@@//build-support:fujimod-rprofile-byte-exclusives.patch": "//build-support:fujimod-rprofile-byte-exclusives.patch",
                 "@@//build-support:fujimod-timer-upcount.patch": "//build-support:fujimod-timer-upcount.patch",
                 "@@//build-support:fujimod-translation-admission.patch": "//build-support:fujimod-translation-admission.patch",
+                "@@//build-support:fujimod-observation-context.patch": "//build-support:fujimod-observation-context.patch",
                 "@@//build-support:fujimod-unicorn-context-align.patch": "//build-support:fujimod-unicorn-context-align.patch",
                 "@@//build-support:fujimod-wifi-unanswered-cmd53.patch": "//build-support:fujimod-wifi-unanswered-cmd53.patch",
                 "@@//build-support:fujimod.nix": "//build-support:fujimod.nix",
@@ -510,6 +511,7 @@
                 "@@//build-support:fujimod-rprofile-byte-exclusives.patch": "//build-support:fujimod-rprofile-byte-exclusives.patch",
                 "@@//build-support:fujimod-timer-upcount.patch": "//build-support:fujimod-timer-upcount.patch",
                 "@@//build-support:fujimod-translation-admission.patch": "//build-support:fujimod-translation-admission.patch",
+                "@@//build-support:fujimod-observation-context.patch": "//build-support:fujimod-observation-context.patch",
                 "@@//build-support:fujimod-unicorn-context-align.patch": "//build-support:fujimod-unicorn-context-align.patch",
                 "@@//build-support:fujimod-wifi-unanswered-cmd53.patch": "//build-support:fujimod-wifi-unanswered-cmd53.patch",
                 "@@//build-support:fujimod.nix": "//build-support:fujimod.nix",
@@ -690,6 +692,7 @@
                 "@@//build-support:fujimod-rprofile-byte-exclusives.patch": "//build-support:fujimod-rprofile-byte-exclusives.patch",
                 "@@//build-support:fujimod-timer-upcount.patch": "//build-support:fujimod-timer-upcount.patch",
                 "@@//build-support:fujimod-translation-admission.patch": "//build-support:fujimod-translation-admission.patch",
+                "@@//build-support:fujimod-observation-context.patch": "//build-support:fujimod-observation-context.patch",
                 "@@//build-support:fujimod-unicorn-context-align.patch": "//build-support:fujimod-unicorn-context-align.patch",
                 "@@//build-support:fujimod-wifi-unanswered-cmd53.patch": "//build-support:fujimod-wifi-unanswered-cmd53.patch",
                 "@@//build-support:fujimod.nix": "//build-support:fujimod.nix",
@@ -870,6 +873,7 @@
                 "@@//build-support:fujimod-rprofile-byte-exclusives.patch": "//build-support:fujimod-rprofile-byte-exclusives.patch",
                 "@@//build-support:fujimod-timer-upcount.patch": "//build-support:fujimod-timer-upcount.patch",
                 "@@//build-support:fujimod-translation-admission.patch": "//build-support:fujimod-translation-admission.patch",
+                "@@//build-support:fujimod-observation-context.patch": "//build-support:fujimod-observation-context.patch",
                 "@@//build-support:fujimod-unicorn-context-align.patch": "//build-support:fujimod-unicorn-context-align.patch",
                 "@@//build-support:fujimod-wifi-unanswered-cmd53.patch": "//build-support:fujimod-wifi-unanswered-cmd53.patch",
                 "@@//build-support:fujimod.nix": "//build-support:fujimod.nix",
@@ -1053,6 +1057,7 @@
                 "@@//build-support:fujimod-rprofile-byte-exclusives.patch": "//build-support:fujimod-rprofile-byte-exclusives.patch",
                 "@@//build-support:fujimod-timer-upcount.patch": "//build-support:fujimod-timer-upcount.patch",
                 "@@//build-support:fujimod-translation-admission.patch": "//build-support:fujimod-translation-admission.patch",
+                "@@//build-support:fujimod-observation-context.patch": "//build-support:fujimod-observation-context.patch",
                 "@@//build-support:fujimod-unicorn-context-align.patch": "//build-support:fujimod-unicorn-context-align.patch",
                 "@@//build-support:fujimod-wifi-unanswered-cmd53.patch": "//build-support:fujimod-wifi-unanswered-cmd53.patch",
                 "@@//build-support:fujimod.nix": "//build-support:fujimod.nix",

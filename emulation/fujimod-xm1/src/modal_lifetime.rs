@@ -282,9 +282,12 @@ impl LifetimeRequest {
         let task33_stack_guard = self.task33_stack_guard.map(Task33StackGuardRequest::into_guard).transpose()?;
         if let Some(guard) = &task33_stack_guard {
             let bottom = guard.immutable[0];
+            let publication_overlap = self.publications.iter().try_fold(false, |hit, row| {
+                Ok::<bool, LifetimeFailure>(hit || word_extent(Guest(row.address))?.overlaps(bottom))
+            })?;
             if bottom.overlaps(runtime) || settings_extent().overlaps(bottom)
                 || immutable_sources.iter().chain(fixed_resources().iter()).any(|range| range.overlaps(bottom))
-                || self.publications.iter().any(|row| word_extent(Guest(row.address)).expect("validated publication").overlaps(bottom)) {
+                || publication_overlap {
                 return Err(LifetimeFailure::InvalidSource);
             }
         }
@@ -954,4 +957,41 @@ fn backlink_overlap(layout: SourceLayout, target: PhysicalExtent) -> bool {
         let start = layout.nodes.start().0 + index * NODE_BYTES + 8;
         target.start().0 < start + 4 && start < target.end().0
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn guard_publication_extent_error_is_not_a_panic() {
+        let mut publications = (0..228).map(|index| PublicationRequest {
+            address: 0x00c4_2000 + index * 4, old: 0, new: 0,
+        }).collect::<Vec<_>>();
+        publications[0].address = 0x2000_0000;
+        let request = LifetimeRequest {
+            runtime: [0x00c4_0000, 0x00c5_0000],
+            resident: [0x00c4_0000, 0x00c4_0400],
+            readonly: vec![],
+            install: ServiceRequest {
+                entry: SiteRequest { pc: 0x00c4_1000, word: 0 },
+                writer: SiteRequest { pc: 0x00c4_1004, word: STR_PUBLICATION },
+            },
+            rollback: ServiceRequest {
+                entry: SiteRequest { pc: 0x00c4_1008, word: 0 },
+                writer: SiteRequest { pc: 0x00c4_100c, word: STR_PUBLICATION },
+            },
+            publications,
+            bank_variant: Some("modal75,menu-engine,render".into()),
+            retired: vec![],
+            settings_writers: vec![],
+            settings_reloads: vec![],
+            task33_stack_guard: Some(Task33StackGuardRequest {
+                node: 0x4006_060c, creation: 0x4005_c3ac, entry: 0x0110_9130,
+                base: 0x00a4_ce00, size: 4096, guard_bytes: 64, baseline: vec![0; 64],
+            }),
+        };
+        let sources = vec![extent(0x00c4_1000, 0x00c4_1010).unwrap()];
+        assert!(matches!(request.into_config(sources), Err(LifetimeFailure::InvalidExtent)));
+    }
 }

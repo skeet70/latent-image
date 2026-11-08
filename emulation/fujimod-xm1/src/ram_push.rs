@@ -951,6 +951,10 @@ impl Server {
             && matches!(&request, Request::SaveInstallCheckpoint { .. }) {
             return Err("active modal observation refuses checkpoint replacement".into());
         }
+        if matches!(&request, Request::SaveInstallCheckpoint { .. } | Request::SnapshotSave { .. })
+            && self.bridge.machine.render_stack_diagnostic.as_ref().is_some_and(|collector| !collector.finished()) {
+            return Err("unfinished render stack diagnostic refuses checkpoint replacement".into());
+        }
         if matches!(&request, Request::SnapshotSave { .. } | Request::SnapshotRestore { .. } | Request::SnapshotKey { .. }) {
             let traces = &self.bridge.machine.traces;
             if self.watch.is_some() || self.preservation.is_some() || traces.modal_observation_active()

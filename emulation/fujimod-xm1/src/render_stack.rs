@@ -13,6 +13,7 @@ mod mapping;
 use mapping::A32Mappings;
 
 const RECORD_LIMIT: usize = 4096;
+const TRANSITION_LIMIT: usize = 65536;
 const NESTING_LIMIT: usize = 32;
 const SOURCE_LIMIT: usize = 64 * 1024 * 1024;
 
@@ -242,7 +243,7 @@ struct Invocation {
 }
 #[derive(Default, Serialize)]
 struct Performance { active_instructions: u64, invocation_count: u64, hook_transitions: u64, host_nanoseconds: u64 }
-struct State { invocations: Vec<Invocation>, open: Vec<usize>, failure: Option<String>, performance: Performance, service_spans: usize }
+struct State { invocations: Vec<Invocation>, open: Vec<usize>, failure: Option<String>, performance: Performance, transitions: usize, service_spans: usize }
 impl State {
     fn fail(&mut self, error: String) { self.failure.get_or_insert(error); }
     fn active(&self, core: usize) -> bool { self.open.iter().any(|&index| self.invocations[index].core == core) }
@@ -255,7 +256,10 @@ impl State {
             let invocation = &mut self.invocations[index];
             if invocation.core != sample.core { continue; }
             if invocation.last_context != Some(context) {
-                if invocation.transitions.len() == RECORD_LIMIT { return Err("stack diagnostic invocation transition bound exceeded".into()); }
+                if invocation.transitions.len() == RECORD_LIMIT || self.transitions == TRANSITION_LIMIT {
+                    return Err("stack diagnostic transition storage bound exceeded".into());
+                }
+                self.transitions += 1;
                 invocation.transitions.push(Transition { pc: sample.pc, cpsr: sample.cpsr, context_depth: sample.context_depth,
                     current_node, owner_node, scheduler, mode_source: sample.mode_source });
                 invocation.last_context = Some(context);
@@ -682,7 +686,7 @@ impl Collector {
         let fetch_mappings = A32Mappings::new(graph, &access)?;
         let config = Rc::new(Config::new(request, access, fetch_mappings)?);
         let state = Rc::new(RefCell::new(State { invocations: Vec::new(), open: Vec::new(), failure: None,
-            performance: Performance::default(), service_spans: 0 }));
+            performance: Performance::default(), transitions: 0, service_spans: 0 }));
         let mut collector = Self { config, state, cores: Vec::new(), finished: false,
             start: Boundary::sample(session)?, end: None };
         let addresses: Vec<u64> = collector.config.request.entries.iter().flat_map(|entry| [entry.address, entry.address + 4])
@@ -790,6 +794,7 @@ impl Collector {
         Ok(())
     }
     pub fn refuse(&self, error: &str) { self.state.borrow_mut().fail(error.into()); }
+    pub fn finished(&self) -> bool { self.finished }
     pub(crate) fn disarm(&mut self, session: &Session) -> Result<(), String> {
         if !self.finished { self.refuse("stack diagnostic instrumentation removed before end"); }
         self.remove_hooks(session)
@@ -1455,4 +1460,18 @@ mod tests {
         assert_eq!(invocation["minimum_context"]["cpsr"].as_u64().unwrap(),
             fixture.machine.session.board.read_register(0, Register::Arm32(arm::Register::Cpsr)).unwrap());
     }
+
+    #[test]
+    fn aggregate_transition_storage_refuses_before_the_report_expands() {
+        let mut fixture = owned_service(NativeTransfer::Call);
+        fixture.begin(Role::Owned, &[RETURN]);
+        {
+            let collector = fixture.machine.render_stack_diagnostic.as_ref().unwrap();
+            collector.state.borrow_mut().transitions = super::TRANSITION_LIMIT;
+        }
+        assert_eq!(fixture.machine.run(2000), RunOutcome::Failed);
+        assert!(fixture.machine.failure.as_deref()
+            .is_some_and(|failure| failure.contains("transition storage bound exceeded")));
+    }
+
 }

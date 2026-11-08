@@ -57,6 +57,7 @@ _FUJIMOD_NIX_DEPS = [
     "//build-support:fujimod-rprofile-byte-exclusives.patch",
     "//build-support:fujimod-timer-upcount.patch",
     "//build-support:fujimod-translation-admission.patch",
+    "//build-support:fujimod-observation-context.patch",
     "//build-support:fujimod-unicorn-context-align.patch",
     "//build-support:fujimod-wifi-unanswered-cmd53.patch",
     "//build-support:fujimod.nix",
