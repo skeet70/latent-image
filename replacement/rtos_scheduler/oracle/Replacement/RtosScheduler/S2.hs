@@ -261,7 +261,10 @@ spec image role (CaseIndex index) row = CaseSpec
   , caseEntry = guest (at d (entryOffset (isStock role) (entry row)))
   , caseExit = guest 0x958e00
   , caseRegions = regions image role row
-  , caseFunctions = [(guest (at d a),z-a) | (a,z) <- [(0xb00,0xb24),(0x3640,0x3668),(0x3668,0x3688),(if entry row==Select then entryOffset (isStock role) Select else 0x3688,0x3728),(0x3728,0x375c),(0x375c,0x37a4),(if entry row==IrqTail then 0x37a8 else 0x37a4,0x37dc),(0x252c,0x2554),(0x27b8,0x27d4),(0x27fc,0x2828),(0x2854,0x286c),(0x3444,0x34a4)] ++ (if isStock role then [] else relocRegions (imageReloc image))]
+  , caseFunctions =
+      if isStock role
+        then [(guest (at d a),z-a) | (a,z) <- baseFunctions]
+        else [(guest (at d a),z-a) | (a,z) <- ownedFunctions]
   , caseInitial = [(r,initial r) | r <- [R0 .. R12]] ++ [(Sp,stackPointer),(Lr,0x958e00),(Cpsr,cpsr row)]
   , caseExpectedStatus = if loops row then InstructionBudget else StopAddress
   , caseExpectedRegisters = [(R8,0xa5a50000 + if entry row `elem` [Resume,IrqResume] then 4 else 8)]
@@ -281,6 +284,9 @@ spec image role (CaseIndex index) row = CaseSpec
           | not (null (trigger d row)) = 400
           | otherwise = (if isStock role then 22 else 21) + case entry row of NoSave -> if isStock role then 9 else 7; Save -> 10; _ -> 0
     ignored = [R1,R2,R3,R12,Lr,Cpsr] ++ [r | entry row `elem` [Save,NoSave,Select,IrqReturn] && not (loops row), r <- [R4,R5,R6]] ++ [Pc | loops row]
+    relocSpans = relocRegions (imageReloc image)
+    ownedFunctions = if any (\(a, _) -> any (\(b, w) -> a >= b && a < w) baseFunctions) relocSpans then baseFunctions else baseFunctions ++ relocSpans
+    baseFunctions = [(0xb00,0xb24),(0x3640,0x3668),(0x3668,0x3688),(if entry row==Select then entryOffset (isStock role) Select else 0x3688,0x3728),(0x3728,0x375c),(0x375c,0x37a4),(if entry row==IrqTail then 0x37a8 else 0x37a4,0x37dc),(0x252c,0x2554),(0x27b8,0x27d4),(0x27fc,0x2828),(0x2854,0x286c),(0x3444,0x34a4)]
     label r n = domainLabel d ++ "-" ++ map (\c -> if c==' ' then '-' else toLower c) (show r) ++ "-" ++ show n
 
 reg :: Register -> NativeObservation -> Word32
@@ -354,7 +360,7 @@ main = do
       owned <- B.readFile p
       symbols <- parsePlatformSymbols s
       unless (sha256Hex (sha256 loader)==loaderSha256 d) (fail "not pinned X-M1 1.50 loader")
-      unless (B.length owned > 0x4000) (fail "aggregate image is too small")
+      unless (B.length owned > 0x1000) (fail "owned image is too small")
       pure (Image d loader owned (relocation d symbols))
     _ -> fail "input arity"
   createDirectoryIfMissing True work
