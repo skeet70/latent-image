@@ -3818,6 +3818,7 @@ haskell_binary(
     srcs = ["SchedulerPairCheckMain.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
+        ":case-sha256",
         ":scheduler-pair-lib",
         "//host:aeson",
         "//host:base",

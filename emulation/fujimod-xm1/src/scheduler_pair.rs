@@ -643,7 +643,7 @@ struct Milestone { phase: String, pulse: Option<Pulse>, expected: MenuTriple, re
 struct Binding { path: PathBuf, sha256: String }
 
 #[derive(Serialize)]
-struct Limits { sites: usize, pending: usize, classes: usize, samples: usize, instructions: u64, watch_rows: usize }
+struct Limits { sites: usize, pending: usize, classes: usize, samples: usize, instructions: u64, watch_rows: usize, lock_events: usize }
 
 #[derive(Serialize)]
 struct Reached { slot: SlotId, calls: u64, returns: u64, pending: u64, first: Option<u64>, last: Option<u64> }
@@ -776,7 +776,7 @@ struct PcWatch { core: Core, address: Hex, count: u64, first: u64 }
 struct ProbeHit { domain: Domain, core: Core, address: Hex, kind: ProbeKind, register: ProbeRegister,
     value: u32, cpsr: u32, sp: Hex, lr: Hex, instructions: u64 }
 
-/// Raw lock-store occurrence budget, not the call-class limit: the semaphore natural route exceeds 64K owned stores; 1M occurrences serialize to about 40 MB inside the 4G emulator scope.
+/// Raw lock-store occurrence budget, not the call-class limit: the semaphore natural route exceeds 64K owned stores. 1M events retain about 40 MB in memory and the report serializes every event.
 const LOCK_LIMIT: usize = 1 << 20;
 #[derive(Clone, Copy, Debug, Serialize)]
 struct LockEvent { task: u32, core: Core, call: u64, at: u64, address: Hex, value: u32 }
@@ -2191,7 +2191,7 @@ fn drive() -> Result<(), String> {
         role: validated.plan.role,
         inputs: vec![plan_binding, run_binding, dat_binding, rom_binding, trajectory_binding, executable_binding],
         reset_sha256: sha256(&checkpoint),
-        limits: Limits { sites: SITE_LIMIT, pending: PENDING_LIMIT, classes: CLASS_LIMIT, samples: SAMPLE_LIMIT, instructions: INSTRUCTION_LIMIT, watch_rows: WATCH_LIMIT },
+        limits: Limits { sites: SITE_LIMIT, pending: PENDING_LIMIT, classes: CLASS_LIMIT, samples: SAMPLE_LIMIT, instructions: INSTRUCTION_LIMIT, watch_rows: WATCH_LIMIT, lock_events: LOCK_LIMIT },
         instructions: machine.instructions(),
         counts: machine.session.board.instruction_counts().try_into().ok(),
         entries: observer.entries,

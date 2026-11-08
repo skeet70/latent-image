@@ -1801,9 +1801,9 @@ XM1_EMULATOR_SLOTS=1 devenv shell -- bazel --batch run --jobs=2 //emulation:emul
   "$PWD/bazel-bin/emulation/scheduler-pair-observe" --plan PLAN_JSON \
   --run "$PWD/emulation/fujimod-xm1/data/xm1-150.json" --update DAT --boot-rom "$ROM" \
   --trajectory "$PWD/emulation/modal75-packaged-route-trajectories.json" --output NEW_DIRECTORY
-bazel-bin/emulation/scheduler-pair-check qualify PLAN_JSON OBSERVATION_DIR/observation.json
-bazel-bin/emulation/scheduler-pair-check compare STOCK_PLAN STOCK_DIR/observation.json OWNED_PLAN OWNED_DIR/observation.json
-bazel-bin/emulation/scheduler-pair-check control CONTROL_PLAN CONTROL_DIR/observation.json
+bazel-bin/emulation/scheduler-pair-check --observer "$PWD/bazel-bin/emulation/scheduler-pair-observe" qualify PLAN_JSON OBSERVATION_DIR/observation.json
+bazel-bin/emulation/scheduler-pair-check --observer "$PWD/bazel-bin/emulation/scheduler-pair-observe" compare STOCK_PLAN STOCK_DIR/observation.json OWNED_PLAN OWNED_DIR/observation.json
+bazel-bin/emulation/scheduler-pair-check --observer "$PWD/bazel-bin/emulation/scheduler-pair-observe" control CONTROL_PLAN CONTROL_DIR/observation.json
 ```
 
 The host checker streams `classes` into checked totals, per-entry summaries and demand-paging witnesses. Notification controls retain the earliest target and preceding failed contracts for the same exact adjudicator; passing contracts are discharged while reading. Duplicate object fields keep their first occurrence, matching Aeson. The comparison forces each role's summary before loading the next role.
