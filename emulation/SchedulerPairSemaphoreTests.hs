@@ -272,10 +272,10 @@ helperCall task address semantic lock instructions callFirst value r0 = call
     (traceOf (replicate 16 0) [] Returned)) { callFirst = callFirst, callWriteOrigins = [originAtForWith task instructions lock] }
 
 releaseCall :: Word32 -> Word64 -> Call
-releaseCall lock first = helperCall taskA releaseAddress (HelperSemantic Release) lock 1 first 0 0x9000
+releaseCall lock first = helperCall taskA releaseAddress (HelperSemantic Release) lock (fromIntegral first) first 0 0x9000
 
 releaseEvents :: [J.Value]
-releaseEvents = [lockEvent taskA 0 10 1 0x400545c0 0, lockEvent taskA 0 11 1 0x400545c4 0]
+releaseEvents = [lockEvent taskA 0 10 10 0x400545c0 0, lockEvent taskA 0 11 11 0x400545c4 0]
 
 interleavedEvents :: [J.Value]
 interleavedEvents =

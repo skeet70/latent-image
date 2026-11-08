@@ -1032,7 +1032,7 @@ The run's terminal JSON at `private-data/scratch/RtosSemaphore/results-return.js
 **Checker verification (review fixes).** The three host checker targets and the rebuilt observer produced these complete wrapper verdict lines, persisted in `private-data/scratch/RtosSemaphore/final-checker-proof.log`:
 
 ```text
-host-build verdict {"verdict":"passed","resource_failure":null,"command":"test","exit_code":0,"unit":"xm1-host-build-797881.scope","unit_result":"success","memory_max":"6G","lock_wait_seconds":0.000,"wall_seconds":22.312,"scope_cpu_seconds":44.324,"scope_memory_peak_bytes":1136705536,"nix_daemon_cpu_seconds":0.015,"nix_daemon_oom_kills":0}
+host-build verdict {"verdict":"passed","resource_failure":null,"command":"test","exit_code":0,"unit":"xm1-host-build-823362.scope","unit_result":"success","memory_max":"6G","lock_wait_seconds":0.000,"wall_seconds":5.851,"scope_cpu_seconds":24.932,"scope_memory_peak_bytes":1374937088,"nix_daemon_cpu_seconds":11.777,"nix_daemon_oom_kills":0}
 host-build verdict {"verdict":"passed","resource_failure":null,"command":"build","exit_code":0,"unit":"xm1-host-build-800742.scope","unit_result":"success","memory_max":"6G","lock_wait_seconds":0.000,"wall_seconds":193.402,"scope_cpu_seconds":15.663,"scope_memory_peak_bytes":653164544,"nix_daemon_cpu_seconds":547.026,"nix_daemon_oom_kills":0}
 ```
 
