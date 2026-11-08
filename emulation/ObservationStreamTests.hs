@@ -13,8 +13,11 @@ import qualified Data.ByteString as B
 import Data.Either (isLeft)
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Emulation.ObservationStream
-  ( TraceHitRef (..), TraceHitSnapshot (..), TraceHitSource (..), foldTraceHitSources, rowNext, withRowReader )
-import Emulation.Sha256 (sha256)
+  ( ObservationRef (..), TraceHitRef (..), TraceHitSnapshot (..), TraceHitSource (..)
+  , VerifiedObservation (..)
+  , decodeObservationRef, foldTraceHitSources, loadVerifiedObservation, resolveReference
+  , rowNext, withRowReader )
+import Emulation.Sha256 (sha256, sha256Hex)
 import EmulatorUsb (TraceHit (..), TraceHitCursor (..), TraceHitLimit (..), TraceHitPage (..))
 import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, removeDirectoryRecursive)
 import System.Exit (exitFailure)
@@ -53,7 +56,8 @@ main = do
   changed <- try (foldTraceHitSources [TraceHitSource (TraceHitCursor 0) (TraceHitCursor 24) (TraceHitSnapshot 24) (\cursor limit -> pure (changing 24 cursor limit))] (\values hit -> pure (values ++ [hit])) [])
   unless (isLeft (changed :: Either SomeException [TraceHit])) (putStrLn "FAIL: a changed page total was accepted" >> exitFailure)
   stickySidecar
-  putStrLn "observation-stream interval/snapshot counterexample passed"
+  verifiedDocument
+  putStrLn "observation-stream interval/snapshot and verified-document counterexamples passed"
 
 stickySidecar :: IO ()
 stickySidecar = do
@@ -88,4 +92,42 @@ stickySidecar = do
   case (digestResult, digestFirst, digestSecond) of
     (Left _, Left _, Left _) -> pure ()
     _ -> putStrLn "FAIL: repeated finish did not keep the digest failure sticky" >> exitFailure
+  removeDirectoryRecursive directory
+
+verifiedDocument :: IO ()
+verifiedDocument = do
+  root <- getTemporaryDirectory
+  let directory = root </> "observation-stream-verified"
+      document = "{\"phase\":\"replay\",\"trace_hits\":[]}\n"
+      size = B.length document
+      path = directory </> "obs.json"
+      hits = TraceHitRef "obs.json" (sha256 document) 0
+      reference phase = ObservationRef phase "obs.json" (sha256 document) (fromIntegral size) hits
+      element = object
+        [ "phase" .= ("replay" :: String), "path" .= ("obs.json" :: FilePath)
+        , "sha256" .= sha256Hex (sha256 document), "bytes" .= (fromIntegral size :: Integer)
+        , "trace_hits" .= hits ]
+      refused label ref = do
+        result <- loadVerifiedObservation directory ref
+        unless (isLeft result) (putStrLn ("FAIL: " ++ label ++ " was accepted") >> exitFailure)
+  createDirectoryIfMissing True directory
+  B.writeFile path document
+  case decodeObservationRef element of
+    Left problem -> putStrLn ("FAIL: receipt element did not decode: " ++ problem) >> exitFailure
+    Right decoded -> unless (decoded == reference "replay") (putStrLn "FAIL: decoded reference differs" >> exitFailure)
+  loaded <- loadVerifiedObservation directory (reference "replay")
+  case loaded of
+    Left problem -> putStrLn ("FAIL: verified document was refused: " ++ problem) >> exitFailure
+    Right verified -> unless
+      (verifiedObservationPath verified == path
+        && verifiedObservationValue verified == object ["phase" .= ("replay" :: String), "trace_hits" .= ([] :: [Int])])
+      (putStrLn "FAIL: verified document differs" >> exitFailure)
+  refused "a byte-count drift" (ObservationRef "replay" "obs.json" (sha256 document) (fromIntegral size + 1) hits)
+  refused "a digest drift" (ObservationRef "replay" "obs.json" (sha256 "other") (fromIntegral size) hits)
+  refused "a phase drift" (ObservationRef "menu" "obs.json" (sha256 document) (fromIntegral size) hits)
+  refused "a nested path" (ObservationRef "replay" "sub/obs.json" (sha256 document) (fromIntegral size) hits)
+  refused "an absolute path" (ObservationRef "replay" "/obs.json" (sha256 document) (fromIntegral size) hits)
+  refused "a missing document" (ObservationRef "replay" "absent.json" (sha256 document) (fromIntegral size) hits)
+  unless (resolveReference directory "obs.json" == Right path) (putStrLn "FAIL: plain reference path did not resolve" >> exitFailure)
+  unless (isLeft (resolveReference directory "sub/obs.json" :: Either String FilePath)) (putStrLn "FAIL: nested reference path resolved" >> exitFailure)
   removeDirectoryRecursive directory
