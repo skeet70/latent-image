@@ -951,7 +951,7 @@ impl Server {
             && matches!(&request, Request::SaveInstallCheckpoint { .. }) {
             return Err("active modal observation refuses checkpoint replacement".into());
         }
-        if matches!(&request, Request::SaveInstallCheckpoint { .. } | Request::SnapshotSave { .. })
+        if matches!(&request, Request::SaveInstallCheckpoint { .. } | Request::SnapshotSave { .. } | Request::SnapshotRestore { .. } | Request::SnapshotKey { .. })
             && self.bridge.machine.render_stack_diagnostic.as_ref().is_some_and(|collector| !collector.finished()) {
             return Err("unfinished render stack diagnostic refuses checkpoint replacement".into());
         }

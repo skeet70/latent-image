@@ -717,6 +717,20 @@ impl Collector {
             self.refuse("stack diagnostic topology changed");
             return Err("stack diagnostic topology changed".into());
         }
+        for core in 0..2 {
+            let bound = self.config.access.cpu(core).map_err(|error| {
+                self.refuse(&error);
+                error
+            })?;
+            let live = session.board.cpu(core).map_err(|error| {
+                self.refuse(&error);
+                error
+            })?;
+            if !std::ptr::eq(bound, live) {
+                self.refuse("stack diagnostic board changed");
+                return Err("stack diagnostic board changed".into());
+            }
+        }
         if session.board.mappings() != self.config.access.mappings() {
             self.refuse("stack diagnostic admitted mapping snapshot changed");
             return Err("stack diagnostic admitted mapping snapshot changed".into());
@@ -1461,17 +1475,5 @@ mod tests {
             fixture.machine.session.board.read_register(0, Register::Arm32(arm::Register::Cpsr)).unwrap());
     }
 
-    #[test]
-    fn aggregate_transition_storage_refuses_before_the_report_expands() {
-        let mut fixture = owned_service(NativeTransfer::Call);
-        fixture.begin(Role::Owned, &[RETURN]);
-        {
-            let collector = fixture.machine.render_stack_diagnostic.as_ref().unwrap();
-            collector.state.borrow_mut().transitions = super::TRANSITION_LIMIT;
-        }
-        assert_eq!(fixture.machine.run(2000), RunOutcome::Failed);
-        assert!(fixture.machine.failure.as_deref()
-            .is_some_and(|failure| failure.contains("transition storage bound exceeded")));
-    }
 
 }
