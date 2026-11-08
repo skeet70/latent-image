@@ -19,6 +19,9 @@ pub struct Sim {
     interrupts: Cell<u32>,
     last_store_mask: Cell<u32>,
     store_log: RefCell<Vec<u32>>,
+    locks: Cell<u32>,
+    second_lock_ready: Cell<bool>,
+    deferred_task: Cell<u32>,
 }
 
 fn at(address: GuestAddress) -> s1::GuestAddress {
@@ -60,6 +63,9 @@ impl Sim {
             interrupts: Cell::new(0x40),
             last_store_mask: Cell::new(0),
             store_log: RefCell::new(Vec::new()),
+            locks: Cell::new(0),
+            second_lock_ready: Cell::new(false),
+            deferred_task: Cell::new(0),
         }
     }
 
@@ -142,6 +148,16 @@ impl Sim {
 
     pub fn last_store_mask(&self) -> u32 {
         self.last_store_mask.get()
+    }
+
+    pub fn suspend_until_second_lock(&self, task: Task) {
+        self.set_byte(task.state(), crate::layout::TaskState::SUSPENDED.bits());
+        self.second_lock_ready.set(true);
+        self.deferred_task.set(task.0 .0);
+    }
+
+    pub fn lock_count(&self) -> u32 {
+        self.locks.get()
     }
 
     pub fn clear_log(&self) {
@@ -328,6 +344,13 @@ impl Env for Sim {
         self.interrupts.set(saved | 0x80);
         let record = self.context(owner).scheduler_lock();
         s1::acquire(self, lock(record.0));
+        let count = self.locks.get() + 1;
+        self.locks.set(count);
+        if self.second_lock_ready.get() && count >= 2 {
+            self.second_lock_ready.set(false);
+            let task = Task(GuestAddress(self.deferred_task.get()));
+            self.set_byte(task.state(), crate::layout::TaskState::READY.bits());
+        }
         let result = body();
         s1::release(self, lock(record.0));
         self.interrupts.set(saved);

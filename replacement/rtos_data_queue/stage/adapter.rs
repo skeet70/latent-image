@@ -7,7 +7,7 @@ mod data_queue;
 use core::arch::{asm, global_asm};
 use core::ptr::{read_volatile, write_volatile};
 use data_queue::*;
-use data_queue::admission::{context_check, Entry, Facts, Params, Records, Request, Service};
+use data_queue::admission::{admit_precheck, Entry, Facts, Params, Records, Request, Service};
 use data_queue::create::{create_data_queue, delete_data_queue, DataQueueCreate, QueueAttributes};
 use data_queue::env::{
     Deadline, DispatchTarget, Env, QueueOrder, SavedInterrupts, SavedMask, Selection, Tick,
@@ -297,15 +297,15 @@ fn service(service: Service, id: i32, timeout: Option<i32>, payload: Option<u32>
     let records = Records {
         data_queues: count(),
     };
-    if let Err(status) = context_check(service, entry) {
-        return status.code();
-    }
-    let resolved = match resolve_data_queue(
-        EntryDomain::new(ENTRY),
+    let resolved = match admit_precheck(
+        service,
+        ENTRY,
+        entry,
         EncodedId(id),
-        records.data_queues,
+        records,
+        Params { timeout },
     ) {
-        Ok(resolved) => resolved,
+        Ok((resolved, _, _)) => resolved,
         Err(status) => return status.code(),
     };
     let config = resolved.domain.words().data_queue_config(resolved.slot);
@@ -324,7 +324,12 @@ fn service(service: Service, id: i32, timeout: Option<i32>, payload: Option<u32>
     };
     let payload = Payload(payload.unwrap_or(0));
     let out = OutWord(GuestAddress(out.unwrap_or(0)));
-    match service {
+    let blocking = matches!(
+        service,
+        Service::Send | Service::SendTimeout | Service::Receive | Service::ReceiveTimeout
+    );
+    let saved = if blocking { Some(cpu.mask_i()) } else { None };
+    let result = match service {
         Service::Send => match send(&cpu, EntryDomain::new(ENTRY), admitted.object, payload) {
             Ok(SendBlocking::Ready(outcome)) => outcome.code(),
             Ok(SendBlocking::Pending(pending)) => {
@@ -414,7 +419,11 @@ fn service(service: Service, id: i32, timeout: Option<i32>, payload: Option<u32>
             }
             Err(status) => status.code(),
         },
+    };
+    if let Some(saved) = saved {
+        cpu.restore_i(saved);
     }
+    result
 }
 
 #[no_mangle]

@@ -70,7 +70,8 @@ impl Ring {
         let tail = m.load_word(self.control.write());
         m.store_word(self.word(m, tail), payload.0);
         let tail = tail.wrapping_add(1);
-        m.store_word(self.control.write(), if capacity <= tail { 0 } else { tail });
+        let tail = if capacity <= tail { 0 } else { tail };
+        m.store_word(self.control.write(), tail);
         let count = m.load_word(self.control.count());
         if count < capacity {
             m.store_word(self.control.count(), count.wrapping_add(1));

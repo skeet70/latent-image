@@ -30,8 +30,8 @@ main = do
   loaderB <- required "--loader-b"
   ownedA <- required "--owned-a-bin"
   ownedB <- required "--owned-b-bin"
-  symbolsA <- required "--owned-a-symbols"
-  symbolsB <- required "--owned-b-symbols"
+  symbolsAPath <- required "--owned-a-symbols"
+  symbolsBPath <- required "--owned-b-symbols"
   resultsPath <- required "--results"
   reviewPath <- required "--review"
   facts <- either failH pure . parseFacts =<< B.readFile layoutPath
@@ -39,8 +39,10 @@ main = do
   loaderBBytes <- B.readFile loaderB
   ownedABytes <- B.readFile ownedA
   ownedBBytes <- B.readFile ownedB
-  baseA <- ownedBase symbolsA
-  baseB <- ownedBase symbolsB
+  symbolsA <- parseOwnedSymbols symbolsAPath
+  symbolsB <- parseOwnedSymbols symbolsBPath
+  baseA <- ownedBase symbolsAPath
+  baseB <- ownedBase symbolsBPath
   layoutDigest <- sha256File layoutPath
   loaderADigest <- sha256File loaderA
   loaderBDigest <- sha256File loaderB
@@ -56,8 +58,8 @@ main = do
       stockB = Image 0xd0000 loaderBBytes
       ownedAImage = Image baseA ownedABytes
       ownedBImage = Image baseB ownedBBytes
-  runA <- runDomain runner cacheRoot (takeDirectory resultsPath </> "domain-a") facts DomainA stockA ownedAImage
-  runB <- runDomain runner cacheRoot (takeDirectory resultsPath </> "domain-b") facts DomainB stockB ownedBImage
+  runA <- runDomain runner cacheRoot (takeDirectory resultsPath </> "domain-a") facts DomainA stockA ownedAImage symbolsA
+  runB <- runDomain runner cacheRoot (takeDirectory resultsPath </> "domain-b") facts DomainB stockB ownedBImage symbolsB
   let runs = runA ++ runB
       failures = [(domainLabel (runEntryDomain run), runName run, message) | run <- runs, message <- runDifferences run]
       caseValue run =
@@ -105,6 +107,18 @@ main = do
     putStrLn (domainLabel (runEntryDomain run) ++ " " ++ runName run ++ ": " ++ message)
   forM_ failures $ \(domain, name, message) -> putStrLn (domain ++ " " ++ name ++ ": " ++ message)
   unless (null failures) exitFailure
+
+parseOwnedSymbols :: FilePath -> IO [(Word32, Word32)]
+parseOwnedSymbols path = do
+  rows <- lines <$> readFile path
+  pure (concatMap row rows)
+  where
+    row line = case words line of
+      [a, z, kind, _] | kind == "T" || kind == "t" ->
+        case (parseWord32 a, parseWord32 z) of
+          (Just address, Just size) | size > 0 && address >= 0x40000 -> [(address, size)]
+          _ -> []
+      _ -> []
 
 ownedBase :: FilePath -> IO Word32
 ownedBase path = do

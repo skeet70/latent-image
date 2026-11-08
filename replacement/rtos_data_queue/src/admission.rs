@@ -107,29 +107,42 @@ pub fn context_check(service: Service, entry: Entry) -> Result<(), ObjectStatus>
     }
 }
 
-/// The stock order: context, class, index, timeout, existence, capacity.
-pub fn admit(request: &Request) -> Result<Admitted, ObjectStatus> {
-    let handler = matches!(
-        request.service,
-        Service::SendPollHandler | Service::ForceSendHandler
-    );
-    context_check(request.service, request.entry)?;
-    let object = resolve_data_queue(
-        EntryDomain::new(request.entry_domain),
-        request.id,
-        request.records.data_queues,
-    )?;
-    if request.service == Service::ForceSendHandler
-        && (request.id.0 <= 0 || request.id.0 as u32 > request.records.data_queues)
+/// The stock order before the creation record: context, class, index, timeout.
+pub fn admit_precheck(
+    service: Service,
+    entry_domain: Domain,
+    entry: Entry,
+    id: EncodedId,
+    records: Records,
+    params: Params,
+) -> Result<(DataQueueId, Timeout, bool), ObjectStatus> {
+    let handler = matches!(service, Service::SendPollHandler | Service::ForceSendHandler);
+    context_check(service, entry)?;
+    let object = resolve_data_queue(EntryDomain::new(entry_domain), id, records.data_queues)?;
+    if service == Service::ForceSendHandler
+        && (id.0 <= 0 || id.0 as u32 > records.data_queues)
     {
         return Err(ObjectStatus::InvalidIndex);
     }
-    let timeout = match request.service {
+    let timeout = match service {
         Service::SendTimeout | Service::ReceiveTimeout => {
-            Timeout::from_stock(request.params.timeout.ok_or(ObjectStatus::Param)?)?
+            Timeout::from_stock(params.timeout.ok_or(ObjectStatus::Param)?)?
         }
         _ => Timeout::Forever,
     };
+    Ok((object, timeout, handler))
+}
+
+/// The stock order: context, class, index, timeout, existence, capacity.
+pub fn admit(request: &Request) -> Result<Admitted, ObjectStatus> {
+    let (object, timeout, handler) = admit_precheck(
+        request.service,
+        request.entry_domain,
+        request.entry,
+        request.id,
+        request.records,
+        request.params,
+    )?;
     exists(request.facts)?;
     if matches!(
         request.service,

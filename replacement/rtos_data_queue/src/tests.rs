@@ -614,3 +614,83 @@ fn the_wait_states_match_the_stock_bits() {
     assert_eq!(TaskState::OBJECT_QUEUED.bits(), 0x10);
     assert_eq!(TaskState::OWNER_LOCK_QUEUED.bits(), 0x20);
 }
+
+#[test]
+fn force_send_on_a_capacity_one_ring_replaces_the_word() {
+    let sim = fixture();
+    install_queue(&sim, 1, 0, 1, RING);
+    let id = queue(1);
+    let out = OutWord(GuestAddress(0x4000_1000));
+    send(&sim, EntryDomain::new(Domain::A), id, Payload(1)).unwrap();
+    force_send(&sim, id, Payload(2), false).unwrap();
+    assert_eq!(sim.word(RING), 2);
+    let control = Domain::A.words().data_queue_control(id.slot);
+    assert_eq!(sim.word(control.read()), 0);
+    assert_eq!(sim.word(control.write()), 0);
+    assert_eq!(
+        receive(&sim, EntryDomain::new(Domain::A), id, out, Timeout::Poll),
+        Ok(ReceiveBlocking::Ready(WaitOutcome::Satisfied(Payload(2))))
+    );
+}
+
+#[test]
+fn force_send_at_the_last_slot_wraps_both_indices() {
+    let sim = fixture();
+    install_queue(&sim, 1, 0, 2, RING);
+    let id = queue(1);
+    let out = OutWord(GuestAddress(0x4000_1000));
+    send(&sim, EntryDomain::new(Domain::A), id, Payload(1)).unwrap();
+    send(&sim, EntryDomain::new(Domain::A), id, Payload(2)).unwrap();
+    receive(&sim, EntryDomain::new(Domain::A), id, out, Timeout::Poll).unwrap();
+    send(&sim, EntryDomain::new(Domain::A), id, Payload(3)).unwrap();
+    force_send(&sim, id, Payload(4), false).unwrap();
+    let control = Domain::A.words().data_queue_control(id.slot);
+    assert_eq!(sim.word(control.read()), 0);
+    assert_eq!(sim.word(control.write()), 0);
+    assert_eq!(
+        receive(&sim, EntryDomain::new(Domain::A), id, out, Timeout::Poll),
+        Ok(ReceiveBlocking::Ready(WaitOutcome::Satisfied(Payload(3))))
+    );
+    assert_eq!(
+        receive(&sim, EntryDomain::new(Domain::A), id, out, Timeout::Poll),
+        Ok(ReceiveBlocking::Ready(WaitOutcome::Satisfied(Payload(4))))
+    );
+}
+
+#[test]
+fn blocking_retries_until_the_caller_is_ready_under_the_lock() {
+    let sim = fixture();
+    install_queue(&sim, 1, 0, 1, RING);
+    let id = queue(1);
+    send(&sim, EntryDomain::new(Domain::A), id, Payload(1)).unwrap();
+    make_ready(&sim, 2, 3);
+    sim.set_running(Domain::A, task(2));
+    sim.suspend_until_second_lock(task(2));
+    let outcome = send(&sim, EntryDomain::new(Domain::A), id, Payload(2));
+    assert!(matches!(outcome, Ok(SendBlocking::Pending(_))), "{outcome:?}");
+    assert!(sim.lock_count() >= 2);
+    assert_eq!(sim.task_state(task(2)), SEND_STATE.bits());
+}
+
+#[test]
+fn resume_receive_restores_the_caller_mask() {
+    let sim = fixture();
+    install_queue(&sim, 1, 0, 1, RING);
+    let id = queue(1);
+    let out = OutWord(GuestAddress(0x4000_1000));
+    make_ready(&sim, 2, 3);
+    sim.set_running(Domain::A, task(2));
+    let pending = match receive(&sim, EntryDomain::new(Domain::A), id, out, Timeout::Forever) {
+        Ok(ReceiveBlocking::Pending(pending)) => pending,
+        other => panic!("{other:?}"),
+    };
+    sim.set_running(Domain::A, task(1));
+    send(&sim, EntryDomain::new(Domain::A), id, Payload(0x55)).unwrap();
+    sim.set_interrupts(0x40);
+    assert_eq!(
+        resume_receive(&sim, pending),
+        ReceiveResume::Completed(WaitOutcome::Satisfied(Payload(0x55)))
+    );
+    assert_eq!(sim.interrupts(), 0x40);
+    assert_eq!(sim.word(out.0), 0x55);
+}
