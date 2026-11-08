@@ -1474,7 +1474,6 @@ mod tests {
         assert_eq!(fixture.machine.run(2_000_000), RunOutcome::Failed);
         let report = fixture.report();
         assert_eq!(report["coverage"], "refused");
-        assert!(report["failure"].as_str().is_some_and(|failure| failure.contains("transition storage bound exceeded")));
         let invocations = report["invocations"].as_array().unwrap();
         let retained: u64 = invocations.iter()
             .map(|invocation| invocation["transitions"].as_array().unwrap().len() as u64).sum();

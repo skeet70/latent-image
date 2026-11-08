@@ -2005,16 +2005,22 @@ mod tests {
         }
         let begin = serde_json::from_value(begin).unwrap();
         server.handle(Request::ModalObservationBegin(begin)).unwrap();
-        for value in [1u32, 2, 3] {
+        let resident = u64::from(modal_lifetime_fixture::RUNTIME) + 0x800;
+        for index in 0..3u64 {
             server.bridge.machine.session.board.write_physical(
-                u64::from(modal_lifetime_fixture::RUNTIME) + 0x800, &value.to_le_bytes()).unwrap();
+                resident + index * 4, &(index as u32 + 1).to_le_bytes()).unwrap();
         }
-        let mut expected = serde_json::to_value(
-            server.bridge.machine.traces.modal_watch_state().unwrap()).unwrap();
-        assert_eq!(expected["record_count"], 3);
-        assert_eq!(expected["records"].as_array().unwrap().len(), 3);
-        assert_eq!(expected["records_sha256"].as_str().unwrap().len(), 64);
-        expected.as_object_mut().unwrap().insert("ok".into(), json!(true));
+        let expected_rows: Vec<Value> = (0..3u64).map(|index| {
+            let address = resident + index * 4;
+            json!({"source": "host-write", "physical": address, "address": address, "size": 4,
+                "core": null, "pc": null, "instructions": null, "tick": null})
+        }).collect();
+        let mut digest_input = Vec::new();
+        for row in &expected_rows {
+            digest_input.extend_from_slice(&serde_json::to_vec(row).unwrap());
+            digest_input.push(b'\n');
+        }
+        let expected_digest = crate::bridge::sha256(&digest_input);
         server.bridge.machine.failure = Some("synthetic terminal fault".into());
         let instructions = server.bridge.machine.instructions();
         let mut output = Vec::new();
@@ -2023,13 +2029,22 @@ mod tests {
         let responses: Vec<Value> = output.split(|byte| *byte == b'\n')
             .filter(|line| !line.is_empty()).map(|line| serde_json::from_slice(line).unwrap()).collect();
         assert_eq!(responses.len(), 3);
-        assert_eq!(responses[1], expected);
-        assert_eq!(responses[2], expected);
+        for response in &responses[1..] {
+            assert_eq!(response["ok"], true);
+            assert_eq!(response["enabled"], true);
+            assert_eq!(response["views"], "fixed");
+            assert_eq!(response["record_count"], 3);
+            assert_eq!(response["records_sha256"], expected_digest.as_str());
+            assert_eq!(response["records"], json!(expected_rows));
+        }
+        assert_eq!(responses[1], responses[2]);
         assert_eq!(server.bridge.machine.instructions(), instructions);
         let receipt: Value = serde_json::from_slice(
             &std::fs::read(server.output.join("emulator-session.json")).unwrap()).unwrap();
         assert_eq!(receipt["request_profile"]["kinds"]["watch-state"]["requests"], 2);
         assert_eq!(receipt["capture_evidence_error"], Value::Null);
+        assert_eq!(receipt["boundary"]["failure"], "synthetic terminal fault");
+        assert_eq!(receipt["boundary"]["instructions"], instructions);
         std::fs::remove_dir_all(&server.output).unwrap();
     }
 
