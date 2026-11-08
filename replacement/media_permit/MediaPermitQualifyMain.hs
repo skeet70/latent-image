@@ -4,26 +4,32 @@
 
 module Main where
 
-import Control.Exception (IOException, try)
+import Control.Exception (Exception, IOException, SomeException, catch, displayException, fromException, throwIO, try)
 import Control.Monad (forM_, unless, when)
 import qualified ArmElf as E
-import Data.Aeson (Value, encode, object, (.=))
+import Data.Aeson (Value (Null), encode, object, (.=))
 import Data.Bits (shiftL, shiftR, (.&.), (.|.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
 import qualified Data.ByteString.Lazy as BL
+import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
+import Data.List (intercalate, isInfixOf, isPrefixOf, isSuffixOf)
 import qualified Data.Map.Strict as M
 import Data.Word (Word32)
-import Emulation.NativeCase (loadCase)
+import Emulation.CachedNativeBatch (BatchReuse (..), CacheEscape, cachedObservedBatch)
+import Emulation.NativeCase (CaseId (..))
 import qualified Emulation.NativeObservation as N
 import Emulation.Sha256 (sha256, sha256Hex)
 import FujiAF.Host hiding (sha256)
+import FujiAF.JSON (encodeCanonical)
+import FujiModNativePaths (fujimodNativeCase)
 import Numeric (showHex)
 import StockInventory (FunctionDeclaration (..), FunctionDerivation (..), FunctionSize (..), GuestAddress (..), PremiseUse (..), ProgramCounter (..), checkedStockFunctions, requiredReturnPremises, returnPremiseLabel)
-import System.Directory (canonicalizePath, createDirectoryIfMissing, doesDirectoryExist, listDirectory, renameFile)
-import System.Environment (getArgs)
-import System.Exit (exitFailure)
-import System.FilePath ((</>))
+import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getCurrentDirectory, listDirectory, removeDirectoryRecursive, removeFile)
+import System.Environment (getArgs, getExecutablePath, lookupEnv)
+import System.Exit (ExitCode (..), exitWith)
+import System.FilePath ((</>), isAbsolute)
+import System.Posix.Process (executeFile)
 
 stockFunctionExtent :: FunctionDerivation -> (Word32, Int)
 stockFunctionExtent derivation =
@@ -374,6 +380,16 @@ scenarios =
       (\e -> e {eHandback = (10, 1), eFaults = 1})
   ]
 
+selectScenarios :: [String] -> Either String ([Scenario], Bool)
+selectScenarios [] = Right (scenarios, False)
+selectScenarios names =
+  let known = map scId scenarios
+      unknown = [name | name <- names, name `notElem` known]
+      selected = filter (\scenario -> scId scenario `elem` names) scenarios
+   in if null unknown
+        then Right (selected, length selected < length scenarios)
+        else Left ("unknown scenario " ++ intercalate ", " unknown ++ "; known scenarios: " ++ intercalate ", " known)
+
 
 data Side = Original | Candidate | DefectCandidate deriving (Eq, Show)
 
@@ -397,37 +413,73 @@ data Inputs = Inputs
   , inCountFunctions :: [(Word32, Int)]
   }
 
+newtype Prerequisite = Prerequisite String
+  deriving (Show)
+
+instance Exception Prerequisite
+
+prerequisite :: String -> IO a
+prerequisite = throwIO . Prerequisite
+
+stockImageSha256 :: String
+stockImageSha256 = "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"
+
+exceptionText :: IOException -> String
+exceptionText problem =
+  let text :: String
+      text = displayException problem
+      prefix :: String
+      prefix = "user error ("
+   in if prefix `isPrefixOf` text && ")" `isSuffixOf` text
+        then take (length text - length prefix - 1) (drop (length prefix) text)
+        else text
+
+readInputFile :: String -> FilePath -> IO B.ByteString
+readInputFile label path = do
+  present <- doesFileExist path
+  unless present (prerequisite ("missing " ++ label ++ " at " ++ path))
+  result <- try (B.readFile path)
+  either (\problem -> prerequisite ("cannot read " ++ label ++ " at " ++ path ++ ": " ++ exceptionText problem)) pure result
+
+readInput :: FilePath -> FilePath -> IO B.ByteString
+readInput root relative = readInputFile ("declared input " ++ relative) (root </> relative)
+
 loadInputs :: FilePath -> FilePath -> IO Inputs
 loadInputs build stockElf = do
-  candidate <- B.readFile (build </> "replacement/media_permit/media-permit-candidate.bin")
-  defect <- B.readFile (build </> "replacement/media_permit/media-permit-defect.bin")
-  low <- B.readFile (build </> "replacement/media_permit/services/low.bin")
-  sideA <- B.readFile (build </> "replacement/media_permit/services/side-a.bin")
-  fatal2 <- B.readFile (build </> "replacement/media_permit/services/fatal2.bin")
-  sideB <- B.readFile (build </> "replacement/media_permit/services/side-b.bin")
-  command <- B.readFile (build </> "replacement/media_permit/services/command.bin")
-  cancel <- B.readFile (build </> "replacement/media_permit/services/cancel.bin")
-  count <- B.readFile (build </> "replacement/media_permit/services/count.bin")
-  stock <- B.readFile stockElf
+  candidate <- readInput build "replacement/media_permit/media-permit-candidate.bin"
+  defect <- readInput build "replacement/media_permit/media-permit-defect.bin"
+  low <- readInput build "replacement/media_permit/services/low.bin"
+  sideA <- readInput build "replacement/media_permit/services/side-a.bin"
+  fatal2 <- readInput build "replacement/media_permit/services/fatal2.bin"
+  sideB <- readInput build "replacement/media_permit/services/side-b.bin"
+  command <- readInput build "replacement/media_permit/services/command.bin"
+  cancel <- readInput build "replacement/media_permit/services/cancel.bin"
+  count <- readInput build "replacement/media_permit/services/count.bin"
+  stock <- readInputFile "stock ELF" stockElf
   when (B.null candidate || B.length candidate `mod` 4 /= 0 || B.length candidate > fromIntegral candidateSize) $
-    ioError (userError "candidate bin is empty, unaligned or exceeds its region")
+    prerequisite "candidate bin is empty, unaligned or exceeds its region"
   when (B.null defect || B.length defect `mod` 4 /= 0 || B.length defect > fromIntegral candidateSize) $
-    ioError (userError "defect candidate bin is empty, unaligned or exceeds its region")
+    prerequisite "defect candidate bin is empty, unaligned or exceeds its region"
   when (B.length candidate > fromIntegral (exitAddress - candidateBase)) $
-    ioError (userError "candidate text reaches the case exit")
+    prerequisite "candidate text reaches the case exit"
   when (B.length defect > fromIntegral (exitAddress - candidateBase)) $
-    ioError (userError "defect text reaches the case exit")
+    prerequisite "defect text reaches the case exit"
   when (B.length low > fromIntegral lowSize) $
-    ioError (userError "low model exceeds its declared region")
+    prerequisite "low model exceeds its declared region"
   when (any B.null [sideA, fatal2, sideB, command, cancel, count]) $
-    ioError (userError "service model bin is empty")
+    prerequisite "service model bin is empty"
   when (B.length count > 0x80) $
-    ioError (userError "count model exceeds the stock subframe-count span")
-  unless (sha256Hex (sha256 (B.take 5185120 (B.drop 0xe8 stock))) == "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a") $
-    ioError (userError "stock ELF does not contain the pinned image-5 bytes")
+    prerequisite "count model exceeds the stock subframe-count span"
+  when (B.length stock < elfOffset (bitBase + bitSize)) $
+    prerequisite "stock ELF is shorter than the declared regions"
+  unless (sha256Hex (sha256 (B.take 5185120 (B.drop 0xe8 stock))) == stockImageSha256) $
+    prerequisite "stock ELF does not contain the pinned image-5 bytes"
   when (any (\(address, expected) -> stockWord stock address /= expected) stockEntries) $
-    ioError (userError "stock ELF does not carry the admitted entry words")
-  stockCode <- map stockFunctionExtent <$> either (ioError . userError) pure (checkedStockFunctions (B.take 5185120 (B.drop 0xe8 stock)))
+    prerequisite "stock ELF does not carry the admitted entry words"
+  stockCode <-
+    case checkedStockFunctions (B.take 5185120 (B.drop 0xe8 stock)) of
+      Left problem -> prerequisite ("stock inventory refused: " ++ problem)
+      Right functions -> pure (map stockFunctionExtent functions)
   models <- concat <$> mapM (linkedFunctions build) [LowModel, HandbackModel, FatalLogModel, FatalModel, CommandModel, CancelModel]
   countFunctions <- linkedFunctions build CountModel
   pure
@@ -450,14 +502,14 @@ data ServiceModel = LowModel | HandbackModel | FatalLogModel | FatalModel | Comm
 
 linkedFunctions :: FilePath -> ServiceModel -> IO [(Word32, Int)]
 linkedFunctions build model = do
-  bytes <- B.readFile (artifactPath ++ ".elf")
-  flat <- B.readFile (artifactPath ++ ".bin")
-  elf <- either (ioError . userError) pure (E.parseElf bytes)
+  bytes <- readInput build (artifactPath ++ ".elf")
+  flat <- readInput build (artifactPath ++ ".bin")
+  elf <- either (prerequisite . ("service model ELF refused: " ++)) pure (E.parseElf bytes)
   text <- case [section | section <- E.elfSections elf, E.sectionExecutable section, E.sectionAllocated section] of
     [section] -> pure section
-    _ -> ioError (userError "service model requires one executable section")
+    _ -> prerequisite ("service model " ++ artifact ++ " requires one executable section")
   let linked = B.take (fromIntegral (E.sectionSize text)) (B.drop (fromIntegral (E.sectionOffset text)) bytes)
-  unless (flat == linked) (ioError (userError "service model ELF and flat image differ"))
+  unless (flat == linked) (prerequisite ("service model " ++ artifact ++ " ELF and flat image differ"))
   mapM (one text (E.elfSymbols elf)) names
   where
     (artifact, names) = case model of
@@ -468,7 +520,7 @@ linkedFunctions build model = do
       CommandModel -> ("command", ["rb_mp_command"])
       CancelModel -> ("cancel", ["rb_mp_cancel"])
       CountModel -> ("count", ["rb_mp_subframe_count"])
-    artifactPath = build </> "replacement/media_permit/services" </> artifact
+    artifactPath = "replacement/media_permit/services" </> artifact
     one text symbols name =
       case [symbol | symbol <- symbols, E.symbolName symbol == name, E.symbolKind symbol == E.FunctionSymbol, E.symbolSize symbol > 0] of
         [symbol]
@@ -476,7 +528,7 @@ linkedFunctions build model = do
           , toInteger (E.symbolValue symbol) + toInteger (E.symbolSize symbol) <= toInteger (E.sectionAddress text) + toInteger (E.sectionSize text)
           , E.symbolValue symbol .&. 3 == 0
           , E.symbolSize symbol .&. 3 == 0 -> pure (E.symbolValue symbol, fromIntegral (E.symbolSize symbol))
-        _ -> ioError (userError ("missing unique bounded service-model function " ++ name))
+        _ -> prerequisite ("missing unique bounded service-model function " ++ name ++ " in " ++ artifact)
 
 stockEntries :: [(Word32, Word32)]
 stockEntries =
@@ -726,11 +778,37 @@ resultStatusLabel ResultInvalidCase = "invalid_case"
 resultStatusLabel ResultInvalidOutput = "invalid_output"
 resultStatusLabel ResultHostTimeout = "host_timeout"
 
+data Execution = Executed | Reused | FailedExecution
+  deriving (Eq, Show)
+
+executionLabel :: Execution -> String
+executionLabel Executed = "executed"
+executionLabel Reused = "reused"
+executionLabel FailedExecution = "failed"
+
 data Result = Result
   { resultStatus :: ResultStatus
   , resultProblems :: [String]
   , resultObservation :: Maybe N.NativeObservation
   , resultEffects :: Maybe Effects
+  , resultExecution :: Maybe Execution
+  , resultArtifact :: Maybe FilePath
+  }
+
+data CaseRun = CaseRun
+  { caseRunStatus :: ResultStatus
+  , caseRunProblems :: [String]
+  , caseRunObservation :: Maybe N.NativeObservation
+  , caseRunExecution :: Maybe Execution
+  }
+
+data Attempt = Attempt
+  { attemptRunner :: FilePath
+  , attemptCache :: FilePath
+  , attemptOut :: FilePath
+  , attemptExecuted :: IORef Int
+  , attemptReused :: IORef Int
+  , attemptFailed :: IORef Int
   }
 
 checkEffects :: Scenario -> N.NativeObservation -> [String]
@@ -843,95 +921,124 @@ checkAbi observation =
           | cpsr .&. 0x3ff /= 0x10 -> ["cpsr control bits expected 0x00000010, observed " ++ hex cpsr]
           | otherwise -> []
 
-runSide :: FilePath -> FilePath -> Inputs -> Scenario -> Side -> IO Result
-runSide runner root inputs scenario side =
+classifyCacheFailure :: String -> ResultStatus
+classifyCacheFailure message
+  | "host_timeout" `isInfixOf` message = ResultHostTimeout
+  | "invalid_case" `isInfixOf` message = ResultInvalidCase
+  | "admission failed" `isInfixOf` message = ResultInvalidCase
+  | "invalid batch" `isInfixOf` message = ResultInvalidCase
+  | "does not exist" `isInfixOf` message = ResultInvalidCase
+  | "must be a capped regular file" `isInfixOf` message = ResultInvalidCase
+  | otherwise = ResultInvalidOutput
+
+removeIfPresent :: FilePath -> IO ()
+removeIfPresent path = do
+  present <- doesFileExist path
+  when present (removeFile path)
+
+extractObservation :: FilePath -> FilePath -> IO ()
+extractObservation resultPath observationPath = do
+  bytes <- B.readFile resultPath
+  value <- jsonRead bytes
+  case get value "runner" of
+    Null -> ioError (userError "native result has no runner observation")
+    runner -> B.writeFile observationPath (encodeCanonical runner)
+
+executeCase :: Attempt -> FilePath -> String -> Value -> [(String, Word32, Word32, B.ByteString)] -> IO CaseRun
+executeCase attempt directory caseId value regions = do
+  createDirectoryIfMissing True directory
+  forM_ regions $ \(ident, _, _, bytes) ->
+    unless (B.null bytes) (B.writeFile (directory </> (ident ++ ".bin")) bytes)
+  BL.writeFile (directory </> "case.json") (encode value)
+  let batchPath = directory </> "batch.json"
+      resultPath = directory </> (caseId ++ ".native-result.json")
+      observationPath = directory </> "observation.json"
+  BL.writeFile batchPath (encode (object ["schema_version" .= (1 :: Int), "cases" .= [object ["id" .= caseId, "path" .= ("case.json" :: String)]]]))
+  outcome <- try (cachedObservedBatch (attemptCache attempt) (attemptRunner attempt) batchPath) :: IO (Either IOException (BatchReuse, [(CaseId, N.NativeObservation)]))
+  case outcome of
+    Left problem -> do
+      removeIfPresent batchPath
+      let message = exceptionText problem
+      B.writeFile (directory </> "diagnostic.txt") (BC.pack message)
+      modifyIORef' (attemptFailed attempt) (+ 1)
+      pure (CaseRun (classifyCacheFailure message) [message] Nothing (Just FailedExecution))
+    Right (reuse, observations) ->
+      case [observation | (ident, observation) <- observations, caseIdText ident == caseId] of
+        [] -> do
+          removeIfPresent batchPath
+          modifyIORef' (attemptFailed attempt) (+ 1)
+          pure (CaseRun ResultInvalidOutput ["native batch did not return " ++ caseId] Nothing (Just FailedExecution))
+        (observation : _) -> do
+          extracted <- try (extractObservation resultPath observationPath) :: IO (Either IOException ())
+          case extracted of
+            Left problem -> do
+              removeIfPresent batchPath
+              let message = "cannot retain the native response: " ++ exceptionText problem
+              B.writeFile (directory </> "diagnostic.txt") (BC.pack message)
+              modifyIORef' (attemptFailed attempt) (+ 1)
+              pure (CaseRun ResultInvalidOutput [message] Nothing (Just FailedExecution))
+            Right () -> do
+              removeIfPresent resultPath
+              removeIfPresent batchPath
+              let execution = case reuse of BatchExecuted -> Executed; BatchReused -> Reused
+              case execution of
+                Executed -> modifyIORef' (attemptExecuted attempt) (+ 1)
+                Reused -> modifyIORef' (attemptReused attempt) (+ 1)
+                FailedExecution -> pure ()
+              pure (CaseRun ResultPassed [] (Just observation) (Just execution))
+
+resultFromCaseRun :: Scenario -> FilePath -> CaseRun -> Result
+resultFromCaseRun scenario directory caseRun =
+  case caseRunObservation caseRun of
+    Nothing -> Result (caseRunStatus caseRun) (caseRunProblems caseRun) Nothing Nothing (caseRunExecution caseRun) (Just directory)
+    Just observation ->
+      let problems =
+            (if N.nativeStatus observation == N.Returned then [] else ["runner status " ++ N.runnerStatusLabel (N.nativeStatus observation)])
+              ++ checkAbi observation
+              ++ checkEffects scenario observation
+              ++ checkWrites observation
+          effects =
+            case (lookup (N.RegionId "globals") (N.nativeMemory observation), lookup (N.RegionId "frames") (N.nativeMemory observation)) of
+              (Just globals, Just frames) -> Just (observeEffects globals frames (N.nativeRegisters observation))
+              _ -> Nothing
+       in Result (if null problems then ResultPassed else ResultFailed) problems (Just observation) effects (caseRunExecution caseRun) (Just directory)
+
+runSide :: Attempt -> FilePath -> Inputs -> Scenario -> Side -> IO Result
+runSide attempt root inputs scenario side =
   case regionBytes inputs side scenario of
-    Left problem -> pure (Result ResultInvalidCase [problem] Nothing Nothing)
+    Left problem -> pure (Result ResultInvalidCase [problem] Nothing Nothing Nothing Nothing)
     Right regions -> do
-      let dir = root </> (scId scenario ++ "-" ++ sideLabel side)
-          value = caseJson inputs scenario side regions
-      createDirectoryIfMissing True dir
-      forM_ regions $ \(ident, _, _, bytes) ->
-        unless (B.null bytes) (B.writeFile (dir </> (ident ++ ".bin")) bytes)
-      BL.writeFile (dir </> "case.json") (encode value)
-      loaded <- try (loadCase (dir </> "case.json"))
-      case loaded of
-        Left (message :: IOException) -> pure (Result ResultInvalidCase [show message] Nothing Nothing)
-        Right (_, loadedRegions, wire, _) -> do
-          executable <- canonicalizePath runner
-          (timed, exit, out, err) <- runBounded 8000000 (8 * 1024 * 1024) executable [] wire
-          B.writeFile (dir </> "runner.stdout") out
-          B.writeFile (dir </> "runner.stderr") err
-          if timed
-            then pure (Result ResultHostTimeout [BC.unpack err] Nothing Nothing)
-            else do
-              parsed <- try (jsonRead out)
-              case parsed of
-                Left (message :: IOException) -> pure (Result ResultInvalidOutput [show message, BC.unpack err] Nothing Nothing)
-                Right runnerValue -> do
-                  case N.observeNative exit loadedRegions runnerValue of
-                    Left problem -> do
-                      BL.writeFile (dir </> "observation.json") (encode runnerValue)
-                      pure (Result ResultInvalidOutput [N.renderObservationError problem, BC.unpack err] Nothing Nothing)
-                    Right observation -> do
-                      renameFile (dir </> "runner.stdout") (dir </> "observation.json")
-                      let problems =
-                            (if N.nativeStatus observation == N.Returned then [] else ["runner status " ++ N.runnerStatusLabel (N.nativeStatus observation)])
-                              ++ checkAbi observation
-                              ++ checkEffects scenario observation
-                              ++ checkWrites observation
-                          effects =
-                            case (lookup (N.RegionId "globals") (N.nativeMemory observation), lookup (N.RegionId "frames") (N.nativeMemory observation)) of
-                              (Just globals, Just frames) -> Just (observeEffects globals frames (N.nativeRegisters observation))
-                              _ -> Nothing
-                      pure (Result (if null problems then ResultPassed else ResultFailed) problems (Just observation) effects)
+      let directory = root </> (scId scenario ++ "-" ++ sideLabel side)
+          caseId = scId scenario ++ "-" ++ sideLabel side
+      caseRun <- executeCase attempt directory caseId (caseJson inputs scenario side regions) regions
+      pure (resultFromCaseRun scenario directory caseRun)
 
 -- The retired resolver body is outside the candidate message case's declared code.
-runForbiddenBody :: FilePath -> FilePath -> Inputs -> Scenario -> IO Result
-runForbiddenBody runner root inputs scenario =
+runForbiddenBody :: Attempt -> Inputs -> Scenario -> IO Result
+runForbiddenBody attempt inputs scenario =
   case regionBytes inputs Candidate control of
-    Left problem -> pure (Result ResultInvalidCase [problem] Nothing Nothing)
+    Left problem -> pure (Result ResultInvalidCase [problem] Nothing Nothing Nothing Nothing)
     Right regions -> do
-      let dir = root </> "forbidden-body"
-          value = caseJsonAt inputs control Candidate 0x00900c00 regions
-      createDirectoryIfMissing True dir
-      forM_ regions $ \(ident, _, _, bytes) ->
-        unless (B.null bytes) (B.writeFile (dir </> (ident ++ ".bin")) bytes)
-      BL.writeFile (dir </> "case.json") (encode value)
-      loaded <- try (loadCase (dir </> "case.json"))
-      case loaded of
-        Left (message :: IOException) -> pure (Result ResultInvalidCase [show message] Nothing Nothing)
-        Right (_, loadedRegions, wire, _) -> do
-          executable <- canonicalizePath runner
-          (timed, exit, out, err) <- runBounded 8000000 (8 * 1024 * 1024) executable [] wire
-          B.writeFile (dir </> "runner.stdout") out
-          B.writeFile (dir </> "runner.stderr") err
-          if timed
-            then pure (Result ResultHostTimeout [BC.unpack err] Nothing Nothing)
-            else do
-              parsed <- try (jsonRead out)
-              case parsed of
-                Left (message :: IOException) -> pure (Result ResultInvalidOutput [show message, BC.unpack err] Nothing Nothing)
-                Right runnerValue -> do
-                  case N.observeNative exit loadedRegions runnerValue of
-                    Left problem -> do
-                      BL.writeFile (dir </> "observation.json") (encode runnerValue)
-                      pure (Result ResultInvalidOutput [N.renderObservationError problem, BC.unpack err] Nothing Nothing)
-                    Right observation -> do
-                      renameFile (dir </> "runner.stdout") (dir </> "observation.json")
-                      let pc = M.lookup N.Pc (N.nativeRegisters observation)
-                          refused =
-                            N.nativeStatus observation == N.UnknownCall
-                              && pc == Just 0x00e7716c
-                              && N.nativeProvenance observation == N.Complete (N.ProvenanceTotal 0) []
-                      pure
-                            ( Result
-                                (if refused then ResultPassed else ResultFailed)
-                                [ "forbidden-body status " ++ N.runnerStatusLabel (N.nativeStatus observation) ++ " at " ++ maybe "missing pc" hex pc
-                                ]
-                                (Just observation)
-                                Nothing
-                            )
+      let directory = attemptOut attempt </> "forbidden-body"
+          caseId = "forbidden-body-candidate"
+      caseRun <- executeCase attempt directory caseId (caseJsonAt inputs control Candidate 0x00900c00 regions) regions
+      case caseRunObservation caseRun of
+        Nothing -> pure (Result (caseRunStatus caseRun) (caseRunProblems caseRun) Nothing Nothing (caseRunExecution caseRun) (Just directory))
+        Just observation ->
+          let pc = M.lookup N.Pc (N.nativeRegisters observation)
+              refused =
+                N.nativeStatus observation == N.UnknownCall
+                  && pc == Just 0x00e7716c
+                  && N.nativeProvenance observation == N.Complete (N.ProvenanceTotal 0) []
+           in pure
+                ( Result
+                    (if refused then ResultPassed else ResultFailed)
+                    ["forbidden-body status " ++ N.runnerStatusLabel (N.nativeStatus observation) ++ " at " ++ maybe "missing pc" hex pc]
+                    (Just observation)
+                    Nothing
+                    (caseRunExecution caseRun)
+                    (Just directory)
+                )
   where
     control = scenario {scId = "forbidden-body"}
 
@@ -942,6 +1049,8 @@ data Control = Control
   { controlName :: String
   , controlStatus :: String
   , controlProblems :: [String]
+  , controlExecution :: Maybe Execution
+  , controlArtifact :: Maybe FilePath
   }
 
 controlJson :: Control -> Value
@@ -950,6 +1059,8 @@ controlJson control =
     [ "name" .= controlName control
     , "status" .= controlStatus control
     , "problems" .= controlProblems control
+    , "execution" .= fmap executionLabel (controlExecution control)
+    , "artifact" .= controlArtifact control
     ]
 
 expectedDefect :: Scenario -> Effects
@@ -968,13 +1079,22 @@ faultWitness scenario result =
           && effects == expectedDefect scenario
       _ -> False
 
-runBoundaryControls :: FilePath -> FilePath -> Inputs -> IO [Control]
-runBoundaryControls runner root inputs = do
+controlStatusFor :: Bool -> Result -> String
+controlStatusFor refused result
+  | refused = "refused"
+  | otherwise = case resultStatus result of
+      ResultInvalidCase -> "invalid_case"
+      ResultHostTimeout -> "host_timeout"
+      ResultInvalidOutput -> "invalid_output"
+      _ -> "accepted"
+
+runBoundaryControls :: Attempt -> Inputs -> IO [Control]
+runBoundaryControls attempt inputs = do
   let scenario = scenarioById "primary-slot0"
       altered words' = inputs {inCandidate = B.concat (map u32le words') <> B.drop (4 * length words') (inCandidate inputs)}
       isaInputs = altered [0xe710f110]
-  abi <- runSide runner (root </> "abi-control") (altered [0xe3a04000, 0xe3a00000, 0xe12fff1e]) scenario Candidate
-  isa <- runSide runner (root </> "isa-control") isaInputs scenario Candidate
+  abi <- runSide attempt (attemptOut attempt </> "abi-control") (altered [0xe3a04000, 0xe3a00000, 0xe12fff1e]) scenario Candidate
+  isa <- runSide attempt (attemptOut attempt </> "isa-control") isaInputs scenario Candidate
   let abiRefused = case resultObservation abi of
         Just observation ->
           resultStatus abi == ResultFailed
@@ -999,88 +1119,350 @@ runBoundaryControls runner root inputs = do
               | (ident, _, size, bytes) <- regions
               ]
         _ -> False
-      control name refused result = Control name (if refused then "refused" else "accepted") (resultProblems result)
+      control name refused result = Control name (controlStatusFor refused result) (resultProblems result) (resultExecution result) (resultArtifact result)
   pure [control "callee-saved-register" abiRefused abi, control "unsupported-isa-before-effect" isaRefused isa]
 
-report :: [(Scenario, Result, Result)] -> Scenario -> Result -> Result -> [Control] -> Value
-report results faultScenario fault forbidden boundaryControls =
+data ExecutionCounts = ExecutionCounts
+  { countExecuted :: Int
+  , countReused :: Int
+  , countFailed :: Int
+  }
+
+headOr :: String -> [String] -> String
+headOr fallback [] = fallback
+headOr _ (value : _) = value
+
+report :: Int -> Bool -> ExecutionCounts -> Maybe FilePath -> [(Scenario, Result, Result)] -> Scenario -> Result -> Result -> [Control] -> Value
+report expectedPairs subset counts cachePath results faultScenario fault forbidden boundaryControls =
   object
     [ "schema_version" .= (1 :: Int)
     , "profile" .= ("media-permit" :: String)
+    , "subset" .= subset
     , "cases" .=
         [ object
             [ "id" .= scId scenario
             , "model" .= show (scExpect scenario)
             , "original" .= resultJson original
             , "candidate" .= resultJson candidate
-            , "status" .= ((if resultStatus original == ResultPassed && resultStatus candidate == ResultPassed then "passed" else "failed") :: String)
+            , "status" .= pairStatus original candidate
             ]
         | (scenario, original, candidate) <- results
         ]
-    , "controls" .=
-        ( [ controlJson (Control "defect-candidate" (if faultWitness faultScenario fault then "refused" else "accepted") (resultProblems fault))
-          , controlJson (Control "forbidden-body" (if forbiddenWitness forbidden then "refused" else "accepted") (resultProblems forbidden))
+    , "controls" .= map controlJson allControls
+    , "execution" .=
+        object
+          [ "executed" .= countExecuted counts
+          , "reused" .= countReused counts
+          , "failed" .= countFailed counts
+          , "cache" .= cachePath
           ]
-            ++ map controlJson boundaryControls
-        )
-    , "status" .= ((if qualified then "qualified" else "failed") :: String)
+    , "status" .= status
+    , "problems" .= problems
     ]
   where
+    defectControl =
+      Control
+        "defect-candidate"
+        (controlStatusFor (faultWitness faultScenario fault) fault)
+        (resultProblems fault)
+        (resultExecution fault)
+        (resultArtifact fault)
+    forbiddenControl =
+      Control
+        "forbidden-body"
+        (controlStatusFor (forbiddenWitness forbidden) forbidden)
+        (resultProblems forbidden)
+        (resultExecution forbidden)
+        (resultArtifact forbidden)
+    allControls = defectControl : forbiddenControl : boundaryControls
+    allResults = [result | (_, original, candidate) <- results, result <- [original, candidate]] ++ [fault, forbidden]
+    qualified :: Bool
     qualified =
-      all (\(_, original, candidate) -> resultStatus original == ResultPassed && resultStatus candidate == ResultPassed) results
+      length results == expectedPairs
+        && all (\(_, original, candidate) -> resultStatus original == ResultPassed && resultStatus candidate == ResultPassed) results
         && faultWitness faultScenario fault
         && forbiddenWitness forbidden
         && all ((== "refused") . controlStatus) boundaryControls
-    resultJson result = object ["status" .= resultStatusLabel (resultStatus result), "problems" .= resultProblems result]
+    status :: String
+    status
+      | any ((== ResultInvalidCase) . resultStatus) allResults || any ((== "invalid_case") . controlStatus) allControls = "prerequisite"
+      | any ((`elem` [ResultHostTimeout, ResultInvalidOutput]) . resultStatus) allResults
+          || any ((`elem` ["host_timeout", "invalid_output"]) . controlStatus) allControls = "infrastructure"
+      | qualified = "qualified"
+      | otherwise = "failed"
+    problems :: [String]
+    problems = caseProblems ++ controlProblemsList
+    caseProblems :: [String]
+    caseProblems =
+      [ scId scenario ++ "/" ++ sideLabel side ++ ": " ++ decisiveProblem result
+      | (scenario, original, candidate) <- results
+      , (side, result) <- [(Original, original), (Candidate, candidate)]
+      , resultStatus result /= ResultPassed
+      ]
+    controlProblemsList :: [String]
+    controlProblemsList =
+      [ "control " ++ controlName control ++ ": " ++ headOr (controlStatus control) (controlProblems control)
+          ++ artifactSuffix (controlArtifact control)
+      | control <- allControls
+      , controlStatus control /= "refused"
+      ]
+    decisiveProblem :: Result -> String
+    decisiveProblem result =
+      headOr (resultStatusLabel (resultStatus result)) (resultProblems result) ++ artifactSuffix (resultArtifact result)
+    artifactSuffix :: Maybe FilePath -> String
+    artifactSuffix = maybe "" (\directory -> " (artifact " ++ directory ++ ")")
+    pairStatus :: Result -> Result -> String
+    pairStatus original candidate
+      | resultStatus original == ResultPassed && resultStatus candidate == ResultPassed = "passed"
+      | any ((== ResultInvalidCase) . resultStatus) [original, candidate] = "invalid_case"
+      | any ((== ResultHostTimeout) . resultStatus) [original, candidate] = "host_timeout"
+      | any ((== ResultInvalidOutput) . resultStatus) [original, candidate] = "invalid_output"
+      | otherwise = "failed"
+    resultJson :: Result -> Value
+    resultJson result =
+      object
+        [ "status" .= resultStatusLabel (resultStatus result)
+        , "problems" .= resultProblems result
+        , "execution" .= fmap executionLabel (resultExecution result)
+        , "artifact" .= resultArtifact result
+        ]
+
+data Options = Options
+  { optionRunner :: Maybe FilePath
+  , optionBuildRoot :: Maybe FilePath
+  , optionStockElf :: Maybe FilePath
+  , optionOut :: FilePath
+  , optionCache :: Maybe FilePath
+  , optionScenarios :: [String]
+  }
+
+data Command = Inventory FilePath | Qualify Options | Help
+
+usage :: String
+usage =
+  unlines
+    [ "usage: media-permit-qualification [--runner PATH] [--build-root DIR] [--stock-elf PATH]"
+    , "       --out DIR [--cache DIR] [--scenario NAME]..."
+    , "       media-permit-qualification --inventory-only STOCK_ELF"
+    ]
+
+parseCommand :: [String] -> Either String Command
+parseCommand arguments
+  | "--help" `elem` arguments || "-h" `elem` arguments = Right Help
+  | otherwise = case arguments of
+      ["--inventory-only", stockElf] -> Right (Inventory stockElf)
+      _ -> do
+        (options, positionals) <- collect arguments (Options Nothing Nothing Nothing "" Nothing [])
+        unless (null positionals) (Left ("unexpected positional argument " ++ headOr "argument" positionals ++ "; use --out, --cache and --scenario"))
+        unless (not (null (optionOut options))) (Left "--out DIR is required")
+        pure (Qualify options)
+  where
+    collect [] options = Right (options, [])
+    collect (flag : value : rest) options
+      | flag `elem` valueFlags = collect rest (setOption flag value options)
+    collect (flag : []) _
+      | flag `elem` valueFlags = Left (flag ++ " needs a value")
+    collect (flag : _) _
+      | flag `elem` valueFlags = Left (flag ++ " needs a value")
+    collect ("--inventory-only" : _) _ = Left "--inventory-only must be used alone"
+    collect (value : rest) options = do
+      (final, positionals) <- collect rest options
+      pure (final, value : positionals)
+    valueFlags = ["--runner", "--build-root", "--stock-elf", "--out", "--cache", "--scenario"]
+    setOption flag value options = case flag of
+      "--runner" -> options {optionRunner = Just value}
+      "--build-root" -> options {optionBuildRoot = Just value}
+      "--stock-elf" -> options {optionStockElf = Just value}
+      "--out" -> options {optionOut = value}
+      "--cache" -> options {optionCache = Just value}
+      "--scenario" -> options {optionScenarios = optionScenarios options ++ [value]}
+      _ -> options
+
+data Paths = Paths
+  { pathRunner :: FilePath
+  , pathBuildRoot :: FilePath
+  , pathStockElf :: FilePath
+  , pathOut :: FilePath
+  , pathCache :: Maybe FilePath
+  }
+
+resolvePaths :: Options -> IO Paths
+resolvePaths options = do
+  workspace <- lookupEnv "BUILD_WORKSPACE_DIRECTORY" >>= maybe getCurrentDirectory pure
+  buildRoot <- case optionBuildRoot options of
+    Just path -> pure (resolve workspace path)
+    Nothing -> do
+      executable <- getExecutablePath
+      let runfiles = executable ++ ".runfiles/_main"
+      present <- doesDirectoryExist runfiles
+      pure (if present then runfiles else workspace </> "bazel-bin")
+  let runner = resolve workspace (maybe fujimodNativeCase id (optionRunner options))
+      stockElf = resolve workspace (maybe "private-data/analysis/x-m1-1.50/lz/id5.elf" id (optionStockElf options))
+      out = resolve workspace (optionOut options)
+      cache = fmap (resolve workspace) (optionCache options)
+  pure Paths {pathRunner = runner, pathBuildRoot = buildRoot, pathStockElf = stockElf, pathOut = out, pathCache = cache}
+  where
+    resolve root path = if isAbsolute path then path else root </> path
+
+acquireSlot :: [String] -> IO ()
+acquireSlot originalArguments = do
+  inside <- lookupEnv "XM1_EMULATOR_SLOT"
+  case inside of
+    Just _ -> pure ()
+    Nothing -> do
+      executable <- getExecutablePath
+      let wrapper = executable ++ ".runfiles/_main/emulation/emulator-slot"
+      present <- doesFileExist wrapper
+      if present
+        then executeFile wrapper False (executable : originalArguments) Nothing
+        else prerequisite ("emulator slot wrapper missing at " ++ wrapper ++ "; run through bazel run or set XM1_EMULATOR_SLOT")
+
+writeResults :: FilePath -> Value -> IO ()
+writeResults out value = BL.writeFile (out </> "results.json") (encode value)
+
+prerequisiteReport :: Maybe FilePath -> String -> Value
+prerequisiteReport cachePath message =
+  object
+    [ "schema_version" .= (1 :: Int)
+    , "profile" .= ("media-permit" :: String)
+    , "subset" .= False
+    , "cases" .= ([] :: [Value])
+    , "controls" .= ([] :: [Value])
+    , "execution" .= object ["executed" .= (0 :: Int), "reused" .= (0 :: Int), "failed" .= (0 :: Int), "cache" .= cachePath]
+    , "status" .= ("prerequisite" :: String)
+    , "problems" .= [message]
+    ]
+
+cleanupEphemeral :: Options -> FilePath -> IO ()
+cleanupEphemeral options cachePath =
+  case optionCache options of
+    Just _ -> pure ()
+    Nothing -> do
+      present <- doesDirectoryExist cachePath
+      when present (removeDirectoryRecursive cachePath)
+
+terminalMessage :: FilePath -> [Scenario] -> Bool -> ExecutionCounts -> Value -> String
+terminalMessage out selected subset counts output =
+  case str (get output "status") of
+    "qualified" ->
+      "media-permit: qualified ("
+        ++ scope
+        ++ "; "
+        ++ show (length selected)
+        ++ " pair(s), 4 controls refused; executed="
+        ++ show (countExecuted counts)
+        ++ " reused="
+        ++ show (countReused counts)
+        ++ "); results="
+        ++ results
+    "failed" -> "media-permit: failed: " ++ firstProblem ++ "; results=" ++ results
+    "prerequisite" -> "media-permit: prerequisite: " ++ firstProblem ++ "; results=" ++ results
+    "infrastructure" -> "media-permit: infrastructure: " ++ firstProblem ++ "; results=" ++ results
+    other -> "media-permit: " ++ other ++ "; results=" ++ results
+  where
+    results = out </> "results.json"
+    scope = if subset then "subset " ++ show (length selected) ++ "/" ++ show (length scenarios) else "full"
+    firstProblem = headOr "see results.json" (map str (list (get output "problems")))
+
+runQualification :: Options -> IO (ExitCode, String)
+runQualification options = do
+  paths <- resolvePaths options
+  present <- doesDirectoryExist (pathOut paths)
+  stale <- if present then listDirectory (pathOut paths) else pure []
+  unless (null stale) (prerequisite ("output directory must be fresh: " ++ pathOut paths))
+  createDirectoryIfMissing True (pathOut paths)
+  let cachePath = maybe (pathOut paths </> ".cache") id (pathCache paths)
+  loaded <- try (loadInputs (pathBuildRoot paths) (pathStockElf paths)) :: IO (Either Prerequisite Inputs)
+  case loaded of
+    Left (Prerequisite message) -> do
+      writeResults (pathOut paths) (prerequisiteReport (pathCache paths) message)
+      pure (ExitFailure 2, "media-permit: prerequisite: " ++ message)
+    Right inputs ->
+      case selectScenarios (optionScenarios options) of
+        Left message -> do
+          writeResults (pathOut paths) (prerequisiteReport (pathCache paths) message)
+          pure (ExitFailure 2, "media-permit: prerequisite: " ++ message)
+        Right (selected, subset) -> do
+          executed <- newIORef 0
+          reused <- newIORef 0
+          failed <- newIORef 0
+          let attempt =
+                Attempt
+                  { attemptRunner = pathRunner paths
+                  , attemptCache = cachePath
+                  , attemptOut = pathOut paths
+                  , attemptExecuted = executed
+                  , attemptReused = reused
+                  , attemptFailed = failed
+                  }
+          results <- runCases attempt inputs selected []
+          let faultScenario = scenarioById "kind0-zero"
+              forbiddenScenario = scenarioById "message-known"
+              faultRoot = pathOut paths </> "defect"
+          createDirectoryIfMissing True faultRoot
+          fault <- runSide attempt faultRoot inputs faultScenario DefectCandidate
+          forbidden <- runForbiddenBody attempt inputs forbiddenScenario
+          boundaryControls <- runBoundaryControls attempt inputs
+          counts <- ExecutionCounts <$> readIORef executed <*> readIORef reused <*> readIORef failed
+          let output = report (length selected) subset counts (pathCache paths) results faultScenario fault forbidden boundaryControls
+              code = case str (get output "status") of
+                "qualified" -> ExitSuccess
+                "prerequisite" -> ExitFailure 2
+                "infrastructure" -> ExitFailure 75
+                _ -> ExitFailure 1
+          writeResults (pathOut paths) output
+          cleanupEphemeral options cachePath `catch` \(_ :: IOException) -> pure ()
+          pure (code, terminalMessage (pathOut paths) selected subset counts output)
+
+runInventory :: FilePath -> IO ()
+runInventory stockElf = do
+  stock <- readInputFile "stock ELF" stockElf
+  unless (sha256Hex (sha256 (B.take 5185120 (B.drop 0xe8 stock))) == stockImageSha256) $
+    prerequisite "stock ELF does not contain the pinned image-5 bytes"
+  functions <-
+    case checkedStockFunctions (B.take 5185120 (B.drop 0xe8 stock)) of
+      Left problem -> prerequisite ("stock inventory refused: " ++ problem)
+      Right values -> pure values
+  jsonPrint
+    ( object
+        [ "functions" .= map inventoryFunction functions
+        , "required_premises" .= map returnPremiseLabel requiredReturnPremises
+        ]
+    )
 
 main :: IO ()
 main = do
   arguments <- getArgs
-  case arguments of
-    ["--inventory-only", stockElf] -> do
-      stock <- B.readFile stockElf
-      unless (sha256Hex (sha256 (B.take 5185120 (B.drop 0xe8 stock))) == "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a") $
-        ioError (userError "stock ELF does not contain the pinned image-5 bytes")
-      functions <- either (ioError . userError) pure (checkedStockFunctions (B.take 5185120 (B.drop 0xe8 stock)))
-      jsonPrint (object
-        [ "functions" .= map inventoryFunction functions
-        , "required_premises" .= map returnPremiseLabel requiredReturnPremises
-        ])
-    [runner, build, out, stockElf] -> run runner build out stockElf
-    _ -> putStrLn "usage: media-permit-qualification RUNNER BAZEL_BIN OUT_DIR STOCK_ELF" >> exitFailure
+  case parseCommand arguments of
+    Left message -> putStrLn ("media-permit: prerequisite: " ++ message) >> exitWith (ExitFailure 2)
+    Right Help -> putStr usage >> exitWith ExitSuccess
+    Right (Inventory stockElf) -> do
+      outcome <- try (runInventory stockElf) :: IO (Either SomeException ())
+      case outcome of
+        Right () -> pure ()
+        Left problem -> handleException problem
+    Right (Qualify options) -> do
+      outcome <- try (acquireSlot arguments >> runQualification options) :: IO (Either SomeException (ExitCode, String))
+      case outcome of
+        Right (code, message) -> putStrLn message >> exitWith code
+        Left problem -> handleException problem
+  where
+    handleException (problem :: SomeException) =
+      case (fromException problem :: Maybe Prerequisite) of
+        Just (Prerequisite message) -> putStrLn ("media-permit: prerequisite: " ++ message) >> exitWith (ExitFailure 2)
+        Nothing ->
+          case (fromException problem :: Maybe CacheEscape) of
+            Just escape -> putStrLn ("media-permit: prerequisite: cache refused: " ++ show escape) >> exitWith (ExitFailure 2)
+            Nothing ->
+              case (fromException problem :: Maybe IOException) of
+                Just problem' -> putStrLn ("media-permit: prerequisite: " ++ exceptionText problem') >> exitWith (ExitFailure 2)
+                Nothing -> throwIO problem
 
-runCases :: FilePath -> FilePath -> Inputs -> [Scenario] -> [(Scenario, Result, Result)] -> IO [(Scenario, Result, Result)]
-runCases _ _ _ [] done = pure (reverse done)
-runCases runner out inputs (scenario : rest) done = do
-  original <- runSide runner out inputs scenario Original
-  candidate <- runSide runner out inputs scenario Candidate
+runCases :: Attempt -> Inputs -> [Scenario] -> [(Scenario, Result, Result)] -> IO [(Scenario, Result, Result)]
+runCases _ _ [] done = pure (reverse done)
+runCases attempt inputs (scenario : rest) done = do
+  original <- runSide attempt (attemptOut attempt) inputs scenario Original
+  candidate <- runSide attempt (attemptOut attempt) inputs scenario Candidate
   let entry = (scenario, original, candidate)
       passed = resultStatus original == ResultPassed && resultStatus candidate == ResultPassed
-  if passed then runCases runner out inputs rest (entry : done) else pure (reverse (entry : done))
-
-run :: FilePath -> FilePath -> FilePath -> FilePath -> IO ()
-run runner build out stockElf = do
-  inputs <- loadInputs build stockElf
-  present <- doesDirectoryExist out
-  stale <- if present then listDirectory out else pure []
-  unless (null stale) (ioError (userError "output directory must be fresh"))
-  createDirectoryIfMissing True out
-  results <- runCases runner out inputs scenarios []
-  let faultScenario = scenarioById "kind0-zero"
-      forbiddenScenario = scenarioById "message-known"
-      faultRoot = out </> "defect"
-  createDirectoryIfMissing True faultRoot
-  fault <- runSide runner faultRoot inputs faultScenario DefectCandidate
-  forbidden <- runForbiddenBody runner out inputs forbiddenScenario
-  boundaryControls <- runBoundaryControls runner out inputs
-  let output = report results faultScenario fault forbidden boundaryControls
-      qualified =
-        length results == length scenarios
-          && all (\(_, original, candidate) -> resultStatus original == ResultPassed && resultStatus candidate == ResultPassed) results
-          && faultWitness faultScenario fault
-          && forbiddenWitness forbidden
-          && all ((== "refused") . controlStatus) boundaryControls
-  BL.writeFile (out </> "results.json") (encode output)
-  let passed = length [() | (_, original, candidate) <- results, resultStatus original == ResultPassed, resultStatus candidate == ResultPassed]
-  putStrLn ("media permit: " ++ show passed ++ "/" ++ show (length results) ++ " differential cases passed")
-  unless qualified exitFailure
+  if passed then runCases attempt inputs rest (entry : done) else pure (reverse (entry : done))
