@@ -5,7 +5,7 @@
 module Main (main) where
 
 import Control.Exception (SomeException, try)
-import Control.Monad (forM, unless)
+import Control.Monad (forM, forM_, unless)
 import Data.Bits (complement, (.&.))
 import qualified Data.ByteString as B
 import Data.Char (isAsciiLower, isDigit)
@@ -29,17 +29,19 @@ import Emulation.NativeObservation
   )
 import Replacement.RtosOwnFirst.Artifact (LinkedDomain (..))
 import Replacement.RtosOwnFirst.Assembly
+import Replacement.RtosOwnFirst.Command
 import Replacement.RtosOwnFirst.Controls
 import Replacement.RtosOwnFirst.Generate
 import Replacement.RtosOwnFirst.Generated
 import Replacement.RtosOwnFirst.Oracle
 import Replacement.RtosOwnFirst.Regions hiding (GuestAddress (..))
+import Replacement.RtosOwnFirst.Replay
 import Replacement.RtosOwnFirst.Shrink
 import Replacement.RtosOwnFirst.Verdict
-import System.Directory (removeDirectoryRecursive)
+import System.Directory (copyFile, createDirectoryIfMissing, listDirectory, removeDirectoryRecursive)
 import System.Environment (getArgs, getEnv)
 import System.Exit (ExitCode (..), exitFailure)
-import System.FilePath ((</>))
+import System.FilePath (takeExtension, (</>))
 import System.IO (BufferMode (..), hSetBuffering, stdout)
 
 check :: String -> Bool -> IO Bool
@@ -88,9 +90,15 @@ runFrom :: [(Register, Word32)] -> B.ByteString -> [WriteEvent] -> Either String
 runFrom overrides callerFrame writes = runOf DomainA (observation overrides callerFrame [(eventAddress e, eventWidth e) | e <- writes]) writes
 
 firstGeneratedRow :: Row
-firstGeneratedRow = case generateRows (GenerationSeed 1) (GenerationCount 1) of
+firstGeneratedRow = case generateRows (GenerationSeed 1) (generationCount 1) of
   row : _ -> row
   [] -> error "generateRows returned no row"
+
+generationCount :: Int -> GenerationCount
+generationCount count = either error id (mkGenerationCount count)
+
+shrinkBudget :: Int -> ShrinkBudget
+shrinkBudget budget = either error id (mkShrinkBudget budget)
 
 pureChecks :: DomainTable -> [IO Bool]
 pureChecks tableA =
@@ -152,9 +160,9 @@ pureChecks tableA =
       , check "one mutant per slot and two equivalents" (sort (map controlSlot mutants) == slots && length equivalents == 2 && all ((== MustFail) . controlExpectation) mutants && all ((== MustPass) . controlExpectation) equivalents)
       , check "generated rows are deterministic, counted and valid" $
           let seed = GenerationSeed 0x2545f4914f6cdd1d
-              rows = generateRows seed (GenerationCount 32)
-           in length rows == 32 && rows == generateRows seed (GenerationCount 32) && all validRow rows
-      , check "the seed changes the generated corpus" (generateRows (GenerationSeed 1) (GenerationCount 8) /= generateRows (GenerationSeed 2) (GenerationCount 8))
+              rows = generateRows seed (generationCount 32)
+           in length rows == 32 && rows == generateRows seed (generationCount 32) && all validRow rows
+      , check "the seed changes the generated corpus" (generateRows (GenerationSeed 1) (generationCount 8) /= generateRows (GenerationSeed 2) (generationCount 8))
       , check "a generated task word is a record start of the 120-record table" $
           let row = firstGeneratedRow
            in validRow row
@@ -166,17 +174,39 @@ pureChecks tableA =
             && all isRight [parseGenerationCount "1", parseGenerationCount "256"]
             && all isRight [parseGenerationSeed "0x2545f4914f6cdd1d", parseGenerationSeed "17"]
             && isRight (parseShrinkBudget "32")
+      , check "count and budget constructors refuse invalid values" $
+          isLeft (mkGenerationCount 0) && isLeft (mkGenerationCount 257) && isLeft (mkShrinkBudget 0) && isLeft (mkShrinkBudget 257)
+            && isRight (mkGenerationCount 1) && isRight (mkShrinkBudget 1)
+      , check "the command line rejects incomplete or misplaced generation flags" $
+          all isLeft
+            [ parseCommand ["--generate"]
+            , parseCommand ["--generate", "4"]
+            , parseCommand ["--generate", "4", "--seed"]
+            , parseCommand ["--seed", "1"]
+            , parseCommand ["--shrink-budget", "4"]
+            , parseCommand ["--control", "mutant-s16c"]
+            , parseCommand ["--replay"]
+            , parseCommand ["--generate", "4", "--seed", "1", "--replay", "summary.json"]
+            , parseCommand ["--generate", "4", "--seed", "1", "--timing-only"]
+            , parseCommand ["--generate", "0", "--seed", "1"]
+            , parseCommand ["--generate", "4", "--seed", "1", "--shrink-budget", "0"]
+            , parseCommand ["--generate", "4", "--seed", "1", "--control", "mutant-s128"]
+            , parseCommand ["--replay", "summary.json", "--seed", "1"]
+            ]
+            && isRight (parseCommand [])
+            && isRight (parseCommand ["--generate", "4", "--seed", "1"])
+            && isRight (parseCommand ["--replay", "summary.json"])
       , do
           let row = firstGeneratedRow
-          reduction <- shrinkRow (ShrinkBudget 32) (const (pure False)) row
+          reduction <- shrinkRow (shrinkBudget 32) (const (pure False)) row
           check "reduction stops at a fixed point when no candidate reproduces" (reductionStatus reduction == FixedPoint && reductionReduced reduction == row)
       , do
           let row = firstGeneratedRow
-          reduction <- shrinkRow (ShrinkBudget 1) (const (pure True)) row
+          reduction <- shrinkRow (shrinkBudget 1) (const (pure True)) row
           check "reduction reports an exhausted budget" (reductionStatus reduction == BudgetExhausted)
       , do
           let row = firstGeneratedRow
-          reduction <- shrinkRow (ShrinkBudget 32) (\candidate -> pure (taskSlotOf candidate == 0)) row
+          reduction <- shrinkRow (shrinkBudget 32) (\candidate -> pure (taskSlotOf candidate == 0)) row
           check "reduction accepts only valid smaller inputs" (reductionStatus reduction == FixedPoint && taskSlotOf (reductionReduced reduction) == 0 && validRow (reductionReduced reduction))
       ]
 
@@ -256,12 +286,11 @@ generatedChecks runner temporary fill domain table owned =
                 { generatedRunner = runner
                 , generatedWork = temporary </> "generated-" ++ domainLabel domain
                 , generatedDomainId = domain
-                , generatedReferenceName = "owned"
-                , generatedReferenceBody = body
-                , generatedSubjects = [(controlName control, controlBody)]
+                , generatedReference = (OwnedRole, body)
+                , generatedSubjects = [(ControlRole control, controlBody)]
                 , generatedSeed = GenerationSeed 0x2545f4914f6cdd1d
-                , generatedCount = GenerationCount 12
-                , generatedBudget = ShrinkBudget 32
+                , generatedCount = generationCount 12
+                , generatedBudget = shrinkBudget 32
                 }
         result <- runGeneratedDomain input
         case generatedResults result of
@@ -269,22 +298,54 @@ generatedChecks runner temporary fill domain table owned =
             Just report -> do
               let originalKinds = map differenceKind (shrinkOriginalDifferences report)
                   replayKinds = map differenceKind (shrinkReplayDifferences report)
-              rejected <-
+                  recordedOriginal = RecordedCase (ControlRole control) domain RecordedOriginal (shrinkOriginalLabel report) (map differenceText (shrinkOriginalDifferences report)) (shrinkOriginalBatches report)
+                  recordedReduced = RecordedCase (ControlRole control) domain RecordedReduced (shrinkReducedLabel report) (map differenceText (shrinkReducedDifferences report)) (shrinkReducedBatches report)
+                  replayWork = temporary </> "replay-" ++ domainLabel domain
+              originalReplay <- replayCase runner replayWork recordedOriginal
+              reducedReplay <- replayCase runner replayWork recordedReduced
+              renamed <-
                 try
                   (loadBatchRuns runner (replayReferenceBatch (shrinkReducedBatches report)) (const "changed-binding") domain [(shrinkOriginalKey report, shrinkReducedRow report)])
                   :: IO (Either SomeException (M.Map CaseKey Run))
+              corrupted <- corruptBatch (replaySubjectBatch (shrinkReducedBatches report)) (temporary </> "corrupt-" ++ domainLabel domain)
+              changedCase <-
+                try
+                  (replayCase runner replayWork recordedReduced {recordedBatches = ReplayBatches (replayReferenceBatch (shrinkReducedBatches report)) corrupted})
+                  :: IO (Either SomeException ReplayCaseResult)
+              changedRunner <- try (replayCase "/bin/true" replayWork recordedReduced) :: IO (Either SomeException ReplayCaseResult)
+              missing <- try (replayCase runner replayWork recordedReduced {recordedCaseId = "missing-case"}) :: IO (Either SomeException ReplayCaseResult)
               sequence
                 [ check "generated corpus: the reference returns" (generatedReferenceReturned result)
                 , check "generated corpus: the +0x16c control differs on a returned case" (outcomeDifferingReturned (subjectOutcome subject) > 0)
                 , check "generated corpus: the reduction preserves the compared boundary" (not (null originalKinds) && replayKinds == originalKinds)
                 , check "generated corpus: the reduction reaches a smaller valid task record" (validRow (shrinkReducedRow report) && taskSlotOf (shrinkReducedRow report) < taskSlotOf (shrinkOriginalRow report))
-                , check "generated corpus: the replay reproduces the reduced case" (shrinkReplayDifferences report == shrinkReducedDifferences report)
-                , check "generated corpus: the replay rejects a changed case binding" (case rejected of Left _ -> True; Right _ -> False)
+                , check "generated corpus: the in-run replay reproduces the reduced case" (shrinkReplayDifferences report == shrinkReducedDifferences report)
+                , check "replay: the original case reproduces its recorded difference" (replayReproduces originalReplay)
+                , check "replay: the reduced case reproduces its recorded difference" (replayReproduces reducedReplay)
+                , check "replay: a changed case byte is rejected before execution" (case changedCase of Left _ -> True; Right _ -> False)
+                , check "replay: a changed runner is rejected before execution" (case changedRunner of Left _ -> True; Right _ -> False)
+                , check "replay: a missing recorded case is rejected" (case missing of Left _ -> True; Right _ -> False)
+                , check "replay: a renamed case label is rejected" (case renamed of Left _ -> True; Right _ -> False)
                 ]
             Nothing -> (: []) <$> check "generated corpus: the control difference was reduced" False
           _ -> (: []) <$> check "generated corpus: one subject result" False
     (Right _, []) -> (: []) <$> check "generated corpus: no +0x16c control" False
     (Left problem, _) -> (: []) <$> check ("generated corpus: " ++ problem) False
+
+copyDirectory :: FilePath -> FilePath -> IO ()
+copyDirectory source destination = do
+  createDirectoryIfMissing True destination
+  entries <- listDirectory source
+  forM_ entries $ \entry -> copyFile (source </> entry) (destination </> entry)
+
+corruptBatch :: FilePath -> FilePath -> IO FilePath
+corruptBatch source destination = do
+  copyDirectory source destination
+  entries <- listDirectory destination
+  case [entry | entry <- entries, takeExtension entry == ".bin"] of
+    artifact : _ -> B.appendFile (destination </> artifact) (B.singleton 0)
+    [] -> fail ("no artifact to corrupt in " ++ source)
+  pure destination
 
 main :: IO ()
 main = do

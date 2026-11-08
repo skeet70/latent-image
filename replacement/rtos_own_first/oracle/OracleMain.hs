@@ -1,30 +1,36 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Runs every own-first slot's case grid against the stock body from the pinned loaders and against
--- the owned body, compares them case by case and runs the controls. Exits 1 when a stock run stops
--- or a control misbehaves, and 2 when an owned body differs from stock.
+-- the owned body, compares them case by case and runs the controls. The generated mode adds a valid
+-- +0x16c corpus with reduction; the replay mode re-executes the retained original and reduced
+-- batches. Exits 1 when a stock run stops or a control misbehaves, and 2 when an owned body differs
+-- from stock.
 module Main (main) where
 
-import Control.Monad (forM, forM_, when)
-import Data.Aeson (Value (Null), object, (.=))
+import Control.Monad (filterM, forM, forM_, unless, when)
+import Data.Aeson (Value (Null), eitherDecodeStrict', object, (.=))
 import qualified Data.ByteString as B
-import Data.List (find)
+import Data.List (intercalate)
 import qualified Data.Map.Strict as M
+import Data.Maybe (listToMaybe)
 import Data.String (fromString)
+import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
 import Emulation.OwnedCase (required)
 import Emulation.Sha256 (sha256, sha256Hex)
-import FujiAF.Host (ensure, failH, readRegular)
+import FujiAF.Host (ensure, failH, get, keys, readRegular)
 import FujiAF.JSON (encodeCanonical)
 import Replacement.RtosOwnFirst.Artifact (LinkedDomain (..), loaderSha256)
+import Replacement.RtosOwnFirst.Command
 import Replacement.RtosOwnFirst.Controls
 import Replacement.RtosOwnFirst.Generate
 import Replacement.RtosOwnFirst.Generated
 import Replacement.RtosOwnFirst.Oracle
 import Replacement.RtosOwnFirst.Regions
+import Replacement.RtosOwnFirst.Replay
 import Replacement.RtosOwnFirst.Shrink
 import Replacement.RtosOwnFirst.Verdict
 import System.Directory (canonicalizePath, createDirectory, createDirectoryIfMissing, doesPathExist, makeAbsolute, removeDirectoryRecursive, setCurrentDirectory)
-import System.Environment (getArgs, lookupEnv)
+import System.Environment (getArgs, getExecutablePath, lookupEnv)
 import System.Exit (ExitCode (..), exitWith)
 import System.FilePath (takeDirectory, (</>))
 
@@ -88,41 +94,24 @@ slotValue report =
 unlessNull :: [a] -> IO () -> IO ()
 unlessNull values action = when (not (null values)) action
 
-data Generation = Generation
-  { generationSeed :: GenerationSeed
-  , generationCount :: GenerationCount
-  , generationBudget :: ShrinkBudget
-  , generationControl :: Control
-  }
+isOwnedRole :: BodyRole -> Bool
+isOwnedRole OwnedRole = True
+isOwnedRole _ = False
 
-optionalArgument :: [String] -> String -> Maybe String
-optionalArgument arguments name = case dropWhile (/= name) arguments of
-  (_ : value : _) -> Just value
-  _ -> Nothing
+isControlRole :: BodyRole -> Bool
+isControlRole (ControlRole _) = True
+isControlRole _ = False
 
--- | The generated corpus is the settled +0x16c leaf and its hand-written control.
-parseGeneration :: [String] -> Either String (Maybe Generation)
-parseGeneration arguments
-  | "--timing-only" `elem` arguments && optionalArgument arguments "--generate" /= Nothing =
-      Left "--generate cannot be combined with --timing-only"
-  | otherwise = case optionalArgument arguments "--generate" of
-      Nothing -> Right Nothing
-      Just countText -> do
-        count <- parseGenerationCount countText
-        seed <- maybe (Left "missing --seed") parseGenerationSeed (optionalArgument arguments "--seed")
-        budget <- maybe (Right defaultShrinkBudget) parseShrinkBudget (optionalArgument arguments "--shrink-budget")
-        control <- case optionalArgument arguments "--control" of
-          Nothing -> case [candidate | candidate <- mutants, controlSlot candidate == generationSlot] of
-            candidate : _ -> Right candidate
-            [] -> Left ("no control for " ++ slotTag generationSlot)
-          Just name -> maybe (Left ("unknown control " ++ name)) Right (find ((== name) . controlName) mutants)
-        when (controlSlot control /= generationSlot) (Left (controlName control ++ " does not test " ++ slotTag generationSlot))
-        Right (Just (Generation seed count budget control))
+ownedSubject :: GeneratedDomain -> Maybe SubjectResult
+ownedSubject result = listToMaybe [subject | subject <- generatedResults result, isOwnedRole (subjectRole subject)]
+
+controlSubject :: GeneratedDomain -> Maybe SubjectResult
+controlSubject result = listToMaybe [subject | subject <- generatedResults result, isControlRole (subjectRole subject)]
 
 subjectValue :: SubjectResult -> Value
 subjectValue subject =
   object
-    [ "name" .= subjectName subject
+    [ "name" .= roleLabel (subjectRole subject)
     , "cases" .= outcomeCases outcome
     , "matches" .= outcomeMatches outcome
     , "differing_returned" .= outcomeDifferingReturned outcome
@@ -136,7 +125,7 @@ subjectValue subject =
 shrinkValue :: ShrinkReport -> Value
 shrinkValue report =
   object
-    [ "role" .= shrinkRole report
+    [ "role" .= roleLabel (shrinkRole report)
     , "status" .= reductionStatusText (reductionStatus reduction)
     , "trials" .= reductionTrials reduction
     , "original" .= boundaryValue (shrinkOriginalLabel report) (shrinkOriginalRow report) (shrinkOriginalDifferences report) (shrinkOriginalBatches report)
@@ -163,64 +152,171 @@ shrinkValue report =
               ]
         ]
 
-generatedDomainValue :: String -> GeneratedDomain -> Value
-generatedDomainValue control result =
+generatedDomainValue :: GeneratedDomain -> Value
+generatedDomainValue result =
   object
     [ "domain" .= domainLabel (generatedDomain result)
     , "cases" .= generatedCases result
     , "stock_returned" .= generatedReferenceReturned result
     , "subjects" .= map subjectValue (generatedResults result)
-    , "candidate_reduction" .= maybe Null shrinkValue (subjectReduction =<< find ((== "owned") . subjectName) (generatedResults result))
-    , "control_reduction" .= maybe Null shrinkValue (subjectReduction =<< find ((== control) . subjectName) (generatedResults result))
+    , "candidate_reduction" .= maybe Null shrinkValue (subjectReduction =<< ownedSubject result)
+    , "control_reduction" .= maybe Null shrinkValue (subjectReduction =<< controlSubject result)
     ]
 
-generatedSubject :: String -> GeneratedDomain -> Maybe SubjectResult
-generatedSubject name result = find ((== name) . subjectName) (generatedResults result)
-
 generatedOwnedMatches :: GeneratedDomain -> Bool
-generatedOwnedMatches result = case generatedSubject "owned" result of
+generatedOwnedMatches result = case ownedSubject result of
   Just subject -> outcomeMatches (subjectOutcome subject) == outcomeCases (subjectOutcome subject)
   Nothing -> False
 
-generatedControlHolds :: String -> GeneratedDomain -> Bool
-generatedControlHolds control result = case generatedSubject control result of
+generatedControlHolds :: GeneratedDomain -> Bool
+generatedControlHolds result = case controlSubject result of
   Just subject -> outcomeDifferingReturned (subjectOutcome subject) > 0
   Nothing -> False
 
-generatedExit :: String -> [GeneratedDomain] -> ExitCode
-generatedExit control results
+generatedExit :: [GeneratedDomain] -> ExitCode
+generatedExit results
   | not (all generatedReferenceReturned results) = ExitFailure 1
-  | not (all (generatedControlHolds control) results) = ExitFailure 1
+  | not (all generatedControlHolds results) = ExitFailure 1
   | not (all generatedOwnedMatches results) = ExitFailure 2
   | otherwise = ExitSuccess
 
-generatedSummary :: FilePath -> Value -> Generation -> [GeneratedDomain] -> Value
-generatedSummary work inputs generation results =
+generatedSummary :: FilePath -> Value -> GenerateOptions -> [GeneratedDomain] -> Value
+generatedSummary work inputs options results =
   object
     [ "schema" .= (1 :: Int)
     , "mode" .= ("generate" :: String)
     , "slot" .= slotText generationSlot
-    , "seed" .= ("0x" ++ seedText (generationSeed generation))
-    , "count" .= count
-    , "control" .= controlName (generationControl generation)
-    , "shrink_budget" .= budget
+    , "seed" .= ("0x" ++ seedText (optionSeed options))
+    , "count" .= generationCountValue (optionCount options)
+    , "control" .= controlName (optionControl options)
+    , "shrink_budget" .= shrinkBudgetValue (optionBudget options)
     , "work" .= work
     , "inputs" .= inputs
-    , "domains" .= map (generatedDomainValue (controlName (generationControl generation))) results
+    , "domains" .= map generatedDomainValue results
     , "stock_returned" .= all generatedReferenceReturned results
     , "owned_matches_stock" .= all generatedOwnedMatches results
-    , "controls_hold" .= all (generatedControlHolds (controlName (generationControl generation))) results
+    , "controls_hold" .= all generatedControlHolds results
+    ]
+
+generatedTerminal :: FilePath -> GenerateOptions -> [GeneratedDomain] -> IO ()
+generatedTerminal summaryPath options results = do
+  let control = optionControl options
+      controls = [subjectOutcome subject | result <- results, subject <- generatedResults result, isControlRole (subjectRole subject)]
+      reductions = [report | result <- results, subject <- generatedResults result, Just report <- [subjectReduction subject]]
+      boundary report = intercalate "," (map (show . differenceKind) (shrinkOriginalDifferences report))
+      reduced = [shrinkReducedLabel report ++ " (" ++ boundary report ++ ", " ++ reductionStatusText (reductionStatus (shrinkReduction report)) ++ ")" | report <- reductions]
+      prefix =
+        "own-first generate: +0x16c seed 0x" ++ seedText (optionSeed options)
+          ++ " " ++ show (generationCountValue (optionCount options)) ++ " cases x 2 loaders"
+      outcome
+        | not (all generatedReferenceReturned results) = "; a stock run did not return"
+        | not (all generatedControlHolds results) = "; control " ++ controlName control ++ " did not differ on a returned case"
+        | not (all generatedOwnedMatches results) = "; owned differs from stock"
+        | otherwise =
+            "; stock returned; owned matches; control differs on "
+              ++ show [outcomeDifferingReturned controlOutcome | controlOutcome <- controls]
+              ++ " returned cases per loader"
+  putStrLn (prefix ++ outcome ++ (if null reduced then "" else "; reduced " ++ intercalate ", " reduced) ++ "; summary " ++ summaryPath)
+
+replayCaseValue :: ReplayCaseResult -> Value
+replayCaseValue result =
+  object
+    [ "role" .= roleLabel (recordedRole recorded)
+    , "domain" .= domainLabel (recordedDomain recorded)
+    , "kind" .= recordedKindText (recordedKind recorded)
+    , "case" .= recordedCaseId recorded
+    , "batches"
+        .= object
+          [ "reference" .= replayReferenceBatch batches
+          , "subject" .= replaySubjectBatch batches
+          ]
+    , "identity"
+        .= object
+          [ "reference_sha256" .= replayReferenceIdentity result
+          , "subject_sha256" .= replaySubjectIdentity result
+          ]
+    , "expected_differences" .= recordedDifferences recorded
+    , "differences" .= replayDifferences result
+    , "reproduces" .= replayReproduces result
     ]
   where
-    GenerationCount count = generationCount generation
-    ShrinkBudget budget = generationBudget generation
+    recorded = replayRecorded result
+    batches = recordedBatches recorded
+
+replaySummary :: FilePath -> FilePath -> Value -> [ReplayCaseResult] -> Value
+replaySummary source work inputs results =
+  object
+    [ "schema" .= (1 :: Int)
+    , "mode" .= ("replay" :: String)
+    , "source" .= source
+    , "work" .= work
+    , "inputs" .= inputs
+    , "cases" .= map replayCaseValue results
+    , "cases_total" .= length results
+    , "reproduced" .= length (filter replayReproduces results)
+    ]
+
+replayExit :: [ReplayCaseResult] -> ExitCode
+replayExit results
+  | any (not . replayReproduces) results = ExitFailure 1
+  | any (isOwnedRole . recordedRole . replayRecorded) results = ExitFailure 2
+  | otherwise = ExitSuccess
+
+replayTerminal :: FilePath -> [ReplayCaseResult] -> IO ()
+replayTerminal summaryPath results =
+  case [result | result <- results, not (replayReproduces result)] of
+    result : _ ->
+      putStrLn
+        ( "own-first replay: " ++ recordedCaseId (replayRecorded result)
+            ++ " (" ++ recordedKindText (recordedKind (replayRecorded result)) ++ ") did not reproduce its recorded difference; summary " ++ summaryPath
+        )
+    [] ->
+      putStrLn
+        ( "own-first replay: " ++ show (length results) ++ " cases replayed and reproduced; summary " ++ summaryPath
+        )
+
+verifyInputs :: Value -> Value -> IO ()
+verifyInputs recorded current = do
+  ensure (keys recorded == keys current) "replay summary input set differs from the current inputs"
+  let differing = [key | key <- keys recorded, get recorded key /= get current key]
+  unless (null differing) (failH ("replay inputs differ: " ++ unwords differing))
+
+enterSlot :: [String] -> IO ()
+enterSlot arguments = do
+  policy <- slotPolicyFromEnvironment
+  reexecInSlot policy arguments
+
+-- | Resolves a relative input against the current directory, the running executable's runfiles tree
+-- and the workspace. A slot re-exec keeps the arguments, so every input becomes absolute before it.
+resolveInput :: FilePath -> IO FilePath
+resolveInput path = do
+  workspace <- lookupEnv "BUILD_WORKSPACE_DIRECTORY"
+  executable <- getExecutablePath
+  let runfiles = executable ++ ".runfiles"
+      candidates =
+        path
+          : [runfiles </> "_main" </> path, runfiles </> path]
+          ++ [directory </> path | directory <- maybe [] (: []) workspace]
+  present <- filterM doesPathExist candidates
+  canonicalizePath (case present of candidate : _ -> candidate; [] -> path)
+
+rewriteFlags :: [(String, FilePath)] -> [String] -> [String]
+rewriteFlags replacements = go
+  where
+    go [] = []
+    go (argument : rest) = case lookup argument replacements of
+      Just value -> argument : value : drop 1 rest
+      Nothing -> argument : go rest
 
 main :: IO ()
 main = do
   arguments <- getArgs
-  let input name = required arguments name >>= canonicalizePath
+  command <- orFailText "arguments" (parseCommand arguments)
+  let input name = required arguments name >>= resolveInput
       output name = required arguments name >>= makeAbsolute
-      timingOnly = "--timing-only" `elem` arguments
+      timingOnly = case command of
+        GridCommand -> "--timing-only" `elem` arguments
+        _ -> False
       selectedSlots = if timingOnly then [S128, S148, S164, S168, S16c, S1618] else slots
   runner <- input "--runner"
   regionsPath <- input "--regions"
@@ -229,6 +325,19 @@ main = do
   loaderPaths <- mapM input ["--loader-a", "--loader-b"]
   work <- output "--work"
   summaryPath <- output "--summary"
+  replaySource <- case command of
+    ReplayCommand options -> Just <$> resolveInput (optionSource options)
+    _ -> pure Nothing
+  let replacements =
+        [("--runner", runner), ("--regions", regionsPath), ("--work", work), ("--summary", summaryPath)]
+          ++ zip ["--loader-a", "--loader-b"] loaderPaths
+          ++ zip ["--owned-a-bin", "--owned-a-symbols", "--owned-b-bin", "--owned-b-symbols"] ownedPaths
+          ++ maybe [] (\source -> [("--replay", source)]) replaySource
+  case command of
+    GenerateCommand _ -> enterSlot (rewriteFlags replacements arguments)
+    ReplayCommand _ -> enterSlot (rewriteFlags replacements arguments)
+    GridCommand -> pure ()
+  lookupEnv "BUILD_WORKSPACE_DIRECTORY" >>= mapM_ setCurrentDirectory
   forM_ [work, summaryPath] $ \path -> do
     exists <- doesPathExist path
     when exists (failH (path ++ " already exists"))
@@ -243,9 +352,11 @@ main = do
     [binA, symbolsA, binB, symbolsB] -> forM (zip domains [LinkedDomain binA symbolsA, LinkedDomain binB symbolsB]) $ \(domain, linked) ->
       orFail ("owned " ++ domainLabel domain) (ownedDomain (tableFill table) domain (domainTable table domain) linked)
     _ -> failH "unreachable owned inputs"
-  generation <- orFailText "generate" (parseGeneration arguments)
   createDirectoryIfMissing True (takeDirectory work)
   createDirectory work
+  canonicalWork <- canonicalizePath work
+  createDirectoryIfMissing True (takeDirectory summaryPath)
+  canonicalSummary <- canonicalizePath summaryPath
   let inputs =
         object
           ( [ "regions_sha256" .= digest regionsBytes
@@ -254,11 +365,11 @@ main = do
               ++ [fromString ("loader_" ++ domainLabel domain ++ "_sha256") .= digest loader | (domain, loader) <- zip domains loaders]
               ++ [fromString name .= digest bytes | (name, bytes) <- zip ["owned_a_bin_sha256", "owned_a_symbols_sha256", "owned_b_bin_sha256", "owned_b_symbols_sha256"] ownedBytes]
           )
-  case generation of
-    Just selected -> do
+  case command of
+    GenerateCommand options -> do
+      let control = optionControl options
       results <- forM (zip3 domains loaders owned) $ \(domain, loader, ownedRows) -> do
         let rowsTable = domainTable table domain
-            control = generationControl selected
         stock <- orFailText (slotTag generationSlot ++ " stock") (stockBody domain rowsTable loader generationSlot)
         ownedSlot <- orFailText (slotTag generationSlot ++ " owned") (ownedBody ownedRows generationSlot)
         code <- orFailText (controlName control) (controlCode domain rowsTable control)
@@ -266,25 +377,36 @@ main = do
         runGeneratedDomain
           GeneratedInput
             { generatedRunner = runner
-            , generatedWork = work
+            , generatedWork = canonicalWork
             , generatedDomainId = domain
-            , generatedReferenceName = "stock"
-            , generatedReferenceBody = stock
-            , generatedSubjects = [("owned", ownedSlot), (controlName control, controlBody)]
-            , generatedSeed = generationSeed selected
-            , generatedCount = generationCount selected
-            , generatedBudget = generationBudget selected
+            , generatedReference = (StockRole, stock)
+            , generatedSubjects = [(OwnedRole, ownedSlot), (ControlRole control, controlBody)]
+            , generatedSeed = optionSeed options
+            , generatedCount = optionCount options
+            , generatedBudget = optionBudget options
             }
-      B.writeFile summaryPath (encodeCanonical (generatedSummary work inputs selected results))
-      exitWith (generatedExit (controlName (generationControl selected)) results)
-    Nothing -> do
+      B.writeFile canonicalSummary (encodeCanonical (generatedSummary canonicalWork inputs options results))
+      generatedTerminal canonicalSummary options results
+      exitWith (generatedExit results)
+    ReplayCommand options -> do
+      source <- maybe (failH ("missing " ++ optionSource options)) pure replaySource
+      sourceBytes <- readRegular 0x1000000 source
+      sourceValue <- either (\problem -> failH (source ++ ": " ++ problem)) pure (eitherDecodeStrict' sourceBytes)
+      recorded <- orFailText "replay summary" (readRecordedCases sourceValue)
+      ensure (not (null recorded)) "replay summary records no original or reduced case"
+      verifyInputs (get sourceValue "inputs") inputs
+      results <- forM recorded $ \caseRecord -> replayCase runner canonicalWork caseRecord
+      B.writeFile canonicalSummary (encodeCanonical (replaySummary source canonicalWork inputs results))
+      replayTerminal canonicalSummary results
+      exitWith (replayExit results)
+    GridCommand -> do
       reports <- fmap concat . forM (zip3 domains loaders owned) $ \(domain, loader, ownedRows) -> do
         let rowsTable = domainTable table domain
         forM selectedSlots $ \slot -> do
           stock <- orFailText (slotTag slot ++ " stock") (stockBody domain rowsTable loader slot)
           ownedSlot <- orFailText (slotTag slot ++ " owned") (ownedBody ownedRows slot)
           entry <- orFailText (slotTag slot ++ " entry") (slotEntry rowsTable slot)
-          let directory role = work </> role ++ "-" ++ domainLabel domain ++ "-" ++ slotTag slot
+          let directory role = canonicalWork </> role ++ "-" ++ domainLabel domain ++ "-" ++ slotTag slot
               timingKeys = [CaseKey index | (index, row) <- zip [0 ..] (take (length (caseGrid slot) - 64) (caseGrid slot)), rowCalls row == SingleCall]
               run role = if timingOnly
                 then runRows runner (directory role) role domain slot timingKeys
@@ -314,9 +436,9 @@ main = do
                 , not (null delta)
                 ]
           unlessNull differences $
-            B.writeFile (work </> "differences-" ++ domainLabel domain ++ "-" ++ slotTag slot ++ ".json") (encodeCanonical (object ["cases" .= differences]))
+            B.writeFile (canonicalWork </> "differences-" ++ domainLabel domain ++ "-" ++ slotTag slot ++ ".json") (encodeCanonical (object ["cases" .= differences]))
           when timingOnly $
-            B.writeFile (work </> "timing-" ++ domainLabel domain ++ "-" ++ slotTag slot ++ ".json") $
+            B.writeFile (canonicalWork </> "timing-" ++ domainLabel domain ++ "-" ++ slotTag slot ++ ".json") $
               encodeCanonical $ object
                 [ "domain" .= domainLabel domain, "slot" .= slotText slot
                 , "cases" .=
@@ -341,8 +463,7 @@ main = do
           pure report
       let exit = verdictExit reports
           domainValue domain = object ["domain" .= domainLabel domain, "slots" .= [slotValue report | report <- reports, reportDomain report == domain]]
-      createDirectoryIfMissing True (takeDirectory summaryPath)
-      B.writeFile summaryPath $
+      B.writeFile canonicalSummary $
         encodeCanonical $
           object
             [ "schema" .= (1 :: Int)

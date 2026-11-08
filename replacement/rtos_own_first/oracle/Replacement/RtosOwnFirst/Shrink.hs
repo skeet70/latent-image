@@ -2,7 +2,9 @@
 -- measure: task record index, then entry-flag population, then mode, F and the context form. The
 -- result is a local fixed point of that order, not a minimum over the input space.
 module Replacement.RtosOwnFirst.Shrink
-  ( ShrinkBudget (..)
+  ( ShrinkBudget
+  , mkShrinkBudget
+  , shrinkBudgetValue
   , defaultShrinkBudget
   , parseShrinkBudget
   , ReductionStatus (..)
@@ -22,6 +24,14 @@ import Replacement.RtosOwnFirst.Oracle
 newtype ShrinkBudget = ShrinkBudget Int
   deriving (Eq, Show)
 
+mkShrinkBudget :: Int -> Either String ShrinkBudget
+mkShrinkBudget budget
+  | budget >= 1 && budget <= maxShrinkBudget = Right (ShrinkBudget budget)
+  | otherwise = Left ("shrink budget must be 1.." ++ show maxShrinkBudget ++ ": " ++ show budget)
+
+shrinkBudgetValue :: ShrinkBudget -> Int
+shrinkBudgetValue (ShrinkBudget budget) = budget
+
 defaultShrinkBudget :: ShrinkBudget
 defaultShrinkBudget = ShrinkBudget 32
 
@@ -30,8 +40,7 @@ maxShrinkBudget = 256
 
 parseShrinkBudget :: String -> Either String ShrinkBudget
 parseShrinkBudget text = case readDec text of
-  [(value, "")]
-    | value >= 1 && value <= toInteger maxShrinkBudget -> Right (ShrinkBudget (fromInteger value))
+  [(value, "")] | value <= toInteger (maxBound :: Int) -> mkShrinkBudget (fromInteger value)
   _ -> Left ("shrink budget must be 1.." ++ show maxShrinkBudget ++ ": " ++ text)
 
 data ReductionStatus = FixedPoint | BudgetExhausted

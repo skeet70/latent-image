@@ -54,6 +54,7 @@ module Replacement.RtosOwnFirst.Oracle
   , runRows
   , runRowsWith
   , loadBatchRuns
+  , observedRun
   , sampleKeys
   , Outcome (..)
   , outcomeOf
@@ -740,18 +741,23 @@ loadBatchRuns runner batchDirectory labelOf domain rows = do
   observed <- loadObservedBatch runner (batchDirectory </> "batch.json")
   unless (length observed == length rows) (fail (batchDirectory ++ ": observation count differs from the case count"))
   M.fromList <$> forM observed (\(CaseId label, observation) -> do
-    let reportPath = batchDirectory </> label ++ ".native-result.json"
-        failWith problem = fail (reportPath ++ ": " ++ problem)
-    key <- maybe (failWith "unknown case") pure (lookup label labelled)
-    reportBytes <- B.readFile reportPath
-    report <- either failWith pure (eitherDecodeStrict' reportBytes :: Either String Value)
-    writes <- either failWith pure (reportWrites report)
-    row <- maybe (failWith "unknown row") pure (lookup key rows)
-    run <- either failWith pure (runOfAt domain (callerSp (rowStack row)) observation writes)
-    forced <- evaluate (forceRun run)
-    pure (key, forced))
+    key <- maybe (fail (batchDirectory ++ ": unknown case " ++ label)) pure (lookup label labelled)
+    row <- maybe (fail (batchDirectory ++ ": unknown row " ++ show key)) pure (lookup key rows)
+    run <- observedRun batchDirectory label domain (callerSp (rowStack row)) observation
+    pure (key, run))
   where
     labelled = [(labelOf key, key) | (key, _) <- rows]
+
+-- | The compared run of one observation, using the report's ordered write log.
+observedRun :: FilePath -> String -> Domain -> Word32 -> N.NativeObservation -> IO Run
+observedRun batchDirectory label domain incomingSp observation = do
+  let reportPath = batchDirectory </> label ++ ".native-result.json"
+      failWith problem = fail (reportPath ++ ": " ++ problem)
+  reportBytes <- B.readFile reportPath
+  report <- either failWith pure (eitherDecodeStrict' reportBytes :: Either String Value)
+  writes <- either failWith pure (reportWrites report)
+  run <- either failWith pure (runOfAt domain incomingSp observation writes)
+  evaluate (forceRun run)
 
 forceRun :: Run -> Run
 forceRun run =

@@ -3,9 +3,10 @@
 -- of the leaf's input contract.
 module Replacement.RtosOwnFirst.Generate
   ( GenerationSeed (..)
-  , GenerationCount (..)
+  , GenerationCount
+  , mkGenerationCount
+  , generationCountValue
   , generationSlot
-  , generatedRowCount
   , parseGenerationSeed
   , parseGenerationCount
   , generatedLabel
@@ -39,8 +40,13 @@ newtype GenerationSeed = GenerationSeed Word64
 newtype GenerationCount = GenerationCount Int
   deriving (Eq, Show)
 
-generatedRowCount :: GenerationCount -> Int
-generatedRowCount (GenerationCount count) = count
+mkGenerationCount :: Int -> Either String GenerationCount
+mkGenerationCount count
+  | count >= 1 && count <= maxGeneratedRows = Right (GenerationCount count)
+  | otherwise = Left ("count must be 1.." ++ show maxGeneratedRows ++ ": " ++ show count)
+
+generationCountValue :: GenerationCount -> Int
+generationCountValue (GenerationCount count) = count
 
 parseGenerationSeed :: String -> Either String GenerationSeed
 parseGenerationSeed text = case text of
@@ -56,7 +62,7 @@ parseGenerationSeed text = case text of
 
 parseGenerationCount :: String -> Either String GenerationCount
 parseGenerationCount text = case readDec text of
-  [(value, "")] | value >= 1 && value <= toInteger maxGeneratedRows -> Right (GenerationCount (fromInteger value))
+  [(value, "")] | value <= toInteger (maxBound :: Int) -> mkGenerationCount (fromInteger value)
   _ -> Left ("count must be 1.." ++ show maxGeneratedRows ++ ": " ++ text)
 
 -- | A case id of the generated corpus, unique within a batch directory.
