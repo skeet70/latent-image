@@ -311,9 +311,6 @@ stubWords d result = prefix
       , movt 1 (runningCell d `shiftR` 16)
       , 0xe5911000
       , 0xe5811018
-      , movw 2 (resume .&. 0xffff)
-      , movt 2 (resume `shiftR` 16)
-      , 0xe581201c
       , 0xe5912014
       , 0xe3a03000
       ] ++ (if result == 0 then [] else [0xe2433000 .|. (result .&. 0xff)]) ++
@@ -321,10 +318,9 @@ stubWords d result = prefix
       , 0xe5d1300c
       , 0xe3833001
       , 0xe5c1300c
-      , 0xe591d018
-      , 0xe591f01c
+      , 0xe8bd4ff0
+      , 0xe12fff1e
       ]
-    resume = stubBase + 0x80
 
 movw, movt :: Word32 -> Word32 -> Word32
 movw register immediate = 0xe3000000 .|. (register `shiftL` 12) .|. ((immediate .&. 0xf000) `shiftL` 4) .|. (immediate .&. 0xfff)
@@ -379,12 +375,14 @@ specFor d role one loader owned = CaseSpec
       ]
   , caseFunctions =
       [(GuestAddress (fromIntegral (entryOf d service)), extentOf service) | service <- [Terminate, ChangePriority, TimedSleep, ReleaseWait, HandlerRelease, Delay]]
-      ++ [(GuestAddress (fromIntegral bodyBase), 0x1300), (GuestAddress (fromIntegral stubBase), 0x80), (GuestAddress (fromIntegral (stubBase + 0x80)), 8)]
+      ++ [(GuestAddress (fromIntegral bodyBase), 0x1300), (GuestAddress (fromIntegral stubBase), 0x80)]
       ++ [(GuestAddress (fromIntegral (switchOf d)), 4)]
       ++ [(GuestAddress (fromIntegral (acquireFn d)), 0x3c), (GuestAddress (fromIntegral (releaseFn d)), 0x40)]
       ++ [(GuestAddress (fromIntegral (if d == DomainA then (0x44744 :: Word32) else 0xd4704)), if d == DomainA then 0xbc else 0xc0)]
+      ++ [(GuestAddress (fromIntegral (base + (if d == DomainB then 0x8ffbc else 0))), size)
+         | (base, size) <- ([(0x43ca4, 0x7c), (0x43d20, 0xb0), (0x43dd0, 0x1a0), (0x43f70, 0xa8), (0x44018, 0x2c)] :: [(Word32, Word32)])]
       ++ [(GuestAddress (fromIntegral (base + (if d == DomainB then 0x8ffc0 else 0))), size)
-         | (base, size) <- ([(0x43ca4, 0x7c), (0x43d20, 0xb0), (0x43dd0, 0x1a0), (0x43f70, 0xa8), (0x44018, 0x2c), (0x44044, 0xf0), (0x44318, 0x1cc), (0x444e4, 0x84), (0x44568, 0xcc), (0x44634, 0xc8), (0x446fc, 0x48), (0x449c0, 0x100), (0x44ac0, 0xc4), (0x44b84, 0xdc), (0x44c60, 0x48), (0x44ca8, 0xe4)] :: [(Word32, Word32)])]
+         | (base, size) <- ([(0x44044, 0xf0), (0x44318, 0x1cc), (0x444e4, 0x84), (0x44568, 0xcc), (0x44634, 0xc8), (0x446fc, 0x48), (0x449c0, 0x100), (0x44ac0, 0xc4), (0x44b84, 0xdc), (0x44c60, 0x48), (0x44ca8, 0xe4)] :: [(Word32, Word32)])]
   , caseInitial =
       [(R0, caseArgument one), (R1, caseArgument1 one), (R2, 0), (R3, 0), (R12, 0)]
       ++ [(register, 0xabc00000 + fromIntegral (fromEnum register)) | register <- [R4 .. R11]]
@@ -406,7 +404,7 @@ specFor d role one loader owned = CaseSpec
       Nothing -> B.replicate 0x100 0
       Just result ->
         let stubCode = B.concat (map word32le (stubWords d result))
-         in stubCode <> B.replicate (0x80 - B.length stubCode) 0 <> word32le 0xe8bd4ff0 <> word32le 0xe12fff1e <> B.replicate 0x40 0
+         in stubCode <> B.replicate (0x100 - B.length stubCode) 0
     stop = if caseStop one then Just (GuestAddress (fromIntegral (switchOf d))) else Nothing
     uncompared
       | caseStop one = [R1, R2, R3, R12, Lr, Pc, Cpsr]
