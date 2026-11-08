@@ -223,6 +223,9 @@ eq region address value = WordIs region address value
 dataQueueId :: Word32 -> Word32
 dataQueueId slot = slot
 
+-- The four timed blocking rows are withdrawn: the fixture's insert and remove are receipt stubs,
+-- so they cannot prove timer membership or consumption. Restore them with a real heap or the
+-- owned tick.
 cases :: Facts -> Domain -> [Case]
 cases facts executing =
   [ caseOf "send-empty" Send [(R0, 1), (R1, 0x1111)] (queue 1 0 2 ++ empty) [ResultIs 0, eq "ring" ringBase 0x1111, eq "kernel" (count 1) 1, eq "kernel" (read 1) 0, eq "kernel" (write 1) 1]
@@ -257,70 +260,10 @@ cases facts executing =
       , eq "kernel" objectLock 0, eq "kernel" schedulerLock 0
       , CpsrIs 0x13
       ]
-  , blocking "send-timeout-blocks" SendTimeout [(R0, 1), (R1, 0x2222), (R2, 5)] (queue 1 0 1 ++ full [0xaaaa] 1)
-      (timeoutActor executing (contextRecord facts executing executing) (timerEntry 1))
-      [ ResultIs (-50)
-      , eq "ring" ringBase 0xaaaa
-      , eq "kernel" (count 1) 1, eq "kernel" (read 1) 0, eq "kernel" (write 1) 0
-      , eq "kernel" (waitResult 1) (-50), eq "kernel" (waitData 1) 0x2222
-      , eq "kernel" (sendNext 1) (sendSelf 1), eq "kernel" (sendPrev 1) (sendSelf 1)
-      , ByteIs "kernel" (taskState 1) (stateReady facts)
-      , eq "timer-stub" stubBase (contextRecord facts executing executing)
-      , eq "timer-stub" (stubBase + 4) (timerEntry 1)
-      , eq "timer-stub" (stubBase + 8) (clockValue + 5)
-      , eq "timer-stub" (stubBase + 0x10) (contextRecord facts executing executing)
-      , eq "timer-stub" (stubBase + 0x14) (timerEntry 1)
-      , eq "kernel" objectLock 0, eq "kernel" schedulerLock 0
-      , CpsrIs 0x13
-      ]
-  , blocking "receive-timeout-blocks" ReceiveTimeout [(R0, 1), (R1, outBase), (R2, 5)] (queue 1 0 2 ++ [poke outBase 0x5e4d1e00])
-      (timeoutActor executing (contextRecord facts executing executing) (timerEntry 1))
-      [ ResultIs (-50)
-      , eq "out" outBase 0x5e4d1e00
-      , eq "kernel" (count 1) 0, eq "kernel" (read 1) 0, eq "kernel" (write 1) 0
-      , eq "kernel" (waitResult 1) (-50)
-      , eq "kernel" (recvNext 1) (recvSelf 1), eq "kernel" (recvPrev 1) (recvSelf 1)
-      , ByteIs "kernel" (taskState 1) (stateReady facts)
-      , eq "timer-stub" stubBase (contextRecord facts executing executing)
-      , eq "timer-stub" (stubBase + 4) (timerEntry 1)
-      , eq "timer-stub" (stubBase + 8) (clockValue + 5)
-      , eq "timer-stub" (stubBase + 0x10) (contextRecord facts executing executing)
-      , eq "timer-stub" (stubBase + 0x14) (timerEntry 1)
-      , eq "kernel" objectLock 0, eq "kernel" schedulerLock 0
-      , CpsrIs 0x13
-      ]
-  , blocking "send-timeout-wake" SendTimeout [(R0, 1), (R1, 0x3333), (R2, 5)] (queue 1 0 1 ++ full [0xbbbb] 1)
-      (serviceActor executing Receive 1 outBase)
-      [ ResultIs 0
-      , eq "out" outBase 0xbbbb, eq "ring" ringBase 0x3333
-      , eq "kernel" (count 1) 1, eq "kernel" (read 1) 0, eq "kernel" (write 1) 0
-      , eq "kernel" (waitResult 1) 0
-      , eq "kernel" (sendNext 1) (sendSelf 1), eq "kernel" (sendPrev 1) (sendSelf 1)
-      , ByteIs "kernel" (taskState 1) (stateReady facts)
-      , eq "timer-stub" stubBase (contextRecord facts executing executing)
-      , eq "timer-stub" (stubBase + 4) (timerEntry 1)
-      , eq "timer-stub" (stubBase + 8) (clockValue + 5)
-      , eq "timer-stub" (stubBase + 0x10) (contextRecord facts executing executing)
-      , eq "timer-stub" (stubBase + 0x14) (timerEntry 1)
-      , eq "kernel" objectLock 0, eq "kernel" schedulerLock 0
-      , CpsrIs 0x13
-      ]
-  , blocking "receive-timeout-wake" ReceiveTimeout [(R0, 1), (R1, outBase), (R2, 5)] (queue 1 0 2 ++ [poke outBase 0x5e4d1e00])
-      (serviceActor executing Send 1 0x4444)
-      [ ResultIs 0
-      , eq "out" outBase 0x4444
-      , eq "kernel" (count 1) 0
-      , eq "kernel" (waitResult 1) 0, eq "kernel" (waitData 1) 0x4444
-      , eq "kernel" (recvNext 1) (recvSelf 1), eq "kernel" (recvPrev 1) (recvSelf 1)
-      , ByteIs "kernel" (taskState 1) (stateReady facts)
-      , eq "timer-stub" stubBase (contextRecord facts executing executing)
-      , eq "timer-stub" (stubBase + 4) (timerEntry 1)
-      , eq "timer-stub" (stubBase + 8) (clockValue + 5)
-      , eq "timer-stub" (stubBase + 0x10) (contextRecord facts executing executing)
-      , eq "timer-stub" (stubBase + 0x14) (timerEntry 1)
-      , eq "kernel" objectLock 0, eq "kernel" schedulerLock 0
-      , CpsrIs 0x13
-      ]
+
+
+
+
   , difference "delete-stranded-receiver" Delete [(R0, 1)] (queue 1 0 2 ++ receiverWaiter)
       [ResultIs 0, eq "kernel" (configExists 1) 0]
       [ResultIs 0, eq "kernel" (configExists 1) 0, eq "kernel" (recvNext 1) (recvSelf 1), eq "kernel" (waitResult 2) 0, ByteIs "kernel" (taskState 2) (stateObjectQueued facts .|. stateWait facts)]
