@@ -359,7 +359,7 @@ stackPointer = 0x00970000
 handlerStackPointer = 0x00970200
 targetStackPointer = 0x00970400
 wakerStack = 0x00970a00
-chainStack = 0x00970c00
+chainStack = wakerStack + 0x400
 exitAddress = 0x00958f00
 stopAddress = 0x00959200
 receiptAddress = 0x00960000
@@ -745,7 +745,8 @@ pages facts one =
      , Page (RegionId "stack") (GuestAddress (callerSp one - 0x400)) (0x400 + B.length callerBytes) ReadWrite
          (B.replicate 0x400 0 <> callerBytes)
      , page "target-stack" (GuestAddress (targetStackPointer - 0x100)) 0x100 ReadWrite
-     , page "waker-chain-stack" (GuestAddress (wakerStack - 0x400)) (fromIntegral (chainStack - (wakerStack - 0x400))) ReadWrite
+     , page "waker-stack" (GuestAddress (wakerStack - 0x400)) 0x400 ReadWrite
+     , page "chain-stack" (GuestAddress wakerStack) (fromIntegral (chainStack - wakerStack)) ReadWrite
      , page "pool" (GuestAddress poolStart) 0x100 ReadWrite
      , page "bank-a" (bank DomainA) 4 Device
      , page "bank-b" (bank DomainB) 4 Device
