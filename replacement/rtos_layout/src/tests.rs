@@ -331,3 +331,59 @@ fn family_slots_refuse_out_of_range_and_oversized_counts() {
     assert_eq!(MailboxSlot::new(2, 1), None);
     assert_eq!(MailboxSlot::new(1, 1).map(MailboxSlot::get), Some(1));
 }
+
+#[test]
+fn fixed_pool_views_are_the_stock_offsets() {
+    let base = GuestAddress(0x4006_194c);
+    assert_eq!(FixedPoolConfig(base).block_size().0, base.0 + 0x04);
+    assert_eq!(FixedPoolConfig(base).begin().0, base.0 + 0x08);
+    assert_eq!(FixedPoolConfig(base).end().0, base.0 + 0x0c);
+    assert_eq!(FixedPoolConfig(base).exists().0, base.0 + 0x10);
+    assert_eq!(FixedPoolControl(base).next_free().0, base.0 + 0x0c);
+    assert_eq!(FixedPoolControl(base).recycled().0, base.0 + 0x10);
+    assert_eq!(FixedPoolWait(base).block().0, base.0 + 0x0c);
+    assert_eq!(
+        [FixedPoolConfig::SIZE, FixedPoolControl::SIZE, FixedPoolWait::SIZE],
+        [0x14, 0x14, 0x10]
+    );
+}
+
+#[test]
+fn fixed_pool_tables_are_the_stock_addresses() {
+    let a = Domain::A.words();
+    let b = Domain::B.words();
+    assert_eq!(
+        [
+            a.fixed_pool_configs.0,
+            a.fixed_pool_controls.0,
+            a.fixed_pool_waits.0,
+            a.fixed_pool_timers.0,
+            a.default_pool_storage.0,
+        ],
+        [0x4006_194c, 0x4005_f584, 0x4005_855c, 0x4005_8cdc, 0x4006_2c4c]
+    );
+    assert_eq!(
+        [
+            b.fixed_pool_configs.0,
+            b.fixed_pool_controls.0,
+            b.fixed_pool_waits.0,
+            b.fixed_pool_timers.0,
+            b.default_pool_storage.0,
+        ],
+        [0x400f_190c, 0x400e_f544, 0x400e_851c, 0x400e_8c9c, 0x400f_2c0c]
+    );
+}
+
+#[test]
+fn fixed_pool_slot_accessors_stride_from_the_table() {
+    let a = Domain::A.words();
+    let pool2 = FixedPoolSlot::new(2, 122).unwrap();
+    let task3 = TaskSlot::new(3).unwrap();
+    assert_eq!(a.fixed_pool_config(pool2).0 .0, 0x4006_194c + 0x14);
+    assert_eq!(a.fixed_pool_control(pool2).0 .0, 0x4005_f584 + 0x14);
+    assert_eq!(a.fixed_pool_wait(task3).0 .0, 0x4005_855c + 2 * 0x10);
+    assert_eq!(a.fixed_pool_timer(task3).0, 0x4005_8cdc + 2 * 0x0c);
+    assert_eq!(FixedPoolSlot::new(122, 122).map(FixedPoolSlot::get), Some(122));
+    assert_eq!(FixedPoolSlot::new(123, 122), None);
+    assert_eq!(FixedPoolSlot::new(1, 0), None);
+}
