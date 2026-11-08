@@ -8,7 +8,7 @@ module Replacement.RtosOwnFirst.Command
   , parseCommand
   ) where
 
-import Control.Monad (when)
+import Control.Monad (unless, void, when)
 import Data.List (find)
 import Replacement.RtosOwnFirst.Controls
 import Replacement.RtosOwnFirst.Generate
@@ -34,6 +34,9 @@ data ReplayOptions = ReplayOptions
 
 parseCommand :: [String] -> Either String Command
 parseCommand arguments = do
+  let unknown = [argument | argument <- arguments, isFlag argument, argument `notElem` allowedFlags]
+  unless (null unknown) (Left ("unknown option " ++ unwords unknown))
+  mapM_ (\name -> void (flagValue name arguments)) commonValueFlags
   generate <- flagValue "--generate" arguments
   replay <- flagValue "--replay" arguments
   let timingOnly = "--timing-only" `elem` arguments
@@ -68,6 +71,17 @@ parseCommand arguments = do
       when (controlSlot control /= generationSlot) (Left (controlName control ++ " does not test " ++ slotTag generationSlot))
       Right control
 
+commonValueFlags, generationValueFlags :: [String]
+commonValueFlags = ["--runner", "--regions", "--owned-a-bin", "--owned-a-symbols", "--owned-b-bin", "--owned-b-symbols", "--loader-a", "--loader-b", "--work", "--summary"]
+generationValueFlags = ["--seed", "--shrink-budget", "--control"]
+
+allowedFlags :: [String]
+allowedFlags = "--generate" : "--replay" : "--timing-only" : commonValueFlags ++ generationValueFlags
+
+isFlag :: String -> Bool
+isFlag ('-' : '-' : _) = True
+isFlag _ = False
+
 -- | A flag is present only with a following value that is not itself a flag, and at most once.
 flagValue :: String -> [String] -> Either String (Maybe String)
 flagValue name = go Nothing
@@ -82,5 +96,3 @@ flagValue name = go Nothing
             Just _ -> Left (name ++ " is given more than once")
             Nothing -> go (Just value) rest
       | otherwise = go found rest
-    isFlag ('-' : '-' : _) = True
-    isFlag _ = False

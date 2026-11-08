@@ -6,7 +6,7 @@ module Main (main) where
 
 import Control.Exception (SomeException, try)
 import Control.Monad (forM, forM_, unless)
-import Data.Aeson (Value, eitherDecodeStrict', object, (.=))
+import Data.Aeson (Value (Null), eitherDecodeStrict', object, (.=))
 import Data.Bits (complement, (.&.))
 import qualified Data.ByteString as B
 import Data.Char (isAsciiLower, isDigit)
@@ -14,6 +14,7 @@ import Data.Either (isLeft, isRight)
 import Data.List (nub, sort)
 import qualified Data.Map.Strict as M
 import Data.Word (Word32)
+import Emulation.NativeCase (runnerDigest)
 import Emulation.NativeObservation
   ( GuestAddress (..)
   , InstructionCount (..)
@@ -40,7 +41,7 @@ import Replacement.RtosOwnFirst.Regions hiding (GuestAddress (..))
 import Replacement.RtosOwnFirst.Replay
 import Replacement.RtosOwnFirst.Shrink
 import Replacement.RtosOwnFirst.Verdict
-import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist, listDirectory, removeDirectoryRecursive)
+import System.Directory (copyFile, createDirectoryIfMissing, doesDirectoryExist, doesFileExist, listDirectory, removeDirectoryRecursive, removeFile)
 import System.Environment (getArgs, getEnv)
 import System.Exit (ExitCode (..), exitFailure)
 import System.FilePath (takeExtension, (</>))
@@ -131,7 +132,6 @@ pureChecks tableA =
       codeStarts slot = either (const []) (map fst . bodyCode) (stockBody DomainA tableA loader slot)
    in [ check "xorshift is the 13/17/5 generator" (xorshift 1 == 0x42021)
       , check "each slot's grid has the designed size" (and [length (caseGrid slot) == expectedCases slot | slot <- slots])
-      , check "the grid is deterministic" (map caseGrid slots == map caseGrid slots)
       , check "every entry CPSR is SVC or SYS with flags, Q, GE, I and F only" (all (privileged . entryCpsr . rowEntry) (concatMap caseGrid slots))
       , check "entry states cover both modes, I, F and the flag patterns" (length entryStates == 24 && length (nub (map entryCpsr entryStates)) == 24)
       , check "+0x16c rows reach +0x148 = 1, +0x128 failing on I and a null task" $
@@ -160,10 +160,10 @@ pureChecks tableA =
             == Right [0xeb002e8e, 0xe3043760, 0xe5d3000e, 0x13e00018, 0xe3130080, 0xe121f001, 0xee121e10, 0xe0020392, 0xe1a031c3, 0xe92d4800, 0xe8bd8800, 0xe12fff1e]
       , check "labels resolve forward and backward" (assembleAt 0x1000 [mark (Label "top"), on CondEq (branch (Label "end")), branch (Label "top"), mark (Label "end")] == Right [0x0a000000, 0xeafffffd])
       , check "one mutant per slot and two equivalents" (sort (map controlSlot mutants) == slots && length equivalents == 2 && all ((== MustFail) . controlExpectation) mutants && all ((== MustPass) . controlExpectation) equivalents)
-      , check "generated rows are deterministic, counted and valid" $
+      , check "generated rows are counted and valid" $
           let seed = GenerationSeed 0x2545f4914f6cdd1d
               rows = generateRows seed (generationCount 32)
-           in length rows == 32 && rows == generateRows seed (generationCount 32) && all validRow rows
+           in length rows == 32 && all validRow rows
       , check "the seed changes the generated corpus" (generateRows (GenerationSeed 1) (generationCount 8) /= generateRows (GenerationSeed 2) (generationCount 8))
       , check "a generated task word is a record start of the 120-record table" $
           let row = firstGeneratedRow
@@ -208,6 +208,26 @@ pureChecks tableA =
           let source :: String -> Value
               source mode = object ["schema" .= (1 :: Int), "mode" .= mode, "slot" .= ("0x16c" :: String), "domains" .= ([] :: [Value])]
            in isLeft (readRecordedCases (source "replay")) && isLeft (readRecordedCases (source "generate"))
+      , check "the command line rejects unknown options and bare common flags" $
+          all isLeft
+            [ parseCommand ["--generat4", "4"]
+            , parseCommand ["--runner"]
+            , parseCommand ["--work"]
+            , parseCommand ["--owned-a-bin"]
+            , parseCommand ["--timing-only", "--unknown", "x"]
+            ]
+      , check "replay requires both reduction records and keyed roles" $
+          let reduction :: String -> Value
+              reduction role = object ["role" .= role, "original" .= Null, "reduced" .= Null]
+              domain :: Value
+              domain = object ["domain" .= ("a" :: String), "candidate_reduction" .= reduction "owned"]
+              summary :: Value
+              summary = object ["schema" .= (1 :: Int), "mode" .= ("generate" :: String), "slot" .= ("0x16c" :: String), "control" .= ("mutant-s16c" :: String), "domains" .= [domain]]
+              mismatchDomain :: Value
+              mismatchDomain = object ["domain" .= ("a" :: String), "candidate_reduction" .= reduction "mutant-s16c", "control_reduction" .= Null]
+              mismatch :: Value
+              mismatch = object ["schema" .= (1 :: Int), "mode" .= ("generate" :: String), "slot" .= ("0x16c" :: String), "control" .= ("mutant-s16c" :: String), "domains" .= [mismatchDomain]]
+           in isLeft (readRecordedCases summary) && isLeft (readRecordedCases mismatch)
       , do
           let row = firstGeneratedRow
           reduction <- shrinkRow (shrinkBudget 32) (const (pure False)) row
@@ -317,12 +337,26 @@ generatedChecks runner temporary fill domain table owned =
                   reducedReport = replayReferenceBatch (shrinkReducedBatches report) </> shrinkReducedLabel report ++ ".native-result.json"
               originalBytes <- B.readFile originalReport
               reducedBytes <- B.readFile reducedReport
+              let fixtureName = "unrelated-fixture-" ++ domainLabel domain ++ ".txt"
+                  fixtureSource = replayReferenceBatch (shrinkOriginalBatches report)
+              B.writeFile (fixtureSource </> fixtureName) "unrelated fixture"
               originalReplay <- replayCase runner replayWork recordedOriginal
               reducedReplay <- replayCase runner replayWork recordedReduced
               preservedOriginal <- B.readFile originalReport
               preservedReduced <- B.readFile reducedReport
               counts <- freshBatchCounts replayWork
+              fixturePreserved <- doesFileExist (fixtureSource </> fixtureName)
+              fixtureCopied <- containsFileNamed replayWork fixtureName
               wrongBoundary <- replayCase runner (temporary </> "replay-wrong-" ++ domainLabel domain) recordedReduced {recordedBoundary = [StatusKind]}
+              runnerHash <- runnerDigest runner
+              let incompleteSource = temporary </> "replay-incomplete-source-" ++ domainLabel domain
+              copyDirectory (replaySubjectBatch (shrinkReducedBatches report)) incompleteSource
+              preparedIncomplete <- preflightCase runnerHash recordedReduced {recordedBatches = ReplayBatches (replayReferenceBatch (shrinkReducedBatches report)) incompleteSource}
+              incompleteEntries <- listDirectory incompleteSource
+              case [entry | entry <- incompleteEntries, takeExtension entry == ".bin"] of
+                artifact : _ -> removeFile (incompleteSource </> artifact)
+                [] -> fail ("no artifact to remove in " ++ incompleteSource)
+              incompleteResult <- executeCase runner (temporary </> "replay-incomplete-work-" ++ domainLabel domain) preparedIncomplete
               renamed <-
                 try
                   (loadBatchRuns runner (replayReferenceBatch (shrinkReducedBatches report)) (const "changed-binding") domain [(shrinkOriginalKey report, shrinkReducedRow report)])
@@ -344,7 +378,9 @@ generatedChecks runner temporary fill domain table owned =
                 , check "replay: the reduced case reproduces its recorded difference" (replayReproduces reducedReplay)
                 , check "replay: the preserved reports are unchanged" (preservedOriginal == originalBytes && preservedReduced == reducedBytes)
                 , check "replay: fresh batches hold only the selected case" (not (null counts) && all (== 1) counts)
+                , check "replay: unrelated source files are not copied" (fixturePreserved && not fixtureCopied)
                 , check "replay: a wrong typed boundary does not reproduce" (not (replayReproduces wrongBoundary))
+                , check "replay: an execution failure is incomplete and not reproduced" (case replayStatus incompleteResult of ReplayIncomplete _ -> True; _ -> False)
                 , check "replay: a changed case byte is rejected before execution" (case changedCase of Left _ -> True; Right _ -> False)
                 , check "replay: a changed runner is rejected before execution" (case changedRunner of Left _ -> True; Right _ -> False)
                 , check "replay: a missing recorded case is rejected" (case missing of Left _ -> True; Right _ -> False)
@@ -383,6 +419,14 @@ freshBatchCounts root = do
         pure $ case eitherDecodeStrict' bytes of
           Right value -> [length (list (get value "cases"))]
           Left _ -> [-1]
+
+containsFileNamed :: FilePath -> String -> IO Bool
+containsFileNamed root name = do
+  entries <- listDirectory root
+  fmap or . forM entries $ \entry -> do
+    let path = root </> entry
+    directory <- doesDirectoryExist path
+    if directory then containsFileNamed path name else pure (entry == name)
 
 main :: IO ()
 main = do

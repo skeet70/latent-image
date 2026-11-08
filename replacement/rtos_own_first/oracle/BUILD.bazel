@@ -84,6 +84,7 @@ haskell_binary(
 
 _TEST_DEPS = [
     ":own-first-oracle-lib",
+    "//emulation:native-adapter",
     "//emulation:native-observation",
     "//host:aeson",
     "//host:base",

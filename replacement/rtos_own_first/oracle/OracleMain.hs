@@ -219,6 +219,11 @@ generatedTerminal summaryPath options results = do
               ++ " returned cases per loader"
   putStrLn (prefix ++ outcome ++ (if null reduced then "" else "; reduced " ++ intercalate ", " reduced) ++ "; summary " ++ summaryPath)
 
+replayStatusText :: ReplayStatus -> String
+replayStatusText ReplayReproduced = "reproduced"
+replayStatusText ReplayKindsDiffer = "different"
+replayStatusText (ReplayIncomplete _) = "incomplete"
+
 replayCaseValue :: ReplayCaseResult -> Value
 replayCaseValue result =
   object
@@ -240,6 +245,8 @@ replayCaseValue result =
     , "kinds" .= map show (replayKinds result)
     , "expected_differences" .= recordedDifferences recorded
     , "differences" .= replayDifferences result
+    , "status" .= replayStatusText (replayStatus result)
+    , "reason" .= case replayStatus result of ReplayIncomplete reason -> reason; _ -> ""
     , "reproduces" .= replayReproduces result
     ]
   where
@@ -261,7 +268,7 @@ replaySummary source work inputs results =
 
 replayExit :: [ReplayCaseResult] -> ExitCode
 replayExit results
-  | any (not . replayReproduces) results = ExitFailure 1
+  | any (\result -> replayStatus result /= ReplayReproduced) results = ExitFailure 1
   | any (isOwnedRole . recordedRole . replayRecorded) results = ExitFailure 2
   | otherwise = ExitSuccess
 
@@ -271,12 +278,17 @@ replayTerminal summaryPath results =
     result : _ ->
       putStrLn
         ( "own-first replay: " ++ recordedCaseId (replayRecorded result)
-            ++ " (" ++ recordedKindText (recordedKind (replayRecorded result)) ++ ") did not reproduce its recorded difference; summary " ++ summaryPath
+            ++ " (" ++ recordedKindText (recordedKind (replayRecorded result)) ++ ") " ++ detail result
+            ++ "; summary " ++ summaryPath
         )
     [] ->
       putStrLn
         ( "own-first replay: " ++ show (length results) ++ " cases replayed and reproduced; summary " ++ summaryPath
         )
+  where
+    detail result = case replayStatus result of
+      ReplayIncomplete reason -> "incomplete: " ++ reason
+      _ -> "did not reproduce its recorded boundary"
 
 verifyInputs :: Value -> Value -> IO ()
 verifyInputs recorded current = do
@@ -343,7 +355,9 @@ main = do
     ReplayCommand _ -> do
       setEnv "XM1_STORAGE_PATH" (takeDirectory work)
       enterSlot (rewriteFlags replacements arguments)
-    GridCommand -> pure ()
+    GridCommand -> do
+      setEnv "XM1_STORAGE_PATH" (takeDirectory work)
+      enterSlot (rewriteFlags replacements arguments)
   lookupEnv "BUILD_WORKSPACE_DIRECTORY" >>= mapM_ setCurrentDirectory
   forM_ [work, summaryPath] $ \path -> do
     exists <- doesPathExist path

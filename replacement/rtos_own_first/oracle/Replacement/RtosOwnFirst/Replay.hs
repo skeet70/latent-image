@@ -9,7 +9,9 @@ module Replacement.RtosOwnFirst.Replay
   , recordedKindText
   , RecordedCase (..)
   , PreparedCase (..)
+  , ReplayStatus (..)
   , ReplayCaseResult (..)
+  , replayReproduces
   , readRecordedCases
   , parseDifferenceKind
   , preflightCase
@@ -17,25 +19,25 @@ module Replacement.RtosOwnFirst.Replay
   , replayCase
   ) where
 
-import Control.Exception (IOException, try)
+import Control.Exception (IOException, SomeException, try)
 import Control.Monad (forM_, unless)
 import Data.Aeson (Value (..), eitherDecodeStrict', object, (.=))
 import qualified Data.ByteString as B
-import Data.List (find, stripPrefix)
+import Data.List (find, isPrefixOf, stripPrefix)
 import Data.Text (unpack)
 import Data.Word (Word32)
 import Emulation.NativeCase (Region (..), loadCase, runnerDigest)
 import Emulation.NativeObservation (NativeObservation, RegionId (..), RunnerStatus (..), parseWord32, registerLabels)
 import Emulation.OwnedCase (CaseId (..), loadObservedBatch)
-import FujiAF.Host (ensure, failH, get, list, str)
+import FujiAF.Host (ensure, failH, get, keys, list, str)
 import FujiAF.JSON (encodeCanonical)
-import Replacement.RtosOwnFirst.Controls (controlName, mutants)
+import Replacement.RtosOwnFirst.Controls (controlName, controlSlot, mutants)
 import Replacement.RtosOwnFirst.Generate (generationSlot)
 import Replacement.RtosOwnFirst.Generated (BodyRole (..), ReplayBatches (..), roleLabel)
 import Replacement.RtosOwnFirst.Oracle (DifferenceKind (..), Run (..), compareRuns, differenceKind, differenceText, observedRun, slotOffset)
 import Replacement.RtosOwnFirst.Regions (Domain (..), SlotOffset (..), domainLabel, hexText)
-import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist)
-import System.FilePath ((</>))
+import System.Directory (canonicalizePath, copyFile, createDirectoryIfMissing, doesFileExist)
+import System.FilePath (isRelative, splitDirectories, (</>))
 
 data RecordedKind = RecordedOriginal | RecordedReduced
   deriving (Eq, Show)
@@ -64,14 +66,23 @@ data PreparedCase = PreparedCase
   , preparedSubjectIdentity :: String
   }
 
+data ReplayStatus
+  = ReplayReproduced
+  | ReplayKindsDiffer
+  | ReplayIncomplete String
+  deriving (Eq, Show)
+
 data ReplayCaseResult = ReplayCaseResult
   { replayRecorded :: RecordedCase
   , replayReferenceIdentity :: String
   , replaySubjectIdentity :: String
   , replayKinds :: [DifferenceKind]
   , replayDifferences :: [String]
-  , replayReproduces :: Bool
+  , replayStatus :: ReplayStatus
   }
+
+replayReproduces :: ReplayCaseResult -> Bool
+replayReproduces result = replayStatus result == ReplayReproduced
 
 -- | Reads every recorded original and reduced case of a schema 1 +0x16c generation summary.
 readRecordedCases :: Value -> Either String [RecordedCase]
@@ -79,25 +90,38 @@ readRecordedCases summary = do
   unless (get summary "schema" == Number 1) (Left "replay source is not a schema 1 summary")
   unless (str (get summary "mode") == "generate") (Left "replay source is not a generation summary")
   unless (str (get summary "slot") == expectedSlot) (Left ("replay source is not the " ++ expectedSlot ++ " generated domain"))
-  cases <- concat <$> mapM domainCases (list (get summary "domains"))
+  controlNameText <- text (get summary "control")
+  control <- case find ((== controlNameText) . controlName) mutants of
+    Just candidate | controlSlot candidate == generationSlot -> Right candidate
+    _ -> Left ("replay source control " ++ show controlNameText ++ " is not the current " ++ expectedSlot ++ " control")
+  cases <- concat <$> mapM (domainCases control) (list (get summary "domains"))
   unless (not (null cases)) (Left "replay source records no original or reduced case")
   Right cases
   where
     expectedSlot = case slotOffset generationSlot of SlotOffset offset -> hexText offset
-    domainCases domain = do
+    domainCases control domain = do
       label <- text (get domain "domain")
       domainId <- case label of
         "a" -> Right DomainA
         "b" -> Right DomainB
         other -> Left ("unknown recorded domain " ++ show other)
-      reductions <- mapM (reduction domainId) [get domain "candidate_reduction", get domain "control_reduction"]
+      unless (all (`elem` keys domain) ["candidate_reduction", "control_reduction"]) $
+        Left ("recorded domain " ++ label ++ " lacks a candidate or control reduction")
+      reductions <-
+        sequence
+          [ reduction domainId "candidate_reduction" OwnedRole (get domain "candidate_reduction")
+          , reduction domainId "control_reduction" (ControlRole control) (get domain "control_reduction")
+          ]
       Right (concat reductions)
-    reduction _ Null = Right []
-    reduction domainId value = do
+    reduction _ _ _ Null = Right []
+    reduction domainId key expectedRole value = do
       name <- text (get value "role")
-      role <- roleOf name
-      original <- caseOf domainId role RecordedOriginal (get value "original")
-      reduced <- caseOf domainId role RecordedReduced (get value "reduced")
+      unless (name == roleLabel expectedRole) $
+        Left ("recorded " ++ key ++ " role " ++ show name ++ " is not " ++ roleLabel expectedRole)
+      original <- caseOf domainId expectedRole RecordedOriginal (get value "original")
+      reduced <- caseOf domainId expectedRole RecordedReduced (get value "reduced")
+      unless (recordedBoundary original == recordedBoundary reduced) $
+        Left ("recorded " ++ key ++ " original and reduced boundaries differ")
       Right [original, reduced]
     caseOf domainId role kind value = do
       ident <- textField value "case"
@@ -109,10 +133,6 @@ readRecordedCases summary = do
       reference <- textField batches "reference"
       subject <- textField batches "subject"
       Right (RecordedCase role domainId kind ident boundary differences (ReplayBatches reference subject))
-    roleOf "owned" = Right OwnedRole
-    roleOf name = case find ((== name) . controlName) mutants of
-      Just control -> Right (ControlRole control)
-      Nothing -> Left ("recorded role " ++ show name ++ " is neither the owned body nor a current control")
     textField value key = text (get value key)
     text (String value) = Right (unpack value)
     text _ = Left "recorded case field must be a string"
@@ -159,9 +179,28 @@ preflightCase runnerHash recorded = do
       , preparedSubjectIdentity = identityField "case_sha256" subjectIdentity
       }
 
--- | Copies the selected case and its declared artifacts, then re-executes the pair.
+-- | Copies the selected case and its declared artifacts, then re-executes the pair. A copy or
+-- execution failure becomes an incomplete result rather than aborting before summary publication.
 executeCase :: FilePath -> FilePath -> PreparedCase -> IO ReplayCaseResult
 executeCase runner work prepared = do
+  outcome <- try (executePair runner work prepared) :: IO (Either SomeException ReplayCaseResult)
+  pure $ case outcome of
+    Right result -> result
+    Left problem -> incomplete prepared (show problem)
+
+incomplete :: PreparedCase -> String -> ReplayCaseResult
+incomplete prepared reason =
+  ReplayCaseResult
+    { replayRecorded = preparedRecorded prepared
+    , replayReferenceIdentity = preparedReferenceIdentity prepared
+    , replaySubjectIdentity = preparedSubjectIdentity prepared
+    , replayKinds = []
+    , replayDifferences = []
+    , replayStatus = ReplayIncomplete reason
+    }
+
+executePair :: FilePath -> FilePath -> PreparedCase -> IO ReplayCaseResult
+executePair runner work prepared = do
   let recorded = preparedRecorded prepared
       expected = recordedCaseId recorded
       batches = recordedBatches recorded
@@ -178,19 +217,21 @@ executeCase runner work prepared = do
     failH ("replayed labels " ++ show (referenceLabel, subjectLabel) ++ " differ from the recorded case " ++ expected)
   referenceRun <- observedRun freshReference referenceLabel (recordedDomain recorded) (preparedEntrySp prepared) referenceObservation
   subjectRun <- observedRun freshSubject subjectLabel (recordedDomain recorded) (preparedEntrySp prepared) subjectObservation
-  unless (runStatus referenceRun == Returned) $
-    failH ("reference run of " ++ expected ++ " did not return")
-  let differences = compareRuns referenceRun subjectRun
-      kinds = map differenceKind differences
-  pure
-    ReplayCaseResult
-      { replayRecorded = recorded
-      , replayReferenceIdentity = preparedReferenceIdentity prepared
-      , replaySubjectIdentity = preparedSubjectIdentity prepared
-      , replayKinds = kinds
-      , replayDifferences = map differenceText differences
-      , replayReproduces = not (null (recordedBoundary recorded)) && kinds == recordedBoundary recorded
-      }
+  if runStatus referenceRun /= Returned
+    then pure (incomplete prepared "reference did not return")
+    else do
+      let differences = compareRuns referenceRun subjectRun
+          kinds = map differenceKind differences
+          status = if kinds == recordedBoundary recorded then ReplayReproduced else ReplayKindsDiffer
+      pure
+        ReplayCaseResult
+          { replayRecorded = recorded
+          , replayReferenceIdentity = preparedReferenceIdentity prepared
+          , replaySubjectIdentity = preparedSubjectIdentity prepared
+          , replayKinds = kinds
+          , replayDifferences = map differenceText differences
+          , replayStatus = status
+          }
 
 -- | Preflight then execute one pair, for callers that replay a single case.
 replayCase :: FilePath -> FilePath -> RecordedCase -> IO ReplayCaseResult
@@ -217,7 +258,15 @@ batchCasePath directory expected = do
   bytes <- B.readFile batchPath
   batch <- either (\problem -> failH (batchPath ++ ": " ++ problem)) pure (eitherDecodeStrict' bytes)
   case recordedEntries batch expected of
-    [entry] -> pure (directory </> str (get entry "path"))
+    [entry] -> do
+      let relative = str (get entry "path")
+      unless (not (null relative) && isRelative relative && ".." `notElem` splitDirectories relative) $
+        failH (batchPath ++ ": case path " ++ show relative ++ " is not a contained relative path")
+      root <- canonicalizePath directory
+      path <- canonicalizePath (directory </> relative)
+      unless (splitDirectories root `isPrefixOf` splitDirectories path) $
+        failH (batchPath ++ ": case path " ++ show relative ++ " escapes the batch directory")
+      pure path
     entries ->
       failH
         ( batchPath ++ ": expected the recorded case " ++ expected ++ ", found "
