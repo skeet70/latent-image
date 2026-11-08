@@ -395,24 +395,21 @@ checkSourceIdentity expected = case (expectedRole expected, expectedSourceIdenti
             | expectedRole expected == OwnedRole
             , sort (map fst bindings) /= sort renderSourceIdentityPaths ->
                 pure (Left "source identity does not name the renderer sources")
-            | otherwise -> go path (M.toList (M.fromList bindings))
+            | otherwise -> go (M.toList (M.fromList bindings))
         Right _ -> pure (Left "source identity is not an object")
  where
   parseBinding (key, J.String text) = do
     digest <- either Left Right (parseDigest text)
     pure (T.unpack (K.toText key), digest)
   parseBinding (key, _) = Left ("source identity value is not a string: " ++ T.unpack (K.toText key))
-  go _ [] = pure (Right ())
-  go sidecarPath ((relative, expectedDigest) : rest) = do
-    let local = takeDirectory sidecarPath </> relative
-    localPresent <- doesFileExist local
-    let resolved = if localPresent then local else relative
-    present <- doesFileExist resolved
-    if not present then pure (Left ("source identity names missing file " ++ resolved)) else do
-      actual <- digestFile resolved
+  go [] = pure (Right ())
+  go ((relative, expectedDigest) : rest) = do
+    present <- doesFileExist relative
+    if not present then pure (Left ("source identity names missing file " ++ relative)) else do
+      actual <- digestFile relative
       if actual /= expectedDigest then pure (Left
         ("source identity of " ++ relative ++ " is " ++ T.unpack (digestText actual)
-          ++ ", the frozen build used " ++ T.unpack (digestText expectedDigest))) else go sidecarPath rest
+          ++ ", the frozen build used " ++ T.unpack (digestText expectedDigest))) else go rest
 
 checkOwnedInputs :: Expected -> IO (Either String ())
 checkOwnedInputs expected = case expectedRole expected of
