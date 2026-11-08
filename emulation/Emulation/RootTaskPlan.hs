@@ -40,7 +40,7 @@ rootLow, rootHigh, stackLow, stackHigh :: Word32
 rootLow = 0x69d160
 rootHigh = 0x69d2b4
 stackLow = 0xa10200
-stackHigh = 0xa5b200
+stackHigh = 0xa5a200
 physical :: Word32 -> Word32
 physical value = value .&. 0x3fffffff
 sourceBodies :: SourceFiles -> B.ByteString -> [(Word32,B.ByteString)]

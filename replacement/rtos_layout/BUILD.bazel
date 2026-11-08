@@ -9,6 +9,7 @@ genrule(
     srcs = [
         "src/lib.rs",
         "src/tests.rs",
+        "//replacement/rtos_reservation:src/lib.rs",
     ],
     outs = ["rtos-layout-host-tests-bin"],
     cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test --crate-name=xm1_rtos_layout -C linker=$(location @lab_clang//:bin/clang) $(location src/tests.rs) -o $@",

@@ -5,7 +5,7 @@
 mod timer;
 
 use core::arch::{asm, global_asm};
-use timer::layout::{Domain, GuestAddress, KernelContext};
+use timer::layout::{Domain, GuestAddress, KernelContext, TimerArena};
 use timer::{
     insert, remove, tick, Capacity, Expiry, Machine, Scheduler, TimerEntry, TimerError, TimerHeap,
 };
@@ -26,15 +26,19 @@ impl TimerConfiguration {
     #[inline(always)]
     fn publish(self, domain: Domain) {
         let words = domain.words();
-        write(self.0.offset(0x20), words.timer_heap.0);
+        write(self.0.offset(0x20), domain.timer_arena().guest.start());
         write(self.0.offset(0x24), words.timer_count.0);
         write(self.0.offset(0x28), words.timer_base.0);
         write(self.0.offset(0x2c), words.tick_now.0);
     }
 }
 
-/// The firmware declares the backing array without a bound.
-const FIXTURE_CAPACITY: Capacity = Capacity::from_static(184);
+const ARENA: TimerArena = ENTRY.timer_arena();
+
+/// The owned arena's logical node bound; 184 nodes fit its 0x800 bytes.
+const TIMER_CAPACITY: Capacity = Capacity::from_static(ARENA.capacity);
+
+const _: () = assert!(ARENA.fits());
 
 #[inline(always)]
 fn read(address: GuestAddress) -> u32 {
@@ -149,7 +153,7 @@ impl Scheduler for Cpu {
 
 #[inline(always)]
 fn heap(context: KernelContext) -> TimerHeap {
-    TimerHeap::from_context(&Cpu, context, FIXTURE_CAPACITY)
+    TimerHeap::from_context(&Cpu, context, TIMER_CAPACITY)
 }
 
 #[no_mangle]

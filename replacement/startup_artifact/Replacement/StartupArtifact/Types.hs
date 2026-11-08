@@ -67,7 +67,7 @@ editBytes (Edit _ bytes) = bytes
 
 data PieceKind = FirstStage | Record2Link | PrimaryPublisher | LoaderOrchestrationB | LoaderStartup | TaskSubmission | TaskStorage
   | IdleTask | RootTask | Image5Producer | PlainProducer | GeneralHeap | ApplicationPump | Task1Actor | Image5Initializer | TaskConstructors
-  | KernelSlotBodies
+  | KernelSlotBodies | Timer
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 pieceKindName :: PieceKind -> Text
@@ -89,11 +89,12 @@ pieceKindName kind = case kind of
   Image5Initializer -> "image5-initializer"
   TaskConstructors -> "task-constructors"
   KernelSlotBodies -> "kernel-slot-bodies"
+  Timer -> "timer"
 
 data Area = FirstStageArea | SecondaryStageArea | LoaderPrefixArea | InterfaceInitializerArea | CriticalPairArea | PrimaryInitializerArea
   | LoaderOrchestrationAArea | LoaderOrchestrationBArea | PhaseDispatcherArea | KernelInstallArea | TaskSubmissionArea | TaskStorageArea
   | IdleTaskArea | RootTaskArea | Image5ProducerArea | PlainProducerArea | GeneralHeapArea | ApplicationPumpArea | Task1ActorArea | Image5InitializerArea | TaskConstructorsArea
-  | KernelSlotBodiesArea
+  | KernelSlotBodiesArea | TimerArea
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 areaName :: Area -> Text
@@ -120,6 +121,7 @@ areaName area = case area of
   Image5InitializerArea -> "image5-initializer"
   TaskConstructorsArea -> "task-constructors"
   KernelSlotBodiesArea -> "kernel-slot-bodies"
+  TimerArea -> "timer"
 
 data FootprintBasis = AdmissionRead | RuntimePremise deriving (Eq, Ord, Show)
 
@@ -317,7 +319,11 @@ data PoolSpan = PoolSpan Word32 Word32 deriving (Eq, Show)
 -- each stack-top return boundary compare as (task, offset) within that role's own allocations, and each
 -- core's tasks, ordered by base, must match between the roles.
 data PoolAllocation = PoolAllocation
-  { poolSpan :: PoolSpan, poolRecords :: Label, poolCursor :: Label
+  { poolSpan :: PoolSpan
+  -- | The allocatable end; the timer arenas own [end, reservedEnd).
+  , poolAllocatableEnd :: Word32
+  , poolReserved :: PoolSpan
+  , poolRecords :: Label, poolCursor :: Label
   , poolWords :: [AllocationWords], poolStackTops :: [Label], poolOwners :: [AllocationOwner], poolCitation :: Citation }
   deriving (Eq, Show)
 
@@ -379,6 +385,8 @@ data PieceFacts
   | Image5InitializerFacts LinkedBytes
   -- | Each loader's owned kernel slots and +0x1618 body.
   | KernelSlotFacts [KernelSlot] [KernelSlotBody]
+  -- | Both loaders' linked timer images and their owned arena spans.
+  | TimerFacts LinkedBytes LinkedBytes PoolSpan PoolSpan
   deriving (Eq, Show)
 
 data Piece = Piece

@@ -357,7 +357,7 @@ checkSubmission receipt watch probe initial samples = do
     oldStorage <- wordsAt ControlStorageRejected before storage 3
     newStorage <- wordsAt ControlStorageRejected after storage 3
     ensure ControlStorageRejected (case oldStorage of
-      [base,1024,1] -> base >= 0xa10200 && toInteger base+1024 <= 0xa5b200 && oldStorage == newStorage
+      [base,1024,1] -> base >= 0xa10200 && toInteger base+1024 <= 0xa5a200 && oldStorage == newStorage
       _ -> False)
     pair <- wordsAt ControlStorageRejected after wrapper 2
     ensure ControlStorageRejected (pair == [0,1024])
@@ -380,7 +380,7 @@ checkCreated probe before after samples = do
   ensure ControlAuxiliaryRejected (auxiliaryBefore == (if isFresh kind then 0 else 1))
   pair <- wordsAt ControlStorageRejected after wrapper 2
   (base,size) <- case pair of [base,size] -> pure (base,size); _ -> Left ControlStorageRejected
-  ensure ControlStorageRejected (size == (if kind == PartialPair then 0 else 1024) && base >= 0xa10200 && toInteger base+1024 <= 0xa5b200)
+  ensure ControlStorageRejected (size == (if kind == PartialPair then 0 else 1024) && base >= 0xa10200 && toInteger base+1024 <= 0xa5a200)
   auxiliaryCall <- one AuxiliaryCall samples; auxiliaryReturn <- one AuxiliaryReturn samples
   arguments auxiliaryCall [encoded]
   auxiliaryPointer <- reg 1 (state auxiliaryCall)

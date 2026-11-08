@@ -5,9 +5,14 @@ module Replacement.RtosTimer.Layout
   ( DomainFacts (..)
   , ContextOffsets (..)
   , LockOffsets (..)
+  , SpanFacts (..)
+  , ArenaFacts (..)
+  , TaskPoolFacts (..)
+  , ReservationFacts (..)
   , Facts (..)
   , parseFacts
   , domainFacts
+  , arenaFor
   ) where
 
 import Data.Aeson (FromJSON (..), eitherDecodeStrict', withObject, (.:))
@@ -42,6 +47,38 @@ data LockOffsets = LockOffsets
   }
   deriving (Eq, Show)
 
+data SpanFacts = SpanFacts
+  { spanStart :: Word32
+  , spanEnd :: Word32
+  , spanSize :: Word32
+  }
+  deriving (Eq, Show)
+
+data ArenaFacts = ArenaFacts
+  { arenaGuest :: SpanFacts
+  , arenaPhysical :: SpanFacts
+  , arenaCapacity :: Word32
+  , arenaNodeBytes :: Word32
+  }
+  deriving (Eq, Show)
+
+data TaskPoolFacts = TaskPoolFacts
+  { poolGuest :: SpanFacts
+  , poolPhysical :: SpanFacts
+  , poolAllocatable :: SpanFacts
+  , poolAllocatablePhysical :: SpanFacts
+  , poolReserved :: SpanFacts
+  }
+  deriving (Eq, Show)
+
+data ReservationFacts = ReservationFacts
+  { reservationTaskPool :: TaskPoolFacts
+  , reservationArenaA :: ArenaFacts
+  , reservationArenaB :: ArenaFacts
+  , reservationNodeBytes :: Word32
+  }
+  deriving (Eq, Show)
+
 data Facts = Facts
   { factsA :: DomainFacts
   , factsB :: DomainFacts
@@ -49,6 +86,7 @@ data Facts = Facts
   , factsLock :: LockOffsets
   , factsTimerEntrySize :: Word32
   , factsTaskSlots :: Word32
+  , factsReservation :: ReservationFacts
   }
   deriving (Eq, Show)
 
@@ -79,6 +117,36 @@ instance FromJSON LockOffsets where
       <*> o .: "acquire"
       <*> o .: "release"
 
+instance FromJSON SpanFacts where
+  parseJSON = withObject "span" $ \o ->
+    SpanFacts <$> o .: "start" <*> o .: "end" <*> o .: "size"
+
+instance FromJSON ArenaFacts where
+  parseJSON = withObject "arena" $ \o ->
+    ArenaFacts
+      <$> o .: "guest"
+      <*> o .: "physical"
+      <*> o .: "capacity"
+      <*> o .: "node_bytes"
+
+instance FromJSON TaskPoolFacts where
+  parseJSON = withObject "task pool" $ \o ->
+    TaskPoolFacts
+      <$> o .: "guest"
+      <*> o .: "physical"
+      <*> o .: "allocatable"
+      <*> o .: "allocatable_physical"
+      <*> o .: "reserved"
+
+instance FromJSON ReservationFacts where
+  parseJSON = withObject "reservation" $ \o -> do
+    pool <- o .: "task_pool"
+    arenas <- o .: "timer_arenas"
+    a <- withObject "timer arenas" (.: "a") arenas
+    b <- withObject "timer arenas" (.: "b") arenas
+    nodeBytes <- o .: "timer_node_bytes"
+    pure (ReservationFacts pool a b nodeBytes)
+
 instance FromJSON Facts where
   parseJSON = withObject "timer layout" $ \o ->
     Facts
@@ -88,6 +156,7 @@ instance FromJSON Facts where
       <*> o .: "lock"
       <*> o .: "timer_entry_size"
       <*> o .: "task_slots"
+      <*> o .: "reservation"
 
 parseFacts :: B.ByteString -> Either String Facts
 parseFacts = eitherDecodeStrict'
@@ -95,3 +164,7 @@ parseFacts = eitherDecodeStrict'
 domainFacts :: Facts -> Domain -> DomainFacts
 domainFacts facts DomainA = factsA facts
 domainFacts facts DomainB = factsB facts
+
+arenaFor :: Facts -> Domain -> ArenaFacts
+arenaFor facts DomainA = reservationArenaA (factsReservation facts)
+arenaFor facts DomainB = reservationArenaB (factsReservation facts)

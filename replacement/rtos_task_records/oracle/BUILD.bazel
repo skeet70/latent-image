@@ -7,6 +7,7 @@ genrule(
     srcs = [
         "layout-facts.rs",
         "//replacement/rtos_layout:src/lib.rs",
+        "//replacement/rtos_reservation:src/lib.rs",
     ],
     outs = ["layout-facts-bin"],
     cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 -A dead_code -C linker=$(location @lab_clang//:bin/clang) $(location layout-facts.rs) -o $@",
