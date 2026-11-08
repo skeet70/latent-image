@@ -65,7 +65,7 @@ compilerFiles :: [FilePath]
 compilerFiles = [library, "debug/deps/libfixture-" ++ hashSuffix ++ ".rmeta", "debug/deps/libfixture-" ++ hashSuffix ++ ".so"] ++ ["debug/incremental/fixture-123/s-456/" ++ name | name <- ["dep-graph.bin", "query-cache.bin", "work-products.bin"]] ++ ["debug/build/builder-" ++ hashSuffix ++ "/build-script-build"]
 
 protectedFiles :: [FilePath]
-protectedFiles = ["main.rs", "case.json", "results/report.html", "image.DAT", "imports/raw.bin", "debug/fixture", "debug/examples/fixture"] ++ ["debug/deps/" ++ name | name <- ["source.rs", "report.json", "report.html", "database.db", "database.sqlite", "firmware.DAT", "custom.bin", "import.rlib", "libunclaimed-0123456789abcdef.rlib", "libfixture-0123456789abcdef.d"]]
+protectedFiles = ["main.rs", "case.json", "results/report.html", "image.DAT", "imports/raw.bin", "imports/\955-\x4e2d.bin", "debug/fixture", "debug/examples/fixture"] ++ ["debug/deps/" ++ name | name <- ["source.rs", "report.json", "report.html", "database.db", "database.sqlite", "firmware.DAT", "custom.bin", "import.rlib", "libunclaimed-0123456789abcdef.rlib", "libfixture-0123456789abcdef.d"]]
 
 fixture :: FilePath -> IO ()
 fixture root = do
@@ -198,6 +198,27 @@ runFixtures argument = do
       withBinaryFile payload ReadMode $ \handle -> do
         hSeek handle AbsoluteSeek (payloadBytes - 1)
         B.hGet handle 1 >>= \byte -> check (byte == "\0") "retained payload changed"
+    fresh "bounded-wide-snapshot" $ \root plan -> do
+      let payloads = [(index, root </> "imports" </> replicate 80 'p' </> ("part-" ++ show index ++ replicate 110 'x' ++ ".bin")) | index <- [0 :: Int .. 8191]]
+          bounded arguments = arguments ++ ["+RTS", "-M128m", "-RTS"]
+      forM_ payloads $ \(index, payload) -> put payload (B.singleton (fromIntegral index))
+      _ <- run executable True (bounded ["plan", "--cargo-target", root, "--output", plan])
+      let (_, lastPayload) = last payloads
+      put lastPayload "\254"
+      _ <- run executable False (bounded ["apply", "--plan", plan])
+      doesPathExist (root </> library) >>= \exists -> check exists "changed wide snapshot permitted deletion"
+      put lastPayload "\255"
+      _ <- run executable True (bounded ["apply", "--plan", plan])
+      forM_ payloads $ \(index, payload) ->
+        B.readFile payload >>= \byte -> check (byte == B.singleton (fromIntegral index)) "retained wide-snapshot payload changed"
+    fresh "nonunicode-filename" $ \root plan -> do
+      let invalidPath = "imports/\xdcff.bin"
+          protected = compilerFiles ++ protectedFiles ++ [invalidPath]
+      put (root </> invalidPath) "synthetic non-Unicode filename fixture"
+      expected <- snapshot root protected
+      _ <- run executable False ["plan", "--cargo-target", root, "--output", plan]
+      doesPathExist plan >>= \exists -> check (not exists) "non-roundtripping filename produced a plan"
+      assertUnchanged root protected expected
     fresh "metadata-only" $ \root _ -> do
       let unreadable = root </> "debug/deps/database.db"
       bracket (setFileMode unreadable 0) (const (setFileMode unreadable 0o600)) $ \_ -> do
