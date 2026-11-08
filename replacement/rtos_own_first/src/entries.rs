@@ -43,7 +43,7 @@ impl Machine for Cpu {
     }
 }
 
-const WORDS: &DomainWords = DOMAIN.words();
+const WORDS: &DomainWords = &DOMAIN.words();
 
 #[no_mangle]
 #[inline(never)]

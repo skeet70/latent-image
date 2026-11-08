@@ -7,6 +7,7 @@ import Data.Aeson (FromJSON (..), Value, object, withObject, (.:), (.:?), (.=))
 import qualified Data.Aeson as J
 import Data.Aeson.Types (Parser)
 import Data.Bits ((.&.), (.|.), complement, shiftL)
+import Data.Either (partitionEithers)
 import qualified Data.ByteString as B
 import Data.List (sort, sortOn)
 import qualified Data.Map.Strict as M
@@ -73,7 +74,7 @@ instance FromJSON DemandPaging where
       <*> o .: "abort" <*> o .: "core_instructions" <*> o .: "spsr" <*> o .: "ifar" <*> o .: "ifsr" <*> o .:? "service"
 data Observation = Observation { obsRole :: Role, obsInputs :: [String], obsInstructions :: Word64, obsEntries :: Int, obsReturns :: Int,
   obsUntracked :: Int, obsUnarmed :: Int, obsFill :: Maybe Value, obsArmings :: [Q.Arming], obsSegments :: [Q.Segment], obsFinal :: Maybe Q.Readback,
-  obsCalls :: [Call], obsPending :: [Word64], obsMilestones :: [Q.Milestone], obsError :: Maybe T.Text, obsMachineError :: Maybe T.Text,
+  obsCalls :: [Call], obsPending :: ([F.Pending],[Word64]), obsMilestones :: [Q.Milestone], obsError :: Maybe T.Text, obsMachineError :: Maybe T.Text,
   obsBankCounts :: BankCounts, obsPcWatches :: [PcWatch], obsDemandPaging :: [DemandPaging] } deriving (Eq,Show)
 data Refusal = Binding | Arming | Readback | Watch | FillFetch | Incomplete | Untracked | Unarmed | WrongCore | CallOutsidePlan | EntryUnreadable | Model ModelFailure | ReturnValue | ProcessorState | MemoryResult | WrittenWords | BankWrites | QueueInvariant | Route | ObserverError | UnsupportedSemantic Semantic | MissingTrace | CompletionMismatch | DispatchModel D.DispatchFailure | DemandPagingState
   | FamilyReturn | FamilyEffect | FamilyLifetime | FamilyTimer | FamilyDestructor | FamilyContinuation | FamilyAssociation deriving (Eq,Show)
@@ -166,7 +167,9 @@ instance FromJSON Observation where
         case bounds of [lo,hi] -> (,,) lo hi <$> c .: "kinds"; _ -> fail "invalid class range")
       Q.Segment <$> (s .: "domains" >>= mapM parseDomain) <*> s .: "started" <*> s .: "ended" <*> pure (length rows) <*> state .:? "violation" <*> pure classes)
     final <- o .:? "final_readback" >>= traverse Q.readbackOf
-    pending <- o .: "pending" >>= mapM (withObject "pending" (.: "entered"))
+    pendingRows <- o .: "pending" >>= mapM pendingOf
+    let (familyPending, otherPending) = partitionEithers pendingRows
+    let pending = (familyPending, otherPending)
     milestones <- o .: "milestones" >>= mapM (withObject "milestone" $ \m -> do
       pulse <- m .:? "pulse" >>= traverse (withObject "pulse" (.: "key"))
       let menu = withObject "menu" $ \v -> Q.MenuTriple <$> v .: "menu" <*> v .: "setting" <*> v .: "cursor"
@@ -176,6 +179,27 @@ instance FromJSON Observation where
     Observation role inputs <$> o .: "instructions" <*> o .: "entries" <*> o .: "returns" <*> count "untracked" <*> count "unarmed_entries"
       <*> o .:? "fill_fetch" <*> pure armings <*> pure segments <*> pure final <*> o .: "classes" <*> pure pending <*> pure milestones
       <*> o .:? "error" <*> o .:? "machine_failure" <*> o .: "bank_counts" <*> pure watches <*> o .: "demand_paging"
+
+pendingOf :: Value -> Parser (Either F.Pending Word64)
+pendingOf = withObject "pending" $ \p -> do
+  entry <- p .: "entry"
+  slot <- entry .: "slot"
+  semantic <- withObject "slot" (.: "semantic") slot
+  entered <- p .: "entered"
+  case semantic of
+    FamilySemantic service -> do
+      domain <- withObject "slot" (.: "domain") slot >>= parseDomain
+      arguments <- entry .: "arguments"
+      before <- entry .: "memory" >>= memoryOf
+      task <- entry .: "task" >>= wordRead
+      spValue <- entry .: "sp"
+      sp <- parseHex spValue
+      cpsr <- entry .: "cpsr"
+      entryValue <- withObject "slot" (.: "entry") slot
+      entryAddress <- parseHex entryValue
+      terminal <- p .:? "terminal_memory" >>= traverse memoryOf
+      pure (Left (F.Pending service domain arguments before terminal task sp cpsr entryAddress entered))
+    _ -> pure (Right entered)
 
 expect :: Refusal -> Bool -> Either Refusal ()
 expect refusal valid = unless valid (Left refusal)
@@ -386,8 +410,11 @@ checkCallEnvelope plan call = do
 
 qualifySuffix :: Observation -> CallTotals -> Either Refusal ()
 qualifySuffix observation totals = do
-  expect Incomplete (hasCompletedClasses totals && obsReturns observation == completedCallCount totals && obsEntries observation == obsReturns observation + length (obsPending observation)
-    && all (\entered -> entered <= obsInstructions observation && obsInstructions observation-entered <= Q.pendingWindow) (obsPending observation))
+  let (familyPending, otherPending) = obsPending observation
+  expect Incomplete (hasCompletedClasses totals && obsReturns observation == completedCallCount totals
+    && obsEntries observation == obsReturns observation + length familyPending + length otherPending
+    && all (\entered -> entered <= obsInstructions observation && obsInstructions observation-entered <= Q.pendingWindow) otherPending)
+  forM_ familyPending $ \pending -> either (Left . familyRefusal) Right (F.checkPendingFamily pending)
   expect ObserverError (obsError observation == Nothing && obsMachineError observation == Nothing)
   let milestones = obsMilestones observation
       phases = S.fromList (map Q.milestonePhase milestones)

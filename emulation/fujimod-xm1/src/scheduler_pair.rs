@@ -481,7 +481,7 @@ impl ReturnKey {
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct OpenCall { entry: EntryState, entered: u64, writes: Vec<CapturedWrite>, bank: Vec<CapturedWrite>, history: Vec<Boundary>, write_cursor: usize, bank_cursor: usize, suspended: bool }
+struct OpenCall { entry: EntryState, entered: u64, writes: Vec<CapturedWrite>, bank: Vec<CapturedWrite>, history: Vec<Boundary>, write_cursor: usize, bank_cursor: usize, suspended: bool, terminal_memory: Option<Vec<WordValue>> }
 
 impl OpenCall {
     fn record(&mut self, mut boundary: Boundary) -> Result<(), String> {
@@ -732,7 +732,11 @@ fn root_snapshot(board: &Board, core: Core, tcm: [u32; 2], domain: Domain) -> Re
         Domain::A => (0x400545a4, 0x400545c0, 0x400546d8, 0x400546dc, 0x4005475c, 0x40054760, 0x40054764, 0x40054768),
         Domain::B => (0x400e4564, 0x400e4580, 0x400e4698, 0x400e469c, 0x400e471c, 0x400e4720, 0x400e4724, 0x400e4728),
     };
-    let mut addresses: BTreeSet<_> = [context, lock, reschedule, bitmap, running, dispatch, selected, 0x400c0804].into_iter().collect();
+    let (object_lock, timer_base, timer_count) = match domain {
+        Domain::A => (0x400545c4, 0x4005476c, 0x40054778),
+        Domain::B => (0x400e4584, 0x400e472c, 0x400e4738),
+    };
+    let mut addresses: BTreeSet<_> = [context, lock, object_lock, timer_base, timer_count, reschedule, bitmap, running, dispatch, selected, 0x400c0804].into_iter().collect();
     addresses.extend((0..128).step_by(4).map(|offset| heads+offset));
     for cell in [running, selected] {
         let task = committed(board.word(core, tcm, cell)?)?;
@@ -988,6 +992,7 @@ fn family_queue(walk: &mut FamilyWalk, family: Family, control: u32) -> Result<(
     for _ in 0..FAMILY_QUEUE_LIMIT {
         let Some(task) = node.filter(|&task| task != control) else { return Ok(()) };
         for offset in [0x0c, 0x14, 0x18, 0x1c, 0x20] { walk.capture_word(task + offset); }
+        if let Some(saved) = walk.pointer(task + 0x18)? { if saved % 4 == 0 { walk.record(saved, 36); } }
         if let Some((waiter, slot)) = family_task(task) {
             let tables = FamilyTables::of(waiter);
             if let Some(wait) = tables.waits(family).record(slot) {
@@ -1336,7 +1341,7 @@ impl Observer<'_> {
         if !self.armings.iter().any(|arming| arming.domain == domain) { self.unarmed_entries.push(StopRecord::of(context)); }
         let semantic = entry.slot.semantic;
         let call = OpenCall { entry, entered: context.instructions, writes: Vec::new(), bank: Vec::new(),
-            history: origin.map(|(_,history)| history).unwrap_or_default(), write_cursor: 0, bank_cursor: 0, suspended: false };
+            history: origin.map(|(_,history)| history).unwrap_or_default(), write_cursor: 0, bank_cursor: 0, suspended: false, terminal_memory: None };
         let continuation = match semantic {
             Semantic::Dispatch { name: DispatchPoint::Select } => {
                 let selected_cell = match domain { Domain::A => 0x40054768, Domain::B => 0x400e4728 };
@@ -1839,6 +1844,18 @@ fn drive() -> Result<(), String> {
     let drained = observer.drain_data(&machine);
     let unhooked = observer.end_data(&machine);
     let error = observed.err().or(ended.err()).or(read_error).or(drained.err()).or(unhooked.err());
+    let maps = observer.maps.clone();
+    {
+        let board = Board { machine: &machine, maps: &maps };
+        for call in observer.open.pending.values_mut().flatten() {
+            let tcm = board.tcm(call.entry.core)?;
+            let mut memory = Vec::with_capacity(call.entry.memory.len());
+            for word in &call.entry.memory {
+                memory.push(WordValue { address: word.address, value: board.word(call.entry.core, tcm, word.address.0)? });
+            }
+            call.terminal_memory = Some(memory);
+        }
+    }
     let report = Report {
         schema: SCHEMA,
         role: validated.plan.role,
@@ -1895,7 +1912,7 @@ mod tests {
             semantic: Semantic::Service { name: Service::SleepTask } }, core: Core::Primary, cpsr: 0x53,
             arguments: [0;4], memory: vec![], r0: 0, lr: Hex(0x8000), task: Read::Committed { value: 0x9000 },
             sp: Hex(0xa000), registers: [0;16], cpacr: 0, fpexc: 0, tpidrurw: 7, origin: None, kernel_context: 0, task_stack: None },
-            entered: 1, writes: vec![], bank: vec![], history: vec![], write_cursor: 0, bank_cursor: 0, suspended: false }
+            entered: 1, writes: vec![], bank: vec![], history: vec![], write_cursor: 0, bank_cursor: 0, suspended: false, terminal_memory: None }
     }
 
     fn captured(write: Written) -> CapturedWrite {

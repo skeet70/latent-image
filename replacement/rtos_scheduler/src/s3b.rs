@@ -15,7 +15,7 @@ impl TaskHandle {
 #[derive(Clone, Copy)]
 enum Request { Activate, CancelActivation, Wake, CancelWake }
 
-const WORDS: &DomainWords = crate::DOMAIN.words();
+const WORDS: DomainWords = crate::DOMAIN.words();
 
 extern "C" {
     fn s3b_prepare(context: KernelContext, task: Task) -> u32;

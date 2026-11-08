@@ -303,7 +303,7 @@ familyPins domain = case domain of
     , Digest "84500e90dc21aafd26b8f6e0b8f9602950ecc0319ee143d88c5d878eba9f62e5"
     )
   DomainB ->
-    ( Digest "2c35ff810dd474a0352801377a1a5ee4be4ed2c5022d0bf13a550bd9e3e55ec4"
+    ( Digest "d7ea8151b60ad0cd45c9582824f5ad9b9300f70290aba2bc4795829a3b96b300"
     , Digest "4037a4dc3b4b25933e7fc7da4858c12c8f81ae340c834857328bf90f93efea21"
     )
 

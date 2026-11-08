@@ -124,6 +124,7 @@ xm1_rust_staticlib(
             "src/timeout.rs",
             "src/wake.rs",
             "//replacement/rtos_layout:src/lib.rs",
+            "//replacement/rtos_reservation:src/lib.rs",
         ],
         rustc_flags = [
             "--cfg",

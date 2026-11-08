@@ -4,7 +4,7 @@ use core::ptr::{read_volatile, write_volatile};
 use crate::layout::{DomainId, DomainWords, GuestAddress, KernelContext, LockRecord, Priority, Task, TaskFlags, TaskState};
 use crate::{Acquired, RecordId, Reschedule, Notified, DOMAIN};
 
-const WORDS: &DomainWords = DOMAIN.words();
+const WORDS: DomainWords = DOMAIN.words();
 
 extern "C" {
     fn s3a_stock_remove(record: KernelContext, task: Task) -> Reschedule;

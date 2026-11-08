@@ -200,7 +200,7 @@ impl Wake for Cpu {
 }
 
 #[inline(always)]
-fn entry_words() -> &'static DomainWords {
+fn entry_words() -> DomainWords {
     ENTRY.words()
 }
 

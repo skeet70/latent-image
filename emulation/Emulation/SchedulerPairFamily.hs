@@ -4,7 +4,7 @@
 -- layout and the independent expected-state rules.
 module Emulation.SchedulerPairFamily
   ( FamilyCall (..), FamilyTrace (..), FamilyBoundary (..), FamilyBoundaryKind (..), FamilyCompletion (..)
-  , FamilyRefusal (..), checkFamilyCall ) where
+  , Pending (..), FamilyRefusal (..), checkFamilyCall, checkPendingFamily ) where
 
 import Control.Monad (foldM, forM, forM_, unless, when)
 import Data.Bits ((.&.), (.|.), complement, shiftL, shiftR)
@@ -104,6 +104,63 @@ familyWindows DomainB =
 
 inFamilyWindow :: Domain -> Word32 -> Bool
 inFamilyWindow domain pc = any (\(lo,hi) -> pc>=lo && pc<hi) (familyWindows domain)
+
+-- | A family call still open at route end, with its entry and terminal words.
+data Pending = Pending
+  { pendingService :: FamilyService
+  , pendingDomain :: Domain
+  , pendingArguments :: [Word32]
+  , pendingBefore :: Memory
+  , pendingTerminal :: Maybe Memory
+  , pendingTask :: Word32
+  , pendingSp :: Word32
+  , pendingCpsr :: Word32
+  , pendingEntry :: Word32
+  , pendingEntered :: Word64
+  } deriving (Eq,Show)
+
+-- | Only a forever timed flag wait is modeled; every other pending family call fails closed.
+checkPendingFamily :: Pending -> Either FamilyRefusal ()
+checkPendingFamily pending = case (pendingService pending, pendingTerminal pending) of
+  (FlagTimedWait, Just terminal) -> foreverTimedWait terminal
+  _ -> Left FamilyLifetime
+  where
+    domain = pendingDomain pending
+    args = pendingArguments pending
+    before = pendingBefore pending
+    foreverTimedWait terminal = do
+      idWord <- argAt args 0
+      out <- argAt args 3
+      (object, slot) <- resolveFlag domain idWord
+      let family = layout object
+          control = flagControl family slot
+          task = pendingTask pending
+      timeout <- wordAt (pendingSp pending) before
+      expect FamilyLifetime (signedWord timeout == -1)
+      wait <- wordAt (task+0x14) terminal
+      expect FamilyLifetime (wait /= 0)
+      timer <- wordAt wait terminal
+      expect FamilyTimer (timer == 0)
+      state <- wordAt (task+0x0c) terminal
+      expect FamilyLifetime (state .&. 0xff == 0x32)
+      headWord <- wordAt control terminal
+      prevWord <- wordAt (control+4) terminal
+      nextWord <- wordAt task terminal
+      taskPrev <- wordAt (task+4) terminal
+      expect FamilyLifetime (headWord == task && prevWord == task && nextWord == control && taskPrev == control)
+      beforeOut <- wordAt out before
+      afterOut <- wordAt out terminal
+      expect FamilyEffect (beforeOut == afterOut)
+      schedulerLock <- wordAt (if domain == DomainA then 0x400545c0 else 0x400e4580) terminal
+      objectLock <- wordAt (if domain == DomainA then 0x400545c4 else 0x400e4584) terminal
+      expect FamilyLifetime (schedulerLock == 0 && objectLock == 0)
+      expect FamilyLifetime (pendingCpsr pending .&. 0x80 == 0)
+      savedSp <- wordAt (task+0x18) terminal
+      savedPc <- wordAt (task+0x1c) terminal
+      let resumeEntry = if domain == DomainA then 0x43668 else 0xd3668
+      expect FamilyLifetime (savedSp /= 0 && savedSp .&. 3 == 0 && savedPc == resumeEntry)
+      continuation <- wordAt (savedSp+32) terminal
+      expect FamilyContinuation (inFamilyWindow domain continuation)
 
 flagConfig :: FamilyLayout -> Word32 -> Word32
 flagConfig family slot = layoutFlagConfig family + (slot-1)*12
