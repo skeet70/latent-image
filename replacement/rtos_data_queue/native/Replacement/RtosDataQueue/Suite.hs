@@ -369,6 +369,7 @@ cases facts executing =
     currentAtPriorityFive =
       let words' = domainFacts facts executing
           task1 = taskAt 1
+          task3 = taskAt 3
           head0 = dfReadyHeads words'
           head5 = head0 + 5 * 8
        in [ poke head0 head0, poke (head0 + 4) head0
@@ -376,6 +377,8 @@ cases facts executing =
           , poke (task1 + factsTaskState facts) (packedState (stateReady facts) 5)
           , poke (dfReadyBitmap words') (1 `shiftL` 5)
           , poke (dfSelected words') task1, poke (dfRunning words') task1
+          , poke task3 task3, poke (task3 + factsTaskPrev facts) task3
+          , poke (task3 + factsTaskState facts) (packedState (factsStateDormant facts) 5)
           ]
     caseOf name call args words' checks =
       Case (CaseId name) call args words' checks [] [] False Nothing
