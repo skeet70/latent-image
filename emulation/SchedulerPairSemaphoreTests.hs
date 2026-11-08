@@ -264,6 +264,14 @@ releaseCall lock first = (callOfTask taskA DomainA releaseAddress (HelperSemanti
   before = M.fromList [(Address handlerA, 0), (Address dispatchA, 1), (Address pointer, lock), (Address lock, 1)]
   after = M.insert (Address lock) 0 before
 
+pendingStaleRelease :: Pending
+pendingStaleRelease = (pendingForever (fromIntegral (-1 :: Int)) 0) { pendingEntered = 50 }
+
+waitTimeoutUntimed :: Call
+waitTimeoutUntimed = callOfTask taskA DomainA 0x47a54 (SemaphoreSemantic SemaphoreWait) [1,0,0,0]
+  (waiterBefore 1) (M.insert (Address waitA) (fromIntegral (-50 :: Int)) (waiterBefore 1)) (fromIntegral (-50 :: Int))
+  [Written (Address waitA) 4 (fromIntegral (-50 :: Int))] (traceOf (withLr 0x47dd0) [saveBoundary 0x47dd0] Returned)
+
 pollRefusalWrite :: Call
 pollRefusalWrite = callOf DomainA pollAddress (SemaphoreSemantic SemaphorePoll) [1,0,0,0] before after (fromIntegral (-42 :: Int)) [Written (Address (configA+0x0c)) 4 1] trace
  where
@@ -377,6 +385,8 @@ main = do
   refuses "refused poll cannot write" [pollRefusalWrite] []
   refuses "empty wait cannot acquire" [waitAcquireEmpty] []
   refuses "completed call cannot clobber r4" [restoredClobber] []
+  refuses "stale release does not satisfy pending" [releaseCall 0x400545c0 10, releaseCall 0x400545c4 11, pollCall 1 0 0] [pendingStaleRelease]
+  refuses "untimed wait cannot time out" [waitTimeoutUntimed] []
   refuses "pending save without I masked" [releaseCall 0x400545c0 10, releaseCall 0x400545c4 11, pollCall 1 0 0] [(pendingForever (fromIntegral (-1 :: Int)) 0) { pendingSaveCpsr = Just 0x13 }]
   putStrLn "scheduler-pair semaphore tests passed"
 

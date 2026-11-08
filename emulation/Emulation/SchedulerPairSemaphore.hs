@@ -321,7 +321,7 @@ checkWait call entryDomain object slot timed trace = do
         expect FamilyLifetime (semaphoreR0 call `elem` [0, statusReleased, statusTimeout])
         wordAt wait (semaphoreAfter call) >>= expect FamilyLifetime . (== semaphoreR0 call)
         byteAt (task + 0x0c) (semaphoreAfter call) >>= expect FamilyLifetime . (\state -> state .&. 1 /= 0)
-        when (timed && signedWord timeout < 0) $ expect FamilyLifetime (semaphoreR0 call /= statusTimeout)
+        when (not timed || signedWord timeout < 0) $ expect FamilyLifetime (semaphoreR0 call /= statusTimeout)
         when (semaphoreR0 call == 0) $ do
           wordAt (control + 0x0c) (semaphoreAfter call) >>= expect FamilyEffect . (== count)
 
@@ -359,7 +359,10 @@ checkTimer call witnesses trace service = do
         , timerEntry witness == timerEntry insert, timerArmedAt witness >= timerArmedAt insert
         , timerArmedAt witness <= returnAt]
       expiry = [witness | witness <- witnesses, timerKind witness == TimerConsumed
-        , timerTask witness == task, not (null (earlier witness))]
+        , timerTask witness == task
+        , any (\insert -> timerEntry insert == timerEntry witness
+                && timerArmedAt insert <= timerArmedAt witness) ownInserts
+        , timerArmedAt witness <= returnAt]
       saved = any ((== FamilySaveKind) . familyBoundaryKind) history
   forM_ ownInserts $ \witness -> do
     expect FamilyTimer (isSemaphoreTimer domain (timerEntry witness))
@@ -429,10 +432,11 @@ checkPendingSemaphore releases pending = case (pendingSemantic pending, pendingT
       expect FamilyLifetime (saveCpsr .&. 0x160 == pendingCpsr pending .&. 0x160)
       expect FamilyLifetime (pendingCpsr pending .&. 0x80 == 0)
       let unlocked lock = [witness | witness <- releases, releaseTask witness == task
-            , releaseCore witness == pendingCore pending, releaseAt witness < saveAt
-            , (Address lock,0) `elem` releaseWrites witness]
+            , releaseCore witness == pendingCore pending, releaseCall witness >= pendingEntered pending
+            , releaseAt witness < saveAt, releaseAddress witness == Address lock, releaseValue witness == 0]
+          callerUnlockAt = maximum (0 : map releaseAt (unlocked lockWord) ++ map releaseAt (unlocked schedulerLockAddress))
           acquired lock = [witness | witness <- releases, releaseTask witness /= task
-            , releaseFirst witness >= saveAt, (Address lock,1) `elem` releaseWrites witness]
+            , releaseAt witness > callerUnlockAt, releaseAddress witness == Address lock, releaseValue witness == 1]
           lockOk lock value = not (null (unlocked lock)) && (value == 0 || (value == 1 && not (null (acquired lock))))
       expect FamilyLifetime (lockOk lockWord objectLock && lockOk schedulerLockAddress schedulerLock)
       savedSp <- wordAt (task + 0x18) terminal
