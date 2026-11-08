@@ -1794,10 +1794,10 @@ For silent-notify, the service's final bank obligation must be exactly the missi
 The frozen wrong-predicate control replaces B's first four notify words with `e3500001 93a00001 912fff1e e320f000`: `cmp r0,#1`, `movls r0,#1`, `bxls lr`, `nop`. Its first B/id1 notify must fail the normal B return contract and satisfy the defective unsigned `id <= 1` predicate's helper contract. The enclosing S3b service is rechecked with that predicate bound to recipient 1; caller domain and record/device address selection remain unchanged. The induced save/resume, dispatch reason, control bits, caller frame, writes and completion must all match the independent model. Production qualification always uses the stock per-domain predicate, and the raw receipt is unchanged.
 
 ```sh
-devenv shell -- bazel --batch build --jobs=2 //emulation:scheduler-pair-plan //emulation:scheduler-pair-observe //emulation:scheduler-pair-check //emulation:emulator-slot
-devenv shell -- bazel --batch test --jobs=2 //emulation:scheduler-pair-tests
-devenv shell -- bazel --batch run --jobs=2 //emulation:scheduler-pair-plan -- ROLE DAT EXPECTED_LOADER_A EXPECTED_LOADER_B NEW_PLAN_JSON [ADDITIONAL_REGIONS ...]
-XM1_EMULATOR_SLOTS=1 devenv shell -- bazel --batch run --jobs=2 //emulation:emulator-slot -- \
+devenv shell -- host-build build --jobs=2 //emulation:scheduler-pair-plan //emulation:scheduler-pair-observe //emulation:scheduler-pair-check //emulation:emulator-slot
+devenv shell -- host-build test --jobs=2 //emulation:scheduler-pair-tests
+devenv shell -- host-build run --jobs=2 //emulation:scheduler-pair-plan -- ROLE DAT EXPECTED_LOADER_A EXPECTED_LOADER_B NEW_PLAN_JSON [ADDITIONAL_REGIONS ...]
+XM1_EMULATOR_SLOTS=1 devenv shell -- host-build run --jobs=2 //emulation:emulator-slot -- \
   "$PWD/bazel-bin/emulation/scheduler-pair-observe" --plan PLAN_JSON \
   --run "$PWD/emulation/fujimod-xm1/data/xm1-150.json" --update DAT --boot-rom "$ROM" \
   --trajectory "$PWD/emulation/modal75-packaged-route-trajectories.json" --output NEW_DIRECTORY
