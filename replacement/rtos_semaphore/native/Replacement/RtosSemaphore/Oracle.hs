@@ -316,6 +316,7 @@ data Expectation = Expectation
   , expectationChecks :: [Check]
   , expectationRefusal :: Maybe RunnerStatus
   , expectationBudget :: Maybe InstructionLimit
+  , expectationDriverMask :: Maybe Word32
   }
   deriving (Eq, Show)
 
@@ -432,12 +433,13 @@ receiptAddress = 0x00960000
 requestAddress = 0x0095a000
 globalLock = 0x400c0804
 
-wakerSlot, wakerPriority, wakerStack, wakerStubBase, maskAddress :: Word32
+wakerSlot, wakerPriority, wakerStack, wakerStubBase, maskAddress, dispatchMaskAddress :: Word32
 wakerSlot = 2
 wakerPriority = 14
 wakerStack = 0x00970000
 wakerStubBase = 0x00959080
 maskAddress = receiptAddress + 0x10
+dispatchMaskAddress = maskAddress + 4
 
 definitionBase, definitionStride :: Word32
 definitionBase = 0x0096c000
@@ -541,7 +543,7 @@ waiterAt facts owner objectSlot objectDomain slot priority =
 plain :: String -> Service -> Domain -> Word32 -> [(GuestAddress, Word32)] -> Word32 -> Word32 -> Bool -> Word32 -> [Check] -> Case
 plain name service domain slot wordList timeout result arrival selected checks =
   Case name service domain slot Nothing wordList timeout
-    (Expectation result arrival selected checks Nothing Nothing) Nothing Nothing
+    (Expectation result arrival selected checks Nothing Nothing Nothing) Nothing Nothing
     (service == InterruptSignal) False True Nothing Nothing
     TaskArrival Nothing Nothing Nothing (service == Create || service == Delete)
 
@@ -566,8 +568,8 @@ cases facts executing =
       , poke requestAddress 1, poke (requestAddress + 4) 1, poke (requestAddress + 8) 1
       ]
       0 0 False 0 [])
-      { caseStock = Expectation 0 False 0 [] (Just MemoryGuard) Nothing }
-      { caseOwned = Just (Expectation (fromIntegral (-18 :: Int)) False 0 [] Nothing Nothing)
+      { caseStock = Expectation 0 False 0 [] (Just MemoryGuard) Nothing Nothing }
+      { caseOwned = Just (Expectation (fromIntegral (-18 :: Int)) False 0 [] Nothing Nothing Nothing)
       , caseDifference = Just "semaphore-create-range-refused"
       }
   , plain "delete-plain" Delete executing 1 (created facts executing 1 1 4 6) 0 0 False 0
@@ -586,7 +588,7 @@ cases facts executing =
           , byte (taskAddress facts executing 2 + tfState (factsTask facts)) (stReady (factsStates facts))
           , eq (waitResult facts executing 2) (fromIntegral (-49 :: Int))
           , eq (queueCell facts executing 1) (controlAddress facts executing 1)
-          ] Nothing Nothing)
+           ] Nothing Nothing Nothing)
       , caseDifference = Just "semaphore-delete-releases-waiters"
       }
   , plain "signal-below-max" Signal executing 1 (created facts executing 1 0 0 2) 0 0 False 0
@@ -684,18 +686,18 @@ cases facts executing =
           , eq (waitResult facts executing 2) (fromIntegral (-49 :: Int))
           , eq (queueCell facts executing 1) (controlAddress facts executing 1)
           , eq (dfReschedule (domainFacts facts executing)) 1
-          ] Nothing Nothing)
+           ] Nothing Nothing Nothing)
       , caseDifference = Just "semaphore-delete-releases-waiters"
       }
   , resumed "wait-signal-return" Wait 0 (Waker WakerSignal [(R0, 1)]) 0 0x93 Nothing
-      (Expectation 0 False 0 (returnChecks 0 False) Nothing Nothing) Nothing Nothing
+      (Expectation 0 False 0 (returnChecks 0 False) Nothing Nothing Nothing) Nothing Nothing
   , resumed "wait-signal-return-f" Wait 0 (Waker WakerSignal [(R0, 1)]) 0 0xD3 (Just 0x53)
-      (Expectation 0 False 0 (returnChecks 0 False) Nothing Nothing) Nothing Nothing
+      (Expectation 0 False 0 (returnChecks 0 False) Nothing Nothing Nothing) Nothing Nothing
   , resumed "timed-timeout-return" TimedWait 5 (Waker (WakerTick 2) []) timedOut 0x93 Nothing
-      (Expectation timedOut False 0 (returnChecks timedOut False ++ timeoutChecks) Nothing Nothing) Nothing Nothing
+      (Expectation timedOut False 0 (returnChecks timedOut False ++ timeoutChecks) Nothing Nothing Nothing) Nothing Nothing
   , resumed "wait-delete-return" Wait 0 (Waker WakerDelete [(R0, 1)]) released 0x93 Nothing
-      (Expectation 0 False 0 [] Nothing (Just (InstructionLimit 20000)))
-      (Just (Expectation released False 0 (returnChecks released True) Nothing Nothing))
+      (Expectation 0 False 0 [] Nothing (Just (InstructionLimit 20000)) Nothing)
+      (Just (Expectation released False 0 (returnChecks released True) Nothing Nothing Nothing))
       (Just "semaphore-delete-releases-waiters")
   ]
   where
@@ -709,10 +711,17 @@ cases facts executing =
         , caseMask = Just mask
         , caseEntryControl = entryControl
         , caseRestoresMask = False
-        , caseStock = stock
-        , caseOwned = owned
+        , caseStock = stock { expectationDriverMask = stockDriver }
+        , caseOwned = fmap (\expectation -> expectation { expectationDriverMask = ownedDriver }) owned
         , caseDifference = difference
         }
+      where
+        stockDriver = case wakerTarget waker of
+          WakerSignal -> Nothing
+          _ -> Just mask
+        ownedDriver = case wakerTarget waker of
+          WakerTick _ -> Just mask
+          _ -> Nothing
     returnChecks result deleted =
       [ eq (waitResult facts executing runningSlot) result
       , eq (waitOwner facts executing runningSlot) (dfId (domainFacts facts executing))
@@ -1004,13 +1013,21 @@ stubWords facts domain waker = assembleStub wakerStubBase (stubProgram facts dom
            , StubWord (movt 3 (handler `shiftR` 16))
            , StubWord 0xe3a00000
            , StubWord 0xe5830000
-           , StubBranchLink (dispatcher domain')
-           , StubWord 0xeafffffe
            ]
+        ++ driverMaskCode
+        ++ [StubBranchLink (dispatcher domain'), StubWord 0xeafffffe]
       where
         handler = dfHandlerContext (domainFacts facts' domain')
     tailCalls domain' target =
-      [StubBranchLink target, StubBranchLink (dispatcher domain'), StubWord 0xeafffffe]
+      [StubBranchLink target] ++ driverMaskCode
+        ++ [StubBranchLink (dispatcher domain'), StubWord 0xeafffffe]
+    driverMaskCode =
+      [ StubWord 0xf10c0080
+      , StubWord 0xe10fc000
+      , StubWord (movw 3 (dispatchMaskAddress .&. 0xffff))
+      , StubWord (movt 3 (dispatchMaskAddress `shiftR` 16))
+      , StubWord 0xe583c000
+      ]
     argWords (register, value) =
       [ StubWord (movw (registerNumber register) (value .&. 0xffff))
       , StubWord (movt (registerNumber register) (value `shiftR` 16))
@@ -1061,7 +1078,7 @@ caseSpec facts executing role loader owned one
       { caseId = emittedId executing one
       , caseProvenance = "X-M1 1.50 semaphore family, pinned x70view 55436fc85c0560dd252b0410af6f2427fe198cd3; synthetic task/object state and timer argument seam"
       , caseExclusion = "Private compiler frames are not byte-compared. Dispatch checks the selected-task arrival and the live stock continuation. The timer removal entry is a recording stub; it proves arguments, not heap removal."
-          ++ (if isJust (caseWaker one) then " The resumed caller owns the caller stack context; a synthetic waker task on its own declared stack calls the stock signal, delete or timer tick, and the suspended caller resumes through its saved dispatcher frame into the wait epilogue. The waker stub records the caller's dispatch CPSR; its flags are excluded and the I/F/mode bits are compared." else "")
+          ++ (if isJust (caseWaker one) then " The resumed caller owns the caller stack context; a synthetic waker task on its own declared stack calls the stock signal, delete or timer tick, and the suspended caller resumes through its saved dispatcher frame into the wait epilogue. The waker stub records the caller's dispatch CPSR, and the tick or fallback driver masks I and records its own CPSR before the dispatcher call; flags are excluded and the I/F/mode bits are compared." else "")
       , caseEntry = wire (entries executing (caseService one))
       , caseExit = wire exitAddress
       , caseRegions =
@@ -1207,12 +1224,18 @@ compareRole facts loader _ spec one expectation observation =
        ]
     ++ [ "CPSR control " ++ show controlActual ++ " is not " ++ show expectedControl
        | expectationRefusal expectation == Nothing
+       , expectationBudget expectation == Nothing
        , controlActual /= Just expectedControl
        ]
     ++ [ "saved caller mask " ++ show savedMask ++ " is not " ++ show mask
        | Just mask <- [caseMask one]
        , let savedMask = fmap (.&. 0x1ff) (readWord facts loader one observation (GuestAddress maskAddress))
        , savedMask /= Just mask
+       ]
+    ++ [ "driver mask " ++ show driverMask ++ " is not " ++ show mask
+       | Just mask <- [expectationDriverMask expectation]
+       , let driverMask = fmap (.&. 0x1ff) (readWord facts loader one observation (GuestAddress dispatchMaskAddress))
+       , driverMask /= Just mask
        ]
     ++ [ "caller frame changed"
        | lookup (RegionId "caller-frame") (nativeMemory observation) /= Just callerBytes
