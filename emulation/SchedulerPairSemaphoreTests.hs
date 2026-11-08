@@ -23,13 +23,15 @@ semPlan :: Plan
 semPlan = Plan Owned "dat" entries guards [] []
  where
   entries =
-    [ Entry DomainA (SemaphoreSemantic SemaphoreSignal) (Address 0x47a54)
+    [ Entry DomainA (SemaphoreSemantic SemaphoreInterruptSignal) (Address 0x47844)
+    , Entry DomainA (SemaphoreSemantic SemaphoreSignal) (Address 0x47a54)
     , Entry DomainA (SemaphoreSemantic SemaphorePoll) (Address 0x47c94)
     , Entry DomainA (SemaphoreSemantic SemaphoreTimedWait) (Address 0x47dd0)
     , Entry DomainB (SemaphoreSemantic SemaphorePoll) (Address 0xd7a14)
     ]
   guards =
-    [ Guard DomainA (Address 0x47a54) (Address 0x47c94) "ga"
+    [ Guard DomainA (Address 0x47844) (Address 0x47a54) "g0"
+    , Guard DomainA (Address 0x47a54) (Address 0x47c94) "ga"
     , Guard DomainA (Address 0x47c94) (Address 0x47dd0) "gb"
     , Guard DomainA (Address 0x47dd0) (Address 0x48044) "gc"
     , Guard DomainB (Address 0xd7a14) (Address 0xd7c54) "gd"
@@ -131,6 +133,14 @@ signalWakeCall = signalWake before after writes [timerRemove]
   writes = [Written (Address controlA) 4 controlA, Written (Address (controlA+4)) 4 controlA]
   timerRemove = Boundary TimerRemoveBoundary (Address 0x44ca8) 1 0 (registers (replicate 16 0)) timerMemory [] [] (Just timerA) 0x9000 [] []
 
+interruptWake :: Call
+interruptWake = (signalWake before after writes [timerRemove]) { callSemantic = SemaphoreSemantic SemaphoreInterruptSignal, callAddress = Address 0x47844 }
+ where
+  before = M.insert (Address handlerA) 1 (waiterBefore 1)
+  after = M.union (M.fromList [(Address controlA, controlA), (Address (controlA+4), controlA)]) before
+  writes = [Written (Address controlA) 4 controlA, Written (Address (controlA+4)) 4 controlA]
+  timerRemove = Boundary TimerRemoveBoundary (Address 0x44ca8) 1 0 (registers (replicate 16 0)) timerMemory [] [] (Just timerA) 0x9000 [] []
+
 signalWakeWithoutSibling :: Call
 signalWakeWithoutSibling = signalWake (waiterBefore 1) after [Written (Address controlA) 4 controlA, Written (Address (controlA+4)) 4 controlA] [timerRemove]
  where
@@ -172,6 +182,35 @@ zeroTimeoutCall r0 history = callOfTask taskA DomainA timedAddress (SemaphoreSem
 timedAcquireWithTimer :: Call
 timedAcquireWithTimer = timedWaitCall 100 [saveBoundary 0x47dd0, timerInsertBoundary]
 
+crossTimedCall :: Call
+crossTimedCall = callOfTask taskA DomainA timedAddress (SemaphoreSemantic SemaphoreTimedWait) [0x00020001, 100, 0, 0]
+  crossBefore crossBefore 0 [] (traceOf (withLr 0x47dd0) [saveBoundary 0x47dd0, timerInsertBoundary] Returned)
+ where
+  configB = 0x400edf98
+  controlB = 0x400eaecc
+  crossBefore = M.fromList
+    [ (Address handlerA, 0)
+    , (Address dispatchA, 1)
+    , (Address configB, 0)
+    , (Address (configB+4), 1)
+    , (Address (configB+8), 5)
+    , (Address (configB+0x0c), 1)
+    , (Address controlB, taskA)
+    , (Address (controlB+4), taskA)
+    , (Address (controlB+8), configB)
+    , (Address (controlB+0x0c), 0)
+    , (Address (taskA+0x0c), 1)
+    , (Address (taskA+0x24), 0)
+    , (Address (taskA+0x14), waitA)
+    , (Address taskA, controlB)
+    , (Address (taskA+4), controlB)
+    , (Address waitA, 0)
+    , (Address (waitA+4), controlB)
+    , (Address (waitA+8), 2)
+    , (Address (timerA+4), callbackA)
+    , (Address (timerA+8), taskA)
+    ]
+
 timedExpiryCall :: Call
 timedExpiryCall = callOfTask taskA DomainA timedAddress (SemaphoreSemantic SemaphoreTimedWait) [1, 100, 0, 0]
   (waiterBefore 1) (M.insert (Address waitA) (fromIntegral (-50 :: Int)) (waiterBefore 1)) (fromIntegral (-50 :: Int))
@@ -192,8 +231,8 @@ pendingForever timeout stackWord = Pending (SemaphoreSemantic SemaphoreTimedWait
     , (Address (taskA+0x18), 0x8000)
     , (Address (taskA+0x1c), 0x43668)
     , (Address (taskA+8), 0x40050000)
-    , (Address (0x40050000+0x10), 0x7000)
-    , (Address (0x40050000+0x14), 0x9000)
+    , (Address (0x40050000+0x10), 0x2000)
+    , (Address (0x40050000+0x14), 0x7000)
     , (Address (0x8000+32), timedAddress)
     , (Address 0x400545c0, 0)
     , (Address 0x400545c4, 0)
@@ -220,8 +259,8 @@ observation calls pendings = J.object
   , "untracked" J..= J.object ["count" J..= (0::Int)], "unarmed_entries" J..= J.object ["count" J..= (0::Int)]
   , "fill_fetch" J..= J.Null
   , "armings" J..= [arming DomainA, arming DomainB]
-  , "segments" J..= [segment [DomainA] 10 20 [(0x47a54,0x47c94),(0x47c94,0x47dd0),(0x47dd0,0x48044)]
-                    , segment [DomainA,DomainB] 20 100 [(0x47a54,0x47c94),(0x47c94,0x47dd0),(0x47dd0,0x48044),(0xd7a14,0xd7c54)]]
+  , "segments" J..= [segment [DomainA] 10 20 [(0x47844,0x47a54),(0x47a54,0x47c94),(0x47c94,0x47dd0),(0x47dd0,0x48044)]
+                    , segment [DomainA,DomainB] 20 100 [(0x47844,0x47a54),(0x47a54,0x47c94),(0x47c94,0x47dd0),(0x47dd0,0x48044),(0xd7a14,0xd7c54)]]
   , "final_readback" J..= rb semReadback
   , "classes" J..= map wireCall calls
   , "pending" J..= map wirePending pendings
@@ -281,11 +320,15 @@ main = do
   accepts "suspended waiter stays suspended" [suspendedWake 4] []
   refuses "suspended waiter ready refuses" [suspendedWake 1] []
   accepts "signal removes sibling timer" [timedAcquireWithTimer, signalWakeCall] []
+  accepts "signal cancellation survives observer class order" [signalWakeCall, timedAcquireWithTimer] []
   refuses "signal cannot invent timer removal" [signalWakeWithoutSibling] []
   accepts "timed expiry uses callback evidence" [timedExpiryCall] []
+  accepts "cross-domain wait uses entry task records" [crossTimedCall] []
+  accepts "interrupt signal cancels armed timer" [timedAcquireWithTimer, interruptWake] []
   accepts "negative r1 timeout is forever" [pollCall 1 0 0] [pendingForever (fromIntegral (-1 :: Int)) 0]
   refuses "positive r1 timeout is not forever" [pollCall 1 0 0] [pendingForever 5 (fromIntegral (-1 :: Int))]
   refuses "stranded caller is not a member" [pollCall 1 0 0] [pendingStranded]
+  refuses "pending save without I masked" [pollCall 1 0 0] [(pendingForever (fromIntegral (-1 :: Int)) 0) { pendingSaveCpsr = Just 0x13 }]
   putStrLn "scheduler-pair semaphore tests passed"
 
 wireCall :: Call -> J.Value
@@ -329,6 +372,7 @@ wirePending pending = J.object
       , "sp" J..= hex (pendingSp pending), "cpsr" J..= pendingCpsr pending
       ]
   , "entered" J..= pendingEntered pending, "terminal_memory" J..= maybe [] wordsOf (pendingTerminal pending)
+  , "history" J..= [J.object ["kind" J..= ("save"::String),"cpsr" J..= cpsr] | cpsr <- maybe [] pure (pendingSaveCpsr pending)]
   ]
 
 kindName :: BoundaryKind -> String

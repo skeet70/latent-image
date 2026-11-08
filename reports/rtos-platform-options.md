@@ -1032,8 +1032,8 @@ The run's terminal JSON at `private-data/scratch/RtosSemaphore/results-return.js
 **Checker verification (review fixes).** The three host checker targets and the rebuilt observer produced these complete wrapper verdict lines, persisted in `private-data/scratch/RtosSemaphore/final-checker-proof.log`:
 
 ```text
-host-build verdict {"verdict":"passed","resource_failure":null,"command":"test","exit_code":0,"unit":"xm1-host-build-478085.scope","unit_result":"success","memory_max":"6G","lock_wait_seconds":264.269,"wall_seconds":4.694,"scope_cpu_seconds":22.739,"scope_memory_peak_bytes":1094193152,"nix_daemon_cpu_seconds":0.001,"nix_daemon_oom_kills":0}
-host-build verdict {"verdict":"passed","resource_failure":null,"command":"build","exit_code":0,"unit":"xm1-host-build-499231.scope","unit_result":"success","memory_max":"6G","lock_wait_seconds":3.004,"wall_seconds":185.978,"scope_cpu_seconds":15.496,"scope_memory_peak_bytes":671850496,"nix_daemon_cpu_seconds":353.324,"nix_daemon_oom_kills":0}
+host-build verdict {"verdict":"passed","resource_failure":null,"command":"test","exit_code":0,"unit":"xm1-host-build-570630.scope","unit_result":"success","memory_max":"6G","lock_wait_seconds":94.118,"wall_seconds":4.828,"scope_cpu_seconds":24.740,"scope_memory_peak_bytes":984465408,"nix_daemon_cpu_seconds":4.806,"nix_daemon_oom_kills":0}
+host-build verdict {"verdict":"passed","resource_failure":null,"command":"build","exit_code":0,"unit":"xm1-host-build-564410.scope","unit_result":"success","memory_max":"6G","lock_wait_seconds":6.006,"wall_seconds":195.006,"scope_cpu_seconds":15.196,"scope_memory_peak_bytes":646217728,"nix_daemon_cpu_seconds":620.313,"nix_daemon_oom_kills":0}
 ```
 
 `//emulation:scheduler-pair-semaphore-tests`, `//emulation:scheduler-pair-tests` and `//emulation:scheduler-pair-family-tests` pass; the 62 cached native comparisons were not rerun and remain the behavior and lifetime oracle.

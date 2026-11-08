@@ -2138,6 +2138,32 @@ fn drive() -> Result<(), String> {
                         }
                     }
                 }
+                if let Semantic::Semaphore { name } = call.entry.slot.semantic {
+                    if name.blocks() {
+                        if let Read::Committed { value: task } = &call.entry.task {
+                            if *task != 0 {
+                                for offset in [0x00, 0x04, 0x14, 0x18, 0x1c, 0x20, 0x24, 8] { addresses.insert(*task + offset); }
+                                if let Read::Committed { value: definition } = board.word(call.entry.core, tcm, *task + 8)? {
+                                    if definition != 0 { addresses.insert(definition + 0x10); addresses.insert(definition + 0x14); }
+                                }
+                                if let Some((waiter, slot)) = family_task(*task) {
+                                    let tables = SemaphoreTables::of(waiter);
+                                    if let Some(wait) = tables.waits.record(slot) {
+                                        for offset in (0..tables.waits.size).step_by(4) { addresses.insert(wait + offset); }
+                                        if let Read::Committed { value: entry } = board.word(call.entry.core, tcm, wait)? {
+                                            if entry != 0 && tables.timers.slot(entry).is_some() {
+                                                for offset in (0..tables.timers.size).step_by(4) { addresses.insert(entry + offset); }
+                                            }
+                                        }
+                                    }
+                                }
+                                if let Read::Committed { value: saved } = board.word(call.entry.core, tcm, *task + 0x18)? {
+                                    if saved % 4 == 0 { for offset in (0..36).step_by(4) { addresses.insert(saved + offset); } }
+                                }
+                            }
+                        }
+                    }
+                }
                 addresses.into_iter().map(|address| Ok(WordValue { address: Hex(address), value: board.word(call.entry.core, tcm, address)? })).collect()
             })();
             match result {
