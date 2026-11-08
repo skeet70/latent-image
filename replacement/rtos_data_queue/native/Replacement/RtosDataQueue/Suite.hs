@@ -367,6 +367,7 @@ codeBytes domain image = install (timerRemove domain) removeStub (install (timer
 pages :: Facts -> Domain -> Case -> [Page]
 pages facts domain _ =
   [ let (low, high) = kernelBounds facts domain in page "kernel" low (fromIntegral (high - low)) ReadWrite
+  , page "definitions" 0x0096c000 0x1000 ReadWrite
   , page "ring" ringBase 0x100 ReadWrite
   , page "out" outBase 0x10 ReadWrite
   , page "packet" packetBase 0x10 ReadWrite
@@ -396,7 +397,7 @@ caseFor facts domain image one =
     , caseRegions =
         [mkRegion (RegionId "code") (N.GuestAddress (fromIntegral (imageBase image))) (fromIntegral (B.length (codeBytes domain image))) ReadExecute (codeBytes domain image)]
           ++ [mkRegion ident (N.GuestAddress (fromIntegral address)) size permission (overlay address background (wordsFor ident)) | Page ident (GuestAddress address) size permission background <- dataPages]
-    , caseFunctions = [(N.GuestAddress (fromIntegral address), size) | (address, size) <- extents domain]
+    , caseFunctions = [(N.GuestAddress (fromIntegral address), size) | (address, size) <- functions]
     , caseInitial = initialRegisters facts domain one
     , caseExpectedStatus = Returned
     , caseExpectedRegisters = [(register, seedRegister register) | register <- [R4 .. R11]] ++ [(Sp, stackPointer)]
@@ -406,7 +407,8 @@ caseFor facts domain image one =
     }
   where
     dataPages = pages facts domain one
-    wordsFor ident = if regionName ident == "kernel" then layoutWords facts ++ caseWords one else caseWords one
+    functions = if imageBase image == 0x40b00 then extents domain ++ [(0x50000, 0x1800)] else extents domain
+    wordsFor ident = if regionName ident == "kernel" || regionName ident == "definitions" then layoutWords facts ++ caseWords one else caseWords one
 
 readWord :: [Page] -> NativeObservation -> String -> Word32 -> Maybe Word32
 readWord pages' observation name address = case
