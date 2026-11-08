@@ -637,7 +637,27 @@ fn admission_refuses_in_stock_order() {
 
     let mut send = request.clone_for_test(Service::Send, EncodedId::of(0, 1));
     send.entry = entry(true, false, 1);
-    assert!(admit(&send).is_ok());
+    assert_eq!(admit(&send), Err(ObjectStatus::Context));
+}
+
+/// Named counterexample `handler-context-blocking-send`: the stock body checks no context and
+/// would block the handler task on the ISR stack; admission refuses it with E_CTX.
+#[test]
+fn a_handler_send_is_refused() {
+    let facts = Facts {
+        exists: true,
+        attributes: 0,
+        capacity: 2,
+    };
+    let mut request = request(Service::Send, EncodedId::of(0, 1), facts, Params { timeout: None });
+    request.entry = entry(true, false, 1);
+    assert_eq!(admit(&request), Err(ObjectStatus::Context));
+    request.entry = entry(false, true, 1);
+    assert_eq!(admit(&request), Err(ObjectStatus::Context));
+    request.entry = entry(false, false, 0);
+    assert_eq!(admit(&request), Err(ObjectStatus::Context));
+    request.entry = entry(false, false, 1);
+    assert!(admit(&request).is_ok());
 }
 
 impl Request {

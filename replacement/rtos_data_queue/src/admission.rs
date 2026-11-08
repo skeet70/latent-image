@@ -97,7 +97,7 @@ fn exists(facts: Facts) -> Result<(), ObjectStatus> {
 
 pub fn context_check(service: Service, entry: Entry) -> Result<(), ObjectStatus> {
     match service {
-        Service::Send => Ok(()),
+        Service::Send => task_blocking(entry),
         Service::SendPoll => context(entry, false),
         Service::SendPollHandler => context(entry, true),
         Service::SendTimeout | Service::Receive | Service::ReceiveTimeout => task_blocking(entry),

@@ -76,7 +76,8 @@ main = do
           [ "schema" .= (1 :: Int)
           , "inputs" .=
               object
-                [ "runner_sha256" .= sha256Hex runnerDigest
+                [ "runner" .= runner
+                , "runner_sha256" .= sha256Hex runnerDigest
                 , "layout_sha256" .= sha256Hex layoutDigest
                 , "loader_a_sha256" .= sha256Hex loaderADigest
                 , "loader_b_sha256" .= sha256Hex loaderBDigest
@@ -94,6 +95,7 @@ main = do
           , "kind" .= ("data-queue-native-review" :: String)
           , "inputs" .= object
               [ "runner" .= runner
+              , "runner_sha256" .= sha256Hex runnerDigest
               , "layout" .= layoutPath
               , "loader_a" .= loaderA
               , "loader_b" .= loaderB

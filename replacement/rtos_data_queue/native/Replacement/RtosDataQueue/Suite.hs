@@ -311,6 +311,15 @@ cases facts executing =
   , caseOf "refuse-invalid-id" SendPoll [(R0, 0x30001), (R1, 0xbbbb)] (queue 1 0 2) [ResultIs (-18), eq "kernel" (count 1) 0]
   , handler "handler-force" ForceSendHandler [(R0, 1), (R1, 3)] (queue 1 0 2 ++ full [1, 2] 2) [ResultIs 0, eq "ring" ringBase 3, eq "kernel" (read 1) 1, eq "kernel" (count 1) 2]
   , handler "handler-class-refused" ForceSendHandler [(R0, 0x10001), (R1, 3)] (queue 1 0 2 ++ full [1, 2] 2) [ResultIs (-18), eq "ring" ringBase 1, eq "kernel" (read 1) 0]
+  , handler "handler-poll-handoff" SendPollHandler [(R0, 1), (R1, 0x5a5a)] (queue 1 0 2 ++ receiverWaiter ++ [poke (dfSelected (domainFacts facts executing)) (taskAt 3)])
+      [ ResultIs 0
+      , eq "kernel" (waitData 2) 0x5a5a
+      , ByteIs "kernel" (taskState 2) (stateReady facts)
+      , eq "kernel" (recvNext 1) (recvSelf 1), eq "kernel" (recvPrev 1) (recvSelf 1)
+      , eq "kernel" (dfReschedule (domainFacts facts executing)) 1
+      , eq "kernel" (count 1) 0
+      , CpsrIs 0x13
+      ]
   , caseOf "timed-receive-poll" ReceiveTimeout [(R0, 1), (R1, outBase), (R2, 0)] (queue 1 0 2 ++ [poke outBase 0x5e4d1e00]) [ResultIs (-50), eq "out" outBase 0x5e4d1e00]
   , caseOf "timed-send-poll" SendTimeout [(R0, 1), (R1, 2), (R2, 0)] (queue 1 0 1 ++ full [0xaaaa] 1) [ResultIs (-50), eq "ring" ringBase 0xaaaa, eq "kernel" (count 1) 1]
   , caseOf "send-timeout-invalid" SendTimeout [(R0, 1), (R1, 2), (R2, -2)] (queue 1 0 2) [ResultIs (-17), eq "kernel" (count 1) 0]
