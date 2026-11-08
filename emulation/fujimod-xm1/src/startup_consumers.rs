@@ -651,7 +651,7 @@ impl Runtime {
         let low = state.sp.0.checked_sub(depth).ok_or("outer scratch underflow")?;
         self.admit(machine, state, ResourceKind::Stack, Lifetime::Observation, None, Address(low), u64::from(depth+32))?;
         self.admit(machine, state, ResourceKind::Buffer, Lifetime::Observation, None, Address(0x409c4460), 0x4b000)?;
-        self.admit(machine, state, ResourceKind::Buffer, Lifetime::Observation, None, Address(0x40a10200), 0x4b000)?;
+        self.admit(machine, state, ResourceKind::Buffer, Lifetime::Observation, None, Address(0x40a10200), 0x4a000)?;
         for index in 0..self.carriers.len() {
             let carrier = self.carriers[index];
             let mut cursor = carrier.start;

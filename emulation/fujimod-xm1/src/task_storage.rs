@@ -78,7 +78,7 @@ fn translation(maps: &[MemoryMap], core: usize, address: u32) -> Result<u32, Str
     u32::try_from(map.physical + u64::from(address) - map.address).map_err(|error| error.to_string())
 }
 fn buffer(machine: &Machine, maps: &[MemoryMap], physical: u32, tcm: &[[u32; 2]; 2]) -> Result<Buffer, String> {
-    if physical < 0xa10200 || physical.checked_add(0x400).is_none_or(|end| end > 0xa5b200) { return Err("task103 buffer leaves bounded pool".into()); }
+    if physical < 0xa10200 || physical.checked_add(0x400).is_none_or(|end| end > 0xa5a200) { return Err("task103 buffer leaves bounded pool".into()); }
     for value in tcm.iter().flatten() {
         let size = (value >> 2) & 31;
         if value & 1 != 0 && size != 0 {
@@ -154,7 +154,7 @@ fn perturb(machine: &mut Machine, case: Case, core: usize, hit: usize) -> Result
         Case::Reuse => (0xa10200, 0x400, 0, 0x40a10600, 0x400, OUTPUT, 0),
         Case::SizeError => (0xa10200, 0x404, 0, 0x40a10600, 0x400, OUTPUT, 0),
         Case::ReservedError => (0xa10200, 0x400, 1, 0x40a10600, 0x400, OUTPUT, 0),
-        Case::CapacityError => (0, 0, 0, 0x40a5b200, 0x400, OUTPUT, 0),
+        Case::CapacityError => (0, 0, 0, 0x40a5a200, 0x400, OUTPUT, 0),
         Case::Unaligned => (0, 0, 0, 0x40a10200, 3, OUTPUT, 0),
         Case::Wrapping => (0, 0, 0, 0x40a101fc, 4, OUTPUT, 0),
         Case::AliasCursor => (0, 0, 0, 0x40a10200, 0x400, CURSOR, 0),
@@ -267,7 +267,7 @@ fn drive() -> Result<(), String> {
     machine.traces.stop_labels.extend(sites.values().cloned());
     machine.traces.arm(&machine.session, sites)?;
     let mut classes: Vec<_> = [(0xa0fc44, 0xa101e4), (0xa5b200, 0xa5b5c0), (0x89ea94, 0x89eaa0),
-        (0x9c2808, 0x9c2814), (0xf3300, 0xf3420), (0xa10200, 0xa5b200)].into_iter().map(|(start, end)| WatchRange {
+        (0x9c2808, 0x9c2814), (0xf3300, 0xf3420), (0xa10200, 0xa5a200)].into_iter().map(|(start, end)| WatchRange {
             start, end, kinds: WatchKinds::CPU_READ.union(WatchKinds::WRITES),
         }).collect();
     classes.push(WatchRange { start: u64::from(START), end: u64::from(END), kinds: WatchKinds::CPU_FETCH.union(WatchKinds::WRITES) });

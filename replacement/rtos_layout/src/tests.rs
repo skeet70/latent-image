@@ -331,3 +331,30 @@ fn family_slots_refuse_out_of_range_and_oversized_counts() {
     assert_eq!(MailboxSlot::new(2, 1), None);
     assert_eq!(MailboxSlot::new(1, 1).map(MailboxSlot::get), Some(1));
 }
+
+#[test]
+fn task_pool_reserves_the_timer_arena_tail() {
+    assert_eq!(TASK_POOL.guest.start(), 0x40a1_0200);
+    assert_eq!(TASK_POOL.guest.end(), 0x40a5_b200);
+    assert_eq!(TASK_POOL.allocatable.end(), 0x40a5_a200);
+    assert_eq!(TASK_POOL.allocatable_bytes(), 0x4a000);
+    assert_eq!(TASK_POOL.reserved.len(), 0x1000);
+    assert_eq!(TASK_POOL.physical().start(), 0xa1_0200);
+    assert_eq!(TASK_POOL.physical().end(), 0xa5_b200);
+}
+
+#[test]
+fn timer_arenas_are_aligned_disjoint_and_fit_their_capacity() {
+    let a = Domain::A.timer_arena();
+    let b = Domain::B.timer_arena();
+    assert_eq!((a.guest.start(), a.guest.end()), (0x40a5_a200, 0x40a5_aa00));
+    assert_eq!((b.guest.start(), b.guest.end()), (0x40a5_aa00, 0x40a5_b200));
+    assert_eq!((a.physical.start(), a.physical.end()), (0xa5_a200, 0xa5_aa00));
+    assert!(a.guest.aligned(32) && b.guest.aligned(32));
+    assert!(!a.guest.overlaps(b.guest));
+    assert!(TASK_POOL.reserved.contains(a.guest) && TASK_POOL.reserved.contains(b.guest));
+    assert_eq!(a.node_bytes(), 0x5c0);
+    assert!(a.fits() && b.fits());
+    assert_eq!(GuestAddress(0x40a5_a200).physical(), 0xa5_a200);
+    assert_eq!(GuestAddress(0x0005_a200).physical(), 0x0005_a200);
+}

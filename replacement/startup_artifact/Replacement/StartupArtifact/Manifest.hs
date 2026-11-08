@@ -33,7 +33,11 @@ data LoaderStartupPaths = LoaderStartupPaths
   { loaderAPaths :: LinkedPaths, loaderBPaths :: LinkedPaths, dispatcherPaths :: LinkedPaths, installerPaths :: LinkedPaths }
   deriving (Eq, Show)
 
-data ManifestPiece = SingleImagePiece PieceKind LinkedPaths | LoaderStartupPiece LoaderStartupPaths | KernelSlotPiece KernelSlotPaths
+data ManifestPiece
+  = SingleImagePiece PieceKind LinkedPaths
+  | LoaderStartupPiece LoaderStartupPaths
+  | KernelSlotPiece KernelSlotPaths
+  | TimerPiece LinkedPaths LinkedPaths
   deriving (Eq, Show)
 
 data KernelSlotPaths = KernelSlotPaths { slotLoaderAPaths :: LinkedPaths, slotLoaderBPaths :: LinkedPaths, slotRegionsPath :: FilePath }
@@ -43,6 +47,7 @@ manifestPieceKind :: ManifestPiece -> PieceKind
 manifestPieceKind (SingleImagePiece kind _) = kind
 manifestPieceKind (LoaderStartupPiece _) = LoaderStartup
 manifestPieceKind (KernelSlotPiece _) = KernelSlotBodies
+manifestPieceKind (TimerPiece _ _) = Timer
 
 -- | Whether the contract carries the application section.
 data ApplicationPhase = WithoutApplication | WithApplication deriving (Eq, Show)
@@ -117,6 +122,11 @@ parseManifest bytes = do
         regions <- text "piece.inputs.regions" (field inputs "regions")
         paths <- KernelSlotPaths <$> side "loader_a" <*> side "loader_b" <*> pure (T.unpack regions)
         pure (KernelSlotPiece paths)
+      Timer -> do
+        inputs <- object "piece.inputs" ["loader_a", "loader_b"] [] (field piece "inputs")
+        let side name = linked ("piece.inputs." <> name) (field inputs name)
+        paths <- TimerPiece <$> side "loader_a" <*> side "loader_b"
+        pure paths
       _ -> SingleImagePiece kind <$> linked "piece.inputs" (field piece "inputs")
   let kinds = sort (map manifestPieceKind pieces)
   forM_ (zip kinds (drop 1 kinds)) $ \(left, right) -> when (left == right) (Left (DuplicatePieceKind left))

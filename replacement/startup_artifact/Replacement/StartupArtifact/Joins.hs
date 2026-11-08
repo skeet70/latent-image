@@ -14,7 +14,7 @@ import qualified Data.Map.Strict as M
 import Data.Maybe (isJust, mapMaybe)
 import qualified Data.Set as Set
 import qualified Data.Text as T
-import Data.Word (Word32)
+import Data.Word (Word32, Word64)
 import Numeric (showHex)
 import qualified Emulation.InterfaceInitializer as I
 import qualified Emulation.LoaderPrefixWitness as P
@@ -69,6 +69,7 @@ data JoinKind = FirstStageSecondaryRendezvous | CriticalPairPublisherBindings | 
   | KernelSlotPrimaryPublisher | KernelSlotLoaderStartup | KernelSlotLoaderOrchestrationB | KernelSlotRecord2Link
   | KernelSlotTaskSubmission | KernelSlotTaskStorage | KernelSlotRootTask | KernelSlotImage5Producer | KernelSlotPlainProducer
   | KernelSlotGeneralHeap
+  | TimerTaskArenaReservation
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 instance JoinName JoinKind where
@@ -108,6 +109,7 @@ instance JoinName JoinKind where
   joinName KernelSlotImage5Producer = "kernel-slot-image5-producer"
   joinName KernelSlotPlainProducer = "kernel-slot-plain-producer"
   joinName KernelSlotGeneralHeap = "kernel-slot-general-heap"
+  joinName TimerTaskArenaReservation = "timer-task-arena-reservation"
 
 at :: Target -> Word32 -> Word32 -> Span
 at target start end = Span target (Guest start) (Guest end)
@@ -406,7 +408,62 @@ registeredJoins =
   , dispatcherRootEntry, dispatcherIdleEntry, wrapperIdleErrorCallback, rootTaskServices
   , image5ProducerServices, plainProducerServices, generalHeapImage5Publication, generalHeapArenaClear
   , applicationPumpServices, task1ActorProducer, task1ActorPump, image5InitializerServices
-  , constructorTaskSubmission, constructorImage5Producer, constructorInitializer Image5Initializer ] ++ kernelSlotJoins
+  , constructorTaskSubmission, constructorImage5Producer, constructorInitializer Image5Initializer
+  , timerTaskArenaReservation ] ++ kernelSlotJoins
+
+-- | The timer arenas and the reduced task-storage producer reserve disjoint pool bytes.
+timerTaskArenaReservation :: Join JoinKind
+timerTaskArenaReservation = Join TimerTaskArenaReservation (Set.fromList [Timer, TaskStorage, TaskSubmission]) []
+  (HostProof "the timer arenas own the reserved tail of the task pool, the task-storage producer allocates only below it, and the stock boot BSS clear precedes both")
+  [ HostCheck "task-pool-allocatable-end" $ \evidence -> case taskSubmissionPool evidence of
+      Just (PoolAllocation (PoolSpan start end) allocatableEnd (PoolSpan reservedStart reservedEnd) _ _ _ _ _ _) ->
+        start == 0xa10200 && end == 0xa5a200 && allocatableEnd == end
+          && reservedStart == end && reservedEnd == 0xa5b200
+      _ -> False
+  , HostCheck "timer-arenas-fit-reserved-span" $ \evidence -> case timerArenaFacts evidence of
+      Just (PoolSpan aStart aEnd, PoolSpan bStart bEnd) ->
+        aStart == 0xa5a200 && aEnd == 0xa5aa00 && bStart == 0xa5aa00 && bEnd == 0xa5b200
+          && aStart `mod` 32 == 0 && bStart `mod` 32 == 0
+          && aStart < aEnd && aEnd == bStart && bStart < bEnd
+          && 184 * 8 <= aEnd - aStart && 184 * 8 <= bEnd - bStart
+      _ -> False
+  , HostCheck "task-writers-exclude-reserved-arena" $ \evidence ->
+      all (not . rangeOverlaps (0xa5a200, 0xa5b200) . normalizeWriteRange)
+        (concat [pieceWrites piece | piece <- evidencePieces evidence, pieceKind piece /= Timer])
+  , HostCheck "timer-writes-stay-outside-allocatable-pool" $ \evidence ->
+      all (not . rangeOverlaps (0xa10200, 0xa5a200) . normalizeWriteRange) (timerWrites evidence)
+  , HostCheck "timer-declares-its-arena" $ \evidence ->
+      any (rangeCovers (0xa5a200, 0xa5b200) . normalizeWriteRange) (timerWrites evidence)
+  ]
+
+taskSubmissionPool :: JoinEvidence -> Maybe PoolAllocation
+taskSubmissionPool evidence = case [pool | TaskSubmissionFacts _ pool <- map pieceFacts (evidencePieces evidence)] of
+  [pool] -> Just pool
+  _ -> Nothing
+
+timerArenaFacts :: JoinEvidence -> Maybe (PoolSpan, PoolSpan)
+timerArenaFacts evidence = case [arena | TimerFacts _ _ a b <- map pieceFacts (evidencePieces evidence), let arena = (a, b)] of
+  [arena] -> Just arena
+  _ -> Nothing
+
+timerWrites :: JoinEvidence -> [WriteRange]
+timerWrites evidence = concat [pieceWrites piece | piece <- evidencePieces evidence, pieceKind piece == Timer]
+
+pieceWrites :: Piece -> [WriteRange]
+pieceWrites piece = case catalogWrites (pieceCatalog piece) of EnumeratedWrites ranges _ -> ranges
+
+normalizeWriteRange :: WriteRange -> WriteRange
+normalizeWriteRange (WriteRange target low high) = WriteRange target (alias low) (alias high)
+  where
+    alias address
+      | address >= 0x40000000 && address < 0x60000000 = address - 0x40000000
+      | otherwise = address
+
+rangeOverlaps :: (Word64, Word64) -> WriteRange -> Bool
+rangeOverlaps (low, high) (WriteRange _ start end) = start < high && low < end
+
+rangeCovers :: (Word64, Word64) -> WriteRange -> Bool
+rangeCovers (low, high) (WriteRange _ start end) = start <= low && high <= end
 
 -- | The task wrapper, the record-2 critical pair and the task-storage transition joined as in
 -- replacement/startup_composition/Replacement/StartupComposition/TaskSubmission.hs:63-97.

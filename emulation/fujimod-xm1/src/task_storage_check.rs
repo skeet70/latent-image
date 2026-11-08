@@ -138,7 +138,7 @@ fn validate(observation: &Observation, role: Role, original: &[u8], linked: &[u8
             Case::Reuse => (0xa10200, [0xa10200, 0x400, 1], 0x40a10600),
             Case::SizeError => (0, [0xa10200, 0x404, 0], 0x40a10600),
             Case::ReservedError => (0, [0xa10200, 0x400, 1], 0x40a10600),
-            Case::CapacityError => (0, [0, 0, 0], 0x40a5b200),
+            Case::CapacityError => (0, [0, 0, 0], 0x40a5a200),
             Case::Unaligned => (0xa10200, [0xa10200, 3, 1], 0x40a10200),
             Case::Wrapping => (0xa101fc, [0xa101fc, 4, 1], 0x40a10200),
             Case::AliasCursor => (0, [0xa10600, 0x400, 1], 0xa10600),

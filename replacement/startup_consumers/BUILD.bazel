@@ -12,6 +12,7 @@ haskell_library(
         "Replacement/StartupConsumers/JoinedWire.hs",
         "Replacement/StartupConsumers/JoinedWitness.hs",
         "Replacement/StartupConsumers/ObservationPolicy.hs",
+        "Replacement/StartupConsumers/Reservation.hs",
         "Replacement/StartupConsumers/Source.hs",
         "Replacement/StartupConsumers/Wire.hs",
         "Replacement/StartupConsumers/Witness.hs",
@@ -64,6 +65,20 @@ haskell_binary(
         "//replacement/kernel_install:kernel-install-artifact",
         "//replacement/startup_composition:startup-composition-artifact",
         "//replacement/startup_dispatch:startup-dispatch-artifact",
+    ],
+)
+
+haskell_test(
+    name = "reservation-facts-tests",
+    srcs = ["ReservationTests.hs"],
+    args = ["$(rootpath //replacement/rtos_timer/oracle:layout.json)"],
+    data = ["//replacement/rtos_timer/oracle:layout.json"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":startup-consumers-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
     ],
 )
 

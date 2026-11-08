@@ -11,7 +11,24 @@ impl GuestAddress {
     pub const fn offset(self, bytes: u32) -> Self {
         Self(self.0.wrapping_add(bytes))
     }
+
+    /// The physical spelling of a `0x40000000`-aliased guest address.
+    #[inline(always)]
+    pub const fn physical(self) -> u32 {
+        if self.0 >= 0x4000_0000 && self.0 < 0x6000_0000 {
+            self.0 - 0x4000_0000
+        } else {
+            self.0
+        }
+    }
 }
+
+#[path = "../../rtos_reservation/src/lib.rs"]
+pub mod reservation;
+
+pub use reservation::{
+    Span, TaskPool, TimerArena, TimerArenas, TASK_POOL, TIMER_ARENA_CAPACITY, TIMER_ARENAS, TIMER_NODE_BYTES,
+};
 
 /// The loader whose kernel owns the data.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -869,6 +886,14 @@ impl Domain {
         match self {
             Domain::A => DomainId::A,
             Domain::B => DomainId::B,
+        }
+    }
+
+    #[inline(always)]
+    pub const fn timer_arena(self) -> TimerArena {
+        match self {
+            Domain::A => TIMER_ARENAS.a,
+            Domain::B => TIMER_ARENAS.b,
         }
     }
 

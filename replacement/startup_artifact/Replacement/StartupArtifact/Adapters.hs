@@ -7,12 +7,13 @@ module Replacement.StartupArtifact.Adapters
   , deriveFirstStage, deriveRecord2Link, derivePrimaryPublisher, deriveLoaderOrchestrationB, deriveLoaderStartup, derivePieceOf
   , deriveTaskSubmission, deriveTaskStorage, deriveIdleTask, deriveRootTask, deriveImage5Producer, derivePlainProducer, deriveGeneralHeap
   , deriveApplicationPump, deriveTask1Actor, deriveImage5Initializer, deriveTaskConstructors
+  , deriveTimer
   , ProducerCall (..), producerCallBoundaries, callerReturn
   , RegionsBytes (..), deriveKernelSlotBodies, slotCallerProblems
   ) where
 
 import qualified A32 as A
-import Control.Monad (unless)
+import Control.Monad (forM_, unless)
 import Data.Bifunctor (first)
 import qualified Data.ByteString as B
 import Data.List (nub, sortOn)
@@ -102,6 +103,7 @@ data PieceImages
   | LoaderStartupImages LinkedImage LinkedImage LinkedImage LinkedImage
   -- | Loader-A and loader-B kernel slot images and regions.json.
   | KernelSlotImages LinkedImage LinkedImage RegionsBytes
+  | TimerImages LinkedImage LinkedImage
 
 -- | The own-first crate's regions.json.
 newtype RegionsBytes = RegionsBytes B.ByteString
@@ -110,6 +112,7 @@ derivePieceOf :: Canonical -> PieceImages -> Either Refusal Piece
 derivePieceOf source images = case images of
   LoaderStartupImages a b dispatcher installer -> deriveLoaderStartup source a b dispatcher installer
   KernelSlotImages a b regions -> deriveKernelSlotBodies source a b regions
+  TimerImages a b -> deriveTimer source a b
   SingleImage kind image -> case kind of
     FirstStage -> deriveFirstStage source image
     Record2Link -> deriveRecord2Link source image
@@ -118,6 +121,7 @@ derivePieceOf source images = case images of
     LoaderStartup -> Left (AdapterRefused kind "loader-startup takes four linked images")
     TaskSubmission -> deriveTaskSubmission source image
     TaskStorage -> deriveTaskStorage source image
+    Timer -> Left (AdapterRefused kind "timer takes two linked images")
     IdleTask -> deriveIdleTask source image
     RootTask -> deriveRootTask source image
     Image5Producer -> deriveImage5Producer source image
@@ -280,7 +284,7 @@ tableBBytes = 0x162c
 record2Destinations :: [WriteRange]
 record2Destinations =
   [ WriteRange PhysicalTarget 0xa0f824 0xa0f828
-  , WriteRange PhysicalTarget 0xa10200 0xa5b200
+  , WriteRange PhysicalTarget 0xa10200 0xa5a200
   , WriteRange (CorePhysicalTarget Core0) 0x62c54 0x63460
   , WriteRange (CorePhysicalTarget Core1) 0xddaa0 0xf3420
   , WriteRange (TcmTarget Core0 InstructionBank) 0 0x2000
@@ -297,7 +301,7 @@ record2Destinations =
 record2Premise :: T.Text
 record2Premise = T.intercalate "; "
   [ "counter [0xa0f824,0xa0f828): the critical pair's only absolute store (emulation/Emulation/CriticalPair.hs:412)"
-  , "task reservation pool [0xa10200,0xa5b200) (reports/replacement-inventory-baseline.md:963), a reservation pool and not proven stack space (:887); one task's critical pair may write another task's stack"
+  , "task reservation pool [0xa10200,0xa5a200) (reports/replacement-inventory-baseline.md:963), a reservation pool and not proven stack space (:887); the timer arenas own the reserved tail [0xa5a200,0xa5b200); one task's critical pair may write another task's stack"
   , "core-0 A boot stack [0x62c54,0x63460) (baseline.md:1206); critical-pair frames up to 128 bytes on entry and 112 on exit below the caller SP (emulation/Emulation/CriticalPair.hs:643-644)"
   , "core-1 [0xddaa0,0xf3420): the prefix workspace clear [0xddaa0,0xf2c14) (replacement/loader_prefix/src.rs xm1_loader_prefix_clear_workspace), table B [0xddaa0,0xdf0cc) (emulation/Emulation/InterfaceInitializer.hs:768) and the B boot stack [0xf2c14,0xf3420) (baseline.md:1206)"
   , "initializer scratch [0xf33f0,0xf3410) lies inside the B boot stack (InterfaceInitializer.hs:768)"
@@ -599,7 +603,7 @@ taskStackWindows :: [WriteRange]
 taskStackWindows =
   [ WriteRange (CorePhysicalTarget Core0) 0x62c54 0x63460
   , WriteRange (CorePhysicalTarget Core1) 0xf2c14 0xf3420
-  , WriteRange PhysicalTarget 0xa10200 0xa5b200 ]
+  , WriteRange PhysicalTarget 0xa10200 0xa5a200 ]
 
 -- | Wrapper records 0x40a5b204+8i and storage records 0x40a0fc44+12i for indices 0..119
 -- (reports/replacement-inventory-baseline.md:963,1088).
@@ -700,14 +704,14 @@ deriveTaskSubmission source (LinkedImage (ImageBytes bin) (SymbolBytes symbolByt
   entryB <- labelled "b93-first-entry"
   -- Base words: storage record +0, wrapper record +0 and creation record +20 (C's base); top words: node +24 (T's
   -- stack top) and the first-entry SP (reports/replacement-inventory-baseline.md:1088,1120-1124,1130).
-  let pool = PoolAllocation (PoolSpan 0xa10200 0xa5b200) records cursorRead
+  let pool = PoolAllocation (PoolSpan 0xa10200 0xa5a200) 0xa5a200 (PoolSpan 0xa5a200 0xa5b200) records cursorRead
         [ AllocationWords records 0 12 AllocationBase, AllocationWords wrappers 0 8 AllocationBase
         , AllocationWords creationA 20 40 AllocationBase, AllocationWords creationB 20 40 AllocationBase
         , AllocationWords nodesA 24 56 AllocationTop, AllocationWords nodesB 24 56 AllocationTop ]
         [entryA, entryB]
         -- Core 0 creates tasks 102 and 104 in kernel A, core 1 tasks 93 and 103 in kernel B (reports/replacement-inventory-baseline.md:1063-1068,1108-1116).
         [AllocationOwner Core0 creationA 20 40, AllocationOwner Core1 creationB 20 40]
-        (Citation "pool [0x40a10200,0x40a5b200) and record layout {base, size, reserved}: replacement/task_storage/src.rs; reservation order across cores is a race, within a core program order (reports/replacement-inventory-baseline.md:1134,1621-1624)")
+        (Citation "allocatable pool [0x40a10200,0x40a5a200), timer arenas [0x40a5a200,0x40a5b200) and record layout {base, size, reserved}: replacement/task_storage/src.rs; reservation order across cores is a race, within a core program order (reports/replacement-inventory-baseline.md:1134,1621-1624)")
   let writes = EnumeratedWrites
         (taskStackWindows ++ [wrapperRecords, WriteRange PhysicalTarget 0xa0f82c 0xa0f830, storageRecords])
         (Premised (Premise (T.intercalate "; "
@@ -724,6 +728,71 @@ deriveTaskSubmission source (LinkedImage (ImageBytes bin) (SymbolBytes symbolByt
           , "stack bounds exclude exception frames; an IRQ that preempts the interrupted task leaves at most 88 bytes on its stack (irq-entry-frame); retained demands are StockStack depths, " <> T.pack (SB.conditionsPhrase SB.demandConditions) ])
         catalog (TaskSubmissionFacts (LinkedBytes bin symbolBytes) pool)
   derivePiece source declaration (StagedOutput (canonicalDat source) (Just (W.stagedBytes (W.stageImage4 wrapperSource artifact))) Nothing)
+
+-- | //replacement/rtos_timer's linked images over the two original timer modules.
+deriveTimer :: Canonical -> LinkedImage -> LinkedImage -> Either Refusal Piece
+deriveTimer source (LinkedImage (ImageBytes a) (SymbolBytes symbolsA)) (LinkedImage (ImageBytes b) (SymbolBytes symbolsB)) = do
+  let kind = Timer
+      shown :: Show e => Either e x -> Either Refusal x
+      shown = first (AdapterRefused kind . T.pack . show)
+      moduleA = (0x44a50, 0x44f2c)
+      moduleB = (0xd4a10, 0xd4eec)
+      entriesA = [("xm1_rtos_timer_initialize",0x44a50),("xm1_rtos_timer_insert",0x44c60)
+                 ,("xm1_rtos_timer_remove",0x44ca8),("xm1_rtos_timer_tick",0x44d8c)]
+      entriesB = [("xm1_rtos_timer_initialize",0xd4a10),("xm1_rtos_timer_insert",0xd4c20)
+                 ,("xm1_rtos_timer_remove",0xd4c68),("xm1_rtos_timer_tick",0xd4d4c)]
+      extent (low, high) = fromIntegral (high - low)
+      entryWord image (low, _) address = B.index image (fromIntegral (address - low))
+  unless (B.length a == extent moduleA && B.length b == extent moduleB)
+    (Left (AdapterRefused kind "timer linked image does not fill its module span"))
+  rowsA <- shown (F.parseSymbols symbolsA)
+  rowsB <- shown (F.parseSymbols symbolsB)
+  let check rows image (low, high) entries = forM_ entries $ \(name, address) -> do
+        symbol <- shown (F.lookupSymbol rows name)
+        unless (F.symbolAddress symbol == address && F.symbolSize symbol == 4)
+          (Left (AdapterRefused kind (T.pack ("timer entry moved: " ++ name))))
+        unless (address >= low && address + 4 <= high && entryWord image (low, high) address == 0xea)
+          (Left (AdapterRefused kind (T.pack ("timer entry is not an in-module branch: " ++ name))))
+  check rowsA a moduleA entriesA
+  check rowsB b moduleB entriesB
+  carrierA <- spanOf kind LoaderA (fst moduleA) (snd moduleA)
+  carrierB <- spanOf kind LoaderB (fst moduleB) (snd moduleB)
+  editA <- maybe (Left (AdapterRefused kind "timer A span is empty")) Right (edit carrierA a)
+  editB <- maybe (Left (AdapterRefused kind "timer B span is empty")) Right (edit carrierB b)
+  codeA <- ownedCode kind (fst moduleA) (snd moduleA)
+  codeB <- ownedCode kind (fst moduleB) (snd moduleB)
+  both <- coreSet kind [Core0, Core1]
+  few <- limit kind 4
+  let boundary name address = do
+        named <- label kind name
+        pure (Boundary named SiteBoundary both (Pc address) (Just (Pc address)) False ComparePresence few Nothing)
+  boundaries <- sequence
+    [ boundary "a-initialize" 0x44a50, boundary "a-insert" 0x44c60
+    , boundary "a-remove" 0x44ca8, boundary "a-tick" 0x44d8c
+    , boundary "b-initialize" 0xd4a10, boundary "b-insert" 0xd4c20
+    , boundary "b-remove" 0xd4c68, boundary "b-tick" 0xd4d4c ]
+  parts <- shown (applyPreTableEdits [editA, editB] (U.parsedParts (canonicalParsed source)))
+  dat <- shown (U.rebuildContainer (canonicalParsed source) parts)
+  let writes = EnumeratedWrites
+        [ WriteRange PhysicalTarget 0xa5a200 0xa5b200
+        , WriteRange (CorePhysicalTarget Core0) 0x5476c 0x5477c
+        , WriteRange (CorePhysicalTarget Core1) 0xe472c 0xe473c
+        , WriteRange (CorePhysicalTarget Core0) 0xc0838 0xc0848
+        , WriteRange (CorePhysicalTarget Core1) 0xc08a8 0xc08b8 ]
+        (Premised (Premise (T.intercalate "; "
+          [ "the timer arenas own [0xa5a200,0xa5b200), 32-byte aligned, disjoint, 0x800 bytes each; 184 nodes at 8 bytes fit"
+          , "the image4 boot BSS clear precedes the timer initializer, and the optional dispatcher clear also precedes it; only allocation-scoped task stack fill/cache writes follow"
+          , "config +0x20 publishes each domain's arena base and the stock owner-context initializer copies it to context +0x34 unchanged"
+          , "stock timer_base, tick, time offset and count words are the initializer's other stores; retained records are current-boot allocations below 0xa5a200" ])))
+      catalog = Catalog boundaries (codeA ++ codeB) writes []
+      declaration = PieceDeclaration kind (Set.singleton TimerArea) [carrierA, carrierB] []
+        (map Premise
+          [ "the linked timer images are the reviewed allocation-free core over the stock ABI"
+          , "the timer callback and wait-result, cyclic lifetime and independent-lock ownership remain open"
+          , "the arena's physical alias and 32-byte cache-line rounding are admission premises, not a proven MPU attribute" ])
+        catalog (TimerFacts (LinkedBytes a symbolsA) (LinkedBytes b symbolsB)
+          (PoolSpan 0xa5a200 0xa5aa00) (PoolSpan 0xa5aa00 0xa5b200))
+  derivePiece source declaration (StagedOutput dat Nothing Nothing)
 
 -- | Replacement.TaskStorage.Artifact over //replacement/task_storage:task-storage-image.
 deriveTaskStorage :: Canonical -> LinkedImage -> Either Refusal Piece
@@ -1082,13 +1151,13 @@ canonicalSegments source =
 
 -- | The task reservation pool that every heap caller's stack comes from (reports/replacement-inventory-baseline.md:963).
 taskPool :: (Word64, Word64)
-taskPool = (0xa10200, 0xa5b200)
+taskPool = (0xa10200, 0xa5a200)
 
 heapWritesPremise :: T.Text
 heapWritesPremise = T.intercalate "; "
   [ "SP-relative stores are proved per entry by the heap frame fixpoint (replacement/general_heap/Replacement/GeneralHeap/Admission.hs deriveFrames); rlsf's stores through pointers are premised to the arena [base, end - 32) its decoded geometry fixes (Admission.hs:29-36)"
   , "the sentinel 0x89d4f8 is the only absolute store (replacement/general_heap/src.rs acquire); errno is stored at the context word, which every public entry loads from 0x89c970 (canonical value 0x89c978)"
-  , "every heap caller on the route runs on a task stack in the reservation pool [0xa10200,0xa5b200), as record2-link's pool range; an owned non-SP store into another live frame of the pool is not excluded"
+  , "every heap caller on the route runs on a task stack in the allocatable reservation pool [0xa10200,0xa5a200), as record2-link's pool range; an owned non-SP store into another live frame of the pool is not excluded"
   , "core 1 has no admitted heap write" ]
 
 -- | Replacement.GeneralHeap.Artifact over //replacement/general_heap:general-heap-image.

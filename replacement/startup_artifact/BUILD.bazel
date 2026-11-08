@@ -117,6 +117,19 @@ _TEST_DEPS = [
 ]
 
 haskell_test(
+    name = "timer-arena-join-tests",
+    srcs = ["TimerArenaJoinTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":startup-artifact",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:text",
+    ],
+)
+
+haskell_test(
     name = "startup-artifact-tests",
     size = "small",
     srcs = ["Fixtures.hs", "Tests.hs"],
