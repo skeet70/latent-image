@@ -726,48 +726,41 @@ fn force_send_at_the_last_slot_wraps_both_indices() {
 }
 
 #[test]
-fn blocking_retries_until_the_caller_is_ready_under_the_lock() {
+fn a_pending_irq_wakes_the_suspended_caller_only_when_the_retry_reopens_i() {
     let sim = fixture();
     install_queue(&sim, 1, 0, 1, RING);
     let id = queue(1);
-    send(&sim, EntryDomain::new(Domain::A), id, Payload(1)).unwrap();
+    let out = OutWord(GuestAddress(0x4000_1000));
     make_ready(&sim, 2, 3);
     sim.set_running(Domain::A, task(2));
-    sim.suspend_until_second_lock(task(2));
+    sim.suspend_pending_irq(task(2));
     sim.set_interrupts(0x40);
+    let mut attempts = 0;
     let outcome = retry_masked(&sim, || {
-        match send(&sim, EntryDomain::new(Domain::A), id, Payload(2)) {
-            Ok(SendBlocking::Retry) => Ok(Attempt::Retry),
+        attempts += 1;
+        if attempts > 4 {
+            return Ok(Attempt::Done(ReceiveBlocking::Ready(WaitOutcome::TimedOut)));
+        }
+        match receive(&sim, EntryDomain::new(Domain::A), id, out, Timeout::Forever) {
+            Ok(ReceiveBlocking::Retry) => Ok(Attempt::Retry),
             Ok(outcome) => Ok(Attempt::Done(outcome)),
             Err(status) => Err(status),
         }
-    });
-    assert!(matches!(outcome, Ok(SendBlocking::Pending(_))), "{outcome:?}");
-    assert!(sim.lock_count() >= 2);
-    assert_eq!(sim.task_state(task(2)), SEND_STATE.bits());
-    assert_eq!(sim.mask_log().len(), 4);
-    assert_eq!(sim.interrupts(), 0x40);
-}
-
-#[test]
-fn a_blocking_retry_reopens_the_caller_mask_between_attempts() {
-    let sim = Sim::new(Domain::A);
-    sim.set_interrupts(0x40);
-    let mut attempts = 0;
-    let mut seen = Vec::new();
-    let result = retry_masked(&sim, || {
-        attempts += 1;
-        seen.push(sim.interrupts());
-        if attempts == 1 {
-            Ok(Attempt::Retry)
-        } else {
-            Ok(Attempt::Done(7))
-        }
-    });
-    assert_eq!(result, Ok(7));
+    })
+    .unwrap();
     assert_eq!(attempts, 2);
-    assert_eq!(seen, [0xc0, 0xc0]);
-    assert_eq!(sim.mask_log(), [(1, 0x40), (0, 0x40), (1, 0x40), (0, 0x40)]);
+    let pending = match outcome {
+        ReceiveBlocking::Pending(pending) => pending,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(sim.task_state(task(2)), RECEIVE_STATE.bits());
+    sim.set(wait(2).data(), 0x5a5a);
+    sim.complete(task(2), wait(2), 0);
+    assert_eq!(
+        resume_receive(&sim, pending),
+        ReceiveResume::Completed(WaitOutcome::Satisfied(Payload(0x5a5a)))
+    );
+    assert_eq!(sim.word(out.0), 0x5a5a);
     assert_eq!(sim.interrupts(), 0x40);
 }
 

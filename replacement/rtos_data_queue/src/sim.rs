@@ -18,11 +18,10 @@ pub struct Sim {
     held: Cell<bool>,
     interrupts: Cell<u32>,
     last_store_mask: Cell<u32>,
-    mask_log: RefCell<Vec<(u8, u32)>>,
+    pending_irq: Cell<bool>,
+    pending_task: Cell<u32>,
     store_log: RefCell<Vec<u32>>,
     locks: Cell<u32>,
-    second_lock_ready: Cell<bool>,
-    deferred_task: Cell<u32>,
 }
 
 fn at(address: GuestAddress) -> s1::GuestAddress {
@@ -63,11 +62,10 @@ impl Sim {
             held: Cell::new(false),
             interrupts: Cell::new(0x40),
             last_store_mask: Cell::new(0),
-            mask_log: RefCell::new(Vec::new()),
+            pending_irq: Cell::new(false),
+            pending_task: Cell::new(0),
             store_log: RefCell::new(Vec::new()),
             locks: Cell::new(0),
-            second_lock_ready: Cell::new(false),
-            deferred_task: Cell::new(0),
         }
     }
 
@@ -152,14 +150,10 @@ impl Sim {
         self.last_store_mask.get()
     }
 
-    pub fn mask_log(&self) -> Vec<(u8, u32)> {
-        self.mask_log.borrow().clone()
-    }
-
-    pub fn suspend_until_second_lock(&self, task: Task) {
+    pub fn suspend_pending_irq(&self, task: Task) {
         self.set_byte(task.state(), crate::layout::TaskState::SUSPENDED.bits());
-        self.second_lock_ready.set(true);
-        self.deferred_task.set(task.0 .0);
+        self.pending_irq.set(true);
+        self.pending_task.set(task.0 .0);
     }
 
     pub fn lock_count(&self) -> u32 {
@@ -313,14 +307,17 @@ impl Env for Sim {
 
     fn mask_i(&self) -> SavedMask {
         let saved = self.interrupts.get();
-        self.mask_log.borrow_mut().push((1, saved));
         self.interrupts.set(saved | 0x80);
         SavedMask(saved)
     }
 
     fn restore_i(&self, saved: SavedMask) {
-        self.mask_log.borrow_mut().push((0, saved.0));
         self.interrupts.set(saved.0);
+        if saved.0 & 0x80 == 0 && self.pending_irq.get() {
+            self.pending_irq.set(false);
+            let task = Task(GuestAddress(self.pending_task.get()));
+            self.set_byte(task.state(), crate::layout::TaskState::READY.bits());
+        }
     }
 
     fn with_object_lock_after<R>(
@@ -354,11 +351,6 @@ impl Env for Sim {
         s1::acquire(self, lock(record.0));
         let count = self.locks.get() + 1;
         self.locks.set(count);
-        if self.second_lock_ready.get() && count >= 2 {
-            self.second_lock_ready.set(false);
-            let task = Task(GuestAddress(self.deferred_task.get()));
-            self.set_byte(task.state(), crate::layout::TaskState::READY.bits());
-        }
         let result = body();
         s1::release(self, lock(record.0));
         self.interrupts.set(saved);
