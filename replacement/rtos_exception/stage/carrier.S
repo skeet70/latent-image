@@ -181,7 +181,7 @@ xm1_exception_irq:
     and r2, r2, #0x40
     bic r1, r1, #0x40
     orr r1, r1, r2
-    msr SPSR_fc, r1
+    msr SPSR_fsxc, r1
     ldm sp!, {r0, r1, r2, r3, r12, lr, pc}^
     .size xm1_exception_irq, . - xm1_exception_irq
 

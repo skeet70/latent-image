@@ -13,7 +13,7 @@ use memory_view::{MemoryAddress, MemoryCore, TcmRegister, static_span, tcm_windo
 mod loader_code;
 use loader_code::immutable_loader_spans;
 
-const USAGE: &str = "fujimod-xm1-idle-tasks [--task idle|root] --role retained|owned --run RUN --update DAT --boot-rom ROM --analysis ROOT --linked BIN --symbols SYMBOLS --contract CONTRACT --output NEW_DIR";
+const USAGE: &str = "fujimod-xm1-idle-tasks [--task idle|root] [--nested] --role retained|owned --run RUN --update DAT --boot-rom ROM --analysis ROOT --linked BIN --symbols SYMBOLS --contract CONTRACT --output NEW_DIR";
 const DEADLINE: u64 = 80_000_000;
 const HIT_LIMIT: usize = 16_384;
 const WATCH_LIMIT: usize = 1_048_576;
@@ -104,16 +104,68 @@ struct Kernel {
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
-enum Boundary { Start, Entry, Instruction, RootEntry, RootInstruction, ServiceEntry, ServiceReturn, TaskSubmit, PeriodicCallback, IrqEntry, IrqFrame, IrqReturn, PostCleanup }
-/// Core0 ATCM bytes from 8 below the sample SP to the IRQ stack top, read through core 0.
+enum Boundary { Start, Entry, Instruction, RootEntry, RootInstruction, ServiceEntry, ServiceReturn, TaskSubmit, PeriodicCallback, IrqEntry, IrqSave, IrqFrame, AckReturn, IrqExit, IrqReturn, HandlerPoint, HandlerResume, PostCleanup }
+/// ATCM bytes from eight below the sample SP to the IRQ stack top.
 #[derive(Serialize)]
 struct InterruptStack { low: Address, bytes: Vec<u8> }
 #[derive(Serialize)]
 struct Sample {
     hit: usize, boundary: Boundary, context: Context, code_word: Word, watch_cursor: usize, views: Vec<View>, kernels: [Kernel; 2],
     #[serde(skip_serializing_if = "Option::is_none")]
+    irq: Option<IrqState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    controller: Option<ControllerObservation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     interrupt_stack: Option<InterruptStack>,
 }
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(try_from = "u8", into = "u8")]
+struct IrqLine(u8);
+impl TryFrom<u8> for IrqLine {
+    type Error = String;
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        require(value < 128, "IRQ line exceeds the controller")?;
+        Ok(Self(value))
+    }
+}
+impl From<IrqLine> for u8 { fn from(value: IrqLine) -> Self { value.0 } }
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(try_from = "u8", into = "u8")]
+struct IrqPriority(u8);
+impl TryFrom<u8> for IrqPriority {
+    type Error = String;
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        require(value < 16, "IRQ priority exceeds the controller")?;
+        Ok(Self(value))
+    }
+}
+impl From<IrqPriority> for u8 { fn from(value: IrqPriority) -> Self { value.0 } }
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct IrqSource { line: IrqLine, priority: IrqPriority }
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct IrqState { counter: Word, lock: Word, dispatch: Word }
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct IrqInjection { outer: IrqSource, nested: IrqSource, handler: Address }
+#[derive(Debug, Deserialize, Serialize)]
+struct ControllerObservation { active: Vec<IrqSource>, injection: Option<IrqInjection> }
+#[derive(Deserialize)]
+struct SavedController { registers: ControllerRegisters }
+#[derive(Deserialize, Serialize)]
+struct ControllerRegisters {
+    enabled: [Word; 4], pending: [Word; 4], vectors: Vec<Option<Address>>,
+    priorities: Vec<Option<IrqPriority>>, active: Vec<IrqSource>,
+}
+#[derive(Clone, Copy, Serialize)]
+struct ControllerId(usize);
+struct ControllerSnapshot { device: ControllerId, registers: ControllerRegisters }
+#[derive(Clone, Copy, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum FixtureState { Prepared, Installed, Restored }
+#[derive(Serialize)]
+struct ControllerFixture { core: Core, device: ControllerId, state: FixtureState, original: ControllerRegisters, probe: IrqLine, handler: Address }
+#[derive(Serialize)]
+struct NestedFixture { state: FixtureState, controllers: [Option<ControllerFixture>; 2] }
+enum ControllerRegister { Enable(IrqLine), Disable(IrqLine), Vector(IrqLine), Priority(IrqLine) }
 #[derive(Deserialize, Serialize)]
 struct WatchSummary { enabled: bool, violation: Option<String> }
 #[derive(Clone, Copy, Deserialize, Eq, PartialEq)]
@@ -121,6 +173,19 @@ struct WatchSummary { enabled: bool, violation: Option<String> }
 enum Access { CpuFetch, CpuRead, CpuWrite, HostRead, HostWrite, ModelBusRead, ModelBusWrite }
 #[derive(Deserialize)]
 struct AccessRecord { source: Access, physical: Option<u64>, size: u64, core: Option<usize>, pc: Option<u64>, instructions: Option<u64> }
+const IRQ_LOCK: Address = Address(0xc0804);
+#[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+struct WatchCursor(usize);
+#[derive(Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+enum ByteOrder { Little, Big }
+#[derive(Deserialize)]
+struct LockWriteWire { core: usize, pc: Address, before: [u8; 4], value: Word, byte_order: ByteOrder }
+#[derive(Serialize)]
+struct LockWrite { cursor: WatchCursor, core: Core, pc: Address, before: Word, after: Word }
+#[derive(Serialize)]
+struct LockJournal { initial: Option<Word>, writes: Vec<LockWrite> }
+struct IrqHold { checked: WatchCursor, owner: Word, exit: Option<WatchCursor> }
 #[derive(Serialize)]
 #[serde(rename_all = "kebab-case")]
 enum Outcome { ObservedMenu, Refused }
@@ -130,6 +195,10 @@ struct Receipt<'a> {
     identity: Identity, checkpoint_sha256: Digest, checkpoint_reused: bool, instructions: u64, lifecycle_end_counts: Option<[u64; 2]>,
     memory_watch_sha256: Digest, watch: Result<WatchSummary, String>, watch_end_error: Option<String>,
     sites: &'a BTreeMap<u32, String>, hits: &'a [Hit], samples: &'a [Sample], final_menu: Result<Option<[u32; 3]>, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    nested_fixture: Option<&'a NestedFixture>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lock_journal: Option<&'a LockJournal>,
 }
 
 fn require(condition: bool, message: &str) -> Result<(), String> { if condition { Ok(()) } else { Err(message.into()) } }
@@ -227,8 +296,7 @@ impl Kernel {
         Ok(())
     }
 }
-fn sample(machine: &Machine, maps: &[MemoryMap], sources: &[Code], hit: usize, state: Context, watch_cursor: usize) -> Result<Sample, String> {
-    let boundary = boundary(state.pc.0)?;
+fn sample(machine: &Machine, maps: &[MemoryMap], sources: &[Code], hit: usize, state: Context, watch_cursor: usize, boundary: Boundary, nested: bool) -> Result<Sample, String> {
     let mut views = Vec::with_capacity(17);
     let kernels = [kernel(machine, maps, &state, Core::Primary, &mut views)?, kernel(machine, maps, &state, Core::Secondary, &mut views)?];
     let roots = view(machine, maps, &state, Object::InterfaceRoots, Core::Primary, 0x96bd20, 8)?;
@@ -243,7 +311,17 @@ fn sample(machine: &Machine, maps: &[MemoryMap], sources: &[Code], hit: usize, s
     let observed = view(machine, maps, &state, Object::Code, state.core, state.pc.0, 4)?;
     require(word(&observed.bytes, 0)? == expected.0, "instruction word differs from installed source")?;
     views.push(observed);
-    Ok(Sample { hit, boundary, context: state, code_word: expected, watch_cursor, views, kernels, interrupt_stack: None })
+    let irq = nested.then(|| -> Result<IrqState, String> {
+        Ok(IrqState {
+            counter: Word(read_guest_word(machine, state.core, match state.core { Core::Primary => 0x545a4, Core::Secondary => 0xe4564 })?),
+            lock: Word(read_guest_word(machine, state.core, 0xc0804)?),
+            dispatch: Word(read_guest_word(machine, state.core, match state.core { Core::Primary => 0x546d8, Core::Secondary => 0xe4698 })?),
+        })
+    }).transpose()?;
+    let controller = (nested && boundary == Boundary::AckReturn).then(|| controller_observation(machine, state.core)).transpose()?;
+    let interrupt_stack = (nested && (IRQ_STACK.0..=IRQ_STACK.1).contains(&state.sp.0))
+        .then(|| interrupt_stack(machine, &state)).transpose()?;
+    Ok(Sample { hit, boundary, context: state, code_word: expected, watch_cursor, views, kernels, irq, controller, interrupt_stack })
 }
 fn sources(root: &Path, overrides: &[Option<PathBuf>; 2]) -> Result<Vec<Code>, String> {
     [("decode/loader-40000.bin", "candidate-loader-a", 0x40000, "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882", 0xdae0),
@@ -302,18 +380,178 @@ fn bind_artifact(role: Role, linked: &[u8], symbols: &[u8], contract: &[u8], upd
         Role::Owned => { require(*update == binding.candidate_dat_sha256, "owned role DAT differs from staging contract")?; Ok(owned_loop) }
     }
 }
-fn boundary(address: u32) -> Result<Boundary, String> {
-    match address {
-        0x725dd8 => Ok(Boundary::Start), ENTRY => Ok(Boundary::Entry), 0x69cbf4 | 0x69cbf8 | 0x69cbfc => Ok(Boundary::Instruction),
-        0x40204 | 0xd0204 => Ok(Boundary::IrqEntry), 0x40234 | 0xd0234 => Ok(Boundary::IrqFrame),
-        0x40364 | 0xd0364 | 0x437d8 | 0xd37d8 => Ok(Boundary::IrqReturn), _ => Err("unknown observation boundary".into()),
+fn read_guest_word(machine: &Machine, core: Core, address: u32) -> Result<u32, String> {
+    let mut bytes = [0u8; 4];
+    machine.session.board.read_memory(core.index(), u64::from(address), &mut bytes)?;
+    Ok(u32::from_le_bytes(bytes))
+}
+
+fn controller_base(core: Core) -> u64 { match core { Core::Primary => 0xfffb3000, Core::Secondary => 0xfffb4000 } }
+fn controller_snapshot(machine: &Machine, core: Core) -> Result<ControllerSnapshot, String> {
+    let base = controller_base(core);
+    let mut board = machine.session.board.state();
+    let devices = board["bus"]["devices"].as_array_mut().ok_or("board devices absent")?;
+    let mut matching = devices.iter_mut().enumerate().filter(|(_, device)| {
+        device["kind"] == "exr2-interrupt-controller"
+            && device["windows"].as_array().is_some_and(|windows| windows.iter().any(|window| window["base"].as_u64() == Some(base)))
+    });
+    let (id, device) = matching.next().ok_or("core interrupt controller absent")?;
+    require(matching.next().is_none(), "core interrupt controller is ambiguous")?;
+    let raw = device.get_mut("state").ok_or("interrupt controller state absent")?;
+    let SavedController { registers } = serde_json::from_value(std::mem::take(raw)).map_err(|error| format!("interrupt controller snapshot: {error}"))?;
+    require(registers.vectors.len() == 128 && registers.priorities.len() == 128 && registers.active.len() <= 16,
+        "interrupt controller snapshot dimensions differ")?;
+    Ok(ControllerSnapshot { device: ControllerId(id), registers })
+}
+fn controller_observation(machine: &Machine, core: Core) -> Result<ControllerObservation, String> {
+    let registers = controller_snapshot(machine, core)?.registers;
+    let marker = match core { Core::Primary => Address(0x42840), Core::Secondary => Address(0xd2840) };
+    let injection = registers.active.last().and_then(|&outer| {
+        registers.priorities.iter().enumerate().find_map(|(index, &priority)| {
+            let priority = priority?;
+            let line = IrqLine(index as u8);
+            let bit = 1u32 << (index % 32);
+            let handler = registers.vectors[index]?;
+            (handler != Address(0) && handler != marker && priority.0 < outer.priority.0
+                && registers.enabled[index / 32].0 & bit != 0
+                && registers.pending[index / 32].0 & bit == 0
+                && registers.active.iter().all(|source| source.line != line))
+                .then_some(IrqInjection { outer, nested: IrqSource { line, priority }, handler })
+        })
+    });
+    Ok(ControllerObservation { active: registers.active, injection })
+}
+
+fn controller_write(machine: &mut Machine, target: &ControllerFixture, register: ControllerRegister, value: Word) -> Result<(), String> {
+    let offset = match register {
+        ControllerRegister::Enable(line) => 0x80 + u64::from(line.0 / 32) * 4,
+        ControllerRegister::Disable(line) => 0xa0 + u64::from(line.0 / 32) * 4,
+        ControllerRegister::Vector(line) => 0x400 + u64::from(line.0) * 4,
+        ControllerRegister::Priority(line) => 0x800 + u64::from(line.0) * 4,
+    };
+    machine.session.board.device_input::<fujimod_emulator_devices::exr2::irq::InterruptController, _>(
+        target.device.0, |controller, context| {
+            fujimod_emulator_devices::Device::write(controller, context, controller_base(target.core) + offset, 4, u64::from(value.0));
+            Ok(())
+        })
+}
+impl ControllerFixture {
+    fn prepare(machine: &Machine, core: Core) -> Result<Self, String> {
+        let ControllerSnapshot { device, registers: original } = controller_snapshot(machine, core)?;
+        require(original.active.is_empty(), "nested fixture starts with an active IRQ")?;
+        let marker = match core { Core::Primary => Address(0x42840), Core::Secondary => Address(0xd2840) };
+        let handler = original.vectors[120].filter(|handler| *handler != Address(0) && *handler != marker)
+            .ok_or("nested fixture requires the registered IPI handler")?;
+        let probe = (0..128).rev().find(|&index| {
+            let bit = 1 << (index % 32);
+            original.enabled[index / 32].0 & bit == 0 && original.pending[index / 32].0 & bit == 0
+                && original.vectors[index] == Some(marker) && original.priorities[index].is_some()
+        }).ok_or("nested fixture has no unused initialized IRQ source")?;
+        for index in 0..128 {
+            require(original.enabled[index / 32].0 & (1 << (index % 32)) == 0 || original.priorities[index].is_some(),
+                "enabled fixture source lacks a programmed priority")?;
+        }
+        Ok(Self { core, device, state: FixtureState::Prepared, original, probe: IrqLine(probe as u8), handler })
+    }
+    fn priorities(&self, machine: &mut Machine, state: FixtureState) -> Result<(), String> {
+        for index in 0..128 {
+            if self.original.enabled[index / 32].0 & (1 << (index % 32)) != 0
+                && self.original.priorities[index] == Some(IrqPriority(0))
+            {
+                controller_write(machine, self, ControllerRegister::Priority(IrqLine(index as u8)),
+                    Word(u32::from(state == FixtureState::Installed)))?;
+            }
+        }
+        Ok(())
+    }
+    fn verify(&self, machine: &Machine, state: FixtureState, baseline: &ControllerRegisters) -> Result<(), String> {
+        let current = controller_snapshot(machine, self.core)?.registers;
+        let installed = state == FixtureState::Installed;
+        for index in 0..128 {
+            let bit = 1 << (index % 32);
+            let probe = index == usize::from(self.probe.0);
+            let enabled = self.original.enabled[index / 32].0 & bit != 0;
+            let adjusted = enabled && self.original.priorities[index] == Some(IrqPriority(0));
+            let priority = if probe {
+                if installed { Some(IrqPriority(0)) } else { self.original.priorities[index] }
+            } else if adjusted {
+                Some(IrqPriority(u8::from(installed)))
+            } else { baseline.priorities[index] };
+            let vector = if probe {
+                if installed { Some(self.handler) } else { self.original.vectors[index] }
+            } else { baseline.vectors[index] };
+            let expected_enabled = if probe { installed } else { baseline.enabled[index / 32].0 & bit != 0 };
+            require(current.priorities[index] == priority && current.vectors[index] == vector
+                && (current.enabled[index / 32].0 & bit != 0) == expected_enabled,
+                "nested fixture MMIO configuration readback differs")?;
+        }
+        Ok(())
     }
 }
-fn sites() -> BTreeMap<u32, String> {
-    [(0x725dd8, "start"), (ENTRY, "entry"), (0x69cbf4, "instruction"), (0x69cbf8, "instruction"), (0x69cbfc, "instruction"),
-     (0x40204, "irq-entry"), (0xd0204, "irq-entry"), (0x40234, "irq-frame"), (0xd0234, "irq-frame"),
-     (0x40364, "irq-return"), (0xd0364, "irq-return"), (0x437d8, "irq-return"), (0xd37d8, "irq-return")]
-        .into_iter().map(|(address, name)| (address, name.into())).collect()
+impl NestedFixture {
+    fn new() -> Self { Self { state: FixtureState::Prepared, controllers: [None, None] } }
+    fn install_core(&mut self, machine: &mut Machine, core: Core) -> Result<(), String> {
+        require(self.state != FixtureState::Restored, "nested fixture was already restored")?;
+        let slot = &mut self.controllers[core.index()];
+        if slot.is_none() {
+            *slot = Some(ControllerFixture::prepare(machine, core)?);
+            let controller = slot.as_mut().ok_or("core nested fixture absent")?;
+            controller.priorities(machine, FixtureState::Installed)?;
+            controller_write(machine, controller, ControllerRegister::Vector(controller.probe), Word(controller.handler.0))?;
+            controller_write(machine, controller, ControllerRegister::Priority(controller.probe), Word(0))?;
+            controller_write(machine, controller, ControllerRegister::Enable(controller.probe), Word(1 << (controller.probe.0 % 32)))?;
+            controller.verify(machine, FixtureState::Installed, &controller.original)?;
+            controller.state = FixtureState::Installed;
+        }
+        if self.controllers.iter().all(|controller| controller.as_ref().is_some_and(|controller| controller.state == FixtureState::Installed)) {
+            self.state = FixtureState::Installed;
+        }
+        Ok(())
+    }
+    fn restore(&mut self, machine: &mut Machine) -> Result<(), String> {
+        require(self.state == FixtureState::Installed, "nested fixture was not installed")?;
+        for slot in &mut self.controllers {
+            let controller = slot.as_mut().ok_or("core nested fixture was not installed")?;
+            let current = controller_snapshot(machine, controller.core)?.registers;
+            require(current.active.is_empty()
+                && current.pending[usize::from(controller.probe.0 / 32)].0 & (1 << (controller.probe.0 % 32)) == 0,
+                "nested fixture source is still active or pending")?;
+            controller_write(machine, controller, ControllerRegister::Disable(controller.probe), Word(1 << (controller.probe.0 % 32)))?;
+            controller_write(machine, controller, ControllerRegister::Vector(controller.probe),
+                Word(controller.original.vectors[usize::from(controller.probe.0)].ok_or("original fixture vector absent")?.0))?;
+            controller_write(machine, controller, ControllerRegister::Priority(controller.probe),
+                Word(u32::from(controller.original.priorities[usize::from(controller.probe.0)].ok_or("original fixture priority absent")?.0)))?;
+            controller.priorities(machine, FixtureState::Restored)?;
+            controller.verify(machine, FixtureState::Restored, &current)?;
+            controller.state = FixtureState::Restored;
+        }
+        self.state = FixtureState::Restored;
+        Ok(())
+    }
+}
+
+fn boundary(address: u32) -> Option<Boundary> {
+    Some(match address {
+        0x725dd8 => Boundary::Start, ENTRY => Boundary::Entry, 0x69cbf4 | 0x69cbf8 | 0x69cbfc => Boundary::Instruction,
+        0x40204 | 0xd0204 => Boundary::IrqEntry, 0x40234 | 0xd0234 => Boundary::IrqFrame,
+        0x4020c | 0xd020c => Boundary::IrqSave,
+        0x40d5c | 0xd0d5c => Boundary::AckReturn,
+        0x402f8 | 0xd02f8 => Boundary::IrqExit,
+        0x40364 | 0xd0364 | 0x437d8 | 0xd37d8 => Boundary::IrqReturn,
+        _ => return None,
+    })
+}
+fn sites(nested: bool) -> BTreeMap<u32, String> {
+    let mut sites = [(0x725dd8, "start"), (ENTRY, "entry"), (0x69cbf4, "instruction"), (0x69cbf8, "instruction"), (0x69cbfc, "instruction"),
+        (0x40204, "irq-entry"), (0xd0204, "irq-entry"), (0x40234, "irq-frame"), (0xd0234, "irq-frame"),
+        (0x40364, "irq-return"), (0xd0364, "irq-return"), (0x437d8, "irq-return"), (0xd37d8, "irq-return")]
+        .into_iter().map(|(address, name)| (address, name.into())).collect::<BTreeMap<_, _>>();
+    if nested {
+        sites.extend([(0x4020c, "irq-save"), (0xd020c, "irq-save"),
+            (0x40d5c, "ack-return"), (0xd0d5c, "ack-return"), (0x402f8, "irq-exit"), (0xd02f8, "irq-exit")]
+            .into_iter().map(|(address, name)| (address, name.into())));
+    }
+    sites
 }
 fn immutable(physical: u64, size: u64) -> bool {
     LOADER_A_CODE.iter().chain(&LOADER_B_CODE).chain(&IMAGE_CODE).chain(&INTERFACES)
@@ -326,6 +564,7 @@ fn watch_ranges() -> Vec<WatchRange> {
     ranges.extend([
         WatchRange { start: u64::from(ENTRY), end: u64::from(LIMIT), kinds: WatchKinds::CPU_FETCH },
         WatchRange { start: 0x725dd8, end: 0x725ddc, kinds: WatchKinds::CPU_FETCH },
+        WatchRange { start: u64::from(IRQ_LOCK.0), end: u64::from(IRQ_LOCK.0) + 4, kinds: WatchKinds::WRITES },
     ]);
     for address in [0x40204, 0xd0204, 0x40234, 0xd0234, 0x40364, 0xd0364, 0x437d8, 0xd37d8] {
         ranges.push(WatchRange { start: address, end: address + 4, kinds: WatchKinds::CPU_FETCH });
@@ -347,14 +586,141 @@ fn fetch_attribution() -> Result<FetchAttribution, String> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Phase { AwaitEntry, AwaitWait, Waiting, IrqEntered, Framed, Returned, Resumed, RepeatPending, Complete }
-struct Lifecycle { phase: Phase, wait: Option<Context>, wait_executed: bool, repeated_at: Option<u64> }
-struct Producer { wfi: Address, resume: Address, cores: [Lifecycle; 2] }
-impl Producer {
-    fn new(wfi: Address, resume: Address) -> Self {
-        Self { wfi, resume, cores: std::array::from_fn(|_| Lifecycle { phase: Phase::AwaitEntry, wait: None, wait_executed: false, repeated_at: None }) }
+enum Phase { AwaitEntry, AwaitWait, Waiting, IrqEntered, Framed, Exiting, Returned, Resumed, RepeatPending, Complete }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NestedAction { Inject(IrqLine), ObserveResume(Address), ResumeObserved(Address) }
+struct NestedEntry { injection: IrqInjection, lock: Word, irq: Context }
+struct NestedFrame { entry: NestedEntry, saved: Context }
+enum NestedProgress {
+    Await,
+    Pended { injection: IrqInjection, lock: Word },
+    Entered(NestedEntry),
+    Saved(NestedFrame),
+    Framed(NestedFrame),
+    Acknowledged(NestedFrame),
+    Exiting { frame: NestedFrame, dispatch: Word },
+    Returning { frame: NestedFrame, dispatch: Word },
+    Complete { lock: Word },
+    Refused,
+}
+impl NestedProgress {
+    fn resume(&self) -> Option<Address> {
+        let entry = match self {
+            Self::Entered(entry) => entry,
+            Self::Saved(frame) | Self::Framed(frame) | Self::Acknowledged(frame)
+                | Self::Exiting { frame, .. } | Self::Returning { frame, .. } => &frame.entry,
+            _ => return None,
+        };
+        entry.irq.lr.0.checked_sub(4).map(Address)
     }
-    fn complete(&self) -> bool { self.cores.iter().all(|core| core.phase == Phase::Complete) }
+    fn observe(self, sample: &Sample) -> Result<(Self, Option<NestedAction>), String> {
+        let state = &sample.context;
+        let irq = sample.irq.ok_or("nested IRQ state was not observed")?;
+        let held = |expected, count| require(irq.lock == expected && irq.counter == Word(count), "nested IRQ counter or lock differs");
+        match (self, sample.boundary) {
+            (Self::Await, Boundary::AckReturn) => {
+                let tag = Word(if state.identities[state.core.index()] == Word(0x4003) { 0x11 } else { 0x12 });
+                held(tag, 1)?;
+                let controller = sample.controller.as_ref().ok_or("outer acknowledgement state absent")?;
+                let injection = controller.injection.ok_or("no enabled configured higher-priority IRQ line")?;
+                require(controller.active.as_slice() == [injection.outer], "outer acknowledgement has unexpected nesting")?;
+                Ok((Self::Pended { injection, lock: tag }, Some(NestedAction::Inject(injection.nested.line))))
+            }
+            (Self::Pended { injection, lock }, Boundary::IrqEntry) => {
+                held(lock, 1)?;
+                require(state.cpsr.0 & 0x1f == 0x12 && state.spsr.0 & 0xbf == 0x13,
+                    "nested interrupt did not interrupt unmasked SVC")?;
+                let resume = Address(state.lr.0.checked_sub(4).ok_or("nested IRQ resume underflows")?);
+                require(resume.0 % 4 == 0, "nested IRQ resume is not A32 aligned")?;
+                Ok((Self::Entered(NestedEntry { injection, lock, irq: state.clone() }), Some(NestedAction::ObserveResume(resume))))
+            }
+            (Self::Entered(entry), Boundary::IrqSave) => {
+                held(entry.lock, 1)?;
+                require(state.cpsr.0 & 0xbf == 0x93 && state.registers == entry.irq.registers,
+                    "nested IRQ changed registers before saving the SVC frame")?;
+                require(state.sp.0 % 4 == 0 && state.sp.0 >= IRQ_STACK.0 + 32 && state.sp.0 <= IRQ_STACK.1,
+                    "interrupted handler stack leaves the IRQ ATCM")?;
+                Ok((Self::Saved(NestedFrame { entry, saved: state.clone() }), None))
+            }
+            (Self::Saved(frame), Boundary::IrqFrame) => {
+                held(frame.entry.lock, 1)?;
+                require(state.sp.0.checked_add(32) == Some(frame.saved.sp.0)
+                    && frame_at::<8>(sample, state.sp)? == nested_frame(&frame),
+                    "nested IRQ saved frame differs from interrupted handler")?;
+                Ok((Self::Framed(frame), None))
+            }
+            (Self::Framed(frame), Boundary::AckReturn) => {
+                held(frame.entry.lock, 2)?;
+                let controller = sample.controller.as_ref().ok_or("nested acknowledgement state absent")?;
+                require(controller.active.as_slice() == [frame.entry.injection.outer, frame.entry.injection.nested]
+                    && sample.context.registers[0] == Word(frame.entry.injection.handler.0),
+                    "nested acknowledgement did not service the injected IRQ handler")?;
+                Ok((Self::Acknowledged(frame), None))
+            }
+            (Self::Acknowledged(frame), Boundary::IrqExit) => {
+                held(frame.entry.lock, 2)?;
+                Ok((Self::Exiting { frame, dispatch: irq.dispatch }, None))
+            }
+            (Self::Exiting { frame, dispatch }, Boundary::IrqReturn) => {
+                held(frame.entry.lock, 1)?;
+                require(irq.dispatch == dispatch, "nested exit consumed the dispatch request")?;
+                require(state.cpsr.0 & 0xbf == 0x93, "nested return is not masked SVC")?;
+                require(state.spsr == frame.entry.irq.spsr, "nested return did not restore the saved status")?;
+                require(state.sp.0.checked_add(28) == Some(frame.saved.sp.0), "nested return stack extent differs")?;
+                require(state.registers[4..12] == frame.entry.irq.registers[4..12], "nested return clobbered callee registers")?;
+                require(frame_at::<7>(sample, state.sp)? == nested_frame(&frame)[1..], "nested return frame changed")?;
+                Ok((Self::Returning { frame, dispatch }, None))
+            }
+            (Self::Returning { frame, dispatch }, Boundary::HandlerResume) => {
+                held(frame.entry.lock, 1)?;
+                let resume = Address(frame.entry.irq.lr.0 - 4);
+                require(state.pc == resume && state.sp == frame.saved.sp && state.lr == frame.saved.lr
+                    && state.registers == frame.entry.irq.registers && state.cpsr == frame.entry.irq.spsr
+                    && irq.dispatch == dispatch, "nested IRQ did not restore the interrupted handler")?;
+                Ok((Self::Complete { lock: frame.entry.lock }, Some(NestedAction::ResumeObserved(resume))))
+            }
+            (progress, _) => Ok((progress, None)),
+        }
+    }
+}
+fn nested_frame(frame: &NestedFrame) -> [u32; 8] {
+    let registers = &frame.entry.irq.registers;
+    [frame.entry.irq.spsr.0, registers[0].0, registers[1].0, registers[2].0, registers[3].0,
+        registers[12].0, frame.saved.lr.0, frame.entry.irq.lr.0 - 4]
+}
+struct Lifecycle {
+    phase: Phase, wait: Option<Context>, wait_executed: bool, repeated_at: Option<u64>,
+    outer_sp: Option<Address>, nested: NestedProgress, hold: Option<IrqHold>,
+}
+struct Producer { wfi: Address, resume: Address, nested: bool, cores: [Lifecycle; 2], journal: LockJournal }
+impl Producer {
+    fn new(wfi: Address, resume: Address, nested: bool) -> Self {
+        Self { wfi, resume, nested, cores: std::array::from_fn(|_| Lifecycle {
+            phase: Phase::AwaitEntry, wait: None, wait_executed: false, repeated_at: None,
+            outer_sp: None, nested: NestedProgress::Await, hold: None,
+        }), journal: LockJournal { initial: None, writes: Vec::new() } }
+    }
+    fn complete(&self) -> bool {
+        self.cores.iter().all(|core| core.phase == Phase::Complete && (!self.nested || matches!(core.nested, NestedProgress::Complete { .. })))
+    }
+    fn boundary(&self, core: Core, address: Address) -> Result<Boundary, String> {
+        let progress = &self.cores[core.index()].nested;
+        if progress.resume() == Some(address) && matches!(progress, NestedProgress::Returning { .. }) {
+            Ok(Boundary::HandlerResume)
+        } else {
+            boundary(address.0).or_else(|| (progress.resume() == Some(address)).then_some(Boundary::HandlerPoint))
+                .ok_or_else(|| "unknown observation boundary".into())
+        }
+    }
+    fn lock_write(&mut self, cursor: WatchCursor, raw: &serde_json::Value) -> Result<(), String> {
+        let wire = LockWriteWire::deserialize(raw).map_err(|error| format!("IRQ lock write: {error}"))?;
+        require(wire.byte_order == ByteOrder::Little, "IRQ lock write has the wrong byte order")?;
+        let before = Word(u32::from_le_bytes(wire.before));
+        let expected = self.journal.writes.last().map(|write| write.after).or(self.journal.initial).ok_or("IRQ lock initial value absent")?;
+        require(before == expected, "IRQ lock write chain has a gap")?;
+        self.journal.writes.push(LockWrite { cursor, core: Core::from_index(wire.core)?, pc: wire.pc, before, after: wire.value });
+        Ok(())
+    }
     fn fetched(&mut self, core: Core, pc: Address, instructions: u64) {
         let life = &mut self.cores[core.index()];
         if pc == self.wfi {
@@ -362,9 +728,19 @@ impl Producer {
             if life.phase == Phase::RepeatPending && life.repeated_at.is_some_and(|start| start < instructions) { life.phase = Phase::Complete; }
         }
     }
-    fn observe(&mut self, sample: &Sample) -> Result<(), String> {
+    fn observe(&mut self, sample: &Sample) -> Result<Option<NestedAction>, String> {
         let state = &sample.context;
         let core = state.core;
+        if self.nested {
+            let irq = sample.irq.ok_or("IRQ state absent for lock journal")?;
+            if self.journal.initial.is_none() {
+                require(sample.boundary == Boundary::Start && self.journal.writes.is_empty(), "IRQ lock journal starts after execution")?;
+                self.journal.initial = Some(irq.lock);
+            }
+            let current = self.journal.writes.iter().rev().find(|write| write.cursor < WatchCursor(sample.watch_cursor))
+                .map(|write| write.after).or(self.journal.initial).ok_or("IRQ lock journal is empty")?;
+            require(irq.lock == current, "IRQ lock readback differs from its write journal")?;
+        }
         let life = &mut self.cores[core.index()];
         let task = &sample.kernels[core.index()];
         let active = task.created == Word(1) && task.current == task.node;
@@ -394,34 +770,84 @@ impl Producer {
                 life.phase = Phase::Resumed;
             }
         }
-        let Some(wait) = life.wait.as_ref() else { return Ok(()) };
+        let Some(wait) = life.wait.as_ref() else { return Ok(None) };
         if sample.boundary == Boundary::IrqEntry && life.phase == Phase::Waiting && active && life.wait_executed
             && state.cpsr.0 & 0x1f == 0x12 && state.spsr == wait.cpsr && state.lr.0 == self.resume.0 + 4
             && state.registers == wait.registers {
             life.phase = Phase::IrqEntered;
         }
+        let outer_frame = [wait.cpsr.0, wait.registers[0].0, wait.registers[1].0, wait.registers[2].0,
+            wait.registers[3].0, wait.registers[12].0, wait.lr.0, self.resume.0];
         if sample.boundary == Boundary::IrqFrame && life.phase == Phase::IrqEntered {
             require(active && state.cpsr.0 & 0xbf == 0x93 && state.sp.0.checked_add(32) == Some(wait.sp.0), "idle IRQ source frame context differs")?;
-            require(frame::<8>(sample)? == [wait.cpsr.0, wait.registers[0].0, wait.registers[1].0, wait.registers[2].0, wait.registers[3].0, wait.registers[12].0, wait.lr.0, self.resume.0], "idle IRQ source frame differs")?;
+            require(frame::<8>(sample)? == outer_frame, "idle IRQ source frame differs")?;
             life.phase = Phase::Framed;
+            life.outer_sp = Some(state.sp);
         }
-        if sample.boundary == Boundary::IrqReturn && life.phase == Phase::Framed && active && state.sp.0.checked_add(28) == Some(wait.sp.0) {
+        if self.nested && life.phase == Phase::Framed {
+            if let Some(hold) = &mut life.hold {
+                let first = self.journal.writes.partition_point(|write| write.cursor < hold.checked);
+                let end = self.journal.writes.partition_point(|write| write.cursor < WatchCursor(sample.watch_cursor));
+                require(self.journal.writes[first..end].iter().all(|write| write.after == hold.owner),
+                    "IRQ lock was released during the nested lifetime")?;
+                hold.checked = WatchCursor(sample.watch_cursor);
+            }
+            require(frame_at::<8>(sample, life.outer_sp.ok_or("outer IRQ frame address absent")?)? == outer_frame,
+                "nested execution changed the outer task frame")?;
+            let progress = std::mem::replace(&mut life.nested, NestedProgress::Refused);
+            let (progress, action) = progress.observe(sample)?;
+            life.nested = progress;
+            if matches!(action, Some(NestedAction::Inject(_))) {
+                life.hold = Some(IrqHold { checked: WatchCursor(sample.watch_cursor),
+                    owner: sample.irq.ok_or("IRQ lock acquisition state absent")?.lock, exit: None });
+            }
+            if action.is_some() { return Ok(action); }
+            if let (NestedProgress::Complete { lock }, Boundary::IrqExit) = (&life.nested, sample.boundary) {
+                let irq = sample.irq.ok_or("outer IRQ exit state absent")?;
+                require(irq.counter == Word(1) && irq.lock == *lock, "outer exit did not retain its lock until cleanup")?;
+                life.hold.as_mut().ok_or("IRQ lock hold interval absent")?.exit = Some(WatchCursor(sample.watch_cursor));
+                life.phase = Phase::Exiting;
+            }
+        }
+        let returning = life.phase == Phase::Framed && !self.nested || life.phase == Phase::Exiting;
+        if sample.boundary == Boundary::IrqReturn && returning && active && state.sp.0.checked_add(28) == Some(wait.sp.0) {
             require(state.cpsr.0 & 0xbf == 0x93, "idle IRQ return has wrong source control bits")?;
-            require(state.spsr == wait.cpsr && frame::<7>(sample)? == [wait.registers[0].0, wait.registers[1].0, wait.registers[2].0, wait.registers[3].0, wait.registers[12].0, wait.lr.0, self.resume.0], "idle IRQ return frame differs")?;
+            require(state.spsr == wait.cpsr && frame::<7>(sample)? == outer_frame[1..], "idle IRQ return frame differs")?;
+            if self.nested {
+                let irq = sample.irq.ok_or("outer IRQ return state absent")?;
+                let hold = life.hold.as_ref().ok_or("IRQ lock hold evidence absent")?;
+                let exit = hold.exit.ok_or("IRQ outer cleanup boundary absent")?;
+                let first = self.journal.writes.partition_point(|write| write.cursor < exit);
+                let end = self.journal.writes.partition_point(|write| write.cursor < WatchCursor(sample.watch_cursor));
+                require(self.journal.writes[first..end].iter().any(|write|
+                    write.core == core && write.before == hold.owner && write.after == Word(0)),
+                    "outer IRQ has no own lock-release write")?;
+                require(irq.counter == Word(0) && irq.dispatch == Word(0), "outer IRQ did not consume its counter and dispatch")?;
+            }
             life.phase = Phase::Returned;
         }
-        Ok(())
+        Ok(None)
     }
 }
 fn restored(state: &Context, wait: &Context) -> bool {
     state.registers == wait.registers && state.sp == wait.sp && state.lr == wait.lr && state.cpsr == wait.cpsr
 }
 fn frame<const WORDS: usize>(sample: &Sample) -> Result<[u32; WORDS], String> {
-    let sp = sample.context.sp.0 & !0x40000000;
-    let stack = sample.views.iter().find(|view| matches!(view.object, Object::Stack) && view.core == sample.context.core).ok_or("idle live stack absent at IRQ boundary")?;
-    let offset = sp.checked_sub(stack.physical.0).ok_or("IRQ frame below idle stack")? as usize;
+    frame_at(sample, sample.context.sp)
+}
+fn frame_at<const WORDS: usize>(sample: &Sample, address: Address) -> Result<[u32; WORDS], String> {
+    let (bytes, offset) = if (IRQ_STACK.0..IRQ_STACK.1).contains(&address.0) {
+        let stack = sample.interrupt_stack.as_ref().ok_or("IRQ ATCM stack was not captured")?;
+        (&stack.bytes, address.0.checked_sub(stack.low.0).ok_or("IRQ frame precedes captured ATCM")? as usize)
+    } else {
+        let address = address.0 & !0x40000000;
+        let stack = sample.views.iter().find(|view| matches!(view.object, Object::Stack) && view.core == sample.context.core
+            && address >= view.physical.0 && u64::from(address) + WORDS as u64 * 4 <= u64::from(view.physical.0) + view.bytes.len() as u64)
+            .ok_or("IRQ frame leaves the captured task stack")?;
+        (&stack.bytes, (address - stack.physical.0) as usize)
+    };
     let mut frame = [0; WORDS];
-    for (index, value) in frame.iter_mut().enumerate() { *value = word(&stack.bytes, offset + 4 * index)?; }
+    for (index, value) in frame.iter_mut().enumerate() { *value = word(bytes, offset + 4 * index)?; }
     Ok(frame)
 }
 
@@ -440,6 +866,11 @@ fn inspect_watch(raw: &serde_json::Value, processed: &mut usize, stopped: &[Hit]
         if matches!(row.source, Access::CpuWrite | Access::HostWrite | Access::ModelBusWrite) {
             let physical = row.physical.ok_or("write has no physical address")?;
             require(!immutable(physical, row.size), "immutable installed code write after watch start")?;
+            if producer.nested && physical < u64::from(IRQ_LOCK.0) + 4 && u64::from(IRQ_LOCK.0) < physical.saturating_add(row.size) {
+                require(row.source == Access::CpuWrite && physical == u64::from(IRQ_LOCK.0) && row.size == 4,
+                    "IRQ lock has an unqualified writer or width")?;
+                producer.lock_write(WatchCursor(*processed + index), &new[index])?;
+            }
         }
         if row.source == Access::CpuFetch && !stop_rows.contains(&Some(index)) {
             producer.fetched(Core::from_index(row.core.ok_or("fetch core absent")?)?, Address(u32::try_from(row.pc.ok_or("fetch PC absent")?).map_err(|_| "fetch PC exceeds32 bits")?), row.instructions.ok_or("fetch clock absent")?);
@@ -862,13 +1293,12 @@ fn root_boundary(pc: u32, binding: &RootBinding) -> Result<Boundary, String> {
     Err("unknown root observation boundary".into())
 }
 fn interrupt_stack(machine: &Machine, state: &Context) -> Result<InterruptStack, String> {
-    require(state.core == Core::Primary && state.tcm[0] == [Word(0), Word(IRQ_ATCM)],
-        "periodic callback stack bank is not the primary core0 ATCM")?;
+    require(state.tcm[state.core.index()] == [Word(0), Word(IRQ_ATCM)], "IRQ stack bank differs from the source ATCM")?;
     let sp = state.sp.0;
-    let low = sp.checked_sub(8).ok_or("periodic callback SP underflows")?;
-    require(sp % 4 == 0 && low >= IRQ_STACK.0 && sp <= IRQ_STACK.1, "periodic callback SP leaves the loader A IRQ stack")?;
+    let low = sp.checked_sub(8).ok_or("IRQ SP underflows")?;
+    require(sp % 4 == 0 && low >= IRQ_STACK.0 && sp <= IRQ_STACK.1, "IRQ SP leaves its ATCM stack")?;
     let mut bytes = vec![0; (IRQ_STACK.1 - low) as usize];
-    machine.session.board.read_memory(Core::Primary.index(), u64::from(low), &mut bytes)?;
+    machine.session.board.read_memory(state.core.index(), u64::from(low), &mut bytes)?;
     Ok(InterruptStack { low: Address(low), bytes })
 }
 fn callback_frame(sample: &Sample, address: u32) -> Result<[u32; 2], String> {
@@ -944,7 +1374,7 @@ fn root_sample(machine: &Machine, maps: &[MemoryMap], sources: &[Code], binding:
     let observed = view(machine, maps, &state, Object::Code, state.core, state.pc.0, 4)?;
     require(word(&observed.bytes, 0)? == expected, "root boundary instruction differs from installed source")?;
     views.push(observed);
-    Ok(Sample { hit, boundary, context: state, code_word: Word(expected), watch_cursor, views, kernels, interrupt_stack })
+    Ok(Sample { hit, boundary, context: state, code_word: Word(expected), watch_cursor, views, kernels, irq: None, controller: None, interrupt_stack })
 }
 fn merged_spans(mut spans: Vec<(u64, u64)>) -> Vec<(u64, u64)> {
     spans.sort_unstable();
@@ -1764,6 +2194,8 @@ fn drive_root(mut machine: Machine, maps: &[MemoryMap], code: &[Code], mut bindi
         checkpoint_sha256: digest(reset), checkpoint_reused: true, instructions: machine.instructions(), lifecycle_end_counts,
         memory_watch_sha256: digest(&accesses), watch: summary, watch_end_error, sites: &sites,
         hits: &machine.traces.hits, samples: &samples, final_menu,
+        nested_fixture: None,
+        lock_journal: None,
     };
     write(&output.join("root-task.json"), &serde_json::to_vec_pretty(&receipt).map_err(|error| error.to_string())?)?;
     outcome
@@ -1773,13 +2205,16 @@ fn drive() -> Result<(), String> {
     let mut arguments = BTreeMap::new(); let mut args = std::env::args_os().skip(1);
     while let Some(flag) = args.next() {
         let flag = flag.into_string().map_err(|_| USAGE)?;
-        if !["--task", "--role", "--run", "--update", "--boot-rom", "--analysis", "--linked", "--symbols", "--contract", "--output", "--loader-a", "--loader-b"].contains(&flag.as_str())
+        if flag == "--nested" { arguments.insert(flag, PathBuf::from("1")); continue; }
+        if !["--task", "--role", "--run", "--update", "--boot-rom", "--analysis", "--linked", "--symbols", "--contract", "--output", "--loader-a", "--loader-b", "--nested"].contains(&flag.as_str())
             || arguments.insert(flag, PathBuf::from(args.next().ok_or(USAGE)?)).is_some() { return Err(USAGE.into()); }
     }
     let task = match arguments.remove("--task") {
         None => TaskScope::Idle,
         Some(value) => TaskScope::parse(value.to_str().ok_or(USAGE)?)?,
     };
+    let nested = arguments.remove("--nested").is_some();
+    require(!nested || matches!(task, TaskScope::Idle), "--nested requires --task idle")?;
     let loader_a = arguments.remove("--loader-a");
     let loader_b = arguments.remove("--loader-b");
     let mut take = |flag| arguments.remove(flag).ok_or_else(|| USAGE.to_owned());
@@ -1814,12 +2249,14 @@ fn drive() -> Result<(), String> {
         return drive_root(machine, &maps, &code, binding, identity, role, &output, &reset);
     }
     let ObserverBinding::Idle((wfi, resume)) = binding else { return Err("idle binding absent".into()) };
-    let sites = sites(); machine.traces.bound_full_registers(NonZeroUsize::new(HIT_LIMIT).ok_or("invalid hit bound")?);
+    let mut sites = sites(nested); machine.traces.bound_full_registers(NonZeroUsize::new(HIT_LIMIT).ok_or("invalid hit bound")?);
     machine.traces.stop_labels.extend(sites.values().cloned());
+    if nested { machine.traces.stop_labels.insert("nested-handler-resume".into()); }
     machine.traces.arm(&machine.session, BTreeMap::from([(0x725dd8, "start".into())]))?;
     let mut watch: Option<Box<MemoryWatch>> = None;
     let mut samples = Vec::new(); let mut processed_hits = 0; let mut processed_rows = 0;
-    let mut producer = Producer::new(wfi, resume); let mut lifecycle_end_counts = None;
+    let mut producer = Producer::new(wfi, resume, nested); let mut lifecycle_end_counts = None;
+    let mut nested_fixture = nested.then(NestedFixture::new);
     let result = (|| -> Result<(), String> {
         loop {
             let stopped = machine.run(DEADLINE.saturating_sub(machine.instructions()));
@@ -1847,10 +2284,30 @@ fn drive() -> Result<(), String> {
                     machine.traces.arm(&machine.session, lifecycle_sites)?;
                     watch = Some(machine.session.board.memory_watch_begin_with_fetch_attribution(watch_ranges(), fetch_attribution()?, WATCH_LIMIT, maps.clone(), ViewPolicy::Observe)?);
                 }
-                let mut observed = sample(&machine, &maps, &code, index, state, cursor)?;
+                let boundary = producer.boundary(core, state.pc)?;
+                let mut observed = sample(&machine, &maps, &code, index, state, cursor, boundary, nested)?;
                 observed.views.extend(installed_views);
+                if boundary == Boundary::Instruction && observed.context.pc == wfi {
+                    if let Some(fixture) = &mut nested_fixture { fixture.install_core(&mut machine, core)?; }
+                }
                 samples.push(observed);
-                producer.observe(samples.last().ok_or("idle sample absent")?)?;
+                if let Some(action) = producer.observe(samples.last().ok_or("idle sample absent")?)? {
+                    match action {
+                        NestedAction::Inject(line) => machine.session.board.raise_irq(core.index(), u32::from(line.0))?,
+                        NestedAction::ObserveResume(address) => {
+                            if self::boundary(address.0).is_none() {
+                                let added = BTreeMap::from([(address.0, "nested-handler-resume".into())]);
+                                machine.traces.add_sites(&machine.session, added.clone())?;
+                                sites.extend(added);
+                            }
+                        }
+                        NestedAction::ResumeObserved(address) => {
+                            if self::boundary(address.0).is_none() {
+                                machine.traces.remove_sites(&machine.session, &[fujimod_xm1::provenance::Guest(address.0)])?;
+                            }
+                        }
+                    }
+                }
             }
             processed_hits = end;
             machine.require_running()?;
@@ -1868,14 +2325,18 @@ fn drive() -> Result<(), String> {
     let disarm = machine.traces.disarm(&machine.session); machine.traces.stop_labels.clear();
     let outcome = result.and(disarm).and_then(|()| {
         require(summary.as_ref().is_ok_and(|summary| summary.enabled && summary.violation.is_none()) && watch_end_error.is_none(), "idle watch refused")?;
+        if let Some(fixture) = &mut nested_fixture { fixture.restore(&mut machine)?; }
         menu_route(&mut machine)
     });
     let final_menu = machine.menu().map(|menu| menu.map(|menu| [menu.menu_id, menu.setting_id, menu.cursor]));
     let receipt = Receipt {
-        schema: 1, scope: "natural-reset-idle-task-lifecycle", role, outcome: if outcome.is_ok() { Outcome::ObservedMenu } else { Outcome::Refused },
+        schema: 1, scope: if nested { "controlled-nested-irq-lifetime" } else { "natural-reset-idle-task-lifecycle" },
+        role, outcome: if outcome.is_ok() { Outcome::ObservedMenu } else { Outcome::Refused },
         error: outcome.as_ref().err().map(String::as_str), machine_failure: machine.failure.as_deref(), identity,
         checkpoint_sha256: digest(&reset), checkpoint_reused: true, instructions: machine.instructions(), lifecycle_end_counts,
         memory_watch_sha256: digest(&accesses), watch: summary, watch_end_error, sites: &sites, hits: &machine.traces.hits, samples: &samples, final_menu,
+        nested_fixture: nested_fixture.as_ref(),
+        lock_journal: nested.then_some(&producer.journal),
     };
     write(&output.join("idle-tasks.json"), &serde_json::to_vec_pretty(&receipt).map_err(|error| error.to_string())?)?;
     outcome
@@ -1906,7 +2367,7 @@ mod tests {
             cpsr: Word(0x53), spsr: Word(0xdeadbeef), counts, identities: [Word(0), Word(1)], tcm: [[Word(0); 2]; 2],
         };
         Sample { hit: 0, boundary, context: state, code_word: Word(0), watch_cursor: 0, views: Vec::new(),
-            kernels: [synthetic_kernel(Core::Primary), synthetic_kernel(Core::Secondary)], interrupt_stack: None }
+            kernels: [synthetic_kernel(Core::Primary), synthetic_kernel(Core::Secondary)], irq: None, controller: None, interrupt_stack: None }
     }
     fn synthetic_entry_and_wait(core: Core) -> [Sample; 2] {
         let entry = synthetic_sample(core, Boundary::Entry, Address(ENTRY), 10);
@@ -1955,7 +2416,7 @@ mod tests {
 
     #[test]
     fn both_cores_need_irq_return_resume_and_executed_repeated_wait() {
-        let mut producer = Producer::new(WFI, RESUME);
+        let mut producer = Producer::new(WFI, RESUME, false);
         feed_through_repeated_wait(&mut producer, Core::Primary, false);
         producer.fetched(Core::Primary, WFI, 43);
         assert!(!producer.complete());
@@ -1967,7 +2428,7 @@ mod tests {
 
     #[test]
     fn a_parked_first_wait_is_not_completion() {
-        let mut producer = Producer::new(WFI, RESUME);
+        let mut producer = Producer::new(WFI, RESUME, false);
         for core in [Core::Primary, Core::Secondary] {
             for sample in synthetic_entry_and_wait(core) { producer.observe(&sample).unwrap(); }
             producer.fetched(core, WFI, 13);
@@ -1977,7 +2438,7 @@ mod tests {
 
     #[test]
     fn unrelated_irq_status_does_not_supply_idle_wakeup() {
-        let mut producer = Producer::new(WFI, RESUME);
+        let mut producer = Producer::new(WFI, RESUME, false);
         let [entry, wait] = synthetic_entry_and_wait(Core::Primary);
         producer.observe(&entry).unwrap(); producer.observe(&wait).unwrap(); producer.fetched(Core::Primary, WFI, 13);
         let [mut irq, frame, returned] = synthetic_irq(Core::Primary, &wait, false);
@@ -1992,7 +2453,7 @@ mod tests {
 
     #[test]
     fn idle_execution_with_another_current_task_refuses() {
-        let mut producer = Producer::new(WFI, RESUME);
+        let mut producer = Producer::new(WFI, RESUME, false);
         let [mut entry, _] = synthetic_entry_and_wait(Core::Primary);
         entry.kernels[0].current = Address(entry.kernels[0].node.0 + 56);
         assert!(producer.observe(&entry).is_err());
@@ -2000,7 +2461,7 @@ mod tests {
 
     #[test]
     fn corrupt_source_frame_refuses_before_return() {
-        let mut producer = Producer::new(WFI, RESUME);
+        let mut producer = Producer::new(WFI, RESUME, false);
         let [entry, wait] = synthetic_entry_and_wait(Core::Primary);
         producer.observe(&entry).unwrap(); producer.observe(&wait).unwrap(); producer.fetched(Core::Primary, WFI, 13);
         let [irq, mut frame, _] = synthetic_irq(Core::Primary, &wait, false);
@@ -2015,7 +2476,7 @@ mod tests {
         for core in [Core::Primary, Core::Secondary] {
             for scheduler_return in [false, true] {
                 for unmasked_boundary in [Boundary::IrqFrame, Boundary::IrqReturn] {
-                    let mut producer = Producer::new(WFI, RESUME);
+                    let mut producer = Producer::new(WFI, RESUME, false);
                     let [entry, wait] = synthetic_entry_and_wait(core);
                     producer.observe(&entry).unwrap();
                     producer.observe(&wait).unwrap();
@@ -2038,7 +2499,7 @@ mod tests {
 
     #[test]
     fn stopped_only_repeated_wait_fetch_does_not_finish() {
-        let mut producer = Producer::new(WFI, RESUME);
+        let mut producer = Producer::new(WFI, RESUME, false);
         feed_through_repeated_wait(&mut producer, Core::Primary, false); producer.fetched(Core::Primary, WFI, 43);
         feed_through_repeated_wait(&mut producer, Core::Secondary, false);
         let raw = serde_json::json!({"enabled":true,"violation":null,"records":[
@@ -2064,7 +2525,7 @@ mod tests {
 
     #[test]
     fn journal_overflow_and_immutable_writes_refuse() {
-        let mut producer = Producer::new(WFI, RESUME);
+        let mut producer = Producer::new(WFI, RESUME, false);
         let overflow = serde_json::json!({"enabled":true,"violation":"record limit","records":[]});
         assert!(inspect_watch(&overflow, &mut 0, &[], &mut producer).is_err());
         for source in ["cpu-write", "host-write", "model-bus-write"] {
@@ -2078,7 +2539,7 @@ mod tests {
 
     #[test]
     fn only_source_code_and_interfaces_are_immutable() {
-        let mut producer = Producer::new(WFI, RESUME);
+        let mut producer = Producer::new(WFI, RESUME, false);
         for physical in [0x820f24, 0x8297f0, 0x8297f4, 0x828580] {
             let write = serde_json::json!({"enabled":true,"violation":null,"records":[
                 {"source":"cpu-write","physical":physical,"size":4,"core":0,"pc":0x662e60,"instructions":6502046}

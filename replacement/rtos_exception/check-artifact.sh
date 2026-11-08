@@ -62,5 +62,7 @@ grep -q '40318:.*b.*0x4375c' "$disasm_a"
 grep -q 'd0318:.*b.*0xd375c' "$disasm_b"
 grep -q '43810:.*bx.*lr' "$disasm_a"
 grep -q 'd3810:.*bx.*lr' "$disasm_b"
+grep -q '40360:.*msr.*SPSR_fsxc, r1' "$disasm_a"
+grep -q 'd0360:.*msr.*SPSR_fsxc, r1' "$disasm_b"
 
 echo "exception artifact entries and first words match their stock extents"
