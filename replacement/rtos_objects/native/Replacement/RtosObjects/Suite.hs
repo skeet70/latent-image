@@ -416,8 +416,14 @@ definitionAddress facts domain slot = definitionBase + (index * factsTaskSlots f
 taskAt :: Facts -> Domain -> TaskSlot -> Word32
 taskAt facts domain slot = dfTaskTable (domainFacts facts domain) + (slot - 1) * factsTaskSize facts
 
+-- The stock reads a one-based local slot from definition +0x20 and from TPIDRURW.
 threadValue :: Domain -> TaskSlot -> Word32
-threadValue domain slot = ((if domain == DomainA then 1 else 2) `shiftL` 16) .|. slot
+threadValue _ slot = slot
+
+selectedThreadValue :: Case -> Word32
+selectedThreadValue one = case caseWaiters one of
+  (pw : _) -> threadValue (pwDomain pw) (pwSlot pw)
+  [] -> threadValue (caseObject one) waiterSlot
 
 packedState :: Word8 -> Word32 -> Word32
 packedState state priority = fromIntegral state .|. (priority `shiftL` 8)
@@ -793,14 +799,13 @@ kernelBounds facts domain = (GuestAddress low, fromIntegral (high - low))
 codeBytes :: Domain -> Image -> Image -> B.ByteString
 codeBytes domain loader owned = installAt timerAddress timerStub (foldl patch original (extents domain))
   where
-    base = minimum (map fst (extents domain))
-    top = maximum [address + size | (address, size) <- extents domain]
+    base = imageBase loader
     timerAddress = timerEntry domain
     slice image address size =
       if address < imageBase image || toInteger address + toInteger size > toInteger (imageBase image) + toInteger (B.length (imageBytes image))
         then error "family code slice is outside its image"
         else B.take (fromIntegral size) (B.drop (fromIntegral (address - imageBase image)) (imageBytes image))
-    original = slice loader base (top - base)
+    original = slice loader base (B.length (imageBytes loader))
     installAt address bytes current = let offset = fromIntegral (address - base) in B.take offset current <> bytes <> B.drop (offset + B.length bytes) current
     patch current (address, size) = installAt address (slice owned address size) current
 
@@ -1019,7 +1024,7 @@ caseFor role facts entries executing loader owned one = CaseSpec
   , caseEntry = wireAddress (GuestAddress (fromMaybe wrapperBase (caseEntryAddress one)))
   , caseExit = wireAddress (GuestAddress exitAddress)
   , caseRegions =
-      [ mkRegion (RegionId "code") (wireAddress (GuestAddress codeBase)) (fromIntegral (codeTop - codeBase)) ReadExecute (codeBytes executing loader owned)
+      [ mkRegion (RegionId "code") (wireAddress (GuestAddress (imageBase loader))) (fromIntegral (B.length (imageBytes loader))) ReadExecute (codeBytes executing loader owned)
       ]
         ++ [ mkRegion ident (wireAddress address) size permission (overlay address background words') | Page ident address size permission background <- dataPages ]
         ++ [ mkRegion (RegionId "continuations") (wireAddress (GuestAddress exitAddress)) (fromIntegral (stopAddress - exitAddress + 4)) ReadExecute (continuationBytes facts entries executing one) ]
@@ -1029,11 +1034,9 @@ caseFor role facts entries executing loader owned one = CaseSpec
   , caseExpectedRegisters = expectedRegisters role one
   , caseExpectedMemory = []
   , caseCp14Identity = Just (if executing == DomainA then 0x4003 else 0x4004)
-  , caseKernel = Just (KernelCase (caseLimit one) (if caseBoundary one == TaskArrival then Just (wireAddress (GuestAddress stopAddress)) else Nothing) (Just 0x80001234) (Just 0) (Just 0) ignored (continuationStacks one))
+  , caseKernel = Just (KernelCase (caseLimit one) (if caseBoundary one == TaskArrival then Just (wireAddress (GuestAddress stopAddress)) else Nothing) (Just (initialThread one)) (Just 0) (Just 0) ignored (continuationStacks one))
   }
   where
-    codeBase = minimum (map fst (extents executing))
-    codeTop = maximum [address + size | (address, size) <- extents executing ++ retainedExtents executing]
     dataPages = pages facts one
     words' =
       let fixture = fixtureWords facts executing one
@@ -1046,6 +1049,11 @@ caseFor role facts entries executing loader owned one = CaseSpec
         ++ [ (wireAddress (GuestAddress wakerStubBase), 0x80) | isJust (caseWaker one) ]
         ++ [ (wireAddress (GuestAddress chainStubBase), 0x80) | not (null (mapMaybe pwChain (caseWaiters one))) ]
     ignored = if caseBoundary one == CallerReturn then [R1, R2, R3, R12, Lr] else [R0 .. R12] ++ [Lr]
+    -- TPIDRURW holds the one-based local slot; bit 31 marks the handler context.
+    initialThread one'
+      | caseBoundary one' == TaskArrival = selectedThreadValue one'
+      | caseInvocation one' == HandlerCallback = runningSlot .|. 0x80000000
+      | otherwise = runningSlot
     -- A waker resumes the blocked caller through the saved frame, so its four synthetic
     -- stacks are declared; a single-context or declared-stop case keeps the empty list.
     continuationStacks one'
@@ -1352,6 +1360,12 @@ compareFamily _role executing facts one stock owned =
           let (GuestAddress base, _) = kernelBounds facts executing
               offset = fromIntegral (mailboxControl facts executing 1 + factsMailboxControlTail facts - base)
            in B.take offset bytes <> word32le 0 <> B.drop (offset + 4) bytes
+      | isJust (caseWaker one) && ident == RegionId (if executing == DomainA then "kernel-a" else "kernel-b") =
+          let (GuestAddress base, _) = kernelBounds facts executing
+              zeroSavedSp current slot =
+                let offset = fromIntegral (taskAt facts executing slot + factsTaskSavedSp facts - base)
+                 in B.take offset current <> word32le 0 <> B.drop (offset + 4) current
+           in foldl zeroSavedSp bytes [1 .. factsTaskSlots facts]
       | otherwise = bytes
 
 controls :: Domain -> Facts -> Case -> NativeObservation -> NativeObservation -> [(String, Bool)]
