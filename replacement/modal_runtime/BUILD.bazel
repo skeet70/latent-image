@@ -607,6 +607,7 @@ haskell_library(
         "//emulation:observation-stream-lib",
         "//host/firmware:bank-allowlist",
         "//host:aeson",
+        "//host:attoparsec",
         "//host:base",
         "//host:bytestring",
         "//host:containers",

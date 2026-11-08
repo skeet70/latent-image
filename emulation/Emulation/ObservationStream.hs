@@ -16,6 +16,7 @@ module Emulation.ObservationStream
   , ObservationSpec (..)
   , writeObservationStream
   , foldTraceHitRows
+  , foldTraceHitLines
   , RowReader
   , rowNext
   , withRowReader
@@ -144,6 +145,63 @@ foldTraceHitSources sources step initial = do
   case problem of
     Just message -> ioError (userError message)
     Nothing -> pure final
+
+foldTraceHitLines :: FilePath -> Value -> (a -> B.ByteString -> IO a) -> a -> IO (Either String a)
+foldTraceHitLines directory value step initial = case value of
+  Object fields -> case KM.lookup "trace_hits" fields of
+    Just (Array rows) -> Right <$> foldM (\state row -> step state (BL.toStrict (encode row))) initial (foldr (:) [] rows)
+    Just raw@(Object _) -> case parseEither (J.parseJSON :: Value -> Parser TraceHitRef) raw of
+      Left problem -> pure (Left ("trace_hits reference: " ++ problem))
+      Right ref -> foldSidecarLines directory ref step initial
+    Just _ -> pure (Left "trace_hits is neither an array nor a reference")
+    Nothing -> pure (Left "trace_hits is missing")
+  _ -> pure (Left "observation is not an object")
+
+foldSidecarLines :: FilePath -> TraceHitRef -> (a -> B.ByteString -> IO a) -> a -> IO (Either String a)
+foldSidecarLines directory ref step initial
+  | isAbsolute relative || takeFileName relative /= relative || takeDirectory relative /= "." =
+      pure (Left "trace-hit reference path is not a plain file name")
+  | otherwise = do
+      let path = directory </> relative
+      present <- doesFileExist path
+      if not present then pure (Left ("trace-hit sidecar is missing: " ++ path)) else do
+        parsed <- bracket (openBinaryFile path ReadMode) hClose readLines
+        case parsed of
+          Left problem -> pure (Left problem)
+          Right (state, count) -> do
+            digest <- sha256File path
+            if count /= traceHitRefCount ref
+              then pure (Left ("trace-hit sidecar has " ++ show count ++ " rows, the reference names " ++ show (traceHitRefCount ref)))
+              else pure (if digest == traceHitRefSha256 ref then Right state else Left "trace-hit sidecar digest differs from its reference")
+ where
+  relative = traceHitRefPath ref
+  readLines handle = do
+    state <- newIORef initial
+    count <- newIORef (0 :: Int)
+    failure <- newIORef Nothing
+    let loop = do
+          problem <- readIORef failure
+          case problem of
+            Just _ -> pure ()
+            Nothing -> do
+              eof <- hIsEOF handle
+              if eof then pure () else do
+                line <- C.hGetLine handle
+                if B.null line then writeIORef failure (Just "trace-hit sidecar has an empty line")
+                else do
+                  currentState <- readIORef state
+                  next <- step currentState line
+                  writeIORef state next
+                  current <- readIORef count
+                  writeIORef count (current + 1)
+                loop
+    loop
+    problem <- readIORef failure
+    final <- readIORef state
+    total <- readIORef count
+    pure $ case problem of
+      Just message -> Left message
+      Nothing -> Right (final, total)
 
 writeObservationStream :: ObservationSpec -> IO ObservationRef
 writeObservationStream spec = do

@@ -17,6 +17,10 @@ module Replacement.ModalRuntime.MenuEnginePair
   , checkRoleReader
   , checkStackReader
   , comparePairReader
+  , RtcByteIndex (..)
+  , ClockEvidence (..)
+  , checkConstantClockInputs
+  , parseSessionClockHits
   , observationPhaseOf
   , segmentResidencies
   , residencyAt
@@ -34,27 +38,32 @@ module Replacement.ModalRuntime.MenuEnginePair
   ) where
 
 import Control.Monad (foldM, forM, unless, when)
+import qualified Data.Attoparsec.ByteString.Char8 as A
 import Data.Aeson ((.:), (.:?))
 import qualified Data.Aeson as J
+import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Aeson.Types as J
 import Data.Bits (shiftL, (.|.))
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Char8 as C
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
-import Data.Word (Word32)
-import Emulation.ObservationStream (foldTraceHitRows)
+import Data.Word (Word32, Word64)
+import Emulation.ObservationStream (foldTraceHitLines)
 import Numeric (readHex)
 import Replacement.ModalRuntime.MenuEngineClass
 import Replacement.ModalRuntime.RenderObjectProvenance
-import Replacement.ModalRuntime.RenderStackEvidence (InstructionCounter)
+import Replacement.ModalRuntime.RenderStackEvidence (InstructionCounter (..))
 import System.FilePath (takeDirectory)
 
 data Role = StockRole | OwnedRole deriving (Eq, Show)
 
 -- | A trace site of the pair trajectories (`emulation/menu-engine-pair-trajectories`); every other
 -- label is 'OtherSite'.
-data Site = StageEntry | KindSwitch | Seek | EventPost | GuardTrap | OtherSite T.Text
+data RtcByteIndex = RtcByte0 | RtcByte1 | RtcByte2 | RtcByte3 deriving (Eq, Ord, Show)
+
+data Site = StageEntry | KindSwitch | Seek | EventPost | GuardTrap | CalendarSample | RtcCounterByte RtcByteIndex | OtherSite T.Text
   deriving (Eq, Show)
 
 parseSite :: T.Text -> Site
@@ -64,6 +73,11 @@ parseSite label = case label of
   "menu-seek" -> Seek
   "menu-event-post" -> EventPost
   "menu-engine-guard-failure" -> GuardTrap
+  "rtc-calendar-sampled" -> CalendarSample
+  "rtc-counter-byte-0" -> RtcCounterByte RtcByte0
+  "rtc-counter-byte-1" -> RtcCounterByte RtcByte1
+  "rtc-counter-byte-2" -> RtcCounterByte RtcByte2
+  "rtc-counter-byte-3" -> RtcCounterByte RtcByte3
   other -> OtherSite other
 
 -- | One recorded trace hit: site, core, r0-r3, lr, sp and the site's reads at entry.
@@ -155,6 +169,115 @@ parseHitValue = J.withObject "trace hit" $ \hit -> do
   instructions <- hit .:? "instructions"
   Hit <$> (parseSite <$> hit .: "site") <*> hit .: "core" <*> pure registers <*> pure lr <*> pure sp <*> pure memory <*> pure provenanceSequence <*> pure instructions
 
+parseHitLine :: B.ByteString -> Either String Hit
+parseHitLine = A.parseOnly hitLine
+ where
+  hitLine = do
+    A.skipSpace
+    _ <- A.char '{'
+    A.skipSpace
+    fields <- field `A.sepBy` (A.skipSpace *> A.char ',' *> A.skipSpace)
+    A.skipSpace
+    _ <- A.char '}'
+    A.skipSpace
+    A.endOfInput
+    either fail pure (build fields)
+  field = do
+    _ <- A.char '"'
+    key <- A.takeWhile (/= '"')
+    _ <- A.char '"'
+    A.skipSpace
+    _ <- A.char ':'
+    A.skipSpace
+    fieldValue key
+  fieldValue key
+    | key == "site" = FSite . parseSite . T.pack . C.unpack <$> string
+    | key == "core" = FCore <$> A.decimal
+    | key == "instructions" = FInstructions <$> A.decimal
+    | key == "r0" = FReg 0 <$> word
+    | key == "r1" = FReg 1 <$> word
+    | key == "r2" = FReg 2 <$> word
+    | key == "r3" = FReg 3 <$> word
+    | key == "lr" = FLr <$> word
+    | key == "sp" = FSp <$> word
+    | key == "memory" = FMemory <$> memory
+    | key == "render_object_provenance_sequence" = FProvenance <$> A.decimal
+    | otherwise = fail ("unknown trace hit field " ++ show key)
+  string = do
+    _ <- A.char '"'
+    text <- A.takeWhile (/= '"')
+    _ <- A.char '"'
+    pure text
+  word = string >>= either fail pure . hexWordText . C.unpack
+  memory = do
+    _ <- A.char '['
+    A.skipSpace
+    values <- string `A.sepBy` (A.skipSpace *> A.char ',' *> A.skipSpace)
+    A.skipSpace
+    _ <- A.char ']'
+    mapM (either fail pure . hexBytesText . C.unpack) values
+  build fields = do
+    let site = first [value | FSite value <- fields]
+        core = first [value | FCore value <- fields]
+        instructions = first [value | FInstructions value <- fields]
+        registers = [first [value | FReg regIndex value <- fields, regIndex == index] | index <- [0..3 :: Int]]
+        lr = first [value | FLr value <- fields]
+        sp = first [value | FSp value <- fields]
+        bytes = concat [value | FMemory value <- fields]
+        provenance = first [value | FProvenance value <- fields]
+    site_ <- maybe (Left "trace hit lacks site") Right site
+    core_ <- maybe (Left "trace hit lacks core") Right core
+    r0 <- maybe (Left "trace hit lacks r0") Right (registers !! 0)
+    r1 <- maybe (Left "trace hit lacks r1") Right (registers !! 1)
+    r2 <- maybe (Left "trace hit lacks r2") Right (registers !! 2)
+    r3 <- maybe (Left "trace hit lacks r3") Right (registers !! 3)
+    pure (Hit site_ core_ (r0,r1,r2,r3) lr sp bytes (ProvenanceSequence <$> provenance)
+      (InstructionCounter . fromIntegral <$> instructions))
+  first [] = Nothing
+  first (value : _) = Just value
+  hexWordText text = case text of
+    '0' : 'x' : digits | [(value, "")] <- readHex digits, value <= 0xffffffff -> Right (value :: Word32)
+    _ -> Left ("not a hexadecimal word: " ++ text)
+  hexBytesText text
+    | odd (length text) = Left "odd hexadecimal length"
+    | otherwise = B.pack <$> mapM pair (pairs text)
+   where
+    pairs [] = []
+    pairs (high : low : rest) = [high, low] : pairs rest
+    pairs _ = []
+    pair [high, low] = case readHex [high, low] of
+      [(value, "")] -> Right value
+      _ -> Left "invalid hexadecimal byte"
+    pair _ = Left "invalid hexadecimal byte"
+
+data RowField = FSite Site | FCore Int | FInstructions Integer | FReg Int Word32 | FLr Word32 | FSp Word32 | FMemory [B.ByteString] | FProvenance Word64
+
+parseSessionHit :: J.Value -> J.Parser Hit
+parseSessionHit = J.withObject "session hit" $ \hit -> do
+  registers <- hit .: "registers"
+  let register name = hexWord =<< registers .: name
+  (r0, r1, r2, r3) <- (,,,) <$> register "r0" <*> register "r1" <*> register "r2" <*> register "r3"
+  lr <- traverse hexWord =<< hit .:? "lr"
+  sp <- traverse hexWord =<< hit .:? "sp"
+  memory <- maybe (pure []) (mapM hexBytes) =<< hit .:? "memory"
+  provenanceSequence <- fmap ProvenanceSequence <$> hit .:? "render_object_provenance_sequence"
+  instructions <- hit .:? "instructions"
+  Hit <$> (parseSite <$> hit .: "site") <*> hit .: "core" <*> pure (r0, r1, r2, r3) <*> pure lr <*> pure sp <*> pure memory <*> pure provenanceSequence <*> pure instructions
+
+parseSessionClockHits :: B.ByteString -> Either String [Hit]
+parseSessionClockHits bytes = do
+  value <- J.eitherDecodeStrict' bytes
+  contexts <- J.parseEither (J.withObject "emulator session" (\fields -> fields J..: "contexts")) value :: Either String [J.Value]
+  mapM (\hit -> J.parseEither parseSessionHit hit) (filter relevant contexts)
+ where
+  relevant (J.Object fields) = case KM.lookup "site" fields of
+    Just (J.String site) -> case parseSite site of
+      CalendarSample -> True
+      RtcCounterByte _ -> True
+      _ -> False
+    _ -> False
+  relevant _ = False
+
 parseObservationHeader :: Residency -> J.Value -> J.Parser (T.Text, [(T.Text, B.ByteString)], Maybe ProvenanceBatch)
 parseObservationHeader _ value = J.withObject "e2e observation" (\fields -> do
   phase <- fields .: "phase"
@@ -184,12 +307,14 @@ readObservationReader residency path = do
     Right value -> case J.parseEither (parseObservationHeader residency) value of
       Left problem -> pure (Left problem)
       Right (phase, segmentReads, provenance) -> do
-        let foldHits step initial = do
-              result <- foldTraceHitRows (takeDirectory path) value
-                (\acc row -> acc >>= \state -> J.parseEither parseHitValue row >>= \hit -> Right <$> step state hit)
-                (Right initial)
-              pure (result >>= id)
-        pure (Right (ObservationReader phase residency segmentReads provenance foldHits))
+        pure (Right (ObservationReader phase residency segmentReads provenance (foldHitLines (takeDirectory path) value)))
+
+foldHitLines :: FilePath -> J.Value -> (a -> Hit -> Either String a) -> a -> IO (Either String a)
+foldHitLines directory value step initial = do
+  result <- foldTraceHitLines directory value
+    (\acc line -> pure (acc >>= \state -> parseHitLine line >>= \hit -> step state hit))
+    (Right initial)
+  pure (result >>= id)
 
 -- | An observation's phase, read before its residency is known.
 observationPhaseOf :: J.Value -> J.Parser T.Text
@@ -436,3 +561,73 @@ comparePairReader stock owned = case readsCheck of
     step posts hit = case hitSite hit of
       EventPost | let (r0, r1, r2, r3) = hitRegisters hit, r0 == 0x1d -> Right ((r1, r2, r3) : posts)
       _ -> Right posts
+
+newtype CalendarInput = CalendarInput B.ByteString deriving (Eq)
+newtype RtcInputByte = RtcInputByte Word32 deriving (Eq)
+data ClockRead = CurrentCalendar | SampledCalendar
+data SampleCoverage = SampleMissing | SampleSeen deriving (Eq)
+data ClockInputState = ClockInputState
+  { clockCalendar :: Maybe CalendarInput
+  , clockRtcBytes :: M.Map RtcByteIndex RtcInputByte
+  , clockSampleCoverage :: SampleCoverage
+  } deriving (Eq)
+
+calendarInput :: B.ByteString -> Either String CalendarInput
+calendarInput bytes
+  | B.length bytes /= 6 = Left "calendar input is not six bytes"
+  | B.index bytes 0 > 50 || B.index bytes 1 < 1 || B.index bytes 1 > 12
+      || B.index bytes 2 < 1 || B.index bytes 2 > 31 || B.index bytes 3 >= 24
+      || B.index bytes 4 >= 60 || B.index bytes 5 >= 61 = Left "calendar input is outside the retained validator's bounds"
+  | otherwise = Right (CalendarInput bytes)
+
+clockRead :: ClockRead -> Observation -> Either String CalendarInput
+clockRead field observation = case [bytes | (name,bytes) <- observationReads observation, name == label] of
+  [bytes] -> calendarInput bytes
+  _ -> Left ("missing or repeated clock input in " ++ T.unpack (observationPhase observation))
+ where label = case field of CurrentCalendar -> "rtc-calendar-current"; SampledCalendar -> "rtc-calendar-sample"
+
+observeCalendar :: ClockInputState -> CalendarInput -> Either String ClockInputState
+observeCalendar state value = case clockCalendar state of
+  Nothing -> Right state {clockCalendar = Just value}
+  Just previous | previous == value -> Right state
+                | otherwise -> Left "calendar input changed within the controlled-clock fixture"
+
+data ClockEvidence = ClockEvidence
+  { clockSessionHits :: [Hit]
+  , clockSegments :: [Observation]
+  } deriving (Eq, Show)
+
+checkConstantClockInputs :: ClockEvidence -> ClockEvidence -> Either String ()
+checkConstantClockInputs stock owned = do
+  left <- collect stock
+  right <- collect owned
+  unless (left == right) (Left "the roles' observed MCU/calendar inputs differ")
+ where
+  collect evidence = do
+    state <- foldM sample (ClockInputState Nothing M.empty SampleMissing) (clockSessionHits evidence)
+    final <- foldM segment state (clockSegments evidence)
+    unless (clockSampleCoverage final == SampleSeen && M.size (clockRtcBytes final) == 4)
+      (Left "controlled clock lacks successful calendar and all four MCU byte observations")
+    pure final
+  segment state observation = do
+    current <- clockRead CurrentCalendar observation >>= observeCalendar state
+    sampled <- clockRead SampledCalendar observation >>= observeCalendar current
+    foldM sample sampled (observationHits observation)
+  sample state hit = case hitSite hit of
+    CalendarSample -> do
+      let (status,_,_,_) = hitRegisters hit
+      unless (status == 0) (Left "MCU calendar sampling failed")
+      value <- case hitMemory hit of
+        [bytes] -> calendarInput bytes
+        _ -> Left "MCU calendar sample lacks its six-byte result"
+      updated <- observeCalendar state value
+      pure updated {clockSampleCoverage = SampleSeen}
+    RtcCounterByte index -> do
+      let (value,_,_,_) = hitRegisters hit
+      unless (value <= 255) (Left "MCU RTC input is not one byte")
+      let byte = RtcInputByte value
+      case M.lookup index (clockRtcBytes state) of
+        Nothing -> Right state {clockRtcBytes = M.insert index byte (clockRtcBytes state)}
+        Just previous | previous == byte -> Right state
+                      | otherwise -> Left "MCU RTC byte changed within the controlled-clock fixture"
+    _ -> Right state

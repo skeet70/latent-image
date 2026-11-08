@@ -2,8 +2,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Replacement.ModalRuntime.RenderPair
   ( RenderConfig(..), DrawCoverage(..), ResourceId(..), DrawClass(..), DrawFunction(..), Draw(..)
-  , deriveDrawClass, renderDraws, compareDraws, checkRenderStackObservations
-  , validateRenderDeclarations, checkRenderCoverage
+  , deriveDrawClass, renderDraws, compareDraws, checkRenderStackObservations, checkRetainedRenderStackObservations
+  , validateRenderDeclarations, validateRetainedRenderDeclarations, DeclarationScope (..), checkRenderCoverage
   , checkRenderInvocationEvidence
   , osdInputs, discoveredBanks
   , foldRenderDraws, collectDrawsReader, compareDrawsReader, discoveredBanksReader
@@ -28,7 +28,7 @@ import Replacement.ModalRuntime.RenderObjectProvenance
 import qualified Replacement.ModalRuntime.RenderStackEvidence as E
 
 newtype ResourceId = ResourceId Word32 deriving (Eq, Show)
-data DrawCoverage = DrawsRequired | DeclaredDrawFree deriving (Eq, Show)
+data DrawCoverage = DrawsRequired | RetainedObservation | DeclaredDrawFree deriving (Eq, Show)
 data RenderConfig = RenderConfig { renderBanks :: [Int], renderClock :: Maybe ResourceId, renderStackBase :: Word32, renderCoverage :: DrawCoverage } deriving (Eq, Show)
 data DrawFunction = TreeDraw | PickerDraw | PaneDraw deriving (Eq, Show)
 data DrawClass = OwnedDraw DrawFunction | StockDraw DrawFunction deriving (Eq, Show)
@@ -561,7 +561,13 @@ checkDescriptor config node record = do
   unless (and [word record offset == Right value | (offset,value) <- [(8,0x1109130),(12,8),(16,4096),(20,renderStackBase config),(32,33)]]) (Left "task 33 descriptor identity/extent differs")
 
 checkRenderStackObservations :: RenderConfig -> S.RenderStackReport -> TablesDocument -> TablesDocument -> [Observation] -> Either String StackReport
-checkRenderStackObservations config bounds stock composed observations = do
+checkRenderStackObservations config bounds stock composed = renderStackObservations config (Just (bounds,stock,composed))
+
+checkRetainedRenderStackObservations :: RenderConfig -> [Observation] -> Either String StackReport
+checkRetainedRenderStackObservations config = renderStackObservations config Nothing
+
+renderStackObservations :: RenderConfig -> Maybe (S.RenderStackReport,TablesDocument,TablesDocument) -> [Observation] -> Either String StackReport
+renderStackObservations config admission observations = do
   unless (case observations of first:_ -> observationPhase first == "render-baseline"; [] -> False) (Left "missing pre-segment render stack baseline")
   snapshots <- forM observations $ \observation -> do
     node <- readNamed "render-task-node" 4 observation
@@ -570,15 +576,17 @@ checkRenderStackObservations config bounds stock composed observations = do
     stack <- readNamed "render-task-stack" 4096 observation
     pure (record,stack)
   unless (all (\(record,_) -> Just record == fmap fst (safeFirst snapshots)) snapshots) (Left "task 33 descriptor changed")
-  floors <- fmap concat $ forM [hit | observation <- observations, hit <- observationHits observation, site hit `elem` ["render-tree-entry","render-picker-entry","render-pane-entry"]] $ \hit -> do
-    let function = case functionOf (site hit) of Just f -> f; Nothing -> TreeDraw
-    klass <- deriveDrawClass stock composed function hit
-    if klass /= OwnedDraw function then pure [] else do
-      sp <- maybe (Left "render entry lacks sp") Right (hitSp hit)
-      let bound = case function of TreeDraw -> S.reportTree bounds; PickerDraw -> S.reportPicker bounds; PaneDraw -> S.reportPane bounds
-          floor_ = toInteger sp - toInteger (S.entryDepth bound) - toInteger (S.entryStockMargin bound)
-      unless (floor_ >= toInteger (renderStackBase config)) (Left "render static floor below task 33 stack")
-      pure [floor_]
+  floors <- case admission of
+    Nothing -> pure []
+    Just (bounds,stock,composed) -> fmap concat $ forM [hit | observation <- observations, hit <- observationHits observation, site hit `elem` ["render-tree-entry","render-picker-entry","render-pane-entry"]] $ \hit -> do
+      let function = case functionOf (site hit) of Just f -> f; Nothing -> TreeDraw
+      klass <- deriveDrawClass stock composed function hit
+      if klass /= OwnedDraw function then pure [] else do
+        sp <- maybe (Left "render entry lacks sp") Right (hitSp hit)
+        let bound = case function of TreeDraw -> S.reportTree bounds; PickerDraw -> S.reportPicker bounds; PaneDraw -> S.reportPane bounds
+            floor_ = toInteger sp - toInteger (S.entryDepth bound) - toInteger (S.entryStockMargin bound)
+        unless (floor_ >= toInteger (renderStackBase config)) (Left "render static floor below task 33 stack")
+        pure [floor_]
   forM_ [hit | observation <- observations, hit <- observationHits observation, site hit `elem` ["render-tree-entry","render-picker-entry","render-pane-entry"]] $ \hit -> case drop 5 (hitMemory hit) of
     current:node:record:_ -> do
       unless (word current 0 == Right 0x4006060c) (Left "render seam is not task 33 on primary")
@@ -589,9 +597,7 @@ checkRenderStackObservations config bounds stock composed observations = do
         (_,first):rest -> [renderStackBase config + fromIntegral offset | offset <- [0,4..4092], any (\(_,later) -> B.take 4 (B.drop offset first) /= B.take 4 (B.drop offset later)) rest]
         [] -> []
       highWater = safeFirst changed
-  case highWater of
-    Just mark -> when (mark < renderStackBase config + 64) (Left "task 33 changed inside existing bottom guard")
-    Nothing -> pure ()
+  case (lowest,highWater) of (Just floor_,Just mark) -> when (toInteger mark < floor_) (Left "task 33 changed below admitted floor"); _ -> Right ()
   pure (StackReport lowest highWater)
  where
   safeFirst (a:_) = Just a
@@ -662,8 +668,16 @@ osdInputs observations = do
 
 data ReadRange = AbsoluteRange Word32 Int | StackRange Int Int deriving (Eq, Show)
 
+data DeclarationScope = AllDrawers | RetainedTreePicker deriving (Eq)
+
 validateRenderDeclarations :: RenderConfig -> Role -> J.Value -> J.Parser ()
-validateRenderDeclarations config role = J.withObject "render receipt" $ \fields -> do
+validateRenderDeclarations = validateDeclarations AllDrawers
+
+validateRetainedRenderDeclarations :: RenderConfig -> J.Value -> J.Parser ()
+validateRetainedRenderDeclarations config = validateDeclarations RetainedTreePicker config StockRole
+
+validateDeclarations :: DeclarationScope -> RenderConfig -> Role -> J.Value -> J.Parser ()
+validateDeclarations scope config role = J.withObject "render receipt" $ \fields -> do
   declarations <- fields J..: "declared_trace_sites" >>= mapM (J.withObject "trace declaration" $ \declaration -> do
     label <- declaration J..: "label"
     address <- declaration J..: "address" >>= hex
@@ -683,7 +697,15 @@ validateRenderDeclarations config role = J.withObject "render receipt" $ \fields
         , ("render-picker-fn-return",(0x116c588,returns 76))
         , ("render-tree-stock",(0x1164e20,[])),("render-picker-stock",(0x1163f30,[]))
         , ("render-osd-buffer",(0x6d76ec,[])),("render-osd-increment",(0x6d7d44,[])) ]
-  forM_ expected $ \(label,value) -> unless ([actual | (name,actual) <- declarations,name == label] == [value]) (fail ("render trace declaration differs: " ++ T.unpack label))
+  let selected = case scope of
+        AllDrawers -> expected
+        RetainedTreePicker -> filter (\(label,_) -> label `notElem` ["render-pane-entry","render-pane-stock","render-pane-return"]) expected
+          ++ [ ("rtc-calendar-sampled",(0x6b11e0,[AbsoluteRange 0x409c34be 6]))
+             , ("rtc-counter-byte-0",(0x6a5cfc,[])),("rtc-counter-byte-1",(0x6a5d08,[]))
+             , ("rtc-counter-byte-2",(0x6a5d14,[])),("rtc-counter-byte-3",(0x6a5d20,[])) ]
+  forM_ selected $ \(label,value) -> unless ([actual | (name,actual) <- declarations,name == label] == [value]) (fail ("render trace declaration differs: " ++ T.unpack label))
+  when (scope == RetainedTreePicker && any (\(label,_) -> "-adapter" `T.isSuffixOf` label) declarations)
+    (fail "retained render receipt declares an owned adapter")
   when (role == OwnedRole) $ forM_ ["render-tree-adapter","render-picker-adapter","render-pane-adapter"] $ \label ->
     unless (length [() | (name,_) <- declarations,name == label] == 1) (fail "missing/duplicate render adapter declaration")
  where
