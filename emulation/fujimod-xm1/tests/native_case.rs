@@ -1099,6 +1099,50 @@ fn malformed_and_out_of_contract_wires_are_invalid_cases() {
     assert_eq!(observed.register("r0"), 0x41);
 }
 
+#[test]
+fn region_count_boundary_reads_the_last_region_and_refuses_past_limits() {
+    const LAST: u32 = 0x6000 + 4 * 61;
+    let mut valid = Case::new(&[LDR_R0_R1, ADD_R0_1, STR_R0_R1_POST_4, BX_LR]).register(1, LAST);
+    for i in 0..61 {
+        valid = valid.region(0x6000 + 4 * i, READ_WRITE, &[0; 4]);
+    }
+    valid = valid.region(LAST, READ_WRITE, &[0; 4]);
+    let observed = valid.run();
+    observed.assert_returned();
+    assert_eq!(observed.register("r0"), 1);
+    assert_eq!(observed.bytes(LAST), "01000000");
+
+    let mut too_many = Case::new(&[BX_LR]);
+    for i in 0..63 {
+        too_many = too_many.region(0x6000 + 4 * i, READ_WRITE, &[0; 4]);
+    }
+    assert_eq!(too_many.run().status(), Status::InvalidCase);
+
+    let mut oversized = Case::new(&[BX_LR]);
+    for i in 0..62 {
+        oversized = oversized.region(0x1000_0000 + 0x2_0000 * i, READ_WRITE, &vec![0; 68_782]);
+    }
+    assert_eq!(oversized.run().status(), Status::InvalidCase);
+
+    let mut read_only = Case::new(&[STR_R0_R1_POST_4, BX_LR]).register(0, 0xdead_beef).register(1, LAST);
+    for i in 0..61 {
+        read_only = read_only.region(0x6000 + 4 * i, READ_WRITE, &[0; 4]);
+    }
+    read_only = read_only.region(LAST, READ, &[0; 4]);
+    let observed = read_only.run();
+    observed.assert_stopped(Status::MemoryGuard, CODE);
+    assert_eq!(observed.register("r0"), 0xdead_beef);
+    assert_eq!(observed.register("r1"), LAST);
+    assert_eq!(observed.bytes(LAST), "00000000");
+
+    let mut bad_permission = Case::new(&[BX_LR]);
+    for i in 0..61 {
+        bad_permission = bad_permission.region(0x6000 + 4 * i, READ_WRITE, &[0; 4]);
+    }
+    bad_permission = bad_permission.region(LAST, 2, &[0; 4]);
+    assert_eq!(bad_permission.run().status(), Status::InvalidCase);
+}
+
 const SVC_ENTRY: u32 = 0x6000_00d3;
 const SYS_ENTRY: u32 = 0x0801_001f;
 const MRS_R1_CPSR: u32 = 0xe10f_1000;

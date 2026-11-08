@@ -172,6 +172,64 @@ contractLimitRegressions runner=withTemporary "fuji-contract-limit-tests"$ \root
      provenance bytes=set "provenance"(s(replicate bytes 'x'))stripped
  boundary "case JSON bytes" (provenance(caseBytes-fixed)) (provenance(caseBytes-fixed+1))
 
+-- A high region count admits the last region's read and write, refuses one region past the
+-- count, and keeps the mapped-byte and permission refusals.
+regionCountRegressions :: FilePath -> IO ()
+regionCountRegressions runner=withTemporary "fuji-region-count-tests"$ \root->do
+ let codeWords=[0xe5921000,0xe2811001,0xe5821000,0xe12fff1e]::[Word32]
+     storeWords=[0xe5820000,0xe12fff1e]::[Word32]
+     code=wordBytes codeWords
+     storeCode=wordBytes storeWords
+ B.writeFile(root</>"region-count.bin")code
+ B.writeFile(root</>"region-count-store.bin")storeCode
+ codeDigest<-sha256 code
+ storeDigest<-sha256 storeCode
+ let hex value=s("0x"++replicate(8-length text)'0'++text) where text=showHex(value::Word32)""
+     zero=obj[("zero",b True)]
+     region name address size permissions initial=obj[("id",s name),("address",hex address),("size",n size),("permissions",s permissions),("initial",initial)]
+     last=0xc000+4*60::Word32
+     dataRegion stride i size permissions=region("data"++show i)(0xc000+stride*fromIntegral i)(fromIntegral size)permissions zero
+     artifact ident path bytes digest'=obj[("id",s ident),("path",s path),("size",n(fromIntegral(B.length bytes))),("sha256",s digest')]
+     baseRegions artifactId codeLength=[region "code" 0x8000 codeLength "rx"(obj[("artifact",s artifactId),("offset",n 0),("length",n codeLength)]),region "exit" 0xa000 4 "rx" zero,region "stack" 0xb000 32 "rw" zero]
+     fixture ident artifactValue codeLength registers regions expectedStatus expectedRegisters expectedMemory=obj
+      [("schema_version",n 1),("id",s ident),("origin",s "synthetic")
+      ,("provenance",s "NativeTests.hs: high region-count boundary")
+      ,("cpu",obj[("architecture",s "arm"),("model",s "cortex-r5f"),("mode",s "arm"),("endian",s "little")])
+      ,("artifacts",arr[artifactValue])
+      ,("entry",hex 0x8000),("exit",hex 0xa000),("registers",registers)
+      ,("regions",arr regions)
+      ,("functions",arr[obj[("address",hex 0x8000),("size",n codeLength)]])
+      ,("stubs",arr[])
+      ,("limits",obj[("instructions",n 1000),("wall_ms",n 10000)])
+      ,("expected",obj[("status",s expectedStatus),("registers",obj expectedRegisters),("memory",arr expectedMemory),("events",arr[])])
+      ,("exclusions",arr[s "high region count control"])]
+     registers=obj([("r"++show i,hex 0)|i<-[0..12::Int]]++[("r2",hex last),("sp",hex 0xb010),("lr",hex 0xa000),("cpsr",hex 0x10)])
+     storeRegisters=obj([("r"++show i,hex 0)|i<-[0..12::Int],i/=0,i/=2]++[("r0",hex 0xdeadbeef),("r2",hex last),("sp",hex 0xb010),("lr",hex 0xa000),("cpsr",hex 0x10)])
+     codeSize=fromIntegral(B.length code)::Integer
+     codeArtifact=artifact "code" "region-count.bin" code codeDigest
+     storeArtifact=artifact "store" "region-count-store.bin" storeCode storeDigest
+     valid=fixture "region-count" codeArtifact codeSize registers(baseRegions "code" codeSize++[dataRegion 4 i 4 "rw"|i<-[0..60::Int]]) "returned" [("r1",hex 1),("pc",hex 0xa000)][obj[("region",s "data60"),("offset",n 0),("hex",s "01000000")]]
+     tooMany=fixture "region-count-65" codeArtifact codeSize registers(baseRegions "code" codeSize++[dataRegion 4 i 4 "rw"|i<-[0..61::Int]]) "returned" [("r1",hex 1)][]
+     oversized=fixture "region-count-bytes" codeArtifact codeSize registers(baseRegions "code" codeSize++[dataRegion 0x20000 i 68782 "rw"|i<-[0..60::Int]]) "returned" [("r1",hex 1)][]
+     readOnly=fixture "region-count-read-only" storeArtifact 8 storeRegisters(baseRegions "store" 8++[dataRegion 4 i 4 (if i==60 then "r" else "rw")|i<-[0..60::Int]]) "memory_guard" [("r0",hex 0xdeadbeef),("r2",hex last)][]
+     badPermission=fixture "region-count-permission" codeArtifact codeSize registers(baseRegions "code" codeSize++[dataRegion 4 i 4 (if i==60 then "rwx" else "rw")|i<-[0..60::Int]]) "returned" [("r1",hex 1)][]
+     path=root</>"region-count.json"
+     run label item=do
+      B.writeFile path(encodeCanonical item)
+      (code',report)<-runCase runner path
+      pure(code',report)
+     passed label item=do
+      (code',report)<-run label item
+      ensure(code'==0 && get report "status"==s "passed")(label++": "++show report)
+     refused label item=do
+      (code',report)<-run label item
+      ensure(code'==1 && get report "status"==s "invalid_case")(label++": "++show report)
+ passed "64 regions read and write the last region" valid
+ refused "65 regions" tooMany
+ refused "64 regions over the mapped-byte budget" oversized
+ passed "64 regions refuse a read-only store" readOnly
+ refused "64 regions with an unsupported permission" badPermission
+
 -- A read-only region admits an expected byte that equals its initial value, refuses an
 -- expected change, and stops a store as memory_guard.
 readOnlyRegressions :: FilePath -> IO ()
@@ -758,6 +816,7 @@ main=do
  instructionLimitRegressions runner
  recordingLimitRegressions runner
  contractLimitRegressions runner
+ regionCountRegressions runner
  readOnlyRegressions runner
  schemaContract
  batched<-fixtureBatch runner checker
@@ -851,5 +910,5 @@ main=do
   (timed,code,out,_)<-runBounded 3000000 (8*1024*1024) runner[](BC.pack input)
   result<-jsonRead out
   ensure(not timed && code==ExitFailure 1 && get result "status"==s "invalid_case")"independent wire rejection failed"
- putStrLn(show(length names)++" hand-derived execution fixtures, 29 JSON rejections, 7 privileged-entry rejections, 10 kernel-case rejections, kernel stack-context declaration boundaries, "++show(length bad)++" independent wire rejections, execute-never boundary, stub/output/deadline checks, contract limit boundaries and schema agreement passed")
+ putStrLn(show(length names)++" hand-derived execution fixtures, 29 JSON rejections, 7 privileged-entry rejections, 10 kernel-case rejections, kernel stack-context declaration boundaries, "++show(length bad)++" independent wire rejections, execute-never boundary, stub/output/deadline checks, contract limit boundaries, high region-count boundaries and schema agreement passed")
  putStrLn(show batched++"-case fixture batch, 9 isolation controls, batch failure and framing controls, batch limit boundaries, the owned-case batch API and kernel-case outcomes passed")
