@@ -127,14 +127,16 @@ entriesBase, entriesSize :: Word32
 entriesBase = 0x40100000
 entriesSize = 0x1000
 
-heap, heapCount, heapBase, tickWord, lockCell, counterBase, receiptBase :: Word32
-heap = entriesBase
-heapCount = entriesBase + 0x100
-heapBase = entriesBase + 0x104
-tickWord = entriesBase + 0x108
+lockCell, counterBase, receiptBase :: Word32
 lockCell = entriesBase + 0x10c
 counterBase = entriesBase + 0x110
 receiptBase = entriesBase + 0x200
+
+heapAddress, timerCountWord, timerBaseWord, timerTickWord :: Facts -> Domain -> Word32
+heapAddress facts domain = dfTimerHeap (domainFacts facts domain)
+timerCountWord facts domain = dfTimerCount (domainFacts facts domain)
+timerBaseWord facts domain = dfTimerBase (domainFacts facts domain)
+timerTickWord facts domain = dfTickNow (domainFacts facts domain)
 
 secondControls, requestBase :: Word32
 secondControls = entriesBase + 0x600
@@ -158,7 +160,7 @@ seedRegister :: Register -> Word32
 seedRegister register = 0xa5a50000 + fromIntegral (fromEnum register)
 
 movwI, movtI, ldrI, strI, movReg, movImm, blWord :: Word32 -> Word32 -> Word32
-addRegLsl2, addImm, subImm :: Word32 -> Word32 -> Word32 -> Word32
+addRegLsl2, addImm, subImm, andImm :: Word32 -> Word32 -> Word32 -> Word32
 movwI rd imm = 0xe3000000 .|. (((imm `shiftR` 12) .&. 0xf) `shiftL` 16) .|. (rd `shiftL` 12) .|. (imm .&. 0xfff)
 movtI rd imm = 0xe3400000 .|. (((imm `shiftR` 12) .&. 0xf) `shiftL` 16) .|. (rd `shiftL` 12) .|. (imm .&. 0xfff)
 ldrI rd rn = 0xe5900000 .|. (rn `shiftL` 16) .|. (rd `shiftL` 12)
@@ -166,6 +168,7 @@ strI rd rn = 0xe5800000 .|. (rn `shiftL` 16) .|. (rd `shiftL` 12)
 addRegLsl2 rd rn rm = 0xe0800000 .|. (rn `shiftL` 16) .|. (rd `shiftL` 12) .|. (2 `shiftL` 7) .|. rm
 addImm rd rn imm = 0xe2800000 .|. (rn `shiftL` 16) .|. (rd `shiftL` 12) .|. (imm .&. 0xfff)
 subImm rd rn imm = 0xe2400000 .|. (rn `shiftL` 16) .|. (rd `shiftL` 12) .|. (imm .&. 0xfff)
+andImm rd rn imm = 0xe2000000 .|. (rn `shiftL` 16) .|. (rd `shiftL` 12) .|. (imm .&. 0xff)
 movReg rd rm = 0xe1a00000 .|. (rd `shiftL` 12) .|. rm
 movImm rd imm = 0xe3a00000 .|. (rd `shiftL` 12) .|. (imm .&. 0xfff)
 blWord here target =
@@ -207,6 +210,7 @@ receiptBody =
   , addRegLsl2 8 8 6
   , strI 7 8
   , mrsCpsr
+  , andImm 7 7 0xff
   , movwI 8 ((receiptBase + 0x100) .&. 0xffff), movtI 8 ((receiptBase + 0x100) `shiftR` 16)
   , addRegLsl2 8 8 6
   , strI 7 8
@@ -343,7 +347,7 @@ coreCases _facts domain =
       , ConfigWord 1 0x0c 30
       , ConfigWord 1 0x10 0
       , ConfigWord 1 0x14 1
-      , RegionsUnchanged ["words", "controls", "count", "entries"]
+      , RegionsUnchanged ["words", "controls", "count", "heap", "entries"]
       ]
       [] [] Returned Returned
   , Case "create-exists" Create Equal [(1, Config 0x2 0x11111111 0x22222222 30 0 1)] [] [] 4 0 0 0x13 1
@@ -351,7 +355,7 @@ coreCases _facts domain =
       [ RegisterIs R0 0xffffffd7
       , ConfigWord 1 0x0c 30
       , ConfigWord 1 0x14 1
-      , RegionsUnchanged ["words", "configs", "controls", "count", "entries"]
+      , RegionsUnchanged ["words", "configs", "controls", "count", "heap", "entries"]
       ]
       [] [] Returned Returned
   , Case "create-zero-period" Create (Repair "the replacement refuses a zero period without a write") [(1, emptyConfig)] [] [] 4 0 0 0x13 1
@@ -461,7 +465,7 @@ coreCases _facts domain =
       Returned Returned
   , Case "configure" Configure Equal [] [] [] 4 0 0 0x13 0
       Nothing Receipt
-      [ ConfigurationPublished, RegionsUnchanged ["words", "configs", "controls", "count", "entries"] ]
+      [ ConfigurationPublished, RegionsUnchanged ["words", "configs", "controls", "count", "heap", "entries"] ]
       [] [] Returned Returned
   , Case "schedule" Schedule Equal [(1, Config 0x2 0x11111111 0x22222222 30 0 1)] [(1, Control 0 0 0 0 0)] [] 4 0 0 0x13 0
       Nothing Receipt
@@ -510,10 +514,10 @@ check facts domain one _role observation check' = case check' of
   ConfigWord slot offset value -> expectWord "configs" (configAddress facts domain slot + offset) value
   ControlWord slot offset value -> expectWord "controls" (controlAddress facts domain slot + offset) value
   SecondControlWord slot offset value -> expectWord "entries" (secondControls + fromIntegral (slot - 1) * 0x18 + offset) value
-  HeapWord index offset value -> expectWord "entries" (heap + fromIntegral (index - 1) * 8 + offset) value
-  CountIs value -> expectWord "entries" heapCount value
-  BaseIs value -> expectWord "entries" heapBase value
-  TickIs value -> expectWord "entries" tickWord value
+  HeapWord index offset value -> expectWord "heap" (heapAddress facts domain + fromIntegral (index - 1) * 8 + offset) value
+  CountIs value -> expectWord "words" (timerCountWord facts domain) value
+  BaseIs value -> expectWord "words" (timerBaseWord facts domain) value
+  TickIs value -> expectWord "words" (timerTickWord facts domain) value
   RegisterIs register value ->
     case lookupRegister register observation of
       Just actual | actual == value -> Right ()
@@ -545,7 +549,7 @@ check facts domain one _role observation check' = case check' of
     expectWord "configuration" (base + 0x64) (caseCount one)
     expectWord "configuration" (base + 0x6c) (expireEntry domain)
   ControlArgumentIs slot -> expectWord "controls" (controlAddress facts domain slot + 0x14) (controlAddress facts domain slot)
-  HeapEntryIs index -> expectWord "entries" (heap + fromIntegral (index - 1) * 8 + 4) (controlTimer facts domain index)
+  HeapEntryIs index -> expectWord "heap" (heapAddress facts domain + fromIntegral (index - 1) * 8 + 4) (controlTimer facts domain index)
   where
     expectWord region address value = do
       actual <- readWord region address
@@ -564,6 +568,7 @@ check facts domain one _role observation check' = case check' of
       "configs" -> overlay (configBase facts domain) 0x60 (configWords facts domain one)
       "controls" -> overlay (controlBase facts domain) 0x60 (controlWords facts domain one)
       "count" -> overlay (countWord facts domain) 4 [(countWord facts domain, caseCount one)]
+      "heap" -> overlay (heapAddress facts domain) 0x100 (heapWords facts domain one)
       "entries" -> overlay entriesBase entriesSize (entriesWords facts domain one)
       "configuration" -> B.replicate 0x70 0xa5
       _ -> B.empty
@@ -571,6 +576,7 @@ check facts domain one _role observation check' = case check' of
     regionBase "configs" = configBase facts domain
     regionBase "controls" = controlBase facts domain
     regionBase "count" = countWord facts domain
+    regionBase "heap" = heapAddress facts domain
     regionBase "entries" = entriesBase
     regionBase "configuration" = wordAddress (configurationAddress domain)
     regionBase _ = 0
@@ -606,21 +612,26 @@ wordsWords facts domain one =
   , (dfCurrentContext d, dfContexts d)
   , (dfSchedulerLock d, 0)
   ]
-    ++ contextWords (factsContext facts) (dfContexts d) (controlBase facts domain) (caseCount one) (expireEntry domain)
-    ++ contextWords (factsContext facts) (dfContexts d + 0x84) (controlBase facts domain) (caseCount one) (expireEntry domain)
+    ++ contextWords (factsContext facts) d (dfContexts d) (controlBase facts domain) (caseCount one) (expireEntry domain)
+    ++ contextWords (factsContext facts) d (dfContexts d + 0x84) (controlBase facts domain) (caseCount one) (expireEntry domain)
     ++ [(configurationWordAddress domain, wordAddress (configurationAddress domain)) | caseCall one == Configure]
+    ++ [ (dfTimerCount d, fromIntegral (length linked))
+       , (dfTimerBase d, 0)
+       , (dfTickNow d, caseTick one)
+       ]
   where
     d = domainFacts facts domain
+    linked = [(slot, control) | (slot, control) <- caseControls one, ctlIndex control /= 0]
 
-contextWords :: ContextOffsets -> Word32 -> Word32 -> Word32 -> Word32 -> [(Word32, Word32)]
-contextWords offsets context controls count callback =
+contextWords :: ContextOffsets -> DomainFacts -> Word32 -> Word32 -> Word32 -> Word32 -> [(Word32, Word32)]
+contextWords offsets d context controls count callback =
   [ (context + contextSchedulerLock offsets, lockCell)
   , (context + contextSchedulerLock offsets + 4, stubAcquire)
   , (context + contextSchedulerLock offsets + 8, stubRelease)
-  , (context + contextTimerHeap offsets, heap)
-  , (context + contextTimerCount offsets, heapCount)
-  , (context + contextTimerBase offsets, heapBase)
-  , (context + contextTickNow offsets, tickWord)
+  , (context + contextTimerHeap offsets, dfTimerHeap d)
+  , (context + contextTimerCount offsets, dfTimerCount d)
+  , (context + contextTimerBase offsets, dfTimerBase d)
+  , (context + contextTickNow offsets, dfTickNow d)
   , (context + contextCyclics offsets, controls)
   , (context + contextCyclicCount offsets, count)
   , (context + contextCyclicCallback offsets, callback)
@@ -671,20 +682,22 @@ secondControlWords facts domain one =
     | (slot, control) <- caseSecondControls one
     ]
 
-entriesWords :: Facts -> Domain -> Case -> [(Word32, Word32)]
-entriesWords facts domain one =
-  [ (heapCount, fromIntegral (length linked))
-  , (heapBase, 0)
-  , (tickWord, caseTick one)
-  , (lockCell, 0)
-  , (counterBase, 0)
-  ]
-    ++ concat
-      [ [ (heap + fromIntegral (index - 1) * 8, ctlExpiry control)
-        , (heap + fromIntegral (index - 1) * 8 + 4, controlTimer facts domain slot)
+heapWords :: Facts -> Domain -> Case -> [(Word32, Word32)]
+heapWords facts domain one =
+  concat
+      [ [ (heapAddress facts domain + fromIntegral (index - 1) * 8, ctlExpiry control)
+        , (heapAddress facts domain + fromIntegral (index - 1) * 8 + 4, controlTimer facts domain slot)
         ]
       | (index, (slot, control)) <- zip [1 :: Int ..] linked
       ]
+  where
+    linked = [(slot, control) | (slot, control) <- caseControls one, ctlIndex control /= 0]
+
+entriesWords :: Facts -> Domain -> Case -> [(Word32, Word32)]
+entriesWords facts domain one =
+  [ (lockCell, 0)
+  , (counterBase, 0)
+  ]
     ++ [ (receiptBase + fromIntegral index * 4, 0) | index <- [0 .. 7 :: Int] ]
     ++ [ (receiptBase + 0x80 + fromIntegral index * 4, 0) | index <- [0 .. 7 :: Int] ]
     ++ [ (receiptBase + 0x100 + fromIntegral index * 4, 0) | index <- [0 .. 7 :: Int] ]
@@ -692,7 +705,6 @@ entriesWords facts domain one =
     ++ secondControlWords facts domain one
     ++ requestWords
   where
-    linked = [(slot, control) | (slot, control) <- caseControls one, ctlIndex control /= 0]
     requestWords = case caseRequest one of
       Nothing -> []
       Just (attributes, argument, handler, period, phase) ->
@@ -733,6 +745,7 @@ caseFor facts domain role stockImage ownedImage timerOwned ownedSymbols timerSym
         , mkRegion (RegionId "configs") (GuestAddress (fromIntegral (configBase facts domain))) 0x60 ReadWrite (overlay (configBase facts domain) 0x60 (configWords facts domain one))
         , mkRegion (RegionId "controls") (GuestAddress (fromIntegral (controlBase facts domain))) 0x60 ReadWrite (overlay (controlBase facts domain) 0x60 (controlWords facts domain one))
         , mkRegion (RegionId "count") (GuestAddress (fromIntegral (countWord facts domain))) 4 ReadWrite (overlay (countWord facts domain) 4 [(countWord facts domain, caseCount one)])
+        , mkRegion (RegionId "heap") (GuestAddress (fromIntegral (heapAddress facts domain))) 0x100 ReadWrite (overlay (heapAddress facts domain) 0x100 (heapWords facts domain one))
         , mkRegion (RegionId "entries") (GuestAddress (fromIntegral entriesBase)) (fromIntegral entriesSize) ReadWrite (overlay entriesBase entriesSize (entriesWords facts domain one))
         , mkRegion (RegionId "stack") (GuestAddress (fromIntegral stackBase)) (fromIntegral stackSize) ReadWrite (B.replicate (fromIntegral stackSize) 0)
         , mkRegion (RegionId "exit") (GuestAddress (fromIntegral exitAddress)) 0x10 ReadExecute (B.replicate 0x10 0)
@@ -872,7 +885,7 @@ runDomain runner cacheRoot directory facts domain stockImage ownedImage timerOwn
         equalDifferences stock' owned' = case caseKind one of
           Equal ->
             regionDifferences domain
-              ([RegionId "words", RegionId "configs", RegionId "controls", RegionId "count", RegionId "entries"]
+              ([RegionId "words", RegionId "configs", RegionId "controls", RegionId "count", RegionId "heap", RegionId "entries"]
                  ++ [configurationRegion | caseCall one == Configure])
               stock'
               owned'
