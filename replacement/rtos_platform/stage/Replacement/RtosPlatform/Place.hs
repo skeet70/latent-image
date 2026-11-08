@@ -88,28 +88,29 @@ solveSections budget runExtents sections = do
       ordered = sortOn (negate . sectionBytes) sections
       (s2Code, s2Other, rest) = partitionS2 ordered
   when (null s2Code) (Left (SearchExhausted ["no S2 sections"]))
-  tryWindows caps windows s2Code s2Other rest
+  let (result, remaining) = tryWindows budget caps windows s2Code s2Other rest
+  case result of
+    Just placements -> admitPlacement runExtents sections placements >> pure placements
+    Nothing -> Left (SearchExhausted ["bounded search exhausted after " ++ show (budget - remaining) ++ " nodes"])
   where
     windows = addressWindows runExtents
-    tryWindows _ [] _ _ _ = Left (SearchExhausted ["no S2 window fits"])
-    tryWindows caps (window : others) s2Code s2Other rest =
-      case preplaceBundle caps window s2Code of
-        Nothing -> tryWindows caps others s2Code s2Other rest
-        Just (cursors, preplacedCode) ->
+    tryWindows remaining _ [] _ _ _ = (Nothing, remaining)
+    tryWindows remaining caps (window : others) s2Code s2Other rest =
+      tryCandidates remaining (take 32 (preplaceBundle caps window s2Code))
+      where
+        tryCandidates left [] = tryWindows left caps others s2Code s2Other rest
+        tryCandidates left ((cursors, preplacedCode) : more) =
           case preplace caps window cursors s2Other of
-            Nothing -> tryWindows caps others s2Code s2Other rest
+            Nothing -> tryCandidates left more
             Just (cursors', preplacedOther) ->
-              case greedy budget caps rest cursors' [] of
-                Nothing -> tryWindows caps others s2Code s2Other rest
-                Just (_, placed) -> do
-                  let placements = preplacedCode ++ preplacedOther ++ placed
-                  admitPlacement runExtents sections placements
-                  pure placements
+              case greedy left caps rest cursors' [] of
+                (Just placed, left') -> (Just (preplacedCode ++ preplacedOther ++ placed), left')
+                (Nothing, left') -> if left' <= 0 then (Nothing, 0) else tryCandidates left' more
 
 partitionS2 :: [Section] -> ([Section], [Section], [Section])
 partitionS2 xs =
   let isS2 s = any (`isPrefixOf` sectionName s) [".text.s2_", ".rodata.s2_pool"]
-      codeNames = [".text.s2_save", ".text.s2_resume", ".text.s2_select", ".text.s2_first_entry", ".text.s2_irq_return", ".text.s2_irq_resume"]
+      codeNames = [".text.s2_save", ".text.s2_resume"]
       code = [s | name <- codeNames, s <- xs, sectionName s == name]
       other = [s | s <- xs, isS2 s, sectionName s `notElem` codeNames]
       rest = [s | s <- xs, not (isS2 s)]
@@ -124,19 +125,18 @@ addressWindows runExtents = go (zip [0 ..] (sortOn extentStart runExtents))
       let (inside, outside) = span (\(_, Extent (GuestAddress s) _) -> s - start <= 4095) rest
       in (i : map fst inside) : go outside
 
-preplaceBundle :: [Int] -> [Int] -> [Section] -> Maybe ([Int], [Placement])
+preplaceBundle :: [Int] -> [Int] -> [Section] -> [([Int], [Placement])]
 preplaceBundle caps window sections
-  | null sections = Just (replicate (length caps) 0, [])
+  | null sections = [(replicate (length caps) 0, [])]
   | otherwise =
-      let cursors = replicate (length caps) 0
-          size = sum (map sectionBytes sections)
-          fits = [(k, alignTo (cursors !! k) 4) | k <- window, alignTo (cursors !! k) 4 + size <= caps !! k]
-      in case sortOn (\(k, off) -> (caps !! k - (off + size), k)) fits of
-           [] -> Nothing
-           ((k, off) : _) ->
-             let (final, placed) = placeAt k off sections []
-             in Just (update k final cursors, placed)
+      [ let (final, placed) = placeAt k off sections []
+        in (update k final cursors, placed)
+      | (k, off) <- sortOn (\(k, off) -> (negate (caps !! k - (off + size)), k)) fits
+      ]
   where
+    cursors = replicate (length caps) 0
+    size = sum (map sectionBytes sections)
+    fits = [(k, alignTo (cursors !! k) 4) | k <- window, alignTo (cursors !! k) 4 + size <= caps !! k]
     placeAt _ _ [] placed = (0, reverse placed)
     placeAt k off (s : rest) placed =
       let off' = alignTo off (sectionAlign s)
@@ -155,27 +155,28 @@ preplace caps window cursors0 sections = go (sortOn (negate . sectionBytes) sect
             [] -> Nothing
             ((k, off) : _) -> go rest (update k (off + sectionBytes s) cursors) (Placement s k off : placed)
 
-greedy :: Int -> [Int] -> [Section] -> [Int] -> [Placement] -> Maybe ([Int], [Placement])
-greedy budget caps sections cursors0 placed0 = go 0 sections cursors0 placed0
+greedy :: Int -> [Int] -> [Section] -> [Int] -> [Placement] -> (Maybe [Placement], Int)
+greedy budget caps sections cursors0 placed0 = go budget sections cursors0 placed0
   where
-    go _ [] cursors placed = Just (cursors, reverse placed)
-    go nodes (s : rest) cursors placed
-      | nodes > budget = Nothing
-      | otherwise =
-          case fits of
-            [] -> Nothing
-            _ -> tryFits (sortOn (\(k, off) -> (caps !! k - (off + sectionBytes s), k)) fits)
+    go remaining [] _ placed = (Just (reverse placed), remaining)
+    go remaining _ _ _ | remaining <= 0 = (Nothing, 0)
+    go remaining (s : rest) cursors placed =
+      case fits of
+        [] -> (Nothing, remaining)
+        _ -> tryFits (remaining - 1) (sortOn (\(k, off) -> (caps !! k - (off + sectionBytes s), k)) fits)
       where
         fits =
           [ (k, alignTo (cursors !! k) (sectionAlign s))
           | k <- [0 .. length caps - 1]
           , alignTo (cursors !! k) (sectionAlign s) + sectionBytes s <= caps !! k
           ]
-        tryFits [] = Nothing
-        tryFits ((k, off) : more) =
-          case go (nodes + 1) rest (update k (off + sectionBytes s) cursors) (Placement s k off : placed) of
-            Nothing -> tryFits more
-            Just result -> Just result
+        tryFits left [] = (Nothing, left)
+        tryFits left ((k, off) : more)
+          | left <= 0 = (Nothing, 0)
+          | otherwise =
+              case go (left - 1) rest (update k (off + sectionBytes s) cursors) (Placement s k off : placed) of
+                (Just result, left') -> (Just result, left')
+                (Nothing, left') -> tryFits left' more
 
 update :: Int -> Int -> [Int] -> [Int]
 update k value xs = [if i == k then value else x | (i, x) <- zip [0 ..] xs]

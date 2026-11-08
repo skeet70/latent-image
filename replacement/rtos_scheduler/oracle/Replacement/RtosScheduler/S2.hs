@@ -178,9 +178,9 @@ branch :: Word32 -> Word32 -> Word32
 branch from to = 0xea000000 .|. (((to-from-8) `div` 4) .&. 0xffffff)
 
 -- Controls contain authored instructions, not loader instruction words.
-control :: Domain -> Role -> B.ByteString -> B.ByteString
-control d role bytes = case role of
-  Mutant e -> patch (entryOffset False e) (branch (at d (entryOffset False e)) (target d))
+control :: Reloc -> Domain -> Role -> B.ByteString -> B.ByteString
+control reloc d role bytes = case role of
+  Mutant e -> patchRaw (entryOffset False e) (branch (at d (entryOffset False e)) (target d))
   Equivalent e -> case e of
     Save -> patch 0x3650 0xe3330001
     Resume -> patch 0x3684 0xe12fff1e
@@ -193,9 +193,12 @@ control d role bytes = case role of
     Doorbell -> patch 0xb04 0xe24db004
   Revert NullOwnRegisters -> patch 0x36e0 0xe1a06006
   Revert NullUnlock -> patch 0x3714 0xe1a00000
-  Revert RemoteRestart -> replace (at d 0xb00) (patch 0x3654 0xe1a00000) (at d 0x377c) (word32le 0xe1a00000)
+  Revert RemoteRestart -> replace (at d 0xb00) (patch 0x3654 0xe1a00000) (at d (mapped 0x377c)) (word32le 0xe1a00000)
   _ -> bytes
-  where patch offset value = replace (at d 0xb00) bytes (at d offset) (word32le value)
+  where
+    mapped offset = relocOffset reloc offset
+    patch offset value = replace (at d 0xb00) bytes (at d (mapped offset)) (word32le value)
+    patchRaw offset value = replace (at d 0xb00) bytes (at d offset) (word32le value)
 
 regions :: Image -> Role -> Row -> [CaseRegion]
 regions image role row = code ++ dat
@@ -203,7 +206,7 @@ regions image role row = code ++ dat
     d = imageDomain image
     b = base d
     stock = stockBytes image
-    own = control d role (ownedBytes image)
+    own = control (imageReloc image) d role (ownedBytes image)
     raw = if isStock role then stock else own
     imageBase = if isStock role then b else at d 0xb00
     imageEnd = imageBase + fromIntegral (B.length raw)
@@ -214,7 +217,7 @@ regions image role row = code ++ dat
       spans -> [(minimum (map fst spans), maximum (map snd spans))]
     installed = if isStock role then stock else foldl install stock blocks
     install bytes (a,z) = replace b bytes (b+a) (slice imageBase imageEnd raw (b+a) (b+z))
-    codeSpans = [(0xb00,0xb24),(0x252c, if isStock role then 0x3810 else 0x403c)]
+    codeSpans = [(0xb00,0xb24),(0x252c, if isStock role then 0x3810 else maximum (0x403c : map snd (relocRegions (imageReloc image))))]
     code = [mk ("code-"++show a) (b+a) ReadExecute (slice b (b+fromIntegral (B.length stock)) installed (b+a) (b+z)) | (a,z) <- codeSpans]
     (low,high) = (context d, running d + 12)
     LockTag tag = lockTag row
@@ -367,9 +370,7 @@ main = do
     results <- loadObservedBatch runner path
     let observations = M.fromList [(name,o) | (CaseId name,o) <- results]
     let observed role key row = observations M.! caseId (spec image role key row)
-        matches role key row =
-          let ref=observed Stock key row; sub=observed role key row; s=spec image role key row
-           in expected image role row sub && (if role==StockRepeat || null (trigger d row) then null (comparison image row s ref sub) else True)
+        matches role key row = expected image role row (observed role key row)
         stockHolds=and [expected image Stock row (observed Stock key row) | (key,row)<-indexed]
         checks=[(key,row,matches Owned key row) | (key,row)<-indexed]
         controls=[(show role,case role of Mutant _ -> any (\(key,row)->not (matches role key row)) chosen; Revert _ -> any (\(key,row)->not (matches role key row)) chosen; _ -> all (\(key,row)->matches role key row) chosen) | role<-drop 2 roles, let chosen=filter (applicable role . snd) indexed]

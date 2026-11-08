@@ -30,7 +30,7 @@ main = do
         (firstEntry : _) -> do
           text <- C.readFile readelfPath
           sections <- either (die . show) pure (parseSections text)
-          placements <- either (die . show) pure (solveSections 2000000 runExtents sections)
+          placements <- either (die . show) pure (solveSections 50000 runExtents sections)
           let entryLines =
                 [ "  .veneer_" ++ slug (entryVeneer e) ++ " " ++ addressText (entryAddress e) ++ " : { KEEP(*(.veneer." ++ slug (entryVeneer e) ++ ")) }"
                 | e <- mapEntries dm

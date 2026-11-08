@@ -13,6 +13,7 @@ import Fixtures (fixtureDat)
 import qualified FujiAF.UpdateContainer as U
 import Replacement.RtosOwnFirst.Regions (Domain (..), Extent (..), GuestAddress (..), extentEnd, extentStart)
 import Replacement.RtosPlatform.Artifact
+import Replacement.RtosPlatform.Place
 import Replacement.RtosPlatform.Union
 
 synthetic :: Union
@@ -90,6 +91,12 @@ main = do
       let outside = 0x10
           mutated = B.take outside fixtureDat <> B.singleton (B.index fixtureDat outside `xorByte` 0x01) <> B.drop (outside + 1) fixtureDat
       expectLeft "a change outside the union refuses" (\e -> case e of ChangeOutside _ -> True; _ -> False) (confineChanges admitted mutated)
+  let tinyRuns = [Extent (GuestAddress 0x1000) (GuestAddress 0x1064)]
+      tinySections = [Section ".text.s2_save" 40 4, Section ".text.s2_resume" 32 4, Section ".text.big" 100 4]
+  case solveSections 20 tinyRuns tinySections of
+    Left (SearchExhausted _) -> pure ()
+    Left err -> check ("bounded packing: " ++ show err) False
+    Right _ -> check "bounded packing accepted an impossible assignment" False
   count <- readIORef failures
   if count == 0 then putStrLn "platform-tests: passed" else putStrLn ("platform-tests: " ++ show count ++ " failures") >> fail "platform-tests failed"
 
