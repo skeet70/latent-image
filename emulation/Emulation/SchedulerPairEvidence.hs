@@ -10,7 +10,7 @@ import qualified Data.Aeson as J
 import qualified Data.ByteString as B
 import Data.Word (Word64)
 import Emulation.SchedulerPairCheck
-import Emulation.SchedulerPairFamily (FamilyCall (..), ReleaseWitness (..), TimerWitness, familyTimerDeferred)
+import Emulation.SchedulerPairFamily (FamilyCall (..), ReleaseWitness (..), TimerWitness)
 import Emulation.SchedulerPairPlan
 import Replacement.RtosOwnFirst.Regions (Domain, domainLabel)
 
@@ -43,7 +43,7 @@ accumulateEvidence plan prior call =
       unlocks = evidenceUnlocks prior ++ unlockWitnesses call
       semantic = checkCallForInWitnesses (take 64 timers) (planRole plan) call
       deferred = case semantic of
-        Left FamilyTimer | familyTimerDeferred call -> [call]
+        Left FamilyTimer -> [call]
         _ -> []
       overflow = evidenceOverflow prior || length timers > 64 || length unlocks > 64 || length (evidenceDeferred prior) + length deferred > 64
   in accumulateKnown timers unlocks deferred overflow plan semantic prior call
@@ -91,8 +91,9 @@ qualifyEvidence bytes plan observation evidence = do
   case evidenceFailure evidence of
     Nothing -> pure ()
     Just (CallFailure _ refusal) -> Left refusal
-  forM_ (evidenceDeferred evidence) $ \call ->
-    either Left (const (pure ())) (checkCallForInWitnesses (evidenceTimers evidence) (planRole plan) call)
+  forM_ (evidenceDeferred evidence) $ \call -> do
+    checkCallEnvelope plan call
+    checkCallForInWitnesses (evidenceTimers evidence) (planRole plan) call
   qualifySuffix plan (evidenceUnlocks evidence) observation (evidenceTotals evidence)
   pure (summaryWith observation (evidenceSummary evidence))
 
@@ -124,7 +125,7 @@ accumulateControlEvidence plan (ControlEvidence compact retained) call =
   unlocks = evidenceUnlocks compact ++ unlockWitnesses call
   checked = checkCallForInWitnesses (take 64 timers) (planRole plan) call
   deferred = case checked of
-    Left FamilyTimer | familyTimerDeferred call -> [call]
+    Left FamilyTimer -> [call]
     _ -> []
   overflow = evidenceOverflow compact || length timers > 64 || length unlocks > 64 || length (evidenceDeferred compact) + length deferred > 64
 
