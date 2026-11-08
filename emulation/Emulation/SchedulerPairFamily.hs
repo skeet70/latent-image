@@ -190,8 +190,8 @@ checkPendingFamily releases pending = case (pendingSemantic pending, pendingTerm
       expect FamilyLifetime (saveCpsr .&. 0x160 == pendingCpsr pending .&. 0x160)
       let unlocked lock = [w | w <- releases, releaseTask w == task, releaseCore w == pendingCore pending,
               releaseCall w >= pendingEntered pending, releaseAt w < saveAt, releaseAddress w == Address lock, releaseValue w == 0]
-          callerUnlockAt = maximum (0 : map releaseAt (unlocked lockWord) ++ map releaseAt (unlocked schedulerLockAddress))
-          acquired lock = [w | w <- releases, releaseTask w /= task, releaseAt w > callerUnlockAt, releaseAddress w == Address lock, releaseValue w == 1]
+          callerUnlockAt lock = maximum (0 : map releaseAt (unlocked lock))
+          acquired lock = [w | w <- releases, releaseTask w /= task, releaseAt w > callerUnlockAt lock, releaseAddress w == Address lock, releaseValue w == 1]
           lockOk lock value = not (null (unlocked lock)) && (value == 0 || (value == 1 && not (null (acquired lock))))
       expect FamilyLifetime (lockOk lockWord objectLock && lockOk schedulerLockAddress schedulerLock)
       savedSp <- wordAt (task+0x18) terminal
