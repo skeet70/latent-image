@@ -3,9 +3,9 @@ module Replacement.RtosObjects.Suite
   ( Image (..), FamilyRun (..), Entries, buildEntries, extents, runFamily ) where
 
 import Control.Monad (forM, unless)
-import Data.Bits ((.&.), (.|.), shiftL, xor)
+import Data.Bits ((.&.), (.|.), shiftL, shiftR, xor)
 import qualified Data.ByteString as B
-import Data.List (find, nub)
+import Data.List (find)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isJust, mapMaybe, maybeToList)
 import Data.Word (Word32, Word8)
@@ -40,7 +40,6 @@ data Role = StockRole | OwnedRole deriving (Eq, Show)
 data Boundary = CallerReturn | TaskArrival deriving (Eq, Show)
 data Invocation = TaskInvocation | HandlerCallback deriving (Eq, Show)
 
-data Delta = WordDelta GuestAddress | ByteDelta GuestAddress deriving (Eq)
 
 data StockDifference
   = NoDifference
@@ -66,6 +65,7 @@ data Expect
   | TimerLog TimerLogExpect
   deriving Show
 
+-- Storage beyond the timer-log cursor is not an observed event.
 data TimerLogExpect = TimerLogExpect Int [(Word32, Word32)] deriving Show
 
 data Step = StepCall Slot [(Register, Word32)] | StepStore GuestAddress deriving Show
@@ -1337,6 +1337,13 @@ data FamilyDifference
   | StateDifference RegionId
   deriving (Eq, Show)
 
+data ScopeControl = BudgetStockState | UnusedSavedSp | AdjacentStateByte deriving (Eq, Show)
+
+scopeControlName :: ScopeControl -> String
+scopeControlName BudgetStockState = "must-fail-budget-stock-state"
+scopeControlName UnusedSavedSp = "must-fail-unused-task-stack"
+scopeControlName AdjacentStateByte = "must-fail-adjacent-state-byte"
+
 renderDifference :: FamilyDifference -> String
 renderDifference difference = case difference of
   RoleDifference OwnedRole message -> "owned: " ++ message
@@ -1350,14 +1357,20 @@ compareFamily _role executing facts one stock owned =
   where
     ownedChecks = roleChecks OwnedRole owned
     stockChecks = roleChecks StockRole stock
-    roleChecks currentRole observation
-      | isBudgetRole currentRole one = exitChecks currentRole observation
-      | otherwise =
-          exitChecks currentRole observation
-            ++ concatMap (checkExpectation facts one observation) (roleExpectations currentRole one)
-            ++ registerChecks currentRole executing facts one observation
-            ++ continuationChecks executing facts one observation
-            ++ effectChecks facts currentRole one observation
+    roleChecks currentRole observation =
+      exitChecks currentRole observation
+        ++ concatMap (checkExpectation facts one observation) expectations
+        ++ registerChecks currentRole executing facts one observation
+        ++ (if incomplete then [] else continuationChecks executing facts one observation)
+        ++ effectChecks facts currentRole one observation
+      where
+        incomplete = isBudgetRole currentRole one
+        expectations = filter (\expectation -> not incomplete || atIncompleteStop expectation) (roleExpectations currentRole one)
+    atIncompleteStop expectation = case expectation of
+      Result _ -> False
+      RegisterEquals _ _ -> False
+      ControlEquals _ -> False
+      _ -> True
     exitChecks currentRole observation =
       let wanted = roleStatus currentRole one
           actual = nativeStatus observation
@@ -1370,56 +1383,46 @@ compareFamily _role executing facts one stock owned =
     compared =
       [ident | Page ident _ _ _ _ <- pages facts one, ident `notElem` map RegionId ["stack", "target-stack", "waker-stack", "chain-stack"]]
     memory observation = M.fromList [(ident, normalize ident bytes) | (ident, bytes) <- nativeMemory observation, ident `elem` compared]
-    -- Only the bytes whose owned and stock expectations differ are deliberate deltas; every
-    -- other byte of a tagged case is compared.
-    deliberateDeltas one' =
-      let ownedEquals = [(a, v) | Equals a v <- caseExpect one']
-          stockEquals = [(a, v) | Equals a v <- caseStockExpectations one']
-          ownedBytes = [(a, v) | ByteEquals a v <- caseExpect one']
-          stockBytes = [(a, v) | ByteEquals a v <- caseStockExpectations one']
-          ownedLog = [(c, es) | TimerLog (TimerLogExpect c es) <- caseExpect one']
-          stockLog = [(c, es) | TimerLog (TimerLogExpect c es) <- caseStockExpectations one']
-          wordDeltas =
-            [WordDelta a | (a, v) <- ownedEquals, Just w <- [lookup a stockEquals], v /= w]
-              ++ [WordDelta a | (a, _) <- stockEquals, a `notElem` map fst ownedEquals]
-          byteDeltas =
-            [ByteDelta a | (a, v) <- ownedBytes, Just w <- [lookup a stockBytes], v /= w]
-              ++ [ByteDelta a | (a, _) <- stockBytes, a `notElem` map fst ownedBytes]
-          logDeltas =
-            if ownedLog == stockLog
-              then []
-              else [WordDelta (GuestAddress (timerLogBase + 4 + fromIntegral i * 8)) | i <- [0 .. logCount - 1]]
-                ++ [WordDelta (GuestAddress (timerLogBase + 8 + fromIntegral i * 8)) | i <- [0 .. logCount - 1]]
-                ++ [WordDelta (GuestAddress timerLogBase)]
-          logCount = maximum (0 : [max c (length es) | (c, es) <- ownedLog ++ stockLog])
-       in nub (wordDeltas ++ byteDeltas ++ logDeltas)
-    deltaWords = deliberateDeltas one
-    inPage delta base size = case delta of
-      WordDelta (GuestAddress a) -> a >= base && a + 4 <= base + fromIntegral size
-      ByteDelta (GuestAddress a) -> a >= base && a < base + fromIntegral size
-    applyDelta current delta base = case delta of
-      WordDelta (GuestAddress a) ->
-        let offset = fromIntegral (a - base) in B.take offset current <> word32le 0 <> B.drop (offset + 4) current
-      ByteDelta (GuestAddress a) ->
-        let offset = fromIntegral (a - base) in B.take offset current <> B.singleton 0 <> B.drop (offset + 1) current
-    zeroIfInPage ident current delta =
-      case [base | Page i (GuestAddress base) size _ _ <- pages facts one, i == ident, inPage delta base size] of
-        (base : _) -> applyDelta current delta base
-        [] -> current
+    declaredBytes role = M.fromList (concatMap expectationBytes (roleExpectations role one))
+    expectationBytes expectation = case expectation of
+      Equals (GuestAddress address) value ->
+        [(GuestAddress (address + fromIntegral offset), fromIntegral (value `shiftR` (offset * 8))) | offset <- [0 .. 3]]
+      ByteEquals address value -> [(address, value)]
+      TimerLog (TimerLogExpect count entries) ->
+        expectationBytes (Equals (GuestAddress timerLogBase) (fromIntegral count))
+          ++ concat
+            [ expectationBytes (Equals (GuestAddress (timerLogBase + 4 + index * 8)) entry)
+                ++ expectationBytes (Equals (GuestAddress (timerLogBase + 8 + index * 8)) argument)
+            | (index, (entry, argument)) <- zip [0 :: Word32 ..] entries
+            ]
+      _ -> []
+    ownedDeclared = declaredBytes OwnedRole
+    stockDeclared = declaredBytes StockRole
+    logExpectations role = [(count, entries) | TimerLog (TimerLogExpect count entries) <- roleExpectations role one]
+    timerPayloadBytes = case (logExpectations OwnedRole, logExpectations StockRole) of
+      ([ownedLog@(_, ownedEntries)], [stockLog@(_, stockEntries)])
+        | ownedLog /= stockLog ->
+            [GuestAddress (timerLogBase + 4 + offset) | offset <- take (8 * max (length ownedEntries) (length stockEntries)) [0 ..]]
+      _ -> []
+    deltaBytes =
+      [ address
+      | (address, ownedByte) <- M.toList ownedDeclared
+      , Just stockByte <- [M.lookup address stockDeclared]
+      , ownedByte /= stockByte
+      ] ++ timerPayloadBytes
     kernelRegion = RegionId (if executing == DomainA then "kernel-a" else "kernel-b")
-    privateMask ident current
-      | caseBoundary one == TaskArrival && ident == kernelRegion =
-          let (GuestAddress base, _) = kernelBounds facts executing
-              offset = fromIntegral (taskAt facts executing runningSlot + factsTaskSavedSp facts - base)
-           in B.take offset current <> word32le 0 <> B.drop (offset + 4) current
-      | isJust (caseWaker one) && ident == kernelRegion =
-          let (GuestAddress base, _) = kernelBounds facts executing
-              zeroSavedSp body slot =
-                let offset = fromIntegral (taskAt facts executing slot + factsTaskSavedSp facts - base)
-                 in B.take offset body <> word32le 0 <> B.drop (offset + 4) body
-           in foldl zeroSavedSp current [1 .. factsTaskSlots facts]
-      | otherwise = current
-    normalize ident bytes = foldl (zeroIfInPage ident) (privateMask ident bytes) deltaWords
+    privateWords ident
+      | ident /= kernelRegion = []
+      | caseBoundary one == TaskArrival = [taskAt facts executing runningSlot + factsTaskSavedSp facts]
+      | isJust (caseWaker one) =
+          [taskAt facts executing slot + factsTaskSavedSp facts | slot <- runningSlot : wakerSlot : [pwSlot waiter | waiter <- caseWaiters one, pwDomain waiter == executing, isJust (pwChain waiter)]]
+      | otherwise = []
+    normalize ident bytes = case [base | Page current (GuestAddress base) _ _ _ <- pages facts one, current == ident] of
+      base : _ ->
+        let addresses = deltaBytes ++ [GuestAddress (address + offset) | address <- privateWords ident, offset <- [0 .. 3]]
+            mask = M.fromList [(address, ()) | address@(GuestAddress value) <- addresses, value >= base, value - base < fromIntegral (B.length bytes)]
+         in if M.null mask then bytes else snd (B.mapAccumL (\address octet -> (address + 1, if M.member (GuestAddress address) mask then 0 else octet)) base bytes)
+      [] -> bytes
 
 controls :: Domain -> Facts -> Case -> NativeObservation -> NativeObservation -> [(String, Bool)]
 controls executing facts one stock owned =
@@ -1441,9 +1444,32 @@ controls executing facts one stock owned =
                ]
        )
     ++ [ ("must-fail-unrelated-kernel-word", any (\difference -> case difference of StateDifference ident -> ident == RegionId region; _ -> False) (compareFamily OwnedRole executing facts one stock (perturbKernel owned)))
-       | caseDifference one == DeleteLeavesQueueTail
+       | caseDifference one /= NoDifference
+       ]
+    ++ [ (scopeControlName BudgetStockState, any stockStateRejected (compareFamily OwnedRole executing facts wrongStock stock owned))
+       | isBudgetRole StockRole one
+       , (address, value) : _ <- [[(a, v) | Equals a v <- caseStockExpectations one]]
+       , let wrongStock = one {caseStockExpect = Just (Equals address (value `xor` 0x80000000) : filter (not . sameAddress address) (caseStockExpectations one))}
+       ]
+    ++ [ (scopeControlName UnusedSavedSp, kernelStateRejected (compareFamily OwnedRole executing facts one stock (perturbByte (GuestAddress (taskAt facts executing (factsTaskSlots facts) + factsTaskSavedSp facts)) owned)))
+       | isJust (caseWaker one)
+       ]
+    ++ [ (scopeControlName AdjacentStateByte, kernelStateRejected (compareFamily OwnedRole executing facts one stock (perturbByte (GuestAddress (taskAt facts executing (if isJust (caseWaker one) then runningSlot else waiterSlot) + factsTaskState facts + 1)) owned)))
+       | caseDifference one /= NoDifference
        ]
   where
+    stockStateRejected (RoleDifference StockRole _) = True
+    stockStateRejected _ = False
+    sameAddress address (Equals actual _) = actual == address
+    sameAddress _ _ = False
+    kernelStateRejected = any (\difference -> case difference of StateDifference ident -> ident == RegionId region; _ -> False)
+    perturbByte (GuestAddress address) observation =
+      observation {nativeMemory =
+        [ (ident, case [base | Page current (GuestAddress base) size _ _ <- pages facts one, current == ident, address >= base, address - base < fromIntegral size] of
+            base : _ -> let offset = fromIntegral (address - base) in B.take offset bytes <> B.singleton (B.index bytes offset `xor` 1) <> B.drop (offset + 1) bytes
+            [] -> bytes)
+        | (ident, bytes) <- nativeMemory observation
+        ]}
     region = if executing == DomainA then "kernel-a" else "kernel-b"
     perturbKernel observation =
       observation
@@ -1643,7 +1669,7 @@ cases facts _entries executing =
       , eq (dfRunning (domainFacts facts (peer executing))) (taskAt facts (peer executing) runningSlot)
       , eq (dfSelected (domainFacts facts (peer executing))) (taskAt facts (peer executing) runningSlot)
       , eq (taskOf executing 1 + factsTaskNext facts) (mailControl 1)
-      , eq (taskOf executing 1 + factsTaskPrev facts) (mailControl 1)
+      , eq (taskOf executing 1 + factsTaskPrev facts) (taskOf (peer executing) 2)
       , eq (taskOf (peer executing) 2 + factsTaskNext facts) (taskOf executing 1)
       , eq (taskOf (peer executing) 2 + factsTaskPrev facts) (mailControl 1)
       , eq (outWord + 8) 0
