@@ -38,6 +38,7 @@ admission=${RENDER_ADMISSION:-bazel-bin/emulation/render-pair-admission}
 stock_packet=${RENDER_STOCK_REUSE_PACKET:-}
 stock_source=${RENDER_STOCK_REUSE_RECEIPT:-}
 archive_sha=${RENDER_ARCHIVE_SHA:-}
+checker=${RENDER_CHECKER:-$PWD/bazel-bin/host/firmware/check-bank-allowlist}
 
 reply() { jq -c '.key_reply.menu | [.menu_id, .setting_id, .cursor]' "$1/menu-observe.json"; }
 landing() {
@@ -202,7 +203,7 @@ admission_run() {
     [ -f "$(dirname "$archive")/render-source-identity.json" ] && args+=(--source-identity "$(dirname "$archive")/render-source-identity.json")
     [ -f "$prelinked/ram-push-manifest.json" ] || { printf 'missing prelinked manifest: %s\n' "$prelinked/ram-push-manifest.json" >&2; return 2; }
     args+=(--prelinked "$prelinked" --prelinked-base "$prelinked_base" --prelinked-size "$(jq -r .size "$prelinked/ram-push-manifest.json")")
-    args+=(--checker "$PWD/bazel-bin/host/firmware/check-bank-allowlist")
+    args+=(--checker "$checker")
   fi
   "$admission" "$verb" "${args[@]}" "$@"
 }
