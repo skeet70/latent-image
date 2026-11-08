@@ -104,13 +104,16 @@ struct Kernel {
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
-enum Boundary { Start, Entry, Instruction, RootEntry, RootInstruction, ServiceEntry, ServiceReturn, TaskSubmit, PeriodicCallback, IrqEntry, IrqFrame, IrqReturn, PostCleanup }
+enum Boundary { Start, Entry, Instruction, RootEntry, RootInstruction, ServiceEntry, ServiceReturn, TaskSubmit, PeriodicCallback, IrqEntry, IrqFrame, AckReturn, IrqReturn, PostCleanup }
 /// Core0 ATCM bytes from 8 below the sample SP to the IRQ stack top, read through core 0.
 #[derive(Serialize)]
 struct InterruptStack { low: Address, bytes: Vec<u8> }
 #[derive(Serialize)]
 struct Sample {
     hit: usize, boundary: Boundary, context: Context, code_word: Word, watch_cursor: usize, views: Vec<View>, kernels: [Kernel; 2],
+    counter: Word, lock: Word, dispatch: Word,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    nested_pend: Option<(u32, u32)>,
     #[serde(skip_serializing_if = "Option::is_none")]
     interrupt_stack: Option<InterruptStack>,
 }
@@ -243,7 +246,11 @@ fn sample(machine: &Machine, maps: &[MemoryMap], sources: &[Code], hit: usize, s
     let observed = view(machine, maps, &state, Object::Code, state.core, state.pc.0, 4)?;
     require(word(&observed.bytes, 0)? == expected.0, "instruction word differs from installed source")?;
     views.push(observed);
-    Ok(Sample { hit, boundary, context: state, code_word: expected, watch_cursor, views, kernels, interrupt_stack: None })
+    let counter = Word(read_guest_word(machine, state.core, if state.core == Core::Primary { 0x0005_45a4 } else { 0x000e_4564 })?);
+    let lock = Word(read_guest_word(machine, state.core, 0x000c_0804)?);
+    let dispatch = Word(read_guest_word(machine, state.core, if state.core == Core::Primary { 0x0005_46d8 } else { 0x000e_4698 })?);
+    let nested_pend = if boundary == Boundary::AckReturn { nested_pend(machine, state.core)? } else { None };
+    Ok(Sample { hit, boundary, context: state, code_word: expected, watch_cursor, views, kernels, counter, lock, dispatch, nested_pend, interrupt_stack: None })
 }
 fn sources(root: &Path, overrides: &[Option<PathBuf>; 2]) -> Result<Vec<Code>, String> {
     [("decode/loader-40000.bin", "candidate-loader-a", 0x40000, "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882", 0xdae0),
@@ -302,16 +309,45 @@ fn bind_artifact(role: Role, linked: &[u8], symbols: &[u8], contract: &[u8], upd
         Role::Owned => { require(*update == binding.candidate_dat_sha256, "owned role DAT differs from staging contract")?; Ok(owned_loop) }
     }
 }
+fn read_guest_word(machine: &Machine, core: Core, address: u32) -> Result<u32, String> {
+    let mut bytes = [0u8; 4];
+    machine.session.board.read_memory(core.index(), u64::from(address), &mut bytes)?;
+    Ok(u32::from_le_bytes(bytes))
+}
+
+fn nested_pend(machine: &Machine, core: Core) -> Result<Option<(u32, u32)>, String> {
+    let bank = if core == Core::Primary { 0xfffb_3000 } else { 0xfffb_4000 };
+    let active = read_guest_word(machine, core, bank + 0x1c0)?;
+    if active == 0xffff { return Ok(None); }
+    let table = if core == Core::Primary { 0x4005_38fc } else { 0x400e_38bc };
+    let current = read_guest_word(machine, core, table + 24 * active + 8)? & 15;
+    for group in 0..4u32 {
+        let enabled = read_guest_word(machine, core, bank + 0x80 + 4 * group)?;
+        let active_bits = read_guest_word(machine, core, bank + 0x230 + 4 * group)?;
+        for bit in 0..32u32 {
+            let line = group * 32 + bit;
+            if enabled & (1 << bit) == 0 || active_bits & (1 << bit) != 0 { continue; }
+            let priority = read_guest_word(machine, core, table + 24 * line + 8)? & 15;
+            if priority < current {
+                return Ok(Some((bank + 0xc0 + 4 * group, 1 << bit)));
+            }
+        }
+    }
+    Ok(None)
+}
+
 fn boundary(address: u32) -> Result<Boundary, String> {
     match address {
         0x725dd8 => Ok(Boundary::Start), ENTRY => Ok(Boundary::Entry), 0x69cbf4 | 0x69cbf8 | 0x69cbfc => Ok(Boundary::Instruction),
         0x40204 | 0xd0204 => Ok(Boundary::IrqEntry), 0x40234 | 0xd0234 => Ok(Boundary::IrqFrame),
+        0x40d5c | 0xd0d5c => Ok(Boundary::AckReturn),
         0x40364 | 0xd0364 | 0x437d8 | 0xd37d8 => Ok(Boundary::IrqReturn), _ => Err("unknown observation boundary".into()),
     }
 }
 fn sites() -> BTreeMap<u32, String> {
     [(0x725dd8, "start"), (ENTRY, "entry"), (0x69cbf4, "instruction"), (0x69cbf8, "instruction"), (0x69cbfc, "instruction"),
      (0x40204, "irq-entry"), (0xd0204, "irq-entry"), (0x40234, "irq-frame"), (0xd0234, "irq-frame"),
+     (0x40d5c, "ack-return"), (0xd0d5c, "ack-return"),
      (0x40364, "irq-return"), (0xd0364, "irq-return"), (0x437d8, "irq-return"), (0xd37d8, "irq-return")]
         .into_iter().map(|(address, name)| (address, name.into())).collect()
 }
@@ -347,14 +383,14 @@ fn fetch_attribution() -> Result<FetchAttribution, String> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Phase { AwaitEntry, AwaitWait, Waiting, IrqEntered, Framed, Returned, Resumed, RepeatPending, Complete }
-struct Lifecycle { phase: Phase, wait: Option<Context>, wait_executed: bool, repeated_at: Option<u64> }
-struct Producer { wfi: Address, resume: Address, cores: [Lifecycle; 2] }
+enum Phase { AwaitEntry, AwaitWait, Waiting, IrqEntered, Framed, NestedEntered, NestedFramed, Returned, Resumed, RepeatPending, Complete }
+struct Lifecycle { phase: Phase, wait: Option<Context>, wait_executed: bool, repeated_at: Option<u64>, outer_lock: Word, outer_sp: Address, pend_issued: bool, nested_complete: bool }
+struct Producer { wfi: Address, resume: Address, nested: bool, cores: [Lifecycle; 2] }
 impl Producer {
-    fn new(wfi: Address, resume: Address) -> Self {
-        Self { wfi, resume, cores: std::array::from_fn(|_| Lifecycle { phase: Phase::AwaitEntry, wait: None, wait_executed: false, repeated_at: None }) }
+    fn new(wfi: Address, resume: Address, nested: bool) -> Self {
+        Self { wfi, resume, nested, cores: std::array::from_fn(|_| Lifecycle { phase: Phase::AwaitEntry, wait: None, wait_executed: false, repeated_at: None, outer_lock: Word(0), outer_sp: Address(0), pend_issued: false, nested_complete: false }) }
     }
-    fn complete(&self) -> bool { self.cores.iter().all(|core| core.phase == Phase::Complete) }
+    fn complete(&self) -> bool { self.cores.iter().all(|core| core.phase == Phase::Complete && (!self.nested || core.nested_complete)) }
     fn fetched(&mut self, core: Core, pc: Address, instructions: u64) {
         let life = &mut self.cores[core.index()];
         if pc == self.wfi {
@@ -362,7 +398,7 @@ impl Producer {
             if life.phase == Phase::RepeatPending && life.repeated_at.is_some_and(|start| start < instructions) { life.phase = Phase::Complete; }
         }
     }
-    fn observe(&mut self, sample: &Sample) -> Result<(), String> {
+    fn observe(&mut self, sample: &Sample) -> Result<Option<(u32, u32)>, String> {
         let state = &sample.context;
         let core = state.core;
         let life = &mut self.cores[core.index()];
@@ -394,7 +430,7 @@ impl Producer {
                 life.phase = Phase::Resumed;
             }
         }
-        let Some(wait) = life.wait.as_ref() else { return Ok(()) };
+        let Some(wait) = life.wait.as_ref() else { return Ok(None) };
         if sample.boundary == Boundary::IrqEntry && life.phase == Phase::Waiting && active && life.wait_executed
             && state.cpsr.0 & 0x1f == 0x12 && state.spsr == wait.cpsr && state.lr.0 == self.resume.0 + 4
             && state.registers == wait.registers {
@@ -404,13 +440,36 @@ impl Producer {
             require(active && state.cpsr.0 & 0xbf == 0x93 && state.sp.0.checked_add(32) == Some(wait.sp.0), "idle IRQ source frame context differs")?;
             require(frame::<8>(sample)? == [wait.cpsr.0, wait.registers[0].0, wait.registers[1].0, wait.registers[2].0, wait.registers[3].0, wait.registers[12].0, wait.lr.0, self.resume.0], "idle IRQ source frame differs")?;
             life.phase = Phase::Framed;
+            life.outer_lock = sample.lock;
+            life.outer_sp = state.sp;
+        }
+        if self.nested && sample.boundary == Boundary::AckReturn && life.phase == Phase::Framed && !life.pend_issued {
+            let pending = sample.nested_pend.ok_or("no configured preempting IRQ line")?;
+            life.pend_issued = true;
+            return Ok(Some(pending));
+        }
+        if self.nested && sample.boundary == Boundary::IrqEntry && life.phase == Phase::Framed && life.pend_issued {
+            require(sample.counter == Word(2) && sample.lock == life.outer_lock, "nested IRQ entry counter or lock differs")?;
+            life.phase = Phase::NestedEntered;
+        }
+        if self.nested && sample.boundary == Boundary::IrqFrame && life.phase == Phase::NestedEntered {
+            require(sample.counter == Word(2) && sample.lock == life.outer_lock, "nested IRQ frame counter or lock differs")?;
+            require(state.spsr.0 & 0x1f == 0x13 && state.spsr.0 & 0x80 == 0, "nested IRQ interrupted context is not unmasked SVC")?;
+            require(state.sp.0 < life.outer_sp.0, "nested IRQ frame is not below the outer frame")?;
+            life.phase = Phase::NestedFramed;
+        }
+        if self.nested && sample.boundary == Boundary::IrqReturn && life.phase == Phase::NestedFramed {
+            require(sample.counter == Word(1) && sample.lock == life.outer_lock, "nested IRQ exit counter or lock differs")?;
+            life.phase = Phase::Framed;
+            life.nested_complete = true;
         }
         if sample.boundary == Boundary::IrqReturn && life.phase == Phase::Framed && active && state.sp.0.checked_add(28) == Some(wait.sp.0) {
             require(state.cpsr.0 & 0xbf == 0x93, "idle IRQ return has wrong source control bits")?;
             require(state.spsr == wait.cpsr && frame::<7>(sample)? == [wait.registers[0].0, wait.registers[1].0, wait.registers[2].0, wait.registers[3].0, wait.registers[12].0, wait.lr.0, self.resume.0], "idle IRQ return frame differs")?;
+            require(sample.counter == Word(0) && sample.lock == Word(0), "outer IRQ exit did not release the lock")?;
             life.phase = Phase::Returned;
         }
-        Ok(())
+        Ok(None)
     }
 }
 fn restored(state: &Context, wait: &Context) -> bool {
@@ -944,7 +1003,7 @@ fn root_sample(machine: &Machine, maps: &[MemoryMap], sources: &[Code], binding:
     let observed = view(machine, maps, &state, Object::Code, state.core, state.pc.0, 4)?;
     require(word(&observed.bytes, 0)? == expected, "root boundary instruction differs from installed source")?;
     views.push(observed);
-    Ok(Sample { hit, boundary, context: state, code_word: Word(expected), watch_cursor, views, kernels, interrupt_stack })
+    Ok(Sample { hit, boundary, context: state, code_word: Word(expected), watch_cursor, views, kernels, counter: Word(0), lock: Word(0), dispatch: Word(0), nested_pend: None, interrupt_stack })
 }
 fn merged_spans(mut spans: Vec<(u64, u64)>) -> Vec<(u64, u64)> {
     spans.sort_unstable();
@@ -1773,13 +1832,15 @@ fn drive() -> Result<(), String> {
     let mut arguments = BTreeMap::new(); let mut args = std::env::args_os().skip(1);
     while let Some(flag) = args.next() {
         let flag = flag.into_string().map_err(|_| USAGE)?;
-        if !["--task", "--role", "--run", "--update", "--boot-rom", "--analysis", "--linked", "--symbols", "--contract", "--output", "--loader-a", "--loader-b"].contains(&flag.as_str())
+        if flag == "--nested" { arguments.insert(flag, PathBuf::from("1")); continue; }
+        if !["--task", "--role", "--run", "--update", "--boot-rom", "--analysis", "--linked", "--symbols", "--contract", "--output", "--loader-a", "--loader-b", "--nested"].contains(&flag.as_str())
             || arguments.insert(flag, PathBuf::from(args.next().ok_or(USAGE)?)).is_some() { return Err(USAGE.into()); }
     }
     let task = match arguments.remove("--task") {
         None => TaskScope::Idle,
         Some(value) => TaskScope::parse(value.to_str().ok_or(USAGE)?)?,
     };
+    let nested = arguments.remove("--nested").is_some();
     let loader_a = arguments.remove("--loader-a");
     let loader_b = arguments.remove("--loader-b");
     let mut take = |flag| arguments.remove(flag).ok_or_else(|| USAGE.to_owned());
@@ -1819,7 +1880,7 @@ fn drive() -> Result<(), String> {
     machine.traces.arm(&machine.session, BTreeMap::from([(0x725dd8, "start".into())]))?;
     let mut watch: Option<Box<MemoryWatch>> = None;
     let mut samples = Vec::new(); let mut processed_hits = 0; let mut processed_rows = 0;
-    let mut producer = Producer::new(wfi, resume); let mut lifecycle_end_counts = None;
+    let mut producer = Producer::new(wfi, resume, nested); let mut lifecycle_end_counts = None;
     let result = (|| -> Result<(), String> {
         loop {
             let stopped = machine.run(DEADLINE.saturating_sub(machine.instructions()));
@@ -1850,7 +1911,9 @@ fn drive() -> Result<(), String> {
                 let mut observed = sample(&machine, &maps, &code, index, state, cursor)?;
                 observed.views.extend(installed_views);
                 samples.push(observed);
-                producer.observe(samples.last().ok_or("idle sample absent")?)?;
+                if let Some((address, bit)) = producer.observe(samples.last().ok_or("idle sample absent")?)? {
+                    machine.session.board.write_memory(core.index(), u64::from(address), &bit.to_le_bytes())?;
+                }
             }
             processed_hits = end;
             machine.require_running()?;
@@ -1906,7 +1969,7 @@ mod tests {
             cpsr: Word(0x53), spsr: Word(0xdeadbeef), counts, identities: [Word(0), Word(1)], tcm: [[Word(0); 2]; 2],
         };
         Sample { hit: 0, boundary, context: state, code_word: Word(0), watch_cursor: 0, views: Vec::new(),
-            kernels: [synthetic_kernel(Core::Primary), synthetic_kernel(Core::Secondary)], interrupt_stack: None }
+            kernels: [synthetic_kernel(Core::Primary), synthetic_kernel(Core::Secondary)], counter: Word(0), lock: Word(0), dispatch: Word(0), nested_pend: None, interrupt_stack: None }
     }
     fn synthetic_entry_and_wait(core: Core) -> [Sample; 2] {
         let entry = synthetic_sample(core, Boundary::Entry, Address(ENTRY), 10);
@@ -1955,7 +2018,7 @@ mod tests {
 
     #[test]
     fn both_cores_need_irq_return_resume_and_executed_repeated_wait() {
-        let mut producer = Producer::new(WFI, RESUME);
+        let mut producer = Producer::new(WFI, RESUME, false);
         feed_through_repeated_wait(&mut producer, Core::Primary, false);
         producer.fetched(Core::Primary, WFI, 43);
         assert!(!producer.complete());
@@ -1967,7 +2030,7 @@ mod tests {
 
     #[test]
     fn a_parked_first_wait_is_not_completion() {
-        let mut producer = Producer::new(WFI, RESUME);
+        let mut producer = Producer::new(WFI, RESUME, false);
         for core in [Core::Primary, Core::Secondary] {
             for sample in synthetic_entry_and_wait(core) { producer.observe(&sample).unwrap(); }
             producer.fetched(core, WFI, 13);
@@ -1977,7 +2040,7 @@ mod tests {
 
     #[test]
     fn unrelated_irq_status_does_not_supply_idle_wakeup() {
-        let mut producer = Producer::new(WFI, RESUME);
+        let mut producer = Producer::new(WFI, RESUME, false);
         let [entry, wait] = synthetic_entry_and_wait(Core::Primary);
         producer.observe(&entry).unwrap(); producer.observe(&wait).unwrap(); producer.fetched(Core::Primary, WFI, 13);
         let [mut irq, frame, returned] = synthetic_irq(Core::Primary, &wait, false);
@@ -1992,7 +2055,7 @@ mod tests {
 
     #[test]
     fn idle_execution_with_another_current_task_refuses() {
-        let mut producer = Producer::new(WFI, RESUME);
+        let mut producer = Producer::new(WFI, RESUME, false);
         let [mut entry, _] = synthetic_entry_and_wait(Core::Primary);
         entry.kernels[0].current = Address(entry.kernels[0].node.0 + 56);
         assert!(producer.observe(&entry).is_err());
@@ -2000,7 +2063,7 @@ mod tests {
 
     #[test]
     fn corrupt_source_frame_refuses_before_return() {
-        let mut producer = Producer::new(WFI, RESUME);
+        let mut producer = Producer::new(WFI, RESUME, false);
         let [entry, wait] = synthetic_entry_and_wait(Core::Primary);
         producer.observe(&entry).unwrap(); producer.observe(&wait).unwrap(); producer.fetched(Core::Primary, WFI, 13);
         let [irq, mut frame, _] = synthetic_irq(Core::Primary, &wait, false);
@@ -2015,7 +2078,7 @@ mod tests {
         for core in [Core::Primary, Core::Secondary] {
             for scheduler_return in [false, true] {
                 for unmasked_boundary in [Boundary::IrqFrame, Boundary::IrqReturn] {
-                    let mut producer = Producer::new(WFI, RESUME);
+                    let mut producer = Producer::new(WFI, RESUME, false);
                     let [entry, wait] = synthetic_entry_and_wait(core);
                     producer.observe(&entry).unwrap();
                     producer.observe(&wait).unwrap();
@@ -2038,7 +2101,7 @@ mod tests {
 
     #[test]
     fn stopped_only_repeated_wait_fetch_does_not_finish() {
-        let mut producer = Producer::new(WFI, RESUME);
+        let mut producer = Producer::new(WFI, RESUME, false);
         feed_through_repeated_wait(&mut producer, Core::Primary, false); producer.fetched(Core::Primary, WFI, 43);
         feed_through_repeated_wait(&mut producer, Core::Secondary, false);
         let raw = serde_json::json!({"enabled":true,"violation":null,"records":[
@@ -2064,7 +2127,7 @@ mod tests {
 
     #[test]
     fn journal_overflow_and_immutable_writes_refuse() {
-        let mut producer = Producer::new(WFI, RESUME);
+        let mut producer = Producer::new(WFI, RESUME, false);
         let overflow = serde_json::json!({"enabled":true,"violation":"record limit","records":[]});
         assert!(inspect_watch(&overflow, &mut 0, &[], &mut producer).is_err());
         for source in ["cpu-write", "host-write", "model-bus-write"] {
@@ -2078,7 +2141,7 @@ mod tests {
 
     #[test]
     fn only_source_code_and_interfaces_are_immutable() {
-        let mut producer = Producer::new(WFI, RESUME);
+        let mut producer = Producer::new(WFI, RESUME, false);
         for physical in [0x820f24, 0x8297f0, 0x8297f4, 0x828580] {
             let write = serde_json::json!({"enabled":true,"violation":null,"records":[
                 {"source":"cpu-write","physical":physical,"size":4,"core":0,"pc":0x662e60,"instructions":6502046}
