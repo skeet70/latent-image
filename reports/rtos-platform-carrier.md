@@ -1,48 +1,40 @@
-# Aggregate RTOS platform carrier and fit result
+# Aggregate RTOS platform carrier: fit and placement
 
-`replacement/rtos_platform` declares the retired-carrier union of the source-reviewed groups that have a live-placement increment: S1, S2, S3a, S3b, S3c, own-first, semaphore, fixed-pool, task records and the global-lock roots and helpers. The union is the stock extents of those groups, not their native scratch. `carriers.json` records the stock extents, the fixed entry addresses and veneer symbols, the retained/owned absolute callees and the emitted demand of every whole function section.
+`replacement/rtos_platform` declares the retired-carrier union of the source-reviewed live-placement groups: S1, S2, S3a, S3b, S3c, own-first, semaphore, fixed-pool, task records and the global-lock roots and helpers. The union is the stock extents of those groups, not their native scratch. `carriers.json` records the stock extents, the fixed entry addresses and veneer symbols, the retained/owned absolute callees and the emitted demand of every whole function section.
 
-## Fit
+## Fit passes after the fixed-pool factoring
 
-The union has enough total bytes but is too fragmented for three fixed-pool bodies.
+The fixed-pool author's `db90918b` replaces the shared `.text.fp_bodies` section with whole-function sections, all at most 672 bytes, and factors the broad `inline(always)` at real boundaries (`release_locked` retained). The aggregate demand list was regenerated from the new A and B symbol tables.
 
 | Fact | A | B |
 | --- | --- | --- |
 | carrier extents | 81 | 81 |
 | total carrier bytes | 16,668 (`0x411c`) | 16,676 (`0x411c`) |
-| emitted whole-section demand | 15,916 (`0x3e2c`) | 16,024 |
+| emitted whole-section demand | 15,980 | 16,004 |
 | largest entry-free carrier run | 672 (`0x2a0`) | 672 (`0x2a0`) |
-| largest emitted section | 964 (`0x3c4`) | 980 (`0x3d4`) |
+| largest emitted section | 588 (`0x24c`, `admit`) | 588 |
 
-The largest section is `xm1_rtos_fixed_pool_timed_get_body`. The next two, `xm1_rtos_fixed_pool_get_body` (772/788) and `xm1_rtos_fixed_pool_release_body` (740/756), also exceed 672. The exact deficit is 292 bytes (`0x124`) in A and 308 (`0x134`) in B for the timed body; the three bodies together exceed the largest run by 1,064 bytes in A and 1,092 in B.
+`//replacement/rtos_platform:stage-platform -- fit CARRIERS` reports `fits` for both domains and exits 0. The task-record `0x11c` create body is well inside the 672-byte run and needs no mid-function split.
 
-The largest run is the fixed-pool timed extent after its four-byte entry veneer (`0x4b818..0x4bab8` A, `0xdb7d8..0xdba78` B). Placing the body at the entry instead of a veneer raises the run to `0x2a4` (676 bytes), which still does not hold the timed body. Every other carrier extent is shorter or is split by a caller-visible entry at the same scale. The total slack is 752 bytes in A and 652 in B, so the failure is fragmentation, not total supply.
+The fixed-pool frame demand from `b143abab` (`private-data/scratch/RtosFixedPoolsSections/section-frames.json`, SHA-256 `d0bf22c6…46f7b19`) is local/worst-case owned-chain bytes: admit 24/24, get 56/64, delete_pool 56/56, release 40/72, release_locked 32/32, create_pool 32/32, poll_unchecked 40/48, resume 8/8, take 8/8, poll 32/40, timed_entry 96/160, get_entry 96/160, poll_entry 64/104, unchecked_entry 64/112, create_entry 64/96, release_entry 64/136, delete_entry 64/120. Owned edges: get/poll/poll_unchecked to take; release to release_locked; every entry to admit plus its core; get and timed entry also to resume. Retained stock calls are outside the owned emitted chain.
 
-The fixed-pool adapter currently places all of its bodies in one `.text.fp_bodies` input section, so the platform link sees a single section of about `0x10b8` bytes, not the per-symbol sizes above. Per-function sections are a prerequisite to any scatter. Even after that split, the three bodies above exceed the largest run, so the fit table is the optimistic bound and the actual link is worse.
+## Placement does not converge
 
-`//replacement/rtos_platform:stage-platform -- fit CARRIERS` reports the deficit and exits 1. The manual `//replacement/rtos_platform:platform-a` link fails before producing an image; no platform symbol map exists.
+The aggregate link still produces no image. `ld.lld --enable-non-contiguous-regions` reports `address assignment did not converge` for both domains with the 82 entry-free carrier regions, and still fails after dropping runs below 64 bytes (56 regions). The failure is the linker's spill search over many small non-contiguous regions, not a physical fit: the total supply exceeds the demand by 688 bytes in A and 672 in B, and every section fits an individual run.
 
-## Why the union cannot be merged further
+The manual `//replacement/rtos_platform:platform-a` and `:platform-b` targets are retained as the failing attempt. The generated `platform-*.ld` and `veneer-*.S` are the declared scatter; they are not a linked artifact.
 
-Adjacent extents were checked for a veneer-free run large enough for the timed body. The largest candidates are the S3b activate/cancel/exit cluster (`0x44f2c..0x454f0`, `0x5c4`), the S3b wake/cancel-wake cluster (`0x46004..0x46534`, `0x530`), the S3c suspend/resume cluster (`0x46a00..0x46e48`, `0x448`) and the fixed-pool timed/release pair (`0x4b814..0x4bd4c`, `0x538`). Each contains caller-visible root entries at the interior boundaries, so the largest veneer-free run inside them is `0x1c4`, `0x1fc`, `0x280` and `0x2a0`. The S2 `select`/`irq_tail` and S1 `prepare` entries are interior and could drop their veneers, but the merged S2 run is `0x154` and the S1 find/prepare run is `0x5c`, so that does not change the result. The loader tail after the last carrier and the gaps between extents are not retired and are not used.
+## Next step
 
-## Options
-
-1. Split the three fixed-pool bodies at real function boundaries. The shared admission, allocator and timeout tails can become separate whole functions; each resulting section must be at most 672 bytes. This is the smallest change and does not move another subsystem's carrier. The task-record report already accepts a source-level split at a real boundary.
-2. Add a larger retired carrier to the declared union. The general-heap carriers (`0x89cde4..0x89d4f8`, `0x714`; `0x89da64..0x89dfc0`, `0x55c`) and the interface/primary initializer carriers (`0x40430..0x40ab0`, `0x680`) are large enough. Each belongs to another cutover, so composing it needs that artifact's bodies or a superseding cutover and a parent decision; a bare carrier would overwrite the other artifact's code.
-3. Keep the union but reduce the demand below the fragmentation limit. The three fixed-pool bodies are the only sections over 672 bytes, so option 1 is the direct form of this.
+Place the whole sections deterministically instead of asking lld to search: link the extracted objects relocatably, bin-pack the named `.text.*`/`.rodata.*` sections into the carrier runs (first-fit decreasing), emit an explicit `*(<section>)` list per run, and link with relocations resolved by lld and no spill. This preserves whole functions and the recorded entry/veneer addresses. The alternative is a linker that converges on the same region map; no unproved carrier is added.
 
 ## Implemented mechanism
 
-- `Union.hs` parses `carriers.json`, splits each carrier at its entry words, and checks fit. A section larger than the largest entry-free run is a typed `CarrierDeficit`; total demand over total supply is a `TotalDeficit`.
+- `Union.hs` parses `carriers.json`, splits each carrier at its entry words, and checks fit.
 - `Artifact.hs` admits a linked image by checking the fit, every veneer symbol at its stock address and size 4, every whole section inside one entry-free run, every demand symbol at its recorded size, no data symbols, zero-or-fill slack words, direct branches to declared owned/retained addresses and a frame walk over the owned runs. It stages by replacing each carrier extent in both loaders, rebuilding the container, confining every changed DAT byte to the union extents and the main checksum, checking the staged loaders and restoring the canonical DAT.
 - `StageMain.hs` exposes `fit` and `stage`; `Tests.hs` exercises stage, restore and confinement over a synthetic fitted carrier and refuses a demand deficit, a moved entry, a demand-size mismatch, a data symbol, a nonzero slack word, overlapping carriers and a change outside the union. The fixture is the pattern-byte container; no firmware content is stored.
-- `//replacement/rtos_platform:platform-tests` passes. The group rlibs and the platform root build; the platform ELF is `manual` because the declared union does not fit.
-
-## Task-record answer
-
-The `0x11c` task-create body is smaller than the 672-byte largest run and fits the pooled union when the union itself fits. The task-record stock extents are declared carriers and the linker uses whole `.text.task_create_body`/`.text.task_delete_body` sections with entry veneers at A `0x4d094`/`0x4d1a4` and B `0xdd054`/`0xdd168`; no mid-function split is needed. It cannot be admitted live until the fixed-pool fragmentation is resolved, because the platform image as a whole does not fit.
+- `//replacement/rtos_platform:platform-tests` passes; the group rlibs and platform root build. `//replacement/rtos_platform:all` builds; the platform ELF is `manual` because placement does not converge.
 
 ## Limits
 
-No platform image, symbol map, candidate DAT or subsystem-native comparison is claimed. The fit is host analysis of the recorded stock extents and emitted symbol sizes, not a link. The frame walk records its own external-call premises rather than claiming full closure. No live, system, MPU, timer, cross-core or hardware behavior is established. The cyclic family is not in this union; its reviewed carrier is native-only and awaits parent clearance.
+No platform image, symbol map, candidate DAT, staged loader or subsystem-native comparison is claimed. The fit is host analysis of the recorded stock extents and emitted symbol sizes. The frame walk records its own external-call premises rather than claiming full closure. No live, system, MPU, timer, cross-core or hardware behavior is established. The cyclic family, IRQ-control root and S3d are excluded/retained as directed.

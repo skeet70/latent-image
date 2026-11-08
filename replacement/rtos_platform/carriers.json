@@ -1680,96 +1680,6 @@
      "bytes": 72
     },
     {
-     "group": "fixed-pool",
-     "symbol": "xm1_rtos_fixed_pool_poll_unchecked",
-     "bytes": 4
-    },
-    {
-     "group": "fixed-pool",
-     "symbol": "xm1_rtos_fixed_pool_get",
-     "bytes": 4
-    },
-    {
-     "group": "fixed-pool",
-     "symbol": "xm1_rtos_fixed_pool_poll",
-     "bytes": 4
-    },
-    {
-     "group": "fixed-pool",
-     "symbol": "xm1_rtos_fixed_pool_timed_get",
-     "bytes": 4
-    },
-    {
-     "group": "fixed-pool",
-     "symbol": "xm1_rtos_fixed_pool_release",
-     "bytes": 4
-    },
-    {
-     "group": "fixed-pool",
-     "symbol": "xm1_rtos_fixed_pool_create",
-     "bytes": 4
-    },
-    {
-     "group": "fixed-pool",
-     "symbol": "xm1_rtos_fixed_pool_delete",
-     "bytes": 4
-    },
-    {
-     "group": "fixed-pool",
-     "symbol": "_RNvCs8O56LNNgKAo_25xm1_rtos_fixed_pool_stage11create_body",
-     "bytes": 200
-    },
-    {
-     "group": "fixed-pool",
-     "symbol": "_RNvCs8O56LNNgKAo_25xm1_rtos_fixed_pool_stage11delete_body",
-     "bytes": 416
-    },
-    {
-     "group": "fixed-pool",
-     "symbol": "xm1_rtos_fixed_pool_create_body",
-     "bytes": 92
-    },
-    {
-     "group": "fixed-pool",
-     "symbol": "xm1_rtos_fixed_pool_delete_body",
-     "bytes": 108
-    },
-    {
-     "group": "fixed-pool",
-     "symbol": "xm1_rtos_fixed_pool_get_body",
-     "bytes": 772
-    },
-    {
-     "group": "fixed-pool",
-     "symbol": "xm1_rtos_fixed_pool_poll_body",
-     "bytes": 436
-    },
-    {
-     "group": "fixed-pool",
-     "symbol": "xm1_rtos_fixed_pool_poll_unchecked_body",
-     "bytes": 436
-    },
-    {
-     "group": "fixed-pool",
-     "symbol": "xm1_rtos_fixed_pool_release_body",
-     "bytes": 740
-    },
-    {
-     "group": "fixed-pool",
-     "symbol": "xm1_rtos_fixed_pool_timed_get_body",
-     "bytes": 964
-    },
-    {
-     "group": "fixed-pool",
-     "symbol": "_RNvNtNtCs8O56LNNgKAo_25xm1_rtos_fixed_pool_stage10fixed_pool2id6target",
-     "bytes": 80
-    },
-    {
-     "group": "fixed-pool",
-     "symbol": "_RNvXsp_NtCsjw6Ar5Xz5I4_4core6resultINtB5_6ResultNtNtNtCs8O56LNNgKAo_25xm1_rtos_fixed_pool_stage10fixed_pool2id6PoolIdNtNtBO_6status10PoolStatusENtNtNtB7_3ops9try_trait3Try6branchBQ_",
-     "bytes": 36
-    },
-    {
      "group": "task-records",
      "symbol": "xm1_rtos_task_create",
      "bytes": 4
@@ -1823,6 +1733,126 @@
      "group": "global-lock",
      "symbol": "xm1_rtos_global_lock_observe_body",
      "bytes": 32
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "xm1_rtos_fixed_pool_poll_unchecked",
+     "bytes": 4
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "xm1_rtos_fixed_pool_get",
+     "bytes": 4
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "xm1_rtos_fixed_pool_poll",
+     "bytes": 4
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "xm1_rtos_fixed_pool_timed_get",
+     "bytes": 4
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "xm1_rtos_fixed_pool_release",
+     "bytes": 4
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "xm1_rtos_fixed_pool_create",
+     "bytes": 4
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "xm1_rtos_fixed_pool_delete",
+     "bytes": 4
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "_RINvNtNtCs8O56LNNgKAo_25xm1_rtos_fixed_pool_stage10fixed_pool3get14poll_uncheckedNtB6_3CpuEB6_",
+     "bytes": 180
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "_RINvNtNtCs8O56LNNgKAo_25xm1_rtos_fixed_pool_stage10fixed_pool3get3getNtB6_3CpuEB6_",
+     "bytes": 520
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "_RINvNtNtCs8O56LNNgKAo_25xm1_rtos_fixed_pool_stage10fixed_pool3get4pollNtB6_3CpuEB6_",
+     "bytes": 128
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "_RINvNtNtCs8O56LNNgKAo_25xm1_rtos_fixed_pool_stage10fixed_pool3get6resumeNtB6_3CpuEB6_",
+     "bytes": 176
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "_RINvNtNtCs8O56LNNgKAo_25xm1_rtos_fixed_pool_stage10fixed_pool4take4takeNtB6_3CpuEB6_",
+     "bytes": 148
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "_RINvNtNtCs8O56LNNgKAo_25xm1_rtos_fixed_pool_stage10fixed_pool6create11create_poolNtB6_3CpuEB6_",
+     "bytes": 184
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "_RINvNtNtCs8O56LNNgKAo_25xm1_rtos_fixed_pool_stage10fixed_pool7release14release_lockedNtB6_3CpuEB6_",
+     "bytes": 256
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "_RINvNtNtCs8O56LNNgKAo_25xm1_rtos_fixed_pool_stage10fixed_pool7release7releaseNtB6_3CpuEB6_",
+     "bytes": 288
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "_RINvNtNtCs8O56LNNgKAo_25xm1_rtos_fixed_pool_stage10fixed_pool8teardown11delete_poolNtB6_3CpuEB6_",
+     "bytes": 416
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "_RINvNtNtCs8O56LNNgKAo_25xm1_rtos_fixed_pool_stage10fixed_pool9admission5admitNCNvB6_8admitted0EB6_",
+     "bytes": 588
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "xm1_rtos_fixed_pool_create_body",
+     "bytes": 180
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "xm1_rtos_fixed_pool_delete_body",
+     "bytes": 144
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "xm1_rtos_fixed_pool_get_body",
+     "bytes": 268
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "xm1_rtos_fixed_pool_poll_body",
+     "bytes": 216
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "xm1_rtos_fixed_pool_poll_unchecked_body",
+     "bytes": 200
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "xm1_rtos_fixed_pool_release_body",
+     "bytes": 176
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "xm1_rtos_fixed_pool_timed_get_body",
+     "bytes": 276
     }
    ]
   },
@@ -3498,96 +3528,6 @@
      "bytes": 72
     },
     {
-     "group": "fixed-pool",
-     "symbol": "_RNvCs8O56LNNgKAo_25xm1_rtos_fixed_pool_stage11create_body",
-     "bytes": 200
-    },
-    {
-     "group": "fixed-pool",
-     "symbol": "_RNvCs8O56LNNgKAo_25xm1_rtos_fixed_pool_stage11delete_body",
-     "bytes": 416
-    },
-    {
-     "group": "fixed-pool",
-     "symbol": "xm1_rtos_fixed_pool_create_body",
-     "bytes": 96
-    },
-    {
-     "group": "fixed-pool",
-     "symbol": "xm1_rtos_fixed_pool_delete_body",
-     "bytes": 108
-    },
-    {
-     "group": "fixed-pool",
-     "symbol": "xm1_rtos_fixed_pool_get_body",
-     "bytes": 788
-    },
-    {
-     "group": "fixed-pool",
-     "symbol": "xm1_rtos_fixed_pool_poll_body",
-     "bytes": 452
-    },
-    {
-     "group": "fixed-pool",
-     "symbol": "xm1_rtos_fixed_pool_poll_unchecked_body",
-     "bytes": 456
-    },
-    {
-     "group": "fixed-pool",
-     "symbol": "xm1_rtos_fixed_pool_release_body",
-     "bytes": 756
-    },
-    {
-     "group": "fixed-pool",
-     "symbol": "xm1_rtos_fixed_pool_timed_get_body",
-     "bytes": 980
-    },
-    {
-     "group": "fixed-pool",
-     "symbol": "_RNvNtNtCs8O56LNNgKAo_25xm1_rtos_fixed_pool_stage10fixed_pool2id6target",
-     "bytes": 80
-    },
-    {
-     "group": "fixed-pool",
-     "symbol": "_RNvXsp_NtCsjw6Ar5Xz5I4_4core6resultINtB5_6ResultNtNtNtCs8O56LNNgKAo_25xm1_rtos_fixed_pool_stage10fixed_pool2id6PoolIdNtNtBO_6status10PoolStatusENtNtNtB7_3ops9try_trait3Try6branchBQ_",
-     "bytes": 36
-    },
-    {
-     "group": "fixed-pool",
-     "symbol": "xm1_rtos_fixed_pool_poll_unchecked",
-     "bytes": 4
-    },
-    {
-     "group": "fixed-pool",
-     "symbol": "xm1_rtos_fixed_pool_get",
-     "bytes": 4
-    },
-    {
-     "group": "fixed-pool",
-     "symbol": "xm1_rtos_fixed_pool_poll",
-     "bytes": 4
-    },
-    {
-     "group": "fixed-pool",
-     "symbol": "xm1_rtos_fixed_pool_timed_get",
-     "bytes": 4
-    },
-    {
-     "group": "fixed-pool",
-     "symbol": "xm1_rtos_fixed_pool_release",
-     "bytes": 4
-    },
-    {
-     "group": "fixed-pool",
-     "symbol": "xm1_rtos_fixed_pool_create",
-     "bytes": 4
-    },
-    {
-     "group": "fixed-pool",
-     "symbol": "xm1_rtos_fixed_pool_delete",
-     "bytes": 4
-    },
-    {
      "group": "task-records",
      "symbol": "xm1_rtos_task_create",
      "bytes": 4
@@ -3641,6 +3581,126 @@
      "group": "global-lock",
      "symbol": "xm1_rtos_global_lock_observe_body",
      "bytes": 32
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "_RINvNtNtCs8O56LNNgKAo_25xm1_rtos_fixed_pool_stage10fixed_pool3get14poll_uncheckedNtB6_3CpuEB6_",
+     "bytes": 180
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "_RINvNtNtCs8O56LNNgKAo_25xm1_rtos_fixed_pool_stage10fixed_pool3get3getNtB6_3CpuEB6_",
+     "bytes": 520
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "_RINvNtNtCs8O56LNNgKAo_25xm1_rtos_fixed_pool_stage10fixed_pool3get4pollNtB6_3CpuEB6_",
+     "bytes": 128
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "_RINvNtNtCs8O56LNNgKAo_25xm1_rtos_fixed_pool_stage10fixed_pool3get6resumeNtB6_3CpuEB6_",
+     "bytes": 176
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "_RINvNtNtCs8O56LNNgKAo_25xm1_rtos_fixed_pool_stage10fixed_pool4take4takeNtB6_3CpuEB6_",
+     "bytes": 148
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "_RINvNtNtCs8O56LNNgKAo_25xm1_rtos_fixed_pool_stage10fixed_pool6create11create_poolNtB6_3CpuEB6_",
+     "bytes": 184
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "_RINvNtNtCs8O56LNNgKAo_25xm1_rtos_fixed_pool_stage10fixed_pool7release14release_lockedNtB6_3CpuEB6_",
+     "bytes": 256
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "_RINvNtNtCs8O56LNNgKAo_25xm1_rtos_fixed_pool_stage10fixed_pool7release7releaseNtB6_3CpuEB6_",
+     "bytes": 288
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "_RINvNtNtCs8O56LNNgKAo_25xm1_rtos_fixed_pool_stage10fixed_pool8teardown11delete_poolNtB6_3CpuEB6_",
+     "bytes": 416
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "_RINvNtNtCs8O56LNNgKAo_25xm1_rtos_fixed_pool_stage10fixed_pool9admission5admitNCNvB6_8admitted0EB6_",
+     "bytes": 588
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "xm1_rtos_fixed_pool_create_body",
+     "bytes": 184
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "xm1_rtos_fixed_pool_delete_body",
+     "bytes": 144
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "xm1_rtos_fixed_pool_get_body",
+     "bytes": 268
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "xm1_rtos_fixed_pool_poll_body",
+     "bytes": 216
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "xm1_rtos_fixed_pool_poll_unchecked_body",
+     "bytes": 200
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "xm1_rtos_fixed_pool_release_body",
+     "bytes": 176
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "xm1_rtos_fixed_pool_timed_get_body",
+     "bytes": 276
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "xm1_rtos_fixed_pool_poll_unchecked",
+     "bytes": 4
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "xm1_rtos_fixed_pool_get",
+     "bytes": 4
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "xm1_rtos_fixed_pool_poll",
+     "bytes": 4
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "xm1_rtos_fixed_pool_timed_get",
+     "bytes": 4
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "xm1_rtos_fixed_pool_release",
+     "bytes": 4
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "xm1_rtos_fixed_pool_create",
+     "bytes": 4
+    },
+    {
+     "group": "fixed-pool",
+     "symbol": "xm1_rtos_fixed_pool_delete",
+     "bytes": 4
     }
    ]
   }
