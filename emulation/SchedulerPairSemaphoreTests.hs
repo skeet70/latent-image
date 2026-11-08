@@ -232,7 +232,7 @@ timedExpiryCall = callOfTask taskA DomainA timedAddress (SemaphoreSemantic Semap
   [Written (Address waitA) 4 (fromIntegral (-50 :: Int))] (traceOf (withLr 0x47dd0) [saveBoundary 0x47dd0, timerInsertBoundary, expiryBoundary] Returned)
 
 pendingForever :: Word32 -> Word32 -> Pending
-pendingForever timeout stackWord = Pending (SemaphoreSemantic SemaphoreTimedWait) DomainA [1, timeout, 0, 0] before (Just terminal) taskA 0x7000 0x13 timedAddress 50 (Just 0x93) (Just 50) 0
+pendingForever timeout stackWord = Pending (SemaphoreSemantic SemaphoreTimedWait) DomainA [1, timeout, 0, 0] before (Just terminal) taskA 0x7000 0x13 timedAddress 5 (Just 0x93) (Just 50) 0
  where
   before = M.fromList [(Address 0x7000, stackWord)]
   terminal = M.union (baseBefore 0 5 taskA) $ M.fromList

@@ -321,6 +321,7 @@ checkWait call entryDomain object slot timed trace = do
         expect FamilyLifetime (semaphoreR0 call `elem` [0, statusReleased, statusTimeout])
         wordAt wait (semaphoreAfter call) >>= expect FamilyLifetime . (== semaphoreR0 call)
         byteAt (task + 0x0c) (semaphoreAfter call) >>= expect FamilyLifetime . (\state -> state .&. 1 /= 0)
+        when (timed && signedWord timeout < 0) $ expect FamilyLifetime (semaphoreR0 call /= statusTimeout)
         when (semaphoreR0 call == 0) $ do
           wordAt (control + 0x0c) (semaphoreAfter call) >>= expect FamilyEffect . (== count)
 
@@ -354,17 +355,9 @@ checkTimer call witnesses trace service = do
       earlier witness = [insert | insert <- witnesses, timerKind insert == TimerInserted
         , timerEntry insert == timerEntry witness
         , timerArmedAt insert <= timerArmedAt witness]
-      armStart = case ownInserts of
-        (witness:_) -> timerArmedAt witness
-        [] -> case [timerArmedAt witness | witness <- witnesses, timerKind witness == TimerInserted
-                    , timerTask witness == task, timerArmedAt witness <= returnAt] of
-          [] -> 0
-          values -> minimum values
-      within witness = timerArmedAt witness >= armStart && timerArmedAt witness <= returnAt
-      inserts = ownInserts ++ [witness | witness <- witnesses, timerKind witness == TimerInserted
-        , timerTask witness == task, within witness]
       retire insert = [witness | witness <- witnesses, timerKind witness `elem` [TimerRemoved, TimerConsumed]
-        , timerEntry witness == timerEntry insert, timerArmedAt witness >= timerArmedAt insert]
+        , timerEntry witness == timerEntry insert, timerArmedAt witness >= timerArmedAt insert
+        , timerArmedAt witness <= returnAt]
       expiry = [witness | witness <- witnesses, timerKind witness == TimerConsumed
         , timerTask witness == task, not (null (earlier witness))]
       saved = any ((== FamilySaveKind) . familyBoundaryKind) history
@@ -377,12 +370,16 @@ checkTimer call witnesses trace service = do
     SemaphoreTimedWait -> do
       timeout <- argAt (semaphoreArguments call) 1
       let positive = signedWord timeout > 0
-      when (positive && saved) $ do
-        expect FamilyTimer (not (null inserts))
-        forM_ inserts $ \insert -> expect FamilyTimer (not (null (retire insert)))
+      if positive
+        then when saved $ do
+          expect FamilyTimer (not (null ownInserts))
+          forM_ ownInserts $ \insert -> expect FamilyTimer (not (null (retire insert)))
+        else expect FamilyTimer (null ownInserts && null ownEvents)
       let expired = semaphoreR0 call == statusTimeout && timeout /= 0
-      expect FamilyTimer (timeout == 0 || not expired || not (null ownInserts))
-      when expired $ expect FamilyTimer (not (null expiry))
+      when expired $ do
+        expect FamilyTimer positive
+        expect FamilyTimer (not (null ownInserts))
+        expect FamilyTimer (not (null expiry))
     SemaphoreSignal -> pure ()
     SemaphoreInterruptSignal -> pure ()
     SemaphoreDelete -> pure ()
