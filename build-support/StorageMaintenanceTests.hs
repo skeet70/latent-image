@@ -21,7 +21,7 @@ import System.Posix.Files (createLink, createSymbolicLink, setFileMode)
 import System.Posix.IO (OpenFileFlags (cloexec), OpenMode (ReadOnly, ReadWrite), closeFd, defaultFileFlags, openFd)
 import System.Posix.Process (executeFile)
 import System.Posix.Types (Fd (..))
-import System.Process (CreateProcess (..), StdStream (CreatePipe), createProcess, proc, readProcessWithExitCode, terminateProcess, waitForProcess)
+import System.Process (CreateProcess (..), StdStream (CreatePipe), createProcess, getProcessExitCode, proc, readProcessWithExitCode, terminateProcess, waitForProcess)
 
 foreign import ccall unsafe "flock" c_flock :: CInt -> CInt -> IO CInt
 foreign import ccall unsafe "mmap" c_mmap :: Ptr () -> CSize -> CInt -> CInt -> CInt -> CLong -> IO (Ptr ())
@@ -29,7 +29,7 @@ foreign import ccall unsafe "mmap" c_mmap :: Ptr () -> CSize -> CInt -> CInt -> 
 data AuditSummary = AuditSummary Bool [Integer]
 instance FromJSON AuditSummary where
   parseJSON = withObject "audit" $ \o -> do
-    verified <- o .: "protectedFilesVerified"
+    verified <- o .: "deletionScopeVerified"
     changes <- o .: "actualAvailableDelta"
     pure (AuditSummary verified (map snd (changes :: [(FilePath, Integer)])))
 
@@ -189,15 +189,11 @@ runFixtures argument = do
       withBinaryFile payload ReadWriteMode $ \handle -> do
         hSeek handle AbsoluteSeek (payloadBytes - 1)
         B.hPut handle "\1"
-      _ <- run executable False (bounded ["apply", "--plan", plan])
-      doesPathExist (root </> library) >>= \exists -> check exists "changed retained payload permitted deletion"
-      withBinaryFile payload ReadWriteMode $ \handle -> do
-        hSeek handle AbsoluteSeek (payloadBytes - 1)
-        B.hPut handle "\0"
       _ <- run executable True (bounded ["apply", "--plan", plan])
+      doesPathExist (root </> library) >>= \exists -> check (not exists) "compiler artifact retained after unrelated data update"
       withBinaryFile payload ReadMode $ \handle -> do
         hSeek handle AbsoluteSeek (payloadBytes - 1)
-        B.hGet handle 1 >>= \byte -> check (byte == "\0") "retained payload changed"
+        B.hGet handle 1 >>= \byte -> check (byte == "\1") "concurrent retained payload update changed"
     fresh "bounded-wide-snapshot" $ \root plan -> do
       let payloads = [(index, root </> "imports" </> replicate 80 'p' </> ("part-" ++ show index ++ replicate 110 'x' ++ ".bin")) | index <- [0 :: Int .. 8191]]
           bounded arguments = arguments ++ ["+RTS", "-M128m", "-RTS"]
@@ -205,12 +201,9 @@ runFixtures argument = do
       _ <- run executable True (bounded ["plan", "--cargo-target", root, "--output", plan])
       let (_, lastPayload) = last payloads
       put lastPayload "\254"
-      _ <- run executable False (bounded ["apply", "--plan", plan])
-      doesPathExist (root </> library) >>= \exists -> check exists "changed wide snapshot permitted deletion"
-      put lastPayload "\255"
       _ <- run executable True (bounded ["apply", "--plan", plan])
       forM_ payloads $ \(index, payload) ->
-        B.readFile payload >>= \byte -> check (byte == B.singleton (fromIntegral index)) "retained wide-snapshot payload changed"
+        B.readFile payload >>= \byte -> check (byte == (if payload == lastPayload then "\254" else B.singleton (fromIntegral index))) "retained wide-snapshot payload changed"
     fresh "nonunicode-filename" $ \root plan -> do
       let invalidPath = "imports/\xdcff.bin"
           protected = compilerFiles ++ protectedFiles ++ [invalidPath]
@@ -252,16 +245,31 @@ runFixtures argument = do
     fresh "stale" $ \root plan -> do
       makePlan executable root plan
       put (root </> "debug/deps/new-private-data.bin") "new consumer data"
-      expected <- snapshot root (compilerFiles ++ protectedFiles)
-      _ <- run executable False ["apply", "--plan", plan]
-      assertUnchanged root (compilerFiles ++ protectedFiles) expected
+      expected <- snapshot root protectedFiles
+      _ <- run executable True ["apply", "--plan", plan]
+      assertUnchanged root protectedFiles expected
       B.readFile (root </> "debug/deps/new-private-data.bin") >>= \bytes -> check (bytes == "new consumer data") "new protected data removed"
+      doesPathExist (root </> library) >>= \exists -> check (not exists) "unrelated added data prevented cleanup"
     fresh "changed" $ \root plan -> do
       makePlan executable root plan
       put (root </> library) "!<arch>\nchanged compiler artifact"
-      expected <- snapshot root (compilerFiles ++ protectedFiles)
-      _ <- run executable False ["apply", "--plan", plan]
-      assertUnchanged root (compilerFiles ++ protectedFiles) expected
+      expected <- B.readFile (root </> library)
+      _ <- run executable True ["apply", "--plan", plan]
+      B.readFile (root </> library) >>= \actual -> check (actual == expected) "changed compiler output was deleted"
+      doesPathExist (root </> (compilerFiles !! 1)) >>= \exists -> check (not exists) "unchanged compiler output was not reclaimed"
+    fresh "same-size-compiler-change" $ \root plan -> do
+      makePlan executable root plan
+      original <- B.readFile (root </> library)
+      let updated = B.init original <> "\0"
+      put (root </> library) updated
+      _ <- run executable True ["apply", "--plan", plan]
+      B.readFile (root </> library) >>= \actual -> check (actual == updated) "same-size compiler update was deleted"
+      doesPathExist (root </> (compilerFiles !! 1)) >>= \exists -> check (not exists) "same-size update blocked other approved compiler outputs"
+    fresh "missing-compiler-candidate" $ \root plan -> do
+      makePlan executable root plan
+      removeFile (root </> library)
+      _ <- run executable True ["apply", "--plan", plan]
+      doesPathExist (root </> (compilerFiles !! 1)) >>= \exists -> check (not exists) "missing compiler output blocked other approved removals"
     fresh "wrong-header" $ \root plan -> do
       let file = "debug/deps/libfixture-" ++ hashSuffix ++ ".rmeta"
       put (root </> file) "firmware data with a compiler-shaped name"
@@ -312,50 +320,75 @@ runFixtures argument = do
       pure ()
     fresh "active" $ \root plan -> do
       makePlan executable root plan
-      expected <- snapshot root (compilerFiles ++ protectedFiles)
+      expected <- snapshot root protectedFiles
       withChild ((proc "sh" ["-c", "printf ready; exec sleep 60"]) { cwd = Just root }) $ do
         inventory <- run executable True ["inventory", "--cargo-target", root]
         case eitherDecodeStrict' inventory of
           Right (InventorySummary available users) -> check (length available == 1 && any (not . null) users) "inventory omitted active user or measured space"
           Left err -> ioError (userError err)
-        _ <- run executable False ["apply", "--plan", plan]
-        assertUnchanged root (compilerFiles ++ protectedFiles) expected
-    fresh "mapped-consumer" $ \root plan -> do
+        _ <- run executable True ["apply", "--plan", plan]
+        assertUnchanged root protectedFiles expected
+        doesPathExist (root </> library) >>= \exists -> check (not exists) "an idle process working directory prevented cleanup"
+    forM_ ["mapped-consumer", "mapped-\n-consumer"] $ \name -> fresh name $ \root plan -> do
       makePlan executable root plan
-      expected <- snapshot root (compilerFiles ++ protectedFiles)
+      expected <- B.readFile (root </> library)
       self <- getExecutablePath
       withChild ((proc self ["--mapped-fixture", root </> library]) {cwd = Just workspace}) $ do
-        _ <- run executable False ["apply", "--plan", plan]
-        assertUnchanged root (compilerFiles ++ protectedFiles) expected
+        _ <- run executable True ["apply", "--plan", plan]
+        B.readFile (root </> library) >>= \actual -> check (actual == expected) "mapped compiler output was deleted"
+        doesPathExist (root </> (compilerFiles !! 1)) >>= \exists -> check (not exists) "unused compiler output was retained beside a mapped output"
+    fresh "open-consumer" $ \root plan -> do
+      makePlan executable root plan
+      expected <- B.readFile (root </> library)
+      withChild (proc "sh" ["-c", "exec 3<\"$1\"; printf ready; exec sleep 60", "reader", root </> library]) $ do
+        _ <- run executable True ["apply", "--plan", plan]
+        B.readFile (root </> library) >>= \actual -> check (actual == expected) "open compiler output was deleted"
     fresh "relative-env-λ" $ \root plan -> do
       makePlan executable root plan
       environment <- getEnvironment
       let command = (proc "sh" ["-c", "printf ready; exec sleep 60"]) { cwd = Just workspace, env = Just (("CARGO_TARGET_DIR", takeFileName root) : filter ((/= "CARGO_TARGET_DIR") . fst) environment) }
       withChild command $ do
-        _ <- run executable False ["apply", "--plan", plan]
-        doesPathExist (root </> library) >>= \exists -> check exists "relative environment target was not protected"
+        _ <- run executable True ["apply", "--plan", plan]
+        doesPathExist (root </> library) >>= \exists -> check (not exists) "an idle target environment prevented cleanup"
     forM_ [".cargo-lock", ".cargo-build-lock", ".cargo-artifact-lock"] $ \lockName ->
       fresh ("locked-" ++ lockName) $ \root plan -> do
         let held = root </> "debug" </> lockName
         put held ""
         makePlan executable root plan
-        expected <- snapshot root (compilerFiles ++ protectedFiles)
-        bracket (openFd held ReadWrite defaultFileFlags {cloexec = True}) closeFd $ \(Fd fd) -> do
+        child <- bracket (openFd held ReadWrite defaultFileFlags {cloexec = True}) closeFd $ \(Fd fd) -> do
           result <- c_flock fd 6
           check (result == 0) "cannot acquire fixture Cargo lock"
-          let blockedPlan = plan ++ ".locked"
-          _ <- run executable False ["plan", "--cargo-target", root, "--output", blockedPlan]
-          doesPathExist blockedPlan >>= \exists -> check (not exists) "planning published a manifest while Cargo held a lock"
-          -- The lock holder is outside this probe's PID namespace.
-          _ <- run "unshare" False
-            ["--pid", "--fork", "--mount-proc", executable, "apply", "--plan", plan]
-          assertUnchanged root (compilerFiles ++ protectedFiles) expected
+          (_, _, _, waiting) <- createProcess (proc "unshare" ["--pid", "--fork", "--mount-proc", executable, "apply", "--plan", plan])
+          threadDelay 200_000
+          getProcessExitCode waiting >>= \status -> check (status == Nothing) "cleanup did not queue behind the Cargo writer"
+          doesPathExist (root </> library) >>= \exists -> check exists "cleanup unlinked compiler output while Cargo held its guard"
+          pure waiting
+        waitForProcess child >>= \status -> check (status == ExitSuccess) "queued cleanup did not finish after Cargo released its guard"
+        doesPathExist (root </> library) >>= \exists -> check (not exists) "queued cleanup did not reclaim compiler output"
     fresh "multi-a" $ \root plan -> do
       let other = workspace </> "multi-b"
       fixture other
       _ <- run executable True ["plan", "--cargo-target", root, "--cargo-target", other, "--output", plan]
       put (other </> "reports/new.json") "preserve"
-      expected <- snapshot root (compilerFiles ++ protectedFiles)
-      _ <- run executable False ["apply", "--plan", plan]
-      assertUnchanged root (compilerFiles ++ protectedFiles) expected
+      expected <- snapshot root protectedFiles
+      _ <- run executable True ["apply", "--plan", plan]
+      assertUnchanged root protectedFiles expected
+      B.readFile (other </> "reports/new.json") >>= \actual -> check (actual == "preserve") "other root application update was changed"
+    fresh "new-profile-guard" $ \root plan -> do
+      makePlan executable root plan
+      put (root </> "debug/.cargo-build-lock") ""
+      expected <- snapshot root (compilerFiles ++ protectedFiles ++ [fingerprint])
+      _ <- run executable True ["apply", "--plan", plan]
+      assertUnchanged root (compilerFiles ++ protectedFiles ++ [fingerprint]) expected
+    fresh "new-unit-outside-plan" $ \root plan -> do
+      makePlan executable root plan
+      let marker = "debug/.fingerprint/newunit-" ++ hashSuffix ++ "/lib-newunit"
+          output = "debug/deps/libnewunit-" ++ hashSuffix ++ ".rlib"
+      put (root </> marker) "0123456789abcdef"
+      put (root </> (marker ++ ".json")) "{\"rustc\":1,\"features\":\"[]\",\"target\":2,\"profile\":3,\"path\":4,\"deps\":[]}"
+      put (root </> output) "!<arch>\nnew unreviewed compiler artifact"
+      expected <- snapshot root [marker, output]
+      _ <- run executable True ["apply", "--plan", plan]
+      assertUnchanged root [marker, output] expected
+      doesPathExist (root </> library) >>= \exists -> check (not exists) "new unit prevented reviewed compiler cleanup"
   putStrLn "storage maintenance behavioral tests passed"
