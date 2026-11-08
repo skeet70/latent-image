@@ -8,6 +8,9 @@
 #[path = "../../rtos_layout/src/lib.rs"]
 pub mod layout;
 
+#[path = "timeout.rs"]
+pub mod timeout;
+
 use layout::{
     Domain, DomainId, GuestAddress, KernelContext, LockRecord, Priority, ReadyHead, Task,
     TaskDefinition, TaskFlags, TaskState, WaitBlock, WaitQueue,
@@ -160,6 +163,8 @@ pub trait Machine {
     fn save_and_mask(&self) -> InterruptState;
     fn restore(&self, state: InterruptState);
     fn masked(&self) -> bool;
+    fn irq_enable(&self);
+    fn irq_disable(&self);
 
     /// The record's acquire function. Stock spins and always reports success.
     fn lock_acquire(&self, lock: LockRecord) -> bool;

@@ -110,6 +110,32 @@ impl Machine for Cpu {
     }
 
     #[inline(always)]
+    fn irq_enable(&self) {
+        unsafe {
+            asm!(
+                "mrs r3, cpsr",
+                "bic r3, r3, #0x80",
+                "msr cpsr_fc, r3",
+                out("r3") _,
+                options(nostack, preserves_flags),
+            )
+        };
+    }
+
+    #[inline(always)]
+    fn irq_disable(&self) {
+        unsafe {
+            asm!(
+                "mrs r3, cpsr",
+                "orr r3, r3, #0x80",
+                "msr cpsr_fc, r3",
+                out("r3") _,
+                options(nostack, preserves_flags),
+            )
+        };
+    }
+
+    #[inline(always)]
     fn lock_acquire(&self, lock: LockRecord) -> bool {
         let acquire: unsafe extern "C" fn(u32) -> u32 =
             unsafe { core::mem::transmute(load(lock.acquire())) };
@@ -234,6 +260,20 @@ pub extern "C" fn s3d_delay_body(delay_ticks: i32) -> i32 {
     delay(&Cpu, EXECUTING, Ticks(delay_ticks))
 }
 
+#[no_mangle]
+#[inline(never)]
+#[link_section = ".text.scheduler_timeout_body"]
+pub extern "C" fn xm1_rtos_scheduler_timeout_body(task: u32) -> i32 {
+    s3d::timeout::timeout(&Cpu, EXECUTING, Task(GuestAddress(task)))
+}
+
+#[no_mangle]
+#[inline(never)]
+#[link_section = ".text.scheduler_delay_completion_body"]
+pub extern "C" fn xm1_rtos_scheduler_delay_completion_body(task: u32) -> i32 {
+    s3d::timeout::delay(&Cpu, EXECUTING, Task(GuestAddress(task)))
+}
+
 core::arch::global_asm!(
     ".section .text.s3d_terminate_entry,\"ax\",%progbits",
     ".global s3d_terminate",
@@ -259,6 +299,14 @@ core::arch::global_asm!(
     ".global s3d_delay",
     ".type s3d_delay, %function",
     "s3d_delay: b s3d_delay_body",
+    ".section .text.scheduler_timeout_entry,\"ax\",%progbits",
+    ".global xm1_rtos_scheduler_timeout",
+    ".type xm1_rtos_scheduler_timeout, %function",
+    "xm1_rtos_scheduler_timeout: b xm1_rtos_scheduler_timeout_body",
+    ".section .text.scheduler_delay_completion_entry,\"ax\",%progbits",
+    ".global xm1_rtos_scheduler_delay_completion",
+    ".type xm1_rtos_scheduler_delay_completion, %function",
+    "xm1_rtos_scheduler_delay_completion: b xm1_rtos_scheduler_delay_completion_body",
 );
 
 #[cfg(all(target_arch = "arm", not(test), not(feature = "component")))]

@@ -5,7 +5,7 @@
 mod timer;
 
 use core::arch::{asm, global_asm};
-use timer::layout::{Domain, GuestAddress, KernelContext, TimerArena};
+use timer::layout::{Domain, GuestAddress, KernelContext, LockRecord, TimerArena};
 use timer::{
     insert, remove, tick, Capacity, Expiry, Machine, Scheduler, TimerEntry, TimerError, TimerHeap,
 };
@@ -104,9 +104,7 @@ fn lock_entry(at: GuestAddress) -> extern "C" fn(u32) -> i32 {
 }
 
 #[inline(always)]
-fn acquire_lock() {
-    let context = current_context();
-    let lock = context.scheduler_lock();
+fn acquire_lock(lock: LockRecord) {
     let acquire = lock_entry(lock.acquire());
     loop {
         irq_set();
@@ -117,9 +115,7 @@ fn acquire_lock() {
 }
 
 #[inline(always)]
-fn release_lock() {
-    let context = current_context();
-    let lock = context.scheduler_lock();
+fn release_lock(lock: LockRecord) {
     let release = lock_entry(lock.release());
     let _ = release(lock.0 .0);
 }
@@ -133,13 +129,13 @@ impl Scheduler for Cpu {
         irq_masked()
     }
 
-    fn release_lock(&self) {
-        release_lock()
+    fn release_lock(&self, lock: LockRecord) {
+        release_lock(lock)
     }
 
     #[link_section = ".text.timer_lock_acquire"]
-    fn acquire_lock(&self) {
-        acquire_lock()
+    fn acquire_lock(&self, lock: LockRecord) {
+        acquire_lock(lock)
     }
 
     fn irq_clear(&self) {
@@ -186,10 +182,15 @@ pub extern "C" fn xm1_rtos_timer_remove_body(context: KernelContext, entry: Time
 #[inline(never)]
 #[link_section = ".text.timer_body_tick"]
 pub extern "C" fn xm1_rtos_timer_tick_body() -> i32 {
-    match tick(&Cpu, |_| heap(current_context()), |_m, callback, argument| unsafe {
-        let invoke: extern "C" fn(u32) = core::mem::transmute::<u32, extern "C" fn(u32)>(callback.0);
-        invoke(argument.0);
-    }) {
+    match tick(
+        &Cpu,
+        |_| heap(current_context()),
+        |_| current_context().scheduler_lock(),
+        |_m, callback, argument| unsafe {
+            let invoke: extern "C" fn(u32) = core::mem::transmute::<u32, extern "C" fn(u32)>(callback.0);
+            invoke(argument.0);
+        },
+    ) {
         Ok(()) => 0,
         Err(TimerError::Context) | Err(TimerError::InterruptMasked) => -25,
         Err(_) => -25,
