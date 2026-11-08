@@ -195,6 +195,7 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/src/witness.rs",
     "//emulation:fujimod-xm1/tests/application_observation.rs",
     "//emulation:fujimod-xm1/tests/checkpoint.rs",
+    "//emulation:fujimod-xm1/tests/common/modal_lifetime_fixture.rs",
     "//emulation:fujimod-xm1/tests/composed_startup.rs",
     "//emulation:fujimod-xm1/tests/data/composed-contract-v4.json",
     "//emulation:fujimod-xm1/tests/exclusive_monitor.rs",

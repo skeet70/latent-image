@@ -920,7 +920,7 @@ impl Server {
             "display_wait_instructions": display_wait, "presentation": presentation, "failure": failure}))
     }
 
-    fn handle(&mut self, request: Request) -> Result<Option<Value>, String> {
+    fn admit_request(&self, request: &Request) -> Result<(), String> {
         let tail_request = matches!(&request, Request::CaptureObservationHits { .. } | Request::CaptureObservationAck { .. }
             | Request::CaptureObservationState | Request::WatchState | Request::Finish
             | Request::ModalObservationReport | Request::ModalObservationEnd
@@ -962,6 +962,11 @@ impl Server {
                 return Err("snapshot save and restore require no armed watch, preservation, capture, modal or rendezvous observation".into());
             }
         }
+        Ok(())
+    }
+
+    fn handle(&mut self, request: Request) -> Result<Option<Value>, String> {
+        self.admit_request(&request)?;
         Ok(Some(match request {
             Request::List => {
                 let c = &self.attachment.configuration;
@@ -1206,10 +1211,7 @@ impl Server {
             }
             Request::WatchState => match &self.watch {
                 Some(watch) => watch.records.borrow().state(),
-                None => match self.bridge.machine.traces.modal_watch_state() {
-                    Some(state) => serde_json::to_value(state).map_err(|failure| failure.to_string())?,
-                    None => return Err("watch-state requires an armed memory watch".into()),
-                },
+                None => return Err("watch-state requires an armed memory watch".into()),
             },
             Request::WatchEnd => {
                 let mut watch = self.watch.take().ok_or("watch-end requires an armed memory watch")?;
@@ -1406,12 +1408,22 @@ impl Server {
     }
 
     fn serve_io(&mut self, input: impl BufRead, mut output: impl Write) -> Result<(), String> {
-        self.bridge.machine.begin_render_provenance()?;
-        let mut emit = |value: &Value| -> Result<(), String> {
-            serde_json::to_writer(&mut output, value).map_err(|error| error.to_string())?;
+        enum Reply {
+            Value(Option<Value>),
+            Written(Result<(), String>),
+        }
+        #[derive(Serialize)]
+        struct WatchReply<T> {
+            ok: bool,
+            #[serde(flatten)]
+            evidence: T,
+        }
+        fn emit_reply(output: &mut impl Write, value: &impl Serialize) -> Result<(), String> {
+            serde_json::to_writer(&mut *output, value).map_err(|error| error.to_string())?;
             output.write_all(b"\n").and_then(|()| output.flush()).map_err(|error| error.to_string())
-        };
-        emit(&json!({"ok": true, "event": "ready", "device": encode_hex(&self.attachment.device),
+        }
+        self.bridge.machine.begin_render_provenance()?;
+        emit_reply(&mut output, &json!({"ok": true, "event": "ready", "device": encode_hex(&self.attachment.device),
             "configuration": encode_hex(&self.attachment.configuration),
             "pre_attach": self.attachment.pre_attach, "checkpoint": self.checkpoint}))?;
         let mut error = None;
@@ -1434,23 +1446,34 @@ impl Server {
                 .and_then(|request| {
                     let started = Instant::now();
                     let kind = request.kind();
-                    let result = self.handle(request);
+                    let result = if matches!(request, Request::WatchState) && self.watch.is_none() {
+                        self.admit_request(&request).and_then(|()| {
+                            match self.bridge.machine.traces.modal_watch_state() {
+                                Some(evidence) => Ok(Reply::Written(emit_reply(&mut output,
+                                    &WatchReply { ok: true, evidence }))),
+                                None => Err("watch-state requires an armed memory watch".into()),
+                            }
+                        })
+                    } else {
+                        self.handle(request).map(Reply::Value)
+                    };
                     let profile = self.requests.kinds.entry(kind).or_default();
                     profile.requests += 1;
                     profile.seconds += started.elapsed().as_secs_f64();
                     result
                 });
             let (response, finished) = match result {
-                Ok(Some(mut value)) => {
+                Ok(Reply::Written(written)) => (Reply::Written(written), false),
+                Ok(Reply::Value(Some(mut value))) => {
                     value.as_object_mut().ok_or("response must be an object")?.insert("ok".into(), json!(true));
-                    (value, false)
+                    (Reply::Value(Some(value)), false)
                 }
-                Ok(None) => {
+                Ok(Reply::Value(None)) => {
                     let response = match &error {
                         Some(message) => json!({"ok": false, "error": "BridgeError", "message": message, "finished": true}),
                         None => json!({"ok": true, "finished": true}),
                     };
-                    (response, true)
+                    (Reply::Value(Some(response)), true)
                 }
                 Err(message) => {
                     let response = json!({"ok": false, "error": "BridgeError", "message": message});
@@ -1463,10 +1486,15 @@ impl Server {
                     }
                     let observing = self.bridge.machine.traces.capture_observation_active()
                         || self.bridge.machine.traces.modal_observation_active();
-                    (response, !observing)
+                    (Reply::Value(Some(response)), !observing)
                 }
             };
-            if let Err(io_error) = emit(&response) {
+            let written = match response {
+                Reply::Written(written) => written,
+                Reply::Value(Some(response)) => emit_reply(&mut output, &response),
+                Reply::Value(None) => unreachable!(),
+            };
+            if let Err(io_error) = written {
                 if error.is_some() {
                     self.capture_evidence_error.get_or_insert(io_error);
                 } else {
@@ -1631,6 +1659,10 @@ fn main() -> ExitCode {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/common/modal_lifetime_fixture.rs"]
+mod modal_lifetime_fixture;
 
 #[cfg(test)]
 mod tests {
@@ -1956,6 +1988,49 @@ mod tests {
         assert!(serde_json::from_value::<Request>(json!({"command": "snapshot-save", "name": "N0"})).is_err());
         assert!(serde_json::from_value::<Request>(json!({"command": "snapshot-save", "name": ""})).is_err());
         assert!(serde_json::from_value::<Request>(json!({"command": "snapshot-key", "name": "n0", "key": "shutter"})).is_err());
+    }
+
+    #[test]
+    fn installed_watch_stream_preserves_all_evidence_after_terminal_failure_without_execution() {
+        let mut server = server(&[0xeafffffe]);
+        let begin = modal_lifetime_fixture::request(false);
+        let write_image = |start: u64, bytes: &Value| {
+            let bytes: Vec<u8> = serde_json::from_value(bytes.clone()).unwrap();
+            server.bridge.machine.session.board.write_physical(start, &bytes).unwrap();
+        };
+        write_image(u64::from(modal_lifetime_fixture::STOCK), &begin["stock"]);
+        for image in begin["context_sources"].as_array().unwrap().iter()
+            .chain(begin["lifetime"]["readonly"].as_array().unwrap()) {
+            write_image(image["start"].as_u64().unwrap(), &image["bytes"]);
+        }
+        let begin = serde_json::from_value(begin).unwrap();
+        server.handle(Request::ModalObservationBegin(begin)).unwrap();
+        for value in [1u32, 2, 3] {
+            server.bridge.machine.session.board.write_physical(
+                u64::from(modal_lifetime_fixture::RUNTIME) + 0x800, &value.to_le_bytes()).unwrap();
+        }
+        let mut expected = serde_json::to_value(
+            server.bridge.machine.traces.modal_watch_state().unwrap()).unwrap();
+        assert_eq!(expected["record_count"], 3);
+        assert_eq!(expected["records"].as_array().unwrap().len(), 3);
+        assert_eq!(expected["records_sha256"].as_str().unwrap().len(), 64);
+        expected.as_object_mut().unwrap().insert("ok".into(), json!(true));
+        server.bridge.machine.failure = Some("synthetic terminal fault".into());
+        let instructions = server.bridge.machine.instructions();
+        let mut output = Vec::new();
+        server.serve_io(b"{\"command\":\"watch-state\"}\n{\"command\":\"watch-state\"}\n".as_slice(),
+            &mut output).unwrap();
+        let responses: Vec<Value> = output.split(|byte| *byte == b'\n')
+            .filter(|line| !line.is_empty()).map(|line| serde_json::from_slice(line).unwrap()).collect();
+        assert_eq!(responses.len(), 3);
+        assert_eq!(responses[1], expected);
+        assert_eq!(responses[2], expected);
+        assert_eq!(server.bridge.machine.instructions(), instructions);
+        let receipt: Value = serde_json::from_slice(
+            &std::fs::read(server.output.join("emulator-session.json")).unwrap()).unwrap();
+        assert_eq!(receipt["request_profile"]["kinds"]["watch-state"]["requests"], 2);
+        assert_eq!(receipt["capture_evidence_error"], Value::Null);
+        std::fs::remove_dir_all(&server.output).unwrap();
     }
 
     #[test]

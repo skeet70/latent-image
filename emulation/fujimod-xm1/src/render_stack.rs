@@ -1456,6 +1456,33 @@ mod tests {
         assert_eq!(fixture.report()["coverage"], "refused");
     }
     #[test]
+    fn aggregate_transition_overflow_refuses_from_observed_contexts() {
+        let mut fixture = Fixture::new();
+        roots(&mut fixture, Role::Owned);
+        fixture.image(ADAPTER, &[0xe92d5fff, 0xe3a04000, 0xe10f0000, 0xe2200080, 0xe121f000,
+            0xe2844001, 0xe35400fa, 0x1afffff9, 0xe8bd5fff, 0xe12fff1e], SourceKind::Owned);
+        fixture.image(RETURN, &[branch(RETURN, RETURN - 4, false)], SourceKind::Retained);
+        fixture.image(RETURN - 4, &[branch(RETURN - 4, TREE, true)], SourceKind::Retained);
+        let request: BeginRequest = serde_json::from_value(json!({"version":1,"role":Role::Owned,
+            "sources":fixture.sources.clone(),"entries":[
+                {"kind":"tree","address":TREE,"frame_depth":56},
+                {"kind":"picker","address":PICKER,"frame_depth":56},
+                {"kind":"pane","address":PANE,"frame_depth":56}],
+            "returns":[RETURN],"retained_services":[]})).unwrap();
+        fixture.machine.begin_render_stack_diagnostic(request).unwrap();
+        fixture.enter();
+        assert_eq!(fixture.machine.run(2_000_000), RunOutcome::Failed);
+        let report = fixture.report();
+        assert_eq!(report["coverage"], "refused");
+        assert!(report["failure"].as_str().is_some_and(|failure| failure.contains("transition storage bound exceeded")));
+        let invocations = report["invocations"].as_array().unwrap();
+        let retained: u64 = invocations.iter()
+            .map(|invocation| invocation["transitions"].as_array().unwrap().len() as u64).sum();
+        assert_eq!(retained, 65_536);
+        assert!(invocations.iter().all(|invocation| invocation["transitions"].as_array().unwrap().len() <= 4096));
+    }
+
+    #[test]
     fn initial_floor_context_retains_its_entry_boundary_without_inventing_an_owner() {
         let mut fixture = Fixture::new();
         roots(&mut fixture, Role::Stock);

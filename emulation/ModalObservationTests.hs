@@ -1032,7 +1032,7 @@ runtimeBindingTests = do
         [range pc (pc+4) | pc <- [0x10000,0x10010,0x10024,0x10044,0x40240,0x4031c,0x436b8,0x43690,0x436f0
           ,0x43720,0x43848,0x42440,0xd0240,0xd031c,0xd36b8,0xd3690,0xd36f0,0xd3720,0xd3848,0xd2440]])
       fetchJson spans = object ["sources" .= ([] :: [Value]), "ranges" .= map pair spans]
-      reloadSpans = [range 0x006309ec 0x006309f0, range 0x006309f0 0x006309f4, range 0x00637ee4 0x00637ee8, range 0x00637ee8 0x00637eec]
+      reloadSpans = [range 0x006309ec 0x006309f0, range 0x006309f0 0x006309f4, range 0x00637ee4 0x00637ee8, range 0x00637ee8 0x00637eec, range 0x0062fef0 0x0062fef4, range 0x0062fef4 0x0062fef8]
       watch spans records = digested (object
         [ "enabled" .= True, "views" .= ("fixed" :: String), "ranges" .= map pair (unionWatchRanges (spans ++ reloadSpans)), "records" .= records, "violation" .= Null
         , "classes" .= ([object ["range" .= pair span_, "kinds" .= (["cpu-write","host-write","model-bus-write"] :: [String])] | span_ <- spans]
@@ -1276,6 +1276,15 @@ runtimeBindingTests = do
     (settingsCompletesWith 225 0 1 (reloadWatch (restoreCopy 0x00637ee4 0x0096cc64)))
   check "the property-write reload call does not admit a whole-block copy's change before its target"
     (not (settingsCompletesWith 225 0 1 (reloadWatch (restoreCopy 0x006309ec 0x0096cc64))))
+  let headerCopy call core = [fetchOn core call]
+        ++ [if address == 0x0096cc72 then reloadStore core address else identityStore core address | address <- [0x0096cc64, 0x0096cc66 .. 0x0096cc72]]
+        ++ [fetchOn core 0x0062fef4]
+  check "the framed-pop setter header reload admits its final changed halfword"
+    (settingsCompletesWith 8 0 1 (reloadWatch (headerCopy 0x0062fef0 0)))
+  check "the body reload does not admit a changed header halfword"
+    (not (settingsCompletesWith 8 0 1 (reloadWatch (headerCopy 0x006309ec 0))))
+  check "the header reload does not admit a body halfword after its return"
+    (not (settingsCompletesWith 9 0 2 (reloadWatch (headerCopy 0x0062fef0 0 ++ [reloadStore 0 0x0096cc74]))))
   check "a fetch row beside a reload site refuses" (not (settingsCompletesWith 0 0 0 (reloadWatch [fetchOn 0 0x006309f4])))
   check "a reload call and return fetch pair without stores completes" (settingsCompletesWith 0 0 0 (reloadWatch [fetchOn 1 0x006309ec, fetchOn 1 0x006309f0]))
   let settingsWrite writer address value = object ["writer" .= (writer :: String), "instructions" .= (1 :: Int), "pc" .= (0x0062ff54 :: Word32)
