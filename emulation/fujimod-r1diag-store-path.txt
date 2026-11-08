@@ -1,1 +1,1 @@
-/nix/store/5b69n1wjhv170l7g8snlml92cg70cpx6-fujimod-xm1-0.1.0
+/nix/store/1fa3rf7k63phfw51h8f2k7zqvx9gxwfb-fujimod-xm1-0.1.0

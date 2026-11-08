@@ -34,11 +34,15 @@ pub struct LifetimeRequest {
     rollback: ServiceRequest,
     publications: Vec<PublicationRequest>,
     #[serde(default)]
+    bank_variant: Option<String>,
+    #[serde(default)]
     retired: Vec<[u32; 2]>,
     #[serde(default)]
     settings_writers: Vec<[u32; 2]>,
     #[serde(default)]
     settings_reloads: Vec<ReloadRequest>,
+    #[serde(default)]
+    task33_stack_guard: Option<Task33StackGuardRequest>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -55,6 +59,89 @@ struct SiteRequest { pc: u32, word: u32 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PublicationRequest { address: u32, old: u32, new: u32 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Task33StackGuardRequest {
+    node: u32, creation: u32, entry: u32, base: u32, size: u32,
+    guard_bytes: u32, baseline: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StackGuardScope { DiagnosticOnlyBottomGuardWriteAttempts }
+
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct Task33StackGuardReceipt {
+    pub scope: StackGuardScope,
+    pub node: u32,
+    pub creation: u32,
+    pub entry: u32,
+    pub base: u32,
+    pub size: u32,
+    pub guard_bytes: u32,
+    #[serde(serialize_with = "serialize_guard_baseline")]
+    pub baseline: [u8; 64],
+    pub priority: u32,
+    pub task_id: u32,
+    pub created: u32,
+}
+
+struct Task33StackGuard {
+    receipt: Task33StackGuardReceipt,
+    immutable: [PhysicalExtent; 3],
+}
+impl Task33StackGuardRequest {
+    fn into_guard(self) -> Result<Task33StackGuard> {
+        if self.node != 0x4006_060c || self.creation != 0x4005_c3ac
+            || self.entry != 0x0110_9130 || self.base != 0x00a4_ce00
+            || self.size != 4096 || self.guard_bytes != 64 {
+            return Err(LifetimeFailure::InvalidRequest);
+        }
+        let baseline = self.baseline.try_into().map_err(|_| LifetimeFailure::InvalidRequest)?;
+        Ok(Task33StackGuard {
+            receipt: Task33StackGuardReceipt {
+                scope: StackGuardScope::DiagnosticOnlyBottomGuardWriteAttempts,
+                node: self.node, creation: self.creation, entry: self.entry,
+                base: self.base, size: self.size, guard_bytes: self.guard_bytes,
+                baseline, priority: 8, task_id: 33, created: 1,
+            },
+            immutable: [
+                extent(self.base, self.base + self.guard_bytes)?,
+                extent((self.node & !0x4000_0000) + 8, (self.node & !0x4000_0000) + 12)?,
+                extent(self.creation & !0x4000_0000, (self.creation & !0x4000_0000) + 40)?,
+            ],
+        })
+    }
+}
+impl Task33StackGuard {
+    fn validate(&self, memory: &impl LifetimeMemory) -> Result<()> {
+        let mut backlink = [0; 4];
+        memory.read(self.immutable[1].start(), &mut backlink)?;
+        if u32::from_le_bytes(backlink) != self.receipt.creation {
+            return Err(LifetimeFailure::InvalidContext);
+        }
+        let mut descriptor = [0; 40];
+        memory.read(self.immutable[2].start(), &mut descriptor)?;
+        for (offset, expected) in [
+            (8, self.receipt.entry), (12, self.receipt.priority),
+            (16, self.receipt.size), (20, self.receipt.base),
+            (32, self.receipt.task_id), (36, self.receipt.created),
+        ] {
+            if descriptor[offset..offset + 4] != expected.to_le_bytes() {
+                return Err(LifetimeFailure::InvalidContext);
+            }
+        }
+        let mut baseline = [0; 64];
+        memory.read(self.immutable[0].start(), &mut baseline)?;
+        if baseline != self.receipt.baseline { return Err(LifetimeFailure::WrongBefore); }
+        Ok(())
+    }
+}
+
+fn serialize_guard_baseline<S: serde::Serializer>(bytes: &[u8; 64], serializer: S) -> std::result::Result<S::Ok, S::Error> {
+    bytes.as_slice().serialize(serializer)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Word(pub u32);
@@ -95,6 +182,7 @@ pub struct LifetimeConfig {
     /// Reloads whose sequential halfword copy stores are admitted between a core's call and return fetches.
     settings_reloads: Vec<SettingsReload>,
     sites: Vec<CodeSite>,
+    task33_stack_guard: Option<Task33StackGuard>,
 }
 
 fn extent(start: u32, end: u32) -> Result<PhysicalExtent> {
@@ -126,23 +214,33 @@ const MAX_SETTINGS_RELOADS: usize = 4;
 
 /// The bank variants the guard binds (RamPushLayout `BankVariant`).
 #[derive(Clone, Copy)]
-enum GuardedVariant { Stock, Modal75, Modal75MenuEngine }
+enum GuardedVariant { Stock, Modal75, Modal75MenuEngine, Modal75MenuEngineRender }
 /// The groups a variant adds to the stock publication vector.
 #[derive(Clone, Copy)]
-enum PublicationGroup { Modal75, MenuEngine }
+enum PublicationGroup { Modal75, MenuEngine, Render }
 const STOCK_PUBLICATIONS: usize = 223;
 impl PublicationGroup {
     fn publications(self) -> usize {
-        match self { PublicationGroup::Modal75 | PublicationGroup::MenuEngine => 1 }
+        match self { PublicationGroup::Modal75 | PublicationGroup::MenuEngine => 1, PublicationGroup::Render => 3 }
     }
 }
 impl GuardedVariant {
-    const ALL: [GuardedVariant; 3] = [GuardedVariant::Stock, GuardedVariant::Modal75, GuardedVariant::Modal75MenuEngine];
+    const ALL: [GuardedVariant; 4] = [GuardedVariant::Stock, GuardedVariant::Modal75, GuardedVariant::Modal75MenuEngine, GuardedVariant::Modal75MenuEngineRender];
     fn groups(self) -> &'static [PublicationGroup] {
         match self {
             GuardedVariant::Stock => &[],
             GuardedVariant::Modal75 => &[PublicationGroup::Modal75],
             GuardedVariant::Modal75MenuEngine => &[PublicationGroup::Modal75, PublicationGroup::MenuEngine],
+            GuardedVariant::Modal75MenuEngineRender => &[PublicationGroup::Modal75, PublicationGroup::MenuEngine, PublicationGroup::Render],
+        }
+    }
+    fn from_tag(tag: &str) -> Option<Self> {
+        match tag {
+            "standard" => Some(GuardedVariant::Stock),
+            "modal75" => Some(GuardedVariant::Modal75),
+            "modal75,menu-engine" => Some(GuardedVariant::Modal75MenuEngine),
+            "modal75,menu-engine,render" => Some(GuardedVariant::Modal75MenuEngineRender),
+            _ => None,
         }
     }
     fn publications(self) -> usize {
@@ -156,8 +254,13 @@ impl LifetimeRequest {
         let resident = extent(self.resident[0], self.resident[1])?;
         let readonly_bytes = self.readonly.iter().try_fold(0usize,
             |total, image| total.checked_add(image.bytes.len())).ok_or(LifetimeFailure::InvalidRequest)?;
+        let variant = match self.bank_variant.as_deref() {
+            Some(tag) => GuardedVariant::from_tag(tag).ok_or(LifetimeFailure::InvalidRequest)?,
+            None => GuardedVariant::ALL.iter().copied().find(|variant| variant.publications() == self.publications.len())
+                .ok_or(LifetimeFailure::InvalidRequest)?,
+        };
         if resident.bytes() != 1024 || !contains(runtime, resident)
-            || !GuardedVariant::ALL.iter().any(|variant| variant.publications() == self.publications.len()) || immutable_sources.is_empty()
+            || variant.publications() != self.publications.len() || immutable_sources.is_empty()
             || runtime.bytes() as usize > MAX_RUNTIME_BYTES || readonly_bytes > MAX_RUNTIME_BYTES
             || self.readonly.len() > 64 {
             return Err(LifetimeFailure::InvalidRequest);
@@ -176,6 +279,15 @@ impl LifetimeRequest {
         }
         let mut sites = vec![install.entry, install.writer, rollback.entry, rollback.writer];
         sites.sort_by_key(|site| site.pc);
+        let task33_stack_guard = self.task33_stack_guard.map(Task33StackGuardRequest::into_guard).transpose()?;
+        if let Some(guard) = &task33_stack_guard {
+            let bottom = guard.immutable[0];
+            if bottom.overlaps(runtime) || settings_extent().overlaps(bottom)
+                || immutable_sources.iter().chain(fixed_resources().iter()).any(|range| range.overlaps(bottom))
+                || self.publications.iter().any(|row| word_extent(Guest(row.address)).expect("validated publication").overlaps(bottom)) {
+                return Err(LifetimeFailure::InvalidSource);
+            }
+        }
         if sites.windows(2).any(|pair| pair[0].pc == pair[1].pc) {
             return Err(LifetimeFailure::InvalidSource);
         }
@@ -233,6 +345,7 @@ impl LifetimeRequest {
         watched.extend(readonly.iter().map(|image| image.extent));
         watched.extend(publications.iter().map(|row| word_extent(row.address).expect("validated publication")));
         for layout in layouts { watched.extend([layout.context, layout.current, layout.selected, layout.nodes, layout.creations, layout.vfp_owner]); }
+        if let Some(guard) = &task33_stack_guard { watched.extend(guard.immutable); }
         watched.sort_by_key(|range| range.start());
         let mut merged: Vec<PhysicalExtent> = Vec::with_capacity(watched.len());
         for range in watched {
@@ -287,7 +400,7 @@ impl LifetimeRequest {
         let mut reload_sites: Vec<_> = settings_reloads.iter().flat_map(|reload| [reload.call, reload.resume]).collect();
         reload_sites.sort();
         if reload_sites.windows(2).any(|pair| pair[0] == pair[1]) { return Err(LifetimeFailure::InvalidRequest); }
-        Ok(LifetimeConfig { runtime, resident, readonly, sources: immutable_sources, install, rollback, publications, publication_addresses: addresses, watched: merged, retired, settings_writers, settings_reloads, sites })
+        Ok(LifetimeConfig { runtime, resident, readonly, sources: immutable_sources, install, rollback, publications, publication_addresses: addresses, watched: merged, retired, settings_writers, settings_reloads, sites, task33_stack_guard })
     }
 }
 
@@ -348,6 +461,8 @@ pub struct LifetimeReceipt {
     /// Value-changing live-settings stores from a settings reload's copy store.
     pub admitted_reload_writes: u64,
     pub failure: Option<LifetimeFailure>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task33_stack_guard: Option<Task33StackGuardReceipt>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -507,6 +622,7 @@ pub struct LifetimeMonitor {
 struct OpenReload { reload: SettingsReload, cursor: Guest }
 impl LifetimeMonitor {
     pub fn new(config: LifetimeConfig, memory: &impl LifetimeMemory) -> Result<Self> {
+        if let Some(guard) = &config.task33_stack_guard { guard.validate(memory)?; }
         let mut resident = [0; 1024];
         memory.read(config.resident.start(), &mut resident)?;
         if resident.iter().any(|byte| *byte != 0) { return Err(LifetimeFailure::InitialResident); }
@@ -525,11 +641,12 @@ impl LifetimeMonitor {
             if Word(u32::from_le_bytes(bytes)) != row.old { return Err(LifetimeFailure::WrongBefore); }
         }
         let publication_count = config.publications.len();
+        let task33_stack_guard = config.task33_stack_guard.as_ref().map(|guard| guard.receipt);
         Ok(Self { config, settings, pending: [None; 2], reloads: [None; 2], superseded: [Superseded::EMPTY; 2], receipt: LifetimeReceipt {
             phase: LifetimePhase::Prepared, publication_count, forward_writes: 0, reverse_writes: 0,
             pending_stores: 0, install_core: None, rollback_core: None, checked_resource_writes: 0,
             checked_identity_writes: 0, checked_scheduler_writes: 0, checked_context_writes: 0, checked_vfp_owner_writes: 0,
-            audited_writes: 0, admitted_settings_writes: 0, admitted_reload_writes: 0, failure: None,
+            audited_writes: 0, admitted_settings_writes: 0, admitted_reload_writes: 0, failure: None, task33_stack_guard,
         } })
     }
     pub fn config(&self) -> &LifetimeConfig { &self.config }
@@ -649,6 +766,16 @@ impl LifetimeMonitor {
     /// publication write. A reload call fetch opens its core's reload bracket and a
     /// reload return fetch closes it, in any phase.
     pub fn observe_row(&mut self, row: &Value) -> Result<()> {
+        if matches!(row.get("source").and_then(Value::as_str), Some("host-write" | "model-bus-write")) {
+            let target = row.get("physical").and_then(Value::as_u64)
+                .and_then(|physical| u32::try_from(physical).ok())
+                .zip(row.get("size").and_then(Value::as_u64).and_then(|size| u32::try_from(size).ok()))
+                .and_then(|(start, size)| start.checked_add(size).and_then(|end| extent(start, end).ok()));
+            if target.is_some_and(|target| self.config.task33_stack_guard.as_ref()
+                .is_some_and(|guard| guard.immutable.iter().any(|range| range.overlaps(target)))) {
+                return Err(self.refuse(LifetimeFailure::ImmutableWrite));
+            }
+        }
         self.healthy()?;
         if row.get("source").and_then(Value::as_str) == Some("cpu-fetch") {
             let physical = row.get("physical").and_then(Value::as_u64).and_then(|physical| u32::try_from(physical).ok());
@@ -678,6 +805,13 @@ impl LifetimeMonitor {
         self.record(result)
     }
     fn write(&mut self, attempt: WriteAttempt<'_>) -> Result<()> {
+        if let Some(guard) = &self.config.task33_stack_guard {
+            let width = attempt.width.bytes()?;
+            let target = extent(attempt.physical.0, attempt.physical.0.checked_add(width as u32).ok_or(LifetimeFailure::InvalidExtent)?)?;
+            if guard.immutable.iter().any(|range| range.overlaps(target)) {
+                return Err(LifetimeFailure::ImmutableWrite);
+            }
+        }
         if attempt.source != WriteSource::Cpu { return Err(LifetimeFailure::NonCpuWrite); }
         if self.receipt.phase == LifetimePhase::Ended { return Err(LifetimeFailure::WrongPhase); }
         if attempt.core.0 >= 2 { return Err(LifetimeFailure::InvalidCore); }
