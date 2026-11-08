@@ -3,15 +3,16 @@
 -- 'Emulation.SchedulerPairCheck'; this module owns the semaphore record layout and the
 -- independent expected-state rules for the seven native operations.
 module Emulation.SchedulerPairSemaphore
-  ( SemaphoreCall (..), checkSemaphoreCall, SemaphoreLayout (..), semaphoreLayout, semaphoreWindows ) where
+  ( SemaphoreCall (..), checkSemaphoreCall, checkPendingSemaphore, SemaphoreLayout (..), semaphoreLayout, semaphoreWindows ) where
 
 import Control.Monad (foldM, forM_, unless, when)
 import Data.Bits ((.&.), (.|.), complement, shiftL, shiftR)
 import qualified Data.Map.Strict as M
-import Data.Word (Word32)
-import Emulation.SchedulerPairCatalog (Address (..), SemaphoreService (..))
+import Data.Word (Word32, Word64)
+import Emulation.SchedulerPairCatalog (Address (..), Semantic (..), SemaphoreService (..))
 import Emulation.SchedulerPairFamily
-  ( FamilyBoundary (..), FamilyBoundaryKind (..), FamilyCompletion (..), FamilyRefusal (..), FamilyTrace (..) )
+  ( FamilyBoundary (..), FamilyBoundaryKind (..), FamilyCompletion (..), FamilyRefusal (..), FamilyTrace (..), Pending (..)
+  , TimerKind (..), TimerWitness (..) )
 import Emulation.SchedulerPairModel (Memory)
 import Emulation.SchedulerPairPlan (Role (..))
 import Replacement.RtosOwnFirst.Regions (Domain (..))
@@ -23,8 +24,10 @@ class SemaphoreCall c where
   semaphoreBefore :: c -> Memory
   semaphoreAfter :: c -> Memory
   semaphoreR0 :: c -> Word32
+  semaphoreCpsr :: c -> Word32
   semaphoreWrites :: c -> [(Address, Int, Word32)]
   semaphoreTask :: c -> Word32
+  semaphoreEpoch :: c -> Word64
   semaphoreService :: c -> Maybe SemaphoreService
   semaphoreTrace :: c -> Maybe FamilyTrace
 
@@ -48,22 +51,24 @@ argAt arguments index = case drop index arguments of
 -- the observation's declared state.
 replayWrite :: Memory -> (Address, Int, Word32) -> Either FamilyRefusal Memory
 replayWrite memory (Address address, size, value)
-  | not (M.member (Address (address .&. complement 3)) memory) = Right memory
+  | not (M.member (Address aligned) memory) = Right memory
   | otherwise = do
       expect FamilyEffect (size `elem` [1, 2, 4] && address `mod` fromIntegral size == 0)
-      old <- wordAt address memory
+      old <- wordAt aligned memory
       let shift = fromIntegral (address .&. 3) * 8
           mask = if size == 4 then maxBound else (1 `shiftL` (size * 8)) - 1
       expect FamilyEffect (value .&. complement mask == 0)
-      pure (M.insert (Address address) ((old .&. complement (mask `shiftL` shift)) .|. (value `shiftL` shift)) memory)
+      pure (M.insert (Address aligned) ((old .&. complement (mask `shiftL` shift)) .|. (value `shiftL` shift)) memory)
+  where aligned = address .&. complement 3
 
-statusInvalid, statusAlreadyExists, statusNotCreated, statusOverflow, statusReleased, statusTimeout :: Word32
+statusInvalid, statusAlreadyExists, statusNotCreated, statusOverflow, statusReleased, statusTimeout, statusContext :: Word32
 statusInvalid = 0xffffffee
 statusAlreadyExists = 0xffffffd7
 statusNotCreated = 0xffffffd6
-statusOverflow = 0xffffffe4
+statusOverflow = 0xffffffd5
 statusReleased = 0xffffffcf
 statusTimeout = 0xffffffce
+statusContext = 0xffffffe7
 
 data SemaphoreLayout = SemaphoreLayout
   { layoutConfigs :: Word32
@@ -102,10 +107,6 @@ timeoutCallback :: Domain -> Word32
 timeoutCallback DomainA = 0x44318
 timeoutCallback DomainB = 0xd42d8
 
-tickEntry :: Domain -> Word32
-tickEntry DomainA = 0x44d8c
-tickEntry DomainB = 0xd4d4c
-
 resolve :: Domain -> Word32 -> Either FamilyRefusal (Domain, Word32)
 resolve entry idWord = do
   let slot = idWord .&. 0xffff
@@ -116,6 +117,51 @@ resolve entry idWord = do
     _ -> Left FamilyReturn
   expect FamilyReturn (slot >= 1 && slot <= 250)
   pure (domain, slot)
+
+handlerContext :: Domain -> Word32
+handlerContext DomainA = 0x400545a4
+handlerContext DomainB = 0x400e4564
+
+dispatchEnabled :: Domain -> Word32
+dispatchEnabled DomainA = 0x40054764
+dispatchEnabled DomainB = 0x400e4724
+
+-- | The status a refusal path must return before any operation effect.
+data Admission = Refused Word32 | Admitted (Domain, Word32)
+
+admission :: SemaphoreCall c => Role -> c -> SemaphoreService -> Domain -> Word32 -> Either FamilyRefusal Admission
+admission role call service domain idWord
+  | role == Stock && invalid = Left FamilyReturn
+  | service `elem` [SemaphoreCreate, SemaphoreDelete] =
+      if invalid then Right (Refused statusInvalid) else Right (Admitted (domain, slot))
+  | otherwise = do
+      handler <- wordAt (handlerContext domain) (semaphoreBefore call)
+      dispatch <- if service `elem` [SemaphoreWait, SemaphoreTimedWait]
+        then wordAt (dispatchEnabled domain) (semaphoreBefore call) else Right 1
+      exists <- case object of
+        Just (objectDomain, objectSlot) -> wordAt (configAddress objectDomain objectSlot + 0x0c) (semaphoreBefore call)
+        Nothing -> Right 0
+      let result :: Admission
+          result =
+            if (handler /= 0) /= (service == SemaphoreInterruptSignal) then Refused statusContext
+            else if semaphoreCpsr call .&. 0x80 /= 0 then Refused statusContext
+            else if dispatch == 0 then Refused statusContext
+            else if invalid then Refused statusInvalid
+            else case object of
+              Nothing -> Refused statusInvalid
+              Just _ | service == SemaphoreCreate -> Refused statusAlreadyExists
+              Just _ | exists == 0 -> Refused statusNotCreated
+              Just (objectDomain, objectSlot) -> Admitted (objectDomain, objectSlot)
+      pure result
+  where
+    slot = idWord .&. 0xffff
+    classBits = (idWord `shiftR` 16) .&. 0xffff
+    invalid = slot < 1 || slot > 250 || (service `notElem` [SemaphoreCreate, SemaphoreDelete] && classBits > 2)
+    object = case classBits of
+      0 -> Just (domain, slot)
+      1 -> Just (DomainA, slot)
+      2 -> Just (DomainB, slot)
+      _ -> Nothing
 
 queueTasks :: Memory -> Word32 -> Either FamilyRefusal [Word32]
 queueTasks memory control = go (0 :: Int) =<< wordAt control memory
@@ -130,8 +176,11 @@ queueTasks memory control = go (0 :: Int) =<< wordAt control memory
 waiterWait :: Memory -> Word32 -> Either FamilyRefusal Word32
 waiterWait memory task = wordAt (task + 0x14) memory
 
-checkSemaphoreCall :: SemaphoreCall c => Role -> c -> [c] -> Either FamilyRefusal ()
-checkSemaphoreCall role call others = do
+checkSemaphoreCall :: SemaphoreCall c => c -> [TimerWitness] -> Either FamilyRefusal ()
+checkSemaphoreCall = checkSemaphoreCallFor Owned
+
+checkSemaphoreCallFor :: SemaphoreCall c => Role -> c -> [TimerWitness] -> Either FamilyRefusal ()
+checkSemaphoreCallFor role call witnesses = do
   trace <- maybe (Left FamilyContinuation) Right (semaphoreTrace call)
   expect FamilyContinuation (familyTraceCompletion trace == FamilyReturnedCompletion)
   replayed <- foldM replayWrite (semaphoreBefore call) (semaphoreWrites call)
@@ -140,74 +189,61 @@ checkSemaphoreCall role call others = do
   service <- maybe (Left FamilyReturn) Right (semaphoreService call)
   idWord <- argAt (semaphoreArguments call) 0
   let domain = semaphoreDomain call
-  case service of
-    SemaphoreCreate -> checkCreate role call domain idWord
-    SemaphoreDelete -> checkDelete role call domain idWord
-    SemaphoreSignal -> checkSignal call domain idWord False
-    SemaphoreInterruptSignal -> checkSignal call domain idWord True
-    SemaphoreWait -> checkWait call domain idWord False trace
-    SemaphorePoll -> checkPoll call domain idWord
-    SemaphoreTimedWait -> checkWait call domain idWord True trace
+  admitted <- admission role call service domain idWord
+  case admitted of
+    Refused expected -> expect FamilyReturn (semaphoreR0 call == expected)
+    Admitted (object, slot) -> case service of
+      SemaphoreCreate -> checkCreate call object slot
+      SemaphoreDelete -> checkDelete role call object slot
+      SemaphoreSignal -> checkSignal call object slot
+      SemaphoreInterruptSignal -> checkSignal call object slot
+      SemaphoreWait -> checkWait call object slot False trace
+      SemaphorePoll -> checkPoll call object slot
+      SemaphoreTimedWait -> checkWait call object slot True trace
   checkContinuation call trace
-  checkTimer call others trace service
+  checkTimer call witnesses trace service
 
-checkCreate :: SemaphoreCall c => Role -> c -> Domain -> Word32 -> Either FamilyRefusal ()
-checkCreate role call domain idWord = do
-  let slot = idWord .&. 0xffff
-  if slot < 1 || slot > 250
-    then case role of
-      Owned -> expect FamilyReturn (semaphoreR0 call == statusInvalid)
-      _ -> pure ()
-    else do
-      request <- argAt (semaphoreArguments call) 1
-      exists <- wordAt (configAddress domain slot + 0x0c) (semaphoreBefore call)
-      if exists /= 0
-        then expect FamilyReturn (semaphoreR0 call == statusAlreadyExists)
-        else do
-          expect FamilyReturn (semaphoreR0 call == 0)
-          attributes <- wordAt request (semaphoreBefore call)
-          initial <- wordAt (request + 4) (semaphoreBefore call)
-          maximumCount <- wordAt (request + 8) (semaphoreBefore call)
-          forM_ [ (configAddress domain slot, attributes)
-                , (configAddress domain slot + 4, initial)
-                , (configAddress domain slot + 8, maximumCount)
-                , (configAddress domain slot + 0x0c, 1)
-                , (controlAddress domain slot + 0x0c, initial)
-                ] $ \(address, value) -> wordAt address (semaphoreAfter call) >>= expect FamilyEffect . (== value)
+checkCreate :: SemaphoreCall c => c -> Domain -> Word32 -> Either FamilyRefusal ()
+checkCreate call domain slot = do
+  request <- argAt (semaphoreArguments call) 1
+  expect FamilyReturn (semaphoreR0 call == 0)
+  attributes <- wordAt request (semaphoreBefore call)
+  initial <- wordAt (request + 4) (semaphoreBefore call)
+  maximumCount <- wordAt (request + 8) (semaphoreBefore call)
+  forM_ [ (configAddress domain slot, attributes)
+        , (configAddress domain slot + 4, initial)
+        , (configAddress domain slot + 8, maximumCount)
+        , (configAddress domain slot + 0x0c, 1)
+        , (controlAddress domain slot + 0x0c, initial)
+        ] $ \(address, value) -> wordAt address (semaphoreAfter call) >>= expect FamilyEffect . (== value)
 
 checkDelete :: SemaphoreCall c => Role -> c -> Domain -> Word32 -> Either FamilyRefusal ()
-checkDelete role call domain idWord = do
-  let slot = idWord .&. 0xffff
-  if slot < 1 || slot > 250
-    then case role of
-      Owned -> expect FamilyReturn (semaphoreR0 call == statusInvalid)
-      _ -> pure ()
-    else do
-      expect FamilyReturn (semaphoreR0 call == 0)
-      forM_ [ (configAddress domain slot, 0)
-            , (configAddress domain slot + 4, 1)
-            , (configAddress domain slot + 8, 1)
-            , (configAddress domain slot + 0x0c, 0)
-            , (controlAddress domain slot + 0x0c, 1)
-            ] $ \(address, value) -> wordAt address (semaphoreAfter call) >>= expect FamilyEffect . (== value)
-      when (role == Owned) $ do
-        expect FamilyEffect (wordAt (controlAddress domain slot) (semaphoreAfter call) == Right (controlAddress domain slot))
-        expect FamilyEffect (wordAt (controlAddress domain slot + 4) (semaphoreAfter call) == Right (controlAddress domain slot))
-        tasks <- queueTasks (semaphoreBefore call) (controlAddress domain slot)
-        forM_ tasks $ \task -> do
-          wait <- waiterWait (semaphoreBefore call) task
-          wordAt wait (semaphoreAfter call) >>= expect FamilyLifetime . (== statusReleased)
-          byteAt (task + 0x0c) (semaphoreAfter call) >>= expect FamilyLifetime . (\state -> state .&. 1 /= 0)
+checkDelete role call domain slot = do
+  expect FamilyReturn (semaphoreR0 call == 0)
+  forM_ [ (configAddress domain slot, 0)
+        , (configAddress domain slot + 4, 1)
+        , (configAddress domain slot + 8, 1)
+        , (configAddress domain slot + 0x0c, 0)
+        , (controlAddress domain slot + 0x0c, 1)
+        ] $ \(address, value) -> wordAt address (semaphoreAfter call) >>= expect FamilyEffect . (== value)
+  when (role == Owned) $ do
+    expect FamilyEffect (wordAt (controlAddress domain slot) (semaphoreAfter call) == Right (controlAddress domain slot))
+    expect FamilyEffect (wordAt (controlAddress domain slot + 4) (semaphoreAfter call) == Right (controlAddress domain slot))
+    tasks <- queueTasks (semaphoreBefore call) (controlAddress domain slot)
+    forM_ tasks $ \task -> do
+      wait <- waiterWait (semaphoreBefore call) task
+      wordAt wait (semaphoreAfter call) >>= expect FamilyLifetime . (== statusReleased)
+      expected <- releaseOutcome (semaphoreBefore call) task
+      byteAt (task + 0x0c) (semaphoreAfter call) >>= expect FamilyLifetime . (== expected)
 
-checkSignal :: SemaphoreCall c => c -> Domain -> Word32 -> Bool -> Either FamilyRefusal ()
-checkSignal call domain idWord _handler = do
-  (object, slot) <- resolve domain idWord
-  let control = controlAddress object slot
+checkSignal :: SemaphoreCall c => c -> Domain -> Word32 -> Either FamilyRefusal ()
+checkSignal call domain slot = do
+  let control = controlAddress domain slot
   first <- wordAt control (semaphoreBefore call)
   if first == control
     then do
       count <- wordAt (control + 0x0c) (semaphoreBefore call)
-      maximumCount <- wordAt (configAddress object slot + 8) (semaphoreBefore call)
+      maximumCount <- wordAt (configAddress domain slot + 8) (semaphoreBefore call)
       if count < maximumCount
         then do
           expect FamilyReturn (semaphoreR0 call == 0)
@@ -217,20 +253,31 @@ checkSignal call domain idWord _handler = do
       expect FamilyReturn (semaphoreR0 call == 0)
       wait <- waiterWait (semaphoreBefore call) first
       wordAt wait (semaphoreAfter call) >>= expect FamilyLifetime . (== 0)
-      byteAt (first + 0x0c) (semaphoreAfter call) >>= expect FamilyLifetime . (\state -> state .&. 1 /= 0)
+      expected <- releaseOutcome (semaphoreBefore call) first
+      byteAt (first + 0x0c) (semaphoreAfter call) >>= expect FamilyLifetime . (== expected)
       next <- wordAt first (semaphoreBefore call)
       wordAt control (semaphoreAfter call) >>= expect FamilyEffect . (== next)
 
+releaseOutcome :: Memory -> Word32 -> Either FamilyRefusal Word32
+releaseOutcome memory task = do
+  state <- byteAt (task + 0x0c) memory
+  flags <- byteAt (task + 0x0e) memory
+  terminating <- wordAt (task + 0x24) memory
+  pure $
+    if terminating /= 0 then (if flags .&. 0x01 == 0 then 0 else 1)
+    else if state .&. 0x04 /= 0 then 4 else 1
+
 checkPoll :: SemaphoreCall c => c -> Domain -> Word32 -> Either FamilyRefusal ()
-checkPoll call domain idWord = do
-  (object, slot) <- resolve domain idWord
-  exists <- wordAt (configAddress object slot + 0x0c) (semaphoreBefore call)
-  expect FamilyReturn (exists /= 0 || semaphoreR0 call == statusNotCreated)
-  let control = controlAddress object slot
+checkPoll call domain slot = do
+  let control = controlAddress domain slot
   count <- wordAt (control + 0x0c) (semaphoreBefore call)
-  if semaphoreR0 call == 0
-    then wordAt (control + 0x0c) (semaphoreAfter call) >>= expect FamilyEffect . (== count - 1)
-    else expect FamilyReturn (semaphoreR0 call == statusTimeout)
+  if count > 0
+    then do
+      expect FamilyReturn (semaphoreR0 call == 0)
+      wordAt (control + 0x0c) (semaphoreAfter call) >>= expect FamilyEffect . (== count - 1)
+    else do
+      expect FamilyReturn (semaphoreR0 call == statusTimeout)
+      wordAt (control + 0x0c) (semaphoreAfter call) >>= expect FamilyEffect . (== count)
 
 taskSlotOf :: Domain -> Word32 -> Maybe Word32
 taskSlotOf domain task =
@@ -239,28 +286,34 @@ taskSlotOf domain task =
    in if task >= base && offset `mod` 0x38 == 0 && offset `div` 0x38 < 120 then Just (offset `div` 0x38 + 1) else Nothing
 
 checkWait :: SemaphoreCall c => c -> Domain -> Word32 -> Bool -> FamilyTrace -> Either FamilyRefusal ()
-checkWait call domain idWord timed trace = do
-  (object, slot) <- resolve domain idWord
-  exists <- wordAt (configAddress object slot + 0x0c) (semaphoreBefore call)
-  expect FamilyReturn (exists /= 0 || semaphoreR0 call == statusNotCreated)
-  let control = controlAddress object slot
+checkWait call domain slot timed trace = do
+  let control = controlAddress domain slot
       task = semaphoreTask call
-  taskSlot <- maybe (Left FamilyAssociation) Right (taskSlotOf domain task)
-  let wait = waitAddress domain taskSlot
       saved = any ((== FamilySaveKind) . familyBoundaryKind) (familyTraceHistory trace)
-  if not saved
+  count <- wordAt (control + 0x0c) (semaphoreBefore call)
+  timeout <- if timed then argAt (semaphoreArguments call) 1 else Right 0xffffffff
+  if timed && timeout == 0
     then do
-      expect FamilyReturn (semaphoreR0 call == 0)
-      count <- wordAt (control + 0x0c) (semaphoreBefore call)
-      wordAt (control + 0x0c) (semaphoreAfter call) >>= expect FamilyEffect . (== count - 1)
-    else do
-      expect FamilyLifetime (semaphoreR0 call `elem` [0, statusReleased, statusTimeout])
-      wordAt wait (semaphoreAfter call) >>= expect FamilyLifetime . (== semaphoreR0 call)
-      byteAt (task + 0x0c) (semaphoreAfter call) >>= expect FamilyLifetime . (\state -> state .&. 1 /= 0)
-      when (semaphoreR0 call == statusTimeout) $ expect FamilyTimer timed
-      when (semaphoreR0 call == 0) $ do
-        count <- wordAt (control + 0x0c) (semaphoreBefore call)
-        wordAt (control + 0x0c) (semaphoreAfter call) >>= expect FamilyEffect . (== count)
+      expect FamilyLifetime (not saved)
+      if count == 0
+        then do
+          expect FamilyReturn (semaphoreR0 call == statusTimeout)
+          wordAt (control + 0x0c) (semaphoreAfter call) >>= expect FamilyEffect . (== count)
+        else do
+          expect FamilyReturn (semaphoreR0 call == 0)
+          wordAt (control + 0x0c) (semaphoreAfter call) >>= expect FamilyEffect . (== count - 1)
+    else if not saved
+      then do
+        expect FamilyReturn (semaphoreR0 call == 0)
+        wordAt (control + 0x0c) (semaphoreAfter call) >>= expect FamilyEffect . (== count - 1)
+      else do
+        taskSlot <- maybe (Left FamilyAssociation) Right (taskSlotOf domain task)
+        let wait = waitAddress domain taskSlot
+        expect FamilyLifetime (semaphoreR0 call `elem` [0, statusReleased, statusTimeout])
+        wordAt wait (semaphoreAfter call) >>= expect FamilyLifetime . (== semaphoreR0 call)
+        byteAt (task + 0x0c) (semaphoreAfter call) >>= expect FamilyLifetime . (\state -> state .&. 1 /= 0)
+        when (semaphoreR0 call == 0) $ do
+          wordAt (control + 0x0c) (semaphoreAfter call) >>= expect FamilyEffect . (== count)
 
 checkContinuation :: SemaphoreCall c => c -> FamilyTrace -> Either FamilyRefusal ()
 checkContinuation call trace = do
@@ -274,32 +327,103 @@ checkContinuation call trace = do
     case familyBoundaryRegisters boundary of
       registers | length registers == 16 -> expect FamilyContinuation (inSemaphoreWindow domain (registers !! 14))
       _ -> Left FamilyContinuation
-  forM_ (filter (\boundary -> familyBoundaryKind boundary == FamilyResumeKind) history) $ \boundary ->
-    case familyBoundaryRegisters boundary of
-      registers | length registers == 16 -> expect FamilyContinuation (inSemaphoreWindow domain (registers !! 15))
-      _ -> Left FamilyContinuation
 
-checkTimer :: SemaphoreCall c => c -> [c] -> FamilyTrace -> SemaphoreService -> Either FamilyRefusal ()
-checkTimer call others trace service = do
-  let history = familyTraceHistory trace
-      domain = semaphoreDomain call
+checkTimer :: SemaphoreCall c => c -> [TimerWitness] -> FamilyTrace -> SemaphoreService -> Either FamilyRefusal ()
+checkTimer call witnesses _trace service = do
+  let domain = semaphoreDomain call
       task = semaphoreTask call
-      inserts = [value | boundary <- history, familyBoundaryKind boundary == FamilyTimerInsertKind, Just value <- [familyBoundaryValue boundary]]
-      siblingInserts = [value | other <- others, boundary <- maybe [] familyTraceHistory (semaphoreTrace other), familyBoundaryKind boundary == FamilyTimerInsertKind, Just value <- [familyBoundaryValue boundary]]
-      removes = [value | boundary <- history, familyBoundaryKind boundary == FamilyTimerRemoveKind, Just value <- [familyBoundaryValue boundary]]
-      tickPops = [boundary | boundary <- history, boundaryAddressOf boundary == tickEntry domain]
-  forM_ inserts $ \value -> do
-    expect FamilyTimer (isSemaphoreTimer domain value)
-    wordAt (value + 4) (semaphoreAfter call) >>= expect FamilyTimer . (== timeoutCallback domain)
-    wordAt (value + 8) (semaphoreAfter call) >>= expect FamilyAssociation . (== task)
-  forM_ removes $ \value -> expect FamilyTimer (value `elem` inserts || value `elem` siblingInserts)
+      epoch = semaphoreEpoch call
+      own = [witness | witness <- witnesses, timerEpoch witness == epoch]
+      ownInserts = [witness | witness <- own, timerKind witness == TimerInserted]
+      ownEvents = [witness | witness <- own, timerKind witness `elem` [TimerRemoved, TimerConsumed]]
+      earlier witness = [insert | insert <- witnesses, timerKind insert == TimerInserted
+        , timerEntry insert == timerEntry witness
+        , timerArmedAt insert <= timerArmedAt witness]
+      expiry = [witness | witness <- witnesses, timerKind witness == TimerConsumed
+        , timerTask witness == task, not (null (earlier witness))]
+  forM_ ownInserts $ \witness -> do
+    expect FamilyTimer (isSemaphoreTimer domain (timerEntry witness))
+    wordAt (timerEntry witness + 4) (semaphoreAfter call) >>= expect FamilyTimer . (== timeoutCallback domain)
+    wordAt (timerEntry witness + 8) (semaphoreAfter call) >>= expect FamilyAssociation . (== task)
+  forM_ ownEvents $ \witness -> expect FamilyTimer (not (null (earlier witness)))
   case service of
     SemaphoreTimedWait -> do
-      expect FamilyTimer (semaphoreR0 call /= statusTimeout || not (null inserts))
-      when (semaphoreR0 call == statusTimeout) $ expect FamilyTimer (not (null tickPops))
-    SemaphoreSignal -> forM_ removes $ \value -> expect FamilyTimer (value `elem` inserts || value `elem` siblingInserts)
-    SemaphoreDelete -> forM_ inserts $ \value -> expect FamilyTimer (value `elem` removes)
-    _ -> expect FamilyTimer (null inserts && null removes)
+      timeout <- argAt (semaphoreArguments call) 1
+      let expired = semaphoreR0 call == statusTimeout && timeout /= 0
+      expect FamilyTimer (timeout == 0 || not expired || not (null ownInserts))
+      when expired $ expect FamilyTimer (not (null expiry))
+    SemaphoreSignal -> pure ()
+    SemaphoreDelete -> pure ()
+    _ -> expect FamilyTimer (null ownInserts && null ownEvents)
 
-boundaryAddressOf :: FamilyBoundary -> Word32
-boundaryAddressOf boundary = case familyBoundaryAddress boundary of Address address -> address
+signedWord :: Word32 -> Int
+signedWord value = if value .&. 0x80000000 /= 0 then fromIntegral value - 0x100000000 else fromIntegral value
+
+-- | A semaphore wait still blocked at route end. Only the untimed wait and the negative
+-- timed wait are forever; a finite timeout still armed fails closed.
+checkPendingSemaphore :: Pending -> Either FamilyRefusal ()
+checkPendingSemaphore pending = case (pendingSemantic pending, pendingTerminal pending) of
+  (SemaphoreSemantic SemaphoreWait, Just terminal) -> foreverWait terminal False
+  (SemaphoreSemantic SemaphoreTimedWait, Just terminal) -> foreverWait terminal True
+  _ -> Left FamilyLifetime
+  where
+    domain = pendingDomain pending
+    args = pendingArguments pending
+    foreverWait terminal timed = do
+      idWord <- argAt args 0
+      (object, slot) <- resolve domain idWord
+      let control = controlAddress object slot
+          task = pendingTask pending
+          objectDomainId = case object of DomainA -> 1; DomainB -> 2
+      when timed $ do
+        timeout <- argAt args 1
+        expect FamilyLifetime (signedWord timeout < 0)
+      wait <- wordAt (task + 0x14) terminal
+      expect FamilyLifetime (wait /= 0)
+      result <- wordAt wait terminal
+      expect FamilyLifetime (result == 0)
+      queue <- wordAt (wait + 4) terminal
+      expect FamilyLifetime (queue == control)
+      owner <- wordAt (wait + 8) terminal
+      expect FamilyLifetime (owner == objectDomainId)
+      state <- wordAt (task + 0x0c) terminal
+      expect FamilyLifetime (state .&. 0xff == 0x32)
+      members <- queueWalk terminal control
+      expect FamilyLifetime (task `elem` members)
+      schedulerLock <- wordAt (if domain == DomainA then 0x400545c0 else 0x400e4580) terminal
+      objectLock <- wordAt (if domain == DomainA then 0x400545c4 else 0x400e4584) terminal
+      expect FamilyLifetime (schedulerLock == 0 && objectLock == 0)
+      forM_ (pendingSaveCpsr pending) $ \saveCpsr ->
+        expect FamilyLifetime (saveCpsr .&. 0x80 /= 0)
+      expect FamilyLifetime (pendingCpsr pending .&. 0x80 == 0)
+      savedSp <- wordAt (task + 0x18) terminal
+      savedPc <- wordAt (task + 0x1c) terminal
+      let resumeEntry = if domain == DomainA then 0x43668 else 0xd3668
+      expect FamilyLifetime (savedSp /= 0 && savedSp .&. 3 == 0 && savedPc == resumeEntry)
+      definition <- wordAt (task + 8) terminal
+      low <- wordAt (definition + 0x10) terminal
+      high <- wordAt (definition + 0x14) terminal
+      expect FamilyLifetime (savedSp > low && savedSp <= high)
+      continuation <- wordAt (savedSp + 32) terminal
+      expect FamilyContinuation (inSemaphoreWindow domain continuation)
+
+-- | Walks the terminal queue from its self-linked head and requires reciprocal links and a
+-- closed cycle. A self-linked caller outside the queue is not a member.
+queueWalk :: Memory -> Word32 -> Either FamilyRefusal [Word32]
+queueWalk memory control = do
+  first <- wordAt control memory
+  expect FamilyLifetime (first == control || first /= 0)
+  go (0 :: Int) first
+  where
+    go depth node
+      | depth > 256 = Left FamilyDestructor
+      | node == control = Right []
+      | node == 0 = Left FamilyLifetime
+      | otherwise = do
+          next <- wordAt node memory
+          prev <- wordAt (node + 4) memory
+          expect FamilyLifetime (next /= 0 && prev /= 0)
+          when (next /= control) $ wordAt (next + 4) memory >>= expect FamilyLifetime . (== node)
+          when (prev /= control) $ wordAt prev memory >>= expect FamilyLifetime . (== node)
+          rest <- go (depth + 1) next
+          pure (node : rest)

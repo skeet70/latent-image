@@ -3869,6 +3869,25 @@ sh_binary(
 ]
 
 haskell_test(
+    name = "scheduler-pair-semaphore-tests",
+    size = "small",
+    srcs = ["SchedulerPairSemaphoreTests.hs"],
+    main_file = "SchedulerPairSemaphoreTests.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":case-sha256",
+        ":own-first-pair-lib",
+        ":scheduler-pair-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//replacement/rtos_scheduler/oracle:scheduler-oracle-lib",
+    ],
+)
+
+haskell_test(
     name = "scheduler-pair-family-tests",
     size = "small",
     srcs = ["SchedulerPairFamilyTests.hs"],

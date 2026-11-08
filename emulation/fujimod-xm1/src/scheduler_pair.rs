@@ -1183,7 +1183,6 @@ impl SemaphoreTables {
 impl SemaphoreService {
     fn owns_its_table(self) -> bool { matches!(self, Self::Create | Self::Delete) }
     fn blocks(self) -> bool { matches!(self, Self::Wait | Self::TimedWait) }
-    fn stack_timeout(self) -> bool { self == Self::TimedWait }
     fn request_argument(self) -> Option<usize> { (self == Self::Create).then_some(1) }
     /// Class 0 is the entry domain, 1 is A and 2 is B; create and delete index the entry domain.
     fn resolve(self, entry: Domain, id: u32) -> Option<(Domain, u32)> {
@@ -1204,7 +1203,7 @@ fn semaphore_queue(walk: &mut FamilyWalk, tables: SemaphoreTables, control: u32)
     let mut node = walk.pointer(control)?;
     for _ in 0..FAMILY_QUEUE_LIMIT {
         let Some(task) = node.filter(|&task| task != control) else { return Ok(()) };
-        for offset in [0x0c, 0x14, 0x18, 0x1c, 0x20] { walk.capture_word(task + offset); }
+        for offset in [0x00, 0x04, 0x0c, 0x14, 0x18, 0x1c, 0x20, 0x24] { walk.capture_word(task + offset); }
         if let Some((waiter, slot)) = family_task(task) {
             let waiter_tables = SemaphoreTables::of(waiter);
             if let Some(wait) = waiter_tables.waits.record(slot) {
@@ -1219,14 +1218,13 @@ fn semaphore_queue(walk: &mut FamilyWalk, tables: SemaphoreTables, control: u32)
     Ok(())
 }
 
-/// The semaphore words one call involves: the create request, the caller's timed-wait stack
-/// argument, the object's config and control, and the bounded wait queue with its timer entries.
+/// The semaphore words one call involves: the create request, the object's config and
+/// control, and the bounded wait queue with its timer entries.
 fn semaphore_words(read: &mut dyn FnMut(u32) -> Result<Read, String>, domain: Domain, name: SemaphoreService,
-    arguments: [u32; 4], caller_sp: u32, running: Option<u32>) -> Result<Vec<u32>, String> {
+    arguments: [u32; 4], running: Option<u32>) -> Result<Vec<u32>, String> {
     let entry_tables = SemaphoreTables::of(domain);
     let mut walk = FamilyWalk { addresses: BTreeSet::new(), read };
     if let Some(index) = name.request_argument() { walk.record(arguments[index], 0x0c); }
-    if name.stack_timeout() { walk.capture_word(caller_sp); }
     if name.blocks() {
         if let Some(slot) = running.and_then(|task| entry_tables.tasks.slot(task)) {
             if let Some(wait) = entry_tables.waits.record(slot) { walk.record(wait, entry_tables.waits.size); }
@@ -1245,7 +1243,7 @@ fn semaphore_words(read: &mut dyn FnMut(u32) -> Result<Read, String>, domain: Do
 }
 
 fn semaphore_snapshot(board: &Board, core: Core, tcm: [u32; 2], domain: Domain, name: SemaphoreService,
-    arguments: [u32; 4], caller_sp: u32) -> Result<Vec<WordValue>, String> {
+    arguments: [u32; 4]) -> Result<Vec<WordValue>, String> {
     let running_cell = match domain { Domain::A => 0x4005_4760, Domain::B => 0x400e_4720 };
     let running = match board.word(core, tcm, running_cell)? {
         Read::Committed { value } if value != 0 => Some(value),
@@ -1253,7 +1251,7 @@ fn semaphore_snapshot(board: &Board, core: Core, tcm: [u32; 2], domain: Domain, 
     };
     let mut read = |address: u32| board.word(core, tcm, address);
     let mut words = root_snapshot(board, core, tcm, domain)?;
-    for address in semaphore_words(&mut read, domain, name, arguments, caller_sp, running)? {
+    for address in semaphore_words(&mut read, domain, name, arguments, running)? {
         words.push(WordValue { address: Hex(address), value: board.word(core, tcm, address)? });
     }
     words.sort_by_key(|word| word.address);
@@ -1522,7 +1520,7 @@ impl Observer<'_> {
                 Semantic::Helper { name } => snapshot(&board, context.core, tcm, name, context.arguments)?,
                 Semantic::Service { name } => service_snapshot(&board, context.core, tcm, domain, name, context.arguments)?,
                 Semantic::Family { name } => family_snapshot(&board, context.core, tcm, domain, name, context.arguments, context.sp)?,
-                Semantic::Semaphore { name } => semaphore_snapshot(&board, context.core, tcm, domain, name, context.arguments, context.sp)?,
+                Semantic::Semaphore { name } => semaphore_snapshot(&board, context.core, tcm, domain, name, context.arguments)?,
                 _ => root_snapshot(&board, context.core, tcm, domain)?,
             },
             order: self.next_order(),
@@ -1603,7 +1601,7 @@ impl Observer<'_> {
             let memory = call.entry.memory.iter().map(|word| Ok(WordValue {
                 address: word.address, value: board.word(context.core, tcm, word.address.0)?,
             })).collect::<Result<Vec<_>, String>>()?;
-            if matches!(call.entry.slot.semantic, Semantic::Service { .. } | Semantic::Family { .. }) && completion == Completion::Return {
+            if matches!(call.entry.slot.semantic, Semantic::Service { .. } | Semantic::Family { .. } | Semantic::Semaphore { .. }) && completion == Completion::Return {
                 call.record(Boundary { kind: BoundaryKind::Return, address: Hex(context.pc), instructions: context.instructions,
                     order: self.next_order(), core: context.core, task: context.current, sp: Hex(context.sp), cpsr: context.cpsr,
                     registers: context.registers, memory: memory.clone(), writes: Vec::new(),
@@ -1709,7 +1707,7 @@ impl Observer<'_> {
         };
         if let Some(kind) = kind { self.boundary(machine, context, tcm, kind, Some(context.r0))?; }
         if kind == Some(BoundaryKind::NoSave) {
-            let discarded = self.open.take_where(|key, call| key.core == context.core && call.entry.task == context.current && matches!(call.entry.slot.semantic, Semantic::Service { .. } | Semantic::Family { .. }));
+            let discarded = self.open.take_where(|key, call| key.core == context.core && call.entry.task == context.current && matches!(call.entry.slot.semantic, Semantic::Service { .. } | Semantic::Family { .. } | Semantic::Semaphore { .. }));
             self.finish(machine, context, tcm, discarded, Completion::Discard)?;
         }
         Ok(origin)
@@ -1814,7 +1812,7 @@ impl Observer<'_> {
                         self.boundary(machine, &context, tcm, kind, Some(boundary_value))?;
                     }
                     if kind == BoundaryKind::DiscardedRead && value == 1 && self.validated.plan.probes[index].register.0 == 3 {
-                        let discarded = self.open.take_where(|key,call| key.core==core && call.entry.task==context.current && matches!(call.entry.slot.semantic,Semantic::Service { .. } | Semantic::Family { .. }));
+                        let discarded = self.open.take_where(|key,call| key.core==core && call.entry.task==context.current && matches!(call.entry.slot.semantic,Semantic::Service { .. } | Semantic::Family { .. } | Semantic::Semaphore { .. }));
                         self.finish(machine,&context,tcm,discarded,Completion::Discard)?;
                     }
                     if kind == BoundaryKind::SelectedRead && self.validated.plan.probes[index].register.0 == 1 {

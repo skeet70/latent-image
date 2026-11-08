@@ -194,26 +194,28 @@ pendingOf = withObject "pending" $ \p -> do
   slot <- entry .: "slot"
   semantic <- withObject "slot" (.: "semantic") slot
   entered <- p .: "entered"
+  let typed = do
+        domain <- withObject "slot" (.: "domain") slot >>= parseDomain
+        arguments <- entry .: "arguments"
+        before <- entry .: "memory" >>= memoryOf
+        task <- entry .: "task" >>= wordRead
+        spValue <- entry .: "sp"
+        sp <- parseHex spValue
+        cpsr <- entry .: "cpsr"
+        entryValue <- withObject "slot" (.: "entry") slot
+        entryAddress <- parseHex entryValue
+        entryCore <- entry .: "core" >>= coreOf
+        entryOrder <- entry .: "order"
+        terminal <- p .:? "terminal_memory" >>= traverse memoryOf
+        history <- p .:? "history" >>= maybe (pure []) (mapM (withObject "boundary" $ \b -> (,,,) <$> b .: "kind" <*> b .: "cpsr" <*> b .: "instructions" <*> b .: "order"))
+        let saves = [(savedCpsr,savedAt,savedOrder) | (kind,savedCpsr,savedAt,savedOrder) <- history, kind == ("save" :: T.Text)]
+            saveCpsr = case saves of { [] -> Nothing; values -> Just ((\\(c,_,_) -> c) (last values)) }
+            saveAt = case saves of { [] -> Nothing; values -> Just ((\\(_,a,_) -> a) (last values)) }
+            saveOrder = case saves of { [] -> Nothing; values -> Just ((\\(_,_,o) -> o) (last values)) }
+        pure (Left (F.Pending semantic domain arguments before terminal task sp cpsr entryAddress entered saveCpsr saveAt saveOrder entryOrder entryCore))
   case semantic of
-    FamilySemantic _ -> do
-      domain <- withObject "slot" (.: "domain") slot >>= parseDomain
-      arguments <- entry .: "arguments"
-      before <- entry .: "memory" >>= memoryOf
-      task <- entry .: "task" >>= wordRead
-      spValue <- entry .: "sp"
-      sp <- parseHex spValue
-      cpsr <- entry .: "cpsr"
-      entryValue <- withObject "slot" (.: "entry") slot
-      entryAddress <- parseHex entryValue
-      entryCore <- entry .: "core" >>= coreOf
-      entryOrder <- entry .: "order"
-      terminal <- p .:? "terminal_memory" >>= traverse memoryOf
-      history <- p .:? "history" >>= maybe (pure []) (mapM (withObject "boundary" $ \b -> (,,,) <$> b .: "kind" <*> b .: "cpsr" <*> b .: "instructions" <*> b .: "order"))
-      let saves = [(savedCpsr,savedAt,savedOrder) | (kind,savedCpsr,savedAt,savedOrder) <- history, kind == ("save" :: T.Text)]
-          saveCpsr = case saves of { [] -> Nothing; values -> Just ((\(c,_,_) -> c) (last values)) }
-          saveAt = case saves of { [] -> Nothing; values -> Just ((\(_,a,_) -> a) (last values)) }
-          saveOrder = case saves of { [] -> Nothing; values -> Just ((\(_,_,o) -> o) (last values)) }
-      pure (Left (F.Pending semantic domain arguments before terminal task sp cpsr entryAddress entered saveCpsr saveAt saveOrder entryOrder entryCore))
+    FamilySemantic _ -> typed
+    SemaphoreSemantic _ -> typed
     _ -> pure (Right entered)
 
 expect :: Refusal -> Bool -> Either Refusal ()
@@ -438,7 +440,10 @@ qualifySuffix plan releases observation totals = do
   forM_ familyPending $ \pending -> do
     checkPendingEnvelope plan pending
     expect Incomplete (F.pendingEntered pending <= obsInstructions observation)
-    either (Left . familyRefusal) Right (F.checkPendingFamily releases pending)
+    case F.pendingSemantic pending of
+      FamilySemantic _ -> either (Left . familyRefusal) Right (F.checkPendingFamily releases pending)
+      SemaphoreSemantic _ -> either (Left . familyRefusal) Right (Sem.checkPendingSemaphore pending)
+      _ -> Left FamilyLifetime
   expect ObserverError (obsError observation == Nothing && obsMachineError observation == Nothing)
   let milestones = obsMilestones observation
       phases = S.fromList (map Q.milestonePhase milestones)
@@ -646,14 +651,13 @@ timerWitnesses calls =
           F.TimerRemoved -> maybe (boundaryTask boundary) id (M.lookup (Address (entry+8)) (boundaryMemory boundary))
           _ -> boundaryTask boundary
   ]
-
 checkFamilyCall :: Call -> [F.TimerWitness] -> Either Refusal ()
 checkFamilyCall call witnesses = case F.checkFamilyCall call witnesses of
   Right () -> Right ()
   Left refusal -> Left (familyRefusal refusal)
 
-checkSemaphoreCall :: Role -> Call -> [Call] -> Either Refusal ()
-checkSemaphoreCall role call others = case Sem.checkSemaphoreCall role call others of
+checkSemaphoreCall :: Role -> Call -> [F.TimerWitness] -> Either Refusal ()
+checkSemaphoreCall _role call witnesses = case Sem.checkSemaphoreCall call witnesses of
   Right () -> Right ()
   Left refusal -> Left (familyRefusal refusal)
 
@@ -673,8 +677,10 @@ instance Sem.SemaphoreCall Call where
   semaphoreBefore = callBefore
   semaphoreAfter = callAfter
   semaphoreR0 = callR0
+  semaphoreCpsr = callCpsr
   semaphoreWrites call = [(address,size,value) | Written address size value <- callWrites call]
   semaphoreTask = callTask
+  semaphoreEpoch = callFirst
   semaphoreService call = case callSemantic call of SemaphoreSemantic service -> Just service; _ -> Nothing
   semaphoreTrace call = fmap familyTraceOf (callTrace call)
 
