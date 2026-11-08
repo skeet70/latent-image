@@ -104,7 +104,7 @@ struct Kernel {
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
-enum Boundary { Start, Entry, Instruction, RootEntry, RootInstruction, ServiceEntry, ServiceReturn, TaskSubmit, PeriodicCallback, IrqEntry, IrqSave, IrqFrame, AckReturn, IrqExit, IrqReturn, HandlerResume, PostCleanup }
+enum Boundary { Start, Entry, Instruction, RootEntry, RootInstruction, ServiceEntry, ServiceReturn, TaskSubmit, PeriodicCallback, IrqEntry, IrqSave, IrqFrame, AckReturn, IrqExit, IrqReturn, HandlerPoint, HandlerResume, PostCleanup }
 /// ATCM bytes from eight below the sample SP to the IRQ stack top.
 #[derive(Serialize)]
 struct InterruptStack { low: Address, bytes: Vec<u8> }
@@ -162,9 +162,9 @@ struct ControllerSnapshot { device: ControllerId, registers: ControllerRegisters
 #[serde(rename_all = "kebab-case")]
 enum FixtureState { Prepared, Installed, Restored }
 #[derive(Serialize)]
-struct ControllerFixture { core: Core, device: ControllerId, original: ControllerRegisters, probe: IrqLine, handler: Address }
+struct ControllerFixture { core: Core, device: ControllerId, state: FixtureState, original: ControllerRegisters, probe: IrqLine, handler: Address }
 #[derive(Serialize)]
-struct NestedFixture { state: FixtureState, controllers: [ControllerFixture; 2] }
+struct NestedFixture { state: FixtureState, controllers: [Option<ControllerFixture>; 2] }
 enum ControllerRegister { Enable(IrqLine), Disable(IrqLine), Vector(IrqLine), Priority(IrqLine) }
 #[derive(Deserialize, Serialize)]
 struct WatchSummary { enabled: bool, violation: Option<String> }
@@ -173,6 +173,19 @@ struct WatchSummary { enabled: bool, violation: Option<String> }
 enum Access { CpuFetch, CpuRead, CpuWrite, HostRead, HostWrite, ModelBusRead, ModelBusWrite }
 #[derive(Deserialize)]
 struct AccessRecord { source: Access, physical: Option<u64>, size: u64, core: Option<usize>, pc: Option<u64>, instructions: Option<u64> }
+const IRQ_LOCK: Address = Address(0xc0804);
+#[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+struct WatchCursor(usize);
+#[derive(Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+enum ByteOrder { Little, Big }
+#[derive(Deserialize)]
+struct LockWriteWire { core: usize, pc: Address, before: [u8; 4], value: Word, byte_order: ByteOrder }
+#[derive(Serialize)]
+struct LockWrite { cursor: WatchCursor, core: Core, pc: Address, before: Word, after: Word }
+#[derive(Serialize)]
+struct LockJournal { initial: Option<Word>, writes: Vec<LockWrite> }
+struct IrqHold { checked: WatchCursor, owner: Word, exit: Option<WatchCursor> }
 #[derive(Serialize)]
 #[serde(rename_all = "kebab-case")]
 enum Outcome { ObservedMenu, Refused }
@@ -184,6 +197,8 @@ struct Receipt<'a> {
     sites: &'a BTreeMap<u32, String>, hits: &'a [Hit], samples: &'a [Sample], final_menu: Result<Option<[u32; 3]>, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     nested_fixture: Option<&'a NestedFixture>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lock_journal: Option<&'a LockJournal>,
 }
 
 fn require(condition: bool, message: &str) -> Result<(), String> { if condition { Ok(()) } else { Err(message.into()) } }
@@ -436,7 +451,7 @@ impl ControllerFixture {
             require(original.enabled[index / 32].0 & (1 << (index % 32)) == 0 || original.priorities[index].is_some(),
                 "enabled fixture source lacks a programmed priority")?;
         }
-        Ok(Self { core, device, original, probe: IrqLine(probe as u8), handler })
+        Ok(Self { core, device, state: FixtureState::Prepared, original, probe: IrqLine(probe as u8), handler })
     }
     fn priorities(&self, machine: &mut Machine, state: FixtureState) -> Result<(), String> {
         for index in 0..128 {
@@ -449,45 +464,54 @@ impl ControllerFixture {
         }
         Ok(())
     }
-    fn verify(&self, machine: &Machine, state: FixtureState) -> Result<(), String> {
+    fn verify(&self, machine: &Machine, state: FixtureState, baseline: &ControllerRegisters) -> Result<(), String> {
         let current = controller_snapshot(machine, self.core)?.registers;
         let installed = state == FixtureState::Installed;
         for index in 0..128 {
             let bit = 1 << (index % 32);
             let probe = index == usize::from(self.probe.0);
             let enabled = self.original.enabled[index / 32].0 & bit != 0;
-            let priority = if installed && probe { Some(IrqPriority(0)) }
-                else if installed && enabled && self.original.priorities[index] == Some(IrqPriority(0)) { Some(IrqPriority(1)) }
-                else { self.original.priorities[index] };
-            require(current.priorities[index] == priority
-                && current.vectors[index] == if installed && probe { Some(self.handler) } else { self.original.vectors[index] }
-                && (current.enabled[index / 32].0 & bit != 0) == (enabled || installed && probe),
+            let adjusted = enabled && self.original.priorities[index] == Some(IrqPriority(0));
+            let priority = if probe {
+                if installed { Some(IrqPriority(0)) } else { self.original.priorities[index] }
+            } else if adjusted {
+                Some(IrqPriority(u8::from(installed)))
+            } else { baseline.priorities[index] };
+            let vector = if probe {
+                if installed { Some(self.handler) } else { self.original.vectors[index] }
+            } else { baseline.vectors[index] };
+            let expected_enabled = if probe { installed } else { baseline.enabled[index / 32].0 & bit != 0 };
+            require(current.priorities[index] == priority && current.vectors[index] == vector
+                && (current.enabled[index / 32].0 & bit != 0) == expected_enabled,
                 "nested fixture MMIO configuration readback differs")?;
         }
         Ok(())
     }
 }
 impl NestedFixture {
-    fn prepare(machine: &Machine) -> Result<Self, String> {
-        Ok(Self { state: FixtureState::Prepared, controllers: [
-            ControllerFixture::prepare(machine, Core::Primary)?, ControllerFixture::prepare(machine, Core::Secondary)?,
-        ] })
-    }
-    fn install(&mut self, machine: &mut Machine) -> Result<(), String> {
-        require(self.state == FixtureState::Prepared, "nested fixture is already installed")?;
-        for controller in &self.controllers {
+    fn new() -> Self { Self { state: FixtureState::Prepared, controllers: [None, None] } }
+    fn install_core(&mut self, machine: &mut Machine, core: Core) -> Result<(), String> {
+        require(self.state != FixtureState::Restored, "nested fixture was already restored")?;
+        let slot = &mut self.controllers[core.index()];
+        if slot.is_none() {
+            *slot = Some(ControllerFixture::prepare(machine, core)?);
+            let controller = slot.as_mut().ok_or("core nested fixture absent")?;
             controller.priorities(machine, FixtureState::Installed)?;
             controller_write(machine, controller, ControllerRegister::Vector(controller.probe), Word(controller.handler.0))?;
             controller_write(machine, controller, ControllerRegister::Priority(controller.probe), Word(0))?;
             controller_write(machine, controller, ControllerRegister::Enable(controller.probe), Word(1 << (controller.probe.0 % 32)))?;
-            controller.verify(machine, FixtureState::Installed)?;
+            controller.verify(machine, FixtureState::Installed, &controller.original)?;
+            controller.state = FixtureState::Installed;
         }
-        self.state = FixtureState::Installed;
+        if self.controllers.iter().all(|controller| controller.as_ref().is_some_and(|controller| controller.state == FixtureState::Installed)) {
+            self.state = FixtureState::Installed;
+        }
         Ok(())
     }
     fn restore(&mut self, machine: &mut Machine) -> Result<(), String> {
         require(self.state == FixtureState::Installed, "nested fixture was not installed")?;
-        for controller in &self.controllers {
+        for slot in &mut self.controllers {
+            let controller = slot.as_mut().ok_or("core nested fixture was not installed")?;
             let current = controller_snapshot(machine, controller.core)?.registers;
             require(current.active.is_empty()
                 && current.pending[usize::from(controller.probe.0 / 32)].0 & (1 << (controller.probe.0 % 32)) == 0,
@@ -498,22 +522,24 @@ impl NestedFixture {
             controller_write(machine, controller, ControllerRegister::Priority(controller.probe),
                 Word(u32::from(controller.original.priorities[usize::from(controller.probe.0)].ok_or("original fixture priority absent")?.0)))?;
             controller.priorities(machine, FixtureState::Restored)?;
-            controller.verify(machine, FixtureState::Restored)?;
+            controller.verify(machine, FixtureState::Restored, &current)?;
+            controller.state = FixtureState::Restored;
         }
         self.state = FixtureState::Restored;
         Ok(())
     }
 }
 
-fn boundary(address: u32) -> Result<Boundary, String> {
-    match address {
-        0x725dd8 => Ok(Boundary::Start), ENTRY => Ok(Boundary::Entry), 0x69cbf4 | 0x69cbf8 | 0x69cbfc => Ok(Boundary::Instruction),
-        0x40204 | 0xd0204 => Ok(Boundary::IrqEntry), 0x40234 | 0xd0234 => Ok(Boundary::IrqFrame),
-        0x4020c | 0xd020c => Ok(Boundary::IrqSave),
-        0x40d5c | 0xd0d5c => Ok(Boundary::AckReturn),
-        0x402f8 | 0xd02f8 => Ok(Boundary::IrqExit),
-        0x40364 | 0xd0364 | 0x437d8 | 0xd37d8 => Ok(Boundary::IrqReturn), _ => Err("unknown observation boundary".into()),
-    }
+fn boundary(address: u32) -> Option<Boundary> {
+    Some(match address {
+        0x725dd8 => Boundary::Start, ENTRY => Boundary::Entry, 0x69cbf4 | 0x69cbf8 | 0x69cbfc => Boundary::Instruction,
+        0x40204 | 0xd0204 => Boundary::IrqEntry, 0x40234 | 0xd0234 => Boundary::IrqFrame,
+        0x4020c | 0xd020c => Boundary::IrqSave,
+        0x40d5c | 0xd0d5c => Boundary::AckReturn,
+        0x402f8 | 0xd02f8 => Boundary::IrqExit,
+        0x40364 | 0xd0364 | 0x437d8 | 0xd37d8 => Boundary::IrqReturn,
+        _ => return None,
+    })
 }
 fn sites(nested: bool) -> BTreeMap<u32, String> {
     let mut sites = [(0x725dd8, "start"), (ENTRY, "entry"), (0x69cbf4, "instruction"), (0x69cbf8, "instruction"), (0x69cbfc, "instruction"),
@@ -538,6 +564,7 @@ fn watch_ranges() -> Vec<WatchRange> {
     ranges.extend([
         WatchRange { start: u64::from(ENTRY), end: u64::from(LIMIT), kinds: WatchKinds::CPU_FETCH },
         WatchRange { start: 0x725dd8, end: 0x725ddc, kinds: WatchKinds::CPU_FETCH },
+        WatchRange { start: u64::from(IRQ_LOCK.0), end: u64::from(IRQ_LOCK.0) + 4, kinds: WatchKinds::WRITES },
     ]);
     for address in [0x40204, 0xd0204, 0x40234, 0xd0234, 0x40364, 0xd0364, 0x437d8, 0xd37d8] {
         ranges.push(WatchRange { start: address, end: address + 4, kinds: WatchKinds::CPU_FETCH });
@@ -637,11 +664,11 @@ impl NestedProgress {
             (Self::Exiting { frame, dispatch }, Boundary::IrqReturn) => {
                 held(frame.entry.lock, 1)?;
                 require(irq.dispatch == dispatch, "nested exit consumed the dispatch request")?;
-                require(state.cpsr.0 & 0xbf == 0x93 && state.spsr == frame.entry.irq.spsr
-                    && state.sp.0.checked_add(28) == Some(frame.saved.sp.0)
-                    && state.registers[4..12] == frame.entry.irq.registers[4..12]
-                    && frame_at::<7>(sample, state.sp)? == nested_frame(&frame)[1..],
-                    "nested IRQ return did not preserve the interrupted handler frame")?;
+                require(state.cpsr.0 & 0xbf == 0x93, "nested return is not masked SVC")?;
+                require(state.spsr == frame.entry.irq.spsr, "nested return did not restore the saved status")?;
+                require(state.sp.0.checked_add(28) == Some(frame.saved.sp.0), "nested return stack extent differs")?;
+                require(state.registers[4..12] == frame.entry.irq.registers[4..12], "nested return clobbered callee registers")?;
+                require(frame_at::<7>(sample, state.sp)? == nested_frame(&frame)[1..], "nested return frame changed")?;
                 Ok((Self::Returning { frame, dispatch }, None))
             }
             (Self::Returning { frame, dispatch }, Boundary::HandlerResume) => {
@@ -663,21 +690,36 @@ fn nested_frame(frame: &NestedFrame) -> [u32; 8] {
 }
 struct Lifecycle {
     phase: Phase, wait: Option<Context>, wait_executed: bool, repeated_at: Option<u64>,
-    outer_sp: Option<Address>, nested: NestedProgress,
+    outer_sp: Option<Address>, nested: NestedProgress, hold: Option<IrqHold>,
 }
-struct Producer { wfi: Address, resume: Address, nested: bool, cores: [Lifecycle; 2] }
+struct Producer { wfi: Address, resume: Address, nested: bool, cores: [Lifecycle; 2], journal: LockJournal }
 impl Producer {
     fn new(wfi: Address, resume: Address, nested: bool) -> Self {
         Self { wfi, resume, nested, cores: std::array::from_fn(|_| Lifecycle {
             phase: Phase::AwaitEntry, wait: None, wait_executed: false, repeated_at: None,
-            outer_sp: None, nested: NestedProgress::Await,
-        }) }
+            outer_sp: None, nested: NestedProgress::Await, hold: None,
+        }), journal: LockJournal { initial: None, writes: Vec::new() } }
     }
     fn complete(&self) -> bool {
         self.cores.iter().all(|core| core.phase == Phase::Complete && (!self.nested || matches!(core.nested, NestedProgress::Complete { .. })))
     }
     fn boundary(&self, core: Core, address: Address) -> Result<Boundary, String> {
-        if self.cores[core.index()].nested.resume() == Some(address) { Ok(Boundary::HandlerResume) } else { boundary(address.0) }
+        let progress = &self.cores[core.index()].nested;
+        if progress.resume() == Some(address) && matches!(progress, NestedProgress::Returning { .. }) {
+            Ok(Boundary::HandlerResume)
+        } else {
+            boundary(address.0).or_else(|| (progress.resume() == Some(address)).then_some(Boundary::HandlerPoint))
+                .ok_or_else(|| "unknown observation boundary".into())
+        }
+    }
+    fn lock_write(&mut self, cursor: WatchCursor, raw: &serde_json::Value) -> Result<(), String> {
+        let wire = LockWriteWire::deserialize(raw).map_err(|error| format!("IRQ lock write: {error}"))?;
+        require(wire.byte_order == ByteOrder::Little, "IRQ lock write has the wrong byte order")?;
+        let before = Word(u32::from_le_bytes(wire.before));
+        let expected = self.journal.writes.last().map(|write| write.after).or(self.journal.initial).ok_or("IRQ lock initial value absent")?;
+        require(before == expected, "IRQ lock write chain has a gap")?;
+        self.journal.writes.push(LockWrite { cursor, core: Core::from_index(wire.core)?, pc: wire.pc, before, after: wire.value });
+        Ok(())
     }
     fn fetched(&mut self, core: Core, pc: Address, instructions: u64) {
         let life = &mut self.cores[core.index()];
@@ -689,6 +731,16 @@ impl Producer {
     fn observe(&mut self, sample: &Sample) -> Result<Option<NestedAction>, String> {
         let state = &sample.context;
         let core = state.core;
+        if self.nested {
+            let irq = sample.irq.ok_or("IRQ state absent for lock journal")?;
+            if self.journal.initial.is_none() {
+                require(sample.boundary == Boundary::Start && self.journal.writes.is_empty(), "IRQ lock journal starts after execution")?;
+                self.journal.initial = Some(irq.lock);
+            }
+            let current = self.journal.writes.iter().rev().find(|write| write.cursor < WatchCursor(sample.watch_cursor))
+                .map(|write| write.after).or(self.journal.initial).ok_or("IRQ lock journal is empty")?;
+            require(irq.lock == current, "IRQ lock readback differs from its write journal")?;
+        }
         let life = &mut self.cores[core.index()];
         let task = &sample.kernels[core.index()];
         let active = task.created == Word(1) && task.current == task.node;
@@ -733,15 +785,27 @@ impl Producer {
             life.outer_sp = Some(state.sp);
         }
         if self.nested && life.phase == Phase::Framed {
+            if let Some(hold) = &mut life.hold {
+                let first = self.journal.writes.partition_point(|write| write.cursor < hold.checked);
+                let end = self.journal.writes.partition_point(|write| write.cursor < WatchCursor(sample.watch_cursor));
+                require(self.journal.writes[first..end].iter().all(|write| write.after == hold.owner),
+                    "IRQ lock was released during the nested lifetime")?;
+                hold.checked = WatchCursor(sample.watch_cursor);
+            }
             require(frame_at::<8>(sample, life.outer_sp.ok_or("outer IRQ frame address absent")?)? == outer_frame,
                 "nested execution changed the outer task frame")?;
             let progress = std::mem::replace(&mut life.nested, NestedProgress::Refused);
             let (progress, action) = progress.observe(sample)?;
             life.nested = progress;
+            if matches!(action, Some(NestedAction::Inject(_))) {
+                life.hold = Some(IrqHold { checked: WatchCursor(sample.watch_cursor),
+                    owner: sample.irq.ok_or("IRQ lock acquisition state absent")?.lock, exit: None });
+            }
             if action.is_some() { return Ok(action); }
             if let (NestedProgress::Complete { lock }, Boundary::IrqExit) = (&life.nested, sample.boundary) {
                 let irq = sample.irq.ok_or("outer IRQ exit state absent")?;
                 require(irq.counter == Word(1) && irq.lock == *lock, "outer exit did not retain its lock until cleanup")?;
+                life.hold.as_mut().ok_or("IRQ lock hold interval absent")?.exit = Some(WatchCursor(sample.watch_cursor));
                 life.phase = Phase::Exiting;
             }
         }
@@ -751,8 +815,14 @@ impl Producer {
             require(state.spsr == wait.cpsr && frame::<7>(sample)? == outer_frame[1..], "idle IRQ return frame differs")?;
             if self.nested {
                 let irq = sample.irq.ok_or("outer IRQ return state absent")?;
-                require(irq.counter == Word(0) && irq.lock == Word(0) && irq.dispatch == Word(0),
-                    "outer IRQ exit did not release the lock and consume dispatch")?;
+                let hold = life.hold.as_ref().ok_or("IRQ lock hold evidence absent")?;
+                let exit = hold.exit.ok_or("IRQ outer cleanup boundary absent")?;
+                let first = self.journal.writes.partition_point(|write| write.cursor < exit);
+                let end = self.journal.writes.partition_point(|write| write.cursor < WatchCursor(sample.watch_cursor));
+                require(self.journal.writes[first..end].iter().any(|write|
+                    write.core == core && write.before == hold.owner && write.after == Word(0)),
+                    "outer IRQ has no own lock-release write")?;
+                require(irq.counter == Word(0) && irq.dispatch == Word(0), "outer IRQ did not consume its counter and dispatch")?;
             }
             life.phase = Phase::Returned;
         }
@@ -796,6 +866,11 @@ fn inspect_watch(raw: &serde_json::Value, processed: &mut usize, stopped: &[Hit]
         if matches!(row.source, Access::CpuWrite | Access::HostWrite | Access::ModelBusWrite) {
             let physical = row.physical.ok_or("write has no physical address")?;
             require(!immutable(physical, row.size), "immutable installed code write after watch start")?;
+            if producer.nested && physical < u64::from(IRQ_LOCK.0) + 4 && u64::from(IRQ_LOCK.0) < physical.saturating_add(row.size) {
+                require(row.source == Access::CpuWrite && physical == u64::from(IRQ_LOCK.0) && row.size == 4,
+                    "IRQ lock has an unqualified writer or width")?;
+                producer.lock_write(WatchCursor(*processed + index), &new[index])?;
+            }
         }
         if row.source == Access::CpuFetch && !stop_rows.contains(&Some(index)) {
             producer.fetched(Core::from_index(row.core.ok_or("fetch core absent")?)?, Address(u32::try_from(row.pc.ok_or("fetch PC absent")?).map_err(|_| "fetch PC exceeds32 bits")?), row.instructions.ok_or("fetch clock absent")?);
@@ -2120,6 +2195,7 @@ fn drive_root(mut machine: Machine, maps: &[MemoryMap], code: &[Code], mut bindi
         memory_watch_sha256: digest(&accesses), watch: summary, watch_end_error, sites: &sites,
         hits: &machine.traces.hits, samples: &samples, final_menu,
         nested_fixture: None,
+        lock_journal: None,
     };
     write(&output.join("root-task.json"), &serde_json::to_vec_pretty(&receipt).map_err(|error| error.to_string())?)?;
     outcome
@@ -2180,7 +2256,7 @@ fn drive() -> Result<(), String> {
     let mut watch: Option<Box<MemoryWatch>> = None;
     let mut samples = Vec::new(); let mut processed_hits = 0; let mut processed_rows = 0;
     let mut producer = Producer::new(wfi, resume, nested); let mut lifecycle_end_counts = None;
-    let mut nested_fixture: Option<NestedFixture> = None;
+    let mut nested_fixture = nested.then(NestedFixture::new);
     let result = (|| -> Result<(), String> {
         loop {
             let stopped = machine.run(DEADLINE.saturating_sub(machine.instructions()));
@@ -2204,10 +2280,6 @@ fn drive() -> Result<(), String> {
                         require(installed.bytes == source.bytes[..length], &format!("installed {} differs at first wrapper: first {:?}, installed {}, source {}", source.name, first, installed.bytes.len(), source.bytes.len()))?;
                         installed_views.push(installed);
                     }
-                    if nested {
-                        nested_fixture = Some(NestedFixture::prepare(&machine)?);
-                        nested_fixture.as_mut().ok_or("nested fixture absent")?.install(&mut machine)?;
-                    }
                     let lifecycle_sites = sites.iter().filter(|(address, _)| **address != 0x725dd8).map(|(&address, label)| (address, label.clone())).collect();
                     machine.traces.arm(&machine.session, lifecycle_sites)?;
                     watch = Some(machine.session.board.memory_watch_begin_with_fetch_attribution(watch_ranges(), fetch_attribution()?, WATCH_LIMIT, maps.clone(), ViewPolicy::Observe)?);
@@ -2215,17 +2287,24 @@ fn drive() -> Result<(), String> {
                 let boundary = producer.boundary(core, state.pc)?;
                 let mut observed = sample(&machine, &maps, &code, index, state, cursor, boundary, nested)?;
                 observed.views.extend(installed_views);
+                if boundary == Boundary::Instruction && observed.context.pc == wfi {
+                    if let Some(fixture) = &mut nested_fixture { fixture.install_core(&mut machine, core)?; }
+                }
                 samples.push(observed);
                 if let Some(action) = producer.observe(samples.last().ok_or("idle sample absent")?)? {
                     match action {
                         NestedAction::Inject(line) => machine.session.board.raise_irq(core.index(), u32::from(line.0))?,
                         NestedAction::ObserveResume(address) => {
-                            let added = BTreeMap::from([(address.0, "nested-handler-resume".into())]);
-                            machine.traces.add_sites(&machine.session, added.clone())?;
-                            sites.extend(added);
+                            if self::boundary(address.0).is_none() {
+                                let added = BTreeMap::from([(address.0, "nested-handler-resume".into())]);
+                                machine.traces.add_sites(&machine.session, added.clone())?;
+                                sites.extend(added);
+                            }
                         }
                         NestedAction::ResumeObserved(address) => {
-                            machine.traces.remove_sites(&machine.session, &[fujimod_xm1::provenance::Guest(address.0)])?;
+                            if self::boundary(address.0).is_none() {
+                                machine.traces.remove_sites(&machine.session, &[fujimod_xm1::provenance::Guest(address.0)])?;
+                            }
                         }
                     }
                 }
@@ -2257,6 +2336,7 @@ fn drive() -> Result<(), String> {
         checkpoint_sha256: digest(&reset), checkpoint_reused: true, instructions: machine.instructions(), lifecycle_end_counts,
         memory_watch_sha256: digest(&accesses), watch: summary, watch_end_error, sites: &sites, hits: &machine.traces.hits, samples: &samples, final_menu,
         nested_fixture: nested_fixture.as_ref(),
+        lock_journal: nested.then_some(&producer.journal),
     };
     write(&output.join("idle-tasks.json"), &serde_json::to_vec_pretty(&receipt).map_err(|error| error.to_string())?)?;
     outcome
