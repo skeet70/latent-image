@@ -555,6 +555,10 @@ A conditional instruction's not-executed edge continues after the run of consecu
 
 The media effect mutant returns with the wrong bitmap bit, the ABI mutant returns with only r4 corrupted, and both are refused. Candidate message cases declare only the resolver entry word at `0x00e77168`; the direct retired-body probe stops as `unknown_call` at `0x00e7716c` with zero memory provenance, before the poisoned word executes. A32 SDIV at the candidate entry stops as `unsupported_instruction`, preserving every supplied register and complete mapped memory with zero provenance.
 
+Media qualification retains each decoded native response once, as `observation.json`, by renaming the original stdout capture. Timeouts, JSON parse failures and native-observation decoding failures retain `runner.stdout`; semantic failures retain the complete observation. Case identities, acceptance predicates, output caps and deadlines are unchanged.
+
+A bounded offline replay through the production media qualifier preserves passed original/owned cases, ABI/ISA failures, the forbidden-body refusal and malformed/timeout diagnostics. Across eight samples, regular-file output falls from 30,901,748 to 19,775,433 bytes; Btrfs exclusive data extents fall from 30,965,760 to 19,824,640 bytes. The paired replay takes about ten seconds, including the controlled eight-second timeout. `private-data/scratch/StorageProducer/verification.json` binds the same-input comparison and scope. This adds no guest execution or firmware qualification and does not attribute the earlier settings reserve refusal to media output.
+
 The bounded #125 execution cutover uses only `//emulation:native-runner`, backed by the pinned FujiMod binary; `952cff1` removed the superseded C runner. These additions do not change the `verify-candidate` native producers or their stored baselines. Full-system runtime migration, the packaged #129 capture/save route, real frame-population bounds and retained device/service semantics remain separate gates.
 
 The host-only inventory check reads the same pinned image-5 ELF wrapper as the media qualification command:

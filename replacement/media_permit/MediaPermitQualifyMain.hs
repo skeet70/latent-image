@@ -20,7 +20,7 @@ import Emulation.Sha256 (sha256, sha256Hex)
 import FujiAF.Host hiding (sha256)
 import Numeric (showHex)
 import StockInventory (FunctionDeclaration (..), FunctionDerivation (..), FunctionSize (..), GuestAddress (..), PremiseUse (..), ProgramCounter (..), checkedStockFunctions, requiredReturnPremises, returnPremiseLabel)
-import System.Directory (canonicalizePath, createDirectoryIfMissing, doesDirectoryExist, listDirectory)
+import System.Directory (canonicalizePath, createDirectoryIfMissing, doesDirectoryExist, listDirectory, renameFile)
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
 import System.FilePath ((</>))
@@ -869,10 +869,12 @@ runSide runner root inputs scenario side =
               case parsed of
                 Left (message :: IOException) -> pure (Result ResultInvalidOutput [show message, BC.unpack err] Nothing Nothing)
                 Right runnerValue -> do
-                  BL.writeFile (dir </> "observation.json") (encode runnerValue)
                   case N.observeNative exit loadedRegions runnerValue of
-                    Left problem -> pure (Result ResultInvalidOutput [N.renderObservationError problem, BC.unpack err] Nothing Nothing)
-                    Right observation ->
+                    Left problem -> do
+                      BL.writeFile (dir </> "observation.json") (encode runnerValue)
+                      pure (Result ResultInvalidOutput [N.renderObservationError problem, BC.unpack err] Nothing Nothing)
+                    Right observation -> do
+                      renameFile (dir </> "runner.stdout") (dir </> "observation.json")
                       let problems =
                             (if N.nativeStatus observation == N.Returned then [] else ["runner status " ++ N.runnerStatusLabel (N.nativeStatus observation)])
                               ++ checkAbi observation
@@ -882,7 +884,7 @@ runSide runner root inputs scenario side =
                             case (lookup (N.RegionId "globals") (N.nativeMemory observation), lookup (N.RegionId "frames") (N.nativeMemory observation)) of
                               (Just globals, Just frames) -> Just (observeEffects globals frames (N.nativeRegisters observation))
                               _ -> Nothing
-                       in pure (Result (if null problems then ResultPassed else ResultFailed) problems (Just observation) effects)
+                      pure (Result (if null problems then ResultPassed else ResultFailed) problems (Just observation) effects)
 
 -- The retired resolver body is outside the candidate message case's declared code.
 runForbiddenBody :: FilePath -> FilePath -> Inputs -> Scenario -> IO Result
@@ -911,16 +913,18 @@ runForbiddenBody runner root inputs scenario =
               case parsed of
                 Left (message :: IOException) -> pure (Result ResultInvalidOutput [show message, BC.unpack err] Nothing Nothing)
                 Right runnerValue -> do
-                  BL.writeFile (dir </> "observation.json") (encode runnerValue)
                   case N.observeNative exit loadedRegions runnerValue of
-                    Left problem -> pure (Result ResultInvalidOutput [N.renderObservationError problem, BC.unpack err] Nothing Nothing)
-                    Right observation ->
+                    Left problem -> do
+                      BL.writeFile (dir </> "observation.json") (encode runnerValue)
+                      pure (Result ResultInvalidOutput [N.renderObservationError problem, BC.unpack err] Nothing Nothing)
+                    Right observation -> do
+                      renameFile (dir </> "runner.stdout") (dir </> "observation.json")
                       let pc = M.lookup N.Pc (N.nativeRegisters observation)
                           refused =
                             N.nativeStatus observation == N.UnknownCall
                               && pc == Just 0x00e7716c
                               && N.nativeProvenance observation == N.Complete (N.ProvenanceTotal 0) []
-                       in pure
+                      pure
                             ( Result
                                 (if refused then ResultPassed else ResultFailed)
                                 [ "forbidden-body status " ++ N.runnerStatusLabel (N.nativeStatus observation) ++ " at " ++ maybe "missing pc" hex pc
