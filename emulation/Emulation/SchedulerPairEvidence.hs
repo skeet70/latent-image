@@ -10,9 +10,10 @@ import qualified Data.Aeson as J
 import qualified Data.ByteString as B
 import Data.Word (Word64)
 import Emulation.SchedulerPairCheck
-import Emulation.SchedulerPairFamily (FamilyCall (..), ReleaseWitness (..), TimerWitness)
+import Emulation.SchedulerPairFamily (ReleaseWitness (..), TimerWitness)
 import Emulation.SchedulerPairPlan
 import Replacement.RtosOwnFirst.Regions (Domain, domainLabel)
+import Replacement.RtosScheduler.Regions (Helper (..))
 
 data CallFailure = CallFailure !Word64 !Refusal
 data SemanticFailureDetails = SemanticFailureDetails !Word64 !Domain !Address !Semantic !Int !Refusal
@@ -32,9 +33,9 @@ emptyCallEvidence :: CallEvidence
 emptyCallEvidence = CallEvidence Nothing Nothing (CallTotals False 0) emptyCallSummary [] [] [] [] False
 
 unlockWitnesses :: Call -> [ReleaseWitness]
-unlockWitnesses call = case familyService call of
-  Just HelperRelease -> [ReleaseWitness (familyTask call) [address | (address,_,_) <- familyWrites call]]
-  Just FamilyRelease -> [ReleaseWitness (familyTask call) [address | (address,_,_) <- familyWrites call]]
+unlockWitnesses call = case callSemantic call of
+  HelperSemantic Release -> [ReleaseWitness (callTask call) (callCore call) (callFirst call) (releaseLast call) [(address,value) | Written address _size value <- callWrites call]]
+  HelperSemantic Acquire -> [ReleaseWitness (callTask call) (callCore call) (callFirst call) (releaseLast call) [(address,value) | Written address _size value <- callWrites call]]
   _ -> []
 
 accumulateEvidence :: Plan -> CallEvidence -> Call -> CallEvidence
@@ -119,7 +120,7 @@ emptyControlEvidence plan = ControlEvidence emptyCallEvidence $ case planRole pl
 
 accumulateControlEvidence :: Plan -> ControlEvidence -> Call -> ControlEvidence
 accumulateControlEvidence plan (ControlEvidence compact retained) call =
-  ControlEvidence (accumulateKnown timers unlocks deferred overflow plan checked compact call) (retainControl (planRole plan) checked retained call)
+  ControlEvidence (accumulateKnown timers unlocks deferred overflow plan checked compact call) (retainControl (planRole plan) resolved retained call)
  where
   timers = evidenceTimers compact ++ timerWitnesses [call]
   unlocks = evidenceUnlocks compact ++ unlockWitnesses call
@@ -127,6 +128,7 @@ accumulateControlEvidence plan (ControlEvidence compact retained) call =
   deferred = case checked of
     Left FamilyTimer -> [call]
     _ -> []
+  resolved = if null deferred then checked else Right ()
   overflow = evidenceOverflow compact || length timers > 64 || length unlocks > 64 || length (evidenceDeferred compact) + length deferred > 64
 
 -- Notify adjudication retains its earliest target and preceding failed contracts.
@@ -134,8 +136,8 @@ retainControl :: Role -> Either Refusal () -> RetainedControl -> Call -> Retaine
 retainControl role checked retained call = case retained of
   NoControlCalls -> retained
   WakeFailure previous -> case checked of
-    Left _ -> WakeFailure (earlierCall previous call)
-    Right () -> retained
+    Left _ | controlTarget role call -> WakeFailure (earlierCall previous call)
+    _ -> retained
   NotifyFailures target failures
     | not isTarget, Right () <- checked -> retained
     | otherwise ->

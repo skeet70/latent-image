@@ -198,12 +198,13 @@ pendingOf = withObject "pending" $ \p -> do
       cpsr <- entry .: "cpsr"
       entryValue <- withObject "slot" (.: "entry") slot
       entryAddress <- parseHex entryValue
+      entryCore <- entry .: "core" >>= coreOf
       terminal <- p .:? "terminal_memory" >>= traverse memoryOf
-      history <- p .:? "history" >>= maybe (pure []) (mapM (withObject "boundary" $ \b -> (,) <$> b .: "kind" <*> b .: "cpsr"))
-      let saveCpsr = case [savedCpsr | (kind,savedCpsr) <- history, kind == ("save" :: T.Text)] of
-            [] -> Nothing
-            values -> Just (last values)
-      pure (Left (F.Pending semantic domain arguments before terminal task sp cpsr entryAddress entered saveCpsr))
+      history <- p .:? "history" >>= maybe (pure []) (mapM (withObject "boundary" $ \b -> (,,) <$> b .: "kind" <*> b .: "cpsr" <*> b .: "instructions"))
+      let saves = [(savedCpsr,savedAt) | (kind,savedCpsr,savedAt) <- history, kind == ("save" :: T.Text)]
+          saveCpsr = case saves of { [] -> Nothing; values -> Just (fst (last values)) }
+          saveAt = case saves of { [] -> Nothing; values -> Just (snd (last values)) }
+      pure (Left (F.Pending semantic domain arguments before terminal task sp cpsr entryAddress entered saveCpsr saveAt entryCore))
     _ -> pure (Right entered)
 
 expect :: Refusal -> Bool -> Either Refusal ()
@@ -390,7 +391,7 @@ qualify bytes plan observation = do
   checkDemandCalls observation
   let calls = sortOn callFirst (obsCalls observation)
   forM_ calls $ \call -> checkCallEnvelope plan call >> checkCallForIn calls (obsRole observation) call
-  let releases = [F.ReleaseWitness (familyTask call) [address | (address,_,_) <- familyWrites call] | call <- calls, familyService call `elem` [Just FamilyRelease, Just HelperRelease]]
+  let releases = [F.ReleaseWitness (callTask call) (callCore call) (callFirst call) (releaseLast call) [(address,value) | Written address _size value <- callWrites call] | call <- calls, callSemantic call `elem` [HelperSemantic Release, HelperSemantic Acquire]]
   qualifySuffix plan releases observation (CallTotals (not (null calls)) (sum (map callCount calls)))
   pure (summary observation)
 
@@ -408,6 +409,11 @@ qualifyPrefix bytes plan observation = do
   final <- maybe (Left Readback) Right (obsFinal observation)
   forM_ domains $ \domain -> either (const (Left Readback)) Right (Q.checkReadback (sharedPlan plan) Q.FinalReadback final domain)
   either (const (Left Watch)) Right (Q.checkSegments (watchPlan plan) (obsArmings observation) final (obsSegments observation))
+
+releaseLast :: Call -> Word64
+releaseLast call = case callTrace call of
+  Just trace -> maximum (callFirst call : map boundaryInstructions (traceHistory trace))
+  Nothing -> callFirst call
 
 checkCallEnvelope :: Plan -> Call -> Either Refusal ()
 checkCallEnvelope plan call = do
@@ -529,6 +535,7 @@ controlTarget role call = case role of
     Left _ -> False
   WrongPredicate -> callDomain call==DomainB && callSemantic call==HelperSemantic Notify
     && case callArguments call of Arguments (1:_) -> True; _ -> False
+  WakeNoInsert -> callSemantic call==ServiceSemantic WakeTask
   _ -> False
 
 controlFailure :: Role -> Observation -> Either Refusal ()
