@@ -6,6 +6,7 @@ module Main (main) where
 
 import Control.Exception (SomeException, try)
 import Control.Monad (forM, forM_, unless)
+import Data.Aeson (Value, eitherDecodeStrict', object, (.=))
 import Data.Bits (complement, (.&.))
 import qualified Data.ByteString as B
 import Data.Char (isAsciiLower, isDigit)
@@ -27,6 +28,7 @@ import Emulation.NativeObservation
   , WriteBytes (..)
   , registerLabels
   )
+import FujiAF.Host (get, list)
 import Replacement.RtosOwnFirst.Artifact (LinkedDomain (..))
 import Replacement.RtosOwnFirst.Assembly
 import Replacement.RtosOwnFirst.Command
@@ -38,7 +40,7 @@ import Replacement.RtosOwnFirst.Regions hiding (GuestAddress (..))
 import Replacement.RtosOwnFirst.Replay
 import Replacement.RtosOwnFirst.Shrink
 import Replacement.RtosOwnFirst.Verdict
-import System.Directory (copyFile, createDirectoryIfMissing, listDirectory, removeDirectoryRecursive)
+import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist, listDirectory, removeDirectoryRecursive)
 import System.Environment (getArgs, getEnv)
 import System.Exit (ExitCode (..), exitFailure)
 import System.FilePath (takeExtension, (</>))
@@ -196,6 +198,16 @@ pureChecks tableA =
             && isRight (parseCommand [])
             && isRight (parseCommand ["--generate", "4", "--seed", "1"])
             && isRight (parseCommand ["--replay", "summary.json"])
+      , check "recorded boundaries parse into typed kinds" $
+          parseDifferenceKind "RegisterKind R0" == Right (RegisterKind R0)
+            && parseDifferenceKind "MemoryKind (RegionId \"buffer\")" == Right (MemoryKind (RegionId "buffer"))
+            && parseDifferenceKind "StatusKind" == Right StatusKind
+            && isLeft (parseDifferenceKind "RegisterKind nope")
+            && isLeft (parseDifferenceKind "")
+      , check "replay refuses a non-generation or empty source" $
+          let source :: String -> Value
+              source mode = object ["schema" .= (1 :: Int), "mode" .= mode, "slot" .= ("0x16c" :: String), "domains" .= ([] :: [Value])]
+           in isLeft (readRecordedCases (source "replay")) && isLeft (readRecordedCases (source "generate"))
       , do
           let row = firstGeneratedRow
           reduction <- shrinkRow (shrinkBudget 32) (const (pure False)) row
@@ -298,11 +310,19 @@ generatedChecks runner temporary fill domain table owned =
             Just report -> do
               let originalKinds = map differenceKind (shrinkOriginalDifferences report)
                   replayKinds = map differenceKind (shrinkReplayDifferences report)
-                  recordedOriginal = RecordedCase (ControlRole control) domain RecordedOriginal (shrinkOriginalLabel report) (map differenceText (shrinkOriginalDifferences report)) (shrinkOriginalBatches report)
-                  recordedReduced = RecordedCase (ControlRole control) domain RecordedReduced (shrinkReducedLabel report) (map differenceText (shrinkReducedDifferences report)) (shrinkReducedBatches report)
+                  recordedOriginal = RecordedCase (ControlRole control) domain RecordedOriginal (shrinkOriginalLabel report) originalKinds (map differenceText (shrinkOriginalDifferences report)) (shrinkOriginalBatches report)
+                  recordedReduced = RecordedCase (ControlRole control) domain RecordedReduced (shrinkReducedLabel report) replayKinds (map differenceText (shrinkReducedDifferences report)) (shrinkReducedBatches report)
                   replayWork = temporary </> "replay-" ++ domainLabel domain
+                  originalReport = replayReferenceBatch (shrinkOriginalBatches report) </> shrinkOriginalLabel report ++ ".native-result.json"
+                  reducedReport = replayReferenceBatch (shrinkReducedBatches report) </> shrinkReducedLabel report ++ ".native-result.json"
+              originalBytes <- B.readFile originalReport
+              reducedBytes <- B.readFile reducedReport
               originalReplay <- replayCase runner replayWork recordedOriginal
               reducedReplay <- replayCase runner replayWork recordedReduced
+              preservedOriginal <- B.readFile originalReport
+              preservedReduced <- B.readFile reducedReport
+              counts <- freshBatchCounts replayWork
+              wrongBoundary <- replayCase runner (temporary </> "replay-wrong-" ++ domainLabel domain) recordedReduced {recordedBoundary = [StatusKind]}
               renamed <-
                 try
                   (loadBatchRuns runner (replayReferenceBatch (shrinkReducedBatches report)) (const "changed-binding") domain [(shrinkOriginalKey report, shrinkReducedRow report)])
@@ -322,6 +342,9 @@ generatedChecks runner temporary fill domain table owned =
                 , check "generated corpus: the in-run replay reproduces the reduced case" (shrinkReplayDifferences report == shrinkReducedDifferences report)
                 , check "replay: the original case reproduces its recorded difference" (replayReproduces originalReplay)
                 , check "replay: the reduced case reproduces its recorded difference" (replayReproduces reducedReplay)
+                , check "replay: the preserved reports are unchanged" (preservedOriginal == originalBytes && preservedReduced == reducedBytes)
+                , check "replay: fresh batches hold only the selected case" (not (null counts) && all (== 1) counts)
+                , check "replay: a wrong typed boundary does not reproduce" (not (replayReproduces wrongBoundary))
                 , check "replay: a changed case byte is rejected before execution" (case changedCase of Left _ -> True; Right _ -> False)
                 , check "replay: a changed runner is rejected before execution" (case changedRunner of Left _ -> True; Right _ -> False)
                 , check "replay: a missing recorded case is rejected" (case missing of Left _ -> True; Right _ -> False)
@@ -346,6 +369,20 @@ corruptBatch source destination = do
     artifact : _ -> B.appendFile (destination </> artifact) (B.singleton 0)
     [] -> fail ("no artifact to corrupt in " ++ source)
   pure destination
+
+freshBatchCounts :: FilePath -> IO [Int]
+freshBatchCounts root = do
+  cases <- listDirectory root
+  fmap concat . forM cases $ \caseDirectory -> do
+    let batchPath = root </> caseDirectory </> "reference" </> "batch-0" </> "batch.json"
+    exists <- doesFileExist batchPath
+    if not exists
+      then pure []
+      else do
+        bytes <- B.readFile batchPath
+        pure $ case eitherDecodeStrict' bytes of
+          Right value -> [length (list (get value "cases"))]
+          Left _ -> [-1]
 
 main :: IO ()
 main = do

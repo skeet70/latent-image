@@ -15,6 +15,7 @@ import qualified Data.Map.Strict as M
 import Data.Maybe (listToMaybe)
 import Data.String (fromString)
 import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
+import Emulation.NativeCase (runnerDigest)
 import Emulation.OwnedCase (required)
 import Emulation.Sha256 (sha256, sha256Hex)
 import FujiAF.Host (ensure, failH, get, keys, readRegular)
@@ -30,7 +31,7 @@ import Replacement.RtosOwnFirst.Replay
 import Replacement.RtosOwnFirst.Shrink
 import Replacement.RtosOwnFirst.Verdict
 import System.Directory (canonicalizePath, createDirectory, createDirectoryIfMissing, doesPathExist, makeAbsolute, removeDirectoryRecursive, setCurrentDirectory)
-import System.Environment (getArgs, getExecutablePath, lookupEnv)
+import System.Environment (getArgs, getExecutablePath, lookupEnv, setEnv)
 import System.Exit (ExitCode (..), exitWith)
 import System.FilePath (takeDirectory, (</>))
 
@@ -235,6 +236,8 @@ replayCaseValue result =
           [ "reference_sha256" .= replayReferenceIdentity result
           , "subject_sha256" .= replaySubjectIdentity result
           ]
+    , "expected_boundary" .= map show (recordedBoundary recorded)
+    , "kinds" .= map show (replayKinds result)
     , "expected_differences" .= recordedDifferences recorded
     , "differences" .= replayDifferences result
     , "reproduces" .= replayReproduces result
@@ -334,8 +337,12 @@ main = do
           ++ zip ["--owned-a-bin", "--owned-a-symbols", "--owned-b-bin", "--owned-b-symbols"] ownedPaths
           ++ maybe [] (\source -> [("--replay", source)]) replaySource
   case command of
-    GenerateCommand _ -> enterSlot (rewriteFlags replacements arguments)
-    ReplayCommand _ -> enterSlot (rewriteFlags replacements arguments)
+    GenerateCommand _ -> do
+      setEnv "XM1_STORAGE_PATH" (takeDirectory work)
+      enterSlot (rewriteFlags replacements arguments)
+    ReplayCommand _ -> do
+      setEnv "XM1_STORAGE_PATH" (takeDirectory work)
+      enterSlot (rewriteFlags replacements arguments)
     GridCommand -> pure ()
   lookupEnv "BUILD_WORKSPACE_DIRECTORY" >>= mapM_ setCurrentDirectory
   forM_ [work, summaryPath] $ \path -> do
@@ -395,7 +402,9 @@ main = do
       recorded <- orFailText "replay summary" (readRecordedCases sourceValue)
       ensure (not (null recorded)) "replay summary records no original or reduced case"
       verifyInputs (get sourceValue "inputs") inputs
-      results <- forM recorded $ \caseRecord -> replayCase runner canonicalWork caseRecord
+      runnerHash <- runnerDigest runner
+      prepared <- forM recorded (preflightCase runnerHash)
+      results <- forM prepared (executeCase runner canonicalWork)
       B.writeFile canonicalSummary (encodeCanonical (replaySummary source canonicalWork inputs results))
       replayTerminal canonicalSummary results
       exitWith (replayExit results)
