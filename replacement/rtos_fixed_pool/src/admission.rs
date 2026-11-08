@@ -79,7 +79,8 @@ pub struct Admitted {
 }
 
 /// The stock order: context, IRQ mask, dispatch word, class, index, timeout, then exists.
-#[inline(always)]
+#[inline(never)]
+#[link_section = ".text.fp_body_admit"]
 pub fn admit(
     request: &Request,
     exists: impl FnOnce(PoolId) -> bool,
