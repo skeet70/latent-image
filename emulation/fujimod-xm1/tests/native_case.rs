@@ -1131,13 +1131,39 @@ fn privileged_status_writes_set_and_clear_i_in_svc_and_sys() {
 }
 
 #[test]
-fn privileged_cpsid_and_cpsie_change_only_i() {
-    // cpsid i; cpsie i
-    for (entry, word, expected) in [(0x4000_0013, 0xf10c_0080, 0x4000_0093), (SVC_ENTRY, 0xf108_0080, 0x6000_0053), (SYS_ENTRY, 0xf10c_0080, 0x0801_009f)] {
+fn privileged_cpsid_and_cpsie_change_only_the_named_i_and_f_masks() {
+    // cpsid i; cpsie i; cpsid f; cpsie f; cpsid if; cpsie if
+    for (entry, word, expected) in [
+        (0x4000_0013, 0xf10c_0080, 0x4000_0093),
+        (SVC_ENTRY, 0xf108_0080, 0x6000_0053),
+        (SYS_ENTRY, 0xf10c_0080, 0x0801_009f),
+        (0x4000_0013, 0xf10c_0040, 0x4000_0053),
+        (0x6000_00d3, 0xf108_0080, 0x6000_0053),
+        (0x6000_00d3, 0xf108_0040, 0x6000_0093),
+        (0x4000_0013, 0xf10c_00c0, 0x4000_00d3),
+        (0x6000_00d3, 0xf108_00c0, 0x6000_0013),
+        (SYS_ENTRY, 0xf10c_00c0, 0x0801_00df),
+    ] {
         let observed = Case::new(&[word, BX_LR]).privileged(entry, None).run();
         observed.assert_returned();
         assert_eq!(observed.register("cpsr"), expected, "{word:#010x}");
+        assert_eq!(observed.register("sp"), SP);
+        assert_eq!(observed.register("lr"), EXIT);
     }
+}
+
+#[test]
+fn privileged_cpsid_if_masks_both_bits_and_cpsie_if_restores_them() {
+    // cpsid if; mrs r1, cpsr; cpsie if; mrs r2, cpsr; bx lr
+    let observed = Case::new(&[0xf10c_00c0, MRS_R1_CPSR, 0xf108_00c0, 0xe10f_2000, BX_LR])
+        .privileged(0x6000_0013, None)
+        .run();
+    observed.assert_returned();
+    assert_eq!(observed.register("r1"), 0x6000_00d3);
+    assert_eq!(observed.register("r2"), 0x6000_0013);
+    assert_eq!(observed.register("cpsr"), 0x6000_0013);
+    assert_eq!(observed.register("sp"), SP);
+    assert_eq!(observed.register("lr"), EXIT);
 }
 
 #[test]
@@ -1177,8 +1203,21 @@ fn privileged_cases_refuse_spsr_mode_changes_exception_returns_and_other_coproce
         0xe120_f20c, // msr r8_usr, r12
         0xf102_0013, // cps #0x13
         0xf10e_0093, // cpsid i, #0x13
-        0xf10c_00c0, // cpsid if
+        0xf10e_00c0, // cpsid if, #0
         0xf10c_0100, // cpsid a
+        0xf10c_0180, // cpsid ai
+        0xf10c_01c0, // cpsid aif
+        0xf108_0140, // cpsie af
+        0xf10d_00c0, // cpsid if with bit 16 set
+        0xf10c_00e0, // cpsid if with bit 5 set
+        0xf10c_02c0, // cpsid if with bit 9 set
+        0xf10c_04c0, // cpsid if with bit 10 set
+        0xf10c_00c1, // cpsid if with mode bit 0 set
+        0xf10c_00df, // cpsid if with the SYS mode field
+        0xf10c_0000, // cpsid with no flag
+        0xf108_0000, // cpsie with no flag
+        0xf104_00c0, // cpsie with imod 0b01
+        0xf100_00c0, // cpsie with imod 0b00 and flags
         0xef00_0000, // svc #0
         0xe1b0_f00e, // movs pc, lr
         0xe25e_f004, // subs pc, lr, #4
@@ -1247,6 +1286,17 @@ fn a_cp14_read_without_a_case_identity_or_in_user_mode_is_refused() {
         let observed = case.run();
         observed.assert_stopped(Status::UnsupportedInstruction, CODE);
         assert_eq!(observed.register("r0"), 9);
+    }
+}
+
+#[test]
+fn user_cases_refuse_cps_mask_words() {
+    for word in [0xf10c_0080, 0xf108_0080, 0xf10c_00c0] {
+        let observed = Case::new(&[word, BX_LR]).register(0, 9).run();
+        observed.assert_stopped(Status::UnsupportedInstruction, CODE);
+        assert_eq!(observed.register("cpsr"), 0x10, "{word:#010x}");
+        assert_eq!(observed.register("r0"), 9, "{word:#010x}");
+        assert_eq!(observed.instructions(), 1, "{word:#010x}");
     }
 }
 
