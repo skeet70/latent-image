@@ -75,6 +75,7 @@ haskell_binary(
         "//host:filepath",
         "//host:process",
         "//host:text",
+        "//host:time",
         "//host:unix",
     ],
 )

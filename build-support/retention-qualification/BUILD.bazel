@@ -1,0 +1,18 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary")
+
+haskell_binary(
+    name = "normal-build-measure",
+    srcs = ["Main.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//host:text",
+    ],
+)
