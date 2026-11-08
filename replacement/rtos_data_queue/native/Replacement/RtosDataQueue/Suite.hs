@@ -6,6 +6,7 @@ import Control.Monad (forM, unless)
 import Data.Bits ((.&.), (.|.), shiftL)
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
+import Data.List (sortOn)
 import Data.Word (Word32, Word8)
 import Emulation.CachedNativeBatch (BatchReuse (..), cachedObservedBatch)
 import Emulation.NativeCase (CaseId (..), caseIdText)
@@ -64,10 +65,10 @@ callerBytes :: B.ByteString
 callerBytes = B.concat [word32le (0xca11e500 + value) | value <- [0 .. 15]]
 
 timerStub :: B.ByteString
-timerStub = assemble [0xe3003000, 0xe3403010, 0xe5830000, 0xe5831004, 0xe5832008, 0xe3a00000, 0xe12fff1e]
+timerStub = assemble [0xe3003000, 0xe3403100, 0xe5830000, 0xe5831004, 0xe5832008, 0xe3a00000, 0xe12fff1e]
 
 removeStub :: B.ByteString
-removeStub = assemble [0xe3003000, 0xe3403010, 0xe5830010, 0xe5831014, 0xe3a00000, 0xe12fff1e]
+removeStub = assemble [0xe3003000, 0xe3403100, 0xe5830010, 0xe5831014, 0xe3a00000, 0xe12fff1e]
 
 entryAddress :: Domain -> Call -> Word32
 entryAddress domain call = case (domain, call) of
@@ -103,7 +104,28 @@ timerRemove DomainB = 0xd4c68
 extents :: Domain -> [(Word32, Word32)]
 extents domain =
   [ (entryAddress domain call, entrySize call) | call <- [Create, Delete, Send, SendPoll, SendPollHandler, SendTimeout, ForceSend, ForceSendHandler, Receive, ReceivePoll, ReceiveTimeout] ]
+    ++ helperFunctions domain
     ++ [(timerInsert domain, fromIntegral (B.length timerStub)), (timerRemove domain, fromIntegral (B.length removeStub))]
+
+helperFunctions :: Domain -> [(Word32, Word32)]
+helperFunctions DomainA =
+  [ (0x4252c, 0x28), (0x42560, 0x68)
+  , (0x43640, 0x28), (0x43668, 0x20), (0x43688, 0xa0), (0x43728, 0x34), (0x4375c, 0x48)
+  , (0x437a4, 0x38), (0x437fc, 0x14), (0x439d8, 0x3c), (0x43a14, 0x28), (0x43c48, 0x5c)
+  , (0x43ca4, 0x7c), (0x43d20, 0xb0), (0x43dd0, 0x48), (0x43f70, 0x2c), (0x44018, 0x2c)
+  , (0x44044, 0xf0), (0x44134, 0x80), (0x44318, 0x1cc), (0x444e4, 0x84), (0x44568, 0xcc)
+  , (0x4471c, 0xc8), (0x447e4, 0x1c), (0x44800, 0x2c), (0x4482c, 0xb8), (0x448e4, 0xe8)
+  , (0x48edc, 0x68), (0x48f44, 0x60), (0x48fa4, 0x54)
+  ]
+helperFunctions DomainB =
+  [ (0xd252c, 0x28), (0xd2560, 0x68)
+  , (0xd3640, 0x28), (0xd3668, 0x20), (0xd3688, 0xa0), (0xd3728, 0x34), (0xd375c, 0x48)
+  , (0xd37a4, 0x38), (0xd37fc, 0x14), (0xd398c, 0x3c), (0xd39c8, 0x28), (0xd3c04, 0x5c)
+  , (0xd3c60, 0x7c), (0xd3cdc, 0xb0), (0xd3d8c, 0x48), (0xd3f2c, 0x2c), (0xd3fd4, 0x30)
+  , (0xd4004, 0xf0), (0xd40f4, 0x80), (0xd42d8, 0x1cc), (0xd44a4, 0x84), (0xd4528, 0xcc)
+  , (0xd46dc, 0xc8), (0xd47a4, 0x1c), (0xd47c0, 0x2c), (0xd47ec, 0xb8), (0xd48a4, 0xe8)
+  , (0xd8e9c, 0x68), (0xd8f04, 0x60), (0xd8f64, 0x54)
+  ]
 
 entrySize :: Call -> Word32
 entrySize Create = 0xa4
@@ -146,7 +168,7 @@ cases facts executing =
   , caseOf "handoff-sender" Receive [(R0, 1), (R1, outBase)] (queue 1 0 1 ++ full [0xaaaa] 1 ++ senderWaiter) [ResultIs 0, eq "out" outBase 0xaaaa, eq "ring" ringBase 0xbbbb, eq "kernel" (count 1) 1, ByteIs "kernel" (taskState 2) (stateReady facts), eq "kernel" (sendNext 1) (sendSelf 1)]
   , difference "delete-stranded-receiver" Delete [(R0, 1)] (queue 1 0 2 ++ receiverWaiter)
       [ResultIs 0, eq "kernel" (configExists 1) 0]
-      [ResultIs 0, eq "kernel" (configExists 1) 0, eq "kernel" (recvNext 1) (recvSelf 1), eq "kernel" (waitResult 2) 0, eq "kernel" (taskState 2) (fromIntegral (stateObjectQueued facts .|. stateWait facts))]
+      [ResultIs 0, eq "kernel" (configExists 1) 0, eq "kernel" (recvNext 1) (recvSelf 1), eq "kernel" (waitResult 2) 0, ByteIs "kernel" (taskState 2) (stateObjectQueued facts .|. stateWait facts)]
       [ResultIs 0, eq "kernel" (configExists 1) 0, eq "kernel" (recvNext 1) (recvSelf 1), eq "kernel" (waitResult 2) (-49), ByteIs "kernel" (taskState 2) (stateReady facts)]
       False
   , difference "delete-timed-waiter" Delete [(R0, 1)] (queue 1 0 2 ++ timedReceiverWaiter)
@@ -407,7 +429,7 @@ caseFor facts domain image one =
     }
   where
     dataPages = pages facts domain one
-    functions = if imageBase image == 0x40b00 then extents domain ++ [(0x50000, 0x1800)] else extents domain
+    functions = sortOn fst (if imageBase image == 0x40000 || imageBase image == 0xd0000 then extents domain else extents domain ++ [(0x50000, 0x2000)])
     wordsFor ident = if regionName ident == "kernel" || regionName ident == "definitions" then layoutWords facts ++ caseWords one else caseWords one
 
 readWord :: [Page] -> NativeObservation -> String -> Word32 -> Maybe Word32
