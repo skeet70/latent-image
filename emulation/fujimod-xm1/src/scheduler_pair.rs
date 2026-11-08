@@ -357,7 +357,7 @@ impl Board<'_> {
     }
 }
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 struct EntryState {
     slot: SlotId,
     core: Core,
@@ -376,6 +376,17 @@ struct EntryState {
     kernel_context: u32,
     task_stack: Option<TaskStack>,
     order: u64,
+}
+impl PartialEq for EntryState { fn eq(&self, other: &Self) -> bool { self.cmp(other).is_eq() } }
+impl Eq for EntryState {}
+impl PartialOrd for EntryState { fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> { Some(self.cmp(other)) } }
+impl Ord for EntryState {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (&self.slot,&self.core,&self.cpsr,&self.arguments,&self.memory,&self.r0,&self.lr,&self.task,&self.sp,&self.registers)
+            .cmp(&(&other.slot,&other.core,&other.cpsr,&other.arguments,&other.memory,&other.r0,&other.lr,&other.task,&other.sp,&other.registers))
+            .then_with(|| (&self.cpacr,&self.fpexc,&self.tpidrurw,&self.origin,&self.kernel_context,&self.task_stack)
+                .cmp(&(&other.cpacr,&other.fpexc,&other.tpidrurw,&other.origin,&other.kernel_context,&other.task_stack)))
+    }
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -411,8 +422,8 @@ struct Boundary {
 
 impl Ord for Boundary {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        (self.kind,self.address,self.order,self.core,self.task,self.sp,self.cpsr,&self.registers,&self.memory,&self.writes,&self.bank,self.value)
-            .cmp(&(other.kind,other.address,other.order,other.core,other.task,other.sp,other.cpsr,&other.registers,&other.memory,&other.writes,&other.bank,other.value))
+        (self.kind,self.address,self.core,self.task,self.sp,self.cpsr,&self.registers,&self.memory,&self.writes,&self.bank,self.value)
+            .cmp(&(other.kind,other.address,other.core,other.task,other.sp,other.cpsr,&other.registers,&other.memory,&other.writes,&other.bank,other.value))
             .then_with(|| (self.cpacr,self.fpexc,self.tpidrurw).cmp(&(other.cpacr,other.fpexc,other.tpidrurw)))
     }
 }
@@ -680,8 +691,16 @@ impl Ord for WriteOrigin {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Copy, Debug, Serialize)]
 struct CapturedWrite { #[serde(flatten)] write: Written, origin: WriteOrigin, order: u64 }
+impl PartialEq for CapturedWrite { fn eq(&self, other: &Self) -> bool { self.cmp(other).is_eq() } }
+impl Eq for CapturedWrite {}
+impl PartialOrd for CapturedWrite { fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> { Some(self.cmp(other)) } }
+impl Ord for CapturedWrite {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (self.write,self.origin).cmp(&(other.write,other.origin))
+    }
+}
 
 /// # Safety
 /// The CPU must outlive every callback that reads the returned pointer.
@@ -2279,17 +2298,17 @@ mod tests {
 
     #[test]
     fn repeated_family_invocations_keep_one_call_class() {
-        let entry = family_call(FamilyService::FamilyFlagSet).entry;
-        let class = CallClass { entry: entry.clone(), result: ReturnState { r0: 0, cpsr: 0x53,
-            memory: entry.memory.clone(), writes: Vec::new(), bank: Vec::new(), completion: Completion::Return,
-            task: entry.task, sp: entry.sp, registers: [0; 16], cpacr: 0, fpexc: 0, tpidrurw: 0, history: Vec::new() } };
+        let base = family_call(FamilyService::FamilyFlagSet).entry;
+        let class = |order: u64| CallClass { entry: EntryState { order, ..base.clone() }, result: ReturnState { r0: 0, cpsr: 0x53,
+            memory: base.memory.clone(), writes: Vec::new(), bank: Vec::new(), completion: Completion::Return,
+            task: base.task, sp: base.sp, registers: [0;16], history: Vec::new(), cpacr: 0, fpexc: 0, tpidrurw: 0 } };
         let mut classes = BTreeMap::new();
-        classify(&mut classes, class.clone(), 10).unwrap();
-        classify(&mut classes, class.clone(), 20).unwrap();
+        classify(&mut classes, class(10), 10).unwrap();
+        classify(&mut classes, class(20), 20).unwrap();
         assert_eq!(classes.len(), 1);
         let count = classes.values().next().unwrap();
         assert_eq!((count.count, count.first, count.last), (2, 10, 20));
-        let mut other = class;
+        let mut other = class(30);
         other.entry.memory.push(WordValue { address: Hex(0x4006_24b4), value: Read::Committed { value: 1 } });
         classify(&mut classes, other, 30).unwrap();
         assert_eq!(classes.len(), 2);
