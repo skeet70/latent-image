@@ -985,7 +985,7 @@ Reset zeroes the heap gap as part of kernel BSS: A `[0x4004dae0,0x40062c54)`, B 
 
 **Retained seams.** The firmware still executes its stock insert/remove/tick bodies. The emitted native ABI uses stock entry addresses and private bodies at `0x50000`; that body region is case-local scratch, not an admitted live placement. Firmware storage allocation, real callback and wait-result integration, cyclic lifecycle and independent-lock ownership remain open. A live cutover still needs admitted placement, complete subsystem native obligations and one integrated comparison through the same technical review cycle. No full-native, system or hardware timer qualification is claimed.
 
-### 4.16 Owned fixed-pool family: host and emitted-ABI increment
+### 4.18 Owned fixed-pool family: host and emitted-ABI increment
 
 `replacement/rtos_fixed_pool` is one allocation-free artifact for the six fixed-pool slots and the `+0x170` extension. It uses family-named views added to `replacement/rtos_layout`: `FixedPoolSlot` (122), `FixedPoolConfig`, `FixedPoolControl`, `FixedPoolWait`, the four table accessors and the default-pool placeholder. The typed entries are `+0xe4` create, `+0xe8` delete, `+0xec` blocking get, `+0xf0` poll, `+0xf4` timed get, `+0xf8` release and `+0x170` unchecked poll. `EncodedId` exists only at admission; the bodies take `PoolId` and `BlockAddress`.
 
