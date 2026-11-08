@@ -88,6 +88,13 @@ impl Block for Cpu {
 #[repr(transparent)]
 struct LifecycleMask(u32);
 
+impl LifecycleMask {
+    /// The saved I/F bits with I forced set for the dispatcher's S2 save.
+    fn dispatch_mask(self) -> Self {
+        LifecycleMask(self.0 | 0x80)
+    }
+}
+
 #[inline(never)]
 fn mask_lifecycle() -> LifecycleMask {
     let saved: u32;
@@ -481,9 +488,13 @@ pub extern "C" fn xm1_rtos_objects_family_flag_create(id: i32, request_pointer: 
 pub extern "C" fn xm1_rtos_objects_family_flag_delete(id: i32) -> i32 {
     let saved = mask_lifecycle();
     let (code, decision) = delete_flag_entry(id);
-    restore_lifecycle(saved);
-    if decision == DispatchDecision::Required {
-        Cpu.dispatch(0);
+    match decision {
+        DispatchDecision::Required => {
+            restore_lifecycle(saved.dispatch_mask());
+            Cpu.dispatch(0);
+            restore_lifecycle(saved);
+        }
+        DispatchDecision::NotRequired => restore_lifecycle(saved),
     }
     code
 }
@@ -554,9 +565,13 @@ pub extern "C" fn xm1_rtos_objects_family_mailbox_create(id: i32, request_pointe
 pub extern "C" fn xm1_rtos_objects_family_mailbox_delete(id: i32) -> i32 {
     let saved = mask_lifecycle();
     let (code, decision) = delete_mailbox_entry(id);
-    restore_lifecycle(saved);
-    if decision == DispatchDecision::Required {
-        Cpu.dispatch(0);
+    match decision {
+        DispatchDecision::Required => {
+            restore_lifecycle(saved.dispatch_mask());
+            Cpu.dispatch(0);
+            restore_lifecycle(saved);
+        }
+        DispatchDecision::NotRequired => restore_lifecycle(saved),
     }
     code
 }
