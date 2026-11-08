@@ -18,7 +18,9 @@ main :: IO ()
 main = do
   arguments <- getArgs
   case arguments of
-    [encoder, rebuild, decoder, timerABin, timerASymbols, timerBBin, timerBSymbols, datPath, scratchPath] -> do
+    [encoder, rebuild, decoder, timerABin, timerASymbols, timerBBin, timerBSymbols,
+     loaderABin, loaderASymbols, loaderBBin, loaderBSymbols, dispatcherBin, dispatcherSymbols,
+     installerBin, installerSymbols, datPath, scratchPath] -> do
       let tools = Tools.Tools encoder rebuild decoder
       scratch <- Tools.validateScratchDirectory scratchPath
       source <- loadCanonical tools scratch datPath
@@ -29,12 +31,14 @@ main = do
       timer <- either (H.failH . show) pure
         (deriveTimer source (LinkedImage (ImageBytes aBytes) (SymbolBytes aSymbols))
           (LinkedImage (ImageBytes bBytes) (SymbolBytes bSymbols)))
+      loaderA <- linked loaderABin loaderASymbols
+      loaderB <- linked loaderBBin loaderBSymbols
+      dispatcher <- linked dispatcherBin dispatcherSymbols
+      installer <- linked installerBin installerSymbols
+      startup <- either (H.failH . show) pure (deriveLoaderStartup source loaderA loaderB dispatcher installer)
       let piece kind ranges = Piece kind Set.empty [] [] ranges [] (Catalog [] [] (EnumeratedWrites [] (Premised (Premise "test"))) []) NoFacts
           publisher = piece PrimaryPublisher [Footprint (Span LoaderA (Guest 0x40000) (Guest 0x4dae0)) AdmissionRead (Citation "test")]
           record2 = piece Record2Link [Footprint (Span LoaderB (Guest 0xd0000) (Guest 0xddaa0)) AdmissionRead (Citation "test")]
-          startup = piece LoaderStartup
-            [ Footprint (Span LoaderA (Guest 0x40000) (Guest 0x4dae0)) AdmissionRead (Citation "test")
-            , Footprint (Span LoaderB (Guest 0xd0000) (Guest 0xddaa0)) AdmissionRead (Citation "test") ]
           slots = piece KernelSlotBodies
             [ Footprint (Span LoaderA (Guest 0x40000) (Guest 0x4dae0)) AdmissionRead (Citation "test")
             , Footprint (Span LoaderB (Guest 0xd0000) (Guest 0xddaa0)) AdmissionRead (Citation "test") ]
@@ -54,4 +58,6 @@ main = do
             unless (names == [name]) (putStrLn (show name ++ " was not the applied join") >> exitFailure)
             unless (length (compositionPieces composition) == 2) (putStrLn (show name ++ " lost a piece") >> exitFailure)
       putStrLn "timer-compose-tests: passed"
-    _ -> H.failH "usage: timer-compose-tests ENCODER REBUILD DECODER TIMER_A_BIN TIMER_A_SYMBOLS TIMER_B_BIN TIMER_B_SYMBOLS CANONICAL_DAT SCRATCH_DIR"
+    _ -> H.failH "usage: timer-compose-tests ENCODER REBUILD DECODER TIMER_A_BIN TIMER_A_SYMBOLS TIMER_B_BIN TIMER_B_SYMBOLS LOADER_A_BIN LOADER_A_SYMBOLS LOADER_B_BIN LOADER_B_SYMBOLS DISPATCHER_BIN DISPATCHER_SYMBOLS INSTALLER_BIN INSTALLER_SYMBOLS CANONICAL_DAT SCRATCH_DIR"
+  where
+    linked image symbols = LinkedImage <$> (ImageBytes <$> B.readFile image) <*> (SymbolBytes <$> B.readFile symbols)

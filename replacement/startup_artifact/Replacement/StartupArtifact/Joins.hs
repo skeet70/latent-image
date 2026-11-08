@@ -421,11 +421,23 @@ timerCarrierAt evidence target low high = case [pieceCarriers piece | piece <- e
   [spans] -> any (\(Span own (Guest start) (Guest end)) -> own == target && start == low && end == high) spans
   _ -> False
 
+timerCalleeExtent :: Target -> Word32 -> Word32 -> Bool
+timerCalleeExtent target start end =
+  (target == LoaderA && start == 0x43640 && end == 0x46c80)
+    || (target == LoaderB && start == 0xd3640 && end == 0xd6c40)
+
 timerAdmissionRead :: PieceKind -> Target -> Word32 -> Word32 -> JoinEvidence -> Bool
 timerAdmissionRead other target low high evidence =
   all (\(Footprint (Span own (Guest start) (Guest end)) basis _) ->
-        own /= target || end <= low || high <= start || basis == AdmissionRead)
+        own /= target || end <= low || high <= start || basis == AdmissionRead
+          || (other == LoaderStartup && basis == RuntimePremise && timerCalleeExtent own start end))
     (concatMap pieceFootprint [piece | piece <- evidencePieces evidence, pieceKind piece == other])
+
+timerCalleeDependency :: JoinEvidence -> Bool
+timerCalleeDependency evidence = case [pieceFootprint piece | piece <- evidencePieces evidence, pieceKind piece == LoaderStartup] of
+  [ranges] -> any (\(Footprint (Span own (Guest start) (Guest end)) basis _) ->
+      basis == RuntimePremise && timerCalleeExtent own start end) ranges
+  _ -> False
 
 -- | The timer module is the only loader difference inside a whole-loader admission read.
 timerLoaderJoin :: JoinKind -> PieceKind -> Target -> Word32 -> Word32 -> Join JoinKind
@@ -445,7 +457,8 @@ timerLoaderStartup = Join TimerLoaderStartup (Set.fromList [Timer, LoaderStartup
   [ HostCheck "timer-a-module-carrier" $ \e -> timerCarrierAt e LoaderA 0x44a50 0x44f2c
   , HostCheck "timer-b-module-carrier" $ \e -> timerCarrierAt e LoaderB 0xd4a10 0xd4eec
   , HostCheck "loader-startup-footprints-are-admission-reads" $ \e ->
-      timerAdmissionRead LoaderStartup LoaderA 0x44a50 0x44f2c e && timerAdmissionRead LoaderStartup LoaderB 0xd4a10 0xd4eec e ]
+      timerAdmissionRead LoaderStartup LoaderA 0x44a50 0x44f2c e && timerAdmissionRead LoaderStartup LoaderB 0xd4a10 0xd4eec e
+  , HostCheck "timer-callee-dependency" timerCalleeDependency ]
 timerKernelSlotBodies = Join TimerKernelSlotBodies (Set.fromList [Timer, KernelSlotBodies])
   [at LoaderA 0x44a50 0x44f2c, at LoaderB 0xd4a10 0xd4eec]
   (HostProof "the timer piece replaces exactly its two module spans; the kernel-slot whole-loader footprints are admission reads of the canonical loaders, and every byte outside the timer modules remains canonical. The composed contract retains both canonical and composed digests.")

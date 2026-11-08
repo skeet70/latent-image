@@ -202,6 +202,22 @@ fn validate(observation: &Observation, role: Role, original: &[u8], linked: &[u8
     }
     Ok(())
 }
+fn word_value(words: &[super::Word], address: u32) -> Result<u32, String> {
+    let word = words.iter().find(|word| word.guest.0 == address).ok_or("sampled word absent")?;
+    require(word.physical.0 == address & !0x40000000 && word.values == [word.physical_value; 2], "incoherent sampled word")?;
+    Ok(word.physical_value)
+}
+
+fn capacity_unaffected(retained: &[super::Word], owned: &[super::Word]) -> Result<(), String> {
+    let intended = [OUTPUT, CURSOR, STATE, STATE + 4, STATE + 8];
+    for word in retained {
+        if !intended.contains(&word.guest.0) {
+            require(word_value(retained, word.guest.0)? == word_value(owned, word.guest.0)?, "capacity-error unaffected sampled word differs")?;
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn compare(retained: &Path, owned: &Path, analysis: &Path, linked_path: &Path, output: &Path) -> Result<(), String> {
     let original = read(&analysis.join("lz/id4-0061c400.bin"))?;
     let linked = read(linked_path)?;
@@ -235,6 +251,7 @@ pub(super) fn compare(retained: &Path, owned: &Path, analysis: &Path, linked_pat
         let (rh, rs) = snapshot(&r, 0x725e78)?;
         let (oh, os) = snapshot(&o, 0x725e78)?;
         if r.case == Case::CapacityError {
+            capacity_unaffected(&rs.words, &os.words)?;
             require(register(rh, "r0")? == 0 && register(oh, "r0")? == (-33i32) as u32, "capacity-error role statuses differ")?;
             require(value(rs, OUTPUT)? == 0xa5a200 && value(os, OUTPUT)? == 0
                 && value(rs, CURSOR)? == 0x40a5a600 && value(os, CURSOR)? == 0x40a5a200
@@ -268,4 +285,24 @@ pub(super) fn compare(retained: &Path, owned: &Path, analysis: &Path, linked_pat
     comparison.error = result.as_ref().err().cloned();
     write(output, &serde_json::to_vec_pretty(&comparison).map_err(|error| error.to_string())?)?;
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn words(values: &[(u32, u32)]) -> Vec<super::super::Word> {
+        values.iter().map(|&(guest, value)| super::super::Word {
+            guest: super::super::Address(guest), physical: super::super::Address(guest & !0x40000000), values: [value; 2], physical_value: value,
+        }).collect()
+    }
+
+    #[test]
+    fn capacity_compares_every_unintended_sampled_word() {
+        let retained = words(&[(OUTPUT, 0xa5a200), (CURSOR, 0x40a5a600), (STATE, 0xa5a200), (STATE + 4, 0x400), (STATE + 8, 1), (0x400f33e4, 0x1234)]);
+        let owned = words(&[(OUTPUT, 0), (CURSOR, 0x40a5a200), (STATE, 0), (STATE + 4, 0), (STATE + 8, 0), (0x400f33e4, 0x1234)]);
+        assert!(capacity_unaffected(&retained, &owned).is_ok());
+        let mutated = words(&[(OUTPUT, 0), (CURSOR, 0x40a5a200), (STATE, 0), (STATE + 4, 0), (STATE + 8, 0), (0x400f33e4, 0x5678)]);
+        assert!(capacity_unaffected(&retained, &mutated).is_err());
+    }
 }
