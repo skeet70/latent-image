@@ -173,7 +173,7 @@ xm1_exception_irq:
     beq 3f
     b 2f
 3:
-    b xm1_exception_dispatcher
+    b xm1_exception_scheduler_return
 2:
     .org 0x148
     ldm sp!, {r1}
@@ -254,5 +254,12 @@ xm1_exception_fiq_hook:
     blx r3
     pop {r11, pc}
     .size xm1_exception_fiq_hook, . - xm1_exception_fiq_hook
+
+    .section .text.exception_vector_slot, "ax", %progbits
+    .global xm1_exception_vector_slot
+    .type xm1_exception_vector_slot, %function
+xm1_exception_vector_slot:
+    bx lr
+    .size xm1_exception_vector_slot, . - xm1_exception_vector_slot
 
     .section .note.GNU-stack, "", %progbits

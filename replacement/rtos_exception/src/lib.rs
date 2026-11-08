@@ -188,6 +188,8 @@ pub struct ExceptionDomain {
     pub resume_gate: GuestAddress,
     /// Called as `hook(pc)` by the FIQ vector when nonzero.
     pub fiq_hook: GuestAddress,
+    /// The controller's null-vector marker for this loader.
+    pub unhandled_vector: VectorWord,
     /// The outermost entry saves the frame pointer at `irq_stack_top - 4`.
     pub irq_stack_top: u32,
 }
@@ -205,6 +207,7 @@ impl ExceptionDomain {
                 exception_hook: GuestAddress(0x4004_f114),
                 resume_gate: GuestAddress(0x4004_f10c),
                 fiq_hook: GuestAddress(0x4004_f110),
+                unhandled_vector: VectorWord(0x42840),
                 irq_stack_top: 0x7000_2000,
             },
             Domain::B => Self {
@@ -217,6 +220,7 @@ impl ExceptionDomain {
                 exception_hook: GuestAddress(0x400d_f0d4),
                 resume_gate: GuestAddress(0x400d_f0cc),
                 fiq_hook: GuestAddress(0x400d_f0d0),
+                unhandled_vector: VectorWord(0xd2840),
                 irq_stack_top: 0x7000_2000,
             },
         }
@@ -305,9 +309,10 @@ pub fn acknowledge<M: Machine>(m: &M, domain: &ExceptionDomain) -> VectorWord {
     let bank = bank(m);
     let base = bank.address();
     let vector = VectorWord(m.load_word(base.offset(0x200)));
-    if vector == VectorWord::NONE || vector == VectorWord::UNHANDLED {
-        m.store_word(domain.unhandled, m.load_word(domain.unhandled).wrapping_add(1));
-        m.log(6, 0);
+    if vector == VectorWord::NONE || vector == domain.unhandled_vector {
+        let count = m.load_word(domain.unhandled).wrapping_add(1);
+        m.store_word(domain.unhandled, count);
+        m.log(6, count);
         return VectorWord::NONE;
     }
     if let Some(line) = first_line(m, bank) {

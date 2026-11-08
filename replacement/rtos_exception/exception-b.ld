@@ -13,9 +13,11 @@ MEMORY {
   dispatcher (rx) : ORIGIN = 0xd0cac, LENGTH = 0xa4
   wrappers (rx) : ORIGIN = 0xd0d50, LENGTH = 0x48
   literal_slack (rx) : ORIGIN = 0xd03a0, LENGTH = 0x70
+  vector_slot (rx) : ORIGIN = 0xd3810, LENGTH = 0x24
   bodies (rx) : ORIGIN = 0xd30a8, LENGTH = 0x250
 }
 
+xm1_exception_scheduler_return = 0xd375c;
 xm1_exception_stock_try = 0xd27d4;
 xm1_exception_stock_release = 0xd27fc;
 xm1_exception_stock_identity = 0xd27b8;
@@ -58,6 +60,10 @@ SECTIONS {
     __fault_end = .;
     . = ORIGIN(literal_slack) + LENGTH(literal_slack);
   } > literal_slack =0xf000f0e7
+  .vector_slot : {
+    KEEP(*(.text.exception_vector_slot))
+    . = ORIGIN(vector_slot) + LENGTH(vector_slot);
+  } > vector_slot =0xf000f0e7
   .forbidden (NOLOAD) : { *(.text .text.* .rodata .rodata.* .data .data.* .bss .bss.* COMMON) } > bodies
   .ARM.attributes 0 : { *(.ARM.attributes) }
   .symtab 0 : { *(.symtab) }
@@ -72,4 +78,5 @@ ASSERT(__lock_end <= ORIGIN(bodies) + LENGTH(bodies), "lock body exceeds the bod
 ASSERT(__eoi_end <= ORIGIN(bodies) + LENGTH(bodies), "EOI body exceeds the bodies extent")
 ASSERT(__exit_end <= ORIGIN(bodies) + LENGTH(bodies), "exit body exceeds the bodies extent")
 ASSERT(__fault_end <= ORIGIN(literal_slack) + LENGTH(literal_slack), "fault body exceeds the literal slack")
+ASSERT(xm1_exception_vector_slot == ORIGIN(vector_slot), "vector-slot setter is not at its stock address")
 ASSERT(SIZEOF(.forbidden) == 0, "unplaced code or writable data")

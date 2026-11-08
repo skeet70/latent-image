@@ -31,6 +31,7 @@ check "$symbols_a" xm1_exception_ack_wrapper 0x00040d50
 check "$symbols_a" xm1_exception_eoi_wrapper 0x00040d60
 check "$symbols_a" xm1_exception_fiq_hook 0x00040d70
 check "$symbols_a" xm1_exception_ack 0x000430a8
+check "$symbols_a" xm1_exception_vector_slot 0x00043810
 
 check "$symbols_b" xm1_exception_undefined 0x000d0100
 check "$symbols_b" xm1_exception_prefetch 0x000d0128
@@ -45,6 +46,7 @@ check "$symbols_b" xm1_exception_ack_wrapper 0x000d0d50
 check "$symbols_b" xm1_exception_eoi_wrapper 0x000d0d60
 check "$symbols_b" xm1_exception_fiq_hook 0x000d0d70
 check "$symbols_b" xm1_exception_ack 0x000d30a8
+check "$symbols_b" xm1_exception_vector_slot 0x000d3810
 
 for name in xm1_exception_lock_acquire xm1_exception_eoi xm1_exception_exit_tail xm1_exception_fault_record; do
   for symbols in "$symbols_a" "$symbols_b"; do
@@ -56,5 +58,9 @@ grep -q '40204:.*mov.*sp, #211' "$disasm_a"
 grep -q 'd0204:.*mov.*sp, #211' "$disasm_b"
 grep -q '40cac:.*push.*r4, r5, r11, lr' "$disasm_a"
 grep -q 'd0cac:.*push.*r4, r5, r11, lr' "$disasm_b"
+grep -q '40318:.*b.*0x4375c' "$disasm_a"
+grep -q 'd0318:.*b.*0xd375c' "$disasm_b"
+grep -q '43810:.*bx.*lr' "$disasm_a"
+grep -q 'd3810:.*bx.*lr' "$disasm_b"
 
 echo "exception artifact entries and first words match their stock extents"

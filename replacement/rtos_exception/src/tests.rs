@@ -217,10 +217,20 @@ fn unhandled_acknowledge_counts_and_logs_code_six() {
         machine.put(d.unhandled.0, 7);
         assert_eq!(acknowledge(&machine, &d), VectorWord::NONE);
         assert_eq!(machine.get(d.unhandled.0), 8);
-        assert_eq!(*machine.log.borrow(), vec![(6, 0)]);
+        assert_eq!(*machine.log.borrow(), vec![(6, 8)]);
         assert_eq!(machine.tpidrurw.get(), 0);
         assert_eq!(machine.get(d.active_irqs.0), 0);
     }
+}
+
+#[test]
+fn secondary_unhandled_marker_is_domain_specific() {
+    let machine = TestMachine::new(false);
+    let d = ExceptionDomain::of(Domain::B);
+    machine.put(Bank::SECONDARY.address().0 + 0x200, 0xd2840);
+    assert_eq!(acknowledge(&machine, &d), VectorWord::NONE);
+    assert_eq!(machine.get(d.unhandled.0), 1);
+    assert_eq!(*machine.log.borrow(), vec![(6, 1)]);
 }
 
 #[test]

@@ -1839,7 +1839,8 @@ fn drive() -> Result<(), String> {
                         let length = if source.base == IMAGE_BASE { (INITIAL_IMAGE_VIEW_END - IMAGE_BASE) as usize } else { source.bytes.len() };
                         let owner = if source.base == 0xd0000 { Core::Secondary } else { Core::Primary };
                         let installed = view(&machine, &maps, &state, Object::LoadedCode, owner, source.base, length)?;
-                        require(installed.bytes == source.bytes[..length], "installed source differs at first wrapper")?;
+                        let first = installed.bytes.iter().zip(source.bytes.iter()).position(|(left, right)| left != right);
+                        require(installed.bytes == source.bytes[..length], &format!("installed {} differs at first wrapper: first {:?}, installed {}, source {}", source.name, first, installed.bytes.len(), source.bytes.len()))?;
                         installed_views.push(installed);
                     }
                     let lifecycle_sites = sites.iter().filter(|(address, _)| **address != 0x725dd8).map(|(&address, label)| (address, label.clone())).collect();

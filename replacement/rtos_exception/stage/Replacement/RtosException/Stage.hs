@@ -44,19 +44,21 @@ data DomainSpec = DomainSpec
 
 specs :: [DomainSpec]
 specs =
-  [ DomainSpec DomainA 0x40000 0x40100 0x432f8
+  [ DomainSpec DomainA 0x40000 0x40100 0x43834
       [ ExtentSpec 0x40100 0x40368
       , ExtentSpec 0x403a0 0x40410
       , ExtentSpec 0x40cac 0x40d50
       , ExtentSpec 0x40d50 0x40d98
       , ExtentSpec 0x430a8 0x432f8
+      , ExtentSpec 0x43810 0x43834
       ]
-  , DomainSpec DomainB 0xd0000 0xd0100 0xd32f8
+  , DomainSpec DomainB 0xd0000 0xd0100 0xd3834
       [ ExtentSpec 0xd0100 0xd0368
       , ExtentSpec 0xd03a0 0xd0410
       , ExtentSpec 0xd0cac 0xd0d50
       , ExtentSpec 0xd0d50 0xd0d98
       , ExtentSpec 0xd30a8 0xd32f8
+      , ExtentSpec 0xd3810 0xd3834
       ]
   ]
 
@@ -105,6 +107,11 @@ sliceAt :: DomainSpec -> ExtentSpec -> B.ByteString -> B.ByteString
 sliceAt spec extent bytes =
   B.take (fromIntegral (extentHigh extent - extentLow extent))
     (B.drop (fromIntegral (extentLow extent - specLow spec)) bytes)
+
+sliceFrom :: Word32 -> ExtentSpec -> B.ByteString -> B.ByteString
+sliceFrom origin extent bytes =
+  B.take (fromIntegral (extentHigh extent - extentLow extent))
+    (B.drop (fromIntegral (extentLow extent - origin)) bytes)
 
 putAt :: DomainSpec -> ExtentSpec -> B.ByteString -> B.ByteString -> B.ByteString
 putAt spec extent replacement bytes =
@@ -169,6 +176,7 @@ entries domain =
       , ("xm1_exception_fiq_hook", 0xd70)
       , ("xm1_exception_ack", 0x30a8)
       , ("xm1_exception_fault_record", 0x3a0)
+      , ("xm1_exception_vector_slot", 0x3810)
       ]
 
 inside :: DomainSpec -> Word32 -> Word32 -> Bool
@@ -310,6 +318,6 @@ contractValue staged = object
     extentValue spec extent = object
       [ "start" .= hex (extentLow extent)
       , "end" .= hex (extentHigh extent)
-      , "stock_sha256" .= sha (sliceAt spec extent (sourceLoaders source M.! specDomain spec))
+      , "stock_sha256" .= sha (sliceFrom (specBase spec) extent (sourceLoaders source M.! specDomain spec))
       , "owned_sha256" .= sha (sliceAt spec extent (linkedBin (admittedLinked (stagedAdmission staged) M.! specDomain spec)))
       ]
