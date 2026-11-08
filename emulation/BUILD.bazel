@@ -3777,6 +3777,7 @@ haskell_library(
         "Emulation/SchedulerPairS3a.hs",
         "Emulation/SchedulerPairS3b.hs",
         "Emulation/SchedulerPairS3c.hs",
+        "Emulation/SchedulerPairSemaphore.hs",
     ],
     src_strip_prefix = ".",
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],

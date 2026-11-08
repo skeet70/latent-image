@@ -5,6 +5,7 @@ module Replacement.RtosSemaphore.Stage
   ( semaphoreService
   , semaphoreConfig
   , semaphoreRegions
+  , semaphoreEntries
   , carrierLength
   , patchLoader
   , semaphorePatches
@@ -28,6 +29,27 @@ semaphoreConfig DomainB = Extent (GuestAddress 0xdd26c) (GuestAddress 0xdd360)
 
 semaphoreRegions :: Domain -> [Extent]
 semaphoreRegions domain = [semaphoreService domain, semaphoreConfig domain]
+
+-- | The seven entry extents per domain, in catalog order.
+semaphoreEntries :: Domain -> [(String, Extent)]
+semaphoreEntries DomainA =
+  [ ("signal", Extent (GuestAddress 0x47604) (GuestAddress 0x47844))
+  , ("interrupt-signal", Extent (GuestAddress 0x47844) (GuestAddress 0x47a54))
+  , ("wait", Extent (GuestAddress 0x47a54) (GuestAddress 0x47c94))
+  , ("poll", Extent (GuestAddress 0x47c94) (GuestAddress 0x47dd0))
+  , ("timed-wait", Extent (GuestAddress 0x47dd0) (GuestAddress 0x48044))
+  , ("create", Extent (GuestAddress 0x4d2a8) (GuestAddress 0x4d338))
+  , ("delete", Extent (GuestAddress 0x4d338) (GuestAddress 0x4d39c))
+  ]
+semaphoreEntries DomainB =
+  [ ("signal", Extent (GuestAddress 0xd75c4) (GuestAddress 0xd7804))
+  , ("interrupt-signal", Extent (GuestAddress 0xd7804) (GuestAddress 0xd7a14))
+  , ("wait", Extent (GuestAddress 0xd7a14) (GuestAddress 0xd7c54))
+  , ("poll", Extent (GuestAddress 0xd7c54) (GuestAddress 0xd7d90))
+  , ("timed-wait", Extent (GuestAddress 0xd7d90) (GuestAddress 0xd8004))
+  , ("create", Extent (GuestAddress 0xdd26c) (GuestAddress 0xdd2fc))
+  , ("delete", Extent (GuestAddress 0xdd2fc) (GuestAddress 0xdd360))
+  ]
 
 carrierLength :: Domain -> Int
 carrierLength domain =

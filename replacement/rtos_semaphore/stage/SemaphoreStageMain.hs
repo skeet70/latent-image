@@ -70,6 +70,7 @@ main = do
   B.writeFile (output </> "loader-a.bin") (patched M.! DomainA)
   B.writeFile (output </> "loader-b.bin") (patched M.! DomainB)
   L.writeFile (output </> "contract.json") (J.encode (contract source base candidate semaphoreA semaphoreB patched) <> L.singleton 10)
+  L.writeFile (output </> "semaphore-regions.json") (J.encode (catalogValue) <> L.singleton 10)
   where
     contract source base candidate semaphoreA semaphoreB patched = J.object
       [ "schema" J..= (1 :: Int)
@@ -98,3 +99,21 @@ main = do
     slice (GuestAddress base) extent bytes =
       B.take (extentBytes extent) (B.drop (fromIntegral (start - base)) bytes)
       where Extent (GuestAddress start) _ = extent
+    catalogValue = J.object
+      [ "fill_word" J..= ("0xe7f000f0" :: String)
+      , "domains" J..= J.object
+          [ "a" J..= domainValue DomainA
+          , "b" J..= domainValue DomainB
+          ]
+      ]
+    domainValue domain = J.object
+      [ "regions" J..= [J.object
+          [ "start" J..= addressText (extentStart extent)
+          , "end" J..= addressText (extentEnd extent)
+          , "entries" J..= [J.object
+              [ "entry" J..= addressText (extentStart extent)
+              , "semantic" J..= J.object ["kind" J..= ("semaphore" :: String), "name" J..= name]
+              ]
+            ]
+          ] | (name, extent) <- semaphoreEntries domain]
+      ]

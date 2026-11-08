@@ -36,7 +36,10 @@ familyServiceName service = ["family-release","helper-release","helper-block","h
   "family-flag-create","family-flag-delete","family-flag-set","family-flag-set-handler","family-flag-clear",
   "family-flag-wait","family-flag-poll","family-flag-timed-wait","family-mailbox-create","family-mailbox-delete",
   "family-mailbox-send","family-mailbox-receive","family-mailbox-poll","family-mailbox-timed-receive"] !! fromEnum service
-data Semantic = HelperSemantic R.Helper | DispatchSemantic DispatchPoint | ServiceSemantic Service | FamilySemantic FamilyService | DoorbellSemantic deriving (Eq,Ord,Show)
+data SemaphoreService = SemaphoreSignal | SemaphoreInterruptSignal | SemaphoreWait | SemaphorePoll | SemaphoreTimedWait | SemaphoreCreate | SemaphoreDelete deriving (Eq,Ord,Show,Enum,Bounded)
+semaphoreServiceName :: SemaphoreService -> String
+semaphoreServiceName service = ["signal","interrupt-signal","wait","poll","timed-wait","create","delete"] !! fromEnum service
+data Semantic = HelperSemantic R.Helper | DispatchSemantic DispatchPoint | ServiceSemantic Service | FamilySemantic FamilyService | SemaphoreSemantic SemaphoreService | DoorbellSemantic deriving (Eq,Ord,Show)
 serviceName :: Service -> String
 serviceName service = ["disable-dispatch","enable-dispatch","exit-task","rotate-ready","interrupt-rotate-ready","core-rotate-ready","interrupt-core-rotate-ready",
   "interrupt-activate-task","activate-task","cancel-activation","wake-task","interrupt-wake-task","cancel-wakeup",
@@ -54,6 +57,7 @@ semanticValue semantic = object ["kind" .= (kind::String),"name" .= name]
     DispatchSemantic point -> ("dispatch",dispatchName point)
     ServiceSemantic service -> ("service",serviceName service)
     FamilySemantic service -> ("family",familyServiceName service)
+    SemaphoreSemantic service -> ("semaphore",semaphoreServiceName service)
     DoorbellSemantic -> ("irq","doorbell")
 instance FromJSON Semantic where
   parseJSON = withObject "entry semantic" $ \o -> do
@@ -64,6 +68,7 @@ instance FromJSON Semantic where
       "dispatch" -> DispatchSemantic <$> named dispatchName name
       "service" -> ServiceSemantic <$> named serviceName name
       "family" -> FamilySemantic <$> named familyServiceName name
+      "semaphore" -> SemaphoreSemantic <$> named semaphoreServiceName name
       "irq" | name=="doorbell" -> pure DoorbellSemantic
       _ -> fail "unknown semantic kind"
 

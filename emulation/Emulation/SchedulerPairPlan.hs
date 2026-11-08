@@ -32,10 +32,10 @@ derivePlan role dat catalogs loaders = do
       keys = [(entryDomain entry,entryAddress entry) | entry <- entries]
       windows = nub (concatMap catalogWindows catalogs)
       probes = concatMap catalogProbes catalogs
-      family = any isFamilyEntry entries
-      guardedFamily entry = not (isFamilyEntry entry) || any (\window -> windowDomain window==entryDomain entry && windowStart window<=entryAddress entry && entryAddress entry<windowEnd window) windows
+      family = any isObservedEntry entries
+      guardedFamily entry = not (isObservedEntry entry) || any (\window -> windowDomain window==entryDomain entry && windowStart window<=entryAddress entry && entryAddress entry<windowEnd window) windows
   unless (not (null entries) && length keys==length (nub keys)) (Left "entry list is empty or repeats an address")
-  unless (not family || any (not . isFamilyEntry) entries) (Left "family catalog requires scheduler entries")
+  unless (not family || any (not . isObservedEntry) entries) (Left "family catalog requires scheduler entries")
   unless (all guardedFamily entries) (Left "family entry outside guarded extent")
   perDomain <- forM domains $ \domain -> do
     loader <- maybe (Left "missing loader") Right (M.lookup domain loaders)
@@ -78,9 +78,10 @@ derivePlan role dat catalogs loaders = do
   stockEntry entry@(Entry domain (DispatchSemantic Select) _) | role==Stock = entry { entryAddress=Address (base domain+0x36ac) }
   stockEntry entry = entry
 
-isFamilyEntry :: Entry -> Bool
-isFamilyEntry (Entry _ (FamilySemantic _) _) = True
-isFamilyEntry _ = False
+isObservedEntry :: Entry -> Bool
+isObservedEntry (Entry _ (FamilySemantic _) _) = True
+isObservedEntry (Entry _ (SemaphoreSemantic _) _) = True
+isObservedEntry _ = False
 
 familyProbes :: Domain -> [Probe]
 familyProbes domain =

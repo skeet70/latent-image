@@ -112,8 +112,12 @@ enum Family { Flag, Mailbox }
 enum IrqKind { Doorbell }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum SemaphoreService { Signal, InterruptSignal, Wait, Poll, TimedWait, Create, Delete }
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
-enum Semantic { Helper { name: Helper }, Dispatch { name: DispatchPoint }, Service { name: Service }, Irq { name: IrqKind }, Family { name: FamilyService } }
+enum Semantic { Helper { name: Helper }, Dispatch { name: DispatchPoint }, Service { name: Service }, Irq { name: IrqKind }, Family { name: FamilyService }, Semaphore { name: SemaphoreService } }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -538,7 +542,7 @@ impl OpenCall {
     /// A family call is tied to the task that entered it; another task's stop is not its boundary.
     fn owns_boundary(&self, key: &ReturnKey, context: &Context) -> bool {
         match self.entry.slot.semantic {
-            Semantic::Family { .. } => self.entry.task == context.current,
+            Semantic::Family { .. } | Semantic::Semaphore { .. } => self.entry.task == context.current,
             _ => key.task.is_none() || self.entry.task == context.current,
         }
     }
@@ -1151,6 +1155,112 @@ fn family_snapshot(board: &Board, core: Core, tcm: [u32; 2], domain: Domain, nam
     Ok(words)
 }
 
+/// The semaphore tables of one loader (`replacement/rtos_layout::Domain::words`).
+#[derive(Clone, Copy, Debug)]
+struct SemaphoreTables { tasks: Table, configs: Table, controls: Table, waits: Table, timers: Table }
+impl SemaphoreTables {
+    fn of(domain: Domain) -> Self {
+        let table = |base, size, count| Table { base, size, count };
+        match domain {
+            Domain::A => Self {
+                tasks: table(0x4005_ff0c, TASK_RECORD_BYTES, TASK_RECORD_COUNT),
+                configs: table(0x4005_dfd8, 0x10, 250),
+                controls: table(0x4005_af0c, 0x10, 250),
+                waits: table(0x4005_4efc, 0x0c, TASK_RECORD_COUNT),
+                timers: table(0x4005_549c, TIMER_ENTRY_BYTES, TASK_RECORD_COUNT),
+            },
+            Domain::B => Self {
+                tasks: table(0x400e_fecc, TASK_RECORD_BYTES, TASK_RECORD_COUNT),
+                configs: table(0x400e_df98, 0x10, 250),
+                controls: table(0x400e_aecc, 0x10, 250),
+                waits: table(0x400e_4ebc, 0x0c, TASK_RECORD_COUNT),
+                timers: table(0x400e_545c, TIMER_ENTRY_BYTES, TASK_RECORD_COUNT),
+            },
+        }
+    }
+}
+
+impl SemaphoreService {
+    fn owns_its_table(self) -> bool { matches!(self, Self::Create | Self::Delete) }
+    fn blocks(self) -> bool { matches!(self, Self::Wait | Self::TimedWait) }
+    fn stack_timeout(self) -> bool { self == Self::TimedWait }
+    fn request_argument(self) -> Option<usize> { (self == Self::Create).then_some(1) }
+    /// Class 0 is the entry domain, 1 is A and 2 is B; create and delete index the entry domain.
+    fn resolve(self, entry: Domain, id: u32) -> Option<(Domain, u32)> {
+        let slot = id & 0xffff;
+        if !(1..=250).contains(&slot) { return None; }
+        if self.owns_its_table() { return Some((entry, slot)); }
+        match (id >> 16) & 0xffff {
+            0 => Some((entry, slot)),
+            1 => Some((Domain::A, slot)),
+            2 => Some((Domain::B, slot)),
+            _ => None,
+        }
+    }
+}
+
+/// Walks a semaphore's wait queue from the control block's self-linked head.
+fn semaphore_queue(walk: &mut FamilyWalk, tables: SemaphoreTables, control: u32) -> Result<(), String> {
+    let mut node = walk.pointer(control)?;
+    for _ in 0..FAMILY_QUEUE_LIMIT {
+        let Some(task) = node.filter(|&task| task != control) else { return Ok(()) };
+        for offset in [0x0c, 0x14, 0x18, 0x1c, 0x20] { walk.capture_word(task + offset); }
+        if let Some((waiter, slot)) = family_task(task) {
+            let waiter_tables = SemaphoreTables::of(waiter);
+            if let Some(wait) = waiter_tables.waits.record(slot) {
+                walk.record(wait, waiter_tables.waits.size);
+                if let Some(entry) = walk.pointer(wait)? {
+                    if waiter_tables.timers.slot(entry).is_some() { walk.record(entry, waiter_tables.timers.size); }
+                }
+            }
+        }
+        node = walk.pointer(task)?;
+    }
+    Ok(())
+}
+
+/// The semaphore words one call involves: the create request, the caller's timed-wait stack
+/// argument, the object's config and control, and the bounded wait queue with its timer entries.
+fn semaphore_words(read: &mut dyn FnMut(u32) -> Result<Read, String>, domain: Domain, name: SemaphoreService,
+    arguments: [u32; 4], caller_sp: u32, running: Option<u32>) -> Result<Vec<u32>, String> {
+    let entry_tables = SemaphoreTables::of(domain);
+    let mut walk = FamilyWalk { addresses: BTreeSet::new(), read };
+    if let Some(index) = name.request_argument() { walk.record(arguments[index], 0x0c); }
+    if name.stack_timeout() { walk.capture_word(caller_sp); }
+    if name.blocks() {
+        if let Some(slot) = running.and_then(|task| entry_tables.tasks.slot(task)) {
+            if let Some(wait) = entry_tables.waits.record(slot) { walk.record(wait, entry_tables.waits.size); }
+            if let Some(entry) = entry_tables.timers.record(slot) { walk.record(entry, entry_tables.timers.size); }
+        }
+    }
+    if let Some((object, slot)) = name.resolve(domain, arguments[0]) {
+        let tables = SemaphoreTables::of(object);
+        if let Some(config) = tables.configs.record(slot) { walk.record(config, tables.configs.size); }
+        if let Some(control) = tables.controls.record(slot) {
+            walk.record(control, tables.controls.size);
+            semaphore_queue(&mut walk, tables, control)?;
+        }
+    }
+    Ok(walk.addresses.into_iter().collect())
+}
+
+fn semaphore_snapshot(board: &Board, core: Core, tcm: [u32; 2], domain: Domain, name: SemaphoreService,
+    arguments: [u32; 4], caller_sp: u32) -> Result<Vec<WordValue>, String> {
+    let running_cell = match domain { Domain::A => 0x4005_4760, Domain::B => 0x400e_4720 };
+    let running = match board.word(core, tcm, running_cell)? {
+        Read::Committed { value } if value != 0 => Some(value),
+        _ => None,
+    };
+    let mut read = |address: u32| board.word(core, tcm, address);
+    let mut words = root_snapshot(board, core, tcm, domain)?;
+    for address in semaphore_words(&mut read, domain, name, arguments, caller_sp, running)? {
+        words.push(WordValue { address: Hex(address), value: board.word(core, tcm, address)? });
+    }
+    words.sort_by_key(|word| word.address);
+    words.dedup_by_key(|word| word.address);
+    Ok(words)
+}
+
 const PC_WATCHES: [u32; 5] = [0x436ec, 0xd36ec, 0xec8014, 0x40b00, 0xd0b00];
 const DISPATCH_LOADS: [u32; 2] = [0x436e4, 0xd36e4];
 
@@ -1412,6 +1522,7 @@ impl Observer<'_> {
                 Semantic::Helper { name } => snapshot(&board, context.core, tcm, name, context.arguments)?,
                 Semantic::Service { name } => service_snapshot(&board, context.core, tcm, domain, name, context.arguments)?,
                 Semantic::Family { name } => family_snapshot(&board, context.core, tcm, domain, name, context.arguments, context.sp)?,
+                Semantic::Semaphore { name } => semaphore_snapshot(&board, context.core, tcm, domain, name, context.arguments, context.sp)?,
                 _ => root_snapshot(&board, context.core, tcm, domain)?,
             },
             order: self.next_order(),

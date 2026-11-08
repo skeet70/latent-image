@@ -25,6 +25,8 @@ import qualified Emulation.SchedulerPairS3b as C
 import qualified Emulation.SchedulerPairS3c as E
 import Emulation.SchedulerPairFamily (FamilyCall (..))
 import qualified Emulation.SchedulerPairFamily as F
+import Emulation.SchedulerPairSemaphore (SemaphoreCall (..))
+import qualified Emulation.SchedulerPairSemaphore as Sem
 import Emulation.Sha256 (sha256, sha256Hex)
 import Replacement.RtosOwnFirst.Regions (Domain (..), domains, domainLabel)
 import Replacement.RtosScheduler.Regions (Helper (..))
@@ -595,6 +597,7 @@ modelled semantic = case semantic of
   DispatchSemantic _ -> True
   DoorbellSemantic -> True
   FamilySemantic _ -> True
+  SemaphoreSemantic _ -> True
   ServiceSemantic service -> A.supportsService service || C.supportsService service || E.supportsService service
 
 checkCall :: Call -> Either Refusal ()
@@ -624,6 +627,8 @@ checkCallForInWitnesses witnesses role call = do
     DispatchSemantic point -> dispatchTags role point call >> pure ()
     FamilySemantic _ | role == Stock -> pure ()
     FamilySemantic _ -> checkFamilyCall call witnesses
+    SemaphoreSemantic _ | role == Stock -> pure ()
+    SemaphoreSemantic _ -> checkSemaphoreCall role call witnesses
     ServiceSemantic service -> checkServiceCall service call
 
 timerWitnesses :: [Call] -> [F.TimerWitness]
@@ -647,6 +652,11 @@ checkFamilyCall call witnesses = case F.checkFamilyCall call witnesses of
   Right () -> Right ()
   Left refusal -> Left (familyRefusal refusal)
 
+checkSemaphoreCall :: Role -> Call -> [Call] -> Either Refusal ()
+checkSemaphoreCall role call others = case Sem.checkSemaphoreCall role call others of
+  Right () -> Right ()
+  Left refusal -> Left (familyRefusal refusal)
+
 familyRefusal :: F.FamilyRefusal -> Refusal
 familyRefusal F.FamilyReturn = FamilyReturn
 familyRefusal F.FamilyEffect = FamilyEffect
@@ -655,6 +665,18 @@ familyRefusal F.FamilyTimer = FamilyTimer
 familyRefusal F.FamilyDestructor = FamilyDestructor
 familyRefusal F.FamilyContinuation = FamilyContinuation
 familyRefusal F.FamilyAssociation = FamilyAssociation
+
+instance Sem.SemaphoreCall Call where
+  semaphoreDomain = callDomain
+  semaphoreCore = callCore
+  semaphoreArguments call = case callArguments call of Arguments arguments -> arguments
+  semaphoreBefore = callBefore
+  semaphoreAfter = callAfter
+  semaphoreR0 = callR0
+  semaphoreWrites call = [(address,size,value) | Written address size value <- callWrites call]
+  semaphoreTask = callTask
+  semaphoreService call = case callSemantic call of SemaphoreSemantic service -> Just service; _ -> Nothing
+  semaphoreTrace call = fmap familyTraceOf (callTrace call)
 
 instance F.FamilyCall Call where
   familyDomain = callDomain
