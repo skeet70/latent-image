@@ -104,7 +104,7 @@ xm1_platform_veneer_s2_dispatch_no_save:
 .global xm1_platform_veneer_s2_dispatch_select
 .type xm1_platform_veneer_s2_dispatch_select,%function
 xm1_platform_veneer_s2_dispatch_select:
-    b xm1_rtos_scheduler_no_save
+    b xm1_rtos_scheduler_select
 .size xm1_platform_veneer_s2_dispatch_select, .-xm1_platform_veneer_s2_dispatch_select
 
 .section .veneer.s2_dispatch_first_entry,"ax",%progbits
@@ -132,7 +132,7 @@ xm1_platform_veneer_s2_dispatch_irq_resume:
 .global xm1_platform_veneer_s2_dispatch_irq_tail
 .type xm1_platform_veneer_s2_dispatch_irq_tail,%function
 xm1_platform_veneer_s2_dispatch_irq_tail:
-    b xm1_rtos_scheduler_irq_resume
+    b xm1_rtos_scheduler_irq_tail
 .size xm1_platform_veneer_s2_dispatch_irq_tail, .-xm1_platform_veneer_s2_dispatch_irq_tail
 
 .section .veneer.s3a_xm1_s3a_exit_task,"ax",%progbits
