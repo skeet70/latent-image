@@ -66,6 +66,7 @@ main = do
         object
           [ "domain" .= domainLabel (runEntryDomain run)
           , "case" .= runName run
+          , "blocking" .= runBlocking run
           , "differences" .= runDifferences run
           , "reuse" .= show (runReuse run)
           ]
@@ -81,6 +82,8 @@ main = do
                 , "owned_b_bin_sha256" .= sha256Hex ownedBDigest
                 ]
           , "cases" .= map caseValue runs
+          , "case_count" .= length runs
+          , "blocking_count" .= length (filter runBlocking runs)
           , "failures" .= length failures
           ]
       review =
@@ -98,7 +101,10 @@ main = do
               [ object ["domain" .= domain, "case" .= name, "difference" .= message]
               | (domain, name, message) <- failures
               ]
+          , "qualification" .= ("complete-family" :: String)
           , "cases" .= map caseValue runs
+          , "case_count" .= length runs
+          , "blocking_count" .= length (filter runBlocking runs)
           , "failures" .= length failures
           ]
   BL.writeFile resultsPath (encode document)

@@ -3,16 +3,18 @@ module Replacement.RtosDataQueue.Suite
   ( Image (..), CaseRun (..), extents, runDomain ) where
 
 import Control.Monad (forM, unless)
-import Data.Bits ((.&.), (.|.), shiftL)
+import Data.Aeson (FromJSON (..), eitherDecodeStrict', withObject, (.:), (.:?))
+import Data.Bits ((.&.), (.|.), shiftL, shiftR)
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
-import Data.List (sortOn)
+import Data.List (intercalate, isPrefixOf, isSuffixOf, sortOn)
+import Data.Maybe (fromMaybe)
 import Data.Word (Word32, Word8)
 import Emulation.CachedNativeBatch (BatchReuse (..), cachedObservedBatch)
 import Emulation.NativeCase (CaseId (..), caseIdText)
 import qualified Emulation.NativeObservation as N
 import Emulation.NativeObservation (Barrier (..), KernelObservation (..), NativeObservation (..), Ordered (..), RegionId (..), Register (..), RunnerStatus (..), Write (..), WriteValue (..), regionName, runnerStatusLabel)
-import Emulation.OwnedCase (CaseOutcome (..), CaseSpec (..), KernelCase (..), Permission (..), assemble, caseOutcome, mkRegion, plainLimit, readWordAt, word32le, writeBatch)
+import Emulation.OwnedCase (CaseOutcome (..), CaseSpec (..), KernelCase (..), Permission (..), assemble, caseOutcome, mkRegion, mkStackContext, plainLimit, readWordAt, word32le, writeBatch)
 import Replacement.RtosDataQueue.Layout
 import Replacement.RtosOwnFirst.Regions (Domain (..), GuestAddress (..), domainLabel)
 import System.FilePath ((</>))
@@ -23,8 +25,11 @@ data Call = Create | Delete | Send | SendPoll | SendPollHandler | SendTimeout
           | ForceSend | ForceSendHandler | Receive | ReceivePoll | ReceiveTimeout
   deriving (Eq, Show)
 
-data Expect = WordIs String Word32 Word32 | ByteIs String Word32 Word8 | ResultIs Word32
+data Expect = WordIs String Word32 Word32 | ByteIs String Word32 Word8 | ResultIs Word32 | CpsrIs Word32
   deriving (Eq, Show)
+
+-- | A second task the scheduler may select while the caller blocks.
+data Actor = Actor { actorCode :: B.ByteString }
 
 data Case = Case
   { caseName :: CaseId
@@ -34,15 +39,14 @@ data Case = Case
   , caseExpect :: [Expect]
   , caseStockExpect :: [Expect]
   , caseOwnedExpect :: [Expect]
-  , caseTimerRemove :: Bool
-  , caseTimerInsert :: Bool
   , caseHandler :: Bool
-  , caseArrival :: Maybe (Word32, Word32)
+  , caseActor :: Maybe Actor
   }
 
 data CaseRun = CaseRun
   { runEntryDomain :: Domain
   , runName :: String
+  , runBlocking :: Bool
   , runChecks :: [(String, Bool)]
   , runDifferences :: [String]
   , runReuse :: (BatchReuse, BatchReuse)
@@ -61,8 +65,12 @@ stackPointer = stackBase + 0x800
 exitAddress = 0x01000200
 stopAddress :: Word32
 stopAddress = 0x01000300
-targetStack :: Word32
-targetStack = 0x00300900
+actorBase, actorStackLow, actorStackHigh, callerStackLow, clockValue :: Word32
+actorBase = 0x01000400
+actorStackLow = 0x00300c00
+actorStackHigh = 0x00301000
+callerStackLow = 0x00300400
+clockValue = 0x1000
 
 seedRegister :: Register -> Word32
 seedRegister register = 0xa5a50000 + fromIntegral (fromEnum register)
@@ -75,6 +83,39 @@ timerStub = assemble [0xe3003000, 0xe3403100, 0xe5830000, 0xe5831004, 0xe5832008
 
 removeStub :: B.ByteString
 removeStub = assemble [0xe3003000, 0xe3403100, 0xe5830010, 0xe5831014, 0xe3a00000, 0xe12fff1e]
+
+-- | `cpsie i`, then `bl` the stock entry that releases the blocked caller.
+serviceActor :: Domain -> Call -> Word32 -> Word32 -> Actor
+serviceActor domain call id argument = Actor (assemble [0xf1080080, movSmall 0 id, movw 1 (argument .&. 0xffff), movt 1 (argument `shiftR` 16), branchLink 4 (entryAddress domain call), branch 5 stopAddress])
+
+-- | Reads the armed timer entry, calls its real timeout callback, then dispatches.
+timeoutActor :: Domain -> Word32 -> Actor
+timeoutActor domain timer =
+  Actor (assemble [0xf1080080, movw 0 (timer .&. 0xffff), movt 0 (timer `shiftR` 16), 0xe5901004, 0xe5900008, 0xe12fff31, 0xe3a00000, branchLink 7 (saveAddress domain), branch 8 stopAddress])
+
+-- | The instruction word at a slot of the actor's own body.
+actorAt :: Int -> Word32
+actorAt index = actorBase + fromIntegral index * 4
+
+movSmall :: Int -> Word32 -> Word32
+movSmall register value = 0xe3a00000 .|. (fromIntegral register `shiftL` 12) .|. (value .&. 0xff)
+
+movw, movt :: Int -> Word32 -> Word32
+movw register value = 0xe3000000 .|. ((value `shiftR` 12) `shiftL` 16) .|. (fromIntegral register `shiftL` 12) .|. (value .&. 0xfff)
+movt register value = 0xe3400000 .|. ((value `shiftR` 12) `shiftL` 16) .|. (fromIntegral register `shiftL` 12) .|. (value .&. 0xfff)
+
+branchLink, branch :: Int -> Word32 -> Word32
+branchLink index target = 0xeb000000 .|. (((target - actorAt index - 8) `shiftR` 2) .&. 0xffffff)
+branch index target = 0xea000000 .|. (((target - actorAt index - 8) `shiftR` 2) .&. 0xffffff)
+
+saveAddress, timeoutCallback :: Domain -> Word32
+saveAddress DomainA = 0x43640
+saveAddress DomainB = 0xd3640
+timeoutCallback DomainA = 0x44318
+timeoutCallback DomainB = 0xd42d8
+
+timeoutCallbackSize :: Int
+timeoutCallbackSize = 0x1cc
 
 entryAddress :: Domain -> Call -> Word32
 entryAddress domain call = case (domain, call) of
@@ -120,7 +161,7 @@ helperFunctions DomainA =
   , (0x437a4, 0x38), (0x437fc, 0x14), (0x439d8, 0x3c), (0x43a14, 0x28), (0x43c48, 0x5c)
   , (0x43ca4, 0x7c), (0x43d20, 0xb0), (0x43dd0, 0x48), (0x43f70, 0x2c), (0x44018, 0x2c)
   , (0x44044, 0xf0), (0x44134, 0x80), (0x44318, 0x1cc), (0x444e4, 0x84), (0x44568, 0xcc)
-  , (0x4471c, 0xc8), (0x447e4, 0x1c), (0x44800, 0x2c), (0x4482c, 0xb8), (0x448e4, 0xe8)
+  , (0x4471c, 0xc8), (0x447e4, 0x1c), (0x44800, 0xe4), (0x448e4, 0xe8)
   , (0x48edc, 0x68), (0x48f44, 0x60), (0x48fa4, 0x54)
   ]
 helperFunctions DomainB =
@@ -129,7 +170,7 @@ helperFunctions DomainB =
   , (0xd37a4, 0x38), (0xd37fc, 0x14), (0xd398c, 0x3c), (0xd39c8, 0x28), (0xd3c04, 0x5c)
   , (0xd3c60, 0x7c), (0xd3cdc, 0xb0), (0xd3d8c, 0x48), (0xd3f2c, 0x2c), (0xd3fd4, 0x30)
   , (0xd4004, 0xf0), (0xd40f4, 0x80), (0xd42d8, 0x1cc), (0xd44a4, 0x84), (0xd4528, 0xcc)
-  , (0xd46dc, 0xc8), (0xd47a4, 0x1c), (0xd47c0, 0x2c), (0xd47ec, 0xb8), (0xd48a4, 0xe8)
+  , (0xd46dc, 0xc8), (0xd47a4, 0x1c), (0xd47c0, 0xe4), (0xd48a4, 0xe8)
   , (0xd8e9c, 0x68), (0xd8f04, 0x60), (0xd8f64, 0x54)
   ]
 
@@ -173,16 +214,92 @@ cases facts executing =
   , caseOf "receive-empty-poll" ReceivePoll [(R0, 1), (R1, outBase)] (queue 1 0 2 ++ [poke outBase 0x5e4d1e00]) [ResultIs (-50), eq "out" outBase 0x5e4d1e00]
   , caseOf "handoff-receiver" Send [(R0, 1), (R1, 0x1234)] (queue 1 0 2 ++ receiverWaiter) [ResultIs 0, eq "kernel" (waitData 2) 0x1234, eq "kernel" (waitResult 2) 0, ByteIs "kernel" (taskState 2) (stateReady facts), eq "kernel" (recvNext 1) (recvSelf 1)]
   , caseOf "handoff-sender" Receive [(R0, 1), (R1, outBase)] (queue 1 0 1 ++ full [0xaaaa] 1 ++ senderWaiter) [ResultIs 0, eq "out" outBase 0xaaaa, eq "ring" ringBase 0xbbbb, eq "kernel" (count 1) 1, ByteIs "kernel" (taskState 2) (stateReady facts), eq "kernel" (sendNext 1) (sendSelf 1)]
+  , blocking "send-blocks" Send [(R0, 1), (R1, 0x1234)] (queue 1 0 1 ++ full [0xaaaa] 1)
+      (serviceActor executing Receive 1 outBase)
+      [ ResultIs 0
+      , eq "out" outBase 0xaaaa, eq "ring" ringBase 0x1234
+      , eq "kernel" (count 1) 1, eq "kernel" (read 1) 0, eq "kernel" (write 1) 0
+      , eq "kernel" (waitResult 1) 0, eq "kernel" (waitData 1) 0x1234
+      , eq "kernel" (waitQueue 1) (sendSelf 1), eq "kernel" (waitOwner 1) (dfId (domainFacts facts executing))
+      , eq "kernel" (sendNext 1) (sendSelf 1), eq "kernel" (sendPrev 1) (sendSelf 1)
+      , ByteIs "kernel" (taskState 1) (stateReady facts)
+      , CpsrIs 0x13
+      ]
+  , blocking "receive-blocks" Receive [(R0, 1), (R1, outBase)] (queue 1 0 2 ++ [poke outBase 0x5e4d1e00])
+      (serviceActor executing Send 1 0x4321)
+      [ ResultIs 0
+      , eq "out" outBase 0x4321
+      , eq "kernel" (count 1) 0, eq "kernel" (read 1) 0, eq "kernel" (write 1) 0
+      , eq "kernel" (waitResult 1) 0, eq "kernel" (waitData 1) 0x4321
+      , eq "kernel" (waitQueue 1) (sendSelf 1), eq "kernel" (waitOwner 1) (dfId (domainFacts facts executing))
+      , eq "kernel" (recvNext 1) (recvSelf 1), eq "kernel" (recvPrev 1) (recvSelf 1)
+      , ByteIs "kernel" (taskState 1) (stateReady facts)
+      , CpsrIs 0x13
+      ]
+  , blocking "send-timeout-blocks" SendTimeout [(R0, 1), (R1, 0x2222), (R2, 5)] (queue 1 0 1 ++ full [0xaaaa] 1)
+      (timeoutActor executing (timerEntry 1))
+      [ ResultIs (-50)
+      , eq "ring" ringBase 0xaaaa
+      , eq "kernel" (count 1) 1, eq "kernel" (read 1) 0, eq "kernel" (write 1) 0
+      , eq "kernel" (waitResult 1) (-50), eq "kernel" (waitData 1) 0x2222
+      , eq "kernel" (sendNext 1) (sendSelf 1), eq "kernel" (sendPrev 1) (sendSelf 1)
+      , ByteIs "kernel" (taskState 1) (stateReady facts)
+      , eq "timer-stub" stubBase (contextRecord facts executing executing)
+      , eq "timer-stub" (stubBase + 4) (timerEntry 1)
+      , eq "timer-stub" (stubBase + 8) (clockValue + 5)
+      , CpsrIs 0x13
+      ]
+  , blocking "receive-timeout-blocks" ReceiveTimeout [(R0, 1), (R1, outBase), (R2, 5)] (queue 1 0 2 ++ [poke outBase 0x5e4d1e00])
+      (timeoutActor executing (timerEntry 1))
+      [ ResultIs (-50)
+      , eq "out" outBase 0x5e4d1e00
+      , eq "kernel" (count 1) 0, eq "kernel" (read 1) 0, eq "kernel" (write 1) 0
+      , eq "kernel" (waitResult 1) (-50)
+      , eq "kernel" (recvNext 1) (recvSelf 1), eq "kernel" (recvPrev 1) (recvSelf 1)
+      , ByteIs "kernel" (taskState 1) (stateReady facts)
+      , eq "timer-stub" stubBase (contextRecord facts executing executing)
+      , eq "timer-stub" (stubBase + 4) (timerEntry 1)
+      , eq "timer-stub" (stubBase + 8) (clockValue + 5)
+      , CpsrIs 0x13
+      ]
+  , blocking "send-timeout-wake" SendTimeout [(R0, 1), (R1, 0x3333), (R2, 5)] (queue 1 0 1 ++ full [0xbbbb] 1)
+      (serviceActor executing Receive 1 outBase)
+      [ ResultIs 0
+      , eq "out" outBase 0xbbbb, eq "ring" ringBase 0x3333
+      , eq "kernel" (count 1) 1, eq "kernel" (read 1) 0, eq "kernel" (write 1) 0
+      , eq "kernel" (waitResult 1) 0
+      , eq "kernel" (sendNext 1) (sendSelf 1), eq "kernel" (sendPrev 1) (sendSelf 1)
+      , ByteIs "kernel" (taskState 1) (stateReady facts)
+      , eq "timer-stub" stubBase (contextRecord facts executing executing)
+      , eq "timer-stub" (stubBase + 4) (timerEntry 1)
+      , eq "timer-stub" (stubBase + 8) (clockValue + 5)
+      , eq "timer-stub" (stubBase + 0x10) (contextRecord facts executing executing)
+      , eq "timer-stub" (stubBase + 0x14) (timerEntry 1)
+      , CpsrIs 0x13
+      ]
+  , blocking "receive-timeout-wake" ReceiveTimeout [(R0, 1), (R1, outBase), (R2, 5)] (queue 1 0 2 ++ [poke outBase 0x5e4d1e00])
+      (serviceActor executing Send 1 0x4444)
+      [ ResultIs 0
+      , eq "out" outBase 0x4444
+      , eq "kernel" (count 1) 0
+      , eq "kernel" (waitResult 1) 0, eq "kernel" (waitData 1) 0x4444
+      , eq "kernel" (recvNext 1) (recvSelf 1), eq "kernel" (recvPrev 1) (recvSelf 1)
+      , ByteIs "kernel" (taskState 1) (stateReady facts)
+      , eq "timer-stub" stubBase (contextRecord facts executing executing)
+      , eq "timer-stub" (stubBase + 4) (timerEntry 1)
+      , eq "timer-stub" (stubBase + 8) (clockValue + 5)
+      , eq "timer-stub" (stubBase + 0x10) (contextRecord facts executing executing)
+      , eq "timer-stub" (stubBase + 0x14) (timerEntry 1)
+      , CpsrIs 0x13
+      ]
   , difference "delete-stranded-receiver" Delete [(R0, 1)] (queue 1 0 2 ++ receiverWaiter)
       [ResultIs 0, eq "kernel" (configExists 1) 0]
       [ResultIs 0, eq "kernel" (configExists 1) 0, eq "kernel" (recvNext 1) (recvSelf 1), eq "kernel" (waitResult 2) 0, ByteIs "kernel" (taskState 2) (stateObjectQueued facts .|. stateWait facts)]
       [ResultIs 0, eq "kernel" (configExists 1) 0, eq "kernel" (recvNext 1) (recvSelf 1), eq "kernel" (waitResult 2) (-49), ByteIs "kernel" (taskState 2) (stateReady facts)]
-      False
   , difference "delete-timed-waiter" Delete [(R0, 1)] (queue 1 0 2 ++ timedReceiverWaiter)
       [ResultIs 0, eq "kernel" (configExists 1) 0]
-      [ResultIs 0, eq "kernel" (configExists 1) 0]
-      [ResultIs 0, eq "kernel" (configExists 1) 0, eq "kernel" (waitResult 2) (-49), ByteIs "kernel" (taskState 2) (stateReady facts)]
-      True
+      [ResultIs 0, eq "kernel" (configExists 1) 0, eq "timer-stub" (stubBase + 0x10) 0, eq "timer-stub" (stubBase + 0x14) 0]
+      [ResultIs 0, eq "kernel" (configExists 1) 0, eq "kernel" (waitResult 2) (-49), ByteIs "kernel" (taskState 2) (stateReady facts), eq "timer-stub" (stubBase + 0x10) (contextRecord facts executing executing), eq "timer-stub" (stubBase + 0x14) (timerEntry 2)]
   , caseOf "create" Create [(R0, 4), (R1, packetBase)]
       [ poke (configExists 4) 0, poke (configAttributes 4) 0x5a5a5a5a
       , poke packetBase 1, poke (packetBase + 4) 2, poke (packetBase + 8) ringBase
@@ -239,13 +356,14 @@ cases facts executing =
           bitmap = dfReadyBitmap words'
        in [poke head3 head3, poke (head3 + 4) head3, poke bitmap ((1 `shiftL` 0) .|. (1 `shiftL` 5))]
     caseOf name call args words' checks =
-      Case (CaseId name) call args words' checks [] [] False False False Nothing
-    difference name call args words' common stockChecks ownedChecks timer =
-      Case (CaseId name) call args words' common stockChecks ownedChecks timer False False Nothing
+      Case (CaseId name) call args words' checks [] [] False Nothing
+    difference name call args words' common stockChecks ownedChecks =
+      Case (CaseId name) call args words' common stockChecks ownedChecks False Nothing
     handler name call args words' checks =
-      Case (CaseId name) call args (words' ++ [poke (dfHandlerContext (domainFacts facts executing)) 1]) checks [] [] False False True Nothing
-    arrival name call args words' checks timerInsert =
-      Case (CaseId name) call args words' checks [] [] False timerInsert False (Just (stopAddress, targetStack))
+      Case (CaseId name) call args (words' ++ [poke (dfHandlerContext (domainFacts facts executing)) 1]) checks [] [] True Nothing
+    blocking name call args words' actor checks =
+      Case (CaseId name) call args words' checks [] [] False (Just actor)
+    timerEntry slot = dataQueueTimer facts executing slot
     peerDomain = if executing == DomainA then DomainB else DomainA
     peerQueue slot attributes capacity =
       let config = dataQueueConfig facts peerDomain slot
@@ -294,10 +412,11 @@ stateWait = factsStateWait
 stateObjectQueued = factsStateObjectQueued
 stateOwnerLockQueued = factsStateOwnerLockQueued
 
-layoutWords :: Facts -> [(Word32, Word32)]
-layoutWords facts =
+layoutWords :: Facts -> Case -> [(Word32, Word32)]
+layoutWords facts one =
   concat [recordPokes block described | block <- domains, described <- domains]
     ++ concatMap taskPokes domains ++ concatMap objectPokes domains ++ concatMap readyPokes domains
+    ++ [poke (dfTickNow (domainFacts facts domain)) clockValue | domain <- domains]
   where
     domains = [DomainA, DomainB]
     recordPokes block described =
@@ -312,6 +431,7 @@ layoutWords facts =
           , poke (record + factsContextRunning facts) (dfRunning words')
           , poke (record + factsContextSelected facts) (dfSelected words')
           , poke (record + factsContextDispatchEnabled facts) (dfDispatchEnabled words')
+          , poke (record + factsContextTickNow facts) (dfTickNow words')
           , poke (record + factsContextFirstEntry facts) (trampoline described)
           , poke (record + factsContextTasks facts) (dfTaskTable words')
           , poke (record + factsContextTaskCount facts) (factsTaskSlots facts)
@@ -322,12 +442,15 @@ layoutWords facts =
       [ let address = task facts domain slot
             definition' = definition facts domain slot
             priority = if slot == 1 then 0 else if slot == 2 then 3 else 5
+            (savedSp, resumePc) = case (slot, caseActor one) of
+              (2, Just _) -> (actorStackHigh, actorBase)
+              _ -> (stackPointer, exitAddress)
          in [ poke address address, poke (address + factsTaskPrev facts) address
             , poke (address + factsTaskDefinition facts) definition'
             , poke (address + factsTaskDomain facts) (dfId (domainFacts facts domain))
             , poke (address + factsTaskState facts) (fromIntegral (factsStateDormant facts) .|. (priority `shiftL` 8))
-            , poke (address + factsTaskSavedSp facts) (if slot == 3 then targetStack else stackPointer)
-            , poke (address + factsTaskResumePc facts) (if slot == 3 then stopAddress else exitAddress)
+            , poke (address + factsTaskSavedSp facts) savedSp
+            , poke (address + factsTaskResumePc facts) resumePc
             , poke (definition' + factsDefinitionPriority facts) priority
             , poke (definition' + 4) (0xa5510000 + slot)
             , poke (definition' + 8) exitAddress
@@ -421,22 +544,22 @@ codeBytes domain image = install (timerRemove domain) removeStub (install (timer
        in B.take offset current <> bytes <> B.drop (offset + B.length bytes) current
 
 pages :: Facts -> Domain -> Case -> [Page]
-pages facts domain _ =
+pages facts domain one =
   [ let (low, high) = kernelBounds facts domain in page "kernel" low (fromIntegral (high - low)) ReadWrite
   , let (low, high) = kernelBounds facts peerDomain in page "peer-kernel" low (fromIntegral (high - low)) ReadWrite
   , page "definitions" 0x0096c000 0x4000 ReadWrite
   , page "ring" ringBase 0x100 ReadWrite
   , page "out" outBase 0x10 ReadWrite
-  , page "packet" packetBase 0x10 ReadWrite
   , page "timer-stub" stubBase 0x40 ReadWrite
   , page "stack" (stackPointer - 0x400) 0x400 ReadWrite
-  , page "target-stack" targetStack 0x100 ReadWrite
+  , page "actor-stack" actorStackLow (fromIntegral (actorStackHigh - actorStackLow)) ReadWrite
   , page "exit" exitAddress 0x10 ReadExecute
-  , page "stop" stopAddress 0x10 ReadExecute
   , Page (RegionId "bank-a") (GuestAddress (fromIntegral (bank DomainA))) 4 Device (B.replicate 4 0)
   , Page (RegionId "bank-b") (GuestAddress (fromIntegral (bank DomainB))) 4 Device (B.replicate 4 0)
   , Page (RegionId "caller-frame") (GuestAddress (fromIntegral stackPointer)) (B.length callerBytes) ReadWrite callerBytes
   ]
+    ++ [page "packet" packetBase 0x10 ReadWrite | caseCall one == Create]
+    ++ [Page (RegionId "actor") (GuestAddress (fromIntegral actorBase)) (B.length code) ReadExecute code | Actor code <- maybe [] pure (caseActor one)]
   where
     peerDomain = if domain == DomainA then DomainB else DomainA
     page name address size permission = Page (RegionId name) (GuestAddress (fromIntegral address)) size permission (B.replicate size 0)
@@ -447,33 +570,57 @@ initialRegisters facts _ one =
   where
     value register = maybe (seedRegister register) id (lookup register (caseArgs one))
 
-caseFor :: Facts -> Domain -> Bool -> [(Word32, Word32)] -> Image -> Case -> CaseSpec
-caseFor facts domain owned ownedSymbols image one =
+caseFor :: Facts -> Domain -> Bool -> [(Word32, Word32)] -> Image -> Image -> Case -> CaseSpec
+caseFor facts domain owned ownedSymbols image stockImage one =
   CaseSpec
     { caseId = caseIdText (caseName one) ++ "-" ++ domainLabel domain
-    , caseProvenance = "X-M1 1.50 data-queue stock ABI, x70view 55436fc85c0560dd252b0410af6f2427fe198cd3; synthetic queue, task and timer-seam state"
-    , caseExclusion = "Synthetic queue state and timer stubs; no blocking continuation, dispatcher arrival or firmware integration."
+    , caseProvenance = "X-M1 1.50 data-queue stock ABI, x70view 55436fc85c0560dd252b0410af6f2427fe198cd3; synthetic queue, task, actor and timer-seam state"
+    , caseExclusion = "Synthetic queue, task and timer-seam state. A second task calls the stock entry or the real timeout callback that releases the blocked caller; timer arm and removal are stubbed to their argument receipts; no firmware integration."
     , caseEntry = N.GuestAddress (fromIntegral (entryAddress domain (caseCall one)))
     , caseExit = N.GuestAddress (fromIntegral exitAddress)
-    , caseRegions =
-        [mkRegion (RegionId "code") (N.GuestAddress (fromIntegral (imageBase image))) (fromIntegral (B.length (codeBytes domain image))) ReadExecute (codeBytes domain image)]
-          ++ [mkRegion ident (N.GuestAddress (fromIntegral address)) size permission (overlay address background (wordsFor ident)) | Page ident (GuestAddress address) size permission background <- dataPages]
+    , caseRegions = codeRegions ++ [mkRegion ident (N.GuestAddress (fromIntegral address)) size permission (overlay address background (wordsFor ident)) | Page ident (GuestAddress address) size permission background <- dataPages]
     , caseFunctions = [(N.GuestAddress (fromIntegral address), size) | (address, size) <- functions]
     , caseInitial = initialRegisters facts domain one
-    , caseExpectedStatus = case caseArrival one of
-        Just _ -> StopAddress
-        Nothing -> Returned
-    , caseExpectedRegisters = case caseArrival one of
-        Just (stop, _) -> [(Pc, stop)]
-        Nothing -> [(register, seedRegister register) | register <- [R4 .. R11]] ++ [(Sp, stackPointer)]
+    , caseExpectedStatus = Returned
+    , caseExpectedRegisters = expectedRegisters one
     , caseExpectedMemory = []
     , caseCp14Identity = Just (if domain == DomainA then 0x4003 else 0x4004)
-    , caseKernel = Just (KernelCase plainLimit (fmap (N.GuestAddress . fromIntegral . fst) (caseArrival one)) (Just 0x80001234) (Just 0) (Just 0) (case caseArrival one of Just _ -> [R0 .. R12] ++ [Lr]; Nothing -> [R0, R1, R2, R3, R12, Lr]) [])
+    , caseKernel = Just (KernelCase plainLimit Nothing (Just 0x80001234) (Just 0) (Just 0) [R0, R1, R2, R3, R12, Lr] stackContexts)
     }
   where
     dataPages = pages facts domain one
-    functions = sortOn fst (if owned then ownedSymbols ++ [(timerInsert domain, fromIntegral (B.length timerStub)), (timerRemove domain, fromIntegral (B.length removeStub))] else extents domain)
-    wordsFor ident = if regionName ident `elem` ["kernel", "peer-kernel", "definitions"] then layoutWords facts ++ caseWords one else caseWords one
+    code = codeBytes domain image
+    codeBase = imageBase image
+    -- The owned role keeps the stock kernel's timeout delivery at its own address: the family
+    -- does not own it, so the code region steps around that span.
+    codeRegions
+      | owned =
+          [ mkRegion (RegionId "code-low") (N.GuestAddress (fromIntegral codeBase)) (fromIntegral (callbackStart - codeBase)) ReadExecute (B.take (fromIntegral (callbackStart - codeBase)) code)
+          , mkRegion (RegionId "stock-timeout") (N.GuestAddress (fromIntegral callbackStart)) timeoutCallbackSize ReadExecute (stockCode stockImage callbackStart timeoutCallbackSize)
+          , mkRegion (RegionId "code-high") (N.GuestAddress (fromIntegral callbackEnd)) (fromIntegral (codeBase + fromIntegral (B.length code) - callbackEnd)) ReadExecute (B.drop (fromIntegral (callbackEnd - codeBase)) code)
+          ]
+      | otherwise =
+          [mkRegion (RegionId "code") (N.GuestAddress (fromIntegral codeBase)) (fromIntegral (B.length code)) ReadExecute code]
+    callbackStart = timeoutCallback domain
+    callbackEnd = callbackStart + fromIntegral timeoutCallbackSize
+    actorFunction = [(actorBase, fromIntegral (B.length body)) | Actor body <- maybe [] pure (caseActor one)]
+    functions = sortOn fst (if owned then ownedSymbols ++ actorFunction ++ timerStubs ++ [(timeoutCallback domain, fromIntegral timeoutCallbackSize)] else extents domain ++ actorFunction)
+    timerStubs = [(timerInsert domain, fromIntegral (B.length timerStub)), (timerRemove domain, fromIntegral (B.length removeStub))]
+    stackContexts = case caseActor one of
+      Nothing -> []
+      Just _ -> either (const []) id (sequence [mkStackContext (N.GuestAddress (fromIntegral callerStackLow)) (N.GuestAddress (fromIntegral stackPointer)), mkStackContext (N.GuestAddress (fromIntegral actorStackLow)) (N.GuestAddress (fromIntegral actorStackHigh))])
+    wordsFor ident = if regionName ident `elem` ["kernel", "peer-kernel", "definitions"] then layoutWords facts one ++ caseWords one else caseWords one
+
+-- | The returned caller's ABI: its result, its callee-saved registers and its stack pointer.
+expectedRegisters :: Case -> [(Register, Word32)]
+expectedRegisters one =
+  [ (R0, value) | value : _ <- [[value | ResultIs value <- caseExpect one ++ caseStockExpect one]] ]
+    ++ [(register, seedRegister register) | register <- [R4 .. R11]]
+    ++ [(Sp, stackPointer)]
+
+stockCode :: Image -> Word32 -> Int -> B.ByteString
+stockCode image address size =
+  B.take size (B.drop (fromIntegral (address - imageBase image)) (imageBytes image))
 
 readWord :: [Page] -> NativeObservation -> String -> Word32 -> Maybe Word32
 readWord pages' observation name address = case
@@ -504,20 +651,32 @@ holds _ _ pages' observation expectation = case expectation of
     Just actual | actual == value -> Right ()
     Just actual -> Left ("r0 is " ++ show actual ++ ", expected " ++ show value)
     Nothing -> Left "missing r0"
+  CpsrIs value -> case N.lookupRegister Cpsr observation of
+    Just actual | actual .&. 0x1ff == value -> Right ()
+    Just actual -> Left ("cpsr is " ++ show actual ++ ", expected control bits " ++ show value)
+    Nothing -> Left "missing cpsr"
 
+-- | Both roles against the declared expectations and each other. The runner's own report is
+-- judged separately: its whole-region memory gate is not declared, so a report is only refused
+-- for a status, register, event or kernel mismatch.
 compareCase :: Facts -> Domain -> Case -> NativeObservation -> NativeObservation -> [String]
-compareCase facts domain one stock owned = statusDifferences ++ resultDifferences ++ expectedDifferences ++ regionDifferences ++ registerDifferences ++ timerDifferences
+compareCase facts domain one stock owned = statusDifferences ++ declaredRegisterDifferences ++ expectedDifferences ++ resultDifferences ++ regionDifferences ++ registerDifferences
   where
     pages' = pages facts domain one
-    expectedStatus = case caseArrival one of
-      Just _ -> StopAddress
-      Nothing -> Returned
+    expectedStatus = Returned
     returned observation = nativeStatus observation == expectedStatus
     valid = returned stock && returned owned
     statusDifferences =
       [ role ++ ": status " ++ runnerStatusLabel (nativeStatus observation) ++ " at pc " ++ show (N.lookupRegister Pc observation) ++ ", expected " ++ runnerStatusLabel expectedStatus
       | (role, observation) <- [("stock", stock), ("owned", owned)]
       , not (returned observation)
+      ]
+    declaredRegisterDifferences =
+      [ role ++ ": " ++ N.registerLabel register ++ " is " ++ show actual ++ ", expected " ++ show value
+      | (role, observation) <- [("stock", stock), ("owned", owned)]
+      , (register, value) <- expectedRegisters one
+      , actual <- [N.lookupRegister register observation]
+      , actual /= Just value
       ]
     expectedDifferences =
       [ role ++ ": " ++ message
@@ -531,45 +690,63 @@ compareCase facts domain one stock owned = statusDifferences ++ resultDifference
     resultDifferences =
       [ "r0 differs: stock " ++ show (N.lookupRegister R0 stock) ++ ", owned " ++ show (N.lookupRegister R0 owned)
       | valid
-      , caseArrival one == Nothing
       , N.lookupRegister R0 stock /= N.lookupRegister R0 owned
       ]
     regionDifferences =
       [ "region " ++ name ++ " differs"
       | valid
-      , caseArrival one == Nothing
       , null (caseStockExpect one)
       , name <- ["kernel", "ring", "out"]
-      , regionBytes stock name /= regionBytes owned name
+      , let view = if name == "kernel" then fmap (withoutContinuations facts domain) else id
+      , view (regionBytes stock name) /= view (regionBytes owned name)
       ]
-    registerDifferences = case caseArrival one of
-      Just (stop, target) ->
-        [ role ++ ": pc " ++ show (N.lookupRegister Pc observation) ++ ", expected " ++ show stop
-        | (role, observation) <- [("stock", stock), ("owned", owned)]
-        , N.lookupRegister Pc observation /= Just stop
-        ]
-
-      Nothing ->
-        [ "caller register " ++ show register ++ " differs"
-        | valid
-        , register <- [R4 .. R11]
-        , N.lookupRegister register stock /= N.lookupRegister register owned
-        ]
-          ++ [ "caller SP differs" | valid, N.lookupRegister Sp stock /= N.lookupRegister Sp owned ]
-    timerDifferences =
-      [ "timer remove receipt differs"
+    registerDifferences =
+      [ "caller register " ++ show register ++ " differs"
       | valid
-      , caseTimerRemove one
-      , let receipt name observation = (readWord pages' observation "timer-stub" (stubBase + 0x10), readWord pages' observation "timer-stub" (stubBase + 0x14))
-      , receipt "stock" stock /= (Nothing, Nothing)
-      , receipt "owned" owned /= (Just (contextRecord facts domain domain), Just (dataQueueTimer facts domain 2))
+      , register <- [R4 .. R11]
+      , N.lookupRegister register stock /= N.lookupRegister register owned
       ]
+        ++ [ "caller SP differs" | valid, N.lookupRegister Sp stock /= N.lookupRegister Sp owned ]
+        ++ [ "caller control bits differ" | valid, fmap (.&. 0x1ff) (N.lookupRegister Cpsr stock) /= fmap (.&. 0x1ff) (N.lookupRegister Cpsr owned) ]
+
+-- | A kernel view with each task's saved stack pointer zeroed. The frame depth at a dispatch is
+-- the body's own; the resumed caller's stack pointer and callee-saved registers are the oracle.
+withoutContinuations :: Facts -> Domain -> B.ByteString -> B.ByteString
+withoutContinuations facts domain bytes = foldl clear bytes addresses
+  where
+    (low, _) = kernelBounds facts domain
+    addresses = [task facts domain slot + factsTaskSavedSp facts | slot <- [1 .. 3]]
+    clear current address =
+      let offset = fromIntegral (address - low)
+       in B.take offset current <> B.replicate 4 0 <> B.drop (offset + 4) current
+
+-- | The runner report's status and mismatches, as its judge wrote them.
+data Report = Report { reportStatus :: String, reportMismatches :: [String] }
+
+instance FromJSON Report where
+  parseJSON = withObject "native report" $ \o ->
+    Report <$> o .: "status" <*> (fromMaybe [] <$> o .:? "mismatches")
+
+-- | The runner report's non-memory mismatches, which are the declarations the wire carries.
+reportVerdicts :: FilePath -> String -> IO [String]
+reportVerdicts directory ident = do
+  let path = directory </> ident ++ ".native-result.json"
+  bytes <- B.readFile path
+  pure $ case eitherDecodeStrict' bytes of
+    Left problem -> [path ++ ": " ++ problem]
+    Right report ->
+      let other = filter (not . memoryMismatch) (reportMismatches report)
+       in [ path ++ ": " ++ reportStatus report ++ (if null other then "" else ": " ++ intercalate "; " other)
+          | reportStatus report `notElem` ["passed", "failed"]
+              || not (null other)
+              || (reportStatus report == "failed" && null (reportMismatches report))
+          ]
 
 runDomain :: FilePath -> FilePath -> FilePath -> Facts -> Domain -> Image -> Image -> [(Word32, Word32)] -> IO [CaseRun]
 runDomain runner cacheRoot directory facts domain stockImage ownedImage ownedSymbols = do
   let selected = cases facts domain
-      stockSpecs = [(one, caseFor facts domain False [] stockImage one) | one <- selected]
-      ownedSpecs = [(one, caseFor facts domain True ownedSymbols ownedImage one) | one <- selected]
+      stockSpecs = [(one, caseFor facts domain False [] stockImage stockImage one) | one <- selected]
+      ownedSpecs = [(one, caseFor facts domain True ownedSymbols ownedImage stockImage one) | one <- selected]
   stockBatch <- writeBatch (directory </> "stock") (map snd stockSpecs)
   ownedBatch <- writeBatch (directory </> "owned") (map snd ownedSpecs)
   (stockReuse, stockRaw) <- cachedObservedBatch cacheRoot runner stockBatch
@@ -578,9 +755,18 @@ runDomain runner cacheRoot directory facts domain stockImage ownedImage ownedSym
       subject = M.fromList [(caseIdText ident, observation) | (ident, observation) <- ownedRaw]
   results <- forM selected $ \one -> do
     let ident = caseIdText (caseName one) ++ "-" ++ domainLabel domain
+        blocking = case caseActor one of
+          Just _ -> True
+          Nothing -> False
+    stockVerdicts <- reportVerdicts (directory </> "stock") ident
+    ownedVerdicts <- reportVerdicts (directory </> "owned") ident
+    let verdicts = stockVerdicts ++ ownedVerdicts
     pure $ case (M.lookup ident reference, M.lookup ident subject) of
-      (Just original, Just replacement) -> CaseRun domain (caseIdText (caseName one)) [] (compareCase facts domain one original replacement) (BatchExecuted, BatchExecuted)
-      (Nothing, _) -> CaseRun domain (caseIdText (caseName one)) [] ["stock case did not run"] (BatchExecuted, BatchExecuted)
-      (_, Nothing) -> CaseRun domain (caseIdText (caseName one)) [] ["owned case did not run"] (BatchExecuted, BatchExecuted)
+      (Just original, Just replacement) -> CaseRun domain (caseIdText (caseName one)) blocking [] (verdicts ++ compareCase facts domain one original replacement) (BatchExecuted, BatchExecuted)
+      (Nothing, _) -> CaseRun domain (caseIdText (caseName one)) blocking [] ["stock case did not run"] (BatchExecuted, BatchExecuted)
+      (_, Nothing) -> CaseRun domain (caseIdText (caseName one)) blocking [] ["owned case did not run"] (BatchExecuted, BatchExecuted)
   unless (length stockRaw == length selected && length ownedRaw == length selected) (fail "native observations do not cover the current data-queue case set")
-  pure [CaseRun (runEntryDomain run) (runName run) (runChecks run) (runDifferences run) (stockReuse, ownedReuse) | run <- results]
+  pure [CaseRun (runEntryDomain run) (runName run) (runBlocking run) (runChecks run) (runDifferences run) (stockReuse, ownedReuse) | run <- results]
+
+memoryMismatch :: String -> Bool
+memoryMismatch mismatch = "memory " `isPrefixOf` mismatch && "differs from exact allowed final bytes" `isSuffixOf` mismatch

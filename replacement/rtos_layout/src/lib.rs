@@ -943,14 +943,23 @@ impl DomainWords {
         Task(self.task_table.offset((slot.get() - 1) * Task::SIZE))
     }
 
-    /// `None` unless `task` is a record start in this table.
+    /// `None` unless `task` is a record start in this table. The A32 build may not divide here.
     #[inline(always)]
     pub const fn task_slot(&self, task: Task) -> Option<TaskSlot> {
         let bytes = task.0 .0.wrapping_sub(self.task_table.0);
-        if bytes % Task::SIZE != 0 {
+        if bytes >= Task::SIZE * TaskSlot::COUNT {
             return None;
         }
-        TaskSlot::new(bytes / Task::SIZE + 1)
+        let mut remaining = bytes;
+        let mut slot = 1;
+        while remaining >= Task::SIZE {
+            remaining -= Task::SIZE;
+            slot += 1;
+        }
+        if remaining != 0 {
+            return None;
+        }
+        TaskSlot::new(slot)
     }
 
     #[inline(always)]

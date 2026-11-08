@@ -63,6 +63,7 @@ fn block<M: Env>(
     object: Domain,
     task: Task,
     wait: DataQueueWait,
+    record: DataQueueControl,
     queue: WaitQueue,
     order: QueueOrder,
     state: TaskState,
@@ -88,7 +89,7 @@ fn block<M: Env>(
             }
             None => m.store_word(wait.base().result(), 0),
         }
-        m.store_word(wait.base().queue(), queue.0 .0);
+        m.store_word(wait.base().queue(), record.0 .0);
         m.store_word(wait.base().owner(), m.load_word(owner.owner()));
         m.queue_wait(owner, task, queue, order);
         true
@@ -203,6 +204,7 @@ pub fn send<M: Env>(
                     id.domain,
                     task,
                     wait,
+                    control,
                     control.sender_queue(),
                     QueueOrder::from_attribute(m.load_word(config.attributes())),
                     SEND_STATE,
@@ -299,6 +301,7 @@ pub fn send_timeout<M: Env>(
                     id.domain,
                     task,
                     wait,
+                    control,
                     control.sender_queue(),
                     QueueOrder::from_attribute(m.load_word(config.attributes())),
                     SEND_STATE,
@@ -402,6 +405,7 @@ pub fn receive<M: Env>(
                     id.domain,
                     task,
                     wait,
+                    control,
                     WaitQueue(control.receivers().0),
                     QueueOrder::Fifo,
                     RECEIVE_STATE,

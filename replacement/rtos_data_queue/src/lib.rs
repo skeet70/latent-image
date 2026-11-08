@@ -28,8 +28,8 @@ fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
 pub use admission::{admit, Admitted, Entry, Facts, Params, Records, Request, Service};
 pub use create::{create_data_queue, delete_data_queue, DataQueueCreate, QueueAttributes};
 pub use env::{
-    release, Deadline, DispatchTarget, Env, QueueOrder, SavedInterrupts, SavedMask, Selection,
-    Tick, TimeoutCallback, TimerEntryAddress, WaitCompletion,
+    release, Deadline, DispatchTarget, Env, HandlerContext, QueueOrder, SavedInterrupts,
+    SavedMask, Selection, Tick, TimeoutCallback, TimerEntryAddress, WaitCompletion,
 };
 pub use id::{own_data_queue_slot, resolve_data_queue, DataQueueId, EncodedId, EntryDomain};
 pub use layout::{DataQueueSlot, Domain, TaskSlot};

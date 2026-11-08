@@ -44,6 +44,13 @@ pub enum DispatchTarget {
     Remote,
 }
 
+/// The context a body that may dispatch was entered from.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum HandlerContext {
+    Task,
+    Handler,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum QueueOrder {
     Fifo,

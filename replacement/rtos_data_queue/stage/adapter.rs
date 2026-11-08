@@ -459,7 +459,12 @@ pub extern "C" fn xm1_rtos_data_queue_delete_body(id: i32) -> i32 {
         Ok(slot) => slot,
         Err(status) => return status.code(),
     };
-    match delete_data_queue(&cpu, DataQueueId { domain: ENTRY, slot }) {
+    let caller = if entry().handler_context == 0 {
+        HandlerContext::Task
+    } else {
+        HandlerContext::Handler
+    };
+    match delete_data_queue(&cpu, DataQueueId { domain: ENTRY, slot }, caller) {
         Ok(()) => 0,
         Err(status) => status.code(),
     }

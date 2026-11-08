@@ -53,7 +53,7 @@ fn main() {
     let h = ReadyHead(GuestAddress(0));
     let [sp0, sp1] = d.initial_sp_terms();
     let context = format!(
-        "{{\"size\":{},\"id\":{},\"owner\":{},\"scheduler_lock\":{},\"object_lock\":{},\"ready_heads\":{},\"ready_bitmap\":{},\"running\":{},\"selected\":{},\"dispatch_enabled\":{},\"first_entry\":{},\"tasks\":{},\"task_count\":{},\"event_flags\":{},\"event_flag_count\":{},\"data_queues\":{},\"data_queue_count\":{},\"mailboxes\":{},\"mailbox_count\":{}}}",
+        "{{\"size\":{},\"id\":{},\"owner\":{},\"scheduler_lock\":{},\"object_lock\":{},\"ready_heads\":{},\"ready_bitmap\":{},\"running\":{},\"selected\":{},\"dispatch_enabled\":{},\"tick_now\":{},\"first_entry\":{},\"tasks\":{},\"task_count\":{},\"event_flags\":{},\"event_flag_count\":{},\"data_queues\":{},\"data_queue_count\":{},\"mailboxes\":{},\"mailbox_count\":{}}}",
         KernelContext::SIZE,
         c.id().0,
         c.owner().0,
@@ -64,6 +64,7 @@ fn main() {
         c.running().0,
         c.selected().0,
         c.dispatch_enabled().0,
+        c.tick_now().0,
         c.first_entry().0,
         c.tasks().0,
         c.task_count().0,

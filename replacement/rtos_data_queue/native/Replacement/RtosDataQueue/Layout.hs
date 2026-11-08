@@ -31,6 +31,7 @@ data DomainFacts = DomainFacts
   , dfReadyBitmap :: Word32
   , dfRunning :: Word32
   , dfDispatchEnabled :: Word32
+  , dfTickNow :: Word32
   , dfSelected :: Word32
   , dfTaskTable :: Word32
   , dfContextA :: Word32
@@ -79,6 +80,7 @@ data Facts = Facts
   , factsContextRunning :: Word32
   , factsContextSelected :: Word32
   , factsContextDispatchEnabled :: Word32
+  , factsContextTickNow :: Word32
   , factsContextFirstEntry :: Word32
   , factsContextTasks :: Word32
   , factsContextTaskCount :: Word32
@@ -133,6 +135,7 @@ instance FromJSON DomainFacts where
       <*> o .: "ready_bitmap"
       <*> o .: "running"
       <*> o .: "dispatch_enabled"
+      <*> o .: "tick_now"
       <*> o .: "selected"
       <*> o .: "task_table"
       <*> o .: "context_a"
@@ -198,6 +201,7 @@ instance FromJSON Facts where
       <*> c .: "running"
       <*> c .: "selected"
       <*> c .: "dispatch_enabled"
+      <*> c .: "tick_now"
       <*> c .: "first_entry"
       <*> c .: "tasks"
       <*> c .: "task_count"

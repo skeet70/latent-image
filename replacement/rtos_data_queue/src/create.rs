@@ -1,5 +1,5 @@
 use crate::env::{
-    release, unlink, DispatchTarget, Env, Selection, WaitCompletion,
+    release, unlink, DispatchTarget, Env, HandlerContext, Selection, WaitCompletion,
 };
 use crate::id::DataQueueId;
 use crate::layout::{GuestAddress, Task, WaitQueue};
@@ -71,7 +71,11 @@ fn release_all<M: Env>(m: &M, queue: WaitQueue) -> bool {
 }
 
 /// Slot `+0xa4`; every queued sender and receiver is released with `-49` before the reset.
-pub fn delete_data_queue<M: Env>(m: &M, id: DataQueueId) -> Result<(), ObjectStatus> {
+pub fn delete_data_queue<M: Env>(
+    m: &M,
+    id: DataQueueId,
+    caller: HandlerContext,
+) -> Result<(), ObjectStatus> {
     let words = id.domain.words();
     let config = words.data_queue_config(id.slot);
     let control = words.data_queue_control(id.slot);
@@ -94,7 +98,14 @@ pub fn delete_data_queue<M: Env>(m: &M, id: DataQueueId) -> Result<(), ObjectSta
             m.store_word(control.write(), 0);
             dispatch
         },
-        |dispatch| if *dispatch { m.dispatch(0) },
+        |dispatch| {
+            if *dispatch {
+                match caller {
+                    HandlerContext::Task => m.dispatch(0),
+                    HandlerContext::Handler => m.request_delayed_dispatch(),
+                }
+            }
+        },
     );
     Ok(())
 }

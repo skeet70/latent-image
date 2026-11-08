@@ -1,5 +1,6 @@
 use crate::admission::{admit, Entry, Facts, Params, Records, Request, Service};
 use crate::create::{create_data_queue, delete_data_queue, DataQueueCreate, QueueAttributes};
+use crate::env::HandlerContext;
 use crate::id::{own_data_queue_slot, resolve_data_queue, DataQueueId, EncodedId, EntryDomain};
 use crate::layout::{
     DataQueueSlot, DataQueueWait, Domain, DomainId, GuestAddress, Task, TaskDefinition, TaskSlot,
@@ -42,6 +43,10 @@ fn timer(slot: u32) -> GuestAddress {
 
 fn context() -> crate::layout::KernelContext {
     Domain::A.words().context(Domain::A)
+}
+
+fn running(sim: &Sim) -> u32 {
+    sim.word(GuestAddress(sim.word(context().running())))
 }
 
 fn set_selected(sim: &Sim, value: u32) {
@@ -375,8 +380,8 @@ fn delete_releases_a_blocked_receiver_and_a_blocked_sender() {
     };
 
     sim.set_running(Domain::A, task(1));
-    delete_data_queue(&sim, queue(1)).unwrap();
-    delete_data_queue(&sim, queue(2)).unwrap();
+    delete_data_queue(&sim, queue(1), HandlerContext::Task).unwrap();
+    delete_data_queue(&sim, queue(2), HandlerContext::Task).unwrap();
     assert_eq!(
         resume_receive(&sim, receiver),
         ReceiveResume::Completed(WaitOutcome::Released)
@@ -407,12 +412,55 @@ fn delete_cancels_a_timed_waiter() {
     };
     assert!(sim.armed(timer(2)));
     sim.set_running(Domain::A, task(1));
-    delete_data_queue(&sim, queue(1)).unwrap();
+    delete_data_queue(&sim, queue(1), HandlerContext::Task).unwrap();
     assert!(!sim.armed(timer(2)));
     assert_eq!(
         resume_receive(&sim, pending),
         ReceiveResume::Completed(WaitOutcome::Released)
     );
+}
+
+#[test]
+fn a_handler_delete_defers_the_released_waiter_dispatch() {
+    let sim = fixture();
+    install_queue(&sim, 1, 0, 1, RING);
+    let out = OutWord(GuestAddress(0x4000_1000));
+    make_ready(&sim, 1, 3);
+    make_ready(&sim, 2, 0);
+    set_selected(&sim, task(1).0 .0);
+    sim.set_running(Domain::A, task(2));
+    let pending = match receive(&sim, EntryDomain::new(Domain::A), queue(1), out, Timeout::Forever)
+    {
+        Ok(ReceiveBlocking::Pending(pending)) => pending,
+        other => panic!("{other:?}"),
+    };
+    sim.set_running(Domain::A, task(3));
+    delete_data_queue(&sim, queue(1), HandlerContext::Handler).unwrap();
+    assert_eq!(sim.delayed(), 1);
+    assert_eq!(running(&sim), task(3).0 .0);
+    assert_eq!(
+        resume_receive(&sim, pending),
+        ReceiveResume::Completed(WaitOutcome::Released)
+    );
+}
+
+#[test]
+fn a_task_delete_dispatches_the_released_waiter() {
+    let sim = fixture();
+    install_queue(&sim, 1, 0, 1, RING);
+    let out = OutWord(GuestAddress(0x4000_1000));
+    make_ready(&sim, 1, 3);
+    make_ready(&sim, 2, 0);
+    set_selected(&sim, task(1).0 .0);
+    sim.set_running(Domain::A, task(2));
+    let _ = match receive(&sim, EntryDomain::new(Domain::A), queue(1), out, Timeout::Forever) {
+        Ok(ReceiveBlocking::Pending(pending)) => pending,
+        other => panic!("{other:?}"),
+    };
+    sim.set_running(Domain::A, task(3));
+    delete_data_queue(&sim, queue(1), HandlerContext::Task).unwrap();
+    assert_eq!(sim.delayed(), 0);
+    assert_eq!(running(&sim), task(2).0 .0);
 }
 
 #[test]
@@ -434,7 +482,7 @@ fn a_timeout_that_completed_first_keeps_its_result_across_delete() {
     };
     sim.complete(task(2), wait(2), -50);
     sim.set_running(Domain::A, task(1));
-    delete_data_queue(&sim, queue(1)).unwrap();
+    delete_data_queue(&sim, queue(1), HandlerContext::Task).unwrap();
     assert_eq!(
         resume_receive(&sim, pending),
         ReceiveResume::Completed(WaitOutcome::TimedOut)
@@ -501,7 +549,7 @@ fn delete_resets_the_stock_record_values() {
     let w = Domain::A.words();
     let config = w.data_queue_config(id.slot);
     let control = w.data_queue_control(id.slot);
-    delete_data_queue(&sim, id).unwrap();
+    delete_data_queue(&sim, id, HandlerContext::Task).unwrap();
     assert_eq!(sim.word(config.attributes()), 0);
     assert_eq!(sim.word(config.capacity()), 1);
     assert_eq!(sim.word(config.ring_base()), w.data_queue_placeholder.0);
