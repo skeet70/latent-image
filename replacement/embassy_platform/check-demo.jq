@@ -1,19 +1,15 @@
-# Judges the embassy phase-1 demonstration and its three controls from their e2e-result.json files:
-#   jq -n -L replacement/embassy_platform --slurpfile demo D --slurpfile no_executors E \
-#     --slurpfile no_pender_kernel P --slurpfile counter_down C --rawfile objects OBJECTS_SHA256 \
-#     -f replacement/embassy_platform/check-demo.jq
-# OBJECTS_SHA256 is `sha256sum bazel-bin/replacement/embassy_platform/*.o` taken before the runs.
-# Expected values follow the `entry` of experiments/embassy_phase1/trajectory.json and the record
-# layout in src/platform.rs, not a run.
+# Judges the verified observation evidence from //replacement/embassy_platform:check-demo.
 include "decode-demo";
+.demo as $demo | .no_executors as $no_executors | .no_pender_kernel as $no_pender_kernel
+| .counter_down as $counter_down | .objects as $objects |
 
 def read_at($phase; $label): [.observations[] | select(.phase == $phase) | .reads[]? | select(.label == $label) | .bytes][0];
 def record($phase): read_at($phase; "demo") | if . == null then null else demo end;
 def run_clean:
-  .checks == {"install": "PASS", "trajectory": "PASS", "unload": "PASS"}
+  .receipt.checks == {"install": "PASS", "trajectory": "PASS", "unload": "PASS"}
   and ([.observations[].steps[].matched] | all)
-  and .forbidden_execution.complete == true and .forbidden_execution.forbidden_fetch_count == 0;
-def wake_hits($r0): [.observations[].trace_hits[]? | select((.site | startswith("wakeup-")) and .r0 == $r0)] | length;
+  and .receipt.forbidden_execution.complete == true and .receipt.forbidden_execution.forbidden_fetch_count == 0;
+def wake_hits($r0): .wake_counts[$r0] // 0;
 # Stack words still holding the fill: byte 0 for A (the allocator's fill), the id byte 119 for B.
 def fill_words($byte): bytes as $b | [range(0; ($b | length) / 4) as $w | ($b[($w * 4):($w * 4 + 4)] == [$byte, $byte, $byte, $byte])];
 def high_water($stack): ($stack | index(false)) as $first | if $first == null then 0 else 2048 - 4 * $first end;
@@ -33,18 +29,18 @@ def started_hosts($d): $d != null and $d.magic == "EMB2"
 def no_faults($run): [$run | record("handback"), record("unloaded-shooting")] as $reads
   | ($reads | all(. != null)) and ([$reads[] | .panics == 0] | all)
   and ([$reads[1].domains[] | .sleeps_other == 0 and .pender_errors == 0 and .early_kernel_wakes == 0 and .clock_regressions == 0] | all);
-def screens: [.menu_receipts[] | {label, menu, png: .sha256, planes: .scanout_evidence.source_bytes.sha256}];
+def screens: [.receipt.menu_receipts[] | {label, menu, png: .sha256, planes: .scanout_evidence.source_bytes.sha256}];
 # The checkpoint key hashes the start inputs; whether a run booted cold or restored that checkpoint is reported, not judged.
-def start_point: .emulator_start | {directory, inputs, key};
-def builder_identity: .relink.source_identity | with_entries(select((.key | startswith("experiments/") or startswith("prelinked-source:")) | not)) | del(.["experiment-prelinked.o"]);
-def variant_file_digest($name; $file): .relink.source_identity["experiments/" + $name + "/" + $file];
+def start_point: .receipt.emulator_start | {directory, inputs, key};
+def builder_identity: .receipt.relink.source_identity | with_entries(select((.key | startswith("experiments/") or startswith("prelinked-source:")) | not)) | del(.["experiment-prelinked.o"]);
+def variant_file_digest($name; $file): .receipt.relink.source_identity["experiments/" + $name + "/" + $file];
 # Source digests the builder recorded for the linked object; receipts relinked before that listing existed have none.
-def prelinked_sources: .relink.source_identity | with_entries(select(.key | startswith("prelinked-source:")));
+def prelinked_sources: .receipt.relink.source_identity | with_entries(select(.key | startswith("prelinked-source:")));
 # The object digest recorded for each variant before the runs.
 def object_digest($object): $objects | split("\n") | map(select(endswith("/" + $object)) | split(" ")[0]) | .[0];
-def is_variant($name; $object): .relink.source_identity["experiments/" + $name + "/prelinked.json"] != null
+def is_variant($name; $object): .receipt.relink.source_identity["experiments/" + $name + "/prelinked.json"] != null
   and object_digest($object) != null
-  and .relink.source_identity["experiment-prelinked.o"] == object_digest($object);
+  and .receipt.relink.source_identity["experiment-prelinked.o"] == object_digest($object);
 
 [
   {run: $demo[0], name: "embassy_phase1", object: "embassy-platform-demo.o"},
@@ -62,7 +58,7 @@ def is_variant($name; $object): .relink.source_identity["experiments/" + $name +
     runs: {
       each_named_variant: ([$runs[] | .name as $n | .object as $o | .run | is_variant($n; $o)] | all),
       same_emulator_start: ([$runs[] | .run | start_point] | unique | length == 1),
-      start_modes: [$runs[] | .run.emulator_start.start],
+      start_modes: [$runs[] | .run.receipt.emulator_start.start],
       same_trajectory: ([$runs[] | .name as $n | .run | variant_file_digest($n; "trajectory.json")] | unique | (length == 1 and .[0] != null)),
       same_hooks: ([$runs[] | .name as $n | .run | variant_file_digest($n; "hooks.json")] | unique | (length == 1 and .[0] != null)),
       same_builder_identity: ([$runs[] | .run | builder_identity] | unique | length == 1),

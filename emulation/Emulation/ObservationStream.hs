@@ -141,8 +141,7 @@ resolveReference directory relative
       Left "reference path is not a plain file name"
   | otherwise = Right (directory </> relative)
 
--- | Reads the document a reference names, checks its byte count, digest and phase, and decodes
--- it. Row references stay with 'withRowReader' and 'foldTraceHitRows'.
+-- | Row integrity is checked by 'foldTraceHitRows'.
 loadVerifiedObservation :: FilePath -> ObservationRef -> IO (Either String VerifiedObservation)
 loadVerifiedObservation directory ref = case resolveReference directory (observationRefPath ref) of
   Left problem -> pure (Left problem)
@@ -164,7 +163,9 @@ loadVerifiedObservation directory ref = case resolveReference directory (observa
                 Right (Right value) -> case phaseOf value of
                   Nothing -> Left "observation document has no phase"
                   Just phase
-                    | phase == observationRefPhase ref -> Right (VerifiedObservation ref path value)
+                    | phase == observationRefPhase ref -> do
+                        traceReferenceProblem ref value
+                        Right (VerifiedObservation ref path value)
                     | otherwise -> Left ("observation document phase " ++ T.unpack phase
                         ++ " differs from its reference " ++ T.unpack (observationRefPhase ref))
 
@@ -173,6 +174,27 @@ phaseOf (Object fields) = case KM.lookup "phase" fields of
   Just (String phase) -> Just phase
   _ -> Nothing
 phaseOf _ = Nothing
+
+traceReferenceProblem :: ObservationRef -> Value -> Either String ()
+traceReferenceProblem reference document = case document of
+  Object fields -> case KM.lookup "trace_hits" fields of
+    Just (Array rows) ->
+      let expected = observationRefTraceHits reference
+       in if traceHitRefCount expected /= length rows
+            then Left "inline trace-hit count differs from the observation reference"
+            else if traceHitRefPath expected /= observationRefPath reference
+              then Left "inline trace-hit reference names another file"
+              else if traceHitRefSha256 expected /= observationRefSha256 reference
+                then Left "inline trace-hit reference digest differs from the observation digest"
+                else Right ()
+    Just raw@(Object _) -> do
+      expected <- either (\problem -> Left ("trace_hits reference: " ++ problem)) Right (parseEither (J.parseJSON :: Value -> Parser TraceHitRef) raw)
+      if expected == observationRefTraceHits reference
+        then Right ()
+        else Left "trace-hit reference differs from the observation reference"
+    Just _ -> Left "trace_hits is neither an array nor a reference"
+    Nothing -> Left "trace_hits is missing"
+  _ -> Left "observation document is not an object"
 
 foldTraceHitSources :: [TraceHitSource] -> (a -> TraceHit -> IO a) -> a -> IO a
 foldTraceHitSources sources step initial = do

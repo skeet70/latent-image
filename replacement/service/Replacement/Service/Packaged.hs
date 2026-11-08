@@ -18,7 +18,6 @@ module Replacement.Service.Packaged
 
 import Control.Exception (IOException, try)
 import Data.Aeson (FromJSON (..), Value (..), eitherDecodeStrict', withObject, withText, (.:), (.:?))
-import qualified Data.Aeson.KeyMap as KM
 import Data.Aeson.Types (Parser, parseEither)
 import qualified Data.ByteString as B
 import Data.Char (isHexDigit)
@@ -29,7 +28,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Word (Word32, Word64)
 import Emulation.ObservationStream
-  ( ObservationRef (..), TraceHitRef (..), VerifiedObservation (..)
+  ( ObservationRef, VerifiedObservation (..)
   , decodeObservationRef, foldTraceHitRows, loadVerifiedObservation
   )
 import Emulation.Sha256 (sha256, sha256File, sha256Hex)
@@ -676,39 +675,14 @@ collectObservation receipt boundary index analysis (ReferencedObservation phase 
   loaded <- loadVerifiedObservation receipt reference
   case loaded of
     Left problem -> pure analysis { analysisFailure = Just problem }
-    Right verified ->
-      case traceReferenceProblem reference (verifiedObservationValue verified) of
-        Left problem -> pure analysis { analysisFailure = Just problem }
-        Right () -> do
-          folded <- foldTraceHitRows receipt (verifiedObservationValue verified) step analysis
-          pure $ either (\problem -> analysis { analysisFailure = Just problem }) id folded
+    Right verified -> do
+      folded <- foldTraceHitRows receipt (verifiedObservationValue verified) step analysis
+      pure $ either (\problem -> analysis { analysisFailure = Just problem }) id folded
   where
     step state row = do
       hit <- either (Left . ("trace-hit row: " ++)) Right (parseEither (parseJSON :: Value -> Parser TraceHit) row)
       pure (ingestHit boundary index phase state hit)
 
--- | The receipt's trace-hit reference must name what the document carries. Row integrity, including
--- a sidecar's digest and count, stays with the shared fold.
-traceReferenceProblem :: ObservationRef -> Value -> Either String ()
-traceReferenceProblem reference document = case document of
-  Object fields -> case KM.lookup "trace_hits" fields of
-    Just (Array rows) ->
-      let expected = observationRefTraceHits reference
-       in if traceHitRefCount expected /= length rows
-            then Left "inline trace-hit count differs from the observation reference"
-            else if traceHitRefPath expected /= observationRefPath reference
-              then Left "inline trace-hit reference names another file"
-              else if traceHitRefSha256 expected /= observationRefSha256 reference
-                then Left "inline trace-hit reference digest differs from the observation digest"
-                else Right ()
-    Just raw@(Object _) -> do
-      expected <- either (\problem -> Left ("trace_hits reference: " ++ problem)) Right (parseEither (parseJSON :: Value -> Parser TraceHitRef) raw)
-      if expected == observationRefTraceHits reference
-        then Right ()
-        else Left "trace-hit reference differs from the observation reference"
-    Just _ -> Left "trace_hits is neither an array nor a reference"
-    Nothing -> Left "trace_hits is missing"
-  _ -> Left "observation document is not an object"
 
 ingestHit :: Maybe Int -> Int -> SegmentName -> HitAnalysis -> TraceHit -> HitAnalysis
 ingestHit boundary index phase analysis hit

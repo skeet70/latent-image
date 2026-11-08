@@ -1,3 +1,5 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary")
+
 NIX_INPUTS = [
     "Cargo.lock",
     "Cargo.toml",
@@ -46,4 +48,30 @@ cp "$$output/test.log" $@
 """,
     local = True,
     tags = ["manual"],
+)
+
+haskell_binary(
+    name = "check-demo",
+    srcs = ["CheckDemoMain.hs"],
+    args = [
+        "--jq", "$(rlocationpath @lab_jq//:bin/jq)",
+        "--checker", "$(rlocationpath check-demo.jq)",
+    ],
+    data = [
+        "check-demo.jq",
+        "decode-demo.jq",
+        "@lab_jq//:bin/jq",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:observation-stream-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//host:text",
+    ],
 )
