@@ -87,17 +87,20 @@ impl Machine for Cpu {
 
     #[inline(always)]
     fn save_and_mask(&self) -> InterruptState {
-        let state = InterruptState(cpsr() & InterruptState::IRQ_MASKED);
-        unsafe { asm!("cpsid i", options(nostack, preserves_flags)) };
+        let state = InterruptState(cpsr() & (InterruptState::IRQ_MASKED | InterruptState::FIQ_MASKED));
+        unsafe { asm!("cpsid if", options(nostack, preserves_flags)) };
         state
     }
 
     #[inline(always)]
     fn restore(&self, state: InterruptState) {
-        if state.masked() {
-            unsafe { asm!("cpsid i", options(nostack, preserves_flags)) };
-        } else {
-            unsafe { asm!("cpsie i", options(nostack, preserves_flags)) };
+        let bits = state.0;
+        let mut current: u32;
+        unsafe {
+            asm!("mrs {}, cpsr", out(reg) current, options(nostack));
+            asm!("bic {0}, {0}, #0xc0", inout(reg) current, options(nostack));
+            asm!("orr {0}, {0}, {1}", inout(reg) current, in(reg) bits, options(nostack));
+            asm!("msr cpsr_fc, {0}", in(reg) current, options(nostack));
         }
     }
 

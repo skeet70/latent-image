@@ -30,6 +30,7 @@ pub struct InterruptState(pub u32);
 
 impl InterruptState {
     pub const IRQ_MASKED: u32 = 0x80;
+    pub const FIQ_MASKED: u32 = 0x40;
 
     pub const fn masked(self) -> bool {
         self.0 & Self::IRQ_MASKED != 0

@@ -337,14 +337,14 @@ poke bytes offset value = B.take index bytes <> value <> B.drop (index + B.lengt
 slice :: B.ByteString -> Word32 -> Word32 -> Word32 -> B.ByteString
 slice owned ownedBase address size = B.take (fromIntegral size) (B.drop (fromIntegral (address - ownedBase)) owned)
 
-patchOwned :: Domain -> Word32 -> B.ByteString -> B.ByteString
-patchOwned d ownedBase owned =
+patchOwned :: Domain -> B.ByteString -> Word32 -> B.ByteString -> B.ByteString
+patchOwned d loader ownedBase owned =
   let base = loaderBase d
       patches =
         [(entryOf d service, 4, entryOf d service) | service <- [Terminate, ChangePriority, TimedSleep, ReleaseWait, HandlerRelease, Delay]]
         ++ [(0x46e4c + if d == DomainB then 0x8ffc0 else 0, 0x180, 0x46e4c + if d == DomainB then 0x8ffc0 else 0)]
         ++ [(if d == DomainA then 0x50000 else 0xe0000, 0x1300, if d == DomainA then 0x50000 else 0xe0000)]
-   in foldl (\bytes (address, size, source) -> poke bytes (address - base) (slice owned ownedBase source size)) (B.replicate 0x12000 0) patches
+   in foldl (\bytes (address, size, source) -> poke bytes (address - base) (slice owned ownedBase source size)) (loader <> B.replicate 0x12000 0) patches
 
 loaderBytes :: Domain -> B.ByteString -> B.ByteString
 loaderBytes _ loader = loader
@@ -382,7 +382,7 @@ specFor d role one loader owned = CaseSpec
       ++ [(GuestAddress (fromIntegral bodyBase), 0x1300), (GuestAddress (fromIntegral stubBase), 0x100)]
       ++ [(GuestAddress (fromIntegral (acquireFn d)), 0x3c), (GuestAddress (fromIntegral (releaseFn d)), 0x40)]
       ++ [(GuestAddress (fromIntegral (base + (if d == DomainB then 0x8ffc0 else 0))), size)
-         | (base, size) <- ([(0x43ca4, 0x7c), (0x43d20, 0xb0), (0x43dd0, 0x1a0), (0x43f70, 0xa8), (0x44018, 0x2c), (0x44c60, 0x48), (0x44ca8, 0x58)] :: [(Word32, Word32)])]
+         | (base, size) <- ([(0x43ca4, 0x7c), (0x43d20, 0xb0), (0x43dd0, 0x1a0), (0x43f70, 0xa8), (0x44018, 0x2c), (0x44318, 0x1cc), (0x444e4, 0x84), (0x44568, 0xcc), (0x44634, 0xc8), (0x446fc, 0x48), (0x44744, 0x90), (0x447d4, 0x1ec), (0x449c0, 0x100), (0x44ac0, 0xc4), (0x44b84, 0xdc), (0x44c60, 0x48), (0x44ca8, 0xe4)] :: [(Word32, Word32)])]
   , caseInitial =
       [(R0, caseArgument one), (R1, caseArgument1 one), (R2, 0), (R3, 0), (R12, 0)]
       ++ [(register, 0xabc00000 + fromIntegral (fromEnum register)) | register <- [R4 .. R11]]
@@ -398,7 +398,7 @@ specFor d role one loader owned = CaseSpec
     bodyBase = if d == DomainA then 0x50000 else 0xe0000
     code = case role of
       Stock -> patchStub d (loaderBytes d loader) Nothing
-      Owned -> patchStub d (patchOwned d (if d == DomainA then 0x454f0 else 0xd54b0) owned) (caseLifecycle one)
+      Owned -> patchStub d (patchOwned d loader (if d == DomainA then 0x454f0 else 0xd54b0) owned) (caseLifecycle one)
     bodies = if role == Owned then slice owned (if d == DomainA then 0x454f0 else 0xd54b0) bodyBase 0x1300 else B.replicate 0x2000 0
     stub = case caseLifecycle one of
       Nothing -> B.replicate 0x100 0
