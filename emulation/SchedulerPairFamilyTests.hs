@@ -6,7 +6,8 @@ import qualified Data.ByteString.Char8 as B
 import qualified Data.Map.Strict as M
 import Data.Word (Word32)
 import Emulation.SchedulerPairCheck
-import Emulation.SchedulerPairFamily (TimerKind (..), TimerWitness (..))
+import Emulation.SchedulerPairFamily (Pending (..), ReleaseWitness (..), TimerKind (..), TimerWitness (..), checkPendingFamily)
+import qualified Emulation.SchedulerPairFamily as F
 import Emulation.SchedulerPairModel (Arguments (..), Memory)
 import Emulation.SchedulerPairPlan
 import qualified Emulation.SchedulerPairS2 as D
@@ -248,6 +249,28 @@ main = do
       consumeWitness armedAt = TimerWitness flagTimerAddress 0x9000 10 armedAt TimerConsumed
   assertRight "consume witness inside arm-to-return" (checkFamilyCall expiryCall [consumeWitness 10])
   assertLeft "consume witness after return" FamilyTimer (checkFamilyCall expiryCall [consumeWitness 21])
+  let pendingBefore = M.insert (Address 0x8100) 1 (M.insert (Address 0x8000) 0xffffffff flagWaitBefore)
+      definition = 0x7000
+      task = 0x9000
+      pendingTerminal = applyWrites pendingBefore (flagWaitWrites 0 ++
+        [ Written (Address (task+0x0c)) 4 0x32
+        , Written (Address (task+0x18)) 4 0x8000
+        , Written (Address (task+0x1c)) 4 0x43668
+        , Written (Address (task+8)) 4 definition
+        , Written (Address (definition+0x10)) 4 0x2000
+        , Written (Address (definition+0x14)) 4 0x7000
+        , Written (Address 0x8020) 4 0x48b30
+        , Written (Address 0x400545c0) 4 1
+        , Written (Address 0x400545c4) 4 0
+        ])
+      pending = Pending (FamilySemantic FlagTimedWait) DomainA [1,1,0,0x8100] pendingBefore (Just pendingTerminal) task 0x8000 0x53 0x48b30 10 (Just 0xd3) (Just 110) 0
+      release owner core call at address value = ReleaseWitness owner core call at (Address address) value
+      callerScheduler = release task 0 90 100 0x400545c0 0
+      callerObject = release task 0 95 102 0x400545c4 0
+      foreignScheduler = release 0x9001 0 95 101 0x400545c0 1
+      earlyForeign = release 0x9001 0 95 99 0x400545c0 1
+  assert "interleaved same-lock reacquisition" (checkPendingFamily [callerScheduler,foreignScheduler,callerObject] pending == Right ())
+  assert "acquisition before same-lock release" (checkPendingFamily [callerScheduler,earlyForeign,callerObject] pending == Left F.FamilyLifetime)
   assertRight "flag delete releases waiter" (checkFamilyCall (flagDeleteCall flagDeleteWrites) [])
   assertRight "delete removes waiter timer" (checkFamilyCall (flagDeleteTimerCall flagDeleteWrites [timerBoundary TimerRemoveBoundary flagTimerAddress 0x9000]) [])
   assertLeft "delete leaves waiter timer" FamilyTimer (checkFamilyCall (flagDeleteTimerCall flagDeleteWrites []) [])

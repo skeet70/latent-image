@@ -733,6 +733,10 @@ struct PcWatch { core: Core, address: Hex, count: u64, first: u64 }
 struct ProbeHit { domain: Domain, core: Core, address: Hex, kind: ProbeKind, register: ProbeRegister,
     value: u32, cpsr: u32, sp: Hex, lr: Hex, instructions: u64 }
 
+const LOCK_LIMIT: usize = 256;
+#[derive(Clone, Copy, Debug, Serialize)]
+struct LockEvent { task: u32, core: Core, call: u64, at: u64, address: Hex, value: u32 }
+
 fn root_snapshot(board: &Board, core: Core, tcm: [u32; 2], domain: Domain) -> Result<Vec<WordValue>, String> {
     let (context, lock, reschedule, heads, bitmap, running, dispatch, selected) = match domain {
         Domain::A => (0x400545a4, 0x400545c0, 0x400546d8, 0x400546dc, 0x4005475c, 0x40054760, 0x40054764, 0x40054768),
@@ -1193,6 +1197,8 @@ struct Observer<'p> {
     demand_services: BTreeMap<(Core, u32), u32>,
     write_batch: Vec<(u64,CapturedWrite)>,
     write_sequence: Rc<Cell<u64>>,
+    lock_events: Vec<LockEvent>,
+    last_instructions: u64,
 }
 
 impl Observer<'_> {
@@ -1279,7 +1285,8 @@ impl Observer<'_> {
                     .flat_map(|call| call.entry.memory.iter().map(|word| word.address.0 & !ALIAS & !3))).collect();
             capture.active.extend([0xfffb30cc,0xfffb40cc,0xfffb30ec,0xfffb40ec].map(|address| address & !ALIAS));
         }
-        machine.session.board.transaction_watch_begin(vec![(0xfffb30cc, 0xfffb30d0), (0xfffb40cc, 0xfffb40d0),
+        self.last_instructions = machine.instructions();
+        machine.session.board.transaction_watch_begin(vec![(0xfffb30cc,0xfffb30d0), (0xfffb40cc,0xfffb40d0),
             (0xfffb30ec, 0xfffb30f0), (0xfffb40ec, 0xfffb40f0)], WATCH_LIMIT)
     }
 
@@ -1292,6 +1299,7 @@ impl Observer<'_> {
             self.write_batch.extend(capture.rows.drain(..));
         }
         self.write_batch.sort_unstable_by_key(|(sequence,_)| *sequence);
+        for (_,write) in &mut self.write_batch { write.origin.instructions += self.last_instructions; }
         for (_,write) in &self.write_batch {
             if [0xfffb30cc,0xfffb40cc,0xfffb30ec,0xfffb40ec].contains(&write.write.address.0) { continue; }
             for calls in self.open.pending.values_mut() {
@@ -1320,6 +1328,7 @@ impl Observer<'_> {
             }
         }
         require(bank_writes.next().is_none(), "scheduler bank writer has no transaction")?;
+        self.last_instructions = machine.instructions();
         Ok(())
     }
     fn end_data(&mut self, machine: &Machine) -> Result<(), String> {
@@ -1441,6 +1450,15 @@ impl Observer<'_> {
                     cpacr: board.register(context.core, arm::Register::Cpacr)?,
                     fpexc: board.register(context.core, arm::Register::Fpexc)?,
                     tpidrurw: board.cp15(context.core, 13, 0, 2)? })?;
+            }
+            if matches!(call.entry.slot.semantic, Semantic::Helper { name: Helper::Release } | Semantic::Helper { name: Helper::Acquire }) {
+                for write in &call.writes {
+                    if write.origin.core == call.entry.core && call.entry.task == (Read::Committed { value: write.origin.task.0 }) {
+                        require(self.lock_events.len() < LOCK_LIMIT, "lock event bound exceeded")?;
+                        self.lock_events.push(LockEvent { task: write.origin.task.0, core: write.origin.core,
+                            call: call.entered, at: write.origin.instructions, address: write.write.address, value: write.write.value });
+                    }
+                }
             }
             let class = CallClass { entry: call.entry, result: ReturnState { r0: context.r0, cpsr: context.cpsr,
                 memory, writes: call.writes, bank: call.bank, completion, task: context.current,
@@ -1808,6 +1826,7 @@ struct Report<'a> {
     milestones: &'a [Milestone],
     reached: Vec<Reached>,
     classes: Vec<ClassRow<'a>>,
+    lock_events: &'a [LockEvent],
     pending: Vec<&'a OpenCall>,
     error: Option<String>,
     machine_failure: Option<String>,
@@ -1895,6 +1914,7 @@ fn drive() -> Result<(), String> {
         probe_hits: Vec::new(),
         trampoline_loads: [None; 2], demand_paging: Vec::new(), demand_services: BTreeMap::new(),
         write_batch: Vec::with_capacity(WATCH_LIMIT*2), write_sequence: Rc::new(Cell::new(0)),
+        lock_events: Vec::new(), last_instructions: 0,
     };
     machine.traces.bound_full_registers(NonZeroUsize::new(2).ok_or("zero hit bound")?);
     machine.traces.stop_labels = [ENTRY_LABEL, CONTINUATION_LABEL, FILL_LABEL, ARM_LABEL, "scheduler-pc-watch", "scheduler-probe"]
@@ -1986,6 +2006,7 @@ fn drive() -> Result<(), String> {
         milestones: &observer.milestones,
         reached: observer.reached(),
         classes: observer.classes.iter().map(|(class, count)| ClassRow { class, count }).collect(),
+        lock_events: &observer.lock_events,
         pending: observer.open.pending.values().flatten().collect(),
         error: error.clone(),
         machine_failure: machine.failure.clone(),

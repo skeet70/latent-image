@@ -72,9 +72,13 @@ instance FromJSON DemandPaging where
     loaded <- o .: "load"
     DemandPaging <$> loaded .: "context" <*> loaded .: "target" <*> loaded .: "core_instructions"
       <*> o .: "abort" <*> o .: "core_instructions" <*> o .: "spsr" <*> o .: "ifar" <*> o .: "ifsr" <*> o .:? "service"
+data LockEvent = LockEvent { lockTask :: Word32, lockCore :: Int, lockCall :: Word64, lockAt :: Word64, lockAddress :: Address, lockValue :: Word32 } deriving (Eq,Show)
+instance FromJSON LockEvent where
+  parseJSON = withObject "lock event" $ \e -> LockEvent <$> e .: "task" <*> (e .: "core" >>= coreOf) <*> e .: "call" <*> e .: "at"
+    <*> (Address <$> (e .: "address" >>= parseHex)) <*> e .: "value"
 data Observation = Observation { obsRole :: Role, obsInputs :: [String], obsInstructions :: Word64, obsEntries :: Int, obsReturns :: Int,
   obsUntracked :: Int, obsUnarmed :: Int, obsFill :: Maybe Value, obsArmings :: [Q.Arming], obsSegments :: [Q.Segment], obsFinal :: Maybe Q.Readback,
-  obsCalls :: [Call], obsPending :: ([F.Pending],[Word64]), obsMilestones :: [Q.Milestone], obsError :: Maybe T.Text, obsMachineError :: Maybe T.Text,
+  obsCalls :: [Call], obsLockEvents :: [LockEvent], obsPending :: ([F.Pending],[Word64]), obsMilestones :: [Q.Milestone], obsError :: Maybe T.Text, obsMachineError :: Maybe T.Text,
   obsBankCounts :: BankCounts, obsPcWatches :: [PcWatch], obsDemandPaging :: [DemandPaging] } deriving (Eq,Show)
 data Refusal = Binding | Arming | Readback | Watch | FillFetch | Incomplete | Untracked | Unarmed | WrongCore | CallOutsidePlan | EntryUnreadable | Model ModelFailure | ReturnValue | ProcessorState | MemoryResult | WrittenWords | BankWrites | QueueInvariant | Route | ObserverError | UnsupportedSemantic Semantic | MissingTrace | CompletionMismatch | DispatchModel D.DispatchFailure | DemandPagingState
   | FamilyReturn | FamilyEffect | FamilyLifetime | FamilyTimer | FamilyDestructor | FamilyContinuation | FamilyAssociation deriving (Eq,Show)
@@ -168,6 +172,7 @@ instance FromJSON Observation where
         case bounds of [lo,hi] -> (,,) lo hi <$> c .: "kinds"; _ -> fail "invalid class range")
       Q.Segment <$> (s .: "domains" >>= mapM parseDomain) <*> s .: "started" <*> s .: "ended" <*> pure (length rows) <*> state .:? "violation" <*> pure classes)
     final <- o .:? "final_readback" >>= traverse Q.readbackOf
+    lockEvents <- o .:? "lock_events" >>= maybe (pure []) (mapM parseJSON)
     pendingRows <- o .: "pending" >>= mapM pendingOf
     let (familyPending, otherPending) = partitionEithers pendingRows
     let pending = (familyPending, otherPending)
@@ -178,7 +183,7 @@ instance FromJSON Observation where
       Q.Milestone <$> m .: "phase" <*> pure pulse <*> (m .: "expected" >>= menu) <*> (m .:? "observed" >>= traverse menu) <*> pure (reached /= Nothing) <*> m .: "finished")
     watches <- o .: "pc_watches" >>= mapM (withObject "PC watch" $ \w -> PcWatch <$> (w .: "core" >>= coreOf) <*> (Address <$> (w .: "address" >>= parseHex)) <*> w .: "count")
     Observation role inputs <$> o .: "instructions" <*> o .: "entries" <*> o .: "returns" <*> count "untracked" <*> count "unarmed_entries"
-      <*> o .:? "fill_fetch" <*> pure armings <*> pure segments <*> pure final <*> o .: "classes" <*> pure pending <*> pure milestones
+      <*> o .:? "fill_fetch" <*> pure armings <*> pure segments <*> pure final <*> o .: "classes" <*> pure lockEvents <*> pure pending <*> pure milestones
       <*> o .:? "error" <*> o .:? "machine_failure" <*> o .: "bank_counts" <*> pure watches <*> o .: "demand_paging"
 
 pendingOf :: Value -> Parser (Either F.Pending Word64)
@@ -391,11 +396,8 @@ qualify bytes plan observation = do
   checkDemandCalls observation
   let calls = sortOn callFirst (obsCalls observation)
   forM_ calls $ \call -> checkCallEnvelope plan call >> checkCallForIn calls (obsRole observation) call
-  let releases = [F.ReleaseWitness task (writerCore origin) (callFirst call) (writerInstructions origin) address value
-        | call <- calls, callSemantic call `elem` [HelperSemantic Release, HelperSemantic Acquire]
-        , (Written address _size value, origin) <- zip (callWrites call) (callWriteOrigins call)
-        , ownsOrigin call origin
-        , let task = case writerTask origin of Address owner -> owner]
+  let releases = [F.ReleaseWitness (lockTask event) (lockCore event) (lockCall event) (lockAt event) (lockAddress event) (lockValue event)
+        | event <- obsLockEvents observation]
   qualifySuffix plan releases observation (CallTotals (not (null calls)) (sum (map callCount calls)))
   pure (summary observation)
 
