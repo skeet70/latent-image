@@ -35,12 +35,14 @@ pub struct ReceivePending {
 pub enum SendBlocking {
     Ready(WaitOutcome<()>),
     Pending(SendPending),
+    Retry,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ReceiveBlocking {
     Ready(WaitOutcome<Payload>),
     Pending(ReceivePending),
+    Retry,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -186,47 +188,45 @@ pub fn send<M: Env>(
     let control = words.data_queue_control(id.slot);
     let ring = Ring::new(config, control);
     let lock = words.context(id.domain).object_lock();
-    loop {
-        let result = m.with_object_lock_after(
-            lock,
-            || -> Result<(SendBlocking, bool, bool), ObjectStatus> {
-                if let Some(local) = handoff_receiver(m, control, payload) {
-                    return Ok((SendBlocking::Ready(WaitOutcome::Satisfied(())), local, false));
-                }
-                if ring.append(m, payload) {
-                    return Ok((SendBlocking::Ready(WaitOutcome::Satisfied(())), false, false));
-                }
-                let (task, wait, _) = task_wait(m, entry)?;
-                m.store_word(wait.data(), payload.0);
-                let blocked = block(
-                    m,
-                    entry.domain(),
-                    id.domain,
-                    task,
-                    wait,
-                    control,
-                    control.sender_queue(),
-                    QueueOrder::from_attribute(m.load_word(config.attributes())),
-                    SEND_STATE,
-                    None,
-                );
-                Ok((
-                    SendBlocking::Pending(SendPending { task, wait }),
-                    false,
-                    !blocked,
-                ))
-            },
-            |result| {
-                if let Ok((_, true, _)) = result {
-                    m.dispatch(-53);
-                }
-            },
-        );
-        match result {
-            Ok((outcome, _, false)) => return Ok(outcome),
-            Ok((_, _, true)) => continue,
-            Err(status) => return Err(status),
-        }
+    let result = m.with_object_lock_after(
+        lock,
+        || -> Result<(SendBlocking, bool, bool), ObjectStatus> {
+            if let Some(local) = handoff_receiver(m, control, payload) {
+                return Ok((SendBlocking::Ready(WaitOutcome::Satisfied(())), local, false));
+            }
+            if ring.append(m, payload) {
+                return Ok((SendBlocking::Ready(WaitOutcome::Satisfied(())), false, false));
+            }
+            let (task, wait, _) = task_wait(m, entry)?;
+            m.store_word(wait.data(), payload.0);
+            let blocked = block(
+                m,
+                entry.domain(),
+                id.domain,
+                task,
+                wait,
+                control,
+                control.sender_queue(),
+                QueueOrder::from_attribute(m.load_word(config.attributes())),
+                SEND_STATE,
+                None,
+            );
+            Ok((
+                SendBlocking::Pending(SendPending { task, wait }),
+                false,
+                !blocked,
+            ))
+        },
+        |result| {
+            if let Ok((_, true, _)) = result {
+                m.dispatch(-53);
+            }
+        },
+    );
+    match result {
+        Ok((outcome, _, false)) => Ok(outcome),
+        Ok((_, _, true)) => Ok(SendBlocking::Retry),
+        Err(status) => Err(status),
     }
 }
 
@@ -280,50 +280,48 @@ pub fn send_timeout<M: Env>(
     let control = words.data_queue_control(id.slot);
     let ring = Ring::new(config, control);
     let lock = words.context(id.domain).object_lock();
-    loop {
-        let result = m.with_object_lock_after(
-            lock,
-            || -> Result<(SendBlocking, bool, bool), ObjectStatus> {
-                if let Some(local) = handoff_receiver(m, control, payload) {
-                    return Ok((SendBlocking::Ready(WaitOutcome::Satisfied(())), local, false));
-                }
-                if ring.append(m, payload) {
-                    return Ok((SendBlocking::Ready(WaitOutcome::Satisfied(())), false, false));
-                }
-                if timeout == Timeout::Poll {
-                    return Ok((SendBlocking::Ready(WaitOutcome::TimedOut), false, false));
-                }
-                let (task, wait, slot) = task_wait(m, entry)?;
-                m.store_word(wait.data(), payload.0);
-                let blocked = block(
-                    m,
-                    entry.domain(),
-                    id.domain,
-                    task,
-                    wait,
-                    control,
-                    control.sender_queue(),
-                    QueueOrder::from_attribute(m.load_word(config.attributes())),
-                    SEND_STATE,
-                    timer_for(m, entry.domain(), slot, timeout),
-                );
-                Ok((
-                    SendBlocking::Pending(SendPending { task, wait }),
-                    false,
-                    !blocked,
-                ))
-            },
-            |result| {
-                if let Ok((_, true, _)) = result {
-                    m.dispatch(-55);
-                }
-            },
-        );
-        match result {
-            Ok((outcome, _, false)) => return Ok(outcome),
-            Ok((_, _, true)) => continue,
-            Err(status) => return Err(status),
-        }
+    let result = m.with_object_lock_after(
+        lock,
+        || -> Result<(SendBlocking, bool, bool), ObjectStatus> {
+            if let Some(local) = handoff_receiver(m, control, payload) {
+                return Ok((SendBlocking::Ready(WaitOutcome::Satisfied(())), local, false));
+            }
+            if ring.append(m, payload) {
+                return Ok((SendBlocking::Ready(WaitOutcome::Satisfied(())), false, false));
+            }
+            if timeout == Timeout::Poll {
+                return Ok((SendBlocking::Ready(WaitOutcome::TimedOut), false, false));
+            }
+            let (task, wait, slot) = task_wait(m, entry)?;
+            m.store_word(wait.data(), payload.0);
+            let blocked = block(
+                m,
+                entry.domain(),
+                id.domain,
+                task,
+                wait,
+                control,
+                control.sender_queue(),
+                QueueOrder::from_attribute(m.load_word(config.attributes())),
+                SEND_STATE,
+                timer_for(m, entry.domain(), slot, timeout),
+            );
+            Ok((
+                SendBlocking::Pending(SendPending { task, wait }),
+                false,
+                !blocked,
+            ))
+        },
+        |result| {
+            if let Ok((_, true, _)) = result {
+                m.dispatch(-55);
+            }
+        },
+    );
+    match result {
+        Ok((outcome, _, false)) => Ok(outcome),
+        Ok((_, _, true)) => Ok(SendBlocking::Retry),
+        Err(status) => Err(status),
     }
 }
 
@@ -377,61 +375,59 @@ pub fn receive<M: Env>(
     let control = words.data_queue_control(id.slot);
     let ring = Ring::new(config, control);
     let lock = words.context(id.domain).object_lock();
-    loop {
-        let result = m.with_object_lock_after(
-            lock,
-            || -> Result<(ReceiveBlocking, bool, bool), ObjectStatus> {
-                if let Some((received, local)) = take_sender(m, control, ring, out) {
-                    return Ok((
-                        ReceiveBlocking::Ready(WaitOutcome::Satisfied(received)),
-                        local,
-                        false,
-                    ));
-                }
-                if ring.count(m).0 != 0 {
-                    return Ok((
-                        ReceiveBlocking::Ready(WaitOutcome::Satisfied(ring.pop(m, out))),
-                        false,
-                        false,
-                    ));
-                }
-                if timeout == Timeout::Poll {
-                    return Ok((ReceiveBlocking::Ready(WaitOutcome::TimedOut), false, false));
-                }
-                let (task, wait, slot) = task_wait(m, entry)?;
-                let blocked = block(
-                    m,
-                    entry.domain(),
-                    id.domain,
-                    task,
-                    wait,
-                    control,
-                    WaitQueue(control.receivers().0),
-                    QueueOrder::Fifo,
-                    RECEIVE_STATE,
-                    timer_for(m, entry.domain(), slot, timeout),
-                );
-                Ok((
-                    ReceiveBlocking::Pending(ReceivePending { task, wait, out }),
+    let result = m.with_object_lock_after(
+        lock,
+        || -> Result<(ReceiveBlocking, bool, bool), ObjectStatus> {
+            if let Some((received, local)) = take_sender(m, control, ring, out) {
+                return Ok((
+                    ReceiveBlocking::Ready(WaitOutcome::Satisfied(received)),
+                    local,
                     false,
-                    !blocked,
-                ))
-            },
-            |result| {
-                if let Ok((_, true, _)) = result {
-                    if timeout == Timeout::Poll {
-                        m.dispatch(-58);
-                    } else {
-                        m.dispatch(-57);
-                    }
+                ));
+            }
+            if ring.count(m).0 != 0 {
+                return Ok((
+                    ReceiveBlocking::Ready(WaitOutcome::Satisfied(ring.pop(m, out))),
+                    false,
+                    false,
+                ));
+            }
+            if timeout == Timeout::Poll {
+                return Ok((ReceiveBlocking::Ready(WaitOutcome::TimedOut), false, false));
+            }
+            let (task, wait, slot) = task_wait(m, entry)?;
+            let blocked = block(
+                m,
+                entry.domain(),
+                id.domain,
+                task,
+                wait,
+                control,
+                WaitQueue(control.receivers().0),
+                QueueOrder::Fifo,
+                RECEIVE_STATE,
+                timer_for(m, entry.domain(), slot, timeout),
+            );
+            Ok((
+                ReceiveBlocking::Pending(ReceivePending { task, wait, out }),
+                false,
+                !blocked,
+            ))
+        },
+        |result| {
+            if let Ok((_, true, _)) = result {
+                if timeout == Timeout::Poll {
+                    m.dispatch(-58);
+                } else {
+                    m.dispatch(-57);
                 }
-            },
-        );
-        match result {
-            Ok((outcome, _, false)) => return Ok(outcome),
-            Ok((_, _, true)) => continue,
-            Err(status) => return Err(status),
-        }
+            }
+        },
+    );
+    match result {
+        Ok((outcome, _, false)) => Ok(outcome),
+        Ok((_, _, true)) => Ok(ReceiveBlocking::Retry),
+        Err(status) => Err(status),
     }
 }
 

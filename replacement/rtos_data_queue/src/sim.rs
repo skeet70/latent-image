@@ -18,6 +18,7 @@ pub struct Sim {
     held: Cell<bool>,
     interrupts: Cell<u32>,
     last_store_mask: Cell<u32>,
+    mask_log: RefCell<Vec<(u8, u32)>>,
     store_log: RefCell<Vec<u32>>,
     locks: Cell<u32>,
     second_lock_ready: Cell<bool>,
@@ -62,6 +63,7 @@ impl Sim {
             held: Cell::new(false),
             interrupts: Cell::new(0x40),
             last_store_mask: Cell::new(0),
+            mask_log: RefCell::new(Vec::new()),
             store_log: RefCell::new(Vec::new()),
             locks: Cell::new(0),
             second_lock_ready: Cell::new(false),
@@ -148,6 +150,10 @@ impl Sim {
 
     pub fn last_store_mask(&self) -> u32 {
         self.last_store_mask.get()
+    }
+
+    pub fn mask_log(&self) -> Vec<(u8, u32)> {
+        self.mask_log.borrow().clone()
     }
 
     pub fn suspend_until_second_lock(&self, task: Task) {
@@ -307,11 +313,13 @@ impl Env for Sim {
 
     fn mask_i(&self) -> SavedMask {
         let saved = self.interrupts.get();
+        self.mask_log.borrow_mut().push((1, saved));
         self.interrupts.set(saved | 0x80);
         SavedMask(saved)
     }
 
     fn restore_i(&self, saved: SavedMask) {
+        self.mask_log.borrow_mut().push((0, saved.0));
         self.interrupts.set(saved.0);
     }
 

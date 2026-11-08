@@ -1,6 +1,6 @@
 use crate::admission::{admit, Entry, Facts, Params, Records, Request, Service};
 use crate::create::{create_data_queue, delete_data_queue, DataQueueCreate, QueueAttributes};
-use crate::env::HandlerContext;
+use crate::env::{retry_masked, Attempt, HandlerContext};
 use crate::id::{own_data_queue_slot, resolve_data_queue, DataQueueId, EncodedId, EntryDomain};
 use crate::layout::{
     DataQueueSlot, DataQueueWait, Domain, DomainId, GuestAddress, Task, TaskDefinition, TaskSlot,
@@ -734,10 +734,41 @@ fn blocking_retries_until_the_caller_is_ready_under_the_lock() {
     make_ready(&sim, 2, 3);
     sim.set_running(Domain::A, task(2));
     sim.suspend_until_second_lock(task(2));
-    let outcome = send(&sim, EntryDomain::new(Domain::A), id, Payload(2));
+    sim.set_interrupts(0x40);
+    let outcome = retry_masked(&sim, || {
+        match send(&sim, EntryDomain::new(Domain::A), id, Payload(2)) {
+            Ok(SendBlocking::Retry) => Ok(Attempt::Retry),
+            Ok(outcome) => Ok(Attempt::Done(outcome)),
+            Err(status) => Err(status),
+        }
+    });
     assert!(matches!(outcome, Ok(SendBlocking::Pending(_))), "{outcome:?}");
     assert!(sim.lock_count() >= 2);
     assert_eq!(sim.task_state(task(2)), SEND_STATE.bits());
+    assert_eq!(sim.mask_log().len(), 4);
+    assert_eq!(sim.interrupts(), 0x40);
+}
+
+#[test]
+fn a_blocking_retry_reopens_the_caller_mask_between_attempts() {
+    let sim = Sim::new(Domain::A);
+    sim.set_interrupts(0x40);
+    let mut attempts = 0;
+    let mut seen = Vec::new();
+    let result = retry_masked(&sim, || {
+        attempts += 1;
+        seen.push(sim.interrupts());
+        if attempts == 1 {
+            Ok(Attempt::Retry)
+        } else {
+            Ok(Attempt::Done(7))
+        }
+    });
+    assert_eq!(result, Ok(7));
+    assert_eq!(attempts, 2);
+    assert_eq!(seen, [0xc0, 0xc0]);
+    assert_eq!(sim.mask_log(), [(1, 0x40), (0, 0x40), (1, 0x40), (0, 0x40)]);
+    assert_eq!(sim.interrupts(), 0x40);
 }
 
 #[test]

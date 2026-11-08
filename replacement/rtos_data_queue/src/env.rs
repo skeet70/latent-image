@@ -124,6 +124,37 @@ pub trait Env {
     fn request_delayed_dispatch(&self);
 }
 
+/// One masked blocking attempt: retry after reopening the caller's I mask, or finish.
+pub enum Attempt<T> {
+    Retry,
+    Done(T),
+}
+
+/// Runs a blocking attempt with the caller's I mask held across enqueue and save. A retry
+/// reopens the caller's mask after the attempt released its locks, then masks again.
+pub fn retry_masked<M: Env, T>(
+    m: &M,
+    mut attempt: impl FnMut() -> Result<Attempt<T>, crate::status::ObjectStatus>,
+) -> Result<T, crate::status::ObjectStatus> {
+    let mut saved = m.mask_i();
+    loop {
+        match attempt() {
+            Ok(Attempt::Retry) => {
+                m.restore_i(saved);
+                saved = m.mask_i();
+            }
+            Ok(Attempt::Done(value)) => {
+                m.restore_i(saved);
+                return Ok(value);
+            }
+            Err(status) => {
+                m.restore_i(saved);
+                return Err(status);
+            }
+        }
+    }
+}
+
 pub(crate) fn unlink<M: Env>(m: &M, task: Task) {
     let prev = m.load_word(task.prev());
     let next = m.load_word(task.next());

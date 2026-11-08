@@ -45,6 +45,18 @@ data Case = Case
   , caseActor :: Maybe Actor
   }
 
+timedRowNames, timeoutRowNames :: [String]
+timedRowNames =
+  [ "send-timeout-blocks"
+  , "receive-timeout-blocks"
+  , "send-timeout-wake"
+  , "receive-timeout-wake"
+  ]
+timeoutRowNames = ["send-timeout-blocks", "receive-timeout-blocks"]
+
+caseNameText :: Case -> String
+caseNameText = caseIdText . caseName
+
 data CaseRun = CaseRun
   { runEntryDomain :: Domain
   , runName :: String
@@ -58,6 +70,9 @@ data ControlRun = ControlRun
   { controlDomain :: Domain
   , controlName :: String
   , controlCase :: String
+  , controlBaseline :: Bool
+  , controlRefused :: Bool
+  , controlGuardNeeded :: Bool
   , controlHolds :: Bool
   }
 
@@ -330,6 +345,8 @@ wakeActor facts domain call id argument = Actor (build actorBase
   , Insn (strI 4 2 armedCallbackOff)
   , Insn (ldrI 4 1 8)
   , Insn (strI 4 2 armedTaskOff)
+  , Insn (movw 4 (wrapperBase .&. 0xffff)), Insn (movt 4 (wrapperBase `shiftR` 16))
+  , Insn (strI 4 1 4)
   , Insn (movSmall 0 id)
   , Insn (movw 1 (argument .&. 0xffff)), Insn (movt 1 (argument `shiftR` 16))
   , CallAbs (entryAddress domain call)
@@ -420,13 +437,13 @@ cases facts executing =
   , timed "send-timeout-blocks" SendTimeout [(R0, 1), (R1, 0x2222), (R2, 5)] (queue 1 0 1 ++ full [0xaaaa] 1)
       (timeoutActor facts executing (clockValue + 5))
       (timeoutChecks (-50) [eq "ring" ringBase 0xaaaa, eq "kernel" (count 1) 1, eq "kernel" (read 1) 0, eq "kernel" (write 1) 0, eq "kernel" (waitData 1) 0x2222, eq "kernel" (sendNext 1) (sendSelf 1), eq "kernel" (sendPrev 1) (sendSelf 1)])
-      [recordEq cbIndexOff 1]
-      [recordEq cbIndexOff 0]
+      [recordEq cbIndexOff 1, eq "kernel" (timerEntry 1) 1]
+      [recordEq cbIndexOff 0, eq "kernel" (timerEntry 1) 0]
   , timed "receive-timeout-blocks" ReceiveTimeout [(R0, 1), (R1, outBase), (R2, 5)] (queue 1 0 2 ++ [poke outBase 0x5e4d1e00])
       (timeoutActor facts executing (clockValue + 5))
       (timeoutChecks (-50) [eq "out" outBase 0x5e4d1e00, eq "kernel" (count 1) 0, eq "kernel" (read 1) 0, eq "kernel" (write 1) 0, eq "kernel" (recvNext 1) (recvSelf 1), eq "kernel" (recvPrev 1) (recvSelf 1)])
-      [recordEq cbIndexOff 1]
-      [recordEq cbIndexOff 0]
+      [recordEq cbIndexOff 1, eq "kernel" (timerEntry 1) 1]
+      [recordEq cbIndexOff 0, eq "kernel" (timerEntry 1) 0]
   , timed "send-timeout-wake" SendTimeout [(R0, 1), (R1, 0x3333), (R2, 5)] (queue 1 0 1 ++ full [0xbbbb] 1)
       (wakeActor facts executing Receive 1 outBase)
       (wakeChecks 0 [eq "out" outBase 0xbbbb, eq "ring" ringBase 0x3333, eq "kernel" (count 1) 1, eq "kernel" (read 1) 0, eq "kernel" (write 1) 0, eq "kernel" (sendNext 1) (sendSelf 1), eq "kernel" (sendPrev 1) (sendSelf 1)])
@@ -941,10 +958,11 @@ compareCase facts domain one stock owned = statusDifferences ++ declaredRegister
       | valid
       , caseCompareRegions one
       , name <- ["kernel", "peer-kernel", "ring", "out", "timer-record"]
-      , let view = case name of
-              "kernel" -> fmap (normalizeKernel facts domain)
-              "peer-kernel" -> fmap (normalizeKernel facts (peer domain))
-              "timer-record" -> fmap (normalizeRecord facts)
+      , let exempt = if caseNameText one `elem` timedRowNames then [dataQueueTimer facts domain 1] else []
+            view = case name of
+              "kernel" -> fmap (normalizeKernel facts domain exempt)
+              "peer-kernel" -> fmap (normalizeKernel facts (peer domain) [])
+              "timer-record" -> fmap (normalizeRecord facts one)
               _ -> id
       , view (regionBytes stock name) /= view (regionBytes owned name)
       ]
@@ -959,20 +977,25 @@ compareCase facts domain one stock owned = statusDifferences ++ declaredRegister
         ++ [ "caller control bits differ" | valid, fmap (.&. 0x1ff) (N.lookupRegister Cpsr stock) /= fmap (.&. 0x1ff) (N.lookupRegister Cpsr owned) ]
 
 -- | Zero the role-specific words a comparison must not read: saved stack pointers, context heap
--- pointers, per-task timer entry indices and the stock heap span.
-normalizeKernel :: Facts -> Domain -> B.ByteString -> B.ByteString
-normalizeKernel facts domain bytes = maskHeap (foldl clear bytes addresses)
+-- pointers, the declared exempt timer indices and the stock heap span.
+normalizeKernel :: Facts -> Domain -> [Word32] -> B.ByteString -> B.ByteString
+normalizeKernel facts domain exempt bytes = maskHeap (foldl clear bytes addresses)
   where
     (low, _) = kernelBounds facts domain
     addresses = [task facts domain slot + factsTaskSavedSp facts | slot <- [1 .. 3]]
       ++ [contextRecord facts domain described + factsContextTimerHeap facts | described <- [DomainA, DomainB]]
-      ++ [dataQueueTimer facts domain slot | slot <- [1 .. 3]]
+      ++ exempt
     clear current address = replaceWord (fromIntegral (address - low)) 0 current
     maskHeap current = maskRange (fromIntegral (dfTimerHeap (domainFacts facts domain) - low)) 0x5c0 current
 
--- | The timer record's callback index and condition flags are role-specific or incidental.
-normalizeRecord :: Facts -> B.ByteString -> B.ByteString
-normalizeRecord _ bytes = replaceWord (fromIntegral cbIndexOff) 0 (replaceWord (fromIntegral cbCpsrOff) (readWordAt bytes (fromIntegral cbCpsrOff) .&. 0x1ff) bytes)
+-- | The callback index is exempt only where the case declares the stock/owned divergence; the
+-- condition flags are incidental in every case.
+normalizeRecord :: Facts -> Case -> B.ByteString -> B.ByteString
+normalizeRecord _ one bytes =
+  let withFlags = replaceWord (fromIntegral cbCpsrOff) (readWordAt bytes (fromIntegral cbCpsrOff) .&. 0x1ff) bytes
+   in if caseNameText one `elem` timeoutRowNames
+        then replaceWord (fromIntegral cbIndexOff) 0 withFlags
+        else withFlags
 
 -- | The stock heap and the owned arena hold the same nodes at different addresses.
 relocatedHeapDifferences :: Facts -> Domain -> NativeObservation -> NativeObservation -> [String]
@@ -1019,31 +1042,62 @@ reportVerdicts directory ident = do
               || (reportStatus report == "failed" && null (reportMismatches report))
           ]
 
-controlRuns :: Facts -> Domain -> Case -> NativeObservation -> [ControlRun]
-controlRuns facts domain one observed =
-  [ ControlRun domain "armed-membership" name (refused (WordIs "timer-record" (recordBase + armedCountOff) 1) (mutateRecord armedCountOff 0))
-  | name `elem` timedNames
+controlRuns :: Facts -> Domain -> Case -> NativeObservation -> NativeObservation -> [ControlRun]
+controlRuns facts domain one stock owned = concat
+  [ control "armed-membership" (guardEq armedCountOff 1) (mutateRecord armedCountOff (const 0))
+  | name `elem` timedRowNames
   ]
-    ++ concat [ [ ControlRun domain "callback-consumed" name (refused (WordIs "timer-record" (recordBase + cbCountOff) 0) (mutateRecord cbCountOff 1))
-               , ControlRun domain "callback-i-masked" name (refused (MaskedIs "timer-record" (recordBase + cbCpsrOff) 0x80 0x80) (mutateRecordBit cbCpsrOff 0x80))
-               , ControlRun domain "callback-lock-held" name (refused (WordIs "timer-record" (recordBase + cbLockOff) 1) (mutateRecord cbLockOff 0))
-               , ControlRun domain "released-lock" name (refused (WordIs "timer-record" (recordBase + afterLockOff) 0) (mutateRecord afterLockOff 1))
-               ]
-             | name `elem` ["send-timeout-blocks", "receive-timeout-blocks"]
-             ]
-    ++ [ ControlRun domain "callback-not-invoked" name (refused (WordIs "timer-record" (recordBase + cbCallsOff) 0) (mutateRecord cbCallsOff 1))
-       | name `elem` ["send-timeout-wake", "receive-timeout-wake"]
-       ]
+    ++ concat
+      [ control "callback-consumed" (guardEq cbCountOff 0) (mutateRecord cbCountOff (const 1))
+          ++ control "callback-i-masked" (MaskedIs "timer-record" (recordBase + cbCpsrOff) 0x80 0x80) (mutateRecord cbCpsrOff (\current -> current .&. complement 0x80))
+          ++ control "callback-lock-held" (guardEq cbLockOff 1) (mutateRecord cbLockOff (const 0))
+          ++ control "released-lock" (guardEq afterLockOff 0) (mutateRecord afterLockOff (const 1))
+      | name `elem` timeoutRowNames
+      ]
+    ++ concat [ control "callback-not-invoked" (guardEq cbCallsOff 0) (mutateRecord cbCallsOff (const 1))
+              | name `elem` ["send-timeout-wake", "receive-timeout-wake"]
+              ]
+    ++ concat [ controlOwned "unaffected-membership" (\current -> current { caseCompareRegions = False }) (mutateKernel (dataQueueTimer facts domain 2) 1)
+              | name `elem` timedRowNames
+              ]
   where
-    name = caseIdText (caseName one)
-    timedNames = ["send-timeout-blocks", "receive-timeout-blocks", "send-timeout-wake", "receive-timeout-wake"]
-    pages' = pages facts domain one
-    refused expectation mutated = case holds facts domain pages' mutated expectation of
-      Left _ -> True
-      Right () -> False
-    mutateRecord offset value = mutateRecordWith offset (const value)
-    mutateRecordBit offset bit = mutateRecordWith offset (\current -> current .&. complement bit)
-    mutateRecordWith offset f = observed { nativeMemory = [ (ident, if regionName ident == "timer-record" then replaceWord (fromIntegral offset) (f (readWordAt bytes (fromIntegral offset))) bytes else bytes) | (ident, bytes) <- nativeMemory observed ] }
+    name = caseNameText one
+    guardEq offset value = WordIs "timer-record" (recordBase + offset) value
+    control label guard mutate = controlWith label (withoutExpect guard) mutate
+    controlWith label transform mutate =
+      let mutantStock = mutate stock
+          mutantOwned = mutate owned
+          baseline = null (compareCase facts domain one stock owned)
+          refused = not (null (compareCase facts domain one mutantStock mutantOwned))
+          guardNeeded = null (compareCase facts domain (transform one) mutantStock mutantOwned)
+       in [ControlRun domain label name baseline refused guardNeeded (baseline && refused && guardNeeded)]
+    controlOwned label transform mutate =
+      let mutantOwned = mutate owned
+          baseline = null (compareCase facts domain one stock owned)
+          refused = not (null (compareCase facts domain one stock mutantOwned))
+          guardNeeded = null (compareCase facts domain (transform one) stock mutantOwned)
+       in [ControlRun domain label name baseline refused guardNeeded (baseline && refused && guardNeeded)]
+    withoutExpect guard current =
+      current
+        { caseExpect = filter (/= guard) (caseExpect current)
+        , caseStockExpect = filter (/= guard) (caseStockExpect current)
+        , caseOwnedExpect = filter (/= guard) (caseOwnedExpect current)
+        }
+    mutateRecord offset f observation =
+      observation
+        { nativeMemory =
+            [ (ident, if regionName ident == "timer-record" then replaceWord (fromIntegral offset) (f (readWordAt bytes (fromIntegral offset))) bytes else bytes)
+            | (ident, bytes) <- nativeMemory observation
+            ]
+        }
+    mutateKernel address value observation =
+      observation
+        { nativeMemory =
+            [ (ident, if regionName ident == "kernel" then replaceWord (fromIntegral (address - low)) value bytes else bytes)
+            | (ident, bytes) <- nativeMemory observation
+            ]
+        }
+    low = fst (kernelBounds facts domain)
 
 runDomain :: FilePath -> FilePath -> FilePath -> Facts -> Domain -> Image -> Image -> Image -> [(Word32, Word32)] -> IO ([CaseRun], [ControlRun])
 runDomain runner cacheRoot directory facts domain stockImage ownedImage timerImage ownedSymbols = do
@@ -1064,9 +1118,9 @@ runDomain runner cacheRoot directory facts domain stockImage ownedImage timerIma
     stockVerdicts <- reportVerdicts (directory </> "stock") ident
     ownedVerdicts <- reportVerdicts (directory </> "owned") ident
     let verdicts = stockVerdicts ++ ownedVerdicts
-        controls = case M.lookup ident subject of
-          Just observed -> controlRuns facts domain one observed
-          Nothing -> []
+        controls = case (M.lookup ident reference, M.lookup ident subject) of
+          (Just original, Just replacement) -> controlRuns facts domain one original replacement
+          _ -> []
     pure ( case (M.lookup ident reference, M.lookup ident subject) of
              (Just original, Just replacement) -> CaseRun domain (caseIdText (caseName one)) blocking [] (verdicts ++ compareCase facts domain one original replacement) (BatchExecuted, BatchExecuted)
              (Nothing, _) -> CaseRun domain (caseIdText (caseName one)) blocking [] ["stock case did not run"] (BatchExecuted, BatchExecuted)

@@ -87,6 +87,9 @@ main = do
           [ "domain" .= domainLabel (controlDomain control)
           , "case" .= controlCase control
           , "control" .= controlName control
+          , "baseline" .= controlBaseline control
+          , "refused" .= controlRefused control
+          , "guard_needed" .= controlGuardNeeded control
           , "holds" .= controlHolds control
           ]
       document =
