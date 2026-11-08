@@ -28,15 +28,17 @@ extern "C" {
     fn xm1_semaphore_stock_restore(saved: u32);
     fn xm1_semaphore_stock_wait_release(owner: KernelContext, task: Task) -> u32;
     fn xm1_semaphore_stock_wait_cancel(owner: KernelContext, task: Task) -> u32;
-    fn xm1_semaphore_stock_wait_enqueue(owner: KernelContext, queue: WaitQueue, wait: WaitBlock);
+    fn xm1_semaphore_stock_wait_enqueue(owner: u32, queue: WaitQueue, wait: WaitBlock);
     fn xm1_semaphore_stock_wait_enqueue_timed(
-        owner: KernelContext,
+        owner: u32,
         queue: WaitQueue,
         wait: WaitBlock,
         timer: GuestAddress,
         timeout: i32,
     );
 }
+
+const PLAIN: i32 = i32::MIN;
 
 struct Cpu;
 
@@ -87,6 +89,24 @@ impl Machine for Cpu {
     fn restore_interrupts(&self, saved: SavedInterrupts) {
         unsafe { xm1_semaphore_stock_restore(saved.0) }
     }
+
+    #[inline(always)]
+    fn restore_f(&self, saved: SavedInterrupts) {
+        let f = saved.0 & 0x40;
+        unsafe {
+            asm!(
+                "mrs {c}, cpsr",
+                "bic {c}, {c}, #0xc0",
+                "orr {c}, {c}, {f}",
+                "orr {c}, {c}, #0x80",
+                "msr cpsr_c, {c}",
+                c = out(reg) _,
+                f = in(reg) f,
+                options(nostack),
+            );
+        }
+    }
+
 
     #[inline(always)]
     fn dmb(&self) {
@@ -190,6 +210,7 @@ impl Block for Cpu {
         wait: WaitBlock,
         how: Enqueue,
     ) {
+        let owner = load(owner.owner());
         match how {
             Enqueue::Plain => unsafe { xm1_semaphore_stock_wait_enqueue(owner, queue, wait) },
             Enqueue::Timed { timer, timeout } => unsafe {
@@ -272,11 +293,8 @@ extern "C" fn xm1_rtos_semaphore_signal_body(semaphore: SemaphoreId, mode: WakeM
 #[no_mangle]
 #[inline(never)]
 #[link_section = ".text.sem_block_body"]
-extern "C" fn xm1_rtos_semaphore_block_body(
-    semaphore: SemaphoreId,
-    timeout: i32,
-    plain: bool,
-) -> i32 {
+extern "C" fn xm1_rtos_semaphore_block_body(semaphore: SemaphoreId, timeout: i32) -> i32 {
+    let plain = timeout == PLAIN;
     match block(&Cpu, EntryDomain::new(ENTRY), semaphore, timeout, !plain) {
         Ok(SemaphoreBlocking::Ready(outcome)) => outcome.code(),
         Ok(SemaphoreBlocking::Pending(pending)) => resumed(pending),
@@ -334,7 +352,7 @@ pub extern "C" fn xm1_rtos_semaphore_interrupt_signal(id: i32) -> i32 {
 #[link_section = ".text.sem_wait"]
 pub extern "C" fn xm1_rtos_semaphore_wait(id: i32) -> i32 {
     match xm1_rtos_semaphore_admit(id, Service::Wait) {
-        Ok(semaphore) => xm1_rtos_semaphore_block_body(semaphore, 0, true),
+        Ok(semaphore) => xm1_rtos_semaphore_block_body(semaphore, PLAIN),
         Err(status) => status.code(),
     }
 }
@@ -344,7 +362,7 @@ pub extern "C" fn xm1_rtos_semaphore_wait(id: i32) -> i32 {
 #[link_section = ".text.sem_timed_wait"]
 pub extern "C" fn xm1_rtos_semaphore_timed_wait(id: i32, timeout: i32) -> i32 {
     match xm1_rtos_semaphore_admit(id, Service::TimedWait) {
-        Ok(semaphore) => xm1_rtos_semaphore_block_body(semaphore, timeout, false),
+        Ok(semaphore) => xm1_rtos_semaphore_block_body(semaphore, timeout),
         Err(status) => status.code(),
     }
 }

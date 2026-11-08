@@ -16,6 +16,8 @@ pub trait Machine {
     /// The stock pair at A `0x42560`/`0x42568` and B `0xd2560`/`0xd2568`.
     fn mask_interrupts(&self) -> SavedInterrupts;
     fn restore_interrupts(&self, saved: SavedInterrupts);
+    /// Restore the saved F bit and keep I set: the dispatcher's switch must stay IRQ-masked.
+    fn restore_f(&self, saved: SavedInterrupts);
     fn dmb(&self);
 }
 

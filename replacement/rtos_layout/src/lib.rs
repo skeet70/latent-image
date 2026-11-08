@@ -1027,7 +1027,7 @@ impl Domain {
                 timer_count: GuestAddress(0x400e_4738),
                 timer_heap: GuestAddress(0x400e_d6d8),
                 task_table: GuestAddress(0x400e_fecc),
-                semaphore_configs: GuestAddress(0x400e_dfd8),
+                semaphore_configs: GuestAddress(0x400e_df98),
                 semaphore_controls: GuestAddress(0x400e_aecc),
                 semaphore_waits: GuestAddress(0x400e_4ebc),
                 semaphore_timers: GuestAddress(0x400e_545c),

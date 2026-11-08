@@ -21,6 +21,7 @@ pub struct Sim {
     doorbell: [Cell<bool>; 2],
     interrupts: Cell<u32>,
     dispatches: RefCell<Vec<i32>>,
+    dispatch_masks: RefCell<Vec<u32>>,
 }
 
 fn at(address: GuestAddress) -> s1::GuestAddress {
@@ -60,6 +61,7 @@ impl Sim {
             doorbell: [Cell::new(false), Cell::new(false)],
             interrupts: Cell::new(0x40),
             dispatches: RefCell::new(Vec::new()),
+            dispatch_masks: RefCell::new(Vec::new()),
         }
     }
 
@@ -163,6 +165,10 @@ impl Sim {
         self.dispatches.borrow().clone()
     }
 
+    pub fn dispatch_masks(&self) -> Vec<u32> {
+        self.dispatch_masks.borrow().clone()
+    }
+
     fn pointed(&self, field: GuestAddress) -> u32 {
         self.word(GuestAddress(self.word(field)))
     }
@@ -254,6 +260,12 @@ impl CreateMachine for Sim {
     fn restore_interrupts(&self, saved: SavedInterrupts) {
         self.interrupts.set(saved.0);
     }
+
+    fn restore_f(&self, saved: SavedInterrupts) {
+        let current = self.interrupts.get();
+        self.interrupts.set((current & !0x40) | (saved.0 & 0x40));
+    }
+
 
     fn dmb(&self) {}
 }
@@ -354,6 +366,7 @@ impl Wake for Sim {
 
     fn dispatch(&self, code: i32) {
         self.dispatches.borrow_mut().push(code);
+        self.dispatch_masks.borrow_mut().push(self.interrupts.get());
         let record = self.context(self.entry);
         let cell = GuestAddress(self.word(record.running()));
         let selected = self.pointed(record.selected());

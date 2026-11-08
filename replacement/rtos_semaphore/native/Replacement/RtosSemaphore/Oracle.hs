@@ -787,11 +787,15 @@ kernelBounds facts domain = (GuestAddress low, fromIntegral (high - low))
 loaderDataSize :: Word32
 loaderDataSize = 0x0000_0060
 
--- | `kernel_find_ready`'s nibble table, bytes `0x4da9f..0x4daae` of loader A as the pinned
--- disassembly lists the words at `0x4da9c..0x4daac`. Loader B's prefix ends before the table and
--- the cross-domain design states one C for both kernels.
-loaderDataBytes :: B.ByteString
-loaderDataBytes = B.replicate 0x1f 0 <> B.pack [0, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0] <> B.replicate 0x31 0
+-- | The loader window holding `kernel_find_ready`'s nibble table. The literal is A `0x4daa0`
+-- and B `0xdda64`; both windows lie inside their pinned loader prefixes.
+loaderDataBase :: Domain -> Word32
+loaderDataBase DomainA = 0x0004_da80
+loaderDataBase DomainB = 0x000d_da40
+
+loaderDataBytes :: Image -> Word32 -> B.ByteString
+loaderDataBytes image base =
+  B.take (fromIntegral loaderDataSize) (B.drop (fromIntegral (base - imageBase image)) (imageBytes image))
 
 callerSp :: Case -> Word32
 callerSp one = if caseHandler one then handlerStack else callerStack
@@ -811,8 +815,9 @@ pages facts loaderImage one =
        , Page (RegionId "target-stack") (GuestAddress (targetStack - 0x100)) 0x100 ReadWrite (B.replicate 0x100 0)
        , Page (RegionId "bank-a") (bank DomainA) 4 Device (B.replicate 4 0)
        , Page (RegionId "bank-b") (bank DomainB) 4 Device (B.replicate 4 0)
-       , let base = imageBase loaderImage + 0xda80
-          in Page (RegionId "loader-data") (GuestAddress base) (fromIntegral loaderDataSize) ReadOnly loaderDataBytes
+       , let base = if imageBase loaderImage == 0x40000 then loaderDataBase DomainA else loaderDataBase DomainB
+          in Page (RegionId "loader-data") (GuestAddress base) (fromIntegral loaderDataSize) ReadOnly
+               (loaderDataBytes loaderImage base)
        ]
 
 contains :: GuestAddress -> Int -> Page -> Bool

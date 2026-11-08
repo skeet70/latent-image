@@ -222,7 +222,9 @@ fn delete_releases_every_waiter_with_released() {
     fixture.create(Domain::A, 1, 0, 0, 1);
     fixture.queue_waiter(Domain::A, 2, Domain::A, 1);
     fixture.queue_waiter(Domain::A, 3, Domain::A, 1);
+    fixture.sim.set_interrupts(0);
     delete_semaphore(&fixture.sim, fixture.id(Domain::A, 1)).unwrap();
+    assert_eq!(fixture.sim.dispatch_masks(), vec![0x80]);
     for slot in [2, 3] {
         assert_eq!(state(&fixture, Domain::A, slot), TaskState::READY.bits());
         assert_eq!(result(&fixture, Domain::A, slot), -49);
