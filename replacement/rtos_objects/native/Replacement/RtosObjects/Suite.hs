@@ -522,7 +522,7 @@ retainedWords facts executing one = case caseRetained one of
       [ poke (rtDqConfig t + 0x0) 0, poke (rtDqConfig t + 0x4) 1, poke (rtDqConfig t + 0x8) 0, poke (rtDqConfig t + 0xc) 1
       , poke (rtDqRuntime t) (rtDqRuntime t), poke (rtDqRuntime t + 0x4) (rtDqRuntime t)
       , poke (rtDqRuntime t + 0x8) (rtDqConfig t)
-      , poke (rtDqRuntime t + 0xc) (rtDqRuntime t), poke (rtDqRuntime t + 0x10) (rtDqRuntime t)
+      , poke (rtDqRuntime t + 0xc) (rtDqRuntime t + 0xc), poke (rtDqRuntime t + 0x10) (rtDqRuntime t + 0xc)
       , poke (rtDqRuntime t + 0x14) 0, poke (rtDqRuntime t + 0x18) 0, poke (rtDqRuntime t + 0x1c) 0
       , poke (rtDqWait t) 0, poke (rtDqWait t + 0x4) 0, poke (rtDqWait t + 0x8) 0, poke (rtDqWait t + 0xc) 0
       , poke (rtDqTimer t) 0
@@ -535,7 +535,7 @@ retainedWords facts executing one = case caseRetained one of
       , poke (rtPoolConfig t + 0x8) poolStart, poke (rtPoolConfig t + 0xc) (poolStart + 0x10), poke (rtPoolConfig t + 0x10) 1
       , poke (rtPoolControl t) (rtPoolControl t), poke (rtPoolControl t + 0x4) (rtPoolControl t)
       , poke (rtPoolControl t + 0x8) (rtPoolConfig t)
-      , poke (rtPoolControl t + 0xc) poolStart, poke (rtPoolControl t + 0x10) 0
+      , poke (rtPoolControl t + 0xc) 0, poke (rtPoolControl t + 0x10) 0
       , poke (rtPoolWait t) 0, poke (rtPoolWait t + 0x4) 0, poke (rtPoolWait t + 0x8) 0, poke (rtPoolWait t + 0xc) 0
       , poke (rtPoolTimer t) 0
       , poke (classRecord + 0x6c) (rtPoolControl t), poke (classRecord + 0x70) 1
@@ -588,7 +588,7 @@ retainedCases facts executing =
       , eq (rtSemWait t) (if timed then 0xffffffce else 0)
       , eq (rtSemWait t + 4) (rtSemControl t)
       , eq (rtSemWait t + 8) 1
-      , eq (rtSemControl t + 0xc) (if timed then 0 else 1)
+      , eq (rtSemControl t + 0xc) 0
       , eq taskWait (rtSemWait t)
       , ready
       ] ++ if timed then [eq (rtSemTimer t + 4) (seam executing "stock-timeout-callback"), eq (rtSemTimer t + 8) (taskAt facts executing runningSlot)] else []
@@ -1478,7 +1478,7 @@ cases facts _entries executing =
   , (mk "mailbox-create" MailboxCreate) { caseArgs = [(R0, id0 1), (R1, requestAddress)], caseWords = [poke requestAddress 0, poke (requestAddress + 4) 32], caseExpect = createMailboxOwned, caseStockExpect = Just createMailboxStock, caseDifference = CreatePublication }
   , (mk "flag-create-recreate" FlagCreate) { caseArgs = [(R0, id0 1), (R1, requestAddress)], caseWords = [poke requestAddress 4, poke (requestAddress + 4) 5], caseExpect = [res 0, eq (flagConfig facts executing 1 + factsFlagConfigExists facts) 1, eq (patternOf 1) 5] }
   , (mk "flag-delete-plain" FlagDelete) { caseArgs = [(R0, id0 1)], caseFlags = [flag 1 4 5 5], caseExpect = deleteFlagState 1 }
-  , (mk "flag-delete-class-ignored" FlagDelete) { caseArgs = [(R0, idB 1)], caseFlags = [flag 1 0 0 0, (DomainB, 1, 0, 0, 0)], caseExpect = [res 0, eq (flagConfig facts executing 1 + factsFlagConfigExists facts) 0, eq (flagConfig facts (peer executing) 1 + factsFlagConfigExists facts) 1] }
+  , (mk "flag-delete-class-ignored" FlagDelete) { caseArgs = [(R0, foreignId 1)], caseFlags = [flag 1 0 0 0, (peer executing, 1, 0, 0, 0)], caseExpect = [res 0, eq (flagConfig facts executing 1 + factsFlagConfigExists facts) 0, eq (flagConfig facts (peer executing) 1 + factsFlagConfigExists facts) 1] }
   , (mk "flag-delete-stranded" FlagDelete) { caseArgs = [(R0, id0 1)], caseFlags = [flag 1 0 0 1], caseWaiters = [timedWaiter 14], caseExpect = deleteStrandedOwned FlagFamily, caseStockExpect = Just (deleteStrandedStock FlagFamily), caseDifference = DeleteStrandsWaiter }
   , (mk "mailbox-delete-stranded" MailboxDelete) { caseArgs = [(R0, id0 1)], caseMailboxes = [mailbox 1 0 32 0 0], caseWaiters = [timedWaiter 14], caseExpect = deleteStrandedOwned MailboxFamily, caseStockExpect = Just (deleteStrandedStock MailboxFamily), caseDifference = DeleteStrandsWaiter }
   , (mk "mailbox-delete-drains" MailboxDelete) { caseArgs = [(R0, id0 1)], caseMailboxes = [mailbox 1 0 32 (messageAddress 0) (messageAddress 1)], caseMessages = [msg 0 (messageAddress 1) 0, msg 1 0 0], caseExpect = [res 0, eq (mailboxConfig facts executing 1 + factsMailboxConfigExists facts) 0, eq (mailboxConfig facts executing 1 + factsMailboxConfigAttributes facts) 2, eq (mailboxConfig facts executing 1 + factsMailboxConfigPriorityLimit facts) 32, eq (mailControl 1 + factsMailboxControlHead facts) 0, eq (mailControl 1 + factsMailboxControlTail facts) 0, eq (messageAddress 0) (messageAddress 1), eq (messageAddress 1) 0], caseStockExpect = Just [res 0, eq (mailboxConfig facts executing 1 + factsMailboxConfigExists facts) 0, eq (mailboxConfig facts executing 1 + factsMailboxConfigAttributes facts) 2, eq (mailboxConfig facts executing 1 + factsMailboxConfigPriorityLimit facts) 32, eq (mailControl 1 + factsMailboxControlHead facts) 0, eq (mailControl 1 + factsMailboxControlTail facts) (messageAddress 1), eq (messageAddress 0) (messageAddress 1), eq (messageAddress 1) 0], caseCompare = [ident | Page ident _ _ _ _ <- pages facts (baseCase executing), ident `notElem` map RegionId ["stack", "target-stack", "waker-stack", "chain-stack"]], caseDifference = DeleteLeavesQueueTail }
@@ -1530,13 +1530,14 @@ cases facts _entries executing =
   , (mk "mailbox-receive-timed-zero" MailboxTimedReceive) { caseArgs = [(R0, id0 1), (R1, outWord), (R2, 0)], caseMailboxes = [mailbox 1 0 32 0 0], caseWords = [poke outWord 0xdead], caseExpect = [res (0xffffffce), eq outWord 0xdead] }
   , (mk "mailbox-receive-fifo" MailboxReceive) { caseArgs = [(R0, id0 1), (R1, outWord)], caseMailboxes = [mailbox 1 0 32 0 0], caseMessages = [msg 0 0 0, msg 1 0 0], caseWaiters = [chainWaiter 12], caseWords = [poke outWord 0xdead], caseWaker = Just (Waker (TargetSlot MailboxSend) [(R0, id0 1), (R1, messageAddress 0)]), caseExpect = [res 0, eq outWord (messageAddress 1), eq (mailControl 1 + factsMailboxControlHead facts) 0, eq (mailboxWait facts executing 2 + factsMailboxWaitMessage facts) (messageAddress 0), byte (taskOf executing 2 + factsTaskState facts) (factsStateReady facts)] }
   , (mk "mailbox-receive-priority" MailboxReceive) { caseArgs = [(R0, id0 1), (R1, outWord)], caseMailboxes = [mailbox 1 1 32 0 0], caseMessages = [msg 0 0 0], caseWaiters = [waiterWith 12 0 0], caseWords = [poke outWord 0xdead], caseWaker = Just (Waker (TargetSlot MailboxSend) [(R0, id0 1), (R1, messageAddress 0)]), caseExpect = [res 0, eq outWord (messageAddress 0), eq (mailControl 1 + factsMailboxControlHead facts) 0, byte (taskOf executing 2 + factsTaskState facts) (factsStateWait facts .|. factsStateObjectQueued facts .|. factsStateOwnerLockQueued facts), eq (mailboxWait facts executing 2 + factsMailboxWaitMessage facts) 0] }
-  , (mk "mailbox-delete-multiwaiter" MailboxReceive) { caseArgs = [(R0, id0 1), (R1, outWord)], caseMailboxes = [mailbox 1 0 32 0 0], caseWaiters = [waiterPeerTimed 14], caseWords = [poke outWord 0xdead, poke requestAddress 0, poke (requestAddress + 4) 32], caseWaker = Just (Waker (TargetSlot MailboxDelete) [(R0, id0 1)]), caseSteps = [StepStore (GuestAddress resultCell), StepCall MailboxCreate [(R0, id0 1), (R1, requestAddress)]], caseExpect = multiwaiterOwned, caseStockExpect = Just [], caseStockStatus = Just InstructionBudget, caseDifference = DeleteStrandsWaiter, caseLimit = InstructionLimit 50000 }
+  , (mk "mailbox-delete-multiwaiter" MailboxReceive) { caseArgs = [(R0, id0 1), (R1, outWord)], caseMailboxes = [mailbox 1 0 32 0 0], caseWaiters = [waiterPeerTimed 5], caseWords = [poke outWord 0xdead, poke requestAddress 0, poke (requestAddress + 4) 32], caseWaker = Just (Waker (TargetSlot MailboxDelete) [(R0, id0 1)]), caseSteps = [StepStore (GuestAddress resultCell), StepCall MailboxCreate [(R0, id0 1), (R1, requestAddress)]], caseExpect = multiwaiterOwned, caseStockExpect = Just [], caseStockStatus = Just InstructionBudget, caseDifference = DeleteStrandsWaiter, caseLimit = InstructionLimit 50000 }
 
     -- Remaining class-ignored mailbox row.
-  , (mk "mailbox-delete-class-ignored" MailboxDelete) { caseArgs = [(R0, idB 1)], caseMailboxes = [mailbox 1 0 32 0 0, (DomainB, 1, 0, 32, 0, 0)], caseExpect = [res 0, eq (mailboxConfig facts executing 1 + factsMailboxConfigExists facts) 0, eq (mailboxConfig facts (peer executing) 1 + factsMailboxConfigExists facts) 1] }
+  , (mk "mailbox-delete-class-ignored" MailboxDelete) { caseArgs = [(R0, foreignId 1)], caseMailboxes = [mailbox 1 0 32 0 0, (peer executing, 1, 0, 32, 0, 0)], caseExpect = [res 0, eq (mailboxConfig facts executing 1 + factsMailboxConfigExists facts) 0, eq (mailboxConfig facts (peer executing) 1 + factsMailboxConfigExists facts) 1] }
   ]
   where
     mk name slot = (baseCase executing) { caseName = CaseId name, caseSlot = slot, caseObject = executing, caseArgs = [] }
+    foreignId slot = if executing == DomainA then idB slot else idA slot
     flag slot attributes initial pattern = (executing, slot, attributes, initial, pattern)
     mailbox slot attributes limit headValue tailValue = (executing, slot, attributes, limit, headValue, tailValue)
     msg index next priority = (messageAddress index, next, priority)
@@ -1582,7 +1583,7 @@ cases facts _entries executing =
       , eq (mailboxWaitResult executing 1) (0xffffffcf)
       , eq (mailboxWaitResult (peer executing) 2) (0xffffffcf)
       , byte (taskOf (peer executing) 2 + factsTaskState facts) (factsStateReady facts)
-      , readyCheck (peer executing) 14 (taskOf (peer executing) 2)
+      , readyCheck (peer executing) 5 (taskOf (peer executing) 2)
       , readyCheck executing 10 (taskOf executing 1)
       , eq (bankAddress (peer executing)) 0x01000000
       , eq (bankAddress executing) 0
