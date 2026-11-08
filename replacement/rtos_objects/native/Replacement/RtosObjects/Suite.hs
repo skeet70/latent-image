@@ -1147,6 +1147,11 @@ caseForCode role facts entries executing loader code extraFunctions one = CaseSp
             , (wakerStack - 0x400, wakerStack)
             , (wakerStack, chainStack)
             ]
+      | isJust (caseSelectedWait one') =
+          map stack
+            [ (callerSp one' - 0x400, callerSp one')
+            , (targetStackPointer - 0x100, targetStackPointer)
+            ]
       | otherwise = []
     stack (low, high) = either error id (mkStackContext (N.GuestAddress (fromIntegral low)) (N.GuestAddress (fromIntegral high)))
     provenance = "X-M1 1.50 stock slot ABI at pinned x70view 55436fc85c0560dd252b0410af6f2427fe198cd3; manifest entries from replacement/media_permit/rtos_slot_contracts.json, extents from stage/family-{a,b}.ld; synthetic caller, waker, waiter, message and timer-entry fixtures; retained stock insert-timer, remove-timer, timeout-callback and timer-tick seams; retained semaphore, data-queue and fixed-pool caller entries, wait/timer tables and the fixed-pool wait table recovered from the pinned disassembly (A 0x4005855c / B 0x400e851c, stride 16)"
