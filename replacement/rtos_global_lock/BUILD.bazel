@@ -1,3 +1,4 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
 
@@ -53,4 +54,58 @@ sh_test(
     srcs = ["//emulation:recovery-task-state-tests.sh"],
     args = ["$(location :global-lock-host-tests-build)"],
     data = [":global-lock-host-tests-build"],
+)
+
+haskell_library(
+    name = "global-lock-stage-lib",
+    srcs = ["stage/Replacement/RtosGlobalLock/Stage.hs"],
+    src_strip_prefix = "stage",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:first-stage",
+        "//host:update-container",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+    ],
+)
+
+_LINKED = [
+    ":global-lock-a.bin",
+    ":global-lock-a.symbols",
+    ":global-lock-b.bin",
+    ":global-lock-b.symbols",
+]
+
+haskell_binary(
+    name = "stage-global-lock",
+    srcs = ["stage/StageMain.hs"],
+    main_file = "stage/StageMain.hs",
+    args = [
+        "--owned-a-bin",
+        "$(rootpath :global-lock-a.bin)",
+        "--owned-a-symbols",
+        "$(rootpath :global-lock-a.symbols)",
+        "--owned-b-bin",
+        "$(rootpath :global-lock-b.bin)",
+        "--owned-b-symbols",
+        "$(rootpath :global-lock-b.symbols)",
+    ],
+    data = _LINKED,
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":global-lock-stage-lib",
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:text",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+    ],
 )
