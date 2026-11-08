@@ -151,7 +151,7 @@ trial=/etc/latent-image/cargo-retention-qualification.json
 approved_trial="$(sha256sum "$trial" | cut -d ' ' -f 1)"
 env CARGO_BUILD_JOBS=2 systemd-run --user --scope --quiet \
   --unit=latent-image-retention-qualification -p MemoryMax=6G -p MemorySwapMax=0 \
-  nix develop "$looklab" -c "$looklab/tools/build.sh" --lane native -- \
+  nix develop "$looklab" -c "$looklab/tools/build.sh" --origin "$looklab" --lane native --target-root "$looklab/target" -- \
   "$qualifier" qualify /usr/local/libexec/latent-image/storage-maintenance \
   "$trial" "$approved_trial" "$report"
 ```

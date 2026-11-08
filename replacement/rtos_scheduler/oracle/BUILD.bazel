@@ -249,3 +249,33 @@ haskell_binary(
         "//host:json",
     ],
 )
+
+haskell_binary(
+    name = "s3d-oracle",
+    srcs = ["S3dMain.hs"],
+    main_file = "S3dMain.hs",
+    args = [
+        "--runner", "$(rootpath //emulation:native-runner)",
+        "--owned-a-bin", "$(rootpath //replacement/rtos_scheduler:s3d-a.bin)",
+        "--owned-b-bin", "$(rootpath //replacement/rtos_scheduler:s3d-b.bin)",
+    ],
+    data = [
+        "//emulation:native-runner",
+        "//replacement/rtos_scheduler:s3d-a.bin",
+        "//replacement/rtos_scheduler:s3d-b.bin",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:cached-native-batch",
+        "//emulation:native-observation",
+        "//emulation:owned-case",
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:json",
+    ],
+)

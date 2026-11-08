@@ -6031,6 +6031,10 @@
         {
           "name": "task-context-caller",
           "statement": "Caller runs in task context with IRQ unmasked and dispatch enabled; the body checks none of these (A 0x48ff8 / B 0xd8fb8), dispatches through A 0x43640 / B 0xd3640 and clears CPSR.I on exit."
+        },
+        {
+          "name": "handler-context-refused",
+          "statement": "The owned body refuses a handler-context caller with -25 before the stock order runs. The stock body checks no context, so a handler-context send on a full ring blocks the interrupted task and dispatches from the ISR stack; that is a stock defect, not an ABI to copy. Counterexample: replacement/rtos_data_queue/src/tests.rs a_handler_send_is_refused."
         }
       ],
       "experiments": [

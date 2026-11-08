@@ -175,7 +175,7 @@ xm1_rtos_scheduler_irq_selected_read:
     orr r0, r0, r2
     .global xm1_rtos_scheduler_exception_return_stop
 xm1_rtos_scheduler_exception_return_stop:
-    msr spsr_fc, r0
+    msr spsr_fsxc, r0
     ldm sp!, {{r0-r3, r12, lr, pc}}^
     endentry irq_tail
 

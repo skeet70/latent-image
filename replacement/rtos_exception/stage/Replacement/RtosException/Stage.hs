@@ -62,6 +62,11 @@ specs =
       ]
   ]
 
+schedulerReturn :: DomainSpec -> (Word32, Word32, Word32)
+schedulerReturn spec = case specDomain spec of
+  DomainA -> (0x437d4, 0xe169f000, 0xe16ff000)
+  DomainB -> (0xd37d4, 0xe169f000, 0xe16ff000)
+
 data StageError
   = ContainerRejected String
   | LoaderMismatch Domain
@@ -194,10 +199,14 @@ admit source a b = do
       when (F.symbolSize symbol > 0 && "xm1_exception_" `isPrefixOf` F.symbolName symbol) $
         require (inside spec (F.symbolAddress symbol) (F.symbolSize symbol)) (SymbolOutside domain (F.symbolName symbol))
     require (B.length (linkedBin artifact) == fromIntegral (specHigh spec - specLow spec)) (ByteOutside domain (specHigh spec))
-    let loader = foldl
+    let loader0 = foldl
           (\bytes extent -> putAt spec extent (sliceAt spec extent (linkedBin artifact)) bytes)
           (sourceLoaders source M.! domain)
           (specExtents spec)
+        (repairAt, preimage, replacement) = schedulerReturn spec
+        repairOffset = fromIntegral (repairAt - specBase spec)
+    require (U.word32At loader0 repairOffset == preimage) (PatchRejected ("scheduler return preimage differs at " ++ hex repairAt))
+    let loader = B.take repairOffset loader0 <> U.putWord32 replacement <> B.drop (repairOffset + 4) loader0
     pure (domain, loader, artifact)
   pure
     ( Admitted
@@ -219,7 +228,11 @@ patchesFor admitted parsed restoring = fmap concat $ forM specs $ \spec -> do
   let source = admittedSource admitted
       target = if restoring then sourceLoaders source M.! specDomain spec else installedLoader admitted (specDomain spec)
       base = specBase spec
-  either (Left . PatchRejected) Right $ sequence
+  repair <- let (repairAt, preimage, replacement) = schedulerReturn spec
+             in if restoring
+                  then either (Left . PatchRejected) Right (F.loaderWordPatch (F.LoaderId (domainLoaderId (specDomain spec))) repairAt replacement preimage)
+                  else either (Left . PatchRejected) Right (F.loaderWordPatch (F.LoaderId (domainLoaderId (specDomain spec))) repairAt preimage replacement)
+  extents <- either (Left . PatchRejected) Right $ sequence
     [ F.loaderWordPatch (F.LoaderId (domainLoaderId (specDomain spec))) at before after
     | ExtentSpec lo hi <- specExtents spec
     , at <- [lo, lo + 4 .. hi - 4]
@@ -228,6 +241,7 @@ patchesFor admitted parsed restoring = fmap concat $ forM specs $ \spec -> do
     , let after = U.word32At target offset
     , before /= after
     ]
+  pure (repair : extents)
 
 rebuild :: U.Parsed -> [F.LoaderWordPatch] -> Either StageError B.ByteString
 rebuild parsed patches = do
@@ -245,12 +259,15 @@ confineChanges admitted dat = do
       mainStart = U.stagingLength + fromIntegral (U.hMainOffset (U.parsedHeader parsed))
   ranges <- fmap concat $ forM specs $ \spec -> do
     segment <- segmentOf parsed (specDomain spec)
+    let (repairAt, _, _) = schedulerReturn spec
     pure
-      [ ( mainStart + fromIntegral (U.segFlash segment) + fromIntegral (extentLow extent - U.segLoad segment)
+      ( ( mainStart + fromIntegral (U.segFlash segment) + fromIntegral (repairAt - U.segLoad segment), 4 )
+      : [ ( mainStart + fromIntegral (U.segFlash segment) + fromIntegral (extentLow extent - U.segLoad segment)
         , fromIntegral (extentHigh extent - extentLow extent)
         )
-      | extent <- specExtents spec
-      ]
+        | extent <- specExtents spec
+        ]
+      )
   require (B.length dat == B.length original) (ChangeOutside (min (B.length dat) (B.length original)))
   let allowed = (U.mainChecksumOffset, 4) : ranges
   forM_ (findOutside allowed original dat) (Left . ChangeOutside)
@@ -313,6 +330,11 @@ contractValue staged = object
       , "linked_bin_sha256" .= sha (linkedBin (admittedLinked (stagedAdmission staged) M.! specDomain spec))
       , "linked_symbols_sha256" .= sha (linkedSymbols (admittedLinked (stagedAdmission staged) M.! specDomain spec))
       , "extents" .= [ extentValue spec extent | extent <- specExtents spec ]
+      , "scheduler_return" .= let (repairAt, preimage, replacement) = schedulerReturn spec in object
+          [ "address" .= hex repairAt, "stock" .= hex preimage, "owned" .= hex replacement
+          , "owner" .= ("s2-irq-resume" :: String)
+          , "extent" .= (if specDomain spec == DomainA then ["0x437a4", "0x437dc"] else ["0xd37a4", "0xd37dc"] :: [String])
+          ]
       , "entries" .= [ object ["symbol" .= name, "address" .= hex address] | (name, address) <- entries (specDomain spec) ]
       ]
     extentValue spec extent = object

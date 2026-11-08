@@ -454,6 +454,84 @@ fn timer_arenas_are_aligned_disjoint_and_fit_their_capacity() {
 }
 
 #[test]
+fn data_queue_tables_are_the_stock_addresses() {
+    for (domain, expected) in [
+        (
+            Domain::A,
+            [0x4005_988c, 0x4005_a00c, 0x4005_70bc, 0x4005_6b1c, 0x4006_2c48],
+        ),
+        (
+            Domain::B,
+            [0x400e_984c, 0x400e_9fcc, 0x400e_707c, 0x400e_6adc, 0x400f_2c08],
+        ),
+    ] {
+        let w = domain.words();
+        assert_eq!(
+            [
+                w.data_queue_configs.0,
+                w.data_queue_controls.0,
+                w.data_queue_waits.0,
+                w.data_queue_timers.0,
+                w.data_queue_placeholder.0,
+            ],
+            expected,
+            "{domain:?}"
+        );
+    }
+}
+
+#[test]
+fn data_queue_record_fields_are_the_stock_offsets() {
+    let base = GuestAddress(0x4005_0000);
+    assert_eq!(DataQueueConfig(base).attributes().0, base.0);
+    assert_eq!(DataQueueConfig(base).capacity().0, base.0 + 0x04);
+    assert_eq!(DataQueueConfig(base).ring_base().0, base.0 + 0x08);
+    assert_eq!(DataQueueConfig(base).exists().0, base.0 + 0x0c);
+    assert_eq!(DataQueueControl(base).sender_queue().next().0, base.0);
+    assert_eq!(DataQueueControl(base).creation().0, base.0 + 0x08);
+    assert_eq!(DataQueueControl(base).receivers().next().0, base.0 + 0x0c);
+    assert_eq!(DataQueueControl(base).receivers().prev().0, base.0 + 0x10);
+    assert_eq!(DataQueueControl(base).count().0, base.0 + 0x14);
+    assert_eq!(DataQueueControl(base).read().0, base.0 + 0x18);
+    assert_eq!(DataQueueControl(base).write().0, base.0 + 0x1c);
+    assert_eq!(DataQueueWait(base).base().result().0, base.0);
+    assert_eq!(DataQueueWait(base).data().0, base.0 + 0x0c);
+}
+
+#[test]
+fn data_queue_sizes_are_the_stock_strides() {
+    assert_eq!(
+        [
+            DataQueueConfig::SIZE,
+            DataQueueControl::SIZE,
+            DataQueueWait::SIZE,
+            TaskList::SIZE,
+        ],
+        [0x10, 0x20, 0x10, 0x08]
+    );
+}
+
+#[test]
+fn data_queue_slot_accessors_stride_from_the_table() {
+    let a = Domain::A.words();
+    let queue2 = DataQueueSlot::new(2, 120).unwrap();
+    let task3 = TaskSlot::new(3).unwrap();
+    assert_eq!(a.data_queue_config(queue2).0 .0, 0x4005_988c + 0x10);
+    assert_eq!(a.data_queue_control(queue2).0 .0, 0x4005_a00c + 0x20);
+    assert_eq!(a.data_queue_wait(task3).0 .0, 0x4005_70bc + 2 * 0x10);
+    assert_eq!(a.data_queue_timer(task3).0, 0x4005_6b1c + 2 * 0x0c);
+}
+
+#[test]
+fn data_queue_slots_refuse_out_of_range_and_oversized_counts() {
+    assert_eq!(DataQueueSlot::new(0, 120), None);
+    assert_eq!(DataQueueSlot::new(121, 120), None);
+    assert_eq!(DataQueueSlot::new(1, 0), None);
+    assert_eq!(DataQueueSlot::new(200, 200), None);
+    assert_eq!(DataQueueSlot::new(120, 120).map(DataQueueSlot::get), Some(120));
+}
+
+#[test]
 fn cyclic_records_are_the_stock_stride_and_offsets() {
     let base = GuestAddress(0x4005_928c);
     let config = CyclicConfig(base);
