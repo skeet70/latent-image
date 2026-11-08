@@ -331,7 +331,10 @@ contractValue staged = object
       , "linked_symbols_sha256" .= sha (linkedSymbols (admittedLinked (stagedAdmission staged) M.! specDomain spec))
       , "extents" .= [ extentValue spec extent | extent <- specExtents spec ]
       , "scheduler_return" .= let (repairAt, preimage, replacement) = schedulerReturn spec in object
-          [ "address" .= hex repairAt, "stock" .= hex preimage, "owned" .= hex replacement ]
+          [ "address" .= hex repairAt, "stock" .= hex preimage, "owned" .= hex replacement
+          , "owner" .= ("s2-irq-resume" :: String)
+          , "extent" .= (if specDomain spec == DomainA then ["0x437a4", "0x437dc"] else ["0xd37a4", "0xd37dc"] :: [String])
+          ]
       , "entries" .= [ object ["symbol" .= name, "address" .= hex address] | (name, address) <- entries (specDomain spec) ]
       ]
     extentValue spec extent = object

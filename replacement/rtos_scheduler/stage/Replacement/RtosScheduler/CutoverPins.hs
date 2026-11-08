@@ -27,8 +27,8 @@ binPin :: Group -> Domain -> Digest
 binPin group domain = Digest $ case (group,domain) of
   (S1,DomainA) -> "fad6b0462e8fdf38b6aedcca2859d7b2fc1aee689d00f5e0656e9367d691b0ac"
   (S1,DomainB) -> "60f4e310f618324a7ae529f66c82a3653fed83265a22e68588c97ad9632f5fdd"
-  (S2,DomainA) -> "eb303f7d08eea8ddbb4557751adfe63853894360723cb3485e85129ca5d35614"
-  (S2,DomainB) -> "1ee6bcb513e58269d81d2138f8354eadf603e8a46439a8767e9f19c0a09f9ee5"
+  (S2,DomainA) -> "935f849c154a382d475ae97f2973e5635ea1851003cc95d0ff75b34090ea7695"
+  (S2,DomainB) -> "186cf5a041e1e9be4420e3e729a48183dc811c4f3a38f0018ca4f6aa8bee2f38"
   (S3a,DomainA) -> "10452e08920a6b4a562668266f38b45e5182dcf016cc12b5e1498849dff962b4"
   (S3a,DomainB) -> "3fc256d552b27a4043e40bbf0f948dc73dc7ce267e5428bf0beb679ab982f51d"
   (S3b,DomainA) -> "4a8c4bd211619225712174cf66856c18517b2af68126a1b21482c38784cea97b"

@@ -340,13 +340,6 @@ pub fn end_of_interrupt<M: Machine>(m: &M, domain: &ExceptionDomain) {
     m.store_word(base.offset(0x200), 0);
 }
 
-/// The exception return's saved status with the current F bit. The carrier writes
-/// the whole word with `msr SPSR_fsxc`, not `_fc`.
-#[inline(always)]
-pub const fn restore_status(saved: u32, current: u32) -> u32 {
-    (saved & !0x40) | (current & 0x40)
-}
-
 /// Stock `0x402f8..0x40348`. The release precedes the decrement; only a zero
 /// counter consumes the dispatch flag.
 #[inline(always)]
