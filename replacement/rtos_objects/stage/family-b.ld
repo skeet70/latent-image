@@ -31,119 +31,157 @@ SECTIONS {
   .helper_release : {
     KEEP(*(.text.helper_release))
     __helper_release_body_end = .;
+    *(.text._RINvNtNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter7objects5block12block_lockedNtB6_3CpuEB6_)
+    *(.text.OUTLINED_FUNCTION_0)
+    __helper_release_shared_end = .;
     . = ORIGIN(helper_release) + LENGTH(helper_release);
   } > helper_release =0xf000f0e7
   .helper_block : {
     KEEP(*(.text.helper_block))
     __helper_block_body_end = .;
+    *(.text._RNvNtNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter7objects2id15resolve_flag_in)
+    *(.text._RNvNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter6family14mask_lifecycle)
+    *(.text._RNvNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter6family17restore_lifecycle)
+    *(.text.OUTLINED_FUNCTION_3)
+    __helper_block_shared_end = .;
     . = ORIGIN(helper_block) + LENGTH(helper_block);
   } > helper_block =0xf000f0e7
   .helper_block_timed : {
     KEEP(*(.text.helper_block_timed))
     __helper_block_timed_body_end = .;
+    *(.rodata.cst16)
+    *(.rodata..Lswitch.table._RNvNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter6family20delete_mailbox_entry)
+    *(.text.OUTLINED_FUNCTION_2)
+    *(.text.OUTLINED_FUNCTION_4)
+    *(.text.OUTLINED_FUNCTION_8)
+    __helper_block_timed_shared_end = .;
     . = ORIGIN(helper_block_timed) + LENGTH(helper_block_timed);
   } > helper_block_timed =0xf000f0e7
   .helper_check : {
     KEEP(*(.text.helper_check))
     __helper_check_body_end = .;
+
+    __helper_check_shared_end = .;
     . = ORIGIN(helper_check) + LENGTH(helper_check);
   } > helper_check =0xf000f0e7
   .family_release : {
     KEEP(*(.text.f2_release))
     __family_release_body_end = .;
+    *(.text._RINvNtNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter7objects4wake13release_readyNtB6_3CpuEB6_)
+    *(.text._RNvNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter6family8unmask_i)
+    __family_release_shared_end = .;
     . = ORIGIN(family_release) + LENGTH(family_release);
   } > family_release =0xf000f0e7
   .family_flag_create : {
     KEEP(*(.text.family_flag_create))
     __family_flag_create_body_end = .;
+    *(.text._RINvNtNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter7objects4wake12release_withNtB6_3CpuEB6_)
+    __family_flag_create_shared_end = .;
     . = ORIGIN(family_flag_create) + LENGTH(family_flag_create);
   } > family_flag_create =0xf000f0e7
   .family_flag_delete : {
     KEEP(*(.text.family_flag_delete))
     __family_flag_delete_body_end = .;
+
+    __family_flag_delete_shared_end = .;
     . = ORIGIN(family_flag_delete) + LENGTH(family_flag_delete);
   } > family_flag_delete =0xf000f0e7
   .family_flag_set : {
     KEEP(*(.text.family_flag_set))
     __family_flag_set_body_end = .;
-    *(.text.*objects6create*)
+    *(.text._RINvNtNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter7objects6create11create_flagNtB6_3CpuEB6_)
+    *(.text._RINvNtNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter7objects4wake13set_flag_modeNtB6_3CpuEB6_)
     __family_flag_set_shared_end = .;
     . = ORIGIN(family_flag_set) + LENGTH(family_flag_set);
   } > family_flag_set =0xf000f0e7
   .family_flag_set_handler : {
     KEEP(*(.text.family_flag_set_handler))
     __family_flag_set_handler_body_end = .;
+    *(.text._RINvNtNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter7objects4wake12queue_insertNtB6_3CpuEB6_)
+    *(.text._RINvNtNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter7objects8teardown11delete_flagNtB6_3CpuEB6_)
+    *(.text._RINvNtNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter7objects8teardown14delete_mailboxNtB6_3CpuEB6_)
+    *(.text._RNvNtNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter7objects2id18resolve_mailbox_in)
+    __family_flag_set_handler_shared_end = .;
     . = ORIGIN(family_flag_set_handler) + LENGTH(family_flag_set_handler);
   } > family_flag_set_handler =0xf000f0e7
   .family_flag_clear : {
     KEEP(*(.text.family_flag_clear))
     __family_flag_clear_body_end = .;
-    *(.rodata.str1.1)
-    *(.rodata..Lanon.*)
-    *(.rodata.*)
+    *(.text._RINvNtNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter7objects6create14create_mailboxNtB6_3CpuEB6_)
+    *(.text._RINvNtNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter7objects6locked13check_controlNtB6_3CpuEB6_)
+    *(.text.OUTLINED_FUNCTION_1)
     __family_flag_clear_shared_end = .;
     . = ORIGIN(family_flag_clear) + LENGTH(family_flag_clear);
   } > family_flag_clear =0xf000f0e7
   .family_flag_wait : {
     KEEP(*(.text.family_flag_wait))
     __family_flag_wait_body_end = .;
-    *(.text.*objects5block*)
+    *(.text._RNvNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter6family18flag_wait_admitted)
     __family_flag_wait_shared_end = .;
     . = ORIGIN(family_flag_wait) + LENGTH(family_flag_wait);
   } > family_flag_wait =0xf000f0e7
   .family_flag_poll : {
     KEEP(*(.text.family_flag_poll))
     __family_flag_poll_body_end = .;
-    *(.text.*family_adapter*Cpu*)
+    *(.text._RNvNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter6family17create_flag_entry)
+    *(.text._RNvNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter6family17delete_flag_entry)
+    *(.text._RNvNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter6family20create_mailbox_entry)
     __family_flag_poll_shared_end = .;
     . = ORIGIN(family_flag_poll) + LENGTH(family_flag_poll);
   } > family_flag_poll =0xf000f0e7
   .family_flag_timed_wait : {
     KEEP(*(.text.family_flag_timed_wait))
     __family_flag_timed_wait_body_end = .;
-    *(.text.*objects9admission*)
-    *(.text.*objects2id*)
-    *(.text.*objects6status*)
-    *(.text.*objects7matching*)
-    *(.text.*objects7message*)
-    *(.text.*objects7timeout*)
+    *(.text._RNvNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter6family11flag_router)
+    *(.text.OUTLINED_FUNCTION_7)
     __family_flag_timed_wait_shared_end = .;
     . = ORIGIN(family_flag_timed_wait) + LENGTH(family_flag_timed_wait);
   } > family_flag_timed_wait =0xf000f0e7
   .family_mailbox_create : {
     KEEP(*(.text.family_mailbox_create))
     __family_mailbox_create_body_end = .;
+
+    __family_mailbox_create_shared_end = .;
     . = ORIGIN(family_mailbox_create) + LENGTH(family_mailbox_create);
   } > family_mailbox_create =0xf000f0e7
   .family_mailbox_delete : {
     KEEP(*(.text.family_mailbox_delete))
     __family_mailbox_delete_body_end = .;
+
+    __family_mailbox_delete_shared_end = .;
     . = ORIGIN(family_mailbox_delete) + LENGTH(family_mailbox_delete);
   } > family_mailbox_delete =0xf000f0e7
   .family_mailbox_send : {
     KEEP(*(.text.family_mailbox_send))
     __family_mailbox_send_body_end = .;
-    *(.text.*objects4wake*)
+    *(.text._RINvNtNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter7objects5block5blockNtB6_3CpuEB6_)
+    *(.text.OUTLINED_FUNCTION_5)
+    *(.text._RNvNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter6family14mailbox_router)
     __family_mailbox_send_shared_end = .;
     . = ORIGIN(family_mailbox_send) + LENGTH(family_mailbox_send);
   } > family_mailbox_send =0xf000f0e7
   .family_mailbox_receive : {
     KEEP(*(.text.family_mailbox_receive))
     __family_mailbox_receive_body_end = .;
-    *(.text.*objects8teardown*)
+    *(.text._RINvNtNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter7objects4wake4sendNtB6_3CpuEB6_)
+    *(.text._RINvNtNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter7objects8teardown11release_allNtB6_3CpuEB6_)
     __family_mailbox_receive_shared_end = .;
     . = ORIGIN(family_mailbox_receive) + LENGTH(family_mailbox_receive);
   } > family_mailbox_receive =0xf000f0e7
   .family_mailbox_poll : {
     KEEP(*(.text.family_mailbox_poll))
     __family_mailbox_poll_body_end = .;
+    *(.text._RINvNtNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter7objects6locked10clear_flagNtB6_3CpuEB6_)
+    *(.text._RNvNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter6family14entry_snapshot)
+    *(.text._RNvNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter6family20delete_mailbox_entry)
+    __family_mailbox_poll_shared_end = .;
     . = ORIGIN(family_mailbox_poll) + LENGTH(family_mailbox_poll);
   } > family_mailbox_poll =0xf000f0e7
   .family_mailbox_timed_receive : {
     KEEP(*(.text.family_mailbox_timed_receive))
     __family_mailbox_timed_receive_body_end = .;
-    *(.text.*objects6locked*)
-    *(.text.*)
+    *(.text._RNvNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter6family16receive_admitted)
+    *(.text.OUTLINED_FUNCTION_6)
     __family_mailbox_timed_receive_shared_end = .;
     . = ORIGIN(family_mailbox_timed_receive) + LENGTH(family_mailbox_timed_receive);
   } > family_mailbox_timed_receive =0xf000f0e7

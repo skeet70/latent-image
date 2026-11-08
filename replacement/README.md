@@ -749,7 +749,22 @@ The host matrix passes 1,388 cases per domain across five roles, 13,880 native c
 
 Build `//replacement/rtos_objects:objects-rust`; run `//replacement/rtos_objects:objects-host-tests` and `//replacement/rtos_layout:rtos-layout-host-tests` through the checked-in environment. F2 adds `set_flag`, `send` and owned wait release over the owned scheduler primitives. Both domain stages, `:objects-f2-stage-a` and `:objects-f2-stage-b`, fit the original entry regions and reject unplaced sections.
 
-`//replacement/rtos_objects:family-suite-runner` builds its native dependencies and uses `Emulation.CachedNativeBatch.cachedObservedBatch` for the bounded F2 comparison. Supply `--layout`, `--loader-a`, `--loader-b`, `--owned-a-bin`, `--owned-b-bin`, `--cache-root` and `--results`; the built layout is `bazel-bin/replacement/rtos_scheduler/oracle/layout.json`. Keep cache/results under named `private-data/scratch` directories, `XM1_EMULATOR_SLOTS=1` and Bazel jobs at most 2. Completed raw batches are reused while current admission and semantic comparisons run again.
+`//replacement/rtos_objects:family-suite-runner` targets the fourteen-entry family and retained semaphore, queue and fixed-pool callers through `Emulation.CachedNativeBatch.cachedObservedBatch`. Both family stages fit their owned regions. Build the runner before taking a slot. Set `LOADER_A`, `LOADER_B`, `FAMILY_A_BIN`, `FAMILY_B_BIN` and `NATIVE_RUNNER` to absolute paths of the stock loaders, strictly linked family binaries and immutable native runner:
+
+```sh
+devenv shell -- host-build build --jobs=2 //replacement/rtos_objects:family-suite-runner
+XM1_EMULATOR_SLOTS=1 devenv shell -- host-build run --jobs=2 //emulation:emulator-slot -- \
+  "$PWD/bazel-bin/replacement/rtos_objects/family-suite-runner" \
+  --runner "$NATIVE_RUNNER" \
+  --layout "$PWD/bazel-bin/replacement/rtos_scheduler/oracle/layout.json" \
+  --manifest "$PWD/replacement/media_permit/rtos_slot_contracts.json" \
+  --loader-a "$LOADER_A" --loader-b "$LOADER_B" \
+  --family-a-bin "$FAMILY_A_BIN" --family-b-bin "$FAMILY_B_BIN" \
+  --cache-root "$PWD/private-data/scratch/RtosObjectsNative/family-cache" \
+  --results "$PWD/private-data/scratch/RtosObjectsNative/family-results.json"
+```
+
+Completed matching raw batches are reused while current comparisons and controls run again. The caller thunk keeps an eight-byte-aligned call SP, puts the fifth flag-wait argument on the stack, saves only LR and returns through BX LR. The subsystem oracle checks callee-saved registers and the 64 caller-live bytes above the initial SP; compiler-private bytes below SP are not compared. Native-case memory expectations describe complete initial regions plus patches, not sparse assertions. The retained F2 subset below remains separate from the family matrix.
 
 All 44 current comparisons pass, reusing 88 stock/owned observations (E-RTOS-OBJECTS-F2-NATIVE-SUBSET-150). An explicit missing-release-DMB control is refused independently of the acquisition barrier. This is a native subset, not the full family qualification. It checks return/selected-task boundaries, state effects, lock and notification ordering, caller-frame preservation and live suspended continuations. Its timer-removal stub proves arguments only; selected-task arrival does not resume the suspended service or prove that a remote receiver ran. Emitted blocking/handler-set/teardown bodies, full native qualification, the family system cutover and hardware remain open.
 
@@ -760,10 +775,6 @@ At `d356fd36`, all 81 object and 18 layout host cases pass, and a separate publi
 F4 adds host `delete_flag` and `delete_mailbox`: every queued waiter is released with `-49`, its timer is cancelled in its scheduler domain, and the object is reset before local dispatch. Mailbox deletion returns an allocation-free `MessageDrain` of caller-owned messages in delivery order. The raw `-49` word cannot distinguish deletion from forced release.
 
 At `ec3e28a6`, all 87 object and 18 layout cases pass, including one mailbox with untimed A and timed B receivers; both resume released with unchanged outputs. A separate public consumer exercises deletion, ordered draining and recreation (E-RTOS-OBJECTS-F4-HOST-150). Strict F2 stages again remain byte-identical to their baseline. Cross-core create/delete serialization remains open under F1a's lifecycle preconditions; generic host teardown does not establish emitted entries, full native qualification or the family cutover.
-
-The fourteen family entry adapters and retained wait helpers are implemented in `stage/family.rs` and `stage/abi.rs`. `:objects-family-stage-a` and `:objects-family-stage-b` use the existing owned extents and the owned S1/S2 components; the family adapter uses `opt-level=2` and LLVM machine outlining for shared A32 instruction sequences. The F2 build flags are unchanged. Polling shares the waiting execution cores without acquiring blocking admission requirements, and lifecycle entries keep their separate I+F scope. Wait-block ownership is a typed one-based object-domain ID; timer cancellation and readiness use the waiter's scheduler domain. Host behavior passes, but strict linking still refuses the family placement. This is not full native, integrated-system or hardware qualification. The current failed predicate and measured map are in `private-data/scratch/RtosFamilyStage/link-fit/summary.json`.
-
-Task wait admission requires I clear. The family wait bodies mask I and re-enable it on return without restoring an earlier full CPSR; lifecycle create/delete retain their separate saved I+F scope. Fatal kernel conditions remain non-returning: r0 is 1 for an invalid waiter domain, 2 for a still-queued resume and 3 for an unknown wait result.
 
 ## Owned timer heap host increment (#156)
 

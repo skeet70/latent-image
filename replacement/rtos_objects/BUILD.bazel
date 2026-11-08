@@ -261,11 +261,8 @@ haskell_binary(
     srcs = ["native/SuiteMain.hs"],
     main_file = "native/SuiteMain.hs",
     data = [
-        ":objects-f2-stage-a.bin",
-        ":objects-f2-stage-b.bin",
         ":objects-family-stage-a.bin",
         ":objects-family-stage-b.bin",
-        "//replacement/media_permit:rtos_slot_contracts.json",
         "//replacement/rtos_scheduler/oracle:layout.json",
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
@@ -279,6 +276,7 @@ haskell_binary(
         "//host:directory",
         "//host:filepath",
         "//host:host-support",
+        "//host:text",
         "//replacement/rtos_own_first/stage:own-first-artifact",
     ],
 )
