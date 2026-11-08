@@ -14,6 +14,10 @@ module Emulation.ObservationStream
   , TraceHitRef (..)
   , ObservationRef (..)
   , ObservationSpec (..)
+  , VerifiedObservation (..)
+  , decodeObservationRef
+  , resolveReference
+  , loadVerifiedObservation
   , writeObservationStream
   , foldTraceHitRows
   , foldTraceHitLines
@@ -22,9 +26,9 @@ module Emulation.ObservationStream
   , withRowReader
   ) where
 
-import Control.Exception (bracket, evaluate)
+import Control.Exception (IOException, bracket, evaluate, try)
 import Control.Monad (foldM, forM_, unless)
-import Data.Aeson (Value (..), eitherDecodeStrict', encode, object, toJSON, withObject, (.:), (.=))
+import Data.Aeson (Value (..), eitherDecodeFileStrict', eitherDecodeStrict', encode, object, toJSON, withObject, (.:), (.=))
 import qualified Data.Aeson as J
 import qualified Data.Aeson.KeyMap as KM
 import Data.Aeson.Types (Parser, parseEither)
@@ -104,6 +108,72 @@ instance J.ToJSON ObservationRef where
     [ "phase" .= phase, "path" .= path, "sha256" .= sha256Hex digest
     , "bytes" .= bytes, "trace_hits" .= hits ]
 
+instance J.FromJSON ObservationRef where
+  parseJSON = withObject "observation reference" $ \fields -> do
+    phase <- fields .: "phase"
+    path <- fields .: "path"
+    text <- fields .: "sha256"
+    digest <- either fail pure (parseSha256Hex text)
+    bytes <- fields .: "bytes"
+    unless (bytes >= 0) (fail "observation reference byte count is negative")
+    hits <- fields .: "trace_hits"
+    pure (ObservationRef phase path digest bytes hits)
+
+-- | An observation reference and the document it names, read and checked against the
+-- reference's byte count, digest and phase.
+data VerifiedObservation = VerifiedObservation
+  { verifiedObservationRef :: ObservationRef
+  , verifiedObservationPath :: FilePath
+  , verifiedObservationValue :: Value
+  }
+
+-- | Parses an observation reference out of a receipt document.
+decodeObservationRef :: Value -> Either String ObservationRef
+decodeObservationRef value = parseEither (J.parseJSON :: Value -> Parser ObservationRef) value
+
+-- | Resolves a reference's plain file name inside a directory. Absolute, empty, @.@, @..@ and
+-- nested names are refused.
+resolveReference :: FilePath -> FilePath -> Either String FilePath
+resolveReference directory relative
+  | null relative = Left "reference path is empty"
+  | relative == "." || relative == ".." = Left "reference path is not a plain file name"
+  | isAbsolute relative || takeFileName relative /= relative || takeDirectory relative /= "." =
+      Left "reference path is not a plain file name"
+  | otherwise = Right (directory </> relative)
+
+-- | Reads the document a reference names, checks its byte count, digest and phase, and decodes
+-- it. Row references stay with 'withRowReader' and 'foldTraceHitRows'.
+loadVerifiedObservation :: FilePath -> ObservationRef -> IO (Either String VerifiedObservation)
+loadVerifiedObservation directory ref = case resolveReference directory (observationRefPath ref) of
+  Left problem -> pure (Left problem)
+  Right path -> do
+    present <- doesFileExist path
+    if not present then pure (Left ("observation document is missing: " ++ path)) else do
+      size <- getFileSize path
+      if fromIntegral size /= observationRefBytes ref
+        then pure (Left ("observation document has " ++ show size ++ " bytes, the reference names " ++ show (observationRefBytes ref)))
+        else do
+          digest <- sha256File path
+          if digest /= observationRefSha256 ref
+            then pure (Left "observation document digest differs from its reference")
+            else do
+              decoded <- try (eitherDecodeFileStrict' path) :: IO (Either IOException (Either String Value))
+              pure $ case decoded of
+                Left problem -> Left (path ++ ": " ++ show problem)
+                Right (Left problem) -> Left (path ++ ": " ++ problem)
+                Right (Right value) -> case phaseOf value of
+                  Nothing -> Left "observation document has no phase"
+                  Just phase
+                    | phase == observationRefPhase ref -> Right (VerifiedObservation ref path value)
+                    | otherwise -> Left ("observation document phase " ++ T.unpack phase
+                        ++ " differs from its reference " ++ T.unpack (observationRefPhase ref))
+
+phaseOf :: Value -> Maybe T.Text
+phaseOf (Object fields) = case KM.lookup "phase" fields of
+  Just (String phase) -> Just phase
+  _ -> Nothing
+phaseOf _ = Nothing
+
 foldTraceHitSources :: [TraceHitSource] -> (a -> TraceHit -> IO a) -> a -> IO a
 foldTraceHitSources sources step initial = do
   state <- newIORef initial
@@ -161,11 +231,9 @@ foldTraceHitLines directory value step initial = case value of
   _ -> pure (Left "observation is not an object")
 
 foldSidecarLines :: FilePath -> TraceHitRef -> (a -> B.ByteString -> IO a) -> a -> IO (Either String a)
-foldSidecarLines directory ref step initial
-  | isAbsolute relative || takeFileName relative /= relative || takeDirectory relative /= "." =
-      pure (Left "trace-hit reference path is not a plain file name")
-  | otherwise = do
-      let path = directory </> relative
+foldSidecarLines directory ref step initial = case resolveReference directory relative of
+  Left problem -> pure (Left problem)
+  Right path -> do
       present <- doesFileExist path
       if not present then pure (Left ("trace-hit sidecar is missing: " ++ path)) else do
         parsed <- bracket (openBinaryFile path ReadMode) hClose readLines
@@ -310,11 +378,9 @@ withRowReader directory value action = case traceField value of
   Right _ -> pure (Left "trace_hits is neither an array nor a reference")
 
 withSidecar :: FilePath -> TraceHitRef -> (RowReader -> IO (Either String a)) -> IO (Either String a)
-withSidecar directory ref action
-  | isAbsolute relative || takeFileName relative /= relative || takeDirectory relative /= "." =
-      pure (Left "trace-hit reference path is not a plain file name")
-  | otherwise = do
-      let path = directory </> relative
+withSidecar directory ref action = case resolveReference directory relative of
+  Left problem -> pure (Left problem)
+  Right path -> do
       present <- doesFileExist path
       if not present then pure (Left ("trace-hit sidecar is missing: " ++ path)) else do
         handle <- openBinaryFile path ReadMode
@@ -386,11 +452,9 @@ foldTraceHitRows directory value step initial = case value of
   _ -> pure (Left "observation is not an object")
 
 foldSidecar :: FilePath -> TraceHitRef -> (a -> Value -> Either String a) -> a -> IO (Either String a)
-foldSidecar directory ref step initial
-  | isAbsolute relative || takeFileName relative /= relative || takeDirectory relative /= "." =
-      pure (Left "trace-hit reference path is not a plain file name")
-  | otherwise = do
-      let path = directory </> relative
+foldSidecar directory ref step initial = case resolveReference directory relative of
+  Left problem -> pure (Left problem)
+  Right path -> do
       present <- doesFileExist path
       if not present then pure (Left ("trace-hit sidecar is missing: " ++ path)) else do
         parsed <- bracket (openBinaryFile path ReadMode) hClose readLines
