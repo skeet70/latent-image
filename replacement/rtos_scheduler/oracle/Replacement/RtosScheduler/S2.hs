@@ -211,13 +211,14 @@ regions image role row = code ++ dat
     imageBase = if isStock role then b else at d 0xb00
     imageEnd = imageBase + fromIntegral (B.length raw)
     blocks = [(0xb00,0xb24),(0x3640,0x37dc),(0x37fc,0x3810)] ++ relocated
-    relocated = if isStock role then [] else mergedRelocated
+    relocated = if isStock role || not aggregate then [] else mergedRelocated
     mergedRelocated = case relocRegions (imageReloc image) of
       [] -> []
       spans -> [(minimum (map fst spans), maximum (map snd spans))]
+    aggregate = any (\(a, _) -> not (any (\(lo, hi) -> a >= lo && a < hi) [(0xb00,0xb24),(0x3640,0x37dc),(0x37fc,0x3810)])) (relocRegions (imageReloc image))
     installed = if isStock role then stock else foldl install stock blocks
     install bytes (a,z) = replace b bytes (b+a) (slice imageBase imageEnd raw (b+a) (b+z))
-    codeSpans = [(0xb00,0xb24),(0x252c, if isStock role then 0x3810 else maximum (0x403c : map snd (relocRegions (imageReloc image))))]
+    codeSpans = [(0xb00,0xb24),(0x252c, if isStock role || not aggregate then 0x3810 else maximum (0x403c : map snd (relocRegions (imageReloc image))))]
     code = [mk ("code-"++show a) (b+a) ReadExecute (slice b (b+fromIntegral (B.length stock)) installed (b+a) (b+z)) | (a,z) <- codeSpans]
     (low,high) = (context d, running d + 12)
     LockTag tag = lockTag row
