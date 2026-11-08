@@ -263,7 +263,7 @@ main = do
         , Written (Address 0x400545c0) 4 1
         , Written (Address 0x400545c4) 4 0
         ])
-      pending = Pending (FamilySemantic FlagTimedWait) DomainA [1,1,0,0x8100] pendingBefore (Just pendingTerminal) task 0x8000 0x53 0x48b30 10 (Just 0xd3) (Just 110) 0
+      pending = Pending (FamilySemantic FlagTimedWait) DomainA [1,1,0,0x8100] pendingBefore (Just pendingTerminal) task 0x8000 0x53 0x48b30 10 (Just 0xd3) (Just 110) (Just 110) 10 0
       release owner core call at address value = ReleaseWitness owner core call at (Address address) value
       callerScheduler = release task 0 90 100 0x400545c0 0
       callerObject = release task 0 95 102 0x400545c4 0

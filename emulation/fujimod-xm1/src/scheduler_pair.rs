@@ -375,6 +375,7 @@ struct EntryState {
     origin: Option<DispatchPoint>,
     kernel_context: u32,
     task_stack: Option<TaskStack>,
+    order: u64,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -403,15 +404,16 @@ enum Completion { Return, Discard, Dispatched }
 
 #[derive(Clone, Debug, Serialize)]
 struct Boundary {
-    kind: BoundaryKind, address: Hex, instructions: u64, core: Core, task: Read,
+    kind: BoundaryKind, address: Hex, instructions: u64, order: u64, core: Core, task: Read,
     sp: Hex, cpsr: u32, registers: [u32; 16], memory: Vec<WordValue>,
     writes: Vec<CapturedWrite>, bank: Vec<CapturedWrite>, value: Option<u32>, cpacr: u32, fpexc: u32, tpidrurw: u32,
 }
 
 impl Ord for Boundary {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        (self.kind,self.address,self.core,self.task,self.sp,self.cpsr,&self.registers,&self.memory,&self.writes,&self.bank,self.value,(self.cpacr,self.fpexc,self.tpidrurw))
-            .cmp(&(other.kind,other.address,other.core,other.task,other.sp,other.cpsr,&other.registers,&other.memory,&other.writes,&other.bank,other.value,(other.cpacr,other.fpexc,other.tpidrurw)))
+        (self.kind,self.address,self.order,self.core,self.task,self.sp,self.cpsr,&self.registers,&self.memory,&self.writes,&self.bank,self.value)
+            .cmp(&(other.kind,other.address,other.order,other.core,other.task,other.sp,other.cpsr,&other.registers,&other.memory,&other.writes,&other.bank,other.value))
+            .then_with(|| (self.cpacr,self.fpexc,self.tpidrurw).cmp(&(other.cpacr,other.fpexc,other.tpidrurw)))
     }
 }
 impl PartialOrd for Boundary {
@@ -679,7 +681,7 @@ impl Ord for WriteOrigin {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-struct CapturedWrite { #[serde(flatten)] write: Written, origin: WriteOrigin }
+struct CapturedWrite { #[serde(flatten)] write: Written, origin: WriteOrigin, order: u64 }
 
 /// # Safety
 /// The CPU must outlive every callback that reads the returned pointer.
@@ -737,7 +739,7 @@ unsafe fn data_write(_access: Access, address: u64, size: i32, value: i64, data:
                 let sequence = capture.sequence.get();
                 capture.sequence.set(sequence+1);
                 capture.rows.push((sequence,CapturedWrite { write: Written { address: Hex(address), size: size as u32,
-                    value: value as u32 & mask }, origin }));
+                    value: value as u32 & mask }, origin, order: sequence }));
             }
             Err(error) => { capture.failure = Some(error); }
         }
@@ -1283,6 +1285,12 @@ impl Observer<'_> {
         let records = guard.watch.records.borrow();
         require(records.violation().is_none() && records.row_count() == 0, "an immutable-byte watch recorded a write or a violation")
     }
+    fn next_order(&self) -> u64 {
+        let order = self.write_sequence.get();
+        self.write_sequence.set(order+1);
+        order
+    }
+
     fn begin_data(&mut self, machine: &Machine) -> Result<(), String> {
         if self.data_hooks.is_empty() {
             for core in 0..2 {
@@ -1386,6 +1394,7 @@ impl Observer<'_> {
                 Semantic::Family { name } => family_snapshot(&board, context.core, tcm, domain, name, context.arguments, context.sp)?,
                 _ => root_snapshot(&board, context.core, tcm, domain)?,
             },
+            order: self.next_order(),
         };
         if entry.kernel_context == 0 && matches!(context.mode(),0x10 | 0x13 | 0x1f) {
             if let Read::Committed { value: task } = context.current {
@@ -1465,7 +1474,7 @@ impl Observer<'_> {
             })).collect::<Result<Vec<_>, String>>()?;
             if matches!(call.entry.slot.semantic, Semantic::Service { .. } | Semantic::Family { .. }) && completion == Completion::Return {
                 call.record(Boundary { kind: BoundaryKind::Return, address: Hex(context.pc), instructions: context.instructions,
-                    core: context.core, task: context.current, sp: Hex(context.sp), cpsr: context.cpsr,
+                    order: self.next_order(), core: context.core, task: context.current, sp: Hex(context.sp), cpsr: context.cpsr,
                     registers: context.registers, memory: memory.clone(), writes: Vec::new(),
                     bank: Vec::new(), value: Some(context.r0),
                     cpacr: board.register(context.core, arm::Register::Cpacr)?,
@@ -1477,7 +1486,7 @@ impl Observer<'_> {
                     if owns_origin(&call.entry, &write.origin) {
                         require(self.lock_events.len() < LOCK_LIMIT, "lock event bound exceeded")?;
                         self.lock_events.push(LockEvent { task: write.origin.task.0, core: write.origin.core,
-                            call: call.entered, at: write.origin.instructions, address: write.write.address, value: write.write.value });
+                            call: call.entry.order, at: write.order, address: write.write.address, value: write.write.value });
                     }
                 }
             }
@@ -1509,12 +1518,13 @@ impl Observer<'_> {
         let keys: Vec<ReturnKey> = self.open.pending.iter()
             .filter(|(_, calls)| calls.iter().any(|call| matches!(call.entry.slot.semantic, Semantic::Family { .. }) && call.entry.task == Read::Committed { value: task }))
             .map(|(key, _)| *key).collect();
+        let order = self.next_order();
         for key in keys {
             if let Some(calls) = self.open.pending.get_mut(&key) {
                 for call in calls.iter_mut().filter(|call| matches!(call.entry.slot.semantic, Semantic::Family { .. }) && call.entry.task == Read::Committed { value: task }) {
                     let memory = call.entry.memory.iter().map(|word| Ok(WordValue { address: word.address, value: board.word(context.core, tcm, word.address.0)? })).collect::<Result<Vec<_>, String>>()?;
                     call.record(Boundary { kind: BoundaryKind::TimerConsume, address: Hex(context.pc), instructions: context.instructions,
-                        core: context.core, task: Read::Committed { value: task }, sp: Hex(context.sp), cpsr: context.cpsr,
+                        order, core: context.core, task: Read::Committed { value: task }, sp: Hex(context.sp), cpsr: context.cpsr,
                         registers: context.registers, memory, writes: Vec::new(), bank: Vec::new(), value: Some(entry),
                         cpacr: board.register(context.core, arm::Register::Cpacr)?,
                         fpexc: board.register(context.core, arm::Register::Fpexc)?,
@@ -1526,6 +1536,7 @@ impl Observer<'_> {
     }
 
     fn boundary(&mut self, machine: &Machine, context: &Context, tcm: [u32; 2], kind: BoundaryKind, value: Option<u32>) -> Result<(), String> {
+        let order = self.next_order();
         let board = Board { machine, maps: &self.maps };
         for (key, calls) in &mut self.open.pending {
             if key.core != context.core { continue; }
@@ -1537,7 +1548,7 @@ impl Observer<'_> {
                     address: word.address, value: board.word(context.core, tcm, word.address.0)?,
                 })).collect::<Result<Vec<_>, String>>()?;
                 call.record(Boundary { kind, address: Hex(context.pc), instructions: context.instructions,
-                    core: context.core, task: context.current, sp: Hex(context.sp), cpsr: context.cpsr,
+                    order, core: context.core, task: context.current, sp: Hex(context.sp), cpsr: context.cpsr,
                     registers: context.registers, memory, writes: Vec::new(),
                     bank: Vec::new(), value,
                     cpacr: board.register(context.core, arm::Register::Cpacr)?,
@@ -1594,7 +1605,7 @@ impl Observer<'_> {
                         && call.dispatch_complete(key, &transfer, None));
                     require(closed.len() == 1, "prefetch abort has no unique trampoline call")?;
                     let boundary = Boundary { kind: BoundaryKind::PrefetchAbort, address: Hex(context.pc),
-                        instructions: context.instructions, core, task: context.current, sp: Hex(context.sp),
+                        instructions: context.instructions, order: self.next_order(), core, task: context.current, sp: Hex(context.sp),
                         cpsr: context.cpsr, registers: context.registers, memory: Vec::new(), writes: Vec::new(),
                         bank: Vec::new(), value: Some(transfer.pc),
                         cpacr: board.register(core, arm::Register::Cpacr)?,
@@ -2062,13 +2073,13 @@ mod tests {
         OpenCall { entry: EntryState { slot: SlotId { domain: Domain::A, entry: Hex(0x45cd4),
             semantic: Semantic::Service { name: Service::SleepTask } }, core: Core::Primary, cpsr: 0x53,
             arguments: [0;4], memory: vec![], r0: 0, lr: Hex(0x8000), task: Read::Committed { value: 0x9000 },
-            sp: Hex(0xa000), registers: [0;16], cpacr: 0, fpexc: 0, tpidrurw: 7, origin: None, kernel_context: 0, task_stack: None },
+            sp: Hex(0xa000), registers: [0;16], cpacr: 0, fpexc: 0, tpidrurw: 7, origin: None, kernel_context: 0, task_stack: None, order: 0 },
             entered: 1, writes: vec![], bank: vec![], history: vec![], write_cursor: 0, bank_cursor: 0, suspended: false, terminal_memory: None }
     }
 
     fn captured(write: Written) -> CapturedWrite {
         CapturedWrite { write, origin: WriteOrigin { core: Core::Primary, pc: Hex(0x45cd4), sp: Hex(0x9ff0),
-            cpsr: 0x53, task: Hex(0x9000), kernel_context: 0, instructions: 1 } }
+            cpsr: 0x53, task: Hex(0x9000), kernel_context: 0, instructions: 1 }, order: 0 }
     }
 
     fn boundary(kind: BoundaryKind) -> Boundary {
@@ -2076,7 +2087,7 @@ mod tests {
         registers[0] = 0xffff_ffef;
         registers[13] = 0x9fd0;
         registers[15] = 0x43640;
-        Boundary { kind, address: Hex(0x43640), instructions: 20, core: Core::Primary,
+        Boundary { kind, address: Hex(0x43640), instructions: 20, order: 0, core: Core::Primary,
             task: Read::Committed { value: 0x9000 }, sp: Hex(0x9fd0), cpsr: 0xd3, registers,
             memory: vec![WordValue { address: Hex(0x9018), value: Read::Committed { value: 0x9fd0 } }],
             writes: vec![], bank: vec![], value: Some(0xffff_ffef), cpacr: 0xf00000, fpexc: 0, tpidrurw: 7 }

@@ -204,12 +204,14 @@ pendingOf = withObject "pending" $ \p -> do
       entryValue <- withObject "slot" (.: "entry") slot
       entryAddress <- parseHex entryValue
       entryCore <- entry .: "core" >>= coreOf
+      entryOrder <- entry .: "order"
       terminal <- p .:? "terminal_memory" >>= traverse memoryOf
-      history <- p .:? "history" >>= maybe (pure []) (mapM (withObject "boundary" $ \b -> (,,) <$> b .: "kind" <*> b .: "cpsr" <*> b .: "instructions"))
-      let saves = [(savedCpsr,savedAt) | (kind,savedCpsr,savedAt) <- history, kind == ("save" :: T.Text)]
-          saveCpsr = case saves of { [] -> Nothing; values -> Just (fst (last values)) }
-          saveAt = case saves of { [] -> Nothing; values -> Just (snd (last values)) }
-      pure (Left (F.Pending semantic domain arguments before terminal task sp cpsr entryAddress entered saveCpsr saveAt entryCore))
+      history <- p .:? "history" >>= maybe (pure []) (mapM (withObject "boundary" $ \b -> (,,,) <$> b .: "kind" <*> b .: "cpsr" <*> b .: "instructions" <*> b .: "order"))
+      let saves = [(savedCpsr,savedAt,savedOrder) | (kind,savedCpsr,savedAt,savedOrder) <- history, kind == ("save" :: T.Text)]
+          saveCpsr = case saves of { [] -> Nothing; values -> Just ((\(c,_,_) -> c) (last values)) }
+          saveAt = case saves of { [] -> Nothing; values -> Just ((\(_,a,_) -> a) (last values)) }
+          saveOrder = case saves of { [] -> Nothing; values -> Just ((\(_,_,o) -> o) (last values)) }
+      pure (Left (F.Pending semantic domain arguments before terminal task sp cpsr entryAddress entered saveCpsr saveAt saveOrder entryOrder entryCore))
     _ -> pure (Right entered)
 
 expect :: Refusal -> Bool -> Either Refusal ()

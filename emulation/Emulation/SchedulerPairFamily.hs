@@ -131,6 +131,8 @@ data Pending = Pending
   , pendingEntered :: Word64
   , pendingSaveCpsr :: Maybe Word32
   , pendingSaveAt :: Maybe Word64
+  , pendingSaveOrder :: Maybe Word64
+  , pendingEntryOrder :: Word64
   , pendingCore :: Int
   } deriving (Eq,Show)
 
@@ -185,11 +187,11 @@ checkPendingFamily releases pending = case (pendingSemantic pending, pendingTerm
       schedulerLock <- wordAt schedulerLockAddress terminal
       objectLock <- wordAt lockWord terminal
       saveCpsr <- maybe (Left FamilyLifetime) Right (pendingSaveCpsr pending)
-      saveAt <- maybe (Left FamilyLifetime) Right (pendingSaveAt pending)
+      saveOrder <- maybe (Left FamilyLifetime) Right (pendingSaveOrder pending)
       expect FamilyLifetime (saveCpsr .&. 0x80 /= 0)
       expect FamilyLifetime (saveCpsr .&. 0x160 == pendingCpsr pending .&. 0x160)
       let unlocked lock = [w | w <- releases, releaseTask w == task, releaseCore w == pendingCore pending,
-              releaseCall w >= pendingEntered pending, releaseAt w < saveAt, releaseAddress w == Address lock, releaseValue w == 0]
+              releaseCall w >= pendingEntryOrder pending, releaseAt w < saveOrder, releaseAddress w == Address lock, releaseValue w == 0]
           callerUnlockAt lock = maximum (0 : map releaseAt (unlocked lock))
           acquired lock = [w | w <- releases, releaseTask w /= task, releaseAt w > callerUnlockAt lock, releaseAddress w == Address lock, releaseValue w == 1]
           lockOk lock value = not (null (unlocked lock)) && (value == 0 || (value == 1 && not (null (acquired lock))))
