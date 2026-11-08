@@ -1,39 +1,47 @@
-/* Loader B: owned global-lock entries at their stock extents and the bodies in native scratch. */
+/* Loader B: the owned global-lock entries and atomic helper closure at their stock extents. */
 ENTRY(xm1_rtos_global_lock_try)
 
 MEMORY {
-  try_entry (rx) : ORIGIN = 0xd12cc, LENGTH = 0x1c
-  release_entry (rx) : ORIGIN = 0xd12e8, LENGTH = 0x1c
-  observe_entry (rx) : ORIGIN = 0xd1304, LENGTH = 0x1c
-  bodies (rx) : ORIGIN = 0xe0000, LENGTH = 0xc4
+  slot_try (rx) : ORIGIN = 0xd12cc, LENGTH = 0x1c
+  slot_release (rx) : ORIGIN = 0xd12e8, LENGTH = 0x1c
+  slot_observe (rx) : ORIGIN = 0xd1304, LENGTH = 0x1c
+  helper_try (rx) : ORIGIN = 0xd27d4, LENGTH = 0x28
+  helper_release (rx) : ORIGIN = 0xd27fc, LENGTH = 0x2c
+  helper_observe (rx) : ORIGIN = 0xd2828, LENGTH = 0x8
 }
 
 SECTIONS {
-  .try_entry : {
-    KEEP(*(.text.global_lock_try_entry))
-    __try_entry_end = .;
-    . = ORIGIN(try_entry) + LENGTH(try_entry);
-  } > try_entry =0xf000f0e7
-  .release_entry : {
-    KEEP(*(.text.global_lock_release_entry))
-    __release_entry_end = .;
-    . = ORIGIN(release_entry) + LENGTH(release_entry);
-  } > release_entry =0xf000f0e7
-  .observe_entry : {
-    KEEP(*(.text.global_lock_observe_entry))
-    __observe_entry_end = .;
-    . = ORIGIN(observe_entry) + LENGTH(observe_entry);
-  } > observe_entry =0xf000f0e7
-  .bodies : {
-    KEEP(*(.text.global_lock_try_body))
-    __try_body_end = .;
-    KEEP(*(.text.global_lock_release_body))
-    __release_body_end = .;
-    KEEP(*(.text.global_lock_observe_body))
-    __observe_body_end = .;
-    . = ORIGIN(bodies) + LENGTH(bodies);
-  } > bodies =0xf000f0e7
-  .forbidden (NOLOAD) : { *(.text .text.* .rodata .rodata.* .data .data.* .bss .bss.* COMMON) } > bodies
+  .slot_try : {
+    KEEP(*(.text.global_lock_try))
+    __slot_try_end = .;
+    . = ORIGIN(slot_try) + LENGTH(slot_try);
+  } > slot_try =0xf000f0e7
+  .slot_release : {
+    KEEP(*(.text.global_lock_release))
+    __slot_release_end = .;
+    . = ORIGIN(slot_release) + LENGTH(slot_release);
+  } > slot_release =0xf000f0e7
+  .slot_observe : {
+    KEEP(*(.text.global_lock_observe))
+    __slot_observe_end = .;
+    . = ORIGIN(slot_observe) + LENGTH(slot_observe);
+  } > slot_observe =0xf000f0e7
+  .helper_try : {
+    KEEP(*(.text.global_lock_helper_try))
+    __helper_try_end = .;
+    . = ORIGIN(helper_try) + LENGTH(helper_try);
+  } > helper_try =0xf000f0e7
+  .helper_release : {
+    KEEP(*(.text.global_lock_helper_release))
+    __helper_release_end = .;
+    . = ORIGIN(helper_release) + LENGTH(helper_release);
+  } > helper_release =0xf000f0e7
+  .helper_observe : {
+    KEEP(*(.text.global_lock_helper_observe))
+    __helper_observe_end = .;
+    . = ORIGIN(helper_observe) + LENGTH(helper_observe);
+  } > helper_observe =0xf000f0e7
+  .forbidden (NOLOAD) : { *(.text .text.* .rodata .rodata.* .data .data.* .bss .bss.* COMMON) } > helper_observe
   .ARM.attributes 0 : { *(.ARM.attributes) }
   .symtab 0 : { *(.symtab) }
   .shstrtab 0 : { *(.shstrtab) }
@@ -41,13 +49,16 @@ SECTIONS {
   /DISCARD/ : { *(.ARM.exidx .ARM.exidx.* .ARM.extab .ARM.extab.* .comment .note .note.*) }
 }
 
-ASSERT(xm1_rtos_global_lock_try == ORIGIN(try_entry), "+0x161c entry is not at its stock address")
-ASSERT(__try_entry_end == ORIGIN(try_entry) + 4, "+0x161c veneer size differs")
-ASSERT(xm1_rtos_global_lock_release == ORIGIN(release_entry), "+0x1620 entry is not at its stock address")
-ASSERT(__release_entry_end == ORIGIN(release_entry) + 4, "+0x1620 veneer size differs")
-ASSERT(xm1_rtos_global_lock_observe == ORIGIN(observe_entry), "+0x1624 entry is not at its stock address")
-ASSERT(__observe_entry_end == ORIGIN(observe_entry) + 4, "+0x1624 veneer size differs")
-ASSERT(xm1_rtos_global_lock_try_body == ORIGIN(bodies), "try body is not at the scratch origin")
-ASSERT(__try_body_end <= __release_body_end && __release_body_end <= __observe_body_end, "body order differs")
-ASSERT(__observe_body_end <= ORIGIN(bodies) + LENGTH(bodies), "bodies exceed the native scratch region")
+ASSERT(xm1_rtos_global_lock_try == ORIGIN(slot_try), "+0x161c entry is not at its stock address")
+ASSERT(__slot_try_end <= ORIGIN(slot_try) + LENGTH(slot_try), "+0x161c entry exceeds its stock extent")
+ASSERT(xm1_rtos_global_lock_release == ORIGIN(slot_release), "+0x1620 entry is not at its stock address")
+ASSERT(__slot_release_end <= ORIGIN(slot_release) + LENGTH(slot_release), "+0x1620 entry exceeds its stock extent")
+ASSERT(xm1_rtos_global_lock_observe == ORIGIN(slot_observe), "+0x1624 entry is not at its stock address")
+ASSERT(__slot_observe_end <= ORIGIN(slot_observe) + LENGTH(slot_observe), "+0x1624 entry exceeds its stock extent")
+ASSERT(helper_try == ORIGIN(helper_try), "try helper is not at its stock address")
+ASSERT(__helper_try_end <= ORIGIN(helper_try) + LENGTH(helper_try), "try helper exceeds its stock extent")
+ASSERT(helper_release == ORIGIN(helper_release), "release helper is not at its stock address")
+ASSERT(__helper_release_end <= ORIGIN(helper_release) + LENGTH(helper_release), "release helper exceeds its stock extent")
+ASSERT(helper_observe == ORIGIN(helper_observe), "observe helper is not at its stock address")
+ASSERT(__helper_observe_end <= ORIGIN(helper_observe) + LENGTH(helper_observe), "observe helper exceeds its stock extent")
 ASSERT(SIZEOF(.forbidden) == 0, "unplaced code or writable data")

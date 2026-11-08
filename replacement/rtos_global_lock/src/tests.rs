@@ -114,14 +114,6 @@ fn a_nonzero_argument_is_the_caller_word() {
 }
 
 #[test]
-fn the_stamp_constructors_recover_the_stock_tags() {
-    assert_eq!(LockStamp::irq_vector(CoreIndex(0)).raw(), 0x11);
-    assert_eq!(LockStamp::irq_vector(CoreIndex(1)).raw(), 0x12);
-    assert_eq!(LockStamp::critical_section(CoreIndex(0)).raw(), 0x21);
-    assert_eq!(LockStamp::critical_section(CoreIndex(1)).raw(), 0x22);
-}
-
-#[test]
 fn try_acquires_a_free_word_and_barriers_after_the_store() {
     let sim = Sim::new();
     let result = try_acquire(&sim, LockWord::DEFAULT_GLOBAL, LockStamp(0x11));

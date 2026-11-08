@@ -8,27 +8,14 @@ pub mod layout;
 
 pub use layout::GuestAddress;
 
-/// The value `+0x161c` stores: the acquirer's identity. The stock body stores `r1`
-/// unchanged and checks nothing about it.
+/// The value `+0x161c` stores: the acquirer's identity, taken from the caller's `r1`.
+/// The retained spellings are the IRQ vector's `(core + 1) | 0x10` and the image4
+/// critical pair's `(core + 1) | 0x20`; the body checks neither.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(transparent)]
 pub struct LockStamp(pub u32);
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[repr(transparent)]
-pub struct CoreIndex(pub u32);
-
 impl LockStamp {
-    /// The stock IRQ vector's hold of the default word: `(core + 1) | 0x10`, 0x11 or 0x12.
-    pub const fn irq_vector(core: CoreIndex) -> Self {
-        Self(core.0.wrapping_add(1) | 0x10)
-    }
-
-    /// The image4 critical pair's hold of the default word: `(core + 1) | 0x20`, 0x21 or 0x22.
-    pub const fn critical_section(core: CoreIndex) -> Self {
-        Self(core.0.wrapping_add(1) | 0x20)
-    }
-
     pub const fn raw(self) -> u32 {
         self.0
     }

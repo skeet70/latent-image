@@ -74,13 +74,10 @@ stackPointer = stackBase + 0x800
 exitAddress :: Word32
 exitAddress = 0x0100_0200
 
-entryBase, entrySize, bodyBase, bodySize :: Domain -> Word32
+entryBase, entrySize :: Domain -> Word32
 entryBase DomainA = 0x412cc
 entryBase DomainB = 0xd12cc
 entrySize _ = 0x54
-bodyBase DomainA = 0x50000
-bodyBase DomainB = 0xe0000
-bodySize _ = 0xc4
 
 atomicsBase, atomicsSize :: Domain -> Word32
 atomicsBase DomainA = 0x427d4
@@ -290,8 +287,8 @@ caseFor domain role stockImage ownedImage symbols one =
         , mkRegion (RegionId "atomics") (GuestAddress (fromIntegral (atomicsBase domain))) (fromIntegral (atomicsSize domain)) ReadExecute (slice stockImage (atomicsBase domain) (atomicsSize domain))
         ]
       Owned ->
-        [ mkRegion (RegionId "entries") (GuestAddress (fromIntegral (entryBase domain))) (fromIntegral (entrySize domain)) ReadExecute (slice ownedImage (entryBase domain) (entrySize domain))
-        , mkRegion (RegionId "bodies") (GuestAddress (fromIntegral (bodyBase domain))) (fromIntegral (bodySize domain)) ReadExecute (slice ownedImage (bodyBase domain) (bodySize domain))
+        [ mkRegion (RegionId "slots") (GuestAddress (fromIntegral (entryBase domain))) (fromIntegral (entrySize domain)) ReadExecute (slice ownedImage (entryBase domain) (entrySize domain))
+        , mkRegion (RegionId "atomics") (GuestAddress (fromIntegral (atomicsBase domain))) (fromIntegral (atomicsSize domain)) ReadExecute (slice ownedImage (atomicsBase domain) (atomicsSize domain))
         ]
     functions = case role of
       Stock ->
@@ -343,7 +340,7 @@ parseOwnedSymbols domain path = do
   rows <- lines <$> readFile path
   pure (concatMap row rows)
   where
-    spans = [(entryBase domain, entrySize domain), (bodyBase domain, bodySize domain)]
+    spans = [(entryBase domain, entrySize domain), (atomicsBase domain, atomicsSize domain)]
     inside address size = any (\(base, length') -> address >= base && address + size <= base + length') spans
     row line = case words line of
       [a, z, kind, _] -> case (parseWord32 a, parseWord32 z) of
@@ -360,7 +357,11 @@ checkStockBytes domain loader = do
 runDomain :: FilePath -> FilePath -> FilePath -> Domain -> Image -> Image -> [(Word32, Word32)] -> IO ([CaseRun], [ControlRun])
 runDomain runner cacheRoot directory domain stockImage ownedImage symbols = do
   either error pure (checkStockBytes domain stockImage)
-  unless (any ((== bodyBase domain) . fst) symbols) (error "owned bodies are not at the scratch origin")
+  let origins =
+        [ entryBase domain, entryBase domain + 0x1c, entryBase domain + 0x38
+        , atomicsBase domain, atomicsBase domain + 0x28, atomicsBase domain + 0x54
+        ]
+  unless (map fst symbols == origins) (error "owned symbols are not the six stock extents")
   let stockSpecs = map (caseFor domain Stock stockImage ownedImage symbols) cases
       ownedSpecs = map (caseFor domain Owned stockImage ownedImage symbols) cases
   stockBatch <- writeBatch (directory </> "stock") stockSpecs

@@ -824,7 +824,7 @@ Pop and removal invalidate membership; removing a detached entry does not change
 
 ## Owned global-lock root extensions (#156)
 
-`replacement/rtos_global_lock` owns the stock root extensions `+0x161c` (single-try acquire), `+0x1620` (release) and `+0x1624` (observe) of both loaders. `LockWord::from_argument` applies the stock `r0` rule, `0` selecting `0x400c0804`; `LockStamp` carries the stored identity and recovers the IRQ vector's `0x11`/`0x12` and critical pair's `0x21`/`0x22` spellings without validating the value. Try refuses a nonzero word at once and repeats the exclusive pair after a lost store; release clears any nonzero word; observe is one plain load. None reads CPSR and none allocates.
+`replacement/rtos_global_lock` owns the stock root extensions `+0x161c` (single-try acquire), `+0x1620` (release) and `+0x1624` (observe) of both loaders. `LockWord::from_argument` applies the stock `r0` rule, `0` selecting `0x400c0804`; `LockStamp` carries the stored identity; the retained spellings are the IRQ vector's `0x11`/`0x12` and the critical pair's `0x21`/`0x22`, and no value is validated. Try refuses a nonzero word at once and repeats the exclusive pair after a lost store; release clears any nonzero word; observe is one plain load. None reads CPSR and none allocates.
 
 The entries are 4-byte branches at their stock extents, A `0x412cc`/`0x412e8`/`0x41304` and B `0xd12cc`/`0xd12e8`/`0xd1304`. The bodies (0x40, 0x44, 0x20 bytes) sit at native scratch `0x50000` and `0xe0000`, outside the loader images; no live placement is claimed. The flat images are byte-identical and the ELFs differ only in address.
 
