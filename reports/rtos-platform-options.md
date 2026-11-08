@@ -1005,6 +1005,19 @@ Reset zeroes the heap gap as part of kernel BSS: A `[0x4004dae0,0x40062c54)`, B 
 
 **Not yet established.** The resumed-caller cases use a synthetic waker caller and the timer removal entry is a recording stub; the timer heap's capacity and the tick's entry-clearing hazard remain retained. The handler deferral covers delete; create remains a mask-only record write. No system, live-placement or hardware qualification is claimed.
 
+**Cutover staging (host).** `//replacement/rtos_semaphore:stage-semaphore` admits the six qualified scheduler/own-first groups, stages the base candidate, then patches the two semaphore carrier extents per domain in place. The canonical DAT stages from `43d67afa...` and the qualified base `47c95e9c...` to `854c4d85...`; the loader regions carry the carrier bytes and every change is confined to the eight extents plus the container checksum. `//replacement/rtos_semaphore:semaphore-stage-tests` verifies the carrier slices, the outside-change refusal, the short-image refusal and the inverse restore. The natural guest comparison is not run: the scheduler and own-first pair observers have closed scheduler-only entry semantics and no semaphore kind, so a semaphore natural route needs a new observer. The 62 cached native comparisons remain the behavior and lifetime oracle. No timer-arena ownership is assumed; the removal, callback and tick seams stay named in the contract.
+
+**Staging verification.** The staging targets produced these complete wrapper verdict lines, persisted under `private-data/scratch/RtosSemaphore/final-stage-{build,test,run}.log`:
+
+```text
+host-build verdict {"verdict":"passed","resource_failure":null,"command":"build","exit_code":0,"unit":"xm1-host-build-3546937.scope","unit_result":"success","memory_max":"6G","lock_wait_seconds":0.000,"wall_seconds":2.475,"scope_cpu_seconds":19.503,"scope_memory_peak_bytes":655106048,"nix_daemon_cpu_seconds":0.000,"nix_daemon_oom_kills":0}
+host-build verdict {"verdict":"passed","resource_failure":null,"command":"test","exit_code":0,"unit":"xm1-host-build-3549936.scope","unit_result":"success","memory_max":"6G","lock_wait_seconds":20.020,"wall_seconds":3.409,"scope_cpu_seconds":20.373,"scope_memory_peak_bytes":881491968,"nix_daemon_cpu_seconds":0.007,"nix_daemon_oom_kills":0}
+host-build verdict {"verdict":"passed","resource_failure":null,"command":"run","exit_code":0,"unit":"xm1-host-build-3548246.scope","unit_result":"success","memory_max":"6G","lock_wait_seconds":0.000,"wall_seconds":2.523,"scope_cpu_seconds":20.089,"scope_memory_peak_bytes":544137216,"nix_daemon_cpu_seconds":0.000,"nix_daemon_oom_kills":0}
+```
+
+The staged candidate is `private-data/scratch/RtosSemaphore/cutover-3/candidate.DAT`, SHA-256 `854c4d8501a9c5b4b912ef1f6e04d1fe483fabc8b7a2a86e3b0bb869cc61e0cb`, 38,405,148 bytes; `contract.json` records the source, base, carrier and per-region digests.
+
+
 **Verification.** The final committed tree produced these complete wrapper verdict lines, persisted with the packet under `private-data/scratch/RtosSemaphore/final-host-test.log`, `final-build.log` and `final-run.log`:
 
 ```text
