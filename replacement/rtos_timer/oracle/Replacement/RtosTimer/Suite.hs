@@ -28,7 +28,7 @@ data Role = Stock | Owned deriving (Eq, Show)
 
 data Call = Initialize | Insert | Remove | Tick deriving (Eq, Show)
 
-data Callback = Receipt | Cancel | Rearm | Switch deriving (Eq, Show)
+data Callback = Receipt | Cancel | Rearm | Switch | SwitchDistinct | WaitRelease deriving (Eq, Show)
 
 data Kind = Equal | Repair String | Fixture String deriving (Eq, Show)
 
@@ -86,7 +86,7 @@ data ControlRun = ControlRun
   , controlHolds :: Bool
   }
 
-stubBase, stubAcquire, stubRelease, stubReceipt, stubCancel, stubRearm, stubSwitch, stubSize :: Word32
+stubBase, stubAcquire, stubRelease, stubReceipt, stubCancel, stubRearm, stubSwitch, stubWaitRelease, stubSize :: Word32
 stubBase = 0x01000000
 stubAcquire = stubBase
 stubRelease = stubBase + 0x18
@@ -94,7 +94,25 @@ stubReceipt = stubBase + 0x30
 stubCancel = stubBase + 0x80
 stubRearm = stubBase + 0xa0
 stubSwitch = stubBase + 0xc8
+stubWaitRelease = stubBase + 0xe0
 stubSize = 0x100
+
+waitReleaseAddress :: Domain -> Word32
+waitReleaseAddress DomainA = 0x44568
+waitReleaseAddress DomainB = 0xd4528
+
+waitReleaseSize :: Word32
+waitReleaseSize = 0xcc
+
+domainId :: Domain -> Word32
+domainId DomainA = 1
+domainId DomainB = 2
+
+secondLockCell, taskAddress, taskWait, taskQueue :: Word32
+secondLockCell = entriesBase + 0x700
+taskAddress = entriesBase + 0x400
+taskWait = entriesBase + 0x440
+taskQueue = entriesBase + 0x460
 
 exitAddress, stackBase, stackSize, stackPointer, entriesBase, entriesSize :: Word32
 exitAddress = 0x01000200
@@ -210,10 +228,18 @@ stubBytes facts domain one = fillStubs $
   , (0x80, [pushLr, movReg 3 0, movwI 0 (currentContext .&. 0xffff), movtI 0 (currentContext `shiftR` 16), ldrI 0 0, movReg 1 3, blWord (stubCancel + 4 * 6) (removeEntry domain), popPc])
   , (0xa0, [pushLr, movReg 3 0, movwI 0 (currentContext .&. 0xffff), movtI 0 (currentContext `shiftR` 16), ldrI 0 0, movReg 1 3, movwI 2 (rearmExpiry .&. 0xffff), movtI 2 (rearmExpiry `shiftR` 16), blWord (stubRearm + 4 * 8) (insertEntry domain), popPc])
   ]
-    ++ [(0xc8, switchCode facts domain) | caseCallback one == Switch]
+    ++ [(0xc8, switchCode facts domain) | caseCallback one `elem` [Switch, SwitchDistinct]]
+    ++ [(0xe0, waitReleaseCode)]
   where
     currentContext = dfCurrentContext (domainFacts facts domain)
     lock = dfSchedulerLock (domainFacts facts domain)
+    waitReleaseCode =
+      [ pushLr
+      , movwI 0 (contextBase .&. 0xffff), movtI 0 (contextBase `shiftR` 16)
+      , movwI 1 (taskAddress .&. 0xffff), movtI 1 (taskAddress `shiftR` 16)
+      , blWord (stubWaitRelease + 4 * 5) (waitReleaseAddress domain)
+      , popPc
+      ]
 
 rearmExpiry :: Word32
 rearmExpiry = 40
@@ -224,6 +250,8 @@ callbackAddress one = case caseCallback one of
   Cancel -> stubCancel
   Rearm -> stubRearm
   Switch -> stubSwitch
+  SwitchDistinct -> stubSwitch
+  WaitRelease -> stubWaitRelease
 
 kernelLow :: Facts -> Domain -> Word32
 kernelLow facts domain = dfHandlerContext (domainFacts facts domain)
@@ -305,12 +333,14 @@ entriesWords facts domain role one =
     ++ [(receiptBase + fromIntegral index * 4, 0) | index <- [0 .. 64 :: Int]]
     ++ [(receiptBase + 0x80 + fromIntegral index * 4, 0) | index <- [0 .. 64 :: Int]]
     ++ secondContextWords
+    ++ taskWords
   where
     d = domainFacts facts domain
     entryCallback slot = fromMaybe fallback (lookup slot (caseSlotCallbacks one))
       where
         fallback = case caseCallback one of
           Switch -> if slot == 1 then stubSwitch else stubReceipt
+          SwitchDistinct -> if slot == 1 then stubSwitch else stubReceipt
           _ -> callbackAddress one
     contextWords =
       [ (contextBase + contextSchedulerLock c, dfSchedulerLock d)
@@ -323,19 +353,30 @@ entriesWords facts domain role one =
       , (contextBase + contextTickNow c, dfTickNow d)
       ]
     secondContextWords = case caseCallback one of
-      Switch ->
-        [ (secondContextBase + contextSchedulerLock c, dfSchedulerLock d)
-        , (secondContextBase + contextSchedulerLock c + lockWord (factsLock facts), dfSchedulerLock d)
-        , (secondContextBase + contextSchedulerLock c + lockAcquire (factsLock facts), stubAcquire)
-        , (secondContextBase + contextSchedulerLock c + lockRelease (factsLock facts), stubRelease)
-        , (secondContextBase + contextTimerHeap c, secondHeapBase)
-        , (secondContextBase + contextTimerCount c, dfTimerCount d)
-        , (secondContextBase + contextTimerBase c, dfTimerBase d)
-        , (secondContextBase + contextTickNow c, dfTickNow d)
-        , (secondHeapBase, 10)
-        , (secondHeapBase + 4, entryAddress 2)
-        , (secondHeapBase + 8, 20)
-        , (secondHeapBase + 12, entryAddress 4)
+      Switch -> switchWords (dfSchedulerLock d)
+      SwitchDistinct -> switchWords secondLockCell
+      _ -> []
+    switchWords lockCell =
+      [ (secondContextBase + contextSchedulerLock c, lockCell)
+      , (secondContextBase + contextSchedulerLock c + lockWord (factsLock facts), lockCell)
+      , (secondContextBase + contextSchedulerLock c + lockAcquire (factsLock facts), stubAcquire)
+      , (secondContextBase + contextSchedulerLock c + lockRelease (factsLock facts), stubRelease)
+      , (secondContextBase + contextTimerHeap c, secondHeapBase)
+      , (secondContextBase + contextTimerCount c, dfTimerCount d)
+      , (secondContextBase + contextTimerBase c, dfTimerBase d)
+      , (secondContextBase + contextTickNow c, dfTickNow d)
+      , (secondHeapBase, 10)
+      , (secondHeapBase + 4, entryAddress 2)
+      , (secondHeapBase + 8, 20)
+      , (secondHeapBase + 12, entryAddress 4)
+      ]
+    taskWords = case caseCallback one of
+      WaitRelease ->
+        [ (taskAddress + 0x0c, 0x06)
+        , (taskAddress + 0x14, taskWait)
+        , (taskWait, entryAddress 1)
+        , (taskWait + 4, taskQueue)
+        , (taskWait + 8, domainId domain)
         ]
       _ -> []
     c = factsContext facts
@@ -456,6 +497,34 @@ extraCases facts domain =
       , WordIs "entries" (secondHeapBase + 4) (entryAddress 2)
       ]
       [] [(2, 1), (4, 2)]
+  , Case "tick-pop-then-wait-release" Tick [(10, 1), (20, 2)] 2 1 0 0 10 1 0x13 WaitRelease (Repair "the tick detaches a popped entry before the wait release observes it")
+      []
+      [ CountIs 0, EntryIndexIs 1 1, EntryIndexIs 2 1
+      , KernelWord (heapNode facts domain 1) 20, KernelWord (heapNode facts domain 1 + 4) (entryAddress 2)
+      , WordIs "entries" taskWait 0, WordIs "entries" (taskAddress + 0x0c) 4
+      ]
+      [ CountIs 1, EntryIndexIs 1 0, EntryIndexIs 2 1
+      , KernelWord (heapNode facts domain 1) 20, KernelWord (heapNode facts domain 1 + 4) (entryAddress 2)
+      , WordIs "entries" taskWait 0, WordIs "entries" (taskAddress + 0x0c) 4
+      ]
+      [] []
+  , Case "tick-context-switch-distinct" Tick [(10, 1), (20, 3)] 2 1 0 0 10 1 0x13 SwitchDistinct (Repair "the tick releases the lock it acquired before reloading the context")
+      []
+      [ CountIs 0, BaseIs 10, TickIs 20, RegisterIs R0 0
+      , CallbacksAre [entryAddress 1, entryAddress 2]
+      , CallbackLocksAre [1, 1]
+      , EntryIndexIs 1 1, EntryIndexIs 2 1, EntryIndexIs 3 1, EntryIndexIs 4 2
+      , KernelWord (dfSchedulerLock (domainFacts facts domain)) 1
+      , WordIs "entries" secondLockCell 0
+      ]
+      [ CountIs 0, BaseIs 10, TickIs 20, RegisterIs R0 0
+      , CallbacksAre [entryAddress 1, entryAddress 2]
+      , CallbackLocksAre [1, 0]
+      , EntryIndexIs 1 0, EntryIndexIs 2 0, EntryIndexIs 3 1, EntryIndexIs 4 2
+      , KernelWord (dfSchedulerLock (domainFacts facts domain)) 0
+      , WordIs "entries" secondLockCell 0
+      ]
+      [] []
   ]
 
 initializeCases :: Facts -> Domain -> [Case]
@@ -624,12 +693,13 @@ caseFor facts domain role stockImage ownedImage ownedSymbols one =
   CaseSpec
     { caseId = caseName one ++ "-" ++ domainLabel domain
     , caseProvenance = "X-M1 1.50 timer stock ABI, x70view 55436fc85c0560dd252b0410af6f2427fe198cd3; synthetic heap, entry and callback state"
-    , caseExclusion = "Synthetic timer heap and callback stubs; no wait-result, cyclic or firmware integration."
+    , caseExclusion = "Synthetic timer heap and callback stubs; the wait-release case runs the stock wait-release body over a synthetic suspended task. No cyclic or firmware integration."
     , caseEntry = GuestAddress (fromIntegral entry)
     , caseExit = GuestAddress (fromIntegral exitAddress)
     , caseRegions =
         [ mkRegion (RegionId "code") (GuestAddress (fromIntegral codeBase)) (fromIntegral (B.length codeBytes)) ReadExecute codeBytes
         , mkRegion (RegionId "stubs") (GuestAddress (fromIntegral stubBase)) (fromIntegral stubSize) ReadExecute (stubBytes facts domain one)
+        , mkRegion (RegionId "wait-release") (GuestAddress (fromIntegral (waitReleaseAddress domain))) (fromIntegral waitReleaseSize) ReadExecute (slice (imageBase stockImage) (imageBytes stockImage) (waitReleaseAddress domain) waitReleaseSize)
         , mkRegion (RegionId "kernel") (GuestAddress (fromIntegral (kernelLow facts domain))) (fromIntegral (kernelSize facts domain role)) ReadWrite (overlay (kernelLow facts domain) (kernelSize facts domain role) (kernelWords facts domain role one))
         , mkRegion (RegionId "entries") (GuestAddress (fromIntegral entriesBase)) (fromIntegral entriesSize) ReadWrite (overlay entriesBase entriesSize (entriesWords facts domain role one))
         , mkRegion (RegionId "stack") (GuestAddress (fromIntegral stackBase)) (fromIntegral stackSize) ReadWrite (B.replicate (fromIntegral stackSize) 0)
@@ -671,9 +741,9 @@ caseFor facts domain role stockImage ownedImage ownedSymbols one =
     functions = case role of
       Stock ->
         let (base, _) = stockBase domain
-         in [(base, 0xc4), (base + 0xc4, 0xdc), (insertEntry domain, 0x48), (removeEntry domain, 0xe4), (tickEntry domain, 0x1a0), (stubBase, stubSize)]
+         in [(base, 0xc4), (base + 0xc4, 0xdc), (insertEntry domain, 0x48), (removeEntry domain, 0xe4), (tickEntry domain, 0x1a0), (stubBase, stubSize), (waitReleaseAddress domain, waitReleaseSize)]
               ++ [(wordAddress (initializeAddress domain), 0x70) | caseCall one == Initialize]
-      Owned -> ownedSymbols ++ [(stubBase, stubSize)]
+      Owned -> ownedSymbols ++ [(stubBase, stubSize), (waitReleaseAddress domain, waitReleaseSize)]
     initialRegisters =
       [ (register, case lookup register arguments of
           Just value -> value
@@ -718,6 +788,8 @@ cohortOf one = case caseName one of
   "tick-ordered-fiq" -> "extra"
   "tick-masked-fiq" -> "extra"
   "tick-context-switch" -> "extra"
+  "tick-pop-then-wait-release" -> "extra"
+  "tick-context-switch-distinct" -> "extra"
   _ -> "core"
 
 runDomain :: FilePath -> FilePath -> FilePath -> Facts -> Domain -> Image -> Image -> [(Word32, Word32)] -> IO ([CaseRun], [ControlRun])

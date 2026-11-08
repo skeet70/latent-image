@@ -1,7 +1,7 @@
 use super::*;
 use core::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
-use crate::layout::{GuestAddress, KernelContext};
+use crate::layout::{GuestAddress, KernelContext, LockRecord};
 
 const NODES: u32 = 0x2000;
 const COUNT: u32 = 0x3000;
@@ -10,10 +10,12 @@ const TICK: u32 = 0x3008;
 const CONTEXT: u32 = 0x1000;
 const SECOND_CONTEXT: u32 = 0x1100;
 const SECOND_NODES: u32 = 0x7000;
+const LOCK_CELL: u32 = 0x1200;
+const SECOND_LOCK_CELL: u32 = 0x1204;
 
 struct Mock {
     words: RefCell<BTreeMap<u32, u32>>,
-    lock_held: Cell<bool>,
+    held: RefCell<Vec<u32>>,
     masked: Cell<bool>,
     handler: Cell<u32>,
     context: Cell<u32>,
@@ -24,7 +26,7 @@ impl Mock {
     fn new() -> Self {
         let mock = Self {
             words: RefCell::new(BTreeMap::new()),
-            lock_held: Cell::new(false),
+            held: RefCell::new(Vec::new()),
             masked: Cell::new(false),
             handler: Cell::new(1),
             context: Cell::new(CONTEXT),
@@ -35,6 +37,7 @@ impl Mock {
         mock.store_word(context.timer_count(), COUNT);
         mock.store_word(context.timer_base(), BASE);
         mock.store_word(context.tick_now(), TICK);
+        mock.store_word(context.scheduler_lock().word(), LOCK_CELL);
         mock.set_count(0);
         mock.set_word(BASE, 0);
         mock.set_word(TICK, 0);
@@ -55,6 +58,24 @@ impl Mock {
         self.set_word(context.timer_count().0, COUNT);
         self.set_word(context.timer_base().0, BASE);
         self.set_word(context.tick_now().0, TICK);
+        self.set_word(context.scheduler_lock().word().0, LOCK_CELL);
+    }
+
+    fn second_lock_cell(&self) {
+        let context = KernelContext(GuestAddress(SECOND_CONTEXT));
+        self.set_word(context.scheduler_lock().word().0, SECOND_LOCK_CELL);
+    }
+
+    fn lock_cell(&self, lock: LockRecord) -> u32 {
+        self.word(lock.word().0)
+    }
+
+    fn current_lock(&self) -> LockRecord {
+        KernelContext(GuestAddress(self.context.get())).scheduler_lock()
+    }
+
+    fn held(&self) -> Vec<u32> {
+        self.held.borrow().clone()
     }
 
     fn set_word(&self, at: u32, value: u32) {
@@ -111,12 +132,20 @@ impl Scheduler for Mock {
         self.masked.get()
     }
 
-    fn release_lock(&self) {
-        self.lock_held.set(false);
+    fn release_lock(&self, lock: LockRecord) {
+        let cell = self.lock_cell(lock);
+        let position = self.held.borrow().iter().position(|held| *held == cell);
+        assert!(position.is_some(), "released a lock this machine does not hold");
+        self.held.borrow_mut().remove(position.unwrap());
     }
 
-    fn acquire_lock(&self) {
-        self.lock_held.set(true);
+    fn acquire_lock(&self, lock: LockRecord) {
+        let cell = self.lock_cell(lock);
+        assert!(
+            !self.held.borrow().contains(&cell),
+            "acquired a lock this machine already holds"
+        );
+        self.held.borrow_mut().push(cell);
     }
 
     fn irq_clear(&self) {
@@ -129,7 +158,7 @@ impl Scheduler for Mock {
 }
 
 fn tick_all(mock: &Mock, heap: TimerHeap) -> Vec<(u32, u32)> {
-    tick(mock, |_| heap, |m, callback, argument| {
+    tick(mock, |_| heap, |m| m.current_lock(), |m, callback, argument| {
         m.events.borrow_mut().push((callback.0, argument.0));
     })
     .unwrap();
@@ -195,7 +224,7 @@ fn pop_then_competing_cancel_is_a_noop_and_the_other_entry_survives() {
     insert(&mock, heap, other, Expiry(20)).unwrap();
     mock.set_word(TICK, 10);
     let popped = first;
-    tick(&mock, |_| heap, |m, _callback, _argument| {
+    tick(&mock, |_| heap, |m| m.current_lock(), |m, _callback, _argument| {
         assert_eq!(remove(m, heap, popped), Ok(Removed::Noop));
     })
     .unwrap();
@@ -210,8 +239,8 @@ fn callback_rearm_keeps_fresh_membership() {
     let entry = mock.entry(1);
     insert(&mock, heap, entry, Expiry(10)).unwrap();
     mock.set_word(TICK, 10);
-    tick(&mock, |_| heap, |m, _callback, _argument| {
-        assert!(m.lock_held.get());
+    tick(&mock, |_| heap, |m| m.current_lock(), |m, _callback, _argument| {
+        assert!(!m.held().is_empty());
         insert(m, heap, entry, Expiry(40)).unwrap();
     })
     .unwrap();
@@ -244,14 +273,14 @@ fn invalid_context_or_irq_changes_nothing() {
     insert(&mock, heap, entry, Expiry(10)).unwrap();
     mock.set_word(TICK, 10);
     mock.handler.set(0);
-    assert_eq!(tick(&mock, |_| heap, |_, _, _| {}), Err(TimerError::Context));
+    assert_eq!(tick(&mock, |_| heap, |m| m.current_lock(), |_, _, _| {}), Err(TimerError::Context));
     assert_eq!(mock.count(), 1);
-    assert!(!mock.lock_held.get());
+    assert!(mock.held().is_empty());
     mock.handler.set(1);
     mock.masked.set(true);
-    assert_eq!(tick(&mock, |_| heap, |_, _, _| {}), Err(TimerError::InterruptMasked));
+    assert_eq!(tick(&mock, |_| heap, |m| m.current_lock(), |_, _, _| {}), Err(TimerError::InterruptMasked));
     assert_eq!(mock.count(), 1);
-    assert!(!mock.lock_held.get());
+    assert!(mock.held().is_empty());
 }
 
 #[test]
@@ -262,8 +291,8 @@ fn corrupt_count_fails_with_the_lock_released_and_irq_cleared() {
     insert(&mock, heap, entry, Expiry(10)).unwrap();
     mock.set_word(TICK, 10);
     mock.set_count(9);
-    assert_eq!(tick(&mock, |_| heap, |_, _, _| {}), Err(TimerError::CorruptCount));
-    assert!(!mock.lock_held.get());
+    assert_eq!(tick(&mock, |_| heap, |m| m.current_lock(), |_, _, _| {}), Err(TimerError::CorruptCount));
+    assert!(mock.held().is_empty());
     assert!(!mock.masked.get());
     assert_eq!(mock.index(entry), 1);
 }
@@ -283,7 +312,7 @@ fn upward_repair_delivers_remaining_timers_in_expiry_order() {
     assert_eq!(remove(&mock, heap, canceled), Ok(Removed::Detached));
     mock.set_word(TICK, 1000);
     let callbacks = RefCell::new(Vec::new());
-    tick(&mock, |_| heap, |_m, callback, _argument| {
+    tick(&mock, |_| heap, |m| m.current_lock(), |_m, callback, _argument| {
         callbacks.borrow_mut().push(callback.0);
     })
     .unwrap();
@@ -295,7 +324,7 @@ fn upward_repair_delivers_remaining_timers_in_expiry_order() {
     for entry in entries.iter() {
         assert_eq!(mock.index(*entry), 0);
     }
-    assert!(!mock.lock_held.get());
+    assert!(mock.held().is_empty());
     assert!(!mock.masked.get());
 }
 
@@ -314,7 +343,7 @@ fn downward_repair_delivers_remaining_timers_in_expiry_order() {
     assert_eq!(remove(&mock, heap, canceled), Ok(Removed::Detached));
     mock.set_word(TICK, 1000);
     let callbacks = RefCell::new(Vec::new());
-    tick(&mock, |_| heap, |_m, callback, _argument| {
+    tick(&mock, |_| heap, |m| m.current_lock(), |_m, callback, _argument| {
         callbacks.borrow_mut().push(callback.0);
     })
     .unwrap();
@@ -326,7 +355,7 @@ fn downward_repair_delivers_remaining_timers_in_expiry_order() {
     for entry in entries.iter() {
         assert_eq!(mock.index(*entry), 0);
     }
-    assert!(!mock.lock_held.get());
+    assert!(mock.held().is_empty());
     assert!(!mock.masked.get());
 }
 
@@ -366,6 +395,34 @@ fn full_capacity_refuses_the_next_insert_without_a_write() {
 }
 
 #[test]
+fn a_distinct_context_lock_is_released_and_a_later_service_progresses() {
+    let mock = Mock::new();
+    let capacity = 8;
+    let heap = mock.heap(capacity);
+    let first = mock.entry(1);
+    let second = mock.entry(2);
+    insert(&mock, heap, first, Expiry(10)).unwrap();
+    mock.second_context();
+    mock.second_lock_cell();
+    mock.set_word(SECOND_NODES, 10);
+    mock.set_word(SECOND_NODES + 4, second.address().0);
+    mock.set_word(second.address().0, 1);
+    mock.set_word(TICK, 10);
+    tick(&mock, |m| m.heap(capacity), |m| m.current_lock(), |m, _callback, _argument| {
+        if m.context.get() == CONTEXT {
+            m.context.set(SECOND_CONTEXT);
+        }
+    })
+    .unwrap();
+    assert!(mock.held().is_empty());
+    let first_context = KernelContext(GuestAddress(CONTEXT));
+    mock.acquire_lock(first_context.scheduler_lock());
+    assert_eq!(mock.held(), vec![LOCK_CELL]);
+    mock.release_lock(first_context.scheduler_lock());
+    assert!(mock.held().is_empty());
+}
+
+#[test]
 fn a_callback_context_change_moves_the_tick_to_the_new_heap() {
     let mock = Mock::new();
     let capacity = 8;
@@ -385,7 +442,7 @@ fn a_callback_context_change_moves_the_tick_to_the_new_heap() {
     mock.set_word(fourth.address().0, 2);
     mock.set_word(TICK, 10);
     let seen = RefCell::new(Vec::new());
-    tick(&mock, |m| m.heap(capacity), |m, callback, argument| {
+    tick(&mock, |m| m.heap(capacity), |m| m.current_lock(), |m, callback, argument| {
         seen.borrow_mut().push((callback.0, argument.0));
         if seen.borrow().len() == 1 {
             m.context.set(SECOND_CONTEXT);

@@ -7,7 +7,7 @@
 pub mod layout;
 
 use core::num::NonZeroU32;
-use layout::{GuestAddress, KernelContext};
+use layout::{GuestAddress, KernelContext, LockRecord};
 
 pub trait Machine {
     fn load_word(&self, at: GuestAddress) -> u32;
@@ -18,8 +18,8 @@ pub trait Scheduler: Machine {
     /// Zero in task context.
     fn handler_context(&self) -> u32;
     fn irq_masked(&self) -> bool;
-    fn release_lock(&self);
-    fn acquire_lock(&self);
+    fn release_lock(&self, lock: LockRecord);
+    fn acquire_lock(&self, lock: LockRecord);
     fn irq_clear(&self);
     fn irq_set(&self);
 }
@@ -335,11 +335,12 @@ pub fn remove<M: Machine>(m: &M, heap: TimerHeap, entry: TimerEntry) -> Result<R
     Ok(Removed::Detached)
 }
 
-/// The callback receives the lock held and must return it held; it may release and reacquire
-/// meanwhile. `resolve` runs at the top of every iteration.
+/// The callback receives the lock held and may release and reacquire it meanwhile. The lock
+/// released after a callback is the one this call acquired, not the post-callback context's.
 pub fn tick<M: Scheduler>(
     m: &M,
     mut resolve: impl FnMut(&M) -> TimerHeap,
+    mut current_lock: impl FnMut(&M) -> LockRecord,
     mut invoke: impl FnMut(&M, CallbackAddress, CallbackArgument),
 ) -> Result<(), TimerError> {
     if m.handler_context() == 0 {
@@ -349,31 +350,25 @@ pub fn tick<M: Scheduler>(
         return Err(TimerError::InterruptMasked);
     }
     m.irq_set();
-    m.acquire_lock();
+    let mut held = current_lock(m);
+    let mut heap = resolve(m);
+    m.acquire_lock(held);
     loop {
-        let heap = resolve(m);
         let count = heap.count(m);
         if count == 0 {
-            finish(m, heap);
+            finish(m, heap, held);
             return Ok(());
         }
         if count > heap.capacity.get() {
-            m.release_lock();
+            m.release_lock(held);
             m.irq_clear();
             return Err(TimerError::CorruptCount);
         }
         let base = heap.base(m);
         let tick = heap.tick_now(m);
-        let head = match Index::new(1, heap.capacity) {
-            Ok(head) => head,
-            Err(error) => {
-                m.release_lock();
-                m.irq_clear();
-                return Err(error);
-            }
-        };
+        let head = in_range(1, heap.capacity);
         if relative(node_expiry(m, heap, head).0, base) > relative(tick.0, base) {
-            finish(m, heap);
+            finish(m, heap, held);
             return Ok(());
         }
         let entry = node_entry(m, heap, head);
@@ -383,14 +378,7 @@ pub fn tick<M: Scheduler>(
         let new_count = count - 1;
         heap.set_count(m, new_count);
         if new_count != 0 {
-            let last = match Index::new(count, heap.capacity) {
-                Ok(last) => last,
-                Err(error) => {
-                    m.release_lock();
-                    m.irq_clear();
-                    return Err(error);
-                }
-            };
+            let last = in_range(count, heap.capacity);
             let last_expiry = node_expiry(m, heap, last);
             let last_entry = node_entry(m, heap, last);
             let index = sift_down(m, heap, head, last_expiry, base, new_count);
@@ -400,19 +388,22 @@ pub fn tick<M: Scheduler>(
             last_entry.set_index(m, TimerIndex::Linked(index));
         }
         invoke(m, callback, argument);
-        m.release_lock();
+        m.release_lock(held);
         m.irq_clear();
         m.irq_set();
-        m.acquire_lock();
+        held = current_lock(m);
+        heap = resolve(m);
+        m.acquire_lock(held);
     }
 }
 
 #[cfg_attr(feature = "stage", link_section = ".text.timer_finish")]
-fn finish<M: Scheduler>(m: &M, heap: TimerHeap) {
+#[inline(never)]
+fn finish<M: Scheduler>(m: &M, heap: TimerHeap, held: LockRecord) {
     let tick = heap.tick_now(m);
     heap.set_base(m, Base(tick.0));
     heap.set_tick_now(m, Now(tick.0.wrapping_add(10)));
-    m.release_lock();
+    m.release_lock(held);
     m.irq_clear();
 }
 

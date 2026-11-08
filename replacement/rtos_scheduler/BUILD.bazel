@@ -220,6 +220,7 @@ genrule(
     srcs = [
         "src/s3d.rs",
         "src/s3d_tests.rs",
+        "src/timeout.rs",
         "//replacement/rtos_layout:src/lib.rs",
         "//replacement/rtos_reservation:src/lib.rs",
     ],
