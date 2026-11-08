@@ -131,7 +131,7 @@ spec domain entry row code ident = CaseSpec ident "X-M1 1.50 S3c contracts at 55
     callbackBlob = poke (poke (B.replicate 128 0) 0 (callbackCode domain row)) 64 retry
     regions = codeRegions ++ [tableRegion,mkRegion (RegionId "code-callback") (ga 0x900000) 128 ReadExecute callbackBlob,mkRegion (RegionId "code-equivalent") (ga 0x930000) 16 ReadExecute (B.replicate 16 0),mkRegion (RegionId "definitions") (ga 0x910000) 0x200 ReadOnly defs,mkRegion (RegionId "callback-log") (ga 0x900100) 16 ReadWrite (B.replicate 16 0),mkRegion (RegionId "output") (ga 0x900200) 4 ReadWrite (word32le 0xeeeeeeee),mkRegion (RegionId "stack") (ga 0x940000) 512 ReadWrite (B.replicate 512 0)] ++ ramRegions ++ [mkRegion (RegionId ("bank-" ++ show address)) (ga address) 4 Device (word32le 0) | address <- [0xfffb30cc,0xfffb40cc]]
     initial = [(R0,(classId row `shiftL` 16) .|. number row),(R1,if entry == GetPriority then 0x900200 else patternWord row),(R2,0),(R3,0),(R12,0)] ++ [(r,0xabc00000+fromIntegral(fromEnum r)) | r <- [R4 .. R11]] ++ [(Sp,0x940200),(Lr,0x920000),(Cpsr,if masked row || entry `elem` [DeliveryLoop,Delivery] then 0xd3 else 0x53)]
-    kernel = KernelCase (InstructionLimit 2500) (Just (ga (stockEntry domain 0x43640))) Nothing Nothing Nothing ([R1,R2,R3,R12,Lr,Pc,Cpsr] ++ [R0 | entry `elem` [DeliveryLoop,Delivery]])
+    kernel = KernelCase (InstructionLimit 2500) (Just (ga (stockEntry domain 0x43640))) Nothing Nothing Nothing ([R1,R2,R3,R12,Lr,Pc,Cpsr] ++ [R0 | entry `elem` [DeliveryLoop,Delivery]]) []
     exitRegion = mkRegion (RegionId "code-exit") (ga 0x920000) 4 ReadExecute (word32le 0xe7f000f0)
 
 normalize :: NativeObservation -> NativeObservation

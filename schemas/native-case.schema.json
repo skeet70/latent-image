@@ -94,7 +94,19 @@
         "stop": {"$ref": "#/$defs/u32", "description": "The case ends as stop_address when the PC reaches it; aligned, executable, not the entry, exit or a stub."},
         "tpidrurw": {"$ref": "#/$defs/u32"},
         "cpacr": {"$ref": "#/$defs/u32"},
-        "fpexc": {"enum": ["0x00000000", "0x40000000"], "description": "EN only. FPEXC words are served only when cpacr cp10 (bits 21:20) and cp11 (bits 23:22) are equal and 0b01 or 0b11, and refused otherwise."}
+        "fpexc": {"enum": ["0x00000000", "0x40000000"], "description": "EN only. FPEXC words are served only when cpacr cp10 (bits 21:20) and cp11 (bits 23:22) are equal and 0b01 or 0b11, and refused otherwise."},
+        "stack_contexts": {
+          "type": "array", "minItems": 1, "maxItems": 16,
+          "description": "Opt-in private stack contexts. Each interval [low, high) is eight-byte aligned, low < high, disjoint from the others, wholly inside one writable non-device region, and the case's initial SP lies in exactly one context (low < SP <= high). Absent keeps the legacy single-context wire unchanged; an empty array is invalid.",
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["low", "high"],
+            "properties": {
+              "low": {"$ref": "#/$defs/u32", "pattern": "^0x[0-9a-f]{7}[08]$"},
+              "high": {"$ref": "#/$defs/u32", "pattern": "^0x[0-9a-f]{7}[08]$"}
+            }
+          }
+        }
       }
     }
   },

@@ -49,6 +49,8 @@ functionCount=256
 stubCount=32
 eventCount=128
 memoryCount=64
+stackContextCount :: Int
+stackContextCount=16
 hex :: Integer -> String
 hex x=showHex x ""
 hexBytes :: B.ByteString -> String
@@ -167,9 +169,10 @@ loadCaseWith reader input = do
    ensure(sum(map regionSize prior)+size<=fromIntegral totalBytes) "total mapped bytes exceeds host limit"
    pure(done++[(Region item base size bytes,source)]))[] regionsInput
  let regions=map fst placed
+ forM_ [contexts|PrivilegedEntry _ _ (Just(KernelEntry _ _ _ _ contexts))<-[profile]] $ checkStackContexts regions (reg "sp")
  ensure(regionAt regions entry 4 'x' && regionAt regions exit 4 'x') "entry/exit must have explicit executable bytes"
  ensure(reg "sp">=8 && regionAt regions (reg "sp"-8) 8 'w') "stack top lacks writable eight bytes"
- forM_[stop|PrivilegedEntry _ _ (Just(KernelEntry(Just stop)_ _ _))<-[profile]]$ \stop->
+ forM_[stop|PrivilegedEntry _ _ (Just(KernelEntry(Just stop)_ _ _ _))<-[profile]]$ \stop->
    ensure(stop `mod` 4==0 && stop/=entry && stop/=exit && regionAt regions stop 4 'x') "stop address must be aligned, executable and differ from the entry and exit"
  functionsInput<-arrayCheck(get c "functions")1 functionCount "functions limit"
  functions<-foldM(\done item->do
@@ -185,7 +188,7 @@ loadCaseWith reader input = do
    fields item "address inputs outputs side_effects" "stub"
    target'<-address(get item "address")
    ensure(target' `mod` 4==0 && target'/=exit && target' `notElem` map(\(t,_,_)->t)done && not(any(\(x,len)->x<=target' && target'<x+len)functions)) "stub address alignment/alias"
-   ensure(target' `notElem` [stop|PrivilegedEntry _ _ (Just(KernelEntry(Just stop)_ _ _))<-[profile]]) "stub address is the stop address"
+   ensure(target' `notElem` [stop|PrivilegedEntry _ _ (Just(KernelEntry(Just stop)_ _ _ _))<-[profile]]) "stub address is the stop address"
    ensure(get item "side_effects"==s "registers-only") "unsupported stub side effects"
    inputs<-bindings(get item "inputs")(take 13 regs); outputs<-bindings(get item "outputs")(take 13 regs)
    ensure(not(null outputs)) "stub must have explicit outputs"
@@ -240,8 +243,10 @@ data EntryProfile = UserEntry | PrivilegedEntry PrivilegedMode (Maybe Cp14Identi
 data PrivilegedMode = SupervisorMode | SystemMode deriving (Eq,Show)
 -- The value MRC p14, 0, Rt, c2, c0, 0 reads in a privileged case.
 newtype Cp14Identity = Cp14Identity Integer deriving (Eq,Show)
--- A kernel case's stop address and its TPIDRURW, CPACR and FPEXC values.
-data KernelEntry = KernelEntry (Maybe Integer) (Maybe Integer) (Maybe Integer) (Maybe Integer) deriving (Eq,Show)
+-- A kernel case's stop address, its TPIDRURW, CPACR and FPEXC values, and its declared stack contexts.
+data KernelEntry = KernelEntry (Maybe Integer) (Maybe Integer) (Maybe Integer) (Maybe Integer) [StackBounds] deriving (Eq,Show)
+-- One declared private stack: @low < SP <= high@.
+data StackBounds = StackBounds {stackLow::Integer,stackHigh::Integer} deriving (Eq,Show)
 isKernel :: EntryProfile -> Bool
 isKernel(PrivilegedEntry _ _ (Just _))=True
 isKernel _=False
@@ -253,13 +258,33 @@ fpexcEnable :: Integer
 fpexcEnable=0x40000000
 kernelEntry :: Value -> IO KernelEntry
 kernelEntry v=do
- ensure(case v of Object _->all(`elem` ["stop","tpidrurw","cpacr","fpexc"])(keys v);_->False) "kernel: only stop, tpidrurw, cpacr and fpexc"
+ ensure(case v of Object _->all(`elem` ["stop","tpidrurw","cpacr","fpexc","stack_contexts"])(keys v);_->False) "kernel: only stop, tpidrurw, cpacr, fpexc and stack_contexts"
  let optionalAddress k=if k `elem` keys v then Just<$>address(get v k) else pure Nothing
- kernel<-KernelEntry<$>optionalAddress "stop"<*>optionalAddress "tpidrurw"<*>optionalAddress "cpacr"<*>optionalAddress "fpexc"
- let KernelEntry _ _ cpacr fpexc=kernel
+ contexts<-if "stack_contexts" `elem` keys v then stackContexts(get v "stack_contexts") else pure []
+ kernel<-KernelEntry<$>optionalAddress "stop"<*>optionalAddress "tpidrurw"<*>optionalAddress "cpacr"<*>optionalAddress "fpexc"<*>pure contexts
+ let KernelEntry _ _ cpacr fpexc _=kernel
  ensure(maybe True(\value->value .&. complement fpexcEnable==0)fpexc) "kernel fpexc may set EN only"
  ensure(fpexc==Nothing || cpacr/=Nothing) "kernel fpexc needs a cpacr"
  pure kernel
+-- A non-empty array of eight-byte aligned, disjoint @low < high@ bounds.
+stackContexts :: Value -> IO [StackBounds]
+stackContexts v=do
+ items<-arrayCheck v 1 stackContextCount "kernel stack_contexts must have one to sixteen contexts"
+ contexts<-forM items$ \item->do
+  fields item "low high" "stack context"
+  low<-address(get item "low"); high<-address(get item "high")
+  ensure(low .&. 7==0 && high .&. 7==0) "stack context bounds must be eight-byte aligned"
+  ensure(low<high) "stack context low bound must be below its high bound"
+  pure(StackBounds low high)
+ let ordered=sortOn stackLow contexts
+ ensure(and[high<=nextLow|(StackBounds _ high,StackBounds nextLow _)<-zip ordered(drop 1 ordered)]) "kernel stack contexts overlap"
+ pure contexts
+-- Every declared context lies inside one writable, non-device region and the initial SP names one.
+checkStackContexts :: [Region] -> Integer -> [StackBounds] -> IO ()
+checkStackContexts regions sp contexts=do
+ when(not(null contexts))$ensure(length(filter(\(StackBounds low high)->low<sp && sp<=high)contexts)==1) "initial SP must belong to exactly one declared stack context"
+ forM_ contexts$ \(StackBounds low high)->
+  ensure(any(\r->str(get(description r)"permissions")=="rw" && baseAddress r<=low && high<=baseAddress r+regionSize r)regions) "stack context must be backed by one writable non-device region"
 -- SVC or SYS with only NZCVQ, GE, I and F besides the mode.
 privilegedMode :: Integer -> Maybe PrivilegedMode
 privilegedMode cpsr
@@ -267,7 +292,12 @@ privilegedMode cpsr
  | otherwise = case cpsr .&. 0x1f of 0x13->Just SupervisorMode; 0x1f->Just SystemMode; _->Nothing
 profileRows :: EntryProfile -> [String]
 profileRows UserEntry=[]
-profileRows(PrivilegedEntry _ identity kernel)=[maybe "n"(\(Cp14Identity v)->"i "++hex v)identity]++[unwords("k":map(maybe "n" hex)[stop,tpidrurw,cpacr,fpexc])|Just(KernelEntry stop tpidrurw cpacr fpexc)<-[kernel]]
+profileRows(PrivilegedEntry _ identity kernel)=
+ [maybe "n"(\(Cp14Identity v)->"i "++hex v)identity]
+ ++[row|Just(KernelEntry stop tpidrurw cpacr fpexc contexts)<-[kernel],row<-unwords("k":map(maybe "n" hex)[stop,tpidrurw,cpacr,fpexc]):contextRows contexts]
+ where
+  contextRows []=[]
+  contextRows contexts=[unwords("c":show(length contexts):concat[[hex low,hex high]|StackBounds low high<-contexts])]
 checkResult :: Value -> [Region] -> Value -> IO [String]
 checkResult c regions result=do
  let expected=get c "expected"
