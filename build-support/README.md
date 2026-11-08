@@ -179,6 +179,8 @@ Routine native qualification uses `fujimod-xm1.nix` with `nativeOnly = true`, ex
 
 The admitted saving is 152.6 seconds, about 67%, exceeding the experiment's 30% and 60-second adoption threshold independently of the different queue waits. This is one pair on a contended host, not a statistical speed estimate. The temporary Rust probe is removed; full integration coverage and test deadlines are unchanged.
 
+The variants share dependency artifacts, not compiled SDK source artifacts. Full integration compiles the SDK source crate again from the shared archive. This improves routine qualification latency, not total compilation work for a single edit followed immediately by full integration.
+
 `fujimod.nix`'s Cargo check hook derives `RUST_TEST_THREADS` from `NIX_BUILD_CORES`; the package sets `dontUseCargoParallelTests`, which makes that hook use one test thread.
 
 ### Prebuilt FujiMod repository overrides
