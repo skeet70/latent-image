@@ -44,6 +44,7 @@ main = do
   baseA <- ownedBase symbolsAPath
   baseB <- ownedBase symbolsBPath
   layoutDigest <- sha256File layoutPath
+  runnerDigest <- sha256File runner
   loaderADigest <- sha256File loaderA
   loaderBDigest <- sha256File loaderB
   ownedADigest <- sha256File ownedA
@@ -75,7 +76,8 @@ main = do
           [ "schema" .= (1 :: Int)
           , "inputs" .=
               object
-                [ "layout_sha256" .= sha256Hex layoutDigest
+                [ "runner_sha256" .= sha256Hex runnerDigest
+                , "layout_sha256" .= sha256Hex layoutDigest
                 , "loader_a_sha256" .= sha256Hex loaderADigest
                 , "loader_b_sha256" .= sha256Hex loaderBDigest
                 , "owned_a_bin_sha256" .= sha256Hex ownedADigest
@@ -91,7 +93,8 @@ main = do
           [ "schema" .= (1 :: Int)
           , "kind" .= ("data-queue-native-review" :: String)
           , "inputs" .= object
-              [ "layout" .= layoutPath
+              [ "runner" .= runner
+              , "layout" .= layoutPath
               , "loader_a" .= loaderA
               , "loader_b" .= loaderB
               , "owned_a" .= ownedA
