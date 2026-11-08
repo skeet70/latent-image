@@ -76,6 +76,29 @@ sh_test(
     data = [":data-queue-host-tests-build"],
 )
 
+genrule(
+    name = "layout-facts-build",
+    srcs = [
+        "native/layout-facts.rs",
+        "//replacement/rtos_layout:src/lib.rs",
+        "//replacement/rtos_reservation:src/lib.rs",
+    ],
+    outs = ["layout-facts-bin"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 -A dead_code -C linker=$(location @lab_clang//:bin/clang) $(location native/layout-facts.rs) -o $@",
+    executable = True,
+    tools = [
+        "@lab_clang//:bin/clang",
+        "@lab_rustc//:bin/rustc",
+    ],
+)
+
+genrule(
+    name = "layout-facts",
+    outs = ["layout.json"],
+    cmd = "$(location :layout-facts-build) > $@",
+    tools = [":layout-facts-build"],
+)
+
 haskell_library(
     name = "data-queue-suite",
     srcs = [
@@ -104,19 +127,23 @@ haskell_binary(
     main_file = "native/SuiteMain.hs",
     args = [
         "--runner", "$(rootpath //emulation:native-runner)",
-        "--layout", "$(rootpath //replacement/rtos_scheduler/oracle:layout.json)",
+        "--layout", "$(rootpath :layout.json)",
         "--owned-a-bin", "$(rootpath :data-queue-a.bin)",
         "--owned-a-symbols", "$(rootpath :data-queue-a.symbols)",
         "--owned-b-bin", "$(rootpath :data-queue-b.bin)",
         "--owned-b-symbols", "$(rootpath :data-queue-b.symbols)",
+        "--timer-a-bin", "$(rootpath //replacement/rtos_timer:timer-a.bin)",
+        "--timer-b-bin", "$(rootpath //replacement/rtos_timer:timer-b.bin)",
     ],
     data = [
         "//emulation:native-runner",
-        "//replacement/rtos_scheduler/oracle:layout.json",
+        ":layout.json",
         ":data-queue-a.bin",
         ":data-queue-a.symbols",
         ":data-queue-b.bin",
         ":data-queue-b.symbols",
+        "//replacement/rtos_timer:timer-a.bin",
+        "//replacement/rtos_timer:timer-b.bin",
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-O2"],
     deps = [

@@ -1,10 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Replacement.RtosDataQueue.Suite
-  ( Image (..), CaseRun (..), extents, runDomain ) where
+  ( Image (..), CaseRun (..), ControlRun (..), extents, runDomain ) where
 
 import Control.Monad (forM, unless)
 import Data.Aeson (FromJSON (..), eitherDecodeStrict', withObject, (.:), (.:?))
-import Data.Bits ((.&.), (.|.), shiftL, shiftR)
+import Data.Bits ((.&.), (.|.), complement, shiftL, shiftR)
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
 import Data.List (intercalate, isPrefixOf, isSuffixOf, sortOn)
@@ -25,7 +25,8 @@ data Call = Create | Delete | Send | SendPoll | SendPollHandler | SendTimeout
           | ForceSend | ForceSendHandler | Receive | ReceivePoll | ReceiveTimeout
   deriving (Eq, Show)
 
-data Expect = WordIs String Word32 Word32 | ByteIs String Word32 Word8 | ResultIs Word32 | CpsrIs Word32
+data Expect = WordIs String Word32 Word32 | ByteIs String Word32 Word8 | MaskedIs String Word32 Word32 Word32
+            | ResultIs Word32 | CpsrIs Word32
   deriving (Eq, Show)
 
 -- | A second task the scheduler may select while the caller blocks.
@@ -39,6 +40,7 @@ data Case = Case
   , caseExpect :: [Expect]
   , caseStockExpect :: [Expect]
   , caseOwnedExpect :: [Expect]
+  , caseCompareRegions :: Bool
   , caseHandler :: Bool
   , caseActor :: Maybe Actor
   }
@@ -52,25 +54,63 @@ data CaseRun = CaseRun
   , runReuse :: (BatchReuse, BatchReuse)
   }
 
+data ControlRun = ControlRun
+  { controlDomain :: Domain
+  , controlName :: String
+  , controlCase :: String
+  , controlHolds :: Bool
+  }
+
 data Page = Page RegionId GuestAddress Int Permission B.ByteString
 
-ringBase, outBase, packetBase, stubBase, stackBase, stackSize, stackPointer, exitAddress :: Word32
+ringBase, outBase, packetBase, stackBase, stackSize, stackPointer, exitAddress :: Word32
 ringBase = 0x40000000
 outBase = 0x40001000
 packetBase = 0x40002000
-stubBase = 0x01000000
 stackBase = 0x00300000
 stackSize = 0x1000
 stackPointer = stackBase + 0x800
 exitAddress = 0x01000200
+
 stopAddress :: Word32
 stopAddress = 0x01000300
-actorBase, actorStackLow, actorStackHigh, callerStackLow, clockValue :: Word32
+
+actorBase, recordBase, wrapperBase, actorStackLow, actorStackHigh, callerStackLow, clockValue :: Word32
 actorBase = 0x01000400
+recordBase = 0x01000600
+wrapperBase = 0x01000800
 actorStackLow = 0x00300c00
 actorStackHigh = 0x00301000
 callerStackLow = 0x00300400
 clockValue = 0x1000
+
+recordSize, wrapperSize :: Int
+recordSize = 0x100
+wrapperSize = 0x100
+
+armedCountOff, armedExpiryOff, armedEntryOff, armedIndexOff, armedCallbackOff, armedTaskOff :: Word32
+armedCountOff = 0
+armedExpiryOff = 4
+armedEntryOff = 8
+armedIndexOff = 12
+armedCallbackOff = 16
+armedTaskOff = 20
+
+afterLockOff, afterCountOff, afterBaseOff, afterTickOff :: Word32
+afterLockOff = 24
+afterCountOff = 28
+afterBaseOff = 32
+afterTickOff = 36
+
+cbCpsrOff, cbLockOff, cbCountOff, cbBaseOff, cbTickOff, cbEntryOff, cbIndexOff, cbCallsOff :: Word32
+cbCpsrOff = 40
+cbLockOff = 44
+cbCountOff = 48
+cbBaseOff = 52
+cbTickOff = 56
+cbEntryOff = 60
+cbIndexOff = 64
+cbCallsOff = 68
 
 seedRegister :: Register -> Word32
 seedRegister register = 0xa5a50000 + fromIntegral (fromEnum register)
@@ -78,52 +118,18 @@ seedRegister register = 0xa5a50000 + fromIntegral (fromEnum register)
 callerBytes :: B.ByteString
 callerBytes = B.concat [word32le (0xca11e500 + value) | value <- [0 .. 15]]
 
-timerStub :: B.ByteString
-timerStub = assemble [0xe3003000, 0xe3403100, 0xe5830000, 0xe5831004, 0xe5832008, 0xe3a00000, 0xe12fff1e]
+-- | The owned timer module sits at its stock extents; the first word of each entry is a branch.
+timerModuleStart, timerModuleSpan, timerModuleBase, timerModuleSize :: Domain -> Word32
+timerModuleStart DomainA = 0x44a50
+timerModuleStart DomainB = 0xd4a10
+timerModuleSpan _ = 0x4dc
+timerModuleBase DomainA = 0x44ac0
+timerModuleBase DomainB = 0xd4a80
+timerModuleSize _ = 0x46c
 
-removeStub :: B.ByteString
-removeStub = assemble [0xe3003000, 0xe3403100, 0xe5830010, 0xe5831014, 0xe3a00000, 0xe12fff1e]
-
--- | `cpsie i`, then `bl` the stock entry that releases the blocked caller.
-serviceActor :: Domain -> Call -> Word32 -> Word32 -> Actor
-serviceActor domain call id argument = Actor (assemble [0xf1080080, movSmall 0 id, movw 1 (argument .&. 0xffff), movt 1 (argument `shiftR` 16), branchLink 4 (entryAddress domain call), branch 5 stopAddress])
-
--- | Takes the tick's scheduler lock, consumes the armed timer entry, calls its real timeout
--- | callback, releases the lock, then dispatches.
-timeoutActor :: Domain -> Word32 -> Word32 -> Actor
-timeoutActor domain context timer =
-  Actor (assemble
-    [ 0xf1080080
-    , movw 0 (context .&. 0xffff), movt 0 (context `shiftR` 16), 0xe2800008
-    , branchLink 4 (acquireAddress domain)
-    , movw 0 (context .&. 0xffff), movt 0 (context `shiftR` 16)
-    , movw 1 (timer .&. 0xffff), movt 1 (timer `shiftR` 16)
-    , branchLink 9 (timerRemove domain)
-    , movw 0 (timer .&. 0xffff), movt 0 (timer `shiftR` 16)
-    , 0xe5901004, 0xe5900008, 0xe12fff31
-    , movw 0 (context .&. 0xffff), movt 0 (context `shiftR` 16), 0xe2800008
-    , branchLink 18 (releaseAddress domain)
-    , 0xe3a00000
-    , branchLink 20 (saveAddress domain)
-    , branch 21 stopAddress
-    ])
-
--- | The instruction word at a slot of the actor's own body.
-actorAt :: Int -> Word32
-actorAt index = actorBase + fromIntegral index * 4
-
-movSmall :: Int -> Word32 -> Word32
-movSmall register value = 0xe3a00000 .|. (fromIntegral register `shiftL` 12) .|. (value .&. 0xff)
-
-movw, movt :: Int -> Word32 -> Word32
-movw register value = 0xe3000000 .|. ((value `shiftR` 12) `shiftL` 16) .|. (fromIntegral register `shiftL` 12) .|. (value .&. 0xfff)
-movt register value = 0xe3400000 .|. ((value `shiftR` 12) `shiftL` 16) .|. (fromIntegral register `shiftL` 12) .|. (value .&. 0xfff)
-
-branchLink, branch :: Int -> Word32 -> Word32
-branchLink index target = 0xeb000000 .|. (((target - actorAt index - 8) `shiftR` 2) .&. 0xffffff)
-branch index target = 0xea000000 .|. (((target - actorAt index - 8) `shiftR` 2) .&. 0xffffff)
-
-saveAddress, acquireAddress, releaseAddress, timeoutCallback :: Domain -> Word32
+tickEntry, saveAddress, acquireAddress, releaseAddress, timeoutCallback :: Domain -> Word32
+tickEntry DomainA = 0x44d8c
+tickEntry DomainB = 0xd4d4c
 saveAddress DomainA = 0x43640
 saveAddress DomainB = 0xd3640
 acquireAddress DomainA = 0x439d8
@@ -161,17 +167,11 @@ entryAddress domain call = case (domain, call) of
   (DomainB, ReceivePoll) -> 0xda2b0
   (DomainB, ReceiveTimeout) -> 0xda52c
 
-timerInsert, timerRemove :: Domain -> Word32
-timerInsert DomainA = 0x44c60
-timerInsert DomainB = 0xd4c20
-timerRemove DomainA = 0x44ca8
-timerRemove DomainB = 0xd4c68
-
 extents :: Domain -> [(Word32, Word32)]
 extents domain =
   [ (entryAddress domain call, entrySize call) | call <- [Create, Delete, Send, SendPoll, SendPollHandler, SendTimeout, ForceSend, ForceSendHandler, Receive, ReceivePoll, ReceiveTimeout] ]
     ++ helperFunctions domain
-    ++ [(timerInsert domain, fromIntegral (B.length timerStub)), (timerRemove domain, fromIntegral (B.length removeStub))]
+    ++ [(timerModuleBase domain, timerModuleSize domain)]
 
 helperFunctions :: Domain -> [(Word32, Word32)]
 helperFunctions DomainA =
@@ -220,12 +220,169 @@ poke address value = (address, value)
 eq :: String -> Word32 -> Word32 -> Expect
 eq region address value = WordIs region address value
 
-dataQueueId :: Word32 -> Word32
-dataQueueId slot = slot
+-- Instruction encoders for the fixture actors and the timer instrument.
+movSmall, movw, movt, movReg, movImm :: Word32 -> Word32 -> Word32
+ldrI, strI, addImm :: Word32 -> Word32 -> Word32 -> Word32
+mrsCpsr :: Word32 -> Word32
+movSmall register value = 0xe3a00000 .|. (register `shiftL` 12) .|. (value .&. 0xff)
+movw register value = 0xe3000000 .|. ((value `shiftR` 12) `shiftL` 16) .|. (register `shiftL` 12) .|. (value .&. 0xfff)
+movt register value = 0xe3400000 .|. ((value `shiftR` 12) `shiftL` 16) .|. (register `shiftL` 12) .|. (value .&. 0xfff)
+ldrI register base offset = 0xe5900000 .|. (base `shiftL` 16) .|. (register `shiftL` 12) .|. (offset .&. 0xfff)
+strI register base offset = 0xe5800000 .|. (base `shiftL` 16) .|. (register `shiftL` 12) .|. (offset .&. 0xfff)
+addImm register base value = 0xe2800000 .|. (base `shiftL` 16) .|. (register `shiftL` 12) .|. (value .&. 0xfff)
+movReg register source = 0xe1a00000 .|. (register `shiftL` 12) .|. source
+movImm register value = 0xe3a00000 .|. (register `shiftL` 12) .|. (value .&. 0xff)
+mrsCpsr register = 0xe10f0000 .|. (register `shiftL` 12)
 
--- The four timed blocking rows are withdrawn: the fixture's insert and remove are receipt stubs,
--- so they cannot prove timer membership or consumption. Restore them with a real heap or the
--- owned tick.
+cpsieI, cpsidI, pushRegs, popRegs :: Word32
+cpsieI = 0xf1080080
+cpsidI = 0xf10c0080
+pushRegs = 0xe92d48f0
+popRegs = 0xe8bd88f0
+
+data Item = Insn Word32 | JumpAbs Word32 | CallAbs Word32
+
+build :: Word32 -> [Item] -> B.ByteString
+build base items = assemble (go base items)
+  where
+    go _ [] = []
+    go address (Insn word : rest) = word : go (address + 4) rest
+    go address (JumpAbs target : rest) = jumpAt address target : go (address + 4) rest
+    go address (CallAbs target : rest) = linkAt address target : go (address + 4) rest
+    linkAt here target = 0xeb000000 .|. (((target - here - 8) `shiftR` 2) .&. 0xffffff)
+    jumpAt here target = 0xea000000 .|. (((target - here - 8) `shiftR` 2) .&. 0xffffff)
+
+-- | Reads the armed membership, patches the entry callback to the boundary instrument, sets the
+-- | clock to the deadline, then runs the domain's tick and dispatches the released caller.
+timeoutActor :: Facts -> Domain -> Word32 -> Actor
+timeoutActor facts domain expiry = Actor (build actorBase
+  [ Insn cpsieI
+  , Insn (movw 0 (countAddr .&. 0xffff)), Insn (movt 0 (countAddr `shiftR` 16))
+  , Insn (ldrI 1 0 0)
+  , Insn (movw 2 (recordBase .&. 0xffff)), Insn (movt 2 (recordBase `shiftR` 16))
+  , Insn (strI 1 2 armedCountOff)
+  , Insn (movw 0 (contextAddr .&. 0xffff)), Insn (movt 0 (contextAddr `shiftR` 16))
+  , Insn (ldrI 3 0 0x34)
+  , Insn (ldrI 1 3 0)
+  , Insn (strI 1 2 armedExpiryOff)
+  , Insn (ldrI 1 3 4)
+  , Insn (strI 1 2 armedEntryOff)
+  , Insn (ldrI 4 1 0)
+  , Insn (strI 4 2 armedIndexOff)
+  , Insn (ldrI 4 1 4)
+  , Insn (strI 4 2 armedCallbackOff)
+  , Insn (ldrI 4 1 8)
+  , Insn (strI 4 2 armedTaskOff)
+  , Insn (movw 4 (wrapperBase .&. 0xffff)), Insn (movt 4 (wrapperBase `shiftR` 16))
+  , Insn (strI 4 1 4)
+  , Insn (movw 4 (handlerAddr .&. 0xffff)), Insn (movt 4 (handlerAddr `shiftR` 16))
+  , Insn (movImm 5 1)
+  , Insn (strI 5 4 0)
+  , Insn (movw 4 (tickAddr .&. 0xffff)), Insn (movt 4 (tickAddr `shiftR` 16))
+  , Insn (movw 5 (expiry .&. 0xffff)), Insn (movt 5 (expiry `shiftR` 16))
+  , Insn (strI 5 4 0)
+  , Insn (movImm 0 0)
+  , Insn (movImm 1 0)
+  , Insn (movImm 2 0)
+  , CallAbs (tickEntry domain)
+  , Insn (movw 4 (recordBase .&. 0xffff)), Insn (movt 4 (recordBase `shiftR` 16))
+  , Insn (movw 0 (lockAddr .&. 0xffff)), Insn (movt 0 (lockAddr `shiftR` 16))
+  , Insn (ldrI 1 0 0), Insn (strI 1 4 afterLockOff)
+  , Insn (movw 0 (countAddr .&. 0xffff)), Insn (movt 0 (countAddr `shiftR` 16))
+  , Insn (ldrI 1 0 0), Insn (strI 1 4 afterCountOff)
+  , Insn (movw 0 (baseAddr .&. 0xffff)), Insn (movt 0 (baseAddr `shiftR` 16))
+  , Insn (ldrI 1 0 0), Insn (strI 1 4 afterBaseOff)
+  , Insn (movw 0 (tickAddr .&. 0xffff)), Insn (movt 0 (tickAddr `shiftR` 16))
+  , Insn (ldrI 1 0 0), Insn (strI 1 4 afterTickOff)
+  , Insn (movw 0 (handlerAddr .&. 0xffff)), Insn (movt 0 (handlerAddr `shiftR` 16))
+  , Insn (movImm 1 0), Insn (strI 1 0 0)
+  , Insn cpsidI
+  , Insn (movImm 0 0)
+  , CallAbs (saveAddress domain)
+  , JumpAbs stopAddress
+  ])
+  where
+    words' = domainFacts facts domain
+    countAddr = dfTimerCount words'
+    baseAddr = dfTimerBase words'
+    tickAddr = dfTickNow words'
+    lockAddr = dfSchedulerLock words'
+    handlerAddr = dfHandlerContext words'
+    contextAddr = contextRecord facts domain domain
+
+-- | Reads the armed membership, then calls the stock service entry that releases the caller.
+wakeActor :: Facts -> Domain -> Call -> Word32 -> Word32 -> Actor
+wakeActor facts domain call id argument = Actor (build actorBase
+  [ Insn cpsieI
+  , Insn (movw 0 (countAddr .&. 0xffff)), Insn (movt 0 (countAddr `shiftR` 16))
+  , Insn (ldrI 1 0 0)
+  , Insn (movw 2 (recordBase .&. 0xffff)), Insn (movt 2 (recordBase `shiftR` 16))
+  , Insn (strI 1 2 armedCountOff)
+  , Insn (movw 0 (contextAddr .&. 0xffff)), Insn (movt 0 (contextAddr `shiftR` 16))
+  , Insn (ldrI 3 0 0x34)
+  , Insn (ldrI 1 3 0)
+  , Insn (strI 1 2 armedExpiryOff)
+  , Insn (ldrI 1 3 4)
+  , Insn (strI 1 2 armedEntryOff)
+  , Insn (ldrI 4 1 0)
+  , Insn (strI 4 2 armedIndexOff)
+  , Insn (ldrI 4 1 4)
+  , Insn (strI 4 2 armedCallbackOff)
+  , Insn (ldrI 4 1 8)
+  , Insn (strI 4 2 armedTaskOff)
+  , Insn (movSmall 0 id)
+  , Insn (movw 1 (argument .&. 0xffff)), Insn (movt 1 (argument `shiftR` 16))
+  , CallAbs (entryAddress domain call)
+  , JumpAbs stopAddress
+  ])
+  where
+    words' = domainFacts facts domain
+    countAddr = dfTimerCount words'
+    contextAddr = contextRecord facts domain domain
+
+-- | Records the callback boundary, then calls the real timeout callback with its task argument.
+wrapperBytes :: Facts -> Domain -> B.ByteString
+wrapperBytes facts domain = build wrapperBase
+  [ Insn pushRegs
+  , Insn (movReg 7 0)
+  , Insn (mrsCpsr 4)
+  , Insn (movw 5 (recordBase .&. 0xffff)), Insn (movt 5 (recordBase `shiftR` 16))
+  , Insn (strI 4 5 cbCpsrOff)
+  , Insn (movw 6 (lockAddr .&. 0xffff)), Insn (movt 6 (lockAddr `shiftR` 16))
+  , Insn (ldrI 4 6 0), Insn (strI 4 5 cbLockOff)
+  , Insn (movw 6 (countAddr .&. 0xffff)), Insn (movt 6 (countAddr `shiftR` 16))
+  , Insn (ldrI 4 6 0), Insn (strI 4 5 cbCountOff)
+  , Insn (movw 6 (baseAddr .&. 0xffff)), Insn (movt 6 (baseAddr `shiftR` 16))
+  , Insn (ldrI 4 6 0), Insn (strI 4 5 cbBaseOff)
+  , Insn (movw 6 (tickAddr .&. 0xffff)), Insn (movt 6 (tickAddr `shiftR` 16))
+  , Insn (ldrI 4 6 0), Insn (strI 4 5 cbTickOff)
+  , Insn (ldrI 4 7 0x14)
+  , Insn (ldrI 4 4 0)
+  , Insn (strI 4 5 cbEntryOff)
+  , Insn (ldrI 4 4 0)
+  , Insn (strI 4 5 cbIndexOff)
+  , Insn (ldrI 4 5 cbCallsOff)
+  , Insn (addImm 4 4 1)
+  , Insn (strI 4 5 cbCallsOff)
+  , Insn (movReg 0 7)
+  , CallAbs (timeoutCallback domain)
+  , Insn popRegs
+  ]
+  where
+    words' = domainFacts facts domain
+    countAddr = dfTimerCount words'
+    baseAddr = dfTimerBase words'
+    tickAddr = dfTickNow words'
+    lockAddr = dfSchedulerLock words'
+
+-- | The stock service entry that releases the blocked caller in the untimed blocking rows.
+serviceActor :: Domain -> Call -> Word32 -> Word32 -> Actor
+serviceActor domain call id argument = Actor (assemble [cpsieI, movSmall 0 id, movw 1 (argument .&. 0xffff), movt 1 (argument `shiftR` 16), branchLink 4 (entryAddress domain call), branch 5 stopAddress])
+
+branchLink, branch :: Int -> Word32 -> Word32
+branchLink index target = 0xeb000000 .|. (((target - actorBase - fromIntegral index * 4 - 8) `shiftR` 2) .&. 0xffffff)
+branch index target = 0xea000000 .|. (((target - actorBase - fromIntegral index * 4 - 8) `shiftR` 2) .&. 0xffffff)
+
 cases :: Facts -> Domain -> [Case]
 cases facts executing =
   [ caseOf "send-empty" Send [(R0, 1), (R1, 0x1111)] (queue 1 0 2 ++ empty) [ResultIs 0, eq "ring" ringBase 0x1111, eq "kernel" (count 1) 1, eq "kernel" (read 1) 0, eq "kernel" (write 1) 1]
@@ -260,18 +417,41 @@ cases facts executing =
       , eq "kernel" objectLock 0, eq "kernel" schedulerLock 0
       , CpsrIs 0x13
       ]
-
-
-
-
+  , timed "send-timeout-blocks" SendTimeout [(R0, 1), (R1, 0x2222), (R2, 5)] (queue 1 0 1 ++ full [0xaaaa] 1)
+      (timeoutActor facts executing (clockValue + 5))
+      (timeoutChecks (-50) [eq "ring" ringBase 0xaaaa, eq "kernel" (count 1) 1, eq "kernel" (read 1) 0, eq "kernel" (write 1) 0, eq "kernel" (waitData 1) 0x2222, eq "kernel" (sendNext 1) (sendSelf 1), eq "kernel" (sendPrev 1) (sendSelf 1)])
+      [recordEq cbIndexOff 1]
+      [recordEq cbIndexOff 0]
+  , timed "receive-timeout-blocks" ReceiveTimeout [(R0, 1), (R1, outBase), (R2, 5)] (queue 1 0 2 ++ [poke outBase 0x5e4d1e00])
+      (timeoutActor facts executing (clockValue + 5))
+      (timeoutChecks (-50) [eq "out" outBase 0x5e4d1e00, eq "kernel" (count 1) 0, eq "kernel" (read 1) 0, eq "kernel" (write 1) 0, eq "kernel" (recvNext 1) (recvSelf 1), eq "kernel" (recvPrev 1) (recvSelf 1)])
+      [recordEq cbIndexOff 1]
+      [recordEq cbIndexOff 0]
+  , timed "send-timeout-wake" SendTimeout [(R0, 1), (R1, 0x3333), (R2, 5)] (queue 1 0 1 ++ full [0xbbbb] 1)
+      (wakeActor facts executing Receive 1 outBase)
+      (wakeChecks 0 [eq "out" outBase 0xbbbb, eq "ring" ringBase 0x3333, eq "kernel" (count 1) 1, eq "kernel" (read 1) 0, eq "kernel" (write 1) 0, eq "kernel" (sendNext 1) (sendSelf 1), eq "kernel" (sendPrev 1) (sendSelf 1)])
+      [eq "kernel" (timerEntry 1) 1]
+      [eq "kernel" (timerEntry 1) 0]
+  , timed "receive-timeout-wake" ReceiveTimeout [(R0, 1), (R1, outBase), (R2, 5)] (queue 1 0 2 ++ [poke outBase 0x5e4d1e00])
+      (wakeActor facts executing Send 1 0x4444)
+      (wakeChecks 0 [eq "out" outBase 0x4444, eq "kernel" (count 1) 0, eq "kernel" (read 1) 0, eq "kernel" (write 1) 0, eq "kernel" (waitData 1) 0x4444, eq "kernel" (recvNext 1) (recvSelf 1), eq "kernel" (recvPrev 1) (recvSelf 1)])
+      [eq "kernel" (timerEntry 1) 1]
+      [eq "kernel" (timerEntry 1) 0]
   , difference "delete-stranded-receiver" Delete [(R0, 1)] (queue 1 0 2 ++ receiverWaiter)
       [ResultIs 0, eq "kernel" (configExists 1) 0]
       [ResultIs 0, eq "kernel" (configExists 1) 0, eq "kernel" (recvNext 1) (recvSelf 1), eq "kernel" (waitResult 2) 0, ByteIs "kernel" (taskState 2) (stateObjectQueued facts .|. stateWait facts)]
       [ResultIs 0, eq "kernel" (configExists 1) 0, eq "kernel" (recvNext 1) (recvSelf 1), eq "kernel" (waitResult 2) (-49), ByteIs "kernel" (taskState 2) (stateReady facts)]
   , difference "delete-timed-waiter" Delete [(R0, 1)] (queue 1 0 2 ++ timedReceiverWaiter)
       [ResultIs 0, eq "kernel" (configExists 1) 0]
-      [ResultIs 0, eq "kernel" (configExists 1) 0, eq "timer-stub" (stubBase + 0x10) 0, eq "timer-stub" (stubBase + 0x14) 0]
-      [ResultIs 0, eq "kernel" (configExists 1) 0, eq "kernel" (waitResult 2) (-49), ByteIs "kernel" (taskState 2) (stateReady facts), eq "timer-stub" (stubBase + 0x10) (contextRecord facts executing executing), eq "timer-stub" (stubBase + 0x14) (timerEntry 2)]
+      [ ResultIs 0, eq "kernel" (configExists 1) 0
+      , eq "kernel" (dfTimerCount words') 1, eq "kernel" (dfTimerHeap words') (clockValue + 5)
+      , eq "kernel" (dfTimerHeap words' + 4) (timerEntry 2), eq "kernel" (timerEntry 2) 1
+      , eq "kernel" (waitResult 2) (timerEntry 2), ByteIs "kernel" (taskState 2) (stateObjectQueued facts .|. stateWait facts)
+      ]
+      [ ResultIs 0, eq "kernel" (configExists 1) 0
+      , eq "kernel" (dfTimerCount words') 0, eq "kernel" (timerEntry 2) 0
+      , eq "kernel" (waitResult 2) (-49), ByteIs "kernel" (taskState 2) (stateReady facts)
+      ]
   , caseOf "create" Create [(R0, 4), (R1, packetBase)]
       [ poke (configExists 4) 0, poke (configAttributes 4) 0x5a5a5a5a
       , poke packetBase 1, poke (packetBase + 4) 2, poke (packetBase + 8) ringBase
@@ -298,6 +478,7 @@ cases facts executing =
   , caseOf "send-timeout-invalid" SendTimeout [(R0, 1), (R1, 2), (R2, -2)] (queue 1 0 2) [ResultIs (-17), eq "kernel" (count 1) 0]
   ]
   where
+    words' = domainFacts facts executing
     queue slot attributes capacity =
       [ poke (configExists slot) 1
       , poke (configAttributes slot) attributes
@@ -312,7 +493,7 @@ cases facts executing =
       , poke (write slot) 0
       ]
     empty = []
-    full words' count' = [poke (ringBase + fromIntegral index * 4) value | (index, value) <- zip [0 :: Int ..] words'] ++ [poke (count 1) count', poke (read 1) 0, poke (write 1) (count' `mod` fromIntegral (max 1 (length words')))]
+    full words'' count' = [poke (ringBase + fromIntegral index * 4) value | (index, value) <- zip [0 :: Int ..] words''] ++ [poke (count 1) count', poke (read 1) 0, poke (write 1) (count' `mod` fromIntegral (max 1 (length words'')))]
     receiverWaiter =
       let t = taskAt 2
           q = recvSelf 1
@@ -322,7 +503,19 @@ cases facts executing =
           , poke (t + factsTaskWait facts) (wait 2)
           , poke (wait 2) 0, poke (waitQueue 2) q, poke (waitOwner 2) (contextRecord facts executing executing)
           ] ++ removeReady3
-    timedReceiverWaiter = receiverWaiter ++ [poke (wait 2) (dataQueueTimer facts executing 2)]
+    timedReceiverWaiter = receiverWaiter
+      ++ [ poke (wait 2) (timerEntry 2)
+         , poke (timerEntry 2) 1
+         , poke (timerEntry 2 + 4) (timeoutCallback executing)
+         , poke (timerEntry 2 + 8) (taskAt 2)
+         , poke (dfTimerCount words') 1
+         , poke (dfTimerBase words') 0
+         , poke (dfTickNow words') clockValue
+         , poke (dfTimerHeap words') (clockValue + 5)
+         , poke (dfTimerHeap words' + 4) (timerEntry 2)
+         , poke (arenaBase facts executing) (clockValue + 5)
+         , poke (arenaBase facts executing + 4) (timerEntry 2)
+         ]
     senderWaiter =
       let t = taskAt 2
           q = sendSelf 1
@@ -333,15 +526,13 @@ cases facts executing =
           , poke (wait 2) 0, poke (waitData 2) 0xbbbb, poke (waitQueue 2) q, poke (waitOwner 2) (contextRecord facts executing executing)
           ] ++ removeReady3
     removeReady3 =
-      let words' = domainFacts facts executing
-          head3 = dfReadyHeads words' + 3 * 8
+      let head3 = dfReadyHeads words' + 3 * 8
           bitmap = dfReadyBitmap words'
        in [poke head3 head3, poke (head3 + 4) head3, poke bitmap ((1 `shiftL` 0) .|. (1 `shiftL` 5))]
     -- Running task 1 READY at priority 5, alone in the ready set, so a released priority-3
     -- waiter outranks the selection.
     currentAtPriorityFive =
-      let words' = domainFacts facts executing
-          task1 = taskAt 1
+      let task1 = taskAt 1
           task3 = taskAt 3
           head0 = dfReadyHeads words'
           head5 = head0 + 5 * 8
@@ -353,18 +544,63 @@ cases facts executing =
           , poke task3 task3, poke (task3 + factsTaskPrev facts) task3
           , poke (task3 + factsTaskState facts) (packedState (factsStateDormant facts) 5)
           ]
-    caseOf name call args words' checks =
-      Case (CaseId name) call args words' checks [] [] False Nothing
-    difference name call args words' common stockChecks ownedChecks =
-      Case (CaseId name) call args words' common stockChecks ownedChecks False Nothing
-    handler name call args words' checks =
-      Case (CaseId name) call args (words' ++ [poke (dfHandlerContext (domainFacts facts executing)) 1]) checks [] [] True Nothing
-    blocking name call args words' actor checks =
-      Case (CaseId name) call args words' checks [] [] False (Just actor)
+    caseOf name call args words'' checks =
+      Case (CaseId name) call args words'' checks [] [] True False Nothing
+    difference name call args words'' common stockChecks ownedChecks =
+      Case (CaseId name) call args words'' common stockChecks ownedChecks False False Nothing
+    handler name call args words'' checks =
+      Case (CaseId name) call args (words'' ++ [poke (dfHandlerContext words') 1]) checks [] [] True True Nothing
+    blocking name call args words'' actor checks =
+      Case (CaseId name) call args words'' checks [] [] True False (Just actor)
+    timed name call args words'' actor checks stockChecks ownedChecks =
+      Case (CaseId name) call args words'' checks stockChecks ownedChecks True False (Just actor)
+    timeoutChecks result extra =
+      [ ResultIs result
+      , eq "kernel" (waitResult 1) result
+      , eq "kernel" (waitQueue 1) (sendSelf 1)
+      , ByteIs "kernel" (taskState 1) (stateReady facts)
+      , eq "kernel" (dfTimerCount words') 0
+      , recordEq armedCountOff 1
+      , recordEq armedExpiryOff (clockValue + 5)
+      , recordEq armedEntryOff (timerEntry 1)
+      , recordEq armedIndexOff 1
+      , recordEq armedCallbackOff (timeoutCallback executing)
+      , recordEq armedTaskOff (taskAt 1)
+      , recordEq afterLockOff 0
+      , recordEq afterCountOff 0
+      , recordEq afterBaseOff (clockValue + 5)
+      , recordEq afterTickOff (clockValue + 15)
+      , MaskedIs "timer-record" (recordBase + cbCpsrOff) 0x80 0x80
+      , recordEq cbLockOff 1
+      , recordEq cbCountOff 0
+      , recordEq cbBaseOff 0
+      , recordEq cbTickOff (clockValue + 5)
+      , recordEq cbEntryOff (timerEntry 1)
+      , recordEq cbCallsOff 1
+      , eq "kernel" objectLock 0, eq "kernel" schedulerLock 0
+      , CpsrIs 0x13
+      ] ++ extra
+    wakeChecks result extra =
+      [ ResultIs result
+      , eq "kernel" (waitResult 1) result
+      , eq "kernel" (waitQueue 1) (sendSelf 1)
+      , ByteIs "kernel" (taskState 1) (stateReady facts)
+      , eq "kernel" (dfTimerCount words') 0
+      , recordEq armedCountOff 1
+      , recordEq armedExpiryOff (clockValue + 5)
+      , recordEq armedEntryOff (timerEntry 1)
+      , recordEq armedIndexOff 1
+      , recordEq armedCallbackOff (timeoutCallback executing)
+      , recordEq armedTaskOff (taskAt 1)
+      , recordEq cbCallsOff 0
+      , eq "kernel" objectLock 0, eq "kernel" schedulerLock 0
+      , CpsrIs 0x13
+      ] ++ extra
     timerEntry slot = dataQueueTimer facts executing slot
-    objectLock = dfObjectLock (domainFacts facts executing)
-    schedulerLock = dfSchedulerLock (domainFacts facts executing)
-    peerDomain = if executing == DomainA then DomainB else DomainA
+    recordEq offset value = eq "timer-record" (recordBase + offset) value
+    objectLock = dfObjectLock words'
+    schedulerLock = dfSchedulerLock words'
+    peerDomain = peer executing
     peerQueue slot attributes capacity =
       let config = dataQueueConfig facts peerDomain slot
           control = dataQueueControl facts peerDomain slot
@@ -403,41 +639,44 @@ cases facts executing =
     taskState slot = taskAt slot + factsTaskState facts
     packedState state priority = fromIntegral state .|. (priority `shiftL` 8)
 
-sendStateBits :: Word8
-sendStateBits = 0x32
-
 stateReady, stateWait, stateObjectQueued, stateOwnerLockQueued :: Facts -> Word8
 stateReady = factsStateReady
 stateWait = factsStateWait
 stateObjectQueued = factsStateObjectQueued
 stateOwnerLockQueued = factsStateOwnerLockQueued
 
-layoutWords :: Facts -> Case -> [(Word32, Word32)]
-layoutWords facts one =
+layoutWords :: Facts -> Bool -> Case -> [(Word32, Word32)]
+layoutWords facts owned one =
   concat [recordPokes block described | block <- domains, described <- domains]
     ++ concatMap taskPokes domains ++ concatMap objectPokes domains ++ concatMap readyPokes domains
+    ++ [poke (dfTimerCount (domainFacts facts domain)) 0 | domain <- domains]
+    ++ [poke (dfTimerBase (domainFacts facts domain)) 0 | domain <- domains]
     ++ [poke (dfTickNow (domainFacts facts domain)) clockValue | domain <- domains]
   where
     domains = [DomainA, DomainB]
     recordPokes block described =
       let record = contextRecord facts block described
-          words' = domainFacts facts described
+          describedWords = domainFacts facts described
           (acquire, release) = lockEntries block
           lock offset address = [poke (record + offset + factsLockWord facts) address, poke (record + offset + factsLockAcquire facts) acquire, poke (record + offset + factsLockRelease facts) release]
-       in [ poke (record + factsContextId facts) (if block == described then factsOwnId facts else dfId words')
-          , poke (record + factsContextOwner facts) (dfId words')
-          , poke (record + factsContextReadyHeads facts) (dfReadyHeads words')
-          , poke (record + factsContextReadyBitmap facts) (dfReadyBitmap words')
-          , poke (record + factsContextRunning facts) (dfRunning words')
-          , poke (record + factsContextSelected facts) (dfSelected words')
-          , poke (record + factsContextDispatchEnabled facts) (dfDispatchEnabled words')
-          , poke (record + factsContextTickNow facts) (dfTickNow words')
+       in [ poke (record + factsContextId facts) (if block == described then factsOwnId facts else dfId describedWords)
+          , poke (record + factsContextOwner facts) (dfId describedWords)
+          , poke (record + factsContextReadyHeads facts) (dfReadyHeads describedWords)
+          , poke (record + factsContextReadyBitmap facts) (dfReadyBitmap describedWords)
+          , poke (record + factsContextRunning facts) (dfRunning describedWords)
+          , poke (record + factsContextSelected facts) (dfSelected describedWords)
+          , poke (record + factsContextDispatchEnabled facts) (dfDispatchEnabled describedWords)
+          , poke (record + factsContextTickNow facts) (dfTickNow describedWords)
+          , poke (record + factsContextTimerHeap facts) (roleHeap described)
+          , poke (record + factsContextTimerCount facts) (dfTimerCount describedWords)
+          , poke (record + factsContextTimerBase facts) (dfTimerBase describedWords)
           , poke (record + factsContextFirstEntry facts) (trampoline described)
-          , poke (record + factsContextTasks facts) (dfTaskTable words')
+          , poke (record + factsContextTasks facts) (dfTaskTable describedWords)
           , poke (record + factsContextTaskCount facts) (factsTaskSlots facts)
-          , poke (record + factsContextDataQueues facts) (dfDataQueueControls words')
+          , poke (record + factsContextDataQueues facts) (dfDataQueueControls describedWords)
           , poke (record + factsContextDataQueueCount facts) 120
-          ] ++ lock (factsContextSchedulerLock facts) (dfSchedulerLock words') ++ lock (factsContextObjectLock facts) (dfObjectLock words')
+          ] ++ lock (factsContextSchedulerLock facts) (dfSchedulerLock describedWords) ++ lock (factsContextObjectLock facts) (dfObjectLock describedWords)
+    roleHeap described = if owned then arenaBase facts described else dfTimerHeap (domainFacts facts described)
     taskPokes domain = concat
       [ let address = task facts domain slot
             definition' = definition facts domain slot
@@ -484,19 +723,19 @@ layoutWords facts one =
       | slot <- [1 .. 3]
       ]
     readyPokes domain =
-      let words' = domainFacts facts domain
-          headAt priority = dfReadyHeads words' + priority * factsHeadSize facts
+      let domainWords = domainFacts facts domain
+          headAt priority = dfReadyHeads domainWords + priority * factsHeadSize facts
           member slot priority =
             let address = task facts domain slot
                 headAddress = headAt priority
              in [poke headAddress address, poke (headAddress + factsHeadPrev facts) address, poke address headAddress, poke (address + factsTaskPrev facts) headAddress, poke (address + factsTaskState facts) (fromIntegral (factsStateReady facts) .|. (priority `shiftL` 8))]
        in concat [[poke (headAt priority) (headAt priority), poke (headAt priority + factsHeadPrev facts) (headAt priority)] | priority <- [0 .. factsPriorities facts - 1]]
             ++ member 1 0 ++ member 2 3 ++ member 3 5
-            ++ [ poke (dfReadyBitmap words') ((1 `shiftL` 0) .|. (1 `shiftL` 3) .|. (1 `shiftL` 5))
-               , poke (dfRunning words') (task facts domain 1), poke (dfSelected words') (task facts domain 1)
-               , poke (dfDispatchEnabled words') 1, poke (dfSchedulerLock words') 0, poke (dfObjectLock words') 0
-               , poke (dfCurrentContext words') (contextRecord facts domain domain)
-               , poke (dfHandlerContext words') 0
+            ++ [ poke (dfReadyBitmap domainWords) ((1 `shiftL` 0) .|. (1 `shiftL` 3) .|. (1 `shiftL` 5))
+               , poke (dfRunning domainWords) (task facts domain 1), poke (dfSelected domainWords) (task facts domain 1)
+               , poke (dfDispatchEnabled domainWords) 1, poke (dfSchedulerLock domainWords) 0, poke (dfObjectLock domainWords) 0
+               , poke (dfCurrentContext domainWords) (contextRecord facts domain domain)
+               , poke (dfHandlerContext domainWords) 0
                ]
 
 trampoline :: Domain -> Word32
@@ -520,6 +759,7 @@ kernelBounds facts domain = (low, high)
       , dfDataQueueControls words' + 5 * rfControlSize (factsRecords facts)
       , dfDataQueueWaits words' + 3 * rfWaitSize (factsRecords facts)
       , dfDataQueueTimers words' + 3 * factsTimerEntrySize facts
+      , dfTimerHeap words' + 0x1000
       ]
 
 contains :: GuestAddress -> Int -> Page -> Bool
@@ -535,13 +775,22 @@ overlay start initial words' = B.concat (pieces 0 ordered)
       let offset = fromIntegral (address - start)
        in B.take (offset - cursor) (B.drop cursor initial) : word32le value : pieces (offset + 4) rest
 
-codeBytes :: Domain -> Image -> B.ByteString
-codeBytes domain image = install (timerRemove domain) removeStub (install (timerInsert domain) timerStub base)
-  where
-    base = imageBytes image
-    install address bytes current =
-      let offset = fromIntegral (address - imageBase image)
-       in B.take offset current <> bytes <> B.drop (offset + B.length bytes) current
+sliceImage :: Image -> Word32 -> Int -> B.ByteString
+sliceImage image address size = B.take size (B.drop (fromIntegral (address - imageBase image)) (imageBytes image))
+
+install :: Image -> Word32 -> B.ByteString -> B.ByteString -> B.ByteString
+install image address bytes current =
+  let offset = fromIntegral (address - imageBase image)
+   in B.take offset current <> bytes <> B.drop (offset + B.length bytes) current
+
+-- | The stock role runs the stock timer block; the owned role overlays the owned timer module at
+-- | its stock extents and the stock timeout callback the family does not own.
+codeBytes :: Facts -> Domain -> Bool -> Image -> Image -> Image -> B.ByteString
+codeBytes _ domain owned timerImage image stockImage
+  | not owned = imageBytes stockImage
+  | otherwise =
+      install image (timeoutCallback domain) (sliceImage stockImage (timeoutCallback domain) timeoutCallbackSize)
+        (install image (timerModuleStart domain) (sliceImage timerImage (timerModuleStart domain) (fromIntegral (timerModuleSpan domain))) (imageBytes image))
 
 pages :: Facts -> Domain -> Case -> [Page]
 pages facts domain one =
@@ -550,7 +799,9 @@ pages facts domain one =
   , page "definitions" 0x0096c000 0x4000 ReadWrite
   , page "ring" ringBase 0x100 ReadWrite
   , page "out" outBase 0x10 ReadWrite
-  , page "timer-stub" stubBase 0x40 ReadWrite
+  , page "arena" (arenaBase facts domain) (fromIntegral (arenaBytes facts domain)) ReadWrite
+  , page "timer-record" recordBase recordSize ReadWrite
+  , pageWith "timer-wrapper" wrapperBase wrapperSize ReadExecute (wrapperBytes facts domain)
   , page "stack" (stackPointer - 0x400) 0x400 ReadWrite
   , page "actor-stack" actorStackLow (fromIntegral (actorStackHigh - actorStackLow)) ReadWrite
   , page "exit" exitAddress 0x10 ReadExecute
@@ -561,8 +812,9 @@ pages facts domain one =
     ++ [page "packet" packetBase 0x10 ReadWrite | caseCall one == Create]
     ++ [Page (RegionId "actor") (GuestAddress (fromIntegral actorBase)) (B.length code) ReadExecute code | Actor code <- maybe [] pure (caseActor one)]
   where
-    peerDomain = if domain == DomainA then DomainB else DomainA
+    peerDomain = peer domain
     page name address size permission = Page (RegionId name) (GuestAddress (fromIntegral address)) size permission (B.replicate size 0)
+    pageWith name address size permission bytes = Page (RegionId name) (GuestAddress (fromIntegral address)) size permission bytes
 
 initialRegisters :: Facts -> Domain -> Case -> [(Register, Word32)]
 initialRegisters facts _ one =
@@ -570,15 +822,16 @@ initialRegisters facts _ one =
   where
     value register = maybe (seedRegister register) id (lookup register (caseArgs one))
 
-caseFor :: Facts -> Domain -> Bool -> [(Word32, Word32)] -> Image -> Image -> Case -> CaseSpec
-caseFor facts domain owned ownedSymbols image stockImage one =
+caseFor :: Facts -> Domain -> Bool -> Image -> [(Word32, Word32)] -> Image -> Image -> Case -> CaseSpec
+caseFor facts domain owned timerImage ownedSymbols image stockImage one =
   CaseSpec
     { caseId = caseIdText (caseName one) ++ "-" ++ domainLabel domain
-    , caseProvenance = "X-M1 1.50 data-queue stock ABI, x70view 55436fc85c0560dd252b0410af6f2427fe198cd3; synthetic queue, task, actor and timer-seam state"
-    , caseExclusion = "Synthetic queue, task and timer-seam state. A second task calls the stock entry or the real timeout callback that releases the blocked caller; timer arm and removal are stubbed to their argument receipts; no firmware integration."
+    , caseProvenance = "X-M1 1.50 data-queue stock ABI, x70view 55436fc85c0560dd252b0410af6f2427fe198cd3; synthetic queue, task, actor and timer-heap state"
+    , caseExclusion = "Synthetic queue, task and timer-heap state. A second task calls the stock entry, runs the domain tick over the armed heap, or records the callback boundary and calls the stock timeout callback; no firmware integration."
     , caseEntry = N.GuestAddress (fromIntegral (entryAddress domain (caseCall one)))
     , caseExit = N.GuestAddress (fromIntegral exitAddress)
-    , caseRegions = codeRegions ++ [mkRegion ident (N.GuestAddress (fromIntegral address)) size permission (overlay address background (wordsFor ident)) | Page ident (GuestAddress address) size permission background <- dataPages]
+    , caseRegions = [mkRegion (RegionId "code") (N.GuestAddress (fromIntegral codeBase)) (fromIntegral (B.length code)) ReadExecute code]
+        ++ [mkRegion ident (N.GuestAddress (fromIntegral address)) size permission (overlay address background (wordsFor owned ident)) | Page ident (GuestAddress address) size permission background <- dataPages]
     , caseFunctions = [(N.GuestAddress (fromIntegral address), size) | (address, size) <- functions]
     , caseInitial = initialRegisters facts domain one
     , caseExpectedStatus = Returned
@@ -589,27 +842,18 @@ caseFor facts domain owned ownedSymbols image stockImage one =
     }
   where
     dataPages = pages facts domain one
-    code = codeBytes domain image
+    code = codeBytes facts domain owned timerImage image stockImage
     codeBase = imageBase image
-    -- The owned role keeps the stock kernel's timeout delivery at its own address: the family
-    -- does not own it, so the code region steps around that span.
-    codeRegions
-      | owned =
-          [ mkRegion (RegionId "code-low") (N.GuestAddress (fromIntegral codeBase)) (fromIntegral (callbackStart - codeBase)) ReadExecute (B.take (fromIntegral (callbackStart - codeBase)) code)
-          , mkRegion (RegionId "stock-timeout") (N.GuestAddress (fromIntegral callbackStart)) timeoutCallbackSize ReadExecute (stockCode stockImage callbackStart timeoutCallbackSize)
-          , mkRegion (RegionId "code-high") (N.GuestAddress (fromIntegral callbackEnd)) (fromIntegral (codeBase + fromIntegral (B.length code) - callbackEnd)) ReadExecute (B.drop (fromIntegral (callbackEnd - codeBase)) code)
-          ]
-      | otherwise =
-          [mkRegion (RegionId "code") (N.GuestAddress (fromIntegral codeBase)) (fromIntegral (B.length code)) ReadExecute code]
-    callbackStart = timeoutCallback domain
-    callbackEnd = callbackStart + fromIntegral timeoutCallbackSize
     actorFunction = [(actorBase, fromIntegral (B.length body)) | Actor body <- maybe [] pure (caseActor one)]
-    functions = sortOn fst (if owned then ownedSymbols ++ actorFunction ++ timerStubs ++ [(timeoutCallback domain, fromIntegral timeoutCallbackSize)] else extents domain ++ actorFunction)
-    timerStubs = [(timerInsert domain, fromIntegral (B.length timerStub)), (timerRemove domain, fromIntegral (B.length removeStub))]
+    wrapperFunction = [(wrapperBase, fromIntegral (B.length (wrapperBytes facts domain)))]
+    functions = sortOn fst $
+      if owned
+        then ownedSymbols ++ actorFunction ++ wrapperFunction ++ [(timerModuleStart domain, timerModuleSpan domain), (timeoutCallback domain, fromIntegral timeoutCallbackSize)]
+        else extents domain ++ actorFunction ++ wrapperFunction
     stackContexts = case caseActor one of
       Nothing -> []
       Just _ -> either (const []) id (sequence [mkStackContext (N.GuestAddress (fromIntegral callerStackLow)) (N.GuestAddress (fromIntegral stackPointer)), mkStackContext (N.GuestAddress (fromIntegral actorStackLow)) (N.GuestAddress (fromIntegral actorStackHigh))])
-    wordsFor ident = if regionName ident `elem` ["kernel", "peer-kernel", "definitions"] then layoutWords facts one ++ caseWords one else caseWords one
+    wordsFor ownedRole ident = (if regionName ident `elem` ["kernel", "peer-kernel", "definitions"] then layoutWords facts ownedRole one else []) ++ caseWords one
 
 -- | The returned caller's ABI: its result, its callee-saved registers and its stack pointer.
 expectedRegisters :: Case -> [(Register, Word32)]
@@ -617,10 +861,6 @@ expectedRegisters one =
   [ (R0, value) | value : _ <- [[value | ResultIs value <- caseExpect one ++ caseStockExpect one]] ]
     ++ [(register, seedRegister register) | register <- [R4 .. R11]]
     ++ [(Sp, stackPointer)]
-
-stockCode :: Image -> Word32 -> Int -> B.ByteString
-stockCode image address size =
-  B.take size (B.drop (fromIntegral (address - imageBase image)) (imageBytes image))
 
 readWord :: [Page] -> NativeObservation -> String -> Word32 -> Maybe Word32
 readWord pages' observation name address = case
@@ -647,6 +887,10 @@ holds _ _ pages' observation expectation = case expectation of
     Just actual | actual == value -> Right ()
     Just actual -> Left (region ++ " byte " ++ show address ++ " is " ++ show actual ++ ", expected " ++ show value)
     Nothing -> Left ("missing " ++ region ++ " byte " ++ show address)
+  MaskedIs region address mask value -> case readWord pages' observation region address of
+    Just actual | actual .&. mask == value -> Right ()
+    Just actual -> Left (region ++ " " ++ show address ++ " masked is " ++ show (actual .&. mask) ++ ", expected " ++ show value)
+    Nothing -> Left ("missing " ++ region ++ " " ++ show address)
   ResultIs value -> case N.lookupRegister R0 observation of
     Just actual | actual == value -> Right ()
     Just actual -> Left ("r0 is " ++ show actual ++ ", expected " ++ show value)
@@ -682,8 +926,8 @@ compareCase facts domain one stock owned = statusDifferences ++ declaredRegister
       [ role ++ ": " ++ message
       | valid
       , (role, observation, checks) <-
-          [ ("stock", stock, if null (caseStockExpect one) then caseExpect one else caseStockExpect one)
-          , ("owned", owned, if null (caseStockExpect one) then caseExpect one else caseOwnedExpect one)
+          [ ("stock", stock, caseExpect one ++ caseStockExpect one)
+          , ("owned", owned, caseExpect one ++ caseOwnedExpect one)
           ]
       , Left message <- [sequence [holds facts domain pages' observation check | check <- checks]]
       ]
@@ -695,14 +939,16 @@ compareCase facts domain one stock owned = statusDifferences ++ declaredRegister
     regionDifferences =
       [ "region " ++ name ++ " differs"
       | valid
-      , null (caseStockExpect one)
-      , name <- ["kernel", "peer-kernel", "ring", "out"]
+      , caseCompareRegions one
+      , name <- ["kernel", "peer-kernel", "ring", "out", "timer-record"]
       , let view = case name of
-              "kernel" -> fmap (withoutContinuations facts domain)
-              "peer-kernel" -> fmap (withoutContinuations facts (peer domain))
+              "kernel" -> fmap (normalizeKernel facts domain)
+              "peer-kernel" -> fmap (normalizeKernel facts (peer domain))
+              "timer-record" -> fmap (normalizeRecord facts)
               _ -> id
       , view (regionBytes stock name) /= view (regionBytes owned name)
       ]
+        ++ (if caseCompareRegions one then relocatedHeapDifferences facts domain stock owned else [])
     registerDifferences =
       [ "caller register " ++ show register ++ " differs"
       | valid
@@ -712,16 +958,44 @@ compareCase facts domain one stock owned = statusDifferences ++ declaredRegister
         ++ [ "caller SP differs" | valid, N.lookupRegister Sp stock /= N.lookupRegister Sp owned ]
         ++ [ "caller control bits differ" | valid, fmap (.&. 0x1ff) (N.lookupRegister Cpsr stock) /= fmap (.&. 0x1ff) (N.lookupRegister Cpsr owned) ]
 
--- | A kernel view with each task's saved stack pointer zeroed. The frame depth at a dispatch is
--- the body's own; the resumed caller's stack pointer and callee-saved registers are the oracle.
-withoutContinuations :: Facts -> Domain -> B.ByteString -> B.ByteString
-withoutContinuations facts domain bytes = foldl clear bytes addresses
+-- | Zero the role-specific words a comparison must not read: saved stack pointers, context heap
+-- pointers, per-task timer entry indices and the stock heap span.
+normalizeKernel :: Facts -> Domain -> B.ByteString -> B.ByteString
+normalizeKernel facts domain bytes = maskHeap (foldl clear bytes addresses)
   where
     (low, _) = kernelBounds facts domain
     addresses = [task facts domain slot + factsTaskSavedSp facts | slot <- [1 .. 3]]
-    clear current address =
-      let offset = fromIntegral (address - low)
-       in B.take offset current <> B.replicate 4 0 <> B.drop (offset + 4) current
+      ++ [contextRecord facts domain described + factsContextTimerHeap facts | described <- [DomainA, DomainB]]
+      ++ [dataQueueTimer facts domain slot | slot <- [1 .. 3]]
+    clear current address = replaceWord (fromIntegral (address - low)) 0 current
+    maskHeap current = maskRange (fromIntegral (dfTimerHeap (domainFacts facts domain) - low)) 0x5c0 current
+
+-- | The timer record's callback index and condition flags are role-specific or incidental.
+normalizeRecord :: Facts -> B.ByteString -> B.ByteString
+normalizeRecord _ bytes = replaceWord (fromIntegral cbIndexOff) 0 (replaceWord (fromIntegral cbCpsrOff) (readWordAt bytes (fromIntegral cbCpsrOff) .&. 0x1ff) bytes)
+
+-- | The stock heap and the owned arena hold the same nodes at different addresses.
+relocatedHeapDifferences :: Facts -> Domain -> NativeObservation -> NativeObservation -> [String]
+relocatedHeapDifferences facts domain stock owned =
+  case (lookup (RegionId "kernel") (nativeMemory stock), lookup (RegionId "arena") (nativeMemory owned)) of
+    (Just kernel, Just arena)
+      | offset + heapLen <= B.length kernel ->
+          [ "relocated timer heap differs" | B.take heapLen (B.drop offset kernel) /= B.take heapLen arena ]
+    _ -> ["relocated timer heap region is missing"]
+  where
+    low = fst (kernelBounds facts domain)
+    offset = fromIntegral (dfTimerHeap (domainFacts facts domain) - low)
+    heapLen = 0x5c0
+
+replaceWord :: Int -> Word32 -> B.ByteString -> B.ByteString
+replaceWord offset value bytes
+  | offset < 0 || offset + 4 > B.length bytes = bytes
+  | otherwise = B.take offset bytes <> word32le value <> B.drop (offset + 4) bytes
+
+maskRange :: Int -> Int -> B.ByteString -> B.ByteString
+maskRange offset size bytes
+  | offset < 0 || size < 0 || offset + size > B.length bytes = bytes
+  | otherwise = B.take offset bytes <> B.replicate size 0 <> B.drop (offset + size) bytes
 
 -- | The runner report's status and mismatches, as its judge wrote them.
 data Report = Report { reportStatus :: String, reportMismatches :: [String] }
@@ -745,11 +1019,37 @@ reportVerdicts directory ident = do
               || (reportStatus report == "failed" && null (reportMismatches report))
           ]
 
-runDomain :: FilePath -> FilePath -> FilePath -> Facts -> Domain -> Image -> Image -> [(Word32, Word32)] -> IO [CaseRun]
-runDomain runner cacheRoot directory facts domain stockImage ownedImage ownedSymbols = do
+controlRuns :: Facts -> Domain -> Case -> NativeObservation -> [ControlRun]
+controlRuns facts domain one observed =
+  [ ControlRun domain "armed-membership" name (refused (WordIs "timer-record" (recordBase + armedCountOff) 1) (mutateRecord armedCountOff 0))
+  | name `elem` timedNames
+  ]
+    ++ concat [ [ ControlRun domain "callback-consumed" name (refused (WordIs "timer-record" (recordBase + cbCountOff) 0) (mutateRecord cbCountOff 1))
+               , ControlRun domain "callback-i-masked" name (refused (MaskedIs "timer-record" (recordBase + cbCpsrOff) 0x80 0x80) (mutateRecordBit cbCpsrOff 0x80))
+               , ControlRun domain "callback-lock-held" name (refused (WordIs "timer-record" (recordBase + cbLockOff) 1) (mutateRecord cbLockOff 0))
+               , ControlRun domain "released-lock" name (refused (WordIs "timer-record" (recordBase + afterLockOff) 0) (mutateRecord afterLockOff 1))
+               ]
+             | name `elem` ["send-timeout-blocks", "receive-timeout-blocks"]
+             ]
+    ++ [ ControlRun domain "callback-not-invoked" name (refused (WordIs "timer-record" (recordBase + cbCallsOff) 0) (mutateRecord cbCallsOff 1))
+       | name `elem` ["send-timeout-wake", "receive-timeout-wake"]
+       ]
+  where
+    name = caseIdText (caseName one)
+    timedNames = ["send-timeout-blocks", "receive-timeout-blocks", "send-timeout-wake", "receive-timeout-wake"]
+    pages' = pages facts domain one
+    refused expectation mutated = case holds facts domain pages' mutated expectation of
+      Left _ -> True
+      Right () -> False
+    mutateRecord offset value = mutateRecordWith offset (const value)
+    mutateRecordBit offset bit = mutateRecordWith offset (\current -> current .&. complement bit)
+    mutateRecordWith offset f = observed { nativeMemory = [ (ident, if regionName ident == "timer-record" then replaceWord (fromIntegral offset) (f (readWordAt bytes (fromIntegral offset))) bytes else bytes) | (ident, bytes) <- nativeMemory observed ] }
+
+runDomain :: FilePath -> FilePath -> FilePath -> Facts -> Domain -> Image -> Image -> Image -> [(Word32, Word32)] -> IO ([CaseRun], [ControlRun])
+runDomain runner cacheRoot directory facts domain stockImage ownedImage timerImage ownedSymbols = do
   let selected = cases facts domain
-      stockSpecs = [(one, caseFor facts domain False [] stockImage stockImage one) | one <- selected]
-      ownedSpecs = [(one, caseFor facts domain True ownedSymbols ownedImage stockImage one) | one <- selected]
+      stockSpecs = [(one, caseFor facts domain False timerImage [] stockImage stockImage one) | one <- selected]
+      ownedSpecs = [(one, caseFor facts domain True timerImage ownedSymbols ownedImage stockImage one) | one <- selected]
   stockBatch <- writeBatch (directory </> "stock") (map snd stockSpecs)
   ownedBatch <- writeBatch (directory </> "owned") (map snd ownedSpecs)
   (stockReuse, stockRaw) <- cachedObservedBatch cacheRoot runner stockBatch
@@ -764,12 +1064,19 @@ runDomain runner cacheRoot directory facts domain stockImage ownedImage ownedSym
     stockVerdicts <- reportVerdicts (directory </> "stock") ident
     ownedVerdicts <- reportVerdicts (directory </> "owned") ident
     let verdicts = stockVerdicts ++ ownedVerdicts
-    pure $ case (M.lookup ident reference, M.lookup ident subject) of
-      (Just original, Just replacement) -> CaseRun domain (caseIdText (caseName one)) blocking [] (verdicts ++ compareCase facts domain one original replacement) (BatchExecuted, BatchExecuted)
-      (Nothing, _) -> CaseRun domain (caseIdText (caseName one)) blocking [] ["stock case did not run"] (BatchExecuted, BatchExecuted)
-      (_, Nothing) -> CaseRun domain (caseIdText (caseName one)) blocking [] ["owned case did not run"] (BatchExecuted, BatchExecuted)
+        controls = case M.lookup ident subject of
+          Just observed -> controlRuns facts domain one observed
+          Nothing -> []
+    pure ( case (M.lookup ident reference, M.lookup ident subject) of
+             (Just original, Just replacement) -> CaseRun domain (caseIdText (caseName one)) blocking [] (verdicts ++ compareCase facts domain one original replacement) (BatchExecuted, BatchExecuted)
+             (Nothing, _) -> CaseRun domain (caseIdText (caseName one)) blocking [] ["stock case did not run"] (BatchExecuted, BatchExecuted)
+             (_, Nothing) -> CaseRun domain (caseIdText (caseName one)) blocking [] ["owned case did not run"] (BatchExecuted, BatchExecuted)
+         , controls
+         )
   unless (length stockRaw == length selected && length ownedRaw == length selected) (fail "native observations do not cover the current data-queue case set")
-  pure [CaseRun (runEntryDomain run) (runName run) (runBlocking run) (runChecks run) (runDifferences run) (stockReuse, ownedReuse) | run <- results]
+  pure ( [ CaseRun (runEntryDomain run) (runName run) (runBlocking run) (runChecks run) (runDifferences run) (stockReuse, ownedReuse) | run <- map fst results ]
+       , concatMap snd results
+       )
 
 memoryMismatch :: String -> Bool
 memoryMismatch mismatch = "memory " `isPrefixOf` mismatch && "differs from exact allowed final bytes" `isSuffixOf` mismatch

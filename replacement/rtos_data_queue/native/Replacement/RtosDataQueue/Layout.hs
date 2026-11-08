@@ -4,9 +4,13 @@
 module Replacement.RtosDataQueue.Layout
   ( Facts (..)
   , DomainFacts (..)
+  , ArenaFacts (..)
   , RecordFacts (..)
   , parseFacts
   , domainFacts
+  , arenaFor
+  , arenaBase
+  , arenaBytes
   , dataQueueConfig
   , dataQueueControl
   , dataQueueWait
@@ -18,6 +22,7 @@ module Replacement.RtosDataQueue.Layout
 
 import Data.Aeson (FromJSON (..), withObject, (.:))
 import qualified Data.Aeson as J
+import Data.Aeson.Types (Parser)
 import qualified Data.ByteString as B
 import Data.Word (Word32, Word8)
 import Replacement.RtosOwnFirst.Regions (Domain (..))
@@ -32,6 +37,9 @@ data DomainFacts = DomainFacts
   , dfRunning :: Word32
   , dfDispatchEnabled :: Word32
   , dfTickNow :: Word32
+  , dfTimerHeap :: Word32
+  , dfTimerCount :: Word32
+  , dfTimerBase :: Word32
   , dfSelected :: Word32
   , dfTaskTable :: Word32
   , dfContextA :: Word32
@@ -66,9 +74,17 @@ data RecordFacts = RecordFacts
   }
   deriving (Eq, Show)
 
+data ArenaFacts = ArenaFacts
+  { arenaStart :: Word32
+  , arenaSize :: Word32
+  }
+  deriving (Eq, Show)
+
 data Facts = Facts
   { factsA :: DomainFacts
   , factsB :: DomainFacts
+  , factsArenaA :: ArenaFacts
+  , factsArenaB :: ArenaFacts
   , factsOwnId :: Word32
   , factsContextSize :: Word32
   , factsContextId :: Word32
@@ -81,6 +97,9 @@ data Facts = Facts
   , factsContextSelected :: Word32
   , factsContextDispatchEnabled :: Word32
   , factsContextTickNow :: Word32
+  , factsContextTimerHeap :: Word32
+  , factsContextTimerCount :: Word32
+  , factsContextTimerBase :: Word32
   , factsContextFirstEntry :: Word32
   , factsContextTasks :: Word32
   , factsContextTaskCount :: Word32
@@ -136,6 +155,9 @@ instance FromJSON DomainFacts where
       <*> o .: "running"
       <*> o .: "dispatch_enabled"
       <*> o .: "tick_now"
+      <*> o .: "timer_heap"
+      <*> o .: "timer_count"
+      <*> o .: "timer_base"
       <*> o .: "selected"
       <*> o .: "task_table"
       <*> o .: "context_a"
@@ -187,9 +209,13 @@ instance FromJSON Facts where
       [first, second] -> pure (first, second)
       _ -> fail "sp_terms needs two offsets"
     rec <- parseRecords o
+    arenas <- o .: "timer_arenas"
+    (arenaA, arenaB) <- parseArenas arenas
     Facts
       <$> o .: "a"
       <*> o .: "b"
+      <*> pure arenaA
+      <*> pure arenaB
       <*> o .: "own_id"
       <*> c .: "size"
       <*> c .: "id"
@@ -202,6 +228,9 @@ instance FromJSON Facts where
       <*> c .: "selected"
       <*> c .: "dispatch_enabled"
       <*> c .: "tick_now"
+      <*> c .: "timer_heap"
+      <*> c .: "timer_count"
+      <*> c .: "timer_base"
       <*> c .: "first_entry"
       <*> c .: "tasks"
       <*> c .: "task_count"
@@ -243,6 +272,7 @@ instance FromJSON Facts where
       <*> pure objectQueued
       <*> pure ownerQueued
 
+parseRecords :: J.Object -> Parser RecordFacts
 parseRecords o = do
   c <- o .: "data_queue_config"
   t <- o .: "data_queue_control"
@@ -264,6 +294,19 @@ parseRecords o = do
     <*> w .: "size"
     <*> w .: "data"
 
+parseArenas :: J.Value -> Parser (ArenaFacts, ArenaFacts)
+parseArenas = withObject "timer arenas" $ \o -> do
+  a <- o .: "a"
+  b <- o .: "b"
+  pure (a, b)
+
+instance FromJSON ArenaFacts where
+  parseJSON = withObject "timer arena" $ \o -> do
+    guest <- o .: "guest"
+    ArenaFacts
+      <$> guest .: "start"
+      <*> guest .: "size"
+
 parseFacts :: B.ByteString -> Either String Facts
 parseFacts = J.eitherDecodeStrict
 
@@ -271,6 +314,17 @@ domainFacts :: Facts -> Domain -> DomainFacts
 domainFacts facts domain = case domain of
   DomainA -> factsA facts
   DomainB -> factsB facts
+
+arenaFor :: Facts -> Domain -> ArenaFacts
+arenaFor facts domain = case domain of
+  DomainA -> factsArenaA facts
+  DomainB -> factsArenaB facts
+
+arenaBase :: Facts -> Domain -> Word32
+arenaBase facts = arenaStart . arenaFor facts
+
+arenaBytes :: Facts -> Domain -> Word32
+arenaBytes facts = arenaSize . arenaFor facts
 
 dataQueueConfig :: Facts -> Domain -> Word32 -> Word32
 dataQueueConfig facts domain slot =

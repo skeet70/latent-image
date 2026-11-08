@@ -14,7 +14,7 @@ import Emulation.Sha256 (sha256File, sha256Hex)
 import FujiAF.Host (failH)
 import FujiAF.StorageBudget (checkStorageBudget)
 import Replacement.RtosDataQueue.Layout (parseFacts)
-import Replacement.RtosDataQueue.Suite (CaseRun (..), Image (..), runDomain)
+import Replacement.RtosDataQueue.Suite (CaseRun (..), ControlRun (..), Image (..), runDomain)
 import Replacement.RtosOwnFirst.Regions (Domain (..), domainLabel)
 import System.Directory (createDirectoryIfMissing, makeAbsolute)
 import System.Environment (getArgs)
@@ -30,6 +30,8 @@ main = do
   loaderB <- required "--loader-b"
   ownedA <- required "--owned-a-bin"
   ownedB <- required "--owned-b-bin"
+  timerA <- required "--timer-a-bin"
+  timerB <- required "--timer-b-bin"
   symbolsAPath <- required "--owned-a-symbols"
   symbolsBPath <- required "--owned-b-symbols"
   resultsPath <- required "--results"
@@ -39,6 +41,8 @@ main = do
   loaderBBytes <- B.readFile loaderB
   ownedABytes <- B.readFile ownedA
   ownedBBytes <- B.readFile ownedB
+  timerABytes <- B.readFile timerA
+  timerBBytes <- B.readFile timerB
   symbolsA <- parseOwnedSymbols symbolsAPath
   symbolsB <- parseOwnedSymbols symbolsBPath
   baseA <- ownedBase symbolsAPath
@@ -49,6 +53,8 @@ main = do
   loaderBDigest <- sha256File loaderB
   ownedADigest <- sha256File ownedA
   ownedBDigest <- sha256File ownedB
+  timerADigest <- sha256File timerA
+  timerBDigest <- sha256File timerB
   unless (sha256Hex loaderADigest == "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882") (failH (loaderA ++ " is not the pinned X-M1 1.50 loader"))
   unless (sha256Hex loaderBDigest == "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec") (failH (loaderB ++ " is not the pinned X-M1 1.50 loader"))
   checkStorageBudget (takeDirectory resultsPath)
@@ -59,10 +65,15 @@ main = do
       stockB = Image 0xd0000 loaderBBytes
       ownedAImage = Image baseA ownedABytes
       ownedBImage = Image baseB ownedBBytes
-  runA <- runDomain runner cacheRoot (takeDirectory resultsPath </> "domain-a") facts DomainA stockA ownedAImage symbolsA
-  runB <- runDomain runner cacheRoot (takeDirectory resultsPath </> "domain-b") facts DomainB stockB ownedBImage symbolsB
+      timerAImage = Image 0x44a50 timerABytes
+      timerBImage = Image 0xd4a10 timerBBytes
+  (runA, controlsA) <- runDomain runner cacheRoot (takeDirectory resultsPath </> "domain-a") facts DomainA stockA ownedAImage timerAImage symbolsA
+  (runB, controlsB) <- runDomain runner cacheRoot (takeDirectory resultsPath </> "domain-b") facts DomainB stockB ownedBImage timerBImage symbolsB
   let runs = runA ++ runB
+      controls = controlsA ++ controlsB
       failures = [(domainLabel (runEntryDomain run), runName run, message) | run <- runs, message <- runDifferences run]
+      failedChecks = [(domainLabel (runEntryDomain run), runName run, description) | run <- runs, (description, False) <- runChecks run]
+      failedControls = [(domainLabel (controlDomain control), controlCase control, controlName control) | control <- controls, not (controlHolds control)]
       caseValue run =
         object
           [ "domain" .= domainLabel (runEntryDomain run)
@@ -71,9 +82,17 @@ main = do
           , "differences" .= runDifferences run
           , "reuse" .= show (runReuse run)
           ]
+      controlValue control =
+        object
+          [ "domain" .= domainLabel (controlDomain control)
+          , "case" .= controlCase control
+          , "control" .= controlName control
+          , "holds" .= controlHolds control
+          ]
       document =
         object
           [ "schema" .= (1 :: Int)
+          , "qualification" .= ("native-subset" :: String)
           , "inputs" .=
               object
                 [ "runner" .= runner
@@ -83,11 +102,15 @@ main = do
                 , "loader_b_sha256" .= sha256Hex loaderBDigest
                 , "owned_a_bin_sha256" .= sha256Hex ownedADigest
                 , "owned_b_bin_sha256" .= sha256Hex ownedBDigest
+                , "timer_a_bin_sha256" .= sha256Hex timerADigest
+                , "timer_b_bin_sha256" .= sha256Hex timerBDigest
                 ]
           , "cases" .= map caseValue runs
+          , "controls" .= map controlValue controls
           , "case_count" .= length runs
           , "blocking_count" .= length (filter runBlocking runs)
-          , "failures" .= length failures
+          , "control_count" .= length controls
+          , "failures" .= (length failures + length failedChecks + length failedControls)
           ]
       review =
         object
@@ -101,23 +124,31 @@ main = do
               , "loader_b" .= loaderB
               , "owned_a" .= ownedA
               , "owned_b" .= ownedB
+              , "timer_a" .= timerA
+              , "timer_b" .= timerB
               ]
           , "counterexamples" .=
               [ object ["domain" .= domain, "case" .= name, "difference" .= message]
               | (domain, name, message) <- failures
               ]
-          , "qualification" .= ("complete-family" :: String)
+          , "controls" .= map controlValue controls
+          , "qualification" .= ("native-subset" :: String)
           , "cases" .= map caseValue runs
           , "case_count" .= length runs
           , "blocking_count" .= length (filter runBlocking runs)
-          , "failures" .= length failures
+          , "control_count" .= length controls
+          , "failures" .= (length failures + length failedChecks + length failedControls)
           ]
   BL.writeFile resultsPath (encode document)
   BL.writeFile reviewPath (encode review)
   forM_ runs $ \run -> forM_ (runDifferences run) $ \message ->
     putStrLn (domainLabel (runEntryDomain run) ++ " " ++ runName run ++ ": " ++ message)
+  forM_ controls $ \control ->
+    putStrLn (domainLabel (controlDomain control) ++ " " ++ controlCase control ++ ": control " ++ controlName control ++ (if controlHolds control then " ok" else " FAILED"))
   forM_ failures $ \(domain, name, message) -> putStrLn (domain ++ " " ++ name ++ ": " ++ message)
-  unless (null failures) exitFailure
+  forM_ failedChecks $ \(domain, name, description) -> putStrLn (domain ++ " " ++ name ++ ": check failed: " ++ description)
+  forM_ failedControls $ \(domain, name, control) -> putStrLn (domain ++ " " ++ name ++ ": control failed: " ++ control)
+  unless (null failures && null failedChecks && null failedControls) exitFailure
 
 parseOwnedSymbols :: FilePath -> IO [(Word32, Word32)]
 parseOwnedSymbols path = do
