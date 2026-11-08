@@ -985,7 +985,7 @@ Reset zeroes the heap gap as part of kernel BSS: A `[0x4004dae0,0x40062c54)`, B 
 
 **Carrier and retained seams.** The emitted A32 artifact fits initialization, insert, remove, tick and all private bodies in A `[0x44a50,0x44f2c)` and B `[0xd4a10,0xd4eec)`, 1244 bytes per domain. Linker assertions bind every entry to its original address, refuse code outside the module and forbid writable data; unused bytes are UDF. No `0x50000` scratch-code region remains. This is code-placement and native-subset evidence, not a staged firmware cutover: firmware still executes stock bodies. Firmware heap ownership, real callback and wait-result integration, cyclic lifecycle and independent-lock ownership remain open. A live cutover still needs admitted storage and caller closure, complete subsystem native obligations and one integrated comparison through the same technical review cycle. No full-native, system or hardware timer qualification is claimed.
 
-### 4.16 Owned global-lock root extensions: host increment
+### 4.20 Owned global-lock root extensions: host increment
 
 `replacement/rtos_global_lock` owns the three stock-only root extensions `+0x161c` (single-try acquire), `+0x1620` (release) and `+0x1624` (observe), separately from the S1 scheduler and object lock helpers. One `Machine`-generic core holds the selection and the exclusive pair; the A32 adapter maps the exclusive load, the exclusive store and the barrier to `ldrex`, `strex` and `dmb sy`.
 
