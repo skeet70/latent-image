@@ -49,6 +49,7 @@ data StockDifference
   | AliasPatternClear
   | CreatePublication
   | OutOfRangeWrite
+  | DeleteLeavesQueueTail
   deriving (Eq, Show)
 
 data Expect
@@ -1059,6 +1060,7 @@ caseFor role facts entries executing loader owned one = CaseSpec
     differenceExclusion AliasAttributes = " Scoped difference: stock reads the clear attribute after the output write; owned decides the clear first."
     differenceExclusion AliasPatternClear = " Scoped difference: stock event_flag_check stores the caller output before the clear; owned clears first, so an output word aliasing the pattern cell differs. Mirrors the host wait_flag_clear_on_match_writes_the_caller_output_after_the_clear behavior."
     differenceExclusion CreatePublication = " Scoped difference: the publication order and its barrier are compared from the ordered write log."
+    differenceExclusion DeleteLeavesQueueTail = " Scoped difference: stock leaves the mailbox queue tail word at its last message when invalidating the object; owned clears it. Only that four-byte tail word is excluded; every other kernel word is compared."
     differenceExclusion OutOfRangeWrite = " Scoped difference: stock indexes outside the table; owned refuses -18 without a write."
 
 expectedRegisters :: Role -> Case -> [(Register, Word32)]
@@ -1133,8 +1135,12 @@ lockReacquired observation address = case writeIndices observation address of
 
 checkExpectation :: Facts -> Case -> NativeObservation -> Expect -> [String]
 checkExpectation facts one observation expectation = case expectation of
-  Equals address value -> ["missing effect " ++ show address ++ " = " ++ show value | readWord facts one observation address /= Just value]
-  ByteEquals address value -> ["missing effect " ++ show address ++ " byte = " ++ show value | readByte facts one observation address /= Just value]
+  Equals address value -> case readWord facts one observation address of
+    Just actual | actual == value -> []
+    _ -> [missingEffect "missing effect " address 4 value]
+  ByteEquals address value -> case readByte facts one observation address of
+    Just actual | actual == value -> []
+    _ -> [missingEffect "missing effect byte " address 1 value]
   Result value -> ["result differs: expected " ++ show value | N.lookupRegister R0 observation /= Just value]
   RegisterEquals register value -> ["register " ++ show register ++ " differs: expected " ++ show value | N.lookupRegister register observation /= Just value]
   ControlEquals value -> ["control differs: expected " ++ show value | fmap (.&. 0x1ff) (N.lookupRegister Cpsr observation) /= Just value]
@@ -1147,6 +1153,14 @@ checkExpectation facts one observation expectation = case expectation of
     let cursor = fromMaybe 0 (readWord facts one observation (GuestAddress timerLogBase))
         actual = [(fromMaybe 0 (readWord facts one observation (GuestAddress (timerLogBase + 4 + fromIntegral index * 8))), fromMaybe 0 (readWord facts one observation (GuestAddress (timerLogBase + 8 + fromIntegral index * 8)))) | index <- [0 .. count - 1]]
      in ["timer log differs: cursor " ++ show cursor ++ ", entries " ++ show actual | fromIntegral cursor /= count || actual /= entries]
+  where
+    missingEffect label address width value =
+      case [ident | page@(Page ident _ _ permission _) <- pages facts one, contains address width page, writable permission, Nothing <- [lookup ident (nativeMemory observation)]] of
+        ident : _ -> "missing mutable capture " ++ show ident ++ " at " ++ show address ++ " = " ++ show value
+        [] -> label ++ show address ++ " = " ++ show value
+    writable ReadWrite = True
+    writable Device = True
+    writable _ = False
 
 effectiveExpectations :: Case -> [Expect]
 effectiveExpectations one
@@ -1242,9 +1256,12 @@ effectChecks facts role one observation = lockChecks ++ notificationChecks
     expectations = roleExpectations role one
     resultValue = roleResult role one
     refusal = resultValue `elem` [0xffffffe7, 0xffffffee, 0xffffffef, 0xffffffd6]
-    takesLock = caseSlot one `notElem` [FlagCreate, MailboxCreate] && not refusal
+    takesLock =
+      caseSlot one `notElem` [FlagCreate, MailboxCreate]
+        && not refusal
+        && (role /= StockRole || caseSlot one `notElem` [FlagDelete, MailboxDelete])
     multiStep = isJust (caseWaker one) || not (null (caseSteps one))
-    objectLock = GuestAddress (dfObjectLock (domainFacts facts (caseObject one)))
+    objectLock = GuestAddress (dfObjectLock (domainFacts facts (caseObject one)) + factsLockWord facts)
     lockChecks
       | not takesLock = []
       | multiStep = []
@@ -1285,8 +1302,12 @@ effectChecks facts role one observation = lockChecks ++ notificationChecks
       ]
 
 compareFamily :: Role -> Domain -> Facts -> Case -> NativeObservation -> NativeObservation -> [String]
-compareFamily _role executing facts one stock owned = ownedChecks ++ stockChecks ++ memoryDifferences
+compareFamily _role executing facts one stock owned =
+  prefixed OwnedRole ownedChecks ++ prefixed StockRole stockChecks ++ memoryDifferences
   where
+    prefixed currentRole = map (\message -> roleText currentRole ++ ": " ++ message)
+    roleText StockRole = "stock"
+    roleText OwnedRole = "owned"
     ownedChecks = roleChecks OwnedRole owned
     stockChecks = roleChecks StockRole stock
     roleChecks currentRole observation
@@ -1316,6 +1337,10 @@ compareFamily _role executing facts one stock owned = ownedChecks ++ stockChecks
           let (GuestAddress base, _) = kernelBounds facts executing
               offset = fromIntegral (taskAt facts executing runningSlot + factsTaskSavedSp facts - base)
            in B.take offset bytes <> word32le 0 <> B.drop (offset + 4) bytes
+      | caseDifference one == DeleteLeavesQueueTail && ident == RegionId (if executing == DomainA then "kernel-a" else "kernel-b") =
+          let (GuestAddress base, _) = kernelBounds facts executing
+              offset = fromIntegral (mailboxControl facts executing 1 + factsMailboxControlTail facts - base)
+           in B.take offset bytes <> word32le 0 <> B.drop (offset + 4) bytes
       | otherwise = bytes
 
 controls :: Domain -> Facts -> Case -> NativeObservation -> NativeObservation -> [(String, Bool)]
@@ -1337,7 +1362,19 @@ controls executing facts one stock owned =
                , ("must-fail-owned-difference", not (null (stockAgainstOwnedExpectations stock)))
                ]
        )
+    ++ [ ("must-fail-unrelated-kernel-word", ("state region " ++ show (RegionId region) ++ " differs") `elem` compareFamily OwnedRole executing facts one stock (perturbKernel owned))
+       | caseDifference one == DeleteLeavesQueueTail
+       ]
   where
+    region = if executing == DomainA then "kernel-a" else "kernel-b"
+    perturbKernel observation =
+      observation
+        { nativeMemory =
+            [ (ident, if ident == RegionId region then flipWord 0x20 bytes else bytes)
+            | (ident, bytes) <- nativeMemory observation
+            ]
+        }
+    flipWord offset bytes = B.take offset bytes <> word32le (readWordAt bytes offset `xor` 1) <> B.drop (offset + 4) bytes
     wrongEffect = case caseExpect one of
       (Equals address value : _) -> Equals address (value + 1)
       (ByteEquals address value : _) -> ByteEquals address (value + 1)
@@ -1415,11 +1452,11 @@ cases facts _entries executing =
   , (mk "flag-delete-class-ignored" FlagDelete) { caseArgs = [(R0, idB 1)], caseFlags = [flag 1 0 0 0, (DomainB, 1, 0, 0, 0)], caseExpect = [res 0, eq (flagConfig facts executing 1 + factsFlagConfigExists facts) 0, eq (flagConfig facts (peer executing) 1 + factsFlagConfigExists facts) 1] }
   , (mk "flag-delete-stranded" FlagDelete) { caseArgs = [(R0, id0 1)], caseFlags = [flag 1 0 0 1], caseWaiters = [timedWaiter 14], caseExpect = deleteStrandedOwned FlagFamily, caseStockExpect = Just (deleteStrandedStock FlagFamily), caseDifference = DeleteStrandsWaiter }
   , (mk "mailbox-delete-stranded" MailboxDelete) { caseArgs = [(R0, id0 1)], caseMailboxes = [mailbox 1 0 32 0 0], caseWaiters = [timedWaiter 14], caseExpect = deleteStrandedOwned MailboxFamily, caseStockExpect = Just (deleteStrandedStock MailboxFamily), caseDifference = DeleteStrandsWaiter }
-  , (mk "mailbox-delete-drains" MailboxDelete) { caseArgs = [(R0, id0 1)], caseMailboxes = [mailbox 1 0 32 (messageAddress 0) (messageAddress 1)], caseMessages = [msg 0 (messageAddress 1) 0, msg 1 0 0], caseExpect = [res 0, eq (mailboxConfig facts executing 1 + factsMailboxConfigExists facts) 0, eq (mailboxConfig facts executing 1 + factsMailboxConfigAttributes facts) 2, eq (mailboxConfig facts executing 1 + factsMailboxConfigPriorityLimit facts) 32, eq (mailControl 1 + factsMailboxControlHead facts) 0, eq (mailControl 1 + factsMailboxControlTail facts) 0, eq (messageAddress 0) (messageAddress 1), eq (messageAddress 1) 0] }
+  , (mk "mailbox-delete-drains" MailboxDelete) { caseArgs = [(R0, id0 1)], caseMailboxes = [mailbox 1 0 32 (messageAddress 0) (messageAddress 1)], caseMessages = [msg 0 (messageAddress 1) 0, msg 1 0 0], caseExpect = [res 0, eq (mailboxConfig facts executing 1 + factsMailboxConfigExists facts) 0, eq (mailboxConfig facts executing 1 + factsMailboxConfigAttributes facts) 2, eq (mailboxConfig facts executing 1 + factsMailboxConfigPriorityLimit facts) 32, eq (mailControl 1 + factsMailboxControlHead facts) 0, eq (mailControl 1 + factsMailboxControlTail facts) 0, eq (messageAddress 0) (messageAddress 1), eq (messageAddress 1) 0], caseStockExpect = Just [res 0, eq (mailboxConfig facts executing 1 + factsMailboxConfigExists facts) 0, eq (mailboxConfig facts executing 1 + factsMailboxConfigAttributes facts) 2, eq (mailboxConfig facts executing 1 + factsMailboxConfigPriorityLimit facts) 32, eq (mailControl 1 + factsMailboxControlHead facts) 0, eq (mailControl 1 + factsMailboxControlTail facts) (messageAddress 1), eq (messageAddress 0) (messageAddress 1), eq (messageAddress 1) 0], caseCompare = [ident | Page ident _ _ _ _ <- pages facts (baseCase executing), ident `notElem` map RegionId ["stack", "target-stack", "waker-stack", "chain-stack"]], caseDifference = DeleteLeavesQueueTail }
   , (mk "flag-delete-recreate" FlagDelete) { caseArgs = [(R0, id0 1)], caseFlags = [flag 1 0 0 1], caseSteps = [StepStore (GuestAddress resultCell), StepCall FlagCreate [(R0, id0 1), (R1, requestAddress)]], caseWords = [poke requestAddress 0, poke (requestAddress + 4) 5], caseExpect = [res 0, eq resultCell 0, eq (flagConfig facts executing 1 + factsFlagConfigExists facts) 1, eq (patternOf 1) 5] }
   , (mk "mailbox-delete-recreate" MailboxDelete) { caseArgs = [(R0, id0 1)], caseMailboxes = [mailbox 1 0 32 0 0], caseSteps = [StepStore (GuestAddress resultCell), StepCall MailboxCreate [(R0, id0 1), (R1, requestAddress)]], caseWords = [poke requestAddress 0, poke (requestAddress + 4) 32], caseExpect = [res 0, eq resultCell 0, eq (mailboxConfig facts executing 1 + factsMailboxConfigExists facts) 1, eq (mailboxConfig facts executing 1 + factsMailboxConfigPriorityLimit facts) 32] }
-  , (mk "flag-create-out-of-range" FlagCreate) { caseArgs = [(R0, 121), (R1, requestAddress)], caseWords = [poke requestAddress 4, poke (requestAddress + 4) 5], caseExpect = [res (0xffffffee), eq (flagConfig facts executing 121 + factsFlagConfigExists facts) 0, eq (flagControl facts executing 121 + factsFlagControlPattern facts) 0], caseStockExpect = Just [res 0, eq (flagConfig facts executing 121 + factsFlagConfigExists facts) 1, eq (flagControl facts executing 121 + factsFlagControlPattern facts) 5], caseDifference = OutOfRangeWrite }
-  , (mk "flag-delete-out-of-range" FlagDelete) { caseArgs = [(R0, 121)], caseExpect = [res (0xffffffee), eq (flagControl facts executing 121) 0], caseStockExpect = Just [res 0, eq (flagControl facts executing 121) (flagControl facts executing 121)], caseDifference = OutOfRangeWrite }
+  , (mk "flag-create-out-of-range" FlagCreate) { caseArgs = [(R0, 121), (R1, requestAddress)], caseWords = [poke requestAddress 4, poke (requestAddress + 4) 5], caseExpect = [res (0xffffffee), eq (flagConfig facts executing 121 + factsFlagConfigExists facts) 0, eq (flagControl facts executing 121 + factsFlagControlPattern facts) 0], caseStockExpect = Just [res 0, eq (flagConfig facts executing 121 + factsFlagConfigExists facts) 1, eq (flagControl facts executing 121 + factsFlagControlPattern facts) 0], caseDifference = OutOfRangeWrite }
+  , (mk "flag-delete-out-of-range" FlagDelete) { caseArgs = [(R0, 121)], caseExpect = [res (0xffffffee), eq (flagControl facts executing 121) (flagControl facts executing 121)], caseStockExpect = Just [res 0, eq (flagControl facts executing 121) (flagControl facts executing 121)], caseDifference = OutOfRangeWrite }
 
     -- Flag set, handler, clear, poll.
   , (mk "flag-set-no-waiter" FlagSet) { caseArgs = [(R0, id0 1), (R1, 2)], caseFlags = [flag 1 0 0 1], caseExpect = [res 0, eq (patternOf 1) 3] }
@@ -1504,8 +1541,8 @@ cases facts _entries executing =
       let timer = case family' of FlagFamily -> flagTimerOf executing 2; MailboxFamily -> mailboxTimerOf executing 2
           waitResult = case family' of FlagFamily -> flagWaitResult executing 2; MailboxFamily -> mailboxWaitResult executing 2
        in [res 0, byte (taskOf executing 2 + factsTaskState facts) (factsStateWait facts .|. factsStateObjectQueued facts .|. factsStateOwnerLockQueued facts), eq waitResult timer, readyCheck executing 14 (readyHead facts executing 14)]
-    handlerOwned = [res 0, eq (flagPattern (peer executing) 2) 0x11, readyCheck (peer executing) 5 (taskOf (peer executing) 2), eq (bankAddress (peer executing)) 0x01000000, eq (rescheduleAddress executing) 0, eq (bankAddress executing) 0, eq (readyHead facts executing 5) (readyHead facts executing 5)]
-    handlerStock = [res 0, eq (flagPattern (peer executing) 2) 0x11, readyCheck executing 5 (taskOf (peer executing) 2), eq (rescheduleAddress executing) 1, eq (bankAddress executing) 0, eq (bankAddress (peer executing)) 0x01000000, eq (readyHead facts (peer executing) 5) (readyHead facts (peer executing) 5)]
+    handlerOwned = [res 0, eq (flagPattern (peer executing) 2) 3, readyCheck (peer executing) 5 (taskOf (peer executing) 2), eq (bankAddress (peer executing)) 0x01000000, eq (rescheduleAddress executing) 0, eq (bankAddress executing) 0, eq (readyHead facts executing 5) (readyHead facts executing 5)]
+    handlerStock = [res 0, eq (flagPattern (peer executing) 2) 3, readyCheck executing 5 (taskOf (peer executing) 2), eq (rescheduleAddress executing) 0, eq (bankAddress executing) 0, eq (bankAddress (peer executing)) 0x01000000, eq (readyHead facts (peer executing) 5) (readyHead facts (peer executing) 5)]
     multiwaiterOwned =
       [ res 0, eq resultCell (0xffffffcf), eq outWord 0xdead
       , eq (mailboxConfig facts executing 1 + factsMailboxConfigExists facts) 1
