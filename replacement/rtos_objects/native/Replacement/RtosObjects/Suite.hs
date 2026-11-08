@@ -416,6 +416,11 @@ wrapperBase = 0x00959000
 wakerStubBase = 0x00959100
 chainStubBase = 0x00959180
 
+actorBase, actorStackLow, actorStackHigh :: Word32
+actorBase = 0x00959180
+actorStackLow = targetStackPointer - 0x100
+actorStackHigh = targetStackPointer
+
 outWord, resultCell, requestAddress, unreadable :: Word32
 outWord = 0x40000080
 resultCell = 0x40000088
@@ -777,9 +782,19 @@ stubCode facts entries executing base target args = assembleCode (case target of
           c8 = blTo c7 (s2Save executing)
        in emit c8 0xeafffffe
 
+selectedWaitCodeAt :: Word32 -> Word32 -> B.ByteString
+selectedWaitCodeAt base entry = assembleCode stubTail
+  where
+    start = emit (emit (emit (codeAt base) 0xf1080080) 0xe52de004) 0xe24dd00c
+    called = blTo (loadArgsCode start (map (\(register, value) -> RegArg register value) [(R0, id0 1), (R1, 1), (R2, 0), (R3, outWord)])) entry
+    stubTail = emit (emit (emit called 0xe28dd00c) 0xe49de004) 0xe12fff1e
+
 continuationBytes :: Facts -> Entries -> Domain -> Case -> B.ByteString
 continuationBytes facts entries executing one = installedSelected
   where
+    installedSelected = case caseSelectedWait one of
+      Nothing -> installedChain
+      Just entry -> install actorBase (selectedWaitCodeAt actorBase entry) installedChain
     zero = B.replicate (fromIntegral (stopAddress - exitAddress + 4)) 0
     installedExit = install exitAddress (assemble [0xe12fff1e]) zero
     installedWrapper = install wrapperBase (wrapperCode facts entries executing one) installedExit
@@ -789,14 +804,7 @@ continuationBytes facts entries executing one = installedSelected
     installedChain = case [chain | Just chain <- map pwChain (caseWaiters one)] of
       (chain : _) -> install chainStubBase (stubCode facts entries executing chainStubBase (wakerTarget chain) (wakerArgs chain)) installedWaker
       [] -> installedWaker
-    installedSelected = case caseSelectedWait one of
-      Nothing -> installedChain
-      Just entry -> install wakerStubBase (selectedWaitCode entry) installedChain
-    selectedWaitCode entry = assembleCode stubTail
-      where
-        start = emit (emit (codeAt wakerStubBase) 0xe52de004) 0xe24dd00c
-        called = blTo (loadArgsCode start (map (\(register, value) -> RegArg register value) [(R0, id0 1), (R1, 1), (R2, 0), (R3, outWord)])) entry
-        stubTail = emit (emit (emit called 0xe28dd00c) 0xe49de004) 0xe12fff1e
+
 
 install :: Word32 -> B.ByteString -> B.ByteString -> B.ByteString
 install address bytes image = B.take offset image <> bytes <> B.drop (offset + B.length bytes) image
@@ -1023,11 +1031,14 @@ layoutWords facts executing one =
          in [ poke address address, poke (address + factsTaskPrev facts) address
             , poke (address + factsTaskDefinition facts) definition, poke (address + factsTaskDomain facts) (dfId (domainFacts facts domain))
             , poke (address + factsTaskState facts) (packedState (factsStateDormant facts) priority)
-            , poke (address + factsTaskSavedSp facts) (if slot == wakerSlot && isJust (caseWaker one) && domain == executing then wakerStack else targetStackPointer)
+            , poke (address + factsTaskSavedSp facts)
+                (if domain == executing && slot == waiterSlot && isJust (caseSelectedWait one) then actorStackHigh
+                 else if slot == wakerSlot && isJust (caseWaker one) && domain == executing then wakerStack
+                 else targetStackPointer)
             , poke (address + factsTaskResumePc facts)
-                (if domain == executing && ((slot == wakerSlot && isJust (caseWaker one)) || (slot == waiterSlot && isJust (caseSelectedWait one)))
-                   then wakerStubBase
-                   else stopAddress)
+                (if domain == executing && slot == waiterSlot && isJust (caseSelectedWait one) then actorBase
+                 else if slot == wakerSlot && isJust (caseWaker one) && domain == executing then wakerStubBase
+                 else stopAddress)
             , poke (definition + factsDefinitionPriority facts) priority
             , poke (definition + 4) (0xa5510000 + slot), poke (definition + 8) stopAddress
             , poke (definition + 0x10) (targetStackPointer - 0x100), poke (definition + 0x14) 0x100
@@ -1118,18 +1129,28 @@ caseForCode role facts entries executing loader code extraFunctions one = CaseSp
   where
     dataPages = pages facts one
     -- The loader's divide helper, called by the retained pool release.
+    baseExtents
+      | role == StockRole && isJust (caseSelectedWait one) = filter (\(address, _) -> address /= 0x44744 && address /= 0xd4704) (extents executing)
+      | otherwise = extents executing
     stockHelpers DomainA = [(0x4da6c, 0x34), (0x4d978, 0xe8)]
     stockHelpers DomainB = [(0xdda30, 0x30), (0xdd93c, 0xe8)]
+    stockWaitHelpers DomainA = [(0x4471c, 0xc8), (0x447e4, 0x1c)]
+    stockWaitHelpers DomainB = [(0xd46dc, 0xc8), (0xd47a4, 0x1c)]
     words' =
       let fixture = fixtureWords facts executing one
           outside = [address | (address, _) <- fixture, not (any (contains address 4) dataPages)]
        in if null outside then fixture else error (caseIdText (caseName one) ++ ": unmapped fixture words " ++ show outside)
     functionList =
-      [ (wireAddress (GuestAddress address), size) | (address, size) <- extents executing ++ retained executing ++ retainedExtents executing ++ extraFunctions ]
+      [ (wireAddress (GuestAddress address), size) | (address, size) <- baseExtents ++ retained executing ++ retainedExtents executing ++ extraFunctions ]
         ++ [ (wireAddress (GuestAddress address), size) | (address, size) <- stockHelpers executing ]
-        ++ [ (wireAddress (GuestAddress address), size) | Seam _ _ address size <- retainedSeams executing ]
+        ++ [ (wireAddress (GuestAddress address), size) | role == StockRole, isJust (caseSelectedWait one), (address, size) <- stockWaitHelpers executing ]
+        ++ [ (wireAddress (GuestAddress address), size)
+           | Seam name _ address size <- retainedSeams executing
+           , not (role == StockRole && isJust (caseSelectedWait one) && name == "stock-remove-timer-helper")
+           ]
         ++ [ (wireAddress (GuestAddress wrapperBase), 0x100) ]
-        ++ [ (wireAddress (GuestAddress wakerStubBase), 0x80) | isJust (caseWaker one) || isJust (caseSelectedWait one) ]
+        ++ [ (wireAddress (GuestAddress wakerStubBase), 0x80) | isJust (caseWaker one) ]
+        ++ [ (wireAddress (GuestAddress actorBase), 0x80) | isJust (caseSelectedWait one) ]
         ++ [ (wireAddress (GuestAddress chainStubBase), 0x80) | not (null (mapMaybe pwChain (caseWaiters one))) ]
     ignored = if caseBoundary one == CallerReturn then [R1, R2, R3, R12, Lr] else [R0 .. R12] ++ [Lr]
     -- TPIDRURW holds the one-based local slot; bit 31 marks the handler context.
@@ -1150,7 +1171,7 @@ caseForCode role facts entries executing loader code extraFunctions one = CaseSp
       | isJust (caseSelectedWait one') =
           map stack
             [ (callerSp one' - 0x400, callerSp one')
-            , (targetStackPointer - 0x100, targetStackPointer)
+            , (actorStackLow, actorStackHigh)
             ]
       | otherwise = []
     stack (low, high) = either error id (mkStackContext (N.GuestAddress (fromIntegral low)) (N.GuestAddress (fromIntegral high)))
@@ -1467,7 +1488,7 @@ compareFamily _role executing facts one stock owned =
       [MissingRegion ident | ident <- compared, M.notMember ident (memory reference) || M.notMember ident (memory subject)]
         ++ [StateDifference ident | ident <- compared, M.lookup ident (memory reference) /= M.lookup ident (memory subject)]
     compared =
-      [ident | Page ident _ _ _ _ <- pages facts one, ident `notElem` map RegionId ["stack", "target-stack", "waker-stack", "chain-stack"]]
+      [ident | Page ident _ _ _ _ <- pages facts one, ident `notElem` map RegionId ["stack", "target-stack", "waker-stack", "chain-stack", "actor-stack"]]
     memory observation = M.fromList [(ident, normalize ident bytes) | (ident, bytes) <- nativeMemory observation, ident `elem` compared]
     declaredBytes role = M.fromList (concatMap expectationBytes (roleExpectations role one))
     expectationBytes expectation = case expectation of
