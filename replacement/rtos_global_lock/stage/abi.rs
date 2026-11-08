@@ -75,7 +75,7 @@ pub unsafe extern "C" fn helper_observe(_word: u32) -> u32 {
     naked_asm!("ldr r0, [r0]", "bx lr")
 }
 
-#[cfg(all(target_arch = "arm", not(test)))]
+#[cfg(all(target_arch = "arm", not(test), not(feature = "component")))]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
     loop {}
