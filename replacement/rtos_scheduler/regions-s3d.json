@@ -1,0 +1,97 @@
+{
+  "fill_word": "0xe7f000f0",
+  "domains": {
+    "a": {
+      "regions": [
+        {
+          "start": "0x454f0",
+          "end": "0x4582c",
+          "entries": [{"entry": "0x454f0", "semantic": {"kind": "service", "name": "task-terminate"}}],
+          "symbol": "s3d_terminate",
+          "frame_bytes": 24
+        },
+        {
+          "start": "0x4582c",
+          "end": "0x45b40",
+          "entries": [{"entry": "0x4582c", "semantic": {"kind": "service", "name": "task-priority-change"}}],
+          "symbol": "s3d_change_priority",
+          "frame_bytes": 24
+        },
+        {
+          "start": "0x45e54",
+          "end": "0x46004",
+          "entries": [{"entry": "0x45e54", "semantic": {"kind": "service", "name": "task-sleep-with-timeout"}}],
+          "symbol": "s3d_timed_sleep",
+          "frame_bytes": 32
+        },
+        {
+          "start": "0x46534",
+          "end": "0x467b4",
+          "entries": [{"entry": "0x46534", "semantic": {"kind": "service", "name": "task-wait-release"}}],
+          "symbol": "s3d_release_wait",
+          "frame_bytes": 24
+        },
+        {
+          "start": "0x467b4",
+          "end": "0x46a00",
+          "entries": [{"entry": "0x467b4", "semantic": {"kind": "service", "name": "task-wait-release-from-handler"}}],
+          "symbol": "s3d_interrupt_release_wait",
+          "frame_bytes": 24
+        },
+        {
+          "start": "0x46e48",
+          "end": "0x46fcc",
+          "entries": [{"entry": "0x46e48", "semantic": {"kind": "service", "name": "task-delay"}}],
+          "symbol": "s3d_delay",
+          "frame_bytes": 32
+        }
+      ]
+    },
+    "b": {
+      "regions": [
+        {
+          "start": "0xd54b0",
+          "end": "0xd57ec",
+          "entries": [{"entry": "0xd54b0", "semantic": {"kind": "service", "name": "task-terminate"}}],
+          "symbol": "s3d_terminate",
+          "frame_bytes": 24
+        },
+        {
+          "start": "0xd57ec",
+          "end": "0xd5b00",
+          "entries": [{"entry": "0xd57ec", "semantic": {"kind": "service", "name": "task-priority-change"}}],
+          "symbol": "s3d_change_priority",
+          "frame_bytes": 24
+        },
+        {
+          "start": "0xd5e14",
+          "end": "0xd5fc4",
+          "entries": [{"entry": "0xd5e14", "semantic": {"kind": "service", "name": "task-sleep-with-timeout"}}],
+          "symbol": "s3d_timed_sleep",
+          "frame_bytes": 32
+        },
+        {
+          "start": "0xd64f4",
+          "end": "0xd6774",
+          "entries": [{"entry": "0xd64f4", "semantic": {"kind": "service", "name": "task-wait-release"}}],
+          "symbol": "s3d_release_wait",
+          "frame_bytes": 24
+        },
+        {
+          "start": "0xd6774",
+          "end": "0xd69c0",
+          "entries": [{"entry": "0xd6774", "semantic": {"kind": "service", "name": "task-wait-release-from-handler"}}],
+          "symbol": "s3d_interrupt_release_wait",
+          "frame_bytes": 24
+        },
+        {
+          "start": "0xd6e08",
+          "end": "0xd6f8c",
+          "entries": [{"entry": "0xd6e08", "semantic": {"kind": "service", "name": "task-delay"}}],
+          "symbol": "s3d_delay",
+          "frame_bytes": 32
+        }
+      ]
+    }
+  }
+}

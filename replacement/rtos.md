@@ -13,7 +13,7 @@ Use `devenv shell -- host-build` for every Bazel build/test/run, normally with `
 | Own-first slots | `//replacement/rtos_own_first:own-first-a`, `:own-first-b`, `:own-first-host-tests`; oracle/stager below | [Manifest](../reports/rtos-platform-manifest-draft.md), [regions](rtos_own_first/regions.json) |
 | Scheduler | `//replacement/rtos_scheduler:all`; oracle/stager below | [Thread/shim design](../reports/rtos-platform-options.md#413-owned-thread-layer-and-stock-abi-shim-design-input-from-the-decomp) |
 | Flags/mailboxes | `//replacement/rtos_objects:objects-rust`, `:objects-host-tests`, `:family-suite-runner` | [Family contract](../reports/rtos-platform-options.md#414-owned-eventflag-and-mailbox-family-the-recovered-0xd4-body-and-the-family-design) |
-| Data queues | [RTOS project #156](https://github.com/skeet70/latent-image/issues/156) | [Slot contracts](media_permit/rtos_slot_contracts.json) |
+| Data queues | `//replacement/rtos_data_queue:data-queue-host-tests`, `:data-queue-a`, `:data-queue-b`, `:data-queue-oracle` | [Blocking returns and timer seam](../reports/rtos-platform-options.md#417-owned-data-queue-family-blocking-returns-and-the-timer-seam) |
 | Task records | `//replacement/rtos_task_records:task-records-host-tests`; [native targets](rtos_task_records/BUILD.bazel) | [Create/delete contract](../reports/rtos-task-records.md) |
 | Timer heap | `//replacement/rtos_timer:timer-rust`, `:timer-host-tests`; [native targets](rtos_timer/oracle/BUILD.bazel) | [Membership and arenas](../reports/rtos-platform-options.md#415-owned-timer-heap-membership-host-increment) |
 | Global lock | `//replacement/rtos_global_lock:global-lock-rust`, `:global-lock-a`, `:global-lock-b`, `:global-lock-host-tests`; `//replacement/rtos_global_lock/oracle:global-lock-oracle` | [Package/staging](rtos_global_lock/), [platform contract](../reports/rtos-platform-options.md) |
@@ -71,8 +71,11 @@ The [scheduler report](../reports/rtos-platform-options.md#413-owned-thread-laye
 | `:s3a-oracle` | `--loader-a LOADER_A --loader-b LOADER_B --work NEW_DIRECTORY --summary NEW_JSON` |
 | `:s3b-oracle` | `RUNNER STOCK_LOADER_A STOCK_LOADER_B OWNED_A_BIN OWNED_B_BIN NEW_WORK_DIRECTORY` (all positional, including under Bazel) |
 | `:s3c-oracle` | `--loader-a LOADER_A --loader-b LOADER_B --work NEW_DIRECTORY` |
+| `:s3d-oracle` | `--loader-a LOADER_A --loader-b LOADER_B --cache-root CACHE --results RESULTS` |
 
 S1 compares lock/ready/notification behavior and checks barrier order separately. S2 stops before exception-return execution beyond the runner's admitted subset and uses independent expected repairs for tagged defects. S3 services may stop at a dispatcher entry with an active frame; private active frames are not returned-call ABI. Blocking stops alone do not establish scheduling or resumed callers.
+
+S3d's six lifecycle services have `//replacement/rtos_scheduler:s3d-host-tests` and the cached native oracle above. Each role must reach its declared return value, including zero, or its exact dispatcher stop and switch reason. Matching refusals are not acceptance. The [lifecycle contract](../reports/rtos-platform-options.md#423-owned-task-lifecycle-services-s3d) separates synthetic save/wake/return evidence from full-dispatcher, aggregate placement and system qualification.
 
 ```sh
 devenv shell -- host-build run //replacement/rtos_scheduler/stage:stage-scheduler -- \
@@ -89,7 +92,7 @@ Family CLIs use `Emulation.CachedNativeBatch`: completed raw observations can be
 
 - Flags/mailboxes: `//replacement/rtos_objects:family-suite-runner` takes `--layout`, `--loader-a`, `--loader-b`, `--owned-a-bin`, `--owned-b-bin`, `--cache-root`, `--results`. The usual layout is `bazel-bin/replacement/rtos_scheduler/oracle/layout.json`. Its [family contract](../reports/rtos-platform-options.md#414-owned-eventflag-and-mailbox-family-the-recovered-0xd4-body-and-the-family-design) distinguishes host pending-token semantics, selected-task arrival and actual suspended-service resumption.
 - Global lock: `//replacement/rtos_global_lock/oracle:global-lock-oracle --loader-a LOADER_A --loader-b LOADER_B --cache-root CACHE --results RESULTS`. Direct-helper ABI, stamp conventions and exclusive-monitor limits are in its [package](rtos_global_lock/) and platform report.
-- Data queues: [RTOS project #156](https://github.com/skeet70/latent-image/issues/156) owns the implementation and qualification work. Its family contract must distinguish actual blocking caller returns, per-role timer membership, the retry IRQ window and the task-context caller requirement.
+- Data queues: `//replacement/rtos_data_queue:data-queue-oracle --loader-a LOADER_A --loader-b LOADER_B --cache-root CACHE --results RESULTS --review REVIEW`. The [family contract](../reports/rtos-platform-options.md#417-owned-data-queue-family-blocking-returns-and-the-timer-seam) distinguishes actual blocking caller returns, per-role timer membership, the retry IRQ window and the task-context caller requirement. Inspect the semantic results/review packet separately from the host-build launcher verdict.
 - Cyclic: `//replacement/rtos_cyclic/oracle:cyclic-oracle` supplies the current cyclic/timer dependencies through [its build target](rtos_cyclic/oracle/BUILD.bazel). The [lifecycle contract](../reports/rtos-platform-options.md#421-owned-cyclic-handler-family-lifecycle-expiry-and-reentrancy) covers callback reentrancy and zero-period policy. Native scratch placement does not admit installation over overlapping stock code.
 
 ## Manual timer composition
