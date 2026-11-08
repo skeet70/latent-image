@@ -2,11 +2,15 @@
 module Main (main) where
 
 import Control.Monad (forM, forM_, unless)
+import Data.Aeson (FromJSON (..), withObject, (.:))
+import qualified Data.Aeson as J
 import Data.Bits (complement)
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Lazy as L
 import qualified Data.Map.Strict as M
 import Data.List (sort)
 import Fixtures (fixtureDat)
+import Numeric (showHex)
 import qualified FujiAF.FirstStage as F
 import qualified FujiAF.UpdateContainer as U
 import Replacement.RtosOwnFirst.Regions
@@ -40,6 +44,38 @@ changedWords domain before after = [GuestAddress (base + fromIntegral offset) | 
 
 rowWords :: [FamilyRow] -> [GuestAddress]
 rowWords rows = [GuestAddress at | admittedRow <- rows, let Extent (GuestAddress low) (GuestAddress high) = rowExtent admittedRow, at <- [low, low + 4 .. high - 4]]
+
+data CatalogEntry = CatalogEntry String String
+  deriving Show
+
+instance FromJSON CatalogEntry where
+  parseJSON = withObject "catalog entry" $ \o -> do
+    semantic <- o .: "semantic"
+    CatalogEntry <$> (semantic .: "kind") <*> (semantic .: "name")
+
+data CatalogRegion = CatalogRegion String String [CatalogEntry]
+  deriving Show
+
+instance FromJSON CatalogRegion where
+  parseJSON = withObject "catalog region" $ \o ->
+    CatalogRegion <$> o .: "start" <*> o .: "end" <*> o .: "entries"
+
+data CatalogDomain = CatalogDomain [CatalogRegion]
+  deriving Show
+
+instance FromJSON CatalogDomain where
+  parseJSON = withObject "catalog domain" $ \o -> CatalogDomain <$> o .: "regions"
+
+newtype Catalog = Catalog (M.Map String CatalogDomain)
+  deriving Show
+
+instance FromJSON Catalog where
+  parseJSON = withObject "catalog" $ \o -> Catalog <$> o .: "domains"
+
+catalogRegion :: FamilyRow -> (String, String, String)
+catalogRegion admittedRow = (address (extentStart (rowExtent admittedRow)), address (extentEnd (rowExtent admittedRow)), familyServiceName (rowSlot admittedRow))
+  where
+    address (GuestAddress at) = "0x" ++ showHex at ""
 
 main :: IO ()
 main = do
@@ -88,4 +124,11 @@ main = do
       names = map controlName controls
   unless (all controlPassed controls) (fail ("controls failed: " ++ show [controlName item | item <- controls, not (controlPassed item)]))
   unless (sort names == sort ["absolute-symbol","base-overlap","bin-length","carrier-byte","dependency-byte","dependency-symbols","entry","family-restores-to-base","frame","marker","outside-window-byte","outside-write","window-overlap","candidate-differs"]) (fail ("control set " ++ show names))
-  putStrLn "family admission, dependency binding, staging, restoration and refusing controls passed"
+  catalog <- right (J.eitherDecodeStrict (L.toStrict (J.encode (familyCatalog staged))) :: Either String Catalog)
+  let Catalog catalogDomains = catalog
+  forM_ [(DomainA,"a"),(DomainB,"b")] $ \(domain,key) -> do
+    let CatalogDomain regions = catalogDomains M.! key
+        expected = map catalogRegion (familyRows domain)
+        actual = [(start,end,name) | CatalogRegion start end entries <- regions, CatalogEntry kind name <- entries, kind=="family"]
+    unless (actual == expected) (fail ("family catalog differs " ++ show domain))
+  putStrLn "family admission, dependency binding, staging, restoration, catalog and refusing controls passed"

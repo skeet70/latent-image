@@ -7,7 +7,7 @@ module Replacement.RtosScheduler.Family
   , FamilyImage (..), FamilyRow (..), FamilyError (..), FamilyControl (..)
   , FamilyAdmission, FamilyStaged
   , familyRows, familyAbsolutes, familyPins
-  , admitFamily, admitFamilyRows, stageFamily, familyDat, familyLoader, familyContract
+  , admitFamily, admitFamilyRows, stageFamily, familyDat, familyLoader, familyContract, familyCatalog, familyServiceName
   , confineFamily, restoreFamily, familyControls, disjointWindows, baseDisjoint
   ) where
 
@@ -19,6 +19,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import Data.List (find, sortOn)
 import qualified Data.Map.Strict as M
+import Data.String (fromString)
 import Data.Word (Word32)
 import qualified Emulation.Sha256 as SHA
 import qualified FujiAF.FirstStage as F
@@ -546,6 +547,55 @@ familyContract staged = object
       , "stock_sha256" .= digestText (sha (slice (domainLoaderBase domain) (rowExtent admittedRow) (S.sourceLoaders source M.! domain)))
       , "base_sha256" .= digestText (sha (slice (domainLoaderBase domain) (rowExtent admittedRow) (cutoverLoader base domain)))
       , "owned_sha256" .= digestText (sha (slice (domainLoaderBase domain) (rowExtent admittedRow) (familyLoaders staged M.! domain)))
+      ]
+
+-- | The semantic name the scheduler-pair catalog carries for a family slot.
+familyServiceName :: FamilySlot -> String
+familyServiceName slot = case slot of
+  FamilyRelease -> "family-release"
+  HelperRelease -> "helper-release"
+  HelperBlock -> "helper-block"
+  HelperBlockTimed -> "helper-block-timed"
+  HelperCheck -> "helper-check"
+  FlagCreate -> "family-flag-create"
+  FlagDelete -> "family-flag-delete"
+  FlagSet -> "family-flag-set"
+  FlagSetHandler -> "family-flag-set-handler"
+  FlagClear -> "family-flag-clear"
+  FlagWait -> "family-flag-wait"
+  FlagPoll -> "family-flag-poll"
+  FlagTimedWait -> "family-flag-timed-wait"
+  MailboxCreate -> "family-mailbox-create"
+  MailboxDelete -> "family-mailbox-delete"
+  MailboxSend -> "family-mailbox-send"
+  MailboxReceive -> "family-mailbox-receive"
+  MailboxPoll -> "family-mailbox-poll"
+  MailboxTimedReceive -> "family-mailbox-timed-receive"
+
+-- | The admitted nineteen windows per domain in scheduler-catalog shape.
+familyCatalog :: FamilyStaged -> Value
+familyCatalog staged = object
+  [ "fill_word" .= ("0xe7f000f0" :: String)
+  , "domains" .= object
+      [ fromString (domainLabel domain) .= object
+          [ "regions" .= [region admittedRow | admittedRow <- familyRowsAdmitted admitted M.! domain]
+          ]
+      | domain <- domains
+      ]
+  ]
+  where
+    admitted = stagedFamily staged
+    address (GuestAddress at) = "0x" ++ showHex at ""
+    symbol (SymbolName text) = text
+    region admittedRow = object
+      [ "start" .= address (extentStart (rowExtent admittedRow))
+      , "end" .= address (extentEnd (rowExtent admittedRow))
+      , "symbol" .= symbol (rowEntry admittedRow)
+      , "frame_bytes" .= (let FrameBytes count = rowFrame admittedRow in count)
+      , "entries" .= [object
+          [ "entry" .= address (extentStart (rowExtent admittedRow))
+          , "semantic" .= object ["kind" .= ("family" :: String), "name" .= familyServiceName (rowSlot admittedRow)]
+          ]]
       ]
 
 replaceAt :: Int -> B.ByteString -> B.ByteString -> B.ByteString

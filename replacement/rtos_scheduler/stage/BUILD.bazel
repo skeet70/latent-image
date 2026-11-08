@@ -161,6 +161,7 @@ haskell_test(
     deps = [
         ":scheduler-artifact",
         "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//host:aeson",
         "//host:base",
         "//host:bytestring",
         "//host:containers",

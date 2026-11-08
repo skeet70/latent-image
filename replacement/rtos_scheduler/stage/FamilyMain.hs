@@ -76,6 +76,7 @@ main = do
       H.ensure (all controlPassed controls) "family control refused"
       createDirectory output
       L.writeFile (output </> "controls.json") (J.encode (map controlValue controls) <> L.singleton 10)
+      L.writeFile (output </> "family-regions.json") (J.encode (familyCatalog staged) <> L.singleton 10)
       if command == "candidate"
         then do
           B.writeFile (output </> "candidate.DAT") (familyDat staged)
