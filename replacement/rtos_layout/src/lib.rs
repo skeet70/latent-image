@@ -145,6 +145,29 @@ impl MailboxSlot {
     }
 }
 
+/// 1..=the cyclic count word.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
+#[repr(transparent)]
+pub struct CyclicSlot(u16);
+
+impl CyclicSlot {
+    pub const COUNT: u32 = 64;
+
+    #[inline(always)]
+    pub const fn new(slot: u32, count: u32) -> Option<Self> {
+        if slot >= 1 && slot <= count && slot <= Self::COUNT {
+            Some(Self(slot as u16))
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub const fn get(self) -> u32 {
+        self.0 as u32
+    }
+}
+
 /// Head of an object's waiter queue, linked through T+0x00/+0x04.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(transparent)]
@@ -359,6 +382,74 @@ impl Message {
     #[inline(always)]
     pub const fn priority(self) -> GuestAddress {
         self.0.offset(0x04)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct CyclicConfig(pub GuestAddress);
+
+impl CyclicConfig {
+    pub const SIZE: u32 = 0x18;
+    /// Attribute bit 1; boot-time activation.
+    pub const START: u32 = 0x02;
+
+    #[inline(always)]
+    pub const fn attributes(self) -> GuestAddress {
+        self.0
+    }
+
+    #[inline(always)]
+    pub const fn argument(self) -> GuestAddress {
+        self.0.offset(0x04)
+    }
+
+    #[inline(always)]
+    pub const fn handler(self) -> GuestAddress {
+        self.0.offset(0x08)
+    }
+
+    #[inline(always)]
+    pub const fn period(self) -> GuestAddress {
+        self.0.offset(0x0c)
+    }
+
+    #[inline(always)]
+    pub const fn phase(self) -> GuestAddress {
+        self.0.offset(0x10)
+    }
+
+    #[inline(always)]
+    pub const fn exists(self) -> GuestAddress {
+        self.0.offset(0x14)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct CyclicControl(pub GuestAddress);
+
+impl CyclicControl {
+    pub const SIZE: u32 = 0x18;
+
+    #[inline(always)]
+    pub const fn config(self) -> GuestAddress {
+        self.0
+    }
+
+    #[inline(always)]
+    pub const fn active(self) -> GuestAddress {
+        self.0.offset(0x04)
+    }
+
+    #[inline(always)]
+    pub const fn expiry(self) -> GuestAddress {
+        self.0.offset(0x08)
+    }
+
+    #[inline(always)]
+    pub const fn timer(self) -> GuestAddress {
+        self.0.offset(0x0c)
     }
 }
 
@@ -787,6 +878,10 @@ pub struct DomainWords {
     pub mailbox_controls: GuestAddress,
     pub mailbox_waits: GuestAddress,
     pub mailbox_timers: GuestAddress,
+    /// [`CyclicSlot::COUNT`] creation records.
+    pub cyclic_configs: GuestAddress,
+    /// [`CyclicSlot::COUNT`] control records.
+    pub cyclic_controls: GuestAddress,
 }
 
 impl DomainWords {
@@ -858,6 +953,16 @@ impl DomainWords {
     pub const fn mailbox_timer(&self, task: TaskSlot) -> GuestAddress {
         self.mailbox_timers.offset((task.get() - 1) * TIMER_ENTRY_SIZE)
     }
+
+    #[inline(always)]
+    pub const fn cyclic_config(&self, slot: CyclicSlot) -> CyclicConfig {
+        CyclicConfig(self.cyclic_configs.offset((slot.get() - 1) * CyclicConfig::SIZE))
+    }
+
+    #[inline(always)]
+    pub const fn cyclic_control(&self, slot: CyclicSlot) -> CyclicControl {
+        CyclicControl(self.cyclic_controls.offset((slot.get() - 1) * CyclicControl::SIZE))
+    }
 }
 
 /// A heap entry: one-based slot, callback and argument.
@@ -901,6 +1006,8 @@ impl Domain {
                 mailbox_controls: GuestAddress(0x4006_2c34),
                 mailbox_waits: GuestAddress(0x4005_783c),
                 mailbox_timers: GuestAddress(0x4005_7fbc),
+                cyclic_configs: GuestAddress(0x4005_ef78),
+                cyclic_controls: GuestAddress(0x4005_928c),
             },
             Domain::B => DomainWords {
                 handler_context: GuestAddress(0x400e_4564),
@@ -928,6 +1035,8 @@ impl Domain {
                 mailbox_controls: GuestAddress(0x400f_2bf4),
                 mailbox_waits: GuestAddress(0x400e_77fc),
                 mailbox_timers: GuestAddress(0x400e_7f7c),
+                cyclic_configs: GuestAddress(0x400e_ef38),
+                cyclic_controls: GuestAddress(0x400e_924c),
             },
         }
     }

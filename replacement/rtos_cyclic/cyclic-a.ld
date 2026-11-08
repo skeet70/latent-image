@@ -1,0 +1,113 @@
+ENTRY(xm1_rtos_cyclic_start)
+
+MEMORY {
+  configure_entry (rx) : ORIGIN = 0x4be3c, LENGTH = 4
+  configure_body (rx) : ORIGIN = 0x4be40, LENGTH = 0x44
+  schedule_entry (rx) : ORIGIN = 0x4be84, LENGTH = 4
+  schedule_body (rx) : ORIGIN = 0x4be88, LENGTH = 0x28
+  expire_entry (rx) : ORIGIN = 0x4beb0, LENGTH = 4
+  expire_body (rx) : ORIGIN = 0x4beb4, LENGTH = 0x88
+  initialize_entry (rx) : ORIGIN = 0x4bf3c, LENGTH = 4
+  initialize_body (rx) : ORIGIN = 0x4bf40, LENGTH = 0x8c
+  start_entry (rx) : ORIGIN = 0x4bfcc, LENGTH = 4
+  start_body (rx) : ORIGIN = 0x4bfd0, LENGTH = 0x16c
+  stop_entry (rx) : ORIGIN = 0x4c13c, LENGTH = 4
+  stop_body (rx) : ORIGIN = 0x4c140, LENGTH = 0x14c
+  create_entry (rx) : ORIGIN = 0x4d818, LENGTH = 4
+  create_body (rx) : ORIGIN = 0x4d81c, LENGTH = 0x8c
+  delete_entry (rx) : ORIGIN = 0x4d8a8, LENGTH = 4
+  delete_body (rx) : ORIGIN = 0x4d8ac, LENGTH = 0x50
+  cyclic_core (rx) : ORIGIN = 0x4c28c, LENGTH = 0x800
+}
+
+SECTIONS {
+  .configure_entry : { KEEP(*(.text.cyclic_configure)) } > configure_entry
+  .configure_body : {
+    KEEP(*(.text.cyclic_body_configure))
+    __configure_body_end = .;
+    . = ORIGIN(configure_body) + LENGTH(configure_body);
+  } > configure_body =0xf000f0e7
+  .schedule_entry : { KEEP(*(.text.cyclic_schedule)) } > schedule_entry
+  .schedule_body : {
+    KEEP(*(.text.cyclic_body_schedule))
+    __schedule_body_end = .;
+    . = ORIGIN(schedule_body) + LENGTH(schedule_body);
+  } > schedule_body =0xf000f0e7
+  .expire_entry : { KEEP(*(.text.cyclic_expire)) } > expire_entry
+  .expire_body : {
+    KEEP(*(.text.cyclic_body_expire))
+    __expire_body_end = .;
+    . = ORIGIN(expire_body) + LENGTH(expire_body);
+  } > expire_body =0xf000f0e7
+  .initialize_entry : { KEEP(*(.text.cyclic_initialize)) } > initialize_entry
+  .initialize_body : {
+    KEEP(*(.text.cyclic_body_initialize))
+    __initialize_body_end = .;
+    . = ORIGIN(initialize_body) + LENGTH(initialize_body);
+  } > initialize_body =0xf000f0e7
+  .start_entry : { KEEP(*(.text.cyclic_start)) } > start_entry
+  .start_body : {
+    KEEP(*(.text.cyclic_body_start))
+    __start_body_end = .;
+    . = ORIGIN(start_body) + LENGTH(start_body);
+  } > start_body =0xf000f0e7
+  .stop_entry : { KEEP(*(.text.cyclic_stop)) } > stop_entry
+  .stop_body : {
+    KEEP(*(.text.cyclic_body_stop))
+    __stop_body_end = .;
+    . = ORIGIN(stop_body) + LENGTH(stop_body);
+  } > stop_body =0xf000f0e7
+  .create_entry : { KEEP(*(.text.cyclic_create)) } > create_entry
+  .create_body : {
+    KEEP(*(.text.cyclic_body_create))
+    __create_body_end = .;
+    . = ORIGIN(create_body) + LENGTH(create_body);
+  } > create_body =0xf000f0e7
+  .delete_entry : { KEEP(*(.text.cyclic_delete)) } > delete_entry
+  .delete_body : {
+    KEEP(*(.text.cyclic_body_delete))
+    __delete_body_end = .;
+    . = ORIGIN(delete_body) + LENGTH(delete_body);
+  } > delete_body =0xf000f0e7
+  .cyclic_core : {
+    *(.text.cyclic_configure_core)
+    *(.text.cyclic_schedule_core)
+    *(.text.cyclic_expire_core)
+    *(.text.cyclic_initialize_core)
+    *(.text.cyclic_start_core)
+    *(.text.cyclic_stop_core)
+    *(.text.cyclic_create_core)
+    *(.text.cyclic_delete_core)
+    *(.text.*rust_begin_unwind)
+    *(.rodata .rodata.*)
+    __cyclic_core_end = .;
+    . = ORIGIN(cyclic_core) + LENGTH(cyclic_core);
+  } > cyclic_core =0xf000f0e7
+  .forbidden (NOLOAD) : { *(.text.* .rodata .rodata.* .data .data.* .bss .bss.* COMMON) } > cyclic_core
+  .ARM.attributes 0 : { *(.ARM.attributes) }
+  .symtab 0 : { *(.symtab) }
+  .shstrtab 0 : { *(.shstrtab) }
+  .strtab 0 : { *(.strtab) }
+  /DISCARD/ : { *(.ARM.exidx .ARM.exidx.* .ARM.extab .ARM.extab.* .comment .note .note.*) }
+}
+
+ASSERT(xm1_rtos_cyclic_configure == 0x4be3c, "configure entry moved")
+ASSERT(xm1_rtos_cyclic_schedule == 0x4be84, "schedule entry moved")
+ASSERT(xm1_rtos_cyclic_expire == 0x4beb0, "expire entry moved")
+ASSERT(xm1_rtos_cyclic_initialize == 0x4bf3c, "initialize entry moved")
+ASSERT(xm1_rtos_cyclic_start == 0x4bfcc, "start entry moved")
+ASSERT(xm1_rtos_cyclic_stop == 0x4c13c, "stop entry moved")
+ASSERT(xm1_rtos_cyclic_create == 0x4d818, "create entry moved")
+ASSERT(xm1_rtos_cyclic_delete == 0x4d8a8, "delete entry moved")
+ASSERT(SIZEOF(.configure_entry) == 4 && SIZEOF(.schedule_entry) == 4 && SIZEOF(.expire_entry) == 4 && SIZEOF(.initialize_entry) == 4 && SIZEOF(.start_entry) == 4 && SIZEOF(.stop_entry) == 4 && SIZEOF(.create_entry) == 4 && SIZEOF(.delete_entry) == 4, "entry veneer size differs")
+ASSERT(__configure_body_end <= ORIGIN(configure_body) + LENGTH(configure_body), "configure body exceeds carrier")
+ASSERT(__schedule_body_end <= ORIGIN(schedule_body) + LENGTH(schedule_body), "schedule body exceeds carrier")
+ASSERT(__expire_body_end <= ORIGIN(expire_body) + LENGTH(expire_body), "expire body exceeds carrier")
+ASSERT(__initialize_body_end <= ORIGIN(initialize_body) + LENGTH(initialize_body), "initialize body exceeds carrier")
+ASSERT(__start_body_end <= ORIGIN(start_body) + LENGTH(start_body), "start body exceeds carrier")
+ASSERT(__stop_body_end <= ORIGIN(stop_body) + LENGTH(stop_body), "stop body exceeds carrier")
+ASSERT(__create_body_end <= ORIGIN(create_body) + LENGTH(create_body), "create body exceeds carrier")
+ASSERT(__delete_body_end <= ORIGIN(delete_body) + LENGTH(delete_body), "delete body exceeds carrier")
+ASSERT(__cyclic_core_end <= ORIGIN(cyclic_core) + LENGTH(cyclic_core), "core exceeds native scratch")
+ASSERT(ORIGIN(cyclic_core) + LENGTH(cyclic_core) <= 0x4d818, "native scratch reaches create")
+ASSERT(SIZEOF(.forbidden) == 0, "unplaced code or writable data")

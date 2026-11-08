@@ -9,6 +9,7 @@ exports_files(
         "//replacement/menu_engine:__pkg__",
         "//replacement/modal_runtime:__pkg__",
         "//replacement/recipe_ui:__pkg__",
+        "//replacement/rtos_cyclic:__pkg__",
         "//replacement/rtos_layout:__pkg__",
         "//replacement/rtos_objects:__pkg__",
         "//replacement/rtos_own_first:__pkg__",

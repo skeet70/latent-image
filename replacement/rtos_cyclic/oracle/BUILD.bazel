@@ -1,0 +1,105 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
+
+package(default_visibility = ["//visibility:public"])
+
+genrule(
+    name = "layout-facts-build",
+    srcs = [
+        "layout-facts.rs",
+        "//replacement/rtos_layout:src/lib.rs",
+    ],
+    outs = ["layout-facts-bin"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 -A dead_code -C linker=$(location @lab_clang//:bin/clang) $(location layout-facts.rs) -o $@",
+    executable = True,
+    tools = [
+        "@lab_clang//:bin/clang",
+        "@lab_rustc//:bin/rustc",
+    ],
+)
+
+genrule(
+    name = "layout",
+    outs = ["layout.json"],
+    cmd = "$(location :layout-facts-build) > $@",
+    tools = [":layout-facts-build"],
+)
+
+_GHCOPTS = ["-XGHC2021", "-Wall", "-Werror", "-O2"]
+
+haskell_library(
+    name = "cyclic-oracle-lib",
+    srcs = [
+        "Replacement/RtosCyclic/Layout.hs",
+        "Replacement/RtosCyclic/Suite.hs",
+    ],
+    src_strip_prefix = ".",
+    ghcopts = _GHCOPTS,
+    deps = [
+        "//emulation:cached-native-batch",
+        "//emulation:native-adapter",
+        "//emulation:native-observation",
+        "//emulation:owned-case",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:filepath",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+    ],
+)
+
+_INPUTS = [
+    ":layout.json",
+    "//emulation:native-runner",
+    "//replacement/rtos_cyclic:cyclic-a.bin",
+    "//replacement/rtos_cyclic:cyclic-a.symbols",
+    "//replacement/rtos_cyclic:cyclic-b.bin",
+    "//replacement/rtos_cyclic:cyclic-b.symbols",
+    "//replacement/rtos_timer:timer-a.bin",
+    "//replacement/rtos_timer:timer-a.symbols",
+    "//replacement/rtos_timer:timer-b.bin",
+    "//replacement/rtos_timer:timer-b.symbols",
+]
+
+haskell_binary(
+    name = "cyclic-oracle",
+    srcs = ["CyclicMain.hs"],
+    main_file = "CyclicMain.hs",
+    args = [
+        "--runner",
+        "$(rootpath //emulation:native-runner)",
+        "--layout",
+        "$(rootpath :layout.json)",
+        "--owned-a-bin",
+        "$(rootpath //replacement/rtos_cyclic:cyclic-a.bin)",
+        "--owned-a-symbols",
+        "$(rootpath //replacement/rtos_cyclic:cyclic-a.symbols)",
+        "--owned-b-bin",
+        "$(rootpath //replacement/rtos_cyclic:cyclic-b.bin)",
+        "--owned-b-symbols",
+        "$(rootpath //replacement/rtos_cyclic:cyclic-b.symbols)",
+        "--timer-a-bin",
+        "$(rootpath //replacement/rtos_timer:timer-a.bin)",
+        "--timer-a-symbols",
+        "$(rootpath //replacement/rtos_timer:timer-a.symbols)",
+        "--timer-b-bin",
+        "$(rootpath //replacement/rtos_timer:timer-b.bin)",
+        "--timer-b-symbols",
+        "$(rootpath //replacement/rtos_timer:timer-b.symbols)",
+    ],
+    data = _INPUTS,
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":cyclic-oracle-lib",
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//host:storage-budget",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+    ],
+)

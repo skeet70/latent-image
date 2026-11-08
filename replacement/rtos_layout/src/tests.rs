@@ -7,7 +7,7 @@ use layout::*;
 
 const DOMAINS: [Domain; 2] = [Domain::A, Domain::B];
 
-fn words_as_array(w: &DomainWords) -> [u32; 17] {
+fn words_as_array(w: &DomainWords) -> [u32; 19] {
     [
         w.handler_context,
         w.scheduler_lock,
@@ -26,6 +26,8 @@ fn words_as_array(w: &DomainWords) -> [u32; 17] {
         w.timer_count,
         w.timer_heap,
         w.task_table,
+        w.cyclic_configs,
+        w.cyclic_controls,
     ]
     .map(|a| a.0)
 }
@@ -37,7 +39,7 @@ fn domain_words_are_the_stock_addresses() {
         [
             0x4005_45a4, 0x4005_45c0, 0x4005_45c4, 0x4005_45c8, 0x4005_45cc, 0x4005_46d8, 0x4005_46dc, 0x4005_475c,
             0x4005_4760, 0x4005_4764, 0x4005_4768, 0x4005_476c, 0x4005_4770, 0x4005_4774, 0x4005_4778, 0x4005_d718,
-            0x4005_ff0c,
+            0x4005_ff0c, 0x4005_ef78, 0x4005_928c,
         ]
     );
     assert_eq!(
@@ -45,7 +47,7 @@ fn domain_words_are_the_stock_addresses() {
         [
             0x400e_4564, 0x400e_4580, 0x400e_4584, 0x400e_4588, 0x400e_458c, 0x400e_4698, 0x400e_469c, 0x400e_471c,
             0x400e_4720, 0x400e_4724, 0x400e_4728, 0x400e_472c, 0x400e_4730, 0x400e_4734, 0x400e_4738, 0x400e_d6d8,
-            0x400e_fecc,
+            0x400e_fecc, 0x400e_ef38, 0x400e_924c,
         ]
     );
 }
@@ -330,4 +332,43 @@ fn family_slots_refuse_out_of_range_and_oversized_counts() {
     assert_eq!(FlagSlot::new(120, 120).map(FlagSlot::get), Some(120));
     assert_eq!(MailboxSlot::new(2, 1), None);
     assert_eq!(MailboxSlot::new(1, 1).map(MailboxSlot::get), Some(1));
+}
+
+#[test]
+fn cyclic_records_are_the_stock_stride_and_offsets() {
+    let base = GuestAddress(0x4005_928c);
+    let config = CyclicConfig(base);
+    let control = CyclicControl(base);
+    assert_eq!(
+        [CyclicConfig::SIZE, CyclicControl::SIZE],
+        [0x18, 0x18]
+    );
+    assert_eq!(
+        [
+            config.attributes(),
+            config.argument(),
+            config.handler(),
+            config.period(),
+            config.phase(),
+            config.exists(),
+        ]
+        .map(|a| a.0),
+        [base.0, base.0 + 4, base.0 + 8, base.0 + 0x0c, base.0 + 0x10, base.0 + 0x14]
+    );
+    assert_eq!(
+        [control.config(), control.active(), control.expiry(), control.timer()].map(|a| a.0),
+        [base.0, base.0 + 4, base.0 + 8, base.0 + 0x0c]
+    );
+    assert_eq!(CyclicConfig::START, 0x02);
+}
+
+#[test]
+fn cyclic_slots_stride_from_the_table() {
+    let a = Domain::A.words();
+    let slot2 = CyclicSlot::new(2, 64).unwrap();
+    assert_eq!(a.cyclic_config(slot2).0 .0, 0x4005_ef78 + 0x18);
+    assert_eq!(a.cyclic_control(slot2).0 .0, 0x4005_928c + 0x18);
+    assert_eq!(CyclicSlot::new(0, 64), None);
+    assert_eq!(CyclicSlot::new(65, 64), None);
+    assert_eq!(CyclicSlot::new(64, 64).map(CyclicSlot::get), Some(64));
 }
