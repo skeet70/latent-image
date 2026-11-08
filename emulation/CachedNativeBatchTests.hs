@@ -3,7 +3,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 module Main (main) where
 
-import Control.Exception (try)
+import Control.Exception (IOException, try)
 import Control.Monad (filterM, forM, forM_)
 import Data.Aeson (Value (..))
 import qualified Data.ByteString as B
@@ -28,6 +28,7 @@ import System.Directory
   , copyFile
   , createDirectoryIfMissing
   , doesDirectoryExist
+  , doesFileExist
   , getPermissions
   , listDirectory
   , removeDirectoryRecursive
@@ -49,6 +50,7 @@ main = do
     corruptionTest (root </> "corruption") canonicalRunner
     interruptedTest (root </> "interrupted") canonicalRunner
     faultyTest (root </> "faulty") canonicalRunner
+    incompleteOutputTest (root </> "incomplete")
     rootAliasTest (root </> "root-alias") canonicalRunner
     escapeV1Test (root </> "escape-v1") canonicalRunner
     escapeTmpTest (root </> "escape-tmp") canonicalRunner
@@ -295,6 +297,37 @@ faultyTest root runner = do
   ensure (reused == BatchReused) ("faulty batch was not reusable: " ++ show reused)
   ensure (reusedObservations == observations) "faulty batch reuse changed the observation"
   checkResultFiles batchDirectory cases reusedObservations ["failed"]
+
+incompleteOutputTest :: FilePath -> IO ()
+incompleteOutputTest root = do
+  let cache = root </> "cache"
+      batchDirectory = root </> "batch"
+      cases = specs 0xdeadbeef 0xdeadbeef 0x11223344
+  batchPath <- O.writeBatch batchDirectory cases
+  let fakeRunner = root </> "fake-runner"
+  B.writeFile fakeRunner (BC.pack "#!/bin/sh\nprintf 'FUJI_NATIVE_BATCH_CASE 0 1\\nnot json\\n'\nexit 1\n")
+  permissions <- getPermissions fakeRunner
+  setPermissions fakeRunner (permissions {executable = True})
+  outcome <-
+    try (cachedObservedBatch cache fakeRunner batchPath)
+      :: IO (Either IOException (BatchReuse, [(CaseId, N.NativeObservation)]))
+  case outcome of
+    Right _ -> fail "incomplete native output was accepted"
+    Left _ -> pure ()
+  case cases of
+    [] -> fail "incomplete output fixture has no case"
+    (caseSpec : _) -> do
+      let resultPath = batchDirectory </> (O.caseId caseSpec ++ ".native-result.json")
+      present <- doesFileExist resultPath
+      ensure present "incomplete native output did not retain its failure report"
+      failed <- B.readFile resultPath >>= jsonRead
+      ensure (str (get failed "status") == "runner_failure") ("unexpected failure status: " ++ show failed)
+      ensure
+        ("not json" `isInfixOf` str (get failed "runner_stdout"))
+        ("failure report lacks raw stdout: " ++ show failed)
+      versionPresent <- doesDirectoryExist (cache </> "v1")
+      entries <- if versionPresent then cacheEntries cache else pure []
+      ensure (null entries) ("incomplete native output published a cache entry: " ++ show entries)
 
 rootAliasTest :: FilePath -> FilePath -> IO ()
 rootAliasTest root runner = do
