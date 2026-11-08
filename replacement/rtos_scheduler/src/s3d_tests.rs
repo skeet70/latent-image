@@ -207,28 +207,63 @@ impl Model {
         self.set_word(task.wait(), WAIT);
         self.set_word(GuestAddress(WAIT), TIMER);
         self.set_word(GuestAddress(TIMER), 0);
-        self.set_word(GuestAddress(TIMER + 4), 0);
+        self.set_word(GuestAddress(TIMER + 4), timeout_callback(domain));
         self.set_word(GuestAddress(TIMER + 8), task.0 .0);
         self.timers.borrow_mut().insert(TIMER);
         let words = domain.words();
         let count = self.word(words.timer_count);
         self.set_word(words.timer_count, count + 1);
         self.set_word(GuestAddress(TIMER), count + 1);
-        let node = GuestAddress(words.timer_heap.0 + count * TIMER_NODE_STRIDE);
-        self.set_word(node, 0);
-        self.set_word(node.offset(TIMER_NODE_ENTRY), TIMER);
+        self.set_word(GuestAddress(words.timer_heap.0 + count * 8), 0);
+        self.set_word(GuestAddress(words.timer_heap.0 + count * 8 + 4), TIMER);
     }
 
-    fn expire_if_active(&self, domain: Domain, slot: u32, result: i32) {
-        let task = self.task(domain, slot);
+    fn tick_once(&self, domain: Domain) {
+        let words = domain.words();
+        let count = self.word(words.timer_count);
+        if count == 0 {
+            return;
+        }
+        let heap = words.timer_heap;
+        let entry = GuestAddress(self.word(GuestAddress(heap.0 + 4)));
+        let callback = self.word(entry.offset(4));
+        let argument = self.word(entry.offset(8));
+        let last = GuestAddress(heap.0 + (count - 1) * 8);
+        let last_entry = self.word(last.offset(4));
+        self.set_word(heap, self.word(last));
+        self.set_word(GuestAddress(heap.0 + 4), last_entry);
+        if count > 1 {
+            self.set_word(GuestAddress(last_entry), 1);
+        }
+        self.set_word(words.timer_count, count - 1);
+        let result = if callback == timeout_callback(domain) {
+            -50
+        } else if callback == delay_callback(domain) {
+            0
+        } else {
+            return;
+        };
+        let task = Task(GuestAddress(argument));
         let wait = GuestAddress(self.word(task.wait()));
-        let receipt = self.word(wait);
-        if receipt != 0 {
-            let entry = TimerEntry(GuestAddress(receipt));
-            let context = domain.words().context(domain);
-            if timer_heap_active(self, context, entry) {
-                self.finish_wait(domain, slot, result);
+        self.set_word(wait, result as u32);
+        if self.word(task.terminate_pending()) != 0 {
+            self.reset_task(task);
+            self.set_word(task.context_discarded(), 1);
+            if self.byte(task.flags()) & 1 != 0 {
+                self.set_byte(task.flags(), self.byte(task.flags()) & !1);
+                self.restart_task(domain.words().context(domain), task);
             }
+            return;
+        }
+        if self.word(task.priority_change_pending()) != 0 {
+            self.set_byte(task.priority(), self.word(task.pending_priority()) as u8);
+            self.set_word(task.priority_change_pending(), 0);
+        }
+        self.set_word(task.cancel_pending(), 0);
+        if self.byte(task.state()) & 4 != 0 {
+            self.set_byte(task.state(), 4);
+        } else {
+            self.insert_ready(domain.words().context(domain), task);
         }
     }
 
@@ -990,42 +1025,58 @@ fn remote_records_notify_and_do_not_switch() {
 }
 
 #[test]
-fn release_removes_the_timer_and_expiry_does_not_revive_the_task() {
+fn uncancelled_timer_expires_and_changes_the_task() {
     let model = Model::new(Domain::A);
     model.make_running(Domain::A, 1);
     model.set_object_wait(Domain::A, 2, 10);
     model.arm_test_timer(Domain::A, 2);
-    let context = Domain::A.words().context(Domain::A);
-    let entry = TimerEntry(GuestAddress(TIMER));
-    assert!(timer_heap_active(&model, context, entry));
-    assert_eq!(status(release_wait(&model, Domain::A, id(Domain::A, 2))), 0);
-    assert!(!timer_heap_active(&model, context, entry));
-    assert_eq!(model.word(Domain::A.words().timer_count), 0);
-    model.expire_if_active(Domain::A, 2, -50);
+    let words = Domain::A.words();
+    assert_eq!(model.word(words.timer_count), 1);
+    assert_eq!(model.word(GuestAddress(words.timer_heap.0 + 4)), TIMER);
+    model.tick_once(Domain::A);
     let task = model.task(Domain::A, 2);
+    assert_eq!(model.word(words.timer_count), 0);
+    assert_eq!(model.word(GuestAddress(WAIT)), (-50i32) as u32);
     assert_eq!(model.byte(task.state()), 1);
-    assert_eq!(model.word(GuestAddress(WAIT)), (-49i32) as u32);
-    let head = ReadyHead(GuestAddress(Domain::A.words().ready_heads.0));
+    let head = ReadyHead(GuestAddress(words.ready_heads.0));
     let first = model.word(head.next());
     assert_eq!(model.word(Task(GuestAddress(first)).next()), task.0 .0);
     assert_eq!(model.word(task.next()), head.0 .0);
 }
 
 #[test]
-fn terminate_removes_the_timer_and_expiry_does_not_revive_the_task() {
+fn release_cancels_the_timer_before_the_consumer_runs() {
     let model = Model::new(Domain::A);
     model.make_running(Domain::A, 1);
     model.set_object_wait(Domain::A, 2, 10);
     model.arm_test_timer(Domain::A, 2);
-    let context = Domain::A.words().context(Domain::A);
-    let entry = TimerEntry(GuestAddress(TIMER));
-    assert!(timer_heap_active(&model, context, entry));
-    assert_eq!(status(terminate(&model, Domain::A, id(Domain::A, 2))), 0);
-    assert!(!timer_heap_active(&model, context, entry));
-    model.expire_if_active(Domain::A, 2, -50);
+    let words = Domain::A.words();
+    assert_eq!(status(release_wait(&model, Domain::A, id(Domain::A, 2))), 0);
+    assert_eq!(model.word(words.timer_count), 0);
+    model.tick_once(Domain::A);
     let task = model.task(Domain::A, 2);
+    assert_eq!(model.word(words.timer_count), 0);
+    assert_eq!(model.word(GuestAddress(WAIT)), (-49i32) as u32);
+    assert_eq!(model.byte(task.state()), 1);
+    let head = ReadyHead(GuestAddress(words.ready_heads.0));
+    let first = model.word(head.next());
+    assert_eq!(model.word(Task(GuestAddress(first)).next()), task.0 .0);
+    assert_eq!(model.word(task.next()), head.0 .0);
+}
+
+#[test]
+fn terminate_cancels_the_timer_before_the_consumer_runs() {
+    let model = Model::new(Domain::A);
+    model.make_running(Domain::A, 1);
+    model.set_object_wait(Domain::A, 2, 10);
+    model.arm_test_timer(Domain::A, 2);
+    let words = Domain::A.words();
+    assert_eq!(status(terminate(&model, Domain::A, id(Domain::A, 2))), 0);
+    assert_eq!(model.word(words.timer_count), 0);
+    model.tick_once(Domain::A);
+    let task = model.task(Domain::A, 2);
+    assert_eq!(model.word(words.timer_count), 0);
     assert_eq!(model.byte(task.state()), 0);
     assert_eq!(model.word(task.context_discarded()), 1);
-    assert_eq!(model.word(Domain::A.words().ready_bitmap), 1);
-    assert_eq!(model.word(Domain::A.words().timer_count), 0);
+    assert_eq!(model.word(words.ready_bitmap), 1);
 }

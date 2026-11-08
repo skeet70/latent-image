@@ -35,7 +35,7 @@ data Role = Stock | Owned deriving (Eq, Show)
 data Service = Terminate | ChangePriority | TimedSleep | ReleaseWait | HandlerRelease | Delay
   deriving (Eq, Show)
 
-data Expected = ReturnedR0 Word32 | StoppedAt Word32 deriving (Eq, Show)
+data Expected = ReturnedR0 Word32 | StoppedAt Word32 Word32 deriving (Eq, Show)
 
 data Case = Case
   { caseName :: String
@@ -291,17 +291,17 @@ cases d =
   , Case "priority-invalid" ChangePriority (idOf d 2) 17 setupRunning 0x53 False Nothing (ReturnedR0 0xffffffef)
   , Case "timed-sleep-wakeup" TimedSleep 5 0 (\e -> setupRunning e >>> setB (taskField (taskAt d 1) 0x0e) 2) 0x53 False Nothing (ReturnedR0 0)
   , Case "timed-sleep-zero" TimedSleep 0 0 setupRunning 0x53 False Nothing (ReturnedR0 0xffffffce)
-  , Case "timed-sleep-block" TimedSleep 50 0 setupRunning 0x53 False Nothing (StoppedAt (switchOf d))
+  , Case "timed-sleep-block" TimedSleep 50 0 setupRunning 0x53 False Nothing (StoppedAt (switchOf d) (stopReason TimedSleep))
   , Case "release-sleeping" ReleaseWait (idOf d 2) 0 (\e -> setupRunning e >>> setWait d 2 0x40059100 0x40059000 (domainId d) >>> armTimer d 2) 0x53 False Nothing (ReturnedR0 0)
   , Case "release-ready" ReleaseWait (idOf d 2) 0 (\e -> setupRunning e >>> makeReady d 2 3 False) 0x53 False Nothing (ReturnedR0 0xffffffd7)
   , Case "handler-release" HandlerRelease (idOf d 2) 0 (\e -> setupRunning e >>> setWait d 2 0x40059100 0x40059000 (domainId d) >>> armTimer d 2 >>> setW (handlerCell d) 1) 0x53 True Nothing (ReturnedR0 0)
-  , Case "delay-block" Delay 30 0 setupRunning 0x53 False Nothing (StoppedAt (switchOf d))
+  , Case "delay-block" Delay 30 0 setupRunning 0x53 False Nothing (StoppedAt (switchOf d) (stopReason Delay))
   , Case "delay-negative" Delay 0xffffffff 0 setupRunning 0x53 False Nothing (ReturnedR0 0xffffffef)
   , Case "timed-sleep-return" TimedSleep 50 0 setupRunning 0x53 False (Just 50) (ReturnedR0 0xffffffce)
   , Case "delay-return" Delay 30 0 setupRunning 0x53 False (Just 0) (ReturnedR0 0)
   , Case "release-cross-domain" Terminate (idOf (other d) 2) 0 (\e -> setupRunning e >>> makeReady (other d) 2 3 True >>> setW (dispatchCell (other d)) 1) 0x53 False Nothing (ReturnedR0 0)
-  , Case "terminate-local-dispatch" Terminate (idOf d 2) 0 (\e -> setupRunning e >>> makeReady d 2 0 True) 0x53 False Nothing (StoppedAt (switchOf d))
-  , Case "release-local-dispatch" ReleaseWait (idOf d 2) 0 (\e -> setupRunning e >>> setB (taskField (taskAt e 1) 0x0d) 5 >>> setWait d 2 0x40059100 0x40059000 (domainId d) >>> armTimer d 2) 0x53 False Nothing (StoppedAt (switchOf d))
+  , Case "terminate-local-dispatch" Terminate (idOf d 2) 0 (\e -> setupRunning e >>> makeReady d 2 0 True) 0x53 False Nothing (StoppedAt (switchOf d) (stopReason Terminate))
+  , Case "release-local-dispatch" ReleaseWait (idOf d 2) 0 (\e -> setupRunning e >>> setB (taskField (taskAt e 1) 0x0d) 5 >>> setWait d 2 0x40059100 0x40059000 (domainId d) >>> armTimer d 2) 0x53 False Nothing (StoppedAt (switchOf d) (stopReason ReleaseWait))
   , Case "release-cross-dispatch" ReleaseWait (idOf (other d) 2) 0 (\e -> setupRunning e >>> setWait (other d) 2 0x40059100 0x40059000 (domainId (other d)) >>> armTimer (other d) 2 >>> setW (dispatchCell (other d)) 1) 0x53 False Nothing (ReturnedR0 0)
   ]
   where
@@ -436,7 +436,7 @@ specFor d role one loaderA loaderB owned = CaseSpec
          in stubCode <> B.replicate (0x100 - B.length stubCode) 0
     (stop, expectedStatus, expectedRegisters) = case caseExpected one of
       ReturnedR0 value -> (Nothing, Returned, [(R0, value)])
-      StoppedAt address -> (Just (GuestAddress (fromIntegral address)), StopAddress, [(R0, stopReason (caseService one))])
+      StoppedAt address reason -> (Just (GuestAddress (fromIntegral address)), StopAddress, [(R0, reason)])
     uncompared = [R1, R2, R3, R12, Lr, Pc, Cpsr]
 
 patchStub :: Domain -> B.ByteString -> Maybe Word32 -> B.ByteString
@@ -472,17 +472,18 @@ normalize observation = observation
 
 judgeOutcome :: Expected -> RunnerStatus -> Word32 -> Word32 -> Bool
 judgeOutcome (ReturnedR0 value) Returned r0 _ = r0 == value
-judgeOutcome (StoppedAt address) StopAddress _ pc = pc == address
+judgeOutcome (StoppedAt address reason) StopAddress r0 pc = pc == address && r0 == reason
 judgeOutcome _ _ _ _ = False
 
 judgeSelfTest :: Bool
 judgeSelfTest = and
   [ not (judgeOutcome (ReturnedR0 0) UnknownCall 0 0)
   , not (judgeOutcome (ReturnedR0 0) Returned 1 0)
-  , not (judgeOutcome (StoppedAt 0x1000) StopAddress 0 0x1004)
-  , not (judgeOutcome (StoppedAt 0x1000) Returned 0 0x1000)
+  , not (judgeOutcome (StoppedAt 0x1000 0xffffff18) StopAddress 0xffffff18 0x1004)
+  , not (judgeOutcome (StoppedAt 0x1000 0xffffff18) StopAddress 0xffffff19 0x1000)
+  , not (judgeOutcome (StoppedAt 0x1000 0xffffff18) Returned 0xffffff18 0x1000)
   , judgeOutcome (ReturnedR0 0) Returned 0 0
-  , judgeOutcome (StoppedAt 0x1000) StopAddress 0 0x1000
+  , judgeOutcome (StoppedAt 0x1000 0xffffff18) StopAddress 0xffffff18 0x1000
   ]
 
 main :: IO ()
@@ -520,7 +521,7 @@ main = do
             compareOne reference left right =
               let adjusted = case caseKernel reference of
                     Just kernel | null (kernelStop kernel) -> reference
-                    _ -> reference { caseKernel = fmap (\k -> k { kernelUncompared = kernelUncompared k ++ [R0, R4, R5, R6, R7, R8, R9, R10, R11, Sp] }) (caseKernel reference) }
+                    _ -> reference { caseKernel = fmap (\k -> k { kernelUncompared = kernelUncompared k ++ [R4, R5, R6, R7, R8, R9, R10, R11, Sp] }) (caseKernel reference) }
                in compareKernelCase adjusted (normalize left) (normalize right)
             failures = [ (name, diff, firstDifference left right) | (name, diff, left, right) <- differences, not (null diff) ]
             differences = [ (caseName one, compareOne reference left right, left, right)
