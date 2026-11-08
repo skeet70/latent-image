@@ -14,21 +14,30 @@ haskell_library(
     name = "own-first-oracle-lib",
     srcs = [
         "Replacement/RtosOwnFirst/Assembly.hs",
+        "Replacement/RtosOwnFirst/Command.hs",
         "Replacement/RtosOwnFirst/Controls.hs",
+        "Replacement/RtosOwnFirst/Generate.hs",
+        "Replacement/RtosOwnFirst/Generated.hs",
         "Replacement/RtosOwnFirst/Oracle.hs",
+        "Replacement/RtosOwnFirst/Replay.hs",
+        "Replacement/RtosOwnFirst/Shrink.hs",
         "Replacement/RtosOwnFirst/Verdict.hs",
     ],
     src_strip_prefix = ".",
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
+        "//emulation:native-adapter",
         "//emulation:native-observation",
         "//emulation:owned-case",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
         "//host:containers",
+        "//host:directory",
         "//host:filepath",
         "//host:host-support",
+        "//host:json",
+        "//host:text",
         "//replacement/rtos_own_first/stage:own-first-artifact",
     ],
 )
@@ -58,6 +67,8 @@ haskell_binary(
     deps = [
         ":own-first-oracle-lib",
         "//emulation:case-sha256",
+        "//emulation:emulator-slot-lib",
+        "//emulation:native-adapter",
         "//emulation:owned-case",
         "//host:aeson",
         "//host:base",
@@ -73,12 +84,15 @@ haskell_binary(
 
 _TEST_DEPS = [
     ":own-first-oracle-lib",
+    "//emulation:native-adapter",
     "//emulation:native-observation",
+    "//host:aeson",
     "//host:base",
     "//host:bytestring",
     "//host:containers",
     "//host:directory",
     "//host:filepath",
+    "//host:host-support",
     "//replacement/rtos_own_first/stage:own-first-artifact",
 ]
 

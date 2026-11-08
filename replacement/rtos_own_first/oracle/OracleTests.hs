@@ -4,13 +4,17 @@
 -- owned body on at least one case, and the owned body and the equivalents match it on every case.
 module Main (main) where
 
-import Control.Monad (forM, unless)
+import Control.Exception (SomeException, try)
+import Control.Monad (forM, forM_, unless)
+import Data.Aeson (Value (Null), eitherDecodeStrict', object, (.=))
 import Data.Bits (complement, (.&.))
 import qualified Data.ByteString as B
 import Data.Char (isAsciiLower, isDigit)
+import Data.Either (isLeft, isRight)
 import Data.List (nub, sort)
 import qualified Data.Map.Strict as M
 import Data.Word (Word32)
+import Emulation.NativeCase (runnerDigest)
 import Emulation.NativeObservation
   ( GuestAddress (..)
   , InstructionCount (..)
@@ -25,16 +29,22 @@ import Emulation.NativeObservation
   , WriteBytes (..)
   , registerLabels
   )
+import FujiAF.Host (get, list)
 import Replacement.RtosOwnFirst.Artifact (LinkedDomain (..))
 import Replacement.RtosOwnFirst.Assembly
+import Replacement.RtosOwnFirst.Command
 import Replacement.RtosOwnFirst.Controls
+import Replacement.RtosOwnFirst.Generate
+import Replacement.RtosOwnFirst.Generated
 import Replacement.RtosOwnFirst.Oracle
 import Replacement.RtosOwnFirst.Regions hiding (GuestAddress (..))
+import Replacement.RtosOwnFirst.Replay
+import Replacement.RtosOwnFirst.Shrink
 import Replacement.RtosOwnFirst.Verdict
-import System.Directory (removeDirectoryRecursive)
+import System.Directory (copyFile, createDirectoryIfMissing, doesDirectoryExist, doesFileExist, listDirectory, removeDirectoryRecursive, removeFile)
 import System.Environment (getArgs, getEnv)
 import System.Exit (ExitCode (..), exitFailure)
-import System.FilePath ((</>))
+import System.FilePath (takeExtension, (</>))
 import System.IO (BufferMode (..), hSetBuffering, stdout)
 
 check :: String -> Bool -> IO Bool
@@ -82,6 +92,17 @@ observation overrides callerFrame writes =
 runFrom :: [(Register, Word32)] -> B.ByteString -> [WriteEvent] -> Either String Run
 runFrom overrides callerFrame writes = runOf DomainA (observation overrides callerFrame [(eventAddress e, eventWidth e) | e <- writes]) writes
 
+firstGeneratedRow :: Row
+firstGeneratedRow = case generateRows (GenerationSeed 1) (generationCount 1) of
+  row : _ -> row
+  [] -> error "generateRows returned no row"
+
+generationCount :: Int -> GenerationCount
+generationCount count = either error id (mkGenerationCount count)
+
+shrinkBudget :: Int -> ShrinkBudget
+shrinkBudget budget = either error id (mkShrinkBudget budget)
+
 pureChecks :: DomainTable -> [IO Bool]
 pureChecks tableA =
   let frame = B.replicate 16 0
@@ -111,7 +132,6 @@ pureChecks tableA =
       codeStarts slot = either (const []) (map fst . bodyCode) (stockBody DomainA tableA loader slot)
    in [ check "xorshift is the 13/17/5 generator" (xorshift 1 == 0x42021)
       , check "each slot's grid has the designed size" (and [length (caseGrid slot) == expectedCases slot | slot <- slots])
-      , check "the grid is deterministic" (map caseGrid slots == map caseGrid slots)
       , check "every entry CPSR is SVC or SYS with flags, Q, GE, I and F only" (all (privileged . entryCpsr . rowEntry) (concatMap caseGrid slots))
       , check "entry states cover both modes, I, F and the flag patterns" (length entryStates == 24 && length (nub (map entryCpsr entryStates)) == 24)
       , check "+0x16c rows reach +0x148 = 1, +0x128 failing on I and a null task" $
@@ -140,6 +160,86 @@ pureChecks tableA =
             == Right [0xeb002e8e, 0xe3043760, 0xe5d3000e, 0x13e00018, 0xe3130080, 0xe121f001, 0xee121e10, 0xe0020392, 0xe1a031c3, 0xe92d4800, 0xe8bd8800, 0xe12fff1e]
       , check "labels resolve forward and backward" (assembleAt 0x1000 [mark (Label "top"), on CondEq (branch (Label "end")), branch (Label "top"), mark (Label "end")] == Right [0x0a000000, 0xeafffffd])
       , check "one mutant per slot and two equivalents" (sort (map controlSlot mutants) == slots && length equivalents == 2 && all ((== MustFail) . controlExpectation) mutants && all ((== MustPass) . controlExpectation) equivalents)
+      , check "generated rows are counted and valid" $
+          let seed = GenerationSeed 0x2545f4914f6cdd1d
+              rows = generateRows seed (generationCount 32)
+           in length rows == 32 && all validRow rows
+      , check "the seed changes the generated corpus" (generateRows (GenerationSeed 1) (generationCount 8) /= generateRows (GenerationSeed 2) (generationCount 8))
+      , check "a generated task word is a record start of the 120-record table" $
+          let row = firstGeneratedRow
+           in validRow row
+                && all (\offset -> validRow row {rowTask = TaskAt offset} == (offset `elem` [0, 119 * recordBytes])) [0, 4, 8, 119 * recordBytes, 120 * recordBytes, -recordBytes]
+      , check "generation, budget and control inputs are bounded" $
+          all isLeft [parseGenerationCount "0", parseGenerationCount "257"]
+            && all isLeft [parseGenerationSeed "zz", parseGenerationSeed "0x"]
+            && all isLeft [parseShrinkBudget "0", parseShrinkBudget "257"]
+            && all isRight [parseGenerationCount "1", parseGenerationCount "256"]
+            && all isRight [parseGenerationSeed "0x2545f4914f6cdd1d", parseGenerationSeed "17"]
+            && isRight (parseShrinkBudget "32")
+      , check "count and budget constructors refuse invalid values" $
+          isLeft (mkGenerationCount 0) && isLeft (mkGenerationCount 257) && isLeft (mkShrinkBudget 0) && isLeft (mkShrinkBudget 257)
+            && isRight (mkGenerationCount 1) && isRight (mkShrinkBudget 1)
+      , check "the command line rejects incomplete or misplaced generation flags" $
+          all isLeft
+            [ parseCommand ["--generate"]
+            , parseCommand ["--generate", "4"]
+            , parseCommand ["--generate", "4", "--seed"]
+            , parseCommand ["--seed", "1"]
+            , parseCommand ["--shrink-budget", "4"]
+            , parseCommand ["--control", "mutant-s16c"]
+            , parseCommand ["--replay"]
+            , parseCommand ["--generate", "4", "--seed", "1", "--replay", "summary.json"]
+            , parseCommand ["--generate", "4", "--seed", "1", "--timing-only"]
+            , parseCommand ["--generate", "0", "--seed", "1"]
+            , parseCommand ["--generate", "4", "--seed", "1", "--shrink-budget", "0"]
+            , parseCommand ["--generate", "4", "--seed", "1", "--control", "mutant-s128"]
+            , parseCommand ["--replay", "summary.json", "--seed", "1"]
+            ]
+            && isRight (parseCommand [])
+            && isRight (parseCommand ["--generate", "4", "--seed", "1"])
+            && isRight (parseCommand ["--replay", "summary.json"])
+      , check "recorded boundaries parse into typed kinds" $
+          parseDifferenceKind "RegisterKind R0" == Right (RegisterKind R0)
+            && parseDifferenceKind "MemoryKind (RegionId \"buffer\")" == Right (MemoryKind (RegionId "buffer"))
+            && parseDifferenceKind "StatusKind" == Right StatusKind
+            && isLeft (parseDifferenceKind "RegisterKind nope")
+            && isLeft (parseDifferenceKind "")
+      , check "replay refuses a non-generation or empty source" $
+          let source :: String -> Value
+              source mode = object ["schema" .= (1 :: Int), "mode" .= mode, "slot" .= ("0x16c" :: String), "domains" .= ([] :: [Value])]
+           in isLeft (readRecordedCases (source "replay")) && isLeft (readRecordedCases (source "generate"))
+      , check "the command line rejects unknown options and bare common flags" $
+          all isLeft
+            [ parseCommand ["--generat4", "4"]
+            , parseCommand ["--runner"]
+            , parseCommand ["--work"]
+            , parseCommand ["--owned-a-bin"]
+            , parseCommand ["--timing-only", "--unknown", "x"]
+            ]
+      , check "replay requires both reduction records and keyed roles" $
+          let reduction :: String -> Value
+              reduction role = object ["role" .= role, "original" .= Null, "reduced" .= Null]
+              domain :: Value
+              domain = object ["domain" .= ("a" :: String), "candidate_reduction" .= reduction "owned"]
+              summary :: Value
+              summary = object ["schema" .= (1 :: Int), "mode" .= ("generate" :: String), "slot" .= ("0x16c" :: String), "control" .= ("mutant-s16c" :: String), "domains" .= [domain]]
+              mismatchDomain :: Value
+              mismatchDomain = object ["domain" .= ("a" :: String), "candidate_reduction" .= reduction "mutant-s16c", "control_reduction" .= Null]
+              mismatch :: Value
+              mismatch = object ["schema" .= (1 :: Int), "mode" .= ("generate" :: String), "slot" .= ("0x16c" :: String), "control" .= ("mutant-s16c" :: String), "domains" .= [mismatchDomain]]
+           in isLeft (readRecordedCases summary) && isLeft (readRecordedCases mismatch)
+      , do
+          let row = firstGeneratedRow
+          reduction <- shrinkRow (shrinkBudget 32) (const (pure False)) row
+          check "reduction stops at a fixed point when no candidate reproduces" (reductionStatus reduction == FixedPoint && reductionReduced reduction == row)
+      , do
+          let row = firstGeneratedRow
+          reduction <- shrinkRow (shrinkBudget 1) (const (pure True)) row
+          check "reduction reports an exhausted budget" (reductionStatus reduction == BudgetExhausted)
+      , do
+          let row = firstGeneratedRow
+          reduction <- shrinkRow (shrinkBudget 32) (\candidate -> pure (taskSlotOf candidate == 0)) row
+          check "reduction accepts only valid smaller inputs" (reductionStatus reduction == FixedPoint && taskSlotOf (reductionReduced reduction) == 0 && validRow (reductionReduced reduction))
       ]
 
 -- | Every grid row with the controls alone, or 'sampleKeys' with the reference repeated as a control too.
@@ -205,6 +305,129 @@ stoppingChecks scope runner temporary fill table owned =
         , check "a mutant that never returns does not hold" (not (holds asMutant) && outcomeDifferingStopped (resultOutcome asMutant) == outcomeCases (resultOutcome asMutant))
         ]
 
+-- | The generated corpus and its first reduced difference against the existing +0x16c control,
+-- with the owned body as the reference the native tests can build without a loader file.
+generatedChecks :: FilePath -> FilePath -> Word32 -> Domain -> DomainTable -> OwnedDomain -> IO [Bool]
+generatedChecks runner temporary fill domain table owned =
+  case (ownedBody owned S16c, [control | control <- mutants, controlSlot control == S16c]) of
+    (Right body, control : _) -> case controlCode domain table control >>= \code -> replaceEntry fill code body of
+      Left problem -> (: []) <$> check ("generated corpus: " ++ problem) False
+      Right controlBody -> do
+        let input =
+              GeneratedInput
+                { generatedRunner = runner
+                , generatedWork = temporary </> "generated-" ++ domainLabel domain
+                , generatedDomainId = domain
+                , generatedReference = (OwnedRole, body)
+                , generatedSubjects = [(ControlRole control, controlBody)]
+                , generatedSeed = GenerationSeed 0x2545f4914f6cdd1d
+                , generatedCount = generationCount 12
+                , generatedBudget = shrinkBudget 32
+                }
+        result <- runGeneratedDomain input
+        case generatedResults result of
+          [subject] -> case subjectReduction subject of
+            Just report -> do
+              let originalKinds = map differenceKind (shrinkOriginalDifferences report)
+                  replayKinds = map differenceKind (shrinkReplayDifferences report)
+                  recordedOriginal = RecordedCase (ControlRole control) domain RecordedOriginal (shrinkOriginalLabel report) originalKinds (map differenceText (shrinkOriginalDifferences report)) (shrinkOriginalBatches report)
+                  recordedReduced = RecordedCase (ControlRole control) domain RecordedReduced (shrinkReducedLabel report) replayKinds (map differenceText (shrinkReducedDifferences report)) (shrinkReducedBatches report)
+                  replayWork = temporary </> "replay-" ++ domainLabel domain
+                  originalReport = replayReferenceBatch (shrinkOriginalBatches report) </> shrinkOriginalLabel report ++ ".native-result.json"
+                  reducedReport = replayReferenceBatch (shrinkReducedBatches report) </> shrinkReducedLabel report ++ ".native-result.json"
+              originalBytes <- B.readFile originalReport
+              reducedBytes <- B.readFile reducedReport
+              let fixtureName = "unrelated-fixture-" ++ domainLabel domain ++ ".txt"
+                  fixtureSource = replayReferenceBatch (shrinkOriginalBatches report)
+              B.writeFile (fixtureSource </> fixtureName) "unrelated fixture"
+              originalReplay <- replayCase runner replayWork recordedOriginal
+              reducedReplay <- replayCase runner replayWork recordedReduced
+              preservedOriginal <- B.readFile originalReport
+              preservedReduced <- B.readFile reducedReport
+              counts <- freshBatchCounts replayWork
+              fixturePreserved <- doesFileExist (fixtureSource </> fixtureName)
+              fixtureCopied <- containsFileNamed replayWork fixtureName
+              wrongBoundary <- replayCase runner (temporary </> "replay-wrong-" ++ domainLabel domain) recordedReduced {recordedBoundary = [StatusKind]}
+              runnerHash <- runnerDigest runner
+              let incompleteSource = temporary </> "replay-incomplete-source-" ++ domainLabel domain
+              copyDirectory (replaySubjectBatch (shrinkReducedBatches report)) incompleteSource
+              preparedIncomplete <- preflightCase runnerHash recordedReduced {recordedBatches = ReplayBatches (replayReferenceBatch (shrinkReducedBatches report)) incompleteSource}
+              incompleteEntries <- listDirectory incompleteSource
+              case [entry | entry <- incompleteEntries, takeExtension entry == ".bin"] of
+                artifact : _ -> removeFile (incompleteSource </> artifact)
+                [] -> fail ("no artifact to remove in " ++ incompleteSource)
+              incompleteResult <- executeCase runner (temporary </> "replay-incomplete-work-" ++ domainLabel domain) preparedIncomplete
+              renamed <-
+                try
+                  (loadBatchRuns runner (replayReferenceBatch (shrinkReducedBatches report)) (const "changed-binding") domain [(shrinkOriginalKey report, shrinkReducedRow report)])
+                  :: IO (Either SomeException (M.Map CaseKey Run))
+              corrupted <- corruptBatch (replaySubjectBatch (shrinkReducedBatches report)) (temporary </> "corrupt-" ++ domainLabel domain)
+              changedCase <-
+                try
+                  (replayCase runner replayWork recordedReduced {recordedBatches = ReplayBatches (replayReferenceBatch (shrinkReducedBatches report)) corrupted})
+                  :: IO (Either SomeException ReplayCaseResult)
+              changedRunner <- try (replayCase "/bin/true" replayWork recordedReduced) :: IO (Either SomeException ReplayCaseResult)
+              missing <- try (replayCase runner replayWork recordedReduced {recordedCaseId = "missing-case"}) :: IO (Either SomeException ReplayCaseResult)
+              sequence
+                [ check "generated corpus: the reference returns" (generatedReferenceReturned result)
+                , check "generated corpus: the +0x16c control differs on a returned case" (outcomeDifferingReturned (subjectOutcome subject) > 0)
+                , check "generated corpus: the reduction preserves the compared boundary" (not (null originalKinds) && replayKinds == originalKinds)
+                , check "generated corpus: the reduction reaches a smaller valid task record" (validRow (shrinkReducedRow report) && taskSlotOf (shrinkReducedRow report) < taskSlotOf (shrinkOriginalRow report))
+                , check "generated corpus: the in-run replay reproduces the reduced case" (shrinkReplayDifferences report == shrinkReducedDifferences report)
+                , check "replay: the original case reproduces its recorded difference" (replayReproduces originalReplay)
+                , check "replay: the reduced case reproduces its recorded difference" (replayReproduces reducedReplay)
+                , check "replay: the preserved reports are unchanged" (preservedOriginal == originalBytes && preservedReduced == reducedBytes)
+                , check "replay: fresh batches hold only the selected case" (not (null counts) && all (== 1) counts)
+                , check "replay: unrelated source files are not copied" (fixturePreserved && not fixtureCopied)
+                , check "replay: a wrong typed boundary does not reproduce" (not (replayReproduces wrongBoundary))
+                , check "replay: an execution failure is incomplete and not reproduced" (case replayStatus incompleteResult of ReplayIncomplete _ -> True; _ -> False)
+                , check "replay: a changed case byte is rejected before execution" (case changedCase of Left _ -> True; Right _ -> False)
+                , check "replay: a changed runner is rejected before execution" (case changedRunner of Left _ -> True; Right _ -> False)
+                , check "replay: a missing recorded case is rejected" (case missing of Left _ -> True; Right _ -> False)
+                , check "replay: a renamed case label is rejected" (case renamed of Left _ -> True; Right _ -> False)
+                ]
+            Nothing -> (: []) <$> check "generated corpus: the control difference was reduced" False
+          _ -> (: []) <$> check "generated corpus: one subject result" False
+    (Right _, []) -> (: []) <$> check "generated corpus: no +0x16c control" False
+    (Left problem, _) -> (: []) <$> check ("generated corpus: " ++ problem) False
+
+copyDirectory :: FilePath -> FilePath -> IO ()
+copyDirectory source destination = do
+  createDirectoryIfMissing True destination
+  entries <- listDirectory source
+  forM_ entries $ \entry -> copyFile (source </> entry) (destination </> entry)
+
+corruptBatch :: FilePath -> FilePath -> IO FilePath
+corruptBatch source destination = do
+  copyDirectory source destination
+  entries <- listDirectory destination
+  case [entry | entry <- entries, takeExtension entry == ".bin"] of
+    artifact : _ -> B.appendFile (destination </> artifact) (B.singleton 0)
+    [] -> fail ("no artifact to corrupt in " ++ source)
+  pure destination
+
+freshBatchCounts :: FilePath -> IO [Int]
+freshBatchCounts root = do
+  cases <- listDirectory root
+  fmap concat . forM cases $ \caseDirectory -> do
+    let batchPath = root </> caseDirectory </> "reference" </> "batch-0" </> "batch.json"
+    exists <- doesFileExist batchPath
+    if not exists
+      then pure []
+      else do
+        bytes <- B.readFile batchPath
+        pure $ case eitherDecodeStrict' bytes of
+          Right value -> [length (list (get value "cases"))]
+          Left _ -> [-1]
+
+containsFileNamed :: FilePath -> String -> IO Bool
+containsFileNamed root name = do
+  entries <- listDirectory root
+  fmap or . forM entries $ \entry -> do
+    let path = root </> entry
+    directory <- doesDirectoryExist path
+    if directory then containsFileNamed path name else pure (entry == name)
+
 main :: IO ()
 main = do
   hSetBuffering stdout LineBuffering
@@ -227,10 +450,12 @@ main = do
         [] -> pure [False]
       checked <- fmap concat . forM (zip domains owned) $ \(domain, ownedRows) ->
         mapM (nativeChecks scope runner temporary (tableFill table) domain (domainTable table domain) ownedRows) slots
+      generated <- fmap concat . forM (zip domains owned) $ \(domain, ownedRows) ->
+        generatedChecks runner temporary (tableFill table) domain (domainTable table domain) ownedRows
       let failures = concatMap fst checked
           reports = [report | (_, Just report) <- checked]
       nativeResult <- check "owned bodies return and the controls hold in both loaders" (null failures && length reports == 2 * length slots)
       mapM_ (putStrLn . ("     " ++)) failures
       verdictResult <- check "the verdict over every slot report exits 0" (verdictExit reports == ExitSuccess)
-      unless (and (nativeResult : verdictResult : sampleResult : pureResults ++ stopping)) exitFailure
+      unless (and (nativeResult : verdictResult : sampleResult : pureResults ++ stopping ++ generated)) exitFailure
     _ -> fail "usage: own-first-oracle-tests full|sample RUNNER REGIONS BIN_A SYMBOLS_A BIN_B SYMBOLS_B"
