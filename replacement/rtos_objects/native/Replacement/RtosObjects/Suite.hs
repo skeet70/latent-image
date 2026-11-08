@@ -535,7 +535,7 @@ retainedWords facts executing one = case caseRetained one of
       , poke (rtPoolConfig t + 0x8) poolStart, poke (rtPoolConfig t + 0xc) (poolStart + 0x10), poke (rtPoolConfig t + 0x10) 1
       , poke (rtPoolControl t) (rtPoolControl t), poke (rtPoolControl t + 0x4) (rtPoolControl t)
       , poke (rtPoolControl t + 0x8) (rtPoolConfig t)
-      , poke (rtPoolControl t + 0xc) 0, poke (rtPoolControl t + 0x10) 0
+      , poke (rtPoolControl t + 0xc) (poolStart + 0x10), poke (rtPoolControl t + 0x10) 0
       , poke (rtPoolWait t) 0, poke (rtPoolWait t + 0x4) 0, poke (rtPoolWait t + 0x8) 0, poke (rtPoolWait t + 0xc) 0
       , poke (rtPoolTimer t) 0
       , poke (classRecord + 0x6c) (rtPoolControl t), poke (classRecord + 0x70) 1
@@ -587,7 +587,7 @@ retainedCases facts executing =
       [ if timed then res 0xffffffce else res 0
       , eq (rtSemWait t) (if timed then 0xffffffce else 0)
       , eq (rtSemWait t + 4) (rtSemControl t)
-      , eq (rtSemWait t + 8) 1
+      , eq (rtSemWait t + 8) (domainId executing)
       , eq (rtSemControl t + 0xc) 0
       , eq taskWait (rtSemWait t)
       , ready
@@ -597,7 +597,7 @@ retainedCases facts executing =
       , eq outWord (if timed then 0xdead else 0x1234)
       , eq (rtDqWait t) (if timed then 0xffffffce else 0)
       , eq (rtDqWait t + 4) (rtDqRuntime t)
-      , eq (rtDqWait t + 8) 1
+      , eq (rtDqWait t + 8) (domainId executing)
       , eq (rtDqWait t + 0xc) (if timed then 0 else 0x1234)
       , eq taskWait (rtDqWait t)
       , ready
@@ -607,7 +607,7 @@ retainedCases facts executing =
       , eq outWord (if timed then 0xdead else poolStart)
       , eq (rtPoolWait t) (if timed then 0xffffffce else 0)
       , eq (rtPoolWait t + 4) (rtPoolControl t)
-      , eq (rtPoolWait t + 8) 1
+      , eq (rtPoolWait t + 8) (domainId executing)
       , eq (rtPoolWait t + 0xc) (if timed then 0 else poolStart)
       , eq taskWait (rtPoolWait t)
       , ready
