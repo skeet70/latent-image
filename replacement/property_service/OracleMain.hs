@@ -25,7 +25,7 @@ import Emulation.OwnedCase (CaseId (..), CaseSpec, loadObservedBatch, readWordAt
 import Emulation.Sha256 (sha256, sha256File, sha256Hex)
 import FujiAF.Host (ensure, failH, get, readRegular, str)
 import FujiAF.JSON (encodeCanonical)
-import FujiModPaths (fujimodNativeCase)
+import FujiModNativePaths (fujimodNativeCase)
 import Numeric (readHex, showHex)
 import PropertyFields (PropertyId (..))
 import Replacement.PropertyService.Admission (FunctionExtent (..), FunctionName (..))

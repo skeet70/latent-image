@@ -42,7 +42,7 @@ Bazel 7.6's native disk-cache garbage collector keeps this cache within 20 GiB a
 Concurrent agents also work in separate git worktrees, so an edit in one never invalidates another agent's build or emulator run. `build-support/agent-worktree.sh NAME [BASE]` creates `../latent-image-worktrees/NAME` on branch `agent/NAME`, symlinks the checkout's ignored `private-data/` into it and prints the output base to use. The agent commits on its `agent/NAME` branch; the integration owner merges it. Once the branch is merged into the main work branch, the integration owner removes the worktree (`git worktree remove ../latent-image-worktrees/NAME`), deletes the branch and deletes `~/.cache/bazel/latent-image-NAME`.
 
 ```sh
-devenv shell -- host-build test //emulation:native-runner-tests
+devenv shell -- host-build test --jobs=2 --local_test_jobs=1 //emulation:native-sdk-tests //emulation:native-runner-tests
 ```
 
 Research output is compacted under the [evidence ledger rules](../docs/principles.md#evidence-ledger). A deletion plan names the current conclusions and failure classes preserved, the retained evidence and the exact redundant files to remove. Record path hashes and preservation checks under `private-data/scratch/reclaim/`, and recheck active runs, current baselines and unmerged work before applying it.
@@ -51,7 +51,7 @@ Build cleanup is restricted to identified compiler or cache outputs whose consum
 
 `//build-support:storage-maintenance` provides explicit Cargo cache inventory, plan and apply operations. Inventory reads metadata, Cargo provenance and compiler headers without hashing application contents. A plan validates its output location, acquires Cargo's BSD `flock` guards without waiting, then streams SHA-256 hashes of all regular files, including protected data. Apply checks process visibility and consumers before hashing, revalidates the complete snapshot under the guards, then checks consumers again before unlinking selected compiler files. Source trees and Git metadata, databases, imports, reports, firmware inputs, top-level executables, examples, unknown files and hardlinked files are retained. Test executables require an exact unit-hash match to a validated Cargo test fingerprint and an ELF header; an executable-looking filename alone is insufficient. Only validated success fingerprints associated with selected compiler artifacts are invalidated.
 
-Content hashing advances SHA-256 state strictly with input chunks no larger than 1 MiB, sized down for small files. Plan metadata scales with file count; the heap cap must leave room for that metadata. Add `+RTS -M2G -RTS` to bound the Haskell heap; the host-build scope separately limits total memory. Quiesce Cargo and other writers before planning a large target.
+Content hashing advances SHA-256 state strictly with input chunks no larger than 1 MiB, sized down for small files. Snapshot paths and digests use packed text; metadata still scales with file count. Filenames that cannot be represented as Unicode are refused without publishing a plan. Add `+RTS -M2G -RTS` to bound the Haskell heap; the host-build scope separately limits total memory. Quiesce Cargo and other writers before planning a large target.
 
 ```sh
 target="$(realpath /path/to/cargo/target)"
@@ -69,6 +69,8 @@ Repeat `--cargo-target` for additional explicit roots. Roots require Cargo marke
 Both `activeUsers` and `uninspectableUsers` must be empty before deletion. Checks cover working directories, executables, mapped files, open descriptors and `CARGO_TARGET_DIR` values. Ordinary invocations inspect the target owner's processes; privileged invocations inspect all visible userspace processes. Inaccessible processes make apply refuse without removing files; inventory still reports them. Request an explicitly authorized privileged host inspection when ordinary permissions are insufficient. Do not run Bazel as root or hide existing consumers in a PID namespace to bypass the check. The isolated test process creates every root it manages.
 
 Planning and apply acquire all present `.cargo-lock`, `.cargo-build-lock` and `.cargo-artifact-lock` guards exclusively and refuse a held guard. A planning refusal publishes no plan. Planning holds the guards for the content snapshot, so new Cargo builds wait until it finishes. Lock-interoperability tests hold each guard outside the maintenance probe's PID namespace, so a process-activity refusal cannot mask the wrong lock domain. These namespace probes manage fresh synthetic fixtures only. Maintenance is for host-local target trees, not remote/shared build caches.
+
+Producer guards outside Cargo, such as Looklab's `target/source.lock`, must also cover planning and apply. Wrap the built maintenance executable directly with `flock --no-fork --exclusive --nonblock LOCK PROGRAM ...`. A separate lock-holder process counts as an active target consumer; wrapping Bazel or `host-build` does not transfer that ownership to the maintenance process.
 
 Apply writes `PLAN.audit.json` with its phase, exact removals, protected-file verification and measured available-space changes. `Applying` or `Interrupted` is not a completed cleanup; inspect the named paths before proceeding. Changed plans, files, owners, inventories or active consumers require a new review. `recognizedBytes` is a logical size, not a promised physical saving on reflinked filesystems, and the measured filesystem delta includes concurrent activity.
 
@@ -163,7 +165,23 @@ The adapter's `r4f::Guard` uses translation admission on every core, without a b
 
 The SDK's `out` output contains runtime executables and `share/fujimod-xm1/`; its `tests` output contains `libexec/fujimod-xm1-tests/` and the harness manifest. `lab_fujimod_xm1` selects `out`, while `lab_fujimod_xm1_tests` selects `tests` from the same derivation. Runtime evidence roots should retain `out`; retain `tests` when citing test executables. The runtime closure excludes the test output. Existing rooted monolithic SDKs remain unchanged, so the split reduces future retention rather than reclaiming historical storage. The checkpoint model identity includes `fujimod-xm1.nix`; packaging edits invalidate incompatible checkpoints through the existing restore check.
 
-Packaging and compiled-code edit measurements are recorded in `E-FUJIMOD-SDK-OUTPUTS-150`. The split changes retention rather than compilation scope; the SDK still builds every binary and exported harness.
+Packaging and compiled-code edit measurements are recorded in `E-FUJIMOD-SDK-OUTPUTS-150`. The split changes retention rather than compilation scope; the default SDK still builds every binary and exported harness.
+
+Routine native qualification uses `fujimod-xm1.nix` with `nativeOnly = true`, exposed by `lab_fujimod_native` and `lab_fujimod_native_tests`. It builds `fujimod-xm1-native-case` and the `native_case` integration harness from a generated manifest that preserves the original dependencies and features but declares only that binary. [Cargo otherwise builds binary targets when an integration test is selected](https://doc.rust-lang.org/cargo/commands/cargo-test.html#target-selection). The variant reuses the full SDK's Crane dependency archive. `//emulation:native-sdk-tests` executes its complete harness manifest; `//emulation:native-runner-tests` exercises the caller-facing native contract. The full integration boundary remains `//emulation:fujimod-xm1-tests`, which executes every full-SDK harness.
+
+`FujiModNativePaths` binds native-only Haskell consumers to this variant. `FujiModPaths` continues to bind full-system drivers and bridges to the full SDK. Native qualification does not require the full SDK through the generated path module.
+
+`E-FUJIMOD-NATIVE-TARGETS-150` records one matched compiled-code edit and the same 74 native Rust cases plus the same native-runner suite. End-to-end time includes shell activation, admission, dependency realization, compilation and tests. Both variants reuse existing dependency artifacts; the targeted sample also realizes its new manifest generator input.
+
+| Seconds | Full SDK | Native targets |
+| --- | ---: | ---: |
+| End-to-end | 466.9 | 85.8 |
+| Admitted build and tests | 228.0 | 75.4 |
+| Host-build lock wait | 234.3 | 6.0 |
+
+The admitted saving is 152.6 seconds, about 67%, exceeding the experiment's 30% and 60-second adoption threshold independently of the different queue waits. This is one pair on a contended host, not a statistical speed estimate. The temporary Rust probe is removed; full integration coverage and test deadlines are unchanged.
+
+The variants share dependency artifacts, not compiled SDK source artifacts. Full integration compiles the SDK source crate again from the shared archive. This improves routine qualification latency, not total compilation work for a single edit followed immediately by full integration.
 
 `fujimod.nix`'s Cargo check hook derives `RUST_TEST_THREADS` from `NIX_BUILD_CORES`; the package sets `dontUseCargoParallelTests`, which makes that hook use one test thread.
 

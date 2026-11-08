@@ -220,7 +220,7 @@ haskell_binary(
         "//emulation:cached-native-batch",
         "//emulation:case-sha256",
         "//emulation:emulator-slot-lib",
-        "//emulation:fujimod-paths",
+        "//emulation:fujimod-native-paths",
         "//emulation:native-observation",
         "//emulation:owned-case",
         "//host:aeson",
