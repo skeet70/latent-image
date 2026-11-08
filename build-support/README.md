@@ -74,6 +74,8 @@ Do not wrap cleanup in a project-wide source-generation lock or stop local servi
 
 Schema-2 plans and audits replace the whole-tree snapshot contract. Apply writes `PLAN.audit.json` with its phase, exact removals, skipped paths and reasons, `deletionScopeVerified`, and measured available-space changes. `Complete` with `deletionScopeVerified=true` establishes that removals stayed within the revalidated compiler allowlist; it does not claim a byte-for-byte snapshot of concurrently changing protected data. `Applying` or `Interrupted` is not a completed cleanup. Inspect the audit before a retry. Schema-1 plans are refused. `recognizedBytes` is a logical size, not a promised physical saving on reflinked filesystems, and the measured filesystem delta includes concurrent activity.
 
+The immediate availability delta is not a final reclamation measurement. Recheck `df` after cleanup; filesystems can defer reclamation, and concurrent activity can change the later result.
+
 The shared Bazel action cache keeps its `.bazelrc` 20 GiB/14-day policy. `host-build` runs in batch mode, which does not execute Bazel's idle GC tasks. The checked-in [user service](systemd/latent-image-cache-gc.service) and [daily timer](systemd/latent-image-cache-gc.timer) start a separate non-batch server in `~/.cache/bazel/latent-image-gc`, run `build --nobuild //build-support:host`, and retain the service through the server's idle window. The service is capped at 2 GiB with no swap. No separate collector is built.
 
 The units assume this checkout is at `~/Code/latent-image` and devenv is installed at `~/.nix-profile/bin/devenv`. Override `WorkingDirectory` or `ExecStart` with a user drop-in for other locations. Install from the checkout root:
