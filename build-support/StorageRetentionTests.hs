@@ -11,6 +11,8 @@ import Data.Aeson (FromJSON (parseJSON), ToJSON (toJSON), eitherDecodeStrict', e
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.List (isPrefixOf, isSuffixOf, sort)
+import Data.List.NonEmpty (NonEmpty (..))
+import qualified Data.List.NonEmpty as NonEmpty
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.Time.Clock.POSIX (POSIXTime, getPOSIXTime)
@@ -21,8 +23,8 @@ import System.Directory (canonicalizePath, createDirectory, createDirectoryIfMis
 import System.Environment (getArgs, getEnvironment, getExecutablePath)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>), splitDirectories, takeDirectory)
-import System.IO (hClose, hFlush, openTempFile)
-import System.Posix.Files (createLink, createSymbolicLink, fileSize, getSymbolicLinkStatus, isDirectory, readSymbolicLink, setFileTimesHiRes)
+import System.IO (hClose, hFlush, openTempFile, stdout)
+import System.Posix.Files (createLink, createSymbolicLink, fileMode, fileSize, getSymbolicLinkStatus, isDirectory, readSymbolicLink, setFileMode, setFileTimesHiRes)
 import System.Posix.IO (OpenFileFlags (cloexec), OpenMode (ReadOnly, ReadWrite), closeFd, defaultFileFlags, openFd)
 import System.Posix.Process (executeFile)
 import System.Posix.Types (Fd (..))
@@ -137,7 +139,7 @@ data ToolResult = ToolResult
 
 data Unit = Unit
   { unitMarker :: FilePath
-  , unitOutputs :: [FilePath]
+  , unitOutputs :: NonEmpty FilePath
   }
 
 hashSuffix :: String
@@ -160,30 +162,31 @@ elf = B.pack [127, 69, 76, 70, 1, 2, 3, 4]
 
 libraryUnit :: String -> Unit
 libraryUnit crate =
-  Unit
+  let output extension = "debug/deps/lib" ++ crate ++ "-" ++ hashSuffix ++ extension
+  in Unit
     ("debug/.fingerprint/" ++ crate ++ "-" ++ hashSuffix ++ "/lib-" ++ crate)
-    ["debug/deps/lib" ++ crate ++ "-" ++ hashSuffix ++ extension | extension <- [".rlib", ".rmeta", ".so"]]
+    (output ".rlib" :| map output [".rmeta", ".so"])
 
 testUnit :: String -> Unit
 testUnit crate =
   Unit
     ("debug/.fingerprint/" ++ crate ++ "-" ++ hashSuffix ++ "/test-lib-" ++ crate)
-    ["debug/deps/" ++ crate ++ "-" ++ hashSuffix]
+    (("debug/deps/" ++ crate ++ "-" ++ hashSuffix) :| [])
 
 buildScriptUnit :: Unit
 buildScriptUnit =
   Unit
     ("debug/.fingerprint/builder-" ++ hashSuffix ++ "/build-script-build-script-build")
-    ["debug/build/builder-" ++ hashSuffix ++ "/build-script-build"]
+    (("debug/build/builder-" ++ hashSuffix ++ "/build-script-build") :| [])
 
 unitJson :: Unit -> FilePath
 unitJson unit = unitMarker unit ++ ".json"
 
 unitFiles :: Unit -> [FilePath]
-unitFiles unit = unitMarker unit : unitJson unit : unitOutputs unit
+unitFiles unit = unitMarker unit : unitJson unit : NonEmpty.toList (unitOutputs unit)
 
 unitSelectedMembers :: Unit -> [FilePath]
-unitSelectedMembers unit = unitMarker unit : unitOutputs unit
+unitSelectedMembers unit = unitMarker unit : NonEmpty.toList (unitOutputs unit)
 
 unitDirectory :: Unit -> FilePath
 unitDirectory = takeDirectory . unitMarker
@@ -214,10 +217,10 @@ ageTree time root = do
     if isDirectory status then ageTree time path else setTimes time path
   setTimes time root
 
-refreshUnit :: POSIXTime -> Unit -> IO ()
-refreshUnit time unit = do
-  setTimes time (unitDirectory unit)
-  forM_ (unitFiles unit) (setTimes time)
+refreshUnit :: FilePath -> POSIXTime -> Unit -> IO ()
+refreshUnit root time unit = do
+  setTimes time (root </> unitDirectory unit)
+  forM_ (unitFiles unit) (setTimes time . (root </>))
 
 apparentBytes :: FilePath -> IO Integer
 apparentBytes root = do
@@ -295,6 +298,11 @@ runApply :: FilePath -> FilePath -> IO RetainOutput
 runApply executable policy = do
   digest <- sha256Hex policy
   decodeOutput =<< invoke executable ["retain", "--policy", policy, "--apply", "--approved-policy-sha256", T.unpack digest]
+
+runApplyWithoutDAC :: FilePath -> FilePath -> IO RetainOutput
+runApplyWithoutDAC executable policy = do
+  digest <- sha256Hex policy
+  decodeOutput =<< invoke "setpriv" ["--bounding-set=-dac_override,-dac_read_search", "--", executable, "retain", "--policy", policy, "--apply", "--approved-policy-sha256", T.unpack digest]
 
 runApplyBounded :: FilePath -> FilePath -> IO RetainOutput
 runApplyBounded executable policy = do
@@ -431,6 +439,7 @@ runFixtures argument = do
       check (countValue (reportRemovedUnitCount previewReport) == 0) "below-budget preview removed a unit"
       check (byteValue (reportBeforeBytes previewReport) == measured) "below-budget preview bytes differ from a fresh measurement"
       check (byteValue (reportBeforeBytes previewReport) <= byteValue (reportBudgetBytes previewReport)) "below-budget preview exceeds its budget"
+      check (not (reportTargetMet previewReport)) "below-budget preview claimed the lower target was met"
       check (null (reportUnits previewReport)) "below-budget preview reported units"
       check (reportAuditPath previewReport == Nothing) "below-budget preview reported an audit"
       check (reportInspectionComplete previewReport == Nothing) "below-budget preview inspected processes"
@@ -444,6 +453,7 @@ runFixtures argument = do
       check (countValue (reportRemovedUnitCount report) == 0) "below-budget apply removed a unit"
       check (byteValue (reportBeforeBytes report) == measured) "below-budget apply bytes differ from a fresh measurement"
       check (byteValue (reportBeforeBytes report) <= byteValue (reportBudgetBytes report)) "below-budget apply exceeds its budget"
+      check (not (reportTargetMet report)) "below-budget apply claimed the lower target was met"
       check (null (reportUnits report)) "below-budget apply reported units"
       check (reportAuditPath report == Nothing) "below-budget apply wrote an audit"
       check (reportInspectionComplete report == Nothing) "below-budget apply inspected processes"
@@ -455,7 +465,7 @@ runFixtures argument = do
           recentUnit = libraryUnit "beta"
       buildRoot root [oldUnit, recentUnit]
       ageTree old root
-      refreshUnit now recentUnit
+      refreshUnit root now recentUnit
       removal <- sumUnits root [oldUnit]
       configure root audit policy removal
       measuredBefore <- apparentBytes root
@@ -485,7 +495,7 @@ runFixtures argument = do
           evicted = [library, script, tests]
       buildRoot root [library, script, tests, recent]
       ageTree old root
-      refreshUnit now recent
+      refreshUnit root now recent
       removal <- sumUnits root evicted
       configure root audit policy removal
       measuredBefore <- apparentBytes root
@@ -509,12 +519,29 @@ runFixtures argument = do
       assertRetained root recent
       assertUnchanged root retained
       assertAudit report audit
+    fresh "oldest-first" $ \root audit policy -> do
+      let oldest = libraryUnit "zeta"
+          newerOld = libraryUnit "alpha"
+          recent = libraryUnit "beta"
+      buildRoot root [oldest, newerOld, recent]
+      ageTree old root
+      refreshUnit root (now - 5 * 86400) newerOld
+      refreshUnit root now recent
+      removal <- sumUnits root [oldest]
+      configure root audit policy removal
+      retained <- snapshot root (unitFiles newerOld ++ unitFiles recent)
+      output <- runApply executable policy
+      report <- rootReport output
+      expectStatus report Complete
+      expectSelectedUnits report [oldest]
+      assertArtifactsRemoved root oldest
+      assertUnchanged root retained
     fresh "recent-member" $ \root audit policy -> do
       let protected = libraryUnit "alpha"
           eligible = libraryUnit "beta"
       buildRoot root [protected, eligible]
       ageTree old root
-      setTimes now (root </> head (unitOutputs protected))
+      setTimes now (root </> NonEmpty.head (unitOutputs protected))
       removal <- sumUnits root [eligible]
       configure root audit policy removal
       retained <- snapshot root (unitFiles protected)
@@ -552,7 +579,7 @@ runFixtures argument = do
     fresh "changed-member" $ \root audit policy -> do
       let protected = libraryUnit "alpha"
           eligible = libraryUnit "beta"
-          changed = head (unitOutputs protected)
+          changed = NonEmpty.head (unitOutputs protected)
       buildRoot root [protected, eligible]
       ageTree old root
       removal <- sumUnits root [eligible]
@@ -579,7 +606,7 @@ runFixtures argument = do
       removal <- sumUnits root [eligible]
       configure root audit policy removal
       retained <- snapshot root (unitFiles protected)
-      withChild ((proc self ["--mapped-fixture", root </> head (unitOutputs protected)]) { cwd = Just workspace }) $ do
+      withChild ((proc self ["--mapped-fixture", root </> NonEmpty.head (unitOutputs protected)]) { cwd = Just workspace }) $ do
         output <- runApply executable policy
         report <- rootReport output
         expectStatus report Complete
@@ -597,7 +624,7 @@ runFixtures argument = do
       removal <- sumUnits root [eligible]
       configure root audit policy removal
       retained <- snapshot root (unitFiles protected)
-      withChild (proc "sh" ["-c", "exec 3<\"$1\"; printf ready; exec sleep 60", "reader", root </> head (unitOutputs protected)]) $ do
+      withChild (proc "sh" ["-c", "exec 3<\"$1\"; printf ready; exec sleep 60", "reader", root </> NonEmpty.head (unitOutputs protected)]) $ do
         output <- runApply executable policy
         report <- rootReport output
         expectStatus report Complete
@@ -607,10 +634,44 @@ runFixtures argument = do
         assertRetained root protected
         assertUnchanged root retained
         assertArtifactsRemoved root eligible
+    fresh "open-control" $ \root audit policy -> do
+      let protected = libraryUnit "alpha"
+          eligible = libraryUnit "beta"
+      buildRoot root [protected, eligible]
+      ageTree old root
+      removal <- sumUnits root [eligible]
+      configure root audit policy removal
+      retained <- snapshot root (unitFiles protected)
+      withChild (proc "sh" ["-c", "exec 3<\"$1\"; printf ready; exec sleep 60", "reader", root </> unitJson protected]) $ do
+        output <- runApply executable policy
+        report <- rootReport output
+        expectStatus report Complete
+        check (countValue (reportBlockedUnitCount report) == 1) "open fingerprint control did not block its unit"
+        expectSelectedUnits report [eligible]
+        assertUnchanged root retained
+        assertArtifactsRemoved root eligible
+    fresh "unwritable-artifact-parent" $ \root audit policy -> do
+      let protected = libraryUnit "alpha"
+          eligible = buildScriptUnit
+          deps = root </> "debug/deps"
+      buildRoot root [protected, eligible]
+      ageTree old root
+      removal <- sumUnits root [protected, eligible]
+      configure root audit policy removal
+      retained <- snapshot root (unitFiles protected)
+      bracket (getSymbolicLinkStatus deps) (setFileMode deps . fileMode) $ \_ -> do
+        setFileMode deps 0o555
+        output <- runApplyWithoutDAC executable policy
+        report <- rootReport output
+        expectStatus report TargetUnmet
+        check (countValue (reportRemovedUnitCount report) == 1) "undeletable unit prevented independent eviction"
+        check (not (reportTargetMet report)) "unwritable artifact parent claimed the target was met"
+        assertUnchanged root retained
+        assertArtifactsRemoved root eligible
     fresh "hardlinked-member" $ \root audit policy -> do
       let protected = libraryUnit "alpha"
           eligible = libraryUnit "beta"
-          linked = head (unitOutputs protected)
+          linked = NonEmpty.head (unitOutputs protected)
       buildRoot root [protected, eligible]
       ageTree old root
       createLink (root </> linked) (workspace </> "external-hardlink")
@@ -633,7 +694,7 @@ runFixtures argument = do
           link = "imports/pointer.bin"
       buildRoot root [eligible, recent]
       ageTree old root
-      refreshUnit now recent
+      refreshUnit root now recent
       put outside "external payload"
       createDirectoryIfMissing True (takeDirectory (root </> link))
       createSymbolicLink outside (root </> link)
@@ -658,7 +719,7 @@ runFixtures argument = do
           symlinkedControl = libraryUnit "gamma"
           eligible = libraryUnit "beta"
           outside = workspace </> "outside-payload.bin"
-          outputPath = head (unitOutputs symlinkedOutput)
+          outputPath = NonEmpty.head (unitOutputs symlinkedOutput)
           controlPath = unitJson symlinkedControl
       buildRoot root [symlinkedOutput, symlinkedControl, eligible]
       ageTree old root
@@ -687,7 +748,7 @@ runFixtures argument = do
           recent = libraryUnit "beta"
       buildRoot root [eligible, recent]
       ageTree old root
-      refreshUnit now recent
+      refreshUnit root now recent
       removal <- sumUnits root [eligible, recent]
       configure root audit policy removal
       retained <- snapshot root (unitFiles recent)
@@ -712,7 +773,7 @@ runFixtures argument = do
           recent = libraryUnit "beta"
       buildRoot root [eligible, recent]
       ageTree old root
-      refreshUnit now recent
+      refreshUnit root now recent
       removal <- sumUnits root [eligible]
       configure root audit policy removal
       paths <- relativePaths root
@@ -740,7 +801,7 @@ runFixtures argument = do
           recent = libraryUnit "beta"
       buildRoot root [eligible, recent]
       ageTree old root
-      refreshUnit now recent
+      refreshUnit root now recent
       removal <- sumUnits root [eligible]
       configure root audit policy removal
       contents <- snapshot root (unitFiles eligible ++ unitFiles recent)
@@ -753,7 +814,7 @@ runFixtures argument = do
           recent = libraryUnit "beta"
       buildRoot root [eligible, recent]
       ageTree old root
-      refreshUnit now recent
+      refreshUnit root now recent
       removal <- sumUnits root [eligible]
       configure root audit policy removal
       contents <- snapshot root (unitFiles eligible ++ unitFiles recent)
@@ -770,7 +831,7 @@ runFixtures argument = do
           recent = libraryUnit "beta"
       buildRoot root [eligible, recent]
       ageTree old root
-      refreshUnit now recent
+      refreshUnit root now recent
       removal <- sumUnits root [eligible]
       configure root audit policy removal
       retained <- snapshot root (unitFiles recent)

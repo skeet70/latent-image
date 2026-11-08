@@ -10,9 +10,11 @@ haskell_binary(
         "//host:base",
         "//host:bytestring",
         "//host:containers",
+        "//host:cryptohash-sha256",
         "//host:directory",
         "//host:filepath",
         "//host:process",
         "//host:text",
+        "//host:unix",
     ],
 )

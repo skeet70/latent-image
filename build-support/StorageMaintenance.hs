@@ -11,6 +11,7 @@ import Control.Exception (IOException, bracket, catch, onException)
 import Control.Monad (forM, forM_, unless, when)
 import qualified Crypto.Hash.SHA256 as SHA
 import Data.Aeson (FromJSON (parseJSON), ToJSON (toJSON), eitherDecodeStrict', encode, object, withObject, (.:), (.=))
+import Data.Bits ((.&.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
 import qualified Data.ByteString.Lazy as BL
@@ -25,6 +26,7 @@ import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Foreign.C.Types (CInt (..))
 import Foreign.C.Error (eAGAIN, eWOULDBLOCK, getErrno)
+import Foreign.C.String (CString)
 import GHC.Generics (Generic)
 import Numeric (showHex)
 import System.Directory (canonicalizePath, createDirectoryIfMissing, doesDirectoryExist, doesPathExist, listDirectory, makeAbsolute, removeFile, renameFile)
@@ -35,7 +37,7 @@ import System.Exit (ExitCode (..), die)
 import System.FilePath ((</>), isAbsolute, makeRelative, normalise, splitDirectories, takeDirectory, takeExtension, takeFileName)
 import System.IO (IOMode (ReadMode), hPutStrLn, stderr, withBinaryFile)
 import System.IO.Error (isDoesNotExistError)
-import System.Posix.Files (deviceID, fileID, fileGroup, fileOwner, fileSize, getFileStatus, getSymbolicLinkStatus, isDirectory, isRegularFile, isSymbolicLink, linkCount, modificationTimeHiRes, readSymbolicLink, setFileMode)
+import System.Posix.Files (deviceID, fileID, fileGroup, fileMode, fileOwner, fileSize, getFileStatus, getSymbolicLinkStatus, isDirectory, isRegularFile, isSymbolicLink, linkCount, modificationTimeHiRes, readSymbolicLink, setFileMode)
 import System.Posix.IO (OpenFileFlags (cloexec, nofollow), OpenMode (ReadWrite), closeFd, defaultFileFlags, openFd)
 import System.Posix.Process (getProcessID)
 import System.Posix.Types (Fd (..))
@@ -59,6 +61,13 @@ data EntryType = RegularFile | Directory | SymbolicLink deriving (Eq, Show, Gene
 data Entry = Entry { path :: !RelativePath, device :: !Integer, inode :: !Integer, ownerUID :: !OwnerUID, size :: !Bytes, digest :: !(Maybe Digest), disposition :: !Disposition, entryType :: !EntryType, mtimeNanoseconds :: !FileTimeNanoseconds } deriving (Eq, Show, Generic, ToJSON, FromJSON)
 data Binding = Binding { root :: Root, entries :: [Entry] } deriving (Eq, Show, Generic, ToJSON, FromJSON)
 data CoherentUnit = CoherentUnit { unitRoot :: Root, unitFingerprint :: RelativePath, unitArtifacts :: [RelativePath], unitControl :: RelativePath } deriving (Eq, Show, Generic, ToJSON, FromJSON)
+
+unitRemovals :: CoherentUnit -> [RelativePath]
+unitRemovals unit = unitFingerprint unit : unitArtifacts unit
+
+unitInputs :: CoherentUnit -> [RelativePath]
+unitInputs unit = unitControl unit : unitRemovals unit
+
 data RetentionContext = RetentionContext { authorizedPolicySha256 :: Digest, authorizedRootPolicy :: RetentionRootPolicy, authorizedArtifactClasses :: [RetentionClass] } deriving (Eq, Show, Generic, ToJSON, FromJSON)
 data Plan = Plan { schemaVersion :: Int, bindings :: [Binding], coherentUnits :: [CoherentUnit], retentionAuthorization :: Maybe RetentionContext } deriving (Eq, Show, Generic, ToJSON, FromJSON)
 newtype FileCount = FileCount Integer deriving stock (Generic) deriving anyclass (ToJSON)
@@ -84,6 +93,7 @@ instance FromJSON RustMetadata where
   parseJSON = withObject "rustc metadata" $ \o -> RustMetadata <$> o .: "rustc_fingerprint"
 
 foreign import ccall unsafe "flock" c_flock :: CInt -> CInt -> IO CInt
+foreign import ccall unsafe "euidaccess" c_euidaccess :: CString -> CInt -> IO CInt
 
 ensure :: Bool -> String -> IO ()
 ensure ok message = unless ok (ioError (userError message))
@@ -393,7 +403,26 @@ verifyRemoval (Root base) identities entry = do
     status <- getSymbolicLinkStatus (base </> key)
     ensure (isDirectory status && fromIntegral (deviceID status) == device expected && fromIntegral (fileID status) == inode expected && OwnerUID (fromIntegral (fileOwner status)) == ownerUID expected) "compiler output ancestor changed"
   status <- getSymbolicLinkStatus (base </> relative)
-  ensure (isRegularFile status && linkCount status == 1 && fromIntegral (deviceID status) == device entry && fromIntegral (fileID status) == inode entry && OwnerUID (fromIntegral (fileOwner status)) == ownerUID entry && Bytes (fromIntegral (fileSize status)) == size entry) "compiler output identity changed"
+  ensure (isRegularFile status && linkCount status == 1 && fromIntegral (deviceID status) == device entry && fromIntegral (fileID status) == inode entry && OwnerUID (fromIntegral (fileOwner status)) == ownerUID entry && Bytes (fromIntegral (fileSize status)) == size entry &&
+    FileTimeNanoseconds (floor (toRational (modificationTimeHiRes status) * 1_000_000_000)) == mtimeNanoseconds entry) "compiler output identity changed"
+
+unitDeletable :: Root -> Map.Map RelativePath Entry -> CoherentUnit -> IO Bool
+unitDeletable r@(Root base) original group =
+  (do
+    forM_ (unitInputs group) $ \member -> do
+      entry <- maybe (ioError (userError "unbound unit member")) pure (Map.lookup member original)
+      verifyRemoval r original entry
+    and <$> mapM deletable (unitRemovals group)) `catch` \(_ :: IOException) -> pure False
+ where
+  deletable member = do
+    let file = base </> relativeFilePath member
+        parent = takeDirectory file
+    encoding <- getFileSystemEncoding
+    permitted <- GHC.withCString encoding parent (\encoded -> (== 0) <$> c_euidaccess encoded 3)
+    parentStatus <- getSymbolicLinkStatus parent
+    fileStatus <- getSymbolicLinkStatus file
+    caller <- getEffectiveUserID
+    pure (permitted && (fileMode parentStatus .&. 0o1000 == 0 || caller == 0 || caller == fileOwner parentStatus || caller == fileOwner fileStatus))
 
 busyArtifacts :: [Binding] -> IO (Set.Set (Root, RelativePath))
 busyArtifacts records = do
@@ -442,11 +471,11 @@ applyLocked planFile plan current = do
           groups = filter ((== r) . unitRoot) (coherentUnits plan)
           version records file = (\entry -> entry {digest = Nothing}) <$> Map.lookup file records
           groupMatches group = case Map.lookup (unitFingerprint group) freshUnits of
-            Just (fresh, True) -> fresh == group && all (\file -> version original file == version latest file) (unitControl group : unitFingerprint group : unitArtifacts group)
+            Just (fresh, True) -> fresh == group && all (\file -> version original file == version latest file) (unitInputs group)
             _ -> False
           unavailable = Set.fromList [file | group <- groups,
-            not (groupMatches group) || any (\member -> Set.member (r, member) busyBefore) (unitFingerprint group : unitArtifacts group),
-            file <- unitFingerprint group : unitArtifacts group]
+            not (groupMatches group) || any (\member -> Set.member (r, member) busyBefore) (unitInputs group),
+            file <- unitRemovals group]
       checked <- forM [entry | entry <- planned, disposition entry /= Retain] $ \entry -> do
         let reject reason = pure (entry, Just reason)
         case Map.lookup (path entry) latest of
@@ -467,8 +496,8 @@ applyLocked planFile plan current = do
         choose r original owners unlockedProfiles checked groups =
           let usable = Map.fromList [(path entry, entry) | (entry, Nothing) <- checked, not (Set.member (r, path entry) busyAfter)]
               unavailableGroups = Set.fromList [file | group <- groups,
-                not (all (`Map.member` usable) (unitFingerprint group : unitArtifacts group)),
-                file <- unitFingerprint group : unitArtifacts group]
+                not (all (`Map.member` usable) (unitRemovals group)) || Set.member (r, unitControl group) busyAfter,
+                file <- unitRemovals group]
               available = Map.withoutKeys usable unavailableGroups
               usableOwner marker = Map.member marker available &&
                 not (Set.member (relativePath (takeDirectory (takeDirectory (takeDirectory (relativeFilePath marker))))) unlockedProfiles)
@@ -486,24 +515,36 @@ applyLocked planFile plan current = do
                         | (entry, reason) <- checked, not (Set.member (path entry) selected)]
           in (r, original, chosen, omitted)
         omissions = concat [items | (_, _, _, items) <- selections]
-    forM_ selections $ \(r, original, chosen, _) -> mapM_ (verifyRemoval r original) chosen
+    forM_ selections $ \(r, original, chosen, _) ->
+      when (null (coherentUnits plan)) (mapM_ (verifyRemoval r original) chosen)
     before <- mapM (space . root) current
     deleted <- newIORef []
+    skippedDuringRemoval <- newIORef omissions
     let persist ok = do
           after <- mapM (space . root) current
           let deltas = [(r, Bytes (a-b)) | ((r,Bytes b),(_,Bytes a)) <- zip before after]
           actualRemoved <- reverse <$> readIORef deleted
-          let audit = Audit 3 (if ok then Complete else Interrupted) plan actualRemoved omissions before after deltas ok
+          actualSkipped <- readIORef skippedDuringRemoval
+          let audit = Audit 3 (if ok then Complete else Interrupted) plan actualRemoved actualSkipped before after deltas ok
           writeJson auditPath audit
           pure audit
     writeJson auditPath (Audit 3 Applying plan [] omissions before before [(r,Bytes 0) | (r,_) <- before] False)
     (do
       hPutStrLn stderr "Removing only unchanged, unused, approved compiler artifacts"
-      forM_ [FingerprintSuccess, CompilerArtifact] $ \kind -> forM_ selections $ \(r@(Root base), original, chosen, _) ->
-        withDeletionCredentials r $ forM_ chosen $ \entry -> when (disposition entry == kind) $ do
-          verifyRemoval r original entry
-          removeFile (base </> relativeFilePath (path entry))
-          modifyIORef' deleted ((r, path entry):)
+      forM_ selections $ \(r@(Root base), original, chosen, _) -> withDeletionCredentials r $ do
+        let available = Map.fromList [(path entry, entry) | entry <- chosen]
+            groups = [group | group <- coherentUnits plan, unitRoot group == r, all (`Map.member` available) (unitRemovals group)]
+            grouped = Set.fromList (concatMap unitRemovals groups)
+            remove entry = do
+              verifyRemoval r original entry
+              removeFile (base </> relativeFilePath (path entry))
+              modifyIORef' deleted ((r, path entry):)
+        forM_ groups $ \group -> do
+          ready <- unitDeletable r original group
+          if ready then mapM_ (remove . (available Map.!)) (unitRemovals group)
+          else modifyIORef' skippedDuringRemoval (++ [Skipped r member UnitUnavailable | member <- unitRemovals group])
+        forM_ [FingerprintSuccess, CompilerArtifact] $ \kind ->
+          mapM_ remove [entry | entry <- chosen, disposition entry == kind, not (Set.member (path entry) grouped)]
       persist True) `onException` persist False
 
 withDeletionCredentials :: Root -> IO a -> IO a
@@ -654,7 +695,7 @@ retainRoot mode classes directory policy@(RetentionRootPolicy r high low _) = do
   measured <- rootApparentBytes r
   let report result after units removedCount recentCount blockedCount met audit inspected =
         RetentionRootReport r result measured after high low units removedCount recentCount blockedCount met audit inspected []
-  if measured <= high then pure (report BelowBudget measured [] (FileCount 0) (FileCount 0) (FileCount 0) True Nothing Nothing)
+  if measured <= high then pure (report BelowBudget measured [] (FileCount 0) (FileCount 0) (FileCount 0) (measured <= low) Nothing Nothing)
   else do
     metadata <- scan RetentionMetadata r
     locked <- withLocks DeferBusyLocks [metadata] $ do
@@ -671,7 +712,7 @@ retainLocked mode classes directory (RetentionRootPolicy r high low@(Bytes targe
   before@(Bytes initial) <- rootApparentBytes r
   let report result after units removedCount recentCount blockedCount met audit inspected =
         RetentionRootReport r result before after high low units removedCount recentCount blockedCount met audit inspected []
-  if before <= high then pure (report BelowBudget before [] (FileCount 0) (FileCount 0) (FileCount 0) True Nothing Nothing)
+  if before <= high then pure (report BelowBudget before [] (FileCount 0) (FileCount 0) (FileCount 0) (before <= low) Nothing Nothing)
   else do
     fingerprints <- validFingerprints r (map path (entries current))
     now <- floor . (* 1_000_000_000) . toRational <$> getPOSIXTime
@@ -681,7 +722,7 @@ retainLocked mode classes directory (RetentionRootPolicy r high low@(Bytes targe
       PreviewRetention -> pure ()
     let units = ownedUnits classes current fingerprints
         recent (UnitMetadata _ _ (FileTimeNanoseconds newest) _) = newest > now - age * 1_000_000_000
-        blocked (UnitMetadata group _ _ safe) = not safe || any (\member -> Set.member (r, member) busy) (unitFingerprint group : unitArtifacts group)
+        blocked (UnitMetadata group _ _ safe) = not safe || any (\member -> Set.member (r, member) busy) (unitInputs group)
         eligible = sortOn (\(UnitMetadata group _ newest _) -> (newest, unitFingerprint group)) [unit | unit <- units, not (recent unit), not (blocked unit)]
         select _ [] = []
         select remaining (unit:rest)
