@@ -402,7 +402,7 @@ retained DomainA =
   , (0x43728, 0x34), (0x4375c, 0x48), (0x437a4, 0x38), (0x437fc, 0x14)
   , (0x439d8, 60), (0x43a14, 40)
   , (0x43c48, 92), (0x43ca4, 124), (0x43d20, 176), (0x43dd0, 72), (0x43f70, 44)
-  , (0x44018, 44), (0x44044, 240), (0x44134, 128), (0x44318, 460)
+  , (0x44018, 44), (0x44044, 240), (0x44134, 128), (0x44318, 460), (0x44d8c, 416)
   , (0x444e4, 132), (0x44568, 204), (0x44634, 200), (0x446fc, 72), (0x44744, 188)
   , (0x44800, 228), (0x448e4, 220), (0x4b41c, 100)
   , (0x44ac0, 196), (0x44b84, 220), (0x44c60, 72), (0x44ca8, 228)
@@ -415,7 +415,7 @@ retained DomainB =
   , (0xd3728, 0x34), (0xd375c, 0x48), (0xd37a4, 0x38), (0xd37fc, 0x14)
   , (0xd398c, 60), (0xd39c8, 40)
   , (0xd3c04, 92), (0xd3c60, 124), (0xd3cdc, 176), (0xd3d8c, 72), (0xd3f2c, 44)
-  , (0xd3fd4, 48), (0xd4004, 240), (0xd40f4, 128), (0xd42d8, 460)
+  , (0xd3fd4, 48), (0xd4004, 240), (0xd40f4, 128), (0xd42d8, 460), (0xd4d8c, 416)
   , (0xd44a4, 132), (0xd4528, 204), (0xd45f4, 200), (0xd46bc, 72), (0xd4704, 188)
   , (0xd47c0, 228), (0xd48a4, 220), (0xdb3dc, 100)
   , (0xd4a80, 196), (0xd4b44, 220), (0xd4c20, 72), (0xd4c68, 228)
@@ -474,10 +474,10 @@ lowestBitAddress DomainB = 0x000d_da64
 driverEntry, expiryEntry, deleteEntry, driverStack, driverSize, expirySize, deleteSize :: Word32
 driverEntry = 0x0005_4000
 expiryEntry = 0x0005_4040
-deleteEntry = 0x0005_4080
+deleteEntry = 0x0005_40c0
 driverStack = 0x0095_9e00
 driverSize = 32
-expirySize = 52
+expirySize = 84
 deleteSize = 12
 
 branchLink :: Word32 -> Word32 -> Word32
@@ -508,24 +508,32 @@ driverBytes domain = assemble
 
 expiryBytes :: Domain -> B.ByteString
 expiryBytes domain = assemble
-  [ movw 0 (task `shiftR` 0 .&. 0xffff)
-  , movt 0 (task `shiftR` 16)
-  , movw 0 (lock `shiftR` 0 .&. 0xffff)
-  , movt 0 (lock `shiftR` 16)
-  , branchLink (expiryEntry + 16) acquire
-  , movw 0 (task `shiftR` 0 .&. 0xffff)
-  , movt 0 (task `shiftR` 16)
-  , branchLink (expiryEntry + 28) callback
-  , movw 0 (lock `shiftR` 0 .&. 0xffff)
-  , movt 0 (lock `shiftR` 16)
-  , branchLink (expiryEntry + 40) release
-  , branchLink (expiryEntry + 44) dispatcher
+  [ movw 0 (interrupt `shiftR` 0 .&. 0xffff)
+  , movt 0 (interrupt `shiftR` 16)
+  , 0xe3a0_1001
+  , 0xe580_1000
+  , 0xe10f_2000
+  , 0xe3c2_2080
+  , 0xe121_f002
+  , movw 0 (tick `shiftR` 0 .&. 0xffff)
+  , movt 0 (tick `shiftR` 16)
+  , 0xe3a0_101e
+  , 0xe580_1000
+  , branchLink (expiryEntry + 44) tickBody
+  , movw 0 (interrupt `shiftR` 0 .&. 0xffff)
+  , movt 0 (interrupt `shiftR` 16)
+  , 0xe3a0_1000
+  , 0xe580_1000
+  , 0xe10f_2000
+  , 0xe382_2080
+  , 0xe121_f002
+  , branchLink (expiryEntry + 76) dispatcher
   , 0xeaff_fffe
   ]
   where
-    (task, lock, acquire, release, callback, dispatcher) = case domain of
-      DomainA -> (0x4005_ff0c, 0x4005_45d4, 0x439d8, 0x43a14, 0x44318, 0x43640)
-      DomainB -> (0x400e_fecc, 0x400e_4594, 0xd398c, 0xd39c8, 0xd42d8, 0xd3640)
+    (interrupt, tick, tickBody, dispatcher) = case domain of
+      DomainA -> (0x4005_45a4, 0x4005_4770, 0x44d8c, 0x43640)
+      DomainB -> (0x400e_4564, 0x400e_4730, 0xd4d8c, 0xd3640)
 
 deleteBytes :: Domain -> B.ByteString
 deleteBytes domain = assemble
@@ -930,7 +938,7 @@ cases facts executing =
       }
   , (plain "timed-resume-expiry" TimedGet executing 1
       (resumeWordsWith facts executing expiryEntry) 30 (fromIntegral (-50 :: Int)) False
-      [noWrite outAddress])
+      [noWrite outAddress, eq (dfTimerCount (domainFacts facts executing)) 0])
       { caseResume = True }
   , (plain "get-resume-delete" Get executing 1
       (resumeWordsWith facts executing deleteEntry) 0 0 False [])
@@ -1090,10 +1098,16 @@ callerSp one = if caseHandler one then handlerStack else callerStack
 
 pages :: Facts -> Case -> [Page]
 pages facts one =
-  [ let (address, size) = kernelBounds facts domain
-     in Page (if domain == DomainA then RegionId "kernel-a" else RegionId "kernel-b") address size ReadWrite (B.replicate size 0)
-  | domain <- [DomainA, DomainB]
+  [ let (address, size) = kernelBounds facts DomainA
+     in Page (RegionId "kernel-a") address size ReadWrite (B.replicate size 0)
   ]
+    ++ [ let (GuestAddress low, _size) = kernelBounds facts DomainB
+             split = dfTickNow (factsB facts) - 4
+         in Page (RegionId "kernel-b") (GuestAddress low) (fromIntegral (split - low)) ReadWrite (B.replicate (fromIntegral (split - low)) 0)
+       , let (GuestAddress low, size) = kernelBounds facts DomainB
+             split = dfTickNow (factsB facts) - 4
+         in Page (RegionId "kernel-b-high") (GuestAddress split) (fromIntegral (low + fromIntegral size - split)) ReadWrite (B.replicate (fromIntegral (low + fromIntegral size - split)) 0)
+       ]
     ++ [ Page (RegionId "definitions") (GuestAddress definitionBase) (fromIntegral (2 * factsTaskSlots facts * definitionStride)) ReadWrite (B.replicate (fromIntegral (2 * factsTaskSlots facts * definitionStride)) 0)
        , Page (RegionId "request") (GuestAddress requestAddress) 0x20 ReadWrite (B.replicate 0x20 0)
        , Page (RegionId "pool-region") (GuestAddress poolRegion) 0x100 ReadWrite (B.replicate 0x100 0)
@@ -1379,15 +1393,19 @@ compareFamily facts executing one stockSpec ownedSpec stock owned =
     ownedExpectation = maybe (caseStock one) id (caseOwned one)
     compared = [ident | Page ident _ _ _ _ <- pages facts one, ident `notElem` map RegionId ["stack", "target-stack", "driver-stack"]]
     memory observation = M.fromList [(ident, normalize ident bytes) | (ident, bytes) <- nativeMemory observation, ident `elem` compared]
-    kernelIdent = RegionId (if executing == DomainA then "kernel-a" else "kernel-b")
+    kernelIdents = if executing == DomainA then [RegionId "kernel-a"] else [RegionId "kernel-b", RegionId "kernel-b-high"]
     normalize ident bytes
-      | ident == kernelIdent && (expectationArrival (caseStock one) || caseResume one) =
-          let (GuestAddress base, _) = kernelBounds facts executing
-              slots = if caseResume one then [runningSlot, idleSlot] else [runningSlot]
-              zero current saved =
-                let offset = fromIntegral (taskAddress facts executing saved + tfSavedSp (factsTask facts) - base)
-                 in B.take offset current <> word32le 0 <> B.drop (offset + 4) current
-           in foldl zero bytes slots
+      | ident `elem` kernelIdents && (expectationArrival (caseStock one) || caseResume one) =
+          case [base | Page region (GuestAddress base) _ _ _ <- pages facts one, region == ident] of
+            [base] ->
+              let slots = if caseResume one then [runningSlot, idleSlot] else [runningSlot]
+                  zero current saved =
+                    let offset = fromIntegral (toInteger (taskAddress facts executing saved) + toInteger (tfSavedSp (factsTask facts)) - toInteger base)
+                     in if offset < 0 || offset + 4 > B.length current
+                          then current
+                          else B.take offset current <> word32le 0 <> B.drop (offset + 4) current
+               in foldl zero bytes slots
+            _ -> bytes
       | otherwise = bytes
     memoryDifferences =
       ["missing state region " ++ show ident | ident <- compared, M.notMember ident (memory stock) || M.notMember ident (memory owned)]
