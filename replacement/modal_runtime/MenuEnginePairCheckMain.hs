@@ -62,26 +62,6 @@ observations directory = do
     residency <- either (fail . ((path ++ ": ") ++)) pure (residencyAt segments index phase)
     either (fail . ((path ++ ": ") ++)) pure =<< readObservationReader residency path
 
-observationsLegacy :: FilePath -> IO [Observation]
-observationsLegacy directory = do
-  resultBytes <- B.readFile (directory </> "e2e-result.json")
-  phases <- either (fail . ((directory </> "e2e-result.json: ") ++)) pure
-    (J.eitherDecodeStrict' resultBytes >>= J.parseEither (J.withObject "e2e result" $ \fields ->
-      fields J..: "phases" >>= mapM (J.withObject "phase" (J..: "name"))))
-  let segments = segmentResidencies phases
-  names <- listDirectory directory
-  let numbered = sortOn fst [(read digits :: Int, name) | name <- names, Just rest <- [stripPrefix "e2e-observation-" name]
-        , let digits = takeWhile isDigit rest, not (null digits), drop (length digits) rest == ".json"]
-  unless (map fst numbered == [0 .. length segments - 1])
-    (fail (directory ++ ": observation files " ++ show (map fst numbered) ++ " are not one per segment of the run's " ++ show (length segments)))
-  forM numbered $ \(index, name) -> do
-    bytes <- B.readFile (directory </> name)
-    either (fail . ((directory </> name ++ ": ") ++)) pure $ do
-      value <- J.eitherDecodeStrict' bytes
-      phase <- J.parseEither observationPhaseOf value
-      residency <- residencyAt segments index phase
-      J.parseEither (parseObservation residency) value
-
 sessionHits :: FilePath -> IO (Either String [Hit])
 sessionHits directory = do
   let path = directory </> "emulator-session.json"
@@ -105,15 +85,17 @@ renderEvidence role directory = do
 
 runRetained :: RenderConfig -> MenuTree -> TablesDocument -> TablesDocument -> FilePath -> FilePath -> IO Bool
 runRetained config tree stockTables document stockPath ownedPath = do
-  stock <- observationsLegacy stockPath
-  owned <- observationsLegacy ownedPath
+  stock <- observations stockPath
+  owned <- observations ownedPath
   unless (not (null stock) && not (null owned)) (fail "a role has no e2e observations")
-  results <- forM [(StockRole, stock), (OwnedRole, owned)] $ \(role, segments) -> case checkRole tree role segments of
-    Left failure -> hPutStrLn stderr (show role ++ ": " ++ failure) >> pure False
-    Right summary -> do
-      putStrLn (show role ++ ": " ++ show (summaryEvents summary) ++ " stage events, "
-        ++ show (summaryFallbackEntries summary) ++ " fallback-site entries")
-      pure True
+  results <- forM [(StockRole, stock), (OwnedRole, owned)] $ \(role, segments) -> do
+    checked <- checkRoleReader tree role segments
+    case checked of
+      Left failure -> hPutStrLn stderr (show role ++ ": " ++ failure) >> pure False
+      Right summary -> do
+        putStrLn (show role ++ ": " ++ show (summaryEvents summary) ++ " stage events, "
+          ++ show (summaryFallbackEntries summary) ++ " fallback-site entries")
+        pure True
   manifestBytes <- B.readFile (ownedPath </> "relinked" </> "ram-push-manifest.json")
   base <- either fail pure (J.eitherDecodeStrict' manifestBytes >>= J.parseEither (J.withObject "manifest" $ \fields -> do
     baseText <- fields J..: "base" :: J.Parser String
@@ -126,40 +108,63 @@ runRetained config tree stockTables document stockPath ownedPath = do
   bound <- either fail pure (S.checkEngineStack S.taskOneBudget elf (\address -> base <= address && address - base < size))
   let margin = S.budgetStockMargin S.taskOneBudget
       required = S.reportEngine bound + S.reportModal bound + margin
-  stacks <- forM [(StockRole, stock), (OwnedRole, owned)] $ \(role, segments) -> case checkStack required segments of
-    Left failure -> hPutStrLn stderr (show role ++ " stack: " ++ failure) >> pure False
-    Right report -> do
-      putStrLn (show role ++ " stack: lowest bound floor " ++ maybe "none" show (stackFloor report)
-        ++ ", measured high-water mark " ++ maybe "none" show (stackHighWater report))
-      pure True
-  paired <- case comparePair stock owned of
-    Left failure -> hPutStrLn stderr ("pair: " ++ failure) >> pure False
-    Right () -> putStrLn "pair: engine reads and 0x1d posts equal" >> pure True
+  stacks <- forM [(StockRole, stock), (OwnedRole, owned)] $ \(role, segments) -> do
+    checked <- checkStackReader required segments
+    case checked of
+      Left failure -> hPutStrLn stderr (show role ++ " stack: " ++ failure) >> pure False
+      Right report -> do
+        putStrLn (show role ++ " stack: lowest bound floor " ++ maybe "none" show (stackFloor report)
+          ++ ", measured high-water mark " ++ maybe "none" show (stackHighWater report))
+        pure True
+  paired <- do
+    checked <- comparePairReader stock owned
+    case checked of
+      Left failure -> hPutStrLn stderr ("pair: " ++ failure) >> pure False
+      Right () -> putStrLn "pair: engine reads and 0x1d posts equal" >> pure True
   stockHits <- sessionHits stockPath >>= either fail pure
   ownedHits <- sessionHits ownedPath >>= either fail pure
   forM_ [(StockRole,stockPath,stock),(OwnedRole,ownedPath,owned)] $ \(_,path,segments) -> do
     value <- B.readFile (path </> "e2e-result.json") >>= either fail pure . J.eitherDecodeStrict'
     either fail pure (J.parseEither (validateRetainedRenderDeclarations config) value)
-    writeRenderReceiptLegacy path segments
-  let checked = do
-        unless (map observationPhase stock == map observationPhase owned) (Left "render segment phases differ")
-        checkRenderCoverage config stock owned
-        checkConstantClockInputs (ClockEvidence stockHits stock) (ClockEvidence ownedHits owned)
-        unless (all noRenderAdapter (concatMap observationHits (stock ++ owned))) (Left "retained render reached an owned adapter")
-        left <- renderDraws config stockTables document StockRole stock
-        right <- renderDraws config stockTables document StockRole owned
-        mapM_ (uncurry (compareDraws config)) (zip left right)
-        stockStack <- checkRetainedRenderStackObservations config stock
-        ownedStack <- checkRetainedRenderStackObservations config owned
-        banks <- discoveredBanks config (concat left ++ concat right)
-        pure (stockStack, ownedStack, banks)
-  rendered <- case checked of
-    Left failure -> hPutStrLn stderr ("render: " ++ failure) >> pure False
-    Right (stockStack, ownedStack, banks) -> do
-      putStrLn ("render: " ++ show (renderCoverage config) ++ " stock-stack=" ++ show stockStack
-        ++ " owned-stack=" ++ show ownedStack ++ " banks=" ++ show banks)
-      pure True
+    writeRenderReceipt path segments
+  let renderFailure problem = hPutStrLn stderr ("render: " ++ problem) >> pure False
+  unless (map readerPhase stock == map readerPhase owned) (fail "render segment phases differ")
+  coverage <- checkRenderCoverageReader config stock owned
+  rendered <- case coverage of
+    Left problem -> renderFailure problem
+    Right () -> do
+      clock <- checkConstantClockInputsReader (ClockEvidenceReader stockHits stock) (ClockEvidenceReader ownedHits owned)
+      adapters <- forM (stock ++ owned) $ \reader -> readerFoldHits reader adapterStep ()
+      case (clock, sequence adapters) of
+        (Left problem, _) -> renderFailure problem
+        (_, Left problem) -> renderFailure problem
+        (Right (), Right _) -> do
+          stockDrawsResult <- collectDrawsReader config stockTables document StockRole stock
+          case stockDrawsResult of
+            Left problem -> renderFailure problem
+            Right stockDraws -> do
+              drawsChecked <- compareDrawsReader config stockTables document stockDraws owned
+              case drawsChecked of
+                Left problem -> renderFailure problem
+                Right () -> do
+                  stockStackResult <- checkRetainedRenderStackObservationsReader config stock
+                  ownedStackResult <- checkRetainedRenderStackObservationsReader config owned
+                  banksResult <- discoveredBanksReader config stockTables document owned
+                  case (stockStackResult, ownedStackResult, banksResult) of
+                    (Left problem, _, _) -> renderFailure problem
+                    (_, Left problem, _) -> renderFailure problem
+                    (_, _, Left problem) -> renderFailure problem
+                    (Right stockStack, Right ownedStack, Right ownedBanks) ->
+                      case discoveredBanks config stockDraws of
+                        Left problem -> renderFailure problem
+                        Right stockBanks -> do
+                          let banks = sort (nub (ownedBanks ++ stockBanks))
+                          putStrLn ("render: " ++ show (renderCoverage config) ++ " stock-stack=" ++ show stockStack
+                            ++ " owned-stack=" ++ show ownedStack ++ " banks=" ++ show banks)
+                          pure True
   pure (and (results ++ stacks ++ [paired, rendered]))
+ where
+  adapterStep () hit = if noRenderAdapter hit then Right () else Left "retained render reached an owned adapter"
 
 noRenderAdapter :: Hit -> Bool
 noRenderAdapter hit = case hitSite hit of
@@ -179,23 +184,6 @@ validateEngineOnlyManifest = J.withObject "engine-only manifest" $ \fields -> do
   hexWord text = case stripPrefix "0x" text of
     Just digits | length digits == 8, [(value,"")] <- readHex digits -> pure (value :: Word32)
     _ -> fail "publication word requires eight hex digits"
-
-writeRenderReceiptLegacy :: FilePath -> [Observation] -> IO ()
-writeRenderReceiptLegacy directory segments = do
-  fronts <- either fail pure (osdInputs segments)
-  labels <- fmap concat $ forM (zip [0 :: Int ..] segments) $ \(index,segment) -> do
-    bytes <- B.readFile (directory </> ("e2e-observation-" ++ show index ++ ".json"))
-    label <- either fail pure (J.eitherDecodeStrict' bytes >>= J.parseEither (J.withObject "observation" (\fields -> fields J..:? "capture" :: J.Parser (Maybe String))))
-    pure [(name,input) | Just name <- [label], Just input <- [lookup (observationPhase segment) fronts]]
-  value <- B.readFile (directory </> "e2e-result.json") >>= either fail pure . J.eitherDecodeStrict'
-  annotated <- either fail pure (J.parseEither (J.withObject "e2e result" $ \fields -> do
-    captures <- fields J..: "menu_receipts" :: J.Parser [J.Value]
-    updated <- forM captures $ J.withObject "capture" $ \capture -> do
-      label <- capture J..: "label"
-      input <- maybe (fail "capture lacks complete OSD front inputs") pure (lookup label labels)
-      pure (J.Object (KM.insert "osd_front" input capture))
-    pure (J.Object (KM.insert "menu_receipts" (J.toJSON updated) fields))) value)
-  BL.writeFile (directory </> "e2e-result-render.json") (J.encode annotated <> "\n")
 
 main :: IO ()
 main = do

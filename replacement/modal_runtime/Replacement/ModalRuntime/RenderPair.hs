@@ -8,6 +8,7 @@ module Replacement.ModalRuntime.RenderPair
   , osdInputs, discoveredBanks
   , foldRenderDraws, collectDrawsReader, compareDrawsReader, discoveredBanksReader
   , checkRenderCoverageReader, checkRenderStackObservationsReader
+  , checkRetainedRenderStackObservationsReader
   , checkRenderInvocationEvidenceReader, osdInputsReader
   ) where
 
@@ -455,6 +456,47 @@ readNamedReader :: T.Text -> Int -> ObservationReader -> Either String B.ByteStr
 readNamedReader name size reader = case [b | (n,b) <- readerReads reader, n == name] of
   [bytes] | B.length bytes == size -> Right bytes
   _ -> Left ("missing/short " ++ T.unpack name)
+
+checkRetainedRenderStackObservationsReader :: RenderConfig -> [ObservationReader] -> IO (Either String StackReport)
+checkRetainedRenderStackObservationsReader config readers
+  | case readers of first:_ -> readerPhase first /= "render-baseline"; [] -> True = pure (Left "missing pre-segment render stack baseline")
+  | otherwise = do
+      snapshots <- forM readers $ \reader -> do
+        record <- pure (readNamedReader "render-task-record" 40 reader)
+        stack <- pure (readNamedReader "render-task-stack" 4096 reader)
+        pure ((,,) (readerPhase reader) <$> record <*> stack)
+      case sequence snapshots of
+        Left problem -> pure (Left problem)
+        Right entries -> do
+          let firstRecord = case entries of (_,record,_):_ -> Just record; [] -> Nothing
+          if not (all (\(_,record,_) -> Just record == firstRecord) entries)
+            then pure (Left "task 33 descriptor changed")
+            else do
+              result <- foldSeams readers
+              case result of
+                Left problem -> pure (Left problem)
+                Right () -> do
+                  let changed = case entries of
+                        (_,_,first):rest -> [renderStackBase config + fromIntegral offset | offset <- [0,4..4092], any (\(_,_,later) -> B.take 4 (B.drop offset first) /= B.take 4 (B.drop offset later)) rest]
+                        [] -> []
+                      highWater = case changed of a:_ -> Just a; [] -> Nothing
+                  pure (Right (StackReport Nothing highWater))
+ where
+  foldSeams [] = pure (Right ())
+  foldSeams (reader:rest) = do
+    result <- readerFoldHits reader step ()
+    case result of
+      Left problem -> pure (Left problem)
+      Right () -> foldSeams rest
+  step () hit
+    | site hit `elem` ["render-tree-entry","render-picker-entry","render-pane-entry"] = do
+        case drop 5 (hitMemory hit) of
+          current:node:record:_ -> do
+            unless (word current 0 == Right 0x4006060c) (Left "render seam is not task 33 on primary")
+            checkDescriptor config node record
+          _ -> Left "render seam lacks task descriptor"
+        Right ()
+    | otherwise = Right ()
 
 checkRenderInvocationEvidenceReader :: S.RenderStackReport -> [ObservationReader] -> E.RenderStackEvidence -> IO (Either String E.AllocationVerdict)
 checkRenderInvocationEvidenceReader bounds readers evidence = do

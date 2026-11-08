@@ -20,11 +20,12 @@ import FujiAF.JSON (encodeCanonical)
 import FujiAF.StorageBudget (checkStorageBudget)
 import System.Directory
   ( createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getFileSize
-  , listDirectory, removeFile, removePathForcibly, renameDirectory, renameFile, setCurrentDirectory )
+  , listDirectory, makeAbsolute, removeFile, removePathForcibly, renameDirectory, renameFile, setCurrentDirectory )
 import System.Environment (getArgs, getEnvironment, lookupEnv)
 import System.Exit (ExitCode (..), exitWith)
-import System.FilePath ((</>), takeDirectory)
+import System.FilePath ((</>), takeDirectory, takeFileName)
 import System.IO (IOMode (ReadMode, WriteMode), SeekMode (AbsoluteSeek), hSeek, stderr, withBinaryFile, withFile)
+import System.Posix.Files (createSymbolicLink)
 import System.Posix.Process (getProcessID)
 import System.Process
   ( CreateProcess (..), StdStream (NoStream, UseHandle), createProcess, proc, rawSystem
@@ -262,6 +263,8 @@ memoryMaxBytes = 2147483648
 qualRoot, binRoot :: FilePath
 qualRoot = "private-data/scratch/ControllerStrategy/engine225/bounded-qual"
 binRoot = qualRoot </> "bin"
+checkerRoot :: FilePath
+checkerRoot = "bazel-bin"
 
 trajectoryRoot, runDocument, inputsRoot, tablesPath, planPath, clockPath :: FilePath
 trajectoryRoot = "private-data/scratch/ControllerStrategy/engine225/controlled-rtc/trajectories"
@@ -281,6 +284,7 @@ main = do
     ["plan"] -> planMode FullMatrix
     ["plan", "headroom"] -> planMode HeadroomOnly
     ["execute"] -> executeMode FullMatrix
+    ["recheck"] -> recheckMode
     ["headroom"] -> executeMode HeadroomOnly
     ["execute-slotted"] -> slottedMode FullMatrix
     ["headroom-slotted"] -> slottedMode HeadroomOnly
@@ -988,6 +992,150 @@ runPairCheck name = do
     then Right check
     else Left (Failure (Predicate "pair-comparison")
       ("pair comparison failed: " ++ caseText name) (check </> "pair.json"))
+
+recheckMode :: IO ()
+recheckMode = do
+  requireCleanSource
+  verifyInputs
+  source <- verifySource
+  buildCheckers
+  forM_ pairs $ \name -> forM_ [Stock, Owned] (admitRole name)
+  checks <- forM pairs $ \name -> do
+    outcome <- runPairCheckCurrent name
+    case outcome of
+      Left failure -> do
+        writeFailurePacket "blocked" failure
+        failH ("pair comparison failed: " ++ caseText name)
+      Right directory -> pure (name, directory)
+  publishRecheck source checks
+
+buildCheckers :: IO ()
+buildCheckers = do
+  createDirectoryIfMissing True (qualRoot </> "logs")
+  configured <- lookupEnv "MENU_BOUNDED_QUAL_OUTPUT_BASE"
+  let baseArguments = ["--output_base=" ++ path | Just path <- [configured]]
+  _ <- runHostBuild baseArguments CompileTargets
+    [ "//replacement/modal_runtime:menu-engine-pair-check"
+    , "//emulation:modal-settings-compare", "//emulation:render-compare" ]
+    (qualRoot </> "logs" </> "recheck-build.log")
+  pure ()
+
+admitRole :: CaseId -> Role -> IO ()
+admitRole name role = do
+  complete <- roleComplete name role
+  unless complete $ do
+    terminal <- roleTerminalFailure name role
+    let (predicate, detail) = case terminal of
+          Just (Failure stored reason _) -> (stored, reason)
+          Nothing -> (Predicate "role-completion", "role is missing or incomplete; recheck refuses guest execution")
+    writeFailurePacket "blocked" (Failure predicate detail (roleDirectory name role))
+    failH ("role admission refused: " ++ caseText name ++ "." ++ roleText role)
+
+mirrorReceipt :: FilePath -> FilePath -> IO ()
+mirrorReceipt source destination = do
+  createDirectoryIfMissing True destination
+  absolute <- makeAbsolute source
+  entries <- listDirectory source
+  forM_ entries $ \entry -> do
+    let name = takeFileName entry
+    when (name `notElem` ["e2e-result-render.json", "render-banks.json", "e2e-render-stack-allocation-check.json"]) $
+      createSymbolicLink (absolute </> entry) (destination </> entry)
+
+runPairCheckCurrent :: CaseId -> IO (Either Failure FilePath)
+runPairCheckCurrent name = do
+  check <- freshDirectory (qualRoot </> "recheck-checks") (caseText name)
+  receipts <- freshDirectory (qualRoot </> "recheck-receipts") (caseText name)
+  let stock = receipts </> "stock"
+      owned = receipts </> "owned"
+  mirrorReceipt (roleDirectory name Stock </> "receipt") stock
+  mirrorReceipt (roleDirectory name Owned </> "receipt") owned
+  pairStatus <- spawn (checkerRoot </> "replacement/modal_runtime/menu-engine-pair-check")
+    ([ "--retained-render", "--tables", tablesPath, "--package-plan", planPath
+     , "--stock", stock, "--owned", owned ]) (check </> "pair-check.log") []
+  settingsStatus <- spawn (checkerRoot </> "emulation/modal-settings-compare")
+    [stock, owned, check </> "settings.json"] (check </> "settings.log") []
+  let exclusion
+        | caseText name `elem` ["oracle-frame-fixed-open", "oracle-fixed-wrap"] = ["--clock-exclusions", clockPath]
+        | otherwise = []
+  renderStatus <- spawn (checkerRoot </> "emulation/render-compare")
+    ([ stock </> "e2e-result-render.json"
+     , owned </> "e2e-result-render.json"
+     , check </> "render.json" ] ++ exclusion) (check </> "render.log") []
+  settingsEqual <- jsonEqual (check </> "settings.json")
+  renderEqual <- jsonEqual (check </> "render.json")
+  let pass = pairStatus == ExitSuccess && settingsStatus == ExitSuccess
+             && renderStatus == ExitSuccess && settingsEqual && renderEqual
+  writeJson (check </> "pair.json") $ object
+    [ "name" .= caseText name
+    , "pair_status" .= exitCodeValue pairStatus
+    , "settings_status" .= exitCodeValue settingsStatus
+    , "render_status" .= exitCodeValue renderStatus
+    , "settings_equal" .= settingsEqual
+    , "render_equal" .= renderEqual
+    , "directory" .= check
+    , "pass" .= pass
+    ]
+  writeFile (qualRoot </> "recheck-checks" </> ("latest-" ++ caseText name)) check
+  pure $ if pass
+    then Right check
+    else Left (Failure (Predicate "pair-comparison")
+      ("recheck comparison failed: " ++ caseText name) (check </> "pair.json"))
+
+publishRecheck :: SourceProvenance -> [(CaseId, FilePath)] -> IO ()
+publishRecheck source checks = do
+  producer <- toolIdentity
+  pairHash <- sha256File (checkerRoot </> "replacement/modal_runtime/menu-engine-pair-check")
+  settingsHash <- sha256File (checkerRoot </> "emulation/modal-settings-compare")
+  renderHash <- sha256File (checkerRoot </> "emulation/render-compare")
+  let roles = [ object ["name" .= caseText name, "role" .= roleText role, "outcome" .= ("complete" :: String), "directory" .= roleDirectory name role]
+              | name <- pairs, role <- [Stock, Owned] ]
+      pairsJson = [ object ["name" .= caseText name, "directory" .= directory, "pass" .= True] | (name, directory) <- checks ]
+      producerValue = object
+        [ "viewer" .= sha256Hex (toolViewer producer)
+        , "sdk_store" .= toolSdkStore producer
+        , "sdk_driver" .= sha256Hex (toolSdkDriver producer)
+        , "sdk_ram_push" .= sha256Hex (toolSdkRamPush producer)
+        ]
+      checkerValue = object
+        [ "pair_check" .= sha256Hex pairHash
+        , "settings_compare" .= sha256Hex settingsHash
+        , "render_compare" .= sha256Hex renderHash
+        ]
+      terminal = object
+        [ "schema" .= (1 :: Int)
+        , "status" .= ("recheck-passed" :: String)
+        , "source" .= sourceJson source
+        , "inputs" .= inputJson inputIdentity
+        , "producer" .= producerValue
+        , "checker" .= checkerValue
+        , "execution" .= object
+            [ "required_pairs" .= length pairs
+            , "required_roles" .= (2 * length pairs)
+            , "admitted_roles" .= length roles
+            , "executed_roles" .= (0 :: Int)
+            , "comparisons" .= length checks
+            ]
+        , "predicates" .= [ object ["name" .= name, "pass" .= True]
+                          | name <- ["all-roles-admitted" :: String, "all-pairs-compared", "all-pairs-pass", "no-guest-execution"] ]
+        , "pairs" .= pairsJson
+        , "roles" .= roles
+        , "review_packet" .= (qualRoot </> "review-packet.json")
+        , "remaining_scope" .= object
+            [ "full67" .= ("rechecked from frozen receipts" :: String)
+            , "hardware" .= ("not claimed" :: String)
+            ]
+        ]
+  writeJson (qualRoot </> "terminal.json") terminal
+  writeJson (qualRoot </> "review-packet.json") $ object
+    [ "terminal" .= terminal
+    , "review" .= object ["checks_run_by_reviewer" .= False, "cutover_approved" .= False]
+    ]
+  printJson $ object
+    [ "status" .= ("recheck-passed" :: String)
+    , "pairs" .= length checks
+    , "roles" .= length roles
+    , "review_packet" .= (qualRoot </> "review-packet.json")
+    ]
 
 publish :: Matrix -> SourceProvenance -> InputIdentity -> IO ()
 publish matrix source inputs = do

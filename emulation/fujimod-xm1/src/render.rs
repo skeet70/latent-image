@@ -213,7 +213,59 @@ impl RenderFacts {
     }
 
     pub fn probe(&self, machine: &Machine) -> Result<Probe, String> {
-        Ok(self.sample(machine)?.probe)
+        let read = |address: Address, bytes: usize| value(machine, address, bytes);
+        let statuses = self.task_statuses(machine)?;
+        let keys_released = machine
+            .document
+            .firmware
+            .keys
+            .iter()
+            .map(|binding| machine.document.firmware.released(&machine.session, binding.key))
+            .collect::<Result<Vec<bool>, String>>()?
+            .into_iter()
+            .all(|released| released);
+        let idle = [
+            read(self.ui_pending, 4)?,
+            read(self.ui_busy, 1)?,
+            read(self.display_suppression, 4)?,
+            read(self.batch_busy, 4)?,
+            read(self.batch_callback, 4)?,
+            read(self.commands_dirty, 4)?,
+            read(self.display_pending, 4)?,
+        ]
+        .iter()
+        .all(|word| *word == 0);
+        let node = machine.session.node(&self.graphics.0)?;
+        let engine = serde_json::from_value::<GraphicsSave>(machine.session.board.device_save(node)?)
+            .map_err(|e| format!("graphics state: {e}"))?
+            .engine;
+        let graphics = Graphics {
+            idle: !engine.busy
+                && engine.command_pending.is_null()
+                && engine.regs.iter().find(|(offset, _)| *offset == 0x34).map_or(0, |(_, value)| *value) == 0
+                && engine.jobs_started == engine.jobs_completed
+                && engine.acknowledgments >= engine.jobs_completed,
+            started: engine.jobs_started,
+            completed: engine.jobs_completed,
+            bytes_completed: engine.bytes_completed,
+        };
+        let drained = keys_released
+            && idle
+            && graphics.idle
+            && read(self.initialized, 1)? == 1
+            && statuses.iter().all(|status| *status == Some(QUEUE_WAIT));
+        Ok(Probe {
+            copied_command: read(self.copied_command, 2)? as u16,
+            packet_token: read(self.packet_token, 1)? as u8,
+            sender_token: read(self.sender_token, 1)? as u8,
+            consumer_token: read(self.consumer_token, 1)? as u8,
+            sender_command: read(self.sender_command, 2)? as u16,
+            staged_render_command: read(self.staged_render_command, 2)? as u16,
+            staged_render_token: read(self.staged_render_token, 1)? as u8,
+            drained,
+            uilib_waiting: statuses.last().copied().flatten() == Some(QUEUE_WAIT),
+            graphics,
+        })
     }
 
     pub fn sample(&self, machine: &Machine) -> Result<GateSample, String> {

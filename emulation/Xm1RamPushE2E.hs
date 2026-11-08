@@ -29,7 +29,7 @@ import System.Posix.Files (setFileMode)
 import System.Posix.Temp (mkdtemp)
 import Text.Read (readMaybe)
 import Emulation.CheckpointKey (CheckpointRoute (..), Interpreter (..), RouteKey (..), UnicornLibrary (..), guestState, hostProcedure, procedureHex, routeKey, routeKeyHex)
-import Emulation.Sha256 (parseSha256Hex, sha256, sha256File, sha256Hex)
+import Emulation.Sha256 (sha256, sha256File, sha256Hex)
 import Emulation.SegmentReceipt (SegmentReceipt (..), SegmentResult (..), elapsedSeconds, segmentName, segmentNameText)
 import Emulation.Symbols (SymbolTable, parseSymbolTable, resolveSymbol)
 import Emulation.PreservationObservation
@@ -51,7 +51,7 @@ import Emulation.ViewerRuntime (FixedSceneFrame (..), fixedSceneFrameArguments)
 import EmulatorUsb
 import FujiAF.RamPush
 import FujiAF.Transport (ensurePrivateDirectory, writePrivateBytes)
-import Xm1UnreviewedRelink (runUnreviewedRamPush, runUnreviewedRamUnload, withPrelinkedBuild, withUnreviewedBuild, withUnreviewedBuildArchive)
+import Xm1UnreviewedRelink (runUnreviewedRamPush, runUnreviewedRamUnload, withUnreviewedBuild, withUnreviewedBuildArchive)
 import RamPushReviewedPins (reviewedContract)
 import RamPushProcedure (procedureSourcesDigest)
 import RamPushCcReviewedPins (reviewedCcContract)
@@ -772,11 +772,7 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
         | otherwise = case relinkMode settings of
             ReviewedRelink -> withPinnedReviewedBuild (payloadContract selected) selected base action
             UnreviewedRelink policy -> case modalOwnedPackage settings of
-              Just owned -> case prelinkedModalBuild settings of
-                Just directory -> do
-                  archive <- either (ioError . userError) pure (parseSha256Hex (ownedArchiveDigest owned))
-                  withPrelinkedBuild directory archive selected policy base action
-                Nothing -> withUnreviewedBuildArchive (ownedArchivePath owned) selected policy base action
+              Just owned -> withUnreviewedBuildArchive (ownedArchivePath owned) selected policy base action
               Nothing -> withUnreviewedBuild selected policy base action
       pushWith observer retained
         | experimental = runRamPushWith xm1PeerCacheAvailability observer (retainedAllocation retained)
@@ -1532,7 +1528,7 @@ runSegments runner segments = forM (zip [0 :: Int ..] segments) $ \(index, liste
     Nothing -> pure (beforeCursor, [])
     Just step -> do
       atExit <- emulatorTraceHitCount emulator beforeCursor
-      let leadingSources = if atExit > before then [emulatorTraceHitSource emulator beforeCursor atExit] else []
+      let leadingSources = if atExit > before then [emulatorTraceHitSource emulator beforeCursor (TraceHitCursor atExit) (TraceHitSnapshot atExit)] else []
       pressed <- if segmentObserve segment
         then observe emulator (segmentKeyPulse segment) [step]
         else [] <$ (presses emulator (segmentKeyPulse segment) [step] `catch` \(failure :: IOException) ->
@@ -1592,7 +1588,7 @@ runSegments runner segments = forM (zip [0 :: Int ..] segments) $ \(index, liste
       pure (expected, fromIntegral (B.head bytes `shiftR` 4) :: Word32))
     (segmentFilmRow segment)
   after <- emulatorTraceHitCount emulator resume
-  let trailingSources = if after > cursorInt resume then [emulatorTraceHitSource emulator resume after] else []
+  let trailingSources = if after > cursorInt resume then [emulatorTraceHitSource emulator resume (TraceHitCursor after) (TraceHitSnapshot after)] else []
       sources = leadingSources ++ trailingSources
       format = TraceHitFormat (runnerLrLabels runner) (runnerSpLabels runner) (runnerTraceLabels runner)
   effects <- foldTraceHitSources sources (\effects hit -> pure (addHitEffect runner effects hit)) emptyEffects
@@ -1626,7 +1622,7 @@ cursorInt (TraceHitCursor value) = value
 writeRendezvousExit :: SegmentRunner -> Segment -> Step -> [Value] -> Int -> Int -> IO Value
 writeRendezvousExit runner segment step observed atExit afterExit = do
   let emulator = runnerEmulator runner
-      sources = if afterExit > atExit then [emulatorTraceHitSource emulator (TraceHitCursor atExit) afterExit] else []
+      sources = if afterExit > atExit then [emulatorTraceHitSource emulator (TraceHitCursor atExit) (TraceHitCursor afterExit) (TraceHitSnapshot afterExit)] else []
       format = TraceHitFormat (runnerLrLabels runner) (runnerSpLabels runner) (runnerTraceLabels runner)
   effects <- foldTraceHitSources sources (\effects hit -> pure (addHitEffect runner effects hit)) emptyEffects
   index <- length <$> readIORef (runnerRendezvousExits runner)

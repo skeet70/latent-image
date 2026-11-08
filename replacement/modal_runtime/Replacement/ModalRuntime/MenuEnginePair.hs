@@ -20,6 +20,8 @@ module Replacement.ModalRuntime.MenuEnginePair
   , RtcByteIndex (..)
   , ClockEvidence (..)
   , checkConstantClockInputs
+  , ClockEvidenceReader (..)
+  , checkConstantClockInputsReader
   , parseSessionClockHits
   , observationPhaseOf
   , segmentResidencies
@@ -610,7 +612,7 @@ checkConstantClockInputs stock owned = do
   unless (left == right) (Left "the roles' observed MCU/calendar inputs differ")
  where
   collect evidence = do
-    state <- foldM sample (ClockInputState Nothing M.empty SampleMissing) (clockSessionHits evidence)
+    state <- foldM sampleClockHit (ClockInputState Nothing M.empty SampleMissing) (clockSessionHits evidence)
     final <- foldM segment state (clockSegments evidence)
     unless (clockSampleCoverage final == SampleSeen && M.size (clockRtcBytes final) == 4)
       (Left "controlled clock lacks successful calendar and all four MCU byte observations")
@@ -618,8 +620,47 @@ checkConstantClockInputs stock owned = do
   segment state observation = do
     current <- clockRead CurrentCalendar observation >>= observeCalendar state
     sampled <- clockRead SampledCalendar observation >>= observeCalendar current
-    foldM sample sampled (observationHits observation)
-  sample state hit = case hitSite hit of
+    foldM sampleClockHit sampled (observationHits observation)
+
+data ClockEvidenceReader = ClockEvidenceReader
+  { clockReaderSessionHits :: [Hit]
+  , clockReaders :: [ObservationReader]
+  }
+
+checkConstantClockInputsReader :: ClockEvidenceReader -> ClockEvidenceReader -> IO (Either String ())
+checkConstantClockInputsReader stock owned = do
+  left <- collect stock
+  right <- collect owned
+  pure $ do
+    l <- left
+    r <- right
+    unless (l == r) (Left "the roles' observed MCU/calendar inputs differ")
+ where
+  collect :: ClockEvidenceReader -> IO (Either String ClockInputState)
+  collect evidence = do
+    case foldM sampleClockHit (ClockInputState Nothing M.empty SampleMissing) (clockReaderSessionHits evidence) of
+      Left problem -> pure (Left problem)
+      Right state -> go state (clockReaders evidence)
+  go :: ClockInputState -> [ObservationReader] -> IO (Either String ClockInputState)
+  go state [] = pure (Right state)
+  go state (reader:rest) = do
+    result <- segmentReader state reader
+    case result of
+      Left problem -> pure (Left problem)
+      Right next -> go next rest
+  segmentReader state reader = do
+    case clockReadReader CurrentCalendar reader >>= observeCalendar state of
+      Left problem -> pure (Left problem)
+      Right current -> case clockReadReader SampledCalendar reader >>= observeCalendar current of
+        Left problem -> pure (Left problem)
+        Right sampled -> readerFoldHits reader sampleClockHit sampled
+  clockReadReader field reader = case [bytes | (name,bytes) <- readerReads reader, name == label] of
+    [bytes] -> calendarInput bytes
+    _ -> Left ("missing or repeated clock input in " ++ T.unpack (readerPhase reader))
+   where label = case field of CurrentCalendar -> "rtc-calendar-current"; SampledCalendar -> "rtc-calendar-sample"
+
+sampleClockHit :: ClockInputState -> Hit -> Either String ClockInputState
+sampleClockHit state hit = case hitSite hit of
     CalendarSample -> do
       let (status,_,_,_) = hitRegisters hit
       unless (status == 0) (Left "MCU calendar sampling failed")

@@ -36,13 +36,32 @@ pub struct Hit {
     /// The site's physical reads at entry, in hex, in `TraceSites::site_reads` order.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub memory: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub stack_memory: Vec<StackRead>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub observation: Option<calls::Observation>,
 }
 
-/// A physical range a site's hits read at entry.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SiteRead { pub address: u64, pub count: usize }
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum SiteRead {
+    Absolute([u64; 2]),
+    Stack { sp: i32, bytes: usize },
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct StackRead {
+    kind: StackReadKind,
+    sp: i32,
+    address: String,
+    bytes: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+enum StackReadKind {
+    #[serde(rename = "sp")]
+    Sp,
+}
 
 #[derive(Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -54,7 +73,7 @@ pub enum RegisterCapture {
 
 pub fn parse_site_reads(
     sites: &BTreeMap<String, String>,
-    reads: &BTreeMap<String, Vec<[u64; 2]>>,
+    reads: &BTreeMap<String, Vec<SiteRead>>,
 ) -> Result<BTreeMap<u32, Vec<SiteRead>>, String> {
     reads.iter().map(|(site, ranges)| {
         if !sites.contains_key(site) {
@@ -63,13 +82,21 @@ pub fn parse_site_reads(
         let address = site.strip_prefix("0x")
             .and_then(|digits| u32::from_str_radix(digits, 16).ok())
             .ok_or_else(|| format!("invalid trace site address {site}"))?;
-        let ranges = ranges.iter().map(|&[address, count]| {
-            let count = usize::try_from(count).map_err(|_| "trace site read count exceeds the host")?;
-            if !(1..=4096).contains(&count)
-                || address.checked_add(count as u64).is_none_or(|end| end > 1 << 32) {
-                return Err("a trace site read requires an address and 1..4096 bytes".to_owned());
+        let ranges = ranges.iter().map(|read| match *read {
+            SiteRead::Absolute([address, count]) => {
+                let count = usize::try_from(count).map_err(|_| "trace site read count exceeds the host")?;
+                if !(1..=4096).contains(&count)
+                    || address.checked_add(count as u64).is_none_or(|end| end > 1 << 32) {
+                    return Err("a trace site read requires an address and 1..4096 bytes".to_owned());
+                }
+                Ok(SiteRead::Absolute([address, count as u64]))
             }
-            Ok(SiteRead { address, count })
+            SiteRead::Stack { sp, bytes } => {
+                if !(1..=4096).contains(&bytes) {
+                    return Err("a stack-relative trace read requires 1..4096 bytes".to_owned());
+                }
+                Ok(SiteRead::Stack { sp, bytes })
+            }
         }).collect::<Result<Vec<_>, String>>()?;
         Ok((address, ranges))
     }).collect()
@@ -1138,9 +1165,8 @@ impl TraceSites {
     }
 
     /// The installed-lifetime guard's memory watch, which the modal observation owns exclusively.
-    pub fn modal_watch_state(&self) -> Option<Result<serde_json::Value, String>> {
+    pub fn modal_watch_state(&self) -> Option<impl Serialize + '_> {
         self.modal_observation.as_ref().and_then(ModalTrace::watch_evidence)
-            .map(|evidence| serde_json::to_value(evidence).map_err(|failure| format!("modal watch state: {failure}")))
     }
 
     pub fn begin_modal_observation(&mut self, session: &Session, config: ModalConfig) -> Result<(), String> {
@@ -1822,6 +1848,30 @@ impl TraceSites {
                     .collect::<Result<_, String>>()?;
                 let (observation, call_return) = self.calls.observe(session, *core, address)?;
                 call_returns.extend(call_return);
+                let sp = register(session, *core, arm::Register::R(13))?;
+                let mut memory = Vec::new();
+                let mut stack_memory = Vec::new();
+                for read in self.site_reads.get(&address).into_iter().flatten() {
+                    let (resolved, count) = match *read {
+                        SiteRead::Absolute([address, count]) => (address, count as usize),
+                        SiteRead::Stack { sp: offset, bytes } => {
+                            let address = i64::from(sp) + i64::from(offset);
+                            if address < 0 || address + bytes as i64 > 1i64 << 32 {
+                                return Err("stack-relative trace read exceeds the guest address space".into());
+                            }
+                            (address as u64, bytes)
+                        }
+                    };
+                    let mut bytes = vec![0; count];
+                    session.board.read_physical(resolved, &mut bytes)?;
+                    let bytes = bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+                    match *read {
+                        SiteRead::Absolute(_) => memory.push(bytes),
+                        SiteRead::Stack { sp, .. } => stack_memory.push(StackRead {
+                            kind: StackReadKind::Sp, sp, address: format!("{resolved:#x}"), bytes,
+                        }),
+                    }
+                }
                 self.hits.push(Hit {
                     site,
                     address: format!("{address:#x}"),
@@ -1829,15 +1879,12 @@ impl TraceSites {
                     instructions,
                     render_object_provenance_sequence: self.render_object_provenance_sequence,
                     registers,
-                    sp: format!("{:#x}", register(session, *core, arm::Register::R(13))?),
+                    sp: format!("{sp:#x}"),
                     lr: format!("{:#x}", register(session, *core, arm::Register::R(14))?),
                     cpsr: register(session, *core, arm::Register::Cpsr)?,
                     code_word: self.code_binding.as_ref().map(|binding| binding.sample(session, *core, address)).transpose()?.flatten(),
-                    memory: self.site_reads.get(&address).map(|reads| reads.iter().map(|read| {
-                        let mut bytes = vec![0; read.count];
-                        session.board.read_physical(read.address, &mut bytes)?;
-                        Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>())
-                    }).collect::<Result<Vec<_>, String>>()).transpose()?.unwrap_or_default(),
+                    memory,
+                    stack_memory,
                     observation,
                 });
                 if let StackPoint::Inside { index, next } = scoped {

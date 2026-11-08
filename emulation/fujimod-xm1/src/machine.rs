@@ -564,7 +564,8 @@ impl Machine {
     fn observed_frame(&self) -> Result<Option<(serde_json::Value, usize, ScanoutFrame)>, String> {
         let name = &self.document.scanout.0;
         let state = self.session.scanout_state(name)?;
-        let presented = state["instances"].as_array().into_iter().flatten().find(|instance| {
+        let instances = state["instances"].as_array().into_iter().flatten();
+        let graphics = instances.clone().find(|instance| {
             instance["graphics"]
                 .as_array()
                 .into_iter()
@@ -577,14 +578,22 @@ impl Machine {
                         && channel["height"].as_u64().is_some_and(|n| n > 1)
                 })
         });
-        let Some(instance) = presented.and_then(|instance| instance["instance"].as_u64()) else {
-            return Ok(None);
-        };
-        let instance = usize::try_from(instance).map_err(|_| "scanout instance")?;
-        let Some(frame) = self.session.scanout(name, instance, true, false)? else {
-            return Ok(None);
-        };
-        Ok(Some((state, instance, frame)))
+        if let Some(metadata) = graphics {
+            if let Some(instance) = metadata["instance"].as_u64() {
+                let instance = usize::try_from(instance).map_err(|_| "scanout instance")?;
+                if let Some(frame) = self.session.scanout(name, instance, true, false)? {
+                    return Ok(Some((state, instance, frame)));
+                }
+            }
+        }
+        for metadata in instances {
+            let instance = metadata["instance"].as_u64().ok_or_else(|| format!("scanout instance missing; native_scanout_state={state}"))?;
+            let instance = usize::try_from(instance).map_err(|_| "scanout instance")?;
+            if let Some(frame) = self.session.scanout(name, instance, true, false)? {
+                return Ok(Some((state, instance, frame)));
+            }
+        }
+        Ok(None)
     }
 
     pub fn read(&self, address: u64, count: usize) -> Result<Vec<u8>, String> {

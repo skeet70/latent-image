@@ -252,7 +252,7 @@ enum DisplayCompletion { AvailablePlane, AcknowledgedFrame }
 enum Request {
     List,
     Transfer(Transfer),
-    TraceSites { sites: BTreeMap<String, String>, #[serde(default)] reads: BTreeMap<String, Vec<[u64; 2]>> },
+    TraceSites { sites: BTreeMap<String, String>, #[serde(default)] reads: BTreeMap<String, Vec<SiteRead>> },
     TraceHits { from: usize, #[serde(default)] limit: Option<std::num::NonZeroUsize> },
     ModalObservationBegin(ModalBeginRequest),
     ModalObservationReport,
@@ -1178,7 +1178,7 @@ impl Server {
             Request::WatchState => match &self.watch {
                 Some(watch) => watch.records.borrow().state(),
                 None => match self.bridge.machine.traces.modal_watch_state() {
-                    Some(state) => state?,
+                    Some(state) => serde_json::to_value(state).map_err(|failure| failure.to_string())?,
                     None => return Err("watch-state requires an armed memory watch".into()),
                 },
             },
