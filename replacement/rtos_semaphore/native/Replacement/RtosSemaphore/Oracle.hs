@@ -34,6 +34,7 @@ import Data.Aeson (FromJSON (..), eitherDecodeStrict', withObject, (.:))
 import Data.Bits ((.&.), (.|.), complement, shiftL, shiftR)
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
+import Data.List (sortOn)
 import Data.Maybe (isJust)
 import Data.Word (Word32, Word8)
 import Emulation.CachedNativeBatch (BatchReuse, cachedObservedBatch)
@@ -49,6 +50,7 @@ import Emulation.NativeObservation
   , Write (..)
   , WriteValue (..)
   )
+import qualified Replacement.RtosPlatform.Aggregate as Agg
 import Emulation.OwnedCase
   ( CaseOutcome (..)
   , CaseSpec (..)
@@ -352,7 +354,7 @@ data Case = Case
   , caseRestoresMask :: Bool
   }
 
-data Image = Image {imageBase :: Word32, imageBytes :: B.ByteString}
+data Image = Image {imageBase :: Word32, imageBytes :: B.ByteString, imageSymbols :: [Agg.AggregateSymbol]}
 
 data Run = Run
   { runDomain :: Domain
@@ -945,12 +947,36 @@ overlay (GuestAddress start) initial words' = B.concat (pieces 0 ordered)
             : word32le value
             : pieces (offset + 4) rest
 
-codeBytes :: Domain -> Image -> Image -> [(Word32, Word32)] -> B.ByteString
-codeBytes domain loader owned extra = install (timerRemoval domain) timerStub (foldl patch original (extents domain))
+aggregate :: Image -> Bool
+aggregate image = not (null (imageSymbols image))
+
+symbolSpans :: Image -> [(Word32, Word32)]
+symbolSpans image = [(Agg.symbolAddress symbol, Agg.symbolSize symbol) | symbol <- imageSymbols image]
+
+ownedSpans :: Domain -> Role -> Image -> [(Word32, Word32)]
+ownedSpans domain role owned
+  | role == OwnedRole, aggregate owned = symbolSpans owned
+  | otherwise = extents domain
+
+codeBounds :: Domain -> Role -> Image -> [(Word32, Word32)] -> (Word32, Word32)
+codeBounds domain role owned extra =
+  let spans = extents domain ++ retained domain ++ extra ++ (if role == OwnedRole then symbolSpans owned else [])
+   in (minimum (map fst spans), maximum [address + size | (address, size) <- spans])
+
+mergeSpans :: [(Word32, Word32)] -> [(Word32, Word32)]
+mergeSpans spans = go (sortOn fst spans)
   where
-    bounds = extents domain ++ retained domain ++ extra
-    base = minimum (map fst bounds)
-    top = maximum [address + size | (address, size) <- bounds]
+    go [] = []
+    go ((start, size) : rest) = extend start (start + size) rest
+    extend start end [] = [(start, end - start)]
+    extend start end ((lo, size) : rest)
+      | lo <= end = extend start (max end (lo + size)) rest
+      | otherwise = (start, end - start) : extend lo (lo + size) rest
+
+codeBytes :: Domain -> Role -> Image -> Image -> [(Word32, Word32)] -> B.ByteString
+codeBytes domain role loader owned extra = install (timerRemoval domain) timerStub (foldl patch original patches)
+  where
+    (base, top) = codeBounds domain role owned extra
     slice image address size =
       if address < imageBase image
         || toInteger address + toInteger size > toInteger (imageBase image) + toInteger (B.length (imageBytes image))
@@ -960,7 +986,11 @@ codeBytes domain loader owned extra = install (timerRemoval domain) timerStub (f
     install address bytes current =
       let offset = fromIntegral (address - base)
        in B.take offset current <> bytes <> B.drop (offset + B.length bytes) current
-    patch current (address, size) = install address (slice owned address size) current
+    patches = ownedSpans domain role owned
+    aggregateImage = Agg.AggregateImage (imageBase owned) (imageBytes owned)
+    patch current (address, size)
+      | role == OwnedRole, aggregate owned = install address (either error id (Agg.sliceAggregate aggregateImage address size)) current
+      | otherwise = install address (slice owned address size) current
 
 tickEntry :: Domain -> Word32
 tickEntry DomainA = 0x44d8c
@@ -1082,11 +1112,11 @@ caseSpec facts executing role loader owned one
       , caseEntry = wire (entries executing (caseService one))
       , caseExit = wire exitAddress
       , caseRegions =
-          [mkRegion (RegionId "code") (wire codeBase) (fromIntegral (codeTop - codeBase)) ReadExecute (codeBytes executing loader owned extra)]
+          [mkRegion (RegionId "code") (wire codeBase) (fromIntegral (codeTop - codeBase)) ReadExecute (codeBytes executing role loader owned extra)]
             ++ [mkRegion ident (wire (guestWord address)) size permission (overlay address background words') | Page ident address size permission background <- dataPages]
             ++ [mkRegion (RegionId "continuations") (wire exitAddress) (fromIntegral (stopAddress - exitAddress + 4)) ReadExecute (continuationBytes facts executing one)]
       , caseFunctions =
-          [(wire address, size) | (address, size) <- extents executing ++ retained executing ++ extra]
+          [(wire address, size) | (address, size) <- mergeSpans (ownedSpans executing role owned ++ retained executing ++ extra)]
             ++ [(wire wakerStubBase, 0x80) | isJust (caseWaker one)]
       , caseInitial = initialRegisters executing one
       , caseExpectedStatus = if isJust budget then InstructionBudget else if arrival then StopAddress else Returned
@@ -1104,8 +1134,7 @@ caseSpec facts executing role loader owned one
       | arrival = [(Pc, stopAddress), (Sp, targetStack)]
       | otherwise = [(R0, expectationResult expectation)]
     extra = wakerCodeExtents executing one
-    codeBase = minimum (map fst (extents executing ++ retained executing ++ extra))
-    codeTop = maximum [address + size | (address, size) <- extents executing ++ retained executing ++ extra]
+    (codeBase, codeTop) = codeBounds executing role owned extra
     dataPages = pages facts loader one
     words' = layoutWords facts executing one
       ++ [ poke (dfHandlerContext (domainFacts facts executing)) (if caseHandler one then 1 else 0)

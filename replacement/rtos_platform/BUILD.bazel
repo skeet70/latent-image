@@ -11,6 +11,17 @@ exports_files([
     "veneer-b.S",
 ])
 
+haskell_library(
+    name = "aggregate",
+    srcs = ["aggregate/Replacement/RtosPlatform/Aggregate.hs"],
+    src_strip_prefix = "aggregate",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
+
 xm1_rust_staticlib(
     name = "platform-root",
     src = "src/lib.rs",

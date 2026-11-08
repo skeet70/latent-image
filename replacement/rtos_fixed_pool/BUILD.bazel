@@ -119,6 +119,7 @@ haskell_library(
         "//host:bytestring",
         "//host:containers",
         "//host:filepath",
+        "//replacement/rtos_platform:aggregate",
     ],
 )
 

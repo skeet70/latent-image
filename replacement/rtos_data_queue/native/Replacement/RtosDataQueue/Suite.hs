@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Replacement.RtosDataQueue.Suite
-  ( Image (..), CaseRun (..), ControlRun (..), extents, runDomain ) where
+  ( Image (..), Aggregate (..), CaseRun (..), ControlRun (..), extents, runDomain ) where
 
 import Control.Monad (forM, unless)
 import Data.Aeson (FromJSON (..), eitherDecodeStrict', withObject, (.:), (.:?))
@@ -15,11 +15,14 @@ import Emulation.NativeCase (CaseId (..), caseIdText)
 import qualified Emulation.NativeObservation as N
 import Emulation.NativeObservation (Barrier (..), KernelObservation (..), NativeObservation (..), Ordered (..), RegionId (..), Register (..), RunnerStatus (..), Write (..), WriteValue (..), regionName, runnerStatusLabel)
 import Emulation.OwnedCase (CaseOutcome (..), CaseSpec (..), KernelCase (..), Permission (..), assemble, caseOutcome, mkRegion, mkStackContext, plainLimit, readWordAt, word32le, writeBatch)
+import qualified Replacement.RtosPlatform.Aggregate as Agg
 import Replacement.RtosDataQueue.Layout
 import Replacement.RtosOwnFirst.Regions (Domain (..), GuestAddress (..), domainLabel)
 import System.FilePath ((</>))
 
 data Image = Image { imageBase :: Word32, imageBytes :: B.ByteString }
+
+data Aggregate = Aggregate { aggregateImage :: Agg.AggregateImage, aggregateSymbols :: [Agg.AggregateSymbol] }
 
 data Call = Create | Delete | Send | SendPoll | SendPollHandler | SendTimeout
           | ForceSend | ForceSendHandler | Receive | ReceivePoll | ReceiveTimeout
@@ -800,14 +803,21 @@ install image address bytes current =
   let offset = fromIntegral (address - imageBase image)
    in B.take offset current <> bytes <> B.drop (offset + B.length bytes) current
 
+aggregateImageBytes :: Image -> Maybe Aggregate -> B.ByteString
+aggregateImageBytes image Nothing = imageBytes image
+aggregateImageBytes image (Just aggregate) =
+  foldl install (imageBytes image) (aggregateSymbols aggregate)
+  where
+    install current symbol = either error id (Agg.installSymbol (imageBase image) current (aggregateImage aggregate) symbol)
+
 -- | The stock role runs the stock timer block; the owned role overlays the owned timer module at
 -- | its stock extents and the stock timeout callback the family does not own.
-codeBytes :: Facts -> Domain -> Bool -> Image -> Image -> Image -> B.ByteString
-codeBytes _ domain owned timerImage image stockImage
+codeBytes :: Facts -> Domain -> Bool -> Maybe Aggregate -> Image -> Image -> Image -> B.ByteString
+codeBytes _ domain owned aggregate timerImage image stockImage
   | not owned = imageBytes stockImage
   | otherwise =
       install image (timeoutCallback domain) (sliceImage stockImage (timeoutCallback domain) timeoutCallbackSize)
-        (install image (timerModuleStart domain) (sliceImage timerImage (timerModuleStart domain) (fromIntegral (timerModuleSpan domain))) (imageBytes image))
+        (install image (timerModuleStart domain) (sliceImage timerImage (timerModuleStart domain) (fromIntegral (timerModuleSpan domain))) (aggregateImageBytes image aggregate))
 
 pages :: Facts -> Domain -> Case -> [Page]
 pages facts domain one =
@@ -839,8 +849,8 @@ initialRegisters facts _ one =
   where
     value register = maybe (seedRegister register) id (lookup register (caseArgs one))
 
-caseFor :: Facts -> Domain -> Bool -> Image -> [(Word32, Word32)] -> Image -> Image -> Case -> CaseSpec
-caseFor facts domain owned timerImage ownedSymbols image stockImage one =
+caseFor :: Facts -> Domain -> Bool -> Maybe Aggregate -> Image -> [(Word32, Word32)] -> Image -> Image -> Case -> CaseSpec
+caseFor facts domain owned aggregate timerImage ownedSymbols image stockImage one =
   CaseSpec
     { caseId = caseIdText (caseName one) ++ "-" ++ domainLabel domain
     , caseProvenance = "X-M1 1.50 data-queue stock ABI, x70view 55436fc85c0560dd252b0410af6f2427fe198cd3; synthetic queue, task, actor and timer-heap state"
@@ -859,13 +869,14 @@ caseFor facts domain owned timerImage ownedSymbols image stockImage one =
     }
   where
     dataPages = pages facts domain one
-    code = codeBytes facts domain owned timerImage image stockImage
+    code = codeBytes facts domain owned aggregate timerImage image stockImage
     codeBase = imageBase image
     actorFunction = [(actorBase, fromIntegral (B.length body)) | Actor body <- maybe [] pure (caseActor one)]
     wrapperFunction = [(wrapperBase, fromIntegral (B.length (wrapperBytes facts domain)))]
+    aggregateFunctions = maybe [] (map (\symbol -> (Agg.symbolAddress symbol, Agg.symbolSize symbol)) . aggregateSymbols) aggregate
     functions = sortOn fst $
       if owned
-        then ownedSymbols ++ actorFunction ++ wrapperFunction ++ [(timerModuleStart domain, timerModuleSpan domain), (timeoutCallback domain, fromIntegral timeoutCallbackSize)]
+        then mergeSpans (ownedSymbols ++ aggregateFunctions ++ actorFunction ++ wrapperFunction ++ [(timerModuleStart domain, timerModuleSpan domain), (timeoutCallback domain, fromIntegral timeoutCallbackSize)])
         else extents domain ++ actorFunction ++ wrapperFunction
     stackContexts = case caseActor one of
       Nothing -> []
@@ -1099,11 +1110,21 @@ controlRuns facts domain one stock owned = concat
         }
     low = fst (kernelBounds facts domain)
 
-runDomain :: FilePath -> FilePath -> FilePath -> Facts -> Domain -> Image -> Image -> Image -> [(Word32, Word32)] -> IO ([CaseRun], [ControlRun])
-runDomain runner cacheRoot directory facts domain stockImage ownedImage timerImage ownedSymbols = do
+mergeSpans :: [(Word32, Word32)] -> [(Word32, Word32)]
+mergeSpans spans = go (sortOn fst spans)
+  where
+    go []=[]
+    go ((start,size):rest)=extend start (start+size) rest
+    extend start end []=[(start,end-start)]
+    extend start end ((lo,size):rest)
+      | lo<=end=extend start (max end (lo+size)) rest
+      | otherwise=(start,end-start):extend lo (lo+size) rest
+
+runDomain :: FilePath -> FilePath -> FilePath -> Facts -> Domain -> Maybe Aggregate -> Image -> Image -> Image -> [(Word32, Word32)] -> IO ([CaseRun], [ControlRun])
+runDomain runner cacheRoot directory facts domain aggregate stockImage ownedImage timerImage ownedSymbols = do
   let selected = cases facts domain
-      stockSpecs = [(one, caseFor facts domain False timerImage [] stockImage stockImage one) | one <- selected]
-      ownedSpecs = [(one, caseFor facts domain True timerImage ownedSymbols ownedImage stockImage one) | one <- selected]
+      stockSpecs = [(one, caseFor facts domain False Nothing timerImage [] stockImage stockImage one) | one <- selected]
+      ownedSpecs = [(one, caseFor facts domain True aggregate timerImage ownedSymbols ownedImage stockImage one) | one <- selected]
   stockBatch <- writeBatch (directory </> "stock") (map snd stockSpecs)
   ownedBatch <- writeBatch (directory </> "owned") (map snd ownedSpecs)
   (stockReuse, stockRaw) <- cachedObservedBatch cacheRoot runner stockBatch

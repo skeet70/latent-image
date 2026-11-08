@@ -14,6 +14,7 @@ import Replacement.RtosOwnFirst.Regions (domains,domainLabel)
 import Replacement.RtosScheduler.Layout (parseLayout)
 import Replacement.RtosScheduler.Oracle (mkEnv,runCases)
 import Replacement.RtosScheduler.Regions (parseSchedulerRegions)
+import qualified Replacement.RtosPlatform.Aggregate as Agg
 import Replacement.RtosScheduler.S3a
 import System.Directory (canonicalizePath,createDirectoryIfMissing,doesPathExist,makeAbsolute,removeDirectoryRecursive,setCurrentDirectory)
 import System.Environment (getArgs,lookupEnv)
@@ -23,6 +24,12 @@ import System.FilePath ((</>),takeDirectory)
 orFail :: Either String a -> IO a
 orFail=either fail pure
 
+optional :: [String] -> String -> IO (Maybe FilePath)
+optional args flag = case dropWhile (/= flag) args of
+  [] -> pure Nothing
+  [_] -> fail (flag ++ " needs a value")
+  _ : value : _ -> Just <$> canonicalizePath value
+
 main :: IO ()
 main=do
   args<-getArgs
@@ -31,9 +38,11 @@ main=do
   regionsPath<-input "--regions"
   layoutPath<-input "--layout"
   ownedPaths<-mapM input ["--owned-a","--owned-b"]
+  symbolsPaths<-mapM (optional args) ["--symbols-a","--symbols-b"]
   lookupEnv "BUILD_WORKSPACE_DIRECTORY" >>= mapM_ setCurrentDirectory
   loaders<-mapM (\name->input name >>= B.readFile) ["--loader-a","--loader-b"]
   owned<-mapM B.readFile ownedPaths
+  symbols<-mapM (traverse (\path->either fail pure . Agg.parseAggregateSymbols =<< B.readFile path)) symbolsPaths
   work<-required args "--work" >>= makeAbsolute
   summary<-required args "--summary" >>= makeAbsolute
   exists<-doesPathExist work
@@ -42,12 +51,15 @@ main=do
   layout<-B.readFile layoutPath >>= orFail . parseLayout
   env<-orFail (mkEnv layout regions)
   createDirectoryIfMissing True work
-  reports<-fmap concat . forM (zip3 domains loaders owned) $ \(domain,loader,bin)->do
+  reports<-fmap concat . forM (zip3 domains loaders (zip owned symbols)) $ \(domain,loader,(bin,symbols))->do
     unless (sha256Hex (sha256 loader)==loaderSha256 domain) (fail "loader identity differs")
     forM services $ \service->do
       let rows=zip [0::Int ..] (scenarios service)
           label role index=role++"-"++show index
-          spec role index row=makeSpec env domain loader (if role `elem` ["owned","mutant"] then Just bin else Nothing) service row (label role index)
+          linked = case symbols of
+            Just rows -> Just (Aggregate bin rows)
+            Nothing -> Just (Standalone bin)
+          spec role index row=makeSpec env domain loader (if role `elem` ["owned","mutant"] then linked else Nothing) service row (label role index)
           build role index row=let raw=spec role index row in case role of "equivalent"->controlSpec True raw; "mutant"->controlSpec False raw; _->raw
           roles=["stock","owned","stock-repeat","equivalent","mutant"]
           cases=[(label role index,build role index row) | (index,row)<-rows,role<-roles]
