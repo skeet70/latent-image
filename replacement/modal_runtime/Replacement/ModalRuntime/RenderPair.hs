@@ -263,7 +263,7 @@ bankWord config memory position offset =
         Just _ -> (5 + position, offset)
   in word (memory !! index) within
 
--- A state-2 slot outside the bank's list retains the last allocation's key bytes, not draw state.
+-- A bank's list holds its draw state; off-list state-2 slots are cache entries.
 liveObjects :: RenderConfig -> [B.ByteString] -> Int -> Either String [Int]
 liveObjects config memory position = do
   let bank = renderBanks config !! position
@@ -286,6 +286,11 @@ liveObjects config memory position = do
 liveObjectSets :: RenderConfig -> [B.ByteString] -> Either String [[Int]]
 liveObjectSets config memory = mapM (liveObjects config memory) [0 .. length (renderBanks config) - 1]
 
+bankLive :: RenderConfig -> [[Int]] -> Int -> [Int]
+bankLive config sets bank = case lookup bank (zip (renderBanks config) [0..]) of
+  Just position -> sets !! position
+  Nothing -> []
+
 liveAddresses :: RenderConfig -> [[Int]] -> S.Set ObjectAddress
 liveAddresses config sets = S.fromList
   [ObjectAddress (0x15e7538 + fromIntegral bank*27136 + fromIntegral index*212) | (position, bank) <- zip [0..] (renderBanks config), index <- sets !! position]
@@ -305,8 +310,11 @@ sameMemoryValue config left right =
     && case (liveObjectSets config a, liveObjectSets config b) of
         (Right liveLeft, Right liveRight) | liveLeft == liveRight ->
           let rightVisible = liveHandles config liveRight rightHandles
+              segmentsA = memorySegments config a
+              segmentsB = memorySegments config b
+              lives = map (\(bank,_,_) -> bankLive config liveLeft bank) segmentsA
           in M.foldrWithKey (\object identity rest -> rest && maybe True (== identity) (M.lookup object rightVisible)) True (liveHandles config liveLeft leftHandles)
-            && and (zipWith3 (sameSegmentValue config leftHandles rightHandles) liveLeft (memorySegments config a) (memorySegments config b))
+            && and (zipWith3 (sameSegmentValue config leftHandles rightHandles) lives segmentsA segmentsB)
         _ -> False
 
 drawDifference :: RenderConfig -> Draw -> Draw -> String
@@ -334,10 +342,14 @@ drawDifference config left right
     Just (offset, x, y) -> Just ("prefix offset " ++ show offset ++ " stock=" ++ hexByte x ++ " owned=" ++ hexByte y)
     Nothing -> Nothing
   segmentDifference = case (liveObjectSets config a, liveObjectSets config b) of
-    (Right liveLeft, Right liveRight) | liveLeft == liveRight -> listToMaybe
-      ["bank " ++ show bank ++ " offset " ++ show (offset + i) ++ " stock=" ++ hexByte (B.index x i) ++ " owned=" ++ hexByte (B.index y i)
-      | (live,(bank,offset,x),(_,_,y)) <- zip3 liveLeft (memorySegments config a) (memorySegments config b)
-      , i <- take 1 [i | i <- [0 .. min (B.length x) (B.length y) - 1], B.index x i /= B.index y i, (offset+i) `div` 212 `elem` live, not (sameHandleByte config leftHandles rightHandles bank (offset+i))]]
+    (Right liveLeft, Right liveRight) | liveLeft == liveRight ->
+      let segmentsA = memorySegments config a
+          segmentsB = memorySegments config b
+          lives = map (\(bank,_,_) -> bankLive config liveLeft bank) segmentsA
+      in listToMaybe
+        ["bank " ++ show bank ++ " offset " ++ show (offset + i) ++ " stock=" ++ hexByte (B.index x i) ++ " owned=" ++ hexByte (B.index y i)
+        | (live,(bank,offset,x),(_,_,y)) <- zip3 lives segmentsA segmentsB
+        , i <- take 1 [i | i <- [0 .. min (B.length x) (B.length y) - 1], B.index x i /= B.index y i, not (segmentByteAllowed config leftHandles rightHandles live bank offset i)]]
     (Right _, Right _) -> Just "render bank lists differ"
     (Left problem, _) -> Just ("stock render bank list: " ++ problem)
     (_, Left problem) -> Just ("owned render bank list: " ++ problem)
@@ -355,9 +367,22 @@ firstChunkDifference = go 0
        | otherwise -> go (offset + B.length x) xs ys
   go offset _ _ = Just (offset, 0, 0)
 
+-- ov48b_find_object and ov48b_allocate_object read state, handle, identifier, text, x and y.
+-- Off-list key and styling bytes are the only stale content.
+controlByte :: Int -> Bool
+controlByte within = within < 0x14 || (within >= 0x34 && within < 0x38)
+
+segmentByteAllowed :: RenderConfig -> M.Map ObjectAddress HandleIdentity -> M.Map ObjectAddress HandleIdentity -> [Int] -> Int -> Int -> Int -> Bool
+segmentByteAllowed config left right live bank offset index =
+  let within = (offset + index) `mod` 212
+      object = (offset + index) `div` 212
+      handle = within >= 4 && within < 8 && sameHandleByte config left right bank (offset + index)
+      content = object `notElem` live && not (controlByte within)
+  in handle || content
+
 sameSegmentValue :: RenderConfig -> M.Map ObjectAddress HandleIdentity -> M.Map ObjectAddress HandleIdentity -> [Int] -> (Int,Int,B.ByteString) -> (Int,Int,B.ByteString) -> Bool
 sameSegmentValue config left right live (bank,offset,a) (_,_,b) = B.length a == B.length b && (a == b || and
-  [ B.index a i == B.index b i || not ((offset+i) `div` 212 `elem` live) || sameHandleByte config left right bank (offset+i) | i <- [0..B.length a-1] ])
+  [ B.index a i == B.index b i || segmentByteAllowed config left right live bank offset i | i <- [0..B.length a-1] ])
 
 sameHandleByte :: RenderConfig -> M.Map ObjectAddress HandleIdentity -> M.Map ObjectAddress HandleIdentity -> Int -> Int -> Bool
 sameHandleByte _ left right bank offset =
