@@ -27,6 +27,7 @@ xm1_rust_staticlib(
             "//replacement/rtos_scheduler:src/s3a.rs",
             "//replacement/rtos_scheduler:src/s3b.rs",
             "//replacement/rtos_layout:src/lib.rs",
+            "//replacement/rtos_reservation:src/lib.rs",
         ],
         rustc_flags = [
             "--cfg",
@@ -60,7 +61,10 @@ xm1_rust_staticlib(
         name = "scheduler-s3c-%s-rlib" % domain,
         src = "//replacement/rtos_scheduler:src/s3c.rs",
         crate_name = "xm1_rtos_scheduler_s3c",
-        data = ["//replacement/rtos_layout:src/lib.rs"],
+        data = [
+            "//replacement/rtos_layout:src/lib.rs",
+            "//replacement/rtos_reservation:src/lib.rs",
+        ],
         rustc_flags = [
             "--cfg",
             "'feature=\"domain-%s\"'" % domain,
@@ -79,6 +83,7 @@ xm1_rust_staticlib(
         data = [
             "//replacement/rtos_own_first:src/entries.rs",
             "//replacement/rtos_layout:src/lib.rs",
+            "//replacement/rtos_reservation:src/lib.rs",
         ],
         rustc_flags = [
             "--cfg",
@@ -97,6 +102,7 @@ xm1_rust_staticlib(
         crate_name = "xm1_rtos_semaphore_stage",
         data = [
             "//replacement/rtos_layout:src/lib.rs",
+            "//replacement/rtos_reservation:src/lib.rs",
             "//replacement/rtos_semaphore:src/admission.rs",
             "//replacement/rtos_semaphore:src/block.rs",
             "//replacement/rtos_semaphore:src/count.rs",
@@ -141,6 +147,7 @@ xm1_rust_staticlib(
             "//replacement/rtos_fixed_pool:src/teardown.rs",
             "//replacement/rtos_fixed_pool:src/timeout.rs",
             "//replacement/rtos_layout:src/lib.rs",
+            "//replacement/rtos_reservation:src/lib.rs",
         ],
         rustc_flags = [
             "--cfg",
@@ -161,6 +168,7 @@ xm1_rust_staticlib(
         crate_name = "xm1_rtos_task_records_abi",
         data = [
             "//replacement/rtos_layout:src/lib.rs",
+            "//replacement/rtos_reservation:src/lib.rs",
             "//replacement/rtos_task_records:src/lib.rs",
         ],
         rustc_flags = [
@@ -182,6 +190,7 @@ xm1_rust_rlib(
     data = [
         "//replacement/rtos_global_lock:src/lib.rs",
         "//replacement/rtos_layout:src/lib.rs",
+        "//replacement/rtos_reservation:src/lib.rs",
     ],
     rustc_flags = [
         "--cfg",

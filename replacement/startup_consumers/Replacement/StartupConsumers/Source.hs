@@ -17,6 +17,7 @@ import qualified Emulation.LoaderPrefixWitness as P
 import qualified Emulation.PrimaryInitializerSource as A
 import qualified Replacement.KernelInstall.Artifact as K
 import Replacement.KernelInstall.Wire (Address (..), WordValue (..))
+import qualified Replacement.StartupConsumers.Reservation as R
 import Replacement.StartupConsumers.Wire (Family (..))
 
 data SourceFiles = SourceFiles
@@ -73,18 +74,30 @@ data AllocationResult
 reserve :: AllocationInput -> AllocationResult
 reserve input
   | reservationBase record /= Address 0 =
-      if reservationSize record /= allocationRequested input then AllocationSizeRejected
-      else if reservationBusy record /= Available then AllocationBusyRejected
-      else Allocated (reservationBase record) (allocationCursor input) (record {reservationBusy = Occupied (WordValue 1)})
-  | cursor-pool+requested > 0x4b000 = AllocationSizeRejected
+      if staleRetained
+        then AllocationSizeRejected
+        else if reservationSize record /= allocationRequested input then AllocationSizeRejected
+        else if reservationBusy record /= Available then AllocationBusyRejected
+        else Allocated (reservationBase record) (allocationCursor input) (record {reservationBusy = Occupied (WordValue 1)})
+  | taskCapacityRefused = AllocationSizeRejected
+  | storageCapacityRefused = AllocationSizeRejected
   | otherwise = Allocated (Address pointer) (Address (cursor + (requested .&. complement 3)))
       (Reservation (Address pointer) (allocationRequested input) (Occupied (WordValue 1)))
   where
     record = allocationRecord input
     ByteCount requested = allocationRequested input
     Address cursor = allocationCursor input
-    pool = case allocationKind input of TaskAllocation -> 0x40a10200; StorageAllocation -> 0x409c4460
-    pointer = case allocationKind input of TaskAllocation -> cursor .&. complement 0x40000000; StorageAllocation -> cursor
+    Address retained = reservationBase record
+    task = allocationKind input == TaskAllocation
+    pool = if task then R.spanStart (R.poolAllocatable R.taskPool) else 0x409c4460
+    poolEnd = if task then R.spanEnd (R.poolAllocatable R.taskPool) else pool + 0x4b000
+    physicalStart = R.spanStart (R.poolAllocatablePhysical R.taskPool)
+    physicalEnd = R.spanEnd (R.poolAllocatablePhysical R.taskPool)
+    pointer = if task then cursor .&. complement 0x40000000 else cursor
+    -- Retained task records must name a current-boot allocation below the reduced bound.
+    staleRetained = task && (retained < physicalStart || retained > physicalEnd || (retained == physicalEnd && requested /= 0))
+    taskCapacityRefused = task && (cursor < pool || cursor > poolEnd || requested > poolEnd - cursor)
+    storageCapacityRefused = not task && cursor-pool+requested > 0x4b000
 
 familyEntryAddress :: Family -> Address
 familyEntryAddress family = Address $ case family of

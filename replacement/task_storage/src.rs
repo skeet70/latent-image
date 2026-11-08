@@ -3,6 +3,13 @@
 use core::arch::asm;
 use core::panic::PanicInfo;
 
+#[path = "../rtos_reservation/src/lib.rs"]
+mod reservation;
+
+use reservation::TASK_POOL;
+
+const POOL_ALLOCATABLE: u32 = TASK_POOL.allocatable_bytes();
+
 #[repr(transparent)]
 #[derive(Clone, Copy)]
 pub struct TaskIndex(u32);
@@ -84,7 +91,9 @@ pub unsafe extern "C" fn xm1_task_storage_transition(
             options(nostack, preserves_flags));
         GuestAddress(value)
     };
-    if current.wrapping_sub(pool_base.0).wrapping_add(requested.0) > 0x4b000 {
+    // The cursor-domain invariant is pool_base <= current <= pool_base + POOL_ALLOCATABLE.
+    let remaining = pool_base.0.wrapping_add(POOL_ALLOCATABLE).wrapping_sub(current);
+    if requested.0 > remaining {
         return ReservationResult::SizeOrCapacity;
     }
     unsafe {

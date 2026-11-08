@@ -215,7 +215,7 @@ fn boundary(address: u32) -> Result<Boundary, String> {
 }
 fn caller(core: Core, lr: u32) -> Option<TaskId> { match (core, lr) { (Core::Primary, 0x69ce8c) => Some(TaskId(104)), (Core::Primary, 0x69cee8) => Some(TaskId(102)), (Core::Secondary, 0x69cf38) => Some(TaskId(103)), (Core::Secondary, 0x69cf70) => Some(TaskId(93)), _ => None } }
 fn watch_ranges(sources: &[Code], composition: bool) -> Vec<WatchRange> {
-    let mut ranges: Vec<_> = [(0x4dae0, 0x4f10c), (0xddaa0, 0xdf0cc), (0x545a4, 0x63460), (0xe4564, 0xf3410), (0xc0800, 0xc0900), (0x96bd20, 0x96bd28), (0xa0fc44, 0xa101e4), (0xa5b204, 0xa5b5c4), (0x89ea94, 0x89ea9c), (0x9c280c, 0x9c2810), (0xa10200, 0xa5b200), (0xa0f82c, 0xa0f830), (0x4f15c, 0x4f160), (0x4f25c, 0x4f260), (0x4f5e4, 0x4f60a)].into_iter().map(|(start, end)| WatchRange { start, end, kinds: WatchKinds::WRITES }).collect();
+    let mut ranges: Vec<_> = [(0x4dae0, 0x4f10c), (0xddaa0, 0xdf0cc), (0x545a4, 0x63460), (0xe4564, 0xf3410), (0xc0800, 0xc0900), (0x96bd20, 0x96bd28), (0xa0fc44, 0xa101e4), (0xa5b204, 0xa5b5c4), (0x89ea94, 0x89ea9c), (0x9c280c, 0x9c2810), (0xa10200, 0xa5a200), (0xa0f82c, 0xa0f830), (0x4f15c, 0x4f160), (0x4f25c, 0x4f260), (0x4f5e4, 0x4f60a)].into_iter().map(|(start, end)| WatchRange { start, end, kinds: WatchKinds::WRITES }).collect();
     if composition {
         ranges.push(WatchRange { start: 0xa0f824, end: 0xa0f828, kinds: WatchKinds::CPU_READ.union(WatchKinds::WRITES) });
         ranges.push(WatchRange { start: 0xa00c0, end: 0xa00c4, kinds: WatchKinds::WRITES });
