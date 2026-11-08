@@ -958,7 +958,7 @@ runPairCheck name = do
       owned = roleDirectory name Owned </> "receipt"
   check <- freshDirectory (qualRoot </> "checks") (caseText name)
   pairStatus <- spawn (binRoot </> "menu-engine-pair-check")
-    ([ "--render", "--tables", tablesPath, "--package-plan", planPath
+    ([ "--retained-render", "--tables", tablesPath, "--package-plan", planPath
      , "--stock", stock, "--owned", owned ]) (check </> "pair-check.log") []
   settingsStatus <- spawn (binRoot </> "modal-settings-compare")
     [stock, owned, check </> "settings.json"] (check </> "settings.log") []

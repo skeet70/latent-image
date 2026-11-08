@@ -1,8 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Emulation.RenderComparison (compareRenderReceipts) where
+module Emulation.RenderComparison (compareRenderReceipts, compareRenderReceiptsWithExclusions) where
 
 import Control.Exception (bracket, onException)
-import Control.Monad (foldM, unless)
+import Control.Monad (unless)
 import Data.Aeson (FromJSON (parseJSON), Object, Value (..), object, (.=))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
@@ -10,32 +10,30 @@ import Data.Aeson.Types (Parser, parseEither, withObject, withText, (.:))
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
-import qualified Data.Vector as V
 import Emulation.Sha256 (Sha256, parseSha256Hex, sha256, sha256Hex)
+import Emulation.RenderNormalization (CaptureLabel(..), SourcePlanes, parseSourcePlanes, sourceExtent, NativeState, Rectangle, parseNativeState, OsdFront, parseOsdFront, parseRectangles, normalize)
 import FujiAF.JSON (decodeStrict, decodeStrictIntegers, encodeCanonical)
 import System.Directory (canonicalizePath)
 import System.FilePath (isAbsolute, takeDirectory, (</>))
 import System.IO (hClose)
 import System.Posix.IO (OpenFileFlags (..), OpenMode (WriteOnly), closeFd, defaultFileFlags, fdToHandle, openFd)
 
-newtype CaptureLabel = CaptureLabel T.Text deriving (Eq, Ord)
 newtype ArtifactPath = ArtifactPath FilePath deriving Eq
 newtype ByteCount = ByteCount Integer deriving Eq
 newtype Instructions = Instructions Integer deriving Eq
 newtype ScanoutInstance = ScanoutInstance Integer deriving Eq
 newtype NodeName = NodeName T.Text deriving Eq
-newtype NativeObject = NativeObject B.ByteString deriving Eq
-newtype SourcePlanes = SourcePlanes (B.ByteString, ByteCount) deriving Eq
-newtype PixelMetadata = PixelMetadata B.ByteString deriving Eq
+newtype NativeObject = NativeObject NativeState
+newtype PixelMetadata = PixelMetadata Value deriving Eq
 
 data ArtifactReference = ArtifactReference ArtifactPath Sha256 (Maybe ByteCount)
 data Artifact = Artifact ArtifactPath Sha256 ByteCount B.ByteString
-data Capture = Capture CaptureLabel ArtifactReference ArtifactReference ArtifactReference
+data Capture = Capture CaptureLabel ArtifactReference ArtifactReference ArtifactReference (Maybe OsdFront)
 data Receipt = Receipt Artifact [Capture]
 data Scanout = Scanout NodeName ScanoutInstance Instructions PixelMetadata ArtifactReference ArtifactReference SourcePlanes NativeObject NativeObject
-data LoadedCapture = LoadedCapture CaptureLabel Artifact Artifact Artifact Scanout
+data LoadedCapture = LoadedCapture CaptureLabel Artifact Artifact Artifact Scanout (Maybe OsdFront)
 
-data PairResult = PairResult CaptureLabel LoadedCapture LoadedCapture [(K.Key, Bool)]
+data PairResult = PairResult CaptureLabel LoadedCapture LoadedCapture [(K.Key, Bool)] [Value]
 
 require :: Bool -> String -> Parser ()
 require condition message = unless condition (fail message)
@@ -73,9 +71,7 @@ artifactReference :: Value -> Parser ArtifactReference
 artifactReference = withObject "artifact reference" reference
 
 nativeObject :: Value -> Parser NativeObject
-nativeObject value = case value of
-  Object fields | not (KM.null fields) -> pure (NativeObject (encodeCanonical value))
-  _ -> fail "native state must be a nonempty object"
+nativeObject value = NativeObject <$> parseNativeState value
 
 pixels :: Value -> Parser PixelMetadata
 pixels = withObject "pixels" $ \fields -> do
@@ -84,29 +80,7 @@ pixels = withObject "pixels" $ \fields -> do
   ByteCount size <- fields .: "rgb_bytes" >>= count
   _ <- fields .: "rgb_sha256" >>= digest
   require (width > 0 && height > 0 && size == width * height * 3) "invalid RGB dimensions or extent"
-  pure (PixelMetadata (encodeCanonical (Object fields)))
-
-sourcePlanes :: Value -> Parser SourcePlanes
-sourcePlanes value = case value of
-  Array entries | not (V.null entries) -> do
-    extent <- foldM plane 0 (V.toList entries)
-    pure (SourcePlanes (encodeCanonical value, ByteCount extent))
-  _ -> fail "source_planes must be a nonempty array"
-  where
-    plane end = withObject "source plane" $ \fields -> do
-      kind <- fields .: "kind" :: Parser T.Text
-      case kind of
-        "main" -> pure ()
-        "graphics" -> do
-          _ <- fields .: "layer" >>= u64
-          _ <- fields .: "channel" >>= u64
-          pure ()
-        _ -> fail "unknown source plane kind"
-      _ <- fields .: "native_source_address" >>= u64
-      offset <- fields .: "offset" >>= u64
-      size <- fields .: "bytes" >>= u64
-      require (offset == end && size > 0 && offset + size <= 18446744073709551615) "invalid source plane extent"
-      pure (offset + size)
+  pure (PixelMetadata (Object fields))
 
 parseScanout :: Value -> Parser Scanout
 parseScanout = withObject "scanout metadata" $ \fields -> do
@@ -119,7 +93,7 @@ parseScanout = withObject "scanout metadata" $ \fields -> do
     <*> (fields .: "pixels" >>= pixels)
     <*> (fields .: "png" >>= artifactReference)
     <*> (fields .: "source_bytes" >>= artifactReference)
-    <*> (fields .: "source_planes" >>= sourcePlanes)
+    <*> (fields .: "source_planes" >>= parseSourcePlanes)
     <*> (fields .: "native_frame_state" >>= nativeObject)
     <*> (fields .: "native_scanout_state" >>= nativeObject)
 
@@ -129,7 +103,7 @@ parseReceipt = withObject "e2e receipt" $ \fields -> do
   require (schema == 1) "unsupported e2e receipt schema"
   captures <- fields .: "menu_receipts" >>= mapM capture
   require (not (null captures)) "receipt has no captures"
-  let labels = [label | Capture label _ _ _ <- captures]
+  let labels = [label | Capture label _ _ _ _ <- captures]
   require (M.size (M.fromList [(label, ()) | label <- labels]) == length labels) "duplicate capture label"
   pure captures
   where
@@ -138,7 +112,8 @@ parseReceipt = withObject "e2e receipt" $ \fields -> do
       png <- reference fields
       (metadata, source) <- fields .: "scanout_evidence" >>= withObject "scanout evidence" (\evidence ->
         (,) <$> (evidence .: "metadata" >>= artifactReference) <*> (evidence .: "source_bytes" >>= artifactReference))
-      pure (Capture label png metadata source)
+      front <- traverse parseOsdFront (KM.lookup "osd_front" fields)
+      pure (Capture label png metadata source front)
 
 failComparison :: String -> IO a
 failComparison = ioError . userError
@@ -172,54 +147,50 @@ loadReceipt path = do
   Receipt artifact <$> parseDocument decodeStrict parseReceipt artifact
 
 loadCapture :: Artifact -> Capture -> IO LoadedCapture
-loadCapture (Artifact (ArtifactPath receiptPath) _ _ _) (Capture label pngRef metadataRef sourceRef) = do
+loadCapture (Artifact (ArtifactPath receiptPath) _ _ _) (Capture label pngRef metadataRef sourceRef front) = do
   let base = takeDirectory receiptPath
   png <- verifyArtifact base pngRef
   metadata@(Artifact (ArtifactPath metadataPath) _ _ _) <- verifyArtifact base metadataRef
   source@(Artifact _ _ (ByteCount sourceSize) _) <- verifyArtifact base sourceRef
-  scanout@(Scanout _ _ _ _ metadataPng metadataSource (SourcePlanes (_, ByteCount extent)) _ _) <- parseDocument decodeStrictIntegers parseScanout metadata
+  scanout@(Scanout _ _ _ _ metadataPng metadataSource planes _ _) <- parseDocument decodeStrictIntegers parseScanout metadata
   boundPng <- verifyArtifact (takeDirectory metadataPath) metadataPng
   boundSource <- verifyArtifact (takeDirectory metadataPath) metadataSource
   unless (sameArtifact png boundPng && sameArtifact source boundSource)
     (failComparison (metadataPath ++ ": receipt and scanout artifact references differ"))
-  unless (extent == sourceSize) (failComparison (metadataPath ++ ": source plane extent differs from source bytes"))
-  pure (LoadedCapture label png source metadata scanout)
+  unless (sourceExtent planes == sourceSize) (failComparison (metadataPath ++ ": source plane extent differs from source bytes"))
+  pure (LoadedCapture label png source metadata scanout front)
 
-pair :: LoadedCapture -> LoadedCapture -> PairResult
-pair left@(LoadedCapture label (Artifact _ _ _ leftPng) (Artifact _ _ _ leftSource) _
-    (Scanout leftNode leftInstance _ leftPixels _ _ leftPlanes leftFrame leftScanout))
+pair :: Maybe Rectangle -> LoadedCapture -> LoadedCapture -> PairResult
+pair rectangle left@(LoadedCapture label (Artifact _ _ _ leftPng) (Artifact _ _ _ leftSource) _
+    (Scanout leftNode leftInstance _ (PixelMetadata leftPixels) _ _ leftPlanes (NativeObject leftFrame) (NativeObject leftScanout)) leftFront)
     right@(LoadedCapture _ (Artifact _ _ _ rightPng) (Artifact _ _ _ rightSource) _
-    (Scanout rightNode rightInstance _ rightPixels _ _ rightPlanes rightFrame rightScanout)) =
-  PairResult label left right
-    [ ("png_bytewise_equal", leftPng == rightPng)
-    , ("source_planes_bytewise_equal", leftSource == rightSource)
-    , ("native_frame_state_equal", leftFrame == rightFrame)
-    , ("native_scanout_state_equal", leftScanout == rightScanout)
-    , ("source_planes_equal", leftPlanes == rightPlanes)
-    , ("pixels_equal", leftPixels == rightPixels)
-    , ("node_equal", leftNode == rightNode)
-    , ("instance_equal", leftInstance == rightInstance)
-    ]
+    (Scanout rightNode rightInstance _ (PixelMetadata rightPixels) _ _ rightPlanes (NativeObject rightFrame) (NativeObject rightScanout)) rightFront) =
+  PairResult label left right (checks ++ [("node_equal", leftNode == rightNode), ("instance_equal", leftInstance == rightInstance)]) records
+  where
+    (checks, records) = normalize rectangle leftFront rightFront
+      (leftFrame, leftScanout, leftPlanes, leftPixels, leftSource, leftPng)
+      (rightFrame, rightScanout, rightPlanes, rightPixels, rightSource, rightPng)
 
 artifactValue :: Artifact -> Value
 artifactValue (Artifact (ArtifactPath path) digest' (ByteCount size) _) = object
   ["path" .= path, "sha256" .= sha256Hex digest', "bytes" .= size]
 
 captureArtifacts :: LoadedCapture -> Value
-captureArtifacts (LoadedCapture _ png source metadata _) = object
+captureArtifacts (LoadedCapture _ png source metadata _ _) = object
   ["png" .= artifactValue png, "source_bytes" .= artifactValue source, "metadata" .= artifactValue metadata]
 
 pairPassed :: PairResult -> Bool
-pairPassed (PairResult _ _ _ checks) = all snd checks
+pairPassed (PairResult _ _ _ checks _) = all snd checks
 
 pairValue :: PairResult -> Value
-pairValue result@(PairResult (CaptureLabel label) left right checks) = object
+pairValue result@(PairResult (CaptureLabel label) left right checks records) = object
   (["capture" .= label, "equal" .= pairPassed result
    ,"instructions" .= object ["reference" .= before, "candidate" .= after, "delta" .= (after - before)]
+   ,"normalizations" .= records
    ,"artifacts" .= object ["reference" .= captureArtifacts left, "candidate" .= captureArtifacts right]]
    ++ [key .= equal | (key, equal) <- checks])
   where
-    clock (LoadedCapture _ _ _ _ (Scanout _ _ (Instructions instructions) _ _ _ _ _ _)) = instructions
+    clock (LoadedCapture _ _ _ _ (Scanout _ _ (Instructions instructions) _ _ _ _ _ _) _) = instructions
     before = clock left
     after = clock right
 
@@ -232,17 +203,26 @@ writeNew path bytes = bracket acquire hClose (\handle -> B.hPut handle bytes)
 
 -- Relative artifact paths are resolved beside the document that references them.
 compareRenderReceipts :: FilePath -> FilePath -> FilePath -> IO Bool
-compareRenderReceipts referencePath candidatePath outputPath = do
+compareRenderReceipts referencePath candidatePath outputPath =
+  compareRenderReceiptsWithExclusions referencePath candidatePath outputPath Nothing
+
+compareRenderReceiptsWithExclusions :: FilePath -> FilePath -> FilePath -> Maybe FilePath -> IO Bool
+compareRenderReceiptsWithExclusions referencePath candidatePath outputPath exclusionPath = do
+  exclusions <- case exclusionPath of
+    Nothing -> pure M.empty
+    Just path -> readArtifact (ArtifactPath path) >>= parseDocument decodeStrictIntegers parseRectangles
   Receipt referenceArtifact referenceCaptures <- loadReceipt referencePath
   Receipt candidateArtifact candidateCaptures <- loadReceipt candidatePath
-  let label (Capture name _ _ _) = name
+  let label (Capture name _ _ _ _) = name
       candidates = M.fromList [(label capture, capture) | capture <- candidateCaptures]
   unless (M.keysSet candidates == M.keysSet (M.fromList [(label capture, ()) | capture <- referenceCaptures]))
     (failComparison "capture label sets differ")
+  unless (all (`M.member` candidates) (M.keys exclusions))
+    (failComparison "clock exclusion label has no capture")
   pairs <- mapM (\capture -> do
     left <- loadCapture referenceArtifact capture
     right <- loadCapture candidateArtifact (candidates M.! label capture)
-    pure (pair left right)) referenceCaptures
+    pure (pair (M.lookup (label capture) exclusions) left right)) referenceCaptures
   let passed = all pairPassed pairs
       result = object
         ["schema" .= (1 :: Int), "equal" .= passed

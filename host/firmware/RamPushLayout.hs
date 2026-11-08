@@ -27,10 +27,18 @@ module RamPushLayout
   , lifecycleBankVariant
   , modalLifecycleBankVariant
   , modalEngineBankVariant
+  , modalRenderBankVariant
+  , bankVariantTag
+  , parseBankVariantTag
+  , bankVariantFromIdentity
+  , renderHookAddresses
+  , renderHookWordFor
   , menuEngineHookAddress
   , menuEngineHookWordFor
   , menuEngineRegionStart
   , menuEngineRegionExtent
+  , menuEngineRegionStartFor
+  , menuEngineRegionExtentFor
   , publicationCountFor
   , publicationActivationCountFor
   , runtimeInstallerExtentFor
@@ -151,19 +159,21 @@ runtimeInstallerExtent = installerExtent publicationCount
 runtimeAllocationSize :: Word32
 runtimeAllocationSize = 0x1dc98
 
-data PublicationGroup = LifecyclePublications | Modal75Publication | MenuEnginePublication
+data PublicationGroup = LifecyclePublications | Modal75Publication | MenuEnginePublication | RenderPublication
   deriving (Eq, Ord, Show)
 
 newtype BankVariant = BankVariant [PublicationGroup]
   deriving (Eq, Show)
 
--- | The menu-engine group composes only with the modal75 group alone.
+-- | Render requires the modal75 and menu-engine groups.
 bankVariant :: [PublicationGroup] -> Either String BankVariant
 bankVariant groups = do
   let ordered = sort groups
   when (or (zipWith (==) ordered (drop 1 ordered))) $
     Left "duplicate publication group"
-  when (MenuEnginePublication `elem` ordered && ordered /= [Modal75Publication, MenuEnginePublication]) $
+  when (RenderPublication `elem` ordered && ordered /= [Modal75Publication, MenuEnginePublication, RenderPublication]) $
+    Left "the render group requires exactly modal75 and menu-engine"
+  when (MenuEnginePublication `elem` ordered && filter (/= RenderPublication) ordered /= [Modal75Publication, MenuEnginePublication]) $
     Left "the menu-engine group requires exactly the modal75 group"
   pure (BankVariant ordered)
 
@@ -180,12 +190,52 @@ lifecycleBankVariant = BankVariant [LifecyclePublications]
 modalLifecycleBankVariant = BankVariant [LifecyclePublications, Modal75Publication]
 modalEngineBankVariant = BankVariant [Modal75Publication, MenuEnginePublication]
 
+modalRenderBankVariant :: BankVariant
+modalRenderBankVariant = BankVariant [Modal75Publication, MenuEnginePublication, RenderPublication]
+
+bankVariantTag :: BankVariant -> String
+bankVariantTag variant
+  | variant == standardBankVariant = "standard"
+  | otherwise = concatTags (map groupTag (publicationGroups variant))
+ where
+  groupTag LifecyclePublications = "lifecycle"
+  groupTag Modal75Publication = "modal75"
+  groupTag MenuEnginePublication = "menu-engine"
+  groupTag RenderPublication = "render"
+  concatTags [] = ""
+  concatTags [tag] = tag
+  concatTags (tag : rest) = tag ++ "," ++ concatTags rest
+
+parseBankVariantTag :: String -> Either String BankVariant
+parseBankVariantTag tag = case filter ((== tag) . bankVariantTag) variants of
+  [variant] -> Right variant
+  _ -> Left "unknown bank variant tag"
+ where
+  variants = [standardBankVariant, modalScopedBankVariant, lifecycleBankVariant, modalLifecycleBankVariant, modalEngineBankVariant, modalRenderBankVariant]
+
+-- | Untagged schema-1 packages retain their legacy count identities.
+bankVariantFromIdentity :: Maybe String -> Int -> Either String BankVariant
+bankVariantFromIdentity tag count = do
+  variant <- case tag of
+    Just identity -> parseBankVariantTag identity
+    Nothing -> case count of
+      223 -> Right standardBankVariant
+      224 -> Right modalScopedBankVariant
+      225 -> Right modalEngineBankVariant
+      226 -> Right lifecycleBankVariant
+      227 -> Right modalLifecycleBankVariant
+      _ -> Left "unsupported legacy bank publication count"
+  when (publicationCountFor variant /= count) $
+    Left "bank variant tag and publication count disagree"
+  pure variant
+
 publicationCountFor :: BankVariant -> Int
 publicationCountFor variant = publicationCount + sum (map groupCount (publicationGroups variant))
  where
   groupCount LifecyclePublications = 3
   groupCount Modal75Publication = 1
   groupCount MenuEnginePublication = 1
+  groupCount RenderPublication = 3
 
 publicationActivationCountFor :: BankVariant -> Int
 publicationActivationCountFor variant = publicationCountFor variant - publicationSetupCount
@@ -265,6 +315,10 @@ modalHookAddress = PublicationAddress 0x00bfb028
 menuEngineHookAddress :: PublicationAddress
 menuEngineHookAddress = PublicationAddress 0x00bf95c8
 
+-- | Tree, picker, and pane entries are the final render publications.
+renderHookAddresses :: [PublicationAddress]
+renderHookAddresses = map PublicationAddress [0x01164e1c, 0x01163f2c, 0x011662a0]
+
 -- | The owned engine's code and tree, placed after the scoped modal
 -- allocation's end.
 menuEngineRegionStart :: Word32 -> Word32
@@ -272,6 +326,16 @@ menuEngineRegionStart base = base + ((runtimeAllocationSizeFor modalScopedBankVa
 
 menuEngineRegionExtent :: Word32
 menuEngineRegionExtent = 0x10000
+
+menuEngineRegionStartFor :: BankVariant -> Word32 -> Word32
+menuEngineRegionStartFor variant base
+  | hasPublicationGroup RenderPublication variant =
+      base + ((runtimeAllocationSize + runtimeInstallerExtentFor variant - runtimeInstallerExtent + 31) .&. 0xffffffe0)
+  | otherwise = menuEngineRegionStart base
+
+menuEngineRegionExtentFor :: BankVariant -> Word32
+menuEngineRegionExtentFor variant =
+  menuEngineRegionStart 0 + menuEngineRegionExtent - menuEngineRegionStartFor variant 0
 
 lifecycleHookAddresses :: [PublicationAddress]
 lifecycleHookAddresses = map PublicationAddress [0x00e99e8c, 0x00e6a754, 0x00e6bb90]
@@ -286,6 +350,7 @@ safePublicationOrderForVariant variant addresses = do
   let modalSelected = hasPublicationGroup Modal75Publication variant
       engineSelected = hasPublicationGroup MenuEnginePublication variant
       finalHooks = [modalHookAddress | modalSelected] <> [menuEngineHookAddress | engineSelected]
+        <> [hook | hasPublicationGroup RenderPublication variant, hook <- renderHookAddresses]
   when (not (null finalHooks) && drop (length addresses - length finalHooks) addresses /= finalHooks) $
     Left "scoped modal hook must occur once at the final logical index"
   when (not modalSelected && modalHookAddress `elem` addresses) $
@@ -316,9 +381,19 @@ menuEngineHookWordFor variant base target source = do
     Left "menu engine hook requires the menu-engine publication group"
   when (source /= 0xe92d4818) $
     Left "stock engine wrapper entry is not push r3,r4,r11,lr"
-  when (target .&. 3 /= 0 || target < menuEngineRegionStart base || target >= menuEngineRegionStart base + menuEngineRegionExtent) $
+  when (target .&. 3 /= 0 || target < menuEngineRegionStartFor variant base || target >= menuEngineRegionStartFor variant base + menuEngineRegionExtentFor variant) $
     Left "menu engine target leaves the engine region"
   hookBranchWord variant base menuEngineHookAddress target
+
+renderHookWordFor :: BankVariant -> Word32 -> PublicationAddress -> Word32 -> Word32 -> Either String Word32
+renderHookWordFor variant base hook target source = do
+  when (not (hasPublicationGroup RenderPublication variant) || hook `notElem` renderHookAddresses) $
+    Left "render hook requires the render publication group and a render entry"
+  when (source /= 0xe92d4ff0) $
+    Left "stock render entry is not push r4-r11,lr"
+  when (target .&. 3 /= 0 || target < menuEngineRegionStartFor variant base || target >= menuEngineRegionStartFor variant base + menuEngineRegionExtentFor variant) $
+    Left "render target leaves the engine region"
+  hookBranchWord variant base hook target
 
 hookBranchWord :: BankVariant -> Word32 -> PublicationAddress -> Word32 -> Either String Word32
 hookBranchWord variant base (PublicationAddress hook) target = do

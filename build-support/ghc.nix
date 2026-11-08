@@ -6,4 +6,5 @@ pkgs.haskellPackages.ghcWithPackages (packages: [
   packages.aeson
   packages.attoparsec
   packages.cryptohash-sha256
+  packages.JuicyPixels
 ])

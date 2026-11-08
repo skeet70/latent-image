@@ -159,6 +159,57 @@ main = do
       | base <- alignedBases, variant <- [lifecycleBankVariant, modalLifecycleBankVariant]])
   check "modal publication is refused without its group"
     (isLeft (modalHookWordFor lifecycleBankVariant 0x00c40000 0x00c40500 0xe92d4ff0))
+  let render = modalRenderBankVariant
+      renderAddresses = testAddresses <> [modalHookAddress, menuEngineHookAddress] <> renderHookAddresses
+      renderOrder = safePublicationOrderForVariant render renderAddresses
+  check "render identity binds its expanded publication count"
+    (bankVariantFromIdentity (Just "modal75,menu-engine,render") 228 == Right render
+      && bankVariantFromIdentity Nothing 227 == Right modalLifecycleBankVariant
+      && isLeft (bankVariantFromIdentity (Just "modal75,menu-engine,render") 225)
+      && isLeft (bankVariantFromIdentity (Just "modal75,menu-engine") 227))
+  let legacyVariants = [standardBankVariant, modalScopedBankVariant, modalEngineBankVariant, lifecycleBankVariant, modalLifecycleBankVariant]
+  check "legacy untagged identities and derived guard counts remain unchanged"
+    (map publicationCountFor legacyVariants == [223, 224, 225, 226, 227]
+      && map publicationActivationCountFor legacyVariants == [92, 93, 94, 95, 96]
+      && and [bankVariantFromIdentity Nothing count == Right variant | (count, variant) <- zip [223 .. 227] legacyVariants])
+  check "render counts and allocation retain the engine region"
+    (publicationCountFor render == 228 && publicationActivationCountFor render == 97
+      && runtimeAllocationSizeFor render == 0x2dcc0
+      && menuEngineRegionStartFor render 0 == 0x1dd00 && menuEngineRegionExtentFor render == 0xffc0
+      && all (\base -> runtimeInstallerBase base - base + runtimeInstallerExtentFor render <= menuEngineRegionStartFor render base - base) alignedBases)
+  check "render hooks activate after modal and engine, tree then picker then pane"
+    (renderHookAddresses == map PublicationAddress [0x01164e1c, 0x01163f2c, 0x011662a0]
+      && renderOrder == Right (order <> map PublicationIndex [223 .. 227])
+      && isLeft (safePublicationOrderForVariant render
+        (testAddresses <> [modalHookAddress, menuEngineHookAddress] <> reverse renderHookAddresses)))
+  let inBody = map PublicationAddress [0x0116657c,0x011675c4]
+      pane = PublicationAddress 0x011662a0
+      coexistAddresses = take 131 renderAddresses <> inBody <> drop 133 renderAddresses
+  coexistOrder <- either fail pure (safePublicationOrderForVariant render coexistAddresses)
+  let forward = map (\index -> coexistAddresses !! publicationIndex index) coexistOrder
+      beforePane = takeWhile (/= pane) forward
+      afterPane = drop 1 (dropWhile (/= pane) (reverse forward))
+  check "in-body value hooks coexist with pane entry and reverse rollback"
+    (last forward == pane && all (`elem` beforePane) inBody && all (`elem` afterPane) inBody
+      && all (\address -> publicationAddress address > publicationAddress pane && publicationAddress address < 0x011675ec) inBody)
+  check "render requires precisely modal and engine"
+    (bankVariant [RenderPublication, MenuEnginePublication, Modal75Publication] == Right render
+      && all (isLeft . bankVariant)
+        [[RenderPublication], [Modal75Publication, RenderPublication], [MenuEnginePublication, RenderPublication]
+        , [LifecyclePublications, Modal75Publication, MenuEnginePublication, RenderPublication]])
+  forM_ renderHookAddresses $ \renderHook -> do
+    let base = 0x00c40000
+        target = menuEngineRegionStartFor render base
+        expected = 0xea000000 + ((target - publicationAddress renderHook - 8) `div` 4 .&. 0x00ffffff)
+    check "render entry emits its A32 branch"
+      (renderHookWordFor render base renderHook target 0xe92d4ff0 == Right expected)
+    check "render entry refuses the wrong stock word"
+      (isLeft (renderHookWordFor render base renderHook target 0xe92d4818))
+    check "render entry refuses misaligned and out-of-region targets"
+      (all (\entry -> isLeft (renderHookWordFor render base renderHook entry 0xe92d4ff0))
+        [target - 4, target + 2, target + menuEngineRegionExtentFor render])
+    check "render entry refuses an unselected render group"
+      (isLeft (renderHookWordFor modalEngineBankVariant base renderHook target 0xe92d4ff0))
   let completeInstaller = unlines
         [ "00000000 <ram_push_install>:"
         , "  bl 0x10 <execute_operation>"

@@ -13,10 +13,22 @@ module EmulatorUsb
   , emulatorBridgeCommand
   , emulatorTraceSites
   , emulatorTraceSitesReading
+  , SiteRead (..)
   , TraceHit (..)
+  , traceHitValue
+  , TraceHitCursor (..)
+  , TraceHitLimit (..)
+  , TraceHitPage (..)
+  , traceHitPageLimit
+  , emulatorTraceHitPage
+  , emulatorTraceHitCount
   , emulatorTraceHits
   , emulatorTraceHitsRaw
   , emulatorTraceHitsPage
+  , emulatorRenderObjectProvenance
+  , emulatorEnableRenderObjectProvenance
+  , emulatorRenderStackDiagnosticBegin
+  , emulatorRenderStackDiagnosticEnd
   , ReleaseSegment
   , releaseSegment
   , emulatorReleaseContext
@@ -34,7 +46,7 @@ module EmulatorUsb
   , emulatorWatchObservation
   , emulatorExecutionWatchBegin
   , emulatorWatchStateRaw
-  , emulatorWatchStateLine
+  , emulatorWatchStateToFile
   , emulatorWatchEnd
   , decodeBridgeWatchLine
   , ModalResponse (..)
@@ -66,10 +78,11 @@ module EmulatorUsb
   , emulatedClock
   ) where
 
+import Control.Applicative ((<|>))
 import Control.Concurrent.MVar
 import Control.Exception (IOException, bracketOnError, try)
-import Control.Monad (unless)
-import Data.Aeson (FromJSON (..), Result (..), ToJSON (..), Value (..), eitherDecodeStrict', encode, fromJSON, object, withText, (.=))
+import Control.Monad (forM_, unless)
+import Data.Aeson (FromJSON (..), Result (..), ToJSON (..), Value (..), eitherDecodeStrict', encode, fromJSON, object, withObject, withText, (.:), (.=))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as M
 import qualified Data.ByteString as B
@@ -83,8 +96,10 @@ import qualified Emulation.CaptureStream as Capture
 import qualified Emulation.SaveLifecycle as Lifecycle
 import qualified Data.ByteString.Lazy as BL
 import Data.Bits (shiftL, (.|.))
-import Data.IORef (atomicModifyIORef', modifyIORef', newIORef)
-import Data.Word (Word32, Word64)
+import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef)
+import Data.Int (Int32)
+import Data.List (sort)
+import Data.Word (Word8, Word32, Word64)
 import Numeric (readHex, showHex)
 import System.Exit (ExitCode (..))
 import System.IO
@@ -92,6 +107,8 @@ import System.Process
 import FujiAF.Transport
 import Emulation.KeyReleaseObservation (ReleaseSegment, releaseSegment)
 import qualified FujiAF.Broker as P
+import Replacement.ModalRuntime.RenderObjectProvenance
+import Emulation.RenderStackDiagnostic (RenderStackDiagnosticConfig, renderStackDiagnosticBeginJson)
 
 -- | Session time for transfers to the emulator: one microsecond per reading, and a pause
 -- advances it by the pause. The bridge bounds every wait inside a transfer in guest
@@ -101,12 +118,17 @@ emulatedClock = do
   tick <- newIORef (1000000000 :: Word64)
   pure (TimedClock (atomicModifyIORef' tick (\n -> (n + 1000, n))) (\ms -> modifyIORef' tick (+ fromIntegral ms * 1000000)))
 
+newtype BufferedProvenanceEvents = BufferedProvenanceEvents Int
+newtype BufferedProvenanceBatches = BufferedProvenanceBatches Int
+data ProvenanceBuffer = ProvenanceDisabled | ProvenanceBuffer BufferedProvenanceEvents BufferedProvenanceBatches [ProvenanceBatch]
+
 data Emulator = Emulator
   { emulatorInput :: Handle
   , emulatorOutput :: Handle
   , emulatorProcess :: ProcessHandle
   , emulatorLock :: MVar ()
   , emulatorCaptureReader :: Capture.BoundedReader
+  , emulatorProvenanceBatches :: IORef ProvenanceBuffer
   }
 
 -- | How the emulator reached its first host command.
@@ -151,7 +173,36 @@ exchangeLockedReading emulator response request = do
   response
 
 rpc :: Emulator -> Value -> IO (M.KeyMap Value)
-rpc = bridgeRpc . exchangeLine
+rpc emulator request = do
+  fields <- bridgeRpc (exchangeLine emulator) request
+  buffer <- readIORef (emulatorProvenanceBatches emulator)
+  case buffer of
+    ProvenanceDisabled -> pure ()
+    ProvenanceBuffer _ _ _ -> forM_ (M.lookup "render_object_provenance" fields) $ \value -> case fromJSON value of
+      Error message -> ioError (userError message)
+      Success batch -> do
+        let incoming = batchEventCount batch
+        added <- atomicModifyIORef' (emulatorProvenanceBatches emulator) $ \current -> case current of
+          ProvenanceDisabled -> (current,Left "render object provenance collection disabled during reply")
+          ProvenanceBuffer (BufferedProvenanceEvents count) (BufferedProvenanceBatches total) batches
+            | incoming <= 65536-count && total < 65536 ->
+                (ProvenanceBuffer (BufferedProvenanceEvents (count+incoming)) (BufferedProvenanceBatches (total+1)) (batch:batches),Right ())
+            | otherwise -> (current,Left "render object provenance forwarding overflow")
+        either (ioError . userError) pure added
+  pure fields
+
+emulatorRenderObjectProvenance :: Emulator -> IO (Maybe ProvenanceBatch)
+emulatorRenderObjectProvenance emulator = do
+  batches <- atomicModifyIORef' (emulatorProvenanceBatches emulator) $ \buffer -> case buffer of
+    ProvenanceDisabled -> (ProvenanceDisabled,[])
+    ProvenanceBuffer _ _ values -> (ProvenanceBuffer (BufferedProvenanceEvents 0) (BufferedProvenanceBatches 0) [],reverse values)
+  either (ioError . userError) pure (combineBatches batches)
+
+emulatorEnableRenderObjectProvenance :: Emulator -> IO ()
+emulatorEnableRenderObjectProvenance emulator =
+  modifyIORef' (emulatorProvenanceBatches emulator) $ \buffer -> case buffer of
+    ProvenanceDisabled -> ProvenanceBuffer (BufferedProvenanceEvents 0) (BufferedProvenanceBatches 0) []
+    ProvenanceBuffer _ _ _ -> buffer
 
 watchRpc :: Emulator -> Value -> IO Value
 watchRpc = bridgeWatchRpc . exchangeLine
@@ -246,7 +297,8 @@ startEmulator python directory arguments choose = bracketOnError create stopEmul
       hSetBuffering input NoBuffering
       lock <- newMVar ()
       captureReader <- Capture.newBoundedReader output
-      pure (Emulator input output process lock captureReader)
+      provenance <- newIORef ProvenanceDisabled
+      pure (Emulator input output process lock captureReader provenance)
     event emulator name = do
       line <- C.hGetLine (emulatorOutput emulator)
       value <- either (ioError . userError . (("invalid emulator " ++ name ++ " event: ") ++)) pure (eitherDecodeStrict' line)
@@ -354,11 +406,35 @@ bridgeUsbApi exchange = UsbApi
 emulatorTraceSites :: Emulator -> [(Word32, String)] -> IO ()
 emulatorTraceSites emulator sites = emulatorTraceSitesReading emulator [(site, label, []) | (site, label) <- sites]
 
--- | Arms the sites; each hit of a site also records its physical reads `(address, count)` at entry.
-emulatorTraceSitesReading :: Emulator -> [(Word32, String, [(Word32, Int)])] -> IO ()
+data SiteRead = SiteRead Word32 Int | StackRead Int32 Int deriving (Eq, Show)
+
+instance FromJSON SiteRead where
+  parseJSON value = absolute value <|> stack value
+    where
+      absolute input = do
+        (start, count) <- parseJSON input
+        case readHex (T.unpack start) of
+          [(word, "")] | T.length start == 8, count >= 1, count <= 4096, word + toInteger count <= 0x100000000 ->
+            pure (SiteRead (fromInteger word) count)
+          _ -> fail "trace site read requires eight hex digits and 1..4096 bytes"
+      stack = withObject "stack-relative trace read" $ \fields -> do
+        unless (sort (M.keys fields) == ["bytes", "sp"]) (fail "stack-relative trace read takes sp and bytes")
+        offset <- fields .: "sp"
+        count <- fields .: "bytes"
+        unless (count >= 1 && count <= 4096) (fail "trace site read requires 1..4096 bytes")
+        pure (StackRead offset count)
+
+instance ToJSON SiteRead where
+  toJSON (SiteRead start count) = toJSON (replicate (8 - length digits) '0' ++ digits, count)
+    where digits = showHex start ""
+  toJSON (StackRead offset count) = object ["sp" .= offset, "bytes" .= count]
+
+emulatorTraceSitesReading :: Emulator -> [(Word32, String, [SiteRead])] -> IO ()
 emulatorTraceSitesReading emulator sites = do
   let address value = "0x" ++ showHex value ""
-  let siteReads = [K.fromString (address site) .= [[toInteger start, toInteger count] | (start, count) <- ranges]
+      readValue (SiteRead start count) = toJSON [toInteger start, toInteger count]
+      readValue (StackRead offset count) = object ["sp" .= offset, "bytes" .= count]
+  let siteReads = [K.fromString (address site) .= map readValue ranges
         | (site, _, ranges) <- sites, not (null ranges)]
   _ <- rpc emulator (object (["command" .= String "trace-sites",
                               "sites" .= object [K.fromString (address site) .= label | (site, label, _) <- sites]]
@@ -378,50 +454,128 @@ data TraceHit = TraceHit
   , traceLr :: Maybe Word32
   , traceSp :: Maybe Word32
   , traceMemory :: [B.ByteString]
+  , traceProvenanceSequence :: Maybe ProvenanceSequence
   } deriving (Eq, Show)
 
--- | The hit count so far and the hits recorded from index `start` on.
+-- | A recorded hit in the receipt form the pair checks consume.
+traceHitValue :: [String] -> [String] -> TraceHit -> Value
+traceHitValue lrLabels spLabels hit = object (
+  [ "site" .= traceSite hit, "core" .= traceCore hit, "instructions" .= traceInstructions hit
+  , "r0" .= addressText (traceR0 hit), "r1" .= addressText (traceR1 hit)
+  , "r2" .= addressText (traceR2 hit), "r3" .= addressText (traceR3 hit) ]
+  ++ ["lr" .= addressText lr | traceSite hit `elem` lrLabels, Just lr <- [traceLr hit]]
+  ++ ["sp" .= addressText sp | traceSite hit `elem` spLabels, Just sp <- [traceSp hit]]
+  ++ ["memory" .= map bytesText (traceMemory hit) | not (null (traceMemory hit))]
+  ++ ["render_object_provenance_sequence" .= sequenceValue | Just sequenceValue <- [traceProvenanceSequence hit]])
+ where
+  addressText value = "0x" ++ replicate (8 - length digits) '0' ++ digits where digits = showHex value ""
+  bytesText = concatMap (\byte -> let digits = showHex byte "" in replicate (2 - length digits) '0' ++ digits) . B.unpack
+
+newtype TraceHitCursor = TraceHitCursor Int deriving (Eq, Ord, Show)
+newtype TraceHitLimit = TraceHitLimit Int deriving (Eq, Show)
+data TraceHitPage = TraceHitPage
+  { tracePageCount :: Int
+  , tracePageCursor :: TraceHitCursor
+  , tracePageHits :: [TraceHit]
+  } deriving (Eq, Show)
+
+-- | One bounded trace-hits request. The SDK returns at most this many rows.
+traceHitPageLimit :: TraceHitLimit
+traceHitPageLimit = TraceHitLimit 16
+
+-- | One page of recorded hits from CURSOR, bounded by LIMIT. The page must return exactly the
+-- rows the frozen count says exist; a short, empty or shifted page is a refusal, not a skip.
+emulatorTraceHitPage :: Emulator -> TraceHitCursor -> TraceHitLimit -> IO TraceHitPage
+emulatorTraceHitPage emulator (TraceHitCursor from) (TraceHitLimit limit) = do
+  require (from >= 0) "trace-hits cursor is negative"
+  require (limit > 0) "trace-hits limit must be positive"
+  fields <- rpc emulator (object ["command" .= String "trace-hits", "from" .= from, "limit" .= limit])
+  count <- integerField "count" fields
+  require (count >= from) ("trace-hits count " ++ show count ++ " precedes cursor " ++ show from)
+  hits <- objectField "hits" fields >>= parseTraceHits
+  let expected = min limit (count - from)
+  require (length hits == expected)
+    ("trace-hits page from " ++ show from ++ " returned " ++ show (length hits)
+      ++ " rows, the frozen count requires " ++ show expected)
+  pure (TraceHitPage count (TraceHitCursor from) hits)
+
+-- | The recorded count at or after CURSOR without fetching the rows. One hit at most is read.
+emulatorTraceHitCount :: Emulator -> TraceHitCursor -> IO Int
+emulatorTraceHitCount emulator (TraceHitCursor from) = do
+  require (from >= 0) "trace-hits cursor is negative"
+  fields <- rpc emulator (object ["command" .= String "trace-hits", "from" .= from, "limit" .= (1 :: Int)])
+  count <- integerField "count" fields
+  require (count >= from) ("trace-hits count " ++ show count ++ " precedes cursor " ++ show from)
+  hits <- objectField "hits" fields >>= parseTraceHits
+  let expected = if from < count then 1 else 0
+  require (length hits == expected) "trace-hits count query returned an unstable hit page"
+  pure count
+
+-- | The hit count so far and the hits recorded from index `start` on. Unbounded; the render route
+-- uses the page and count queries instead.
 emulatorTraceHits :: Emulator -> Int -> IO (Int, [TraceHit])
 emulatorTraceHits emulator start = do
   fields <- rpc emulator (object ["command" .= String "trace-hits", "from" .= start])
   count <- integerField "count" fields
-  hits <- objectField "hits" fields >>= \value -> case value of
-    Array items -> mapM hit (foldr (:) [] items)
-    _ -> ioError (userError "emulator trace hits must be an array")
+  hits <- objectField "hits" fields >>= parseTraceHits
   pure (count, hits)
-  where
-    hexWord name text = case text of
-      '0' : 'x' : digits | [(word, "")] <- readHex digits -> pure word
-      _ -> ioError (userError ("invalid emulator trace register " ++ name ++ ": " ++ text))
-    hexBytes text = case text of
-      [] -> pure []
-      high : low : rest | [(byte, "")] <- readHex [high, low] -> (byte :) <$> hexBytes rest
-      _ -> ioError (userError "invalid emulator trace hit memory")
-    hit (Object item) = do
-      site <- textField "site" item
-      core <- integerField "core" item
-      instructions <- objectField "instructions" item >>= \value -> case fromJSON value of
-        Success number -> pure number
-        Error message -> ioError (userError ("invalid emulator trace instruction count: " ++ message))
-      registers <- objectField "registers" item >>= \value -> case value of
-        Object registers -> pure registers
-        _ -> ioError (userError "emulator trace hit registers must be an object")
-      let register name = textField name registers >>= hexWord name
-      let optionalWord name = case M.lookup (K.fromString name) item of
-            Nothing -> pure Nothing
-            Just (String text) -> Just <$> hexWord name (T.unpack text)
-            Just _ -> ioError (userError ("emulator trace hit " ++ name ++ " must be a hex string"))
-      lr <- optionalWord "lr"
-      sp <- optionalWord "sp"
-      memory <- case M.lookup "memory" item of
-        Nothing -> pure []
-        Just (Array entries) -> mapM (\entry -> case entry of
-          String text -> B.pack <$> hexBytes (T.unpack text)
-          _ -> ioError (userError "emulator trace hit memory must be hex strings")) (foldr (:) [] entries)
-        Just _ -> ioError (userError "emulator trace hit memory must be an array")
-      TraceHit site core instructions <$> register "r0" <*> register "r1" <*> register "r2" <*> register "r3"
-        <*> pure lr <*> pure sp <*> pure memory
-    hit _ = ioError (userError "emulator trace hit must be an object")
+
+parseTraceHits :: Value -> IO [TraceHit]
+parseTraceHits value = case value of
+  Array items -> mapM parseTraceHit (foldr (:) [] items)
+  _ -> ioError (userError "emulator trace hits must be an array")
+
+parseTraceHit :: Value -> IO TraceHit
+parseTraceHit (Object item) = do
+  site <- textField "site" item
+  core <- integerField "core" item
+  instructions <- objectField "instructions" item >>= \value -> case fromJSON value of
+    Success number -> pure number
+    Error message -> ioError (userError ("invalid emulator trace instruction count: " ++ message))
+  registers <- objectField "registers" item >>= \value -> case value of
+    Object registers -> pure registers
+    _ -> ioError (userError "emulator trace hit registers must be an object")
+  let register name = textField name registers >>= hexWord name
+  let optionalWord name = case M.lookup (K.fromString name) item of
+        Nothing -> pure Nothing
+        Just (String text) -> Just <$> hexWord name (T.unpack text)
+        Just _ -> ioError (userError ("emulator trace hit " ++ name ++ " must be a hex string"))
+  lr <- optionalWord "lr"
+  sp <- optionalWord "sp"
+  memory <- case M.lookup "memory" item of
+    Nothing -> pure []
+    Just (Array entries) -> mapM (\entry -> case entry of
+      String text -> B.pack <$> hexBytes (T.unpack text)
+      _ -> ioError (userError "emulator trace hit memory must be hex strings")) (foldr (:) [] entries)
+    Just _ -> ioError (userError "emulator trace hit memory must be an array")
+  stackMemory <- case M.lookup "stack_memory" item of
+    Nothing -> pure []
+    Just (Array entries) -> mapM (\entry -> case entry of
+      Object fields -> do
+        kind <- textField "kind" fields
+        require (kind == "sp") "emulator stack memory requires sp kind"
+        textField "bytes" fields >>= fmap B.pack . hexBytes
+      _ -> ioError (userError "emulator stack memory must be objects")) (foldr (:) [] entries)
+    Just _ -> ioError (userError "emulator stack memory must be an array")
+  provenanceSequence <- case M.lookup "render_object_provenance_sequence" item of
+    Nothing -> pure Nothing
+    Just value -> case fromJSON value of
+      Success n -> pure (Just (ProvenanceSequence n))
+      Error message -> ioError (userError ("invalid render object provenance sequence: " ++ message))
+  TraceHit site core instructions <$> register "r0" <*> register "r1" <*> register "r2" <*> register "r3"
+    <*> pure lr <*> pure sp <*> pure (stackMemory ++ memory) <*> pure provenanceSequence
+parseTraceHit _ = ioError (userError "emulator trace hit must be an object")
+
+hexWord :: String -> String -> IO Word32
+hexWord name text = case text of
+  '0' : 'x' : digits | [(word, "")] <- readHex digits -> pure word
+  _ -> ioError (userError ("invalid emulator trace register " ++ name ++ ": " ++ text))
+
+hexBytes :: String -> IO [Word8]
+hexBytes text = case text of
+  [] -> pure []
+  high : low : rest | [(byte, "")] <- readHex [high, low] -> (byte :) <$> hexBytes rest
+  _ -> ioError (userError "invalid emulator trace hit memory")
 
 -- | The bridge's hit records from index `start` on, unchanged, with their `lr`, `sp` and `cpsr`.
 emulatorTraceHitsRaw :: Emulator -> Int -> IO Value
@@ -512,9 +666,34 @@ emulatorExecutionWatchBegin emulator protected forbidden limit = watchRpc emulat
 emulatorWatchStateRaw :: Emulator -> IO Value
 emulatorWatchStateRaw emulator = watchRpc emulator (object ["command" .= String "watch-state"])
 
--- | The undecoded watch-state response line, for callers that store it before decoding.
-emulatorWatchStateLine :: Emulator -> IO B.ByteString
-emulatorWatchStateLine emulator = exchangeLine emulator (encode (object ["command" .= String "watch-state"]))
+emulatorRenderStackDiagnosticBegin :: Emulator -> RenderStackDiagnosticConfig -> IO Value
+emulatorRenderStackDiagnosticBegin emulator = watchRpc emulator . renderStackDiagnosticBeginJson
+
+emulatorRenderStackDiagnosticEnd :: Emulator -> IO Value
+emulatorRenderStackDiagnosticEnd emulator = watchRpc emulator (object ["command" .= String "render-stack-diagnostic-end"])
+
+emulatorWatchStateToFile :: Emulator -> FilePath -> IO ()
+emulatorWatchStateToFile emulator path = withMVar (emulatorLock emulator) $ \_ ->
+  withPrivateOutput path $ \write -> do
+    BL.hPutStr (emulatorInput emulator) (encode (object ["command" .= String "watch-state"]))
+    B.hPut (emulatorInput emulator) "\n"
+    hFlush (emulatorInput emulator)
+    copyReply write
+  where
+    copyReply :: (B.ByteString -> IO ()) -> IO ()
+    copyReply write = do
+      chunk <- B.hGetSome (emulatorOutput emulator) 32768
+      require (not (B.null chunk)) "truncated emulator watch-state response"
+      let (bytes, ending) = B.break (== 10) chunk
+      write bytes
+      if B.null ending
+        then copyReply write
+        else do
+          -- No subsequent response precedes its request under emulatorLock.
+          let unsolicited = B.drop 1 ending
+          unless (B.null unsolicited) $ do
+            write unsolicited
+            ioError (userError "unsolicited bytes after emulator watch-state response")
 
 -- | Ends the armed memory watch and returns its final state.
 emulatorWatchEnd :: Emulator -> IO Value

@@ -524,6 +524,7 @@ haskell_binary(
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
+        "//host:directory",
         "//host:classic-chrome",
         "//host:classic-chrome-ram",
         "//host:host-support",
@@ -1523,6 +1524,7 @@ haskell_library(
         "ArmElf.hs",
         "BankAllowlist.hs",
         "EngineStack.hs",
+        "RenderStack.hs",
         "StackWalk.hs",
     ],
     ghcopts = [
@@ -1547,6 +1549,22 @@ haskell_test(
     name = "engine-stack-tests",
     size = "small",
     srcs = ["EngineStackTests.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-XGHC2021",
+    ],
+    deps = [
+        ":bank-allowlist",
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
+
+haskell_test(
+    name = "render-stack-tests",
+    size = "small",
+    srcs = ["RenderStackTests.hs"],
     ghcopts = [
         "-Wall",
         "-Werror",
@@ -1795,6 +1813,7 @@ filegroup(
     name = "ram-push-modal-engine-relinker",
     srcs = [
         "build-recipe-bank-modal-engine-ram.sh",
+        "build-recipe-bank-modal-render-ram.sh",
         "build-recipe-bank-ram.sh",
         ":build-recipe-bank",
         "//menu:recipe_bank_menu_engine_allowlist_fragment.json",
@@ -1839,12 +1858,14 @@ haskell_test(
         "$(location //menu:recipe_bank_modal_allowlist_fragment.json)",
         "$(location :modal-00c40000/kernel.elf)",
         "$(location :modal-00c4fc88/kernel.elf)",
+        "$(location //menu:recipe_bank_render_allowlist_fragment.json)",
     ],
     data = [
         "//menu:recipe_bank_allowlist.json",
         "//menu:recipe_bank_modal_allowlist_fragment.json",
         ":modal-00c40000/kernel.elf",
         ":modal-00c4fc88/kernel.elf",
+        "//menu:recipe_bank_render_allowlist_fragment.json",
     ],
     ghcopts = ["-Wall", "-Werror", "-XGHC2021"],
     deps = [
@@ -1945,6 +1966,20 @@ genrule(
     ("", "//replacement/bank:bank", "//replacement/bank:relink-sources"),
     ("modal75", "//replacement/bank:bank-modal", "//replacement/bank:modal-relink-sources"),
 ]]
+
+haskell_binary(
+    name = "legacy-bank-manifest-tests",
+    srcs = ["LegacyBankManifestTests.hs"],
+    main_file = "LegacyBankManifestTests.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:text",
+    ],
+)
 
 # The Classic Chrome RAM-push builder (reports/classic-chrome-patch.md
 # section 8.2): menu/classic_chrome_ram.S and the generic installer.

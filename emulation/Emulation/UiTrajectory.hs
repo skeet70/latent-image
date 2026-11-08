@@ -7,6 +7,8 @@ module Emulation.UiTrajectory
   , FilmRow (..)
   , filmStoredCode
   , Step (..)
+  , StepCompletion (..)
+  , presentedFrameMenu
   , Segment (..)
   , LifecycleAction (..)
   , LifecycleRole (..)
@@ -32,11 +34,11 @@ module Emulation.UiTrajectory
   ) where
 
 import Control.Applicative ((<|>))
-import Control.Monad (forM, unless, when)
-import Data.Aeson (FromJSON (..), Value, eitherDecodeStrict', withArray, withObject, (.!=), (.:?), (.:))
+import Control.Monad (unless, when)
+import Data.Aeson (FromJSON (..), Value, eitherDecodeStrict', withArray, withObject, withText, (.!=), (.:?), (.:))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
-import Data.Aeson.Types (Object, Parser)
+import Data.Aeson.Types (Object, Parser, parseEither)
 import qualified Data.ByteString as B
 import Data.Foldable (toList)
 import Data.List (nub, sort, stripPrefix)
@@ -45,7 +47,7 @@ import qualified Data.Text as T
 import Data.Word (Word32)
 import Emulation.PreservationObservation (PreservationRanges, checkPreservationRangeCount, preservationRangeList, preservationRanges)
 import Emulation.WatchObservation (ExecutionInterval (..), executionIntervalLabel, Instructions (..), WatchAddress, WatchRange, unionWatchRanges, watchAddress, watchAddressValue, watchRange, watchRangeBounds)
-import EmulatorUsb (KeyPulse (..), KeyTiming (..), ModeDial (..), SettleBudget (..), defaultKeyTiming, modeDialName)
+import EmulatorUsb (CrawlKey, SiteRead (..), KeyPulse (..), KeyTiming (..), ModeDial (..), SettleBudget (..), defaultKeyTiming, modeDialName)
 import Numeric (readHex)
 
 data MenuState = MenuState Int Int Int deriving (Eq, Show)
@@ -114,8 +116,26 @@ instance FromJSON ReadExpectation where
           _ -> fail "invalid read expectation byte"
         bytes _ = fail "incomplete read expectation byte"
     ReadExpectation label . B.pack <$> bytes (T.unpack text)
+data StepCompletion = PacketCompletion | PresentedFrameCompletion CrawlKey deriving (Eq, Show)
 -- | `stepIdle` is the guest instructions run with no input before the press (FujiMod only).
-data Step = Step { stepKey :: String, stepExpected :: MenuState, stepTiming :: KeyTiming, stepIdle :: Maybe Instructions } deriving (Eq, Show)
+data Step = Step { stepKey :: String, stepExpected :: MenuState, stepTiming :: KeyTiming, stepIdle :: Maybe Instructions, stepCompletion :: StepCompletion } deriving (Eq, Show)
+
+data DisplaySettle = DisplayUnpressed | DisplayConsumed | DisplayUnsettled deriving (Eq)
+
+presentedFrameMenu :: Value -> Either String MenuState
+presentedFrameMenu = parseEither $ withObject "display-key reply" $ \reply -> do
+  failure <- reply .: "failure" :: Parser (Maybe String)
+  maybe (pure ()) fail failure
+  status <- reply .: "settle" >>= withObject "display settle" (\settle ->
+    settle .: "status" >>= withText "display settle status" (\value -> case value of
+      "prior-render-pending" -> pure DisplayUnpressed
+      "packet-consumed" -> pure DisplayConsumed
+      "budget-exhausted" -> pure DisplayUnsettled
+      _ -> fail "unknown display settle status"))
+  unless (status == DisplayConsumed) (fail "presented-frame requires a consumed physical key packet")
+  _ <- reply .: "display_wait_instructions" :: Parser Word32
+  reply .: "menu" >>= withObject "display menu" (\menu ->
+    MenuState <$> menu .: "menu_id" <*> menu .: "setting_id" <*> menu .: "cursor")
 
 -- | The bridge's largest `idle` request, its MAX_SETTLE.
 maxStepIdle :: Integer
@@ -123,15 +143,20 @@ maxStepIdle = 90000000
 
 instance FromJSON Step where
   parseJSON = withArray "step" $ \items -> case toList items of
-    [key, menu, setting, cursor] -> step key menu setting cursor (defaultKeyTiming, Nothing)
-    [key, menu, setting, cursor, timing] -> step key menu setting cursor =<< withObject "step timing" keyTiming timing
-    _ -> fail "a step is [key, menu, setting, cursor] with an optional timing object"
+    [key, menu, setting, cursor] -> step key menu setting cursor (defaultKeyTiming, Nothing, PacketCompletion)
+    [key, menu, setting, cursor, timing] -> step key menu setting cursor =<< withObject "step contract" (keyTiming key) timing
+    _ -> fail "a step is [key, menu, setting, cursor] with an optional contract object"
     where
-      step key menu setting cursor (timing, idle) =
-        Step <$> parseJSON key <*> (MenuState <$> parseJSON menu <*> parseJSON setting <*> parseJSON cursor) <*> pure timing <*> pure idle
-      keyTiming timing = do
-        unless (all (`elem` ["hold_instructions", "release_instructions", "settle_instructions", "idle_instructions"]) (KM.keys timing))
-          (fail "step timing takes only hold_instructions, release_instructions, settle_instructions and idle_instructions")
+      step key menu setting cursor (timing, idle, completion) =
+        Step <$> parseJSON key <*> (MenuState <$> parseJSON menu <*> parseJSON setting <*> parseJSON cursor) <*> pure timing <*> pure idle <*> pure completion
+      keyTiming key timing = do
+        unless (all (`elem` ["hold_instructions", "release_instructions", "settle_instructions", "idle_instructions", "completion"]) (KM.keys timing))
+          (fail "unknown step contract field")
+        completion <- timing .:? "completion" >>= \value -> case (value :: Maybe T.Text) of
+          Nothing -> pure PacketCompletion
+          Just "packet-consumed" -> pure PacketCompletion
+          Just "presented-frame" -> PresentedFrameCompletion <$> parseJSON key
+          _ -> fail "completion must be packet-consumed or presented-frame"
         pulse <- if KM.member "hold_instructions" timing || KM.member "release_instructions" timing
           then Just <$> keyPulse timing
           else pure Nothing
@@ -139,7 +164,9 @@ instance FromJSON Step where
         when (settle == Just 0) (fail "settle_instructions must be positive")
         idle <- timing .:? "idle_instructions"
         unless (all (\count -> count >= 1 && count <= maxStepIdle) idle) (fail ("idle_instructions must be 1.." ++ show maxStepIdle))
-        pure (KeyTiming pulse (SettleBudget <$> settle), Instructions . fromInteger <$> idle)
+        when (completion /= PacketCompletion && (isJust pulse || isJust settle || isJust idle))
+          (fail "presented-frame uses the bridge's bounded display-key contract without timing overrides")
+        pure (KeyTiming pulse (SettleBudget <$> settle), Instructions . fromInteger <$> idle, completion)
 
 data LifecycleRole = RetainedLifecycle | OwnedLifecycle deriving (Eq, Show)
 data LifecycleAction = LifecycleAction
@@ -199,6 +226,8 @@ instance FromJSON Segment where
       <*> segment .:? "read_expectations" .!= []
       <*> segment .:? "read_preservations" .!= []
       <*> segment .:? "save_lifecycle"
+    when (isJust (segmentKeyPulse result) && any ((/= PacketCompletion) . stepCompletion) (segmentSteps result))
+      (fail "presented-frame cannot combine with a segment key pulse")
     let expectations = segmentReadExpectations result
         labels = map expectedReadLabel expectations
     unless (length (nub labels) == length labels) (fail "read expectation labels must be unique")
@@ -256,8 +285,6 @@ data SiteLr = RecordsLr | OmitsLr deriving (Eq, Show)
 
 data SiteSp = RecordsSp | OmitsSp deriving (Eq, Show)
 
--- | A physical range a trace site reads at each entry: start and byte count, 1..4096.
-data SiteRead = SiteRead { siteReadStart :: Word32, siteReadCount :: Int } deriving (Eq, Show)
 
 -- | Labels the e2e arms itself.
 reservedLabels :: [String]
@@ -279,10 +306,7 @@ instance FromJSON TraceSite where
       Just fields -> do
         unless (all (`elem` ["reads", "lr", "sp"]) (KM.keys fields)) (fail "trace site options take reads, lr and sp")
         (,,) <$> fields .:? "reads" .!= [] <*> fields .:? "lr" .!= False <*> fields .:? "sp" .!= False
-    siteReads <- forM (entryReads :: [(T.Text, Int)]) $ \(start, count) -> case readAddress start of
-      Right (FixedAddress word) | T.length start == 8, count >= 1, count <= 4096, toInteger word + toInteger count <= 0x100000000 ->
-        pure (SiteRead word count)
-      _ -> fail ("trace site read must be eight hex digits and 1..4096 bytes: " ++ T.unpack start)
+    let siteReads = entryReads :: [SiteRead]
     pure (TraceSite site label siteReads (if wantsLr || not (null siteReads) then RecordsLr else OmitsLr)
       (if wantsSp then RecordsSp else OmitsSp))
 
@@ -450,7 +474,7 @@ variantMismatches retained variant
       , ("requires", segmentRequires a == segmentRequires b)
       , ("film_row", segmentFilmRow a == segmentFilmRow b)
       , ("save_lifecycle", segmentSaveLifecycle a == segmentSaveLifecycle b) ]
-    assertion step = (stepKey step, stepExpected step)
+    assertion step = (stepKey step, stepExpected step, stepCompletion step)
 
 -- | The first pressed step of SEGMENTS, with its segment's index, when it is a MENU its segment
 -- does not end on: the press that leaves the retained bridge's rendezvous overlay. The retained

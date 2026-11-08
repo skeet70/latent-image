@@ -9,14 +9,14 @@ module FujiAF.RamPush
   , callbackTablePointerAddress, callbackTableAddress, callbackStockWord
   , queryOutputAddress, configGateIndex, mailboxBytes
   , reviewedAllocationSize, installerAbiVersion, publicationCount, setupCount, activationCount
-  , PayloadKind(..), Payload(..), bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, bankModalEnginePayload, classicChromePayload, classicChromeIconPayload, usbTogglePayload, afRingPayload, experimentPayload, experimentHookCapacity, payloads, payloadOfSize, payloadPublicationCount, payloadEntries
+  , PayloadKind(..), Payload(..), bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, bankModalEnginePayload, bankModalRenderPayload, classicChromePayload, classicChromeIconPayload, usbTogglePayload, afRingPayload, experimentPayload, experimentHookCapacity, payloads, payloadOfSize, payloadPublicationCount, payloadEntries
   , readRamPushManifest, parseRamPushManifest, readRamAllocState, readRetainedAllocation, readRamPushState
   , consumedMarkerPath, writeAllocStateFile, writeStateFile
   , ramAllocArguments, ramPushArguments, ramFreeArguments, ramUnloadArguments, ramRelinkArguments
   , ramAllocJournalCapBytes, ramPushJournalCapBytes, ramFreeJournalCapBytes, ramUnloadJournalCapBytes
-  , validateReviewedContract, reviewedScopeIdentity, sourceIdentityDifferences, requireReviewedBytes, requireReviewedState, ReviewedContract(..), publicationContractDigest
+  , validateReviewedContract, reviewedScopeIdentity, composedAllowlistIdentity, sourceIdentityDifferences, requireReviewedBytes, requireReviewedState, ReviewedContract(..), publicationContractDigest
   , RamPushRelinker(..), RustBankInputs(..), runfilesRelinker, PinnedBuild(..)
-  , AllowlistPolicy(..), OverrideReason(..), AllowlistOutcome(..), allowlistReceipt
+  , AllowlistPolicy(..), OverrideReason(..), AllowlistOutcome(..), allowlistReceipt, checkRelinkedBank
   , pinnedReviewedManifest, withPinnedReviewedBuild, withPinnedReviewedBuildUsing, withRelinkedBuildUsing
   , runRamAlloc, runRamAllocWith, runRamPush, runRamPushWith, runRamRelink
   , runRamFree, runRamFreeWith, runRamUnload, runRamUnloadWith
@@ -92,6 +92,7 @@ data RamPushManifest = RamPushManifest
   , runtimeBytes :: B.ByteString
   , manifestEntries :: RamPushEntries
   , manifestPublications :: [Publication]
+  , manifestBankVariant :: Maybe Layout.BankVariant
   } deriving (Eq, Show)
 data RamAllocState = RamAllocState
   { allocBase :: Address
@@ -121,6 +122,7 @@ data RamPushState = RamPushState
   , stateSlotWord :: WordValue
   , stateBootstrap :: B.ByteString
   , stateNonce :: Word32
+  , stateBankVariant :: Maybe Layout.BankVariant
   } deriving (Eq, Show)
 data PeerCacheAvailability = PeerCacheBound | PeerCacheUnbound deriving (Eq, Show)
 data RamAllocOutcome = RamAllocated FilePath | RamAllocRefused String | RamAllocUncertain String deriving (Eq, Show)
@@ -156,7 +158,7 @@ data ReviewedContract = ReviewedContract
 data PayloadKind = RecipeBankD3 | RecipeBankModal75 | RecipeBankLifecycle | RecipeBankModalLifecycle | RecipeBankModal75MenuEngine | ClassicChrome | ClassicChromeIcon | UsbToggle | AfRing | Experiment deriving (Eq, Show)
 
 -- | What a payload kind's relink links, and the allocation, ABI word, counts
--- and installer start it has. A runtime's allocation size names its kind.
+-- and installer start it has.
 data Payload = Payload
   { payloadKind :: PayloadKind
   , payloadAllocationSize :: Int
@@ -238,6 +240,14 @@ bankModalEnginePayload = bankD3Payload
   , payloadActivationCount = Layout.publicationActivationCountFor Layout.modalEngineBankVariant
   , payloadRelinkScript = "build-recipe-bank-modal-engine-ram.sh"
   , payloadBankVariant = Just Layout.modalEngineBankVariant
+  }
+
+bankModalRenderPayload :: Payload
+bankModalRenderPayload = bankModalEnginePayload
+  { payloadAllocationSize = fromIntegral (Layout.runtimeAllocationSizeFor Layout.modalRenderBankVariant)
+  , payloadActivationCount = Layout.publicationActivationCountFor Layout.modalRenderBankVariant
+  , payloadRelinkScript = "build-recipe-bank-modal-render-ram.sh"
+  , payloadBankVariant = Just Layout.modalRenderBankVariant
   }
 
 -- | reports/classic-chrome-patch.md section 8.2: 84 setup and 47 activation
@@ -349,6 +359,37 @@ payloadOfSize size = case filter ((== size) . payloadAllocationSize) payloads of
 requirePayload :: Int -> IO Payload
 requirePayload size = maybe (P.reject ("allocation size "++show size++" is no RAM-push payload's extent")) pure (payloadOfSize size)
 
+payloadWithVariant :: Maybe Layout.BankVariant -> Int -> IO Payload
+payloadWithVariant variant size = do
+  payload <- requirePayload size
+  case variant of
+    Nothing -> do
+      require (isNothing (payloadBankVariant payload)) "bank payload requires a bank variant"
+      pure payload
+    Just selected -> do
+      require (size == fromIntegral (Layout.runtimeAllocationSizeFor selected)) "bank variant and allocation size disagree"
+      pure payload
+        { payloadBankVariant = Just selected
+        , payloadActivationCount = Layout.publicationActivationCountFor selected
+        }
+
+parseManifestVariant :: Value -> Int -> IO (Maybe Layout.BankVariant)
+parseManifestVariant value size = do
+  payload <- requirePayload size
+  case payloadBankVariant payload of
+    Nothing -> do
+      require (field value "bank_variant" == Null) "bank_variant requires a bank payload"
+      pure Nothing
+    Just _ -> do
+      tag <- case field value "bank_variant" of
+        Null -> pure Nothing
+        String identity -> pure (Just (T.unpack identity))
+        _ -> P.reject "bank_variant requires a string identity"
+      count <- case field value "publications" of
+        Array items -> pure (V.length items)
+        _ -> P.reject "publications array required"
+      Just <$> either P.reject pure (Layout.bankVariantFromIdentity tag count)
+
 unreviewedBankRefusal :: PayloadKind -> Maybe String
 unreviewedBankRefusal kind = case kind of
   RecipeBankModal75 -> Just "scoped modal-75 payload has no approved live reviewed contract; use the host-only --ram-push-modal-scoped --unreviewed-relink emulator path"
@@ -434,6 +475,10 @@ closed :: Value -> [String] -> IO ()
 closed (Object object) keys = require (sort (map K.toString (M.keys object)) == sort keys) "closed RAM-push document keys required"
 closed _ _ = P.reject "RAM-push JSON object required"
 
+variantDocumentKeys :: Value -> [String] -> [String]
+variantDocumentKeys (Object object) keys = keys ++ ["bank_variant" | M.member "bank_variant" object]
+variantDocumentKeys _ keys = keys
+
 integer :: Value -> Int -> Int -> IO Int
 integer (Number n) low high = case toBoundedInteger n of
   Just value | value >= low && value <= high -> pure value
@@ -499,7 +544,7 @@ validateManifest manifest = do
       entryAddresses = map unAddress [installEntry entries,rollbackEntry entries,statusEntry entries]
   require (B.length (runtimeBytes manifest) == size) "runtime.bin length differs from manifest size"
   require (sha256 (runtimeBytes manifest) == runtimeDigest manifest) "runtime.bin SHA256 differs from manifest"
-  payload <- requirePayload size
+  payload <- payloadWithVariant (manifestBankVariant manifest) size
   let count = payloadPublicationCount payload
       setups = payloadSetupCount payload
       activations = payloadActivationCount payload
@@ -519,16 +564,18 @@ validateManifest manifest = do
 parseRamPushManifest :: FilePath -> B.ByteString -> B.ByteString -> IO RamPushManifest
 parseRamPushManifest path document runtime = do
   value <- either P.reject pure (decodeStrictIntegers document)
-  closed value ["base","entry","publications","runtime_sha256","schema","size","source_identity"]
+  closed value (variantDocumentKeys value ["base","entry","publications","runtime_sha256","schema","size","source_identity"])
   _ <- integer (field value "schema") 1 1
   Address base <- Address <$> hex32 (field value "base")
   size <- integer (field value "size") (minimum (map payloadAllocationSize payloads)) (maximum (map payloadAllocationSize payloads))
-  payload <- requirePayload size
+  variant <- parseManifestVariant value size
+  payload <- payloadWithVariant variant size
   digest <- text (field value "runtime_sha256") 64
   require (hexDigest digest) "runtime_sha256 must be lowercase SHA256"
   identity <- case field value "source_identity" of
     Object object -> do
-      require (not (M.null object) && M.size object <= 68) "bounded nonempty source_identity required"
+      require (not (M.null object)) "source_identity must be nonempty"
+      require (M.size object <= 68) "source_identity exceeds 68 entries"
       forM (M.toList object) $ \(key,item) -> do
         name <- pure (K.toString key)
         hash <- text item 64
@@ -537,7 +584,7 @@ parseRamPushManifest path document runtime = do
     _ -> P.reject "source_identity object required"
   entries <- parseEntries (field value "entry")
   publications <- array (field value "publications") (payloadPublicationCount payload) (payloadPublicationCount payload) >>= mapM (parsePublication (payloadPublicationCount payload))
-  validateManifest (RamPushManifest path (takeDirectory path </> "runtime.bin") (sha256 document) identity (Address base) size digest runtime entries publications)
+  validateManifest (RamPushManifest path (takeDirectory path </> "runtime.bin") (sha256 document) identity (Address base) size digest runtime entries publications variant)
 
 readRamPushManifest :: FilePath -> IO RamPushManifest
 readRamPushManifest path = do
@@ -604,6 +651,7 @@ requireReviewedBytes suppliedManifest suppliedRuntime reviewedManifest reviewedR
 
 requireReviewedState :: RamPushState -> RamPushManifest -> IO ()
 requireReviewedState state reviewed = do
+  require (stateBankVariant state == manifestBankVariant reviewed) "installed state bank variant differs from the pinned builder output"
   require (stateBase state == allocationBase reviewed && stateSize state == allocationSize reviewed) "installed state allocation differs from the pinned builder output"
   require (stateManifestDigest state == manifestDigest reviewed) "installed state manifest hash differs from the pinned builder output"
   require (stateRuntimeDigest state == runtimeDigest reviewed) "installed state runtime hash differs from the pinned builder output"
@@ -629,7 +677,7 @@ allocStateValue state = Object (M.fromList
   , ("config_f7", Number (fromIntegral (allocConfigF7 state))) ])
 
 stateValue :: RamPushState -> Value
-stateValue state = Object (M.fromList
+stateValue state = Object (M.fromList $
   [ ("schema", Number 1), ("kind", String "xm1-ram-push-state")
   , ("manifest_sha256", String (T.pack (stateManifestDigest state)))
   , ("runtime_sha256", String (T.pack (stateRuntimeDigest state)))
@@ -639,7 +687,9 @@ stateValue state = Object (M.fromList
   , ("publications", Array (V.fromList (map publicationValue (statePublications state))))
   , ("slot_old", String (T.pack (hexWord (unWordValue (stateSlotWord state)))))
   , ("bootstrap", String (T.pack (P.hexBytes (B.unpack (stateBootstrap state)))))
-  , ("nonce", String (T.pack (hexWord (stateNonce state)))) ])
+  , ("nonce", String (T.pack (hexWord (stateNonce state)))) ]
+  ++ [("bank_variant", String (T.pack (Layout.bankVariantTag variant)))
+     | Just variant <- [stateBankVariant state], Layout.hasPublicationGroup Layout.RenderPublication variant])
 
 parseHexBytes :: Value -> Int -> IO B.ByteString
 parseHexBytes value count = do
@@ -705,7 +755,7 @@ writeConsumedMarker retained end = writePrivateBytes (consumedMarkerPath retaine
 parseState :: B.ByteString -> IO RamPushState
 parseState document = do
   value <- either P.reject pure (decodeStrictIntegers document)
-  closed value ["base","bootstrap","entry","kind","manifest_sha256","nonce","publications","runtime_sha256","schema","size","slot_old"]
+  closed value (variantDocumentKeys value ["base","bootstrap","entry","kind","manifest_sha256","nonce","publications","runtime_sha256","schema","size","slot_old"])
   _ <- integer (field value "schema") 1 1
   require (field value "kind" == String "xm1-ram-push-state") "RAM-unload state kind mismatch"
   manifestHash <- text (field value "manifest_sha256") 64
@@ -713,16 +763,17 @@ parseState document = do
   require (hexDigest manifestHash && hexDigest runtimeHash) "state SHA256 is invalid"
   base <- Address <$> hex32 (field value "base")
   size <- integer (field value "size") (minimum (map payloadAllocationSize payloads)) (maximum (map payloadAllocationSize payloads))
-  payload <- requirePayload size
+  variant <- parseManifestVariant value size
+  payload <- payloadWithVariant variant size
   entries <- parseEntries (field value "entry")
   publications <- array (field value "publications") (payloadPublicationCount payload) (payloadPublicationCount payload) >>= mapM (parsePublication (payloadPublicationCount payload))
   slot <- WordValue <$> hex32 (field value "slot_old")
   original <- parseHexBytes (field value "bootstrap") 32
   require (original == bootstrapBytes) "state bootstrap differs from the internally built allocator bootstrap"
   nonce <- hex32 (field value "nonce")
-  let state = RamPushState manifestHash runtimeHash base size entries publications slot original nonce
+  let state = RamPushState manifestHash runtimeHash base size entries publications slot original nonce variant
       zeros = B.replicate size 0
-      dummy = RamPushManifest "" "" manifestHash [] base size (sha256 zeros) zeros entries publications
+      dummy = RamPushManifest "" "" manifestHash [] base size (sha256 zeros) zeros entries publications (payloadBankVariant payload)
   _ <- validateManifest dummy
   pure state
 
@@ -1297,6 +1348,7 @@ withRelinkedBuildUsing relinker policy base action = withReviewedBuildDirectory 
   reviewedRuntime <- privateRegular "reviewed RAM-push runtime" reviewedRuntimePath (512*1024)
   reviewed <- parseRamPushManifest reviewedManifestPath reviewedDocument reviewedRuntime
   require (allocationSize reviewed == payloadAllocationSize payload) "relinked manifest is not the relinker's payload"
+  require (manifestBankVariant reviewed == payloadBankVariant payload) "relinked manifest bank variant differs from the selected payload"
   allowlist <- case payloadBankVariant payload of
     Just variant -> checkRelinkedBank variant policy root output reviewed
     Nothing -> pure NoBankCode
@@ -1349,7 +1401,8 @@ runRamPushWith availability observer allocation manifest clock api directory
   | Nothing <- payloadOfSize (allocSize allocation) = pure (RamPushRefused ("retained allocation size "++show (allocSize allocation)++" is no payload's extent"))
   | allocationSize manifest /= allocSize allocation = pure (RamPushRefused "manifest size differs from the retained allocation's extent")
   | allocationBase manifest /= allocBase allocation = pure (RamPushRefused "manifest base differs from the retained allocation")
-  | Just payload <- payloadOfSize (allocSize allocation) = do
+  | Just _ <- payloadOfSize (allocSize allocation) = do
+      payload <- payloadWithVariant (manifestBankVariant manifest) (allocSize allocation)
       let cap = ramPushJournalCapBytes payload
           count = payloadPublicationCount payload
           runtimeChunks = (allocationSize manifest+247) `div` 248
@@ -1385,7 +1438,7 @@ runRamPushWith availability observer allocation manifest clock api directory
         forM_ (manifestPublications manifest) $ \publication -> do
           current <- wordAt <$> readMemory live (publicationAddress publication) 4
           require (current == unWordValue (publicationNew publication)) ("installed word readback mismatch at "++hexWord (unAddress (publicationAddress publication)))
-        statePath <- writeStateFile directory (RamPushState (manifestDigest manifest) (runtimeDigest manifest) (allocBase allocation) (allocSize allocation) (manifestEntries manifest) (manifestPublications manifest) slot bootstrapBytes nonce)
+        statePath <- writeStateFile directory (RamPushState (manifestDigest manifest) (runtimeDigest manifest) (allocBase allocation) (allocSize allocation) (manifestEntries manifest) (manifestPublications manifest) slot bootstrapBytes nonce (manifestBankVariant manifest))
         note session "ram-push-installed" ("state="++statePath++";publications="++show count)
         writeIORef active False
         pure statePath
@@ -1490,7 +1543,8 @@ runRamUnloadWith :: PeerCacheAvailability -> RamPushState -> Clock -> UsbApi -> 
 runRamUnloadWith availability state clock api directory
   | availability == PeerCacheUnbound = pure (RamUnloadRefused "X-M1 peer-core cache binding is unbound; no camera write sent")
   | Nothing <- payloadOfSize (stateSize state) = pure (RamUnloadRefused ("installed state size "++show (stateSize state)++" is no payload's extent"))
-  | Just payload <- payloadOfSize (stateSize state) = do
+  | Just _ <- payloadOfSize (stateSize state) = do
+      payload <- payloadWithVariant (stateBankVariant state) (stateSize state)
       let count = payloadPublicationCount payload
           cap = ramUnloadJournalCapBytes payload; deadline = transferTimeoutMs*(600 + 2*count)
       session <- newSession clock api directory cap deadline
