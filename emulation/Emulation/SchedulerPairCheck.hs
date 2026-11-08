@@ -209,9 +209,9 @@ pendingOf = withObject "pending" $ \p -> do
         terminal <- p .:? "terminal_memory" >>= traverse memoryOf
         history <- p .:? "history" >>= maybe (pure []) (mapM (withObject "boundary" $ \b -> (,,,) <$> b .: "kind" <*> b .: "cpsr" <*> b .: "instructions" <*> b .: "order"))
         let saves = [(savedCpsr,savedAt,savedOrder) | (kind,savedCpsr,savedAt,savedOrder) <- history, kind == ("save" :: T.Text)]
-            saveCpsr = case saves of { [] -> Nothing; values -> Just ((\\(c,_,_) -> c) (last values)) }
-            saveAt = case saves of { [] -> Nothing; values -> Just ((\\(_,a,_) -> a) (last values)) }
-            saveOrder = case saves of { [] -> Nothing; values -> Just ((\\(_,_,o) -> o) (last values)) }
+            saveCpsr = case saves of { [] -> Nothing; values -> Just ((\(c,_,_) -> c) (last values)) }
+            saveAt = case saves of { [] -> Nothing; values -> Just ((\(_,a,_) -> a) (last values)) }
+            saveOrder = case saves of { [] -> Nothing; values -> Just ((\(_,_,o) -> o) (last values)) }
         pure (Left (F.Pending semantic domain arguments before terminal task sp cpsr entryAddress entered saveCpsr saveAt saveOrder entryOrder entryCore))
   case semantic of
     FamilySemantic _ -> typed

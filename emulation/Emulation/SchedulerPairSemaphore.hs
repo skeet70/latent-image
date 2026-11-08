@@ -427,13 +427,13 @@ checkPendingSemaphore releases pending = case (pendingSemantic pending, pendingT
       schedulerLock <- wordAt schedulerLockAddress terminal
       objectLock <- wordAt lockWord terminal
       saveCpsr <- maybe (Left FamilyLifetime) Right (pendingSaveCpsr pending)
-      saveAt <- maybe (Left FamilyLifetime) Right (pendingSaveAt pending)
+      saveOrder <- maybe (Left FamilyLifetime) Right (pendingSaveOrder pending)
       expect FamilyLifetime (saveCpsr .&. 0x80 /= 0)
       expect FamilyLifetime (saveCpsr .&. 0x160 == pendingCpsr pending .&. 0x160)
       expect FamilyLifetime (pendingCpsr pending .&. 0x80 == 0)
       let unlocked lock = [witness | witness <- releases, releaseTask witness == task
-            , releaseCore witness == pendingCore pending, releaseCall witness >= pendingEntered pending
-            , releaseAt witness < saveAt, releaseAddress witness == Address lock, releaseValue witness == 0]
+            , releaseCore witness == pendingCore pending, releaseCall witness >= pendingEntryOrder pending
+            , releaseAt witness < saveOrder, releaseAddress witness == Address lock, releaseValue witness == 0]
           callerUnlockAt lock = maximum (0 : map releaseAt (unlocked lock))
           acquired lock = [witness | witness <- releases, releaseTask witness /= task
             , releaseAt witness > callerUnlockAt lock, releaseAddress witness == Address lock, releaseValue witness == 1]

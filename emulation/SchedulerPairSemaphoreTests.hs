@@ -237,7 +237,7 @@ timedExpiryCall = callOfTask taskA DomainA timedAddress (SemaphoreSemantic Semap
   [Written (Address waitA) 4 (fromIntegral (-50 :: Int))] (traceOf (withLr 0x47dd0) [saveBoundary 0x47dd0, timerInsertBoundary, expiryBoundary] Returned)
 
 pendingForever :: Word32 -> Word32 -> Pending
-pendingForever timeout stackWord = Pending (SemaphoreSemantic SemaphoreTimedWait) DomainA [1, timeout, 0, 0] before (Just terminal) taskA 0x7000 0x13 timedAddress 5 (Just 0x93) (Just 50) 0
+pendingForever timeout stackWord = Pending (SemaphoreSemantic SemaphoreTimedWait) DomainA [1, timeout, 0, 0] before (Just terminal) taskA 0x7000 0x13 timedAddress 5 (Just 0x93) (Just 50) (Just 50) 5 0
  where
   before = M.fromList [(Address 0x7000, stackWord)]
   terminal = M.union (baseBefore 0 5 taskA) $ M.fromList
@@ -285,12 +285,12 @@ interleavedEvents =
   ]
 
 pendingInterleaved :: Pending
-pendingInterleaved = (pendingForever (fromIntegral (-1 :: Int)) 0) { pendingSaveAt = Just 110, pendingTerminal = Just terminal }
+pendingInterleaved = (pendingForever (fromIntegral (-1 :: Int)) 0) { pendingSaveAt = Just 110, pendingSaveOrder = Just 110, pendingTerminal = Just terminal }
  where
   terminal = M.insert (Address 0x400545c0) 1 (maybe M.empty id (pendingTerminal (pendingForever (fromIntegral (-1 :: Int)) 0)))
 
 pendingStaleRelease :: Pending
-pendingStaleRelease = (pendingForever (fromIntegral (-1 :: Int)) 0) { pendingEntered = 50 }
+pendingStaleRelease = (pendingForever (fromIntegral (-1 :: Int)) 0) { pendingEntered = 50, pendingEntryOrder = 50 }
 
 waitTimeoutUntimed :: Call
 waitTimeoutUntimed = callOfTask taskA DomainA 0x47a54 (SemaphoreSemantic SemaphoreWait) [1,0,0,0]
@@ -469,13 +469,14 @@ wirePending :: Pending -> J.Value
 wirePending pending = J.object
   [ "entry" J..= J.object
       [ "slot" J..= J.object ["domain" J..= domainName (pendingDomain pending),"entry" J..= hex (pendingEntry pending),"semantic" J..= semanticValue (pendingSemantic pending)]
-      , "core" J..= coreName 0
+      , "core" J..= coreName 0, "order" J..= pendingEntryOrder pending
       , "arguments" J..= pendingArguments pending, "memory" J..= wordsOf (pendingBefore pending)
       , "task" J..= J.object ["view" J..= ("committed"::String),"value" J..= pendingTask pending]
       , "sp" J..= hex (pendingSp pending), "cpsr" J..= pendingCpsr pending
       ]
   , "entered" J..= pendingEntered pending, "terminal_memory" J..= maybe [] wordsOf (pendingTerminal pending)
-  , "history" J..= [J.object ["kind" J..= ("save"::String),"cpsr" J..= cpsr,"instructions" J..= at] | cpsr <- maybe [] pure (pendingSaveCpsr pending), at <- maybe [] pure (pendingSaveAt pending)]
+  , "history" J..= [J.object ["kind" J..= ("save"::String),"cpsr" J..= cpsr,"instructions" J..= at,"order" J..= order]
+      | cpsr <- maybe [] pure (pendingSaveCpsr pending), at <- maybe [] pure (pendingSaveAt pending), order <- maybe [] pure (pendingSaveOrder pending)]
   ]
 
 kindName :: BoundaryKind -> String
