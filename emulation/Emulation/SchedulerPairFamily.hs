@@ -134,8 +134,8 @@ data Pending = Pending
   , pendingCore :: Int
   } deriving (Eq,Show)
 
--- | A completed S1 lock event: its writer, instruction, and stored lock words.
-data ReleaseWitness = ReleaseWitness { releaseTask :: Word32, releaseCore :: Int, releaseFirst :: Word64, releaseAt :: Word64, releaseWrites :: [(Address,Word32)] } deriving (Eq,Show)
+-- | One qualified owned S1 lock store: its writer, call epoch, store instruction, and word.
+data ReleaseWitness = ReleaseWitness { releaseTask :: Word32, releaseCore :: Int, releaseCall :: Word64, releaseAt :: Word64, releaseAddress :: Address, releaseValue :: Word32 } deriving (Eq,Show)
 
 -- | Only a forever timed flag wait is modeled; every other pending family call fails closed.
 checkPendingFamily :: [ReleaseWitness] -> Pending -> Either FamilyRefusal ()
@@ -188,8 +188,10 @@ checkPendingFamily releases pending = case (pendingSemantic pending, pendingTerm
       saveAt <- maybe (Left FamilyLifetime) Right (pendingSaveAt pending)
       expect FamilyLifetime (saveCpsr .&. 0x80 /= 0)
       expect FamilyLifetime (saveCpsr .&. 0x160 == pendingCpsr pending .&. 0x160)
-      let unlocked lock = [w | w <- releases, releaseTask w == task, releaseCore w == pendingCore pending, releaseAt w < saveAt, (Address lock,0) `elem` releaseWrites w]
-          acquired lock = [w | w <- releases, releaseTask w /= task, releaseFirst w >= saveAt, (Address lock,1) `elem` releaseWrites w]
+      let unlocked lock = [w | w <- releases, releaseTask w == task, releaseCore w == pendingCore pending,
+              releaseCall w >= pendingEntered pending, releaseAt w < saveAt, releaseAddress w == Address lock, releaseValue w == 0]
+          callerUnlockAt = maximum (0 : map releaseAt (unlocked lockWord) ++ map releaseAt (unlocked schedulerLockAddress))
+          acquired lock = [w | w <- releases, releaseTask w /= task, releaseAt w > callerUnlockAt, releaseAddress w == Address lock, releaseValue w == 1]
           lockOk lock value = not (null (unlocked lock)) && (value == 0 || (value == 1 && not (null (acquired lock))))
       expect FamilyLifetime (lockOk lockWord objectLock && lockOk schedulerLockAddress schedulerLock)
       savedSp <- wordAt (task+0x18) terminal

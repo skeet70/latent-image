@@ -391,7 +391,11 @@ qualify bytes plan observation = do
   checkDemandCalls observation
   let calls = sortOn callFirst (obsCalls observation)
   forM_ calls $ \call -> checkCallEnvelope plan call >> checkCallForIn calls (obsRole observation) call
-  let releases = [F.ReleaseWitness (callTask call) (callCore call) (callFirst call) (releaseLast call) [(address,value) | Written address _size value <- callWrites call] | call <- calls, callSemantic call `elem` [HelperSemantic Release, HelperSemantic Acquire]]
+  let releases = [F.ReleaseWitness task (writerCore origin) (callFirst call) (writerInstructions origin) address value
+        | call <- calls, callSemantic call `elem` [HelperSemantic Release, HelperSemantic Acquire]
+        , (Written address _size value, origin) <- zip (callWrites call) (callWriteOrigins call)
+        , ownsOrigin call origin
+        , let task = case writerTask origin of Address owner -> owner]
   qualifySuffix plan releases observation (CallTotals (not (null calls)) (sum (map callCount calls)))
   pure (summary observation)
 
@@ -409,11 +413,6 @@ qualifyPrefix bytes plan observation = do
   final <- maybe (Left Readback) Right (obsFinal observation)
   forM_ domains $ \domain -> either (const (Left Readback)) Right (Q.checkReadback (sharedPlan plan) Q.FinalReadback final domain)
   either (const (Left Watch)) Right (Q.checkSegments (watchPlan plan) (obsArmings observation) final (obsSegments observation))
-
-releaseLast :: Call -> Word64
-releaseLast call = case callTrace call of
-  Just trace -> maximum (callFirst call : map boundaryInstructions (traceHistory trace))
-  Nothing -> callFirst call
 
 checkCallEnvelope :: Plan -> Call -> Either Refusal ()
 checkCallEnvelope plan call = do
