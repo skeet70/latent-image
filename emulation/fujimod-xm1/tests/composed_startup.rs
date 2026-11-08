@@ -1830,7 +1830,9 @@ fn pool_contract() -> Value {
     reads.push(read("primary-publisher/creation-a", 0x4005_ce74, 80));
     reads.push(read("primary-publisher/creation-b", 0x400e_cccc, 80));
     value["pool_allocation"] = json!({
-        "pool": {"start": POOL, "end": 0x00a5_b200},
+        "pool": {"start": POOL, "end": 0x00a5_a200},
+        "allocatable_end": 0x00a5_a200,
+        "reserved": {"start": 0x00a5_a200, "end": 0x00a5_b200},
         "records": "primary-publisher/records", "cursor": "primary-publisher/cursor",
         "words": [
             {"read": "primary-publisher/records", "offset": 0, "stride": 12, "position": "base"},

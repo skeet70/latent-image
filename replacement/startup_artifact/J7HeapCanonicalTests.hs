@@ -150,7 +150,7 @@ main = do
       core0 = WriteRange (CorePhysicalTarget Core0)
   putStrLn ("general-heap writes: " ++ show heapWrites)
   ok "partition: arena [0xa71a00,0xbf19e0), sentinel, errno and the task pool on core 0, nothing on core 1"
-    (heapWrites == [core0 0xa71a00 0xbf19e0, core0 0x89d4f8 0x89d4fc, core0 0x89c978 0x89c97c, core0 0xa10200 0xa5b200])
+    (heapWrites == [core0 0xa71a00 0xbf19e0, core0 0x89d4f8 0x89d4fc, core0 0x89c978 0x89c97c, core0 0xa10200 0xa5a200])
   let readsOf piece = [(labelText (readLabel row), readDiffers row /= Nothing, readExpect row) | row <- catalogReads (pieceCatalog piece)]
   ok "image5-producer destination and staging carry per-role expectations, its other reads none"
     (readsOf image5 ==

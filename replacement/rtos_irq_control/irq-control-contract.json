@@ -1,0 +1,167 @@
+{
+  "schema": 1,
+  "target": {
+    "body": "XM1",
+    "firmware": "1.50",
+    "decomp_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+    "loaders": {
+      "a": {
+        "path": "private-data/analysis/x-m1-1.50/decode/loader-40000.bin",
+        "sha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882"
+      },
+      "b": {
+        "path": "private-data/analysis/x-m1-1.50/decode/loader-d0000.bin",
+        "sha256": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec"
+      }
+    },
+    "slots": {
+      "0x158": {
+        "operation": "interrupt-enable",
+        "entries": {"a": "0x41108", "b": "0xd1108"},
+        "bodies": {"a": "0x42b00", "b": "0xd2b00"}
+      },
+      "0x15c": {
+        "operation": "interrupt-disable",
+        "entries": {"a": "0x41124", "b": "0xd1124"},
+        "bodies": {"a": "0x42eb0", "b": "0xd2eb0"}
+      },
+      "0x160": {
+        "operation": "interrupt-handler-define",
+        "entries": {"a": "0x4d8fc", "b": "0xdd8c0"},
+        "configure": {"a": "0x429ac", "b": "0xd29ac"},
+        "reset": {"a": "0x42a98", "b": "0xd2a98"}
+      }
+    }
+  },
+  "capability": {
+    "owned": [
+      "typed interrupt line 0..=127 and validated registration fields",
+      "24-byte registration table view at the stock addresses",
+      "enable and disable controller sequences on the executing core's bank",
+      "define, configure and reset registration sequences",
+      "CPSR I and I/F mask/restore backend",
+      "per-domain A32 entries at the stock slot addresses"
+    ],
+    "non_goals": [
+      "vector, IRQ or SVC entry and exit",
+      "interrupt delivery",
+      "nesting",
+      "controller arbitration",
+      "hardware laws",
+      "live firmware placement"
+    ],
+    "corrections": [
+      {
+        "id": "valid-irq-number",
+        "trigger": "enable or disable with r0 < 0",
+        "stock": "the signed cmp r0,#127 passes; the table and controller words are indexed below their bases",
+        "owned": "the typed boundary refuses before any backend access and the slot returns -5",
+        "retained_boundary": "the A32 entry converts r0 to i32 and calls the typed service",
+        "consumer_dependence": "the census ids are all 0..=127; no consumer passes a negative id"
+      }
+    ]
+  },
+  "boundary": {
+    "table": {
+      "a": "0x400538fc",
+      "b": "0x400e38bc",
+      "entries": 128,
+      "stride": 24,
+      "words": ["handler", "+0x4", "priority", "+0xc", "mode"]
+    },
+    "banks": {
+      "primary": "0xfffb3000",
+      "secondary": "0xfffb4000",
+      "selection": "CP14 c2,c0,0 equal to 0x4003 selects primary, any other value secondary; the slot domain does not select the bank"
+    },
+    "arguments": {
+      "enable": "r0 signed interrupt number",
+      "disable": "r0 signed interrupt number",
+      "define": "r0 uxth interrupt number; r1 NULL or five words {ignored, handler, priority, +0xc flag, mode}"
+    },
+    "returns": {
+      "enable": {"ok": 0, "out_of_range": -5, "empty_handler": -5},
+      "disable": {"ok": 0, "out_of_range": -5},
+      "define": {"ok": 0, "invalid_non_null_packet": -17, "null_packet": 0}
+    },
+    "default_empty_handler": {"a": "0x42840", "b": "0xd2840"}
+  },
+  "lifetime": {
+    "table_initial_state": "kernel_initialize_irqs sets all 128 entries to {default empty handler, 0, 15, 0, 1} before the first phase callback on both cores",
+    "define": "writes the registration table only; no controller word changes",
+    "enable": "reads the table and publishes the handler to controller +0x400 + 4*line and the priority to +0x800 + 4*line",
+    "disable": "writes the empty handler to controller +0x400 + 4*line and leaves the registration table unchanged",
+    "replacement": "a define after an enable leaves the controller vector unchanged until the next enable"
+  },
+  "effects": {
+    "enable": [
+      "mask IRQ",
+      "read the table handler; an empty handler restores IRQ and returns -5",
+      "read the group enable word, write ~0 to the clear word",
+      "read-modify-write the +0x60 and +0x100 group bits from table +0x4 and +0xc",
+      "read-modify-write +0x180 and +0x140 half-word fields from table +0x10, selected by table +0xc",
+      "write table handler to +0x400 + 4*line and table priority to +0x800 + 4*line",
+      "write the line bit to +0x120 and the saved enable word OR the bit to +0x80",
+      "restore IRQ"
+    ],
+    "disable": [
+      "mask IRQ",
+      "read the group enable word, write ~0 to the clear word",
+      "clear the +0x60 bit, write the line bit to +0xe0",
+      "clear the +0x100 bit, write the line bit to +0x120",
+      "clear both +0x180 and +0x140 half-word fields",
+      "write the empty handler to +0x400 + 4*line",
+      "write the saved enable word AND NOT the line bit to +0x80",
+      "restore IRQ"
+    ],
+    "define": [
+      "mask IRQ and FIQ",
+      "uxth the line",
+      "NULL packet: reset writes {empty handler, 0, 15, 0, 1} through configure and returns 0",
+      "non-NULL packet: read +0x4, +0x8, +0xc, +0x10, validate, then configure writes {handler, 0, priority, flag, mode}",
+      "configure masks IRQ around the five table stores and restores it",
+      "restore IRQ and FIQ"
+    ]
+  },
+  "verification": {
+    "host": {
+      "target": "//replacement/rtos_irq_control:irq-host-tests",
+      "tests": 18,
+      "checks": [
+        "exact mask, table and controller event order for enable, disable and define",
+        "no controller or table write on every refusal",
+        "both table domains and both controller banks",
+        "caller I and F bits preserved",
+        "define replacement lifetime and disable/enable republish",
+        "named negative-line counterexamples"
+      ]
+    },
+    "native": {
+      "target": "//replacement/rtos_irq_control:irq-native-suite",
+      "cases": 40,
+      "stock_owned_matches": 32,
+      "owned_corrections": 8,
+      "domains": ["a", "b"],
+      "covered": [
+        "define success, NULL reset, invalid packet, line 128, line 0xffff and uxth line 0x10000",
+        "enable empty-handler refusal and line 128 refusal",
+        "disable line 128 refusal",
+        "negative-line enable, disable and define corrections"
+      ],
+      "excluded": [
+        "enable and disable success paths read and write controller words outside the native device allowlist",
+        "the scratch body at 0x50000 is not a live placement"
+      ]
+    },
+    "full_system": {
+      "status": "not run for owned code",
+      "reason": "the controller-bank success path needs the full-system controller model; no owned live carrier or RAM-push experiment was staged",
+      "stock_reference": "reports/xm1-timer-interrupt-laws.md sections 4.4 and 7 record the stock bank sequence against the FujiMod model"
+    }
+  },
+  "promotion": {
+    "live_placement": "requires an admitted carrier for the shared body and the three entry veneers in the loader image",
+    "full_system_owned_run": "requires the admitted carrier or a RAM-push experiment that calls the emitted body under the full-system controller model",
+    "retained_boundary": "vector, IRQ entry and exit, the root global lock at +0x161c/+0x1620/+0x1624 and its stock atomic helpers, nesting, arbitration and the physical controller backend remain retained and unqualified"
+  }
+}

@@ -19,7 +19,7 @@ exports_files([
         data = [
             "src/entries.rs",
             "src/s3b.rs",
-            "//replacement/rtos_layout:src/lib.rs",
+            "//replacement/rtos_layout:src/lib.rs", "//replacement/rtos_reservation:src/lib.rs",
         ],
         rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain],
     )
@@ -46,7 +46,7 @@ genrule(
     srcs = [
         "src/lib.rs",
         "src/tests.rs",
-        "//replacement/rtos_layout:src/lib.rs",
+        "//replacement/rtos_layout:src/lib.rs", "//replacement/rtos_reservation:src/lib.rs",
     ],
     outs = ["scheduler-host-tests-bin"],
     cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location src/lib.rs) -o $@",
@@ -134,7 +134,7 @@ exports_files(["regions-s2.json", "regions-s3a.json"])
         name = "s3a-%s-rust" % domain,
         src = "src/lib.rs",
         crate_name = "xm1_rtos_scheduler_s3a",
-        data = ["src/entries.rs", "src/s3a.rs", "src/s3b.rs", "//replacement/rtos_layout:src/lib.rs"],
+        data = ["src/entries.rs", "src/s3a.rs", "src/s3b.rs", "//replacement/rtos_layout:src/lib.rs", "//replacement/rtos_reservation:src/lib.rs"],
         rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain, "--cfg", "'feature=\"s3a\"'"],
     )
     for domain in ["a", "b"]
@@ -171,7 +171,7 @@ exports_files(["regions-s3c.json"])
         name = "s3c-%s-rust" % domain,
         src = "src/s3c.rs",
         crate_name = "xm1_rtos_scheduler_s3c",
-        data = ["//replacement/rtos_layout:src/lib.rs"],
+        data = ["//replacement/rtos_layout:src/lib.rs", "//replacement/rtos_reservation:src/lib.rs"],
         rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain],
     )
     for domain in ["a", "b"]
@@ -192,7 +192,7 @@ genrule(
     name = "scheduler-host-rlib",
     srcs = [
         "src/lib.rs",
-        "//replacement/rtos_layout:src/lib.rs",
+        "//replacement/rtos_layout:src/lib.rs", "//replacement/rtos_reservation:src/lib.rs",
     ],
     outs = ["libxm1_rtos_scheduler.rlib"],
     cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --crate-name=xm1_rtos_scheduler --crate-type=rlib -o $@ $(location src/lib.rs)",

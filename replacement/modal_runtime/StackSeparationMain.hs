@@ -57,7 +57,7 @@ overlaps (Interval (PhysicalAddress a) (PhysicalAddress b)) (Interval (PhysicalA
 -- Recovered stack allocations; each extent is the conservative containing range.
 stackRegions :: [StackRegion]
 stackRegions =
-  [ StackRegion TaskStackPool (interval 0x40a10200 0x40a5b200) "task reservation 0x725c6c: cursor 0x4089ea98 from 0x40a10200, growth bounded by 0x4b000 (E-KERNEL-PHASE0-RESOURCE-ORDER-SOURCE-150; reports/replacement-inventory-baseline.md section 8)"
+  [ StackRegion TaskStackPool (interval 0x40a10200 0x40a5a200) "task reservation 0x725c6c: cursor 0x4089ea98 from 0x40a10200, growth bounded by 0x4a000; timer arenas own [0x40a5a200,0x40a5b200) (E-KERNEL-PHASE0-RESOURCE-ORDER-SOURCE-150; reports/replacement-inventory-baseline.md section 8)"
   , StackRegion SeparateStoragePool (interval 0x409c4460 0x40a0f460) "separate storage reservation 0x723470: cursor 0x4089ea90 from 0x409c4460, growth bounded by 0x4b000; included because phase submissions fill/cache stack storage (E-KERNEL-PHASE0-RESOURCE-ORDER-SOURCE-150)"
   , StackRegion KernelBootStack (interval 0x40062c54 0x40063460) "loader A boot stack 0x40062c54..0x40063460, initialized over 0x80c bytes before SP installation (reports/replacement-inventory-baseline.md section 8.13; E-STARTUP-TASK-RETAINED-STACK-SOURCE-150)"
   , StackRegion KernelBootStack (interval 0x400f2c14 0x400f3420) "loader B boot stack 0x400f2c14..0x400f3420, top 0x400f3420 (reports/replacement-inventory-baseline.md section 8.13; emulation/README.md opaque caller-frame premise; E-STARTUP-TASK-RETAINED-STACK-SOURCE-150)"
@@ -260,7 +260,7 @@ main = do
   results <- either fail pure (mapM (analyze bytes) callbacks)
   let regionPairs = [(a, b) | (i, StackRegion _ a _) <- zip [0 :: Int ..] stackRegions, (j, StackRegion _ b _) <- zip [0 ..] stackRegions, i < j, overlaps a b]
       taskIntervals = [(base, size, interval (toInteger base) (toInteger base + size)) | Task base size <- tasks]
-      taskPool = interval 0x40a10200 0x40a5b200
+      taskPool = interval 0x40a10200 0x40a5a200
       inside (Interval (PhysicalAddress a) (PhysicalAddress b)) (Interval (PhysicalAddress c) (PhysicalAddress d)) = c <= a && b <= d
       derived = filter resultDerived results
       usesSeparation = filter (not . null . resultSites) derived

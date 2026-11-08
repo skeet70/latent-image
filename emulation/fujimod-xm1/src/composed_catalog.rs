@@ -776,6 +776,8 @@ pub struct AllocationOwner {
 #[serde(deny_unknown_fields)]
 pub struct PoolAllocation {
     pub pool: PoolSpan,
+    pub allocatable_end: u32,
+    pub reserved: PoolSpan,
     pub records: Label,
     pub cursor: Label,
     pub words: Vec<AllocationWords>,
@@ -818,7 +820,10 @@ fn check_pool_allocation<'a>(relation: &PoolAllocation, boundaries: &BTreeMap<La
         }
         Ok(read)
     };
-    if relation.pool.start >= relation.pool.end || relation.pool.start % 4 != 0 || relation.pool.end % 4 != 0 {
+    if relation.pool.start >= relation.pool.end || relation.pool.start % 4 != 0 || relation.pool.end % 4 != 0
+        || relation.allocatable_end != relation.pool.end
+        || relation.reserved.start != relation.pool.end || relation.reserved.start >= relation.reserved.end
+        || relation.reserved.start % 4 != 0 || relation.reserved.end % 4 != 0 {
         return refuse(PoolAllocationProblem::Pool);
     }
     if read(&relation.records)?.length % ALLOCATION_RECORD_BYTES != 0 {

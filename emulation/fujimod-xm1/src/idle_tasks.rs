@@ -450,7 +450,7 @@ fn menu_route(machine: &mut Machine) -> Result<(), String> {
 const ROOT_ENTRY: u32 = 0x69d160;
 const ROOT_LIMIT: u32 = 0x69d2b4;
 const ROOT_STACK: u32 = 0xa10a00;
-const TASK_STACK_POOL: (u32, u32) = (0xa10200, 0xa5b200);
+const TASK_STACK_POOL: (u32, u32) = (0xa10200, 0xa5a200);
 const TASK_RECORD_POOLS: [(Core, u32, u32); 2] = [
     (Core::Primary, 0x5beac, 0x5ff0c), (Core::Secondary, 0xebe6c, 0xefecc),
 ];
