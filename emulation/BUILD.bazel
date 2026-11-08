@@ -276,10 +276,16 @@ config_setting(
     define_values = {"fujimod_store": "pfra"},
 )
 
+config_setting(
+    name = "r1diag-fujimod-store",
+    define_values = {"fujimod_store": "r1diag"},
+)
+
 genrule(
     name = "fujimod-paths-module",
     srcs = select({
         ":pfra-fujimod-store": ["fujimod-pfra-store-path.txt"],
+        ":r1diag-fujimod-store": ["fujimod-r1diag-store-path.txt"],
         "//conditions:default": ["@lab_fujimod_xm1//:share/fujimod-xm1/store-path"],
     }),
     outs = ["FujiModPaths.hs"],

@@ -1,0 +1,99 @@
+diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/board/observation.rs
+--- a/crates/emulator/src/board/observation.rs
++++ b/crates/emulator/src/board/observation.rs
+@@ -27,6 +27,51 @@
+ pub use journal::{MAX_JOURNAL_ROWS, MutationJournal, MutationRow};
+ pub(in crate::board) use lifecycle::ObservationRegistry;
+ type Span = (u64, u64);
++
++pub struct ObservationContext {
++    cpus: Rc<Vec<Rc<dyn Cpu>>>,
++    memory: Rc<super::memory::Memory>,
++    mappings: Vec<MemoryMap>,
++    pause: Rc<Cell<bool>>,
++}
++impl ObservationContext {
++    pub fn cpu(&self, core: usize) -> Result<&dyn Cpu, String> {
++        self.cpus.get(core).map(|cpu| &**cpu).ok_or_else(|| "observation core is unavailable".into())
++    }
++    pub fn mappings(&self) -> &[MemoryMap] { &self.mappings }
++    pub fn core_count(&self) -> usize { self.cpus.len() }
++    pub fn read_register(&self, core: usize, register: Register) -> Result<u64, String> {
++        scalar(self.cpu(core)?, register)
++    }
++    pub fn read_memory(&self, core: usize, address: u64, bytes: &mut [u8]) -> Result<(), String> {
++        self.cpu(core)?.read_memory(address, bytes)
++    }
++    pub fn read_physical(&self, address: u64, bytes: &mut [u8]) -> Result<(), String> {
++        self.memory.read_host(address, bytes)
++    }
++    pub fn read_backing(&self, address: u64, bytes: &mut [u8]) -> Result<(), String> {
++        let end = address.checked_add(bytes.len() as u64).ok_or("canonical backing read overflows")?;
++        let (base, backing) = self.memory.regions().iter().find(|(base, backing)| {
++            *base <= address && base.checked_add(backing.len() as u64).is_some_and(|limit| end <= limit)
++        }).ok_or("canonical backing read has no complete region")?;
++        let offset = usize::try_from(address - base).map_err(|_| "canonical backing offset exceeds host size")?;
++        unsafe {
++            std::ptr::copy_nonoverlapping(backing.as_ptr().add(offset), bytes.as_mut_ptr(), bytes.len());
++        }
++        Ok(())
++    }
++    /// A new board window clears the request.
++    pub fn request_pause(&self) { self.pause.set(true); }
++}
++impl Board {
++    pub fn observation_context(&self) -> ObservationContext {
++        ObservationContext {
++            cpus: self.cpus.clone(), memory: self.physical_memory.clone(),
++            mappings: self.mappings.clone(), pause: self.host_pause.clone(),
++        }
++    }
++}
++
+ /// Access sources one classified watch range records.
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+ pub struct WatchKinds(u8);
+diff --git a/crates/emulator/src/board/tests.rs b/crates/emulator/src/board/tests.rs
+--- a/crates/emulator/src/board/tests.rs
++++ b/crates/emulator/src/board/tests.rs
+@@ -1,8 +1,40 @@
+ use super::*;
+ use fujimod_emulator_devices::{Cx, Device};
+ use fujimod_emulator_cpu::Model;
+ use fujimod_emulator_cpu_unicorn::Library;
+ use std::sync::{Arc, Mutex};
++
++#[test]
++fn observation_pause_returns_before_a_zero_progress_retry_and_unhooked_execution_resumes() {
++    use fujimod_emulator_cpu::{Hook, HookRange};
++    unsafe fn pause(_: u64, _: u32, data: *mut std::ffi::c_void) {
++        let context = unsafe { &*data.cast::<observation::ObservationContext>() };
++        context.request_pause();
++        context.cpu(0).unwrap().stop_before_instruction().unwrap();
++    }
++    let (mut board, _) = build_rprofile(bus::Mode::Strict, true);
++    let context = Box::new(board.observation_context());
++    let data = (&*context as *const observation::ObservationContext).cast_mut().cast();
++    let before = board.read_register(0, Register::Arm32(fujimod_emulator_cpu::arm::Register::R(0))).unwrap();
++    let hook = unsafe {
++        context.cpu(0).unwrap().install_hook(Hook::Instruction {
++            callback: pause,
++            data,
++            range: HookRange::Inclusive { begin: 0x10000, end: 0x10000 },
++        }).unwrap()
++    };
++    board.run_until(100, 100).unwrap();
++    assert_eq!(board.instruction_counts(), vec![0]);
++    assert_eq!(board.read_register(0, Register::Arm32(fujimod_emulator_cpu::arm::Register::R(0))).unwrap(), before);
++    context.cpu(0).unwrap().remove_hook(hook).unwrap();
++    board.run_until(4, 100).unwrap();
++    let (mut unhooked, _) = build_rprofile(bus::Mode::Strict, true);
++    unhooked.run_until(4, 100).unwrap();
++    assert_eq!(board.instruction_counts(), unhooked.instruction_counts());
++    for register in [Register::Pc, Register::Arm32(fujimod_emulator_cpu::arm::Register::R(0)), Register::Arm32(fujimod_emulator_cpu::arm::Register::R(2))] {
++        assert_eq!(board.read_register(0, register).unwrap(), unhooked.read_register(0, register).unwrap());
++    }
++}
+ #[derive(Default)]
+ struct Probe {
+     due: Option<u64>,

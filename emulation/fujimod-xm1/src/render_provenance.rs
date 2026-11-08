@@ -11,7 +11,7 @@ const EVENT_LIMIT: usize = 65536;
 #[derive(Clone, Copy, Serialize)]
 pub struct Boundary { instructions: u64, tick: u64 }
 impl Boundary {
-    fn sample(session: &Session) -> Result<Self, String> {
+    pub(crate) fn sample(session: &Session) -> Result<Self, String> {
         Ok(Self { instructions: crate::trace::InstructionCount::from_board(session)?.value(), tick: session.board.now() })
     }
 }

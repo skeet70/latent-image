@@ -31,6 +31,7 @@ let
       ./fujimod-wifi-unanswered-cmd53.patch
       ./fujimod-rprofile-byte-exclusives.patch
       ./fujimod-translation-admission.patch
+      ./fujimod-observation-context.patch
     ] ++ extraPatches;
   };
   # Upstream's mise.toml pins Rust 1.99.1; cargo 1.98 rejects the workspace's

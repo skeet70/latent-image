@@ -134,6 +134,7 @@ pub struct Machine {
     pub failure: Option<String>,
     pub traces: TraceSites,
     pub render_provenance: Option<crate::render_provenance::Collector>,
+    pub render_stack_diagnostic: Option<crate::render_stack::Collector>,
     pub guard: Guard,
     pub key_release_observations: Vec<KeyReleaseObservation>,
     release_context: ReleaseContext,
@@ -152,6 +153,7 @@ impl Machine {
         Ok(Self {
             document, session, failure: None, traces: TraceSites::default(), guard,
             render_provenance: None,
+            render_stack_diagnostic: None,
             key_release_observations: Vec::new(),
             release_context: ReleaseContext {
                 route: std::env::var("XM1_KEY_RELEASE_ROUTE").ok().map(ReleaseRoute),
@@ -167,6 +169,13 @@ impl Machine {
         self.render_provenance = Some(crate::render_provenance::Collector::begin(&self.session, graph.mappings)?);
         self.traces.begin_presentation_tracking(&self.session)?;
         self.traces.render_object_provenance_sequence = Some(0);
+        Ok(())
+    }
+
+    pub fn begin_render_stack_diagnostic(&mut self, request: crate::render_stack::BeginRequest) -> Result<(), String> {
+        if self.render_stack_diagnostic.is_some() { return Err("render stack diagnostic already active".into()); }
+        let (_, graph) = crate::run::graph(&self.document)?;
+        self.render_stack_diagnostic = Some(crate::render_stack::Collector::begin(&self.session, &graph, request)?);
         Ok(())
     }
 
@@ -217,6 +226,7 @@ impl Machine {
 
     /// Removes host instrumentation before a session checkpoint.
     pub fn disarm(&mut self) -> Result<(), String> {
+        if let Some(collector) = &mut self.render_stack_diagnostic { collector.disarm(&self.session)?; }
         if let Some(collector) = &mut self.render_provenance { collector.disarm(&self.session)?; }
         self.traces.teardown(&self.session)?;
         self.guard.disarm(&self.session.board)
@@ -269,6 +279,12 @@ impl Machine {
                 return RunOutcome::Completed;
             }
             let window = end.min(current.value().saturating_add(GUARD_WINDOW));
+            if let Some(collector) = &self.render_stack_diagnostic {
+                if let Err(error) = collector.before_advance(&self.session) {
+                    self.failure = Some(error);
+                    return RunOutcome::Failed;
+                }
+            }
             if let Some(collector) = &self.render_provenance {
                 if let Err(error) = collector.begin_advance(&self.session) {
                     self.failure = Some(error);
@@ -277,8 +293,10 @@ impl Machine {
             }
             self.traces.begin_advance();
             let result = self.session.board.run_window(window, self.document.execution.quantum, None, until);
+            let stack_result = self.render_stack_diagnostic.as_mut()
+                .map(|collector| collector.after_advance(&self.session)).unwrap_or(Ok(()));
             let refused = self.guard.scan(&self.session.board);
-            if let Err(error) = refused.and(result) {
+            if let Err(error) = refused.and(result).and(stack_result) {
                 self.failure = Some(error);
                 return RunOutcome::Failed;
             }

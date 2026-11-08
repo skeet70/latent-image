@@ -254,6 +254,9 @@ enum Request {
     Transfer(Transfer),
     TraceSites { sites: BTreeMap<String, String>, #[serde(default)] reads: BTreeMap<String, Vec<SiteRead>> },
     TraceHits { from: usize, #[serde(default)] limit: Option<std::num::NonZeroUsize> },
+    RenderStackDiagnosticBegin(fujimod_xm1::render_stack::BeginRequest),
+    RenderStackDiagnosticReport,
+    RenderStackDiagnosticEnd,
     ModalObservationBegin(ModalBeginRequest),
     ModalObservationReport,
     ModalObservationEnd,
@@ -307,6 +310,9 @@ enum RequestKind {
     Transfer,
     TraceSites,
     TraceHits,
+    RenderStackDiagnosticBegin,
+    RenderStackDiagnosticReport,
+    RenderStackDiagnosticEnd,
     ModalObservationBegin,
     ModalObservationReport,
     ModalObservationEnd,
@@ -351,6 +357,9 @@ impl Request {
             Request::Transfer(_) => RequestKind::Transfer,
             Request::TraceSites { .. } => RequestKind::TraceSites,
             Request::TraceHits { .. } => RequestKind::TraceHits,
+            Request::RenderStackDiagnosticBegin(_) => RequestKind::RenderStackDiagnosticBegin,
+            Request::RenderStackDiagnosticReport => RequestKind::RenderStackDiagnosticReport,
+            Request::RenderStackDiagnosticEnd => RequestKind::RenderStackDiagnosticEnd,
             Request::ModalObservationBegin(_) => RequestKind::ModalObservationBegin,
             Request::ModalObservationReport => RequestKind::ModalObservationReport,
             Request::ModalObservationEnd => RequestKind::ModalObservationEnd,
@@ -914,7 +923,8 @@ impl Server {
     fn handle(&mut self, request: Request) -> Result<Option<Value>, String> {
         let tail_request = matches!(&request, Request::CaptureObservationHits { .. } | Request::CaptureObservationAck { .. }
             | Request::CaptureObservationState | Request::WatchState | Request::Finish
-            | Request::ModalObservationReport | Request::ModalObservationEnd);
+            | Request::ModalObservationReport | Request::ModalObservationEnd
+            | Request::RenderStackDiagnosticReport | Request::RenderStackDiagnosticEnd);
         let recovers = matches!(&request, Request::TraceHits { .. } | Request::SnapshotRestore { .. }
             | Request::SnapshotKey { .. } | Request::SnapshotDrop { .. });
         if self.bridge.machine.failure.is_some() && !tail_request && !recovers {
@@ -979,6 +989,21 @@ impl Server {
                 let provenance = self.bridge.machine.render_provenance.as_mut()
                     .map(|collector| collector.drain(&self.bridge.machine.session)).transpose()?;
                 json!({"count": hits.len(), "hits": &hits[from..end], "render_object_provenance": provenance})
+            }
+            Request::RenderStackDiagnosticBegin(request) => {
+                self.bridge.machine.begin_render_stack_diagnostic(request)?;
+                json!({"version":1,"diagnostic_only":true,"active":true})
+            }
+            Request::RenderStackDiagnosticReport => {
+                let collector = self.bridge.machine.render_stack_diagnostic.as_ref().ok_or("render stack diagnostic is not active")?;
+                if let Some(error) = &self.bridge.machine.failure { collector.refuse(error); }
+                collector.report()?
+            }
+            Request::RenderStackDiagnosticEnd => {
+                let machine = &mut self.bridge.machine;
+                let collector = machine.render_stack_diagnostic.as_mut().ok_or("render stack diagnostic is not active")?;
+                if let Some(error) = &machine.failure { collector.refuse(error); }
+                collector.finish(&machine.session)?
             }
             Request::ModalObservationBegin(request) => {
                 let machine = &mut self.bridge.machine;
