@@ -1,7 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Replacement.RootTask.Artifact
-  ( CanonicalSource, LinkedArtifact, StagedImage4, StagedCandidate, ArtifactError (..)
+  ( CanonicalSource, LinkedArtifact, LinkedAppCallback, StagedImage4, StagedCandidate, ArtifactError (..)
   , canonicalSource, canonicalProof, deriveArtifact, artifactProof, artifactBytes
+  , deriveAppCallback, appCallbackBytes, stageAppImage4
   , stageImage4, stagedBytes, contractValue
   , stageCandidate, candidateBytes, candidateContractValue
   ) where
@@ -28,12 +29,19 @@ data ArtifactError = SourceMismatch | ExtentRejected | SymbolRejected | CodeReje
   deriving (Eq, Show)
 data CanonicalSource = CanonicalSource OriginalDat DecodedImage4 SourceIdentities RootProof
 data LinkedArtifact = LinkedArtifact B.ByteString SourceIdentity SourceIdentity RootProof
+data LinkedAppCallback = LinkedAppCallback B.ByteString SourceIdentity SourceIdentity
 data StagedImage4 = StagedImage4 CanonicalSource LinkedArtifact DecodedImage4
 data StagedCandidate = StagedCandidate StagedImage4 Image4.StagedCandidate
 
 origin, limit :: Word32
 origin = 0x69d160
 limit = 0x69d2b4
+
+appOrigin, appLimit, appRegisterEnd, appSize :: Word32
+appOrigin = 0x725424
+appLimit = 0x7257a8
+appRegisterEnd = 0x7256c4
+appSize = 0x384
 require :: Bool -> ArtifactError -> Either ArtifactError ()
 require premise refusal = unless premise (Left refusal)
 identity :: B.ByteString -> SourceIdentity
@@ -93,6 +101,49 @@ artifactProof :: LinkedArtifact -> RootProof
 artifactProof (LinkedArtifact _ _ _ proof) = proof
 artifactBytes :: LinkedArtifact -> B.ByteString
 artifactBytes (LinkedArtifact bytes _ _ _) = bytes
+
+-- | Admits the app-callback entries at 0x725424/0x7256c4 and their owned bodies in the
+-- two stock extents.
+deriveAppCallback :: B.ByteString -> B.ByteString -> Either ArtifactError LinkedAppCallback
+deriveAppCallback bytes symbolBytes = do
+  require (B.length bytes == fromIntegral appSize) ExtentRejected
+  symbols <- either (const (Left SymbolRejected)) Right (F.parseSymbols symbolBytes)
+  let lookupSymbol name = either (const (Left SymbolRejected)) Right (F.lookupSymbol symbols name)
+  register <- lookupSymbol "xm1_app_register_callback"
+  unregister <- lookupSymbol "xm1_app_unregister_callback"
+  registerEnd <- lookupSymbol "__register_end"
+  unregisterEnd <- lookupSymbol "__unregister_end"
+  require (F.symbolAddress register == appOrigin && F.symbolSize register > 0
+    && F.symbolAddress register + F.symbolSize register <= appRegisterEnd) SymbolRejected
+  require (F.symbolAddress unregister == appRegisterEnd && F.symbolSize unregister > 0
+    && F.symbolAddress unregister + F.symbolSize unregister <= appLimit) SymbolRejected
+  require (F.symbolAddress registerEnd <= appRegisterEnd && F.symbolSize registerEnd == 0) SymbolRejected
+  require (F.symbolAddress unregisterEnd <= appLimit && F.symbolSize unregisterEnd == 0) SymbolRejected
+  forM_ symbols $ \symbol -> do
+    let address = F.symbolAddress symbol
+        size = F.symbolSize symbol
+        name = F.symbolName symbol
+    require (address .&. 3 == 0 && address >= appOrigin && address <= appLimit
+      && toInteger address + toInteger size <= toInteger appLimit) SymbolRejected
+    require (name `elem` ["__register_end", "__unregister_end"]
+      || (address < appRegisterEnd && address + size <= appRegisterEnd)
+      || (address >= appRegisterEnd && address + size <= appLimit)) SymbolRejected
+  require (all validKind (filter (not . C.null) (C.lines symbolBytes))) SymbolRejected
+  pure (LinkedAppCallback bytes (identity bytes) (identity symbolBytes))
+  where
+    validKind line = case C.words line of
+      [_,_,kind,name] -> kind `elem` ["T", "t"] && not (C.null name)
+      _ -> False
+
+appCallbackBytes :: LinkedAppCallback -> B.ByteString
+appCallbackBytes (LinkedAppCallback bytes _ _) = bytes
+
+stageAppImage4 :: B.ByteString -> LinkedAppCallback -> B.ByteString
+stageAppImage4 image artifact =
+  let linked = appCallbackBytes artifact
+      offset = fromIntegral (appOrigin - 0x61c400)
+  in B.take offset image <> linked <> B.drop (offset + B.length linked) image
+
 stageImage4 :: CanonicalSource -> LinkedArtifact -> StagedImage4
 stageImage4 source@(CanonicalSource _ (DecodedImage4 original) _ _) artifact =
   let linked = artifactBytes artifact

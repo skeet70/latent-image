@@ -29,7 +29,7 @@ serviceSymbols =
   , ("root_init_6a5c08",0x6a5c08)
   , ("root_init_6568ec",0x6568ec)
   , ("root_submit_later",0x69ca44)
-  , ("root_register_periodic",0x725424)
+  , ("xm1_app_register_callback",0x725424)
   , ("root_cleanup",0x72612c)
   , ("root_periodic_callback",0x69cc18)
   , ("root_periodic_context",0x96ca4c)

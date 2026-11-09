@@ -24,17 +24,17 @@ import Replacement.StartupArtifact.Types
 image4Base :: Word32
 image4Base = 0x61c400
 
--- | Root's own carrier, and the idle and dispatcher carriers that would otherwise end the extents of
--- 0x69ca44 and 0x69cc18 only at the next direct-call target 0x69cfa4.
+-- | Root's own carrier, the idle, app-callback and dispatcher carriers that would otherwise end the
+-- extents of 0x69ca44 and 0x69cc18 only at the next direct-call target 0x69cfa4.
 excluded :: [L.CodeWindow]
-excluded = [window 0x69d160 0x69d2b4, window 0x69cbf0 0x69cc00, dispatcherCarrier]
+excluded = [window 0x69d160 0x69d2b4, window 0x69cbf0 0x69cc00, window 0x725424 0x7257a8, dispatcherCarrier]
   where
     window low high = L.CodeWindow (LI.CodeAddress low) (LI.CodeAddress high)
 
 -- | Every code entry root calls (replacement/root_task/Replacement/RootTask/Services.hs, without the
--- context word 0x96ca4c) and the callbacks it publishes.
+-- context word 0x96ca4c and the app-callback entry 0x725424) and the callbacks it publishes.
 roots :: [Word32]
-roots = [address | (_, address) <- serviceSymbols, address /= 0x96ca4c] ++ [0x72835c, 0x726478]
+roots = [address | (_, address) <- serviceSymbols, address /= 0x96ca4c, address /= 0x725424] ++ [0x72835c, 0x726478]
 
 -- | Canonical decoded image 4.
 closureExtents :: B.ByteString -> [(Word32, Word32)]

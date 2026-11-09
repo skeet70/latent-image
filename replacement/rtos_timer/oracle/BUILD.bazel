@@ -55,6 +55,10 @@ _INPUTS = [
     "//replacement/rtos_timer:timer-a.symbols",
     "//replacement/rtos_timer:timer-b.bin",
     "//replacement/rtos_timer:timer-b.symbols",
+    "//replacement/rtos_scheduler:s3d-a.bin",
+    "//replacement/rtos_scheduler:s3d-a.symbols",
+    "//replacement/rtos_scheduler:s3d-b.bin",
+    "//replacement/rtos_scheduler:s3d-b.symbols",
 ]
 
 haskell_binary(
@@ -74,6 +78,14 @@ haskell_binary(
         "$(rootpath //replacement/rtos_timer:timer-b.bin)",
         "--owned-b-symbols",
         "$(rootpath //replacement/rtos_timer:timer-b.symbols)",
+        "--s3d-a-bin",
+        "$(rootpath //replacement/rtos_scheduler:s3d-a.bin)",
+        "--s3d-a-symbols",
+        "$(rootpath //replacement/rtos_scheduler:s3d-a.symbols)",
+        "--s3d-b-bin",
+        "$(rootpath //replacement/rtos_scheduler:s3d-b.bin)",
+        "--s3d-b-symbols",
+        "$(rootpath //replacement/rtos_scheduler:s3d-b.symbols)",
     ],
     data = _INPUTS,
     ghcopts = _GHCOPTS,

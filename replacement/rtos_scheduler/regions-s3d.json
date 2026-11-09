@@ -4,6 +4,20 @@
     "a": {
       "regions": [
         {
+          "start": "0x44318",
+          "end": "0x444e4",
+          "entries": [{"entry": "0x44318", "semantic": {"kind": "callback", "name": "wait-timeout-completion"}}],
+          "symbol": "xm1_rtos_scheduler_timeout",
+          "frame_bytes": 24
+        },
+        {
+          "start": "0x44634",
+          "end": "0x446fc",
+          "entries": [{"entry": "0x44634", "semantic": {"kind": "callback", "name": "delay-completion"}}],
+          "symbol": "xm1_rtos_scheduler_delay_completion",
+          "frame_bytes": 8
+        },
+        {
           "start": "0x454f0",
           "end": "0x4582c",
           "entries": [{"entry": "0x454f0", "semantic": {"kind": "service", "name": "task-terminate"}}],
@@ -49,6 +63,20 @@
     },
     "b": {
       "regions": [
+        {
+          "start": "0xd42d8",
+          "end": "0xd44a4",
+          "entries": [{"entry": "0xd42d8", "semantic": {"kind": "callback", "name": "wait-timeout-completion"}}],
+          "symbol": "xm1_rtos_scheduler_timeout",
+          "frame_bytes": 24
+        },
+        {
+          "start": "0xd45f4",
+          "end": "0xd46bc",
+          "entries": [{"entry": "0xd45f4", "semantic": {"kind": "callback", "name": "delay-completion"}}],
+          "symbol": "xm1_rtos_scheduler_delay_completion",
+          "frame_bytes": 8
+        },
         {
           "start": "0xd54b0",
           "end": "0xd57ec",

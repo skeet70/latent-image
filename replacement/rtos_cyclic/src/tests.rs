@@ -21,7 +21,7 @@ const EXPIRE_CALLBACK: u32 = 0x4beb0;
 const HANDLER: u32 = 0x4010_1030;
 const ARGUMENT: u32 = 0x1234_5678;
 
-struct Mock {
+pub(crate) struct Mock {
     words: RefCell<BTreeMap<u32, u32>>,
     lock_held: Cell<u32>,
     i_masked: Cell<bool>,
@@ -34,7 +34,7 @@ struct Mock {
 }
 
 impl Mock {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let mock = Self {
             words: RefCell::new(BTreeMap::new()),
             lock_held: Cell::new(0),
@@ -75,19 +75,19 @@ impl Mock {
         self.set_word(context + 0x10, LOCK_RELEASE);
     }
 
-    fn set_word(&self, at: u32, value: u32) {
+    pub(crate) fn set_word(&self, at: u32, value: u32) {
         self.words.borrow_mut().insert(at, value);
     }
 
-    fn word(&self, at: u32) -> u32 {
+    pub(crate) fn word(&self, at: u32) -> u32 {
         *self.words.borrow().get(&at).unwrap_or(&0)
     }
 
-    fn config(&self, slot: u32) -> CyclicConfig {
+    pub(crate) fn config(&self, slot: u32) -> CyclicConfig {
         CyclicConfig(GuestAddress(CONFIG_BASE + (slot - 1) * 0x18))
     }
 
-    fn control(&self, slot: u32) -> CyclicControl {
+    pub(crate) fn control(&self, slot: u32) -> CyclicControl {
         CyclicControl(GuestAddress(CONTROL_BASE + (slot - 1) * 0x18))
     }
 
@@ -95,7 +95,7 @@ impl Mock {
         CyclicControl(GuestAddress(SECOND_CONTROL_BASE + (slot - 1) * 0x18))
     }
 
-    fn seed_config(&self, slot: u32, attributes: u32, period: u32, handler: u32) {
+    pub(crate) fn seed_config(&self, slot: u32, attributes: u32, period: u32, handler: u32) {
         let config = self.config(slot);
         self.set_word(config.attributes().0, attributes);
         self.set_word(config.argument().0, ARGUMENT);
@@ -105,7 +105,7 @@ impl Mock {
         self.set_word(config.exists().0, 1);
     }
 
-    fn seed_control(&self, slot: u32, active: u32, expiry: u32) {
+    pub(crate) fn seed_control(&self, slot: u32, active: u32, expiry: u32) {
         let control = self.control(slot);
         self.set_word(control.config().0, self.config(slot).0 .0);
         self.set_word(control.active().0, active);
@@ -133,11 +133,11 @@ impl Mock {
         )
     }
 
-    fn count(&self) -> u32 {
+    pub(crate) fn count(&self) -> u32 {
         self.word(HEAP_COUNT)
     }
 
-    fn entry_index(&self, slot: u32) -> u32 {
+    pub(crate) fn entry_index(&self, slot: u32) -> u32 {
         self.word(self.control(slot).timer().0)
     }
 
@@ -146,6 +146,10 @@ impl Mock {
         timer::tick(
             self,
             |m| m.heap(),
+            |m| {
+                timer::layout::KernelContext(timer::layout::GuestAddress(m.current.get()))
+                    .scheduler_lock()
+            },
             |m, callback, argument| {
                 assert_eq!(callback.0, EXPIRE_CALLBACK);
                 let _ = expire(m, CyclicControl(GuestAddress(argument.0)));
@@ -273,12 +277,12 @@ impl timer::Scheduler for Mock {
         self.i_masked.get()
     }
 
-    fn release_lock(&self) {
+    fn release_lock(&self, _lock: timer::layout::LockRecord) {
         self.lock_held.set(0);
     }
 
-    fn acquire_lock(&self) {
-        self.lock_held.set(self.current.get());
+    fn acquire_lock(&self, lock: timer::layout::LockRecord) {
+        self.lock_held.set(lock.0 .0);
     }
 
     fn irq_clear(&self) {

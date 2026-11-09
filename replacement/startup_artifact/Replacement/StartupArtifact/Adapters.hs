@@ -7,7 +7,7 @@ module Replacement.StartupArtifact.Adapters
   , deriveFirstStage, deriveRecord2Link, derivePrimaryPublisher, deriveLoaderOrchestrationB, deriveLoaderStartup, derivePieceOf
   , deriveTaskSubmission, deriveTaskStorage, deriveIdleTask, deriveRootTask, deriveImage5Producer, derivePlainProducer, deriveGeneralHeap
   , deriveApplicationPump, deriveTask1Actor, deriveImage5Initializer, deriveTaskConstructors
-  , deriveTimer
+  , deriveTimer, deriveAppCallback
   , ProducerCall (..), producerCallBoundaries, callerReturn
   , RegionsBytes (..), deriveKernelSlotBodies, slotCallerProblems
   ) where
@@ -122,6 +122,7 @@ derivePieceOf source images = case images of
     TaskSubmission -> deriveTaskSubmission source image
     TaskStorage -> deriveTaskStorage source image
     Timer -> Left (AdapterRefused kind "timer takes two linked images")
+    AppCallback -> deriveAppCallback source image
     IdleTask -> deriveIdleTask source image
     RootTask -> deriveRootTask source image
     Image5Producer -> deriveImage5Producer source image
@@ -880,6 +881,7 @@ deriveIdleTask source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes)) =
 
 -- | Kebab name of a root call target (replacement/root_task/Replacement/RootTask/Services.hs).
 rootServiceName :: Word32 -> Maybe T.Text
+rootServiceName 0x725424 = Just "register-periodic"
 rootServiceName target = case [name | (name, address) <- serviceSymbols, address == target] of
   [name] -> T.replace "_" "-" <$> T.stripPrefix "root_" (T.pack name)
   _ -> Nothing
@@ -988,6 +990,31 @@ deriveRootTask source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes)) =
           , "an IRQ that preempts root leaves at most 88 bytes below the interrupted frame (irq-entry-frame); retained callee demand on root's stack is bounded by root-retained-depth, " <> T.pack (SB.conditionsPhrase SB.rootDepthConditions) <> ", except the chains it names" ])
         catalog (RootTaskFacts (LinkedBytes bin symbolBytes) pool)
   derivePiece source declaration (StagedOutput (canonicalDat source) (Just (RT.stagedBytes (RT.stageImage4 rootSource artifact))) Nothing)
+
+-- | App callback entries and owned bodies over the stock image4 extents at 0x725424 and 0x7256c4.
+deriveAppCallback :: Canonical -> LinkedImage -> Either Refusal Piece
+deriveAppCallback source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes)) = do
+  let kind = AppCallback
+      shown :: Show e => Either e a -> Either Refusal a
+      shown = first (AdapterRefused kind . T.pack . show)
+      targets = canonicalTargets source
+      image4 = targetOf targets Image4
+      start = 0x725424
+      end = 0x7257a8
+  refuseUnless kind (B.length image4 == 0x282800) "image4 length differs"
+  artifact <- shown (RT.deriveAppCallback bin symbolBytes)
+  carrier <- spanOf kind Image4 start end
+  code <- codeOf kind start end
+  let declaration = PieceDeclaration kind (Set.singleton AppCallbackArea) [carrier]
+        [Footprint carrier RuntimePremise (Citation "replacement/root_task/Replacement/RootTask/Artifact.hs:105-153")]
+        (map Premise
+          [ "the root interface table at 0x96bd20 publishes the loader roots; create/delete/start/stop at +0x108/+0x10c/+0x110/+0x114 and the critical pair at +0x164/+0x168 are retained services"
+          , "the callback registry at 0x409c3500 and the app dispatcher at 0x72337c are retained readers; the app caller writes the registry, cyclic creation records and timer controls"
+          , "the error recorder 0x41a34, last_error 0x40a0f82c and dispatch_error 0x723398 are retained"
+          , "the app callback runs on core 0 in task context; its register core and report frame is 80 bytes below the root call SP, and the retained/owned interface call frames, IRQ and critical-section lifetime remain runtime premises" ])
+        (Catalog [] [code] (EnumeratedWrites [] (Premised (Premise "the app caller's registry, cyclic-record and timer-control writes are admitted by the composed guard's runtime premise"))) [])
+        (AppCallbackFacts (LinkedBytes bin symbolBytes) (StackDepth 80))
+  derivePiece source declaration (StagedOutput (canonicalDat source) (Just (RT.stageAppImage4 image4 artifact)) Nothing)
 
 -- | Entry SP of both producers in task60 on the qualified leaf routes (reports/replacement-inventory-baseline.md:1450,1477).
 newtype ProducerEntrySp = ProducerEntrySp Word64

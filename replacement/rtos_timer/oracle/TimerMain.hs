@@ -29,6 +29,10 @@ main = do
   ownedB <- required "--owned-b-bin"
   symbolsA <- required "--owned-a-symbols"
   symbolsB <- required "--owned-b-symbols"
+  s3dA <- required "--s3d-a-bin"
+  s3dB <- required "--s3d-b-bin"
+  s3dSymbolsA <- required "--s3d-a-symbols"
+  s3dSymbolsB <- required "--s3d-b-symbols"
   cacheRoot <- required "--cache-root"
   resultsPath <- required "--results"
   facts <- either failH pure . parseFacts =<< B.readFile layoutPath
@@ -38,11 +42,17 @@ main = do
   ownedBBytes <- B.readFile ownedB
   ownedASymbols <- parseOwnedSymbols symbolsA
   ownedBSymbols <- parseOwnedSymbols symbolsB
+  s3dABytes <- B.readFile s3dA
+  s3dBBytes <- B.readFile s3dB
+  s3dASymbols <- parseS3dSymbols s3dSymbolsA
+  s3dBSymbols <- parseS3dSymbols s3dSymbolsB
   layoutDigest <- sha256File layoutPath
   loaderADigest <- sha256File loaderA
   loaderBDigest <- sha256File loaderB
   ownedADigest <- sha256File ownedA
   ownedBDigest <- sha256File ownedB
+  s3dADigest <- sha256File s3dA
+  s3dBDigest <- sha256File s3dB
   unless (sha256Hex loaderADigest == "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882") (failH (loaderA ++ " is not the pinned X-M1 1.50 loader"))
   unless (sha256Hex loaderBDigest == "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec") (failH (loaderB ++ " is not the pinned X-M1 1.50 loader"))
   checkStorageBudget (takeDirectory resultsPath)
@@ -50,10 +60,12 @@ main = do
   createDirectoryIfMissing True (takeDirectory resultsPath)
   let stockA = Image 0x40000 loaderABytes
       stockB = Image 0xd0000 loaderBBytes
-      ownedAImage = Image (minimum (map fst ownedASymbols)) ownedABytes
-      ownedBImage = Image (minimum (map fst ownedBSymbols)) ownedBBytes
-  (runA, controlsA) <- runDomain runner cacheRoot (takeDirectory resultsPath </> "domain-a") facts DomainA stockA ownedAImage ownedASymbols
-  (runB, controlsB) <- runDomain runner cacheRoot (takeDirectory resultsPath </> "domain-b") facts DomainB stockB ownedBImage ownedBSymbols
+      ownedAImage = Image (minimum (map ownedAddress ownedASymbols)) ownedABytes
+      ownedBImage = Image (minimum (map ownedAddress ownedBSymbols)) ownedBBytes
+      s3dAImage = Image 0x44318 s3dABytes
+      s3dBImage = Image 0xd42d8 s3dBBytes
+  (runA, controlsA) <- runDomain runner cacheRoot (takeDirectory resultsPath </> "domain-a") facts DomainA stockA stockB ownedAImage ownedASymbols s3dAImage s3dASymbols
+  (runB, controlsB) <- runDomain runner cacheRoot (takeDirectory resultsPath </> "domain-b") facts DomainB stockB stockA ownedBImage ownedBSymbols s3dBImage s3dBSymbols
   let runs = runA ++ runB
       controls = controlsA ++ controlsB
       failures =
@@ -98,6 +110,8 @@ main = do
                 , "loader_b_sha256" .= sha256Hex loaderBDigest
                 , "owned_a_bin_sha256" .= sha256Hex ownedADigest
                 , "owned_b_bin_sha256" .= sha256Hex ownedBDigest
+                , "s3d_a_bin_sha256" .= sha256Hex s3dADigest
+                , "s3d_b_bin_sha256" .= sha256Hex s3dBDigest
                 ]
           , "cases" .= map caseValue runs
           , "controls" .= map controlValue controls

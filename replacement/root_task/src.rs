@@ -40,13 +40,13 @@ enum ConfigOption {
 #[repr(transparent)]
 struct PeriodTicks(u32);
 #[repr(u32)]
-enum PeriodicOption {
-    Zero = 0,
+enum CallbackMode {
+    Event = 0,
 }
 #[repr(transparent)]
-struct CallbackAddress(*const ());
+struct CallbackHandler(u32);
 #[repr(transparent)]
-struct ContextAddress(*const u8);
+struct TokenOutput(u32);
 #[repr(u32)]
 enum CleanupTarget {
     Current = 0,
@@ -80,11 +80,11 @@ extern "C" {
     fn root_init_6a5c08();
     fn root_init_6568ec();
     fn root_submit_later();
-    fn root_register_periodic(
-        ticks: PeriodTicks,
-        option: PeriodicOption,
-        callback: CallbackAddress,
-        context: ContextAddress,
+    fn xm1_app_register_callback(
+        period: PeriodTicks,
+        mode: CallbackMode,
+        callback: CallbackHandler,
+        token: TokenOutput,
     ) -> RetainedStatus;
     fn root_cleanup(target: CleanupTarget) -> CleanupStatus;
     fn root_periodic_callback();
@@ -147,11 +147,11 @@ pub unsafe extern "C" fn xm1_root_task() -> CleanupStatus {
         }
 
         root_submit_later();
-        let _ = root_register_periodic(
+        let _ = xm1_app_register_callback(
             PeriodTicks(30),
-            PeriodicOption::Zero,
-            CallbackAddress(root_periodic_callback as *const ()),
-            ContextAddress(core::ptr::addr_of!(root_periodic_context)),
+            CallbackMode::Event,
+            CallbackHandler(root_periodic_callback as *const () as u32),
+            TokenOutput(core::ptr::addr_of!(root_periodic_context) as u32),
         );
         root_mark(PhaseMarker::Later);
         root_cleanup(CleanupTarget::Current)

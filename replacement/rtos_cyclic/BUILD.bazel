@@ -8,6 +8,7 @@ xm1_rust_staticlib(
     src = "src/lib.rs",
     crate_name = "xm1_rtos_cyclic",
     data = [
+        "src/app.rs",
         "src/id.rs",
         "src/machine.rs",
         "src/ops.rs",
@@ -25,6 +26,7 @@ xm1_rust_staticlib(
         src = "src/lib.rs",
         crate_name = "xm1_rtos_cyclic_abi",
         data = [
+            "src/app.rs",
             "src/id.rs",
             "src/machine.rs",
             "src/ops.rs",
@@ -58,6 +60,38 @@ xm1_rust_staticlib(
     for domain in ["a", "b"]
 ]
 
+xm1_rust_staticlib(
+    name = "app-callback-rust",
+    src = "src/lib.rs",
+    crate_name = "xm1_rtos_cyclic_app",
+    data = [
+        "src/app.rs",
+        "src/id.rs",
+        "src/machine.rs",
+        "src/ops.rs",
+        "src/status.rs",
+        "src/types.rs",
+        "stage/app_abi.rs",
+        "//replacement/rtos_layout:src/lib.rs",
+        "//replacement/rtos_reservation:src/lib.rs",
+    ],
+    rustc_flags = [
+        "--cfg",
+        "'feature=\"stage-app\"'",
+    ],
+)
+
+xm1_rust_elf(
+    name = "app-callback",
+    rust_staticlib = ":app-callback-rust",
+    entry = "xm1_app_register_callback",
+    extra_ldflags = [
+        "-Wl,--gc-sections",
+        "-Wl,--orphan-handling=error",
+    ],
+    link_script = "app-callback.ld",
+)
+
 genrule(
     name = "timer-host-rlib",
     srcs = [
@@ -76,6 +110,8 @@ genrule(
 genrule(
     name = "cyclic-host-tests-build",
     srcs = [
+        "src/app.rs",
+        "src/app_tests.rs",
         "src/id.rs",
         "src/lib.rs",
         "src/machine.rs",
