@@ -1,0 +1,56 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+
+package(default_visibility = ["//visibility:public"])
+
+haskell_library(
+    name = "pool-suite-lib",
+    srcs = ["Replacement/AfResult/PoolSuite.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:cached-native-batch",
+        "//emulation:case-sha256",
+        "//emulation:native-adapter",
+        "//emulation:native-observation",
+        "//emulation:owned-case",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:filepath",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+[
+    haskell_binary(
+        name = name,
+        srcs = [main, "SuiteMain.hs"],
+        main_file = main,
+        data = ["//replacement/af_result:af-result.elf"],
+        ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+        deps = [
+            ":pool-suite-lib",
+            "//emulation:fujimod-native-paths",
+            "//host:aeson",
+            "//host:base",
+            "//host:bytestring",
+            "//host:directory",
+            "//host:filepath",
+            "//host:storage-budget",
+        ],
+    )
+    for name, main in [("pool-suite", "PoolMain.hs"), ("pool-smoke", "SmokeMain.hs")]
+]
+
+haskell_test(
+    name = "pool-runner-tests",
+    srcs = ["RunnerTests.hs"],
+    main_file = "RunnerTests.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":pool-suite-lib",
+        "//emulation:native-observation",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+    ],
+)
