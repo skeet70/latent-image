@@ -4,7 +4,7 @@ module Replacement.RtosScheduler.S3a (Service (..), services, serviceName, servi
 import Data.Bits ((.&.), (.|.), shiftL)
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
-import Data.List (sortOn)
+import Data.List (isPrefixOf, sortOn)
 import Data.Word (Word32)
 import qualified Emulation.NativeCase as C
 import Emulation.NativeObservation
@@ -112,11 +112,11 @@ makeSpec env domain loader owned service scenario label = spec
         where
           ownBase=fst (serviceExtent domain Exit)
           replace old s=let (at,size)=serviceExtent domain s; offset=fromIntegral (at-loaderBase); source=fromIntegral (at-ownBase) in B.take offset old <> B.take (fromIntegral size) (B.drop source bin) <> B.drop (offset+fromIntegral size) old
-      Just (Aggregate _ _ rows) -> case aggregateImage of
+      Just (Aggregate _ _ _) -> case aggregateImage of
         Just image ->
-          let withSymbols = foldl' installSymbol loader selected
-              installSymbol old symbol = either error id (Agg.installSymbol loaderBase old image symbol)
-           in either error id (Agg.installPlacements loaderBase withSymbols image rows)
+          let offset = fromIntegral (Agg.imageBase image - loaderBase)
+              payload = Agg.imageBytes image
+           in B.take offset loader <> payload <> B.drop (offset + B.length payload) loader
         Nothing -> loader
     slice :: Word32 -> Word32 -> B.ByteString
     slice at size=B.take (fromIntegral size) (B.drop (fromIntegral (at-loaderBase)) bytes)
@@ -124,11 +124,9 @@ makeSpec env domain loader owned service scenario label = spec
     helperBase=minimum (map fst helpers)
     helperEnd=maximum [at+size | (at,size)<-helpers]
     symbolSpans = [(Agg.symbolAddress symbol, Agg.symbolSize symbol) | symbol <- selected]
-    allSymbolSpans = case owned of
-      Just (Aggregate _ symbols _) -> [(Agg.symbolAddress symbol, Agg.symbolSize symbol) | symbol <- symbols, Agg.symbolSize symbol > 0]
-      _ -> []
-    aggregateBase = minimum (map fst (symbolSpans ++ allSymbolSpans ++ helpers ++ placementSpans))
-    aggregateTop = maximum [at+size | (at,size)<-symbolSpans ++ allSymbolSpans ++ helpers ++ placementSpans]
+    payloadSpans = maybe [] (\image -> [(Agg.imageBase image, fromIntegral (B.length (Agg.imageBytes image)))]) aggregateImage
+    aggregateBase = minimum (map fst (symbolSpans ++ helpers ++ placementSpans ++ payloadSpans))
+    aggregateTop = maximum [at+size | (at,size)<-symbolSpans ++ helpers ++ placementSpans ++ payloadSpans]
     body = case owned of
       Just (Aggregate _ _ _) -> Body entry [(aggregateBase, slice aggregateBase (aggregateTop-aggregateBase))] [] [] [(tableAt,slice tableAt 16)]
       _ -> Body entry [(entry,slice entry (snd (serviceExtent domain service))),(helperBase,slice helperBase (helperEnd-helperBase))] [] [] [(tableAt,slice tableAt 16)]
@@ -159,8 +157,11 @@ makeSpec env domain loader owned service scenario label = spec
         ++ [w (recordAddress layout domain target+0x10) 0x00102000 | not (ready scenario)]
     regions=foldl' (\rs (at,value)->map (poke at value) rs) (rawRegions++fixtureRegions) patches
     helpers=if domain==DomainA then [(0x439d8,0x3c),(0x43a14,0x28),(0x43c48,0x5c),(0x43ca4,0x7c),(0x43d20,0xb0),(0x43dd0,0x48),(0x43f70,0x2c),(0x44018,0x2c),(0x44134,0x80),(0x433e4,0x60)] else [(0xd398c,0x3c),(0xd39c8,0x28),(0xd3c04,0x5c),(0xd3c60,0x7c),(0xd3cdc,0xb0),(0xd3d8c,0x48),(0xd3f2c,0x2c),(0xd3fd4,0x30),(0xd40f4,0x80),(0xd33e4,0x60)]
+    overlaps (left, size) (right, count) = left < right + count && right < left + size
+    retainedHelpers = [extent | extent <- helpers, not (any (overlaps extent) (symbolSpans ++ placementSpans))]
+    placementFunctions = [(Agg.placementAddress placement, Agg.placementBytes placement) | placement <- placements, ".text." `isPrefixOf` Agg.placementSection placement]
     functions=(case owned of
-      Just (Aggregate _ _ _) -> [(address at,size) | (at,size)<-mergeSpans (symbolSpans ++ allSymbolSpans ++ helpers)]
+      Just (Aggregate _ _ _) -> [(address at,size) | (at,size)<-mergeSpans (symbolSpans ++ retainedHelpers ++ placementFunctions)]
       _ -> [(address at,size) | (at,size)<-serviceExtent domain service:helpers]) ++ fixtureFunctions
     (endStatus,stop)=expected env domain service scenario
     excluded=Cpsr : (if endStatus==InstructionBudget then [R0,R1,R2,R3,R4,R5,R6,R7,R8,R9,R10,R11,R12,Sp,Lr,Pc] else if stop/=Nothing then [R1,R2,R3,R4,R5,R6,R7,R8,R9,R10,R11,R12,Sp,Lr] else [R1,R2,R3,R12,Lr])

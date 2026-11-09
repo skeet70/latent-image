@@ -214,27 +214,26 @@ main = do
             patch s bytes = poke bytes [(entry s+delta-base,B.take (extent s) (B.drop (fromIntegral (entry s-entry Activate)) owned))]
             candidate = case aggregateImage of
               Nothing -> foldr patch stock [minBound..maxBound]
-              Just image ->
-                let withSymbols = foldl (\bytes symbol -> either error id (Agg.installSymbol base bytes image symbol)) stock selected
-                 in case placements of
-                      Just plans -> either error id (Agg.installPlacements base withSymbols image plans)
-                      Nothing -> withSymbols
+              Just image -> poke stock [(Agg.imageBase image - base, Agg.imageBytes image)]
             symbolSpans = [(Agg.symbolAddress symbol, Agg.symbolSize symbol) | symbol <- selected]
             placementSpans = maybe [] (map (\placement -> (Agg.placementAddress placement, Agg.placementBytes placement))) placements
+            payloadSpans = maybe [] (\image -> [(Agg.imageBase image, fromIntegral (B.length (Agg.imageBytes image)))]) aggregateImage
             helperSpans = helperFunctions b
             helperBase = if b then 0xd33e4 else 0x433e4
             helperSize = if b then 0x1210 else 0x1250
             stockCodeSpans s = [(entry s+delta, fromIntegral (extent s)), (helperBase, helperSize)]
             stockFunctionSpans s = (entry s+delta, fromIntegral (extent s)) : helperSpans
-            aggregateLo = minimum (map fst (symbolSpans ++ helperSpans ++ placementSpans))
-            aggregateHi = maximum [address + size | (address, size) <- symbolSpans ++ helperSpans ++ placementSpans]
+            aggregateLo = minimum (map fst (symbolSpans ++ helperSpans ++ placementSpans ++ payloadSpans))
+            aggregateHi = maximum [address + size | (address, size) <- symbolSpans ++ helperSpans ++ placementSpans ++ payloadSpans]
             ownedCodeSpans s = case symbols of
               Nothing -> stockCodeSpans s
               Just _ -> [(aggregateLo, aggregateHi-aggregateLo)]
             placementFunctions = maybe [] (map (\placement -> (Agg.placementAddress placement, Agg.placementBytes placement)) . filter (\placement -> ".text." `isPrefixOf` Agg.placementSection placement)) placements
+            overlaps (left, size) (right, bytes) = left < right + bytes && right < left + size
+            retainedHelpers = [extent' | extent' <- helperSpans, not (any (overlaps extent') (symbolSpans ++ placementSpans))]
             ownedFunctionSpans s = case symbols of
               Nothing -> stockFunctionSpans s
-              Just _ -> mergeSpans (symbolSpans ++ helperSpans ++ placementFunctions)
+              Just _ -> mergeSpans (symbolSpans ++ retainedHelpers ++ placementFunctions)
         forM [minBound..maxBound] $ \s -> do
           let cases=rows s
               scratchInputs specification = specification {caseInitial = [(register, if register `elem` [R1, R2, R3, R12] then value `xor` 0xffffffff else value) | (register, value) <- caseInitial specification]}
