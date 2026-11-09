@@ -112,6 +112,7 @@ haskell_library(
     visibility = ["//replacement/modal_runtime:__pkg__"],
     deps = [
         "//host:base",
+        "//host:bytestring",
         "//host:directory",
         "//host:filepath",
         "//host:process",
