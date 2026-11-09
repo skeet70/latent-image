@@ -45,7 +45,7 @@ caseBytes=16*1024*1024
 artifactCount, regionCount, functionCount, stubCount, eventCount, memoryCount :: Int
 artifactCount=20
 regionCount=64
-functionCount=256
+functionCount=512
 stubCount=32
 eventCount=128
 memoryCount=64

@@ -1100,6 +1100,25 @@ fn malformed_and_out_of_contract_wires_are_invalid_cases() {
 }
 
 #[test]
+fn function_count_boundary_calls_the_last_function_and_refuses_one_more() {
+    const LAST: u32 = 0x6000 + 8 * 510;
+    let mut instructions = vec![BX_LR; 2 * 512];
+    instructions[2 * 510] = 0xe3a0_002a;
+    let mut case = Case::new(&[PUSH_LR, branch(CODE + 4, LAST, true), POP_PC])
+        .region(0x6000, READ_EXECUTE, &words(&instructions));
+    for index in 0..511 {
+        case = case.function(0x6000 + 8 * index, 8);
+    }
+    let observed = case.run();
+    observed.assert_returned();
+    assert_eq!(observed.register("r0"), 42);
+    assert_eq!(observed.register("sp"), SP);
+
+    case = case.function(0x6000 + 8 * 511, 8);
+    assert_eq!(case.run().status(), Status::InvalidCase);
+}
+
+#[test]
 fn region_count_boundary_reads_the_last_region_and_refuses_past_limits() {
     const LAST: u32 = 0x6000 + 4 * 61;
     let mut valid = Case::new(&[LDR_R0_R1, ADD_R0_1, STR_R0_R1_POST_4, BX_LR]).register(1, LAST);
