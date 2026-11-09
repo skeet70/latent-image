@@ -10,11 +10,13 @@ MEMORY {
 SECTIONS {
   .af_select : {
     KEEP(*(.text.af_select))
+    KEEP(*(.text.af_select_core))
     __af_select_end = .;
     . = ORIGIN(selector) + LENGTH(selector);
   } > selector =0xf000f0e7
   .af_rotate : {
     KEEP(*(.text.af_rotate))
+    KEEP(*(.text.af_rotate_core))
     __af_rotate_end = .;
     . = ORIGIN(rotate) + LENGTH(rotate);
   } > rotate =0xf000f0e7

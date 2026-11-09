@@ -15,6 +15,7 @@ haskell_library(
         "//host:base",
         "//host:bytestring",
         "//host:containers",
+        "//host:deepseq",
         "//host:filepath",
         "//host/firmware:bank-allowlist",
     ],

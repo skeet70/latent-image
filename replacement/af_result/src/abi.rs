@@ -27,8 +27,8 @@ impl Bus for Firmware {
 }
 
 #[no_mangle]
-#[link_section = ".text.af_select"]
-pub unsafe extern "C" fn xm1_af_select(group: u32, count: *mut u16, base: *mut u32) {
+#[link_section = ".text.af_select_adapter"]
+pub unsafe extern "C" fn xm1_af_select_adapter(group: u32, count: *mut u16, base: *mut u32) {
     let pool = select(&mut Firmware, Group::from_raw(group));
     unsafe {
         write_volatile(base, pool.base.0);

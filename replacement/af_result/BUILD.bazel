@@ -16,6 +16,7 @@ xm1_rust_staticlib(
 xm1_rust_elf(
     name = "af-result",
     rust_staticlib = ":af-result-rust",
+    asm_srcs = ["entry.S"],
     entry = "xm1_af_reserve",
     link_script = "af-result.ld",
     extra_ldflags = ["-Wl,--gc-sections", "-Wl,--orphan-handling=error"],
@@ -54,7 +55,7 @@ genrule(
 sh_test(
     name = "host-tests",
     size = "small",
-    srcs = ["//emulation:recovery-task-state-tests.sh"],
+    srcs = ["host-test.sh"],
     args = ["$(location :host-tests-build)"],
     data = [":host-tests-build"],
 )

@@ -51,6 +51,8 @@ pub trait Bus {
     fn leave(&mut self, token: u32);
 }
 
+#[inline(never)]
+#[cfg_attr(feature = "stage", link_section = ".text.af_select_core")]
 pub fn select(bus: &mut impl Bus, group: Group) -> Pool {
     match group {
         Group::Secondary => Pool { base: Address(0x016fed28), count: 7 },
@@ -76,6 +78,7 @@ fn find_after(bus: &mut impl Bus, pool: Pool, start: u16, state: RecordState) ->
     None
 }
 
+#[cfg_attr(feature = "stage", link_section = ".text.af_rotate_core")]
 pub fn rotate(bus: &mut impl Bus, pool: Pool) {
     if pool.count == 0 { return; }
     let first = pool.state(bus, Slot(0));
