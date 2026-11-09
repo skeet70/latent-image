@@ -115,10 +115,12 @@ aggregateAdmission table =
   let entries = [(slot, either error id (slotEntry table slot)) | slot <- slots]
       symbol slot = "fixed_" ++ slotTag slot
       entryRows = [object ["group" .= ("own-first" :: String), "name" .= slotTag slot, "address" .= hexText address, "symbol" .= symbol slot, "veneer" .= symbol slot] | (slot, address) <- entries]
+      carrierSpans = (0x40000, 0x40010) : [(address, address + 8) | (_, address) <- entries]
       domainValue :: Word32 -> Int -> [Value] -> Value
       domainValue base size rows = object
         [ "loader_base" .= hexText base, "loader_size" .= size, "entries" .= rows
-        , "carriers" .= [object ["group" .= ("own-first" :: String), "start" .= hexText base, "end" .= hexText (base + fromIntegral size)]]
+        , "carriers" .= [object ["group" .= ("own-first" :: String), "start" .= hexText start, "end" .= hexText end]
+            | (start, end) <- if base == 0x40000 then carrierSpans else [(base, base + fromIntegral size)]]
         , "externals" .= ([] :: [Value]), "demand" .= ([] :: [Value])
         ]
       carriers = BL.toStrict (encode (object
@@ -127,24 +129,33 @@ aggregateAdmission table =
         ]))
       placements = BL.toStrict (encode (object ["placements" .=
         [object ["address" .= ("0x40000" :: String), "bytes" .= (4 :: Int), "section" .= (".text.packed" :: String)]
-        ,object ["address" .= ("0x40004" :: String), "bytes" .= (4 :: Int), "section" .= (".rodata" :: String)]]]))
-      top = maximum (map ((+ 4) . snd) entries)
+        ,object ["address" .= ("0x40004" :: String), "bytes" .= (4 :: Int), "section" .= (".rodata" :: String)]
+        ,object ["address" .= ("0x40008" :: String), "bytes" .= (4 :: Int), "section" .= (".text.anonymous" :: String)]]]))
+      top = maximum (map snd carrierSpans)
       binary = B.replicate (fromIntegral (top - 0x40000)) 0x5a
       stock = B.replicate (domainLoaderSize DomainA) 0x33
       nm address size name = showHex address "" ++ " " ++ showHex size "" ++ " T " ++ name ++ "\n"
       symbols = concat [nm address (4 :: Word32) (symbol slot) | (slot, address) <- entries] ++ nm (0x40000 :: Word32) (4 :: Word32) "packed"
-      admit rows plans = aggregateDomain 0xe7f000f0 DomainA table stock binary (C.pack rows) plans carriers
+      admit payload rows plans = aggregateDomain 0xe7f000f0 DomainA table stock payload (C.pack rows) plans carriers
+      expectedImage = B.pack
+        [if any (\(start, end) -> start <= address && address < end) carrierSpans then 0x5a else 0x33
+        | offset <- [0 .. domainLoaderSize DomainA - 1], let address = 0x40000 + fromIntegral offset]
       accepted = do
-        owned <- admit symbols placements
-        body <- ownedBody owned S60
-        pure (bodyEntry body == either error id (slotEntry table S60)
-          && case bodyCode body of
-            [(0x40000, image)] -> B.take 8 image == B.replicate 8 0x5a && B.take 4 (B.drop 8 image) == B.replicate 4 0x33
-            _ -> False)
+        owned <- admit binary symbols placements
+        bodies <- mapM (ownedBody owned) slots
+        pure (and
+          [ bodyEntry body == address && bodyCode body == [(0x40000, expectedImage)]
+              && any (\(start, size) -> start <= 0x40008 && 0x40008 < start + size) (bodyFunctions body)
+              && not (any (\(start, size) -> start <= 0x40004 && 0x40004 < start + size) (bodyFunctions body))
+          | (body, (_, address)) <- zip bodies entries])
    in accepted == Right True
-        && isLeft (admit (symbols ++ nm (0x40008 :: Word32) (4 :: Word32) "unplaced") placements)
-        && isLeft (admit (symbols ++ nm (0x40008 :: Word32) (4 :: Word32) "fixed_s60") placements)
-        && isLeft (admit symbols (BL.toStrict (encode (object ["placements" .=
+        && isLeft (admit B.empty symbols placements)
+        && isLeft (admit (B.init binary) symbols placements)
+        && isLeft (admit (binary <> B.singleton 0) symbols placements)
+        && isLeft (admit binary (symbols ++ nm (0x4000c :: Word32) (4 :: Word32) "unplaced") placements)
+        && isLeft (admit binary (symbols ++ nm (0x4000c :: Word32) (4 :: Word32) "fixed_s60") placements)
+        && isLeft (admit binary (symbols ++ nm (0x40004 :: Word32) (4 :: Word32) "readonly") placements)
+        && isLeft (admit binary symbols (BL.toStrict (encode (object ["placements" .=
           [object ["address" .= ("0x900000" :: String), "bytes" .= (4 :: Int), "section" .= (".text.outside" :: String)]]]))))
 
 pureChecks :: DomainTable -> [IO Bool]
@@ -248,7 +259,7 @@ pureChecks tableA =
            in isRight (parseCommand arguments)
                 && all (\missing -> isLeft (parseCommand (concatMap (\flag -> [flag, "input"]) (filter (/= missing) flags)))) flags
                 && isRight (parseCommand (["--owned-a-bin", "standalone-a", "--owned-a-symbols", "standalone-a.symbols", "--owned-b-bin", "standalone-b", "--owned-b-symbols", "standalone-b.symbols"] ++ arguments))
-      , check "aggregate fixed ABI entries coexist with packed code and rodata without admitting unplaced functions" (aggregateAdmission tableA)
+      , check "every aggregate slot preserves complete carrier slack and canonical gaps, admits text but not rodata, and rejects incomplete payloads" (aggregateAdmission tableA)
       , check "recorded boundaries parse into typed kinds" $
           parseDifferenceKind "RegisterKind R0" == Right (RegisterKind R0)
             && parseDifferenceKind "MemoryKind (RegionId \"buffer\")" == Right (MemoryKind (RegionId "buffer"))

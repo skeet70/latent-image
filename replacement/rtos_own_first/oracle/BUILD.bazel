@@ -48,9 +48,9 @@ haskell_library(
 
 # The stock loaders come from private-data:
 # bazel run //replacement/rtos_own_first/oracle:own-first-oracle -- --loader-a LOADER_A --loader-b LOADER_B --work NEW_DIRECTORY --summary NEW_JSON
-# Aggregate mode overrides the standalone defaults with --aggregate-a-bin platform-a.bin
-# --aggregate-a-symbols platform-a.symbols --placements-a placement-a.json and the three B flags.
-# Bazel supplies --carriers replacement/rtos_platform/carriers.json for fixed ABI entry admission.
+# Aggregate mode takes complete effective carrier slices from staged loaders through --aggregate-a-bin
+# and --aggregate-b-bin, with --aggregate-a-symbols/--aggregate-b-symbols and --placements-a/--placements-b.
+# Direct invocation accepts --carriers for the matching emitted union metadata.
 haskell_binary(
     name = "own-first-oracle",
     srcs = ["OracleMain.hs"],

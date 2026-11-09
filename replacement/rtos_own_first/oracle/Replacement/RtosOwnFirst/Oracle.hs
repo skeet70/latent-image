@@ -68,7 +68,7 @@ import Control.Monad (forM, unless)
 import Data.Aeson (Value, eitherDecodeStrict')
 import Data.Bits (shiftL, shiftR, testBit, xor, (.&.), (.|.))
 import qualified Data.ByteString as B
-import Data.List (find, nub, sortOn)
+import Data.List (find, isPrefixOf, nub, sortOn)
 import qualified Data.Map.Strict as M
 import Data.Maybe (isNothing, mapMaybe)
 import Data.Word (Word32, Word64, Word8)
@@ -494,11 +494,13 @@ aggregateDomain fill domain table stock binary symbolBytes placementBytes carrie
   symbols <- Agg.parseAggregateSymbols symbolBytes
   placements <- Agg.parsePlacements placementBytes
   unless (not (null symbols) && not (null placements)) (Left "aggregate symbols and placements must be nonempty")
-  let base = minimum (map Agg.symbolAddress symbols)
-      image = Agg.AggregateImage base binary
+  let dm = U.domainMap union domain
+      carriers = [Agg.SectionPlacement start (end - start) ".carrier"
+        | carrier <- U.mapCarriers dm
+        , let Extent (GuestAddress start) (GuestAddress end) = U.carrierExtent carrier]
       GuestAddress loaderBase = domainLoaderBase domain
       symbolSpans = [(Agg.symbolAddress symbol, Agg.symbolSize symbol) | symbol <- symbols, Agg.symbolSize symbol > 0]
-      dm = U.domainMap union domain
+      executable = [placement | placement <- placements, Agg.placementBytes placement > 0, ".text" `isPrefixOf` Agg.placementSection placement]
       fixed symbol = any (\entry ->
         let GuestAddress address = U.entryAddress entry
          in Agg.symbolName symbol == U.entryVeneer entry
@@ -508,8 +510,15 @@ aggregateDomain fill domain table stock binary symbolBytes placementBytes carrie
           && toInteger (Agg.placementAddress placement) + toInteger (Agg.placementBytes placement) <= toInteger end) (U.runs dm)
       covered (address, size) = any (\placement ->
         Agg.placementAddress placement <= address
-          && toInteger address + toInteger size <= toInteger (Agg.placementAddress placement) + toInteger (Agg.placementBytes placement)) placements
+          && toInteger address + toInteger size <= toInteger (Agg.placementAddress placement) + toInteger (Agg.placementBytes placement)) executable
   unless (B.length stock == domainLoaderSize domain) (Left "loader size")
+  unless (not (null carriers)) (Left "aggregate has no declared carriers")
+  unless (all (\carrier -> Agg.placementAddress carrier >= loaderBase
+      && toInteger (Agg.placementAddress carrier) + toInteger (Agg.placementBytes carrier)
+        <= toInteger loaderBase + toInteger (B.length stock)) carriers)
+    (Left "aggregate carrier is outside loader")
+  let base = minimum (map Agg.placementAddress carriers)
+      image = Agg.AggregateImage base binary
   unless (all placementFits placements) (Left "aggregate placement is outside packed carrier space")
   unless (all (\symbol -> Agg.symbolSize symbol == 0 || fixed symbol || covered (Agg.symbolAddress symbol, Agg.symbolSize symbol)) symbols)
     (Left "aggregate function is outside placement metadata and declared fixed ABI entries")
@@ -517,15 +526,17 @@ aggregateDomain fill domain table stock binary symbolBytes placementBytes carrie
   entries <- mapM (slotEntry table) slots
   unless (all (\entry -> any (\(address, size) -> address == entry && size > 0) symbolSpans) entries)
     (Left "aggregate symbols omit a public own-first entry")
-  let top = maximum
-        ([toInteger address + toInteger size | (address, size) <- symbolSpans]
-          ++ [toInteger (Agg.placementAddress placement) + toInteger (Agg.placementBytes placement) | placement <- placements])
-  unless (top == toInteger base + toInteger (B.length binary)) (Left "aggregate binary and metadata spans differ")
-  withSymbols <- Agg.installAggregate loaderBase stock image symbols
-  installed <- Agg.installPlacements loaderBase withSymbols image placements
+  let top = maximum [toInteger (Agg.placementAddress carrier) + toInteger (Agg.placementBytes carrier) | carrier <- carriers]
+  unless (top == toInteger base + toInteger (B.length binary)) (Left "aggregate binary and complete carrier extent differ")
+  installed <- Agg.installPlacements loaderBase stock image carriers
   retained <- mapM (stockBody domain table stock) slots
-  let retainedSpans = nub (concatMap bodyFunctions retained)
-      functions = foldr merge [] (sortOn fst (retainedSpans ++ symbolSpans))
+  let allocations = carriers ++ placements
+      overlaps (address, size) placement =
+        toInteger address < toInteger (Agg.placementAddress placement) + toInteger (Agg.placementBytes placement)
+          && toInteger (Agg.placementAddress placement) < toInteger address + toInteger size
+      retainedSpans = filter (\span' -> not (any (overlaps span') allocations)) (nub (concatMap bodyFunctions retained))
+      textSpans = [(Agg.placementAddress placement, Agg.placementBytes placement) | placement <- executable]
+      functions = foldr merge [] (sortOn fst (retainedSpans ++ symbolSpans ++ textSpans))
       merge (address, size) ((next, nextSize) : rest)
         | address + size > next = merge (address, max (address + size) (next + nextSize) - address) rest
       merge span' rest = span' : rest
