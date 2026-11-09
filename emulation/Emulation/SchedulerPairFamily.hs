@@ -23,6 +23,7 @@ data FamilyBoundary = FamilyBoundary
   , familyBoundaryInstructions :: Word64
   , familyBoundaryCore :: Int
   , familyBoundaryRegisters :: [Word32]
+  , familyBoundaryMemory :: Memory
   , familyBoundaryValue :: Maybe Word32
   , familyBoundaryTask :: Word32
   } deriving (Eq,Show)
@@ -362,7 +363,7 @@ checkTimerBoundary call value boundary inserting = do
     _ -> Left FamilyTimer
   entryTask <- if inserting
     then wordAt (value+8) (familyAfter call)
-    else wordAt (value+8) (familyBefore call)
+    else wordAt (value+8) (familyBoundaryMemory boundary)
   expect FamilyAssociation (familyBoundaryTask boundary==familyTask call || entryTask==familyTask call)
   expect FamilyAssociation (familyBoundaryCore boundary==familyCore call || entryTask==familyTask call)
   if inserting then expect FamilyTimer (entryTask==familyTask call) else expect FamilyTimer (entryTask/=0)

@@ -176,6 +176,7 @@ SECTIONS {
     *(.text._RINvNtNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter7objects6locked10clear_flagNtB6_3CpuEB6_)
     *(.text._RNvNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter6family14entry_snapshot)
     *(.text._RNvNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter6family20delete_mailbox_entry)
+    *(.text.OUTLINED_FUNCTION_6)
     __family_mailbox_poll_shared_end = .;
     . = ORIGIN(family_mailbox_poll) + LENGTH(family_mailbox_poll);
   } > family_mailbox_poll =0xf000f0e7
@@ -183,7 +184,6 @@ SECTIONS {
     KEEP(*(.text.family_mailbox_timed_receive))
     __family_mailbox_timed_receive_body_end = .;
     *(.text._RNvNtCs1rraWxgmT7_31xm1_rtos_objects_family_adapter6family14mailbox_router)
-    *(.text.OUTLINED_FUNCTION_6)
     __family_mailbox_timed_receive_shared_end = .;
     . = ORIGIN(family_mailbox_timed_receive) + LENGTH(family_mailbox_timed_receive);
   } > family_mailbox_timed_receive =0xf000f0e7

@@ -405,6 +405,61 @@ refusesBudget label expected calls pendings = case streamingVerdict [] calls pen
 
 main :: IO ()
 main = do
+  retained <- either error pure . J.eitherDecodeStrict' =<< B.readFile "emulation/semaphore-signal-rewait.json"
+  case checkCall retained of
+    Right () -> pure ()
+    Left refusal -> error ("retained signal waiter re-waits: " ++ show refusal)
+  let changeHistory f call = call { callTrace = fmap (\trace -> trace { traceHistory = map f (traceHistory trace) }) (callTrace call) }
+      withoutSave = changeHistory (\boundary -> if boundaryKind boundary == SaveBoundary then boundary { boundaryKind = ReturnBoundary } else boundary) retained
+      unreadableSave = changeHistory (\boundary -> if boundaryKind boundary == SaveBoundary then boundary { boundaryMemory = M.empty } else boundary) retained
+  case checkCall withoutSave of
+    Left _ -> pure ()
+    Right () -> error "ordinary returns cannot establish signal preemption"
+  case checkCall unreadableSave of
+    Left _ -> pure ()
+    Right () -> error "unreadable suspension cannot establish signal release"
+  let corrupt = Written (Address 0x400551c0) 4 0xffffffce
+      corruptOrigin = (originAtForWith (callTask retained) 34779350 0x477c0)
+        { writerContext = callKernelContext retained, writerSp = Address 0xa19bb8 }
+      corruptReturn boundary = if boundaryKind boundary == ReturnBoundary
+        then boundary { boundaryMemory = M.insert (Address 0x400551c0) 0xffffffce (boundaryMemory boundary)
+                      , boundaryWrites = boundaryWrites boundary ++ [corrupt]
+                      , boundaryWriteOrigins = boundaryWriteOrigins boundary ++ [corruptOrigin] }
+        else boundary
+      corruptCaller = (changeHistory corruptReturn retained)
+        { callAfter = M.insert (Address 0x400551c0) 0xffffffce (callAfter retained)
+        , callWrites = callWrites retained ++ [corrupt]
+        , callWriteOrigins = callWriteOrigins retained ++ [corruptOrigin] }
+  case checkCall corruptCaller of
+    Left FamilyLifetime -> pure ()
+    result -> error ("caller cannot corrupt released completion after resume: " ++ show result)
+  let irqWrite = Written (Address 0x4005b148) 4 1
+      irqOrigin = corruptOrigin { writerContext = 1, writerCpsr = 0x92, writerSp = Address 0x70000800 }
+      irqReturn boundary = if boundaryKind boundary == ReturnBoundary
+        then boundary { boundaryMemory = M.insert (Address 0x4005b148) 1 (boundaryMemory boundary)
+                      , boundaryWrites = boundaryWrites boundary ++ [irqWrite]
+                      , boundaryWriteOrigins = boundaryWriteOrigins boundary ++ [irqOrigin] }
+        else boundary
+      interruptedCaller = (changeHistory irqReturn retained)
+        { callAfter = M.insert (Address 0x4005b148) 1 (callAfter retained)
+        , callWrites = callWrites retained ++ [irqWrite]
+        , callWriteOrigins = callWriteOrigins retained ++ [irqOrigin] }
+  case checkCall interruptedCaller of
+    Right () -> pure ()
+    result -> error ("same-task interrupt may signal after resume: " ++ show result)
+  let changeSave f = changeHistory (\boundary -> if boundaryKind boundary == SaveBoundary then f boundary else boundary) retained
+      invalidSaves =
+        [ ("wrong task", changeSave (\boundary -> boundary { boundaryTask = 0x40060bf4 }))
+        , ("wrong core", changeSave (\boundary -> boundary { boundaryCore = 1 }))
+        , ("save after resume", changeSave (\boundary -> boundary { boundaryInstructions = 34779345 }))
+        , ("wrong save entry", changeSave (\boundary -> boundary { boundaryAddress = Address 0x43644 }))
+        , ("missing resume", changeHistory (\boundary -> if boundaryKind boundary == ResumeBoundary then boundary { boundaryKind = ReturnBoundary } else boundary) retained)
+        , ("missing prefix effects", changeSave (\boundary -> boundary { boundaryWrites = [] }))
+        , ("unexplained final corruption", retained { callAfter = M.insert (Address 0x400551c0) 0xffffffce (callAfter retained) })
+        ]
+  mapM_ (\(label, invalid) -> case checkCall invalid of
+    Left _ -> pure ()
+    Right () -> error ("signal suspension accepted " ++ label)) invalidSaves
   accepts "poll acquires from one" [pollCall 1 0 0] []
   refuses "poll count one timeout refuses" [pollCall 1 (fromIntegral (-50 :: Int)) 1] []
   refuses "poll empty acquire refuses" [pollCall 0 0 0] []

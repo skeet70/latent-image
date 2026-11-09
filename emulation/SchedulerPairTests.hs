@@ -173,6 +173,16 @@ main = do
   assert "B with A predicate refuses at id 1" (checkCall call {callDomain=DomainB,callCore=1,callArguments=Arguments [1,0,0,0],callR0=1,callBank=[],callBankOrigins=[]} == Left ReturnValue)
   forM_ [(DomainA,0),(DomainA,1),(DomainB,0),(DomainB,2)] $ \(domain,id') -> assert "local notify" (stockCall domain Notify (Arguments [id',0,0,0]) M.empty == Right (Expected 1 M.empty mempty []))
   assert "route comparison ignores call interleavings" (compareRoutes observation {obsRole=Stock} observation {obsCalls=[call {callFirst=80}]} == Right ())
+  let separatelyObserved = observation { obsInputs = take 5 (obsInputs observation) ++ ["owned-observer"] }
+      stockObserved = observation { obsRole = Stock }
+  assert "route comparison permits separately verified observer identities"
+    (compareRoutes stockObserved separatelyObserved == Right ())
+  assert "route comparison rejects a different boot ROM"
+    (compareRoutes stockObserved separatelyObserved { obsInputs = take 3 (obsInputs separatelyObserved) ++ ["other-rom"] ++ drop 4 (obsInputs separatelyObserved) } == Left Binding)
+  assert "route comparison rejects a different trajectory"
+    (compareRoutes stockObserved separatelyObserved { obsInputs = take 4 (obsInputs separatelyObserved) ++ ["other-trajectory"] ++ drop 5 (obsInputs separatelyObserved) } == Left Binding)
+  assert "route comparison rejects truncated per-role bindings"
+    (compareRoutes stockObserved separatelyObserved { obsInputs = take 5 (obsInputs separatelyObserved) } == Left Binding)
   refuses "model invalid arguments" (Model InvalidArguments) observation {obsCalls=[call {callArguments=Arguments []}]}
   let emptyQueues = M.fromList ([(Address 0x1020,0x2000),(Address 0x1024,0x3000),(Address 0x102c,0x3004),(Address 0x1030,0x3008),
         (Address 0x3000,0),(Address 0x3004,0xdead),(Address 0x3008,2)] ++ [(Address (0x2000+p*8+offset),0x2000+p*8) | p <- [0..15],offset <- [0,4]])

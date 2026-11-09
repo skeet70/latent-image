@@ -470,7 +470,8 @@ routeSignature :: Observation -> [(T.Text,Maybe T.Text,Q.MenuTriple,Maybe Q.Menu
 routeSignature = map (\m -> (Q.milestonePhase m,Q.milestoneKey m,Q.milestoneExpected m,Q.milestoneObserved m)) . obsMilestones
 compareRoutes :: Observation -> Observation -> Either Refusal ()
 compareRoutes stock owned = do
-  expect Binding (drop 3 (obsInputs stock) == drop 3 (obsInputs owned))
+  expect Binding (length (obsInputs stock) == 6 && length (obsInputs owned) == 6
+    && take 2 (drop 3 (obsInputs stock)) == take 2 (drop 3 (obsInputs owned)))
   expect Route (obsRole stock == Stock && obsRole owned == Owned && routeSignature stock == routeSignature owned)
 data SummaryEntry = SummaryEntry !Domain !Address !Semantic deriving (Eq,Ord,Show)
 data RedesignCounts = RedesignCounts
@@ -715,6 +716,14 @@ instance Sem.SemaphoreCall Call where
   semaphoreEpoch = callFirst
   semaphoreService call = case callSemantic call of SemaphoreSemantic service -> Just service; _ -> Nothing
   semaphoreTrace call = fmap familyTraceOf (callTrace call)
+  semaphoreWriters call = [if ownsOrigin call origin then Sem.SignalCaller else Sem.OtherWriter | origin <- callWriteOrigins call]
+  semaphoreSuspension call = do
+    trace <- callTrace call
+    let (prefix, rest) = break (\boundary -> boundaryKind boundary == SaveBoundary && ownsBoundary call boundary) (traceHistory trace)
+    case rest of
+      saved : _ -> Just (boundaryMemory saved,
+        [(address, size, value) | boundary <- prefix ++ [saved], Written address size value <- boundaryWrites boundary])
+      [] -> Nothing
 
 instance F.FamilyCall Call where
   familyDomain = callDomain
@@ -756,6 +765,7 @@ familyBoundaryOf boundary = F.FamilyBoundary
   , F.familyBoundaryInstructions = boundaryInstructions boundary
   , F.familyBoundaryCore = boundaryCore boundary
   , F.familyBoundaryRegisters = D.registers (boundaryRegisters boundary)
+  , F.familyBoundaryMemory = boundaryMemory boundary
   , F.familyBoundaryValue = boundaryValue boundary
   , F.familyBoundaryTask = boundaryTask boundary
   }
