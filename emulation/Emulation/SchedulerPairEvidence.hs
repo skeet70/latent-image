@@ -10,10 +10,13 @@ module Emulation.SchedulerPairEvidence
 import Control.Monad (forM_)
 import qualified Data.Aeson as J
 import qualified Data.ByteString as B
-import Data.Word (Word64)
+import qualified Data.Map.Strict as M
+import Data.Word (Word32, Word64)
 import Emulation.SchedulerPairCheck
 import Emulation.SchedulerPairFamily (ReleaseWitness (..), TimerWitness)
+import Emulation.SchedulerPairModel (Arguments (..))
 import Emulation.SchedulerPairPlan
+import qualified Emulation.SchedulerPairS2 as D
 import Replacement.RtosOwnFirst.Regions (Domain, domainLabel)
 
 -- | Explicit fail-closed budgets. The retained family stock observation has
@@ -26,7 +29,23 @@ deferredCallBudget = 256
 controlCandidateBudget = 256
 
 data CallFailure = CallFailure !Word64 !Refusal
-data SemanticFailureDetails = SemanticFailureDetails !Word64 !Domain !Address !Semantic !Int !Refusal
+data CallProjection = CallProjection
+  { projectionDomain :: !Domain, projectionAddress :: !Address, projectionSemantic :: !Semantic
+  , projectionCore :: !Int, projectionCpsr :: !Word32, projectionArguments :: ![Word32]
+  , projectionBefore :: ![(Address, Word32)], projectionAfter :: ![(Address, Word32)]
+  , projectionWrites :: ![(Address, Int, Word32)], projectionBank :: ![(Address, Int, Word32)]
+  , projectionTask :: !Word32, projectionFirst :: !Word64, projectionR0 :: !Word32, projectionReturnCpsr :: !Word32
+  , projectionBeforeRegisters :: ![Word32], projectionAfterRegisters :: ![Word32]
+  } deriving Show
+projectionOf :: Call -> CallProjection
+projectionOf call = CallProjection (callDomain call) (callAddress call) (callSemantic call) (callCore call) (callCpsr call)
+  (case callArguments call of Arguments arguments -> arguments)
+  (M.toList (callBefore call)) (M.toList (callAfter call))
+  [(address,size,value) | Written address size value <- callWrites call]
+  [(address,size,value) | Written address size value <- callBank call]
+  (callTask call) (callFirst call) (callR0 call) (callReturnCpsr call)
+  (maybe [] (D.registers . traceBefore) (callTrace call)) (maybe [] (D.registers . traceAfter) (callTrace call))
+data SemanticFailureDetails = SemanticFailureDetails !Word64 !Domain !Address !Semantic !Int !Refusal !CallProjection
 data CallEvidence = CallEvidence
   { evidenceFailure :: !(Maybe CallFailure)
   , evidenceSemanticFailure :: !(Maybe SemanticFailureDetails)
@@ -77,7 +96,7 @@ accumulateKnown timers deferred limit timerTotal deferredTotal plan semanticResu
     Right () -> evidenceSemanticFailure prior
     Left refusal ->
       let failure = SemanticFailureDetails (callFirst call) (callDomain call) (callAddress call)
-            (callSemantic call) (callCore call) refusal
+            (callSemantic call) (callCore call) refusal (projectionOf call)
       in failure `seq` earlierSemantic (evidenceSemanticFailure prior) failure
   totals = CallTotals True (completedCallCount (evidenceTotals prior) + callCount call)
   counts = case plannedResult of
@@ -91,8 +110,8 @@ earlierFailure previous candidate@(CallFailure first _) = case previous of
   _ -> Just candidate
 
 earlierSemantic :: Maybe SemanticFailureDetails -> SemanticFailureDetails -> Maybe SemanticFailureDetails
-earlierSemantic previous candidate@(SemanticFailureDetails first _ _ _ _ _) = case previous of
-  Just (SemanticFailureDetails old _ _ _ _ _) | old<=first -> previous
+earlierSemantic previous candidate@(SemanticFailureDetails first _ _ _ _ _ _) = case previous of
+  Just (SemanticFailureDetails old _ _ _ _ _ _) | old<=first -> previous
   _ -> Just candidate
 
 qualifyEvidence :: B.ByteString -> Plan -> Observation -> CallEvidence -> Either Refusal J.Value
@@ -115,9 +134,27 @@ qualifyEvidence bytes plan observation evidence = do
 evidenceFailureValue :: CallEvidence -> J.Value
 evidenceFailureValue evidence = case evidenceSemanticFailure evidence of
   Nothing -> J.Null
-  Just (SemanticFailureDetails first domain address semantic core refusal) -> J.object
+  Just (SemanticFailureDetails first domain address semantic core refusal projection) -> J.object
     ["first" J..= first,"domain" J..= domainLabel domain,"entry" J..= show address
-    ,"semantic" J..= semanticValue semantic,"core" J..= core,"refusal" J..= show refusal]
+    ,"semantic" J..= semanticValue semantic,"core" J..= core,"refusal" J..= show refusal
+    ,"call" J..= projectionValue projection]
+
+projectionValue :: CallProjection -> J.Value
+projectionValue projection = J.object
+  [ "domain" J..= domainLabel (projectionDomain projection)
+  , "address" J..= show (projectionAddress projection)
+  , "semantic" J..= semanticValue (projectionSemantic projection)
+  , "core" J..= projectionCore projection, "cpsr" J..= projectionCpsr projection
+  , "arguments" J..= projectionArguments projection
+  , "before" J..= [(show address,value) | (address,value) <- projectionBefore projection]
+  , "after" J..= [(show address,value) | (address,value) <- projectionAfter projection]
+  , "writes" J..= [(show address,size,value) | (address,size,value) <- projectionWrites projection]
+  , "bank" J..= [(show address,size,value) | (address,size,value) <- projectionBank projection]
+  , "task" J..= projectionTask projection, "first" J..= projectionFirst projection
+  , "r0" J..= projectionR0 projection, "return_cpsr" J..= projectionReturnCpsr projection
+  , "before_registers" J..= projectionBeforeRegisters projection
+  , "after_registers" J..= projectionAfterRegisters projection
+  ]
 
 data RetainedControl
   = NoControlCalls

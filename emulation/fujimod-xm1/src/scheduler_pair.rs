@@ -982,6 +982,11 @@ impl FamilyService {
 
     fn message_argument(self) -> Option<usize> { (self == Self::FamilyMailboxSend).then_some(1) }
 
+    /// The flag and mailbox create request names the initial attributes and value words.
+    fn request_argument(self) -> Option<usize> {
+        matches!(self, Self::FamilyFlagCreate | Self::FamilyMailboxCreate).then_some(1)
+    }
+
     /// The flag timed wait passes its timeout as the fifth argument, on the caller's stack.
     fn stack_timeout(self) -> bool { self == Self::FamilyFlagTimedWait }
 
@@ -1082,6 +1087,7 @@ fn family_words(read: &mut dyn FnMut(u32) -> Result<Read, String>, domain: Domai
     if let Some(index) = name.output_argument() { walk.capture_word(arguments[index]); }
     if name.stack_timeout() { walk.capture_word(caller_sp); }
     if let Some(index) = name.message_argument() { walk.record(arguments[index], MESSAGE_BYTES); }
+    if let Some(index) = name.request_argument() { walk.record(arguments[index], 8); }
     if name.family().is_none() {
         helper_words(&mut walk, name, arguments, running)?;
         return Ok(walk.addresses.into_iter().collect());
