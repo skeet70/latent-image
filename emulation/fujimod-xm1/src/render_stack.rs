@@ -11,6 +11,8 @@ use crate::{provenance::Guest, render_provenance::Boundary};
 #[path = "render_stack_mapping.rs"]
 mod mapping;
 use mapping::A32Mappings;
+#[path = "render_stack_transitions.rs"]
+mod transitions;
 
 const RECORD_LIMIT: usize = 4096;
 const TRANSITION_LIMIT: usize = 65536;
@@ -195,10 +197,10 @@ impl Identity {
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "kebab-case")]
 enum Terminal { OwnedReturn, FallbackHandoff, StockReturn }
-#[derive(Serialize)]
+#[derive(Clone, Copy, Eq, PartialEq, Serialize)]
 struct Transition { pc: u32, cpsr: u32, context_depth: u32, current_node: u32, owner_node: Option<u32>, scheduler: bool,
     mode_source: Option<ModeSource> }
-#[derive(Clone, Copy, Serialize)]
+#[derive(Clone, Copy, Eq, PartialEq, Serialize)]
 struct ModeSource { pc: u32, word: u32 }
 #[derive(Serialize)]
 #[serde(transparent)]
@@ -229,6 +231,8 @@ enum ServiceCoverage { PartialObservedSourceTransitions }
 #[derive(Serialize)]
 struct ServiceSpan { observed_owned_pc: u32, observed_owned_word: u32, entry_pc: u32, entry_sp: u32, return_pc: u32, exit_sp: Option<u32>, min_sp: u32, deepest_pc: u32, deepest_lr: u32, minimum_context: MinimumContext, within_allowance: bool }
 #[derive(Serialize)]
+struct TransitionSpan { first: u64, last: u64 }
+#[derive(Serialize)]
 struct Invocation {
     id: u64, parent: Option<u64>, kind: EntryKind, core: usize, task_identity: Identity,
     entry_pc: u32, entry_sp: u32, entry_lr: u32, entry_mode: u32,
@@ -236,14 +240,16 @@ struct Invocation {
     exit_sp: Option<u32>, min_sp: u32, deepest_pc: u32, deepest_lr: u32,
     minimum_context: MinimumContext,
     terminal: Option<Terminal>, frame_depth: u32, allowance: u32, within_bound: bool,
-    transitions: Vec<Transition>, retained_spans: Vec<ServiceSpan>,
+    transition_span: TransitionSpan,
+    #[serde(skip)] transitions: transitions::Trace,
+    retained_spans: Vec<ServiceSpan>,
     #[serde(skip)] identity: TaskIdentity,
     #[serde(skip)] last_context: Option<(u32, u32, u32, Option<u32>, bool)>,
     #[serde(skip)] open_services: Vec<usize>,
 }
 #[derive(Default, Serialize)]
 struct Performance { active_instructions: u64, invocation_count: u64, hook_transitions: u64, host_nanoseconds: u64 }
-struct State { invocations: Vec<Invocation>, open: Vec<usize>, failure: Option<String>, performance: Performance, transitions: usize, service_spans: usize }
+struct State { invocations: Vec<Invocation>, open: Vec<usize>, failure: Option<String>, performance: Performance, transitions: transitions::Arena, service_spans: usize }
 impl State {
     fn fail(&mut self, error: String) { self.failure.get_or_insert(error); }
     fn active(&self, core: usize) -> bool { self.open.iter().any(|&index| self.invocations[index].core == core) }
@@ -255,13 +261,16 @@ impl State {
         for &index in &self.open {
             let invocation = &mut self.invocations[index];
             if invocation.core != sample.core { continue; }
+            invocation.transition_span.last = self.performance.active_instructions;
             if invocation.last_context != Some(context) {
-                if invocation.transitions.len() == RECORD_LIMIT || self.transitions == TRANSITION_LIMIT {
-                    return Err("stack diagnostic transition storage bound exceeded".into());
+                let logical_limit = self.performance.active_instructions.checked_mul(NESTING_LIMIT as u64)
+                    .ok_or("stack diagnostic logical transition bound overflow")?;
+                if self.transitions.logical.checked_add(1).ok_or("stack diagnostic logical transition overflow")? > logical_limit {
+                    return Err("stack diagnostic logical transitions exceed observed instruction span".into());
                 }
-                self.transitions += 1;
-                invocation.transitions.push(Transition { pc: sample.pc, cpsr: sample.cpsr, context_depth: sample.context_depth,
-                    current_node, owner_node, scheduler, mode_source: sample.mode_source });
+                self.transitions.push(&mut invocation.transitions, self.performance.active_instructions,
+                    Transition { pc: sample.pc, cpsr: sample.cpsr, context_depth: sample.context_depth,
+                    current_node, owner_node, scheduler, mode_source: sample.mode_source })?;
                 invocation.last_context = Some(context);
             }
             if owner != Some(invocation.identity) { continue; }
@@ -347,7 +356,10 @@ impl State {
                 entry_boundary: boundary, terminal_boundary: None,
                 exit_sp: None, min_sp: sample.sp, deepest_pc: sample.pc, deepest_lr: sample.lr, terminal: None,
                 minimum_context: MinimumContext::new(sample, None, None, MinimumCoordinate::EntryBoundary { boundary }),
-                frame_depth: entry.frame_depth, allowance: 1024, within_bound: false, transitions: Vec::new(),
+                frame_depth: entry.frame_depth, allowance: 1024, within_bound: false,
+                transition_span: TransitionSpan { first: self.performance.active_instructions.checked_add(1).ok_or("stack diagnostic ordinal overflow")?,
+                    last: self.performance.active_instructions.checked_add(1).ok_or("stack diagnostic ordinal overflow")? },
+                transitions: transitions::Trace::default(),
                 retained_spans: Vec::new(), open_services: Vec::new(), last_context: None });
             self.performance.invocation_count += 1;
             return Ok(());
@@ -364,6 +376,11 @@ impl State {
         if sample.sp != expected_sp || sample.cpsr & 0x1f != invocation.entry_mode
             || Identity::new(sample.identity, sample.descriptor) != invocation.task_identity || !invocation.open_services.is_empty() {
             return Err("stack diagnostic return is ambiguous or unrestored".into());
+        }
+        let observed_span = boundary.instruction_count().checked_sub(invocation.entry_boundary.instruction_count())
+            .and_then(|span| span.checked_add(1)).ok_or("stack diagnostic invocation instruction span overflow")?;
+        if invocation.transitions.count > observed_span {
+            return Err("stack diagnostic logical transitions exceed invocation instruction span".into());
         }
         invocation.exit_sp = Some(sample.sp);
         invocation.terminal_boundary = Some(boundary);
@@ -686,7 +703,7 @@ impl Collector {
         let fetch_mappings = A32Mappings::new(graph, &access)?;
         let config = Rc::new(Config::new(request, access, fetch_mappings)?);
         let state = Rc::new(RefCell::new(State { invocations: Vec::new(), open: Vec::new(), failure: None,
-            performance: Performance::default(), transitions: 0, service_spans: 0 }));
+            performance: Performance::default(), transitions: transitions::Arena::new(), service_spans: 0 }));
         let mut collector = Self { config, state, cores: Vec::new(), finished: false,
             start: Boundary::sample(session)?, end: None };
         let addresses: Vec<u64> = collector.config.request.entries.iter().flat_map(|entry| [entry.address, entry.address + 4])
@@ -817,7 +834,13 @@ impl Collector {
         if self.finished { return self.report(); }
         if !self.state.borrow().open.is_empty() { self.refuse("stack diagnostic ended with incomplete invocations"); }
         if let Err(error) = self.remove_hooks(session) { self.refuse(&error); return Err(error); }
-        self.end = Some(Boundary::sample(session)?);
+        let end = Boundary::sample(session)?;
+        let observed_span = end.instruction_count().checked_sub(self.start.instruction_count())
+            .and_then(|span| span.checked_add(1)).ok_or("stack diagnostic instruction span overflow")?;
+        if self.state.borrow().performance.active_instructions > observed_span {
+            self.refuse("stack diagnostic active observations exceed instruction span");
+        }
+        self.end = Some(end);
         self.finished = true;
         self.report()
     }
@@ -836,11 +859,34 @@ impl Collector {
     }
     pub fn report(&self) -> Result<serde_json::Value, String> {
         let state = self.state.borrow();
-        Ok(serde_json::json!({"version":1,"diagnostic_only":true,
+        #[derive(Serialize)]
+        struct InvocationReport<'a> {
+            #[serde(flatten)] invocation: &'a Invocation,
+            transition_count: u64,
+            transitions: transitions::Rows<'a>,
+        }
+        struct InvocationReports<'a>(&'a State);
+        impl Serialize for InvocationReports<'_> {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                use serde::ser::SerializeSeq;
+                let mut rows = serializer.serialize_seq(Some(self.0.invocations.len()))?;
+                for invocation in &self.0.invocations {
+                    rows.serialize_element(&InvocationReport { invocation, transition_count: invocation.transitions.count,
+                        transitions: self.0.transitions.rows(&invocation.transitions) })?;
+                }
+                rows.end()
+            }
+        }
+        let invocations = InvocationReports(&state);
+        Ok(serde_json::json!({"version":2,"diagnostic_only":true,
+            "transition_encoding":"pair-stride-v1",
+            "transition_storage":{"per_invocation_limit":RECORD_LIMIT,"aggregate_limit":TRANSITION_LIMIT,
+                "allocated_entries":state.transitions.allocated_entries(),
+                "retained_entries":state.transitions.retained,"logical_transitions":state.transitions.logical},
             "coverage":if state.failure.is_none() && state.open.is_empty() { "continuous" } else { "refused" },
             "failure":state.failure,"incomplete_intervals":!state.open.is_empty(),"active_invocations":state.open.len(),
             "retained_service_coverage":ServiceCoverage::PartialObservedSourceTransitions,"retained_service_spans_informational":true,
-            "invocations":state.invocations,"performance":state.performance,"sources":self.config.request.sources,
+            "invocations":invocations,"performance":state.performance,"sources":self.config.request.sources,
             "whole_route_stack_minimum_proven":false,"scope":"installed-before-unload","finished":self.finished,
             "role":self.config.request.role,"start":self.start,"end":self.end}))
     }
@@ -930,7 +976,13 @@ mod tests {
                 self.machine.session.board.write_register(0, register, u64::from(value)).unwrap();
             }
         }
-        fn report(&self) -> Value { self.machine.render_stack_diagnostic.as_ref().unwrap().report().unwrap() }
+        fn report(&self) -> Value {
+            let report = self.machine.render_stack_diagnostic.as_ref().unwrap().report().unwrap();
+            let storage = &report["transition_storage"];
+            assert!(storage["retained_entries"].as_u64().unwrap() <= storage["allocated_entries"].as_u64().unwrap());
+            assert!(storage["allocated_entries"].as_u64().unwrap() <= 65536);
+            report
+        }
     }
     fn branch(from: u32, to: u32, link: bool) -> u32 {
         (if link { 0xeb000000 } else { 0xea000000 }) | ((to.wrapping_sub(from + 8) >> 2) & 0x00ffffff)
@@ -1064,8 +1116,8 @@ mod tests {
         let ordinal = minimum["coordinate"]["ordinal"].as_u64().unwrap();
         assert!(ordinal > 0 && ordinal < report["performance"]["active_instructions"].as_u64().unwrap());
         let transitions = report["invocations"][0]["transitions"].as_array().unwrap();
-        assert!(transitions.iter().any(|row| row["cpsr"].as_u64().unwrap() & 128 == 0));
-        assert!(transitions.iter().any(|row| row["cpsr"].as_u64().unwrap() & 128 != 0));
+        assert!(transitions.iter().any(|row| row["context"]["cpsr"].as_u64().unwrap() & 128 == 0));
+        assert!(transitions.iter().any(|row| row["context"]["cpsr"].as_u64().unwrap() & 128 != 0));
     }
 
     #[test]
@@ -1459,8 +1511,10 @@ mod tests {
     fn aggregate_transition_overflow_refuses_from_observed_contexts() {
         let mut fixture = Fixture::new();
         roots(&mut fixture, Role::Owned);
-        fixture.image(ADAPTER, &[0xe92d5fff, 0xe3a04000, 0xe10f0000, 0xe2200080, 0xe121f000,
-            0xe2844001, 0xe35400fa, 0x1afffff9, 0xe8bd5fff, 0xe12fff1e], SourceKind::Owned);
+        let mut words = vec![0xe92d5fff, 0xe10f0000];
+        for _ in 0..250 { words.extend([0xe2200080, 0xe121f000]); }
+        words.extend([0xe8bd5fff, 0xe12fff1e]);
+        fixture.image(ADAPTER, &words, SourceKind::Owned);
         fixture.image(RETURN, &[branch(RETURN, RETURN - 4, false)], SourceKind::Retained);
         fixture.image(RETURN - 4, &[branch(RETURN - 4, TREE, true)], SourceKind::Retained);
         let request: BeginRequest = serde_json::from_value(json!({"version":1,"role":Role::Owned,
@@ -1479,6 +1533,42 @@ mod tests {
             .map(|invocation| invocation["transitions"].as_array().unwrap().len() as u64).sum();
         assert_eq!(retained, 65_536);
         assert!(invocations.iter().all(|invocation| invocation["transitions"].as_array().unwrap().len() <= 4096));
+    }
+
+    #[test]
+    fn uncompressible_executed_contexts_exhaust_the_per_invocation_bound() {
+        let mut fixture = Fixture::new();
+        roots(&mut fixture, Role::Owned);
+        let mut words = vec![0xe92d5fff, 0xe10f0000];
+        for _ in 0..4100 { words.extend([0xe2200080, 0xe121f000]); }
+        words.extend([0xe8bd5fff, 0xe12fff1e]);
+        fixture.image(ADAPTER, &words, SourceKind::Owned);
+        fixture.begin(Role::Owned, &[RETURN]);
+        assert_eq!(fixture.machine.run(100000), RunOutcome::Failed);
+        let report = fixture.report();
+        assert_eq!(report["coverage"], "refused");
+        assert_eq!(report["invocations"][0]["transitions"].as_array().unwrap().len(), 4096);
+        assert_eq!(report["transition_storage"]["retained_entries"], 4096);
+    }
+
+    #[test]
+    fn repeated_executed_mask_cycles_keep_the_changed_final_context() {
+        let mut fixture = Fixture::new();
+        roots(&mut fixture, Role::Owned);
+        fixture.image(ADAPTER, &[0xe92d5fff, 0xe30f4fff, 0xe10f0000,
+            0xe2200080, 0xe121f000, 0xe2200080, 0xe121f000,
+            0xe2544001, 0x1afffff9, 0xe2200040, 0xe121f000, 0xe8bd5fff, 0xe12fff1e], SourceKind::Owned);
+        fixture.begin(Role::Owned, &[RETURN]);
+        assert_eq!(fixture.machine.run(1_000_000), RunOutcome::Completed);
+        let report = fixture.report();
+        let invocation = &report["invocations"][0];
+        assert_eq!(report["coverage"], "continuous");
+        assert!(invocation["transition_count"].as_u64().unwrap() > 100000);
+        assert!(invocation["transitions"].as_array().unwrap().len() < 16);
+        let rows = invocation["transitions"].as_array().unwrap();
+        let final_context = &rows.last().unwrap()["context"];
+        assert_eq!(final_context["pc"], ADAPTER + 44);
+        assert_ne!(final_context["cpsr"].as_u64().unwrap() & 64, rows[0]["context"]["cpsr"].as_u64().unwrap() & 64);
     }
 
     #[test]
