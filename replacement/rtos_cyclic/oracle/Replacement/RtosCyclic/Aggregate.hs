@@ -1,3 +1,5 @@
+-- | Storage bridges unallocated gaps with canonical loader bytes and splits at readonly data.
+-- Fetch declarations cover only allocated code, with every public ABI entry a function start.
 module Replacement.RtosCyclic.Aggregate (bindAggregate, admissionControls) where
 
 import Control.Monad (forM, forM_, unless)
@@ -11,9 +13,13 @@ import Replacement.RtosCyclic.Suite (Image (..), ControlRun (..), foreignCodeExt
 
 type Slice = (Image, Bool, [(Word32, Word32)])
 
-bindAggregate :: U.DomainMap -> B.ByteString -> [A.AggregateSymbol] -> [A.SectionPlacement] -> Either String [Slice]
-bindAggregate domain bytes symbols placements = do
+bindAggregate :: U.DomainMap -> Image -> B.ByteString -> [A.AggregateSymbol] -> [A.SectionPlacement] -> Either String [Slice]
+bindAggregate domain stock bytes symbols placements = do
   unless (not (null placements)) (Left "aggregate placements are empty")
+  forM_ foreignCodeExtents $ \(address, size) ->
+    unless (toInteger address + toInteger size <= toInteger (imageBase stock) ||
+            toInteger address >= toInteger (imageBase stock) + toInteger (B.length (imageBytes stock)))
+      (Left "aggregate storage mapping overlaps foreign fixture code")
   forM_ (U.mapCarriers domain) $ \carrier ->
     forM_ foreignCodeExtents $ \(address, size) -> do
       let R.Extent (R.GuestAddress low) (R.GuestAddress high) = U.carrierExtent carrier
@@ -33,14 +39,25 @@ bindAggregate domain bytes symbols placements = do
     unless (any (fixed entry) symbols) (Left ("aggregate is missing fixed ABI entry: " ++ U.entryVeneer entry))
     unless (U.entryGroup entry `notElem` [U.Cyclic, U.Timer] || any (\s -> A.symbolName s == U.entrySymbol entry) symbols || any (\p -> A.placementSection p `elem` [".text." ++ U.entrySymbol entry, ".text." ++ U.entrySymbol entry ++ "_entry"]) placements)
       (Left ("aggregate is missing declared body: " ++ U.entrySymbol entry))
-  forM (merge executable ++ readonly) $ \(address, size, isCode) -> do
-    payload <- A.sliceAggregate image address size
-    pure (Image address payload, isCode, [(address, size) | isCode])
+  installedFunctions <- A.installAggregate (imageBase stock) (imageBytes stock) image symbols
+  installed <- A.installPlacements (imageBase stock) installedFunctions image placements
+  let loaderTop = imageBase stock + fromIntegral (B.length installed)
+      readonlySpans = merge readonly
+      mappings = gaps (imageBase stock) loaderTop readonlySpans
+      functions = concatMap splitPublic (merge executable)
+  forM mappings $ \(address, size, isCode) -> do
+    let payload = B.take (fromIntegral size) (B.drop (fromIntegral (address - imageBase stock)) installed)
+        fetches = [(at, count) | (at, count, _) <- functions, isCode, inside at count address size]
+    pure (Image address payload, isCode, fetches)
   where
     fixed entry s = A.symbolName s == U.entryVeneer entry && R.GuestAddress (A.symbolAddress s) == U.entryAddress entry && A.symbolSize s == 4
     allocated s = any (\p -> sectionKind p == Just True && inside (A.symbolAddress s) (A.symbolSize s) (A.placementAddress p) (A.placementBytes p)) placements || any (`fixed` s) (U.mapEntries domain)
     executable = [(A.placementAddress p, A.placementBytes p, True) | p <- placements, sectionKind p == Just True] ++ [(A.symbolAddress s, A.symbolSize s, True) | s <- symbols]
     readonly = [(A.placementAddress p, A.placementBytes p, False) | p <- placements, sectionKind p == Just False]
+    publicStarts = [address | entry <- U.mapEntries domain, let R.GuestAddress address = U.entryAddress entry]
+    splitPublic (address, size, _) =
+      let cuts = sortOn id (address : [at | at <- publicStarts, at > address, at < address + size] ++ [address + size])
+       in [(low, high - low, True) | (low, high) <- zip cuts (drop 1 cuts)]
 
 sectionKind :: A.SectionPlacement -> Maybe Bool
 sectionKind p
@@ -62,6 +79,11 @@ merge = foldr join [] . sortOn (\(at, _, _) -> at)
       | toInteger at + toInteger size >= toInteger next = (at, max (at + size) (next + bytes) - at, code) : rest
       | otherwise = (at, size, code) : (next, bytes, code) : rest
 
+gaps :: Word32 -> Word32 -> [(Word32, Word32, Bool)] -> [(Word32, Word32, Bool)]
+gaps low high [] = [(low, high - low, True) | low < high]
+gaps low high ((at, size, _) : rest) =
+  [(low, at - low, True) | low < at] ++ [(at, size, False)] ++ gaps (at + size) high rest
+
 admissionControls :: [ControlRun]
 admissionControls = [ControlRun "aggregate-admission" name "binding" holds | (name, holds) <- checks]
   where
@@ -73,7 +95,8 @@ admissionControls = [ControlRun "aggregate-admission" name "binding" holds | (na
     tailSymbol = A.AggregateSymbol "tail" 0x1010 4
     symbols = [veneer, body, tailSymbol]
     allPlacements = placements ++ [A.SectionPlacement 0x1010 4 ".text.tail"]
-    admitted ss ps = bindAggregate domain (B.pack [0 .. 19]) ss ps
+    stock = Image 0x1000 (B.replicate 32 0xa5)
+    admitted ss ps = bindAggregate domain stock (B.pack [0 .. 19]) ss ps
     refused ss ps = case admitted ss ps of Left _ -> True; Right _ -> False
     checks =
       [ ("fixed-veneer-packed-code-readonly", case admitted symbols allPlacements of
@@ -81,7 +104,7 @@ admissionControls = [ControlRun "aggregate-admission" name "binding" holds | (na
              && any (\(Image at payload, code, spans) -> at == 0x1000 && payload == B.pack [0 .. 11] && code && spans == [(0x1000, 12)]) slices
            Left _ -> False)
       , ("executable-placement-without-positive-symbol", case admitted symbols [A.SectionPlacement 0x1004 8 ".text.body", A.SectionPlacement 0x100c 8 ".text.alias"] of
-           Right slices -> any (\(Image at payload, code, spans) -> at == 0x1000 && payload == B.pack [0 .. 19] && code && spans == [(0x1000, 20)]) slices
+           Right slices -> any (\(Image at payload, code, spans) -> at == 0x1000 && payload == B.pack [0 .. 19] <> B.replicate 12 0xa5 && code && spans == [(0x1000, 20)]) slices
            Left _ -> False)
       , ("wrong-veneer-name", refused [veneer {A.symbolName = "wrong"}, body, tailSymbol] allPlacements)
       , ("wrong-veneer-address", refused [veneer {A.symbolAddress = 0x1001}, body, tailSymbol] allPlacements)
@@ -90,8 +113,18 @@ admissionControls = [ControlRun "aggregate-admission" name "binding" holds | (na
       , ("section-outside-carrier", refused symbols (allPlacements ++ [A.SectionPlacement 0x1020 4 ".rodata.outside"]))
       , ("readonly-not-function", refused (symbols ++ [A.AggregateSymbol "data-as-code" 0x100c 4]) allPlacements)
       , ("zero-size-not-function", refused (symbols ++ [A.AggregateSymbol "label" 0x100c 0]) allPlacements)
-      , ("wrong-image-span", case bindAggregate domain (B.pack [0 .. 20]) symbols allPlacements of Left _ -> True; Right _ -> False)
+      , ("wrong-image-span", case bindAggregate domain stock (B.pack [0 .. 20]) symbols allPlacements of Left _ -> True; Right _ -> False)
       , ("readonly-overlaps-code", refused symbols (allPlacements ++ [A.SectionPlacement 0x1004 4 ".rodata.overlap"]))
-      ] ++ [ ("foreign-code-overlaps-unused-carrier", case bindAggregate (domain {U.mapCarriers = U.mapCarriers domain ++ [U.Carrier U.Shared (R.Extent (R.GuestAddress address) (R.GuestAddress (address + size)))]}) (B.pack [0 .. 19]) symbols allPlacements of Left _ -> True; Right _ -> False)
+      , ("canonical-gap-bytes-preserved", case admitted symbols allPlacements of
+           Right slices -> any (\(Image at payload, code, spans) -> at == 0x1010 && payload == B.pack [16 .. 19] <> B.replicate 12 0xa5 && code && spans == [(0x1010, 4)]) slices
+           Left _ -> False)
+      , ("adjacent-public-entry-remains-function-start",
+           let adjacentDomain = domain {U.mapEntries = U.mapEntries domain ++ [U.Entry U.Shared "adjacent" (R.GuestAddress 0x1004) "unused" "body"]}
+               adjacentSymbols = [veneer, body {A.symbolSize = 4}, tailSymbol]
+               adjacentPlacements = [A.SectionPlacement 0x1008 4 ".text.continuation", A.SectionPlacement 0x100c 4 ".rodata.table", A.SectionPlacement 0x1010 4 ".text.tail"]
+            in case bindAggregate adjacentDomain stock (B.pack [0 .. 19]) adjacentSymbols adjacentPlacements of
+                 Right slices -> any (\(_, code, spans) -> code && spans == [(0x1000, 4), (0x1004, 8)]) slices
+                 Left _ -> False)
+      ] ++ [ ("foreign-code-overlaps-unused-carrier", case bindAggregate (domain {U.mapCarriers = U.mapCarriers domain ++ [U.Carrier U.Shared (R.Extent (R.GuestAddress address) (R.GuestAddress (address + size)))]}) stock (B.pack [0 .. 19]) symbols allPlacements of Left _ -> True; Right _ -> False)
         | (address, size) <- foreignCodeExtents
       ]

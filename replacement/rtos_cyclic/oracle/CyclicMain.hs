@@ -59,13 +59,13 @@ main = do
       pure (a, b, da ++ db)
     [Just ab, Just aSymbols, Just ap, Just bb, Just bs, Just bp, Just carriers] -> do
       union <- either (failH . show) pure . Union.parseUnion =<< B.readFile carriers
-      let bind domain bin symbols placements = do
+      let bind domain stock bin symbols placements = do
             bytes <- B.readFile bin
             functions <- either failH pure . Agg.parseAggregateSymbols =<< B.readFile symbols
             sections <- either failH pure . Agg.parsePlacements =<< B.readFile placements
-            either failH pure (bindAggregate domain bytes functions sections)
-      a <- bind (Union.unionA union) ab aSymbols ap
-      b <- bind (Union.unionB union) bb bs bp
+            either failH pure (bindAggregate domain stock bytes functions sections)
+      a <- bind (Union.unionA union) (Image 0x40000 loaderABytes) ab aSymbols ap
+      b <- bind (Union.unionB union) (Image 0xd0000 loaderBBytes) bb bs bp
       digests <- mapM (\path -> do digest <- sha256File path; pure (path, sha256Hex digest)) [ab, aSymbols, ap, bb, bs, bp, carriers]
       let input = Aggregate (a ++ b)
       pure (input, input, digests)
