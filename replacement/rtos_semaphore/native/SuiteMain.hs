@@ -16,7 +16,7 @@ import System.Environment (getArgs)
 import System.Exit (exitFailure)
 import System.FilePath ((</>), takeDirectory)
 import qualified Replacement.RtosPlatform.Aggregate as Agg
-import Replacement.RtosSemaphore.Oracle (Domain (..), Image (..), Run (..), extents, parseFacts, runCases, runDomain, runFamily, runReuse)
+import Replacement.RtosSemaphore.Oracle (Domain (..), Image (..), Run (..), extents, parseFacts, runCases, runControls, runDomain, runFamily, runReuse)
 
 main :: IO ()
 main = do
@@ -57,6 +57,7 @@ main = do
       failures =
         [(name, message) | run <- runs, (name, Left message) <- runCases run]
           ++ [(name, unlines differences) | run <- runs, (name, Right differences) <- runCases run, not (null differences)]
+          ++ [(name, "semantic control did not reject corruption") | run <- runs, (name, False) <- runControls run]
       cases =
         [ object
             [ "domain" .= show (runDomain run)
@@ -73,7 +74,8 @@ main = do
         [ object ["domain" .= show (runDomain run), "stock" .= show (fst (runReuse run)), "owned" .= show (snd (runReuse run))]
         | run <- runs
         ]
-      document = object ["cases" .= cases, "reuse" .= reuse, "failures" .= length failures]
+      controls = [object ["domain" .= show (runDomain run), "control" .= name, "holds" .= passed] | run <- runs, (name, passed) <- runControls run]
+      document = object ["cases" .= cases, "controls" .= controls, "reuse" .= reuse, "failures" .= length failures]
   BL.writeFile resultsPath (encode document)
   forM_ runs $ \run -> forM_ (runCases run) $ \(name, result) ->
     putStrLn (show (runDomain run) ++ " " ++ name ++ ": " ++ outcomeText result)
