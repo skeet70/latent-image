@@ -4,6 +4,7 @@ module Replacement.RtosTimer.Aggregate
   ( Aggregate
   , loadAggregate
   , aggregateRegions
+  , aggregateControlRegions
   , aggregateFunctions
   , admissionControls
   ) where
@@ -112,6 +113,19 @@ aggregateRegions label (Aggregate image _ placements) =
     permission address
       | any (\(low, high) -> address >= low && address < high) readonly = ReadOnly
       | otherwise = ReadExecute
+
+aggregateControlRegions :: String -> [(Word32, Word32)] -> Aggregate -> [CaseRegion]
+aggregateControlRegions label patches (Aggregate image symbols placements) =
+  aggregateRegions label (Aggregate (A.AggregateImage base patched) symbols placements)
+  where
+    base = A.imageBase image
+    patched = foldl patch (A.imageBytes image) patches
+    patch bytes (address, value)
+      | not (contains base (fromIntegral (B.length bytes)) address 4) =
+          error "aggregate control patch outside installed image"
+      | otherwise =
+          let offset = fromIntegral (address - base)
+           in B.take offset bytes <> word32le value <> B.drop (offset + 4) bytes
 
 aggregateFunctions :: Aggregate -> [(Word32, Word32)]
 aggregateFunctions (Aggregate _ symbols placements) = compactFunctions roots spans
