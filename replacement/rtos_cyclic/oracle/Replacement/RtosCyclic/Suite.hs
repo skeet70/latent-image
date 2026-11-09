@@ -8,6 +8,7 @@ module Replacement.RtosCyclic.Suite
   , ControlRun (..)
   , runDomain
   , parseOwnedSymbols
+  , stockFunctions
   ) where
 
 import Control.Monad (forM, forM_, unless)
