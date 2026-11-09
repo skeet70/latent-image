@@ -52,7 +52,7 @@
       }
     },
     "functions": {
-      "type": "array", "minItems": 1, "maxItems": 256,
+      "type": "array", "minItems": 1, "maxItems": 512,
       "items": {"type": "object", "additionalProperties": false, "required": ["address", "size"], "properties": {"address": {"$ref": "#/$defs/u32"}, "size": {"$ref": "#/$defs/size"}}}
     },
     "stubs": {

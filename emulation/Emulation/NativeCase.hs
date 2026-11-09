@@ -34,7 +34,7 @@ regs=map (("r"++).show) [0::Int ..12]++["sp","lr","cpsr"]
 -- larger engine limit: an execution records far more events than a case declares (e.g., 184 recorded
 -- vs. 0 declared), measured over 2738 recipe-bank SD cases with a maximum of 284 events.
 -- Largest case measured over the recipe-bank and UI generators and 2,314 generated cases:
--- 1131576 artifact bytes, 1888202 total mapped bytes, 19 artifacts, 16 regions, 210 functions,
+-- 1131576 artifact bytes, 1888202 total mapped bytes, 19 artifacts, 16 measured regions, 210 functions,
 -- 12 stubs, 59 expected events, 49 expected memory entries, 525916 expected memory bytes.
 sizeBytes :: Int
 sizeBytes=2*1024*1024
@@ -44,13 +44,11 @@ caseBytes :: Int
 caseBytes=16*1024*1024
 artifactCount, regionCount, functionCount, stubCount, eventCount, memoryCount :: Int
 artifactCount=20
-regionCount=16
-functionCount=256
+regionCount=64
+functionCount=512
 stubCount=32
 eventCount=128
 memoryCount=64
-stackContextCount :: Int
-stackContextCount=16
 hex :: Integer -> String
 hex x=showHex x ""
 hexBytes :: B.ByteString -> String
@@ -109,7 +107,8 @@ loadCaseWith reader input = do
  raw<-readRegularWith (pure()) False caseBytes path
  c<-either failH pure(decodeStrictIntegers raw)
  let optional=[key|key<-["cp14_identity","kernel"],key `elem` keys c]
- fields c (unwords(words "schema_version id origin provenance cpu artifacts entry exit registers regions functions stubs limits expected exclusions"++optional)) "case"
+     ignored=["ignored_memory"|"ignored_memory" `elem` keys c]
+ fields c (unwords(words "schema_version id origin provenance cpu artifacts entry exit registers regions functions stubs limits expected exclusions"++optional++ignored)) "case"
  void(integer(get c "schema_version")1 1 "schema version")
  ensure(get c "origin" `elem` [s "synthetic",s "stock"]) "origin must be synthetic or stock; a stock case needs an independently known result"
  ensure(validId(get c "id")) "invalid case id"
@@ -169,10 +168,9 @@ loadCaseWith reader input = do
    ensure(sum(map regionSize prior)+size<=fromIntegral totalBytes) "total mapped bytes exceeds host limit"
    pure(done++[(Region item base size bytes,source)]))[] regionsInput
  let regions=map fst placed
- forM_ [contexts|PrivilegedEntry _ _ (Just(KernelEntry _ _ _ _ contexts))<-[profile]] $ checkStackContexts regions (reg "sp")
  ensure(regionAt regions entry 4 'x' && regionAt regions exit 4 'x') "entry/exit must have explicit executable bytes"
  ensure(reg "sp">=8 && regionAt regions (reg "sp"-8) 8 'w') "stack top lacks writable eight bytes"
- forM_[stop|PrivilegedEntry _ _ (Just(KernelEntry(Just stop)_ _ _ _))<-[profile]]$ \stop->
+ forM_[stop|PrivilegedEntry _ _ (Just(KernelEntry(Just stop)_ _ _))<-[profile]]$ \stop->
    ensure(stop `mod` 4==0 && stop/=entry && stop/=exit && regionAt regions stop 4 'x') "stop address must be aligned, executable and differ from the entry and exit"
  functionsInput<-arrayCheck(get c "functions")1 functionCount "functions limit"
  functions<-foldM(\done item->do
@@ -188,7 +186,7 @@ loadCaseWith reader input = do
    fields item "address inputs outputs side_effects" "stub"
    target'<-address(get item "address")
    ensure(target' `mod` 4==0 && target'/=exit && target' `notElem` map(\(t,_,_)->t)done && not(any(\(x,len)->x<=target' && target'<x+len)functions)) "stub address alignment/alias"
-   ensure(target' `notElem` [stop|PrivilegedEntry _ _ (Just(KernelEntry(Just stop)_ _ _ _))<-[profile]]) "stub address is the stop address"
+   ensure(target' `notElem` [stop|PrivilegedEntry _ _ (Just(KernelEntry(Just stop)_ _ _))<-[profile]]) "stub address is the stop address"
    ensure(get item "side_effects"==s "registers-only") "unsupported stub side effects"
    inputs<-bindings(get item "inputs")(take 13 regs); outputs<-bindings(get item "outputs")(take 13 regs)
    ensure(not(null outputs)) "stub must have explicit outputs"
@@ -243,10 +241,8 @@ data EntryProfile = UserEntry | PrivilegedEntry PrivilegedMode (Maybe Cp14Identi
 data PrivilegedMode = SupervisorMode | SystemMode deriving (Eq,Show)
 -- The value MRC p14, 0, Rt, c2, c0, 0 reads in a privileged case.
 newtype Cp14Identity = Cp14Identity Integer deriving (Eq,Show)
--- A kernel case's stop address, its TPIDRURW, CPACR and FPEXC values, and its declared stack contexts.
-data KernelEntry = KernelEntry (Maybe Integer) (Maybe Integer) (Maybe Integer) (Maybe Integer) [StackBounds] deriving (Eq,Show)
--- One declared private stack: @low < SP <= high@.
-data StackBounds = StackBounds {stackLow::Integer,stackHigh::Integer} deriving (Eq,Show)
+-- A kernel case's stop address and its TPIDRURW, CPACR and FPEXC values.
+data KernelEntry = KernelEntry (Maybe Integer) (Maybe Integer) (Maybe Integer) (Maybe Integer) deriving (Eq,Show)
 isKernel :: EntryProfile -> Bool
 isKernel(PrivilegedEntry _ _ (Just _))=True
 isKernel _=False
@@ -258,33 +254,13 @@ fpexcEnable :: Integer
 fpexcEnable=0x40000000
 kernelEntry :: Value -> IO KernelEntry
 kernelEntry v=do
- ensure(case v of Object _->all(`elem` ["stop","tpidrurw","cpacr","fpexc","stack_contexts"])(keys v);_->False) "kernel: only stop, tpidrurw, cpacr, fpexc and stack_contexts"
+ ensure(case v of Object _->all(`elem` ["stop","tpidrurw","cpacr","fpexc"])(keys v);_->False) "kernel: only stop, tpidrurw, cpacr and fpexc"
  let optionalAddress k=if k `elem` keys v then Just<$>address(get v k) else pure Nothing
- contexts<-if "stack_contexts" `elem` keys v then stackContexts(get v "stack_contexts") else pure []
- kernel<-KernelEntry<$>optionalAddress "stop"<*>optionalAddress "tpidrurw"<*>optionalAddress "cpacr"<*>optionalAddress "fpexc"<*>pure contexts
- let KernelEntry _ _ cpacr fpexc _=kernel
+ kernel<-KernelEntry<$>optionalAddress "stop"<*>optionalAddress "tpidrurw"<*>optionalAddress "cpacr"<*>optionalAddress "fpexc"
+ let KernelEntry _ _ cpacr fpexc=kernel
  ensure(maybe True(\value->value .&. complement fpexcEnable==0)fpexc) "kernel fpexc may set EN only"
  ensure(fpexc==Nothing || cpacr/=Nothing) "kernel fpexc needs a cpacr"
  pure kernel
--- A non-empty array of eight-byte aligned, disjoint @low < high@ bounds.
-stackContexts :: Value -> IO [StackBounds]
-stackContexts v=do
- items<-arrayCheck v 1 stackContextCount "kernel stack_contexts must have one to sixteen contexts"
- contexts<-forM items$ \item->do
-  fields item "low high" "stack context"
-  low<-address(get item "low"); high<-address(get item "high")
-  ensure(low .&. 7==0 && high .&. 7==0) "stack context bounds must be eight-byte aligned"
-  ensure(low<high) "stack context low bound must be below its high bound"
-  pure(StackBounds low high)
- let ordered=sortOn stackLow contexts
- ensure(and[high<=nextLow|(StackBounds _ high,StackBounds nextLow _)<-zip ordered(drop 1 ordered)]) "kernel stack contexts overlap"
- pure contexts
--- Every declared context lies inside one writable, non-device region and the initial SP names one.
-checkStackContexts :: [Region] -> Integer -> [StackBounds] -> IO ()
-checkStackContexts regions sp contexts=do
- when(not(null contexts))$ensure(length(filter(\(StackBounds low high)->low<sp && sp<=high)contexts)==1) "initial SP must belong to exactly one declared stack context"
- forM_ contexts$ \(StackBounds low high)->
-  ensure(any(\r->str(get(description r)"permissions")=="rw" && baseAddress r<=low && high<=baseAddress r+regionSize r)regions) "stack context must be backed by one writable non-device region"
 -- SVC or SYS with only NZCVQ, GE, I and F besides the mode.
 privilegedMode :: Integer -> Maybe PrivilegedMode
 privilegedMode cpsr
@@ -292,28 +268,62 @@ privilegedMode cpsr
  | otherwise = case cpsr .&. 0x1f of 0x13->Just SupervisorMode; 0x1f->Just SystemMode; _->Nothing
 profileRows :: EntryProfile -> [String]
 profileRows UserEntry=[]
-profileRows(PrivilegedEntry _ identity kernel)=
- [maybe "n"(\(Cp14Identity v)->"i "++hex v)identity]
- ++[row|Just(KernelEntry stop tpidrurw cpacr fpexc contexts)<-[kernel],row<-unwords("k":map(maybe "n" hex)[stop,tpidrurw,cpacr,fpexc]):contextRows contexts]
- where
-  contextRows []=[]
-  contextRows contexts=[unwords("c":show(length contexts):concat[[hex low,hex high]|StackBounds low high<-contexts])]
+profileRows(PrivilegedEntry _ identity kernel)=[maybe "n"(\(Cp14Identity v)->"i "++hex v)identity]++[unwords("k":map(maybe "n" hex)[stop,tpidrurw,cpacr,fpexc])|Just(KernelEntry stop tpidrurw cpacr fpexc)<-[kernel]]
 checkResult :: Value -> [Region] -> Value -> IO [String]
 checkResult c regions result=do
+ initial<-bindings(get c "registers")regs
  let expected=get c "expected"
+     reg k=maybe 0 id(lookup k initial)
      status=["status differs"|get result "status"/=get expected "status"]
      registers=["register "++k++": differs"|k<-keys(get expected "registers"),get(get result "registers")k/=get(get expected "registers")k]
      events=["stub events differ"|get result "events"/=get expected "events"]
      kernel=["kernel register "++k++": differs"|"kernel" `elem` keys expected,k<-keys(get expected "kernel"),get(get result "kernel")k/=get(get expected "kernel")k]
      memory=list(get result "memory")
+ ignored<-if "ignored_memory" `notElem` keys c then pure [] else do
+   rows<-arrayCheck(get c "ignored_memory")0 memoryCount "ignored memory limit"
+   foldM(\done item->do
+     fields item "region offset length" "ignored memory"
+     let ident=str(get item "region")
+     r<-maybe(failH "unknown ignored region")pure(find(\region->get(description region)"id"==s ident)regions)
+     offset<-integer(get item "offset")0(fromIntegral(regionSize r)) "ignored offset"
+     length'<-integer(get item "length")1(fromIntegral(regionSize r)) "ignored length"
+     let end=offset+length'
+         offsetI=fromIntegral offset
+         lengthI=fromIntegral length'
+         sp=fromInteger(reg "sp")
+         base=fromIntegral(baseAddress r)
+         dead=max 0(min(toInteger(regionSize r))(sp-base))
+     ensure(ident=="stack") "only stack private frames may be ignored"
+     ensure(get expected "status"==s "returned") "ignored memory requires a returned case"
+     ensure(end<=toInteger(regionSize r) && end<=dead) "ignored memory is not a dead private frame"
+     ensure(all(\(name,lo,extent)->name/=ident || lo+extent<=offsetI || offsetI+lengthI<=lo)done) "ignored memory overlaps"
+     pure((ident,offsetI,lengthI):done))[]rows
+ let sortedIgnored=sortOn(\(name,offset,_)->(name,offset))ignored
  mem<-if length memory/=length regions then pure["memory region count differs"] else fmap concat$forM(zip regions memory)$ \(r,actual)->do
    desired<-foldM(\bytes change->if get change "region"==get(description r)"id" then do
      value<-byteString(get change "hex")
      let offset=fromInteger(num(get change "offset"))
      pure(B.take offset bytes<>value<>B.drop(offset+B.length value)bytes)
     else pure bytes)(regionBytes r)(list(get expected "memory"))
-   pure["memory "++str(get(description r)"id")++": differs from exact allowed final bytes"|get actual "address"/=get(description r)"address" || get actual "bytes"/=s(hexBytes desired)]
+   let ident=str(get(description r)"id")
+       ranges=[(offset,length')|(name,offset,length')<-sortedIgnored,name==ident]
+       intervals=complementRanges(B.length desired)ranges
+       actualHex=str(get actual "bytes")
+       desiredHex=hexBytes desired
+       same
+         | null ranges = actualHex==desiredHex
+         | length actualHex/=2*B.length desired = False
+         | otherwise = all(\(offset,length')->take(2*length')(drop(2*offset)actualHex)==take(2*length')(drop(2*offset)desiredHex))intervals
+   pure["memory "++ident++": differs from exact allowed final bytes"|get actual "address"/=get(description r)"address" || not same]
  pure(status++registers++events++kernel++mem)
+
+complementRanges :: Int -> [(Int,Int)] -> [(Int,Int)]
+complementRanges total ranges=go 0 ranges
+ where
+  go position []=[(position,total-position)|position<total]
+  go position ((offset,length'):rest)=
+    (if offset>position then [(position,offset-position)] else [])
+    ++go(max position(offset+length'))rest
 unknownReport :: Value
 unknownReport=obj[("schema_version",n 1),("profile",s "unknown")]
 caseReport :: Value -> [(String,Value)] -> Value
@@ -681,7 +691,10 @@ executeBatch executable hash batchDigest cases sink=do
  let admitted=[a|(_,Right a)<-cases]
      artifacts=batchArtifacts admitted
      index=M.fromList(zip(map artifactDigest artifacts)[0..])
-     record entry=modifyIORef' statuses(entry:)
+     record entry=do
+      _<-evaluate(batchCaseStatus entry)
+      forM_(batchCaseDigest entry)$ \(DigestHex digest)->evaluate(foldr seq()digest)
+      modifyIORef' statuses(entry:)
      emit ident regions code value=do
       sink(CaseReport ident regions code value)
       record(BatchCase ident(caseStatusOf value)(reportDigest value))
