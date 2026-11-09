@@ -453,8 +453,17 @@ const DISPLAY_WAIT: u64 = 60_000_000;
 /// The store entry the render pair arms as `render-osd-buffer`; its callers hand off the stage-0 buffers.
 const PUBLICATION_SITE: u32 = 0x006d_76ec;
 
-fn later_publication<'a>(hits: &'a [Hit], start: usize, after: u64) -> Option<&'a Hit> {
-    hits.get(start..)?.iter().find(|hit| hit.site == "render-osd-buffer" && hit.instructions > after)
+fn eligible_publication(hit: &Hit) -> bool {
+    hit.site == "render-osd-buffer"
+        && u32::from_str_radix(hit.lr.trim_start_matches("0x"), 16)
+            .is_ok_and(|caller| matches!(caller, 0x006d_7b3c | 0x006d_7c24 | 0x006d_7d10))
+}
+
+fn publication_pair<'a>(hits: &'a [Hit], start: usize, after: u64) -> Option<(&'a Hit, &'a Hit)> {
+    let hits = hits.get(start..)?;
+    let buffer = hits.iter().find(|hit| eligible_publication(hit) && hit.instructions > after)?;
+    let increment = hits.iter().find(|hit| hit.site == "render-osd-increment" && hit.instructions >= buffer.instructions)?;
+    Some((buffer, increment))
 }
 
 /// A client-chosen snapshot name: 1..=64 lowercase ASCII letters, digits or '-'.
@@ -912,14 +921,24 @@ impl Server {
         self.bridge.machine.traces.sites.get(&PUBLICATION_SITE).is_some_and(|label| label == "render-osd-buffer")
     }
 
-    fn await_publication(&mut self, start: usize, after: u64, budget: u64) -> Result<Hit, String> {
+    fn await_publication(&mut self, start: usize, after: u64, budget: u64) -> Result<(Hit, Hit), String> {
         let mut waited = 0;
         loop {
-            if let Some(hit) = later_publication(&self.bridge.machine.traces.hits, start, after) {
-                return Ok(hit.clone());
+            let found = publication_pair(&self.bridge.machine.traces.hits, start, after)
+                .map(|(buffer, increment)| (buffer.clone(), increment.clone(), increment.instructions));
+            if let Some((buffer, increment, commit)) = found {
+                while self.bridge.machine.instructions() <= commit {
+                    if waited >= budget {
+                        return Err(format!("no committed render-osd-buffer publication after presented frame within {waited} instructions"));
+                    }
+                    self.bridge.advance(DISPLAY_STEP)?;
+                    self.bridge.machine.require_running()?;
+                    waited += DISPLAY_STEP;
+                }
+                return Ok((buffer, increment));
             }
             if waited >= budget {
-                return Err(format!("no render-osd-buffer publication after presented frame within {waited} instructions"));
+                return Err(format!("no committed render-osd-buffer publication after presented frame within {waited} instructions"));
             }
             self.bridge.advance(DISPLAY_STEP)?;
             self.bridge.machine.require_running()?;
@@ -935,17 +954,27 @@ impl Server {
         let pressed = self.bridge.settled_key(key.press, default_pulse(key.press), MAX_SETTLE)
             .and_then(|settle| self.bridge.machine.require_running().map(|()| settle))
             .and_then(|settle| self.await_display_plane(completion).map(|(waited, acknowledgement)| (settle, waited, acknowledgement)));
-        let instructions = self.bridge.machine.instructions() - before;
         let (settle, display_wait, presentation, menu, failure, publication) = match pressed {
             Ok((settle, waited, acknowledgement)) => {
                 let publication = if publication_armed {
-                    let hit = self.await_publication(publication_start, self.bridge.machine.instructions(), DISPLAY_WAIT)?;
-                    json!({"site": hit.site, "instructions": hit.instructions, "core": hit.core, "lr": hit.lr})
+                    match self.await_publication(publication_start, self.bridge.machine.instructions(), DISPLAY_WAIT) {
+                        Ok((buffer, increment)) => json!({
+                            "buffer": {"site": buffer.site, "instructions": buffer.instructions, "core": buffer.core, "lr": buffer.lr},
+                            "increment": {"site": increment.site, "instructions": increment.instructions, "core": increment.core, "lr": increment.lr}}),
+                        Err(error) => {
+                            let instructions = self.bridge.machine.instructions() - before;
+                            self.key_log.push(json!({"key": key.name, "snapshot": snapshot, "seconds": started.elapsed().as_secs_f64(),
+                                "instructions": instructions, "settle": json!(settle), "display_wait_instructions": json!(waited),
+                                "presentation": json!(acknowledgement), "publication": Value::Null, "failure": error}));
+                            return Err(error);
+                        }
+                    }
                 } else { Value::Null };
                 (json!(settle), json!(waited), json!(acknowledgement), menu_value(self.bridge.machine.menu()?), Value::Null, publication)
             }
             Err(failure) => (Value::Null, Value::Null, Value::Null, Value::Null, json!(failure), Value::Null),
         };
+        let instructions = self.bridge.machine.instructions() - before;
         self.key_log.push(json!({"key": key.name, "snapshot": snapshot, "seconds": started.elapsed().as_secs_f64(),
             "instructions": instructions, "settle": settle, "display_wait_instructions": display_wait, "presentation": presentation,
             "publication": publication, "failure": failure}));
@@ -2081,28 +2110,47 @@ mod tests {
         std::fs::remove_dir_all(&server.output).unwrap();
     }
 
-    #[test]
-    fn publication_wait_selects_only_a_strictly_later_real_publication() {
-        let hit = |site: &str, instructions: u64| Hit {
+    fn publication_hit(site: &str, lr: &str, instructions: u64) -> Hit {
+        Hit {
             site: site.into(), address: "0x006d76ec".into(), core: 0, instructions,
             render_object_provenance_sequence: None, registers: BTreeMap::new(), sp: "0x0".into(),
-            lr: "0x006d7b3c".into(), cpsr: 0, code_word: None, memory: Vec::new(),
+            lr: lr.into(), cpsr: 0, code_word: None, memory: Vec::new(),
             stack_memory: Vec::new(), observation: None,
-        };
-        let hits = [hit("render-osd-buffer", 10), hit("other-site", 20), hit("render-osd-buffer", 30)];
-        assert_eq!(later_publication(&hits, 0, 5).unwrap().instructions, 10);
-        assert_eq!(later_publication(&hits, 0, 25).unwrap().instructions, 30);
-        assert!(later_publication(&hits, 0, 30).is_none());
-        assert_eq!(later_publication(&hits, 2, 0).unwrap().instructions, 30);
-        assert!(later_publication(&hits, 3, 0).is_none());
+        }
     }
 
     #[test]
-    fn presented_frame_fails_closed_without_a_later_publication() {
+    fn committed_publication_is_the_eligible_caller_and_increment() {
+        let mut server = server(&[0xeafffffe]);
+        server.bridge.machine.traces.hits.push(publication_hit("render-osd-buffer", "0x006d7b3c", 10));
+        server.bridge.machine.traces.hits.push(publication_hit("render-osd-increment", "0x006d7d44", 20));
+        let (buffer, increment) = server.await_publication(0, 5, DISPLAY_STEP).unwrap();
+        assert_eq!((buffer.site.as_str(), buffer.lr.as_str(), buffer.instructions),
+            ("render-osd-buffer", "0x006d7b3c", 10));
+        assert_eq!((increment.site.as_str(), increment.instructions), ("render-osd-increment", 20));
+        assert!(server.bridge.machine.instructions() > 20);
+    }
+
+    #[test]
+    fn publication_wait_refuses_ineligible_caller_missing_increment_or_old_buffer() {
+        let mut ineligible = server(&[0xeafffffe]);
+        ineligible.bridge.machine.traces.hits.push(publication_hit("render-osd-buffer", "0x006d7920", 10));
+        ineligible.bridge.machine.traces.hits.push(publication_hit("render-osd-increment", "0x006d7d44", 20));
+        assert!(ineligible.await_publication(0, 5, 0).is_err());
+        let mut missing = server(&[0xeafffffe]);
+        missing.bridge.machine.traces.hits.push(publication_hit("render-osd-buffer", "0x006d7b3c", 10));
+        assert!(missing.await_publication(0, 5, 0).is_err());
+        let mut old = server(&[0xeafffffe]);
+        old.bridge.machine.traces.hits.push(publication_hit("render-osd-buffer", "0x006d7b3c", 10));
+        old.bridge.machine.traces.hits.push(publication_hit("render-osd-increment", "0x006d7d44", 20));
+        assert!(old.await_publication(0, 10, 0).is_err());
+    }
+
+    #[test]
+    fn presented_frame_refuses_without_a_committed_publication() {
         let mut server = server(&[0xeafffffe]);
         let after = server.bridge.machine.instructions();
-        let error = server.await_publication(0, after, 2 * DISPLAY_STEP).unwrap_err();
-        assert!(error.contains("no render-osd-buffer publication"));
+        assert!(server.await_publication(0, after, 2 * DISPLAY_STEP).is_err());
     }
 
     #[test]
