@@ -227,6 +227,11 @@ main = do
   assert "irrelevant unwritten unreadable word passes" (checkCall disabled {callUnreadable=S.singleton (Address 0x301c)}==Right ())
   assert "required unreadable word refuses" (case checkCall disabled {callBefore=M.delete (Address 0x40054764) serviceMemory,
     callUnreadable=S.singleton (Address 0x40054764)} of Left _ -> True; Right _ -> False)
+  let unreadableAcquisition=acquired {boundaryMemory=M.delete (Address 0x300c) serviceMemory,
+        boundaryUnreadable=S.singleton (Address 0x300c)}
+      acquisitionCall=disabled {callUnreadable=S.singleton (Address 0x300c),
+        callTrace=Just (CallTrace serviceRegisters serviceRegisters Returned [unreadableAcquisition,returned] Nothing)}
+  assert "unreadable acquisition word cannot fall back to entry" (case checkCall acquisitionCall of Left _ -> True; Right _ -> False)
   let scratchMemory=M.union (M.fromList [(Address 0x3008,0x6000),(Address 0x6010,0x1000),(Address 0x6014,0x7000),(Address 0x77f0,9)]) serviceMemory
       scratchRegisters=serviceRegisters {D.registers=replicate 13 0 ++ [0x7800,0,0]}
       scratchAcquired=acquired {boundaryMemory=scratchMemory,boundaryWrites=Written (Address 0x77f0) 4 7:boundaryWrites acquired,

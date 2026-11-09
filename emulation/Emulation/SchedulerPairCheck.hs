@@ -632,6 +632,13 @@ checkUnreadableWrites call = forM_ (callWrites call) $ \(Written (Address addres
         Nothing -> False
   in expect EntryUnreadable (inStack || not (S.member aligned (callUnreadable call)))
 
+-- | Remove an unreadable word and its alias from a fallback snapshot so a
+-- required acquisition read cannot borrow an older committed value.
+maskUnreadable :: S.Set Address -> Memory -> Memory
+maskUnreadable unreadable memory = foldr remove memory (S.toList unreadable)
+ where
+  remove (Address address) = M.delete (Address (address .&. complement 0x40000000 .&. complement 3)) . M.delete (Address address)
+
 checkCallFor :: Role -> Call -> Either Refusal ()
 checkCallFor = checkCallForInWitnesses []
 
@@ -799,7 +806,7 @@ checkServiceCallWith policy service call = do
           [] -> Right previous
           acquired:_ -> do
             acquiredWrites <- ownedWrites call (boundaryWrites acquired) (boundaryWriteOrigins acquired)
-            let memory=M.union (boundaryMemory acquired) previous
+            let memory=maskUnreadable (boundaryUnreadable acquired) (M.union (boundaryMemory acquired) previous)
                 words'=V.domainWords domain
                 records=V.contextTable words':[V.contextTable words'+0x84] ++
                   [record | Just record <- [M.lookup (Address (V.currentContext words')) memory]]
