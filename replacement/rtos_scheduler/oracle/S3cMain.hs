@@ -165,12 +165,8 @@ roleSpec bounds functionSpans readonlySpans role domain entry row code ident = c
   CallerWrite -> driver (wordsBytes (loadAddress 0x940200 ++ [0xe58c4000,branch 0x93000c (entryAt domain entry)]))
   ReadonlyWrite -> (driver (wordsBytes (loadAddress readonlyAt ++ [0xe58c0000,0xe12fff1e])))
     {caseExpectedStatus = MemoryGuard, caseExpectedRegisters = [(R12,readonlyAt),(Pc,0x930008)]}
-  ReadonlyFetch -> base
-    { caseEntry = GuestAddress (fromIntegral readonlyAt)
-    , caseFunctions = (GuestAddress (fromIntegral readonlyAt),4) : caseFunctions base
-    , caseExpectedStatus = FetchGuard
-    , caseExpectedRegisters = [(Pc,readonlyAt)]
-    }
+  ReadonlyFetch -> (driver (wordsBytes (loadAddress readonlyAt ++ [0xe12fff1c])))
+    {caseExpectedStatus = FetchGuard, caseExpectedRegisters = [(R12,readonlyAt),(Pc,readonlyAt)]}
   _ -> base
   where
     base = spec bounds functionSpans readonlySpans domain entry row code ident

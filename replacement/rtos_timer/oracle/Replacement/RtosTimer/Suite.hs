@@ -1332,8 +1332,8 @@ composeControlPatches _d timerImage timerSymbols control = do
     [] -> Left "the timer tick body symbol is missing"
     _ -> Left "the timer tick body symbol is duplicated"
   let candidates = case control of
-        ControlRemoveCallback -> [(0x118, 0xe12fff38, 0xe1a00000), (0xd0, 0xe12fff35, 0xe1a00000)]
-        ControlWrongLock -> [(0x124, 0xe1a00006, 0xe286000c), (0xd4, 0xe1a00006, 0xe286000c)]
+        ControlRemoveCallback -> [(0x118, 0xe12fff38, 0xe1a00000), (0xd0, 0xe12fff35, 0xe1a00000), (0x124, 0xe12fff33, 0xe1a00000)]
+        ControlWrongLock -> [(0x124, 0xe1a00006, 0xe286000c), (0xd4, 0xe1a00006, 0xe286000c), (0x130, 0xe1a00006, 0xe286000c)]
         ControlWrongDetach -> [(0xd4, 0xe5812000, 0xe1a00000), (0xb4, 0xe5801000, 0xe1a00000)]
       matches =
         [(address, replacement)

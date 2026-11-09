@@ -764,7 +764,7 @@ placementSelfTest = and
   , not (symbolAllocated [] [] (Agg.AggregateSymbol "body" 0x50000 4))
   ]
   where
-    entry = Union.Entry Union.S3d "terminate" (Regions.GuestAddress 0x454f0) "body" "veneer"
+    entry = Union.Entry Union.S3d "terminate" (Regions.GuestAddress 0x454f0) "body" ".text.body" "veneer"
     veneer = Agg.AggregateSymbol "veneer" 0x454f0 4
     placement = Agg.SectionPlacement 0x454f4 8 ".text.body"
 

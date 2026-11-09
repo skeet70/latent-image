@@ -413,7 +413,7 @@ functionSpans domain role payload = case payload of
   Aggregate _ symbols placements carriers | role == OwnedObservation ->
     let allocated = [(lo, hi - lo) | Regions.Extent (GuestAddress lo) (GuestAddress hi) <- carriers]
         overlaps (lo,size) (at,width) = lo < at + width && at < lo + size
-        kept = filter (\extent -> not (any (overlaps extent) allocated)) (retained domain ++ [(releaseEntry domain, 0xcc)])
+        kept = filter (\extent -> not (any (overlaps extent) allocated)) (extents domain ++ retained domain ++ [(releaseEntry domain, 0xcc)])
         sections = [(Agg.placementAddress p, Agg.placementBytes p) | p <- placements, Agg.placementBytes p > 0, Agg.placementSection p == ".text" || ".text." `isPrefixOf` Agg.placementSection p]
         spans = sections ++ [(Agg.symbolAddress s, Agg.symbolSize s) | s <- symbols, Agg.symbolSize s > 0] ++ kept
         cuts = sort (nub (concat [[at, at + size] | (at, size) <- spans]))

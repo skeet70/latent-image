@@ -61,6 +61,7 @@ data Entry = Entry
   , entryName :: String
   , entryAddress :: GuestAddress
   , entrySymbol :: String
+  , entrySection :: String
   , entryVeneer :: String
   }
   deriving (Eq, Show)
@@ -126,6 +127,7 @@ instance FromJSON ParsedEntry where
         <*> o .: "name"
         <*> address o "address"
         <*> o .: "symbol"
+        <*> o .: "section"
         <*> o .: "veneer"
 
 newtype ParsedCarrier = ParsedCarrier Carrier
@@ -240,7 +242,7 @@ resolveEntryTarget image symbols placements entry = do
     [symbol] -> Right symbol
     [] -> do
       thunk <- case [placement | placement <- placements,
-        A.placementSection placement == ".text." ++ entrySymbol entry ++ "_entry",
+        A.placementSection placement == entrySection entry,
         A.placementBytes placement == 4] of
         [placement] -> Right placement
         _ -> Left ("missing allocated entry thunk: " ++ entrySymbol entry)

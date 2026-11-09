@@ -501,18 +501,20 @@ runDomain runner cacheRoot directory domain stockImage ownedImage symbols aggreg
           driver = 0x0100_0400
           driverBytes = assemble [0xe5c01000, 0xe12fff1e]
           probes = [(address, protection) | (address, _) <- readonly, protection <- [WriteProtection, FetchProtection]]
-          name address protection = "readonly-" ++ show protection ++ "-" ++ show address
+          protectionLabel WriteProtection = "write"
+          protectionLabel FetchProtection = "fetch"
+          name address protection = "readonly-" ++ protectionLabel protection ++ "-" ++ show address
           spec address protection =
             let template = case cases of
                   one : _ -> caseFor domain Owned stockImage ownedImage symbols aggregates one
                   [] -> error "global-lock cases are empty"
-                entry = if protection == WriteProtection then driver else address
+                program = if protection == WriteProtection then driverBytes else assemble [0xe12fff10,0xe12fff1e]
              in template
                { caseId = name address protection
-               , caseEntry = GuestAddress (fromIntegral entry)
+               , caseEntry = GuestAddress (fromIntegral driver)
                , caseRegions = caseRegions template ++
-                   [mkRegion (RegionId "readonly-driver") (GuestAddress (fromIntegral driver)) (B.length driverBytes) ReadExecute driverBytes]
-               , caseFunctions = [(GuestAddress (fromIntegral entry), if protection == WriteProtection then 8 else 4)]
+                   [mkRegion (RegionId "readonly-driver") (GuestAddress (fromIntegral driver)) (B.length program) ReadExecute program]
+               , caseFunctions = [(GuestAddress (fromIntegral driver), fromIntegral (B.length program))]
                , caseInitial = [(R0, address), (R1, 0xa5), (Sp, stackPointer), (Lr, exitAddress), (Cpsr, 0x13)]
                , caseExpectedStatus = if protection == WriteProtection then MemoryGuard else FetchGuard
                , caseExpectedRegisters = [(R0, address), (Pc, if protection == WriteProtection then driver else address)]

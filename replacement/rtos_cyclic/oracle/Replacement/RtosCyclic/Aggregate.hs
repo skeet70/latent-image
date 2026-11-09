@@ -102,7 +102,7 @@ gaps low high ((at, size, _) : rest) =
 admissionControls :: [ControlRun]
 admissionControls = [ControlRun "aggregate-admission" name "binding" holds | (name, holds) <- checks]
   where
-    entry = U.Entry U.Cyclic "configure" (R.GuestAddress 0x1000) "body" "veneer"
+    entry = U.Entry U.Cyclic "configure" (R.GuestAddress 0x1000) "body" ".text.body" "veneer"
     domain = U.DomainMap R.DomainA (R.GuestAddress 0x1000) 0x20 [entry] [U.Carrier U.Cyclic (R.Extent (R.GuestAddress 0x1000) (R.GuestAddress 0x1020))] [] []
     veneer = A.AggregateSymbol "veneer" 0x1000 4
     body = A.AggregateSymbol "body" 0x1004 8
@@ -143,7 +143,7 @@ admissionControls = [ControlRun "aggregate-admission" name "binding" holds | (na
                  Left _ -> False)
       , ("partial-carrier-refused", case bindAggregate domain stock (B.pack [0 .. 19]) symbols allPlacements of Left _ -> True; Right _ -> False)
       , ("adjacent-public-entry-remains-function-start",
-           let adjacentDomain = domain {U.mapEntries = U.mapEntries domain ++ [U.Entry U.Shared "adjacent" (R.GuestAddress 0x1004) "unused" "body"]}
+           let adjacentDomain = domain {U.mapEntries = U.mapEntries domain ++ [U.Entry U.Shared "adjacent" (R.GuestAddress 0x1004) "unused" ".text.continuation" "body"]}
                adjacentSymbols = [veneer, body {A.symbolSize = 4}, tailSymbol]
                adjacentPlacements = [A.SectionPlacement 0x1008 4 ".text.continuation", A.SectionPlacement 0x100c 4 ".rodata.table", A.SectionPlacement 0x1010 4 ".text.tail"]
             in case bindAggregate adjacentDomain stock effective adjacentSymbols adjacentPlacements of

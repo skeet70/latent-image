@@ -23,7 +23,7 @@ synthetic = Union 0xe7f000f0 domainA domainB
   where
     domainA = DomainMap DomainA (GuestAddress 0x40000) 0xdae0 [entry 0x40430 "body_a" "veneer_a"] [Carrier FixedPool (Extent (GuestAddress 0x40430) (GuestAddress 0x40530))] [] [Demand FixedPool "body_a" 0x20]
     domainB = DomainMap DomainB (GuestAddress 0xd0000) 0xdaa0 [entry 0xd0430 "body_b" "veneer_b"] [Carrier FixedPool (Extent (GuestAddress 0xd0430) (GuestAddress 0xd0530))] [] [Demand FixedPool "body_b" 0x20]
-    entry at symbol veneer = Entry FixedPool "test" (GuestAddress at) symbol veneer
+    entry at symbol veneer = Entry FixedPool "test" (GuestAddress at) symbol (".text." ++ symbol) veneer
 
 linkedFor :: Union -> Linked
 linkedFor _ = Linked (bin (GuestAddress 0x40430)) (symbols (GuestAddress 0x40430) "veneer_a" "body_a") "" [(0x40460, 8)] (bin (GuestAddress 0xd0430)) (symbols (GuestAddress 0xd0430) "veneer_b" "body_b") "" [(0xd0460, 8)]
@@ -88,10 +88,10 @@ main = do
   check "zero-extent labels do not become native functions"
     (Aggregate.parseAggregateSymbols "0004282c 00000000 T label\n00042830 00000004 T function\n"
       == Right [Aggregate.AggregateSymbol "function" 0x42830 4])
-  let aliasEntry = Entry S3d "terminate" (GuestAddress 0x1000) "terminate" "veneer"
+  let aliasEntry = Entry S3d "terminate" (GuestAddress 0x1000) "terminate" ".text.scheduler_timeout_entry" "veneer"
       aliasImage = Aggregate.AggregateImage 0x1000 (U.putWord32 0xea000002 <> B.replicate 0x0c 0 <> U.putWord32 0xea000002 <> B.replicate 0x10 0)
       aliasSymbols = [Aggregate.AggregateSymbol "veneer" 0x1000 4, Aggregate.AggregateSymbol "terminate_body" 0x1020 4]
-      aliasPlacement = Aggregate.SectionPlacement 0x1010 4 ".text.terminate_entry"
+      aliasPlacement = Aggregate.SectionPlacement 0x1010 4 ".text.scheduler_timeout_entry"
       resolvedAlias = resolveEntryTarget aliasImage aliasSymbols [aliasPlacement] aliasEntry
   check "allocated public thunk resolves without a zero-size function"
     (resolvedAlias == Right (Aggregate.AggregateSymbol "terminate" 0x1010 4))
@@ -101,6 +101,10 @@ main = do
     (resolveEntryTarget (Aggregate.AggregateImage 0x1000 (U.putWord32 0 <> B.drop 4 (Aggregate.imageBytes aliasImage))) aliasSymbols [aliasPlacement] aliasEntry)
   expectLeft "unallocated zero-size alias is refused" (const True)
     (resolveEntryTarget aliasImage aliasSymbols [] aliasEntry)
+  check "carrier parser retains emitted entry sections"
+    (case parseUnion (encodeUnion synthetic) of
+      Right parsed -> map entrySection (mapEntries (unionA parsed)) == [".text.body_a"]
+      Left _ -> False)
   expectLeft "entry thunk without a genuine positive-size body is refused" (const True)
     (resolveEntryTarget aliasImage [] [aliasPlacement] aliasEntry)
   case withLink synthetic (linkedFor synthetic) of
@@ -124,7 +128,7 @@ main = do
           check "allocated readonly zero words survive DAT staging" (B.take 8 (B.drop (fromIntegral (base + 0x30 - loaderBase)) loader) == B.replicate 8 0)
   let refusedDemand = synthetic { unionA = (unionA synthetic) { mapDemand = [Demand FixedPool "body_a" 0x100] } }
   expectLeft "demand larger than the largest run refuses" (\e -> case e of FitRejected (CarrierDeficit DomainA FixedPool "body_a" 0x100 0xfc) -> True; _ -> False) (withLink refusedDemand (linkedFor synthetic))
-  let movedVeneer = synthetic { unionA = (unionA synthetic) { mapEntries = [Entry FixedPool "test" (GuestAddress 0x40434) "body_a" "veneer_a"] } }
+  let movedVeneer = synthetic { unionA = (unionA synthetic) { mapEntries = [Entry FixedPool "test" (GuestAddress 0x40434) "body_a" ".text.body_a" "veneer_a"] } }
   expectLeft "a moved entry refuses" (\e -> case e of EntryMoved DomainA _ (GuestAddress 0x40430) -> True; _ -> False) (withLink movedVeneer (linkedFor synthetic))
   let wrongSize = synthetic { unionA = (unionA synthetic) { mapDemand = [Demand FixedPool "body_a" 0x24] } }
   expectLeft "a demand-size mismatch refuses" (\e -> case e of DemandSize DomainA _ 0x20 -> True; _ -> False) (withLink wrongSize (linkedFor synthetic))
@@ -178,7 +182,7 @@ encodeUnion union = C.pack ("{\"schema\":1,\"fill_word\":\"0xe7f000f0\",\"domain
     comma [] = ""
     comma [x] = x
     comma (x : xs) = x ++ "," ++ comma xs
-    entryJson e = "{\"group\":\"" ++ groupLabel (entryGroup e) ++ "\",\"name\":\"" ++ entryName e ++ "\",\"address\":\"" ++ addressText (entryAddress e) ++ "\",\"symbol\":\"" ++ entrySymbol e ++ "\",\"veneer\":\"" ++ entryVeneer e ++ "\"}"
+    entryJson e = "{\"group\":\"" ++ groupLabel (entryGroup e) ++ "\",\"name\":\"" ++ entryName e ++ "\",\"address\":\"" ++ addressText (entryAddress e) ++ "\",\"symbol\":\"" ++ entrySymbol e ++ "\",\"section\":\"" ++ entrySection e ++ "\",\"veneer\":\"" ++ entryVeneer e ++ "\"}"
     carrierJson c = "{\"group\":\"" ++ groupLabel (carrierGroup c) ++ "\",\"start\":\"" ++ addressText (extentStart (carrierExtent c)) ++ "\",\"end\":\"" ++ addressText (extentEnd (carrierExtent c)) ++ "\"}"
     demandJson d = "{\"group\":\"" ++ groupLabel (demandGroup d) ++ "\",\"symbol\":\"" ++ demandSymbol d ++ "\",\"bytes\":" ++ show (demandBytes d) ++ "}"
     addressText (GuestAddress value) = "0x" ++ hex value
