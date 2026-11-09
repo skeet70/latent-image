@@ -8,7 +8,9 @@ import Data.List (isPrefixOf, sort, sortOn)
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
 import Data.Word (Word32, Word8)
+import Data.Maybe (fromMaybe)
 import Emulation.NativeObservation
+import qualified Emulation.NativeCase as C
 import Emulation.OwnedCase
 import qualified Replacement.RtosPlatform.Aggregate as Agg
 import Replacement.RtosScheduler.Oracle (runCases)
@@ -109,13 +111,33 @@ spec domainB service (Row handle context cpsr state flags exists discarded self 
        (selected,w (if state .&. 1 /= 0 then task else selectedTask))]
       ++ [(at,w value) | state .&. 1 /= 0, (at,value) <- [(heads,task),(heads+4,task),(task,heads),(task+4,heads)]]
 
-comparable :: NativeObservation -> NativeObservation -> Bool
-comparable a b = nativeStatus a == nativeStatus b && nativeMemory a == nativeMemory b && all same registers && mode a == mode b && writes a == writes b
+comparable :: CaseSpec -> NativeObservation -> NativeObservation -> Bool
+comparable spec a b = nativeStatus a == nativeStatus b && memoryHolds && all same registers && mode a == mode b && visibleWrites a == visibleWrites b
  where
+  sp = fromMaybe 0 (lookup Sp (caseInitial spec))
   registers = [R0] ++ (if nativeStatus a==Returned then [R4 .. R11]++[Sp] else [])
   same r = M.lookup r (nativeRegisters a)==M.lookup r (nativeRegisters b)
   mode observation = (.&. 0x1ff) <$> M.lookup Cpsr (nativeRegisters observation)
-  writes observation = sort [(at,size,value) | Just kernel <- [nativeKernel observation], Just order <- [observedOrder kernel], OrderedWrite (Write (GuestAddress at) (WriteBytes size)) value <- order]
+  writable permission = case permission of ReadWrite -> True; Device -> True; _ -> False
+  memoryHolds = all regionHolds (caseRegions spec)
+  regionHolds (CaseRegion raw permission)
+    | not (writable permission) = True
+    | otherwise = case (M.lookup ident (M.fromList (nativeMemory a)), M.lookup ident (M.fromList (nativeMemory b))) of
+        (Just x, Just y) -> liveBytes base x == liveBytes base y
+        _ -> False
+    where
+      ident = regionIdOf raw
+      base = fromIntegral (C.baseAddress raw)
+  liveBytes base bytes
+    | base < sp = B.drop (fromIntegral (min (fromIntegral (B.length bytes)) (sp - base))) bytes
+    | otherwise = bytes
+  visibleWrites observation = sort [(fromIntegral at, fromIntegral size, value) | Just kernel <- [nativeKernel observation], Just order <- [observedOrder kernel], OrderedWrite (Write (GuestAddress at) (WriteBytes size)) value <- order, writableAt (fromIntegral at) (fromIntegral size)]
+  writableAt at size = any regionWritable (caseRegions spec)
+   where
+    regionWritable (CaseRegion raw permission) =
+      let base = fromIntegral (C.baseAddress raw)
+          top = base + fromIntegral (B.length (C.regionBytes raw))
+       in writable permission && base <= at && at + size <= top && not (base < sp && at < sp)
 
 main :: IO ()
 main = do
@@ -168,9 +190,10 @@ main = do
           observed <- runCases runner dir labelled
           let at role i=observed M.! (role++show i)
               completed=and [nativeStatus (at "stock" i) == status && M.lookup R0 (nativeRegisters (at "stock" i)) == Just value | (i,row) <- zip [0 :: Int ..] cases, let (status,value)=expected b s row]
-              matches role=length [() | i<-[0..length cases-1],comparable (at "stock" i) (at role i)]
+              stockSpec i row=spec b s row ("stock"++show i) (stockCodeSpans s) (stockFunctionSpans s) stock
+              matches role=length [() | i<-[0..length cases-1],comparable (stockSpec i (cases!!i)) (at "stock" i) (at role i)]
               holds=completed && matches "owned"==length cases && matches "equivalent"==length cases && matches "mutant"<length cases
-          unless holds $ putStrLn (show (b,s,completed,matches "owned",length cases,[(i,nativeStatus (at "stock" i),nativeStatus (at "owned" i)) | i<-[0..length cases-1],not (comparable (at "stock" i) (at "owned" i))]))
+          unless holds $ putStrLn (show (b,s,completed,matches "owned",length cases,[(i,nativeStatus (at "stock" i),nativeStatus (at "owned" i)) | i<-[0..length cases-1],not (comparable (stockSpec i (cases!!i)) (at "stock" i) (at "owned" i))]))
           if holds then removeDirectoryRecursive dir else pure ()
           let report=object ["domain_b".=b,"service".=show s,"cases".=length cases,"stock_completed".=completed,"owned_matches".=matches "owned","equivalent_matches".=matches "equivalent","mutant_matches".=matches "mutant","passed".=holds]
           B.writeFile (work </> (show b++show s++".json")) (encodeCanonical report)

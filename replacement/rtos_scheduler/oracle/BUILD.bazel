@@ -213,6 +213,7 @@ haskell_binary(
     ],
     deps = [
         ":scheduler-oracle-lib",
+        "//emulation:native-adapter",
         "//emulation:native-observation",
         "//emulation:owned-case",
         "//host:aeson",
