@@ -8,7 +8,7 @@ import Control.Monad (forM, forM_, unless)
 import Data.Aeson ((.=))
 import Data.Bits ((.&.), (.|.), complement, shiftL, shiftR, xor)
 import qualified Data.ByteString as B
-import Data.List (find, sortOn)
+import Data.List (find, isPrefixOf, sortOn)
 import qualified Data.Map.Strict as M
 import Data.Word (Word32)
 import Emulation.CachedNativeBatch (cachedObservedBatch)
@@ -555,8 +555,9 @@ specFor d role one loaderA loaderB aggregates owned = CaseSpec
       ++ helperRanges d ++ helperRanges other
       ++ [(bodyBase, 0x4000) | role == Owned, Nothing <- [aggregates]]
     aggregateFunctions = case (role, aggregates) of
-      (Owned, Just (Aggregate _ symbolsA _, Aggregate _ symbolsB _)) ->
+      (Owned, Just (Aggregate _ symbolsA placementsA, Aggregate _ symbolsB placementsB)) ->
         [(Agg.symbolAddress symbol, Agg.symbolSize symbol) | symbol <- symbolsA ++ symbolsB]
+        ++ [(Agg.placementAddress placement, Agg.placementBytes placement) | placement <- placementsA ++ placementsB, Agg.placementBytes placement > 0, let section = Agg.placementSection placement, section == ".text" || ".text." `isPrefixOf` section]
       _ -> []
     bodyBase = if d == DomainA then 0x50000 else 0xe0000
     aggregateFor domain = fmap (\(a, b) -> if domain == DomainA then a else b) aggregates
