@@ -35,7 +35,7 @@ main = do
   ownedDigest <- sha256File ownedPath
   symbolsDigest <- sha256File symbolsPath
   unless (sha256Hex stockDigest == stockSha256) (failH (stockImagePath ++ " is not the pinned X-M1 1.50 image4"))
-  unless (B.length ownedImage == 0x384) (failH (ownedPath ++ " is not the app-callback 0x384-byte image"))
+  unless (B.length ownedImage == 0x242c) (failH (ownedPath ++ " is not the app-callback 0x242c-byte image"))
   checkStorageBudget (takeDirectory resultsPath)
   createDirectoryIfMissing True cacheRoot
   createDirectoryIfMissing True (takeDirectory resultsPath)

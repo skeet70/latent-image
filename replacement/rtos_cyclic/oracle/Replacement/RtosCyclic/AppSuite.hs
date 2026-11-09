@@ -257,10 +257,10 @@ caseFor role stockImage ownedImage ownedFunctions one =
   where
     codeBytes = case role of
       Stock -> slice stockImage codeBase codeSize
-      Owned -> ownedImage
+      Owned -> B.take (fromIntegral codeSize) (B.drop (fromIntegral (codeBase - 0x72337c)) ownedImage)
     functions = case role of
       Stock -> stockFunctions ++ stubs
-      Owned -> ownedFunctions ++ stubs
+      Owned -> filter (\(address, size) -> address >= codeBase && address + size <= codeBase + codeSize) ownedFunctions ++ stubs
     stubs =
       [ (stubsBase, stubSize)
       , (supportRecordBase, supportSize)
@@ -316,8 +316,10 @@ readOwnedFunctions path = do
         , Just address <- parseHex addressText
         , Just size <- parseHex sizeText
         , size > 0
-        , address >= codeBase
-        , address + size <= codeBase + codeSize -> [(address, size)]
+        , address >= 0x72337c
+        , (address < 0x723398 && toInteger address + toInteger size <= 0x723398)
+            || (address >= codeBase && toInteger address + toInteger size <= toInteger codeBase + toInteger codeSize)
+          -> [(address, size)]
       _ -> []
 
 parseHex :: String -> Maybe Word32

@@ -42,9 +42,10 @@ footprint loaderA loaderB image4 = mapMaybe (\(basis, target, start, end, citati
   , (RuntimePremise, LoaderB, 0xd0430, 0xd0434, "emulation/Emulation/InterfaceInitializer.hs:515-525 (table B service slots behind the initializer entry)")
   , (RuntimePremise, Image4, 0x89ea8c, 0x89ea90, "reports/replacement-inventory-baseline.md:887 (error callback word, canonical 0x723330)")
   , (RuntimePremise, Image4, 0x69cbf0, 0x69cc00, "replacement/task_submission/Replacement/TaskSubmission/Admission.hs:110-111,127-129 (error dispatch demand assumes the idle body's frame)")
+  , (RuntimePremise, Image4, 0x723330, 0x723344, "reports/rtos-platform-options.md#421-owned-cyclic-handler-family-lifecycle-expiry-and-reentrancy (default error callback returns at 0x723340 without calls or literals)")
   ]
-  ++ closure Image4 0x61c400 image4 [carrier] [0x7221c8, 0x723398, 0x723330, 0x72835c, 0x6470fc]
-       "replacement/task_submission/Replacement/TaskSubmission/Admission.hs:96 (fill, error dispatch); callbacks 0x723330, 0x72835c (reports/replacement-inventory-baseline.md:887,889) and log trace 0x6470fc (emulation/Emulation/TaskSubmissionProgram.hs:487-496), closed over direct calls"
+  ++ closure Image4 0x61c400 image4 [carrier] [0x7221c8, 0x723398, 0x72835c, 0x6470fc]
+       "replacement/task_submission/Replacement/TaskSubmission/Admission.hs:96 (fill, error dispatch); callback 0x72835c (reports/replacement-inventory-baseline.md:889) and log trace 0x6470fc (emulation/Emulation/TaskSubmissionProgram.hs:487-496), closed over direct calls"
   ++ closure LoaderA 0x40000 loaderA [] [0x41a34, 0x42634, 0x427d4, 0x427fc, 0x4d39c, 0x4d094, 0x44f2c, 0x412bc, 0x41140, 0x41164]
        "replacement/task_submission/Replacement/TaskSubmission/Admission.hs:96-97,99-107 (log, cache, lock services and root-0 services; reports/replacement-inventory-baseline.md:1078-1082), closed over direct calls"
   ++ closure LoaderB 0xd0000 loaderB [] [0xdd360, 0xdd054, 0xd4eec, 0xd12bc, 0xd1140, 0xd1164]

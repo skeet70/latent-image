@@ -3,7 +3,7 @@
 -- | The A32 app-to-owned-cyclic join on core 0: the emitted app caller at @0x725424@ runs over
 -- the loader-published interface table and root, calls the emitted cyclic create/start entries at
 -- their stock addresses, arms a phase-30 record, and the emitted timer tick delivers through the
--- stock registry dispatcher and stack-guard callback. The stock image4 caller and the stock loader
+-- emitted registry dispatcher and retained stack-guard callback. The stock image4 caller and loader
 -- entries run the same join for comparison.
 --
 -- Fixture premises, not live state: the kernel context records, the timer heap pointer, the
@@ -269,10 +269,12 @@ codeBytes _layout inputs role name = case name of
   "loader-code" -> slice 0x40000 (inLoaderA inputs) 0x41140 (0x4d8fc - 0x41140)
   "loader-helpers" -> slice 0x40000 (inLoaderA inputs) 0x41140 (0x427d4 - 0x41140)
   "guard-code" -> slice image4Base (inImage4 inputs) stackGuard 0x54
-  "dispatch-code" -> slice image4Base (inImage4 inputs) dispatchEvent 0x40
+  "dispatch-code" -> case role of
+    Stock -> stockDispatch
+    Owned -> B.take 0x1c (inApp inputs) <> B.drop 0x1c stockDispatch
   "stack-check-code" -> slice image4Base (inImage4 inputs) stackCheck 0xf8
   "app" -> case role of
-    Owned -> inApp inputs
+    Owned -> B.drop (fromIntegral (appRegister - dispatchEvent)) (inApp inputs)
     Stock -> slice image4Base (inImage4 inputs) appRegister 0x384
   "cyclic" -> inCyclic inputs
   "timer" -> inTimer inputs
@@ -280,6 +282,8 @@ codeBytes _layout inputs role name = case name of
   "stack" -> B.replicate 0x1000 0
   "exit" -> B.replicate 0x10 0
   _ -> error ("no code bytes for region " ++ name)
+  where
+    stockDispatch = slice image4Base (inImage4 inputs) dispatchEvent 0x40
 
 codeRegions :: Layout -> Inputs -> Role -> [(String, Word32, Int, Permission, B.ByteString)]
 codeRegions layout inputs role =
@@ -893,7 +897,10 @@ buildCase layout inputs role variant state =
     , caseEntry = GuestAddress (fromIntegral entry)
     , caseExit = GuestAddress (fromIntegral exitAddress)
     , caseRegions = stateCaseRegions ++ codeCaseRegions
-    , caseFunctions = [(GuestAddress (fromIntegral address), size) | (address, size) <- commonFunctions ++ roleFunctions ++ stubFunctions]
+    , caseFunctions =
+        [ (GuestAddress (fromIntegral address), size)
+        | (address, size) <- filter (\(address, _) -> role == Stock || address /= dispatchEvent) commonFunctions ++ roleFunctions ++ stubFunctions
+        ]
     , caseInitial =
         [ (R0, argument0), (R1, 0), (R2, stackGuard), (R3, tokenAddress)
         ]

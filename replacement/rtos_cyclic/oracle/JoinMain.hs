@@ -2,7 +2,7 @@
 
 -- | Runs the core-0 app-callback join: the emitted app caller at 0x725424 over the loader-published
 -- root and interface table, the emitted cyclic create/start entries, the emitted timer tick, and
--- the stock registry dispatcher and stack-guard callback, against the stock caller and stock loader
+-- the emitted registry dispatcher and retained stack-guard callback, against the stock caller and stock loader
 -- entries. Writes a terminal JSON.
 module Main (main) where
 
@@ -55,7 +55,7 @@ main = do
   unless (sha256Hex image4Digest == "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16") (failH (image4Path ++ " is not the pinned X-M1 1.50 image4"))
   unless (sha256Hex loaderADigest == "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882") (failH (loaderAPath ++ " is not the pinned X-M1 1.50 loader A"))
   unless (sha256Hex loaderBDigest == "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec") (failH (loaderBPath ++ " is not the pinned X-M1 1.50 loader B"))
-  unless (B.length app == 0x384) (failH (appPath ++ " is not the 0x384-byte app-callback image"))
+  unless (B.length app == 0x242c) (failH (appPath ++ " is not the 0x242c-byte app-callback image"))
   unless (B.length cyclic == 0x1ac0) (failH (cyclicPath ++ " is not the 0x1ac0-byte cyclic A image"))
   unless (B.length timer == 0x4dc) (failH (timerPath ++ " is not the 0x4dc-byte timer A image"))
   checkStorageBudget (takeDirectory resultsPath)

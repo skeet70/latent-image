@@ -25,7 +25,7 @@ import Replacement.StartupArtifact.Compose
 import Replacement.StartupArtifact.AttachState
 import Replacement.StartupArtifact.Contract
 import Replacement.StartupArtifact.Manifest
-import Replacement.StartupArtifact.Application (RoleImages (..), SiteMap (..), application, applicationValue, plainImage)
+import Replacement.StartupArtifact.Application (Application, RoleImages (..), SiteMap (..), application, applicationValue, plainImage)
 import Replacement.StartupArtifact.Joins (JoinKind, registeredJoins)
 import Replacement.StartupArtifact.Targets
 import Replacement.StartupArtifact.Types
@@ -647,7 +647,25 @@ main = do
   ok "a retained entry_state refuses" (refusesWith sources entryState (word 0))
   ok "an entry_state without a loader-A orchestration piece refuses" (refusesWith sources (word 0) entryState)
 
-  -- Application section.
+  sectioned <- applicationChecks ok targets parts
+  let withSection = contractValue source manifestText contracted contractDat contractTargets entryLabel attachJson (Just sectioned)
+      without key value = case value of
+        J.Object fields -> J.Object (KeyMap.delete key fields)
+        other -> other
+  ok "a contract without the section is schema 4 and has no application member"
+    (member "schema" contractJson == J.toJSON (4 :: Int) && member "application" contractJson == J.Null)
+  ok "a contract with the section is schema 5 and otherwise unchanged"
+    (member "schema" withSection == J.toJSON (5 :: Int) && member "application" withSection == applicationValue sectioned
+      && without "schema" (without "application" withSection) == without "schema" contractJson)
+
+  producerReadChecks ok source first
+
+  passed <- readIORef counter
+  putStrLn ("startup-artifact-tests: " ++ show passed ++ " checks passed")
+
+{-# NOINLINE applicationChecks #-}
+applicationChecks :: (String -> Bool -> IO ()) -> TargetBytes -> U.Parts -> IO Application
+applicationChecks ok targets parts = do
   plain <- either (fail . show) pure (plainImage parts)
   U.MediaImage plainBytes <- either fail pure (U.extractPlain parts)
   let patched base changes = either (error . show) id (applyTargetEdits [wordEdit target address value | (target, address, value) <- changes] base)
@@ -718,21 +736,7 @@ main = do
         && map (\row -> (member "retained_sha256" row, member "composed_sha256" row)) (rowsOf "code" "pump" value)
           == [(J.toJSON (digestText (image5Slice stockImages 0xbfbd20 0xbfbd40)), J.toJSON (digestText (image5Slice stockImages 0xbfbd20 0xbfbd40)))])
     Left problem -> fail (show problem)
-  sectioned <- either (fail . show) pure (appOf [] stockImages)
-  let withSection = contractValue source manifestText contracted contractDat contractTargets entryLabel attachJson (Just sectioned)
-      without key value = case value of
-        J.Object fields -> J.Object (KeyMap.delete key fields)
-        other -> other
-  ok "a contract without the section is schema 4 and has no application member"
-    (member "schema" contractJson == J.toJSON (4 :: Int) && member "application" contractJson == J.Null)
-  ok "a contract with the section is schema 5 and otherwise unchanged"
-    (member "schema" withSection == J.toJSON (5 :: Int) && member "application" withSection == applicationValue sectioned
-      && without "schema" (without "application" withSection) == without "schema" contractJson)
-
-  producerReadChecks ok source first
-
-  passed <- readIORef counter
-  putStrLn ("startup-artifact-tests: " ++ show passed ++ " checks passed")
+  either (fail . show) pure (appOf [] stockImages)
 
 {-# NOINLINE manifestChecks #-}
 manifestChecks :: (String -> Bool -> IO ()) -> Label -> B.ByteString -> IO ()

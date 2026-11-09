@@ -3,8 +3,7 @@
 //! The stock five words map to `CyclicCreate`: mode = attributes, slot = argument, completion =
 //! handler, argument = period, repeated_argument = phase.
 //!
-//! Retained seams: the interface method table and the app dispatcher completion; remove the
-//! interface seam when the app caller and the cyclic service are linked in one owned image.
+//! Retained seam: the root interface method table.
 
 use crate::id::EncodedId;
 use crate::layout::GuestAddress;
@@ -15,7 +14,7 @@ use crate::types::{
 /// 1..=64.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
 #[repr(transparent)]
-pub struct CallbackSlot(u16);
+pub struct CallbackSlot(u32);
 
 impl CallbackSlot {
     pub const COUNT: u32 = 64;
@@ -23,7 +22,7 @@ impl CallbackSlot {
     #[inline(always)]
     pub const fn new(slot: u32) -> Option<Self> {
         if slot >= 1 && slot <= Self::COUNT {
-            Some(Self(slot as u16))
+            Some(Self(slot))
         } else {
             None
         }
@@ -31,12 +30,12 @@ impl CallbackSlot {
 
     #[inline(always)]
     pub const fn get(self) -> u32 {
-        self.0 as u32
+        self.0
     }
 
     #[inline(always)]
     const fn from_slot(slot: u32) -> Self {
-        Self(slot as u16)
+        Self(slot)
     }
 }
 
@@ -312,8 +311,6 @@ pub const ERROR_OPERATION: u32 = 0x20;
 /// The stock token-candidate attempts.
 pub const TOKEN_ATTEMPTS: u32 = 9999;
 
-/// The app dispatcher used as the cyclic handler for mode 0. Retained seam: remove when the
-/// app dispatcher is owned.
 pub const DISPATCH_EVENT: CyclicHandler = CyclicHandler(0x0072_337c);
 
 #[cfg_attr(feature = "stage-app", inline(never))]
