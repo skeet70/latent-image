@@ -47,7 +47,7 @@ import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe)
 import Data.String (fromString)
 import Data.Word (Word32)
-import Emulation.NativeCase (BatchCase (..), BatchStatus (..), BatchSummary (..), CaseId (..), CaseReport (..), CaseStatus (..), Region (..), batchStatusLabel, loadCase, runBatch, runCase)
+import Emulation.NativeCase (BatchCase (..), BatchStatus (..), BatchSummary (..), CaseId (..), CaseReport (..), CaseStatus (..), DigestHex (..), Region (..), artifactCount, batchStatusLabel, loadCase, runBatch, runCase, sizeBytes)
 import Emulation.NativeObservation
   ( GuestAddress (..)
   , KernelObservation (..)
@@ -293,47 +293,80 @@ compareKernelCase spec reference subject = case (caseKernel spec, nativeKernel r
     written (OrderedSystemWrite register value) = [Right (register, value)]
     written (OrderedBarrier _) = []
 
-regionJson :: CaseRegion -> Value
-regionJson (CaseRegion region permission) =
+newtype InitializerId = InitializerId String
+newtype InitializerOffset = InitializerOffset Int
+
+data InitialArtifact = InitialArtifact
+  { initializerId :: InitializerId
+  , initializerBytes :: B.ByteString
+  , initializerDigest :: DigestHex
+  }
+
+data InitialSlice = InitialSlice InitializerId InitializerOffset
+data Initializers = Initializers [InitialArtifact] (M.Map RegionId InitialSlice)
+
+initializersFor :: CaseSpec -> Initializers
+initializersFor spec = Initializers (map fst built) (M.fromList (concatMap snd built))
+  where
+    nonzero = [region | CaseRegion region _ <- caseRegions spec, not (B.all (== 0) (regionBytes region))]
+    groups
+      | length nonzero <= artifactCount = [(InitializerId (regionName (regionIdOf region)), [region]) | region <- nonzero]
+      | otherwise = [(InitializerId ("initial-" ++ show index), regions) | (index, regions) <- zip [0 :: Int ..] (pack [] 0 nonzero)]
+    pack [] _ [] = []
+    pack pending _ [] = [reverse pending]
+    pack pending bytes (region : rest)
+      | not (null pending) && bytes + B.length (regionBytes region) > sizeBytes =
+          reverse pending : pack [region] (B.length (regionBytes region)) rest
+      | otherwise = pack (region : pending) (bytes + B.length (regionBytes region)) rest
+    built = map build groups
+    build (ident, regions) =
+      let bytes = case regions of
+            [region] -> regionBytes region
+            _ -> B.concat (map regionBytes regions)
+          offsets = scanl (\offset region -> offset + B.length (regionBytes region)) 0 regions
+          slices = [(regionIdOf region, InitialSlice ident (InitializerOffset offset)) | (region, offset) <- zip regions offsets]
+       in (InitialArtifact ident bytes (DigestHex (sha256Hex (sha256 bytes))), slices)
+
+regionJson :: Initializers -> CaseRegion -> Value
+regionJson (Initializers _ slices) (CaseRegion region permission) =
   object
     [ "id" .= regionName (regionIdOf region)
     , "address" .= hexAddress (GuestAddress (fromIntegral (baseAddress region)))
     , "size" .= regionSize region
     , "permissions" .= permissionLabel permission
     , "initial" .=
-        ( if B.all (== 0) (regionBytes region)
-            then object ["zero" .= True]
-            else object
-              [ "artifact" .= regionName (regionIdOf region)
-              , "offset" .= (0 :: Int)
+        ( case M.lookup (regionIdOf region) slices of
+            Nothing -> object ["zero" .= True]
+            Just (InitialSlice (InitializerId ident) (InitializerOffset offset)) -> object
+              [ "artifact" .= ident
+              , "offset" .= offset
               , "length" .= B.length (regionBytes region)
               ]
         )
     ]
 
-artifactJson :: (Region -> FilePath) -> CaseRegion -> Value
-artifactJson file (CaseRegion region _) =
+artifactJson :: (InitialArtifact -> FilePath) -> InitialArtifact -> Value
+artifactJson file artifact@(InitialArtifact (InitializerId ident) bytes (DigestHex digest)) =
   object
-    [ "id" .= regionName (regionIdOf region)
-    , "path" .= file region
-    , "size" .= B.length (regionBytes region)
-    , "sha256" .= sha256Hex (sha256 (regionBytes region))
+    [ "id" .= ident
+    , "path" .= file artifact
+    , "size" .= B.length bytes
+    , "sha256" .= digest
     ]
 
--- | The case JSON; @file@ names the artifact file holding a region's initial bytes.
-caseValue :: (Region -> FilePath) -> CaseSpec -> Value
-caseValue file spec =
+caseValue :: (InitialArtifact -> FilePath) -> Initializers -> CaseSpec -> Value
+caseValue file initializers@(Initializers artifacts _) spec =
   object $
     [ "schema_version" .= (1 :: Int)
     , "id" .= caseId spec
     , "origin" .= ("synthetic" :: String)
     , "provenance" .= caseProvenance spec
     , "cpu" .= object ["architecture" .= ("arm" :: String), "model" .= ("cortex-r5f" :: String), "mode" .= ("arm" :: String), "endian" .= ("little" :: String)]
-    , "artifacts" .= [artifactJson file r | r <- caseRegions spec, not (B.all (== 0) (regionBytes (caseRegion r)))]
+    , "artifacts" .= map (artifactJson file) artifacts
     , "entry" .= hexAddress (caseEntry spec)
     , "exit" .= hexAddress (caseExit spec)
     , "registers" .= object [fromString (registerLabel r) .= hexWord32 value | (r, value) <- caseInitial spec]
-    , "regions" .= map regionJson (caseRegions spec)
+    , "regions" .= map (regionJson initializers) (caseRegions spec)
     , "functions" .=
         [ object ["address" .= hexAddress address, "size" .= size]
         | (address, size) <- caseFunctions spec
@@ -368,12 +401,12 @@ kernelJson kernel =
 writeCase :: FilePath -> CaseSpec -> IO FilePath
 writeCase directory spec = do
   createDirectoryIfMissing True directory
-  let file region = regionName (regionIdOf region) ++ ".bin"
-  forM_ (caseRegions spec) $ \(CaseRegion region _) ->
-    when (not (B.all (== 0) (regionBytes region))) $
-      B.writeFile (directory </> file region) (regionBytes region)
+  let initializers@(Initializers artifacts _) = initializersFor spec
+      file artifact = case initializerId artifact of InitializerId ident -> ident ++ ".bin"
+  forM_ artifacts $ \artifact ->
+    B.writeFile (directory </> file artifact) (initializerBytes artifact)
   let path = directory </> "case.json"
-  B.writeFile path (encodeCanonical (caseValue file spec))
+  B.writeFile path (encodeCanonical (caseValue file initializers spec))
   pure path
 
 loadObserved :: FilePath -> FilePath -> IO NativeObservation
@@ -391,11 +424,12 @@ writeBatch directory specs = do
   let ids = map caseId specs
   when (nub ids /= ids) (error "writeBatch: duplicate case id")
   createDirectoryIfMissing True directory
-  let file bytes = sha256Hex (sha256 bytes) ++ ".bin"
+  let planned = [(spec, initializersFor spec) | spec <- specs]
+      file artifact = case initializerDigest artifact of DigestHex digest -> digest ++ ".bin"
       caseFile spec = caseId spec ++ ".case.json"
-      artifacts = M.fromList [(file bytes, bytes) | spec <- specs, CaseRegion region _ <- caseRegions spec, let bytes = regionBytes region, not (B.all (== 0) bytes)]
+      artifacts = M.fromList [(file artifact, initializerBytes artifact) | (_, Initializers initializers _) <- planned, artifact <- initializers]
   forM_ (M.toList artifacts) $ \(name, bytes) -> B.writeFile (directory </> name) bytes
-  forM_ specs $ \spec -> B.writeFile (directory </> caseFile spec) (encodeCanonical (caseValue (file . regionBytes) spec))
+  forM_ planned $ \(spec, initializers) -> B.writeFile (directory </> caseFile spec) (encodeCanonical (caseValue file initializers spec))
   let path = directory </> "batch.json"
   B.writeFile path $
     encodeCanonical
