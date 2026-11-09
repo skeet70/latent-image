@@ -8,7 +8,7 @@ import Control.Concurrent (threadDelay)
 import Control.Exception (IOException, try)
 import Control.Monad (unless, void)
 import Data.Char (isDigit)
-import Data.List (isInfixOf, isPrefixOf)
+import Data.List (elemIndex, isInfixOf, isPrefixOf)
 import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
 import System.Directory (canonicalizePath, createDirectoryIfMissing, doesFileExist, getTemporaryDirectory, makeAbsolute)
 import System.Environment (getArgs, getEnvironment, getExecutablePath, lookupEnv)
@@ -164,6 +164,12 @@ run binary = do
   firstSeen <- case pidA of
     Just owner -> waitFor (fmap (("pid=" ++ owner) `isInfixOf`) (readFile' diagnosticLog))
     Nothing -> pure False
+  threadDelay 3_500_000
+  firstReportedOnce <- case pidA of
+    Just owner -> do
+      text <- readFile' diagnosticLog
+      pure (length (filter (== owner) (mapMaybe reportedPid (lines text))) == 1)
+    Nothing -> pure False
   holderB <- spawnHolder self root lockPath 1 readyB releaseB
   pidB <- waitForPid readyB
   writeFile releaseA ""
@@ -184,27 +190,101 @@ run binary = do
   canonicalRoot <- canonicalizePath root
   let sampled = mapMaybe reportedPid (lines diagnosticErr)
       context = ("cwd=" ++ canonicalRoot) `isInfixOf` diagnosticErr
+      count owner = length (filter (== owner) sampled)
+      before earlier later = case (elemIndex earlier sampled, elemIndex later sampled) of
+        (Just earlierAt, Just laterAt) -> earlierAt < laterAt
+        _ -> False
       sequenceOk = case (pidA, pidB) of
-        (Just firstPid, Just secondPid) -> sampled == [firstPid, secondPid]
+        (Just firstPid, Just secondPid) ->
+          count firstPid == 1
+            && count secondPid >= 1
+            && before firstPid secondPid
+            && firstPid `notElem` drop 1 (dropWhile (/= secondPid) sampled)
         _ -> False
   holders <- expect "contention names the first and changed kernel owner while admission waits"
-    (firstSeen && changedSeen && not early && diagnosticCode == Just ExitSuccess && sequenceOk && context)
+    (firstSeen && firstReportedOnce && changedSeen && not early
+      && diagnosticCode == Just ExitSuccess && sequenceOk && context)
   unless holders (putStrLn (show (pidA, pidB, diagnosticCode, sampled, context) ++ "\n" ++ diagnosticErr))
 
-  pure (and [serialized, passed, released, failed, refused, holders])
+  let holderBase = root </> "hb"
+      waiterBase = root </> "wb"
+      baseLog = root </> "base-stderr"
+  baseHolder <- spawnArgs binary root
+    (("FAKE_NAME", "base-holder") : ("FAKE_RELEASE", release "base-holder") : environment)
+    ["--output_base=" ++ holderBase, "build", "//fake:target"]
+  baseHeld <- waitFor (started "base-holder")
+  writeFile (release "base-waiter") ""
+  baseWaiter <- spawnLoggedArgs binary root
+    (("FAKE_NAME", "base-waiter") : ("FAKE_RELEASE", release "base-waiter") : environment)
+    ["--output_base=" ++ waiterBase, "build", "//fake:target"] baseLog
+  let expectedBase = "output_base=" ++ holderBase ++ " command_log=" ++ (holderBase </> "command.log")
+  baseReported <- waitFor (fmap (expectedBase `isInfixOf`) (readFile' baseLog))
+  writeFile (release "base-holder") ""
+  baseHolderCode <- waitForProcess (invocationProcess baseHolder)
+  baseWaiterCode <- waitForProcess (invocationProcess baseWaiter)
+  baseErr <- invocationStderr baseWaiter
+  baseObserved <- expect "an explicit holder output base is named with its existing command.log"
+    (baseHeld && baseReported && baseHolderCode == ExitSuccess && baseWaiterCode == ExitSuccess
+      && "\"verdict\":\"passed\"" `isInfixOf` baseErr)
+
+  let overBase = "--output_base=" ++ replicate 600 'x'
+      overLog = root </> "over-stderr"
+  overHolder <- spawnArgs binary root
+    (("FAKE_NAME", "over-holder") : ("FAKE_RELEASE", release "over-holder") : environment)
+    [overBase, "build", "//fake:target"]
+  overHeld <- waitFor (started "over-holder")
+  writeFile (release "over-waiter") ""
+  overWaiter <- spawnLoggedArgs binary root
+    (("FAKE_NAME", "over-waiter") : ("FAKE_RELEASE", release "over-waiter") : environment)
+    ["build", "//fake:target"] overLog
+  overReported <- waitFor (fmap ("output_base=unavailable" `isInfixOf`) (readFile' overLog))
+  writeFile (release "over-holder") ""
+  overHolderCode <- waitForProcess (invocationProcess overHolder)
+  overWaiterCode <- waitForProcess (invocationProcess overWaiter)
+  overErr <- invocationStderr overWaiter
+  overOk <- expect "an over-bound output base is unavailable, not a truncated path"
+    (overHeld && overReported && overHolderCode == ExitSuccess && overWaiterCode == ExitSuccess
+      && not ("command_log=" `isInfixOf` overErr))
+
+  let cutBase = "--output_base=" ++ replicate 5000 'y'
+      cutLog = root </> "cut-stderr"
+  cutHolder <- spawnArgs binary root
+    (("FAKE_NAME", "cut-holder") : ("FAKE_RELEASE", release "cut-holder") : environment)
+    [cutBase, "build", "//fake:target"]
+  cutHeld <- waitFor (started "cut-holder")
+  writeFile (release "cut-waiter") ""
+  cutWaiter <- spawnLoggedArgs binary root
+    (("FAKE_NAME", "cut-waiter") : ("FAKE_RELEASE", release "cut-waiter") : environment)
+    ["build", "//fake:target"] cutLog
+  cutReported <- waitFor (fmap ("output_base=unavailable" `isInfixOf`) (readFile' cutLog))
+  writeFile (release "cut-holder") ""
+  cutHolderCode <- waitForProcess (invocationProcess cutHolder)
+  cutWaiterCode <- waitForProcess (invocationProcess cutWaiter)
+  cutErr <- invocationStderr cutWaiter
+  cutOk <- expect "a cmdline cut inside output_base is unavailable, not a fabricated path"
+    (cutHeld && cutReported && cutHolderCode == ExitSuccess && cutWaiterCode == ExitSuccess
+      && not ("command_log=" `isInfixOf` cutErr))
+
+  pure (and [serialized, passed, released, failed, refused, holders, baseObserved, overOk, cutOk])
 
 spawn :: FilePath -> FilePath -> [(String, String)] -> IO Invocation
-spawn = spawnWith CreatePipe
+spawn binary root environment = spawnWith CreatePipe binary root environment ["build", "//fake:target"]
+
+spawnArgs :: FilePath -> FilePath -> [(String, String)] -> [String] -> IO Invocation
+spawnArgs binary root environment arguments = spawnWith CreatePipe binary root environment arguments
 
 spawnLogged :: FilePath -> FilePath -> [(String, String)] -> FilePath -> IO Invocation
-spawnLogged binary root environment logPath = do
+spawnLogged binary root environment = spawnLoggedArgs binary root environment ["build", "//fake:target"]
+
+spawnLoggedArgs :: FilePath -> FilePath -> [(String, String)] -> [String] -> FilePath -> IO Invocation
+spawnLoggedArgs binary root environment arguments logPath = do
   handle <- openFile logPath WriteMode
-  invocation <- spawnWith (UseHandle handle) binary root environment
+  invocation <- spawnWith (UseHandle handle) binary root environment arguments
   pure invocation { invocationStderr = hClose handle >> readFile' logPath }
 
-spawnWith :: StdStream -> FilePath -> FilePath -> [(String, String)] -> IO Invocation
-spawnWith stderrStream binary root environment = do
-  (_, _, err, handle) <- createProcess (proc binary ["build", "//fake:target"])
+spawnWith :: StdStream -> FilePath -> FilePath -> [(String, String)] -> [String] -> IO Invocation
+spawnWith stderrStream binary root environment arguments = do
+  (_, _, err, handle) <- createProcess (proc binary arguments)
     { env = Just environment, cwd = Just root, std_err = stderrStream }
   case err of
     Just pipe -> do

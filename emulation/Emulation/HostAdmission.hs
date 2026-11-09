@@ -22,16 +22,18 @@ import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Exception (IOException, evaluate, try)
 import Control.Monad (unless, void, when)
+import qualified Data.ByteString as ByteString
+import qualified Data.ByteString.Char8 as ByteString8
 import Data.Char (isDigit, isPrint, isSpace)
 import Data.List (dropWhileEnd, isPrefixOf, stripPrefix)
-import Data.Maybe (isNothing, listToMaybe)
+import Data.Maybe (isNothing)
 import GHC.Clock (getMonotonicTime)
 import Numeric (showFFloat)
 import System.Directory (createDirectoryIfMissing, findExecutable, getHomeDirectory, removeFile)
 import System.Environment (getExecutablePath, lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (..), exitWith)
 import System.FilePath (isAbsolute, takeDirectory, takeFileName, (</>))
-import System.IO (IOMode (ReadMode), SeekMode (AbsoluteSeek), hFlush, hGetChar, hGetContents, hGetLine, hPutStrLn, stderr, withFile)
+import System.IO (IOMode (ReadMode), SeekMode (AbsoluteSeek), hFlush, hGetContents, hGetLine, hPutStrLn, stderr, withBinaryFile)
 import System.IO.Error (catchIOError, isDoesNotExistError)
 import System.Posix.Files (readSymbolicLink)
 import System.Posix.IO (FdOption (CloseOnExec), FileLock, LockRequest (WriteLock), OpenFileFlags (creat), OpenMode (ReadWrite), closeFd, createPipe, defaultFileFlags, fdToHandle, getLock, openFd, setFdOption, setLock)
@@ -232,10 +234,19 @@ data KernelOwner = KernelOwner ProcessID | KernelUnlocked | KernelUnknown
 data HolderDetails = HolderDetails
   { holderCommand :: Maybe String
   , holderDirectory :: Maybe FilePath
-  , holderOutputBase :: Maybe FilePath
+  , holderOutputBase :: OutputBase
   }
 
+data OutputBase = NoOutputBase | OutputBaseUnavailable | OutputBaseObserved FilePath
+
 data OwnerSample = OwnerNone | OwnerUnknown | OwnerReported ProcessID (Maybe HolderDetails)
+
+-- | Last announced kernel observation. A sample without associated metadata is
+-- not settled, so the next attempt can attach context once the owner is stable.
+data AnnouncedOwner = AnnouncedOwner
+  { announcedKernel :: KernelOwner
+  , announcedSettled :: Bool
+  }
 
 acquireBuildLock :: FilePath -> IO Fd
 acquireBuildLock directory = do
@@ -252,34 +263,43 @@ acquireBuildLock directory = do
   attempt Nothing
 
 -- | Reports the sampled owner on the first contention and when it changes;
--- sampling errors stay diagnostic. The last announced PID is compared before
--- any @/proc@ read, so an unchanged holder costs one kernel query per attempt.
-announceContention :: FilePath -> Fd -> Maybe (Maybe ProcessID) -> IO (Maybe (Maybe ProcessID))
+-- sampling errors stay diagnostic. A settled owner is compared before any
+-- @/proc@ read, so an unchanged holder costs one kernel query per attempt.
+announceContention :: FilePath -> Fd -> Maybe AnnouncedOwner -> IO (Maybe AnnouncedOwner)
 announceContention directory fd previous = do
   queried <- try (queryKernelOwner fd) :: IO (Either IOException KernelOwner)
-  case queried of
-    Right (KernelOwner pid)
-      | previous == Just (Just pid) -> pure previous
+  let current = either (const KernelUnknown) id queried
+  case current of
+    KernelOwner pid
+      | settled previous current -> pure previous
       | otherwise -> do
           details <- holderDetails pid
           confirmed <- queryKernelOwner fd
-          announce previous (OwnerReported pid (if confirmed == KernelOwner pid then details else Nothing))
-    Right KernelUnlocked -> announce previous OwnerNone
-    Right KernelUnknown -> announce previous OwnerUnknown
-    Left _ -> announce previous OwnerUnknown
+          case confirmed of
+            KernelOwner confirmedPid
+              | confirmedPid == pid -> announce previous current details True
+              | otherwise -> announce previous (KernelOwner confirmedPid) Nothing False
+            KernelUnlocked -> announce previous KernelUnlocked Nothing True
+            KernelUnknown -> announce previous KernelUnknown Nothing True
+    _ -> announce previous current Nothing True
   where
-    announce lastSample sample =
-      if lastSample == Just (ownerPid sample)
-        then pure lastSample
-        else do
-          (hPutStrLn stderr (renderContention directory sample) >> hFlush stderr)
+    settled (Just announced) owner =
+      announcedKernel announced == owner && announcedSettled announced
+    settled _ _ = False
+    announce lastOwner owner details ready =
+      case lastOwner of
+        Just announced
+          | announcedKernel announced == owner
+              && (announcedSettled announced || not ready) -> pure lastOwner
+        _ -> do
+          (hPutStrLn stderr (renderContention directory (sampleOf owner details)) >> hFlush stderr)
             `catchIOError` \_ -> pure ()
-          pure (Just (ownerPid sample))
+          pure (Just (AnnouncedOwner owner ready))
 
-ownerPid :: OwnerSample -> Maybe ProcessID
-ownerPid OwnerNone = Nothing
-ownerPid OwnerUnknown = Nothing
-ownerPid (OwnerReported pid _) = Just pid
+sampleOf :: KernelOwner -> Maybe HolderDetails -> OwnerSample
+sampleOf (KernelOwner pid) details = OwnerReported pid details
+sampleOf KernelUnlocked _ = OwnerNone
+sampleOf KernelUnknown _ = OwnerUnknown
 
 queryKernelOwner :: Fd -> IO KernelOwner
 queryKernelOwner fd = do
@@ -295,44 +315,62 @@ queryKernelOwner fd = do
 -- entries stay absent; no lookup failure is an ownership fact.
 holderDetails :: ProcessID -> IO (Maybe HolderDetails)
 holderDetails pid = do
-  command <- boundedText 64 ("/proc" </> show pid </> "comm")
+  command <- processName pid
   directory <- try (readSymbolicLink ("/proc" </> show pid </> "cwd")) :: IO (Either IOException FilePath)
   outputBase <- processOutputBase pid
   let details = HolderDetails
-        (sanitizeText 64 . trim <$> command)
+        command
         (either (const Nothing) (Just . sanitizeText 512) directory)
         outputBase
   pure $ case details of
-    HolderDetails Nothing Nothing Nothing -> Nothing
+    HolderDetails Nothing Nothing NoOutputBase -> Nothing
     _ -> Just details
 
-processOutputBase :: ProcessID -> IO (Maybe FilePath)
+processName :: ProcessID -> IO (Maybe String)
+processName pid = do
+  contents <- boundedBytes 64 ("/proc" </> show pid </> "comm")
+  pure (sanitizeText 64 . trim . ByteString8.unpack <$> contents)
+
+outputBaseFlag :: ByteString.ByteString
+outputBaseFlag = ByteString8.pack "--output_base="
+
+processOutputBase :: ProcessID -> IO OutputBase
 processOutputBase pid = do
-  contents <- boundedText 4096 ("/proc" </> show pid </> "cmdline")
-  pure $ contents >>= \text ->
-    listToMaybe
-      [ sanitizeText 512 base
-      | argument <- nulSeparated text
-      , Just base <- [stripPrefix "--output_base=" argument]
-      , not (null base)
-      ]
+  contents <- boundedBytes 4096 ("/proc" </> show pid </> "cmdline")
+  pure $ case contents of
+    Nothing -> OutputBaseUnavailable
+    Just bytes ->
+      let values =
+            [ value
+            | argument <- completeArguments bytes
+            , Just value <- [ByteString8.stripPrefix outputBaseFlag argument]
+            , not (ByteString.null value)
+            ]
+          truncated = outputBaseFlag `ByteString.isPrefixOf` incompleteTail bytes
+      in case reverse values of
+        value : _ | ByteString.length value > 512 -> OutputBaseUnavailable
+                  | truncated -> OutputBaseUnavailable
+                  | otherwise -> OutputBaseObserved (sanitizeText 512 (ByteString8.unpack value))
+        [] | truncated -> OutputBaseUnavailable
+           | otherwise -> NoOutputBase
 
-nulSeparated :: String -> [String]
-nulSeparated text = case break (== '\0') text of
-  (argument, []) -> [argument]
-  (argument, _ : rest) -> argument : nulSeparated rest
-
-boundedText :: Int -> FilePath -> IO (Maybe String)
-boundedText limit path = do
-  result <- try (withFile path ReadMode (\handle -> gather handle limit [])) :: IO (Either IOException String)
-  pure (either (const Nothing) Just result)
+-- | Complete NUL-terminated argv tokens only; the tail after the last NUL is
+-- kept separately because the bounded read may have cut inside it.
+completeArguments :: ByteString.ByteString -> [ByteString.ByteString]
+completeArguments bytes = filter (not . ByteString.null) (dropLast (ByteString.split 0 bytes))
   where
-    gather _ 0 acc = pure (reverse acc)
-    gather handle remaining acc = do
-      next <- try (hGetChar handle) :: IO (Either IOException Char)
-      case next of
-        Left _ -> pure (reverse acc)
-        Right character -> gather handle (remaining - 1) (character : acc)
+    dropLast [] = []
+    dropLast [_] = []
+    dropLast (argument : rest) = argument : dropLast rest
+
+incompleteTail :: ByteString.ByteString -> ByteString.ByteString
+incompleteTail bytes = ByteString.reverse (ByteString.takeWhile (/= 0) (ByteString.reverse bytes))
+
+boundedBytes :: Int -> FilePath -> IO (Maybe ByteString.ByteString)
+boundedBytes limit path = do
+  result <- try (withBinaryFile path ReadMode (\handle -> ByteString.hGet handle (limit + 1)))
+    :: IO (Either IOException ByteString.ByteString)
+  pure (either (const Nothing) Just result)
 
 sanitizeText :: Int -> String -> String
 sanitizeText limit = take limit . map (\character -> if isPrint character then character else '?')
@@ -349,7 +387,13 @@ holderText (OwnerReported pid (Just details)) =
   "holder pid=" ++ show pid
     ++ maybe "" (\name -> " command=" ++ name) (holderCommand details)
     ++ maybe "" (\path -> " cwd=" ++ path) (holderDirectory details)
-    ++ maybe "" (\base -> " output_base=" ++ base ++ " command_log=" ++ (base </> "command.log")) (holderOutputBase details)
+    ++ outputBaseText (holderOutputBase details)
+
+outputBaseText :: OutputBase -> String
+outputBaseText NoOutputBase = ""
+outputBaseText OutputBaseUnavailable = " output_base=unavailable"
+outputBaseText (OutputBaseObserved base) =
+  " output_base=" ++ base ++ " command_log=" ++ (base </> "command.log")
 
 -- | Stops the scope of this lock's previous holder when its processes outlived
 -- the holder, then records @unit@ as the current holder's scope.
