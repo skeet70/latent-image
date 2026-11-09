@@ -67,7 +67,7 @@ editBytes (Edit _ bytes) = bytes
 
 data PieceKind = FirstStage | Record2Link | PrimaryPublisher | LoaderOrchestrationB | LoaderStartup | TaskSubmission | TaskStorage
   | IdleTask | RootTask | Image5Producer | PlainProducer | GeneralHeap | ApplicationPump | Task1Actor | Image5Initializer | TaskConstructors
-  | KernelSlotBodies | Timer
+  | KernelSlotBodies | Timer | AppCallback
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 pieceKindName :: PieceKind -> Text
@@ -90,11 +90,12 @@ pieceKindName kind = case kind of
   TaskConstructors -> "task-constructors"
   KernelSlotBodies -> "kernel-slot-bodies"
   Timer -> "timer"
+  AppCallback -> "app-callback"
 
 data Area = FirstStageArea | SecondaryStageArea | LoaderPrefixArea | InterfaceInitializerArea | CriticalPairArea | PrimaryInitializerArea
   | LoaderOrchestrationAArea | LoaderOrchestrationBArea | PhaseDispatcherArea | KernelInstallArea | TaskSubmissionArea | TaskStorageArea
   | IdleTaskArea | RootTaskArea | Image5ProducerArea | PlainProducerArea | GeneralHeapArea | ApplicationPumpArea | Task1ActorArea | Image5InitializerArea | TaskConstructorsArea
-  | KernelSlotBodiesArea | TimerArea
+  | KernelSlotBodiesArea | TimerArea | AppCallbackArea
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 areaName :: Area -> Text
@@ -122,6 +123,7 @@ areaName area = case area of
   TaskConstructorsArea -> "task-constructors"
   KernelSlotBodiesArea -> "kernel-slot-bodies"
   TimerArea -> "timer"
+  AppCallbackArea -> "app-callback"
 
 data FootprintBasis = AdmissionRead | RuntimePremise deriving (Eq, Ord, Show)
 
@@ -387,6 +389,8 @@ data PieceFacts
   | KernelSlotFacts [KernelSlot] [KernelSlotBody]
   -- | Both loaders' linked timer images and their owned arena spans.
   | TimerFacts LinkedBytes LinkedBytes PoolSpan PoolSpan
+  -- | The linked app callback image and its own deepest frame below the root call SP.
+  | AppCallbackFacts LinkedBytes StackDepth
   deriving (Eq, Show)
 
 data Piece = Piece

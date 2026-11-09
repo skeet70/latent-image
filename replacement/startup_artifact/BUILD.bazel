@@ -270,6 +270,8 @@ _J5_IMAGES = _J4_IMAGES + [
     "//replacement/idle_task:idle-task-image.symbols",
     "//replacement/root_task:root-task-image.bin",
     "//replacement/root_task:root-task-image.symbols",
+    "//replacement/rtos_cyclic:app-callback.bin",
+    "//replacement/rtos_cyclic:app-callback.symbols",
 ]
 
 # Canonical inputs come from private-data:
