@@ -42,6 +42,8 @@ SECTIONS {
     __s3d_release_waiting_end = .;
     KEEP(*(.text.*release_queued*))
     __s3d_release_queued_end = .;
+    KEEP(*(.text.*release*))
+    __s3d_release_core_end = .;
     KEEP(*(.text))
     KEEP(*(.rodata .rodata.*))
     . = ORIGIN(bodies) + LENGTH(bodies);
