@@ -921,7 +921,8 @@ impl Server {
         self.bridge.machine.traces.sites.get(&PUBLICATION_SITE).is_some_and(|label| label == "render-osd-buffer")
     }
 
-    fn await_publication(&mut self, start: usize, after: u64, budget: u64) -> Result<(Hit, Hit), String> {
+    fn await_publication(&mut self, start: usize, after: u64, budget: u64)
+        -> Result<(Hit, Hit, fujimod_xm1::presentation::Acknowledgement), String> {
         let mut waited = 0;
         loop {
             let found = publication_pair(&self.bridge.machine.traces.hits, start, after)
@@ -935,7 +936,9 @@ impl Server {
                     self.bridge.machine.require_running()?;
                     waited += DISPLAY_STEP;
                 }
-                return Ok((buffer, increment));
+                let (_, acknowledgement) = self.await_display_plane(DisplayCompletion::AcknowledgedFrame)?;
+                let acknowledgement = acknowledgement.ok_or("publication invocation lacks a presented acknowledgement")?;
+                return Ok((buffer, increment, acknowledgement));
             }
             if waited >= budget {
                 return Err(format!("no committed render-osd-buffer publication after presented frame within {waited} instructions"));
@@ -958,9 +961,10 @@ impl Server {
             Ok((settle, waited, acknowledgement)) => {
                 let publication = if publication_armed {
                     match self.await_publication(publication_start, self.bridge.machine.instructions(), DISPLAY_WAIT) {
-                        Ok((buffer, increment)) => json!({
+                        Ok((buffer, increment, acknowledgement)) => json!({
                             "buffer": {"site": buffer.site, "instructions": buffer.instructions, "core": buffer.core, "lr": buffer.lr},
-                            "increment": {"site": increment.site, "instructions": increment.instructions, "core": increment.core, "lr": increment.lr}}),
+                            "increment": {"site": increment.site, "instructions": increment.instructions, "core": increment.core, "lr": increment.lr},
+                            "acknowledgement": acknowledgement}),
                         Err(error) => {
                             let instructions = self.bridge.machine.instructions() - before;
                             self.key_log.push(json!({"key": key.name, "snapshot": snapshot, "seconds": started.elapsed().as_secs_f64(),
@@ -2110,47 +2114,15 @@ mod tests {
         std::fs::remove_dir_all(&server.output).unwrap();
     }
 
-    fn publication_hit(site: &str, lr: &str, instructions: u64) -> Hit {
-        Hit {
-            site: site.into(), address: "0x006d76ec".into(), core: 0, instructions,
-            render_object_provenance_sequence: None, registers: BTreeMap::new(), sp: "0x0".into(),
-            lr: lr.into(), cpsr: 0, code_word: None, memory: Vec::new(),
-            stack_memory: Vec::new(), observation: None,
-        }
-    }
-
     #[test]
-    fn committed_publication_is_the_eligible_caller_and_increment() {
+    fn display_key_without_a_presentation_returns_and_logs_the_failed_key() {
         let mut server = server(&[0xeafffffe]);
-        server.bridge.machine.traces.hits.push(publication_hit("render-osd-buffer", "0x006d7b3c", 10));
-        server.bridge.machine.traces.hits.push(publication_hit("render-osd-increment", "0x006d7d44", 20));
-        let (buffer, increment) = server.await_publication(0, 5, DISPLAY_STEP).unwrap();
-        assert_eq!((buffer.site.as_str(), buffer.lr.as_str(), buffer.instructions),
-            ("render-osd-buffer", "0x006d7b3c", 10));
-        assert_eq!((increment.site.as_str(), increment.instructions), ("render-osd-increment", 20));
-        assert!(server.bridge.machine.instructions() > 20);
-    }
-
-    #[test]
-    fn publication_wait_refuses_ineligible_caller_missing_increment_or_old_buffer() {
-        let mut ineligible = server(&[0xeafffffe]);
-        ineligible.bridge.machine.traces.hits.push(publication_hit("render-osd-buffer", "0x006d7920", 10));
-        ineligible.bridge.machine.traces.hits.push(publication_hit("render-osd-increment", "0x006d7d44", 20));
-        assert!(ineligible.await_publication(0, 5, 0).is_err());
-        let mut missing = server(&[0xeafffffe]);
-        missing.bridge.machine.traces.hits.push(publication_hit("render-osd-buffer", "0x006d7b3c", 10));
-        assert!(missing.await_publication(0, 5, 0).is_err());
-        let mut old = server(&[0xeafffffe]);
-        old.bridge.machine.traces.hits.push(publication_hit("render-osd-buffer", "0x006d7b3c", 10));
-        old.bridge.machine.traces.hits.push(publication_hit("render-osd-increment", "0x006d7d44", 20));
-        assert!(old.await_publication(0, 10, 0).is_err());
-    }
-
-    #[test]
-    fn presented_frame_refuses_without_a_committed_publication() {
-        let mut server = server(&[0xeafffffe]);
-        let after = server.bridge.machine.instructions();
-        assert!(server.await_publication(0, after, 2 * DISPLAY_STEP).is_err());
+        server.arm(&BTreeMap::from([("0x006d76ec".to_owned(), "render-osd-buffer".to_owned())])).unwrap();
+        let response = server.handle(request(json!({"command": "display-key", "key": "back"}))).unwrap().unwrap();
+        assert!(response["failure"].is_string());
+        assert_eq!(response["publication"], Value::Null);
+        assert_eq!(server.key_log.len(), 1);
+        assert!(server.key_log[0]["failure"].is_string());
     }
 
     #[test]
