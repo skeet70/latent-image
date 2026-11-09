@@ -41,7 +41,13 @@ data AccountingConfig = AccountingConfig
 
 data CoverageKind = PermissionDenied | MissingPath | ToolFailure | TimedOut | InvalidOutput | ScopeChanged deriving stock (Eq, Show, Generic) deriving anyclass (FromJSON, ToJSON)
 data CoverageIssue = CoverageIssue { issuePath :: StoragePath, issueKind :: CoverageKind, issueDetail :: Text } deriving stock (Eq, Show, Generic) deriving anyclass (FromJSON, ToJSON)
-data DirectoryMeasurement = DirectoryMeasurement { directoryPath :: StoragePath, directoryAllocatedBytes :: ByteCount } deriving stock (Eq, Show, Generic) deriving anyclass (FromJSON, ToJSON)
+data DirectoryMeasurement = DirectoryMeasurement { directoryPath :: StoragePath, directoryAllocatedBytes :: ByteCount, directoryScanRoot :: RootId } deriving stock (Eq, Show, Generic) deriving anyclass (FromJSON, ToJSON)
+data ProducerAllocation = ProducerAllocation
+  { allocationProducer :: ProducerId
+  , allocationAllocatedBytes :: ByteCount
+  , allocationMeasuredPaths :: [StoragePath]
+  , allocationCoverageIssues :: [CoverageIssue]
+  } deriving stock (Eq, Show, Generic) deriving anyclass (FromJSON, ToJSON)
 data FilesystemMeasurement = FilesystemMeasurement
   { filesystemId :: FilesystemId
   , filesystemProbePath :: StoragePath
@@ -63,6 +69,7 @@ data AccountingSnapshot = AccountingSnapshot
   , snapshotStartedAt :: EpochSeconds
   , snapshotCompletedAt :: EpochSeconds
   , snapshotDirectories :: [DirectoryMeasurement]
+  , snapshotProducerAllocations :: [ProducerAllocation]
   , snapshotFilesystems :: [FilesystemMeasurement]
   , snapshotBtrfsCapacity :: [BtrfsCapacity]
   , snapshotCoverageIssues :: [CoverageIssue]
@@ -88,3 +95,6 @@ data AccountingState = AccountingState
   , stateBudgets :: [BudgetResult]
   , stateLowSpace :: Bool
   } deriving stock (Eq, Show, Generic) deriving anyclass (FromJSON, ToJSON)
+
+data SampleStatus = SampleComplete | SampleIncomplete deriving stock (Eq, Show, Generic) deriving anyclass (FromJSON, ToJSON)
+data CheckStatus = CheckHealthy | CheckUnhealthy deriving stock (Eq, Show, Generic) deriving anyclass (FromJSON, ToJSON)

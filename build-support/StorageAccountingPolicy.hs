@@ -1,18 +1,20 @@
 {-# LANGUAGE OverloadedStrings #-}
--- | Shared extents are not deducted from allocated-footprint budgets.
+-- | Byte budgets are judged from one per-producer allocation measurement over that
+-- producer's selected path union. Directory rows remain for discovery and copy
+-- counting only.
 module StorageAccountingPolicy
   ( checkAccounting
   , evaluateBudgets
   , validateProducerBudgets
   ) where
 
-import Data.List (intercalate, isPrefixOf)
+import Data.List (intercalate, isPrefixOf, nub)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (isJust, isNothing)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
-import System.FilePath (isAbsolute, joinPath, normalise, splitDirectories, takeFileName)
+import System.FilePath (isAbsolute, normalise, splitDirectories, takeFileName)
 import StorageAccountingTypes
 
 byteCountValue :: ByteCount -> Integer
@@ -72,11 +74,6 @@ isImmediateChild (StoragePath parent) (StoragePath child) =
   in length childComponents == length parentComponents + 1
        && parentComponents `isPrefixOf` childComponents
 
-properAncestors :: FilePath -> [FilePath]
-properAncestors path =
-  let components = pathComponents path
-  in [joinPath (take count components) | count <- [1 .. length components - 1]]
-
 childName :: FilePath -> Text
 childName = T.pack . takeFileName . normalise
 
@@ -90,10 +87,98 @@ data RowIndex = RowIndex
 
 indexRows :: [DirectoryMeasurement] -> RowIndex
 indexRows measurements =
-  let grouped = Map.fromListWith (++) [(normalise path, [bytes]) | DirectoryMeasurement (StoragePath path) bytes <- measurements]
+  let grouped = Map.fromListWith (++) [(normalise path, [bytes]) | DirectoryMeasurement (StoragePath path) bytes _ <- measurements]
       bytesByPath = Map.map minimum grouped
       duplicates = [path | (path, values) <- Map.toList grouped, length values > 1]
   in RowIndex bytesByPath duplicates
+
+data AllocationIndex = AllocationIndex (Map.Map ProducerId [ProducerAllocation])
+
+indexAllocations :: [ProducerAllocation] -> AllocationIndex
+indexAllocations allocations =
+  AllocationIndex (Map.fromListWith (++) [(allocationProducer allocation, [allocation]) | allocation <- allocations])
+
+allocationsFor :: AllocationIndex -> ProducerId -> [ProducerAllocation]
+allocationsFor (AllocationIndex records) pid = Map.findWithDefault [] pid records
+
+ownedScopes :: ProducerBudget -> [FilePath] -> [StoragePath]
+ownedScopes budget copyPaths = producerPaths budget ++ map StoragePath copyPaths
+
+nestedScanRoots :: AccountingConfig -> [StoragePath] -> [StoragePath]
+nestedScanRoots config owned =
+  [ scanRootPath root
+  | root <- accountingScanRoots config
+  , any (\scope -> containsStoragePath scope (scanRootPath root)) owned
+  ]
+
+requiredMeasuredPaths :: AccountingConfig -> ProducerBudget -> [FilePath] -> [StoragePath]
+requiredMeasuredPaths config budget copyPaths =
+  let owned = ownedScopes budget copyPaths
+  in Set.toList (Set.fromList (owned ++ nestedScanRoots config owned))
+
+measuredPathSet :: [ProducerAllocation] -> Set.Set FilePath
+measuredPathSet allocations =
+  Set.fromList [normalise (storagePathValue path) | allocation <- allocations, path <- allocationMeasuredPaths allocation]
+
+measurementCovers :: Set.Set FilePath -> FilePath -> Bool
+measurementCovers measured path =
+  Set.member path measured || any (`containsFilePath` path) (Set.toList measured)
+
+allocationLowerBound :: [ProducerAllocation] -> ByteCount
+allocationLowerBound allocations =
+  ByteCount (maximum (0 : [value | allocation <- allocations, let ByteCount value = allocationAllocatedBytes allocation, value >= 0]))
+
+data AllocationAssessment = AllocationAssessment
+  { assessmentLowerBound :: ByteCount
+  , assessmentComplete :: Bool
+  , assessmentProblems :: [String]
+  }
+
+assessAllocation :: AccountingConfig -> ProducerBudget -> [FilePath] -> [CoverageIssue] -> [ProducerAllocation] -> AllocationAssessment
+assessAllocation config budget copyPaths snapshotIssues records =
+  AllocationAssessment
+    { assessmentLowerBound = allocationLowerBound records
+    , assessmentComplete = single && null invalidProblems && null coverageProblems
+    , assessmentProblems = countProblems ++ invalidProblems ++ coverageProblems
+    }
+ where
+  label = "producer " ++ show (producerIdValue (producerId budget)) ++ ": "
+  single = case records of
+    [_] -> True
+    _ -> False
+  countProblems = case records of
+    [] -> [label ++ "no per-producer allocation measurement; byte usage is not attributed"]
+    [_] -> []
+    _ -> [label ++ show (length records) ++ " per-producer allocation measurements; exactly one is required"]
+  invalidProblems =
+    [ label ++ "allocation has negative allocated bytes: " ++ show value
+    | allocation <- records
+    , let ByteCount value = allocationAllocatedBytes allocation
+    , value < 0
+    ]
+      ++ [ label ++ "allocation coverage issue: " ++ describeIssue issue
+         | allocation <- records
+         , issue <- allocationCoverageIssues allocation
+         ]
+  measured = measuredPathSet records
+  owned = ownedScopes budget copyPaths
+  nested = Set.fromList (map (normalise . storagePathValue) (nestedScanRoots config owned))
+  coverageProblems =
+    (if single then concatMap requiredProblem (requiredMeasuredPaths config budget copyPaths) else [])
+      ++ [ label ++ "coverage issue under producer measurement scope: " ++ describeIssue issue
+         | issue <- nub [scopeIssue | scope <- owned, scopeIssue <- issuesUnder scope snapshotIssues]
+         ]
+  requiredProblem path
+    | Set.member normalized nested =
+        [ label ++ "allocation does not explicitly measure nested scan root " ++ storagePathValue path
+        | not (Set.member normalized measured)
+        ]
+    | otherwise =
+        [ label ++ "allocation does not measure required path " ++ storagePathValue path
+        | not (measurementCovers measured normalized)
+        ]
+   where
+    normalized = normalise (storagePathValue path)
 
 duplicateProducerProblems :: [ProducerBudget] -> [String]
 duplicateProducerProblems budgets =
@@ -171,12 +256,6 @@ validateProducerBudgets config =
  where
   budgets = accountingBudgets config
 
-selectTopmost :: [(FilePath, ByteCount)] -> [(FilePath, ByteCount)]
-selectTopmost rows =
-  let measuredPaths = Set.fromList (map fst rows)
-      topmost (path, _) = not (any (`Set.member` measuredPaths) (properAncestors path))
-  in filter topmost rows
-
 issuesUnder :: StoragePath -> [CoverageIssue] -> [CoverageIssue]
 issuesUnder scope =
   filter (\(CoverageIssue path _ _) -> containsStoragePath scope path || containsStoragePath path scope)
@@ -189,10 +268,6 @@ hasExactRow :: RowIndex -> StoragePath -> Bool
 hasExactRow index scope =
   Map.member (normalise (storagePathValue scope)) (rowIndexBytes index)
 
-hasAnyRowUnder :: RowIndex -> StoragePath -> Bool
-hasAnyRowUnder index scope =
-  any (\(path, _) -> containsStoragePath scope (StoragePath path)) (Map.toList (rowIndexBytes index))
-
 copyDepthCovered :: AccountingConfig -> StoragePath -> Bool
 copyDepthCovered config parent =
   any covered (accountingScanRoots config)
@@ -200,25 +275,6 @@ copyDepthCovered config parent =
   covered (ScanRoot _ root depth) =
     containsStoragePath root parent
       && length (pathComponents (storagePathValue parent)) - length (pathComponents (storagePathValue root)) + 1 <= depth
-
-byteScopeCovered :: RowIndex -> [CoverageIssue] -> StoragePath -> Bool
-byteScopeCovered index issues scope =
-  hasExactRow index scope && null (issuesUnder scope issues)
-
-byteScopeProblems :: RowIndex -> [CoverageIssue] -> StoragePath -> [String]
-byteScopeProblems index issues scope
-  | hasExactRow index scope = issueProblems
-  | hasAnyRowUnder index scope =
-      [ "producer path " ++ storagePathValue scope ++ " has no directory measurement; byte usage is a partial lower bound"
-      ] ++ issueProblems
-  | otherwise =
-      [ "no directory measurement covers producer path " ++ storagePathValue scope ++ "; byte usage is not attributed"
-      ] ++ issueProblems
- where
-  issueProblems =
-    [ "coverage issue under producer path " ++ storagePathValue scope ++ ": " ++ describeIssue issue
-    | issue <- issuesUnder scope issues
-    ]
 
 copyScopeCovered :: AccountingConfig -> RowIndex -> [CoverageIssue] -> CopyScope -> Bool
 copyScopeCovered config index issues scope =
@@ -301,30 +357,14 @@ rowRelevant budget path =
   any (\scope -> containsStoragePath scope (StoragePath path)) (producerPaths budget)
     || any (\scope -> scopeChild scope path) (producerCopyScopes budget)
 
-evaluateProducer :: AccountingConfig -> Bool -> [String] -> ProducerBudget -> RowIndex -> [CoverageIssue] -> BudgetResult
-evaluateProducer config filesystemOnly globalProblems budget index issues =
+evaluateProducer :: AccountingConfig -> Bool -> [String] -> ProducerBudget -> RowIndex -> AllocationIndex -> [CoverageIssue] -> BudgetResult
+evaluateProducer config filesystemOnly globalProblems budget index allocations issues =
   let pid = producerId budget
       paths = producerPaths budget
       scopes = producerCopyScopes budget
       byteBudget = producerByteBudget budget
       copyBudget = producerCopyBudget budget
       bytesByPath = rowIndexBytes index
-      matchingRows =
-        [ (path, bytes)
-        | (path, bytes) <- Map.toList bytesByPath
-        , any (\scope -> containsStoragePath scope (StoragePath path)) paths
-            || any (\scope -> scopeChild scope path) scopes
-        ]
-      topmostRows = selectTopmost matchingRows
-      observedBytes = ByteCount (sum [byteCountValue bytes | (_, bytes) <- topmostRows])
-      producerPathsCovered =
-        all (byteScopeCovered index issues) paths
-          && (not (null paths) || not (null scopes) || isNothing byteBudget)
-      copyScopesCovered =
-        all (copyScopeCovered config index issues) scopes
-          && (not (null scopes) || isNothing copyBudget)
-      byteCovered = producerPathsCovered && copyScopesCovered
-      copyCovered = copyScopesCovered
       copyPaths =
         Set.fromList
           [ path
@@ -332,10 +372,21 @@ evaluateProducer config filesystemOnly globalProblems budget index issues =
           , (path, _) <- Map.toList bytesByPath
           , scopeChild scope path
           ]
+      assessment = assessAllocation config budget (Set.toList copyPaths) issues (allocationsFor allocations pid)
+      observedBytes = assessmentLowerBound assessment
+      producerPathsCovered =
+        assessmentComplete assessment
+          && (not (null paths) || not (null scopes) || isNothing byteBudget)
+      copyScopesCovered =
+        all (copyScopeCovered config index issues) scopes
+          && (not (null scopes) || isNothing copyBudget)
+      byteCovered = producerPathsCovered && copyScopesCovered
+      copyCovered = copyScopesCovered
       observedCopies = CopyCount (fromIntegral (Set.size copyPaths))
       bothThresholdsAbsent = isNothing byteBudget && isNothing copyBudget
+      byteAccountingRelevant = isJust byteBudget || bothThresholdsAbsent
       coverageProblems =
-        concatMap (byteScopeProblems index issues) paths
+        (if byteAccountingRelevant then assessmentProblems assessment else [])
           ++ concatMap (copyScopeProblems config index issues) scopes
       relevantCoverage =
         filesystemOnly
@@ -368,12 +419,13 @@ evaluateProducer config filesystemOnly globalProblems budget index issues =
 
 evaluateBudgets :: AccountingConfig -> AccountingSnapshot -> [BudgetResult]
 evaluateBudgets config snapshot =
-  [ evaluateProducer config filesystemOnly globalProblems budget index (snapshotCoverageIssues snapshot)
+  [ evaluateProducer config filesystemOnly globalProblems budget index allocations (snapshotCoverageIssues snapshot)
   | budget <- accountingBudgets config
   ]
  where
   filesystemOnly = snapshotFilesystemOnly snapshot
   index = if filesystemOnly then RowIndex Map.empty [] else indexRows (snapshotDirectories snapshot)
+  allocations = if filesystemOnly then AllocationIndex Map.empty else indexAllocations (snapshotProducerAllocations snapshot)
   globalProblems =
     [ "filesystem-only snapshot has no directory measurements; producer budgets cannot be evaluated"
     | filesystemOnly
@@ -427,10 +479,27 @@ directoryProblems :: AccountingSnapshot -> [String]
 directoryProblems snapshot =
   concatMap (pathProblem "directory measurement path" . directoryPath) (snapshotDirectories snapshot)
     ++ [ "directory measurement has negative allocated bytes: " ++ storagePathValue path
-       | DirectoryMeasurement path bytes <- snapshotDirectories snapshot
+       | DirectoryMeasurement path bytes _ <- snapshotDirectories snapshot
        , byteCountValue bytes < 0
        ]
+    ++ [ "directory measurement has empty scan root id: " ++ storagePathValue (directoryPath measurement)
+       | measurement <- snapshotDirectories snapshot
+       , T.null (T.strip (rootIdValue (directoryScanRoot measurement)))
+       ]
     ++ duplicatePathProblemsFor "directory measurement" (map directoryPath (snapshotDirectories snapshot))
+
+producerAllocationProblems :: AccountingSnapshot -> [String]
+producerAllocationProblems snapshot =
+  concatMap allocationProblems (snapshotProducerAllocations snapshot)
+    ++ duplicateTextProblems "producer allocation" [producerIdValue (allocationProducer allocation) | allocation <- snapshotProducerAllocations snapshot]
+ where
+  allocationProblems allocation =
+    let label = "producer allocation " ++ show (producerIdValue (allocationProducer allocation)) ++ ": "
+        ByteCount value = allocationAllocatedBytes allocation
+    in [ label ++ "producer id is empty" | T.null (T.strip (producerIdValue (allocationProducer allocation))) ]
+         ++ [ label ++ "allocated bytes are negative: " ++ show value | value < 0 ]
+         ++ concatMap (pathProblem (label ++ "measured path")) (allocationMeasuredPaths allocation)
+         ++ duplicatePathProblemsFor (label ++ "measured path") (allocationMeasuredPaths allocation)
 
 filesystemMeasurementProblems :: AccountingConfig -> EpochSeconds -> EpochSeconds -> FilesystemMeasurement -> [String]
 filesystemMeasurementProblems config now completed measurement =
@@ -490,6 +559,7 @@ validateAccountingState config expected now state =
         ]
       , snapshotTimeProblems config now "current snapshot" current
       , directoryProblems current
+      , producerAllocationProblems current
       , filesystemProblems config now current
       ]
   validatePreviousSnapshot = case statePrevious state of
