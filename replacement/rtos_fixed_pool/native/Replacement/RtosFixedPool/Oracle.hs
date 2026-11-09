@@ -357,7 +357,7 @@ data Case = Case
   , caseResume :: Bool
   }
 
-data Image = Image {imageBase :: Word32, imageBytes :: B.ByteString, imageSymbols :: [Agg.AggregateSymbol]}
+data Image = Image {imageBase :: Word32, imageBytes :: B.ByteString, imageSymbols :: [Agg.AggregateSymbol], imagePlacements :: [Agg.SectionPlacement]}
 
 data Run = Run
   { runDomain :: Domain
@@ -1152,7 +1152,8 @@ ownedSpans domain role owned
 
 codeBounds :: Domain -> Role -> Image -> (Word32, Word32)
 codeBounds domain role owned =
-  let spans = extents domain ++ retained domain ++ (if role == OwnedRole then symbolSpans owned else [])
+  let placementSpans = [(Agg.placementAddress placement, Agg.placementBytes placement) | placement <- imagePlacements owned]
+      spans = extents domain ++ retained domain ++ (if role == OwnedRole then symbolSpans owned ++ placementSpans else [])
       scratch = if role == OwnedRole && aggregate owned then [] else [(bodyRegion, bodyLength)]
       base = minimum (map fst spans)
       top = maximum
@@ -1179,7 +1180,9 @@ mergeSpans spans = go (sortOn fst spans)
 codeBytes :: Domain -> Role -> Image -> Image -> B.ByteString
 codeBytes domain role loader owned = withDrivers $ case role of
   StockRole -> stockBytes
-  OwnedRole -> foldl patch stockBytes (ownedSpans domain role owned)
+  OwnedRole -> case aggregate owned of
+    True -> either error id (Agg.installPlacements base (foldl patch stockBytes (ownedSpans domain role owned)) aggregateImage (imagePlacements owned))
+    False -> foldl patch stockBytes (ownedSpans domain role owned)
   where
     (base, top) = codeBounds domain role owned
     bounds = extents domain ++ retained domain ++ (if role == OwnedRole then symbolSpans owned else [])

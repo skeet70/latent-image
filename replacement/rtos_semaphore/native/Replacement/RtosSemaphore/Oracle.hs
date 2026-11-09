@@ -354,7 +354,7 @@ data Case = Case
   , caseRestoresMask :: Bool
   }
 
-data Image = Image {imageBase :: Word32, imageBytes :: B.ByteString, imageSymbols :: [Agg.AggregateSymbol]}
+data Image = Image {imageBase :: Word32, imageBytes :: B.ByteString, imageSymbols :: [Agg.AggregateSymbol], imagePlacements :: [Agg.SectionPlacement]}
 
 data Run = Run
   { runDomain :: Domain
@@ -960,7 +960,8 @@ ownedSpans domain role owned
 
 codeBounds :: Domain -> Role -> Image -> [(Word32, Word32)] -> (Word32, Word32)
 codeBounds domain role owned extra =
-  let spans = extents domain ++ retained domain ++ extra ++ (if role == OwnedRole then symbolSpans owned else [])
+  let placementSpans = [(Agg.placementAddress placement, Agg.placementBytes placement) | placement <- imagePlacements owned]
+      spans = extents domain ++ retained domain ++ extra ++ (if role == OwnedRole then symbolSpans owned ++ placementSpans else [])
    in (minimum (map fst spans), maximum [address + size | (address, size) <- spans])
 
 mergeSpans :: [(Word32, Word32)] -> [(Word32, Word32)]
@@ -974,7 +975,7 @@ mergeSpans spans = go (sortOn fst spans)
       | otherwise = (start, end - start) : extend lo (lo + size) rest
 
 codeBytes :: Domain -> Role -> Image -> Image -> [(Word32, Word32)] -> B.ByteString
-codeBytes domain role loader owned extra = install (timerRemoval domain) timerStub (foldl patch original patches)
+codeBytes domain role loader owned extra = install (timerRemoval domain) timerStub withPlacements
   where
     (base, top) = codeBounds domain role owned extra
     slice image address size =
@@ -988,6 +989,10 @@ codeBytes domain role loader owned extra = install (timerRemoval domain) timerSt
        in B.take offset current <> bytes <> B.drop (offset + B.length bytes) current
     patches = ownedSpans domain role owned
     aggregateImage = Agg.AggregateImage (imageBase owned) (imageBytes owned)
+    withSymbols = foldl patch original patches
+    withPlacements
+      | role == OwnedRole, aggregate owned = either error id (Agg.installPlacements base withSymbols aggregateImage (imagePlacements owned))
+      | otherwise = withSymbols
     patch current (address, size)
       | role == OwnedRole, aggregate owned = install address (either error id (Agg.sliceAggregate aggregateImage address size)) current
       | otherwise = install address (slice owned address size) current

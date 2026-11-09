@@ -22,7 +22,7 @@ import System.FilePath ((</>))
 
 data Image = Image { imageBase :: Word32, imageBytes :: B.ByteString }
 
-data Aggregate = Aggregate { aggregateImage :: Agg.AggregateImage, aggregateSymbols :: [Agg.AggregateSymbol] }
+data Aggregate = Aggregate { aggregateImage :: Agg.AggregateImage, aggregateSymbols :: [Agg.AggregateSymbol], aggregatePlacements :: [Agg.SectionPlacement] }
 
 data Call = Create | Delete | Send | SendPoll | SendPollHandler | SendTimeout
           | ForceSend | ForceSendHandler | Receive | ReceivePoll | ReceiveTimeout
@@ -806,8 +806,9 @@ install image address bytes current =
 aggregateImageBytes :: Image -> Maybe Aggregate -> B.ByteString
 aggregateImageBytes image Nothing = imageBytes image
 aggregateImageBytes image (Just aggregate) =
-  foldl install (imageBytes image) (aggregateSymbols aggregate)
+  either error id (Agg.installPlacements (imageBase image) withSymbols (aggregateImage aggregate) (aggregatePlacements aggregate))
   where
+    withSymbols = foldl install (imageBytes image) (aggregateSymbols aggregate)
     install current symbol = either error id (Agg.installSymbol (imageBase image) current (aggregateImage aggregate) symbol)
 
 -- | The stock role runs the stock timer block; the owned role overlays the owned timer module at

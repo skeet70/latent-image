@@ -39,6 +39,8 @@ main = do
   aggregateASymbols <- optional "--aggregate-a-symbols"
   aggregateBBin <- optional "--aggregate-b-bin"
   aggregateBSymbols <- optional "--aggregate-b-symbols"
+  aggregateAPlacements <- optional "--aggregate-a-placements"
+  aggregateBPlacements <- optional "--aggregate-b-placements"
   resultsPath <- required "--results"
   reviewPath <- required "--review"
   facts <- either failH pure . parseFacts =<< B.readFile layoutPath
@@ -72,8 +74,8 @@ main = do
       ownedBImage = Image baseB ownedBBytes
       timerAImage = Image 0x44a50 timerABytes
       timerBImage = Image 0xd4a10 timerBBytes
-  aggregateA <- aggregateOf aggregateABin aggregateASymbols
-  aggregateB <- aggregateOf aggregateBBin aggregateBSymbols
+  aggregateA <- aggregateOf aggregateABin aggregateASymbols aggregateAPlacements
+  aggregateB <- aggregateOf aggregateBBin aggregateBSymbols aggregateBPlacements
   (runA, controlsA) <- runDomain runner cacheRoot (takeDirectory resultsPath </> "domain-a") facts DomainA aggregateA stockA ownedAImage timerAImage symbolsA
   (runB, controlsB) <- runDomain runner cacheRoot (takeDirectory resultsPath </> "domain-b") facts DomainB aggregateB stockB ownedBImage timerBImage symbolsB
   let runs = runA ++ runB
@@ -160,14 +162,17 @@ main = do
   forM_ failedControls $ \(domain, name, control) -> putStrLn (domain ++ " " ++ name ++ ": control failed: " ++ control)
   unless (null failures && null failedChecks && null failedControls) exitFailure
 
-aggregateOf :: Maybe FilePath -> Maybe FilePath -> IO (Maybe Aggregate)
-aggregateOf Nothing Nothing = pure Nothing
-aggregateOf (Just binPath) (Just symbolsPath) = do
+aggregateOf :: Maybe FilePath -> Maybe FilePath -> Maybe FilePath -> IO (Maybe Aggregate)
+aggregateOf Nothing Nothing _ = pure Nothing
+aggregateOf (Just binPath) (Just symbolsPath) placementsPath = do
   bytes <- B.readFile binPath
   symbols <- either failH pure . Agg.parseAggregateSymbols =<< B.readFile symbolsPath
+  placements <- case placementsPath of
+    Nothing -> pure []
+    Just path -> either failH pure . Agg.parsePlacements =<< B.readFile path
   image <- either failH pure (Agg.aggregateImage symbols bytes)
-  pure (Just (Aggregate image symbols))
-aggregateOf _ _ = failH "an aggregate bin needs its symbols"
+  pure (Just (Aggregate image symbols placements))
+aggregateOf _ _ _ = failH "an aggregate bin needs its symbols"
 
 optional :: String -> IO (Maybe FilePath)
 optional flag = do

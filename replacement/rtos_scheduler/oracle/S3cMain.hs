@@ -206,6 +206,9 @@ mergeSpans spans = go (sortOn fst spans)
 readSymbols :: FilePath -> IO [Agg.AggregateSymbol]
 readSymbols path = either fail pure . Agg.parseAggregateSymbols =<< B.readFile path
 
+readPlacements :: FilePath -> IO [Agg.SectionPlacement]
+readPlacements path = either fail pure . Agg.parsePlacements =<< B.readFile path
+
 optional :: [String] -> String -> IO (Maybe FilePath)
 optional args flag = case dropWhile (/= flag) args of
   [] -> pure Nothing
@@ -220,16 +223,19 @@ main = do
   bPath <- required args "--owned-b" >>= canonicalizePath
   symbolsAPath <- optional args "--symbols-a"
   symbolsBPath <- optional args "--symbols-b"
+  placementsAPath <- optional args "--placements-a"
+  placementsBPath <- optional args "--placements-b"
   aLoader <- required args "--loader-a" >>= canonicalizePath
   bLoader <- required args "--loader-b" >>= canonicalizePath
   work <- required args "--work" >>= canonicalizePath
   lookupEnv "BUILD_WORKSPACE_DIRECTORY" >>= mapM_ setCurrentDirectory
   createDirectoryIfMissing True work
   runnerBytes <- B.readFile runner
-  results <- forM [(A,aLoader,aPath,symbolsAPath),(B,bLoader,bPath,symbolsBPath)] $ \(domain,loaderPath,ownedPath,symbolsPath) -> do
+  results <- forM [(A,aLoader,aPath,symbolsAPath,placementsAPath),(B,bLoader,bPath,symbolsBPath,placementsBPath)] $ \(domain,loaderPath,ownedPath,symbolsPath,placementsPath) -> do
     loader <- B.readFile loaderPath
     owned <- B.readFile ownedPath
     symbols <- traverse readSymbols symbolsPath
+    placements <- traverse readPlacements placementsPath
     let digest = sha256Hex . sha256
         aggregate = case symbols of
           Just parsed -> not (null parsed)
@@ -243,13 +249,18 @@ main = do
         standaloneLoader = foldl (\bytes entry -> let address=entryAt domain entry in poke bytes (address-loaderBase domain) (B.take (extent entry) (B.drop (fromIntegral(address-ownedBase)) owned))) loader [minBound..maxBound]
         ownedLoader = case aggregateImage of
           Nothing -> standaloneLoader
-          Just image -> foldl (\bytes symbol -> either error id (Agg.installSymbol (loaderBase domain) bytes image symbol)) loader selected
+          Just image ->
+            let withSymbols = foldl (\bytes symbol -> either error id (Agg.installSymbol (loaderBase domain) bytes image symbol)) loader selected
+             in case placements of
+                  Just plans -> either error id (Agg.installPlacements (loaderBase domain) withSymbols image plans)
+                  Nothing -> withSymbols
         symbolSpans = [(Agg.symbolAddress symbol, Agg.symbolSize symbol) | symbol <- selected]
+        placementSpans = maybe [] (map (\placement -> (Agg.placementAddress placement, Agg.placementBytes placement))) placements
         stockFunctions = [(stockEntry domain at,size) | (at,size) <- [(0x439d8,60),(0x43a14,40),(0x43c48,92),(0x43ca4,124),(0x43d20,176),(0x44018,if domain == A then 44 else 48),(0x433e4,96),(0x43640,4)]] ++ [(entryAt domain e,fromIntegral(extent e)) | e <- [minBound .. maxBound]]
         ownedFunctions = if aggregate then mergeSpans (symbolSpans ++ stockFunctions) else stockFunctions
         stockBounds = (stockEntry domain 0x433e4, entryAt domain Enable + fromIntegral(extent Enable))
         ownedBounds = if aggregate
-          then (min (fst stockBounds) (minimum (map fst symbolSpans)), max (snd stockBounds) (maximum [address + size | (address, size) <- symbolSpans]))
+          then (min (fst stockBounds) (minimum (map fst (symbolSpans ++ placementSpans))), max (snd stockBounds) (maximum [address + size | (address, size) <- symbolSpans ++ placementSpans]))
           else stockBounds
     forM [minBound..maxBound] $ \entry -> do
       let grid = rows entry

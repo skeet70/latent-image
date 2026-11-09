@@ -4,7 +4,10 @@
 module Replacement.RtosPlatform.Aggregate
   ( AggregateImage (..)
   , AggregateSymbol (..)
+  , SectionPlacement (..)
   , parseAggregateSymbols
+  , parsePlacements
+  , installPlacements
   , aggregateImage
   , symbolsWithPrefixes
   , sliceAggregate
@@ -13,8 +16,10 @@ module Replacement.RtosPlatform.Aggregate
   ) where
 
 import Control.Monad (foldM)
+import Data.Aeson (FromJSON (..), eitherDecodeStrict', withObject, (.:))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
+import qualified Data.Text as T
 import Data.List (isPrefixOf, sortOn)
 import Data.Maybe (catMaybes)
 import Data.Word (Word32)
@@ -33,6 +38,47 @@ data AggregateImage = AggregateImage
   , imageBytes :: B.ByteString
   }
   deriving (Eq, Show)
+
+data SectionPlacement = SectionPlacement
+  { placementAddress :: Word32
+  , placementBytes :: Word32
+  , placementSection :: String
+  }
+  deriving (Eq, Show)
+
+instance FromJSON SectionPlacement where
+  parseJSON = withObject "placement" $ \o ->
+    SectionPlacement
+      <$> (o .: "address" >>= either fail pure . hexPlacement)
+      <*> o .: "bytes"
+      <*> o .: "section"
+
+newtype ParsedPlacements = ParsedPlacements [SectionPlacement]
+instance FromJSON ParsedPlacements where
+  parseJSON = withObject "placements" $ \o -> ParsedPlacements <$> o .: "placements"
+
+parsePlacements :: B.ByteString -> Either String [SectionPlacement]
+parsePlacements bytes = do
+  ParsedPlacements placements <- eitherDecodeStrict' bytes
+  pure placements
+
+hexPlacement :: T.Text -> Either String Word32
+hexPlacement text =
+  let raw = T.unpack text
+      digits = case raw of
+        '0' : 'x' : rest -> rest
+        '0' : 'X' : rest -> rest
+        _ -> raw
+   in case readHex digits of
+        [(value, "")] | value <= toInteger (maxBound :: Word32) -> Right (fromInteger value)
+        _ -> Left ("placement field is not a 32-bit hex word: " ++ raw)
+
+installPlacements :: Word32 -> B.ByteString -> AggregateImage -> [SectionPlacement] -> Either String B.ByteString
+installPlacements base current image = foldM install current
+  where
+    install bytes placement = do
+      section <- sliceAggregate image (placementAddress placement) (placementBytes placement)
+      installAt base bytes (placementAddress placement) section
 
 parseAggregateSymbols :: B.ByteString -> Either String [AggregateSymbol]
 parseAggregateSymbols bytes = catMaybes <$> mapM parseLine (filter (not . C.null) (C.lines bytes))

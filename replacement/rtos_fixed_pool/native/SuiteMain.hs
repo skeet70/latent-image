@@ -33,6 +33,8 @@ main = do
   loaderB <- required "--loader-b"
   ownedA <- required "--owned-a-bin"
   ownedB <- required "--owned-b-bin"
+  placementsAPath <- optional "--placements-a"
+  placementsBPath <- optional "--placements-b"
   symbolsA <- required "--owned-a-symbols"
   symbolsB <- required "--owned-b-symbols"
   resultsPath <- required "--results"
@@ -45,10 +47,12 @@ main = do
   ownedBSymbols <- parseSymbols <$> B.readFile symbolsB
   checkStorageBudget (takeDirectory resultsPath)
   createDirectoryIfMissing True cacheRoot
-  let stockA = Image 0x40000 loaderABytes []
-      stockB = Image 0xd0000 loaderBBytes []
-  ownedAImage <- ownedImage DomainA ownedABytes ownedASymbols
-  ownedBImage <- ownedImage DomainB ownedBBytes ownedBSymbols
+  placementsA <- traverse readPlacements placementsAPath
+  placementsB <- traverse readPlacements placementsBPath
+  ownedAImage <- ownedImage DomainA ownedABytes ownedASymbols placementsA
+  ownedBImage <- ownedImage DomainB ownedBBytes ownedBSymbols placementsB
+  let stockA = Image 0x40000 loaderABytes [] []
+      stockB = Image 0xd0000 loaderBBytes [] []
   runA <- runFamily runner cacheRoot (takeDirectory resultsPath </> "domain-a") facts DomainA stockA ownedAImage
   runB <- runFamily runner cacheRoot (takeDirectory resultsPath </> "domain-b") facts DomainB stockB ownedBImage
   let runs = [runA, runB]
@@ -124,15 +128,26 @@ expectedEntries domain =
 parseSymbols :: B.ByteString -> [Agg.AggregateSymbol]
 parseSymbols = either error id . Agg.parseAggregateSymbols
 
-ownedImage :: Domain -> B.ByteString -> [Agg.AggregateSymbol] -> IO Image
-ownedImage domain bytes symbols = case [Agg.symbolAddress symbol | symbol <- symbols, Agg.symbolName symbol == "xm1_rtos_fixed_pool_poll_unchecked"] of
+readPlacements :: FilePath -> IO [Agg.SectionPlacement]
+readPlacements path = either failH pure . Agg.parsePlacements =<< B.readFile path
+
+ownedImage :: Domain -> B.ByteString -> [Agg.AggregateSymbol] -> Maybe [Agg.SectionPlacement] -> IO Image
+ownedImage domain bytes symbols placements = case [Agg.symbolAddress symbol | symbol <- symbols, Agg.symbolName symbol == "xm1_rtos_fixed_pool_poll_unchecked"] of
   (address : _) | address == entries domain PollUnchecked -> do
     base <- origin domain (M.fromList [(Agg.symbolName symbol, Agg.symbolAddress symbol) | symbol <- symbols])
-    pure (Image base bytes [])
+    pure (Image base bytes [] [])
   _ -> do
     image <- either fail pure (Agg.aggregateImage symbols bytes)
     let selected = Agg.symbolsWithPrefixes ["xm1_rtos_fixed_pool_", "xm1_platform_veneer_fixed_pool_", "_RINvNtNtCs8O56LNNgKAo_25xm1_rtos_fixed_pool_stage"] symbols
-    pure (Image (Agg.imageBase image) (Agg.imageBytes image) selected)
+    pure (Image (Agg.imageBase image) (Agg.imageBytes image) selected (maybe [] id placements))
+
+optional :: String -> IO (Maybe FilePath)
+optional flag = do
+  arguments <- getArgs
+  case dropWhile (/= flag) arguments of
+    [] -> pure Nothing
+    [_] -> failH (flag ++ " needs a value")
+    _ : value : _ -> Just <$> makeAbsolute value
 
 required :: String -> IO FilePath
 required flag = do

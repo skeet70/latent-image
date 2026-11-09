@@ -33,7 +33,7 @@ type W = M.Map Word32 Word32
 
 data Role = Stock | Owned deriving (Eq, Show)
 
-data Aggregate = Aggregate Agg.AggregateImage [Agg.AggregateSymbol]
+data Aggregate = Aggregate Agg.AggregateImage [Agg.AggregateSymbol] [Agg.SectionPlacement]
 
 data Service = Terminate | ChangePriority | TimedSleep | ReleaseWait | HandlerRelease | Delay
   | Timeout | DelayCallback
@@ -496,9 +496,10 @@ helperRanges d =
 
 installAggregate :: Domain -> B.ByteString -> Maybe Aggregate -> B.ByteString
 installAggregate _ code Nothing = code
-installAggregate d code (Just (Aggregate image symbols)) =
-  foldl install code symbols
+installAggregate d code (Just (Aggregate image symbols placements)) =
+  either error id (Agg.installPlacements (loaderBase d) withSymbols image placements)
   where
+    withSymbols = foldl install code symbols
     install current symbol = either error id (Agg.installSymbol (loaderBase d) current image symbol)
 
 mergeSpans :: [(Word32, Word32)] -> [(Word32, Word32)]
@@ -552,7 +553,7 @@ specFor d role one loaderA loaderB aggregate owned = CaseSpec
       ++ [(bodyBase, 0x4000), (stubBase, 0x80), (switchOf d, 4)]
       ++ helperRanges d ++ helperRanges other
     aggregateFunctions = case (role, aggregate) of
-      (Owned, Just (Aggregate _ symbols)) -> [(Agg.symbolAddress symbol, Agg.symbolSize symbol) | symbol <- symbols]
+      (Owned, Just (Aggregate _ symbols _)) -> [(Agg.symbolAddress symbol, Agg.symbolSize symbol) | symbol <- symbols]
       _ -> []
     bodyBase = if d == DomainA then 0x50000 else 0xe0000
     code = case role of
@@ -616,14 +617,17 @@ judgeSelfTest = and
   , judgeOutcome (StoppedAt 0x1000 0xffffff18) StopAddress 0xffffff18 0x1000
   ]
 
-aggregateOf :: Maybe FilePath -> Maybe FilePath -> IO (Maybe Aggregate)
-aggregateOf Nothing Nothing = pure Nothing
-aggregateOf (Just binPath) (Just symbolsPath) = do
+aggregateOf :: Maybe FilePath -> Maybe FilePath -> Maybe FilePath -> IO (Maybe Aggregate)
+aggregateOf Nothing Nothing _ = pure Nothing
+aggregateOf (Just binPath) (Just symbolsPath) placementsPath = do
   bytes <- B.readFile binPath
   symbols <- either fail pure . Agg.parseAggregateSymbols =<< B.readFile symbolsPath
+  placements <- case placementsPath of
+    Nothing -> pure []
+    Just path -> either fail pure . Agg.parsePlacements =<< B.readFile path
   image <- either fail pure (Agg.aggregateImage symbols bytes)
-  pure (Just (Aggregate image symbols))
-aggregateOf _ _ = fail "an aggregate bin needs its symbols"
+  pure (Just (Aggregate image symbols placements))
+aggregateOf _ _ _ = fail "an aggregate bin needs its symbols"
 
 optionalArgument :: String -> IO (Maybe FilePath)
 optionalArgument name = do
@@ -642,8 +646,10 @@ main = do
   ownedB <- argument "--owned-b-bin"
   aggregateABin <- optionalArgument "--aggregate-a-bin"
   aggregateASymbols <- optionalArgument "--aggregate-a-symbols"
+  aggregateAPlacements <- optionalArgument "--aggregate-a-placements"
   aggregateBBin <- optionalArgument "--aggregate-b-bin"
   aggregateBSymbols <- optionalArgument "--aggregate-b-symbols"
+  aggregateBPlacements <- optionalArgument "--aggregate-b-placements"
   cacheRoot <- argument "--cache-root"
   results <- argument "--results"
   loaderABytes <- B.readFile loaderA
@@ -656,8 +662,8 @@ main = do
   unless (sha256Hex digestB == "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec") (fail "loader B is not the pinned image")
   createDirectoryIfMissing True cacheRoot
   createDirectoryIfMissing True (takeDirectory results)
-  aggregateA <- aggregateOf aggregateABin aggregateASymbols
-  aggregateB <- aggregateOf aggregateBBin aggregateBSymbols
+  aggregateA <- aggregateOf aggregateABin aggregateASymbols aggregateAPlacements
+  aggregateB <- aggregateOf aggregateBBin aggregateBSymbols aggregateBPlacements
   reports <- forM [(DomainA, loaderABytes, aggregateA, ownedABytes), (DomainB, loaderBBytes, aggregateB, ownedBBytes)] $ \(d, _loader, aggregate, owned) -> do
     let grid = cases d
         directory = takeDirectory results </> ("s3d-" ++ domainLabel d)

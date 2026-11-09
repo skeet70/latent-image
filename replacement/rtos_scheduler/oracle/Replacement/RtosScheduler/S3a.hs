@@ -77,7 +77,7 @@ poke at value region@(CaseRegion raw permission)
     offset = fromIntegral (at-base)
     bytes = C.regionBytes raw
 
-data Linked = Standalone B.ByteString | Aggregate B.ByteString [Agg.AggregateSymbol]
+data Linked = Standalone B.ByteString | Aggregate B.ByteString [Agg.AggregateSymbol] [Agg.SectionPlacement]
 
 makeSpec :: Env -> Domain -> B.ByteString -> Maybe Linked -> Service -> Scenario -> String -> CaseSpec
 makeSpec env domain loader owned service scenario label = spec
@@ -97,10 +97,14 @@ makeSpec env domain loader owned service scenario label = spec
     entry=fst (serviceExtent domain service)
     loaderBase=if domain==DomainA then 0x40000 else 0xd0000
     selected = case owned of
-      Just (Aggregate _ symbols) -> Agg.symbolsWithPrefixes ["xm1_s3a_", "xm1_platform_veneer_s3a_"] symbols
+      Just (Aggregate _ symbols _) -> Agg.symbolsWithPrefixes ["xm1_s3a_", "xm1_platform_veneer_s3a_"] symbols
       _ -> []
+    placements = case owned of
+      Just (Aggregate _ _ rows) -> rows
+      _ -> []
+    placementSpans = [(Agg.placementAddress placement, Agg.placementBytes placement) | placement <- placements]
     aggregateImage = case owned of
-      Just (Aggregate bin symbols) -> Just (Agg.AggregateImage (minimum (map Agg.symbolAddress symbols)) bin)
+      Just (Aggregate bin symbols _) -> Just (Agg.AggregateImage (minimum (map Agg.symbolAddress symbols)) bin)
       _ -> Nothing
     bytes=case owned of
       Nothing -> loader
@@ -108,21 +112,19 @@ makeSpec env domain loader owned service scenario label = spec
         where
           ownBase=fst (serviceExtent domain Exit)
           replace old s=let (at,size)=serviceExtent domain s; offset=fromIntegral (at-loaderBase); source=fromIntegral (at-ownBase) in B.take offset old <> B.take (fromIntegral size) (B.drop source bin) <> B.drop (offset+fromIntegral size) old
-      Just (Aggregate _ _) -> foldl' installSymbol loader selected
-        where
-          installSymbol old symbol = case aggregateImage of
-            Just image -> either error id (Agg.installSymbol loaderBase old image symbol)
-            Nothing -> old
+      Just (Aggregate _ _ rows) -> case aggregateImage of
+        Just image -> either error id (Agg.installPlacements loaderBase loader image rows)
+        Nothing -> loader
     slice :: Word32 -> Word32 -> B.ByteString
     slice at size=B.take (fromIntegral size) (B.drop (fromIntegral (at-loaderBase)) bytes)
     tableAt=if domain==DomainA then 0x4daa0 else 0xdda64
     helperBase=minimum (map fst helpers)
     helperEnd=maximum [at+size | (at,size)<-helpers]
     symbolSpans = [(Agg.symbolAddress symbol, Agg.symbolSize symbol) | symbol <- selected]
-    aggregateBase = minimum (map fst (symbolSpans ++ helpers))
-    aggregateTop = maximum [at+size | (at,size)<-symbolSpans ++ helpers]
+    aggregateBase = minimum (map fst (symbolSpans ++ helpers ++ placementSpans))
+    aggregateTop = maximum [at+size | (at,size)<-symbolSpans ++ helpers ++ placementSpans]
     body = case owned of
-      Just (Aggregate _ _) -> Body entry [(aggregateBase, slice aggregateBase (aggregateTop-aggregateBase))] [] [] [(tableAt,slice tableAt 16)]
+      Just (Aggregate _ _ _) -> Body entry [(aggregateBase, slice aggregateBase (aggregateTop-aggregateBase))] [] [] [(tableAt,slice tableAt 16)]
       _ -> Body entry [(entry,slice entry (snd (serviceExtent domain service))),(helperBase,slice helperBase (helperEnd-helperBase))] [] [] [(tableAt,slice tableAt 16)]
     spec=caseSpec env domain body label Rotate row
     rawRegions=map extendContext (caseRegions spec)
@@ -152,7 +154,7 @@ makeSpec env domain loader owned service scenario label = spec
     regions=foldl' (\rs (at,value)->map (poke at value) rs) (rawRegions++fixtureRegions) patches
     helpers=if domain==DomainA then [(0x439d8,0x3c),(0x43a14,0x28),(0x43c48,0x5c),(0x43ca4,0x7c),(0x43d20,0xb0),(0x43dd0,0x48),(0x43f70,0x2c),(0x44018,0x2c),(0x44134,0x80),(0x433e4,0x60)] else [(0xd398c,0x3c),(0xd39c8,0x28),(0xd3c04,0x5c),(0xd3c60,0x7c),(0xd3cdc,0xb0),(0xd3d8c,0x48),(0xd3f2c,0x2c),(0xd3fd4,0x30),(0xd40f4,0x80),(0xd33e4,0x60)]
     functions=(case owned of
-      Just (Aggregate _ _) -> [(address at,size) | (at,size)<-mergeSpans (symbolSpans ++ helpers)]
+      Just (Aggregate _ _ _) -> [(address at,size) | (at,size)<-mergeSpans (symbolSpans ++ helpers)]
       _ -> [(address at,size) | (at,size)<-serviceExtent domain service:helpers]) ++ fixtureFunctions
     (endStatus,stop)=expected env domain service scenario
     excluded=Cpsr : (if endStatus==InstructionBudget then [R0,R1,R2,R3,R4,R5,R6,R7,R8,R9,R10,R11,R12,Sp,Lr,Pc] else if stop/=Nothing then [R1,R2,R3,R4,R5,R6,R7,R8,R9,R10,R11,R12,Sp,Lr] else [R1,R2,R3,R12,Lr])

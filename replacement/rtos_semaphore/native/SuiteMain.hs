@@ -33,6 +33,8 @@ main = do
   ownedB <- required "--owned-b-bin"
   symbolsAPath <- optional "--symbols-a"
   symbolsBPath <- optional "--symbols-b"
+  placementsAPath <- optional "--placements-a"
+  placementsBPath <- optional "--placements-b"
   resultsPath <- required "--results"
   facts <- either fail pure . parseFacts =<< B.readFile layoutPath
   loaderABytes <- B.readFile loaderA
@@ -41,12 +43,14 @@ main = do
   ownedBBytes <- B.readFile ownedB
   symbolsA <- traverse (readSymbols) symbolsAPath
   symbolsB <- traverse (readSymbols) symbolsBPath
+  placementsA <- traverse readPlacements placementsAPath
+  placementsB <- traverse readPlacements placementsBPath
   checkStorageBudget (takeDirectory resultsPath)
   createDirectoryIfMissing True cacheRoot
-  let stockA = Image 0x40000 loaderABytes []
-      stockB = Image 0xd0000 loaderBBytes []
-      ownedAImage = ownedImage DomainA ownedABytes symbolsA
-      ownedBImage = ownedImage DomainB ownedBBytes symbolsB
+  let stockA = Image 0x40000 loaderABytes [] []
+      stockB = Image 0xd0000 loaderBBytes [] []
+      ownedAImage = ownedImage DomainA ownedABytes symbolsA placementsA
+      ownedBImage = ownedImage DomainB ownedBBytes symbolsB placementsB
   runA <- runFamily runner cacheRoot (takeDirectory resultsPath </> "domain-a") facts DomainA stockA ownedAImage
   runB <- runFamily runner cacheRoot (takeDirectory resultsPath </> "domain-b") facts DomainB stockB ownedBImage
   let runs = [runA, runB]
@@ -76,15 +80,18 @@ main = do
   forM_ failures $ \(name, message) -> putStrLn (name ++ ": " ++ message)
   unless (null failures) exitFailure
 
-ownedImage :: Domain -> B.ByteString -> Maybe [Agg.AggregateSymbol] -> Image
-ownedImage domain bytes Nothing = Image (minimum (map fst (extents domain))) bytes []
-ownedImage _ bytes (Just symbols) =
+ownedImage :: Domain -> B.ByteString -> Maybe [Agg.AggregateSymbol] -> Maybe [Agg.SectionPlacement] -> Image
+ownedImage domain bytes Nothing _ = Image (minimum (map fst (extents domain))) bytes [] []
+ownedImage _ bytes (Just symbols) placements =
   let image = either error id (Agg.aggregateImage symbols bytes)
       selected = Agg.symbolsWithPrefixes ["xm1_rtos_semaphore_", "xm1_platform_veneer_semaphore_"] symbols
-   in Image (Agg.imageBase image) (Agg.imageBytes image) selected
+   in Image (Agg.imageBase image) (Agg.imageBytes image) selected (maybe [] id placements)
 
 readSymbols :: FilePath -> IO [Agg.AggregateSymbol]
 readSymbols path = either fail pure . Agg.parseAggregateSymbols =<< B.readFile path
+
+readPlacements :: FilePath -> IO [Agg.SectionPlacement]
+readPlacements path = either fail pure . Agg.parsePlacements =<< B.readFile path
 
 optional :: String -> IO (Maybe FilePath)
 optional flag = do

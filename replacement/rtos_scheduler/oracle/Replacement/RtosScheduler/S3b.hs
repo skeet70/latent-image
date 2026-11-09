@@ -123,28 +123,36 @@ main = do
   let positional = stripSymbolFlags arguments
       symbolsA = flagValue "--symbols-a" arguments
       symbolsB = flagValue "--symbols-b" arguments
+      placementsA = flagValue "--placements-a" arguments
+      placementsB = flagValue "--placements-b" arguments
   case positional of
     [runner,loaderA,loaderB,binA,binB,work] -> do
       createDirectoryIfMissing True work
-      reports <- forM [(False,loaderA,binA,symbolsA),(True,loaderB,binB,symbolsB)] $ \(b,loaderPath,binPath,symbolsPath) -> do
+      reports <- forM [(False,loaderA,binA,symbolsA,placementsA),(True,loaderB,binB,symbolsB,placementsB)] $ \(b,loaderPath,binPath,symbolsPath,placementsPath) -> do
         stock <- B.readFile loaderPath
         owned <- B.readFile binPath
         symbols <- traverse readSymbols symbolsPath
+        placements <- traverse readPlacements placementsPath
         let delta=if b then 0x8ffc0 else 0; base=if b then 0xd0000 else 0x40000
             selected = maybe [] (Agg.symbolsWithPrefixes ["xm1_s3b_", "xm1_platform_veneer_s3b_"]) symbols
             aggregateImage = fmap (\rows -> Agg.AggregateImage (minimum (map Agg.symbolAddress rows)) owned) symbols
             patch s bytes = poke bytes [(entry s+delta-base,B.take (extent s) (B.drop (fromIntegral (entry s-entry Activate)) owned))]
             candidate = case aggregateImage of
               Nothing -> foldr patch stock [minBound..maxBound]
-              Just image -> foldl (\bytes symbol -> either error id (Agg.installSymbol base bytes image symbol)) stock selected
+              Just image ->
+                let withSymbols = foldl (\bytes symbol -> either error id (Agg.installSymbol base bytes image symbol)) stock selected
+                 in case placements of
+                      Just plans -> either error id (Agg.installPlacements base withSymbols image plans)
+                      Nothing -> withSymbols
             symbolSpans = [(Agg.symbolAddress symbol, Agg.symbolSize symbol) | symbol <- selected]
+            placementSpans = maybe [] (map (\placement -> (Agg.placementAddress placement, Agg.placementBytes placement))) placements
             helperSpans = helperFunctions b
             helperBase = if b then 0xd33e4 else 0x433e4
             helperSize = if b then 0x1210 else 0x1250
             stockCodeSpans s = [(entry s+delta, fromIntegral (extent s)), (helperBase, helperSize)]
             stockFunctionSpans s = (entry s+delta, fromIntegral (extent s)) : helperSpans
-            aggregateLo = minimum (map fst (symbolSpans ++ helperSpans))
-            aggregateHi = maximum [address + size | (address, size) <- symbolSpans ++ helperSpans]
+            aggregateLo = minimum (map fst (symbolSpans ++ helperSpans ++ placementSpans))
+            aggregateHi = maximum [address + size | (address, size) <- symbolSpans ++ helperSpans ++ placementSpans]
             ownedCodeSpans s = case symbols of
               Nothing -> stockCodeSpans s
               Just _ -> [(aggregateLo, aggregateHi-aggregateLo)]
@@ -186,6 +194,9 @@ mergeSpans spans = go (sortOn fst spans)
 
 readSymbols :: FilePath -> IO [Agg.AggregateSymbol]
 readSymbols path = either fail pure . Agg.parseAggregateSymbols =<< B.readFile path
+
+readPlacements :: FilePath -> IO [Agg.SectionPlacement]
+readPlacements path = either fail pure . Agg.parsePlacements =<< B.readFile path
 
 flagValue :: String -> [String] -> Maybe FilePath
 flagValue flag arguments = case dropWhile (/= flag) arguments of
