@@ -524,7 +524,7 @@ extraCases facts domain =
       , KernelWord (dfSchedulerLock (domainFacts facts domain)) 0
       , WordIs "entries" secondLockCell 0
       ]
-      [] []
+      [] [(2, 1), (4, 2)]
   ]
 
 initializeCases :: Facts -> Domain -> [Case]
