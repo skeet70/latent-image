@@ -207,6 +207,9 @@ main = do
   check "pane owned adapter completes at root wrapper return" (passes (paneRun [pane,hit "render-pane-adapter",paneReturned]))
   check "pane resident owned class cannot enter stock body" (not (passes (paneRun [pane,hit "render-pane-stock",paneReturned])))
   check "pane return requires adapter" (not (passes (paneRun [pane,paneReturned])))
+  let leaves = map hit ["render-pane-grid","render-pane-label-grid","render-pane-aligned","render-pane-cell-box","render-pane-bounds"]
+  check "pane leaf arguments are not draw boundaries" (passes (paneRun ([pane,hit "render-pane-adapter"] ++ leaves ++ [paneReturned])))
+  check "pane leaf arguments before an entry are ignored" (passes (paneRun (leaves ++ [pane,hit "render-pane-adapter",paneReturned])))
   check "pane draws provide coverage" (passes (checkRenderCoverage config [observation [pane]] [observation [pane]]))
   check "owned adapter draw accepted" (passes (run owned))
   check "stock body residency fails" (not (passes (run [entry TreeDraw,hit "render-tree-stock",returned])))
