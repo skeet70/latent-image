@@ -460,8 +460,7 @@ main = do
         let rowsTable = domainTable table domain
         stock <- orFailText (slotTag generationSlot ++ " stock") (stockBody domain rowsTable loader generationSlot)
         ownedSlot <- orFailText (slotTag generationSlot ++ " owned") (ownedBody ownedRows generationSlot)
-        code <- orFailText (controlName control) (controlCode domain rowsTable control)
-        controlBody <- orFailText (controlName control) (replaceEntry (tableFill table) code ownedSlot)
+        controlBody <- orFailText (controlName control) (buildControlBody (tableFill table) domain rowsTable control ownedSlot)
         runGeneratedDomain
           GeneratedInput
             { generatedRunner = runner
@@ -540,8 +539,7 @@ main = do
                 ]
           repeatOutcome <- if timingOnly then pure (outcomeOf stockRuns stockRuns) else outcomeOf stockRuns <$> run "stock-repeat" stock
           controlResults <- forM [control | not timingOnly, control <- equivalents ++ mutants, controlSlot control == slot] $ \control -> do
-            code <- orFailText (controlName control) (controlCode domain rowsTable control)
-            body <- orFailText (controlName control) (replaceEntry (tableFill table) code ownedSlot)
+            body <- orFailText (controlName control) (buildControlBody (tableFill table) domain rowsTable control ownedSlot)
             ControlResult (controlName control) (controlExpectation control) (controlNote control) . outcomeOf stockRuns
               <$> run (controlName control) body
           let controls = if timingOnly then [] else ControlResult "stock-repeat" MustPass "the stock body against itself" repeatOutcome : controlResults

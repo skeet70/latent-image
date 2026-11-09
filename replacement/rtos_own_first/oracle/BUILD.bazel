@@ -51,6 +51,7 @@ haskell_library(
 # Aggregate mode takes complete effective carrier slices from staged loaders through --aggregate-a-bin
 # and --aggregate-b-bin, with --aggregate-a-symbols/--aggregate-b-symbols and --placements-a/--placements-b.
 # Direct invocation accepts --carriers for the matching emitted union metadata.
+# Four-byte entry controls branch to separately assembled foreign code; positive carrier bytes remain unchanged.
 haskell_binary(
     name = "own-first-oracle",
     srcs = ["OracleMain.hs"],

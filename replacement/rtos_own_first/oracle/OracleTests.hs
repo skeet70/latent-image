@@ -143,7 +143,18 @@ aggregateAdmission table =
       accepted = do
         owned <- admit binary symbols placements
         bodies <- mapM (ownedBody owned) slots
-        pure (and
+        controls <- forM (mutants ++ equivalents) $ \control -> do
+          body <- ownedBody owned (controlSlot control)
+          subject <- buildControlBody 0xe7f000f0 DomainA table control body
+          let entry = bodyEntry body
+              offset = fromIntegral (entry - 0x40000)
+              unchanged image = B.take offset image == B.take offset expectedImage
+                && B.drop (offset + 4) image == B.drop (offset + 4) expectedImage
+          pure (bodyEntry subject == entry
+            && case lookup 0x40000 (bodyCode subject) of
+              Just image -> unchanged image && B.take 4 (B.drop offset image) /= B.take 4 (B.drop offset expectedImage)
+              Nothing -> False)
+        pure (and controls && and
           [ bodyEntry body == address && bodyCode body == [(0x40000, expectedImage)]
               && any (\(start, size) -> start <= 0x40008 && 0x40008 < start + size) (bodyFunctions body)
               && not (any (\(start, size) -> start <= 0x40004 && 0x40004 < start + size) (bodyFunctions body))
@@ -334,8 +345,9 @@ nativeChecks scope runner temporary fill domain table owned slot = do
           outcome <- outcomeOf reference <$> run "owned-repeat" body
           (: []) <$> report "owned-repeat" (ControlResult "owned-repeat" MustPass "the reference body against itself" outcome) outcome
         else pure []
+      let veneerBody = body {bodyFunctions = [(start, if start == entry then 4 else size) | (start, size) <- bodyFunctions body]}
       controls <- forM [control | control <- mutants ++ equivalents, controlSlot control == slot] $ \control ->
-        case controlCode domain table control >>= \code -> replaceEntry fill code body of
+        case buildControlBody fill domain table control veneerBody of
           Left problem -> pure (Left (name ++ " " ++ controlName control ++ ": " ++ problem))
           Right subject -> do
             outcome <- outcomeOf reference <$> run (controlName control) subject
@@ -372,7 +384,7 @@ stoppingChecks scope runner temporary fill table owned =
 generatedChecks :: FilePath -> FilePath -> Word32 -> Domain -> DomainTable -> OwnedDomain -> IO [Bool]
 generatedChecks runner temporary fill domain table owned =
   case (ownedBody owned S16c, [control | control <- mutants, controlSlot control == S16c]) of
-    (Right body, control : _) -> case controlCode domain table control >>= \code -> replaceEntry fill code body of
+    (Right body, control : _) -> case buildControlBody fill domain table control body of
       Left problem -> (: []) <$> check ("generated corpus: " ++ problem) False
       Right controlBody -> do
         let input =

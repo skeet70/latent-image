@@ -17,6 +17,7 @@ module Replacement.RtosOwnFirst.Assembly
   , on
   , mark
   , branch
+  , branchTo
   , branchLink
   , assembleAt
   , movw
@@ -110,6 +111,9 @@ mark = Mark
 -- | B to a label.
 branch :: Label -> Item
 branch = Transfer CondAl False . ToLabel
+
+branchTo :: Word32 -> Item
+branchTo = Transfer CondAl False . ToAddress
 
 -- | BL to an absolute address.
 branchLink :: Word32 -> Item
