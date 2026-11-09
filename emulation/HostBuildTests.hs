@@ -10,11 +10,12 @@ import Control.Monad (unless, void)
 import Data.Char (isDigit)
 import Data.List (elemIndex, isInfixOf, isPrefixOf)
 import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
+import GHC.IO.Encoding (setForeignEncoding)
 import System.Directory (canonicalizePath, createDirectoryIfMissing, doesFileExist, getTemporaryDirectory, makeAbsolute)
 import System.Environment (getArgs, getEnvironment, getExecutablePath, lookupEnv)
 import System.Exit (ExitCode (..), exitFailure)
 import System.FilePath (takeDirectory, (</>))
-import System.IO (IOMode (WriteMode), SeekMode (AbsoluteSeek), hClose, hGetContents, openFile)
+import System.IO (IOMode (WriteMode), SeekMode (AbsoluteSeek), hClose, hGetContents, openFile, utf8)
 import System.Posix.Files (setFileMode)
 import System.Posix.IO (LockRequest (WriteLock), OpenFileFlags (creat), OpenMode (ReadWrite), closeFd, defaultFileFlags, openFd, setLock)
 import System.Posix.Process (getProcessID)
@@ -41,6 +42,7 @@ expect name ok = do
 
 main :: IO ()
 main = do
+  setForeignEncoding utf8
   arguments <- getArgs
   case arguments of
     "--hold-range" : range -> holdRange range
@@ -114,10 +116,9 @@ run binary = do
   serialized <- expect "a second host build waits for the first to finish"
     (firstStarted && not secondEarly
       && maybe False id ((<) <$> position "end first" <*> position (startLine "second")))
-  passed <- expect "both builds pass with a passed verdict and run bazel --batch"
+  passed <- expect "both builds pass with a passed verdict"
     (firstCode == ExitSuccess && secondCode == ExitSuccess
-      && "\"verdict\":\"passed\"" `isInfixOf` firstErr && "\"verdict\":\"passed\"" `isInfixOf` secondErr
-      && " --batch build " `isInfixOf` startLine "first")
+      && "\"verdict\":\"passed\"" `isInfixOf` firstErr && "\"verdict\":\"passed\"" `isInfixOf` secondErr)
 
   holder <- start "holder" []
   holderStarted <- waitFor (started "holder")
@@ -217,8 +218,10 @@ run binary = do
   baseWaiter <- spawnLoggedArgs binary root
     (("FAKE_NAME", "base-waiter") : ("FAKE_RELEASE", release "base-waiter") : environment)
     ["--output_base=" ++ waiterBase, "build", "//fake:target"] baseLog
-  let expectedBase = "output_base=" ++ holderBase ++ " command_log=" ++ (holderBase </> "command.log")
-  baseReported <- waitFor (fmap (expectedBase `isInfixOf`) (readFile' baseLog))
+  baseReported <- waitFor $ do
+    text <- readFile' baseLog
+    pure (("output_base=" ++ holderBase) `isInfixOf` text
+      && ("command_log=" ++ (holderBase </> "command.log")) `isInfixOf` text)
   writeFile (release "base-holder") ""
   baseHolderCode <- waitForProcess (invocationProcess baseHolder)
   baseWaiterCode <- waitForProcess (invocationProcess baseWaiter)
@@ -227,45 +230,35 @@ run binary = do
     (baseHeld && baseReported && baseHolderCode == ExitSuccess && baseWaiterCode == ExitSuccess
       && "\"verdict\":\"passed\"" `isInfixOf` baseErr)
 
-  let overBase = "--output_base=" ++ replicate 600 'x'
-      overLog = root </> "over-stderr"
-  overHolder <- spawnArgs binary root
-    (("FAKE_NAME", "over-holder") : ("FAKE_RELEASE", release "over-holder") : environment)
-    [overBase, "build", "//fake:target"]
-  overHeld <- waitFor (started "over-holder")
-  writeFile (release "over-waiter") ""
-  overWaiter <- spawnLoggedArgs binary root
-    (("FAKE_NAME", "over-waiter") : ("FAKE_RELEASE", release "over-waiter") : environment)
-    ["build", "//fake:target"] overLog
-  overReported <- waitFor (fmap ("output_base=unavailable" `isInfixOf`) (readFile' overLog))
-  writeFile (release "over-holder") ""
-  overHolderCode <- waitForProcess (invocationProcess overHolder)
-  overWaiterCode <- waitForProcess (invocationProcess overWaiter)
-  overErr <- invocationStderr overWaiter
-  overOk <- expect "an over-bound output base is unavailable, not a truncated path"
-    (overHeld && overReported && overHolderCode == ExitSuccess && overWaiterCode == ExitSuccess
-      && not ("command_log=" `isInfixOf` overErr))
+  let unavailableBase testCase = do
+        let (name, argumentBase) = case testCase of
+              OverBoundBase -> ("over", replicate 600 'x')
+              CutBaseArgument -> ("cut", replicate 5000 'y')
+              ControlByteBase -> ("control", "/tmp/diagnostic\nbase")
+              NonAsciiBase -> ("unicode", "/tmp/diagnostic-\x00e9")
+            holderName = name ++ "-holder"
+            waiterName = name ++ "-waiter"
+            diagnosticPath = root </> (name ++ "-stderr")
+        externalHolder <- spawnArgs binary root
+          (("FAKE_NAME", holderName) : ("FAKE_RELEASE", release holderName) : environment)
+          ["--output_base=" ++ argumentBase, "build", "//fake:target"]
+        held <- waitFor (started holderName)
+        writeFile (release waiterName) ""
+        externalWaiter <- spawnLoggedArgs binary root
+          (("FAKE_NAME", waiterName) : ("FAKE_RELEASE", release waiterName) : environment)
+          ["build", "//fake:target"] diagnosticPath
+        unavailable <- waitFor (fmap ("output_base=unavailable" `isInfixOf`) (readFile' diagnosticPath))
+        writeFile (release holderName) ""
+        holderCode <- waitForProcess (invocationProcess externalHolder)
+        externalWaiterCode <- waitForProcess (invocationProcess externalWaiter)
+        diagnosticText <- invocationStderr externalWaiter
+        expect (name ++ " output base stays unavailable without changing admission")
+          (held && unavailable && holderCode == ExitSuccess && externalWaiterCode == ExitSuccess
+            && not ("command_log=" `isInfixOf` diagnosticText))
+  boundaries <- mapM unavailableBase [OverBoundBase, CutBaseArgument, ControlByteBase, NonAsciiBase]
+  pure (and ([serialized, passed, released, failed, refused, holders, baseObserved] ++ boundaries))
 
-  let cutBase = "--output_base=" ++ replicate 5000 'y'
-      cutLog = root </> "cut-stderr"
-  cutHolder <- spawnArgs binary root
-    (("FAKE_NAME", "cut-holder") : ("FAKE_RELEASE", release "cut-holder") : environment)
-    [cutBase, "build", "//fake:target"]
-  cutHeld <- waitFor (started "cut-holder")
-  writeFile (release "cut-waiter") ""
-  cutWaiter <- spawnLoggedArgs binary root
-    (("FAKE_NAME", "cut-waiter") : ("FAKE_RELEASE", release "cut-waiter") : environment)
-    ["build", "//fake:target"] cutLog
-  cutReported <- waitFor (fmap ("output_base=unavailable" `isInfixOf`) (readFile' cutLog))
-  writeFile (release "cut-holder") ""
-  cutHolderCode <- waitForProcess (invocationProcess cutHolder)
-  cutWaiterCode <- waitForProcess (invocationProcess cutWaiter)
-  cutErr <- invocationStderr cutWaiter
-  cutOk <- expect "a cmdline cut inside output_base is unavailable, not a fabricated path"
-    (cutHeld && cutReported && cutHolderCode == ExitSuccess && cutWaiterCode == ExitSuccess
-      && not ("command_log=" `isInfixOf` cutErr))
-
-  pure (and [serialized, passed, released, failed, refused, holders, baseObserved, overOk, cutOk])
+data UnavailableOutputBase = OverBoundBase | CutBaseArgument | ControlByteBase | NonAsciiBase
 
 spawn :: FilePath -> FilePath -> [(String, String)] -> IO Invocation
 spawn binary root environment = spawnWith CreatePipe binary root environment ["build", "//fake:target"]

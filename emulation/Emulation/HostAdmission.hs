@@ -225,9 +225,7 @@ admittedFlags command
   | command `elem` ["build", "test", "run", "coverage"] = ["--jobs=4", "--local_resources=memory=3072"]
   | otherwise = []
 
--- | One conflicting-lock query result. F_GETLK names a single conflicting
--- lock, so the owner is a sample at query time rather than an ownership
--- receipt.
+-- | F_GETLK reports one conflicting lock at query time.
 data KernelOwner = KernelOwner ProcessID | KernelUnlocked | KernelUnknown
   deriving (Eq)
 
@@ -240,13 +238,6 @@ data HolderDetails = HolderDetails
 data OutputBase = NoOutputBase | OutputBaseUnavailable | OutputBaseObserved FilePath
 
 data OwnerSample = OwnerNone | OwnerUnknown | OwnerReported ProcessID (Maybe HolderDetails)
-
--- | Last announced kernel observation. A sample without associated metadata is
--- not settled, so the next attempt can attach context once the owner is stable.
-data AnnouncedOwner = AnnouncedOwner
-  { announcedKernel :: KernelOwner
-  , announcedSettled :: Bool
-  }
 
 acquireBuildLock :: FilePath -> IO Fd
 acquireBuildLock directory = do
@@ -262,39 +253,25 @@ acquireBuildLock directory = do
             attempt announced'
   attempt Nothing
 
--- | Reports the sampled owner on the first contention and when it changes;
--- sampling errors stay diagnostic. A settled owner is compared before any
--- @/proc@ read, so an unchanged holder costs one kernel query per attempt.
-announceContention :: FilePath -> Fd -> Maybe AnnouncedOwner -> IO (Maybe AnnouncedOwner)
+-- | Samples metadata only on first contention and observed owner changes.
+announceContention :: FilePath -> Fd -> Maybe KernelOwner -> IO (Maybe KernelOwner)
 announceContention directory fd previous = do
-  queried <- try (queryKernelOwner fd) :: IO (Either IOException KernelOwner)
-  let current = either (const KernelUnknown) id queried
-  case current of
-    KernelOwner pid
-      | settled previous current -> pure previous
-      | otherwise -> do
-          details <- holderDetails pid
-          confirmed <- queryKernelOwner fd
-          case confirmed of
-            KernelOwner confirmedPid
-              | confirmedPid == pid -> announce previous current details True
-              | otherwise -> announce previous (KernelOwner confirmedPid) Nothing False
-            KernelUnlocked -> announce previous KernelUnlocked Nothing True
-            KernelUnknown -> announce previous KernelUnknown Nothing True
-    _ -> announce previous current Nothing True
+  current <- queryKernelOwner fd
+  if previous == Just current
+    then pure previous
+    else case current of
+      KernelOwner pid -> do
+        details <- holderDetails pid
+        confirmed <- queryKernelOwner fd
+        announce confirmed (if confirmed == current then details else Nothing)
+      _ -> announce current Nothing
   where
-    settled (Just announced) owner =
-      announcedKernel announced == owner && announcedSettled announced
-    settled _ _ = False
-    announce lastOwner owner details ready =
-      case lastOwner of
-        Just announced
-          | announcedKernel announced == owner
-              && (announcedSettled announced || not ready) -> pure lastOwner
-        _ -> do
+    announce owner details
+      | previous == Just owner = pure previous
+      | otherwise = do
           (hPutStrLn stderr (renderContention directory (sampleOf owner details)) >> hFlush stderr)
             `catchIOError` \_ -> pure ()
-          pure (Just (AnnouncedOwner owner ready))
+          pure (Just owner)
 
 sampleOf :: KernelOwner -> Maybe HolderDetails -> OwnerSample
 sampleOf (KernelOwner pid) details = OwnerReported pid details
@@ -311,8 +288,7 @@ queryKernelOwner fd = do
     Right Nothing -> KernelUnlocked
     Left _ -> KernelUnknown
 
--- | Bounded @/proc@ metadata for a sampled owner. Missing or unreadable
--- entries stay absent; no lookup failure is an ownership fact.
+-- | Bounded metadata for a sampled owner.
 holderDetails :: ProcessID -> IO (Maybe HolderDetails)
 holderDetails pid = do
   command <- processName pid
@@ -350,12 +326,12 @@ processOutputBase pid = do
       in case reverse values of
         value : _ | ByteString.length value > 512 -> OutputBaseUnavailable
                   | truncated -> OutputBaseUnavailable
-                  | otherwise -> OutputBaseObserved (sanitizeText 512 (ByteString8.unpack value))
+                  | not (ByteString.all (\byte -> byte >= 32 && byte <= 126) value) -> OutputBaseUnavailable
+                  | otherwise -> OutputBaseObserved (ByteString8.unpack value)
         [] | truncated -> OutputBaseUnavailable
            | otherwise -> NoOutputBase
 
--- | Complete NUL-terminated argv tokens only; the tail after the last NUL is
--- kept separately because the bounded read may have cut inside it.
+-- | Only NUL-terminated argv tokens are complete.
 completeArguments :: ByteString.ByteString -> [ByteString.ByteString]
 completeArguments bytes = filter (not . ByteString.null) (dropLast (ByteString.split 0 bytes))
   where
@@ -364,7 +340,7 @@ completeArguments bytes = filter (not . ByteString.null) (dropLast (ByteString.s
     dropLast (argument : rest) = argument : dropLast rest
 
 incompleteTail :: ByteString.ByteString -> ByteString.ByteString
-incompleteTail bytes = ByteString.reverse (ByteString.takeWhile (/= 0) (ByteString.reverse bytes))
+incompleteTail = snd . ByteString.breakEnd (== 0)
 
 boundedBytes :: Int -> FilePath -> IO (Maybe ByteString.ByteString)
 boundedBytes limit path = do
