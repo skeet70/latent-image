@@ -82,9 +82,14 @@ runBoundedCommand timeoutValue (OutputLimit outputLimit) program arguments
           overflow <- newIORef False
           outDone <- newEmptyMVar
           errDone <- newEmptyMVar
+          cleaned <- newIORef False
           outThread <- forkIO (readStream outHandle outputBound outChunks overflow True `finally` putMVar outDone ())
           errThread <- forkIO (readStream errHandle maxCommandStderr errChunks overflow False `finally` putMVar errDone ())
-          let cleanup = cleanupProcess processGroup processHandle outThread errThread outHandle errHandle outDone errDone
+          let cleanup = do
+                alreadyCleaned <- readIORef cleaned
+                unless alreadyCleaned $ do
+                  writeIORef cleaned True
+                  cleanupProcess processGroup processHandle outThread errThread outHandle errHandle outDone errDone
               body = do
                 start <- getMonotonicTimeNSec
                 let deadline = toInteger start + timeoutMicros * 1000
