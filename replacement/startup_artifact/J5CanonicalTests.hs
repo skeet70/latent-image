@@ -106,9 +106,15 @@ main = do
   ok "root-task edits only image 4 inside [0x69d160,0x69d2b4)"
     (editTargets root == Set.fromList [Image4] && pieceCarriers root == [at Image4 0x69d160 0x69d2b4]
       && editsInsideCarriers root && footprintOutsideCarriers root && not (null (pieceEdits root)))
-  ok "app-callback edits only image 4 inside [0x725424,0x7257a8)"
-    (editTargets app == Set.fromList [Image4] && pieceCarriers app == [at Image4 0x725424 0x7257a8]
+  ok "app-callback edits only its disjoint image 4 carriers"
+    (editTargets app == Set.fromList [Image4] && pieceCarriers app == [at Image4 0x72337c 0x723398, at Image4 0x725424 0x7257a8]
       && editsInsideCarriers app && footprintOutsideCarriers app && not (null (pieceEdits app)))
+  let callbackRange = at Image4 0x723330 0x723344
+      callbackCollision = app {pieceCarriers = callbackRange : pieceCarriers app}
+  ok "task submission protects its retained default error callback"
+    (case compose registeredJoins source [submission, callbackCollision] of
+      Left (FootprintOverlap TaskSubmission AppCallback range) -> range == callbackRange
+      _ -> False)
   let boundariesOf piece = catalogBoundaries (pieceCatalog piece)
       labelsOf piece = map (labelText . boundaryLabel) (boundariesOf piece)
       boundaryNamed piece name = [boundary | boundary <- boundariesOf piece, labelText (boundaryLabel boundary) == name]

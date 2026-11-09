@@ -991,7 +991,7 @@ deriveRootTask source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes)) =
         catalog (RootTaskFacts (LinkedBytes bin symbolBytes) pool)
   derivePiece source declaration (StagedOutput (canonicalDat source) (Just (RT.stagedBytes (RT.stageImage4 rootSource artifact))) Nothing)
 
--- | App callback entries and owned bodies over the stock image4 extents at 0x725424 and 0x7256c4.
+-- | App callback dispatcher and registration over disjoint stock image4 extents.
 deriveAppCallback :: Canonical -> LinkedImage -> Either Refusal Piece
 deriveAppCallback source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes)) = do
   let kind = AppCallback
@@ -1005,14 +1005,16 @@ deriveAppCallback source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes)
   artifact <- shown (RT.deriveAppCallback bin symbolBytes)
   carrier <- spanOf kind Image4 start end
   code <- codeOf kind start end
-  let declaration = PieceDeclaration kind (Set.singleton AppCallbackArea) [carrier]
-        [Footprint carrier RuntimePremise (Citation "replacement/root_task/Replacement/RootTask/Artifact.hs:105-153")]
+  dispatchCarrier <- spanOf kind Image4 0x72337c 0x723398
+  dispatchCode <- codeOf kind 0x72337c 0x723398
+  let declaration = PieceDeclaration kind (Set.singleton AppCallbackArea) [dispatchCarrier, carrier]
+        [Footprint range RuntimePremise (Citation "replacement/root_task/Replacement/RootTask/Artifact.hs:107-161") | range <- [dispatchCarrier, carrier]]
         (map Premise
           [ "the root interface table at 0x96bd20 publishes the loader roots; create/delete/start/stop at +0x108/+0x10c/+0x110/+0x114 and the critical pair at +0x164/+0x168 are retained services"
-          , "the callback registry at 0x409c3500 and the app dispatcher at 0x72337c are retained readers; the app caller writes the registry, cyclic creation records and timer controls"
+          , "the callback registry at 0x409c3500 is shared by owned registration and dispatch; cyclic delivery supplies an installed slot in 1..64 with an AAPCS callback"
           , "the error recorder 0x41a34, last_error 0x40a0f82c and dispatch_error 0x723398 are retained"
           , "the app callback runs on core 0 in task context; its register core and report frame is 80 bytes below the root call SP, and the retained/owned interface call frames, IRQ and critical-section lifetime remain runtime premises" ])
-        (Catalog [] [code] (EnumeratedWrites [] (Premised (Premise "the app caller's registry, cyclic-record and timer-control writes are admitted by the composed guard's runtime premise"))) [])
+        (Catalog [] [dispatchCode, code] (EnumeratedWrites [] (Premised (Premise "the app caller's registry, cyclic-record and timer-control writes are admitted by the composed guard's runtime premise"))) [])
         (AppCallbackFacts (LinkedBytes bin symbolBytes) (StackDepth 80))
   derivePiece source declaration (StagedOutput (canonicalDat source) (Just (RT.stageAppImage4 image4 artifact)) Nothing)
 

@@ -1,11 +1,17 @@
 ENTRY(xm1_app_register_callback)
 
 MEMORY {
+  dispatch_entry (rx) : ORIGIN = 0x72337c, LENGTH = 0x1c
   register_entry (rx) : ORIGIN = 0x725424, LENGTH = 0x2a0
   unregister_entry (rx) : ORIGIN = 0x7256c4, LENGTH = 0xe4
 }
 
 SECTIONS {
+  .dispatch_entry : {
+    KEEP(*(.text.app_dispatch))
+    __dispatch_end = .;
+    . = ORIGIN(dispatch_entry) + LENGTH(dispatch_entry);
+  } > dispatch_entry =0xf000f0e7
   .register_entry : {
     KEEP(*(.text.app_register))
     KEEP(*(.text.app_register_core))
@@ -29,6 +35,8 @@ SECTIONS {
   /DISCARD/ : { *(.ARM.exidx .ARM.exidx.* .ARM.extab .ARM.extab.* .comment .note .note.*) }
 }
 
+ASSERT(xm1_app_dispatch_callback == 0x72337c, "app dispatcher entry moved")
+ASSERT(__dispatch_end <= ORIGIN(dispatch_entry) + LENGTH(dispatch_entry), "app dispatcher exceeds its stock extent")
 ASSERT(xm1_app_register_callback == 0x725424, "app register entry moved")
 ASSERT(xm1_app_unregister_callback == 0x7256c4, "app unregister entry moved")
 ASSERT(__register_end <= ORIGIN(register_entry) + LENGTH(register_entry), "app register exceeds its stock extent")

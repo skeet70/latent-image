@@ -37,11 +37,13 @@ origin, limit :: Word32
 origin = 0x69d160
 limit = 0x69d2b4
 
-appOrigin, appLimit, appRegisterEnd, appSize :: Word32
+appOrigin, appLimit, appRegisterEnd, appDispatchOrigin, appDispatchLimit, appSize :: Word32
 appOrigin = 0x725424
 appLimit = 0x7257a8
 appRegisterEnd = 0x7256c4
-appSize = 0x384
+appDispatchOrigin = 0x72337c
+appDispatchLimit = 0x723398
+appSize = appLimit - appDispatchOrigin
 require :: Bool -> ArtifactError -> Either ArtifactError ()
 require premise refusal = unless premise (Left refusal)
 identity :: B.ByteString -> SourceIdentity
@@ -102,17 +104,23 @@ artifactProof (LinkedArtifact _ _ _ proof) = proof
 artifactBytes :: LinkedArtifact -> B.ByteString
 artifactBytes (LinkedArtifact bytes _ _ _) = bytes
 
--- | Admits the app-callback entries at 0x725424/0x7256c4 and their owned bodies in the
--- two stock extents.
+-- | Admits the dispatcher, registration and unregistration in their disjoint stock extents.
 deriveAppCallback :: B.ByteString -> B.ByteString -> Either ArtifactError LinkedAppCallback
 deriveAppCallback bytes symbolBytes = do
   require (B.length bytes == fromIntegral appSize) ExtentRejected
   symbols <- either (const (Left SymbolRejected)) Right (F.parseSymbols symbolBytes)
   let lookupSymbol name = either (const (Left SymbolRejected)) Right (F.lookupSymbol symbols name)
+  dispatch <- lookupSymbol "xm1_app_dispatch_callback"
+  dispatchEnd <- lookupSymbol "__dispatch_end"
   register <- lookupSymbol "xm1_app_register_callback"
   unregister <- lookupSymbol "xm1_app_unregister_callback"
   registerEnd <- lookupSymbol "__register_end"
   unregisterEnd <- lookupSymbol "__unregister_end"
+  require (F.symbolAddress dispatch == appDispatchOrigin && F.symbolSize dispatch > 0
+    && F.symbolAddress dispatch + F.symbolSize dispatch <= appDispatchLimit) SymbolRejected
+  require (F.symbolAddress dispatchEnd <= appDispatchLimit
+    && F.symbolAddress dispatchEnd >= appDispatchOrigin + F.symbolSize dispatch
+    && F.symbolSize dispatchEnd == 0) SymbolRejected
   require (F.symbolAddress register == appOrigin && F.symbolSize register > 0
     && F.symbolAddress register + F.symbolSize register <= appRegisterEnd) SymbolRejected
   require (F.symbolAddress unregister == appRegisterEnd && F.symbolSize unregister > 0
@@ -122,12 +130,11 @@ deriveAppCallback bytes symbolBytes = do
   forM_ symbols $ \symbol -> do
     let address = F.symbolAddress symbol
         size = F.symbolSize symbol
-        name = F.symbolName symbol
-    require (address .&. 3 == 0 && address >= appOrigin && address <= appLimit
-      && toInteger address + toInteger size <= toInteger appLimit) SymbolRejected
-    require (name `elem` ["__register_end", "__unregister_end"]
-      || (address < appRegisterEnd && address + size <= appRegisterEnd)
-      || (address >= appRegisterEnd && address + size <= appLimit)) SymbolRejected
+    require (address .&. 3 == 0
+      && any (\(low, high) -> address >= low && address <= high
+        && toInteger address + toInteger size <= toInteger high)
+        [(appDispatchOrigin, appDispatchLimit), (appOrigin, appRegisterEnd), (appRegisterEnd, appLimit)])
+      SymbolRejected
   require (all validKind (filter (not . C.null) (C.lines symbolBytes))) SymbolRejected
   pure (LinkedAppCallback bytes (identity bytes) (identity symbolBytes))
   where
@@ -141,8 +148,17 @@ appCallbackBytes (LinkedAppCallback bytes _ _) = bytes
 stageAppImage4 :: B.ByteString -> LinkedAppCallback -> B.ByteString
 stageAppImage4 image artifact =
   let linked = appCallbackBytes artifact
-      offset = fromIntegral (appOrigin - 0x61c400)
-  in B.take offset image <> linked <> B.drop (offset + B.length linked) image
+      dispatchOffset = fromIntegral (appDispatchOrigin - 0x61c400)
+      dispatchSize = fromIntegral (appDispatchLimit - appDispatchOrigin)
+      registerOffset = fromIntegral (appOrigin - 0x61c400)
+      registerBytes = B.drop (fromIntegral (appOrigin - appDispatchOrigin)) linked
+  in B.concat
+      [ B.take dispatchOffset image
+      , B.take dispatchSize linked
+      , B.take (registerOffset - dispatchOffset - dispatchSize) (B.drop (dispatchOffset + dispatchSize) image)
+      , registerBytes
+      , B.drop (registerOffset + B.length registerBytes) image
+      ]
 
 stageImage4 :: CanonicalSource -> LinkedArtifact -> StagedImage4
 stageImage4 source@(CanonicalSource _ (DecodedImage4 original) _ _) artifact =
