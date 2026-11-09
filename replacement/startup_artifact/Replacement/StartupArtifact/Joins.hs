@@ -924,14 +924,25 @@ suppliedOf evidence = do
 -- retained callee and the IRQ preemption peak. Refused entries and their refusals must be exactly
 -- the pinned list, and the bounded ones use only the allowed premises.
 retainedFits :: JoinEvidence -> Integer -> Integer -> [SS.Condition] -> [(Word32, SS.StackRefusal)] -> [Word32] -> Bool
-retainedFits evidence frame budget allowed unbounded entries = case suppliedOf evidence >>= \supplied -> depthsIn evidence supplied (nub entries) of
+retainedFits evidence frame budget allowed unbounded entries =
+  retainedFitsWith evidence frame budget allowed unbounded entries 0
+
+-- | 'retainedFits' with an owned callee's own frame added below the retained depths.
+retainedFitsWith :: JoinEvidence -> Integer -> Integer -> [SS.Condition] -> [(Word32, SS.StackRefusal)] -> [Word32] -> Integer -> Bool
+retainedFitsWith evidence frame budget allowed unbounded entries extra = case suppliedOf evidence >>= \supplied -> depthsIn evidence supplied (nub entries) of
   Nothing -> False
   Just results ->
     let refused = sortOn fst [(entry, refusal) | (entry, Left refusal) <- results]
         bounded = [report | (_, Right report) <- results]
         depths = [toInteger bytes | report <- bounded, let SS.StackDepth bytes = SS.reportDepth report]
      in refused == sortOn fst unbounded && usesOnly allowed (Set.unions (map SS.reportConditions bounded))
-          && all (\depth -> frame + depth + toInteger SB.irqPreemptionBytes <= budget) depths
+          && all (\depth -> frame + depth + extra + toInteger SB.irqPreemptionBytes <= budget) depths
+
+-- | The app callback's own frame below the root call SP.
+appCallbackDepth :: JoinEvidence -> Integer
+appCallbackDepth evidence = case [toInteger bytes | AppCallbackFacts _ (StackDepth bytes) <- map pieceFacts (evidencePieces evidence)] of
+  [depth] -> depth
+  _ -> 0
 
 -- | Root's call targets from its admitted proof.
 rootTargets :: JoinEvidence -> Maybe [Word32]
@@ -955,7 +966,9 @@ svc = SS.Refusal 0x4360c W.SupervisorCall
 
 rootRetainedDepth :: JoinEvidence -> Bool
 rootRetainedDepth evidence = case (rootFrame evidence, rootTargets evidence) of
-  (Just (_, low), Just targets) -> retainedFits evidence (toInteger (negate low)) rootStackBytes SB.rootDepthConditions rootUnbounded targets
+  (Just (_, low), Just targets) ->
+    retainedFitsWith evidence (toInteger (negate low)) rootStackBytes SB.rootDepthConditions rootUnbounded
+      (filter (/= 0x725424) targets) (appCallbackDepth evidence)
   _ -> False
 
 -- | The r0 = 0 path of 0x72612c: @cmp r6, #0; cmpne r6, r0; bne 0x7261d0@, no @bl@ in [0x72616c, 0x7261d0),

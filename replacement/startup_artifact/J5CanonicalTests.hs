@@ -67,13 +67,14 @@ main :: IO ()
 main = do
   arguments <- getArgs
   (encoder, rebuild, decoder, imagePaths, datPath, scratchPath) <- case arguments of
-    [encoder, rebuild, decoder, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19, a20, a21, a22, dat, scratch] ->
-      pure (encoder, rebuild, decoder, [a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19, a20, a21, a22], dat, scratch)
-    _ -> H.failH "usage: startup-artifact-j5-canonical-tests ENCODER REBUILD DECODER (J4 IMAGE SYMBOLS){9} IDLE_BIN IDLE_SYMBOLS ROOT_BIN ROOT_SYMBOLS CANONICAL_DAT SCRATCH_DIR"
+    [encoder, rebuild, decoder, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19, a20, a21, a22, a23, a24, dat, scratch] ->
+      pure (encoder, rebuild, decoder, [a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19, a20, a21, a22, a23, a24], dat, scratch)
+    _ -> H.failH "usage: startup-artifact-j5-canonical-tests ENCODER REBUILD DECODER (J4 IMAGE SYMBOLS){9} IDLE_BIN IDLE_SYMBOLS ROOT_BIN ROOT_SYMBOLS APP_BIN APP_SYMBOLS CANONICAL_DAT SCRATCH_DIR"
   resolved <- mapM canonicalizePath imagePaths
   [firstBin, firstSymbols, pairBin, pairSymbols, publisherBin, publisherSymbols, orchestrationABin, orchestrationASymbols
     , orchestrationBBin, orchestrationBSymbols, dispatcherBin, dispatcherSymbols, installerBin, installerSymbols
-    , submissionBin, submissionSymbols, storageBin, storageSymbols, idleBin, idleSymbols, rootBin, rootSymbols] <- pure resolved
+    , submissionBin, submissionSymbols, storageBin, storageSymbols, idleBin, idleSymbols, rootBin, rootSymbols
+    , appBin, appSymbols] <- pure resolved
   tools <- Tools.Tools <$> canonicalizePath encoder <*> canonicalizePath rebuild <*> canonicalizePath decoder
   counter <- newIORef 0
   let ok = check counter
@@ -96,6 +97,7 @@ main = do
   storage <- single TaskStorage storageBin storageSymbols
   idle <- single IdleTask idleBin idleSymbols
   root <- single RootTask rootBin rootSymbols
+  app <- single AppCallback appBin appSymbols
 
   -- Pieces.
   ok "idle-task edits only image 4 inside [0x69cbf0,0x69cc00)"
@@ -104,6 +106,9 @@ main = do
   ok "root-task edits only image 4 inside [0x69d160,0x69d2b4)"
     (editTargets root == Set.fromList [Image4] && pieceCarriers root == [at Image4 0x69d160 0x69d2b4]
       && editsInsideCarriers root && footprintOutsideCarriers root && not (null (pieceEdits root)))
+  ok "app-callback edits only image 4 inside [0x725424,0x7257a8)"
+    (editTargets app == Set.fromList [Image4] && pieceCarriers app == [at Image4 0x725424 0x7257a8]
+      && editsInsideCarriers app && footprintOutsideCarriers app && not (null (pieceEdits app)))
   let boundariesOf piece = catalogBoundaries (pieceCatalog piece)
       labelsOf piece = map (labelText . boundaryLabel) (boundariesOf piece)
       boundaryNamed piece name = [boundary | boundary <- boundariesOf piece, labelText (boundaryLabel boundary) == name]
@@ -163,7 +168,7 @@ main = do
     (WA.errorCallbackDemand (WA.StackOffset (-4)) == WA.stockCalleeDemand (WA.FixedService WA.ErrorCallback))
 
   -- The pool-allocation relation with the J5 additions.
-  let pieces = [first, pair, publisher, startup, submission, storage, idle, root]
+  let pieces = [first, pair, publisher, startup, submission, storage, idle, root, app]
       items name value = case value of
         J.Object fields -> case KeyMap.lookup (Key.fromText name) fields of
           Just (J.Array rows) -> V.toList rows
