@@ -8,11 +8,13 @@ import Control.Monad (forM_, unless)
 import Data.Aeson (object, (.=), encode)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
+import Data.List (isPrefixOf)
 import Emulation.Sha256 (sha256File, sha256Hex)
 import FujiAF.Host (failH)
 import FujiAF.StorageBudget (checkStorageBudget)
 import Replacement.RtosGlobalLock.Suite
 import Replacement.RtosOwnFirst.Regions (Domain (..), domainLabel)
+import qualified Replacement.RtosPlatform.Union as Union
 import System.Directory (createDirectoryIfMissing, makeAbsolute)
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
@@ -23,18 +25,31 @@ main = do
   runner <- required "--runner" >>= makeAbsolute
   loaderA <- required "--loader-a"
   loaderB <- required "--loader-b"
-  ownedA <- required "--owned-a-bin"
-  ownedB <- required "--owned-b-bin"
-  symbolsA <- required "--owned-a-symbols"
-  symbolsB <- required "--owned-b-symbols"
+  aggregateFlags <- mapM optional
+    ["--aggregate-a-bin", "--aggregate-a-symbols", "--aggregate-a-placements",
+     "--aggregate-b-bin", "--aggregate-b-symbols", "--aggregate-b-placements",
+     "--aggregate-carriers"]
+  (ownedA, ownedB, ownedAImage, ownedBImage, ownedASymbols, ownedBSymbols, aggregates) <- case aggregateFlags of
+    [Nothing, Nothing, Nothing, Nothing, Nothing, Nothing, Nothing] -> do
+      a <- required "--owned-a-bin"
+      b <- required "--owned-b-bin"
+      sa <- required "--owned-a-symbols" >>= parseOwnedSymbols DomainA
+      sb <- required "--owned-b-symbols" >>= parseOwnedSymbols DomainB
+      unless (not (null sa) && not (null sb)) (failH "owned symbols are empty")
+      ba <- B.readFile a
+      bb <- B.readFile b
+      pure (a, b, Image (minimum (map fst sa)) ba, Image (minimum (map fst sb)) bb, sa, sb, [])
+    [Just a, Just sa, Just pa, Just b, Just sb, Just pb, Just carriers] -> do
+      union <- either (failH . show) pure . Union.parseUnion =<< B.readFile carriers
+      imageA <- readAggregate DomainA union a sa pa
+      imageB <- readAggregate DomainB union b sb pb
+      pure (a, b, aggregateImage imageA, aggregateImage imageB,
+        aggregateSymbols imageA, aggregateSymbols imageB, [imageA, imageB])
+    _ -> failH "aggregate mode requires both binary/symbol/placement triples and --aggregate-carriers"
   cacheRoot <- required "--cache-root"
   resultsPath <- required "--results"
   loaderABytes <- B.readFile loaderA
   loaderBBytes <- B.readFile loaderB
-  ownedABytes <- B.readFile ownedA
-  ownedBBytes <- B.readFile ownedB
-  ownedASymbols <- parseOwnedSymbols DomainA symbolsA
-  ownedBSymbols <- parseOwnedSymbols DomainB symbolsB
   loaderADigest <- sha256File loaderA
   loaderBDigest <- sha256File loaderB
   ownedADigest <- sha256File ownedA
@@ -46,10 +61,8 @@ main = do
   createDirectoryIfMissing True (takeDirectory resultsPath)
   let stockA = Image 0x40000 loaderABytes
       stockB = Image 0xd0000 loaderBBytes
-      ownedAImage = Image (minimum (map fst ownedASymbols)) ownedABytes
-      ownedBImage = Image (minimum (map fst ownedBSymbols)) ownedBBytes
-  (runA, controlsA) <- runDomain runner cacheRoot (takeDirectory resultsPath </> "domain-a") DomainA stockA ownedAImage ownedASymbols
-  (runB, controlsB) <- runDomain runner cacheRoot (takeDirectory resultsPath </> "domain-b") DomainB stockB ownedBImage ownedBSymbols
+  (runA, controlsA) <- runDomain runner cacheRoot (takeDirectory resultsPath </> "domain-a") DomainA stockA ownedAImage ownedASymbols aggregates
+  (runB, controlsB) <- runDomain runner cacheRoot (takeDirectory resultsPath </> "domain-b") DomainB stockB ownedBImage ownedBSymbols aggregates
   let runs = runA ++ runB
       controls = controlsA ++ controlsB
       failures =
@@ -97,9 +110,13 @@ main = do
   unless (null failures && null failedChecks && null failedControls) exitFailure
 
 required :: String -> IO FilePath
-required flag = do
+required flag = optional flag >>= maybe (failH (flag ++ " is required")) pure
+
+optional :: String -> IO (Maybe FilePath)
+optional flag = do
   arguments <- getArgs
-  case dropWhile (/= flag) arguments of
-    [] -> failH (flag ++ " is required")
-    [_] -> failH (flag ++ " needs a value")
-    _ : value : _ -> pure value
+  case [drop (index + 1) arguments | (index, argument) <- zip [0 :: Int ..] arguments, argument == flag] of
+    [] -> pure Nothing
+    occurrences -> case last occurrences of
+      value : _ | not ("--" `isPrefixOf` value) -> pure (Just value)
+      _ -> failH (flag ++ " needs a value")
