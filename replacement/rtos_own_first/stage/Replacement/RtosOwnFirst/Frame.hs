@@ -1,5 +1,5 @@
--- | Stack demand of owned code, walked over A32 words. Flow stays inside the extent holding the
--- function's entry; a call or a branch to another owned extent composes with the callee's frame.
+-- | Stack demand of owned code, walked over A32 words. Calls compose with callee frames;
+-- branches with an active frame continue with the current sp and frame pointer.
 module Replacement.RtosOwnFirst.Frame
   ( OwnedCode (..)
   , CallKind (..)
@@ -67,7 +67,7 @@ r11 :: A.Reg
 r11 = A.Reg 11
 
 -- | sp and, when known, r11 as offsets from entry sp.
-data State = State {statePc :: Word32, stateSp :: Int, stateFp :: Maybe Int}
+data State = State {stateExtent :: Extent, statePc :: Word32, stateSp :: Int, stateFp :: Maybe Int}
 
 data Walked = Walked Int [CallEdge]
 
@@ -106,24 +106,25 @@ compose owned walked visiting done entry
 
 walk :: S.Set Word32 -> OwnedCode -> GuestAddress -> Either FrameError Walked
 walk permitted code entry@(GuestAddress start) = case filter (`extentContains` entry) (codeExtents code) of
-  [extent] -> go extent M.empty [State start 0 Nothing] 0 []
+  [extent] -> go M.empty [State extent start 0 Nothing] 0 []
   _ -> Left (FrameError entry FlowLeavesExtent)
   where
     GuestAddress base = codeBase code
     owned target = any (`extentContains` GuestAddress target) (codeExtents code)
-    go _ _ [] low calls = Right (Walked low (S.toList (S.fromList calls)))
-    go extent seen (state : pending) low calls =
-      let pc = statePc state
+    go _ [] low calls = Right (Walked low (S.toList (S.fromList calls)))
+    go seen (state : pending) low calls =
+      let extent = stateExtent state
+          pc = statePc state
           key = (stateSp state, stateFp state)
        in case M.lookup pc seen of
-            Just keys | S.member key keys -> go extent seen pending low calls
+            Just keys | S.member key keys -> go seen pending low calls
             Just keys | any ((/= stateSp state) . fst) (S.toList keys) -> Left (FrameError (GuestAddress pc) StackUnbalanced)
             _
               | not (extentContains extent (GuestAddress pc)) || pc .&. 3 /= 0 -> Left (FrameError (GuestAddress pc) FlowLeavesExtent)
               | otherwise -> do
                   (next, edges) <- either (Left . FrameError (GuestAddress pc)) Right (step extent state (U.word32At (codeBytes code) (fromIntegral (pc - base))))
-                  go extent (M.insertWith S.union pc (S.singleton key) seen) (next ++ pending) (minimum (low : map stateSp next)) (edges ++ calls)
-    step extent state@(State pc sp fp) word = do
+                  go (M.insertWith S.union pc (S.singleton key) seen) (next ++ pending) (minimum (low : map stateSp next)) (edges ++ calls)
+    step extent state@(State _ pc sp fp) word = do
       let conditional = word `shiftR` 28 < 14
           following current = current {statePc = pc + 4}
           orSkipped successors = successors ++ [following state | conditional]
@@ -161,6 +162,8 @@ walk permitted code entry@(GuestAddress start) = case filter (`extentContains` e
           | otherwise -> Left (CallOutsideOwned (GuestAddress target))
         A.Branch _ False target
           | extentContains extent (GuestAddress target) -> Right (orSkipped [state {statePc = target}], [])
+          | sp /= 0, [targetExtent] <- filter (`extentContains` GuestAddress target) (codeExtents code) ->
+              Right (orSkipped [state {stateExtent = targetExtent, statePc = target}], [])
           | owned target -> do
               (successors, _) <- returning sp
               Right (successors, [CallEdge (GuestAddress pc) (GuestAddress target) 0 TailCall])
