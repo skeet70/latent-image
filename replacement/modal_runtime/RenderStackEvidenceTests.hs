@@ -143,7 +143,8 @@ main = do
         , set "performance" (J.object ["active_instructions" J..= (20 :: Word32),"invocation_count" J..= (0 :: Word32),"hook_transitions" J..= (2 :: Word32)]) (singleton invocation)
         , report [invocation,invocation] ] $ \invalid ->
     check "missing, duplicate or incomplete continuous coverage refuses" (not (accepts invalid))
-  let withRuns runs count = set "transition_storage" (storage (toInteger (length runs)) count)
+  let withRuns :: [J.Value] -> Integer -> J.Value
+      withRuns runs count = set "transition_storage" (storage (toInteger (length runs)) count)
         (singleton (set "transitions" (J.toJSON runs) (set "transition_count" (J.toJSON count) invocation)))
       pairReport = withRuns [pair] 7
       alteredContext key value = withRuns [set "first" (sample 2 (set key value transitionContext)) pair] 7
@@ -187,6 +188,7 @@ main = do
           [ ("id",number (index+1)),("entry_boundary",boundary first),("terminal_boundary",boundary last_)
           , ("transition_span",J.object ["first" J..= first,"last" J..= last_])
           , ("transition_count",J.toJSON rows),("transitions",J.toJSON [sample ordinal transitionContext | ordinal <- [first..last_]]) ]
+      storageReport :: [Int] -> J.Value
       storageReport counts =
         let values = zipWith storageInvocation [0..] counts
             total = sum counts

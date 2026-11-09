@@ -2180,7 +2180,7 @@ mod tests {
             (0x006d_7df4, [0xe1a0_0004, 0xe12f_ff1e]),
             (0x006d_76ec, [0xe1a0_0000, 0xe12f_ff1e]),
             (0x006d_7d44, [0xe1a0_0000, 0xe12f_ff1e]),
-            (0x006d_7b3c, [0xe51f_f004, 0x8000_00e4]),
+            (0x006d_7b3c, [0xe51f_f004, 0x0000_00d8]),
         ] {
             for (index, word) in words.into_iter().enumerate() {
                 put(address + index as u64 * 4, &word.to_le_bytes());
@@ -2206,38 +2206,11 @@ mod tests {
             ("0x006d76ec".to_owned(), "render-osd-buffer".to_owned()),
             ("0x006d7d44".to_owned(), "render-osd-increment".to_owned()),
         ])).unwrap();
-        type FaultReceipt = std::cell::Cell<Option<(fujimod_emulator_cpu::Fault, u64, i32)>>;
-        unsafe fn capture_fault(kind: fujimod_emulator_cpu::Fault, address: u64, bytes: i32, _: i64, data: *mut std::ffi::c_void) -> bool {
-            let receipt = unsafe { &*data.cast::<FaultReceipt>() };
-            receipt.set(Some((kind, address, bytes)));
-            false
-        }
-        let fault = Box::new(FaultReceipt::new(None));
-        let fault_hook = unsafe { server.bridge.machine.session.board.cpu(0).unwrap().install_hook(fujimod_emulator_cpu::Hook::Fault {
-            callback: capture_fault, data: (&*fault as *const FaultReceipt).cast_mut().cast(),
-        }) }.unwrap();
         let mut output = Vec::new();
         server.serve_io(b"{\"command\":\"display-key\",\"key\":\"back\"}\n".as_slice(), &mut output).unwrap();
         let responses: Vec<Value> = output.split(|byte| *byte == b'\n').filter(|line| !line.is_empty())
             .map(|line| serde_json::from_slice(line).unwrap()).collect();
         let result = responses.last().unwrap();
-        let board = &server.bridge.machine.session.board;
-        let cpu = board.cpu(0).unwrap();
-        cpu.remove_hook(fault_hook).unwrap();
-        eprintln!("exact access fault: {:?}", fault.get());
-        let cp = |crn, crm, opc2| cpu.coprocessor(arm::Coprocessor {
-            cp: 15, opc1: 0, crn, crm, opc2, secure: 0, wide: false,
-        }, None).unwrap();
-        eprintln!("publication fault: result={result:?} pc={:?} cpsr={:?} spsr={:?} ifar={:#x} ifsr={:#x} dfar={:#x} dfsr={:#x} sctlr={:#x} rgnr={:#x}",
-            board.read_register(0, Register::Pc), board.read_register(0, Register::Arm32(arm::Register::Cpsr)),
-            board.read_register(0, Register::Arm32(arm::Register::Spsr)), cp(6, 0, 2), cp(5, 0, 1), cp(6, 0, 0), cp(5, 0, 0), cp(1, 0, 0), cp(6, 2, 0));
-        let region_number = arm::Coprocessor { cp: 15, opc1: 0, crn: 6, crm: 2, opc2: 0, secure: 0, wide: false };
-        let saved_region = cp(6, 2, 0);
-        for region in 0..12u64 {
-            cpu.coprocessor(region_number, Some(region)).unwrap();
-            eprintln!("MPU region {region}: base={:#x} size={:#x} access={:#x}", cp(6, 1, 0), cp(6, 1, 2), cp(6, 1, 4));
-        }
-        cpu.coprocessor(region_number, Some(saved_region)).unwrap();
         let receipt: Value = serde_json::from_slice(
             &std::fs::read(server.output.join("emulator-session.json")).unwrap()).unwrap();
         assert_eq!(result["ok"], false, "{result}");
