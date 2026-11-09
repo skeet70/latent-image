@@ -35,7 +35,9 @@ type W = M.Map Word32 Word32
 
 data Role = Stock | Owned deriving (Eq, Show)
 
-data Aggregate = Aggregate Agg.AggregateImage [Agg.AggregateSymbol] [Agg.SectionPlacement]
+data FetchLayout = OriginalFunctions | AllocatedFunctions deriving (Eq, Show)
+
+data Aggregate = Aggregate Agg.AggregateImage [Agg.AggregateSymbol] [Agg.SectionPlacement] [Regions.Extent]
 
 data Service = Terminate | ChangePriority | TimedSleep | ReleaseWait | HandlerRelease | Delay
   | Timeout | DelayCallback
@@ -388,11 +390,24 @@ data ControlRun = ControlRun
   }
 
 controlRuns :: Domain -> Case -> CaseSpec -> NativeObservation -> NativeObservation -> [ControlRun]
-controlRuns d one spec stock owned
-  | caseService one `notElem` [Timeout, DelayCallback] = []
-  | otherwise = [ControlRun name (refused (mutate offset owned)) | (name, offset) <- targets]
+controlRuns d one spec stock owned =
+  frameControls ++ [ControlRun name (refused (mutate offset owned)) | caseService one `elem` [Timeout, DelayCallback], (name, offset) <- targets]
   where
     refused mutated = not (null (compareKernelCase adjusted (normalize stock) (normalize mutated)))
+    frameOffset = fromIntegral (stackTop - stackBase)
+    callerFramePreserved observation = case lookup (RegionId "stack") (nativeMemory observation) of
+      Just bytes -> B.length bytes == 0x1000 && B.drop frameOffset bytes == B.replicate (0x1000 - frameOffset) 0
+      Nothing -> False
+    mutateFrame offset = owned { nativeMemory =
+      [(ident, if ident == RegionId "stack" then flipAt offset bytes else bytes) | (ident, bytes) <- nativeMemory owned] }
+    frameControls =
+      [ControlRun "stock-caller-frame" (callerFramePreserved stock), ControlRun "owned-caller-frame" (callerFramePreserved owned)]
+      ++ case lookup (RegionId "stack") (nativeMemory owned) of
+        Just bytes | B.length bytes > frameOffset ->
+          [ ControlRun "incoming-frame-mutation" (not (null (compareKernelCase adjusted (normalize owned) (normalize (mutateFrame frameOffset)))))
+          , ControlRun "private-stack-insensitive" (null (compareKernelCase adjusted (normalize owned) (normalize (mutateFrame 0))))
+          ]
+        _ -> [ControlRun "incoming-frame-observation" False]
     adjusted = case caseKernel spec of
       Just kernel | null (kernelStop kernel) -> spec
       _ -> spec { caseKernel = fmap (\k -> k { kernelUncompared = kernelUncompared k ++ [R4, R5, R6, R7, R8, R9, R10, R11, Sp] }) (caseKernel spec) }
@@ -495,7 +510,7 @@ helperRanges d =
     late = if d == DomainB then 0x8ffc0 else 0
 
 installAggregate :: Domain -> B.ByteString -> Aggregate -> B.ByteString
-installAggregate d code (Aggregate image symbols placements) =
+installAggregate d code (Aggregate image symbols placements _) =
   either error id (Agg.installPlacements (loaderBase d) withSymbols image placements)
   where
     top = maximum (loaderBase d + fromIntegral (B.length code) :
@@ -504,14 +519,14 @@ installAggregate d code (Aggregate image symbols placements) =
     withSymbols = foldl install padded symbols
     install current symbol = either error id (Agg.installSymbol (loaderBase d) current image symbol)
 
-mergeSpans :: [(Word32, Word32)] -> [(Word32, Word32)]
-mergeSpans spans = go (sortOn fst spans)
+mergeSpans :: FetchLayout -> [(Word32, Word32)] -> [(Word32, Word32)]
+mergeSpans layout spans = go (sortOn fst spans)
   where
     go []=[]
     go ((start,size):rest)=extend start (start+size) rest
     extend start end []=[(start,end-start)]
     extend start end ((lo,size):rest)
-      | lo<end=extend start (max end (lo+size)) rest
+      | lo < end || (layout == AllocatedFunctions && lo == end) = extend start (max end (lo + size)) rest
       | otherwise=(start,end-start):extend lo (lo+size) rest
 
 specFor :: Domain -> Role -> Case -> B.ByteString -> B.ByteString -> Maybe (Aggregate, Aggregate) -> B.ByteString -> CaseSpec
@@ -533,7 +548,10 @@ specFor d role one loaderA loaderB aggregates owned = CaseSpec
       , mkRegion (RegionId "bank-b") (GuestAddress 0xfffb40cc) 4 Device (word32le 0)
       ] ++ bodyRegions
   , caseFunctions =
-      [(GuestAddress (fromIntegral address), size) | (address, size) <- mergeSpans (ownedFunctions ++ aggregateFunctions)]
+      [(GuestAddress (fromIntegral start), end - start)
+      | (base, size) <- mergeSpans (if null aggregateList then OriginalFunctions else AllocatedFunctions) (ownedFunctions ++ aggregateFunctions)
+      , let boundaries = base : filter (\address -> base < address && address < base + size) publicEntries ++ [base + size]
+      , (start, end) <- zip boundaries (tail boundaries)]
   , caseInitial =
       [(R0, caseArgument one), (R1, caseArgument1 one), (R2, 0), (R3, 0), (R12, 0)]
       ++ [(register, 0xabc00000 + fromIntegral (fromEnum register)) | register <- [R4 .. R11]]
@@ -549,13 +567,23 @@ specFor d role one loaderA loaderB aggregates owned = CaseSpec
     loader = if d == DomainA then loaderA else loaderB
     otherLoader = if other == DomainA then loaderA else loaderB
     fixture = setW (handlerCell d) (if caseHandler one then 1 else 0) (caseSetup one d (baseFixture d))
+    publicEntries = M.keys (M.fromList
+      [(address, ()) | address <- entryOf d (caseService one) :
+        [Agg.symbolAddress symbol | aggregate <- aggregateList, let Aggregate _ symbols _ _ = aggregate, symbol <- symbols, "xm1_platform_veneer_" `isPrefixOf` Agg.symbolName symbol]])
+    aggregateList = case (role, aggregates) of
+      (Owned, Just (a, b)) -> [a, b]
+      _ -> []
+    carriers = concat [extents | Aggregate _ _ _ extents <- aggregateList]
+    retained (address, size) = all (\(Regions.Extent (Regions.GuestAddress low) (Regions.GuestAddress high)) ->
+      toInteger address + toInteger size <= toInteger low || high <= address) carriers
     ownedFunctions =
-      [(entryOf d service, extentOf service) | service <- [Terminate, ChangePriority, TimedSleep, ReleaseWait, HandlerRelease, Delay, Timeout, DelayCallback]]
-      ++ [(stubBase, 0x80), (switchOf d, 4)]
-      ++ helperRanges d ++ helperRanges other
+      [(stubBase, 0x80)]
+      ++ filter retained (helperRanges d ++ helperRanges other)
+      ++ [(entryOf d service, extentOf service) | service <- [Terminate, ChangePriority, TimedSleep, ReleaseWait, HandlerRelease, Delay, Timeout, DelayCallback], null aggregateList]
+      ++ [(switchOf d, 4) | null aggregateList]
       ++ [(bodyBase, 0x4000) | role == Owned, Nothing <- [aggregates]]
     aggregateFunctions = case (role, aggregates) of
-      (Owned, Just (Aggregate _ symbolsA placementsA, Aggregate _ symbolsB placementsB)) ->
+      (Owned, Just (Aggregate _ symbolsA placementsA _, Aggregate _ symbolsB placementsB _)) ->
         [(Agg.symbolAddress symbol, Agg.symbolSize symbol) | symbol <- symbolsA ++ symbolsB]
         ++ [(Agg.placementAddress placement, Agg.placementBytes placement) | placement <- placementsA ++ placementsB, Agg.placementBytes placement > 0, let section = Agg.placementSection placement, section == ".text" || ".text." `isPrefixOf` section]
       _ -> []
@@ -605,12 +633,15 @@ firstDifference stock owned =
 
 normalize :: NativeObservation -> NativeObservation
 normalize observation = observation
-  { nativeMemory = filter ((`notElem` [RegionId "stack", RegionId "stub"]) . fst) (nativeMemory observation)
+  { nativeMemory =
+      [(ident, if ident == RegionId "stack" then B.drop (fromIntegral (stackTop - stackBase)) bytes else bytes)
+      | (ident, bytes) <- nativeMemory observation, ident /= RegionId "stub"]
   , nativeKernel = fmap clean (nativeKernel observation)
   }
   where
     clean kernel = kernel { observedOrder = fmap (filter keep) (observedOrder kernel) }
-    keep (OrderedWrite (Write (GuestAddress address) _) _) = not (address >= fromIntegral stackBase && address < fromIntegral (stackBase + 0x1000))
+    keep (OrderedWrite (Write (GuestAddress address) (WriteBytes bytes)) _) =
+      not (address >= fromIntegral stackBase && toInteger address + toInteger bytes <= toInteger stackTop)
     keep _ = True
 
 judgeOutcome :: Expected -> RunnerStatus -> Word32 -> Word32 -> Bool
@@ -629,20 +660,20 @@ judgeSelfTest = placementSelfTest && and
   , judgeOutcome (StoppedAt 0x1000 0xffffff18) StopAddress 0xffffff18 0x1000
   ]
 
-aggregateOf :: [Union.Entry] -> Maybe FilePath -> Maybe FilePath -> Maybe FilePath -> IO (Maybe Aggregate)
+aggregateOf :: Maybe Union.DomainMap -> Maybe FilePath -> Maybe FilePath -> Maybe FilePath -> IO (Maybe Aggregate)
 aggregateOf _ Nothing Nothing Nothing = pure Nothing
-aggregateOf entries (Just binPath) (Just symbolsPath) (Just placementsPath) = do
+aggregateOf (Just domain) (Just binPath) (Just symbolsPath) (Just placementsPath) = do
   bytes <- B.readFile binPath
   symbols <- either fail pure . Agg.parseAggregateSymbols =<< B.readFile symbolsPath
   placements <- either fail pure . Agg.parsePlacements =<< B.readFile placementsPath
   unless (not (null placements)) (fail "aggregate placements are empty")
   image <- either fail pure (Agg.aggregateImage symbols bytes)
   forM_ symbols $ \symbol ->
-    unless (symbolAllocated entries placements symbol)
+    unless (symbolAllocated (Union.mapEntries domain) placements symbol)
       (fail ("aggregate symbol has no allocated placement or fixed ABI entry: " ++ Agg.symbolName symbol))
   forM_ placements $ \placement ->
     either fail (const (pure ())) (Agg.sliceAggregate image (Agg.placementAddress placement) (Agg.placementBytes placement))
-  pure (Just (Aggregate image symbols placements))
+  pure (Just (Aggregate image symbols placements (map Union.carrierExtent (Union.mapCarriers domain))))
 aggregateOf _ _ _ _ = fail "aggregate mode requires binary, symbols and placements for both domains"
 
 symbolAllocated :: [Union.Entry] -> [Agg.SectionPlacement] -> Agg.AggregateSymbol -> Bool
@@ -694,12 +725,11 @@ main = do
   aggregateBBin <- optionalArgument "--aggregate-b-bin"
   aggregateBSymbols <- optionalArgument "--aggregate-b-symbols"
   aggregateBPlacements <- optionalArgument "--aggregate-b-placements"
-  entries <- if all (== Nothing) [aggregateABin, aggregateASymbols, aggregateAPlacements, aggregateBBin, aggregateBSymbols, aggregateBPlacements]
-    then pure ([], [])
+  maps <- if all (== Nothing) [aggregateABin, aggregateASymbols, aggregateAPlacements, aggregateBBin, aggregateBSymbols, aggregateBPlacements]
+    then pure Nothing
     else do
       carriers <- argument "--aggregate-carriers"
-      union <- either (fail . show) pure . Union.parseUnion =<< B.readFile carriers
-      pure (Union.mapEntries (Union.unionA union), Union.mapEntries (Union.unionB union))
+      Just <$> (either (fail . show) pure . Union.parseUnion =<< B.readFile carriers)
   cacheRoot <- argument "--cache-root"
   results <- argument "--results"
   loaderABytes <- B.readFile loaderA
@@ -712,8 +742,8 @@ main = do
   unless (sha256Hex digestB == "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec") (fail "loader B is not the pinned image")
   createDirectoryIfMissing True cacheRoot
   createDirectoryIfMissing True (takeDirectory results)
-  aggregateA <- aggregateOf (fst entries) aggregateABin aggregateASymbols aggregateAPlacements
-  aggregateB <- aggregateOf (snd entries) aggregateBBin aggregateBSymbols aggregateBPlacements
+  aggregateA <- aggregateOf (Union.unionA <$> maps) aggregateABin aggregateASymbols aggregateAPlacements
+  aggregateB <- aggregateOf (Union.unionB <$> maps) aggregateBBin aggregateBSymbols aggregateBPlacements
   aggregates <- case (aggregateA, aggregateB) of
     (Nothing, Nothing) -> pure Nothing
     (Just a, Just b) -> pure (Just (a, b))
@@ -721,7 +751,7 @@ main = do
   forM_ [(DomainA, aggregateA), (DomainB, aggregateB)] $ \(domain, candidate) ->
     case candidate of
       Nothing -> pure ()
-      Just (Aggregate _ symbols _) ->
+      Just (Aggregate _ symbols _ _) ->
         forM_ [Terminate, ChangePriority, TimedSleep, ReleaseWait, HandlerRelease, Delay, Timeout, DelayCallback] $ \service ->
           unless (any (\symbol -> Agg.symbolAddress symbol == entryOf domain service && Agg.symbolSize symbol > 0) symbols)
             (fail ("aggregate is missing public S3d entry: " ++ show (domain, service)))

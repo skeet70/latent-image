@@ -66,7 +66,7 @@ S3b's old batch helper removed the complete `stack` observation before a compara
 
 Shared S3b dispatch, S3c resolution/locking, lifecycle helpers and blocking queue operations are emitted once in the aggregate where applicable. Standalone fixed-slot scheduler artifacts retain their existing inlining constraint. The queue union remains its eleven owned extents; the retained wait-release helper at A `0x44568` / B `0xd4528` is not carrier supply.
 
-The own-first, S3d and task-record oracles accept complete aggregate symbols and placement metadata. Source wiring is not aggregate execution evidence. Current joined build, placement, staging, family qualification and review results must be bound separately before integration.
+The own-first, S3d, task-record, cyclic and timer oracles accept complete aggregate symbols and placement metadata. Cyclic/timer aggregate mode omits standalone body installation and keeps foreign instrumentation disjoint from owned carriers. Mapping compaction is separate from executable fetch coverage and preserves declared ABI entry boundaries and readonly exclusions under unchanged native limits. Source wiring is not aggregate execution evidence. Current joined build, placement, staging, family qualification and review results must be bound separately before integration.
 
 The unchanged frozen A/B union images subsequently pass 62 semaphore cases, including both actual timed-timeout caller returns, and 62 task-record cases with 466 controls and four emitted create/delete smoke cases. Semaphore stock observations are reused in both domains; owned semaphore roles execute afresh. Task-record roles execute afresh under current admission. These results are recorded in `private-data/scratch/FirmwarePlatformJoin/native-increment-01.json`.
 
@@ -81,6 +81,11 @@ The cyclic/detached-pop timer source composition uses real retired extents and n
 The corrected actual union stages DAT `5f639314db9ba160a12b907dc2f3bde4ae7c7902b93c531458617727a4e3fccb`. The staging command reparses that DAT, verifies its extracted loaders and restores the pinned source. Comparison against all 252 allocated sections and 113 declared four-byte veneers per domain finds identical emitted bytes, including eight A and seven B aligned readonly zero words. `private-data/scratch/FirmwarePlatformJoin/stage-reviewed-02/allocated-byte-proof.json` binds those checks, hashes and effective carrier images for subsequent native runs. This supersedes the invalid earlier DAT, not its historical receipt.
 
 The split-frame continuation repair exposes the next exact static premise in `.text.s2_select`: A `0x43d88`, bytes `0a d8 a0 e3`, sets SP to `0xa0000`; B `0xd3d44`, bytes `13 d8 a0 e3`, sets SP to `0x130000`. The generic walker reports `StackUnbounded` at those alternate idle-stack roots. Live ownership requires explicit alternate-stack and restored-task-stack lifetime, bounds and memory-permission contracts; successful host staging does not supply those physical preconditions.
+
+The first S3d run against the corrected effective carrier images refuses native case admission at `terminate-ready-a` with `functions limit`; its launcher succeeds but the application exits 1. No firmware behavior is accepted from that refusal. Fetch metadata compaction now retains the exact executable union, splits at declared public entries and omits retired helper declarations that overlap owned carriers. The lifecycle comparison retains live incoming-frame bytes and ordered caller writes; controls challenge live-frame corruption and private-stack insensitivity. Fresh qualification remains required.
+
+S3d lifecycle-return fixtures redirect the owned dispatcher entry to foreign save/wake/return instrumentation; blocking fixtures stop at that entry. Those fixtures cannot establish unmodified dispatcher/context-transfer acceptance. This boundary remains separate from source placement, byte preservation and service/callback comparisons.
+
 
 
 
