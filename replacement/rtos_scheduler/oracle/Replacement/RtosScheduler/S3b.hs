@@ -189,7 +189,7 @@ mergeSpans spans = go (sortOn fst spans)
     go ((start,size):rest)=extend start (start+size) rest
     extend start end []=[(start,end-start)]
     extend start end ((lo,size):rest)
-      | lo<=end=extend start (max end (lo+size)) rest
+      | lo<end=extend start (max end (lo+size)) rest
       | otherwise=(start,end-start):extend lo (lo+size) rest
 
 readSymbols :: FilePath -> IO [Agg.AggregateSymbol]
@@ -205,6 +205,6 @@ flagValue flag arguments = case dropWhile (/= flag) arguments of
   _ : value : _ -> Just value
 
 stripSymbolFlags :: [String] -> [String]
-stripSymbolFlags (flag : _ : rest) | flag `elem` ["--symbols-a", "--symbols-b"] = stripSymbolFlags rest
+stripSymbolFlags (flag : _ : rest) | flag `elem` ["--symbols-a", "--symbols-b", "--placements-a", "--placements-b"] = stripSymbolFlags rest
 stripSymbolFlags (value : rest) = value : stripSymbolFlags rest
 stripSymbolFlags [] = []

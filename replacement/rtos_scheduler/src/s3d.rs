@@ -763,11 +763,7 @@ pub(crate) fn release<M: Machine>(m: &M, domain: Domain, id: EncodedId, handler:
         return Err(ServiceError::NotWaiting);
     }
     if state & TaskState::OBJECT_QUEUED.bits() == 0 {
-        let waiting = core::hint::black_box(
-            release_waiting::<M>
-                as fn(&M, DomainWords, KernelContext, Task, InterruptState, bool),
-        );
-        waiting(m, words, record, task, saved, handler);
+        release_waiting(m, words, record, task, saved, handler);
         return Ok(());
     }
     release_queued(m, words, record, task, saved, handler)

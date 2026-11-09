@@ -509,7 +509,7 @@ mergeSpans spans = go (sortOn fst spans)
     go ((start,size):rest)=extend start (start+size) rest
     extend start end []=[(start,end-start)]
     extend start end ((lo,size):rest)
-      | lo<=end=extend start (max end (lo+size)) rest
+      | lo<end=extend start (max end (lo+size)) rest
       | otherwise=(start,end-start):extend lo (lo+size) rest
 
 specFor :: Domain -> Role -> Case -> B.ByteString -> B.ByteString -> Maybe Aggregate -> B.ByteString -> CaseSpec

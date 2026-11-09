@@ -1118,7 +1118,7 @@ mergeSpans spans = go (sortOn fst spans)
     go ((start,size):rest)=extend start (start+size) rest
     extend start end []=[(start,end-start)]
     extend start end ((lo,size):rest)
-      | lo<=end=extend start (max end (lo+size)) rest
+      | lo<end=extend start (max end (lo+size)) rest
       | otherwise=(start,end-start):extend lo (lo+size) rest
 
 runDomain :: FilePath -> FilePath -> FilePath -> Facts -> Domain -> Maybe Aggregate -> Image -> Image -> Image -> [(Word32, Word32)] -> IO ([CaseRun], [ControlRun])

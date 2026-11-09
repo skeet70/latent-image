@@ -62,6 +62,12 @@ main = do
   ownedBDigest <- sha256File ownedB
   timerADigest <- sha256File timerA
   timerBDigest <- sha256File timerB
+  aggregateABinDigest <- traverse sha256File aggregateABin
+  aggregateASymbolsDigest <- traverse sha256File aggregateASymbols
+  aggregateAPlacementsDigest <- traverse sha256File aggregateAPlacements
+  aggregateBBinDigest <- traverse sha256File aggregateBBin
+  aggregateBSymbolsDigest <- traverse sha256File aggregateBSymbols
+  aggregateBPlacementsDigest <- traverse sha256File aggregateBPlacements
   unless (sha256Hex loaderADigest == "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882") (failH (loaderA ++ " is not the pinned X-M1 1.50 loader"))
   unless (sha256Hex loaderBDigest == "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec") (failH (loaderB ++ " is not the pinned X-M1 1.50 loader"))
   checkStorageBudget (takeDirectory resultsPath)
@@ -116,6 +122,12 @@ main = do
                 , "owned_b_bin_sha256" .= sha256Hex ownedBDigest
                 , "timer_a_bin_sha256" .= sha256Hex timerADigest
                 , "timer_b_bin_sha256" .= sha256Hex timerBDigest
+                , "aggregate_a_bin_sha256" .= fmap sha256Hex aggregateABinDigest
+                , "aggregate_a_symbols_sha256" .= fmap sha256Hex aggregateASymbolsDigest
+                , "aggregate_a_placements_sha256" .= fmap sha256Hex aggregateAPlacementsDigest
+                , "aggregate_b_bin_sha256" .= fmap sha256Hex aggregateBBinDigest
+                , "aggregate_b_symbols_sha256" .= fmap sha256Hex aggregateBSymbolsDigest
+                , "aggregate_b_placements_sha256" .= fmap sha256Hex aggregateBPlacementsDigest
                 ]
           , "cases" .= map caseValue runs
           , "controls" .= map controlValue controls
@@ -138,6 +150,12 @@ main = do
               , "owned_b" .= ownedB
               , "timer_a" .= timerA
               , "timer_b" .= timerB
+              , "aggregate_a_bin_sha256" .= fmap sha256Hex aggregateABinDigest
+              , "aggregate_a_symbols_sha256" .= fmap sha256Hex aggregateASymbolsDigest
+              , "aggregate_a_placements_sha256" .= fmap sha256Hex aggregateAPlacementsDigest
+              , "aggregate_b_bin_sha256" .= fmap sha256Hex aggregateBBinDigest
+              , "aggregate_b_symbols_sha256" .= fmap sha256Hex aggregateBSymbolsDigest
+              , "aggregate_b_placements_sha256" .= fmap sha256Hex aggregateBPlacementsDigest
               ]
           , "counterexamples" .=
               [ object ["domain" .= domain, "case" .= name, "difference" .= message]

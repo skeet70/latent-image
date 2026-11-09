@@ -95,6 +95,7 @@ data StageError
   | StagedLoaderMismatch Domain
   | PatchRejected String
   | RestoreMismatch
+  | ScratchExternal Domain External
   deriving (Eq, Show)
 
 require :: Bool -> StageError -> Either StageError ()
@@ -198,6 +199,11 @@ branchTargets text = concatMap line (C.lines text)
 
 admit :: Union -> CanonicalSource -> Linked -> Either StageError Admitted
 admit union source linked = do
+  forM_ domains $ \domain ->
+    forM_ (mapExternals (domainMap union domain)) $ \external ->
+      case externalKind external of
+        ScratchEntry -> Left (ScratchExternal domain external)
+        _ -> pure ()
   forM_ domains $ \domain -> either (Left . FitRejected) Right (fit (domainMap union domain))
   admitted <- forM domains $ \domain -> do
     let dm = domainMap union domain

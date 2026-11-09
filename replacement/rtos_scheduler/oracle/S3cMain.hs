@@ -116,7 +116,7 @@ callbackCode domain row = wordsBytes (capture ++ mode ++ [0xe12fff1e])
       _ -> []
 
 spec :: (Word32, Word32) -> [(Word32, Word32)] -> Domain -> Entry -> Row -> B.ByteString -> String -> CaseSpec
-spec (codeLo, codeHi) functionSpans domain entry row code ident = CaseSpec ident "X-M1 1.50 S3c contracts at 55436fc85c, synthetic typed scheduler state" "one native service call, no concurrent CPU or devices beyond IRQ pending words" (ga (entryAt domain entry)) (ga 0x920000) (regions ++ [exitRegion]) [(ga at,size) | (at,size) <- functionSpans] initial Returned [(R4,0xabc00004)] [] Nothing (Just kernel)
+spec (codeLo, codeHi) functionSpans domain entry row code ident = CaseSpec ident "X-M1 1.50 S3c contracts at 55436fc85c, synthetic typed scheduler state" "one native service call, no concurrent CPU or devices beyond IRQ pending words" (ga (entryAt domain entry)) (ga 0x920000) (regions ++ [exitRegion]) ([(ga at,size) | (at,size) <- functionSpans] ++ [(ga 0x900000,64),(ga 0x900040,64),(ga 0x930000,16)]) initial Returned [(R4,0xabc00004)] [] Nothing (Just kernel)
   where
     ga = GuestAddress . fromIntegral
     codeRegions = [mkRegion (RegionId "code-loader") (ga codeLo) (fromIntegral(codeHi-codeLo)) ReadExecute (B.take (fromIntegral(codeHi-codeLo)) (B.drop (fromIntegral(codeLo-loaderBase domain)) code))]
@@ -200,7 +200,7 @@ mergeSpans spans = go (sortOn fst spans)
     go ((start,size):rest)=extend start (start+size) rest
     extend start end []=[(start,end-start)]
     extend start end ((lo,size):rest)
-      | lo<=end=extend start (max end (lo+size)) rest
+      | lo<end=extend start (max end (lo+size)) rest
       | otherwise=(start,end-start):extend lo (lo+size) rest
 
 readSymbols :: FilePath -> IO [Agg.AggregateSymbol]
