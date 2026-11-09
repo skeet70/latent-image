@@ -82,6 +82,7 @@ import Replacement.RtosOwnFirst.Artifact (LinkedDomain (..), StageError (..), ow
 import qualified Replacement.RtosOwnFirst.Assembly as A
 import Replacement.RtosOwnFirst.Regions
 import qualified Replacement.RtosPlatform.Aggregate as Agg
+import qualified Replacement.RtosPlatform.Union as U
 import System.FilePath ((</>))
 
 data Slot = S60 | Sfc | S100 | S128 | S12c | S130 | S134 | S138 | S13c | S148 | S14c | S150 | S154 | S164 | S168 | S16c | S1618
@@ -487,8 +488,9 @@ ownedDomain fill domain table linked = do
     loaderBase = case domain of DomainA -> 0x40000; DomainB -> 0xd0000
     regionEntryWord region = let GuestAddress value = regionEntry region in value
 
-aggregateDomain :: Word32 -> Domain -> DomainTable -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> Either String OwnedDomain
-aggregateDomain fill domain table stock binary symbolBytes placementBytes = do
+aggregateDomain :: Word32 -> Domain -> DomainTable -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> Either String OwnedDomain
+aggregateDomain fill domain table stock binary symbolBytes placementBytes carrierBytes = do
+  union <- either (Left . show) Right (U.parseUnion carrierBytes)
   symbols <- Agg.parseAggregateSymbols symbolBytes
   placements <- Agg.parsePlacements placementBytes
   unless (not (null symbols) && not (null placements)) (Left "aggregate symbols and placements must be nonempty")
@@ -496,11 +498,21 @@ aggregateDomain fill domain table stock binary symbolBytes placementBytes = do
       image = Agg.AggregateImage base binary
       GuestAddress loaderBase = domainLoaderBase domain
       symbolSpans = [(Agg.symbolAddress symbol, Agg.symbolSize symbol) | symbol <- symbols, Agg.symbolSize symbol > 0]
+      dm = U.domainMap union domain
+      fixed symbol = any (\entry ->
+        let GuestAddress address = U.entryAddress entry
+         in Agg.symbolName symbol == U.entryVeneer entry
+              && Agg.symbolAddress symbol == address && Agg.symbolSize symbol == 4) (U.mapEntries dm)
+      placementFits placement = any (\(Extent (GuestAddress start) (GuestAddress end)) ->
+        start <= Agg.placementAddress placement
+          && toInteger (Agg.placementAddress placement) + toInteger (Agg.placementBytes placement) <= toInteger end) (U.runs dm)
       covered (address, size) = any (\placement ->
         Agg.placementAddress placement <= address
           && toInteger address + toInteger size <= toInteger (Agg.placementAddress placement) + toInteger (Agg.placementBytes placement)) placements
   unless (B.length stock == domainLoaderSize domain) (Left "loader size")
-  unless (all covered symbolSpans) (Left "aggregate function is outside placement metadata")
+  unless (all placementFits placements) (Left "aggregate placement is outside packed carrier space")
+  unless (all (\symbol -> Agg.symbolSize symbol == 0 || fixed symbol || covered (Agg.symbolAddress symbol, Agg.symbolSize symbol)) symbols)
+    (Left "aggregate function is outside placement metadata and declared fixed ABI entries")
   mapM_ (\(address, size) -> Agg.sliceAggregate image address size) symbolSpans
   entries <- mapM (slotEntry table) slots
   unless (all (\entry -> any (\(address, size) -> address == entry && size > 0) symbolSpans) entries)

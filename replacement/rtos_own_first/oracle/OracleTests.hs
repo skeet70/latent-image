@@ -11,6 +11,7 @@ import qualified Data.Aeson.KeyMap as KM
 import Data.Bits (complement, (.&.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
+import qualified Data.ByteString.Char8 as C
 import Data.Char (isAsciiLower, isDigit)
 import Data.Either (isLeft, isRight)
 import Data.List (nub, sort)
@@ -34,6 +35,7 @@ import Emulation.NativeObservation
 import Emulation.OwnedCase (CaseId (..))
 import Emulation.Sha256 (parseSha256Hex)
 import FujiAF.Host (get, list)
+import Numeric (showHex)
 import qualified FujiAF.Host as Host
 import Replacement.RtosOwnFirst.Artifact (LinkedDomain (..))
 import Replacement.RtosOwnFirst.Assembly
@@ -107,6 +109,43 @@ generationCount count = either error id (mkGenerationCount count)
 
 shrinkBudget :: Int -> ShrinkBudget
 shrinkBudget budget = either error id (mkShrinkBudget budget)
+
+aggregateAdmission :: DomainTable -> Bool
+aggregateAdmission table =
+  let entries = [(slot, either error id (slotEntry table slot)) | slot <- slots]
+      symbol slot = "fixed_" ++ slotTag slot
+      entryRows = [object ["group" .= ("own-first" :: String), "name" .= slotTag slot, "address" .= hexText address, "symbol" .= symbol slot, "veneer" .= symbol slot] | (slot, address) <- entries]
+      domainValue :: Word32 -> Int -> [Value] -> Value
+      domainValue base size rows = object
+        [ "loader_base" .= hexText base, "loader_size" .= size, "entries" .= rows
+        , "carriers" .= [object ["group" .= ("own-first" :: String), "start" .= hexText base, "end" .= hexText (base + fromIntegral size)]]
+        , "externals" .= ([] :: [Value]), "demand" .= ([] :: [Value])
+        ]
+      carriers = BL.toStrict (encode (object
+        [ "fill_word" .= ("0xe7f000f0" :: String)
+        , "domains" .= object ["a" .= domainValue 0x40000 (domainLoaderSize DomainA) entryRows, "b" .= domainValue 0xd0000 (domainLoaderSize DomainB) []]
+        ]))
+      placements = BL.toStrict (encode (object ["placements" .=
+        [object ["address" .= ("0x40000" :: String), "bytes" .= (4 :: Int), "section" .= (".text.packed" :: String)]
+        ,object ["address" .= ("0x40004" :: String), "bytes" .= (4 :: Int), "section" .= (".rodata" :: String)]]]))
+      top = maximum (map ((+ 4) . snd) entries)
+      binary = B.replicate (fromIntegral (top - 0x40000)) 0x5a
+      stock = B.replicate (domainLoaderSize DomainA) 0x33
+      nm address size name = showHex address "" ++ " " ++ showHex size "" ++ " T " ++ name ++ "\n"
+      symbols = concat [nm address (4 :: Word32) (symbol slot) | (slot, address) <- entries] ++ nm (0x40000 :: Word32) (4 :: Word32) "packed"
+      admit rows plans = aggregateDomain 0xe7f000f0 DomainA table stock binary (C.pack rows) plans carriers
+      accepted = do
+        owned <- admit symbols placements
+        body <- ownedBody owned S60
+        pure (bodyEntry body == either error id (slotEntry table S60)
+          && case bodyCode body of
+            [(0x40000, image)] -> B.take 8 image == B.replicate 8 0x5a && B.take 4 (B.drop 8 image) == B.replicate 4 0x33
+            _ -> False)
+   in accepted == Right True
+        && isLeft (admit (symbols ++ nm (0x40008 :: Word32) (4 :: Word32) "unplaced") placements)
+        && isLeft (admit (symbols ++ nm (0x40008 :: Word32) (4 :: Word32) "fixed_s60") placements)
+        && isLeft (admit symbols (BL.toStrict (encode (object ["placements" .=
+          [object ["address" .= ("0x900000" :: String), "bytes" .= (4 :: Int), "section" .= (".text.outside" :: String)]]]))))
 
 pureChecks :: DomainTable -> [IO Bool]
 pureChecks tableA =
@@ -209,6 +248,7 @@ pureChecks tableA =
            in isRight (parseCommand arguments)
                 && all (\missing -> isLeft (parseCommand (concatMap (\flag -> [flag, "input"]) (filter (/= missing) flags)))) flags
                 && isRight (parseCommand (["--owned-a-bin", "standalone-a", "--owned-a-symbols", "standalone-a.symbols", "--owned-b-bin", "standalone-b", "--owned-b-symbols", "standalone-b.symbols"] ++ arguments))
+      , check "aggregate fixed ABI entries coexist with packed code and rodata without admitting unplaced functions" (aggregateAdmission tableA)
       , check "recorded boundaries parse into typed kinds" $
           parseDifferenceKind "RegisterKind R0" == Right (RegisterKind R0)
             && parseDifferenceKind "MemoryKind (RegionId \"buffer\")" == Right (MemoryKind (RegionId "buffer"))

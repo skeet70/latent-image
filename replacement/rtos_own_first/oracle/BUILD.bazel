@@ -42,6 +42,7 @@ haskell_library(
         "//host:text",
         "//replacement/rtos_own_first/stage:own-first-artifact",
         "//replacement/rtos_platform:aggregate",
+        "//replacement/rtos_platform:platform-artifact",
     ],
 )
 
@@ -49,6 +50,7 @@ haskell_library(
 # bazel run //replacement/rtos_own_first/oracle:own-first-oracle -- --loader-a LOADER_A --loader-b LOADER_B --work NEW_DIRECTORY --summary NEW_JSON
 # Aggregate mode overrides the standalone defaults with --aggregate-a-bin platform-a.bin
 # --aggregate-a-symbols platform-a.symbols --placements-a placement-a.json and the three B flags.
+# Bazel supplies --carriers replacement/rtos_platform/carriers.json for fixed ABI entry admission.
 haskell_binary(
     name = "own-first-oracle",
     srcs = ["OracleMain.hs"],
@@ -58,6 +60,8 @@ haskell_binary(
         "$(rootpath //emulation:native-runner)",
         "--regions",
         "$(rootpath //replacement/rtos_own_first:regions.json)",
+        "--carriers",
+        "$(rootpath //replacement/rtos_platform:carriers.json)",
         "--owned-a-bin",
         "$(rootpath //replacement/rtos_own_first:own-first-a.bin)",
         "--owned-a-symbols",
@@ -67,7 +71,7 @@ haskell_binary(
         "--owned-b-symbols",
         "$(rootpath //replacement/rtos_own_first:own-first-b.symbols)",
     ],
-    data = _LINKED + ["//emulation:native-runner"],
+    data = _LINKED + ["//emulation:native-runner", "//replacement/rtos_platform:carriers.json"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":own-first-oracle-lib",

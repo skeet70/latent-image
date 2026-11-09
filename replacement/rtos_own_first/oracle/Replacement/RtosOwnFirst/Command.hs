@@ -75,7 +75,7 @@ parseCommand arguments = do
       Right control
 
 commonValueFlags, generationValueFlags :: [String]
-commonValueFlags = ["--runner", "--regions", "--owned-a-bin", "--owned-a-symbols", "--owned-b-bin", "--owned-b-symbols", "--loader-a", "--loader-b", "--work", "--summary"] ++ aggregateValueFlags
+commonValueFlags = ["--runner", "--regions", "--carriers", "--owned-a-bin", "--owned-a-symbols", "--owned-b-bin", "--owned-b-symbols", "--loader-a", "--loader-b", "--work", "--summary"] ++ aggregateValueFlags
 generationValueFlags = ["--seed", "--shrink-budget", "--control"]
 
 aggregateValueFlags :: [String]

@@ -300,6 +300,7 @@ data InputIdentities = InputIdentities
   , inputOwnedBSymbols :: Sha256
   , inputPlacementsA :: Sha256
   , inputPlacementsB :: Sha256
+  , inputCarriers :: Sha256
   }
 
 inputIdentityFields :: [(String, InputIdentities -> Sha256)]
@@ -314,6 +315,7 @@ inputIdentityFields =
   , ("owned_b_symbols_sha256", inputOwnedBSymbols)
   , ("placements_a_sha256", inputPlacementsA)
   , ("placements_b_sha256", inputPlacementsB)
+  , ("carriers_sha256", inputCarriers)
   ]
 
 instance ToJSON InputIdentities where
@@ -322,8 +324,8 @@ instance ToJSON InputIdentities where
 parseInputIdentities :: Value -> Either String InputIdentities
 parseInputIdentities value = do
   let expected = map fst inputIdentityFields
-      legacy = filter (`notElem` ["placements_a_sha256", "placements_b_sha256"]) expected
-  unless (sort (keys value) `elem` map sort [expected, legacy]) (Left "replay summary input set differs from the current inputs")
+      legacy = filter (`notElem` ["placements_a_sha256", "placements_b_sha256", "carriers_sha256"]) expected
+  unless (sort (keys value) `elem` map sort [expected, filter (/= "carriers_sha256") expected, legacy]) (Left "replay summary input set differs from the current inputs")
   InputIdentities
     <$> field "regions_sha256"
     <*> field "runner_sha256"
@@ -335,6 +337,7 @@ parseInputIdentities value = do
     <*> field "owned_b_symbols_sha256"
     <*> optionalField "placements_a_sha256"
     <*> optionalField "placements_b_sha256"
+    <*> optionalField "carriers_sha256"
   where
     field key = parseSha256Hex (str (get value key))
     optionalField key = if key `elem` keys value then field key else Right (sha256 B.empty)
@@ -389,6 +392,7 @@ main = do
         else ["--owned-a-bin", "--owned-a-symbols", "--owned-b-bin", "--owned-b-symbols"]
   ownedPaths <- mapM input ownedFlags
   placementPaths <- if aggregateMode then mapM input ["--placements-a", "--placements-b"] else pure []
+  carrierPath <- if aggregateMode then Just <$> input "--carriers" else pure Nothing
   lookupEnv "BUILD_WORKSPACE_DIRECTORY" >>= mapM_ setCurrentDirectory
   loaderPaths <- mapM input ["--loader-a", "--loader-b"]
   work <- output "--work"
@@ -401,6 +405,7 @@ main = do
           ++ zip ["--loader-a", "--loader-b"] loaderPaths
           ++ zip ownedFlags ownedPaths
           ++ zip ["--placements-a", "--placements-b"] placementPaths
+          ++ maybe [] (\path -> [("--carriers", path)]) carrierPath
           ++ maybe [] (\source -> [("--replay", source)]) replaySource
   setEnv "XM1_STORAGE_PATH" (takeDirectory work)
   enterSlot (rewriteFlags replacements arguments)
@@ -412,6 +417,7 @@ main = do
   regionsBytes <- readRegular 0x100000 regionsPath
   ownedBytes <- mapM (readRegular 0x100000) ownedPaths
   placementBytes <- mapM (readRegular 0x100000) placementPaths
+  carrierBytes <- maybe (pure B.empty) (readRegular 0x100000) carrierPath
   loaders <- mapM (readRegular 0x20000) loaderPaths
   forM_ (zip domains loaders) $ \(domain, loader) ->
     ensure (digest loader == loaderSha256 domain) ("--loader-" ++ domainLabel domain ++ " is not the pinned X-M1 1.50 loader")
@@ -420,7 +426,7 @@ main = do
     ([binA, symbolsA, binB, symbolsB], [placementsA, placementsB]) ->
       forM (zip3 domains loaders [(binA, symbolsA, placementsA), (binB, symbolsB, placementsB)]) $ \(domain, loader, (binary, symbols, placements)) ->
         orFailText ("aggregate " ++ domainLabel domain)
-          (aggregateDomain (tableFill table) domain (domainTable table domain) loader binary symbols placements)
+          (aggregateDomain (tableFill table) domain (domainTable table domain) loader binary symbols placements carrierBytes)
     ([binA, symbolsA, binB, symbolsB], []) | not aggregateMode ->
       forM (zip domains [LinkedDomain binA symbolsA, LinkedDomain binB symbolsB]) $ \(domain, linked) ->
         orFail ("owned " ++ domainLabel domain) (ownedDomain (tableFill table) domain (domainTable table domain) linked)
@@ -444,6 +450,7 @@ main = do
           , inputOwnedBSymbols = sha256 symbolsB
           , inputPlacementsA = sha256 (case placementBytes of first : _ -> first; _ -> B.empty)
           , inputPlacementsB = sha256 (case placementBytes of [_, second] -> second; _ -> B.empty)
+          , inputCarriers = sha256 carrierBytes
           }
     _ -> failH "unreachable input shape"
   case command of
