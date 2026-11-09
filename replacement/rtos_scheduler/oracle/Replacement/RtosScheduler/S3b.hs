@@ -156,9 +156,10 @@ main = do
             ownedCodeSpans s = case symbols of
               Nothing -> stockCodeSpans s
               Just _ -> [(aggregateLo, aggregateHi-aggregateLo)]
+            placementFunctions = maybe [] (map (\placement -> (Agg.placementAddress placement, Agg.placementBytes placement)) . filter (\placement -> ".text." `isPrefixOf` Agg.placementSection placement)) placements
             ownedFunctionSpans s = case symbols of
               Nothing -> stockFunctionSpans s
-              Just _ -> mergeSpans (symbolSpans ++ helperSpans)
+              Just _ -> mergeSpans (symbolSpans ++ helperSpans ++ placementFunctions)
         forM [minBound..maxBound] $ \s -> do
           let cases=rows s
               roles=[("stock",stock,stockCodeSpans s,stockFunctionSpans s),("owned",candidate,ownedCodeSpans s,ownedFunctionSpans s),("equivalent",poke candidate [(entry s+delta-base+4,w 0xe1a0b00d)],ownedCodeSpans s,ownedFunctionSpans s),("mutant",poke candidate [(entry s+delta-base,w 0xe3e00010<>w 0xe12fff1e)],ownedCodeSpans s,ownedFunctionSpans s)]

@@ -6,7 +6,7 @@ import Data.Aeson (object, (.=))
 import Data.Char (toLower)
 import Data.Bits ((.&.), (.|.), shiftL, shiftR)
 import qualified Data.ByteString as B
-import Data.List (nub, sortOn)
+import Data.List (isPrefixOf, nub, sortOn)
 import Data.Word (Word32)
 import Emulation.NativeObservation
 import Emulation.OwnedCase
@@ -257,7 +257,8 @@ main = do
         symbolSpans = [(Agg.symbolAddress symbol, Agg.symbolSize symbol) | symbol <- selected]
         placementSpans = maybe [] (map (\placement -> (Agg.placementAddress placement, Agg.placementBytes placement))) placements
         stockFunctions = [(stockEntry domain at,size) | (at,size) <- [(0x439d8,60),(0x43a14,40),(0x43c48,92),(0x43ca4,124),(0x43d20,176),(0x44018,if domain == A then 44 else 48),(0x433e4,96),(0x43640,4)]] ++ [(entryAt domain e,fromIntegral(extent e)) | e <- [minBound .. maxBound]]
-        ownedFunctions = if aggregate then mergeSpans (symbolSpans ++ stockFunctions) else stockFunctions
+        placementFunctions = maybe [] (map (\placement -> (Agg.placementAddress placement, Agg.placementBytes placement)) . filter (\placement -> ".text." `isPrefixOf` Agg.placementSection placement)) placements
+        ownedFunctions = if aggregate then mergeSpans (symbolSpans ++ stockFunctions ++ placementFunctions) else stockFunctions
         stockBounds = (stockEntry domain 0x433e4, entryAt domain Enable + fromIntegral(extent Enable))
         ownedBounds = if aggregate
           then (min (fst stockBounds) (minimum (map fst (symbolSpans ++ placementSpans))), max (snd stockBounds) (maximum [address + size | (address, size) <- symbolSpans ++ placementSpans]))
