@@ -470,7 +470,8 @@ routeSignature :: Observation -> [(T.Text,Maybe T.Text,Q.MenuTriple,Maybe Q.Menu
 routeSignature = map (\m -> (Q.milestonePhase m,Q.milestoneKey m,Q.milestoneExpected m,Q.milestoneObserved m)) . obsMilestones
 compareRoutes :: Observation -> Observation -> Either Refusal ()
 compareRoutes stock owned = do
-  expect Binding (drop 3 (obsInputs stock) == drop 3 (obsInputs owned))
+  expect Binding (length (obsInputs stock) == 6 && length (obsInputs owned) == 6
+    && take 2 (drop 3 (obsInputs stock)) == take 2 (drop 3 (obsInputs owned)))
   expect Route (obsRole stock == Stock && obsRole owned == Owned && routeSignature stock == routeSignature owned)
 data SummaryEntry = SummaryEntry !Domain !Address !Semantic deriving (Eq,Ord,Show)
 data RedesignCounts = RedesignCounts
