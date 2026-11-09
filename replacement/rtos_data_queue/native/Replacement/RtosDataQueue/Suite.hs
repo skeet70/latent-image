@@ -17,12 +17,13 @@ import Emulation.NativeObservation (Barrier (..), KernelObservation (..), Native
 import Emulation.OwnedCase (CaseOutcome (..), CaseSpec (..), KernelCase (..), Permission (..), assemble, caseOutcome, mkRegion, mkStackContext, plainLimit, readWordAt, word32le, writeBatch)
 import qualified Replacement.RtosPlatform.Aggregate as Agg
 import Replacement.RtosDataQueue.Layout
+import qualified Replacement.RtosOwnFirst.Regions as Regions
 import Replacement.RtosOwnFirst.Regions (Domain (..), GuestAddress (..), domainLabel)
 import System.FilePath ((</>))
 
 data Image = Image { imageBase :: Word32, imageBytes :: B.ByteString }
 
-data Aggregate = Aggregate { aggregateImage :: Agg.AggregateImage, aggregateSymbols :: [Agg.AggregateSymbol], aggregatePlacements :: [Agg.SectionPlacement] }
+data Aggregate = Aggregate { aggregateImage :: Agg.AggregateImage, aggregateSymbols :: [Agg.AggregateSymbol], aggregatePlacements :: [Agg.SectionPlacement], aggregateCarriers :: [Regions.Extent] }
 
 data Call = Create | Delete | Send | SendPoll | SendPollHandler | SendTimeout
           | ForceSend | ForceSendHandler | Receive | ReceivePoll | ReceiveTimeout
@@ -803,22 +804,22 @@ install image address bytes current =
   let offset = fromIntegral (address - imageBase image)
    in B.take offset current <> bytes <> B.drop (offset + B.length bytes) current
 
-aggregateImageBytes :: Image -> Maybe Aggregate -> B.ByteString
-aggregateImageBytes image Nothing = imageBytes image
-aggregateImageBytes image (Just aggregate) =
-  either error id (Agg.installPlacements (imageBase image) withSymbols (aggregateImage aggregate) (aggregatePlacements aggregate))
+aggregateImageBytes :: Image -> Aggregate -> B.ByteString
+aggregateImageBytes stock aggregate = foldl installCarrier original (aggregateCarriers aggregate)
   where
-    withSymbols = foldl install (imageBytes image) (aggregateSymbols aggregate)
-    install current symbol = either error id (Agg.installSymbol (imageBase image) current (aggregateImage aggregate) symbol)
+    original = B.take size (imageBytes stock) <> B.replicate (max 0 (size - B.length (imageBytes stock))) 0
+    size = fromIntegral (top - imageBase stock)
+    top = maximum [high | Regions.Extent _ (Regions.GuestAddress high) <- aggregateCarriers aggregate]
+    installCarrier current (Regions.Extent (Regions.GuestAddress low) (Regions.GuestAddress high)) =
+      install stock low (either error id (Agg.sliceAggregate (aggregateImage aggregate) low (high - low))) current
 
--- | The stock role runs the stock timer block; the owned role overlays the owned timer module at
--- | its stock extents and the stock timeout callback the family does not own.
 codeBytes :: Facts -> Domain -> Bool -> Maybe Aggregate -> Image -> Image -> Image -> B.ByteString
 codeBytes _ domain owned aggregate timerImage image stockImage
   | not owned = imageBytes stockImage
+  | Just joined <- aggregate = aggregateImageBytes stockImage joined
   | otherwise =
       install image (timeoutCallback domain) (sliceImage stockImage (timeoutCallback domain) timeoutCallbackSize)
-        (install image (timerModuleStart domain) (sliceImage timerImage (timerModuleStart domain) (fromIntegral (timerModuleSpan domain))) (aggregateImageBytes image aggregate))
+        (install image (timerModuleStart domain) (sliceImage timerImage (timerModuleStart domain) (fromIntegral (timerModuleSpan domain))) (imageBytes image))
 
 pages :: Facts -> Domain -> Case -> [Page]
 pages facts domain one =
@@ -855,30 +856,50 @@ caseFor facts domain owned aggregate timerImage ownedSymbols image stockImage on
   CaseSpec
     { caseId = caseIdText (caseName one) ++ "-" ++ domainLabel domain
     , caseProvenance = "X-M1 1.50 data-queue stock ABI, x70view 55436fc85c0560dd252b0410af6f2427fe198cd3; synthetic queue, task, actor and timer-heap state"
-    , caseExclusion = "Synthetic queue, task and timer-heap state. A second task calls the stock entry, runs the domain tick over the armed heap, or records the callback boundary and calls the stock timeout callback; no firmware integration."
+    , caseExclusion = "Synthetic queue, task and timer-heap state. The selected actor calls the live service or tick; the external callback instrument calls the live timeout callback. Physical IRQ delivery and concurrent cores are not modeled."
     , caseEntry = N.GuestAddress (fromIntegral (entryAddress domain (caseCall one)))
     , caseExit = N.GuestAddress (fromIntegral exitAddress)
-    , caseRegions = [mkRegion (RegionId "code") (N.GuestAddress (fromIntegral codeBase)) (fromIntegral (B.length code)) ReadExecute code]
+    , caseRegions = codeRegions
         ++ [mkRegion ident (N.GuestAddress (fromIntegral address)) size permission (overlay address background (wordsFor owned ident)) | Page ident (GuestAddress address) size permission background <- dataPages]
     , caseFunctions = [(N.GuestAddress (fromIntegral address), size) | (address, size) <- functions]
     , caseInitial = initialRegisters facts domain one
     , caseExpectedStatus = Returned
     , caseExpectedRegisters = expectedRegisters one
-    , caseExpectedMemory = []
+    , caseExpectedMemory = [(RegionId "caller-frame", callerBytes)]
     , caseCp14Identity = Just (if domain == DomainA then 0x4003 else 0x4004)
     , caseKernel = Just (KernelCase plainLimit Nothing (Just 0x80001234) (Just 0) (Just 0) [R0, R1, R2, R3, R12, Lr] stackContexts)
     }
   where
     dataPages = pages facts domain one
     code = codeBytes facts domain owned aggregate timerImage image stockImage
-    codeBase = imageBase image
+    codeBase = case (owned, aggregate) of
+      (True, Just _) -> imageBase stockImage
+      _ -> imageBase image
     actorFunction = [(actorBase, fromIntegral (B.length body)) | Actor body <- maybe [] pure (caseActor one)]
     wrapperFunction = [(wrapperBase, fromIntegral (B.length (wrapperBytes facts domain)))]
-    aggregateFunctions = maybe [] (map (\symbol -> (Agg.symbolAddress symbol, Agg.symbolSize symbol)) . aggregateSymbols) aggregate
-    functions = sortOn fst $
-      if owned
-        then mergeSpans (ownedSymbols ++ aggregateFunctions ++ actorFunction ++ wrapperFunction ++ [(timerModuleStart domain, timerModuleSpan domain), (timeoutCallback domain, fromIntegral timeoutCallbackSize)])
-        else extents domain ++ actorFunction ++ wrapperFunction
+    aggregateFunctions = maybe [] (\joined ->
+      [(Agg.symbolAddress symbol, Agg.symbolSize symbol) | symbol <- aggregateSymbols joined, Agg.symbolSize symbol > 0]
+        ++ [(Agg.placementAddress placement, Agg.placementBytes placement) | placement <- aggregatePlacements joined, Agg.placementBytes placement > 0, executable placement]) aggregate
+    executable placement = let section = Agg.placementSection placement in section == ".text" || ".text." `isPrefixOf` section
+    retained (address, size) = maybe True (all (\(Regions.Extent (Regions.GuestAddress low) (Regions.GuestAddress high)) ->
+      toInteger address + toInteger size <= toInteger low || high <= address) . aggregateCarriers) aggregate
+    functions = splitEntries (mergeSpans $
+      actorFunction ++ wrapperFunction ++
+        if owned then case aggregate of
+          Just _ -> aggregateFunctions ++ filter retained (helperFunctions domain)
+          Nothing -> ownedSymbols ++ [(timerModuleStart domain, timerModuleSpan domain), (timeoutCallback domain, fromIntegral timeoutCallbackSize)]
+        else extents domain)
+    entryBoundaries = sortOn id $ entryAddress domain (caseCall one) :
+      [Agg.symbolAddress symbol | joined <- maybe [] pure aggregate, symbol <- aggregateSymbols joined, "xm1_platform_veneer_" `isPrefixOf` Agg.symbolName symbol]
+    splitEntries spans = [(low, high - low) | (address, size) <- spans, let points = address : filter (\point -> address < point && point < address + size) entryBoundaries ++ [address + size], (low, high) <- zip points (drop 1 points), high > low]
+    readonly = if owned then maybe [] (mergeSpans . map (\placement -> (Agg.placementAddress placement, Agg.placementBytes placement)) . filter (\placement -> Agg.placementBytes placement > 0 && not (executable placement)) . aggregatePlacements) aggregate else []
+    storageBoundaries = sortOn id (codeBase : codeBase + fromIntegral (B.length code) : concat [[address, address + size] | (address, size) <- readonly])
+    codeRegions =
+      [ mkRegion (RegionId ("code-" ++ show low)) (N.GuestAddress (fromIntegral low)) (fromIntegral (high - low))
+          (if any (\(address, size) -> address <= low && high <= address + size) readonly then ReadOnly else ReadExecute)
+          (B.take (fromIntegral (high - low)) (B.drop (fromIntegral (low - codeBase)) code))
+      | (low, high) <- zip storageBoundaries (drop 1 storageBoundaries), high > low
+      ]
     stackContexts = case caseActor one of
       Nothing -> []
       Just _ -> either (const []) id (sequence [mkStackContext (N.GuestAddress (fromIntegral callerStackLow)) (N.GuestAddress (fromIntegral stackPointer)), mkStackContext (N.GuestAddress (fromIntegral actorStackLow)) (N.GuestAddress (fromIntegral actorStackHigh))])
@@ -933,7 +954,7 @@ holds _ _ pages' observation expectation = case expectation of
 -- judged separately: its whole-region memory gate is not declared, so a report is only refused
 -- for a status, register, event or kernel mismatch.
 compareCase :: Facts -> Domain -> Case -> NativeObservation -> NativeObservation -> [String]
-compareCase facts domain one stock owned = statusDifferences ++ declaredRegisterDifferences ++ expectedDifferences ++ resultDifferences ++ regionDifferences ++ registerDifferences
+compareCase facts domain one stock owned = statusDifferences ++ declaredRegisterDifferences ++ expectedDifferences ++ membershipDifferences ++ callerDifferences ++ resultDifferences ++ regionDifferences ++ registerDifferences
   where
     pages' = pages facts domain one
     expectedStatus = Returned
@@ -960,6 +981,19 @@ compareCase facts domain one stock owned = statusDifferences ++ declaredRegister
           ]
       , Left message <- [sequence [holds facts domain pages' observation check | check <- checks]]
       ]
+    membershipDifferences =
+      [ role ++ ": named timer membership writes differ"
+      | caseNameText one `elem` timedRowNames
+      , (role, observation, expected) <- [("stock", stock, [(4, 1)]), ("owned", owned, [(4, 1), (4, 0)])]
+      , let address = dataQueueTimer facts domain 1
+            writes = [(width, fromIntegral value :: Word32)
+              | Just events <- [nativeKernel observation >>= observedOrder]
+              , OrderedWrite (Write actual width) (WriteValue value) <- events
+              , actual == N.GuestAddress (fromIntegral address)]
+      , writes /= expected
+      ]
+    callerDifferences =
+      [role ++ ": live caller frame differs" | (role, observation) <- [("stock", stock), ("owned", owned)], regionBytes observation "caller-frame" /= Just callerBytes]
     resultDifferences =
       [ "r0 differs: stock " ++ show (N.lookupRegister R0 stock) ++ ", owned " ++ show (N.lookupRegister R0 owned)
       | valid
@@ -1072,8 +1106,20 @@ controlRuns facts domain one stock owned = concat
     ++ concat [ controlOwned "unaffected-membership" (\current -> current { caseCompareRegions = False }) (mutateKernel (dataQueueTimer facts domain 2) 1)
               | name `elem` timedRowNames
               ]
+    ++ [detect "live-caller-frame" (owned
+          {nativeMemory = [(ident, if regionName ident == "caller-frame" then replaceWord 0 0 bytes else bytes) | (ident, bytes) <- nativeMemory owned]})]
+    ++ concat [[detect "missing-detach-write" (owned {nativeKernel = fmap withoutDetach (nativeKernel owned)})
+               ,detect "owned-relink" (mutateKernel (dataQueueTimer facts domain 1) 1 owned)]
+              | name `elem` timedRowNames]
   where
     name = caseNameText one
+    detect label mutant =
+      let baseline = null (compareCase facts domain one stock owned)
+          refused = not (null (compareCase facts domain one stock mutant))
+       in ControlRun domain label name baseline refused True (baseline && refused)
+    withoutDetach kernel = kernel {observedOrder = fmap (filter keep) (observedOrder kernel)}
+    keep (OrderedWrite (Write actual _) (WriteValue 0)) = actual /= N.GuestAddress (fromIntegral (dataQueueTimer facts domain 1))
+    keep _ = True
     guardEq offset value = WordIs "timer-record" (recordBase + offset) value
     control label guard mutate = controlWith label (withoutExpect guard) mutate
     controlWith label transform mutate =
@@ -1121,6 +1167,28 @@ mergeSpans spans = go (sortOn fst spans)
       | lo<end=extend start (max end (lo+size)) rest
       | otherwise=(start,end-start):extend lo (lo+size) rest
 
+readonlyCases :: Maybe Aggregate -> CaseSpec -> [(RunnerStatus, CaseSpec)]
+readonlyCases aggregate template =
+  [ (status, template
+      { caseId = label ++ "-" ++ show address
+      , caseEntry = N.GuestAddress (fromIntegral probe)
+      , caseRegions = mkRegion (RegionId "readonly-probe") (N.GuestAddress (fromIntegral probe)) (B.length program) ReadExecute program : caseRegions template
+      , caseFunctions = (N.GuestAddress (fromIntegral probe), fromIntegral (B.length program)) : caseFunctions template
+      , caseExpectedStatus = status
+      , caseExpectedRegisters = []
+      , caseExpectedMemory = []
+      })
+  | joined <- maybe [] pure aggregate
+  , placement <- aggregatePlacements joined
+  , Agg.placementBytes placement >= 4
+  , let section = Agg.placementSection placement
+  , not (section == ".text" || ".text." `isPrefixOf` section)
+  , let address = Agg.placementAddress placement
+  , (label, status, instruction) <- [("readonly-write", MemoryGuard, 0xe5801000), ("readonly-fetch", FetchGuard, 0xe12fff10)]
+  , let probe = 0x01000a00
+        program = assemble [movw 0 (address .&. 0xffff), movt 0 (address `shiftR` 16), instruction, 0xe12fff1e]
+  ]
+
 runDomain :: FilePath -> FilePath -> FilePath -> Facts -> Domain -> Maybe Aggregate -> Image -> Image -> Image -> [(Word32, Word32)] -> IO ([CaseRun], [ControlRun])
 runDomain runner cacheRoot directory facts domain aggregate stockImage ownedImage timerImage ownedSymbols = do
   let selected = cases facts domain
@@ -1130,6 +1198,17 @@ runDomain runner cacheRoot directory facts domain aggregate stockImage ownedImag
   ownedBatch <- writeBatch (directory </> "owned") (map snd ownedSpecs)
   (stockReuse, stockRaw) <- cachedObservedBatch cacheRoot runner stockBatch
   (ownedReuse, ownedRaw) <- cachedObservedBatch cacheRoot runner ownedBatch
+  readonlyControls <- case ownedSpecs of
+    [] -> pure []
+    (_, template) : _ -> do
+      let refusals = readonlyCases aggregate template
+      if null refusals then pure [] else do
+        batch <- writeBatch (directory </> "readonly-controls") (map snd refusals)
+        (_, observed) <- cachedObservedBatch cacheRoot runner batch
+        let byId = M.fromList [(caseIdText ident, observation) | (ident, observation) <- observed]
+        pure [let holds = maybe False ((== status) . nativeStatus) (M.lookup (caseId spec) byId)
+               in ControlRun domain (caseId spec) "aggregate-storage" True holds True holds
+             | (status, spec) <- refusals]
   let reference = M.fromList [(caseIdText ident, observation) | (ident, observation) <- stockRaw]
       subject = M.fromList [(caseIdText ident, observation) | (ident, observation) <- ownedRaw]
   results <- forM selected $ \one -> do
@@ -1151,7 +1230,7 @@ runDomain runner cacheRoot directory facts domain aggregate stockImage ownedImag
          )
   unless (length stockRaw == length selected && length ownedRaw == length selected) (fail "native observations do not cover the current data-queue case set")
   pure ( [ CaseRun (runEntryDomain run) (runName run) (runBlocking run) (runChecks run) (runDifferences run) (stockReuse, ownedReuse) | run <- map fst results ]
-       , concatMap snd results
+       , concatMap snd results ++ readonlyControls
        )
 
 memoryMismatch :: String -> Bool

@@ -127,6 +127,8 @@ haskell_binary(
     srcs = ["native/SuiteMain.hs"],
     main_file = "native/SuiteMain.hs",
     args = [
+        # Aggregate execution supplies both --aggregate-{a,b}-{bin,symbols,placements}
+        # and --aggregate-carriers. These override standalone image inputs.
         "--runner", "$(rootpath //emulation:native-runner)",
         "--layout", "$(rootpath :layout.json)",
         "--owned-a-bin", "$(rootpath :data-queue-a.bin)",
@@ -160,5 +162,6 @@ haskell_binary(
         "//host:storage-budget",
         "//replacement/rtos_own_first/stage:own-first-artifact",
         "//replacement/rtos_platform:aggregate",
+        "//replacement/rtos_platform:platform-artifact",
     ],
 )
