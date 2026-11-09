@@ -34,7 +34,7 @@ import Emulation.SegmentReceipt (SegmentReceipt (..), SegmentResult (..), elapse
 import Emulation.Symbols (SymbolTable, parseSymbolTable, resolveSymbol)
 import Emulation.PreservationObservation
 import Emulation.ModalObservation
-import Emulation.ModalWatchStream (readFinalModalWatch)
+import Emulation.ModalWatchStream (compactFinalWatch, readFinalModalWatch)
 import Emulation.LiveSettings (describeLiveSettingChange, liveSettingChange, readLiveSettings)
 import qualified Emulation.CaptureStream as CaptureJournal
 import qualified Emulation.SaveLifecycle as SaveLifecycle
@@ -2158,8 +2158,11 @@ finishModalLifetime emulator receipt session = do
     let request = lifetimeAttemptRequest attempt
         limit = modalRequestLimit request
     let finalPath = receipt </> "e2e-modal-watch-final.json"
+        rawPath = finalPath ++ ".raw"
     finalStored <- if lifetimeAttemptOwnsObserver attempt
-      then (Right <$> emulatorWatchStateToFile emulator finalPath) `catch` \(failure :: SomeException) -> pure (Left (displayException failure))
+      then (do
+        emulatorWatchStateToFile emulator rawPath
+        compactFinalWatch rawPath finalPath) `catch` \(failure :: SomeException) -> pure (Left (displayException failure))
       else pure (Left "modal observation was not armed")
     finalFile <- traverse (\() -> do
       bytes <- getFileSize finalPath

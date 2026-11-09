@@ -4030,13 +4030,19 @@ haskell_library(
     src_strip_prefix = ".",
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
+        ":case-sha256",
         ":modal-observation",
         ":watch-observation",
         "//host:aeson",
         "//host:attoparsec",
         "//host:base",
         "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
         "//host:json",
+        "//host:process",
+        "//host:text",
+        "//host:unix",
     ],
 )
 
@@ -4046,12 +4052,16 @@ haskell_test(
     srcs = ["ModalWatchStreamTests.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
+        ":case-sha256",
         ":emulator-usb",
         ":modal-observation",
         ":modal-watch-stream",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
     ],
 )
 

@@ -2,7 +2,8 @@
 module Main (main) where
 
 import Control.Monad (forM_, unless)
-import Data.Aeson (Value (..), encode, object, toJSON, (.=))
+import Data.Aeson (Value (..), eitherDecodeStrict', encode, object, toJSON, (.=))
+import Data.Bits (xor)
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
@@ -10,8 +11,11 @@ import qualified Data.ByteString.Lazy as BL
 import Data.Either (isLeft)
 import Data.IORef (atomicModifyIORef', newIORef)
 import Emulation.ModalObservation (finalModalWatchSummary, parseFinalModalWatch)
-import Emulation.ModalWatchStream (readFinalModalWatchFrom)
+import Emulation.ModalWatchStream (compactFinalWatch, readFinalModalWatch, readFinalModalWatchFrom)
+import Emulation.Sha256 (sha256, sha256Hex)
 import EmulatorUsb (decodeBridgeWatchLine)
+import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, removeFile, removePathForcibly)
+import System.FilePath ((</>))
 
 row :: Int -> Value
 row ordinal = object
@@ -23,9 +27,12 @@ row ordinal = object
 watch :: [Value] -> Value
 watch rows = object
   [ "ok" .= True, "enabled" .= True, "ranges" .= ([[0x1000, 0x1004]] :: [[Int]])
-  , "records" .= rows, "record_count" .= length rows, "records_sha256" .= replicate 64 '0'
+  , "records" .= rows, "record_count" .= length rows, "records_sha256" .= rowDigest rows
   , "violation" .= Null, "classes" .= [object ["range" .= ([0x1000, 0x1004] :: [Int]), "kinds" .= (["cpu-write", "host-write", "model-bus-write"] :: [String])]]
   , "views" .= ("fixed" :: String), "fetch_attribution" .= object ["sources" .= ([] :: [Value]), "ranges" .= ([[0x2000, 0x2004]] :: [[Int]])] ]
+
+rowDigest :: [Value] -> String
+rowDigest rows = sha256Hex (sha256 (B.concat [BL.toStrict (encode value) <> "\n" | value <- rows]))
 
 chunks :: Int -> B.ByteString -> [B.ByteString]
 chunks size bytes | B.null bytes = []
@@ -41,6 +48,72 @@ readChunks pieces = do
 
 check :: String -> Bool -> IO ()
 check label passed = unless passed (ioError (userError label))
+
+compactionTests :: IO ()
+compactionTests = do
+  base <- getTemporaryDirectory
+  let root = base </> "modal-watch-compaction"
+  removePathForcibly root
+  createDirectoryIfMissing True root
+  let fixture = watch [row 1, row 2]
+      raw = root </> "raw.json"
+      compact = root </> "e2e-modal-watch-final.json"
+  B.writeFile raw (BL.toStrict (encode fixture))
+  inline <- readFinalModalWatch raw
+  check "frozen inline watch reads" (either (const False) (const True) inline)
+  result <- compactFinalWatch raw compact
+  check "compaction succeeds" (result == Right ())
+  compacted <- readFinalModalWatch compact
+  check "compacted watch preserves the summary and row digest"
+    (fmap finalModalWatchSummary compacted == fmap finalModalWatchSummary inline)
+  compactBytes <- B.readFile compact
+  finalValue <- either (ioError . userError) pure (eitherDecodeStrict' compactBytes)
+  let writeFinal value = BL.writeFile compact (encode value)
+      modifyFinal change = do
+        bytes <- B.readFile compact
+        value <- either (ioError . userError) pure (eitherDecodeStrict' bytes)
+        changed <- change value
+        writeFinal changed
+      setSummary key value = modifyFinal $ \current -> case current of
+        Object fields -> pure (Object (KM.insert key value fields))
+        _ -> ioError (userError "compacted final is not an object")
+      setReference pairs = modifyFinal $ \current -> case current of
+        Object fields -> case KM.lookup "records" fields of
+          Just (Object reference) -> pure (Object (KM.insert "records" (Object (foldr (uncurry KM.insert) reference pairs)) fields))
+          _ -> ioError (userError "compacted reference is not an object")
+        _ -> ioError (userError "compacted final is not an object")
+      reject label = do
+        bad <- readFinalModalWatch compact
+        check label (isLeft bad)
+      sidecar = compact ++ ".records.jsonl.gz"
+  writeFinal finalValue
+  setReference [("count", Number 3)]
+  reject "compacted watch rejects a wrong row count"
+  writeFinal finalValue
+  setSummary "records_sha256" (String (replicate 64 '0'))
+  reject "compacted watch rejects a wrong row digest"
+  writeFinal finalValue
+  setReference [("sha256", String (replicate 64 '0'))]
+  reject "compacted watch rejects a wrong sidecar digest"
+  sidecarBytes <- B.readFile sidecar
+  writeFinal finalValue
+  let truncated = B.take (B.length sidecarBytes - 8) sidecarBytes
+  B.writeFile sidecar truncated
+  setReference [("sha256", String (sha256Hex (sha256 truncated))), ("bytes", toJSON (B.length truncated))]
+  reject "compacted watch rejects a truncated gzip"
+  let corrupt = B.concat
+        [ B.take (B.length sidecarBytes - 5) sidecarBytes
+        , B.singleton (B.index sidecarBytes (B.length sidecarBytes - 5) `xor` 1)
+        , B.drop (B.length sidecarBytes - 4) sidecarBytes ]
+  writeFinal finalValue
+  B.writeFile sidecar corrupt
+  setReference [("sha256", String (sha256Hex (sha256 corrupt))), ("bytes", toJSON (B.length corrupt))]
+  reject "compacted watch rejects a corrupt gzip CRC"
+  writeFinal finalValue
+  B.writeFile sidecar sidecarBytes
+  removeFile sidecar
+  reject "compacted watch rejects a missing sidecar"
+  removePathForcibly root
 
 main :: IO ()
 main = do
@@ -101,4 +174,5 @@ main = do
     check "truncated or trailing watch data refuses" (isLeft streamed)
   let large = encoded (watch (map row [1 .. 4096]))
   equivalent "multi-chunk terminal watch preserves every typed row" large
+  compactionTests
   putStrLn "streaming modal watch admission passed"
