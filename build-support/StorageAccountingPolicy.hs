@@ -1,11 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
--- | Read-only accounting policy: aggregate allocated-footprint budgets and
--- managed-copy lifecycle checks. Observed bytes are allocated bytes, not a
--- unique physical-recovery estimate; shared extents are not deducted.
--- Producer membership is configured path-prefix discovery: producer paths plus
--- the immediate children named by each copy scope. It grants no deletion
--- authority. Copy scopes contribute bytes and copies only to their own
--- producer's budget.
+-- | Shared extents are not deducted from allocated-footprint budgets.
 module StorageAccountingPolicy
   ( checkAccounting
   , evaluateBudgets
@@ -53,6 +47,7 @@ canonicalPathProblem (StoragePath raw)
   | null raw = Just "path is empty"
   | not (isAbsolute raw) = Just ("path is not absolute: " ++ raw)
   | normalise raw /= raw = Just ("path is not lexically canonical: " ++ raw)
+  | any (`elem` [".", ".."]) (splitDirectories raw) || '\0' `elem` raw = Just ("invalid path component: " ++ raw)
   | otherwise = Nothing
 
 pathProblem :: String -> StoragePath -> [String]
@@ -147,8 +142,8 @@ validateProducer budget =
         Just (CopyCount limit) | limit <= 0 -> [label ++ "copy budget must be positive"]
         _ -> []
       byteBudgetScopeProblems =
-        [ label ++ "byte budget requires at least one producer path"
-        | isJust (producerByteBudget budget) && null paths
+        [ label ++ "byte budget requires at least one producer path or copy scope"
+        | isJust (producerByteBudget budget) && null paths && null (producerCopyScopes budget)
         ]
       scopes = producerCopyScopes budget
       copyBudgetScopeProblems =
@@ -184,7 +179,7 @@ selectTopmost rows =
 
 issuesUnder :: StoragePath -> [CoverageIssue] -> [CoverageIssue]
 issuesUnder scope =
-  filter (\(CoverageIssue (StoragePath path) _ _) -> containsStoragePath scope (StoragePath path))
+  filter (\(CoverageIssue path _ _) -> containsStoragePath scope path || containsStoragePath path scope)
 
 describeIssue :: CoverageIssue -> String
 describeIssue (CoverageIssue (StoragePath path) kind detail) =
@@ -198,9 +193,13 @@ hasAnyRowUnder :: RowIndex -> StoragePath -> Bool
 hasAnyRowUnder index scope =
   any (\(path, _) -> containsStoragePath scope (StoragePath path)) (Map.toList (rowIndexBytes index))
 
-hasImmediateChildRow :: RowIndex -> StoragePath -> Bool
-hasImmediateChildRow index parent =
-  any (isImmediateChild parent . StoragePath . fst) (Map.toList (rowIndexBytes index))
+copyDepthCovered :: AccountingConfig -> StoragePath -> Bool
+copyDepthCovered config parent =
+  any covered (accountingScanRoots config)
+ where
+  covered (ScanRoot _ root depth) =
+    containsStoragePath root parent
+      && length (pathComponents (storagePathValue parent)) - length (pathComponents (storagePathValue root)) + 1 <= depth
 
 byteScopeCovered :: RowIndex -> [CoverageIssue] -> StoragePath -> Bool
 byteScopeCovered index issues scope =
@@ -221,14 +220,14 @@ byteScopeProblems index issues scope
     | issue <- issuesUnder scope issues
     ]
 
-copyScopeCovered :: RowIndex -> [CoverageIssue] -> CopyScope -> Bool
-copyScopeCovered index issues scope =
+copyScopeCovered :: AccountingConfig -> RowIndex -> [CoverageIssue] -> CopyScope -> Bool
+copyScopeCovered config index issues scope =
   hasExactRow index (copyParent scope)
-    && hasImmediateChildRow index (copyParent scope)
+    && copyDepthCovered config (copyParent scope)
     && null (issuesUnder (copyParent scope) issues)
 
-copyScopeProblems :: RowIndex -> [CoverageIssue] -> CopyScope -> [String]
-copyScopeProblems index issues scope =
+copyScopeProblems :: AccountingConfig -> RowIndex -> [CoverageIssue] -> CopyScope -> [String]
+copyScopeProblems config index issues scope =
   missingParentProblems
     ++ missingChildrenProblems
     ++ [ "coverage issue under copy scope parent " ++ storagePathValue (copyParent scope) ++ ": " ++ describeIssue issue
@@ -241,9 +240,8 @@ copyScopeProblems index issues scope =
     | not (hasExactRow index parent)
     ]
   missingChildrenProblems =
-    [ "copy scope parent " ++ storagePathValue parent ++ " has no measured immediate children; managed copy count is incomplete"
-    | hasExactRow index parent
-    , not (hasImmediateChildRow index parent)
+    [ "copy scope parent " ++ storagePathValue parent ++ " is not scanned deeply enough to enumerate immediate children"
+    | not (copyDepthCovered config parent)
     ]
 
 scopeChild :: CopyScope -> FilePath -> Bool
@@ -303,8 +301,8 @@ rowRelevant budget path =
   any (\scope -> containsStoragePath scope (StoragePath path)) (producerPaths budget)
     || any (\scope -> scopeChild scope path) (producerCopyScopes budget)
 
-evaluateProducer :: Bool -> [String] -> ProducerBudget -> RowIndex -> [CoverageIssue] -> BudgetResult
-evaluateProducer filesystemOnly globalProblems budget index issues =
+evaluateProducer :: AccountingConfig -> Bool -> [String] -> ProducerBudget -> RowIndex -> [CoverageIssue] -> BudgetResult
+evaluateProducer config filesystemOnly globalProblems budget index issues =
   let pid = producerId budget
       paths = producerPaths budget
       scopes = producerCopyScopes budget
@@ -321,9 +319,9 @@ evaluateProducer filesystemOnly globalProblems budget index issues =
       observedBytes = ByteCount (sum [byteCountValue bytes | (_, bytes) <- topmostRows])
       producerPathsCovered =
         all (byteScopeCovered index issues) paths
-          && (not (null paths) || isNothing byteBudget)
+          && (not (null paths) || not (null scopes) || isNothing byteBudget)
       copyScopesCovered =
-        all (copyScopeCovered index issues) scopes
+        all (copyScopeCovered config index issues) scopes
           && (not (null scopes) || isNothing copyBudget)
       byteCovered = producerPathsCovered && copyScopesCovered
       copyCovered = copyScopesCovered
@@ -338,12 +336,13 @@ evaluateProducer filesystemOnly globalProblems budget index issues =
       bothThresholdsAbsent = isNothing byteBudget && isNothing copyBudget
       coverageProblems =
         concatMap (byteScopeProblems index issues) paths
-          ++ concatMap (copyScopeProblems index issues) scopes
+          ++ concatMap (copyScopeProblems config index issues) scopes
       relevantCoverage =
         filesystemOnly
           || (isJust byteBudget && not byteCovered)
           || (isJust copyBudget && not copyCovered)
           || (bothThresholdsAbsent && not (byteCovered && copyCovered))
+          || not (null duplicateProblems)
       overProblems = overBudgetProblems byteBudget copyBudget observedBytes observedCopies byteCovered copyCovered
       overlapProblems = producerOverlapProblems budget ++ copyScopeOverlapProblems scopes
       duplicateProblems =
@@ -369,7 +368,7 @@ evaluateProducer filesystemOnly globalProblems budget index issues =
 
 evaluateBudgets :: AccountingConfig -> AccountingSnapshot -> [BudgetResult]
 evaluateBudgets config snapshot =
-  [ evaluateProducer filesystemOnly globalProblems budget index (snapshotCoverageIssues snapshot)
+  [ evaluateProducer config filesystemOnly globalProblems budget index (snapshotCoverageIssues snapshot)
   | budget <- accountingBudgets config
   ]
  where
@@ -426,10 +425,7 @@ snapshotTimeProblems config now label snapshot =
 
 directoryProblems :: AccountingSnapshot -> [String]
 directoryProblems snapshot =
-  [ "directory measurement path is not absolute: " ++ storagePathValue path
-  | DirectoryMeasurement path _ <- snapshotDirectories snapshot
-  , not (isAbsolute (storagePathValue path))
-  ]
+  concatMap (pathProblem "directory measurement path" . directoryPath) (snapshotDirectories snapshot)
     ++ [ "directory measurement has negative allocated bytes: " ++ storagePathValue path
        | DirectoryMeasurement path bytes <- snapshotDirectories snapshot
        , byteCountValue bytes < 0
@@ -450,6 +446,7 @@ filesystemMeasurementProblems config now completed measurement =
        ++ [ "filesystem " ++ identifier ++ " has negative available bytes" | available < 0 ]
        ++ [ "filesystem " ++ identifier ++ " used bytes exceed total bytes" | used > total ]
        ++ [ "filesystem " ++ identifier ++ " available bytes exceed total bytes" | available > total ]
+       ++ [ "filesystem " ++ identifier ++ " used and available bytes exceed total bytes" | used + available > total ]
        ++ [ "filesystem " ++ identifier ++ " probe path is not absolute: " ++ probe | not (isAbsolute probe) ]
        ++ [ "filesystem " ++ identifier ++ " measurement is in the future" | measured > epochValue now ]
        ++ [ "filesystem " ++ identifier ++ " measurement is after snapshot completion" | measured > epochValue completed ]
@@ -464,6 +461,7 @@ filesystemProblems config now snapshot =
   | null (snapshotFilesystems snapshot)
   ]
     ++ concatMap (filesystemMeasurementProblems config now (snapshotCompletedAt snapshot)) (snapshotFilesystems snapshot)
+    ++ duplicateTextProblems "filesystem id" [value | measurement <- snapshotFilesystems snapshot, let FilesystemId value = filesystemId measurement]
 
 validateAccountingState :: AccountingConfig -> ConfigurationDigest -> EpochSeconds -> AccountingState -> [String]
 validateAccountingState config expected now state =

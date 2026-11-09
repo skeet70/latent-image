@@ -1,0 +1,21 @@
+[Unit]
+Description=Sample whole-host storage pressure without deleting data
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/latent-image/storage-accounting.env
+ExecStart=%h/.local/libexec/latent-image/storage-accounting sample --config %h/.config/latent-image/storage-accounting.json --state %h/.local/state/latent-image/storage-accounting/fast --filesystem-only +RTS -M128M -RTS
+UMask=0077
+MemoryMax=256M
+MemorySwapMax=0
+OOMPolicy=stop
+TimeoutStartSec=2min
+Nice=15
+IOSchedulingClass=idle
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/state/latent-image/storage-accounting
+RestrictSUIDSGID=true
+StandardOutput=journal
+StandardError=journal

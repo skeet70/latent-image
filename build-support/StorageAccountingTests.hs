@@ -13,7 +13,7 @@ import Data.Maybe (listToMaybe)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.Time.Clock.POSIX (getPOSIXTime)
-import Foreign.C.Types (CInt)
+import Foreign.C.Types (CInt (..))
 import StorageAccountingTypes
 import System.Directory (canonicalizePath, createDirectory, doesPathExist, getTemporaryDirectory, removeDirectoryRecursive, removeFile)
 import System.Environment (getArgs, getEnvironment)

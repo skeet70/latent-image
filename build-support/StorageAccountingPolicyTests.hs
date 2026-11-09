@@ -57,7 +57,7 @@ baseConfig :: AccountingConfig
 baseConfig =
   AccountingConfig
     { accountingSchemaVersion = 1
-    , accountingScanRoots = [ScanRoot (RootId "data") (StoragePath "/data") 4]
+    , accountingScanRoots = [ScanRoot (RootId "data") (StoragePath "/") 8]
     , accountingFilesystemPaths = [StoragePath "/data"]
     , accountingReserveBytes = ByteCount 1000
     , accountingCommandTimeout = Seconds 30
@@ -183,6 +183,8 @@ testValidation = do
     (validateProducerBudgets (withBudgets [producerBudget "x" ["/data/a"] Nothing [("/copies", ""), ("/copies", "img-")] (Just 2)]))
   checkRight "unbudgeted producer validates"
     (validateProducerBudgets (withBudgets [producerBudget "x" ["/data/a"] Nothing [] Nothing]))
+  checkRight "copy scopes can own the whole byte budget"
+    (validateProducerBudgets (withBudgets [producerBudget "copies" [] (Just 100) [("/copies", "img-")] Nothing]))
 
 testEvaluation :: IO ()
 testEvaluation = do
@@ -239,7 +241,7 @@ testEvaluation = do
         evaluateBudgets
           (withBudgets [producerBudget "data" ["/data"] (Just 150) [] Nothing])
           (withDirectories [directory "/data" 100, directory "/data" 100])
-  checkEq "duplicate rows verdict" WithinBudget (verdictOf duplicateResults)
+  checkEq "duplicate rows verdict" CoverageIncomplete (verdictOf duplicateResults)
   checkEq "duplicate rows bytes" (ByteCount 100) (observedBytesOf duplicateResults)
 
   let immediateResults =
@@ -267,8 +269,18 @@ testEvaluation = do
         evaluateBudgets
           (withBudgets [producerBudget "copies" [] Nothing [("/copies", "img-")] (Just 1)])
           (withDirectories [directory "/copies" 100])
-  checkEq "empty copy scope verdict" CoverageIncomplete (verdictOf emptyScopeResults)
+  checkEq "measured empty copy scope verdict" WithinBudget (verdictOf emptyScopeResults)
   checkEq "empty copy scope count" (CopyCount 0) (observedCopiesOf emptyScopeResults)
+
+  let shallowConfig = (withBudgets [producerBudget "copies" [] Nothing [("/copies", "img-")] (Just 1)])
+        { accountingScanRoots = [ScanRoot (RootId "data") (StoragePath "/") 1] }
+      shallowResults = evaluateBudgets shallowConfig (withDirectories [directory "/copies" 100])
+  checkEq "unobserved copy children are incomplete" CoverageIncomplete (verdictOf shallowResults)
+
+  let ancestorIssueResults = evaluateBudgets
+        (withBudgets [producerBudget "data" ["/data/cache"] (Just 100) [] Nothing])
+        (withDirectoriesAndIssues [directory "/data/cache" 10] [denied "/data"])
+  checkEq "ancestor scan failures invalidate byte coverage" CoverageIncomplete (verdictOf ancestorIssueResults)
 
   let unmeasuredScopeResults =
         evaluateBudgets
@@ -355,6 +367,8 @@ testCheck = do
   checkLeft "future filesystem measurement" (checkAccounting healthyConfig expected now (stateWith ((withDirectories [directory "/data" 100]) { snapshotFilesystems = [healthyFilesystem { filesystemMeasuredAt = futureTime }] })))
   checkLeft "stale filesystem measurement" (checkAccounting healthyConfig expected now (stateWith ((withDirectories [directory "/data" 100]) { snapshotFilesystems = [healthyFilesystem { filesystemMeasuredAt = staleTime }] })))
   checkLeft "invalid filesystem numbers" (checkAccounting healthyConfig expected now (stateWith ((withDirectories [directory "/data" 100]) { snapshotFilesystems = [healthyFilesystem { filesystemTotalBytes = ByteCount 0 }] })))
+  checkLeft "inconsistent filesystem capacity" (checkAccounting healthyConfig expected now (stateWith (healthySnapshot { snapshotFilesystems = [healthyFilesystem { filesystemAvailableBytes = ByteCount 60001 }] })))
+  checkLeft "duplicate filesystem identity" (checkAccounting healthyConfig expected now (stateWith (healthySnapshot { snapshotFilesystems = [healthyFilesystem, healthyFilesystem] })))
   checkRight "low space boundary" (checkAccounting healthyConfig expected now (stateWith ((withDirectories [directory "/data" 100]) { snapshotFilesystems = [healthyFilesystem { filesystemTotalBytes = ByteCount 100000, filesystemUsedBytes = ByteCount 99000, filesystemAvailableBytes = ByteCount 1000 }] })))
   checkRight "stale boundary" (checkAccounting healthyConfig expected now (stateWith ((snapshotAt staleBoundaryTime) { snapshotDirectories = [directory "/data" 100] })))
 

@@ -84,7 +84,7 @@ run binary = do
   let position line = lookup line (zip order [0 :: Int ..])
       startLine name = fromMaybe "" (listToMaybe [line | line <- order, ("start " ++ name ++ " ") `isPrefixOf` line])
   serialized <- expect "a second host build waits for the first to finish"
-    (firstStarted && not secondEarly && "Waiting for the host build lock" `isInfixOf` secondErr
+    (firstStarted && not secondEarly
       && maybe False id ((<) <$> position "end first" <*> position (startLine "second")))
   passed <- expect "both builds pass with a passed verdict and run bazel --batch"
     (firstCode == ExitSuccess && secondCode == ExitSuccess

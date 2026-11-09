@@ -30,7 +30,7 @@ import Numeric (showFFloat)
 import System.Directory (createDirectoryIfMissing, findExecutable, getHomeDirectory, removeFile)
 import System.Environment (getExecutablePath, lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (..), exitWith)
-import System.FilePath (takeDirectory, takeFileName, (</>))
+import System.FilePath (isAbsolute, takeDirectory, takeFileName, (</>))
 import System.IO (SeekMode (AbsoluteSeek), hFlush, hGetContents, hGetLine, hPutStrLn, stderr)
 import System.IO.Error (catchIOError, isDoesNotExistError)
 import System.Posix.IO (FdOption (CloseOnExec), LockRequest (WriteLock), OpenFileFlags (creat), OpenMode (ReadWrite), closeFd, createPipe, defaultFileFlags, fdToHandle, openFd, setFdOption, setLock)
@@ -93,6 +93,44 @@ admittedVariable = "XM1_HOST_BUILD"
 resourceFailureExit :: Int
 resourceFailureExit = 75
 
+newtype AccountingExecutable = AccountingExecutable FilePath
+newtype AccountingConfiguration = AccountingConfiguration FilePath
+newtype AccountingStateDirectory = AccountingStateDirectory FilePath
+data AccountingGuard = AccountingGuard AccountingExecutable AccountingConfiguration AccountingStateDirectory
+
+configuredAccountingGuard :: IO (Maybe AccountingGuard)
+configuredAccountingGuard = do
+  config <- lookupEnv "XM1_STORAGE_ACCOUNTING_CONFIG"
+  state <- lookupEnv "XM1_STORAGE_ACCOUNTING_STATE"
+  program <- lookupEnv "XM1_STORAGE_ACCOUNTING_TOOL"
+  case (config, state, program) of
+    (Nothing, Nothing, Nothing) -> pure Nothing
+    (Just configuration, Just directory, executable) -> do
+      fallback <- (</> ".local/libexec/latent-image/storage-accounting") <$> getHomeDirectory
+      let tool = maybe fallback id executable
+      unless (all isAbsolute [configuration, directory, tool]) $
+        refuseAccounting "accounting config, state and executable must be absolute paths"
+      pure (Just (AccountingGuard (AccountingExecutable tool) (AccountingConfiguration configuration) (AccountingStateDirectory directory)))
+    _ -> refuseAccounting "set both XM1_STORAGE_ACCOUNTING_CONFIG and XM1_STORAGE_ACCOUNTING_STATE to opt into aggregate admission"
+
+refuseAccounting :: String -> IO a
+refuseAccounting problem = do
+  hPutStrLn stderr ("host-build storage admission: " ++ take 4096 problem)
+  exitWith (ExitFailure resourceFailureExit)
+
+checkConfiguredAccounting :: IO ()
+checkConfiguredAccounting = do
+  guard <- configuredAccountingGuard
+  case guard of
+    Nothing -> pure ()
+    Just (AccountingGuard (AccountingExecutable program) (AccountingConfiguration config) (AccountingStateDirectory state)) -> do
+      result <- try (readProcessWithExitCode program ["check", "--config", config, "--state", state, "+RTS", "-M512M", "-RTS"] "")
+        :: IO (Either IOException (ExitCode, String, String))
+      case result of
+        Right (ExitSuccess, _, _) -> pure ()
+        Right (_, out, err) -> refuseAccounting (err ++ out)
+        Left problem -> refuseAccounting (show problem)
+
 -- | @host-build [--output_base=PATH] COMMAND [ARGUMENT...]@, or the internal
 -- scope child.
 hostBuildMain :: [String] -> IO ()
@@ -117,6 +155,7 @@ admit requestedBase command rest = do
   waitStart <- getMonotonicTime
   lock <- acquireBuildLock directory
   waited <- subtract waitStart <$> getMonotonicTime
+  checkConfiguredAccounting
   scoped <- userScopeAvailable
   let MemoryMax memory = classMemoryMax Build
   pid <- getProcessID

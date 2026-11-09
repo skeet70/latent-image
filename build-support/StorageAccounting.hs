@@ -27,7 +27,7 @@ import qualified Data.Text.Encoding as TE
 import Data.Text.Encoding.Error (lenientDecode)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Foreign.C.Error (eAGAIN, eWOULDBLOCK, getErrno)
-import Foreign.C.Types (CInt)
+import Foreign.C.Types (CInt (..))
 import qualified GHC.Foreign as GHC
 import GHC.Generics (Generic)
 import GHC.IO.Encoding (TextEncoding, getFileSystemEncoding)
@@ -662,7 +662,7 @@ issueOrder coverageIssue = (issuePath coverageIssue, issueDetail coverageIssue)
 
 renderIssue :: CoverageIssue -> String
 renderIssue coverageIssue =
-  T.unpack (storagePathText (issuePath coverageIssue)) ++ ": " ++ show (issueKind coverageIssue) ++ ": " ++ T.unpack (issueDetail coverageIssue)
+  storagePathText (issuePath coverageIssue) ++ ": " ++ show (issueKind coverageIssue) ++ ": " ++ T.unpack (issueDetail coverageIssue)
 
 issueCounts :: [CoverageIssue] -> [IssueCount]
 issueCounts issues =
