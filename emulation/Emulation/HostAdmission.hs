@@ -20,7 +20,7 @@ module Emulation.HostAdmission
 
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
-import Control.Exception (IOException, evaluate, try)
+import Control.Exception (IOException, catch, evaluate, try)
 import Control.Monad (unless, void, when)
 import qualified Data.ByteString as ByteString
 import qualified Data.ByteString.Char8 as ByteString8
@@ -28,6 +28,7 @@ import Data.Char (isDigit, isPrint, isSpace)
 import Data.List (dropWhileEnd, isPrefixOf, stripPrefix)
 import Data.Maybe (isNothing)
 import GHC.Clock (getMonotonicTime)
+import FujiAF.StorageBudget (StorageFailure, checkStorageBudget)
 import Numeric (showFFloat)
 import System.Directory (createDirectoryIfMissing, findExecutable, getHomeDirectory, removeFile)
 import System.Environment (getExecutablePath, lookupEnv, setEnv, unsetEnv)
@@ -158,7 +159,6 @@ admit requestedBase command rest = do
   waitStart <- getMonotonicTime
   lock <- acquireBuildLock directory
   waited <- subtract waitStart <$> getMonotonicTime
-  checkConfiguredAccounting
   scoped <- userScopeAvailable
   let MemoryMax memory = classMemoryMax Build
   pid <- getProcessID
@@ -166,6 +166,10 @@ admit requestedBase command rest = do
   if scoped
     then stopPreviousScope directory unit
     else hPutStrLn stderr ("No systemd user session: host build runs without the " ++ memory ++ " memory cap") >> hFlush stderr
+  checkStorageBudget directory
+    `catch` (\problem -> refuseAccounting (show (problem :: StorageFailure)))
+    `catch` (\problem -> refuseAccounting (show (problem :: IOException)))
+  checkConfiguredAccounting
   let script = directory </> ("run-" ++ show pid ++ ".sh")
       running = command == "run"
       bazelArguments =

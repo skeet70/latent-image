@@ -116,6 +116,7 @@ haskell_library(
         "//host:directory",
         "//host:filepath",
         "//host:process",
+        "//host:storage-budget",
         "//host:unix",
     ],
 )

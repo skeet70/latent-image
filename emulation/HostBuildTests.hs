@@ -99,6 +99,19 @@ run binary = do
         entries <- lines <$> readFile' logFile
         pure (listToMaybe [found | line <- entries, "start" : entry : found : _ <- [words line], entry == name])
 
+  writeFile (release "low-storage") ""
+  lowStorage <- start "low-storage" [("XM1_STORAGE_MIN_FREE", "999999999999999999999T")]
+  lowStorageCode <- waitForProcess (invocationProcess lowStorage)
+  lowStorageRan <- started "low-storage"
+  storageRefused <- expect "insufficient free space refuses a new build before bazel runs"
+    (lowStorageCode == ExitFailure 75 && not lowStorageRan)
+  writeFile (release "invalid-reserve") ""
+  invalidReserve <- start "invalid-reserve" [("XM1_STORAGE_MIN_FREE", "0")]
+  invalidReserveCode <- waitForProcess (invocationProcess invalidReserve)
+  invalidReserveRan <- started "invalid-reserve"
+  invalidReserveRefused <- expect "an invalid storage reserve cannot authorize a build"
+    (invalidReserveCode == ExitFailure 75 && not invalidReserveRan)
+
   first <- start "first" []
   firstStarted <- waitFor (started "first")
   writeFile (release "second") ""
@@ -256,7 +269,7 @@ run binary = do
           (held && unavailable && holderCode == ExitSuccess && externalWaiterCode == ExitSuccess
             && not ("command_log=" `isInfixOf` diagnosticText))
   boundaries <- mapM unavailableBase [OverBoundBase, CutBaseArgument, ControlByteBase, NonAsciiBase]
-  pure (and ([serialized, passed, released, failed, refused, holders, baseObserved] ++ boundaries))
+  pure (and ([storageRefused, invalidReserveRefused, serialized, passed, released, failed, refused, holders, baseObserved] ++ boundaries))
 
 data UnavailableOutputBase = OverBoundBase | CutBaseArgument | ControlByteBase | NonAsciiBase
 
@@ -351,8 +364,9 @@ testEnvironment home bin logFile = do
       path = maybe bin ((bin ++ ":") ++) (lookup "PATH" inherited)
       keep name value environment =
         if any ((== name) . fst) environment then environment else (name, value) : environment
-      dropped = ["HOME", "PATH", "XM1_EMULATOR_SLOT", "XM1_HOST_BUILD"]
-  pure $ ("HOME", home) : ("PATH", path) : ("FAKE_LOG", logFile)
+      dropped = ["HOME", "PATH", "XM1_EMULATOR_SLOT", "XM1_HOST_BUILD", "XM1_STORAGE_MIN_FREE",
+        "XM1_STORAGE_ACCOUNTING_CONFIG", "XM1_STORAGE_ACCOUNTING_STATE", "XM1_STORAGE_ACCOUNTING_TOOL"]
+  pure $ ("HOME", home) : ("PATH", path) : ("FAKE_LOG", logFile) : ("XM1_STORAGE_MIN_FREE", "1")
     : filter ((`notElem` dropped) . fst)
       (keep "XDG_RUNTIME_DIR" runtime (keep "DBUS_SESSION_BUS_ADDRESS" ("unix:path=" ++ runtime ++ "/bus") inherited))
 

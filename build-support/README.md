@@ -29,6 +29,8 @@ On first contention and observed owner changes, stderr names the kernel-sampled 
 
 After admission, `host-build` runs `bazel --batch` in a `systemd-run --user --scope` with `MemoryMax=6G`, no swap and `OOMPolicy=stop`, adding `--jobs=4 --local_resources=memory=3072` before the caller's options. Batch mode keeps Bazel's JVM and actions inside the scope and leaves no server behind. In a worktree at `latent-image-worktrees/NAME` the output base is `~/.cache/bazel/latent-image-NAME`, in the main checkout Bazel's default; `--output_base` overrides it. `run` builds with `--script_path`, releases the lock and then executes the target, so an emulator target takes its slot after the build. `host-build` refuses to start inside an emulator slot or inside another admitted command, so a slot holder never waits for the build lock. A command example in this repository that calls `bazel build`, `test` or `run`, with or without `--batch`, `--output_base` and `--jobs`, runs as `host-build` with the same command, targets and options.
 
+Before starting Bazel, `host-build` enforces the existing `XM1_STORAGE_MIN_FREE` reserve, default 100 GiB, on the host cache filesystem. The check runs after lock acquisition and abandoned-scope cleanup, independently of optional aggregate accounting. An invalid reserve, failed probe or insufficient free space exits 75 without starting Bazel. It does not terminate an admitted build or constrain writers on another filesystem. Below the reserve, invoke an already-built maintenance executable directly rather than trying to build it through `host-build`.
+
 The last stderr line is `host-build verdict` followed by a JSON object. `verdict` is `passed`, `failed` (Bazel's exit status is kept), `interrupted` (Bazel's exit 8), `resource-failure` or `unknown`. `resource_failure` is `oom-kill` when the scope's systemd `Result` is `oom-kill`, read before systemd collects the unit, or `nix-daemon-oom-kill` when a failed command coincides with a rise in `nix-daemon.service`'s `memory.events` `oom_kill`; a resource failure exits 75 and is not a firmware or emulator discrepancy. An unreadable unit status is `unit_result` `unknown`, never success. The object also carries the lock wait, wall time, the scope's CPU time and memory peak and the Nix daemon's CPU time during the command, which includes any concurrent Nix builds outside admission.
 
 Two resource classes share the host's 30.4 GiB (`Emulation.HostAdmission`): `build`, one admitted command at 6 GiB, and `emulator`, 2 slots of at most 8 GiB each. The worst case, 22 GiB, leaves 8.4 GiB for the OS, interactive work and Nix daemon builders. Nix builds, including the FujiMod Rust and Unicorn compilation rules_nixpkgs requests during a Bazel fetch, run in `nix-daemon.service`, outside the scope and every class, and are not memory-capped: the build lock serializes the admitted ones and `repositories.bzl` limits each to one Nix job and two cores. Capping them takes a privileged `nix-daemon.service` drop-in (`MemoryMax`, `MemorySwapMax=0`, `OOMPolicy=continue`), which is not applied.
@@ -94,6 +96,12 @@ systemctl --user start latent-image-cache-gc.service
 ```
 
 Inspect `systemctl --user status latent-image-cache-gc.timer` for the next run and `journalctl --user -u latent-image-cache-gc.service` for failures. This collects only Bazel's configured disk cache; it does not prune output bases, Cargo targets, Nix staging or research data. The policy is not a hard filesystem quota, and the cache can exceed its target between collections. A separate, disabled-by-default timer applies a reviewed selective retention policy to explicit Cargo roots; [selective Cargo retention](#selective-cargo-retention) covers its policy, privilege and installation.
+
+### Nix store collection
+
+The host's existing `nix-gc.timer` runs every six hours with up to one hour of jitter, under the reviewed standing policy. Its unchanged service command is `nix-collect-garbage --delete-older-than 30d`: expire profile generations older than 30 days, then collect unreferenced store paths using Nix's liveness checks. This is separate from the Bazel cache collector, Cargo retention and the read-only accounting timers. Unrooted SDKs and tools can be collected even when a report mentions them; no research-preservation roots are inferred from that mention.
+
+Inspect `systemctl --user list-timers nix-gc.timer` and `journalctl --user -u nix-gc.service`. This policy deletes no project directories and schedules no filesystem balance. Btrfs block-group compaction remains a separately reviewed administrative operation; metadata selection also includes system block groups, and its filter limits are not a global count across all types.
 
 ### Selective Cargo retention
 
@@ -221,7 +229,7 @@ Configuration is schema-1 JSON. Paths must be absolute and normalized; root and 
 
 `check` re-evaluates the detailed snapshot and probes live free space and each path's filesystem identity. Missing, stale, incompatible, incomplete or over-budget evidence refuses admission. Cached verdicts are not authority. `guard --config FILE --state DIR -- COMMAND ARGS...` executes the command only after a healthy check and preserves its exit status. These are admission checks, not quotas: active or unguarded writers can still consume space.
 
-`host-build` supports the same opt-in check after acquiring its existing host lock. Set both `XM1_STORAGE_ACCOUNTING_CONFIG` and `XM1_STORAGE_ACCOUNTING_STATE`; optionally set `XM1_STORAGE_ACCOUNTING_TOOL`, otherwise it uses `$HOME/.local/libexec/latent-image/storage-accounting`. A failed check exits 75 before starting the build. No accounting guard is enabled by default, and this does not replace the host-wide build limit.
+`host-build` also supports an opt-in aggregate check after acquiring its existing host lock. Set both `XM1_STORAGE_ACCOUNTING_CONFIG` and `XM1_STORAGE_ACCOUNTING_STATE`; optionally set `XM1_STORAGE_ACCOUNTING_TOOL`, otherwise it uses `$HOME/.local/libexec/latent-image/storage-accounting`. A failed check exits 75 before starting the build. Aggregate admission is not enabled by default; the live free-space reserve above is mandatory for the updated launcher.
 
 The checked-in `latent-image-storage-sample` user service/timer samples physical usage every five minutes; `latent-image-storage-inventory` inventories directories hourly. They have separate state locks, memory/time limits and low I/O priority; the detailed service is limited to half a CPU. They inspect the real `/var/tmp`, not a private temporary namespace. User permissions still bound coverage.
 
@@ -237,7 +245,7 @@ systemctl --user start latent-image-storage-sample.service latent-image-storage-
 systemctl --user enable --now latent-image-storage-sample.timer latent-image-storage-inventory.timer
 ```
 
-Inspect `systemctl --user list-timers 'latent-image-storage-*'`, `journalctl --user -u latent-image-storage-sample.service -u latent-image-storage-inventory.service`, and each state's `accounting.json`. Disable future samples with `systemctl --user disable --now latent-image-storage-sample.timer latent-image-storage-inventory.timer`. Neither timer grants deletion authority or changes weekly Nix GC.
+Inspect `systemctl --user list-timers 'latent-image-storage-*'`, `journalctl --user -u latent-image-storage-sample.service -u latent-image-storage-inventory.service`, and each state's `accounting.json`. Disable future samples with `systemctl --user disable --now latent-image-storage-sample.timer latent-image-storage-inventory.timer`. Neither observer timer grants deletion authority or changes Nix GC.
 
 ### Research-output admission and observer retention
 
