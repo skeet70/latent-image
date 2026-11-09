@@ -1067,7 +1067,7 @@ impl Server {
             }
             Request::RenderStackDiagnosticBegin(request) => {
                 self.bridge.machine.begin_render_stack_diagnostic(request)?;
-                json!({"version":1,"diagnostic_only":true,"active":true})
+                json!({"version":2,"diagnostic_only":true,"active":true})
             }
             Request::RenderStackDiagnosticReport => {
                 let collector = self.bridge.machine.render_stack_diagnostic.as_ref().ok_or("render stack diagnostic is not active")?;
@@ -2221,6 +2221,11 @@ mod tests {
         assert_eq!(receipt["key_log"][0]["publication"], Value::Null);
         assert_eq!(receipt["key_log"][0]["failure"], error);
         assert_eq!(receipt["key_log"][0]["presentation"]["status"], "acknowledged");
+        server.bridge.machine.require_running().expect("the guest stopped before the later presentation");
+        let hits = &server.bridge.machine.traces.hits;
+        let buffer = hits.iter().find(|hit| hit.site == "render-osd-buffer").expect("publication buffer site was not executed");
+        let increment = hits.iter().find(|hit| hit.site == "render-osd-increment").expect("publication increment site was not executed");
+        assert!(increment.instructions >= buffer.instructions);
         std::fs::remove_dir_all(&server.output).unwrap();
     }
 

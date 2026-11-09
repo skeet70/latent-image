@@ -5,7 +5,7 @@ module Main (main) where
 
 import Control.Exception (IOException, bracket, try)
 import Control.Monad (forM_, unless)
-import Data.Aeson (Value (..), eitherDecode, encode, object, (.=))
+import Data.Aeson (Value (..), eitherDecode, encode, object, toJSON, (.=))
 import Data.IORef (atomicModifyIORef', newIORef)
 import qualified Data.Aeson.Key as K
 import qualified Data.Text as T

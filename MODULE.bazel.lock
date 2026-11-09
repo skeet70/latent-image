@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "OQcUWIiA01g7GsBfIw79UCKyiMV7biwoq0E+ATvd+fQ=",
+        "bzlTransitiveDigest": "fPyb0800nbqNx9r847C7Y8Z/lbHl4QnW1Yo41tY28Ow=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -614,6 +614,7 @@
                 "@@//emulation:fujimod-xm1/src/render_stack.rs": "//emulation:fujimod-xm1/src/render_stack.rs",
                 "@@//emulation:fujimod-xm1/src/render_stack_context.rs": "//emulation:fujimod-xm1/src/render_stack_context.rs",
                 "@@//emulation:fujimod-xm1/src/render_stack_mapping.rs": "//emulation:fujimod-xm1/src/render_stack_mapping.rs",
+                "@@//emulation:fujimod-xm1/src/render_stack_transitions.rs": "//emulation:fujimod-xm1/src/render_stack_transitions.rs",
                 "@@//emulation:fujimod-xm1/src/run.rs": "//emulation:fujimod-xm1/src/run.rs",
                 "@@//emulation:fujimod-xm1/src/reset_observation.rs": "//emulation:fujimod-xm1/src/reset_observation.rs",
                 "@@//emulation:fujimod-xm1/src/root_compact.rs": "//emulation:fujimod-xm1/src/root_compact.rs",
@@ -796,6 +797,7 @@
                 "@@//emulation:fujimod-xm1/src/render_stack.rs": "//emulation:fujimod-xm1/src/render_stack.rs",
                 "@@//emulation:fujimod-xm1/src/render_stack_context.rs": "//emulation:fujimod-xm1/src/render_stack_context.rs",
                 "@@//emulation:fujimod-xm1/src/render_stack_mapping.rs": "//emulation:fujimod-xm1/src/render_stack_mapping.rs",
+                "@@//emulation:fujimod-xm1/src/render_stack_transitions.rs": "//emulation:fujimod-xm1/src/render_stack_transitions.rs",
                 "@@//emulation:fujimod-xm1/src/run.rs": "//emulation:fujimod-xm1/src/run.rs",
                 "@@//emulation:fujimod-xm1/src/reset_observation.rs": "//emulation:fujimod-xm1/src/reset_observation.rs",
                 "@@//emulation:fujimod-xm1/src/root_compact.rs": "//emulation:fujimod-xm1/src/root_compact.rs",
@@ -978,6 +980,7 @@
                 "@@//emulation:fujimod-xm1/src/render_stack.rs": "//emulation:fujimod-xm1/src/render_stack.rs",
                 "@@//emulation:fujimod-xm1/src/render_stack_context.rs": "//emulation:fujimod-xm1/src/render_stack_context.rs",
                 "@@//emulation:fujimod-xm1/src/render_stack_mapping.rs": "//emulation:fujimod-xm1/src/render_stack_mapping.rs",
+                "@@//emulation:fujimod-xm1/src/render_stack_transitions.rs": "//emulation:fujimod-xm1/src/render_stack_transitions.rs",
                 "@@//emulation:fujimod-xm1/src/run.rs": "//emulation:fujimod-xm1/src/run.rs",
                 "@@//emulation:fujimod-xm1/src/reset_observation.rs": "//emulation:fujimod-xm1/src/reset_observation.rs",
                 "@@//emulation:fujimod-xm1/src/root_compact.rs": "//emulation:fujimod-xm1/src/root_compact.rs",
@@ -1163,6 +1166,7 @@
                 "@@//emulation:fujimod-xm1/src/render_stack.rs": "//emulation:fujimod-xm1/src/render_stack.rs",
                 "@@//emulation:fujimod-xm1/src/render_stack_context.rs": "//emulation:fujimod-xm1/src/render_stack_context.rs",
                 "@@//emulation:fujimod-xm1/src/render_stack_mapping.rs": "//emulation:fujimod-xm1/src/render_stack_mapping.rs",
+                "@@//emulation:fujimod-xm1/src/render_stack_transitions.rs": "//emulation:fujimod-xm1/src/render_stack_transitions.rs",
                 "@@//emulation:fujimod-xm1/src/run.rs": "//emulation:fujimod-xm1/src/run.rs",
                 "@@//emulation:fujimod-xm1/src/reset_observation.rs": "//emulation:fujimod-xm1/src/reset_observation.rs",
                 "@@//emulation:fujimod-xm1/src/root_compact.rs": "//emulation:fujimod-xm1/src/root_compact.rs",
