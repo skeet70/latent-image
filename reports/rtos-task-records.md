@@ -32,14 +32,14 @@ The bodies mask I and F through the stock pair A `0x42560`/`0x42568` (B `0xd2560
 
 ## Carrier
 
-The current emitted demand includes each four-byte entry and the shared reset helper in the create group.
+The standalone emitted demand includes each four-byte entry and the shared reset helper in the create group.
 
 | Domain | Stock create bytes | Owned create group bytes | Stock delete bytes | Owned delete group bytes |
 | --- | --- | --- | --- | --- |
 | A | `0x110` | `0x168` | `0x104` | `0x108` |
 | B | `0x114` | `0x168` | `0x104` | `0x108` |
 
-The artifact does not fit those stock extents. It remains linked at native-only scratch `0x50000`/`0x50200`; no live address is admitted. An in-place cut needs 92 fewer bytes in A and 88 in B, or a grounded shared carrier preserving the retained entry addresses.
+The standalone artifact does not fit those stock extents and remains linked at native-only scratch `0x50000`/`0x50200`. The actual platform union supplies the grounded shared carrier, preserves the retained entry addresses and stages the complete task-record bodies in corrected DAT `5f639314db9ba160a12b907dc2f3bde4ae7c7902b93c531458617727a4e3fccb`. Aggregate qualification uses effective carrier slices extracted from those staged loaders, not the standalone scratch bodies or a body-only overlay.
 
 ## Verification
 
@@ -48,6 +48,8 @@ The artifact does not fit those stock extents. It remains linked at native-only 
 - Each case checks the actual `nativeStatus`, caller SP, R4-R11, CPSR I/F and the declared C/T/map bytes. Equal cases compare stock and owned bytes; repair cases assert the stock effect and the owned no-write. Controls refuse a changed CPSR I or F, SP, R4, status, declared region, equal-region byte and publication barrier.
 
 Native-fixture acceptance does not establish full-native, system, live-placement or hardware qualification.
+
+The actual union's per-entry frame report records 48 bytes of owned create-path demand and 40 bytes for delete. All four roots retain explicit mask/restore source leaves: A `0x42560`/`0x42568`, B `0xd2560`/`0xd2568`, reached at depths 40 and 32 respectively. Composed closure is conditional on those leaves' stack, IRQ and ABI contracts and the caller stack's backing, headroom and live-byte ownership. `stage-frame-03/contract.json` does not establish unconditional live, device or concurrency ownership.
 
 ## Retained callers
 

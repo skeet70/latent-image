@@ -39,9 +39,14 @@ bindAggregate domain stock bytes symbols placements = do
     unless (any (fixed entry) symbols) (Left ("aggregate is missing fixed ABI entry: " ++ U.entryVeneer entry))
     unless (U.entryGroup entry `notElem` [U.Cyclic, U.Timer] || any (\s -> A.symbolName s == U.entrySymbol entry) symbols || any (\p -> A.placementSection p `elem` [".text." ++ U.entrySymbol entry, ".text." ++ U.entrySymbol entry ++ "_entry"]) placements)
       (Left ("aggregate is missing declared body: " ++ U.entrySymbol entry))
-  installedFunctions <- A.installAggregate (imageBase stock) (imageBytes stock) image symbols
-  installed <- A.installPlacements (imageBase stock) installedFunctions image placements
-  let loaderTop = imageBase stock + fromIntegral (B.length installed)
+  let payload = A.imageBytes image
+      payloadBase = A.imageBase image
+  unless (payloadBase >= imageBase stock &&
+      toInteger payloadBase + toInteger (B.length payload) <= toInteger (imageBase stock) + toInteger (B.length (imageBytes stock)))
+    (Left "effective aggregate carrier slice is outside its loader")
+  let offset = fromIntegral (payloadBase - imageBase stock)
+      installed = B.take offset (imageBytes stock) <> payload <> B.drop (offset + B.length payload) (imageBytes stock)
+      loaderTop = imageBase stock + fromIntegral (B.length installed)
       readonlySpans = merge readonly
       mappings = gaps (imageBase stock) loaderTop readonlySpans
       functions = concatMap splitPublic (merge executable)

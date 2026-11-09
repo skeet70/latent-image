@@ -87,8 +87,13 @@ loadAggregate foreignCode loaderBase loaderBytes domain binPath symbolsPath plac
     unless (any ((== body) . A.symbolName) symbols) (fail ("aggregate timer body missing: " ++ body))
   unless (length (filter ((== U.Timer) . U.entryGroup) (U.mapEntries domain)) == 4)
     (fail "aggregate requires four timer ABI entries")
-  withCode <- either fail pure (A.installAggregate loaderBase loaderBytes image symbols)
-  installed <- either fail pure (A.installPlacements loaderBase withCode image placements)
+  let payload = A.imageBytes image
+      payloadBase = A.imageBase image
+  unless (payloadBase >= loaderBase &&
+      toInteger payloadBase + toInteger (B.length payload) <= toInteger loaderBase + toInteger (B.length loaderBytes))
+    (fail "effective aggregate carrier slice is outside its loader")
+  let offset = fromIntegral (payloadBase - loaderBase)
+      installed = B.take offset loaderBytes <> payload <> B.drop (offset + B.length payload) loaderBytes
   pure (Aggregate (A.AggregateImage loaderBase installed) symbols placements)
 
 aggregateRegions :: String -> Aggregate -> [CaseRegion]
