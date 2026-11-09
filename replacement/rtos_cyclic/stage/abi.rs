@@ -147,7 +147,9 @@ impl Machine for Cpu {
         read(entry.0) != 0
     }
 
-    #[inline(always)]
+    #[cfg_attr(not(feature = "component"), inline(always))]
+    #[cfg_attr(feature = "component", inline(never))]
+    #[cfg_attr(feature = "component", link_section = ".text.cyclic_remove_timer")]
     fn remove_timer(&self, context: KernelContext, entry: GuestAddress) -> bool {
         let remove: extern "C" fn(u32, u32) = unsafe { core::mem::transmute(TIMER_REMOVE) };
         remove(context.0 .0, entry.0);

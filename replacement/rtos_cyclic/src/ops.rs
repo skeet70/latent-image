@@ -62,7 +62,8 @@ pub fn schedule<M: Machine>(
     Ok(())
 }
 
-#[cfg_attr(feature = "stage", inline(never))]
+#[cfg_attr(all(feature = "stage", not(feature = "component")), inline(never))]
+#[cfg_attr(feature = "component", inline(always))]
 #[cfg_attr(feature = "stage", link_section = ".text.cyclic_configure_core")]
 pub fn configure<M: Machine>(
     m: &M,
@@ -76,7 +77,8 @@ pub fn configure<M: Machine>(
     m.store_word(configuration.offset(0x6c), callback);
 }
 
-#[cfg_attr(feature = "stage", inline(never))]
+#[cfg_attr(all(feature = "stage", not(feature = "component")), inline(never))]
+#[cfg_attr(feature = "component", inline(always))]
 #[cfg_attr(feature = "stage", link_section = ".text.cyclic_initialize_core")]
 pub fn initialize<M: Machine>(
     m: &M,
@@ -106,7 +108,8 @@ pub fn initialize<M: Machine>(
     }
 }
 
-#[cfg_attr(feature = "stage", inline(never))]
+#[cfg_attr(all(feature = "stage", not(feature = "component")), inline(never))]
+#[cfg_attr(feature = "component", inline(always))]
 #[cfg_attr(feature = "stage", link_section = ".text.cyclic_create_core")]
 pub fn create_with_request<M: Machine, R: FnOnce() -> Result<CyclicCreate, CyclicStatus>>(
     m: &M,
@@ -166,7 +169,8 @@ pub fn create_from_request<M: Machine>(
     })
 }
 
-#[cfg_attr(feature = "stage", inline(never))]
+#[cfg_attr(all(feature = "stage", not(feature = "component")), inline(never))]
+#[cfg_attr(feature = "component", inline(always))]
 #[cfg_attr(feature = "stage", link_section = ".text.cyclic_delete_core")]
 pub fn delete<M: Machine>(m: &M, entry: Domain, id: EncodedId) -> CyclicStatus {
     let slot = match own_cyclic_slot(id) {
@@ -199,7 +203,9 @@ pub fn delete<M: Machine>(m: &M, entry: Domain, id: EncodedId) -> CyclicStatus {
     status
 }
 
-#[inline(always)]
+#[cfg_attr(not(feature = "component"), inline(always))]
+#[cfg_attr(feature = "component", inline(never))]
+#[cfg_attr(feature = "component", link_section = ".text.cyclic_zero_config")]
 fn zero_config<M: Machine>(m: &M, config: CyclicConfig) {
     m.store_word(config.attributes(), 0);
     m.store_word(config.argument(), 0);
@@ -234,7 +240,8 @@ fn admit_control<M: Machine>(
     Ok((context, control, config))
 }
 
-#[cfg_attr(feature = "stage", inline(never))]
+#[cfg_attr(all(feature = "stage", not(feature = "component")), inline(never))]
+#[cfg_attr(feature = "component", inline(always))]
 #[cfg_attr(feature = "stage", link_section = ".text.cyclic_start_core")]
 pub fn start<M: Machine>(m: &M, entry: Domain, id: EncodedId) -> CyclicStatus {
     let (context, control, config) = match admit_control(m, entry, id) {
@@ -266,7 +273,8 @@ pub fn start<M: Machine>(m: &M, entry: Domain, id: EncodedId) -> CyclicStatus {
     status
 }
 
-#[cfg_attr(feature = "stage", inline(never))]
+#[cfg_attr(all(feature = "stage", not(feature = "component")), inline(never))]
+#[cfg_attr(feature = "component", inline(always))]
 #[cfg_attr(feature = "stage", link_section = ".text.cyclic_stop_core")]
 pub fn stop<M: Machine>(m: &M, entry: Domain, id: EncodedId) -> CyclicStatus {
     let (context, control, _config) = match admit_control(m, entry, id) {
@@ -284,7 +292,8 @@ pub fn stop<M: Machine>(m: &M, entry: Domain, id: EncodedId) -> CyclicStatus {
     status
 }
 
-#[cfg_attr(feature = "stage", inline(never))]
+#[cfg_attr(all(feature = "stage", not(feature = "component")), inline(never))]
+#[cfg_attr(feature = "component", inline(always))]
 #[cfg_attr(feature = "stage", link_section = ".text.cyclic_expire_core")]
 pub fn expire<M: Machine>(m: &M, control: CyclicControl) -> CyclicStatus {
     let config = config_of(m, control);

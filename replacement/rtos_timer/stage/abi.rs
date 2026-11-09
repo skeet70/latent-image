@@ -114,7 +114,9 @@ fn acquire_lock(lock: LockRecord) {
     }
 }
 
-#[inline(always)]
+#[cfg_attr(not(feature = "component"), inline(always))]
+#[cfg_attr(feature = "component", inline(never))]
+#[cfg_attr(feature = "component", link_section = ".text.timer_lock_release")]
 fn release_lock(lock: LockRecord) {
     let release = lock_entry(lock.release());
     let _ = release(lock.0 .0);
