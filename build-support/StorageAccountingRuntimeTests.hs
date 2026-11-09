@@ -4,13 +4,14 @@ module Main (main) where
 
 import Control.Concurrent (threadDelay)
 import Control.Exception (IOException, bracket, catch)
-import Control.Monad (forM_, unless, when)
+import Control.Monad (forM, forM_, unless)
 import Data.Aeson (eitherDecodeStrict', encode)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
+import Data.List (isPrefixOf, isSuffixOf)
 import Data.Maybe (fromMaybe)
 import StorageAccountingTypes
-import System.Directory (canonicalizePath, createDirectory, doesPathExist, getTemporaryDirectory, removeDirectoryRecursive, removeFile, renameDirectory)
+import System.Directory (canonicalizePath, createDirectory, doesPathExist, getTemporaryDirectory, listDirectory, removeDirectoryRecursive, removeFile, renameDirectory)
 import System.Environment (getArgs, getEnvironment)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
@@ -88,15 +89,21 @@ startCollector tool overrides arguments = do
 collectorPid :: ProcessHandle -> IO ProcessID
 collectorPid processHandle = getPid processHandle >>= maybe (ioError (userError "collector has no pid")) pure
 
-waitForFile :: FilePath -> Int -> IO ()
-waitForFile path limit = go 0
+readPidFiles :: FilePath -> String -> IO [ProcessID]
+readPidFiles control prefix = do
+  entries <- listDirectory control
+  fmap concat $ forM [entry | entry <- entries, prefix `isPrefixOf` entry, ".pid" `isSuffixOf` entry] $ \entry ->
+    fmap (: []) (readPid (control </> entry))
+
+waitForPidFiles :: FilePath -> String -> Int -> Int -> IO ()
+waitForPidFiles control prefix expected limit = go 0
  where
   go elapsed = do
-    exists <- doesPathExist path
-    if exists
+    pids <- readPidFiles control prefix
+    if length pids >= expected
       then pure ()
       else if elapsed >= limit
-        then ioError (userError ("timed out waiting for " ++ path))
+        then ioError (userError ("timed out waiting for " ++ prefix ++ " pid files in " ++ control))
         else threadDelay pollMicros >> go (elapsed + pollMicros)
 
 waitForExit :: ProcessHandle -> Int -> IO ExitCode
@@ -151,8 +158,8 @@ blockingDuScript :: String
 blockingDuScript = unlines
   [ "#!/bin/sh"
   , "trap '' TERM"
-  , "echo $$ > \"$CONTROL/du.pid\""
-  , "sh -c 'trap \"\" TERM; echo $$ > \"$CONTROL/child.pid\"; exec sleep 300' &"
+  , "echo $$ > \"$CONTROL/du.$$.pid\""
+  , "sh -c 'trap \"\" TERM; echo $$ > \"$CONTROL/child.$$.pid\"; exec sleep 300' &"
   , "wait"
   ]
 
@@ -199,10 +206,11 @@ testTimeoutKillsProbeGroup tool workspace = withCase workspace "timeout-group" $
   environment <- fakeEnvironment fakeBin control
   (code, _, _) <- runCollector tool environment (sampleArguments config state)
   check (code == ExitSuccess) "timed-out sample must still publish incomplete state"
-  leader <- readPid (control </> "du.pid")
-  descendant <- readPid (control </> "child.pid")
-  waitForDead leader 5000000
-  waitForDead descendant 5000000
+  leaders <- readPidFiles control "du."
+  descendants <- readPidFiles control "child."
+  check (not (null leaders)) "the fake du must record its leader pid"
+  check (not (null descendants)) "the fake du must record its descendant pid"
+  mapM_ (\processId -> waitForDead processId 5000000) (leaders ++ descendants)
   stateValue <- readStateFrom state
   check (any ((== TimedOut) . issueKind) (snapshotCoverageIssues (stateCurrent stateValue)))
     "du timeout must be an explicit coverage issue"
@@ -225,20 +233,18 @@ testCancellationPreservesState tool workspace = withCase workspace "cancellation
   original <- B.readFile stateFile
   writeExecutable fakeDu blockingDuScript
   forM_ [("SIGINT", sigINT), ("SIGTERM", sigTERM)] $ \(label, signal) -> do
-    removeIfExists (control </> "du.pid")
-    removeIfExists (control </> "child.pid")
+    clearPidFiles control
     environment <- fakeEnvironment fakeBin control
     processHandle <- startCollector tool environment (sampleArguments config state)
     processId <- collectorPid processHandle
-    waitForFile (control </> "du.pid") 10000000
-    waitForFile (control </> "child.pid") 10000000
-    leader <- readPid (control </> "du.pid")
-    descendant <- readPid (control </> "child.pid")
+    waitForPidFiles control "du." 1 10000000
+    waitForPidFiles control "child." 1 10000000
+    leaders <- readPidFiles control "du."
+    descendants <- readPidFiles control "child."
     signalProcess signal processId
     code <- waitForExit processHandle 10000000
     check (code /= ExitSuccess) ("collector must fail after " ++ label)
-    waitForDead leader 5000000
-    waitForDead descendant 5000000
+    mapM_ (\probePid -> waitForDead probePid 5000000) (leaders ++ descendants)
     preserved <- B.readFile stateFile
     check (preserved == original) ("previous state must survive " ++ label)
 
@@ -267,14 +273,17 @@ testRenameAnchorsStateWrites tool workspace = withCase workspace "rename-anchore
   writeConfig config (validConfig root (Seconds 60))
   environment <- fakeEnvironment fakeBin control
   processHandle <- startCollector tool environment (sampleArguments config state)
-  waitForFile (control </> "du.pid") 10000000
-  waitForFile (control </> "child.pid") 10000000
-  leader <- readPid (control </> "du.pid")
+  waitForPidFiles control "du." 1 10000000
+  waitForPidFiles control "child." 1 10000000
+  leaders <- readPidFiles control "du."
+  descendants <- readPidFiles control "child."
   renameDirectory state moved
   createSymbolicLink victim state
-  signalProcessGroup sigKILL (fromIntegral leader) `catch` \(_ :: IOException) -> signalProcess sigKILL leader
+  forM_ leaders $ \leader ->
+    signalProcessGroup sigKILL (fromIntegral leader) `catch` \(_ :: IOException) -> signalProcess sigKILL leader
   code <- waitForExit processHandle 15000000
   check (code == ExitSuccess) "sample must publish state after the probe is released"
+  mapM_ (\probePid -> waitForDead probePid 5000000) (leaders ++ descendants)
   sentinelAfter <- B.readFile (victim </> "accounting.json.tmp")
   check (sentinelAfter == sentinel) "the victim temporary sentinel must remain unchanged"
   victimStateAfter <- B.readFile (victim </> "accounting.json")
@@ -285,7 +294,9 @@ testRenameAnchorsStateWrites tool workspace = withCase workspace "rename-anchore
   linkStatus <- getSymbolicLinkStatus state
   check (isSymbolicLink linkStatus) "the replaced state path must remain a symlink"
 
-removeIfExists :: FilePath -> IO ()
-removeIfExists path = do
-  exists <- doesPathExist path
-  when exists (removeFile path `catch` \(err :: IOException) -> unless (isDoesNotExistError err) (ioError err))
+clearPidFiles :: FilePath -> IO ()
+clearPidFiles control = do
+  entries <- listDirectory control
+  forM_ [entry | entry <- entries, ".pid" `isSuffixOf` entry] $ \entry ->
+    removeFile (control </> entry) `catch` \(err :: IOException) ->
+      unless (isDoesNotExistError err) (ioError err)
