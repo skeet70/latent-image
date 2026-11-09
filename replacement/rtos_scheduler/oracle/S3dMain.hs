@@ -575,14 +575,13 @@ helperRanges d =
     late = if d == DomainB then 0x8ffc0 else 0
 
 installAggregate :: Domain -> B.ByteString -> Aggregate -> B.ByteString
-installAggregate d code (Aggregate image symbols placements _) =
-  either error id (Agg.installPlacements (loaderBase d) withSymbols image placements)
+installAggregate d code (Aggregate image _ _ carriers) = foldl install padded carriers
   where
     top = maximum (loaderBase d + fromIntegral (B.length code) :
-      [Agg.placementAddress placement + Agg.placementBytes placement | placement <- placements])
+      [high | Regions.Extent _ (Regions.GuestAddress high) <- carriers])
     padded = code <> B.replicate (fromIntegral (top - loaderBase d) - B.length code) 0
-    withSymbols = foldl install padded symbols
-    install current symbol = either error id (Agg.installSymbol (loaderBase d) current image symbol)
+    install current (Regions.Extent (Regions.GuestAddress low) (Regions.GuestAddress high)) =
+      poke current (low - loaderBase d) (either error id (Agg.sliceAggregate image low (high - low)))
 
 mergeSpans :: FetchLayout -> [(Word32, Word32)] -> [(Word32, Word32)]
 mergeSpans layout spans = go (sortOn fst spans)
@@ -803,7 +802,8 @@ transferSpec d role one loaderA loaderB pair = base
   , caseExclusion = "Two explicit task stacks; foreign worker drives handler/clock state, calls the real timer tick and dispatcher. No owned instruction is replaced."
   , caseRegions = map replace (caseRegions base) ++
       [mkRegion (RegionId "worker-stack") (guest workerBase) 0x1000 ReadWrite workerStack]
-  , caseFunctions = filter (\(address, _) -> address /= guest (switchOf d) || role /= Stock) (caseFunctions base) ++ stockScheduler ++ [(guest (tickEntry d), 0x1a0) | role == Stock]
+  , caseFunctions = filter (\(address, _) -> (address /= guest (switchOf d) || role /= Stock) && address /= guest stubBase) (caseFunctions base)
+      ++ [(guest stubBase, fromIntegral (4 * length worker))] ++ stockScheduler ++ [(guest (tickEntry d), 0x1a0) | role == Stock]
   , caseExpectedRegisters = caseExpectedRegisters base ++
       [(r, initialCallee r) | r <- [R4 .. R11]] ++ [(Sp, stackTop)]
   , caseKernel = fmap (\k -> k
@@ -814,17 +814,13 @@ transferSpec d role one loaderA loaderB pair = base
   where
     guest = GuestAddress . fromIntegral
     context (low, high) = either error id (mkStackContext (guest low) (guest high))
-    aggregate = if d == DomainA then fst pair else snd pair
     base = specFor d role one loaderA loaderB (Just pair) B.empty
     fixture = (makeReady d 2 15 False
-      >>> setW (taskAt d 2 + 0x18) (workerTop - 36)
-      >>> setW (taskAt d 2 + 0x1c) (resumeAddress role d aggregate)
+      >>> setW (taskAt d 2 + 0x18) workerTop
+      >>> setW (taskAt d 2 + 0x1c) stubBase
       >>> setW (definitionAt d 2 + 0x14) workerBase
       >>> setW (definitionAt d 2 + 0x10) 0x800) (caseSetup one d (baseFixture d))
-    workerStack = foldl (\bytes (offset, value) -> poke bytes offset (word32le value))
-      (B.replicate 0x1000 0xa5)
-      (zip [workerTop - workerBase - 36, workerTop - workerBase - 32 ..]
-        ([workerCallee r | r <- [R4 .. R11]] ++ [stubBase]))
+    workerStack = B.replicate 0x1000 0xa5
     worker = workerWords d (1000 + caseArgument one)
     replace region@(CaseRegion mapped _) =
       case regionIdOf mapped of
@@ -835,6 +831,7 @@ transferSpec d role one loaderA loaderB pair = base
           (B.concat (map word32le worker) <> B.replicate (0x100 - 4 * length worker) 0)
         _ -> region
     stockScheduler = [(guest (switchOf d + low), high - low) | role == Stock, (low, high) <- [(0,0x28),(0x28,0x48),(0x48,0x6c),(0x6c,0xe8)]]
+      ++ [(guest (loaderBase d + 0x252c), 40) | role == Stock]
 
 initialCallee, workerCallee :: Register -> Word32
 initialCallee r = 0xabc00000 + fromIntegral (fromEnum r)
@@ -846,6 +843,7 @@ tickEntry DomainB = 0xd4d4c
 
 workerWords :: Domain -> Word32 -> [Word32]
 workerWords d expiry =
+  concat [[movw (fromIntegral (fromEnum r)) (workerCallee r .&. 0xffff), movt (fromIntegral (fromEnum r)) (workerCallee r `shiftR` 16)] | r <- [R4 .. R11]] ++
   store (tickCell d) expiry ++ store (handlerCell d) 1 ++
   [0xf1080080, movw 12 (tickEntry d .&. 0xffff), movt 12 (tickEntry d `shiftR` 16), 0xe12fff3c] ++
   store (handlerCell d) 0 ++
@@ -879,7 +877,7 @@ transferFrame d role one aggregate = (stackTop - frameBytes - 36, scheduler, ser
       Owned -> selectedSymbol aggregate (if sleep then "s3d_timed_sleep_body" else "s3d_delay_body") + if sleep then 0x1a4 else 0x140
     scheduler = case role of
       Stock | sleep -> [0, result, caseArgument one, 1, initialCallee R8, initialCallee R9, initialCallee R10, stackTop - 4, continuation]
-      Stock -> [record, runningCell d, timer, result, caseArgument one, initialCallee R9, initialCallee R10, stackTop - 4, continuation]
+      Stock -> [currentCell d, runningCell d, timer, result, caseArgument one, initialCallee R9, initialCallee R10, stackTop - 4, continuation]
       Owned | sleep -> [0x40, result, expiry, handlerCell d, timer, record, caseArgument one, stackTop - 8, continuation]
       Owned -> [expiry, taskAt d 1, 0x40, handlerCell d, timer, record, caseArgument one, stackTop - 8, continuation]
     record = contexts d + if d == DomainA then 0 else 0x84
@@ -947,9 +945,7 @@ stackReplay observation ident = case (lookup ident (nativeMemory observation), n
   _ -> False
   where
     base = if ident == RegionId "stack" then stackBase else workerBase
-    initial = if ident == RegionId "stack" then B.replicate 0x1000 0xa5 else
-      foldl (\bytes (offset, value) -> poke bytes offset (word32le value)) (B.replicate 0x1000 0xa5)
-        (zip [0x800 - 36, 0x800 - 32 ..] ([workerCallee r | r <- [R4 .. R11]] ++ [stubBase]))
+    initial = B.replicate 0x1000 0xa5
     apply bytes (OrderedWrite (Write (GuestAddress address) (WriteBytes size)) (WriteValue value))
       | address >= fromIntegral base && address + fromIntegral size <= fromIntegral base + 0x1000 =
           poke bytes (fromIntegral address - base) (B.pack [fromIntegral (value `shiftR` (8 * n)) | n <- [0 .. fromIntegral size - 1]])
@@ -983,12 +979,12 @@ transferView d observation = observation
 readonlyTransfer :: CaseSpec -> CaseSpec
 readonlyTransfer spec = spec
   { caseId = caseId spec ++ "-readonly-scheduler"
-  , caseEntry = guest 0x930000
+  , caseEntry = GuestAddress 0x930000
   , caseExclusion = "A disjoint permission probe attempts a readonly scheduler write; it does not execute a lifecycle service."
-  , caseRegions = mkRegion (RegionId "readonly-probe") (guest 0x930000) 20 ReadExecute probe
+  , caseRegions = mkRegion (RegionId "readonly-probe") (GuestAddress 0x930000) 20 ReadExecute probe
       : [CaseRegion mapped (if regionIdOf mapped `elem` [RegionId "data-a", RegionId "data-b"] then ReadOnly else permission)
         | CaseRegion mapped permission <- caseRegions spec]
-  , caseFunctions = (guest 0x930000, 20) : caseFunctions spec
+  , caseFunctions = (GuestAddress 0x930000, 20) : caseFunctions spec
   , caseExpectedStatus = MemoryGuard
   , caseExpectedRegisters = [(R4, initialCallee R4), (Cpsr, 0x53), (Pc, 0x93000c)]
   }
