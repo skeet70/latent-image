@@ -10,8 +10,9 @@ module Replacement.RtosTimer.Aggregate
 
 import Control.Monad (forM_, unless)
 import qualified Data.ByteString as B
-import Data.List (isPrefixOf)
+import Data.List (foldl', isPrefixOf, nub, sort, sortOn)
 import Data.Word (Word32)
+import Emulation.NativeObservation (GuestAddress (..), RegionId (..))
 import Emulation.OwnedCase
 import qualified Replacement.RtosOwnFirst.Regions as R
 import qualified Replacement.RtosPlatform.Aggregate as A
@@ -49,17 +50,26 @@ symbolAdmitted domain placements symbol
     packed placement = executable placement &&
       contains (A.placementAddress placement) (A.placementBytes placement) (A.symbolAddress symbol) (A.symbolSize symbol)
 
-loadAggregate :: [(Word32, Word32)] -> U.DomainMap -> FilePath -> FilePath -> FilePath -> IO Aggregate
-loadAggregate foreignCode domain binPath symbolsPath placementsPath = do
+loadAggregate :: [(Word32, Word32)] -> Word32 -> B.ByteString -> U.DomainMap -> FilePath -> FilePath -> FilePath -> IO Aggregate
+loadAggregate foreignCode loaderBase loaderBytes domain binPath symbolsPath placementsPath = do
   forM_ foreignCode $ \(address, bytes) ->
     unless (all (disjoint address bytes . U.carrierExtent) (U.mapCarriers domain))
       (fail ("foreign fixture code overlaps owned aggregate carrier: " ++ show (address, bytes)))
   symbols <- either fail pure . A.parseAggregateSymbols =<< B.readFile symbolsPath
   placements <- either fail pure . A.parsePlacements =<< B.readFile placementsPath
   unless (not (null placements)) (fail "aggregate placements are empty")
+  let ordered = sortOn A.placementAddress placements
+  forM_ (zip ordered (drop 1 ordered)) $ \(left, right) ->
+    unless (toInteger (A.placementAddress left) + toInteger (A.placementBytes left) <= toInteger (A.placementAddress right))
+      (fail "aggregate placements overlap")
   image <- either fail pure . A.aggregateImage symbols =<< B.readFile binPath
   forM_ placements $ \placement -> do
     unless (placementAdmitted domain placement) (fail ("aggregate placement outside declared carriers: " ++ show placement))
+    forM_ (U.mapEntries domain) $ \entry -> case U.entryAddress entry of
+      R.GuestAddress address ->
+        unless (disjoint (A.placementAddress placement) (A.placementBytes placement)
+          (R.Extent (R.GuestAddress address) (R.GuestAddress (address + 4))))
+          (fail "aggregate placement overlaps fixed ABI veneer")
     either fail (const (pure ())) (A.sliceAggregate image (A.placementAddress placement) (A.placementBytes placement))
   forM_ symbols $ \symbol ->
     unless (symbolAdmitted domain placements symbol) (fail ("aggregate symbol outside packed code or exact fixed ABI: " ++ show symbol))
@@ -77,25 +87,49 @@ loadAggregate foreignCode domain binPath symbolsPath placementsPath = do
     unless (any ((== body) . A.symbolName) symbols) (fail ("aggregate timer body missing: " ++ body))
   unless (length (filter ((== U.Timer) . U.entryGroup) (U.mapEntries domain)) == 4)
     (fail "aggregate requires four timer ABI entries")
-  pure (Aggregate image symbols placements)
+  withCode <- either fail pure (A.installAggregate loaderBase loaderBytes image symbols)
+  installed <- either fail pure (A.installPlacements loaderBase withCode image placements)
+  pure (Aggregate (A.AggregateImage loaderBase installed) symbols placements)
 
 aggregateRegions :: String -> Aggregate -> [CaseRegion]
-aggregateRegions label (Aggregate image symbols placements) =
-  [ region (label ++ "-placement-" ++ show index) (A.placementAddress placement) (A.placementBytes placement)
-      (if executable placement then ReadExecute else ReadOnly)
-  | (index, placement) <- zip [0 :: Int ..] placements
-  ] ++
-  [ region (label ++ "-" ++ A.symbolName symbol) (A.symbolAddress symbol) 4 ReadExecute
-  | symbol <- symbols, "xm1_platform_veneer_" `isPrefixOf` A.symbolName symbol
+aggregateRegions label (Aggregate image _ placements) =
+  [ mkRegion (RegionId (label ++ "-" ++ show index)) (GuestAddress (fromIntegral low))
+      (fromIntegral (high - low)) (permission low)
+      (either error id (A.sliceAggregate image low (high - low)))
+  | (index, (low, high)) <- zip [0 :: Int ..] (zip boundaries (drop 1 boundaries))
   ]
   where
-    region name address bytes permission = mkRegion (RegionId name) (GuestAddress (fromIntegral address)) (fromIntegral bytes) permission
-      (either error id (A.sliceAggregate image address bytes))
+    readonly = mergeSpans [(A.placementAddress placement, A.placementAddress placement + A.placementBytes placement)
+      | placement <- placements, not (executable placement)]
+    base = A.imageBase image
+    top = base + fromIntegral (B.length (A.imageBytes image))
+    boundaries = sort (nub (base : top : concatMap (\(low, high) -> [low, high]) readonly))
+    permission address
+      | any (\(low, high) -> address >= low && address < high) readonly = ReadOnly
+      | otherwise = ReadExecute
 
 aggregateFunctions :: Aggregate -> [(Word32, Word32)]
-aggregateFunctions (Aggregate _ symbols placements) =
-  [(A.symbolAddress symbol, A.symbolSize symbol) | symbol <- symbols] ++
-  [(A.placementAddress placement, A.placementBytes placement) | placement <- placements, executable placement]
+aggregateFunctions (Aggregate _ symbols placements) = compactFunctions roots spans
+  where
+    roots = [A.symbolAddress symbol | symbol <- symbols, "xm1_platform_veneer_" `isPrefixOf` A.symbolName symbol]
+    spans = [(A.symbolAddress symbol, A.symbolAddress symbol + A.symbolSize symbol) | symbol <- symbols] ++
+      [(A.placementAddress placement, A.placementAddress placement + A.placementBytes placement)
+      | placement <- placements, executable placement]
+
+compactFunctions :: [Word32] -> [(Word32, Word32)] -> [(Word32, Word32)]
+compactFunctions roots spans =
+  [ (start, end - start)
+  | (low, high) <- mergeSpans spans
+  , let boundaries = low : sort (nub [root | root <- roots, root > low, root < high]) ++ [high]
+  , (start, end) <- zip boundaries (drop 1 boundaries)
+  ]
+
+mergeSpans :: [(Word32, Word32)] -> [(Word32, Word32)]
+mergeSpans = reverse . foldl' append [] . sortOn fst
+  where
+    append ((low, high) : rest) (nextLow, nextHigh)
+      | nextLow <= high = (low, max high nextHigh) : rest
+    append spans span' = span' : spans
 
 admissionControls :: [(String, Bool)]
 admissionControls =
@@ -114,6 +148,10 @@ admissionControls =
   , ("foreign-fixture-disjoint", disjoint 0x1010 4 carrier)
   , ("foreign-fixture-overlap", not (disjoint 0x1008 4 carrier))
   , ("foreign-fixture-crossing", not (disjoint 0xffc 8 carrier))
+  , ("fetch-union-compaction", compactFunctions [0x1000, 0x1008]
+      [(0x1000, 0x1004), (0x1004, 0x100c), (0x1004, 0x1008)] == [(0x1000, 8), (0x1008, 4)])
+  , ("fetch-union-preserves-gap", compactFunctions []
+      [(0x1000, 0x1004), (0x1008, 0x100c)] == [(0x1000, 4), (0x1008, 4)])
   ]
   where
     domain = U.DomainMap R.DomainA (R.GuestAddress 0x1000) 16

@@ -36,13 +36,13 @@ main = do
     , "--aggregate-b-bin", "--aggregate-b-symbols", "--aggregate-b-placements"
     , "--aggregate-carriers"
     ]
-  (ownedAImage, ownedBImage, ownedASymbols, ownedBSymbols, aggregates, ownedAPath, ownedBPath) <-
-    loadInputs aggregatePaths
   cacheRoot <- required "--cache-root"
   resultsPath <- required "--results"
   facts <- either failH pure . parseFacts =<< B.readFile layoutPath
   loaderABytes <- B.readFile loaderA
   loaderBBytes <- B.readFile loaderB
+  (ownedAImage, ownedBImage, ownedASymbols, ownedBSymbols, aggregates, ownedAPath, ownedBPath) <-
+    loadInputs loaderABytes loaderBBytes aggregatePaths
   ownedADigest <- sha256File ownedAPath
   ownedBDigest <- sha256File ownedBPath
   layoutDigest <- sha256File layoutPath
@@ -138,13 +138,13 @@ argumentValues flag (name : value : rest)
   | name == flag = value : argumentValues flag rest
   | otherwise = argumentValues flag (value : rest)
 
-loadInputs :: [Maybe FilePath] -> IO (Image, Image, [(Word32, Word32)], [(Word32, Word32)], [Aggregate], FilePath, FilePath)
-loadInputs [Just a, Just sa, Just pa, Just b, Just sb, Just pb, Just carriers] = do
+loadInputs :: B.ByteString -> B.ByteString -> [Maybe FilePath] -> IO (Image, Image, [(Word32, Word32)], [(Word32, Word32)], [Aggregate], FilePath, FilePath)
+loadInputs loaderABytes loaderBBytes [Just a, Just sa, Just pa, Just b, Just sb, Just pb, Just carriers] = do
   union <- either (failH . show) pure . Union.parseUnion =<< B.readFile carriers
-  aggregateA <- loadAggregate fixtureCodeExtents (Union.unionA union) a sa pa
-  aggregateB <- loadAggregate fixtureCodeExtents (Union.unionB union) b sb pb
+  aggregateA <- loadAggregate fixtureCodeExtents 0x40000 loaderABytes (Union.unionA union) a sa pa
+  aggregateB <- loadAggregate fixtureCodeExtents 0xd0000 loaderBBytes (Union.unionB union) b sb pb
   pure (Image 0 B.empty, Image 0 B.empty, [], [], [aggregateA, aggregateB], a, b)
-loadInputs paths | all (== Nothing) paths = do
+loadInputs _ _ paths | all (== Nothing) paths = do
   a <- required "--owned-a-bin"
   b <- required "--owned-b-bin"
   sa <- required "--owned-a-symbols" >>= parseOwnedSymbols
@@ -153,4 +153,4 @@ loadInputs paths | all (== Nothing) paths = do
   ba <- B.readFile a
   bb <- B.readFile b
   pure (Image (minimum (map fst sa)) ba, Image (minimum (map fst sb)) bb, sa, sb, [], a, b)
-loadInputs _ = failH "aggregate mode requires binaries, symbols, placements for both domains and --aggregate-carriers"
+loadInputs _ _ _ = failH "aggregate mode requires binaries, symbols, placements for both domains and --aggregate-carriers"
