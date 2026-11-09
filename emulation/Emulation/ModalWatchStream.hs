@@ -130,8 +130,8 @@ streamSidecar sidecar =
  where
   lineLimit = 1024 * 1024
   decodedLimit = 1024 * 1024 * 1024
-  readLines handle = go B.empty 0 0 [] []
-  go partial !total !count records digest = do
+  readLines handle = go handle B.empty 0 0 [] []
+  go handle partial !total !count records digest = do
     chunk <- B.hGetSome handle 65536
     if B.null chunk
       then if B.null partial
@@ -144,7 +144,7 @@ streamSidecar sidecar =
         if B.length rest > lineLimit then pure (Left "compacted watch row exceeds its line bound")
         else case consume complete total count records digest of
           Left problem -> pure (Left problem)
-          Right (nextTotal, nextCount, nextRecords, nextDigest) -> go rest nextTotal nextCount nextRecords nextDigest
+          Right (nextTotal, nextCount, nextRecords, nextDigest) -> go handle rest nextTotal nextCount nextRecords nextDigest
   consume [] total count records digest = Right (total, count, records, digest)
   consume (piece : remaining) total count records digest
     | B.null piece = Left "compacted watch contains a blank row"

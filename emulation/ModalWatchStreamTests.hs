@@ -10,6 +10,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.Either (isLeft)
 import Data.IORef (atomicModifyIORef', newIORef)
+import qualified Data.Text as T
 import Emulation.ModalObservation (finalModalWatchSummary, parseFinalModalWatch)
 import Emulation.ModalWatchStream (compactFinalWatch, readFinalModalWatch, readFinalModalWatchFrom)
 import Emulation.Sha256 (sha256, sha256Hex)
@@ -67,7 +68,7 @@ compactionTests = do
   check "compacted watch preserves the summary and row digest"
     (fmap finalModalWatchSummary compacted == fmap finalModalWatchSummary inline)
   compactBytes <- B.readFile compact
-  finalValue <- either (ioError . userError) pure (eitherDecodeStrict' compactBytes)
+  finalValue <- either (ioError . userError) pure (eitherDecodeStrict' compactBytes) :: IO Value
   let writeFinal value = BL.writeFile compact (encode value)
       modifyFinal change = do
         bytes <- B.readFile compact
@@ -90,16 +91,16 @@ compactionTests = do
   setReference [("count", Number 3)]
   reject "compacted watch rejects a wrong row count"
   writeFinal finalValue
-  setSummary "records_sha256" (String (replicate 64 '0'))
+  setSummary "records_sha256" (String (T.pack (replicate 64 '0')))
   reject "compacted watch rejects a wrong row digest"
   writeFinal finalValue
-  setReference [("sha256", String (replicate 64 '0'))]
+  setReference [("sha256", String (T.pack (replicate 64 '0')))]
   reject "compacted watch rejects a wrong sidecar digest"
   sidecarBytes <- B.readFile sidecar
   writeFinal finalValue
   let truncated = B.take (B.length sidecarBytes - 8) sidecarBytes
   B.writeFile sidecar truncated
-  setReference [("sha256", String (sha256Hex (sha256 truncated))), ("bytes", toJSON (B.length truncated))]
+  setReference [("sha256", String (T.pack (sha256Hex (sha256 truncated)))), ("bytes", toJSON (B.length truncated))]
   reject "compacted watch rejects a truncated gzip"
   let corrupt = B.concat
         [ B.take (B.length sidecarBytes - 5) sidecarBytes
@@ -107,7 +108,7 @@ compactionTests = do
         , B.drop (B.length sidecarBytes - 4) sidecarBytes ]
   writeFinal finalValue
   B.writeFile sidecar corrupt
-  setReference [("sha256", String (sha256Hex (sha256 corrupt))), ("bytes", toJSON (B.length corrupt))]
+  setReference [("sha256", String (T.pack (sha256Hex (sha256 corrupt)))), ("bytes", toJSON (B.length corrupt))]
   reject "compacted watch rejects a corrupt gzip CRC"
   writeFinal finalValue
   B.writeFile sidecar sidecarBytes
