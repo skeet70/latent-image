@@ -21,7 +21,7 @@ use fujimod_emulator::board::preservation::{
 };
 use fujimod_xm1::sd_host::{Backing, MediaImage, SectorAddress, SectorCount};
 use fujimod_xm1::nand_read::{RowAddress, RowCount};
-use fujimod_xm1::trace::{CAPTURE_OBSERVATION_BOUNDS, CaptureCursor, CaptureScope, CaptureSnapshot, InstructionCount, SiteRead, parse_site_reads};
+use fujimod_xm1::trace::{CAPTURE_OBSERVATION_BOUNDS, CaptureCursor, CaptureScope, CaptureSnapshot, Hit, InstructionCount, SiteRead, parse_site_reads};
 use serde::{Deserialize, Serialize};
 use fujimod_emulator_devices::Device;
 use fujimod_emulator_exr2_isp_input::ImageInput;
@@ -450,6 +450,12 @@ const SNAPSHOT_LIMIT: usize = 24;
 
 const DISPLAY_STEP: u64 = 2_000_000;
 const DISPLAY_WAIT: u64 = 60_000_000;
+/// The store entry the render pair arms as `render-osd-buffer`; its callers hand off the stage-0 buffers.
+const PUBLICATION_SITE: u32 = 0x006d_76ec;
+
+fn later_publication<'a>(hits: &'a [Hit], start: usize, after: u64) -> Option<&'a Hit> {
+    hits.get(start..)?.iter().find(|hit| hit.site == "render-osd-buffer" && hit.instructions > after)
+}
 
 /// A client-chosen snapshot name: 1..=64 lowercase ASCII letters, digits or '-'.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -902,22 +908,49 @@ impl Server {
         }
     }
 
-    /// Presses `key`, then waits for a presented plane; a failed press is returned as its `failure`.
+    fn publication_armed(&self) -> bool {
+        self.bridge.machine.traces.sites.get(&PUBLICATION_SITE).is_some_and(|label| label == "render-osd-buffer")
+    }
+
+    fn await_publication(&mut self, start: usize, after: u64, budget: u64) -> Result<Hit, String> {
+        let mut waited = 0;
+        loop {
+            if let Some(hit) = later_publication(&self.bridge.machine.traces.hits, start, after) {
+                return Ok(hit.clone());
+            }
+            if waited >= budget {
+                return Err(format!("no render-osd-buffer publication after presented frame within {waited} instructions"));
+            }
+            self.bridge.advance(DISPLAY_STEP)?;
+            self.bridge.machine.require_running()?;
+            waited += DISPLAY_STEP;
+        }
+    }
+
     fn display_press(&mut self, key: &PressName, snapshot: Option<&SnapshotName>, completion: DisplayCompletion) -> Result<Value, String> {
         let started = Instant::now();
         let before = self.bridge.machine.instructions();
+        let publication_start = self.bridge.machine.traces.hits.len();
+        let publication_armed = matches!(completion, DisplayCompletion::AcknowledgedFrame) && self.publication_armed();
         let pressed = self.bridge.settled_key(key.press, default_pulse(key.press), MAX_SETTLE)
             .and_then(|settle| self.bridge.machine.require_running().map(|()| settle))
             .and_then(|settle| self.await_display_plane(completion).map(|(waited, acknowledgement)| (settle, waited, acknowledgement)));
         let instructions = self.bridge.machine.instructions() - before;
-        let (settle, display_wait, presentation, menu, failure) = match pressed {
-            Ok((settle, waited, acknowledgement)) => (json!(settle), json!(waited), json!(acknowledgement), menu_value(self.bridge.machine.menu()?), Value::Null),
-            Err(failure) => (Value::Null, Value::Null, Value::Null, Value::Null, json!(failure)),
+        let (settle, display_wait, presentation, menu, failure, publication) = match pressed {
+            Ok((settle, waited, acknowledgement)) => {
+                let publication = if publication_armed {
+                    let hit = self.await_publication(publication_start, self.bridge.machine.instructions(), DISPLAY_WAIT)?;
+                    json!({"site": hit.site, "instructions": hit.instructions, "core": hit.core, "lr": hit.lr})
+                } else { Value::Null };
+                (json!(settle), json!(waited), json!(acknowledgement), menu_value(self.bridge.machine.menu()?), Value::Null, publication)
+            }
+            Err(failure) => (Value::Null, Value::Null, Value::Null, Value::Null, json!(failure), Value::Null),
         };
         self.key_log.push(json!({"key": key.name, "snapshot": snapshot, "seconds": started.elapsed().as_secs_f64(),
-            "instructions": instructions, "settle": settle, "display_wait_instructions": display_wait, "presentation": presentation, "failure": failure}));
+            "instructions": instructions, "settle": settle, "display_wait_instructions": display_wait, "presentation": presentation,
+            "publication": publication, "failure": failure}));
         Ok(json!({"snapshot": snapshot, "key": key.name, "menu": menu, "settle": settle, "instructions": instructions,
-            "display_wait_instructions": display_wait, "presentation": presentation, "failure": failure}))
+            "display_wait_instructions": display_wait, "presentation": presentation, "publication": publication, "failure": failure}))
     }
 
     fn admit_request(&self, request: &Request) -> Result<(), String> {
@@ -2046,6 +2079,30 @@ mod tests {
         assert_eq!(receipt["boundary"]["failure"], "synthetic terminal fault");
         assert_eq!(receipt["boundary"]["instructions"], instructions);
         std::fs::remove_dir_all(&server.output).unwrap();
+    }
+
+    #[test]
+    fn publication_wait_selects_only_a_strictly_later_real_publication() {
+        let hit = |site: &str, instructions: u64| Hit {
+            site: site.into(), address: "0x006d76ec".into(), core: 0, instructions,
+            render_object_provenance_sequence: None, registers: BTreeMap::new(), sp: "0x0".into(),
+            lr: "0x006d7b3c".into(), cpsr: 0, code_word: None, memory: Vec::new(),
+            stack_memory: Vec::new(), observation: None,
+        };
+        let hits = [hit("render-osd-buffer", 10), hit("other-site", 20), hit("render-osd-buffer", 30)];
+        assert_eq!(later_publication(&hits, 0, 5).unwrap().instructions, 10);
+        assert_eq!(later_publication(&hits, 0, 25).unwrap().instructions, 30);
+        assert!(later_publication(&hits, 0, 30).is_none());
+        assert_eq!(later_publication(&hits, 2, 0).unwrap().instructions, 30);
+        assert!(later_publication(&hits, 3, 0).is_none());
+    }
+
+    #[test]
+    fn presented_frame_fails_closed_without_a_later_publication() {
+        let mut server = server(&[0xeafffffe]);
+        let after = server.bridge.machine.instructions();
+        let error = server.await_publication(0, after, 2 * DISPLAY_STEP).unwrap_err();
+        assert!(error.contains("no render-osd-buffer publication"));
     }
 
     #[test]

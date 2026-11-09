@@ -20,7 +20,7 @@ def render_return_reads($offset):
   + [render_banks[] | chunks(22967608 + . * 27136;27136)[]];
 def render_pane_entry_reads: render_entry_reads | .[2] = ["015e64d8",40];
 def render_pane_return_reads: render_return_reads(0) | .[0] = ["015e650c",68] | .[1] = ["015e64d8",40];
-def render_sites($role):
+def render_sites($role; $name):
   if render_enabled then [
     ["01164e1c","render-tree-entry",{"lr":true,"sp":true,"reads":render_entry_reads}],
     ["01163f2c","render-picker-entry",{"lr":true,"sp":true,"reads":render_entry_reads}],
@@ -33,7 +33,8 @@ def render_sites($role):
     ["01158184","render-pane-return",{"sp":true,"reads":render_pane_return_reads}],
     ["006d7d44","render-osd-increment"],
     ["006d76ec","render-osd-buffer",{"lr":true}]
-  ] + (if $role == "owned" then [
+  ] + (if $name == "framed-pop-group41" then [["011130e0","render-picker-fill"]] else [] end)
+    + (if $role == "owned" then [
     ["runtime:rb_render_tree_entry","render-tree-adapter",{"sp":true}],
     ["runtime:rb_render_picker_entry","render-picker-adapter",{"sp":true}],
     ["runtime:rb_render_pane_entry","render-pane-adapter",{"sp":true}]
@@ -57,13 +58,13 @@ def engine_reads: [
 # The stage entry reads the block and the last-move pair and keeps sp at each event; the kind
 # switch's and the seek's lr tell 0xbf95c8's call (and the owned fallback, which resumes there)
 # from the adapter's service calls.
-def engine_sites($role): [
+def engine_sites($role; $name): [
   ["00d4dd2c", "menu-stage-entry", {"reads": [["009571d0", 1072], ["01467580", 8]], "sp": true}],
   ["00bfa234", "menu-kind-switch", {"lr": true}],
   ["00bfad04", "menu-seek", {"lr": true}],
   ["0063270c", "menu-event-post"]
 ] + (if $role == "owned" then [["runtime:rb_menu_engine_guard_failure", "menu-engine-guard-failure"]]
-     elif $role == "stock" then [] else error("role must be stock or owned") end) + render_sites($role);
+     elif $role == "stock" then [] else error("role must be stock or owned") end) + render_sites($role; $name);
 def presented_handoff:
   if length == 0 then . else .[-1] |= (if length == 4 then . + [{completion:"presented-frame"}] else .[4].completion = "presented-frame" end) end;
 def render_trajectory:
