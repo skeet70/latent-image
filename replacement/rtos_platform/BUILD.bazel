@@ -88,6 +88,29 @@ xm1_rust_staticlib(
     for domain in ["a", "b"]
 ]
 
+[
+    xm1_rust_rlib(
+        name = "scheduler-s3d-%s-rlib" % domain,
+        src = "//replacement/rtos_scheduler/stage:s3d_abi.rs",
+        crate_name = "xm1_rtos_scheduler_s3d",
+        data = [
+            "//replacement/rtos_scheduler:src/s3d.rs",
+            "//replacement/rtos_scheduler:src/timeout.rs",
+            "//replacement/rtos_layout:src/lib.rs",
+            "//replacement/rtos_reservation:src/lib.rs",
+        ],
+        rustc_flags = [
+            "--cfg",
+            "'feature=\"domain-%s\"'" % domain,
+            "--cfg",
+            "'feature=\"stage\"'",
+            "--cfg",
+            "'feature=\"component\"'",
+        ],
+    )
+    for domain in ["a", "b"]
+]
+
 
 [
     xm1_rust_rlib(
@@ -250,6 +273,7 @@ _ARCHIVES = {
         ":scheduler-a-rlib",
         ":scheduler-s2-a-rlib",
         ":scheduler-s3c-a-rlib",
+        ":scheduler-s3d-a-rlib",
         ":data-queue-a-rlib",
         ":own-first-a-rlib",
         ":semaphore-a-rlib",
@@ -262,6 +286,7 @@ _ARCHIVES = {
         ":scheduler-b-rlib",
         ":scheduler-s2-b-rlib",
         ":scheduler-s3c-b-rlib",
+        ":scheduler-s3d-b-rlib",
         ":data-queue-b-rlib",
         ":own-first-b-rlib",
         ":semaphore-b-rlib",
@@ -286,7 +311,7 @@ tmp=$$(mktemp -d)
 trap 'rm -rf "$$tmp"' EXIT
 $(location @lab_clang//:bin/clang) --target=armv7r-none-eabi -march=armv7-r -marm -c $(location veneer-%s.S) -o $$tmp/veneer.o
 $(location @lab_clang//:bin/clang) --target=armv7r-none-eabi -march=armv7-r -marm -c $(location //replacement/rtos_fixed_pool:stage/entries.S) -o $$tmp/entries.o
-$(location @lab_jq//:bin/jq) -r '.domains.%s | (.entries[].symbol, .entries[].veneer, .demand[].symbol)' $(location carriers.json) | sort -u > $$tmp/seeds
+$(location @lab_jq//:bin/jq) -r '.domains.%s | (.entries[].symbol, .entries[].veneer)' $(location carriers.json) | sort -u > $$tmp/seeds
 $(location @lab_lld//:bin/ld.lld) -m armelf -r --gc-sections $$(awk '{printf " -u %%s", $$1}' $$tmp/seeds) --start-group %s --end-group $$tmp/veneer.o $$tmp/entries.o -o $(location :bodies-%s.o)
 $(location @lab_llvm//:bin/llvm-readelf) -S $(location :bodies-%s.o) > $(location :sections-%s.txt)
 """ % (domain, domain, " ".join(["$(location %s)" % archive for archive in _ARCHIVES[domain]]), domain, domain, domain),

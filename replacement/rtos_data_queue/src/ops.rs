@@ -59,6 +59,7 @@ pub enum ReceiveResume {
     Corrupt(ReceivePending),
 }
 
+#[inline(never)]
 fn block<M: Env>(
     m: &M,
     entry: Domain,
@@ -99,6 +100,7 @@ fn block<M: Env>(
 }
 
 /// `Some(local)` when a receiver took the word, where `local` means the caller dispatches.
+#[inline(never)]
 fn handoff_receiver<M: Env>(m: &M, control: DataQueueControl, payload: Payload) -> Option<bool> {
     let first = m.load_word(control.receivers().next());
     if first == control.receivers().0 .0 {
@@ -117,6 +119,7 @@ fn handoff_receiver<M: Env>(m: &M, control: DataQueueControl, payload: Payload) 
 }
 
 /// `Some((received, local))` when a sender delivered its word.
+#[inline(never)]
 fn take_sender<M: Env>(
     m: &M,
     control: DataQueueControl,
@@ -148,6 +151,7 @@ fn take_sender<M: Env>(
     Some((received, local))
 }
 
+#[inline(never)]
 fn timer_for<M: Env>(
     m: &M,
     entry: Domain,
@@ -163,6 +167,7 @@ fn timer_for<M: Env>(
     }
 }
 
+#[inline(never)]
 fn task_wait<M: Env>(
     m: &M,
     entry: EntryDomain,
@@ -183,51 +188,7 @@ pub fn send<M: Env>(
     id: DataQueueId,
     payload: Payload,
 ) -> Result<SendBlocking, ObjectStatus> {
-    let words = id.domain.words();
-    let config = words.data_queue_config(id.slot);
-    let control = words.data_queue_control(id.slot);
-    let ring = Ring::new(config, control);
-    let lock = words.context(id.domain).object_lock();
-    let result = m.with_object_lock_after(
-        lock,
-        || -> Result<(SendBlocking, bool, bool), ObjectStatus> {
-            if let Some(local) = handoff_receiver(m, control, payload) {
-                return Ok((SendBlocking::Ready(WaitOutcome::Satisfied(())), local, false));
-            }
-            if ring.append(m, payload) {
-                return Ok((SendBlocking::Ready(WaitOutcome::Satisfied(())), false, false));
-            }
-            let (task, wait, _) = task_wait(m, entry)?;
-            m.store_word(wait.data(), payload.0);
-            let blocked = block(
-                m,
-                entry.domain(),
-                id.domain,
-                task,
-                wait,
-                control,
-                control.sender_queue(),
-                QueueOrder::from_attribute(m.load_word(config.attributes())),
-                SEND_STATE,
-                None,
-            );
-            Ok((
-                SendBlocking::Pending(SendPending { task, wait }),
-                false,
-                !blocked,
-            ))
-        },
-        |result| {
-            if let Ok((_, true, _)) = result {
-                m.dispatch(-53);
-            }
-        },
-    );
-    match result {
-        Ok((outcome, _, false)) => Ok(outcome),
-        Ok((_, _, true)) => Ok(SendBlocking::Retry),
-        Err(status) => Err(status),
-    }
+    send_blocking(m, entry, id, payload, Timeout::Forever, SendCall::Plain)
 }
 
 /// Slot `+0xac` and `+0xb0`.
@@ -267,6 +228,12 @@ pub fn send_poll<M: Env>(
     result.map(|(outcome, _)| outcome)
 }
 
+#[derive(Clone, Copy)]
+enum SendCall {
+    Plain,
+    Timed,
+}
+
 /// Slot `+0xb4`.
 pub fn send_timeout<M: Env>(
     m: &M,
@@ -274,6 +241,18 @@ pub fn send_timeout<M: Env>(
     id: DataQueueId,
     payload: Payload,
     timeout: Timeout,
+) -> Result<SendBlocking, ObjectStatus> {
+    send_blocking(m, entry, id, payload, timeout, SendCall::Timed)
+}
+
+#[inline(never)]
+fn send_blocking<M: Env>(
+    m: &M,
+    entry: EntryDomain,
+    id: DataQueueId,
+    payload: Payload,
+    timeout: Timeout,
+    call: SendCall,
 ) -> Result<SendBlocking, ObjectStatus> {
     let words = id.domain.words();
     let config = words.data_queue_config(id.slot);
@@ -314,7 +293,7 @@ pub fn send_timeout<M: Env>(
         },
         |result| {
             if let Ok((_, true, _)) = result {
-                m.dispatch(-55);
+                m.dispatch(match call { SendCall::Plain => -53, SendCall::Timed => -55 });
             }
         },
     );
@@ -363,6 +342,7 @@ pub fn force_send<M: Env>(
 }
 
 /// Slots `+0xc0`, `+0xc4` and `+0xc8`.
+#[inline(never)]
 pub fn receive<M: Env>(
     m: &M,
     entry: EntryDomain,

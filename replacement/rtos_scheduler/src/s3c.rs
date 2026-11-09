@@ -54,10 +54,12 @@ fn running() -> Task { Task(GuestAddress(word(DOMAIN.words().running))) }
 fn current() -> KernelContext { KernelContext(GuestAddress(word(DOMAIN.words().current_context))) }
 #[inline(always)]
 fn config(task: Task) -> GuestAddress { GuestAddress(word(task.0.offset(8))) }
-#[inline(always)]
+#[cfg_attr(feature = "component", inline(never))]
+#[cfg_attr(not(feature = "component"), inline(always))]
 fn invalid_context(interrupt: bool) -> bool { (word(DOMAIN.words().handler_context) != 0) != interrupt || cpsr() & 128 != 0 }
 
-#[inline(always)]
+#[cfg_attr(feature = "component", inline(never))]
+#[cfg_attr(not(feature = "component"), inline(always))]
 fn resolve(id: TaskId, zero: bool, interrupt: bool) -> Result<(KernelContext, Task), ServiceResult> {
     let class = id.0 >> 16;
     let record = match class {
@@ -89,7 +91,8 @@ impl SchedulerGuard {
         unsafe { release(self.0.0.offset(8)); }
     }
 }
-#[inline(always)]
+#[cfg_attr(feature = "component", inline(never))]
+#[cfg_attr(not(feature = "component"), inline(always))]
 fn lock(record: KernelContext) -> SchedulerGuard {
     loop { mask(); if let Some(guard) = SchedulerGuard::acquire(record) { return guard; } unmask(); }
 }

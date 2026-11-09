@@ -7,7 +7,7 @@ mod data_queue;
 use core::arch::{asm, global_asm};
 use core::ptr::{read_volatile, write_volatile};
 use data_queue::*;
-use data_queue::admission::{admit_precheck, Entry, Facts, Params, Records, Request, Service};
+use data_queue::admission::{admit_precheck, Entry, Facts, Params, Records, Service};
 use data_queue::create::{create_data_queue, delete_data_queue, DataQueueCreate, QueueAttributes};
 use data_queue::env::{
     retry_masked, Attempt, Deadline, DispatchTarget, Env, QueueOrder, SavedInterrupts, SavedMask,
@@ -179,6 +179,7 @@ impl Env for Cpu {
         unsafe { xm1_rtos_scheduler_remove(owner, task) };
     }
 
+    #[inline(never)]
     fn queue_wait(&self, _owner: KernelContext, task: Task, queue: data_queue::layout::WaitQueue, order: QueueOrder) {
         let head = queue.0;
         let (mut at, mut next) = (GuestAddress(load(queue.prev())), head);
@@ -305,20 +306,12 @@ fn service(service: Service, id: i32, timeout: Option<i32>, payload: Option<u32>
         records,
         Params { timeout },
     ) {
-        Ok((resolved, _, _)) => resolved,
+        Ok(prechecked) => prechecked,
         Err(status) => return status.code(),
     };
-    let config = resolved.domain.words().data_queue_config(resolved.slot);
-    let request = Request {
-        service,
-        entry_domain: ENTRY,
-        entry,
-        id: EncodedId(id),
-        records,
-        facts: facts(config),
-        params: Params { timeout },
-    };
-    let admitted = match data_queue::admission::admit(&request) {
+    let object = resolved.object();
+    let config = object.domain.words().data_queue_config(object.slot);
+    let admitted = match resolved.finish(facts(config)) {
         Ok(admitted) => admitted,
         Err(status) => return status.code(),
     };

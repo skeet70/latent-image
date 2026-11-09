@@ -213,6 +213,7 @@ haskell_binary(
     ],
     deps = [
         ":scheduler-oracle-lib",
+        "//emulation:case-sha256",
         "//emulation:native-adapter",
         "//emulation:native-observation",
         "//emulation:owned-case",
@@ -222,6 +223,7 @@ haskell_binary(
         "//host:containers",
         "//host:directory",
         "//host:filepath",
+        "//host:host-support",
         "//host:json",
         "//replacement/rtos_platform:aggregate",
     ],

@@ -32,7 +32,7 @@ import Data.Word (Word32)
 import Numeric (readHex)
 import Replacement.RtosOwnFirst.Regions (Domain (..), Extent (..), GuestAddress (..), domains, extentBytes, extentContains)
 
-data Group = OwnFirst | S1 | S2 | S3a | S3b | S3c | S3d | Semaphore | FixedPool | TaskRecords | DataQueue | GlobalLock
+data Group = OwnFirst | S1 | S2 | S3a | S3b | S3c | S3d | Semaphore | FixedPool | TaskRecords | DataQueue | GlobalLock | Shared
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 groupLabel :: Group -> String
@@ -49,6 +49,7 @@ groupLabel value = case value of
   TaskRecords -> "task-records"
   DataQueue -> "data-queue"
   GlobalLock -> "global-lock"
+  Shared -> "shared"
 
 data Entry = Entry
   { entryGroup :: Group

@@ -55,6 +55,7 @@ SECTIONS {
     __scheduler_delay_completion_body_end = .;
     KEEP(*(.text.scheduler_timeout_core))
     __scheduler_timeout_core_end = .;
+    KEEP(*(.text.*lock* .text.*detach_waiter* .text.*notify_then_switch* .text.*requeue_priority* .text.*reorder_wait_queue*))
     KEEP(*(.text))
     KEEP(*(.rodata .rodata.*))
     . = ORIGIN(bodies) + LENGTH(bodies);

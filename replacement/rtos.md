@@ -75,6 +75,9 @@ The [scheduler report](../reports/rtos-platform-options.md#413-owned-thread-laye
 
 S1 compares lock/ready/notification behavior and checks barrier order separately. S2 stops before exception-return execution beyond the runner's admitted subset and uses independent expected repairs for tagged defects. S3 services may stop at a dispatcher entry with an active frame; private active frames are not returned-call ABI. Blocking stops alone do not establish scheduling or resumed callers.
 
+For aggregate S3b qualification, supply both `--symbols-a/--symbols-b` and `--placements-a/--placements-b` with the positional union binaries. `--reuse-root SAVED_S3B_DIRECTORY` rejudges saved observations only when their wire and runner digests match current inputs. The live incoming stack range remains compared. The equivalent-input role changes ABI scratch-register inputs, not relocated firmware instructions.
+
+
 S3d's six lifecycle services have `//replacement/rtos_scheduler:s3d-host-tests` and the cached native oracle above. The same image carries the owned timeout and delay completion callbacks at A `0x44318`/`0x44634` and B `0xd42d8`/`0xd45f4`, with bodies in the native scratch region; the tick still runs from the timer carrier. Each role must reach its declared return value, including zero, or its exact dispatcher stop and switch reason. Matching refusals are not acceptance. The [lifecycle contract](../reports/rtos-platform-options.md#423-owned-task-lifecycle-services-s3d) separates synthetic save/wake/return evidence from full-dispatcher, aggregate placement and system qualification.
 
 ```sh

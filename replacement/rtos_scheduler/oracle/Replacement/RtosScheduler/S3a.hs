@@ -97,7 +97,7 @@ makeSpec env domain loader owned service scenario label = spec
     entry=fst (serviceExtent domain service)
     loaderBase=if domain==DomainA then 0x40000 else 0xd0000
     selected = case owned of
-      Just (Aggregate _ symbols _) -> Agg.symbolsWithPrefixes ["xm1_s3a_", "xm1_platform_veneer_"] symbols
+      Just (Aggregate _ symbols _) -> symbols
       _ -> []
     placements = case owned of
       Just (Aggregate _ _ rows) -> rows

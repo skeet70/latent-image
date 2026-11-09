@@ -12,7 +12,7 @@ pub mod layout;
 pub mod timeout;
 
 use layout::{
-    Domain, DomainId, DomainWords, GuestAddress, KernelContext, LockRecord, Priority, ReadyHead,
+    Domain, DomainId, GuestAddress, KernelContext, LockRecord, Priority, ReadyHead,
     Task, TaskDefinition, TaskFlags, TaskState, WaitBlock, WaitQueue,
 };
 
@@ -268,7 +268,7 @@ fn exists<M: Machine>(m: &M, task: Task) -> bool {
 
 /// Masks IRQ and spins until `lock` is held. A failed attempt restores the entry state
 /// before retrying, as the stock loops do.
-#[inline(always)]
+#[inline(never)]
 fn lock<M: Machine>(m: &M, lock_record: LockRecord) -> InterruptState {
     let saved = m.save_and_mask();
     while !m.lock_acquire(lock_record) {
@@ -279,12 +279,12 @@ fn lock<M: Machine>(m: &M, lock_record: LockRecord) -> InterruptState {
 }
 
 /// Takes `lock` while IRQ is already masked and one other lock is held.
-#[inline(always)]
+#[inline(never)]
 fn lock_masked<M: Machine>(m: &M, lock_record: LockRecord) {
     while !m.lock_acquire(lock_record) {}
 }
 
-#[inline(always)]
+#[inline(never)]
 fn unlock<M: Machine>(m: &M, lock_record: LockRecord, saved: InterruptState) {
     m.lock_release(lock_record);
     m.restore(saved);
@@ -305,7 +305,7 @@ fn owner_context<M: Machine>(
 }
 
 /// The `wait.result` receipt can name a node a timeout already popped.
-#[inline(always)]
+#[inline(never)]
 fn detach_waiter<M: Machine>(m: &M, record: KernelContext, task: Task) {
     let wait = WaitBlock(GuestAddress(word(m, task.wait())));
     let receipt = word(m, wait.result());
@@ -325,7 +325,7 @@ fn detach_waiter<M: Machine>(m: &M, record: KernelContext, task: Task) {
 }
 
 /// The `FUN_0004482c` release state machine over [`detach_waiter`].
-#[inline(always)]
+#[inline(never)]
 fn release_locked<M: Machine>(m: &M, record: KernelContext, task: Task) -> bool {
     detach_waiter(m, record, task);
     let wait = WaitBlock(GuestAddress(word(m, task.wait())));
@@ -352,7 +352,7 @@ fn release_locked<M: Machine>(m: &M, record: KernelContext, task: Task) -> bool 
     m.insert_ready(record, task)
 }
 
-#[inline(always)]
+#[inline(never)]
 fn notify_then_switch<M: Machine>(
     m: &M,
     record: KernelContext,
@@ -380,7 +380,7 @@ fn find_ready<M: Machine>(m: &M, record: KernelContext) -> Task {
 }
 
 /// `kernel_requeue_priority`: move a ready task to `to`, then repair selection.
-#[inline(always)]
+#[inline(never)]
 fn requeue_priority<M: Machine>(
     m: &M,
     record: KernelContext,
@@ -431,7 +431,7 @@ fn requeue_priority<M: Machine>(
 }
 
 /// `FUN_00044aa8`: reinsert a waiter into its priority-ordered object queue.
-#[inline(always)]
+#[inline(never)]
 fn reorder_wait_queue<M: Machine>(m: &M, queue: WaitQueue, task: Task) {
     let config = word(m, queue.config());
     if word(m, GuestAddress(config)) & 1 == 0 {
@@ -763,16 +763,16 @@ pub(crate) fn release<M: Machine>(m: &M, domain: Domain, id: EncodedId, handler:
         return Err(ServiceError::NotWaiting);
     }
     if state & TaskState::OBJECT_QUEUED.bits() == 0 {
-        release_waiting(m, words, record, task, saved, handler);
+        release_waiting(m, domain, record, task, saved, handler);
         return Ok(());
     }
-    release_queued(m, words, record, task, saved, handler)
+    release_queued(m, domain, record, task, saved, handler)
 }
 
 #[inline(never)]
 fn release_waiting<M: Machine>(
     m: &M,
-    words: DomainWords,
+    domain: Domain,
     record: KernelContext,
     task: Task,
     saved: InterruptState,
@@ -781,7 +781,7 @@ fn release_waiting<M: Machine>(
     let dispatch = release_locked(m, record, task);
     if dispatch {
         if handler {
-            put(m, words.reschedule, 1);
+            put(m, domain.words().reschedule, 1);
             unlock(m, record.scheduler_lock(), saved);
         } else {
             notify_then_switch(m, record, record.scheduler_lock(), saved, SwitchReason::Release);
@@ -794,12 +794,13 @@ fn release_waiting<M: Machine>(
 #[inline(never)]
 fn release_queued<M: Machine>(
     m: &M,
-    words: DomainWords,
+    domain: Domain,
     record: KernelContext,
     task: Task,
     saved: InterruptState,
     handler: bool,
 ) -> Result<(), ServiceError> {
+    let words = domain.words();
     let owner = owner_context(m, &words, task).ok_or(ServiceError::InvalidId)?;
     put(m, task.cancel_pending(), 1);
     m.lock_release(record.scheduler_lock());

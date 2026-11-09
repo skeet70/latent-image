@@ -138,7 +138,7 @@ ownedImage domain bytes symbols placements = case [Agg.symbolAddress symbol | sy
     pure (Image base bytes [] [])
   _ -> do
     image <- either fail pure (Agg.aggregateImage symbols bytes)
-    let selected = Agg.symbolsWithPrefixes ["xm1_rtos_fixed_pool_", "xm1_platform_veneer_", "_RINvNtNtCs8O56LNNgKAo_25xm1_rtos_fixed_pool_stage"] symbols
+    let selected = symbols
     pure (Image (Agg.imageBase image) (Agg.imageBytes image) selected (maybe [] id placements))
 
 optional :: String -> IO (Maybe FilePath)

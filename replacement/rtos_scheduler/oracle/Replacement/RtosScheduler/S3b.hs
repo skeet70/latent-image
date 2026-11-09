@@ -2,19 +2,20 @@
 module Main (main) where
 
 import Control.Monad (forM, unless)
-import Data.Aeson (object, (.=))
-import Data.Bits ((.&.))
-import Data.List (isPrefixOf, sort, sortOn)
+import Data.Aeson (eitherDecodeStrict', object, (.=))
+import Data.Bits ((.&.), xor)
+import Data.List (isPrefixOf, sortOn)
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
 import Data.Word (Word32, Word8)
-import Data.Maybe (fromMaybe)
+import Data.Maybe (catMaybes, fromMaybe, isJust)
 import Emulation.NativeObservation
 import qualified Emulation.NativeCase as C
 import Emulation.OwnedCase
+import Emulation.Sha256 (sha256File, sha256Hex)
+import FujiAF.Host (get, s, set, str)
 import qualified Replacement.RtosPlatform.Aggregate as Agg
-import Replacement.RtosScheduler.Oracle (runCases)
-import System.Directory (createDirectoryIfMissing, removeDirectoryRecursive)
+import System.Directory (createDirectoryIfMissing, doesFileExist, removeDirectoryRecursive)
 import System.Environment (getArgs)
 import System.FilePath ((</>))
 import FujiAF.JSON (encodeCanonical)
@@ -132,13 +133,49 @@ comparable spec a b = nativeStatus a == nativeStatus b && memoryHolds && all sam
   liveBytes base bytes
     | base == stackLow = B.drop (fromIntegral (min (fromIntegral (B.length bytes)) (sp - stackLow))) bytes
     | otherwise = bytes
-  visibleWrites observation = sort [(fromIntegral at, fromIntegral size, value) | Just kernel <- [nativeKernel observation], Just order <- [observedOrder kernel], OrderedWrite (Write (GuestAddress at) (WriteBytes size)) value <- order, deviceAt (fromIntegral at) (fromIntegral size)]
+  visibleWrites observation = [(fromIntegral at, fromIntegral size, value) | Just kernel <- [nativeKernel observation], Just order <- [observedOrder kernel], OrderedWrite (Write (GuestAddress at) (WriteBytes size)) value <- order, deviceAt (fromIntegral at) (fromIntegral size)]
   deviceAt at size = any regionDevice (caseRegions spec)
    where
     regionDevice (CaseRegion raw permission) =
       let base = fromIntegral (C.baseAddress raw)
           top = base + fromIntegral (B.length (C.regionBytes raw))
        in case permission of Device -> base <= at && at + size <= top; _ -> False
+
+runCases :: FilePath -> Maybe FilePath -> FilePath -> [(String, CaseSpec)] -> IO (M.Map String NativeObservation, Int)
+runCases runner reuseDirectory directory cases = do
+  runnerDigest <- sha256Hex <$> sha256File runner
+  results <- forM (zip [0 :: Int ..] (chunks cases)) $ \(batch, labelled) -> do
+    let batchName = "batch-" ++ show batch
+        currentDirectory = directory </> batchName
+    path <- writeBatch currentDirectory (map snd labelled)
+    reused <- fmap catMaybes $ forM labelled $ \(label, _) ->
+      case reuseDirectory of
+        Nothing -> pure Nothing
+        Just savedDirectory -> do
+          let savedPath = savedDirectory </> batchName </> (label ++ ".native-result.json")
+          exists <- doesFileExist savedPath
+          if not exists then pure Nothing else do
+            saved <- either fail pure . eitherDecodeStrict' =<< B.readFile savedPath
+            (current, regions, _, identity) <- C.loadCase (currentDirectory </> (label ++ ".case.json"))
+            if str (get saved "runner_sha256") /= runnerDigest || Just (get saved "wire_sha256") /= lookup "wire_sha256" identity
+              then pure Nothing
+              else do
+                exit <- either (fail . show) pure (reportRunnerExit saved)
+                let report = set "runner_sha256" (s runnerDigest) (C.caseReport current identity)
+                (_, judged) <- C.judgeRunner current regions report exit (encodeCanonical (get saved "runner")) B.empty
+                B.writeFile (currentDirectory </> (label ++ ".native-result.json")) (encodeCanonical judged)
+                observation <- either (fail . show) pure (observeNative exit regions (get judged "runner"))
+                pure (Just (CaseId label, observation))
+    let reusedLabels = M.fromList [(label, ()) | (CaseId label, _) <- reused]
+        freshSpecs = [specification | (label, specification) <- labelled, M.notMember label reusedLabels]
+    fresh <- if null freshSpecs then pure [] else loadObservedBatch runner =<< writeBatch (currentDirectory </> "fresh") freshSpecs
+    let observed = reused ++ fresh
+    unless (length observed == length labelled) (fail (path ++ ": observation count differs"))
+    pure ([(label, observation {nativeMemory = [(ident, B.copy bytes) | (ident, bytes) <- nativeMemory observation, not ("code-" `isPrefixOf` regionName ident)]}) | (CaseId label, observation) <- observed], length reused)
+  pure (M.fromList (concatMap fst results), sum (map snd results))
+ where
+  chunks [] = []
+  chunks items = let (batch, rest) = splitAt 4096 items in batch : chunks rest
 
 main :: IO ()
 main = do
@@ -148,6 +185,7 @@ main = do
       symbolsB = flagValue "--symbols-b" arguments
       placementsA = flagValue "--placements-a" arguments
       placementsB = flagValue "--placements-b" arguments
+      reuseRoot = flagValue "--reuse-root" arguments
   case positional of
     [runner,loaderA,loaderB,binA,binB,work] -> do
       createDirectoryIfMissing True work
@@ -156,9 +194,17 @@ main = do
         owned <- B.readFile binPath
         symbols <- traverse readSymbols symbolsPath
         placements <- traverse readPlacements placementsPath
+        unless (isJust symbolsPath == isJust placementsPath) (fail "aggregate symbols and placements must be supplied together")
+        aggregateImage <- traverse (\rows -> either fail pure (Agg.aggregateImage rows owned)) symbols
+        loaderDigest <- sha256Hex <$> sha256File loaderPath
+        unless (loaderDigest == if b then "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec" else "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882") (fail "loader is not pinned X-M1 1.50")
+        candidateDigest <- sha256Hex <$> sha256File binPath
+        runnerDigest <- sha256Hex <$> sha256File runner
+        symbolDigest <- traverse (fmap sha256Hex . sha256File) symbolsPath
+        placementDigest <- traverse (fmap sha256Hex . sha256File) placementsPath
+        B.writeFile (work </> ("inputs-" ++ show b ++ ".json")) (encodeCanonical (object ["loader_sha256" .= loaderDigest, "candidate_sha256" .= candidateDigest, "runner_sha256" .= runnerDigest, "symbols_sha256" .= symbolDigest, "placements_sha256" .= placementDigest]))
         let delta=if b then 0x8ffc0 else 0; base=if b then 0xd0000 else 0x40000
-            selected = maybe [] (Agg.symbolsWithPrefixes ["xm1_s3b_", "xm1_platform_veneer_"]) symbols
-            aggregateImage = fmap (\rows -> Agg.AggregateImage (minimum (map Agg.symbolAddress rows)) owned) symbols
+            selected = fromMaybe [] symbols
             patch s bytes = poke bytes [(entry s+delta-base,B.take (extent s) (B.drop (fromIntegral (entry s-entry Activate)) owned))]
             candidate = case aggregateImage of
               Nothing -> foldr patch stock [minBound..maxBound]
@@ -185,20 +231,28 @@ main = do
               Just _ -> mergeSpans (symbolSpans ++ helperSpans ++ placementFunctions)
         forM [minBound..maxBound] $ \s -> do
           let cases=rows s
-              roles=[("stock",stock,stockCodeSpans s,stockFunctionSpans s),("owned",candidate,ownedCodeSpans s,ownedFunctionSpans s),("equivalent",poke candidate [(entry s+delta-base+4,w 0xe1a0b00d)],ownedCodeSpans s,ownedFunctionSpans s),("mutant",poke candidate [(entry s+delta-base,w 0xe3e00010<>w 0xe12fff1e)],ownedCodeSpans s,ownedFunctionSpans s)]
-              labelled=[(role++show i,spec b s row (role++show i) codeSpans functionSpans bytes) | (role,bytes,codeSpans,functionSpans)<-roles,(i,row)<-zip [0::Int ..] cases]
+              scratchInputs specification = specification {caseInitial = [(register, if register `elem` [R1, R2, R3, R12] then value `xor` 0xffffffff else value) | (register, value) <- caseInitial specification]}
+              roles=[("stock",stock,stockCodeSpans s,stockFunctionSpans s,id),("owned",candidate,ownedCodeSpans s,ownedFunctionSpans s,id),("equivalent",candidate,ownedCodeSpans s,ownedFunctionSpans s,scratchInputs),("mutant",poke candidate [(entry s+delta-base,w 0xe3e00010<>w 0xe12fff1e)],ownedCodeSpans s,ownedFunctionSpans s,id)]
+              labelled=[(role++show i,alter (spec b s row (role++show i) codeSpans functionSpans bytes)) | (role,bytes,codeSpans,functionSpans,alter)<-roles,(i,row)<-zip [0::Int ..] cases]
               dir=work </> (show b++show s)
-          observed <- runCases runner dir labelled
+          (observed, reused) <- runCases runner (fmap (</> (show b ++ show s)) reuseRoot) dir labelled
           let at role i=observed M.! (role++show i)
               completed=and [nativeStatus (at "stock" i) == status && M.lookup R0 (nativeRegisters (at "stock" i)) == Just value | (i,row) <- zip [0 :: Int ..] cases, let (status,value)=expected b s row]
               stockSpec i row=spec b s row ("stock"++show i) (stockCodeSpans s) (stockFunctionSpans s) stock
               matches role=length [() | i<-[0..length cases-1],comparable (stockSpec i (cases!!i)) (at "stock" i) (at role i)]
-              corruptTask observation = observation { nativeMemory = [ if regionName ident=="tasks-a" then (ident, B.take 0x0c bytes <> B.singleton 0x7f <> B.drop 0x0d bytes) else (ident, bytes) | (ident, bytes) <- nativeMemory observation ] }
-              negativeControl = not (null cases) && not (comparable (stockSpec 0 (head cases)) (at "stock" 0) (corruptTask (at "owned" 0)))
+              corruptByte name offset observation = observation { nativeMemory = [(ident, if regionName ident == name then B.take offset bytes <> B.singleton (B.index bytes offset + 1) <> B.drop (offset + 1) bytes else bytes) | (ident, bytes) <- nativeMemory observation] }
+              controls = case cases of
+                [] -> []
+                row : _ ->
+                  let reference = at "stock" 0
+                      fixture = stockSpec 0 row
+                      refuses change = not (comparable fixture reference (change reference))
+                   in [refuses (corruptByte "tasks-a" 0x0c), refuses (corruptByte "globals-a" 0), refuses (corruptByte "stack" 0x100), comparable fixture reference (corruptByte "stack" 0 reference)]
+              negativeControl = length controls == 4 && and controls
               holds=completed && matches "owned"==length cases && matches "equivalent"==length cases && matches "mutant"<length cases && negativeControl
           unless holds $ putStrLn (show (b,s,completed,matches "owned",length cases,[(i,nativeStatus (at "stock" i),nativeStatus (at "owned" i)) | i<-[0..length cases-1],not (comparable (stockSpec i (cases!!i)) (at "stock" i) (at "owned" i))]))
           if holds then removeDirectoryRecursive dir else pure ()
-          let report=object ["domain_b".=b,"service".=show s,"cases".=length cases,"stock_completed".=completed,"owned_matches".=matches "owned","equivalent_matches".=matches "equivalent","mutant_matches".=matches "mutant","negative_control".=negativeControl,"passed".=holds]
+          let report=object ["domain_b".=b,"service".=show s,"cases".=length cases,"reused_observations".=reused,"stock_completed".=completed,"owned_matches".=matches "owned","equivalent_matches".=matches "equivalent","mutant_matches".=matches "mutant","negative_control".=negativeControl,"passed".=holds]
           B.writeFile (work </> (show b++show s++".json")) (encodeCanonical report)
           pure (holds,report)
       let flat=concat reports
@@ -232,6 +286,6 @@ flagValue flag arguments = case dropWhile (/= flag) arguments of
   _ : value : _ -> Just value
 
 stripSymbolFlags :: [String] -> [String]
-stripSymbolFlags (flag : _ : rest) | flag `elem` ["--symbols-a", "--symbols-b", "--placements-a", "--placements-b"] = stripSymbolFlags rest
+stripSymbolFlags (flag : _ : rest) | flag `elem` ["--symbols-a", "--symbols-b", "--placements-a", "--placements-b", "--reuse-root"] = stripSymbolFlags rest
 stripSymbolFlags (value : rest) = value : stripSymbolFlags rest
 stripSymbolFlags [] = []

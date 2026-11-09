@@ -50,7 +50,8 @@ impl Ring {
     }
 
     /// A8 `0x48edc` / B8 `0xd8e9c`.
-    pub fn append<M: Env>(&self, m: &M, payload: Payload) -> bool {
+    #[inline(never)]
+    pub fn append<M: Env>(self, m: &M, payload: Payload) -> bool {
         let capacity = m.load_word(self.config.capacity());
         let count = m.load_word(self.control.count());
         if count >= capacity {
@@ -81,7 +82,8 @@ impl Ring {
     }
 
     /// A8 `0x48fa4` / B8 `0xd8f64`; the caller has already checked the count.
-    pub fn pop<M: Env>(&self, m: &M, out: OutWord) -> Payload {
+    #[inline(never)]
+    pub fn pop<M: Env>(self, m: &M, out: OutWord) -> Payload {
         let capacity = m.load_word(self.config.capacity());
         let head = m.load_word(self.control.read());
         let payload = Payload(m.load_word(self.word(m, head)));

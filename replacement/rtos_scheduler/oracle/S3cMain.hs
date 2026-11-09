@@ -244,7 +244,7 @@ main = do
     unless (aggregate || B.length owned == fromIntegral(entryAt domain Enable - entryAt domain DeliveryLoop) + extent Enable) (fail "owned binary extent differs")
     B.writeFile (work </> ("inputs-" ++ show domain ++ ".json")) (encodeCanonical(object ["loader_sha256" .= digest loader,"owned_sha256" .= digest owned,"runner_sha256" .= digest runnerBytes]))
     let ownedBase = entryAt domain DeliveryLoop
-        selected = maybe [] (Agg.symbolsWithPrefixes ["s3c_", "xm1_platform_veneer_"]) symbols
+        selected = maybe [] id symbols
         aggregateImage = fmap (\parsed -> Agg.AggregateImage (minimum (map Agg.symbolAddress parsed)) owned) symbols
         standaloneLoader = foldl (\bytes entry -> let address=entryAt domain entry in poke bytes (address-loaderBase domain) (B.take (extent entry) (B.drop (fromIntegral(address-ownedBase)) owned))) loader [minBound..maxBound]
         ownedLoader = case aggregateImage of
