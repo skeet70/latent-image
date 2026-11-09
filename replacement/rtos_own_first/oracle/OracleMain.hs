@@ -298,6 +298,8 @@ data InputIdentities = InputIdentities
   , inputOwnedASymbols :: Sha256
   , inputOwnedBBin :: Sha256
   , inputOwnedBSymbols :: Sha256
+  , inputPlacementsA :: Sha256
+  , inputPlacementsB :: Sha256
   }
 
 inputIdentityFields :: [(String, InputIdentities -> Sha256)]
@@ -310,6 +312,8 @@ inputIdentityFields =
   , ("owned_a_symbols_sha256", inputOwnedASymbols)
   , ("owned_b_bin_sha256", inputOwnedBBin)
   , ("owned_b_symbols_sha256", inputOwnedBSymbols)
+  , ("placements_a_sha256", inputPlacementsA)
+  , ("placements_b_sha256", inputPlacementsB)
   ]
 
 instance ToJSON InputIdentities where
@@ -317,7 +321,9 @@ instance ToJSON InputIdentities where
 
 parseInputIdentities :: Value -> Either String InputIdentities
 parseInputIdentities value = do
-  unless (sort (keys value) == sort (map fst inputIdentityFields)) (Left "replay summary input set differs from the current inputs")
+  let expected = map fst inputIdentityFields
+      legacy = filter (`notElem` ["placements_a_sha256", "placements_b_sha256"]) expected
+  unless (sort (keys value) `elem` map sort [expected, legacy]) (Left "replay summary input set differs from the current inputs")
   InputIdentities
     <$> field "regions_sha256"
     <*> field "runner_sha256"
@@ -327,8 +333,11 @@ parseInputIdentities value = do
     <*> field "owned_a_symbols_sha256"
     <*> field "owned_b_bin_sha256"
     <*> field "owned_b_symbols_sha256"
+    <*> optionalField "placements_a_sha256"
+    <*> optionalField "placements_b_sha256"
   where
     field key = parseSha256Hex (str (get value key))
+    optionalField key = if key `elem` keys value then field key else Right (sha256 B.empty)
 
 verifyInputs :: InputIdentities -> InputIdentities -> IO ()
 verifyInputs recorded current = do
@@ -374,7 +383,12 @@ main = do
       selectedSlots = if timingOnly then [S128, S148, S164, S168, S16c, S1618] else slots
   runner <- input "--runner"
   regionsPath <- input "--regions"
-  ownedPaths <- mapM input ["--owned-a-bin", "--owned-a-symbols", "--owned-b-bin", "--owned-b-symbols"]
+  let aggregateMode = "--aggregate-a-bin" `elem` arguments
+      ownedFlags = if aggregateMode
+        then ["--aggregate-a-bin", "--aggregate-a-symbols", "--aggregate-b-bin", "--aggregate-b-symbols"]
+        else ["--owned-a-bin", "--owned-a-symbols", "--owned-b-bin", "--owned-b-symbols"]
+  ownedPaths <- mapM input ownedFlags
+  placementPaths <- if aggregateMode then mapM input ["--placements-a", "--placements-b"] else pure []
   lookupEnv "BUILD_WORKSPACE_DIRECTORY" >>= mapM_ setCurrentDirectory
   loaderPaths <- mapM input ["--loader-a", "--loader-b"]
   work <- output "--work"
@@ -385,7 +399,8 @@ main = do
   let replacements =
         [("--runner", runner), ("--regions", regionsPath), ("--work", work), ("--summary", summaryPath)]
           ++ zip ["--loader-a", "--loader-b"] loaderPaths
-          ++ zip ["--owned-a-bin", "--owned-a-symbols", "--owned-b-bin", "--owned-b-symbols"] ownedPaths
+          ++ zip ownedFlags ownedPaths
+          ++ zip ["--placements-a", "--placements-b"] placementPaths
           ++ maybe [] (\source -> [("--replay", source)]) replaySource
   setEnv "XM1_STORAGE_PATH" (takeDirectory work)
   enterSlot (rewriteFlags replacements arguments)
@@ -396,14 +411,20 @@ main = do
   runnerBytes <- readRegular 0x10000000 runner
   regionsBytes <- readRegular 0x100000 regionsPath
   ownedBytes <- mapM (readRegular 0x100000) ownedPaths
+  placementBytes <- mapM (readRegular 0x100000) placementPaths
   loaders <- mapM (readRegular 0x20000) loaderPaths
   forM_ (zip domains loaders) $ \(domain, loader) ->
     ensure (digest loader == loaderSha256 domain) ("--loader-" ++ domainLabel domain ++ " is not the pinned X-M1 1.50 loader")
   table <- orFailText "regions.json" (parseRegionTable regionsBytes)
-  owned <- case ownedBytes of
-    [binA, symbolsA, binB, symbolsB] -> forM (zip domains [LinkedDomain binA symbolsA, LinkedDomain binB symbolsB]) $ \(domain, linked) ->
-      orFail ("owned " ++ domainLabel domain) (ownedDomain (tableFill table) domain (domainTable table domain) linked)
-    _ -> failH "unreachable owned inputs"
+  owned <- case (ownedBytes, placementBytes) of
+    ([binA, symbolsA, binB, symbolsB], [placementsA, placementsB]) ->
+      forM (zip3 domains loaders [(binA, symbolsA, placementsA), (binB, symbolsB, placementsB)]) $ \(domain, loader, (binary, symbols, placements)) ->
+        orFailText ("aggregate " ++ domainLabel domain)
+          (aggregateDomain (tableFill table) domain (domainTable table domain) loader binary symbols placements)
+    ([binA, symbolsA, binB, symbolsB], []) | not aggregateMode ->
+      forM (zip domains [LinkedDomain binA symbolsA, LinkedDomain binB symbolsB]) $ \(domain, linked) ->
+        orFail ("owned " ++ domainLabel domain) (ownedDomain (tableFill table) domain (domainTable table domain) linked)
+    _ -> failH "incomplete aggregate inputs"
   createDirectoryIfMissing True (takeDirectory work)
   createDirectory work
   canonicalWork <- canonicalizePath work
@@ -421,6 +442,8 @@ main = do
           , inputOwnedASymbols = sha256 symbolsA
           , inputOwnedBBin = sha256 binB
           , inputOwnedBSymbols = sha256 symbolsB
+          , inputPlacementsA = sha256 (case placementBytes of first : _ -> first; _ -> B.empty)
+          , inputPlacementsB = sha256 (case placementBytes of [_, second] -> second; _ -> B.empty)
           }
     _ -> failH "unreachable input shape"
   case command of

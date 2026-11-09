@@ -41,11 +41,14 @@ haskell_library(
         "//host:json",
         "//host:text",
         "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//replacement/rtos_platform:aggregate",
     ],
 )
 
 # The stock loaders come from private-data:
 # bazel run //replacement/rtos_own_first/oracle:own-first-oracle -- --loader-a LOADER_A --loader-b LOADER_B --work NEW_DIRECTORY --summary NEW_JSON
+# Aggregate mode overrides the standalone defaults with --aggregate-a-bin platform-a.bin
+# --aggregate-a-symbols platform-a.symbols --placements-a placement-a.json and the three B flags.
 haskell_binary(
     name = "own-first-oracle",
     srcs = ["OracleMain.hs"],

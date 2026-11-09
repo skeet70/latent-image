@@ -203,6 +203,12 @@ pureChecks tableA =
             && isRight (parseCommand [])
             && isRight (parseCommand ["--generate", "4", "--seed", "1"])
             && isRight (parseCommand ["--replay", "summary.json"])
+      , check "aggregate input requires both images, symbols and placements" $
+          let flags = ["--aggregate-a-bin", "--aggregate-a-symbols", "--placements-a", "--aggregate-b-bin", "--aggregate-b-symbols", "--placements-b"]
+              arguments = concatMap (\flag -> [flag, "input"]) flags
+           in isRight (parseCommand arguments)
+                && all (\missing -> isLeft (parseCommand (concatMap (\flag -> [flag, "input"]) (filter (/= missing) flags)))) flags
+                && isRight (parseCommand (["--owned-a-bin", "standalone-a", "--owned-a-symbols", "standalone-a.symbols", "--owned-b-bin", "standalone-b", "--owned-b-symbols", "standalone-b.symbols"] ++ arguments))
       , check "recorded boundaries parse into typed kinds" $
           parseDifferenceKind "RegisterKind R0" == Right (RegisterKind R0)
             && parseDifferenceKind "MemoryKind (RegionId \"buffer\")" == Right (MemoryKind (RegionId "buffer"))

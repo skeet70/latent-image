@@ -37,6 +37,9 @@ parseCommand arguments = do
   let unknown = [argument | argument <- arguments, isFlag argument, argument `notElem` allowedFlags]
   unless (null unknown) (Left ("unknown option " ++ unwords unknown))
   mapM_ (\name -> void (flagValue name arguments)) commonValueFlags
+  aggregateValues <- mapM (`flagValue` arguments) aggregateValueFlags
+  when (any (/= Nothing) aggregateValues && any (== Nothing) aggregateValues)
+    (Left "aggregate mode requires --aggregate-a-bin, --aggregate-a-symbols, --placements-a, --aggregate-b-bin, --aggregate-b-symbols and --placements-b")
   generate <- flagValue "--generate" arguments
   replay <- flagValue "--replay" arguments
   let timingOnly = "--timing-only" `elem` arguments
@@ -72,8 +75,11 @@ parseCommand arguments = do
       Right control
 
 commonValueFlags, generationValueFlags :: [String]
-commonValueFlags = ["--runner", "--regions", "--owned-a-bin", "--owned-a-symbols", "--owned-b-bin", "--owned-b-symbols", "--loader-a", "--loader-b", "--work", "--summary"]
+commonValueFlags = ["--runner", "--regions", "--owned-a-bin", "--owned-a-symbols", "--owned-b-bin", "--owned-b-symbols", "--loader-a", "--loader-b", "--work", "--summary"] ++ aggregateValueFlags
 generationValueFlags = ["--seed", "--shrink-budget", "--control"]
+
+aggregateValueFlags :: [String]
+aggregateValueFlags = ["--aggregate-a-bin", "--aggregate-a-symbols", "--placements-a", "--aggregate-b-bin", "--aggregate-b-symbols", "--placements-b"]
 
 allowedFlags :: [String]
 allowedFlags = "--generate" : "--replay" : "--timing-only" : commonValueFlags ++ generationValueFlags
