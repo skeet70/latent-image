@@ -756,6 +756,7 @@ familyBoundaryOf boundary = F.FamilyBoundary
   , F.familyBoundaryInstructions = boundaryInstructions boundary
   , F.familyBoundaryCore = boundaryCore boundary
   , F.familyBoundaryRegisters = D.registers (boundaryRegisters boundary)
+  , F.familyBoundaryMemory = boundaryMemory boundary
   , F.familyBoundaryValue = boundaryValue boundary
   , F.familyBoundaryTask = boundaryTask boundary
   }
