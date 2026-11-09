@@ -68,6 +68,13 @@ Shared S3b dispatch, S3c resolution/locking, lifecycle helpers and blocking queu
 
 The own-first, S3d and task-record oracles accept complete aggregate symbols and placement metadata. Source wiring is not aggregate execution evidence. Current joined build, placement, staging, family qualification and review results must be bound separately before integration.
 
+The unchanged frozen A/B union images subsequently pass 62 semaphore cases, including both actual timed-timeout caller returns, and 62 task-record cases with 466 controls and four emitted create/delete smoke cases. Semaphore stock observations are reused in both domains; owned semaphore roles execute afresh. Task-record roles execute afresh under current admission. These results are recorded in `private-data/scratch/FirmwarePlatformJoin/native-increment-01.json`.
+
+The first semaphore attempt refuses native admission because zero-size LLVM `T` labels become zero-size function guards. The aggregate symbol parser now omits those labels while retaining every positive-size function; its regression test passes. S3a/S3c CLI input selection now permits explicit aggregate binary arguments to override Bazel's standalone defaults. Those two CLI changes compile, but their new family cohorts have not executed.
+
+The subsequent S3b attempt refuses storage admission before native cases: 107,014,287,360 available bytes against the unchanged 107,374,182,400-byte reserve. The build launcher succeeds; the qualification application exits 1. No S3b aggregate or control pass is claimed for that attempt.
+
+
 ## Limits
 
 The earlier global-lock and S2 aggregate suites run on their relocated inputs; the staged candidate is not executed. S2 passes 560/560 in both domains for that cohort. The owned-run frame walk treats declared externals as leaves, and the S2 exception-save path remains a recorded `StackUnbalanced` premise rather than call-graph closure. Cyclic and IRQ remain outside the union. Linked S3d/data-queue composition, current aggregate family acceptance and composed frame closure remain open. No live, system, MPU, timer, cross-core or hardware behavior is established. Full RTOS/firmware acceptance is not claimed.

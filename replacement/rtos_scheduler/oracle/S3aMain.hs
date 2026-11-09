@@ -6,7 +6,6 @@ import Data.Aeson (object, (.=))
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
 import Emulation.NativeObservation (nativeStatus, runnerStatusLabel)
-import Emulation.OwnedCase (required)
 import Emulation.Sha256 (sha256,sha256Hex)
 import FujiAF.JSON (encodeCanonical)
 import Replacement.RtosOwnFirst.Artifact (loaderSha256)
@@ -82,3 +81,8 @@ main=do
   createDirectoryIfMissing True (takeDirectory summary)
   B.writeFile summary (encodeCanonical (object ["schema" .= (1::Int),"reports" .= map snd reports,"holds" .= all fst reports,"comparison" .= ("Persistent bytes and write multiset, r0, preserved registers/SP at return, CPSR mode/I/F/A; dispatcher stops exclude live frames. Stock callees retained. Equivalent is an independently emitted tail-branch wrapper. Mutant returns 1 without effects."::String),"loader_sha256" .= map (sha256Hex . sha256) loaders,"owned_sha256" .= map (sha256Hex . sha256) owned]))
   forM_ reports $ \(holds,_)->unless holds exitFailure
+
+required :: [String] -> String -> IO String
+required arguments flag = case [value | (key, value) <- zip arguments (drop 1 arguments), key == flag] of
+  [] -> fail (flag ++ " is required")
+  values -> pure (last values)

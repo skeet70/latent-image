@@ -14,6 +14,7 @@ import qualified Emulation.NativeCase as C
 import Emulation.OwnedCase
 import Emulation.Sha256 (sha256File, sha256Hex)
 import FujiAF.Host (get, s, set, str)
+import FujiAF.StorageBudget (checkStorageBudget)
 import qualified Replacement.RtosPlatform.Aggregate as Agg
 import System.Directory (createDirectoryIfMissing, doesFileExist, removeDirectoryRecursive)
 import System.Environment (getArgs)
@@ -143,6 +144,7 @@ comparable spec a b = nativeStatus a == nativeStatus b && memoryHolds && all sam
 
 runCases :: FilePath -> Maybe FilePath -> FilePath -> [(String, CaseSpec)] -> IO (M.Map String NativeObservation, Int)
 runCases runner reuseDirectory directory cases = do
+  checkStorageBudget directory
   runnerDigest <- sha256Hex <$> sha256File runner
   results <- forM (zip [0 :: Int ..] (chunks cases)) $ \(batch, labelled) -> do
     let batchName = "batch-" ++ show batch

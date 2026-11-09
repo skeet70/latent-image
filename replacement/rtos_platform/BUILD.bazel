@@ -431,6 +431,7 @@ haskell_test(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":platform-artifact",
+        ":aggregate",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",

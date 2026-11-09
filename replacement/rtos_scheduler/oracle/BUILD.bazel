@@ -225,6 +225,7 @@ haskell_binary(
         "//host:filepath",
         "//host:host-support",
         "//host:json",
+        "//host:storage-budget",
         "//replacement/rtos_platform:aggregate",
     ],
 )

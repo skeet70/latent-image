@@ -15,6 +15,7 @@ import Replacement.RtosOwnFirst.Regions (Domain (..), Extent (..), GuestAddress 
 import Replacement.RtosPlatform.Artifact
 import Replacement.RtosPlatform.Place
 import Replacement.RtosPlatform.Union
+import qualified Replacement.RtosPlatform.Aggregate as Aggregate
 
 synthetic :: Union
 synthetic = Union 0xe7f000f0 domainA domainB
@@ -82,6 +83,9 @@ main = do
       expectLeft name predicate result = case result of
         Left err -> check name (predicate err)
         Right _ -> check name False
+  check "zero-extent labels do not become native functions"
+    (Aggregate.parseAggregateSymbols "0004282c 00000000 T label\n00042830 00000004 T function\n"
+      == Right [Aggregate.AggregateSymbol "function" 0x42830 4])
   case withLink synthetic (linkedFor synthetic) of
     Left err -> check ("positive admission: " ++ show err) False
     Right (source, admitted, staged) -> do

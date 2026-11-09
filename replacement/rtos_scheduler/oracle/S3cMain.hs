@@ -9,7 +9,7 @@ import qualified Data.ByteString as B
 import Data.List (isPrefixOf, nub, sortOn)
 import Data.Word (Word32)
 import Emulation.NativeObservation
-import Emulation.OwnedCase
+import Emulation.OwnedCase hiding (required)
 import Emulation.Sha256 (sha256, sha256Hex)
 import qualified Replacement.RtosPlatform.Aggregate as Agg
 import Replacement.RtosOwnFirst.Artifact (loaderSha256)
@@ -305,3 +305,8 @@ main = do
   B.writeFile (work </> "summary.json") (encodeCanonical(object ["passed" .= passed,"entries" .= length flat,"cases_per_role" .= sum[n | (_,n,_) <- flat],"results" .= [object ["entry" .= name,"cases" .= count,"holds" .= ok] | (name,count,ok) <- flat]]))
   forM_ flat print
   unless passed (fail "S3c qualification refused")
+
+required :: [String] -> String -> IO String
+required arguments flag = case [value | (key, value) <- zip arguments (drop 1 arguments), key == flag] of
+  [] -> fail (flag ++ " is required")
+  values -> pure (last values)

@@ -84,8 +84,10 @@ parseAggregateSymbols :: B.ByteString -> Either String [AggregateSymbol]
 parseAggregateSymbols bytes = catMaybes <$> mapM parseLine (filter (not . C.null) (C.lines bytes))
   where
     parseLine line = case C.words line of
-      [address, size, kind, name] | kind `elem` ["T", "t"] ->
-        Just <$> (AggregateSymbol (C.unpack name) <$> hexWord address <*> hexWord size)
+      [address, size, kind, name] | kind `elem` ["T", "t"] -> do
+        start <- hexWord address
+        bytes' <- hexWord size
+        pure (if bytes' == 0 then Nothing else Just (AggregateSymbol (C.unpack name) start bytes'))
       [_, _, _, _] -> Right Nothing
       _ -> Left ("aggregate symbol row is not ADDR SIZE KIND NAME: " ++ C.unpack line)
     hexWord text = case readHex (C.unpack text) of
