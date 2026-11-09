@@ -455,8 +455,6 @@ patchOwned d loader ownedBase owned =
         ++ [(if d == DomainA then 0x50000 else 0xe0000, 0x4000, if d == DomainA then 0x50000 else 0xe0000)]
    in foldl (\bytes (address, size, source) -> poke bytes (address - base) (slice owned ownedBase source size)) (loader <> B.replicate 0x12000 0) patches
 
-loaderBytes :: Domain -> B.ByteString -> B.ByteString
-loaderBytes _ loader = loader
 
 dataCode :: Domain -> W -> B.ByteString
 dataCode d m = serialize (globalsBase d) globalsSize m
@@ -494,12 +492,14 @@ helperRanges d =
     early = if d == DomainB then 0x8ffbc else 0
     late = if d == DomainB then 0x8ffc0 else 0
 
-installAggregate :: Domain -> B.ByteString -> Maybe Aggregate -> B.ByteString
-installAggregate _ code Nothing = code
-installAggregate d code (Just (Aggregate image symbols placements)) =
+installAggregate :: Domain -> B.ByteString -> Aggregate -> B.ByteString
+installAggregate d code (Aggregate image symbols placements) =
   either error id (Agg.installPlacements (loaderBase d) withSymbols image placements)
   where
-    withSymbols = foldl install code symbols
+    top = maximum (loaderBase d + fromIntegral (B.length code) :
+      [Agg.placementAddress placement + Agg.placementBytes placement | placement <- placements])
+    padded = code <> B.replicate (fromIntegral (top - loaderBase d) - B.length code) 0
+    withSymbols = foldl install padded symbols
     install current symbol = either error id (Agg.installSymbol (loaderBase d) current image symbol)
 
 mergeSpans :: [(Word32, Word32)] -> [(Word32, Word32)]
@@ -512,17 +512,16 @@ mergeSpans spans = go (sortOn fst spans)
       | lo<end=extend start (max end (lo+size)) rest
       | otherwise=(start,end-start):extend lo (lo+size) rest
 
-specFor :: Domain -> Role -> Case -> B.ByteString -> B.ByteString -> Maybe Aggregate -> B.ByteString -> CaseSpec
-specFor d role one loaderA loaderB aggregate owned = CaseSpec
+specFor :: Domain -> Role -> Case -> B.ByteString -> B.ByteString -> Maybe (Aggregate, Aggregate) -> B.ByteString -> CaseSpec
+specFor d role one loaderA loaderB aggregates owned = CaseSpec
   { caseId = caseName one ++ "-" ++ domainLabel d
   , caseProvenance = "X-M1 1.50 S3d lifecycle services, x70view 55436fc85c0560dd252b0410af6f2427fe198cd3; synthetic scheduler state"
   , caseExclusion = "One service call. Blocking cases stop at the dispatcher entry; lifecycle cases replace the dispatcher with a save/wake/return stub so the original caller returns."
   , caseEntry = GuestAddress (fromIntegral (entryOf d (caseService one)))
   , caseExit = GuestAddress (fromIntegral exitAddress)
   , caseRegions =
-      [ mkRegion (RegionId "code") (GuestAddress (fromIntegral (loaderBase d))) 0x10000 ReadExecute (B.take 0x10000 code)
-      , mkRegion (RegionId "code-other") (GuestAddress (fromIntegral (loaderBase other))) 0x10000 ReadExecute (B.take 0x10000 otherLoader)
-      , mkRegion (RegionId "bodies") (GuestAddress (fromIntegral bodyBase)) 0x4000 ReadExecute bodies
+      [ mkRegion (RegionId "code") (GuestAddress (fromIntegral (loaderBase d))) (fromIntegral (B.length code)) ReadExecute code
+      , mkRegion (RegionId "code-other") (GuestAddress (fromIntegral (loaderBase other))) (fromIntegral (B.length otherCode)) ReadExecute otherCode
       , mkRegion (RegionId "stub") (GuestAddress (fromIntegral stubBase)) 0x100 ReadExecute stub
       , mkRegion (RegionId "data-a") (GuestAddress (fromIntegral (globalsBase DomainA))) (fromIntegral globalsSize) ReadWrite (dataCode DomainA fixture)
       , mkRegion (RegionId "data-b") (GuestAddress (fromIntegral (globalsBase DomainB))) (fromIntegral globalsSize) ReadWrite (dataCode DomainB fixture)
@@ -530,7 +529,7 @@ specFor d role one loaderA loaderB aggregate owned = CaseSpec
       , mkRegion (RegionId "exit") (GuestAddress (fromIntegral exitAddress)) 0x10 ReadExecute (word32le 0xe7f000f0)
       , mkRegion (RegionId "bank-a") (GuestAddress 0xfffb30cc) 4 Device (word32le 0)
       , mkRegion (RegionId "bank-b") (GuestAddress 0xfffb40cc) 4 Device (word32le 0)
-      ]
+      ] ++ bodyRegions
   , caseFunctions =
       [(GuestAddress (fromIntegral address), size) | (address, size) <- mergeSpans (ownedFunctions ++ aggregateFunctions)]
   , caseInitial =
@@ -550,16 +549,26 @@ specFor d role one loaderA loaderB aggregate owned = CaseSpec
     fixture = setW (handlerCell d) (if caseHandler one then 1 else 0) (caseSetup one d (baseFixture d))
     ownedFunctions =
       [(entryOf d service, extentOf service) | service <- [Terminate, ChangePriority, TimedSleep, ReleaseWait, HandlerRelease, Delay, Timeout, DelayCallback]]
-      ++ [(bodyBase, 0x4000), (stubBase, 0x80), (switchOf d, 4)]
+      ++ [(stubBase, 0x80), (switchOf d, 4)]
       ++ helperRanges d ++ helperRanges other
-    aggregateFunctions = case (role, aggregate) of
-      (Owned, Just (Aggregate _ symbols _)) -> [(Agg.symbolAddress symbol, Agg.symbolSize symbol) | symbol <- symbols]
+      ++ [(bodyBase, 0x4000) | role == Owned, Nothing <- [aggregates]]
+    aggregateFunctions = case (role, aggregates) of
+      (Owned, Just (Aggregate _ symbolsA _, Aggregate _ symbolsB _)) ->
+        [(Agg.symbolAddress symbol, Agg.symbolSize symbol) | symbol <- symbolsA ++ symbolsB]
       _ -> []
     bodyBase = if d == DomainA then 0x50000 else 0xe0000
-    code = case role of
-      Stock -> patchStub d (loaderBytes d loader) (caseLifecycle one)
-      Owned -> patchStub d (installAggregate d (patchOwned d loader (ownedBaseOf d) owned) aggregate) (caseLifecycle one)
-    bodies = if role == Owned then slice owned (ownedBaseOf d) bodyBase 0x4000 else B.replicate 0x4000 0
+    aggregateFor domain = fmap (\(a, b) -> if domain == DomainA then a else b) aggregates
+    ownedCode domain original = case aggregateFor domain of
+      Just aggregate -> installAggregate domain original aggregate
+      Nothing | domain == d -> B.take 0x10000 (patchOwned d original (ownedBaseOf d) owned)
+      Nothing -> original
+    code = patchStub d (if role == Stock then loader else ownedCode d loader) (caseLifecycle one)
+    otherCode = if role == Stock then otherLoader else ownedCode other otherLoader
+    bodyRegions = case (role, aggregates) of
+      (Owned, Nothing) ->
+        [mkRegion (RegionId "bodies") (GuestAddress (fromIntegral bodyBase)) 0x4000 ReadExecute
+          (slice owned (ownedBaseOf d) bodyBase 0x4000)]
+      _ -> []
     stub = case caseLifecycle one of
       Nothing -> B.replicate 0x100 0
       Just result ->
@@ -618,32 +627,39 @@ judgeSelfTest = and
   ]
 
 aggregateOf :: Maybe FilePath -> Maybe FilePath -> Maybe FilePath -> IO (Maybe Aggregate)
-aggregateOf Nothing Nothing _ = pure Nothing
-aggregateOf (Just binPath) (Just symbolsPath) placementsPath = do
+aggregateOf Nothing Nothing Nothing = pure Nothing
+aggregateOf (Just binPath) (Just symbolsPath) (Just placementsPath) = do
   bytes <- B.readFile binPath
   symbols <- either fail pure . Agg.parseAggregateSymbols =<< B.readFile symbolsPath
-  placements <- case placementsPath of
-    Nothing -> pure []
-    Just path -> either fail pure . Agg.parsePlacements =<< B.readFile path
+  placements <- either fail pure . Agg.parsePlacements =<< B.readFile placementsPath
+  unless (not (null placements)) (fail "aggregate placements are empty")
   image <- either fail pure (Agg.aggregateImage symbols bytes)
+  forM_ symbols $ \symbol ->
+    unless (any (\placement ->
+      Agg.symbolAddress symbol >= Agg.placementAddress placement &&
+      toInteger (Agg.symbolAddress symbol) + toInteger (Agg.symbolSize symbol) <=
+        toInteger (Agg.placementAddress placement) + toInteger (Agg.placementBytes placement)) placements)
+      (fail ("aggregate symbol has no allocated placement: " ++ Agg.symbolName symbol))
+  forM_ placements $ \placement ->
+    either fail (const (pure ())) (Agg.sliceAggregate image (Agg.placementAddress placement) (Agg.placementBytes placement))
   pure (Just (Aggregate image symbols placements))
-aggregateOf _ _ _ = fail "an aggregate bin needs its symbols"
+aggregateOf _ _ _ = fail "aggregate mode requires binary, symbols and placements for both domains"
 
 optionalArgument :: String -> IO (Maybe FilePath)
 optionalArgument name = do
   arguments <- getArgs
-  case dropWhile (/= name) arguments of
-    [] -> pure Nothing
-    [_] -> fail (name ++ " needs a value")
-    _ : value : _ -> Just <$> makeAbsolute value
+  case reverse (argumentValues name arguments) of
+    [] | name `elem` arguments -> fail (name ++ " needs a value")
+       | otherwise -> pure Nothing
+    value : _ -> Just <$> makeAbsolute value
 
 main :: IO ()
 main = do
   runner <- argument "--runner" >>= makeAbsolute
   loaderA <- argument "--loader-a"
   loaderB <- argument "--loader-b"
-  ownedA <- argument "--owned-a-bin"
-  ownedB <- argument "--owned-b-bin"
+  ownedA <- optionalArgument "--owned-a-bin"
+  ownedB <- optionalArgument "--owned-b-bin"
   aggregateABin <- optionalArgument "--aggregate-a-bin"
   aggregateASymbols <- optionalArgument "--aggregate-a-symbols"
   aggregateAPlacements <- optionalArgument "--aggregate-a-placements"
@@ -654,8 +670,8 @@ main = do
   results <- argument "--results"
   loaderABytes <- B.readFile loaderA
   loaderBBytes <- B.readFile loaderB
-  ownedABytes <- B.readFile ownedA
-  ownedBBytes <- B.readFile ownedB
+  ownedABytes <- standaloneBytes aggregateABin ownedA
+  ownedBBytes <- standaloneBytes aggregateBBin ownedB
   digestA <- sha256File loaderA
   digestB <- sha256File loaderB
   unless (sha256Hex digestA == "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882") (fail "loader A is not the pinned image")
@@ -664,12 +680,23 @@ main = do
   createDirectoryIfMissing True (takeDirectory results)
   aggregateA <- aggregateOf aggregateABin aggregateASymbols aggregateAPlacements
   aggregateB <- aggregateOf aggregateBBin aggregateBSymbols aggregateBPlacements
-  reports <- forM [(DomainA, loaderABytes, aggregateA, ownedABytes), (DomainB, loaderBBytes, aggregateB, ownedBBytes)] $ \(d, _loader, aggregate, owned) -> do
+  aggregates <- case (aggregateA, aggregateB) of
+    (Nothing, Nothing) -> pure Nothing
+    (Just a, Just b) -> pure (Just (a, b))
+    _ -> fail "aggregate mode requires both domains"
+  forM_ [(DomainA, aggregateA), (DomainB, aggregateB)] $ \(domain, candidate) ->
+    case candidate of
+      Nothing -> pure ()
+      Just (Aggregate _ symbols _) ->
+        forM_ [Terminate, ChangePriority, TimedSleep, ReleaseWait, HandlerRelease, Delay, Timeout, DelayCallback] $ \service ->
+          unless (any (\symbol -> Agg.symbolAddress symbol == entryOf domain service && Agg.symbolSize symbol > 0) symbols)
+            (fail ("aggregate is missing public S3d entry: " ++ show (domain, service)))
+  reports <- forM [(DomainA, ownedABytes), (DomainB, ownedBBytes)] $ \(d, owned) -> do
     let grid = cases d
         directory = takeDirectory results </> ("s3d-" ++ domainLabel d)
     createDirectoryIfMissing True directory
     observed <- forM [Stock, Owned] $ \role -> do
-      let specs = [specFor d role one loaderABytes loaderBBytes aggregate owned | one <- grid]
+      let specs = [specFor d role one loaderABytes loaderBBytes aggregates owned | one <- grid]
       batch <- writeBatch (directory </> show role) specs
       outcomes <- cachedObservedBatch cacheRoot runner batch
       pure (specs, snd outcomes)
@@ -725,7 +752,18 @@ zip4 _ _ _ _ = []
 argument :: String -> IO FilePath
 argument flag = do
   arguments <- getArgs
-  case dropWhile (/= flag) arguments of
-    [] -> fail (flag ++ " is required")
-    [_] -> fail (flag ++ " needs a value")
-    _ : value : _ -> pure value
+  case reverse (argumentValues flag arguments) of
+    [] -> fail (flag ++ " is required and needs a value")
+    value : _ -> pure value
+
+argumentValues :: String -> [String] -> [String]
+argumentValues _ [] = []
+argumentValues _ [_] = []
+argumentValues flag (name : value : rest)
+  | name == flag = value : argumentValues flag rest
+  | otherwise = argumentValues flag (value : rest)
+
+standaloneBytes :: Maybe FilePath -> Maybe FilePath -> IO B.ByteString
+standaloneBytes (Just _) _ = pure B.empty
+standaloneBytes Nothing (Just path) = B.readFile path
+standaloneBytes Nothing Nothing = fail "standalone mode requires --owned-a-bin and --owned-b-bin"
