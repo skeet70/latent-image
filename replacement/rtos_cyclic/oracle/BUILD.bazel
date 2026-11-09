@@ -30,6 +30,7 @@ _GHCOPTS = ["-XGHC2021", "-Wall", "-Werror", "-O2"]
 haskell_library(
     name = "cyclic-oracle-lib",
     srcs = [
+        "Replacement/RtosCyclic/Aggregate.hs",
         "Replacement/RtosCyclic/Layout.hs",
         "Replacement/RtosCyclic/Suite.hs",
     ],
@@ -46,6 +47,8 @@ haskell_library(
         "//host:containers",
         "//host:filepath",
         "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//replacement/rtos_platform:aggregate",
+        "//replacement/rtos_platform:platform-artifact",
     ],
 )
 
@@ -102,5 +105,7 @@ haskell_binary(
         "//host:json",
         "//host:storage-budget",
         "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//replacement/rtos_platform:aggregate",
+        "//replacement/rtos_platform:platform-artifact",
     ],
 )
