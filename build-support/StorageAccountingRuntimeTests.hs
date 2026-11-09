@@ -238,7 +238,7 @@ testCancellationPreservesState tool workspace = withCase workspace "cancellation
   original <- B.readFile stateFile
   writeExecutable fakeDu blockingDuScript
   forM_ [("SIGINT", sigINT), ("SIGTERM", sigTERM)] $ \(label, signal) -> do
-    clearPidFiles control
+    clearControl control
     environment <- fakeEnvironment fakeBin control
     processHandle <- startCollector tool environment (sampleArguments config state)
     processId <- collectorPid processHandle
@@ -299,9 +299,9 @@ testRenameAnchorsStateWrites tool workspace = withCase workspace "rename-anchore
   linkStatus <- getSymbolicLinkStatus state
   check (isSymbolicLink linkStatus) "the replaced state path must remain a symlink"
 
-clearPidFiles :: FilePath -> IO ()
-clearPidFiles control = do
+clearControl :: FilePath -> IO ()
+clearControl control = do
   entries <- listDirectory control
-  forM_ [entry | entry <- entries, ".pid" `isSuffixOf` entry] $ \entry ->
+  forM_ entries $ \entry ->
     removeFile (control </> entry) `catch` \(err :: IOException) ->
       unless (isDoesNotExistError err) (ioError err)
