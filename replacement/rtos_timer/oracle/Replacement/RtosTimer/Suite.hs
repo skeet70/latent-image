@@ -20,6 +20,7 @@ import Emulation.NativeObservation
 import Emulation.OwnedCase
 import Replacement.RtosOwnFirst.Regions (Domain (..), domainLabel)
 import Replacement.RtosTimer.Layout
+import Replacement.RtosTimer.Aggregate (Aggregate, aggregateFunctions, aggregateRegions, admissionControls)
 import System.FilePath ((</>))
 
 data Image = Image { imageBase :: Word32, imageBytes :: B.ByteString }
@@ -33,7 +34,8 @@ data Callback = Receipt | Cancel | Rearm | Switch | SwitchDistinct | WaitRelease
 data Kind = Equal | Repair String | Fixture String deriving (Eq, Show)
 
 data Check
-  = KernelWord Word32 Word32
+  = ReturnedSuccessfully
+  | KernelWord Word32 Word32
   | EntryWord Int Word32 Word32
   | CountIs Word32
   | BaseIs Word32
@@ -547,7 +549,8 @@ expectedCpsrControl one = case caseCall one of
 checksFor :: Facts -> Domain -> Role -> Case -> [Check]
 checksFor facts domain role one =
   map (retargetCheck facts domain role) (
-    [ RegisterIs R4 (seedRegister R4)
+    [ ReturnedSuccessfully
+    , RegisterIs R4 (seedRegister R4)
     , RegisterIs R5 (seedRegister R5)
     , RegisterIs R6 (seedRegister R6)
     , RegisterIs R7 (seedRegister R7)
@@ -566,6 +569,8 @@ checksFor facts domain role one =
 
 check :: Facts -> Domain -> Case -> Role -> NativeObservation -> Check -> Either String ()
 check facts domain _one role observation check' = case check' of
+  ReturnedSuccessfully -> unless (nativeStatus observation == Returned)
+    (Left ("status " ++ runnerStatusLabel (nativeStatus observation)))
   KernelWord address value -> expectWord (nodeRegion address) address value
   EntryWord slot offset value -> expectWord "entries" (entryAddress slot + offset) value
   CountIs value -> expectWord "kernel" (dfTimerCount (domainFacts facts domain)) value
@@ -688,17 +693,17 @@ maskRange offset size bytes
   | offset < 0 || size < 0 || offset + size > B.length bytes = bytes
   | otherwise = B.take offset bytes <> B.replicate size 0 <> B.drop (offset + size) bytes
 
-caseFor :: Facts -> Domain -> Role -> Image -> Image -> [(Word32, Word32)] -> Case -> CaseSpec
-caseFor facts domain role stockImage ownedImage ownedSymbols one =
+caseFor :: Facts -> Domain -> Role -> Image -> Image -> [(Word32, Word32)] -> [Aggregate] -> Case -> CaseSpec
+caseFor facts domain role stockImage ownedImage ownedSymbols aggregates one =
   CaseSpec
     { caseId = caseName one ++ "-" ++ domainLabel domain
     , caseProvenance = "X-M1 1.50 timer stock ABI, x70view 55436fc85c0560dd252b0410af6f2427fe198cd3; synthetic heap, entry and callback state"
-    , caseExclusion = "Synthetic timer heap and callback stubs; the wait-release case runs the stock wait-release body over a synthetic suspended task. No cyclic or firmware integration."
+    , caseExclusion = "Synthetic timer heap and foreign fixture callbacks; wait-release instrumentation uses the retained stock helper over a synthetic suspended task. No full-system qualification."
     , caseEntry = GuestAddress (fromIntegral entry)
     , caseExit = GuestAddress (fromIntegral exitAddress)
     , caseRegions =
-        [ mkRegion (RegionId "code") (GuestAddress (fromIntegral codeBase)) (fromIntegral (B.length codeBytes)) ReadExecute codeBytes
-        , mkRegion (RegionId "stubs") (GuestAddress (fromIntegral stubBase)) (fromIntegral stubSize) ReadExecute (stubBytes facts domain one)
+        codeRegions ++
+        [ mkRegion (RegionId "stubs") (GuestAddress (fromIntegral stubBase)) (fromIntegral stubSize) ReadExecute (stubBytes facts domain one)
         , mkRegion (RegionId "wait-release") (GuestAddress (fromIntegral (waitReleaseAddress domain))) (fromIntegral waitReleaseSize) ReadExecute (slice (imageBase stockImage) (imageBytes stockImage) (waitReleaseAddress domain) waitReleaseSize)
         , mkRegion (RegionId "kernel") (GuestAddress (fromIntegral (kernelLow facts domain))) (fromIntegral (kernelSize facts domain role)) ReadWrite (overlay (kernelLow facts domain) (kernelSize facts domain role) (kernelWords facts domain role one))
         , mkRegion (RegionId "entries") (GuestAddress (fromIntegral entriesBase)) (fromIntegral entriesSize) ReadWrite (overlay entriesBase entriesSize (entriesWords facts domain role one))
@@ -727,6 +732,10 @@ caseFor facts domain role stockImage ownedImage ownedSymbols one =
     , caseKernel = Just (KernelCase plainLimit Nothing (Just 0x80001234) (Just 0) (Just 0) [R1, R2, R3, R12, Lr] [])
     }
   where
+    codeRegions
+      | role == Owned && not (null aggregates) =
+          concat [aggregateRegions ("aggregate-" ++ show index) aggregate | (index, aggregate) <- zip [0 :: Int ..] aggregates]
+      | otherwise = [mkRegion (RegionId "code") (GuestAddress (fromIntegral codeBase)) (B.length codeBytes) ReadExecute codeBytes]
     entry = case caseCall one of
       Initialize -> wordAddress (initializeAddress domain)
       Insert -> insertEntry domain
@@ -743,7 +752,7 @@ caseFor facts domain role stockImage ownedImage ownedSymbols one =
         let (base, _) = stockBase domain
          in [(base, 0xc4), (base + 0xc4, 0xdc), (insertEntry domain, 0x48), (removeEntry domain, 0xe4), (tickEntry domain, 0x1a0), (stubBase, stubSize), (waitReleaseAddress domain, waitReleaseSize)]
               ++ [(wordAddress (initializeAddress domain), 0x70) | caseCall one == Initialize]
-      Owned -> ownedSymbols ++ [(stubBase, stubSize), (waitReleaseAddress domain, waitReleaseSize)]
+      Owned -> (if null aggregates then ownedSymbols else concatMap aggregateFunctions aggregates) ++ [(stubBase, stubSize), (waitReleaseAddress domain, waitReleaseSize)]
     initialRegisters =
       [ (register, case lookup register arguments of
           Just value -> value
@@ -792,17 +801,18 @@ cohortOf one = case caseName one of
   "tick-context-switch-distinct" -> "extra"
   _ -> "core"
 
-runDomain :: FilePath -> FilePath -> FilePath -> Facts -> Domain -> Image -> Image -> [(Word32, Word32)] -> IO ([CaseRun], [ControlRun])
-runDomain runner cacheRoot directory facts domain stockImage ownedImage ownedSymbols = do
+runDomain :: FilePath -> FilePath -> FilePath -> Facts -> Domain -> Image -> Image -> [(Word32, Word32)] -> [Aggregate] -> IO ([CaseRun], [ControlRun])
+runDomain runner cacheRoot directory facts domain stockImage ownedImage ownedSymbols aggregates = do
   let selected = cases facts domain
   (coreRuns, coreControls) <- runCohort "core" (filter ((== "core") . cohortOf) selected) directory
   (extraRuns, extraControls) <- runCohort "extra" (filter ((== "extra") . cohortOf) selected) (directory </> "extra")
   (initializeRuns, initializeControls) <- runCohort "initialize" (filter ((== "initialize") . cohortOf) selected) (directory </> "initialize")
-  pure (coreRuns ++ extraRuns ++ initializeRuns, coreControls ++ extraControls ++ initializeControls)
+  pure (coreRuns ++ extraRuns ++ initializeRuns, coreControls ++ extraControls ++ initializeControls ++
+    [ControlRun "admission" name "aggregate" holds | (name, holds) <- admissionControls])
   where
     runCohort cohort chosen base = do
-      let stockSpecs = map (caseFor facts domain Stock stockImage ownedImage ownedSymbols) chosen
-          ownedSpecs = map (caseFor facts domain Owned stockImage ownedImage ownedSymbols) chosen
+      let stockSpecs = map (caseFor facts domain Stock stockImage ownedImage ownedSymbols aggregates) chosen
+          ownedSpecs = map (caseFor facts domain Owned stockImage ownedImage ownedSymbols aggregates) chosen
       stockBatch <- writeBatch (base </> "stock") stockSpecs
       ownedBatch <- writeBatch (base </> "owned") ownedSpecs
       (stockReuse, stockRaw) <- cachedObservedBatch cacheRoot runner stockBatch
@@ -814,10 +824,7 @@ runDomain runner cacheRoot directory facts domain stockImage ownedImage ownedSym
             stock = M.lookup ident reference
             owned = M.lookup ident subject
             roleChecks role observation = map (check facts domain one role observation) (checksFor facts domain role one)
-            statusCheck observation = case nativeStatus observation of
-              Returned -> Right ()
-              status -> Left ("status " ++ runnerStatusLabel status)
-            errorsFor role observation = [message | Left message <- statusCheck observation : roleChecks role observation]
+            errorsFor role observation = [message | Left message <- roleChecks role observation]
             equalDifferences stock' owned' = case caseKind one of
               Equal -> regionDifferences facts domain [RegionId "kernel", RegionId "entries"] stock' owned'
                 ++ relocatedHeapDifferences facts domain stock' owned'
@@ -855,7 +862,11 @@ runDomain runner cacheRoot directory facts domain stockImage ownedImage ownedSym
 -- unchanged region.
 controlRuns :: Facts -> Domain -> String -> Case -> NativeObservation -> [ControlRun]
 controlRuns facts domain cohort one observation =
-  [ ControlRun cohort "cpsr-i" (caseName one) (refused (CpsrControlIs expected) (mutateCpsr (`xor` 0x80) observation))
+  [ ControlRun cohort "native-unknown-call" (caseName one)
+      (refused ReturnedSuccessfully (observation {nativeStatus = UnknownCall}))
+  , ControlRun cohort "native-unsupported" (caseName one)
+      (refused ReturnedSuccessfully (observation {nativeStatus = UnsupportedInstruction}))
+  , ControlRun cohort "cpsr-i" (caseName one) (refused (CpsrControlIs expected) (mutateCpsr (`xor` 0x80) observation))
   , ControlRun cohort "cpsr-f" (caseName one) (refused (CpsrControlIs expected) (mutateCpsr (`xor` 0x40) observation))
   ]
     ++ [ ControlRun cohort "configuration-publication" (caseName one) (refused ConfigurationPublished (mutateConfiguration observation))
@@ -922,6 +933,7 @@ controlRuns facts domain cohort one observation =
 
 describe :: Check -> String
 describe check' = case check' of
+  ReturnedSuccessfully -> "native returned"
   KernelWord address value -> "kernel " ++ showHexWord address ++ " = " ++ showHexWord value
   EntryWord slot offset value -> "entry " ++ show slot ++ "+" ++ show offset ++ " = " ++ showHexWord value
   CountIs value -> "count = " ++ show value
