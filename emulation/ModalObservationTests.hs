@@ -1231,7 +1231,7 @@ runtimeBindingTests = do
   check "the completed settings writes name the setter row"
     (fmap (map (get "pc") . values . get "writes" . settingsWritesJson)
       (parseFinalModalWatch (settingsWatch 0x0062ff54) >>= completedSettingsWrites scopedRequest) == Right [Number 0x0062ff54])
-  let fetchOn core physical = set "core" (Number core) (fetchRow physical 100)
+  let fetchOn core physical = set "core" (toJSON (core :: Int)) (fetchRow physical 100)
       reloadStore core address = set "pc" (Number 0x00722134) (set "value" (Number 0xa9c9) (set "before" (array [Number 0x20, Number 0x20])
         (cpu core address address 2 100)))
       reloadWatch reloadRows = set "fetch_attribution" (fetchJson helperFetches) (watch scopedWrites (take 100 published ++ reloadRows ++ drop 100 published))
