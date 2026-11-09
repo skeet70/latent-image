@@ -17,7 +17,7 @@ import qualified Data.Aeson.Types as J
 import Data.Bits ((.&.))
 import qualified Data.ByteString as B
 import qualified Data.Foldable as F
-import Data.List (find, nub, sort, sortOn)
+import Data.List (find, nub, sort)
 import qualified Data.Text as T
 import Data.Word (Word32, Word64)
 import Numeric (showHex)
@@ -206,7 +206,8 @@ validateTransitions (ActiveObservations observations) invocation = do
     (Left "render transition span leaves observed invocation interval")
   (_,count) <- foldM (\(previous,total) run -> do
     (a,b,n) <- transitionExtent run
-    unless (toInteger first <= a && previous < a && b <= toInteger last_)
+    let ordered = if total == 0 then a == toInteger first else previous < a
+    unless (ordered && b <= toInteger last_)
       (Left "render transition positions are unordered or outside invocation span")
     pure (b,total+n)) (0,0) (invocationTransitions invocation)
   unless (count == toInteger (invocationTransitionCount invocation)
@@ -233,7 +234,7 @@ validateInvocationSpans invocations = do
           && parentFirst <= first && last_ <= parentLast)
           (Left "render nested invocation span leaves its parent")
   forM_ [Core0, Core1] $ \core -> do
-    let roots = sortOn (fst . invocationSpan) [invocation | invocation <- invocations,
+    let roots = [invocation | invocation <- invocations,
           invocationParent invocation == Nothing, invocationCore invocation == core]
     forM_ (zip roots (drop 1 roots)) $ \(earlier, later) -> do
       let (_, earlierLast) = invocationSpan earlier

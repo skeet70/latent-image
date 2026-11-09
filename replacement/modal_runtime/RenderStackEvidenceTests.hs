@@ -154,6 +154,8 @@ main = do
     (accepts (spanReport [spanInvocation 1 Nothing 2 10 2 8,spanInvocation 2 (Just 1) 3 9 3 8] 1))
   check "nested transition span cannot leave its parent"
     (not (accepts (spanReport [spanInvocation 1 Nothing 2 10 2 5,spanInvocation 2 (Just 1) 3 9 3 8] 1)))
+  check "reversed disjoint root ordinal spans refuse"
+    (not (accepts (spanReport [spanInvocation 1 Nothing 2 8 4 10,spanInvocation 2 Nothing 9 10 2 3] 2)))
   check "nested invocation cannot change core" (not (accepts (nestedReport [invocation,set "core" (number 1) nested])))
   forM_ [ set "coverage" (J.String "refused") (singleton invocation)
         , set "finished" (J.Bool False) (singleton invocation)
@@ -192,6 +194,7 @@ main = do
         , withRuns [pair] 6
         , withRuns [] 7
         , withRuns [] 0
+        , withRuns [sample 3 transitionContext] 1
         , set "version" (number 1) pairReport
         , J.Object (case pairReport of J.Object o -> KM.delete "transition_encoding" o; _ -> KM.empty)
         , set "transition_encoding" (J.String "flat") pairReport
