@@ -175,6 +175,70 @@ systemctl --user enable --now latent-image-cargo-retention.timer
 
 Inspect `systemctl --user status latent-image-cargo-retention.timer` and `journalctl --user -u latent-image-cargo-retention.service`. The timer has up to 30 minutes of jitter and can catch up a missed invocation. `TargetUnmet` is a retention result, not permission to delete protected files. Stop future automatic runs with `systemctl --user disable --now latent-image-cargo-retention.timer`; removing an active run's grant does not undo completed removals.
 
+### Whole-host accounting and aggregate producer checks
+
+`//build-support:storage-accounting` is a separate read-only checkpoint. It never invokes Cargo retention, garbage collection, sudo or deletion. `sample` records physical filesystem usage, Btrfs chunk capacity, directory allocation, aggregate producer budgets and coverage failures. Filesystem identities distinguish separate same-label mounts and coalesce Btrfs subvolume aliases. Keep filesystem-only and detailed samples in separate state directories.
+
+```sh
+devenv shell -- host-build build --jobs=2 //build-support:storage-accounting
+tool="$(realpath bazel-bin/build-support/storage-accounting)"
+config="$HOME/.config/latent-image/storage-accounting.json"
+state="$HOME/.local/state/latent-image/storage-accounting"
+"$tool" sample --config "$config" --state "$state/fast" --filesystem-only +RTS -M128M -RTS
+"$tool" sample --config "$config" --state "$state/detailed" +RTS -M1G -RTS
+"$tool" check --config "$config" --state "$state/detailed"
+```
+
+Each state directory retains only current and previous snapshots in atomic `accounting.json`, with a lock file and bounded temporary output. A configuration change resets growth compatibility. Directory growth includes newly created and removed paths only when scan depth and coverage prove the missing side was zero. Permission failures, disappeared paths, malformed output, timeouts and output bounds are coverage gaps, not zero bytes. A fatal filesystem-probe failure preserves the previous state. Stdout is a bounded JSON summary; detailed paths and issues remain in the private state file.
+
+Physical filesystem deltas include writers outside configured producer paths. Directory allocation is not unique physical usage: hardlinks are deduplicated within each producer's union, while reflinks, compression and overlap between producers prevent summing their totals into a physical residual. Btrfs allocated-but-unused metadata capacity is separate from retained file growth. Short-window rates are net retained-use changes, not gross writes or forecasts with a guaranteed lifetime.
+
+Configuration is schema-1 JSON. Paths must be absolute and normalized; root and producer identifiers must be unique. Declare separate scan roots at nested filesystem boundaries. Copy scopes count immediate directories matching a prefix, and require enough depth in the effective scan root to prove a count. Explicit paths and discovered copies share one producer byte budget. This example is illustrative, not deletion authority or the host's accepted Cargo-retention policy:
+
+```json
+{
+  "accountingSchemaVersion": 1,
+  "accountingScanRoots": [
+    {"scanRootId": "projects", "scanRootPath": "/srv/projects", "scanDepth": 3}
+  ],
+  "accountingFilesystemPaths": ["/srv/projects"],
+  "accountingReserveBytes": 107374182400,
+  "accountingCommandTimeout": 900,
+  "accountingMaximumAge": 7200,
+  "accountingBudgets": [
+    {
+      "producerId": "project",
+      "producerPaths": ["/srv/projects/project"],
+      "producerByteBudget": 107374182400,
+      "producerCopyScopes": [
+        {"copyParent": "/srv/projects/copies", "copyNamePrefix": "project-"}
+      ],
+      "producerCopyBudget": 3
+    }
+  ]
+}
+```
+
+`check` re-evaluates the detailed snapshot and probes live free space and each path's filesystem identity. Missing, stale, incompatible, incomplete or over-budget evidence refuses admission. Cached verdicts are not authority. `guard --config FILE --state DIR -- COMMAND ARGS...` executes the command only after a healthy check and preserves its exit status. These are admission checks, not quotas: active or unguarded writers can still consume space.
+
+`host-build` supports the same opt-in check after acquiring its existing host lock. Set both `XM1_STORAGE_ACCOUNTING_CONFIG` and `XM1_STORAGE_ACCOUNTING_STATE`; optionally set `XM1_STORAGE_ACCOUNTING_TOOL`, otherwise it uses `$HOME/.local/libexec/latent-image/storage-accounting`. A failed check exits 75 before starting the build. No accounting guard is enabled by default, and this does not replace the host-wide build limit.
+
+The checked-in `latent-image-storage-sample` user service/timer samples physical usage every five minutes; `latent-image-storage-inventory` inventories directories hourly. They have separate state locks, memory/time limits and low I/O priority; the detailed service is limited to half a CPU. They inspect the real `/var/tmp`, not a private temporary namespace. User permissions still bound coverage.
+
+Install the built executable at `$HOME/.local/libexec/latent-image/storage-accounting`, configuration at `$HOME/.config/latent-image/storage-accounting.json`, and an environment file at the same prefix with `.env` instead of `.json`. Set its `PATH` to the pinned GNU coreutils and btrfs-progs binary directories and `LC_ALL=C.UTF-8`. Create the state parent and `fast`, `detailed`, `runtime` subdirectories with mode 0700. Inspect `ldd` and pin the executable's actual Nix runtime packages plus those tool packages under the runtime directory with `nix-store --realise --add-root PREFIX --indirect PATH...`; do not pin research SDKs as part of this installation.
+
+```sh
+install -Dm0644 build-support/systemd/latent-image-storage-sample.service "$HOME/.config/systemd/user/latent-image-storage-sample.service"
+install -Dm0644 build-support/systemd/latent-image-storage-sample.timer "$HOME/.config/systemd/user/latent-image-storage-sample.timer"
+install -Dm0644 build-support/systemd/latent-image-storage-inventory.service "$HOME/.config/systemd/user/latent-image-storage-inventory.service"
+install -Dm0644 build-support/systemd/latent-image-storage-inventory.timer "$HOME/.config/systemd/user/latent-image-storage-inventory.timer"
+systemctl --user daemon-reload
+systemctl --user start latent-image-storage-sample.service latent-image-storage-inventory.service
+systemctl --user enable --now latent-image-storage-sample.timer latent-image-storage-inventory.timer
+```
+
+Inspect `systemctl --user list-timers 'latent-image-storage-*'`, `journalctl --user -u latent-image-storage-sample.service -u latent-image-storage-inventory.service`, and each state's `accounting.json`. Disable future samples with `systemctl --user disable --now latent-image-storage-sample.timer latent-image-storage-inventory.timer`. Neither timer grants deletion authority or changes weekly Nix GC.
+
 ### Research-output admission and observer retention
 
 

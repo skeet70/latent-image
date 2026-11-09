@@ -14,32 +14,31 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Foreign.C.Types (CInt (..))
+import GHC.IO.Encoding (setFileSystemEncoding, utf8)
 import StorageAccountingTypes
 import System.Directory (canonicalizePath, createDirectory, doesPathExist, getTemporaryDirectory, removeDirectoryRecursive, removeFile)
 import System.Environment (getArgs, getEnvironment)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import System.IO (hClose, openTempFile)
-import System.Posix.Files (createSymbolicLink, setFileMode)
+import System.Posix.Files (createLink, createSymbolicLink, setFileMode)
 import System.Posix.IO (OpenMode (ReadWrite), closeFd, defaultFileFlags, openFd)
 import System.Posix.Types (Fd (..))
 import System.Posix.User (getEffectiveUserID)
 import System.Process (CreateProcess (..), proc, readCreateProcessWithExitCode)
+import Text.Read (readMaybe)
 
 foreign import ccall unsafe "flock" c_flock :: CInt -> CInt -> IO CInt
 
-data SampleSummary = SampleSummary
-  { sampleSummaryStatus :: String
-  , sampleSummaryIssueCount :: Int
-  , sampleSummaryStatePath :: FilePath
-  , sampleSummaryDirectoryCount :: Int
+newtype SampleSummary = SampleSummary
+  { sampleSummaryStatus :: SampleStatus
   }
 instance FromJSON SampleSummary where
   parseJSON = withObject "sample report" $ \o ->
-    SampleSummary <$> o .: "sampleStatus" <*> o .: "sampleIssueCount" <*> o .: "sampleStatePath" <*> o .: "sampleDirectoryCount"
+    SampleSummary <$> o .: "sampleStatus"
 
 data CheckSummary = CheckSummary
-  { checkSummaryStatus :: String
+  { checkSummaryStatus :: CheckStatus
   , checkSummaryProblems :: [String]
   }
 instance FromJSON CheckSummary where
@@ -113,6 +112,7 @@ withWorkspace action = do
 
 main :: IO ()
 main = do
+  setFileSystemEncoding utf8
   arguments <- getArgs
   case arguments of
     [tool] -> withWorkspace $ \workspace -> do
@@ -129,6 +129,9 @@ main = do
       testTimeout tool workspace
       testCheckAndGuard tool workspace
       testStateSymlinks tool workspace
+      testProducerHardlinkAttribution tool workspace
+      testCreatedAndRemovedDirectoryGrowth tool workspace
+      testFilesystemProbeBindings tool workspace
     _ -> ioError (userError "storage-accounting-tests TOOL")
 
 testInvalidConfig :: FilePath -> FilePath -> IO ()
@@ -169,14 +172,12 @@ testGrowth tool workspace = withCase workspace "growth" $ \directory -> do
   createDirectory root
   B.writeFile (root </> "seed") (incompressible 4096)
   writeConfig config (validConfig root)
-  (firstCode, firstOut, _) <- runTool tool (sampleArguments config state [])
-  check (firstCode == ExitSuccess) "first sample must succeed"
+  (firstCode, firstOut, firstErr) <- runTool tool (sampleArguments config state [])
+  check (firstCode == ExitSuccess) ("first sample must succeed: " ++ show firstErr)
   firstSummary <- decodeSample firstOut
-  check (sampleSummaryStatus firstSummary == "SampleComplete") "first sample must be complete"
-  check (sampleSummaryStatePath firstSummary == state </> "accounting.json") "sample report must name the state file"
-  firstState <- readState state
-  check (not (null (snapshotDirectories (stateCurrent firstState)))) "first sample must record directories"
-  B.writeFile (root </> "grow") (incompressible 1048576)
+  check (sampleSummaryStatus firstSummary == SampleComplete) "first sample must be complete"
+  (allocated, _, _) <- readCreateProcessWithExitCode (proc "fallocate" ["-l", "1048576", root </> "grow"]) ""
+  check (allocated == ExitSuccess) "growth fixture must allocate its declared extent"
   threadDelay 1200000
   (secondCode, _, _) <- runTool tool (sampleArguments config state [])
   check (secondCode == ExitSuccess) "second sample must succeed"
@@ -184,7 +185,7 @@ testGrowth tool workspace = withCase workspace "growth" $ \directory -> do
   check (growthCompatibleBaseline (stateGrowth secondState)) "same config must keep a compatible baseline"
   case listToMaybe [growth | growth <- growthDirectories (stateGrowth secondState), growthDirectory growth == StoragePath root] of
     Just growth -> case growthAllocatedBytes growth of
-      ByteDelta delta -> check (delta > 0) "adding a file must raise the root allocated delta"
+      ByteDelta delta -> check (delta == 1048576) "allocated growth must be reported in bytes"
     Nothing -> check False "second sample must report root directory growth"
   removeFile (root </> "grow")
   threadDelay 1200000
@@ -193,7 +194,7 @@ testGrowth tool workspace = withCase workspace "growth" $ \directory -> do
   thirdState <- readState state
   case listToMaybe [growth | growth <- growthDirectories (stateGrowth thirdState), growthDirectory growth == StoragePath root] of
     Just growth -> case growthAllocatedBytes growth of
-      ByteDelta delta -> check (delta < 0) "removing a file must lower the root allocated delta"
+      ByteDelta delta -> check (delta == -1048576) "released allocation must be reported as negative bytes"
     Nothing -> check False "third sample must report root directory growth"
 
 testConfigChange :: FilePath -> FilePath -> IO ()
@@ -234,7 +235,7 @@ testFilesystemOnlyCheck tool workspace = withCase workspace "filesystem-only-che
   (recheckCode, recheckOut, _) <- runTool tool (checkArguments config state)
   check (recheckCode /= ExitSuccess) "filesystem-only state must not check healthy"
   summary <- decodeCheck recheckOut
-  check (checkSummaryStatus summary == "CheckUnhealthy") "filesystem-only check must report unhealthy"
+  check (checkSummaryStatus summary == CheckUnhealthy) "filesystem-only check must report unhealthy"
 
 testStaleCheck :: FilePath -> FilePath -> IO ()
 testStaleCheck tool workspace = withCase workspace "stale-check" $ \directory -> do
@@ -250,7 +251,7 @@ testStaleCheck tool workspace = withCase workspace "stale-check" $ \directory ->
   (checkCode, checkOut, _) <- runTool tool (checkArguments config state)
   check (checkCode /= ExitSuccess) "stale state must not check healthy"
   summary <- decodeCheck checkOut
-  check (checkSummaryStatus summary == "CheckUnhealthy") "stale check must report unhealthy"
+  check (checkSummaryStatus summary == CheckUnhealthy) "stale check must report unhealthy"
 
 testWeirdFilename :: FilePath -> FilePath -> IO ()
 testWeirdFilename tool workspace = withCase workspace "weird-filename" $ \directory -> do
@@ -262,10 +263,8 @@ testWeirdFilename tool workspace = withCase workspace "weird-filename" $ \direct
   createDirectory (root </> weird)
   B.writeFile (root </> weird </> "data") "x"
   writeConfig config (validConfig root)
-  (code, out, _) <- runTool tool (sampleArguments config state [])
+  (code, _, _) <- runTool tool (sampleArguments config state [])
   check (code == ExitSuccess) "sample with unusual filenames must succeed"
-  summary <- decodeSample out
-  check (sampleSummaryDirectoryCount summary >= 2) "sample must report root and unusual child"
   stateValue <- readState state
   check (any ((== StoragePath (root </> weird)) . directoryPath) (snapshotDirectories (stateCurrent stateValue))) "unusual filename must round-trip through du and JSON"
 
@@ -282,8 +281,7 @@ testMissingRoot tool workspace = withCase workspace "missing-root" $ \directory 
   (sampleCode, sampleOut, _) <- runTool tool (sampleArguments config state [])
   check (sampleCode == ExitSuccess) "missing scan root must still publish explicit incomplete state"
   summary <- decodeSample sampleOut
-  check (sampleSummaryStatus summary == "SampleIncomplete") "missing scan root must mark the sample incomplete"
-  check (sampleSummaryIssueCount summary > 0) "missing scan root must report an issue count"
+  check (sampleSummaryStatus summary == SampleIncomplete) "missing scan root must mark the sample incomplete"
   stateValue <- readState state
   check (any ((== MissingPath) . issueKind) (snapshotCoverageIssues (stateCurrent stateValue))) "missing scan root must be an explicit issue"
   (checkCode, _, _) <- runTool tool (checkArguments config state)
@@ -371,7 +369,7 @@ testCheckAndGuard tool workspace = withCase workspace "check-guard" $ \directory
   (checkCode, checkOut, _) <- runTool tool (checkArguments config state)
   check (checkCode == ExitSuccess) "fresh detailed state must check healthy"
   summary <- decodeCheck checkOut
-  check (checkSummaryStatus summary == "CheckHealthy") "healthy check must report healthy"
+  check (checkSummaryStatus summary == CheckHealthy) "healthy check must report healthy"
   check (null (checkSummaryProblems summary)) "healthy check must report no problems"
   (guardCode, _, _) <- runTool tool ["guard", "--config", config, "--state", state, "--", "sh", "-c", "exit 7"]
   check (guardCode == ExitFailure 7) "guard must preserve the child exit status"
@@ -406,3 +404,100 @@ testStateSymlinks tool workspace = withCase workspace "state-symlinks" $ \direct
   check (parentCode /= ExitSuccess) "sample must reject a state directory under an untrusted symlinked parent"
   parentState <- doesPathExist (realParent </> "state")
   check (not parentState) "untrusted symlinked parent must not receive a state directory"
+
+testProducerHardlinkAttribution :: FilePath -> FilePath -> IO ()
+testProducerHardlinkAttribution tool workspace = withCase workspace "producer-hardlinks" $ \directory -> do
+  let first = directory </> "a"
+      selected = directory </> "z"
+      config = directory </> "config.json"
+      state = directory </> "state"
+      base = validConfig selected
+  createDirectory first
+  createDirectory selected
+  (allocated, _, _) <- readCreateProcessWithExitCode (proc "fallocate" ["-l", "2097152", first </> "payload"]) ""
+  check (allocated == ExitSuccess) "allocate hardlinked compiler-output fixture"
+  createLink (first </> "payload") (selected </> "payload")
+  writeConfig config base
+    { accountingScanRoots = [ScanRoot (RootId "first") (StoragePath first) 1, ScanRoot (RootId "selected") (StoragePath selected) 1]
+    , accountingBudgets = map (\budget -> budget
+        { producerPaths = [StoragePath selected], producerByteBudget = Just (ByteCount 1048576) }) (accountingBudgets base)
+    }
+  (code, _, _) <- runTool tool (sampleArguments config state [])
+  check (code == ExitSuccess) "hardlinked fixture must be measurable"
+  value <- readState state
+  check (map budgetVerdict (stateBudgets value) == [OverBudget]) "a hardlink charged outside the producer must not hide its allocation"
+
+testCreatedAndRemovedDirectoryGrowth :: FilePath -> FilePath -> IO ()
+testCreatedAndRemovedDirectoryGrowth tool workspace = withCase workspace "copy-growth" $ \directory -> do
+  let root = directory </> "root"
+      child = root </> "copy"
+      config = directory </> "config.json"
+      state = directory </> "state"
+  createDirectory root
+  writeConfig config (validConfig root)
+  (baselineCode, _, _) <- runTool tool (sampleArguments config state [])
+  check (baselineCode == ExitSuccess) "baseline inventory must succeed"
+  createDirectory child
+  (allocated, _, _) <- readCreateProcessWithExitCode (proc "fallocate" ["-l", "1048576", child </> "payload"]) ""
+  check (allocated == ExitSuccess) "allocate new-copy fixture"
+  (statCode, statOut, _) <- readCreateProcessWithExitCode (proc "stat" ["-c", "%b %B", "--", child]) ""
+  directoryBytes <- case (statCode, traverse readMaybe (words statOut) :: Maybe [Integer]) of
+    (ExitSuccess, Just [blocks, blockBytes]) -> pure (blocks * blockBytes)
+    _ -> ioError (userError "cannot measure fixture directory allocation")
+  threadDelay 1200000
+  (createdCode, _, _) <- runTool tool (sampleArguments config state [])
+  check (createdCode == ExitSuccess) "new-copy inventory must succeed"
+  created <- readState state
+  let deltas value = [(growthDirectory row, growthAllocatedBytes row) | row <- growthDirectories (stateGrowth value)]
+      expected = 1048576 + directoryBytes
+  check (lookup (StoragePath child) (deltas created) == Just (ByteDelta expected)) "a new directory must report its full allocation from a known zero baseline"
+  removeDirectoryRecursive child
+  threadDelay 1200000
+  (removedCode, _, _) <- runTool tool (sampleArguments config state [])
+  check (removedCode == ExitSuccess) "removed-copy inventory must succeed"
+  removed <- readState state
+  check (lookup (StoragePath child) (deltas removed) == Just (ByteDelta (negate expected))) "a removed directory must report its full allocation returning to zero"
+
+testFilesystemProbeBindings :: FilePath -> FilePath -> IO ()
+testFilesystemProbeBindings tool workspace = withCase workspace "filesystem-bindings" $ \directory -> do
+  let root = directory </> "root"
+      fakeBin = directory </> "bin"
+      config = directory </> "config.json"
+      state = directory </> "state"
+      marker = directory </> "marker"
+      stateFile = state </> "accounting.json"
+  createDirectory root
+  createDirectory fakeBin
+  environment <- getEnvironment
+  let probeEnvironment = ("PATH", fakeBin ++ ":" ++ maybe "" id (lookup "PATH" environment)) : filter ((/= "PATH") . fst) environment
+      run arguments = runToolWithEnvironment tool probeEnvironment arguments
+  writeConfig config (validConfig root)
+    { accountingFilesystemPaths = [StoragePath "/proc", StoragePath root], accountingReserveBytes = ByteCount 100 }
+  B.writeFile (fakeBin </> "df") "#!/bin/sh\nfor last in \"$@\"; do :; done\nprintf 'Filesystem 1B-blocks Used Available\\n'\nif [ \"$last\" = /proc ]; then printf 'tmpfs 10000 3000 7000\\n'; else printf 'tmpfs 10000 9999 1\\n'; fi\n"
+  setFileMode (fakeBin </> "df") 0o755
+  (lowCode, _, _) <- run (sampleArguments config state [])
+  check (lowCode == ExitSuccess) "same-source filesystem probes must be measurable"
+  low <- readState state
+  check (stateLowSpace low) "a second filesystem sharing a source label must not hide its low reserve"
+  B.writeFile (fakeBin </> "df") "#!/bin/sh\nprintf 'Filesystem 1B-blocks Used Available\\ntmpfs 10000 3000 7000\\n'\n"
+  (healthyCode, _, _) <- run (sampleArguments config state [])
+  check (healthyCode == ExitSuccess) "healthy filesystem baseline must succeed"
+  healthy <- readState state
+  swapped <- case snapshotFilesystems (stateCurrent healthy) of
+    [first, second] -> do
+      check (filesystemId first /= filesystemId second) "distinct mounted filesystems need distinct identities"
+      pure healthy { stateCurrent = (stateCurrent healthy)
+        { snapshotFilesystems = [first { filesystemId = filesystemId second }, second { filesystemId = filesystemId first }] } }
+    _ -> ioError (userError "both configured filesystem bindings must be retained")
+  BL.writeFile stateFile (encode swapped)
+  (guardCode, _, _) <- run ["guard", "--config", config, "--state", state, "--", "sh", "-c", "touch \"$1\"", "sh", marker]
+  check (guardCode /= ExitSuccess) "swapping probe identities must refuse admission even when the identity set is unchanged"
+  markerExists <- doesPathExist marker
+  check (not markerExists) "a changed filesystem binding must not execute the guarded command"
+  before <- B.readFile stateFile
+  B.writeFile (fakeBin </> "stat") "#!/bin/sh\nexit 1\n"
+  setFileMode (fakeBin </> "stat") 0o755
+  (failedCode, _, _) <- run (sampleArguments config state [])
+  check (failedCode /= ExitSuccess) "an inventory without any filesystem measurement must fail"
+  after <- B.readFile stateFile
+  check (after == before) "a fatal filesystem probe must preserve the previous accounting state"

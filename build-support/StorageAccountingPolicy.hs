@@ -8,7 +8,7 @@ module StorageAccountingPolicy
   , validateProducerBudgets
   ) where
 
-import Data.List (intercalate, isPrefixOf, nub)
+import Data.List (intercalate, isPrefixOf, nub, sortOn)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (isJust, isNothing)
 import qualified Data.Set as Set
@@ -270,11 +270,11 @@ hasExactRow index scope =
 
 copyDepthCovered :: AccountingConfig -> StoragePath -> Bool
 copyDepthCovered config parent =
-  any covered (accountingScanRoots config)
- where
-  covered (ScanRoot _ root depth) =
-    containsStoragePath root parent
-      && length (pathComponents (storagePathValue parent)) - length (pathComponents (storagePathValue root)) + 1 <= depth
+  case sortOn (negate . length . pathComponents . storagePathValue . scanRootPath)
+    [root | root <- accountingScanRoots config, containsStoragePath (scanRootPath root) parent] of
+      ScanRoot _ root depth : _ ->
+        length (pathComponents (storagePathValue parent)) - length (pathComponents (storagePathValue root)) + 1 <= depth
+      [] -> False
 
 copyScopeCovered :: AccountingConfig -> RowIndex -> [CoverageIssue] -> CopyScope -> Bool
 copyScopeCovered config index issues scope =
@@ -530,7 +530,11 @@ filesystemProblems config now snapshot =
   | null (snapshotFilesystems snapshot)
   ]
     ++ concatMap (filesystemMeasurementProblems config now (snapshotCompletedAt snapshot)) (snapshotFilesystems snapshot)
-    ++ duplicateTextProblems "filesystem id" [value | measurement <- snapshotFilesystems snapshot, let FilesystemId value = filesystemId measurement]
+    ++ duplicatePathProblemsFor "filesystem probe path" (map filesystemProbePath (snapshotFilesystems snapshot))
+    ++ [ "configured filesystem probe is missing: " ++ storagePathValue path
+       | path <- accountingFilesystemPaths config, path `notElem` map filesystemProbePath (snapshotFilesystems snapshot) ]
+    ++ [ "unexpected filesystem probe: " ++ storagePathValue path
+       | path <- map filesystemProbePath (snapshotFilesystems snapshot), path `notElem` accountingFilesystemPaths config ]
 
 validateAccountingState :: AccountingConfig -> ConfigurationDigest -> EpochSeconds -> AccountingState -> [String]
 validateAccountingState config expected now state =

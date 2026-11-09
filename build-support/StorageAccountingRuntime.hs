@@ -1,9 +1,11 @@
+{-# LANGUAGE CApiFFI #-}
 {-# LANGUAGE ForeignFunctionInterface #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 module StorageAccountingRuntime
   ( CommandOutcome (..)
   , OutputLimit (..)
   , runBoundedCommand
+  , btrfsFilesystemId
   , StateDirectory
   , withStateLock
   , withStateRead
@@ -12,19 +14,30 @@ module StorageAccountingRuntime
   , writeStateBytes
   ) where
 
-import Control.Concurrent (MVar, ThreadId, forkIO, killThread, newEmptyMVar, putMVar, threadDelay, tryTakeMVar)
+import Control.Concurrent (MVar, ThreadId, forkIO, killThread, newEmptyMVar, putMVar, threadDelay, tryReadMVar)
 import Control.Exception (IOException, bracket, catch, displayException, finally, mask, onException, try, uninterruptibleMask_)
 import Control.Monad (forM, unless, when)
-import Data.Bits ((.&.))
+import Data.Bits ((.&.), (.|.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (isPrefixOf, nub)
 import Data.Maybe (catMaybes)
-import Foreign.C.Error (eAGAIN, eINTR, eWOULDBLOCK, getErrno)
-import Foreign.C.Types (CInt (..))
+import qualified Data.Text as T
+import Data.Word (Word8, Word64)
+import Foreign.C.Error (eAGAIN, eINTR, eWOULDBLOCK, getErrno, throwErrnoIfMinus1, throwErrnoIfMinus1_)
+import Foreign.C.String (CString)
+import Foreign.C.Types (CInt (..), CUInt (..), CULong (..))
+import Foreign.Marshal.Alloc (allocaBytesAligned)
+import Foreign.Marshal.Array (peekArray)
+import Foreign.Marshal.Utils (fillBytes)
+import Foreign.Ptr (Ptr, castPtr, plusPtr)
+import Foreign.Storable (alignment, sizeOf)
 import GHC.Clock (getMonotonicTimeNSec)
-import StorageAccountingTypes (Seconds (..))
+import qualified GHC.Foreign as GHC
+import GHC.IO.Encoding (getFileSystemEncoding)
+import Numeric (showHex)
+import StorageAccountingTypes (FilesystemId (..), Seconds (..), StoragePath (..))
 import System.Directory (canonicalizePath, getHomeDirectory, makeAbsolute)
 import System.Exit (ExitCode)
 import System.FilePath ((</>), isAbsolute, makeRelative, normalise, splitDirectories, takeDirectory, takeFileName)
@@ -39,6 +52,37 @@ import qualified System.Posix.User as User
 import System.Process (CreateProcess (..), ProcessHandle, StdStream (..), createProcess, getPid, getProcessExitCode, proc, terminateProcess)
 
 foreign import ccall unsafe "flock" c_flock :: CInt -> CInt -> IO CInt
+foreign import capi unsafe "fcntl.h open" c_openDirectory :: CString -> CInt -> IO CInt
+foreign import capi unsafe "fcntl.h value O_DIRECTORY" c_oDirectory :: CInt
+foreign import capi unsafe "fcntl.h value O_NOFOLLOW" c_oNoFollow :: CInt
+foreign import capi unsafe "fcntl.h value O_CLOEXEC" c_oCloexec :: CInt
+foreign import capi unsafe "linux/btrfs.h value BTRFS_IOC_FS_INFO" c_btrfsFsInfoRequest :: CULong
+foreign import capi unsafe "linux/btrfs.h value BTRFS_FSID_SIZE" c_btrfsFsidSize :: CInt
+foreign import capi unsafe "linux/ioctl.h _IOC_SIZE" c_ioctlSize :: CULong -> CUInt
+foreign import capi unsafe "sys/ioctl.h ioctl" c_btrfsIoctl :: CInt -> CULong -> Ptr () -> IO CInt
+
+btrfsFilesystemId :: StoragePath -> IO FilesystemId
+btrfsFilesystemId (StoragePath path) = bracket openDirectory closeFd $ \(Fd descriptor) -> do
+  let bufferSize = fromIntegral (c_ioctlSize c_btrfsFsInfoRequest)
+      uuidSize = fromIntegral c_btrfsFsidSize
+      uuidOffset = 2 * sizeOf (0 :: Word64)
+  ensure (uuidSize == 16 && bufferSize >= uuidOffset + uuidSize) "unsupported Btrfs filesystem-info ABI"
+  allocaBytesAligned bufferSize (alignment (0 :: Word64)) $ \buffer -> do
+    fillBytes buffer 0 bufferSize
+    throwErrnoIfMinus1_ "BTRFS_IOC_FS_INFO" (c_btrfsIoctl descriptor c_btrfsFsInfoRequest (castPtr buffer))
+    -- fsid follows max_id and num_devices in btrfs_ioctl_fs_info_args.
+    uuid <- peekArray uuidSize (castPtr (buffer `plusPtr` uuidOffset) :: Ptr Word8)
+    pure (FilesystemId (T.pack ("btrfs:" ++ concatMap renderByte (zip [0 :: Int ..] uuid))))
+ where
+  openDirectory = do
+    encoding <- getFileSystemEncoding
+    GHC.withCString encoding path $ \encoded ->
+      Fd <$> throwErrnoIfMinus1 "open Btrfs directory" (c_openDirectory encoded (c_oDirectory .|. c_oNoFollow .|. c_oCloexec))
+  renderByte (index, byte) =
+    (if index `elem` [4, 6, 8, 10] then "-" else "") ++
+      case showHex byte "" of
+        [digit] -> ['0', digit]
+        digits -> digits
 
 data CommandOutcome
   = CommandCompleted ExitCode B.ByteString B.ByteString
@@ -68,7 +112,6 @@ runBoundedCommand timeoutValue (OutputLimit outputLimit) program arguments
             , std_out = CreatePipe
             , std_err = CreatePipe
             , create_group = True
-            , close_fds = True
             }
           timeoutMicros = min maxCommandTimeoutSeconds requestedSeconds * 1000000
           outputBound = max 0 outputLimit
@@ -214,7 +257,7 @@ waitForMVar :: MVar () -> Int -> IO Bool
 waitForMVar done limit = go 0
  where
   go elapsed = do
-    finished <- tryTakeMVar done
+    finished <- tryReadMVar done
     case finished of
       Just () -> pure True
       Nothing
@@ -243,7 +286,7 @@ withStateRead input action = mask $ \restore -> do
 readStateBytes :: OutputLimit -> StateDirectory -> IO (Maybe B.ByteString)
 readStateBytes (OutputLimit limit) directory = mask $ \restore -> do
   ensure (limit >= 0) "accounting state bound must be nonnegative"
-  opened <- try (openFd (statePath directory "accounting.json") ReadOnly defaultFileFlags { nofollow = True, cloexec = True })
+  opened <- try (openFd (statePath directory "accounting.json") ReadOnly defaultFileFlags { nofollow = True, cloexec = True, nonBlock = True })
   case opened of
     Left (err :: IOException)
       | isDoesNotExistError err -> pure Nothing

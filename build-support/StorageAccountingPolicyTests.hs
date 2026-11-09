@@ -260,6 +260,15 @@ testEvaluation = do
   checkEq "segment boundary verdict" WithinBudget (verdictOf boundaryResults)
   checkEq "segment boundary bytes" (ByteCount 100) (observedBytesOf boundaryResults)
 
+  let nestedCopiesConfig =
+        (withBudgets [producerBudget "copies" [] Nothing [("/data/copies", "img-")] (Just 1)])
+          { accountingScanRoots =
+              [ScanRoot (RootId "data") (StoragePath "/data") 8,
+               ScanRoot (RootId "nested") (StoragePath "/data/copies") 0] }
+      nestedCopies = evaluateBudgets nestedCopiesConfig
+        (snapshotWith [directoryIn "nested" "/data/copies" 100] [] [])
+  checkEq "nested root depth bounds copy discovery" CoverageIncomplete (verdictOf nestedCopies)
+
   let missingResults =
         evaluateBudgets
           (withBudgets [producerBudget "data" ["/data/missing"] (Just 100) [] Nothing])
@@ -554,6 +563,11 @@ testCheck = do
   checkLeft "invalid filesystem numbers" (checkAccounting healthyConfig expected now (stateWith ((snapshotWith [directory "/data" 100] [allocation "data" 100 ["/data"] []] []) { snapshotFilesystems = [healthyFilesystem { filesystemTotalBytes = ByteCount 0 }] })))
   checkLeft "inconsistent filesystem capacity" (checkAccounting healthyConfig expected now (stateWith (healthySnapshot { snapshotFilesystems = [healthyFilesystem { filesystemAvailableBytes = ByteCount 60001 }] })))
   checkLeft "duplicate filesystem identity" (checkAccounting healthyConfig expected now (stateWith (healthySnapshot { snapshotFilesystems = [healthyFilesystem, healthyFilesystem] })))
+  let aliasConfig = healthyConfig { accountingFilesystemPaths = [StoragePath "/data", StoragePath "/alias"] }
+      aliasSnapshot = healthySnapshot
+        { snapshotFilesystems = [healthyFilesystem, healthyFilesystem { filesystemProbePath = StoragePath "/alias" }] }
+  checkRight "filesystem aliases retain both probe bindings" (checkAccounting aliasConfig expected now (stateWith aliasSnapshot))
+  checkLeft "a configured filesystem probe cannot disappear" (checkAccounting aliasConfig expected now (stateWith healthySnapshot))
   checkRight "low space boundary" (checkAccounting healthyConfig expected now (stateWith ((snapshotWith [directory "/data" 100] [allocation "data" 100 ["/data"] []] []) { snapshotFilesystems = [healthyFilesystem { filesystemTotalBytes = ByteCount 100000, filesystemUsedBytes = ByteCount 99000, filesystemAvailableBytes = ByteCount 1000 }] })))
   checkRight "stale boundary" (checkAccounting healthyConfig expected now (stateWith ((snapshotAt staleBoundaryTime) { snapshotDirectories = [directory "/data" 100], snapshotProducerAllocations = [allocation "data" 100 ["/data"] []] })))
 

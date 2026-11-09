@@ -17,10 +17,11 @@ import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import System.IO (hClose, openTempFile)
 import System.IO.Error (isDoesNotExistError)
-import System.Posix.Files (createSymbolicLink, getSymbolicLinkStatus, isSymbolicLink, setFileMode)
+import System.Posix.Files (createNamedPipe, createSymbolicLink, getSymbolicLinkStatus, isSymbolicLink, setFileMode)
 import System.Posix.Signals (sigINT, sigKILL, sigTERM, signalProcess, signalProcessGroup)
 import System.Posix.Types (ProcessID)
 import System.Process (CreateProcess (..), ProcessHandle, StdStream (..), createProcess, getPid, getProcessExitCode, proc, readCreateProcessWithExitCode, terminateProcess)
+import System.Timeout (timeout)
 
 check :: Bool -> String -> IO ()
 check condition message = unless condition (ioError (userError message))
@@ -40,7 +41,7 @@ withCase workspace name action = do
   let directory = workspace </> name
   createDirectory directory
   canonical <- canonicalizePath directory
-  action canonical
+  action canonical `catch` \(err :: IOException) -> ioError (userError (name ++ ": " ++ show err))
 
 validConfig :: FilePath -> Seconds -> AccountingConfig
 validConfig root timeoutValue = AccountingConfig
@@ -81,8 +82,8 @@ startCollector tool overrides arguments = do
   (_, _, _, processHandle) <- createProcess (proc tool arguments)
     { env = Just environment
     , std_in = NoStream
-    , std_out = NoStream
-    , std_err = NoStream
+    , std_out = Inherit
+    , std_err = Inherit
     }
   pure processHandle
 
@@ -193,6 +194,7 @@ main = do
       testTimeoutKillsProbeGroup tool workspace
       testCancellationPreservesState tool workspace
       testRenameAnchorsStateWrites tool workspace
+      testFifoStateRefused tool workspace
     _ -> ioError (userError "storage-accounting-runtime-tests COLLECTOR")
 
 testTimeoutKillsProbeGroup :: FilePath -> FilePath -> IO ()
@@ -209,12 +211,12 @@ testTimeoutKillsProbeGroup tool workspace = withCase workspace "timeout-group" $
   writeExecutable fakeDu blockingDuScript
   writeConfig config (validConfig root (Seconds 1))
   environment <- fakeEnvironment fakeBin control
-  (code, _, _) <- runCollector tool environment (sampleArguments config state)
-  check (code == ExitSuccess) "timed-out sample must still publish incomplete state"
+  (code, _, err) <- runCollector tool environment (sampleArguments config state)
+  check (code == ExitSuccess) ("timed-out sample must still publish incomplete state: " ++ err)
+  waitForPidFiles control "du." 1 1000000
+  waitForPidFiles control "child." 1 1000000
   leaders <- readPidFiles control "du."
   descendants <- readPidFiles control "child."
-  check (not (null leaders)) "the fake du must record its leader pid"
-  check (not (null descendants)) "the fake du must record its descendant pid"
   mapM_ (\processId -> waitForDead processId 5000000) (leaders ++ descendants)
   stateValue <- readStateFrom state
   check (any ((== TimedOut) . issueKind) (snapshotCoverageIssues (stateCurrent stateValue)))
@@ -247,7 +249,7 @@ testCancellationPreservesState tool workspace = withCase workspace "cancellation
     leaders <- readPidFiles control "du."
     descendants <- readPidFiles control "child."
     signalProcess signal processId
-    code <- waitForExit processHandle 10000000
+    code <- waitForExit processHandle 10000000 `catch` \(err :: IOException) -> ioError (userError (label ++ ": " ++ show err))
     check (code /= ExitSuccess) ("collector must fail after " ++ label)
     mapM_ (\probePid -> waitForDead probePid 5000000) (leaders ++ descendants)
     preserved <- B.readFile stateFile
@@ -298,6 +300,27 @@ testRenameAnchorsStateWrites tool workspace = withCase workspace "rename-anchore
   check (not temporaryExists) "a successful write must not leave a temporary artifact"
   linkStatus <- getSymbolicLinkStatus state
   check (isSymbolicLink linkStatus) "the replaced state path must remain a symlink"
+
+testFifoStateRefused :: FilePath -> FilePath -> IO ()
+testFifoStateRefused tool workspace = withCase workspace "fifo-state" $ \directory -> do
+  let root = directory </> "root"
+      state = directory </> "state"
+      config = directory </> "config.json"
+      marker = directory </> "marker"
+  createDirectory root
+  createDirectory state
+  setFileMode state 0o700
+  createNamedPipe (state </> "accounting.json") 0o600
+  writeConfig config (validConfig root (Seconds 10))
+  forM_ [sampleArguments config state,
+    ["check", "--config", config, "--state", state],
+    ["guard", "--config", config, "--state", state, "--", "sh", "-c", "touch \"$1\"", "sh", marker]] $ \arguments -> do
+      result <- timeout 3000000 (runCollector tool [] arguments)
+      case result of
+        Just (code, _, _) -> check (code /= ExitSuccess) "a FIFO is not an accounting state file"
+        Nothing -> check False "state file validation must not block opening a FIFO"
+  exists <- doesPathExist marker
+  check (not exists) "a FIFO state must not admit the guarded command"
 
 clearControl :: FilePath -> IO ()
 clearControl control = do

@@ -6,49 +6,43 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 module Main (main) where
 
-import Control.Concurrent (forkIO, newEmptyMVar, putMVar, takeMVar, threadDelay)
-import Control.Exception (IOException, bracket, catch, displayException, finally, try)
+import Control.Concurrent (myThreadId, throwTo)
+import Control.Exception (IOException, catch, displayException, try)
 import Control.Monad (forM, forM_, unless, when)
 import qualified Crypto.Hash.SHA256 as SHA
 import Data.Aeson (ToJSON, eitherDecodeStrict', encode)
-import Data.Bits ((.&.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
 import qualified Data.ByteString.Lazy as BL
 import Data.Char (toUpper)
-import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (nub, sortOn)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (catMaybes, isJust, listToMaybe, mapMaybe)
+import Data.Maybe (catMaybes, listToMaybe, mapMaybe)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.Text.Encoding.Error (lenientDecode)
 import Data.Time.Clock.POSIX (getPOSIXTime)
-import Foreign.C.Error (eAGAIN, eWOULDBLOCK, getErrno)
-import Foreign.C.Types (CInt (..))
 import qualified GHC.Foreign as GHC
 import GHC.Generics (Generic)
 import GHC.IO.Encoding (TextEncoding, getFileSystemEncoding)
 import Numeric (showHex)
 import StorageAccountingPolicy (checkAccounting, evaluateBudgets, validateProducerBudgets)
+import StorageAccountingRuntime (CommandOutcome (..))
+import qualified StorageAccountingRuntime as Runtime
 import StorageAccountingTypes
-import System.Directory (canonicalizePath, createDirectory, getHomeDirectory, makeAbsolute, removeFile, renameFile)
+import System.Directory (canonicalizePath, makeAbsolute)
 import System.Environment (getArgs)
 import System.Exit (ExitCode (..), die, exitFailure)
-import System.FilePath ((</>), isAbsolute, makeRelative, normalise, splitDirectories, takeDirectory)
-import System.IO (Handle, IOMode (ReadMode), hClose, hFlush, hPutStrLn, stderr, stdout, withBinaryFile)
-import System.IO.Error (isAlreadyExistsError, isDoesNotExistError, isPermissionError)
-import System.Posix.Files (FileStatus, deviceID, fileMode, fileOwner, getFdStatus, getFileStatus, getSymbolicLinkStatus, isDirectory, isRegularFile, isSymbolicLink, setFileMode)
-import System.Posix.IO (OpenFileFlags (..), OpenMode (..), closeFd, defaultFileFlags, fdToHandle, openFd)
+import System.FilePath ((</>), isAbsolute, normalise, splitDirectories, takeDirectory)
+import System.IO (IOMode (ReadMode), hFlush, hPutStrLn, stderr, stdout, withBinaryFile)
+import System.IO.Error (isDoesNotExistError, isPermissionError)
+import System.Posix.Files (FileStatus, deviceID, getFileStatus, getSymbolicLinkStatus, isDirectory, isSymbolicLink)
+import System.Posix.Signals (Handler (CatchOnce), installHandler, sigTERM)
+import System.Posix.Types (DeviceID)
 import System.Posix.Process (executeFile)
-import System.Posix.Types (Fd (..))
-import System.Posix.User (getEffectiveUserID, getUserEntryForID, homeDirectory)
-import System.Process (CreateProcess (..), ProcessHandle, StdStream (..), createProcess, getProcessExitCode, proc, terminateProcess)
-import System.Timeout (timeout)
 
-foreign import ccall unsafe "flock" c_flock :: CInt -> CInt -> IO CInt
 
 schemaVersion :: Int
 schemaVersion = 1
@@ -56,14 +50,13 @@ schemaVersion = 1
 maxScanDepth :: Int
 maxScanDepth = 8
 
-maxConfigBytes, maxStateBytes, maxDfOutput, maxStatOutput, maxBtrfsOutput, maxDuOutput, maxCommandStderr, maxIssuesPerProbe, maxDirectoryRecords, issueDetailLimit :: Int
+maxConfigBytes, maxStateBytes, maxDfOutput, maxStatOutput, maxBtrfsOutput, maxDuOutput, maxIssuesPerProbe, maxDirectoryRecords, issueDetailLimit :: Int
 maxConfigBytes = 4 * 1024 * 1024
 maxStateBytes = 256 * 1024 * 1024
 maxDfOutput = 1024 * 1024
 maxStatOutput = 1024 * 1024
 maxBtrfsOutput = 16 * 1024 * 1024
 maxDuOutput = 256 * 1024 * 1024
-maxCommandStderr = 16 * 1024
 maxIssuesPerProbe = 1000
 maxDirectoryRecords = 500000
 issueDetailLimit = 500
@@ -71,11 +64,6 @@ issueDetailLimit = 500
 usageText :: String
 usageText = "usage: storage-accounting sample --config FILE --state DIR [--filesystem-only] | check --config FILE --state DIR | guard --config FILE --state DIR -- COMMAND ARGS..."
 
-data CommandOutcome
-  = CommandCompleted ExitCode B.ByteString B.ByteString
-  | CommandTimedOut B.ByteString B.ByteString
-  | CommandOutputExceeded B.ByteString B.ByteString
-  | CommandSpawnFailed String
 
 data ProbeResult = ProbeResult { probeMeasurements :: [FilesystemMeasurement], probeIssues :: [CoverageIssue] }
 
@@ -88,7 +76,6 @@ data BudgetSummary = BudgetSummary
   , budgetSummaryProblemCount :: Int
   } deriving stock (Eq, Show, Generic) deriving anyclass (ToJSON)
 
-data SampleStatus = SampleComplete | SampleIncomplete deriving stock (Eq, Show, Generic) deriving anyclass (ToJSON)
 data SampleReport = SampleReport
   { sampleStatus :: SampleStatus
   , sampleStatePath :: StoragePath
@@ -109,7 +96,6 @@ data SampleReport = SampleReport
   , sampleBudgets :: [BudgetSummary]
   } deriving stock (Eq, Show, Generic) deriving anyclass (ToJSON)
 
-data CheckStatus = CheckHealthy | CheckUnhealthy deriving stock (Eq, Show, Generic) deriving anyclass (ToJSON)
 data CheckReport = CheckReport
   { checkStatus :: CheckStatus
   , checkConfigurationDigest :: ConfigurationDigest
@@ -130,7 +116,10 @@ data CheckReport = CheckReport
 data Evaluation = Evaluation { evaluationProblems :: [String], evaluationReport :: CheckReport }
 
 main :: IO ()
-main = (getArgs >>= dispatch) `catch` \(err :: IOException) -> die (displayException err)
+main = do
+  thread <- myThreadId
+  _ <- installHandler sigTERM (CatchOnce (throwTo thread (ExitFailure 143))) Nothing
+  (getArgs >>= dispatch) `catch` \(err :: IOException) -> die (displayException err)
 
 dispatch :: [String] -> IO ()
 dispatch ("sample" : arguments) = do
@@ -154,8 +143,8 @@ dispatch _ = die usageText
 parseOptions :: [String] -> IO (FilePath, FilePath, [String], Bool)
 parseOptions = go Nothing Nothing False
  where
-  go config state filesystemOnly ("--config" : value : rest) = go (Just value) state filesystemOnly rest
-  go config state filesystemOnly ("--state" : value : rest) = go config (Just value) filesystemOnly rest
+  go _ state filesystemOnly ("--config" : value : rest) = go (Just value) state filesystemOnly rest
+  go config _ filesystemOnly ("--state" : value : rest) = go config (Just value) filesystemOnly rest
   go config state _ ("--filesystem-only" : rest) = go config state True rest
   go config state filesystemOnly rest = do
     configFile <- maybe (die "missing --config FILE") pure config
@@ -165,20 +154,24 @@ parseOptions = go Nothing Nothing False
 sampleCommand :: FilePath -> FilePath -> Bool -> IO ()
 sampleCommand configFile stateArgument filesystemOnly = do
   (config, digest) <- loadConfig configFile
-  withStateLock stateArgument $ \directory -> do
+  Runtime.withStateLock stateArgument $ \directory -> do
     previousState <- readStateMaybe directory
     started <- nowEpoch
     filesystemProbe <- probeFilesystems config
+    ensure (not (null (probeMeasurements filesystemProbe)))
+      ("no filesystem measurements succeeded; previous state preserved\n" ++ unlines (reportedProblems (map renderIssue (probeIssues filesystemProbe))))
     (capacities, capacityIssues) <- probeBtrfs config (probeMeasurements filesystemProbe)
     (directories, directoryIssues) <- if filesystemOnly then pure ([], []) else scanDirectories config
+    allocations <- if filesystemOnly then pure [] else probeProducerAllocations config directories
     completed <- nowEpoch
-    let issues = sortOn issueOrder (probeIssues filesystemProbe ++ capacityIssues ++ directoryIssues)
+    let issues = sortOn issueOrder (probeIssues filesystemProbe ++ capacityIssues ++ directoryIssues ++ concatMap allocationCoverageIssues allocations)
         snapshot = AccountingSnapshot
           { snapshotSchemaVersion = schemaVersion
           , snapshotConfigurationDigest = digest
           , snapshotStartedAt = started
           , snapshotCompletedAt = completed
           , snapshotDirectories = sortOn directoryPath directories
+          , snapshotProducerAllocations = allocations
           , snapshotFilesystems = probeMeasurements filesystemProbe
           , snapshotBtrfsCapacity = capacities
           , snapshotCoverageIssues = issues
@@ -198,13 +191,13 @@ sampleCommand configFile stateArgument filesystemOnly = do
     writeStateFile directory state
     BL.putStr (encode (SampleReport
       { sampleStatus = if null issues then SampleComplete else SampleIncomplete
-      , sampleStatePath = StoragePath (stateFilePath directory)
+      , sampleStatePath = StoragePath (Runtime.stateDisplayPath directory </> "accounting.json")
       , sampleConfigurationDigest = digest
       , sampleSnapshotStartedAt = started
       , sampleSnapshotCompletedAt = completed
       , sampleFilesystemOnly = filesystemOnly
       , sampleDirectoryCount = length directories
-      , sampleFilesystemCount = length (probeMeasurements filesystemProbe)
+      , sampleFilesystemCount = length (dedupeMeasurements (probeMeasurements filesystemProbe))
       , sampleBtrfsCount = length capacities
       , sampleIssueCount = length issues
       , sampleIssueKinds = issueCounts issues
@@ -228,7 +221,7 @@ checkCommand configFile stateArgument = do
   BL.putStr (encode (evaluationReport evaluation))
   hFlush stdout
   unless (null (evaluationProblems evaluation)) $ do
-    forM_ (evaluationProblems evaluation) $ \problem -> hPutStrLn stderr ("storage accounting check: " ++ problem)
+    forM_ (reportedProblems (evaluationProblems evaluation)) $ \problem -> hPutStrLn stderr ("storage accounting check: " ++ problem)
     exitFailure
 
 guardCommand :: FilePath -> FilePath -> [String] -> IO ()
@@ -246,7 +239,7 @@ guardCommand configFile stateArgument command = do
         executable : arguments -> executeFile executable True arguments Nothing
         [] -> die "storage accounting guard: empty command"
     else do
-      forM_ (evaluationProblems evaluation) $ \problem -> hPutStrLn stderr ("storage accounting guard: " ++ problem)
+      forM_ (reportedProblems (evaluationProblems evaluation)) $ \problem -> hPutStrLn stderr ("storage accounting guard: " ++ problem)
       hFlush stderr
       exitFailure
 
@@ -255,17 +248,19 @@ evaluateCheck config digest state now = do
   live <- probeFilesystems config
   let current = stateCurrent state
       age = Seconds (max 0 (unEpoch now - unEpoch (snapshotCompletedAt current)))
+      currentGrowth = computeGrowth config (statePrevious state) current
       accountingProblems = case checkAccounting config digest now state of
-        Left problems -> problems
+        Left rejected -> rejected
         Right () -> []
-      coverageProblems =
-        let issues = snapshotCoverageIssues current
-        in if null issues
-             then []
-             else ["coverage incomplete: " ++ show (length issues) ++ " issue(s); first: " ++ renderIssue (head issues)]
+      coverageProblems = case snapshotCoverageIssues current of
+        [] -> []
+        firstIssue : remaining -> ["coverage incomplete: " ++ show (1 + length remaining) ++ " issue(s); first: " ++ renderIssue firstIssue]
       liveProblems =
         [ "live filesystem probe failed: " ++ renderIssue coverageIssue | coverageIssue <- probeIssues live ]
         ++ [ "no live filesystem measurement" | null (probeMeasurements live) ]
+        ++ [ "filesystem identity changed at a configured probe path; run sample again"
+           | Set.fromList [(filesystemProbePath row, filesystemId row) | row <- probeMeasurements live]
+             /= Set.fromList [(filesystemProbePath row, filesystemId row) | row <- snapshotFilesystems current] ]
         ++ [ "live free space below reserve: " ++ T.unpack (filesystemIdText (filesystemId measurement))
                ++ " available " ++ show (unByteCount (filesystemAvailableBytes measurement))
                ++ " reserve " ++ show (unByteCount (accountingReserveBytes config))
@@ -286,12 +281,15 @@ evaluateCheck config digest state now = do
         , checkLiveFilesystems = probeMeasurements live
         , checkReserveBytes = accountingReserveBytes config
         , checkLiveLowSpace = lowSpace
-        , checkGrowthCompatible = growthCompatibleBaseline (stateGrowth state)
-        , checkFilesystemGrowth = growthFilesystems (stateGrowth state)
-        , checkBudgets = budgetSummaries (stateBudgets state)
-        , checkProblems = map T.pack problems
+        , checkGrowthCompatible = growthCompatibleBaseline currentGrowth
+        , checkFilesystemGrowth = growthFilesystems currentGrowth
+        , checkBudgets = budgetSummaries (evaluateBudgets config current)
+        , checkProblems = map T.pack (reportedProblems problems)
         }
   pure (Evaluation problems report)
+
+reportedProblems :: [String] -> [String]
+reportedProblems = map (take 2000) . take 32
 
 loadConfig :: FilePath -> IO (AccountingConfig, ConfigurationDigest)
 loadConfig path = do
@@ -301,7 +299,7 @@ loadConfig path = do
   pure (config, digestBytes bytes)
 
 loadState :: FilePath -> IO AccountingState
-loadState argument = stateDirectory False argument >>= readStateRequired
+loadState argument = Runtime.withStateRead argument readStateRequired
 
 validateConfig :: AccountingConfig -> IO ()
 validateConfig config = do
@@ -382,16 +380,18 @@ probeFilesystems config = do
         | otherwise -> do
             measuredAt <- nowEpoch
             outcome <- runCommand (accountingCommandTimeout config) maxDfOutput "df" ["-B1", "--output=source,size,used,avail", "--", path]
-            pure $ case outcome of
+            case outcome of
               CommandCompleted ExitSuccess output _ ->
-                either (Left . issue InvalidOutput path) Right (parseDfOutput storagePath measuredAt output)
-              CommandCompleted (ExitFailure _) _ err -> Left (commandFailureIssue path err)
-              CommandTimedOut _ err -> Left (issue TimedOut path (appendDetail "df timed out" err))
-              CommandOutputExceeded _ err -> Left (issue ToolFailure path (appendDetail "df output exceeded bound" err))
-              CommandSpawnFailed message -> Left (issue ToolFailure path (T.pack message))
+                case parseDfOutput storagePath measuredAt output of
+                  Left problem -> pure (Left (issue InvalidOutput path problem))
+                  Right measurement -> identifyFilesystem config measurement
+              CommandCompleted (ExitFailure _) _ err -> pure (Left (commandFailureIssue path err))
+              CommandTimedOut _ err -> pure (Left (issue TimedOut path (appendDetail "df timed out" err)))
+              CommandOutputExceeded _ err -> pure (Left (issue ToolFailure path (appendDetail "df output exceeded bound" err)))
+              CommandSpawnFailed message -> pure (Left (issue ToolFailure path (T.pack message)))
   let issues = [coverageIssue | Left coverageIssue <- results]
-      measurements = dedupeMeasurements [measurement | Right measurement <- results]
-  pure (ProbeResult (sortOn filesystemId measurements) (sortOn issueOrder issues))
+      measurements = [measurement | Right measurement <- results]
+  pure (ProbeResult (sortOn filesystemProbePath measurements) (sortOn issueOrder issues))
 
 parseDfOutput :: StoragePath -> EpochSeconds -> B.ByteString -> Either Text FilesystemMeasurement
 parseDfOutput storagePath measuredAt output =
@@ -412,6 +412,28 @@ parseDfOutput storagePath measuredAt output =
           _ -> Left "df output contains non-numeric fields"
       _ -> Left "df output is missing fields"
 
+identifyFilesystem :: AccountingConfig -> FilesystemMeasurement -> IO (Either CoverageIssue FilesystemMeasurement)
+identifyFilesystem config measurement = do
+  let path = storagePathText (filesystemProbePath measurement)
+  outcome <- runCommand (accountingCommandTimeout config) maxStatOutput "stat" ["-f", "-c", "%T:%i", "--", path]
+  case outcome of
+    CommandCompleted ExitSuccess output _ -> case BC.lines output of
+      [value] | "btrfs:" `B.isPrefixOf` value -> identifyBtrfsFilesystem measurement
+      [value] | not (B.null value), BC.elem ':' value ->
+        pure (Right measurement { filesystemId = FilesystemId ("filesystem:" <> TE.decodeUtf8With lenientDecode value) })
+      _ -> pure (Left (issue InvalidOutput path "stat did not return a filesystem identity"))
+    CommandCompleted (ExitFailure _) _ err -> pure (Left (commandFailureIssue path err))
+    CommandTimedOut _ err -> pure (Left (issue TimedOut path (appendDetail "filesystem identity probe timed out" err)))
+    CommandOutputExceeded _ err -> pure (Left (issue ToolFailure path (appendDetail "filesystem identity output exceeded bound" err)))
+    CommandSpawnFailed problem -> pure (Left (issue ToolFailure path (T.pack problem)))
+
+identifyBtrfsFilesystem :: FilesystemMeasurement -> IO (Either CoverageIssue FilesystemMeasurement)
+identifyBtrfsFilesystem measurement = do
+  result <- try (Runtime.btrfsFilesystemId (filesystemProbePath measurement)) :: IO (Either IOException FilesystemId)
+  pure $ case result of
+    Right identity -> Right measurement { filesystemId = identity }
+    Left err -> Left (issue (classifyIOException err) (storagePathText (filesystemProbePath measurement)) (T.pack (displayException err)))
+
 dedupeMeasurements :: [FilesystemMeasurement] -> [FilesystemMeasurement]
 dedupeMeasurements = go Set.empty
  where
@@ -422,7 +444,7 @@ dedupeMeasurements = go Set.empty
 
 probeBtrfs :: AccountingConfig -> [FilesystemMeasurement] -> IO ([BtrfsCapacity], [CoverageIssue])
 probeBtrfs config measurements = do
-  results <- forM measurements $ \measurement -> do
+  results <- forM (dedupeMeasurements measurements) $ \measurement -> do
     let path = storagePathText (filesystemProbePath measurement)
     outcome <- runCommand (accountingCommandTimeout config) maxStatOutput "stat" ["-f", "-c", "%T", "--", path]
     case outcome of
@@ -532,7 +554,6 @@ scanDirectories config = do
       groups = Map.toList (Map.fromListWith (++) [(device, [root]) | (root, device) <- kept])
       setupIssues = [coverageIssue | Left coverageIssue <- prepared] ++ overlapIssues
   outcomes <- forM groups $ \(_, roots) -> do
-    -- One du invocation per device deduplicates hardlinks across every root on that device; hardlinks cannot cross devices.
     let ordered = sortOn (storagePathText . scanRootPath) roots
         maxDepth = maximum (map scanDepth ordered)
         arguments = ["-x", "-B1", "--null", "--max-depth=" ++ show maxDepth, "--"] ++ map (storagePathText . scanRootPath) ordered
@@ -542,11 +563,10 @@ scanDirectories config = do
       _ -> pure ([], 0)
     let (boundedRecords, truncated) = if length parsed > maxDirectoryRecords then (take maxDirectoryRecords parsed, True) else (parsed, False)
         rootPaths = map (storagePathText . scanRootPath) ordered
-        firstRoot = storagePathText (scanRootPath (head ordered))
-        measurements = recordsForGroup ordered boundedRecords
+        measurements = recordsForGroup config ordered boundedRecords
         recordIssues =
-          [issue InvalidOutput firstRoot "du produced a malformed record" | malformed > 0]
-          ++ [issue ToolFailure firstRoot "directory record bound exceeded; measurements are a lower bound" | truncated]
+          [issue InvalidOutput path "du produced a malformed record" | path <- rootPaths, malformed > 0]
+          ++ [issue ToolFailure path "directory record bound exceeded; measurements are a lower bound" | path <- rootPaths, truncated]
           ++ [issue InvalidOutput path "du produced no record for the scan root" | path <- rootPaths, not (any ((== path) . snd) boundedRecords)]
     outcomeIssues <- duOutcomeIssues ordered outcome
     pure (measurements, recordIssues ++ outcomeIssues)
@@ -554,16 +574,81 @@ scanDirectories config = do
       issues = setupIssues ++ concatMap snd outcomes
   pure (sortOn directoryPath (dedupeDirectories directories), sortOn issueOrder issues)
 
-recordsForGroup :: [ScanRoot] -> [(ByteCount, FilePath)] -> [DirectoryMeasurement]
-recordsForGroup roots = mapMaybe record
+recordsForGroup :: AccountingConfig -> [ScanRoot] -> [(ByteCount, FilePath)] -> [DirectoryMeasurement]
+recordsForGroup config roots = mapMaybe record
  where
-  record (size, path)
-    | any (\root -> maybe False (\depth -> depth <= scanDepth root) (relativeDepth (storagePathText (scanRootPath root)) path)) roots =
-        Just (DirectoryMeasurement (StoragePath path) size)
-    | otherwise = Nothing
+  origins = sortOn (negate . length . splitDirectories . storagePathText . scanRootPath) (accountingScanRoots config)
+  accepted = Set.fromList (map scanRootId roots)
+  record (size, path) = do
+    origin <- listToMaybe [root | root <- origins, inside (storagePathText (scanRootPath root)) path]
+    depth <- relativeDepth (storagePathText (scanRootPath origin)) path
+    if Set.member (scanRootId origin) accepted && depth <= scanDepth origin
+      then Just (DirectoryMeasurement (StoragePath path) size (scanRootId origin))
+      else Nothing
 
 dedupeDirectories :: [DirectoryMeasurement] -> [DirectoryMeasurement]
 dedupeDirectories = Map.elems . Map.fromList . map (\measurement -> (directoryPath measurement, measurement))
+
+probeProducerAllocations :: AccountingConfig -> [DirectoryMeasurement] -> IO [ProducerAllocation]
+probeProducerAllocations config directories = forM [budget | budget <- accountingBudgets config, producerByteBudget budget /= Nothing] $ \budget -> do
+  let copyPaths =
+        [ directoryPath row
+        | scope <- producerCopyScopes budget
+        , row <- directories
+        , let path = storagePathText (directoryPath row)
+        , path /= storagePathText (copyParent scope)
+        , takeDirectory path == storagePathText (copyParent scope)
+        , let CopyPrefix prefix = copyNamePrefix scope
+        , prefix `T.isPrefixOf` T.pack (last (splitDirectories path))
+        ]
+      owned = nub (producerPaths budget ++ copyPaths)
+      nested = [scanRootPath root | root <- accountingScanRoots config,
+        any (\parent -> inside (storagePathText parent) (storagePathText (scanRootPath root))) owned]
+      candidates = nub (owned ++ nested)
+  prepared <- mapM prepareScopePath candidates
+  let paths = normalizeScopeRoots [entry | Right entry <- prepared]
+      setupIssues = [problem | Left problem <- prepared]
+      scopeRoots = [ScanRoot (RootId "producer-allocation") path 0 | path <- paths]
+  if null paths
+    then pure (ProducerAllocation (producerId budget) (ByteCount 0) candidates setupIssues)
+    else do
+      outcome <- runCommand (accountingCommandTimeout config) maxDuOutput "du"
+        (["-x", "-B1", "--null", "--summarize", "--"] ++ map storagePathText paths)
+      (records, malformed) <- case outcome of
+        CommandCompleted _ output _ -> parseDuRecords output
+        _ -> pure ([], 0)
+      commandIssues <- duOutcomeIssues scopeRoots outcome
+      let expected = Set.fromList (map storagePathText paths)
+          observed = Map.fromList [(path, recordBytes) | (recordBytes, path) <- records, Set.member path expected]
+          missing = [issue InvalidOutput path "producer allocation has no directory measurement"
+            | path <- Set.toList expected, Map.notMember path observed]
+          invalid = [issue InvalidOutput (storagePathText path) "producer allocation contains malformed or unexpected records"
+            | path <- paths, malformed > 0 || length records /= Map.size observed]
+          bytes = ByteCount (sum [unByteCount value | value <- Map.elems observed])
+      pure (ProducerAllocation (producerId budget) bytes candidates (setupIssues ++ commandIssues ++ missing ++ invalid))
+
+prepareScopePath :: StoragePath -> IO (Either CoverageIssue (StoragePath, DeviceID))
+prepareScopePath scope = do
+  let path = storagePathText scope
+  result <- try (do
+    canonical <- canonicalizePath path
+    ensure (canonical == path) "producer scope is no longer canonical"
+    status <- getSymbolicLinkStatus path
+    ensure (isDirectory status && not (isSymbolicLink status)) "producer scope must be a directory"
+    pure (scope, deviceID status)) :: IO (Either IOException (StoragePath, DeviceID))
+  pure $ case result of
+    Right value -> Right value
+    Left problem -> Left (issue (classifyIOException problem) path (T.pack (displayException problem)))
+
+normalizeScopeRoots :: [(StoragePath, DeviceID)] -> [StoragePath]
+normalizeScopeRoots entries = map fst (foldl' add [] ordered)
+ where
+  ordered = sortOn (\(path, _) -> (length (splitDirectories (storagePathText path)), path)) entries
+  add kept candidate@(path, device) =
+    case sortOn (negate . length . splitDirectories . storagePathText . fst)
+      [entry | entry@(ancestor, _) <- kept, inside (storagePathText ancestor) (storagePathText path)] of
+      (_, ancestorDevice) : _ | ancestorDevice == device -> kept
+      _ -> candidate : kept
 
 parseDuRecords :: B.ByteString -> IO ([(ByteCount, FilePath)], Int)
 parseDuRecords output = do
@@ -610,13 +695,16 @@ stderrIssues roots err = do
       Just pathBytes -> do
         decoded <- try (decodeFilesystemPath pathBytes) :: IO (Either IOException FilePath)
         pure $ case decoded of
-          Right path -> (Just (issue (classifyMessage line) path (issueText line)), line)
-          Left _ -> (Nothing, line)
+          Right path | isAbsolute path, any (\root -> inside (storagePathText (scanRootPath root)) path) roots ->
+            (Just (issue (classifyMessage line) path (issueText line)), line)
+          _ -> (Nothing, line)
   let specific = take maxIssuesPerProbe [coverageIssue | (Just coverageIssue, _) <- mapped]
       genericLines = take 1 [line | (Nothing, line) <- mapped]
       generic = [issue (classifyMessage line) (storagePathText (scanRootPath root)) (issueText line) | root <- roots, line <- genericLines]
       fallback = [issue ToolFailure (storagePathText (scanRootPath root)) "du failed without diagnostics" | root <- roots, null rawLines]
-  pure (specific ++ generic ++ fallback)
+      truncated = [issue ToolFailure (storagePathText (scanRootPath root)) "du diagnostics exceeded the captured bound"
+        | root <- roots, B.length err >= 16 * 1024 || length mapped > maxIssuesPerProbe]
+  pure (specific ++ generic ++ fallback ++ truncated)
 
 extractQuoted :: B.ByteString -> Maybe B.ByteString
 extractQuoted line = do
@@ -684,17 +772,17 @@ computeGrowth config previous current = case previous of
   Just prior
     | snapshotConfigurationDigest prior /= snapshotConfigurationDigest current -> GrowthReport False [] []
     | snapshotFilesystemOnly prior /= snapshotFilesystemOnly current -> GrowthReport False [] []
-    | otherwise -> GrowthReport True (filesystemGrowth config current prior) (directoryGrowth current prior)
+    | otherwise -> GrowthReport True (filesystemGrowth config current prior) (directoryGrowth config current prior)
 
 filesystemGrowth :: AccountingConfig -> AccountingSnapshot -> AccountingSnapshot -> [FilesystemGrowth]
 filesystemGrowth config current previous =
   [ makeGrowth measurement prior
-  | measurement <- snapshotFilesystems current
+  | measurement <- dedupeMeasurements (snapshotFilesystems current)
   , Just prior <- [Map.lookup (filesystemId measurement) priorById]
   , filesystemMeasuredAt measurement > filesystemMeasuredAt prior
   ]
  where
-  priorById = Map.fromList [(filesystemId measurement, measurement) | measurement <- snapshotFilesystems previous]
+  priorById = Map.fromList [(filesystemId measurement, measurement) | measurement <- dedupeMeasurements (snapshotFilesystems previous)]
   makeGrowth measurement prior =
     let elapsed = Seconds (unEpoch (filesystemMeasuredAt measurement) - unEpoch (filesystemMeasuredAt prior))
         delta = unByteCount (filesystemUsedBytes measurement) - unByteCount (filesystemUsedBytes prior)
@@ -707,17 +795,35 @@ secondsToReserve config measurement rate =
   let gap = unByteCount (filesystemAvailableBytes measurement) - unByteCount (accountingReserveBytes config)
   in Seconds (if gap <= 0 then 0 else (gap * 86400) `quot` rate)
 
-directoryGrowth :: AccountingSnapshot -> AccountingSnapshot -> [DirectoryGrowth]
-directoryGrowth current previous
+directoryGrowth :: AccountingConfig -> AccountingSnapshot -> AccountingSnapshot -> [DirectoryGrowth]
+directoryGrowth config current previous
   | snapshotCompletedAt current <= snapshotCompletedAt previous = []
-  | otherwise = sortOn growthDirectory
-      [ DirectoryGrowth (directoryPath measurement) (ByteDelta (unByteCount (directoryAllocatedBytes measurement) - unByteCount priorBytes))
-      | measurement <- snapshotDirectories current
-      , Just priorBytes <- [Map.lookup (directoryPath measurement) priorByPath]
-      , directoryAllocatedBytes measurement /= priorBytes
+  | otherwise =
+      [ DirectoryGrowth path (ByteDelta (unByteCount after - unByteCount before))
+      | path <- Set.toAscList (Map.keysSet currentByPath `Set.union` Map.keysSet previousByPath)
+      , Just (before, after) <- [values path]
+      , before /= after
       ]
  where
-  priorByPath = Map.fromList [(directoryPath measurement, directoryAllocatedBytes measurement) | measurement <- snapshotDirectories previous]
+  currentByPath = Map.fromList [(directoryPath row, row) | row <- snapshotDirectories current]
+  previousByPath = Map.fromList [(directoryPath row, row) | row <- snapshotDirectories previous]
+  currentPaths = Map.keysSet currentByPath
+  previousPaths = Map.keysSet previousByPath
+  values path = case (Map.lookup path previousByPath, Map.lookup path currentByPath) of
+    (Just before, Just after) | directoryScanRoot before == directoryScanRoot after ->
+      Just (directoryAllocatedBytes before, directoryAllocatedBytes after)
+    (Nothing, Just after) | absenceKnown previous previousPaths after -> Just (ByteCount 0, directoryAllocatedBytes after)
+    (Just before, Nothing) | absenceKnown current currentPaths before -> Just (directoryAllocatedBytes before, ByteCount 0)
+    _ -> Nothing
+  absenceKnown snapshot knownPaths row = any covers (accountingScanRoots config)
+   where
+    target = storagePathText (directoryPath row)
+    covers root =
+      scanRootId root == directoryScanRoot row
+        && maybe False (<= scanDepth root) (relativeDepth (storagePathText (scanRootPath root)) target)
+        && Set.member (scanRootPath root) knownPaths
+        && all (\problem -> let failed = storagePathText (issuePath problem)
+            in not (inside failed target || inside target failed)) (snapshotCoverageIssues snapshot)
 
 nowEpoch :: IO EpochSeconds
 nowEpoch = EpochSeconds . floor <$> getPOSIXTime
@@ -728,191 +834,20 @@ digestBytes bytes = ConfigurationDigest (T.pack (concatMap hex (B.unpack (SHA.ha
   hex byte = let value = showHex byte "" in replicate (2 - length value) '0' ++ value
 
 runCommand :: Seconds -> Int -> FilePath -> [String] -> IO CommandOutcome
-runCommand timeoutValue outputLimit program arguments =
-  (do
-    result <- createProcess (proc program arguments) { std_in = NoStream, std_out = CreatePipe, std_err = CreatePipe }
-    case result of
-      (_, Just outHandle, Just errHandle, processHandle) -> do
-        outRef <- newIORef []
-        errRef <- newIORef []
-        overflowRef <- newIORef False
-        outDone <- newEmptyMVar
-        errDone <- newEmptyMVar
-        _ <- forkIO (readStream outHandle outputLimit outRef overflowRef processHandle True `finally` putMVar outDone ())
-        _ <- forkIO (readStream errHandle maxCommandStderr errRef overflowRef processHandle False `finally` putMVar errDone ())
-        let drain = do
-              outFinished <- timeout 2000000 (takeMVar outDone)
-              errFinished <- timeout 2000000 (takeMVar errDone)
-              pure (isJust outFinished && isJust errFinished)
-            collect = do
-              out <- B.concat . reverse <$> readIORef outRef
-              err <- B.concat . reverse <$> readIORef errRef
-              overflow <- readIORef overflowRef
-              pure (out, err, overflow)
-            closeBoth = closeQuietly outHandle >> closeQuietly errHandle
-        exited <- waitForProcessUntil processHandle (unSeconds timeoutValue * 1000000)
-        case exited of
-          Just exitCode -> do
-            finished <- drain
-            when finished closeBoth
-            (out, err, overflow) <- collect
-            pure (if overflow then CommandOutputExceeded out err else CommandCompleted exitCode out err)
-          Nothing -> do
-            terminateProcess processHandle `catch` \(_ :: IOException) -> pure ()
-            _ <- waitForProcessUntil processHandle 2000000
-            finished <- drain
-            when finished closeBoth
-            (out, err, _) <- collect
-            pure (CommandTimedOut out err)
-      (_, _, _, processHandle) -> do
-        terminateProcess processHandle `catch` \(_ :: IOException) -> pure ()
-        pure (CommandSpawnFailed "cannot create process pipes")
-  ) `catch` \(err :: IOException) -> pure (CommandSpawnFailed (displayException err))
+runCommand limit outputLimit = Runtime.runBoundedCommand limit (Runtime.OutputLimit outputLimit)
 
-readStream :: Handle -> Int -> IORef [B.ByteString] -> IORef Bool -> ProcessHandle -> Bool -> IO ()
-readStream handle limit chunksRef overflowRef processHandle stopOnOverflow = loop 0 `catch` \(_ :: IOException) -> pure ()
- where
-  loop total = do
-    chunk <- B.hGetSome handle 65536
-    if B.null chunk
-      then pure ()
-      else do
-        let remaining = limit - total
-        if remaining <= 0 || B.length chunk > remaining
-          then do
-            when (remaining > 0) $ modifyIORef' chunksRef (B.take remaining chunk :)
-            if stopOnOverflow
-              then do
-                writeIORef overflowRef True
-                terminateProcess processHandle `catch` \(_ :: IOException) -> pure ()
-                closeQuietly handle
-              else loop (total + B.length chunk)
-          else do
-            modifyIORef' chunksRef (chunk :)
-            loop (total + B.length chunk)
-
-waitForProcessUntil :: ProcessHandle -> Integer -> IO (Maybe ExitCode)
-waitForProcessUntil processHandle microseconds = do
-  start <- getPOSIXTime
-  let loop = do
-        exitCode <- getProcessExitCode processHandle
-        case exitCode of
-          Just code -> pure (Just code)
-          Nothing -> do
-            current <- getPOSIXTime
-            let elapsedMicroseconds = floor ((current - start) * 1000000) :: Integer
-            if elapsedMicroseconds >= microseconds
-              then pure Nothing
-              else threadDelay 10000 >> loop
-  loop
-
-closeQuietly :: Handle -> IO ()
-closeQuietly handle = hClose handle `catch` \(_ :: IOException) -> pure ()
-
-stateDirectory :: Bool -> FilePath -> IO FilePath
-stateDirectory create input = do
-  absoluteResult <- try (normalise <$> makeAbsolute input) :: IO (Either IOException FilePath)
-  absolute <- either (ioError . userError . ("state directory cannot be made absolute: " ++) . displayException) pure absoluteResult
-  statusResult <- try (getSymbolicLinkStatus absolute) :: IO (Either IOException FileStatus)
-  status <- case statusResult of
-    Right existing -> pure existing
-    Left err
-      | isDoesNotExistError err && create -> do
-          let parent = takeDirectory absolute
-          _ <- requireTrustedStatePath parent
-          created <- try (createDirectory absolute) :: IO (Either IOException ())
-          case created of
-            Left createError | not (isAlreadyExistsError createError) -> ioError createError
-            _ -> pure ()
-          getSymbolicLinkStatus absolute
-      | isDoesNotExistError err -> ioError (userError ("state directory does not exist: " ++ input))
-      | otherwise -> ioError err
-  ensure (isDirectory status && not (isSymbolicLink status)) "state directory must be a directory, not a symlink or file"
-  canonical <- requireTrustedStatePath absolute
-  caller <- getEffectiveUserID
-  ensure (fileOwner status == caller) "state directory must be owned by the invoking account"
-  if create
-    then setFileMode canonical 0o700
-    else ensure ((fileMode status .&. 0o077) == 0) "state directory must be owner-only"
-  pure canonical
-
-requireTrustedStatePath :: FilePath -> IO FilePath
-requireTrustedStatePath absolute = do
-  canonicalResult <- try (canonicalizePath absolute) :: IO (Either IOException FilePath)
-  canonical <- either (ioError . userError . ("state path cannot be canonicalized: " ++) . displayException) pure canonicalResult
-  environmentHome <- try (getHomeDirectory) :: IO (Either IOException FilePath)
-  passwdHome <- try (getEffectiveUserID >>= getUserEntryForID >>= \entry -> pure (homeDirectory entry)) :: IO (Either IOException FilePath)
-  let homePaths = nub (either (const []) (: []) environmentHome ++ either (const []) (: []) passwdHome)
-  homePairs <- fmap catMaybes $ forM homePaths $ \home -> do
-    homeCanonicalResult <- try (canonicalizePath home) :: IO (Either IOException FilePath)
-    pure $ case homeCanonicalResult of
-      Right homeCanonical -> Just (home, homeCanonical)
-      Left _ -> Nothing
-  let expected = case
-        [ normalise (homeCanonical </> makeRelative prefix absolute)
-        | (home, homeCanonical) <- homePairs
-        , prefix <- [home, homeCanonical]
-        , inside prefix absolute
-        ] of
-        candidate : _ -> candidate
-        [] -> absolute
-  ensure (canonical == expected) "state path must not redirect through a symlink"
-  pure canonical
-
-withStateLock :: FilePath -> (FilePath -> IO a) -> IO a
-withStateLock input action = do
-  directory <- stateDirectory True input
-  bracket (acquire directory) closeFd (\_ -> action directory)
- where
-  acquire directory = do
-    fd <- openFd (lockFilePath directory) ReadWrite defaultFileFlags { creat = Just 0o600, nofollow = True, cloexec = True }
-    status <- getFdStatus fd
-    caller <- getEffectiveUserID
-    if not (isRegularFile status && fileOwner status == caller)
-      then do
-        closeFd fd
-        ioError (userError "state lock must be a regular file owned by the invoking account")
-      else case fd of
-        Fd descriptor -> do
-          result <- c_flock descriptor 6
-          if result == 0
-            then pure fd
-            else do
-              errno <- getErrno
-              closeFd fd
-              if errno == eAGAIN || errno == eWOULDBLOCK
-                then ioError (userError "another storage accounting run holds the state lock")
-                else ioError (userError "cannot acquire storage accounting state lock")
-
-stateFilePath :: FilePath -> FilePath
-stateFilePath directory = directory </> "accounting.json"
-
-lockFilePath :: FilePath -> FilePath
-lockFilePath directory = directory </> "accounting.lock"
-
-tempFilePath :: FilePath -> FilePath
-tempFilePath directory = directory </> "accounting.json.tmp"
-
-readStateMaybe :: FilePath -> IO (Maybe AccountingState)
+readStateMaybe :: Runtime.StateDirectory -> IO (Maybe AccountingState)
 readStateMaybe directory = do
-  let path = stateFilePath directory
-  statusResult <- try (getSymbolicLinkStatus path) :: IO (Either IOException FileStatus)
-  case statusResult of
-    Left err
-      | isDoesNotExistError err -> pure Nothing
-      | otherwise -> ioError err
-    Right status -> do
-      caller <- getEffectiveUserID
-      ensure (isRegularFile status && not (isSymbolicLink status)) "accounting state must be a regular file"
-      ensure (fileOwner status == caller) "accounting state must be owned by the invoking account"
-      ensure ((fileMode status .&. 0o077) == 0) "accounting state must not be accessible by other accounts"
-      bytes <- readBoundedFile maxStateBytes path
-      state <- either (ioError . userError . ("malformed accounting state: " ++)) pure (eitherDecodeStrict' bytes)
+  bytes <- Runtime.readStateBytes (Runtime.OutputLimit maxStateBytes) directory
+  case bytes of
+    Nothing -> pure Nothing
+    Just payload -> do
+      state <- either (ioError . userError . ("malformed accounting state: " ++)) pure (eitherDecodeStrict' payload)
       ensure (stateSchemaVersion state == schemaVersion) "unsupported accounting state schema"
       ensure (snapshotSchemaVersion (stateCurrent state) == schemaVersion) "unsupported accounting snapshot schema"
       pure (Just state)
 
-readStateRequired :: FilePath -> IO AccountingState
+readStateRequired :: Runtime.StateDirectory -> IO AccountingState
 readStateRequired directory = readStateMaybe directory >>= maybe (ioError (userError "no accounting state; run sample first")) pure
 
 readBoundedFile :: Int -> FilePath -> IO B.ByteString
@@ -926,32 +861,8 @@ readBoundedFile limit path = withBinaryFile path ReadMode $ \handle -> go handle
         then ioError (userError ("file exceeds accounting bound: " ++ path))
         else go handle (total + B.length chunk) (chunk : chunks)
 
-writeStateFile :: FilePath -> AccountingState -> IO ()
-writeStateFile directory state = do
-  let target = stateFilePath directory
-      temporary = tempFilePath directory
-      payload = encode state
-  ensure (BL.length payload <= fromIntegral maxStateBytes) "accounting state exceeds the configured bound"
-  removeIfExists temporary
-  fd <- openFd temporary WriteOnly defaultFileFlags { creat = Just 0o600, exclusive = True, nofollow = True, cloexec = True }
-  handle <- fdToHandle fd
-  (BL.hPut handle payload >> hFlush handle) `finally` hClose handle
-  setFileMode temporary 0o600
-  canonicalResult <- try (canonicalizePath directory) :: IO (Either IOException FilePath)
-  canonical <- either (ioError . userError . ("state directory changed during write: " ++) . displayException) pure canonicalResult
-  ensure (canonical == directory) "state directory changed during write"
-  renameFile temporary target
-
-removeIfExists :: FilePath -> IO ()
-removeIfExists path = do
-  result <- try (getSymbolicLinkStatus path) :: IO (Either IOException FileStatus)
-  case result of
-    Left err
-      | isDoesNotExistError err -> pure ()
-      | otherwise -> ioError err
-    Right status -> do
-      ensure (not (isDirectory status)) "state temporary path is a directory"
-      removeFile path
+writeStateFile :: Runtime.StateDirectory -> AccountingState -> IO ()
+writeStateFile directory = Runtime.writeStateBytes (Runtime.OutputLimit maxStateBytes) directory . encode
 
 ensure :: Bool -> String -> IO ()
 ensure condition message = unless condition (ioError (userError message))
