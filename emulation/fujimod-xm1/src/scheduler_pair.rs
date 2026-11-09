@@ -4,6 +4,7 @@ use fujimod_emulator::board::observation::{MemoryWatch, ViewPolicy, WatchKinds, 
 use fujimod_emulator_cpu::{Access, Cpu, Hook, HookId, HookRange, InstructionEntryId, Register, arm};
 use fujimod_xm1::bridge::{read, sha256};
 use fujimod_xm1::guest::RouteKey;
+use fujimod_xm1::provenance::Guest;
 use fujimod_xm1::machine::{Hold, KeyPulse, Machine, RunOutcome, key_pulse};
 use fujimod_xm1::run::{self, RunDocument, ValidatedUpdate};
 use serde::{Deserialize, Serialize, Serializer};
@@ -562,12 +563,12 @@ impl OpenCalls {
         self.count -= closed.len();
         closed
     }
-    fn take_where(&mut self, mut predicate: impl FnMut(&ReturnKey, &OpenCall) -> bool) -> Vec<OpenCall> {
+    fn take_where(&mut self, mut predicate: impl FnMut(&ReturnKey, &OpenCall) -> bool) -> Vec<(ReturnKey, OpenCall)> {
         let mut taken = Vec::new();
         self.pending.retain(|key, calls| {
             let mut kept = Vec::new();
             for call in calls.drain(..) {
-                if predicate(key, &call) { taken.push(call); } else { kept.push(call); }
+                if predicate(key, &call) { taken.push((*key, call)); } else { kept.push(call); }
             }
             *calls = kept;
             !calls.is_empty()
@@ -1582,7 +1583,7 @@ impl Observer<'_> {
             for address in spellings(continuation & !ALIAS) {
                 if self.return_sites.contains(&address) { continue; }
                 if !machine.traces.sites.contains_key(&address) {
-                    require(machine.traces.sites.len() < SITE_LIMIT, "continuation site bound exceeded")?;
+                    require(machine.traces.sites.len() < SITE_LIMIT, &format!("continuation site bound exceeded at {address:#x}"))?;
                     machine.traces.add_sites(&machine.session, [(address, CONTINUATION_LABEL.to_owned())].into_iter().collect())?;
                 }
                 self.return_sites.insert(address);
@@ -1634,14 +1635,25 @@ impl Observer<'_> {
         Ok(())
     }
 
-    fn complete(&mut self, machine: &Machine, context: &Context, tcm: [u32; 2]) -> Result<(), String> {
+    fn complete(&mut self, machine: &mut Machine, context: &Context, tcm: [u32; 2]) -> Result<(), String> {
         let key = ReturnKey::of(context, context.pc);
         let closed = self.open.close(&key);
         if closed.is_empty() { self.unrelated_continuations += 1; }
         if context.r0 == 0 && closed.iter().any(|call| call.entry.slot.semantic == (Semantic::Helper { name: Helper::Acquire })) {
             self.boundary(machine,context,tcm,BoundaryKind::Acquired,Some(0))?;
         }
-        self.finish(machine, context, tcm, closed, Completion::Return)
+        self.finish(machine, context, tcm, closed, Completion::Return)?;
+        self.retire_continuation(machine, &key)
+    }
+
+    fn retire_continuation(&mut self, machine: &mut Machine, key: &ReturnKey) -> Result<(), String> {
+        for address in spellings(key.pc) {
+            if self.open.pending.keys().any(|other| spellings(other.pc).contains(&address)) { continue; }
+            if self.return_sites.remove(&address) {
+                machine.traces.remove_sites(&machine.session, &[Guest(address)])?;
+            }
+        }
+        Ok(())
     }
 
     /// A timer expiry belongs to the parked owner, not to the callback's current call.
@@ -1667,7 +1679,7 @@ impl Observer<'_> {
         Ok(())
     }
 
-    fn boundary(&mut self, machine: &Machine, context: &Context, tcm: [u32; 2], kind: BoundaryKind, value: Option<u32>) -> Result<(), String> {
+    fn boundary(&mut self, machine: &mut Machine, context: &Context, tcm: [u32; 2], kind: BoundaryKind, value: Option<u32>) -> Result<(), String> {
         let order = self.next_order();
         let board = Board { machine, maps: &self.maps };
         for (key, calls) in &mut self.open.pending {
@@ -1691,17 +1703,19 @@ impl Observer<'_> {
         Ok(())
     }
 
-    fn dispatch_boundary(&mut self, machine: &Machine, context: &Context, tcm: [u32; 2], semantic: Option<Semantic>) -> Result<Option<(DispatchPoint,Vec<Boundary>)>, String> {
+    fn dispatch_boundary(&mut self, machine: &mut Machine, context: &Context, tcm: [u32; 2], semantic: Option<Semantic>) -> Result<Option<(DispatchPoint,Vec<Boundary>)>, String> {
         let closed = self.open.take_where(|key, call| call.dispatch_complete(key, context, semantic));
         let origin = if semantic == Some(Semantic::Dispatch { name: DispatchPoint::Select }) {
-            closed.last().and_then(|call| match call.entry.slot.semantic {
+            closed.last().and_then(|(_,call)| match call.entry.slot.semantic {
                 Semantic::Dispatch { name } => Some((call.entry.origin.unwrap_or(name), call.history.iter()
                     .filter(|event| matches!(event.kind,BoundaryKind::SelectedRead | BoundaryKind::DiscardedRead | BoundaryKind::EnabledRead | BoundaryKind::GlobalLockRead))
                     .map(|event| { let mut inherited=event.clone(); inherited.writes.clear(); inherited.bank.clear(); inherited }).collect())),
                 _ => None,
             })
         } else { None };
-        if !closed.is_empty() { self.finish(machine, context, tcm, closed, Completion::Dispatched)?; }
+        if !closed.is_empty() {
+            self.finish(machine, context, tcm, closed.iter().map(|(_,call)| call.clone()).collect(), Completion::Dispatched)?;
+        }
         let kind = match semantic {
             Some(Semantic::Dispatch { name: DispatchPoint::Save }) => Some(BoundaryKind::Save),
             Some(Semantic::Dispatch { name: DispatchPoint::Resume }) => Some(BoundaryKind::Resume),
@@ -1711,8 +1725,10 @@ impl Observer<'_> {
         if let Some(kind) = kind { self.boundary(machine, context, tcm, kind, Some(context.r0))?; }
         if kind == Some(BoundaryKind::NoSave) {
             let discarded = self.open.take_where(|key, call| key.core == context.core && call.entry.task == context.current && matches!(call.entry.slot.semantic, Semantic::Service { .. } | Semantic::Family { .. } | Semantic::Semaphore { .. }));
-            self.finish(machine, context, tcm, discarded, Completion::Discard)?;
+            self.finish(machine, context, tcm, discarded.iter().map(|(_,call)| call.clone()).collect(), Completion::Discard)?;
+            for (key,_) in &discarded { self.retire_continuation(machine, key)?; }
         }
+        for (key,_) in &closed { self.retire_continuation(machine, key)?; }
         Ok(origin)
     }
 
@@ -1743,9 +1759,10 @@ impl Observer<'_> {
                         cpacr: board.register(core, arm::Register::Cpacr)?,
                         fpexc: board.register(core, arm::Register::Fpexc)?, tpidrurw: board.cp15(core, 13, 0, 2)? };
                     self.demand_paging.push(demand);
-                    for mut call in closed {
+                    for (key, mut call) in closed {
                         call.record(boundary.clone())?;
                         self.finish(machine, &transfer, tcm, vec![call], Completion::Dispatched)?;
+                        self.retire_continuation(machine, &key)?;
                     }
                     let root = match core { Core::Primary => 0x4004dae0, Core::Secondary => 0x400ddaa0 };
                     for offset in (0..=0x124).step_by(4) {
@@ -1753,7 +1770,7 @@ impl Observer<'_> {
                         for view in spellings(address & !ALIAS) {
                             self.demand_services.insert((core,view),root+offset);
                             if !machine.traces.sites.contains_key(&view) {
-                                require(machine.traces.sites.len() < SITE_LIMIT, "demand service site bound exceeded")?;
+                                require(machine.traces.sites.len() < SITE_LIMIT, &format!("demand service site bound exceeded at {view:#x}"))?;
                                 machine.traces.add_sites(&machine.session, [(view,"scheduler-demand-service".into())].into_iter().collect())?;
                             }
                         }
@@ -1816,21 +1833,24 @@ impl Observer<'_> {
                     }
                     if kind == BoundaryKind::DiscardedRead && value == 1 && self.validated.plan.probes[index].register.0 == 3 {
                         let discarded = self.open.take_where(|key,call| key.core==core && call.entry.task==context.current && matches!(call.entry.slot.semantic,Semantic::Service { .. } | Semantic::Family { .. } | Semantic::Semaphore { .. }));
-                        self.finish(machine,&context,tcm,discarded,Completion::Discard)?;
+                        self.finish(machine,&context,tcm,discarded.iter().map(|(_,call)| call.clone()).collect(),Completion::Discard)?;
+                        for (key,_) in &discarded { self.retire_continuation(machine,key)?; }
                     }
                     if kind == BoundaryKind::SelectedRead && self.validated.plan.probes[index].register.0 == 1 {
                         require(value != 0 || !self.dispatched[core.index()], "null selected task after first dispatch")?;
                         if value != 0 {
                             let destination = committed(Board { machine, maps: &self.maps }.word(core,tcm,value+0x1c)?)? & !1;
                             if !machine.traces.sites.contains_key(&destination) {
-                                require(machine.traces.sites.len()<SITE_LIMIT, "dispatch destination site bound exceeded")?;
+                                require(machine.traces.sites.len()<SITE_LIMIT, &format!("dispatch destination site bound exceeded at {destination:#x}"))?;
                                 machine.traces.add_sites(&machine.session, [(destination,CONTINUATION_LABEL.to_owned())].into_iter().collect())?;
                             }
                             self.return_sites.insert(destination);
-                            let selected = self.open.take_where(|key,call| key.core==core && matches!(call.entry.slot.semantic,Semantic::Dispatch { name: DispatchPoint::Select }));
-                            for call in selected {
+                            let selected = self.open.take_where(|key,call| key.core==core && matches!(call.entry.slot.semantic, Semantic::Dispatch { name: DispatchPoint::Select }));
+                            let selectedKeys: Vec<ReturnKey> = selected.iter().map(|(key,_)| *key).collect();
+                            for (_,call) in selected {
                                 self.open.open(ReturnKey { core,pc:destination,sp:0,task:None,mode:0 },call)?;
                             }
+                            for key in selectedKeys { self.retire_continuation(machine,&key)?; }
                             self.dispatched[core.index()] = true;
                         }
                     }
