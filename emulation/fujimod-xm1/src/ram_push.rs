@@ -2115,14 +2115,140 @@ mod tests {
     }
 
     #[test]
-    fn display_key_without_a_presentation_returns_and_logs_the_failed_key() {
-        let mut server = server(&[0xeafffffe]);
-        server.arm(&BTreeMap::from([("0x006d76ec".to_owned(), "render-osd-buffer".to_owned())])).unwrap();
-        let response = server.handle(request(json!({"command": "display-key", "key": "back"}))).unwrap().unwrap();
-        assert!(response["failure"].is_string());
-        assert_eq!(response["publication"], Value::Null);
-        assert_eq!(server.key_log.len(), 1);
-        assert!(server.key_log[0]["failure"].is_string());
+    fn display_key_fails_a_later_presentation_and_retains_the_acknowledged_key() {
+        use fujimod_emulator_cpu::{Register, arm};
+        // Original synthetic ADC scanner and presentation caller, A32 little-endian.
+        let program = [
+            0xe59fa11c, 0xe3a00008, 0xe58a0004, 0xe3a00c02, 0xe58a0008, 0xe3a00902, 0xe3800005, 0xe58a0000,
+            0xe59fc100, 0xe3a05603, 0xe3a00000, 0xe5850000, 0xe2856004, 0xe5860000, 0xe59a0054, 0xe3a01b01,
+            0xe2411001, 0xe1500001, 0x03a02000, 0x13a02001, 0xe5cc2000, 0xe5953000, 0xe3530000, 0x0a000002,
+            0xe3530003, 0x0a000013, 0xeafffff2, 0xe3520001, 0x1afffff0, 0xe3a03003, 0xe5853000, 0xe59fb0a8,
+            0xe59fd0a8, 0xe28fe004, 0xe59f30a4, 0xe12fff13, 0xe3a00000, 0xe28fe004, 0xe59f3098, 0xe12fff13,
+            0xe28fe008, 0xe59f3090, 0xe3a04000, 0xe12fff13, 0xe59f9088, 0xeaffffdf, 0xe2599001, 0x1affffdd,
+            0xe3a03004, 0xe5853000, 0xe59f4074, 0xe1a0e004, 0xe59f4070, 0xe12fff14, 0xe28fe004, 0xe59f4068,
+            0xe12fff14, 0xe59fb064, 0xe59fd064, 0xe28fe004, 0xe59f303c, 0xe12fff13, 0xe3a00001, 0xe28fe004,
+            0xe59f3030, 0xe12fff13, 0xe28fe008, 0xe59f3028, 0xe3a04001, 0xe12fff13, 0xe3a03005, 0xe5853000,
+            0xeaffffc4, 0xfff8a000, 0x00828365, 0x00a01000, 0x00a01004, 0x006d7920, 0x006d7da4, 0x006d7df4,
+            0x00a7d8c0, 0x006d7b3c, 0x006d76ec, 0x006d7d44, 0x00a02000, 0x00a02004,
+        ];
+        let mut server = server(&program);
+        let put = |address: u64, bytes: &[u8]| {
+            server.bridge.machine.session.board.write_physical(address, bytes).unwrap();
+        };
+        put(0x0089_f7c8, &1u32.to_le_bytes());
+        put(0x0096_ca50, &0x0020_0000u32.to_le_bytes());
+        for (row, code, low_tag, high_tag, low, high) in [
+            (18u64, 1u32, 14230u16, 14228u16, 100u16, 200u16),
+            (19, 50, 14234, 14232, 300, 400),
+            (20, 9, 14238, 14236, 500, 600),
+        ] {
+            let record = 0x0082_8120 + row * 28;
+            put(record, &code.to_le_bytes());
+            put(record + 9, &[1]);
+            put(record + 12, &9u32.to_le_bytes());
+            put(record + 16, &low_tag.to_le_bytes());
+            put(record + 18, &high_tag.to_le_bytes());
+            put(0x0020_0000 + u64::from(low_tag), &low.to_le_bytes());
+            put(0x0020_0000 + u64::from(high_tag), &high.to_le_bytes());
+        }
+        put(0x014e_32ba, &0x4001u16.to_le_bytes());
+        put(0x014e_32bc, &[1]);
+        put(0x014e_3338, &[1]);
+        put(0x015e_46d0, &0x4001u16.to_le_bytes());
+        put(0x015e_46d2, &[1]);
+        put(0x015e_470d, &[1]);
+        for (record, table, descriptors, entries) in [
+            (0x0005_4610u64, 0x4006_0000u32, 0x0006_1000u64, [0x00c2_2f60u32, 0x006d_2700]),
+            (0x0005_4694, 0x4006_2000, 0x0006_3000, [0x006d_7540, 0x0110_9130]),
+        ] {
+            put(record, &table.to_le_bytes());
+            put(record + 4, &2u32.to_le_bytes());
+            for (index, entry) in entries.into_iter().enumerate() {
+                let row = u64::from(table & 0x3fff_ffff) + index as u64 * 0x38;
+                let descriptor = descriptors + index as u64 * 0x28;
+                put(row + 8, &(descriptor as u32).to_le_bytes());
+                put(row + 12, &0x12u32.to_le_bytes());
+                put(descriptor + 8, &entry.to_le_bytes());
+                put(descriptor + 36, &1u32.to_le_bytes());
+            }
+        }
+        put(0x00a1_0000, &0xe581_0000u32.to_le_bytes());
+        put(0x00a1_0004, &0xeaff_fffeu32.to_le_bytes());
+        for (address, words) in [
+            (0x006d_7920u64, [0xe92d_49f0u32, 0xe12f_ff1e]),
+            (0x006d_7da4, [0xe284_4f46, 0xe12f_ff1e]),
+            (0x006d_7df4, [0xe1a0_0004, 0xe12f_ff1e]),
+            (0x006d_76ec, [0xe1a0_0000, 0xe12f_ff1e]),
+            (0x006d_7d44, [0xe1a0_0000, 0xe12f_ff1e]),
+            (0x006d_7b3c, [0xe51f_f004, 0x8000_00e4]),
+        ] {
+            for (index, word) in words.into_iter().enumerate() {
+                put(address + index as u64 * 4, &word.to_le_bytes());
+            }
+        }
+        put(0x2000, &[255, 30, 60, 210].repeat(4));
+        put(0x3000, &[128, 40, 50, 60, 128, 70, 80, 90, 0, 0, 0, 0, 128, 10, 20, 30, 128, 50, 60, 70]);
+        for (offset, value) in [
+            (0x00u64, 11u32 << 24), (0x10, 0x0001_0001), (0x84, 1), (0x90, 0x11), (0x94, 0), (0x98, 0),
+            (0xa4, 0x0001_0001), (0xa8, 0x0001_0001), (0xb4, 0x2000), (0xb8, 0x3000), (0xc4, 0),
+            (0xc8, 1), (0xe4, 0x8080), (0x108, 3), (0x11c, 0), (0x120, 0), (0x124, 0), (0x128, 0),
+            (0x16c, 1), (0x174, 4), (0x178, 10), (0x17c, 20), (0x188, 0), (0x18c, 128), (0x190, 0),
+        ] {
+            let machine = &mut server.bridge.machine;
+            machine.session.board.write_register(0, Register::Pc, 0x00a1_0000).unwrap();
+            machine.session.board.write_register(0, arm::CORE[0], u64::from(value)).unwrap();
+            machine.session.board.write_register(0, arm::CORE[1], 0xfff6_b000 + offset).unwrap();
+            machine.run(1);
+            machine.require_running().unwrap();
+        }
+        server.bridge.machine.session.board.write_register(0, Register::Pc, 0).unwrap();
+        server.arm(&BTreeMap::from([
+            ("0x006d76ec".to_owned(), "render-osd-buffer".to_owned()),
+            ("0x006d7d44".to_owned(), "render-osd-increment".to_owned()),
+        ])).unwrap();
+        type FaultReceipt = std::cell::Cell<Option<(fujimod_emulator_cpu::Fault, u64, i32)>>;
+        unsafe fn capture_fault(kind: fujimod_emulator_cpu::Fault, address: u64, bytes: i32, _: i64, data: *mut std::ffi::c_void) -> bool {
+            let receipt = unsafe { &*data.cast::<FaultReceipt>() };
+            receipt.set(Some((kind, address, bytes)));
+            false
+        }
+        let fault = Box::new(FaultReceipt::new(None));
+        let fault_hook = unsafe { server.bridge.machine.session.board.cpu(0).unwrap().install_hook(fujimod_emulator_cpu::Hook::Fault {
+            callback: capture_fault, data: (&*fault as *const FaultReceipt).cast_mut().cast(),
+        }) }.unwrap();
+        let mut output = Vec::new();
+        server.serve_io(b"{\"command\":\"display-key\",\"key\":\"back\"}\n".as_slice(), &mut output).unwrap();
+        let responses: Vec<Value> = output.split(|byte| *byte == b'\n').filter(|line| !line.is_empty())
+            .map(|line| serde_json::from_slice(line).unwrap()).collect();
+        let result = responses.last().unwrap();
+        let board = &server.bridge.machine.session.board;
+        let cpu = board.cpu(0).unwrap();
+        cpu.remove_hook(fault_hook).unwrap();
+        eprintln!("exact access fault: {:?}", fault.get());
+        let cp = |crn, crm, opc2| cpu.coprocessor(arm::Coprocessor {
+            cp: 15, opc1: 0, crn, crm, opc2, secure: 0, wide: false,
+        }, None).unwrap();
+        eprintln!("publication fault: result={result:?} pc={:?} cpsr={:?} spsr={:?} ifar={:#x} ifsr={:#x} dfar={:#x} dfsr={:#x} sctlr={:#x} rgnr={:#x}",
+            board.read_register(0, Register::Pc), board.read_register(0, Register::Arm32(arm::Register::Cpsr)),
+            board.read_register(0, Register::Arm32(arm::Register::Spsr)), cp(6, 0, 2), cp(5, 0, 1), cp(6, 0, 0), cp(5, 0, 0), cp(1, 0, 0), cp(6, 2, 0));
+        let region_number = arm::Coprocessor { cp: 15, opc1: 0, crn: 6, crm: 2, opc2: 0, secure: 0, wide: false };
+        let saved_region = cp(6, 2, 0);
+        for region in 0..12u64 {
+            cpu.coprocessor(region_number, Some(region)).unwrap();
+            eprintln!("MPU region {region}: base={:#x} size={:#x} access={:#x}", cp(6, 1, 0), cp(6, 1, 2), cp(6, 1, 4));
+        }
+        cpu.coprocessor(region_number, Some(saved_region)).unwrap();
+        let receipt: Value = serde_json::from_slice(
+            &std::fs::read(server.output.join("emulator-session.json")).unwrap()).unwrap();
+        assert_eq!(result["ok"], false, "{result}");
+        let error = result["message"].as_str().unwrap();
+        assert!(error.contains("presentation handler did not succeed"), "{error}");
+        assert_eq!(receipt["bridge_error"], error);
+        assert_eq!(receipt["key_log"].as_array().unwrap().len(), 1);
+        assert_eq!(receipt["key_log"][0]["publication"], Value::Null);
+        assert_eq!(receipt["key_log"][0]["failure"], error);
+        assert_eq!(receipt["key_log"][0]["presentation"]["status"], "acknowledged");
+        std::fs::remove_dir_all(&server.output).unwrap();
     }
 
     #[test]
