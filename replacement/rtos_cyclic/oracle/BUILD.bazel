@@ -49,6 +49,55 @@ haskell_library(
     ],
 )
 
+haskell_library(
+    name = "app-suite",
+    srcs = ["Replacement/RtosCyclic/AppSuite.hs"],
+    src_strip_prefix = ".",
+    ghcopts = _GHCOPTS,
+    deps = [
+        "//emulation:cached-native-batch",
+        "//emulation:native-observation",
+        "//emulation:owned-case",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:filepath",
+    ],
+)
+
+haskell_binary(
+    name = "app-callback-oracle",
+    srcs = ["AppMain.hs"],
+    main_file = "AppMain.hs",
+    args = [
+        "--runner",
+        "$(rootpath //emulation:native-runner)",
+        "--owned-bin",
+        "$(rootpath //replacement/rtos_cyclic:app-callback.bin)",
+        "--owned-symbols",
+        "$(rootpath //replacement/rtos_cyclic:app-callback.symbols)",
+    ],
+    data = [
+        "//emulation:native-runner",
+        "//replacement/rtos_cyclic:app-callback.bin",
+        "//replacement/rtos_cyclic:app-callback.symbols",
+    ],
+    ghcopts = _GHCOPTS,
+    tags = ["manual"],
+    deps = [
+        ":app-suite",
+        "//emulation:case-sha256",
+        "//emulation:owned-case",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:storage-budget",
+    ],
+)
+
 _INPUTS = [
     ":layout.json",
     "//emulation:native-runner",
