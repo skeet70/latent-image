@@ -88,8 +88,8 @@ runBoundedCommand timeoutValue (OutputLimit outputLimit) program arguments
           let cleanup = do
                 alreadyCleaned <- readIORef cleaned
                 unless alreadyCleaned $ do
-                  writeIORef cleaned True
                   cleanupProcess processGroup processHandle outThread errThread outHandle errHandle outDone errDone
+                  writeIORef cleaned True
               body = do
                 start <- getMonotonicTimeNSec
                 let deadline = toInteger start + timeoutMicros * 1000
