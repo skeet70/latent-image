@@ -519,10 +519,12 @@ Before every aggregate single-instruction `Machine::run(1)`, the worker validate
 
 `//emulation:native-runner` is `fujimod-xm1-native-case` from `@lab_fujimod_xm1` (`emulation/fujimod-xm1/src/native_case.rs`). It runs one case on the pinned FujiMod raw Unicorn Cortex-R5F core with a closed ARM/little-endian user-mode profile for synthetic and admitted stock cases. Unicorn has no Cortex-R4; R5F is its closest model to the ARMv7-R, PMSAv7, VFPv3-D16 core inferred for the X-M1 in [E-CPU-PROFILE](../reports/firmware-extraction.md#cpu-profile). This is a Cortex-R5F engine with R4F exclusions, not a general R4F qualification. Nothing may depend on R5F-only behavior ([rule](../docs/principles.md#scope-and-evidence)); the runner refuses A32 SDIV/UDIV through `r4f::classify_a32`, and coprocessor exclusion keeps R5F ID, MPU and TCM/cache registers out of reach. Synthetic fixtures supply no X-M1 behavior or ABI evidence. No camera is enumerated or opened. `unicorn-info.c` remains the smaller engine-initialization check. Follow [phase 3](../spec/03-phases-and-gates.md#3b-native-function-harness) and the [runtime contract](../spec/08-artifact-and-runtime-contracts.md). Retained host C models do not establish a general C policy; [current principles](../docs/principles.md#implementation-and-build) govern new implementation and migration.
 
+For rewrite increments, follow [native rewrite qualification](../replacement/README.md#native-rewrite-qualification) for build selection, affected-caller checks, admission diagnostics and full-integration boundaries.
+
 ```sh
-devenv shell -- bazel test //emulation:native-runner-tests
-devenv shell -- bazel build //emulation:native-runner
-devenv shell -- bazel run //emulation:native-case -- --runner bazel-bin/emulation/native-runner emulation/fixtures/arithmetic.json
+devenv shell -- host-build test --jobs=2 --local_test_jobs=1 //emulation:native-sdk-tests //emulation:native-runner-tests
+devenv shell -- host-build build --jobs=2 //emulation:native-runner
+devenv shell -- env XM1_EMULATOR_SLOTS=1 host-build run --jobs=2 //emulation:native-case -- --runner bazel-bin/emulation/native-runner emulation/fixtures/arithmetic.json
 ```
 
 The last command prints a JSON report and returns zero only when the exact expected registers, complete final memory and stub events match the expected exit. A negative fixture can pass by reproducing its independently expected guard failure; inspect `runner.status` alongside the outer validation status. Redirect reports into an explicitly chosen local artifact directory when retaining a run. [Fixture provenance](fixtures/PROVENANCE.md) derives the expected results independently of execution; `devenv shell -- bazel run //emulation:generate-fixtures -- --output /tmp/fuji-native-fixtures` writes a new directory with exact binary bytes and structurally identical JSON manifests. Canonical Haskell serialization changes JSON whitespace/key ordering; the original checked-in manifests keep their historical formatting.
