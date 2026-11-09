@@ -654,3 +654,59 @@ xm1_platform_veneer_data_queue_receive_timeout:
     b xm1_rtos_data_queue_receive_timeout
 .size xm1_platform_veneer_data_queue_receive_timeout, .-xm1_platform_veneer_data_queue_receive_timeout
 
+
+.section .veneer.s3d_terminate,"ax",%progbits
+.global xm1_platform_veneer_s3d_terminate
+.type xm1_platform_veneer_s3d_terminate,%function
+xm1_platform_veneer_s3d_terminate:
+    b s3d_terminate
+.size xm1_platform_veneer_s3d_terminate, .-xm1_platform_veneer_s3d_terminate
+
+.section .veneer.s3d_change_priority,"ax",%progbits
+.global xm1_platform_veneer_s3d_change_priority
+.type xm1_platform_veneer_s3d_change_priority,%function
+xm1_platform_veneer_s3d_change_priority:
+    b s3d_change_priority
+.size xm1_platform_veneer_s3d_change_priority, .-xm1_platform_veneer_s3d_change_priority
+
+.section .veneer.s3d_timed_sleep,"ax",%progbits
+.global xm1_platform_veneer_s3d_timed_sleep
+.type xm1_platform_veneer_s3d_timed_sleep,%function
+xm1_platform_veneer_s3d_timed_sleep:
+    b s3d_timed_sleep
+.size xm1_platform_veneer_s3d_timed_sleep, .-xm1_platform_veneer_s3d_timed_sleep
+
+.section .veneer.s3d_release_wait,"ax",%progbits
+.global xm1_platform_veneer_s3d_release_wait
+.type xm1_platform_veneer_s3d_release_wait,%function
+xm1_platform_veneer_s3d_release_wait:
+    b s3d_release_wait
+.size xm1_platform_veneer_s3d_release_wait, .-xm1_platform_veneer_s3d_release_wait
+
+.section .veneer.s3d_interrupt_release_wait,"ax",%progbits
+.global xm1_platform_veneer_s3d_interrupt_release_wait
+.type xm1_platform_veneer_s3d_interrupt_release_wait,%function
+xm1_platform_veneer_s3d_interrupt_release_wait:
+    b s3d_interrupt_release_wait
+.size xm1_platform_veneer_s3d_interrupt_release_wait, .-xm1_platform_veneer_s3d_interrupt_release_wait
+
+.section .veneer.s3d_delay,"ax",%progbits
+.global xm1_platform_veneer_s3d_delay
+.type xm1_platform_veneer_s3d_delay,%function
+xm1_platform_veneer_s3d_delay:
+    b s3d_delay
+.size xm1_platform_veneer_s3d_delay, .-xm1_platform_veneer_s3d_delay
+
+.section .veneer.scheduler_timeout,"ax",%progbits
+.global xm1_platform_veneer_scheduler_timeout
+.type xm1_platform_veneer_scheduler_timeout,%function
+xm1_platform_veneer_scheduler_timeout:
+    b xm1_rtos_scheduler_timeout
+.size xm1_platform_veneer_scheduler_timeout, .-xm1_platform_veneer_scheduler_timeout
+
+.section .veneer.scheduler_delay_completion,"ax",%progbits
+.global xm1_platform_veneer_scheduler_delay_completion
+.type xm1_platform_veneer_scheduler_delay_completion,%function
+xm1_platform_veneer_scheduler_delay_completion:
+    b xm1_rtos_scheduler_delay_completion
+.size xm1_platform_veneer_scheduler_delay_completion, .-xm1_platform_veneer_scheduler_delay_completion

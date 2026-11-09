@@ -32,7 +32,7 @@ import Data.Word (Word32)
 import Numeric (readHex)
 import Replacement.RtosOwnFirst.Regions (Domain (..), Extent (..), GuestAddress (..), domains, extentBytes, extentContains)
 
-data Group = OwnFirst | S1 | S2 | S3a | S3b | S3c | Semaphore | FixedPool | TaskRecords | DataQueue | GlobalLock
+data Group = OwnFirst | S1 | S2 | S3a | S3b | S3c | S3d | Semaphore | FixedPool | TaskRecords | DataQueue | GlobalLock
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 groupLabel :: Group -> String
@@ -43,6 +43,7 @@ groupLabel value = case value of
   S3a -> "s3a"
   S3b -> "s3b"
   S3c -> "s3c"
+  S3d -> "s3d"
   Semaphore -> "semaphore"
   FixedPool -> "fixed-pool"
   TaskRecords -> "task-records"
@@ -60,7 +61,7 @@ data Entry = Entry
 
 data Carrier = Carrier {carrierGroup :: Group, carrierExtent :: Extent} deriving (Eq, Show)
 
-data ExternalKind = OwnedEntry | RetainedService deriving (Eq, Show)
+data ExternalKind = OwnedEntry | RetainedService | ScratchEntry deriving (Eq, Show)
 
 data External = External {externalName :: String, externalAddress :: GuestAddress, externalKind :: ExternalKind}
   deriving (Eq, Show)
@@ -133,6 +134,7 @@ instance FromJSON ParsedExternal where
     externalKind <- case kind :: String of
       "owned" -> pure OwnedEntry
       "retained" -> pure RetainedService
+      "scratch" -> pure ScratchEntry
       _ -> fail "unknown external kind"
     fmap ParsedExternal $ External <$> o .: "name" <*> address o "address" <*> pure externalKind
 
@@ -181,10 +183,12 @@ parseUnion bytes = do
       unless (any (\c -> extentContains (carrierExtent c) (entryAddress e)) (mapCarriers dm)) (Left (EntryOutsideCarrier domain e))
     forM_ (zip (sortOn entryAddress (mapEntries dm)) (drop 1 (sortOn entryAddress (mapEntries dm)))) $ \(left, right) ->
       when (entryAddress left == entryAddress right) (Left (EntryRepeated domain (entryAddress left)))
-    forM_ (mapExternals dm) $ \e -> do
-      let GuestAddress at = externalAddress e
-          GuestAddress base = mapBase dm
-      unless (at >= base && at < base + fromIntegral (mapSize dm)) (Left (ExternalOutsideLoader domain e))
+    forM_ (mapExternals dm) $ \e -> case externalKind e of
+      ScratchEntry -> pure ()
+      _ -> do
+        let GuestAddress at = externalAddress e
+            GuestAddress base = mapBase dm
+        unless (at >= base && at < base + fromIntegral (mapSize dm)) (Left (ExternalOutsideLoader domain e))
   pure union
 
 domainMap :: Union -> Domain -> DomainMap
