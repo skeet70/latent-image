@@ -907,6 +907,7 @@ transferControls d role one aggregate observation =
         Just bytes -> B.take 0x600 bytes == B.replicate 0x600 0xa5 && B.drop 0x800 bytes == B.replicate 0x800 0xa5
         Nothing -> False
       | ident <- [RegionId "stack", RegionId "worker-stack"]]
+    checksFor :: NativeObservation -> [(String, Bool)]
     checksFor observed =
       [ ("initial-caller-return", nativeStatus observed == Returned && registerValue observed R0 == if caseService one == TimedSleep then 0xffffffce else 0)
       , ("caller-callee-registers", all (\r -> registerValue observed r == initialCallee r) [R4 .. R11])
@@ -982,11 +983,28 @@ transferView d observation = observation
 readonlyTransfer :: CaseSpec -> CaseSpec
 readonlyTransfer spec = spec
   { caseId = caseId spec ++ "-readonly-scheduler"
-  , caseRegions = [CaseRegion mapped (if regionIdOf mapped `elem` [RegionId "data-a", RegionId "data-b"] then ReadOnly else permission)
-                  | CaseRegion mapped permission <- caseRegions spec]
+  , caseEntry = guest 0x930000
+  , caseExclusion = "A disjoint permission probe attempts a readonly scheduler write; it does not execute a lifecycle service."
+  , caseRegions = mkRegion (RegionId "readonly-probe") (guest 0x930000) 20 ReadExecute probe
+      : [CaseRegion mapped (if regionIdOf mapped `elem` [RegionId "data-a", RegionId "data-b"] then ReadOnly else permission)
+        | CaseRegion mapped permission <- caseRegions spec]
+  , caseFunctions = (guest 0x930000, 20) : caseFunctions spec
   , caseExpectedStatus = MemoryGuard
-  , caseExpectedRegisters = []
+  , caseExpectedRegisters = [(R4, initialCallee R4), (Cpsr, 0x53), (Pc, 0x93000c)]
   }
+  where
+    probe = B.concat (map word32le [0xe30405a4, 0xe3440005, 0xe3a01000, 0xe5801000, 0xe12fff1e])
+
+readonlyHolds :: NativeObservation -> Bool
+readonlyHolds observation =
+  nativeStatus observation == MemoryGuard
+    && registerValue observation R4 == initialCallee R4
+    && registerValue observation Cpsr == 0x53
+    && registerValue observation Pc == 0x93000c
+    && maybe False (all noWrite) (nativeKernel observation >>= observedOrder)
+  where
+    noWrite (OrderedWrite _ _) = False
+    noWrite _ = True
 
 main :: IO ()
 main = do
@@ -1074,7 +1092,7 @@ main = do
       readonlyControls <- if cohort == ContextTransfer then do
         readonlyBatch <- writeBatch (directory </> (show role ++ "-readonly")) (map readonlyTransfer specs)
         (_, readonlyOutcomes) <- cachedObservedBatch cacheRoot runner readonlyBatch
-        pure [(caseName one, ControlRun (show role ++ "-readonly-scheduler-refused") (nativeStatus observation == MemoryGuard))
+        pure [(caseName one, ControlRun (show role ++ "-readonly-scheduler-refused") (readonlyHolds observation))
              | (one, (_, observation)) <- zip grid readonlyOutcomes]
         else pure []
       pure (specs, snd outcomes, readonlyControls)

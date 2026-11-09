@@ -1,8 +1,10 @@
 {-# LANGUAGE GHC2021 #-}
 module Main (main) where
 
+import Control.Exception (onException)
 import Control.Monad (forM, forM_)
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Char8 as BC
 import Data.Bits ((.&.), (.|.), shiftL, shiftR)
 import Data.Word (Word8, Word32)
 import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
@@ -40,7 +42,8 @@ main = do
     standalone <- forM cases $ \spec -> do
       path <- O.writeCase (root </> O.caseId spec) spec
       checkAdmission path spec
-      observation <- O.loadObserved runner path
+      observation <- O.loadObserved runner path `onException`
+        (BC.putStrLn . B.take 8192 =<< B.readFile (root </> O.caseId spec </> "native-result.json"))
       checkObservation spec observation
       pure (C.CaseId (O.caseId spec), observation)
     batch <- O.writeBatch (root </> "batch") cases
