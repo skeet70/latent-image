@@ -160,6 +160,8 @@ pollMicros = 10000
 blockingDuScript :: String
 blockingDuScript = unlines
   [ "#!/bin/sh"
+  , "if [ -e \"$CONTROL/blocked\" ]; then exit 0; fi"
+  , ": > \"$CONTROL/blocked\""
   , "trap '' TERM"
   , "echo $$ > \"$CONTROL/du.$$.pid\""
   , "sh -c 'trap \"\" TERM; echo $$ > \"$CONTROL/child.$$.pid\"; exec sleep 300' &"
