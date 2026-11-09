@@ -777,8 +777,225 @@ optionalArgument name = do
        | otherwise -> pure Nothing
     value : _ -> Just <$> makeAbsolute value
 
+data Cohort = BoundedServices | ContextTransfer deriving (Eq, Show)
+
+workerBase, workerTop :: Word32
+workerBase = 0x40072000
+workerTop = workerBase + 0x800
+
+selectedSymbol :: Aggregate -> String -> Word32
+selectedSymbol (Aggregate _ symbols _ _) name =
+  case filter ((== name) . Agg.symbolName) symbols of
+    [symbol] -> Agg.symbolAddress symbol
+    _ -> error ("missing or ambiguous context-transfer symbol: " ++ name)
+
+resumeAddress :: Role -> Domain -> Aggregate -> Word32
+resumeAddress Stock d _ = switchOf d + 0x28
+resumeAddress Owned _ aggregate = selectedSymbol aggregate "xm1_rtos_scheduler_resume"
+
+transferCases :: Domain -> [Case]
+transferCases d =
+  [one { caseLifecycle = Nothing } | one <- cases d, caseName one `elem` ["timed-sleep-return", "delay-return"]]
+
+transferSpec :: Domain -> Role -> Case -> B.ByteString -> B.ByteString -> (Aggregate, Aggregate) -> CaseSpec
+transferSpec d role one loaderA loaderB pair = base
+  { caseId = "context-transfer-" ++ caseId base
+  , caseExclusion = "Two explicit task stacks; foreign worker drives handler/clock state, calls the real timer tick and dispatcher. No owned instruction is replaced."
+  , caseRegions = map replace (caseRegions base) ++
+      [mkRegion (RegionId "worker-stack") (guest workerBase) 0x1000 ReadWrite workerStack]
+  , caseFunctions = filter (\(address, _) -> address /= guest (switchOf d) || role /= Stock) (caseFunctions base) ++ stockScheduler ++ [(guest (tickEntry d), 0x1a0) | role == Stock]
+  , caseExpectedRegisters = caseExpectedRegisters base ++
+      [(r, initialCallee r) | r <- [R4 .. R11]] ++ [(Sp, stackTop)]
+  , caseKernel = fmap (\k -> k
+      { kernelLimit = InstructionLimit 20000
+      , kernelStackContexts = map context [(stackBase, stackTop), (workerBase, workerTop)]
+      }) (caseKernel base)
+  }
+  where
+    guest = GuestAddress . fromIntegral
+    context (low, high) = either error id (mkStackContext (guest low) (guest high))
+    aggregate = if d == DomainA then fst pair else snd pair
+    base = specFor d role one loaderA loaderB (Just pair) B.empty
+    fixture = (makeReady d 2 15 False
+      >>> setW (taskAt d 2 + 0x18) (workerTop - 36)
+      >>> setW (taskAt d 2 + 0x1c) (resumeAddress role d aggregate)
+      >>> setW (definitionAt d 2 + 0x14) workerBase
+      >>> setW (definitionAt d 2 + 0x10) 0x800) (caseSetup one d (baseFixture d))
+    workerStack = foldl (\bytes (offset, value) -> poke bytes offset (word32le value))
+      (B.replicate 0x1000 0xa5)
+      (zip [workerTop - workerBase - 36, workerTop - workerBase - 32 ..]
+        ([workerCallee r | r <- [R4 .. R11]] ++ [stubBase]))
+    worker = workerWords d (1000 + caseArgument one)
+    replace region@(CaseRegion mapped _) =
+      case regionIdOf mapped of
+        RegionId "data-a" -> mkRegion (RegionId "data-a") (guest (globalsBase DomainA)) (fromIntegral globalsSize) ReadWrite (dataCode DomainA fixture)
+        RegionId "data-b" -> mkRegion (RegionId "data-b") (guest (globalsBase DomainB)) (fromIntegral globalsSize) ReadWrite (dataCode DomainB fixture)
+        RegionId "stack" -> mkRegion (RegionId "stack") (guest stackBase) 0x1000 ReadWrite (B.replicate 0x1000 0xa5)
+        RegionId "stub" -> mkRegion (RegionId "stub") (guest stubBase) 0x100 ReadExecute
+          (B.concat (map word32le worker) <> B.replicate (0x100 - 4 * length worker) 0)
+        _ -> region
+    stockScheduler = [(guest (switchOf d + low), high - low) | role == Stock, (low, high) <- [(0,0x28),(0x28,0x48),(0x48,0x6c),(0x6c,0xe8)]]
+
+initialCallee, workerCallee :: Register -> Word32
+initialCallee r = 0xabc00000 + fromIntegral (fromEnum r)
+workerCallee r = 0xdef00000 + fromIntegral (fromEnum r)
+
+tickEntry :: Domain -> Word32
+tickEntry DomainA = 0x44d8c
+tickEntry DomainB = 0xd4d4c
+
+workerWords :: Domain -> Word32 -> [Word32]
+workerWords d expiry =
+  store (tickCell d) expiry ++ store (handlerCell d) 1 ++
+  [0xf1080080, movw 12 (tickEntry d .&. 0xffff), movt 12 (tickEntry d `shiftR` 16), 0xe12fff3c] ++
+  store (handlerCell d) 0 ++
+  [0xf10c0080, movw 12 (switchOf d .&. 0xffff), movt 12 (switchOf d `shiftR` 16), 0xe12fff3c, 0xe7f000f0]
+  where
+    store address value =
+      [movw 0 (address .&. 0xffff), movt 0 (address `shiftR` 16),
+       movw 1 (value .&. 0xffff), movt 1 (value `shiftR` 16), 0xe5801000]
+
+observationWord :: RegionId -> Word32 -> NativeObservation -> Maybe Word32
+observationWord ident offset observation = do
+  bytes <- lookup ident (nativeMemory observation)
+  let encoded = B.take 4 (B.drop (fromIntegral offset) bytes)
+  if B.length encoded /= 4 then Nothing else
+    Just (sum [fromIntegral byte `shiftL` (8 * n) | (n, byte) <- zip [0 ..] (B.unpack encoded)])
+
+transferFrame :: Domain -> Role -> Case -> Aggregate -> (Word32, [Word32], [Word32])
+transferFrame d role one aggregate = (stackTop - frameBytes - 36, scheduler, service)
+  where
+    sleep = caseService one == TimedSleep
+    frameBytes = case role of Stock -> if sleep then 24 else 32; Owned -> 40
+    serviceRegisters = case role of
+      Stock -> if sleep then [R4, R5, R6, R7, R11] else [R3, R4, R5, R6, R7, R8, R11]
+      Owned -> [R3, R4, R5, R6, R7, R8, R9, R10, R11]
+    service = [if r == R3 then if role == Owned && not sleep then _sleepResults d else 0 else initialCallee r | r <- serviceRegisters] ++ [exitAddress]
+    result = _sleepResults d
+    timer = _sleepTimers d
+    expiry = 1000 + caseArgument one
+    continuation = case role of
+      Stock -> entryOf d (caseService one) + if sleep then 0x194 else 0x168
+      Owned -> selectedSymbol aggregate (if sleep then "s3d_timed_sleep_body" else "s3d_delay_body") + if sleep then 0x1a4 else 0x140
+    scheduler = case role of
+      Stock | sleep -> [0, result, caseArgument one, 1, initialCallee R8, initialCallee R9, initialCallee R10, stackTop - 4, continuation]
+      Stock -> [record, runningCell d, timer, result, caseArgument one, initialCallee R9, initialCallee R10, stackTop - 4, continuation]
+      Owned | sleep -> [0x40, result, expiry, handlerCell d, timer, record, caseArgument one, stackTop - 8, continuation]
+      Owned -> [expiry, taskAt d 1, 0x40, handlerCell d, timer, record, caseArgument one, stackTop - 8, continuation]
+    record = contexts d + if d == DomainA then 0 else 0x84
+
+transferControls :: Domain -> Role -> Case -> Aggregate -> NativeObservation -> [ControlRun]
+transferControls d role one aggregate observation =
+  checks ++ [ControlRun name (not (valid (corrupt ident offset observation))) | (name, ident, offset) <- mutations]
+  where
+    dataId = RegionId (if d == DomainA then "data-a" else "data-b")
+    word address = observationWord dataId (address - globalsBase d)
+    stackWord address = observationWord (RegionId "stack") (address - stackBase)
+    (savedSp, savedFrame, serviceFrame) = transferFrame d role one aggregate
+    timerState = if role == Stock then 1 else 0
+    writes observed = nativeKernel observed >>= observedOrder
+    values address observed = do
+      events <- writes observed
+      pure [fromIntegral value :: Word32 | OrderedWrite (Write (GuestAddress target) (WriteBytes 4)) (WriteValue value) <- events, target == fromIntegral address]
+    memoryFrame observed = and [stackWord (savedSp + offset) observed == Just value | (offset, value) <- zip [0,4 ..] (savedFrame ++ serviceFrame)]
+    workerFrame observed = and
+      [observationWord (RegionId "worker-stack") (workerTop - workerBase - 36 + offset) observed == Just value
+      | (offset, value) <- zip [0,4 ..] ([workerCallee r | r <- [R4 .. R11]] ++ [workerReturn])]
+    workerReturn = stubBase + fromIntegral (4 * (length (workerWords d (1000 + caseArgument one)) - 1))
+    guards observed = and
+      [case lookup ident (nativeMemory observed) of
+        Just bytes -> B.take 0x600 bytes == B.replicate 0x600 0xa5 && B.drop 0x800 bytes == B.replicate 0x800 0xa5
+        Nothing -> False
+      | ident <- [RegionId "stack", RegionId "worker-stack"]]
+    checksFor observed =
+      [ ("initial-caller-return", nativeStatus observed == Returned && registerValue observed R0 == if caseService one == TimedSleep then 0xffffffce else 0)
+      , ("caller-callee-registers", all (\r -> registerValue observed r == initialCallee r) [R4 .. R11])
+      , ("caller-sp-cpsr", registerValue observed Sp == stackTop && registerValue observed Cpsr .&. 0x1ff == 0x53)
+      , ("caller-saved-sp-pc", word (taskAt d 1 + 0x18) observed == Just savedSp && word (taskAt d 1 + 0x1c) observed == Just (resumeAddress role d aggregate))
+      , ("caller-save-frame", memoryFrame observed)
+      , ("worker-saved-sp-pc", word (taskAt d 2 + 0x18) observed == Just (workerTop - 36) && word (taskAt d 2 + 0x1c) observed == Just (resumeAddress role d aggregate))
+      , ("worker-save-frame", workerFrame observed)
+      , ("both-task-selections", values (runningCell d) observed == Just [taskAt d 2, taskAt d 1])
+      , ("both-task-thread-identities", fmap (\events -> [value | OrderedSystemWrite Tpidrurw value <- events]) (writes observed) == Just [2,1])
+      , ("caller-live-frame-and-stack-guards", guards observed)
+      , ("timer-completion", word (timerCount d) observed == Just 0 && word (tickCell d - 4) observed == Just (1000 + caseArgument one) && word (tickCell d) observed == Just (1010 + caseArgument one) && word (_sleepTimers d) observed == Just timerState)
+      , ("timer-index-write-contract", values (_sleepTimers d) observed == Just (if role == Stock then [1] else [1,0]))
+      , ("wait-result", word (_sleepResults d) observed == Just (if caseService one == TimedSleep then 0xffffffce else 0))
+      , ("ready-queues", word (selectedCell d) observed == Just (taskAt d 1) && word (runningCell d) observed == Just (taskAt d 1) && word (bitmapCell d) observed == Just 0x8001 && word (readyHeads d) observed == Just (taskAt d 1) && word (readyHeads d + 15 * 8) observed == Just (taskAt d 2))
+      , ("private-stack-write-replay", all (stackReplay observed) [RegionId "stack", RegionId "worker-stack"])
+      ]
+    checks = [ControlRun name holds | (name, holds) <- checksFor observation]
+    valid = all snd . checksFor
+    mutations =
+      [ ("saved-sp-corruption-refused", dataId, taskAt d 1 + 0x18 - globalsBase d)
+      , ("saved-pc-corruption-refused", dataId, taskAt d 1 + 0x1c - globalsBase d)
+      , ("saved-callee-corruption-refused", RegionId "stack", savedSp - stackBase)
+      , ("service-frame-corruption-refused", RegionId "stack", stackTop - 4 - stackBase)
+      , ("worker-frame-corruption-refused", RegionId "worker-stack", workerTop - 36 - workerBase)
+      , ("timer-effect-corruption-refused", dataId, timerCount d - globalsBase d)
+      , ("incoming-frame-corruption-refused", RegionId "stack", stackTop - stackBase)
+      , ("worker-incoming-frame-corruption-refused", RegionId "worker-stack", workerTop - workerBase)
+      , ("private-scratch-corruption-refused", RegionId "stack", 0x600)
+      ]
+    corrupt ident offset observed = observed { nativeMemory =
+      [(key, if key == ident then poke bytes offset (word32le 0xbad0bad0) else bytes) | (key, bytes) <- nativeMemory observed] }
+
+stackReplay :: NativeObservation -> RegionId -> Bool
+stackReplay observation ident = case (lookup ident (nativeMemory observation), nativeKernel observation >>= observedOrder) of
+  (Just actual, Just events) -> actual == foldl apply initial events
+  _ -> False
+  where
+    base = if ident == RegionId "stack" then stackBase else workerBase
+    initial = if ident == RegionId "stack" then B.replicate 0x1000 0xa5 else
+      foldl (\bytes (offset, value) -> poke bytes offset (word32le value)) (B.replicate 0x1000 0xa5)
+        (zip [0x800 - 36, 0x800 - 32 ..] ([workerCallee r | r <- [R4 .. R11]] ++ [stubBase]))
+    apply bytes (OrderedWrite (Write (GuestAddress address) (WriteBytes size)) (WriteValue value))
+      | address >= fromIntegral base && address + fromIntegral size <= fromIntegral base + 0x1000 =
+          poke bytes (fromIntegral address - base) (B.pack [fromIntegral (value `shiftR` (8 * n)) | n <- [0 .. fromIntegral size - 1]])
+    apply bytes _ = bytes
+
+transferView :: Domain -> NativeObservation -> NativeObservation
+transferView d observation = observation
+  { nativeMemory = [(ident, project ident bytes) | (ident, bytes) <- nativeMemory observation]
+  , nativeKernel = fmap (\k -> k { observedOrder = fmap (filter keep) (observedOrder k) }) (nativeKernel observation)
+  }
+  where
+    private = [(stackTop - 0x200, stackTop), (workerTop - 0x200, workerTop),
+      (taskAt d 1 + 0x18, taskAt d 1 + 0x20), (taskAt d 2 + 0x18, taskAt d 2 + 0x20),
+      (_sleepTimers d, _sleepTimers d + 4)]
+    project ident bytes = foldl clear bytes private
+      where
+        base = case ident of
+          RegionId "stack" -> stackBase
+          RegionId "worker-stack" -> workerBase
+          RegionId "data-a" -> globalsBase DomainA
+          RegionId "data-b" -> globalsBase DomainB
+          _ -> 0
+        clear current (low, high)
+          | low >= base && toInteger high <= toInteger base + toInteger (B.length current) =
+              poke current (low - base) (B.replicate (fromIntegral (high - low)) 0)
+          | otherwise = current
+    keep (OrderedWrite (Write (GuestAddress address) (WriteBytes size)) _) =
+      not (any (\(low, high) -> address >= fromIntegral low && address + fromIntegral size <= fromIntegral high) private)
+    keep _ = True
+
+readonlyTransfer :: CaseSpec -> CaseSpec
+readonlyTransfer spec = spec
+  { caseId = caseId spec ++ "-readonly-scheduler"
+  , caseRegions = [CaseRegion mapped (if regionIdOf mapped `elem` [RegionId "data-a", RegionId "data-b"] then ReadOnly else permission)
+                  | CaseRegion mapped permission <- caseRegions spec]
+  , caseExpectedStatus = MemoryGuard
+  , caseExpectedRegisters = []
+  }
+
 main :: IO ()
 main = do
+  arguments <- getArgs
+  cohort <- case argumentValues "--cohort" arguments of
+    [] -> pure BoundedServices
+    ["bounded-services"] -> pure BoundedServices
+    ["context-transfer"] -> pure ContextTransfer
+    _ -> fail "--cohort must be bounded-services or context-transfer"
   runner <- argument "--runner" >>= makeAbsolute
   loaderA <- argument "--loader-a"
   loaderB <- argument "--loader-b"
@@ -813,6 +1030,20 @@ main = do
     (Nothing, Nothing) -> pure Nothing
     (Just a, Just b) -> pure (Just (a, b))
     _ -> fail "aggregate mode requires both domains"
+  unless (cohort /= ContextTransfer || case aggregates of Just _ -> True; Nothing -> False)
+    (fail "context-transfer requires the actual aggregate binary, symbols, placements and carriers for both domains")
+  forM_ [aggregate | cohort == ContextTransfer, Just (a, b) <- [aggregates], aggregate <- [a, b]] $ \(Aggregate _ symbols placements carriers) -> do
+    forM_ ["xm1_rtos_scheduler_save", "xm1_rtos_scheduler_resume", "xm1_rtos_scheduler_select", "xm1_rtos_timer_tick_body",
+           "s3d_timed_sleep_body", "s3d_delay_body"] $ \name ->
+      unless (any (\symbol -> Agg.symbolName symbol == name && Agg.symbolSize symbol > 0) symbols)
+        (fail ("context-transfer requires owned implementation: " ++ name))
+    let foreignIntervals = [(stubBase, stubBase + 0x100), (exitAddress, exitAddress + 0x10),
+                            (stackBase, stackBase + 0x1000), (workerBase, workerBase + 0x1000)]
+        allocated = [(Agg.placementAddress p, Agg.placementAddress p + Agg.placementBytes p) | p <- placements]
+          ++ [(Agg.symbolAddress s, Agg.symbolAddress s + Agg.symbolSize s) | s <- symbols]
+          ++ [(low, high) | Regions.Extent (Regions.GuestAddress low) (Regions.GuestAddress high) <- carriers]
+    unless (and [high <= low' || high' <= low | (low, high) <- foreignIntervals, (low', high') <- allocated])
+      (fail "context-transfer instrumentation overlaps an owned carrier, symbol or allocation")
   forM_ [(DomainA, aggregateA), (DomainB, aggregateB)] $ \(domain, candidate) ->
     case candidate of
       Nothing -> pure ()
@@ -827,23 +1058,40 @@ main = do
         all (\name -> any ((== name) . Agg.symbolName) symbols)
           ["xm1_rtos_timer_remove_body", "xm1_rtos_timer_tick_body"]
   reports <- forM [(DomainA, ownedABytes), (DomainB, ownedBBytes)] $ \(d, owned) -> do
-    let grid = cases d
-        directory = takeDirectory results </> ("s3d-" ++ domainLabel d)
+    let grid = if cohort == ContextTransfer then transferCases d else cases d
+        directory = takeDirectory results </> ((if cohort == ContextTransfer then "context-transfer-" else "s3d-") ++ domainLabel d)
+        domainAggregate = case aggregates of
+          Just (a, b) -> if d == DomainA then a else b
+          Nothing -> error "context-transfer aggregate required"
     createDirectoryIfMissing True directory
     observed <- forM [Stock, Owned] $ \role -> do
-      let specs = [specFor d role one loaderABytes loaderBBytes aggregates owned | one <- grid]
+      let specs = [case (cohort, aggregates) of
+            (ContextTransfer, Just pair) -> transferSpec d role one loaderABytes loaderBBytes pair
+            _ -> specFor d role one loaderABytes loaderBBytes aggregates owned
+            | one <- grid]
       batch <- writeBatch (directory </> show role) specs
       outcomes <- cachedObservedBatch cacheRoot runner batch
-      pure (specs, snd outcomes)
+      readonlyControls <- if cohort == ContextTransfer then do
+        readonlyBatch <- writeBatch (directory </> (show role ++ "-readonly")) (map readonlyTransfer specs)
+        (_, readonlyOutcomes) <- cachedObservedBatch cacheRoot runner readonlyBatch
+        pure [(caseName one, ControlRun (show role ++ "-readonly-scheduler-refused") (nativeStatus observation == MemoryGuard))
+             | (one, (_, observation)) <- zip grid readonlyOutcomes]
+        else pure []
+      pure (specs, snd outcomes, readonlyControls)
     case observed of
-      [(specs, stock), (_, ownedObs)] -> do
+      [(specs, stock, stockReadonly), (_, ownedObs, ownedReadonly)] -> do
         let stockObs = map snd stock
             ownedObservations = map snd ownedObs
             compareOne one reference left right =
               let adjusted = case caseKernel reference of
                     Just kernel | null (kernelStop kernel) -> reference
                     _ -> reference { caseKernel = fmap (\k -> k { kernelUncompared = kernelUncompared k ++ [R4, R5, R6, R7, R8, R9, R10, R11, Sp] }) (caseKernel reference) }
-               in compareKernelCase adjusted (normalize left) (normalize (detachmentView (timerDetachment timerContract d one) right))
+               in if cohort == ContextTransfer
+                  then let valid role observation = all controlHolds (transferControls d role one domainAggregate observation)
+                        in if valid Stock left && valid Owned right
+                           then compareKernelCase adjusted (transferView d left) (transferView d right)
+                           else compareKernelCase adjusted left right
+                  else compareKernelCase adjusted (normalize left) (normalize (detachmentView (timerDetachment timerContract d one) right))
             failures = [ (name, diff, firstDifference left right) | (name, diff, left, right) <- differences, not (null diff) ]
             differences = [ (caseName one, compareOne one reference left right, left, right)
                           | (one, reference, left, right) <- zip4 grid specs stockObs ownedObservations ]
@@ -857,11 +1105,16 @@ main = do
             controls =
               [ (caseName one, control)
               | (one, spec, left, right) <- zip4 grid specs stockObs ownedObservations
-              , control <- controlRuns timerContract d one spec left right
-              ]
+              , control <- if cohort == ContextTransfer
+                  then [control { controlName = show role ++ "-" ++ controlName control }
+                       | (role, observation) <- [(Stock, left), (Owned, right)]
+                       , control <- transferControls d role one domainAggregate observation]
+                  else controlRuns timerContract d one spec left right
+              ] ++ stockReadonly ++ ownedReadonly
             failedControls = [ (name, controlName control) | (name, control) <- controls, not (controlHolds control) ]
         B.writeFile (directory </> "report.json") (encodeCanonical (A.object
           [ "domain" .= domainLabel d
+          , "cohort" .= show cohort
           , "cases" .= length grid
           , "differences" .= length failures
           , "failures" .= [A.object ["case" .= name, "differences" .= show diff, "first" .= first] | (name, diff, first) <- failures]
