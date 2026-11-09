@@ -4,6 +4,7 @@ module Main (main) where
 import Control.Monad (unless)
 import qualified Data.ByteString.Char8 as B
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import Data.Word (Word32)
 import Emulation.SchedulerPairCheck
 import Emulation.SchedulerPairFamily (Pending (..), ReleaseWitness (..), TimerKind (..), TimerWitness (..), checkPendingFamily)
@@ -40,7 +41,7 @@ traceOf values history completion = CallTrace (registers values) (registers valu
 callOf :: Domain -> Word32 -> Semantic -> [Word32] -> Memory -> Memory -> Word32 -> CallTrace -> [Written] -> Call
 callOf domain address semantic arguments before after r0 trace writes =
   Call domain (Address address) semantic (if domain==DomainA then 0 else 1) 0x13 (Arguments arguments)
-    before after r0 0x13 writes [] 1 10 (Just trace) 0x9000 1 Nothing [] []
+    before after r0 0x13 writes [] 1 10 (Just trace) 0x9000 1 Nothing [] [] S.empty
 
 applyWrites :: Memory -> [Written] -> Memory
 applyWrites = foldl (\memory (Written (Address address) _ value) -> M.insert (Address address) value memory)
@@ -122,10 +123,10 @@ flagWaitWrites timer =
 timerBoundary :: BoundaryKind -> Word32 -> Word32 -> Boundary
 timerBoundary kind entry task =
   Boundary kind (Address (if kind==TimerInsertBoundary then 0x44c60 else 0x44ca8)) 1 0
-    (registers [1,entry]) M.empty [] [] (Just entry) task [] []
+    (registers [1,entry]) M.empty [] [] (Just entry) task [] [] S.empty
 
 tickBoundary :: Word32 -> Boundary
-tickBoundary entry = Boundary TimerConsumeBoundary (Address 0x44d8c) 2 0 (registers [entry]) M.empty [] [] (Just entry) 0x9000 [] []
+tickBoundary entry = Boundary TimerConsumeBoundary (Address 0x44d8c) 2 0 (registers [entry]) M.empty [] [] (Just entry) 0x9000 [] [] S.empty
 
 flagWaitCall :: [Written] -> Word32 -> [Boundary] -> Call
 flagWaitCall writes r0 history =
@@ -190,7 +191,7 @@ mailboxDeleteCall writes =
   callOf DomainA 0x4d654 (FamilySemantic MailboxDelete) [1] mailboxBefore (applyWrites mailboxBefore writes) 0 (flagSetTrace 0) writes
 
 misassociated :: Boundary
-misassociated = Boundary ResumeBoundary (Address 0x43640) 1 0 (registers (withStack 0x8000 0)) M.empty [] [] Nothing 0x9999 [] []
+misassociated = Boundary ResumeBoundary (Address 0x43640) 1 0 (registers (withStack 0x8000 0)) M.empty [] [] Nothing 0x9999 [] [] S.empty
 
 familyCatalogJson :: B.ByteString
 familyCatalogJson = B.pack "{\"fill_word\":\"0xe7f000f0\",\"domains\":{\"a\":{\"regions\":[{\"start\":\"0x4813c\",\"end\":\"0x4839c\",\"entries\":[{\"entry\":\"0x4813c\",\"semantic\":{\"kind\":\"family\",\"name\":\"family-flag-set\"}}]}]},\"b\":{\"regions\":[{\"start\":\"0xd80fc\",\"end\":\"0xd835c\",\"entries\":[{\"entry\":\"0xd80fc\",\"semantic\":{\"kind\":\"family\",\"name\":\"family-flag-set\"}}]}]}}}"
@@ -244,7 +245,7 @@ main = do
   assertRight "wake removes timer" (checkFamilyCall (flagWaitCall waitWrites 0 [timerBoundary TimerInsertBoundary flagTimerAddress 0x9000,timerBoundary TimerRemoveBoundary flagTimerAddress 0x9000]) [])
   assertLeft "expiry without pop" FamilyTimer (checkFamilyCall (flagWaitCall expiryWrites 0xffffffce [timerBoundary TimerInsertBoundary flagTimerAddress 0x9000]) [])
   assertRight "expiry tick pop" (checkFamilyCall (flagWaitCall expiryWrites 0xffffffce [timerBoundary TimerInsertBoundary flagTimerAddress 0x9000,tickBoundary flagTimerAddress]) [])
-  let returnBoundary = Boundary ReturnBoundary (Address 0x43640) 20 0 (registers [0]) M.empty [] [] Nothing 0x9000 [] []
+  let returnBoundary = Boundary ReturnBoundary (Address 0x43640) 20 0 (registers [0]) M.empty [] [] Nothing 0x9000 [] [] S.empty
       expiryCall = flagWaitCall expiryWrites 0xffffffce [timerBoundary TimerInsertBoundary flagTimerAddress 0x9000,returnBoundary]
       consumeWitness armedAt = TimerWitness flagTimerAddress 0x9000 10 armedAt TimerConsumed
   assertRight "consume witness inside arm-to-return" (checkFamilyCall expiryCall [consumeWitness 10])
@@ -263,7 +264,7 @@ main = do
         , Written (Address 0x400545c0) 4 1
         , Written (Address 0x400545c4) 4 0
         ])
-      pending = Pending (FamilySemantic FlagTimedWait) DomainA [1,1,0,0x8100] pendingBefore (Just pendingTerminal) task 0x8000 0x53 0x48b30 10 (Just 0xd3) (Just 110) (Just 110) 10 0
+      pending = Pending (FamilySemantic FlagTimedWait) DomainA [1,1,0,0x8100] pendingBefore (Just pendingTerminal) task 0x8000 0x53 0x48b30 10 (Just 0xd3) (Just 110) (Just 110) 10 0 S.empty
       release owner core call at address value = ReleaseWitness owner core call at (Address address) value
       callerScheduler = release task 0 90 100 0x400545c0 0
       callerObject = release task 0 95 102 0x400545c4 0
