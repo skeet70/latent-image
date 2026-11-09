@@ -113,7 +113,10 @@ makeSpec env domain loader owned service scenario label = spec
           ownBase=fst (serviceExtent domain Exit)
           replace old s=let (at,size)=serviceExtent domain s; offset=fromIntegral (at-loaderBase); source=fromIntegral (at-ownBase) in B.take offset old <> B.take (fromIntegral size) (B.drop source bin) <> B.drop (offset+fromIntegral size) old
       Just (Aggregate _ _ rows) -> case aggregateImage of
-        Just image -> either error id (Agg.installPlacements loaderBase loader image rows)
+        Just image ->
+          let withSymbols = foldl' installSymbol loader selected
+              installSymbol old symbol = either error id (Agg.installSymbol loaderBase old image symbol)
+           in either error id (Agg.installPlacements loaderBase withSymbols image rows)
         Nothing -> loader
     slice :: Word32 -> Word32 -> B.ByteString
     slice at size=B.take (fromIntegral size) (B.drop (fromIntegral (at-loaderBase)) bytes)
