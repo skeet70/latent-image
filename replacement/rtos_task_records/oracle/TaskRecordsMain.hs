@@ -45,8 +45,12 @@ main = do
   forM_ [(ownedABytes, ownedASymbols, placementsA), (ownedBBytes, ownedBSymbols, placementsB)] $ \(bytes, symbols, placements) ->
     when (any (\(name, _, _) -> "xm1_platform_veneer_" `isPrefixOf` name) symbols) $ do
       when (null placements) (failH "aggregate images require their placement manifests")
-      _ <- either failH pure (Agg.aggregateImage [Agg.AggregateSymbol name address size | (name, address, size) <- symbols] bytes)
-      pure ()
+      let image = Agg.AggregateImage (minimum [address | (_, address, _) <- symbols]) bytes
+          extents = [(address, size) | (_, address, size) <- symbols]
+            ++ [(Agg.placementAddress placement, Agg.placementBytes placement) | placement <- placements]
+      forM_ extents $ \(address, size) -> do
+        _ <- either failH pure (Agg.sliceAggregate image address size)
+        pure ()
   layoutDigest <- sha256File layoutPath
   loaderADigest <- sha256File loaderA
   loaderBDigest <- sha256File loaderB

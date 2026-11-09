@@ -703,9 +703,8 @@ caseFor facts domain role stockImage ownedImage symbols one =
     aggregate = any (\(name, _, _) -> "xm1_platform_veneer_" `isPrefixOf` name) symbols
     aggregateBytes =
       let image = Agg.AggregateImage (imageBase ownedImage) (imageBytes ownedImage)
-          parsed = [Agg.AggregateSymbol name address size | (name, address, size) <- symbols]
-          patched = either error id (Agg.installAggregate (imageBase stockImage) (imageBytes stockImage) image parsed)
-       in either error id (Agg.installPlacements (imageBase stockImage) patched image (imagePlacements ownedImage))
+          carrier = Agg.AggregateSymbol "effective-carrier" (imageBase ownedImage) (fromIntegral (B.length (imageBytes ownedImage)))
+       in either error id (Agg.installSymbol (imageBase stockImage) (imageBytes stockImage) image carrier)
     maskRegions = [mkRegion (RegionId "mask") (GuestAddress (fromIntegral maskSave)) 0x68 ReadExecute maskBytes | role == Stock || not aggregate]
     definitionsBase = definitionBase facts domain
     definitionsSize = definitionRegionSize facts
@@ -718,9 +717,28 @@ caseFor facts domain role stockImage ownedImage symbols one =
         [ (GuestAddress (fromIntegral stockEntry), stockExtent)
         , (GuestAddress (fromIntegral maskSave), 0x68)
         ]
+      Owned | aggregate ->
+        [(GuestAddress (fromIntegral address), size) | (address, size) <- executable ++ preserved]
       Owned ->
         [(GuestAddress (fromIntegral address), size) | (_, address, size) <- symbols]
           ++ [(GuestAddress (fromIntegral maskSave), 0x68)]
+    executable =
+      [(address, size) | (_, address, size) <- symbols, size > 0]
+        ++ [(Agg.placementAddress placement, Agg.placementBytes placement)
+           | placement <- imagePlacements ownedImage
+           , Agg.placementBytes placement > 0
+           , ".text." `isPrefixOf` Agg.placementSection placement
+           ]
+    allocated =
+      [(address, size) | (_, address, size) <- symbols, size > 0]
+        ++ [(Agg.placementAddress placement, Agg.placementBytes placement)
+           | placement <- imagePlacements ownedImage
+           , Agg.placementBytes placement > 0
+           ]
+    overlaps (address, size) (other, bytes) =
+      toInteger address < toInteger other + toInteger bytes
+        && toInteger other < toInteger address + toInteger size
+    preserved = [extent | extent <- [(maskSave, 0x68)], not (any (overlaps extent) allocated)]
     _unused = (d, t)
 
 parseOwnedSymbols :: FilePath -> IO [(String, Word32, Word32)]
