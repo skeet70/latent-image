@@ -166,9 +166,15 @@ installCarrier domain fill symbols placements raw extent = do
       covered at = any (\(lo, hi) -> lo <= at && at < hi) spans
         || any (\(lo, len) -> lo <= at && at < lo + fromIntegral len) placements
       words32 = [U.word32At padded off | off <- [0, 4 .. extentBytes extent - 4]]
-  forM_ (zip [0, 4 .. extentBytes extent - 4] words32) $ \(off, word) ->
-    when (not (covered (startAddress + fromIntegral off)) && word /= 0 && word /= fill) (Left (SlackNotFillOrZero domain (GuestAddress (startAddress + fromIntegral off))))
-  pure (B.concat (map U.putWord32 (map (\word -> if word == 0 then fill else word) words32)))
+      fillBytes = U.putWord32 fill
+      byteCovered off = covered (startAddress + fromIntegral off)
+      slackByteValid off = B.index padded off == 0 || B.index padded off == B.index fillBytes (off `mod` 4)
+      installedByte off = if byteCovered off then B.index padded off else B.index fillBytes (off `mod` 4)
+  forM_ (zip [0, 4 .. extentBytes extent - 4] words32) $ \(off, word) -> do
+    let offsets = [off .. off + 3]
+        valid = if any byteCovered offsets then all (\at -> byteCovered at || slackByteValid at) offsets else word == 0 || word == fill
+    when (not valid) (Left (SlackNotFillOrZero domain (GuestAddress (startAddress + fromIntegral off))))
+  pure (B.pack (map installedByte [0 .. extentBytes extent - 1]))
   where
     GuestAddress startAddress = extentStart extent
 

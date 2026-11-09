@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Main (main) where
 
-import Control.Monad (forM, unless)
+import Control.Monad (filterM, forM, unless)
 import Data.Aeson (eitherDecodeStrict', object, (.=))
 import Data.Bits ((.&.), xor)
 import Data.List (isPrefixOf, sortOn)
@@ -154,23 +154,27 @@ runCases runner reuseDirectory directory cases = do
       case reuseDirectory of
         Nothing -> pure Nothing
         Just savedDirectory -> do
-          let savedPath = savedDirectory </> batchName </> (label ++ ".native-result.json")
-          exists <- doesFileExist savedPath
-          if not exists then pure Nothing else do
-            saved <- either fail pure . eitherDecodeStrict' =<< B.readFile savedPath
-            (current, regions, _, identity) <- C.loadCase (currentDirectory </> (label ++ ".case.json"))
-            if str (get saved "runner_sha256") /= runnerDigest || Just (get saved "wire_sha256") /= lookup "wire_sha256" identity
-              then pure Nothing
-              else do
-                exit <- either (fail . show) pure (reportRunnerExit saved)
-                let report = set "runner_sha256" (s runnerDigest) (C.caseReport current identity)
-                (_, judged) <- C.judgeRunner current regions report exit (encodeCanonical (get saved "runner")) B.empty
-                B.writeFile (currentDirectory </> (label ++ ".native-result.json")) (encodeCanonical judged)
-                observation <- either (fail . show) pure (observeNative exit regions (get judged "runner"))
-                pure (Just (CaseId label, observation))
+          savedPaths <- filterM doesFileExist
+            [ savedDirectory </> batchName </> (label ++ ".native-result.json")
+            , savedDirectory </> batchName </> "fresh" </> (label ++ ".native-result.json")
+            ]
+          case savedPaths of
+            [] -> pure Nothing
+            savedPath : _ -> do
+              saved <- either fail pure . eitherDecodeStrict' =<< B.readFile savedPath
+              (current, regions, _, identity) <- C.loadCase (currentDirectory </> (label ++ ".case.json"))
+              if str (get saved "runner_sha256") /= runnerDigest || Just (get saved "wire_sha256") /= lookup "wire_sha256" identity
+                then pure Nothing
+                else do
+                  exit <- either (fail . show) pure (reportRunnerExit saved)
+                  let report = set "runner_sha256" (s runnerDigest) (C.caseReport current identity)
+                  (_, judged) <- C.judgeRunner current regions report exit (encodeCanonical (get saved "runner")) B.empty
+                  B.writeFile (currentDirectory </> (label ++ ".native-result.json")) (encodeCanonical judged)
+                  observation <- either (fail . show) pure (observeNative exit regions (get judged "runner"))
+                  pure (Just (CaseId label, observation))
     let reusedLabels = M.fromList [(label, ()) | (CaseId label, _) <- reused]
         freshSpecs = [specification | (label, specification) <- labelled, M.notMember label reusedLabels]
-    fresh <- if null freshSpecs then pure [] else loadObservedBatch runner =<< writeBatch (currentDirectory </> "fresh") freshSpecs
+    fresh <- if null freshSpecs then pure [] else loadObservedBatch runner =<< writeBatch currentDirectory freshSpecs
     let observed = reused ++ fresh
     unless (length observed == length labelled) (fail (path ++ ": observation count differs"))
     pure ([(label, observation {nativeMemory = [(ident, B.copy bytes) | (ident, bytes) <- nativeMemory observation, not ("code-" `isPrefixOf` regionName ident)]}) | (CaseId label, observation) <- observed], length reused)

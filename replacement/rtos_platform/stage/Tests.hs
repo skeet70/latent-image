@@ -2,6 +2,7 @@
 
 module Main (main) where
 
+import Control.Monad (forM_)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import Data.Bits (xor)
@@ -33,7 +34,8 @@ bin (GuestAddress _base) =
     [ U.putWord32 0xea000002
     , B.replicate 0x0c 0
     , U.putWord32 0xe12fff1e
-    , B.concat (replicate 7 (U.putWord32 0xe1a00000))
+    , U.putWord32 0
+    , B.concat (replicate 6 (U.putWord32 0xe1a00000))
     , B.replicate (0x100 - 0x30) 0
     ]
 
@@ -94,6 +96,16 @@ main = do
       check "confined candidate changes only the carrier" (confineChanges admitted (stagedDat staged) == Right ())
       check "staged loader differs from stock" (stagedLoader staged DomainA /= sourceLoaders source M.! DomainA)
       check "staged loader B differs from stock" (stagedLoader staged DomainB /= sourceLoaders source M.! DomainB)
+      case canonicalSource (stagedDat staged) (stagedLoader staged DomainA) (stagedLoader staged DomainB) of
+        Left err -> check ("extract staged DAT: " ++ show err) False
+        Right extracted -> forM_ [DomainA, DomainB] $ \domain -> do
+          let base = if domain == DomainA then 0x40430 else 0xd0430
+              loaderBase = if domain == DomainA then 0x40000 else 0xd0000
+              body = B.take 0x20 (B.drop 0x10 (bin (GuestAddress base)))
+              loader = sourceLoaders extracted M.! domain
+          check "allocated body bytes survive DAT staging" (B.take 0x20 (B.drop (fromIntegral (base + 0x10 - loaderBase)) loader) == body)
+          check "extracted DAT matches staged loader" (loader == stagedLoader staged domain)
+          check "uncovered carrier slack receives trap fill" (B.take 4 (B.drop (fromIntegral (base + 4 - loaderBase)) loader) == U.putWord32 0xe7f000f0)
   let refusedDemand = synthetic { unionA = (unionA synthetic) { mapDemand = [Demand FixedPool "body_a" 0x100] } }
   expectLeft "demand larger than the largest run refuses" (\e -> case e of FitRejected (CarrierDeficit DomainA FixedPool "body_a" 0x100 0xfc) -> True; _ -> False) (withLink refusedDemand (linkedFor synthetic))
   let movedVeneer = synthetic { unionA = (unionA synthetic) { mapEntries = [Entry FixedPool "test" (GuestAddress 0x40434) "body_a" "veneer_a"] } }
