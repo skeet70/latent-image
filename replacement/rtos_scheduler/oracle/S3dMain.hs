@@ -17,6 +17,8 @@ import Emulation.OwnedCase
 import Emulation.Sha256 (sha256File, sha256Hex)
 import FujiAF.JSON (encodeCanonical)
 import qualified Replacement.RtosPlatform.Aggregate as Agg
+import qualified Replacement.RtosPlatform.Union as Union
+import qualified Replacement.RtosOwnFirst.Regions as Regions
 import System.Directory (createDirectoryIfMissing, makeAbsolute)
 import System.Environment (getArgs)
 import System.FilePath ((</>), takeDirectory)
@@ -616,7 +618,7 @@ judgeOutcome (StoppedAt address reason) StopAddress r0 pc = pc == address && r0 
 judgeOutcome _ _ _ _ = False
 
 judgeSelfTest :: Bool
-judgeSelfTest = and
+judgeSelfTest = placementSelfTest && and
   [ not (judgeOutcome (ReturnedR0 0) UnknownCall 0 0)
   , not (judgeOutcome (ReturnedR0 0) Returned 1 0)
   , not (judgeOutcome (StoppedAt 0x1000 0xffffff18) StopAddress 0xffffff18 0x1004)
@@ -626,24 +628,49 @@ judgeSelfTest = and
   , judgeOutcome (StoppedAt 0x1000 0xffffff18) StopAddress 0xffffff18 0x1000
   ]
 
-aggregateOf :: Maybe FilePath -> Maybe FilePath -> Maybe FilePath -> IO (Maybe Aggregate)
-aggregateOf Nothing Nothing Nothing = pure Nothing
-aggregateOf (Just binPath) (Just symbolsPath) (Just placementsPath) = do
+aggregateOf :: [Union.Entry] -> Maybe FilePath -> Maybe FilePath -> Maybe FilePath -> IO (Maybe Aggregate)
+aggregateOf _ Nothing Nothing Nothing = pure Nothing
+aggregateOf entries (Just binPath) (Just symbolsPath) (Just placementsPath) = do
   bytes <- B.readFile binPath
   symbols <- either fail pure . Agg.parseAggregateSymbols =<< B.readFile symbolsPath
   placements <- either fail pure . Agg.parsePlacements =<< B.readFile placementsPath
   unless (not (null placements)) (fail "aggregate placements are empty")
   image <- either fail pure (Agg.aggregateImage symbols bytes)
   forM_ symbols $ \symbol ->
-    unless (any (\placement ->
-      Agg.symbolAddress symbol >= Agg.placementAddress placement &&
-      toInteger (Agg.symbolAddress symbol) + toInteger (Agg.symbolSize symbol) <=
-        toInteger (Agg.placementAddress placement) + toInteger (Agg.placementBytes placement)) placements)
-      (fail ("aggregate symbol has no allocated placement: " ++ Agg.symbolName symbol))
+    unless (symbolAllocated entries placements symbol)
+      (fail ("aggregate symbol has no allocated placement or fixed ABI entry: " ++ Agg.symbolName symbol))
   forM_ placements $ \placement ->
     either fail (const (pure ())) (Agg.sliceAggregate image (Agg.placementAddress placement) (Agg.placementBytes placement))
   pure (Just (Aggregate image symbols placements))
-aggregateOf _ _ _ = fail "aggregate mode requires binary, symbols and placements for both domains"
+aggregateOf _ _ _ _ = fail "aggregate mode requires binary, symbols and placements for both domains"
+
+symbolAllocated :: [Union.Entry] -> [Agg.SectionPlacement] -> Agg.AggregateSymbol -> Bool
+symbolAllocated entries placements symbol =
+  any contains placements || any fixedEntry entries
+  where
+    contains placement =
+      Agg.symbolAddress symbol >= Agg.placementAddress placement &&
+      toInteger (Agg.symbolAddress symbol) + toInteger (Agg.symbolSize symbol) <=
+        toInteger (Agg.placementAddress placement) + toInteger (Agg.placementBytes placement)
+    fixedEntry entry =
+      Agg.symbolName symbol == Union.entryVeneer entry &&
+      Regions.GuestAddress (Agg.symbolAddress symbol) == Union.entryAddress entry &&
+      Agg.symbolSize symbol == 4
+
+placementSelfTest :: Bool
+placementSelfTest = and
+  [ symbolAllocated [entry] [] veneer
+  , not (symbolAllocated [entry] [] (veneer { Agg.symbolAddress = 0x50000 }))
+  , not (symbolAllocated [entry] [] (veneer { Agg.symbolSize = 8 }))
+  , not (symbolAllocated [entry] [] (veneer { Agg.symbolName = "body" }))
+  , symbolAllocated [] [placement] (Agg.AggregateSymbol "body" 0x454f4 8)
+  , not (symbolAllocated [] [placement] (Agg.AggregateSymbol "body" 0x454f4 12))
+  , not (symbolAllocated [] [] (Agg.AggregateSymbol "body" 0x50000 4))
+  ]
+  where
+    entry = Union.Entry Union.S3d "terminate" (Regions.GuestAddress 0x454f0) "body" "veneer"
+    veneer = Agg.AggregateSymbol "veneer" 0x454f0 4
+    placement = Agg.SectionPlacement 0x454f4 8 ".text.body"
 
 optionalArgument :: String -> IO (Maybe FilePath)
 optionalArgument name = do
@@ -666,6 +693,12 @@ main = do
   aggregateBBin <- optionalArgument "--aggregate-b-bin"
   aggregateBSymbols <- optionalArgument "--aggregate-b-symbols"
   aggregateBPlacements <- optionalArgument "--aggregate-b-placements"
+  entries <- if all (== Nothing) [aggregateABin, aggregateASymbols, aggregateAPlacements, aggregateBBin, aggregateBSymbols, aggregateBPlacements]
+    then pure ([], [])
+    else do
+      carriers <- argument "--aggregate-carriers"
+      union <- either (fail . show) pure . Union.parseUnion =<< B.readFile carriers
+      pure (Union.mapEntries (Union.unionA union), Union.mapEntries (Union.unionB union))
   cacheRoot <- argument "--cache-root"
   results <- argument "--results"
   loaderABytes <- B.readFile loaderA
@@ -678,8 +711,8 @@ main = do
   unless (sha256Hex digestB == "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec") (fail "loader B is not the pinned image")
   createDirectoryIfMissing True cacheRoot
   createDirectoryIfMissing True (takeDirectory results)
-  aggregateA <- aggregateOf aggregateABin aggregateASymbols aggregateAPlacements
-  aggregateB <- aggregateOf aggregateBBin aggregateBSymbols aggregateBPlacements
+  aggregateA <- aggregateOf (fst entries) aggregateABin aggregateASymbols aggregateAPlacements
+  aggregateB <- aggregateOf (snd entries) aggregateBBin aggregateBSymbols aggregateBPlacements
   aggregates <- case (aggregateA, aggregateB) of
     (Nothing, Nothing) -> pure Nothing
     (Just a, Just b) -> pure (Just (a, b))

@@ -266,11 +266,13 @@ haskell_binary(
         "--runner", "$(rootpath //emulation:native-runner)",
         "--owned-a-bin", "$(rootpath //replacement/rtos_scheduler:s3d-a.bin)",
         "--owned-b-bin", "$(rootpath //replacement/rtos_scheduler:s3d-b.bin)",
+        "--aggregate-carriers", "$(rootpath //replacement/rtos_platform:carriers.json)",
     ],
     data = [
         "//emulation:native-runner",
         "//replacement/rtos_scheduler:s3d-a.bin",
         "//replacement/rtos_scheduler:s3d-b.bin",
+        "//replacement/rtos_platform:carriers.json",
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
@@ -286,5 +288,7 @@ haskell_binary(
         "//host:filepath",
         "//host:json",
         "//replacement/rtos_platform:aggregate",
+        "//replacement/rtos_platform:platform-artifact",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
     ],
 )
