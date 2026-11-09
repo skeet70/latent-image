@@ -6,7 +6,7 @@ import Data.Aeson (Value, object, (.=))
 import Data.Bits ((.&.), (.|.), shiftL)
 import qualified Data.ByteString as B
 import Data.Char (toLower)
-import Data.List (sortOn)
+import Data.List (isPrefixOf, nub, sort, sortOn)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe)
 import Data.Word (Word32)
@@ -18,6 +18,9 @@ import FujiAF.JSON (encodeCanonical)
 import Numeric (readHex)
 import Replacement.RtosOwnFirst.Artifact (loaderSha256)
 import Replacement.RtosOwnFirst.Regions (Domain (..), domainLabel)
+import qualified Replacement.RtosOwnFirst.Regions as R
+import qualified Replacement.RtosPlatform.Aggregate as Agg
+import qualified Replacement.RtosPlatform.Union as Union
 import Replacement.RtosScheduler.Oracle (stackBase, stackPointer)
 import System.Directory (canonicalizePath, createDirectoryIfMissing, doesPathExist, makeAbsolute, removeDirectoryRecursive, setCurrentDirectory)
 import System.Environment (getArgs, lookupEnv)
@@ -32,10 +35,12 @@ data Role = Stock | StockRepeat | Owned | Equivalent Entry | Mutant Entry | Reve
 newtype CaseIndex = CaseIndex Int deriving (Eq, Ord, Show)
 newtype LockTag = LockTag Word32 deriving (Eq, Show)
 data Row = Row { entry :: Entry, selection :: Selection, discarded :: Word32, enabled :: Word32, flags :: Word32, pending :: Word32, cpacr :: Word32, fpexc :: Word32, cpsr :: Word32, lockTag :: LockTag } deriving (Show)
-data Image = Image { imageDomain :: Domain, stockBytes :: B.ByteString, ownedBytes :: B.ByteString, imageReloc :: Reloc, imageExtras :: [(Word32, Word32)] }
+data Image = Image { imageDomain :: Domain, stockBytes :: B.ByteString, ownedBytes :: B.ByteString, imageReloc :: Reloc, imageExtras :: [(Word32, Word32)], imageAggregate :: Maybe ([Agg.AggregateSymbol], [Agg.SectionPlacement], [R.Extent]) }
 
 isAggregate :: Image -> Bool
-isAggregate image = not (null (imageExtras image)) || any (\(a, _) -> not (any (\(lo, hi) -> a >= lo && a < hi) [(0xb00,0xb24),(0x3640,0x37dc),(0x37fc,0x3810)])) (relocRegions (imageReloc image))
+isAggregate image = case imageAggregate image of
+  Just _ -> True
+  Nothing -> not (null (imageExtras image)) || any (\(a, _) -> not (any (\(lo, hi) -> a >= lo && a < hi) [(0xb00,0xb24),(0x3640,0x37dc),(0x37fc,0x3810)])) (relocRegions (imageReloc image))
 
 extraRegions :: M.Map String (Word32, Word32) -> Domain -> [(Word32, Word32)]
 extraRegions symbols domain =
@@ -110,6 +115,22 @@ relocation domain symbols = Reloc
       IrqTail -> 0x34
       Doorbell -> 0x24
 
+
+aggregateFunctions :: Image -> [(Word32, Word32)] -> [(Word32, Word32)]
+aggregateFunctions image retained = case imageAggregate image of
+  Nothing -> retained
+  Just (symbols, placements, carriers) ->
+    let b = base (imageDomain image)
+        outside (a,z) = all (\(R.Extent (R.GuestAddress lo) (R.GuestAddress hi)) -> b+z <= lo || hi <= b+a) carriers
+        spans = filter outside retained
+          ++ [(Agg.symbolAddress s-b,Agg.symbolAddress s-b+Agg.symbolSize s) | s <- symbols]
+          ++ [(Agg.placementAddress p-b,Agg.placementAddress p-b+Agg.placementBytes p) | p <- placements, Agg.placementBytes p > 0, let section = Agg.placementSection p, section == ".text" || ".text." `isPrefixOf` section]
+        merge [] = []
+        merge ((a,z):rest) = extend a z rest
+        extend a z ((lo,hi):rest) | lo < z = extend a (max z hi) rest
+        extend a z rest = (a,z) : merge rest
+        entries = sort (nub ([entryOffset False e | e <- [minBound..maxBound]] ++ [Agg.symbolAddress s-b | s <- symbols]))
+     in [(lo,hi) | (a,z) <- merge (sortOn fst spans), let cuts = a : filter (\v -> a < v && v < z) entries ++ [z], (lo,hi) <- zip cuts (drop 1 cuts)]
 redesignId :: Redesign -> String
 redesignId NullOwnRegisters = "null-selection-own-registers"
 redesignId NullUnlock = "null-loop-releases-leaked-global-lock"
@@ -240,10 +261,21 @@ regions image role row = code ++ dat
       [] -> []
       spans -> [(minimum (map fst spans), maximum (map snd spans))]
     aggregate = isAggregate image
-    installed = if isStock role then stock else foldl install stock blocks
+    installed = if isStock role then stock else case imageAggregate image of
+      Nothing -> foldl install stock blocks
+      Just _ -> B.take 0xb00 stock <> own
     install bytes (a,z) = replace b bytes (b+a) (slice imageBase imageEnd raw (b+a) (b+z))
     codeSpans = [(0xb00,0xb24),(if isStock role || not aggregate then 0x252c else 0x12b4, if isStock role || not aggregate then 0x3810 else maximum (0x403c : map snd (relocRegions (imageReloc image)) ++ map snd (imageExtras image)))]
-    code = [mk ("code-"++show a) (b+a) ReadExecute (slice b (b+fromIntegral (B.length stock)) installed (b+a) (b+z)) | (a,z) <- codeSpans]
+    code = case (isStock role, imageAggregate image) of
+      (False, Just _) ->
+        let functions = aggregateFunctions image [(0x252c,0x2554),(0x27b8,0x27d4),(0x27fc,0x2828),(0x2854,0x286c),(0x3444,0x34a4)]
+            join (a,z) ((lo,hi):rest) | z == lo = (a,hi):rest
+            join span' rest = span':rest
+            storage = foldr join [] functions
+            top = fromIntegral (B.length installed)
+            cuts = sort (nub (0xb00 : top : concat [[a,z] | (a,z) <- storage]))
+         in [mk ("code-"++show a) (b+a) (if any (\(lo,hi) -> lo <= a && z <= hi) storage then ReadExecute else ReadOnly) (slice b (b+top) installed (b+a) (b+z)) | (a,z) <- zip cuts (drop 1 cuts)]
+      _ -> [mk ("code-"++show a) (b+a) ReadExecute (slice b (b+fromIntegral (B.length stock)) installed (b+a) (b+z)) | (a,z) <- codeSpans]
     (low,high) = (context d, running d + 12)
     LockTag tag = lockTag row
     pokes = [(context d,1),(running d,task d),(running d+4,enabled row),(running d+8,selected d row),(reschedule d,0)]
@@ -309,7 +341,9 @@ spec image role (CaseIndex index) row = CaseSpec
           | not (null (trigger d row)) = 400
           | otherwise = (if isStock role then 22 else 21) + case entry row of NoSave -> if isStock role then 9 else 7; Save -> 10; _ -> 0
     ignored = [R1,R2,R3,R12,Lr,Cpsr] ++ [r | entry row `elem` [Save,NoSave,Select,IrqReturn] && not (loops row), r <- [R4,R5,R6]] ++ [Pc | loops row]
-    ownedFunctions = if isAggregate image then mergeSpans ([(entryOffset False e, entryOffset False e + 4) | e <- [minBound .. maxBound]] ++ [(relocOffset (imageReloc image) a, relocEnd (imageReloc image) z) | (a,z) <- baseFunctions] ++ imageExtras image) else baseFunctions
+    ownedFunctions = case imageAggregate image of
+      Just _ -> aggregateFunctions image baseFunctions
+      Nothing -> if isAggregate image then mergeSpans ([(entryOffset False e, entryOffset False e + 4) | e <- [minBound .. maxBound]] ++ [(relocOffset (imageReloc image) a, relocEnd (imageReloc image) z) | (a,z) <- baseFunctions] ++ imageExtras image) else baseFunctions
     mergeSpans spans = go (sortOn fst spans)
       where
         go [] = []
@@ -385,21 +419,52 @@ main = do
   args <- getArgs
   let input name = required args name >>= canonicalizePath
   runner <- input "--runner"
-  paths <- mapM input ["--loader-a","--loader-b","--owned-a","--owned-b","--symbols-a","--symbols-b"]
+  let aggregateFlags = ["--aggregate-" ++ domain ++ "-" ++ kind | domain <- ["a","b"], kind <- ["bin","symbols","placements"]] ++ ["--aggregate-carriers"]
+      aggregateMode = any (`elem` args) aggregateFlags
+  when aggregateMode $ unless (all (`elem` args) aggregateFlags) (fail "aggregate inputs must be supplied together")
+  paths <- mapM input (["--loader-a","--loader-b"] ++ if aggregateMode then aggregateFlags else ["--owned-a","--owned-b","--symbols-a","--symbols-b"])
   work <- required args "--work" >>= makeAbsolute
   summary <- required args "--summary" >>= makeAbsolute
   cache <- required args "--cache-root" >>= makeAbsolute
   lookupEnv "BUILD_WORKSPACE_DIRECTORY" >>= mapM_ setCurrentDirectory
   forM_ [work,summary] $ \p -> doesPathExist p >>= \exists -> when exists (fail (p++" already exists"))
-  images <- case paths of
-    [la,lb,oa,ob,sa,sb] -> forM [(DomainA,la,oa,sa),(DomainB,lb,ob,sb)] $ \(d,l,p,s) -> do
-      loader <- B.readFile l
-      owned <- B.readFile p
-      symbols <- parsePlatformSymbols s
-      unless (sha256Hex (sha256 loader)==loaderSha256 d) (fail "not pinned X-M1 1.50 loader")
-      unless (B.length owned > 0x1000) (fail "owned image is too small")
-      pure (Image d loader owned (relocation d symbols) (extraRegions symbols d))
-    _ -> fail "input arity"
+  images <- if aggregateMode then case paths of
+    [la,lb,oa,sa,pa,ob,sb,pb,carrierPath] -> do
+      union <- B.readFile carrierPath >>= either (fail . show) pure . Union.parseUnion
+      forM [(DomainA,la,oa,sa,pa),(DomainB,lb,ob,sb,pb)] $ \(d,l,p,s,placementPath) -> do
+        loader <- B.readFile l
+        unless (sha256Hex (sha256 loader)==loaderSha256 d) (fail "not pinned X-M1 1.50 loader")
+        bin <- B.readFile p
+        symbols <- B.readFile s >>= either fail pure . Agg.parseAggregateSymbols
+        placements <- B.readFile placementPath >>= either fail pure . Agg.parsePlacements
+        payload <- either fail pure (Agg.aggregateImage symbols bin)
+        let carrierMap = Union.domainMap union d
+            carriers = map Union.carrierExtent (Union.mapCarriers carrierMap)
+            inside address size = any (\(R.Extent (R.GuestAddress lo) (R.GuestAddress hi)) -> lo <= address && toInteger address + toInteger size <= toInteger hi) carriers
+        forM_ symbols $ \symbol -> unless (inside (Agg.symbolAddress symbol) (Agg.symbolSize symbol)) (fail ("symbol outside carrier: " ++ Agg.symbolName symbol))
+        forM_ placements $ \placement -> when (Agg.placementBytes placement > 0) $ unless (inside (Agg.placementAddress placement) (Agg.placementBytes placement)) (fail "placement outside carrier")
+        forM_ (Union.mapEntries carrierMap) $ \e -> do
+          let R.GuestAddress address = Union.entryAddress e
+          unless (any ((== Union.entrySymbol e) . Agg.symbolName) symbols) (fail ("missing entry body " ++ Union.entrySymbol e))
+          unless (any (\symbol -> Agg.symbolName symbol == Union.entryVeneer e && Agg.symbolAddress symbol == address) symbols) (fail ("missing entry veneer " ++ Union.entryVeneer e))
+        forM_ carriers $ \(R.Extent (R.GuestAddress lo) (R.GuestAddress hi)) -> either fail (const (pure ())) (Agg.sliceAggregate payload lo (hi-lo))
+        let top = Agg.imageBase payload + fromIntegral (B.length bin)
+            padded = loader <> B.replicate (max 0 (fromIntegral (top-base d)-B.length loader)) 0
+            install bytes (R.Extent (R.GuestAddress lo) (R.GuestAddress hi)) = replace (base d) bytes lo (either error id (Agg.sliceAggregate payload lo (hi-lo)))
+            installed = foldl install padded carriers
+            symbolMap = M.fromList [(Agg.symbolName symbol,(Agg.symbolAddress symbol,Agg.symbolSize symbol)) | symbol <- symbols]
+        unless (Agg.imageBase payload == at d 0xb00) (fail "aggregate effective slice has wrong base")
+        pure (Image d loader (B.take (fromIntegral (top-at d 0xb00)) (B.drop 0xb00 installed)) (relocation d symbolMap) [] (Just (symbols,placements,carriers)))
+    _ -> fail "aggregate input arity"
+    else case paths of
+      [la,lb,oa,ob,sa,sb] -> forM [(DomainA,la,oa,sa),(DomainB,lb,ob,sb)] $ \(d,l,p,s) -> do
+        loader <- B.readFile l
+        owned <- B.readFile p
+        symbols <- parsePlatformSymbols s
+        unless (sha256Hex (sha256 loader)==loaderSha256 d) (fail "not pinned X-M1 1.50 loader")
+        unless (B.length owned > 0x1000) (fail "owned image is too small")
+        pure (Image d loader owned (relocation d symbols) (extraRegions symbols d) Nothing)
+      _ -> fail "input arity"
   createDirectoryIfMissing True work
   reports <- forM images $ \image -> do
     let d=imageDomain image

@@ -33,6 +33,7 @@ module Replacement.RtosScheduler.Oracle
   , stockRaiseIrq
   , OwnedImage
   , ownedImage
+  , aggregateBody
   , stockBody
   , ownedBody
   , ownEntryFunction
@@ -56,7 +57,7 @@ module Replacement.RtosScheduler.Oracle
   ) where
 
 import Control.Exception (evaluate)
-import Control.Monad (forM, unless, when)
+import Control.Monad (forM, forM_, unless, when)
 import Data.Bits (shiftL, shiftR, xor, (.&.), (.|.))
 import qualified Data.ByteString as B
 import Data.List (find, nub, sort)
@@ -85,6 +86,9 @@ import Emulation.OwnedCase
   )
 import Numeric (showHex)
 import Replacement.RtosOwnFirst.Regions (Domain (..), domainLabel, domainLoaderBase, domainLoaderSize, domains)
+import qualified Replacement.RtosOwnFirst.Regions as R
+import qualified Replacement.RtosPlatform.Aggregate as Agg
+import Data.List (isPrefixOf, sortOn)
 import qualified Replacement.RtosOwnFirst.Regions as OwnFirst
 import Replacement.RtosScheduler.Layout
 import Replacement.RtosScheduler.Regions
@@ -737,9 +741,59 @@ ownedBody table image (raiseAt, raiseBytes) helper = do
       , bodyData = []
       }
 
--- | The declared function at the entry.
+aggregateBody :: SchedulerDomain -> StockCode -> Agg.AggregateImage -> [Agg.AggregateSymbol] -> [Agg.SectionPlacement] -> [R.Extent] -> Helper -> Either String Body
+aggregateBody table stock@(StockCode domain loader) image symbols placements carriers helper = do
+  own <- regionOf table helper
+  symbol <- maybe (Left ("missing aggregate helper " ++ regionSymbol own)) Right (find ((== regionSymbol own) . Agg.symbolName) symbols)
+  shimSymbols <- forM [shimBodySymbol shim | shim <- domainShims table, shimHelper shim == helper] $ \name ->
+    maybe (Left ("missing aggregate shim " ++ name)) Right (find ((== name) . Agg.symbolName) symbols)
+  let R.GuestAddress loaderBase = domainLoaderBase domain
+      intervals = [(lo, hi) | R.Extent (R.GuestAddress lo) (R.GuestAddress hi) <- carriers]
+      inside address size = any (\(lo, hi) -> lo <= address && toInteger address + toInteger size <= toInteger hi) intervals
+      validate address size = unless (size > 0 && inside address size) (Left ("aggregate extent outside live carrier: " ++ show (address, size)))
+      text p = let section = Agg.placementSection p in section == ".text" || ".text." `isPrefixOf` section
+  mapM_ (\s -> validate (Agg.symbolAddress s) (Agg.symbolSize s)) symbols
+  mapM_ (\p -> when (Agg.placementBytes p > 0) (validate (Agg.placementAddress p) (Agg.placementBytes p))) placements
+  let end = Agg.imageBase image + fromIntegral (B.length (Agg.imageBytes image))
+  unless (Agg.imageBase image >= loaderBase) (Left "aggregate starts below loader")
+  forM_ intervals $ \(lo, hi) -> Agg.sliceAggregate image lo (hi - lo) >> pure ()
+  let padded = loader <> B.replicate (max 0 (fromIntegral (end - loaderBase) - B.length loader)) 0
+      install bytes (lo, hi) =
+        let offset = fromIntegral (lo - loaderBase)
+            chunk = either error id (Agg.sliceAggregate image lo (hi - lo))
+         in B.take offset bytes <> chunk <> B.drop (offset + B.length chunk) bytes
+      installed = foldl install padded intervals
+      raise = (domainRaiseIrq table, stockRaiseIrqBytes)
+      retained (a, n) = all (\(lo, hi) -> a + n <= lo || hi <= a) intervals
+      spans = [(Agg.symbolAddress s, Agg.symbolSize s) | s <- symbols]
+        ++ [(Agg.placementAddress p, Agg.placementBytes p) | p <- placements, text p, Agg.placementBytes p > 0]
+        ++ [raise | retained raise]
+      merged = merge (sortOn fst spans)
+      merge [] = []
+      merge ((a,n):rest) = extend a (a+n) rest
+      extend a z ((lo,n):rest) | lo <= z = extend a (max z (lo+n)) rest
+      extend a z rest = (a,z-a) : merge rest
+      boundaries = nub (sort (map regionEntry (domainRegions table) ++ map Agg.symbolAddress symbols))
+      functions = [(lo,hi-lo) | (a,n) <- merged, let functionCuts = a : filter (\v -> a < v && v < a+n) boundaries ++ [a+n], (lo,hi) <- zip functionCuts (drop 1 functionCuts)]
+      storageLow = min (Agg.imageBase image) (fst raise)
+      storageHigh = max end (fst raise + snd raise)
+      cuts = nub (sort (storageLow : storageHigh : concat [[a,a+n] | (a,n) <- merged]))
+      chunks = [(a,z, B.take (fromIntegral (z-a)) (B.drop (fromIntegral (a-loaderBase)) installed)) | (a,z) <- zip cuts (drop 1 cuts)]
+      executable a z = any (\(lo,n) -> lo <= a && z <= lo+n) merged
+  _ <- stockSlice stock (Extent (fst raise) (fst raise + snd raise))
+  pure Body
+    { bodyEntry = regionEntry own
+    , bodyCode = [(a,bytes) | (a,z,bytes) <- chunks, executable a z]
+    , bodyData = [(a,bytes) | (a,z,bytes) <- chunks, not (executable a z)]
+    , bodyFunctions = functions
+    , bodyOwn = [Extent (Agg.symbolAddress s) (Agg.symbolAddress s + Agg.symbolSize s) | s <- symbol : shimSymbols]
+    }
+
+-- | The helper body selected for replacement controls.
 ownEntryFunction :: Body -> Either String (Word32, Word32)
-ownEntryFunction body = maybe (Left "entry is not a declared function") (\size -> Right (bodyEntry body, size)) (lookup (bodyEntry body) (bodyFunctions body))
+ownEntryFunction body = case bodyOwn body of
+  Extent start end : _ -> Right (start, end - start)
+  [] -> Left "helper has no declared owned function"
 
 rewriteWords :: Word32 -> [Word32] -> Body -> Body
 rewriteWords at replacement body = body {bodyCode = map rewrite (bodyCode body)}
@@ -750,7 +804,7 @@ rewriteWords at replacement body = body {bodyCode = map rewrite (bodyCode body)}
           let offset = fromIntegral (at - base) in (base, B.take offset code <> bytes <> B.drop (offset + B.length bytes) code)
       | otherwise = (base, code)
 
--- | The body with the function at its entry rewritten as @code@ followed by fill words.
+-- | Rewrites the control function as @code@ followed by fill words.
 replaceEntry :: Word32 -> [Word32] -> Body -> Either String Body
 replaceEntry fill code body = do
   (entry, size) <- ownEntryFunction body

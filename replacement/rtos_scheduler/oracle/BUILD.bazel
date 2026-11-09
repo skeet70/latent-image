@@ -58,6 +58,7 @@ haskell_library(
         "//host:text",
         "//replacement/rtos_own_first/oracle:own-first-oracle-lib",
         "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//replacement/rtos_platform:aggregate",
     ],
 )
 
@@ -98,6 +99,8 @@ haskell_binary(
         "//host:host-support",
         "//host:json",
         "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//replacement/rtos_platform:aggregate",
+        "//replacement/rtos_platform:union",
     ],
 )
 
@@ -165,6 +168,8 @@ haskell_binary(
         "//host:host-support",
         "//host:json",
         "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//replacement/rtos_platform:aggregate",
+        "//replacement/rtos_platform:union",
     ],
 )
 
@@ -255,6 +260,7 @@ haskell_binary(
         "//host:filepath",
         "//host:json",
         "//replacement/rtos_platform:aggregate",
+        "//replacement/rtos_platform:union",
     ],
 )
 
