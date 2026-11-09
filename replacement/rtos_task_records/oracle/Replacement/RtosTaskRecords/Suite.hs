@@ -12,7 +12,7 @@ module Replacement.RtosTaskRecords.Suite
 import Control.Monad (forM, forM_, unless)
 import Data.Bits ((.|.), shiftL, xor)
 import qualified Data.ByteString as B
-import Data.List (isPrefixOf)
+import Data.List (isPrefixOf, nub, sort, sortOn)
 import qualified Data.Map.Strict as M
 import Data.Word (Word32, Word8)
 import Emulation.CachedNativeBatch (BatchReuse, cachedObservedBatch)
@@ -718,7 +718,7 @@ caseFor facts domain role stockImage ownedImage symbols one =
         , (GuestAddress (fromIntegral maskSave), 0x68)
         ]
       Owned | aggregate ->
-        [(GuestAddress (fromIntegral address), size) | (address, size) <- executable ++ preserved]
+        [(GuestAddress (fromIntegral address), size) | (address, size) <- admitted]
       Owned ->
         [(GuestAddress (fromIntegral address), size) | (_, address, size) <- symbols]
           ++ [(GuestAddress (fromIntegral maskSave), 0x68)]
@@ -739,6 +739,17 @@ caseFor facts domain role stockImage ownedImage symbols one =
       toInteger address < toInteger other + toInteger bytes
         && toInteger other < toInteger address + toInteger size
     preserved = [extent | extent <- [(maskSave, 0x68)], not (any (overlaps extent) allocated)]
+    admitted = concatMap splitAtEntries (merge (sortOn fst (executable ++ preserved)))
+    merge [] = []
+    merge ((address, size) : rest) = extend address (address + size) rest
+    extend address top [] = [(address, top - address)]
+    extend address top remaining@((next, size) : rest)
+      | next < top = extend address (max top (next + size)) rest
+      | otherwise = (address, top - address) : merge remaining
+    publicEntries = sort (nub [address | (name, address, size) <- symbols, size > 0, "xm1_platform_veneer_" `isPrefixOf` name])
+    splitAtEntries (address, size) =
+      let boundaries = address : [entryAddress | entryAddress <- publicEntries, address < entryAddress, entryAddress < address + size] ++ [address + size]
+       in [(low, high - low) | (low, high) <- zip boundaries (drop 1 boundaries)]
     _unused = (d, t)
 
 parseOwnedSymbols :: FilePath -> IO [(String, Word32, Word32)]
