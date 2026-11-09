@@ -3,7 +3,7 @@
 -- 'Emulation.SchedulerPairCheck'; this module owns the semaphore record layout and the
 -- independent expected-state rules for the seven native operations.
 module Emulation.SchedulerPairSemaphore
-  ( SemaphoreCall (..), checkSemaphoreCall, checkPendingSemaphore, SemaphoreLayout (..), semaphoreLayout, semaphoreWindows ) where
+  ( SemaphoreCall (..), SemaphoreWriter (..), checkSemaphoreCall, checkPendingSemaphore, SemaphoreLayout (..), semaphoreLayout, semaphoreWindows ) where
 
 import Control.Monad (foldM, forM_, unless, when)
 import Data.Bits ((.&.), (.|.), complement, shiftL, shiftR)
@@ -16,6 +16,8 @@ import Emulation.SchedulerPairFamily
 import Emulation.SchedulerPairModel (Memory)
 import Emulation.SchedulerPairPlan (Role (..))
 import Replacement.RtosOwnFirst.Regions (Domain (..))
+
+data SemaphoreWriter = SignalCaller | OtherWriter deriving (Eq, Show)
 
 class SemaphoreCall c where
   semaphoreDomain :: c -> Domain
@@ -31,7 +33,7 @@ class SemaphoreCall c where
   semaphoreService :: c -> Maybe SemaphoreService
   semaphoreTrace :: c -> Maybe FamilyTrace
   semaphoreSuspension :: c -> Maybe (Memory, [(Address, Int, Word32)])
-  semaphoreWriteTasks :: c -> [Word32]
+  semaphoreWriters :: c -> [SemaphoreWriter]
 
 expect :: FamilyRefusal -> Bool -> Either FamilyRefusal ()
 expect refusal valid = unless valid (Left refusal)
@@ -271,12 +273,12 @@ checkSignal call domain slot = do
       case semaphoreSuspension call of
         Nothing -> pure ()
         Just (_, prefix) -> do
-          let suffix = drop (length prefix) (zip (semaphoreWrites call) (semaphoreWriteTasks call))
+          let suffix = drop (length prefix) (zip (semaphoreWrites call) (semaphoreWriters call))
               protected = [(control, 0x10), (first, 0x38), (wait, 0x0c)]
               overlaps (Address address, size, _) (base, bytes) =
                 toInteger address < toInteger base + bytes && toInteger base < toInteger address + toInteger size
           forM_ suffix $ \(write, writer) ->
-            when (writer == semaphoreTask call) $
+            when (writer == SignalCaller) $
               expect FamilyLifetime (not (any (overlaps write) protected))
 
 -- A signal may switch to its released waiter before returning to its caller.
@@ -284,8 +286,20 @@ signalEffect :: SemaphoreCall c => c -> Domain -> Either FamilyRefusal Memory
 signalEffect call object = case semaphoreSuspension call of
   Nothing -> pure (semaphoreAfter call)
   Just (snapshot, writes) -> do
-    expect FamilyAssociation (length (semaphoreWriteTasks call) == length (semaphoreWrites call))
+    expect FamilyAssociation (length (semaphoreWriters call) == length (semaphoreWrites call))
     expect FamilyEffect (writes == take (length writes) (semaphoreWrites call))
+    trace <- maybe (Left FamilyContinuation) Right (semaphoreTrace call)
+    let history = familyTraceHistory trace
+        saves = filter ((== FamilySaveKind) . familyBoundaryKind) history
+        resumes = filter ((== FamilyResumeKind) . familyBoundaryKind) history
+        returns = filter ((== FamilyReturnKind) . familyBoundaryKind) history
+        entry = case semaphoreDomain call of DomainA -> 0x43640; DomainB -> 0xd3640
+    case (saves, resumes, returns) of
+      (saved : _, resumed : _, returned : _) -> do
+        expect FamilyContinuation (familyBoundaryAddress saved == Address entry)
+        expect FamilyContinuation (familyBoundaryInstructions saved < familyBoundaryInstructions resumed
+          && familyBoundaryInstructions resumed < familyBoundaryInstructions returned)
+      _ -> Left FamilyContinuation
     replayed <- foldM replayWrite (semaphoreBefore call) writes
     forM_ (M.keys (semaphoreBefore call)) $ \address ->
       expect FamilyEffect (M.lookup address replayed == M.lookup address snapshot)

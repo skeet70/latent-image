@@ -715,10 +715,10 @@ instance Sem.SemaphoreCall Call where
   semaphoreEpoch = callFirst
   semaphoreService call = case callSemantic call of SemaphoreSemantic service -> Just service; _ -> Nothing
   semaphoreTrace call = fmap familyTraceOf (callTrace call)
-  semaphoreWriteTasks call = [task | origin <- callWriteOrigins call, let Address task = writerTask origin]
+  semaphoreWriters call = [if ownsOrigin call origin then Sem.SignalCaller else Sem.OtherWriter | origin <- callWriteOrigins call]
   semaphoreSuspension call = do
     trace <- callTrace call
-    let (prefix, rest) = break ((== SaveBoundary) . boundaryKind) (traceHistory trace)
+    let (prefix, rest) = break (\boundary -> boundaryKind boundary == SaveBoundary && ownsBoundary call boundary) (traceHistory trace)
     case rest of
       saved : _ -> Just (boundaryMemory saved,
         [(address, size, value) | boundary <- prefix ++ [saved], Written address size value <- boundaryWrites boundary])
