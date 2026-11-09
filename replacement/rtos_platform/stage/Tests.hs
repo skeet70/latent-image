@@ -26,7 +26,7 @@ synthetic = Union 0xe7f000f0 domainA domainB
     entry at symbol veneer = Entry FixedPool "test" (GuestAddress at) symbol veneer
 
 linkedFor :: Union -> Linked
-linkedFor _ = Linked (bin (GuestAddress 0x40430)) (symbols (GuestAddress 0x40430) "veneer_a" "body_a") "" [] (bin (GuestAddress 0xd0430)) (symbols (GuestAddress 0xd0430) "veneer_b" "body_b") "" []
+linkedFor _ = Linked (bin (GuestAddress 0x40430)) (symbols (GuestAddress 0x40430) "veneer_a" "body_a") "" [(0x40460, 8)] (bin (GuestAddress 0xd0430)) (symbols (GuestAddress 0xd0430) "veneer_b" "body_b") "" [(0xd0460, 8)]
 
 bin :: GuestAddress -> B.ByteString
 bin (GuestAddress _base) =
@@ -106,6 +106,7 @@ main = do
           check "allocated body bytes survive DAT staging" (B.take 0x20 (B.drop (fromIntegral (base + 0x10 - loaderBase)) loader) == body)
           check "extracted DAT matches staged loader" (loader == stagedLoader staged domain)
           check "uncovered carrier slack receives trap fill" (B.take 4 (B.drop (fromIntegral (base + 4 - loaderBase)) loader) == U.putWord32 0xe7f000f0)
+          check "allocated readonly zero words survive DAT staging" (B.take 8 (B.drop (fromIntegral (base + 0x30 - loaderBase)) loader) == B.replicate 8 0)
   let refusedDemand = synthetic { unionA = (unionA synthetic) { mapDemand = [Demand FixedPool "body_a" 0x100] } }
   expectLeft "demand larger than the largest run refuses" (\e -> case e of FitRejected (CarrierDeficit DomainA FixedPool "body_a" 0x100 0xfc) -> True; _ -> False) (withLink refusedDemand (linkedFor synthetic))
   let movedVeneer = synthetic { unionA = (unionA synthetic) { mapEntries = [Entry FixedPool "test" (GuestAddress 0x40434) "body_a" "veneer_a"] } }
