@@ -341,6 +341,7 @@ entriesWords facts domain role one =
     ++ [(receiptBase + fromIntegral index * 4, 0) | index <- [0 .. 64 :: Int]]
     ++ [(receiptBase + 0x80 + fromIntegral index * 4, 0) | index <- [0 .. 64 :: Int]]
     ++ secondContextWords
+    ++ secondMembership
     ++ taskWords
   where
     d = domainFacts facts domain
@@ -363,6 +364,9 @@ entriesWords facts domain role one =
     secondContextWords = case caseCallback one of
       Switch -> switchWords (dfSchedulerLock d)
       SwitchDistinct -> switchWords secondLockCell
+      _ -> []
+    secondMembership = case caseCallback one of
+      SwitchDistinct -> [(entryAddress 2, 1), (entryAddress 4, 2)]
       _ -> []
     switchWords lockCell =
       [ (secondContextBase + contextSchedulerLock c, lockCell)

@@ -51,9 +51,9 @@ bindAggregate domain stock bytes symbols placements = do
       mappings = gaps (imageBase stock) loaderTop readonlySpans
       functions = concatMap splitPublic (merge executable)
   forM mappings $ \(address, size, isCode) -> do
-    let payload = B.take (fromIntegral size) (B.drop (fromIntegral (address - imageBase stock)) installed)
+    let mappingBytes = B.take (fromIntegral size) (B.drop (fromIntegral (address - imageBase stock)) installed)
         fetches = [(at, count) | (at, count, _) <- functions, isCode, inside at count address size]
-    pure (Image address payload, isCode, fetches)
+    pure (Image address mappingBytes, isCode, fetches)
   where
     fixed entry s = A.symbolName s == U.entryVeneer entry && R.GuestAddress (A.symbolAddress s) == U.entryAddress entry && A.symbolSize s == 4
     allocated s = any (\p -> sectionKind p == Just True && inside (A.symbolAddress s) (A.symbolSize s) (A.placementAddress p) (A.placementBytes p)) placements || any (`fixed` s) (U.mapEntries domain)
