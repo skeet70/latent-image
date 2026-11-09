@@ -514,12 +514,27 @@ impl OpenCall {
         boundary.bank = self.bank[self.bank_cursor..].to_vec();
         self.write_cursor = self.writes.len();
         self.bank_cursor = self.bank.len();
-        if matches!(self.entry.slot.semantic, Semantic::Service { .. } | Semantic::Family { .. }) {
+        if matches!(self.entry.slot.semantic, Semantic::Service { .. } | Semantic::Family { .. } | Semantic::Semaphore { .. }) {
             if boundary.kind == BoundaryKind::Save { self.suspended = true; }
             if boundary.kind == BoundaryKind::Resume { self.suspended = false; }
         }
         self.history.push(boundary);
         Ok(())
+    }
+
+    fn record_timer_completion(&mut self, boundary: Boundary) -> Result<(), String> {
+        if boundary.kind == BoundaryKind::TimerRemove {
+            let Some(entry) = boundary.value else { return Ok(()); };
+            let latest = self.history.iter().rev().find(|event| matches!(event.kind,
+                BoundaryKind::TimerInsert | BoundaryKind::TimerRemove | BoundaryKind::TimerConsume | BoundaryKind::Resume));
+            let armed = latest.is_some_and(|event| event.kind == BoundaryKind::TimerInsert
+                && event.value == Some(entry) && event.task == self.entry.task
+                && event.instructions < boundary.instructions && event.order < boundary.order);
+            let owner = boundary.memory.iter().find(|word| word.address.0 == entry + 8).map(|word| word.value);
+            if !self.suspended || !armed
+                || boundary.registers[1] != entry || owner != Some(self.entry.task) { return Ok(()); }
+        }
+        self.record(boundary)
     }
 
     fn dispatch_complete(&self, key: &ReturnKey, context: &Context, semantic: Option<Semantic>) -> bool {
@@ -1051,7 +1066,7 @@ fn family_queue(walk: &mut FamilyWalk, family: Family, control: u32) -> Result<(
     let mut node = walk.pointer(control)?;
     for _ in 0..FAMILY_QUEUE_LIMIT {
         let Some(task) = node.filter(|&task| task != control) else { return Ok(()) };
-        for offset in [0x00, 0x04, 0x0c, 0x14, 0x18, 0x1c, 0x20] { walk.capture_word(task + offset); }
+        walk.record(task, TASK_RECORD_BYTES);
         if let Some(saved) = walk.pointer(task + 0x18)? { if saved % 4 == 0 { walk.record(saved, 36); } }
         if let Some((waiter, slot)) = family_task(task) {
             let tables = FamilyTables::of(waiter);
@@ -1212,7 +1227,7 @@ fn semaphore_queue(walk: &mut FamilyWalk, tables: SemaphoreTables, control: u32)
     let mut node = walk.pointer(control)?;
     for _ in 0..FAMILY_QUEUE_LIMIT {
         let Some(task) = node.filter(|&task| task != control) else { return Ok(()) };
-        for offset in [0x00, 0x04, 0x0c, 0x14, 0x18, 0x1c, 0x20, 0x24] { walk.capture_word(task + offset); }
+        walk.record(task, TASK_RECORD_BYTES);
         if let Some((waiter, slot)) = family_task(task) {
             let waiter_tables = SemaphoreTables::of(waiter);
             if let Some(wait) = waiter_tables.waits.record(slot) {
@@ -1662,8 +1677,8 @@ impl Observer<'_> {
         Ok(())
     }
 
-    /// A timer expiry belongs to the parked owner, not to the callback's current call.
-    fn consume_timer(&mut self, machine: &Machine, context: &Context, tcm: [u32; 2], entry: u32, task: u32) -> Result<(), String> {
+    /// Timer completion belongs to the parked owner as well as any observed waker.
+    fn complete_timer(&mut self, machine: &Machine, context: &Context, tcm: [u32; 2], entry: u32, task: u32, kind: BoundaryKind) -> Result<(), String> {
         let board = Board { machine, maps: &self.maps };
         let keys: Vec<ReturnKey> = self.open.pending.iter()
             .filter(|(_, calls)| calls.iter().any(|call| matches!(call.entry.slot.semantic, Semantic::Family { .. } | Semantic::Semaphore { .. }) && call.entry.task == Read::Committed { value: task }))
@@ -1673,8 +1688,8 @@ impl Observer<'_> {
             if let Some(calls) = self.open.pending.get_mut(&key) {
                 for call in calls.iter_mut().filter(|call| matches!(call.entry.slot.semantic, Semantic::Family { .. } | Semantic::Semaphore { .. }) && call.entry.task == Read::Committed { value: task }) {
                     let memory = call.entry.memory.iter().map(|word| Ok(WordValue { address: word.address, value: board.word(context.core, tcm, word.address.0)? })).collect::<Result<Vec<_>, String>>()?;
-                    call.record(Boundary { kind: BoundaryKind::TimerConsume, address: Hex(context.pc), instructions: context.instructions,
-                        order, core: context.core, task: Read::Committed { value: task }, sp: Hex(context.sp), cpsr: context.cpsr,
+                    call.record_timer_completion(Boundary { kind, address: Hex(context.pc), instructions: context.instructions,
+                        order, core: context.core, task: if kind == BoundaryKind::TimerConsume { Read::Committed { value: task } } else { context.current }, sp: Hex(context.sp), cpsr: context.cpsr,
                         registers: context.registers, memory, writes: Vec::new(), bank: Vec::new(), value: Some(entry),
                         cpacr: board.register(context.core, arm::Register::Cpacr)?,
                         fpexc: board.register(context.core, arm::Register::Fpexc)?,
@@ -1832,10 +1847,16 @@ impl Observer<'_> {
                         require(committed(board.word(core, tcm, entry + 8)?)? == callback_task, "timer callback task differs from entry owner")?;
                         entry
                     } else if let Some(register) = probe.kind.timer_value_register() { board.register(core, arm::Register::R(register))? } else { value };
+                    let removed_owner = if kind == BoundaryKind::TimerRemove {
+                        Some(committed(board.word(core, tcm, boundary_value + 8)?)?)
+                    } else { None };
                     if kind == BoundaryKind::TimerConsume {
-                        self.consume_timer(machine, &context, tcm, boundary_value, callback_task)?;
+                        self.complete_timer(machine, &context, tcm, boundary_value, callback_task, kind)?;
                     } else {
                         self.boundary(machine, &context, tcm, kind, Some(boundary_value))?;
+                        if let Some(owner) = removed_owner {
+                            self.complete_timer(machine, &context, tcm, boundary_value, owner, kind)?;
+                        }
                     }
                     if kind == BoundaryKind::DiscardedRead && value == 1 && self.validated.plan.probes[index].register.0 == 3 {
                         let discarded = self.open.take_where(|key,call| key.core==core && call.entry.task==context.current && matches!(call.entry.slot.semantic,Semantic::Service { .. } | Semantic::Family { .. } | Semantic::Semaphore { .. }));
@@ -2385,14 +2406,29 @@ mod tests {
         assert!(addresses.contains(&waits[0]) && addresses.contains(&(waits[0] + 0x14)));
         assert!(addresses.contains(&tables.flag_timers.record(1).unwrap()));
         assert!(addresses.contains(&tables.flag_timers.record(5).unwrap()));
-        for offset in [0x00, 0x04, 0x0c, 0x14, 0x18, 0x1c, 0x20] { assert!(addresses.contains(&(tasks[0] + offset))); }
+        for offset in (0..TASK_RECORD_BYTES).step_by(4) { assert!(addresses.contains(&(tasks[0] + offset))); }
         let last = FAMILY_QUEUE_LIMIT - tasks.len() - 1;
-        for offset in [0x00, 0x04, 0x0c, 0x14, 0x18, 0x1c, 0x20] {
+        for offset in (0..TASK_RECORD_BYTES).step_by(4) {
             assert!(addresses.contains(&(synthetic[last] + offset)));
             assert!(!addresses.contains(&(synthetic[last + 1] + offset)));
         }
         assert!(!addresses.contains(&tables.flag_controls.record(4).unwrap()));
-        assert!(addresses.len() <= FAMILY_QUEUE_LIMIT * 7 + 64);
+        assert!(addresses.len() <= FAMILY_QUEUE_LIMIT * (TASK_RECORD_BYTES as usize / 4) + 64);
+    }
+
+    #[test]
+    fn semaphore_waiter_snapshot_keeps_release_state() {
+        let tables = SemaphoreTables::of(Domain::A);
+        let control = tables.controls.record(1).unwrap();
+        let task = tables.tasks.record(1).unwrap();
+        let words = BTreeMap::from([(control, task), (task, control)]);
+        let mut read = family_read(&words);
+        let addresses = semaphore_words(&mut read, Domain::A, SemaphoreService::Signal,
+            [1, 0, 0, 0], None).unwrap();
+        for offset in (0..TASK_RECORD_BYTES).step_by(4) {
+            assert!(addresses.contains(&(task + offset)));
+        }
+        assert!(!addresses.contains(&(task + TASK_RECORD_BYTES)));
     }
 
     #[test]
@@ -2450,6 +2486,55 @@ mod tests {
             ["timer-insert", "timer-remove", "timer-insert"]);
         assert_eq!(history[0]["value"], entry);
         assert_eq!(history[0]["registers"][1], entry);
+    }
+
+    #[test]
+    fn parked_wait_retains_only_its_current_owned_timer_removal() {
+        for semantic in [Semantic::Family { name: FamilyService::FamilyFlagTimedWait },
+            Semantic::Semaphore { name: SemaphoreService::TimedWait }] {
+        let entry = FamilyTables::of(Domain::A).flag_timers.record(1).unwrap();
+        let mut call = family_call(FamilyService::FamilyFlagTimedWait);
+        call.entry.slot.semantic = semantic;
+        let mut timer = boundary(BoundaryKind::TimerInsert);
+        timer.value = Some(entry);
+        timer.task = call.entry.task;
+        timer.instructions = 10;
+        timer.order = 10;
+        call.record(timer.clone()).unwrap();
+        call.record(boundary(BoundaryKind::Save)).unwrap();
+        timer.kind = BoundaryKind::TimerRemove;
+        timer.instructions = 20;
+        timer.order = 20;
+        timer.registers[1] = entry;
+        timer.memory = vec![WordValue { address: Hex(entry + 8), value: call.entry.task }];
+        timer.task = Read::Committed { value: 0x9100 };
+        timer.core = Core::Secondary;
+        let mut wrong_owner = timer.clone();
+        wrong_owner.memory[0].value = Read::Committed { value: 0x9100 };
+        call.record_timer_completion(wrong_owner).unwrap();
+        let mut wrong_order = timer.clone();
+        wrong_order.order = 9;
+        call.record_timer_completion(wrong_order).unwrap();
+        let mut wrong_time = timer.clone();
+        wrong_time.instructions = 9;
+        call.record_timer_completion(wrong_time).unwrap();
+        let mut other = timer.clone();
+        other.value = Some(entry + 12);
+        call.record_timer_completion(other).unwrap();
+        call.record_timer_completion(timer.clone()).unwrap();
+        timer.instructions = 30;
+        timer.order = 30;
+        call.record_timer_completion(timer).unwrap();
+        let wire = serde_json::to_value(&call).unwrap();
+        let removals: Vec<_> = wire["history"].as_array().unwrap().iter()
+            .filter(|event| event["kind"] == "timer-remove").collect();
+        assert_eq!(removals.len(), 1);
+        assert_eq!(removals[0]["value"], entry);
+        assert_eq!(removals[0]["instructions"], 20);
+        assert_eq!(removals[0]["order"], 20);
+        assert_eq!(removals[0]["core"], "secondary");
+        assert_eq!(removals[0]["task"]["value"], 0x9100);
+        }
     }
 
     #[test]

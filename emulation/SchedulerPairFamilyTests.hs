@@ -123,7 +123,7 @@ flagWaitWrites timer =
 timerBoundary :: BoundaryKind -> Word32 -> Word32 -> Boundary
 timerBoundary kind entry task =
   Boundary kind (Address (if kind==TimerInsertBoundary then 0x44c60 else 0x44ca8)) 1 0
-    (registers [1,entry]) M.empty [] [] (Just entry) task [] [] S.empty
+    (registers [1,entry]) (M.singleton (Address (entry+8)) task) [] [] (Just entry) task [] [] S.empty
 
 tickBoundary :: Word32 -> Boundary
 tickBoundary entry = Boundary TimerConsumeBoundary (Address 0x44d8c) 2 0 (registers [entry]) M.empty [] [] (Just entry) 0x9000 [] [] S.empty
@@ -243,6 +243,15 @@ main = do
       expiryWrites = [write | write@(Written (Address address) _ _) <- waitWrites,address/=0x8100]
   assertLeft "orphan timer" FamilyTimer (checkFamilyCall (flagWaitCall waitWrites 0 [timerBoundary TimerInsertBoundary flagTimerAddress 0x9000]) [])
   assertRight "wake removes timer" (checkFamilyCall (flagWaitCall waitWrites 0 [timerBoundary TimerInsertBoundary flagTimerAddress 0x9000,timerBoundary TimerRemoveBoundary flagTimerAddress 0x9000]) [])
+  let freshBefore = M.insert (Address (flagTimerAddress+8)) 0 flagWaitBefore
+      freshHistory = [timerBoundary TimerInsertBoundary flagTimerAddress 0x9000,timerBoundary TimerRemoveBoundary flagTimerAddress 0x9000]
+      freshTimerCall = callOf DomainA 0x48b30 (FamilySemantic FlagTimedWait) [1,1,0,0x8100]
+        freshBefore (applyWrites freshBefore waitWrites) 0 (traceOf (withStack 0x8000 0) freshHistory Returned) waitWrites
+  assertRight "wake removes freshly initialized timer" (checkFamilyCall freshTimerCall [])
+  let wrongOwner = (timerBoundary TimerRemoveBoundary flagTimerAddress 0x9000)
+        { boundaryMemory = M.singleton (Address (flagTimerAddress+8)) 0 }
+  assertLeft "removal snapshot must name owner" FamilyTimer
+    (checkFamilyCall (flagWaitCall waitWrites 0 [timerBoundary TimerInsertBoundary flagTimerAddress 0x9000,wrongOwner]) [])
   assertLeft "expiry without pop" FamilyTimer (checkFamilyCall (flagWaitCall expiryWrites 0xffffffce [timerBoundary TimerInsertBoundary flagTimerAddress 0x9000]) [])
   assertRight "expiry tick pop" (checkFamilyCall (flagWaitCall expiryWrites 0xffffffce [timerBoundary TimerInsertBoundary flagTimerAddress 0x9000,tickBoundary flagTimerAddress]) [])
   let returnBoundary = Boundary ReturnBoundary (Address 0x43640) 20 0 (registers [0]) M.empty [] [] Nothing 0x9000 [] [] S.empty
