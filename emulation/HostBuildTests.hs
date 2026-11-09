@@ -6,20 +6,24 @@ module Main (main) where
 
 import Control.Concurrent (threadDelay)
 import Control.Exception (IOException, try)
-import Control.Monad (unless)
+import Control.Monad (unless, void)
+import Data.Char (isDigit)
 import Data.List (isInfixOf, isPrefixOf)
-import Data.Maybe (fromMaybe, listToMaybe)
-import System.Directory (createDirectoryIfMissing, doesFileExist, getTemporaryDirectory, makeAbsolute)
-import System.Environment (getArgs, getEnvironment, lookupEnv)
+import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
+import System.Directory (canonicalizePath, createDirectoryIfMissing, doesFileExist, getTemporaryDirectory, makeAbsolute)
+import System.Environment (getArgs, getEnvironment, getExecutablePath, lookupEnv)
 import System.Exit (ExitCode (..), exitFailure)
-import System.FilePath ((</>))
-import System.IO (hGetContents)
+import System.FilePath (takeDirectory, (</>))
+import System.IO (IOMode (WriteMode), SeekMode (AbsoluteSeek), hClose, hGetContents, openFile)
 import System.Posix.Files (setFileMode)
+import System.Posix.IO (LockRequest (WriteLock), OpenFileFlags (creat), OpenMode (ReadWrite), closeFd, defaultFileFlags, openFd, setLock)
 import System.Posix.Process (getProcessID)
 import System.Posix.Signals (signalProcess, sigKILL)
+import System.Posix.Types (FileOffset)
 import System.Posix.User (getEffectiveUserID)
-import System.Process (CreateProcess (..), ProcessHandle, StdStream (CreatePipe), createProcess, getPid, proc, waitForProcess)
+import System.Process (CreateProcess (..), ProcessHandle, StdStream (CreatePipe, NoStream, UseHandle), createProcess, getPid, proc, waitForProcess)
 import System.Timeout (timeout)
+import Text.Read (readMaybe)
 
 fakeBazel :: String
 fakeBazel = unlines
@@ -39,8 +43,32 @@ main :: IO ()
 main = do
   arguments <- getArgs
   case arguments of
+    "--hold-range" : range -> holdRange range
     [binary] -> makeAbsolute binary >>= run >>= \passed -> unless passed exitFailure
-    _ -> ioError (userError "usage: host-build-tests HOST_BUILD")
+    _ -> ioError (userError "usage: host-build-tests HOST_BUILD | --hold-range LOCK OFFSET READY RELEASE")
+
+-- | A controlled external holder: one byte-range write lock on the shared lock
+-- file until @RELEASE@ appears, then the descriptor closes and the lock drops.
+holdRange :: [String] -> IO ()
+holdRange arguments = case arguments of
+  [lockPath, offsetText, readyPath, releasePath] ->
+    case (readMaybe offsetText :: Maybe FileOffset) of
+      Just offset -> do
+        createDirectoryIfMissing True (takeDirectory lockPath)
+        fd <- openFd lockPath ReadWrite defaultFileFlags {creat = Just 0o600}
+        setLock fd (WriteLock, AbsoluteSeek, offset, 1)
+        getProcessID >>= \pid -> writeFile readyPath (show pid)
+        waitRelease releasePath (600 :: Int)
+        closeFd fd
+      Nothing -> ioError (userError "hold-range: OFFSET is not a file offset")
+  _ -> ioError (userError "usage: host-build-tests --hold-range LOCK OFFSET READY RELEASE")
+
+waitRelease :: FilePath -> Int -> IO ()
+waitRelease path remaining = do
+  released <- doesFileExist path
+  if released || remaining <= 0
+    then pure ()
+    else threadDelay 100_000 >> waitRelease path (remaining - 1)
 
 data Invocation = Invocation
   { invocationProcess :: ProcessHandle
@@ -121,14 +149,111 @@ run binary = do
   refused <- expect "a caller holding an emulator slot is refused without running bazel"
     (slottedCode == ExitFailure 2 && not slottedRan)
 
-  pure (and [serialized, passed, released, failed, refused])
+  self <- getExecutablePath
+  let lockPath = home </> ".cache" </> "xm1-host-build" </> "build.lock"
+      readyA = root </> "holder-a-ready"
+      readyB = root </> "holder-b-ready"
+      releaseA = root </> "holder-a-release"
+      releaseB = root </> "holder-b-release"
+      diagnosticLog = root </> "diagnostic-stderr"
+  holderA <- spawnHolder self root lockPath 0 readyA releaseA
+  pidA <- waitForPid readyA
+  writeFile (release "diagnostic") ""
+  diagnostic <- spawnLogged binary root
+    (("FAKE_NAME", "diagnostic") : ("FAKE_RELEASE", release "diagnostic") : environment) diagnosticLog
+  firstSeen <- case pidA of
+    Just owner -> waitFor (fmap (("pid=" ++ owner) `isInfixOf`) (readFile' diagnosticLog))
+    Nothing -> pure False
+  holderB <- spawnHolder self root lockPath 1 readyB releaseB
+  pidB <- waitForPid readyB
+  writeFile releaseA ""
+  changedSeen <- case pidB of
+    Just owner -> waitFor (fmap (("pid=" ++ owner) `isInfixOf`) (readFile' diagnosticLog))
+    Nothing -> pure False
+  early <- started "diagnostic"
+  writeFile releaseB ""
+  diagnosticCode <- timeout 20_000_000 (waitForProcess (invocationProcess diagnostic))
+  case diagnosticCode of
+    Just _ -> pure ()
+    Nothing -> do
+      getPid (invocationProcess diagnostic) >>= maybe (pure ()) (signalProcess sigKILL)
+      void (waitForProcess (invocationProcess diagnostic))
+  diagnosticErr <- invocationStderr diagnostic
+  _ <- waitForProcess (holderProcess holderA)
+  _ <- waitForProcess (holderProcess holderB)
+  canonicalRoot <- canonicalizePath root
+  let sampled = mapMaybe reportedPid (lines diagnosticErr)
+      context = ("cwd=" ++ canonicalRoot) `isInfixOf` diagnosticErr
+      sequenceOk = case (pidA, pidB) of
+        (Just firstPid, Just secondPid) -> sampled == [firstPid, secondPid]
+        _ -> False
+  holders <- expect "contention names the first and changed kernel owner while admission waits"
+    (firstSeen && changedSeen && not early && diagnosticCode == Just ExitSuccess && sequenceOk && context)
+  unless holders (putStrLn (show (pidA, pidB, diagnosticCode, sampled, context) ++ "\n" ++ diagnosticErr))
+
+  pure (and [serialized, passed, released, failed, refused, holders])
 
 spawn :: FilePath -> FilePath -> [(String, String)] -> IO Invocation
-spawn binary root environment = do
-  (_, _, Just err, handle) <- createProcess (proc binary ["build", "//fake:target"])
-    { env = Just environment, cwd = Just root, std_err = CreatePipe }
-  contents <- hGetContents err
-  pure (Invocation handle (length contents `seq` pure contents))
+spawn = spawnWith CreatePipe
+
+spawnLogged :: FilePath -> FilePath -> [(String, String)] -> FilePath -> IO Invocation
+spawnLogged binary root environment logPath = do
+  handle <- openFile logPath WriteMode
+  invocation <- spawnWith (UseHandle handle) binary root environment
+  pure invocation { invocationStderr = hClose handle >> readFile' logPath }
+
+spawnWith :: StdStream -> FilePath -> FilePath -> [(String, String)] -> IO Invocation
+spawnWith stderrStream binary root environment = do
+  (_, _, err, handle) <- createProcess (proc binary ["build", "//fake:target"])
+    { env = Just environment, cwd = Just root, std_err = stderrStream }
+  case err of
+    Just pipe -> do
+      contents <- hGetContents pipe
+      pure (Invocation handle (length contents `seq` pure contents))
+    Nothing -> pure (Invocation handle (pure ""))
+
+data Holder = Holder
+  { holderProcess :: ProcessHandle
+  }
+
+spawnHolder :: FilePath -> FilePath -> FilePath -> FileOffset -> FilePath -> FilePath -> IO Holder
+spawnHolder self root lockPath offset readyPath releasePath = do
+  (_, _, _, handle) <- createProcess
+    (proc self ["--hold-range", lockPath, show offset, readyPath, releasePath])
+    { cwd = Just root, std_out = NoStream, std_err = NoStream }
+  pure (Holder handle)
+
+waitForPid :: FilePath -> IO (Maybe String)
+waitForPid path = go (100 :: Int)
+  where
+    go 0 = readyPid path
+    go remaining = do
+      found <- readyPid path
+      case found of
+        Just pid -> pure (Just pid)
+        Nothing -> threadDelay 100_000 >> go (remaining - 1)
+
+readyPid :: FilePath -> IO (Maybe String)
+readyPid path = do
+  exists <- doesFileExist path
+  if not exists
+    then pure Nothing
+    else do
+      text <- readFile' path
+      let digits = takeWhile isDigit text
+      pure (if null digits then Nothing else Just digits)
+
+reportedPid :: String -> Maybe String
+reportedPid line = do
+  rest <- after "holder pid=" line
+  let digits = takeWhile isDigit rest
+  if null digits then Nothing else Just digits
+
+after :: String -> String -> Maybe String
+after needle text
+  | needle `isPrefixOf` text = Just (drop (length needle) text)
+  | null text = Nothing
+  | otherwise = after needle (drop 1 text)
 
 waitFor :: IO Bool -> IO Bool
 waitFor condition = go (100 :: Int)

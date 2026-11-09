@@ -22,21 +22,22 @@ import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Exception (IOException, evaluate, try)
 import Control.Monad (unless, void, when)
-import Data.Char (isDigit, isSpace)
+import Data.Char (isDigit, isPrint, isSpace)
 import Data.List (dropWhileEnd, isPrefixOf, stripPrefix)
-import Data.Maybe (isNothing)
+import Data.Maybe (isNothing, listToMaybe)
 import GHC.Clock (getMonotonicTime)
 import Numeric (showFFloat)
 import System.Directory (createDirectoryIfMissing, findExecutable, getHomeDirectory, removeFile)
 import System.Environment (getExecutablePath, lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (..), exitWith)
 import System.FilePath (isAbsolute, takeDirectory, takeFileName, (</>))
-import System.IO (SeekMode (AbsoluteSeek), hFlush, hGetContents, hGetLine, hPutStrLn, stderr)
+import System.IO (IOMode (ReadMode), SeekMode (AbsoluteSeek), hFlush, hGetChar, hGetContents, hGetLine, hPutStrLn, stderr, withFile)
 import System.IO.Error (catchIOError, isDoesNotExistError)
-import System.Posix.IO (FdOption (CloseOnExec), LockRequest (WriteLock), OpenFileFlags (creat), OpenMode (ReadWrite), closeFd, createPipe, defaultFileFlags, fdToHandle, openFd, setFdOption, setLock)
+import System.Posix.Files (readSymbolicLink)
+import System.Posix.IO (FdOption (CloseOnExec), FileLock, LockRequest (WriteLock), OpenFileFlags (creat), OpenMode (ReadWrite), closeFd, createPipe, defaultFileFlags, fdToHandle, getLock, openFd, setFdOption, setLock)
 import System.Posix.Process (executeFile, getProcessID)
 import System.Posix.Signals (Handler (Catch), installHandler, sigINT)
-import System.Posix.Types (Fd (..))
+import System.Posix.Types (Fd (..), ProcessID)
 import System.Process (CreateProcess (..), createProcess, getProcessExitCode, proc, readProcessWithExitCode, terminateProcess, waitForProcess)
 import System.Timeout (timeout)
 import Text.Read (readMaybe)
@@ -222,6 +223,20 @@ admittedFlags command
   | command `elem` ["build", "test", "run", "coverage"] = ["--jobs=4", "--local_resources=memory=3072"]
   | otherwise = []
 
+-- | One conflicting-lock query result. F_GETLK names a single conflicting
+-- lock, so the owner is a sample at query time rather than an ownership
+-- receipt.
+data KernelOwner = KernelOwner ProcessID | KernelUnlocked | KernelUnknown
+  deriving (Eq)
+
+data HolderDetails = HolderDetails
+  { holderCommand :: Maybe String
+  , holderDirectory :: Maybe FilePath
+  , holderOutputBase :: Maybe FilePath
+  }
+
+data OwnerSample = OwnerNone | OwnerUnknown | OwnerReported ProcessID (Maybe HolderDetails)
+
 acquireBuildLock :: FilePath -> IO Fd
 acquireBuildLock directory = do
   fd <- openFd (directory </> "build.lock") ReadWrite defaultFileFlags {creat = Just 0o600}
@@ -231,12 +246,110 @@ acquireBuildLock directory = do
         case locked of
           Right () -> pure fd
           Left _ -> do
-            unless announced $ do
-              hPutStrLn stderr ("Waiting for the host build lock in " ++ directory)
-              hFlush stderr
+            announced' <- announceContention directory fd announced
             threadDelay 1_000_000
-            attempt True
-  attempt False
+            attempt announced'
+  attempt Nothing
+
+-- | Reports the sampled owner on the first contention and when it changes;
+-- sampling errors stay diagnostic. The last announced PID is compared before
+-- any @/proc@ read, so an unchanged holder costs one kernel query per attempt.
+announceContention :: FilePath -> Fd -> Maybe (Maybe ProcessID) -> IO (Maybe (Maybe ProcessID))
+announceContention directory fd previous = do
+  queried <- try (queryKernelOwner fd) :: IO (Either IOException KernelOwner)
+  case queried of
+    Right (KernelOwner pid)
+      | previous == Just (Just pid) -> pure previous
+      | otherwise -> do
+          details <- holderDetails pid
+          confirmed <- queryKernelOwner fd
+          announce previous (OwnerReported pid (if confirmed == KernelOwner pid then details else Nothing))
+    Right KernelUnlocked -> announce previous OwnerNone
+    Right KernelUnknown -> announce previous OwnerUnknown
+    Left _ -> announce previous OwnerUnknown
+  where
+    announce lastSample sample =
+      if lastSample == Just (ownerPid sample)
+        then pure lastSample
+        else do
+          (hPutStrLn stderr (renderContention directory sample) >> hFlush stderr)
+            `catchIOError` \_ -> pure ()
+          pure (Just (ownerPid sample))
+
+ownerPid :: OwnerSample -> Maybe ProcessID
+ownerPid OwnerNone = Nothing
+ownerPid OwnerUnknown = Nothing
+ownerPid (OwnerReported pid _) = Just pid
+
+queryKernelOwner :: Fd -> IO KernelOwner
+queryKernelOwner fd = do
+  result <- try (getLock fd (WriteLock, AbsoluteSeek, 0, 0))
+    :: IO (Either IOException (Maybe (ProcessID, FileLock)))
+  pure $ case result of
+    Right (Just (pid, _)) | pid > 0 -> KernelOwner pid
+    Right (Just _) -> KernelUnknown
+    Right Nothing -> KernelUnlocked
+    Left _ -> KernelUnknown
+
+-- | Bounded @/proc@ metadata for a sampled owner. Missing or unreadable
+-- entries stay absent; no lookup failure is an ownership fact.
+holderDetails :: ProcessID -> IO (Maybe HolderDetails)
+holderDetails pid = do
+  command <- boundedText 64 ("/proc" </> show pid </> "comm")
+  directory <- try (readSymbolicLink ("/proc" </> show pid </> "cwd")) :: IO (Either IOException FilePath)
+  outputBase <- processOutputBase pid
+  let details = HolderDetails
+        (sanitizeText 64 . trim <$> command)
+        (either (const Nothing) (Just . sanitizeText 512) directory)
+        outputBase
+  pure $ case details of
+    HolderDetails Nothing Nothing Nothing -> Nothing
+    _ -> Just details
+
+processOutputBase :: ProcessID -> IO (Maybe FilePath)
+processOutputBase pid = do
+  contents <- boundedText 4096 ("/proc" </> show pid </> "cmdline")
+  pure $ contents >>= \text ->
+    listToMaybe
+      [ sanitizeText 512 base
+      | argument <- nulSeparated text
+      , Just base <- [stripPrefix "--output_base=" argument]
+      , not (null base)
+      ]
+
+nulSeparated :: String -> [String]
+nulSeparated text = case break (== '\0') text of
+  (argument, []) -> [argument]
+  (argument, _ : rest) -> argument : nulSeparated rest
+
+boundedText :: Int -> FilePath -> IO (Maybe String)
+boundedText limit path = do
+  result <- try (withFile path ReadMode (\handle -> gather handle limit [])) :: IO (Either IOException String)
+  pure (either (const Nothing) Just result)
+  where
+    gather _ 0 acc = pure (reverse acc)
+    gather handle remaining acc = do
+      next <- try (hGetChar handle) :: IO (Either IOException Char)
+      case next of
+        Left _ -> pure (reverse acc)
+        Right character -> gather handle (remaining - 1) (character : acc)
+
+sanitizeText :: Int -> String -> String
+sanitizeText limit = take limit . map (\character -> if isPrint character then character else '?')
+
+renderContention :: FilePath -> OwnerSample -> String
+renderContention directory sample =
+  "host-build: waiting for build lock in " ++ sanitizeText 512 directory ++ "; " ++ holderText sample
+
+holderText :: OwnerSample -> String
+holderText OwnerNone = "holder=none"
+holderText OwnerUnknown = "holder=unknown"
+holderText (OwnerReported pid Nothing) = "holder pid=" ++ show pid ++ " details=unavailable"
+holderText (OwnerReported pid (Just details)) =
+  "holder pid=" ++ show pid
+    ++ maybe "" (\name -> " command=" ++ name) (holderCommand details)
+    ++ maybe "" (\path -> " cwd=" ++ path) (holderDirectory details)
+    ++ maybe "" (\base -> " output_base=" ++ base ++ " command_log=" ++ (base </> "command.log")) (holderOutputBase details)
 
 -- | Stops the scope of this lock's previous holder when its processes outlived
 -- the holder, then records @unit@ as the current holder's scope.
