@@ -16,8 +16,10 @@ import System.Environment (getArgs)
 import System.Exit (exitFailure)
 import System.FilePath ((</>), takeDirectory)
 import Replacement.RtosObjects.Layout (parseFacts)
-import Replacement.RtosObjects.Suite (FamilyRun (..), Image (..), extents, runFamily)
-import Replacement.RtosOwnFirst.Regions (Domain (..))
+import Replacement.RtosObjects.Suite (FamilyRun (..), Image (..), Payload (..), extents, runFamily)
+import Replacement.RtosOwnFirst.Regions (Domain (..), GuestAddress (..), Extent (..))
+import qualified Replacement.RtosPlatform.Aggregate as Agg
+import qualified Replacement.RtosPlatform.Union as Union
 
 main :: IO ()
 main = do
@@ -30,20 +32,24 @@ main = do
   layoutPath <- required "--layout"
   loaderA <- required "--loader-a"
   loaderB <- required "--loader-b"
-  ownedA <- required "--owned-a-bin"
-  ownedB <- required "--owned-b-bin"
+  aggregate <- aggregateInputs arguments
   resultsPath <- required "--results"
   facts <- either fail pure . parseFacts =<< B.readFile layoutPath
   loaderABytes <- B.readFile loaderA
   loaderBBytes <- B.readFile loaderB
-  ownedABytes <- B.readFile ownedA
-  ownedBBytes <- B.readFile ownedB
+  (ownedAImage, ownedBImage) <- case aggregate of
+    Just images -> pure images
+    Nothing -> do
+      ownedA <- required "--owned-a-bin"
+      ownedB <- required "--owned-b-bin"
+      a <- B.readFile ownedA
+      b <- B.readFile ownedB
+      pure (Standalone (Image (minimum (map fst (extents DomainA))) a),
+            Standalone (Image (minimum (map fst (extents DomainB))) b))
   checkStorageBudget (takeDirectory resultsPath)
   createDirectoryIfMissing True cacheRoot
   let stockA = Image 0x40000 loaderABytes
       stockB = Image 0xd0000 loaderBBytes
-      ownedAImage = Image (minimum (map fst (extents DomainA))) ownedABytes
-      ownedBImage = Image (minimum (map fst (extents DomainB))) ownedBBytes
   runA <- runFamily runner cacheRoot (takeDirectory resultsPath </> "domain-a") facts DomainA stockA ownedAImage
   runB <- runFamily runner cacheRoot (takeDirectory resultsPath </> "domain-b") facts DomainB stockB ownedBImage
   let runs = [runA, runB]
@@ -76,7 +82,44 @@ main = do
 required :: String -> IO FilePath
 required flag = do
   arguments <- getArgs
-  case dropWhile (/= flag) arguments of
-    [] -> failH (flag ++ " is required")
-    [_] -> failH (flag ++ " needs a value")
-    _ : value : _ -> pure value
+  case [value | (key,value) <- zip arguments (drop 1 arguments), key == flag] of
+    [] -> failH (flag ++ " is required and needs a value")
+    values -> pure (last values)
+
+aggregateInputs :: [String] -> IO (Maybe (Payload, Payload))
+aggregateInputs arguments
+  | not (any (`elem` arguments) flags) = pure Nothing
+  | otherwise = do
+      paths <- mapM required flags
+      case paths of
+        [aBin,aSymbols,aPlacements,bBin,bSymbols,bPlacements,carriersPath] -> do
+          union <- either (fail . show) pure . Union.parseUnion =<< B.readFile carriersPath
+          a <- load DomainA union aBin aSymbols aPlacements
+          b <- load DomainB union bBin bSymbols bPlacements
+          pure (Just (a,b))
+        _ -> fail "aggregate input arity differs"
+  where
+    flags = ["--aggregate-a-bin","--aggregate-a-symbols","--aggregate-a-placements",
+             "--aggregate-b-bin","--aggregate-b-symbols","--aggregate-b-placements","--aggregate-carriers"]
+    load domain union bin symbolsPath placementsPath = do
+      symbols <- either fail pure . Agg.parseAggregateSymbols =<< B.readFile symbolsPath
+      placements <- either fail pure . Agg.parsePlacements =<< B.readFile placementsPath
+      image <- either fail pure . Agg.aggregateImage symbols =<< B.readFile bin
+      let domainMap = Union.domainMap union domain
+          carriers = map Union.carrierExtent (Union.mapCarriers domainMap)
+          within address size = any (\(Extent (GuestAddress lo) (GuestAddress hi)) ->
+            lo <= address && toInteger address + toInteger size <= toInteger hi) carriers
+          spans = [(Agg.symbolAddress s, Agg.symbolSize s) | s <- symbols]
+            ++ [(Agg.placementAddress p, Agg.placementBytes p) | p <- placements, Agg.placementBytes p > 0]
+      forM_ carriers $ \(Extent (GuestAddress lo) (GuestAddress hi)) ->
+        either fail (const (pure ())) (Agg.sliceAggregate image lo (hi-lo))
+      unless (any ((== "xm1_rtos_timer_remove_body") . Agg.symbolName) symbols)
+        (fail "aggregate objects cases require the owned timer removal body")
+      forM_ spans $ \(address,size) -> do
+        unless (within address size) (fail ("aggregate extent outside admitted carrier: " ++ show (address,size)))
+        either fail (const (pure ())) (Agg.sliceAggregate image address size)
+      forM_ (Union.mapEntries domainMap) $ \entry -> do
+        let GuestAddress address = Union.entryAddress entry
+        unless (within address 4 && any (\s -> Agg.symbolAddress s == address && Agg.symbolSize s > 0) symbols)
+          (fail ("aggregate entry missing live veneer: " ++ Union.entryName entry))
+      pure (Aggregate image symbols placements carriers)
