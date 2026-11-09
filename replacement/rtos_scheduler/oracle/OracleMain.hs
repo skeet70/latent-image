@@ -119,9 +119,8 @@ main = do
         image <- orFail "aggregate image" (Agg.aggregateImage symbols bin)
         let carrierMap = Union.domainMap union domain
         forM_ (Union.mapEntries carrierMap) $ \entry -> do
-          let R.GuestAddress address = Union.entryAddress entry
-          ensure (any (\symbol -> Agg.symbolName symbol == Union.entrySymbol entry) symbols) ("missing aggregate entry body: " ++ Union.entrySymbol entry)
-          ensure (any (\symbol -> Agg.symbolName symbol == Union.entryVeneer entry && Agg.symbolAddress symbol == address) symbols) ("missing aggregate entry veneer: " ++ Union.entryVeneer entry)
+          _ <- orFail "aggregate entry binding" (Union.resolveEntryTarget image symbols placements entry)
+          pure ()
         pure (Right (image,symbols,placements,map Union.carrierExtent (Union.mapCarriers carrierMap)))
     _ -> failH "unreachable aggregate inputs"
     else case ownedPaths of

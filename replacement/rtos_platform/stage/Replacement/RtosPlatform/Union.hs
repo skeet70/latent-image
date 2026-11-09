@@ -15,6 +15,7 @@ module Replacement.RtosPlatform.Union
   , FitError (..)
   , parseUnion
   , domainMap
+  , resolveEntryTarget
   , runs
   , fit
   , totalRunBytes
@@ -25,12 +26,14 @@ import Control.Monad (forM_, unless, when)
 import Data.Aeson (FromJSON (..), withObject, withText, (.:))
 import qualified Data.Aeson as J
 import Data.Aeson.Types (Parser)
+import Data.Bits ((.&.), (.|.), shiftL, shiftR)
 import qualified Data.ByteString as B
 import qualified Data.Text as T
 import Data.List (sortOn)
 import Data.Word (Word32)
 import Numeric (readHex)
 import Replacement.RtosOwnFirst.Regions (Domain (..), Extent (..), GuestAddress (..), domains, extentBytes, extentContains)
+import qualified Replacement.RtosPlatform.Aggregate as A
 
 data Group = OwnFirst | S1 | S2 | S3a | S3b | S3c | S3d | Semaphore | FixedPool | TaskRecords | DataQueue | GlobalLock | Cyclic | Timer | Shared
   deriving (Eq, Ord, Show, Enum, Bounded)
@@ -230,3 +233,37 @@ fit dm = do
   when (demand > supply) (Left (TotalDeficit (domainOf dm) demand supply))
   where
     domainOf = mapDomain
+
+resolveEntryTarget :: A.AggregateImage -> [A.AggregateSymbol] -> [A.SectionPlacement] -> Entry -> Either String A.AggregateSymbol
+resolveEntryTarget image symbols placements entry = do
+  target <- case named (entrySymbol entry) of
+    [symbol] -> Right symbol
+    [] -> do
+      thunk <- case [placement | placement <- placements,
+        A.placementSection placement == ".text." ++ entrySymbol entry ++ "_entry",
+        A.placementBytes placement == 4] of
+        [placement] -> Right placement
+        _ -> Left ("missing allocated entry thunk: " ++ entrySymbol entry)
+      body <- case named (entrySymbol entry ++ "_body") of
+        [symbol] -> Right symbol
+        _ -> Left ("missing positive-size entry body: " ++ entrySymbol entry)
+      let address = A.placementAddress thunk
+      instruction <- wordAt address
+      unless (instruction == branch address (A.symbolAddress body))
+        (Left ("allocated entry thunk does not branch to its body: " ++ entrySymbol entry))
+      pure (A.AggregateSymbol (entrySymbol entry) address 4)
+    _ -> Left ("duplicate entry symbol: " ++ entrySymbol entry)
+  let GuestAddress address = entryAddress entry
+  case named (entryVeneer entry) of
+    [veneer] | A.symbolAddress veneer == address, A.symbolSize veneer == 4 -> Right ()
+    _ -> Left ("missing exact fixed entry veneer: " ++ entryVeneer entry)
+  instruction <- wordAt address
+  unless (instruction == branch address (A.symbolAddress target))
+    (Left ("fixed entry veneer does not branch to its target: " ++ entryVeneer entry))
+  pure target
+  where
+    named name = [symbol | symbol <- symbols, A.symbolName symbol == name, A.symbolSize symbol > 0]
+    branch address target = 0xea000000 .|. (((target - address - 8) `shiftR` 2) .&. 0xffffff)
+    wordAt address = do
+      bytes <- A.sliceAggregate image address 4
+      pure (B.foldr (\byte value -> fromIntegral byte .|. (value `shiftL` 8)) (0 :: Word32) bytes)

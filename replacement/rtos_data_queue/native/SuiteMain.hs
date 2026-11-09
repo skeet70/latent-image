@@ -10,7 +10,6 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.Word (Word32)
 import Data.List (isPrefixOf)
-import Data.Bits ((.&.), (.|.), shiftL, shiftR)
 import Emulation.NativeObservation (parseWord32)
 import Emulation.Sha256 (sha256File, sha256Hex)
 import FujiAF.Host (failH)
@@ -217,15 +216,8 @@ aggregateOf domain (Just union) (Just binPath) (Just symbolsPath) (Just placemen
   forM_ spans $ \(address, size) -> either failH (const (pure ())) (Agg.sliceAggregate image address size)
   unless (all contained spans) (failH "aggregate symbol or placement is outside the live carrier union")
   forM_ (Union.mapEntries dm) $ \entry -> do
-    let Regions.GuestAddress address = Union.entryAddress entry
-        matches name = [symbol | symbol <- symbols, Agg.symbolName symbol == name]
-    case (matches (Union.entryVeneer entry), matches (Union.entrySymbol entry)) of
-      ([veneer], [body]) | Agg.symbolAddress veneer == address && Agg.symbolSize veneer == 4 -> do
-        instruction <- either failH pure (Agg.sliceAggregate image address 4)
-        let word = B.foldr (\byte value -> fromIntegral byte .|. (value `shiftL` 8)) (0 :: Word32) instruction
-            expected = 0xea000000 .|. (((Agg.symbolAddress body - address - 8) `shiftR` 2) .&. 0xffffff)
-        unless (word == expected) (failH ("aggregate veneer does not branch to its body: " ++ Union.entryVeneer entry))
-      _ -> failH ("missing or invalid aggregate body/veneer: " ++ Union.entrySymbol entry)
+    _ <- either failH pure (Union.resolveEntryTarget image symbols placements entry)
+    pure ()
   pure (Just (Aggregate image symbols placements carriers))
 aggregateOf _ _ _ _ _ = failH "incomplete aggregate inputs"
 

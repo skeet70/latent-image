@@ -111,7 +111,7 @@ aggregateFunctions aggregates =
     merge ((base, size) : rest) = extend base (base + size) rest
     extend base top [] = [(base, top - base)]
     extend base top ((low, size) : rest)
-      | low < top = extend base (max top (low + size)) rest
+      | low <= top = extend base (max top (low + size)) rest
       | otherwise = (base, top - base) : extend low (low + size) rest
 
 data Role = Stock | Owned deriving (Eq, Show)
@@ -503,7 +503,9 @@ runDomain runner cacheRoot directory domain stockImage ownedImage symbols aggreg
           probes = [(address, protection) | (address, _) <- readonly, protection <- [WriteProtection, FetchProtection]]
           name address protection = "readonly-" ++ show protection ++ "-" ++ show address
           spec address protection =
-            let template = caseFor domain Owned stockImage ownedImage symbols aggregates (head cases)
+            let template = case cases of
+                  one : _ -> caseFor domain Owned stockImage ownedImage symbols aggregates one
+                  [] -> error "global-lock cases are empty"
                 entry = if protection == WriteProtection then driver else address
              in template
                { caseId = name address protection
@@ -513,7 +515,7 @@ runDomain runner cacheRoot directory domain stockImage ownedImage symbols aggreg
                , caseFunctions = [(GuestAddress (fromIntegral entry), if protection == WriteProtection then 8 else 4)]
                , caseInitial = [(R0, address), (R1, 0xa5), (Sp, stackPointer), (Lr, exitAddress), (Cpsr, 0x13)]
                , caseExpectedStatus = if protection == WriteProtection then MemoryGuard else FetchGuard
-               , caseExpectedRegisters = []
+               , caseExpectedRegisters = [(R0, address), (Pc, if protection == WriteProtection then driver else address)]
                , caseExpectedMemory = []
                }
       unless (all (\aggregate -> let image = aggregateImage aggregate in
@@ -567,10 +569,10 @@ runDomain runner cacheRoot directory domain stockImage ownedImage symbols aggreg
               [ControlRun "aggregate-source-byte" (caseName one)
                 (not (aggregateUnchanged aggregates (observation {nativeMemory = map corrupt (nativeMemory observation)})))
               | not (null aggregates)]) owned
-            corrupt (ident, bytes)
-              | "aggregate-" `isPrefixOf` regionName ident, Just (byte, rest) <- B.uncons bytes =
-                  (ident, B.cons (byte `xor` 1) rest)
-              | otherwise = (ident, bytes)
+            corrupt (regionIdent, bytes)
+              | "aggregate-" `isPrefixOf` regionName regionIdent, Just (byte, rest) <- B.uncons bytes =
+                  (regionIdent, B.cons (byte `xor` 1) rest)
+              | otherwise = (regionIdent, bytes)
         pure (run, controls)
       unless (length stockRaw == length chosen && length ownedRaw == length chosen) (error "native observations do not cover the current case set")
       pure (map fst results, concatMap snd results)

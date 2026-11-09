@@ -8,6 +8,7 @@ import Control.Monad (forM_, unless)
 import Data.Aeson (object, (.=), encode)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
+import Data.Word (Word32)
 import FujiAF.Host (failH)
 import FujiAF.StorageBudget (checkStorageBudget)
 import FujiModNativePaths (fujimodNativeCase)
@@ -107,6 +108,7 @@ aggregateInputs arguments
       image <- either fail pure . Agg.aggregateImage symbols =<< B.readFile bin
       let domainMap = Union.domainMap union domain
           carriers = map Union.carrierExtent (Union.mapCarriers domainMap)
+          within :: Word32 -> Word32 -> Bool
           within address size = any (\(Extent (GuestAddress lo) (GuestAddress hi)) ->
             lo <= address && toInteger address + toInteger size <= toInteger hi) carriers
           spans = [(Agg.symbolAddress s, Agg.symbolSize s) | s <- symbols]

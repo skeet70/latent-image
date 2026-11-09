@@ -429,6 +429,7 @@ haskell_library(
     src_strip_prefix = "stage",
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
+        ":aggregate",
         "//emulation:case-sha256",
         "//host:aeson",
         "//host:base",

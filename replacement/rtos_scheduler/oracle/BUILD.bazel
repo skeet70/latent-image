@@ -100,7 +100,7 @@ haskell_binary(
         "//host:json",
         "//replacement/rtos_own_first/stage:own-first-artifact",
         "//replacement/rtos_platform:aggregate",
-        "//replacement/rtos_platform:union",
+        "//replacement/rtos_platform:platform-artifact",
     ],
 )
 
@@ -169,7 +169,7 @@ haskell_binary(
         "//host:json",
         "//replacement/rtos_own_first/stage:own-first-artifact",
         "//replacement/rtos_platform:aggregate",
-        "//replacement/rtos_platform:union",
+        "//replacement/rtos_platform:platform-artifact",
     ],
 )
 
@@ -260,7 +260,7 @@ haskell_binary(
         "//host:filepath",
         "//host:json",
         "//replacement/rtos_platform:aggregate",
-        "//replacement/rtos_platform:union",
+        "//replacement/rtos_platform:platform-artifact",
     ],
 )
 

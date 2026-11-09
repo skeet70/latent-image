@@ -139,7 +139,7 @@ frameHolds reference observation = stackBound && returnedAbi && incomingBytes &&
     sp = registerValue observation Sp
     stackBound = 0x940000 <= sp && sp <= 0x940200
     returnedAbi = case caseOutcome reference observation of
-      OutcomeReturned -> sp == 0x940200 && all (\r -> registerValue observation r == 0xabc00000 + fromIntegral (fromEnum r)) [R4..R11]
+      OutcomeReturned -> sp == 0x940200 && all (\r -> registerValue observation r == 0xabc00000 + fromIntegral (fromEnum r)) [R4 .. R11]
       _ -> True
     incomingBytes = fmap (B.all (== 0) . B.drop 512) (lookup (RegionId "stack") (nativeMemory observation)) == Just True
     incomingEffects = maybe False (all outsideIncoming) (nativeKernel observation >>= observedOrder)
@@ -163,8 +163,14 @@ roleSpec bounds functionSpans readonlySpans role domain entry row code ident = c
   Mutant -> driver (wordsBytes [0xe3e00062,0xe12fff1e])
   Equivalent -> driver (word32le (branch 0x930000 (entryAt domain entry)))
   CallerWrite -> driver (wordsBytes (loadAddress 0x940200 ++ [0xe58c4000,branch 0x93000c (entryAt domain entry)]))
-  ReadonlyWrite -> driver (wordsBytes (loadAddress readonlyAt ++ [0xe58c0000,0xe12fff1e]))
-  ReadonlyFetch -> base {caseEntry = GuestAddress (fromIntegral readonlyAt), caseFunctions = (GuestAddress (fromIntegral readonlyAt),4) : caseFunctions base}
+  ReadonlyWrite -> (driver (wordsBytes (loadAddress readonlyAt ++ [0xe58c0000,0xe12fff1e])))
+    {caseExpectedStatus = MemoryGuard, caseExpectedRegisters = [(R12,readonlyAt),(Pc,0x930008)]}
+  ReadonlyFetch -> base
+    { caseEntry = GuestAddress (fromIntegral readonlyAt)
+    , caseFunctions = (GuestAddress (fromIntegral readonlyAt),4) : caseFunctions base
+    , caseExpectedStatus = FetchGuard
+    , caseExpectedRegisters = [(Pc,readonlyAt)]
+    }
   _ -> base
   where
     base = spec bounds functionSpans readonlySpans domain entry row code ident
@@ -242,6 +248,7 @@ readAggregate dm bin symbolsPath placementsPath = do
   placements <- readPlacements placementsPath
   let carriers = [(lo,hi-lo) | carrier <- Union.mapCarriers dm, let R.Extent (R.GuestAddress lo) (R.GuestAddress hi) = Union.carrierExtent carrier]
       entries = [at | entry <- Union.mapEntries dm, let R.GuestAddress at = Union.entryAddress entry]
+      inside :: (Word32, Word32) -> Bool
       inside (at,size) = size > 0 && any (\(lo,count) -> lo <= at && toInteger at + toInteger size <= toInteger lo + toInteger count) carriers
       spans = [(Agg.symbolAddress s,Agg.symbolSize s) | s <- symbols] ++ [(Agg.placementAddress p,Agg.placementBytes p) | p <- placements, Agg.placementBytes p > 0]
   unless (not (null carriers) && not (null symbols) && not (null placements)) (fail "aggregate metadata is empty")
@@ -264,11 +271,8 @@ readAggregate dm bin symbolsPath placementsPath = do
       (fail ("aggregate function has no executable allocation: " ++ Agg.symbolName symbol))
   unless (all (\service -> entryAt (if Union.mapDomain dm == R.DomainA then A else B) service `elem` entries) [minBound..maxBound]) (fail "aggregate is missing an S3c fixed entry")
   forM_ (Union.mapEntries dm) $ \entry -> do
-    let R.GuestAddress at = Union.entryAddress entry
-    unless (inside (at,4) && any (\s -> Agg.symbolName s == Union.entryVeneer entry && Agg.symbolAddress s == at && Agg.symbolSize s == 4) symbols) (fail ("aggregate fixed veneer differs: " ++ Union.entryName entry))
-    unless (any (\s -> Agg.symbolName s == Union.entrySymbol entry) symbols) (fail ("aggregate body is absent: " ++ Union.entryName entry))
-    forM_ (filter (\s -> Agg.symbolName s == Union.entrySymbol entry) symbols) $ \body ->
-      unless (readWordAt bytes (fromIntegral (at-base)) == branch at (Agg.symbolAddress body)) (fail ("aggregate veneer does not branch to its body: " ++ Union.entryName entry))
+    _ <- either fail pure (Union.resolveEntryTarget image symbols placements entry)
+    pure ()
   pure (Aggregate image symbols placements carriers entries)
 
 installAggregate :: Domain -> B.ByteString -> Aggregate -> B.ByteString
@@ -348,7 +352,7 @@ main = do
         outcomes <- map snd <$> loadObservedBatch runner batch
         pure (specs,outcomes)
       case observed of
-        [(stockSpecs,stock),(_,ownedObs),(_,equivalents),(_,mutants),(_,stockRepeat),(_,callerWrites),(_,readonlyWrites),(_,readonlyFetches)] -> do
+        [(stockSpecs,stock),(_,ownedObs),(_,equivalents),(_,mutants),(_,stockRepeat),(_,callerWrites),(readonlyWriteSpecs,readonlyWrites),(readonlyFetchSpecs,readonlyFetches)] -> do
           let compareOne reference left right = compareKernelCase adjusted (normalize left) (normalize right)
                 where adjusted = case caseOutcome reference left of
                         OutcomeReturned -> reference
@@ -364,8 +368,8 @@ main = do
           let validStock = and [contractHolds entry row reference observation | (row,reference,observation) <- zip3 grid stockSpecs stock]
               validOwned = and [contractHolds entry row reference observation | (row,reference,observation) <- zip3 grid stockSpecs ownedObs]
               callerRejected = all not (matches callerWrites)
-              readonlyWriteHeld = all (guardHolds MemoryGuard) readonlyWrites
-              readonlyFetchHeld = all (guardHolds FetchGuard) readonlyFetches
+              readonlyWriteHeld = and (zipWith guardHolds readonlyWriteSpecs readonlyWrites)
+              readonlyFetchHeld = and (zipWith guardHolds readonlyFetchSpecs readonlyFetches)
               framesHeld = and [frameHolds reference observation | subjects <- [stock,ownedObs,equivalents,stockRepeat], (reference,observation) <- zip stockSpecs subjects]
               holds = and good && and eqGood && and repeatGood && not(and mutantGood) && validStock && validOwned && callerRejected && readonlyWriteHeld && readonlyFetchHeld && framesHeld
           B.writeFile (directory </> "report.json") (encodeCanonical (object ["entry" .= show entry,"cases" .= length grid,"owned_matches" .= length(filter id good),"equivalent_matches" .= length(filter id eqGood),"stock_repeat_matches" .= length(filter id repeatGood),"mutant_differences" .= length(filter not mutantGood),"stock_valid" .= validStock,"owned_contract_valid" .= validOwned,"stock_contract_failures" .= contractFailures stock,"owned_contract_failures" .= contractFailures ownedObs,"caller_write_rejected" .= callerRejected,"readonly_write_refused" .= readonlyWriteHeld,"readonly_fetch_refused" .= readonlyFetchHeld,"frame_contract_valid" .= framesHeld,"holds" .= holds]))
@@ -384,7 +388,9 @@ main = do
       left <- readAggregate (Union.unionA maps) a sa pa
       right <- readAggregate (Union.unionB maps) b sb pb
       pure (Just (left,right))
-    guardHolds status observation = nativeStatus observation == status && registerValue observation R4 == 0xabc00004 && maybe False (all noWrite) (nativeKernel observation >>= observedOrder)
+    guardHolds reference observation = nativeStatus observation == caseExpectedStatus reference &&
+      all (\(register,value) -> registerValue observation register == value) (caseExpectedRegisters reference) &&
+      registerValue observation R4 == 0xabc00004 && maybe False (all noWrite) (nativeKernel observation >>= observedOrder)
     noWrite (OrderedWrite _ _) = False
     noWrite _ = True
 

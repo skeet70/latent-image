@@ -984,7 +984,7 @@ compareCase facts domain one stock owned = statusDifferences ++ declaredRegister
     membershipDifferences =
       [ role ++ ": named timer membership writes differ"
       | caseNameText one `elem` timedRowNames
-      , (role, observation, expected) <- [("stock", stock, [(4, 1)]), ("owned", owned, [(4, 1), (4, 0)])]
+      , (role, observation, expected) <- [("stock", stock, [(N.WriteBytes 4, 1)]), ("owned", owned, [(N.WriteBytes 4, 1), (N.WriteBytes 4, 0)])]
       , let address = dataQueueTimer facts domain 1
             writes = [(width, fromIntegral value :: Word32)
               | Just events <- [nativeKernel observation >>= observedOrder]
@@ -1175,7 +1175,7 @@ readonlyCases aggregate template =
       , caseRegions = mkRegion (RegionId "readonly-probe") (N.GuestAddress (fromIntegral probe)) (B.length program) ReadExecute program : caseRegions template
       , caseFunctions = (N.GuestAddress (fromIntegral probe), fromIntegral (B.length program)) : caseFunctions template
       , caseExpectedStatus = status
-      , caseExpectedRegisters = []
+      , caseExpectedRegisters = [(R0, address), (Pc, if status == MemoryGuard then probe + 8 else address)]
       , caseExpectedMemory = []
       })
   | joined <- maybe [] pure aggregate

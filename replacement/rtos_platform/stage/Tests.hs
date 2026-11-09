@@ -88,6 +88,21 @@ main = do
   check "zero-extent labels do not become native functions"
     (Aggregate.parseAggregateSymbols "0004282c 00000000 T label\n00042830 00000004 T function\n"
       == Right [Aggregate.AggregateSymbol "function" 0x42830 4])
+  let aliasEntry = Entry S3d "terminate" (GuestAddress 0x1000) "terminate" "veneer"
+      aliasImage = Aggregate.AggregateImage 0x1000 (U.putWord32 0xea000002 <> B.replicate 0x0c 0 <> U.putWord32 0xea000002 <> B.replicate 0x10 0)
+      aliasSymbols = [Aggregate.AggregateSymbol "veneer" 0x1000 4, Aggregate.AggregateSymbol "terminate_body" 0x1020 4]
+      aliasPlacement = Aggregate.SectionPlacement 0x1010 4 ".text.terminate_entry"
+      resolvedAlias = resolveEntryTarget aliasImage aliasSymbols [aliasPlacement] aliasEntry
+  check "allocated public thunk resolves without a zero-size function"
+    (resolvedAlias == Right (Aggregate.AggregateSymbol "terminate" 0x1010 4))
+  expectLeft "entry thunk corruption is refused" (const True)
+    (resolveEntryTarget (Aggregate.AggregateImage 0x1000 (B.replicate 0x24 0)) aliasSymbols [aliasPlacement] aliasEntry)
+  expectLeft "fixed veneer corruption is refused" (const True)
+    (resolveEntryTarget (Aggregate.AggregateImage 0x1000 (U.putWord32 0 <> B.drop 4 (Aggregate.imageBytes aliasImage))) aliasSymbols [aliasPlacement] aliasEntry)
+  expectLeft "unallocated zero-size alias is refused" (const True)
+    (resolveEntryTarget aliasImage aliasSymbols [] aliasEntry)
+  expectLeft "entry thunk without a genuine positive-size body is refused" (const True)
+    (resolveEntryTarget aliasImage [] [aliasPlacement] aliasEntry)
   case withLink synthetic (linkedFor synthetic) of
     Left err -> check ("positive admission: " ++ show err) False
     Right (source, admitted, staged) -> do

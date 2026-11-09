@@ -151,15 +151,10 @@ ownedImage domain bytes symbols placements
 optional :: String -> IO (Maybe FilePath)
 optional flag = do
   arguments <- getArgs
-  case dropWhile (/= flag) arguments of
+  case reverse [drop (index + 1) arguments | (index, argument) <- zip [0 :: Int ..] arguments, argument == flag] of
     [] -> pure Nothing
-    [_] -> failH (flag ++ " needs a value")
-    _ : value : _ -> Just <$> makeAbsolute value
+    [] : _ -> failH (flag ++ " needs a value")
+    (value : _) : _ -> Just <$> makeAbsolute value
 
 required :: String -> IO FilePath
-required flag = do
-  arguments <- getArgs
-  case dropWhile (/= flag) arguments of
-    [] -> failH (flag ++ " is required")
-    [_] -> failH (flag ++ " needs a value")
-    _ : value : _ -> pure value
+required flag = optional flag >>= maybe (failH (flag ++ " is required")) pure

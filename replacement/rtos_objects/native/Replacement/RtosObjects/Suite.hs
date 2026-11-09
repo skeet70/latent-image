@@ -5,7 +5,7 @@ module Replacement.RtosObjects.Suite
 import Control.Monad (forM, unless)
 import Data.Bits ((.&.), (.|.), shiftL)
 import qualified Data.ByteString as B
-import Data.List (foldl', isPrefixOf, nub, sort)
+import Data.List (isPrefixOf, nub, sort)
 import qualified Data.Map.Strict as M
 import Data.Word (Word32, Word8)
 import Emulation.CachedNativeBatch (BatchReuse, cachedObservedBatch)
@@ -244,7 +244,7 @@ cases facts executing =
        in one {caseTimer = Just timerToken, caseWords = caseWords one ++ [poke (wait + factsWaitBlockResult facts) (pointerWord timerToken)], caseExpect = caseExpect one ++ [eq (wait + factsWaitBlockResult facts) 0, eq receiptAddress (recordAddress facts executing owner), eq (receiptAddress + 4) (pointerWord timerToken)]}
 
 bindTimer :: Facts -> Domain -> Payload -> Case -> Case
-bindTimer facts executing payload one
+bindTimer facts _executing payload one
   | isAggregate payload, Just _ <- caseTimer one =
       let owner = case caseWake one of Released domain -> domain; _ -> error "timer case has no owner"
           dw = domainFacts facts owner
@@ -655,14 +655,14 @@ storageGuards (Aggregate image _ placements _) spec =
           , caseRegions = mkRegion (RegionId "storage-probe") (wireAddress (GuestAddress probeAddress)) (B.length bytes) ReadExecute bytes : caseRegions spec
           , caseFunctions = (wireAddress (GuestAddress probeAddress),fromIntegral (B.length bytes)) : caseFunctions spec
           , caseInitial = (R1,address) : filter ((/= R1) . fst) (caseInitial spec)
-          , caseExpectedStatus = MemoryGuard
-          , caseExpectedRegisters = []
+          , caseExpectedStatus = if fetch then FetchGuard else MemoryGuard
+          , caseExpectedRegisters = [(R1,address), (Pc,if fetch then address else probeAddress)]
           , caseExpectedMemory = []
           }
    in map probe targets
 storageGuardResult :: CaseSpec -> NativeObservation -> [String]
 storageGuardResult spec observation =
-  ["readonly storage access was not refused" | caseOutcome spec observation /= OutcomeRefused MemoryGuard]
+  ["readonly storage access was not refused" | caseOutcome spec observation /= OutcomeRefused (caseExpectedStatus spec)]
 
 runFamily :: FilePath -> FilePath -> FilePath -> Facts -> Domain -> Image -> Payload -> IO FamilyRun
 runFamily runner cacheRoot directory facts executing stock owned = do

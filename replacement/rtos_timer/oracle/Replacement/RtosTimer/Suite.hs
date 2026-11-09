@@ -1439,6 +1439,17 @@ composeRegionDifferences facts domain stock owned =
         base = if name == "data-a" then globalsBase DomainA else globalsBase DomainB
         offset = fromIntegral (timerAddress - base)
 
+composeFrameEffects :: NativeObservation -> [String]
+composeFrameEffects observation = case nativeKernel observation >>= observedOrder of
+  Nothing -> ["the composition write log is truncated"]
+  Just order ->
+    [ "write to live incoming frame or outer stack guard"
+    | OrderedWrite (Write (GuestAddress address) (WriteBytes bytes)) _ <- order
+    , any (\low -> toInteger address < toInteger low + 0x40 &&
+        toInteger low < toInteger address + toInteger bytes)
+        [composeStackTop, composeStackBase, composeStackBase + composeStackSize - 0x40]
+    ]
+
 runDomain :: FilePath -> FilePath -> FilePath -> Facts -> Domain -> Image -> Image -> Image -> [OwnedSymbol] -> Image -> [OwnedSymbol] -> [Aggregate] -> IO ([CaseRun], [ControlRun])
 runDomain runner cacheRoot directory facts domain stockImage otherImage ownedImage ownedSymbols s3dImage s3dSymbols aggregates = do
   let selected = cases facts domain
@@ -1519,7 +1530,9 @@ runDomain runner cacheRoot directory facts domain stockImage otherImage ownedIma
           statusCheck observation = case nativeStatus observation of
             Returned -> Right ()
             status -> Left ("status " ++ runnerStatusLabel status)
-          errorsFor role checks observation = [message | Left message <- statusCheck observation : map (checkObservation facts domain role observation) checks]
+          errorsFor role checks observation =
+            [message | Left message <- statusCheck observation : map (checkObservation facts domain role observation) checks]
+              ++ composeFrameEffects observation
       results <- forM chosen $ \one -> do
         let ident = composeName one ++ "-" ++ domainLabel domain
             stock = M.lookup ident reference
@@ -1555,8 +1568,21 @@ runDomain runner cacheRoot directory facts domain stockImage otherImage ownedIma
               , name == composeName one
               , Just observed <- [M.lookup (composeName one ++ "-control-" ++ composeControlName control ++ "-" ++ domainLabel domain) controlObservations]
               ]
+                ++ [ControlRun "composition" name (composeName one)
+                     (not (null (composeFrameEffects (frameWrite at observed))))
+                   | Just observed <- [owned]
+                   , (name, at) <-
+                       [("incoming-frame-restored-write", composeStackTop),
+                        ("lower-guard-restored-write", composeStackBase),
+                        ("upper-guard-restored-write", composeStackBase + composeStackSize - 0x40)]]
         pure (run, controlResults)
       pure (map fst results, concatMap snd results)
+    frameWrite at observation = observation
+      { nativeKernel = fmap (\kernel -> kernel
+          { observedOrder = fmap (++ [OrderedWrite (Write (GuestAddress (fromIntegral at)) (WriteBytes 4)) (WriteValue 0)])
+              (observedOrder kernel)
+          }) (nativeKernel observation)
+      }
 
 -- | The checks must refuse a cleared I, a changed F and a changed byte in every declared
 -- unchanged region.

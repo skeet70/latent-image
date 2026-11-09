@@ -444,9 +444,8 @@ main = do
         forM_ symbols $ \symbol -> unless (inside (Agg.symbolAddress symbol) (Agg.symbolSize symbol)) (fail ("symbol outside carrier: " ++ Agg.symbolName symbol))
         forM_ placements $ \placement -> when (Agg.placementBytes placement > 0) $ unless (inside (Agg.placementAddress placement) (Agg.placementBytes placement)) (fail "placement outside carrier")
         forM_ (Union.mapEntries carrierMap) $ \e -> do
-          let R.GuestAddress address = Union.entryAddress e
-          unless (any ((== Union.entrySymbol e) . Agg.symbolName) symbols) (fail ("missing entry body " ++ Union.entrySymbol e))
-          unless (any (\symbol -> Agg.symbolName symbol == Union.entryVeneer e && Agg.symbolAddress symbol == address) symbols) (fail ("missing entry veneer " ++ Union.entryVeneer e))
+          _ <- either fail pure (Union.resolveEntryTarget payload symbols placements e)
+          pure ()
         forM_ carriers $ \(R.Extent (R.GuestAddress lo) (R.GuestAddress hi)) -> either fail (const (pure ())) (Agg.sliceAggregate payload lo (hi-lo))
         let top = Agg.imageBase payload + fromIntegral (B.length bin)
             padded = loader <> B.replicate (max 0 (fromIntegral (top-base d)-B.length loader)) 0

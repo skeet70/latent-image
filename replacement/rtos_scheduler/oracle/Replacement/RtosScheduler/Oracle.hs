@@ -749,8 +749,8 @@ aggregateBody table stock@(StockCode domain loader) image symbols placements car
     maybe (Left ("missing aggregate shim " ++ name)) Right (find ((== name) . Agg.symbolName) symbols)
   let R.GuestAddress loaderBase = domainLoaderBase domain
       intervals = [(lo, hi) | R.Extent (R.GuestAddress lo) (R.GuestAddress hi) <- carriers]
-      inside address size = any (\(lo, hi) -> lo <= address && toInteger address + toInteger size <= toInteger hi) intervals
-      validate address size = unless (size > 0 && inside address size) (Left ("aggregate extent outside live carrier: " ++ show (address, size)))
+      withinCarrier address size = any (\(lo, hi) -> lo <= address && toInteger address + toInteger size <= toInteger hi) intervals
+      validate address size = unless (size > 0 && withinCarrier address size) (Left ("aggregate extent outside live carrier: " ++ show (address, size)))
       text p = let section = Agg.placementSection p in section == ".text" || ".text." `isPrefixOf` section
   mapM_ (\s -> validate (Agg.symbolAddress s) (Agg.symbolSize s)) symbols
   mapM_ (\p -> when (Agg.placementBytes p > 0) (validate (Agg.placementAddress p) (Agg.placementBytes p))) placements
