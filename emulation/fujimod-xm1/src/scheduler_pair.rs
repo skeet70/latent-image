@@ -1048,7 +1048,7 @@ fn family_queue(walk: &mut FamilyWalk, family: Family, control: u32) -> Result<(
     let mut node = walk.pointer(control)?;
     for _ in 0..FAMILY_QUEUE_LIMIT {
         let Some(task) = node.filter(|&task| task != control) else { return Ok(()) };
-        for offset in [0x0c, 0x14, 0x18, 0x1c, 0x20] { walk.capture_word(task + offset); }
+        for offset in [0x00, 0x04, 0x0c, 0x14, 0x18, 0x1c, 0x20] { walk.capture_word(task + offset); }
         if let Some(saved) = walk.pointer(task + 0x18)? { if saved % 4 == 0 { walk.record(saved, 36); } }
         if let Some((waiter, slot)) = family_task(task) {
             let tables = FamilyTables::of(waiter);
@@ -2363,14 +2363,14 @@ mod tests {
         assert!(addresses.contains(&waits[0]) && addresses.contains(&(waits[0] + 0x14)));
         assert!(addresses.contains(&tables.flag_timers.record(1).unwrap()));
         assert!(addresses.contains(&tables.flag_timers.record(5).unwrap()));
-        for offset in [0x0c, 0x14, 0x18, 0x1c, 0x20] { assert!(addresses.contains(&(tasks[0] + offset))); }
+        for offset in [0x00, 0x04, 0x0c, 0x14, 0x18, 0x1c, 0x20] { assert!(addresses.contains(&(tasks[0] + offset))); }
         let last = FAMILY_QUEUE_LIMIT - tasks.len() - 1;
-        for offset in [0x0c, 0x14, 0x18, 0x1c, 0x20] {
+        for offset in [0x00, 0x04, 0x0c, 0x14, 0x18, 0x1c, 0x20] {
             assert!(addresses.contains(&(synthetic[last] + offset)));
             assert!(!addresses.contains(&(synthetic[last + 1] + offset)));
         }
         assert!(!addresses.contains(&tables.flag_controls.record(4).unwrap()));
-        assert!(addresses.len() <= FAMILY_QUEUE_LIMIT * 5 + 64);
+        assert!(addresses.len() <= FAMILY_QUEUE_LIMIT * 7 + 64);
     }
 
     #[test]

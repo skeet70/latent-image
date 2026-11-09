@@ -1145,3 +1145,9 @@ The timed-sleep and delay cases execute a synthetic save/wake/return stub and re
 
 Synthetic single-core states and the test stub do not qualify cross-core concurrency, cache ordering, task/IRQ stack capacity, natural reach or the full dispatcher. Full-native, composed scheduler/platform, system and hardware qualification remain separate.
 
+### Family waiter snapshot coverage correction
+
+The retained headlayout owned observation (`87f6d847a10c8d2d3e08d33a1372c4a61876a2135291a56bd4623e9ddaa76a28`) first refuses flag set at `0x4813c`, instruction 27,209,759. Its waiter `0x4005ffec` has no captured `+0x00` or `+0x04` word in either call snapshot. The checker requires both links to derive the unlink effect. The captured writes independently show the control `0x400624f4` becoming self-linked, wait result `0x40056050 := 1`, pattern `0x40062500 := 0` and completion `0x4005603c := 0`. This refusal is an observer coverage defect, not evidence of a firmware dequeue defect.
+
+`family_queue` now captures both queue-link words for each visited waiter within the unchanged queue-walk limit. The bounded snapshot test checks the links at the first and last included waiters and their absence beyond the limit. Caller-owned unlink and ordinary return classification are unchanged. This source correction does not qualify the retained observation, fill in its missing values, resolve its deferred timer refusal or promote a candidate.
+
