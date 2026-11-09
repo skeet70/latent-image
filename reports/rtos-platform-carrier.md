@@ -56,6 +56,9 @@ Existing baseline family results do not qualify the current linked union. Every 
 
 The linked lifecycle source increment builds both actual union images with 218 allocated sections per domain. Emitted section bytes are A 27,671 / B 27,695 against A 27,800 / B 27,808 entry-free carrier bytes; the largest whole section is 824 bytes. The `.bin` identities are A `db78bc9263972cb19b330d8114165579dcf909c40391da9db40b27c64c5571f3` and B `261777dcaca552af5ae33ba81b17788c69380311d763ec233d1b0dad7d8025f8`. Platform synthetic tests, data-queue host behavior tests and lifecycle host behavior tests pass in that source increment; native aggregate acceptance is still required. These are emitted-code and placement measurements, not reclaimed-flash measurements.
 
+The actual emitted images pass `stage-platform stage` against the pinned stock DAT and loaders. The staged DAT is `4c5d2d6d139a7e38d886ff27ab8d13e7ad8633b41d85b9df162d665fe090a21f`; staged A/B loaders are `eb0a36b326feadad3055b3d393f20624561dda2c78e2be3913aa536547d0b07a` / `519253a65723ed9ef0e490ad7c878739a5ad2e7543540243105c0d28da8f5937`. Its contract records 202 public entries across both domains and unresolved frame-walker `StackUnbalanced` premises at A `0x44330` / B `0xd42f0`. The source and staging receipt is `private-data/scratch/FirmwarePlatformJoin/source-increment.json`; staging does not establish semantic execution.
+
+
 
 The saved semaphore aggregate timeout reaches `0x44e58` (`blx r3`), calls the `0x44318` veneer containing `0xea0034de`, and refuses instruction fetch at `0x51698`. The manifest resolved that callback to native scratch instead of linking its implementation. The source composition now links the S3d component and removes its scratch external substitutions. No passing joined timeout result follows from that source change alone.
 
