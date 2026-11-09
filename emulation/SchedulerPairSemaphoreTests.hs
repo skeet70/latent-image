@@ -3,11 +3,13 @@ module Main (main) where
 
 import qualified Data.Aeson as J
 import qualified Data.ByteString as B
+import Data.List (isPrefixOf)
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import Data.Word (Word32, Word64)
 import Emulation.SchedulerPairCheck
 import Emulation.SchedulerPairDecode (decodeCheckedObservation)
-import Emulation.SchedulerPairEvidence (qualifyEvidence)
+import Emulation.SchedulerPairEvidence (qualifyEvidence, timerWitnessBudget)
 import Emulation.SchedulerPairFamily (Pending (..))
 import Emulation.SchedulerPairModel (Arguments (..), Memory)
 import Emulation.SchedulerPairPlan
@@ -62,7 +64,7 @@ callOf = callOfTask 0x9000
 callOfTask :: Word32 -> Domain -> Word32 -> Semantic -> [Word32] -> Memory -> Memory -> Word32 -> [Written] -> CallTrace -> Call
 callOfTask task domain address semantic arguments before after r0 writes trace =
   Call domain (Address address) semantic (if domain==DomainA then 0 else 1) 0x13 (Arguments arguments)
-    before after r0 0x13 writes [] 1 10 (Just trace) task 1 Nothing (map (const (originAtFor task address)) writes) []
+    before after r0 0x13 writes [] 1 10 (Just trace) task 1 Nothing (map (const (originAtFor task address)) writes) [] S.empty
 
 originAtFor :: Word32 -> Word32 -> WriteOrigin
 originAtFor task address = originAtForWith task 1 address
@@ -141,7 +143,7 @@ signalWakeCall = signalWake before after writes [timerRemove]
     , (Address (controlA+4), controlA)
     ]) before
   writes = [Written (Address controlA) 4 controlA, Written (Address (controlA+4)) 4 controlA]
-  timerRemove = Boundary TimerRemoveBoundary (Address 0x44ca8) 1 0 (registers (replicate 16 0)) timerMemory [] [] (Just timerA) 0x9000 [] []
+  timerRemove = Boundary TimerRemoveBoundary (Address 0x44ca8) 1 0 (registers (replicate 16 0)) timerMemory [] [] (Just timerA) 0x9000 [] [] S.empty
 
 interruptWake :: Call
 interruptWake = (signalWake before after writes [timerRemove]) { callSemantic = SemaphoreSemantic SemaphoreInterruptSignal, callAddress = Address 0x47844 }
@@ -149,13 +151,13 @@ interruptWake = (signalWake before after writes [timerRemove]) { callSemantic = 
   before = M.insert (Address handlerA) 1 (waiterBefore 1)
   after = M.union (M.fromList [(Address controlA, controlA), (Address (controlA+4), controlA)]) before
   writes = [Written (Address controlA) 4 controlA, Written (Address (controlA+4)) 4 controlA]
-  timerRemove = Boundary TimerRemoveBoundary (Address 0x44ca8) 1 0 (registers (replicate 16 0)) timerMemory [] [] (Just timerA) 0x9000 [] []
+  timerRemove = Boundary TimerRemoveBoundary (Address 0x44ca8) 1 0 (registers (replicate 16 0)) timerMemory [] [] (Just timerA) 0x9000 [] [] S.empty
 
 signalWakeWithoutSibling :: Call
 signalWakeWithoutSibling = signalWake (waiterBefore 1) after [Written (Address controlA) 4 controlA, Written (Address (controlA+4)) 4 controlA] [timerRemove]
  where
   after = M.union (M.fromList [(Address controlA, controlA), (Address (controlA+4), controlA)]) (waiterBefore 1)
-  timerRemove = Boundary TimerRemoveBoundary (Address 0x44ca8) 1 0 (registers (replicate 16 0)) timerMemory [] [] (Just timerA) 0x9000 [] []
+  timerRemove = Boundary TimerRemoveBoundary (Address 0x44ca8) 1 0 (registers (replicate 16 0)) timerMemory [] [] (Just timerA) 0x9000 [] [] S.empty
 
 suspendedWake :: Word32 -> Call
 suspendedWake afterState = signalWake before after [Written (Address controlA) 4 controlA, Written (Address (controlA+4)) 4 controlA] []
@@ -171,22 +173,22 @@ withLr :: Word32 -> [Word32]
 withLr lr = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,lr,0]
 
 saveBoundary :: Word32 -> Boundary
-saveBoundary lr = Boundary SaveBoundary (Address 0x43640) 1 0 (registers (withLr lr)) M.empty [] [] Nothing taskA [] []
+saveBoundary lr = Boundary SaveBoundary (Address 0x43640) 1 0 (registers (withLr lr)) M.empty [] [] Nothing taskA [] [] S.empty
 
 resumeBoundary :: Boundary
-resumeBoundary = Boundary ResumeBoundary (Address 0x43668) 2 0 (registers (withLr 0x47dd0)) M.empty [] [] Nothing taskA [] []
+resumeBoundary = Boundary ResumeBoundary (Address 0x43668) 2 0 (registers (withLr 0x47dd0)) M.empty [] [] Nothing taskA [] [] S.empty
 
 timerInsertBoundary :: Boundary
-timerInsertBoundary = Boundary TimerInsertBoundary (Address 0x44c60) 1 0 (registers (replicate 16 0)) timerMemory [] [] (Just timerA) taskA [] []
+timerInsertBoundary = Boundary TimerInsertBoundary (Address 0x44c60) 1 0 (registers (replicate 16 0)) timerMemory [] [] (Just timerA) taskA [] [] S.empty
 
 timerMemory :: Memory
 timerMemory = M.fromList [(Address (timerA+4), callbackA), (Address (timerA+8), taskA)]
 
 timerRemoveBoundary :: Boundary
-timerRemoveBoundary = Boundary TimerRemoveBoundary (Address 0x44ca8) 1 0 (registers (replicate 16 0)) timerMemory [] [] (Just timerA) taskA [] []
+timerRemoveBoundary = Boundary TimerRemoveBoundary (Address 0x44ca8) 1 0 (registers (replicate 16 0)) timerMemory [] [] (Just timerA) taskA [] [] S.empty
 
 expiryBoundary :: Boundary
-expiryBoundary = Boundary TimerConsumeBoundary (Address callbackA) 3 0 (registers (replicate 16 0)) timerMemory [] [] (Just timerA) taskA [] []
+expiryBoundary = Boundary TimerConsumeBoundary (Address callbackA) 3 0 (registers (replicate 16 0)) timerMemory [] [] (Just timerA) taskA [] [] S.empty
 
 zeroTimeoutCall :: Word32 -> [Boundary] -> Call
 zeroTimeoutCall r0 history = callOfTask taskA DomainA timedAddress (SemaphoreSemantic SemaphoreTimedWait) [1, 0, 0, 0]
@@ -237,7 +239,7 @@ timedExpiryCall = callOfTask taskA DomainA timedAddress (SemaphoreSemantic Semap
   [Written (Address waitA) 4 (fromIntegral (-50 :: Int))] (traceOf (withLr 0x47dd0) [saveBoundary 0x47dd0, timerInsertBoundary, expiryBoundary] Returned)
 
 pendingForever :: Word32 -> Word32 -> Pending
-pendingForever timeout stackWord = Pending (SemaphoreSemantic SemaphoreTimedWait) DomainA [1, timeout, 0, 0] before (Just terminal) taskA 0x7000 0x13 timedAddress 5 (Just 0x93) (Just 50) (Just 50) 5 0
+pendingForever timeout stackWord = Pending (SemaphoreSemantic SemaphoreTimedWait) DomainA [1, timeout, 0, 0] before (Just terminal) taskA 0x7000 0x13 timedAddress 5 (Just 0x93) (Just 50) (Just 50) 5 0 S.empty
  where
   before = M.fromList [(Address 0x7000, stackWord)]
   terminal = M.union (baseBefore 0 5 taskA) $ M.fromList
@@ -395,6 +397,12 @@ refusesWith label events calls pendings = case streamingVerdict events calls pen
   Left _ -> pure ()
   Right _ -> error (label ++ ": expected refusal")
 
+refusesBudget :: String -> String -> [Call] -> [Pending] -> IO ()
+refusesBudget label expected calls pendings = case streamingVerdict [] calls pendings of
+  Left failure | expected `isPrefixOf` failure -> pure ()
+  Left failure -> error (label ++ ": wrong refusal " ++ failure)
+  Right _ -> error (label ++ ": expected refusal")
+
 main :: IO ()
 main = do
   retained <- either error pure . J.eitherDecodeStrict' =<< B.readFile "emulation/semaphore-signal-rewait.json"
@@ -456,6 +464,18 @@ main = do
     ,helperCall taskA releaseAddress (HelperSemantic Release) 0x400545c4 102 102 0 0x9000
     ,pollCall 1 0 0] [pendingInterleaved]
   refusesWith "pending save without I masked" releaseEvents [releaseCall 0x400545c0 10, releaseCall 0x400545c4 11, pollCall 1 0 0] [(pendingForever (fromIntegral (-1 :: Int)) 0) { pendingSaveCpsr = Just 0x13 }]
+  accepts "irrelevant unwritten unreadable word" [(pollCall 1 0 0) { callUnreadable = S.singleton (Address 0x301c) }] []
+  refuses "required unreadable config word" [(pollCall 1 0 0) { callBefore = M.delete (Address (configA+0x0c)) (callBefore (pollCall 1 0 0)),
+    callAfter = M.delete (Address (configA+0x0c)) (callAfter (pollCall 1 0 0)), callUnreadable = S.singleton (Address (configA+0x0c)) }] []
+  refuses "unreadable owned non-scratch write" [(pollCall 1 0 0) { callUnreadable = S.singleton (Address 0x301c),
+    callWrites = [Written (Address 0x301c) 4 0], callWriteOrigins = [originAtFor 0x9000 0x301c] }] []
+  accepts "more than 64 valid timer lifetimes"
+    (replicate 65 (timedWaitCall 100 [saveBoundary 0x47dd0, timerInsertBoundary, timerRemoveBoundary, resumeBoundary])) []
+  refuses "late invalid timer lifetime"
+    (replicate 65 (timedWaitCall 100 [saveBoundary 0x47dd0, timerInsertBoundary, timerRemoveBoundary, resumeBoundary])
+      ++ [(timedWaitCall 100 [saveBoundary 0x47dd0, timerRemoveBoundary, resumeBoundary]) { callFirst = 1000 }]) []
+  refusesBudget "timer witness budget exhaustion" "BudgetExceeded TimerWitnessBudget"
+    [(pollCall 1 0 0) { callTrace = Just (traceOf (replicate 16 0) (replicate (timerWitnessBudget + 1) timerInsertBoundary) Returned) }] []
   putStrLn "scheduler-pair semaphore tests passed"
 
 wireCall :: Call -> J.Value
@@ -463,14 +483,14 @@ wireCall value = J.object
   [ "entry" J..= J.object
       [ "slot" J..= J.object ["domain" J..= domainName (callDomain value),"entry" J..= hex (addressOf (callAddress value)),"semantic" J..= semanticValue (callSemantic value)]
       , "core" J..= coreName (callCore value), "cpsr" J..= callCpsr value, "arguments" J..= args (callArguments value)
-      , "memory" J..= wordsOf (callBefore value)
+      , "memory" J..= wordsOfWith (callUnreadable value) (callBefore value)
       , "registers" J..= maybe (replicate (16::Int) (0::Int)) (map fromIntegral . D.registers . traceBefore) (callTrace value)
       , "cpacr" J..= (0::Int), "fpexc" J..= (0::Int), "tpidrurw" J..= (0::Int)
       , "task" J..= J.object ["view" J..= ("committed"::String),"value" J..= callTask value]
       , "kernel_context" J..= callKernelContext value, "task_stack" J..= J.Null
       ]
   , "result" J..= J.object
-      [ "r0" J..= callR0 value, "cpsr" J..= callReturnCpsr value, "memory" J..= wordsOf (callAfter value)
+      [ "r0" J..= callR0 value, "cpsr" J..= callReturnCpsr value, "memory" J..= wordsOfWith (callUnreadable value) (callAfter value)
       , "registers" J..= maybe (replicate (16::Int) (0::Int)) (map fromIntegral . D.registers . traceAfter) (callTrace value)
       , "cpacr" J..= (0::Int), "fpexc" J..= (0::Int), "tpidrurw" J..= (0::Int)
       , "completion" J..= ("return"::String)
@@ -487,7 +507,7 @@ wireBoundary boundary = J.object
   , "instructions" J..= boundaryInstructions boundary, "core" J..= coreName (boundaryCore boundary)
   , "registers" J..= D.registers (boundaryRegisters boundary), "cpsr" J..= D.processorState (boundaryRegisters boundary)
   , "cpacr" J..= (0::Int), "fpexc" J..= (0::Int), "tpidrurw" J..= (0::Int)
-  , "memory" J..= wordsOf (boundaryMemory boundary), "writes" J..= ([]::[J.Value]), "bank" J..= ([]::[J.Value])
+  , "memory" J..= wordsOfWith (boundaryUnreadable boundary) (boundaryMemory boundary), "writes" J..= ([]::[J.Value]), "bank" J..= ([]::[J.Value])
   , "value" J..= fmap J.toJSON (boundaryValue boundary)
   , "task" J..= J.object ["view" J..= ("committed"::String),"value" J..= boundaryTask boundary]
   ]
@@ -497,7 +517,7 @@ wirePending pending = J.object
   [ "entry" J..= J.object
       [ "slot" J..= J.object ["domain" J..= domainName (pendingDomain pending),"entry" J..= hex (pendingEntry pending),"semantic" J..= semanticValue (pendingSemantic pending)]
       , "core" J..= coreName 0, "order" J..= pendingEntryOrder pending
-      , "arguments" J..= pendingArguments pending, "memory" J..= wordsOf (pendingBefore pending)
+      , "arguments" J..= pendingArguments pending, "memory" J..= wordsOfWith (pendingUnreadable pending) (pendingBefore pending)
       , "task" J..= J.object ["view" J..= ("committed"::String),"value" J..= pendingTask pending]
       , "sp" J..= hex (pendingSp pending), "cpsr" J..= pendingCpsr pending
       ]
@@ -539,6 +559,11 @@ rb value = J.object ["instructions" J..= Q.readbackInstructions value, "ranges" 
 wordsOf :: Memory -> [J.Value]
 wordsOf memory = [J.object ["address" J..= hex address,"value" J..= J.object ["view" J..= ("committed"::String),"value" J..= value]]
   | (Address address,value) <- M.toList memory]
+
+wordsOfWith :: S.Set Address -> Memory -> [J.Value]
+wordsOfWith unreadable memory = wordsOf memory ++
+  [J.object ["address" J..= hex address,"value" J..= J.object ["view" J..= ("unresolved"::String)]]
+  | Address address <- S.toList unreadable, not (M.member (Address address) memory)]
 
 writeOf :: (Written, WriteOrigin) -> J.Value
 writeOf (Written (Address address) size value, origin) = J.object

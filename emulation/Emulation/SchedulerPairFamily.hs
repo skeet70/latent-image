@@ -9,6 +9,7 @@ module Emulation.SchedulerPairFamily
 import Control.Monad (foldM, forM, forM_, unless, when)
 import Data.Bits ((.&.), (.|.), complement, shiftL, shiftR)
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import Data.Word (Word32, Word64)
 import Emulation.SchedulerPairCatalog (Address (..), FamilyService (..), Semantic (..))
 import Emulation.SchedulerPairModel (Memory)
@@ -134,6 +135,7 @@ data Pending = Pending
   , pendingSaveOrder :: Maybe Word64
   , pendingEntryOrder :: Word64
   , pendingCore :: Int
+  , pendingUnreadable :: S.Set Address
   } deriving (Eq,Show)
 
 -- | One qualified owned S1 lock store: its writer, call epoch, store instruction, and word.
