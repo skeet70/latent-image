@@ -7,13 +7,18 @@ import Data.Word (Word32)
 import qualified Replacement.RtosPlatform.Aggregate as A
 import qualified Replacement.RtosPlatform.Union as U
 import qualified Replacement.RtosOwnFirst.Regions as R
-import Replacement.RtosCyclic.Suite (Image (..), ControlRun (..))
+import Replacement.RtosCyclic.Suite (Image (..), ControlRun (..), foreignCodeExtents)
 
 type Slice = (Image, Bool, [(Word32, Word32)])
 
 bindAggregate :: U.DomainMap -> B.ByteString -> [A.AggregateSymbol] -> [A.SectionPlacement] -> Either String [Slice]
 bindAggregate domain bytes symbols placements = do
   unless (not (null placements)) (Left "aggregate placements are empty")
+  forM_ (U.mapCarriers domain) $ \carrier ->
+    forM_ foreignCodeExtents $ \(address, size) -> do
+      let R.Extent (R.GuestAddress low) (R.GuestAddress high) = U.carrierExtent carrier
+      unless (toInteger address + toInteger size <= toInteger low || address >= high)
+        (Left "foreign fixture code overlaps an owned union carrier")
   image <- A.aggregateImage symbols bytes
   let ordered = sortOn A.placementAddress placements
   forM_ (zip ordered (drop 1 ordered)) $ \(left, right) ->
@@ -87,4 +92,6 @@ admissionControls = [ControlRun "aggregate-admission" name "binding" holds | (na
       , ("zero-size-not-function", refused (symbols ++ [A.AggregateSymbol "label" 0x100c 0]) allPlacements)
       , ("wrong-image-span", case bindAggregate domain (B.pack [0 .. 20]) symbols allPlacements of Left _ -> True; Right _ -> False)
       , ("readonly-overlaps-code", refused symbols (allPlacements ++ [A.SectionPlacement 0x1004 4 ".rodata.overlap"]))
+      ] ++ [ ("foreign-code-overlaps-unused-carrier", case bindAggregate (domain {U.mapCarriers = U.mapCarriers domain ++ [U.Carrier U.Shared (R.Extent (R.GuestAddress address) (R.GuestAddress (address + size)))]}) (B.pack [0 .. 19]) symbols allPlacements of Left _ -> True; Right _ -> False)
+        | (address, size) <- foreignCodeExtents
       ]

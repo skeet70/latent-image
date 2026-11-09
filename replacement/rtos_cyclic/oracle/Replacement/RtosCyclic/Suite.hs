@@ -9,6 +9,7 @@ module Replacement.RtosCyclic.Suite
   , ControlRun (..)
   , runDomain
   , parseOwnedSymbols
+  , foreignCodeExtents
   ) where
 
 import Control.Monad (forM, forM_, unless)
@@ -127,6 +128,9 @@ exitAddress = 0x01000200
 stackBase = 0x300000
 stackSize = 0x1000
 stackPointer = stackBase + 0x800
+
+foreignCodeExtents :: [(Word32, Word32)]
+foreignCodeExtents = [(stubBase, stubSize), (exitAddress, 0x10)]
 
 entriesBase, entriesSize :: Word32
 entriesBase = 0x40100000
