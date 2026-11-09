@@ -56,6 +56,25 @@ withLink union linked = do
   staged <- stage admitted
   pure (source, admitted, staged)
 
+branchingRuns :: [Extent]
+branchingRuns =
+  [ Extent (GuestAddress 0x1000) (GuestAddress 0x10c8)
+  , Extent (GuestAddress 0x10c8) (GuestAddress 0x1190)
+  , Extent (GuestAddress 0x1190) (GuestAddress 0x1258)
+  ]
+    ++ [Extent (GuestAddress start) (GuestAddress (start + 0x4c)) | start <- [0x1258, 0x12a4, 0x12f0, 0x133c, 0x1388]]
+    ++ [Extent (GuestAddress 0x10000) (GuestAddress 0x10064)]
+
+branchingSections :: [Section]
+branchingSections =
+  [ Section ".text.s2_save" 40 4
+  , Section ".text.s2_resume" 32 4
+  , Section ".rodata.s2_pool" 8 4
+  , Section ".text.fill_a" 150 4
+  , Section ".text.fill_b" 150 4
+  , Section ".text.fill_c" 150 4
+  ]
+
 main :: IO ()
 main = do
   failures <- newIORef (0 :: Int)
@@ -97,6 +116,17 @@ main = do
     Left (SearchExhausted _) -> pure ()
     Left err -> check ("bounded packing: " ++ show err) False
     Right _ -> check "bounded packing accepted an impossible assignment" False
+  -- Three 200-byte runs hold the 150-byte sections; five 76-byte runs hold the
+  -- save/resume bundle but not the pool. The first three bundle runs leave two
+  -- 200-byte runs for three sections, the fourth leaves all three.
+  case solveSections 20 branchingRuns branchingSections of
+    Left (SearchExhausted _) -> pure ()
+    Left err -> check ("branching budget: " ++ show err) False
+    Right _ -> check "branching budget placed under an exhausted cumulative budget" False
+  case solveSections 200 branchingRuns branchingSections of
+    Left err -> check ("branching budget success: " ++ show err) False
+    Right placements ->
+      check "branching placement is not publicly admissible" (admitPlacement branchingRuns branchingSections placements == Right ())
   count <- readIORef failures
   if count == 0 then putStrLn "platform-tests: passed" else putStrLn ("platform-tests: " ++ show count ++ " failures") >> fail "platform-tests failed"
 
