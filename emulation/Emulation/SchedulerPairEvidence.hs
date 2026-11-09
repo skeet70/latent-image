@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Emulation.SchedulerPairEvidence
-  ( CallEvidence, emptyCallEvidence, accumulateEvidence, qualifyEvidence, evidenceFailureValue
+  ( CallEvidence, evidenceTotals, emptyCallEvidence, accumulateEvidence, qualifyEvidence, evidenceFailureValue
   , ControlEvidence, emptyControlEvidence, accumulateControlEvidence, qualifyControlEvidence
   , checkControlEvidence, controlFailureValue ) where
 

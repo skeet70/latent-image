@@ -10,7 +10,8 @@ import qualified Data.ByteString.Lazy.Char8 as L
 import Emulation.SchedulerPairCheck
 import Emulation.SchedulerPairDecode (decodeCheckedObservation, decodeControlObservation)
 import Emulation.SchedulerPairEvidence
-  ( qualifyEvidence, evidenceFailureValue, qualifyControlEvidence, checkControlEvidence, controlFailureValue )
+  ( qualifyEvidence, evidenceTotals, evidenceFailureValue, qualifyControlEvidence, checkControlEvidence, controlFailureValue )
+import Emulation.SchedulerPairFamily (Pending (..))
 import Emulation.SchedulerPairPlan
 import Emulation.Sha256 (sha256, sha256Hex)
 import qualified FujiAF.Host as H
@@ -29,7 +30,14 @@ load observer planPath observationPath = do
   let recorded = drop 5 (obsInputs observation)
   unless (recorded == [sha256Hex (sha256 observer)])
     (H.failH ("observer identity differs: observation records " ++ show recorded))
-  result <- either (\refusal -> H.failH (show refusal ++ ": " ++ L.unpack (J.encode (if obsRole observation==planRole plan then evidenceFailureValue evidence else J.Null))))
+  let (familyPending, otherPending) = obsPending observation
+      counts = "entries=" ++ show (obsEntries observation) ++ ",returns=" ++ show (obsReturns observation)
+        ++ ",pending=" ++ show (length familyPending + length otherPending)
+        ++ ",instructions=" ++ show (obsInstructions observation)
+        ++ ",family=" ++ show [(pendingSemantic pending, pendingEntered pending) | pending <- familyPending]
+        ++ ",other=" ++ show otherPending
+        ++ ",classes=" ++ show (completedCallCount (evidenceTotals evidence))
+  result <- either (\refusal -> H.failH (show refusal ++ ": " ++ counts ++ ": " ++ L.unpack (J.encode (if obsRole observation==planRole plan then evidenceFailureValue evidence else J.Null))))
     pure (qualifyEvidence bytes plan observation evidence)
   checkedSummary <- evaluate (force result)
   pure (QualifiedObservation observation checkedSummary)

@@ -135,13 +135,20 @@ coreOf = J.withText "core" $ \core -> case core of "primary" -> pure 0; "seconda
 wordRead :: Value -> Parser Word32
 wordRead = withObject "read" $ \o -> do
   view <- o .: "view"
-  unless (view == ("committed"::String)) (fail "unreadable scheduler state")
+  unless (view == ("committed"::String)) (fail ("EntryUnreadable: " ++ view))
   o .: "value"
 memoryOf :: Value -> Parser Memory
 memoryOf = J.withArray "memory" $ \rows -> do
-  pairs <- mapM (withObject "word" $ \o -> (,) <$> (Address <$> (o .: "address" >>= parseHex)) <*> (o .: "value" >>= wordRead)) (foldr (:) [] rows)
-  unless (M.size (M.fromList pairs) == length pairs) (fail "duplicate word")
-  pure (M.fromList pairs)
+  pairs <- mapM (withObject "word" $ \o -> do
+    address <- Address <$> (o .: "address" >>= parseHex)
+    word <- o .: "value"
+    view <- withObject "read" (.: "view") word
+    if view == ("committed"::String)
+      then Just <$> ((,) address <$> withObject "read" (.: "value") word)
+      else pure Nothing) (foldr (:) [] rows)
+  let committed = [pair | Just pair <- pairs]
+  unless (M.size (M.fromList committed) == length committed) (fail "duplicate word")
+  pure (M.fromList committed)
 writtenOf :: Value -> Parser Written
 writtenOf = withObject "write" $ \o -> Written <$> (Address <$> (o .: "address" >>= parseHex)) <*> o .: "size" <*> o .: "value"
 instance FromJSON Call where
