@@ -141,8 +141,8 @@ argumentValues flag (name : value : rest)
 loadInputs :: [Maybe FilePath] -> IO (Image, Image, [(Word32, Word32)], [(Word32, Word32)], [Aggregate], FilePath, FilePath)
 loadInputs [Just a, Just sa, Just pa, Just b, Just sb, Just pb, Just carriers] = do
   union <- either (failH . show) pure . Union.parseUnion =<< B.readFile carriers
-  aggregateA <- loadAggregate (Union.unionA union) a sa pa
-  aggregateB <- loadAggregate (Union.unionB union) b sb pb
+  aggregateA <- loadAggregate fixtureCodeExtents (Union.unionA union) a sa pa
+  aggregateB <- loadAggregate fixtureCodeExtents (Union.unionB union) b sb pb
   pure (Image 0 B.empty, Image 0 B.empty, [], [], [aggregateA, aggregateB], a, b)
 loadInputs paths | all (== Nothing) paths = do
   a <- required "--owned-a-bin"

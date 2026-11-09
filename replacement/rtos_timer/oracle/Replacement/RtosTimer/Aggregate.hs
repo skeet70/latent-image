@@ -23,6 +23,10 @@ contains :: Word32 -> Word32 -> Word32 -> Word32 -> Bool
 contains base size address bytes = bytes > 0 && address >= base &&
   toInteger address + toInteger bytes <= toInteger base + toInteger size
 
+disjoint :: Word32 -> Word32 -> R.Extent -> Bool
+disjoint address bytes (R.Extent (R.GuestAddress low) (R.GuestAddress high)) =
+  toInteger address + toInteger bytes <= toInteger low || address >= high
+
 placementAdmitted :: U.DomainMap -> A.SectionPlacement -> Bool
 placementAdmitted domain placement =
   (executable placement || ".rodata" `isPrefixOf` A.placementSection placement) &&
@@ -45,8 +49,11 @@ symbolAdmitted domain placements symbol
     packed placement = executable placement &&
       contains (A.placementAddress placement) (A.placementBytes placement) (A.symbolAddress symbol) (A.symbolSize symbol)
 
-loadAggregate :: U.DomainMap -> FilePath -> FilePath -> FilePath -> IO Aggregate
-loadAggregate domain binPath symbolsPath placementsPath = do
+loadAggregate :: [(Word32, Word32)] -> U.DomainMap -> FilePath -> FilePath -> FilePath -> IO Aggregate
+loadAggregate foreignCode domain binPath symbolsPath placementsPath = do
+  forM_ foreignCode $ \(address, bytes) ->
+    unless (all (disjoint address bytes . U.carrierExtent) (U.mapCarriers domain))
+      (fail ("foreign fixture code overlaps owned aggregate carrier: " ++ show (address, bytes)))
   symbols <- either fail pure . A.parseAggregateSymbols =<< B.readFile symbolsPath
   placements <- either fail pure . A.parsePlacements =<< B.readFile placementsPath
   unless (not (null placements)) (fail "aggregate placements are empty")
@@ -104,6 +111,9 @@ admissionControls =
   , ("readonly-not-function", not (symbolAdmitted domain [readonly] (A.AggregateSymbol "body" 0x100c 4)))
   , ("out-of-carrier-data", not (placementAdmitted domain (readonly {A.placementAddress = 0x2000})))
   , ("oversized-data", not (placementAdmitted domain (readonly {A.placementBytes = 8})))
+  , ("foreign-fixture-disjoint", disjoint 0x1010 4 carrier)
+  , ("foreign-fixture-overlap", not (disjoint 0x1008 4 carrier))
+  , ("foreign-fixture-crossing", not (disjoint 0xffc 8 carrier))
   ]
   where
     domain = U.DomainMap R.DomainA (R.GuestAddress 0x1000) 16
@@ -113,3 +123,4 @@ admissionControls =
     packed = A.SectionPlacement 0x1004 8 ".text.body"
     readonly = A.SectionPlacement 0x100c 4 ".rodata.pool"
     admitted = symbolAdmitted domain [packed]
+    carrier = R.Extent (R.GuestAddress 0x1000) (R.GuestAddress 0x1010)

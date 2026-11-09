@@ -7,6 +7,7 @@ module Replacement.RtosTimer.Suite
   , ControlRun (..)
   , runDomain
   , parseOwnedSymbols
+  , fixtureCodeExtents
   ) where
 
 import Control.Monad (forM, forM_, unless)
@@ -105,6 +106,11 @@ waitReleaseAddress DomainB = 0xd4528
 
 waitReleaseSize :: Word32
 waitReleaseSize = 0xcc
+
+fixtureCodeExtents :: [(Word32, Word32)]
+fixtureCodeExtents =
+  [(stubBase, stubSize), (exitAddress, 0x10)] ++
+  [(waitReleaseAddress domain, waitReleaseSize) | domain <- [DomainA, DomainB]]
 
 domainId :: Domain -> Word32
 domainId DomainA = 1
