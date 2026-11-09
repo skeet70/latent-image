@@ -197,7 +197,7 @@ runRoot root (label, role) = do
     , ("missing transition encoding", "e2e-render-stack-diagnostic.json", "transition_encoding", J.Null)
     , ("false logical transition counter", "e2e-render-stack-diagnostic.json", "transition_storage"
       , J.object ["per_invocation_limit" J..= (4096 :: Word32),"aggregate_limit" J..= (65536 :: Word32)
-          ,"retained_entries" J..= (0 :: Word32),"logical_transitions" J..= (1 :: Word32)])
+          ,"retained_entries" J..= (0 :: Word32),"allocated_entries" J..= (65536 :: Word32),"logical_transitions" J..= (1 :: Word32)])
     ]
   setCurrentDirectory original
   pure ([admitted, admittedFile, reusedOk, tamperedOk, missingListOk, emptyListOk, unboundSidecarOk, unboundSourcesOk, changedOk, missingOk, wrongTrajectoryOk, wrongRoleOk, malformedOk, emptyOk, prelinkedBaseOk, prelinkedSizeOk, mutatedPrelinkedOk
@@ -312,7 +312,7 @@ buildFixture directory receipt role = do
         , "transition_encoding" J..= ("pair-stride-v1" :: T.Text)
         , "transition_storage" J..= J.object
             ["per_invocation_limit" J..= (4096 :: Word32),"aggregate_limit" J..= (65536 :: Word32)
-            ,"retained_entries" J..= (0 :: Word32),"logical_transitions" J..= (0 :: Word32)]
+            ,"retained_entries" J..= (0 :: Word32),"allocated_entries" J..= (65536 :: Word32),"logical_transitions" J..= (0 :: Word32)]
         , "start" J..= J.object ["instructions" J..= (0 :: Word32),"tick" J..= (0 :: Word32)]
         , "end" J..= J.object ["instructions" J..= (0 :: Word32),"tick" J..= (0 :: Word32)]
         , "sources" J..= (case config of J.Object fields -> KM.lookup "sources" fields; _ -> Nothing)

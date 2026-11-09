@@ -98,6 +98,8 @@ These are source/build contracts, not a global modal admission or live-device ap
 
 The render stack evidence consumer accepts diagnostic output version 2 with `pair-stride-v1` transitions; diagnostic begin requests remain version 1. Encoded entries retain complete contexts and global active-observation positions, with hard limits of 4096 entries per invocation and 65536 in aggregate. Admission checks pair arithmetic, strict order, invocation spans, logical counts and root storage counters without expanding repeated rows. Observation totals are bounded by the recorded guest instruction interval. Foreign-task transitions remain evidence, while the existing allocation, minimum-context and task-ownership checks remain independent. Earlier diagnostic versions are not upgraded or reinterpreted.
 
+The required `transition_storage.allocated_entries` counter records actual encoded-entry capacity. Admission requires `retained_entries <= allocated_entries <= 65536`.
+
 ## Startup-consumer witness
 
 `//emulation:startup-consumers` captures schema1 natural receipts for retained, installer-only and joined dispatcher-plus-installer roles. `//replacement/startup_consumers:startup-consumers-check` independently admits the canonical DAT, image4 and each loader; derives both native components and the joined frame proof; and reconstructs each staged container and contract before receipt qualification. Independent source review accepted the mechanism after fetch-clock, lock-coverage, executed-entry census and raw exclusive-access corrections. The public host test and SDK build pass. No research guest qualification is claimed yet.

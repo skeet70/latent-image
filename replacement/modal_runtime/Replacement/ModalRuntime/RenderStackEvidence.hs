@@ -300,8 +300,10 @@ parseRenderStackEvidence expectedRole request value = J.parseEither parse value
       perInvocation <- storage J..: "per_invocation_limit" :: J.Parser Integer
       aggregate <- storage J..: "aggregate_limit" :: J.Parser Integer
       retainedCount <- storage J..: "retained_entries" :: J.Parser Integer
+      allocatedCount <- storage J..: "allocated_entries" :: J.Parser Integer
       logicalCount <- storage J..: "logical_transitions" :: J.Parser Integer
-      unless (perInvocation == 4096 && aggregate == 65536 && retainedCount == retained && logicalCount == logical)
+      unless (perInvocation == 4096 && aggregate == 65536 && retainedCount == retained && logicalCount == logical
+        && retainedCount <= allocatedCount && allocatedCount <= 65536)
         (fail "render transition storage limits or counters differ"))
     forM_ invocations $ \invocation -> do
       unless (lookup (invocationKind invocation) entries == Just (invocationFrame invocation))

@@ -466,7 +466,8 @@ runTests arguments = do
         , "retained_service_spans_informational" .= True
         , "transition_encoding" .= String "pair-stride-v1"
         , "transition_storage" .= object ["per_invocation_limit" .= (4096 :: Word32)
-            , "aggregate_limit" .= (65536 :: Word32),"retained_entries" .= (0 :: Word32),"logical_transitions" .= (0 :: Word32)]
+            , "aggregate_limit" .= (65536 :: Word32),"retained_entries" .= (0 :: Word32)
+            , "allocated_entries" .= (65536 :: Word32),"logical_transitions" .= (0 :: Word32)]
         , "performance" .= object ["active_instructions" .= (0 :: Word32)
             , "invocation_count" .= (0 :: Word32), "hook_transitions" .= (0 :: Word32)] ]
   check "finished invocation measurement remains explicitly diagnostic"

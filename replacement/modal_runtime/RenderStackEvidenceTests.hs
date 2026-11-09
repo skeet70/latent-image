@@ -67,7 +67,7 @@ pair = J.object
 storage :: Integer -> Integer -> J.Value
 storage retained logical = J.object
   [ "per_invocation_limit" J..= (4096 :: Integer),"aggregate_limit" J..= (65536 :: Integer)
-  , "retained_entries" J..= retained,"logical_transitions" J..= logical ]
+  , "retained_entries" J..= retained,"allocated_entries" J..= (65536 :: Integer),"logical_transitions" J..= logical ]
 
 invocation :: J.Value
 invocation = J.object
@@ -149,6 +149,8 @@ main = do
       pairReport = withRuns [pair] 7
       alteredContext key value = withRuns [set "first" (sample 2 (set key value transitionContext)) pair] 7
   check "pair-stride run with trailing first preserves seven logical transitions" (accepts pairReport)
+  check "allocated capacity may equal retained storage"
+    (accepts (set "transition_storage" (set "allocated_entries" (number 1) (storage 1 7)) pairReport))
   forM_ [ ("pc",number 0x119f760),("cpsr",number 0x600000d3),("context_depth",number 1)
         , ("current_node",number 0x40060644),("owner_node",J.Null),("scheduler",J.Bool True)
         , ("mode_source",J.object ["pc" J..= (0x119f754 :: Word32),"word" J..= (0xe121f000 :: Word32)]) ] $ \(key,value) ->
@@ -174,6 +176,10 @@ main = do
         , set "transition_encoding" (J.String "flat") pairReport
         , set "transition_storage" (storage 2 7) pairReport
         , set "transition_storage" (storage 1 6) pairReport
+        , set "transition_storage" (set "allocated_entries" (number 0) (storage 1 7)) pairReport
+        , set "transition_storage" (set "allocated_entries" (number 65537) (storage 1 7)) pairReport
+        , set "transition_storage" (set "allocated_entries" (J.toJSON (-1 :: Integer)) (storage 1 7)) pairReport
+        , set "transition_storage" (set "allocated_entries" J.Null (storage 1 7)) pairReport
         , set "transition_storage" (set "per_invocation_limit" (number 4097) (storage 1 7)) pairReport
         , set "transition_storage" (set "aggregate_limit" (number 65537) (storage 1 7)) pairReport
         , singleton (set "transition_span" (J.object ["first" J..= (0 :: Word32),"last" J..= (8 :: Word32)]) invocation)
