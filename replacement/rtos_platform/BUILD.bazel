@@ -250,6 +250,55 @@ xm1_rust_staticlib(
     for domain in ["a", "b"]
 ]
 
+[
+    xm1_rust_rlib(
+        name = "cyclic-%s-rlib" % domain,
+        src = "//replacement/rtos_cyclic:src/lib.rs",
+        crate_name = "xm1_rtos_cyclic_abi",
+        data = [
+            "//replacement/rtos_cyclic:src/id.rs",
+            "//replacement/rtos_cyclic:src/machine.rs",
+            "//replacement/rtos_cyclic:src/ops.rs",
+            "//replacement/rtos_cyclic:src/status.rs",
+            "//replacement/rtos_cyclic:src/types.rs",
+            "//replacement/rtos_cyclic:stage/abi.rs",
+            "//replacement/rtos_layout:src/lib.rs",
+            "//replacement/rtos_reservation:src/lib.rs",
+        ],
+        rustc_flags = [
+            "--cfg",
+            "'feature=\"domain-%s\"'" % domain,
+            "--cfg",
+            "'feature=\"stage\"'",
+            "--cfg",
+            "'feature=\"component\"'",
+        ],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    xm1_rust_rlib(
+        name = "timer-%s-rlib" % domain,
+        src = "//replacement/rtos_timer:stage/abi.rs",
+        crate_name = "xm1_rtos_timer_abi",
+        data = [
+            "//replacement/rtos_timer:src/lib.rs",
+            "//replacement/rtos_layout:src/lib.rs",
+            "//replacement/rtos_reservation:src/lib.rs",
+        ],
+        rustc_flags = [
+            "--cfg",
+            "'feature=\"domain-%s\"'" % domain,
+            "--cfg",
+            "'feature=\"stage\"'",
+            "--cfg",
+            "'feature=\"component\"'",
+        ],
+    )
+    for domain in ["a", "b"]
+]
+
 xm1_rust_rlib(
     name = "global-lock-rlib",
     src = "//replacement/rtos_global_lock:stage/abi.rs",
@@ -280,6 +329,8 @@ _ARCHIVES = {
         ":fixed-pool-a-rlib",
         ":task-records-a-rlib",
         ":global-lock-rlib",
+        ":cyclic-a-rlib",
+        ":timer-a-rlib",
     ],
     "b": [
         ":platform-root",
@@ -293,6 +344,8 @@ _ARCHIVES = {
         ":fixed-pool-b-rlib",
         ":task-records-b-rlib",
         ":global-lock-rlib",
+        ":cyclic-b-rlib",
+        ":timer-b-rlib",
     ],
 }
 

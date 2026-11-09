@@ -710,3 +710,73 @@ xm1_platform_veneer_scheduler_timeout:
 xm1_platform_veneer_scheduler_delay_completion:
     b xm1_rtos_scheduler_delay_completion
 .size xm1_platform_veneer_scheduler_delay_completion, .-xm1_platform_veneer_scheduler_delay_completion
+
+.section .veneer.cyclic_configure,"ax",%progbits
+.global xm1_platform_veneer_cyclic_configure
+.type xm1_platform_veneer_cyclic_configure,%function
+xm1_platform_veneer_cyclic_configure:
+    b xm1_rtos_cyclic_configure
+.size xm1_platform_veneer_cyclic_configure, .-xm1_platform_veneer_cyclic_configure
+
+.section .veneer.cyclic_schedule,"ax",%progbits
+.global xm1_platform_veneer_cyclic_schedule
+.type xm1_platform_veneer_cyclic_schedule,%function
+xm1_platform_veneer_cyclic_schedule:
+    b xm1_rtos_cyclic_schedule
+.size xm1_platform_veneer_cyclic_schedule, .-xm1_platform_veneer_cyclic_schedule
+
+.section .veneer.cyclic_expire,"ax",%progbits
+.global xm1_platform_veneer_cyclic_expire
+.type xm1_platform_veneer_cyclic_expire,%function
+xm1_platform_veneer_cyclic_expire:
+    b xm1_rtos_cyclic_expire
+.size xm1_platform_veneer_cyclic_expire, .-xm1_platform_veneer_cyclic_expire
+
+.section .veneer.cyclic_initialize,"ax",%progbits
+.global xm1_platform_veneer_cyclic_initialize
+.type xm1_platform_veneer_cyclic_initialize,%function
+xm1_platform_veneer_cyclic_initialize:
+    b xm1_rtos_cyclic_initialize
+.size xm1_platform_veneer_cyclic_initialize, .-xm1_platform_veneer_cyclic_initialize
+
+.section .veneer.cyclic_start,"ax",%progbits
+.global xm1_platform_veneer_cyclic_start
+.type xm1_platform_veneer_cyclic_start,%function
+xm1_platform_veneer_cyclic_start:
+    b xm1_rtos_cyclic_start
+.size xm1_platform_veneer_cyclic_start, .-xm1_platform_veneer_cyclic_start
+
+.section .veneer.cyclic_stop,"ax",%progbits
+.global xm1_platform_veneer_cyclic_stop
+.type xm1_platform_veneer_cyclic_stop,%function
+xm1_platform_veneer_cyclic_stop:
+    b xm1_rtos_cyclic_stop
+.size xm1_platform_veneer_cyclic_stop, .-xm1_platform_veneer_cyclic_stop
+
+.section .veneer.cyclic_create,"ax",%progbits
+.global xm1_platform_veneer_cyclic_create
+.type xm1_platform_veneer_cyclic_create,%function
+xm1_platform_veneer_cyclic_create:
+    b xm1_rtos_cyclic_create
+.size xm1_platform_veneer_cyclic_create, .-xm1_platform_veneer_cyclic_create
+
+.section .veneer.cyclic_delete,"ax",%progbits
+.global xm1_platform_veneer_cyclic_delete
+.type xm1_platform_veneer_cyclic_delete,%function
+xm1_platform_veneer_cyclic_delete:
+    b xm1_rtos_cyclic_delete
+.size xm1_platform_veneer_cyclic_delete, .-xm1_platform_veneer_cyclic_delete
+
+.macro timer_veneer name
+.section .veneer.timer_\name,"ax",%progbits
+.global xm1_platform_veneer_timer_\name
+.type xm1_platform_veneer_timer_\name,%function
+xm1_platform_veneer_timer_\name:
+    b xm1_rtos_timer_\name
+.size xm1_platform_veneer_timer_\name, .-xm1_platform_veneer_timer_\name
+.endm
+
+timer_veneer initialize
+timer_veneer insert
+timer_veneer remove
+timer_veneer tick
