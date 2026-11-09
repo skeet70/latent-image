@@ -33,7 +33,14 @@ def render_sites($role; $name):
     ["01158184","render-pane-return",{"sp":true,"reads":render_pane_return_reads}],
     ["006d7d44","render-osd-increment"],
     ["006d76ec","render-osd-buffer",{"lr":true}]
-  ] + (if $name == "framed-pop-group41" then [["011130e0","render-fill-entry"]] else [] end)
+  ] + (if $name == "framed-pop-group41" then [
+    ["011130e0","render-fill-entry"],
+    ["01113514","render-pane-cell-box",{"sp":true,"reads":[{"sp":0,"bytes":12}]}],
+    ["0111278c","render-pane-aligned"],
+    ["011121d4","render-pane-label-grid"],
+    ["0111236c","render-pane-grid"],
+    ["01112d64","render-pane-bounds"]
+  ] else [] end)
     + (if $role == "owned" then [
     ["runtime:rb_render_tree_entry","render-tree-adapter",{"sp":true}],
     ["runtime:rb_render_picker_entry","render-picker-adapter",{"sp":true}],
