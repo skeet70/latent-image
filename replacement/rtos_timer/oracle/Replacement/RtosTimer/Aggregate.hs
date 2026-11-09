@@ -10,7 +10,7 @@ module Replacement.RtosTimer.Aggregate
 
 import Control.Monad (forM_, unless)
 import qualified Data.ByteString as B
-import Data.List (foldl', isPrefixOf, nub, sort, sortOn)
+import Data.List (isPrefixOf, nub, sort, sortOn)
 import Data.Word (Word32)
 import Emulation.NativeObservation (GuestAddress (..), RegionId (..))
 import Emulation.OwnedCase

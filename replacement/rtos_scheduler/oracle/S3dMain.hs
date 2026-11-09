@@ -37,6 +37,13 @@ data Role = Stock | Owned deriving (Eq, Show)
 
 data FetchLayout = OriginalFunctions | AllocatedFunctions deriving (Eq, Show)
 
+data TimerIndexState = LinkedIndex | DetachedIndex deriving (Eq, Show)
+data TimerContract = RetainedTimer | OwnedDetachedTimer
+data TimerIndexCell = TimerIndexCell Domain GuestAddress
+
+armedTimerIndex :: TimerIndexCell
+armedTimerIndex = TimerIndexCell DomainA (GuestAddress 0x40059200)
+
 data Aggregate = Aggregate Agg.AggregateImage [Agg.AggregateSymbol] [Agg.SectionPlacement] [Regions.Extent]
 
 data Service = Terminate | ChangePriority | TimedSleep | ReleaseWait | HandlerRelease | Delay
@@ -274,7 +281,8 @@ _linkQueue d slot =
 armTimer :: Domain -> Word32 -> W -> W
 armTimer d slot =
   let task = taskAt d slot
-      timer = 0x40059200
+      TimerIndexCell _ (GuestAddress address) = armedTimerIndex
+      timer = fromIntegral address
       heap = timerHeap d
    in setW timer 1
       >>> setW (timer + 4) (timeoutCallback d)
@@ -389,9 +397,66 @@ data ControlRun = ControlRun
   , controlHolds :: Bool
   }
 
-controlRuns :: Domain -> Case -> CaseSpec -> NativeObservation -> NativeObservation -> [ControlRun]
-controlRuns d one spec stock owned =
-  frameControls ++ [ControlRun name (refused (mutate offset owned)) | caseService one `elem` [Timeout, DelayCallback], (name, offset) <- targets]
+timerDetachment :: TimerContract -> Domain -> Case -> Maybe TimerIndexCell
+timerDetachment RetainedTimer _ _ = Nothing
+timerDetachment OwnedDetachedTimer d one
+  | caseService one `elem` [ReleaseWait, HandlerRelease]
+  , succeeded (caseExpected one)
+  , let TimerIndexCell _ (GuestAddress address) = armedTimerIndex
+  , M.lookup (fromIntegral address) (caseSetup one d (baseFixture d)) == Just 1 = Just armedTimerIndex
+  | otherwise = Nothing
+  where
+    succeeded (ReturnedR0 value) = value == 0
+    succeeded (StoppedAt _ _) = True
+
+timerIndexState :: TimerIndexCell -> NativeObservation -> Maybe TimerIndexState
+timerIndexState (TimerIndexCell domain (GuestAddress address)) observation = do
+  bytes <- lookup (RegionId (if domain == DomainA then "data-a" else "data-b")) (nativeMemory observation)
+  let offset = fromIntegral (address - fromIntegral (globalsBase domain))
+      encoded = B.take 4 (B.drop offset bytes)
+  if encoded == word32le 0 then Just DetachedIndex
+    else if encoded == word32le 1 then Just LinkedIndex else Nothing
+
+indexView :: TimerIndexCell -> TimerIndexState -> NativeObservation -> NativeObservation
+indexView (TimerIndexCell domain (GuestAddress address)) state observation = observation
+  { nativeMemory =
+      [(ident, if ident == region then B.take offset bytes <> encoded <> B.drop (offset + 4) bytes else bytes)
+      | (ident, bytes) <- nativeMemory observation]
+  }
+  where
+    region = RegionId (if domain == DomainA then "data-a" else "data-b")
+    offset = fromIntegral (address - fromIntegral (globalsBase domain))
+    encoded = word32le (case state of LinkedIndex -> 1; DetachedIndex -> 0)
+
+indexWrites :: TimerIndexCell -> NativeObservation -> Maybe [(WriteBytes, WriteValue)]
+indexWrites (TimerIndexCell _ address) observation = do
+  kernel <- nativeKernel observation
+  events <- observedOrder kernel
+  pure [(bytes, value) | OrderedWrite (Write target bytes) value <- events, target == address]
+
+detachmentView :: Maybe TimerIndexCell -> NativeObservation -> NativeObservation
+detachmentView Nothing observation = observation
+detachmentView (Just cell@(TimerIndexCell _ address)) observation =
+  (indexView cell LinkedIndex observation) { nativeKernel = fmap clean (nativeKernel observation) }
+  where
+    clean kernel = kernel { observedOrder = fmap (filter keep) (observedOrder kernel) }
+    keep (OrderedWrite (Write target (WriteBytes 4)) (WriteValue 0)) = target /= address
+    keep _ = True
+
+detachmentControls :: Maybe TimerIndexCell -> NativeObservation -> NativeObservation -> [ControlRun]
+detachmentControls Nothing _ _ = []
+detachmentControls (Just cell) stock owned =
+  [ ControlRun "stock-linked-timer-index" (timerIndexState cell stock == Just LinkedIndex && indexWrites cell stock == Just [])
+  , ControlRun "owned-detached-timer-index" (detached owned)
+  , ControlRun "timer-index-corruption-refused" (not (detached (indexView cell LinkedIndex owned)))
+  ]
+  where
+    detached observation = timerIndexState cell observation == Just DetachedIndex && indexWrites cell observation == Just [(WriteBytes 4, WriteValue 0)]
+
+controlRuns :: TimerContract -> Domain -> Case -> CaseSpec -> NativeObservation -> NativeObservation -> [ControlRun]
+controlRuns timerContract d one spec stock owned =
+  frameControls ++ detachmentControls (timerDetachment timerContract d one) stock owned
+  ++ [ControlRun name (refused (mutate offset owned)) | caseService one `elem` [Timeout, DelayCallback], (name, offset) <- targets]
   where
     refused mutated = not (null (compareKernelCase adjusted (normalize stock) (normalize mutated)))
     frameOffset = fromIntegral (stackTop - stackBase)
@@ -551,7 +616,7 @@ specFor d role one loaderA loaderB aggregates owned = CaseSpec
       [(GuestAddress (fromIntegral start), end - start)
       | (base, size) <- mergeSpans (if null aggregateList then OriginalFunctions else AllocatedFunctions) (ownedFunctions ++ aggregateFunctions)
       , let boundaries = base : filter (\address -> base < address && address < base + size) publicEntries ++ [base + size]
-      , (start, end) <- zip boundaries (tail boundaries)]
+      , (start, end) <- zip boundaries (drop 1 boundaries)]
   , caseInitial =
       [(R0, caseArgument one), (R1, caseArgument1 one), (R2, 0), (R3, 0), (R12, 0)]
       ++ [(register, 0xabc00000 + fromIntegral (fromEnum register)) | register <- [R4 .. R11]]
@@ -755,6 +820,12 @@ main = do
         forM_ [Terminate, ChangePriority, TimedSleep, ReleaseWait, HandlerRelease, Delay, Timeout, DelayCallback] $ \service ->
           unless (any (\symbol -> Agg.symbolAddress symbol == entryOf domain service && Agg.symbolSize symbol > 0) symbols)
             (fail ("aggregate is missing public S3d entry: " ++ show (domain, service)))
+  let timerContract = case aggregates of
+        Just (a, b) | all detachedTimer [a, b] -> OwnedDetachedTimer
+        _ -> RetainedTimer
+      detachedTimer (Aggregate _ symbols _ _) =
+        all (\name -> any ((== name) . Agg.symbolName) symbols)
+          ["xm1_rtos_timer_remove_body", "xm1_rtos_timer_tick_body"]
   reports <- forM [(DomainA, ownedABytes), (DomainB, ownedBBytes)] $ \(d, owned) -> do
     let grid = cases d
         directory = takeDirectory results </> ("s3d-" ++ domainLabel d)
@@ -768,13 +839,13 @@ main = do
       [(specs, stock), (_, ownedObs)] -> do
         let stockObs = map snd stock
             ownedObservations = map snd ownedObs
-            compareOne reference left right =
+            compareOne one reference left right =
               let adjusted = case caseKernel reference of
                     Just kernel | null (kernelStop kernel) -> reference
                     _ -> reference { caseKernel = fmap (\k -> k { kernelUncompared = kernelUncompared k ++ [R4, R5, R6, R7, R8, R9, R10, R11, Sp] }) (caseKernel reference) }
-               in compareKernelCase adjusted (normalize left) (normalize right)
+               in compareKernelCase adjusted (normalize left) (normalize (detachmentView (timerDetachment timerContract d one) right))
             failures = [ (name, diff, firstDifference left right) | (name, diff, left, right) <- differences, not (null diff) ]
-            differences = [ (caseName one, compareOne reference left right, left, right)
+            differences = [ (caseName one, compareOne one reference left right, left, right)
                           | (one, reference, left, right) <- zip4 grid specs stockObs ownedObservations ]
             contracts =
               [ (caseName one, roleName, caseExpected one, nativeStatus observation, registerValue observation R0, registerValue observation Pc)
@@ -786,7 +857,7 @@ main = do
             controls =
               [ (caseName one, control)
               | (one, spec, left, right) <- zip4 grid specs stockObs ownedObservations
-              , control <- controlRuns d one spec left right
+              , control <- controlRuns timerContract d one spec left right
               ]
             failedControls = [ (name, controlName control) | (name, control) <- controls, not (controlHolds control) ]
         B.writeFile (directory </> "report.json") (encodeCanonical (A.object

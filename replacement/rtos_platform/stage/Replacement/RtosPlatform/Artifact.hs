@@ -366,9 +366,38 @@ contractValue staged = object
       [ object ["domain" .= domainLabel domain, "premise" .= premise]
       | domain <- domains, premise <- domainFramePremises (admittedDomains admitted M.! domain)
       ]
+  , "entry_frame_results" .=
+      [ entryFrameValue domain entry
+      | domain <- domains
+      , entry <- mapEntries (domainMap union domain)
+      , entryGroup entry `elem` [TaskRecords, Cyclic, Timer]
+      ]
   ]
   where
     admitted = stagedAdmitted staged
     source = admittedSource admitted
     union = admittedUnion admitted
     addressText (GuestAddress value) = hexText value
+    entryFrameValue domain entry = object
+      [ "domain" .= domainLabel domain
+      , "group" .= groupLabel (entryGroup entry)
+      , "name" .= entryName entry
+      , "symbol" .= entrySymbol entry
+      , "result" .= result
+      ]
+      where
+        dm = domainMap union domain
+        symbols = domainSymbols (admittedDomains admitted M.! domain)
+        roots = [GuestAddress (F.symbolAddress symbol) | symbol <- symbols, F.symbolName symbol == entrySymbol entry]
+        external = S.fromList [address | declared <- mapExternals dm, let GuestAddress address = externalAddress declared]
+        code = OwnedCode (mapBase dm) (stagedLoader staged domain) (map carrierExtent (mapCarriers dm))
+        result = case roots of
+          [root] -> case framesWith external code [root] of
+            Left err -> object ["status" .= ("premise" :: String), "premise" .= show err]
+            Right (walked, edges) -> object
+              [ "status" .= (if null edges then "closed-owned-paths" else "retained-frame-premises" :: String)
+              , "owned_frames" .= M.size walked
+              , "frames" .= map show (M.elems walked)
+              , "external_edges" .= map show edges
+              ]
+          _ -> object ["status" .= ("missing-or-ambiguous-root" :: String)]

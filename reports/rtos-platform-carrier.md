@@ -84,6 +84,14 @@ The split-frame continuation repair exposes the next exact static premise in `.t
 
 The first S3d run against the corrected effective carrier images refuses native case admission at `terminate-ready-a` with `functions limit`; its launcher succeeds but the application exits 1. No firmware behavior is accepted from that refusal. Fetch metadata compaction now retains the exact executable union, splits at declared public entries and omits retired helper declarations that overlap owned carriers. The lifecycle comparison retains live incoming-frame bytes and ordered caller writes; controls challenge live-frame corruption and private-stack insensitivity. Fresh qualification remains required.
 
+The admitted S3d cohort captures 25 cases per domain. Four release comparisons per domain initially differ only at the armed timer's index word `0x40059200`: stock retains 1; owned writes 0 at PC `0x4d320`, instruction `0xe5810000`, in `xm1_rtos_timer_remove_body`. The joint normal-remove detachment repair is required by platform-options §4.13/§4.20 and the cyclic join. Independent per-role checks require the original linked index/no-write and the owned detached index/exact single zero-write before projecting only that named correction. The corrected effective-image model passes 50 comparisons and 254 controls, with zero comparison, outcome-contract or control failures (`s3d-effective-04`). All other caller/frame/device effects remain compared. This is bounded service/callback acceptance, not unmodified dispatcher or physical-system acceptance.
+
+Fresh timer aggregate qualification refuses storage before execution at 102,394,003,456 available bytes against the unchanged 107,374,182,400-byte reserve. Source-level cyclic/timer initialization-artifact compaction and host admission tests do not override that refusal or establish firmware execution.
+
+Independent actual-image frame walks now report each task-record, cyclic and timer entry without discarding later roots after the global idle-stack premise. `stage-frame-03/contract.json` retains the same candidate DAT identity: ten entry roots close through owned paths, four task-record roots close their owned paths with explicit retained mask/restore leaves, and fourteen roots retain exact indirect-call `PcWrite` premises. The retained leaves are A `0x42560/0x42568` and B `0xd2560/0xd2568`; cyclic/timer indirect callbacks and configured function pointers require admitted target/frame contracts before composed ownership. These reports do not turn native fixture callbacks into live firmware placement.
+
+
+
 S3d lifecycle-return fixtures redirect the owned dispatcher entry to foreign save/wake/return instrumentation; blocking fixtures stop at that entry. Those fixtures cannot establish unmodified dispatcher/context-transfer acceptance. This boundary remains separate from source placement, byte preservation and service/callback comparisons.
 
 
