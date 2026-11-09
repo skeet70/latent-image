@@ -653,3 +653,4 @@ xm1_platform_veneer_data_queue_receive_poll:
 xm1_platform_veneer_data_queue_receive_timeout:
     b xm1_rtos_data_queue_receive_timeout
 .size xm1_platform_veneer_data_queue_receive_timeout, .-xm1_platform_veneer_data_queue_receive_timeout
+

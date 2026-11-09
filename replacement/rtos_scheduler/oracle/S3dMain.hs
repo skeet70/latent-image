@@ -348,7 +348,7 @@ patchOwned d loader ownedBase owned =
       patches =
         [(entryOf d service, 4, entryOf d service) | service <- [Terminate, ChangePriority, TimedSleep, ReleaseWait, HandlerRelease, Delay]]
         ++ [(0x46e4c + if d == DomainB then 0x8ffc0 else 0, 0x180, 0x46e4c + if d == DomainB then 0x8ffc0 else 0)]
-        ++ [(if d == DomainA then 0x50000 else 0xe0000, 0x1300, if d == DomainA then 0x50000 else 0xe0000)]
+        ++ [(if d == DomainA then 0x50000 else 0xe0000, 0x4000, if d == DomainA then 0x50000 else 0xe0000)]
    in foldl (\bytes (address, size, source) -> poke bytes (address - base) (slice owned ownedBase source size)) (loader <> B.replicate 0x12000 0) patches
 
 loaderBytes :: Domain -> B.ByteString -> B.ByteString
@@ -415,7 +415,7 @@ specFor d role one loaderA loaderB aggregate owned = CaseSpec
   , caseRegions =
       [ mkRegion (RegionId "code") (GuestAddress (fromIntegral (loaderBase d))) 0x10000 ReadExecute (B.take 0x10000 code)
       , mkRegion (RegionId "code-other") (GuestAddress (fromIntegral (loaderBase other))) 0x10000 ReadExecute (B.take 0x10000 otherLoader)
-      , mkRegion (RegionId "bodies") (GuestAddress (fromIntegral bodyBase)) 0x2000 ReadExecute bodies
+      , mkRegion (RegionId "bodies") (GuestAddress (fromIntegral bodyBase)) 0x4000 ReadExecute bodies
       , mkRegion (RegionId "stub") (GuestAddress (fromIntegral stubBase)) 0x100 ReadExecute stub
       , mkRegion (RegionId "data-a") (GuestAddress (fromIntegral (globalsBase DomainA))) (fromIntegral globalsSize) ReadWrite (dataCode DomainA fixture)
       , mkRegion (RegionId "data-b") (GuestAddress (fromIntegral (globalsBase DomainB))) (fromIntegral globalsSize) ReadWrite (dataCode DomainB fixture)
@@ -443,7 +443,7 @@ specFor d role one loaderA loaderB aggregate owned = CaseSpec
     fixture = setW (handlerCell d) (if caseHandler one then 1 else 0) (caseSetup one d (baseFixture d))
     ownedFunctions =
       [(entryOf d service, extentOf service) | service <- [Terminate, ChangePriority, TimedSleep, ReleaseWait, HandlerRelease, Delay]]
-      ++ [(bodyBase, 0x1300), (stubBase, 0x80), (switchOf d, 4)]
+      ++ [(bodyBase, 0x4000), (stubBase, 0x80), (switchOf d, 4)]
       ++ helperRanges d ++ helperRanges other
     aggregateFunctions = case (role, aggregate) of
       (Owned, Just (Aggregate _ symbols)) -> [(Agg.symbolAddress symbol, Agg.symbolSize symbol) | symbol <- symbols]
@@ -452,7 +452,7 @@ specFor d role one loaderA loaderB aggregate owned = CaseSpec
     code = case role of
       Stock -> patchStub d (loaderBytes d loader) (caseLifecycle one)
       Owned -> patchStub d (installAggregate d (patchOwned d loader (if d == DomainA then 0x454f0 else 0xd54b0) owned) aggregate) (caseLifecycle one)
-    bodies = if role == Owned then slice owned (if d == DomainA then 0x454f0 else 0xd54b0) bodyBase 0x1300 else B.replicate 0x2000 0
+    bodies = if role == Owned then slice owned (if d == DomainA then 0x454f0 else 0xd54b0) bodyBase 0x4000 else B.replicate 0x4000 0
     stub = case caseLifecycle one of
       Nothing -> B.replicate 0x100 0
       Just result ->

@@ -7,7 +7,7 @@ MEMORY {
   interrupt_release_wait_entry (rx) : ORIGIN = 0x467b4, LENGTH = 0x04
   delay_entry (rx) : ORIGIN = 0x46e48, LENGTH = 0x04
   delay_body (rx) : ORIGIN = 0x46e4c, LENGTH = 0x180
-  bodies (rx) : ORIGIN = 0x50000, LENGTH = 0x2000
+  bodies (rx) : ORIGIN = 0x50000, LENGTH = 0x4000
 }
 s3d_remove_ready = 0x43d20;
 s3d_insert_ready = 0x43ca4;
@@ -38,6 +38,12 @@ SECTIONS {
     __s3d_interrupt_release_wait_body_end = .;
     KEEP(*(.text.s3d_timer_active))
     __s3d_timer_active_end = .;
+    KEEP(*(.text.*release_waiting*))
+    __s3d_release_waiting_end = .;
+    KEEP(*(.text.*release_queued*))
+    __s3d_release_queued_end = .;
+    KEEP(*(.text))
+    KEEP(*(.rodata .rodata.*))
     . = ORIGIN(bodies) + LENGTH(bodies);
   } > bodies =0xf000f0e7
   .forbidden (NOLOAD) : { *(.text .text.* .rodata .rodata.* .data .data.* .bss .bss.* COMMON) } > bodies

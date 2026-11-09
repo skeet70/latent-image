@@ -86,6 +86,7 @@ xm1_rust_staticlib(
     for domain in ["a", "b"]
 ]
 
+
 [
     xm1_rust_rlib(
         name = "own-first-%s-rlib" % domain,
