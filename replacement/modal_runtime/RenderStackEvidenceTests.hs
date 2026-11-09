@@ -135,6 +135,26 @@ main = do
     (not (accepts (nestedReport [set "min_sp" (number 0xa4d700) invocation,nested])))
   check "overlapping invocation cannot omit its enclosing parent"
     (not (accepts (report [invocation,set "parent" J.Null nested])))
+  let spanInvocation :: Word32 -> Maybe Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> J.Value
+      spanInvocation ident parent entry terminal spanFirst spanLast = foldr (uncurry set) invocation
+        [ ("id",number ident),("parent",maybe J.Null number parent)
+        , ("entry_boundary",boundary entry),("terminal_boundary",boundary terminal)
+        , ("transition_span",J.object ["first" J..= spanFirst,"last" J..= spanLast])
+        , ("transition_count",number 1),("transitions",J.toJSON [sample spanFirst transitionContext]) ]
+      spanReport :: [J.Value] -> Int -> J.Value
+      spanReport values roots = foldr (uncurry set) (report values)
+        [ ("transition_storage",storage (toInteger (length values)) (toInteger (length values)))
+        , ("performance",J.object ["active_instructions" J..= (10 :: Word32)
+            ,"invocation_count" J..= length values,"hook_transitions" J..= (2 * roots)]) ]
+  check "ordered disjoint root transition spans are accepted"
+    (accepts (spanReport [spanInvocation 1 Nothing 2 8 2 8,spanInvocation 2 Nothing 9 10 9 10] 2))
+  check "root transition spans cannot overlap across sequential boundaries"
+    (not (accepts (spanReport [spanInvocation 1 Nothing 2 8 2 8,spanInvocation 2 Nothing 9 10 7 8] 2)))
+  check "nested transition span is contained in its parent"
+    (accepts (spanReport [spanInvocation 1 Nothing 2 10 2 8,spanInvocation 2 (Just 1) 3 9 3 8] 1))
+  check "nested transition span cannot leave its parent"
+    (not (accepts (spanReport [spanInvocation 1 Nothing 2 10 2 5,spanInvocation 2 (Just 1) 3 9 3 8] 1)))
+  check "nested invocation cannot change core" (not (accepts (nestedReport [invocation,set "core" (number 1) nested])))
   forM_ [ set "coverage" (J.String "refused") (singleton invocation)
         , set "finished" (J.Bool False) (singleton invocation)
         , set "active_invocations" (number 1) (singleton invocation)
@@ -171,6 +191,7 @@ main = do
         , withRuns [pair,sample 8 transitionContext] 8
         , withRuns [pair] 6
         , withRuns [] 7
+        , withRuns [] 0
         , set "version" (number 1) pairReport
         , J.Object (case pairReport of J.Object o -> KM.delete "transition_encoding" o; _ -> KM.empty)
         , set "transition_encoding" (J.String "flat") pairReport

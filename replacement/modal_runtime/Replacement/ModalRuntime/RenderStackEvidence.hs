@@ -17,7 +17,7 @@ import qualified Data.Aeson.Types as J
 import Data.Bits ((.&.))
 import qualified Data.ByteString as B
 import qualified Data.Foldable as F
-import Data.List (nub, sort)
+import Data.List (find, nub, sort, sortOn)
 import qualified Data.Text as T
 import Data.Word (Word32, Word64)
 import Numeric (showHex)
@@ -212,7 +212,33 @@ validateTransitions (ActiveObservations observations) invocation = do
   unless (count == toInteger (invocationTransitionCount invocation)
     && count <= toInteger terminal - toInteger entry + 1)
     (Left "render logical transition count differs or exceeds instruction span")
+  unless (count > 0) (Left "render invocation retains no transition")
   pure count
+
+invocationSpan :: Invocation -> (Word64, Word64)
+invocationSpan invocation =
+  let TransitionSpan (ObservationOrdinal first) (ObservationOrdinal last_) = invocationTransitionSpan invocation
+  in (first, last_)
+
+validateInvocationSpans :: [Invocation] -> Either String ()
+validateInvocationSpans invocations = do
+  forM_ invocations $ \invocation -> case invocationParent invocation of
+    Nothing -> pure ()
+    Just parentId -> case find ((== parentId) . invocationId) invocations of
+      Nothing -> Left "render invocation parent is absent"
+      Just parent -> do
+        let (parentFirst, parentLast) = invocationSpan parent
+            (first, last_) = invocationSpan invocation
+        unless (invocationCore parent == invocationCore invocation
+          && parentFirst <= first && last_ <= parentLast)
+          (Left "render nested invocation span leaves its parent")
+  forM_ [Core0, Core1] $ \core -> do
+    let roots = sortOn (fst . invocationSpan) [invocation | invocation <- invocations,
+          invocationParent invocation == Nothing, invocationCore invocation == core]
+    forM_ (zip roots (drop 1 roots)) $ \(earlier, later) -> do
+      let (_, earlierLast) = invocationSpan earlier
+          (laterFirst, _) = invocationSpan later
+      unless (earlierLast < laterFirst) (Left "render root invocation spans overlap or are unordered")
 instance J.FromJSON Invocation where
   parseJSON = J.withObject "render invocation" $ \fields -> do
     _ <- fields J..: "entry_mode" :: J.Parser SupervisorMode
@@ -283,6 +309,7 @@ parseRenderStackEvidence expectedRole request value = J.parseEither parse value
     let retained = sum sizes
     unless (retained <= 65536) (fail "render aggregate transition storage exceeded")
     invocations <- mapM J.parseJSON rawInvocations
+    either fail pure (validateInvocationSpans invocations)
     (observations,count,hooks) <- fields J..: "performance" >>= J.withObject "render diagnostic performance" (\p ->
       (,,) <$> p J..: "active_instructions" <*> p J..: "invocation_count" <*> p J..: "hook_transitions")
     let roots = length (filter ((==Nothing) . invocationParent) invocations)
