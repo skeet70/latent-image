@@ -3873,6 +3873,7 @@ haskell_test(
     size = "small",
     srcs = ["SchedulerPairSemaphoreTests.hs"],
     main_file = "SchedulerPairSemaphoreTests.hs",
+    data = ["semaphore-signal-rewait.json"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":case-sha256",

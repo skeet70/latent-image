@@ -397,6 +397,33 @@ refusesWith label events calls pendings = case streamingVerdict events calls pen
 
 main :: IO ()
 main = do
+  retained <- either error pure . J.eitherDecodeStrict' =<< B.readFile "emulation/semaphore-signal-rewait.json"
+  case checkCall retained of
+    Right () -> pure ()
+    Left refusal -> error ("retained signal waiter re-waits: " ++ show refusal)
+  let changeHistory f call = call { callTrace = fmap (\trace -> trace { traceHistory = map f (traceHistory trace) }) (callTrace call) }
+      withoutSave = changeHistory (\boundary -> if boundaryKind boundary == SaveBoundary then boundary { boundaryKind = ReturnBoundary } else boundary) retained
+      unreadableSave = changeHistory (\boundary -> if boundaryKind boundary == SaveBoundary then boundary { boundaryMemory = M.empty } else boundary) retained
+  case checkCall withoutSave of
+    Left _ -> pure ()
+    Right () -> error "ordinary returns cannot establish signal preemption"
+  case checkCall unreadableSave of
+    Left _ -> pure ()
+    Right () -> error "unreadable suspension cannot establish signal release"
+  let corrupt = Written (Address 0x400551c0) 4 0xffffffce
+      corruptOrigin = originAtForWith (callTask retained) 34779350 0x477c0
+      corruptReturn boundary = if boundaryKind boundary == ReturnBoundary
+        then boundary { boundaryMemory = M.insert (Address 0x400551c0) 0xffffffce (boundaryMemory boundary)
+                      , boundaryWrites = boundaryWrites boundary ++ [corrupt]
+                      , boundaryWriteOrigins = boundaryWriteOrigins boundary ++ [corruptOrigin] }
+        else boundary
+      corruptCaller = (changeHistory corruptReturn retained)
+        { callAfter = M.insert (Address 0x400551c0) 0xffffffce (callAfter retained)
+        , callWrites = callWrites retained ++ [corrupt]
+        , callWriteOrigins = callWriteOrigins retained ++ [corruptOrigin] }
+  case checkCall corruptCaller of
+    Left FamilyLifetime -> pure ()
+    result -> error ("caller cannot corrupt released completion after resume: " ++ show result)
   accepts "poll acquires from one" [pollCall 1 0 0] []
   refuses "poll count one timeout refuses" [pollCall 1 (fromIntegral (-50 :: Int)) 1] []
   refuses "poll empty acquire refuses" [pollCall 0 0 0] []
