@@ -47,6 +47,7 @@ SECTIONS {
     KEEP(*(.text.*release_queued*))
     __s3d_release_queued_end = .;
     KEEP(*(.text.*release*))
+    KEEP(*(.text.s3d_release_core))
     __s3d_release_core_end = .;
     KEEP(*(.text.scheduler_timeout_body))
     __scheduler_timeout_body_end = .;

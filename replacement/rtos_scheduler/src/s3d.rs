@@ -742,7 +742,7 @@ pub fn timed_sleep<M: Machine>(m: &M, domain: Domain, timeout: Ticks) -> i32 {
 /// The shared `+0x38` body; `handler` selects the `+0x3c` context rule and the
 /// delayed-dispatch word instead of a dispatcher entry.
 #[inline(always)]
-fn release<M: Machine>(m: &M, domain: Domain, id: EncodedId, handler: bool) -> Result<(), ServiceError> {
+pub(crate) fn release<M: Machine>(m: &M, domain: Domain, id: EncodedId, handler: bool) -> Result<(), ServiceError> {
     let words = domain.words();
     if if handler { !handler_context(m, &words) } else { !task_context(m, &words) } {
         return Err(ServiceError::NotTaskContext);
@@ -763,7 +763,11 @@ fn release<M: Machine>(m: &M, domain: Domain, id: EncodedId, handler: bool) -> R
         return Err(ServiceError::NotWaiting);
     }
     if state & TaskState::OBJECT_QUEUED.bits() == 0 {
-        release_waiting(m, words, record, task, saved, handler);
+        let waiting = core::hint::black_box(
+            release_waiting::<M>
+                as fn(&M, DomainWords, KernelContext, Task, InterruptState, bool),
+        );
+        waiting(m, words, record, task, saved, handler);
         return Ok(());
     }
     release_queued(m, words, record, task, saved, handler)
