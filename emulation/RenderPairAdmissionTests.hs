@@ -193,6 +193,11 @@ runRoot root (label, role) = do
     expectLeft (label ++ " " ++ control ++ " refuses") result)
     [ ("mismatched qualification", "e2e-result.json", "outcome", J.String mismatchedOutcome)
     , ("missing lifetime coverage", "e2e-modal-observation.json", "whole_installed_lifetime_coverage", J.Bool False)
+    , ("old diagnostic version", "e2e-render-stack-diagnostic.json", "version", J.toJSON (1 :: Word32))
+    , ("missing transition encoding", "e2e-render-stack-diagnostic.json", "transition_encoding", J.Null)
+    , ("false logical transition counter", "e2e-render-stack-diagnostic.json", "transition_storage"
+      , J.object ["per_invocation_limit" J..= (4096 :: Word32),"aggregate_limit" J..= (65536 :: Word32)
+          ,"retained_entries" J..= (0 :: Word32),"logical_transitions" J..= (1 :: Word32)])
     ]
   setCurrentDirectory original
   pure ([admitted, admittedFile, reusedOk, tamperedOk, missingListOk, emptyListOk, unboundSidecarOk, unboundSourcesOk, changedOk, missingOk, wrongTrajectoryOk, wrongRoleOk, malformedOk, emptyOk, prelinkedBaseOk, prelinkedSizeOk, mutatedPrelinkedOk
@@ -303,7 +308,20 @@ buildFixture directory receipt role = do
             ]
         ]
   let diagnostic = J.object
-        [ "scope" J..= ("installed-before-unload" :: T.Text)
+        [ "version" J..= (2 :: Word32)
+        , "transition_encoding" J..= ("pair-stride-v1" :: T.Text)
+        , "transition_storage" J..= J.object
+            ["per_invocation_limit" J..= (4096 :: Word32),"aggregate_limit" J..= (65536 :: Word32)
+            ,"retained_entries" J..= (0 :: Word32),"logical_transitions" J..= (0 :: Word32)]
+        , "start" J..= J.object ["instructions" J..= (0 :: Word32),"tick" J..= (0 :: Word32)]
+        , "end" J..= J.object ["instructions" J..= (0 :: Word32),"tick" J..= (0 :: Word32)]
+        , "sources" J..= (case config of J.Object fields -> KM.lookup "sources" fields; _ -> Nothing)
+        , "invocations" J..= ([] :: [J.Value])
+        , "retained_service_coverage" J..= ("partial-observed-source-transitions" :: T.Text)
+        , "retained_service_spans_informational" J..= True
+        , "performance" J..= J.object ["active_instructions" J..= (0 :: Word32)
+            ,"invocation_count" J..= (0 :: Word32),"hook_transitions" J..= (0 :: Word32)]
+        , "scope" J..= ("installed-before-unload" :: T.Text)
         , "diagnostic_only" J..= True
         , "whole_route_stack_minimum_proven" J..= False
         , "coverage" J..= ("continuous" :: T.Text)

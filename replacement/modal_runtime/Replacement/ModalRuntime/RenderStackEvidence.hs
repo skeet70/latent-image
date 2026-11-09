@@ -16,6 +16,7 @@ import qualified Data.Aeson as J
 import qualified Data.Aeson.Types as J
 import Data.Bits ((.&.))
 import qualified Data.ByteString as B
+import qualified Data.Foldable as F
 import Data.List (nub, sort)
 import qualified Data.Text as T
 import Data.Word (Word32, Word64)
@@ -57,6 +58,10 @@ newtype PhysicalAddress = PhysicalAddress Word32 deriving newtype (J.FromJSON, E
 newtype GuardBaseline = GuardBaseline B.ByteString deriving (Eq)
 data GuardAccess = GuardWrites | GuardFetches deriving (Eq, Show)
 data GuardClass = GuardClass PhysicalAddress PhysicalAddress GuardAccess
+data TransitionContext = TransitionContext CodeAddress RawCpsr ContextDepth NodeAddress (Maybe NodeAddress) Bool (Maybe ModeSource) deriving (Eq, Show)
+data TransitionSample = TransitionSample ObservationOrdinal TransitionContext deriving (Eq, Show)
+data TransitionRun = TransitionSingle TransitionSample | TransitionPair TransitionSample TransitionSample Word64 Word64 Bool deriving (Eq, Show)
+data TransitionSpan = TransitionSpan ObservationOrdinal ObservationOrdinal deriving (Eq, Show)
 data Invocation = Invocation
   { invocationId :: InvocationId
   , invocationParent :: Maybe InvocationId
@@ -76,6 +81,9 @@ data Invocation = Invocation
   , invocationFrame :: FrameBytes
   , invocationAllowance :: FrameBytes
   , invocationEstimatePassed :: Bool
+  , invocationTransitionSpan :: TransitionSpan
+  , invocationTransitionCount :: Word64
+  , invocationTransitions :: [TransitionRun]
   } deriving (Eq, Show)
 newtype ActiveObservations = ActiveObservations Word64 deriving newtype (J.FromJSON, Eq, Show)
 data RenderStackEvidence = RenderStackEvidence StackRole StackBoundary StackBoundary ActiveObservations [SourceBinding] [Invocation] AllocationVerdict deriving (Eq, Show)
@@ -149,6 +157,62 @@ instance J.FromJSON SourceBinding where
     unless (T.length digest == 64 && T.all (\c -> c >= '0' && c <= '9' || c >= 'a' && c <= 'f') digest)
       (fail "render source digest is not lowercase SHA256")
     SourceBinding kind <$> fields J..: "start" <*> fields J..: "path" <*> pure (SourceDigest digest)
+instance J.FromJSON TransitionContext where
+  parseJSON = J.withObject "render transition context" $ \fields -> TransitionContext
+    <$> fields J..: "pc" <*> fields J..: "cpsr" <*> fields J..: "context_depth"
+    <*> fields J..: "current_node" <*> fields J..: "owner_node" <*> fields J..: "scheduler" <*> fields J..: "mode_source"
+instance J.FromJSON TransitionSample where
+  parseJSON = J.withObject "render transition sample" $ \fields ->
+    TransitionSample <$> fields J..: "ordinal" <*> fields J..: "context"
+instance J.FromJSON TransitionRun where
+  parseJSON value = J.withObject "render transition run" (\fields -> do
+    kind <- fields J..: "kind" :: J.Parser T.Text
+    case kind of
+      "sample" -> TransitionSingle <$> J.parseJSON value
+      "pair" -> TransitionPair <$> fields J..: "first" <*> fields J..: "second"
+        <*> fields J..: "stride" <*> fields J..: "pairs" <*> fields J..: "trailing_first"
+      _ -> fail "unknown render transition encoding entry") value
+instance J.FromJSON TransitionSpan where
+  parseJSON = J.withObject "render transition span" $ \fields ->
+    TransitionSpan <$> fields J..: "first" <*> fields J..: "last"
+
+boundedArray :: J.FromJSON a => Int -> J.Value -> J.Parser [a]
+boundedArray limit = J.withArray "bounded render evidence array" $ \values -> do
+  unless (F.length values <= limit) (fail "render evidence storage bound exceeded")
+  mapM J.parseJSON (F.toList values)
+
+transitionExtent :: TransitionRun -> Either String (Integer,Integer,Integer)
+transitionExtent (TransitionSingle (TransitionSample (ObservationOrdinal ordinal) _)) =
+  pure (toInteger ordinal,toInteger ordinal,1)
+transitionExtent (TransitionPair (TransitionSample (ObservationOrdinal first) _) (TransitionSample (ObservationOrdinal second) _) stride pairs trailing) = do
+  let a = toInteger first
+      b = toInteger second
+      step = toInteger stride
+      n = toInteger pairs
+      count = 2*n + if trailing then 1 else 0
+      last_ = if trailing then a+n*step else b+(n-1)*step
+  unless (n >= 1 && count >= 3 && a < b && b < a+step
+    && last_ <= toInteger (maxBound :: Word64) && count <= toInteger (maxBound :: Word64))
+    (Left "render transition pair has invalid order, count or overflow")
+  pure (a,last_,count)
+
+validateTransitions :: ActiveObservations -> Invocation -> Either String Integer
+validateTransitions (ActiveObservations observations) invocation = do
+  let TransitionSpan (ObservationOrdinal first) (ObservationOrdinal last_) = invocationTransitionSpan invocation
+      StackBoundary (InstructionCounter entry) _ = invocationStart invocation
+      StackBoundary (InstructionCounter terminal) _ = invocationEnd invocation
+  unless (first > 0 && first <= last_ && last_ <= observations
+    && toInteger last_ - toInteger first <= toInteger terminal - toInteger entry)
+    (Left "render transition span leaves observed invocation interval")
+  (_,count) <- foldM (\(previous,total) run -> do
+    (a,b,n) <- transitionExtent run
+    unless (toInteger first <= a && previous < a && b <= toInteger last_)
+      (Left "render transition positions are unordered or outside invocation span")
+    pure (b,total+n)) (0,0) (invocationTransitions invocation)
+  unless (count == toInteger (invocationTransitionCount invocation)
+    && count <= toInteger terminal - toInteger entry + 1)
+    (Left "render logical transition count differs or exceeds instruction span")
+  pure count
 instance J.FromJSON Invocation where
   parseJSON = J.withObject "render invocation" $ \fields -> do
     _ <- fields J..: "entry_mode" :: J.Parser SupervisorMode
@@ -159,6 +223,8 @@ instance J.FromJSON Invocation where
       <*> fields J..: "entry_boundary" <*> fields J..: "terminal_boundary"
       <*> fields J..: "exit_sp" <*> fields J..: "min_sp" <*> fields J..: "deepest_pc" <*> fields J..: "minimum_context"
       <*> fields J..: "terminal" <*> fields J..: "frame_depth" <*> fields J..: "allowance" <*> fields J..: "within_bound"
+      <*> fields J..: "transition_span" <*> fields J..: "transition_count"
+      <*> (fields J..: "transitions" >>= boundedArray 4096)
 
 canonicalIdentity :: Identity
 canonicalIdentity = Identity Primary (TaskId 33) (NodeAddress 0x4006060c) (CreationAddress 0x4005c3ac)
@@ -187,7 +253,7 @@ parseRenderStackEvidence expectedRole request value = J.parseEither parse value
     role <- fields J..: "role"
     start <- fields J..: "start"
     end <- fields J..: "end"
-    unless (version == 1 && diagnosticOnly && scope == "installed-before-unload" && not wholeRoute
+    unless (version == 2 && diagnosticOnly && scope == "installed-before-unload" && not wholeRoute
       && coverage == "continuous" && failure == Nothing && active == 0 && not incomplete && finished
       && role == expectedRole && boundaryBetween start end start)
       (fail "render stack evidence is refused, unfinished, mismatched or overclaimed")
@@ -207,12 +273,36 @@ parseRenderStackEvidence expectedRole request value = J.parseEither parse value
     partial <- fields J..: "retained_service_coverage" :: J.Parser T.Text
     informational <- fields J..: "retained_service_spans_informational"
     unless (partial == "partial-observed-source-transitions" && informational) (fail "render retained-service coverage is overclaimed")
-    invocations <- fields J..: "invocations"
+    encoding <- fields J..: "transition_encoding" :: J.Parser T.Text
+    unless (encoding == "pair-stride-v1") (fail "unsupported render transition encoding")
+    rawInvocations <- fields J..: "invocations" >>= boundedArray 4096 :: J.Parser [J.Value]
+    sizes <- mapM (J.withObject "render invocation storage" (\i ->
+      i J..: "transitions" >>= J.withArray "render transition storage" (\rows -> do
+        unless (F.length rows <= 4096) (fail "render per-invocation transition storage exceeded")
+        pure (toInteger (F.length rows))))) rawInvocations
+    let retained = sum sizes
+    unless (retained <= 65536) (fail "render aggregate transition storage exceeded")
+    invocations <- mapM J.parseJSON rawInvocations
     (observations,count,hooks) <- fields J..: "performance" >>= J.withObject "render diagnostic performance" (\p ->
       (,,) <$> p J..: "active_instructions" <*> p J..: "invocation_count" <*> p J..: "hook_transitions")
     let roots = length (filter ((==Nothing) . invocationParent) invocations)
     unless (length invocations <= 4096 && count == length invocations && hooks == 2 * roots)
       (fail "render invocation coverage counters differ")
+    let ActiveObservations activeInstructions = observations
+        StackBoundary (InstructionCounter startInstructions) _ = start
+        StackBoundary (InstructionCounter endInstructions) _ = end
+    unless (toInteger activeInstructions <= toInteger endInstructions - toInteger startInstructions + 1)
+      (fail "render active observations exceed observed guest instruction span")
+    logical <- sum <$> mapM (either fail pure . validateTransitions observations) invocations
+    unless (logical <= toInteger (maxBound :: Word64) && logical <= toInteger activeInstructions * 32)
+      (fail "render logical transitions exceed observed active nesting")
+    fields J..: "transition_storage" >>= J.withObject "render transition storage counters" (\storage -> do
+      perInvocation <- storage J..: "per_invocation_limit" :: J.Parser Integer
+      aggregate <- storage J..: "aggregate_limit" :: J.Parser Integer
+      retainedCount <- storage J..: "retained_entries" :: J.Parser Integer
+      logicalCount <- storage J..: "logical_transitions" :: J.Parser Integer
+      unless (perInvocation == 4096 && aggregate == 65536 && retainedCount == retained && logicalCount == logical)
+        (fail "render transition storage limits or counters differ"))
     forM_ invocations $ \invocation -> do
       unless (lookup (invocationKind invocation) entries == Just (invocationFrame invocation))
         (fail "render invocation frame differs from admitted request")

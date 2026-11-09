@@ -449,14 +449,14 @@ runTests arguments = do
         , set "entries" (array (drop 1 diagnosticEntries)) diagnosticConfig
         , set "returns" (array []) diagnosticConfig, set "extra" Null diagnosticConfig ] $ \invalid ->
     check "malformed diagnostic configuration refuses" (isLeft (decodeDiagnostic invalid))
-  let diagnosticBegin = object ["version" .= (1 :: Word32), "diagnostic_only" .= True, "active" .= True]
+  let diagnosticBegin = object ["version" .= (2 :: Word32), "diagnostic_only" .= True, "active" .= True]
   check "native diagnostic begin acknowledgement is distinct from its terminal report"
     (checkRenderStackDiagnosticBegin diagnosticBegin == Right () && isLeft (checkRenderStackDiagnosticReport parsedDiagnostic diagnosticBegin))
-  forM_ [set "active" (Bool False) diagnosticBegin, set "version" (Number 2) diagnosticBegin
+  forM_ [set "active" (Bool False) diagnosticBegin, set "version" (Number 1) diagnosticBegin
         , set "diagnostic_only" (Bool False) diagnosticBegin, set "ok" (Bool False) diagnosticBegin] $ \invalid ->
     check "refused diagnostic activation fails" (isLeft (checkRenderStackDiagnosticBegin invalid))
   let diagnosticReport = object
-        [ "version" .= (1 :: Word32), "diagnostic_only" .= True, "scope" .= String "installed-before-unload"
+        [ "version" .= (2 :: Word32), "diagnostic_only" .= True, "scope" .= String "installed-before-unload"
         , "whole_route_stack_minimum_proven" .= False, "coverage" .= String "continuous"
         , "failure" .= Null, "active_invocations" .= (0 :: Word32), "incomplete_intervals" .= False, "finished" .= True
         , "role" .= String "owned", "start" .= object ["instructions" .= (8 :: Word32), "tick" .= (10 :: Word32)]
@@ -464,6 +464,9 @@ runTests arguments = do
         , "sources" .= [diagnosticSource], "invocations" .= ([] :: [Value])
         , "retained_service_coverage" .= String "partial-observed-source-transitions"
         , "retained_service_spans_informational" .= True
+        , "transition_encoding" .= String "pair-stride-v1"
+        , "transition_storage" .= object ["per_invocation_limit" .= (4096 :: Word32)
+            , "aggregate_limit" .= (65536 :: Word32),"retained_entries" .= (0 :: Word32),"logical_transitions" .= (0 :: Word32)]
         , "performance" .= object ["active_instructions" .= (0 :: Word32)
             , "invocation_count" .= (0 :: Word32), "hook_transitions" .= (0 :: Word32)] ]
   check "finished invocation measurement remains explicitly diagnostic"

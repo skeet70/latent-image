@@ -135,7 +135,7 @@ checkRenderStackDiagnosticBegin = parseEither $ withObject "render stack diagnos
   version <- fields .: "version" :: Parser Word32
   diagnosticOnly <- fields .: "diagnostic_only"
   active <- fields .: "active"
-  unless (version == 1 && diagnosticOnly && active) (fail "render stack diagnostic did not activate")
+  unless (version == 2 && diagnosticOnly && active) (fail "render stack diagnostic did not activate")
 
 checkRenderStackDiagnosticReport :: RenderStackDiagnosticConfig -> Value -> Either String ()
 checkRenderStackDiagnosticReport config@(RenderStackDiagnosticConfig expectedRole _ _ _ _) value =
