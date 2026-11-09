@@ -119,6 +119,7 @@ comparable spec a b = nativeStatus a == nativeStatus b && memoryHolds && all sam
   same r = M.lookup r (nativeRegisters a)==M.lookup r (nativeRegisters b)
   mode observation = (.&. 0x1ff) <$> M.lookup Cpsr (nativeRegisters observation)
   writable permission = case permission of ReadWrite -> True; Device -> True; _ -> False
+  stackLow = 0x959700
   memoryHolds = all regionHolds (caseRegions spec)
   regionHolds (CaseRegion raw permission)
     | not (writable permission) = True
@@ -129,15 +130,15 @@ comparable spec a b = nativeStatus a == nativeStatus b && memoryHolds && all sam
       ident = regionIdOf raw
       base = fromIntegral (C.baseAddress raw)
   liveBytes base bytes
-    | base < sp = B.drop (fromIntegral (min (fromIntegral (B.length bytes)) (sp - base))) bytes
+    | base == stackLow = B.drop (fromIntegral (min (fromIntegral (B.length bytes)) (sp - stackLow))) bytes
     | otherwise = bytes
-  visibleWrites observation = sort [(fromIntegral at, fromIntegral size, value) | Just kernel <- [nativeKernel observation], Just order <- [observedOrder kernel], OrderedWrite (Write (GuestAddress at) (WriteBytes size)) value <- order, writableAt (fromIntegral at) (fromIntegral size)]
-  writableAt at size = any regionWritable (caseRegions spec)
+  visibleWrites observation = sort [(fromIntegral at, fromIntegral size, value) | Just kernel <- [nativeKernel observation], Just order <- [observedOrder kernel], OrderedWrite (Write (GuestAddress at) (WriteBytes size)) value <- order, deviceAt (fromIntegral at) (fromIntegral size)]
+  deviceAt at size = any regionDevice (caseRegions spec)
    where
-    regionWritable (CaseRegion raw permission) =
+    regionDevice (CaseRegion raw permission) =
       let base = fromIntegral (C.baseAddress raw)
           top = base + fromIntegral (B.length (C.regionBytes raw))
-       in writable permission && base <= at && at + size <= top && not (base < sp && at < sp)
+       in case permission of Device -> base <= at && at + size <= top; _ -> False
 
 main :: IO ()
 main = do
@@ -192,10 +193,12 @@ main = do
               completed=and [nativeStatus (at "stock" i) == status && M.lookup R0 (nativeRegisters (at "stock" i)) == Just value | (i,row) <- zip [0 :: Int ..] cases, let (status,value)=expected b s row]
               stockSpec i row=spec b s row ("stock"++show i) (stockCodeSpans s) (stockFunctionSpans s) stock
               matches role=length [() | i<-[0..length cases-1],comparable (stockSpec i (cases!!i)) (at "stock" i) (at role i)]
-              holds=completed && matches "owned"==length cases && matches "equivalent"==length cases && matches "mutant"<length cases
+              corruptTask observation = observation { nativeMemory = [ if regionName ident=="tasks-a" then (ident, B.take 0x0c bytes <> B.singleton 0x7f <> B.drop 0x0d bytes) else (ident, bytes) | (ident, bytes) <- nativeMemory observation ] }
+              negativeControl = not (null cases) && not (comparable (stockSpec 0 (head cases)) (at "stock" 0) (corruptTask (at "owned" 0)))
+              holds=completed && matches "owned"==length cases && matches "equivalent"==length cases && matches "mutant"<length cases && negativeControl
           unless holds $ putStrLn (show (b,s,completed,matches "owned",length cases,[(i,nativeStatus (at "stock" i),nativeStatus (at "owned" i)) | i<-[0..length cases-1],not (comparable (stockSpec i (cases!!i)) (at "stock" i) (at "owned" i))]))
           if holds then removeDirectoryRecursive dir else pure ()
-          let report=object ["domain_b".=b,"service".=show s,"cases".=length cases,"stock_completed".=completed,"owned_matches".=matches "owned","equivalent_matches".=matches "equivalent","mutant_matches".=matches "mutant","passed".=holds]
+          let report=object ["domain_b".=b,"service".=show s,"cases".=length cases,"stock_completed".=completed,"owned_matches".=matches "owned","equivalent_matches".=matches "equivalent","mutant_matches".=matches "mutant","negative_control".=negativeControl,"passed".=holds]
           B.writeFile (work </> (show b++show s++".json")) (encodeCanonical report)
           pure (holds,report)
       let flat=concat reports
