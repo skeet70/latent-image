@@ -1514,7 +1514,7 @@ readonlyCases image template =
       , caseRegions = mkRegion (RegionId "readonly-probe") (wire probe) (B.length program) ReadExecute program : caseRegions template
       , caseFunctions = (wire probe, fromIntegral (B.length program)) : caseFunctions template
       , caseExpectedStatus = status
-      , caseExpectedRegisters = []
+      , caseExpectedRegisters = [(R0, address), (Pc, if status == MemoryGuard then probe + 8 else address)]
       , caseExpectedMemory = []
       })
   | placement <- imagePlacements image
