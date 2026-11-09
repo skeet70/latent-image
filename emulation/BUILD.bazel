@@ -2334,6 +2334,26 @@ haskell_test(
     ],
 )
 
+haskell_test(
+    name = "owned-case-native-initialization-tests",
+    size = "medium",
+    srcs = ["OwnedCaseNativeInitializationTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
+    tags = ["no-sandbox"],
+    deps = [
+        ":emulator-slot-lib",
+        ":fujimod-native-paths",
+        ":native-adapter",
+        ":native-observation",
+        ":owned-case",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+    ],
+)
+
 haskell_library(
     name = "cached-native-batch",
     srcs = ["Emulation/CachedNativeBatch.hs"],
