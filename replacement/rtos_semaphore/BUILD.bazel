@@ -1,5 +1,5 @@
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
-load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
 
 package(default_visibility = ["//visibility:public"])
@@ -144,5 +144,78 @@ haskell_binary(
         "//host:filepath",
         "//host:host-support",
         "//host:storage-budget",
+    ],
+)
+
+_CUTOVER = [
+    "//replacement/rtos_scheduler:" + name
+    for metadata, binary in [
+        ("regions.json", "scheduler"),
+        ("regions-s2.json", "scheduler-s2"),
+        ("regions-s3a.json", "s3a"),
+        ("regions-s3b.json", "s3b"),
+        ("regions-s3c.json", "s3c"),
+    ]
+    for name in [metadata, binary + "-a.bin", binary + "-a.symbols", binary + "-b.bin", binary + "-b.symbols"]
+] + [
+    "//replacement/rtos_own_first:" + name
+    for name in ["regions.json", "own-first-a.bin", "own-first-a.symbols", "own-first-b.bin", "own-first-b.symbols"]
+]
+
+haskell_library(
+    name = "semaphore-stage-lib",
+    srcs = ["stage/Replacement/RtosSemaphore/Stage.hs"],
+    src_strip_prefix = "stage",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:first-stage",
+        "//host:update-container",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//replacement/rtos_scheduler/stage:scheduler-artifact",
+    ],
+)
+
+haskell_binary(
+    name = "stage-semaphore",
+    srcs = ["stage/SemaphoreStageMain.hs"],
+    main_file = "stage/SemaphoreStageMain.hs",
+    args = ["$(rootpath %s)" % linked for linked in _CUTOVER],
+    data = _CUTOVER,
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":semaphore-stage-lib",
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//replacement/rtos_scheduler/stage:scheduler-artifact",
+    ],
+)
+
+haskell_test(
+    name = "semaphore-stage-tests",
+    size = "small",
+    srcs = ["SemaphoreStageTests.hs", "//replacement/startup_artifact:Fixtures.hs"],
+    main_file = "SemaphoreStageTests.hs",
+    args = ["$(rootpath %s)" % linked for linked in _CUTOVER],
+    data = _CUTOVER,
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":semaphore-stage-lib",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:first-stage",
+        "//host:update-container",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//replacement/rtos_scheduler/stage:scheduler-artifact",
     ],
 )

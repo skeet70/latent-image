@@ -3769,6 +3769,7 @@ haskell_library(
         "Emulation/SchedulerPairCheck.hs",
         "Emulation/SchedulerPairDecode.hs",
         "Emulation/SchedulerPairEvidence.hs",
+        "Emulation/SchedulerPairFamily.hs",
         "Emulation/SchedulerPairModel.hs",
         "Emulation/SchedulerPairPlan.hs",
         "Emulation/SchedulerPairS2.hs",
@@ -3776,6 +3777,7 @@ haskell_library(
         "Emulation/SchedulerPairS3a.hs",
         "Emulation/SchedulerPairS3b.hs",
         "Emulation/SchedulerPairS3c.hs",
+        "Emulation/SchedulerPairSemaphore.hs",
     ],
     src_strip_prefix = ".",
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
@@ -3816,6 +3818,7 @@ haskell_binary(
     srcs = ["SchedulerPairCheckMain.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
+        ":case-sha256",
         ":scheduler-pair-lib",
         "//host:aeson",
         "//host:base",
@@ -3865,6 +3868,41 @@ sh_binary(
     )
     for model, module in [("s2", "S2"), ("s3a", "S3a"), ("s3bc", "S3bc")]
 ]
+
+haskell_test(
+    name = "scheduler-pair-semaphore-tests",
+    size = "small",
+    srcs = ["SchedulerPairSemaphoreTests.hs"],
+    main_file = "SchedulerPairSemaphoreTests.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":case-sha256",
+        ":own-first-pair-lib",
+        ":scheduler-pair-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//replacement/rtos_scheduler/oracle:scheduler-oracle-lib",
+    ],
+)
+
+haskell_test(
+    name = "scheduler-pair-family-tests",
+    size = "small",
+    srcs = ["SchedulerPairFamilyTests.hs"],
+    main_file = "SchedulerPairFamilyTests.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":scheduler-pair-lib",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//replacement/rtos_scheduler/oracle:scheduler-oracle-lib",
+    ],
+)
 
 haskell_library(
     name = "local-ui-menu",

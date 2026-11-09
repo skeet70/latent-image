@@ -101,6 +101,70 @@ xm1_rust_staticlib(
     for domain in ["a", "b"]
 ]
 
+[
+    xm1_rust_staticlib(
+        name = "objects-family-adapter-%s" % domain,
+        src = "stage/adapter.rs",
+        crate_name = "xm1_rtos_objects_family_adapter",
+        opt_level = "2",
+        data = [
+            "stage/abi.rs",
+            "stage/family.rs",
+            "src/admission.rs",
+            "src/block.rs",
+            "src/create.rs",
+            "src/id.rs",
+            "src/lib.rs",
+            "src/locked.rs",
+            "src/matching.rs",
+            "src/message.rs",
+            "src/order.rs",
+            "src/status.rs",
+            "src/teardown.rs",
+            "src/timeout.rs",
+            "src/wake.rs",
+            "//replacement/rtos_layout:src/lib.rs",
+            "//replacement/rtos_reservation:src/lib.rs",
+        ],
+        rustc_flags = [
+            "--cfg",
+            "'feature=\"domain-%s\"'" % domain,
+            "--cfg",
+            "'feature=\"stage\"'",
+            "--cfg",
+            "'feature=\"family\"'",
+            "-C",
+            "llvm-args=-enable-machine-outliner=always",
+            "-C",
+            "llvm-args=-machine-outliner-reruns=1",
+        ],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    xm1_rust_elf(
+        name = "objects-family-stage-%s" % domain,
+        rust_staticlib = ":objects-family-adapter-%s" % domain,
+        rust_components = [
+            ":scheduler-%s-component" % domain,
+            ":scheduler-s2-%s-component" % domain,
+        ],
+        link_script = "stage/family-%s.ld" % domain,
+        extra_ldflags = [
+            "-Wl,-Map=$(@D)/objects-family-stage-%s.map" % domain,
+            "-Wl,--gc-sections",
+            "-Wl,--orphan-handling=error",
+        ],
+        link_includes = [
+            "//replacement/rtos_scheduler:scheduler-%s-placement.ld" % domain,
+            "//replacement/rtos_scheduler:scheduler-s2-%s-placement.ld" % domain,
+        ],
+        entry = "xm1_rtos_objects_family_flag_create",
+    )
+    for domain in ["a", "b"]
+]
+
 genrule(
     name = "objects-smoke-build",
     srcs = [
@@ -198,8 +262,10 @@ haskell_binary(
     srcs = ["native/SuiteMain.hs"],
     main_file = "native/SuiteMain.hs",
     data = [
-        ":objects-f2-stage-a.bin",
-        ":objects-f2-stage-b.bin",
+        ":objects-family-stage-a.bin",
+        ":objects-family-stage-b.bin",
+        "//replacement/rtos_scheduler:s3b-a.bin",
+        "//replacement/rtos_scheduler:s3b-b.bin",
         "//replacement/rtos_scheduler/oracle:layout.json",
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
@@ -213,6 +279,7 @@ haskell_binary(
         "//host:directory",
         "//host:filepath",
         "//host:host-support",
+        "//host:text",
         "//replacement/rtos_own_first/stage:own-first-artifact",
     ],
 )

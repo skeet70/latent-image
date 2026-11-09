@@ -47,7 +47,7 @@ pub struct MailboxId {
     pub slot: MailboxSlot,
 }
 
-fn target(entry: EntryDomain, class: i32) -> Result<Domain, ObjectStatus> {
+pub(crate) fn target(entry: EntryDomain, class: i32) -> Result<Domain, ObjectStatus> {
     match class {
         0 => Ok(entry.domain()),
         1 => Ok(Domain::A),
@@ -56,16 +56,46 @@ fn target(entry: EntryDomain, class: i32) -> Result<Domain, ObjectStatus> {
     }
 }
 
-pub fn resolve_flag(entry: EntryDomain, id: EncodedId, count: u32) -> Result<FlagId, ObjectStatus> {
-    let domain = target(entry, id.class())?;
+/// The index check and slot construction once the class has selected the domain.
+#[cfg_attr(feature = "family", inline(never))]
+pub fn resolve_flag_in(domain: Domain, id: EncodedId, count: u32) -> Result<FlagId, ObjectStatus> {
     let slot = FlagSlot::new(index(id)?, count).ok_or(ObjectStatus::InvalidIndex)?;
     Ok(FlagId { domain, slot })
 }
 
-pub fn resolve_mailbox(entry: EntryDomain, id: EncodedId, count: u32) -> Result<MailboxId, ObjectStatus> {
+pub fn resolve_flag(entry: EntryDomain, id: EncodedId, count: u32) -> Result<FlagId, ObjectStatus> {
     let domain = target(entry, id.class())?;
+    resolve_flag_in(domain, id, count)
+}
+
+/// Reads the count only after the class and index are valid, and only for the selected domain.
+pub fn resolve_flag_with(
+    entry: EntryDomain,
+    id: EncodedId,
+    count: impl FnOnce(Domain) -> u32,
+) -> Result<FlagId, ObjectStatus> {
+    let domain = target(entry, id.class())?;
+    resolve_flag_in(domain, id, count(domain))
+}
+
+#[cfg_attr(feature = "family", inline(never))]
+pub fn resolve_mailbox_in(domain: Domain, id: EncodedId, count: u32) -> Result<MailboxId, ObjectStatus> {
     let slot = MailboxSlot::new(index(id)?, count).ok_or(ObjectStatus::InvalidIndex)?;
     Ok(MailboxId { domain, slot })
+}
+
+pub fn resolve_mailbox(entry: EntryDomain, id: EncodedId, count: u32) -> Result<MailboxId, ObjectStatus> {
+    let domain = target(entry, id.class())?;
+    resolve_mailbox_in(domain, id, count)
+}
+
+pub fn resolve_mailbox_with(
+    entry: EntryDomain,
+    id: EncodedId,
+    count: impl FnOnce(Domain) -> u32,
+) -> Result<MailboxId, ObjectStatus> {
+    let domain = target(entry, id.class())?;
+    resolve_mailbox_in(domain, id, count(domain))
 }
 
 /// Create and delete ignore the class half: `uxth(id)` indexes the entry domain's own table.

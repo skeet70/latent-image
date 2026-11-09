@@ -40,6 +40,7 @@ pub struct MailboxCreate {
 }
 
 /// `+0x80`. The table is the id's domain, which `admit` set to the entry domain.
+#[cfg_attr(feature = "family", inline(never))]
 pub fn create_flag<M: Machine>(m: &M, id: FlagId, create: FlagCreate) -> Result<FlagId, ObjectStatus> {
     let words = id.domain.words();
     let config = words.flag_config(id.slot);
@@ -62,6 +63,7 @@ pub fn create_flag<M: Machine>(m: &M, id: FlagId, create: FlagCreate) -> Result<
 }
 
 /// `+0xcc`. `tail` is written 0 here, which stock leaves to the first FIFO append.
+#[cfg_attr(feature = "family", inline(never))]
 pub fn create_mailbox<M: Machine>(
     m: &M,
     id: MailboxId,

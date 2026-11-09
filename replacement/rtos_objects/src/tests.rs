@@ -1,6 +1,6 @@
 use crate::layout::{
     DomainWords, FlagConfig, FlagControl, FlagWait, GuestAddress, LockRecord, MailboxControl, MailboxWait,
-    Message, Task,
+    Message, Task, TaskState,
 };
 use crate::sim::Sim;
 use crate::*;
@@ -15,23 +15,69 @@ fn entry() -> Entry {
     }
 }
 
+struct Tables {
+    flags: u32,
+    mailboxes: u32,
+    exists: bool,
+    attributes: u32,
+    priority_limit: u32,
+    priority: u32,
+}
+
+impl Tables {
+    fn ready() -> Self {
+        Self {
+            flags: 120,
+            mailboxes: 1,
+            exists: true,
+            attributes: 0,
+            priority_limit: 32,
+            priority: 0,
+        }
+    }
+}
+
+impl Records for Tables {
+    fn flags(&self, _: Domain) -> u32 {
+        self.flags
+    }
+
+    fn mailboxes(&self, _: Domain) -> u32 {
+        self.mailboxes
+    }
+}
+
+impl Facts for Tables {
+    fn exists(&self, _: Object) -> bool {
+        self.exists
+    }
+
+    fn attributes(&self, _: Object) -> u32 {
+        self.attributes
+    }
+
+    fn priority_limit(&self, _: Object) -> u32 {
+        self.priority_limit
+    }
+
+    fn message_priority(&self, _: Message) -> u32 {
+        self.priority
+    }
+}
+
 fn req(service: Service) -> Request {
     Request {
         service,
         entry: entry(),
         entry_domain: EntryDomain::new(Domain::A),
         id: EncodedId::of(1, 1),
-        records: Records {
-            flags: 120,
-            mailboxes: 1,
-        },
-        facts: Facts {
-            exists: true,
-            attributes: 0,
-            priority_limit: 32,
-        },
         params: Params::NONE,
     }
+}
+
+fn admit_req(request: &Request) -> Result<Admitted, ObjectStatus> {
+    let tables = Tables::ready();
+    admit(request, &tables, &tables)
 }
 
 fn flag1(domain: Domain) -> FlagId {
@@ -83,7 +129,7 @@ fn create_names_the_entry_domain_whatever_the_class() {
         request.entry_domain = EntryDomain::new(entry);
         request.id = EncodedId::of(2, 1);
         assert_eq!(
-            admit(&request).map(|admitted| admitted.object),
+            admit_req(&request).map(|admitted| admitted.object),
             Ok(Object::Flag(flag1(expected))),
             "{entry:?}"
         );
@@ -159,7 +205,7 @@ fn create_has_no_context_check() {
         dispatch_enabled: 0,
     };
     assert_eq!(
-        admit(&request).map(|admitted| admitted.object),
+        admit_req(&request).map(|admitted| admitted.object),
         Ok(Object::Flag(flag1(Domain::A)))
     );
 }
@@ -168,22 +214,22 @@ fn create_has_no_context_check() {
 fn task_forms_refuse_handler_context() {
     let mut request = req(Service::FlagSet);
     request.entry.handler_context = 1;
-    assert_eq!(admit(&request), Err(ObjectStatus::Context));
+    assert_eq!(admit_req(&request), Err(ObjectStatus::Context));
 }
 
 #[test]
 fn the_handler_form_refuses_task_context() {
-    assert_eq!(admit(&req(Service::FlagSetHandler)), Err(ObjectStatus::Context));
+    assert_eq!(admit_req(&req(Service::FlagSetHandler)), Err(ObjectStatus::Context));
     let mut handler = req(Service::FlagSetHandler);
     handler.entry.handler_context = 1;
-    assert!(admit(&handler).is_ok());
+    assert!(admit_req(&handler).is_ok());
 }
 
 #[test]
 fn masked_irq_is_refused() {
     let mut request = req(Service::FlagClear);
     request.entry.irq_masked = true;
-    assert_eq!(admit(&request), Err(ObjectStatus::Context));
+    assert_eq!(admit_req(&request), Err(ObjectStatus::Context));
 }
 
 #[test]
@@ -197,7 +243,7 @@ fn only_the_blocking_forms_read_the_dispatch_word() {
         let mut request = req(service);
         request.entry.dispatch_enabled = 0;
         request.params.pattern = Pattern(1);
-        assert_eq!(admit(&request), Err(ObjectStatus::Context), "{service:?}");
+        assert_eq!(admit_req(&request), Err(ObjectStatus::Context), "{service:?}");
     }
     for service in [
         Service::FlagSet,
@@ -209,35 +255,34 @@ fn only_the_blocking_forms_read_the_dispatch_word() {
         let mut request = req(service);
         request.entry.dispatch_enabled = 0;
         request.params.pattern = Pattern(1);
-        assert!(admit(&request).is_ok(), "{service:?}");
+        assert!(admit_req(&request).is_ok(), "{service:?}");
     }
+}
+
+fn send_request() -> Request {
+    let mut request = req(Service::MailboxSend);
+    request.params.message = Some(Message(GuestAddress(0)));
+    request
 }
 
 #[test]
 fn send_checks_existence_before_the_priority() {
-    let mut request = req(Service::MailboxSend);
-    request.facts = Facts {
-        exists: false,
-        attributes: 2,
-        priority_limit: 32,
-    };
-    request.params.message_priority = Some(0);
-    assert_eq!(admit(&request), Err(ObjectStatus::NotCreated));
+    let request = send_request();
+    let tables = Tables { exists: false, attributes: 2, ..Tables::ready() };
+    assert_eq!(admit(&request, &tables, &tables), Err(ObjectStatus::NotCreated));
 }
 
 #[test]
 fn send_refuses_a_priority_outside_the_limit() {
     for priority in [0, 33, 0xffff_ffff] {
-        let mut request = req(Service::MailboxSend);
-        request.facts.attributes = 2;
-        request.params.message_priority = Some(priority);
-        assert_eq!(admit(&request), Err(ObjectStatus::Param), "{priority}");
+        let request = send_request();
+        let tables = Tables { attributes: 2, priority, ..Tables::ready() };
+        assert_eq!(admit(&request, &tables, &tables), Err(ObjectStatus::Param), "{priority}");
     }
-    let mut accepted = req(Service::MailboxSend);
-    accepted.facts.attributes = 2;
-    accepted.params.message_priority = Some(32);
+    let accepted = send_request();
+    let tables = Tables { attributes: 2, priority: 32, ..Tables::ready() };
     assert_eq!(
-        admit(&accepted).map(|admitted| admitted.priority),
+        admit(&accepted, &tables, &tables).map(|admitted| admitted.priority),
         Ok(Some(MessagePriority::new(32, PriorityLimit(32)).unwrap()))
     );
 }
@@ -252,61 +297,55 @@ fn a_negative_priority_is_refused_whatever_the_limit() {
         Err(ObjectStatus::Param),
         "a negative limit admits nothing"
     );
-    let mut request = req(Service::MailboxSend);
-    request.facts = Facts {
-        exists: true,
-        attributes: 2,
-        priority_limit: 0xffff_ffff,
-    };
-    request.params.message_priority = Some(0xffff_ffff);
-    assert_eq!(admit(&request), Err(ObjectStatus::Param));
+    let request = send_request();
+    let tables = Tables { attributes: 2, priority_limit: 0xffff_ffff, priority: 0xffff_ffff, ..Tables::ready() };
+    assert_eq!(admit(&request, &tables, &tables), Err(ObjectStatus::Param));
 }
 
 #[test]
 fn send_ignores_the_priority_without_the_attribute() {
-    let mut request = req(Service::MailboxSend);
-    request.params.message_priority = Some(0);
-    assert_eq!(admit(&request).map(|admitted| admitted.priority), Ok(None));
+    let request = send_request();
+    assert_eq!(admit_req(&request).map(|admitted| admitted.priority), Ok(None));
 }
 
 #[test]
 fn timed_receive_checks_the_timeout_before_existence() {
     let mut request = req(Service::MailboxTimedReceive);
-    request.facts.exists = false;
     request.params.timeout = Some(-2);
-    assert_eq!(admit(&request), Err(ObjectStatus::Param));
+    let tables = Tables { exists: false, ..Tables::ready() };
+    assert_eq!(admit(&request, &tables, &tables), Err(ObjectStatus::Param));
 }
 
 #[test]
 fn flag_wait_refuses_a_zero_pattern_before_existence() {
-    let mut request = req(Service::FlagWait);
-    request.facts.exists = false;
-    assert_eq!(admit(&request), Err(ObjectStatus::Param));
+    let request = req(Service::FlagWait);
+    let tables = Tables { exists: false, ..Tables::ready() };
+    assert_eq!(admit(&request, &tables, &tables), Err(ObjectStatus::Param));
 }
 
 #[test]
 fn flag_timed_wait_checks_the_mode_before_existence() {
     let mut request = req(Service::FlagTimedWait);
-    request.facts.exists = false;
     request.params.pattern = Pattern(1);
     request.params.mode = 2;
     request.params.timeout = Some(-1);
-    assert_eq!(admit(&request), Err(ObjectStatus::Param));
+    let tables = Tables { exists: false, ..Tables::ready() };
+    assert_eq!(admit(&request, &tables, &tables), Err(ObjectStatus::Param));
 }
 
 #[test]
 fn flag_set_accepts_zero_bits() {
     let mut request = req(Service::FlagSet);
     request.params.pattern = Pattern(0);
-    assert!(admit(&request).is_ok());
+    assert!(admit_req(&request).is_ok());
 }
 
 #[test]
 fn the_index_is_checked_before_the_creation_record() {
     let mut request = req(Service::FlagSet);
     request.id = EncodedId::of(1, 121);
-    request.facts.exists = false;
-    assert_eq!(admit(&request), Err(ObjectStatus::InvalidIndex));
+    let tables = Tables { exists: false, ..Tables::ready() };
+    assert_eq!(admit(&request, &tables, &tables), Err(ObjectStatus::InvalidIndex));
 }
 
 #[test]
@@ -315,7 +354,7 @@ fn admit_returns_the_validated_parameters() {
     request.params.pattern = Pattern(0x10);
     request.params.mode = 1;
     request.params.timeout = Some(5);
-    let admitted = admit(&request).unwrap();
+    let admitted = admit_req(&request).unwrap();
     assert_eq!(admitted.object, Object::Flag(flag1(Domain::A)));
     assert_eq!(admitted.want, Pattern(0x10));
     assert_eq!(admitted.mode, MatchMode::Any);
@@ -516,31 +555,18 @@ impl Machine for Mock {
 }
 
 impl ObjectLock for Mock {
-    fn with_object_lock_after<R>(&self, _lock: LockRecord, body: impl FnOnce() -> R, after: impl FnOnce(&R)) -> R {
+    fn lock_object(&self, lock: LockRecord) -> ObjectGuard<'_, Self> {
         assert!(!self.held.get(), "object lock acquired twice");
         self.creation_mask.set(false);
         let saved = self.interrupts.get();
         self.interrupts.set(SavedInterrupts(saved.0 | 0x80));
         self.held.set(true);
-        let result = body();
-        assert!(self.held.get(), "object lock released while not held");
-        self.held.set(false);
-        after(&result);
-        self.interrupts.set(saved);
-        result
+        ObjectGuard::new(self, lock, saved)
     }
 
-    fn with_object_lock<R>(&self, _lock: LockRecord, body: impl FnOnce() -> R) -> R {
-        assert!(!self.held.get(), "object lock acquired twice");
-        self.creation_mask.set(false);
-        let saved = self.interrupts.get();
-        self.interrupts.set(SavedInterrupts(saved.0 | 0x80));
-        self.held.set(true);
-        let result = body();
+    fn release_object(&self, _lock: LockRecord) {
         assert!(self.held.get(), "object lock released while not held");
         self.held.set(false);
-        self.interrupts.set(saved);
-        result
     }
 }
 
@@ -706,7 +732,7 @@ fn a_create_through_admit_writes_the_entry_domain_table() {
     let m = Mock::marking(Domain::B.words().flag_config(FlagSlot::new(5, 120).unwrap()).exists().0);
     request.entry_domain = EntryDomain::new(Domain::B);
     request.id = EncodedId::of(2, 5);
-    let admitted = admit(&request).unwrap();
+    let admitted = admit_req(&request).unwrap();
     let id = match admitted.object {
         Object::Flag(id) => id,
         Object::Mailbox(_) => panic!("flag create admitted a mailbox"),
@@ -979,7 +1005,7 @@ fn a_poll_output_aliasing_the_attributes_keeps_the_clear() {
 }
 
 #[test]
-fn a_poll_output_aliasing_the_pattern_loses_to_the_clear() {
+fn a_poll_output_aliasing_the_pattern_writes_the_output() {
     let words = Domain::A.words();
     let slot = FlagSlot::new(3, 120).unwrap();
     let m = Mock::marking(words.flag_config(slot).exists().0);
@@ -995,7 +1021,7 @@ fn a_poll_output_aliasing_the_pattern_loses_to_the_clear() {
         ),
         Ok(WaitOutcome::Satisfied(Pattern(0x31)))
     );
-    assert_eq!(m.word(pattern), 0);
+    assert_eq!(m.word(pattern), 0x31);
 }
 
 #[test]
@@ -1417,6 +1443,7 @@ fn running_task(sim: &Sim, words: &DomainWords, domain: Domain, slot: u32) -> (T
     let task_slot = TaskSlot::new(slot).unwrap();
     let task = words.task(task_slot);
     sim.set(task.domain(), if domain == Domain::A { 1 } else { 2 });
+    sim.set_byte(task.state(), TaskState::READY.bits());
     sim.set_running(domain, task);
     (task, task_slot)
 }
@@ -1485,11 +1512,68 @@ fn wait_flag_without_a_match_arms_the_waiter() {
     assert_eq!(sim.word(wait.mode()), 0);
     assert_eq!(sim.word(wait.base().result()), 0);
     assert_eq!(sim.word(wait.base().queue()), control.0 .0);
-    assert_eq!(sim.word(wait.base().owner()), words.context(Domain::A).0 .0);
+    assert_eq!(sim.word(wait.base().owner()), 1);
     assert_eq!(sim.word(task.state()) & 0xff, 0x32);
     assert_eq!(sim.word(task.wait()), wait.0 .0);
     assert_eq!(sim.word(control.queue().next()), task.0 .0);
     assert_eq!(sim.word(out), 0);
+}
+
+#[test]
+fn wait_flag_clear_on_match_writes_the_caller_output_after_the_clear() {
+    let words = Domain::A.words();
+    let slot = FlagSlot::new(3, 120).unwrap();
+    let sim = Sim::new(Domain::A);
+    install(&sim, Domain::A);
+    let id = create_flag_at(&sim, slot, FlagConfig::CLEAR_ON_MATCH, 0x11);
+    let control = words.flag_control(slot);
+    let out = control.pattern();
+    assert_eq!(
+        wait_flag(
+            &sim,
+            EntryDomain::new(Domain::A),
+            id,
+            WantedMask::new(Pattern(0x01)).unwrap(),
+            MatchMode::All,
+            OutWord(out),
+            Timeout::Forever,
+        ),
+        Ok(FlagBlocking::Ready(WaitOutcome::Satisfied(Pattern(0x11))))
+    );
+    assert_eq!(sim.word(out), 0x11);
+    assert_eq!(sim.word(control.pattern()), 0x11);
+}
+
+#[test]
+fn cross_domain_timed_wait_records_the_one_based_owner() {
+    let a = Domain::A.words();
+    let slot = FlagSlot::new(3, 120).unwrap();
+    let sim = Sim::new(Domain::A);
+    install(&sim, Domain::A);
+    let id = FlagId {
+        domain: Domain::B,
+        slot,
+    };
+    assert_eq!(
+        create_flag(&sim, id, FlagCreate { attributes: FlagAttributes(0), initial: Pattern(0) }),
+        Ok(id)
+    );
+    let (task, task_slot) = running_task(&sim, &a, Domain::A, 7);
+    sim.set(a.context(Domain::A).tick_now(), a.tick_now.0);
+    sim.set(a.tick_now, 100);
+    pending_flag(wait_flag(
+        &sim,
+        EntryDomain::new(Domain::A),
+        id,
+        WantedMask::new(Pattern(0x10)).unwrap(),
+        MatchMode::All,
+        OutWord(GuestAddress(0x4000_0600)),
+        Timeout::Units(5),
+    ));
+    let wait = a.flag_wait(task_slot);
+    assert_eq!(sim.word(wait.base().owner()), 2);
+    assert_eq!(sim.word(wait.base().queue()), Domain::B.words().flag_control(slot).0 .0);
+    assert_eq!(sim.word(task.wait()), wait.0 .0);
 }
 
 #[test]
@@ -1633,7 +1717,7 @@ fn receive_on_an_empty_mailbox_arms_the_receiver() {
     assert_eq!(sim.word(task.wait()), wait.0 .0);
     assert_eq!(sim.word(wait.base().result()), 0);
     assert_eq!(sim.word(wait.base().queue()), control.0 .0);
-    assert_eq!(sim.word(wait.base().owner()), words.context(Domain::A).0 .0);
+    assert_eq!(sim.word(wait.base().owner()), 1);
     assert_eq!(sim.word(control.queue().next()), task.0 .0);
     assert_eq!(sim.word(out), 0);
 }
@@ -1937,7 +2021,11 @@ fn delete_flag_releases_a_queued_waiter_with_minus_49() {
         0,
         0,
     );
-    assert_eq!(delete_flag(&sim, id), Ok(()));
+    if delete_flag(&sim, id) == DispatchDecision::Required {
+        let saved = sim.mask_interrupts();
+        sim.dispatch(0);
+        sim.restore_interrupts(saved);
+    }
     assert_eq!(sim.word(wait.base().result()), 0xffff_ffcf);
     assert_eq!(sim.word(task.state()) & 0xff, 0x01);
     assert_eq!(sim.ready(Domain::A, 5), task.0 .0);
@@ -1969,7 +2057,11 @@ fn delete_flag_cancels_the_timed_waiters_timer() {
         timer.0,
     );
     sim.arm(timer);
-    assert_eq!(delete_flag(&sim, id), Ok(()));
+    if delete_flag(&sim, id) == DispatchDecision::Required {
+        let saved = sim.mask_interrupts();
+        sim.dispatch(0);
+        sim.restore_interrupts(saved);
+    }
     assert!(!sim.armed(timer));
     assert_eq!(sim.word(wait.base().result()), 0xffff_ffcf);
 }
@@ -1985,7 +2077,13 @@ fn delete_mailbox_drains_queued_messages_in_delivery_order() {
     let second = Message(GuestAddress(0x4000_0310));
     send(&sim, id, first, None);
     send(&sim, id, second, None);
-    let drained: Vec<Message> = delete_mailbox(&sim, id).unwrap().collect();
+    let (drain, decision) = delete_mailbox(&sim, id);
+    if decision == DispatchDecision::Required {
+        let saved = sim.mask_interrupts();
+        sim.dispatch(0);
+        sim.restore_interrupts(saved);
+    }
+    let drained: Vec<Message> = drain.collect();
     assert_eq!(drained, vec![first, second]);
     let control = words.mailbox_control(slot);
     assert_eq!(sim.word(control.head()), 0);
@@ -2014,7 +2112,13 @@ fn delete_mailbox_releases_a_queued_receiver() {
         OutWord(GuestAddress(0x4000_0600)),
         Timeout::Forever,
     ));
-    let drained: Vec<Message> = delete_mailbox(&sim, id).unwrap().collect();
+    let (drain, decision) = delete_mailbox(&sim, id);
+    if decision == DispatchDecision::Required {
+        let saved = sim.mask_interrupts();
+        sim.dispatch(0);
+        sim.restore_interrupts(saved);
+    }
+    let drained: Vec<Message> = drain.collect();
     assert!(drained.is_empty());
     let wait = words.mailbox_wait(task_slot);
     assert_eq!(sim.word(wait.base().result()), 0xffff_ffcf);
@@ -2047,7 +2151,11 @@ fn delete_releases_a_cross_domain_waiter_in_its_domain() {
         0,
         0,
     );
-    assert_eq!(delete_flag(&sim, id), Ok(()));
+    if delete_flag(&sim, id) == DispatchDecision::Required {
+        let saved = sim.mask_interrupts();
+        sim.dispatch(0);
+        sim.restore_interrupts(saved);
+    }
     assert_eq!(sim.ready(Domain::B, 5), task.0 .0);
     assert_eq!(sim.ready(Domain::A, 5), 0);
     assert!(sim.doorbell(1));
@@ -2087,7 +2195,13 @@ fn delete_mailbox_releases_two_receivers_in_their_domains() {
     ));
     let timer_b = b.mailbox_timer(slot_b);
     assert!(sim.armed(timer_b));
-    let drained: Vec<Message> = delete_mailbox(&sim, mailbox).unwrap().collect();
+    let (drain, decision) = delete_mailbox(&sim, mailbox);
+    if decision == DispatchDecision::Required {
+        let saved = sim.mask_interrupts();
+        sim.dispatch(0);
+        sim.restore_interrupts(saved);
+    }
+    let drained: Vec<Message> = drain.collect();
     assert!(drained.is_empty());
     assert_eq!(sim.word(a.mailbox_wait(slot_a).base().result()), 0xffff_ffcf);
     assert_eq!(sim.word(b.mailbox_wait(slot_b).base().result()), 0xffff_ffcf);

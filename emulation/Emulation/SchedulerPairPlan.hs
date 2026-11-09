@@ -32,7 +32,11 @@ derivePlan role dat catalogs loaders = do
       keys = [(entryDomain entry,entryAddress entry) | entry <- entries]
       windows = nub (concatMap catalogWindows catalogs)
       probes = concatMap catalogProbes catalogs
+      family = any isObservedEntry entries
+      guardedFamily entry = not (isObservedEntry entry) || any (\window -> windowDomain window==entryDomain entry && windowStart window<=entryAddress entry && entryAddress entry<windowEnd window) windows
   unless (not (null entries) && length keys==length (nub keys)) (Left "entry list is empty or repeats an address")
+  unless (not family || any (not . isObservedEntry) entries) (Left "family catalog requires scheduler entries")
+  unless (all guardedFamily entries) (Left "family entry outside guarded extent")
   perDomain <- forM domains $ \domain -> do
     loader <- maybe (Left "missing loader") Right (M.lookup domain loaders)
     unless (B.length loader == if domain==DomainA then 0xdae0 else 0xdaa0) (Left "loader size differs")
@@ -63,7 +67,8 @@ derivePlan role dat catalogs loaders = do
         retries = [mk (offset + (if role==Stock then stock else owned) - (if domain==DomainB then 64 else 0)) Retry 0
           | (service,stock,owned) <- [(DisableDispatch,0xca78,0xca4c),(SleepTask,0x5d9c,0x5d60),(SuspendTask,0x6b60,0x6b10),(EnableTaskException,0x74c8,0x749c)]
           , any (\entry -> entryDomain entry==domain && entrySemantic entry==ServiceSemantic service) entries]
-        domainProbes = [probe | probe <- probes,probeDomain probe==domain,not dispatch] ++ s2Probes ++ callbackProbes ++ retries
+        domainProbes = [probe | probe <- probes,probeDomain probe==domain,not dispatch] ++ s2Probes ++ callbackProbes ++ retries ++ familyDomainProbes
+        familyDomainProbes = if family then familyProbes domain else []
     unless (not (any (\entry -> entryDomain entry==domain && entrySemantic entry==ServiceSemantic DeliverTaskException) entries) || length callbackProbes==2)
       (Left "exception callback instruction differs")
     pure (guards,fills,domainProbes)
@@ -72,6 +77,22 @@ derivePlan role dat catalogs loaders = do
   unAddress (Address address) = address
   stockEntry entry@(Entry domain (DispatchSemantic Select) _) | role==Stock = entry { entryAddress=Address (base domain+0x36ac) }
   stockEntry entry = entry
+
+isObservedEntry :: Entry -> Bool
+isObservedEntry (Entry _ (FamilySemantic _) _) = True
+isObservedEntry (Entry _ (SemaphoreSemantic _) _) = True
+isObservedEntry _ = False
+
+familyProbes :: Domain -> [Probe]
+familyProbes domain =
+  [Probe domain (Address address) kind (Register register)
+  | (address,kind) <- [(timerInsert, TimerInsert),(timerRemove, TimerRemove)]
+  , register <- [0,1]]
+  ++ [Probe domain (Address consume) TimerConsume (Register 0)]
+ where
+  (timerInsert,timerRemove,consume) = case domain of
+    DomainA -> (0x44c60,0x44ca8,0x44318)
+    DomainB -> (0xd4c20,0xd4c68,0xd42d8)
 
 planValue :: Plan -> Value
 planValue plan = object

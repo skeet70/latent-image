@@ -20,6 +20,7 @@ haskell_library(
         "Replacement/RtosScheduler/Artifact.hs",
         "Replacement/RtosScheduler/Cutover.hs",
         "Replacement/RtosScheduler/CutoverPins.hs",
+        "Replacement/RtosScheduler/Family.hs",
         "Replacement/RtosScheduler/Semantic.hs",
     ],
     src_strip_prefix = ".",
@@ -130,6 +131,52 @@ haskell_test(
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
+        "//host:first-stage",
+        "//host:update-container",
+    ],
+)
+
+_FAMILY = [
+    "//replacement/rtos_objects:objects-family-stage-%s.%s" % (domain, suffix)
+    for domain in ["a", "b"]
+    for suffix in ["bin", "symbols"]
+]
+
+haskell_binary(
+    name = "family-cutover",
+    srcs = ["FamilyMain.hs"],
+    main_file = "FamilyMain.hs",
+    args = ["$(rootpath %s)" % linked for linked in _CUTOVER + _FAMILY],
+    data = _CUTOVER + _FAMILY,
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":scheduler-artifact",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+    ],
+)
+
+haskell_test(
+    name = "family-cutover-tests",
+    size = "small",
+    srcs = ["FamilyTests.hs", "//replacement/startup_artifact:Fixtures.hs"],
+    main_file = "FamilyTests.hs",
+    args = ["$(rootpath %s)" % linked for linked in _CUTOVER + _FAMILY],
+    data = _CUTOVER + _FAMILY,
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":scheduler-artifact",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
         "//host:first-stage",
         "//host:update-container",
     ],
