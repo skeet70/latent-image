@@ -110,7 +110,7 @@ symbolsWithPrefixes prefixes = filter (\row -> any (`isPrefixOf` symbolName row)
 sliceAggregate :: AggregateImage -> Word32 -> Word32 -> Either String B.ByteString
 sliceAggregate image address size
   | address < imageBase image = Left "aggregate slice starts below its image"
-  | address + size > imageBase image + fromIntegral (B.length (imageBytes image)) = Left ("aggregate slice ends above its image: " ++ show (address, size, imageBase image, B.length (imageBytes image)))
+  | toInteger address + toInteger size > toInteger (imageBase image) + toInteger (B.length (imageBytes image)) = Left ("aggregate slice ends above its image: " ++ show (address, size, imageBase image, B.length (imageBytes image)))
   | otherwise =
       Right (B.take (fromIntegral size) (B.drop (fromIntegral (address - imageBase image)) (imageBytes image)))
 
@@ -128,7 +128,7 @@ installAggregate base current image = foldM install current
 installAt :: Word32 -> B.ByteString -> Word32 -> B.ByteString -> Either String B.ByteString
 installAt base current address bytes
   | address < base = Left "aggregate install starts below the image"
-  | address + fromIntegral (B.length bytes) > base + fromIntegral (B.length current) = Left "aggregate install ends above the image"
+  | toInteger address + toInteger (B.length bytes) > toInteger base + toInteger (B.length current) = Left "aggregate install ends above the image"
   | otherwise =
       let offset = fromIntegral (address - base)
        in Right (B.take offset current <> bytes <> B.drop (offset + B.length bytes) current)

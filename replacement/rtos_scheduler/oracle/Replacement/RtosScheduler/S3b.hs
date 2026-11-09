@@ -134,7 +134,7 @@ main = do
         symbols <- traverse readSymbols symbolsPath
         placements <- traverse readPlacements placementsPath
         let delta=if b then 0x8ffc0 else 0; base=if b then 0xd0000 else 0x40000
-            selected = maybe [] (Agg.symbolsWithPrefixes ["xm1_s3b_", "xm1_platform_veneer_s3b_"]) symbols
+            selected = maybe [] (Agg.symbolsWithPrefixes ["xm1_s3b_", "xm1_platform_veneer_"]) symbols
             aggregateImage = fmap (\rows -> Agg.AggregateImage (minimum (map Agg.symbolAddress rows)) owned) symbols
             patch s bytes = poke bytes [(entry s+delta-base,B.take (extent s) (B.drop (fromIntegral (entry s-entry Activate)) owned))]
             candidate = case aggregateImage of

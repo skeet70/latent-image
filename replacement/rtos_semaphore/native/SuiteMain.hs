@@ -84,7 +84,7 @@ ownedImage :: Domain -> B.ByteString -> Maybe [Agg.AggregateSymbol] -> Maybe [Ag
 ownedImage domain bytes Nothing _ = Image (minimum (map fst (extents domain))) bytes [] []
 ownedImage _ bytes (Just symbols) placements =
   let image = either error id (Agg.aggregateImage symbols bytes)
-      selected = Agg.symbolsWithPrefixes ["xm1_rtos_semaphore_", "xm1_platform_veneer_semaphore_"] symbols
+      selected = Agg.symbolsWithPrefixes ["xm1_rtos_semaphore_", "xm1_platform_veneer_"] symbols
    in Image (Agg.imageBase image) (Agg.imageBytes image) selected (maybe [] id placements)
 
 readSymbols :: FilePath -> IO [Agg.AggregateSymbol]

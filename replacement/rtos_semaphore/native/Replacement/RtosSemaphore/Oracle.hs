@@ -34,7 +34,7 @@ import Data.Aeson (FromJSON (..), eitherDecodeStrict', withObject, (.:))
 import Data.Bits ((.&.), (.|.), complement, shiftL, shiftR)
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
-import Data.List (sortOn)
+import Data.List (isPrefixOf, sortOn)
 import Data.Maybe (isJust)
 import Data.Word (Word32, Word8)
 import Emulation.CachedNativeBatch (BatchReuse, cachedObservedBatch)
@@ -971,7 +971,7 @@ mergeSpans spans = go (sortOn fst spans)
     go ((start, size) : rest) = extend start (start + size) rest
     extend start end [] = [(start, end - start)]
     extend start end ((lo, size) : rest)
-      | lo <= end = extend start (max end (lo + size)) rest
+      | lo < end = extend start (max end (lo + size)) rest
       | otherwise = (start, end - start) : extend lo (lo + size) rest
 
 codeBytes :: Domain -> Role -> Image -> Image -> [(Word32, Word32)] -> B.ByteString
@@ -1121,7 +1121,7 @@ caseSpec facts executing role loader owned one
             ++ [mkRegion ident (wire (guestWord address)) size permission (overlay address background words') | Page ident address size permission background <- dataPages]
             ++ [mkRegion (RegionId "continuations") (wire exitAddress) (fromIntegral (stopAddress - exitAddress + 4)) ReadExecute (continuationBytes facts executing one)]
       , caseFunctions =
-          [(wire address, size) | (address, size) <- mergeSpans (ownedSpans executing role owned ++ retained executing ++ extra)]
+          [(wire address, size) | (address, size) <- mergeSpans (ownedSpans executing role owned ++ retained executing ++ extra ++ placementFunctions)]
             ++ [(wire wakerStubBase, 0x80) | isJust (caseWaker one)]
       , caseInitial = initialRegisters executing one
       , caseExpectedStatus = if isJust budget then InstructionBudget else if arrival then StopAddress else Returned
@@ -1139,6 +1139,7 @@ caseSpec facts executing role loader owned one
       | arrival = [(Pc, stopAddress), (Sp, targetStack)]
       | otherwise = [(R0, expectationResult expectation)]
     extra = wakerCodeExtents executing one
+    placementFunctions = [(Agg.placementAddress placement, Agg.placementBytes placement) | placement <- imagePlacements owned, ".text." `isPrefixOf` Agg.placementSection placement]
     (codeBase, codeTop) = codeBounds executing role owned extra
     dataPages = pages facts loader one
     words' = layoutWords facts executing one

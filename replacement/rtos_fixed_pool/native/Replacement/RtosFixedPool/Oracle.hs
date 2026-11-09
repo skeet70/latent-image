@@ -37,7 +37,7 @@ import Data.Aeson (FromJSON (..), eitherDecodeStrict', withObject, (.:))
 import Data.Bits ((.&.), (.|.), complement, shiftL, shiftR)
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
-import Data.List (sortOn)
+import Data.List (isPrefixOf, sortOn)
 import Data.Word (Word32, Word8)
 import Emulation.CachedNativeBatch (BatchReuse, cachedObservedBatch)
 import Emulation.NativeCase (caseIdText)
@@ -1174,7 +1174,7 @@ mergeSpans spans = go (sortOn fst spans)
     go ((start, size) : rest) = extend start (start + size) rest
     extend start end [] = [(start, end - start)]
     extend start end ((lo, size) : rest)
-      | lo <= end = extend start (max end (lo + size)) rest
+      | lo < end = extend start (max end (lo + size)) rest
       | otherwise = (start, end - start) : extend lo (lo + size) rest
 
 codeBytes :: Domain -> Role -> Image -> Image -> B.ByteString
@@ -1224,7 +1224,7 @@ caseSpec facts executing role loader owned one
           [mkRegion (RegionId "code") (wire codeBase) (fromIntegral (codeTop - codeBase)) ReadExecute (codeBytes executing role loader owned)]
             ++ [mkRegion ident (wire (guestWord address)) size permission (overlay address background words') | Page ident address size permission background <- dataPages]
             ++ [mkRegion (RegionId "continuations") (wire exitAddress) (fromIntegral (stopAddress - exitAddress + 4)) ReadExecute (B.replicate (fromIntegral (stopAddress - exitAddress + 4)) 0)]
-      , caseFunctions = [(wire address, size) | (address, size) <- mergeSpans (ownedSpans executing role owned ++ retained executing ++ [(driverEntry, driverSize), (expiryEntry, expirySize), (deleteEntry, deleteSize)])]
+      , caseFunctions = [(wire address, size) | (address, size) <- mergeSpans (ownedSpans executing role owned ++ retained executing ++ placementFunctions ++ [(driverEntry, driverSize), (expiryEntry, expirySize), (deleteEntry, deleteSize)])]
       , caseInitial = initialRegisters executing one
       , caseExpectedStatus = if arrival then StopAddress else Returned
       , caseExpectedRegisters = if arrival
@@ -1237,6 +1237,7 @@ caseSpec facts executing role loader owned one
   where
     expectation = expectationOf role one
     arrival = expectationArrival expectation
+    placementFunctions = [(Agg.placementAddress placement, Agg.placementBytes placement) | placement <- imagePlacements owned, ".text." `isPrefixOf` Agg.placementSection placement]
     (codeBase, codeTop) = codeBounds executing role owned
     dataPages = pages facts one
     words' = layoutWords facts
