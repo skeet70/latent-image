@@ -3,7 +3,7 @@
 module Main (main) where
 
 import Control.Concurrent (threadDelay)
-import Control.Exception (IOException, bracket, catch)
+import Control.Exception (IOException, bracket, catch, try)
 import Control.Monad (forM, forM_, unless)
 import Data.Aeson (eitherDecodeStrict', encode)
 import qualified Data.ByteString as B
@@ -92,8 +92,9 @@ collectorPid processHandle = getPid processHandle >>= maybe (ioError (userError 
 readPidFiles :: FilePath -> String -> IO [ProcessID]
 readPidFiles control prefix = do
   entries <- listDirectory control
-  fmap concat $ forM [entry | entry <- entries, prefix `isPrefixOf` entry, ".pid" `isSuffixOf` entry] $ \entry ->
-    fmap (: []) (readPid (control </> entry))
+  fmap concat $ forM [entry | entry <- entries, prefix `isPrefixOf` entry, ".pid" `isSuffixOf` entry] $ \entry -> do
+    result <- try (readPid (control </> entry)) :: IO (Either IOException ProcessID)
+    pure (either (const []) (: []) result)
 
 waitForPidFiles :: FilePath -> String -> Int -> Int -> IO ()
 waitForPidFiles control prefix expected limit = go 0
@@ -122,9 +123,11 @@ waitForExit processHandle limit = go 0
 readPid :: FilePath -> IO ProcessID
 readPid path = do
   contents <- readFile path
-  case reads (takeWhile (/= '\n') contents) of
-    [(value, _)] -> pure (fromIntegral (value :: Int))
-    _ -> ioError (userError ("invalid pid file: " ++ path))
+  case break (== '\n') contents of
+    (value, '\n' : _) -> case reads value of
+      [(number, "")] -> pure (fromIntegral (number :: Int))
+      _ -> ioError (userError ("invalid pid file: " ++ path))
+    _ -> ioError (userError ("incomplete pid file: " ++ path))
 
 processRunning :: ProcessID -> IO Bool
 processRunning processId = do
