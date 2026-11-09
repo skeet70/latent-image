@@ -132,14 +132,21 @@ readPlacements :: FilePath -> IO [Agg.SectionPlacement]
 readPlacements path = either failH pure . Agg.parsePlacements =<< B.readFile path
 
 ownedImage :: Domain -> B.ByteString -> [Agg.AggregateSymbol] -> Maybe [Agg.SectionPlacement] -> IO Image
-ownedImage domain bytes symbols placements = case [Agg.symbolAddress symbol | symbol <- symbols, Agg.symbolName symbol == "xm1_rtos_fixed_pool_poll_unchecked"] of
-  (address : _) | address == entries domain PollUnchecked -> do
-    base <- origin domain (M.fromList [(Agg.symbolName symbol, Agg.symbolAddress symbol) | symbol <- symbols])
-    pure (Image base bytes [] [])
-  _ -> do
-    image <- either fail pure (Agg.aggregateImage symbols bytes)
-    let selected = symbols
-    pure (Image (Agg.imageBase image) (Agg.imageBytes image) selected (maybe [] id placements))
+ownedImage domain bytes symbols placements
+  | Just sections <- placements = do
+      unless (not (null sections)) (failH "aggregate placements are empty")
+      image <- either failH pure (Agg.aggregateImage symbols bytes)
+      forM_ sections $ \section -> do
+        _ <- either failH pure (Agg.sliceAggregate image (Agg.placementAddress section) (Agg.placementBytes section))
+        pure ()
+      pure (Image (Agg.imageBase image) (Agg.imageBytes image) symbols sections)
+  | any (isAggregate . Agg.symbolName) symbols =
+      failH "aggregate fixed-pool qualification requires --placements-a and --placements-b"
+  | otherwise = do
+      base <- origin domain (M.fromList [(Agg.symbolName symbol, Agg.symbolAddress symbol) | symbol <- symbols])
+      pure (Image base bytes [] [])
+  where
+    isAggregate name = take 20 name == "xm1_platform_veneer_"
 
 optional :: String -> IO (Maybe FilePath)
 optional flag = do
