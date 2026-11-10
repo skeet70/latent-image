@@ -301,7 +301,6 @@ expectedResult facts Owned op row = case op of
     | otherwise -> 0
   DeleteReset
     | invalidSlot -> statusInvalid
-    | rowExists row == 0 -> statusAlreadyExists
     | rowState row /= 0 -> statusAlreadyExists
     | not (rowBound row) -> statusInvalid
     | otherwise -> 0
@@ -552,8 +551,7 @@ cases facts domain =
       "delete-reset-nonexistent"
       DeleteReset
       (baseRow 12 DeleteReset) {rowExists = 0}
-      (Repair "resetting a missing definition is refused")
-      []
+      Equal
       [ RegisterIs R0 0
       , WordIs "definitions" (cfield 12 (definitionAttributes d)) 0
       , WordIs "definitions" (cfield 12 (definitionPriority d)) 15
@@ -561,8 +559,9 @@ cases facts domain =
       , WordIs "definitions" (exists 12) 0
       , ByteIs "tasks" (tfield 12 (taskState t)) 0
       ]
-      [RegisterIs R0 statusAlreadyExists, RegionsUnchanged dataRegions]
       []
+      []
+      [dmb 12]
   , Case
       "delete-reset-live-ready"
       DeleteReset
@@ -606,6 +605,24 @@ cases facts domain =
       (Repair "a stale definition pointer is refused without a write")
       []
       [RegisterIs R0 0, WordIs "definitions" (exists 17) 0, ByteIs "tasks" (tfield 17 (taskPriority t)) 15]
+      [RegisterIs R0 statusInvalid, RegionsUnchanged dataRegions]
+      []
+  , Case
+      "delete-reset-unpublished-live"
+      DeleteReset
+      (baseRow 18 DeleteReset) {rowExists = 0, rowState = 1}
+      (Repair "an unpublished active task is not reset under the caller")
+      []
+      [RegisterIs R0 0, WordIs "definitions" (exists 18) 0, ByteIs "tasks" (tfield 18 (taskState t)) 0]
+      [RegisterIs R0 statusAlreadyExists, RegionsUnchanged dataRegions]
+      []
+  , Case
+      "delete-reset-unpublished-unbound"
+      DeleteReset
+      (baseRow 19 DeleteReset) {rowExists = 0, rowBound = False}
+      (Repair "an unpublished stale definition pointer is refused without a write")
+      []
+      [RegisterIs R0 0, WordIs "definitions" (exists 19) 0, ByteIs "tasks" (tfield 19 (taskPriority t)) 15]
       [RegisterIs R0 statusInvalid, RegionsUnchanged dataRegions]
       []
   , Case

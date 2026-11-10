@@ -23,6 +23,7 @@ import qualified Emulation.SchedulerPairService as V
 import qualified Emulation.SchedulerPairS3a as A
 import qualified Emulation.SchedulerPairS3b as C
 import qualified Emulation.SchedulerPairS3c as E
+import qualified Emulation.SchedulerPairTaskRecords as TR
 import Emulation.SchedulerPairFamily (FamilyCall (..))
 import qualified Emulation.SchedulerPairFamily as F
 import Emulation.SchedulerPairSemaphore (SemaphoreCall (..))
@@ -88,7 +89,7 @@ data Refusal = Binding | Arming | Readback | Watch | FillFetch | Incomplete | Un
   | FamilyReturn | FamilyEffect | FamilyLifetime | FamilyTimer | FamilyDestructor | FamilyContinuation | FamilyAssociation deriving (Eq,Show)
 
 data Completion = Returned | Discarded | Dispatched deriving (Eq,Show)
-data BoundaryKind = SaveBoundary | ResumeBoundary | NoSaveBoundary | RetryBoundary | CallbackBoundary | CallbackReturnBoundary | SelectedBoundary | DiscardedBoundary | EnabledBoundary | GlobalLockBoundary | AcquiredBoundary | SelectCompleteBoundary | FirstEntryBoundary | IrqTailBoundary | ReturnBoundary | PrefetchAbortBoundary | TimerInsertBoundary | TimerRemoveBoundary | TimerConsumeBoundary deriving (Eq,Show)
+data BoundaryKind = SaveBoundary | ResumeBoundary | NoSaveBoundary | RetryBoundary | CallbackBoundary | CallbackReturnBoundary | SelectedBoundary | DiscardedBoundary | EnabledBoundary | GlobalLockBoundary | AcquiredBoundary | SelectCompleteBoundary | FirstEntryBoundary | IrqTailBoundary | ReturnBoundary | PrefetchAbortBoundary | TimerInsertBoundary | TimerRemoveBoundary | TimerConsumeBoundary | PublicationBarrierBoundary deriving (Eq,Show)
 data Boundary = Boundary { boundaryKind :: BoundaryKind, boundaryAddress :: Address, boundaryInstructions :: Word64, boundaryCore :: Int, boundaryRegisters :: D.Registers, boundaryMemory :: Memory, boundaryWrites :: [Written], boundaryBank :: [Written], boundaryValue :: Maybe Word32, boundaryTask :: Word32,
   boundaryWriteOrigins :: [WriteOrigin], boundaryBankOrigins :: [WriteOrigin], boundaryUnreadable :: S.Set Address } deriving (Eq,Show)
 data CallTrace = CallTrace { traceBefore :: D.Registers, traceAfter :: D.Registers, traceCompletion :: Completion, traceHistory :: [Boundary], traceOrigin :: Maybe DispatchPoint } deriving (Eq,Show)
@@ -116,6 +117,7 @@ instance FromJSON BoundaryKind where
     "irq-tail" -> pure IrqTailBoundary
     "return" -> pure ReturnBoundary
     "prefetch-abort" -> pure PrefetchAbortBoundary
+    "publication-barrier" -> pure PublicationBarrierBoundary
     "timer-insert" -> pure TimerInsertBoundary
     "timer-remove" -> pure TimerRemoveBoundary
     "timer-consume" -> pure TimerConsumeBoundary
@@ -618,6 +620,7 @@ modelled semantic = case semantic of
   HelperSemantic _ -> True
   DispatchSemantic _ -> True
   DoorbellSemantic -> True
+  TaskRecordSemantic _ -> True
   FamilySemantic _ -> True
   SemaphoreSemantic _ -> True
   ServiceSemantic service -> A.supportsService service || C.supportsService service || E.supportsService service
@@ -651,6 +654,7 @@ checkCallForInWitnesses witnesses role call = do
   checkUnreadableWrites call
   case callSemantic call of
     FamilySemantic _ -> pure ()
+    TaskRecordSemantic _ -> expect WrongCore (callCore call `elem` [0,1])
     _ -> expect WrongCore (callCore call == if callDomain call==DomainA then 0 else 1)
   case callSemantic call of
     HelperSemantic _ -> checkHelperCall call
@@ -663,6 +667,7 @@ checkCallForInWitnesses witnesses role call = do
       expect WrittenWords (any (\(Written (Address address) size value) -> address .&. complement 0x40000000==reschedule .&. complement 0x40000000 && size==4 && value==1) writes)
       expect ProcessorState (callCpsr call .&. 0x1ff==callReturnCpsr call .&. 0x1ff)
     DispatchSemantic point -> dispatchTags role point call >> pure ()
+    TaskRecordSemantic point -> checkTaskRecordCall role point call
     FamilySemantic _ | role == Stock -> pure ()
     FamilySemantic _ -> checkFamilyCall call witnesses
     SemaphoreSemantic _ | role == Stock -> pure ()
@@ -902,3 +907,124 @@ resumeModel domain service
   | C.supportsService service = C.resumeService domain service
   | E.supportsService service = E.resumeService domain service
   | otherwise = \_ _ _ -> Left InvalidArguments
+
+data TaskCallerCore = PrimaryTaskCore | SecondaryTaskCore deriving Eq
+
+-- Loader entries 0x40098/0xd0098 zero these objects before installing SP.
+bootstrapTaskStack :: TaskCallerCore -> TaskStack
+bootstrapTaskStack PrimaryTaskCore = TaskStack (Address 0x40062c54) (Address 0x40063460)
+bootstrapTaskStack SecondaryTaskCore = TaskStack (Address 0x400f2c14) (Address 0x400f3420)
+
+checkTaskRecordCall :: Role -> TaskRecordPoint -> Call -> Either Refusal ()
+checkTaskRecordCall role point call = do
+  trace <- maybe (Left MissingTrace) Right (callTrace call)
+  expect Incomplete (callCount call==1)
+  callerCore <- case callCore call of
+    0 -> Right PrimaryTaskCore
+    1 -> Right SecondaryTaskCore
+    _ -> Left WrongCore
+  case point of
+    CreateTaskRecord -> do
+      recordedOwnerCore <- case M.lookup (Address 0x400c0804) (callBefore call) of
+        Just 0x21 -> Right PrimaryTaskCore
+        Just 0x22 -> Right SecondaryTaskCore
+        _ -> Left MemoryResult
+      expect MemoryResult (recordedOwnerCore==callerCore)
+    DeleteTaskRecord -> expect WrongCore (case (callerCore,callDomain call) of
+      (PrimaryTaskCore,DomainA) -> True
+      (SecondaryTaskCore,DomainB) -> True
+      _ -> False)
+  let initial=traceBefore trace
+      final=traceAfter trace
+      reg state index = case drop index (D.registers state) of value:_ -> Right value; _ -> Left EntryUnreadable
+  sp <- reg initial 13
+  returnSp <- reg final 13
+  callerLr<-reg initial 14
+  returnedPc<-reg final 15
+  let Arguments suppliedArguments=callArguments call
+  expect ProcessorState (suppliedArguments==take 4 (D.registers initial) && callCpsr call==D.processorState initial
+    && callReturnCpsr call==D.processorState final && take 1 (D.registers final)==[callR0 call]
+    && callerLr .&. 1==0 && returnedPc .&. complement 0x40000000==callerLr .&. complement 0x40000000)
+  callerStack <- case (callTask call,callKernelContext call,callTaskStack call,point) of
+    (0,1,Nothing,CreateTaskRecord) -> do
+      expect MissingTrace (callCpsr call .&. 0x1f==0x13)
+      pure (bootstrapTaskStack callerCore)
+    (task,0,Just allocation,_) | task/=0 -> do
+      configuration<-maybe (Left EntryUnreadable) Right (M.lookup (Address (task+8)) (callBefore call))
+      allocationBase<-maybe (Left EntryUnreadable) Right (M.lookup (Address (configuration+20)) (callBefore call))
+      bytes<-maybe (Left EntryUnreadable) Right (M.lookup (Address (configuration+16)) (callBefore call))
+      expect MissingTrace (allocationBase<=maxBound-bytes && allocation==TaskStack (Address allocationBase) (Address (allocationBase+bytes)))
+      pure allocation
+    _ -> Left MissingTrace
+  let TaskStack (Address stackBase) (Address stackTop)=callerStack
+  expect MissingTrace (sp>=48 && stackBase<=sp-48 && sp<=stackTop)
+  requestWords<-case (point,callArguments call) of
+    (CreateTaskRecord,Arguments (_:request:_))->do
+      expect MissingTrace (request `mod` 4==0 && request>=sp && request<=maxBound-24 && request+24<=stackTop)
+      pure [Address address | address<-[request,request+4..request+20]]
+    (DeleteTaskRecord,_)->pure []
+    _->Left EntryUnreadable
+  let arrays=concat [concat [[Address address | address<-[start,start+4..start+bytes-4]] | (start,bytes)<-[(definitions,120*0x28),(tasks,120*0x38),(ids,120*4)]]
+        | domain<-domains,let (definitions,tasks,ids,_)=TR.recordAddresses domain]
+      frame=[Address address | address<-[sp-48,sp-44..sp+20]]
+      required=S.fromList (Address 0x400c0804:arrays++frame++requestWords)
+  expect EntryUnreadable (M.keysSet (callBefore call)==required)
+  let normalizeAddress (Address address)=Address (address .&. complement 0x40000000)
+  expect MissingTrace (S.null (S.intersection (S.fromList (map normalizeAddress arrays)) (S.fromList (map normalizeAddress (frame++requestWords)))))
+  expect ProcessorState (length (D.registers initial)==16 && length (D.registers final)==16
+    && take 8 (drop 4 (D.registers initial))==take 8 (drop 4 (D.registers final)) && sp==returnSp
+    && D.processorState initial .&. 0xff==D.processorState final .&. 0xff
+    && D.tpidrurw initial==D.tpidrurw final && D.cpacr initial==D.cpacr final && D.fpexc initial==D.fpexc final)
+  expect CompletionMismatch (traceCompletion trace==Returned)
+  let returned=[boundary | boundary<-traceHistory trace,boundaryKind boundary==ReturnBoundary]
+  expect CompletionMismatch (case returned of
+    [boundary] -> boundaryTask boundary==callTask call && boundaryCore boundary==callCore call
+      && boundaryInstructions boundary>callFirst call && boundaryMemory boundary==callAfter call && boundaryRegisters boundary==final
+    _ -> False)
+  expected <- either (Left . Model) Right (TR.recordCall (role/=Stock) (callDomain call) point (callArguments call) (callBefore call))
+  expect ReturnValue (callR0 call==expectedR0 expected)
+  let physical (Address address)=Address (address .&. complement 0x40000000)
+      aligned (Address address)=physical (Address (address .&. complement 3))
+      private (Address address)=let Address lo=physical (Address (sp-48)); Address hi=physical (Address sp)
+                               in lo<=address && address<hi
+      known=M.fromList [(aligned address,address) | address<-M.keys (callBefore call)]
+      owns origin=writerCore origin==callCore call && writerTask origin==Address (callTask call)
+        && writerContext origin==callKernelContext call && writerCpsr origin .&. 0x1f==callCpsr call .&. 0x1f
+      pairs=zip (callWrites call) (callWriteOrigins call)
+      own=[(write,origin) | (write,origin)<-pairs,owns origin]
+      semantic=[write | (write@(Written address _ _),_)<-own,not (private (aligned address))]
+      nonprivate memory=M.filterWithKey (\address _->not (private (aligned address))) memory
+      apply memory (Written address@(Address raw) size value)=do
+        expect WrittenWords (size `elem` [1,2,4] && raw `mod` fromIntegral size==0)
+        key<-maybe (Left WrittenWords) Right (M.lookup (aligned address) known)
+        old<-maybe (Left WrittenWords) Right (M.lookup key memory)
+        let shift=fromIntegral (raw .&. 3)*8
+            mask=if size==4 then maxBound else (1 `shiftL` (size*8))-1
+        expect WrittenWords (value .&. complement mask==0)
+        pure (M.insert key ((old .&. complement (mask `shiftL` shift)) .|. (value `shiftL` shift)) memory)
+  expect WrittenWords (length (callWrites call)==length (callWriteOrigins call) && null (callBank call))
+  forM_ own $ \(Written address _ _,origin)->do
+    let Address writerStack=physical (writerSp origin)
+        Address callerSp=physical (Address sp)
+    expect ProcessorState (callerSp>=48 && callerSp-48<=writerStack && writerStack<=callerSp)
+    unless (private (aligned address)) $ expect ProcessorState (writerCpsr origin .&. 0xc0==0xc0)
+  replayed<-foldM apply (callBefore call) semantic
+  expect WrittenWords (S.fromList [aligned address | Written address _ _<-semantic]==S.map aligned (expectedWrites expected))
+  expect MemoryResult (nonprivate replayed==nonprivate (expectedMemory expected))
+  concurrent<-foldM (\memory write@(Written address _ _)->
+    if M.member (aligned address) known then apply memory write else pure memory) (callBefore call) (callWrites call)
+  expect MemoryResult (M.keys (callBefore call)==M.keys (callAfter call) && nonprivate concurrent==nonprivate (callAfter call))
+  whenPublished role point expected trace semantic
+ where
+  whenPublished role' point' expected trace writes
+    | role'==Stock || expectedR0 expected/=0 || (point'==DeleteTaskRecord && case callArguments call of Arguments (_:mode:_) -> mode/=1; _ -> True) = pure ()
+    | otherwise = do
+        exists<-either (Left . Model) Right (TR.publicationWord (callDomain call) (callArguments call))
+        let barriers=[boundary | boundary<-traceHistory trace,boundaryKind boundary==PublicationBarrierBoundary]
+            publication=[write | write@(Written (Address address) _ _)<-writes,address .&. complement 0x40000000==exists .&. complement 0x40000000]
+        expect WrittenWords (case (publication,reverse writes) of ([Written _ 4 value],lastWrite:_) -> publication==[lastWrite] && value==(if point'==CreateTaskRecord then 1 else 0); _ -> False)
+        expect WrittenWords (case barriers of
+          [boundary] -> all (\(Written (Address address) _ _)->address .&. complement 0x40000000/=exists .&. complement 0x40000000) (boundaryWrites boundary)
+            && boundaryInstructions boundary>callFirst call
+            && M.lookup (Address exists) (boundaryMemory boundary)==M.lookup (Address exists) (callBefore call)
+          _ -> False)

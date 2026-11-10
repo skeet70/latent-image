@@ -24,7 +24,7 @@ assert :: String -> Bool -> IO ()
 assert label value = unless value (error label)
 plan :: Plan
 plan = Plan Owned "dat" [Entry DomainA (HelperSemantic Notify) (Address 0x44018),Entry DomainB (HelperSemantic Notify) (Address 0xd3fd4)]
-  [Guard DomainA (Address 0x44018) (Address 0x44044) "a",Guard DomainB (Address 0xd3fd4) (Address 0xd4004) "b"] [] []
+  [Guard DomainA (Address 0x44018) (Address 0x44044) "a",Guard DomainB (Address 0xd3fd4) (Address 0xd4004) "b"] [] [] retainedArmingEntries
 planBytes :: B.ByteString
 planBytes = "synthetic-plan"
 call :: Call
@@ -48,6 +48,30 @@ main :: IO ()
 main = do
   assert "correct trace qualifies" (case qualify planBytes plan observation of Right _ -> True; Left _ -> False)
   assert "plan wire round trip" (J.eitherDecodeStrict (L.toStrict (J.encode (planValue plan))) == Right plan)
+  let prefixArmings=either error id (armingEntries (Address 0x40020) (Address 0x1042c))
+      prefixPlan=plan {planArmingEntries=prefixArmings}
+      planFields=case planValue plan of J.Object fields->fields; _->error "fixture plan shape"
+      domainEntry domain address=J.object ["domain" J..= (domain::String),"loader_entry" J..= (address::String)]
+      primary=domainEntry "a" "0x40020"
+      secondary=domainEntry "b" "0x1042c"
+      withDomains value=J.Object (K.insert "domains" value planFields)
+      decodePlanValue :: J.Value -> Either String Plan
+      decodePlanValue value=J.eitherDecode (J.encode value)
+      rejectsPlan value=case decodePlanValue value of Left _->True; Right _->False
+  assert "relocated prefix arming survives the public plan wire round trip"
+    (decodePlanValue (planValue prefixPlan)==Right prefixPlan)
+  assert "domain row order does not change arming identity"
+    (decodePlanValue (withDomains (J.toJSON [secondary,primary]))==Right prefixPlan)
+  forM_
+    [ J.Object (K.delete "domains" planFields),withDomains J.Null
+    , withDomains (J.toJSON ([]::[J.Value])),withDomains (J.toJSON [primary])
+    , withDomains (J.toJSON [primary,primary]),withDomains (J.toJSON [secondary,secondary])
+    , withDomains (J.toJSON [primary,secondary,secondary])
+    , withDomains (J.toJSON [primary,domainEntry "c" "0x1042c"])
+    , withDomains (J.toJSON [primary,domainEntry "b" "0x0"])
+    , withDomains (J.toJSON [primary,domainEntry "b" "0x1042d"])
+    , withDomains (J.toJSON [primary,domainEntry "b" "0x40020"])
+    ] $ \value->assert "malformed domain arming metadata refuses at the wire boundary" (rejectsPlan value)
   let encoded = J.encode wireObservation
       expectedEntry = J.object ["domain" J..= ("a"::String),"entry" J..= ("0x44018"::String)
         ,"semantic" J..= J.object ["kind" J..= ("helper"::String),"name" J..= ("notify"::String)],"calls" J..= (1::Int)]
@@ -449,7 +473,7 @@ main = do
         [Window DomainA (Address 0x42100) (Address 0x42110)] [Probe DomainA (Address 0x42104) SelectedRead (Register 1)]
       catalogPlan = derivePlan Owned B.empty [firstCatalog,secondCatalog] (M.fromList [(DomainA,B.replicate 0xdae0 0),(DomainB,B.replicate 0xdaa0 0)])
   assert "catalog list preserves actual entry addresses and semantic tags" (case catalogPlan of
-    Right planned -> planEntries planned==catalogEntries firstCatalog++catalogEntries secondCatalog && planProbes planned==catalogProbes secondCatalog && length (planGuards planned)==3
+    Right planned -> planEntries planned==catalogEntries firstCatalog++catalogEntries secondCatalog && planProbes planned==catalogProbes secondCatalog && length (planGuards planned)==3 && planArmingEntries planned==retainedArmingEntries
     Left _ -> False)
   let boundaryEntries =
         [Entry d semantic (Address (base d+offset-(if d==DomainB && serviceEntry then 64 else 0)))

@@ -1,6 +1,6 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
-module Emulation.SchedulerPairDecode (decodeCheckedObservation, decodeControlObservation) where
+module Emulation.SchedulerPairDecode (decodeCheckedObservation, decodeControlObservation, foldObservation) where
 
 import qualified Data.Aeson as J
 import Data.Aeson.Decoding (toEitherValue)
@@ -137,6 +137,7 @@ forceSemantic (HelperSemantic helper) = helper `seq` ()
 forceSemantic (DispatchSemantic point) = point `seq` ()
 forceSemantic DoorbellSemantic = ()
 forceSemantic (ServiceSemantic service) = service `seq` ()
+forceSemantic (TaskRecordSemantic point) = point `seq` ()
 forceSemantic (FamilySemantic service) = service `seq` ()
 forceSemantic (SemaphoreSemantic service) = service `seq` ()
 

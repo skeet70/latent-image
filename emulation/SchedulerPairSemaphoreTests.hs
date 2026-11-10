@@ -23,7 +23,7 @@ planBytes :: B.ByteString
 planBytes = "semaphore-plan"
 
 semPlan :: Plan
-semPlan = Plan Owned "dat" entries guards [] []
+semPlan = Plan Owned "dat" entries guards [] [] retainedArmingEntries
  where
   entries =
     [ Entry DomainA (HelperSemantic Acquire) (Address 0x439d8)
@@ -575,6 +575,7 @@ kindName kind = case kind of
   TimerInsertBoundary -> "timer-insert"
   TimerRemoveBoundary -> "timer-remove"
   TimerConsumeBoundary -> "timer-consume"
+  PublicationBarrierBoundary -> "publication-barrier"
 
 rb :: Q.Readback -> J.Value
 rb value = J.object ["instructions" J..= Q.readbackInstructions value, "ranges" J..=

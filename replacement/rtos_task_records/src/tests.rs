@@ -326,14 +326,67 @@ fn delete_reset_refuses_active_and_blocked_tasks_without_writing() {
 }
 
 #[test]
-fn delete_refuses_records_that_are_not_created() {
+fn delete_clear_refuses_records_that_are_not_created() {
     for domain in DOMAINS {
-        for mode in [DeleteMode::Clear, DeleteMode::Reset] {
-            let (mock, slot) = fixture(domain, 17);
-            let before = mock.snapshot();
-            assert_eq!(delete(&mock, domain, slot, mode), Err(TaskRecordError::NotCreated));
-            assert_eq!(mock.snapshot().0, before.0);
-        }
+        let (mock, slot) = fixture(domain, 17);
+        let before = mock.snapshot();
+        assert_eq!(delete(&mock, domain, slot, DeleteMode::Clear), Err(TaskRecordError::NotCreated));
+        assert_eq!(mock.snapshot().0, before.0);
+    }
+}
+
+#[test]
+fn clear_reset_recreate_preserves_saved_task_context() {
+    for domain in DOMAINS {
+        let (mock, slot) = fixture(domain, 17);
+        let words = domain.words();
+        let definition = words.task_definition(slot);
+        let task = words.task(slot);
+        create_default(&mock, domain, slot).unwrap();
+        delete(&mock, domain, slot, DeleteMode::Clear).unwrap();
+        delete(&mock, domain, slot, DeleteMode::Reset).unwrap();
+        assert_eq!(mock.word(definition.exists()), 0);
+        assert_eq!(mock.word(definition.attributes()), 0);
+        assert_eq!(mock.word(definition.argument()), 16);
+        assert_eq!(mock.word(definition.entry()), 0);
+        assert_eq!(mock.word(definition.priority()), 15);
+        assert_eq!(mock.word(definition.stack_size()), 4);
+        assert_eq!(mock.word(definition.stack()), words.default_stack_word.address().0);
+        assert_eq!(mock.byte(task.state()), TaskState::DORMANT.bits());
+        assert_eq!(mock.word(task.definition()), definition.0 .0);
+        assert_eq!(mock.word(task.saved_sp()), 0x1111_1111);
+        assert_eq!(mock.word(task.resume_pc()), 0x2222_2222);
+        assert_eq!(mock.word(task.pending_priority()), 0x9999_9999);
+        assert_eq!(create_default(&mock, domain, slot), Ok(slot));
+        assert_eq!(mock.word(definition.exists()), 1);
+        assert_eq!(mock.word(words.task_creation_id(slot).word()), slot.get());
+        assert_eq!(mock.word(task.saved_sp()), 0x1111_1111);
+        assert_eq!(mock.word(task.resume_pc()), 0x2222_2222);
+        assert!(!mock.masked.get());
+    }
+}
+
+#[test]
+fn unpublished_reset_refuses_live_targets_without_writing() {
+    for domain in DOMAINS {
+        let (mock, slot) = fixture(domain, 17);
+        mock.set_byte(domain.words().task(slot).state(), TaskState::READY.bits());
+        let before = mock.snapshot();
+        assert_eq!(delete(&mock, domain, slot, DeleteMode::Reset), Err(TaskRecordError::TargetLive));
+        assert_eq!(mock.snapshot().0, before.0);
+        assert!(!mock.masked.get());
+    }
+}
+
+#[test]
+fn unpublished_reset_refuses_unbound_targets_without_writing() {
+    for domain in DOMAINS {
+        let (mock, slot) = fixture(domain, 17);
+        mock.set_word(domain.words().task(slot).definition(), 0);
+        let before = mock.snapshot();
+        assert_eq!(delete(&mock, domain, slot, DeleteMode::Reset), Err(TaskRecordError::UnboundRecord));
+        assert_eq!(mock.snapshot().0, before.0);
+        assert!(!mock.masked.get());
     }
 }
 
@@ -425,4 +478,137 @@ fn domain_ids_are_the_stock_words() {
     assert_eq!(Domain::B.id(), DomainId::B);
     assert_eq!(Domain::A.id().word(), 1);
     assert_eq!(Domain::B.id().word(), 2);
+}
+
+#[test]
+fn every_slot_can_be_created_then_exhausted_and_reused_without_changing_context_identity() {
+    for domain in DOMAINS {
+        let mock = Mock::new();
+        let words = domain.words();
+        for raw in 1..=120 {
+            let slot = TaskSlot::new(raw).unwrap();
+            let task = words.task(slot);
+            mock.set_word(task.definition(), words.task_definition(slot).0 .0);
+            mock.set_word(task.saved_sp(), 0x8000_0000 + raw * 0x100);
+            mock.set_word(task.resume_pc(), 0x4000_0000 + raw * 4);
+            assert_eq!(create_default(&mock, domain, slot), Ok(slot));
+        }
+        let full = mock.snapshot();
+        for raw in 1..=120 {
+            let slot = TaskSlot::new(raw).unwrap();
+            assert_eq!(create_default(&mock, domain, slot), Err(TaskRecordError::AlreadyExists));
+        }
+        assert_eq!(mock.snapshot().0, full.0);
+        assert!(TaskSlot::new(0).is_none());
+        assert!(TaskSlot::new(121).is_none());
+        assert!(TaskSlot::new(u32::MAX).is_none());
+        for raw in [1, 120] {
+            let slot = TaskSlot::new(raw).unwrap();
+            let task = words.task(slot);
+            delete(&mock, domain, slot, DeleteMode::Reset).unwrap();
+            assert_eq!(create_default(&mock, domain, slot), Ok(slot));
+            assert_eq!(mock.word(task.definition()), words.task_definition(slot).0 .0);
+            assert_eq!(mock.word(task.saved_sp()), 0x8000_0000 + raw * 0x100);
+            assert_eq!(mock.word(task.resume_pc()), 0x4000_0000 + raw * 4);
+            assert_eq!(mock.word(words.task_creation_id(slot).word()), raw);
+        }
+    }
+}
+
+#[test]
+fn request_stack_rounding_and_priority_boundaries_are_visible_in_both_domains() {
+    for domain in DOMAINS {
+        for (bytes, rounded) in [(0, 0), (1, 4), (3, 4), (4, 4), (5, 8), (0xffff_fffc, 0xffff_fffc)] {
+            for priority in [1, 16] {
+                let (mock, slot) = fixture(domain, 120);
+                let request = TaskRequest::new(0, 0, GuestAddress(0), priority, bytes, GuestAddress(0)).unwrap();
+                assert_eq!(create(&mock, domain, slot, request), Ok(slot));
+                let definition = domain.words().task_definition(slot);
+                assert_eq!(mock.word(definition.stack_size()), rounded);
+                assert_eq!(mock.word(definition.priority()), priority - 1);
+            }
+        }
+    }
+}
+
+struct RequestGuard {
+    memory: Mock,
+    request: GuestAddress,
+    readable_words: Vec<u32>,
+}
+
+impl Machine for RequestGuard {
+    fn load_word(&self, at: GuestAddress) -> u32 {
+        if at.0 >= self.request.0 && at.0 < self.request.0 + 24 {
+            assert!(self.readable_words.contains(&(at.0 - self.request.0)), "request read outside admitted memory");
+        }
+        self.memory.load_word(at)
+    }
+
+    fn store_word(&self, at: GuestAddress, value: u32) {
+        assert!(at.0 < self.request.0 || at.0 >= self.request.0 + 24, "request write");
+        self.memory.store_word(at, value);
+    }
+
+    fn load_byte(&self, at: GuestAddress) -> u8 {
+        self.memory.load_byte(at)
+    }
+
+    fn store_byte(&self, at: GuestAddress, value: u8) {
+        self.memory.store_byte(at, value);
+    }
+
+    fn mask_interrupts(&self) -> SavedInterrupts {
+        self.memory.mask_interrupts()
+    }
+
+    fn restore_interrupts(&self, saved: SavedInterrupts) {
+        self.memory.restore_interrupts(saved);
+    }
+
+    fn dmb(&self) {
+        self.memory.dmb();
+    }
+}
+
+#[test]
+fn refused_creation_does_not_dereference_unavailable_request_memory() {
+    for domain in DOMAINS {
+        for error in [TaskRecordError::AlreadyExists, TaskRecordError::TargetLive, TaskRecordError::UnboundRecord] {
+            let (memory, slot) = fixture(domain, 1);
+            let words = domain.words();
+            match error {
+                TaskRecordError::AlreadyExists => memory.set_word(words.task_definition(slot).exists(), 1),
+                TaskRecordError::TargetLive => memory.set_byte(words.task(slot).state(), TaskState::READY.bits()),
+                TaskRecordError::UnboundRecord => memory.set_word(words.task(slot).definition(), 0),
+                _ => unreachable!(),
+            }
+            let before = memory.snapshot();
+            let guard = RequestGuard { memory, request: GuestAddress(0x8000_0000), readable_words: vec![] };
+            assert_eq!(create_masked_at(&guard, domain, slot, guard.request), Err(error));
+            assert_eq!(guard.memory.snapshot().0, before.0);
+        }
+    }
+}
+
+#[test]
+fn invalid_request_fields_refuse_before_reading_unavailable_payload_or_writing_records() {
+    for domain in DOMAINS {
+        for (priority, bytes, readable_words, error) in [
+            (0, 0, vec![12], TaskRecordError::InvalidPriority),
+            (17, 0, vec![12], TaskRecordError::InvalidPriority),
+            (u32::MAX, 0, vec![12], TaskRecordError::InvalidPriority),
+            (1, 0xffff_fffd, vec![12, 16], TaskRecordError::InvalidStackSize),
+            (16, u32::MAX, vec![12, 16], TaskRecordError::InvalidStackSize),
+        ] {
+            let (memory, slot) = fixture(domain, 120);
+            let request = GuestAddress(0x8000_0000);
+            memory.set_word(request.offset(12), priority);
+            memory.set_word(request.offset(16), bytes);
+            let before = memory.snapshot();
+            let guard = RequestGuard { memory, request, readable_words };
+            assert_eq!(create_masked_at(&guard, domain, slot, request), Err(error));
+            assert_eq!(guard.memory.snapshot().0, before.0);
+        }
+    }
 }

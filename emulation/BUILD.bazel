@@ -3922,9 +3922,14 @@ haskell_library(
         "Emulation/SchedulerPairS3b.hs",
         "Emulation/SchedulerPairS3c.hs",
         "Emulation/SchedulerPairSemaphore.hs",
+        "Emulation/SchedulerPairTaskRecords.hs",
     ],
     src_strip_prefix = ".",
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = [
+        "//replacement/rtos_task_records/oracle:__pkg__",
+        "//replacement/rtos_timer:__pkg__",
+    ],
     deps = [
         ":case-sha256",
         ":own-first-pair-lib",

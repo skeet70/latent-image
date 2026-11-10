@@ -1,12 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Emulation.SchedulerPairPlan
-  ( module Emulation.SchedulerPairCatalog, Role (..), roleName, parseRole, Guard (..), Plan (..), base, derivePlan, planValue ) where
+  ( module Emulation.SchedulerPairCatalog, Role (..), roleName, parseRole, Guard (..), ArmingEntries, armingEntries, armingEntry, retainedArmingEntries, Plan (..), base, derivePlan, planValue ) where
 
 import Control.Monad (forM, unless)
 import Data.Aeson (FromJSON (..), Value, object, withObject, (.:), (.=))
 import qualified Data.ByteString as B
 import Data.Bits ((.&.), shiftL)
-import Data.List (nub)
+import Data.List (nub, sortOn)
 import qualified Data.Map.Strict as M
 import Data.Word (Word32)
 import Emulation.SchedulerPairCatalog
@@ -19,7 +19,17 @@ roleName role = ["stock", "owned", "control-restored", "control-silent-notify", 
 parseRole :: String -> Either String Role
 parseRole name = maybe (Left "unknown scheduler role") Right (lookup name [(roleName r,r) | r <- [minBound..maxBound]])
 data Guard = Guard { guardDomain :: Domain, guardStart :: Address, guardEnd :: Address, guardDigest :: String } deriving (Eq, Show)
-data Plan = Plan { planRole :: Role, planDat :: String, planEntries :: [Entry], planGuards :: [Guard], planFills :: [Address], planProbes :: [Probe] } deriving (Eq, Show)
+data ArmingEntries = ArmingEntries !Address !Address deriving (Eq, Show)
+armingEntries :: Address -> Address -> Either String ArmingEntries
+armingEntries primary@(Address primaryPc) secondary@(Address secondaryPc)
+  | primaryPc/=0 && secondaryPc/=0 && primaryPc/=secondaryPc && primaryPc `mod` 4==0 && secondaryPc `mod` 4==0 = Right (ArmingEntries primary secondary)
+  | otherwise = Left "arming entries must be distinct nonzero aligned instruction addresses"
+armingEntry :: ArmingEntries -> Domain -> Address
+armingEntry (ArmingEntries primary _) DomainA = primary
+armingEntry (ArmingEntries _ secondary) DomainB = secondary
+retainedArmingEntries :: ArmingEntries
+retainedArmingEntries = ArmingEntries (Address 0x40020) (Address 0xd0020)
+data Plan = Plan { planRole :: Role, planDat :: String, planEntries :: [Entry], planGuards :: [Guard], planFills :: [Address], planProbes :: [Probe], planArmingEntries :: ArmingEntries } deriving (Eq, Show)
 base :: Domain -> Word32
 base DomainA = 0x40000
 base DomainB = 0xd0000
@@ -72,7 +82,7 @@ derivePlan role dat catalogs loaders = do
     unless (not (any (\entry -> entryDomain entry==domain && entrySemantic entry==ServiceSemantic DeliverTaskException) entries) || length callbackProbes==2)
       (Left "exception callback instruction differs")
     pure (guards,fills,domainProbes)
-  pure (Plan role (sha256Hex (sha256 dat)) entries (concat [guards | (guards,_,_) <- perDomain]) (nub (concat [fills | (_,fills,_) <- perDomain])) (concat [probes' | (_,_,probes') <- perDomain]))
+  pure (Plan role (sha256Hex (sha256 dat)) entries (concat [guards | (guards,_,_) <- perDomain]) (nub (concat [fills | (_,fills,_) <- perDomain])) (concat [probes' | (_,_,probes') <- perDomain]) retainedArmingEntries)
  where
   unAddress (Address address) = address
   stockEntry entry@(Entry domain (DispatchSemantic Select) _) | role==Stock = entry { entryAddress=Address (base domain+0x36ac) }
@@ -97,7 +107,7 @@ familyProbes domain =
 planValue :: Plan -> Value
 planValue plan = object
   [ "schema" .= (3::Int),"role" .= roleName (planRole plan),"dat_sha256" .= planDat plan
-  , "domains" .= [object ["domain" .= domainLabel d,"loader_entry" .= hex (base d+0x20)] | d <- domains]
+  , "domains" .= [object ["domain" .= domainLabel d,"loader_entry" .= hex address] | d <- domains, let Address address=armingEntry (planArmingEntries plan) d]
   , "entries" .= [object ["domain" .= domainLabel d,"entry" .= hex a,"semantic" .= semanticValue semantic] | Entry d semantic (Address a) <- planEntries plan]
   , "guarded" .= [object ["domain" .= domainLabel d,"start" .= hex lo,"end" .= hex hi,"sha256" .= digest] | Guard d (Address lo) (Address hi) digest <- planGuards plan]
   , "fills" .= [hex a | Address a <- planFills plan]
@@ -108,7 +118,11 @@ instance FromJSON Plan where
     schema <- o .: "schema"
     unless (schema==(3::Int)) (fail "plan schema differs")
     role <- o .: "role" >>= either fail pure . parseRole
+    domainEntries <- o .: "domains" >>= mapM (withObject "domain arming" $ \entry -> (,) <$> (entry .: "domain" >>= parseDomain) <*> (Address <$> (entry .: "loader_entry" >>= parseHex)))
+    parsedArmings <- case sortOn fst domainEntries of
+      [(DomainA,primary),(DomainB,secondary)] -> either fail pure (armingEntries primary secondary)
+      _ -> fail "plan requires one arming entry for each domain"
     entries <- o .: "entries" >>= mapM (withObject "entry" $ \e -> Entry <$> (e .: "domain" >>= parseDomain) <*> e .: "semantic" <*> (Address <$> (e .: "entry" >>= parseHex)))
     guards <- o .: "guarded" >>= mapM (withObject "guard" $ \g -> Guard <$> (g .: "domain" >>= parseDomain) <*> (Address <$> (g .: "start" >>= parseHex)) <*> (Address <$> (g .: "end" >>= parseHex)) <*> g .: "sha256")
     probes <- o .: "probes" >>= mapM (withObject "probe" $ \p -> Probe <$> (p .: "domain" >>= parseDomain) <*> (Address <$> (p .: "address" >>= parseHex)) <*> (p .: "kind" >>= named probeKindName) <*> (p .: "register" >>= registerOf))
-    Plan role <$> o .: "dat_sha256" <*> pure entries <*> pure guards <*> (o .: "fills" >>= mapM (fmap Address . parseHex)) <*> pure probes
+    Plan role <$> o .: "dat_sha256" <*> pure entries <*> pure guards <*> (o .: "fills" >>= mapM (fmap Address . parseHex)) <*> pure probes <*> pure parsedArmings

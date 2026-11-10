@@ -259,10 +259,10 @@ pub fn delete<M: Machine>(m: &M, domain: Domain, slot: TaskSlot, mode: DeleteMod
 pub fn delete_masked<M: Machine>(m: &M, domain: Domain, slot: TaskSlot, mode: DeleteMode) -> Result<(), TaskRecordError> {
     let words = domain.words();
     let definition = words.task_definition(slot);
-    if m.load_word(definition.exists()) == 0 {
-        return Err(TaskRecordError::NotCreated);
-    }
     if mode == DeleteMode::Clear {
+        if m.load_word(definition.exists()) == 0 {
+            return Err(TaskRecordError::NotCreated);
+        }
         m.store_word(definition.exists(), 0);
         return Ok(());
     }

@@ -28,6 +28,10 @@ data Service = DisableDispatch | EnableDispatch | ExitTask | RotateReady | Inter
   | InterruptActivateTask | ActivateTask | CancelActivation | WakeTask | InterruptWakeTask | CancelWakeup
   | GetTaskPriority | SleepTask | SuspendTask | ResumeTask | ForceResumeTask | RaiseTaskException | InterruptRaiseTaskException
   | DisableTaskException | EnableTaskException | DeliverTaskException | DeliverTaskExceptionEntry deriving (Eq,Ord,Show,Enum,Bounded)
+data TaskRecordPoint = CreateTaskRecord | DeleteTaskRecord deriving (Eq,Ord,Show,Enum,Bounded)
+taskRecordName :: TaskRecordPoint -> String
+taskRecordName CreateTaskRecord = "create"
+taskRecordName DeleteTaskRecord = "delete"
 data FamilyService = FamilyRelease | HelperRelease | HelperBlock | HelperBlockTimed | HelperCheck
   | FlagCreate | FlagDelete | FlagSet | FlagSetHandler | FlagClear | FlagWait | FlagPoll | FlagTimedWait
   | MailboxCreate | MailboxDelete | MailboxSend | MailboxReceive | MailboxPoll | MailboxTimedReceive deriving (Eq,Ord,Show,Enum,Bounded)
@@ -39,7 +43,7 @@ familyServiceName service = ["family-release","helper-release","helper-block","h
 data SemaphoreService = SemaphoreSignal | SemaphoreInterruptSignal | SemaphoreWait | SemaphorePoll | SemaphoreTimedWait | SemaphoreCreate | SemaphoreDelete deriving (Eq,Ord,Show,Enum,Bounded)
 semaphoreServiceName :: SemaphoreService -> String
 semaphoreServiceName service = ["signal","interrupt-signal","wait","poll","timed-wait","create","delete"] !! fromEnum service
-data Semantic = HelperSemantic R.Helper | DispatchSemantic DispatchPoint | ServiceSemantic Service | FamilySemantic FamilyService | SemaphoreSemantic SemaphoreService | DoorbellSemantic deriving (Eq,Ord,Show)
+data Semantic = HelperSemantic R.Helper | DispatchSemantic DispatchPoint | ServiceSemantic Service | FamilySemantic FamilyService | SemaphoreSemantic SemaphoreService | TaskRecordSemantic TaskRecordPoint | DoorbellSemantic deriving (Eq,Ord,Show)
 serviceName :: Service -> String
 serviceName service = ["disable-dispatch","enable-dispatch","exit-task","rotate-ready","interrupt-rotate-ready","core-rotate-ready","interrupt-core-rotate-ready",
   "interrupt-activate-task","activate-task","cancel-activation","wake-task","interrupt-wake-task","cancel-wakeup",
@@ -56,6 +60,7 @@ semanticValue semantic = object ["kind" .= (kind::String),"name" .= name]
     HelperSemantic helper -> ("helper",R.helperName helper)
     DispatchSemantic point -> ("dispatch",dispatchName point)
     ServiceSemantic service -> ("service",serviceName service)
+    TaskRecordSemantic point -> ("task-record",taskRecordName point)
     FamilySemantic service -> ("family",familyServiceName service)
     SemaphoreSemantic service -> ("semaphore",semaphoreServiceName service)
     DoorbellSemantic -> ("irq","doorbell")
@@ -67,12 +72,13 @@ instance FromJSON Semantic where
       "helper" -> HelperSemantic <$> named R.helperName name
       "dispatch" -> DispatchSemantic <$> named dispatchName name
       "service" -> ServiceSemantic <$> named serviceName name
+      "task-record" -> TaskRecordSemantic <$> named taskRecordName name
       "family" -> FamilySemantic <$> named familyServiceName name
       "semaphore" -> SemaphoreSemantic <$> named semaphoreServiceName name
       "irq" | name=="doorbell" -> pure DoorbellSemantic
       _ -> fail "unknown semantic kind"
 
-data ProbeKind = SelectedRead | DiscardedRead | EnabledRead | GlobalLockRead | Retry | Callback | CallbackReturn | SelectComplete | FirstEntryExit | IrqTailProbe | TimerInsert | TimerRemove | TimerConsume deriving (Eq,Ord,Show,Enum,Bounded)
+data ProbeKind = SelectedRead | DiscardedRead | EnabledRead | GlobalLockRead | Retry | Callback | CallbackReturn | SelectComplete | FirstEntryExit | IrqTailProbe | TimerInsert | TimerRemove | TimerConsume | PublicationBarrier deriving (Eq,Ord,Show,Enum,Bounded)
 newtype Register = Register Int deriving (Eq,Ord,Show)
 data Probe = Probe { probeDomain :: Domain, probeAddress :: Address, probeKind :: ProbeKind, probeRegister :: Register } deriving (Eq,Show)
 probeKindName :: ProbeKind -> String
@@ -86,6 +92,7 @@ probeKindName CallbackReturn = "callback-return"
 probeKindName SelectComplete = "select-complete"
 probeKindName FirstEntryExit = "first-entry-exit"
 probeKindName IrqTailProbe = "irq-tail"
+probeKindName PublicationBarrier = "publication-barrier"
 probeKindName TimerInsert = "timer-insert"
 probeKindName TimerRemove = "timer-remove"
 probeKindName TimerConsume = "timer-consume"

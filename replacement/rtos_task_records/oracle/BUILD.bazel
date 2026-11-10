@@ -1,4 +1,4 @@
-load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -92,5 +92,74 @@ haskell_binary(
         "//host:storage-budget",
         "//replacement/rtos_own_first/stage:own-first-artifact",
         "//replacement/rtos_platform:aggregate",
+    ],
+)
+
+haskell_library(
+    name = "task-records-system-lib",
+    srcs = [
+        "Replacement/RtosTaskRecords/System.hs",
+        "Replacement/RtosTaskRecords/SystemCheck.hs",
+    ],
+    src_strip_prefix = ".",
+    ghcopts = _GHCOPTS,
+    deps = [
+        "//emulation:scheduler-pair-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:update-container",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//replacement/rtos_platform:aggregate",
+        "//replacement/rtos_platform:platform-artifact",
+    ],
+)
+
+haskell_binary(
+    name = "task-records-system-plan",
+    srcs = ["TaskRecordsSystemPlanMain.hs"],
+    main_file = "TaskRecordsSystemPlanMain.hs",
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":task-records-system-lib",
+        "//emulation:scheduler-pair-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:host-support",
+        "//replacement/rtos_platform:aggregate",
+        "//replacement/rtos_platform:platform-artifact",
+    ],
+)
+
+haskell_binary(
+    name = "task-records-system-check",
+    srcs = ["TaskRecordsSystemCheckMain.hs"],
+    main_file = "TaskRecordsSystemCheckMain.hs",
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":task-records-system-lib",
+        "//emulation:scheduler-pair-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+    ],
+)
+
+haskell_test(
+    name = "task-records-system-tests",
+    size = "small",
+    srcs = ["TaskRecordsSystemTests.hs"],
+    main_file = "TaskRecordsSystemTests.hs",
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":task-records-system-lib",
+        "//emulation:scheduler-pair-lib",
+        "//host:base",
+        "//host:containers",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
     ],
 )
