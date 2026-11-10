@@ -4400,3 +4400,18 @@ haskell_test(
     deps = [":value-picker-cases-lib", ":render-cases-lib", "//host:base", "//host:bytestring"],
 )
 
+haskell_library(
+    name = "parallel-cases",
+    srcs = ["Emulation/ParallelCases.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = ["//host:base"],
+)
+
+haskell_test(
+    name = "parallel-cases-tests",
+    srcs = ["ParallelCasesTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
+    deps = [":parallel-cases", "//host:base"],
+)
