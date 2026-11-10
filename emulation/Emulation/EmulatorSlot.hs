@@ -163,18 +163,18 @@ acquire directory execution scope = do
             threadDelay 500_000
             attempt
       firstFree _ [] = pure Nothing
-      firstFree prefix (slot : rest) = do
-        fd <- openFd (directory </> (prefix ++ show slot ++ ".lock")) ReadWrite defaultFileFlags {creat = Just 0o600}
+      firstFree slotPrefix (slot : rest) = do
+        fd <- openFd (directory </> (slotPrefix ++ show slot ++ ".lock")) ReadWrite defaultFileFlags {creat = Just 0o600}
         locked <- try (setLock fd (WriteLock, AbsoluteSeek, 0, 0)) :: IO (Either IOException ())
         case locked of
           Right () -> do
-            claimScopeRecord (directory </> (prefix ++ show slot ++ ".scope")) scope
+            claimScopeRecord (directory </> (slotPrefix ++ show slot ++ ".scope")) scope
             pure (Just (Slot slot))
           Left _ -> do
             owner <- lockOwnerText fd
-            hPutStrLn stderr ("host admission: " ++ prefix ++ show slot ++ " " ++ owner)
+            hPutStrLn stderr ("host admission: " ++ slotPrefix ++ show slot ++ " " ++ owner)
             closeFd fd
-            firstFree prefix rest
+            firstFree slotPrefix rest
   attempt
 
 -- | A private copy of the running executable beneath the slot directory, named
