@@ -1,171 +1,278 @@
--- | Slot admission through the library: two probes limited to one slot each
--- hold both host slots at once, and a third waits, survives replacement of its
--- executable on disk, and re-executes the original program into the slot the
--- first releases.
+-- | Behavioral admission tests against the host user manager, without large allocations.
 module Main (main) where
 
+import Control.Concurrent (threadDelay)
 import Control.Exception (IOException, try)
-import Control.Monad (unless)
+import Control.Monad (forM, unless)
 import Data.IORef (modifyIORef, newIORef, readIORef)
-import Data.List (isInfixOf, sort, stripPrefix)
-import Data.Maybe (fromMaybe)
+import Data.List (isInfixOf, stripPrefix)
+import Data.Maybe (fromMaybe, mapMaybe)
 import System.Directory (copyFile, createDirectoryIfMissing, getTemporaryDirectory, removeFile)
 import System.Environment (getArgs, getEnvironment, lookupEnv)
 import System.Exit (ExitCode (..), exitFailure)
 import System.FilePath ((</>))
-import System.IO (Handle, hClose, hGetLine, hWaitForInput)
+import System.IO (Handle, hClose, hGetLine)
 import System.Posix.Files (setFileMode)
 import System.Posix.Process (getProcessID)
+import System.Posix.Signals (nullSignal, sigKILL, signalProcess)
+import System.Posix.Types (ProcessID)
 import System.Posix.User (getEffectiveUserID)
 import System.Process (CreateProcess (..), ProcessHandle, StdStream (CreatePipe), createProcess, getProcessExitCode, proc, readCreateProcessWithExitCode, waitForProcess)
 import System.Timeout (timeout)
+import Text.Read (readMaybe)
 
 expect :: String -> Bool -> IO Bool
-expect name ok = do
-  putStrLn ((if ok then "ok   " else "FAIL ") ++ name)
-  pure ok
+expect name ok = putStrLn ((if ok then "ok   " else "FAIL ") ++ name) >> pure ok
 
-replacementScript :: String
-replacementScript = unlines
-  [ "#!/bin/sh"
-  , "echo replacement-ran"
-  , "exit 42"
-  ]
+data Probe = Probe Handle Handle ProcessHandle
+data Admission = Admission [String] (Maybe String)
 
 main :: IO ()
 main = do
   arguments <- getArgs
   case arguments of
-    [source] -> run source >>= \passed -> unless passed exitFailure
-    _ -> ioError (userError "usage: emulator-slot-tests PROBE")
+    [source, builder] -> run source builder >>= \ok -> unless ok exitFailure
+    _ -> ioError (userError "usage: emulator-slot-tests PROBE HOST-BUILD")
 
-data Probe = Probe
-  { probeIn :: Handle
-  , probeOut :: Handle
-  , probeProcess :: ProcessHandle
-  }
-
--- | The lines a probe printed up to its in-slot report, and the slot it reports.
-data Admission = Admission [String] (Maybe String)
-
-admittedSlot :: Admission -> Maybe String
-admittedSlot (Admission _ slot) = slot
-
-run :: FilePath -> IO Bool
-run source = do
+run :: FilePath -> FilePath -> IO Bool
+run source builder = do
   temporary <- getTemporaryDirectory
   base <- fromMaybe temporary <$> lookupEnv "TEST_TMPDIR"
   pid <- getProcessID
   let root = base </> ("emulator-slot-tests-" ++ show pid)
       home = root </> "home"
-      probe = root </> "probe"
-  createDirectoryIfMissing True (home </> ".cache" </> "xm1-emulator-slots")
-  environment <- probeEnvironment home
-  first <- spawnProbe source environment
-  firstAdmission <- admission first
-  second <- spawnProbe source environment
-  secondAdmission <- admission second
-  bothOk <- expect "two probes limited to one slot each hold both host slots at once"
-    (sort (map admittedSlot [firstAdmission, secondAdmission]) == [Just "1", Just "2"])
-  let Admission firstLines _ = firstAdmission
-      Admission secondLines _ = secondAdmission
-  memoryOk <- expect "both admitted scopes enforce the 4 GiB verification budget"
-    (all (elem "probe-memory-max 4294967296") [firstLines, secondLines])
-  copyFile source probe
-  setFileMode probe 0o700
-  third <- spawnProbe probe environment
-  beginning <- try (hGetLine (probeOut third)) :: IO (Either IOException String)
-  startedOk <- expect "a third probe starts while both slots are held" (beginning == Right "probe-starting")
-  removeFile probe
-  writeFile probe replacementScript
-  setFileMode probe 0o700
-  pending <- try (hWaitForInput (probeOut third) 3000) :: IO (Either IOException Bool)
-  finished <- getProcessExitCode (probeProcess third)
-  waitedOk <- expect "the third probe still waits after its executable is replaced"
-    (pending == Right False && finished == Nothing)
-  release first
-  thirdAdmission <- admission third
-  takenOk <- expect "the third probe takes the slot the first releases"
-    (admittedSlot thirdAdmission == admittedSlot firstAdmission)
-  release second
-  release third
-  codes <- mapM (waitForProcess . probeProcess) [first, second, third]
-  codeOk <- expect "every probe exits successfully" (all (== ExitSuccess) codes)
-  let Admission thirdLines _ = thirdAdmission
-  originalOk <- expect "the re-exec runs the original program, not the replacement"
-    (not (any ("replacement-ran" `isInfixOf`) thirdLines))
-  let sessionless = root </> "probe-sessionless"
-  copyFile source sessionless
-  setFileMode sessionless 0o700
-  alone <- spawnProbe sessionless (sessionlessEnvironment root environment)
-  aloneAdmission <- admission alone
-  release alone
-  aloneCode <- waitForProcess (probeProcess alone)
-  sessionlessOk <- expect "without a user session the probe still runs in its slot"
-    (aloneCode == ExitSuccess && admittedSlot aloneAdmission /= Nothing)
-  let lowStorageEnvironment = ("XM1_STORAGE_MIN_FREE", "999999999999999999999T")
-        : filter ((/= "XM1_STORAGE_MIN_FREE") . fst) environment
-  (lowStorageCode, lowStorageOutput, _) <- readCreateProcessWithExitCode
-    (proc source []) {env = Just lowStorageEnvironment} ""
-  storageOk <- expect "insufficient disk reserve prevents an emulator-slot admission"
-    (lowStorageCode /= ExitSuccess && not (any (isInfixOf "probe-in-slot ") (lines lowStorageOutput)))
-  let overBudgetEnvironment = ("XM1_EMULATOR_MEMORY_MAX", "8G")
-        : filter ((/= "XM1_EMULATOR_MEMORY_MAX") . fst) environment
-  (overBudgetCode, overBudgetOutput, _) <- readCreateProcessWithExitCode
-    (proc source []) {env = Just overBudgetEnvironment} ""
-  capOk <- expect "a scope above the 4 GiB class budget is refused"
-    (overBudgetCode /= ExitSuccess && not (any (isInfixOf "probe-in-slot ") (lines overBudgetOutput)))
-  let outcomes = [bothOk, memoryOk, startedOk, waitedOk, takenOk, codeOk, originalOk, sessionlessOk, storageOk, capOk]
-      shown (Admission seen slot) = show seen ++ " -> " ++ show slot
-  unless (and outcomes) $ putStrLn ("probe admissions: " ++ unwords (map shown [firstAdmission, secondAdmission, thirdAdmission, aloneAdmission]))
-  pure (and outcomes)
+      replacement = root </> "probe"
+      bin = root </> "bin"
+  createDirectoryIfMissing True home
+  createDirectoryIfMissing True bin
+  writeFile (bin </> "bazel") "#!/bin/sh\necho 'probe-in-slot build'\ncat >/dev/null\nexit 0\n"
+  setFileMode (bin </> "bazel") 0o700
+  inherited <- probeEnvironment home
+  let environment = change "PATH" (bin ++ ":" ++ fromMaybe "" (lookup "PATH" inherited)) inherited
+      native = change "XM1_PROBE_CLASS" "native" environment
+      spawn env = start (proc source []) {env = Just env}
+      build = start (proc builder ["build", "//fake:target"]) {env = Just environment}
+  full <- forM [1 :: Int .. 4] $ \_ -> do
+    job <- spawn environment
+    seen <- admission job
+    pure (job, seen)
+  fullOk <- expect "four full-system scopes overlap under their whole-tree 4 GiB caps"
+    (all (\(_, Admission seen slot) -> slot /= Nothing && "probe-memory-max 4294967296" `elem` seen) full)
+  copyFile source replacement
+  setFileMode replacement 0o700
+  fifth <- start (proc replacement []) {env = Just environment}
+  fifthWaiting <- waiting fifth
+  removeFile replacement
+  writeFile replacement "#!/bin/sh\necho replacement-ran\nexit 42\n"
+  setFileMode replacement 0o700
+  firstNative <- spawn native
+  firstSeen <- admission firstNative
+  secondNative <- spawn (change "XM1_NATIVE_MEMORY_MAX" "1G" native)
+  secondSeen <- admission secondNative
+  overlap <- expect "two native suites overlap four full-system scopes while a full-system waiter waits"
+    (admitted firstSeen && admitted secondSeen && fifthWaiting)
+  thirdNative <- spawn native
+  overBudget <- waiting thirdNative
+  smallDuringWait <- spawn (change "XM1_NATIVE_MEMORY_MAX" "1G" native)
+  smallDuringWaitSeen <- admission smallDuringWait
+  release firstNative
+  thirdSeen <- admission thirdNative
+  atomicOk <- expect "over-budget admission waits without retaining partial tokens"
+    (overBudget && admitted smallDuringWaitSeen && admitted thirdSeen)
+  release (fst (head full))
+  fifthSeen@(Admission fifthLines _) <- admission fifth
+  pinnedOk <- expect "a saturated full-system waiter runs its pinned executable after replacement"
+    (admitted fifthSeen && not (any (isInfixOf "replacement-ran") fifthLines))
+  mapM_ release (map fst (drop 1 full) ++ [fifth, secondNative, thirdNative, smallDuringWait])
+  codes <- mapM finish (map fst full ++ [fifth, firstNative, secondNative, thirdNative, smallDuringWait])
+  exitsOk <- expect "all concurrent probes preserve successful exit" (all (== Just ExitSuccess) codes)
 
--- | Reads a probe's stdout through its in-slot report, to end of file, or for
--- at most 10 seconds.
+  buildA <- build
+  buildSeenA <- admission buildA
+  buildB <- build
+  buildSeenB <- admission buildB
+  fullWithBuild <- spawn environment
+  buildFullSeen <- admission fullWithBuild
+  nativeWithBuild <- spawn native
+  buildNativeSeen <- admission nativeWithBuild
+  nativeWithBuild2 <- spawn native
+  buildNativeSeen2 <- admission nativeWithBuild2
+  buildOverlap <- expect "two builds, a full-system scope and two native suites overlap at 20 GiB"
+    (all admitted [buildSeenA, buildSeenB, buildFullSeen, buildNativeSeen, buildNativeSeen2])
+  buildWaiter <- spawn native
+  blockedByBuild <- waiting buildWaiter
+  release buildA
+  resumedBuildWaiter <- admission buildWaiter
+  buildBudget <- expect "build memory participates in the same weighted budget"
+    (blockedByBuild && admitted resumedBuildWaiter)
+  mapM_ release [buildB, fullWithBuild, nativeWithBuild, nativeWithBuild2, buildWaiter]
+  buildCodes <- mapM finish [buildA, buildB, fullWithBuild, nativeWithBuild, nativeWithBuild2, buildWaiter]
+  buildExit <- expect "admitted build and verification exits propagate" (all (== Just ExitSuccess) buildCodes)
+
+  small <- spawn (change "XM1_NATIVE_MEMORY_MAX" "256M" native)
+  Admission smallLines smallSlot <- admission small
+  release small
+  smallCode <- finish small
+  smallOk <- expect "explicit small-native caps constrain the whole scope"
+    (smallSlot /= Nothing && "probe-memory-max 268435456" `elem` smallLines && smallCode == Just ExitSuccess)
+  nativeClass <- forM [1 :: Int .. 8] $ \_ -> do
+    job <- spawn (change "XM1_NATIVE_MEMORY_MAX" "256M" native)
+    seen <- admission job
+    pure (job, seen)
+  ninthNative <- spawn (change "XM1_NATIVE_MEMORY_MAX" "256M" native)
+  ninthWaiting <- waiting ninthNative
+  release (fst (head nativeClass))
+  ninthSeen <- admission ninthNative
+  nativeLimit <- expect "eight small native scopes overlap and a ninth waits for its class"
+    (all (admitted . snd) nativeClass && ninthWaiting && admitted ninthSeen)
+  mapM_ release (map fst (drop 1 nativeClass) ++ [ninthNative])
+  mapM_ finish (map fst nativeClass ++ [ninthNative])
+  nested <- spawn (change "XM1_PROBE_NESTED" "1" native)
+  Admission nestedLines nestedSlot <- admission nested
+  release nested
+  _ <- finish nested
+  nestedOk <- expect "a child cannot reuse its parent's admission marker"
+    (nestedSlot /= Nothing && "probe-nested-exit ExitFailure 1" `elem` nestedLines)
+  (nestedBuildCode, _, _) <- readCreateProcessWithExitCode
+    (proc builder ["build"]) {env = Just (change "XM1_EMULATOR_SLOT" "1" environment)} ""
+  nestedBuildOk <- expect "build admission refuses to wait inside verification" (nestedBuildCode == ExitFailure 2)
+  failed <- spawn (change "XM1_PROBE_EXIT" "37" native)
+  failedSeen <- admission failed
+  release failed
+  failedCode <- finish failed
+  exitOk <- expect "verification propagates the command's exit status" (admitted failedSeen && failedCode == Just (ExitFailure 37))
+
+  crashed <- spawn environment
+  crashSeen <- admission crashed
+  let owner = observedPid "probe-pid " crashSeen
+  mapM_ (signalProcess sigKILL) owner
+  _ <- finish crashed
+  afterCrash <- spawn environment
+  crashRecovery <- admission afterCrash
+  release afterCrash
+  _ <- finish afterCrash
+  crashOk <- expect "a killed lock owner releases admission for the next scope" (owner /= Nothing && admitted crashRecovery)
+  survivorJob <- spawn (change "XM1_PROBE_SURVIVOR" "1" environment)
+  survivorSeen <- admission survivorJob
+  release survivorJob
+  _ <- finish survivorJob
+  afterSurvivor <- spawn native
+  recoveredSurvivor <- admission afterSurvivor
+  gone <- maybe (pure False) (waitGone 50) (observedPid "probe-survivor " survivorSeen)
+  release afterSurvivor
+  _ <- finish afterSurvivor
+  survivorOk <- expect "memory reuse stops an old scope's surviving descendants" (admitted recoveredSurvivor && gone)
+
+  let legacyUnit = "xm1-test-legacy-" ++ show pid ++ ".scope"
+      legacyEnv = change "XM1_PROBE_LEGACY" "1" environment
+  legacy <- start (proc "systemd-run" ["--user", "--scope", "--quiet", "--collect", "--unit=" ++ legacyUnit, "--property=MemoryMax=4G", "--property=MemorySwapMax=0", "--", source]) {env = Just legacyEnv}
+  legacySeen <- admission legacy
+  (_, _, Just ready, reservation) <- createProcess (proc builder ["--reserve-legacy", legacyUnit]) {env = Just environment, std_err = CreatePipe}
+  reserved <- timeout 10_000_000 (hGetLine ready)
+  legacyBuildA <- build
+  legacyBuildSeenA <- admission legacyBuildA
+  legacyBuildB <- build
+  legacyBuildSeenB <- admission legacyBuildB
+  legacyNativeA <- spawn native
+  legacyNativeSeenA <- admission legacyNativeA
+  legacyNativeB <- spawn native
+  legacyNativeSeenB <- admission legacyNativeB
+  legacyWaiter <- spawn native
+  legacyBlocked <- waiting legacyWaiter
+  release legacy
+  _ <- finish legacy
+  reservationCode <- timeout 10_000_000 (waitForProcess reservation)
+  legacyResumed <- admission legacyWaiter
+  legacyOk <- expect "a validated temporary 4 GiB legacy reservation consumes budget until its scope ends"
+    (admitted legacySeen && maybe False (isInfixOf "legacy reservation ready:") reserved && all admitted [legacyBuildSeenA, legacyBuildSeenB, legacyNativeSeenA, legacyNativeSeenB] && legacyBlocked && reservationCode == Just ExitSuccess && admitted legacyResumed)
+  mapM_ release [legacyBuildA, legacyBuildB, legacyNativeA, legacyNativeB, legacyWaiter]
+  mapM_ finish [legacyBuildA, legacyBuildB, legacyNativeA, legacyNativeB, legacyWaiter]
+  (invalidLegacy, _, _) <- readCreateProcessWithExitCode (proc builder ["--reserve-legacy", "missing.scope"]) {env = Just environment} ""
+  invalidLegacyOk <- expect "legacy reservation refuses a missing or unvalidated scope" (invalidLegacy /= ExitSuccess)
+
+  (lowStorageCode, lowStorageOutput, _) <- readCreateProcessWithExitCode
+    (proc source []) {env = Just (change "XM1_STORAGE_MIN_FREE" "999999999999999999999T" environment)} ""
+  storageOk <- expect "insufficient disk reserve prevents admission"
+    (lowStorageCode /= ExitSuccess && not ("probe-in-slot " `isInfixOf` lowStorageOutput))
+  (capCode, capOutput, _) <- readCreateProcessWithExitCode
+    (proc source []) {env = Just (change "XM1_NATIVE_MEMORY_MAX" "4G" native)} ""
+  capOk <- expect "native scopes above their class cap are refused"
+    (capCode /= ExitSuccess && not ("probe-in-slot " `isInfixOf` capOutput))
+  (sessionCode, _, _) <- readCreateProcessWithExitCode
+    (proc source []) {env = Just (change "DBUS_SESSION_BUS_ADDRESS" "unix:path=/nonexistent-xm1-test-bus" environment)} ""
+  sessionOk <- expect "a missing user manager cannot silently bypass memory enforcement" (sessionCode /= ExitSuccess)
+  let failedRunner = root </> "failed-runner"
+  createDirectoryIfMissing True failedRunner
+  writeFile (failedRunner </> "systemd-run") "#!/bin/sh\nexit 43\n"
+  setFileMode (failedRunner </> "systemd-run") 0o700
+  (startupCode, _, _) <- readCreateProcessWithExitCode
+    (proc source []) {env = Just (change "PATH" (failedRunner ++ ":" ++ fromMaybe "" (lookup "PATH" environment)) environment)} ""
+  afterStartup <- spawn native
+  afterStartupSeen <- admission afterStartup
+  release afterStartup
+  _ <- finish afterStartup
+  startupOk <- expect "failed scope startup propagates exit without leaking resource locks"
+    (startupCode == ExitFailure 43 && admitted afterStartupSeen)
+  pure (and [fullOk, overlap, atomicOk, pinnedOk, exitsOk, buildOverlap, buildBudget, buildExit, smallOk, nativeLimit, nestedOk, nestedBuildOk, exitOk, crashOk, survivorOk, legacyOk, invalidLegacyOk, storageOk, capOk, sessionOk, startupOk])
+
+change :: String -> String -> [(String, String)] -> [(String, String)]
+change key value environment = (key, value) : filter ((/= key) . fst) environment
+
+admitted :: Admission -> Bool
+admitted (Admission _ slot) = slot /= Nothing
+
+observedPid :: String -> Admission -> Maybe ProcessID
+observedPid prefix (Admission seen _) = case mapMaybe (\line -> stripPrefix prefix line >>= readMaybe) seen of
+  pid : _ -> Just pid
+  [] -> Nothing
+
+waitGone :: Int -> ProcessID -> IO Bool
+waitGone attempts pid = do
+  status <- try (signalProcess nullSignal pid) :: IO (Either IOException ())
+  case status of
+    Left _ -> pure True
+    Right () | attempts > 0 -> threadDelay 100_000 >> waitGone (attempts - 1) pid
+    _ -> pure False
+
 admission :: Probe -> IO Admission
-admission probe = do
+admission (Probe _ out _) = do
   seen <- newIORef []
-  slot <- timeout 10_000_000 (go seen)
+  slot <- timeout 15_000_000 (go seen)
   Admission <$> (reverse <$> readIORef seen) <*> pure (fromMaybe Nothing slot)
   where
     go seen = do
-      line <- try (hGetLine (probeOut probe)) :: IO (Either IOException String)
+      line <- try (hGetLine out) :: IO (Either IOException String)
       case line of
         Left _ -> pure Nothing
         Right text -> do
           modifyIORef seen (text :)
           maybe (go seen) (pure . Just) (stripPrefix "probe-in-slot " text)
 
--- | Closes the probe's stdin, which ends its in-slot run.
+waiting :: Probe -> IO Bool
+waiting job@(Probe _ _ process) = do
+  result <- timeout 1_500_000 (admission job)
+  status <- getProcessExitCode process
+  pure (case result of Nothing -> status == Nothing; Just _ -> False)
+
 release :: Probe -> IO ()
-release = hClose . probeIn
+release (Probe input _ _) = hClose input
 
--- | The probe environment with the user bus pointed at a directory that does
--- not exist, so @systemctl --user@ cannot reach a manager.
-sessionlessEnvironment :: FilePath -> [(String, String)] -> [(String, String)]
-sessionlessEnvironment root environment =
-  ("XDG_RUNTIME_DIR", missing) : ("DBUS_SESSION_BUS_ADDRESS", "unix:path=" ++ missing ++ "/bus")
-    : filter ((`notElem` ["XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"]) . fst) environment
-  where
-    missing = root </> "no-session"
+finish :: Probe -> IO (Maybe ExitCode)
+finish (Probe _ _ process) = timeout 15_000_000 (waitForProcess process)
 
-spawnProbe :: FilePath -> [(String, String)] -> IO Probe
-spawnProbe probe environment = do
-  started <- createProcess (proc probe []) {std_in = CreatePipe, std_out = CreatePipe, env = Just environment}
+start :: CreateProcess -> IO Probe
+start command = do
+  started <- createProcess command {std_in = CreatePipe, std_out = CreatePipe}
   case started of
     (Just input, Just out, _, process) -> pure (Probe input out process)
-    _ -> ioError (userError "the probe's stdin or stdout did not open")
+    _ -> ioError (userError "probe pipes did not open")
 
--- | A private HOME so the probe's slot locks are its own, one slot per
--- invocation, and no inherited slot claim. The user bus settings keep
--- systemd-run reachable when the test runner has pruned the environment.
 probeEnvironment :: FilePath -> IO [(String, String)]
 probeEnvironment home = do
   inherited <- getEnvironment
   uid <- getEffectiveUserID
   let runtime = "/run/user/" ++ show uid
-      keep name value environment =
-        if any ((== name) . fst) environment then environment else (name, value) : environment
-  pure (("HOME", home) : ("XM1_EMULATOR_SLOTS", "1") : ("XM1_STORAGE_MIN_FREE", "1")
-    : filter ((`notElem` ["HOME", "XM1_EMULATOR_SLOTS", "XM1_EMULATOR_SLOT", "XM1_EMULATOR_MEMORY_MAX", "XM1_STORAGE_MIN_FREE"]) . fst)
-      (keep "XDG_RUNTIME_DIR" runtime (keep "DBUS_SESSION_BUS_ADDRESS" ("unix:path=" ++ runtime ++ "/bus") inherited)))
+      keep key value environment = if any ((== key) . fst) environment then environment else (key, value) : environment
+      dropped = ["HOME", "XM1_EMULATOR_SLOT", "XM1_EMULATOR_MEMORY_MAX", "XM1_NATIVE_MEMORY_MAX", "XM1_NATIVE_SLOTS", "XM1_HOST_BUILD", "XM1_ADMISSION_SCOPE", "XM1_ADMISSION_OWNER", "XM1_STORAGE_MIN_FREE", "XM1_PROBE_CLASS", "XM1_PROBE_LEGACY", "XM1_PROBE_NESTED", "XM1_PROBE_SURVIVOR", "XM1_PROBE_EXIT"]
+  pure (("HOME", home) : ("XM1_STORAGE_MIN_FREE", "1") : filter ((`notElem` dropped) . fst)
+    (keep "XDG_RUNTIME_DIR" runtime (keep "DBUS_SESSION_BUS_ADDRESS" ("unix:path=" ++ runtime ++ "/bus") inherited)))

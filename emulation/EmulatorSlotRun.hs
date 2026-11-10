@@ -4,7 +4,7 @@
 module Main where
 
 import Control.Exception (IOException, catch, displayException)
-import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
+import Emulation.EmulatorSlot (ExecutionClass (..), reexecInSlot, slotPolicyForClass)
 import System.Directory (setCurrentDirectory)
 import System.Environment (getArgs, lookupEnv)
 import System.Exit (exitFailure)
@@ -16,10 +16,13 @@ main = run `catch` \failure -> hPutStrLn stderr (displayException (failure :: IO
   where
     run = do
       arguments <- getArgs
-      case arguments of
-        [] -> hPutStrLn stderr "usage: emulator-slot COMMAND [ARGUMENT...]" >> exitFailure
+      let (execution, commandArguments) = case arguments of
+            "--native" : rest -> (NativeVerification, rest)
+            _ -> (FullSystem, arguments)
+      case commandArguments of
+        [] -> hPutStrLn stderr "usage: emulator-slot [--native] COMMAND [ARGUMENT...]" >> exitFailure
         command : rest -> do
           lookupEnv "BUILD_WORKING_DIRECTORY" >>= mapM_ setCurrentDirectory
-          policy <- slotPolicyFromEnvironment
+          policy <- slotPolicyForClass execution
           reexecInSlot policy arguments
           executeFile command True rest Nothing

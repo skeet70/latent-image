@@ -1,13 +1,10 @@
--- | Admission for full-system emulator runs, the 'Emulator' class of
--- "Emulation.HostAdmission". A run holds one of the host's 'hostSlots' slot
--- locks under @~/.cache/xm1-emulator-slots/@, whichever is free, shared by every
--- checkout and agent on the host, and runs inside a systemd user scope with a
--- memory cap and no swap when the host has a systemd user session.
--- @XM1_EMULATOR_SLOTS@ is how many slots a caller such as verify-candidate may hold at once.
+-- | Whole-process-tree admission for native suites and full-system emulators.
 module Emulation.EmulatorSlot
   ( SlotCount (..)
   , MemoryMax
   , SlotPolicy (..)
+  , ExecutionClass (..)
+  , slotPolicyForClass
   , slotPolicyFromEnvironment
   , reexecInSlot
   , insideSlot
@@ -19,24 +16,29 @@ import Control.Monad (forM_, unless, when)
 import qualified Data.ByteString as B
 import Data.Char (isDigit)
 import Data.List (isSuffixOf, stripPrefix)
-import Emulation.HostAdmission (MemoryMax (..), ResourceClass (Emulator), classConcurrency, classMemoryMax, memoryMaxBytes, parseMemoryMax, userScopeAvailable)
+import qualified Emulation.HostAdmission as Host
+import Emulation.HostAdmission (MemoryMax (..), ResourceClass (Emulator), ScopeName, claimScopeRecord, classConcurrency, classMemoryMax, memoryMaxBytes, parseMemoryMax, parseScopeName, reserveMemory, userScopeAvailable)
 import FujiAF.StorageBudget (checkStorageBudget)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, getCurrentDirectory, getHomeDirectory, listDirectory, removeFile)
-import System.Environment (getExecutablePath, lookupEnv, setEnv)
+import System.Environment (getExecutablePath, lookupEnv, setEnv, unsetEnv)
 import System.FilePath ((</>))
 import System.IO (Handle, IOMode (ReadMode, WriteMode), SeekMode (AbsoluteSeek), hFlush, hPutStrLn, stderr, withBinaryFile)
 import System.IO.Error (catchIOError, isDoesNotExistError)
 import System.Posix.Files (createSymbolicLink, setFileMode)
-import System.Posix.IO (LockRequest (WriteLock), OpenFileFlags (creat), OpenMode (ReadWrite), closeFd, defaultFileFlags, openFd, setLock)
+import System.Posix.IO (LockRequest (WriteLock), OpenFileFlags (creat), OpenMode (ReadWrite), closeFd, defaultFileFlags, getLock, openFd, setLock)
 import System.Posix.Process (executeFile, getProcessID)
 import System.Posix.Types (ProcessID)
 import Text.Read (readMaybe)
 
 newtype SlotCount = SlotCount Int
 
+data ExecutionClass = NativeVerification | FullSystem
+  deriving (Eq, Read, Show)
+
 data SlotPolicy = SlotPolicy
   { slotCount :: SlotCount
   , memoryMax :: MemoryMax
+  , executionClass :: ExecutionClass
   }
 
 newtype Slot = Slot Int
@@ -46,64 +48,94 @@ slotVariable = "XM1_EMULATOR_SLOT"
 slotsVariable = "XM1_EMULATOR_SLOTS"
 memoryVariable = "XM1_EMULATOR_MEMORY_MAX"
 
--- | The host budget: slot locks 1 and 2.
-hostSlots :: Int
-hostSlots = classConcurrency Emulator
+
+resourceClass :: ExecutionClass -> Host.ResourceClass
+resourceClass FullSystem = Emulator
+resourceClass NativeVerification = Host.NativeVerification
 
 -- | Whether this process or an ancestor holds a slot.
 insideSlot :: IO Bool
 insideSlot = maybe False (const True) <$> lookupEnv slotVariable
 
--- | All host slots at 4G by default; @XM1_EMULATOR_SLOTS@ (1..'hostSlots') and
--- @XM1_EMULATOR_MEMORY_MAX@ (at most the class cap) override them.
+-- | Memory caps cover the suite and all of its children.
 slotPolicyFromEnvironment :: IO SlotPolicy
-slotPolicyFromEnvironment = do
-  slots <- lookupEnv slotsVariable >>= maybe (pure (SlotCount hostSlots)) parseSlots
-  memory <- lookupEnv memoryVariable >>= maybe (pure (classMemoryMax Emulator)) parseMemory
-  pure (SlotPolicy slots memory)
-  where
-    parseSlots text = case readMaybe text of
-      Just count | count >= 1 && count <= hostSlots -> pure (SlotCount count)
-      _ -> ioError (userError (slotsVariable ++ " must be an integer 1.." ++ show hostSlots ++ ", the host's slots"))
-    MemoryMax cap = classMemoryMax Emulator
-    parseMemory text = case parseMemoryMax text of
-      Just memory | memoryMaxBytes memory <= memoryMaxBytes (MemoryMax cap) -> pure memory
-      _ -> ioError (userError (memoryVariable ++ " must be a positive byte count with an optional K, M, G or T suffix, at most " ++ cap))
+slotPolicyFromEnvironment = slotPolicyForClass FullSystem
 
--- | Returns inside a slot. Outside one, waits for a free slot, then replaces
--- the process with itself, under @systemd-run --user --scope@ when a user
--- session answers. The slot is a POSIX record lock, which execve preserves, so
--- it is held until the run exits.
---
--- The re-exec runs a pinned copy of the running executable, never its original
--- path: a concurrent build relinks that path while the wait runs.
+slotPolicyForClass :: ExecutionClass -> IO SlotPolicy
+slotPolicyForClass execution = do
+  let resource = resourceClass execution
+      maximumSlots = classConcurrency resource
+      slotsName = if execution == FullSystem then slotsVariable else "XM1_NATIVE_SLOTS"
+      memoryName = if execution == FullSystem then memoryVariable else "XM1_NATIVE_MEMORY_MAX"
+      MemoryMax cap = classMemoryMax resource
+  slotsText <- lookupEnv slotsName
+  slots <- case slotsText >>= readMaybe of
+    Just count | count >= 1 && count <= maximumSlots -> pure (SlotCount count)
+    Nothing | slotsText == Nothing -> pure (SlotCount maximumSlots)
+    _ -> ioError (userError (slotsName ++ " must be an integer 1.." ++ show maximumSlots))
+  memoryText <- lookupEnv memoryName
+  memory <- case memoryText of
+    Nothing -> pure (classMemoryMax resource)
+    Just text -> case parseMemoryMax text of
+      Just value | memoryMaxBytes value <= memoryMaxBytes (MemoryMax cap) -> pure value
+      _ -> ioError (userError (memoryName ++ " must be positive and at most " ++ cap))
+  pure (SlotPolicy slots memory execution)
+
+-- | Re-execs a pinned inode into a capped scope before taking resource locks.
 reexecInSlot :: SlotPolicy -> [String] -> IO ()
 reexecInSlot policy arguments = do
+  let resource = resourceClass (executionClass policy)
+      SlotCount requestedSlots = slotCount policy
+  unless (requestedSlots >= 1 && requestedSlots <= classConcurrency resource
+      && memoryMaxBytes (memoryMax policy) <= memoryMaxBytes (classMemoryMax resource)) $
+    ioError (userError "invalid verification class policy")
   storage <- lookupEnv "XM1_STORAGE_PATH" >>= maybe defaultStoragePath pure
   checkStorageBudget storage
   inside <- lookupEnv slotVariable
+  build <- lookupEnv "XM1_HOST_BUILD"
+  when (build /= Nothing) (ioError (userError "refusing slot admission inside a host build"))
   case inside of
-    Just _ -> pure ()
+    Just _ -> do
+      owner <- lookupEnv "XM1_ADMISSION_OWNER"
+      admittedClass <- lookupEnv "XM1_ADMISSION_CLASS"
+      unless ((admittedClass >>= readMaybe) == Just (executionClass policy)) $
+        ioError (userError "verification class differs from the active admission")
+      pid <- getProcessID
+      unless (owner == Just (show pid)) $
+        ioError (userError "refusing nested verification admission")
     Nothing -> do
       directory <- slotDirectory
-      Slot slot <- acquire directory
-      checkStorageBudget storage
-      setEnv slotVariable (show slot)
-      executable <- pinExecutable directory
-      scoped <- userScopeAvailable
-      let MemoryMax memory = memoryMax policy
-      if scoped
-        then executeFile "systemd-run" True
-          ([ "--user", "--scope", "--quiet", "--collect"
-           , "--property=MemoryMax=" ++ memory
-           , "--property=MemorySwapMax=0"
-           , "--"
-           , executable
-           ] ++ arguments) Nothing
-        else do
-          hPutStrLn stderr ("No systemd user session: emulator slot " ++ show slot ++ " runs without the " ++ memory ++ " memory cap")
-          hFlush stderr
+      pending <- lookupEnv "XM1_ADMISSION_SCOPE"
+      case pending of
+        Just unit -> do
+          groups <- readFile "/proc/self/cgroup"
+          unless (any (\line -> reverse (take (length unit) (reverse line)) == unit) (lines groups)) $
+            ioError (userError "admission scope does not contain this process")
+          scope <- maybe (ioError (userError "invalid admission scope")) pure (parseScopeName unit)
+          Slot slot <- acquire directory (executionClass policy) scope
+          _ <- reserveMemory (memoryMax policy) scope
+          checkStorageBudget storage
+          unsetEnv "XM1_ADMISSION_SCOPE"
+          setEnv slotVariable (show slot)
+          pid <- getProcessID
+          setEnv "XM1_ADMISSION_OWNER" (show pid)
+          setEnv "XM1_ADMISSION_CLASS" (show (executionClass policy))
+          executable <- pinExecutable directory
           executeFile executable False arguments Nothing
+        Nothing -> do
+          scoped <- userScopeAvailable
+          unless scoped (ioError (userError "verification admission requires a systemd user scope"))
+          executable <- pinExecutable directory
+          pid <- getProcessID
+          let unit = "xm1-verification-" ++ show pid ++ ".scope"
+              MemoryMax memory = memoryMax policy
+          setEnv "XM1_ADMISSION_SCOPE" unit
+          executeFile "systemd-run" True
+            ([ "--user", "--scope", "--quiet", "--collect", "--unit=" ++ unit
+             , "--property=MemoryMax=" ++ memory
+             , "--property=MemorySwapMax=0", "--property=OOMPolicy=stop"
+             , "--", executable
+             ] ++ arguments) Nothing
 
 defaultStoragePath :: IO FilePath
 defaultStoragePath = do
@@ -117,28 +149,33 @@ slotDirectory = do
   createDirectoryIfMissing True directory
   pure directory
 
-acquire :: FilePath -> IO Slot
-acquire directory = do
-  let attempt announced = do
-        free <- firstFree directory [1 .. hostSlots]
+acquire :: FilePath -> ExecutionClass -> ScopeName -> IO Slot
+acquire directory execution scope = do
+  let maximumSlots = classConcurrency (resourceClass execution)
+      prefix = if execution == FullSystem then "slot-" else "native-"
+      attempt = do
+        free <- firstFree prefix [1 .. maximumSlots]
         case free of
           Just slot -> pure slot
           Nothing -> do
-            unless announced $ do
-              hPutStrLn stderr ("Waiting for one of the host's " ++ show hostSlots ++ " emulator slots in " ++ directory)
-              hFlush stderr
-            threadDelay 2000000
-            attempt True
-  attempt False
-
-firstFree :: FilePath -> [Int] -> IO (Maybe Slot)
-firstFree _ [] = pure Nothing
-firstFree directory (slot : rest) = do
-  fd <- openFd (directory </> ("slot-" ++ show slot ++ ".lock")) ReadWrite defaultFileFlags {creat = Just 0o600}
-  locked <- try (setLock fd (WriteLock, AbsoluteSeek, 0, 0)) :: IO (Either IOException ())
-  case locked of
-    Right () -> pure (Just (Slot slot))
-    Left _ -> closeFd fd >> firstFree directory rest
+            hPutStrLn stderr ("host admission: waiting for " ++ show execution ++ " class slot")
+            hFlush stderr
+            threadDelay 500_000
+            attempt
+      firstFree _ [] = pure Nothing
+      firstFree prefix (slot : rest) = do
+        fd <- openFd (directory </> (prefix ++ show slot ++ ".lock")) ReadWrite defaultFileFlags {creat = Just 0o600}
+        locked <- try (setLock fd (WriteLock, AbsoluteSeek, 0, 0)) :: IO (Either IOException ())
+        case locked of
+          Right () -> do
+            claimScopeRecord (directory </> (prefix ++ show slot ++ ".scope")) scope
+            pure (Just (Slot slot))
+          Left _ -> do
+            owner <- getLock fd (WriteLock, AbsoluteSeek, 0, 0)
+            hPutStrLn stderr ("host admission: " ++ prefix ++ show slot ++ " owner=" ++ show owner)
+            closeFd fd
+            firstFree prefix rest
+  attempt
 
 -- | A private copy of the running executable beneath the slot directory, named
 -- @pin-<pid>@ for the PID execve preserves. The bytes come from the running

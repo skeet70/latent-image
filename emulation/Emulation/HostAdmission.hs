@@ -1,10 +1,4 @@
--- | Host resource classes and admitted Bazel commands.
---
--- 'Build' admits two Bazel commands host-wide using byte-range locks on
--- @~/.cache/xm1-host-build/build.lock@. Each runs as @bazel --batch@ in a 6 GiB
--- systemd user scope. 'Emulator' admits two runs of at most 4 GiB each.
--- The 20 GiB maximum leaves 10.4 GiB for the OS, interactive work and Nix
--- daemon builders, which run outside these scopes.
+-- | Host-wide class limits and a shared 20 GiB managed-memory budget.
 module Emulation.HostAdmission
   ( ResourceClass (..)
   , MemoryMax (..)
@@ -14,21 +8,25 @@ module Emulation.HostAdmission
   , memoryMaxBytes
   , userScopeAvailable
   , hostBuildMain
+  , ScopeName
+  , parseScopeName
+  , reserveMemory
+  , claimScopeRecord
   ) where
 
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Exception (IOException, catch, evaluate, try)
-import Control.Monad (unless, void, when)
+import Control.Monad (forM_, unless, void, when)
 import qualified Data.ByteString as ByteString
 import qualified Data.ByteString.Char8 as ByteString8
 import Data.Char (isDigit, isPrint, isSpace)
-import Data.List (dropWhileEnd, isPrefixOf, stripPrefix)
+import Data.List (dropWhileEnd, isPrefixOf, nub, stripPrefix)
 import Data.Maybe (isNothing)
 import GHC.Clock (getMonotonicTime)
 import FujiAF.StorageBudget (StorageFailure, checkStorageBudget)
 import Numeric (showFFloat)
-import System.Directory (createDirectoryIfMissing, findExecutable, getHomeDirectory, removeFile)
+import System.Directory (createDirectoryIfMissing, findExecutable, getHomeDirectory, removeFile, renameFile)
 import System.Environment (getExecutablePath, lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (..), exitWith)
 import System.FilePath (isAbsolute, takeDirectory, takeFileName, (</>))
@@ -39,11 +37,11 @@ import System.Posix.IO (FdOption (CloseOnExec), FileLock, LockRequest (WriteLock
 import System.Posix.Process (executeFile, getProcessID)
 import System.Posix.Signals (Handler (Catch), installHandler, sigINT)
 import System.Posix.Types (Fd (..), ProcessID)
-import System.Process (CreateProcess (..), createProcess, getProcessExitCode, proc, readProcessWithExitCode, terminateProcess, waitForProcess)
+import System.Process (CreateProcess (..), createProcess, proc, readProcessWithExitCode, waitForProcess)
 import System.Timeout (timeout)
 import Text.Read (readMaybe)
 
-data ResourceClass = Build | Emulator
+data ResourceClass = Build | Emulator | NativeVerification
 
 -- | A systemd @MemoryMax=@ value: decimal bytes with an optional K, M, G or T suffix.
 newtype MemoryMax = MemoryMax String
@@ -51,12 +49,108 @@ newtype MemoryMax = MemoryMax String
 -- | Simultaneous admissions host-wide.
 classConcurrency :: ResourceClass -> Int
 classConcurrency Build = 2
-classConcurrency Emulator = 2
+classConcurrency Emulator = 4
+classConcurrency NativeVerification = 8
 
 -- | The memory cap of one admission; an emulator run may ask for less.
 classMemoryMax :: ResourceClass -> MemoryMax
 classMemoryMax Build = MemoryMax "6G"
 classMemoryMax Emulator = MemoryMax "4G"
+classMemoryMax NativeVerification = MemoryMax "2G"
+
+newtype ScopeName = ScopeName String
+  deriving (Eq)
+
+parseScopeName :: String -> Maybe ScopeName
+parseScopeName text
+  | not (null text), all (\c -> c `elem` (['a'..'z'] ++ ['A'..'Z'] ++ ['0'..'9'] ++ "-_.")) text
+  , reverse (take 6 (reverse text)) == ".scope" = Just (ScopeName text)
+  | otherwise = Nothing
+
+-- | Reservations are acquired inside an already-started scope.
+reserveMemory :: MemoryMax -> ScopeName -> IO Fd
+reserveMemory memory scope = do
+  let quantum = 256 * 1024 * 1024
+      tokens = fromInteger ((memoryMaxBytes memory + quantum - 1) `div` quantum)
+  unless (tokens > 0 && tokens <= 80) $
+    ioError (userError "managed memory reservation must fit the 20 GiB host budget")
+  directory <- (</> ".cache" </> "xm1-host-memory") <$> getHomeDirectory
+  createDirectoryIfMissing True directory
+  let attempt = do
+        gate <- openFd (directory </> "gate.lock") ReadWrite defaultFileFlags {creat = Just 0o600}
+        entered <- try (setLock gate (WriteLock, AbsoluteSeek, 0, 1)) :: IO (Either IOException ())
+        case entered of
+          Left _ -> closeFd gate >> threadDelay 100_000 >> attempt
+          Right () -> do
+            fd <- openFd (directory </> "memory.lock") ReadWrite defaultFileFlags {creat = Just 0o600}
+            setFdOption fd CloseOnExec False
+            chosen <- collect fd tokens [0 .. 79] []
+            case chosen of
+              Nothing -> do
+                closeFd fd
+                closeFd gate
+                announceMemory directory tokens
+                threadDelay 500_000
+                attempt
+              Just indices -> do
+                claimScopeRecords [directory </> ("scope-" ++ show index) | index <- indices] scope
+                closeFd gate
+                pure fd
+      collect _ 0 _ selected = pure (Just selected)
+      collect _ _ [] _ = pure Nothing
+      collect fd count (index : rest) selected = do
+        result <- try (setLock fd (WriteLock, AbsoluteSeek, index, 1)) :: IO (Either IOException ())
+        case result of
+          Right () -> collect fd (count - 1) rest (index : selected)
+          Left _ -> collect fd count rest selected
+  attempt
+
+announceMemory :: FilePath -> Int -> IO ()
+announceMemory directory tokens = do
+  fd <- openFd (directory </> "memory.lock") ReadWrite defaultFileFlags
+  owners <- mapM (\index -> getLock fd (WriteLock, AbsoluteSeek, index, 1)) [0 .. 79]
+  closeFd fd
+  hPutStrLn stderr ("host admission: waiting for managed memory (" ++ show tokens ++ " x 256MiB of 20GiB); owners=" ++ show (nub [pid | Just (pid, _) <- owners]))
+  hFlush stderr
+
+claimScopeRecord :: FilePath -> ScopeName -> IO ()
+claimScopeRecord record = claimScopeRecords [record]
+
+claimScopeRecords :: [FilePath] -> ScopeName -> IO ()
+claimScopeRecords records scope@(ScopeName unit) = do
+  previous <- mapM readRecord records
+  mapM_ reapScope (nub [prior | Just prior <- previous, prior /= scope])
+  pid <- getProcessID
+  forM_ records $ \record -> do
+    let temporary = record ++ "." ++ show pid
+    writeFile temporary (unit ++ "\n")
+    renameFile temporary record
+  where
+    readRecord record = do
+      previous <- (Just <$> (readFile record >>= \text -> evaluate (length text) >> pure (trim text)))
+        `catchIOError` \problem -> if isDoesNotExistError problem then pure Nothing else ioError problem
+      case previous of
+        Just name -> case parseScopeName name of
+          Just prior -> pure (Just prior)
+          Nothing -> ioError (userError ("invalid admission scope record: " ++ record))
+        Nothing -> pure Nothing
+
+scopeActive :: ScopeName -> IO Bool
+scopeActive (ScopeName unit) = do
+  (_, out, _) <- readProcessWithExitCode "systemctl" ["--user", "show", unit, "-p", "ActiveState", "--value"] ""
+  case trim out of
+    state | state `elem` ["active", "activating", "deactivating"] -> pure True
+    state | state `elem` ["inactive", "failed"] -> pure False
+    _ -> ioError (userError ("cannot establish scope state: " ++ unit))
+
+reapScope :: ScopeName -> IO ()
+reapScope scope@(ScopeName unit) = do
+  active <- scopeActive scope
+  when active $ do
+    (code, _, err) <- readProcessWithExitCode "systemctl" ["--user", "stop", unit] ""
+    unless (code == ExitSuccess) (ioError (userError ("cannot reap scope " ++ unit ++ ": " ++ err)))
+    remaining <- scopeActive scope
+    when remaining (ioError (userError ("scope still has work: " ++ unit)))
 
 parseMemoryMax :: String -> Maybe MemoryMax
 parseMemoryMax text = case span isDigit text of
@@ -137,6 +231,7 @@ checkConfiguredAccounting = do
 -- scope child.
 hostBuildMain :: [String] -> IO ()
 hostBuildMain arguments = case arguments of
+  ["--reserve-legacy", name] | Just scope <- parseScopeName name -> reserveLegacy scope
   "--scope-child" : report : release : unit : program : rest
     | Just reportFd <- readMaybe report, Just releaseFd <- readMaybe release ->
         scopeChild (Fd reportFd) (Fd releaseFd) unit program rest
@@ -158,12 +253,11 @@ admit requestedBase command rest = do
   (lock, lane) <- acquireBuildLock directory
   waited <- subtract waitStart <$> getMonotonicTime
   scoped <- userScopeAvailable
-  let MemoryMax memory = classMemoryMax Build
   pid <- getProcessID
   let unit = "xm1-host-build-" ++ show pid ++ ".scope"
   if scoped
     then stopPreviousScope directory lane unit
-    else hPutStrLn stderr ("No systemd user session: host build runs without the " ++ memory ++ " memory cap") >> hFlush stderr
+    else ioError (userError "host-build requires a systemd user scope to enforce its memory cap")
   checkStorageBudget directory
     `catch` (\problem -> refuseAccounting (show (problem :: StorageFailure)))
     `catch` (\problem -> refuseAccounting (show (problem :: IOException)))
@@ -219,6 +313,21 @@ worktreeOutputBase = do
       | top <- trim out, takeFileName (takeDirectory top) == "latent-image-worktrees" ->
           Just (home </> ".cache" </> "bazel" </> ("latent-image-" ++ takeFileName top))
     _ -> Nothing
+
+reserveLegacy :: ScopeName -> IO ()
+reserveLegacy scope@(ScopeName unit) = do
+  refuseNested
+  (code, out, _) <- readProcessWithExitCode "systemctl"
+    ["--user", "show", unit, "-p", "ActiveState", "-p", "MemoryMax"] ""
+  unless (code == ExitSuccess && "ActiveState=active" `elem` lines out && "MemoryMax=4294967296" `elem` lines out) $
+    ioError (userError "legacy reservation requires an active scope capped at exactly 4 GiB")
+  _ <- reserveMemory (MemoryMax "4G") scope
+  hPutStrLn stderr ("legacy reservation ready: " ++ unit ++ " 4GiB")
+  hFlush stderr
+  let wait = do
+        (_, state, _) <- readProcessWithExitCode "systemctl" ["--user", "show", unit, "-p", "ActiveState", "--value"] ""
+        when (trim state `elem` ["active", "activating", "deactivating"]) (threadDelay 1_000_000 >> wait)
+  wait
 
 -- | Parallelism within the build scope; Bazel's resource estimate excludes its
 -- own 2 GiB heap.
@@ -514,16 +623,14 @@ scopeChild report release unit program arguments = do
   setFdOption release CloseOnExec True
   reportHandle <- fdToHandle report
   releaseHandle <- fdToHandle release
-  (_, _, _, child) <- createProcess (proc program arguments)
+  scope <- maybe (ioError (userError "scope child requires a valid scope name")) pure (parseScopeName unit)
   released <- newEmptyMVar
   _ <- forkIO $ do
     _ <- try (hGetContents releaseHandle >>= evaluate . length) :: IO (Either IOException Int)
-    status <- getProcessExitCode child
-    when (isNothing status) $
-      if unit == "-"
-        then terminateProcess child
-        else void (readProcessWithExitCode "systemctl" ["--user", "stop", "--no-block", unit] "")
+    void (readProcessWithExitCode "systemctl" ["--user", "stop", "--no-block", unit] "")
     putMVar released ()
+  _ <- reserveMemory (classMemoryMax Build) scope
+  (_, _, _, child) <- createProcess (proc program arguments)
   code <- waitForProcess child
   _ <- try (hPutStrLn reportHandle (show (exitNumber code)) >> hFlush reportHandle) :: IO (Either IOException ())
   takeMVar released
