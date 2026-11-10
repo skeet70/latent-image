@@ -16,7 +16,7 @@ import qualified Data.Map.Strict as M
 import Data.Maybe (listToMaybe)
 import Data.Word (Word64)
 import Emulation.CachedNativeBatch (cachedObservedBatch)
-import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
+import Emulation.EmulatorSlot (ExecutionClass (NativeVerification), reexecInSlot, slotPolicyForClass)
 import Emulation.NativeObservation (NativeObservation (..), RunnerStatus (..), runnerStatusLabel)
 import Emulation.OwnedCase (CaseId, CaseSpec, caseId, loadObservedBatch, writeBatch)
 import Emulation.Sha256 (Sha256, sha256, sha256File, sha256Hex)
@@ -171,7 +171,7 @@ main = do
     Right (Left message) -> terminalFailure Nothing FailureInvalid message
     Right (Right value) -> pure value
   setEnv "XM1_STORAGE_PATH" (takeDirectory (optionOut options))
-  admitted <- trySync (slotPolicyFromEnvironment >>= \policy -> reexecInSlot policy (reexecArguments options))
+  admitted <- trySync (slotPolicyForClass NativeVerification >>= \policy -> reexecInSlot policy (reexecArguments options))
   case admitted of
     Left exception -> terminalFailure Nothing FailureInfrastructure (displayException exception)
     Right () -> run options

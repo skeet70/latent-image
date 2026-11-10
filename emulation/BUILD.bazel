@@ -194,6 +194,8 @@ haskell_binary(
     deps = [
         ":emulator-slot-lib",
         "//host:base",
+        "//host:process",
+        "//host:unix",
     ],
 )
 
@@ -201,10 +203,18 @@ haskell_binary(
 # clients arriving from a PID namespace, so the linux-sandbox cannot host this.
 haskell_test(
     name = "emulator-slot-tests",
-    size = "small",
+    size = "medium",
     srcs = ["EmulatorSlotTests.hs"],
-    args = ["$(rootpath :emulator-slot-probe)"],
-    data = [":emulator-slot-probe"],
+    args = [
+        "$(rootpath :emulator-slot-probe)",
+        "$(rootpath :host-build)",
+        "$(rootpath :emulator-slot)",
+    ],
+    data = [
+        ":emulator-slot-probe",
+        ":host-build",
+        ":emulator-slot",
+    ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     tags = ["no-sandbox"],
     deps = [
@@ -2921,6 +2931,7 @@ haskell_binary(
     srcs = ["VerifyCandidate.hs"],
     data = [
         ":e2e-observation-compare",
+        ":emulator-slot",
         ":flash-boot-check",
         ":fujimod-flash-boot-check",
         ":native-runner",

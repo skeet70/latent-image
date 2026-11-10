@@ -318,6 +318,14 @@ executeMode scope = do
   when occupied (failH "qualification preparation must start outside an emulator slot")
   requireCleanSource
   verifyInputs
+  policy <- boundedSlotPolicy
+  checkStorageBudget qualRoot
+  buildAndTest
+  reexecInSlot policy [slottedArgument scope]
+  failH "qualification did not enter a fresh emulator slot"
+
+boundedSlotPolicy :: IO SlotPolicy
+boundedSlotPolicy = do
   configuredPolicy <- slotPolicyFromEnvironment
   memoryOverride <- lookupEnv "XM1_EMULATOR_MEMORY_MAX"
   let policy = case memoryOverride of
@@ -326,13 +334,15 @@ executeMode scope = do
       SlotCount slots = slotCount policy
   unless (slots == 1 && Admission.memoryMaxBytes (memoryMax policy) == memoryMaxBytes)
     (failH "qualification requires XM1_EMULATOR_SLOTS=1 and a 2G emulator cap")
-  checkStorageBudget qualRoot
-  buildAndTest
-  reexecInSlot policy [slottedArgument scope]
-  failH "qualification did not enter a fresh emulator slot"
+  pure policy
 
 slottedMode :: QualificationScope -> IO ()
 slottedMode scope = do
+  pending <- lookupEnv "XM1_ADMISSION_SCOPE"
+  previouslyAdmitted <- insideSlot
+  unless (previouslyAdmitted || pending /= Nothing) (failH "slotted qualification requires pending or active admission")
+  policy <- boundedSlotPolicy
+  reexecInSlot policy [slottedArgument scope]
   occupied <- insideSlot
   unless occupied (failH "slotted qualification requires an emulator slot")
   readBoundedScope
