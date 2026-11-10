@@ -131,16 +131,19 @@ This bounded qualifier executes registration, repeated ticks, delivery and unreg
 
 `//replacement/rtos_timer:stage-root-platform` binds the existing nine-piece J5 composition, including the reduced-bound task-storage helper, owned root task and owned app dispatcher/caller, to the actual platform union. Bazel supplies all linked inputs and tools. The stager verifies the admitted startup bytes, rejects intersecting startup/platform carriers, stages both aggregate loaders and requires inverse platform restoration to recover the admitted startup DAT. It writes `composed.DAT`, all six decoded targets, `composed-contract.json`, the two pre-platform `startup-loader-*.bin` references and two `effective-carrier-*.bin` slices. The effective slices include actual staged gaps and carrier fill, not unallocated raw linker bytes.
 
+Supply the existing J5 manifest as the guard source. The stager preserves its `primary-publisher/entry-core0` peer, residency, register, allowance and relation declarations, then appends resident coverage for the actual admitted app carriers. Image4 is resident at that boundary. Empty residency declarations are refused. The old empty-guard counterexample is preserved in `TimerAppSystemJoin/root-closure-compose-control-2tbhayg8/stage.log`.
+
 The nested startup contract describes the pre-platform input. Its attach, application and frame runtime witnesses require requalification on the final package. No continuous arena or natural-root acceptance follows from byte composition. The earlier `TimerAppSystemJoin/root-closure-stage-01` remains loader-only and has stock image4; its closed allowance must not be reused for this package.
 
 After a separate file-only output grant, stage into a new directory:
 
 ```sh
-HB=/nix/store/p7m8ycqzgyw2msmynma7p6746w8qva6y-host-build/bin/host-build
+HB=/nix/store/aab2pmlkgb0nvabv3g8hhxnbw6dk8l41-host-build/bin/host-build
 OB=/home/murph/.cache/bazel/latent-image-TimerAppSystemJoin
 devenv shell -- "$HB" --output_base="$OB" run --jobs=4 \
   //replacement/rtos_timer:stage-root-platform -- \
   "$PWD/private-data/firmware/x-m1-1.50/FWUP0002.DAT" \
+  "$PWD/private-data/scratch/J5Root155/manifest-j5-v1.json" \
   "$PWD/private-data/scratch/TimerAppSystemJoin" \
   "$PWD/private-data/scratch/TimerAppSystemJoin/root-closure-composed-01"
 ```
@@ -163,7 +166,7 @@ The measured canonical sizes give a 46,682,424-byte baseline for all normal reta
 
 Cache reuse requires the canonical immutable runner path and its bytes, the complete ordered expectation-free batch wire, and valid raw/exit/provenance digests. Expectations are judged again on every read. Changing the ordered cohort changes the batch key: cyclic smoke cannot be assumed to reuse a full cohort. Timer initialization batches and the app lifecycle prefix can be reused only if those identities remain equal. The current runner hash is `2bd58d3bc0d30d6fd9de6c22cd94c2c95c40189a0c55bb8232996a421583e8f3`; older `21ff2236ea7060c7c51958668c1debf0b560855b106c9375629a154d50b3aefc` receipts cannot be preclaimed as hits. Budget fresh observations until admission proves otherwise.
 
-After explicit slot and output admission, generate a run script without executing the qualifier, then contain the whole qualifier with the parent-verified main slot wrapper. Keep `XM1_EMULATOR_SLOTS=1` and explicit 2 GiB for these small native scopes. `RUN` must be a newly admitted output directory, `P` the newly staged package, `B` this output base's `bazel-bin`, and `CACHE` the shared native cache. Replace `smoke` with `full` only under its own allowance.
+After explicit slot and output admission, use Bazel's `--run_under` with the parent-verified main slot wrapper. Host-build owns `--script_path` internally; supplying another one creates the requested launcher but breaks host-build's follow-on handoff. `--run_under` starts the contained qualifier after build admission is released. Keep `XM1_EMULATOR_SLOTS=1` and explicit 2 GiB for these small native scopes. `RUN` must be a newly admitted output directory, `P` the newly staged package, `B` this output base's `bazel-bin`, and `CACHE` the shared native cache. Replace `smoke` with `full` only under its own allowance.
 
 ```sh
 STOCK="$PWD/private-data/analysis/x-m1-1.50"
@@ -171,8 +174,8 @@ B="$PWD/bazel-bin"
 P="$PWD/private-data/scratch/TimerAppSystemJoin/root-closure-composed-01"
 CACHE="$PWD/private-data/scratch/TimerAppSystemJoin/native-cache"
 mkdir -p "$RUN"
-SLOT_WRAPPER=/var/home/murph/Code/latent-image/bazel-bin/emulation/emulator-slot
-devenv shell -- "$HB" --output_base="$OB" run --jobs=4 --script_path="$RUN/timer.launch" \
+SLOT_WRAPPER=/var/home/murph/.cache/bazel/_bazel_murph/4aa8d9b0a55ca9b1b9553dfd7cc9563e/execroot/_main/bazel-out/k8-fastbuild/bin/emulation/emulator-slot
+XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=2G devenv shell -- "$HB" --output_base="$OB" run --jobs=4 --run_under="$SLOT_WRAPPER" \
   //replacement/rtos_timer/oracle:timer-oracle -- --scope smoke \
   --loader-a "$STOCK/decode/loader-40000.bin" --loader-b "$STOCK/decode/loader-d0000.bin" \
   --aggregate-a-bin "$P/effective-carrier-a.bin" --aggregate-a-symbols "$B/replacement/rtos_platform/platform-a.symbols" \
@@ -180,13 +183,12 @@ devenv shell -- "$HB" --output_base="$OB" run --jobs=4 --script_path="$RUN/timer
   --aggregate-b-bin "$P/effective-carrier-b.bin" --aggregate-b-symbols "$B/replacement/rtos_platform/platform-b.symbols" \
   --aggregate-b-placements "$B/replacement/rtos_platform/placement-b.json" \
   --aggregate-carriers "$PWD/replacement/rtos_platform/carriers.json" --cache-root "$CACHE" --results "$RUN/timer/results.json"
-XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=2G "$SLOT_WRAPPER" "$RUN/timer.launch"
 ```
 
 The cyclic and app commands use separate work directories:
 
 ```sh
-devenv shell -- "$HB" --output_base="$OB" run --jobs=4 --script_path="$RUN/cyclic.launch" \
+XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=2G devenv shell -- "$HB" --output_base="$OB" run --jobs=4 --run_under="$SLOT_WRAPPER" \
   //replacement/rtos_cyclic/oracle:cyclic-oracle -- --scope smoke \
   --loader-a "$STOCK/decode/loader-40000.bin" --loader-b "$STOCK/decode/loader-d0000.bin" \
   --aggregate-a-bin "$P/effective-carrier-a.bin" --aggregate-a-symbols "$B/replacement/rtos_platform/platform-a.symbols" \
@@ -194,8 +196,7 @@ devenv shell -- "$HB" --output_base="$OB" run --jobs=4 --script_path="$RUN/cycli
   --aggregate-b-bin "$P/effective-carrier-b.bin" --aggregate-b-symbols "$B/replacement/rtos_platform/platform-b.symbols" \
   --aggregate-b-placements "$B/replacement/rtos_platform/placement-b.json" \
   --aggregate-carriers "$PWD/replacement/rtos_platform/carriers.json" --cache-root "$CACHE" --results "$RUN/cyclic/results.json"
-XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=2G "$SLOT_WRAPPER" "$RUN/cyclic.launch"
-devenv shell -- "$HB" --output_base="$OB" run --jobs=4 --script_path="$RUN/app.launch" \
+XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=2G devenv shell -- "$HB" --output_base="$OB" run --jobs=4 --run_under="$SLOT_WRAPPER" \
   //replacement/rtos_cyclic/oracle:join-oracle -- --scope smoke \
   --image4 "$STOCK/lz/id4-0061c400.bin" \
   --loader-a "$STOCK/decode/loader-40000.bin" --loader-b "$STOCK/decode/loader-d0000.bin" \
@@ -205,7 +206,6 @@ devenv shell -- "$HB" --output_base="$OB" run --jobs=4 --script_path="$RUN/app.l
   --aggregate-symbols-a "$B/replacement/rtos_platform/platform-a.symbols" \
   --aggregate-placements-a "$B/replacement/rtos_platform/placement-a.json" \
   --aggregate-carriers "$PWD/replacement/rtos_platform/carriers.json" --cache-root "$CACHE" --results "$RUN/app/results.json"
-XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=2G "$SLOT_WRAPPER" "$RUN/app.launch"
 ```
 
 All runtime commands above remain unexecuted for this source revision. The minimum changed timer-publication smoke is four native observations; the composed-package and native-slot grants are separate prerequisites for the packaged sequence. No core-1 app caller is admitted.

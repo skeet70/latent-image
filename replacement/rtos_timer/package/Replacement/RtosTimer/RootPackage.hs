@@ -4,7 +4,8 @@ module Replacement.RtosTimer.RootPackage
   ) where
 
 import Control.Monad (forM, forM_, unless)
-import Data.Aeson (Value, object, (.=), encode)
+import Data.Aeson (Value (..), object, (.=), encode, eitherDecodeStrict', toJSON)
+import qualified Data.Aeson.KeyMap as K
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Map.Strict as M
@@ -14,6 +15,7 @@ import qualified Replacement.RtosPlatform.Aggregate as Aggregate
 import qualified Replacement.RtosPlatform.Artifact as Platform
 import qualified Replacement.RtosPlatform.Union as Union
 import qualified Replacement.StartupArtifact.Compose as Startup
+import qualified Replacement.StartupArtifact.Manifest as Manifest
 import qualified Replacement.StartupArtifact.Targets as Targets
 import qualified Replacement.StartupArtifact.Types as Startup
 
@@ -94,22 +96,20 @@ packageContract startupContract startupDat package@RootPackage{packagePlatform =
   where
     digest targets target = SHA.sha256Hex (SHA.sha256 (Targets.targetOf targets target))
 
-j5Manifest :: [FilePath] -> Either String B.ByteString
-j5Manifest paths = case paths of
-  [first, firstSymbols, pair, pairSymbols, publisher, publisherSymbols,
-   loaderA, loaderASymbols, loaderB, loaderBSymbols, dispatcher, dispatcherSymbols,
-   installer, installerSymbols, submission, submissionSymbols, storage, storageSymbols,
-   idle, idleSymbols, root, rootSymbols, app, appSymbols] ->
-    Right (BL.toStrict (encode (object
+j5Manifest :: B.ByteString -> [Startup.Span] -> [FilePath] -> Either String B.ByteString
+j5Manifest guardManifest appCarriers paths = do
+  baseline <- either (Left . show) Right (Manifest.parseManifest guardManifest)
+  unless (Startup.labelText (Manifest.manifestAttach baseline) == "primary-publisher/entry-core0")
+    (Left "root platform requires the source-bound primary-publisher J5 attach guard")
+  guard <- preservedGuard
+  case paths of
+    [first, firstSymbols, pair, pairSymbols, publisher, publisherSymbols,
+     loaderA, loaderASymbols, loaderB, loaderBSymbols, dispatcher, dispatcherSymbols,
+     installer, installerSymbols, submission, submissionSymbols, storage, storageSymbols,
+     idle, idleSymbols, root, rootSymbols, app, appSymbols] ->
+      Right (BL.toStrict (encode (object
       [ "schema" .= (4 :: Int)
-      , "guard" .= object
-          [ "attach" .= ("first-stage/entry" :: String)
-          , "attach_state" .= object
-              [ "peers" .= ([] :: [Value]), "carriers" .= ([] :: [Value])
-              , "allowances" .= ([] :: [Value]), "registers" .= ([] :: [Value])
-              , "board" .= ([] :: [Value]), "relations" .= object []
-              ]
-          ]
+      , "guard" .= guard
       , "pieces" .=
           [ single Startup.FirstStage first firstSymbols
           , single Startup.Record2Link pair pairSymbols
@@ -128,8 +128,20 @@ j5Manifest paths = case paths of
           , single Startup.AppCallback app appSymbols
           ]
       ])))
-  _ -> Left "root platform requires the complete 24-path J5 linked-input set"
+    _ -> Left "root platform requires the complete 24-path J5 linked-input set"
   where
+    preservedGuard = do
+      document <- eitherDecodeStrict' guardManifest
+      case document of
+        Object top | Just (Object guard) <- K.lookup "guard" top
+                   , Just (Object rules) <- K.lookup "attach_state" guard
+                   , Just (Array carriers) <- K.lookup "carriers" rules
+                   , not (null carriers) ->
+          let resident (Startup.Span target (Startup.Guest start) (Startup.Guest end)) =
+                object ["target" .= Startup.targetName target, "start" .= start, "end" .= end, "residency" .= ("resident" :: String)]
+              extended = K.insert "carriers" (toJSON (foldr (:) (map resident appCarriers) carriers)) rules
+           in Right (Object (K.insert "attach_state" (Object extended) guard))
+        _ -> Left "root platform requires the existing nonempty J5 residency declaration"
     linked image symbols = object ["image" .= image, "symbols" .= symbols]
     single :: Startup.PieceKind -> FilePath -> FilePath -> Value
     single kind image symbols = object ["kind" .= Startup.pieceKindName kind, "inputs" .= linked image symbols]

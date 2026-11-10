@@ -63,10 +63,19 @@ main = do
   let overlapping = (piece T.TaskStorage) {T.pieceCarriers = [T.Span T.LoaderA (T.Guest 0x40430) (T.Guest 0x40434)]}
   require "overlapping startup and platform ownership accepted" (isLeft (join (overlapping : drop 1 pieces) startupDat))
   require "changed unadmitted startup container accepted" (isLeft (join pieces (B.cons 0 (B.drop 1 startupDat))))
-  manifestBytes <- either die pure (j5Manifest ["synthetic-" ++ show index | index <- [1 :: Int .. 24]])
+  let seed rows = "{\"schema\":4,\"guard\":{\"attach\":\"primary-publisher/entry-core0\",\"attach_state\":{\"peers\":[],\"carriers\":" <> rows <>
+        ",\"allowances\":[],\"registers\":[],\"board\":[],\"relations\":{\"timer\":{\"citation\":\"existing timer law\"}}}},\"pieces\":[{\"kind\":\"first-stage\",\"inputs\":{\"image\":\"seed\",\"symbols\":\"seed\"}}]}"
+      resident = "{\"target\":\"record1\",\"start\":32,\"end\":36,\"residency\":\"resident\"}"
+      guarded = seed ("[" <> resident <> "]")
+      appCarrier = T.Span T.Image4 (T.Guest 0x72337c) (T.Guest 0x723398)
+  manifestBytes <- either die pure (j5Manifest guarded [appCarrier] ["synthetic-" ++ show index | index <- [1 :: Int .. 24]])
   manifest <- either (die . show) pure (Manifest.parseManifest manifestBytes)
   require "J5 manifest omitted a required startup piece"
     (map Manifest.manifestPieceKind (Manifest.manifestPieces manifest) ==
       [T.FirstStage,T.Record2Link,T.PrimaryPublisher,T.LoaderStartup,T.TaskSubmission,T.TaskStorage,T.IdleTask,T.RootTask,T.AppCallback])
-  require "J5 manifest accepted missing linked inputs" (isLeft (j5Manifest (replicate 23 "synthetic")))
+  expected <- either (die . show) pure (Manifest.parseManifest (seed ("[" <> resident <> ",{\"target\":\"image4\",\"start\":7484284,\"end\":7484312,\"residency\":\"resident\"}]")))
+  require "J5 guard lost an existing declaration or added incorrect app residency"
+    (Manifest.manifestAttachRules manifest == Manifest.manifestAttachRules expected)
+  require "J5 manifest accepted an empty residency declaration" (isLeft (j5Manifest (seed "[]") [] (replicate 24 "synthetic")))
+  require "J5 manifest accepted missing linked inputs" (isLeft (j5Manifest guarded [] (replicate 23 "synthetic")))
   putStrLn "root-package-tests: passed"

@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 -- | Canonical decode, composition staging and the output directory.
 module Replacement.StartupArtifact.Stage
-  ( loadCanonical, imageLimit, loadPieces, stageComposition, stageManifest, writeOutputs, runStager, applicationSiteMap
+  ( loadCanonical, imageLimit, loadPieces, stageComposition, stageManifest, stageLoadedManifest, writeOutputs, runStager, applicationSiteMap
   ) where
 
 import Control.Monad (forM, forM_, unless)
@@ -126,6 +126,12 @@ runStager tools canonicalPath manifestPath scratchPath output = do
 stageManifest :: Tools.Tools -> Tools.ScratchDirectory -> Canonical -> B.ByteString -> Manifest -> IO (B.ByteString, TargetBytes, J.Value, Composition JoinKind)
 stageManifest tools scratch source manifestBytes manifest = do
   derived <- loadPieces source manifest
+  stageLoadedManifest tools scratch source manifestBytes manifest derived
+
+stageLoadedManifest :: Tools.Tools -> Tools.ScratchDirectory -> Canonical -> B.ByteString -> Manifest -> [Piece] -> IO (B.ByteString, TargetBytes, J.Value, Composition JoinKind)
+stageLoadedManifest tools scratch source manifestBytes manifest derived = do
+  H.ensure (map pieceKind derived == map manifestPieceKind (manifestPieces manifest))
+    "loaded startup pieces differ from the manifest"
   let attach = manifestAttach manifest
   pieces <- refused (attachGuard attach derived)
   composition <- refused (compose registeredJoins source pieces)

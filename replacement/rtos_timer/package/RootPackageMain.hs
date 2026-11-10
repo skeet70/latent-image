@@ -23,14 +23,19 @@ main = do
   arguments <- getArgs
   case arguments of
     encoder : rebuild : decoder : rest -> case splitAt 24 rest of
-      (imagePaths, [carriersPath, binA, symbolsA, disasmA, placementsA, binB, symbolsB, disasmB, placementsB, canonicalPath, scratchPath, output]) -> do
+      (imagePaths, [carriersPath, binA, symbolsA, disasmA, placementsA, binB, symbolsB, disasmB, placementsB, canonicalPath, guardPath, scratchPath, output]) -> do
         paths <- mapM canonicalizePath imagePaths
-        manifestBytes <- either H.failH pure (j5Manifest paths)
-        manifest <- either (H.failH . show) pure (Manifest.parseManifest manifestBytes)
+        guardBytes <- input guardPath
+        initialBytes <- either H.failH pure (j5Manifest guardBytes [] paths)
+        initialManifest <- either (H.failH . show) pure (Manifest.parseManifest initialBytes)
         tools <- Tools.Tools <$> canonicalizePath encoder <*> canonicalizePath rebuild <*> canonicalizePath decoder
         scratch <- Tools.validateScratchDirectory scratchPath
         source <- Startup.loadCanonical tools scratch canonicalPath
-        (startupDat, observed, startupContract, composition) <- Startup.stageManifest tools scratch source manifestBytes manifest
+        derived <- Startup.loadPieces source initialManifest
+        let appCarriers = concat [Startup.pieceCarriers piece | piece <- derived, Startup.pieceKind piece == Startup.AppCallback]
+        manifestBytes <- either H.failH pure (j5Manifest guardBytes appCarriers paths)
+        manifest <- either (H.failH . show) pure (Manifest.parseManifest manifestBytes)
+        (startupDat, observed, startupContract, composition) <- Startup.stageLoadedManifest tools scratch source manifestBytes manifest derived
         union <- either (H.failH . show) pure . Union.parseUnion =<< input carriersPath
         forM_ R.domains $ \domain -> do
           let entries = Union.mapEntries (Union.domainMap union domain)
@@ -51,7 +56,7 @@ main = do
       _ -> usage
     _ -> usage
   where
-    usage = H.failH "usage: stage-root-platform (Bazel supplies tools and linked J5/platform inputs) CANONICAL_DAT SCRATCH_DIR NEW_OUTPUT"
+    usage = H.failH "usage: stage-root-platform (Bazel supplies tools and linked J5/platform inputs) CANONICAL_DAT J5_GUARD_MANIFEST SCRATCH_DIR NEW_OUTPUT"
     input path = H.readRegular (64 * 1024 * 1024) path
     placements path = do
       rows <- either H.failH pure . Aggregate.parsePlacements =<< input path
