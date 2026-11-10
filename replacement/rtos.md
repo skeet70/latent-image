@@ -108,3 +108,112 @@ XM1_EMULATOR_SLOTS=1 devenv shell -- host-build run --jobs=1 \
 ```
 
 Bazel supplies linked images; the command admits the actual Timer and LoaderStartup pieces and bounded joins. A plain test invocation without the private arguments fails its contract. Host composition and a role-grounded native oracle do not establish runtime arena ownership, independent-lock ownership or integrated hardware behavior.
+
+### Packaged domain-A app join
+
+`//replacement/rtos_cyclic/oracle:join-admission-tests` checks packaged-loader admission without firmware or emulator execution. `:join-oracle` accepts the additional packaged inputs below after aggregate staging. The stock loader arguments remain canonical references; `--packaged-loader-a` is the actual staged loader, not the aggregate flat binary.
+
+Add `--admission-only` to validate the actual private inputs and write their identities without starting a guest. Its result records `runtime_executed: false`; it is a host smoke check, not a native verdict.
+
+```sh
+XM1_EMULATOR_SLOTS=1 devenv shell -- host-build run --jobs=4 \
+  //replacement/rtos_cyclic/oracle:join-oracle -- \
+  --image4 IMAGE4 --loader-a STOCK_LOADER_A --loader-b STOCK_LOADER_B \
+  --packaged-loader-a STAGED_LOADER_A \
+  --aggregate-bin-a AGGREGATE_BIN_A --aggregate-symbols-a AGGREGATE_SYMBOLS_A \
+  --aggregate-placements-a AGGREGATE_PLACEMENT_A --aggregate-carriers CARRIERS_JSON \
+  --cache-root SHARED_NATIVE_CACHE --results NEW_RESULTS_JSON --admission-only
+```
+
+This bounded qualifier executes registration, repeated ticks, delivery and unregistration through the published root/interface tables into the actual union image. Admission reconstructs that loader from pinned stock, declared UDF-filled carriers, emitted functions and every allocated section, including readonly zeros. The shared cyclic aggregate binder preserves readonly exclusions and public ABI fetch boundaries. Every owned observation must retain its complete loader bytes. Contexts, registry, heap and lock callbacks remain fixture state; this does not boot the staged DAT or exercise a core-1 app caller. Run only with an admitted emulator slot and retained-output allowance.
+
+### Composed root and timer package
+
+`//replacement/rtos_timer:stage-root-platform` binds the existing nine-piece J5 composition, including the reduced-bound task-storage helper, owned root task and owned app dispatcher/caller, to the actual platform union. Bazel supplies all linked inputs and tools. The stager verifies the admitted startup bytes, rejects intersecting startup/platform carriers, stages both aggregate loaders and requires inverse platform restoration to recover the admitted startup DAT. It writes `composed.DAT`, all six decoded targets, `composed-contract.json`, the two pre-platform `startup-loader-*.bin` references and two `effective-carrier-*.bin` slices. The effective slices include actual staged gaps and carrier fill, not unallocated raw linker bytes.
+
+Supply the existing J5 manifest as the guard source. The stager preserves its `primary-publisher/entry-core0` peer, residency, register, allowance and relation declarations, then appends resident coverage for the actual admitted app carriers. Image4 is resident at that boundary. Empty residency declarations are refused. The old empty-guard counterexample is preserved in `TimerAppSystemJoin/root-closure-compose-control-2tbhayg8/stage.log`.
+
+The nested startup contract describes the pre-platform input. Its attach, application and frame runtime witnesses require requalification on the final package. No continuous arena or natural-root acceptance follows from byte composition. The earlier `TimerAppSystemJoin/root-closure-stage-01` remains loader-only and has stock image4; its closed allowance must not be reused for this package.
+
+The completed file-only invocation used the following inputs. Its output now exists; another invocation requires its own grant and a fresh output directory.
+
+```sh
+HB=/nix/store/aab2pmlkgb0nvabv3g8hhxnbw6dk8l41-host-build/bin/host-build
+OB=/home/murph/.cache/bazel/latent-image-TimerAppSystemJoin
+devenv shell -- "$HB" --output_base="$OB" run --jobs=4 \
+  //replacement/rtos_timer:stage-root-platform -- \
+  "$PWD/private-data/firmware/x-m1-1.50/FWUP0002.DAT" \
+  "$PWD/private-data/scratch/J5Root155/manifest-j5-v1.json" \
+  "$PWD/private-data/scratch/TimerAppSystemJoin" \
+  "$PWD/private-data/scratch/TimerAppSystemJoin/root-closure-composed-01"
+```
+
+For that package, the app join additionally takes `--startup-loader-a PACKAGE/startup-loader-a.bin --packaged-image4 PACKAGE/image4.bin`. Loader admission reconstructs the platform change over the recorded admitted startup loader instead of canonical stock; stock comparison still uses pinned canonical input. App admission checks the emitted dispatcher and caller spans in final image4. Owned execution maps its app, dispatcher and retained callback/checker bytes from that final image4. These bounded mappings do not execute the complete image4 or boot its root task.
+
+The app join owns a fresh `<results-directory>/stages` workspace. Publication, each of the five ordinary ticks and every fault stage have separate directories; an existing workspace is refused before case materialization. The shared cache stores reusable observations, not mutable stage work. The ownership-fixed full join rejudges all 28 original wires from cache with 596 checks and 21 controls, zero semantic failures, and retains 28 separate case files and 28 generic judgments. Its 316 historical cache-workspace files remain unchanged, with no added/removed cache keys or shared-cache growth. Generic judgments retain 28 failed exact-memory statuses; terminal observations remain 27 returned and one declared stop-address.
+
+### Bounded native scopes and admission plan
+
+The timer, cyclic and app-join CLIs accept `--scope smoke|full`, defaulting to `full`. Smoke selection changes case selection, not expectations or applicable status/admission checks.
+
+| Qualifier | Smoke | Full | Proposed additional retained cap, smoke / fresh full |
+|---|---|---|---|
+| Timer | Initialize A/B: 2 comparisons, 4 observations, 56 controls | 56 comparisons, 118 observations including 6 mutants, 280 controls | 8 / 128 MiB |
+| Cyclic | Equal-period receipt/rearm A/B: 2 comparisons, 4 observations, 23 controls | 48 comparisons, 96 observations, 179 controls | 8 / 64 MiB |
+| Domain-A app join | Publication plus seven lifecycle stages: 16 observations, 21 controls | Publication plus thirteen stages: 28 observations, 21 controls | 160 / 256 MiB |
+
+These bounds were proposed from the earlier measured cohorts, then separately admitted for the recorded leaf smokes and full qualifiers. The app smoke-only flag remains unexecuted. Prior timer work/raw-cache payloads are 54,112,256/38,262,420 bytes; cyclic work/raw-cache payloads are 22,102,016/16,083,462 bytes. Timer initialize produced 869,984 raw bytes across four observations; cyclic receipt/rearm produced 689,994. Historical app observations span multiple generations: the largest individual raw receipt is 3,285,481 bytes, not the whole old 487,075,840-byte cache. The app bounds cover raw copies plus state/input blobs. Actual current totals are recorded below and in the platform report. File-only composition completed under a 64 MiB retained grant and a separate 512 MiB transient codec grant.
+
+The measured canonical sizes give a 46,682,424-byte baseline for all normal retained composition payloads, including decoded targets, both startup-loader references and both effective carrier slices. Compressed image4 changes, JSON and filesystem allocation are additional. The 64 MiB proposal includes those normal outputs, not transient codec scratch. Platform inverse restoration is checked in memory and produces no separate restored DAT. Persisting an extra restored DAT raises the baseline to 85,087,572 bytes; that variant needs a proposed 96 MiB retained allowance plus transient headroom.
+
+Cache reuse requires the canonical immutable runner path and its bytes, the complete ordered expectation-free batch wire, and valid raw/exit/provenance digests. Expectations are judged again on every read. Changing the ordered cohort changes the batch key: cyclic smoke cannot be assumed to reuse a full cohort. Timer initialization batches and the app lifecycle prefix can be reused only if those identities remain equal. The current runner hash is `2bd58d3bc0d30d6fd9de6c22cd94c2c95c40189a0c55bb8232996a421583e8f3`; older `21ff2236ea7060c7c51958668c1debf0b560855b106c9375629a154d50b3aefc` receipts cannot be preclaimed as hits. Budget fresh observations until admission proves otherwise.
+
+After explicit slot and output admission, use Bazel's `--run_under` with the parent-verified main slot wrapper. Host-build owns `--script_path` internally; supplying another one creates the requested launcher but breaks host-build's follow-on handoff. `--run_under` starts the contained qualifier after build admission is released. Keep `XM1_EMULATOR_SLOTS=1` and explicit 2 GiB for these small native scopes. `RUN` must be a newly admitted output directory, `P` the newly staged package, `B` this output base's `bazel-bin`, and `CACHE` the shared native cache. Replace `smoke` with `full` only under its own allowance.
+
+The wrapper normally honors `BUILD_WORKING_DIRECTORY`; remove that variable only around a Bazel `--run_under` wrapper so relative runfiles arguments retain Bazel's working directory. The executed private plans instead record absolute argv for every linked input and avoid this cwd dependency.
+
+```sh
+STOCK="$PWD/private-data/analysis/x-m1-1.50"
+B="$PWD/bazel-bin"
+P="$PWD/private-data/scratch/TimerAppSystemJoin/root-closure-composed-01"
+CACHE="$PWD/private-data/scratch/TimerAppSystemJoin/native-cache"
+mkdir -p "$RUN"
+SLOT_WRAPPER=/var/home/murph/Code/latent-image/private-data/scratch/HostAdmission/bin/emulator-slot-six
+XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=2G devenv shell -- "$HB" --output_base="$OB" run --jobs=4 --run_under="env -u BUILD_WORKING_DIRECTORY $SLOT_WRAPPER" \
+  //replacement/rtos_timer/oracle:timer-oracle -- --scope smoke \
+  --loader-a "$STOCK/decode/loader-40000.bin" --loader-b "$STOCK/decode/loader-d0000.bin" \
+  --aggregate-a-bin "$P/effective-carrier-a.bin" --aggregate-a-symbols "$B/replacement/rtos_platform/platform-a.symbols" \
+  --aggregate-a-placements "$B/replacement/rtos_platform/placement-a.json" \
+  --aggregate-b-bin "$P/effective-carrier-b.bin" --aggregate-b-symbols "$B/replacement/rtos_platform/platform-b.symbols" \
+  --aggregate-b-placements "$B/replacement/rtos_platform/placement-b.json" \
+  --aggregate-carriers "$PWD/replacement/rtos_platform/carriers.json" --cache-root "$CACHE" --results "$RUN/timer/results.json"
+```
+
+The cyclic and app commands use separate work directories:
+
+```sh
+XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=2G devenv shell -- "$HB" --output_base="$OB" run --jobs=4 --run_under="env -u BUILD_WORKING_DIRECTORY $SLOT_WRAPPER" \
+  //replacement/rtos_cyclic/oracle:cyclic-oracle -- --scope smoke \
+  --loader-a "$STOCK/decode/loader-40000.bin" --loader-b "$STOCK/decode/loader-d0000.bin" \
+  --aggregate-a-bin "$P/effective-carrier-a.bin" --aggregate-a-symbols "$B/replacement/rtos_platform/platform-a.symbols" \
+  --aggregate-a-placements "$B/replacement/rtos_platform/placement-a.json" \
+  --aggregate-b-bin "$P/effective-carrier-b.bin" --aggregate-b-symbols "$B/replacement/rtos_platform/platform-b.symbols" \
+  --aggregate-b-placements "$B/replacement/rtos_platform/placement-b.json" \
+  --aggregate-carriers "$PWD/replacement/rtos_platform/carriers.json" --cache-root "$CACHE" --results "$RUN/cyclic/results.json"
+XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=2G devenv shell -- "$HB" --output_base="$OB" run --jobs=4 --run_under="env -u BUILD_WORKING_DIRECTORY $SLOT_WRAPPER" \
+  //replacement/rtos_cyclic/oracle:join-oracle -- --scope smoke \
+  --image4 "$STOCK/lz/id4-0061c400.bin" \
+  --loader-a "$STOCK/decode/loader-40000.bin" --loader-b "$STOCK/decode/loader-d0000.bin" \
+  --packaged-loader-a "$P/loader-a.bin" --startup-loader-a "$P/startup-loader-a.bin" \
+  --packaged-image4 "$P/image4.bin" \
+  --aggregate-bin-a "$B/replacement/rtos_platform/platform-a.bin" \
+  --aggregate-symbols-a "$B/replacement/rtos_platform/platform-a.symbols" \
+  --aggregate-placements-a "$B/replacement/rtos_platform/placement-a.json" \
+  --aggregate-carriers "$PWD/replacement/rtos_platform/carriers.json" --cache-root "$CACHE" --results "$RUN/app/results.json"
+```
+
+The actual `root-closure-composed-01` package passes file-only loader/app admission. Its two independently guarded leaf smokes pass 2 comparisons and 4 fresh observations each: timer has 72 checks/56 controls; cyclic has 80 checks/23 controls. All semantic checks hold. The eight generic exact-memory native receipts retain `failed` statuses for writable-region changes; all eight runner observations returned. Guarded launcher intervals overlap for 0.326 seconds. Both have observed 2 GiB memory limits and no reserve or retention violation; their subsecond cgroups have journal start records but no journal end records. `stage-receipt.json`, `smoke-plan.json` and `smoke-receipt.json` retain exact commands, identities and measured allocation. These are bounded semantic-oracle results, not generic native-case passes, natural root boot, physical arena exclusivity or a core-1 app caller.
+
+The default-full timer, cyclic and packaged app cohorts pass 56/48/28 comparisons or records, 3444/1512/596 checks and 280/179/21 controls, with zero semantic failures. They contain 242 observations: 238 fresh and four reused initialization observations. Guarded launcher intervals overlap for 7.034 seconds; journal-recorded cgroup lifecycle intervals overlap for 6.884 seconds. The later workspace-fixed app run rejudges all 28 unchanged original cases from cache and retains every phase judgment. [Issue 162](https://github.com/skeet70/latent-image/issues/162) records the ownership defect, fix, retained original evidence and remaining limits. Exact allocations, resource peaks, raw terminal exceptions and receipt hashes are in `full-receipt.json`, `cgroup-journal-receipt.json` and the [platform report](../reports/rtos-platform-options.md).
+
+The launcher commands above describe the completed legacy admission recipe, not a new launch authorization. New host builds use the parent-approved `/nix/store/4daiijs9y231gjv2i8q5251hpcpkxrj8-host-build/bin/host-build` through devenv. New native scopes use `private-data/scratch/HostAdmission/bin/emulator-slot-weighted-5d1ea738 --native COMMAND`; new full-system guests remain paused. Completed scopes retain their original admission identities.

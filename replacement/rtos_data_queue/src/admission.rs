@@ -49,6 +49,25 @@ pub struct Admitted {
     pub handler: bool,
 }
 
+pub struct Prechecked {
+    service: Service,
+    admitted: Admitted,
+}
+
+impl Prechecked {
+    pub fn object(&self) -> DataQueueId {
+        self.admitted.object
+    }
+
+    pub fn finish(self, facts: Facts) -> Result<Admitted, ObjectStatus> {
+        exists(facts)?;
+        if matches!(self.service, Service::ForceSend | Service::ForceSendHandler) && facts.capacity == 0 {
+            return Err(ObjectStatus::Capacity);
+        }
+        Ok(self.admitted)
+    }
+}
+
 pub struct Request {
     pub service: Service,
     pub entry_domain: Domain,
@@ -115,7 +134,7 @@ pub fn admit_precheck(
     id: EncodedId,
     records: Records,
     params: Params,
-) -> Result<(DataQueueId, Timeout, bool), ObjectStatus> {
+) -> Result<Prechecked, ObjectStatus> {
     let handler = matches!(service, Service::SendPollHandler | Service::ForceSendHandler);
     context_check(service, entry)?;
     let object = resolve_data_queue(EntryDomain::new(entry_domain), id, records.data_queues)?;
@@ -130,31 +149,18 @@ pub fn admit_precheck(
         }
         _ => Timeout::Forever,
     };
-    Ok((object, timeout, handler))
+    Ok(Prechecked { service, admitted: Admitted { object, timeout, handler } })
 }
 
 /// The stock order: context, class, index, timeout, existence, capacity.
 pub fn admit(request: &Request) -> Result<Admitted, ObjectStatus> {
-    let (object, timeout, handler) = admit_precheck(
+    admit_precheck(
         request.service,
         request.entry_domain,
         request.entry,
         request.id,
         request.records,
         request.params,
-    )?;
-    exists(request.facts)?;
-    if matches!(
-        request.service,
-        Service::ForceSend | Service::ForceSendHandler
-    ) && request.facts.capacity == 0
-    {
-        return Err(ObjectStatus::Capacity);
-    }
-    Ok(Admitted {
-        object,
-        timeout,
-        handler,
-    })
+    )?.finish(request.facts)
 }
 

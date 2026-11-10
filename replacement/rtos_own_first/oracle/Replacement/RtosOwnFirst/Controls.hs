@@ -6,11 +6,15 @@ module Replacement.RtosOwnFirst.Controls
   , mutants
   , equivalents
   , controlCode
+  , buildControlBody
   ) where
 
+import Control.Monad (unless)
+import qualified Data.ByteString as B
+import Emulation.OwnedCase (word32le)
 import Data.Word (Word32)
 import Replacement.RtosOwnFirst.Assembly
-import Replacement.RtosOwnFirst.Oracle (DataWords (..), Slot (..), dataWords, slotEntry)
+import Replacement.RtosOwnFirst.Oracle (Body (..), DataWords (..), Slot (..), dataWords, replaceEntry, slotEntry)
 import Replacement.RtosOwnFirst.Regions (Domain, DomainTable)
 
 data Expectation = MustPass | MustFail deriving (Eq, Show)
@@ -20,7 +24,7 @@ data Control = Control
   , controlSlot :: Slot
   , controlExpectation :: Expectation
   , controlNote :: String
-  , -- | Items placed at the slot's entry; the table gives +0x16c's callee entries.
+  , -- | The table supplies +0x16c's callee entries.
     controlItems :: DataWords -> DomainTable -> Either String [Item]
   }
 
@@ -29,6 +33,27 @@ controlCode domain table control = do
   entry <- slotEntry table (controlSlot control)
   items <- controlItems control (dataWords domain) table
   assembleAt entry items
+
+buildControlBody :: Word32 -> Domain -> DomainTable -> Control -> Body -> Either String Body
+buildControlBody fill domain table control body
+  | lookup (bodyEntry body) (bodyFunctions body) == Just 4 = do
+      items <- controlItems control (dataWords domain) table
+      code <- assembleAt foreignEntry items
+      let bytes = B.concat (map word32le code)
+          size = fromIntegral (B.length bytes)
+      unless (not (B.null bytes) && B.length bytes <= 0x1000) (Left "control exceeds foreign code extent")
+      unless (all (\(base, image) -> toInteger base + toInteger (B.length image) <= toInteger foreignEntry
+          || toInteger foreignEntry + toInteger size <= toInteger base) (bodyCode body))
+        (Left "foreign control overlaps supplied code")
+      veneer <- assembleAt (bodyEntry body) [branchTo foreignEntry]
+      redirected <- replaceEntry fill veneer body
+      pure redirected
+        { bodyCode = bodyCode redirected ++ [(foreignEntry, bytes)]
+        , bodyFunctions = bodyFunctions redirected ++ [(foreignEntry, size)]
+        }
+  | otherwise = controlCode domain table control >>= \code -> replaceEntry fill code body
+  where
+    foreignEntry = 0x00800000
 
 fixed :: ([Item]) -> DataWords -> DomainTable -> Either String [Item]
 fixed items _ _ = Right items

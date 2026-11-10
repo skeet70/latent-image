@@ -1,0 +1,498 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "carriers.json",
+    "platform-a.ld",
+    "platform-b.ld",
+    "veneer-a.S",
+    "veneer-b.S",
+])
+
+haskell_library(
+    name = "aggregate",
+    srcs = ["aggregate/Replacement/RtosPlatform/Aggregate.hs"],
+    src_strip_prefix = "aggregate",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:text",
+    ],
+)
+
+xm1_rust_staticlib(
+    name = "platform-root",
+    src = "src/lib.rs",
+    crate_name = "xm1_rtos_platform",
+)
+
+[
+    xm1_rust_rlib(
+        name = "scheduler-%s-rlib" % domain,
+        src = "//replacement/rtos_scheduler:src/lib.rs",
+        crate_name = "xm1_rtos_scheduler",
+        data = [
+            "//replacement/rtos_scheduler:src/entries.rs",
+            "//replacement/rtos_scheduler:src/s3a.rs",
+            "//replacement/rtos_scheduler:src/s3b.rs",
+            "//replacement/rtos_layout:src/lib.rs",
+            "//replacement/rtos_reservation:src/lib.rs",
+        ],
+        rustc_flags = [
+            "--cfg",
+            "'feature=\"domain-%s\"'" % domain,
+            "--cfg",
+            "'feature=\"s3a\"'",
+            "--cfg",
+            "'feature=\"component\"'",
+        ],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    xm1_rust_rlib(
+        name = "scheduler-s2-%s-rlib" % domain,
+        src = "//replacement/rtos_scheduler:src/s2.rs",
+        crate_name = "xm1_rtos_scheduler_s2",
+        rustc_flags = [
+            "--cfg",
+            "'feature=\"domain-%s\"'" % domain,
+            "--cfg",
+            "'feature=\"component\"'",
+        ],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    xm1_rust_rlib(
+        name = "scheduler-s3c-%s-rlib" % domain,
+        src = "//replacement/rtos_scheduler:src/s3c.rs",
+        crate_name = "xm1_rtos_scheduler_s3c",
+        data = [
+            "//replacement/rtos_layout:src/lib.rs",
+            "//replacement/rtos_reservation:src/lib.rs",
+        ],
+        rustc_flags = [
+            "--cfg",
+            "'feature=\"domain-%s\"'" % domain,
+            "--cfg",
+            "'feature=\"component\"'",
+        ],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    xm1_rust_rlib(
+        name = "scheduler-s3d-%s-rlib" % domain,
+        src = "//replacement/rtos_scheduler/stage:s3d_abi.rs",
+        crate_name = "xm1_rtos_scheduler_s3d",
+        data = [
+            "//replacement/rtos_scheduler:src/s3d.rs",
+            "//replacement/rtos_scheduler:src/timeout.rs",
+            "//replacement/rtos_layout:src/lib.rs",
+            "//replacement/rtos_reservation:src/lib.rs",
+        ],
+        rustc_flags = [
+            "--cfg",
+            "'feature=\"domain-%s\"'" % domain,
+            "--cfg",
+            "'feature=\"stage\"'",
+            "--cfg",
+            "'feature=\"component\"'",
+        ],
+    )
+    for domain in ["a", "b"]
+]
+
+
+[
+    xm1_rust_rlib(
+        name = "own-first-%s-rlib" % domain,
+        src = "//replacement/rtos_own_first:src/lib.rs",
+        crate_name = "xm1_rtos_own_first",
+        data = [
+            "//replacement/rtos_own_first:src/entries.rs",
+            "//replacement/rtos_layout:src/lib.rs",
+            "//replacement/rtos_reservation:src/lib.rs",
+        ],
+        rustc_flags = [
+            "--cfg",
+            "'feature=\"domain-%s\"'" % domain,
+            "--cfg",
+            "'feature=\"component\"'",
+        ],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    xm1_rust_rlib(
+        name = "semaphore-%s-rlib" % domain,
+        src = "//replacement/rtos_semaphore:stage/adapter.rs",
+        crate_name = "xm1_rtos_semaphore_stage",
+        data = [
+            "//replacement/rtos_layout:src/lib.rs",
+            "//replacement/rtos_reservation:src/lib.rs",
+            "//replacement/rtos_semaphore:src/admission.rs",
+            "//replacement/rtos_semaphore:src/block.rs",
+            "//replacement/rtos_semaphore:src/count.rs",
+            "//replacement/rtos_semaphore:src/create.rs",
+            "//replacement/rtos_semaphore:src/id.rs",
+            "//replacement/rtos_semaphore:src/lib.rs",
+            "//replacement/rtos_semaphore:src/locks.rs",
+            "//replacement/rtos_semaphore:src/order.rs",
+            "//replacement/rtos_semaphore:src/signal.rs",
+            "//replacement/rtos_semaphore:src/status.rs",
+            "//replacement/rtos_semaphore:src/teardown.rs",
+            "//replacement/rtos_semaphore:src/timeout.rs",
+            "//replacement/rtos_semaphore:src/wake.rs",
+        ],
+        rustc_flags = [
+            "--cfg",
+            "'feature=\"domain-%s\"'" % domain,
+            "--cfg",
+            "'feature=\"stage\"'",
+            "--cfg",
+            "'feature=\"component\"'",
+        ],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    xm1_rust_rlib(
+        name = "fixed-pool-%s-rlib" % domain,
+        src = "//replacement/rtos_fixed_pool:stage/adapter.rs",
+        crate_name = "xm1_rtos_fixed_pool_stage",
+        data = [
+            "//replacement/rtos_fixed_pool:src/admission.rs",
+            "//replacement/rtos_fixed_pool:src/create.rs",
+            "//replacement/rtos_fixed_pool:src/get.rs",
+            "//replacement/rtos_fixed_pool:src/id.rs",
+            "//replacement/rtos_fixed_pool:src/lib.rs",
+            "//replacement/rtos_fixed_pool:src/machine.rs",
+            "//replacement/rtos_fixed_pool:src/release.rs",
+            "//replacement/rtos_fixed_pool:src/status.rs",
+            "//replacement/rtos_fixed_pool:src/take.rs",
+            "//replacement/rtos_fixed_pool:src/teardown.rs",
+            "//replacement/rtos_fixed_pool:src/timeout.rs",
+            "//replacement/rtos_layout:src/lib.rs",
+            "//replacement/rtos_reservation:src/lib.rs",
+        ],
+        rustc_flags = [
+            "--cfg",
+            "'feature=\"domain-%s\"'" % domain,
+            "--cfg",
+            "'feature=\"stage\"'",
+            "--cfg",
+            "'feature=\"component\"'",
+        ],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    xm1_rust_rlib(
+        name = "task-records-%s-rlib" % domain,
+        src = "//replacement/rtos_task_records:stage/abi.rs",
+        crate_name = "xm1_rtos_task_records_abi",
+        data = [
+            "//replacement/rtos_layout:src/lib.rs",
+            "//replacement/rtos_reservation:src/lib.rs",
+            "//replacement/rtos_task_records:src/lib.rs",
+        ],
+        rustc_flags = [
+            "--cfg",
+            "'feature=\"domain-%s\"'" % domain,
+            "--cfg",
+            "'feature=\"stage\"'",
+            "--cfg",
+            "'feature=\"component\"'",
+        ],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    xm1_rust_rlib(
+        name = "data-queue-%s-rlib" % domain,
+        src = "//replacement/rtos_data_queue:stage/adapter.rs",
+        crate_name = "xm1_rtos_data_queue_abi",
+        data = [
+            "//replacement/rtos_data_queue:src/admission.rs",
+            "//replacement/rtos_data_queue:src/create.rs",
+            "//replacement/rtos_data_queue:src/env.rs",
+            "//replacement/rtos_data_queue:src/id.rs",
+            "//replacement/rtos_data_queue:src/lib.rs",
+            "//replacement/rtos_data_queue:src/ops.rs",
+            "//replacement/rtos_data_queue:src/ring.rs",
+            "//replacement/rtos_data_queue:src/status.rs",
+            "//replacement/rtos_data_queue:src/timeout.rs",
+            "//replacement/rtos_layout:src/lib.rs",
+            "//replacement/rtos_reservation:src/lib.rs",
+        ],
+        rustc_flags = [
+            "--cfg",
+            "'feature=\"domain-%s\"'" % domain,
+            "--cfg",
+            "'feature=\"stage\"'",
+            "--cfg",
+            "'feature=\"component\"'",
+        ],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    xm1_rust_rlib(
+        name = "cyclic-%s-rlib" % domain,
+        src = "//replacement/rtos_cyclic:src/lib.rs",
+        crate_name = "xm1_rtos_cyclic_abi",
+        data = [
+            "//replacement/rtos_cyclic:src/app.rs",
+            "//replacement/rtos_cyclic:src/id.rs",
+            "//replacement/rtos_cyclic:src/machine.rs",
+            "//replacement/rtos_cyclic:src/ops.rs",
+            "//replacement/rtos_cyclic:src/status.rs",
+            "//replacement/rtos_cyclic:src/types.rs",
+            "//replacement/rtos_cyclic:stage/abi.rs",
+            "//replacement/rtos_layout:src/lib.rs",
+            "//replacement/rtos_reservation:src/lib.rs",
+        ],
+        rustc_flags = [
+            "--cfg",
+            "'feature=\"domain-%s\"'" % domain,
+            "--cfg",
+            "'feature=\"stage\"'",
+            "--cfg",
+            "'feature=\"component\"'",
+        ],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    xm1_rust_rlib(
+        name = "timer-%s-rlib" % domain,
+        src = "//replacement/rtos_timer:stage/abi.rs",
+        crate_name = "xm1_rtos_timer_abi",
+        data = [
+            "//replacement/rtos_timer:src/lib.rs",
+            "//replacement/rtos_layout:src/lib.rs",
+            "//replacement/rtos_reservation:src/lib.rs",
+        ],
+        rustc_flags = [
+            "--cfg",
+            "'feature=\"domain-%s\"'" % domain,
+            "--cfg",
+            "'feature=\"stage\"'",
+            "--cfg",
+            "'feature=\"component\"'",
+        ],
+    )
+    for domain in ["a", "b"]
+]
+
+xm1_rust_rlib(
+    name = "global-lock-rlib",
+    src = "//replacement/rtos_global_lock:stage/abi.rs",
+    crate_name = "xm1_rtos_global_lock_abi",
+    data = [
+        "//replacement/rtos_global_lock:src/lib.rs",
+        "//replacement/rtos_layout:src/lib.rs",
+        "//replacement/rtos_reservation:src/lib.rs",
+    ],
+    rustc_flags = [
+        "--cfg",
+        "'feature=\"stage\"'",
+        "--cfg",
+        "'feature=\"component\"'",
+    ],
+)
+
+_ARCHIVES = {
+    "a": [
+        ":platform-root",
+        ":scheduler-a-rlib",
+        ":scheduler-s2-a-rlib",
+        ":scheduler-s3c-a-rlib",
+        ":scheduler-s3d-a-rlib",
+        ":data-queue-a-rlib",
+        ":own-first-a-rlib",
+        ":semaphore-a-rlib",
+        ":fixed-pool-a-rlib",
+        ":task-records-a-rlib",
+        ":global-lock-rlib",
+        ":cyclic-a-rlib",
+        ":timer-a-rlib",
+    ],
+    "b": [
+        ":platform-root",
+        ":scheduler-b-rlib",
+        ":scheduler-s2-b-rlib",
+        ":scheduler-s3c-b-rlib",
+        ":scheduler-s3d-b-rlib",
+        ":data-queue-b-rlib",
+        ":own-first-b-rlib",
+        ":semaphore-b-rlib",
+        ":fixed-pool-b-rlib",
+        ":task-records-b-rlib",
+        ":global-lock-rlib",
+        ":cyclic-b-rlib",
+        ":timer-b-rlib",
+    ],
+}
+
+[
+    genrule(
+        name = "bodies-%s" % domain,
+        srcs = _ARCHIVES[domain] + [
+            "veneer-%s.S" % domain,
+            "//replacement/rtos_fixed_pool:stage/entries.S",
+            "carriers.json",
+        ],
+        outs = ["bodies-%s.o" % domain, "sections-%s.txt" % domain],
+        cmd = """
+set -e
+tmp=$$(mktemp -d)
+trap 'rm -rf "$$tmp"' EXIT
+$(location @lab_clang//:bin/clang) --target=armv7r-none-eabi -march=armv7-r -marm -c $(location veneer-%s.S) -o $$tmp/veneer.o
+$(location @lab_clang//:bin/clang) --target=armv7r-none-eabi -march=armv7-r -marm -c $(location //replacement/rtos_fixed_pool:stage/entries.S) -o $$tmp/entries.o
+$(location @lab_jq//:bin/jq) -r '.domains.%s | (.entries[].symbol, .entries[].veneer)' $(location carriers.json) | sort -u > $$tmp/seeds
+$(location @lab_lld//:bin/ld.lld) -m armelf -r --gc-sections $$(awk '{printf " -u %%s", $$1}' $$tmp/seeds) --start-group %s --end-group $$tmp/veneer.o $$tmp/entries.o -o $(location :bodies-%s.o)
+$(location @lab_llvm//:bin/llvm-readelf) -S $(location :bodies-%s.o) > $(location :sections-%s.txt)
+""" % (domain, domain, " ".join(["$(location %s)" % archive for archive in _ARCHIVES[domain]]), domain, domain, domain),
+        tools = [
+            "@lab_clang//:bin/clang",
+            "@lab_jq//:bin/jq",
+            "@lab_lld//:bin/ld.lld",
+            "@lab_llvm//:bin/llvm-readelf",
+        ],
+        visibility = ["//visibility:public"],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    genrule(
+        name = "platform-script-%s" % domain,
+        srcs = ["carriers.json", ":sections-%s.txt" % domain],
+        outs = ["platform-%s.gen.ld" % domain, "placement-%s.json" % domain],
+        tools = [":place-platform"],
+        cmd = "$(location :place-platform) $(location carriers.json) %s $(location :sections-%s.txt) $(location :platform-%s.gen.ld) $(location :placement-%s.json)" % (domain, domain, domain, domain),
+        visibility = ["//visibility:public"],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    genrule(
+        name = "platform-%s" % domain,
+        srcs = [":bodies-%s.o" % domain, ":platform-%s.gen.ld" % domain],
+        outs = [
+            "platform-%s.elf" % domain,
+            "platform-%s.bin" % domain,
+            "platform-%s.symbols" % domain,
+            "platform-%s.disasm" % domain,
+        ],
+        cmd = """
+set -e
+$(location @lab_lld//:bin/ld.lld) -m armelf -T $(location :platform-%s.gen.ld) $(location :bodies-%s.o) -o $(location :platform-%s.elf)
+$(location @lab_llvm//:bin/llvm-objcopy) -O binary $(location :platform-%s.elf) $(location :platform-%s.bin)
+$(location @lab_llvm//:bin/llvm-nm) -S --defined-only --numeric-sort $(location :platform-%s.elf) > $(location :platform-%s.symbols)
+$(location @lab_llvm//:bin/llvm-objdump) -d --no-show-raw-insn --triple=armv7r-none-eabi --mcpu=cortex-r4f $(location :platform-%s.elf) > $(location :platform-%s.disasm)
+""" % (domain, domain, domain, domain, domain, domain, domain, domain, domain),
+        tools = [
+            "@lab_lld//:bin/ld.lld",
+            "@lab_llvm//:bin/llvm-objcopy",
+            "@lab_llvm//:bin/llvm-nm",
+            "@lab_llvm//:bin/llvm-objdump",
+        ],
+        visibility = ["//visibility:public"],
+    )
+    for domain in ["a", "b"]
+]
+
+haskell_library(
+    name = "platform-artifact",
+    srcs = [
+        "stage/Replacement/RtosPlatform/Artifact.hs",
+        "stage/Replacement/RtosPlatform/Place.hs",
+        "stage/Replacement/RtosPlatform/Union.hs",
+    ],
+    src_strip_prefix = "stage",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":aggregate",
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:first-stage",
+        "//host:text",
+        "//host:update-container",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+    ],
+)
+
+haskell_binary(
+    name = "stage-platform",
+    srcs = ["stage/StageMain.hs"],
+    main_file = "stage/StageMain.hs",
+    data = ["carriers.json"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":platform-artifact",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+    ],
+)
+
+haskell_binary(
+    name = "place-platform",
+    srcs = ["stage/PlaceMain.hs"],
+    main_file = "stage/PlaceMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":platform-artifact",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+    ],
+)
+
+haskell_test(
+    name = "platform-tests",
+    size = "small",
+    srcs = [
+        "stage/Tests.hs",
+        "//replacement/startup_artifact:Fixtures.hs",
+    ],
+    main_file = "stage/Tests.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":platform-artifact",
+        ":aggregate",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:first-stage",
+        "//host:update-container",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+    ],
+)

@@ -1,9 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Replacement.RtosScheduler.S3a (Service (..), services, serviceName, serviceExtent, Scenario (..), scenarios, makeSpec, difference, expected, contractHolds, controlSpec) where
+module Replacement.RtosScheduler.S3a (Service (..), services, serviceName, serviceExtent, Scenario (..), scenarios, Linked (..), makeSpec, difference, expected, contractHolds, controlSpec) where
 
 import Data.Bits ((.&.), (.|.), shiftL)
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
+import Data.List (isPrefixOf, sortOn)
 import Data.Word (Word32)
 import qualified Emulation.NativeCase as C
 import Emulation.NativeObservation
@@ -11,6 +12,7 @@ import Emulation.OwnedCase
 import Replacement.RtosOwnFirst.Regions (Domain (..))
 import Replacement.RtosScheduler.Layout
 import Replacement.RtosScheduler.Oracle (Env (..), Row (..), Locality (..), Body (..), caseGrid, caseSpec, taskAddress, recordAddress)
+import qualified Replacement.RtosPlatform.Aggregate as Agg
 import Replacement.RtosScheduler.Regions (Helper (Rotate))
 
 data Service = Disable | Enable | Exit | RotateTask | RotateInterrupt | RotateCore | RotateInterruptCore deriving (Eq, Show, Enum, Bounded)
@@ -75,7 +77,9 @@ poke at value region@(CaseRegion raw permission)
     offset = fromIntegral (at-base)
     bytes = C.regionBytes raw
 
-makeSpec :: Env -> Domain -> B.ByteString -> Maybe B.ByteString -> Service -> Scenario -> String -> CaseSpec
+data Linked = Standalone B.ByteString | Aggregate B.ByteString [Agg.AggregateSymbol] [Agg.SectionPlacement]
+
+makeSpec :: Env -> Domain -> B.ByteString -> Maybe Linked -> Service -> Scenario -> String -> CaseSpec
 makeSpec env domain loader owned service scenario label = spec
   { caseId=label, caseEntry=address entry, caseRegions=regions, caseFunctions=functions
   , caseInitial=initial, caseExpectedStatus=endStatus, caseKernel=Just (KernelCase (InstructionLimit 1600) stop Nothing Nothing Nothing excluded [])
@@ -92,18 +96,40 @@ makeSpec env domain loader owned service scenario label = spec
     row=row0 {rowLocality=if target==domain then Local else Remote, rowLists=lists, rowSelected=chosen, rowStale=Nothing, rowDispatch=dispatchWord scenario, rowTaskPriority=3, rowState=1, rowFlags=0, rowArgument=3, rowLockWord=if held scenario then 1 else 0}
     entry=fst (serviceExtent domain service)
     loaderBase=if domain==DomainA then 0x40000 else 0xd0000
+    selected = case owned of
+      Just (Aggregate _ symbols _) -> symbols
+      _ -> []
+    placements = case owned of
+      Just (Aggregate _ _ rows) -> rows
+      _ -> []
+    placementSpans = [(Agg.placementAddress placement, Agg.placementBytes placement) | placement <- placements]
+    aggregateImage = case owned of
+      Just (Aggregate bin symbols _) -> Just (Agg.AggregateImage (minimum (map Agg.symbolAddress symbols)) bin)
+      _ -> Nothing
     bytes=case owned of
       Nothing -> loader
-      Just bin -> foldl' replace loader services
+      Just (Standalone bin) -> foldl' replace loader services
         where
           ownBase=fst (serviceExtent domain Exit)
           replace old s=let (at,size)=serviceExtent domain s; offset=fromIntegral (at-loaderBase); source=fromIntegral (at-ownBase) in B.take offset old <> B.take (fromIntegral size) (B.drop source bin) <> B.drop (offset+fromIntegral size) old
+      Just (Aggregate _ _ _) -> case aggregateImage of
+        Just image ->
+          let offset = fromIntegral (Agg.imageBase image - loaderBase)
+              payload = Agg.imageBytes image
+           in B.take offset loader <> payload <> B.drop (offset + B.length payload) loader
+        Nothing -> loader
     slice :: Word32 -> Word32 -> B.ByteString
     slice at size=B.take (fromIntegral size) (B.drop (fromIntegral (at-loaderBase)) bytes)
     tableAt=if domain==DomainA then 0x4daa0 else 0xdda64
     helperBase=minimum (map fst helpers)
     helperEnd=maximum [at+size | (at,size)<-helpers]
-    body=Body entry [(entry,slice entry (snd (serviceExtent domain service))),(helperBase,slice helperBase (helperEnd-helperBase))] [] [] [(tableAt,slice tableAt 16)]
+    symbolSpans = [(Agg.symbolAddress symbol, Agg.symbolSize symbol) | symbol <- selected]
+    payloadSpans = maybe [] (\image -> [(Agg.imageBase image, fromIntegral (B.length (Agg.imageBytes image)))]) aggregateImage
+    aggregateBase = minimum (map fst (symbolSpans ++ helpers ++ placementSpans ++ payloadSpans))
+    aggregateTop = maximum [at+size | (at,size)<-symbolSpans ++ helpers ++ placementSpans ++ payloadSpans]
+    body = case owned of
+      Just (Aggregate _ _ _) -> Body entry [(aggregateBase, slice aggregateBase (aggregateTop-aggregateBase))] [] [] [(tableAt,slice tableAt 16)]
+      _ -> Body entry [(entry,slice entry (snd (serviceExtent domain service))),(helperBase,slice helperBase (helperEnd-helperBase))] [] [] [(tableAt,slice tableAt 16)]
     spec=caseSpec env domain body label Rotate row
     rawRegions=map extendContext (caseRegions spec)
     extendContext region@(CaseRegion raw permission)
@@ -131,7 +157,12 @@ makeSpec env domain loader owned service scenario label = spec
         ++ [w (recordAddress layout domain target+0x10) 0x00102000 | not (ready scenario)]
     regions=foldl' (\rs (at,value)->map (poke at value) rs) (rawRegions++fixtureRegions) patches
     helpers=if domain==DomainA then [(0x439d8,0x3c),(0x43a14,0x28),(0x43c48,0x5c),(0x43ca4,0x7c),(0x43d20,0xb0),(0x43dd0,0x48),(0x43f70,0x2c),(0x44018,0x2c),(0x44134,0x80),(0x433e4,0x60)] else [(0xd398c,0x3c),(0xd39c8,0x28),(0xd3c04,0x5c),(0xd3c60,0x7c),(0xd3cdc,0xb0),(0xd3d8c,0x48),(0xd3f2c,0x2c),(0xd3fd4,0x30),(0xd40f4,0x80),(0xd33e4,0x60)]
-    functions=[(address at,size) | (at,size)<-serviceExtent domain service:helpers] ++ fixtureFunctions
+    overlaps (left, size) (right, count) = left < right + count && right < left + size
+    retainedHelpers = [extent | extent <- helpers, not (any (overlaps extent) (symbolSpans ++ placementSpans))]
+    placementFunctions = [(Agg.placementAddress placement, Agg.placementBytes placement) | placement <- placements, ".text." `isPrefixOf` Agg.placementSection placement]
+    functions=(case owned of
+      Just (Aggregate _ _ _) -> [(address at,size) | (at,size)<-mergeSpans (symbolSpans ++ retainedHelpers ++ placementFunctions)]
+      _ -> [(address at,size) | (at,size)<-serviceExtent domain service:helpers]) ++ fixtureFunctions
     (endStatus,stop)=expected env domain service scenario
     excluded=Cpsr : (if endStatus==InstructionBudget then [R0,R1,R2,R3,R4,R5,R6,R7,R8,R9,R10,R11,R12,Sp,Lr,Pc] else if stop/=Nothing then [R1,R2,R3,R4,R5,R6,R7,R8,R9,R10,R11,R12,Sp,Lr] else [R1,R2,R3,R12,Lr])
     initial=map (\(reg,value)->(reg,case reg of R0 -> if coreService service then selector scenario else priority scenario; R1 -> priority scenario; Cpsr -> entryControl scenario .|. (if irqMasked scenario then 0x80 else 0); _ -> value)) (caseInitial spec)
@@ -143,6 +174,16 @@ makeSpec env domain loader owned service scenario label = spec
       ++ [mkRegion (RegionId "retry-state") (address 0x0096d000) 4 ReadWrite (word32le 1) | retryAcquire scenario]
       ++ [fixtureCode 0x00102000 [0xe59f1008,0xe3a02001,0xe5c12000,branchWord (0x00102000+12) releaseAt,localTask+0xc] | not (ready scenario)]
     fixtureFunctions=[(address 0x00101000,32) | retryAcquire scenario] ++ [(address 0x00102000,16) | not (ready scenario)]
+
+mergeSpans :: [(Word32, Word32)] -> [(Word32, Word32)]
+mergeSpans spans = go (sortOn fst spans)
+  where
+    go []=[]
+    go ((start,size):rest)=extend start (start+size) rest
+    extend start end []=[(start,end-start)]
+    extend start end ((lo,size):rest)
+      | lo<end=extend start (max end (lo+size)) rest
+      | otherwise=(start,end-start):extend lo (lo+size) rest
 
 address :: Word32 -> GuestAddress
 address=GuestAddress . fromIntegral

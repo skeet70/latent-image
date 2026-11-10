@@ -34,6 +34,7 @@ import Data.Aeson (FromJSON (..), eitherDecodeStrict', withObject, (.:))
 import Data.Bits ((.&.), (.|.), complement, shiftL, shiftR)
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
+import Data.List (isPrefixOf, sortOn)
 import Data.Maybe (isJust)
 import Data.Word (Word32, Word8)
 import Emulation.CachedNativeBatch (BatchReuse, cachedObservedBatch)
@@ -48,7 +49,9 @@ import Emulation.NativeObservation
   , RunnerStatus (..)
   , Write (..)
   , WriteValue (..)
+  , WriteBytes (..)
   )
+import qualified Replacement.RtosPlatform.Aggregate as Agg
 import Emulation.OwnedCase
   ( CaseOutcome (..)
   , CaseSpec (..)
@@ -350,15 +353,28 @@ data Case = Case
   , caseMask :: Maybe Word32
   , caseEntryControl :: Maybe Word32
   , caseRestoresMask :: Bool
+  , caseTimerIndex :: Maybe TimerIndexCell
   }
 
-data Image = Image {imageBase :: Word32, imageBytes :: B.ByteString}
+data Image = Image {imageBase :: Word32, imageBytes :: B.ByteString, imageSymbols :: [Agg.AggregateSymbol], imagePlacements :: [Agg.SectionPlacement]}
+
+newtype TimerIndexCell = TimerIndexCell GuestAddress
+
+data TimerContract = RecordingTimer | OwnedTimer deriving (Eq)
+
+timerContract :: Image -> TimerContract
+timerContract image
+  | all (`elem` names) ["xm1_rtos_timer_remove_body", "xm1_rtos_timer_tick_body"] = OwnedTimer
+  | otherwise = RecordingTimer
+  where
+    names = map Agg.symbolName (imageSymbols image)
 
 data Run = Run
   { runDomain :: Domain
   , runCases :: [(String, Either String [String])]
   , runMatches :: Int
   , runReuse :: (BatchReuse, BatchReuse)
+  , runControls :: [(String, Bool)]
   }
 
 data Page = Page RegionId GuestAddress Int Permission B.ByteString
@@ -545,7 +561,7 @@ plain name service domain slot wordList timeout result arrival selected checks =
   Case name service domain slot Nothing wordList timeout
     (Expectation result arrival selected checks Nothing Nothing Nothing) Nothing Nothing
     (service == InterruptSignal) False True Nothing Nothing
-    TaskArrival Nothing Nothing Nothing (service == Create || service == Delete)
+    TaskArrival Nothing Nothing Nothing (service == Create || service == Delete) Nothing
 
 cases :: Facts -> Domain -> [Case]
 cases facts executing =
@@ -741,6 +757,26 @@ cases facts executing =
       ]
     readyHeadAt priority =
       dfReadyHeads (domainFacts facts executing) + priority * hfSize (factsHead facts)
+
+bindTimer :: TimerContract -> Facts -> Domain -> Case -> Case
+bindTimer RecordingTimer _ _ one = one
+bindTimer OwnedTimer facts executing one
+  | Just (_, entry) <- caseReceipt one =
+      one
+        { caseReceipt = Nothing
+        , caseTimerIndex = Just (TimerIndexCell (GuestAddress entry))
+        , caseWords = caseWords one ++
+            [ poke entry 1
+            , poke (dfTimerCount words') 1
+            , poke (dfTimerHeap words') 0
+            , poke (dfTimerHeap words' + 4) entry
+            ]
+        }
+  | Just (Waker (WakerTick _) _) <- caseWaker one =
+      one {caseTimerIndex = Just (TimerIndexCell (GuestAddress (timerAddress facts executing runningSlot)))}
+  | otherwise = one
+  where
+    words' = domainFacts facts executing
 
 data Role = StockRole | OwnedRole deriving (Eq, Show)
 
@@ -945,12 +981,39 @@ overlay (GuestAddress start) initial words' = B.concat (pieces 0 ordered)
             : word32le value
             : pieces (offset + 4) rest
 
-codeBytes :: Domain -> Image -> Image -> [(Word32, Word32)] -> B.ByteString
-codeBytes domain loader owned extra = install (timerRemoval domain) timerStub (foldl patch original (extents domain))
+aggregate :: Image -> Bool
+aggregate image = not (null (imageSymbols image))
+
+symbolSpans :: Image -> [(Word32, Word32)]
+symbolSpans image = [(Agg.symbolAddress symbol, Agg.symbolSize symbol) | symbol <- imageSymbols image]
+
+ownedSpans :: Domain -> Role -> Image -> [(Word32, Word32)]
+ownedSpans domain role owned
+  | role == OwnedRole, aggregate owned = symbolSpans owned
+  | otherwise = extents domain
+
+codeBounds :: Domain -> Role -> Image -> [(Word32, Word32)] -> (Word32, Word32)
+codeBounds domain role owned extra =
+  let placementSpans = [(Agg.placementAddress placement, Agg.placementBytes placement) | placement <- imagePlacements owned]
+      spans = extents domain ++ retained domain ++ extra ++ (if role == OwnedRole then symbolSpans owned ++ placementSpans ++ [(imageBase owned, fromIntegral (B.length (imageBytes owned))) | aggregate owned] else [])
+   in (minimum (map fst spans), maximum [address + size | (address, size) <- spans])
+
+mergeSpans :: [(Word32, Word32)] -> [(Word32, Word32)]
+mergeSpans spans = go (sortOn fst spans)
   where
-    bounds = extents domain ++ retained domain ++ extra
-    base = minimum (map fst bounds)
-    top = maximum [address + size | (address, size) <- bounds]
+    go [] = []
+    go ((start, size) : rest) = extend start (start + size) rest
+    extend start end [] = [(start, end - start)]
+    extend start end ((lo, size) : rest)
+      | lo < end = extend start (max end (lo + size)) rest
+      | otherwise = (start, end - start) : extend lo (lo + size) rest
+
+codeBytes :: TimerContract -> Domain -> Role -> Image -> Image -> [(Word32, Word32)] -> B.ByteString
+codeBytes contract domain role loader owned extra
+  | contract == OwnedTimer = withPlacements
+  | otherwise = install (timerRemoval domain) timerStub withPlacements
+  where
+    (base, top) = codeBounds domain role owned extra
     slice image address size =
       if address < imageBase image
         || toInteger address + toInteger size > toInteger (imageBase image) + toInteger (B.length (imageBytes image))
@@ -960,6 +1023,11 @@ codeBytes domain loader owned extra = install (timerRemoval domain) timerStub (f
     install address bytes current =
       let offset = fromIntegral (address - base)
        in B.take offset current <> bytes <> B.drop (offset + B.length bytes) current
+    patches = ownedSpans domain role owned
+    withSymbols = foldl patch original patches
+    withPlacements
+      | role == OwnedRole, aggregate owned = install (imageBase owned) (imageBytes owned) original
+      | otherwise = withSymbols
     patch current (address, size) = install address (slice owned address size) current
 
 tickEntry :: Domain -> Word32
@@ -1071,22 +1139,23 @@ expectationOf :: Role -> Case -> Expectation
 expectationOf StockRole one = caseStock one
 expectationOf OwnedRole one = maybe (caseStock one) id (caseOwned one)
 
-caseSpec :: Facts -> Domain -> Role -> Image -> Image -> Case -> CaseSpec
-caseSpec facts executing role loader owned one
+caseSpec :: TimerContract -> Facts -> Domain -> Role -> Image -> Image -> Case -> CaseSpec
+caseSpec contract facts executing role loader owned one
   | not (null outside) = error (caseName one ++ ": unmapped fixture words " ++ show outside)
   | otherwise = CaseSpec
       { caseId = emittedId executing one
       , caseProvenance = "X-M1 1.50 semaphore family, pinned x70view 55436fc85c0560dd252b0410af6f2427fe198cd3; synthetic task/object state and timer argument seam"
-      , caseExclusion = "Private compiler frames are not byte-compared. Dispatch checks the selected-task arrival and the live stock continuation. The timer removal entry is a recording stub; it proves arguments, not heap removal."
+      , caseExclusion = "Private compiler frames are not byte-compared. Dispatch checks the selected-task arrival and the live stock continuation."
+          ++ (if contract == RecordingTimer then " The timer removal entry is a recording stub; it proves arguments, not heap removal." else " Timer removal and tick execute unmodified linked bodies; the approved Detached-index correction is asserted per role.")
           ++ (if isJust (caseWaker one) then " The resumed caller owns the caller stack context; a synthetic waker task on its own declared stack calls the stock signal, delete or timer tick, and the suspended caller resumes through its saved dispatcher frame into the wait epilogue. The waker stub records the caller's dispatch CPSR, and the tick or fallback driver masks I and records its own CPSR before the dispatcher call; flags are excluded and the I/F/mode bits are compared." else "")
       , caseEntry = wire (entries executing (caseService one))
       , caseExit = wire exitAddress
       , caseRegions =
-          [mkRegion (RegionId "code") (wire codeBase) (fromIntegral (codeTop - codeBase)) ReadExecute (codeBytes executing loader owned extra)]
+          [mkRegion (RegionId "code") (wire codeBase) (fromIntegral (codeTop - codeBase)) ReadExecute (codeBytes contract executing role loader owned extra)]
             ++ [mkRegion ident (wire (guestWord address)) size permission (overlay address background words') | Page ident address size permission background <- dataPages]
             ++ [mkRegion (RegionId "continuations") (wire exitAddress) (fromIntegral (stopAddress - exitAddress + 4)) ReadExecute (continuationBytes facts executing one)]
       , caseFunctions =
-          [(wire address, size) | (address, size) <- extents executing ++ retained executing ++ extra]
+          [(wire address, size) | (address, size) <- mergeSpans functionSpans]
             ++ [(wire wakerStubBase, 0x80) | isJust (caseWaker one)]
       , caseInitial = initialRegisters executing one
       , caseExpectedStatus = if isJust budget then InstructionBudget else if arrival then StopAddress else Returned
@@ -1103,9 +1172,13 @@ caseSpec facts executing role loader owned one
       | isJust budget = [(R0, 0)]
       | arrival = [(Pc, stopAddress), (Sp, targetStack)]
       | otherwise = [(R0, expectationResult expectation)]
-    extra = wakerCodeExtents executing one
-    codeBase = minimum (map fst (extents executing ++ retained executing ++ extra))
-    codeTop = maximum [address + size | (address, size) <- extents executing ++ retained executing ++ extra]
+    extra = wakerCodeExtents executing one ++ [(timerRemoval executing, 0x6c) | contract == OwnedTimer]
+    placementFunctions = [(Agg.placementAddress placement, Agg.placementBytes placement) | placement <- imagePlacements owned, ".text." `isPrefixOf` Agg.placementSection placement]
+    allocated = symbolSpans owned ++ [(Agg.placementAddress placement, Agg.placementBytes placement) | placement <- imagePlacements owned]
+    overlaps (left, size) (right, bytes) = left < right + bytes && right < left + size
+    preserved = [extent | extent <- retained executing ++ extra, role /= OwnedRole || not (any (overlaps extent) allocated)]
+    functionSpans = ownedSpans executing role owned ++ preserved ++ placementFunctions
+    (codeBase, codeTop) = codeBounds executing role owned extra
     dataPages = pages facts loader one
     words' = layoutWords facts executing one
       ++ [ poke (dfHandlerContext (domainFacts facts executing)) (if caseHandler one then 1 else 0)
@@ -1292,6 +1365,8 @@ compareFamily :: Facts -> Domain -> Image -> Case -> CaseSpec -> CaseSpec -> Nat
 compareFamily facts executing loader one stockSpec ownedSpec stock owned =
   compareRole facts loader executing stockSpec one (caseStock one) stock
     ++ compareRole facts loader executing ownedSpec one ownedExpectation owned
+    ++ timerIndexErrors facts loader one StockRole stock
+    ++ timerIndexErrors facts loader one OwnedRole owned
     ++ ( if caseOwned one == Nothing
           then memoryDifferences
           else
@@ -1303,7 +1378,8 @@ compareFamily facts executing loader one stockSpec ownedSpec stock owned =
     ownedExpectation = maybe (caseStock one) id (caseOwned one)
     compared = [ident | Page ident _ _ _ _ <- pages facts loader one, ident `notElem` map RegionId ["stack", "target-stack", "waker-stack"]]
     memory observation = M.fromList [(ident, normalize ident bytes) | (ident, bytes) <- nativeMemory observation, ident `elem` compared]
-    normalize ident bytes
+    normalize ident = normalizeTimer ident . normalizeFrame ident
+    normalizeFrame ident bytes
       | expectationArrival (caseStock one) || maybe False expectationArrival (caseOwned one) =
           if ident == region then clear (clear bytes savedSpOffset) resumeOffset else bytes
       | isJust (caseWaker one), ident == region =
@@ -1321,15 +1397,63 @@ compareFamily facts executing loader one stockSpec ownedSpec stock owned =
     callerResume = resumeOffset
     wakerSavedSp = offsetOf (taskAddress facts executing wakerSlot + tfSavedSp (factsTask facts))
     wakerResume = offsetOf (taskAddress facts executing wakerSlot + tfResumePc (factsTask facts))
+    normalizeTimer ident bytes = case caseTimerIndex one of
+      Nothing -> bytes
+      Just (TimerIndexCell address) -> case
+        [fromIntegral (guestWord address - guestWord base) | page@(Page actual base _ _ _) <- pages facts loader one, actual == ident, contains address 4 page] of
+          [offset] -> clear bytes offset
+          _ -> bytes
     memoryDifferences =
       ["missing state region " ++ show ident | ident <- compared, M.notMember ident (memory stock) || M.notMember ident (memory owned)]
         ++ ["state region " ++ show ident ++ " differs" | ident <- compared, M.lookup ident (memory stock) /= M.lookup ident (memory owned)]
 
+timerIndexErrors :: Facts -> Image -> Case -> Role -> NativeObservation -> [String]
+timerIndexErrors facts loader one role observation = case caseTimerIndex one of
+  Nothing -> []
+  Just (TimerIndexCell address) ->
+    ["timer index does not satisfy the named Detached-index contract"
+    | readWord facts loader one observation address /= Just expected
+        || writes address /= expectedWrites
+    ]
+  where
+    expected = if role == OwnedRole then 0 else 1
+    expectedWrites = inserted ++ [(4, 0) | role == OwnedRole]
+    inserted = [(4, 1) | Just (Waker (WakerTick _) _) <- [caseWaker one]]
+    writes address =
+      [ (width, fromIntegral value :: Word32)
+      | Just kernel <- [nativeKernel observation]
+      , Just events <- [observedOrder kernel]
+      , OrderedWrite (Write actual (WriteBytes width)) (WriteValue value) <- events
+      , actual == wire (guestWord address)
+      ]
+
+timerControls :: Facts -> Domain -> Image -> Case -> CaseSpec -> CaseSpec -> NativeObservation -> NativeObservation -> [(String, Bool)]
+timerControls facts executing loader one stockSpec ownedSpec stock owned = case caseTimerIndex one of
+  Nothing -> []
+  Just (TimerIndexCell address) ->
+    [ ("owned-timer-relink-refused", rejected stock (mutate address 1 owned))
+    , ("stock-timer-detach-refused", rejected (mutate address 0 stock) owned)
+    , ("missing-detach-write-refused", rejected stock (owned {nativeKernel = fmap withoutDetach (nativeKernel owned)}))
+    , ("live-caller-frame-mutation-refused", rejected stock (mutate (GuestAddress (callerSp one)) 0 owned))
+    ]
+    where
+      rejected reference subject = not (null (compareFamily facts executing loader one stockSpec ownedSpec reference subject))
+      withoutDetach kernel = kernel {observedOrder = fmap (filter keep) (observedOrder kernel)}
+      keep (OrderedWrite (Write actual _) (WriteValue 0)) = actual /= wire (guestWord address)
+      keep _ = True
+      mutate target value observation = observation {nativeMemory = map replace (nativeMemory observation)}
+        where
+          replace (ident, bytes) = case
+            [fromIntegral (guestWord target - guestWord base) | page@(Page actual base _ _ _) <- pages facts loader one, actual == ident, contains target 4 page] of
+              [offset] -> (ident, B.take offset bytes <> word32le value <> B.drop (offset + 4) bytes)
+              _ -> (ident, bytes)
+
 runFamily :: FilePath -> FilePath -> FilePath -> Facts -> Domain -> Image -> Image -> IO Run
 runFamily runner cacheRoot directory facts executing stock owned = do
-  let selected = cases facts executing
-      stockCases = [(one, caseSpec facts executing StockRole stock stock one) | one <- selected]
-      ownedCases = [(one, caseSpec facts executing OwnedRole stock owned one) | one <- selected]
+  let contract = timerContract owned
+      selected = map (bindTimer contract facts executing) (cases facts executing)
+      stockCases = [(one, caseSpec contract facts executing StockRole stock stock one) | one <- selected]
+      ownedCases = [(one, caseSpec contract facts executing OwnedRole stock owned one) | one <- selected]
   stockBatch <- writeBatch (directory </> "stock") (map snd stockCases)
   ownedBatch <- writeBatch (directory </> "owned") (map snd ownedCases)
   (stockReuse, stockRaw) <- cachedObservedBatch cacheRoot runner stockBatch
@@ -1346,4 +1470,11 @@ runFamily runner cacheRoot directory facts executing stock owned = do
       (Nothing, _) -> Left "stock case did not run"
       (_, Nothing) -> Left "owned case did not run")
   unless (length stockRaw == length selected && length ownedRaw == length selected) (fail "native observations do not cover the current semaphore case set")
-  pure (Run executing results (length [() | (_, Right []) <- results]) (stockReuse, ownedReuse))
+  let controls = concat
+        [ [(caseName one ++ "/" ++ name, passed) | (name, passed) <- timerControls facts executing stock one stockSpec ownedSpec original replacement]
+        | (one, stockSpec) <- stockCases
+        , Just ownedSpec <- [lookup (caseName one) [(caseName candidate, spec) | (candidate, spec) <- ownedCases]]
+        , Just original <- [M.lookup (emittedId executing one) reference]
+        , Just replacement <- [M.lookup (emittedId executing one) subject]
+        ]
+  pure (Run executing results (length [() | (_, Right []) <- results]) (stockReuse, ownedReuse) controls)

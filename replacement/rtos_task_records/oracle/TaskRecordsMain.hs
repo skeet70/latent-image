@@ -4,16 +4,18 @@
 -- entries through the cached native batch, and writes a terminal JSON.
 module Main (main) where
 
-import Control.Monad (forM_, unless)
+import Control.Monad (forM_, unless, when)
 import Data.Aeson (object, (.=), encode)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
+import Data.List (isPrefixOf)
 import Emulation.Sha256 (sha256File, sha256Hex)
 import FujiAF.Host (failH)
 import FujiAF.StorageBudget (checkStorageBudget)
 import Replacement.RtosOwnFirst.Regions (Domain (..), domainLabel)
 import Replacement.RtosTaskRecords.Layout (parseFacts)
 import Replacement.RtosTaskRecords.Suite
+import qualified Replacement.RtosPlatform.Aggregate as Agg
 import System.Directory (createDirectoryIfMissing, makeAbsolute)
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
@@ -38,6 +40,17 @@ main = do
   ownedBBytes <- B.readFile ownedB
   ownedASymbols <- parseOwnedSymbols symbolsA
   ownedBSymbols <- parseOwnedSymbols symbolsB
+  placementsA <- optionalPlacements "--placements-a"
+  placementsB <- optionalPlacements "--placements-b"
+  forM_ [(ownedABytes, ownedASymbols, placementsA), (ownedBBytes, ownedBSymbols, placementsB)] $ \(bytes, symbols, placements) ->
+    when (any (\(name, _, _) -> "xm1_platform_veneer_" `isPrefixOf` name) symbols) $ do
+      when (null placements) (failH "aggregate images require their placement manifests")
+      let image = Agg.AggregateImage (minimum [address | (_, address, _) <- symbols]) bytes
+          extents = [(address, size) | (_, address, size) <- symbols]
+            ++ [(Agg.placementAddress placement, Agg.placementBytes placement) | placement <- placements]
+      forM_ extents $ \(address, size) -> do
+        _ <- either failH pure (Agg.sliceAggregate image address size)
+        pure ()
   layoutDigest <- sha256File layoutPath
   loaderADigest <- sha256File loaderA
   loaderBDigest <- sha256File loaderB
@@ -48,10 +61,10 @@ main = do
   checkStorageBudget (takeDirectory resultsPath)
   createDirectoryIfMissing True cacheRoot
   createDirectoryIfMissing True (takeDirectory resultsPath)
-  let stockA = Image 0x40000 loaderABytes
-      stockB = Image 0xd0000 loaderBBytes
-      ownedAImage = Image (minimum [address | (_, address, _) <- ownedASymbols]) ownedABytes
-      ownedBImage = Image (minimum [address | (_, address, _) <- ownedBSymbols]) ownedBBytes
+  let stockA = Image 0x40000 loaderABytes []
+      stockB = Image 0xd0000 loaderBBytes []
+      ownedAImage = Image (minimum [address | (_, address, _) <- ownedASymbols]) ownedABytes placementsA
+      ownedBImage = Image (minimum [address | (_, address, _) <- ownedBSymbols]) ownedBBytes placementsB
   (runA, controlsA) <- runDomain runner cacheRoot (takeDirectory resultsPath </> "domain-a") facts DomainA stockA ownedAImage ownedASymbols
   (runB, controlsB) <- runDomain runner cacheRoot (takeDirectory resultsPath </> "domain-b") facts DomainB stockB ownedBImage ownedBSymbols
   let runs = runA ++ runB
@@ -119,7 +132,13 @@ main = do
 required :: String -> IO FilePath
 required flag = do
   arguments <- getArgs
-  case dropWhile (/= flag) arguments of
+  case [value | (key, value) <- zip arguments (drop 1 arguments), key == flag] of
     [] -> failH (flag ++ " is required")
-    [_] -> failH (flag ++ " needs a value")
-    _ : value : _ -> pure value
+    values -> pure (last values)
+
+optionalPlacements :: String -> IO [Agg.SectionPlacement]
+optionalPlacements flag = do
+  arguments <- getArgs
+  case [value | (key, value) <- zip arguments (drop 1 arguments), key == flag] of
+    [] -> pure []
+    values -> either failH pure . Agg.parsePlacements =<< B.readFile (last values)

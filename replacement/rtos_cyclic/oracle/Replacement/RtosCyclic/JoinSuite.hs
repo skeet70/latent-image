@@ -14,11 +14,17 @@
 -- caller are core-0 only, so the join is domain A.
 module Replacement.RtosCyclic.JoinSuite
   ( Inputs (..)
+  , KernelImage (..)
+  , ApplicationImage (..)
+  , Scope (..)
+  , admitPackagedKernel
+  , admitPackagedApplication
   , CaseRun (..)
   , ControlRun (..)
   , runJoin
   ) where
 
+import Control.Monad (forM)
 import Data.Bits ((.&.), (.|.), shiftL, shiftR, xor)
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
@@ -27,9 +33,14 @@ import Data.Word (Word32)
 import Emulation.CachedNativeBatch (BatchReuse, cachedObservedBatch)
 import Emulation.NativeObservation
 import Emulation.OwnedCase
-import Replacement.RtosCyclic.Suite (stockFunctions)
+import qualified Replacement.RtosCyclic.Aggregate as CyclicAggregate
+import Replacement.RtosCyclic.Suite (Image (..), stockFunctions)
 import Replacement.RtosOwnFirst.Regions (Domain (..))
+import qualified Replacement.RtosOwnFirst.Regions as R
+import qualified Replacement.RtosPlatform.Aggregate as Aggregate
+import qualified Replacement.RtosPlatform.Union as Union
 import qualified Replacement.RtosTimer.Suite as Timer
+import System.Directory (createDirectory)
 import System.FilePath ((</>))
 
 data Inputs = Inputs
@@ -42,7 +53,44 @@ data Inputs = Inputs
   , inAppSymbols :: [(Word32, Word32)]
   , inCyclicSymbols :: [(Word32, Word32)]
   , inTimerSymbols :: [Timer.OwnedSymbol]
+  , inKernel :: KernelImage
+  , inApplication :: ApplicationImage
   }
+
+data KernelImage
+  = StandaloneKernel
+  | PackagedKernel B.ByteString [(Image, Bool, [(Word32, Word32)])]
+
+data ApplicationImage = StandaloneApplication | PackagedApplication B.ByteString
+
+admitPackagedApplication :: B.ByteString -> B.ByteString -> B.ByteString -> Either String ApplicationImage
+admitPackagedApplication stock app staged
+  | B.length staged /= B.length stock = Left "packaged image4 length differs from canonical image4"
+  | B.length app /= 0x242c = Left "app-callback image is not 0x242c bytes"
+  | slice image4Base staged dispatchEvent 0x1c /= B.take 0x1c app = Left "packaged dispatcher differs from emitted owned code"
+  | slice image4Base staged appRegister 0x384 /= B.drop (fromIntegral (appRegister - dispatchEvent)) app = Left "packaged app caller differs from emitted owned code"
+  | otherwise = Right (PackagedApplication staged)
+
+data Scope = FullScope | LifecycleSmoke deriving (Eq, Show)
+
+admitPackagedKernel :: Union.Union -> B.ByteString -> B.ByteString -> Aggregate.AggregateImage -> [Aggregate.AggregateSymbol] -> [Aggregate.SectionPlacement] -> Either String KernelImage
+admitPackagedKernel union stock loader image symbols placements = do
+  let domain = Union.unionA union
+      carriers = [ (low, high) | carrier <- Union.mapCarriers domain, R.Extent (R.GuestAddress low) (R.GuestAddress high) <- [Union.carrierExtent carrier] ]
+      filled = combine 0x40000 (B.length stock)
+        ((0x40000, stock) : [(low, B.concat (replicate (fromIntegral ((high - low) `div` 4)) (word32le (Union.unionFill union)))) | (low, high) <- carriers])
+  withSymbols <- Aggregate.installAggregate 0x40000 filled image symbols
+  expected <- Aggregate.installPlacements 0x40000 withSymbols image placements
+  if loader /= expected
+    then Left "packaged loader differs from allocated sections, veneers, carrier fill or retained stock"
+    else case carriers of
+      [] -> Left "packaged loader has no carriers"
+      _ -> do
+        let low = minimum (map fst carriers)
+            high = maximum (map snd carriers)
+            effective = slice 0x40000 loader low (fromIntegral (high - low))
+        mappings <- CyclicAggregate.bindAggregate domain (Image 0x40000 stock) effective symbols placements
+        pure (PackagedKernel loader mappings)
 
 data Role = Stock | Owned deriving (Eq, Show)
 
@@ -243,38 +291,41 @@ stateRegions layout role state =
   | (name, base, size, permission) <- stateLayout layout role
   ]
 
--- | The code regions. The stock role's single loader block covers the retained helpers, the stock
--- support, timer and cyclic entries; the owned role's helper block stops before the owned carriers.
 codeLayout :: Layout -> Role -> [(String, Word32, Int, Permission)]
-codeLayout layout role =
-  [ (loaderName, 0x41140, loaderSize, ReadExecute)
+codeLayout _layout _role =
+  [ ("loader-code", 0x40000, 0xdae0, ReadExecute)
   , ("guard-code", stackGuard, 0x54, ReadExecute)
   , ("dispatch-code", dispatchEvent, 0x40, ReadExecute)
   , ("stack-check-code", stackCheck, 0xf8, ReadExecute)
   , ("app", appRegister, 0x384, ReadExecute)
   ]
-    ++ [("cyclic", lStockCyclicLow layout, fromIntegral (lStockCyclicSize layout), ReadExecute) | role == Owned]
-    ++ [("timer", lStockTimerLow layout, fromIntegral (lStockTimerSize layout), ReadExecute) | role == Owned]
     ++ [("stubs", stubBase, fromIntegral stubSize, ReadExecute)
        , ("stack", stackBase, 0x1000, ReadWrite)
        , ("exit", exitAddress, 0x10, ReadExecute)
        ]
-  where
-    (loaderName, loaderSize) = case role of
-      Stock -> ("loader-code", 0x4d8fc - 0x41140)
-      Owned -> ("loader-helpers", 0x427d4 - 0x41140)
 
 codeBytes :: Layout -> Inputs -> Role -> String -> B.ByteString
-codeBytes _layout inputs role name = case name of
-  "loader-code" -> slice 0x40000 (inLoaderA inputs) 0x41140 (0x4d8fc - 0x41140)
-  "loader-helpers" -> slice 0x40000 (inLoaderA inputs) 0x41140 (0x427d4 - 0x41140)
-  "guard-code" -> slice image4Base (inImage4 inputs) stackGuard 0x54
+codeBytes layout inputs role name = case name of
+  "loader-code" -> case (role, inKernel inputs) of
+    (Stock, _) -> inLoaderA inputs
+    (Owned, PackagedKernel loader _) -> loader
+    (Owned, StandaloneKernel) ->
+      combine 0x40000 0xdae0
+        [ (0x40000, inLoaderA inputs)
+        , (lStockCyclicLow layout, inCyclic inputs)
+        , (lStockTimerLow layout, inTimer inputs)
+        ]
+  "guard-code" -> slice image4Base roleImage4 stackGuard 0x54
   "dispatch-code" -> case role of
     Stock -> stockDispatch
-    Owned -> B.take 0x1c (inApp inputs) <> B.drop 0x1c stockDispatch
-  "stack-check-code" -> slice image4Base (inImage4 inputs) stackCheck 0xf8
+    Owned -> case inApplication inputs of
+      StandaloneApplication -> B.take 0x1c (inApp inputs) <> B.drop 0x1c stockDispatch
+      PackagedApplication bytes -> slice image4Base bytes dispatchEvent 0x40
+  "stack-check-code" -> slice image4Base roleImage4 stackCheck 0xf8
   "app" -> case role of
-    Owned -> B.drop (fromIntegral (appRegister - dispatchEvent)) (inApp inputs)
+    Owned -> case inApplication inputs of
+      StandaloneApplication -> B.drop (fromIntegral (appRegister - dispatchEvent)) (inApp inputs)
+      PackagedApplication bytes -> slice image4Base bytes appRegister 0x384
     Stock -> slice image4Base (inImage4 inputs) appRegister 0x384
   "cyclic" -> inCyclic inputs
   "timer" -> inTimer inputs
@@ -283,13 +334,27 @@ codeBytes _layout inputs role name = case name of
   "exit" -> B.replicate 0x10 0
   _ -> error ("no code bytes for region " ++ name)
   where
+    roleImage4 = case (role, inApplication inputs) of
+      (Owned, PackagedApplication bytes) -> bytes
+      _ -> inImage4 inputs
     stockDispatch = slice image4Base (inImage4 inputs) dispatchEvent 0x40
 
 codeRegions :: Layout -> Inputs -> Role -> [(String, Word32, Int, Permission, B.ByteString)]
-codeRegions layout inputs role =
-  [ (name, base, size, permission, codeBytes layout inputs role name)
-  | (name, base, size, permission) <- codeLayout layout role
-  ]
+codeRegions layout inputs role = case (role, inKernel inputs) of
+  (Owned, PackagedKernel loader mappings) ->
+    [ ("loader-code-" ++ show index, base, B.length bytes, if executable then ReadExecute else ReadOnly, bytes)
+    | (index, (Image base bytes, executable, _)) <- zip [0 :: Int ..] mappings
+    ] ++
+    [ ("loader-prefix", 0x40000, fromIntegral (low - 0x40000), ReadExecute, B.take (fromIntegral (low - 0x40000)) loader)
+    , ("loader-suffix", high, B.length loader - fromIntegral (high - 0x40000), ReadOnly, B.drop (fromIntegral (high - 0x40000)) loader)
+    ] ++ regionsWithoutLoader
+    where
+      low = minimum [base | (Image base _, _, _) <- mappings]
+      high = maximum [base + fromIntegral (B.length bytes) | (Image base bytes, _, _) <- mappings]
+  _ -> regions
+  where
+    regions = [(name, base, size, permission, codeBytes layout inputs role name) | (name, base, size, permission) <- codeLayout layout role]
+    regionsWithoutLoader = [region | region@(name, _, _, _, _) <- regions, name /= "loader-code"]
 
 emittedBases :: Layout -> Role -> [(String, Word32, Int)]
 emittedBases layout role =
@@ -899,7 +964,7 @@ buildCase layout inputs role variant state =
     , caseRegions = stateCaseRegions ++ codeCaseRegions
     , caseFunctions =
         [ (GuestAddress (fromIntegral address), size)
-        | (address, size) <- filter (\(address, _) -> role == Stock || address /= dispatchEvent) commonFunctions ++ roleFunctions ++ stubFunctions
+        | (address, size) <- retainedFunctions ++ roleFunctions ++ stubFunctions
         ]
     , caseInitial =
         [ (R0, argument0), (R1, 0), (R2, stackGuard), (R3, tokenAddress)
@@ -941,12 +1006,21 @@ buildCase layout inputs role variant state =
       [ mkRegion (RegionId (fromString name)) (GuestAddress (fromIntegral base)) size permission bytes
       | (name, base, size, permission, bytes) <- codeRegions layout inputs role
       ]
+    retainedFunctions = case (role, inKernel inputs) of
+      (Owned, PackagedKernel _ mappings) ->
+        [ function
+        | function@(address, size) <- commonFunctions
+        , address /= dispatchEvent
+        , not (any (\(owned, bytes) -> address < owned + bytes && owned < address + size) (concat [functions | (_, _, functions) <- mappings]))
+        ]
+      _ -> filter (\(address, _) -> role == Stock || address /= dispatchEvent) commonFunctions
     roleFunctions = case role of
       Stock -> [(appRegister, 0x2a0), (appUnregister, 0xe4)] ++ stockFunctions DomainA
-      Owned ->
-        inAppSymbols inputs
-          ++ inCyclicSymbols inputs
-          ++ [(Timer.ownedAddress symbol, Timer.ownedSize symbol) | symbol <- inTimerSymbols inputs]
+      Owned -> inAppSymbols inputs ++ case inKernel inputs of
+        PackagedKernel _ mappings -> concat [functions | (_, _, functions) <- mappings]
+        StandaloneKernel ->
+          inCyclicSymbols inputs
+            ++ [(Timer.ownedAddress symbol, Timer.ownedSize symbol) | symbol <- inTimerSymbols inputs]
 
 commonFunctions :: [(Word32, Word32)]
 commonFunctions =
@@ -1050,13 +1124,57 @@ checkRun layout role variant state observation differences reuse =
       | check' <- RunnerStatusIs Returned : xChecks expected
       ]
 
-runOneStage :: FilePath -> FilePath -> Inputs -> Variant -> (State, State) -> IO (CaseRun, CaseRun, State, State, BatchReuse, NativeObservation, NativeObservation)
-runOneStage runner cacheRoot inputs variant (stockState, ownedState) = do
-  let patchedStock = patchState layoutA variant stockState
+payloadHolds :: Inputs -> NativeObservation -> Bool
+payloadHolds inputs observation = all unchanged
+  [ (name, bytes)
+  | (name, _, _, _, bytes) <- codeRegions layoutA inputs Owned
+  , take 6 name == "loader"
+  ]
+  where
+    unchanged (name, bytes) = lookup (RegionId (fromString name)) (nativeMemory observation) == Just bytes
+
+newtype JoinWorkspace = JoinWorkspace { workspaceRoot :: FilePath }
+
+data JoinStage
+  = RegisterPhase30 | TickAt0 | TickAt10 | TickAt20 | TickAt30
+  | UnregisterPhase30 | TickAfterUnregister | FaultStage Variant
+
+newWorkspace :: FilePath -> IO JoinWorkspace
+newWorkspace resultsDirectory = do
+  let directory = resultsDirectory </> "stages"
+  createDirectory directory
+  pure (JoinWorkspace directory)
+
+stageDirectory :: JoinWorkspace -> JoinStage -> FilePath
+stageDirectory (JoinWorkspace root) stage = root </> case stage of
+  RegisterPhase30 -> "register-30"
+  TickAt0 -> "tick-0"
+  TickAt10 -> "tick-10"
+  TickAt20 -> "tick-20"
+  TickAt30 -> "tick-30"
+  UnregisterPhase30 -> "unregister-30001"
+  TickAfterUnregister -> "tick-after-unregister"
+  FaultStage variant -> variantName variant
+
+stageVariant :: JoinStage -> Variant
+stageVariant stage = case stage of
+  RegisterPhase30 -> Register 30
+  TickAt0 -> Tick
+  TickAt10 -> Tick
+  TickAt20 -> Tick
+  TickAt30 -> Tick
+  UnregisterPhase30 -> Unregister 30001
+  TickAfterUnregister -> Tick
+  FaultStage variant -> variant
+
+runOneStage :: FilePath -> FilePath -> JoinWorkspace -> Inputs -> JoinStage -> (State, State) -> IO (CaseRun, CaseRun, State, State, BatchReuse, NativeObservation, NativeObservation)
+runOneStage runner cacheRoot workspace inputs stage (stockState, ownedState) = do
+  let variant = stageVariant stage
+      patchedStock = patchState layoutA variant stockState
       patchedOwned = patchState layoutA variant ownedState
       stockSpec = buildCase layoutA inputs Stock variant patchedStock
       ownedSpec = buildCase layoutA inputs Owned variant patchedOwned
-      directory = cacheRoot </> variantName variant
+      directory = stageDirectory workspace stage
   (reuse, pairs) <- runBatch runner cacheRoot directory [stockSpec, ownedSpec]
   let stockObservation = observationOf (variantName variant ++ "-stock") pairs
       ownedObservation = observationOf (variantName variant ++ "-owned") pairs
@@ -1067,7 +1185,12 @@ runOneStage runner cacheRoot inputs variant (stockState, ownedState) = do
       differences = if repair then [] else compareRoles layoutA stockObservation ownedObservation
   pure
     ( checkRun layoutA Stock variant patchedStock stockObservation differences reuse
-    , checkRun layoutA Owned variant patchedOwned ownedObservation differences reuse
+    , let checked = checkRun layoutA Owned variant patchedOwned ownedObservation differences reuse
+          payloadCheck = ("complete executing loader bytes", payloadHolds inputs ownedObservation)
+       in checked
+            { runChecks = runChecks checked ++ [payloadCheck]
+            , runDifferences = runDifferences checked ++ [fst payloadCheck | not (snd payloadCheck)]
+            }
     , stateFrom layoutA Stock stockObservation
     , stateFrom layoutA Owned ownedObservation
     , reuse
@@ -1075,10 +1198,11 @@ runOneStage runner cacheRoot inputs variant (stockState, ownedState) = do
     , ownedObservation
     )
 
-runJoin :: FilePath -> FilePath -> FilePath -> Inputs -> IO ([CaseRun], [ControlRun])
-runJoin runner resultsDirectory cacheRoot inputs = do
+runJoin :: Scope -> FilePath -> FilePath -> FilePath -> Inputs -> IO ([CaseRun], [ControlRun])
+runJoin scope runner resultsDirectory cacheRoot inputs = do
+  workspace <- newWorkspace resultsDirectory
   let rootSpec = rootPrepCase layoutA (inLoaderA inputs)
-  (rootReuse, rootPairs) <- runBatch runner cacheRoot (resultsDirectory </> "prep-root") [rootSpec]
+  (rootReuse, rootPairs) <- runBatch runner cacheRoot (workspaceRoot workspace </> "prep-root") [rootSpec]
   let rootObservation = observationOf "prep-root" rootPairs
       rootChecks observation =
         [ ("root table " ++ describe check', either (const False) (const True) (evaluateWith [("root", lRoot layoutA, 0x1700)] layoutA Stock observation check'))
@@ -1099,7 +1223,7 @@ runJoin runner resultsDirectory cacheRoot inputs = do
          in CaseRun "prep-root" "fixture" checks [description | (description, False) <- checks] rootReuse
       rootBytes = regionBytesOf rootObservation (RegionId "root")
   let interfaceSpec = interfacesPrepCase inputs
-  (interfaceReuse, interfacePairs) <- runBatch runner cacheRoot (resultsDirectory </> "prep-interfaces") [interfaceSpec]
+  (interfaceReuse, interfacePairs) <- runBatch runner cacheRoot (workspaceRoot workspace </> "prep-interfaces") [interfaceSpec]
   let interfaceObservation = observationOf "prep-interfaces" interfacePairs
       interfaceChecks observation =
         [ ("interface table " ++ describe check', either (const False) (const True) (evaluateWith [("interfaces", interfacesAddress, 8)] layoutA Stock observation check'))
@@ -1115,32 +1239,33 @@ runJoin runner resultsDirectory cacheRoot inputs = do
       interfaceBytes = regionBytesOf interfaceObservation (RegionId "interfaces")
       initialStock = seedState layoutA Stock rootBytes interfaceBytes
       initialOwned = seedState layoutA Owned rootBytes interfaceBytes
-  (registerStock, registerOwned, afterRegisterStock, afterRegisterOwned, registerReuse, _, _) <-
-    runOneStage runner cacheRoot inputs (Register 30) (initialStock, initialOwned)
-  (tick0Stock, tick0Owned, afterTick0Stock, afterTick0Owned, tick0Reuse, _, _) <-
-    runOneStage runner cacheRoot inputs Tick (afterRegisterStock, afterRegisterOwned)
-  (tick10Stock, tick10Owned, afterTick10Stock, afterTick10Owned, tick10Reuse, _, _) <-
-    runOneStage runner cacheRoot inputs Tick (afterTick0Stock, afterTick0Owned)
-  (tick20Stock, tick20Owned, afterTick20Stock, afterTick20Owned, tick20Reuse, _, noDeliveryOwned) <-
-    runOneStage runner cacheRoot inputs Tick (afterTick10Stock, afterTick10Owned)
+  (registerStock, registerOwned, afterRegisterStock, afterRegisterOwned, _, _, _) <-
+    runOneStage runner cacheRoot workspace inputs RegisterPhase30 (initialStock, initialOwned)
+  (tick0Stock, tick0Owned, afterTick0Stock, afterTick0Owned, _, _, _) <-
+    runOneStage runner cacheRoot workspace inputs TickAt0 (afterRegisterStock, afterRegisterOwned)
+  (tick10Stock, tick10Owned, afterTick10Stock, afterTick10Owned, _, _, _) <-
+    runOneStage runner cacheRoot workspace inputs TickAt10 (afterTick0Stock, afterTick0Owned)
+  (tick20Stock, tick20Owned, afterTick20Stock, afterTick20Owned, _, _, noDeliveryOwned) <-
+    runOneStage runner cacheRoot workspace inputs TickAt20 (afterTick10Stock, afterTick10Owned)
   (deliverStock, deliverOwned, afterDeliverStock, afterDeliverOwned, deliverReuse, _, deliveryOwned) <-
-    runOneStage runner cacheRoot inputs Tick (afterTick20Stock, afterTick20Owned)
-  (unregisterStock, unregisterOwned, afterUnregisterStock, afterUnregisterOwned, unregisterReuse, _, _) <-
-    runOneStage runner cacheRoot inputs (Unregister 30001) (afterDeliverStock, afterDeliverOwned)
-  (postTickStock, postTickOwned, _, _, postTickReuse, _, _) <-
-    runOneStage runner cacheRoot inputs Tick (afterUnregisterStock, afterUnregisterOwned)
-  (createFaultStock, createFaultOwned, _, _, createFaultReuse, _, _) <-
-    runOneStage runner cacheRoot inputs RegisterCreateFault (initialStock, initialOwned)
-  (startFaultStock, startFaultOwned, _, _, startFaultReuse, _, _) <-
-    runOneStage runner cacheRoot inputs RegisterStartFault (initialStock, initialOwned)
-  (noSlotStock, noSlotOwned, _, _, noSlotReuse, _, _) <-
-    runOneStage runner cacheRoot inputs RegisterNoSlot (initialStock, initialOwned)
-  (zeroStock, zeroOwned, _, _, zeroReuse, _, _) <-
-    runOneStage runner cacheRoot inputs RegisterZeroPeriod (initialStock, initialOwned)
-  (missingStock, missingOwned, _, _, missingReuse, _, _) <-
-    runOneStage runner cacheRoot inputs (Unregister 12345) (afterDeliverStock, afterDeliverOwned)
-  (registryFaultStock, registryFaultOwned, _, _, registryFaultReuse, _, _) <-
-    runOneStage runner cacheRoot inputs TickRegistryFault (afterTick20Stock, afterTick20Owned)
+    runOneStage runner cacheRoot workspace inputs TickAt30 (afterTick20Stock, afterTick20Owned)
+  (unregisterStock, unregisterOwned, afterUnregisterStock, afterUnregisterOwned, _, _, _) <-
+    runOneStage runner cacheRoot workspace inputs UnregisterPhase30 (afterDeliverStock, afterDeliverOwned)
+  (postTickStock, postTickOwned, _, _, _, _, _) <-
+    runOneStage runner cacheRoot workspace inputs TickAfterUnregister (afterUnregisterStock, afterUnregisterOwned)
+  let faultInputs = case scope of
+        LifecycleSmoke -> []
+        FullScope ->
+          [ (RegisterCreateFault, (initialStock, initialOwned))
+          , (RegisterStartFault, (initialStock, initialOwned))
+          , (RegisterNoSlot, (initialStock, initialOwned))
+          , (RegisterZeroPeriod, (initialStock, initialOwned))
+          , (Unregister 12345, (afterDeliverStock, afterDeliverOwned))
+          , (TickRegistryFault, (afterTick20Stock, afterTick20Owned))
+          ]
+  faultRuns <- forM faultInputs $ \(variant, state) -> do
+    (stock, owned, _, _, _, _, _) <- runOneStage runner cacheRoot workspace inputs (FaultStage variant) state
+    pure [stock, owned]
   let runs =
         [ rootRun rootObservation
         , interfaceRun interfaceObservation
@@ -1158,24 +1283,7 @@ runJoin runner resultsDirectory cacheRoot inputs = do
         , unregisterOwned
         , postTickStock
         , postTickOwned
-        , createFaultStock
-        , createFaultOwned
-        , startFaultStock
-        , startFaultOwned
-        , noSlotStock
-        , noSlotOwned
-        , zeroStock
-        , zeroOwned
-        , missingStock
-        , missingOwned
-        , registryFaultStock
-        , registryFaultOwned
-        ]
-      _reuse =
-        ( registerReuse
-        , (tick0Reuse, tick10Reuse, tick20Reuse, deliverReuse, unregisterReuse, postTickReuse)
-        , (createFaultReuse, startFaultReuse, noSlotReuse, zeroReuse, missingReuse, registryFaultReuse)
-        )
+        ] ++ concat faultRuns
       controls =
         comparatorControls deliveryOwned noDeliveryOwned
           ++ statusControls Returned (\observation -> checkRun layoutA Owned Tick afterTick20Owned observation [] deliverReuse) deliveryOwned

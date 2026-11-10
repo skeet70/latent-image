@@ -165,6 +165,60 @@ fn request(id: u32) -> CyclicCreate {
 }
 
 #[test]
+fn registration_reuses_storage_after_periodic_delivery_and_teardown() {
+    let mock = mock_with_slot(SLOT64);
+    let adapter = Adapter::new(&mock);
+    for cycle in 0..3 {
+        assert_eq!(register(&adapter), CallbackStatus::OK);
+        let token = CallbackToken::new(mock.word(TOKEN.0) as i32);
+        assert_eq!(token.get(), CallbackToken::FIRST + cycle);
+        let expiry = mock.word(mock.control(SLOT64).expiry().0);
+        let before = mock.events().len();
+        mock.advance_to(expiry - 1);
+        assert_eq!(mock.events().len(), before);
+        mock.advance_to(expiry);
+        assert_eq!(mock.events().len(), before + 1);
+        assert_eq!(mock.events().last(), Some(&(DISPATCH_EVENT.0, SLOT64)));
+        assert_eq!(mock.count(), 1);
+        assert_eq!(mock.word(mock.control(SLOT64).expiry().0), expiry + PERIOD);
+        assert_eq!(unregister_callback(&adapter, slots(), token), CallbackStatus::OK);
+        assert_eq!(mock.count(), 0);
+        assert_eq!(busy(&mock, SLOT64), 0);
+        assert_eq!(registry_token(&mock, SLOT64), 0);
+        mock.advance_to(expiry + PERIOD);
+        assert_eq!(mock.events().len(), before + 1);
+    }
+}
+
+#[test]
+fn heap_exhaustion_retains_a_cancellable_registration() {
+    let mock = mock_with_slot(SLOT64);
+    for slot in 56..64 {
+        mock.seed_control(slot, 0, 0);
+    }
+    let adapter = Adapter::new(&mock);
+    let mut tokens = Vec::new();
+    for _ in 0..8 {
+        assert_eq!(register(&adapter), CallbackStatus::OK);
+        tokens.push(CallbackToken::new(mock.word(TOKEN.0) as i32));
+    }
+    assert_eq!(mock.count(), 8);
+    assert_eq!(register(&adapter).code(), CyclicStatus::Timer.code());
+    let refused = CallbackToken::new(mock.word(TOKEN.0) as i32);
+    assert_ne!(refused, CallbackToken::INVALID);
+    assert_eq!(busy(&mock, 56), 1);
+    assert_eq!(mock.count(), 8);
+    assert_eq!(unregister_callback(&adapter, slots(), refused), CallbackStatus::OK);
+    assert_eq!(busy(&mock, 56), 0);
+    for token in tokens {
+        assert_eq!(unregister_callback(&adapter, slots(), token), CallbackStatus::OK);
+    }
+    assert_eq!(mock.count(), 0);
+    assert_eq!(register(&adapter), CallbackStatus::OK);
+    assert_eq!(mock.count(), 1);
+}
+
+#[test]
 fn register_writes_the_request_registry_and_token() {
     let mock = mock_with_slot(SLOT64);
     let adapter = Adapter::new(&mock);

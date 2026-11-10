@@ -6,6 +6,7 @@
 -- owned body differs from stock.
 module Main (main) where
 
+import Control.Exception (evaluate)
 import Control.Monad (forM, forM_, when)
 import Data.Aeson (Value, object, (.=))
 import qualified Data.ByteString as B
@@ -18,6 +19,8 @@ import FujiAF.JSON (encodeCanonical)
 import Numeric (showHex)
 import Replacement.RtosOwnFirst.Artifact (loaderSha256)
 import Replacement.RtosOwnFirst.Regions (domainLabel, domains)
+import qualified Replacement.RtosPlatform.Aggregate as Agg
+import qualified Replacement.RtosPlatform.Union as Union
 import Replacement.RtosScheduler.Controls
 import Replacement.RtosScheduler.Layout (parseLayout)
 import Replacement.RtosScheduler.Oracle
@@ -78,6 +81,28 @@ helperValue report =
   where
     owned = reportOwned report
 
+chunks :: [a] -> [[a]]
+chunks [] = []
+chunks values = let (batch, rest) = splitAt 64 values in batch : chunks rest
+
+mergeOutcome :: Outcome -> Outcome -> Outcome
+mergeOutcome left right = Outcome
+  { outcomeCases = outcomeCases left + outcomeCases right
+  , outcomeMatches = outcomeMatches left + outcomeMatches right
+  , outcomeFirst = case outcomeFirst left of Nothing -> outcomeFirst right; first -> first
+  , outcomeDifferingCompleted = outcomeDifferingCompleted left + outcomeDifferingCompleted right
+  , outcomeDifferingOther = outcomeDifferingOther left + outcomeDifferingOther right
+  , outcomeStatuses = M.unionWith (+) (outcomeStatuses left) (outcomeStatuses right)
+  }
+
+mergeReports :: HelperReport -> HelperReport -> HelperReport
+mergeReports left right = left
+  { reportStockStatuses = M.unionWith (+) (reportStockStatuses left) (reportStockStatuses right)
+  , reportStockHolds = reportStockHolds left && reportStockHolds right
+  , reportOwned = mergeOutcome (reportOwned left) (reportOwned right)
+  , reportControls = zipWith (\a b -> a {resultOutcome = mergeOutcome (resultOutcome a) (resultOutcome b)}) (reportControls left) (reportControls right)
+  }
+
 main :: IO ()
 main = do
   arguments <- getArgs
@@ -86,7 +111,10 @@ main = do
   runner <- input "--runner"
   regionsPath <- input "--regions"
   layoutPath <- input "--layout"
-  ownedPaths <- mapM input ["--owned-a-bin", "--owned-a-symbols", "--owned-b-bin", "--owned-b-symbols"]
+  let aggregateFlags = ["--aggregate-" ++ domain ++ "-" ++ kind | domain <- ["a","b"], kind <- ["bin","symbols","placements"]] ++ ["--aggregate-carriers"]
+      aggregateMode = any (`elem` arguments) aggregateFlags
+  when aggregateMode $ ensure (all (`elem` arguments) aggregateFlags) "aggregate inputs must be supplied together"
+  ownedPaths <- mapM input (if aggregateMode then aggregateFlags else ["--owned-a-bin", "--owned-a-symbols", "--owned-b-bin", "--owned-b-symbols"])
   lookupEnv "BUILD_WORKSPACE_DIRECTORY" >>= mapM_ setCurrentDirectory
   loaderPaths <- mapM input ["--loader-a", "--loader-b"]
   work <- output "--work"
@@ -104,13 +132,26 @@ main = do
   regions <- orFail "regions.json" (parseSchedulerRegions regionsBytes)
   layout <- orFail "layout" (parseLayout layoutBytes)
   env <- orFail "layout" (mkEnv layout regions)
-  images <- case ownedPaths of
-    [binA, symbolsA, binB, symbolsB] -> forM (zip domains [(binA, symbolsA), (binB, symbolsB)]) $ \(domain, (bin, symbolsPath)) -> do
-      let table = schedulerDomain regions domain
-      symbols <- parseSymbols (map regionSymbol (domainRegions table) ++ map shimBodySymbol (domainShims table)) symbolsPath
-      bytes <- B.readFile bin
-      orFail ("owned " ++ domainLabel domain) (ownedImage table bytes symbols)
-    _ -> failH "unreachable owned inputs"
+  images <- if aggregateMode then case ownedBytes of
+    [binA,symbolsA,placementsA,binB,symbolsB,placementsB,carrierBytes] -> do
+      union <- orFail "aggregate carriers" (either (Left . show) Right (Union.parseUnion carrierBytes))
+      forM (zip domains [(binA,symbolsA,placementsA),(binB,symbolsB,placementsB)]) $ \(domain,(bin,symbolBytes,placementBytes)) -> do
+        symbols <- orFail "aggregate symbols" (Agg.parseAggregateSymbols symbolBytes)
+        placements <- orFail "aggregate placements" (Agg.parsePlacements placementBytes)
+        image <- orFail "aggregate image" (Agg.aggregateImage symbols bin)
+        let carrierMap = Union.domainMap union domain
+        forM_ (Union.mapEntries carrierMap) $ \entry -> do
+          _ <- orFail "aggregate entry binding" (Union.resolveEntryTarget image symbols placements entry)
+          pure ()
+        pure (Right (image,symbols,placements,map Union.carrierExtent (Union.mapCarriers carrierMap)))
+    _ -> failH "unreachable aggregate inputs"
+    else case ownedPaths of
+      [binA, symbolsA, binB, symbolsB] -> forM (zip domains [(binA, symbolsA), (binB, symbolsB)]) $ \(domain, (bin, symbolsPath)) -> do
+        let table = schedulerDomain regions domain
+        symbols <- parseSymbols (map regionSymbol (domainRegions table) ++ map shimBodySymbol (domainShims table)) symbolsPath
+        bytes <- B.readFile bin
+        Left <$> orFail ("owned " ++ domainLabel domain) (ownedImage table bytes symbols)
+      _ -> failH "unreachable owned inputs"
   createDirectoryIfMissing True (takeDirectory work)
   createDirectory work
   reports <- fmap concat . forM (zip3 domains loaders images) $ \(domain, loader, image) -> do
@@ -121,28 +162,37 @@ main = do
     forM helpers $ \helper -> do
       let name = domainLabel domain ++ " " ++ helperName helper
       stock <- orFail (name ++ " stock") (stockBody table code helper)
-      owned <- orFail (name ++ " owned") (ownedBody table image raise helper)
+      owned <- orFail (name ++ " owned") $ case image of
+        Left standalone -> ownedBody table standalone raise helper
+        Right (aggregate,symbols,placements,carriers) -> aggregateBody table code aggregate symbols placements carriers helper
       let controls = [control | control <- equivalents ++ mutants, controlHelper control == helper]
       controlRoles <- forM controls $ \control -> do
         body <- orFail (name ++ " " ++ controlName control) (controlBody fill layout control owned)
         pure (Role (controlName control) body True)
       let directory = work </> domainLabel domain ++ "-" ++ helperName helper
           keys = map CaseKey [0 .. length (caseGrid layout helper) - 1]
-      run <- runHelper env runner directory domain helper keys (Role "stock" stock False) (Role "owned" owned True : Role "stock-repeat" stock False : controlRoles)
-      let outcomes = M.fromList (runSubjects run)
-          result role expectation note = ControlResult role expectation note (outcomes M.! role)
-          report =
-            HelperReport
-              { reportDomain = domain
-              , reportHelper = helper
-              , reportEntry = bodyEntry owned
-              , reportStockStatuses = statusCounts (runReference run)
-              , reportStockHolds = runReferenceEnds run
-              , reportOwned = outcomes M.! "owned"
-              , reportControls =
-                  result "stock-repeat" MustPass "the stock code against itself"
-                    : [result (controlName control) (controlExpectation control) (controlNote control) | control <- controls]
-              }
+      batches <- forM (zip [0 :: Int ..] (chunks keys)) $ \(index, batchKeys) -> do
+        let batchDirectory = directory </> show index
+        run <- runHelper env runner batchDirectory domain helper batchKeys (Role "stock" stock False) (Role "owned" owned True : Role "stock-repeat" stock False : controlRoles)
+        let outcomes = M.fromList (runSubjects run)
+            result role expectation note = ControlResult role expectation note (outcomes M.! role)
+            report =
+              HelperReport
+                { reportDomain = domain
+                , reportHelper = helper
+                , reportEntry = bodyEntry owned
+                , reportStockStatuses = statusCounts (runReference run)
+                , reportStockHolds = runReferenceEnds run
+                , reportOwned = outcomes M.! "owned"
+                , reportControls =
+                    result "stock-repeat" MustPass "the stock code against itself"
+                      : [result (controlName control) (controlExpectation control) (controlNote control) | control <- controls]
+                }
+        _ <- evaluate (B.length (encodeCanonical (object ["helper" .= helperValue report, "controls" .= map (controlValue report) (reportControls report)])))
+        _ <- evaluate (outcomeDifferingCompleted (reportOwned report))
+        _ <- evaluate (outcomeDifferingOther (reportOwned report))
+        pure report
+      let report = foldl1 mergeReports batches
       when (verdictExit [report] == ExitSuccess) (removeDirectoryRecursive directory)
       pure report
   let exit = verdictExit reports
@@ -153,7 +203,7 @@ main = do
             , "runner_sha256" .= digest runnerBytes
             ]
               ++ [fromString ("loader_" ++ domainLabel domain ++ "_sha256") .= digest loader | (domain, loader) <- zip domains loaders]
-              ++ [fromString name .= digest bytes | (name, bytes) <- zip ["owned_a_bin_sha256", "owned_a_symbols_sha256", "owned_b_bin_sha256", "owned_b_symbols_sha256"] ownedBytes]
+              ++ [fromString name .= digest bytes | (name, bytes) <- zip (if aggregateMode then aggregateFlags else ["owned_a_bin_sha256", "owned_a_symbols_sha256", "owned_b_bin_sha256", "owned_b_symbols_sha256"]) ownedBytes]
           )
       domainValue domain = object ["domain" .= domainLabel domain, "helpers" .= [helperValue report | report <- reports, reportDomain report == domain]]
   createDirectoryIfMissing True (takeDirectory summaryPath)

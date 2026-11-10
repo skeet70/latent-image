@@ -8,6 +8,7 @@ import Control.Monad (unless)
 import Data.Bits (complement)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
+import Data.Foldable (toList)
 import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Word (Word32)
 import Fixtures (fixtureDat)
@@ -15,7 +16,7 @@ import qualified FujiAF.FirstStage as F
 import qualified FujiAF.UpdateContainer as U
 import Numeric (showHex)
 import Replacement.RtosOwnFirst.Artifact
-import Replacement.RtosOwnFirst.Frame (Frame (..))
+import Replacement.RtosOwnFirst.Frame (Frame (..), FrameError (..), OwnedCode (..), Violation (..), frames)
 import Replacement.RtosOwnFirst.Pins
 import Replacement.RtosOwnFirst.Regions
 import System.Exit (exitFailure)
@@ -189,6 +190,39 @@ main = do
                ]
         )
       check "slot 0x164's frame composes its call" (fmap frameComposed (admittedFrame admitted DomainA (GuestAddress 0x41140)) == Just (FrameBytes 16))
+
+  -- Synthetic split epilogue with the emitted scheduler save/resume's nine-register frame.
+  let splitCode transfer restoreWord =
+        OwnedCode (GuestAddress 0x1000)
+          (words32
+            ( [0xe92d4ff0, 0xe28db01c, 0xe24dd00c, 0x0a000003, 0xea000002]
+                ++ replicate 3 fill
+                ++ [transfer, 0xe24bd01c, restoreWord]
+                ++ replicate 5 fill
+                ++ [0xe24dd008, 0xe28dd008, 0xe12fff1e]
+            ))
+          [ Extent (GuestAddress 0x1000) (GuestAddress 0x1014)
+          , Extent (GuestAddress 0x1020) (GuestAddress 0x102c)
+          , Extent (GuestAddress 0x1040) (GuestAddress 0x104c)
+          ]
+      splitFrames transfer restoreWord = frames (splitCode transfer restoreWord) [GuestAddress 0x1000]
+      frameBounds = map (\frame -> (frameEntry frame, frameOwn frame, frameComposed frame)) . toList
+  check "split conditional and unconditional branches preserve SP/FP and compose calls"
+    (fmap frameBounds (splitFrames 0xeb000006 0xe8bd8ff0)
+      == Right
+        [ (GuestAddress 0x1000, FrameBytes 48, FrameBytes 56)
+        , (GuestAddress 0x1040, FrameBytes 8, FrameBytes 8)
+        ])
+  check "split-frame return still rejects an unrestored saved register"
+    (splitFrames 0xeb000006 0xe8bd8fe0 == Left (FrameError (GuestAddress 0x1028) StackUnbalanced))
+  check "split-frame branch still rejects an unknown destination"
+    (splitFrames 0xea00000e 0xe8bd8ff0 == Left (FrameError (GuestAddress 0x1020) (BranchOutsideOwned (GuestAddress 0x1060))))
+  check "split-frame branch still rejects an indirect transfer"
+    (splitFrames 0xe12fff10 0xe8bd8ff0 == Left (FrameError (GuestAddress 0x1020) PcWrite))
+  check "split-frame cycle still rejects accumulating stack"
+    (splitFrames 0xeafffff6 0xe8bd8ff0 == Left (FrameError (GuestAddress 0x1000) StackUnbalanced))
+  check "split-frame continuation still rejects a task-record SP replacement"
+    (splitFrames 0xe591d018 0xe8bd8ff0 == Left (FrameError (GuestAddress 0x1020) StackUnbounded))
 
   -- An owned byte between the extents.
   refusedAs "owned byte outside the regions" (OwnedByteOutsideRegions DomainA (GuestAddress 0x41200))

@@ -40,11 +40,17 @@ haskell_library(
         "//host:json",
         "//host:text",
         "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//replacement/rtos_platform:aggregate",
+        "//replacement/rtos_platform:platform-artifact",
     ],
 )
 
 # The stock loaders come from private-data:
 # bazel run //replacement/rtos_own_first/oracle:own-first-oracle -- --loader-a LOADER_A --loader-b LOADER_B --work NEW_DIRECTORY --summary NEW_JSON
+# Aggregate mode takes complete effective carrier slices from staged loaders through --aggregate-a-bin
+# and --aggregate-b-bin, with --aggregate-a-symbols/--aggregate-b-symbols and --placements-a/--placements-b.
+# Direct invocation accepts --carriers for the matching emitted union metadata.
+# Four-byte entry controls branch to separately assembled foreign code; positive carrier bytes remain unchanged.
 haskell_binary(
     name = "own-first-oracle",
     srcs = ["OracleMain.hs"],
@@ -54,6 +60,8 @@ haskell_binary(
         "$(rootpath //emulation:native-runner)",
         "--regions",
         "$(rootpath //replacement/rtos_own_first:regions.json)",
+        "--carriers",
+        "$(rootpath //replacement/rtos_platform:carriers.json)",
         "--owned-a-bin",
         "$(rootpath //replacement/rtos_own_first:own-first-a.bin)",
         "--owned-a-symbols",
@@ -63,7 +71,7 @@ haskell_binary(
         "--owned-b-symbols",
         "$(rootpath //replacement/rtos_own_first:own-first-b.symbols)",
     ],
-    data = _LINKED + ["//emulation:native-runner"],
+    data = _LINKED + ["//emulation:native-runner", "//replacement/rtos_platform:carriers.json"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":own-first-oracle-lib",

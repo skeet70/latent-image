@@ -1,3 +1,4 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
 
@@ -61,4 +62,108 @@ sh_test(
     srcs = ["//emulation:recovery-task-state-tests.sh"],
     args = ["$(location :timer-host-tests-build)"],
     data = [":timer-host-tests-build"],
+)
+
+haskell_library(
+    name = "root-package",
+    srcs = ["package/Replacement/RtosTimer/RootPackage.hs"],
+    src_strip_prefix = "package",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//replacement/rtos_platform:aggregate",
+        "//replacement/rtos_platform:platform-artifact",
+        "//replacement/startup_artifact:startup-artifact",
+    ],
+)
+
+haskell_test(
+    name = "root-package-tests",
+    srcs = [
+        "package/RootPackageTests.hs",
+        "//replacement/startup_artifact:Fixtures.hs",
+    ],
+    main_file = "package/RootPackageTests.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":root-package",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:update-container",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//replacement/rtos_platform:platform-artifact",
+        "//replacement/startup_artifact:startup-artifact",
+    ],
+)
+
+_ROOT_LINKED_INPUTS = [
+    "//replacement/first_stage:first-stage-image.bin",
+    "//replacement/first_stage:first-stage-image.symbols",
+    "//replacement/critical_pair:critical-pair-image.bin",
+    "//replacement/critical_pair:critical-pair-image.symbols",
+    "//replacement/primary_initializer:primary-initializer-image.bin",
+    "//replacement/primary_initializer:primary-initializer-image.symbols",
+    "//replacement/loader_orchestration:loader-a-orchestration-image.bin",
+    "//replacement/loader_orchestration:loader-a-orchestration-image.symbols",
+    "//replacement/loader_orchestration:loader-b-orchestration-image.bin",
+    "//replacement/loader_orchestration:loader-b-orchestration-image.symbols",
+    "//replacement/startup_dispatch:startup-dispatch-image.bin",
+    "//replacement/startup_dispatch:startup-dispatch-image.symbols",
+    "//replacement/kernel_install:kernel-install-image.bin",
+    "//replacement/kernel_install:kernel-install-image.symbols",
+    "//replacement/task_submission:task-submission-image.bin",
+    "//replacement/task_submission:task-submission-image.symbols",
+    "//replacement/task_storage:task-storage-image.bin",
+    "//replacement/task_storage:task-storage-image.symbols",
+    "//replacement/idle_task:idle-task-image.bin",
+    "//replacement/idle_task:idle-task-image.symbols",
+    "//replacement/root_task:root-task-image.bin",
+    "//replacement/root_task:root-task-image.symbols",
+    "//replacement/rtos_cyclic:app-callback.bin",
+    "//replacement/rtos_cyclic:app-callback.symbols",
+    "//replacement/rtos_platform:carriers.json",
+    "//replacement/rtos_platform:platform-a.bin",
+    "//replacement/rtos_platform:platform-a.symbols",
+    "//replacement/rtos_platform:platform-a.disasm",
+    "//replacement/rtos_platform:placement-a.json",
+    "//replacement/rtos_platform:platform-b.bin",
+    "//replacement/rtos_platform:platform-b.symbols",
+    "//replacement/rtos_platform:platform-b.disasm",
+    "//replacement/rtos_platform:placement-b.json",
+]
+
+haskell_binary(
+    name = "stage-root-platform",
+    srcs = ["package/RootPackageMain.hs"],
+    main_file = "package/RootPackageMain.hs",
+    args = [
+        "$(rootpath //lz:lz-encode)",
+        "$(rootpath //host/firmware:rebuild-update)",
+        "$(rootpath //lz:fflzd)",
+    ] + ["$(rootpath %s)" % path for path in _ROOT_LINKED_INPUTS],
+    data = [
+        "//host/firmware:rebuild-update",
+        "//lz:fflzd",
+        "//lz:lz-encode",
+    ] + _ROOT_LINKED_INPUTS,
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":root-package",
+        "//emulation:image4-staging-lib",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//replacement/rtos_platform:aggregate",
+        "//replacement/rtos_platform:platform-artifact",
+        "//replacement/startup_artifact:startup-artifact",
+    ],
 )

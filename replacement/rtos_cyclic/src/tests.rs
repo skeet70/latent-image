@@ -141,6 +141,13 @@ impl Mock {
         self.word(self.control(slot).timer().0)
     }
 
+    pub(crate) fn advance_to(&self, now: u32) {
+        self.set_word(TICK, now);
+        self.run_tick();
+        self.handler_context.set(0);
+    }
+
+
     fn run_tick(&self) {
         self.handler_context.set(1);
         timer::tick(
@@ -162,7 +169,7 @@ impl Mock {
         *self.action.borrow_mut() = Some(action);
     }
 
-    fn events(&self) -> Vec<(u32, u32)> {
+    pub(crate) fn events(&self) -> Vec<(u32, u32)> {
         self.events.borrow().clone()
     }
 

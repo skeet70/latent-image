@@ -12,6 +12,7 @@ module Replacement.RtosTaskRecords.Suite
 import Control.Monad (forM, forM_, unless)
 import Data.Bits ((.|.), shiftL, xor)
 import qualified Data.ByteString as B
+import Data.List (isPrefixOf, nub, sort, sortOn)
 import qualified Data.Map.Strict as M
 import Data.Word (Word32, Word8)
 import Emulation.CachedNativeBatch (BatchReuse, cachedObservedBatch)
@@ -19,9 +20,10 @@ import Emulation.NativeObservation
 import Emulation.OwnedCase
 import Replacement.RtosOwnFirst.Regions (Domain (..), domainLabel)
 import Replacement.RtosTaskRecords.Layout
+import qualified Replacement.RtosPlatform.Aggregate as Agg
 import System.FilePath ((</>))
 
-data Image = Image { imageBase :: Word32, imageBytes :: B.ByteString }
+data Image = Image { imageBase :: Word32, imageBytes :: B.ByteString, imagePlacements :: [Agg.SectionPlacement] }
 
 data Role = Stock | Owned deriving (Eq, Show)
 
@@ -643,13 +645,13 @@ caseFor facts domain role stockImage ownedImage symbols one =
   CaseSpec
     { caseId = caseName one ++ "-" ++ domainLabel domain
     , caseProvenance = "X-M1 1.50 task-record stock ABI, x70view 55436fc85c0560dd252b0410af6f2427fe198cd3; synthetic C/T/map state"
-    , caseExclusion = "Synthetic task tables and request record; no scheduler, object queue or stack-check consumer. Owned code is native-only scratch."
+    , caseExclusion = "Synthetic task tables and request record; no scheduler, object queue or stack-check consumer."
     , caseEntry = GuestAddress (fromIntegral entry)
     , caseExit = GuestAddress (fromIntegral exitAddress)
     , caseRegions =
         [ mkRegion (RegionId "code") (GuestAddress (fromIntegral codeBase)) (B.length codeBytes) ReadExecute codeBytes
-        , mkRegion (RegionId "mask") (GuestAddress (fromIntegral maskSave)) 0x68 ReadExecute maskBytes
-        , mkRegion (RegionId "definitions") (GuestAddress (fromIntegral definitionsBase)) (fromIntegral definitionsSize) ReadWrite (overlay definitionsBase definitionsSize (initialWords facts domain (caseRow one)))
+        ] ++ maskRegions ++
+        [ mkRegion (RegionId "definitions") (GuestAddress (fromIntegral definitionsBase)) (fromIntegral definitionsSize) ReadWrite (overlay definitionsBase definitionsSize (initialWords facts domain (caseRow one)))
         , mkRegion (RegionId "tasks") (GuestAddress (fromIntegral tasksBase)) (fromIntegral tasksSize) ReadWrite (overlay tasksBase tasksSize (initialWords facts domain (caseRow one)))
         , mkRegion (RegionId "map") (GuestAddress (fromIntegral mapBase)) (fromIntegral mapSize) ReadWrite (overlay mapBase mapSize (initialWords facts domain (caseRow one)))
         , mkRegion (RegionId "request") (GuestAddress (fromIntegral requestBase)) 0x18 ReadWrite (overlay requestBase 0x18 (initialWords facts domain (caseRow one)))
@@ -691,12 +693,19 @@ caseFor facts domain role stockImage ownedImage symbols one =
     ownedName = if caseOp one == Create then "xm1_rtos_task_create" else "xm1_rtos_task_delete"
     entry = case role of
       Stock -> stockEntry
-      Owned -> ownedEntry
+      Owned -> if aggregate then stockEntry else ownedEntry
     (codeBase, codeBytes) = case role of
       Stock -> (stockEntry, slice (imageBase stockImage) (imageBytes stockImage) stockEntry stockExtent)
+      Owned | aggregate -> (imageBase stockImage, aggregateBytes)
       Owned -> (imageBase ownedImage, imageBytes ownedImage)
     maskSave = dfMaskSave domainWords
     maskBytes = slice (imageBase stockImage) (imageBytes stockImage) maskSave 0x68
+    aggregate = any (\(name, _, _) -> "xm1_platform_veneer_" `isPrefixOf` name) symbols
+    aggregateBytes =
+      let image = Agg.AggregateImage (imageBase ownedImage) (imageBytes ownedImage)
+          carrier = Agg.AggregateSymbol "effective-carrier" (imageBase ownedImage) (fromIntegral (B.length (imageBytes ownedImage)))
+       in either error id (Agg.installSymbol (imageBase stockImage) (imageBytes stockImage) image carrier)
+    maskRegions = [mkRegion (RegionId "mask") (GuestAddress (fromIntegral maskSave)) 0x68 ReadExecute maskBytes | role == Stock || not aggregate]
     definitionsBase = definitionBase facts domain
     definitionsSize = definitionRegionSize facts
     tasksBase = taskBase facts domain
@@ -708,9 +717,39 @@ caseFor facts domain role stockImage ownedImage symbols one =
         [ (GuestAddress (fromIntegral stockEntry), stockExtent)
         , (GuestAddress (fromIntegral maskSave), 0x68)
         ]
+      Owned | aggregate ->
+        [(GuestAddress (fromIntegral address), size) | (address, size) <- admitted]
       Owned ->
         [(GuestAddress (fromIntegral address), size) | (_, address, size) <- symbols]
           ++ [(GuestAddress (fromIntegral maskSave), 0x68)]
+    executable =
+      [(address, size) | (_, address, size) <- symbols, size > 0]
+        ++ [(Agg.placementAddress placement, Agg.placementBytes placement)
+           | placement <- imagePlacements ownedImage
+           , Agg.placementBytes placement > 0
+           , ".text." `isPrefixOf` Agg.placementSection placement
+           ]
+    allocated =
+      [(address, size) | (_, address, size) <- symbols, size > 0]
+        ++ [(Agg.placementAddress placement, Agg.placementBytes placement)
+           | placement <- imagePlacements ownedImage
+           , Agg.placementBytes placement > 0
+           ]
+    overlaps (address, size) (other, bytes) =
+      toInteger address < toInteger other + toInteger bytes
+        && toInteger other < toInteger address + toInteger size
+    preserved = [extent | extent <- [(maskSave, 0x68)], not (any (overlaps extent) allocated)]
+    admitted = concatMap splitAtEntries (merge (sortOn fst (executable ++ preserved)))
+    merge [] = []
+    merge ((address, size) : rest) = extend address (address + size) rest
+    extend address top [] = [(address, top - address)]
+    extend address top remaining@((next, size) : rest)
+      | next < top = extend address (max top (next + size)) rest
+      | otherwise = (address, top - address) : merge remaining
+    publicEntries = sort (nub [address | (name, address, size) <- symbols, size > 0, "xm1_platform_veneer_" `isPrefixOf` name])
+    splitAtEntries (address, size) =
+      let boundaries = address : [entryAddress | entryAddress <- publicEntries, address < entryAddress, entryAddress < address + size] ++ [address + size]
+       in [(low, high - low) | (low, high) <- zip boundaries (drop 1 boundaries)]
     _unused = (d, t)
 
 parseOwnedSymbols :: FilePath -> IO [(String, Word32, Word32)]
@@ -724,8 +763,6 @@ parseOwnedSymbols path = do
     , Just address <- [parseWord32 addressText]
     , Just size <- [parseWord32 sizeText]
     , size > 0
-    , address >= 0x0005_0000
-    , address < 0x0005_0400
     ]
 
 runDomain

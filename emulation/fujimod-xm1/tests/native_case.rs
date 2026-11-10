@@ -103,7 +103,6 @@ struct Case {
     identity: Option<String>,
     /// The wire's kernel row of a kernel case.
     kernel: Option<String>,
-    /// The wire's stack-context row of an opted-in kernel case.
     stack_contexts: Option<String>,
 }
 
@@ -203,14 +202,12 @@ impl Case {
         self
     }
 
-    /// Declares the private stacks of an opted-in kernel case.
     fn stacks(mut self, bounds: &[(u32, u32)]) -> Self {
         let pairs: Vec<String> = bounds.iter().map(|(low, high)| format!(" {low:x} {high:x}")).collect();
         self.stack_contexts = Some(format!("c {}{}", bounds.len(), pairs.concat()));
         self
     }
 
-    /// A raw stack-context row, for malformed declarations.
     fn context_row(mut self, row: &str) -> Self {
         self.stack_contexts = Some(row.to_owned());
         self
@@ -2323,7 +2320,6 @@ const PUSH_R4_R11_LR: u32 = 0xe92d_4ff0;
 const POP_R4_R11_PC: u32 = 0xe8bd_8ff0;
 const POP_R4_R11_LR: u32 = 0xe8bd_4ff0;
 const MOV_PC_LR: u32 = 0xe1a0_f00e;
-/// `ldr sp, [r4, #n]`, `ldr pc, [r4, #n]` and `ldr lr, [r4, #n]`.
 const LDR_SP_R4_0: u32 = 0xe594_d000;
 const LDR_PC_R4_0: u32 = 0xe594_f000;
 const LDR_PC_R4_4: u32 = 0xe594_f004;
@@ -2332,7 +2328,6 @@ const LDR_PC_R4_12: u32 = 0xe594_f00c;
 const LDR_LR_R4_16: u32 = 0xe594_e010;
 const LDR_LR_R4_20: u32 = 0xe594_e014;
 
-/// `main` at `CODE`, `worker` at `WORKER` and `inner` at `INNER`.
 fn two_stack_program(main: [u32; 3], worker: [u32; 4], inner: [u32; 4]) -> Vec<u32> {
     let mut code = vec![0u32; 20];
     code[..3].copy_from_slice(&main);
@@ -2341,7 +2336,6 @@ fn two_stack_program(main: [u32; 3], worker: [u32; 4], inner: [u32; 4]) -> Vec<u
     code
 }
 
-/// Two declared stacks below `SP` and `SP_B`, with `data` readable at `DATA`.
 fn two_stack_case(code: &[u32], data: &[u32]) -> Case {
     let mut case = Case::new(code);
     case.functions = vec![(CODE, 0x10), (WORKER, 0x10), (INNER, 0x10)];
@@ -2388,7 +2382,6 @@ const DISPATCH: u32 = 0x1060;
 const SELECT: u32 = 0x1080;
 const MANY: u32 = 0x5000;
 
-/// The `SP` stack plus `count - 1` disjoint eight-byte stacks at `MANY`.
 fn many_stacks(count: usize) -> Vec<(u32, u32)> {
     let mut bounds = vec![(STACK, SP)];
     bounds.extend((0..count - 1).map(|index| {

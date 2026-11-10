@@ -34,6 +34,7 @@ module Replacement.RtosOwnFirst.Oracle
   , OwnedDomain (..)
   , ownedDomain
   , stockBody
+  , aggregateDomain
   , ownedBody
   , replaceEntry
   , slotEntry
@@ -67,7 +68,7 @@ import Control.Monad (forM, unless)
 import Data.Aeson (Value, eitherDecodeStrict')
 import Data.Bits (shiftL, shiftR, testBit, xor, (.&.), (.|.))
 import qualified Data.ByteString as B
-import Data.List (find, nub)
+import Data.List (find, isPrefixOf, nub, sortOn)
 import qualified Data.Map.Strict as M
 import Data.Maybe (isNothing, mapMaybe)
 import Data.Word (Word32, Word64, Word8)
@@ -75,10 +76,13 @@ import qualified Emulation.NativeObservation as N
 import Emulation.NativeObservation (Register (..), RegionId (..), RunnerStatus (..))
 import Emulation.OwnedCase (CaseId (..), CaseRegion, CaseSpec (..), Permission (..), loadObservedBatch, mkRegion, word32le, writeBatch)
 import FujiAF.Host (get, list, num, str)
+import qualified FujiAF.FirstStage as F
 import Numeric (readHex, showHex)
-import Replacement.RtosOwnFirst.Artifact (LinkedDomain, StageError, ownedExtents)
+import Replacement.RtosOwnFirst.Artifact (LinkedDomain (..), StageError (..), ownedExtents)
 import qualified Replacement.RtosOwnFirst.Assembly as A
 import Replacement.RtosOwnFirst.Regions
+import qualified Replacement.RtosPlatform.Aggregate as Agg
+import qualified Replacement.RtosPlatform.Union as U
 import System.FilePath ((</>))
 
 data Slot = S60 | Sfc | S100 | S128 | S12c | S130 | S134 | S138 | S13c | S148 | S14c | S150 | S154 | S164 | S168 | S16c | S1618
@@ -446,10 +450,98 @@ data OwnedDomain = OwnedDomain
   , ownedTable :: DomainTable
   , ownedFill :: Word32
   , ownedRegions :: [(Region, B.ByteString)]
+  , ownedPlacement :: Maybe (M.Map SlotOffset (Word32, Word32), (Word32, Word32))
+  , ownedImage :: Maybe (Word32, B.ByteString)
+  , ownedAggregate :: Maybe Body
   }
 
 ownedDomain :: Word32 -> Domain -> DomainTable -> LinkedDomain -> Either StageError OwnedDomain
-ownedDomain fill domain table linked = OwnedDomain domain table fill <$> ownedExtents fill domain table linked
+ownedDomain fill domain table linked = do
+  symbols <- either (const (Left (SymbolsUnparsed domain))) Right (F.parseSymbols (linkedSymbols linked))
+  let rows = domainExtents table
+      byName name = case [symbol | symbol <- symbols, F.symbolName symbol == name] of
+        [symbol] -> Right symbol
+        _ -> Left (SymbolMissing domain (SymbolName name))
+      symbolNameOf region = let SymbolName text = regionSymbol region in text
+  placed <- forM rows $ \region -> do
+    symbol <- byName (symbolNameOf region)
+    pure (region, F.symbolAddress symbol, F.symbolSize symbol)
+  if and [address == regionEntryWord region | (region, address, _) <- placed]
+    then (\regions -> OwnedDomain domain table fill regions Nothing Nothing Nothing) <$> ownedExtents fill domain table linked
+    else do
+      let base = minimum [F.symbolAddress symbol | symbol <- symbols, F.symbolSize symbol > 0, F.symbolAddress symbol >= loaderBase]
+          image = linkedBin linked
+          slice address size = B.take (fromIntegral size) (B.drop (fromIntegral (address - base)) image)
+      bodySymbol <- byName (let SymbolName text = bodySymbol (tableBody table) in text)
+      let bodyPlacement = (F.symbolAddress bodySymbol, F.symbolSize bodySymbol)
+      installed <- forM placed $ \(region, address, size) -> (,) region <$> pure (slice address size)
+      pure OwnedDomain
+        { ownedDomainId = domain
+        , ownedTable = table
+        , ownedFill = fill
+        , ownedRegions = installed
+        , ownedPlacement = Just (M.fromList [(regionSlot region, (address, size)) | (region, address, size) <- placed], bodyPlacement)
+        , ownedImage = Just (base, image)
+        , ownedAggregate = Nothing
+        }
+  where
+    loaderBase = case domain of DomainA -> 0x40000; DomainB -> 0xd0000
+    regionEntryWord region = let GuestAddress value = regionEntry region in value
+
+aggregateDomain :: Word32 -> Domain -> DomainTable -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> Either String OwnedDomain
+aggregateDomain fill domain table stock binary symbolBytes placementBytes carrierBytes = do
+  union <- either (Left . show) Right (U.parseUnion carrierBytes)
+  symbols <- Agg.parseAggregateSymbols symbolBytes
+  placements <- Agg.parsePlacements placementBytes
+  unless (not (null symbols) && not (null placements)) (Left "aggregate symbols and placements must be nonempty")
+  let dm = U.domainMap union domain
+      carriers = [Agg.SectionPlacement start (end - start) ".carrier"
+        | carrier <- U.mapCarriers dm
+        , let Extent (GuestAddress start) (GuestAddress end) = U.carrierExtent carrier]
+      GuestAddress loaderBase = domainLoaderBase domain
+      symbolSpans = [(Agg.symbolAddress symbol, Agg.symbolSize symbol) | symbol <- symbols, Agg.symbolSize symbol > 0]
+      executable = [placement | placement <- placements, Agg.placementBytes placement > 0, ".text" `isPrefixOf` Agg.placementSection placement]
+      fixed symbol = any (\entry ->
+        let GuestAddress address = U.entryAddress entry
+         in Agg.symbolName symbol == U.entryVeneer entry
+              && Agg.symbolAddress symbol == address && Agg.symbolSize symbol == 4) (U.mapEntries dm)
+      placementFits placement = any (\(Extent (GuestAddress start) (GuestAddress end)) ->
+        start <= Agg.placementAddress placement
+          && toInteger (Agg.placementAddress placement) + toInteger (Agg.placementBytes placement) <= toInteger end) (U.runs dm)
+      covered (address, size) = any (\placement ->
+        Agg.placementAddress placement <= address
+          && toInteger address + toInteger size <= toInteger (Agg.placementAddress placement) + toInteger (Agg.placementBytes placement)) executable
+  unless (B.length stock == domainLoaderSize domain) (Left "loader size")
+  unless (not (null carriers)) (Left "aggregate has no declared carriers")
+  unless (all (\carrier -> Agg.placementAddress carrier >= loaderBase
+      && toInteger (Agg.placementAddress carrier) + toInteger (Agg.placementBytes carrier)
+        <= toInteger loaderBase + toInteger (B.length stock)) carriers)
+    (Left "aggregate carrier is outside loader")
+  let base = minimum (map Agg.placementAddress carriers)
+      image = Agg.AggregateImage base binary
+  unless (all placementFits placements) (Left "aggregate placement is outside packed carrier space")
+  unless (all (\symbol -> Agg.symbolSize symbol == 0 || fixed symbol || covered (Agg.symbolAddress symbol, Agg.symbolSize symbol)) symbols)
+    (Left "aggregate function is outside placement metadata and declared fixed ABI entries")
+  mapM_ (\(address, size) -> Agg.sliceAggregate image address size) symbolSpans
+  entries <- mapM (slotEntry table) slots
+  unless (all (\entry -> any (\(address, size) -> address == entry && size > 0) symbolSpans) entries)
+    (Left "aggregate symbols omit a public own-first entry")
+  let top = maximum [toInteger (Agg.placementAddress carrier) + toInteger (Agg.placementBytes carrier) | carrier <- carriers]
+  unless (top == toInteger base + toInteger (B.length binary)) (Left "aggregate binary and complete carrier extent differ")
+  installed <- Agg.installPlacements loaderBase stock image carriers
+  retained <- mapM (stockBody domain table stock) slots
+  let allocations = carriers ++ placements
+      overlaps (address, size) placement =
+        toInteger address < toInteger (Agg.placementAddress placement) + toInteger (Agg.placementBytes placement)
+          && toInteger (Agg.placementAddress placement) < toInteger address + toInteger size
+      retainedSpans = filter (\span' -> not (any (overlaps span') allocations)) (nub (concatMap bodyFunctions retained))
+      textSpans = [(Agg.placementAddress placement, Agg.placementBytes placement) | placement <- executable]
+      functions = foldr merge [] (sortOn fst (retainedSpans ++ symbolSpans ++ textSpans))
+      merge (address, size) ((next, nextSize) : rest)
+        | address + size > next = merge (address, max (address + size) (next + nextSize) - address) rest
+      merge span' rest = span' : rest
+      body = Body loaderBase [(loaderBase, installed)] functions
+  pure (OwnedDomain domain table fill [] Nothing Nothing (Just body))
 
 regionOf :: DomainTable -> Slot -> Either String Region
 regionOf table slot = maybe (Left ("no region for " ++ slotTag slot)) Right (find ((== slotOffset slot) . regionSlot) (domainExtents table))
@@ -485,19 +577,33 @@ stockBody domain table loader slot = do
   pure (Body (fst (extentBounds (regionExtent own))) [(start, slice (start, end)) | (start, end) <- bounds] [(start, end - start) | (start, end) <- bounds])
 
 ownedBody :: OwnedDomain -> Slot -> Either String Body
+ownedBody owned slot | Just body <- ownedAggregate owned = do
+  entry <- slotEntry (ownedTable owned) slot
+  pure body {bodyEntry = entry}
 ownedBody owned slot = do
   let table = ownedTable owned
-      body = tableBody table
-      (bodyStart, bodyEnd) = extentBounds (bodyExtent body)
+      placementOf region = case ownedPlacement owned of
+        Nothing -> let (start, end) = extentBounds (regionExtent region) in (start, end - start)
+        Just (placements, _) -> maybe (regionStart region, fromIntegral (extentBytes (regionExtent region))) id (M.lookup (regionSlot region) placements)
+      regionStart region = let GuestAddress value = extentStart (regionExtent region) in value
+      placementOfRegion region = placementOf region
   entry <- slotEntry table slot
   mapped <- forM (ownedReach table slot) $ \offset ->
     maybe (Left "owned region missing") Right (find ((== offset) . regionSlot . fst) (ownedRegions owned))
-  let functions (region, _)
-        | regionSlot region == bodyHost body = [(start, bodyStart - start), (bodyStart, bodyEnd - bodyStart)]
-        | otherwise = [(start, end - start)]
-        where
-          (start, end) = extentBounds (regionExtent region)
-  pure (Body entry [(fst (extentBounds (regionExtent region)), bytes) | (region, bytes) <- mapped] (concatMap functions mapped))
+  let functions (region, _) = [placementOfRegion region]
+      bodyExtras = case ownedImage owned of
+        Nothing -> []
+        Just (base, image) ->
+          [ (entry, sliceImage base image entry 4) ]
+          ++ [ (address, sliceImage base image address size)
+             | (address, size) <- [bodyPlacement | Just (_, bodyPlacement) <- [ownedPlacement owned]], slot == S1618
+             ]
+      sliceImage :: Word32 -> B.ByteString -> Word32 -> Word32 -> B.ByteString
+      sliceImage base image address size = B.take (fromIntegral size) (B.drop (fromIntegral (address - base)) image)
+      extraFunctions = case ownedPlacement owned of
+        Just (_, (address, size)) | slot == S1618 -> [(address, size)]
+        _ -> []
+  pure (Body entry (map (\(region, bytes) -> (fst (placementOfRegion region), bytes)) mapped ++ bodyExtras) (concatMap functions mapped ++ extraFunctions ++ [(entry, 4) | ownedImage owned /= Nothing]))
 
 -- | The body with the function at its entry rewritten as @code@ followed by fill words.
 replaceEntry :: Word32 -> [Word32] -> Body -> Either String Body

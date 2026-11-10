@@ -8,7 +8,8 @@ use crate::types::{
     CyclicArgument, CyclicAttributes, CyclicCreate, CyclicHandler, CyclicPhase, Expiry, PeriodWord,
 };
 
-#[inline(always)]
+#[cfg_attr(feature = "stage", inline(never))]
+#[cfg_attr(feature = "stage", link_section = ".text.cyclic_lock")]
 fn lock<M: Machine>(m: &M, context: KernelContext) {
     loop {
         m.irq_set();
@@ -19,7 +20,8 @@ fn lock<M: Machine>(m: &M, context: KernelContext) {
     }
 }
 
-#[inline(always)]
+#[cfg_attr(feature = "stage", inline(never))]
+#[cfg_attr(feature = "stage", link_section = ".text.cyclic_unlock")]
 fn unlock<M: Machine>(m: &M, context: KernelContext) {
     m.release_lock(context);
     m.irq_clear();
@@ -60,7 +62,8 @@ pub fn schedule<M: Machine>(
     Ok(())
 }
 
-#[cfg_attr(feature = "stage", inline(never))]
+#[cfg_attr(all(feature = "stage", not(feature = "component")), inline(never))]
+#[cfg_attr(feature = "component", inline(always))]
 #[cfg_attr(feature = "stage", link_section = ".text.cyclic_configure_core")]
 pub fn configure<M: Machine>(
     m: &M,
@@ -74,7 +77,8 @@ pub fn configure<M: Machine>(
     m.store_word(configuration.offset(0x6c), callback);
 }
 
-#[cfg_attr(feature = "stage", inline(never))]
+#[cfg_attr(all(feature = "stage", not(feature = "component")), inline(never))]
+#[cfg_attr(feature = "component", inline(always))]
 #[cfg_attr(feature = "stage", link_section = ".text.cyclic_initialize_core")]
 pub fn initialize<M: Machine>(
     m: &M,
@@ -104,7 +108,8 @@ pub fn initialize<M: Machine>(
     }
 }
 
-#[cfg_attr(feature = "stage", inline(never))]
+#[cfg_attr(all(feature = "stage", not(feature = "component")), inline(never))]
+#[cfg_attr(feature = "component", inline(always))]
 #[cfg_attr(feature = "stage", link_section = ".text.cyclic_create_core")]
 pub fn create_with_request<M: Machine, R: FnOnce() -> Result<CyclicCreate, CyclicStatus>>(
     m: &M,
@@ -164,7 +169,8 @@ pub fn create_from_request<M: Machine>(
     })
 }
 
-#[cfg_attr(feature = "stage", inline(never))]
+#[cfg_attr(all(feature = "stage", not(feature = "component")), inline(never))]
+#[cfg_attr(feature = "component", inline(always))]
 #[cfg_attr(feature = "stage", link_section = ".text.cyclic_delete_core")]
 pub fn delete<M: Machine>(m: &M, entry: Domain, id: EncodedId) -> CyclicStatus {
     let slot = match own_cyclic_slot(id) {
@@ -197,7 +203,9 @@ pub fn delete<M: Machine>(m: &M, entry: Domain, id: EncodedId) -> CyclicStatus {
     status
 }
 
-#[inline(always)]
+#[cfg_attr(not(feature = "component"), inline(always))]
+#[cfg_attr(feature = "component", inline(never))]
+#[cfg_attr(feature = "component", link_section = ".text.cyclic_zero_config")]
 fn zero_config<M: Machine>(m: &M, config: CyclicConfig) {
     m.store_word(config.attributes(), 0);
     m.store_word(config.argument(), 0);
@@ -208,32 +216,38 @@ fn zero_config<M: Machine>(m: &M, config: CyclicConfig) {
 }
 
 #[cfg_attr(feature = "stage", inline(never))]
-#[cfg_attr(feature = "stage", link_section = ".text.cyclic_start_core")]
-pub fn start<M: Machine>(m: &M, entry: Domain, id: EncodedId) -> CyclicStatus {
+#[cfg_attr(feature = "stage", link_section = ".text.cyclic_admit_control")]
+fn admit_control<M: Machine>(
+    m: &M,
+    entry: Domain,
+    id: EncodedId,
+) -> Result<(KernelContext, CyclicControl, CyclicConfig), CyclicStatus> {
     if m.handler_context() != 0 || m.irq_masked() {
-        return CyclicStatus::Context;
+        return Err(CyclicStatus::Context);
     }
-    let context = match target_context(m, entry, id.class()) {
-        Ok(context) => context,
-        Err(status) => return status,
-    };
+    let context = target_context(m, entry, id.class())?;
     let index = id.index();
     if index <= 0 {
-        return CyclicStatus::InvalidIndex;
+        return Err(CyclicStatus::InvalidIndex);
     }
     let count = m.load_word(context.cyclic_count());
-    let slot = match CyclicSlot::new(index as u32, count) {
-        Some(slot) => slot,
-        None => return CyclicStatus::InvalidIndex,
-    };
-    let control = match control_of(m, context, slot) {
-        Some(control) => control,
-        None => return CyclicStatus::InvalidIndex,
-    };
+    let slot = CyclicSlot::new(index as u32, count).ok_or(CyclicStatus::InvalidIndex)?;
+    let control = control_of(m, context, slot).ok_or(CyclicStatus::InvalidIndex)?;
     let config = config_of(m, control);
     if m.load_word(config.exists()) == 0 {
-        return CyclicStatus::NotCreated;
+        return Err(CyclicStatus::NotCreated);
     }
+    Ok((context, control, config))
+}
+
+#[cfg_attr(all(feature = "stage", not(feature = "component")), inline(never))]
+#[cfg_attr(feature = "component", inline(always))]
+#[cfg_attr(feature = "stage", link_section = ".text.cyclic_start_core")]
+pub fn start<M: Machine>(m: &M, entry: Domain, id: EncodedId) -> CyclicStatus {
+    let (context, control, config) = match admit_control(m, entry, id) {
+        Ok(admitted) => admitted,
+        Err(status) => return status,
+    };
     lock(m, context);
     let status = match PeriodWord(m.load_word(config.period())).checked() {
         None => CyclicStatus::Param,
@@ -259,33 +273,14 @@ pub fn start<M: Machine>(m: &M, entry: Domain, id: EncodedId) -> CyclicStatus {
     status
 }
 
-#[cfg_attr(feature = "stage", inline(never))]
+#[cfg_attr(all(feature = "stage", not(feature = "component")), inline(never))]
+#[cfg_attr(feature = "component", inline(always))]
 #[cfg_attr(feature = "stage", link_section = ".text.cyclic_stop_core")]
 pub fn stop<M: Machine>(m: &M, entry: Domain, id: EncodedId) -> CyclicStatus {
-    if m.handler_context() != 0 || m.irq_masked() {
-        return CyclicStatus::Context;
-    }
-    let context = match target_context(m, entry, id.class()) {
-        Ok(context) => context,
+    let (context, control, _config) = match admit_control(m, entry, id) {
+        Ok(admitted) => admitted,
         Err(status) => return status,
     };
-    let index = id.index();
-    if index <= 0 {
-        return CyclicStatus::InvalidIndex;
-    }
-    let count = m.load_word(context.cyclic_count());
-    let slot = match CyclicSlot::new(index as u32, count) {
-        Some(slot) => slot,
-        None => return CyclicStatus::InvalidIndex,
-    };
-    let control = match control_of(m, context, slot) {
-        Some(control) => control,
-        None => return CyclicStatus::InvalidIndex,
-    };
-    let config = config_of(m, control);
-    if m.load_word(config.exists()) == 0 {
-        return CyclicStatus::NotCreated;
-    }
     lock(m, context);
     let status = if m.remove_timer(context, control.timer()) {
         m.store_word(control.active(), 0);
@@ -297,7 +292,8 @@ pub fn stop<M: Machine>(m: &M, entry: Domain, id: EncodedId) -> CyclicStatus {
     status
 }
 
-#[cfg_attr(feature = "stage", inline(never))]
+#[cfg_attr(all(feature = "stage", not(feature = "component")), inline(never))]
+#[cfg_attr(feature = "component", inline(always))]
 #[cfg_attr(feature = "stage", link_section = ".text.cyclic_expire_core")]
 pub fn expire<M: Machine>(m: &M, control: CyclicControl) -> CyclicStatus {
     let config = config_of(m, control);

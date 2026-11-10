@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 -- | Canonical decode, composition staging and the output directory.
 module Replacement.StartupArtifact.Stage
-  ( loadCanonical, imageLimit, loadPieces, stageComposition, writeOutputs, runStager, applicationSiteMap
+  ( loadCanonical, imageLimit, loadPieces, stageComposition, stageManifest, stageLoadedManifest, writeOutputs, runStager, applicationSiteMap
   ) where
 
 import Control.Monad (forM, forM_, unless)
@@ -25,7 +25,7 @@ import Replacement.StartupArtifact.Application (RoleImages (..), SiteMap (..), a
 import Replacement.StartupArtifact.AttachState (AttachSources (..), attachStateValue)
 import Replacement.StartupArtifact.Compose
 import Replacement.StartupArtifact.Contract
-import Replacement.StartupArtifact.Joins (registeredJoins)
+import Replacement.StartupArtifact.Joins (JoinKind, registeredJoins)
 import Replacement.StartupArtifact.Manifest
 import Replacement.StartupArtifact.Targets
 import Replacement.StartupArtifact.Types
@@ -120,7 +120,18 @@ runStager tools canonicalPath manifestPath scratchPath output = do
   manifestBytes <- H.readRegular (1024*1024) manifestPath
   manifest <- refused (parseManifest manifestBytes)
   source <- loadCanonical tools scratch canonicalPath
+  (dat, observed, contract, _) <- stageManifest tools scratch source manifestBytes manifest
+  writeOutputs output dat observed contract
+
+stageManifest :: Tools.Tools -> Tools.ScratchDirectory -> Canonical -> B.ByteString -> Manifest -> IO (B.ByteString, TargetBytes, J.Value, Composition JoinKind)
+stageManifest tools scratch source manifestBytes manifest = do
   derived <- loadPieces source manifest
+  stageLoadedManifest tools scratch source manifestBytes manifest derived
+
+stageLoadedManifest :: Tools.Tools -> Tools.ScratchDirectory -> Canonical -> B.ByteString -> Manifest -> [Piece] -> IO (B.ByteString, TargetBytes, J.Value, Composition JoinKind)
+stageLoadedManifest tools scratch source manifestBytes manifest derived = do
+  H.ensure (map pieceKind derived == map manifestPieceKind (manifestPieces manifest))
+    "loaded startup pieces differ from the manifest"
   let attach = manifestAttach manifest
   pieces <- refused (attachGuard attach derived)
   composition <- refused (compose registeredJoins source pieces)
@@ -141,7 +152,7 @@ runStager tools canonicalPath manifestPath scratchPath output = do
       composed <- RoleImages observed <$> plainImage composedParts
       mapping <- applicationSiteMap (compositionPieces composition)
       Just <$> application mapping (contractCarriers composition) retained composed
-  writeOutputs output dat observed (contractValue source manifestBytes composition dat observed attach attachState section)
+  pure (dat, observed, contractValue source manifestBytes composition dat observed attach attachState section, composition)
 
 applicationSiteMap :: [Piece] -> Either Refusal SiteMap
 applicationSiteMap pieces = SiteMap . Map.fromList . concat <$> mapM mapped pieces
