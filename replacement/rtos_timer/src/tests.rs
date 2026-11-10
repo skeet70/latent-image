@@ -13,6 +13,31 @@ const SECOND_NODES: u32 = 0x7000;
 const LOCK_CELL: u32 = 0x1200;
 const SECOND_LOCK_CELL: u32 = 0x1204;
 
+
+#[test]
+fn cold_storage_publication_initializes_both_domains_without_clearing_entries() {
+    for domain in [layout::Domain::A, layout::Domain::B] {
+        let mock = Mock::new();
+        let configuration = GuestAddress(0x9000);
+        let words = domain.words();
+        let arena = domain.timer_arena();
+        mock.set_word(words.timer_count.0, 184);
+        mock.set_word(words.timer_base.0, 123);
+        mock.set_word(words.tick_now.0, 456);
+        mock.set_word(words.time_offset.0, 789);
+        mock.set_word(arena.guest.start(), 0xfeed);
+        initialize(&mock, domain, configuration);
+        assert_eq!(mock.word(words.timer_count.0), 0);
+        assert_eq!(mock.word(words.timer_base.0), 0);
+        assert_eq!(mock.word(words.tick_now.0), 10);
+        assert_eq!(mock.word(words.time_offset.0), 0);
+        assert_eq!(mock.word(configuration.offset(0x20).0), arena.guest.start());
+        assert_eq!(mock.word(configuration.offset(0x24).0), words.timer_count.0);
+        assert_eq!(mock.word(configuration.offset(0x28).0), words.timer_base.0);
+        assert_eq!(mock.word(configuration.offset(0x2c).0), words.tick_now.0);
+        assert_eq!(mock.word(arena.guest.start()), 0xfeed);
+    }
+}
 struct Mock {
     words: RefCell<BTreeMap<u32, u32>>,
     held: RefCell<Vec<u32>>,

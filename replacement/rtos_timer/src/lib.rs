@@ -7,7 +7,7 @@
 pub mod layout;
 
 use core::num::NonZeroU32;
-use layout::{GuestAddress, KernelContext, LockRecord};
+use layout::{Domain, GuestAddress, KernelContext, LockRecord};
 
 pub trait Machine {
     fn load_word(&self, at: GuestAddress) -> u32;
@@ -22,6 +22,20 @@ pub trait Scheduler: Machine {
     fn acquire_lock(&self, lock: LockRecord);
     fn irq_clear(&self);
     fn irq_set(&self);
+}
+
+/// Cold-boot storage publication. Owner contexts must not yet be published.
+#[inline(always)]
+pub fn initialize<M: Machine>(m: &M, domain: Domain, configuration: GuestAddress) {
+    let words = domain.words();
+    m.store_word(words.time_offset, 0);
+    m.store_word(words.timer_base, 0);
+    m.store_word(words.tick_now, 10);
+    m.store_word(words.timer_count, 0);
+    m.store_word(configuration.offset(0x20), domain.timer_arena().guest.start());
+    m.store_word(configuration.offset(0x24), words.timer_count.0);
+    m.store_word(configuration.offset(0x28), words.timer_base.0);
+    m.store_word(configuration.offset(0x2c), words.tick_now.0);
 }
 
 const NODE_SIZE: u32 = 0x08;

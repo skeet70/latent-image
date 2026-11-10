@@ -20,18 +20,6 @@ const CONFIGURATION_WORD: GuestAddress = GuestAddress(0x4005_46d4);
 #[cfg(feature = "domain-b")]
 const CONFIGURATION_WORD: GuestAddress = GuestAddress(0x400e_4694);
 
-struct TimerConfiguration(GuestAddress);
-
-impl TimerConfiguration {
-    #[inline(always)]
-    fn publish(self, domain: Domain) {
-        let words = domain.words();
-        write(self.0.offset(0x20), domain.timer_arena().guest.start());
-        write(self.0.offset(0x24), words.timer_count.0);
-        write(self.0.offset(0x28), words.timer_base.0);
-        write(self.0.offset(0x2c), words.tick_now.0);
-    }
-}
 
 const ARENA: TimerArena = ENTRY.timer_arena();
 
@@ -156,12 +144,7 @@ fn heap(context: KernelContext) -> TimerHeap {
 #[inline(never)]
 #[link_section = ".text.timer_body_initialize"]
 pub extern "C" fn xm1_rtos_timer_initialize_body() {
-    let words = ENTRY.words();
-    write(words.time_offset, 0);
-    write(words.timer_base, 0);
-    write(words.tick_now, 10);
-    write(words.timer_count, 0);
-    TimerConfiguration(GuestAddress(read(CONFIGURATION_WORD))).publish(ENTRY);
+    timer::initialize(&Cpu, ENTRY, GuestAddress(read(CONFIGURATION_WORD)));
 }
 
 #[no_mangle]
