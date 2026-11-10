@@ -66,7 +66,9 @@ rustPlatform.buildRustPackage {
     cargo test -p fujimod-emulator-exr2-storage --locked -j "$CARGO_BUILD_JOBS" --profile release \
       --target ${pkgs.stdenv.targetPlatform.rust.rustcTargetSpec} --offline --lib
   '';
-  nativeBuildInputs = [ pkgs.cmake pkgs.pkg-config ];
+  # apple-cf, a macOS-only FujiMod dependency, builds its Swift bridge with SwiftPM.
+  nativeBuildInputs = [ pkgs.cmake pkgs.pkg-config ]
+    ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.swift pkgs.swiftpm ];
   # The JIT execution-gate tests run their emitted Wasm under Node.
   nativeCheckInputs = [ pkgs.nodejs ];
   dontUseCmakeConfigure = true;

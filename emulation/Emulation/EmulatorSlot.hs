@@ -25,10 +25,12 @@ import System.Directory (createDirectoryIfMissing, doesDirectoryExist, getCurren
 import System.Environment (getExecutablePath, lookupEnv, setEnv)
 import System.FilePath ((</>))
 import System.IO (Handle, IOMode (ReadMode, WriteMode), SeekMode (AbsoluteSeek), hFlush, hPutStrLn, stderr, withBinaryFile)
-import System.IO.Error (catchIOError, isDoesNotExistError)
+import System.IO.Error (catchIOError, isDoesNotExistError, isPermissionError)
+import System.Info (os)
 import System.Posix.Files (createSymbolicLink, setFileMode)
 import System.Posix.IO (LockRequest (WriteLock), OpenFileFlags (creat), OpenMode (ReadWrite), closeFd, defaultFileFlags, openFd, setLock)
 import System.Posix.Process (executeFile, getProcessID)
+import System.Posix.Signals (nullSignal, signalProcess)
 import System.Posix.Types (ProcessID)
 import Text.Read (readMaybe)
 
@@ -141,8 +143,7 @@ firstFree directory (slot : rest) = do
     Left _ -> closeFd fd >> firstFree directory rest
 
 -- | A private copy of the running executable beneath the slot directory, named
--- @pin-<pid>@ for the PID execve preserves. The bytes come from the running
--- inode through @/proc/self/exe@, so no relink of the on-disk file changes them.
+-- @pin-<pid>@ for the PID execve preserves, copied from 'runningImage'.
 pinExecutable :: FilePath -> IO FilePath
 pinExecutable directory = do
   sweepPinned directory
@@ -152,11 +153,19 @@ pinExecutable directory = do
   -- A crashed run with a reused PID can leave either path behind.
   removeIfPresent pinned
   removeIfPresent (pinned ++ ".runfiles")
-  withBinaryFile "/proc/self/exe" ReadMode $ \running ->
+  withBinaryFile (runningImage executable) ReadMode $ \running ->
     withBinaryFile pinned WriteMode $ \copy -> copyChunks running copy
   setFileMode pinned 0o700
   linkRunfiles executable pinned
   pure pinned
+
+-- | On Linux the running inode through @/proc/self/exe@, which no relink of the
+-- on-disk file changes; elsewhere the executable's path, which a relink during
+-- the slot wait can replace.
+runningImage :: FilePath -> FilePath
+runningImage executable
+  | os == "linux" = "/proc/self/exe"
+  | otherwise = executable
 
 removeIfPresent :: FilePath -> IO ()
 removeIfPresent path = removeFile path `catchIOError` \problem ->
@@ -195,10 +204,14 @@ sweepPinned directory = do
   forM_ entries $ \entry -> case pinnedPid entry of
     Nothing -> pure ()
     Just pid -> do
-      alive <- doesDirectoryExist ("/proc" </> show pid)
+      alive <- processExists pid
       unless alive $ do
         _ <- try (removeFile (directory </> entry)) :: IO (Either IOException ())
         pure ()
+
+-- | Signal 0 checks existence only; a permission refusal means the process exists.
+processExists :: ProcessID -> IO Bool
+processExists pid = (signalProcess nullSignal pid >> pure True) `catchIOError` (pure . isPermissionError)
 
 pinnedPid :: String -> Maybe ProcessID
 pinnedPid entry = do

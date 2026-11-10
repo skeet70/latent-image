@@ -20,7 +20,7 @@ foreign import ccall safe "fuji_usb_release" releaseUSB :: IO CInt
 foreign import ccall safe "fuji_usb_close" closeUSB :: IO CInt
 foreign import ccall safe "fuji_usb_exit" exitUSB :: IO CInt
 
--- The native_usb.c entry points the provider marshals through.
+-- The transport/usb provider's entry points this module marshals through.
 data NativeCalls = NativeCalls
   { callLoad :: IO CInt, callInit :: IO CInt, callList :: IO CInt
   , callPath :: CInt -> IO CString, callField :: CInt -> CInt -> IO CInt
@@ -34,7 +34,7 @@ status label action = do
   result <- action
   unless (result == 0) (P.reject (label++" native status "++show result))
 
--- Constructing this record is inert. Only usbInit loads/initializes libusb.
+-- Constructing this record is inert. Only usbInit touches the provider.
 nativeApi :: UsbApi
 nativeApi = nativeApiWith (NativeCalls loadUSB initUSB listUSB pathUSB fieldUSB openUSB claimUSB transferUSB releaseUSB closeUSB exitUSB)
 

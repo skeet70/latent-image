@@ -21,7 +21,7 @@ import Data.Bits (shiftL, shiftR, (.|.))
 import Data.Int (Int32)
 import Data.Word (Word32)
 import Numeric (readHex, showFFloat, showHex)
-import System.Directory (createDirectory, doesDirectoryExist, doesFileExist, getCurrentDirectory, getFileSize, listDirectory, removeDirectory, removeDirectoryRecursive, removeFile, setCurrentDirectory)
+import System.Directory (createDirectory, doesDirectoryExist, doesFileExist, getCurrentDirectory, getFileSize, getTemporaryDirectory, listDirectory, removeDirectory, removeDirectoryRecursive, removeFile, setCurrentDirectory)
 import System.Environment (getExecutablePath, lookupEnv)
 import System.FilePath (isAbsolute, replaceExtension, takeDirectory, takeFileName, (</>))
 import System.IO (BufferMode (LineBuffering), IOMode (WriteMode), hFlush, hSetBuffering, stdout, withFile)
@@ -339,12 +339,18 @@ rawWatch action = (Right <$> action) `catch` \(failure :: SomeException) -> pure
 privateDirectory :: FilePath -> IO ()
 privateDirectory path = createDirectory path >> setFileMode path 0o700
 
--- | Runs a transport session in a private directory on tmpfs (XDG_RUNTIME_DIR, else /dev/shm),
--- then copies its files into DIRECTORY, which must exist, whether or not the session succeeded.
--- The transport fsyncs every journal line, which costs tens of milliseconds a transfer on disk.
+-- | Runs a transport session in a private directory under XDG_RUNTIME_DIR, else /dev/shm, else
+-- the temporary directory, then copies its files into DIRECTORY, which must exist, whether or
+-- not the session succeeded. The transport fsyncs every journal line, which costs tens of
+-- milliseconds a transfer on a Linux disk.
 stagedSession :: FilePath -> (FilePath -> IO a) -> IO a
 stagedSession directory session = do
-  root <- maybe "/dev/shm" id <$> lookupEnv "XDG_RUNTIME_DIR"
+  runtime <- lookupEnv "XDG_RUNTIME_DIR"
+  shm <- doesDirectoryExist "/dev/shm"
+  root <- case runtime of
+    Just path -> pure path
+    Nothing | shm -> pure "/dev/shm"
+            | otherwise -> getTemporaryDirectory
   bracket (mkdtemp (root </> "xm1-e2e-session-")) removeDirectoryRecursive $ \staging -> do
     let work = staging </> "session"
     privateDirectory work

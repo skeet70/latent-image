@@ -33,7 +33,7 @@ impl PoolCreate {
 /// Slot `+0xe4`. Stock publishes `exists` before resetting the control block; the owned create
 /// resets the control block and issues `dmb` before the marker.
 #[inline(never)]
-#[link_section = ".text.fp_body_create_pool"]
+#[cfg_attr(target_os = "none", link_section = ".text.fp_body_create_pool")]
 pub fn create_pool<M: Machine>(m: &M, id: PoolId, create: PoolCreate) -> Result<(), PoolStatus> {
     let words = id.domain.words();
     let config = words.fixed_pool_config(id.slot);

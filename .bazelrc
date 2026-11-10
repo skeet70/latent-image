@@ -1,8 +1,14 @@
 common --enable_bzlmod
+common --enable_platform_specific_config
 build --host_platform=//build-support:host
 build --platforms=//build-support:host
 build --enable_runfiles
 test --test_output=errors
+# The devenv SDK and deployment target, which the Nix compilers otherwise lack;
+# 14.0 is the pinned nixpkgs libraries' own minimum.
+build:macos --action_env=MACOSX_DEPLOYMENT_TARGET --action_env=SDKROOT
+build:macos --host_action_env=MACOSX_DEPLOYMENT_TARGET --host_action_env=SDKROOT
+build:macos --macos_minimum_os=14.0 --host_macos_minimum_os=14.0
 # Shared across output bases, so a concurrent agent on its own --output_base reuses actions.
 build --disk_cache=~/.cache/bazel-disk/latent-image
 build --experimental_disk_cache_gc_max_size=20G

@@ -1,9 +1,9 @@
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
-load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
 
 package(default_visibility = ["//visibility:public"])
 
-xm1_rust_staticlib(
+xm1_rust_rlib(
     name = "task-records-rust",
     src = "src/lib.rs",
     crate_name = "xm1_rtos_task_records",

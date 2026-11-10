@@ -1,0 +1,13 @@
+--- a/gcc/config.host
++++ b/gcc/config.host
+@@ -92,6 +92,11 @@
+ # Common parts for widely ported systems.
+ case ${host} in
++  aarch64-*-darwin*)
++    # These releases have no arm64 Darwin host_hooks definition. Use the
++    # portable POSIX hooks, without the old 1 GB, 4 KB-aligned PCH reserve.
++    out_host_hook_obj=host-default.o
++    ;;
+   *-darwin*)
+     # Generic darwin host support.
+     out_host_hook_obj=host-darwin.o

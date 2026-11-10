@@ -15,7 +15,7 @@ import Emulation.RenderComparison (compareRenderReceipts, compareRenderReceiptsW
 import Emulation.Sha256 (sha256, sha256Hex)
 import FujiAF.JSON (decodeStrict, encodeCanonical)
 import Numeric (readHex)
-import System.Directory (createDirectory, doesPathExist, getTemporaryDirectory, removeDirectoryRecursive, removeFile)
+import System.Directory (canonicalizePath, createDirectory, doesPathExist, getTemporaryDirectory, removeDirectoryRecursive, removeFile)
 import System.FilePath (takeDirectory, (</>))
 import System.IO (hClose, openTempFile)
 
@@ -26,7 +26,8 @@ withTemporary :: (FilePath -> IO a) -> IO a
 withTemporary action = bracket acquire removeDirectoryRecursive action
   where
     acquire = do
-      base <- getTemporaryDirectory
+      -- Receipts bind canonical paths; Darwin's temporary directory is reached through /var -> /private/var.
+      base <- getTemporaryDirectory >>= canonicalizePath
       (path, handle) <- openTempFile base "render-comparison-"
       hClose handle
       removeFile path

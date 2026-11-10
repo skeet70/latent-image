@@ -218,7 +218,7 @@ dispatch Help = putStr $ unlines
   , "OUTDIR must be absolute and must not exist; it is created with mode 0700."
   , "Without OUTDIR a live operation writes to"
   , "$BUILD_WORKSPACE_DIRECTORY/private-data/sessions/<UTC>-<operation>."
-  , "Help and rehearse never load libusb, enumerate or open USB."
+  , "Help and rehearse never enumerate or open USB."
   ]
 dispatch (Rehearse Identify) = rehearseIdentify
 dispatch (Rehearse (ReadConfig path)) = readPlanFile path >>= rehearseReadConfig
