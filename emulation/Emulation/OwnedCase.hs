@@ -21,9 +21,12 @@ module Emulation.OwnedCase
   , KernelDifference (..)
   , compareKernelCase
   , writeCase
+  , MemoryProfile (..)
+  , writeCaseWithProfile
   , loadObserved
   , CaseId (..)
   , writeBatch
+  , writeBatchWithProfile
   , loadObservedBatch
   , registerValue
   , regionBytesOf
@@ -47,7 +50,7 @@ import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe)
 import Data.String (fromString)
 import Data.Word (Word32)
-import Emulation.NativeCase (BatchCase (..), BatchStatus (..), BatchSummary (..), CaseId (..), CaseReport (..), CaseStatus (..), DigestHex (..), Region (..), artifactCount, batchStatusLabel, loadCase, runBatch, runCase, sizeBytes)
+import Emulation.NativeCase (BatchCase (..), BatchStatus (..), BatchSummary (..), CaseId (..), CaseReport (..), CaseStatus (..), DigestHex (..), MemoryProfile (..), Region (..), artifactCount, batchStatusLabel, loadCase, profileSizeBytes, runBatch, runCase)
 import Emulation.NativeObservation
   ( GuestAddress (..)
   , KernelObservation (..)
@@ -305,8 +308,8 @@ data InitialArtifact = InitialArtifact
 data InitialSlice = InitialSlice InitializerId InitializerOffset
 data Initializers = Initializers [InitialArtifact] (M.Map RegionId InitialSlice)
 
-initializersFor :: CaseSpec -> Initializers
-initializersFor spec = Initializers (map fst built) (M.fromList (concatMap snd built))
+initializersFor :: MemoryProfile -> CaseSpec -> Initializers
+initializersFor profile spec = Initializers (map fst built) (M.fromList (concatMap snd built))
   where
     nonzero = [region | CaseRegion region _ <- caseRegions spec, not (B.all (== 0) (regionBytes region))]
     groups
@@ -315,7 +318,7 @@ initializersFor spec = Initializers (map fst built) (M.fromList (concatMap snd b
     pack [] _ [] = []
     pack pending _ [] = [reverse pending]
     pack pending bytes (region : rest)
-      | not (null pending) && bytes + B.length (regionBytes region) > sizeBytes =
+      | not (null pending) && bytes + B.length (regionBytes region) > profileSizeBytes profile =
           reverse pending : pack [region] (B.length (regionBytes region)) rest
       | otherwise = pack (region : pending) (bytes + B.length (regionBytes region)) rest
     built = map build groups
@@ -354,8 +357,8 @@ artifactJson file artifact@(InitialArtifact (InitializerId ident) bytes (DigestH
     , "sha256" .= digest
     ]
 
-caseValue :: (InitialArtifact -> FilePath) -> Initializers -> CaseSpec -> Value
-caseValue file initializers@(Initializers artifacts _) spec =
+caseValue :: MemoryProfile -> (InitialArtifact -> FilePath) -> Initializers -> CaseSpec -> Value
+caseValue profile file initializers@(Initializers artifacts _) spec =
   object $
     [ "schema_version" .= (1 :: Int)
     , "id" .= caseId spec
@@ -387,6 +390,7 @@ caseValue file initializers@(Initializers artifacts _) spec =
     ]
       ++ ["cp14_identity" .= hexWord32 identity | Just identity <- [caseCp14Identity spec]]
       ++ ["kernel" .= kernelJson kernel | Just kernel <- [caseKernel spec]]
+      ++ ["memory_profile" .= ("resource8" :: String) | profile == Resource8]
 
 kernelJson :: KernelCase -> Value
 kernelJson kernel =
@@ -399,14 +403,17 @@ kernelJson kernel =
          ]
 
 writeCase :: FilePath -> CaseSpec -> IO FilePath
-writeCase directory spec = do
+writeCase = writeCaseWithProfile DefaultMemory
+
+writeCaseWithProfile :: MemoryProfile -> FilePath -> CaseSpec -> IO FilePath
+writeCaseWithProfile profile directory spec = do
   createDirectoryIfMissing True directory
-  let initializers@(Initializers artifacts _) = initializersFor spec
+  let initializers@(Initializers artifacts _) = initializersFor profile spec
       file artifact = case initializerId artifact of InitializerId ident -> ident ++ ".bin"
   forM_ artifacts $ \artifact ->
     B.writeFile (directory </> file artifact) (initializerBytes artifact)
   let path = directory </> "case.json"
-  B.writeFile path (encodeCanonical (caseValue file initializers spec))
+  B.writeFile path (encodeCanonical (caseValue profile file initializers spec))
   pure path
 
 loadObserved :: FilePath -> FilePath -> IO NativeObservation
@@ -420,16 +427,19 @@ loadObserved runner path = do
 -- | Writes the cases into one directory as @ID.case.json@, every distinct initial-bytes artifact
 -- once as @SHA256.bin@, and the batch file @batch.json@, whose path is returned.
 writeBatch :: FilePath -> [CaseSpec] -> IO FilePath
-writeBatch directory specs = do
+writeBatch = writeBatchWithProfile DefaultMemory
+
+writeBatchWithProfile :: MemoryProfile -> FilePath -> [CaseSpec] -> IO FilePath
+writeBatchWithProfile profile directory specs = do
   let ids = map caseId specs
   when (nub ids /= ids) (error "writeBatch: duplicate case id")
   createDirectoryIfMissing True directory
-  let planned = [(spec, initializersFor spec) | spec <- specs]
+  let planned = [(spec, initializersFor profile spec) | spec <- specs]
       file artifact = case initializerDigest artifact of DigestHex digest -> digest ++ ".bin"
       caseFile spec = caseId spec ++ ".case.json"
       artifacts = M.fromList [(file artifact, initializerBytes artifact) | (_, Initializers initializers _) <- planned, artifact <- initializers]
   forM_ (M.toList artifacts) $ \(name, bytes) -> B.writeFile (directory </> name) bytes
-  forM_ planned $ \(spec, initializers) -> B.writeFile (directory </> caseFile spec) (encodeCanonical (caseValue file initializers spec))
+  forM_ planned $ \(spec, initializers) -> B.writeFile (directory </> caseFile spec) (encodeCanonical (caseValue profile file initializers spec))
   let path = directory </> "batch.json"
   B.writeFile path $
     encodeCanonical

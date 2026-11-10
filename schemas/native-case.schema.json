@@ -7,6 +7,7 @@
   "required": ["schema_version", "id", "origin", "provenance", "cpu", "artifacts", "entry", "exit", "registers", "regions", "functions", "stubs", "limits", "expected", "exclusions"],
   "properties": {
     "schema_version": {"const": 1},
+    "memory_profile": {"const": "resource8", "description": "Absent retains the default envelope. resource8 permits 8388608 mapped bytes, bytes per region/artifact and aggregate stub contract bytes, 41943040 wire bytes and 67108864 JSON bytes. Semantic sums, fences and permissions are checked by the host and SDK."},
     "id": {"$ref": "#/$defs/id"},
     "origin": {"enum": ["synthetic", "stock"]},
     "provenance": {"type": "string", "minLength": 1},
@@ -45,7 +46,7 @@
           "initial": {
             "oneOf": [
               {"type": "object", "additionalProperties": false, "required": ["zero"], "properties": {"zero": {"const": true}}},
-              {"type": "object", "additionalProperties": false, "required": ["artifact", "offset", "length"], "properties": {"artifact": {"$ref": "#/$defs/id"}, "offset": {"type": "integer", "minimum": 0, "maximum": 2097152}, "length": {"$ref": "#/$defs/size"}}}
+              {"type": "object", "additionalProperties": false, "required": ["artifact", "offset", "length"], "properties": {"artifact": {"$ref": "#/$defs/id"}, "offset": {"type": "integer", "minimum": 0, "maximum": 8388608}, "length": {"$ref": "#/$defs/size"}}}
             ]
           }
         }
@@ -72,12 +73,12 @@
         "registers": {"$ref": "#/$defs/registers", "minProperties": 1},
         "memory": {
           "type": "array", "maxItems": 64,
-          "items": {"type": "object", "additionalProperties": false, "required": ["region", "offset", "hex"], "properties": {"region": {"$ref": "#/$defs/id"}, "offset": {"type": "integer", "minimum": 0, "maximum": 2097152}, "hex": {"type": "string", "pattern": "^([0-9a-f]{2})+$", "maxLength": 4194304}}}
+          "items": {"type": "object", "additionalProperties": false, "required": ["region", "offset", "hex"], "properties": {"region": {"$ref": "#/$defs/id"}, "offset": {"type": "integer", "minimum": 0, "maximum": 8388608}, "hex": {"type": "string", "pattern": "^([0-9a-f]{2})+$", "maxLength": 16777216}}}
         },
         "ignored_memory": {
           "type": "array", "minItems": 1, "maxItems": 64,
           "description": "Disjoint private frame spans in the writable region containing entry SP, ending at or below entry SP, disjoint from expected.memory. At most 4194304 bytes total. Requires scripted stubs or no stubs.",
-          "items": {"type": "object", "additionalProperties": false, "required": ["region", "offset", "length"], "properties": {"region": {"$ref": "#/$defs/id"}, "offset": {"type": "integer", "minimum": 0, "maximum": 2097152}, "length": {"$ref": "#/$defs/size"}}}
+          "items": {"type": "object", "additionalProperties": false, "required": ["region", "offset", "length"], "properties": {"region": {"$ref": "#/$defs/id"}, "offset": {"type": "integer", "minimum": 0, "maximum": 8388608}, "length": {"$ref": "#/$defs/size"}}}
         },
         "events": {
           "type": "array", "maxItems": 128,
@@ -114,6 +115,22 @@
   },
   "allOf": [
     {
+      "if": {"not": {"required": ["memory_profile"]}},
+      "then": {"properties": {
+        "artifacts": {"items": {"properties": {"size": {"maximum": 2097152}}}},
+        "regions": {"items": {"properties": {"size": {"maximum": 2097152}, "initial": {"properties": {"offset": {"maximum": 2097152}, "length": {"maximum": 2097152}}}}}},
+        "functions": {"items": {"properties": {"size": {"maximum": 2097152}}}},
+        "expected": {"properties": {
+          "memory": {"items": {"properties": {"offset": {"maximum": 2097152}, "hex": {"maxLength": 4194304}}}},
+          "ignored_memory": {"items": {"properties": {"offset": {"maximum": 2097152}, "length": {"maximum": 2097152}}}}
+        }},
+        "stubs": {"items": {"properties": {"calls": {"items": {"properties": {
+          "reads": {"items": {"properties": {"hex": {"maxLength": 4194304}}}},
+          "writes": {"items": {"properties": {"hex": {"maxLength": 4194304}}}}
+        }}}}}}
+      }}
+    },
+    {
       "if": {"anyOf": [{"properties": {"stubs": {"contains": {"required": ["calls"]}}}}, {"properties": {"expected": {"required": ["ignored_memory"]}}}]},
       "then": {"properties": {"stubs": {"items": {"$ref": "#/$defs/scriptStub"}}}},
       "else": {"properties": {"expected": {"properties": {"events": {"items": {"properties": {"inputs": {"$ref": "#/$defs/stubRegisters"}}}}}}}}
@@ -122,7 +139,7 @@
   "$defs": {
     "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$"},
     "u32": {"type": "string", "pattern": "^0x[0-9a-f]{8}$"},
-    "size": {"type": "integer", "minimum": 1, "maximum": 2097152},
+    "size": {"type": "integer", "minimum": 1, "maximum": 8388608},
     "registers": {
       "type": "object", "additionalProperties": false,
       "properties": {
@@ -149,7 +166,7 @@
         "register": {"enum": ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "r12", "sp", "lr"]},
         "indirect_register": {"enum": ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "r12", "sp", "lr"]},
         "offset": {"type": "integer", "minimum": -2147483648, "maximum": 2147483647},
-        "hex": {"type": "string", "pattern": "^([0-9a-f]{2})+$", "maxLength": 4194304}
+        "hex": {"type": "string", "pattern": "^([0-9a-f]{2})+$", "maxLength": 16777216}
       }
     },
     "kernelRegisters": {"type": "object", "additionalProperties": false, "properties": {"tpidrurw": {"$ref": "#/$defs/u32"}, "fpexc": {"$ref": "#/$defs/u32"}, "reserved": {"$ref": "#/$defs/u32"}}},

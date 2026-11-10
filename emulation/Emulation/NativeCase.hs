@@ -42,6 +42,29 @@ totalBytes :: Int
 totalBytes=4*1024*1024
 caseBytes :: Int
 caseBytes=16*1024*1024
+data MemoryProfile = DefaultMemory | Resource8 deriving (Eq,Show)
+memoryProfile :: Value -> IO MemoryProfile
+memoryProfile c
+ | "memory_profile" `notElem` keys c = pure DefaultMemory
+ | get c "memory_profile"==s "resource8" = pure Resource8
+ | otherwise = failH "unsupported memory_profile"
+profileSizeBytes, profileTotalBytes, profileJsonBytes, profileOutputBytes :: MemoryProfile -> Int
+profileSizeBytes DefaultMemory=sizeBytes
+profileSizeBytes Resource8=8*1024*1024
+profileTotalBytes DefaultMemory=totalBytes
+profileTotalBytes Resource8=8*1024*1024
+profileJsonBytes DefaultMemory=caseBytes
+profileJsonBytes Resource8=64*1024*1024
+profileOutputBytes DefaultMemory=8*1024*1024
+profileOutputBytes Resource8=40*1024*1024
+profileWireBytes :: MemoryProfile -> Bool -> Int
+profileWireBytes Resource8 _=40*1024*1024
+profileWireBytes DefaultMemory scripted=(if scripted then 20 else 16)*1024*1024
+wireHeader :: MemoryProfile -> Bool -> String
+wireHeader DefaultMemory False="FUJI_NATIVE_V1"
+wireHeader DefaultMemory True="FUJI_NATIVE_SCRIPT_V1"
+wireHeader Resource8 False="FUJI_NATIVE_RESOURCE8_V1"
+wireHeader Resource8 True="FUJI_NATIVE_RESOURCE8_SCRIPT_V1"
 artifactCount, regionCount, functionCount, stubCount, eventCount, memoryCount :: Int
 artifactCount=20
 regionCount=64
@@ -61,9 +84,11 @@ address v = do
  ensure(length text==10 && take 2 text=="0x" && all (`elem` "0123456789abcdef") (drop 2 text)) "address/register: canonical 32-bit hexadecimal required"
  case readHex(drop 2 text) of [(value,"")]->pure value; _->failH "invalid hexadecimal"
 byteString :: Value -> IO B.ByteString
-byteString v=do
+byteString=profileByteString DefaultMemory
+profileByteString :: MemoryProfile -> Value -> IO B.ByteString
+profileByteString profile v=do
  let text=str v
- ensure(case v of String _->length text<=2*sizeBytes && even(length text) && all (`elem` "0123456789abcdef") text; _->False) "bytes: lowercase hex pairs required"
+ ensure(case v of String _->length text<=2*profileSizeBytes profile && even(length text) && all (`elem` "0123456789abcdef") text; _->False) "bytes: lowercase hex pairs required"
  pure(B.pack(go text))
  where go []=[]; go (a:c:rest)=fromIntegral(digitToInt a*16+digitToInt c):go rest; go _=[]
 bindings :: Value -> [String] -> IO [(String,Integer)]
@@ -87,8 +112,8 @@ stubAddress (ScriptStub target _)=target
 scriptedStub :: CaseStub -> Bool
 scriptedStub (ScriptStub _ _)=True
 scriptedStub _=False
-contractMemory :: Value -> IO ContractMemory
-contractMemory item=do
+contractMemory :: MemoryProfile -> Value -> IO ContractMemory
+contractMemory profile item=do
  let selectors=filter (`elem` keys item)["address","register","indirect_register"]
  selector<-case selectors of [one]->pure one;_->failH "memory target must have exactly one selector"
  fields item (selector++" offset hex") "stub memory"
@@ -97,7 +122,7 @@ contractMemory item=do
    index<-maybe(failH "memory register must be r0-r12, sp or lr")pure(elemIndex name(take 15 regs))
    pure(if selector=="register" then RegisterTarget index else IndirectTarget index)
  offset<-integer(get item "offset")(-2147483648)2147483647 "stub memory offset"
- bytes<-byteString(get item "hex")
+ bytes<-profileByteString profile(get item "hex")
  ensure(not(B.null bytes)) "stub memory must not be empty"
  pure(ContractMemory target offset bytes)
 stubWire :: Bool -> CaseStub -> [String]
@@ -117,6 +142,9 @@ bindingRows values=[unwords[show(maybe 0 id(elemIndex name regs)),hex value]|(na
 data IgnoredFrameSpan = IgnoredFrameSpan Value Integer Integer deriving Show
 validateIgnoredMemory :: Value -> [Region] -> IO [IgnoredFrameSpan]
 validateIgnoredMemory c regions=do
+ envelope<-memoryProfile c
+ let sizeBytes=profileSizeBytes envelope; totalBytes=profileTotalBytes envelope
+     byteString=profileByteString envelope
  let expected=get c "expected"
  if "ignored_memory" `notElem` keys expected then pure [] else do
   rows<-arrayCheck(get expected "ignored_memory")1 memoryCount "ignored memory limit"
@@ -149,7 +177,7 @@ data RegionSource = ZeroSource | SliceSource Artifact Integer Integer
 type ArtifactReader = FilePath -> IO Artifact
 readArtifact :: ArtifactReader
 readArtifact file=do
- bytes<-readRegularWith (pure())False sizeBytes file
+ bytes<-readRegularWith (pure())False (profileSizeBytes Resource8) file
  pure(Artifact(ArtifactDigest(sha256Hex(sha256 bytes)))bytes)
 data LoadedCase = LoadedCase
  { loadedValue::Value
@@ -167,9 +195,13 @@ loadCase input = do
 loadCaseWith :: ArtifactReader -> FilePath -> IO LoadedCase
 loadCaseWith reader input = do
  path<-canonicalizePath input
- raw<-readRegularWith (pure()) False caseBytes path
+ raw<-readRegularWith (pure()) False (profileJsonBytes Resource8) path
  c<-either failH pure(decodeStrictIntegers raw)
- let optional=[key|key<-["cp14_identity","kernel"],key `elem` keys c]
+ envelope<-memoryProfile c
+ ensure(B.length raw<=profileJsonBytes envelope) "case JSON bytes exceed the limit"
+ let sizeBytes=profileSizeBytes envelope; totalBytes=profileTotalBytes envelope
+     byteString=profileByteString envelope
+     optional=[key|key<-["cp14_identity","kernel","memory_profile"],key `elem` keys c]
  fields c (unwords(words "schema_version id origin provenance cpu artifacts entry exit registers regions functions stubs limits expected exclusions"++optional)) "case"
  void(integer(get c "schema_version")1 1 "schema version")
  ensure(get c "origin" `elem` [s "synthetic",s "stock"]) "origin must be synthetic or stock; a stock case needs an independently known result"
@@ -187,7 +219,7 @@ loadCaseWith reader input = do
    identity<-if "cp14_identity" `notElem` optional then pure Nothing else Just . Cp14Identity<$>address(get c "cp14_identity")
    kernel<-if "kernel" `notElem` optional then pure Nothing else Just<$>kernelEntry(get c "kernel")
    pure(PrivilegedEntry mode identity kernel)
- ensure(profile/=UserEntry || null optional) "a CP14 identity or kernel needs a privileged entry"
+ ensure(profile/=UserEntry || all(=="memory_profile")optional) "a CP14 identity or kernel needs a privileged entry"
  ensure(reg "lr"==exit && reg "sp" `mod` 8==0) "LR must be exit and SP eight-byte aligned"
  fields(get c "limits") "instructions wall_ms" "limits"
  budget<-integer(get(get c "limits")"instructions")1 4000000 "instructions"
@@ -260,7 +292,7 @@ loadCaseWith reader input = do
        reads<-arrayCheck(get call "reads")0 memoryCount "stub reads limit"
        writes<-arrayCheck(get call "writes")0 memoryCount "stub writes limit"
        ensure(length reads+length writes<=memoryCount) "stub memory rows limit"
-       ScriptCall inputs outputs <$> mapM contractMemory reads <*> mapM contractMemory writes
+       ScriptCall inputs outputs <$> mapM (contractMemory envelope) reads <*> mapM (contractMemory envelope) writes
      pure(ScriptStub target' calls)
     else do
      ensure(get item "side_effects"==s "registers-only") "unsupported stub side effects"
@@ -301,11 +333,12 @@ loadCaseWith reader input = do
   void(address(get event "address")); void(bindings(get event "inputs")(take (if scripted then 15 else 13) regs)); void(bindings(get event "outputs")(take 13 regs))
  exclusions<-arrayCheck(get c "exclusions")1 1000000 "coverage exclusions required"
  ensure(all(not.null.str)exclusions) "coverage exclusions required"
- let rows=[if scripted then "FUJI_NATIVE_SCRIPT_V1" else "FUJI_NATIVE_V1","cortex-r5f-arm-le",unwords[hex entry,hex exit,show budget,show wall],unwords[hex(reg r)|r<-regs]]++profileRows profile++[unwords(map(show.length)[regionsInput,functionsInput,stubsInput])]
+ let rows=[wireHeader envelope scripted,"cortex-r5f-arm-le",unwords[hex entry,hex exit,show budget,show wall],unwords[hex(reg r)|r<-regs]]++profileRows profile++[unwords(map(show.length)[regionsInput,functionsInput,stubsInput])]
      functionRows=[unwords[hex x,hex size]|(x,size)<-functions]
      stubRows=concatMap(stubWire scripted)stubs
      after=functionRows++stubRows
      wire=BL.toStrict(BB.toLazyByteString(BB.string7(unlines rows)<>mconcat[BB.string7(regionHead r)<>BB.char7 ' '<>BB.byteStringHex(regionBytes r)<>BB.char7 '\n'|r<-regions]<>BB.string7(unlines after)))
+ ensure(B.length wire<=profileWireBytes envelope scripted) "case wire bytes exceed the limit"
  let digest=sha256Hex(sha256 raw); wireDigest=sha256Hex(sha256 wire)
  pure LoadedCase
   { loadedValue=c
@@ -380,6 +413,8 @@ profileRows(PrivilegedEntry _ identity kernel)=
   contextRows contexts=[unwords("c":show(length contexts):concat[[hex low,hex high]|StackBounds low high<-contexts])]
 checkResult :: Value -> [Region] -> Value -> IO [String]
 checkResult c regions result=do
+ envelope<-memoryProfile c
+ let byteString=profileByteString envelope
  ignored<-validateIgnoredMemory c regions
  let expected=get c "expected"
      status=["status differs"|get result "status"/=get expected "status"]
@@ -429,7 +464,8 @@ runCase runner path = do
    result<-try$do
     executable<-canonicalizePath runner
     hash<-runnerDigest executable
-    (timed,exit,out,err)<-runBounded(fromInteger(num(get(get c "limits")"wall_ms")*1000+2000000))(8*1024*1024) executable [] wire
+    envelope<-memoryProfile c
+    (timed,exit,out,err)<-runBounded(fromInteger(num(get(get c "limits")"wall_ms")*1000+2000000))(profileOutputBytes envelope) executable [] wire
     let report'=set "runner_sha256" (s hash) report
     if timed then pure(1,merge report'[("status",s "host_timeout"),("stdout",s(BC.unpack out)),("stderr",s(BC.unpack err))]) else judgeRunner c regions report' exit out err
    case result of Left(e::IOException)->pure(1,merge report[("status",s "invalid_case"),("reason",s(show e))]);Right value->pure value
@@ -613,9 +649,11 @@ batchBody index a=BL.toStrict(BB.toLazyByteString(BB.string7(unlines before)<>mc
   initial ZeroSource=" z"
   initial(SliceSource artifact offset len)=unwords["","s",show(index M.! artifactDigest artifact),show offset,show len]
 
-batchWire :: [Artifact] -> [B.ByteString] -> BL.ByteString
-batchWire artifacts bodies=BB.toLazyByteString(BB.string7("FUJI_NATIVE_BATCH_V1\n"++show(length artifacts)++" "++show(length bodies)++"\n")<>mconcat(map(framed . artifactBytes)artifacts)<>mconcat(map framed bodies))
- where framed bytes=BB.intDec(B.length bytes)<>BB.char7 '\n'<>BB.byteString bytes<>BB.char7 '\n'
+batchWire :: MemoryProfile -> [Artifact] -> [B.ByteString] -> BL.ByteString
+batchWire envelope artifacts bodies=BB.toLazyByteString(BB.string7(header++"\n"++show(length artifacts)++" "++show(length bodies)++"\n")<>mconcat(map(framed . artifactBytes)artifacts)<>mconcat(map framed bodies))
+ where
+  header=case envelope of DefaultMemory->"FUJI_NATIVE_BATCH_V1";Resource8->"FUJI_NATIVE_RESOURCE8_BATCH_V1"
+  framed bytes=BB.intDec(B.length bytes)<>BB.char7 '\n'<>BB.byteString bytes<>BB.char7 '\n'
 
 -- Each entry is invalid (its runCase report) or admitted; past the limits the batch is refused.
 prepareBatch :: B.ByteString -> [BatchEntry] -> IO [(CaseId,Either Value Admitted)]
@@ -669,12 +707,12 @@ frameText out=do
  pure(B.take batchStreamBytes(B.concat(reverse frame++reverse pending++[buffered])))
 
 -- `FUJI_NATIVE_BATCH_CASE INDEX EXIT` and the observation line.
-readFrame :: Output -> Int -> IO (Either (BatchStatus,String) (ExitCode,B.ByteString))
-readFrame out index=do
+readFrame :: Output -> MemoryProfile -> Int -> IO (Either (BatchStatus,String) (ExitCode,B.ByteString))
+readFrame out envelope index=do
  header<-readLine out 128
  case BC.words<$>header of
   Right[tag,position,exit]|tag==BC.pack "FUJI_NATIVE_BATCH_CASE",position==BC.pack(show index),Just code<-frameExit exit->do
-   observation<-readLine out batchStreamBytes
+   observation<-readLine out(profileOutputBytes envelope)
    pure$case observation of
     Right line->Right(code,line)
     Left OutputEnded->Left(BatchRunnerFailure,"runner output ended inside a frame")
@@ -773,8 +811,12 @@ executeBatch executable hash batchDigest cases sink=do
      -- Reports of refused entries; admitted cases that never got a frame are not_run.
      remaining=mapM_(\(ident,result)->either(emit ident Nothing 1)(\a->record(BatchCase ident CaseNotRun(reportDigest(admittedReport a))))result)
      withRunner a=set "runner_sha256"(s(digestHex hash))(admittedReport a)
+ envelopes<-mapM(memoryProfile . admittedValue)admitted
+ let envelope=if Resource8 `elem` envelopes then Resource8 else DefaultMemory
+     wire=batchWire envelope artifacts(map(batchBody index)admitted)
+ ensure(BL.length wire<=768*1024*1024) "batch wire bytes exceed the limit"
  (status,(reason,failed,exit),errors)<-if null admitted then remaining cases>>pure(BatchComplete,(Nothing,Nothing,Nothing),B.empty) else
-  bracket(startBatch executable(batchWire artifacts(map(batchBody index)admitted)))(void . stopBatch)$ \p->do
+  bracket(startBatch executable wire)(void . stopBatch)$ \p->do
    transferred<-timeout batchInputMicros(readMVar(processInput p))
    let failAt ident a(status,reason)rest=do
         ended<-case status of BatchHostTimeout->pure Nothing;_->timeout 1000000(waitForProcess(processHandle p))
@@ -798,7 +840,8 @@ executeBatch executable hash batchDigest cases sink=do
        frames k((ident,Right a):rest)=do
         writeIORef(outputFrame(processOutput p))[]
         let wall=num(get(get(admittedValue a)"limits")"wall_ms")
-        frame<-timeout(fromInteger(wall*1000+2000000))(readFrame(processOutput p)k)
+        envelope<-memoryProfile(admittedValue a)
+        frame<-timeout(fromInteger(wall*1000+2000000))(readFrame(processOutput p)envelope k)
         excess<-readIORef(processErrorsExcess p)
         case frame of
          Just(Right(exit,line))->do

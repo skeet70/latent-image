@@ -271,6 +271,15 @@ readOnlyRegressions runner=withTemporary "fuji-read-only-tests"$ \root->do
  (code,report)<-runCase runner path
  ensure(code==0 && get report "status"==s "passed" && get(get report "runner")"status"==s "memory_guard")("store to a read-only region: "++show report)
 
+
+defaultWireRegression :: IO ()
+defaultWireRegression=do
+ (_,_,wire,_)<-loadCase "emulation/fixtures/arithmetic.json"
+ ensure(wire==BC.pack(unlines
+  ["FUJI_NATIVE_V1","cortex-r5f-arm-le","1004 1080 100 1000"
+  ,"fffffffe 5 2004 0 0 0 0 0 0 0 0 0 0 3020 1080 10","4 1 0"
+  ,"1004 c 5 010080e0000082e51eff2fe1","1080 4 5 00000000","2004 4 3 00000000"
+  ,"3000 20 3 0000000000000000000000000000000000000000000000000000000000000000","1004 c"])) "default fixed wire changed"
 -- The schema carries the same bounds as the adapter; drift fails here.
 schemaContract :: IO ()
 schemaContract=do
@@ -283,7 +292,7 @@ schemaContract=do
  sliced<-case[o|o<-list(get item "oneOf"),"offset"`elem`keys(get o "properties")] of
    [only]->pure only
    forms->failH("initial must carry exactly one artifact-slice form, saw "++show(length forms))
- expect "$defs/size maximum"(get(get defs "size")"maximum")(toInteger sizeBytes)
+ expect "$defs/size maximum"(get(get defs "size")"maximum")(toInteger(profileSizeBytes Resource8))
  expect "artifacts maxItems"(get(get props "artifacts")"maxItems")(toInteger artifactCount)
  expect "regions maxItems"(get(get props "regions")"maxItems")(toInteger regionCount)
  expect "functions maxItems"(get(get props "functions")"maxItems")(toInteger functionCount)
@@ -292,9 +301,9 @@ schemaContract=do
  expect "expected events maxItems"(get(get(get(get props "expected")"properties")"events")"maxItems")(toInteger eventCount)
  expect "instructions maximum"(get(get(get(get props "limits")"properties")"instructions")"maximum") 4000000
  expect "wall_ms maximum"(get(get(get(get props "limits")"properties")"wall_ms")"maximum") 10000
- expect "initial offset maximum"(get(get(get sliced "properties")"offset")"maximum")(toInteger sizeBytes)
- expect "expected offset maximum"(get(get(get memory "properties")"offset")"maximum")(toInteger sizeBytes)
- expect "expected hex maxLength"(get(get(get memory "properties")"hex")"maxLength")(toInteger(2*sizeBytes))
+ expect "initial offset maximum"(get(get(get sliced "properties")"offset")"maximum")(toInteger(profileSizeBytes Resource8))
+ expect "expected offset maximum"(get(get(get memory "properties")"offset")"maximum")(toInteger(profileSizeBytes Resource8))
+ expect "expected hex maxLength"(get(get(get memory "properties")"hex")"maxLength")(toInteger(2*profileSizeBytes Resource8))
  let batch=get defs "batch"
  expect "batch cases maxItems"(get(get(get batch "properties")"cases")"maxItems")(toInteger batchCaseCount)
  expect "batch maxJsonBytes"(get batch "maxJsonBytes")(toInteger batchJsonBytes)
@@ -517,7 +526,7 @@ batchFailures runner checker=withTemporary "fuji-batch-failures"$ \root->do
  -- that case's invalid_case.
  let seedSlice=BC.pack(" s "++show(head[i|(i,artifact)<-zip[0::Int ..]artifacts,artifactBytes artifact==wordBytes[0x11223344]])++" 0 4")
      replaceSlice body=let (before,after)=B.breakSubstring seedSlice body in before<>BC.pack(" s "++show(length artifacts)++" 0 4")<>B.drop(B.length seedSlice)after
-     wire=BL.toStrict(batchWire artifacts[head bodies,replaceSlice(bodies!!1)])
+     wire=BL.toStrict(batchWire DefaultMemory artifacts[head bodies,replaceSlice(bodies!!1)])
  ensure(seedSlice`B.isInfixOf`(bodies!!1))("reader body lacks the seed slice: "++BC.unpack(bodies!!1))
  (exit,out)<-runWire "per-case wire refusal" wire
  observations<-mapM jsonRead[line|(i,line)<-zip[0::Int ..](BC.lines out),odd i,i<4]
@@ -527,12 +536,12 @@ batchFailures runner checker=withTemporary "fuji-batch-failures"$ \root->do
   refusedWire "batch framing refusal"
  -- The runner's own batch limits: the case count and the distinct artifact bytes.
  let writerBody=head bodies
- ranWire "case count at the limit"batchCaseCount(BL.toStrict(batchWire artifacts(replicate batchCaseCount writerBody)))
- refusedWire "case count past the limit"(BL.toStrict(batchWire artifacts(replicate(batchCaseCount+1)writerBody)))
+ ranWire "case count at the limit"batchCaseCount(BL.toStrict(batchWire DefaultMemory artifacts(replicate batchCaseCount writerBody)))
+ refusedWire "case count past the limit"(BL.toStrict(batchWire DefaultMemory artifacts(replicate(batchCaseCount+1)writerBody)))
  let used=sum(map(B.length . artifactBytes)artifacts)
      full=B.replicate sizeBytes 0x5a
      padding extra=let room=batchArtifactBytes-used+extra; (whole,part)=room`divMod`sizeBytes in replicate whole full++[B.replicate part 0x5a|part>0]
-     padded extra=BL.toStrict(batchWire(artifacts++[Artifact(ArtifactDigest "padding")bytes|bytes<-padding extra])[writerBody])
+     padded extra=BL.toStrict(batchWire DefaultMemory(artifacts++[Artifact(ArtifactDigest "padding")bytes|bytes<-padding extra])[writerBody])
  ranWire "artifact bytes at the limit"1(padded 0)
  refusedWire "artifact bytes past the limit"(padded 1)
 
@@ -608,6 +617,42 @@ ownedBatchApi runner=withTemporary "fuji-owned-batch"$ \root->do
       [ spec "writer"[0xe5820000,0xe12fff1e][(N.R0,0xdeadbeef),(N.R2,0x9000)][(N.R0,0xdeadbeef)][(N.RegionId "data",O.word32le 0xdeadbeef)]
       , spec "reader"[0xe5921000,0xe12fff1e][(N.R2,0x9000)][(N.R1,0x11223344)][]
       ]
+ let cacheBytes=B.replicate(0x420000-4)0x5a<>O.word32le 0x11223344
+     cache=O.mkRegion(N.RegionId "cache")(N.GuestAddress 0x80000000)0x420000 O.ReadOnly cacheBytes
+     resourceBase=spec "whole-cache"[0xe5921000,0xe12fff1e][(N.R2,0x8041fffc)][(N.R1,0x11223344)][]
+     resource=resourceBase{O.caseRegions=O.caseRegions resourceBase++[cache]}
+ resourcePath<-O.writeCaseWithProfile Resource8(root</>"resource")resource
+ (resourceValue,resourceRegions,resourceWire,_)<-loadCase resourcePath
+ ensure(length[r|r<-resourceRegions,regionSize r==0x420000 && regionBytes r==cacheBytes]==1
+  && BC.pack "FUJI_NATIVE_RESOURCE8_V1\n"`B.isPrefixOf`resourceWire) "whole cache initializer was not preserved in one resource region"
+ observed<-O.loadObserved runner resourcePath
+ ensure(O.registerValue observed N.R1==0x11223344) "whole cache high-address read differs"
+ let scriptPath=takeDirectory resourcePath</>"script.json"
+     ignored=obj[("region",s "stack"),("offset",n 0),("length",n 8)]
+     scripted=set "expected"(set "ignored_memory"(arr[ignored])(get resourceValue "expected"))resourceValue
+ B.writeFile scriptPath(encodeCanonical scripted)
+ (_,_,scriptWire,_)<-loadCase scriptPath
+ ensure(BC.pack "FUJI_NATIVE_RESOURCE8_SCRIPT_V1\n"`B.isPrefixOf`scriptWire) "resource script header differs"
+ let refused label value=do
+      let path=takeDirectory resourcePath</>"refused.json"
+      B.writeFile path(encodeCanonical value)
+      result<-try(loadCase path)::IO(Either SomeException(Value,[Region],B.ByteString,[(String,Value)]))
+      ensure(case result of Left _->True;_->False)(label++" was admitted")
+     cacheIndex=length(O.caseRegions resourceBase)
+ refused "default whole cache"(remove "memory_profile" resourceValue)
+ refused "unknown profile"(set "memory_profile"(s "resource16")resourceValue)
+ refused "null profile"(set "memory_profile" Null resourceValue)
+ refused "region overflow"(modifyAt "regions" cacheIndex(set "address"(s "0xffc00000"))resourceValue)
+ refused "mapped aggregate"(modifyAt "regions" cacheIndex(set "size"(n(8*1024*1024)))resourceValue)
+ refused "region limit"(modifyAt "regions" cacheIndex(set "size"(n(8*1024*1024+1)))resourceValue)
+ refused "writable executable cache"(modifyAt "regions" cacheIndex(set "permissions"(s "rwx"))resourceValue)
+ refused "executable high cache"(modifyAt "regions" cacheIndex(set "permissions"(s "rx"))resourceValue)
+ resourceBatch<-O.writeBatchWithProfile Resource8(root</>"resource-batch")[resource,head specs]
+ let defaultPath=takeDirectory resourceBatch</>"writer.case.json"
+ defaultValue<-B.readFile defaultPath>>=jsonRead
+ B.writeFile defaultPath(encodeCanonical(remove "memory_profile" defaultValue))
+ batchObservations<-O.loadObservedBatch runner resourceBatch
+ ensure(map fst batchObservations==[CaseId "whole-cache",CaseId "writer"]) "resource batch observations missing"
  alone<-forM specs$ \one->O.writeCase(root</>"alone"</>O.caseId one)one>>=O.loadObserved runner
  batched<-O.writeBatch(root</>"batch")specs>>=O.loadObservedBatch runner
  ensure(batched==zip(map(CaseId . O.caseId)specs)alone)("owned batch observations differ from single-case observations: "++show batched)
@@ -852,6 +897,7 @@ main :: IO ()
 main=do
  [runner,generator,checker]<-getArgs
  scriptAdapterRegressions
+ defaultWireRegression
  names<-sort.filter((==".json").takeExtension) <$> listDirectory "emulation/fixtures"
  forM_ names$ \name->do
   let path="emulation/fixtures" </> name
