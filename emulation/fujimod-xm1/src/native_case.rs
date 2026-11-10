@@ -1,6 +1,6 @@
 //! Bounded native cases on the pinned FujiMod Cortex-R5F core with the
 //! Cortex-R4F exclusions of `r4f::classify_a32`. Input is the
-//! `FUJI_NATIVE_V1` wire written by `Emulation.NativeCase`, or a
+//! `FUJI_NATIVE_V1` or `FUJI_NATIVE_SCRIPT_V1` wire written by `Emulation.NativeCase`, or a
 //! `FUJI_NATIVE_BATCH_V1` wire of such cases; output is the runner
 //! observation read by `Emulation.NativeObservation`, one per case.
 //!
@@ -348,7 +348,7 @@ struct Region {
     initial: Box<[u8]>,
 }
 
-/// One of r0-r12, the registers a stub contract may bind.
+/// A core register from r0 through LR.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct StubRegister(u8);
 
@@ -370,8 +370,57 @@ struct Binding {
 
 struct Stub {
     address: Address,
+    calls: Box<[StubCall]>,
+    scripted: bool,
+}
+
+struct StubCall {
     inputs: Box<[Binding]>,
     outputs: Box<[Binding]>,
+    reads: Box<[MemoryContract]>,
+    writes: Box<[MemoryContract]>,
+}
+
+#[derive(Clone, Copy)]
+enum MemoryTarget {
+    Absolute(Address),
+    Register(StubRegister),
+    Indirect(StubRegister),
+}
+
+struct MemoryContract {
+    target: MemoryTarget,
+    offset: i32,
+    bytes: Box<[u8]>,
+}
+
+impl MemoryContract {
+    fn address(&self, cpu: &dyn Cpu, case: &Case, need: Need) -> Result<u32, Step> {
+        let base = match self.target {
+            MemoryTarget::Absolute(address) => address.0,
+            MemoryTarget::Register(register) | MemoryTarget::Indirect(register) => read(cpu, register.register())?,
+        };
+        let shifted = i64::from(base) + i64::from(self.offset);
+        let mut address = u32::try_from(shifted).map_err(|_| Step::Stop(Status::MemoryGuard))?;
+        if matches!(self.target, MemoryTarget::Indirect(_)) {
+            if address % 4 != 0 || !Self::covered(case, address, 4, Need::Read) {
+                return Err(Step::Stop(Status::MemoryGuard));
+            }
+            address = read_word(cpu, u64::from(address))?;
+        }
+        if !Self::covered(case, address, self.bytes.len() as u64, need) {
+            return Err(Step::Stop(Status::MemoryGuard));
+        }
+        Ok(address)
+    }
+
+    fn covered(case: &Case, address: u32, bytes: u64, need: Need) -> bool {
+        case.regions.iter().any(|region| {
+            region.permission != Permission::Device
+                && region.permission.grants(need)
+                && region.span.contains(u64::from(address), bytes)
+        })
+    }
 }
 
 /// Entry CPSR: user mode with NZCV only, or a `PrivilegedMode` with
@@ -815,7 +864,11 @@ fn parse_case(
     mut initial: impl FnMut(&mut Tokens<'_>, u32) -> Result<Box<[u8]>, WireError>,
 ) -> Result<Case, WireError> {
     let mut tokens = Tokens { rest: wire };
-    tokens.literal(b"FUJI_NATIVE_V1", "wire version must be FUJI_NATIVE_V1")?;
+    let scripted = match tokens.next()? {
+        b"FUJI_NATIVE_V1" => false,
+        b"FUJI_NATIVE_SCRIPT_V1" => true,
+        _ => return Err(WireError("unsupported native wire version")),
+    };
     tokens.literal(b"cortex-r5f-arm-le", "CPU profile must be cortex-r5f-arm-le")?;
     let entry = Address(tokens.word()?);
     let exit = Address(tokens.word()?);
@@ -915,16 +968,42 @@ fn parse_case(
     }
 
     let mut stubs: Vec<Stub> = Vec::with_capacity(stub_count as usize);
+    let mut total_calls = 0;
+    let mut contract_bytes = 0u64;
     for _ in 0..stub_count {
         let address = Address(tokens.word()?);
-        let input_count = tokens.count(13)?;
-        let output_count = tokens.count(13)?;
-        if output_count == 0 {
-            return Err(WireError("stub must declare an output"));
+        let call_count = if scripted { tokens.count(128)? } else { 1 };
+        if call_count == 0 {
+            return Err(WireError("scripted stub needs a call"));
         }
-        let inputs = bindings(&mut tokens, input_count)?;
-        let outputs = bindings(&mut tokens, output_count)?;
-        stubs.push(Stub { address, inputs, outputs });
+        if scripted {
+            total_calls += call_count;
+            if total_calls > 128 {
+                return Err(WireError("scripted calls exceed 128"));
+            }
+        }
+        let mut calls = Vec::with_capacity(call_count as usize);
+        for _ in 0..call_count {
+            let input_count = tokens.count(if scripted { 15 } else { 13 })?;
+            let output_count = tokens.count(13)?;
+            let (read_count, write_count) = if scripted {
+                (tokens.count(64)?, tokens.count(64)?)
+            } else {
+                (0, 0)
+            };
+            if read_count + write_count > 64 {
+                return Err(WireError("stub memory rows exceed 64"));
+            }
+            if !scripted && output_count == 0 {
+                return Err(WireError("stub must declare an output"));
+            }
+            let inputs = bindings(&mut tokens, input_count, if scripted { 14 } else { 12 })?;
+            let outputs = bindings(&mut tokens, output_count, 12)?;
+            let reads = memory_contracts(&mut tokens, read_count, &mut contract_bytes)?;
+            let writes = memory_contracts(&mut tokens, write_count, &mut contract_bytes)?;
+            calls.push(StubCall { inputs, outputs, reads, writes });
+        }
+        stubs.push(Stub { address, calls: calls.into(), scripted });
     }
     tokens.finish()?;
 
@@ -947,10 +1026,10 @@ fn parse_case(
     Ok(case)
 }
 
-fn bindings(tokens: &mut Tokens<'_>, count: u32) -> Result<Box<[Binding]>, WireError> {
+fn bindings(tokens: &mut Tokens<'_>, count: u32, max_register: u32) -> Result<Box<[Binding]>, WireError> {
     let mut bindings: Vec<Binding> = Vec::with_capacity(count as usize);
     for _ in 0..count {
-        let register = StubRegister(tokens.count(12)? as u8);
+        let register = StubRegister(tokens.count(max_register)? as u8);
         let value = tokens.word()?;
         if bindings.iter().any(|binding| binding.register == register) {
             return Err(WireError("stub binds a register twice"));
@@ -958,6 +1037,36 @@ fn bindings(tokens: &mut Tokens<'_>, count: u32) -> Result<Box<[Binding]>, WireE
         bindings.push(Binding { register, value });
     }
     Ok(bindings.into())
+}
+
+fn memory_contracts(tokens: &mut Tokens<'_>, count: u32, total: &mut u64) -> Result<Box<[MemoryContract]>, WireError> {
+    let mut entries = Vec::with_capacity(count as usize);
+    for _ in 0..count {
+        let kind = tokens.next()?;
+        let target = match kind {
+            b"a" => MemoryTarget::Absolute(Address(tokens.word()?)),
+            b"r" | b"i" => {
+                let index = tokens.word()?;
+                if index > 14 {
+                    return Err(WireError("memory target register exceeds LR"));
+                }
+                let register = StubRegister(index as u8);
+                if kind == b"r" { MemoryTarget::Register(register) } else { MemoryTarget::Indirect(register) }
+            }
+            _ => return Err(WireError("memory target must be a, r or i")),
+        };
+        let offset = tokens.word()? as i32;
+        let bytes = tokens.word()?;
+        if bytes == 0 || bytes > MAX_REGION_BYTES {
+            return Err(WireError("memory contract must contain 1..2MiB bytes"));
+        }
+        *total += u64::from(bytes);
+        if *total > MAX_MAPPED_BYTES {
+            return Err(WireError("memory contracts exceed 4MiB"));
+        }
+        entries.push(MemoryContract { target, offset, bytes: tokens.bytes(bytes)? });
+    }
+    Ok(entries.into())
 }
 
 fn validate(case: &Case) -> Result<(), WireError> {
@@ -1144,8 +1253,8 @@ impl Serialize for HexBytes {
     }
 }
 
-const CORE_LABELS: [&str; 13] = [
-    "r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "r12",
+const CORE_LABELS: [&str; 15] = [
+    "r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "r12", "sp", "lr",
 ];
 
 #[derive(Serialize)]
@@ -1757,7 +1866,8 @@ struct State {
     started: Instant,
     entered: u64,
     shadow: ShadowContexts,
-    events: Vec<usize>,
+    events: Vec<(usize, usize)>,
+    stub_calls: [usize; MAX_STUBS as usize],
     trace: [TraceEntry; LOG_SIZE],
     accesses: [AccessEntry; LOG_SIZE],
     access_total: u64,
@@ -1782,6 +1892,7 @@ impl State {
             entered: 0,
             shadow: ShadowContexts::new(case),
             events: Vec::with_capacity(MAX_RECORDED_EVENTS),
+            stub_calls: [0; MAX_STUBS as usize],
             captures: Vec::new(),
             snapshots: Vec::new(),
             trace: [TraceEntry::default(); LOG_SIZE],
@@ -1863,7 +1974,15 @@ impl State {
         let pc = address as u32;
         if pc == case.exit.0 {
             let shadow = self.shadow.state();
-            let status = if shadow.returning && shadow.depth == 0 { Status::Returned } else { Status::UnknownCall };
+            let status = if shadow.returning && shadow.depth == 0 {
+                if case.stubs.iter().enumerate().any(|(index, stub)| stub.scripted && self.stub_calls[index] != stub.calls.len()) {
+                    Status::StubContract
+                } else {
+                    Status::Returned
+                }
+            } else {
+                Status::UnknownCall
+            };
             return Err(Step::Stop(status));
         }
         if case.stops_at(pc) {
@@ -2048,8 +2167,13 @@ impl State {
             return Ok(());
         }
         if let Some(index) = case.stub_at(target) {
-            self.apply_stub(cpu, &case.stubs[index], index)?;
-            write(cpu, arm::CORE[14], return_address)?;
+            if case.stubs[index].scripted {
+                write(cpu, arm::CORE[14], return_address)?;
+            }
+            self.apply_stub(cpu, case, index)?;
+            if !case.stubs[index].scripted {
+                write(cpu, arm::CORE[14], return_address)?;
+            }
             write(cpu, arm::PC, return_address)?;
             return Ok(());
         }
@@ -2082,7 +2206,7 @@ impl State {
         if link != self.expected_return(case) {
             return Err(Step::Stop(Status::UnknownCall));
         }
-        self.apply_stub(cpu, &case.stubs[index], index)?;
+        self.apply_stub(cpu, case, index)?;
         self.return_to(case, link)?;
         write(cpu, arm::PC, link)?;
         Ok(())
@@ -2111,14 +2235,32 @@ impl State {
         Ok(())
     }
 
-    fn apply_stub(&mut self, cpu: &dyn Cpu, stub: &Stub, index: usize) -> Result<(), Step> {
+    fn apply_stub(&mut self, cpu: &dyn Cpu, case: &Case, index: usize) -> Result<(), Step> {
+        let stub = &case.stubs[index];
+        let call_index = if stub.scripted { self.stub_calls[index] } else { 0 };
+        let call = stub.calls.get(call_index).ok_or(Step::Stop(Status::StubContract))?;
         if self.events.len() == MAX_RECORDED_EVENTS {
             return Err(Step::Stop(Status::StubContract));
         }
-        for binding in stub.inputs.iter() {
+        for binding in call.inputs.iter() {
             if read(cpu, binding.register.register())? != binding.value {
                 return Err(Step::Stop(Status::StubContract));
             }
+        }
+        let mut buffer = [0u8; 1024];
+        for memory in call.reads.iter() {
+            let address = memory.address(cpu, case, Need::Read)?;
+            for (index, expected) in memory.bytes.chunks(buffer.len()).enumerate() {
+                let actual = &mut buffer[..expected.len()];
+                cpu.read_memory(u64::from(address) + (index * 1024) as u64, actual)?;
+                if actual != expected {
+                    return Err(Step::Stop(Status::StubContract));
+                }
+            }
+        }
+        let mut targets = [0u32; 64];
+        for (target, memory) in targets.iter_mut().zip(call.writes.iter()) {
+            *target = memory.address(cpu, case, Need::Write)?;
         }
         if self.captures.iter().any(|capture| capture.service == stub.address.0) {
             let mut registers = [0; 15];
@@ -2137,8 +2279,12 @@ impl State {
             }
             self.snapshots.push(StubSnapshot { service: stub.address.0, registers, memory });
         }
-        self.events.push(index);
-        for binding in stub.outputs.iter() {
+        self.events.push((index, call_index));
+        self.stub_calls[index] += 1;
+        for (target, memory) in targets.iter().zip(call.writes.iter()) {
+            cpu.write_memory(u64::from(*target), &memory.bytes)?;
+        }
+        for binding in call.outputs.iter() {
             write(cpu, binding.register.register(), binding.value)?;
         }
         Ok(())
@@ -2356,9 +2502,10 @@ impl State {
             events: self
                 .events
                 .iter()
-                .map(|&index| {
+                .map(|&(index, call_index)| {
                     let stub = &case.stubs[index];
-                    Event { address: Word(stub.address.0), inputs: Bindings(&stub.inputs), outputs: Bindings(&stub.outputs) }
+                    let call = &stub.calls[call_index];
+                    Event { address: Word(stub.address.0), inputs: Bindings(&call.inputs), outputs: Bindings(&call.outputs) }
                 })
                 .collect(),
             trace_total: Count(self.entered),

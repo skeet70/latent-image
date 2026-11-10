@@ -15,7 +15,7 @@ import Numeric (showHex)
 
 newtype ServiceAddress = ServiceAddress Word32 deriving (Eq, Show, Ord)
 newtype Argument = Argument Int deriving (Eq, Show)
-data MemoryArgument = MemoryArgument Argument Int B.ByteString | AbsoluteMemory Word32 Int B.ByteString deriving (Eq, Show)
+data MemoryArgument = MemoryArgument Argument Int B.ByteString | IndirectMemoryArgument Argument Int B.ByteString | AbsoluteMemory Word32 Int B.ByteString deriving (Eq, Show)
 data ServiceCall = ServiceCall
   { serviceAddress :: ServiceAddress
   , serviceInputs :: [(Argument, Word32)]
@@ -46,14 +46,21 @@ addressText :: Word32 -> String
 addressText w = let h = showHex w "" in "0x" ++ replicate (8-length h) '0' ++ h
 
 bindingsJSON :: [(Argument, Word32)] -> Value
-bindingsJSON bindings = object [K.fromString (if n == 13 then "sp" else "r" ++ show n) .= addressText value | (Argument n,value) <- bindings]
+bindingsJSON bindings = object [K.fromString (argumentName n) .= addressText value | (Argument n,value) <- bindings]
+
+argumentName :: Int -> String
+argumentName 13 = "sp"
+argumentName 14 = "lr"
+argumentName n = "r" ++ show n
 
 memoryJSON :: MemoryArgument -> Value
 memoryJSON (MemoryArgument (Argument register) offset bytes) = object
-  [ "register" .= (if register == 13 then "sp" else "r" ++ show register)
+  [ "register" .= argumentName register
   , "offset" .= offset, "hex" .= hexBytes bytes ]
 memoryJSON (AbsoluteMemory address offset bytes) = object
   [ "address" .= addressText address, "offset" .= offset, "hex" .= hexBytes bytes ]
+memoryJSON (IndirectMemoryArgument (Argument register) offset bytes) = object
+  [ "indirect_register" .= argumentName register, "offset" .= offset, "hex" .= hexBytes bytes ]
 
 callsJSON :: [ServiceAddress] -> [ServiceCall] -> [Value]
 callsJSON targets calls = [object

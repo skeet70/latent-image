@@ -789,9 +789,66 @@ kernelStackContextRegressions runner=withTemporary "fuji-kernel-contexts"$ \root
  smoke "self-dispatch" [0,0] [0x30dc,0x1040,0x30dc,0x1040,0x10f0] [(0x1000,0x10),(0x1040,0x10),(0x1060,0x10),(0x1080,0x10)] [context 0x3000 0x3100]
  smoke "resume-stub" [0xe594d000,0xe594f004] [0x30dc,0x1040,0x3300,0x1020,0x10f0,0x1000] [(0x1000,0x10),(0x1020,0x10),(0x1040,0x10),(0x1060,0x10),(0x1080,0x10)] [context 0x3000 0x3100,context 0x3200 0x3300]
 
+scriptAdapterRegressions :: IO ()
+scriptAdapterRegressions=withTemporary "fuji-script-adapter"$ \root->do
+ base<-B.readFile "emulation/fixtures/explicit-stub.json" >>= jsonRead
+ copyFile "emulation/fixtures/explicit-stub.bin"(root </> "explicit-stub.bin")
+ let path=root </> "script.json"
+     legacy=head(list(get base "stubs"))
+     memory selector value offset=obj[(selector,s value),("offset",n offset),("hex",s "00")]
+     call=obj[("inputs",set "sp"(s "0x00003020")(get legacy "inputs")),("outputs",get legacy "outputs"),("reads",arr[memory "address" "0x00002004" 0,memory "register" "sp" (-1),memory "indirect_register" "r2" 4]),("writes",arr[])]
+     stub calls=obj[("address",get legacy "address"),("calls",arr calls)]
+     fixture=set "stubs"(arr[stub[call]])base
+     load value=do B.writeFile path(encodeCanonical value);loadCase path
+     reject label value=do
+      result<-try(load value)
+      ensure(case result of Left(_::SomeException)->True;Right _->False)(label++" admitted")
+ (_,_,legacyWire,_)<-load base
+ (_,_,wire,_)<-load fixture
+ ensure(BC.isPrefixOf "FUJI_NATIVE_V1\n" legacyWire && BC.isPrefixOf "FUJI_NATIVE_SCRIPT_V1\n" wire) "wire version selection"
+ ensure(BC.isSuffixOf "4000 1\n3 1 3 0\n0 6\n1 9\n13 3020\n0 f\na 2004 0 1 00\nr d ffffffff 1 00\ni 2 4 1 00\n" wire) "script public wire encoding"
+ void(load(set "stubs"(arr[stub(replicate 128 call)])base))
+ void(load(set "stubs"(arr[stub[set "reads"(arr(replicate 64(memory "register" "r2" 0)))call]])base))
+ let fullMemory=memory "address" "0x00002004" 0
+     largeMemory=set "hex"(s(replicate(2*sizeBytes)'0'))fullMemory
+     contracts rows=set "stubs"(arr[stub[set "reads"(arr rows)call]])base
+ void(load(contracts[largeMemory,largeMemory]))
+ reject "aggregate contract bytes"(contracts[largeMemory,largeMemory,fullMemory])
+ reject "per-entry contract bytes"(contracts[set "hex"(s(replicate(2*sizeBytes+2)'0'))fullMemory])
+ reject "empty calls"(set "stubs"(arr[stub[]])base)
+ reject "excess calls"(set "stubs"(arr[stub(replicate 129 call)])base)
+ reject "unknown call field"(set "stubs"(arr[stub[set "unexpected"(n 0)call]])base)
+ reject "SP output"(set "stubs"(arr[stub[set "outputs"(obj[("sp",s "0x00003020")])call]])base)
+ reject "ambiguous memory target"(set "stubs"(arr[stub[set "reads"(arr[set "address"(s "0x00002004")(memory "register" "r2" 0)])call]])base)
+ reject "excess memory rows"(set "stubs"(arr[stub[set "reads"(arr(replicate 65(memory "register" "r2" 0)))call]])base)
+ reject "offset overflow"(set "stubs"(arr[stub[set "reads"(arr[memory "register" "r2" 2147483648])call]])base)
+ reject "mixed forms"(set "stubs"(arr[legacy, set "address"(s "0x00004004")(stub[call])])base)
+ let span offset len=obj[("region",s "stack"),("offset",n offset),("length",n len)]
+     ignored spans=set "expected"(set "ignored_memory"(arr spans)(get fixture "expected"))fixture
+     private=ignored[span 0 8]
+ (c,regions,_,_)<-load private
+ let result stackByte=obj[("status",get(get c "expected")"status"),("registers",get(get c "expected")"registers"),("events",get(get c "expected")"events"),("memory",arr[obj[("address",get(description r)"address"),("bytes",s(hexBytes(if get(description r)"id"==s "stack" then B.singleton stackByte<>B.drop 1(regionBytes r) else regionBytes r)))]|r<-regions])]
+ problems<-checkResult c regions(result 0xff)
+ ensure(null problems) "private frame projection changed observable result"
+ let outputCase=set "expected"(set "memory"(arr[obj[("region",s "data"),("offset",n 0),("hex",s "01000000")]])(get c "expected"))c
+     outputResult bytes=set "memory"(arr[if get item "address"==s "0x00002004" then set "bytes"(s bytes)item else item|item<-list(get(result 0xff)"memory")])(result 0xff)
+ outputProblems<-checkResult outputCase regions(outputResult "01000000")
+ ensure(null outputProblems) "private projection rejected declared pointed output"
+ wrongOutputProblems<-checkResult outputCase regions(outputResult "02000000")
+ ensure(not(null wrongOutputProblems)) "private projection hid incorrect pointed final output"
+ wrongScalarProblems<-checkResult outputCase regions(set "registers"(set "r0"(s "0x00000012")(get(outputResult "01000000")"registers"))(outputResult "01000000"))
+ ensure(not(null wrongScalarProblems)) "private projection hid incorrect scalar final output"
+ reject "overlapping ignored frames"(ignored[span 0 8,span 4 8])
+ reject "frame above entry SP"(ignored[span 24 9])
+ reject "ignored caller output"(set "expected"(set "memory"(arr[obj[("region",s "stack"),("offset",n 0),("hex",s "ff")])(get private "expected"))private)
+ (_,ordinaryRegions,_,_)<-load fixture
+ ordinaryProblems<-checkResult fixture ordinaryRegions(result 0xff)
+ ensure(not(null ordinaryProblems)) "ordinary memory comparison ignored private bytes"
+
 main :: IO ()
 main=do
  [runner,generator,checker]<-getArgs
+ scriptAdapterRegressions
  names<-sort.filter((==".json").takeExtension) <$> listDirectory "emulation/fixtures"
  forM_ names$ \name->do
   let path="emulation/fixtures" </> name

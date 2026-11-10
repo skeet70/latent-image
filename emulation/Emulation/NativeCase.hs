@@ -77,6 +77,68 @@ arrayCheck v low high label=do
  ensure(case v of Array _->low<=length(list v) && length(list v)<=high; _->False) label
  pure(list v)
 
+data MemoryTarget = AbsoluteTarget Integer | RegisterTarget Int | IndirectTarget Int deriving Show
+data ContractMemory = ContractMemory MemoryTarget Integer B.ByteString deriving Show
+data ScriptCall = ScriptCall [(String,Integer)] [(String,Integer)] [ContractMemory] [ContractMemory] deriving Show
+data CaseStub = LegacyStub Integer [(String,Integer)] [(String,Integer)] | ScriptStub Integer [ScriptCall] deriving Show
+stubAddress :: CaseStub -> Integer
+stubAddress (LegacyStub target _ _)=target
+stubAddress (ScriptStub target _)=target
+scriptedStub :: CaseStub -> Bool
+scriptedStub (ScriptStub _ _)=True
+scriptedStub _=False
+contractMemory :: Value -> IO ContractMemory
+contractMemory item=do
+ let selectors=filter (`elem` keys item)["address","register","indirect_register"]
+ ensure(length selectors==1) "memory target must have exactly one selector"
+ let selector=head selectors
+ fields item (selector++" offset hex") "stub memory"
+ target<-if selector=="address" then AbsoluteTarget <$> address(get item selector) else do
+   let name=str(get item selector)
+   index<-maybe(failH "memory register must be r0-r12, sp or lr")pure(elemIndex name(take 15 regs))
+   pure(if selector=="register" then RegisterTarget index else IndirectTarget index)
+ offset<-integer(get item "offset")(-2147483648)2147483647 "stub memory offset"
+ bytes<-byteString(get item "hex")
+ ensure(not(B.null bytes)) "stub memory must not be empty"
+ pure(ContractMemory target offset bytes)
+stubWire :: Bool -> CaseStub -> [String]
+stubWire False (LegacyStub target inputs outputs)=
+ unwords[hex target,show(length inputs),show(length outputs)]:bindingRows inputs++bindingRows outputs
+stubWire True (ScriptStub target calls)=unwords[hex target,show(length calls)]:concatMap callRows calls
+ where
+  callRows (ScriptCall inputs outputs reads writes)=
+   unwords(map show[length inputs,length outputs,length reads,length writes]):bindingRows inputs++bindingRows outputs++map memoryRow(reads++writes)
+  memoryRow (ContractMemory target' offset bytes)=
+   let (kind,base)=case target' of AbsoluteTarget value->("a",value);RegisterTarget index->("r",fromIntegral index);IndirectTarget index->("i",fromIntegral index)
+   in unwords[kind,hex base,hex(offset `mod` 4294967296),hex(fromIntegral(B.length bytes)),hexBytes bytes]
+stubWire _ _=error "mixed stub formats"
+bindingRows :: [(String,Integer)] -> [String]
+bindingRows values=[unwords[show(maybe 0 id(elemIndex name regs)),hex value]|(name,value)<-values]
+
+data IgnoredFrameSpan = IgnoredFrameSpan Value Integer Integer deriving Show
+validateIgnoredMemory :: Value -> [Region] -> IO [IgnoredFrameSpan]
+validateIgnoredMemory c regions=do
+ let expected=get c "expected"
+ if "ignored_memory" `notElem` keys expected then pure [] else do
+  rows<-arrayCheck(get expected "ignored_memory")1 memoryCount "ignored memory limit"
+  sp<-address(get(get c "registers")"sp")
+  spans<-foldM(\prior item->do
+   fields item "region offset length" "ignored memory"
+   let ident=get item "region"
+   region<-maybe(failH "unknown ignored region")pure(find(\r->get(description r)"id"==ident)regions)
+   offset<-integer(get item "offset")0(fromIntegral sizeBytes) "ignored offset"
+   len<-integer(get item "length")1(fromIntegral sizeBytes) "ignored length"
+   let end=offset+len
+   ensure(str(get(description region)"permissions")=="rw" && end<=regionSize region && baseAddress region<sp && sp<=baseAddress region+regionSize region && baseAddress region+end<=sp) "ignored memory must be private writable frame below entry SP"
+   ensure(all(\(IgnoredFrameSpan name low high)->name/=ident || high<=offset || end<=low)prior) "ignored memory overlaps"
+   forM_(list(get expected "memory"))$ \change->when(get change "region"==ident)$do
+    bytes<-byteString(get change "hex")
+    let low=num(get change "offset"); high=low+fromIntegral(B.length bytes)
+    ensure(high<=offset || end<=low) "ignored memory overlaps expected output"
+   pure(prior++[IgnoredFrameSpan ident offset end]))[] rows
+  ensure(sum[high-low|IgnoredFrameSpan _ low high<-spans]<=fromIntegral totalBytes) "total ignored memory limit"
+  pure spans
+
 data Region = Region {description::Value,baseAddress::Integer,regionSize::Integer,regionBytes::B.ByteString} deriving Show
 regionAt :: [Region] -> Integer -> Integer -> Char -> Bool
 regionAt rs base size permission=any(\r->baseAddress r<=base && base+size<=baseAddress r+regionSize r && permission `elem` str(get(description r)"permissions"))rs
@@ -185,16 +247,34 @@ loadCaseWith reader input = do
  ensure(entry `elem` map fst functions) "entry must start a declared function"
  stubsInput<-arrayCheck(get c "stubs")0 stubCount "stubs limit"
  stubs<-foldM(\done item->do
-   fields item "address inputs outputs side_effects" "stub"
+   let scripted="calls" `elem` keys item
+   fields item (if scripted then "address calls" else "address inputs outputs side_effects") "stub"
    target'<-address(get item "address")
-   ensure(target' `mod` 4==0 && target'/=exit && target' `notElem` map(\(t,_,_)->t)done && not(any(\(x,len)->x<=target' && target'<x+len)functions)) "stub address alignment/alias"
+   ensure(target' `mod` 4==0 && target'/=exit && target' `notElem` map stubAddress done && not(any(\(x,len)->x<=target' && target'<x+len)functions)) "stub address alignment/alias"
    ensure(target' `notElem` [stop|PrivilegedEntry _ _ (Just(KernelEntry(Just stop)_ _ _ _))<-[profile]]) "stub address is the stop address"
-   ensure(get item "side_effects"==s "registers-only") "unsupported stub side effects"
-   inputs<-bindings(get item "inputs")(take 13 regs); outputs<-bindings(get item "outputs")(take 13 regs)
-   ensure(not(null outputs)) "stub must have explicit outputs"
-   pure(done++[(target',inputs,outputs)]))[] stubsInput
+   stub<-if scripted then do
+     callsInput<-arrayCheck(get item "calls")1 eventCount "stub calls limit"
+     calls<-forM callsInput$ \call->do
+       fields call "inputs outputs reads writes" "stub call"
+       inputs<-bindings(get call "inputs")(take 15 regs)
+       outputs<-bindings(get call "outputs")(take 13 regs)
+       reads<-arrayCheck(get call "reads")0 memoryCount "stub reads limit"
+       writes<-arrayCheck(get call "writes")0 memoryCount "stub writes limit"
+       ensure(length reads+length writes<=memoryCount) "stub memory rows limit"
+       ScriptCall inputs outputs <$> mapM contractMemory reads <*> mapM contractMemory writes
+     pure(ScriptStub target' calls)
+    else do
+     ensure(get item "side_effects"==s "registers-only") "unsupported stub side effects"
+     inputs<-bindings(get item "inputs")(take 13 regs); outputs<-bindings(get item "outputs")(take 13 regs)
+     ensure(not(null outputs)) "stub must have explicit outputs"
+     pure(LegacyStub target' inputs outputs)
+   pure(done++[stub]))[] stubsInput
+ let scripted=any scriptedStub stubs || "ignored_memory" `elem` keys(get c "expected")
+ ensure(not scripted || all scriptedStub stubs) "legacy and scripted stubs cannot be mixed"
+ ensure(sum[length calls|ScriptStub _ calls<-stubs]<=eventCount) "total scripted calls limit"
+ ensure(sum[B.length bytes|ScriptStub _ calls<-stubs,ScriptCall _ _ reads writes<-calls,ContractMemory _ _ bytes<-reads++writes]<=totalBytes) "total stub contract bytes limit"
  let expected=get c "expected"
- fields expected(unwords(words "status registers memory events"++["kernel"|"kernel" `elem` keys expected])) "expected"
+ fields expected(unwords(words "status registers memory events"++[key|key<-["kernel","ignored_memory"],key `elem` keys expected])) "expected"
  ensure(str(get expected "status") `elem` words "returned instruction_budget wall_budget memory_guard fetch_guard unknown_call unsupported_instruction stub_contract stop_address") "unsupported expected exit"
  when("kernel" `elem` keys expected)$do
   ensure(isKernel profile) "expected kernel registers need a kernel case"
@@ -215,15 +295,16 @@ loadCaseWith reader input = do
    ensure(writable || initialSlice==bytes) "expected memory in a read-only region must equal its initial bytes"
    ensure(all(\(name,lo,hi)->name/=ident || hi<=offset || end<=lo)occupied) "expected memory overlaps"
    pure((ident,offset,end):occupied)) [] differences
+ void(validateIgnoredMemory c regions)
  events<-arrayCheck(get expected "events")0 eventCount "event limit"
  forM_ events $ \event->do
   fields event "address inputs outputs" "expected event"
-  void(address(get event "address")); void(bindings(get event "inputs")(take 13 regs)); void(bindings(get event "outputs")(take 13 regs))
+  void(address(get event "address")); void(bindings(get event "inputs")(take (if scripted then 15 else 13) regs)); void(bindings(get event "outputs")(take 13 regs))
  exclusions<-arrayCheck(get c "exclusions")1 1000000 "coverage exclusions required"
  ensure(all(not.null.str)exclusions) "coverage exclusions required"
- let rows=["FUJI_NATIVE_V1","cortex-r5f-arm-le",unwords[hex entry,hex exit,show budget,show wall],unwords[hex(reg r)|r<-regs]]++profileRows profile++[unwords(map(show.length)[regionsInput,functionsInput,stubsInput])]
+ let rows=[if scripted then "FUJI_NATIVE_SCRIPT_V1" else "FUJI_NATIVE_V1","cortex-r5f-arm-le",unwords[hex entry,hex exit,show budget,show wall],unwords[hex(reg r)|r<-regs]]++profileRows profile++[unwords(map(show.length)[regionsInput,functionsInput,stubsInput])]
      functionRows=[unwords[hex x,hex size]|(x,size)<-functions]
-     stubRows=concat[unwords[hex t,show(length inputs),show(length outputs)]:[unwords[show(maybe 0 id(elemIndex k regs)),hex v]|bindingGroup<-[inputs,outputs],(k,v)<-bindingGroup]|(t,inputs,outputs)<-stubs]
+     stubRows=concatMap(stubWire scripted)stubs
      after=functionRows++stubRows
      wire=BL.toStrict(BB.toLazyByteString(BB.string7(unlines rows)<>mconcat[BB.string7(regionHead r)<>BB.char7 ' '<>BB.byteStringHex(regionBytes r)<>BB.char7 '\n'|r<-regions]<>BB.string7(unlines after)))
  let digest=sha256Hex(sha256 raw); wireDigest=sha256Hex(sha256 wire)
@@ -300,6 +381,7 @@ profileRows(PrivilegedEntry _ identity kernel)=
   contextRows contexts=[unwords("c":show(length contexts):concat[[hex low,hex high]|StackBounds low high<-contexts])]
 checkResult :: Value -> [Region] -> Value -> IO [String]
 checkResult c regions result=do
+ ignored<-validateIgnoredMemory c regions
  let expected=get c "expected"
      status=["status differs"|get result "status"/=get expected "status"]
      registers=["register "++k++": differs"|k<-keys(get expected "registers"),get(get result "registers")k/=get(get expected "registers")k]
@@ -312,7 +394,11 @@ checkResult c regions result=do
      let offset=fromInteger(num(get change "offset"))
      pure(B.take offset bytes<>value<>B.drop(offset+B.length value)bytes)
     else pure bytes)(regionBytes r)(list(get expected "memory"))
-   pure["memory "++str(get(description r)"id")++": differs from exact allowed final bytes"|get actual "address"/=get(description r)"address" || get actual "bytes"/=s(hexBytes desired)]
+   let actualBytes=str(get actual "bytes")
+       desiredBytes=hexBytes desired
+       spans=[(fromInteger low*2,fromInteger high*2)|IgnoredFrameSpan ident low high<-ignored,ident==get(description r)"id"]
+       project bytes=foldl'(\value (low,high)->take low value++replicate(high-low)'0'++drop high value)bytes spans
+   pure["memory "++str(get(description r)"id")++": differs from exact allowed final bytes"|get actual "address"/=get(description r)"address" || length actualBytes/=length desiredBytes || any (`notElem` "0123456789abcdef") actualBytes || project actualBytes/=project desiredBytes]
  pure(status++registers++events++kernel++mem)
 unknownReport :: Value
 unknownReport=obj[("schema_version",n 1),("profile",s "unknown")]

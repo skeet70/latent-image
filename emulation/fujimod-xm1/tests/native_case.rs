@@ -1,4 +1,4 @@
-//! `FUJI_NATIVE_V1` wires judged by the observation `native_case::run` prints.
+//! Native contract wires judged by the observation `native_case::run` prints.
 
 use fujimod_xm1::native_case;
 use serde::Deserialize;
@@ -37,6 +37,56 @@ struct Stub {
     outputs: Vec<(u8, u32)>,
 }
 
+#[derive(Clone, Copy)]
+enum MemoryTarget {
+    Absolute(u32),
+    Register(u8),
+    Indirect(u8),
+}
+
+#[derive(Clone)]
+struct ScriptMemory {
+    target: MemoryTarget,
+    offset: i32,
+    bytes: Vec<u8>,
+}
+
+impl ScriptMemory {
+    fn new(target: MemoryTarget, offset: i32, bytes: &[u8]) -> Self {
+        Self { target, offset, bytes: bytes.to_vec() }
+    }
+
+    fn row(&self) -> String {
+        let (kind, base) = match self.target {
+            MemoryTarget::Absolute(address) => ("a", address),
+            MemoryTarget::Register(register) => ("r", u32::from(register)),
+            MemoryTarget::Indirect(register) => ("i", u32::from(register)),
+        };
+        let hex: String = self.bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+        format!("{kind} {base:x} {:x} {:x} {hex}\n", self.offset as u32, self.bytes.len())
+    }
+}
+
+#[derive(Clone, Default)]
+struct ScriptCall {
+    inputs: Vec<(u8, u32)>,
+    outputs: Vec<(u8, u32)>,
+    reads: Vec<ScriptMemory>,
+    writes: Vec<ScriptMemory>,
+}
+
+impl ScriptCall {
+    fn scalar(inputs: &[(u8, u32)], outputs: &[(u8, u32)]) -> Self {
+        Self { inputs: inputs.to_vec(), outputs: outputs.to_vec(), ..Self::default() }
+    }
+}
+
+#[derive(Clone)]
+struct ScriptStub {
+    address: u32,
+    calls: Vec<ScriptCall>,
+}
+
 /// One case: code at `CODE`, the exit inside the code region, a stack below `SP`.
 #[derive(Clone)]
 struct Case {
@@ -48,6 +98,7 @@ struct Case {
     regions: Vec<Region>,
     functions: Vec<(u32, u32)>,
     stubs: Vec<Stub>,
+    scripts: Vec<ScriptStub>,
     /// The wire's CP14 identity token of a privileged case.
     identity: Option<String>,
     /// The wire's kernel row of a kernel case.
@@ -96,6 +147,7 @@ impl Case {
             ],
             functions: vec![(CODE, 4 * code.len() as u32)],
             stubs: Vec::new(),
+            scripts: Vec::new(),
             identity: None,
             kernel: None,
             stack_contexts: None,
@@ -129,6 +181,11 @@ impl Case {
 
     fn stub(mut self, address: u32, inputs: &[(u8, u32)], outputs: &[(u8, u32)]) -> Self {
         self.stubs.push(Stub { address, inputs: inputs.to_vec(), outputs: outputs.to_vec() });
+        self
+    }
+
+    fn script(mut self, address: u32, calls: Vec<ScriptCall>) -> Self {
+        self.scripts.push(ScriptStub { address, calls });
         self
     }
 
@@ -168,8 +225,9 @@ impl Case {
     }
 
     fn wire(&self) -> String {
+        let header = if self.scripts.is_empty() { "FUJI_NATIVE_V1" } else { "FUJI_NATIVE_SCRIPT_V1" };
         let mut text = format!(
-            "FUJI_NATIVE_V1\ncortex-r5f-arm-le\n{:x} {:x} {} {}\n",
+            "{header}\ncortex-r5f-arm-le\n{:x} {:x} {} {}\n",
             self.entry, self.exit, self.instructions, self.wall_ms
         );
         let registers: Vec<String> = self.registers.iter().map(|value| format!("{value:x}")).collect();
@@ -183,7 +241,7 @@ impl Case {
         if let Some(contexts) = &self.stack_contexts {
             text += &format!("\n{contexts}");
         }
-        text += &format!("\n{} {} {}\n", self.regions.len(), self.functions.len(), self.stubs.len());
+        text += &format!("\n{} {} {}\n", self.regions.len(), self.functions.len(), self.stubs.len() + self.scripts.len());
         for region in &self.regions {
             let hex: String = region.bytes.iter().map(|byte| format!("{byte:02x}")).collect();
             text += &format!("{:x} {:x} {} {hex}\n", region.address, region.size, region.permission);
@@ -195,6 +253,18 @@ impl Case {
             text += &format!("{:x} {} {}\n", stub.address, stub.inputs.len(), stub.outputs.len());
             for (register, value) in stub.inputs.iter().chain(&stub.outputs) {
                 text += &format!("{register} {value:x}\n");
+            }
+        }
+        for stub in &self.scripts {
+            text += &format!("{:x} {}\n", stub.address, stub.calls.len());
+            for call in &stub.calls {
+                text += &format!("{} {} {} {}\n", call.inputs.len(), call.outputs.len(), call.reads.len(), call.writes.len());
+                for (register, value) in call.inputs.iter().chain(&call.outputs) {
+                    text += &format!("{register} {value:x}\n");
+                }
+                for memory in call.reads.iter().chain(&call.writes) {
+                    text += &memory.row();
+                }
             }
         }
         text
@@ -211,7 +281,7 @@ struct Memory {
     bytes: Option<String>,
 }
 
-#[derive(Deserialize, Debug, PartialEq)]
+#[derive(Clone, Deserialize, Debug, PartialEq)]
 struct Event {
     address: String,
     inputs: BTreeMap<String, String>,
@@ -790,6 +860,265 @@ fn a_called_stub_with_a_mismatched_input_is_a_contract_failure() {
     observed.assert_stopped(Status::StubContract, 0x1004);
     assert!(observed.observation.events.is_empty());
     assert_eq!(observed.register("r0"), 6);
+}
+
+#[test]
+fn scripted_calls_consume_ordered_scalar_and_memory_contracts() {
+    let first = ScriptCall {
+        inputs: vec![(0, 5), (13, SP - 4), (14, CODE + 8)],
+        outputs: vec![(0, 7)],
+        reads: vec![ScriptMemory::new(MemoryTarget::Absolute(0x4004), -4, &[1, 2, 3, 4])],
+        writes: vec![ScriptMemory::new(MemoryTarget::Register(1), -4, &[5, 6, 7, 8])],
+    };
+    let second = ScriptCall {
+        inputs: vec![(0, 8), (14, CODE + 16)],
+        outputs: vec![(0, 9)],
+        reads: vec![ScriptMemory::new(MemoryTarget::Register(1), -4, &[5, 6, 7, 8])],
+        writes: vec![ScriptMemory::new(MemoryTarget::Absolute(0x4000), 4, &[9, 10, 11, 12])],
+    };
+    let observed = Case::new(&[PUSH_LR, branch(CODE + 4, STUB, true), ADD_R0_1, branch(CODE + 12, STUB, true), POP_PC])
+        .register(0, 5)
+        .register(1, 0x4004)
+        .region(0x4000, READ_WRITE, &[1, 2, 3, 4, 0, 0, 0, 0])
+        .script(STUB, vec![first, second])
+        .run();
+    observed.assert_returned();
+    assert_eq!(observed.register("r0"), 9);
+    assert_eq!(observed.bytes(0x4000), "05060708090a0b0c");
+    assert_eq!(
+        observed.observation.events,
+        [
+            Event {
+                address: "0x00002000".into(),
+                inputs: bindings(&[("r0", 5), ("sp", SP - 4), ("lr", CODE + 8)]),
+                outputs: bindings(&[("r0", 7)]),
+            },
+            Event {
+                address: "0x00002000".into(),
+                inputs: bindings(&[("r0", 8), ("lr", CODE + 16)]),
+                outputs: bindings(&[("r0", 9)]),
+            },
+        ]
+    );
+}
+
+#[test]
+fn scripted_scalar_mismatch_stops_before_declared_outputs() {
+    let observed = Case::new(&[branch(CODE, STUB, false)])
+        .register(0, 6)
+        .region(0x4000, READ_WRITE, &[1, 2, 3, 4])
+        .script(
+            STUB,
+            vec![ScriptCall {
+                inputs: vec![(0, 5)],
+                outputs: vec![(0, 9)],
+                writes: vec![ScriptMemory::new(MemoryTarget::Absolute(0x4000), 0, &[5, 6, 7, 8])],
+                ..ScriptCall::default()
+            }],
+        )
+        .run();
+    observed.assert_stopped(Status::StubContract, CODE);
+    assert_eq!(observed.register("r0"), 6);
+    assert_eq!(observed.bytes(0x4000), "01020304");
+    assert!(observed.observation.events.is_empty());
+}
+
+#[test]
+fn scripted_read_mismatch_stops_before_declared_outputs() {
+    let observed = Case::new(&[branch(CODE, STUB, false)])
+        .region(0x4000, READ_WRITE, &[1, 2, 3, 4])
+        .script(
+            STUB,
+            vec![ScriptCall {
+                outputs: vec![(0, 9)],
+                reads: vec![ScriptMemory::new(MemoryTarget::Absolute(0x4000), 0, &[1, 2, 3, 5])],
+                writes: vec![ScriptMemory::new(MemoryTarget::Absolute(0x4000), 0, &[5, 6, 7, 8])],
+                ..ScriptCall::default()
+            }],
+        )
+        .run();
+    observed.assert_stopped(Status::StubContract, CODE);
+    assert_eq!(observed.register("r0"), 0);
+    assert_eq!(observed.bytes(0x4000), "01020304");
+    assert!(observed.observation.events.is_empty());
+}
+
+#[test]
+fn an_extra_scripted_call_fails_after_the_last_declared_call() {
+    let observed = Case::new(&[PUSH_LR, branch(CODE + 4, STUB, true), branch(CODE + 8, STUB, true), POP_PC])
+        .script(STUB, vec![ScriptCall::scalar(&[], &[(0, 7)])])
+        .run();
+    observed.assert_stopped(Status::StubContract, CODE + 8);
+    assert_eq!(observed.register("r0"), 7);
+    assert_eq!(
+        observed.observation.events,
+        [Event { address: "0x00002000".into(), inputs: bindings(&[]), outputs: bindings(&[("r0", 7)]) }]
+    );
+}
+
+#[test]
+fn returning_with_an_omitted_scripted_call_is_a_contract_failure() {
+    let observed = Case::new(&[branch(CODE, STUB, false)])
+        .script(STUB, vec![ScriptCall::scalar(&[], &[(0, 7)]), ScriptCall::scalar(&[], &[(0, 9)])])
+        .run();
+    observed.assert_stopped(Status::StubContract, EXIT);
+    assert_eq!(observed.register("r0"), 7);
+    assert_eq!(observed.observation.events.len(), 1);
+
+    let uncalled = Case::new(&[BX_LR]).script(STUB, vec![ScriptCall::default()]).run();
+    uncalled.assert_stopped(Status::StubContract, EXIT);
+    assert!(uncalled.observation.events.is_empty());
+}
+
+#[test]
+fn pending_scripted_calls_do_not_replace_an_execution_failure() {
+    let observed = Case::new(&[LDR_R0_R1, BX_LR]).register(1, 0x5000).script(STUB, vec![ScriptCall::default()]).run();
+    observed.assert_stopped(Status::MemoryGuard, CODE);
+    assert!(observed.observation.events.is_empty());
+}
+
+#[test]
+fn scripted_output_bytes_reach_the_indirect_fifth_argument_on_the_stack() {
+    // push {lr}; sub sp, sp, #4; str r1, [sp]; bl STUB; ldr r0, [r1]; add sp, sp, #4; pop {pc}
+    let observed = Case::new(&[
+        PUSH_LR,
+        0xe24d_d004,
+        0xe58d_1000,
+        branch(CODE + 12, STUB, true),
+        LDR_R0_R1,
+        0xe28d_d004,
+        POP_PC,
+    ])
+    .register(1, 0x4000)
+    .region(0x4000, READ_WRITE, &[0; 4])
+    .script(
+        STUB,
+        vec![ScriptCall {
+            inputs: vec![(13, SP - 8)],
+            reads: vec![
+                ScriptMemory::new(MemoryTarget::Register(13), 0, &0x4000u32.to_le_bytes()),
+                ScriptMemory::new(MemoryTarget::Indirect(13), 0, &[0; 4]),
+            ],
+            writes: vec![ScriptMemory::new(MemoryTarget::Indirect(13), 0, &[0x12, 0x34, 0x56, 0x78])],
+            ..ScriptCall::default()
+        }],
+    )
+    .run();
+    observed.assert_returned();
+    assert_eq!(observed.register("r0"), 0x7856_3412);
+    assert_eq!(observed.register("sp"), SP);
+    assert_eq!(observed.bytes(0x4000), "12345678");
+    assert_eq!(
+        observed.observation.events,
+        [Event { address: "0x00002000".into(), inputs: bindings(&[("sp", SP - 8)]), outputs: bindings(&[]) }]
+    );
+}
+
+#[test]
+fn scripted_memory_ranges_and_pointer_overflow_are_memory_guards() {
+    let invalid = [
+        (MemoryTarget::Absolute(0x5000), 0, 0x4000),
+        (MemoryTarget::Absolute(0x4006), 0, 0x4000),
+        (MemoryTarget::Absolute(u32::MAX - 1), 0, 0x4000),
+        (MemoryTarget::Absolute(0), -1, 0x4000),
+        (MemoryTarget::Register(1), 0, 0x5000),
+        (MemoryTarget::Register(1), 4, u32::MAX - 1),
+        (MemoryTarget::Register(1), -1, 0),
+        (MemoryTarget::Indirect(1), 0, 0x5000),
+        (MemoryTarget::Indirect(1), 4, u32::MAX - 1),
+        (MemoryTarget::Indirect(1), -1, 0),
+        (MemoryTarget::Indirect(13), 0, 0x5000),
+        (MemoryTarget::Indirect(13), 0, u32::MAX - 1),
+    ];
+    for (target, offset, pointer) in invalid {
+        for write in [false, true] {
+            let memory = ScriptMemory::new(target, offset, &[0; 4]);
+            let call = if write {
+                ScriptCall { writes: vec![memory], ..ScriptCall::default() }
+            } else {
+                ScriptCall { reads: vec![memory], ..ScriptCall::default() }
+            };
+            let observed = Case::new(&[branch(CODE, STUB, false)])
+                .register(1, pointer)
+                .region(0x4000, READ_WRITE, &[0; 8])
+                .region(SP, READ_WRITE, &pointer.to_le_bytes())
+                .script(STUB, vec![call])
+                .run();
+            observed.assert_stopped(Status::MemoryGuard, CODE);
+            assert!(observed.observation.events.is_empty());
+        }
+    }
+}
+
+#[test]
+fn scripted_writes_cannot_modify_read_only_memory() {
+    for target in [MemoryTarget::Absolute(0x4000), MemoryTarget::Register(1), MemoryTarget::Indirect(13)] {
+        let observed = Case::new(&[branch(CODE, STUB, false)])
+            .register(1, 0x4000)
+            .region(0x4000, READ, &[1, 2, 3, 4])
+            .region(SP, READ, &0x4000u32.to_le_bytes())
+            .script(
+                STUB,
+                vec![ScriptCall {
+                    reads: vec![ScriptMemory::new(target, 0, &[1, 2, 3, 4])],
+                    writes: vec![ScriptMemory::new(target, 0, &[5, 6, 7, 8])],
+                    ..ScriptCall::default()
+                }],
+            )
+            .run();
+        observed.assert_stopped(Status::MemoryGuard, CODE);
+        assert_eq!(observed.bytes(0x4000), "01020304");
+        assert!(observed.observation.events.is_empty());
+    }
+}
+
+#[test]
+fn legacy_stub_wires_keep_repeatable_and_optional_calls() {
+    let legacy = Case::new(&[PUSH_LR, branch(CODE + 4, STUB, true), branch(CODE + 8, STUB, true), POP_PC])
+        .stub(STUB, &[(0, 5)], &[(0, 5)])
+        .register(0, 5);
+    let wire = legacy.wire();
+    assert!(wire.starts_with("FUJI_NATIVE_V1\n"));
+    assert!(wire.ends_with("2000 1 1\n0 5\n0 5\n"));
+    let observed = observe(wire.as_bytes());
+    observed.assert_returned();
+    assert_eq!(observed.register("r0"), 5);
+    let event = Event { address: "0x00002000".into(), inputs: bindings(&[("r0", 5)]), outputs: bindings(&[("r0", 5)]) };
+    assert_eq!(observed.observation.events, [event.clone(), event]);
+
+    let uncalled = Case::new(&[BX_LR]).stub(STUB, &[], &[(0, 7)]).run();
+    uncalled.assert_returned();
+    assert_eq!(uncalled.register("r0"), 0);
+    assert!(uncalled.observation.events.is_empty());
+}
+
+#[test]
+fn legacy_wire_bytes_and_return_behavior_match_the_fixed_fixture() {
+    let mut case = Case::new(&[BX_LR]);
+    case.exit = CODE + 4;
+    case.registers[13] = STACK + 4;
+    case.registers[14] = CODE + 4;
+    case.regions[0].size = 8;
+    case.regions[0].bytes = words(&[BX_LR, 0]);
+    case.regions[1].size = 4;
+    case.regions[1].bytes = vec![0; 4];
+    let fixture = concat!(
+        "FUJI_NATIVE_V1\n",
+        "cortex-r5f-arm-le\n",
+        "1000 1004 1000 1000\n",
+        "0 0 0 0 0 0 0 0 0 0 0 0 0 3004 1004 10\n",
+        "2 1 0\n",
+        "1000 8 5 1eff2fe100000000\n",
+        "3000 4 3 00000000\n",
+        "1000 4\n",
+    );
+    assert_eq!(case.wire().as_bytes(), fixture.as_bytes());
+    let observed = observe(fixture.as_bytes());
+    assert!(observed.returned);
+    assert_eq!(observed.status(), Status::Returned);
+    assert_eq!(observed.register("pc"), CODE + 4);
+    assert_eq!(observed.register("sp"), STACK + 4);
+    assert!(observed.observation.events.is_empty());
 }
 
 #[test]

@@ -1,4 +1,4 @@
-//! `FUJI_NATIVE_V1` wire on stdin, one observation line on stdout. Exit 0
+//! `FUJI_NATIVE_V1` or `FUJI_NATIVE_SCRIPT_V1` on stdin, one observation line on stdout. Exit 0
 //! means `returned`, 1 any other observation, 2 an I/O failure.
 //!
 //! With the sole argument `--batch`: a `FUJI_NATIVE_BATCH_V1` wire on stdin and

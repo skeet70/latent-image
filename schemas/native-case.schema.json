@@ -57,11 +57,8 @@
     },
     "stubs": {
       "type": "array", "maxItems": 32,
-      "items": {
-        "type": "object", "additionalProperties": false,
-        "required": ["address", "inputs", "outputs", "side_effects"],
-        "properties": {"address": {"$ref": "#/$defs/u32"}, "inputs": {"$ref": "#/$defs/stubRegisters"}, "outputs": {"$ref": "#/$defs/stubRegisters", "minProperties": 1}, "side_effects": {"const": "registers-only"}}
-      }
+      "items": {"oneOf": [{"$ref": "#/$defs/legacyStub"}, {"$ref": "#/$defs/scriptStub"}]},
+      "description": "All stubs in a case use one form. Script calls total at most 128 and their read/write bytes total at most 4194304."
     },
     "limits": {
       "type": "object", "additionalProperties": false, "required": ["instructions", "wall_ms"],
@@ -77,9 +74,14 @@
           "type": "array", "maxItems": 64,
           "items": {"type": "object", "additionalProperties": false, "required": ["region", "offset", "hex"], "properties": {"region": {"$ref": "#/$defs/id"}, "offset": {"type": "integer", "minimum": 0, "maximum": 2097152}, "hex": {"type": "string", "pattern": "^([0-9a-f]{2})+$", "maxLength": 4194304}}}
         },
+        "ignored_memory": {
+          "type": "array", "minItems": 1, "maxItems": 64,
+          "description": "Disjoint private frame spans in the writable region containing entry SP, ending at or below entry SP, disjoint from expected.memory. At most 4194304 bytes total. Requires scripted stubs or no stubs.",
+          "items": {"type": "object", "additionalProperties": false, "required": ["region", "offset", "length"], "properties": {"region": {"$ref": "#/$defs/id"}, "offset": {"type": "integer", "minimum": 0, "maximum": 2097152}, "length": {"$ref": "#/$defs/size"}}}
+        },
         "events": {
           "type": "array", "maxItems": 128,
-          "items": {"type": "object", "additionalProperties": false, "required": ["address", "inputs", "outputs"], "properties": {"address": {"$ref": "#/$defs/u32"}, "inputs": {"$ref": "#/$defs/stubRegisters"}, "outputs": {"$ref": "#/$defs/stubRegisters"}}}
+          "items": {"type": "object", "additionalProperties": false, "required": ["address", "inputs", "outputs"], "properties": {"address": {"$ref": "#/$defs/u32"}, "inputs": {"$ref": "#/$defs/scriptRegisters"}, "outputs": {"$ref": "#/$defs/stubRegisters"}}}
         },
         "kernel": {"$ref": "#/$defs/kernelRegisters", "description": "Final TPIDRURW and FPEXC of a kernel case that declares them, and the word its last LDREX reserved."}
       }
@@ -110,6 +112,13 @@
       }
     }
   },
+  "allOf": [
+    {
+      "if": {"anyOf": [{"properties": {"stubs": {"contains": {"required": ["calls"]}}}}, {"properties": {"expected": {"required": ["ignored_memory"]}}}]},
+      "then": {"properties": {"stubs": {"items": {"$ref": "#/$defs/scriptStub"}}}},
+      "else": {"properties": {"expected": {"properties": {"events": {"items": {"properties": {"inputs": {"$ref": "#/$defs/stubRegisters"}}}}}}}}
+    }
+  ],
   "$defs": {
     "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$"},
     "u32": {"type": "string", "pattern": "^0x[0-9a-f]{8}$"},
@@ -121,6 +130,28 @@
       }
     },
     "stubRegisters": {"allOf": [{"$ref": "#/$defs/registers"}], "not": {"anyOf": [{"required": ["sp"]}, {"required": ["lr"]}, {"required": ["cpsr"]}, {"required": ["pc"]}]}},
+    "scriptRegisters": {"allOf": [{"$ref": "#/$defs/registers"}], "not": {"anyOf": [{"required": ["cpsr"]}, {"required": ["pc"]}]}},
+    "legacyStub": {"type": "object", "additionalProperties": false, "required": ["address", "inputs", "outputs", "side_effects"], "properties": {"address": {"$ref": "#/$defs/u32"}, "inputs": {"$ref": "#/$defs/stubRegisters"}, "outputs": {"$ref": "#/$defs/stubRegisters", "minProperties": 1}, "side_effects": {"const": "registers-only"}}},
+    "scriptStub": {
+      "type": "object", "additionalProperties": false, "required": ["address", "calls"],
+      "properties": {"address": {"$ref": "#/$defs/u32"}, "calls": {"type": "array", "minItems": 1, "maxItems": 128, "items": {"$ref": "#/$defs/scriptCall"}}}
+    },
+    "scriptCall": {
+      "type": "object", "additionalProperties": false, "required": ["inputs", "outputs", "reads", "writes"],
+      "properties": {"inputs": {"$ref": "#/$defs/scriptRegisters"}, "outputs": {"$ref": "#/$defs/stubRegisters"}, "reads": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/contractMemory"}}, "writes": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/contractMemory"}}},
+      "description": "At most 64 read and write rows combined."
+    },
+    "contractMemory": {
+      "type": "object", "additionalProperties": false, "required": ["offset", "hex"],
+      "oneOf": [{"required": ["address"]}, {"required": ["register"]}, {"required": ["indirect_register"]}],
+      "properties": {
+        "address": {"$ref": "#/$defs/u32"},
+        "register": {"enum": ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "r12", "sp", "lr"]},
+        "indirect_register": {"enum": ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "r12", "sp", "lr"]},
+        "offset": {"type": "integer", "minimum": -2147483648, "maximum": 2147483647},
+        "hex": {"type": "string", "pattern": "^([0-9a-f]{2})+$", "maxLength": 4194304}
+      }
+    },
     "kernelRegisters": {"type": "object", "additionalProperties": false, "properties": {"tpidrurw": {"$ref": "#/$defs/u32"}, "fpexc": {"$ref": "#/$defs/u32"}, "reserved": {"$ref": "#/$defs/u32"}}},
     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "batch": {
