@@ -12,6 +12,7 @@ module Emulation.HostAdmission
   , parseScopeName
   , reserveMemory
   , claimScopeRecord
+  , lockOwnerText
   ) where
 
 import Control.Concurrent (forkIO, threadDelay)
@@ -547,6 +548,11 @@ sampleOf :: KernelOwner -> Maybe HolderDetails -> OwnerSample
 sampleOf (KernelOwner pid) details = OwnerReported pid details
 sampleOf KernelUnlocked _ = OwnerNone
 sampleOf KernelUnknown _ = OwnerUnknown
+
+lockOwnerText :: Fd -> IO String
+lockOwnerText fd = do
+  owner <- queryKernelOwner fd
+  pure (holderText (sampleOf owner Nothing))
 
 queryKernelOwner :: Fd -> IO KernelOwner
 queryKernelOwner fd = do

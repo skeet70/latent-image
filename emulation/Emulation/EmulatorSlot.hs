@@ -17,7 +17,7 @@ import qualified Data.ByteString as B
 import Data.Char (isDigit)
 import Data.List (isSuffixOf, stripPrefix)
 import qualified Emulation.HostAdmission as Host
-import Emulation.HostAdmission (MemoryMax (..), ResourceClass (Emulator), ScopeName, claimScopeRecord, classConcurrency, classMemoryMax, memoryMaxBytes, parseMemoryMax, parseScopeName, reserveMemory, userScopeAvailable)
+import Emulation.HostAdmission (MemoryMax (..), ResourceClass (Emulator), ScopeName, claimScopeRecord, classConcurrency, classMemoryMax, lockOwnerText, memoryMaxBytes, parseMemoryMax, parseScopeName, reserveMemory, userScopeAvailable)
 import FujiAF.StorageBudget (checkStorageBudget)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, getCurrentDirectory, getHomeDirectory, listDirectory, removeFile)
 import System.Environment (getExecutablePath, lookupEnv, setEnv, unsetEnv)
@@ -25,7 +25,7 @@ import System.FilePath ((</>))
 import System.IO (Handle, IOMode (ReadMode, WriteMode), SeekMode (AbsoluteSeek), hFlush, hPutStrLn, stderr, withBinaryFile)
 import System.IO.Error (catchIOError, isDoesNotExistError)
 import System.Posix.Files (createSymbolicLink, setFileMode)
-import System.Posix.IO (LockRequest (WriteLock), OpenFileFlags (creat), OpenMode (ReadWrite), closeFd, defaultFileFlags, getLock, openFd, setLock)
+import System.Posix.IO (LockRequest (WriteLock), OpenFileFlags (creat), OpenMode (ReadWrite), closeFd, defaultFileFlags, openFd, setLock)
 import System.Posix.Process (executeFile, getProcessID)
 import System.Posix.Types (ProcessID)
 import Text.Read (readMaybe)
@@ -171,8 +171,8 @@ acquire directory execution scope = do
             claimScopeRecord (directory </> (prefix ++ show slot ++ ".scope")) scope
             pure (Just (Slot slot))
           Left _ -> do
-            owner <- getLock fd (WriteLock, AbsoluteSeek, 0, 0)
-            hPutStrLn stderr ("host admission: " ++ prefix ++ show slot ++ " owner=" ++ show owner)
+            owner <- lockOwnerText fd
+            hPutStrLn stderr ("host admission: " ++ prefix ++ show slot ++ " " ++ owner)
             closeFd fd
             firstFree prefix rest
   attempt
