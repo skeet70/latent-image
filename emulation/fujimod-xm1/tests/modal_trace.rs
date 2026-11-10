@@ -414,6 +414,7 @@ fn installed_current_case(kernel: fujimod_xm1::modal_permit::CoreId, case: Curre
     let mappings: Vec<_> = (0..2).flat_map(|core| [
         MemoryMap { core, address: 0, physical: 0, size: 0x0130_0000, permissions: 7 },
         MemoryMap { core, address: 0x4000_0000, physical: 0, size: 0x0130_0000, permissions: 7 },
+        MemoryMap { core, address: 0x0146_7000, physical: 0x0146_7000, size: 0x1000, permissions: 7 },
     ]).collect();
     let graph = Graph {
         processors: (0..2).map(|index| Processor {
@@ -422,8 +423,8 @@ fn installed_current_case(kernel: fujimod_xm1::modal_permit::CoreId, case: Curre
                 (arm::CORE[0], u64::from(base)), (arm::CORE[1], u64::from(node.0)),
                 (Register::Arm32(arm::Register::R(13)), 0x8000)],
         }).collect(),
-        ram: vec![Ram { base: 0, size: 0x0130_0000 }],
-        dma_mappings: vec![BusMapping::ram(0, 0x0130_0000)],
+        ram: vec![Ram { base: 0, size: 0x0130_0000 }, Ram { base: 0x0146_7000, size: 0x1000 }],
+        dma_mappings: vec![BusMapping::ram(0, 0x0130_0000), BusMapping::ram(0x0146_7000, 0x1000)],
         decoders: vec![], peripherals: vec![], mappings,
         instructions_per_tick: Ratio::new(1, 1).unwrap(),
     };
