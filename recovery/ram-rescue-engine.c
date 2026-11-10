@@ -1,4 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
+/* Darwin hides O_NOFOLLOW under _POSIX_C_SOURCE alone. */
+#define _DARWIN_C_SOURCE
 #include <unicorn/unicorn.h>
 #include <unicorn/arm.h>
 #include <inttypes.h>

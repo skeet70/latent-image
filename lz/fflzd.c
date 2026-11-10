@@ -42,8 +42,13 @@ static uint32_t le32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | 
 
 int main(int argc, char **argv) {
     if (argc != 4 && argc != 5) { fprintf(stderr, "usage: fflzd PAYLOAD OFFSET OUT [EXPECTED_SIZE]\n"); return 2; }
-    struct rlimit rc = {10, 10}, ra = {256u << 20, 256u << 20}, rf = {MAX_OUT, MAX_OUT};
-    if (setrlimit(RLIMIT_CPU, &rc) || setrlimit(RLIMIT_AS, &ra) || setrlimit(RLIMIT_FSIZE, &rf)) die("setrlimit", errno, 0);
+    struct rlimit rc = {10, 10}, rf = {MAX_OUT, MAX_OUT};
+    if (setrlimit(RLIMIT_CPU, &rc) || setrlimit(RLIMIT_FSIZE, &rf)) die("setrlimit", errno, 0);
+#ifndef __APPLE__
+    /* Darwin refuses an address-space limit this small: EINVAL up to at least 64 GiB. */
+    struct rlimit ra = {256u << 20, 256u << 20};
+    if (setrlimit(RLIMIT_AS, &ra)) die("setrlimit", errno, 0);
+#endif
     signal(SIGALRM, on_alarm);
     alarm(15);
 

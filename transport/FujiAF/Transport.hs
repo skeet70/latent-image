@@ -34,7 +34,7 @@ data Candidate = Candidate { physicalPath :: String, vid :: Int, pid :: Int, des
   deriving (Eq, Show, Read)
 
 -- init/list/open/claim/transfer/release/close/exit are injected as one API.
--- Synthetic tests never call native_usb.c. Each stage receives remaining
+-- Synthetic tests never call the native provider. Each stage receives remaining
 -- milliseconds. A transfer reports a provider failure as ProviderFailure.
 data UsbApi = UsbApi
   { usbInit :: Int -> IO (), usbList :: Int -> IO [Candidate]
@@ -101,11 +101,11 @@ transferTimeoutMs = 5000
 transferCeilingMs :: Int
 transferCeilingMs = 33000
 
--- native_usb.c refuses a larger control or bulk OUT transfer.
+-- The native provider refuses a larger control or bulk OUT transfer.
 transferCeilingBytes :: Int
 transferCeilingBytes = 292
 
--- native_usb.c refuses a larger bulk IN: one read-bulk chunk.
+-- The native provider refuses a larger bulk IN: one read-bulk chunk.
 bulkInCeilingBytes :: Int
 bulkInCeilingBytes = 0x100000
 
@@ -114,7 +114,7 @@ transferLength (P.ControlWrite _ _ _ _ bytes) = length bytes
 transferLength (P.BulkOut _ bytes) = length bytes
 transferLength (P.BulkIn _ count) = count
 
--- The shapes native_usb.c sends: the twelve-byte vendor control write, bulk
+-- The shapes the native provider sends: the twelve-byte vendor control write, bulk
 -- OUT of 1..transferCeilingBytes and bulk IN of 1..bulkInCeilingBytes.
 supportedTransfer :: P.Transfer -> Bool
 supportedTransfer packet = case packet of

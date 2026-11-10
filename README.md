@@ -6,7 +6,7 @@ Today, the project provides firmware analysis tools, a synthetic autofocus simul
 
 ## Try it on your host
 
-The supported build host is Linux x86_64 with [Nix](https://nixos.org/download/) and [devenv](https://devenv.sh/getting-started/). Bazel owns the build; the checked-in devenv environment supplies pinned dependencies. Initial setup downloads toolchains and dependencies.
+Supported build hosts are Linux x86_64 and macOS on Apple silicon, each with [Nix](https://nixos.org/download/) and [devenv](https://devenv.sh/getting-started/). On Windows, install [WSL 2](https://learn.microsoft.com/windows/wsl/install) and run the Linux instructions inside it. Bazel owns the build; the checked-in devenv environment supplies pinned dependencies. Initial setup downloads toolchains and dependencies; on macOS it also builds FujiMod and the matching compilers from source. Host-maintenance targets that rely on systemd or `/proc` are Linux-only and skipped on macOS ([macOS host](build-support/README.md#macos-host)).
 
 ```sh
 git clone https://github.com/skeet70/latent-image.git

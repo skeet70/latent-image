@@ -7,8 +7,15 @@ load("@rules_nixpkgs_core//:nixpkgs.bzl", "nixpkgs_local_repository", "nixpkgs_p
 _UNICORN_BUILD = """
 load("@rules_cc//cc:defs.bzl", "cc_import", "cc_library")
 package(default_visibility = ["//visibility:public"])
-# Preserve the SONAME in Bazel's runtime symlinks as well as at link time.
-cc_import(name = "shared", shared_library = "lib/libunicorn.so.2")
+# Preserve the SONAME or install name in Bazel's runtime symlinks as well as at
+# link time.
+cc_import(
+    name = "shared",
+    shared_library = select({
+        "@platforms//os:macos": "lib/libunicorn.2.dylib",
+        "//conditions:default": "lib/libunicorn.so.2",
+    }),
+)
 cc_library(
     name = "unicorn",
     hdrs = glob(["include/unicorn/*.h"]),
@@ -30,22 +37,19 @@ cc_library(
 )
 """
 
-_LIBUSB_HEADERS_BUILD = """
-load("@rules_cc//cc:defs.bzl", "cc_library")
+# The camera transport's USB provider with rustc's native-static-libs for each host.
+_FUJI_USB_BUILD = """
+load("@rules_cc//cc:defs.bzl", "cc_import", "cc_library")
 package(default_visibility = ["//visibility:public"])
-# Camera operations open the runtime by path, as does the transport test that
-# exercises the lister. Do not link libusb or run its initialization anywhere
-# else.
+cc_import(name = "archive", static_library = "lib/libfuji_usb.a")
 cc_library(
-    name = "headers",
-    hdrs = glob(["include/libusb-1.0/*.h"]),
-    includes = ["include/libusb-1.0"],
+    name = "fuji-usb",
+    linkopts = select({
+        "@platforms//os:macos": ["-framework", "IOKit", "-framework", "CoreFoundation", "-liconv"],
+        "//conditions:default": ["-lgcc_s", "-lutil", "-lrt", "-lpthread", "-lm", "-ldl"],
+    }),
+    deps = [":archive"],
 )
-"""
-
-# Exported for its store path alone; nothing depends on these bytes at link time.
-_LIBUSB_RUNTIME_BUILD = """
-exports_files(["share/libusb-runtime/store-path"], visibility = ["//visibility:public"])
 """
 
 _FUJIMOD_NIX_DEPS = [
@@ -245,17 +249,18 @@ def _lab_dependencies_impl(_ctx):
         build_file_content = _RECORDER_PYTHON_BUILD,
     )
     nixpkgs_package(
-        name = "lab_libusb",
-        attribute_path = "libusb1.dev",
+        name = "lab_fuji_usb",
+        nix_file = "//build-support:fuji-usb.nix",
+        nix_file_deps = [
+            "//:devenv.lock",
+            "//build-support:nixpkgs.nix",
+            "//transport:usb/Cargo.lock",
+            "//transport:usb/Cargo.toml",
+            "//transport:usb/src/lib.rs",
+            "//transport:usb/src/tests.rs",
+        ],
         repository = "@lab_nixpkgs",
-        build_file_content = _LIBUSB_HEADERS_BUILD,
-    )
-    nixpkgs_package(
-        name = "lab_libusb_runtime",
-        nix_file = "//build-support:libusb-runtime.nix",
-        nix_file_deps = ["//build-support:nixpkgs.nix", "//:devenv.lock"],
-        repository = "@lab_nixpkgs",
-        build_file_content = _LIBUSB_RUNTIME_BUILD,
+        build_file_content = _FUJI_USB_BUILD,
     )
     for name, attribute, binary in [
         ("lab_jsonschema", "check-jsonschema", "check-jsonschema"),
@@ -385,6 +390,9 @@ def _lab_dependencies_impl(_ctx):
         nix_file = "//build-support:exr2-gcc.nix",
         nix_file_deps = [
             "//build-support:nixpkgs.nix",
+            "//build-support:exr2-gcc/gcc-darwin-arm64-generator-abi.patch",
+            "//build-support:exr2-gcc/gcc-darwin-arm64-host.patch",
+            "//build-support:exr2-gcc/gcc-generator-callbacks.patch",
             "//build-support:exr2-gcc/host-qsort.c",
             "//:devenv.lock",
         ],
