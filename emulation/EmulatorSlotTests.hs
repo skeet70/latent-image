@@ -4,6 +4,7 @@ module Main (main) where
 import Control.Concurrent (threadDelay)
 import Control.Exception (IOException, try)
 import Control.Monad (forM, unless)
+import Data.Char (isHexDigit)
 import Data.IORef (modifyIORef, newIORef, readIORef)
 import Data.List (isInfixOf, stripPrefix)
 import Data.Maybe (fromMaybe, mapMaybe)
@@ -17,7 +18,7 @@ import System.Posix.Process (getProcessID)
 import System.Posix.Signals (nullSignal, sigKILL, signalProcess)
 import System.Posix.Types (ProcessID)
 import System.Posix.User (getEffectiveUserID)
-import System.Process (CreateProcess (..), ProcessHandle, StdStream (CreatePipe), createProcess, getPid, getProcessExitCode, proc, readCreateProcessWithExitCode, readProcessWithExitCode, waitForProcess)
+import System.Process (CreateProcess (..), ProcessHandle, StdStream (CreatePipe), createProcess, getPid, getProcessExitCode, proc, readCreateProcessWithExitCode, waitForProcess)
 import System.Timeout (timeout)
 import Text.Read (readMaybe)
 
@@ -26,6 +27,9 @@ expect name ok = putStrLn ((if ok then "ok   " else "FAIL ") ++ name) >> pure ok
 
 data Probe = Probe Handle Handle ProcessHandle
 data Admission = Admission [String] (Maybe String)
+  deriving (Show)
+newtype ObservedInvocation = ObservedInvocation String
+  deriving (Eq, Show)
 
 main :: IO ()
 main = do
@@ -214,27 +218,29 @@ run source builder wrapper = do
   originalOwner <- spawn environment
   originalSeen <- admission originalOwner
   let reusedUnit = fromMaybe "missing.scope" (observedText "probe-unit " originalSeen)
-  originalInvocation <- invocationOf reusedUnit
+  originalInvocation <- invocationOf environment reusedUnit
   release originalOwner
   _ <- finish originalOwner
-  waitUnitEnded 50 reusedUnit
+  waitUnitEnded environment 50 reusedUnit
   unrelatedOwner <- rawScope reusedUnit
   unrelatedSeen <- admission unrelatedOwner
-  unrelatedInvocation <- invocationOf reusedUnit
+  unrelatedInvocation <- invocationOf environment reusedUnit
   nativeAfterReuse <- spawn native
   nativeAfterReuseSeen <- admission nativeAfterReuse
   fullAfterReuse <- spawn environment
   fullAfterReuseSeen <- admission fullAfterReuse
   unrelatedAlive <- processAlive unrelatedSeen
   reusedManagedOk <- expect "managed memory and class records never stop a reused unit's different invocation"
-    (admitted originalSeen && admitted unrelatedSeen && not (null originalInvocation) && originalInvocation /= unrelatedInvocation && admitted nativeAfterReuseSeen && admitted fullAfterReuseSeen && unrelatedAlive)
+    (admitted originalSeen && admitted unrelatedSeen && originalInvocation /= unrelatedInvocation && admitted nativeAfterReuseSeen && admitted fullAfterReuseSeen && unrelatedAlive)
+  unless reusedManagedOk $ putStrLn ("managed reuse observations: " ++
+    show (originalInvocation, unrelatedInvocation, originalSeen, unrelatedSeen, nativeAfterReuseSeen, fullAfterReuseSeen, unrelatedAlive))
   mapM_ release [unrelatedOwner, nativeAfterReuse, fullAfterReuse]
   mapM_ finish [unrelatedOwner, nativeAfterReuse, fullAfterReuse]
 
   let legacyUnit = "xm1-test-legacy-" ++ show pid ++ ".scope"
   legacy <- rawScope legacyUnit
   legacySeen <- admission legacy
-  originalLegacyInvocation <- invocationOf legacyUnit
+  originalLegacyInvocation <- invocationOf environment legacyUnit
   (_, _, Just ready, reservation) <- createProcess (proc builder ["--reserve-legacy", legacyUnit]) {env = Just environment, std_err = CreatePipe}
   reserved <- timeout 10_000_000 (hGetLine ready)
   getPid reservation >>= mapM_ (signalProcess sigKILL)
@@ -259,15 +265,17 @@ run source builder wrapper = do
     (admitted legacySeen && maybe False (isInfixOf "legacy reservation ready:") reserved && all admitted [legacyBuildSeenA, legacyBuildSeenB, legacyNativeSeenA, legacyNativeSeenB] && legacyBlocked && legacyAlive && reservationCode /= Nothing && reservationCode /= Just ExitSuccess && admitted legacyResumed)
   mapM_ release [legacyBuildA, legacyBuildB, legacyNativeA, legacyNativeB, legacyWaiter]
   mapM_ finish [legacyBuildA, legacyBuildB, legacyNativeA, legacyNativeB, legacyWaiter]
-  waitUnitEnded 50 legacyUnit
+  waitUnitEnded environment 50 legacyUnit
   reusedLegacy <- rawScope legacyUnit
   reusedLegacySeen <- admission reusedLegacy
-  reusedLegacyInvocation <- invocationOf legacyUnit
+  reusedLegacyInvocation <- invocationOf environment legacyUnit
   afterLegacyReuse <- spawn native
   afterLegacyReuseSeen <- admission afterLegacyReuse
   reusedLegacyAlive <- processAlive reusedLegacySeen
   reusedLegacyOk <- expect "expired legacy protection never stops a different invocation reusing its unit name"
     (admitted reusedLegacySeen && originalLegacyInvocation /= reusedLegacyInvocation && admitted afterLegacyReuseSeen && reusedLegacyAlive)
+  unless reusedLegacyOk $ putStrLn ("legacy reuse observations: " ++
+    show (originalLegacyInvocation, reusedLegacyInvocation, reusedLegacySeen, afterLegacyReuseSeen, reusedLegacyAlive))
   mapM_ release [reusedLegacy, afterLegacyReuse]
   mapM_ finish [reusedLegacy, afterLegacyReuse]
   (invalidLegacy, _, _) <- readCreateProcessWithExitCode (proc builder ["--reserve-legacy", "missing.scope"]) {env = Just environment} ""
@@ -281,9 +289,13 @@ run source builder wrapper = do
     (proc source []) {env = Just (change "XM1_NATIVE_MEMORY_MAX" "8G" native)} ""
   capOk <- expect "native scopes above their class cap are refused"
     (capCode /= ExitSuccess && not ("probe-in-slot " `isInfixOf` capOutput))
-  (sessionCode, _, _) <- readCreateProcessWithExitCode
-    (proc source []) {env = Just (change "DBUS_SESSION_BUS_ADDRESS" "unix:path=/nonexistent-xm1-test-bus" environment)} ""
+  let missingRuntime = root </> "no-session"
+      sessionless = change "XDG_RUNTIME_DIR" missingRuntime
+        (change "DBUS_SESSION_BUS_ADDRESS" ("unix:path=" ++ missingRuntime ++ "/bus") environment)
+  (sessionCode, sessionOutput, sessionError) <- readCreateProcessWithExitCode
+    (proc source []) {env = Just sessionless} ""
   sessionOk <- expect "a missing user manager cannot silently bypass memory enforcement" (sessionCode /= ExitSuccess)
+  unless sessionOk $ putStrLn ("sessionless observations: " ++ show (sessionCode, sessionOutput, sessionError))
   let failedRunner = root </> "failed-runner"
   createDirectoryIfMissing True failedRunner
   writeFile (failedRunner </> "systemd-run") "#!/bin/sh\nexit 43\n"
@@ -319,18 +331,24 @@ processAlive seen = case observedPid "probe-pid " seen of
   Nothing -> pure False
   Just owner -> either (const False) (const True) <$> (try (signalProcess nullSignal owner) :: IO (Either IOException ()))
 
-invocationOf :: String -> IO String
-invocationOf unit = do
-  (_, out, _) <- readProcessWithExitCode "systemctl" ["--user", "show", unit, "-p", "InvocationID", "--value"] ""
-  pure (unwords (words out))
+invocationOf :: [(String, String)] -> String -> IO ObservedInvocation
+invocationOf environment unit = do
+  (code, out, err) <- readCreateProcessWithExitCode
+    (proc "systemctl" ["--user", "show", unit, "-p", "InvocationID", "--value"]) {env = Just environment} ""
+  let identity = unwords (words out)
+  if code == ExitSuccess && length identity == 32 && all isHexDigit identity
+    then pure (ObservedInvocation identity)
+    else ioError (userError ("cannot observe invocation of " ++ unit ++ ": " ++ show (code, out, err)))
 
-waitUnitEnded :: Int -> String -> IO ()
-waitUnitEnded attempts unit = do
-  (_, out, _) <- readProcessWithExitCode "systemctl" ["--user", "show", unit, "-p", "ActiveState", "--value"] ""
-  let active = unwords (words out) `elem` ["active", "activating", "deactivating"]
-  if active && attempts > 0
-    then threadDelay 100_000 >> waitUnitEnded (attempts - 1) unit
-    else pure ()
+waitUnitEnded :: [(String, String)] -> Int -> String -> IO ()
+waitUnitEnded environment attempts unit = do
+  (code, out, err) <- readCreateProcessWithExitCode
+    (proc "systemctl" ["--user", "show", unit, "-p", "ActiveState", "--value"]) {env = Just environment} ""
+  case unwords (words out) of
+    state | state `elem` ["inactive", "failed"] -> pure ()
+    state | state `elem` ["active", "activating", "deactivating"], attempts > 0 ->
+      threadDelay 100_000 >> waitUnitEnded environment (attempts - 1) unit
+    _ -> ioError (userError ("cannot observe completed scope " ++ unit ++ ": " ++ show (code, out, err)))
 
 waitGone :: Int -> ProcessID -> IO Bool
 waitGone attempts pid = do
