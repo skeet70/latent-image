@@ -1,9 +1,14 @@
 use crate::render_commands::{DrawReport, FontId, NodeId, ResourceId, SideState};
-use crate::menu_widgets::tree_list::{Child, DrawServices, HookRecord, ResourceDescriptor, Snapshot, Summary};
+use crate::menu_widgets::tree_list::{Child, DrawServices, HookRecord, NestedChild, ResourceDescriptor, Selection, Snapshot, SnapshotSource, Summary};
 use super::calls::*;
 
 pub(super) struct StockServices;
 unsafe extern "C" {
+    fn rb_render_call_61ce1c(node: u32, slot: u32, out: *mut Snapshot);
+    fn rb_render_call_11730dc(node: u32, kind: u32, record: *mut u32, selection: *mut u32, index: *mut u32) -> u32;
+    fn rb_render_call_bf8f4c(node: u32, parent: u32, out: *mut Summary);
+    fn rb_render_call_116d4e4(node: u32, parent: u32, selection: u32);
+    fn rb_render_call_1159168(node: u32, parent: u32, selection: u32);
     fn rb_render_call_7221c8(a0: *mut DrawReport, a1: u32, a2: u32);
     fn rb_render_call_bf8e64(a0: u32, a1: *mut Summary);
     fn rb_render_call_4d978(a0: u32, a1: u32) -> u32;
@@ -31,8 +36,33 @@ impl DrawServices for StockServices {
         unsafe { hook.assume_init() }
     }
     fn panel_font(&self) -> FontId { FontId(unsafe { core::ptr::read_volatile(0x15e46c0 as *const u32) }) }
-    fn live_snapshot(&mut self, out: &mut Snapshot) {
-        stock!(rb_render_call_61cd14, (out as *mut Snapshot).cast());
+    fn snapshot(&mut self, node: NodeId, source: SnapshotSource, out: &mut Snapshot) {
+        match source {
+            SnapshotSource::Live => stock!(rb_render_call_61cd14, (out as *mut Snapshot).cast()),
+            SnapshotSource::SavedSlot1 => stock!(rb_render_call_61ce1c, node.0, 1, out),
+            SnapshotSource::SavedSlot2 => stock!(rb_render_call_61ce1c, node.0, 2, out),
+        }
+    }
+    fn resolve_selection(&mut self, node: NodeId, selection: &mut Selection) -> bool {
+        stock!(rb_render_call_11730dc, node.0, 2, &mut selection.record, &mut selection.selection, &mut selection.index) != 0
+    }
+    fn nested_summary(&mut self, node: NodeId, parent: u32, out: &mut Summary) {
+        stock!(rb_render_call_bf8f4c, node.0, parent, out);
+    }
+    fn nested_child(&mut self, node: NodeId, parent: u32, index: u32, out: &mut NestedChild) {
+        stock!(rb_render_call_bf90f0, node.0, parent, index, (out as *mut NestedChild).cast());
+    }
+    fn nested_label(&mut self, node: NodeId, parent: u32, selection: u32) -> ResourceId {
+        ResourceId(stock!(rb_render_call_bf93e0, node.0, parent, selection, 1))
+    }
+    fn selection_hook(&mut self, record: &mut HookRecord) -> u32 {
+        stock!(rb_render_call_116f948, (record as *mut HookRecord).cast())
+    }
+    fn selected_detail(&mut self, node: NodeId, parent: u32, selection: u32) {
+        stock!(rb_render_call_116d4e4, node.0, parent, selection);
+    }
+    fn footer(&mut self, node: NodeId, parent: u32, selection: u32) {
+        stock!(rb_render_call_1159168, node.0, parent, selection);
     }
     fn clear_report(&mut self, out: &mut DrawReport) {
         stock!(rb_render_call_7221c8, out, 0, 68);

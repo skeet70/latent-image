@@ -7,7 +7,7 @@ mod render_commands;
 mod tree_list;
 
 use render_commands::{DrawReport, FontId, NodeId, ResourceId, SideState};
-use tree_list::{Child, DrawArgs, DrawMode, DrawServices, HookRecord, ResourceDescriptor, Snapshot, Summary};
+use tree_list::{Child, DrawArgs, DrawMode, DrawServices, HookRecord, NestedChild, NestedGrid, ResourceDescriptor, Selection, Snapshot, SnapshotSource, Summary};
 
 macro_rules! stock {
     ($address:expr, $signature:ty, $($argument:expr),* $(,)?) => {{
@@ -24,8 +24,33 @@ impl DrawServices for StockServices {
         unsafe { hook.assume_init() }
     }
     fn panel_font(&self) -> FontId { FontId(unsafe { core::ptr::read_volatile(0x15e46c0 as *const u32) }) }
-    fn live_snapshot(&mut self, out: &mut Snapshot) {
-        stock!(0x61cd14, unsafe extern "C" fn(*mut Snapshot), out);
+    fn snapshot(&mut self, node: NodeId, source: SnapshotSource, out: &mut Snapshot) {
+        match source {
+            SnapshotSource::Live => stock!(0x61cd14, unsafe extern "C" fn(*mut Snapshot), out),
+            SnapshotSource::SavedSlot1 => stock!(0x61ce1c, unsafe extern "C" fn(u32,u32,*mut Snapshot), node.0,1,out),
+            SnapshotSource::SavedSlot2 => stock!(0x61ce1c, unsafe extern "C" fn(u32,u32,*mut Snapshot), node.0,2,out),
+        }
+    }
+    fn resolve_selection(&mut self, node: NodeId, selection: &mut Selection) -> bool {
+        stock!(0x11730dc, unsafe extern "C" fn(u32,u32,*mut u32,*mut u32,*mut u32)->u32, node.0,2,&mut selection.record,&mut selection.selection,&mut selection.index) != 0
+    }
+    fn nested_summary(&mut self, node: NodeId, parent: u32, out: &mut Summary) {
+        stock!(0xbf8f4c, unsafe extern "C" fn(u32,u32,*mut Summary), node.0,parent,out);
+    }
+    fn nested_child(&mut self, node: NodeId, parent: u32, index: u32, out: &mut NestedChild) {
+        stock!(0xbf90f0, unsafe extern "C" fn(u32,u32,u32,*mut NestedChild), node.0,parent,index,out);
+    }
+    fn nested_label(&mut self, node: NodeId, parent: u32, selection: u32) -> ResourceId {
+        ResourceId(stock!(0xbf93e0, unsafe extern "C" fn(u32,u32,u32,u32)->u32,node.0,parent,selection,1))
+    }
+    fn selection_hook(&mut self, record: &mut HookRecord) -> u32 {
+        stock!(0x116f948, unsafe extern "C" fn(*mut HookRecord)->u32,record)
+    }
+    fn selected_detail(&mut self, node: NodeId, parent: u32, selection: u32) {
+        stock!(0x116d4e4, unsafe extern "C" fn(u32,u32,u32),node.0,parent,selection);
+    }
+    fn footer(&mut self, node: NodeId, parent: u32, selection: u32) {
+        stock!(0x1159168, unsafe extern "C" fn(u32,u32,u32),node.0,parent,selection);
     }
     fn clear_report(&mut self, out: &mut DrawReport) {
         stock!(0x7221c8, unsafe extern "C" fn(*mut DrawReport, u32, u32), out, 0, 68);
@@ -99,8 +124,8 @@ impl DrawServices for StockServices {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn tree_list_entry(node:u32,first:u32,second:u32,first_step:u32,second_step:u32,_nested_first:u32,_nested_second:u32,_nested_first_step:u32,_nested_second_step:u32,mode:u32,report:*mut DrawReport) {
-    tree_list::tree_list(&mut StockServices,DrawArgs { node:NodeId(node),first:first as u16,second:second as u16,first_step,second_step,mode:DrawMode(mode) }, unsafe { &mut *report });
+pub unsafe extern "C" fn tree_list_entry(node:u32,first:u32,second:u32,first_step:u32,second_step:u32,nested_first:u32,nested_second:u32,nested_first_step:u32,nested_second_step:u32,mode:u32,report:*mut DrawReport) {
+    tree_list::tree_list(&mut StockServices,DrawArgs { node:NodeId(node),first:first as u16,second:second as u16,first_step,second_step,nested:NestedGrid {first:nested_first as u16,second:nested_second as u16,first_step:nested_first_step,second_step:nested_second_step},mode:DrawMode(mode) }, unsafe { &mut *report });
 }
 
 #[panic_handler]
