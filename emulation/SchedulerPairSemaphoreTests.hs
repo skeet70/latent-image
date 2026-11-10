@@ -166,6 +166,33 @@ suspendedWake afterState = signalWake before after [Written (Address controlA) 4
   before = waiterBefore 4
   after = M.union (M.fromList [(Address controlA, controlA), (Address (controlA+4), controlA), (Address (taskA+0x0c), afterState)]) before
 
+-- Project-authored synthetic signal whose released waiter blocks before the caller resumes.
+signalRewaitCall :: Call
+signalRewaitCall =
+  let before = M.union (M.fromList [(Address 0x400545c0,1),(Address 0x400545c4,1)]) (waiterBefore 0x32)
+      changes =
+        [ (Address controlA,controlA), (Address (controlA+4),controlA)
+        , (Address (taskA+0x0c),1), (Address waitA,0)
+        , (Address 0x400545c0,0), (Address 0x400545c4,0)
+        ]
+      prefix = [Written address 4 value | (address,value) <- changes]
+      savedMemory = M.union (M.fromList changes) before
+      blocked = Written (Address (taskA+0x0c)) 1 0x32
+      after = M.insert (Address (taskA+0x0c)) 0x32 savedMemory
+      state pc = registers (replicate 13 0 ++ [0x8080,signalAddress+4,pc])
+      caller = WriteOrigin 0 (Address signalAddress) (Address 0x8080) 0x13 (Address 0x9200) 0 15
+      waiter = caller { writerTask=Address taskA,writerInstructions=30 }
+      boundary kind pc at memory writes origins =
+        Boundary kind (Address pc) at 0 (state pc) memory writes [] Nothing 0x9200 origins [] S.empty
+      saved = boundary SaveBoundary 0x43640 20 savedMemory prefix (replicate (length prefix) caller)
+      resumed = boundary ResumeBoundary 0x43668 40 after [blocked] [waiter]
+      returned = boundary ReturnBoundary (signalAddress+4) 50 after [] []
+      trace = CallTrace (state signalAddress) (state (signalAddress+4)) Returned [saved,resumed,returned] Nothing
+  in (callOf DomainA signalAddress (SemaphoreSemantic SemaphoreSignal) [1,0,0,0] before after 0 (prefix++[blocked]) trace)
+    { callFirst=10,callTask=0x9200
+    , callTaskStack=Just (TaskStack (Address 0x8000) (Address 0x8100))
+    , callWriteOrigins=replicate (length prefix) caller++[waiter] }
+
 timedWaitCall :: Word32 -> [Boundary] -> Call
 timedWaitCall timeout history = callOfTask taskA DomainA timedAddress (SemaphoreSemantic SemaphoreTimedWait) [1, timeout, 0, 0]
   (waiterBefore 1) (waiterBefore 1) 0 [] (traceOf (withLr 0x47dd0) history Returned)
@@ -511,10 +538,10 @@ main = do
     case checkCallFor role other of
       Left _ -> pure ()
       Right () -> error (show role ++ " accepted other role delete effect")
-  retained <- either error pure . J.eitherDecodeStrict' =<< B.readFile "emulation/semaphore-signal-rewait.json"
+  let retained = signalRewaitCall
   case checkCall retained of
     Right () -> pure ()
-    Left refusal -> error ("retained signal waiter re-waits: " ++ show refusal)
+    Left refusal -> error ("synthetic signal waiter re-waits: " ++ show refusal)
   let changeHistory f call = call { callTrace = fmap (\trace -> trace { traceHistory = map f (traceHistory trace) }) (callTrace call) }
       withoutSave = changeHistory (\boundary -> if boundaryKind boundary == SaveBoundary then boundary { boundaryKind = ReturnBoundary } else boundary) retained
       unreadableSave = changeHistory (\boundary -> if boundaryKind boundary == SaveBoundary then boundary { boundaryMemory = M.empty } else boundary) retained
@@ -524,30 +551,30 @@ main = do
   case checkCall unreadableSave of
     Left _ -> pure ()
     Right () -> error "unreadable suspension cannot establish signal release"
-  let corrupt = Written (Address 0x400551c0) 4 0xffffffce
-      corruptOrigin = (originAtForWith (callTask retained) 34779350 0x477c0)
-        { writerContext = callKernelContext retained, writerSp = Address 0xa19bb8 }
+  let corrupt = Written (Address waitA) 4 0xffffffce
+      corruptOrigin = (originAtForWith (callTask retained) 45 (signalAddress+4))
+        { writerContext = callKernelContext retained, writerSp = Address 0x8080 }
       corruptReturn boundary = if boundaryKind boundary == ReturnBoundary
-        then boundary { boundaryMemory = M.insert (Address 0x400551c0) 0xffffffce (boundaryMemory boundary)
+        then boundary { boundaryMemory = M.insert (Address waitA) 0xffffffce (boundaryMemory boundary)
                       , boundaryWrites = boundaryWrites boundary ++ [corrupt]
                       , boundaryWriteOrigins = boundaryWriteOrigins boundary ++ [corruptOrigin] }
         else boundary
       corruptCaller = (changeHistory corruptReturn retained)
-        { callAfter = M.insert (Address 0x400551c0) 0xffffffce (callAfter retained)
+        { callAfter = M.insert (Address waitA) 0xffffffce (callAfter retained)
         , callWrites = callWrites retained ++ [corrupt]
         , callWriteOrigins = callWriteOrigins retained ++ [corruptOrigin] }
   case checkCall corruptCaller of
     Left FamilyLifetime -> pure ()
     result -> error ("caller cannot corrupt released completion after resume: " ++ show result)
-  let irqWrite = Written (Address 0x4005b148) 4 1
+  let irqWrite = Written (Address (controlA+0x0c)) 4 1
       irqOrigin = corruptOrigin { writerContext = 1, writerCpsr = 0x92, writerSp = Address 0x70000800 }
       irqReturn boundary = if boundaryKind boundary == ReturnBoundary
-        then boundary { boundaryMemory = M.insert (Address 0x4005b148) 1 (boundaryMemory boundary)
+        then boundary { boundaryMemory = M.insert (Address (controlA+0x0c)) 1 (boundaryMemory boundary)
                       , boundaryWrites = boundaryWrites boundary ++ [irqWrite]
                       , boundaryWriteOrigins = boundaryWriteOrigins boundary ++ [irqOrigin] }
         else boundary
       interruptedCaller = (changeHistory irqReturn retained)
-        { callAfter = M.insert (Address 0x4005b148) 1 (callAfter retained)
+        { callAfter = M.insert (Address (controlA+0x0c)) 1 (callAfter retained)
         , callWrites = callWrites retained ++ [irqWrite]
         , callWriteOrigins = callWriteOrigins retained ++ [irqOrigin] }
   case checkCall interruptedCaller of
@@ -555,19 +582,19 @@ main = do
     result -> error ("same-task interrupt may signal after resume: " ++ show result)
   let changeSave f = changeHistory (\boundary -> if boundaryKind boundary == SaveBoundary then f boundary else boundary) retained
       invalidSaves =
-        [ ("wrong task", changeSave (\boundary -> boundary { boundaryTask = 0x40060bf4 }))
+        [ ("wrong task", changeSave (\boundary -> boundary { boundaryTask = taskB }))
         , ("wrong core", changeSave (\boundary -> boundary { boundaryCore = 1 }))
-        , ("save after resume", changeSave (\boundary -> boundary { boundaryInstructions = 34779345 }))
+        , ("save after resume", changeSave (\boundary -> boundary { boundaryInstructions = 40 }))
         , ("wrong save entry", changeSave (\boundary -> boundary { boundaryAddress = Address 0x43644 }))
         , ("missing resume", changeHistory (\boundary -> if boundaryKind boundary == ResumeBoundary then boundary { boundaryKind = ReturnBoundary } else boundary) retained)
         , ("missing prefix effects", changeSave (\boundary -> boundary { boundaryWrites = [] }))
-        , ("unexplained final corruption", retained { callAfter = M.insert (Address 0x400551c0) 0xffffffce (callAfter retained) })
+        , ("unexplained final corruption", retained { callAfter = M.insert (Address waitA) 0xffffffce (callAfter retained) })
         ]
   mapM_ (\(label, invalid) -> case checkCall invalid of
     Left _ -> pure ()
     Right () -> error ("signal suspension accepted " ++ label)) invalidSaves
   forM_ [Stock, Owned] $ \role -> do
-    forM_ [("retained signal", retained), ("foreign interrupt", interruptedCaller)] $ \(label, valid) ->
+    forM_ [("synthetic signal", retained), ("foreign interrupt", interruptedCaller)] $ \(label, valid) ->
       unless (checkCallFor role valid == Right ()) (error (show role ++ " " ++ label ++ ": " ++ show (checkCallFor role valid)))
     forM_ (("caller corruption", corruptCaller) : ("missing suspension", unreadableSave) : invalidSaves) $ \(label, invalid) ->
       case checkCallFor role invalid of
@@ -575,14 +602,14 @@ main = do
         Right () -> error (show role ++ " accepted " ++ label)
   let changedEndpoint kind change = changeHistory (\boundary -> if boundaryKind boundary == kind then change boundary else boundary) retained
       wrongMode boundary = boundary { boundaryRegisters = (boundaryRegisters boundary) { D.processorState = 0x92 } }
-      wrongContext boundary = boundary { boundaryMemory = M.insert (Address 0x400545a4) 1 (boundaryMemory boundary) }
+      wrongContext boundary = boundary { boundaryMemory = M.insert (Address handlerA) 1 (boundaryMemory boundary) }
       wrongStack boundary = boundary { boundaryRegisters = (boundaryRegisters boundary)
         { D.registers = take 13 (D.registers (boundaryRegisters boundary)) ++ [0x70002000] ++ drop 14 (D.registers (boundaryRegisters boundary)) } }
       endpointChanges =
         [ ("mode", wrongMode)
         , ("context", wrongContext)
         , ("stack", wrongStack)
-        , ("task", \boundary -> boundary { boundaryTask = 0x40060bf4 })
+        , ("task", \boundary -> boundary { boundaryTask = taskB })
         , ("core", \boundary -> boundary { boundaryCore = 1 })
         ]
   mapM_ (\(kind, label, change) -> case checkCall (changedEndpoint kind change) of
@@ -602,25 +629,25 @@ main = do
     Right () -> pure ()
     result -> error ("foreign interrupt endpoints cannot replace caller endpoints: " ++ show result)
   let readyWrite write@(Written address size value)
-        | address == Address 0x40060c00 && size == 1 && value == 50 = Written address size 1
+        | address == Address (taskA+0x0c) && size == 1 && value == 0x32 = Written address size 1
         | otherwise = write
       matchingBoundary boundary = boundary
         { boundaryWrites = map readyWrite (boundaryWrites boundary)
-        , boundaryMemory = if boundaryInstructions boundary >= 34779212
-            then M.insert (Address 0x40060c00) 0x301 (boundaryMemory boundary)
+        , boundaryMemory = if boundaryInstructions boundary >= 30
+            then M.insert (Address (taskA+0x0c)) 1 (boundaryMemory boundary)
             else boundaryMemory boundary }
       matchingFinal = (changeHistory matchingBoundary retained)
         { callWrites = map readyWrite (callWrites retained)
-        , callAfter = M.insert (Address 0x40060c00) 0x301 (callAfter retained) }
+        , callAfter = M.insert (Address (taskA+0x0c)) 1 (callAfter retained) }
       omitResume boundary = if boundaryKind boundary == ResumeBoundary
         then boundary { boundaryKind = SelectedBoundary } else boundary
       missingResume = changeHistory omitResume matchingFinal
       unreadableOwnership boundary = if boundaryKind boundary == SaveBoundary
-        then boundary { boundaryMemory = M.delete (Address 0x400545a4) (boundaryMemory boundary)
-                      , boundaryUnreadable = S.insert (Address 0x400545a4) (boundaryUnreadable boundary) }
+        then boundary { boundaryMemory = M.delete (Address handlerA) (boundaryMemory boundary)
+                      , boundaryUnreadable = S.insert (Address handlerA) (boundaryUnreadable boundary) }
         else boundary
       unreadableSaveMatchingFinal = (changeHistory unreadableOwnership missingResume)
-        { callUnreadable = S.insert (Address 0x400545a4) (callUnreadable missingResume) }
+        { callUnreadable = S.insert (Address handlerA) (callUnreadable missingResume) }
   case checkCall matchingFinal of
     Right () -> pure ()
     result -> error ("matching final release with owned endpoints: " ++ show result)
