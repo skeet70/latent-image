@@ -840,7 +840,10 @@ scriptAdapterRegressions=withTemporary "fuji-script-adapter"$ \root->do
  ensure(not(null wrongScalarProblems)) "private projection hid incorrect scalar final output"
  reject "overlapping ignored frames"(ignored[span 0 8,span 4 8])
  reject "frame above entry SP"(ignored[span 24 9])
- reject "ignored caller output"(set "expected"(set "memory"(arr[obj[("region",s "stack"),("offset",n 0),("hex",s "ff")])(get private "expected"))private)
+ reject "ignored caller output"
+   (set "expected"
+     (set "memory" (arr [obj [("region",s "stack"),("offset",n 0),("hex",s "ff")]]) (get private "expected"))
+     private)
  (_,ordinaryRegions,_,_)<-load fixture
  ordinaryProblems<-checkResult fixture ordinaryRegions(result 0xff)
  ensure(not(null ordinaryProblems)) "ordinary memory comparison ignored private bytes"
