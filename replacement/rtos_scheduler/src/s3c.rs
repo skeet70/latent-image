@@ -266,5 +266,6 @@ pub extern "C" fn s3c_exception_delivery() {
     guard.release();
 }
 
+#[cfg(not(feature = "component"))]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo<'_>) -> ! { loop {} }

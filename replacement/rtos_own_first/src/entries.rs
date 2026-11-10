@@ -1,4 +1,5 @@
 use core::arch::{asm, global_asm};
+#[cfg(not(feature = "component"))]
 use core::panic::PanicInfo;
 use core::mem::MaybeUninit;
 use core::ptr::{read_volatile, write_volatile};
@@ -185,6 +186,7 @@ global_asm!(
     ".popsection",
 );
 
+#[cfg(not(feature = "component"))]
 #[panic_handler]
 fn panic(_: &PanicInfo<'_>) -> ! {
     loop {}

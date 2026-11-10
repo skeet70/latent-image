@@ -256,6 +256,7 @@ xm1_rust_staticlib(
         src = "//replacement/rtos_cyclic:src/lib.rs",
         crate_name = "xm1_rtos_cyclic_abi",
         data = [
+            "//replacement/rtos_cyclic:src/app.rs",
             "//replacement/rtos_cyclic:src/id.rs",
             "//replacement/rtos_cyclic:src/machine.rs",
             "//replacement/rtos_cyclic:src/ops.rs",
