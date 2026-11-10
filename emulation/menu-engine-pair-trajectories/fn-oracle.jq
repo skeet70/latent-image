@@ -20,7 +20,7 @@ $config[0] as $c
       {source:"reports/owned-menu-engine-increment-5.md:21,29,58-69",expectation:"ISO opens at cursor 17; DOWN visits 18 then20 because cursor19 is hidden. RIGHT on20 opens AUTO ISO. BACK closes both ISO and its Fn AUTO child, rather than popping the child; the closed menu tuple is retained."},
       {source:"private-data/scratch/ControllerStrategy/menu-oracle-open/menu-observe.json and inc3/close/menu-observe.json",expectation:"The modal sample opens and closes the shooting menu before the Fn path."}
     ],
-    trace_sites:engine_sites($role),
+    trace_sites:engine_sites($role; $name),
     before_unload:[
       {phase:"package-menu-prefix",capture:"oracle-live-view",steps:[],reads:reads},
       segment("modal-sample";"modal-sample";($sample | presented_handoff))

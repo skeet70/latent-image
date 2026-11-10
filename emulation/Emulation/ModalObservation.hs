@@ -784,6 +784,12 @@ stockSettingsReload = SettingsReload (watchAddress 0x006309ec) (watchAddress 0x0
 stockSettingsRestore :: SettingsReload
 stockSettingsRestore = SettingsReload (watchAddress 0x00637ee4) (watchAddress 0x00637ee8) (watchAddress 0x00722134) liveSettingsBlock
 
+-- | The setter's header reload at `0x62fef0` calls `0x61da3c` and returns to
+-- `0x62fef4`. Its eight ordered halfword stores cover `[0x96cc64, 0x96cc74)`.
+stockSettingsHeaderReload :: SettingsReload
+stockSettingsHeaderReload = SettingsReload (watchAddress 0x0062fef0) (watchAddress 0x0062fef4) (watchAddress 0x00722134)
+  (either error id (watchRange (watchAddress 0x0096cc64) (watchAddress 0x0096cc74)))
+
 -- | The call and return instruction words, in that order.
 reloadSiteRanges :: SettingsReload -> [WatchRange]
 reloadSiteRanges reload = [either error id (watchRange pc (watchAddress (watchAddressValue pc + 4))) | pc <- [reloadCall reload, reloadReturn reload]]
@@ -975,7 +981,7 @@ bindModalRuntimeSource manifest elfBytes = do
   rollback <- routine "ram_push_rollback" (Ram.unAddress (Ram.rollbackEntry (Ram.manifestEntries manifest))) "restore_old_words"
   let bindings = [PublicationBinding (watchAddress (Ram.unAddress (Ram.publicationAddress publication)))
         (Ram.publicationOld publication) (Ram.publicationNew publication) | publication <- publications]
-  pure (ModalRuntimeSource (ModalLifetimeSource variant runtimeExtent residentExtent readonly install rollback bindings [] (Just (sha256 elfBytes)) (Just runtimeDigest) [] [stockPropertySetter] [stockSettingsReload, stockSettingsRestore] Nothing))
+  pure (ModalRuntimeSource (ModalLifetimeSource variant runtimeExtent residentExtent readonly install rollback bindings [] (Just (sha256 elfBytes)) (Just runtimeDigest) [] [stockPropertySetter] [stockSettingsReload, stockSettingsRestore, stockSettingsHeaderReload] Nothing))
 
 littleWord :: Word32 -> B.ByteString
 littleWord word = B.pack [fromIntegral (word `div` (256 ^ index)) | index <- [0 .. 3 :: Int]]

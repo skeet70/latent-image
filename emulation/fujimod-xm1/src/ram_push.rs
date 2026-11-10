@@ -21,7 +21,7 @@ use fujimod_emulator::board::preservation::{
 };
 use fujimod_xm1::sd_host::{Backing, MediaImage, SectorAddress, SectorCount};
 use fujimod_xm1::nand_read::{RowAddress, RowCount};
-use fujimod_xm1::trace::{CAPTURE_OBSERVATION_BOUNDS, CaptureCursor, CaptureScope, CaptureSnapshot, InstructionCount, SiteRead, parse_site_reads};
+use fujimod_xm1::trace::{CAPTURE_OBSERVATION_BOUNDS, CaptureCursor, CaptureScope, CaptureSnapshot, Hit, InstructionCount, SiteRead, parse_site_reads};
 use serde::{Deserialize, Serialize};
 use fujimod_emulator_devices::Device;
 use fujimod_emulator_exr2_isp_input::ImageInput;
@@ -254,6 +254,9 @@ enum Request {
     Transfer(Transfer),
     TraceSites { sites: BTreeMap<String, String>, #[serde(default)] reads: BTreeMap<String, Vec<SiteRead>> },
     TraceHits { from: usize, #[serde(default)] limit: Option<std::num::NonZeroUsize> },
+    RenderStackDiagnosticBegin(fujimod_xm1::render_stack::BeginRequest),
+    RenderStackDiagnosticReport,
+    RenderStackDiagnosticEnd,
     ModalObservationBegin(ModalBeginRequest),
     ModalObservationReport,
     ModalObservationEnd,
@@ -307,6 +310,9 @@ enum RequestKind {
     Transfer,
     TraceSites,
     TraceHits,
+    RenderStackDiagnosticBegin,
+    RenderStackDiagnosticReport,
+    RenderStackDiagnosticEnd,
     ModalObservationBegin,
     ModalObservationReport,
     ModalObservationEnd,
@@ -351,6 +357,9 @@ impl Request {
             Request::Transfer(_) => RequestKind::Transfer,
             Request::TraceSites { .. } => RequestKind::TraceSites,
             Request::TraceHits { .. } => RequestKind::TraceHits,
+            Request::RenderStackDiagnosticBegin(_) => RequestKind::RenderStackDiagnosticBegin,
+            Request::RenderStackDiagnosticReport => RequestKind::RenderStackDiagnosticReport,
+            Request::RenderStackDiagnosticEnd => RequestKind::RenderStackDiagnosticEnd,
             Request::ModalObservationBegin(_) => RequestKind::ModalObservationBegin,
             Request::ModalObservationReport => RequestKind::ModalObservationReport,
             Request::ModalObservationEnd => RequestKind::ModalObservationEnd,
@@ -441,6 +450,21 @@ const SNAPSHOT_LIMIT: usize = 24;
 
 const DISPLAY_STEP: u64 = 2_000_000;
 const DISPLAY_WAIT: u64 = 60_000_000;
+/// The store entry the render pair arms as `render-osd-buffer`; its callers hand off the stage-0 buffers.
+const PUBLICATION_SITE: u32 = 0x006d_76ec;
+
+fn eligible_publication(hit: &Hit) -> bool {
+    hit.site == "render-osd-buffer"
+        && u32::from_str_radix(hit.lr.trim_start_matches("0x"), 16)
+            .is_ok_and(|caller| matches!(caller, 0x006d_7b3c | 0x006d_7c24 | 0x006d_7d10))
+}
+
+fn publication_pair<'a>(hits: &'a [Hit], start: usize, after: u64) -> Option<(&'a Hit, &'a Hit)> {
+    let hits = hits.get(start..)?;
+    let buffer = hits.iter().find(|hit| eligible_publication(hit) && hit.instructions > after)?;
+    let increment = hits.iter().find(|hit| hit.site == "render-osd-increment" && hit.instructions >= buffer.instructions)?;
+    Some((buffer, increment))
+}
 
 /// A client-chosen snapshot name: 1..=64 lowercase ASCII letters, digits or '-'.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -893,28 +917,80 @@ impl Server {
         }
     }
 
-    /// Presses `key`, then waits for a presented plane; a failed press is returned as its `failure`.
+    fn publication_armed(&self) -> bool {
+        self.bridge.machine.traces.sites.get(&PUBLICATION_SITE).is_some_and(|label| label == "render-osd-buffer")
+    }
+
+    fn await_publication(&mut self, start: usize, after: u64, budget: u64)
+        -> Result<(Hit, Hit, fujimod_xm1::presentation::Acknowledgement), String> {
+        let mut waited = 0;
+        loop {
+            let found = publication_pair(&self.bridge.machine.traces.hits, start, after)
+                .map(|(buffer, increment)| (buffer.clone(), increment.clone(), increment.instructions));
+            if let Some((buffer, increment, commit)) = found {
+                while self.bridge.machine.instructions() <= commit {
+                    if waited >= budget {
+                        return Err(format!("no committed render-osd-buffer publication after presented frame within {waited} instructions"));
+                    }
+                    self.bridge.advance(DISPLAY_STEP)?;
+                    self.bridge.machine.require_running()?;
+                    waited += DISPLAY_STEP;
+                }
+                let (_, acknowledgement) = self.await_display_plane(DisplayCompletion::AcknowledgedFrame)?;
+                let acknowledgement = acknowledgement.ok_or("publication invocation lacks a presented acknowledgement")?;
+                return Ok((buffer, increment, acknowledgement));
+            }
+            if waited >= budget {
+                return Err(format!("no committed render-osd-buffer publication after presented frame within {waited} instructions"));
+            }
+            self.bridge.advance(DISPLAY_STEP)?;
+            self.bridge.machine.require_running()?;
+            waited += DISPLAY_STEP;
+        }
+    }
+
     fn display_press(&mut self, key: &PressName, snapshot: Option<&SnapshotName>, completion: DisplayCompletion) -> Result<Value, String> {
         let started = Instant::now();
         let before = self.bridge.machine.instructions();
+        let publication_start = self.bridge.machine.traces.hits.len();
+        let publication_armed = matches!(completion, DisplayCompletion::AcknowledgedFrame) && self.publication_armed();
         let pressed = self.bridge.settled_key(key.press, default_pulse(key.press), MAX_SETTLE)
             .and_then(|settle| self.bridge.machine.require_running().map(|()| settle))
             .and_then(|settle| self.await_display_plane(completion).map(|(waited, acknowledgement)| (settle, waited, acknowledgement)));
-        let instructions = self.bridge.machine.instructions() - before;
-        let (settle, display_wait, presentation, menu, failure) = match pressed {
-            Ok((settle, waited, acknowledgement)) => (json!(settle), json!(waited), json!(acknowledgement), menu_value(self.bridge.machine.menu()?), Value::Null),
-            Err(failure) => (Value::Null, Value::Null, Value::Null, Value::Null, json!(failure)),
+        let (settle, display_wait, presentation, menu, failure, publication) = match pressed {
+            Ok((settle, waited, acknowledgement)) => {
+                let publication = if publication_armed {
+                    match self.await_publication(publication_start, self.bridge.machine.instructions(), DISPLAY_WAIT) {
+                        Ok((buffer, increment, acknowledgement)) => json!({
+                            "buffer": {"site": buffer.site, "instructions": buffer.instructions, "core": buffer.core, "lr": buffer.lr},
+                            "increment": {"site": increment.site, "instructions": increment.instructions, "core": increment.core, "lr": increment.lr},
+                            "acknowledgement": acknowledgement}),
+                        Err(error) => {
+                            let instructions = self.bridge.machine.instructions() - before;
+                            self.key_log.push(json!({"key": key.name, "snapshot": snapshot, "seconds": started.elapsed().as_secs_f64(),
+                                "instructions": instructions, "settle": json!(settle), "display_wait_instructions": json!(waited),
+                                "presentation": json!(acknowledgement), "publication": Value::Null, "failure": error}));
+                            return Err(error);
+                        }
+                    }
+                } else { Value::Null };
+                (json!(settle), json!(waited), json!(acknowledgement), menu_value(self.bridge.machine.menu()?), Value::Null, publication)
+            }
+            Err(failure) => (Value::Null, Value::Null, Value::Null, Value::Null, json!(failure), Value::Null),
         };
+        let instructions = self.bridge.machine.instructions() - before;
         self.key_log.push(json!({"key": key.name, "snapshot": snapshot, "seconds": started.elapsed().as_secs_f64(),
-            "instructions": instructions, "settle": settle, "display_wait_instructions": display_wait, "presentation": presentation, "failure": failure}));
+            "instructions": instructions, "settle": settle, "display_wait_instructions": display_wait, "presentation": presentation,
+            "publication": publication, "failure": failure}));
         Ok(json!({"snapshot": snapshot, "key": key.name, "menu": menu, "settle": settle, "instructions": instructions,
-            "display_wait_instructions": display_wait, "presentation": presentation, "failure": failure}))
+            "display_wait_instructions": display_wait, "presentation": presentation, "publication": publication, "failure": failure}))
     }
 
-    fn handle(&mut self, request: Request) -> Result<Option<Value>, String> {
+    fn admit_request(&self, request: &Request) -> Result<(), String> {
         let tail_request = matches!(&request, Request::CaptureObservationHits { .. } | Request::CaptureObservationAck { .. }
             | Request::CaptureObservationState | Request::WatchState | Request::Finish
-            | Request::ModalObservationReport | Request::ModalObservationEnd);
+            | Request::ModalObservationReport | Request::ModalObservationEnd
+            | Request::RenderStackDiagnosticReport | Request::RenderStackDiagnosticEnd);
         let recovers = matches!(&request, Request::TraceHits { .. } | Request::SnapshotRestore { .. }
             | Request::SnapshotKey { .. } | Request::SnapshotDrop { .. });
         if self.bridge.machine.failure.is_some() && !tail_request && !recovers {
@@ -941,6 +1017,10 @@ impl Server {
             && matches!(&request, Request::SaveInstallCheckpoint { .. }) {
             return Err("active modal observation refuses checkpoint replacement".into());
         }
+        if matches!(&request, Request::SaveInstallCheckpoint { .. } | Request::SnapshotSave { .. } | Request::SnapshotRestore { .. } | Request::SnapshotKey { .. })
+            && self.bridge.machine.render_stack_diagnostic.as_ref().is_some_and(|collector| !collector.finished()) {
+            return Err("unfinished render stack diagnostic refuses checkpoint replacement".into());
+        }
         if matches!(&request, Request::SnapshotSave { .. } | Request::SnapshotRestore { .. } | Request::SnapshotKey { .. }) {
             let traces = &self.bridge.machine.traces;
             if self.watch.is_some() || self.preservation.is_some() || traces.modal_observation_active()
@@ -948,6 +1028,11 @@ impl Server {
                 return Err("snapshot save and restore require no armed watch, preservation, capture, modal or rendezvous observation".into());
             }
         }
+        Ok(())
+    }
+
+    fn handle(&mut self, request: Request) -> Result<Option<Value>, String> {
+        self.admit_request(&request)?;
         Ok(Some(match request {
             Request::List => {
                 let c = &self.attachment.configuration;
@@ -979,6 +1064,21 @@ impl Server {
                 let provenance = self.bridge.machine.render_provenance.as_mut()
                     .map(|collector| collector.drain(&self.bridge.machine.session)).transpose()?;
                 json!({"count": hits.len(), "hits": &hits[from..end], "render_object_provenance": provenance})
+            }
+            Request::RenderStackDiagnosticBegin(request) => {
+                self.bridge.machine.begin_render_stack_diagnostic(request)?;
+                json!({"version":2,"diagnostic_only":true,"active":true})
+            }
+            Request::RenderStackDiagnosticReport => {
+                let collector = self.bridge.machine.render_stack_diagnostic.as_ref().ok_or("render stack diagnostic is not active")?;
+                if let Some(error) = &self.bridge.machine.failure { collector.refuse(error); }
+                collector.report()?
+            }
+            Request::RenderStackDiagnosticEnd => {
+                let machine = &mut self.bridge.machine;
+                let collector = machine.render_stack_diagnostic.as_mut().ok_or("render stack diagnostic is not active")?;
+                if let Some(error) = &machine.failure { collector.refuse(error); }
+                collector.finish(&machine.session)?
             }
             Request::ModalObservationBegin(request) => {
                 let machine = &mut self.bridge.machine;
@@ -1177,10 +1277,7 @@ impl Server {
             }
             Request::WatchState => match &self.watch {
                 Some(watch) => watch.records.borrow().state(),
-                None => match self.bridge.machine.traces.modal_watch_state() {
-                    Some(state) => serde_json::to_value(state).map_err(|failure| failure.to_string())?,
-                    None => return Err("watch-state requires an armed memory watch".into()),
-                },
+                None => return Err("watch-state requires an armed memory watch".into()),
             },
             Request::WatchEnd => {
                 let mut watch = self.watch.take().ok_or("watch-end requires an armed memory watch")?;
@@ -1377,12 +1474,22 @@ impl Server {
     }
 
     fn serve_io(&mut self, input: impl BufRead, mut output: impl Write) -> Result<(), String> {
-        self.bridge.machine.begin_render_provenance()?;
-        let mut emit = |value: &Value| -> Result<(), String> {
-            serde_json::to_writer(&mut output, value).map_err(|error| error.to_string())?;
+        enum Reply {
+            Value(Option<Value>),
+            Written(Result<(), String>),
+        }
+        #[derive(Serialize)]
+        struct WatchReply<T> {
+            ok: bool,
+            #[serde(flatten)]
+            evidence: T,
+        }
+        fn emit_reply(output: &mut impl Write, value: &impl Serialize) -> Result<(), String> {
+            serde_json::to_writer(&mut *output, value).map_err(|error| error.to_string())?;
             output.write_all(b"\n").and_then(|()| output.flush()).map_err(|error| error.to_string())
-        };
-        emit(&json!({"ok": true, "event": "ready", "device": encode_hex(&self.attachment.device),
+        }
+        self.bridge.machine.begin_render_provenance()?;
+        emit_reply(&mut output, &json!({"ok": true, "event": "ready", "device": encode_hex(&self.attachment.device),
             "configuration": encode_hex(&self.attachment.configuration),
             "pre_attach": self.attachment.pre_attach, "checkpoint": self.checkpoint}))?;
         let mut error = None;
@@ -1405,23 +1512,34 @@ impl Server {
                 .and_then(|request| {
                     let started = Instant::now();
                     let kind = request.kind();
-                    let result = self.handle(request);
+                    let result = if matches!(request, Request::WatchState) && self.watch.is_none() {
+                        self.admit_request(&request).and_then(|()| {
+                            match self.bridge.machine.traces.modal_watch_state() {
+                                Some(evidence) => Ok(Reply::Written(emit_reply(&mut output,
+                                    &WatchReply { ok: true, evidence }))),
+                                None => Err("watch-state requires an armed memory watch".into()),
+                            }
+                        })
+                    } else {
+                        self.handle(request).map(Reply::Value)
+                    };
                     let profile = self.requests.kinds.entry(kind).or_default();
                     profile.requests += 1;
                     profile.seconds += started.elapsed().as_secs_f64();
                     result
                 });
             let (response, finished) = match result {
-                Ok(Some(mut value)) => {
+                Ok(Reply::Written(written)) => (Reply::Written(written), false),
+                Ok(Reply::Value(Some(mut value))) => {
                     value.as_object_mut().ok_or("response must be an object")?.insert("ok".into(), json!(true));
-                    (value, false)
+                    (Reply::Value(Some(value)), false)
                 }
-                Ok(None) => {
+                Ok(Reply::Value(None)) => {
                     let response = match &error {
                         Some(message) => json!({"ok": false, "error": "BridgeError", "message": message, "finished": true}),
                         None => json!({"ok": true, "finished": true}),
                     };
-                    (response, true)
+                    (Reply::Value(Some(response)), true)
                 }
                 Err(message) => {
                     let response = json!({"ok": false, "error": "BridgeError", "message": message});
@@ -1434,10 +1552,15 @@ impl Server {
                     }
                     let observing = self.bridge.machine.traces.capture_observation_active()
                         || self.bridge.machine.traces.modal_observation_active();
-                    (response, !observing)
+                    (Reply::Value(Some(response)), !observing)
                 }
             };
-            if let Err(io_error) = emit(&response) {
+            let written = match response {
+                Reply::Written(written) => written,
+                Reply::Value(Some(response)) => emit_reply(&mut output, &response),
+                Reply::Value(None) => unreachable!(),
+            };
+            if let Err(io_error) = written {
                 if error.is_some() {
                     self.capture_evidence_error.get_or_insert(io_error);
                 } else {
@@ -1602,6 +1725,10 @@ fn main() -> ExitCode {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/common/modal_lifetime_fixture.rs"]
+mod modal_lifetime_fixture;
 
 #[cfg(test)]
 mod tests {
@@ -1927,6 +2054,179 @@ mod tests {
         assert!(serde_json::from_value::<Request>(json!({"command": "snapshot-save", "name": "N0"})).is_err());
         assert!(serde_json::from_value::<Request>(json!({"command": "snapshot-save", "name": ""})).is_err());
         assert!(serde_json::from_value::<Request>(json!({"command": "snapshot-key", "name": "n0", "key": "shutter"})).is_err());
+    }
+
+    #[test]
+    fn installed_watch_stream_preserves_all_evidence_after_terminal_failure_without_execution() {
+        let mut server = server(&[0xeafffffe]);
+        let begin = modal_lifetime_fixture::request(false);
+        let write_image = |start: u64, bytes: &Value| {
+            let bytes: Vec<u8> = serde_json::from_value(bytes.clone()).unwrap();
+            server.bridge.machine.session.board.write_physical(start, &bytes).unwrap();
+        };
+        write_image(u64::from(modal_lifetime_fixture::STOCK), &begin["stock"]);
+        for image in begin["context_sources"].as_array().unwrap().iter()
+            .chain(begin["lifetime"]["readonly"].as_array().unwrap()) {
+            write_image(image["start"].as_u64().unwrap(), &image["bytes"]);
+        }
+        let begin = serde_json::from_value(begin).unwrap();
+        server.handle(Request::ModalObservationBegin(begin)).unwrap();
+        let resident = u64::from(modal_lifetime_fixture::RUNTIME) + 0x800;
+        for index in 0..3u64 {
+            server.bridge.machine.session.board.write_physical(
+                resident + index * 4, &(index as u32 + 1).to_le_bytes()).unwrap();
+        }
+        let expected_rows: Vec<Value> = (0..3u64).map(|index| {
+            let address = resident + index * 4;
+            json!({"source": "host-write", "physical": address, "address": address, "size": 4,
+                "core": null, "pc": null, "instructions": null, "tick": null})
+        }).collect();
+        let mut digest_input = Vec::new();
+        for row in &expected_rows {
+            digest_input.extend_from_slice(&serde_json::to_vec(row).unwrap());
+            digest_input.push(b'\n');
+        }
+        let expected_digest = crate::bridge::sha256(&digest_input);
+        server.bridge.machine.failure = Some("synthetic terminal fault".into());
+        let instructions = server.bridge.machine.instructions();
+        let mut output = Vec::new();
+        server.serve_io(b"{\"command\":\"watch-state\"}\n{\"command\":\"watch-state\"}\n".as_slice(),
+            &mut output).unwrap();
+        let responses: Vec<Value> = output.split(|byte| *byte == b'\n')
+            .filter(|line| !line.is_empty()).map(|line| serde_json::from_slice(line).unwrap()).collect();
+        assert_eq!(responses.len(), 3);
+        for response in &responses[1..] {
+            assert_eq!(response["ok"], true);
+            assert_eq!(response["enabled"], true);
+            assert_eq!(response["views"], "fixed");
+            assert_eq!(response["record_count"], 3);
+            assert_eq!(response["records_sha256"], expected_digest.as_str());
+            assert_eq!(response["records"], json!(expected_rows));
+        }
+        assert_eq!(responses[1], responses[2]);
+        assert_eq!(server.bridge.machine.instructions(), instructions);
+        let receipt: Value = serde_json::from_slice(
+            &std::fs::read(server.output.join("emulator-session.json")).unwrap()).unwrap();
+        assert_eq!(receipt["request_profile"]["kinds"]["watch-state"]["requests"], 2);
+        assert_eq!(receipt["capture_evidence_error"], Value::Null);
+        assert_eq!(receipt["boundary"]["failure"], "synthetic terminal fault");
+        assert_eq!(receipt["boundary"]["instructions"], instructions);
+        std::fs::remove_dir_all(&server.output).unwrap();
+    }
+
+    #[test]
+    fn display_key_fails_a_later_presentation_and_retains_the_acknowledged_key() {
+        use fujimod_emulator_cpu::{Register, arm};
+        // Original synthetic ADC scanner and presentation caller, A32 little-endian.
+        let program = [
+            0xe59fa11c, 0xe3a00008, 0xe58a0004, 0xe3a00c02, 0xe58a0008, 0xe3a00902, 0xe3800005, 0xe58a0000,
+            0xe59fc100, 0xe3a05603, 0xe3a00000, 0xe5850000, 0xe2856004, 0xe5860000, 0xe59a0054, 0xe3a01b01,
+            0xe2411001, 0xe1500001, 0x03a02000, 0x13a02001, 0xe5cc2000, 0xe5953000, 0xe3530000, 0x0a000002,
+            0xe3530003, 0x0a000013, 0xeafffff2, 0xe3520001, 0x1afffff0, 0xe3a03003, 0xe5853000, 0xe59fb0a8,
+            0xe59fd0a8, 0xe28fe004, 0xe59f30a4, 0xe12fff13, 0xe3a00000, 0xe28fe004, 0xe59f3098, 0xe12fff13,
+            0xe28fe008, 0xe59f3090, 0xe3a04000, 0xe12fff13, 0xe59f9088, 0xeaffffdf, 0xe2599001, 0x1affffdd,
+            0xe3a03004, 0xe5853000, 0xe59f4074, 0xe1a0e004, 0xe59f4070, 0xe12fff14, 0xe28fe004, 0xe59f4068,
+            0xe12fff14, 0xe59fb064, 0xe59fd064, 0xe28fe004, 0xe59f303c, 0xe12fff13, 0xe3a00001, 0xe28fe004,
+            0xe59f3030, 0xe12fff13, 0xe28fe008, 0xe59f3028, 0xe3a04001, 0xe12fff13, 0xe3a03005, 0xe5853000,
+            0xeaffffc4, 0xfff8a000, 0x00828365, 0x00a01000, 0x00a01004, 0x006d7920, 0x006d7da4, 0x006d7df4,
+            0x00a7d8c0, 0x006d7b3c, 0x006d76ec, 0x006d7d44, 0x00a02000, 0x00a02004,
+        ];
+        let mut server = server(&program);
+        let put = |address: u64, bytes: &[u8]| {
+            server.bridge.machine.session.board.write_physical(address, bytes).unwrap();
+        };
+        put(0x0089_f7c8, &1u32.to_le_bytes());
+        put(0x0096_ca50, &0x0020_0000u32.to_le_bytes());
+        for (row, code, low_tag, high_tag, low, high) in [
+            (18u64, 1u32, 14230u16, 14228u16, 100u16, 200u16),
+            (19, 50, 14234, 14232, 300, 400),
+            (20, 9, 14238, 14236, 500, 600),
+        ] {
+            let record = 0x0082_8120 + row * 28;
+            put(record, &code.to_le_bytes());
+            put(record + 9, &[1]);
+            put(record + 12, &9u32.to_le_bytes());
+            put(record + 16, &low_tag.to_le_bytes());
+            put(record + 18, &high_tag.to_le_bytes());
+            put(0x0020_0000 + u64::from(low_tag), &low.to_le_bytes());
+            put(0x0020_0000 + u64::from(high_tag), &high.to_le_bytes());
+        }
+        put(0x014e_32ba, &0x4001u16.to_le_bytes());
+        put(0x014e_32bc, &[1]);
+        put(0x014e_3338, &[1]);
+        put(0x015e_46d0, &0x4001u16.to_le_bytes());
+        put(0x015e_46d2, &[1]);
+        put(0x015e_470d, &[1]);
+        for (record, table, descriptors, entries) in [
+            (0x0005_4610u64, 0x4006_0000u32, 0x0006_1000u64, [0x00c2_2f60u32, 0x006d_2700]),
+            (0x0005_4694, 0x4006_2000, 0x0006_3000, [0x006d_7540, 0x0110_9130]),
+        ] {
+            put(record, &table.to_le_bytes());
+            put(record + 4, &2u32.to_le_bytes());
+            for (index, entry) in entries.into_iter().enumerate() {
+                let row = u64::from(table & 0x3fff_ffff) + index as u64 * 0x38;
+                let descriptor = descriptors + index as u64 * 0x28;
+                put(row + 8, &(descriptor as u32).to_le_bytes());
+                put(row + 12, &0x12u32.to_le_bytes());
+                put(descriptor + 8, &entry.to_le_bytes());
+                put(descriptor + 36, &1u32.to_le_bytes());
+            }
+        }
+        put(0x00a1_0000, &0xe581_0000u32.to_le_bytes());
+        put(0x00a1_0004, &0xeaff_fffeu32.to_le_bytes());
+        for (address, words) in [
+            (0x006d_7920u64, [0xe92d_49f0u32, 0xe12f_ff1e]),
+            (0x006d_7da4, [0xe284_4f46, 0xe12f_ff1e]),
+            (0x006d_7df4, [0xe1a0_0004, 0xe12f_ff1e]),
+            (0x006d_76ec, [0xe1a0_0000, 0xe12f_ff1e]),
+            (0x006d_7d44, [0xe1a0_0000, 0xe12f_ff1e]),
+            (0x006d_7b3c, [0xe51f_f004, 0x0000_00d8]),
+        ] {
+            for (index, word) in words.into_iter().enumerate() {
+                put(address + index as u64 * 4, &word.to_le_bytes());
+            }
+        }
+        put(0x2000, &[255, 30, 60, 210].repeat(4));
+        put(0x3000, &[128, 40, 50, 60, 128, 70, 80, 90, 0, 0, 0, 0, 128, 10, 20, 30, 128, 50, 60, 70]);
+        for (offset, value) in [
+            (0x00u64, 11u32 << 24), (0x10, 0x0001_0001), (0x84, 1), (0x90, 0x11), (0x94, 0), (0x98, 0),
+            (0xa4, 0x0001_0001), (0xa8, 0x0001_0001), (0xb4, 0x2000), (0xb8, 0x3000), (0xc4, 0),
+            (0xc8, 1), (0xe4, 0x8080), (0x108, 3), (0x11c, 0), (0x120, 0), (0x124, 0), (0x128, 0),
+            (0x16c, 1), (0x174, 4), (0x178, 10), (0x17c, 20), (0x188, 0), (0x18c, 128), (0x190, 0),
+        ] {
+            let machine = &mut server.bridge.machine;
+            machine.session.board.write_register(0, Register::Pc, 0x00a1_0000).unwrap();
+            machine.session.board.write_register(0, arm::CORE[0], u64::from(value)).unwrap();
+            machine.session.board.write_register(0, arm::CORE[1], 0xfff6_b000 + offset).unwrap();
+            machine.run(1);
+            machine.require_running().unwrap();
+        }
+        server.bridge.machine.session.board.write_register(0, Register::Pc, 0).unwrap();
+        server.arm(&BTreeMap::from([
+            ("0x006d76ec".to_owned(), "render-osd-buffer".to_owned()),
+            ("0x006d7d44".to_owned(), "render-osd-increment".to_owned()),
+        ])).unwrap();
+        let mut output = Vec::new();
+        server.serve_io(b"{\"command\":\"display-key\",\"key\":\"back\"}\n".as_slice(), &mut output).unwrap();
+        let responses: Vec<Value> = output.split(|byte| *byte == b'\n').filter(|line| !line.is_empty())
+            .map(|line| serde_json::from_slice(line).unwrap()).collect();
+        let result = responses.last().unwrap();
+        let receipt: Value = serde_json::from_slice(
+            &std::fs::read(server.output.join("emulator-session.json")).unwrap()).unwrap();
+        assert_eq!(result["ok"], false, "{result}");
+        let error = result["message"].as_str().unwrap();
+        assert!(error.contains("presentation handler did not succeed"), "{error}");
+        assert_eq!(receipt["bridge_error"], error);
+        assert_eq!(receipt["key_log"].as_array().unwrap().len(), 1);
+        assert_eq!(receipt["key_log"][0]["publication"], Value::Null);
+        assert_eq!(receipt["key_log"][0]["failure"], error);
+        assert_eq!(receipt["key_log"][0]["presentation"]["status"], "acknowledged");
+        server.bridge.machine.require_running().expect("the guest stopped before the later presentation");
+        let hits = &server.bridge.machine.traces.hits;
+        let buffer = hits.iter().find(|hit| hit.site == "render-osd-buffer").expect("publication buffer site was not executed");
+        let increment = hits.iter().find(|hit| hit.site == "render-osd-increment").expect("publication increment site was not executed");
+        assert!(increment.instructions >= buffer.instructions);
+        std::fs::remove_dir_all(&server.output).unwrap();
     }
 
     #[test]

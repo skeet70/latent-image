@@ -186,6 +186,9 @@ fn stock_reload() -> Value {
 fn stock_restore() -> Value {
     json!({"call": RESTORE_CALL, "return": RESTORE_RETURN, "copy_store": COPY_STORE, "target": [SETTINGS, SETTINGS + 450]})
 }
+fn stock_header_reload() -> Value {
+    json!({"call": 0x0062_fef0, "return": 0x0062_fef4, "copy_store": COPY_STORE, "target": [SETTINGS, RELOAD_START]})
+}
 fn reload_request(reloads: Value) -> Value {
     let mut value = request();
     value["settings_writers"] = json!([[0x0062_4694, 0x0063_09c4]]);
@@ -193,7 +196,7 @@ fn reload_request(reloads: Value) -> Value {
     value
 }
 fn reload_fixture() -> LifetimeMonitor {
-    let config = config(reload_request(json!([stock_reload(), stock_restore()]))).unwrap();
+    let config = config(reload_request(json!([stock_reload(), stock_restore(), stock_header_reload()]))).unwrap();
     let mut memory = Memory::default();
     for (extent, bytes) in config.readonly_images() { memory.store(extent.start().0, bytes); }
     memory.store(SETTINGS, &[0x5a; 450]);
@@ -278,6 +281,25 @@ fn the_back_restore_copies_the_whole_block_in_halfword_order_from_its_own_call()
     let mut monitor = reload_fixture();
     fetch(&mut monitor, 1, RELOAD_CALL).unwrap();
     assert_eq!(store_on(&mut monitor, 1, COPY_STORE, SETTINGS, &[0x5a, 0x5a], 0xa9c9), Err(LifetimeFailure::ResourceChanged));
+}
+
+#[test]
+fn framed_pop_header_reload_updates_the_expected_header_before_the_setter_continues() {
+    let mut monitor = reload_fixture();
+    write_from(&mut monitor, SETTER, SETTINGS + 14, &[0x5a, 0x5a], 0x95aa).unwrap();
+    fetch(&mut monitor, 0, RELOAD_CALL).unwrap();
+    store_on(&mut monitor, 0, COPY_STORE, RELOAD_START, &[0x5a, 0x5a], 0x5a5a).unwrap();
+    fetch(&mut monitor, 0, RELOAD_RETURN).unwrap();
+    fetch(&mut monitor, 0, 0x0062_fef0).unwrap();
+    for address in (SETTINGS..SETTINGS + 14).step_by(2) {
+        store_on(&mut monitor, 0, COPY_STORE, address, &[0x5a, 0x5a], 0x5a5a).unwrap();
+    }
+    store_on(&mut monitor, 0, COPY_STORE, SETTINGS + 14, &[0xaa, 0x95], 0x94aa).unwrap();
+    fetch(&mut monitor, 0, 0x0062_fef4).unwrap();
+    write_from(&mut monitor, 0x0062_ff2c, SETTINGS + 11, &[0x5a], 7).unwrap();
+    assert_eq!((monitor.receipt().admitted_reload_writes, monitor.receipt().admitted_settings_writes), (1, 2));
+    write_from(&mut monitor, 0x1000, SETTINGS + 14, &[0xaa, 0x94], 0x94aa).unwrap();
+    assert_eq!(store_on(&mut monitor, 0, COPY_STORE, RELOAD_START, &[0x5a, 0x5a], 0xa9c9), Err(LifetimeFailure::ResourceChanged));
 }
 
 #[test]

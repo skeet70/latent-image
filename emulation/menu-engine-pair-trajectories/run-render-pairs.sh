@@ -24,7 +24,7 @@ B=(devenv shell -- host-build --output_base="$output_base")
 firmware=private-data/analysis/x-m1-1.50/update/prefix/FWUP0002-prefix.DAT
 nand=private-data/analysis/x-m1-1.50/stored-f7/emulation/inputs/f7-1.nand
 boot_rom=private-data/analysis/x-m1-1.50/bootrom/bootrom-0x80000000-4000.bin
-run_document=emulation/fujimod-xm1/data/xm1-150.json
+run_document=${RENDER_RUN_DOCUMENT:-emulation/fujimod-xm1/data/xm1-150.json}
 source_commit=${RENDER_SOURCE_COMMIT:-$(git rev-parse --short=8 HEAD)}
 sdk=${RENDER_SDK:-}
 frozen_manifest=${RENDER_FROZEN_MANIFEST:-}
@@ -59,7 +59,7 @@ sample() {
 
 
 build() {
-  "${B[@]}" build --jobs=2 --define=fujimod_store=pfra //emulation:xm1-viewer //emulation:cardless-ram-push-bridge //emulation:render-compare \
+  "${B[@]}" build --jobs=2 //emulation:xm1-viewer //emulation:cardless-ram-push-bridge //emulation:render-compare \
     //emulation:modal-settings-compare //replacement/modal_runtime:menu-engine-pair-check \
     //replacement/modal_runtime:menu-engine-tree //emulation:render-pair-admission \
     //host/firmware:check-bank-allowlist || exit 1
@@ -212,6 +212,7 @@ guest_arguments() {
   local name="$1" role="$2" suffix="${3:+-$3}" dir="$1-$2${3:+-$3}"
   GUEST=(--workspace "$PWD" --ram-push-e2e --cardless --fujimod --unreviewed-relink
     --firmware "$firmware" --installed-nand "$nand"
+    --fujimod-run-document "$run_document"
     --trajectories "$trajectories/$name.$role.json"
     --output "$runs4/$dir-runtime" --receipt-output "$PWD/$runs4/$dir")
   case "$role" in
@@ -341,7 +342,7 @@ check() {
   printf '%s settings exit=%s %s\n' "$name$s" "$settings_status" "$(jq -c '{equal, problem}' "$results/$name$s-settings.json" 2>/dev/null)"
   local exclusions=()
   case "$name" in
-    oracle-frame-fixed-open|oracle-fixed-wrap) exclusions=(--clock-exclusions emulation/menu-engine-pair-trajectories/clock-exclusions.json) ;;
+    oracle-frame-fixed-open|oracle-fixed-wrap|oracle-framed-pop-back) exclusions=(--clock-exclusions emulation/menu-engine-pair-trajectories/clock-exclusions.json) ;;
     oracle-framed-push) exclusions=(--clock-exclusions emulation/menu-engine-pair-trajectories/clock-exclusions-framed-push.json) ;;
   esac
   bazel-bin/emulation/render-compare "$runs/$name-stock$s/e2e-result-render.json" "$runs/$name-owned$s/e2e-result-render.json" "$results/$name$s-render.json" "${exclusions[@]}" > "$results/$name$s-render-check.txt" 2>&1

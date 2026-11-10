@@ -1,0 +1,1 @@
+/nix/store/1xdkgsj2559a0nfakqyfrphmw2lp98kn-fujimod-xm1-0.1.0

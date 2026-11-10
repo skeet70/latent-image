@@ -122,11 +122,15 @@ deriveDrawClass stock composed function hit = do
                   pure (flatOverride || kind == 1)
   pure ((if owned then OwnedDraw else StockDraw) function)
 
+-- Only a draw boundary belongs to a draw: the pane leaf sites share the
+-- "render-pane-" prefix but are entry arguments, not entries, bodies or returns.
 functionOf :: T.Text -> Maybe DrawFunction
-functionOf label | "render-tree-" `T.isPrefixOf` label = Just TreeDraw
-                 | "render-picker-" `T.isPrefixOf` label = Just PickerDraw
-                 | "render-pane-" `T.isPrefixOf` label = Just PaneDraw
-                 | otherwise = Nothing
+functionOf label
+  | not (any (`T.isSuffixOf` label) ["-entry","-adapter","-stock","-return"]) = Nothing
+  | "render-tree-" `T.isPrefixOf` label = Just TreeDraw
+  | "render-picker-" `T.isPrefixOf` label = Just PickerDraw
+  | "render-pane-" `T.isPrefixOf` label = Just PaneDraw
+  | otherwise = Nothing
 
 renderDraws :: RenderConfig -> TablesDocument -> TablesDocument -> Role -> [Observation] -> Either String [[Draw]]
 renderDraws config stock composed role observations = do
@@ -632,7 +636,9 @@ checkRenderInvocationEvidenceReader bounds readers evidence = do
       let frames = [(E.TreeStack,E.FrameBytes (S.entryDepth (S.reportTree bounds)))
             ,(E.PickerStack,E.FrameBytes (S.entryDepth (S.reportPicker bounds)))
             ,(E.PaneStack,E.FrameBytes (S.entryDepth (S.reportPane bounds)))]
-      E.checkEntryWitnesses frames witnesses evidence
+          (start, end) = E.evidenceInterval evidence
+          scoped = [witness | witness@(E.EntryWitness _ counter _ _) <- witnesses, counter >= start, counter <= end]
+      E.checkEntryWitnesses frames scoped evidence
       pure (E.allocationVerdict evidence)
  where
   go witnesses [] = pure (Right (reverse witnesses))
@@ -800,7 +806,9 @@ checkRenderInvocationEvidence bounds observations evidence = do
   let frames = [(E.TreeStack,E.FrameBytes (S.entryDepth (S.reportTree bounds)))
         ,(E.PickerStack,E.FrameBytes (S.entryDepth (S.reportPicker bounds)))
         ,(E.PaneStack,E.FrameBytes (S.entryDepth (S.reportPane bounds)))]
-  E.checkEntryWitnesses frames witnesses evidence
+      (start, end) = E.evidenceInterval evidence
+      scoped = [witness | witness@(E.EntryWitness _ counter _ _) <- witnesses, counter >= start, counter <= end]
+  E.checkEntryWitnesses frames scoped evidence
   pure (E.allocationVerdict evidence)
 
 osdInputs :: [Observation] -> Either String [(T.Text,J.Value)]

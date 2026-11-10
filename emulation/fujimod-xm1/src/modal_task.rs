@@ -211,6 +211,20 @@ pub fn sample(
 }
 
 /// The current task of `core`'s kernel, without the task-execution mode and context-depth checks of [`sample`].
+/// A task context sample: the current identity and creation descriptor plus the kernel context
+/// depth, which may be nonzero for a nested context.
+pub struct ContextSample {
+    pub identity: TaskIdentity,
+    pub descriptor: [u32; 10],
+    pub context_depth: u32,
+}
+
+pub fn sample_context(memory: &impl ValidatedTaskMemory, core: CoreId) -> Result<ContextSample, TaskError> {
+    let context_depth = word(memory, local_kernel(core)?.context_cell())?;
+    let (identity, descriptor) = current_task(memory, core)?;
+    Ok(ContextSample { identity, descriptor, context_depth })
+}
+
 pub fn current_task_id(memory: &impl ValidatedTaskMemory, core: CoreId) -> Result<TaskId, TaskError> {
     current_task(memory, core).map(|(identity, _)| identity.id)
 }

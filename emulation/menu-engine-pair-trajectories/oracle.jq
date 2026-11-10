@@ -58,7 +58,7 @@ $graph[0].graph as $g
     ] + (if $ARGS.named.landing != null then [{"source": "the menu-oracle-\($name) receipt's key reply", "expectation": "The key lands on \($ARGS.named.landing)."}] else [] end)
       + (if ($closing | length) > 0 then [{"source": "crawl-5's back edges and the menu-oracle-close and menu-oracle-close-property receipts' key replies", "expectation": "BACK returns to the live-view root (controller 74 in state 4) before the unload; a BACK into the live view keeps the menu reading of the screen it closes."}] else [] end)
       + (if $ARGS.named.sample != null then [{"source": "emulation/menu-oracle-open.json and emulation/menu-oracle-close.json receipts", "expectation": "OK from the live view opens the shooting menu on \($ARGS.named.sample[0][1:]) and BACK closes it on \($ARGS.named.sample[1][1:])."}] else [] end),
-    "trace_sites": engine_sites($role),
+    "trace_sites": engine_sites($role; $name),
     "before_unload": (
       [ {"phase": "package-menu-prefix", "capture": "oracle-live-view", "steps": [], "reads": reads} ]
       + (if $ARGS.named.sample != null then [segment("modal-sample"; "modal-sample"; ($ARGS.named.sample | presented_handoff))] else [] end)

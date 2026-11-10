@@ -1072,25 +1072,8 @@ decodeReceipt expected config elf result session modal diagnostic request indice
         unless (verified && entries > 0) (fail "owned receipt lacks verified task identity")
         unless (variant == ("modal75,menu-engine,render" :: T.Text) && publications == 228)
           (fail "owned receipt publication vector differs")
-    (scope, diagnosticOnly, wholeRoute, coverageText, finished, failure, active, incomplete, diagnosticRole) <-
-      J.withObject "render diagnostic" (\fields -> do
-        scope <- fields J..: "scope"
-        diagnosticOnly <- fields J..: "diagnostic_only"
-        wholeRoute <- fields J..: "whole_route_stack_minimum_proven"
-        coverageText <- fields J..: "coverage"
-        finished <- fields J..: "finished"
-        failure <- fields J..: "failure" :: J.Parser (Maybe T.Text)
-        active <- fields J..: "active_invocations" :: J.Parser Word32
-        incomplete <- fields J..: "incomplete_intervals"
-        role <- fields J..: "role"
-        pure (scope, diagnosticOnly, wholeRoute, coverageText, finished, failure, active, incomplete, role)) diagnostic
-    unless (scope == ("installed-before-unload" :: T.Text) && diagnosticOnly && not wholeRoute
-      && coverageText == ("continuous" :: T.Text) && finished && failure == Nothing && active == 0 && not incomplete)
-      (fail "render diagnostic is refused, unfinished or overclaimed")
-    let expectedRoleText = roleText (expectedRole expected)
-    unless (diagnosticRole == expectedRoleText) (fail "render diagnostic role differs")
-    requestRole <- J.withObject "diagnostic request" (\fields -> fields J..: "role") request
-    unless (requestRole == expectedRoleText) (fail "diagnostic request role differs")
+    let evidenceRole = case expectedRole expected of StockRole -> E.StockStack; OwnedRole -> E.OwnedStack
+    _ <- either fail pure (E.parseRenderStackEvidence evidenceRole request diagnostic)
     requestConfig <- J.parseJSON request
     unless (sameConfig (config {configRole = expectedRole expected}) (requestConfig :: DiagnosticConfig))
       (fail "diagnostic request differs from the admitted configuration")
@@ -1271,9 +1254,6 @@ ownedConfigFromElf elf allocationSize base stock retainedConfig = do
   let depths = [ (E.TreeStack, R.entryDepth (R.reportTree report))
                , (E.PickerStack, R.entryDepth (R.reportPicker report))
                , (E.PaneStack, R.entryDepth (R.reportPane report)) ]
-      declared = [(entryKind entry, depth) | entry <- configEntries stock, E.FrameBytes depth <- [entryDepth entry]]
-  unless (sort depths == sort declared) (Left
-    ("owned ELF depths " ++ show depths ++ " differ from the frozen stock receipt's " ++ show declared))
   let sections = [(ELF.sectionAddress section, sectionBytes section)
                  | section <- ELF.elfSections elf, ELF.sectionExecutable section, ELF.sectionSize section > 0]
       ownedSources = [DiagnosticSource OwnedSource (E.StackAddress address) (digestBytes bytes) "" | (address, bytes) <- sections]

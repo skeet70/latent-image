@@ -113,6 +113,43 @@ Every qualification observation requires continuous provenance from the first ob
 
 `render_object_provenance` records continuous allocation, object binding and free events across bridge requests and inter-segment execution. Its bounded event stream refuses overflow, missing sequence ranges, clock discontinuity and snapshot restoration after activation. Each trace hit identifies the exact provenance sequence at its boundary. Only object `+4` may compare by `(constructor, requested extent, per-constructor allocation ordinal)`, and only for exact live allocation bases bound to that object. Freeing and reusing an address does not revive its previous binding. Preexisting handles without provenance remain raw; differing unknown handles refuse comparison. Other object fields, draw reports, scalar state and framebuffer bytes remain exact under the existing clock and render-surface rules.
 
+### Controlled-RTC compact receipt admission
+
+The current matrix keeps the `hqldj1cqqq8yncpxfq5pnvp8498ghq8n-fujimod-xm1-0.1.0` SDK and controlled-RTC run document unchanged. Picker-26's completed stock and owned roles exercise the compact lifetime-watch producer. The retained final contains 698,978 rows in its gzip sidecar; the JSON envelope is 16,187 bytes and the sidecar is 9,469,172 bytes.
+
+Rebuilding the comparison consumers at source `a92f201f` admits those same receipts without guest replay: engine, settings and render comparisons each exit zero, with 32 drawer entries in each role and no clock masks. Both role admissions verify against their original identities. The earlier stale-reader failure and its checks remain preserved separately from the rebuilt-consumer checks.
+
+The ten earlier admitted pairs retain source `04883506` and their original admission records. Resumption verifies each receipt against its recorded source and the unchanged SDK, trajectory, configuration, payload, runtime and canonical-RTC identities. Consumer adoption does not relabel those observations.
+
+Exact checker hashes, role identities, commands and resource verdicts are in `private-data/scratch/RenderMatrixAudit/identity-v2.json`, `private-data/scratch/RenderMatrixAudit/resume-result-v3.json` and the indexed `cohort-reconciliation-v3.json`. The final controlled-RTC cohort admits all 67 pairs and 134 roles with unmasked engine, settings and render comparisons: 56 pairs reach drawers in both roles, while 11 pairs are explicitly draw-free. This is finite renderer-subsystem qualification, not whole-firmware or hardware acceptance.
+
+The first continuation reaches 51 passing pairs before stock `oracle-nowrap-edge` exits 143 after its unchanged 2 GiB scope reports kernel `oom-kill`. Its full counterexample remains preserved, including the completed compact final's 857,072 rows and 10,656,340-byte gzip sidecar. This resource failure does not establish a firmware or comparison defect. After the owner authorizes 4 GiB verification scopes, a separately named stock/owned retry completes and passes all three unmasked comparisons, with nine drawer entries per role. The journal reports stock and owned peaks of 2.6G and 2.2G under the admitted 4 GiB cap. The earlier failed role is not relabeled or admitted.
+
+Source inspection identifies avoidable host retention: the compact reader kept every raw JSONL row for its digest, then concatenated them while retaining typed witnesses. The reader now updates a strict SHA-256 context with the original row bytes and LF. Compressed-file hashing uses bounded chunks. The producer writes rows directly and computes its row count before compression. Full typed witnesses and all existing digest, count, ordering, bounds and gzip-completion checks remain required.
+
+Both affected host suites pass on the repair. A file-only run of the rebuilt public reader authenticates the preserved 857,072-row final under a 2 GiB scope in 4.77 seconds, with a journal-reported 537.6 MiB peak. It neither replays the guest nor admits the incomplete role. Independent source review finds no remaining blocker in this retention repair; the inline reader and raw compactor still scale with input size.
+
+The new scope default and maximum are 4 GiB; the topic retains its existing two-slot concurrency. Its rebuilt slot tests pass, a real cgroup probe reads `memory.max=4294967296`, and an 8G request refuses before execution. Later common host-concurrency changes remain separate from these recorded runs. The current producer archive, SDK, canonical RTC, runtime, checker pin and original ten receipt identities are unchanged.
+
+### Executed defect controls
+
+Native widget controls and receipt mutations prove different boundaries. The native cases in the widget contracts execute the loop over declared service stubs. `RenderComparisonTests` mutates receipt fields and image bytes to exercise the host consumer. Neither establishes that a packaged guest executed a defective drawer.
+
+The earlier `RenderSourcePort/control-tree` run on `oracle-push` and `control-picker` run on `picker-15` are not executed tree/picker controls: their task-33 diagnostics contain respectively eight and 22 pane invocations, with no invocation of the mutated drawer. Their passing comparisons do not qualify the controls. The separately executed pane-selected control remains pane evidence only.
+
+`E-RENDER-TREE-PICKER-GUEST-CONTROLS-150` supplies executed controls on `oracle-fn-auto-open` using the current `/nix/store/qmn23ds0kbqc2fcq9k2dh5833w617991-fujimod-xm1-0.1.0` runtime. The stock, unchanged owned, tree-selected-unstyled and picker-selected-unstyled roles each complete installation, the trajectory and unload. Each records one pane, three Fn-picker and one AUTO-ISO tree invocation; all five invocations in each owned role terminate `owned-return`.
+
+| Role | Required-draw pair checker | Settings comparison | Image comparison | Observed defect |
+| --- | ---: | ---: | ---: | --- |
+| Unchanged owned | 0 | 0 | 0 | All five captures have byte-equal PNGs and source planes |
+| Tree selected row unstyled | 1 | 0 | 1 | `oracle-key` PNG, pixels and source planes differ |
+| Picker selected row unstyled | 1 | 0 | 1 | `oracle-path` PNG, pixels and source planes differ |
+
+Both defect pair checks report `render draw order/state differs` after equal engine reads and `0x1d` posts. No draw-free fallback, clock exclusion, clock-resource exemption or receipt mutation is used. The unchanged role passes the allocation-based invocation criterion; historical estimate violations remain visible. This closes the executed tree/picker selected-row controls, not the complete renderer matrix or hardware acceptance.
+
+Receipts are `private-data/scratch/RenderDefectControls/{stock,owned,tree,picker}/`; each retains `e2e-result.json`, task-33 diagnostics and the raw observations. `evidence.json` in that scratch directory binds receipt and archive digests, commands and the stock shell's post-receipt launcher error. Reproduction uses its `run-control.sh ROLE` followed by `compare-controls.sh`; the latter calls the existing required-draw, settings and image comparators. The retained control archives and their role-specific prelinked packages/configurations come from `RenderSourcePort/control-{tree,picker}`; no package rebuild is implied. Guests run serially with one emulator slot and a 4 GiB guest cap, retaining the 100 GiB disk reserve. No build, test or formatter ran for this evidence increment.
+
+
 ## 7. Shims
 
 | Shim | Removal condition |
