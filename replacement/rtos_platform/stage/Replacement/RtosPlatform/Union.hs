@@ -249,23 +249,23 @@ resolveEntryTarget image symbols placements entry = do
       body <- case named (entrySymbol entry ++ "_body") of
         [symbol] -> Right symbol
         _ -> Left ("missing positive-size entry body: " ++ entrySymbol entry)
-      let address = A.placementAddress thunk
-      instruction <- wordAt address
-      unless (instruction == branch address (A.symbolAddress body))
+      let thunkAddress = A.placementAddress thunk
+      instruction <- wordAt thunkAddress
+      unless (instruction == branch thunkAddress (A.symbolAddress body))
         (Left ("allocated entry thunk does not branch to its body: " ++ entrySymbol entry))
-      pure (A.AggregateSymbol (entrySymbol entry) address 4)
+      pure (A.AggregateSymbol (entrySymbol entry) thunkAddress 4)
     _ -> Left ("duplicate entry symbol: " ++ entrySymbol entry)
-  let GuestAddress address = entryAddress entry
+  let GuestAddress veneerAddress = entryAddress entry
   case named (entryVeneer entry) of
-    [veneer] | A.symbolAddress veneer == address, A.symbolSize veneer == 4 -> Right ()
+    [veneer] | A.symbolAddress veneer == veneerAddress, A.symbolSize veneer == 4 -> Right ()
     _ -> Left ("missing exact fixed entry veneer: " ++ entryVeneer entry)
-  instruction <- wordAt address
-  unless (instruction == branch address (A.symbolAddress target))
+  instruction <- wordAt veneerAddress
+  unless (instruction == branch veneerAddress (A.symbolAddress target))
     (Left ("fixed entry veneer does not branch to its target: " ++ entryVeneer entry))
   pure target
   where
     named name = [symbol | symbol <- symbols, A.symbolName symbol == name, A.symbolSize symbol > 0]
-    branch address target = 0xea000000 .|. (((target - address - 8) `shiftR` 2) .&. 0xffffff)
-    wordAt address = do
-      bytes <- A.sliceAggregate image address 4
+    branch source target = 0xea000000 .|. (((target - source - 8) `shiftR` 2) .&. 0xffffff)
+    wordAt location = do
+      bytes <- A.sliceAggregate image location 4
       pure (B.foldr (\byte value -> fromIntegral byte .|. (value `shiftL` 8)) (0 :: Word32) bytes)

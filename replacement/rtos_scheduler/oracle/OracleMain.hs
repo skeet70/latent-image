@@ -6,6 +6,7 @@
 -- owned body differs from stock.
 module Main (main) where
 
+import Control.Exception (evaluate)
 import Control.Monad (forM, forM_, when)
 import Data.Aeson (Value, object, (.=))
 import qualified Data.ByteString as B
@@ -18,7 +19,6 @@ import FujiAF.JSON (encodeCanonical)
 import Numeric (showHex)
 import Replacement.RtosOwnFirst.Artifact (loaderSha256)
 import Replacement.RtosOwnFirst.Regions (domainLabel, domains)
-import qualified Replacement.RtosOwnFirst.Regions as R
 import qualified Replacement.RtosPlatform.Aggregate as Agg
 import qualified Replacement.RtosPlatform.Union as Union
 import Replacement.RtosScheduler.Controls
@@ -80,6 +80,28 @@ helperValue report =
     ]
   where
     owned = reportOwned report
+
+chunks :: [a] -> [[a]]
+chunks [] = []
+chunks values = let (batch, rest) = splitAt 64 values in batch : chunks rest
+
+mergeOutcome :: Outcome -> Outcome -> Outcome
+mergeOutcome left right = Outcome
+  { outcomeCases = outcomeCases left + outcomeCases right
+  , outcomeMatches = outcomeMatches left + outcomeMatches right
+  , outcomeFirst = case outcomeFirst left of Nothing -> outcomeFirst right; first -> first
+  , outcomeDifferingCompleted = outcomeDifferingCompleted left + outcomeDifferingCompleted right
+  , outcomeDifferingOther = outcomeDifferingOther left + outcomeDifferingOther right
+  , outcomeStatuses = M.unionWith (+) (outcomeStatuses left) (outcomeStatuses right)
+  }
+
+mergeReports :: HelperReport -> HelperReport -> HelperReport
+mergeReports left right = left
+  { reportStockStatuses = M.unionWith (+) (reportStockStatuses left) (reportStockStatuses right)
+  , reportStockHolds = reportStockHolds left && reportStockHolds right
+  , reportOwned = mergeOutcome (reportOwned left) (reportOwned right)
+  , reportControls = zipWith (\a b -> a {resultOutcome = mergeOutcome (resultOutcome a) (resultOutcome b)}) (reportControls left) (reportControls right)
+  }
 
 main :: IO ()
 main = do
@@ -149,21 +171,28 @@ main = do
         pure (Role (controlName control) body True)
       let directory = work </> domainLabel domain ++ "-" ++ helperName helper
           keys = map CaseKey [0 .. length (caseGrid layout helper) - 1]
-      run <- runHelper env runner directory domain helper keys (Role "stock" stock False) (Role "owned" owned True : Role "stock-repeat" stock False : controlRoles)
-      let outcomes = M.fromList (runSubjects run)
-          result role expectation note = ControlResult role expectation note (outcomes M.! role)
-          report =
-            HelperReport
-              { reportDomain = domain
-              , reportHelper = helper
-              , reportEntry = bodyEntry owned
-              , reportStockStatuses = statusCounts (runReference run)
-              , reportStockHolds = runReferenceEnds run
-              , reportOwned = outcomes M.! "owned"
-              , reportControls =
-                  result "stock-repeat" MustPass "the stock code against itself"
-                    : [result (controlName control) (controlExpectation control) (controlNote control) | control <- controls]
-              }
+      batches <- forM (zip [0 :: Int ..] (chunks keys)) $ \(index, batchKeys) -> do
+        let batchDirectory = directory </> show index
+        run <- runHelper env runner batchDirectory domain helper batchKeys (Role "stock" stock False) (Role "owned" owned True : Role "stock-repeat" stock False : controlRoles)
+        let outcomes = M.fromList (runSubjects run)
+            result role expectation note = ControlResult role expectation note (outcomes M.! role)
+            report =
+              HelperReport
+                { reportDomain = domain
+                , reportHelper = helper
+                , reportEntry = bodyEntry owned
+                , reportStockStatuses = statusCounts (runReference run)
+                , reportStockHolds = runReferenceEnds run
+                , reportOwned = outcomes M.! "owned"
+                , reportControls =
+                    result "stock-repeat" MustPass "the stock code against itself"
+                      : [result (controlName control) (controlExpectation control) (controlNote control) | control <- controls]
+                }
+        _ <- evaluate (B.length (encodeCanonical (object ["helper" .= helperValue report, "controls" .= map (controlValue report) (reportControls report)])))
+        _ <- evaluate (outcomeDifferingCompleted (reportOwned report))
+        _ <- evaluate (outcomeDifferingOther (reportOwned report))
+        pure report
+      let report = foldl1 mergeReports batches
       when (verdictExit [report] == ExitSuccess) (removeDirectoryRecursive directory)
       pure report
   let exit = verdictExit reports

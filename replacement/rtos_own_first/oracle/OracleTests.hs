@@ -114,7 +114,7 @@ aggregateAdmission :: DomainTable -> Bool
 aggregateAdmission table =
   let entries = [(slot, either error id (slotEntry table slot)) | slot <- slots]
       symbol slot = "fixed_" ++ slotTag slot
-      entryRows = [object ["group" .= ("own-first" :: String), "name" .= slotTag slot, "address" .= hexText address, "symbol" .= symbol slot, "veneer" .= symbol slot] | (slot, address) <- entries]
+      entryRows = [object ["group" .= ("own-first" :: String), "name" .= slotTag slot, "address" .= hexText address, "symbol" .= symbol slot, "veneer" .= symbol slot, "section" .= (".text." ++ slotTag slot)] | (slot, address) <- entries]
       carrierSpans = (0x40000, 0x40010) : [(address, address + 8) | (_, address) <- entries]
       domainValue :: Word32 -> Int -> [Value] -> Value
       domainValue base size rows = object

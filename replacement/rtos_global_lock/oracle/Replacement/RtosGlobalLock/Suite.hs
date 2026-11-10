@@ -509,13 +509,19 @@ runDomain runner cacheRoot directory domain stockImage ownedImage symbols aggreg
                   one : _ -> caseFor domain Owned stockImage ownedImage symbols aggregates one
                   [] -> error "global-lock cases are empty"
                 program = if protection == WriteProtection then driverBytes else assemble [0xe12fff10,0xe12fff1e]
+                value R0 = address
+                value R1 = 0xa5
+                value Sp = stackPointer
+                value Lr = exitAddress
+                value Cpsr = 0x13
+                value register = seedRegister register
              in template
                { caseId = name address protection
                , caseEntry = GuestAddress (fromIntegral driver)
                , caseRegions = caseRegions template ++
                    [mkRegion (RegionId "readonly-driver") (GuestAddress (fromIntegral driver)) (B.length program) ReadExecute program]
                , caseFunctions = [(GuestAddress (fromIntegral driver), fromIntegral (B.length program))]
-               , caseInitial = [(R0, address), (R1, 0xa5), (Sp, stackPointer), (Lr, exitAddress), (Cpsr, 0x13)]
+               , caseInitial = [(register, value register) | register <- [R0 .. R12] ++ [Sp, Lr, Cpsr]]
                , caseExpectedStatus = if protection == WriteProtection then MemoryGuard else FetchGuard
                , caseExpectedRegisters = [(R0, address), (Pc, if protection == WriteProtection then driver else address)]
                , caseExpectedMemory = []

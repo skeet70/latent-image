@@ -1,8 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Replacement.RtosScheduler.S2 (main) where
 
+import Control.Exception (evaluate)
 import Control.Monad (forM, forM_, unless, when)
-import Data.Aeson (Value, object, (.=))
+import Data.Aeson (object, (.=))
 import Data.Bits ((.&.), (.|.), shiftL)
 import qualified Data.ByteString as B
 import Data.Char (toLower)
@@ -33,6 +34,10 @@ data Redesign = NullOwnRegisters | NullUnlock | RemoteRestart deriving (Eq, Ord,
 data Selection = Same | Other | Null deriving (Eq, Show)
 data Role = Stock | StockRepeat | Owned | Equivalent Entry | Mutant Entry | Revert Redesign deriving (Eq, Show)
 newtype CaseIndex = CaseIndex Int deriving (Eq, Ord, Show)
+chunks :: [a] -> [[a]]
+chunks [] = []
+chunks values = let (batch, rest) = splitAt 64 values in batch : chunks rest
+
 newtype LockTag = LockTag Word32 deriving (Eq, Show)
 data Row = Row { entry :: Entry, selection :: Selection, discarded :: Word32, enabled :: Word32, flags :: Word32, pending :: Word32, cpacr :: Word32, fpexc :: Word32, cpsr :: Word32, lockTag :: LockTag } deriving (Show)
 data Image = Image { imageDomain :: Domain, stockBytes :: B.ByteString, ownedBytes :: B.ByteString, imageReloc :: Reloc, imageExtras :: [(Word32, Word32)], imageAggregate :: Maybe ([Agg.AggregateSymbol], [Agg.SectionPlacement], [R.Extent]) }
@@ -267,14 +272,16 @@ regions image role row = code ++ dat
     install bytes (a,z) = replace b bytes (b+a) (slice imageBase imageEnd raw (b+a) (b+z))
     codeSpans = [(0xb00,0xb24),(if isStock role || not aggregate then 0x252c else 0x12b4, if isStock role || not aggregate then 0x3810 else maximum (0x403c : map snd (relocRegions (imageReloc image)) ++ map snd (imageExtras image)))]
     code = case (isStock role, imageAggregate image) of
-      (False, Just _) ->
+      (False, Just (_, _, carriers)) ->
         let functions = aggregateFunctions image [(0x252c,0x2554),(0x27b8,0x27d4),(0x27fc,0x2828),(0x2854,0x286c),(0x3444,0x34a4)]
             join (a,z) ((lo,hi):rest) | z == lo = (a,hi):rest
             join span' rest = span':rest
             storage = foldr join [] functions
             top = fromIntegral (B.length installed)
             cuts = sort (nub (0xb00 : top : concat [[a,z] | (a,z) <- storage]))
-         in [mk ("code-"++show a) (b+a) (if any (\(lo,hi) -> lo <= a && z <= hi) storage then ReadExecute else ReadOnly) (slice b (b+top) installed (b+a) (b+z)) | (a,z) <- zip cuts (drop 1 cuts)]
+            executable a z = any (\(lo,hi) -> lo <= a && z <= hi) storage
+            supplied a z = any (\(R.Extent (R.GuestAddress lo) (R.GuestAddress hi)) -> lo < b+z && b+a < hi) carriers
+         in [mk ("code-"++show a) (b+a) (if executable a z then ReadExecute else ReadOnly) (slice b (b+top) installed (b+a) (b+z)) | (a,z) <- zip cuts (drop 1 cuts), executable a z || supplied a z]
       _ -> [mk ("code-"++show a) (b+a) ReadExecute (slice b (b+fromIntegral (B.length stock)) installed (b+a) (b+z)) | (a,z) <- codeSpans]
     (low,high) = (context d, running d + 12)
     LockTag tag = lockTag row
@@ -366,22 +373,6 @@ order o = fromMaybe (error "truncated kernel order") (nativeKernel o >>= observe
 writes :: Word32 -> NativeObservation -> [Word32]
 writes address o = [fromIntegral v | OrderedWrite (Write a _) (WriteValue v) <- order o, a==guest address]
 
-firstWriteDiff :: NativeObservation -> NativeObservation -> Value
-firstWriteDiff s o = case [ (i,a,b) | (i,a,b) <- zip3 [0 :: Int ..] (order s) (order o), a /= b ] of
-  (i,a,b):_ -> object ["index" .= i, "stock" .= show a, "owned" .= show b]
-  [] -> object ["index" .= length (order s), "stock" .= ("-"::String), "owned" .= ("-"::String)]
-
-filtered :: NativeObservation -> NativeObservation
-filtered o = o { nativeMemory=filter (not . excluded . fst) (nativeMemory o), nativeKernel=fmap (\k -> k {observedOrder=fmap (filter keep) (observedOrder k)}) (nativeKernel o) }
-  where
-    excluded ident = regionName ident `elem` ["stack","idle-stack","target-stack"] || take 5 (regionName ident)=="code-" || take 6 (regionName ident)=="table-"
-    keep (OrderedWrite (Write a _) _) = let n=guestWord a in not (stackBase<=n && n<stackPointer) && not (0x9ff00<=n && n<0xa0000) && not (0x12ff00<=n && n<0x130000)
-    keep _ = True
-
-comparison :: Image -> Row -> CaseSpec -> NativeObservation -> NativeObservation -> [KernelDifference]
-comparison _ _ description reference subject = compareKernelCase description {caseRegions=filter retained (caseRegions description)} (filtered reference) (filtered subject)
-  where retained (CaseRegion region _) = not (regionIdOf region `elem` map RegionId ["stack","idle-stack","target-stack"])
-
 expected :: Image -> Role -> Row -> NativeObservation -> Bool
 expected image role row o
   | NullOwnRegisters `elem` tags = if stock then nativeStatus o==UnsupportedInstruction && reg Pc o==at d 0x3704 && word "sentinel" 0 o==1 else nativeStatus o==InstructionBudget && word "sentinel" 0 o==0xfeedcafe && reg Cpsr o .&. 0x1f==0x13 && 1 `elem` writes (context d) o
@@ -471,20 +462,22 @@ main = do
         indexed=if "--sample" `elem` args then concat [take 3 [pair | pair@(_,row)<-grid,entry row==e] | e<-[minBound..maxBound]] ++ concat [take 1 [pair | pair@(_,row)<-grid,r `elem` trigger d row] | r<-[NullOwnRegisters,NullUnlock,RemoteRestart]] else grid
         roles=[Stock,Owned,StockRepeat] ++ map Equivalent [minBound..maxBound] ++ map Mutant [minBound..maxBound] ++ map Revert [NullOwnRegisters,NullUnlock,RemoteRestart]
         applicable role row = case role of Equivalent e -> entry row==e; Mutant e -> entry row==e; Revert r -> r `elem` trigger d row; _ -> True
-        groups=[(show role,[(caseId s,s) | (key,row)<-indexed, applicable role row, let s=spec image role key row]) | role<-roles]
+        groups=[(role,[(key,row,s) | (key,row)<-indexed, applicable role row, let s=spec image role key row]) | role<-roles]
         directory=work </> domainLabel d
-    outcomes <- forM groups $ \(label,descriptions) -> do
-      batch <- writeBatch (directory </> label) (map snd descriptions)
-      (reuse,raw) <- cachedObservedBatch cache runner batch
-      pure (label,reuse,raw)
-    let results = concat [raw | (_,_,raw) <- outcomes]
-        observations = M.fromList [(name,o) | (CaseId name,o) <- results]
-    let observed role key row = observations M.! caseId (spec image role key row)
-        matches role key row = expected image role row (observed role key row)
-        stockHolds=and [expected image Stock row (observed Stock key row) | (key,row)<-indexed]
+    outcomes <- fmap concat . forM groups $ \(role,descriptions) ->
+      forM (zip [0 :: Int ..] (chunks descriptions)) $ \(index,chunk) -> do
+        batch <- writeBatch (directory </> show role </> show index) [description | (_,_,description) <- chunk]
+        (reuse,raw) <- cachedObservedBatch cache runner batch
+        let observed = M.fromList [(caseIdText ident, observation) | (ident,observation) <- raw]
+            judged = [(caseId description, maybe False (expected image role row) (M.lookup (caseId description) observed)) | (_,row,description) <- chunk]
+        _ <- evaluate (B.length (encodeCanonical (object ["cases" .= [object ["id" .= ident,"holds" .= ok] | (ident,ok) <- judged]])))
+        pure (show role,reuse,judged)
+    let observations = M.fromList [result | (_,_,judged) <- outcomes, result <- judged]
+        matches role key row = M.findWithDefault False (caseId (spec image role key row)) observations
+        stockHolds=and [matches Stock key row | (key,row)<-indexed]
         checks=[(key,row,matches Owned key row) | (key,row)<-indexed]
         controls=[(show role,case role of Mutant _ -> any (\(key,row)->not (matches role key row)) chosen; Revert _ -> any (\(key,row)->not (matches role key row)) chosen; _ -> all (\(key,row)->matches role key row) chosen) | role<-drop 2 roles, let chosen=filter (applicable role . snd) indexed]
-        failures=[object ["case" .= show key,"row" .= show row,"tags" .= map redesignId (trigger d row),"stock_status" .= show (nativeStatus (observed Stock key row)),"owned_status" .= show (nativeStatus (observed Owned key row)),"stock_pc" .= show (reg Pc (observed Stock key row)),"owned_pc" .= show (reg Pc (observed Owned key row)),"owned_sp" .= show (reg Sp (observed Owned key row)),"owned_lr" .= show (reg Lr (observed Owned key row)),"owned_r0" .= show (reg R0 (observed Owned key row)),"stock_r0" .= show (reg R0 (observed Stock key row)),"first_write_diff" .= firstWriteDiff (observed Stock key row) (observed Owned key row),"stock_global" .= show (word "global" 0 (observed Stock key row)),"owned_global" .= show (word "global" 0 (observed Owned key row)),"declared_stop" .= show (stop image Owned d row),"owned_order_tail" .= show (take 8 (reverse (order (observed Owned key row)))),"owned_task18" .= show (word "tasks" 0x18 (observed Owned key row)),"owned_task1c" .= show (word "tasks" 0x1c (observed Owned key row)),"stock_task18" .= show (word "tasks" 0x18 (observed Stock key row)),"stock_task1c" .= show (word "tasks" 0x1c (observed Stock key row)),"stock_expected" .= expected image Stock row (observed Stock key row),"owned_expected" .= expected image Owned row (observed Owned key row),"differences" .= map show (comparison image row (spec image Owned key row) (observed Stock key row) (observed Owned key row))] | (key,row,ok)<-checks, not ok || not (expected image Stock row (observed Stock key row))]
+        failures=[object ["case" .= show key,"row" .= show row,"tags" .= map redesignId (trigger d row),"stock_expected" .= matches Stock key row,"owned_expected" .= ok] | (key,row,ok)<-checks, not ok || not (matches Stock key row)]
         holds=stockHolds && all (\(_,_,ok)->ok) checks && all snd controls
         report=object ["domain" .= domainLabel d,"cases" .= length indexed,"untagged" .= length [() | (_,r)<-indexed,null (trigger d r)],"expected_differences" .= [object ["id" .= redesignId r,"count" .= length [() | (_,row)<-indexed,r `elem` trigger d row]] | r<-[NullOwnRegisters,NullUnlock,RemoteRestart]],"stock_holds" .= stockHolds,"owned_holds" .= all (\(_,_,ok)->ok) checks,"controls" .= [object ["name" .= name,"holds" .= ok] | (name,ok)<-controls],"batch_reuse" .= [object ["role" .= label,"reuse" .= show reuse] | (label,reuse,_)<-outcomes],"failures" .= failures,"holds" .= holds]
     when holds (removeDirectoryRecursive directory)

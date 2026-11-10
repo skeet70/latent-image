@@ -525,11 +525,16 @@ compareFamily facts executing payload one description stock owned =
           Nothing -> ["missing suspended caller SP"]
           Just saved ->
             ["suspended caller frame is outside its live stack" | saved < callerSp one - 0x400 || toInteger saved + 36 > toInteger (callerSp one) || saved .&. 3 /= 0]
-              ++ ["suspended caller resume entry differs" | readWord facts one observation (GuestAddress savedPcAddress) /= Just (resumeEntry executing)]
+              ++ ["suspended caller resume entry differs" | readWord facts one observation (GuestAddress savedPcAddress) /= expectedResume role]
               ++ ["suspended callee-saved register " ++ show register ++ " differs" | (offset,register) <- zip [12,16 .. 28] [R7 .. R11], readWord facts one observation (GuestAddress (saved+offset)) /= N.lookupRegister register observation]
               ++ ["suspended continuation is not in the caller's code" | maybe True (not . inOwnedCode role) (readWord facts one observation (GuestAddress (saved+32)))]
     savedSpAddress = taskAt facts executing runningSlot + factsTaskSavedSp facts
     savedPcAddress = taskAt facts executing runningSlot + factsTaskResumePc facts
+    expectedResume OwnedObservation | Aggregate _ symbols _ _ <- payload =
+      case [Agg.symbolAddress symbol | symbol <- symbols, Agg.symbolName symbol == "xm1_rtos_scheduler_resume", Agg.symbolSize symbol > 0] of
+        [address] -> Just address
+        _ -> Nothing
+    expectedResume _ = Just (resumeEntry executing)
     inOwnedCode role address = any (\(base,size) -> base <= address && address < base+size) (functionSpans executing role payload)
     compared = [ident | Page ident _ _ _ _ <- pages facts one, ident `notElem` map RegionId ["stack","target-stack"]]
     memory observation = M.fromList [(ident, normalizeTimer ident (normalize ident bytes)) | (ident,bytes) <- nativeMemory observation, ident `elem` compared]
@@ -537,7 +542,9 @@ compareFamily facts executing payload one description stock owned =
       | caseBoundary one == TaskArrival && ident == RegionId (if executing == DomainA then "kernel-a" else "kernel-b") =
           let (GuestAddress base,_) = kernelBounds facts executing
               offset = fromIntegral (savedSpAddress-base)
-           in B.take offset bytes <> word32le 0 <> B.drop (offset+4) bytes
+              resumeOffset = fromIntegral (savedPcAddress-base)
+              withoutSp = B.take offset bytes <> word32le 0 <> B.drop (offset+4) bytes
+           in B.take resumeOffset withoutSp <> word32le 0 <> B.drop (resumeOffset+4) withoutSp
       | otherwise = bytes
     normalizeTimer ident bytes = case caseTimerIndex one of
       Nothing -> bytes
@@ -631,6 +638,7 @@ semanticControls facts domain payload one spec stock owned =
          check "device-write-refused" (mutateWord facts one (bank domain) 0xffffffff owned),
          check "task-state-refused" (mutateWord facts one (GuestAddress state) 0xffffffff owned),
          check "caller-message-refused" (mutateWord facts one (GuestAddress 0x40000000) 0xffffffff owned)]
+          ++ [check "saved-resume-refused" (mutateWord facts one (GuestAddress (taskAt facts domain runningSlot + factsTaskResumePc facts)) 0 owned) | caseBoundary one == TaskArrival]
    in baseControls ++ case caseTimerIndex one of
       Nothing -> []
       Just address ->

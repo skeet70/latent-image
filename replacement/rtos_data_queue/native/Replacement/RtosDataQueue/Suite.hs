@@ -953,9 +953,20 @@ holds _ _ pages' observation expectation = case expectation of
 -- | Both roles against the declared expectations and each other. The runner's own report is
 -- judged separately: its whole-region memory gate is not declared, so a report is only refused
 -- for a status, register, event or kernel mismatch.
-compareCase :: Facts -> Domain -> Case -> NativeObservation -> NativeObservation -> [String]
-compareCase facts domain one stock owned = statusDifferences ++ declaredRegisterDifferences ++ expectedDifferences ++ membershipDifferences ++ callerDifferences ++ resultDifferences ++ regionDifferences ++ registerDifferences
+compareCase :: Maybe Aggregate -> Facts -> Domain -> Case -> NativeObservation -> NativeObservation -> [String]
+compareCase aggregate facts domain one stock owned = resumeDifferences ++ statusDifferences ++ declaredRegisterDifferences ++ expectedDifferences ++ membershipDifferences ++ callerDifferences ++ resultDifferences ++ regionDifferences ++ registerDifferences
   where
+    fixedResume = if domain == DomainA then 0x43668 else 0xd3668
+    resumeBody = case aggregate of
+      Nothing -> Just fixedResume
+      Just joined -> case [Agg.symbolAddress symbol | symbol <- aggregateSymbols joined, Agg.symbolName symbol == "xm1_rtos_scheduler_resume", Agg.symbolSize symbol > 0] of
+        [address] -> Just address
+        _ -> Nothing
+    resumeOffsets = [fromIntegral (task facts domain slot + factsTaskResumePc facts - fst (kernelBounds facts domain)) | slot <- [1 .. 3]]
+    resumed = [offset | Just bytes <- [regionBytes stock "kernel"], offset <- resumeOffsets, readWordAt bytes offset == fixedResume]
+    resumeDifferences =
+      ["owned saved resume entry differs" | offset <- resumed, fmap (\bytes -> readWordAt bytes offset) (regionBytes owned "kernel") /= resumeBody]
+    normalizeResume bytes = foldl (\current offset -> replaceWord offset fixedResume current) bytes resumed
     pages' = pages facts domain one
     expectedStatus = Returned
     returned observation = nativeStatus observation == expectedStatus
@@ -1005,12 +1016,12 @@ compareCase facts domain one stock owned = statusDifferences ++ declaredRegister
       , caseCompareRegions one
       , name <- ["kernel", "peer-kernel", "ring", "out", "timer-record"]
       , let exempt = if caseNameText one `elem` timedRowNames then [dataQueueTimer facts domain 1] else []
-            view = case name of
-              "kernel" -> fmap (normalizeKernel facts domain exempt)
-              "peer-kernel" -> fmap (normalizeKernel facts (peer domain) [])
-              "timer-record" -> fmap (normalizeRecord facts one)
-              _ -> id
-      , view (regionBytes stock name) /= view (regionBytes owned name)
+            view resumeView observation = case name of
+              "kernel" -> fmap (normalizeKernel facts domain exempt . resumeView) (regionBytes observation name)
+              "peer-kernel" -> fmap (normalizeKernel facts (peer domain) []) (regionBytes observation name)
+              "timer-record" -> fmap (normalizeRecord facts one) (regionBytes observation name)
+              _ -> regionBytes observation name
+      , view id stock /= view normalizeResume owned
       ]
         ++ (if caseCompareRegions one then relocatedHeapDifferences facts domain stock owned else [])
     registerDifferences =
@@ -1088,8 +1099,8 @@ reportVerdicts directory ident = do
               || (reportStatus report == "failed" && null (reportMismatches report))
           ]
 
-controlRuns :: Facts -> Domain -> Case -> NativeObservation -> NativeObservation -> [ControlRun]
-controlRuns facts domain one stock owned = concat
+controlRuns :: Maybe Aggregate -> Facts -> Domain -> Case -> NativeObservation -> NativeObservation -> [ControlRun]
+controlRuns aggregate facts domain one stock owned = concat
   [ control "armed-membership" (guardEq armedCountOff 1) (mutateRecord armedCountOff (const 0))
   | name `elem` timedRowNames
   ]
@@ -1111,11 +1122,16 @@ controlRuns facts domain one stock owned = concat
     ++ concat [[detect "missing-detach-write" (owned {nativeKernel = fmap withoutDetach (nativeKernel owned)})
                ,detect "owned-relink" (mutateKernel (dataQueueTimer facts domain 1) 1 owned)]
               | name `elem` timedRowNames]
+    ++ [detect ("saved-resume-" ++ show slot) (mutateKernel address 0 owned)
+       | slot <- [1 .. 3]
+       , let address = task facts domain slot + factsTaskResumePc facts
+       , Just bytes <- [regionBytes stock "kernel"]
+       , readWordAt bytes (fromIntegral (address - fst (kernelBounds facts domain))) == (if domain == DomainA then 0x43668 else 0xd3668)]
   where
     name = caseNameText one
     detect label mutant =
-      let baseline = null (compareCase facts domain one stock owned)
-          refused = not (null (compareCase facts domain one stock mutant))
+      let baseline = null (compareCase aggregate facts domain one stock owned)
+          refused = not (null (compareCase aggregate facts domain one stock mutant))
        in ControlRun domain label name baseline refused True (baseline && refused)
     withoutDetach kernel = kernel {observedOrder = fmap (filter keep) (observedOrder kernel)}
     keep (OrderedWrite (Write actual _) (WriteValue 0)) = actual /= N.GuestAddress (fromIntegral (dataQueueTimer facts domain 1))
@@ -1125,15 +1141,15 @@ controlRuns facts domain one stock owned = concat
     controlWith label transform mutate =
       let mutantStock = mutate stock
           mutantOwned = mutate owned
-          baseline = null (compareCase facts domain one stock owned)
-          refused = not (null (compareCase facts domain one mutantStock mutantOwned))
-          guardNeeded = null (compareCase facts domain (transform one) mutantStock mutantOwned)
+          baseline = null (compareCase aggregate facts domain one stock owned)
+          refused = not (null (compareCase aggregate facts domain one mutantStock mutantOwned))
+          guardNeeded = null (compareCase aggregate facts domain (transform one) mutantStock mutantOwned)
        in [ControlRun domain label name baseline refused guardNeeded (baseline && refused && guardNeeded)]
     controlOwned label transform mutate =
       let mutantOwned = mutate owned
-          baseline = null (compareCase facts domain one stock owned)
-          refused = not (null (compareCase facts domain one stock mutantOwned))
-          guardNeeded = null (compareCase facts domain (transform one) stock mutantOwned)
+          baseline = null (compareCase aggregate facts domain one stock owned)
+          refused = not (null (compareCase aggregate facts domain one stock mutantOwned))
+          guardNeeded = null (compareCase aggregate facts domain (transform one) stock mutantOwned)
        in [ControlRun domain label name baseline refused guardNeeded (baseline && refused && guardNeeded)]
     withoutExpect guard current =
       current
@@ -1220,10 +1236,10 @@ runDomain runner cacheRoot directory facts domain aggregate stockImage ownedImag
     ownedVerdicts <- reportVerdicts (directory </> "owned") ident
     let verdicts = stockVerdicts ++ ownedVerdicts
         controls = case (M.lookup ident reference, M.lookup ident subject) of
-          (Just original, Just replacement) -> controlRuns facts domain one original replacement
+          (Just original, Just replacement) -> controlRuns aggregate facts domain one original replacement
           _ -> []
     pure ( case (M.lookup ident reference, M.lookup ident subject) of
-             (Just original, Just replacement) -> CaseRun domain (caseIdText (caseName one)) blocking [] (verdicts ++ compareCase facts domain one original replacement) (BatchExecuted, BatchExecuted)
+             (Just original, Just replacement) -> CaseRun domain (caseIdText (caseName one)) blocking [] (verdicts ++ compareCase aggregate facts domain one original replacement) (BatchExecuted, BatchExecuted)
              (Nothing, _) -> CaseRun domain (caseIdText (caseName one)) blocking [] ["stock case did not run"] (BatchExecuted, BatchExecuted)
              (_, Nothing) -> CaseRun domain (caseIdText (caseName one)) blocking [] ["owned case did not run"] (BatchExecuted, BatchExecuted)
          , controls

@@ -1428,12 +1428,13 @@ compareRole facts role spec one expectation observation =
       Just (target, value) | target == domain -> value
       _ -> 0
 
-compareFamily :: Facts -> Domain -> Case -> CaseSpec -> CaseSpec -> NativeObservation -> NativeObservation -> [String]
-compareFamily facts executing one stockSpec ownedSpec stock owned =
+compareFamily :: Image -> Facts -> Domain -> Case -> CaseSpec -> CaseSpec -> NativeObservation -> NativeObservation -> [String]
+compareFamily image facts executing one stockSpec ownedSpec stock owned =
   compareRole facts StockRole stockSpec one (caseStock one) stock
     ++ compareRole facts OwnedRole ownedSpec one ownedExpectation owned
     ++ timerIndexErrors facts one StockRole stock
     ++ timerIndexErrors facts one OwnedRole owned
+    ++ ["owned saved resume entry differs" | address <- resumeAddresses facts executing one stock, readWord facts one owned address /= resumeBody]
     ++ ( if caseOwned one == Nothing
           then memoryDifferences
           else
@@ -1442,6 +1443,12 @@ compareFamily facts executing one stockSpec ownedSpec stock owned =
             ]
        )
   where
+    fixedResume = if executing == DomainA then 0x43668 else 0xd3668
+    resumeBody
+      | not (aggregate image) = Just fixedResume
+      | otherwise = case [Agg.symbolAddress symbol | symbol <- imageSymbols image, Agg.symbolName symbol == "xm1_rtos_scheduler_resume", Agg.symbolSize symbol > 0] of
+          [address] -> Just address
+          _ -> Nothing
     ownedExpectation = maybe (caseStock one) id (caseOwned one)
     compared = [ident | Page ident _ _ _ _ <- pages facts one, ident `notElem` map RegionId ["stack", "target-stack", "driver-stack"]]
     memory observation = M.fromList [(ident, normalizeTimer ident (normalize ident bytes)) | (ident, bytes) <- nativeMemory observation, ident `elem` compared]
@@ -1451,12 +1458,13 @@ compareFamily facts executing one stockSpec ownedSpec stock owned =
           case [base | Page region (GuestAddress base) _ _ _ <- pages facts one, region == ident] of
             [base] ->
               let slots = if caseResume one then [runningSlot, idleSlot] else [runningSlot]
-                  zero current saved =
-                    let offset = fromIntegral (toInteger (taskAddress facts executing saved) + toInteger (tfSavedSp (factsTask facts)) - toInteger base)
+                  fields = [taskAddress facts executing slot + tfSavedSp (factsTask facts) | slot <- slots] ++ map guestWord (resumeAddresses facts executing one stock)
+                  zero current field =
+                    let offset = fromIntegral (toInteger field - toInteger base)
                      in if offset < 0 || offset + 4 > B.length current
                           then current
                           else B.take offset current <> word32le 0 <> B.drop (offset + 4) current
-               in foldl zero bytes slots
+               in foldl zero bytes fields
             _ -> bytes
       | otherwise = bytes
     normalizeTimer ident bytes = case caseTimerIndex one of
@@ -1468,6 +1476,13 @@ compareFamily facts executing one stockSpec ownedSpec stock owned =
     memoryDifferences =
       ["missing state region " ++ show ident | ident <- compared, M.notMember ident (memory stock) || M.notMember ident (memory owned)]
         ++ ["state region " ++ show ident ++ " differs" | ident <- compared, M.lookup ident (memory stock) /= M.lookup ident (memory owned)]
+
+resumeAddresses :: Facts -> Domain -> Case -> NativeObservation -> [GuestAddress]
+resumeAddresses facts domain one stock =
+  [address | slot <- if caseResume one then [runningSlot, idleSlot] else [runningSlot]
+  , expectationArrival (caseStock one) || caseResume one
+  , let address = GuestAddress (taskAddress facts domain slot + tfResumePc (factsTask facts))
+  , readWord facts one stock address == Just (if domain == DomainA then 0x43668 else 0xd3668)]
 
 timerIndexErrors :: Facts -> Case -> Role -> NativeObservation -> [String]
 timerIndexErrors facts one role observation = case caseTimerIndex one of
@@ -1485,26 +1500,28 @@ timerIndexErrors facts one role observation = case caseTimerIndex one of
       , OrderedWrite (Write actual (WriteBytes width)) (WriteValue value) <- events
       , actual == wire (guestWord address)]
 
-timerControls :: Facts -> Domain -> Case -> CaseSpec -> CaseSpec -> NativeObservation -> NativeObservation -> [(String, Either String [String])]
-timerControls facts executing one stockSpec ownedSpec stock owned = case caseTimerIndex one of
-  Nothing -> []
-  Just address ->
-    [check "owned-relink-refused" stock (mutate address 1 owned)
-    , check "stock-detach-refused" (mutate address 0 stock) owned
-    , check "missing-detach-write-refused" stock (owned {nativeKernel = fmap withoutDetach (nativeKernel owned)})
-    , check "live-caller-frame-mutation-refused" stock (mutate (GuestAddress (callerSp one)) 0 owned)]
-    where
-      check name reference subject = (caseName one ++ "/" ++ name, Right
-        ["corruption escaped the oracle" | null (compareFamily facts executing one stockSpec ownedSpec reference subject)])
-      withoutDetach kernel = kernel {observedOrder = fmap (filter keep) (observedOrder kernel)}
-      keep (OrderedWrite (Write actual _) (WriteValue 0)) = actual /= wire (guestWord address)
-      keep _ = True
-      mutate target value observation = observation {nativeMemory = map replace (nativeMemory observation)}
-        where
-          replace (ident, bytes) = case
-            [fromIntegral (guestWord target - guestWord base) | page@(Page actual base _ _ _) <- pages facts one, actual == ident, contains target 4 page] of
-              [offset] -> (ident, B.take offset bytes <> word32le value <> B.drop (offset + 4) bytes)
-              _ -> (ident, bytes)
+timerControls :: Image -> Facts -> Domain -> Case -> CaseSpec -> CaseSpec -> NativeObservation -> NativeObservation -> [(String, Either String [String])]
+timerControls image facts executing one stockSpec ownedSpec stock owned =
+  [check ("saved-resume-" ++ show (guestWord address)) stock (mutate address 0 owned) | address <- resumeAddresses facts executing one stock]
+    ++ case caseTimerIndex one of
+      Nothing -> []
+      Just address ->
+        [check "owned-relink-refused" stock (mutate address 1 owned)
+        , check "stock-detach-refused" (mutate address 0 stock) owned
+        , check "missing-detach-write-refused" stock (owned {nativeKernel = fmap (withoutDetach address) (nativeKernel owned)})
+        , check "live-caller-frame-mutation-refused" stock (mutate (GuestAddress (callerSp one)) 0 owned)]
+  where
+    check name reference subject = (caseName one ++ "/" ++ name, Right
+      ["corruption escaped the oracle" | null (compareFamily image facts executing one stockSpec ownedSpec reference subject)])
+    withoutDetach address kernel = kernel {observedOrder = fmap (filter (keep address)) (observedOrder kernel)}
+    keep address (OrderedWrite (Write actual _) (WriteValue 0)) = actual /= wire (guestWord address)
+    keep _ _ = True
+    mutate target value observation = observation {nativeMemory = map replace (nativeMemory observation)}
+      where
+        replace (ident, bytes) = case
+          [fromIntegral (guestWord target - guestWord base) | page@(Page actual base _ _ _) <- pages facts one, actual == ident, contains target 4 page] of
+            [offset] -> (ident, B.take offset bytes <> word32le value <> B.drop (offset + 4) bytes)
+            _ -> (ident, bytes)
 
 readonlyCases :: Image -> CaseSpec -> [(RunnerStatus, CaseSpec)]
 readonlyCases image template =
@@ -1557,12 +1574,12 @@ runFamily runner cacheRoot directory facts executing stock owned = do
           Just spec -> spec
           Nothing -> error "the owned spec is missing for a case"
     pure (caseName one, case (M.lookup ident reference, M.lookup ident subject) of
-      (Just original, Just replacement) -> Right (compareFamily facts executing one stockSpec ownedSpec original replacement)
+      (Just original, Just replacement) -> Right (compareFamily owned facts executing one stockSpec ownedSpec original replacement)
       (Nothing, _) -> Left "stock case did not run"
       (_, Nothing) -> Left "owned case did not run")
   unless (length stockRaw == length selected && length ownedRaw == length selected) (fail "native observations do not cover the current fixed-pool case set")
   let controls = concat
-        [timerControls facts executing one stockSpec ownedSpec original replacement
+        [timerControls owned facts executing one stockSpec ownedSpec original replacement
         | (one, stockSpec) <- stockCases
         , Just ownedSpec <- [lookup (caseName one) [(caseName candidate, spec) | (candidate, spec) <- ownedCases]]
         , Just original <- [M.lookup (emittedId executing one) reference]
