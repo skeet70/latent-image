@@ -37,6 +37,7 @@ import Data.Aeson (FromJSON (..), eitherDecodeStrict', withObject, (.:))
 import Data.Bits ((.&.), (.|.), complement, shiftL, shiftR)
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
+import Data.List (isPrefixOf, sort, nub)
 import Data.Word (Word32, Word8)
 import Emulation.CachedNativeBatch (BatchReuse, cachedObservedBatch)
 import Emulation.NativeCase (caseIdText)
@@ -50,7 +51,9 @@ import Emulation.NativeObservation
   , RunnerStatus (..)
   , Write (..)
   , WriteValue (..)
+  , WriteBytes (..)
   )
+import qualified Replacement.RtosPlatform.Aggregate as Agg
 import Emulation.OwnedCase
   ( CaseOutcome (..)
   , CaseSpec (..)
@@ -351,11 +354,12 @@ data Case = Case
   , caseDispatch :: Bool
   , caseBank :: Maybe (Domain, Word32)
   , caseReceipt :: Maybe (Word32, Word32)
+  , caseTimerIndex :: Maybe GuestAddress
   , caseR1 :: Maybe Word32
   , caseResume :: Bool
   }
 
-data Image = Image {imageBase :: Word32, imageBytes :: B.ByteString}
+data Image = Image {imageBase :: Word32, imageBytes :: B.ByteString, imageSymbols :: [Agg.AggregateSymbol], imagePlacements :: [Agg.SectionPlacement]}
 
 data Run = Run
   { runDomain :: Domain
@@ -464,17 +468,14 @@ bank DomainB = GuestAddress 0xfffb40cc
 callerBytes :: B.ByteString
 callerBytes = B.concat [word32le (0xca11e500 + value) | value <- [0 .. 15]]
 
-lowestBitTable :: B.ByteString
-lowestBitTable = B.pack [0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 0]
-
 lowestBitAddress :: Domain -> Word32
 lowestBitAddress DomainA = 0x0004_daa0
 lowestBitAddress DomainB = 0x000d_da64
 
 driverEntry, expiryEntry, deleteEntry, driverStack, driverSize, expirySize, deleteSize :: Word32
-driverEntry = 0x0005_4000
-expiryEntry = 0x0005_4040
-deleteEntry = 0x0005_40c0
+driverEntry = exitAddress + 0x40
+expiryEntry = exitAddress + 0x80
+deleteEntry = exitAddress + 0x100
 driverStack = 0x0095_9e00
 driverSize = 32
 expirySize = 84
@@ -678,7 +679,7 @@ plain :: String -> Service -> Domain -> Word32 -> [(GuestAddress, Word32)] -> Wo
 plain name service objectDomain slot fixture timeout result arrival checks =
   Case name service objectDomain slot Nothing fixture timeout
     (Expectation result arrival checks) Nothing Nothing
-    False False True Nothing Nothing Nothing False
+    False False True Nothing Nothing Nothing Nothing False
 
 cases :: Facts -> Domain -> [Case]
 cases facts executing =
@@ -949,6 +950,25 @@ cases facts executing =
       }
   ]
 
+bindTimer :: Facts -> Domain -> Image -> Case -> Case
+bindTimer facts executing image one
+  | not (aggregate image) = one
+  | Just (_, token) <- caseReceipt one =
+      let entry = if token == timerToken then timerAddress facts executing waiterSlot else token
+          seeded = if caseResume one then [] else
+            [ poke (waitResult facts executing waiterSlot) entry
+            , poke entry 1
+            , poke (dfTimerCount dw) 1
+            , poke (dfTimerHeap dw) 0
+            , poke (dfTimerHeap dw + 4) entry
+            ]
+       in one {caseReceipt = Nothing, caseTimerIndex = Just (GuestAddress entry), caseWords = caseWords one ++ seeded}
+  | caseName one == "timed-resume-expiry" =
+      one {caseTimerIndex = Just (GuestAddress (timerAddress facts executing runningSlot))}
+  | otherwise = one
+  where
+    dw = domainFacts facts executing
+
 data Role = StockRole | OwnedRole deriving (Eq, Show)
 
 layoutWords :: Facts -> [(GuestAddress, Word32)]
@@ -1137,38 +1157,57 @@ overlay (GuestAddress start) initial words' = B.concat (pieces 0 ordered)
             : word32le value
             : pieces (offset + 4) rest
 
+aggregate :: Image -> Bool
+aggregate image = not (null (imageSymbols image))
+
+symbolSpans :: Image -> [(Word32, Word32)]
+symbolSpans image = [(Agg.symbolAddress symbol, Agg.symbolSize symbol) | symbol <- imageSymbols image, Agg.symbolSize symbol > 0]
+
+ownedSpans :: Domain -> Role -> Image -> [(Word32, Word32)]
+ownedSpans domain role owned
+  | role == OwnedRole, aggregate owned = symbolSpans owned
+  | role == StockRole = extents domain
+  | otherwise = extents domain ++ [(bodyRegion, bodyLength)]
+
+storageSpan :: Image -> (Word32, Word32)
+storageSpan image = (imageBase image, fromIntegral (B.length (imageBytes image)))
+
+codeBounds :: Domain -> Role -> Image -> (Word32, Word32)
+codeBounds domain role owned =
+  let spans = extents domain ++ retained domain ++ [(lowestBitAddress domain, 16)]
+        ++ if role == StockRole then [] else if aggregate owned then [storageSpan owned] else [(bodyRegion, bodyLength)]
+   in (minimum (map fst spans), maximum [address + size | (address, size) <- spans])
+
 codeBytes :: Domain -> Role -> Image -> Image -> B.ByteString
-codeBytes domain role loader owned = withDrivers $ case role of
-  StockRole -> stockBytes
-  OwnedRole -> foldl patch stockBytes (extents domain ++ [(bodyRegion, bodyLength)])
+codeBytes domain role loader owned
+  | role == OwnedRole, aggregate owned = install (imageBase owned) (imageBytes owned) original
+  | otherwise = withTimer (if role == OwnedRole then foldl patch original (ownedSpans domain role owned) else original)
   where
-    bounds = extents domain ++ retained domain
-    base = minimum (bodyRegion : map fst bounds)
-    top = maximum
-      [ maximum [address + size | (address, size) <- bounds]
-      , bodyRegion + bodyLength
-      , lowestBitAddress domain + 16
-      , driverEntry + driverSize
-      , expiryEntry + expirySize
-      , deleteEntry + deleteSize
-      ]
-    slice image address size =
-      if address < imageBase image
-        || toInteger address + toInteger size > toInteger (imageBase image) + toInteger (B.length (imageBytes image))
-        then error "fixed-pool code slice is outside its image"
-        else B.take (fromIntegral size) (B.drop (fromIntegral (address - imageBase image)) (imageBytes image))
-    stockBytes = install (timerRemoval domain) timerStub
-      (install (lowestBitAddress domain) lowestBitTable
-        (foldl (\current (address, size) -> install address (slice loader address size) current)
-          (B.replicate (fromIntegral (top - base)) 0) bounds))
-    withDrivers current =
-      install deleteEntry (deleteBytes domain)
-        (install expiryEntry (expiryBytes domain)
-          (install driverEntry (driverBytes domain) current))
+    (base, top) = codeBounds domain role owned
+    slice image address size
+      | address < imageBase image
+          || toInteger address + toInteger size > toInteger (imageBase image) + toInteger (B.length (imageBytes image)) =
+          error "fixed-pool code slice is outside its image"
+      | otherwise = B.take (fromIntegral size) (B.drop (fromIntegral (address - imageBase image)) (imageBytes image))
+    original = install low (slice loader low (high - low)) (B.replicate (fromIntegral (top - base)) 0)
+    low = max base (imageBase loader)
+    high = min top (imageBase loader + fromIntegral (B.length (imageBytes loader)))
     install address bytes current =
       let offset = fromIntegral (address - base)
        in B.take offset current <> bytes <> B.drop (offset + B.length bytes) current
+    withTimer current
+      | aggregate owned = current
+      | otherwise = install (timerRemoval domain) timerStub current
     patch current (address, size) = install address (slice owned address size) current
+
+continuationBytes :: Domain -> B.ByteString
+continuationBytes domain = foldl install zero
+  [(driverEntry, driverBytes domain), (expiryEntry, expiryBytes domain), (deleteEntry, deleteBytes domain)]
+  where
+    zero = B.replicate (fromIntegral (stopAddress - exitAddress + 4)) 0
+    install current (address, bytes) =
+      let offset = fromIntegral (address - exitAddress)
+       in B.take offset current <> bytes <> B.drop (offset + B.length bytes) current
 
 expectationOf :: Role -> Case -> Expectation
 expectationOf StockRole one = caseStock one
@@ -1179,15 +1218,15 @@ caseSpec facts executing role loader owned one
   | not (null outside) = error (caseName one ++ ": unmapped fixture words " ++ show outside)
   | otherwise = CaseSpec
       { caseId = emittedId executing one
-      , caseProvenance = "X-M1 1.50 fixed-pool family, pinned x70view 55436fc85c0560dd252b0410af6f2427fe198cd3; synthetic task/object state and timer argument seam"
-      , caseExclusion = "Private compiler frames are not byte-compared. Dispatch rows check the selected-task arrival; resumed rows check the original caller's service return, output word, SP, callee-saved registers and CPSR control. The timer removal entry is a recording stub; it proves arguments, not heap removal."
+      , caseProvenance = "X-M1 1.50 fixed-pool family, pinned x70view 55436fc85c0560dd252b0410af6f2427fe198cd3; synthetic task/object state"
+      , caseExclusion = "Private compiler frames are not byte-compared. Dispatch rows check selected-task arrival; resumed rows check the live caller frame, service return, output, SP, callee-saved registers and CPSR control. Aggregate cases execute linked timer removal and tick; standalone cases retain the timer argument seam."
       , caseEntry = wire (entries executing (caseService one))
       , caseExit = wire exitAddress
       , caseRegions =
-          [mkRegion (RegionId "code") (wire codeBase) (fromIntegral (codeTop - codeBase)) ReadExecute (codeBytes executing role loader owned)]
+          codeRegions
             ++ [mkRegion ident (wire (guestWord address)) size permission (overlay address background words') | Page ident address size permission background <- dataPages]
-            ++ [mkRegion (RegionId "continuations") (wire exitAddress) (fromIntegral (stopAddress - exitAddress + 4)) ReadExecute (B.replicate (fromIntegral (stopAddress - exitAddress + 4)) 0)]
-      , caseFunctions = [(wire address, size) | (address, size) <- extents executing ++ retained executing ++ [(bodyRegion, bodyLength), (driverEntry, driverSize), (expiryEntry, expirySize), (deleteEntry, deleteSize)]]
+            ++ [mkRegion (RegionId "continuations") (wire exitAddress) (fromIntegral (stopAddress - exitAddress + 4)) ReadExecute (continuationBytes executing)]
+      , caseFunctions = [(wire address, size) | (address, size) <- functionSpans ++ [(driverEntry, driverSize), (expiryEntry, expirySize), (deleteEntry, deleteSize)]]
       , caseInitial = initialRegisters executing one
       , caseExpectedStatus = if arrival then StopAddress else Returned
       , caseExpectedRegisters = if arrival
@@ -1200,15 +1239,30 @@ caseSpec facts executing role loader owned one
   where
     expectation = expectationOf role one
     arrival = expectationArrival expectation
-    codeBase = minimum (bodyRegion : map fst (extents executing ++ retained executing))
-    codeTop = maximum
-      [ maximum [address + size | (address, size) <- extents executing ++ retained executing]
-      , bodyRegion + bodyLength
-      , lowestBitAddress executing + 16
-      , driverEntry + driverSize
-      , expiryEntry + expirySize
-      , deleteEntry + deleteSize
-      ]
+    placementFunctions = [(Agg.placementAddress placement, Agg.placementBytes placement) | role == OwnedRole, placement <- imagePlacements owned, Agg.placementBytes placement > 0, Agg.placementSection placement == ".text" || ".text." `isPrefixOf` Agg.placementSection placement]
+    allocated = symbolSpans owned ++ [(Agg.placementAddress placement, Agg.placementBytes placement) | placement <- imagePlacements owned]
+    allocatedSections = [(Agg.placementAddress p, Agg.placementBytes p) | p <- imagePlacements owned, Agg.placementBytes p > 0]
+    overlaps (left, size) (right, width) = left < right + width && right < left + size
+    preserved = [extent | extent <- retained executing, role /= OwnedRole || not (any (overlaps extent) allocated)]
+    functionSpans
+      | role == OwnedRole && aggregate owned = preserved ++ concatMap splitFunctions placementFunctions
+          ++ [extent | extent <- symbolSpans owned, not (any (overlaps extent) allocatedSections)]
+      | otherwise = ownedSpans executing role owned ++ preserved
+    splitFunctions (address, size) =
+      let starts = sort (nub (address : address + size :
+            [at | (at, _) <- symbolSpans owned, at > address, at < address + size]))
+       in [(lo, hi - lo) | (lo, hi) <- zip starts (drop 1 starts)]
+    (codeBase, codeTop) = codeBounds executing role owned
+    readonly = [(Agg.placementAddress p, Agg.placementAddress p + Agg.placementBytes p)
+      | role == OwnedRole, p <- imagePlacements owned, Agg.placementBytes p > 0
+      , not (Agg.placementSection p == ".text" || ".text." `isPrefixOf` Agg.placementSection p)]
+    cuts = sort (nub (codeBase : codeTop : concat [[lo, hi] | (lo, hi) <- readonly]))
+    installed = codeBytes executing role loader owned
+    codeRegions =
+      [mkRegion (RegionId ("code-" ++ show index)) (wire lo) (fromIntegral (hi - lo))
+        (if any (\(start, end) -> start <= lo && hi <= end) readonly then ReadOnly else ReadExecute)
+        (B.take (fromIntegral (hi - lo)) (B.drop (fromIntegral (lo - codeBase)) installed))
+      | (index, (lo, hi)) <- zip [0 :: Int ..] (zip cuts (drop 1 cuts)), hi > lo]
     dataPages = pages facts one
     words' = layoutWords facts
       ++ [ poke (dfHandlerContext (domainFacts facts executing)) (if caseHandler one then 1 else 0)
@@ -1374,10 +1428,13 @@ compareRole facts role spec one expectation observation =
       Just (target, value) | target == domain -> value
       _ -> 0
 
-compareFamily :: Facts -> Domain -> Case -> CaseSpec -> CaseSpec -> NativeObservation -> NativeObservation -> [String]
-compareFamily facts executing one stockSpec ownedSpec stock owned =
+compareFamily :: Image -> Facts -> Domain -> Case -> CaseSpec -> CaseSpec -> NativeObservation -> NativeObservation -> [String]
+compareFamily image facts executing one stockSpec ownedSpec stock owned =
   compareRole facts StockRole stockSpec one (caseStock one) stock
     ++ compareRole facts OwnedRole ownedSpec one ownedExpectation owned
+    ++ timerIndexErrors facts one StockRole stock
+    ++ timerIndexErrors facts one OwnedRole owned
+    ++ ["owned saved resume entry differs" | address <- resumeAddresses facts executing one stock, readWord facts one owned address /= resumeBody]
     ++ ( if caseOwned one == Nothing
           then memoryDifferences
           else
@@ -1386,36 +1443,129 @@ compareFamily facts executing one stockSpec ownedSpec stock owned =
             ]
        )
   where
+    fixedResume = if executing == DomainA then 0x43668 else 0xd3668
+    resumeBody
+      | not (aggregate image) = Just fixedResume
+      | otherwise = case [Agg.symbolAddress symbol | symbol <- imageSymbols image, Agg.symbolName symbol == "xm1_rtos_scheduler_resume", Agg.symbolSize symbol > 0] of
+          [address] -> Just address
+          _ -> Nothing
     ownedExpectation = maybe (caseStock one) id (caseOwned one)
     compared = [ident | Page ident _ _ _ _ <- pages facts one, ident `notElem` map RegionId ["stack", "target-stack", "driver-stack"]]
-    memory observation = M.fromList [(ident, normalize ident bytes) | (ident, bytes) <- nativeMemory observation, ident `elem` compared]
+    memory observation = M.fromList [(ident, normalizeTimer ident (normalize ident bytes)) | (ident, bytes) <- nativeMemory observation, ident `elem` compared]
     kernelIdents = if executing == DomainA then [RegionId "kernel-a"] else [RegionId "kernel-b"]
     normalize ident bytes
       | ident `elem` kernelIdents && (expectationArrival (caseStock one) || caseResume one) =
           case [base | Page region (GuestAddress base) _ _ _ <- pages facts one, region == ident] of
             [base] ->
               let slots = if caseResume one then [runningSlot, idleSlot] else [runningSlot]
-                  zero current saved =
-                    let offset = fromIntegral (toInteger (taskAddress facts executing saved) + toInteger (tfSavedSp (factsTask facts)) - toInteger base)
+                  fields = [taskAddress facts executing slot + tfSavedSp (factsTask facts) | slot <- slots] ++ map guestWord (resumeAddresses facts executing one stock)
+                  zero current field =
+                    let offset = fromIntegral (toInteger field - toInteger base)
                      in if offset < 0 || offset + 4 > B.length current
                           then current
                           else B.take offset current <> word32le 0 <> B.drop (offset + 4) current
-               in foldl zero bytes slots
+               in foldl zero bytes fields
             _ -> bytes
       | otherwise = bytes
+    normalizeTimer ident bytes = case caseTimerIndex one of
+      Nothing -> bytes
+      Just address -> case
+        [fromIntegral (guestWord address - guestWord base) | page@(Page actual base _ _ _) <- pages facts one, actual == ident, contains address 4 page] of
+          [offset] -> B.take offset bytes <> word32le 0 <> B.drop (offset + 4) bytes
+          _ -> bytes
     memoryDifferences =
       ["missing state region " ++ show ident | ident <- compared, M.notMember ident (memory stock) || M.notMember ident (memory owned)]
         ++ ["state region " ++ show ident ++ " differs" | ident <- compared, M.lookup ident (memory stock) /= M.lookup ident (memory owned)]
 
+resumeAddresses :: Facts -> Domain -> Case -> NativeObservation -> [GuestAddress]
+resumeAddresses facts domain one stock =
+  [address | slot <- if caseResume one then [runningSlot, idleSlot] else [runningSlot]
+  , expectationArrival (caseStock one) || caseResume one
+  , let address = GuestAddress (taskAddress facts domain slot + tfResumePc (factsTask facts))
+  , readWord facts one stock address == Just (if domain == DomainA then 0x43668 else 0xd3668)]
+
+timerIndexErrors :: Facts -> Case -> Role -> NativeObservation -> [String]
+timerIndexErrors facts one role observation = case caseTimerIndex one of
+  Nothing -> []
+  Just address ->
+    ["timer index violates the named Detached-index contract"
+    | readWord facts one observation address /= Just expected || writes address /= expectedWrites]
+  where
+    expected = if role == OwnedRole then 0 else 1
+    expectedWrites = [(4, 1) | caseResume one] ++ [(4, 0) | role == OwnedRole]
+    writes address =
+      [(width, fromIntegral value :: Word32)
+      | Just kernel <- [nativeKernel observation]
+      , Just events <- [observedOrder kernel]
+      , OrderedWrite (Write actual (WriteBytes width)) (WriteValue value) <- events
+      , actual == wire (guestWord address)]
+
+timerControls :: Image -> Facts -> Domain -> Case -> CaseSpec -> CaseSpec -> NativeObservation -> NativeObservation -> [(String, Either String [String])]
+timerControls image facts executing one stockSpec ownedSpec stock owned =
+  [check ("saved-resume-" ++ show (guestWord address)) stock (mutate address 0 owned) | address <- resumeAddresses facts executing one stock]
+    ++ case caseTimerIndex one of
+      Nothing -> []
+      Just address ->
+        [check "owned-relink-refused" stock (mutate address 1 owned)
+        , check "stock-detach-refused" (mutate address 0 stock) owned
+        , check "missing-detach-write-refused" stock (owned {nativeKernel = fmap (withoutDetach address) (nativeKernel owned)})
+        , check "live-caller-frame-mutation-refused" stock (mutate (GuestAddress (callerSp one)) 0 owned)]
+  where
+    check name reference subject = (caseName one ++ "/" ++ name, Right
+      ["corruption escaped the oracle" | null (compareFamily image facts executing one stockSpec ownedSpec reference subject)])
+    withoutDetach address kernel = kernel {observedOrder = fmap (filter (keep address)) (observedOrder kernel)}
+    keep address (OrderedWrite (Write actual _) (WriteValue 0)) = actual /= wire (guestWord address)
+    keep _ _ = True
+    mutate target value observation = observation {nativeMemory = map replace (nativeMemory observation)}
+      where
+        replace (ident, bytes) = case
+          [fromIntegral (guestWord target - guestWord base) | page@(Page actual base _ _ _) <- pages facts one, actual == ident, contains target 4 page] of
+            [offset] -> (ident, B.take offset bytes <> word32le value <> B.drop (offset + 4) bytes)
+            _ -> (ident, bytes)
+
+readonlyCases :: Image -> CaseSpec -> [(RunnerStatus, CaseSpec)]
+readonlyCases image template =
+  [ (status, template
+      { caseId = label ++ "-" ++ show address
+      , caseEntry = wire probe
+      , caseRegions = mkRegion (RegionId "readonly-probe") (wire probe) (B.length program) ReadExecute program : caseRegions template
+      , caseFunctions = (wire probe, fromIntegral (B.length program)) : caseFunctions template
+      , caseExpectedStatus = status
+      , caseExpectedRegisters = [(R0, address), (Pc, if status == MemoryGuard then probe + 8 else address)]
+      , caseExpectedMemory = []
+      })
+  | placement <- imagePlacements image
+  , Agg.placementBytes placement >= 4
+  , let section = Agg.placementSection placement
+  , not (section == ".text" || ".text." `isPrefixOf` section)
+  , let address = Agg.placementAddress placement
+  , (label, status, instruction) <-
+      [("readonly-write", MemoryGuard, 0xe5801000), ("readonly-fetch", FetchGuard, 0xe12fff10)]
+  , let probe = receiptAddress + 0x200
+        program = assemble [movw 0 (address .&. 0xffff), movt 0 (address `shiftR` 16), instruction, 0xe12fff1e]
+  ]
+
 runFamily :: FilePath -> FilePath -> FilePath -> Facts -> Domain -> Image -> Image -> IO Run
 runFamily runner cacheRoot directory facts executing stock owned = do
-  let selected = cases facts executing
-      stockCases = [(one, caseSpec facts executing StockRole stock stock one) | one <- selected]
+  let selected = map (bindTimer facts executing owned) (cases facts executing)
+      stockCases = [(one, caseSpec facts executing StockRole stock owned one) | one <- selected]
       ownedCases = [(one, caseSpec facts executing OwnedRole stock owned one) | one <- selected]
   stockBatch <- writeBatch (directory </> "stock") (map snd stockCases)
   ownedBatch <- writeBatch (directory </> "owned") (map snd ownedCases)
   (stockReuse, stockRaw) <- cachedObservedBatch cacheRoot runner stockBatch
   (ownedReuse, ownedRaw) <- cachedObservedBatch cacheRoot runner ownedBatch
+  refusalResults <- case ownedCases of
+    [] -> pure []
+    (_, template) : _ -> do
+      let refusals = readonlyCases owned template
+      if null refusals then pure [] else do
+        batch <- writeBatch (directory </> "readonly-controls") (map snd refusals)
+        (_, observed) <- cachedObservedBatch cacheRoot runner batch
+        let byId = M.fromList [(caseIdText ident, observation) | (ident, observation) <- observed]
+        pure [(caseId spec, case M.lookup (caseId spec) byId of
+          Nothing -> Left "readonly refusal did not run"
+          Just observation -> Right ["wrong readonly refusal " ++ show (nativeStatus observation) | nativeStatus observation /= status])
+          | (status, spec) <- refusals]
   let reference = M.fromList [(caseIdText ident, observation) | (ident, observation) <- stockRaw]
       subject = M.fromList [(caseIdText ident, observation) | (ident, observation) <- ownedRaw]
   results <- forM stockCases $ \(one, stockSpec) -> do
@@ -1424,8 +1574,32 @@ runFamily runner cacheRoot directory facts executing stock owned = do
           Just spec -> spec
           Nothing -> error "the owned spec is missing for a case"
     pure (caseName one, case (M.lookup ident reference, M.lookup ident subject) of
-      (Just original, Just replacement) -> Right (compareFamily facts executing one stockSpec ownedSpec original replacement)
+      (Just original, Just replacement) -> Right (compareFamily owned facts executing one stockSpec ownedSpec original replacement)
       (Nothing, _) -> Left "stock case did not run"
       (_, Nothing) -> Left "owned case did not run")
   unless (length stockRaw == length selected && length ownedRaw == length selected) (fail "native observations do not cover the current fixed-pool case set")
-  pure (Run executing results (length [() | (_, Right []) <- results]) (stockReuse, ownedReuse))
+  let controls = concat
+        [timerControls owned facts executing one stockSpec ownedSpec original replacement
+        | (one, stockSpec) <- stockCases
+        , Just ownedSpec <- [lookup (caseName one) [(caseName candidate, spec) | (candidate, spec) <- ownedCases]]
+        , Just original <- [M.lookup (emittedId executing one) reference]
+        , Just replacement <- [M.lookup (emittedId executing one) subject]]
+      payloadResults
+        | not (aggregate owned) = []
+        | otherwise =
+            let installed = codeBytes executing OwnedRole stock owned
+                (base, top) = codeBounds executing OwnedRole owned
+                offset = fromIntegral (imageBase owned - base)
+                size = B.length (imageBytes owned)
+                canonicalBytes = codeBytes executing StockRole stock owned
+                (stockBase, stockTop) = codeBounds executing StockRole owned
+                canonical address =
+                  B.index installed (fromIntegral (address - base)) == B.index canonicalBytes (fromIntegral (address - stockBase))
+             in [("whole-effective-carrier-bytes", Right
+                    ["effective carrier bytes changed" | B.take size (B.drop offset installed) /= imageBytes owned])
+                , ("canonical-unowned-gap-bytes", Right
+                    ["canonical unowned bytes changed" | not (all canonical
+                      [address | address <- [max base stockBase .. min top stockTop - 1]
+                      , address < imageBase owned || address >= imageBase owned + fromIntegral size])])]
+      allResults = results ++ controls ++ refusalResults ++ payloadResults
+  pure (Run executing allResults (length [() | (_, Right []) <- allResults]) (stockReuse, ownedReuse))

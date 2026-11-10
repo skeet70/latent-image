@@ -78,6 +78,9 @@ SECTIONS {
     *(.text.cyclic_stop_core)
     *(.text.cyclic_create_core)
     *(.text.cyclic_delete_core)
+    *(.text.cyclic_lock)
+    *(.text.cyclic_unlock)
+    *(.text.cyclic_admit_control)
     *(.text.*rust_begin_unwind)
     *(.rodata .rodata.*)
     __cyclic_core_end = .;

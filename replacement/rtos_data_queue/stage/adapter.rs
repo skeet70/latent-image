@@ -7,7 +7,7 @@ mod data_queue;
 use core::arch::{asm, global_asm};
 use core::ptr::{read_volatile, write_volatile};
 use data_queue::*;
-use data_queue::admission::{admit_precheck, Entry, Facts, Params, Records, Request, Service};
+use data_queue::admission::{admit_precheck, Entry, Facts, Params, Records, Service};
 use data_queue::create::{create_data_queue, delete_data_queue, DataQueueCreate, QueueAttributes};
 use data_queue::env::{
     retry_masked, Attempt, Deadline, DispatchTarget, Env, QueueOrder, SavedInterrupts, SavedMask,
@@ -30,7 +30,7 @@ const ENTRY: Domain = Domain::A;
 #[cfg(feature = "domain-b")]
 const ENTRY: Domain = Domain::B;
 
-#[cfg(all(target_arch = "arm", not(test)))]
+#[cfg(all(target_arch = "arm", not(test), not(feature = "component")))]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
     loop {}
@@ -43,6 +43,22 @@ struct Reschedule(pub u32);
 #[derive(Clone, Copy)]
 #[repr(transparent)]
 struct RecordId(pub u32);
+
+#[repr(transparent)]
+struct ServiceOperand(u32);
+
+#[repr(transparent)]
+struct TimeoutWord(i32);
+
+impl TimeoutWord {
+    const FOREVER: Self = Self(-1);
+}
+
+#[derive(Clone, Copy)]
+enum SendInvocation {
+    Plain,
+    Timed(Timeout),
+}
 
 #[repr(u32)]
 enum Notified {
@@ -179,6 +195,7 @@ impl Env for Cpu {
         unsafe { xm1_rtos_scheduler_remove(owner, task) };
     }
 
+    #[inline(never)]
     fn queue_wait(&self, _owner: KernelContext, task: Task, queue: data_queue::layout::WaitQueue, order: QueueOrder) {
         let head = queue.0;
         let (mut at, mut next) = (GuestAddress(load(queue.prev())), head);
@@ -291,7 +308,11 @@ fn facts(config: DataQueueConfig) -> Facts {
     }
 }
 
-fn service(service: Service, id: i32, timeout: Option<i32>, payload: Option<u32>, out: Option<u32>) -> i32 {
+fn service(service: Service, id: EncodedId, timeout: TimeoutWord, operand: ServiceOperand) -> i32 {
+    let timeout = match service {
+        Service::SendTimeout | Service::ReceiveTimeout => Some(timeout.0),
+        _ => None,
+    };
     let cpu = Cpu;
     let entry = entry();
     let records = Records {
@@ -301,129 +322,36 @@ fn service(service: Service, id: i32, timeout: Option<i32>, payload: Option<u32>
         service,
         ENTRY,
         entry,
-        EncodedId(id),
+        id,
         records,
         Params { timeout },
     ) {
-        Ok((resolved, _, _)) => resolved,
+        Ok(prechecked) => prechecked,
         Err(status) => return status.code(),
     };
-    let config = resolved.domain.words().data_queue_config(resolved.slot);
-    let request = Request {
-        service,
-        entry_domain: ENTRY,
-        entry,
-        id: EncodedId(id),
-        records,
-        facts: facts(config),
-        params: Params { timeout },
-    };
-    let admitted = match data_queue::admission::admit(&request) {
+    let object = resolved.object();
+    let config = object.domain.words().data_queue_config(object.slot);
+    let admitted = match resolved.finish(facts(config)) {
         Ok(admitted) => admitted,
         Err(status) => return status.code(),
     };
-    let payload = Payload(payload.unwrap_or(0));
-    let out = OutWord(GuestAddress(out.unwrap_or(0)));
+    let payload = Payload(operand.0);
+    let out = OutWord(GuestAddress(operand.0));
     let blocking = matches!(
         service,
         Service::Send | Service::SendTimeout | Service::Receive | Service::ReceiveTimeout
     );
     let mut attempt = || -> Result<Attempt<i32>, ObjectStatus> {
         match service {
-            Service::Send => match send(&cpu, EntryDomain::new(ENTRY), admitted.object, payload) {
-                Ok(SendBlocking::Ready(outcome)) => Ok(Attempt::Done(outcome.code())),
-                Ok(SendBlocking::Pending(pending)) => {
-                    cpu.dispatch(-53);
-                    Ok(Attempt::Done(match resume_send(&cpu, pending) {
-                        SendResume::Completed(outcome) => outcome.code(),
-                        SendResume::Pending(_) | SendResume::Corrupt(_) => -49,
-                    }))
-                }
-                Ok(SendBlocking::Retry) => Ok(Attempt::Retry),
-                Err(status) => Err(status),
-            },
-            Service::SendPoll => match send_poll(&cpu, admitted.object, payload, false) {
-                Ok(outcome) => Ok(Attempt::Done(outcome.code())),
-                Err(status) => Err(status),
-            },
-            Service::SendPollHandler => match send_poll(&cpu, admitted.object, payload, true) {
-                Ok(outcome) => Ok(Attempt::Done(outcome.code())),
-                Err(status) => Err(status),
-            },
-            Service::SendTimeout => match send_timeout(
-                &cpu,
-                EntryDomain::new(ENTRY),
-                admitted.object,
-                payload,
-                admitted.timeout,
-            ) {
-                Ok(SendBlocking::Ready(outcome)) => Ok(Attempt::Done(outcome.code())),
-                Ok(SendBlocking::Pending(pending)) => {
-                    cpu.dispatch(-55);
-                    Ok(Attempt::Done(match resume_send(&cpu, pending) {
-                        SendResume::Completed(outcome) => outcome.code(),
-                        SendResume::Pending(_) | SendResume::Corrupt(_) => -49,
-                    }))
-                }
-                Ok(SendBlocking::Retry) => Ok(Attempt::Retry),
-                Err(status) => Err(status),
-            },
-            Service::ForceSend => match force_send(&cpu, admitted.object, payload, false) {
-                Ok(()) => Ok(Attempt::Done(0)),
-                Err(status) => Err(status),
-            },
-            Service::ForceSendHandler => match force_send(&cpu, admitted.object, payload, true) {
-                Ok(()) => Ok(Attempt::Done(0)),
-                Err(status) => Err(status),
-            },
-            Service::Receive => match receive(
-                &cpu,
-                EntryDomain::new(ENTRY),
-                admitted.object,
-                out,
-                admitted.timeout,
-            ) {
-                Ok(ReceiveBlocking::Ready(outcome)) => Ok(Attempt::Done(outcome.code())),
-                Ok(ReceiveBlocking::Pending(pending)) => {
-                    cpu.dispatch(-57);
-                    Ok(Attempt::Done(match resume_receive(&cpu, pending) {
-                        ReceiveResume::Completed(outcome) => outcome.code(),
-                        ReceiveResume::Pending(_) | ReceiveResume::Corrupt(_) => -49,
-                    }))
-                }
-                Ok(ReceiveBlocking::Retry) => Ok(Attempt::Retry),
-                Err(status) => Err(status),
-            },
-            Service::ReceivePoll => match receive(
-                &cpu,
-                EntryDomain::new(ENTRY),
-                admitted.object,
-                out,
-                Timeout::Poll,
-            ) {
-                Ok(ReceiveBlocking::Ready(outcome)) => Ok(Attempt::Done(outcome.code())),
-                Ok(ReceiveBlocking::Pending(_)) => Ok(Attempt::Done(-50)),
-                Ok(ReceiveBlocking::Retry) => Ok(Attempt::Done(-50)),
-                Err(status) => Err(status),
-            },
-            Service::ReceiveTimeout => match receive(
-                &cpu,
-                EntryDomain::new(ENTRY),
-                admitted.object,
-                out,
-                admitted.timeout,
-            ) {
-                Ok(ReceiveBlocking::Ready(outcome)) => Ok(Attempt::Done(outcome.code())),
-                Ok(ReceiveBlocking::Pending(pending)) => {
-                    cpu.dispatch(-59);
-                    Ok(Attempt::Done(match resume_receive(&cpu, pending) {
-                        ReceiveResume::Completed(outcome) => outcome.code(),
-                        ReceiveResume::Pending(_) | ReceiveResume::Corrupt(_) => -49,
-                    }))
-                }
-                Ok(ReceiveBlocking::Retry) => Ok(Attempt::Retry),
-                Err(status) => Err(status),
-            },
+            Service::Send => attempt_send(&cpu, admitted.object, payload, SendInvocation::Plain),
+            Service::SendPoll => attempt_send_poll(&cpu, admitted.object, payload, false),
+            Service::SendPollHandler => attempt_send_poll(&cpu, admitted.object, payload, true),
+            Service::SendTimeout => attempt_send(&cpu, admitted.object, payload, SendInvocation::Timed(admitted.timeout)),
+            Service::ForceSend => attempt_force_send(&cpu, admitted.object, payload, false),
+            Service::ForceSendHandler => attempt_force_send(&cpu, admitted.object, payload, true),
+            Service::Receive => attempt_receive(&cpu, admitted.object, out, admitted.timeout),
+            Service::ReceivePoll => attempt_receive_poll(&cpu, admitted.object, out),
+            Service::ReceiveTimeout => attempt_receive_timeout(&cpu, admitted.object, out, admitted.timeout),
         }
     };
     let result = if blocking {
@@ -437,6 +365,89 @@ fn service(service: Service, id: i32, timeout: Option<i32>, payload: Option<u32>
     match result {
         Ok(code) => code,
         Err(status) => status.code(),
+    }
+}
+
+
+#[inline(never)]
+fn attempt_send(cpu: &Cpu, object: DataQueueId, payload: Payload, invocation: SendInvocation) -> Result<Attempt<i32>, ObjectStatus> {
+    let result = match invocation {
+        SendInvocation::Plain => send(cpu, EntryDomain::new(ENTRY), object, payload),
+        SendInvocation::Timed(timeout) => send_timeout(cpu, EntryDomain::new(ENTRY), object, payload, timeout),
+    };
+    match result {
+        Ok(SendBlocking::Ready(outcome)) => Ok(Attempt::Done(outcome.code())),
+        Ok(SendBlocking::Pending(pending)) => {
+            cpu.dispatch(match invocation {
+                SendInvocation::Plain => -53,
+                SendInvocation::Timed(_) => -55,
+            });
+            Ok(Attempt::Done(match resume_send(cpu, pending) {
+                SendResume::Completed(outcome) => outcome.code(),
+                SendResume::Pending(_) | SendResume::Corrupt(_) => -49,
+            }))
+        }
+        Ok(SendBlocking::Retry) => Ok(Attempt::Retry),
+        Err(status) => Err(status),
+    }
+}
+
+#[inline(never)]
+fn attempt_send_poll(cpu: &Cpu, object: DataQueueId, payload: Payload, handler: bool) -> Result<Attempt<i32>, ObjectStatus> {
+    match send_poll(cpu, object, payload, handler) {
+        Ok(outcome) => Ok(Attempt::Done(outcome.code())),
+        Err(status) => Err(status),
+    }
+}
+
+
+#[inline(never)]
+fn attempt_force_send(cpu: &Cpu, object: DataQueueId, payload: Payload, handler: bool) -> Result<Attempt<i32>, ObjectStatus> {
+    match force_send(cpu, object, payload, handler) {
+        Ok(()) => Ok(Attempt::Done(0)),
+        Err(status) => Err(status),
+    }
+}
+
+#[inline(never)]
+fn attempt_receive(cpu: &Cpu, object: DataQueueId, out: OutWord, timeout: Timeout) -> Result<Attempt<i32>, ObjectStatus> {
+    match receive(cpu, EntryDomain::new(ENTRY), object, out, timeout) {
+        Ok(ReceiveBlocking::Ready(outcome)) => Ok(Attempt::Done(outcome.code())),
+        Ok(ReceiveBlocking::Pending(pending)) => {
+            cpu.dispatch(-57);
+            Ok(Attempt::Done(match resume_receive(cpu, pending) {
+                ReceiveResume::Completed(outcome) => outcome.code(),
+                ReceiveResume::Pending(_) | ReceiveResume::Corrupt(_) => -49,
+            }))
+        }
+        Ok(ReceiveBlocking::Retry) => Ok(Attempt::Retry),
+        Err(status) => Err(status),
+    }
+}
+
+#[inline(never)]
+fn attempt_receive_poll(cpu: &Cpu, object: DataQueueId, out: OutWord) -> Result<Attempt<i32>, ObjectStatus> {
+    match receive(cpu, EntryDomain::new(ENTRY), object, out, Timeout::Poll) {
+        Ok(ReceiveBlocking::Ready(outcome)) => Ok(Attempt::Done(outcome.code())),
+        Ok(ReceiveBlocking::Pending(_)) => Ok(Attempt::Done(-50)),
+        Ok(ReceiveBlocking::Retry) => Ok(Attempt::Done(-50)),
+        Err(status) => Err(status),
+    }
+}
+
+#[inline(never)]
+fn attempt_receive_timeout(cpu: &Cpu, object: DataQueueId, out: OutWord, timeout: Timeout) -> Result<Attempt<i32>, ObjectStatus> {
+    match receive(cpu, EntryDomain::new(ENTRY), object, out, timeout) {
+        Ok(ReceiveBlocking::Ready(outcome)) => Ok(Attempt::Done(outcome.code())),
+        Ok(ReceiveBlocking::Pending(pending)) => {
+            cpu.dispatch(-59);
+            Ok(Attempt::Done(match resume_receive(cpu, pending) {
+                ReceiveResume::Completed(outcome) => outcome.code(),
+                ReceiveResume::Pending(_) | ReceiveResume::Corrupt(_) => -49,
+            }))
+        }
+        Ok(ReceiveBlocking::Retry) => Ok(Attempt::Retry),
+        Err(status) => Err(status),
     }
 }
 
@@ -514,53 +525,53 @@ entry!("dq_receive_timeout", "receive_timeout", "receive_timeout");
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn xm1_rtos_data_queue_send_body(id: i32, data: u32) -> i32 {
-    service(Service::Send, id, None, Some(data), None)
+    service(Service::Send, EncodedId(id), TimeoutWord::FOREVER, ServiceOperand(data))
 }
 
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn xm1_rtos_data_queue_send_poll_body(id: i32, data: u32) -> i32 {
-    service(Service::SendPoll, id, None, Some(data), None)
+    service(Service::SendPoll, EncodedId(id), TimeoutWord::FOREVER, ServiceOperand(data))
 }
 
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn xm1_rtos_data_queue_send_poll_handler_body(id: i32, data: u32) -> i32 {
-    service(Service::SendPollHandler, id, None, Some(data), None)
+    service(Service::SendPollHandler, EncodedId(id), TimeoutWord::FOREVER, ServiceOperand(data))
 }
 
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn xm1_rtos_data_queue_send_timeout_body(id: i32, data: u32, timeout: i32) -> i32 {
-    service(Service::SendTimeout, id, Some(timeout), Some(data), None)
+    service(Service::SendTimeout, EncodedId(id), TimeoutWord(timeout), ServiceOperand(data))
 }
 
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn xm1_rtos_data_queue_force_send_body(id: i32, data: u32) -> i32 {
-    service(Service::ForceSend, id, None, Some(data), None)
+    service(Service::ForceSend, EncodedId(id), TimeoutWord::FOREVER, ServiceOperand(data))
 }
 
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn xm1_rtos_data_queue_force_send_handler_body(id: i32, data: u32) -> i32 {
-    service(Service::ForceSendHandler, id, None, Some(data), None)
+    service(Service::ForceSendHandler, EncodedId(id), TimeoutWord::FOREVER, ServiceOperand(data))
 }
 
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn xm1_rtos_data_queue_receive_body(id: i32, out: u32) -> i32 {
-    service(Service::Receive, id, None, None, Some(out))
+    service(Service::Receive, EncodedId(id), TimeoutWord::FOREVER, ServiceOperand(out))
 }
 
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn xm1_rtos_data_queue_receive_poll_body(id: i32, out: u32) -> i32 {
-    service(Service::ReceivePoll, id, None, None, Some(out))
+    service(Service::ReceivePoll, EncodedId(id), TimeoutWord::FOREVER, ServiceOperand(out))
 }
 
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn xm1_rtos_data_queue_receive_timeout_body(id: i32, out: u32, timeout: i32) -> i32 {
-    service(Service::ReceiveTimeout, id, Some(timeout), None, Some(out))
+    service(Service::ReceiveTimeout, EncodedId(id), TimeoutWord(timeout), ServiceOperand(out))
 }

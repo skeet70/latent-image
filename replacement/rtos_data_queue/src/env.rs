@@ -155,6 +155,7 @@ pub fn retry_masked<M: Env, T>(
     }
 }
 
+#[inline(never)]
 pub(crate) fn unlink<M: Env>(m: &M, task: Task) {
     let prev = m.load_word(task.prev());
     let next = m.load_word(task.next());
@@ -163,6 +164,7 @@ pub(crate) fn unlink<M: Env>(m: &M, task: Task) {
 }
 
 /// The stock wait release, A `0x44568` / B `0xd4528`.
+#[inline(never)]
 pub fn release<M: Env>(m: &M, owner: KernelContext, task: Task, completion: WaitCompletion) -> Selection {
     let wait = GuestAddress(m.load_word(task.wait()));
     let entry = m.load_word(wait);
@@ -192,6 +194,7 @@ pub fn release<M: Env>(m: &M, owner: KernelContext, task: Task, completion: Wait
     m.insert(owner, task)
 }
 
+#[inline(never)]
 pub(crate) fn dispatch_after<M: Env>(m: &M, owner: KernelContext, released: Selection) -> bool {
     match released {
         Selection::Unchanged => false,

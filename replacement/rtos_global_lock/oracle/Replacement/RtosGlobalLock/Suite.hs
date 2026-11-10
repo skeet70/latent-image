@@ -3,6 +3,8 @@
 -- | Global-lock try, release and observe cases over the stock loaders and the owned A32 entries.
 module Replacement.RtosGlobalLock.Suite
   ( Image (..)
+  , Aggregate (..)
+  , readAggregate
   , CaseRun (..)
   , ControlRun (..)
   , runDomain
@@ -11,7 +13,7 @@ module Replacement.RtosGlobalLock.Suite
 
 import Control.Monad (forM, forM_, unless)
 import Data.Bits (xor)
-import Data.List (isPrefixOf)
+import Data.List (isPrefixOf, sort, sortOn)
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
 import Data.Word (Word32, Word8)
@@ -19,11 +21,102 @@ import Emulation.CachedNativeBatch (BatchReuse, cachedObservedBatch)
 import Emulation.NativeObservation
 import Emulation.OwnedCase
 import Replacement.RtosOwnFirst.Regions (Domain (..), domainLabel)
+import qualified Replacement.RtosOwnFirst.Regions as Regions
+import qualified Replacement.RtosPlatform.Aggregate as Agg
+import qualified Replacement.RtosPlatform.Union as Union
 import System.FilePath ((</>))
 
 data Image = Image { imageBase :: Word32, imageBytes :: B.ByteString }
 
+data Aggregate = Aggregate
+  { aggregateImage :: Image
+  , aggregateSymbols :: [(Word32, Word32)]
+  , aggregatePlacements :: [Agg.SectionPlacement]
+  , aggregateEntries :: [Word32]
+  }
+
+readAggregate :: Domain -> Union.Union -> FilePath -> FilePath -> FilePath -> IO Aggregate
+readAggregate domain union bin symbolsPath placementsPath = do
+  bytes <- B.readFile bin
+  symbols <- either fail pure . Agg.parseAggregateSymbols =<< B.readFile symbolsPath
+  placements <- either fail pure . Agg.parsePlacements =<< B.readFile placementsPath
+  let domainMap = Union.domainMap union domain
+      carriers = map Union.carrierExtent (Union.mapCarriers domainMap)
+      lows = [low | Regions.Extent (Regions.GuestAddress low) _ <- carriers]
+      highs = [high | Regions.Extent _ (Regions.GuestAddress high) <- carriers]
+  unless (not (null carriers) && not (null symbols) && not (null placements)) (fail "aggregate metadata is empty")
+  let base = minimum lows
+      top = maximum highs
+      image = Agg.AggregateImage base bytes
+      spans = [(Agg.symbolAddress symbol, Agg.symbolSize symbol) | symbol <- symbols]
+        ++ [(Agg.placementAddress placement, Agg.placementBytes placement) | placement <- placements, Agg.placementBytes placement > 0]
+      admitted (address, size) = any (\(Regions.Extent (Regions.GuestAddress low) (Regions.GuestAddress high)) ->
+        low <= address && toInteger address + toInteger size <= toInteger high) carriers
+  unless (toInteger (B.length bytes) == toInteger top - toInteger base) (fail "effective aggregate bytes do not span the complete carriers")
+  forM_ spans $ \span'@(address, size) -> do
+    unless (admitted span') (fail "aggregate function or placement is outside a live carrier")
+    _ <- either fail pure (Agg.sliceAggregate image address size)
+    pure ()
+  forM_ symbols $ \symbol ->
+    forM_ [p | p <- placements, Agg.placementBytes p > 0, not (textPlacement p)] $ \p ->
+      unless (toInteger (Agg.symbolAddress symbol) + toInteger (Agg.symbolSize symbol) <= toInteger (Agg.placementAddress p)
+        || toInteger (Agg.placementAddress p) + toInteger (Agg.placementBytes p) <= toInteger (Agg.symbolAddress symbol))
+        (fail "aggregate executable symbol overlaps readonly placement")
+  let entries = [address | entry <- Union.mapEntries domainMap, let Regions.GuestAddress address = Union.entryAddress entry]
+  forM_ (Union.mapEntries domainMap) $ \entry -> do
+    let Regions.GuestAddress address = Union.entryAddress entry
+    unless (any (\symbol -> Agg.symbolAddress symbol == address && Agg.symbolName symbol == Union.entryVeneer entry) symbols)
+      (fail "aggregate fixed entry lacks its positive veneer symbol")
+  pure (Aggregate (Image base bytes)
+    [(Agg.symbolAddress symbol, Agg.symbolSize symbol) | symbol <- symbols] placements entries)
+
+aggregateRegions :: Aggregate -> [CaseRegion]
+aggregateRegions aggregate =
+  [mkRegion ident (GuestAddress (fromIntegral low)) (B.length bytes) permission bytes
+  | (ident, low, permission, bytes) <- aggregateStorage aggregate]
+
+aggregateStorage :: Aggregate -> [(RegionId, Word32, Permission, B.ByteString)]
+aggregateStorage aggregate =
+  [(RegionId ("aggregate-" ++ show base ++ "-" ++ show low), low, permission, slice image low (high - low))
+  | (low, high) <- zip boundaries (drop 1 boundaries)
+  , let permission = if any (\(start, end) -> start <= low && high <= end) readonly then ReadOnly else ReadExecute]
+  where
+    image = aggregateImage aggregate
+    base = imageBase image
+    top = base + fromIntegral (B.length (imageBytes image))
+    readonly = [(Agg.placementAddress p, Agg.placementAddress p + Agg.placementBytes p)
+      | p <- aggregatePlacements aggregate, Agg.placementBytes p > 0, not (textPlacement p)]
+    boundaries = M.keys (M.fromList [(address, ()) | address <- base : top : concatMap (\(low, high) -> [low, high]) readonly])
+
+aggregateUnchanged :: [Aggregate] -> NativeObservation -> Bool
+aggregateUnchanged aggregates observation = all unchanged (concatMap aggregateStorage aggregates)
+  where
+    unchanged (ident, _, _, bytes) = lookup ident (nativeMemory observation) == Just bytes
+
+textPlacement :: Agg.SectionPlacement -> Bool
+textPlacement placement = Agg.placementSection placement == ".text" || ".text." `isPrefixOf` Agg.placementSection placement
+
+aggregateFunctions :: [Aggregate] -> [(Word32, Word32)]
+aggregateFunctions aggregates =
+  [(low, high - low)
+  | (base, size) <- merge (sortOn fst spans)
+  , let boundaries = base : filter (\address -> base < address && address < base + size) entries ++ [base + size]
+  , (low, high) <- zip boundaries (drop 1 boundaries)]
+  where
+    spans = concatMap aggregateSymbols aggregates
+      ++ [(Agg.placementAddress p, Agg.placementBytes p) | aggregate <- aggregates,
+        p <- aggregatePlacements aggregate, Agg.placementBytes p > 0, textPlacement p]
+    entries = sort (concatMap aggregateEntries aggregates)
+    merge [] = []
+    merge ((base, size) : rest) = extend base (base + size) rest
+    extend base top [] = [(base, top - base)]
+    extend base top ((low, size) : rest)
+      | low <= top = extend base (max top (low + size)) rest
+      | otherwise = (base, top - base) : extend low (low + size) rest
+
 data Role = Stock | Owned deriving (Eq, Show)
+
+data Protection = WriteProtection | FetchProtection deriving (Eq, Show)
 
 data Service = Try | Release | Observe deriving (Eq, Show)
 
@@ -261,8 +354,8 @@ regionDifferences stock owned =
   , M.lookup ident (M.fromList (nativeMemory stock)) /= M.lookup ident (M.fromList (nativeMemory owned))
   ]
 
-caseFor :: Domain -> Role -> Image -> Image -> [(Word32, Word32)] -> Case -> CaseSpec
-caseFor domain role stockImage ownedImage symbols one =
+caseFor :: Domain -> Role -> Image -> Image -> [(Word32, Word32)] -> [Aggregate] -> Case -> CaseSpec
+caseFor domain role stockImage ownedImage symbols aggregates one =
   CaseSpec
     { caseId = caseName one ++ "-" ++ domainLabel domain
     , caseProvenance = "X-M1 1.50 global-lock root extensions +0x161c/+0x1620/+0x1624, x70view 55436fc85c0560dd252b0410af6f2427fe198cd3; synthetic lock words and caller stack"
@@ -311,6 +404,7 @@ caseFor domain role stockImage ownedImage symbols one =
         , mkRegion (RegionId "atomics") (GuestAddress (fromIntegral (atomicsBase domain))) (fromIntegral (atomicsSize domain)) ReadExecute (slice stockImage (atomicsBase domain) (atomicsSize domain))
         ]
       Owned ->
+        if not (null aggregates) then concatMap aggregateRegions aggregates else
         [ mkRegion (RegionId "slots") (GuestAddress (fromIntegral (entryBase domain))) (fromIntegral (entrySize domain)) ReadExecute (slice ownedImage (entryBase domain) (entrySize domain))
         , mkRegion (RegionId "atomics") (GuestAddress (fromIntegral (atomicsBase domain))) (fromIntegral (atomicsSize domain)) ReadExecute (slice ownedImage (atomicsBase domain) (atomicsSize domain))
         ]
@@ -319,6 +413,7 @@ caseFor domain role stockImage ownedImage symbols one =
         [ (entryBase domain, 0x1c), (entryBase domain + 0x1c, 0x1c), (entryBase domain + 0x38, 0x1c)
         , (atomicsBase domain, 0x28), (atomicsBase domain + 0x28, 0x2c), (atomicsBase domain + 0x54, 0x8)
         ]
+      Owned | not (null aggregates) -> aggregateFunctions aggregates
       Owned -> symbols
     initialRegisters =
       [(R0, caseArgument one), (R1, caseStamp one)]
@@ -384,8 +479,8 @@ cohortOf one
   | caseName one `elem` ["try-free-default-critical", "release-held-default-critical"] = "conventions"
   | otherwise = "root"
 
-runDomain :: FilePath -> FilePath -> FilePath -> Domain -> Image -> Image -> [(Word32, Word32)] -> IO ([CaseRun], [ControlRun])
-runDomain runner cacheRoot directory domain stockImage ownedImage symbols = do
+runDomain :: FilePath -> FilePath -> FilePath -> Domain -> Image -> Image -> [(Word32, Word32)] -> [Aggregate] -> IO ([CaseRun], [ControlRun])
+runDomain runner cacheRoot directory domain stockImage ownedImage symbols aggregates = do
   either error pure (checkStockBytes domain stockImage)
   let origins =
         [ entryBase domain, entryBase domain + 0x1c, entryBase domain + 0x38
@@ -394,11 +489,57 @@ runDomain runner cacheRoot directory domain stockImage ownedImage symbols = do
   unless (map fst symbols == origins) (error "owned symbols are not the six stock extents")
   (rootRuns, rootControls) <- runCohort [one | one <- cases, cohortOf one == "root"] directory
   (conventionRuns, conventionControls) <- runCohort [one | one <- cases, cohortOf one == "conventions"] (directory </> "conventions")
-  pure (rootRuns ++ conventionRuns, rootControls ++ conventionControls)
+  protectionControls <- runProtection
+  pure (rootRuns ++ conventionRuns, rootControls ++ conventionControls ++ protectionControls)
   where
+    runProtection = do
+      let readonly = [(address, bytes) | aggregate <- aggregates,
+            (_, address, ReadOnly, bytes) <- aggregateStorage aggregate]
+          driver = 0x0100_0400
+          driverBytes = assemble [0xe5c01000, 0xe12fff1e]
+          probes = [(address, protection) | (address, _) <- readonly, protection <- [WriteProtection, FetchProtection]]
+          protectionLabel WriteProtection = "write"
+          protectionLabel FetchProtection = "fetch"
+          name address protection = "readonly-" ++ protectionLabel protection ++ "-" ++ show address
+          spec address protection =
+            let template = case cases of
+                  one : _ -> caseFor domain Owned stockImage ownedImage symbols aggregates one
+                  [] -> error "global-lock cases are empty"
+                program = if protection == WriteProtection then driverBytes else assemble [0xe12fff10,0xe12fff1e]
+                value R0 = address
+                value R1 = 0xa5
+                value Sp = stackPointer
+                value Lr = exitAddress
+                value Cpsr = 0x13
+                value register = seedRegister register
+             in template
+               { caseId = name address protection
+               , caseEntry = GuestAddress (fromIntegral driver)
+               , caseRegions = caseRegions template ++
+                   [mkRegion (RegionId "readonly-driver") (GuestAddress (fromIntegral driver)) (B.length program) ReadExecute program]
+               , caseFunctions = [(GuestAddress (fromIntegral driver), fromIntegral (B.length program))]
+               , caseInitial = [(register, value register) | register <- [R0 .. R12] ++ [Sp, Lr, Cpsr]]
+               , caseExpectedStatus = if protection == WriteProtection then MemoryGuard else FetchGuard
+               , caseExpectedRegisters = [(R0, address), (Pc, if protection == WriteProtection then driver else address)]
+               , caseExpectedMemory = []
+               }
+      unless (all (\aggregate -> let image = aggregateImage aggregate in
+        driver + fromIntegral (B.length driverBytes) <= imageBase image
+        || imageBase image + fromIntegral (B.length (imageBytes image)) <= driver) aggregates)
+        (error "readonly probe driver overlaps supplied code storage")
+      if null probes then pure [] else do
+        batch <- writeBatch (directory </> "readonly") [spec address protection | (address, protection) <- probes]
+        (_, raw) <- cachedObservedBatch cacheRoot runner batch
+        let observed = M.fromList [(caseIdText ident, observation) | (ident, observation) <- raw]
+        pure [ControlRun (show protection) (name address protection)
+          (case M.lookup (name address protection) observed of
+            Just observation -> nativeStatus observation == (if protection == WriteProtection then MemoryGuard else FetchGuard)
+              && aggregateUnchanged aggregates observation
+            Nothing -> False)
+          | (address, protection) <- probes]
     runCohort chosen base = do
-      let stockSpecs = map (caseFor domain Stock stockImage ownedImage symbols) chosen
-          ownedSpecs = map (caseFor domain Owned stockImage ownedImage symbols) chosen
+      let stockSpecs = map (caseFor domain Stock stockImage ownedImage symbols aggregates) chosen
+          ownedSpecs = map (caseFor domain Owned stockImage ownedImage symbols aggregates) chosen
       stockBatch <- writeBatch (base </> "stock") stockSpecs
       ownedBatch <- writeBatch (base </> "owned") ownedSpecs
       (stockReuse, stockRaw) <- cachedObservedBatch cacheRoot runner stockBatch
@@ -418,6 +559,7 @@ runDomain runner cacheRoot directory domain stockImage ownedImage symbols = do
                   (Just stock', Just owned') ->
                     [("stock: " ++ describe check', either (const False) (const True) (check one stock' check')) | check' <- checksFor one]
                       ++ [("owned: " ++ describe check', either (const False) (const True) (check one owned' check')) | check' <- checksFor one]
+                      ++ [("owned: complete aggregate source bytes unchanged", aggregateUnchanged aggregates owned') | not (null aggregates)]
                   _ -> []
               , runDifferences = case (stock, owned) of
                   (Just stock', Just owned') ->
@@ -428,7 +570,14 @@ runDomain runner cacheRoot directory domain stockImage ownedImage symbols = do
                   (_, Nothing) -> ["owned case did not run"]
               , runReuse = (stockReuse, ownedReuse)
               }
-            controls = maybe [] (controlRuns one) owned
+            controls = maybe [] (\observation -> controlRuns one observation ++
+              [ControlRun "aggregate-source-byte" (caseName one)
+                (not (aggregateUnchanged aggregates (observation {nativeMemory = map corrupt (nativeMemory observation)})))
+              | not (null aggregates)]) owned
+            corrupt (regionIdent, bytes)
+              | "aggregate-" `isPrefixOf` regionName regionIdent, Just (byte, rest) <- B.uncons bytes =
+                  (regionIdent, B.cons (byte `xor` 1) rest)
+              | otherwise = (regionIdent, bytes)
         pure (run, controls)
       unless (length stockRaw == length chosen && length ownedRaw == length chosen) (error "native observations do not cover the current case set")
       pure (map fst results, concatMap snd results)

@@ -241,16 +241,23 @@ pub extern "C" fn s3d_timed_sleep_body(timeout: i32) -> i32 {
 
 #[no_mangle]
 #[inline(never)]
+#[link_section = ".text.s3d_release_core"]
+pub extern "C" fn s3d_release_core(id: i32, handler: u32) -> i32 {
+    status(s3d::release(&Cpu, EXECUTING, EncodedId(id), handler != 0))
+}
+
+#[no_mangle]
+#[inline(never)]
 #[link_section = ".text.s3d_release_wait_body"]
 pub extern "C" fn s3d_release_wait_body(id: i32) -> i32 {
-    status(release_wait(&Cpu, EXECUTING, EncodedId(id)))
+    s3d_release_core(id, 0)
 }
 
 #[no_mangle]
 #[inline(never)]
 #[link_section = ".text.s3d_interrupt_release_wait_body"]
 pub extern "C" fn s3d_interrupt_release_wait_body(id: i32) -> i32 {
-    status(interrupt_release_wait(&Cpu, EXECUTING, EncodedId(id)))
+    s3d_release_core(id, 1)
 }
 
 #[no_mangle]

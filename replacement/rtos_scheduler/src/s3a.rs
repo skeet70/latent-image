@@ -46,14 +46,16 @@ fn unmask() { unsafe { asm!("cpsie i", options(nostack, preserves_flags)) }; }
 fn current() -> KernelContext { KernelContext(GuestAddress(load(WORDS.current_context))) }
 #[inline(always)]
 fn running() -> Task { Task(GuestAddress(load(WORDS.running))) }
-#[inline(always)]
+#[cfg_attr(feature = "component", inline(never))]
+#[cfg_attr(not(feature = "component"), inline(always))]
 fn context_ok(interrupt: bool) -> bool { (load(WORDS.handler_context) != 0) == interrupt && !masked() }
 
 struct Scheduler;
 struct Guard<'a> { record: KernelContext, _owner: &'a mut Scheduler }
 
 impl Scheduler {
-    #[inline(always)]
+    #[cfg_attr(feature = "component", inline(never))]
+    #[cfg_attr(not(feature = "component"), inline(always))]
     fn lock(&mut self, record: KernelContext, interrupt_retry: bool) -> Guard<'_> {
         loop {
             mask();

@@ -11,6 +11,7 @@ import qualified Data.Aeson.KeyMap as KM
 import Data.Bits (complement, (.&.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
+import qualified Data.ByteString.Char8 as C
 import Data.Char (isAsciiLower, isDigit)
 import Data.Either (isLeft, isRight)
 import Data.List (nub, sort)
@@ -34,6 +35,7 @@ import Emulation.NativeObservation
 import Emulation.OwnedCase (CaseId (..))
 import Emulation.Sha256 (parseSha256Hex)
 import FujiAF.Host (get, list)
+import Numeric (showHex)
 import qualified FujiAF.Host as Host
 import Replacement.RtosOwnFirst.Artifact (LinkedDomain (..))
 import Replacement.RtosOwnFirst.Assembly
@@ -107,6 +109,65 @@ generationCount count = either error id (mkGenerationCount count)
 
 shrinkBudget :: Int -> ShrinkBudget
 shrinkBudget budget = either error id (mkShrinkBudget budget)
+
+aggregateAdmission :: DomainTable -> Bool
+aggregateAdmission table =
+  let entries = [(slot, either error id (slotEntry table slot)) | slot <- slots]
+      symbol slot = "fixed_" ++ slotTag slot
+      entryRows = [object ["group" .= ("own-first" :: String), "name" .= slotTag slot, "address" .= hexText address, "symbol" .= symbol slot, "veneer" .= symbol slot, "section" .= (".text." ++ slotTag slot)] | (slot, address) <- entries]
+      carrierSpans = (0x40000, 0x40010) : [(address, address + 8) | (_, address) <- entries]
+      domainValue :: Word32 -> Int -> [Value] -> Value
+      domainValue base size rows = object
+        [ "loader_base" .= hexText base, "loader_size" .= size, "entries" .= rows
+        , "carriers" .= [object ["group" .= ("own-first" :: String), "start" .= hexText start, "end" .= hexText end]
+            | (start, end) <- if base == 0x40000 then carrierSpans else [(base, base + fromIntegral size)]]
+        , "externals" .= ([] :: [Value]), "demand" .= ([] :: [Value])
+        ]
+      carriers = BL.toStrict (encode (object
+        [ "fill_word" .= ("0xe7f000f0" :: String)
+        , "domains" .= object ["a" .= domainValue 0x40000 (domainLoaderSize DomainA) entryRows, "b" .= domainValue 0xd0000 (domainLoaderSize DomainB) []]
+        ]))
+      placements = BL.toStrict (encode (object ["placements" .=
+        [object ["address" .= ("0x40000" :: String), "bytes" .= (4 :: Int), "section" .= (".text.packed" :: String)]
+        ,object ["address" .= ("0x40004" :: String), "bytes" .= (4 :: Int), "section" .= (".rodata" :: String)]
+        ,object ["address" .= ("0x40008" :: String), "bytes" .= (4 :: Int), "section" .= (".text.anonymous" :: String)]]]))
+      top = maximum (map snd carrierSpans)
+      binary = B.replicate (fromIntegral (top - 0x40000)) 0x5a
+      stock = B.replicate (domainLoaderSize DomainA) 0x33
+      nm address size name = showHex address "" ++ " " ++ showHex size "" ++ " T " ++ name ++ "\n"
+      symbols = concat [nm address (4 :: Word32) (symbol slot) | (slot, address) <- entries] ++ nm (0x40000 :: Word32) (4 :: Word32) "packed"
+      admit payload rows plans = aggregateDomain 0xe7f000f0 DomainA table stock payload (C.pack rows) plans carriers
+      expectedImage = B.pack
+        [if any (\(start, end) -> start <= address && address < end) carrierSpans then 0x5a else 0x33
+        | offset <- [0 .. domainLoaderSize DomainA - 1], let address = 0x40000 + fromIntegral offset]
+      accepted = do
+        owned <- admit binary symbols placements
+        bodies <- mapM (ownedBody owned) slots
+        controls <- forM (mutants ++ equivalents) $ \control -> do
+          body <- ownedBody owned (controlSlot control)
+          subject <- buildControlBody 0xe7f000f0 DomainA table control body
+          let entry = bodyEntry body
+              offset = fromIntegral (entry - 0x40000)
+              unchanged image = B.take offset image == B.take offset expectedImage
+                && B.drop (offset + 4) image == B.drop (offset + 4) expectedImage
+          pure (bodyEntry subject == entry
+            && case lookup 0x40000 (bodyCode subject) of
+              Just image -> unchanged image && B.take 4 (B.drop offset image) /= B.take 4 (B.drop offset expectedImage)
+              Nothing -> False)
+        pure (and controls && and
+          [ bodyEntry body == address && bodyCode body == [(0x40000, expectedImage)]
+              && any (\(start, size) -> start <= 0x40008 && 0x40008 < start + size) (bodyFunctions body)
+              && not (any (\(start, size) -> start <= 0x40004 && 0x40004 < start + size) (bodyFunctions body))
+          | (body, (_, address)) <- zip bodies entries])
+   in accepted == Right True
+        && isLeft (admit B.empty symbols placements)
+        && isLeft (admit (B.init binary) symbols placements)
+        && isLeft (admit (binary <> B.singleton 0) symbols placements)
+        && isLeft (admit binary (symbols ++ nm (0x4000c :: Word32) (4 :: Word32) "unplaced") placements)
+        && isLeft (admit binary (symbols ++ nm (0x4000c :: Word32) (4 :: Word32) "fixed_s60") placements)
+        && isLeft (admit binary (symbols ++ nm (0x40004 :: Word32) (4 :: Word32) "readonly") placements)
+        && isLeft (admit binary symbols (BL.toStrict (encode (object ["placements" .=
+          [object ["address" .= ("0x900000" :: String), "bytes" .= (4 :: Int), "section" .= (".text.outside" :: String)]]]))))
 
 pureChecks :: DomainTable -> [IO Bool]
 pureChecks tableA =
@@ -203,6 +264,13 @@ pureChecks tableA =
             && isRight (parseCommand [])
             && isRight (parseCommand ["--generate", "4", "--seed", "1"])
             && isRight (parseCommand ["--replay", "summary.json"])
+      , check "aggregate input requires both images, symbols and placements" $
+          let flags = ["--aggregate-a-bin", "--aggregate-a-symbols", "--placements-a", "--aggregate-b-bin", "--aggregate-b-symbols", "--placements-b"]
+              arguments = concatMap (\flag -> [flag, "input"]) flags
+           in isRight (parseCommand arguments)
+                && all (\missing -> isLeft (parseCommand (concatMap (\flag -> [flag, "input"]) (filter (/= missing) flags)))) flags
+                && isRight (parseCommand (["--owned-a-bin", "standalone-a", "--owned-a-symbols", "standalone-a.symbols", "--owned-b-bin", "standalone-b", "--owned-b-symbols", "standalone-b.symbols"] ++ arguments))
+      , check "every aggregate slot preserves complete carrier slack and canonical gaps, admits text but not rodata, and rejects incomplete payloads" (aggregateAdmission tableA)
       , check "recorded boundaries parse into typed kinds" $
           parseDifferenceKind "RegisterKind R0" == Right (RegisterKind R0)
             && parseDifferenceKind "MemoryKind (RegionId \"buffer\")" == Right (MemoryKind (RegionId "buffer"))
@@ -277,8 +345,9 @@ nativeChecks scope runner temporary fill domain table owned slot = do
           outcome <- outcomeOf reference <$> run "owned-repeat" body
           (: []) <$> report "owned-repeat" (ControlResult "owned-repeat" MustPass "the reference body against itself" outcome) outcome
         else pure []
+      let veneerBody = body {bodyFunctions = [(start, if start == entry then 4 else size) | (start, size) <- bodyFunctions body]}
       controls <- forM [control | control <- mutants ++ equivalents, controlSlot control == slot] $ \control ->
-        case controlCode domain table control >>= \code -> replaceEntry fill code body of
+        case buildControlBody fill domain table control veneerBody of
           Left problem -> pure (Left (name ++ " " ++ controlName control ++ ": " ++ problem))
           Right subject -> do
             outcome <- outcomeOf reference <$> run (controlName control) subject
@@ -315,7 +384,7 @@ stoppingChecks scope runner temporary fill table owned =
 generatedChecks :: FilePath -> FilePath -> Word32 -> Domain -> DomainTable -> OwnedDomain -> IO [Bool]
 generatedChecks runner temporary fill domain table owned =
   case (ownedBody owned S16c, [control | control <- mutants, controlSlot control == S16c]) of
-    (Right body, control : _) -> case controlCode domain table control >>= \code -> replaceEntry fill code body of
+    (Right body, control : _) -> case buildControlBody fill domain table control body of
       Left problem -> (: []) <$> check ("generated corpus: " ++ problem) False
       Right controlBody -> do
         let input =

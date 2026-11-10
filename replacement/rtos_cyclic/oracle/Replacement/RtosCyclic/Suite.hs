@@ -4,11 +4,12 @@
 -- entries. Expiry runs through the owned timer tick so the pop and re-arm are real.
 module Replacement.RtosCyclic.Suite
   ( Image (..)
+  , OwnedInput (..)
   , CaseRun (..)
   , ControlRun (..)
   , runDomain
   , parseOwnedSymbols
-  , stockFunctions
+  , foreignCodeExtents
   ) where
 
 import Control.Monad (forM, forM_, unless)
@@ -24,6 +25,10 @@ import Replacement.RtosCyclic.Layout
 import System.FilePath ((</>))
 
 data Image = Image { imageBase :: Word32, imageBytes :: B.ByteString }
+
+data OwnedInput
+  = Standalone Image Image [(Word32, Word32)] [(Word32, Word32)]
+  | Aggregate [(Image, Bool, [(Word32, Word32)])]
 
 data Role = Stock | Owned deriving (Eq, Show)
 
@@ -123,6 +128,9 @@ exitAddress = 0x01000200
 stackBase = 0x300000
 stackSize = 0x1000
 stackPointer = stackBase + 0x800
+
+foreignCodeExtents :: [(Word32, Word32)]
+foreignCodeExtents = [(stubBase, stubSize), (exitAddress, 0x10)]
 
 entriesBase, entriesSize :: Word32
 entriesBase = 0x40100000
@@ -745,8 +753,8 @@ caseArgs facts domain one = case caseCall one of
   where
     d = domainFacts facts domain
 
-caseFor :: Facts -> Domain -> Role -> Image -> Image -> Image -> [(Word32, Word32)] -> [(Word32, Word32)] -> Case -> CaseSpec
-caseFor facts domain role stockImage ownedImage timerOwned ownedSymbols timerSymbols one =
+caseFor :: Facts -> Domain -> Role -> Image -> OwnedInput -> Case -> CaseSpec
+caseFor facts domain role stockImage ownedInput one =
   CaseSpec
     { caseId = caseName one ++ "-" ++ domainLabel domain
     , caseProvenance = "X-M1 1.50 cyclic stock ABI, x70view 55436fc85c0560dd252b0410af6f2427fe198cd3; synthetic tables, heap and callback stubs"
@@ -754,9 +762,8 @@ caseFor facts domain role stockImage ownedImage timerOwned ownedSymbols timerSym
     , caseEntry = GuestAddress (fromIntegral entry)
     , caseExit = GuestAddress (fromIntegral exitAddress)
     , caseRegions =
-        [ mkRegion (RegionId "code") (GuestAddress (fromIntegral codeBase)) (fromIntegral (B.length codeBytes)) ReadExecute codeBytes
-        , mkRegion (RegionId "timer") (GuestAddress (fromIntegral timerBase)) (fromIntegral (B.length timerBytes)) ReadExecute timerBytes
-        , mkRegion (RegionId "stubs") (GuestAddress (fromIntegral stubBase)) (fromIntegral stubSize) ReadExecute (stubBytes domain one)
+        codeRegions
+          ++ [ mkRegion (RegionId "stubs") (GuestAddress (fromIntegral stubBase)) (fromIntegral stubSize) ReadExecute (stubBytes domain one)
         , mkRegion (RegionId "words") (GuestAddress (fromIntegral (wordsBase domain))) 0x1000 ReadWrite (overlay (wordsBase domain) 0x1000 (wordsWords facts domain one))
         , mkRegion (RegionId "configs") (GuestAddress (fromIntegral (configBase facts domain))) 0x60 ReadWrite (overlay (configBase facts domain) 0x60 (configWords facts domain one handler))
         , mkRegion (RegionId "controls") (GuestAddress (fromIntegral (controlBase facts domain))) 0x60 ReadWrite (overlay (controlBase facts domain) 0x60 (controlWords facts domain one))
@@ -801,15 +808,22 @@ caseFor facts domain role stockImage ownedImage timerOwned ownedSymbols timerSym
     entry = callEntry domain (caseCall one)
     status = if role == Stock then caseStockStatus one else caseOwnedStatus one
     handler = handlerFor role one
-    (codeBase, codeBytes) = case role of
-      Stock -> (cyclicLow domain, slice (imageBase stockImage) (imageBytes stockImage) (cyclicLow domain) (cyclicSize domain))
-      Owned -> (imageBase ownedImage, imageBytes ownedImage)
-    (timerBase, timerBytes) = case role of
-      Stock -> (timerLow domain, slice (imageBase stockImage) (imageBytes stockImage) (timerLow domain) (timerSize domain))
-      Owned -> (timerLow domain, imageBytes timerOwned)
-    functions = case role of
-      Stock -> stockFunctions domain ++ [(stubBase, stubSize)]
-      Owned -> ownedSymbols ++ timerSymbols ++ [(stubBase, stubSize)]
+    codeRegions = case (role, ownedInput) of
+      (Owned, Aggregate images) ->
+        [mkRegion (RegionId ("aggregate-" ++ show index)) (GuestAddress (fromIntegral base)) (fromIntegral (B.length bytes)) (if executable then ReadExecute else ReadOnly) bytes
+        | (index, (Image base bytes, executable, _)) <- zip [0 :: Int ..] images]
+      _ ->
+        [ mkRegion (RegionId "code") (GuestAddress (fromIntegral codeBase)) (fromIntegral (B.length codeBytes)) ReadExecute codeBytes
+        , mkRegion (RegionId "timer") (GuestAddress (fromIntegral timerBase)) (fromIntegral (B.length timerBytes)) ReadExecute timerBytes
+        ]
+    (codeBase, codeBytes, timerBase, timerBytes) = case (role, ownedInput) of
+      (Owned, Standalone owned timer _ _) -> (imageBase owned, imageBytes owned, imageBase timer, imageBytes timer)
+      _ -> (cyclicLow domain, slice (imageBase stockImage) (imageBytes stockImage) (cyclicLow domain) (cyclicSize domain),
+            timerLow domain, slice (imageBase stockImage) (imageBytes stockImage) (timerLow domain) (timerSize domain))
+    functions = [(stubBase, stubSize)] ++ case (role, ownedInput) of
+      (Stock, _) -> stockFunctions domain
+      (Owned, Standalone _ _ ownedSymbols timerSymbols) -> ownedSymbols ++ timerSymbols
+      (Owned, Aggregate images) -> concat [spans | (_, _, spans) <- images]
 
 stockFunctions :: Domain -> [(Word32, Word32)]
 stockFunctions domain =
@@ -870,15 +884,12 @@ runDomain
   -> Facts
   -> Domain
   -> Image
-  -> Image
-  -> Image
-  -> [(Word32, Word32)]
-  -> [(Word32, Word32)]
+  -> OwnedInput
   -> IO ([CaseRun], [ControlRun])
-runDomain runner cacheRoot directory facts domain stockImage ownedImage timerOwned ownedSymbols timerSymbols = do
+runDomain runner cacheRoot directory facts domain stockImage ownedInput = do
   let chosen = cases facts domain
-      stockSpecs = map (caseFor facts domain Stock stockImage ownedImage timerOwned ownedSymbols timerSymbols) chosen
-      ownedSpecs = map (caseFor facts domain Owned stockImage ownedImage timerOwned ownedSymbols timerSymbols) chosen
+      stockSpecs = map (caseFor facts domain Stock stockImage ownedInput) chosen
+      ownedSpecs = map (caseFor facts domain Owned stockImage ownedInput) chosen
   stockBatch <- writeBatch (directory </> "stock") stockSpecs
   ownedBatch <- writeBatch (directory </> "owned") ownedSpecs
   (stockReuse, stockRaw) <- cachedObservedBatch cacheRoot runner stockBatch

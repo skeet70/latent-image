@@ -325,15 +325,24 @@ pub fn remove<M: Machine>(m: &M, heap: TimerHeap, entry: TimerEntry) -> Result<R
     entry.set_index(m, TimerIndex::Detached);
     let new_count = count - 1;
     heap.set_count(m, new_count);
+    repair_after_removal(m, heap, index, count);
+    Ok(Removed::Detached)
+}
+
+#[cfg_attr(feature = "component", link_section = ".text.timer_repair_after_removal")]
+#[cfg_attr(feature = "component", inline(never))]
+#[cfg_attr(not(feature = "component"), inline(always))]
+fn repair_after_removal<M: Machine>(m: &M, heap: TimerHeap, index: Index, count: u32) {
+    let new_count = count - 1;
     if new_count == 0 || index.get() == count {
-        return Ok(Removed::Detached);
+        return;
     }
-    let last = Index::new(count, heap.capacity)?;
+    let last = in_range(count, heap.capacity);
     let last_expiry = node_expiry(m, heap, last);
     let last_entry = node_entry(m, heap, last);
     let base = heap.base(m);
     let index = if index.get() > 1 {
-        let parent = Index::new(index.get() >> 1, heap.capacity)?;
+        let parent = in_range(index.get() >> 1, heap.capacity);
         if relative(last_expiry.0, base) < relative(node_expiry(m, heap, parent).0, base) {
             sift_up(m, heap, index, last_expiry, base)
         } else {
@@ -346,7 +355,6 @@ pub fn remove<M: Machine>(m: &M, heap: TimerHeap, entry: TimerEntry) -> Result<R
     m.store_word(node.offset(NODE_EXPIRY), last_expiry.0);
     m.store_word(node.offset(NODE_ENTRY), last_entry.address().0);
     last_entry.set_index(m, TimerIndex::Linked(index));
-    Ok(Removed::Detached)
 }
 
 /// The callback receives the lock held and may release and reacquire it meanwhile. The lock
@@ -391,16 +399,7 @@ pub fn tick<M: Scheduler>(
         entry.set_index(m, TimerIndex::Detached);
         let new_count = count - 1;
         heap.set_count(m, new_count);
-        if new_count != 0 {
-            let last = in_range(count, heap.capacity);
-            let last_expiry = node_expiry(m, heap, last);
-            let last_entry = node_entry(m, heap, last);
-            let index = sift_down(m, heap, head, last_expiry, base, new_count);
-            let node = heap.node(index);
-            m.store_word(node.offset(NODE_EXPIRY), last_expiry.0);
-            m.store_word(node.offset(NODE_ENTRY), last_entry.address().0);
-            last_entry.set_index(m, TimerIndex::Linked(index));
-        }
+        repair_after_removal(m, heap, head, count);
         invoke(m, callback, argument);
         m.release_lock(held);
         m.irq_clear();

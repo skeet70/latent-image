@@ -19,6 +19,8 @@ haskell_library(
         "//host:containers",
         "//host:filepath",
         "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//replacement/rtos_platform:aggregate",
+        "//replacement/rtos_platform:platform-artifact",
     ],
 )
 
@@ -59,5 +61,6 @@ haskell_binary(
         "//host:host-support",
         "//host:storage-budget",
         "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//replacement/rtos_platform:platform-artifact",
     ],
 )

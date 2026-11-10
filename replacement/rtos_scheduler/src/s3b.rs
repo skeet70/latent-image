@@ -15,6 +15,9 @@ impl TaskHandle {
 #[derive(Clone, Copy)]
 enum Request { Activate, CancelActivation, Wake, CancelWake }
 
+#[derive(Clone, Copy)]
+enum Invocation { Task, Handler }
+
 const WORDS: DomainWords = crate::DOMAIN.words();
 
 extern "C" {
@@ -36,11 +39,13 @@ unsafe fn irq<const MASK: bool>() {
     asm!("msr CPSR_fc, {status}", status = in(reg) status, options(nostack));
 }
 
-#[inline(always)]
-unsafe fn service<const HANDLER: bool>(raw: u32, request: Request) -> i32 {
+#[cfg_attr(feature = "component", inline(never))]
+#[cfg_attr(not(feature = "component"), inline(always))]
+unsafe fn service(raw: u32, request: Request, invocation: Invocation) -> i32 {
+    let handler = matches!(invocation, Invocation::Handler);
     let status: u32;
     asm!("mrs {status}, cpsr", status = out(reg) status, options(nostack, preserves_flags));
-    if (word(WORDS.handler_context.0) != 0) != HANDLER || status & 0x80 != 0 { return -25; }
+    if (word(WORDS.handler_context.0) != 0) != handler || status & 0x80 != 0 { return -25; }
     let Some(handle) = TaskHandle::parse(raw) else { return -18; };
     let context = match handle.domain {
         DomainId::Own => word(WORDS.current_context.0),
@@ -48,7 +53,7 @@ unsafe fn service<const HANDLER: bool>(raw: u32, request: Request) -> i32 {
         DomainId::B => WORDS.contexts.0 + KernelContext::SIZE,
     };
     let number = handle.number as i32;
-    if number < 0 || (HANDLER && number == 0) || number > word(context + 0x48) as i32 { return -18; }
+    if number < 0 || (handler && number == 0) || number > word(context + 0x48) as i32 { return -18; }
     let task = if number == 0 { word(WORDS.running.0) } else { word(context + 0x44) + (number as u32 - 1) * Task::SIZE };
     if word(word(task + 8) + 0x24) == 0 { return -42; }
     let lock = context + 8;
@@ -56,7 +61,7 @@ unsafe fn service<const HANDLER: bool>(raw: u32, request: Request) -> i32 {
         irq::<true>();
         let acquire: unsafe extern "C" fn(u32) -> i32 = core::mem::transmute(word(context + 0x0c));
         if acquire(lock) == 0 { break; }
-        if !HANDLER { irq::<false>(); }
+        if !handler { irq::<false>(); }
     }
     let mut dispatch = false;
     let state = byte(task + 0x0c);
@@ -74,14 +79,14 @@ unsafe fn service<const HANDLER: bool>(raw: u32, request: Request) -> i32 {
         }
         Request::Activate | Request::Wake => {
             let wake = matches!(request, Request::Wake);
-            if wake && (state == 0 || (!HANDLER && task == word(WORDS.running.0) && word(task + 0x30) != 0)) {
+            if wake && (state == 0 || (!handler && task == word(WORDS.running.0) && word(task + 0x30) != 0)) {
                 result = -41;
             } else if (!wake && state == 0) || (wake && state & 8 != 0) {
                 let context = KernelContext(GuestAddress(context));
                 let task = Task(GuestAddress(task));
                 let changed = if wake { s3b_release_wait(context, task) } else { s3b_prepare(context, task) };
                 if changed != 0 && s3b_notify(word(context.0.0)) != 0 {
-                    if HANDLER { write_volatile(WORDS.reschedule.0 as *mut u32, 1); } else { dispatch = true; }
+                    if handler { write_volatile(WORDS.reschedule.0 as *mut u32, 1); } else { dispatch = true; }
                 }
             } else if flags & bit != 0 { result = -43; }
             else { write_volatile((task + 0x0e) as *mut u8, flags | bit); }
@@ -95,15 +100,15 @@ unsafe fn service<const HANDLER: bool>(raw: u32, request: Request) -> i32 {
 }
 
 macro_rules! entry {
-    ($name:ident, $section:literal, $handler:literal, $request:ident) => {
+    ($name:ident, $section:literal, $handler:ident, $request:ident) => {
         #[no_mangle]
         #[link_section = $section]
-        pub unsafe extern "C" fn $name(handle: u32) -> i32 { service::<$handler>(handle, Request::$request) }
+        pub unsafe extern "C" fn $name(handle: u32) -> i32 { service(handle, Request::$request, Invocation::$handler) }
     };
 }
-entry!(xm1_s3b_interrupt_activate, ".text.s3b_interrupt_activate", true, Activate);
-entry!(xm1_s3b_activate, ".text.s3b_activate", false, Activate);
-entry!(xm1_s3b_cancel_activation, ".text.s3b_cancel_activation", false, CancelActivation);
-entry!(xm1_s3b_wake, ".text.s3b_wake", false, Wake);
-entry!(xm1_s3b_interrupt_wake, ".text.s3b_interrupt_wake", true, Wake);
-entry!(xm1_s3b_cancel_wake, ".text.s3b_cancel_wake", false, CancelWake);
+entry!(xm1_s3b_interrupt_activate, ".text.s3b_interrupt_activate", Handler, Activate);
+entry!(xm1_s3b_activate, ".text.s3b_activate", Task, Activate);
+entry!(xm1_s3b_cancel_activation, ".text.s3b_cancel_activation", Task, CancelActivation);
+entry!(xm1_s3b_wake, ".text.s3b_wake", Task, Wake);
+entry!(xm1_s3b_interrupt_wake, ".text.s3b_interrupt_wake", Handler, Wake);
+entry!(xm1_s3b_cancel_wake, ".text.s3b_cancel_wake", Task, CancelWake);

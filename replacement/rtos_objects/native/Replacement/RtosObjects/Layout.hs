@@ -77,6 +77,10 @@ data Facts = Facts
   , factsContextFirstEntry :: Word32
   , factsContextTasks :: Word32
   , factsContextTaskCount :: Word32
+  , factsContextTimerHeap :: Word32
+  , factsContextTimerCount :: Word32
+  , factsContextTimerBase :: Word32
+  , factsContextTickNow :: Word32
   , factsContextFlags :: Word32
   , factsContextFlagCount :: Word32
   , factsContextMailboxes :: Word32
@@ -217,6 +221,10 @@ instance FromJSON Facts where
       <*> c .: "first_entry"
       <*> c .: "tasks"
       <*> c .: "task_count"
+      <*> c .: "timer_heap"
+      <*> c .: "timer_count"
+      <*> c .: "timer_base"
+      <*> c .: "tick_now"
       <*> c .: "event_flags"
       <*> c .: "event_flag_count"
       <*> c .: "mailboxes"

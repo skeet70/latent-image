@@ -9,12 +9,16 @@ import Data.Aeson (object, (.=), encode)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.Word (Word32)
+import Data.List (isPrefixOf)
 import Emulation.NativeObservation (parseWord32)
 import Emulation.Sha256 (sha256File, sha256Hex)
 import FujiAF.Host (failH)
 import FujiAF.StorageBudget (checkStorageBudget)
 import Replacement.RtosDataQueue.Layout (parseFacts)
-import Replacement.RtosDataQueue.Suite (CaseRun (..), ControlRun (..), Image (..), runDomain)
+import qualified Replacement.RtosPlatform.Aggregate as Agg
+import qualified Replacement.RtosPlatform.Union as Union
+import qualified Replacement.RtosOwnFirst.Regions as Regions
+import Replacement.RtosDataQueue.Suite (Aggregate (..), CaseRun (..), ControlRun (..), Image (..), runDomain)
 import Replacement.RtosOwnFirst.Regions (Domain (..), domainLabel)
 import System.Directory (createDirectoryIfMissing, makeAbsolute)
 import System.Environment (getArgs)
@@ -28,12 +32,23 @@ main = do
   layoutPath <- required "--layout"
   loaderA <- required "--loader-a"
   loaderB <- required "--loader-b"
-  ownedA <- required "--owned-a-bin"
-  ownedB <- required "--owned-b-bin"
-  timerA <- required "--timer-a-bin"
-  timerB <- required "--timer-b-bin"
-  symbolsAPath <- required "--owned-a-symbols"
-  symbolsBPath <- required "--owned-b-symbols"
+  aggregateABin <- optional "--aggregate-a-bin"
+  aggregateASymbols <- optional "--aggregate-a-symbols"
+  aggregateBBin <- optional "--aggregate-b-bin"
+  aggregateBSymbols <- optional "--aggregate-b-symbols"
+  aggregateAPlacements <- optional "--aggregate-a-placements"
+  aggregateBPlacements <- optional "--aggregate-b-placements"
+  aggregateCarriers <- optional "--aggregate-carriers"
+  let aggregateFlags = [aggregateABin, aggregateASymbols, aggregateAPlacements, aggregateBBin, aggregateBSymbols, aggregateBPlacements, aggregateCarriers]
+  unless (all (== Nothing) aggregateFlags || all (/= Nothing) aggregateFlags)
+    (failH "aggregate mode requires both binary/symbol/placement triples and --aggregate-carriers")
+  ownedA <- maybe (required "--owned-a-bin") pure aggregateABin
+  ownedB <- maybe (required "--owned-b-bin") pure aggregateBBin
+  symbolsAPath <- maybe (required "--owned-a-symbols") pure aggregateASymbols
+  symbolsBPath <- maybe (required "--owned-b-symbols") pure aggregateBSymbols
+  timerA <- maybe (required "--timer-a-bin") pure aggregateABin
+  timerB <- maybe (required "--timer-b-bin") pure aggregateBBin
+  carriers <- traverse (\path -> either (failH . show) pure . Union.parseUnion =<< B.readFile path) aggregateCarriers
   resultsPath <- required "--results"
   reviewPath <- required "--review"
   facts <- either failH pure . parseFacts =<< B.readFile layoutPath
@@ -55,6 +70,13 @@ main = do
   ownedBDigest <- sha256File ownedB
   timerADigest <- sha256File timerA
   timerBDigest <- sha256File timerB
+  aggregateABinDigest <- traverse sha256File aggregateABin
+  aggregateASymbolsDigest <- traverse sha256File aggregateASymbols
+  aggregateAPlacementsDigest <- traverse sha256File aggregateAPlacements
+  aggregateBBinDigest <- traverse sha256File aggregateBBin
+  aggregateBSymbolsDigest <- traverse sha256File aggregateBSymbols
+  aggregateBPlacementsDigest <- traverse sha256File aggregateBPlacements
+  aggregateCarriersDigest <- traverse sha256File aggregateCarriers
   unless (sha256Hex loaderADigest == "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882") (failH (loaderA ++ " is not the pinned X-M1 1.50 loader"))
   unless (sha256Hex loaderBDigest == "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec") (failH (loaderB ++ " is not the pinned X-M1 1.50 loader"))
   checkStorageBudget (takeDirectory resultsPath)
@@ -67,8 +89,10 @@ main = do
       ownedBImage = Image baseB ownedBBytes
       timerAImage = Image 0x44a50 timerABytes
       timerBImage = Image 0xd4a10 timerBBytes
-  (runA, controlsA) <- runDomain runner cacheRoot (takeDirectory resultsPath </> "domain-a") facts DomainA stockA ownedAImage timerAImage symbolsA
-  (runB, controlsB) <- runDomain runner cacheRoot (takeDirectory resultsPath </> "domain-b") facts DomainB stockB ownedBImage timerBImage symbolsB
+  aggregateA <- aggregateOf DomainA carriers aggregateABin aggregateASymbols aggregateAPlacements
+  aggregateB <- aggregateOf DomainB carriers aggregateBBin aggregateBSymbols aggregateBPlacements
+  (runA, controlsA) <- runDomain runner cacheRoot (takeDirectory resultsPath </> "domain-a") facts DomainA aggregateA stockA ownedAImage timerAImage symbolsA
+  (runB, controlsB) <- runDomain runner cacheRoot (takeDirectory resultsPath </> "domain-b") facts DomainB aggregateB stockB ownedBImage timerBImage symbolsB
   let runs = runA ++ runB
       controls = controlsA ++ controlsB
       failures = [(domainLabel (runEntryDomain run), runName run, message) | run <- runs, message <- runDifferences run]
@@ -107,6 +131,13 @@ main = do
                 , "owned_b_bin_sha256" .= sha256Hex ownedBDigest
                 , "timer_a_bin_sha256" .= sha256Hex timerADigest
                 , "timer_b_bin_sha256" .= sha256Hex timerBDigest
+                , "aggregate_a_bin_sha256" .= fmap sha256Hex aggregateABinDigest
+                , "aggregate_a_symbols_sha256" .= fmap sha256Hex aggregateASymbolsDigest
+                , "aggregate_a_placements_sha256" .= fmap sha256Hex aggregateAPlacementsDigest
+                , "aggregate_b_bin_sha256" .= fmap sha256Hex aggregateBBinDigest
+                , "aggregate_b_symbols_sha256" .= fmap sha256Hex aggregateBSymbolsDigest
+                , "aggregate_b_placements_sha256" .= fmap sha256Hex aggregateBPlacementsDigest
+                , "aggregate_carriers_sha256" .= fmap sha256Hex aggregateCarriersDigest
                 ]
           , "cases" .= map caseValue runs
           , "controls" .= map controlValue controls
@@ -129,6 +160,13 @@ main = do
               , "owned_b" .= ownedB
               , "timer_a" .= timerA
               , "timer_b" .= timerB
+              , "aggregate_a_bin_sha256" .= fmap sha256Hex aggregateABinDigest
+              , "aggregate_a_symbols_sha256" .= fmap sha256Hex aggregateASymbolsDigest
+              , "aggregate_a_placements_sha256" .= fmap sha256Hex aggregateAPlacementsDigest
+              , "aggregate_b_bin_sha256" .= fmap sha256Hex aggregateBBinDigest
+              , "aggregate_b_symbols_sha256" .= fmap sha256Hex aggregateBSymbolsDigest
+              , "aggregate_b_placements_sha256" .= fmap sha256Hex aggregateBPlacementsDigest
+              , "aggregate_carriers_sha256" .= fmap sha256Hex aggregateCarriersDigest
               ]
           , "counterexamples" .=
               [ object ["domain" .= domain, "case" .= name, "difference" .= message]
@@ -152,6 +190,44 @@ main = do
   forM_ failedChecks $ \(domain, name, description) -> putStrLn (domain ++ " " ++ name ++ ": check failed: " ++ description)
   forM_ failedControls $ \(domain, name, control) -> putStrLn (domain ++ " " ++ name ++ ": control failed: " ++ control)
   unless (null failures && null failedChecks && null failedControls) exitFailure
+
+aggregateOf :: Domain -> Maybe Union.Union -> Maybe FilePath -> Maybe FilePath -> Maybe FilePath -> IO (Maybe Aggregate)
+aggregateOf _ Nothing Nothing Nothing Nothing = pure Nothing
+aggregateOf domain (Just union) (Just binPath) (Just symbolsPath) (Just placementsPath) = do
+  bytes <- B.readFile binPath
+  symbols <- either failH pure . Agg.parseAggregateSymbols =<< B.readFile symbolsPath
+  placements <- either failH pure . Agg.parsePlacements =<< B.readFile placementsPath
+  image <- either failH pure (Agg.aggregateImage symbols bytes)
+  let dm = Union.domainMap union domain
+      carriers = map Union.carrierExtent (Union.mapCarriers dm)
+      spans = [(Agg.symbolAddress symbol, Agg.symbolSize symbol) | symbol <- symbols]
+        ++ [(Agg.placementAddress placement, Agg.placementBytes placement) | placement <- placements, Agg.placementBytes placement > 0]
+      contained (address, size) = any (\(Regions.Extent (Regions.GuestAddress low) (Regions.GuestAddress high)) ->
+        low <= address && toInteger address + toInteger size <= toInteger high) carriers
+  forM_ carriers $ \(Regions.Extent (Regions.GuestAddress low) (Regions.GuestAddress high)) ->
+    either failH (const (pure ())) (Agg.sliceAggregate image low (high - low))
+  let executable placement = let section = Agg.placementSection placement in section == ".text" || ".text." `isPrefixOf` section
+      text = [(Agg.symbolAddress symbol, Agg.symbolSize symbol) | symbol <- symbols]
+        ++ [(Agg.placementAddress placement, Agg.placementBytes placement) | placement <- placements, executable placement, Agg.placementBytes placement > 0]
+      readonly = [(Agg.placementAddress placement, Agg.placementBytes placement) | placement <- placements, not (executable placement), Agg.placementBytes placement > 0]
+      overlaps (left, size) (right, bytes') = toInteger left < toInteger right + toInteger bytes' && toInteger right < toInteger left + toInteger size
+  unless (not (null carriers) && not (null placements)) (failH "aggregate mode requires live carriers and placements")
+  unless (not (or [overlaps code dat | code <- text, dat <- readonly])) (failH "aggregate executable span overlaps readonly data")
+  forM_ spans $ \(address, size) -> either failH (const (pure ())) (Agg.sliceAggregate image address size)
+  unless (all contained spans) (failH "aggregate symbol or placement is outside the live carrier union")
+  forM_ (Union.mapEntries dm) $ \entry -> do
+    _ <- either failH pure (Union.resolveEntryTarget image symbols placements entry)
+    pure ()
+  pure (Just (Aggregate image symbols placements carriers))
+aggregateOf _ _ _ _ _ = failH "incomplete aggregate inputs"
+
+optional :: String -> IO (Maybe FilePath)
+optional flag = do
+  arguments <- getArgs
+  case [value | (key, value) <- zip arguments (drop 1 arguments), key == flag] of
+    [] | flag `elem` arguments -> failH (flag ++ " needs a value")
+       | otherwise -> pure Nothing
+    values -> Just <$> makeAbsolute (last values)
 
 parseOwnedSymbols :: FilePath -> IO [(Word32, Word32)]
 parseOwnedSymbols path = do
@@ -180,7 +256,6 @@ ownedBase path = do
 required :: String -> IO FilePath
 required flag = do
   arguments <- getArgs
-  case dropWhile (/= flag) arguments of
+  case [value | (key, value) <- zip arguments (drop 1 arguments), key == flag] of
     [] -> failH (flag ++ " is required")
-    [_] -> failH (flag ++ " needs a value")
-    _ : value : _ -> pure value
+    values -> pure (last values)

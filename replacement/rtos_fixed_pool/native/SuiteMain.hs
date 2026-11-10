@@ -7,18 +7,17 @@ module Main (main) where
 import Control.Monad (forM_, unless)
 import Data.Aeson (object, (.=), encode)
 import qualified Data.ByteString as B
-import qualified Data.ByteString.Char8 as BC
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Map.Strict as M
 import Data.Word (Word32)
 import FujiAF.Host (failH)
 import FujiAF.StorageBudget (checkStorageBudget)
 import FujiModNativePaths (fujimodNativeCase)
-import Numeric (readHex)
 import System.Directory (createDirectoryIfMissing, makeAbsolute)
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
 import System.FilePath ((</>), takeDirectory)
+import qualified Replacement.RtosPlatform.Aggregate as Agg
 import Replacement.RtosFixedPool.Oracle (Domain (..), Image (..), Run (..), Service (..), bodyRegion, entries, extents, parseFacts, runFamily)
 
 main :: IO ()
@@ -34,6 +33,8 @@ main = do
   loaderB <- required "--loader-b"
   ownedA <- required "--owned-a-bin"
   ownedB <- required "--owned-b-bin"
+  placementsAPath <- optional "--placements-a"
+  placementsBPath <- optional "--placements-b"
   symbolsA <- required "--owned-a-symbols"
   symbolsB <- required "--owned-b-symbols"
   resultsPath <- required "--results"
@@ -44,14 +45,14 @@ main = do
   ownedBBytes <- B.readFile ownedB
   ownedASymbols <- parseSymbols <$> B.readFile symbolsA
   ownedBSymbols <- parseSymbols <$> B.readFile symbolsB
-  baseA <- origin DomainA ownedASymbols
-  baseB <- origin DomainB ownedBSymbols
   checkStorageBudget (takeDirectory resultsPath)
   createDirectoryIfMissing True cacheRoot
-  let stockA = Image 0x40000 loaderABytes
-      stockB = Image 0xd0000 loaderBBytes
-      ownedAImage = Image baseA ownedABytes
-      ownedBImage = Image baseB ownedBBytes
+  placementsA <- traverse readPlacements placementsAPath
+  placementsB <- traverse readPlacements placementsBPath
+  ownedAImage <- ownedImage DomainA ownedABytes ownedASymbols placementsA
+  ownedBImage <- ownedImage DomainB ownedBBytes ownedBSymbols placementsB
+  let stockA = Image 0x40000 loaderABytes [] []
+      stockB = Image 0xd0000 loaderBBytes [] []
   runA <- runFamily runner cacheRoot (takeDirectory resultsPath </> "domain-a") facts DomainA stockA ownedAImage
   runB <- runFamily runner cacheRoot (takeDirectory resultsPath </> "domain-b") facts DomainB stockB ownedBImage
   let runs = [runA, runB]
@@ -124,18 +125,36 @@ expectedEntries domain =
   , (entries domain PollUnchecked, "xm1_rtos_fixed_pool_poll_unchecked")
   ]
 
-parseSymbols :: B.ByteString -> M.Map String Word32
-parseSymbols bytes = M.fromList
-  [ (name, value)
-  | line <- lines (BC.unpack bytes)
-  , address : _ : _ : name : _ <- [words line]
-  , [(value, "")] <- [readHex address]
-  ]
+parseSymbols :: B.ByteString -> [Agg.AggregateSymbol]
+parseSymbols = either error id . Agg.parseAggregateSymbols
+
+readPlacements :: FilePath -> IO [Agg.SectionPlacement]
+readPlacements path = either failH pure . Agg.parsePlacements =<< B.readFile path
+
+ownedImage :: Domain -> B.ByteString -> [Agg.AggregateSymbol] -> Maybe [Agg.SectionPlacement] -> IO Image
+ownedImage domain bytes symbols placements
+  | Just sections <- placements = do
+      unless (not (null sections)) (failH "aggregate placements are empty")
+      image <- either failH pure (Agg.aggregateImage symbols bytes)
+      forM_ sections $ \section -> do
+        _ <- either failH pure (Agg.sliceAggregate image (Agg.placementAddress section) (Agg.placementBytes section))
+        pure ()
+      pure (Image (Agg.imageBase image) (Agg.imageBytes image) symbols sections)
+  | any (isAggregate . Agg.symbolName) symbols =
+      failH "aggregate fixed-pool qualification requires --placements-a and --placements-b"
+  | otherwise = do
+      base <- origin domain (M.fromList [(Agg.symbolName symbol, Agg.symbolAddress symbol) | symbol <- symbols])
+      pure (Image base bytes [] [])
+  where
+    isAggregate name = take 20 name == "xm1_platform_veneer_"
+
+optional :: String -> IO (Maybe FilePath)
+optional flag = do
+  arguments <- getArgs
+  case reverse [drop (index + 1) arguments | (index, argument) <- zip [0 :: Int ..] arguments, argument == flag] of
+    [] -> pure Nothing
+    [] : _ -> failH (flag ++ " needs a value")
+    (value : _) : _ -> Just <$> makeAbsolute value
 
 required :: String -> IO FilePath
-required flag = do
-  arguments <- getArgs
-  case dropWhile (/= flag) arguments of
-    [] -> failH (flag ++ " is required")
-    [_] -> failH (flag ++ " needs a value")
-    _ : value : _ -> pure value
+required flag = optional flag >>= maybe (failH (flag ++ " is required")) pure

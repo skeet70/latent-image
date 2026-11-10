@@ -6,7 +6,6 @@ import Data.Aeson (object, (.=))
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
 import Emulation.NativeObservation (nativeStatus, runnerStatusLabel)
-import Emulation.OwnedCase (required)
 import Emulation.Sha256 (sha256,sha256Hex)
 import FujiAF.JSON (encodeCanonical)
 import Replacement.RtosOwnFirst.Artifact (loaderSha256)
@@ -14,6 +13,7 @@ import Replacement.RtosOwnFirst.Regions (domains,domainLabel)
 import Replacement.RtosScheduler.Layout (parseLayout)
 import Replacement.RtosScheduler.Oracle (mkEnv,runCases)
 import Replacement.RtosScheduler.Regions (parseSchedulerRegions)
+import qualified Replacement.RtosPlatform.Aggregate as Agg
 import Replacement.RtosScheduler.S3a
 import System.Directory (canonicalizePath,createDirectoryIfMissing,doesPathExist,makeAbsolute,removeDirectoryRecursive,setCurrentDirectory)
 import System.Environment (getArgs,lookupEnv)
@@ -23,6 +23,12 @@ import System.FilePath ((</>),takeDirectory)
 orFail :: Either String a -> IO a
 orFail=either fail pure
 
+optional :: [String] -> String -> IO (Maybe FilePath)
+optional args flag = case dropWhile (/= flag) args of
+  [] -> pure Nothing
+  [_] -> fail (flag ++ " needs a value")
+  _ : value : _ -> Just <$> canonicalizePath value
+
 main :: IO ()
 main=do
   args<-getArgs
@@ -31,9 +37,13 @@ main=do
   regionsPath<-input "--regions"
   layoutPath<-input "--layout"
   ownedPaths<-mapM input ["--owned-a","--owned-b"]
+  symbolsPaths<-mapM (optional args) ["--symbols-a","--symbols-b"]
+  placementPaths<-mapM (optional args) ["--placements-a","--placements-b"]
   lookupEnv "BUILD_WORKSPACE_DIRECTORY" >>= mapM_ setCurrentDirectory
   loaders<-mapM (\name->input name >>= B.readFile) ["--loader-a","--loader-b"]
   owned<-mapM B.readFile ownedPaths
+  parsedSymbols<-mapM (traverse (\path->either fail pure . Agg.parseAggregateSymbols =<< B.readFile path)) symbolsPaths
+  placements<-mapM (traverse (\path->either fail pure . Agg.parsePlacements =<< B.readFile path)) placementPaths
   work<-required args "--work" >>= makeAbsolute
   summary<-required args "--summary" >>= makeAbsolute
   exists<-doesPathExist work
@@ -42,12 +52,16 @@ main=do
   layout<-B.readFile layoutPath >>= orFail . parseLayout
   env<-orFail (mkEnv layout regions)
   createDirectoryIfMissing True work
-  reports<-fmap concat . forM (zip3 domains loaders owned) $ \(domain,loader,bin)->do
+  reports<-fmap concat . forM (zip domains (zip3 loaders owned (zip parsedSymbols placements))) $ \(domain,(loader,bin,(symbolRows,placementRows)))->do
     unless (sha256Hex (sha256 loader)==loaderSha256 domain) (fail "loader identity differs")
     forM services $ \service->do
       let rows=zip [0::Int ..] (scenarios service)
           label role index=role++"-"++show index
-          spec role index row=makeSpec env domain loader (if role `elem` ["owned","mutant"] then Just bin else Nothing) service row (label role index)
+          linked = case (symbolRows, placementRows) of
+            (Just parsed, Just plans) -> Just (Aggregate bin parsed plans)
+            (Just parsed, Nothing) -> Just (Aggregate bin parsed [])
+            _ -> Just (Standalone bin)
+          spec role index row=makeSpec env domain loader (if role `elem` ["owned","mutant"] then linked else Nothing) service row (label role index)
           build role index row=let raw=spec role index row in case role of "equivalent"->controlSpec True raw; "mutant"->controlSpec False raw; _->raw
           roles=["stock","owned","stock-repeat","equivalent","mutant"]
           cases=[(label role index,build role index row) | (index,row)<-rows,role<-roles]
@@ -67,3 +81,8 @@ main=do
   createDirectoryIfMissing True (takeDirectory summary)
   B.writeFile summary (encodeCanonical (object ["schema" .= (1::Int),"reports" .= map snd reports,"holds" .= all fst reports,"comparison" .= ("Persistent bytes and write multiset, r0, preserved registers/SP at return, CPSR mode/I/F/A; dispatcher stops exclude live frames. Stock callees retained. Equivalent is an independently emitted tail-branch wrapper. Mutant returns 1 without effects."::String),"loader_sha256" .= map (sha256Hex . sha256) loaders,"owned_sha256" .= map (sha256Hex . sha256) owned]))
   forM_ reports $ \(holds,_)->unless holds exitFailure
+
+required :: [String] -> String -> IO String
+required arguments flag = case [value | (key, value) <- zip arguments (drop 1 arguments), key == flag] of
+  [] -> fail (flag ++ " is required")
+  values -> pure (last values)
