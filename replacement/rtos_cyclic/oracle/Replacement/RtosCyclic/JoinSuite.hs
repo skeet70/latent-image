@@ -14,6 +14,8 @@
 -- caller are core-0 only, so the join is domain A.
 module Replacement.RtosCyclic.JoinSuite
   ( Inputs (..)
+  , KernelImage (..)
+  , admitPackagedKernel
   , CaseRun (..)
   , ControlRun (..)
   , runJoin
@@ -27,8 +29,12 @@ import Data.Word (Word32)
 import Emulation.CachedNativeBatch (BatchReuse, cachedObservedBatch)
 import Emulation.NativeObservation
 import Emulation.OwnedCase
-import Replacement.RtosCyclic.Suite (stockFunctions)
+import qualified Replacement.RtosCyclic.Aggregate as CyclicAggregate
+import Replacement.RtosCyclic.Suite (Image (..), stockFunctions)
 import Replacement.RtosOwnFirst.Regions (Domain (..))
+import qualified Replacement.RtosOwnFirst.Regions as R
+import qualified Replacement.RtosPlatform.Aggregate as Aggregate
+import qualified Replacement.RtosPlatform.Union as Union
 import qualified Replacement.RtosTimer.Suite as Timer
 import System.FilePath ((</>))
 
@@ -42,7 +48,31 @@ data Inputs = Inputs
   , inAppSymbols :: [(Word32, Word32)]
   , inCyclicSymbols :: [(Word32, Word32)]
   , inTimerSymbols :: [Timer.OwnedSymbol]
+  , inKernel :: KernelImage
   }
+
+data KernelImage
+  = StandaloneKernel
+  | PackagedKernel B.ByteString [(Image, Bool, [(Word32, Word32)])]
+
+admitPackagedKernel :: Union.Union -> B.ByteString -> B.ByteString -> Aggregate.AggregateImage -> [Aggregate.AggregateSymbol] -> [Aggregate.SectionPlacement] -> Either String KernelImage
+admitPackagedKernel union stock loader image symbols placements = do
+  let domain = Union.unionA union
+      carriers = [ (low, high) | carrier <- Union.mapCarriers domain, R.Extent (R.GuestAddress low) (R.GuestAddress high) <- [Union.carrierExtent carrier] ]
+      filled = combine 0x40000 (B.length stock)
+        ((0x40000, stock) : [(low, B.concat (replicate (fromIntegral ((high - low) `div` 4)) (word32le (Union.unionFill union)))) | (low, high) <- carriers])
+  withSymbols <- Aggregate.installAggregate 0x40000 filled image symbols
+  expected <- Aggregate.installPlacements 0x40000 withSymbols image placements
+  if loader /= expected
+    then Left "packaged loader differs from allocated sections, veneers, carrier fill or retained stock"
+    else case carriers of
+      [] -> Left "packaged loader has no carriers"
+      _ -> do
+        let low = minimum (map fst carriers)
+            high = maximum (map snd carriers)
+            effective = slice 0x40000 loader low (fromIntegral (high - low))
+        mappings <- CyclicAggregate.bindAggregate domain (Image 0x40000 stock) effective symbols placements
+        pure (PackagedKernel loader mappings)
 
 data Role = Stock | Owned deriving (Eq, Show)
 
@@ -243,31 +273,30 @@ stateRegions layout role state =
   | (name, base, size, permission) <- stateLayout layout role
   ]
 
--- | The code regions. The stock role's single loader block covers the retained helpers, the stock
--- support, timer and cyclic entries; the owned role's helper block stops before the owned carriers.
 codeLayout :: Layout -> Role -> [(String, Word32, Int, Permission)]
-codeLayout layout role =
-  [ (loaderName, 0x41140, loaderSize, ReadExecute)
+codeLayout _layout _role =
+  [ ("loader-code", 0x40000, 0xdae0, ReadExecute)
   , ("guard-code", stackGuard, 0x54, ReadExecute)
   , ("dispatch-code", dispatchEvent, 0x40, ReadExecute)
   , ("stack-check-code", stackCheck, 0xf8, ReadExecute)
   , ("app", appRegister, 0x384, ReadExecute)
   ]
-    ++ [("cyclic", lStockCyclicLow layout, fromIntegral (lStockCyclicSize layout), ReadExecute) | role == Owned]
-    ++ [("timer", lStockTimerLow layout, fromIntegral (lStockTimerSize layout), ReadExecute) | role == Owned]
     ++ [("stubs", stubBase, fromIntegral stubSize, ReadExecute)
        , ("stack", stackBase, 0x1000, ReadWrite)
        , ("exit", exitAddress, 0x10, ReadExecute)
        ]
-  where
-    (loaderName, loaderSize) = case role of
-      Stock -> ("loader-code", 0x4d8fc - 0x41140)
-      Owned -> ("loader-helpers", 0x427d4 - 0x41140)
 
 codeBytes :: Layout -> Inputs -> Role -> String -> B.ByteString
-codeBytes _layout inputs role name = case name of
-  "loader-code" -> slice 0x40000 (inLoaderA inputs) 0x41140 (0x4d8fc - 0x41140)
-  "loader-helpers" -> slice 0x40000 (inLoaderA inputs) 0x41140 (0x427d4 - 0x41140)
+codeBytes layout inputs role name = case name of
+  "loader-code" -> case (role, inKernel inputs) of
+    (Stock, _) -> inLoaderA inputs
+    (Owned, PackagedKernel loader _) -> loader
+    (Owned, StandaloneKernel) ->
+      combine 0x40000 0xdae0
+        [ (0x40000, inLoaderA inputs)
+        , (lStockCyclicLow layout, inCyclic inputs)
+        , (lStockTimerLow layout, inTimer inputs)
+        ]
   "guard-code" -> slice image4Base (inImage4 inputs) stackGuard 0x54
   "dispatch-code" -> case role of
     Stock -> stockDispatch
@@ -286,10 +315,21 @@ codeBytes _layout inputs role name = case name of
     stockDispatch = slice image4Base (inImage4 inputs) dispatchEvent 0x40
 
 codeRegions :: Layout -> Inputs -> Role -> [(String, Word32, Int, Permission, B.ByteString)]
-codeRegions layout inputs role =
-  [ (name, base, size, permission, codeBytes layout inputs role name)
-  | (name, base, size, permission) <- codeLayout layout role
-  ]
+codeRegions layout inputs role = case (role, inKernel inputs) of
+  (Owned, PackagedKernel loader mappings) ->
+    [ ("loader-code-" ++ show index, base, B.length bytes, if executable then ReadExecute else ReadOnly, bytes)
+    | (index, (Image base bytes, executable, _)) <- zip [0 :: Int ..] mappings
+    ] ++
+    [ ("loader-prefix", 0x40000, fromIntegral (low - 0x40000), ReadExecute, B.take (fromIntegral (low - 0x40000)) loader)
+    , ("loader-suffix", high, B.length loader - fromIntegral (high - 0x40000), ReadOnly, B.drop (fromIntegral (high - 0x40000)) loader)
+    ] ++ regionsWithoutLoader
+    where
+      low = minimum [base | (Image base _, _, _) <- mappings]
+      high = maximum [base + fromIntegral (B.length bytes) | (Image base bytes, _, _) <- mappings]
+  _ -> regions
+  where
+    regions = [(name, base, size, permission, codeBytes layout inputs role name) | (name, base, size, permission) <- codeLayout layout role]
+    regionsWithoutLoader = [region | region@(name, _, _, _, _) <- regions, name /= "loader-code"]
 
 emittedBases :: Layout -> Role -> [(String, Word32, Int)]
 emittedBases layout role =
@@ -899,7 +939,7 @@ buildCase layout inputs role variant state =
     , caseRegions = stateCaseRegions ++ codeCaseRegions
     , caseFunctions =
         [ (GuestAddress (fromIntegral address), size)
-        | (address, size) <- filter (\(address, _) -> role == Stock || address /= dispatchEvent) commonFunctions ++ roleFunctions ++ stubFunctions
+        | (address, size) <- retainedFunctions ++ roleFunctions ++ stubFunctions
         ]
     , caseInitial =
         [ (R0, argument0), (R1, 0), (R2, stackGuard), (R3, tokenAddress)
@@ -941,12 +981,21 @@ buildCase layout inputs role variant state =
       [ mkRegion (RegionId (fromString name)) (GuestAddress (fromIntegral base)) size permission bytes
       | (name, base, size, permission, bytes) <- codeRegions layout inputs role
       ]
+    retainedFunctions = case (role, inKernel inputs) of
+      (Owned, PackagedKernel _ mappings) ->
+        [ function
+        | function@(address, size) <- commonFunctions
+        , address /= dispatchEvent
+        , not (any (\(owned, bytes) -> address < owned + bytes && owned < address + size) (concat [functions | (_, _, functions) <- mappings]))
+        ]
+      _ -> filter (\(address, _) -> role == Stock || address /= dispatchEvent) commonFunctions
     roleFunctions = case role of
       Stock -> [(appRegister, 0x2a0), (appUnregister, 0xe4)] ++ stockFunctions DomainA
-      Owned ->
-        inAppSymbols inputs
-          ++ inCyclicSymbols inputs
-          ++ [(Timer.ownedAddress symbol, Timer.ownedSize symbol) | symbol <- inTimerSymbols inputs]
+      Owned -> inAppSymbols inputs ++ case inKernel inputs of
+        PackagedKernel _ mappings -> concat [functions | (_, _, functions) <- mappings]
+        StandaloneKernel ->
+          inCyclicSymbols inputs
+            ++ [(Timer.ownedAddress symbol, Timer.ownedSize symbol) | symbol <- inTimerSymbols inputs]
 
 commonFunctions :: [(Word32, Word32)]
 commonFunctions =
@@ -1050,6 +1099,15 @@ checkRun layout role variant state observation differences reuse =
       | check' <- RunnerStatusIs Returned : xChecks expected
       ]
 
+payloadHolds :: Inputs -> NativeObservation -> Bool
+payloadHolds inputs observation = all unchanged
+  [ (name, bytes)
+  | (name, _, _, _, bytes) <- codeRegions layoutA inputs Owned
+  , take 6 name == "loader"
+  ]
+  where
+    unchanged (name, bytes) = lookup (RegionId (fromString name)) (nativeMemory observation) == Just bytes
+
 runOneStage :: FilePath -> FilePath -> Inputs -> Variant -> (State, State) -> IO (CaseRun, CaseRun, State, State, BatchReuse, NativeObservation, NativeObservation)
 runOneStage runner cacheRoot inputs variant (stockState, ownedState) = do
   let patchedStock = patchState layoutA variant stockState
@@ -1067,7 +1125,12 @@ runOneStage runner cacheRoot inputs variant (stockState, ownedState) = do
       differences = if repair then [] else compareRoles layoutA stockObservation ownedObservation
   pure
     ( checkRun layoutA Stock variant patchedStock stockObservation differences reuse
-    , checkRun layoutA Owned variant patchedOwned ownedObservation differences reuse
+    , let checked = checkRun layoutA Owned variant patchedOwned ownedObservation differences reuse
+          payloadCheck = ("complete executing loader bytes", payloadHolds inputs ownedObservation)
+       in checked
+            { runChecks = runChecks checked ++ [payloadCheck]
+            , runDifferences = runDifferences checked ++ [fst payloadCheck | not (snd payloadCheck)]
+            }
     , stateFrom layoutA Stock stockObservation
     , stateFrom layoutA Owned ownedObservation
     , reuse

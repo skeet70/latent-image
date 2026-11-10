@@ -10,6 +10,7 @@ module Replacement.RtosCyclic.Suite
   , runDomain
   , parseOwnedSymbols
   , foreignCodeExtents
+  , stockFunctions
   ) where
 
 import Control.Monad (forM, forM_, unless)

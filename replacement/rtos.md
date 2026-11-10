@@ -108,3 +108,21 @@ XM1_EMULATOR_SLOTS=1 devenv shell -- host-build run --jobs=1 \
 ```
 
 Bazel supplies linked images; the command admits the actual Timer and LoaderStartup pieces and bounded joins. A plain test invocation without the private arguments fails its contract. Host composition and a role-grounded native oracle do not establish runtime arena ownership, independent-lock ownership or integrated hardware behavior.
+
+### Packaged domain-A app join
+
+`//replacement/rtos_cyclic/oracle:join-admission-tests` checks packaged-loader admission without firmware or emulator execution. `:join-oracle` accepts the additional packaged inputs below after aggregate staging. The stock loader arguments remain canonical references; `--packaged-loader-a` is the actual staged loader, not the aggregate flat binary.
+
+Add `--admission-only` to validate the actual private inputs and write their identities without starting a guest. Its result records `runtime_executed: false`; it is a host smoke check, not a native verdict.
+
+```sh
+XM1_EMULATOR_SLOTS=1 devenv shell -- host-build run --jobs=4 \
+  //replacement/rtos_cyclic/oracle:join-oracle -- \
+  --image4 IMAGE4 --loader-a STOCK_LOADER_A --loader-b STOCK_LOADER_B \
+  --packaged-loader-a STAGED_LOADER_A \
+  --aggregate-bin-a AGGREGATE_BIN_A --aggregate-symbols-a AGGREGATE_SYMBOLS_A \
+  --aggregate-placements-a AGGREGATE_PLACEMENT_A --aggregate-carriers CARRIERS_JSON \
+  --cache-root SHARED_NATIVE_CACHE --results NEW_RESULTS_JSON
+```
+
+This bounded qualifier executes registration, repeated ticks, delivery and unregistration through the published root/interface tables into the actual union image. Admission reconstructs that loader from pinned stock, declared UDF-filled carriers, emitted functions and every allocated section, including readonly zeros. The shared cyclic aggregate binder preserves readonly exclusions and public ABI fetch boundaries. Every owned observation must retain its complete loader bytes. Contexts, registry, heap and lock callbacks remain fixture state; this does not boot the staged DAT or exercise a core-1 app caller. Run only with an admitted emulator slot and retained-output allowance.

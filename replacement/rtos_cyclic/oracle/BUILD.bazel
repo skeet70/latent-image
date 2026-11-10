@@ -1,4 +1,4 @@
-load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -118,7 +118,24 @@ haskell_library(
         "//host:containers",
         "//host:filepath",
         "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//replacement/rtos_platform:aggregate",
+        "//replacement/rtos_platform:platform-artifact",
         "//replacement/rtos_timer/oracle:timer-oracle-lib",
+    ],
+)
+
+haskell_test(
+    name = "join-admission-tests",
+    srcs = ["JoinTests.hs"],
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":cyclic-oracle-lib",
+        ":join-suite",
+        "//host:base",
+        "//host:bytestring",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//replacement/rtos_platform:aggregate",
+        "//replacement/rtos_platform:platform-artifact",
     ],
 )
 
@@ -166,6 +183,8 @@ haskell_binary(
         "//host:host-support",
         "//host:storage-budget",
         "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//replacement/rtos_platform:aggregate",
+        "//replacement/rtos_platform:platform-artifact",
         "//replacement/rtos_timer/oracle:timer-oracle-lib",
     ],
 )

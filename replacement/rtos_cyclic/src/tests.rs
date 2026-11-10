@@ -147,9 +147,6 @@ impl Mock {
         self.handler_context.set(0);
     }
 
-    pub(crate) fn deliveries(&self) -> Vec<(u32, u32)> {
-        self.events.borrow().clone()
-    }
 
     fn run_tick(&self) {
         self.handler_context.set(1);
@@ -172,7 +169,7 @@ impl Mock {
         *self.action.borrow_mut() = Some(action);
     }
 
-    fn events(&self) -> Vec<(u32, u32)> {
+    pub(crate) fn events(&self) -> Vec<(u32, u32)> {
         self.events.borrow().clone()
     }
 

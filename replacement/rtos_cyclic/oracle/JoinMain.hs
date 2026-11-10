@@ -6,8 +6,8 @@
 -- entries. Writes a terminal JSON.
 module Main (main) where
 
-import Control.Monad (unless)
-import Data.Aeson (object, (.=), encode)
+import Control.Monad (unless, when)
+import Data.Aeson (Value, object, (.=), encode)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Emulation.Sha256 (sha256File, sha256Hex)
@@ -18,9 +18,11 @@ import Replacement.RtosCyclic.JoinSuite
 import qualified Replacement.RtosCyclic.Suite as Cyclic
 import qualified Replacement.RtosTimer.Suite as Timer
 import Replacement.RtosOwnFirst.Regions (Domain (..))
+import qualified Replacement.RtosPlatform.Aggregate as Aggregate
+import qualified Replacement.RtosPlatform.Union as Union
 import System.Directory (createDirectoryIfMissing)
 import System.Environment (getArgs)
-import System.Exit (exitFailure)
+import System.Exit (exitFailure, exitSuccess)
 import System.FilePath (takeDirectory)
 
 main :: IO ()
@@ -58,6 +60,7 @@ main = do
   unless (B.length app == 0x242c) (failH (appPath ++ " is not the 0x242c-byte app-callback image"))
   unless (B.length cyclic == 0x1ac0) (failH (cyclicPath ++ " is not the 0x1ac0-byte cyclic A image"))
   unless (B.length timer == 0x4dc) (failH (timerPath ++ " is not the 0x4dc-byte timer A image"))
+  (kernel, kernelEvidence) <- loadKernel loaderA
   checkStorageBudget (takeDirectory resultsPath)
   createDirectoryIfMissing True cacheRoot
   createDirectoryIfMissing True (takeDirectory resultsPath)
@@ -72,7 +75,20 @@ main = do
           , inAppSymbols = appSymbols
           , inCyclicSymbols = cyclicSymbols
           , inTimerSymbols = timerSymbols
+          , inKernel = kernel
           }
+  admissionOnly <- elem "--admission-only" <$> getArgs
+  when admissionOnly $ do
+    BL.writeFile resultsPath (encode (object
+      [ "schema" .= (1 :: Int)
+      , "mode" .= ("admission-only" :: String)
+      , "runtime_executed" .= False
+      , "image4_sha256" .= sha256Hex image4Digest
+      , "app_bin_sha256" .= sha256Hex appDigest
+      , "kernel" .= kernelEvidence
+      ]))
+    putStrLn "join input admission passed; no guest executed"
+    exitSuccess
   (runs, controls) <- runJoin runner (takeDirectory resultsPath) cacheRoot inputs
   let failures = [(runStage run, runRole run, message) | run <- runs, message <- runDifferences run]
       failedChecks = [(runStage run, runRole run, description) | run <- runs, (description, False) <- runChecks run]
@@ -102,6 +118,7 @@ main = do
                 , "app_bin_sha256" .= sha256Hex appDigest
                 , "cyclic_bin_sha256" .= sha256Hex cyclicDigest
                 , "timer_bin_sha256" .= sha256Hex timerDigest
+                , "kernel" .= kernelEvidence
                 , "app_functions" .= length appSymbols
                 , "cyclic_functions" .= length cyclicSymbols
                 , "timer_functions" .= length timerSymbols
@@ -116,6 +133,41 @@ main = do
   mapM_ (\name -> putStrLn ("control failed: " ++ name)) failedControls
   putStrLn ("join cases: " ++ show (length runs) ++ ", checks: " ++ show (sum (map (length . runChecks) runs)) ++ ", controls: " ++ show (length controls) ++ ", failures: " ++ show (length failures + length failedChecks + length failedControls))
   unless (null failures && null failedChecks && null failedControls) exitFailure
+
+loadKernel :: B.ByteString -> IO (KernelImage, Value)
+loadKernel stock = do
+  arguments <- getArgs
+  case dropWhile (/= "--packaged-loader-a") arguments of
+    [] -> pure (StandaloneKernel, object ["mode" .= ("standalone" :: String)])
+    [_] -> failH "--packaged-loader-a needs a value"
+    _ : path : _ -> do
+      binaryPath <- required "--aggregate-bin-a"
+      symbolsPath <- required "--aggregate-symbols-a"
+      placementsPath <- required "--aggregate-placements-a"
+      carriersPath <- required "--aggregate-carriers"
+      union <- B.readFile carriersPath >>= either (failH . show) pure . Union.parseUnion
+      loader <- B.readFile path
+      binary <- B.readFile binaryPath
+      symbols <- B.readFile symbolsPath >>= either failH pure . Aggregate.parseAggregateSymbols
+      placements <- B.readFile placementsPath >>= either failH pure . Aggregate.parsePlacements
+      image <- either failH pure (Aggregate.aggregateImage symbols binary)
+      kernel <- either failH pure (admitPackagedKernel union stock loader image symbols placements)
+      digest <- sha256File path
+      binaryDigest <- sha256File binaryPath
+      symbolsDigest <- sha256File symbolsPath
+      placementsDigest <- sha256File placementsPath
+      carriersDigest <- sha256File carriersPath
+      pure
+        ( kernel
+        , object
+            [ "mode" .= ("packaged-domain-a" :: String)
+            , "loader_sha256" .= sha256Hex digest
+            , "aggregate_bin_sha256" .= sha256Hex binaryDigest
+            , "aggregate_symbols_sha256" .= sha256Hex symbolsDigest
+            , "aggregate_placements_sha256" .= sha256Hex placementsDigest
+            , "aggregate_carriers_sha256" .= sha256Hex carriersDigest
+            ]
+        )
 
 required :: String -> IO FilePath
 required flag = do
