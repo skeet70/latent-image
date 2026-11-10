@@ -15,12 +15,16 @@
 module Replacement.RtosCyclic.JoinSuite
   ( Inputs (..)
   , KernelImage (..)
+  , ApplicationImage (..)
+  , Scope (..)
   , admitPackagedKernel
+  , admitPackagedApplication
   , CaseRun (..)
   , ControlRun (..)
   , runJoin
   ) where
 
+import Control.Monad (forM)
 import Data.Bits ((.&.), (.|.), shiftL, shiftR, xor)
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
@@ -49,11 +53,24 @@ data Inputs = Inputs
   , inCyclicSymbols :: [(Word32, Word32)]
   , inTimerSymbols :: [Timer.OwnedSymbol]
   , inKernel :: KernelImage
+  , inApplication :: ApplicationImage
   }
 
 data KernelImage
   = StandaloneKernel
   | PackagedKernel B.ByteString [(Image, Bool, [(Word32, Word32)])]
+
+data ApplicationImage = StandaloneApplication | PackagedApplication B.ByteString
+
+admitPackagedApplication :: B.ByteString -> B.ByteString -> B.ByteString -> Either String ApplicationImage
+admitPackagedApplication stock app staged
+  | B.length staged /= B.length stock = Left "packaged image4 length differs from canonical image4"
+  | B.length app /= 0x242c = Left "app-callback image is not 0x242c bytes"
+  | slice image4Base staged dispatchEvent 0x1c /= B.take 0x1c app = Left "packaged dispatcher differs from emitted owned code"
+  | slice image4Base staged appRegister 0x384 /= B.drop (fromIntegral (appRegister - dispatchEvent)) app = Left "packaged app caller differs from emitted owned code"
+  | otherwise = Right (PackagedApplication staged)
+
+data Scope = FullScope | LifecycleSmoke deriving (Eq, Show)
 
 admitPackagedKernel :: Union.Union -> B.ByteString -> B.ByteString -> Aggregate.AggregateImage -> [Aggregate.AggregateSymbol] -> [Aggregate.SectionPlacement] -> Either String KernelImage
 admitPackagedKernel union stock loader image symbols placements = do
@@ -297,13 +314,17 @@ codeBytes layout inputs role name = case name of
         , (lStockCyclicLow layout, inCyclic inputs)
         , (lStockTimerLow layout, inTimer inputs)
         ]
-  "guard-code" -> slice image4Base (inImage4 inputs) stackGuard 0x54
+  "guard-code" -> slice image4Base roleImage4 stackGuard 0x54
   "dispatch-code" -> case role of
     Stock -> stockDispatch
-    Owned -> B.take 0x1c (inApp inputs) <> B.drop 0x1c stockDispatch
-  "stack-check-code" -> slice image4Base (inImage4 inputs) stackCheck 0xf8
+    Owned -> case inApplication inputs of
+      StandaloneApplication -> B.take 0x1c (inApp inputs) <> B.drop 0x1c stockDispatch
+      PackagedApplication bytes -> slice image4Base bytes dispatchEvent 0x40
+  "stack-check-code" -> slice image4Base roleImage4 stackCheck 0xf8
   "app" -> case role of
-    Owned -> B.drop (fromIntegral (appRegister - dispatchEvent)) (inApp inputs)
+    Owned -> case inApplication inputs of
+      StandaloneApplication -> B.drop (fromIntegral (appRegister - dispatchEvent)) (inApp inputs)
+      PackagedApplication bytes -> slice image4Base bytes appRegister 0x384
     Stock -> slice image4Base (inImage4 inputs) appRegister 0x384
   "cyclic" -> inCyclic inputs
   "timer" -> inTimer inputs
@@ -312,6 +333,9 @@ codeBytes layout inputs role name = case name of
   "exit" -> B.replicate 0x10 0
   _ -> error ("no code bytes for region " ++ name)
   where
+    roleImage4 = case (role, inApplication inputs) of
+      (Owned, PackagedApplication bytes) -> bytes
+      _ -> inImage4 inputs
     stockDispatch = slice image4Base (inImage4 inputs) dispatchEvent 0x40
 
 codeRegions :: Layout -> Inputs -> Role -> [(String, Word32, Int, Permission, B.ByteString)]
@@ -1138,8 +1162,8 @@ runOneStage runner cacheRoot inputs variant (stockState, ownedState) = do
     , ownedObservation
     )
 
-runJoin :: FilePath -> FilePath -> FilePath -> Inputs -> IO ([CaseRun], [ControlRun])
-runJoin runner resultsDirectory cacheRoot inputs = do
+runJoin :: Scope -> FilePath -> FilePath -> FilePath -> Inputs -> IO ([CaseRun], [ControlRun])
+runJoin scope runner resultsDirectory cacheRoot inputs = do
   let rootSpec = rootPrepCase layoutA (inLoaderA inputs)
   (rootReuse, rootPairs) <- runBatch runner cacheRoot (resultsDirectory </> "prep-root") [rootSpec]
   let rootObservation = observationOf "prep-root" rootPairs
@@ -1178,32 +1202,33 @@ runJoin runner resultsDirectory cacheRoot inputs = do
       interfaceBytes = regionBytesOf interfaceObservation (RegionId "interfaces")
       initialStock = seedState layoutA Stock rootBytes interfaceBytes
       initialOwned = seedState layoutA Owned rootBytes interfaceBytes
-  (registerStock, registerOwned, afterRegisterStock, afterRegisterOwned, registerReuse, _, _) <-
+  (registerStock, registerOwned, afterRegisterStock, afterRegisterOwned, _, _, _) <-
     runOneStage runner cacheRoot inputs (Register 30) (initialStock, initialOwned)
-  (tick0Stock, tick0Owned, afterTick0Stock, afterTick0Owned, tick0Reuse, _, _) <-
+  (tick0Stock, tick0Owned, afterTick0Stock, afterTick0Owned, _, _, _) <-
     runOneStage runner cacheRoot inputs Tick (afterRegisterStock, afterRegisterOwned)
-  (tick10Stock, tick10Owned, afterTick10Stock, afterTick10Owned, tick10Reuse, _, _) <-
+  (tick10Stock, tick10Owned, afterTick10Stock, afterTick10Owned, _, _, _) <-
     runOneStage runner cacheRoot inputs Tick (afterTick0Stock, afterTick0Owned)
-  (tick20Stock, tick20Owned, afterTick20Stock, afterTick20Owned, tick20Reuse, _, noDeliveryOwned) <-
+  (tick20Stock, tick20Owned, afterTick20Stock, afterTick20Owned, _, _, noDeliveryOwned) <-
     runOneStage runner cacheRoot inputs Tick (afterTick10Stock, afterTick10Owned)
   (deliverStock, deliverOwned, afterDeliverStock, afterDeliverOwned, deliverReuse, _, deliveryOwned) <-
     runOneStage runner cacheRoot inputs Tick (afterTick20Stock, afterTick20Owned)
-  (unregisterStock, unregisterOwned, afterUnregisterStock, afterUnregisterOwned, unregisterReuse, _, _) <-
+  (unregisterStock, unregisterOwned, afterUnregisterStock, afterUnregisterOwned, _, _, _) <-
     runOneStage runner cacheRoot inputs (Unregister 30001) (afterDeliverStock, afterDeliverOwned)
-  (postTickStock, postTickOwned, _, _, postTickReuse, _, _) <-
+  (postTickStock, postTickOwned, _, _, _, _, _) <-
     runOneStage runner cacheRoot inputs Tick (afterUnregisterStock, afterUnregisterOwned)
-  (createFaultStock, createFaultOwned, _, _, createFaultReuse, _, _) <-
-    runOneStage runner cacheRoot inputs RegisterCreateFault (initialStock, initialOwned)
-  (startFaultStock, startFaultOwned, _, _, startFaultReuse, _, _) <-
-    runOneStage runner cacheRoot inputs RegisterStartFault (initialStock, initialOwned)
-  (noSlotStock, noSlotOwned, _, _, noSlotReuse, _, _) <-
-    runOneStage runner cacheRoot inputs RegisterNoSlot (initialStock, initialOwned)
-  (zeroStock, zeroOwned, _, _, zeroReuse, _, _) <-
-    runOneStage runner cacheRoot inputs RegisterZeroPeriod (initialStock, initialOwned)
-  (missingStock, missingOwned, _, _, missingReuse, _, _) <-
-    runOneStage runner cacheRoot inputs (Unregister 12345) (afterDeliverStock, afterDeliverOwned)
-  (registryFaultStock, registryFaultOwned, _, _, registryFaultReuse, _, _) <-
-    runOneStage runner cacheRoot inputs TickRegistryFault (afterTick20Stock, afterTick20Owned)
+  let faultInputs = case scope of
+        LifecycleSmoke -> []
+        FullScope ->
+          [ (RegisterCreateFault, (initialStock, initialOwned))
+          , (RegisterStartFault, (initialStock, initialOwned))
+          , (RegisterNoSlot, (initialStock, initialOwned))
+          , (RegisterZeroPeriod, (initialStock, initialOwned))
+          , (Unregister 12345, (afterDeliverStock, afterDeliverOwned))
+          , (TickRegistryFault, (afterTick20Stock, afterTick20Owned))
+          ]
+  faultRuns <- forM faultInputs $ \(variant, state) -> do
+    (stock, owned, _, _, _, _, _) <- runOneStage runner cacheRoot inputs variant state
+    pure [stock, owned]
   let runs =
         [ rootRun rootObservation
         , interfaceRun interfaceObservation
@@ -1221,24 +1246,7 @@ runJoin runner resultsDirectory cacheRoot inputs = do
         , unregisterOwned
         , postTickStock
         , postTickOwned
-        , createFaultStock
-        , createFaultOwned
-        , startFaultStock
-        , startFaultOwned
-        , noSlotStock
-        , noSlotOwned
-        , zeroStock
-        , zeroOwned
-        , missingStock
-        , missingOwned
-        , registryFaultStock
-        , registryFaultOwned
-        ]
-      _reuse =
-        ( registerReuse
-        , (tick0Reuse, tick10Reuse, tick20Reuse, deliverReuse, unregisterReuse, postTickReuse)
-        , (createFaultReuse, startFaultReuse, noSlotReuse, zeroReuse, missingReuse, registryFaultReuse)
-        )
+        ] ++ concat faultRuns
       controls =
         comparatorControls deliveryOwned noDeliveryOwned
           ++ statusControls Returned (\observation -> checkRun layoutA Owned Tick afterTick20Owned observation [] deliverReuse) deliveryOwned

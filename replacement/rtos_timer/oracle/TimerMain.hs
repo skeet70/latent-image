@@ -28,6 +28,11 @@ import System.FilePath ((</>), takeDirectory)
 main :: IO ()
 main = do
   runner <- required "--runner" >>= makeAbsolute
+  scope <- optional "--scope" >>= \value -> case value of
+    Nothing -> pure FullScope
+    Just "full" -> pure FullScope
+    Just "smoke" -> pure PublicationSmoke
+    Just other -> failH ("unknown timer scope: " ++ other)
   layoutPath <- required "--layout"
   loaderA <- required "--loader-a"
   loaderB <- required "--loader-b"
@@ -63,8 +68,8 @@ main = do
   createDirectoryIfMissing True (takeDirectory resultsPath)
   let stockA = Image 0x40000 loaderABytes
       stockB = Image 0xd0000 loaderBBytes
-  (runA, controlsA) <- runDomain runner cacheRoot (takeDirectory resultsPath </> "domain-a") facts DomainA stockA stockB ownedAImage ownedASymbols s3dAImage s3dASymbols aggregates
-  (runB, controlsB) <- runDomain runner cacheRoot (takeDirectory resultsPath </> "domain-b") facts DomainB stockB stockA ownedBImage ownedBSymbols s3dBImage s3dBSymbols aggregates
+  (runA, controlsA) <- runDomain scope runner cacheRoot (takeDirectory resultsPath </> "domain-a") facts DomainA stockA stockB ownedAImage ownedASymbols s3dAImage s3dASymbols aggregates
+  (runB, controlsB) <- runDomain scope runner cacheRoot (takeDirectory resultsPath </> "domain-b") facts DomainB stockB stockA ownedBImage ownedBSymbols s3dBImage s3dBSymbols aggregates
   let runs = runA ++ runB
       controls = controlsA ++ controlsB
       failures =
@@ -102,6 +107,7 @@ main = do
       document =
         object
           [ "schema" .= (1 :: Int)
+          , "scope" .= show scope
           , "inputs" .=
               object
                 [ "layout_sha256" .= sha256Hex layoutDigest

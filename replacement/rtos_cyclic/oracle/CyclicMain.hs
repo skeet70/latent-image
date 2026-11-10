@@ -28,6 +28,11 @@ import System.FilePath ((</>), takeDirectory)
 
 main :: IO ()
 main = do
+  scope <- optional "--scope" >>= \value -> case value of
+    Nothing -> pure FullScope
+    Just "full" -> pure FullScope
+    Just "smoke" -> pure CallbackSmoke
+    Just other -> failH ("unknown cyclic scope: " ++ other)
   runner <- required "--runner" >>= makeAbsolute
   layoutPath <- required "--layout"
   loaderA <- required "--loader-a"
@@ -81,8 +86,8 @@ main = do
   createDirectoryIfMissing True (takeDirectory resultsPath)
   let stockA = Image 0x40000 loaderABytes
       stockB = Image 0xd0000 loaderBBytes
-  (runA, controlsA) <- runDomain runner cacheRoot (takeDirectory resultsPath </> "domain-a") facts DomainA stockA inputA
-  (runB, controlsB) <- runDomain runner cacheRoot (takeDirectory resultsPath </> "domain-b") facts DomainB stockB inputB
+  (runA, controlsA) <- runDomain runner scope cacheRoot (takeDirectory resultsPath </> "domain-a") facts DomainA stockA inputA
+  (runB, controlsB) <- runDomain runner scope cacheRoot (takeDirectory resultsPath </> "domain-b") facts DomainB stockB inputB
   let runs = runA ++ runB
       controls = admissionControls ++ controlsA ++ controlsB
       failures =
@@ -120,6 +125,7 @@ main = do
       document =
         object
           [ "schema" .= (1 :: Int)
+          , "scope" .= show scope
           , "inputs" .=
               object
                 [ "layout_sha256" .= sha256Hex layoutDigest

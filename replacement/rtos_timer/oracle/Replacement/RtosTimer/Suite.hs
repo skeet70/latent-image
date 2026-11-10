@@ -6,6 +6,7 @@ module Replacement.RtosTimer.Suite
   , CaseRun (..)
   , ControlRun (..)
   , OwnedSymbol (..)
+  , Scope (..)
   , runDomain
   , parseOwnedSymbols
   , fixtureCodeExtents
@@ -29,6 +30,8 @@ import Replacement.RtosTimer.Aggregate (Aggregate, aggregateFunctions, aggregate
 import System.FilePath ((</>))
 
 data Image = Image { imageBase :: Word32, imageBytes :: B.ByteString }
+
+data Scope = FullScope | PublicationSmoke deriving (Eq, Show)
 
 data Role = Stock | Owned deriving (Eq, Show)
 
@@ -1450,19 +1453,22 @@ composeFrameEffects observation = case nativeKernel observation >>= observedOrde
         [composeStackTop, composeStackBase, composeStackBase + composeStackSize - 0x40]
     ]
 
-runDomain :: FilePath -> FilePath -> FilePath -> Facts -> Domain -> Image -> Image -> Image -> [OwnedSymbol] -> Image -> [OwnedSymbol] -> [Aggregate] -> IO ([CaseRun], [ControlRun])
-runDomain runner cacheRoot directory facts domain stockImage otherImage ownedImage ownedSymbols s3dImage s3dSymbols aggregates = do
-  let selected = cases facts domain
+runDomain :: Scope -> FilePath -> FilePath -> FilePath -> Facts -> Domain -> Image -> Image -> Image -> [OwnedSymbol] -> Image -> [OwnedSymbol] -> [Aggregate] -> IO ([CaseRun], [ControlRun])
+runDomain scope runner cacheRoot directory facts domain stockImage otherImage ownedImage ownedSymbols s3dImage s3dSymbols aggregates = do
+  let selected = case scope of
+        FullScope -> cases facts domain
+        PublicationSmoke -> initializeCases facts domain
   (coreRuns, coreControls) <- runCohort "core" (filter ((== "core") . cohortOf) selected) directory
   (extraRuns, extraControls) <- runCohort "extra" (filter ((== "extra") . cohortOf) selected) (directory </> "extra")
   (initializeRuns, initializeControls) <- runCohort "initialize" (filter ((== "initialize") . cohortOf) selected) (directory </> "initialize")
-  (composeRuns, composeControlRuns) <- runComposeCohort (composeCases facts domain) (directory </> "composition")
+  (composeRuns, composeControlRuns) <- runComposeCohort (case scope of FullScope -> composeCases facts domain; PublicationSmoke -> []) (directory </> "composition")
   pure
     ( coreRuns ++ extraRuns ++ initializeRuns ++ composeRuns
     , coreControls ++ extraControls ++ initializeControls ++ composeControlRuns ++
         [ControlRun "admission" name "aggregate" holds | (name, holds) <- admissionControls]
     )
   where
+    runCohort _ [] _ = pure ([], [])
     runCohort cohort chosen base = do
       let stockSpecs = map (caseFor facts domain Stock stockImage ownedImage ownedSymbols aggregates) chosen
           ownedSpecs = map (caseFor facts domain Owned stockImage ownedImage ownedSymbols aggregates) chosen
@@ -1510,6 +1516,7 @@ runDomain runner cacheRoot directory facts domain stockImage otherImage ownedIma
               Nothing -> []
         pure (run, controls)
       pure (map fst results, concatMap snd results)
+    runComposeCohort [] _ = pure ([], [])
     runComposeCohort chosen base = do
       let stockSpecs = [composeCaseFor facts domain Stock stockImage otherImage ownedImage ownedSymbols s3dImage s3dSymbols aggregates [] "" one | one <- chosen]
           ownedSpecs = [composeCaseFor facts domain Owned stockImage otherImage ownedImage ownedSymbols s3dImage s3dSymbols aggregates [] "" one | one <- chosen]

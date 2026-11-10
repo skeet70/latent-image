@@ -5,6 +5,7 @@
 module Replacement.RtosCyclic.Suite
   ( Image (..)
   , OwnedInput (..)
+  , Scope (..)
   , CaseRun (..)
   , ControlRun (..)
   , runDomain
@@ -30,6 +31,8 @@ data Image = Image { imageBase :: Word32, imageBytes :: B.ByteString }
 data OwnedInput
   = Standalone Image Image [(Word32, Word32)] [(Word32, Word32)]
   | Aggregate [(Image, Bool, [(Word32, Word32)])]
+
+data Scope = FullScope | CallbackSmoke deriving (Eq, Show)
 
 data Role = Stock | Owned deriving (Eq, Show)
 
@@ -880,6 +883,7 @@ regionDifferences _ regions stock owned =
 
 runDomain
   :: FilePath
+  -> Scope
   -> FilePath
   -> FilePath
   -> Facts
@@ -887,8 +891,10 @@ runDomain
   -> Image
   -> OwnedInput
   -> IO ([CaseRun], [ControlRun])
-runDomain runner cacheRoot directory facts domain stockImage ownedInput = do
-  let chosen = cases facts domain
+runDomain runner scope cacheRoot directory facts domain stockImage ownedInput = do
+  let chosen = case scope of
+        FullScope -> cases facts domain
+        CallbackSmoke -> [one | one <- cases facts domain, caseCall one == Tick, caseKind one == Equal, caseCallback one == Receipt]
       stockSpecs = map (caseFor facts domain Stock stockImage ownedInput) chosen
       ownedSpecs = map (caseFor facts domain Owned stockImage ownedInput) chosen
   stockBatch <- writeBatch (directory </> "stock") stockSpecs

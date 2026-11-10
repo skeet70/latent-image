@@ -42,4 +42,24 @@ main = do
   require (isLeft (admit (changed 20 0 staged))) "changed carrier slack accepted"
   require (isLeft (admit (B.take 31 staged))) "truncated loader accepted"
   require (isLeft (admitPackagedKernel union stock staged image symbols [Aggregate.SectionPlacement 0x4001c 12 ".outside"])) "out-of-image placement accepted"
+  let startup = changed 0 0x44 stock
+      combined = changed 0 0x44 staged
+  require (not (isLeft (admitPackagedKernel union startup combined image symbols placements))) "admitted startup loader bytes lost during platform admission"
+  require (isLeft (admitPackagedKernel union startup staged image symbols placements)) "startup loader bytes reverted to stock"
+  let image4 = B.replicate 0x120000 0x55
+      app = B.replicate 0x242c 0x11
+      dispatcherOffset = 0x72337c - 0x61c400
+      appOffset = 0x725424 - 0x61c400
+      replace offset bytes original = B.take offset original <> bytes <> B.drop (offset + B.length bytes) original
+      packagedImage4 = replace dispatcherOffset (B.take 0x1c app)
+        (replace appOffset (B.drop (0x725424 - 0x72337c) app) (changed 0 0x44 image4))
+      admitApp = admitPackagedApplication image4 app
+  case admitApp packagedImage4 of
+    Right (PackagedApplication bytes) -> require (bytes == packagedImage4) "admission changed packaged image4"
+    Right StandaloneApplication -> die "packaged application admitted as standalone"
+    Left refusal -> die ("packaged owned app refused: " ++ refusal)
+  require (isLeft (admitApp (changed dispatcherOffset 0 packagedImage4))) "changed packaged dispatcher accepted"
+  require (isLeft (admitApp (changed appOffset 0 packagedImage4))) "changed packaged app caller accepted"
+  require (isLeft (admitApp (B.drop 1 packagedImage4))) "truncated packaged image4 accepted"
+  require (isLeft (admitPackagedApplication image4 (B.drop 1 app) packagedImage4)) "truncated emitted app accepted"
   putStrLn "join-admission-tests: passed"

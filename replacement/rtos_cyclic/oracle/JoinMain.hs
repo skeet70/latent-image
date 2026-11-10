@@ -28,6 +28,12 @@ import System.FilePath (takeDirectory)
 main :: IO ()
 main = do
   runner <- required "--runner"
+  scope <- getArgs >>= \arguments -> case dropWhile (/= "--scope") arguments of
+    [] -> pure FullScope
+    [_] -> failH "--scope needs a value"
+    _ : "full" : _ -> pure FullScope
+    _ : "smoke" : _ -> pure LifecycleSmoke
+    _ : other : _ -> failH ("unknown app join scope: " ++ other)
   image4Path <- required "--image4"
   loaderAPath <- required "--loader-a"
   loaderBPath <- required "--loader-b"
@@ -61,6 +67,7 @@ main = do
   unless (B.length cyclic == 0x1ac0) (failH (cyclicPath ++ " is not the 0x1ac0-byte cyclic A image"))
   unless (B.length timer == 0x4dc) (failH (timerPath ++ " is not the 0x4dc-byte timer A image"))
   (kernel, kernelEvidence) <- loadKernel loaderA
+  (application, applicationEvidence) <- loadApplication kernel image4 app
   checkStorageBudget (takeDirectory resultsPath)
   createDirectoryIfMissing True cacheRoot
   createDirectoryIfMissing True (takeDirectory resultsPath)
@@ -76,20 +83,23 @@ main = do
           , inCyclicSymbols = cyclicSymbols
           , inTimerSymbols = timerSymbols
           , inKernel = kernel
+          , inApplication = application
           }
   admissionOnly <- elem "--admission-only" <$> getArgs
   when admissionOnly $ do
     BL.writeFile resultsPath (encode (object
       [ "schema" .= (1 :: Int)
       , "mode" .= ("admission-only" :: String)
+      , "scope" .= show scope
       , "runtime_executed" .= False
       , "image4_sha256" .= sha256Hex image4Digest
       , "app_bin_sha256" .= sha256Hex appDigest
       , "kernel" .= kernelEvidence
+      , "application" .= applicationEvidence
       ]))
     putStrLn "join input admission passed; no guest executed"
     exitSuccess
-  (runs, controls) <- runJoin runner (takeDirectory resultsPath) cacheRoot inputs
+  (runs, controls) <- runJoin scope runner (takeDirectory resultsPath) cacheRoot inputs
   let failures = [(runStage run, runRole run, message) | run <- runs, message <- runDifferences run]
       failedChecks = [(runStage run, runRole run, description) | run <- runs, (description, False) <- runChecks run]
       failedControls = [controlName control | control <- controls, not (controlHolds control)]
@@ -110,6 +120,7 @@ main = do
       document =
         object
           [ "schema" .= (1 :: Int)
+          , "scope" .= show scope
           , "inputs" .=
               object
                 [ "image4_sha256" .= sha256Hex image4Digest
@@ -119,6 +130,7 @@ main = do
                 , "cyclic_bin_sha256" .= sha256Hex cyclicDigest
                 , "timer_bin_sha256" .= sha256Hex timerDigest
                 , "kernel" .= kernelEvidence
+                , "application" .= applicationEvidence
                 , "app_functions" .= length appSymbols
                 , "cyclic_functions" .= length cyclicSymbols
                 , "timer_functions" .= length timerSymbols
@@ -138,7 +150,9 @@ loadKernel :: B.ByteString -> IO (KernelImage, Value)
 loadKernel stock = do
   arguments <- getArgs
   case dropWhile (/= "--packaged-loader-a") arguments of
-    [] -> pure (StandaloneKernel, object ["mode" .= ("standalone" :: String)])
+    [] -> do
+      when ("--startup-loader-a" `elem` arguments) (failH "--startup-loader-a requires --packaged-loader-a")
+      pure (StandaloneKernel, object ["mode" .= ("standalone" :: String)])
     [_] -> failH "--packaged-loader-a needs a value"
     _ : path : _ -> do
       binaryPath <- required "--aggregate-bin-a"
@@ -146,12 +160,20 @@ loadKernel stock = do
       placementsPath <- required "--aggregate-placements-a"
       carriersPath <- required "--aggregate-carriers"
       union <- B.readFile carriersPath >>= either (failH . show) pure . Union.parseUnion
+      (reference, referenceEvidence) <- case dropWhile (/= "--startup-loader-a") arguments of
+        [] -> pure (stock, object ["mode" .= ("canonical-loader" :: String)])
+        [_] -> failH "--startup-loader-a needs a value"
+        _ : referencePath : _ -> do
+          bytes <- B.readFile referencePath
+          unless (B.length bytes == B.length stock) (failH "startup loader length differs from canonical loader")
+          digest <- sha256File referencePath
+          pure (bytes, object ["mode" .= ("pre-platform-startup-loader" :: String), "sha256" .= sha256Hex digest])
       loader <- B.readFile path
       binary <- B.readFile binaryPath
       symbols <- B.readFile symbolsPath >>= either failH pure . Aggregate.parseAggregateSymbols
       placements <- B.readFile placementsPath >>= either failH pure . Aggregate.parsePlacements
       image <- either failH pure (Aggregate.aggregateImage symbols binary)
-      kernel <- either failH pure (admitPackagedKernel union stock loader image symbols placements)
+      kernel <- either failH pure (admitPackagedKernel union reference loader image symbols placements)
       digest <- sha256File path
       binaryDigest <- sha256File binaryPath
       symbolsDigest <- sha256File symbolsPath
@@ -162,12 +184,28 @@ loadKernel stock = do
         , object
             [ "mode" .= ("packaged-domain-a" :: String)
             , "loader_sha256" .= sha256Hex digest
+            , "reference" .= referenceEvidence
             , "aggregate_bin_sha256" .= sha256Hex binaryDigest
             , "aggregate_symbols_sha256" .= sha256Hex symbolsDigest
             , "aggregate_placements_sha256" .= sha256Hex placementsDigest
             , "aggregate_carriers_sha256" .= sha256Hex carriersDigest
             ]
         )
+
+loadApplication :: KernelImage -> B.ByteString -> B.ByteString -> IO (ApplicationImage, Value)
+loadApplication kernel stock app = do
+  arguments <- getArgs
+  case dropWhile (/= "--packaged-image4") arguments of
+    [] -> pure (StandaloneApplication, object ["mode" .= ("standalone" :: String)])
+    [_] -> failH "--packaged-image4 needs a value"
+    _ : path : _ -> do
+      case kernel of
+        StandaloneKernel -> failH "--packaged-image4 requires --packaged-loader-a"
+        PackagedKernel _ _ -> pure ()
+      bytes <- B.readFile path
+      application <- either failH pure (admitPackagedApplication stock app bytes)
+      digest <- sha256File path
+      pure (application, object ["mode" .= ("packaged-image4" :: String), "sha256" .= sha256Hex digest])
 
 required :: String -> IO FilePath
 required flag = do

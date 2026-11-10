@@ -122,7 +122,88 @@ XM1_EMULATOR_SLOTS=1 devenv shell -- host-build run --jobs=4 \
   --packaged-loader-a STAGED_LOADER_A \
   --aggregate-bin-a AGGREGATE_BIN_A --aggregate-symbols-a AGGREGATE_SYMBOLS_A \
   --aggregate-placements-a AGGREGATE_PLACEMENT_A --aggregate-carriers CARRIERS_JSON \
-  --cache-root SHARED_NATIVE_CACHE --results NEW_RESULTS_JSON
+  --cache-root SHARED_NATIVE_CACHE --results NEW_RESULTS_JSON --admission-only
 ```
 
 This bounded qualifier executes registration, repeated ticks, delivery and unregistration through the published root/interface tables into the actual union image. Admission reconstructs that loader from pinned stock, declared UDF-filled carriers, emitted functions and every allocated section, including readonly zeros. The shared cyclic aggregate binder preserves readonly exclusions and public ABI fetch boundaries. Every owned observation must retain its complete loader bytes. Contexts, registry, heap and lock callbacks remain fixture state; this does not boot the staged DAT or exercise a core-1 app caller. Run only with an admitted emulator slot and retained-output allowance.
+
+### Composed root and timer package
+
+`//replacement/rtos_timer:stage-root-platform` binds the existing nine-piece J5 composition, including the reduced-bound task-storage helper, owned root task and owned app dispatcher/caller, to the actual platform union. Bazel supplies all linked inputs and tools. The stager verifies the admitted startup bytes, rejects intersecting startup/platform carriers, stages both aggregate loaders and requires inverse platform restoration to recover the admitted startup DAT. It writes `composed.DAT`, all six decoded targets, `composed-contract.json`, the two pre-platform `startup-loader-*.bin` references and two `effective-carrier-*.bin` slices. The effective slices include actual staged gaps and carrier fill, not unallocated raw linker bytes.
+
+The nested startup contract describes the pre-platform input. Its attach, application and frame runtime witnesses require requalification on the final package. No continuous arena or natural-root acceptance follows from byte composition. The earlier `TimerAppSystemJoin/root-closure-stage-01` remains loader-only and has stock image4; its closed allowance must not be reused for this package.
+
+After a separate file-only output grant, stage into a new directory:
+
+```sh
+HB=/nix/store/p7m8ycqzgyw2msmynma7p6746w8qva6y-host-build/bin/host-build
+OB=/home/murph/.cache/bazel/latent-image-TimerAppSystemJoin
+devenv shell -- "$HB" --output_base="$OB" run --jobs=4 \
+  //replacement/rtos_timer:stage-root-platform -- \
+  "$PWD/private-data/firmware/x-m1-1.50/FWUP0002.DAT" \
+  "$PWD/private-data/scratch/TimerAppSystemJoin" \
+  "$PWD/private-data/scratch/TimerAppSystemJoin/root-closure-composed-01"
+```
+
+For that package, the app join additionally takes `--startup-loader-a PACKAGE/startup-loader-a.bin --packaged-image4 PACKAGE/image4.bin`. Loader admission reconstructs the platform change over the recorded admitted startup loader instead of canonical stock; stock comparison still uses pinned canonical input. App admission checks the emitted dispatcher and caller spans in final image4. Owned execution maps its app, dispatcher and retained callback/checker bytes from that final image4. These bounded mappings do not execute the complete image4 or boot its root task.
+
+### Bounded native scopes and admission plan
+
+The timer, cyclic and app-join CLIs accept `--scope smoke|full`, defaulting to `full`. Smoke selection changes case selection, not expectations or applicable status/admission checks.
+
+| Qualifier | Smoke | Full | Proposed additional retained cap, smoke / fresh full |
+|---|---|---|---|
+| Timer | Initialize A/B: 2 comparisons, 4 observations, 56 controls | 56 comparisons, 118 observations including 6 mutants, 280 controls | 8 / 128 MiB |
+| Cyclic | Equal-period receipt/rearm A/B: 2 comparisons, 4 observations, 23 controls | 48 comparisons, 96 observations, 179 controls | 8 / 64 MiB |
+| Domain-A app join | Publication plus seven lifecycle stages: 16 observations, 21 controls | Publication plus thirteen stages: 28 observations, 21 controls | 160 / 256 MiB |
+
+These are proposals, not output grants or executed new-source receipts. Measured prior timer work/raw-cache payloads are 54,112,256/38,262,420 bytes; cyclic work/raw-cache payloads are 22,102,016/16,083,462 bytes. Timer initialize produced 869,984 raw bytes across four observations; cyclic receipt/rearm produced 689,994. Historical app observations span multiple generations: the largest individual raw receipt is 3,285,481 bytes, not the whole old 487,075,840-byte cache. The proposed app bounds cover two raw copies plus state/input blobs. Actual new totals must be measured. File-only root composition needs a separate proposed 64 MiB retained allowance and transient codec headroom; it has not been run.
+
+Cache reuse requires the canonical immutable runner path and its bytes, the complete ordered expectation-free batch wire, and valid raw/exit/provenance digests. Expectations are judged again on every read. Changing the ordered cohort changes the batch key: cyclic smoke cannot be assumed to reuse a full cohort. Timer initialization batches and the app lifecycle prefix can be reused only if those identities remain equal. The current runner hash is `2bd58d3bc0d30d6fd9de6c22cd94c2c95c40189a0c55bb8232996a421583e8f3`; older `21ff2236ea7060c7c51958668c1debf0b560855b106c9375629a154d50b3aefc` receipts cannot be preclaimed as hits. Budget fresh observations until admission proves otherwise.
+
+After explicit slot and output admission, generate a run script without executing the qualifier, then contain the whole qualifier with the slot wrapper. Keep `XM1_EMULATOR_SLOTS=1`; these older worktree wrappers receive an explicit 2 GiB cap. `RUN` must be a newly admitted output directory, `P` the newly staged package, `B` this output base's `bazel-bin`, and `CACHE` the shared native cache. Replace `smoke` with `full` only under its own allowance.
+
+```sh
+STOCK="$PWD/private-data/analysis/x-m1-1.50"
+B="$PWD/bazel-bin"
+P="$PWD/private-data/scratch/TimerAppSystemJoin/root-closure-composed-01"
+CACHE="$PWD/private-data/scratch/TimerAppSystemJoin/native-cache"
+mkdir -p "$RUN"
+devenv shell -- "$HB" --output_base="$OB" build --jobs=4 //emulation:emulator-slot
+devenv shell -- "$HB" --output_base="$OB" run --jobs=4 --script_path="$RUN/timer.launch" \
+  //replacement/rtos_timer/oracle:timer-oracle -- --scope smoke \
+  --loader-a "$STOCK/decode/loader-40000.bin" --loader-b "$STOCK/decode/loader-d0000.bin" \
+  --aggregate-a-bin "$P/effective-carrier-a.bin" --aggregate-a-symbols "$B/replacement/rtos_platform/platform-a.symbols" \
+  --aggregate-a-placements "$B/replacement/rtos_platform/placement-a.json" \
+  --aggregate-b-bin "$P/effective-carrier-b.bin" --aggregate-b-symbols "$B/replacement/rtos_platform/platform-b.symbols" \
+  --aggregate-b-placements "$B/replacement/rtos_platform/placement-b.json" \
+  --aggregate-carriers "$PWD/replacement/rtos_platform/carriers.json" --cache-root "$CACHE" --results "$RUN/timer/results.json"
+XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=2G "$B/emulation/emulator-slot" "$RUN/timer.launch"
+```
+
+The cyclic and app commands use separate work directories:
+
+```sh
+devenv shell -- "$HB" --output_base="$OB" run --jobs=4 --script_path="$RUN/cyclic.launch" \
+  //replacement/rtos_cyclic/oracle:cyclic-oracle -- --scope smoke \
+  --loader-a "$STOCK/decode/loader-40000.bin" --loader-b "$STOCK/decode/loader-d0000.bin" \
+  --aggregate-a-bin "$P/effective-carrier-a.bin" --aggregate-a-symbols "$B/replacement/rtos_platform/platform-a.symbols" \
+  --aggregate-a-placements "$B/replacement/rtos_platform/placement-a.json" \
+  --aggregate-b-bin "$P/effective-carrier-b.bin" --aggregate-b-symbols "$B/replacement/rtos_platform/platform-b.symbols" \
+  --aggregate-b-placements "$B/replacement/rtos_platform/placement-b.json" \
+  --aggregate-carriers "$PWD/replacement/rtos_platform/carriers.json" --cache-root "$CACHE" --results "$RUN/cyclic/results.json"
+XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=2G "$B/emulation/emulator-slot" "$RUN/cyclic.launch"
+devenv shell -- "$HB" --output_base="$OB" run --jobs=4 --script_path="$RUN/app.launch" \
+  //replacement/rtos_cyclic/oracle:join-oracle -- --scope smoke \
+  --image4 "$STOCK/lz/id4-0061c400.bin" \
+  --loader-a "$STOCK/decode/loader-40000.bin" --loader-b "$STOCK/decode/loader-d0000.bin" \
+  --packaged-loader-a "$P/loader-a.bin" --startup-loader-a "$P/startup-loader-a.bin" \
+  --packaged-image4 "$P/image4.bin" \
+  --aggregate-bin-a "$B/replacement/rtos_platform/platform-a.bin" \
+  --aggregate-symbols-a "$B/replacement/rtos_platform/platform-a.symbols" \
+  --aggregate-placements-a "$B/replacement/rtos_platform/placement-a.json" \
+  --aggregate-carriers "$PWD/replacement/rtos_platform/carriers.json" --cache-root "$CACHE" --results "$RUN/app/results.json"
+XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=2G "$B/emulation/emulator-slot" "$RUN/app.launch"
+```
+
+All runtime commands above remain unexecuted for this source revision. The minimum changed timer-publication smoke is four native observations; the composed-package and native-slot grants are separate prerequisites for the packaged sequence. No core-1 app caller is admitted.
