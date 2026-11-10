@@ -3,9 +3,9 @@
 module Main where
 
 import Data.Aeson (Value, object, (.=))
+import Data.Aeson.Types (Pair)
 import qualified Data.ByteString as B
 import Data.Word (Word32)
-import Emulation.RenderCases (ServiceAddress (..), serviceAddress)
 import qualified Emulation.ValuePickerCases as Picker
 import FujiAF.JSON (encodeCanonical)
 import System.Environment (getArgs)
@@ -20,13 +20,13 @@ newtype ParentId = ParentId Word32
 newtype SelectedId = SelectedId Word32
 data DrawFunction = Tree | Picker deriving (Eq, Show)
 data NodeOrigin = Stock | Package | Unknown deriving (Eq, Show)
-data ModelClass = OwnedTree | OwnedPicker | Retained deriving (Eq, Show)
 data RecordedEntry = RecordedEntry
   { caseName :: CaseName, function :: DrawFunction, caller :: ReturnAddress
   , mode :: DrawMode, node :: NodeId, liveKind :: SnapshotKind
   , liveParent :: ParentId, liveSelected :: SelectedId, origin :: NodeOrigin
-  , modelClass :: ModelClass
   }
+data InstallationAdmission = Admitted | Refused deriving (Eq, Show)
+data InstallationCase = InstallationCase RecordedEntry InstallationAdmission
 
 wordAt :: B.ByteString -> Int -> Word32
 wordAt bytes offset = sum [fromIntegral (B.index bytes (offset+i))*256^i | i<-[0..3]]
@@ -35,72 +35,73 @@ modelEntries :: [RecordedEntry]
 modelEntries = map tree Tree.scenarios ++ map picker Picker.pickerCases
   where
     tree c = let Tree.NodeId n=Tree.node c; Tree.DrawMode m=Tree.mode c; snapshot=Tree.snapshot c
-             in RecordedEntry (CaseName (Tree.scenarioName c)) Tree (ReturnAddress 0x01167a60)
+             in RecordedEntry (CaseName (Tree.scenarioName c)) Tree (ReturnAddress (Tree.returnAddress c))
                   (DrawMode m) (NodeId n) (SnapshotKind (snapshot!!0)) (ParentId (snapshot!!3))
-                  (SelectedId (snapshot!!4)) Stock OwnedTree
+                  (SelectedId (snapshot!!4)) Stock
     picker c = let Picker.NodeId n=Picker.pickerNode c; snapshot=Picker.pickerSnapshot c
-                   usesLive=any ((==ServiceAddress 0x61cd14) . serviceAddress) (Picker.pickerCalls c)
                in RecordedEntry (CaseName ("picker-"++Picker.pickerName c)) Picker (ReturnAddress (Picker.pickerReturnAddress c))
                     (DrawMode (Picker.pickerMode c)) (NodeId n) (SnapshotKind (wordAt snapshot 0))
                     (ParentId (wordAt snapshot 12)) (SelectedId (wordAt snapshot 16)) Stock
-                    (if usesLive then OwnedPicker else Retained)
 
-boundaryEntries :: [RecordedEntry]
-boundaryEntries = concatMap refused [tree,picker,fnPicker] ++
-  [ tree {caseName=CaseName ("tree-saved-mode-"++show m),mode=DrawMode m,modelClass=Retained}
-  | m<-[5,6,7,9,11,12,13] ] ++
-  [ picker {caseName=CaseName ("picker-saved-mode-"++show m),mode=DrawMode m,modelClass=Retained}
-  | m<-[7,9,13] ] ++
-  [ picker {caseName=CaseName ("picker-skipped-mode-"++show m),mode=DrawMode m,modelClass=Retained}
-  | m<-[2,3] ] ++
-  [ fnPicker {caseName=CaseName ("fn-picker-saved-or-skipped-mode-"++show m),mode=DrawMode m,modelClass=Retained}
-  | m<-[2,3,7,9,13] ] ++
-  [ tree {caseName=CaseName ("tree-kind-"++show kind),liveKind=SnapshotKind kind,modelClass=Retained}
-  | kind<-[0,2,0xffffffff] ] ++
-  [ tree {caseName=CaseName "tree-node25-override",node=NodeId 0x25,liveKind=SnapshotKind 2,liveParent=ParentId 0x27,liveSelected=SelectedId 0}
-  , tree {caseName=CaseName "tree-node38-override",node=NodeId 0x38,liveKind=SnapshotKind 2,liveParent=ParentId 0x228,liveSelected=SelectedId 11}
-  , tree {caseName=CaseName "tree-node25-parent-near-miss",node=NodeId 0x25,liveKind=SnapshotKind 2,liveParent=ParentId 27,liveSelected=SelectedId 0,modelClass=Retained}
-  , tree {caseName=CaseName "tree-node38-parent-near-miss",node=NodeId 0x38,liveKind=SnapshotKind 2,liveParent=ParentId 228,liveSelected=SelectedId 11,modelClass=Retained}
-  , tree {caseName=CaseName "tree-node25-selection-near-miss",node=NodeId 0x25,liveKind=SnapshotKind 2,liveParent=ParentId 0x27,liveSelected=SelectedId 1,modelClass=Retained}
-  , tree {caseName=CaseName "tree-node38-selection-near-miss",node=NodeId 0x38,liveKind=SnapshotKind 2,liveParent=ParentId 0x228,liveSelected=SelectedId 12,modelClass=Retained}
-  ] ++
-  [ entry {caseName=CaseName (prefix entry++"-high-mode-"++show m),mode=DrawMode m}
-  | entry<-[tree,picker],m<-[14,31,32,0xffffffff] ] ++
-  [ picker {caseName=CaseName ("picker-live-mode-"++show m),mode=DrawMode m} | m<-[5,6,11,12] ]
+boundaryEntries :: [InstallationCase]
+boundaryEntries = map (`InstallationCase` Refused)
+  (concatMap refused [tree,picker,fnPicker] ++
+   [ tree {caseName=CaseName ("tree-saved-mode-"++show m),mode=DrawMode m} | m<-[5,6,7,9,11,12,13] ] ++
+   [ entry {caseName=CaseName (prefix entry++"-saved-or-skipped-mode-"++show m),mode=DrawMode m}
+   | entry<-[picker,fnPicker],m<-[2,3,7,9,13] ] ++
+   [ tree {caseName=CaseName ("tree-kind-"++show kind),liveKind=SnapshotKind kind} | kind<-[0,2,0xffffffff] ] ++
+   [ tree {caseName=CaseName "tree-node25-parent-near-miss",node=NodeId 0x25,liveKind=SnapshotKind 2,liveParent=ParentId 27,liveSelected=SelectedId 0}
+   , tree {caseName=CaseName "tree-node38-parent-near-miss",node=NodeId 0x38,liveKind=SnapshotKind 2,liveParent=ParentId 228,liveSelected=SelectedId 11}
+   , tree {caseName=CaseName "tree-node25-selection-near-miss",node=NodeId 0x25,liveKind=SnapshotKind 2,liveParent=ParentId 0x27,liveSelected=SelectedId 1}
+   , tree {caseName=CaseName "tree-node38-selection-near-miss",node=NodeId 0x38,liveKind=SnapshotKind 2,liveParent=ParentId 0x228,liveSelected=SelectedId 12}
+   ] ++
+   [ picker {caseName=CaseName ("picker-uninstalled-caller-"++show address),caller=ReturnAddress address}
+   | address<-[0x01169a18,0x0116a1bc,0x0116a8b4,0x0116b530,0x0116b56c] ]) ++
+  map (`InstallationCase` Admitted)
+  ([ tree {caseName=CaseName ("tree-live-mode-"++show m),mode=DrawMode m}
+   | m<-[0,1,2,3,4,8,10,14,31,32,0xffffffff] ] ++
+   [ entry {caseName=CaseName (prefix entry++"-live-mode-"++show m),mode=DrawMode m}
+   | entry<-[picker,fnPicker],m<-[0,1,4,5,6,8,10,11,12,14,31,32,0xffffffff] ] ++
+   [ tree {caseName=CaseName "tree-node25-override",node=NodeId 0x25,liveKind=SnapshotKind 2,liveParent=ParentId 0x27,liveSelected=SelectedId 0}
+   , tree {caseName=CaseName "tree-node38-override",node=NodeId 0x38,liveKind=SnapshotKind 2,liveParent=ParentId 0x228,liveSelected=SelectedId 11}
+   ])
   where
     tree=RecordedEntry (CaseName "tree-boundary") Tree (ReturnAddress 0x01167a60) (DrawMode 0) (NodeId 0x40)
-      (SnapshotKind 1) (ParentId 0x224) (SelectedId 9) Stock OwnedTree
+      (SnapshotKind 1) (ParentId 0x224) (SelectedId 9) Stock
     picker=RecordedEntry (CaseName "picker-boundary") Picker (ReturnAddress 0x01168ce4) (DrawMode 0) (NodeId 0x30)
-      (SnapshotKind 0x17) (ParentId 0x39) (SelectedId 1) Stock OwnedPicker
+      (SnapshotKind 0x17) (ParentId 0x39) (SelectedId 1) Stock
     fnPicker=picker {caseName=CaseName "fn-picker-boundary",caller=ReturnAddress 0x0116c588,node=NodeId 0x63}
     prefix entry=case (function entry,caller entry) of (Tree,_)->"tree"; (Picker,ReturnAddress 0x0116c588)->"fn-picker"; _->"picker"
     refused entry=
-      [ entry {caseName=CaseName (prefix entry++"-package-node"),node=NodeId 0x400,origin=Package,modelClass=Retained}
-      , entry {caseName=CaseName (prefix entry++"-unknown-origin"),origin=Unknown,modelClass=Retained}
-      , entry {caseName=CaseName (prefix entry++"-other-caller"),caller=ReturnAddress (case function entry of Tree->0x0116c058;Picker->0x01169308),modelClass=Retained}
-      , entry {caseName=CaseName (prefix entry++"-cross-function-caller"),caller=ReturnAddress (case function entry of Tree->0x01168ce4;Picker->0x01167a60),modelClass=Retained}
+      [ entry {caseName=CaseName (prefix entry++"-package-node"),node=NodeId 0x400,origin=Package}
+      , entry {caseName=CaseName (prefix entry++"-unknown-origin"),origin=Unknown}
+      , entry {caseName=CaseName (prefix entry++"-other-caller"),caller=ReturnAddress (case function entry of Tree->0x0116c058;Picker->0x01169308)}
+      , entry {caseName=CaseName (prefix entry++"-cross-function-caller"),caller=ReturnAddress (case function entry of Tree->0x01168ce4;Picker->0x01167a60)}
       ]
 
-entryJSON :: RecordedEntry -> Value
-entryJSON entry = object
+entryFields :: RecordedEntry -> [Pair]
+entryFields entry =
   [ "id" .= name, "function" .= show (function entry), "caller_return" .= callerWord
   , "mode" .= modeWord, "node" .= nodeWord, "live_kind" .= kindWord
   , "live_parent" .= parentWord, "live_selected" .= selectedWord
-  , "origin" .= show (origin entry), "model_class" .= show (modelClass entry)
-  , "expected_owned" .= (modelClass entry/=Retained)
+  , "origin" .= show (origin entry)
   ]
   where
     CaseName name=caseName entry; ReturnAddress callerWord=caller entry; DrawMode modeWord=mode entry
     NodeId nodeWord=node entry; SnapshotKind kindWord=liveKind entry
     ParentId parentWord=liveParent entry; SelectedId selectedWord=liveSelected entry
 
-rustTest :: Int -> RecordedEntry -> String
-rustTest index entry = unlines
+installationJSON :: InstallationCase -> Value
+installationJSON (InstallationCase entry admission) =
+  object (entryFields entry ++ ["expected_owned" .= (admission==Admitted)])
+
+rustTest :: Int -> InstallationCase -> String
+rustTest index (InstallationCase entry admission) = unlines
   [ "#[test]", "fn entry_case_"++show index++"() {"
   , "    let entry = EntryClass { function: DrawFunction::"++show (function entry)++", caller: ReturnAddress("++show callerWord++"),"
   , "        mode: "++show modeWord++", node: "++show nodeWord++", live_kind: "++show kindWord++","
   , "        live_parent: "++show parentWord++", live_selected: "++show selectedWord++", origin: NodeOrigin::"++show (origin entry)++" };"
-  , "    assert_eq!(entry.owned(), "++(if modelClass entry==Retained then "false" else "true")++", "++show name++");"
+  , "    assert_eq!(entry.owned(), "++(if admission==Admitted then "true" else "false")++", "++show name++");"
   , "}"
   ]
   where
@@ -151,12 +152,13 @@ main = do
   args<-getArgs
   case args of
     ["--json",json,"--rust",rust] -> do
-      let entries=modelEntries++boundaryEntries
       B.writeFile json (encodeCanonical (object
-        [ "schema_version" .= (1::Int), "model_cases" .= length modelEntries
-        , "boundary_cases" .= length boundaryEntries, "entries" .= (map entryJSON entries ++ map paneJSON paneEntries)
-        , "pane_cases" .= length paneEntries
+        [ "schema_version" .= (2::Int), "native_model_cases" .= length modelEntries
+        , "native_model_inputs" .= map (object . entryFields) modelEntries
+        , "installation_cases" .= length boundaryEntries
+        , "installation_entries" .= map installationJSON boundaryEntries
+        , "pane_cases" .= length paneEntries, "pane_entries" .= map paneJSON paneEntries
         ]))
-      writeFile rust ("use render_adapter_class::{DrawFunction, NodeOrigin, ReturnAddress, EntryClass, PaneEntryClass, PaneNode, PaneMode, SnapshotDepth, SnapshotKind};\n"++concat (zipWith rustTest [0..] entries)++concat (zipWith paneRustTest [0..] paneEntries))
-      putStrLn (show (length modelEntries)++" native model entries, "++show (length boundaryEntries)++" class boundary entries, "++show (length paneEntries)++" pane entries")
+      writeFile rust ("use render_adapter_class::{DrawFunction, NodeOrigin, ReturnAddress, EntryClass, PaneEntryClass, PaneNode, PaneMode, SnapshotDepth, SnapshotKind};\n"++concat (zipWith rustTest [0..] boundaryEntries)++concat (zipWith paneRustTest [0..] paneEntries))
+      putStrLn (show (length modelEntries)++" native model inputs, "++show (length boundaryEntries)++" installation boundary entries, "++show (length paneEntries)++" pane entries")
     _ -> fail "usage: render-adapter-class-cases --json OUTPUT.json --rust OUTPUT.rs"
