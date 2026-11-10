@@ -1,8 +1,8 @@
 //! Bounded native cases on the pinned FujiMod Cortex-R5F core with the
 //! Cortex-R4F exclusions of `r4f::classify_a32`. Input is the
-//! `FUJI_NATIVE_V1` or `FUJI_NATIVE_SCRIPT_V1` wire written by `Emulation.NativeCase`, or a
-//! `FUJI_NATIVE_BATCH_V1` wire of such cases; output is the runner
-//! observation read by `Emulation.NativeObservation`, one per case.
+//! native case wire written by `Emulation.NativeCase`, or a batch wire of such
+//! cases; output is the runner observation read by `Emulation.NativeObservation`,
+//! one per case.
 //!
 //! Engine pages carry the union of the permissions of the regions they touch.
 //! The memory hook admits each access against exact logical regions and
@@ -60,6 +60,8 @@ use std::time::{Duration, Instant};
 pub const MAX_WIRE_BYTES: usize = 16 * 1024 * 1024;
 /// Hex for 4 MiB mapped bytes and 4 MiB contracts, plus 4 MiB framing allowance.
 pub const MAX_SCRIPT_WIRE_BYTES: usize = 20 * 1024 * 1024;
+/// Hex for 8 MiB mapped bytes and 8 MiB contracts, plus 8 MiB framing allowance.
+pub const MAX_RESOURCE_WIRE_BYTES: usize = 40 * 1024 * 1024;
 /// Batch wire bound: 256 MiB of distinct artifacts plus case bodies, each
 /// shorter than its case JSON, of which a batch carries at most 256 MiB.
 pub const MAX_BATCH_WIRE_BYTES: usize = 768 * 1024 * 1024;
@@ -69,6 +71,44 @@ const MAX_BATCH_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_REGIONS: u32 = 64;
 const MAX_REGION_BYTES: u32 = 2 * 1024 * 1024;
 const MAX_MAPPED_BYTES: u64 = 4 * 1024 * 1024;
+const RESOURCE_BYTES: u32 = 8 * 1024 * 1024;
+
+#[derive(Clone, Copy)]
+enum MemoryEnvelope {
+    Default,
+    Resource8,
+}
+
+impl MemoryEnvelope {
+    fn region_bytes(self) -> u32 {
+        match self {
+            Self::Default => MAX_REGION_BYTES,
+            Self::Resource8 => RESOURCE_BYTES,
+        }
+    }
+
+    fn aggregate_bytes(self) -> u64 {
+        match self {
+            Self::Default => MAX_MAPPED_BYTES,
+            Self::Resource8 => u64::from(RESOURCE_BYTES),
+        }
+    }
+
+    fn wire_bytes(self, scripted: bool) -> usize {
+        match self {
+            Self::Default if scripted => MAX_SCRIPT_WIRE_BYTES,
+            Self::Default => MAX_WIRE_BYTES,
+            Self::Resource8 => MAX_RESOURCE_WIRE_BYTES,
+        }
+    }
+
+    fn error(self, default: &'static str, resource8: &'static str) -> WireError {
+        WireError(match self {
+            Self::Default => default,
+            Self::Resource8 => resource8,
+        })
+    }
+}
 const MAX_FUNCTIONS: u32 = 512;
 const MAX_STUBS: u32 = 32;
 const MAX_INSTRUCTIONS: u32 = 4_000_000;
@@ -196,7 +236,7 @@ pub fn run_batch(wire: &[u8], out: &mut impl std::io::Write) -> std::io::Result<
         }
     };
     for (index, body) in batch.cases.iter().enumerate() {
-        let case = parse_case(body, |tokens, bytes| slice(tokens, &batch.artifacts, bytes));
+        let case = parse_case(body, batch.envelope, |tokens, bytes, envelope| slice(tokens, &batch.artifacts, bytes, envelope));
         let outcome = render(&match &case {
             Ok(case) => execute(case),
             Err(error) => Observation::invalid(*error),
@@ -854,24 +894,30 @@ impl Kernel {
 }
 
 fn parse(wire: &[u8]) -> Result<Case, WireError> {
-    parse_case(wire, |tokens, bytes| tokens.bytes(bytes))
+    parse_case(wire, MemoryEnvelope::Resource8, |tokens, bytes, _| tokens.bytes(bytes))
 }
 
 /// One case wire whose region rows end in the form `initial` reads.
 fn parse_case(
     wire: &[u8],
-    mut initial: impl FnMut(&mut Tokens<'_>, u32) -> Result<Box<[u8]>, WireError>,
+    allowed: MemoryEnvelope,
+    mut initial: impl FnMut(&mut Tokens<'_>, u32, MemoryEnvelope) -> Result<Box<[u8]>, WireError>,
 ) -> Result<Case, WireError> {
-    if wire.len() > MAX_SCRIPT_WIRE_BYTES {
+    if wire.len() > MAX_RESOURCE_WIRE_BYTES {
         return Err(WireError("wire exceeds its byte limit"));
     }
     let mut tokens = Tokens { rest: wire };
-    let scripted = match tokens.next()? {
-        b"FUJI_NATIVE_V1" => false,
-        b"FUJI_NATIVE_SCRIPT_V1" => true,
+    let (envelope, scripted) = match tokens.next()? {
+        b"FUJI_NATIVE_V1" => (MemoryEnvelope::Default, false),
+        b"FUJI_NATIVE_SCRIPT_V1" => (MemoryEnvelope::Default, true),
+        b"FUJI_NATIVE_RESOURCE8_V1" => (MemoryEnvelope::Resource8, false),
+        b"FUJI_NATIVE_RESOURCE8_SCRIPT_V1" => (MemoryEnvelope::Resource8, true),
         _ => return Err(WireError("unsupported native wire version")),
     };
-    let limit = if scripted { MAX_SCRIPT_WIRE_BYTES } else { MAX_WIRE_BYTES };
+    if matches!((allowed, envelope), (MemoryEnvelope::Default, MemoryEnvelope::Resource8)) {
+        return Err(WireError("resource8 case requires resource8 batch framing"));
+    }
+    let limit = envelope.wire_bytes(scripted);
     if wire.len() > limit {
         return Err(WireError("wire exceeds its byte limit"));
     }
@@ -931,8 +977,8 @@ fn parse_case(
     for _ in 0..region_count {
         let base = tokens.word()?;
         let bytes = tokens.word()?;
-        if bytes > MAX_REGION_BYTES {
-            return Err(WireError("region exceeds 2 MiB"));
+        if bytes > envelope.region_bytes() {
+            return Err(envelope.error("region exceeds 2 MiB", "region exceeds 8 MiB"));
         }
         let span = Span::new(base, bytes)?;
         let permission = match tokens.count(15)? {
@@ -949,13 +995,13 @@ fn parse_case(
             return Err(WireError("executable region must end by 0x7ffffffc"));
         }
         mapped += u64::from(bytes);
-        if mapped > MAX_MAPPED_BYTES {
-            return Err(WireError("regions exceed 4 MiB in total"));
+        if mapped > envelope.aggregate_bytes() {
+            return Err(envelope.error("regions exceed 4 MiB in total", "regions exceed 8 MiB in total"));
         }
         if regions.iter().any(|region| region.span.overlaps(span)) {
             return Err(WireError("regions overlap"));
         }
-        let initial = initial(&mut tokens, bytes)?;
+        let initial = initial(&mut tokens, bytes, envelope)?;
         regions.push(Region { span, permission, initial });
     }
 
@@ -963,8 +1009,8 @@ fn parse_case(
     for _ in 0..function_count {
         let base = tokens.word()?;
         let bytes = tokens.word()?;
-        if bytes > MAX_REGION_BYTES || base % 4 != 0 || bytes % 4 != 0 {
-            return Err(WireError("function must be aligned, word-sized and at most 2 MiB"));
+        if bytes > envelope.region_bytes() || base % 4 != 0 || bytes % 4 != 0 {
+            return Err(envelope.error("function must be aligned, word-sized and at most 2 MiB", "function must be aligned, word-sized and at most 8 MiB"));
         }
         let span = Span::new(base, bytes)?;
         if functions.iter().any(|function| function.overlaps(span)) {
@@ -1002,8 +1048,8 @@ fn parse_case(
             }
             let inputs = bindings(&mut tokens, input_count, if scripted { 14 } else { 12 })?;
             let outputs = bindings(&mut tokens, output_count, 12)?;
-            let reads = memory_contracts(&mut tokens, read_count, &mut contract_bytes)?;
-            let writes = memory_contracts(&mut tokens, write_count, &mut contract_bytes)?;
+            let reads = memory_contracts(&mut tokens, read_count, &mut contract_bytes, envelope)?;
+            let writes = memory_contracts(&mut tokens, write_count, &mut contract_bytes, envelope)?;
             calls.push(StubCall { inputs, outputs, reads, writes });
         }
         stubs.push(Stub { address, calls: calls.into(), scripted });
@@ -1042,7 +1088,7 @@ fn bindings(tokens: &mut Tokens<'_>, count: u32, max_register: u32) -> Result<Bo
     Ok(bindings.into())
 }
 
-fn memory_contracts(tokens: &mut Tokens<'_>, count: u32, total: &mut u64) -> Result<Box<[MemoryContract]>, WireError> {
+fn memory_contracts(tokens: &mut Tokens<'_>, count: u32, total: &mut u64, envelope: MemoryEnvelope) -> Result<Box<[MemoryContract]>, WireError> {
     let mut entries = Vec::with_capacity(count as usize);
     for _ in 0..count {
         let kind = tokens.next()?;
@@ -1060,12 +1106,12 @@ fn memory_contracts(tokens: &mut Tokens<'_>, count: u32, total: &mut u64) -> Res
         };
         let offset = tokens.word()? as i32;
         let bytes = tokens.word()?;
-        if bytes == 0 || bytes > MAX_REGION_BYTES {
-            return Err(WireError("memory contract must contain 1..2MiB bytes"));
+        if bytes == 0 || bytes > envelope.region_bytes() {
+            return Err(envelope.error("memory contract must contain 1..2MiB bytes", "memory contract must contain 1..8MiB bytes"));
         }
         *total += u64::from(bytes);
-        if *total > MAX_MAPPED_BYTES {
-            return Err(WireError("memory contracts exceed 4MiB"));
+        if *total > envelope.aggregate_bytes() {
+            return Err(envelope.error("memory contracts exceed 4MiB", "memory contracts exceed 8MiB"));
         }
         entries.push(MemoryContract { target, offset, bytes: tokens.bytes(bytes)? });
     }
@@ -1136,16 +1182,21 @@ fn validate_stack_contexts(case: &Case, bounds: Box<[StackBounds]>) -> Result<St
 struct Batch<'a> {
     artifacts: Vec<&'a [u8]>,
     cases: Vec<&'a [u8]>,
+    envelope: MemoryEnvelope,
 }
 
-/// `FUJI_NATIVE_BATCH_V1`, artifact and case counts, then each artifact and each
+/// A batch header, artifact and case counts, then each artifact and each
 /// case body as a decimal length, one newline and that many raw bytes.
 fn frame(wire: &[u8]) -> Result<Batch<'_>, WireError> {
     if wire.len() > MAX_BATCH_WIRE_BYTES {
         return Err(WireError("batch wire exceeds its byte limit"));
     }
     let mut tokens = Tokens { rest: wire };
-    tokens.literal(b"FUJI_NATIVE_BATCH_V1", "batch version must be FUJI_NATIVE_BATCH_V1")?;
+    let envelope = match tokens.next()? {
+        b"FUJI_NATIVE_BATCH_V1" => MemoryEnvelope::Default,
+        b"FUJI_NATIVE_RESOURCE8_BATCH_V1" => MemoryEnvelope::Resource8,
+        _ => return Err(WireError("unsupported native batch wire version")),
+    };
     let artifact_count = tokens.count(MAX_BATCH_ARTIFACTS)?;
     let case_count = tokens.count(MAX_BATCH_CASES)?;
     if case_count == 0 {
@@ -1154,7 +1205,7 @@ fn frame(wire: &[u8]) -> Result<Batch<'_>, WireError> {
     let mut artifacts = Vec::with_capacity(artifact_count as usize);
     let mut total = 0u64;
     for _ in 0..artifact_count {
-        let length = tokens.count(MAX_REGION_BYTES)?;
+        let length = tokens.count(envelope.region_bytes())?;
         total += u64::from(length);
         if length == 0 || total > MAX_BATCH_ARTIFACT_BYTES {
             return Err(WireError("artifacts must be nonempty and at most 256 MiB in total"));
@@ -1163,22 +1214,22 @@ fn frame(wire: &[u8]) -> Result<Batch<'_>, WireError> {
     }
     let mut cases = Vec::with_capacity(case_count as usize);
     for _ in 0..case_count {
-        let length = tokens.count(MAX_SCRIPT_WIRE_BYTES as u32)?;
+        let length = tokens.count(envelope.wire_bytes(true) as u32)?;
         cases.push(tokens.raw(length)?);
     }
     tokens.finish()?;
-    Ok(Batch { artifacts, cases })
+    Ok(Batch { artifacts, cases, envelope })
 }
 
 /// A batch region's initial bytes: `z` for zeros, or `s <artifact> <offset> <length>`
 /// for an artifact slice followed by zeros.
-fn slice(tokens: &mut Tokens<'_>, artifacts: &[&[u8]], bytes: u32) -> Result<Box<[u8]>, WireError> {
+fn slice(tokens: &mut Tokens<'_>, artifacts: &[&[u8]], bytes: u32, envelope: MemoryEnvelope) -> Result<Box<[u8]>, WireError> {
     let mut initial = vec![0u8; bytes as usize];
     match tokens.next()? {
         b"z" => {}
         b"s" => {
             let artifact = tokens.count(MAX_BATCH_ARTIFACTS)?;
-            let offset = tokens.count(MAX_REGION_BYTES)? as usize;
+            let offset = tokens.count(envelope.region_bytes())? as usize;
             let length = tokens.count(bytes)? as usize;
             let source = artifacts
                 .get(artifact as usize)

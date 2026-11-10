@@ -62,7 +62,7 @@ impl ScriptMemory {
             MemoryTarget::Register(register) => ("r", u32::from(register)),
             MemoryTarget::Indirect(register) => ("i", u32::from(register)),
         };
-        let hex: String = self.bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+        let hex = hex_bytes(&self.bytes);
         format!("{kind} {base:x} {:x} {:x} {hex}\n", self.offset as u32, self.bytes.len())
     }
 }
@@ -104,6 +104,7 @@ struct Case {
     /// The wire's kernel row of a kernel case.
     kernel: Option<String>,
     stack_contexts: Option<String>,
+    resource8: bool,
 }
 
 /// A kernel case's wire row; `None` is `n`.
@@ -120,6 +121,16 @@ impl Kernel {
         let token = |value: Option<u32>| value.map_or("n".to_owned(), |value| format!("{value:x}"));
         format!("k {} {} {} {}", token(self.stop), token(self.tpidrurw), token(self.cpacr), token(self.fpexc))
     }
+}
+
+fn hex_bytes(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut hex = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        hex.push(DIGITS[usize::from(byte >> 4)] as char);
+        hex.push(DIGITS[usize::from(byte & 15)] as char);
+    }
+    hex
 }
 
 fn words(words: &[u32]) -> Vec<u8> {
@@ -150,6 +161,7 @@ impl Case {
             identity: None,
             kernel: None,
             stack_contexts: None,
+            resource8: false,
         }
     }
 
@@ -222,7 +234,16 @@ impl Case {
     }
 
     fn wire(&self) -> String {
-        let header = if self.scripts.is_empty() { "FUJI_NATIVE_V1" } else { "FUJI_NATIVE_SCRIPT_V1" };
+        self.wire_with(|_, region| hex_bytes(&region.bytes))
+    }
+
+    fn wire_with(&self, initial: impl Fn(usize, &Region) -> String) -> String {
+        let header = match (self.resource8, self.scripts.is_empty()) {
+            (false, true) => "FUJI_NATIVE_V1",
+            (false, false) => "FUJI_NATIVE_SCRIPT_V1",
+            (true, true) => "FUJI_NATIVE_RESOURCE8_V1",
+            (true, false) => "FUJI_NATIVE_RESOURCE8_SCRIPT_V1",
+        };
         let mut text = format!(
             "{header}\ncortex-r5f-arm-le\n{:x} {:x} {} {}\n",
             self.entry, self.exit, self.instructions, self.wall_ms
@@ -239,9 +260,8 @@ impl Case {
             text += &format!("\n{contexts}");
         }
         text += &format!("\n{} {} {}\n", self.regions.len(), self.functions.len(), self.stubs.len() + self.scripts.len());
-        for region in &self.regions {
-            let hex: String = region.bytes.iter().map(|byte| format!("{byte:02x}")).collect();
-            text += &format!("{:x} {:x} {} {hex}\n", region.address, region.size, region.permission);
+        for (index, region) in self.regions.iter().enumerate() {
+            text += &format!("{:x} {:x} {} {}\n", region.address, region.size, region.permission, initial(index, region));
         }
         for (address, size) in &self.functions {
             text += &format!("{address:x} {size:x}\n");
@@ -2619,4 +2639,241 @@ fn malformed_stack_context_declarations_are_invalid() {
         let observed = case.run();
         assert_eq!(observed.status(), Status::InvalidCase, "{}", case.wire());
     }
+}
+
+const CACHE: u32 = 0x0100_0000;
+const CACHE_BYTES: usize = 0x420000;
+
+#[test]
+fn resource8_executes_against_the_whole_calibration_cache() {
+    let mut cache = vec![0x5a; CACHE_BYTES];
+    cache[..4].copy_from_slice(&7u32.to_le_bytes());
+    cache[CACHE_BYTES - 4..].copy_from_slice(&11u32.to_le_bytes());
+    let mut case = Case::new(&[
+        LDR_R0_R1, ADD_R0_1, 0xe581_0000,
+        0xe592_3000, 0xe283_3001, 0xe582_3000, BX_LR,
+    ])
+    .region(CACHE, READ_WRITE, &cache)
+    .register(1, CACHE)
+    .register(2, CACHE + CACHE_BYTES as u32 - 4)
+    .register(4, 0x12345678)
+    .register(11, 0x87654321);
+    assert_eq!(case.run().status(), Status::InvalidCase);
+    case.resource8 = true;
+    let observed = case.run();
+    observed.assert_returned();
+    assert_eq!(observed.register("r0"), 8);
+    assert_eq!(observed.register("r3"), 12);
+    for (register, expected) in [("r4", 0x12345678), ("r11", 0x87654321), ("sp", SP), ("lr", EXIT)] {
+        assert_eq!(observed.register(register), expected);
+    }
+    let actual = observed.bytes(CACHE);
+    assert_eq!(&actual[..8], "08000000");
+    assert_eq!(&actual[8..actual.len() - 8], "5a".repeat(CACHE_BYTES - 8));
+    assert_eq!(&actual[actual.len() - 8..], "0c000000");
+    assert_eq!(observed.bytes(STACK), "00".repeat(0x100));
+}
+
+#[test]
+fn resource8_mapped_boundary_is_exact_and_default_stays_bounded() {
+    let mut case = Case::new(&[BX_LR]);
+    case.resource8 = true;
+    let bytes = 8 * 1024 * 1024 - 0x200;
+    case.regions.push(Region { address: CACHE, size: bytes, permission: READ_WRITE, bytes: vec![0; bytes as usize] });
+    case.run().assert_returned();
+    case.regions.last_mut().unwrap().size += 1;
+    case.regions.last_mut().unwrap().bytes.push(0);
+    assert_eq!(case.run().status(), Status::InvalidCase);
+    case.regions.last_mut().unwrap().size = 8 * 1024 * 1024 + 1;
+    assert_eq!(case.run().status(), Status::InvalidCase);
+    case.resource8 = false;
+    case.regions.last_mut().unwrap().size = 2 * 1024 * 1024 + 1;
+    assert_eq!(case.run().status(), Status::InvalidCase);
+    case.regions.pop();
+    for index in 0..2 {
+        case.regions.push(Region {
+            address: CACHE + index * 0x200000,
+            size: 2 * 1024 * 1024,
+            permission: READ_WRITE,
+            bytes: vec![0; 2 * 1024 * 1024],
+        });
+    }
+    assert_eq!(case.run().status(), Status::InvalidCase);
+}
+
+#[test]
+fn resource8_script_writes_a_large_contract_through_its_far_end() {
+    let mut effect = vec![0x6b; CACHE_BYTES];
+    effect[CACHE_BYTES - 4..].copy_from_slice(&0x76543210u32.to_le_bytes());
+    let mut case = Case::new(&[PUSH_LR, branch(CODE + 4, STUB, true), LDR_R0_R1, POP_PC])
+        .region(CACHE, READ_WRITE, &vec![0x5a; CACHE_BYTES])
+        .register(1, CACHE + CACHE_BYTES as u32 - 4)
+        .script(STUB, vec![ScriptCall {
+            writes: vec![ScriptMemory { target: MemoryTarget::Absolute(CACHE), offset: 0, bytes: effect }],
+            ..ScriptCall::default()
+        }]);
+    assert_eq!(case.run().status(), Status::InvalidCase);
+    case.resource8 = true;
+    let observed = case.run();
+    observed.assert_returned();
+    assert_eq!(observed.register("r0"), 0x76543210);
+    let actual = observed.bytes(CACHE);
+    assert_eq!(&actual[..actual.len() - 8], "6b".repeat(CACHE_BYTES - 4));
+    assert_eq!(&actual[actual.len() - 8..], "10325476");
+    assert_eq!(observed.register("sp"), SP);
+}
+
+#[test]
+fn resource_envelopes_preserve_execution_refusals() {
+    let cases = [
+        (Case::new(&[LDR_R0_R1, BX_LR]).register(1, CACHE), Status::MemoryGuard),
+        (Case::new(&[0xe581_0000, BX_LR]).register(1, CACHE).region(CACHE, READ, &[0; 4]), Status::MemoryGuard),
+        (Case::new(&[branch(CODE, CODE + 0x80, false)]), Status::UnknownCall),
+        (Case::new(&[0xef00_0000, BX_LR]), Status::UnsupportedInstruction),
+        (Case::new(&[branch(CODE, STUB, false)])
+            .register(1, u32::MAX - 1)
+            .script(STUB, vec![ScriptCall {
+                writes: vec![ScriptMemory::new(MemoryTarget::Indirect(1), 0, &[9; 4])],
+                ..ScriptCall::default()
+            }]), Status::MemoryGuard),
+        (Case::new(&[LDREX_R1_R2, branch(CODE + 4, STUB, false)])
+            .kernel(Kernel::default())
+            .register(2, CACHE)
+            .region(CACHE, READ_WRITE, &[0; 4])
+            .script(STUB, vec![ScriptCall {
+                writes: vec![ScriptMemory::new(MemoryTarget::Absolute(CACHE), 0, &[9; 4])],
+                ..ScriptCall::default()
+            }]), Status::UnsupportedInstruction),
+    ];
+    for (case, status) in cases {
+        for resource8 in [false, true] {
+            let mut case = case.clone();
+            case.resource8 = resource8;
+            let observed = case.run();
+            assert_eq!(observed.status(), status);
+            assert!(!observed.returned);
+            assert!(observed.observation.events.is_empty());
+            if let Some(memory) = observed.observation.memory.iter().find(|memory| memory.address == "0x01000000") {
+                assert_eq!(memory.bytes.as_deref(), Some("00000000"));
+            }
+        }
+    }
+}
+
+#[test]
+fn resource8_contract_aggregate_boundary_is_exact() {
+    let row = ScriptMemory { target: MemoryTarget::Absolute(CACHE), offset: 0, bytes: vec![0; 4 * 1024 * 1024] };
+    let mut case = Case::new(&[branch(CODE, STUB, false)])
+        .region(CACHE, READ_WRITE, &row.bytes)
+        .script(STUB, vec![ScriptCall { reads: vec![row.clone(), row], ..ScriptCall::default() }]);
+    case.resource8 = true;
+    case.run().assert_returned();
+    case.scripts[0].calls[0].reads.push(ScriptMemory::new(MemoryTarget::Absolute(CACHE), 0, &[0]));
+    assert_eq!(case.run().status(), Status::InvalidCase);
+    case.scripts[0].calls[0].reads[0].bytes.resize(8 * 1024 * 1024 + 1, 0);
+    assert_eq!(case.run().status(), Status::InvalidCase);
+}
+
+fn batch_case(case: &Case) -> String {
+    case.wire_with(|index, region| format!("s {index} 0 {}", region.bytes.len()))
+}
+
+fn batch_wire(header: &str, artifacts: &[Region], bodies: &[String]) -> Vec<u8> {
+    let mut wire = format!("{header}\n{} {}\n", artifacts.len(), bodies.len()).into_bytes();
+    for artifact in artifacts {
+        wire.extend_from_slice(format!("{}\n", artifact.bytes.len()).as_bytes());
+        wire.extend_from_slice(&artifact.bytes);
+        wire.push(b'\n');
+    }
+    for body in bodies {
+        wire.extend_from_slice(format!("{}\n", body.len()).as_bytes());
+        wire.extend_from_slice(body.as_bytes());
+        wire.push(b'\n');
+    }
+    wire
+}
+
+#[test]
+fn resource8_batch_framing_is_opt_in_and_default_cases_keep_their_limits() {
+    let mut resource = Case::new(&[LDR_R0_R1, BX_LR])
+        .region(CACHE, READ_WRITE, &vec![0x5a; CACHE_BYTES])
+        .register(1, CACHE + CACHE_BYTES as u32 - 4);
+    resource.resource8 = true;
+    let resource_body = batch_case(&resource);
+    let default_body = batch_case(&Case::new(&[LDR_R0_R1, BX_LR])
+        .register(1, STACK));
+    let bodies = [resource_body.clone(), default_body];
+    let mut output = Vec::new();
+    assert!(!native_case::run_batch(&batch_wire("FUJI_NATIVE_BATCH_V1", &resource.regions, &bodies), &mut output).unwrap());
+    output.clear();
+    assert!(native_case::run_batch(&batch_wire("FUJI_NATIVE_RESOURCE8_BATCH_V1", &resource.regions, &bodies), &mut output).unwrap());
+    let text = String::from_utf8(output).unwrap();
+    let lines: Vec<_> = text.lines().collect();
+    assert_eq!(lines[0], "FUJI_NATIVE_BATCH_CASE 0 0");
+    let observation: Observation = serde_json::from_str(lines[1]).unwrap();
+    assert_eq!(observation.status, Status::Returned);
+    assert_eq!(word(&observation.registers["r0"]), 0x5a5a5a5a);
+    assert_eq!(lines[2], "FUJI_NATIVE_BATCH_CASE 1 0");
+    let observation: Observation = serde_json::from_str(lines[3]).unwrap();
+    assert_eq!(observation.status, Status::Returned);
+    assert_eq!(word(&observation.registers["r0"]), 0);
+    resource.resource8 = false;
+    let body = batch_case(&resource);
+    let mut output = Vec::new();
+    assert!(native_case::run_batch(&batch_wire("FUJI_NATIVE_RESOURCE8_BATCH_V1", &resource.regions, &[body]), &mut output).unwrap());
+    let text = String::from_utf8(output).unwrap();
+    let observation: Observation = serde_json::from_str(text.lines().nth(1).unwrap()).unwrap();
+    assert_eq!(observation.status, Status::InvalidCase);
+}
+
+#[test]
+fn resource8_wire_ceiling_does_not_widen_default_headers() {
+    for scripted in [false, true] {
+        let mut case = Case::new(&[BX_LR]);
+        if scripted {
+            case = case.script(STUB, Vec::new());
+        }
+        let mut wire = case.wire();
+        wire.extend(std::iter::repeat_n(' ', 21 * 1024 * 1024));
+        assert_eq!(observe(wire.as_bytes()).status(), Status::InvalidCase);
+        case.resource8 = true;
+        let mut wire = case.wire();
+        wire.extend(std::iter::repeat_n(' ', 21 * 1024 * 1024));
+        observe(wire.as_bytes()).assert_returned();
+        let mut body = batch_case(&case);
+        body.extend(std::iter::repeat_n(' ', 21 * 1024 * 1024));
+        let mut output = Vec::new();
+        assert!(!native_case::run_batch(&batch_wire("FUJI_NATIVE_BATCH_V1", &case.regions, std::slice::from_ref(&body)), &mut output).unwrap());
+        output.clear();
+        assert!(native_case::run_batch(&batch_wire("FUJI_NATIVE_RESOURCE8_BATCH_V1", &case.regions, &[body]), &mut output).unwrap());
+        let text = String::from_utf8(output).unwrap();
+        let observation: Observation = serde_json::from_str(text.lines().nth(1).unwrap()).unwrap();
+        assert_eq!(observation.status, Status::Returned);
+        wire = case.wire();
+        wire.extend(std::iter::repeat_n(' ', native_case::MAX_RESOURCE_WIRE_BYTES + 1 - wire.len()));
+        assert_eq!(observe(wire.as_bytes()).status(), Status::InvalidCase);
+    }
+}
+
+#[test]
+fn resource8_batch_artifact_boundary_and_header_admission_are_exact() {
+    let mut case = Case::new(&[BX_LR]);
+    let default_body = batch_case(&case);
+    case.resource8 = true;
+    let resource_body = batch_case(&case);
+    let mut output = Vec::new();
+    assert!(native_case::run_batch(&batch_wire("FUJI_NATIVE_BATCH_V1", &case.regions, &[resource_body]), &mut output).unwrap());
+    let text = String::from_utf8(output).unwrap();
+    let observation: Observation = serde_json::from_str(text.lines().nth(1).unwrap()).unwrap();
+    assert_eq!(observation.status, Status::InvalidCase);
+    let mut artifacts = case.regions;
+    artifacts.push(Region { address: CACHE, size: 8 * 1024 * 1024, permission: READ, bytes: vec![0; 8 * 1024 * 1024] });
+    let mut output = Vec::new();
+    assert!(native_case::run_batch(&batch_wire("FUJI_NATIVE_RESOURCE8_BATCH_V1", &artifacts, std::slice::from_ref(&default_body)), &mut output).unwrap());
+    let text = String::from_utf8(output).unwrap();
+    let observation: Observation = serde_json::from_str(text.lines().nth(1).unwrap()).unwrap();
+    assert_eq!(observation.status, Status::Returned);
+    artifacts.last_mut().unwrap().bytes.push(0);
+    let mut output = Vec::new();
+    assert!(!native_case::run_batch(&batch_wire("FUJI_NATIVE_RESOURCE8_BATCH_V1", &artifacts, &[default_body]), &mut output).unwrap());
 }
