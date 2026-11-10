@@ -131,6 +131,8 @@ Both affected host suites pass on the repair. A file-only run of the rebuilt pub
 
 The new scope default and maximum are 4 GiB; the topic retains its existing two-slot concurrency. Its rebuilt slot tests pass, a real cgroup probe reads `memory.max=4294967296`, and an 8G request refuses before execution. Later common host-concurrency changes remain separate from these recorded runs. The current producer archive, SDK, canonical RTC, runtime, checker pin and original ten receipt identities are unchanged.
 
+Main integration at `61481dec` rejudges all 67 original pairs with four concurrent bounded verification processes. All 201 engine, settings and render comparisons pass in 879.49 seconds without guest replay or clock masks. The indexed checks, original role bindings and main-consumer digests are retained in `private-data/scratch/RenderMainAdmission/main-rejudgment.json` (`E-RENDER-R1-MAIN-COHORT-150`). This does not qualify the expanded tree/picker classes or the retained summary-buffer correction tracked in [#161](https://github.com/skeet70/latent-image/issues/161).
+
 ### Executed defect controls
 
 Native widget controls and receipt mutations prove different boundaries. The native cases in the widget contracts execute the loop over declared service stubs. `RenderComparisonTests` mutates receipt fields and image bytes to exercise the host consumer. Neither establishes that a packaged guest executed a defective drawer.
