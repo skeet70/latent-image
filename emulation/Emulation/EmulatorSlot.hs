@@ -46,7 +46,6 @@ slotVariable = "XM1_EMULATOR_SLOT"
 slotsVariable = "XM1_EMULATOR_SLOTS"
 memoryVariable = "XM1_EMULATOR_MEMORY_MAX"
 
--- | The host budget: slot locks 1 and 2.
 hostSlots :: Int
 hostSlots = classConcurrency Emulator
 

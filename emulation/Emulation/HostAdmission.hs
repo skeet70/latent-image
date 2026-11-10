@@ -1,10 +1,4 @@
 -- | Host resource classes and admitted Bazel commands.
---
--- 'Build' admits two Bazel commands host-wide using byte-range locks on
--- @~/.cache/xm1-host-build/build.lock@. Each runs as @bazel --batch@ in a 6 GiB
--- systemd user scope. 'Emulator' admits two runs of at most 4 GiB each.
--- The 20 GiB maximum leaves 10.4 GiB for the OS, interactive work and Nix
--- daemon builders, which run outside these scopes.
 module Emulation.HostAdmission
   ( ResourceClass (..)
   , MemoryMax (..)
@@ -51,7 +45,7 @@ newtype MemoryMax = MemoryMax String
 -- | Simultaneous admissions host-wide.
 classConcurrency :: ResourceClass -> Int
 classConcurrency Build = 2
-classConcurrency Emulator = 2
+classConcurrency Emulator = 6
 
 -- | The memory cap of one admission; an emulator run may ask for less.
 classMemoryMax :: ResourceClass -> MemoryMax

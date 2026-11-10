@@ -1,11 +1,7 @@
--- | Slot admission through the library: two probes limited to one slot each
--- hold both host slots at once, and a third waits, survives replacement of its
--- executable on disk, and re-executes the original program into the slot the
--- first releases.
 module Main (main) where
 
 import Control.Exception (IOException, try)
-import Control.Monad (unless)
+import Control.Monad (replicateM, unless)
 import Data.IORef (modifyIORef, newIORef, readIORef)
 import Data.List (isInfixOf, sort, stripPrefix)
 import Data.Maybe (fromMaybe)
@@ -63,37 +59,38 @@ run source = do
   environment <- probeEnvironment home
   first <- spawnProbe source environment
   firstAdmission <- admission first
-  second <- spawnProbe source environment
-  secondAdmission <- admission second
-  bothOk <- expect "two probes limited to one slot each hold both host slots at once"
-    (sort (map admittedSlot [firstAdmission, secondAdmission]) == [Just "1", Just "2"])
-  let Admission firstLines _ = firstAdmission
-      Admission secondLines _ = secondAdmission
-  memoryOk <- expect "both admitted scopes enforce the 4 GiB verification budget"
-    (all (elem "probe-memory-max 4294967296") [firstLines, secondLines])
+  others <- replicateM 5 $ do
+    other <- spawnProbe source environment
+    observed <- admission other
+    pure (other, observed)
+  let admissions = firstAdmission : map snd others
+  bothOk <- expect "six independent probes hold all host slots concurrently"
+    (sort (map admittedSlot admissions) == map (Just . show) [1 .. 6 :: Int])
+  memoryOk <- expect "all admitted scopes enforce the 4 GiB verification cap"
+    (all (\(Admission seen _) -> "probe-memory-max 4294967296" `elem` seen) admissions)
   copyFile source probe
   setFileMode probe 0o700
-  third <- spawnProbe probe environment
-  beginning <- try (hGetLine (probeOut third)) :: IO (Either IOException String)
-  startedOk <- expect "a third probe starts while both slots are held" (beginning == Right "probe-starting")
+  waiting <- spawnProbe probe environment
+  beginning <- try (hGetLine (probeOut waiting)) :: IO (Either IOException String)
+  startedOk <- expect "a seventh probe starts while all slots are held" (beginning == Right "probe-starting")
   removeFile probe
   writeFile probe replacementScript
   setFileMode probe 0o700
-  pending <- try (hWaitForInput (probeOut third) 3000) :: IO (Either IOException Bool)
-  finished <- getProcessExitCode (probeProcess third)
-  waitedOk <- expect "the third probe still waits after its executable is replaced"
+  pending <- try (hWaitForInput (probeOut waiting) 3000) :: IO (Either IOException Bool)
+  finished <- getProcessExitCode (probeProcess waiting)
+  waitedOk <- expect "the waiting probe survives replacement of its executable"
     (pending == Right False && finished == Nothing)
   release first
-  thirdAdmission <- admission third
-  takenOk <- expect "the third probe takes the slot the first releases"
-    (admittedSlot thirdAdmission == admittedSlot firstAdmission)
-  release second
-  release third
-  codes <- mapM (waitForProcess . probeProcess) [first, second, third]
+  waitingAdmission <- admission waiting
+  takenOk <- expect "the waiting probe takes the released slot"
+    (admittedSlot waitingAdmission == admittedSlot firstAdmission)
+  mapM_ (release . fst) others
+  release waiting
+  codes <- mapM (waitForProcess . probeProcess) (first : map fst others ++ [waiting])
   codeOk <- expect "every probe exits successfully" (all (== ExitSuccess) codes)
-  let Admission thirdLines _ = thirdAdmission
+  let Admission waitingLines _ = waitingAdmission
   originalOk <- expect "the re-exec runs the original program, not the replacement"
-    (not (any ("replacement-ran" `isInfixOf`) thirdLines))
+    (not (any ("replacement-ran" `isInfixOf`) waitingLines))
   let sessionless = root </> "probe-sessionless"
   copyFile source sessionless
   setFileMode sessionless 0o700
@@ -117,7 +114,7 @@ run source = do
     (overBudgetCode /= ExitSuccess && not (any (isInfixOf "probe-in-slot ") (lines overBudgetOutput)))
   let outcomes = [bothOk, memoryOk, startedOk, waitedOk, takenOk, codeOk, originalOk, sessionlessOk, storageOk, capOk]
       shown (Admission seen slot) = show seen ++ " -> " ++ show slot
-  unless (and outcomes) $ putStrLn ("probe admissions: " ++ unwords (map shown [firstAdmission, secondAdmission, thirdAdmission, aloneAdmission]))
+  unless (and outcomes) $ putStrLn ("probe admissions: " ++ unwords (map shown (admissions ++ [waitingAdmission, aloneAdmission])))
   pure (and outcomes)
 
 -- | Reads a probe's stdout through its in-slot report, to end of file, or for
