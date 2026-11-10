@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Main (main) where
 
+import Control.Monad (forM_, unless)
 import qualified Data.Aeson as J
 import qualified Data.ByteString as B
 import Data.List (isPrefixOf)
@@ -64,13 +65,13 @@ callOf = callOfTask 0x9000
 callOfTask :: Word32 -> Domain -> Word32 -> Semantic -> [Word32] -> Memory -> Memory -> Word32 -> [Written] -> CallTrace -> Call
 callOfTask task domain address semantic arguments before after r0 writes trace =
   Call domain (Address address) semantic (if domain==DomainA then 0 else 1) 0x13 (Arguments arguments)
-    before after r0 0x13 writes [] 1 10 (Just trace) task 1 Nothing (map (const (originAtFor task address)) writes) [] S.empty
+    before after r0 0x13 writes [] 1 10 (Just trace) task 0 Nothing (map (const (originAtFor task address)) writes) [] S.empty
 
 originAtFor :: Word32 -> Word32 -> WriteOrigin
 originAtFor task address = originAtForWith task 1 address
 
 originAtForWith :: Word32 -> Word32 -> Word32 -> WriteOrigin
-originAtForWith task instructions address = WriteOrigin 0 (Address address) (Address 0x9000) 0x13 (Address task) 1 (fromIntegral instructions)
+originAtForWith task instructions address = WriteOrigin 0 (Address address) (Address 0x9000) 0x13 (Address task) 0 (fromIntegral instructions)
 
 signalAddress, pollAddress, timedAddress, callbackA, timerA :: Word32
 signalAddress = 0x47604
@@ -182,7 +183,7 @@ timerInsertBoundary :: Boundary
 timerInsertBoundary = Boundary TimerInsertBoundary (Address 0x44c60) 1 0 (registers (replicate 16 0)) timerMemory [] [] (Just timerA) taskA [] [] S.empty
 
 timerMemory :: Memory
-timerMemory = M.fromList [(Address (timerA+4), callbackA), (Address (timerA+8), taskA)]
+timerMemory = M.fromList [(Address handlerA, 0), (Address (timerA+4), callbackA), (Address (timerA+8), taskA)]
 
 timerRemoveBoundary :: Boundary
 timerRemoveBoundary = Boundary TimerRemoveBoundary (Address 0x44ca8) 1 0 (registers (replicate 16 0)) timerMemory [] [] (Just timerA) taskA [] [] S.empty
@@ -405,6 +406,111 @@ refusesBudget label expected calls pendings = case streamingVerdict [] calls pen
 
 main :: IO ()
 main = do
+  -- Project-authored synthetic state with a stock software-timer insertion boundary.
+  let foreignInsert = Boundary TimerInsertBoundary (Address 0x44c60) 11 0
+        (registers (replicate 13 0 ++ [0x70001fbc,0x4bea8,0]))
+        (M.singleton (Address handlerA) 1) [] [] (Just 0x40059838) 0x9000 [] [] S.empty
+      foreignTimers = (callOf DomainA signalAddress (SemaphoreSemantic SemaphoreSignal) [1,0,0,0]
+        (baseBefore 0 5 controlA) (baseBefore 1 5 controlA) 0
+        [Written (Address (controlA+0x0c)) 4 1] (traceOf (replicate 16 0) [foreignInsert] Returned))
+        { callTaskStack = Just (TaskStack (Address 0x8000) (Address 0xa000)) }
+      changeInsert change call = call { callTrace = fmap (\trace -> trace
+        { traceHistory = map (\boundary -> if boundaryKind boundary == TimerInsertBoundary then change boundary else boundary)
+            (traceHistory trace) }) (callTrace call) }
+      callerInsert boundary = boundary
+        { boundaryMemory = M.insert (Address handlerA) 0 (boundaryMemory boundary)
+        , boundaryRegisters = (boundaryRegisters boundary)
+            { D.registers = take 13 (D.registers (boundaryRegisters boundary))
+                ++ [0x9000] ++ drop 14 (D.registers (boundaryRegisters boundary)) } }
+      unreadableInsert boundary = (callerInsert boundary)
+        { boundaryMemory = M.delete (Address handlerA) (boundaryMemory boundary)
+        , boundaryUnreadable = S.insert (Address handlerA) (boundaryUnreadable boundary) }
+  forM_ [Stock, Owned] $ \role -> do
+    forM_ [("foreign software timer", foreignTimers, Right ())
+          ,("caller non-semaphore timer", changeInsert callerInsert foreignTimers, Left FamilyTimer)
+          ,("unreadable timer ownership", changeInsert unreadableInsert foreignTimers, Left FamilyContinuation)] $ \(label, call, expected) ->
+      unless (checkCallForIn [call] role call == expected)
+        (error (show role ++ " " ++ label ++ ": " ++ show (checkCallForIn [call] role call)))
+  forM_ [Stock, Owned] $ \role ->
+    forM_ [TimerInsertBoundary, TimerRemoveBoundary, TimerConsumeBoundary] $ \kind -> do
+      let callerEvent = timerInsertBoundary
+            { boundaryKind = kind, boundaryTask = 0x9000, boundaryInstructions = 11
+            , boundaryAddress = Address (if kind == TimerConsumeBoundary then callbackA else if kind == TimerRemoveBoundary then 0x44ca8 else 0x44c60)
+            , boundaryRegisters = registers (replicate 13 0 ++ [0x9000,0,0]) }
+          foreignEvent = callerEvent
+            { boundaryMemory = M.insert (Address handlerA) 1 (boundaryMemory callerEvent)
+            , boundaryRegisters = registers (replicate 13 0 ++ [0x70001fbc,0,0]) }
+          unreadableEvent = callerEvent
+            { boundaryMemory = M.delete (Address handlerA) (boundaryMemory callerEvent)
+            , boundaryUnreadable = S.singleton (Address handlerA) }
+          withEvent original event =
+            let timerState = M.fromList [(Address (timerA+4), callbackA), (Address (timerA+8), callTask original)]
+            in original
+              { callBefore = M.union timerState (callBefore original)
+              , callAfter = M.union timerState (callAfter original)
+              , callTaskStack = Just (TaskStack (Address 0x8000) (Address 0xa000))
+              , callTrace = Just (traceOf (replicate 16 0) [event] Returned) }
+          refused = (pollCall 0 0xffffffee 0) { callArguments = Arguments [251,0,0,0] }
+      forM_ [("poll", pollCall 1 0 0), ("refused", refused), ("timed poll", zeroTimeoutCall 0xffffffce [])] $ \(label, original) -> do
+        let eventForTask event = event { boundaryTask = callTask original }
+        forM_ [("foreign", foreignEvent, Right ()), ("caller", callerEvent, Left FamilyTimer)
+              ,("unreadable", unreadableEvent, Left FamilyContinuation)] $ \(owner, event, expected) -> do
+          let call = withEvent original (eventForTask event)
+          unless (checkCallForIn [call] role call == expected)
+            (error (show (role,kind) ++ " " ++ label ++ " " ++ owner ++ ": " ++ show (checkCallForIn [call] role call)))
+  forM_ [Stock, Owned] $ \role -> do
+    let valid = pollCall 1 0 0
+        missing = valid
+          { callBefore = M.delete (Address (configA+0x0c)) (callBefore valid)
+          , callAfter = M.delete (Address (configA+0x0c)) (callAfter valid)
+          , callUnreadable = S.singleton (Address (configA+0x0c)) }
+        check label expected call = unless (checkCallFor role call == expected)
+          (error (show role ++ " " ++ label ++ ": " ++ show (checkCallFor role call)))
+    check "valid poll" (Right ()) valid
+    check "forged decrement" (Left FamilyEffect) (pollCall 1 0 1)
+    check "missing creation evidence" (Left FamilyEffect) missing
+    check "missing continuation evidence" (Left FamilyContinuation) (valid { callTrace = Nothing })
+    check "invalid poll id" (Right ()) ((pollCall 0 0xffffffee 0) { callArguments = Arguments [251,0,0,0] })
+  let outsideConfig = configA + 250 * 0x10
+      outsideCount = controlA + 250 * 0x10 + 0x0c
+      request = 0x3000
+      createBefore = M.fromList
+        [ (Address request, 0), (Address (request+4), 1), (Address (request+8), 2)
+        , (Address outsideConfig, 0), (Address (outsideConfig+4), 0), (Address (outsideConfig+8), 0)
+        , (Address (outsideConfig+0x0c), 0), (Address outsideCount, 0) ]
+      created = M.fromList
+        [ (Address outsideConfig, 0), (Address (outsideConfig+4), 1), (Address (outsideConfig+8), 2)
+        , (Address (outsideConfig+0x0c), 1), (Address outsideCount, 1) ]
+      createWrites = [Written address 4 value | (address,value) <- M.toList created]
+      stockCreate = callOf DomainA 0x4d2a8 (SemaphoreSemantic SemaphoreCreate) [251,request,0,0]
+        createBefore (M.union created createBefore) 0 createWrites (traceOf (replicate 16 0) [] Returned)
+      ownedCreate = callOf DomainA 0x4d2a8 (SemaphoreSemantic SemaphoreCreate) [251,request,0,0]
+        createBefore createBefore 0xffffffee [] (traceOf (replicate 16 0) [] Returned)
+  forM_ [(Stock, stockCreate, ownedCreate), (Owned, ownedCreate, stockCreate)] $ \(role, valid, invalid) -> do
+    unless (checkCallFor role valid == Right ()) (error (show role ++ " create indexing: " ++ show (checkCallFor role valid)))
+    case checkCallFor role invalid of
+      Left _ -> pure ()
+      Right () -> error (show role ++ " accepted other role create indexing")
+  let deleteBefore = waiterBefore 4
+      reset = M.fromList
+        [ (Address configA, 0), (Address (configA+4), 1), (Address (configA+8), 1)
+        , (Address (configA+0x0c), 0), (Address (controlA+0x0c), 1) ]
+      deleteAfter = M.union reset deleteBefore
+      deleteWrites = [Written address 4 value | (address,value) <- M.toList reset]
+      stockDelete = callOf DomainA 0x4d338 (SemaphoreSemantic SemaphoreDelete) [1,0,0,0]
+        deleteBefore deleteAfter 0 deleteWrites (traceOf (replicate 16 0) [] Returned)
+      released = M.fromList
+        [ (Address controlA, controlA), (Address (controlA+4), controlA), (Address waitA, 0xffffffcf) ]
+      ownedDelete = stockDelete
+        { callAfter = M.union released deleteAfter
+        , callWrites = deleteWrites ++ [Written address 4 value | (address,value) <- M.toList released]
+        , callWriteOrigins = map (const (originAtFor 0x9000 0x4d338)) (deleteWrites ++ [Written address 4 value | (address,value) <- M.toList released]) }
+  forM_ [(Stock, stockDelete), (Owned, ownedDelete)] $ \(role, valid) -> do
+    unless (checkCallFor role valid == Right ()) (error (show role ++ " delete law: " ++ show (checkCallFor role valid)))
+    let other = if role == Stock then ownedDelete else stockDelete
+    case checkCallFor role other of
+      Left _ -> pure ()
+      Right () -> error (show role ++ " accepted other role delete effect")
   retained <- either error pure . J.eitherDecodeStrict' =<< B.readFile "emulation/semaphore-signal-rewait.json"
   case checkCall retained of
     Right () -> pure ()
@@ -460,6 +566,13 @@ main = do
   mapM_ (\(label, invalid) -> case checkCall invalid of
     Left _ -> pure ()
     Right () -> error ("signal suspension accepted " ++ label)) invalidSaves
+  forM_ [Stock, Owned] $ \role -> do
+    forM_ [("retained signal", retained), ("foreign interrupt", interruptedCaller)] $ \(label, valid) ->
+      unless (checkCallFor role valid == Right ()) (error (show role ++ " " ++ label ++ ": " ++ show (checkCallFor role valid)))
+    forM_ (("caller corruption", corruptCaller) : ("missing suspension", unreadableSave) : invalidSaves) $ \(label, invalid) ->
+      case checkCallFor role invalid of
+        Left _ -> pure ()
+        Right () -> error (show role ++ " accepted " ++ label)
   let changedEndpoint kind change = changeHistory (\boundary -> if boundaryKind boundary == kind then change boundary else boundary) retained
       wrongMode boundary = boundary { boundaryRegisters = (boundaryRegisters boundary) { D.processorState = 0x92 } }
       wrongContext boundary = boundary { boundaryMemory = M.insert (Address 0x400545a4) 1 (boundaryMemory boundary) }

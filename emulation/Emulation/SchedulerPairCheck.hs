@@ -679,7 +679,6 @@ checkCallForInWitnesses witnesses role call = do
     DispatchSemantic point -> dispatchTags role point call >> pure ()
     TaskRecordSemantic point -> checkTaskRecordCall role point call
     FamilySemantic _ -> checkFamilyCall call witnesses
-    SemaphoreSemantic _ | role == Stock -> pure ()
     SemaphoreSemantic _ -> checkSemaphoreCall role call witnesses
     ServiceSemantic service -> checkServiceCall service call
 
@@ -704,7 +703,7 @@ checkFamilyCall call witnesses = case F.checkFamilyCall call witnesses of
   Left refusal -> Left (familyRefusal refusal)
 
 checkSemaphoreCall :: Role -> Call -> [F.TimerWitness] -> Either Refusal ()
-checkSemaphoreCall _role call witnesses = case Sem.checkSemaphoreCall call witnesses of
+checkSemaphoreCall role call witnesses = case Sem.checkSemaphoreCall role call witnesses of
   Right () -> Right ()
   Left refusal -> Left (familyRefusal refusal)
 
@@ -732,6 +731,22 @@ instance Sem.SemaphoreCall Call where
   semaphoreTrace call = fmap familyTraceOf (callTrace call)
   semaphoreWriters call = [if ownsOrigin call origin then Sem.SignalCaller else Sem.OtherWriter | origin <- callWriteOrigins call]
   semaphoreSuspension = callerSuspension
+  semaphoreTimerWriter call witness = do
+    trace <- maybe (Left F.FamilyContinuation) Right (callTrace call)
+    let kind = case F.timerKind witness of
+          F.TimerInserted -> TimerInsertBoundary
+          F.TimerRemoved -> TimerRemoveBoundary
+          F.TimerConsumed -> TimerConsumeBoundary
+        select previous boundary
+          | boundaryKind boundary /= kind
+            || boundaryInstructions boundary /= F.timerArmedAt witness
+            || boundaryValue boundary /= Just (F.timerEntry witness) = Right previous
+          | otherwise = case boundaryOwnership call boundary of
+              CallerBoundary -> Right (Just Sem.SignalCaller)
+              ForeignBoundary -> Right (case previous of Nothing -> Just Sem.OtherWriter; _ -> previous)
+              UnreadableBoundary -> Left F.FamilyContinuation
+    writer <- foldM select Nothing (traceHistory trace)
+    maybe (Left F.FamilyTimer) Right writer
 
 instance F.FamilyCall Call where
   familyDomain = callDomain

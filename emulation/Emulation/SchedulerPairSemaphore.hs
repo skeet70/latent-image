@@ -5,7 +5,7 @@
 module Emulation.SchedulerPairSemaphore
   ( SemaphoreCall (..), SemaphoreWriter (..), checkSemaphoreCall, checkPendingSemaphore, SemaphoreLayout (..), semaphoreLayout, semaphoreWindows ) where
 
-import Control.Monad (foldM, forM_, unless, when)
+import Control.Monad (filterM, foldM, forM_, unless, when)
 import Data.Bits ((.&.), (.|.), complement, shiftL, shiftR)
 import qualified Data.Map.Strict as M
 import Data.Word (Word32, Word64)
@@ -34,6 +34,7 @@ class SemaphoreCall c where
   semaphoreTrace :: c -> Maybe FamilyTrace
   semaphoreSuspension :: c -> Either FamilyRefusal (Maybe FamilySuspension)
   semaphoreWriters :: c -> [SemaphoreWriter]
+  semaphoreTimerWriter :: c -> TimerWitness -> Either FamilyRefusal SemaphoreWriter
 
 expect :: FamilyRefusal -> Bool -> Either FamilyRefusal ()
 expect refusal valid = unless valid (Left refusal)
@@ -135,7 +136,12 @@ data Admission = Refused Word32 | Admitted (Domain, Word32)
 
 admission :: SemaphoreCall c => Role -> c -> SemaphoreService -> Domain -> Word32 -> Either FamilyRefusal Admission
 admission role call service domain idWord
-  | role == Stock && invalid = Left FamilyReturn
+  | role == Stock && service `elem` [SemaphoreCreate, SemaphoreDelete] =
+      if service == SemaphoreCreate
+        then do
+          exists <- wordAt (configAddress domain slot + 0x0c) (semaphoreBefore call)
+          pure (if exists /= 0 then Refused statusAlreadyExists else Admitted (domain, slot))
+        else pure (Admitted (domain, slot))
   | service `elem` [SemaphoreCreate, SemaphoreDelete] = do
       if invalid then pure (Refused statusInvalid) else do
         exists <- wordAt (configAddress domain slot + 0x0c) (semaphoreBefore call)
@@ -179,11 +185,8 @@ queueTasks memory control = go (0 :: Int) =<< wordAt control memory
 waiterWait :: Memory -> Word32 -> Either FamilyRefusal Word32
 waiterWait memory task = wordAt (task + 0x14) memory
 
-checkSemaphoreCall :: SemaphoreCall c => c -> [TimerWitness] -> Either FamilyRefusal ()
-checkSemaphoreCall = checkSemaphoreCallFor Owned
-
-checkSemaphoreCallFor :: SemaphoreCall c => Role -> c -> [TimerWitness] -> Either FamilyRefusal ()
-checkSemaphoreCallFor role call witnesses = do
+checkSemaphoreCall :: SemaphoreCall c => Role -> c -> [TimerWitness] -> Either FamilyRefusal ()
+checkSemaphoreCall role call witnesses = do
   trace <- maybe (Left FamilyContinuation) Right (semaphoreTrace call)
   expect FamilyContinuation (familyTraceCompletion trace == FamilyReturnedCompletion)
   replayed <- foldM replayWrite (semaphoreBefore call) (semaphoreWrites call)
@@ -202,7 +205,11 @@ checkSemaphoreCallFor role call witnesses = do
       expect FamilyEffect (null (semaphoreWrites call))
       expect FamilyEffect (M.keys after == M.keys before
         && all (\address -> M.lookup address after == M.lookup address before) (M.keys before))
-      expect FamilyTimer (null [boundary | boundary <- history, familyBoundaryKind boundary `elem` [FamilyTimerInsertKind, FamilyTimerRemoveKind, FamilyTimerConsumeKind]])
+      forM_ history $ \boundary -> case familyBoundaryKind boundary of
+        FamilyTimerInsertKind -> forbidCallerTimer TimerInserted boundary
+        FamilyTimerRemoveKind -> forbidCallerTimer TimerRemoved boundary
+        FamilyTimerConsumeKind -> forbidCallerTimer TimerConsumed boundary
+        _ -> pure ()
       expect FamilyContinuation (null [boundary | boundary <- history, familyBoundaryKind boundary == FamilySaveKind])
     Admitted (object, slot) -> case service of
       SemaphoreCreate -> checkCreate call object slot
@@ -214,6 +221,12 @@ checkSemaphoreCallFor role call witnesses = do
       SemaphoreTimedWait -> checkWait call domain object slot True trace
   checkContinuation call trace
   checkTimer call witnesses trace service
+  where
+    forbidCallerTimer kind boundary = do
+      entry <- maybe (Left FamilyTimer) Right (familyBoundaryValue boundary)
+      writer <- semaphoreTimerWriter call (TimerWitness entry (familyBoundaryTask boundary)
+        (semaphoreEpoch call) (familyBoundaryInstructions boundary) kind)
+      expect FamilyTimer (writer == OtherWriter)
 
 checkCreate :: SemaphoreCall c => c -> Domain -> Word32 -> Either FamilyRefusal ()
 checkCreate call domain slot = do
@@ -247,6 +260,19 @@ checkDelete role call domain slot = do
       wordAt wait (semaphoreAfter call) >>= expect FamilyLifetime . (== statusReleased)
       expected <- releaseOutcome (semaphoreBefore call) task
       byteAt (task + 0x0c) (semaphoreAfter call) >>= expect FamilyLifetime . (== expected)
+  when (role == Stock) $ do
+    let before = semaphoreBefore call
+        after = semaphoreAfter call
+    forM_ [controlAddress domain slot, controlAddress domain slot + 4] $ \address -> do
+      value <- wordAt address before
+      wordAt address after >>= expect FamilyEffect . (== value)
+    tasks <- queueTasks before (controlAddress domain slot)
+    forM_ tasks $ \task -> do
+      state <- byteAt (task + 0x0c) before
+      byteAt (task + 0x0c) after >>= expect FamilyLifetime . (== state)
+      wait <- waiterWait before task
+      result <- wordAt wait before
+      wordAt wait after >>= expect FamilyLifetime . (== result)
 
 checkSignal :: SemaphoreCall c => c -> Domain -> Word32 -> Either FamilyRefusal ()
 checkSignal call domain slot = do
@@ -392,20 +418,22 @@ checkTimer call witnesses trace service = do
       task = semaphoreTask call
       epoch = semaphoreEpoch call
       returnAt = maximum (0 : map familyBoundaryInstructions history)
-      ownInserts = [witness | witness <- witnesses, timerEpoch witness == epoch, timerKind witness == TimerInserted]
-      ownEvents = [witness | witness <- witnesses, timerEpoch witness == epoch, timerKind witness `elem` [TimerRemoved, TimerConsumed]]
+      inserted = [witness | witness <- witnesses, timerEpoch witness == epoch, timerKind witness == TimerInserted]
+      retired = [witness | witness <- witnesses, timerEpoch witness == epoch, timerKind witness `elem` [TimerRemoved, TimerConsumed]]
       earlier witness = [insert | insert <- witnesses, timerKind insert == TimerInserted
         , timerEntry insert == timerEntry witness
         , timerArmedAt insert <= timerArmedAt witness]
       retire insert = [witness | witness <- witnesses, timerKind witness `elem` [TimerRemoved, TimerConsumed]
         , timerEntry witness == timerEntry insert, timerArmedAt witness >= timerArmedAt insert
         , timerArmedAt witness <= returnAt]
-      expiry = [witness | witness <- witnesses, timerKind witness == TimerConsumed
+      saved = any ((== FamilySaveKind) . familyBoundaryKind) history
+  ownInserts <- filterM (fmap (== SignalCaller) . semaphoreTimerWriter call) inserted
+  ownEvents <- filterM (fmap (== SignalCaller) . semaphoreTimerWriter call) retired
+  let expiry = [witness | witness <- witnesses, timerKind witness == TimerConsumed
         , timerTask witness == task
         , any (\insert -> timerEntry insert == timerEntry witness
                 && timerArmedAt insert <= timerArmedAt witness) ownInserts
         , timerArmedAt witness <= returnAt]
-      saved = any ((== FamilySaveKind) . familyBoundaryKind) history
   forM_ ownInserts $ \witness -> do
     expect FamilyTimer (isSemaphoreTimer domain (timerEntry witness))
     wordAt (timerEntry witness + 4) (semaphoreAfter call) >>= expect FamilyTimer . (== timeoutCallback domain)
