@@ -1,4 +1,4 @@
-load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_test")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 
 exports_files([
@@ -159,5 +159,121 @@ haskell_test(
         "//host:directory",
         "//host:filepath",
         "//host:process",
+    ],
+)
+
+haskell_library(
+    name = "storage-accounting-types",
+    srcs = ["StorageAccountingTypes.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:text",
+    ],
+)
+
+haskell_library(
+    name = "storage-accounting-policy",
+    srcs = ["StorageAccountingPolicy.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        ":storage-accounting-types",
+        "//host:base",
+        "//host:containers",
+        "//host:filepath",
+        "//host:text",
+    ],
+)
+
+haskell_library(
+    name = "storage-accounting-runtime",
+    srcs = ["StorageAccountingRuntime.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        ":storage-accounting-types",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//host:text",
+        "//host:unix",
+    ],
+)
+
+haskell_binary(
+    name = "storage-accounting",
+    srcs = ["StorageAccounting.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded", "-rtsopts"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":storage-accounting-policy",
+        ":storage-accounting-runtime",
+        ":storage-accounting-types",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:cryptohash-sha256",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
+        "//host:time",
+        "//host:unix",
+    ],
+)
+
+haskell_test(
+    name = "storage-accounting-tests",
+    srcs = ["StorageAccountingTests.hs"],
+    args = ["$(rootpath :storage-accounting)"],
+    data = [":storage-accounting"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":storage-accounting-types",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//host:text",
+        "//host:time",
+        "//host:unix",
+    ],
+)
+
+haskell_test(
+    name = "storage-accounting-policy-tests",
+    srcs = ["StorageAccountingPolicyTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":storage-accounting-policy",
+        ":storage-accounting-types",
+        "//host:base",
+        "//host:text",
+    ],
+)
+
+haskell_test(
+    name = "storage-accounting-runtime-tests",
+    srcs = ["StorageAccountingRuntimeTests.hs"],
+    args = ["$(rootpath :storage-accounting)"],
+    data = [":storage-accounting"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
+    deps = [
+        ":storage-accounting-types",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//host:unix",
     ],
 )

@@ -8,7 +8,6 @@ module Replacement.RtosOwnFirst.Frame
   , Violation (..)
   , FrameError (..)
   , frames
-  , framesWith
   ) where
 
 import qualified A32 as A
@@ -73,39 +72,31 @@ data Walked = Walked Int [CallEdge]
 
 -- | The frames of the roots and of all owned code they reach.
 frames :: OwnedCode -> [GuestAddress] -> Either FrameError (M.Map GuestAddress Frame)
-frames code roots = fst <$> framesWith S.empty code roots
-
--- | The same walk with declared external callees as leaves. Calls to a
--- permitted address are recorded as external edges instead of rejected.
-framesWith :: S.Set Word32 -> OwnedCode -> [GuestAddress] -> Either FrameError (M.Map GuestAddress Frame, [CallEdge])
-framesWith permitted code roots = do
+frames code roots = do
   walked <- reach M.empty roots
-  composed <- foldM (compose owned walked S.empty) M.empty (M.keys walked)
-  let external = S.toList (S.fromList [edge | Walked _ calls <- M.elems walked, edge@(CallEdge _ (GuestAddress target) _ _) <- calls, not (owned target)])
-      result = M.mapWithKey (\entry (Walked low calls) -> Frame entry (FrameBytes (negate low)) (FrameBytes (negate (composed M.! entry))) calls) walked
-  pure (result, external)
+  composed <- foldM (compose walked S.empty) M.empty (M.keys walked)
+  pure (M.mapWithKey (\entry (Walked low calls) -> Frame entry (FrameBytes (negate low)) (FrameBytes (negate (composed M.! entry))) calls) walked)
   where
-    owned target = any (`extentContains` GuestAddress target) (codeExtents code)
     reach done [] = Right done
     reach done (entry : pending)
       | M.member entry done = reach done pending
       | otherwise = do
-          result@(Walked _ calls) <- walk permitted code entry
-          reach (M.insert entry result done) ([edgeTarget edge | edge <- calls, let GuestAddress target = edgeTarget edge, owned target] ++ pending)
+          result@(Walked _ calls) <- walk code entry
+          reach (M.insert entry result done) (map edgeTarget calls ++ pending)
 
-compose :: (Word32 -> Bool) -> M.Map GuestAddress Walked -> S.Set GuestAddress -> M.Map GuestAddress Int -> GuestAddress -> Either FrameError (M.Map GuestAddress Int)
-compose owned walked visiting done entry
+compose :: M.Map GuestAddress Walked -> S.Set GuestAddress -> M.Map GuestAddress Int -> GuestAddress -> Either FrameError (M.Map GuestAddress Int)
+compose walked visiting done entry
   | M.member entry done = Right done
   | S.member entry visiting = Left (FrameError entry Recursion)
   | otherwise = do
       let Walked own calls = walked M.! entry
-      done' <- foldM (compose owned walked (S.insert entry visiting)) done [GuestAddress target | CallEdge _ (GuestAddress target) _ _ <- calls, owned target]
-      let low = minimum (own : [negate depth + done' M.! GuestAddress target | CallEdge _ (GuestAddress target) depth _ <- calls, owned target])
+      done' <- foldM (compose walked (S.insert entry visiting)) done (map edgeTarget calls)
+      let low = minimum (own : [negate depth + done' M.! target | CallEdge _ target depth _ <- calls])
       when (low < negate stackLimit) (Left (FrameError entry StackUnbounded))
       pure (M.insert entry low done')
 
-walk :: S.Set Word32 -> OwnedCode -> GuestAddress -> Either FrameError Walked
-walk permitted code entry@(GuestAddress start) = case filter (`extentContains` entry) (codeExtents code) of
+walk :: OwnedCode -> GuestAddress -> Either FrameError Walked
+walk code entry@(GuestAddress start) = case filter (`extentContains` entry) (codeExtents code) of
   [extent] -> go extent M.empty [State start 0 Nothing] 0 []
   _ -> Left (FrameError entry FlowLeavesExtent)
   where
@@ -157,14 +148,10 @@ walk permitted code entry@(GuestAddress start) = case filter (`extentContains` e
         A.Hint {} -> advance state
         A.Branch _ True target
           | owned target -> Right ([following state], [CallEdge (GuestAddress pc) (GuestAddress target) (negate sp) Call])
-          | S.member target permitted -> Right ([following state], [CallEdge (GuestAddress pc) (GuestAddress target) (negate sp) Call])
           | otherwise -> Left (CallOutsideOwned (GuestAddress target))
         A.Branch _ False target
           | extentContains extent (GuestAddress target) -> Right (orSkipped [state {statePc = target}], [])
           | owned target -> do
-              (successors, _) <- returning sp
-              Right (successors, [CallEdge (GuestAddress pc) (GuestAddress target) 0 TailCall])
-          | S.member target permitted -> do
               (successors, _) <- returning sp
               Right (successors, [CallEdge (GuestAddress pc) (GuestAddress target) 0 TailCall])
           | otherwise -> Left (BranchOutsideOwned (GuestAddress target))

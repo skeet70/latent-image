@@ -1,18 +1,16 @@
-//! A32 app callback entries over the owned caller core. Retained seams: the root interface table,
-//! the callback registry and the app error recorder; remove the interface indirection when the app
-//! caller and the cyclic service are linked in one owned image.
+//! A32 app callback entries over the owned caller core and registry dispatcher.
 
 use crate::app::{
-    register_callback, unregister_callback, CallbackHandler, CallbackMachine, CallbackSlots,
-    CallbackStatus, CallbackToken, CriticalToken, InterfaceId, TokenOutput,
+    register_callback, unregister_callback, CallbackHandler, CallbackMachine, CallbackSlot,
+    CallbackSlots, CallbackStatus, CallbackToken, CriticalToken, InterfaceId, TokenOutput,
+    DISPATCH_EVENT,
 };
-use crate::types::{CyclicCreate, CyclicHandler, PeriodWord};
+use crate::types::{CyclicCreate, PeriodWord};
 use crate::EncodedId;
 use crate::GuestAddress;
 
 const INTERFACES: u32 = 0x0096_bd20;
 const SLOTS: u32 = 0x409c_3500;
-const DISPATCH_EVENT: u32 = 0x0072_337c;
 const ERROR_RECORD: u32 = 0x0004_1a34;
 const LAST_ERROR: u32 = 0x40a0_f82c;
 const DISPATCH_ERROR: u32 = 0x0072_3398;
@@ -111,6 +109,22 @@ impl CallbackMachine for App {
     }
 }
 
+/// # Safety
+/// `slot` identifies an installed callback with an AAPCS entry.
+#[unsafe(naked)]
+#[no_mangle]
+#[link_section = ".text.app_dispatch"]
+pub unsafe extern "C" fn xm1_app_dispatch_callback(_slot: CallbackSlot) {
+    core::arch::naked_asm!(
+        "movw r12, #{slots_low}",
+        "movt r12, #{slots_high}",
+        "ldr r12, [r12, r0, lsl #2]",
+        "bx r12",
+        slots_low = const SLOTS & 0xffff,
+        slots_high = const SLOTS >> 16,
+    );
+}
+
 #[no_mangle]
 #[inline(never)]
 #[link_section = ".text.app_register"]
@@ -125,7 +139,7 @@ pub extern "C" fn xm1_app_register_callback(
         CallbackSlots::at(GuestAddress(SLOTS)),
         PeriodWord(argument),
         mode,
-        CyclicHandler(DISPATCH_EVENT),
+        DISPATCH_EVENT,
         CallbackHandler::new(callback),
         TokenOutput::at(GuestAddress(token as u32)),
     )

@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# OPTIONS_GHC -Wno-orphans #-}
 module Emulation.SchedulerPairCheck where
 
 import Control.Monad (foldM, forM_, unless)
@@ -6,6 +7,7 @@ import Data.Aeson (FromJSON (..), Value, object, withObject, (.:), (.:?), (.=))
 import qualified Data.Aeson as J
 import Data.Aeson.Types (Parser)
 import Data.Bits ((.&.), (.|.), complement, shiftL)
+import Data.Either (partitionEithers)
 import qualified Data.ByteString as B
 import Data.List (sort, sortOn)
 import qualified Data.Map.Strict as M
@@ -21,6 +23,10 @@ import qualified Emulation.SchedulerPairService as V
 import qualified Emulation.SchedulerPairS3a as A
 import qualified Emulation.SchedulerPairS3b as C
 import qualified Emulation.SchedulerPairS3c as E
+import Emulation.SchedulerPairFamily (FamilyCall (..))
+import qualified Emulation.SchedulerPairFamily as F
+import Emulation.SchedulerPairSemaphore (SemaphoreCall (..))
+import qualified Emulation.SchedulerPairSemaphore as Sem
 import Emulation.Sha256 (sha256, sha256Hex)
 import Replacement.RtosOwnFirst.Regions (Domain (..), domains, domainLabel)
 import Replacement.RtosScheduler.Regions (Helper (..))
@@ -39,7 +45,7 @@ originsOf :: Value -> Parser [WriteOrigin]
 originsOf value = J.parseJSON value >>= mapM (withObject "attributed write" (.: "origin"))
 data Call = Call { callDomain :: Domain, callAddress :: Address, callSemantic :: Semantic, callCore :: Int, callCpsr :: Word32, callArguments :: Arguments,
   callBefore :: Memory, callAfter :: Memory, callR0 :: Word32, callReturnCpsr :: Word32, callWrites :: [Written], callBank :: [Written], callCount :: Int, callFirst :: Word64, callTrace :: Maybe CallTrace, callTask :: Word32,
-  callKernelContext :: Word32, callTaskStack :: Maybe TaskStack, callWriteOrigins :: [WriteOrigin], callBankOrigins :: [WriteOrigin] } deriving (Eq,Show)
+  callKernelContext :: Word32, callTaskStack :: Maybe TaskStack, callWriteOrigins :: [WriteOrigin], callBankOrigins :: [WriteOrigin], callUnreadable :: S.Set Address } deriving (Eq,Show)
 data PcWatch = PcWatch Int Address Word64 deriving (Eq,Show)
 data BankCounts = BankCounts { primaryBankWrites :: Word64, secondaryBankWrites :: Word64 } deriving (Eq,Show)
 instance FromJSON BankCounts where
@@ -68,16 +74,23 @@ instance FromJSON DemandPaging where
     loaded <- o .: "load"
     DemandPaging <$> loaded .: "context" <*> loaded .: "target" <*> loaded .: "core_instructions"
       <*> o .: "abort" <*> o .: "core_instructions" <*> o .: "spsr" <*> o .: "ifar" <*> o .: "ifsr" <*> o .:? "service"
+data LockEvent = LockEvent { lockTask :: Word32, lockCore :: Int, lockCall :: Word64, lockAt :: Word64, lockAddress :: Address, lockValue :: Word32 } deriving (Eq,Show)
+instance FromJSON LockEvent where
+  parseJSON = withObject "lock event" $ \e -> LockEvent <$> e .: "task" <*> (e .: "core" >>= coreOf) <*> e .: "call" <*> e .: "at"
+    <*> (Address <$> (e .: "address" >>= parseHex)) <*> e .: "value"
 data Observation = Observation { obsRole :: Role, obsInputs :: [String], obsInstructions :: Word64, obsEntries :: Int, obsReturns :: Int,
   obsUntracked :: Int, obsUnarmed :: Int, obsFill :: Maybe Value, obsArmings :: [Q.Arming], obsSegments :: [Q.Segment], obsFinal :: Maybe Q.Readback,
-  obsCalls :: [Call], obsPending :: [Word64], obsMilestones :: [Q.Milestone], obsError :: Maybe T.Text, obsMachineError :: Maybe T.Text,
+  obsCalls :: [Call], obsLockEvents :: [LockEvent], obsPending :: ([F.Pending],[Word64]), obsMilestones :: [Q.Milestone], obsError :: Maybe T.Text, obsMachineError :: Maybe T.Text,
   obsBankCounts :: BankCounts, obsPcWatches :: [PcWatch], obsDemandPaging :: [DemandPaging] } deriving (Eq,Show)
-data Refusal = Binding | Arming | Readback | Watch | FillFetch | Incomplete | Untracked | Unarmed | WrongCore | CallOutsidePlan | EntryUnreadable | Model ModelFailure | ReturnValue | ProcessorState | MemoryResult | WrittenWords | BankWrites | QueueInvariant | Route | ObserverError | UnsupportedSemantic Semantic | MissingTrace | CompletionMismatch | DispatchModel D.DispatchFailure | DemandPagingState deriving (Eq,Show)
+data BudgetKind = TimerWitnessBudget | DeferredCallBudget | ControlBudget deriving (Eq,Show)
+data Refusal = Binding | Arming | Readback | Watch | FillFetch | Incomplete | Untracked | Unarmed | WrongCore | CallOutsidePlan | EntryUnreadable | Model ModelFailure | ReturnValue | ProcessorState | MemoryResult | WrittenWords | BankWrites | QueueInvariant | Route | ObserverError | UnsupportedSemantic Semantic | MissingTrace | CompletionMismatch | DispatchModel D.DispatchFailure | DemandPagingState
+  | BudgetExceeded BudgetKind Int Int
+  | FamilyReturn | FamilyEffect | FamilyLifetime | FamilyTimer | FamilyDestructor | FamilyContinuation | FamilyAssociation deriving (Eq,Show)
 
 data Completion = Returned | Discarded | Dispatched deriving (Eq,Show)
-data BoundaryKind = SaveBoundary | ResumeBoundary | NoSaveBoundary | RetryBoundary | CallbackBoundary | CallbackReturnBoundary | SelectedBoundary | DiscardedBoundary | EnabledBoundary | GlobalLockBoundary | AcquiredBoundary | SelectCompleteBoundary | FirstEntryBoundary | IrqTailBoundary | ReturnBoundary | PrefetchAbortBoundary deriving (Eq,Show)
+data BoundaryKind = SaveBoundary | ResumeBoundary | NoSaveBoundary | RetryBoundary | CallbackBoundary | CallbackReturnBoundary | SelectedBoundary | DiscardedBoundary | EnabledBoundary | GlobalLockBoundary | AcquiredBoundary | SelectCompleteBoundary | FirstEntryBoundary | IrqTailBoundary | ReturnBoundary | PrefetchAbortBoundary | TimerInsertBoundary | TimerRemoveBoundary | TimerConsumeBoundary deriving (Eq,Show)
 data Boundary = Boundary { boundaryKind :: BoundaryKind, boundaryAddress :: Address, boundaryInstructions :: Word64, boundaryCore :: Int, boundaryRegisters :: D.Registers, boundaryMemory :: Memory, boundaryWrites :: [Written], boundaryBank :: [Written], boundaryValue :: Maybe Word32, boundaryTask :: Word32,
-  boundaryWriteOrigins :: [WriteOrigin], boundaryBankOrigins :: [WriteOrigin] } deriving (Eq,Show)
+  boundaryWriteOrigins :: [WriteOrigin], boundaryBankOrigins :: [WriteOrigin], boundaryUnreadable :: S.Set Address } deriving (Eq,Show)
 data CallTrace = CallTrace { traceBefore :: D.Registers, traceAfter :: D.Registers, traceCompletion :: Completion, traceHistory :: [Boundary], traceOrigin :: Maybe DispatchPoint } deriving (Eq,Show)
 
 registersOf :: J.Object -> Parser D.Registers
@@ -103,6 +116,9 @@ instance FromJSON BoundaryKind where
     "irq-tail" -> pure IrqTailBoundary
     "return" -> pure ReturnBoundary
     "prefetch-abort" -> pure PrefetchAbortBoundary
+    "timer-insert" -> pure TimerInsertBoundary
+    "timer-remove" -> pure TimerRemoveBoundary
+    "timer-consume" -> pure TimerConsumeBoundary
     _ -> fail "unsupported scheduler boundary"
 instance FromJSON Completion where
   parseJSON = J.withText "completion" $ \kind -> case kind of
@@ -111,23 +127,33 @@ instance FromJSON Completion where
     "dispatched" -> pure Dispatched
     _ -> fail "unsupported scheduler completion"
 instance FromJSON Boundary where
-  parseJSON = withObject "boundary" $ \o -> Boundary <$> o .: "kind" <*> (Address <$> (o .: "address" >>= parseHex))
-    <*> o .: "instructions" <*> (o .: "core" >>= coreOf) <*> registersOf o <*> (o .: "memory" >>= memoryOf)
-    <*> (o .: "writes" >>= mapM writtenOf) <*> (o .: "bank" >>= mapM writtenOf) <*> o .:? "value" <*> (o .: "task" >>= wordRead)
-    <*> (o .: "writes" >>= originsOf) <*> (o .: "bank" >>= originsOf)
+  parseJSON = withObject "boundary" $ \o -> do
+    memory <- o .: "memory" >>= memoryOf
+    Boundary <$> o .: "kind" <*> (Address <$> (o .: "address" >>= parseHex))
+      <*> o .: "instructions" <*> (o .: "core" >>= coreOf) <*> registersOf o <*> pure (fst memory)
+      <*> (o .: "writes" >>= mapM writtenOf) <*> (o .: "bank" >>= mapM writtenOf) <*> o .:? "value" <*> (o .: "task" >>= wordRead)
+      <*> (o .: "writes" >>= originsOf) <*> (o .: "bank" >>= originsOf) <*> pure (snd memory)
 
 coreOf :: Value -> Parser Int
 coreOf = J.withText "core" $ \core -> case core of "primary" -> pure 0; "secondary" -> pure 1; _ -> fail "unknown core"
 wordRead :: Value -> Parser Word32
 wordRead = withObject "read" $ \o -> do
   view <- o .: "view"
-  unless (view == ("committed"::String)) (fail "unreadable scheduler state")
+  unless (view == ("committed"::String)) (fail ("EntryUnreadable: " ++ view))
   o .: "value"
-memoryOf :: Value -> Parser Memory
+memoryOf :: Value -> Parser (Memory, S.Set Address)
 memoryOf = J.withArray "memory" $ \rows -> do
-  pairs <- mapM (withObject "word" $ \o -> (,) <$> (Address <$> (o .: "address" >>= parseHex)) <*> (o .: "value" >>= wordRead)) (foldr (:) [] rows)
-  unless (M.size (M.fromList pairs) == length pairs) (fail "duplicate word")
-  pure (M.fromList pairs)
+  pairs <- mapM (withObject "word" $ \o -> do
+    address <- Address <$> (o .: "address" >>= parseHex)
+    word <- o .: "value"
+    view <- withObject "read" (.: "view") word
+    if view == ("committed"::String)
+      then Left <$> ((,) address <$> withObject "read" (.: "value") word)
+      else pure (Right address)) (foldr (:) [] rows)
+  let committed = [pair | Left pair <- pairs]
+      unreadable = S.fromList [address | Right address <- pairs]
+  unless (M.size (M.fromList committed) == length committed) (fail "duplicate word")
+  pure (M.fromList committed, unreadable)
 writtenOf :: Value -> Parser Written
 writtenOf = withObject "write" $ \o -> Written <$> (Address <$> (o .: "address" >>= parseHex)) <*> o .: "size" <*> o .: "value"
 instance FromJSON Call where
@@ -140,10 +166,13 @@ instance FromJSON Call where
     semantic <- identity .: "semantic"
     origin <- e .:? "origin" >>= traverse (J.withText "dispatch origin" (named dispatchName . T.unpack))
     trace <- CallTrace <$> registersOf e <*> registersOf r <*> r .: "completion" <*> r .: "history" <*> pure origin
+    before <- e .: "memory" >>= memoryOf
+    after <- r .: "memory" >>= memoryOf
+    let unreadable = S.unions (snd before : snd after : map boundaryUnreadable (traceHistory trace))
     Call d address semantic <$> (e .: "core" >>= coreOf) <*> e .: "cpsr" <*> (Arguments <$> e .: "arguments")
-      <*> (e .: "memory" >>= memoryOf) <*> (r .: "memory" >>= memoryOf) <*> r .: "r0" <*> r .: "cpsr"
+      <*> pure (fst before) <*> pure (fst after) <*> r .: "r0" <*> r .: "cpsr"
       <*> (r .: "writes" >>= mapM writtenOf) <*> (r .: "bank" >>= mapM writtenOf) <*> o .: "count" <*> o .: "first" <*> pure (Just trace) <*> (e .: "task" >>= wordRead)
-      <*> e .: "kernel_context" <*> e .:? "task_stack" <*> (r .: "writes" >>= originsOf) <*> (r .: "bank" >>= originsOf)
+      <*> e .: "kernel_context" <*> e .:? "task_stack" <*> (r .: "writes" >>= originsOf) <*> (r .: "bank" >>= originsOf) <*> pure unreadable
 instance FromJSON Observation where
   parseJSON = withObject "scheduler observation" $ \o -> do
     schema <- o .: "schema"
@@ -160,7 +189,10 @@ instance FromJSON Observation where
         case bounds of [lo,hi] -> (,,) lo hi <$> c .: "kinds"; _ -> fail "invalid class range")
       Q.Segment <$> (s .: "domains" >>= mapM parseDomain) <*> s .: "started" <*> s .: "ended" <*> pure (length rows) <*> state .:? "violation" <*> pure classes)
     final <- o .:? "final_readback" >>= traverse Q.readbackOf
-    pending <- o .: "pending" >>= mapM (withObject "pending" (.: "entered"))
+    lockEvents <- o .:? "lock_events" >>= maybe (pure []) (mapM parseJSON)
+    pendingRows <- o .: "pending" >>= mapM pendingOf
+    let (familyPending, otherPending) = partitionEithers pendingRows
+    let pending = (familyPending, otherPending)
     milestones <- o .: "milestones" >>= mapM (withObject "milestone" $ \m -> do
       pulse <- m .:? "pulse" >>= traverse (withObject "pulse" (.: "key"))
       let menu = withObject "menu" $ \v -> Q.MenuTriple <$> v .: "menu" <*> v .: "setting" <*> v .: "cursor"
@@ -168,8 +200,39 @@ instance FromJSON Observation where
       Q.Milestone <$> m .: "phase" <*> pure pulse <*> (m .: "expected" >>= menu) <*> (m .:? "observed" >>= traverse menu) <*> pure (reached /= Nothing) <*> m .: "finished")
     watches <- o .: "pc_watches" >>= mapM (withObject "PC watch" $ \w -> PcWatch <$> (w .: "core" >>= coreOf) <*> (Address <$> (w .: "address" >>= parseHex)) <*> w .: "count")
     Observation role inputs <$> o .: "instructions" <*> o .: "entries" <*> o .: "returns" <*> count "untracked" <*> count "unarmed_entries"
-      <*> o .:? "fill_fetch" <*> pure armings <*> pure segments <*> pure final <*> o .: "classes" <*> pure pending <*> pure milestones
+      <*> o .:? "fill_fetch" <*> pure armings <*> pure segments <*> pure final <*> o .: "classes" <*> pure lockEvents <*> pure pending <*> pure milestones
       <*> o .:? "error" <*> o .:? "machine_failure" <*> o .: "bank_counts" <*> pure watches <*> o .: "demand_paging"
+
+pendingOf :: Value -> Parser (Either F.Pending Word64)
+pendingOf = withObject "pending" $ \p -> do
+  entry <- p .: "entry"
+  slot <- entry .: "slot"
+  semantic <- withObject "slot" (.: "semantic") slot
+  entered <- p .: "entered"
+  let typed = do
+        domain <- withObject "slot" (.: "domain") slot >>= parseDomain
+        arguments <- entry .: "arguments"
+        before <- entry .: "memory" >>= memoryOf
+        task <- entry .: "task" >>= wordRead
+        spValue <- entry .: "sp"
+        sp <- parseHex spValue
+        cpsr <- entry .: "cpsr"
+        entryValue <- withObject "slot" (.: "entry") slot
+        entryAddress <- parseHex entryValue
+        entryCore <- entry .: "core" >>= coreOf
+        entryOrder <- entry .: "order"
+        terminal <- p .:? "terminal_memory" >>= traverse memoryOf
+        history <- p .:? "history" >>= maybe (pure []) (mapM (withObject "boundary" $ \b -> (,,,) <$> b .: "kind" <*> b .: "cpsr" <*> b .: "instructions" <*> b .: "order"))
+        let saves = [(savedCpsr,savedAt,savedOrder) | (kind,savedCpsr,savedAt,savedOrder) <- history, kind == ("save" :: T.Text)]
+            saveCpsr = case saves of { [] -> Nothing; values -> Just ((\(c,_,_) -> c) (last values)) }
+            saveAt = case saves of { [] -> Nothing; values -> Just ((\(_,a,_) -> a) (last values)) }
+            saveOrder = case saves of { [] -> Nothing; values -> Just ((\(_,_,o) -> o) (last values)) }
+        pure (Left (F.Pending semantic domain arguments (fst before) (fst <$> terminal) task sp cpsr entryAddress entered saveCpsr saveAt saveOrder entryOrder entryCore
+          (S.union (snd before) (maybe S.empty snd terminal))))
+  case semantic of
+    FamilySemantic _ -> typed
+    SemaphoreSemantic _ -> typed
+    _ -> pure (Right entered)
 
 expect :: Refusal -> Bool -> Either Refusal ()
 expect refusal valid = unless valid (Left refusal)
@@ -346,7 +409,7 @@ watchPlan plan = sharedPlan plan {planGuards=filter outermost (planGuards plan)}
   outermost guard = not (any (\outer -> guardDomain outer==guardDomain guard && guardStart outer<=guardStart guard &&
     guardEnd guard<=guardEnd outer && (guardStart outer/=guardStart guard || guardEnd outer/=guardEnd guard)) (planGuards plan))
 trajectorySha256 :: String
-trajectorySha256 = "7497182560f1d971cf17b23429dee5d3257a0263267ddcb3680da9ba78eb2002"
+trajectorySha256 = "43134e99c48715ca58e6838347f164e3458dbd986ad2f854e6788371422f0a8d"
 data CallTotals = CallTotals { hasCompletedClasses :: !Bool, completedCallCount :: !Int } deriving (Eq,Show)
 
 qualify :: B.ByteString -> Plan -> Observation -> Either Refusal Value
@@ -354,8 +417,10 @@ qualify bytes plan observation = do
   qualifyPrefix bytes plan observation
   checkDemandCalls observation
   let calls = sortOn callFirst (obsCalls observation)
-  forM_ calls $ \call -> checkCallEnvelope plan call >> checkCallFor (obsRole observation) call
-  qualifySuffix observation (CallTotals (not (null calls)) (sum (map callCount calls)))
+  forM_ calls $ \call -> checkCallEnvelope plan call >> checkCallForIn calls (obsRole observation) call
+  let releases = [F.ReleaseWitness (lockTask event) (lockCore event) (lockCall event) (lockAt event) (lockAddress event) (lockValue event)
+        | event <- obsLockEvents observation]
+  qualifySuffix plan releases observation (CallTotals (not (null calls)) (sum (map callCount calls)))
   pure (summary observation)
 
 qualifyPrefix :: B.ByteString -> Plan -> Observation -> Either Refusal ()
@@ -378,10 +443,23 @@ checkCallEnvelope plan call = do
   expect CallOutsidePlan (any (\entry -> entryDomain entry == callDomain call && entryAddress entry == callAddress call && entrySemantic entry == callSemantic call) (planEntries plan))
   expect Incomplete (callCount call > 0)
 
-qualifySuffix :: Observation -> CallTotals -> Either Refusal ()
-qualifySuffix observation totals = do
-  expect Incomplete (hasCompletedClasses totals && obsReturns observation == completedCallCount totals && obsEntries observation == obsReturns observation + length (obsPending observation)
-    && all (\entered -> entered <= obsInstructions observation && obsInstructions observation-entered <= Q.pendingWindow) (obsPending observation))
+checkPendingEnvelope :: Plan -> F.Pending -> Either Refusal ()
+checkPendingEnvelope plan pending =
+  expect CallOutsidePlan (any (\entry -> entryDomain entry == F.pendingDomain pending && entryAddress entry == Address (F.pendingEntry pending) && entrySemantic entry == F.pendingSemantic pending) (planEntries plan))
+
+qualifySuffix :: Plan -> [F.ReleaseWitness] -> Observation -> CallTotals -> Either Refusal ()
+qualifySuffix plan releases observation totals = do
+  let (familyPending, otherPending) = obsPending observation
+  expect Incomplete (hasCompletedClasses totals && obsReturns observation == completedCallCount totals
+    && obsEntries observation == obsReturns observation + length familyPending + length otherPending
+    && all (\entered -> entered <= obsInstructions observation && obsInstructions observation-entered <= Q.pendingWindow) otherPending)
+  forM_ familyPending $ \pending -> do
+    checkPendingEnvelope plan pending
+    expect Incomplete (F.pendingEntered pending <= obsInstructions observation)
+    case F.pendingSemantic pending of
+      FamilySemantic _ -> either (Left . familyRefusal) Right (F.checkPendingFamily releases pending)
+      SemaphoreSemantic _ -> either (Left . familyRefusal) Right (Sem.checkPendingSemaphore releases pending)
+      _ -> Left FamilyLifetime
   expect ObserverError (obsError observation == Nothing && obsMachineError observation == Nothing)
   let milestones = obsMilestones observation
       phases = S.fromList (map Q.milestonePhase milestones)
@@ -392,7 +470,8 @@ routeSignature :: Observation -> [(T.Text,Maybe T.Text,Q.MenuTriple,Maybe Q.Menu
 routeSignature = map (\m -> (Q.milestonePhase m,Q.milestoneKey m,Q.milestoneExpected m,Q.milestoneObserved m)) . obsMilestones
 compareRoutes :: Observation -> Observation -> Either Refusal ()
 compareRoutes stock owned = do
-  expect Binding (drop 3 (obsInputs stock) == drop 3 (obsInputs owned))
+  expect Binding (length (obsInputs stock) == 6 && length (obsInputs owned) == 6
+    && take 2 (drop 3 (obsInputs stock)) == take 2 (drop 3 (obsInputs owned)))
   expect Route (obsRole stock == Stock && obsRole owned == Owned && routeSignature stock == routeSignature owned)
 data SummaryEntry = SummaryEntry !Domain !Address !Semantic deriving (Eq,Ord,Show)
 data RedesignCounts = RedesignCounts
@@ -483,6 +562,7 @@ controlTarget role call = case role of
     Left _ -> False
   WrongPredicate -> callDomain call==DomainB && callSemantic call==HelperSemantic Notify
     && case callArguments call of Arguments (1:_) -> True; _ -> False
+  WakeNoInsert -> callSemantic call==ServiceSemantic WakeTask
   _ -> False
 
 controlFailure :: Role -> Observation -> Either Refusal ()
@@ -538,14 +618,40 @@ modelled semantic = case semantic of
   HelperSemantic _ -> True
   DispatchSemantic _ -> True
   DoorbellSemantic -> True
+  FamilySemantic _ -> True
+  SemaphoreSemantic _ -> True
   ServiceSemantic service -> A.supportsService service || C.supportsService service || E.supportsService service
 
 checkCall :: Call -> Either Refusal ()
 checkCall = checkCallFor Owned
 
+checkUnreadableWrites :: Call -> Either Refusal ()
+checkUnreadableWrites call = forM_ (callWrites call) $ \(Written (Address address) _ _) ->
+  let aligned = Address (address .&. complement 3)
+      inStack = case callTaskStack call of
+        Just (TaskStack (Address lo) (Address hi)) -> lo<=address && address<hi
+        Nothing -> False
+  in expect EntryUnreadable (inStack || not (S.member aligned (callUnreadable call)))
+
+-- | Remove an unreadable word and its alias from a fallback snapshot so a
+-- required acquisition read cannot borrow an older committed value.
+maskUnreadable :: S.Set Address -> Memory -> Memory
+maskUnreadable unreadable memory = foldr remove memory (S.toList unreadable)
+ where
+  remove (Address address) = M.delete (Address (address .&. complement 0x40000000 .&. complement 3)) . M.delete (Address address)
+
 checkCallFor :: Role -> Call -> Either Refusal ()
-checkCallFor role call = do
-  expect WrongCore (callCore call == if callDomain call==DomainA then 0 else 1)
+checkCallFor = checkCallForInWitnesses []
+
+checkCallForIn :: [Call] -> Role -> Call -> Either Refusal ()
+checkCallForIn calls = checkCallForInWitnesses (timerWitnesses calls)
+
+checkCallForInWitnesses :: [F.TimerWitness] -> Role -> Call -> Either Refusal ()
+checkCallForInWitnesses witnesses role call = do
+  checkUnreadableWrites call
+  case callSemantic call of
+    FamilySemantic _ -> pure ()
+    _ -> expect WrongCore (callCore call == if callDomain call==DomainA then 0 else 1)
   case callSemantic call of
     HelperSemantic _ -> checkHelperCall call
     DoorbellSemantic -> do
@@ -557,7 +663,112 @@ checkCallFor role call = do
       expect WrittenWords (any (\(Written (Address address) size value) -> address .&. complement 0x40000000==reschedule .&. complement 0x40000000 && size==4 && value==1) writes)
       expect ProcessorState (callCpsr call .&. 0x1ff==callReturnCpsr call .&. 0x1ff)
     DispatchSemantic point -> dispatchTags role point call >> pure ()
+    FamilySemantic _ | role == Stock -> pure ()
+    FamilySemantic _ -> checkFamilyCall call witnesses
+    SemaphoreSemantic _ | role == Stock -> pure ()
+    SemaphoreSemantic _ -> checkSemaphoreCall role call witnesses
     ServiceSemantic service -> checkServiceCall service call
+
+timerWitnesses :: [Call] -> [F.TimerWitness]
+timerWitnesses calls =
+  [ F.TimerWitness entry task (callFirst call) (boundaryInstructions boundary) kind
+  | call <- calls
+  , boundary <- maybe [] traceHistory (callTrace call)
+  , (kind, entry) <- case boundaryKind boundary of
+      TimerInsertBoundary -> [(F.TimerInserted, value) | Just value <- [boundaryValue boundary]]
+      TimerRemoveBoundary -> [(F.TimerRemoved, value) | Just value <- [boundaryValue boundary]]
+      TimerConsumeBoundary -> [(F.TimerConsumed, value) | Just value <- [boundaryValue boundary]]
+      _ -> []
+  , let task = case kind of
+          F.TimerConsumed -> maybe (boundaryTask boundary) id (M.lookup (Address (entry+8)) (boundaryMemory boundary))
+          F.TimerRemoved -> maybe (boundaryTask boundary) id (M.lookup (Address (entry+8)) (boundaryMemory boundary))
+          _ -> boundaryTask boundary
+  ]
+checkFamilyCall :: Call -> [F.TimerWitness] -> Either Refusal ()
+checkFamilyCall call witnesses = case F.checkFamilyCall call witnesses of
+  Right () -> Right ()
+  Left refusal -> Left (familyRefusal refusal)
+
+checkSemaphoreCall :: Role -> Call -> [F.TimerWitness] -> Either Refusal ()
+checkSemaphoreCall _role call witnesses = case Sem.checkSemaphoreCall call witnesses of
+  Right () -> Right ()
+  Left refusal -> Left (familyRefusal refusal)
+
+familyRefusal :: F.FamilyRefusal -> Refusal
+familyRefusal F.FamilyReturn = FamilyReturn
+familyRefusal F.FamilyEffect = FamilyEffect
+familyRefusal F.FamilyLifetime = FamilyLifetime
+familyRefusal F.FamilyTimer = FamilyTimer
+familyRefusal F.FamilyDestructor = FamilyDestructor
+familyRefusal F.FamilyContinuation = FamilyContinuation
+familyRefusal F.FamilyAssociation = FamilyAssociation
+
+instance Sem.SemaphoreCall Call where
+  semaphoreDomain = callDomain
+  semaphoreCore = callCore
+  semaphoreArguments call = case callArguments call of Arguments arguments -> arguments
+  semaphoreBefore = callBefore
+  semaphoreAfter = callAfter
+  semaphoreR0 = callR0
+  semaphoreCpsr = callCpsr
+  semaphoreWrites call = [(address,size,value) | Written address size value <- callWrites call]
+  semaphoreTask = callTask
+  semaphoreEpoch = callFirst
+  semaphoreService call = case callSemantic call of SemaphoreSemantic service -> Just service; _ -> Nothing
+  semaphoreTrace call = fmap familyTraceOf (callTrace call)
+  semaphoreWriters call = [if ownsOrigin call origin then Sem.SignalCaller else Sem.OtherWriter | origin <- callWriteOrigins call]
+  semaphoreSuspension call = do
+    trace <- callTrace call
+    let (prefix, rest) = break (\boundary -> boundaryKind boundary == SaveBoundary && ownsBoundary call boundary) (traceHistory trace)
+    case rest of
+      saved : _ -> Just (boundaryMemory saved,
+        [(address, size, value) | boundary <- prefix ++ [saved], Written address size value <- boundaryWrites boundary])
+      [] -> Nothing
+
+instance F.FamilyCall Call where
+  familyDomain = callDomain
+  familyCore = callCore
+  familyArguments call = case callArguments call of Arguments arguments -> arguments
+  familyBefore = callBefore
+  familyAfter = callAfter
+  familyR0 = callR0
+  familyWrites call = [(address,size,value) | Written address size value <- callWrites call]
+  familyTask = callTask
+  familyEpoch = callFirst
+  familyService call = case callSemantic call of FamilySemantic service -> Just service; _ -> Nothing
+  familyTrace call = fmap familyTraceOf (callTrace call)
+
+familyTraceOf :: CallTrace -> F.FamilyTrace
+familyTraceOf trace = F.FamilyTrace
+  { F.familyTraceCompletion = case traceCompletion trace of
+      Returned -> F.FamilyReturnedCompletion
+      Discarded -> F.FamilyDiscardedCompletion
+      Dispatched -> F.FamilyDispatchedCompletion
+  , F.familyTraceBefore = D.registers (traceBefore trace)
+  , F.familyTraceAfter = D.registers (traceAfter trace)
+  , F.familyTraceBeforeCpsr = D.processorState (traceBefore trace)
+  , F.familyTraceAfterCpsr = D.processorState (traceAfter trace)
+  , F.familyTraceHistory = map familyBoundaryOf (traceHistory trace)
+  }
+
+familyBoundaryOf :: Boundary -> F.FamilyBoundary
+familyBoundaryOf boundary = F.FamilyBoundary
+  { F.familyBoundaryKind = case boundaryKind boundary of
+      SaveBoundary -> F.FamilySaveKind
+      ResumeBoundary -> F.FamilyResumeKind
+      ReturnBoundary -> F.FamilyReturnKind
+      TimerInsertBoundary -> F.FamilyTimerInsertKind
+      TimerRemoveBoundary -> F.FamilyTimerRemoveKind
+      TimerConsumeBoundary -> F.FamilyTimerConsumeKind
+      _ -> F.FamilyOtherKind
+  , F.familyBoundaryAddress = boundaryAddress boundary
+  , F.familyBoundaryInstructions = boundaryInstructions boundary
+  , F.familyBoundaryCore = boundaryCore boundary
+  , F.familyBoundaryRegisters = D.registers (boundaryRegisters boundary)
+  , F.familyBoundaryMemory = boundaryMemory boundary
+  , F.familyBoundaryValue = boundaryValue boundary
+  , F.familyBoundaryTask = boundaryTask boundary
+  }
 
 dispatchTags :: Role -> DispatchPoint -> Call -> Either Refusal [D.Redesign]
 dispatchTags role point call = do
@@ -605,7 +816,7 @@ checkServiceCallWith policy service call = do
           [] -> Right previous
           acquired:_ -> do
             acquiredWrites <- ownedWrites call (boundaryWrites acquired) (boundaryWriteOrigins acquired)
-            let memory=M.union (boundaryMemory acquired) previous
+            let memory=maskUnreadable (boundaryUnreadable acquired) (M.union (boundaryMemory acquired) previous)
                 words'=V.domainWords domain
                 records=V.contextTable words':[V.contextTable words'+0x84] ++
                   [record | Just record <- [M.lookup (Address (V.currentContext words')) memory]]
@@ -634,8 +845,10 @@ checkServiceCallWith policy service call = do
               , Just size <- [M.lookup (Address (config+0x10)) (callBefore call)]
               , Just start <- [M.lookup (Address (config+0x14)) (callBefore call)]
               , sp <- take 1 (drop 13 (D.registers (traceBefore trace)))]
-            known=M.fromList [(normalize address,address) | address <- M.keys atAcquisition,
-              S.member address (expectedWrites wanted) || not (any (\(lo,hi) -> lo<=normalize address && normalize address<hi) scratch)]
+            inScratch address = any (\(lo,hi) -> lo<=address && address<hi) scratch
+            known=M.fromList ([(normalize address,address) | address <- M.keys atAcquisition,
+              S.member address (expectedWrites wanted) || not (inScratch (normalize address))]
+              ++ [(normalize address,address) | address <- S.toList (callUnreadable call), not (inScratch (normalize address))])
             actual=S.fromList [normalize address | Written address _ _ <- writes,M.member (normalize address) known]
             apply memory (Written address@(Address raw) size value') = case M.lookup (normalize address) known of
               Nothing -> Right memory

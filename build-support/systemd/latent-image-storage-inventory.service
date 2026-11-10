@@ -1,0 +1,22 @@
+[Unit]
+Description=Inventory whole-host storage and aggregate producer budgets
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/latent-image/storage-accounting.env
+ExecStart=%h/.local/libexec/latent-image/storage-accounting sample --config %h/.config/latent-image/storage-accounting.json --state %h/.local/state/latent-image/storage-accounting/detailed +RTS -M1G -RTS
+UMask=0077
+MemoryMax=2G
+MemorySwapMax=0
+OOMPolicy=stop
+TimeoutStartSec=20min
+CPUQuota=50%
+Nice=19
+IOSchedulingClass=idle
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/state/latent-image/storage-accounting
+RestrictSUIDSGID=true
+StandardOutput=journal
+StandardError=journal

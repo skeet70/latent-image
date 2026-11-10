@@ -1,6 +1,11 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
 
+exports_files(
+    ["rtos_slot_contracts.json"],
+    visibility = ["//visibility:public"],
+)
+
 filegroup(
     name = "module",
     srcs = ["src/lib.rs"],

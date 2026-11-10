@@ -8,7 +8,7 @@ import Control.Monad (forM, forM_, unless)
 import Data.Aeson ((.=))
 import Data.Bits ((.&.), (.|.), complement, shiftL, shiftR, xor)
 import qualified Data.ByteString as B
-import Data.List (find, sortOn)
+import Data.List (find)
 import qualified Data.Map.Strict as M
 import Data.Word (Word32)
 import Emulation.CachedNativeBatch (cachedObservedBatch)
@@ -16,7 +16,6 @@ import Emulation.NativeObservation
 import Emulation.OwnedCase
 import Emulation.Sha256 (sha256File, sha256Hex)
 import FujiAF.JSON (encodeCanonical)
-import qualified Replacement.RtosPlatform.Aggregate as Agg
 import System.Directory (createDirectoryIfMissing, makeAbsolute)
 import System.Environment (getArgs)
 import System.FilePath ((</>), takeDirectory)
@@ -32,8 +31,6 @@ domainLabel DomainB = "b"
 type W = M.Map Word32 Word32
 
 data Role = Stock | Owned deriving (Eq, Show)
-
-data Aggregate = Aggregate Agg.AggregateImage [Agg.AggregateSymbol]
 
 data Service = Terminate | ChangePriority | TimedSleep | ReleaseWait | HandlerRelease | Delay
   | Timeout | DelayCallback
@@ -452,7 +449,7 @@ patchOwned d loader ownedBase owned =
       patches =
         [(entryOf d service, 4, entryOf d service) | service <- [Terminate, ChangePriority, TimedSleep, ReleaseWait, HandlerRelease, Delay, Timeout, DelayCallback]]
         ++ [(0x46e4c + if d == DomainB then 0x8ffc0 else 0, 0x180, 0x46e4c + if d == DomainB then 0x8ffc0 else 0)]
-        ++ [(if d == DomainA then 0x50000 else 0xe0000, 0x4000, if d == DomainA then 0x50000 else 0xe0000)]
+        ++ [(if d == DomainA then 0x50000 else 0xe0000, 0x1300, if d == DomainA then 0x50000 else 0xe0000)]
    in foldl (\bytes (address, size, source) -> poke bytes (address - base) (slice owned ownedBase source size)) (loader <> B.replicate 0x12000 0) patches
 
 loaderBytes :: Domain -> B.ByteString -> B.ByteString
@@ -494,25 +491,8 @@ helperRanges d =
     early = if d == DomainB then 0x8ffbc else 0
     late = if d == DomainB then 0x8ffc0 else 0
 
-installAggregate :: Domain -> B.ByteString -> Maybe Aggregate -> B.ByteString
-installAggregate _ code Nothing = code
-installAggregate d code (Just (Aggregate image symbols)) =
-  foldl install code symbols
-  where
-    install current symbol = either error id (Agg.installSymbol (loaderBase d) current image symbol)
-
-mergeSpans :: [(Word32, Word32)] -> [(Word32, Word32)]
-mergeSpans spans = go (sortOn fst spans)
-  where
-    go []=[]
-    go ((start,size):rest)=extend start (start+size) rest
-    extend start end []=[(start,end-start)]
-    extend start end ((lo,size):rest)
-      | lo<=end=extend start (max end (lo+size)) rest
-      | otherwise=(start,end-start):extend lo (lo+size) rest
-
-specFor :: Domain -> Role -> Case -> B.ByteString -> B.ByteString -> Maybe Aggregate -> B.ByteString -> CaseSpec
-specFor d role one loaderA loaderB aggregate owned = CaseSpec
+specFor :: Domain -> Role -> Case -> B.ByteString -> B.ByteString -> B.ByteString -> CaseSpec
+specFor d role one loaderA loaderB owned = CaseSpec
   { caseId = caseName one ++ "-" ++ domainLabel d
   , caseProvenance = "X-M1 1.50 S3d lifecycle services, x70view 55436fc85c0560dd252b0410af6f2427fe198cd3; synthetic scheduler state"
   , caseExclusion = "One service call. Blocking cases stop at the dispatcher entry; lifecycle cases replace the dispatcher with a save/wake/return stub so the original caller returns."
@@ -531,7 +511,10 @@ specFor d role one loaderA loaderB aggregate owned = CaseSpec
       , mkRegion (RegionId "bank-b") (GuestAddress 0xfffb40cc) 4 Device (word32le 0)
       ]
   , caseFunctions =
-      [(GuestAddress (fromIntegral address), size) | (address, size) <- mergeSpans (ownedFunctions ++ aggregateFunctions)]
+      [(GuestAddress (fromIntegral (entryOf d service)), extentOf service) | service <- [Terminate, ChangePriority, TimedSleep, ReleaseWait, HandlerRelease, Delay, Timeout, DelayCallback]]
+      ++ [(GuestAddress (fromIntegral bodyBase), 0x4000), (GuestAddress (fromIntegral stubBase), 0x80)]
+      ++ [(GuestAddress (fromIntegral (switchOf d)), 4)]
+      ++ [(GuestAddress (fromIntegral address), size) | (address, size) <- helperRanges d ++ helperRanges other]
   , caseInitial =
       [(R0, caseArgument one), (R1, caseArgument1 one), (R2, 0), (R3, 0), (R12, 0)]
       ++ [(register, 0xabc00000 + fromIntegral (fromEnum register)) | register <- [R4 .. R11]]
@@ -547,17 +530,10 @@ specFor d role one loaderA loaderB aggregate owned = CaseSpec
     loader = if d == DomainA then loaderA else loaderB
     otherLoader = if other == DomainA then loaderA else loaderB
     fixture = setW (handlerCell d) (if caseHandler one then 1 else 0) (caseSetup one d (baseFixture d))
-    ownedFunctions =
-      [(entryOf d service, extentOf service) | service <- [Terminate, ChangePriority, TimedSleep, ReleaseWait, HandlerRelease, Delay, Timeout, DelayCallback]]
-      ++ [(bodyBase, 0x4000), (stubBase, 0x80), (switchOf d, 4)]
-      ++ helperRanges d ++ helperRanges other
-    aggregateFunctions = case (role, aggregate) of
-      (Owned, Just (Aggregate _ symbols)) -> [(Agg.symbolAddress symbol, Agg.symbolSize symbol) | symbol <- symbols]
-      _ -> []
     bodyBase = if d == DomainA then 0x50000 else 0xe0000
     code = case role of
       Stock -> patchStub d (loaderBytes d loader) (caseLifecycle one)
-      Owned -> patchStub d (installAggregate d (patchOwned d loader (ownedBaseOf d) owned) aggregate) (caseLifecycle one)
+      Owned -> patchStub d (patchOwned d loader (ownedBaseOf d) owned) (caseLifecycle one)
     bodies = if role == Owned then slice owned (ownedBaseOf d) bodyBase 0x4000 else B.replicate 0x4000 0
     stub = case caseLifecycle one of
       Nothing -> B.replicate 0x100 0
@@ -616,23 +592,6 @@ judgeSelfTest = and
   , judgeOutcome (StoppedAt 0x1000 0xffffff18) StopAddress 0xffffff18 0x1000
   ]
 
-aggregateOf :: Maybe FilePath -> Maybe FilePath -> IO (Maybe Aggregate)
-aggregateOf Nothing Nothing = pure Nothing
-aggregateOf (Just binPath) (Just symbolsPath) = do
-  bytes <- B.readFile binPath
-  symbols <- either fail pure . Agg.parseAggregateSymbols =<< B.readFile symbolsPath
-  image <- either fail pure (Agg.aggregateImage symbols bytes)
-  pure (Just (Aggregate image symbols))
-aggregateOf _ _ = fail "an aggregate bin needs its symbols"
-
-optionalArgument :: String -> IO (Maybe FilePath)
-optionalArgument name = do
-  arguments <- getArgs
-  case dropWhile (/= name) arguments of
-    [] -> pure Nothing
-    [_] -> fail (name ++ " needs a value")
-    _ : value : _ -> Just <$> makeAbsolute value
-
 main :: IO ()
 main = do
   runner <- argument "--runner" >>= makeAbsolute
@@ -640,10 +599,6 @@ main = do
   loaderB <- argument "--loader-b"
   ownedA <- argument "--owned-a-bin"
   ownedB <- argument "--owned-b-bin"
-  aggregateABin <- optionalArgument "--aggregate-a-bin"
-  aggregateASymbols <- optionalArgument "--aggregate-a-symbols"
-  aggregateBBin <- optionalArgument "--aggregate-b-bin"
-  aggregateBSymbols <- optionalArgument "--aggregate-b-symbols"
   cacheRoot <- argument "--cache-root"
   results <- argument "--results"
   loaderABytes <- B.readFile loaderA
@@ -656,14 +611,12 @@ main = do
   unless (sha256Hex digestB == "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec") (fail "loader B is not the pinned image")
   createDirectoryIfMissing True cacheRoot
   createDirectoryIfMissing True (takeDirectory results)
-  aggregateA <- aggregateOf aggregateABin aggregateASymbols
-  aggregateB <- aggregateOf aggregateBBin aggregateBSymbols
-  reports <- forM [(DomainA, loaderABytes, aggregateA, ownedABytes), (DomainB, loaderBBytes, aggregateB, ownedBBytes)] $ \(d, _loader, aggregate, owned) -> do
+  reports <- forM [(DomainA, loaderABytes, ownedABytes), (DomainB, loaderBBytes, ownedBBytes)] $ \(d, _loader, owned) -> do
     let grid = cases d
         directory = takeDirectory results </> ("s3d-" ++ domainLabel d)
     createDirectoryIfMissing True directory
     observed <- forM [Stock, Owned] $ \role -> do
-      let specs = [specFor d role one loaderABytes loaderBBytes aggregate owned | one <- grid]
+      let specs = [specFor d role one loaderABytes loaderBBytes owned | one <- grid]
       batch <- writeBatch (directory </> show role) specs
       outcomes <- cachedObservedBatch cacheRoot runner batch
       pure (specs, snd outcomes)

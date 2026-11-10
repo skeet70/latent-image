@@ -42,20 +42,12 @@ SECTIONS {
     __s3d_interrupt_release_wait_body_end = .;
     KEEP(*(.text.s3d_timer_active))
     __s3d_timer_active_end = .;
-    KEEP(*(.text.*release_waiting*))
-    __s3d_release_waiting_end = .;
-    KEEP(*(.text.*release_queued*))
-    __s3d_release_queued_end = .;
-    KEEP(*(.text.*release*))
-    __s3d_release_core_end = .;
     KEEP(*(.text.scheduler_timeout_body))
     __scheduler_timeout_body_end = .;
     KEEP(*(.text.scheduler_delay_completion_body))
     __scheduler_delay_completion_body_end = .;
     KEEP(*(.text.scheduler_timeout_core))
     __scheduler_timeout_core_end = .;
-    KEEP(*(.text))
-    KEEP(*(.rodata .rodata.*))
     . = ORIGIN(bodies) + LENGTH(bodies);
   } > bodies =0xf000f0e7
   .forbidden (NOLOAD) : { *(.text .text.* .rodata .rodata.* .data .data.* .bss .bss.* COMMON) } > bodies

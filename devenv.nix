@@ -16,6 +16,7 @@ in {
     coreutils
     diffutils
     util-linux
+    btrfs-progs
     gnumake
     pkg-config
     clang

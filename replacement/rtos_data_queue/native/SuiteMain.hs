@@ -14,8 +14,7 @@ import Emulation.Sha256 (sha256File, sha256Hex)
 import FujiAF.Host (failH)
 import FujiAF.StorageBudget (checkStorageBudget)
 import Replacement.RtosDataQueue.Layout (parseFacts)
-import qualified Replacement.RtosPlatform.Aggregate as Agg
-import Replacement.RtosDataQueue.Suite (Aggregate (..), CaseRun (..), ControlRun (..), Image (..), runDomain)
+import Replacement.RtosDataQueue.Suite (CaseRun (..), ControlRun (..), Image (..), runDomain)
 import Replacement.RtosOwnFirst.Regions (Domain (..), domainLabel)
 import System.Directory (createDirectoryIfMissing, makeAbsolute)
 import System.Environment (getArgs)
@@ -35,10 +34,6 @@ main = do
   timerB <- required "--timer-b-bin"
   symbolsAPath <- required "--owned-a-symbols"
   symbolsBPath <- required "--owned-b-symbols"
-  aggregateABin <- optional "--aggregate-a-bin"
-  aggregateASymbols <- optional "--aggregate-a-symbols"
-  aggregateBBin <- optional "--aggregate-b-bin"
-  aggregateBSymbols <- optional "--aggregate-b-symbols"
   resultsPath <- required "--results"
   reviewPath <- required "--review"
   facts <- either failH pure . parseFacts =<< B.readFile layoutPath
@@ -72,10 +67,8 @@ main = do
       ownedBImage = Image baseB ownedBBytes
       timerAImage = Image 0x44a50 timerABytes
       timerBImage = Image 0xd4a10 timerBBytes
-  aggregateA <- aggregateOf aggregateABin aggregateASymbols
-  aggregateB <- aggregateOf aggregateBBin aggregateBSymbols
-  (runA, controlsA) <- runDomain runner cacheRoot (takeDirectory resultsPath </> "domain-a") facts DomainA aggregateA stockA ownedAImage timerAImage symbolsA
-  (runB, controlsB) <- runDomain runner cacheRoot (takeDirectory resultsPath </> "domain-b") facts DomainB aggregateB stockB ownedBImage timerBImage symbolsB
+  (runA, controlsA) <- runDomain runner cacheRoot (takeDirectory resultsPath </> "domain-a") facts DomainA stockA ownedAImage timerAImage symbolsA
+  (runB, controlsB) <- runDomain runner cacheRoot (takeDirectory resultsPath </> "domain-b") facts DomainB stockB ownedBImage timerBImage symbolsB
   let runs = runA ++ runB
       controls = controlsA ++ controlsB
       failures = [(domainLabel (runEntryDomain run), runName run, message) | run <- runs, message <- runDifferences run]
@@ -159,23 +152,6 @@ main = do
   forM_ failedChecks $ \(domain, name, description) -> putStrLn (domain ++ " " ++ name ++ ": check failed: " ++ description)
   forM_ failedControls $ \(domain, name, control) -> putStrLn (domain ++ " " ++ name ++ ": control failed: " ++ control)
   unless (null failures && null failedChecks && null failedControls) exitFailure
-
-aggregateOf :: Maybe FilePath -> Maybe FilePath -> IO (Maybe Aggregate)
-aggregateOf Nothing Nothing = pure Nothing
-aggregateOf (Just binPath) (Just symbolsPath) = do
-  bytes <- B.readFile binPath
-  symbols <- either failH pure . Agg.parseAggregateSymbols =<< B.readFile symbolsPath
-  image <- either failH pure (Agg.aggregateImage symbols bytes)
-  pure (Just (Aggregate image symbols))
-aggregateOf _ _ = failH "an aggregate bin needs its symbols"
-
-optional :: String -> IO (Maybe FilePath)
-optional flag = do
-  arguments <- getArgs
-  case dropWhile (/= flag) arguments of
-    [] -> pure Nothing
-    [_] -> failH (flag ++ " needs a value")
-    _ : value : _ -> Just <$> makeAbsolute value
 
 parseOwnedSymbols :: FilePath -> IO [(Word32, Word32)]
 parseOwnedSymbols path = do

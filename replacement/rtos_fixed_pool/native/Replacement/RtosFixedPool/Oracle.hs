@@ -37,7 +37,6 @@ import Data.Aeson (FromJSON (..), eitherDecodeStrict', withObject, (.:))
 import Data.Bits ((.&.), (.|.), complement, shiftL, shiftR)
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
-import Data.List (sortOn)
 import Data.Word (Word32, Word8)
 import Emulation.CachedNativeBatch (BatchReuse, cachedObservedBatch)
 import Emulation.NativeCase (caseIdText)
@@ -52,7 +51,6 @@ import Emulation.NativeObservation
   , Write (..)
   , WriteValue (..)
   )
-import qualified Replacement.RtosPlatform.Aggregate as Agg
 import Emulation.OwnedCase
   ( CaseOutcome (..)
   , CaseSpec (..)
@@ -357,7 +355,7 @@ data Case = Case
   , caseResume :: Bool
   }
 
-data Image = Image {imageBase :: Word32, imageBytes :: B.ByteString, imageSymbols :: [Agg.AggregateSymbol]}
+data Image = Image {imageBase :: Word32, imageBytes :: B.ByteString}
 
 data Run = Run
   { runDomain :: Domain
@@ -1139,50 +1137,21 @@ overlay (GuestAddress start) initial words' = B.concat (pieces 0 ordered)
             : word32le value
             : pieces (offset + 4) rest
 
-aggregate :: Image -> Bool
-aggregate image = not (null (imageSymbols image))
-
-symbolSpans :: Image -> [(Word32, Word32)]
-symbolSpans image = [(Agg.symbolAddress symbol, Agg.symbolSize symbol) | symbol <- imageSymbols image]
-
-ownedSpans :: Domain -> Role -> Image -> [(Word32, Word32)]
-ownedSpans domain role owned
-  | role == OwnedRole, aggregate owned = symbolSpans owned
-  | otherwise = extents domain ++ [(bodyRegion, bodyLength)]
-
-codeBounds :: Domain -> Role -> Image -> (Word32, Word32)
-codeBounds domain role owned =
-  let spans = extents domain ++ retained domain ++ (if role == OwnedRole then symbolSpans owned else [])
-      scratch = if role == OwnedRole && aggregate owned then [] else [(bodyRegion, bodyLength)]
-      base = minimum (map fst spans)
-      top = maximum
-        ( [ maximum [address + size | (address, size) <- spans]
-          , lowestBitAddress domain + 16
-          , driverEntry + driverSize
-          , expiryEntry + expirySize
-          , deleteEntry + deleteSize
-          ]
-            ++ [address + size | (address, size) <- scratch]
-        )
-   in (base, top)
-
-mergeSpans :: [(Word32, Word32)] -> [(Word32, Word32)]
-mergeSpans spans = go (sortOn fst spans)
-  where
-    go [] = []
-    go ((start, size) : rest) = extend start (start + size) rest
-    extend start end [] = [(start, end - start)]
-    extend start end ((lo, size) : rest)
-      | lo <= end = extend start (max end (lo + size)) rest
-      | otherwise = (start, end - start) : extend lo (lo + size) rest
-
 codeBytes :: Domain -> Role -> Image -> Image -> B.ByteString
 codeBytes domain role loader owned = withDrivers $ case role of
   StockRole -> stockBytes
-  OwnedRole -> foldl patch stockBytes (ownedSpans domain role owned)
+  OwnedRole -> foldl patch stockBytes (extents domain ++ [(bodyRegion, bodyLength)])
   where
-    (base, top) = codeBounds domain role owned
-    bounds = extents domain ++ retained domain ++ (if role == OwnedRole then symbolSpans owned else [])
+    bounds = extents domain ++ retained domain
+    base = minimum (bodyRegion : map fst bounds)
+    top = maximum
+      [ maximum [address + size | (address, size) <- bounds]
+      , bodyRegion + bodyLength
+      , lowestBitAddress domain + 16
+      , driverEntry + driverSize
+      , expiryEntry + expirySize
+      , deleteEntry + deleteSize
+      ]
     slice image address size =
       if address < imageBase image
         || toInteger address + toInteger size > toInteger (imageBase image) + toInteger (B.length (imageBytes image))
@@ -1199,10 +1168,7 @@ codeBytes domain role loader owned = withDrivers $ case role of
     install address bytes current =
       let offset = fromIntegral (address - base)
        in B.take offset current <> bytes <> B.drop (offset + B.length bytes) current
-    aggregateImage = Agg.AggregateImage (imageBase owned) (imageBytes owned)
-    patch current (address, size)
-      | role == OwnedRole, aggregate owned = install address (either error id (Agg.sliceAggregate aggregateImage address size)) current
-      | otherwise = install address (slice owned address size) current
+    patch current (address, size) = install address (slice owned address size) current
 
 expectationOf :: Role -> Case -> Expectation
 expectationOf StockRole one = caseStock one
@@ -1221,7 +1187,7 @@ caseSpec facts executing role loader owned one
           [mkRegion (RegionId "code") (wire codeBase) (fromIntegral (codeTop - codeBase)) ReadExecute (codeBytes executing role loader owned)]
             ++ [mkRegion ident (wire (guestWord address)) size permission (overlay address background words') | Page ident address size permission background <- dataPages]
             ++ [mkRegion (RegionId "continuations") (wire exitAddress) (fromIntegral (stopAddress - exitAddress + 4)) ReadExecute (B.replicate (fromIntegral (stopAddress - exitAddress + 4)) 0)]
-      , caseFunctions = [(wire address, size) | (address, size) <- mergeSpans (ownedSpans executing role owned ++ retained executing ++ [(driverEntry, driverSize), (expiryEntry, expirySize), (deleteEntry, deleteSize)])]
+      , caseFunctions = [(wire address, size) | (address, size) <- extents executing ++ retained executing ++ [(bodyRegion, bodyLength), (driverEntry, driverSize), (expiryEntry, expirySize), (deleteEntry, deleteSize)]]
       , caseInitial = initialRegisters executing one
       , caseExpectedStatus = if arrival then StopAddress else Returned
       , caseExpectedRegisters = if arrival
@@ -1234,7 +1200,15 @@ caseSpec facts executing role loader owned one
   where
     expectation = expectationOf role one
     arrival = expectationArrival expectation
-    (codeBase, codeTop) = codeBounds executing role owned
+    codeBase = minimum (bodyRegion : map fst (extents executing ++ retained executing))
+    codeTop = maximum
+      [ maximum [address + size | (address, size) <- extents executing ++ retained executing]
+      , bodyRegion + bodyLength
+      , lowestBitAddress executing + 16
+      , driverEntry + driverSize
+      , expiryEntry + expirySize
+      , deleteEntry + deleteSize
+      ]
     dataPages = pages facts one
     words' = layoutWords facts
       ++ [ poke (dfHandlerContext (domainFacts facts executing)) (if caseHandler one then 1 else 0)

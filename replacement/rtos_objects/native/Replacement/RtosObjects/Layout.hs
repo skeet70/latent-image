@@ -5,6 +5,9 @@
 module Replacement.RtosObjects.Layout
   ( Facts (..)
   , DomainFacts (..)
+  , Manifest
+  , parseManifest
+  , manifestAddress
   , parseFacts
   , domainFacts
   , record
@@ -20,8 +23,10 @@ module Replacement.RtosObjects.Layout
 
 import Data.Aeson (FromJSON (..), withObject, (.:))
 import qualified Data.Aeson as J
+import Data.Aeson.Types (Parser)
 import qualified Data.ByteString as B
 import Data.Word (Word32, Word8)
+import Numeric (readHex)
 import Replacement.RtosOwnFirst.Regions (Domain (..))
 
 data DomainFacts = DomainFacts
@@ -321,3 +326,46 @@ task facts domain slot = dfTaskTable (domainFacts facts domain) + (slot - 1) * f
 
 readyHead :: Facts -> Domain -> Word32 -> Word32
 readyHead facts domain priority = dfReadyHeads (domainFacts facts domain) + priority * factsHeadSize facts
+
+data SlotContract = SlotContract String [(String, String, Word32)]
+
+-- | The pinned X-M1 slot contract manifest: per-operation decomp rows with the A and B entry
+-- addresses. The suite's extents remain the current strict placement and are checked against it.
+newtype Manifest = Manifest [SlotContract]
+
+instance FromJSON SlotContract where
+  parseJSON = withObject "slot contract" $ \o ->
+    SlotContract
+      <$> o .: "operation"
+      <*> (o .: "decomp" >>= mapM parseDecomp)
+
+instance FromJSON Manifest where
+  parseJSON = withObject "manifest" $ \o -> Manifest <$> o .: "slotContracts"
+
+parseDecomp :: J.Value -> Parser (String, String, Word32)
+parseDecomp = withObject "decomp" $ \o -> do
+  domain <- o .: "domain"
+  name <- o .: "name"
+  text <- o .: "address"
+  case hexWord text of
+    Just address -> pure (domain, name, address)
+    Nothing -> fail ("invalid decomp address " ++ text)
+
+hexWord :: String -> Maybe Word32
+hexWord ('0' : 'x' : digits)
+  | not (null digits) && all (`elem` ("0123456789abcdef" :: String)) digits =
+      case readHex digits of
+        [(value, "")]
+          | value <= toInteger (maxBound :: Word32) -> Just (fromInteger value)
+        _ -> Nothing
+hexWord _ = Nothing
+
+parseManifest :: B.ByteString -> Either String Manifest
+parseManifest = J.eitherDecodeStrict
+
+manifestAddress :: Manifest -> String -> String -> String -> Either String Word32
+manifestAddress (Manifest contracts) operation domain name =
+  case [address | SlotContract op decomp <- contracts, op == operation, (rowDomain, rowName, address) <- decomp, rowDomain == domain, rowName == name] of
+    [address] -> Right address
+    [] -> Left ("manifest has no " ++ domain ++ " " ++ name ++ " for " ++ operation)
+    _ -> Left ("manifest has duplicate " ++ domain ++ " " ++ name ++ " for " ++ operation)

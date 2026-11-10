@@ -35,7 +35,7 @@ fn words_as_array(w: &DomainWords) -> [u32; 19] {
 #[test]
 fn domain_words_are_the_stock_addresses() {
     assert_eq!(
-        words_as_array(&Domain::A.words()),
+        words_as_array(Domain::A.words()),
         [
             0x4005_45a4, 0x4005_45c0, 0x4005_45c4, 0x4005_45c8, 0x4005_45cc, 0x4005_46d8, 0x4005_46dc, 0x4005_475c,
             0x4005_4760, 0x4005_4764, 0x4005_4768, 0x4005_476c, 0x4005_4770, 0x4005_4774, 0x4005_4778, 0x4005_d718,
@@ -43,7 +43,7 @@ fn domain_words_are_the_stock_addresses() {
         ]
     );
     assert_eq!(
-        words_as_array(&Domain::B.words()),
+        words_as_array(Domain::B.words()),
         [
             0x400e_4564, 0x400e_4580, 0x400e_4584, 0x400e_4588, 0x400e_458c, 0x400e_4698, 0x400e_469c, 0x400e_471c,
             0x400e_4720, 0x400e_4724, 0x400e_4728, 0x400e_472c, 0x400e_4730, 0x400e_4734, 0x400e_4738, 0x400e_d6d8,
@@ -109,7 +109,7 @@ fn context_fields_are_the_stock_offsets() {
 
 #[test]
 fn task_records_are_the_stock_addresses() {
-    let first_and_last = |w: DomainWords| {
+    let first_and_last = |w: &DomainWords| {
         [TaskSlot::new(1).unwrap(), TaskSlot::new(60).unwrap(), TaskSlot::new(120).unwrap()].map(|s| w.task(s).0 .0)
     };
     assert_eq!(first_and_last(Domain::A.words()), [0x4005_ff0c, 0x4006_0bf4, 0x4006_1914]);

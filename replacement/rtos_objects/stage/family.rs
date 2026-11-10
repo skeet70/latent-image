@@ -1,0 +1,613 @@
+use super::{cpsr_masked, entry_words, load, xm1_rtos_scheduler_save, Cpu, Reschedule, ENTRY};
+use crate::objects;
+use crate::objects::admission::{
+    admit_flag, admit_mailbox, Entry, FlagService, MailboxService,
+    Object, Params, Request, Service,
+};
+use crate::objects::block::{
+    receive, resume_flag, resume_receive, wait_flag, Block, Deadline, FlagBlocking, FlagResume,
+    IrqScope, ReceiveBlocking, ReceiveResume, SavedMask, Tick, TimerEntryAddress, TimeoutCallback,
+};
+use crate::objects::create::{create_flag, create_mailbox, FlagAttributes, MailboxAttributes};
+use crate::objects::id::{own_flag_slot, own_mailbox_slot, EncodedId, EntryDomain, FlagId, MailboxId};
+use crate::objects::layout::{Domain, GuestAddress, Message, Task};
+use crate::objects::locked::{clear_flag, OutWord};
+use crate::objects::matching::{KeepMask, MatchMode, Pattern, WantedMask};
+use crate::objects::message::PriorityLimit;
+use crate::objects::status::ObjectStatus;
+use crate::objects::teardown::{delete_flag, delete_mailbox, DispatchDecision};
+use crate::objects::timeout::Timeout;
+use crate::objects::wake::{send, set_flag, set_flag_handler, Wake};
+
+/// Fatal kernel conditions; the discriminant is the A32 diagnostic code retained in r0 at the trap loop.
+#[repr(u32)]
+#[derive(Clone, Copy)]
+pub(super) enum KernelFault {
+    /// The waiting task's domain word is neither A nor B.
+    WaiterDomain = 1,
+    /// The S2 save returned with the wait still queued.
+    StillQueued = 2,
+    /// The S2 save returned an unknown wait result.
+    UnknownResult = 3,
+}
+
+#[inline(always)]
+#[no_mangle]
+pub(super) fn xm1_rtos_objects_fault(fault: KernelFault) -> ! {
+    unsafe {
+        core::arch::asm!("2: b 2b", in("r0") fault as u32, options(noreturn, nostack));
+    }
+}
+
+extern "C" {
+    fn xm1_rtos_scheduler_remove(record: objects::layout::KernelContext, task: Task) -> Reschedule;
+    fn xm1_rtos_objects_stock_insert_timer(record: objects::layout::KernelContext, entry: GuestAddress, expiry: u32);
+    static xm1_rtos_objects_stock_timeout: u32;
+}
+
+impl IrqScope for Cpu {
+    fn mask_i(&self) -> SavedMask {
+        let saved: u32;
+        unsafe { core::arch::asm!("mrs {saved}, cpsr", "cpsid i", saved = out(reg) saved, options(nostack)) };
+        SavedMask(saved)
+    }
+
+    fn restore_i(&self, saved: SavedMask) {
+        unsafe { core::arch::asm!("msr cpsr_fc, {saved}", saved = in(reg) saved.0, options(nostack)) };
+    }
+}
+
+impl Block for Cpu {
+    fn current(&self, entry: Domain) -> Task {
+        Task(GuestAddress(load(GuestAddress(load(super::record(entry).running())))))
+    }
+
+    fn remove_ready(&self, owner: objects::layout::KernelContext, task: Task) {
+        unsafe { xm1_rtos_scheduler_remove(owner, task) };
+    }
+
+    fn queue_wait(&self, _owner: objects::layout::KernelContext, task: Task, queue: objects::layout::WaitQueue, order: objects::order::QueueOrder) {
+        objects::wake::queue_insert(self, task, queue, order);
+    }
+
+    fn arm_timer(&self, owner: objects::layout::KernelContext, entry: TimerEntryAddress, deadline: Deadline) {
+        unsafe { xm1_rtos_objects_stock_insert_timer(owner, entry.0, deadline.0) };
+    }
+
+    fn tick(&self, owner: objects::layout::KernelContext) -> Tick {
+        Tick(load(GuestAddress(load(owner.tick_now()))))
+    }
+
+    fn timeout_callback(&self) -> TimeoutCallback {
+        TimeoutCallback(core::ptr::addr_of!(xm1_rtos_objects_stock_timeout) as u32)
+    }
+}
+
+/// Stock create/delete set I+F through `0x42560` and restore only those bits through `0x42568`.
+#[derive(Clone, Copy)]
+#[repr(transparent)]
+struct LifecycleMask(u32);
+
+impl LifecycleMask {
+    /// The saved I/F bits with I forced set for the dispatcher's S2 save.
+    fn dispatch_mask(self) -> Self {
+        LifecycleMask(self.0 | 0x80)
+    }
+}
+
+#[inline(never)]
+fn mask_lifecycle() -> LifecycleMask {
+    let saved: u32;
+    unsafe {
+        core::arch::asm!(
+            "mrs {saved}, cpsr",
+            "cpsid if",
+            saved = out(reg) saved,
+            options(nostack),
+        )
+    };
+    LifecycleMask(saved & 0xc0)
+}
+
+#[inline(never)]
+fn restore_lifecycle(saved: LifecycleMask) {
+    let current: u32;
+    let restored: u32;
+    unsafe {
+        core::arch::asm!(
+            "mrs {current}, cpsr",
+            "bic {restored}, {current}, #0xc0",
+            "orr {restored}, {restored}, {saved}",
+            "msr cpsr_c, {restored}",
+            current = out(reg) current,
+            restored = out(reg) restored,
+            saved = in(reg) saved.0,
+            options(nostack),
+        )
+    };
+}
+
+/// Stock retry addresses `0x488e8` / `0x4892c`.
+#[inline(never)]
+fn unmask_i() {
+    unsafe { core::arch::asm!("cpsie i", options(nostack)) };
+}
+
+struct StageTables;
+
+impl objects::admission::Records for StageTables {
+    fn flags(&self, domain: Domain) -> u32 {
+        load(entry_words().context(domain).event_flag_count())
+    }
+
+    fn mailboxes(&self, domain: Domain) -> u32 {
+        load(entry_words().context(domain).mailbox_count())
+    }
+}
+
+impl objects::admission::Facts for StageTables {
+    fn exists(&self, object: Object) -> bool {
+        match object {
+            Object::Flag(id) => load(id.domain.words().flag_config(id.slot).exists()) != 0,
+            Object::Mailbox(id) => load(id.domain.words().mailbox_config(id.slot).exists()) != 0,
+        }
+    }
+
+    fn attributes(&self, object: Object) -> u32 {
+        match object {
+            Object::Flag(id) => load(id.domain.words().flag_config(id.slot).attributes()),
+            Object::Mailbox(id) => load(id.domain.words().mailbox_config(id.slot).attributes()),
+        }
+    }
+
+    fn priority_limit(&self, object: Object) -> u32 {
+        match object {
+            Object::Mailbox(id) => load(id.domain.words().mailbox_config(id.slot).priority_limit()),
+            Object::Flag(_) => 0,
+        }
+    }
+
+    fn message_priority(&self, message: Message) -> u32 {
+        load(message.priority())
+    }
+}
+
+#[inline(never)]
+fn entry_snapshot(blocking: bool) -> Entry {
+    let words = entry_words();
+    let handler_context = load(words.handler_context);
+    let irq_masked = unsafe { cpsr_masked() };
+    let refused = handler_context != 0 || irq_masked;
+    Entry {
+        handler_context,
+        irq_masked,
+        dispatch_enabled: if blocking && !refused { load(words.dispatch_enabled) } else { 0 },
+    }
+}
+
+#[inline(always)]
+fn request(service: Service, blocking: bool, id: i32, params: Params) -> Request {
+    Request {
+        service,
+        entry: entry_snapshot(blocking),
+        entry_domain: EntryDomain::new(ENTRY),
+        id: EncodedId(id),
+        params,
+    }
+}
+
+
+#[inline(never)]
+fn create_flag_entry(id: i32, request_pointer: u32) -> i32 {
+    let words = entry_words();
+    let slot = match own_flag_slot(EncodedId(id), load(words.context(ENTRY).event_flag_count())) {
+        Ok(slot) => slot,
+        Err(status) => return status.code(),
+    };
+    if load(ENTRY.words().flag_config(slot).exists()) != 0 {
+        return ObjectStatus::AlreadyExists.code();
+    }
+    let create = objects::create::FlagCreate {
+        attributes: FlagAttributes(load(GuestAddress(request_pointer))),
+        initial: Pattern(load(GuestAddress(request_pointer + 4))),
+    };
+    match create_flag(&Cpu, FlagId { domain: ENTRY, slot }, create) {
+        Ok(_) => 0,
+        Err(status) => status.code(),
+    }
+}
+
+#[inline(never)]
+fn delete_flag_entry(id: i32) -> (i32, DispatchDecision) {
+    let words = entry_words();
+    let slot = match own_flag_slot(EncodedId(id), load(words.context(ENTRY).event_flag_count())) {
+        Ok(slot) => slot,
+        Err(status) => return (status.code(), DispatchDecision::NotRequired),
+    };
+    (0, delete_flag(&Cpu, FlagId { domain: ENTRY, slot }))
+}
+
+#[inline(never)]
+fn create_mailbox_entry(id: i32, request_pointer: u32) -> i32 {
+    let words = entry_words();
+    let slot = match own_mailbox_slot(EncodedId(id), load(words.context(ENTRY).mailbox_count())) {
+        Ok(slot) => slot,
+        Err(status) => return status.code(),
+    };
+    if load(ENTRY.words().mailbox_config(slot).exists()) != 0 {
+        return ObjectStatus::AlreadyExists.code();
+    }
+    let create = objects::create::MailboxCreate {
+        attributes: MailboxAttributes(load(GuestAddress(request_pointer))),
+        priority_limit: PriorityLimit(load(GuestAddress(request_pointer + 4))),
+    };
+    match create_mailbox(&Cpu, MailboxId { domain: ENTRY, slot }, create) {
+        Ok(_) => 0,
+        Err(status) => status.code(),
+    }
+}
+
+#[inline(never)]
+fn delete_mailbox_entry(id: i32) -> (i32, DispatchDecision) {
+    let words = entry_words();
+    let slot = match own_mailbox_slot(EncodedId(id), load(words.context(ENTRY).mailbox_count())) {
+        Ok(slot) => slot,
+        Err(status) => return (status.code(), DispatchDecision::NotRequired),
+    };
+    let (drain, decision) = delete_mailbox(&Cpu, MailboxId { domain: ENTRY, slot });
+    core::mem::drop(drain);
+    (0, decision)
+}
+
+#[derive(Clone, Copy)]
+enum FlagInvocation {
+    Set { id: i32, bits: u32 },
+    SetHandler { id: i32, bits: u32 },
+    Clear { id: i32, keep: u32 },
+    Wait { id: i32, pattern: u32, mode: u32, result: u32 },
+    Poll { id: i32, pattern: u32, mode: u32, result: u32 },
+    TimedWait { id: i32, pattern: u32, mode: u32, result: u32, timeout: i32 },
+}
+
+#[derive(Clone, Copy)]
+enum MailboxInvocation {
+    Send { id: i32, message: u32 },
+    Receive { id: i32, message_out: u32 },
+    Poll { id: i32, message_out: u32 },
+    TimedReceive { id: i32, message_out: u32, timeout: i32 },
+}
+
+impl FlagInvocation {
+    fn admission(self) -> (FlagService, i32, Params) {
+        match self {
+            FlagInvocation::Set { id, .. } => {
+                (FlagService::Set, id, Params::NONE)
+            }
+            FlagInvocation::SetHandler { id, .. } => {
+                (FlagService::SetHandler, id, Params::NONE)
+            }
+            FlagInvocation::Clear { id, .. } => {
+                (FlagService::Clear, id, Params::NONE)
+            }
+            FlagInvocation::Wait { id, pattern, mode, .. } => (
+                FlagService::Wait,
+                id,
+                Params { pattern: Pattern(pattern), mode, timeout: None, message: None },
+            ),
+            FlagInvocation::TimedWait { id, pattern, mode, timeout, .. } => (
+                FlagService::TimedWait,
+                id,
+                Params { pattern: Pattern(pattern), mode, timeout: Some(timeout), message: None },
+            ),
+            FlagInvocation::Poll { id, pattern, mode, .. } => (
+                FlagService::Poll,
+                id,
+                Params { pattern: Pattern(pattern), mode, timeout: None, message: None },
+            ),
+        }
+    }
+}
+
+impl MailboxInvocation {
+    fn admission(self) -> (MailboxService, i32, Params) {
+        match self {
+            MailboxInvocation::Send { id, message } => (
+                MailboxService::Send,
+                id,
+                Params {
+                    pattern: Pattern(0),
+                    mode: 0,
+                    timeout: None,
+                    message: Some(Message(GuestAddress(message))),
+                },
+            ),
+            MailboxInvocation::Receive { id, .. } => (
+                MailboxService::Receive,
+                id,
+                Params { pattern: Pattern(0), mode: 0, timeout: None, message: None },
+            ),
+            MailboxInvocation::TimedReceive { id, timeout, .. } => (
+                MailboxService::TimedReceive,
+                id,
+                Params { pattern: Pattern(0), mode: 0, timeout: Some(timeout), message: None },
+            ),
+            MailboxInvocation::Poll { id, .. } => (
+                MailboxService::Poll,
+                id,
+                Params { pattern: Pattern(0), mode: 0, timeout: None, message: None },
+            ),
+        }
+    }
+}
+
+#[inline(never)]
+fn flag_wait_admitted(id: FlagId, wanted: WantedMask, mode: MatchMode, result: OutWord, timeout: Timeout) -> i32 {
+    unsafe { core::arch::asm!("cpsid i", options(nostack)) };
+    let code = loop {
+        match wait_flag(
+            &Cpu,
+            EntryDomain::new(ENTRY),
+            id,
+            wanted,
+            mode,
+            result,
+            timeout,
+        ) {
+            Ok(FlagBlocking::Ready(outcome)) => break outcome.code(),
+            Ok(FlagBlocking::Pending(pending)) => {
+                unsafe { xm1_rtos_scheduler_save(0) };
+                break match resume_flag(&Cpu, pending) {
+                    FlagResume::Completed(outcome) => outcome.code(),
+                    FlagResume::Pending(_) => xm1_rtos_objects_fault(KernelFault::StillQueued),
+                    FlagResume::Corrupt(_) => xm1_rtos_objects_fault(KernelFault::UnknownResult),
+                };
+            }
+            Ok(FlagBlocking::Retry) => {
+                unmask_i();
+                Cpu.mask_i();
+            }
+            Err(status) => break status.code(),
+        }
+    };
+    unsafe { core::arch::asm!("cpsie i", options(nostack)) };
+    code
+}
+
+#[inline(never)]
+fn receive_admitted(id: MailboxId, message_out: OutWord, timeout: Timeout) -> i32 {
+    unsafe { core::arch::asm!("cpsid i", options(nostack)) };
+    let code = loop {
+        match receive(
+            &Cpu,
+            EntryDomain::new(ENTRY),
+            id,
+            message_out,
+            timeout,
+        ) {
+            Ok(ReceiveBlocking::Ready(outcome)) => break outcome.code(),
+            Ok(ReceiveBlocking::Pending(pending)) => {
+                unsafe { xm1_rtos_scheduler_save(0) };
+                break match resume_receive(&Cpu, pending) {
+                    ReceiveResume::Completed(outcome) => outcome.code(),
+                    ReceiveResume::Pending(_) => xm1_rtos_objects_fault(KernelFault::StillQueued),
+                    ReceiveResume::Corrupt(_) => xm1_rtos_objects_fault(KernelFault::UnknownResult),
+                };
+            }
+            Ok(ReceiveBlocking::Retry) => {
+                unmask_i();
+                Cpu.mask_i();
+            }
+            Err(status) => break status.code(),
+        }
+    };
+    unsafe { core::arch::asm!("cpsie i", options(nostack)) };
+    code
+}
+
+#[inline(never)]
+fn flag_router(invocation: FlagInvocation) -> i32 {
+    let (flag_service, id, params) = invocation.admission();
+    let admitted = match admit_flag(
+        &request(flag_service.service(), flag_service.blocks(), id, params),
+        flag_service,
+        &StageTables,
+        &StageTables,
+    ) {
+        Ok(admitted) => admitted,
+        Err(status) => return status.code(),
+    };
+    let wait = |result: OutWord, timeout| {
+        let wanted = match WantedMask::new(admitted.want) {
+            Ok(wanted) => wanted,
+            Err(status) => return status.code(),
+        };
+        flag_wait_admitted(admitted.id, wanted, admitted.mode, result, timeout)
+    };
+    match invocation {
+        FlagInvocation::Set { bits, .. } => {
+            set_flag(&Cpu, admitted.id, Pattern(bits));
+            0
+        }
+        FlagInvocation::SetHandler { bits, .. } => {
+            set_flag_handler(&Cpu, admitted.id, Pattern(bits));
+            0
+        }
+        FlagInvocation::Clear { keep, .. } => match clear_flag(&Cpu, admitted.id, KeepMask(keep)) {
+            Ok(()) => 0,
+            Err(status) => status.code(),
+        },
+        FlagInvocation::Wait { result, .. } | FlagInvocation::TimedWait { result, .. } => {
+            wait(OutWord(GuestAddress(result)), admitted.timeout.unwrap_or(Timeout::Forever))
+        }
+        FlagInvocation::Poll { result, .. } => wait(OutWord(GuestAddress(result)), Timeout::Poll),
+    }
+}
+
+#[inline(never)]
+fn mailbox_router(invocation: MailboxInvocation) -> i32 {
+    let (mailbox_service, id, params) = invocation.admission();
+    let admitted = match admit_mailbox(
+        &request(mailbox_service.service(), mailbox_service.blocks(), id, params),
+        mailbox_service,
+        &StageTables,
+        &StageTables,
+    ) {
+        Ok(admitted) => admitted,
+        Err(status) => return status.code(),
+    };
+    match invocation {
+        MailboxInvocation::Send { message, .. } => {
+            send(&Cpu, admitted.id, Message(GuestAddress(message)), admitted.priority);
+            0
+        }
+        MailboxInvocation::Receive { message_out, .. }
+        | MailboxInvocation::TimedReceive { message_out, .. } => {
+            receive_admitted(admitted.id, OutWord(GuestAddress(message_out)), admitted.timeout.unwrap_or(Timeout::Forever))
+        }
+        MailboxInvocation::Poll { message_out, .. } => {
+            receive_admitted(admitted.id, OutWord(GuestAddress(message_out)), Timeout::Poll)
+        }
+    }
+}
+
+/// A handler-context teardown sets the delayed-dispatch word instead of switching stacks.
+fn dispatch_teardown(saved: LifecycleMask) {
+    if load(ENTRY.words().handler_context) != 0 {
+        Cpu.request_delayed_dispatch();
+        restore_lifecycle(saved);
+    } else {
+        restore_lifecycle(saved.dispatch_mask());
+        Cpu.dispatch(0);
+        restore_lifecycle(saved);
+    }
+}
+
+/// Slot `+0x80`.
+#[no_mangle]
+#[inline(never)]
+#[link_section = ".text.family_flag_create"]
+pub extern "C" fn xm1_rtos_objects_family_flag_create(id: i32, request_pointer: u32) -> i32 {
+    let saved = mask_lifecycle();
+    let code = create_flag_entry(id, request_pointer);
+    restore_lifecycle(saved);
+    code
+}
+
+/// Slot `+0x84`.
+#[no_mangle]
+#[inline(never)]
+#[link_section = ".text.family_flag_delete"]
+pub extern "C" fn xm1_rtos_objects_family_flag_delete(id: i32) -> i32 {
+    let saved = mask_lifecycle();
+    let (code, decision) = delete_flag_entry(id);
+    match decision {
+        DispatchDecision::Required => dispatch_teardown(saved),
+        DispatchDecision::NotRequired => restore_lifecycle(saved),
+    }
+    code
+}
+
+/// Slot `+0x88`.
+#[no_mangle]
+#[inline(never)]
+#[link_section = ".text.family_flag_set"]
+pub extern "C" fn xm1_rtos_objects_family_flag_set(id: i32, bits: u32) -> i32 {
+    flag_router(FlagInvocation::Set { id, bits })
+}
+
+/// Slot `+0x8c`.
+#[no_mangle]
+#[inline(never)]
+#[link_section = ".text.family_flag_set_handler"]
+pub extern "C" fn xm1_rtos_objects_family_flag_set_handler(id: i32, bits: u32) -> i32 {
+    flag_router(FlagInvocation::SetHandler { id, bits })
+}
+
+/// Slot `+0x90`.
+#[no_mangle]
+#[inline(never)]
+#[link_section = ".text.family_flag_clear"]
+pub extern "C" fn xm1_rtos_objects_family_flag_clear(id: i32, keep: u32) -> i32 {
+    flag_router(FlagInvocation::Clear { id, keep })
+}
+
+/// Slot `+0x94`.
+#[no_mangle]
+#[inline(never)]
+#[link_section = ".text.family_flag_wait"]
+pub extern "C" fn xm1_rtos_objects_family_flag_wait(id: i32, pattern: u32, mode: u32, result: u32) -> i32 {
+    flag_router(FlagInvocation::Wait { id, pattern, mode, result })
+}
+
+/// Slot `+0x9c`.
+#[no_mangle]
+#[inline(never)]
+#[link_section = ".text.family_flag_timed_wait"]
+pub extern "C" fn xm1_rtos_objects_family_flag_timed_wait(id: i32, pattern: u32, mode: u32, result: u32, timeout: i32) -> i32 {
+    flag_router(FlagInvocation::TimedWait { id, pattern, mode, result, timeout })
+}
+
+/// Slot `+0x98`.
+#[no_mangle]
+#[inline(never)]
+#[link_section = ".text.family_flag_poll"]
+pub extern "C" fn xm1_rtos_objects_family_flag_poll(id: i32, pattern: u32, mode: u32, result: u32) -> i32 {
+    flag_router(FlagInvocation::Poll { id, pattern, mode, result })
+}
+
+/// Slot `+0xcc`.
+#[no_mangle]
+#[inline(never)]
+#[link_section = ".text.family_mailbox_create"]
+pub extern "C" fn xm1_rtos_objects_family_mailbox_create(id: i32, request_pointer: u32) -> i32 {
+    let saved = mask_lifecycle();
+    let code = create_mailbox_entry(id, request_pointer);
+    restore_lifecycle(saved);
+    code
+}
+
+/// Slot `+0xd0`; the raw ABI discards the drained pointers as stock does.
+#[no_mangle]
+#[inline(never)]
+#[link_section = ".text.family_mailbox_delete"]
+pub extern "C" fn xm1_rtos_objects_family_mailbox_delete(id: i32) -> i32 {
+    let saved = mask_lifecycle();
+    let (code, decision) = delete_mailbox_entry(id);
+    match decision {
+        DispatchDecision::Required => dispatch_teardown(saved),
+        DispatchDecision::NotRequired => restore_lifecycle(saved),
+    }
+    code
+}
+
+/// Slot `+0xd4`.
+#[no_mangle]
+#[inline(never)]
+#[link_section = ".text.family_mailbox_send"]
+pub extern "C" fn xm1_rtos_objects_family_mailbox_send(id: i32, message: u32) -> i32 {
+    mailbox_router(MailboxInvocation::Send { id, message })
+}
+
+/// Slot `+0xd8`.
+#[no_mangle]
+#[inline(never)]
+#[link_section = ".text.family_mailbox_receive"]
+pub extern "C" fn xm1_rtos_objects_family_mailbox_receive(id: i32, message_out: u32) -> i32 {
+    mailbox_router(MailboxInvocation::Receive { id, message_out })
+}
+
+/// Slot `+0xe0`.
+#[no_mangle]
+#[inline(never)]
+#[link_section = ".text.family_mailbox_timed_receive"]
+pub extern "C" fn xm1_rtos_objects_family_mailbox_timed_receive(id: i32, message_out: u32, timeout: i32) -> i32 {
+    mailbox_router(MailboxInvocation::TimedReceive { id, message_out, timeout })
+}
+
+/// Slot `+0xdc`.
+#[no_mangle]
+#[inline(never)]
+#[link_section = ".text.family_mailbox_poll"]
+pub extern "C" fn xm1_rtos_objects_family_mailbox_poll(id: i32, message_out: u32) -> i32 {
+    mailbox_router(MailboxInvocation::Poll { id, message_out })
+}

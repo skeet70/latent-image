@@ -1,0 +1,10 @@
+[Unit]
+Description=Sample physical storage pressure every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+RandomizedDelaySec=20s
+
+[Install]
+WantedBy=timers.target

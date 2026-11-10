@@ -23,7 +23,13 @@ devenv shell -- host-build run //transport:camera -- --help
 devenv shell -- host-build run //emulation:unicorn-info
 ```
 
-`host-build [--output_base=PATH] COMMAND [ARGUMENT...]` (`//emulation:host-build`, which devenv also puts on PATH through `host-build.nix`) is the supported way to run a Bazel build, test or run. It waits for the host build lock, a POSIX record lock on `~/.cache/xm1-host-build/build.lock` shared by every checkout, so one admitted command runs at a time on the host; the lock is released when the process exits, however it exits, and the next holder stops any scope the previous one left running. It then runs `bazel --batch` in a `systemd-run --user --scope` with `MemoryMax=6G`, no swap and `OOMPolicy=stop`, adding `--jobs=4 --local_resources=memory=3072` before the caller's options. Batch mode keeps Bazel's JVM and actions inside the scope and leaves no server behind. In a worktree at `latent-image-worktrees/NAME` the output base is `~/.cache/bazel/latent-image-NAME`, in the main checkout Bazel's default; `--output_base` overrides it. `run` builds with `--script_path`, releases the lock and then executes the target, so an emulator target takes its slot after the build. `host-build` refuses to start inside an emulator slot or inside another admitted command, so a slot holder never waits for the build lock. A command example in this repository that calls `bazel build`, `test` or `run`, with or without `--batch`, `--output_base` and `--jobs`, runs as `host-build` with the same command, targets and options.
+`host-build [--output_base=PATH] COMMAND [ARGUMENT...]` (`//emulation:host-build`, which devenv also puts on PATH through `host-build.nix`) is the supported way to run a Bazel build, test or run. It waits for the host build lock, a POSIX record lock on `~/.cache/xm1-host-build/build.lock` shared by every checkout, so one admitted command runs at a time on the host; the lock is released when the process exits, however it exits, and the next holder stops any scope the previous one left running.
+
+On first contention and observed owner changes, stderr names the kernel-sampled holder PID, command name and working directory when readable. An observed explicit `--output_base` also supplies the existing `command.log` path. Metadata reads are bounded; cut, oversized or non-ASCII/control-byte output bases remain unavailable rather than becoming altered paths. A changed owner during metadata collection has no associated details. These are best-effort samples, not atomic ownership receipts, and never authorize stopping a holder. Unchanged observations stay quiet. Exercise the real-wrapper serialization, holder-death, owner-change, diagnostic-boundary and exit-status checks with `devenv shell -- host-build test --jobs=2 --local_test_jobs=1 //emulation:host-build-tests`. This diagnostic reduces manual investigation, not queue service time.
+
+After admission, `host-build` runs `bazel --batch` in a `systemd-run --user --scope` with `MemoryMax=6G`, no swap and `OOMPolicy=stop`, adding `--jobs=4 --local_resources=memory=3072` before the caller's options. Batch mode keeps Bazel's JVM and actions inside the scope and leaves no server behind. In a worktree at `latent-image-worktrees/NAME` the output base is `~/.cache/bazel/latent-image-NAME`, in the main checkout Bazel's default; `--output_base` overrides it. `run` builds with `--script_path`, releases the lock and then executes the target, so an emulator target takes its slot after the build. `host-build` refuses to start inside an emulator slot or inside another admitted command, so a slot holder never waits for the build lock. A command example in this repository that calls `bazel build`, `test` or `run`, with or without `--batch`, `--output_base` and `--jobs`, runs as `host-build` with the same command, targets and options.
+
+Before starting Bazel, `host-build` enforces the existing `XM1_STORAGE_MIN_FREE` reserve, default 100 GiB, on the host cache filesystem. The check runs after lock acquisition and abandoned-scope cleanup, independently of optional aggregate accounting. An invalid reserve, failed probe or insufficient free space exits 75 without starting Bazel. It does not terminate an admitted build or constrain writers on another filesystem. Below the reserve, invoke an already-built maintenance executable directly rather than trying to build it through `host-build`.
 
 The last stderr line is `host-build verdict` followed by a JSON object. `verdict` is `passed`, `failed` (Bazel's exit status is kept), `interrupted` (Bazel's exit 8), `resource-failure` or `unknown`. `resource_failure` is `oom-kill` when the scope's systemd `Result` is `oom-kill`, read before systemd collects the unit, or `nix-daemon-oom-kill` when a failed command coincides with a rise in `nix-daemon.service`'s `memory.events` `oom_kill`; a resource failure exits 75 and is not a firmware or emulator discrepancy. An unreadable unit status is `unit_result` `unknown`, never success. The object also carries the lock wait, wall time, the scope's CPU time and memory peak and the Nix daemon's CPU time during the command, which includes any concurrent Nix builds outside admission.
 
@@ -90,6 +96,12 @@ systemctl --user start latent-image-cache-gc.service
 ```
 
 Inspect `systemctl --user status latent-image-cache-gc.timer` for the next run and `journalctl --user -u latent-image-cache-gc.service` for failures. This collects only Bazel's configured disk cache; it does not prune output bases, Cargo targets, Nix staging or research data. The policy is not a hard filesystem quota, and the cache can exceed its target between collections. A separate, disabled-by-default timer applies a reviewed selective retention policy to explicit Cargo roots; [selective Cargo retention](#selective-cargo-retention) covers its policy, privilege and installation.
+
+### Nix store collection
+
+The host's existing `nix-gc.timer` runs every six hours with up to one hour of jitter, under the reviewed standing policy. Its unchanged service command is `nix-collect-garbage --delete-older-than 30d`: expire profile generations older than 30 days, then collect unreferenced store paths using Nix's liveness checks. This is separate from the Bazel cache collector, Cargo retention and the read-only accounting timers. Unrooted SDKs and tools can be collected even when a report mentions them; no research-preservation roots are inferred from that mention.
+
+Inspect `systemctl --user list-timers nix-gc.timer` and `journalctl --user -u nix-gc.service`. This policy deletes no project directories and schedules no filesystem balance. Btrfs block-group compaction remains a separately reviewed administrative operation; metadata selection also includes system block groups, and its filter limits are not a global count across all types.
 
 ### Selective Cargo retention
 
@@ -170,6 +182,70 @@ systemctl --user enable --now latent-image-cargo-retention.timer
 ```
 
 Inspect `systemctl --user status latent-image-cargo-retention.timer` and `journalctl --user -u latent-image-cargo-retention.service`. The timer has up to 30 minutes of jitter and can catch up a missed invocation. `TargetUnmet` is a retention result, not permission to delete protected files. Stop future automatic runs with `systemctl --user disable --now latent-image-cargo-retention.timer`; removing an active run's grant does not undo completed removals.
+
+### Whole-host accounting and aggregate producer checks
+
+`//build-support:storage-accounting` is a separate read-only checkpoint. It never invokes Cargo retention, garbage collection, sudo or deletion. `sample` records physical filesystem usage, Btrfs chunk capacity, directory allocation, aggregate producer budgets and coverage failures. Filesystem identities distinguish separate same-label mounts and coalesce Btrfs subvolume aliases. Keep filesystem-only and detailed samples in separate state directories.
+
+```sh
+devenv shell -- host-build build --jobs=2 //build-support:storage-accounting
+tool="$(realpath bazel-bin/build-support/storage-accounting)"
+config="$HOME/.config/latent-image/storage-accounting.json"
+state="$HOME/.local/state/latent-image/storage-accounting"
+"$tool" sample --config "$config" --state "$state/fast" --filesystem-only +RTS -M128M -RTS
+"$tool" sample --config "$config" --state "$state/detailed" +RTS -M1G -RTS
+"$tool" check --config "$config" --state "$state/detailed"
+```
+
+Each state directory retains only current and previous snapshots in atomic `accounting.json`, with a lock file and bounded temporary output. A configuration change resets growth compatibility. Directory growth includes newly created and removed paths only when scan depth and coverage prove the missing side was zero. Permission failures, disappeared paths, malformed output, timeouts and output bounds are coverage gaps, not zero bytes. A fatal filesystem-probe failure preserves the previous state. Stdout is a bounded JSON summary; detailed paths and issues remain in the private state file.
+
+Physical filesystem deltas include writers outside configured producer paths. Directory allocation is not unique physical usage: hardlinks are deduplicated within each producer's union, while reflinks, compression and overlap between producers prevent summing their totals into a physical residual. Btrfs allocated-but-unused metadata capacity is separate from retained file growth. Short-window rates are net retained-use changes, not gross writes or forecasts with a guaranteed lifetime.
+
+Configuration is schema-1 JSON. Paths must be absolute and normalized; root and producer identifiers must be unique. Declare separate scan roots at nested filesystem boundaries. Copy scopes count immediate directories matching a prefix, and require enough depth in the effective scan root to prove a count. Explicit paths and discovered copies share one producer byte budget. This example is illustrative, not deletion authority or the host's accepted Cargo-retention policy:
+
+```json
+{
+  "accountingSchemaVersion": 1,
+  "accountingScanRoots": [
+    {"scanRootId": "projects", "scanRootPath": "/srv/projects", "scanDepth": 3}
+  ],
+  "accountingFilesystemPaths": ["/srv/projects"],
+  "accountingReserveBytes": 107374182400,
+  "accountingCommandTimeout": 900,
+  "accountingMaximumAge": 7200,
+  "accountingBudgets": [
+    {
+      "producerId": "project",
+      "producerPaths": ["/srv/projects/project"],
+      "producerByteBudget": 107374182400,
+      "producerCopyScopes": [
+        {"copyParent": "/srv/projects/copies", "copyNamePrefix": "project-"}
+      ],
+      "producerCopyBudget": 3
+    }
+  ]
+}
+```
+
+`check` re-evaluates the detailed snapshot and probes live free space and each path's filesystem identity. Missing, stale, incompatible, incomplete or over-budget evidence refuses admission. Cached verdicts are not authority. `guard --config FILE --state DIR -- COMMAND ARGS...` executes the command only after a healthy check and preserves its exit status. These are admission checks, not quotas: active or unguarded writers can still consume space.
+
+`host-build` also supports an opt-in aggregate check after acquiring its existing host lock. Set both `XM1_STORAGE_ACCOUNTING_CONFIG` and `XM1_STORAGE_ACCOUNTING_STATE`; optionally set `XM1_STORAGE_ACCOUNTING_TOOL`, otherwise it uses `$HOME/.local/libexec/latent-image/storage-accounting`. A failed check exits 75 before starting the build. Aggregate admission is not enabled by default; the live free-space reserve above is mandatory for the updated launcher.
+
+The checked-in `latent-image-storage-sample` user service/timer samples physical usage every five minutes; `latent-image-storage-inventory` inventories directories hourly. They have separate state locks, memory/time limits and low I/O priority; the detailed service is limited to half a CPU. They inspect the real `/var/tmp`, not a private temporary namespace. User permissions still bound coverage.
+
+Install the built executable at `$HOME/.local/libexec/latent-image/storage-accounting`, configuration at `$HOME/.config/latent-image/storage-accounting.json`, and an environment file at the same prefix with `.env` instead of `.json`. Set its `PATH` to the pinned GNU coreutils and btrfs-progs binary directories and `LC_ALL=C.UTF-8`. Create the state parent and `fast`, `detailed`, `runtime` subdirectories with mode 0700. Inspect `ldd` and pin the executable's actual Nix runtime packages plus those tool packages under the runtime directory with `nix-store --realise --add-root PREFIX --indirect PATH...`; do not pin research SDKs as part of this installation.
+
+```sh
+install -Dm0644 build-support/systemd/latent-image-storage-sample.service "$HOME/.config/systemd/user/latent-image-storage-sample.service"
+install -Dm0644 build-support/systemd/latent-image-storage-sample.timer "$HOME/.config/systemd/user/latent-image-storage-sample.timer"
+install -Dm0644 build-support/systemd/latent-image-storage-inventory.service "$HOME/.config/systemd/user/latent-image-storage-inventory.service"
+install -Dm0644 build-support/systemd/latent-image-storage-inventory.timer "$HOME/.config/systemd/user/latent-image-storage-inventory.timer"
+systemctl --user daemon-reload
+systemctl --user start latent-image-storage-sample.service latent-image-storage-inventory.service
+systemctl --user enable --now latent-image-storage-sample.timer latent-image-storage-inventory.timer
+```
+
+Inspect `systemctl --user list-timers 'latent-image-storage-*'`, `journalctl --user -u latent-image-storage-sample.service -u latent-image-storage-inventory.service`, and each state's `accounting.json`. Disable future samples with `systemctl --user disable --now latent-image-storage-sample.timer latent-image-storage-inventory.timer`. Neither observer timer grants deletion authority or changes Nix GC.
 
 ### Research-output admission and observer retention
 

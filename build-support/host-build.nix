@@ -13,7 +13,8 @@ let
   };
 in
 pkgs.runCommand "host-build" { nativeBuildInputs = [ ghc ]; } ''
-  mkdir -p $out/bin build
-  ghc -XGHC2021 -Wall -Werror -O2 -threaded -i${sources} -outputdir build \
+  mkdir -p $out/bin build/FujiAF
+  cp ${../host/FujiAF/StorageBudget.hs} build/FujiAF/StorageBudget.hs
+  ghc -XGHC2021 -Wall -Werror -O2 -threaded -i${sources} -ibuild -outputdir build \
     -o $out/bin/host-build ${sources}/HostBuildRun.hs
 ''

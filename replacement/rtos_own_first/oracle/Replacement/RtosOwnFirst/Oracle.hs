@@ -75,9 +75,8 @@ import qualified Emulation.NativeObservation as N
 import Emulation.NativeObservation (Register (..), RegionId (..), RunnerStatus (..))
 import Emulation.OwnedCase (CaseId (..), CaseRegion, CaseSpec (..), Permission (..), loadObservedBatch, mkRegion, word32le, writeBatch)
 import FujiAF.Host (get, list, num, str)
-import qualified FujiAF.FirstStage as F
 import Numeric (readHex, showHex)
-import Replacement.RtosOwnFirst.Artifact (LinkedDomain (..), StageError (..), ownedExtents)
+import Replacement.RtosOwnFirst.Artifact (LinkedDomain, StageError, ownedExtents)
 import qualified Replacement.RtosOwnFirst.Assembly as A
 import Replacement.RtosOwnFirst.Regions
 import System.FilePath ((</>))
@@ -447,41 +446,10 @@ data OwnedDomain = OwnedDomain
   , ownedTable :: DomainTable
   , ownedFill :: Word32
   , ownedRegions :: [(Region, B.ByteString)]
-  , ownedPlacement :: Maybe (M.Map SlotOffset (Word32, Word32), (Word32, Word32))
-  , ownedImage :: Maybe (Word32, B.ByteString)
   }
 
 ownedDomain :: Word32 -> Domain -> DomainTable -> LinkedDomain -> Either StageError OwnedDomain
-ownedDomain fill domain table linked = do
-  symbols <- either (const (Left (SymbolsUnparsed domain))) Right (F.parseSymbols (linkedSymbols linked))
-  let rows = domainExtents table
-      byName name = case [symbol | symbol <- symbols, F.symbolName symbol == name] of
-        [symbol] -> Right symbol
-        _ -> Left (SymbolMissing domain (SymbolName name))
-      symbolNameOf region = let SymbolName text = regionSymbol region in text
-  placed <- forM rows $ \region -> do
-    symbol <- byName (symbolNameOf region)
-    pure (region, F.symbolAddress symbol, F.symbolSize symbol)
-  if and [address == regionEntryWord region | (region, address, _) <- placed]
-    then (\regions -> OwnedDomain domain table fill regions Nothing Nothing) <$> ownedExtents fill domain table linked
-    else do
-      let base = minimum [F.symbolAddress symbol | symbol <- symbols, F.symbolSize symbol > 0, F.symbolAddress symbol >= loaderBase]
-          image = linkedBin linked
-          slice address size = B.take (fromIntegral size) (B.drop (fromIntegral (address - base)) image)
-      bodySymbol <- byName (let SymbolName text = bodySymbol (tableBody table) in text)
-      let bodyPlacement = (F.symbolAddress bodySymbol, F.symbolSize bodySymbol)
-      installed <- forM placed $ \(region, address, size) -> (,) region <$> pure (slice address size)
-      pure OwnedDomain
-        { ownedDomainId = domain
-        , ownedTable = table
-        , ownedFill = fill
-        , ownedRegions = installed
-        , ownedPlacement = Just (M.fromList [(regionSlot region, (address, size)) | (region, address, size) <- placed], bodyPlacement)
-        , ownedImage = Just (base, image)
-        }
-  where
-    loaderBase = case domain of DomainA -> 0x40000; DomainB -> 0xd0000
-    regionEntryWord region = let GuestAddress value = regionEntry region in value
+ownedDomain fill domain table linked = OwnedDomain domain table fill <$> ownedExtents fill domain table linked
 
 regionOf :: DomainTable -> Slot -> Either String Region
 regionOf table slot = maybe (Left ("no region for " ++ slotTag slot)) Right (find ((== slotOffset slot) . regionSlot) (domainExtents table))
@@ -519,28 +487,17 @@ stockBody domain table loader slot = do
 ownedBody :: OwnedDomain -> Slot -> Either String Body
 ownedBody owned slot = do
   let table = ownedTable owned
-      placementOf region = case ownedPlacement owned of
-        Nothing -> let (start, end) = extentBounds (regionExtent region) in (start, end - start)
-        Just (placements, _) -> maybe (regionStart region, fromIntegral (extentBytes (regionExtent region))) id (M.lookup (regionSlot region) placements)
-      regionStart region = let GuestAddress value = extentStart (regionExtent region) in value
-      placementOfRegion region = placementOf region
+      body = tableBody table
+      (bodyStart, bodyEnd) = extentBounds (bodyExtent body)
   entry <- slotEntry table slot
   mapped <- forM (ownedReach table slot) $ \offset ->
     maybe (Left "owned region missing") Right (find ((== offset) . regionSlot . fst) (ownedRegions owned))
-  let functions (region, _) = [placementOfRegion region]
-      bodyExtras = case ownedImage owned of
-        Nothing -> []
-        Just (base, image) ->
-          [ (entry, sliceImage base image entry 4) ]
-          ++ [ (address, sliceImage base image address size)
-             | (address, size) <- [bodyPlacement | Just (_, bodyPlacement) <- [ownedPlacement owned]], slot == S1618
-             ]
-      sliceImage :: Word32 -> B.ByteString -> Word32 -> Word32 -> B.ByteString
-      sliceImage base image address size = B.take (fromIntegral size) (B.drop (fromIntegral (address - base)) image)
-      extraFunctions = case ownedPlacement owned of
-        Just (_, (address, size)) | slot == S1618 -> [(address, size)]
-        _ -> []
-  pure (Body entry (map (\(region, bytes) -> (fst (placementOfRegion region), bytes)) mapped ++ bodyExtras) (concatMap functions mapped ++ extraFunctions ++ [(entry, 4) | ownedImage owned /= Nothing]))
+  let functions (region, _)
+        | regionSlot region == bodyHost body = [(start, bodyStart - start), (bodyStart, bodyEnd - bodyStart)]
+        | otherwise = [(start, end - start)]
+        where
+          (start, end) = extentBounds (regionExtent region)
+  pure (Body entry [(fst (extentBounds (regionExtent region)), bytes) | (region, bytes) <- mapped] (concatMap functions mapped))
 
 -- | The body with the function at its entry rewritten as @code@ followed by fill words.
 replaceEntry :: Word32 -> [Word32] -> Body -> Either String Body

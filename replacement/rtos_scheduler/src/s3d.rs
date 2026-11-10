@@ -12,8 +12,8 @@ pub mod layout;
 pub mod timeout;
 
 use layout::{
-    Domain, DomainId, DomainWords, GuestAddress, KernelContext, LockRecord, Priority, ReadyHead,
-    Task, TaskDefinition, TaskFlags, TaskState, WaitBlock, WaitQueue,
+    Domain, DomainId, GuestAddress, KernelContext, LockRecord, Priority, ReadyHead, Task,
+    TaskDefinition, TaskFlags, TaskState, WaitBlock, WaitQueue,
 };
 
 #[cfg(test)]
@@ -763,43 +763,19 @@ fn release<M: Machine>(m: &M, domain: Domain, id: EncodedId, handler: bool) -> R
         return Err(ServiceError::NotWaiting);
     }
     if state & TaskState::OBJECT_QUEUED.bits() == 0 {
-        release_waiting(m, words, record, task, saved, handler);
+        let dispatch = release_locked(m, record, task);
+        if dispatch {
+            if handler {
+                put(m, words.reschedule, 1);
+                unlock(m, record.scheduler_lock(), saved);
+            } else {
+                notify_then_switch(m, record, record.scheduler_lock(), saved, SwitchReason::Release);
+            }
+        } else {
+            unlock(m, record.scheduler_lock(), saved);
+        }
         return Ok(());
     }
-    release_queued(m, words, record, task, saved, handler)
-}
-
-#[inline(never)]
-fn release_waiting<M: Machine>(
-    m: &M,
-    words: DomainWords,
-    record: KernelContext,
-    task: Task,
-    saved: InterruptState,
-    handler: bool,
-) {
-    let dispatch = release_locked(m, record, task);
-    if dispatch {
-        if handler {
-            put(m, words.reschedule, 1);
-            unlock(m, record.scheduler_lock(), saved);
-        } else {
-            notify_then_switch(m, record, record.scheduler_lock(), saved, SwitchReason::Release);
-        }
-    } else {
-        unlock(m, record.scheduler_lock(), saved);
-    }
-}
-
-#[inline(never)]
-fn release_queued<M: Machine>(
-    m: &M,
-    words: DomainWords,
-    record: KernelContext,
-    task: Task,
-    saved: InterruptState,
-    handler: bool,
-) -> Result<(), ServiceError> {
     let owner = owner_context(m, &words, task).ok_or(ServiceError::InvalidId)?;
     put(m, task.cancel_pending(), 1);
     m.lock_release(record.scheduler_lock());

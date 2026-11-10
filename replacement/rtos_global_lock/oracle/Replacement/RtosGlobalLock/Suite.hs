@@ -314,11 +314,6 @@ caseFor domain role stockImage ownedImage symbols one =
         [ mkRegion (RegionId "slots") (GuestAddress (fromIntegral (entryBase domain))) (fromIntegral (entrySize domain)) ReadExecute (slice ownedImage (entryBase domain) (entrySize domain))
         , mkRegion (RegionId "atomics") (GuestAddress (fromIntegral (atomicsBase domain))) (fromIntegral (atomicsSize domain)) ReadExecute (slice ownedImage (atomicsBase domain) (atomicsSize domain))
         ]
-          ++ [ mkRegion (RegionId ("body-" ++ show n)) (GuestAddress (fromIntegral address)) (fromIntegral size) ReadExecute (slice ownedImage address size)
-             | ((address, size), n) <- zip bodySymbols [0 :: Int ..]
-             ]
-    spans = [(entryBase domain, entrySize domain), (atomicsBase domain, atomicsSize domain)]
-    bodySymbols = [symbol | symbol@(address, _) <- symbols, not (any (\(base, length') -> address >= base && address < base + length') spans)]
     functions = case role of
       Stock ->
         [ (entryBase domain, 0x1c), (entryBase domain + 0x1c, 0x1c), (entryBase domain + 0x38, 0x1c)
@@ -365,14 +360,16 @@ hexPair :: (Word32, Word32) -> String
 hexPair (address, value) = showHexWord address ++ "=" ++ showHexWord value
 
 parseOwnedSymbols :: Domain -> FilePath -> IO [(Word32, Word32)]
-parseOwnedSymbols _ path = do
+parseOwnedSymbols domain path = do
   rows <- lines <$> readFile path
   pure (concatMap row rows)
   where
+    spans = [(entryBase domain, entrySize domain), (atomicsBase domain, atomicsSize domain)]
+    inside address size = any (\(base, length') -> address >= base && address + size <= base + length') spans
     row line = case words line of
       [a, z, kind, _] -> case (parseWord32 a, parseWord32 z) of
         (Just address, Just size)
-          | kind `elem` ["T", "t"], size > 0 -> [(address, size)]
+          | kind `elem` ["T", "t"], size > 0, inside address size -> [(address, size)]
         _ -> []
       _ -> []
 
@@ -394,7 +391,7 @@ runDomain runner cacheRoot directory domain stockImage ownedImage symbols = do
         [ entryBase domain, entryBase domain + 0x1c, entryBase domain + 0x38
         , atomicsBase domain, atomicsBase domain + 0x28, atomicsBase domain + 0x54
         ]
-  unless (all (`elem` map fst symbols) origins) (error "owned symbols lack the six public entries")
+  unless (map fst symbols == origins) (error "owned symbols are not the six stock extents")
   (rootRuns, rootControls) <- runCohort [one | one <- cases, cohortOf one == "root"] directory
   (conventionRuns, conventionControls) <- runCohort [one | one <- cases, cohortOf one == "conventions"] (directory </> "conventions")
   pure (rootRuns ++ conventionRuns, rootControls ++ conventionControls)

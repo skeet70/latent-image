@@ -137,22 +137,13 @@ haskell_binary(
     main_file = "S2Main.hs",
     args = [
         "--runner", "$(rootpath //emulation:native-runner)",
-        "--owned-a", "$(rootpath //replacement/rtos_platform:platform-a.bin)",
-        "--owned-b", "$(rootpath //replacement/rtos_platform:platform-b.bin)",
-        "--symbols-a", "$(rootpath //replacement/rtos_platform:platform-a.symbols)",
-        "--symbols-b", "$(rootpath //replacement/rtos_platform:platform-b.symbols)",
+        "--owned-a", "$(rootpath //replacement/rtos_scheduler:scheduler-s2-a.bin)",
+        "--owned-b", "$(rootpath //replacement/rtos_scheduler:scheduler-s2-b.bin)",
     ],
-    data = [
-        "//emulation:native-runner",
-        "//replacement/rtos_platform:platform-a.bin",
-        "//replacement/rtos_platform:platform-b.bin",
-        "//replacement/rtos_platform:platform-a.symbols",
-        "//replacement/rtos_platform:platform-b.symbols",
-    ],
+    data = ["//emulation:native-runner", "//replacement/rtos_scheduler:scheduler-s2-a.bin", "//replacement/rtos_scheduler:scheduler-s2-b.bin"],
     ghcopts = _GHCOPTS,
     deps = [
         ":scheduler-oracle-lib",
-        "//emulation:cached-native-batch",
         "//emulation:case-sha256",
         "//emulation:native-observation",
         "//emulation:owned-case",
@@ -197,7 +188,6 @@ haskell_binary(
         "//host:json",
         "//replacement/rtos_own_first/oracle:own-first-oracle-lib",
         "//replacement/rtos_own_first/stage:own-first-artifact",
-        "//replacement/rtos_platform:aggregate",
     ],
 )
 
@@ -222,7 +212,6 @@ haskell_binary(
         "//host:directory",
         "//host:filepath",
         "//host:json",
-        "//replacement/rtos_platform:aggregate",
     ],
 )
 
@@ -250,7 +239,6 @@ haskell_binary(
         "//host:directory",
         "//host:filepath",
         "//host:json",
-        "//replacement/rtos_platform:aggregate",
     ],
 )
 
@@ -281,6 +269,5 @@ haskell_binary(
         "//host:directory",
         "//host:filepath",
         "//host:json",
-        "//replacement/rtos_platform:aggregate",
     ],
 )

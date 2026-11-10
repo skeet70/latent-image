@@ -7,17 +7,18 @@ module Main (main) where
 import Control.Monad (forM_, unless)
 import Data.Aeson (object, (.=), encode)
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Char8 as BC
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Map.Strict as M
 import Data.Word (Word32)
 import FujiAF.Host (failH)
 import FujiAF.StorageBudget (checkStorageBudget)
 import FujiModNativePaths (fujimodNativeCase)
+import Numeric (readHex)
 import System.Directory (createDirectoryIfMissing, makeAbsolute)
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
 import System.FilePath ((</>), takeDirectory)
-import qualified Replacement.RtosPlatform.Aggregate as Agg
 import Replacement.RtosFixedPool.Oracle (Domain (..), Image (..), Run (..), Service (..), bodyRegion, entries, extents, parseFacts, runFamily)
 
 main :: IO ()
@@ -43,12 +44,14 @@ main = do
   ownedBBytes <- B.readFile ownedB
   ownedASymbols <- parseSymbols <$> B.readFile symbolsA
   ownedBSymbols <- parseSymbols <$> B.readFile symbolsB
+  baseA <- origin DomainA ownedASymbols
+  baseB <- origin DomainB ownedBSymbols
   checkStorageBudget (takeDirectory resultsPath)
   createDirectoryIfMissing True cacheRoot
-  let stockA = Image 0x40000 loaderABytes []
-      stockB = Image 0xd0000 loaderBBytes []
-  ownedAImage <- ownedImage DomainA ownedABytes ownedASymbols
-  ownedBImage <- ownedImage DomainB ownedBBytes ownedBSymbols
+  let stockA = Image 0x40000 loaderABytes
+      stockB = Image 0xd0000 loaderBBytes
+      ownedAImage = Image baseA ownedABytes
+      ownedBImage = Image baseB ownedBBytes
   runA <- runFamily runner cacheRoot (takeDirectory resultsPath </> "domain-a") facts DomainA stockA ownedAImage
   runB <- runFamily runner cacheRoot (takeDirectory resultsPath </> "domain-b") facts DomainB stockB ownedBImage
   let runs = [runA, runB]
@@ -121,18 +124,13 @@ expectedEntries domain =
   , (entries domain PollUnchecked, "xm1_rtos_fixed_pool_poll_unchecked")
   ]
 
-parseSymbols :: B.ByteString -> [Agg.AggregateSymbol]
-parseSymbols = either error id . Agg.parseAggregateSymbols
-
-ownedImage :: Domain -> B.ByteString -> [Agg.AggregateSymbol] -> IO Image
-ownedImage domain bytes symbols = case [Agg.symbolAddress symbol | symbol <- symbols, Agg.symbolName symbol == "xm1_rtos_fixed_pool_poll_unchecked"] of
-  (address : _) | address == entries domain PollUnchecked -> do
-    base <- origin domain (M.fromList [(Agg.symbolName symbol, Agg.symbolAddress symbol) | symbol <- symbols])
-    pure (Image base bytes [])
-  _ -> do
-    image <- either fail pure (Agg.aggregateImage symbols bytes)
-    let selected = Agg.symbolsWithPrefixes ["xm1_rtos_fixed_pool_", "xm1_platform_veneer_fixed_pool_", "_RINvNtNtCs8O56LNNgKAo_25xm1_rtos_fixed_pool_stage"] symbols
-    pure (Image (Agg.imageBase image) (Agg.imageBytes image) selected)
+parseSymbols :: B.ByteString -> M.Map String Word32
+parseSymbols bytes = M.fromList
+  [ (name, value)
+  | line <- lines (BC.unpack bytes)
+  , address : _ : _ : name : _ <- [words line]
+  , [(value, "")] <- [readHex address]
+  ]
 
 required :: String -> IO FilePath
 required flag = do

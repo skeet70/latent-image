@@ -15,7 +15,6 @@ import System.Directory (createDirectoryIfMissing, makeAbsolute)
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
 import System.FilePath ((</>), takeDirectory)
-import qualified Replacement.RtosPlatform.Aggregate as Agg
 import Replacement.RtosSemaphore.Oracle (Domain (..), Image (..), Run (..), extents, parseFacts, runCases, runDomain, runFamily, runReuse)
 
 main :: IO ()
@@ -31,22 +30,18 @@ main = do
   loaderB <- required "--loader-b"
   ownedA <- required "--owned-a-bin"
   ownedB <- required "--owned-b-bin"
-  symbolsAPath <- optional "--symbols-a"
-  symbolsBPath <- optional "--symbols-b"
   resultsPath <- required "--results"
   facts <- either fail pure . parseFacts =<< B.readFile layoutPath
   loaderABytes <- B.readFile loaderA
   loaderBBytes <- B.readFile loaderB
   ownedABytes <- B.readFile ownedA
   ownedBBytes <- B.readFile ownedB
-  symbolsA <- traverse (readSymbols) symbolsAPath
-  symbolsB <- traverse (readSymbols) symbolsBPath
   checkStorageBudget (takeDirectory resultsPath)
   createDirectoryIfMissing True cacheRoot
-  let stockA = Image 0x40000 loaderABytes []
-      stockB = Image 0xd0000 loaderBBytes []
-      ownedAImage = ownedImage DomainA ownedABytes symbolsA
-      ownedBImage = ownedImage DomainB ownedBBytes symbolsB
+  let stockA = Image 0x40000 loaderABytes
+      stockB = Image 0xd0000 loaderBBytes
+      ownedAImage = Image (minimum (map fst (extents DomainA))) ownedABytes
+      ownedBImage = Image (minimum (map fst (extents DomainB))) ownedBBytes
   runA <- runFamily runner cacheRoot (takeDirectory resultsPath </> "domain-a") facts DomainA stockA ownedAImage
   runB <- runFamily runner cacheRoot (takeDirectory resultsPath </> "domain-b") facts DomainB stockB ownedBImage
   let runs = [runA, runB]
@@ -75,24 +70,6 @@ main = do
     putStrLn (show (runDomain run) ++ " " ++ name ++ ": " ++ outcomeText result)
   forM_ failures $ \(name, message) -> putStrLn (name ++ ": " ++ message)
   unless (null failures) exitFailure
-
-ownedImage :: Domain -> B.ByteString -> Maybe [Agg.AggregateSymbol] -> Image
-ownedImage domain bytes Nothing = Image (minimum (map fst (extents domain))) bytes []
-ownedImage _ bytes (Just symbols) =
-  let image = either error id (Agg.aggregateImage symbols bytes)
-      selected = Agg.symbolsWithPrefixes ["xm1_rtos_semaphore_", "xm1_platform_veneer_semaphore_"] symbols
-   in Image (Agg.imageBase image) (Agg.imageBytes image) selected
-
-readSymbols :: FilePath -> IO [Agg.AggregateSymbol]
-readSymbols path = either fail pure . Agg.parseAggregateSymbols =<< B.readFile path
-
-optional :: String -> IO (Maybe FilePath)
-optional flag = do
-  arguments <- getArgs
-  case dropWhile (/= flag) arguments of
-    [] -> pure Nothing
-    [_] -> failH (flag ++ " needs a value")
-    _ : value : _ -> Just <$> makeAbsolute value
 
 required :: String -> IO FilePath
 required flag = do

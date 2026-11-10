@@ -5,13 +5,16 @@ module Replacement.RtosTimer.Suite
   ( Image (..)
   , CaseRun (..)
   , ControlRun (..)
+  , OwnedSymbol (..)
   , runDomain
   , parseOwnedSymbols
+  , parseS3dSymbols
   ) where
 
 import Control.Monad (forM, forM_, unless)
 import Data.Bits ((.&.), (.|.), complement, shiftL, shiftR, xor)
 import qualified Data.ByteString as B
+import Data.List (isSubsequenceOf)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe)
 import Data.Word (Word32, Word8)
@@ -44,6 +47,10 @@ data Check
   | EntryIndexIs Int Word32
   | CpsrControlIs Word32
   | WordIs String Word32 Word32
+  | WordIsRole String Word32 Word32 Word32
+  | ByteIs String Word32 Word32
+  | WroteSequence Word32 [Word32]
+  | WroteSequenceOwned Word32 [Word32]
   | RegionsUnchanged [String]
   | ConfigurationPublished
   | ArenaOwned
@@ -571,11 +578,7 @@ check facts domain _one role observation check' = case check' of
   CountIs value -> expectWord "kernel" (dfTimerCount (domainFacts facts domain)) value
   BaseIs value -> expectWord "kernel" (dfTimerBase (domainFacts facts domain)) value
   TickIs value -> expectWord "kernel" (dfTickNow (domainFacts facts domain)) value
-  RegisterIs register value ->
-    case lookupRegister register observation of
-      Just actual | actual == value -> Right ()
-      Just actual -> Left (registerLabel register ++ " is " ++ showHexWord actual ++ ", expected " ++ showHexWord value)
-      Nothing -> Left ("missing register " ++ registerLabel register)
+  RegisterIs register value -> checkObservation facts domain role observation (RegisterIs register value)
   CallbacksAre expected -> do
     count <- readCounter
     unless (count == fromIntegral (length expected)) (Left ("callback count " ++ show count ++ ", expected " ++ show (length expected)))
@@ -587,13 +590,10 @@ check facts domain _one role observation check' = case check' of
     actual <- forM [0 .. fromIntegral count - 1] $ \index -> readWord "entries" (receiptBase + 0x80 + index * 4)
     unless (actual == expected) (Left ("callback lock words " ++ show actual ++ ", expected " ++ show expected))
   EntryIndexIs slot value -> expectWord "entries" (entryAddress slot) value
-  CpsrControlIs value ->
-    case lookupRegister Cpsr observation of
-      Just actual
-        | cpsrControl actual == cpsrControl value -> Right ()
-        | otherwise -> Left ("cpsr control " ++ showHexWord (cpsrControl actual) ++ ", expected " ++ showHexWord (cpsrControl value))
-      Nothing -> Left "missing register cpsr"
+  CpsrControlIs value -> checkObservation facts domain role observation (CpsrControlIs value)
   WordIs region address value -> expectWord region address value
+  ByteIs region address value -> checkObservation facts domain role observation (ByteIs region address value)
+  WroteSequence address expected -> checkObservation facts domain role observation (WroteSequence address expected)
   ConfigurationPublished -> do
     let d = domainFacts facts domain
         region = regionName configurationRegion
@@ -620,6 +620,7 @@ check facts domain _one role observation check' = case check' of
     forM_ regions $ \region -> do
       actual <- readRegion region
       unless (actual == initialRegion region) (Left ("region " ++ region ++ " changed"))
+  other -> checkObservation facts domain role observation other
   where
     readCounter = readWord "entries" counterBase
     expectWord region address value = do
@@ -648,6 +649,65 @@ check facts domain _one role observation check' = case check' of
     nodeRegion address
       | role == Owned, let (low, high) = arenaSpan facts domain, address >= low, address < high = "arena"
       | otherwise = "kernel"
+
+-- | The checks that read only the observation, shared by the heap cases and the tick-to-completion
+-- composition cases.
+checkObservation :: Facts -> Domain -> Role -> NativeObservation -> Check -> Either String ()
+checkObservation _facts _domain _role observation check' = case check' of
+  RegisterIs register value ->
+    case lookupRegister register observation of
+      Just actual | actual == value -> Right ()
+      Just actual -> Left (registerLabel register ++ " is " ++ showHexWord actual ++ ", expected " ++ showHexWord value)
+      Nothing -> Left ("missing register " ++ registerLabel register)
+  CpsrControlIs value ->
+    case lookupRegister Cpsr observation of
+      Just actual
+        | cpsrControl actual == cpsrControl value -> Right ()
+        | otherwise -> Left ("cpsr control " ++ showHexWord (cpsrControl actual) ++ ", expected " ++ showHexWord (cpsrControl value))
+      Nothing -> Left "missing register cpsr"
+  WordIs region address value -> expectWord region address value
+  WordIsRole region address stockValue ownedValue -> expectWord region address (if _role == Stock then stockValue else ownedValue)
+  ByteIs region address value -> do
+    bytes <- readRegion region
+    if address < regionLow region || address + 1 > regionHigh region
+      then Left ("address " ++ showHexWord address ++ " is outside " ++ region)
+      else do
+        let actual = fromIntegral (B.index bytes (fromIntegral (address - regionLow region)))
+        unless (actual == value) (Left (region ++ " " ++ showHexWord address ++ " is " ++ showHexWord actual ++ ", expected " ++ showHexWord value))
+  WroteSequence address expected -> wroteSequence address expected
+  WroteSequenceOwned address expected -> case _role of
+    Owned -> wroteSequence address expected
+    Stock -> Right ()
+  _ -> Left ("check does not apply to this observation: " ++ describe check')
+  where
+    wroteSequence address expected =
+      case nativeKernel observation >>= observedOrder of
+        Nothing -> Left "the write log is truncated"
+        Just order -> do
+          let actual =
+                [ fromIntegral value
+                | OrderedWrite (Write (GuestAddress at) _) (WriteValue value) <- order
+                , at == fromIntegral address
+                ]
+          unless (expected `isSubsequenceOf` actual) (Left ("writes at " ++ showHexWord address ++ " are " ++ show (map showHexWord actual) ++ ", expected the subsequence " ++ show (map showHexWord expected)))
+    expectWord region address value = do
+      actual <- readWord region address
+      unless (actual == value) (Left (region ++ " " ++ showHexWord address ++ " is " ++ showHexWord actual ++ ", expected " ++ showHexWord value))
+    readWord region address = do
+      bytes <- readRegion region
+      if address < regionLow region || address + 4 > regionHigh region
+        then Left ("address " ++ showHexWord address ++ " is outside " ++ region)
+        else Right (readWordAt bytes (fromIntegral (address - regionLow region)))
+    readRegion region = case lookup (RegionId region) (nativeMemory observation) of
+      Nothing -> Left ("missing region " ++ region)
+      Just bytes -> Right bytes
+    regionLow region = regionBaseOf region
+    regionHigh region = regionLow region + fromIntegral (B.length (regionBytes' region))
+    regionBytes' region = fromMaybe B.empty (lookup (RegionId region) (nativeMemory observation))
+    regionBaseOf "data-a" = globalsBase DomainA
+    regionBaseOf "data-b" = globalsBase DomainB
+    regionBaseOf "entries" = entriesBase
+    regionBaseOf _ = 0
 
 showHexWord :: Word32 -> String
 showHexWord value = "0x" ++ showHex' value
@@ -688,7 +748,7 @@ maskRange offset size bytes
   | offset < 0 || size < 0 || offset + size > B.length bytes = bytes
   | otherwise = B.take offset bytes <> B.replicate size 0 <> B.drop (offset + size) bytes
 
-caseFor :: Facts -> Domain -> Role -> Image -> Image -> [(Word32, Word32)] -> Case -> CaseSpec
+caseFor :: Facts -> Domain -> Role -> Image -> Image -> [OwnedSymbol] -> Case -> CaseSpec
 caseFor facts domain role stockImage ownedImage ownedSymbols one =
   CaseSpec
     { caseId = caseName one ++ "-" ++ domainLabel domain
@@ -743,7 +803,7 @@ caseFor facts domain role stockImage ownedImage ownedSymbols one =
         let (base, _) = stockBase domain
          in [(base, 0xc4), (base + 0xc4, 0xdc), (insertEntry domain, 0x48), (removeEntry domain, 0xe4), (tickEntry domain, 0x1a0), (stubBase, stubSize), (waitReleaseAddress domain, waitReleaseSize)]
               ++ [(wordAddress (initializeAddress domain), 0x70) | caseCall one == Initialize]
-      Owned -> ownedSymbols ++ [(stubBase, stubSize), (waitReleaseAddress domain, waitReleaseSize)]
+      Owned -> [(ownedAddress symbol, ownedSize symbol) | symbol <- ownedSymbols] ++ [(stubBase, stubSize), (waitReleaseAddress domain, waitReleaseSize)]
     initialRegisters =
       [ (register, case lookup register arguments of
           Just value -> value
@@ -767,19 +827,35 @@ slice base bytes address size
   | address < base || address + size > base + fromIntegral (B.length bytes) = error "timer code slice is outside its image"
   | otherwise = B.take (fromIntegral size) (B.drop (fromIntegral (address - base)) bytes)
 
-parseOwnedSymbols :: FilePath -> IO [(Word32, Word32)]
-parseOwnedSymbols path = do
+data OwnedSymbol = OwnedSymbol
+  { ownedName :: String
+  , ownedAddress :: Word32
+  , ownedSize :: Word32
+  }
+
+timerSpans, s3dSpans :: [(Word32, Word32)]
+timerSpans = [(0x44a50, 0x44f2c), (0xd4a10, 0xd4eec)]
+s3dSpans = [(0x44318, 0x54000), (0xd42d8, 0xe4000)]
+
+parseSymbolsIn :: [(Word32, Word32)] -> FilePath -> IO [OwnedSymbol]
+parseSymbolsIn spans path = do
   rows <- lines <$> readFile path
   pure (concatMap row rows)
   where
     row line = case words line of
-      [a, z, kind, _] -> case (parseWord32 a, parseWord32 z) of
+      [a, z, kind, name] -> case (parseWord32 a, parseWord32 z) of
         (Just address, Just size)
           | kind `elem` ["T", "t"], size > 0
-          , (address >= 0x44a50 && address < 0x44f2c && size <= 0x44f2c - address)
-            || (address >= 0xd4a10 && address < 0xd4eec && size <= 0xd4eec - address) -> [(address, size)]
+          , any (\(low, high) -> address >= low && address < high && size <= high - address) spans ->
+              [OwnedSymbol name address size]
         _ -> []
       _ -> []
+
+parseOwnedSymbols :: FilePath -> IO [OwnedSymbol]
+parseOwnedSymbols = parseSymbolsIn timerSpans
+
+parseS3dSymbols :: FilePath -> IO [OwnedSymbol]
+parseS3dSymbols = parseSymbolsIn s3dSpans
 
 cohortOf :: Case -> String
 cohortOf one = case caseName one of
@@ -792,13 +868,541 @@ cohortOf one = case caseName one of
   "tick-context-switch-distinct" -> "extra"
   _ -> "core"
 
-runDomain :: FilePath -> FilePath -> FilePath -> Facts -> Domain -> Image -> Image -> [(Word32, Word32)] -> IO ([CaseRun], [ControlRun])
-runDomain runner cacheRoot directory facts domain stockImage ownedImage ownedSymbols = do
+type W = M.Map Word32 Word32
+
+data ComposeKind
+  = TimeoutObject
+  | TimeoutSleeping
+  | TimeoutTerminate
+  | TimeoutPriority
+  | TimeoutCrossOwner
+  | DelayElapsed
+  deriving (Eq, Show)
+
+data ComposeControl = ControlRemoveCallback | ControlWrongLock | ControlWrongDetach
+  deriving (Eq, Show)
+
+data ComposeCase = ComposeCase
+  { composeName :: String
+  , composeKind :: ComposeKind
+  , composeSetup :: Domain -> W -> W
+  , composeChecks :: [Check]
+  }
+
+composeStackBase, composeStackSize, composeStackTop, composeExit, globalsSize :: Word32
+composeStackBase = 0x40070000
+composeStackSize = 0x1000
+composeStackTop = composeStackBase + 0x800
+composeExit = 0x40080000
+globalsSize = 0x14000
+
+globalsBase :: Domain -> Word32
+globalsBase DomainA = 0x40050000
+globalsBase DomainB = 0x400e0000
+
+composeLoaderBase :: Domain -> Word32
+composeLoaderBase DomainA = 0x40000
+composeLoaderBase DomainB = 0xd0000
+
+composeBodyBase :: Domain -> Word32
+composeBodyBase DomainA = 0x50000
+composeBodyBase DomainB = 0xe0000
+
+setW :: Word32 -> Word32 -> W -> W
+setW at value = M.insert at value
+
+setB :: Word32 -> Word32 -> W -> W
+setB at value m =
+  let wordAt = at .&. complement 3
+      shift = (at .&. 3) * 8
+      old = M.findWithDefault 0 wordAt m
+      mask = complement (0xff `shiftL` fromIntegral shift)
+      new = (old .&. mask) .|. ((value .&. 0xff) `shiftL` fromIntegral shift)
+   in M.insert wordAt new m
+
+wordOf :: Word32 -> W -> Word32
+wordOf at = M.findWithDefault 0 at
+
+composeTask :: Facts -> Domain -> Int -> Word32
+composeTask facts d slot =
+  let sf = factsScheduler facts
+      sd = sfDomain sf d
+   in swTaskTable sd + (fromIntegral slot - 1) * tkSize (sfTask sf)
+
+fixtureWait, fixtureQueue, fixtureTimer :: SchedulerDomain -> Word32
+fixtureWait sd = swTimerHeap sd + 0x800
+fixtureQueue sd = fixtureWait sd + 0x20
+fixtureTimer sd = fixtureWait sd + 0x40
+
+seedGlobals :: Facts -> Domain -> W -> W
+seedGlobals facts d =
+  let sf = factsScheduler facts
+      sd = sfDomain sf d
+      headSize = rhSize (sfReadyHead sf)
+      priorities = sfPriorities sf
+   in foldl (\f (address, value) -> f . setW address value) id
+        ([ (swReadyHeads sd + priority * headSize, swReadyHeads sd + priority * headSize) | priority <- [0 .. priorities - 1] ]
+          ++ [ (swReadyHeads sd + priority * headSize + rhPrev (sfReadyHead sf), swReadyHeads sd + priority * headSize) | priority <- [0 .. priorities - 1] ])
+     . setW (swReadyBitmap sd) 0
+     . setW (swSelected sd) 0
+     . setW (swRunning sd) 0
+     . setW (swDispatchEnabled sd) 0
+     . setW (swTimerCount sd) 0
+     . setW (swTimerBase sd) 0
+     . setW (swTickNow sd) 1000
+
+seedTasks :: Facts -> Domain -> W -> W
+seedTasks facts d =
+  let sf = factsScheduler facts
+      sd = sfDomain sf d
+      taskOffset = sfTask sf
+      definitionOffset = sfDefinition sf
+      (sp0, sp1) = dfSpTerms definitionOffset
+   in foldl (\m slot ->
+        let task = swTaskTable sd + (slot - 1) * tkSize taskOffset
+            definition = swTaskDefinitions sd + (slot - 1) * dfSize definitionOffset
+         in m
+           . setW (task + tkDefinition taskOffset) definition
+           . setB (task + tkState taskOffset) 0
+           . setW (task + tkNext taskOffset) 0
+           . setW (task + tkPrev taskOffset) 0
+           . setW (task + tkWait taskOffset) 0
+           . setW (task + tkDomain taskOffset) (domainId d)
+           . setW (definition + dfExists definitionOffset) 1
+           . setW (definition + dfPriority definitionOffset) 15
+           . setW (definition + sp0) 0x100
+           . setW (definition + sp1) composeStackBase) id [1 .. sfTaskSlots sf]
+
+seedRecord :: Facts -> Domain -> Domain -> W -> W
+seedRecord facts executing target =
+  let sf = factsScheduler facts
+      contextOffset = sfContext sf
+      lockOffset = sfLock sf
+      targetWords = sfDomain sf target
+      helpers = sfHelpers sf target
+      context = swContexts (sfDomain sf executing) + if target == DomainA then 0 else cxSize contextOffset
+      recordId = if target == executing then 0 else domainId target
+   in setW (context + cxId contextOffset) recordId
+    . setW (context + cxSchedulerLock contextOffset) (swSchedulerLock targetWords)
+    . setW (context + cxSchedulerLock contextOffset + lockAcquire lockOffset) (helpAcquire helpers)
+    . setW (context + cxSchedulerLock contextOffset + lockRelease lockOffset) (helpRelease helpers)
+    . setW (context + cxObjectLock contextOffset) (swObjectLock targetWords)
+    . setW (context + cxObjectLock contextOffset + lockAcquire lockOffset) (helpAcquire helpers)
+    . setW (context + cxObjectLock contextOffset + lockRelease lockOffset) (helpRelease helpers)
+    . setW (context + cxReadyHeads contextOffset) (swReadyHeads targetWords)
+    . setW (context + cxReadyBitmap contextOffset) (swReadyBitmap targetWords)
+    . setW (context + cxRunning contextOffset) (swRunning targetWords)
+    . setW (context + cxSelected contextOffset) (swSelected targetWords)
+    . setW (context + cxDispatchEnabled contextOffset) (swDispatchEnabled targetWords)
+    . setW (context + cxTimerHeap contextOffset) (swTimerHeap targetWords)
+    . setW (context + cxTimerCount contextOffset) (swTimerCount targetWords)
+    . setW (context + cxTimerBase contextOffset) (swTimerBase targetWords)
+    . setW (context + cxTickNow contextOffset) (swTickNow targetWords)
+    . setW (context + cxTasks contextOffset) (swTaskTable targetWords)
+    . setW (context + cxTaskCount contextOffset) (sfTaskSlots sf)
+    . setW (context + cxFirstEntry contextOffset) (helpFirstEntry helpers)
+
+baseFixture :: Facts -> Domain -> W
+baseFixture facts executing =
+  let sf = factsScheduler facts
+      sd = sfDomain sf executing
+      contextOffset = sfContext sf
+      executingContext = swContexts sd + if executing == DomainA then 0 else cxSize contextOffset
+   in foldl (.) id
+        [ setW (swCurrentContext sd) executingContext
+        , setW (swHandlerContext sd) 1
+        , setW (swDispatchEnabled sd) 1
+        , setW (swSchedulerLock (sfDomain sf DomainA)) 0
+        , setW (swSchedulerLock (sfDomain sf DomainB)) 0
+        , setW (swObjectLock (sfDomain sf DomainA)) 0
+        , setW (swObjectLock (sfDomain sf DomainB)) 0
+        , seedRecord facts executing DomainA
+        , seedRecord facts executing DomainB
+        , seedTasks facts DomainA
+        , seedTasks facts DomainB
+        , seedGlobals facts DomainA
+        , seedGlobals facts DomainB
+        ] M.empty
+
+makeReady :: Facts -> Domain -> Int -> Word32 -> Bool -> W -> W
+makeReady facts d slot priority selected m =
+  let sf = factsScheduler facts
+      sd = sfDomain sf d
+      taskOffset = sfTask sf
+      headOffset = sfReadyHead sf
+      task = composeTask facts d slot
+      readyHead' = swReadyHeads sd + priority * rhSize headOffset
+      previous = wordOf (readyHead' + rhPrev headOffset) m
+      m1 = setB (task + tkState taskOffset) (stateReady (sfStates sf))
+         . setB (task + tkPriority taskOffset) priority
+         . setW (task + tkNext taskOffset) previous
+         . setW (task + tkPrev taskOffset) readyHead'
+         . setW previous task
+         . setW (readyHead' + rhPrev headOffset) task
+         . setW (swReadyBitmap sd) (wordOf (swReadyBitmap sd) m .|. (1 `shiftL` fromIntegral priority))
+         $ m
+   in if selected then setW (swSelected sd) task m1 else m1
+
+makeRunning :: Facts -> Domain -> Int -> W -> W
+makeRunning facts d slot =
+  makeReady facts d slot 0 True
+    . setW (swRunning (sfDomain (factsScheduler facts) d)) (composeTask facts d slot)
+
+setupRunning :: Facts -> Domain -> W -> W
+setupRunning facts d = setW (swSelected (sfDomain (factsScheduler facts) d)) 0 . makeRunning facts d 1
+
+objectWaitTask :: Facts -> Domain -> Int -> Word32 -> Word32 -> W -> W
+objectWaitTask facts d slot owner callback =
+  let sf = factsScheduler facts
+      sd = sfDomain sf d
+      taskOffset = sfTask sf
+      states = sfStates sf
+      task = composeTask facts d slot
+      wait = fixtureWait sd
+      queue = fixtureQueue sd
+      timer = fixtureTimer sd
+   in setB (task + tkState taskOffset) (stateWait states .|. stateObjectQueued states)
+    . setB (task + tkPriority taskOffset) 3
+    . setW (task + tkWait taskOffset) wait
+    . setW (task + tkNext taskOffset) queue
+    . setW (task + tkPrev taskOffset) queue
+    . setW (task + tkTerminatePending taskOffset) 0
+    . setW (task + tkPriorityChangePending taskOffset) 0
+    . setW (task + tkCancelPending taskOffset) 0
+    . setW (task + tkContextDiscarded taskOffset) 0
+    . setW wait timer
+    . setW (wait + 4) queue
+    . setW (wait + 8) owner
+    . setW queue task
+    . setW (queue + 4) task
+    . setW timer 1
+    . setW (timer + 4) callback
+    . setW (timer + 8) task
+
+sleepingWait :: Facts -> Domain -> Int -> Word32 -> W -> W
+sleepingWait facts d slot callback =
+  let sf = factsScheduler facts
+      sd = sfDomain sf d
+      taskOffset = sfTask sf
+      states = sfStates sf
+      task = composeTask facts d slot
+      wait = fixtureWait sd
+      timer = fixtureTimer sd
+   in setB (task + tkState taskOffset) (stateWait states .|. stateSleeping states)
+    . setB (task + tkPriority taskOffset) 3
+    . setW (task + tkWait taskOffset) wait
+    . setW (task + tkTerminatePending taskOffset) 0
+    . setW (task + tkPriorityChangePending taskOffset) 0
+    . setW (task + tkCancelPending taskOffset) 0
+    . setW (task + tkContextDiscarded taskOffset) 0
+    . setW wait timer
+    . setW (wait + 4) 0
+    . setW (wait + 8) (domainId d)
+    . setW timer 1
+    . setW (timer + 4) callback
+    . setW (timer + 8) task
+
+armTimer :: Facts -> Domain -> W -> W
+armTimer facts d =
+  let sd = sfDomain (factsScheduler facts) d
+      timer = fixtureTimer sd
+   in setW (swTimerCount sd) 1
+    . setW (swTimerHeap sd) 0
+    . setW (swTimerHeap sd + 4) timer
+
+timeoutCallbackAddress, delayCallbackAddress :: Domain -> Word32
+timeoutCallbackAddress DomainA = 0x44318
+timeoutCallbackAddress DomainB = 0xd42d8
+delayCallbackAddress DomainA = 0x44634
+delayCallbackAddress DomainB = 0xd45f4
+
+callbackOf :: Domain -> ComposeKind -> Word32
+callbackOf d DelayElapsed = delayCallbackAddress d
+callbackOf d _ = timeoutCallbackAddress d
+
+composeCases :: Facts -> Domain -> [ComposeCase]
+composeCases facts d =
+  [ ComposeCase "tick-timeout-object" TimeoutObject setupTimeoutObject (composeChecksFor facts d TimeoutObject)
+  , ComposeCase "tick-timeout-sleeping" TimeoutSleeping setupTimeoutSleeping (composeChecksFor facts d TimeoutSleeping)
+  , ComposeCase "tick-timeout-terminate" TimeoutTerminate setupTimeoutTerminate (composeChecksFor facts d TimeoutTerminate)
+  , ComposeCase "tick-timeout-priority" TimeoutPriority setupTimeoutPriority (composeChecksFor facts d TimeoutPriority)
+  , ComposeCase "tick-timeout-cross-owner" TimeoutCrossOwner setupTimeoutCrossOwner (composeChecksFor facts d TimeoutCrossOwner)
+  , ComposeCase "tick-delay-elapsed" DelayElapsed setupDelayElapsed (composeChecksFor facts d DelayElapsed)
+  ]
+  where
+    other domain = if domain == DomainA then DomainB else DomainA
+    setupTimeoutObject e =
+      setupRunning facts e
+        . objectWaitTask facts e 2 (domainId e) (callbackOf e TimeoutObject)
+        . armTimer facts e
+    setupTimeoutSleeping e =
+      setupRunning facts e
+        . sleepingWait facts e 2 (callbackOf e TimeoutSleeping)
+        . armTimer facts e
+    setupTimeoutTerminate e =
+      let taskOffset = sfTask (factsScheduler facts)
+          task = composeTask facts e 2
+       in setupRunning facts e
+        . setW (task + tkTerminatePending taskOffset) 1
+        . setB (task + tkFlags taskOffset) 1
+        . objectWaitTask facts e 2 (domainId e) (callbackOf e TimeoutTerminate)
+        . armTimer facts e
+    setupTimeoutPriority e =
+      let taskOffset = sfTask (factsScheduler facts)
+          task = composeTask facts e 2
+       in setupRunning facts e
+        . setW (task + tkPriorityChangePending taskOffset) 1
+        . setW (task + tkPendingPriority taskOffset) 7
+        . objectWaitTask facts e 2 (domainId e) (callbackOf e TimeoutPriority)
+        . armTimer facts e
+    setupTimeoutCrossOwner e =
+      setupRunning facts e
+        . objectWaitTask facts e 2 (domainId (other e)) (callbackOf e TimeoutCrossOwner)
+        . armTimer facts e
+    setupDelayElapsed e =
+      setupRunning facts e
+        . sleepingWait facts e 2 (callbackOf e DelayElapsed)
+        . armTimer facts e
+
+composeChecksFor :: Facts -> Domain -> ComposeKind -> [Check]
+composeChecksFor facts d kind =
+  [ RegisterIs R4 (seedRegister R4)
+  , RegisterIs R5 (seedRegister R5)
+  , RegisterIs R6 (seedRegister R6)
+  , RegisterIs R7 (seedRegister R7)
+  , RegisterIs R8 (seedRegister R8)
+  , RegisterIs R9 (seedRegister R9)
+  , RegisterIs R10 (seedRegister R10)
+  , RegisterIs R11 (seedRegister R11)
+  , RegisterIs Sp composeStackTop
+  , RegisterIs R0 0
+  , CpsrControlIs 0x53
+  , WordIs region (swTimerCount sd) 0
+  , WordIsRole region timer 1 0
+  , WordIs region (swTimerBase sd) 1000
+  , WordIs region (swTickNow sd) 1010
+  , WordIs region lockWord 0
+  , WordIs objectRegion objectWord 0
+  , WordIs region (swReschedule sd) 1
+  , ByteIs region (task + tkState taskOffset) (stateReady states)
+  , WordIs region (task + tkCancelPending taskOffset) 0
+  , WordIs region (task + tkWait taskOffset) wait
+  , WordIs region wait finalResult
+  , WordIs region (wait + 4) queueValue
+  , WordIs region (wait + 8) (domainId owner)
+  , WordIs region readyHead task
+  , WordIs region (readyHead + rhPrev headOffset) task
+  , WordIs region (swReadyBitmap sd) (1 .|. (1 `shiftL` fromIntegral priority))
+  , WordIs region (swSelected sd) task
+  , WroteSequenceOwned timer [0]
+  , WroteSequence (swReschedule sd) [1]
+  , WroteSequence lockWord lockWrites
+  ]
+    ++ [ WordIs region queue queue | objectQueued ]
+    ++ [ WordIs region (queue + 4) queue | objectQueued ]
+    ++ [ WroteSequence objectWord [1, 0] | objectQueued ]
+    ++ [ WordIs region (task + tkContextDiscarded taskOffset) 1 | kind == TimeoutTerminate ]
+    ++ [ ByteIs region (task + tkFlags taskOffset) 0 | kind == TimeoutTerminate ]
+    ++ [ WordIs region (task + tkPriorityChangePending taskOffset) 0 | kind == TimeoutPriority ]
+    ++ [ ByteIs region (task + tkPriority taskOffset) 7 | kind == TimeoutPriority ]
+    ++ [ WordIs region (swObjectLock sd) 0 | kind == TimeoutCrossOwner ]
+  where
+    sf = factsScheduler facts
+    sd = sfDomain sf d
+    taskOffset = sfTask sf
+    headOffset = sfReadyHead sf
+    states = sfStates sf
+    region = if d == DomainA then "data-a" else "data-b"
+    otherRegion = if d == DomainA then "data-b" else "data-a"
+    other = if d == DomainA then DomainB else DomainA
+    task = composeTask facts d 2
+    wait = fixtureWait sd
+    queue = fixtureQueue sd
+    timer = fixtureTimer sd
+    objectQueued = kind `elem` [TimeoutObject, TimeoutTerminate, TimeoutPriority, TimeoutCrossOwner]
+    owner = if kind == TimeoutCrossOwner then other else d
+    objectRegion = if kind == TimeoutCrossOwner then otherRegion else region
+    lockWord = swSchedulerLock sd
+    objectWord = swObjectLock (sfDomain sf owner)
+    priority = case kind of
+      TimeoutPriority -> 7
+      TimeoutTerminate -> 15
+      _ -> 3
+    readyHead = swReadyHeads sd + priority * rhSize headOffset
+    queueValue = if objectQueued then queue else 0
+    finalResult = if kind == DelayElapsed then 0 else 0xffffffce
+    lockWrites = if objectQueued then [1, 0, 1, 0] else [1, 0]
+
+composeHelpers :: Domain -> [(Word32, Word32)]
+composeHelpers DomainA =
+  [ (0x439d8, 0x3c), (0x43a14, 0x40), (0x433e4, 0x60), (0x43c48, 0x5c)
+  , (0x43ca4, 0x7c), (0x43d20, 0xb0), (0x43dd0, 0x1a0), (0x43f70, 0xa8), (0x44018, 0x2c)
+  ]
+composeHelpers DomainB =
+  [ (0xd398c, 0x3c), (0xd39c8, 0x40), (0xd33e4, 0x60), (0xd3c04, 0x5c)
+  , (0xd3c60, 0x7c), (0xd3cdc, 0xb0), (0xd3d8c, 0x1a0), (0xd3f2c, 0xa8), (0xd3fd4, 0x30)
+  ]
+
+stockComposeFunctions :: Domain -> ComposeKind -> [(Word32, Word32)]
+stockComposeFunctions d kind =
+  [ (tickEntry d, 0x1a0)
+  , (callbackOf d kind, if kind == DelayElapsed then 0xc8 else 0x1cc)
+  , (if d == DomainA then 0x44b84 else 0xd4b44, 0xdc)
+  ]
+    ++ composeHelpers d
+
+ownedComposeFunctions :: Domain -> [OwnedSymbol] -> [OwnedSymbol] -> ComposeKind -> [(Word32, Word32)]
+ownedComposeFunctions d timerSymbols s3dSymbols kind =
+  [(ownedAddress symbol, ownedSize symbol) | symbol <- timerSymbols]
+    ++ [(ownedAddress symbol, ownedSize symbol) | symbol <- s3dSymbols]
+    ++ [(callbackOf d kind, 4)]
+    ++ composeHelpers d
+
+padTo :: Int -> B.ByteString -> B.ByteString
+padTo size bytes = B.take size (bytes <> B.replicate size 0)
+
+poke :: B.ByteString -> Word32 -> B.ByteString -> B.ByteString
+poke bytes offset value = B.take (fromIntegral offset) bytes <> value <> B.drop (fromIntegral offset + B.length value) bytes
+
+pokeSlice :: B.ByteString -> Word32 -> B.ByteString -> B.ByteString
+pokeSlice bytes offset chunk = poke bytes offset chunk
+
+serialize :: Word32 -> Word32 -> W -> B.ByteString
+serialize base size m = foldl write (B.replicate (fromIntegral size) 0) (M.toList m)
+  where
+    write bytes (address, value)
+      | address >= base && address + 4 <= base + size = poke bytes (address - base) (word32le value)
+      | otherwise = bytes
+
+s3dEntries :: Domain -> [Word32]
+s3dEntries DomainA = [0x44318, 0x44634, 0x454f0, 0x4582c, 0x45e54, 0x46534, 0x467b4, 0x46e48]
+s3dEntries DomainB = [0xd42d8, 0xd45f4, 0xd54b0, 0xd57ec, 0xd5e14, 0xd64f4, 0xd6774, 0xd6e08]
+
+s3dDelayBody :: Domain -> Word32
+s3dDelayBody DomainA = 0x46e4c
+s3dDelayBody DomainB = 0xd6e0c
+
+composeOwnedCode :: Domain -> B.ByteString -> Image -> [OwnedSymbol] -> Image -> [(Word32, Word32)] -> B.ByteString
+composeOwnedCode d loader timerImage timerSymbols s3dImage extra =
+  let base = composeLoaderBase d
+      timerBase = minimum (map ownedAddress timerSymbols)
+      s3dBase = imageBase s3dImage
+      s3dBytes = imageBytes s3dImage
+      withTimer = pokeSlice (padTo 0x10000 loader) (timerBase - base) (imageBytes timerImage)
+      withS3d = foldl
+        (\bytes (address, size, source) -> pokeSlice bytes (address - base) (slice s3dBase s3dBytes source size))
+        withTimer
+        ([(entry, 4, entry) | entry <- s3dEntries d]
+          ++ [(s3dDelayBody d, 0x180, s3dDelayBody d)])
+   in foldl (\bytes (address, word) -> poke bytes (address - base) (word32le word)) withS3d extra
+
+composeControlPatches :: Domain -> Image -> [OwnedSymbol] -> ComposeControl -> Either String [(Word32, Word32)]
+composeControlPatches _d timerImage timerSymbols control = do
+  body <- case [symbol | symbol <- timerSymbols, ownedName symbol == "xm1_rtos_timer_tick_body"] of
+    [symbol] -> Right symbol
+    [] -> Left "the timer tick body symbol is missing"
+    _ -> Left "the timer tick body symbol is duplicated"
+  let at offset expected replacement = do
+        let address = ownedAddress body + offset
+            actual = readWordAt (imageBytes timerImage) (fromIntegral (address - imageBase timerImage))
+        if actual == expected
+          then Right [(address, replacement)]
+          else Left ("the timer tick body word at " ++ showHexWord address ++ " is " ++ showHexWord actual ++ ", expected " ++ showHexWord expected)
+  case control of
+    ControlRemoveCallback -> at 0x118 0xe12fff38 0xe1a00000
+    ControlWrongLock -> at 0x124 0xe1a00006 0xe286000c
+    ControlWrongDetach -> at 0xd4 0xe5812000 0xe1a00000
+
+composeCaseFor :: Facts -> Domain -> Role -> Image -> Image -> Image -> [OwnedSymbol] -> Image -> [OwnedSymbol] -> [(Word32, Word32)] -> String -> ComposeCase -> CaseSpec
+composeCaseFor facts d role stockImage otherImage timerImage timerSymbols s3dImage s3dSymbols extra suffix one =
+  CaseSpec
+    { caseId = composeName one ++ suffix ++ "-" ++ domainLabel d
+    , caseProvenance = "X-M1 1.50 timer tick plus S3d timeout/delay completion, x70view 55436fc85c0560dd252b0410af6f2427fe198cd3; synthetic scheduler state"
+    , caseExclusion = "One tick with one due entry; synthetic single-core state. Not natural callback delivery, cross-core concurrency, cache ordering or the full dispatcher."
+    , caseEntry = GuestAddress (fromIntegral (tickEntry d))
+    , caseExit = GuestAddress (fromIntegral composeExit)
+    , caseRegions =
+        [ mkRegion (RegionId "code") (GuestAddress (fromIntegral (composeLoaderBase d))) 0x10000 ReadExecute codeBytes
+        , mkRegion (RegionId "bodies") (GuestAddress (fromIntegral (composeBodyBase d))) 0x4000 ReadExecute bodies
+        , mkRegion (RegionId "data-a") (GuestAddress (fromIntegral (globalsBase DomainA))) (fromIntegral globalsSize) ReadWrite (serialize (globalsBase DomainA) globalsSize fixture)
+        , mkRegion (RegionId "data-b") (GuestAddress (fromIntegral (globalsBase DomainB))) (fromIntegral globalsSize) ReadWrite (serialize (globalsBase DomainB) globalsSize fixture)
+        , mkRegion (RegionId "stack") (GuestAddress (fromIntegral composeStackBase)) (fromIntegral composeStackSize) ReadWrite (B.replicate (fromIntegral composeStackSize) 0)
+        , mkRegion (RegionId "exit") (GuestAddress (fromIntegral composeExit)) 0x10 ReadExecute (B.replicate 0x10 0)
+        ]
+          ++ [ mkRegion (RegionId "code-other") (GuestAddress (fromIntegral (composeLoaderBase other))) 0x10000 ReadExecute (padTo 0x10000 (imageBytes otherImage))
+             | crossOwner
+             ]
+    , caseFunctions = [(GuestAddress (fromIntegral address), size) | (address, size) <- functions]
+    , caseInitial =
+        [ (R0, 0), (R1, 0), (R2, 0), (R3, 0)
+        , (R4, seedRegister R4), (R5, seedRegister R5), (R6, seedRegister R6), (R7, seedRegister R7)
+        , (R8, seedRegister R8), (R9, seedRegister R9), (R10, seedRegister R10), (R11, seedRegister R11)
+        , (R12, 0), (Sp, composeStackTop), (Lr, composeExit), (Cpsr, 0x53)
+        ]
+    , caseExpectedStatus = Returned
+    , caseExpectedRegisters =
+        [ (R4, seedRegister R4), (R5, seedRegister R5), (R6, seedRegister R6), (R7, seedRegister R7)
+        , (R8, seedRegister R8), (R9, seedRegister R9), (R10, seedRegister R10), (R11, seedRegister R11)
+        , (Sp, composeStackTop), (R0, 0)
+        ]
+    , caseExpectedMemory = []
+    , caseCp14Identity = Just (if d == DomainA then 0x4003 else 0x4004)
+    , caseKernel = Just (KernelCase (InstructionLimit 40000) Nothing (Just 0x80001234) (Just 0) (Just 0) [R1, R2, R3, R12, Lr, Pc, Cpsr] [])
+    }
+  where
+    fixture = composeSetup one d (baseFixture facts d)
+    codeBytes = case role of
+      Stock -> padTo 0x10000 (imageBytes stockImage)
+      Owned -> composeOwnedCode d (imageBytes stockImage) timerImage timerSymbols s3dImage extra
+    bodies = case role of
+      Stock -> B.replicate 0x4000 0
+      Owned -> slice (imageBase s3dImage) (imageBytes s3dImage) (composeBodyBase d) 0x4000
+    other = if d == DomainA then DomainB else DomainA
+    crossOwner = composeKind one == TimeoutCrossOwner
+    otherHelpers = sfHelpers (factsScheduler facts) other
+    functions =
+      (case role of
+        Stock -> stockComposeFunctions d (composeKind one)
+        Owned -> ownedComposeFunctions d timerSymbols s3dSymbols (composeKind one))
+        ++ (if crossOwner then [(helpAcquire otherHelpers, 0x3c), (helpRelease otherHelpers, 0x40)] else [])
+
+composeControlName :: ComposeControl -> String
+composeControlName ControlRemoveCallback = "callback-removed"
+composeControlName ControlWrongLock = "wrong-lock"
+composeControlName ControlWrongDetach = "wrong-detach"
+
+composeControls :: ComposeKind -> [ComposeControl]
+composeControls TimeoutObject = [ControlRemoveCallback, ControlWrongLock, ControlWrongDetach]
+composeControls _ = []
+
+composeRegionDifferences :: Facts -> Domain -> NativeObservation -> NativeObservation -> [String]
+composeRegionDifferences facts domain stock owned =
+  [ "region " ++ name ++ " differs"
+  | name <- ["data-a", "data-b"]
+  , masked name (lookup (RegionId name) (nativeMemory stock)) /= masked name (lookup (RegionId name) (nativeMemory owned))
+  ]
+  where
+    timerAddress = fixtureTimer (sfDomain (factsScheduler facts) domain)
+    masked name = fmap (maskEntry name)
+    maskEntry name bytes
+      | timerAddress >= base && timerAddress + 4 <= base + fromIntegral (B.length bytes) =
+          B.take offset bytes <> B.replicate 4 0 <> B.drop (offset + 4) bytes
+      | otherwise = bytes
+      where
+        base = if name == "data-a" then globalsBase DomainA else globalsBase DomainB
+        offset = fromIntegral (timerAddress - base)
+
+runDomain :: FilePath -> FilePath -> FilePath -> Facts -> Domain -> Image -> Image -> Image -> [OwnedSymbol] -> Image -> [OwnedSymbol] -> IO ([CaseRun], [ControlRun])
+runDomain runner cacheRoot directory facts domain stockImage otherImage ownedImage ownedSymbols s3dImage s3dSymbols = do
   let selected = cases facts domain
   (coreRuns, coreControls) <- runCohort "core" (filter ((== "core") . cohortOf) selected) directory
   (extraRuns, extraControls) <- runCohort "extra" (filter ((== "extra") . cohortOf) selected) (directory </> "extra")
   (initializeRuns, initializeControls) <- runCohort "initialize" (filter ((== "initialize") . cohortOf) selected) (directory </> "initialize")
-  pure (coreRuns ++ extraRuns ++ initializeRuns, coreControls ++ extraControls ++ initializeControls)
+  (composeRuns, composeControlRuns) <- runComposeCohort (composeCases facts domain) (directory </> "composition")
+  pure
+    ( coreRuns ++ extraRuns ++ initializeRuns ++ composeRuns
+    , coreControls ++ extraControls ++ initializeControls ++ composeControlRuns
+    )
   where
     runCohort cohort chosen base = do
       let stockSpecs = map (caseFor facts domain Stock stockImage ownedImage ownedSymbols) chosen
@@ -849,6 +1453,64 @@ runDomain runner cacheRoot directory facts domain stockImage ownedImage ownedSym
               Just observed -> controlRuns facts domain cohort one observed
               Nothing -> []
         pure (run, controls)
+      pure (map fst results, concatMap snd results)
+    runComposeCohort chosen base = do
+      let stockSpecs = [composeCaseFor facts domain Stock stockImage otherImage ownedImage ownedSymbols s3dImage s3dSymbols [] "" one | one <- chosen]
+          ownedSpecs = [composeCaseFor facts domain Owned stockImage otherImage ownedImage ownedSymbols s3dImage s3dSymbols [] "" one | one <- chosen]
+          controls =
+            [ (composeName one, control, composeCaseFor facts domain Owned stockImage otherImage ownedImage ownedSymbols s3dImage s3dSymbols (either error id (composeControlPatches domain ownedImage ownedSymbols control)) ("-control-" ++ composeControlName control) one)
+            | one <- chosen
+            , control <- composeControls (composeKind one)
+            ]
+      stockBatch <- writeBatch (base </> "stock") stockSpecs
+      ownedBatch <- writeBatch (base </> "owned") ownedSpecs
+      controlBatch <- writeBatch (base </> "controls") (map (\(_, _, spec) -> spec) controls)
+      (stockReuse, stockRaw) <- cachedObservedBatch cacheRoot runner stockBatch
+      (ownedReuse, ownedRaw) <- cachedObservedBatch cacheRoot runner ownedBatch
+      (_, controlRaw) <- cachedObservedBatch cacheRoot runner controlBatch
+      let reference = M.fromList [(caseIdText ident, observation) | (ident, observation) <- stockRaw]
+          subject = M.fromList [(caseIdText ident, observation) | (ident, observation) <- ownedRaw]
+          controlObservations = M.fromList [(caseIdText ident, observation) | (ident, observation) <- controlRaw]
+          statusCheck observation = case nativeStatus observation of
+            Returned -> Right ()
+            status -> Left ("status " ++ runnerStatusLabel status)
+          errorsFor role checks observation = [message | Left message <- statusCheck observation : map (checkObservation facts domain role observation) checks]
+      results <- forM chosen $ \one -> do
+        let ident = composeName one ++ "-" ++ domainLabel domain
+            stock = M.lookup ident reference
+            owned = M.lookup ident subject
+            checks = composeChecks one
+            run = CaseRun
+              { caseDomain = domain
+              , runCohort = "composition"
+              , runName = composeName one
+              , runKind = Equal
+              , runChecks = case (stock, owned) of
+                  (Just stock', Just owned') ->
+                    [ ("stock: " ++ describe check', either (const False) (const True) (checkObservation facts domain Stock stock' check'))
+                    | check' <- checks
+                    ]
+                      ++ [ ("owned: " ++ describe check', either (const False) (const True) (checkObservation facts domain Owned owned' check'))
+                         | check' <- checks
+                         ]
+                  _ -> []
+              , runDifferences = case (stock, owned) of
+                  (Just stock', Just owned') ->
+                    [ "stock: " ++ message | message <- errorsFor Stock checks stock' ]
+                      ++ [ "owned: " ++ message | message <- errorsFor Owned checks owned' ]
+                      ++ composeRegionDifferences facts domain stock' owned'
+                  (Nothing, _) -> ["stock case did not run"]
+                  (_, Nothing) -> ["owned case did not run"]
+              , runReuse = (stockReuse, ownedReuse)
+              }
+            controlResults =
+              [ ControlRun "composition" ("executed-" ++ composeControlName control) (composeName one)
+                  (not (null (errorsFor Owned checks observed)))
+              | (name, control, _) <- controls
+              , name == composeName one
+              , Just observed <- [M.lookup (composeName one ++ "-control-" ++ composeControlName control ++ "-" ++ domainLabel domain) controlObservations]
+              ]
+        pure (run, controlResults)
       pure (map fst results, concatMap snd results)
 
 -- | The checks must refuse a cleared I, a changed F and a changed byte in every declared
@@ -933,6 +1595,10 @@ describe check' = case check' of
   EntryIndexIs slot value -> "entry " ++ show slot ++ " index = " ++ show value
   CpsrControlIs value -> "cpsr control = " ++ showHexWord (cpsrControl value)
   WordIs region address value -> region ++ " " ++ showHexWord address ++ " = " ++ showHexWord value
+  WordIsRole region address stockValue ownedValue -> region ++ " " ++ showHexWord address ++ " = stock " ++ showHexWord stockValue ++ " / owned " ++ showHexWord ownedValue
+  ByteIs region address value -> region ++ " byte " ++ showHexWord address ++ " = " ++ showHexWord value
+  WroteSequence address values -> "writes " ++ showHexWord address ++ " = " ++ show (map showHexWord values)
+  WroteSequenceOwned address values -> "owned writes " ++ showHexWord address ++ " = " ++ show (map showHexWord values)
   RegionsUnchanged regions -> "unchanged " ++ unwords regions
   ConfigurationPublished -> "timer configuration pointers"
   ArenaOwned -> "owned timer arena publication"

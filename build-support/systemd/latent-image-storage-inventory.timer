@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh aggregate storage inventory hourly
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

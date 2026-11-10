@@ -3,7 +3,7 @@
 -- | The A32 app-to-owned-cyclic join on core 0: the emitted app caller at @0x725424@ runs over
 -- the loader-published interface table and root, calls the emitted cyclic create/start entries at
 -- their stock addresses, arms a phase-30 record, and the emitted timer tick delivers through the
--- stock registry dispatcher and stack-guard callback. The stock image4 caller and the stock loader
+-- emitted registry dispatcher and retained stack-guard callback. The stock image4 caller and loader
 -- entries run the same join for comparison.
 --
 -- Fixture premises, not live state: the kernel context records, the timer heap pointer, the
@@ -29,6 +29,7 @@ import Emulation.NativeObservation
 import Emulation.OwnedCase
 import Replacement.RtosCyclic.Suite (stockFunctions)
 import Replacement.RtosOwnFirst.Regions (Domain (..))
+import qualified Replacement.RtosTimer.Suite as Timer
 import System.FilePath ((</>))
 
 data Inputs = Inputs
@@ -40,7 +41,7 @@ data Inputs = Inputs
   , inTimer :: B.ByteString
   , inAppSymbols :: [(Word32, Word32)]
   , inCyclicSymbols :: [(Word32, Word32)]
-  , inTimerSymbols :: [(Word32, Word32)]
+  , inTimerSymbols :: [Timer.OwnedSymbol]
   }
 
 data Role = Stock | Owned deriving (Eq, Show)
@@ -268,10 +269,12 @@ codeBytes _layout inputs role name = case name of
   "loader-code" -> slice 0x40000 (inLoaderA inputs) 0x41140 (0x4d8fc - 0x41140)
   "loader-helpers" -> slice 0x40000 (inLoaderA inputs) 0x41140 (0x427d4 - 0x41140)
   "guard-code" -> slice image4Base (inImage4 inputs) stackGuard 0x54
-  "dispatch-code" -> slice image4Base (inImage4 inputs) dispatchEvent 0x40
+  "dispatch-code" -> case role of
+    Stock -> stockDispatch
+    Owned -> B.take 0x1c (inApp inputs) <> B.drop 0x1c stockDispatch
   "stack-check-code" -> slice image4Base (inImage4 inputs) stackCheck 0xf8
   "app" -> case role of
-    Owned -> inApp inputs
+    Owned -> B.drop (fromIntegral (appRegister - dispatchEvent)) (inApp inputs)
     Stock -> slice image4Base (inImage4 inputs) appRegister 0x384
   "cyclic" -> inCyclic inputs
   "timer" -> inTimer inputs
@@ -279,6 +282,8 @@ codeBytes _layout inputs role name = case name of
   "stack" -> B.replicate 0x1000 0
   "exit" -> B.replicate 0x10 0
   _ -> error ("no code bytes for region " ++ name)
+  where
+    stockDispatch = slice image4Base (inImage4 inputs) dispatchEvent 0x40
 
 codeRegions :: Layout -> Inputs -> Role -> [(String, Word32, Int, Permission, B.ByteString)]
 codeRegions layout inputs role =
@@ -460,6 +465,7 @@ data Check
   = RegionWord String Word32 Word32
   | RegisterIs Register Word32
   | CpsrControlIs Word32
+  | RunnerStatusIs RunnerStatus
   | HeapNode Int Word32 Word32
   deriving (Eq, Show)
 
@@ -473,6 +479,7 @@ describe check' = case check' of
   RegionWord region address value -> region ++ " " ++ showHexWord address ++ " = " ++ showHexWord value
   RegisterIs register value -> registerLabel register ++ " = " ++ showHexWord value
   CpsrControlIs value -> "cpsr control = " ++ showHexWord value
+  RunnerStatusIs status -> "runner status = " ++ runnerStatusLabel status
   HeapNode index expiry entry -> "heap node " ++ show index ++ " = (" ++ showHexWord expiry ++ ", " ++ showHexWord entry ++ ")"
 
 showHexWord :: Word32 -> String
@@ -511,6 +518,9 @@ evaluateWith bases layout role observation check' = case check' of
         | cpsrControl actual == cpsrControl value -> Right ()
         | otherwise -> Left (describe check' ++ " but is " ++ showHexWord (cpsrControl actual))
       Nothing -> Left "missing register cpsr"
+  RunnerStatusIs status
+    | nativeStatus observation == status -> Right ()
+    | otherwise -> Left (describe check' ++ " but is " ++ runnerStatusLabel (nativeStatus observation))
   HeapNode index expiry entry -> do
     let node = heapBase layout role + fromIntegral (index - 1) * 8
     actualExpiry <- readAbsWith bases observation node
@@ -887,7 +897,10 @@ buildCase layout inputs role variant state =
     , caseEntry = GuestAddress (fromIntegral entry)
     , caseExit = GuestAddress (fromIntegral exitAddress)
     , caseRegions = stateCaseRegions ++ codeCaseRegions
-    , caseFunctions = [(GuestAddress (fromIntegral address), size) | (address, size) <- commonFunctions ++ roleFunctions ++ stubFunctions]
+    , caseFunctions =
+        [ (GuestAddress (fromIntegral address), size)
+        | (address, size) <- filter (\(address, _) -> role == Stock || address /= dispatchEvent) commonFunctions ++ roleFunctions ++ stubFunctions
+        ]
     , caseInitial =
         [ (R0, argument0), (R1, 0), (R2, stackGuard), (R3, tokenAddress)
         ]
@@ -930,7 +943,10 @@ buildCase layout inputs role variant state =
       ]
     roleFunctions = case role of
       Stock -> [(appRegister, 0x2a0), (appUnregister, 0xe4)] ++ stockFunctions DomainA
-      Owned -> inAppSymbols inputs ++ inCyclicSymbols inputs ++ inTimerSymbols inputs
+      Owned ->
+        inAppSymbols inputs
+          ++ inCyclicSymbols inputs
+          ++ [(Timer.ownedAddress symbol, Timer.ownedSize symbol) | symbol <- inTimerSymbols inputs]
 
 commonFunctions :: [(Word32, Word32)]
 commonFunctions =
@@ -1031,7 +1047,7 @@ checkRun layout role variant state observation differences reuse =
     expected = expectation layout role variant state
     checks =
       [ (describe check', either (const False) (const True) (evaluate layout role observation check'))
-      | check' <- xChecks expected
+      | check' <- RunnerStatusIs Returned : xChecks expected
       ]
 
 runOneStage :: FilePath -> FilePath -> Inputs -> Variant -> (State, State) -> IO (CaseRun, CaseRun, State, State, BatchReuse, NativeObservation, NativeObservation)
@@ -1064,10 +1080,11 @@ runJoin runner resultsDirectory cacheRoot inputs = do
   let rootSpec = rootPrepCase layoutA (inLoaderA inputs)
   (rootReuse, rootPairs) <- runBatch runner cacheRoot (resultsDirectory </> "prep-root") [rootSpec]
   let rootObservation = observationOf "prep-root" rootPairs
-      rootChecks =
-        [ ("root table " ++ describe check', either (const False) (const True) (evaluateWith [("root", lRoot layoutA, 0x1700)] layoutA Stock rootObservation check'))
+      rootChecks observation =
+        [ ("root table " ++ describe check', either (const False) (const True) (evaluateWith [("root", lRoot layoutA, 0x1700)] layoutA Stock observation check'))
         | check' <-
-            [ RegionWord "root" (lRoot layoutA + 0x108) (lCreateEntry layoutA)
+            [ RunnerStatusIs Returned
+            , RegionWord "root" (lRoot layoutA + 0x108) (lCreateEntry layoutA)
             , RegionWord "root" (lRoot layoutA + 0x10c) (lDeleteEntry layoutA)
             , RegionWord "root" (lRoot layoutA + 0x110) (lStartEntry layoutA)
             , RegionWord "root" (lRoot layoutA + 0x114) (lStopEntry layoutA)
@@ -1077,19 +1094,24 @@ runJoin runner resultsDirectory cacheRoot inputs = do
             , RegionWord "root" (lRoot layoutA + 0x174) 0x400c0800
             ]
         ]
-      rootRun = CaseRun "prep-root" "fixture" rootChecks [description | (description, False) <- rootChecks] rootReuse
+      rootRun observation =
+        let checks = rootChecks observation
+         in CaseRun "prep-root" "fixture" checks [description | (description, False) <- checks] rootReuse
       rootBytes = regionBytesOf rootObservation (RegionId "root")
   let interfaceSpec = interfacesPrepCase inputs
   (interfaceReuse, interfacePairs) <- runBatch runner cacheRoot (resultsDirectory </> "prep-interfaces") [interfaceSpec]
   let interfaceObservation = observationOf "prep-interfaces" interfacePairs
-      interfaceChecks =
-        [ ("interface table " ++ describe check', either (const False) (const True) (evaluateWith [("interfaces", interfacesAddress, 8)] layoutA Stock interfaceObservation check'))
+      interfaceChecks observation =
+        [ ("interface table " ++ describe check', either (const False) (const True) (evaluateWith [("interfaces", interfacesAddress, 8)] layoutA Stock observation check'))
         | check' <-
-            [ RegionWord "interfaces" interfacesAddress (lRoot layoutA)
+            [ RunnerStatusIs StopAddress
+            , RegionWord "interfaces" interfacesAddress (lRoot layoutA)
             , RegionWord "interfaces" (interfacesAddress + 4) 0x400ddaa0
             ]
         ]
-      interfaceRun = CaseRun "prep-interfaces" "fixture" interfaceChecks [description | (description, False) <- interfaceChecks] interfaceReuse
+      interfaceRun observation =
+        let checks = interfaceChecks observation
+         in CaseRun "prep-interfaces" "fixture" checks [description | (description, False) <- checks] interfaceReuse
       interfaceBytes = regionBytesOf interfaceObservation (RegionId "interfaces")
       initialStock = seedState layoutA Stock rootBytes interfaceBytes
       initialOwned = seedState layoutA Owned rootBytes interfaceBytes
@@ -1120,8 +1142,8 @@ runJoin runner resultsDirectory cacheRoot inputs = do
   (registryFaultStock, registryFaultOwned, _, _, registryFaultReuse, _, _) <-
     runOneStage runner cacheRoot inputs TickRegistryFault (afterTick20Stock, afterTick20Owned)
   let runs =
-        [ rootRun
-        , interfaceRun
+        [ rootRun rootObservation
+        , interfaceRun interfaceObservation
         , registerStock
         , registerOwned
         , tick0Stock
@@ -1154,8 +1176,24 @@ runJoin runner resultsDirectory cacheRoot inputs = do
         , (tick0Reuse, tick10Reuse, tick20Reuse, deliverReuse, unregisterReuse, postTickReuse)
         , (createFaultReuse, startFaultReuse, noSlotReuse, zeroReuse, missingReuse, registryFaultReuse)
         )
-      controls = comparatorControls deliveryOwned noDeliveryOwned
+      controls =
+        comparatorControls deliveryOwned noDeliveryOwned
+          ++ statusControls Returned (\observation -> checkRun layoutA Owned Tick afterTick20Owned observation [] deliverReuse) deliveryOwned
+          ++ statusControls Returned rootRun rootObservation
+          ++ statusControls StopAddress interfaceRun interfaceObservation
   pure (runs, controls)
+
+statusControls :: RunnerStatus -> (NativeObservation -> CaseRun) -> NativeObservation -> [ControlRun]
+statusControls expected check observation =
+  [ ControlRun
+      ("runner-" ++ runnerStatusLabel status)
+      (runStage baseline)
+      (null (runDifferences baseline) && not (null (runDifferences (check (observation {nativeStatus = status})))))
+  | status <- [InstructionBudget, MemoryGuard, StopAddress, Returned]
+  , status /= expected
+  ]
+  where
+    baseline = check observation
 
 -- | Comparator sensitivity: each control mutates one observed word and requires its check to fail.
 comparatorControls :: NativeObservation -> NativeObservation -> [ControlRun]

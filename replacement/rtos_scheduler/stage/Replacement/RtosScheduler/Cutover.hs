@@ -3,6 +3,7 @@ module Replacement.RtosScheduler.Cutover
   ( GroupInput (..), CutoverVariant (..), CutoverError (..), CutoverAdmission, CutoverStaged
   , admitCutover, stageCutover, cutoverDat, cutoverLoader, cutoverContract, confineCutover
   , restoreCutover, disjointExtents, validateInputs, ownFirstGuards
+  , admittedExtents, rebuild, loadersFrom
   ) where
 
 import Control.Monad (forM, forM_, unless)
@@ -187,6 +188,10 @@ admitCutover source inputs = do
     pure (domain,loader)
   pure (CutoverAdmission source windows (M.fromList loaders) inputs)
   where toOwn linked = O.LinkedDomain (S.linkedBin linked) (S.linkedSymbols linked)
+
+-- | Every admitted window extent, by domain.
+admittedExtents :: CutoverAdmission -> [(Domain, Extent)]
+admittedExtents admitted = [(windowDomain window, windowExtent window) | window <- admittedWindows admitted]
 
 controlLoaders :: CutoverVariant -> CutoverAdmission -> Either CutoverError (M.Map Domain B.ByteString)
 controlLoaders variant admitted = case variant of

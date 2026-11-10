@@ -22,6 +22,21 @@ The [Rust toolchain guide](toolchain/README.md) owns compiler provenance and bui
 
 Stagers require their declared canonical X-M1 1.50 inputs, not an arbitrary previously staged candidate. Firmware and generated artifacts remain in ignored `private-data/`; use a named `private-data/scratch/` directory or `private-data/verify-candidate/runs/` for new outputs. Individual commands specify whether directories must already exist or be fresh. Guest execution uses the shared [emulator slot](../build-support/README.md#commands), normally `XM1_EMULATOR_SLOTS=1`; file-only admission and comparison do not execute firmware.
 
+## Native rewrite qualification
+
+For an applicable native-only increment, run the native SDK and runner suites plus the affected caller's qualification command:
+
+```sh
+devenv shell -- env XM1_EMULATOR_SLOTS=1 host-build test --jobs=2 --local_test_jobs=1 \
+  //emulation:native-sdk-tests //emulation:native-runner-tests
+```
+
+`//emulation:native-sdk-tests` selects the native SDK build rather than unrelated SDK executables and harnesses. Keep `//emulation:fujimod-xm1-tests` and the complete existing qualification at the full-integration boundary. The native pair does not replace family, subsystem, system, control or hardware checks. Reuse compatible completed observations; adopting this tooling alone does not require replaying them.
+
+The current `host-build` automatically reports the kernel-sampled lock holder on first contention and owner changes. Use its PID, workspace/output-base context and existing `command.log` pointer before doing manual process archaeology. Unavailable or raced metadata is not evidence that the lane is free, and elapsed time does not authorize stopping a holder. The [build command guide](../build-support/README.md#commands) owns diagnostic details, resource limits and the real-wrapper checks. `host-build run` releases the build lock before executing its target; emulator targets then take their own slot.
+
+An older topic checkout may still provide an older launcher. Resolve `devenv shell -- which host-build` in the current main checkout, then invoke that returned executable through `devenv shell` from the worker checkout with its usual output base. Keep the worker's source and working directory; do not change SDK identities or pin a resolved Nix store path in configuration merely to adopt admission diagnostics.
+
 ## Authoritative references
 
 | Question | Home |

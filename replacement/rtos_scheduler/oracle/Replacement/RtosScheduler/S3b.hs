@@ -4,13 +4,12 @@ module Main (main) where
 import Control.Monad (forM, unless)
 import Data.Aeson (object, (.=))
 import Data.Bits ((.&.))
-import Data.List (isPrefixOf, sort, sortOn)
+import Data.List (sort)
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
 import Data.Word (Word32, Word8)
 import Emulation.NativeObservation
 import Emulation.OwnedCase
-import qualified Replacement.RtosPlatform.Aggregate as Agg
 import Replacement.RtosScheduler.Oracle (runCases)
 import System.Directory (createDirectoryIfMissing, removeDirectoryRecursive)
 import System.Environment (getArgs)
@@ -60,12 +59,12 @@ poke = foldl (\bytes (offset,value) -> B.take (fromIntegral offset) bytes <> val
 w :: Word32 -> B.ByteString
 w = word32le
 
-spec :: Bool -> Service -> Row -> String -> [(Word32, Word32)] -> [(Word32, Word32)] -> B.ByteString -> CaseSpec
-spec domainB service (Row handle context cpsr state flags exists discarded self dispatch) label codeSpans functionSpans code = CaseSpec
+spec :: Bool -> Service -> Row -> String -> B.ByteString -> CaseSpec
+spec domainB service (Row handle context cpsr state flags exists discarded self dispatch) label code = CaseSpec
   { caseId=label, caseProvenance="X-M1 1.50 exact task_services.c 55436fc85c, S3b", caseExclusion="Stack scratch and live dispatcher frame excluded; retained helpers execute stock", caseEntry=ga (entry service + delta), caseExit=ga 0x958f00
   , caseRegions=codeRegions ++ [mkRegion (RegionId "config") (ga 0x96c000) 0x1000 ReadWrite config, mkRegion (RegionId "stack") (ga 0x959700) 0x110 ReadWrite (B.replicate 0x110 0)] ++ concatMap ram [False,True] ++ [mkRegion (RegionId name) (ga at) 4 Device (w 0) | (name,at) <- [("bank0",0xfffb30cc),("bank1",0xfffb40cc)]]
       ++ [mkRegion (RegionId "code-exit") (ga 0x958f00) 4 ReadExecute (w 0xe7f000f0)]
-  , caseFunctions=[(ga at,size) | (at,size) <- functionSpans]
+  , caseFunctions=[(ga at,size) | (at,size) <- functions]
   , caseInitial=[(r,if r==R0 then handle else 0xa5a50000 + fromIntegral (fromEnum r)) | r <- [R0 .. R12]] ++ [(Sp,0x959800),(Lr,0x958f00),(Cpsr,cpsr)]
   , caseExpectedStatus=fst expectation, caseExpectedRegisters=[(R0,snd expectation)], caseExpectedMemory=[], caseCp14Identity=Nothing
   , caseKernel=Just (KernelCase (InstructionLimit 4000) (Just (ga (if domainB then 0xd3640 else 0x43640))) Nothing Nothing Nothing [R1,R2,R3,R12,Lr,Pc,Cpsr] []) }
@@ -74,7 +73,8 @@ spec domainB service (Row handle context cpsr state flags exists discarded self 
   ga = GuestAddress . fromIntegral
   delta = if domainB then 0x8ffc0 else 0
   base = if domainB then 0xd0000 else 0x40000
-  codeRegions = [mkRegion (RegionId ("code-"++show at)) (ga at) (fromIntegral size) ReadExecute (B.take (fromIntegral size) (B.drop (fromIntegral (at-base)) code)) | (at,size) <- codeSpans]
+  functions = (entry service+delta,fromIntegral (extent service)) : if domainB then [(0xd3f2c,44),(0xd3c60,124),(0xd4528,204),(0xd3d8c,72),(0xd3fd4,48),(0xd33e4,96),(0xd398c,60),(0xd39c8,40)] else [(0x43f70,44),(0x43ca4,124),(0x44568,204),(0x43dd0,72),(0x44018,44),(0x433e4,96),(0x439d8,60),(0x43a14,40)]
+  codeRegions = [mkRegion (RegionId ("code-"++show at)) (ga at) size ReadExecute (B.take size (B.drop (fromIntegral (at-base)) code)) | (at,size) <- [(entry service+delta,extent service),(if domainB then 0xd33e4 else 0x433e4,if domainB then 0x1210 else 0x1250)]]
   localRam = if domainB then 0x400e0000 else 0x40050000
   table = localRam + if domainB then 0x458c else 0x45cc
   own = if domainB then 2 else 1
@@ -119,42 +119,20 @@ comparable a b = nativeStatus a == nativeStatus b && nativeMemory a == nativeMem
 
 main :: IO ()
 main = do
-  arguments <- getArgs
-  let positional = stripSymbolFlags arguments
-      symbolsA = flagValue "--symbols-a" arguments
-      symbolsB = flagValue "--symbols-b" arguments
-  case positional of
+  args <- getArgs
+  case args of
     [runner,loaderA,loaderB,binA,binB,work] -> do
       createDirectoryIfMissing True work
-      reports <- forM [(False,loaderA,binA,symbolsA),(True,loaderB,binB,symbolsB)] $ \(b,loaderPath,binPath,symbolsPath) -> do
+      reports <- forM [(False,loaderA,binA),(True,loaderB,binB)] $ \(b,loaderPath,binPath) -> do
         stock <- B.readFile loaderPath
         owned <- B.readFile binPath
-        symbols <- traverse readSymbols symbolsPath
         let delta=if b then 0x8ffc0 else 0; base=if b then 0xd0000 else 0x40000
-            selected = maybe [] (Agg.symbolsWithPrefixes ["xm1_s3b_", "xm1_platform_veneer_s3b_"]) symbols
-            aggregateImage = fmap (\rows -> Agg.AggregateImage (minimum (map Agg.symbolAddress rows)) owned) symbols
             patch s bytes = poke bytes [(entry s+delta-base,B.take (extent s) (B.drop (fromIntegral (entry s-entry Activate)) owned))]
-            candidate = case aggregateImage of
-              Nothing -> foldr patch stock [minBound..maxBound]
-              Just image -> foldl (\bytes symbol -> either error id (Agg.installSymbol base bytes image symbol)) stock selected
-            symbolSpans = [(Agg.symbolAddress symbol, Agg.symbolSize symbol) | symbol <- selected]
-            helperSpans = helperFunctions b
-            helperBase = if b then 0xd33e4 else 0x433e4
-            helperSize = if b then 0x1210 else 0x1250
-            stockCodeSpans s = [(entry s+delta, fromIntegral (extent s)), (helperBase, helperSize)]
-            stockFunctionSpans s = (entry s+delta, fromIntegral (extent s)) : helperSpans
-            aggregateLo = minimum (map fst (symbolSpans ++ helperSpans))
-            aggregateHi = maximum [address + size | (address, size) <- symbolSpans ++ helperSpans]
-            ownedCodeSpans s = case symbols of
-              Nothing -> stockCodeSpans s
-              Just _ -> [(aggregateLo, aggregateHi-aggregateLo)]
-            ownedFunctionSpans s = case symbols of
-              Nothing -> stockFunctionSpans s
-              Just _ -> mergeSpans (symbolSpans ++ helperSpans)
+            candidate=foldr patch stock [minBound..maxBound]
         forM [minBound..maxBound] $ \s -> do
           let cases=rows s
-              roles=[("stock",stock,stockCodeSpans s,stockFunctionSpans s),("owned",candidate,ownedCodeSpans s,ownedFunctionSpans s),("equivalent",poke candidate [(entry s+delta-base+4,w 0xe1a0b00d)],ownedCodeSpans s,ownedFunctionSpans s),("mutant",poke candidate [(entry s+delta-base,w 0xe3e00010<>w 0xe12fff1e)],ownedCodeSpans s,ownedFunctionSpans s)]
-              labelled=[(role++show i,spec b s row (role++show i) codeSpans functionSpans bytes) | (role,bytes,codeSpans,functionSpans)<-roles,(i,row)<-zip [0::Int ..] cases]
+              roles=[("stock",stock),("owned",candidate),("equivalent",poke candidate [(entry s+delta-base+4,w 0xe1a0b00d)]),("mutant",poke candidate [(entry s+delta-base,w 0xe3e00010<>w 0xe12fff1e)])]
+              labelled=[(role++show i,spec b s row (role++show i) bytes) | (role,bytes)<-roles,(i,row)<-zip [0::Int ..] cases]
               dir=work </> (show b++show s)
           observed <- runCases runner dir labelled
           let at role i=observed M.! (role++show i)
@@ -170,30 +148,3 @@ main = do
       B.writeFile (work </> "summary.json") (encodeCanonical (object ["passed".=all fst flat,"entries".=map snd flat]))
       unless (all fst flat) (fail "S3b oracle failed")
     _ -> fail "runner loader-a loader-b owned-a owned-b work"
-
-helperFunctions :: Bool -> [(Word32, Word32)]
-helperFunctions domainB = if domainB then [(0xd3f2c,44),(0xd3c60,124),(0xd4528,204),(0xd3d8c,72),(0xd3fd4,48),(0xd33e4,96),(0xd398c,60),(0xd39c8,40)] else [(0x43f70,44),(0x43ca4,124),(0x44568,204),(0x43dd0,72),(0x44018,44),(0x433e4,96),(0x439d8,60),(0x43a14,40)]
-
-mergeSpans :: [(Word32, Word32)] -> [(Word32, Word32)]
-mergeSpans spans = go (sortOn fst spans)
-  where
-    go []=[]
-    go ((start,size):rest)=extend start (start+size) rest
-    extend start end []=[(start,end-start)]
-    extend start end ((lo,size):rest)
-      | lo<=end=extend start (max end (lo+size)) rest
-      | otherwise=(start,end-start):extend lo (lo+size) rest
-
-readSymbols :: FilePath -> IO [Agg.AggregateSymbol]
-readSymbols path = either fail pure . Agg.parseAggregateSymbols =<< B.readFile path
-
-flagValue :: String -> [String] -> Maybe FilePath
-flagValue flag arguments = case dropWhile (/= flag) arguments of
-  [] -> Nothing
-  [_] -> Nothing
-  _ : value : _ -> Just value
-
-stripSymbolFlags :: [String] -> [String]
-stripSymbolFlags (flag : _ : rest) | flag `elem` ["--symbols-a", "--symbols-b"] = stripSymbolFlags rest
-stripSymbolFlags (value : rest) = value : stripSymbolFlags rest
-stripSymbolFlags [] = []

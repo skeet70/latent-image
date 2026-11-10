@@ -1,5 +1,5 @@
 {-# LANGUAGE DeriveDataTypeable #-}
-module FujiAF.StorageBudget (checkStorageBudget) where
+module FujiAF.StorageBudget (StorageFailure, checkStorageBudget) where
 
 import Control.Exception (Exception, IOException, catch, throwIO)
 import Control.Monad (unless, when)

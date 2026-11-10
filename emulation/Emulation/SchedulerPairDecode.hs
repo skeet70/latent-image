@@ -9,12 +9,13 @@ import Data.Aeson.Decoding.Tokens
 import qualified Data.Aeson.KeyMap as K
 import qualified Data.ByteString.Lazy as L
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import Emulation.SchedulerPairCheck
 import Emulation.SchedulerPairEvidence
   ( CallEvidence, emptyCallEvidence, accumulateEvidence
   , ControlEvidence, emptyControlEvidence, accumulateControlEvidence )
 import Emulation.SchedulerPairModel (Memory, Arguments (..))
-import Emulation.SchedulerPairPlan (Plan, Semantic (..))
+import Emulation.SchedulerPairPlan (Address, Plan, Semantic (..))
 import qualified Emulation.SchedulerPairS2 as D
 
 data Classes s = MissingClasses | ParsedClasses s | InvalidClasses String
@@ -116,12 +117,16 @@ forceRegisters :: D.Registers -> ()
 forceRegisters (D.Registers values cpsr thread access exception) =
   forceList forceScalar values `seq` cpsr `seq` thread `seq` access `seq` exception `seq` ()
 
+forceSet :: S.Set Address -> ()
+forceSet = S.foldl' (\() address -> address `seq` ()) ()
+
 forceBoundary :: Boundary -> ()
-forceBoundary (Boundary kind address instructions core registers memory writes bank value task origins bankOrigins) =
+forceBoundary (Boundary kind address instructions core registers memory writes bank value task origins bankOrigins unreadable) =
   kind `seq` address `seq` instructions `seq` core `seq`
   forceRegisters registers `seq` forceMemory memory `seq`
   forceList forceWritten writes `seq` forceList forceWritten bank `seq`
-  forceMaybe forceScalar value `seq` task `seq` forceList forceOrigin origins `seq` forceList forceOrigin bankOrigins
+  forceMaybe forceScalar value `seq` task `seq` forceList forceOrigin origins `seq` forceList forceOrigin bankOrigins `seq`
+  forceSet unreadable
 
 forceTrace :: CallTrace -> ()
 forceTrace (CallTrace before after completion history origin) = forceRegisters before `seq` forceRegisters after `seq`
@@ -132,14 +137,17 @@ forceSemantic (HelperSemantic helper) = helper `seq` ()
 forceSemantic (DispatchSemantic point) = point `seq` ()
 forceSemantic DoorbellSemantic = ()
 forceSemantic (ServiceSemantic service) = service `seq` ()
+forceSemantic (FamilySemantic service) = service `seq` ()
+forceSemantic (SemaphoreSemantic service) = service `seq` ()
 
 -- Classes are fully evaluated before advancing the token stream.
 forceCall :: Call -> ()
-forceCall (Call domain address semantic core cpsr (Arguments arguments) before after r0 returnedCpsr writes bank count first trace task context stack origins bankOrigins) =
+forceCall (Call domain address semantic core cpsr (Arguments arguments) before after r0 returnedCpsr writes bank count first trace task context stack origins bankOrigins unreadable) =
   domain `seq` address `seq` forceSemantic semantic `seq` core `seq` cpsr `seq`
   forceList forceScalar arguments `seq` forceMemory before `seq` forceMemory after `seq`
   r0 `seq` returnedCpsr `seq` forceList forceWritten writes `seq` forceList forceWritten bank `seq`
   count `seq` first `seq` forceMaybe forceTrace trace `seq` task `seq` context `seq`
-  forceMaybe forceStack stack `seq` forceList forceOrigin origins `seq` forceList forceOrigin bankOrigins
+  forceMaybe forceStack stack `seq` forceList forceOrigin origins `seq` forceList forceOrigin bankOrigins `seq`
+  forceSet unreadable
  where
   forceStack (TaskStack low high) = low `seq` high `seq` ()

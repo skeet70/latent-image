@@ -20,23 +20,27 @@ module Emulation.HostAdmission
 
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
-import Control.Exception (IOException, evaluate, try)
+import Control.Exception (IOException, catch, evaluate, try)
 import Control.Monad (unless, void, when)
-import Data.Char (isDigit, isSpace)
+import qualified Data.ByteString as ByteString
+import qualified Data.ByteString.Char8 as ByteString8
+import Data.Char (isDigit, isPrint, isSpace)
 import Data.List (dropWhileEnd, isPrefixOf, stripPrefix)
 import Data.Maybe (isNothing)
 import GHC.Clock (getMonotonicTime)
+import FujiAF.StorageBudget (StorageFailure, checkStorageBudget)
 import Numeric (showFFloat)
 import System.Directory (createDirectoryIfMissing, findExecutable, getHomeDirectory, removeFile)
 import System.Environment (getExecutablePath, lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (..), exitWith)
-import System.FilePath (takeDirectory, takeFileName, (</>))
-import System.IO (SeekMode (AbsoluteSeek), hFlush, hGetContents, hGetLine, hPutStrLn, stderr)
+import System.FilePath (isAbsolute, takeDirectory, takeFileName, (</>))
+import System.IO (IOMode (ReadMode), SeekMode (AbsoluteSeek), hFlush, hGetContents, hGetLine, hPutStrLn, stderr, withBinaryFile)
 import System.IO.Error (catchIOError, isDoesNotExistError)
-import System.Posix.IO (FdOption (CloseOnExec), LockRequest (WriteLock), OpenFileFlags (creat), OpenMode (ReadWrite), closeFd, createPipe, defaultFileFlags, fdToHandle, openFd, setFdOption, setLock)
+import System.Posix.Files (readSymbolicLink)
+import System.Posix.IO (FdOption (CloseOnExec), FileLock, LockRequest (WriteLock), OpenFileFlags (creat), OpenMode (ReadWrite), closeFd, createPipe, defaultFileFlags, fdToHandle, getLock, openFd, setFdOption, setLock)
 import System.Posix.Process (executeFile, getProcessID)
 import System.Posix.Signals (Handler (Catch), installHandler, sigINT)
-import System.Posix.Types (Fd (..))
+import System.Posix.Types (Fd (..), ProcessID)
 import System.Process (CreateProcess (..), createProcess, getProcessExitCode, proc, readProcessWithExitCode, terminateProcess, waitForProcess)
 import System.Timeout (timeout)
 import Text.Read (readMaybe)
@@ -93,6 +97,44 @@ admittedVariable = "XM1_HOST_BUILD"
 resourceFailureExit :: Int
 resourceFailureExit = 75
 
+newtype AccountingExecutable = AccountingExecutable FilePath
+newtype AccountingConfiguration = AccountingConfiguration FilePath
+newtype AccountingStateDirectory = AccountingStateDirectory FilePath
+data AccountingGuard = AccountingGuard AccountingExecutable AccountingConfiguration AccountingStateDirectory
+
+configuredAccountingGuard :: IO (Maybe AccountingGuard)
+configuredAccountingGuard = do
+  config <- lookupEnv "XM1_STORAGE_ACCOUNTING_CONFIG"
+  state <- lookupEnv "XM1_STORAGE_ACCOUNTING_STATE"
+  program <- lookupEnv "XM1_STORAGE_ACCOUNTING_TOOL"
+  case (config, state, program) of
+    (Nothing, Nothing, Nothing) -> pure Nothing
+    (Just configuration, Just directory, executable) -> do
+      fallback <- (</> ".local/libexec/latent-image/storage-accounting") <$> getHomeDirectory
+      let tool = maybe fallback id executable
+      unless (all isAbsolute [configuration, directory, tool]) $
+        refuseAccounting "accounting config, state and executable must be absolute paths"
+      pure (Just (AccountingGuard (AccountingExecutable tool) (AccountingConfiguration configuration) (AccountingStateDirectory directory)))
+    _ -> refuseAccounting "set both XM1_STORAGE_ACCOUNTING_CONFIG and XM1_STORAGE_ACCOUNTING_STATE to opt into aggregate admission"
+
+refuseAccounting :: String -> IO a
+refuseAccounting problem = do
+  hPutStrLn stderr ("host-build storage admission: " ++ take 4096 problem)
+  exitWith (ExitFailure resourceFailureExit)
+
+checkConfiguredAccounting :: IO ()
+checkConfiguredAccounting = do
+  guard <- configuredAccountingGuard
+  case guard of
+    Nothing -> pure ()
+    Just (AccountingGuard (AccountingExecutable program) (AccountingConfiguration config) (AccountingStateDirectory state)) -> do
+      result <- try (readProcessWithExitCode program ["check", "--config", config, "--state", state, "+RTS", "-M512M", "-RTS"] "")
+        :: IO (Either IOException (ExitCode, String, String))
+      case result of
+        Right (ExitSuccess, _, _) -> pure ()
+        Right (_, out, err) -> refuseAccounting (err ++ out)
+        Left problem -> refuseAccounting (show problem)
+
 -- | @host-build [--output_base=PATH] COMMAND [ARGUMENT...]@, or the internal
 -- scope child.
 hostBuildMain :: [String] -> IO ()
@@ -124,6 +166,10 @@ admit requestedBase command rest = do
   if scoped
     then stopPreviousScope directory unit
     else hPutStrLn stderr ("No systemd user session: host build runs without the " ++ memory ++ " memory cap") >> hFlush stderr
+  checkStorageBudget directory
+    `catch` (\problem -> refuseAccounting (show (problem :: StorageFailure)))
+    `catch` (\problem -> refuseAccounting (show (problem :: IOException)))
+  checkConfiguredAccounting
   let script = directory </> ("run-" ++ show pid ++ ".sh")
       running = command == "run"
       bazelArguments =
@@ -183,6 +229,20 @@ admittedFlags command
   | command `elem` ["build", "test", "run", "coverage"] = ["--jobs=4", "--local_resources=memory=3072"]
   | otherwise = []
 
+-- | F_GETLK reports one conflicting lock at query time.
+data KernelOwner = KernelOwner ProcessID | KernelUnlocked | KernelUnknown
+  deriving (Eq)
+
+data HolderDetails = HolderDetails
+  { holderCommand :: Maybe String
+  , holderDirectory :: Maybe FilePath
+  , holderOutputBase :: OutputBase
+  }
+
+data OutputBase = NoOutputBase | OutputBaseUnavailable | OutputBaseObserved FilePath
+
+data OwnerSample = OwnerNone | OwnerUnknown | OwnerReported ProcessID (Maybe HolderDetails)
+
 acquireBuildLock :: FilePath -> IO Fd
 acquireBuildLock directory = do
   fd <- openFd (directory </> "build.lock") ReadWrite defaultFileFlags {creat = Just 0o600}
@@ -192,12 +252,128 @@ acquireBuildLock directory = do
         case locked of
           Right () -> pure fd
           Left _ -> do
-            unless announced $ do
-              hPutStrLn stderr ("Waiting for the host build lock in " ++ directory)
-              hFlush stderr
+            announced' <- announceContention directory fd announced
             threadDelay 1_000_000
-            attempt True
-  attempt False
+            attempt announced'
+  attempt Nothing
+
+-- | Samples metadata only on first contention and observed owner changes.
+announceContention :: FilePath -> Fd -> Maybe KernelOwner -> IO (Maybe KernelOwner)
+announceContention directory fd previous = do
+  current <- queryKernelOwner fd
+  if previous == Just current
+    then pure previous
+    else case current of
+      KernelOwner pid -> do
+        details <- holderDetails pid
+        confirmed <- queryKernelOwner fd
+        announce confirmed (if confirmed == current then details else Nothing)
+      _ -> announce current Nothing
+  where
+    announce owner details
+      | previous == Just owner = pure previous
+      | otherwise = do
+          (hPutStrLn stderr (renderContention directory (sampleOf owner details)) >> hFlush stderr)
+            `catchIOError` \_ -> pure ()
+          pure (Just owner)
+
+sampleOf :: KernelOwner -> Maybe HolderDetails -> OwnerSample
+sampleOf (KernelOwner pid) details = OwnerReported pid details
+sampleOf KernelUnlocked _ = OwnerNone
+sampleOf KernelUnknown _ = OwnerUnknown
+
+queryKernelOwner :: Fd -> IO KernelOwner
+queryKernelOwner fd = do
+  result <- try (getLock fd (WriteLock, AbsoluteSeek, 0, 0))
+    :: IO (Either IOException (Maybe (ProcessID, FileLock)))
+  pure $ case result of
+    Right (Just (pid, _)) | pid > 0 -> KernelOwner pid
+    Right (Just _) -> KernelUnknown
+    Right Nothing -> KernelUnlocked
+    Left _ -> KernelUnknown
+
+-- | Bounded metadata for a sampled owner.
+holderDetails :: ProcessID -> IO (Maybe HolderDetails)
+holderDetails pid = do
+  command <- processName pid
+  directory <- try (readSymbolicLink ("/proc" </> show pid </> "cwd")) :: IO (Either IOException FilePath)
+  outputBase <- processOutputBase pid
+  let details = HolderDetails
+        command
+        (either (const Nothing) (Just . sanitizeText 512) directory)
+        outputBase
+  pure $ case details of
+    HolderDetails Nothing Nothing NoOutputBase -> Nothing
+    _ -> Just details
+
+processName :: ProcessID -> IO (Maybe String)
+processName pid = do
+  contents <- boundedBytes 64 ("/proc" </> show pid </> "comm")
+  pure (sanitizeText 64 . trim . ByteString8.unpack <$> contents)
+
+outputBaseFlag :: ByteString.ByteString
+outputBaseFlag = ByteString8.pack "--output_base="
+
+processOutputBase :: ProcessID -> IO OutputBase
+processOutputBase pid = do
+  contents <- boundedBytes 4096 ("/proc" </> show pid </> "cmdline")
+  pure $ case contents of
+    Nothing -> OutputBaseUnavailable
+    Just bytes ->
+      let values =
+            [ value
+            | argument <- completeArguments bytes
+            , Just value <- [ByteString8.stripPrefix outputBaseFlag argument]
+            , not (ByteString.null value)
+            ]
+          truncated = outputBaseFlag `ByteString.isPrefixOf` incompleteTail bytes
+      in case reverse values of
+        value : _ | ByteString.length value > 512 -> OutputBaseUnavailable
+                  | truncated -> OutputBaseUnavailable
+                  | not (ByteString.all (\byte -> byte >= 32 && byte <= 126) value) -> OutputBaseUnavailable
+                  | otherwise -> OutputBaseObserved (ByteString8.unpack value)
+        [] | truncated -> OutputBaseUnavailable
+           | otherwise -> NoOutputBase
+
+-- | Only NUL-terminated argv tokens are complete.
+completeArguments :: ByteString.ByteString -> [ByteString.ByteString]
+completeArguments bytes = filter (not . ByteString.null) (dropLast (ByteString.split 0 bytes))
+  where
+    dropLast [] = []
+    dropLast [_] = []
+    dropLast (argument : rest) = argument : dropLast rest
+
+incompleteTail :: ByteString.ByteString -> ByteString.ByteString
+incompleteTail = snd . ByteString.breakEnd (== 0)
+
+boundedBytes :: Int -> FilePath -> IO (Maybe ByteString.ByteString)
+boundedBytes limit path = do
+  result <- try (withBinaryFile path ReadMode (\handle -> ByteString.hGet handle (limit + 1)))
+    :: IO (Either IOException ByteString.ByteString)
+  pure (either (const Nothing) Just result)
+
+sanitizeText :: Int -> String -> String
+sanitizeText limit = take limit . map (\character -> if isPrint character then character else '?')
+
+renderContention :: FilePath -> OwnerSample -> String
+renderContention directory sample =
+  "host-build: waiting for build lock in " ++ sanitizeText 512 directory ++ "; " ++ holderText sample
+
+holderText :: OwnerSample -> String
+holderText OwnerNone = "holder=none"
+holderText OwnerUnknown = "holder=unknown"
+holderText (OwnerReported pid Nothing) = "holder pid=" ++ show pid ++ " details=unavailable"
+holderText (OwnerReported pid (Just details)) =
+  "holder pid=" ++ show pid
+    ++ maybe "" (\name -> " command=" ++ name) (holderCommand details)
+    ++ maybe "" (\path -> " cwd=" ++ path) (holderDirectory details)
+    ++ outputBaseText (holderOutputBase details)
+
+outputBaseText :: OutputBase -> String
+outputBaseText NoOutputBase = ""
+outputBaseText OutputBaseUnavailable = " output_base=unavailable"
+outputBaseText (OutputBaseObserved base) =
+  " output_base=" ++ base ++ " command_log=" ++ (base </> "command.log")
 
 -- | Stops the scope of this lock's previous holder when its processes outlived
 -- the holder, then records @unit@ as the current holder's scope.

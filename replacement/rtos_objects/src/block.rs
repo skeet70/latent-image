@@ -1,11 +1,11 @@
 use crate::create::Machine;
 use crate::id::{EntryDomain, FlagId, MailboxId};
 use crate::layout::{
-    Domain, FlagConfig, FlagWait, GuestAddress, KernelContext, MailboxWait, Message, Task, TaskState,
-    WaitBlock, WaitQueue,
+    Domain, DomainId, FlagWait, GuestAddress, KernelContext, MailboxWait, Message, Task, TaskState, WaitBlock,
+    WaitQueue,
 };
-use crate::locked::OutWord;
-use crate::matching::{check, MatchMode, Pattern, WantedMask};
+use crate::locked::{check_control, OutWord};
+use crate::matching::{MatchMode, Pattern, WantedMask};
 use crate::order::QueueOrder;
 use crate::status::{ObjectStatus, WaitOutcome};
 use crate::timeout::Timeout;
@@ -67,50 +67,72 @@ pub struct ReceivePending {
 pub enum FlagBlocking {
     Ready(WaitOutcome<Pattern>),
     Pending(FlagWaitPending),
+    /// The running task was not READY; the caller drops the object lock and retries.
+    Retry,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ReceiveBlocking {
     Ready(WaitOutcome<Message>),
     Pending(ReceivePending),
+    /// The running task was not READY; the caller drops the object lock and retries.
+    Retry,
 }
 
-/// The wake writes the wait block's completion word before the task becomes runnable; the
-/// caller output is written by the resumed entry.
-fn block<M: Block>(
-    m: &M,
-    entry: Domain,
-    object: Domain,
-    task: Task,
-    wait: GuestAddress,
-    queue: WaitQueue,
-    order: QueueOrder,
-    timer: Option<(TimerEntryAddress, Deadline)>,
-) {
-    let owner = m.context(object);
-    m.with_scheduler_lock(entry, || {
-        m.store_byte(
-            task.state(),
-            TaskState::WAIT
-                .union(TaskState::OBJECT_QUEUED)
-                .union(TaskState::OWNER_LOCK_QUEUED)
-                .bits(),
-        );
-        m.remove_ready(m.context(entry), task);
-        m.store_word(task.wait(), wait.0);
-        match timer {
-            Some((timer_entry, deadline)) => {
-                m.store_word(wait, timer_entry.0 .0);
-                m.store_word(timer_entry.0.offset(TIMER_ENTRY_CALLBACK), m.timeout_callback().0);
-                m.store_word(timer_entry.0.offset(TIMER_ENTRY_ARGUMENT), task.0 .0);
-                m.arm_timer(m.context(entry), timer_entry, deadline);
-            }
-            None => m.store_word(wait, 0),
+/// The wait preparation a caller runs with the object and scheduler locks held.
+pub struct WaitPreparation {
+    pub entry: Domain,
+    pub owner: DomainId,
+    pub task: Task,
+    pub wait: WaitBlock,
+    pub queue: WaitQueue,
+    pub order: QueueOrder,
+    pub timer: Option<WaitTimer>,
+}
+
+#[derive(Clone, Copy)]
+pub struct WaitTimer {
+    pub entry: TimerEntryAddress,
+    pub deadline: Deadline,
+}
+
+#[cfg_attr(feature = "family", inline(never))]
+pub fn block_locked<M: Block>(m: &M, prep: &WaitPreparation) {
+    m.store_byte(
+        prep.task.state(),
+        TaskState::WAIT
+            .union(TaskState::OBJECT_QUEUED)
+            .union(TaskState::OWNER_LOCK_QUEUED)
+            .bits(),
+    );
+    m.remove_ready(m.context(prep.entry), prep.task);
+    m.store_word(prep.task.wait(), prep.wait.0 .0);
+    match prep.timer {
+        Some(timer) => {
+            m.store_word(prep.wait.0, timer.entry.0 .0);
+            m.store_word(timer.entry.0.offset(TIMER_ENTRY_CALLBACK), m.timeout_callback().0);
+            m.store_word(timer.entry.0.offset(TIMER_ENTRY_ARGUMENT), prep.task.0 .0);
+            m.arm_timer(m.context(prep.entry), timer.entry, timer.deadline);
         }
-        m.store_word(WaitBlock(wait).queue(), queue.0 .0);
-        m.store_word(WaitBlock(wait).owner(), owner.0 .0);
-        m.queue_wait(owner, task, queue, order);
-    });
+        None => m.store_word(prep.wait.0, 0),
+    }
+    m.store_word(prep.wait.queue(), prep.queue.0 .0);
+    m.store_word(prep.wait.owner(), prep.owner.word());
+    m.queue_wait(m.context(prep.entry), prep.task, prep.queue, prep.order);
+}
+
+#[cfg_attr(feature = "family", inline(never))]
+fn block<M: Block>(m: &M, prep: &WaitPreparation) -> bool {
+    let mut scheduler = m.lock_scheduler(prep.entry);
+    let ready = (|| {
+        if m.load_byte(prep.task.state()) & TaskState::READY.bits() == 0 {
+            return false;
+        }
+        block_locked(m, prep);
+        true
+    })();
+    scheduler.release();
+    ready
 }
 
 /// Slots `+0x94` and `+0x9c`.
@@ -127,20 +149,13 @@ pub fn wait_flag<M: Block>(
     let control = words.flag_control(id.slot);
     let config = words.flag_config(id.slot);
     let lock = words.context(id.domain).object_lock();
-    m.with_object_lock(lock, || {
+    let _guard = m.lock_object(lock);
+    (|| {
         if m.load_word(control.queue().next()) != control.0 .0 {
             return Err(ObjectStatus::QueueOverflow);
         }
-        let mut pattern = Pattern(m.load_word(control.pattern()));
-        let clear_on_match = m.load_word(config.attributes()) & FlagConfig::CLEAR_ON_MATCH != 0;
-        match check(&mut pattern, want.pattern(), mode, clear_on_match) {
-            Some(reported) => {
-                m.store_word(out.0, reported.0);
-                if clear_on_match {
-                    m.store_word(control.pattern(), 0);
-                }
-                Ok(FlagBlocking::Ready(WaitOutcome::Satisfied(reported)))
-            }
+        match check_control(m, control, config, want.pattern(), mode, out) {
+            Some(reported) => Ok(FlagBlocking::Ready(WaitOutcome::Satisfied(reported))),
             None => match timeout {
                 Timeout::Poll => Ok(FlagBlocking::Ready(WaitOutcome::TimedOut)),
                 Timeout::Forever | Timeout::Units(_) => {
@@ -154,27 +169,29 @@ pub fn wait_flag<M: Block>(
                     m.store_word(wait.pattern(), want.pattern().0);
                     m.store_word(wait.mode(), if mode == MatchMode::Any { 1 } else { 0 });
                     let timer = match timeout {
-                        Timeout::Units(units) => Some((
-                            TimerEntryAddress(entry.domain().words().flag_timer(slot)),
-                            Deadline(m.tick(m.context(entry.domain())).0.wrapping_add(units)),
-                        )),
+                        Timeout::Units(units) => Some(WaitTimer {
+                            entry: TimerEntryAddress(entry.domain().words().flag_timer(slot)),
+                            deadline: Deadline(m.tick(m.context(entry.domain())).0.wrapping_add(units)),
+                        }),
                         _ => None,
                     };
-                    block(
-                        m,
-                        entry.domain(),
-                        id.domain,
+                    let prep = WaitPreparation {
+                        entry: entry.domain(),
+                        owner: id.domain.id(),
                         task,
-                        wait.0,
-                        control.queue(),
-                        QueueOrder::from_attribute(m.load_word(config.attributes())),
+                        wait: WaitBlock(wait.0),
+                        queue: control.queue(),
+                        order: QueueOrder::from_attribute(m.load_word(config.attributes())),
                         timer,
-                    );
+                    };
+                    if !block(m, &prep) {
+                        return Ok(FlagBlocking::Retry);
+                    }
                     Ok(FlagBlocking::Pending(FlagWaitPending { task, wait, out }))
                 }
             },
         }
-    })
+    })()
 }
 
 /// Slots `+0xd8` and `+0xe0`.
@@ -189,7 +206,8 @@ pub fn receive<M: Block>(
     let control = words.mailbox_control(id.slot);
     let config = words.mailbox_config(id.slot);
     let lock = words.context(id.domain).object_lock();
-    m.with_object_lock(lock, || {
+    let _guard = m.lock_object(lock);
+    (|| {
         let head = m.load_word(control.head());
         if head != 0 {
             let message = Message(GuestAddress(head));
@@ -209,26 +227,28 @@ pub fn receive<M: Block>(
                     .ok_or(ObjectStatus::Param)?;
                 let wait = entry.domain().words().mailbox_wait(slot);
                 let timer = match timeout {
-                    Timeout::Units(units) => Some((
-                        TimerEntryAddress(entry.domain().words().mailbox_timer(slot)),
-                        Deadline(m.tick(m.context(entry.domain())).0.wrapping_add(units)),
-                    )),
+                    Timeout::Units(units) => Some(WaitTimer {
+                        entry: TimerEntryAddress(entry.domain().words().mailbox_timer(slot)),
+                        deadline: Deadline(m.tick(m.context(entry.domain())).0.wrapping_add(units)),
+                    }),
                     _ => None,
                 };
-                block(
-                    m,
-                    entry.domain(),
-                    id.domain,
+                let prep = WaitPreparation {
+                    entry: entry.domain(),
+                    owner: id.domain.id(),
                     task,
-                    wait.0,
-                    control.queue(),
-                    QueueOrder::from_attribute(m.load_word(config.attributes())),
+                    wait: WaitBlock(wait.0),
+                    queue: control.queue(),
+                    order: QueueOrder::from_attribute(m.load_word(config.attributes())),
                     timer,
-                );
+                };
+                if !block(m, &prep) {
+                    return Ok(ReceiveBlocking::Retry);
+                }
                 Ok(ReceiveBlocking::Pending(ReceivePending { task, wait, out }))
             }
         }
-    })
+    })()
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -245,6 +265,7 @@ pub enum ReceiveResume {
     Corrupt(ReceivePending),
 }
 
+#[cfg_attr(feature = "family", inline(always))]
 pub fn resume_flag<M: Machine + IrqScope>(m: &M, pending: FlagWaitPending) -> FlagResume {
     if m.load_byte(pending.task.state()) & TaskState::WAIT.bits() != 0 {
         return FlagResume::Pending(pending);
@@ -263,6 +284,7 @@ pub fn resume_flag<M: Machine + IrqScope>(m: &M, pending: FlagWaitPending) -> Fl
     }
 }
 
+#[cfg_attr(feature = "family", inline(always))]
 pub fn resume_receive<M: Machine + IrqScope>(m: &M, pending: ReceivePending) -> ReceiveResume {
     if m.load_byte(pending.task.state()) & TaskState::WAIT.bits() != 0 {
         return ReceiveResume::Pending(pending);

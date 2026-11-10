@@ -4,8 +4,8 @@ use crate::block::{Block, Deadline, IrqScope, SavedMask, Tick, TimerEntryAddress
 use crate::create::{Machine as CreateMachine, SavedInterrupts};
 use crate::layout::{Domain, DomainId, GuestAddress, KernelContext, LockRecord, Task, WaitQueue};
 use crate::order::QueueOrder;
-use crate::locked::ObjectLock;
-use crate::wake::{DispatchTarget, Release, Selection, Wake};
+use crate::locked::{ObjectGuard, ObjectLock};
+use crate::wake::{DispatchTarget, Release, SchedulerGuard, Selection, Wake};
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use xm1_rtos_scheduler as s1;
@@ -259,31 +259,19 @@ impl CreateMachine for Sim {
 }
 
 impl ObjectLock for Sim {
-    fn with_object_lock_after<R>(&self, record: LockRecord, body: impl FnOnce() -> R, after: impl FnOnce(&R)) -> R {
+    fn lock_object(&self, record: LockRecord) -> ObjectGuard<'_, Self> {
         assert!(!self.held.get(), "object lock acquired twice");
         let saved = self.interrupts.get();
         self.interrupts.set(saved | 0x80);
         self.held.set(true);
         s1::acquire(self, lock(record.0));
-        let result = body();
-        s1::release(self, lock(record.0));
-        after(&result);
-        self.held.set(false);
-        self.interrupts.set(saved);
-        result
+        ObjectGuard::new(self, record, SavedInterrupts(saved))
     }
 
-    fn with_object_lock<R>(&self, record: LockRecord, body: impl FnOnce() -> R) -> R {
-        assert!(!self.held.get(), "object lock acquired twice");
-        let saved = self.interrupts.get();
-        self.interrupts.set(saved | 0x80);
-        self.held.set(true);
-        s1::acquire(self, lock(record.0));
-        let result = body();
+    fn release_object(&self, record: LockRecord) {
+        assert!(self.held.get(), "object lock released without the lock");
         s1::release(self, lock(record.0));
         self.held.set(false);
-        self.interrupts.set(saved);
-        result
     }
 }
 
@@ -325,16 +313,18 @@ impl Release for Sim {
 }
 
 impl Wake for Sim {
-    fn with_scheduler_lock<R>(&self, owner: Domain, body: impl FnOnce() -> R) -> R {
+    fn lock_scheduler(&self, owner: Domain) -> SchedulerGuard<'_, Self> {
         assert!(self.held.get(), "scheduler lock taken without the object lock");
         let saved = self.interrupts.get();
         self.interrupts.set(saved | 0x80);
         let record = self.context(owner).scheduler_lock();
         s1::acquire(self, lock(record.0));
-        let result = body();
+        SchedulerGuard::new(self, owner, Some(SavedInterrupts(saved)))
+    }
+
+    fn release_scheduler(&self, owner: Domain) {
+        let record = self.context(owner).scheduler_lock();
         s1::release(self, lock(record.0));
-        self.interrupts.set(saved);
-        result
     }
 
     fn waiter_domain(&self, waiter: Task) -> Domain {
@@ -368,11 +358,6 @@ impl Wake for Sim {
     }
 }
 
-fn priority_byte(sim: &Sim, task: Task) -> u8 {
-    let GuestAddress(at) = task.priority();
-    (sim.word(GuestAddress(at & !3)) >> (8 * (at & 3))) as u8
-}
-
 impl IrqScope for Sim {
     fn mask_i(&self) -> SavedMask {
         let saved = self.interrupts.get();
@@ -396,25 +381,7 @@ impl Block for Sim {
     }
 
     fn queue_wait(&self, _owner: KernelContext, task: Task, queue: WaitQueue, order: QueueOrder) {
-        let head = queue.0;
-        let (mut at, mut next) = (GuestAddress(self.word(queue.prev())), head);
-        if order == QueueOrder::Priority {
-            at = head;
-            next = GuestAddress(self.word(head));
-            let candidate = priority_byte(self, task);
-            while next.0 != head.0 {
-                let existing = Task(next);
-                if priority_byte(self, existing) > candidate {
-                    break;
-                }
-                at = next;
-                next = GuestAddress(self.word(existing.next()));
-            }
-        }
-        self.set(task.next(), next.0);
-        self.set(task.prev(), at.0);
-        self.set(GuestAddress(at.0), task.0 .0);
-        self.set(GuestAddress(next.0).offset(0x04), task.0 .0);
+        crate::wake::queue_insert(self, task, queue, order);
     }
 
     fn arm_timer(&self, _owner: KernelContext, entry: TimerEntryAddress, deadline: Deadline) {

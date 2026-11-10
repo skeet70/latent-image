@@ -6,12 +6,11 @@ import Data.Aeson (object, (.=))
 import Data.Char (toLower)
 import Data.Bits ((.&.), (.|.), shiftL, shiftR)
 import qualified Data.ByteString as B
-import Data.List (nub, sortOn)
+import Data.List (nub)
 import Data.Word (Word32)
 import Emulation.NativeObservation
 import Emulation.OwnedCase
 import Emulation.Sha256 (sha256, sha256Hex)
-import qualified Replacement.RtosPlatform.Aggregate as Agg
 import Replacement.RtosOwnFirst.Artifact (loaderSha256)
 import qualified Replacement.RtosOwnFirst.Regions as R
 import FujiAF.JSON (encodeCanonical)
@@ -115,11 +114,15 @@ callbackCode domain row = wordsBytes (capture ++ mode ++ [0xe12fff1e])
       2 -> [0xe3530001,0x1a000004,0xe3002000 .|. (runningCell domain .&. 0xfff) .|. ((runningCell domain .&. 0xf000) `shiftL` 4),0xe3442000 .|. ((runningCell domain `shiftR` 16) .&. 0xfff),0xe5922000,0xe3a03080,0xe5823010]
       _ -> []
 
-spec :: (Word32, Word32) -> [(Word32, Word32)] -> Domain -> Entry -> Row -> B.ByteString -> String -> CaseSpec
-spec (codeLo, codeHi) functionSpans domain entry row code ident = CaseSpec ident "X-M1 1.50 S3c contracts at 55436fc85c, synthetic typed scheduler state" "one native service call, no concurrent CPU or devices beyond IRQ pending words" (ga (entryAt domain entry)) (ga 0x920000) (regions ++ [exitRegion]) [(ga at,size) | (at,size) <- functionSpans] initial Returned [(R4,0xabc00004)] [] Nothing (Just kernel)
+spec :: Domain -> Entry -> Row -> B.ByteString -> String -> CaseSpec
+spec domain entry row code ident = CaseSpec ident "X-M1 1.50 S3c contracts at 55436fc85c, synthetic typed scheduler state" "one native service call, no concurrent CPU or devices beyond IRQ pending words" (ga (entryAt domain entry)) (ga 0x920000) (regions ++ [exitRegion]) functions initial Returned [(R4,0xabc00004)] [] Nothing (Just kernel)
   where
     ga = GuestAddress . fromIntegral
+    codeRanges = [(entryAt domain e,fromIntegral(extent e)) | e <- [minBound .. maxBound]] ++ [(stockEntry domain at,size) | (at,size) <- [(0x439d8,60),(0x43a14,40),(0x43c48,92),(0x43ca4,124),(0x43d20,176),(0x44018,if domain == A then 44 else 48),(0x433e4,96),(0x43640,4)]]
+    functions = [(ga at,size) | (at,size) <- codeRanges] ++ [(ga 0x900000,64),(ga 0x900040,64),(ga 0x930000,16)]
     codeRegions = [mkRegion (RegionId "code-loader") (ga codeLo) (fromIntegral(codeHi-codeLo)) ReadExecute (B.take (fromIntegral(codeHi-codeLo)) (B.drop (fromIntegral(codeLo-loaderBase domain)) code))]
+    codeLo = stockEntry domain 0x433e4
+    codeHi = entryAt domain Enable + fromIntegral(extent Enable)
     tableAt = if domain == A then 0x4daa0 else 0xdda64
     tableRegion = mkRegion (RegionId "find-table") (ga tableAt) 16 ReadOnly (B.take 16 (B.drop (fromIntegral(tableAt-loaderBase domain)) code))
     ramRegions = [mkRegion (RegionId (label ++ map toLower(show d))) (ga base) size ReadWrite (ram domain d row base size) | d <- [A,B], (label,base,size) <- [("globals-",currentCell d-36,fromIntegral(runningCell d+48-(currentCell d-36))),("tasks-",taskBase d-56,280)]]
@@ -141,19 +144,17 @@ normalize observation = observation {nativeMemory = filter ((/= RegionId "stack"
 branch :: Word32 -> Word32 -> Word32
 branch from to = 0xea000000 .|. (((to-from-8) `shiftR` 2) .&. 0xffffff)
 
-roleSpec :: (Word32, Word32) -> [(Word32, Word32)] -> Maybe Word32 -> Role -> Domain -> Entry -> Row -> B.ByteString -> String -> CaseSpec
-roleSpec bounds functionSpans aggregateTarget role domain entry row code ident = case role of
-  Mutant -> spec bounds functionSpans domain entry row (poke code offset (wordsBytes [0xe3e00062,0xe12fff1e])) ident
-  Equivalent -> base {caseRegions = map equivalentRegion (caseRegions (spec bounds functionSpans domain entry row (poke code offset (word32le (branch address 0x930000))) ident))}
+roleSpec :: Role -> Domain -> Entry -> Row -> B.ByteString -> String -> CaseSpec
+roleSpec role domain entry row code ident = case role of
+  Mutant -> spec domain entry row (poke code offset (wordsBytes [0xe3e00062,0xe12fff1e])) ident
+  Equivalent -> base {caseRegions = map equivalentRegion (caseRegions (spec domain entry row (poke code offset (word32le (branch address 0x930000))) ident))}
   _ -> base
   where
-    base = spec bounds functionSpans domain entry row code ident
+    base = spec domain entry row code ident
     address = entryAt domain entry
     offset = address-loaderBase domain
-    equivalentRegion region
-      | regionIdOf (caseRegion region) /= RegionId "code-equivalent" = region
-      | Just target <- aggregateTarget = mkRegion (RegionId "code-equivalent") (GuestAddress 0x930000) 16 ReadExecute (wordsBytes [branch 0x930000 target, 0xe12fff1e])
-      | otherwise = mkRegion (RegionId "code-equivalent") (GuestAddress 0x930000) 16 ReadExecute (wordsBytes [0xe320f000] <> B.take 4 (B.drop (fromIntegral offset) code) <> word32le (branch 0x930008 (address+4)) <> word32le 0xe7f000f0)
+    equivalentRegion region | regionIdOf (caseRegion region) == RegionId "code-equivalent" = mkRegion (RegionId "code-equivalent") (GuestAddress 0x930000) 16 ReadExecute (wordsBytes [0xe320f000] <> B.take 4 (B.drop (fromIntegral offset) code) <> word32le (branch 0x930008 (address+4)) <> word32le 0xe7f000f0)
+                            | otherwise = region
 expectedResult :: Entry -> Row -> Maybe Word32
 expectedResult entry row
   | entry `elem` [DeliveryLoop,Delivery] = Nothing
@@ -187,82 +188,34 @@ contractHolds entry row reference observation = case caseOutcome reference obser
     outputHolds = entry /= GetPriority || expectedResult entry row /= Just 0 || fmap (\bytes -> readWordAt bytes 0) (lookup (RegionId "output") (nativeMemory observation)) == Just (priorityWord (priority row) + 1)
 
 
-branchTarget :: Word32 -> Word32 -> Word32
-branchTarget at word = at + 8 + fromIntegral (delta * 4)
-  where
-    immediate = fromIntegral (word .&. 0xffffff) :: Int
-    delta = if immediate .&. 0x800000 /= 0 then immediate - 0x1000000 else immediate
-
-mergeSpans :: [(Word32, Word32)] -> [(Word32, Word32)]
-mergeSpans spans = go (sortOn fst spans)
-  where
-    go []=[]
-    go ((start,size):rest)=extend start (start+size) rest
-    extend start end []=[(start,end-start)]
-    extend start end ((lo,size):rest)
-      | lo<=end=extend start (max end (lo+size)) rest
-      | otherwise=(start,end-start):extend lo (lo+size) rest
-
-readSymbols :: FilePath -> IO [Agg.AggregateSymbol]
-readSymbols path = either fail pure . Agg.parseAggregateSymbols =<< B.readFile path
-
-optional :: [String] -> String -> IO (Maybe FilePath)
-optional args flag = case dropWhile (/= flag) args of
-  [] -> pure Nothing
-  [_] -> fail (flag ++ " needs a value")
-  _ : value : _ -> Just <$> canonicalizePath value
-
 main :: IO ()
 main = do
   args <- getArgs
   runner <- required args "--runner" >>= canonicalizePath
   aPath <- required args "--owned-a" >>= canonicalizePath
   bPath <- required args "--owned-b" >>= canonicalizePath
-  symbolsAPath <- optional args "--symbols-a"
-  symbolsBPath <- optional args "--symbols-b"
   aLoader <- required args "--loader-a" >>= canonicalizePath
   bLoader <- required args "--loader-b" >>= canonicalizePath
   work <- required args "--work" >>= canonicalizePath
   lookupEnv "BUILD_WORKSPACE_DIRECTORY" >>= mapM_ setCurrentDirectory
   createDirectoryIfMissing True work
   runnerBytes <- B.readFile runner
-  results <- forM [(A,aLoader,aPath,symbolsAPath),(B,bLoader,bPath,symbolsBPath)] $ \(domain,loaderPath,ownedPath,symbolsPath) -> do
+  results <- forM [(A,aLoader,aPath),(B,bLoader,bPath)] $ \(domain,loaderPath,ownedPath) -> do
     loader <- B.readFile loaderPath
     owned <- B.readFile ownedPath
-    symbols <- traverse readSymbols symbolsPath
     let digest = sha256Hex . sha256
-        aggregate = case symbols of
-          Just parsed -> not (null parsed)
-          Nothing -> False
     unless (digest loader == loaderSha256 (if domain == A then R.DomainA else R.DomainB)) (fail "loader is not the pinned X-M1 1.50 image")
-    unless (aggregate || B.length owned == fromIntegral(entryAt domain Enable - entryAt domain DeliveryLoop) + extent Enable) (fail "owned binary extent differs")
+    unless (B.length owned == fromIntegral(entryAt domain Enable - entryAt domain DeliveryLoop) + extent Enable) (fail "owned binary extent differs")
     B.writeFile (work </> ("inputs-" ++ show domain ++ ".json")) (encodeCanonical(object ["loader_sha256" .= digest loader,"owned_sha256" .= digest owned,"runner_sha256" .= digest runnerBytes]))
     let ownedBase = entryAt domain DeliveryLoop
-        selected = maybe [] (Agg.symbolsWithPrefixes ["s3c_", "xm1_platform_veneer_s3c_"]) symbols
-        aggregateImage = fmap (\parsed -> Agg.AggregateImage (minimum (map Agg.symbolAddress parsed)) owned) symbols
-        standaloneLoader = foldl (\bytes entry -> let address=entryAt domain entry in poke bytes (address-loaderBase domain) (B.take (extent entry) (B.drop (fromIntegral(address-ownedBase)) owned))) loader [minBound..maxBound]
-        ownedLoader = case aggregateImage of
-          Nothing -> standaloneLoader
-          Just image -> foldl (\bytes symbol -> either error id (Agg.installSymbol (loaderBase domain) bytes image symbol)) loader selected
-        symbolSpans = [(Agg.symbolAddress symbol, Agg.symbolSize symbol) | symbol <- selected]
-        stockFunctions = [(stockEntry domain at,size) | (at,size) <- [(0x439d8,60),(0x43a14,40),(0x43c48,92),(0x43ca4,124),(0x43d20,176),(0x44018,if domain == A then 44 else 48),(0x433e4,96),(0x43640,4)]] ++ [(entryAt domain e,fromIntegral(extent e)) | e <- [minBound .. maxBound]]
-        ownedFunctions = if aggregate then mergeSpans (symbolSpans ++ stockFunctions) else stockFunctions
-        stockBounds = (stockEntry domain 0x433e4, entryAt domain Enable + fromIntegral(extent Enable))
-        ownedBounds = if aggregate
-          then (min (fst stockBounds) (minimum (map fst symbolSpans)), max (snd stockBounds) (maximum [address + size | (address, size) <- symbolSpans]))
-          else stockBounds
+        ownedLoader = foldl (\bytes entry -> let address=entryAt domain entry in poke bytes (address-loaderBase domain) (B.take (extent entry) (B.drop (fromIntegral(address-ownedBase)) owned))) loader [minBound..maxBound]
     forM [minBound..maxBound] $ \entry -> do
       let grid = rows entry
           directory = work </> show domain ++ "-" ++ show entry
       createDirectoryIfMissing True directory
       observed <- forM [Stock,Owned,Equivalent,Mutant,StockRepeat] $ \role -> do
         let code = if role `elem` [Stock,StockRepeat] then loader else ownedLoader
-            bounds = if role `elem` [Stock,StockRepeat] then stockBounds else ownedBounds
-            functionSpans = if role `elem` [Stock,StockRepeat] then stockFunctions else ownedFunctions
-            aggregateTarget = if aggregate && role == Equivalent
-              then Just (branchTarget (entryAt domain entry) (readWordAt ownedLoader (fromIntegral (entryAt domain entry - loaderBase domain))))
-              else Nothing
-            specs = [roleSpec bounds functionSpans aggregateTarget role domain entry row code (map toLower (show role) ++ "-" ++ show index) | (index,row) <- zip [0::Int ..] grid]
+            specs = [roleSpec role domain entry row code (map toLower (show role) ++ "-" ++ show index) | (index,row) <- zip [0::Int ..] grid]
         batch <- writeBatch (directory </> show role) specs
         outcomes <- map snd <$> loadObservedBatch runner batch
         pure (specs,outcomes)

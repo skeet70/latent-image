@@ -119,7 +119,6 @@ haskell_library(
         "//host:bytestring",
         "//host:containers",
         "//host:filepath",
-        "//replacement/rtos_platform:aggregate",
     ],
 )
 
@@ -146,6 +145,5 @@ haskell_binary(
         "//host:filepath",
         "//host:host-support",
         "//host:storage-budget",
-        "//replacement/rtos_platform:aggregate",
     ],
 )
