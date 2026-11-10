@@ -973,9 +973,6 @@ fn parse_case(
     for _ in 0..stub_count {
         let address = Address(tokens.word()?);
         let call_count = if scripted { tokens.count(128)? } else { 1 };
-        if call_count == 0 {
-            return Err(WireError("scripted stub needs a call"));
-        }
         if scripted {
             total_calls += call_count;
             if total_calls > 128 {

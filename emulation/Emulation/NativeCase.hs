@@ -253,7 +253,7 @@ loadCaseWith reader input = do
    ensure(target' `mod` 4==0 && target'/=exit && target' `notElem` map stubAddress done && not(any(\(x,len)->x<=target' && target'<x+len)functions)) "stub address alignment/alias"
    ensure(target' `notElem` [stop|PrivilegedEntry _ _ (Just(KernelEntry(Just stop)_ _ _ _))<-[profile]]) "stub address is the stop address"
    stub<-if scripted then do
-     callsInput<-arrayCheck(get item "calls")1 eventCount "stub calls limit"
+     callsInput<-arrayCheck(get item "calls")0 eventCount "stub calls limit"
      calls<-forM callsInput$ \call->do
        fields call "inputs outputs reads writes" "stub call"
        inputs<-bindings(get call "inputs")(take 15 regs)

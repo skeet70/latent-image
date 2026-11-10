@@ -815,7 +815,7 @@ scriptAdapterRegressions=withTemporary "fuji-script-adapter"$ \root->do
  void(load(contracts[largeMemory,largeMemory]))
  reject "aggregate contract bytes"(contracts[largeMemory,largeMemory,fullMemory])
  reject "per-entry contract bytes"(contracts[set "hex"(s(replicate(2*sizeBytes+2)'0'))fullMemory])
- reject "empty calls"(set "stubs"(arr[stub[]])base)
+ void(load(set "stubs"(arr[stub[]])base))
  reject "excess calls"(set "stubs"(arr[stub(replicate 129 call)])base)
  reject "unknown call field"(set "stubs"(arr[stub[set "unexpected"(n 0)call]])base)
  reject "SP output"(set "stubs"(arr[stub[set "outputs"(obj[("sp",s "0x00003020")])call]])base)

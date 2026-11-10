@@ -134,7 +134,7 @@
     "legacyStub": {"type": "object", "additionalProperties": false, "required": ["address", "inputs", "outputs", "side_effects"], "properties": {"address": {"$ref": "#/$defs/u32"}, "inputs": {"$ref": "#/$defs/stubRegisters"}, "outputs": {"$ref": "#/$defs/stubRegisters", "minProperties": 1}, "side_effects": {"const": "registers-only"}}},
     "scriptStub": {
       "type": "object", "additionalProperties": false, "required": ["address", "calls"],
-      "properties": {"address": {"$ref": "#/$defs/u32"}, "calls": {"type": "array", "minItems": 1, "maxItems": 128, "items": {"$ref": "#/$defs/scriptCall"}}}
+      "properties": {"address": {"$ref": "#/$defs/u32"}, "calls": {"type": "array", "minItems": 0, "maxItems": 128, "items": {"$ref": "#/$defs/scriptCall"}}}
     },
     "scriptCall": {
       "type": "object", "additionalProperties": false, "required": ["inputs", "outputs", "reads", "writes"],

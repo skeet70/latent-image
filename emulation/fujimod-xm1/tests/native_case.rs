@@ -957,6 +957,17 @@ fn an_extra_scripted_call_fails_after_the_last_declared_call() {
 }
 
 #[test]
+fn an_empty_service_queue_allows_only_cases_that_skip_the_service() {
+    let skipped = Case::new(&[BX_LR]).script(STUB, vec![]).run();
+    assert_eq!(skipped.observation.status, Status::Returned);
+    assert!(skipped.observation.events.is_empty());
+
+    let called = Case::new(&[branch(CODE, STUB, false)]).script(STUB, vec![]).run();
+    called.assert_stopped(Status::StubContract, CODE);
+    assert!(called.observation.events.is_empty());
+}
+
+#[test]
 fn returning_with_an_omitted_scripted_call_is_a_contract_failure() {
     let observed = Case::new(&[branch(CODE, STUB, false)])
         .script(STUB, vec![ScriptCall::scalar(&[], &[(0, 7)]), ScriptCall::scalar(&[], &[(0, 9)])])
