@@ -152,7 +152,7 @@ slotDirectory = do
 acquire :: FilePath -> ExecutionClass -> ScopeName -> IO Slot
 acquire directory execution scope = do
   let maximumSlots = classConcurrency (resourceClass execution)
-      prefix = if execution == FullSystem then "slot-" else "native-"
+      prefix = if execution == FullSystem then "full-" else "native-"
       attempt = do
         free <- firstFree prefix [1 .. maximumSlots]
         case free of
