@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "kind": "xm1-ram-push-review-record",
   "reviews": [
     {"commit":"83728b10c27654399569f59244743309542de603","date":"2026-10-30","id":"RustBankArtifactReview","reviewer":"RustBankArtifactReview (openai-codex/gpt-6.1-sol)","scope":"Source and built-artifact identities at 83728b10c27654399569f59244743309542de603: build-recipe-bank, host/firmware/BuildRecipeBank.hs, host/firmware/build-recipe-bank-ram.sh, menu/recipe_bank_allowlist.json, menu/recipe_bank_probe.c, menu/recipe_bank_ui.h, replacement/bank/lib.rs, replacement/recipe_ui/src/lib.rs, replacement/service/lib.rs, replacement/service/rb_service.h, replacement/service/rb_service_stock.S, rust_object_replacement_bank and rust_toolchain_replacement_bank. Reference-base relinks at 0x00c40000 and 0x00c4fc88: 222 publications, 131 setup/91 activation, ABI 5, allocation 0x1dc98, unchanged contract bca512954d90a2225d19fc3117fe4efcfe1c7d11f446da12c72976f5b1e4fb46. No emulator, owner visual, actual-allocation or live approval.","session":"Main agent session (private), review of private-data/analysis/pr122-bank-host-0f13a33/resolution/review-packet/packet.json and its exact source/artifact subjects at 83728b10c27654399569f59244743309542de603","verdict":"approve"},
@@ -74,5 +74,9 @@
     {"component":"bank-content","identity":"rust_object_replacement_bank","sha256":"0fb86c8296323f492efc4f3455a6d3766ab7a372e3f1bb90896c851d4c92e61a","source":"rust-archive","status":{"commit":"6465d2ca5d26cdfc89a4735218aca8934e564e8b","verdict":"unreviewed"}},
     {"component":"mechanism","identity":"rust_toolchain_replacement_bank","sha256":"5b765637e7d5bbc170569b0b0e91860b3f334f5a45572e0e41075a3a51b3bd3f","source":"rust-toolchain-facts","status":{"commit":"6ab95b34d9e199042c34a04f8d2ebf44e4537757","verdict":"unreviewed"}}
   ],
-  "publication_contract": {"sha256":"19984b4feca5e11791d085cbc7ca4a4ac60db5c809da7feaadab5071522b0130","status":{"commit":"6ab95b34d9e199042c34a04f8d2ebf44e4537757","verdict":"unreviewed"}}
+  "publication_contract": {"sha256":"19984b4feca5e11791d085cbc7ca4a4ac60db5c809da7feaadab5071522b0130","status":{"commit":"6ab95b34d9e199042c34a04f8d2ebf44e4537757","verdict":"unreviewed"}},
+  "linked": [
+    {"base":"0x00c40000","sha256":"6b307c1d4c2af8c2e8fff08e8edd2510a1e7875be51978c7e48ea340039cab13"},
+    {"base":"0x00c4fc88","sha256":"17552808399c130e92e116f24ea2cc6deb7cdc5c6b307ef883de251054fc6a97"}
+  ]
 }
