@@ -7,6 +7,7 @@ import Data.Aeson (Value, object, (.=))
 import qualified Data.Aeson.Key as K
 import qualified Data.ByteString as B
 import Data.Bits (testBit)
+import Data.Char (toLower)
 import Data.Int (Int8, Int16)
 import Data.List (nub)
 import Data.Word (Word32)
@@ -17,30 +18,16 @@ import FujiAF.Host (ensure, get, str)
 import FujiAF.JSON (encodeCanonical)
 import System.Directory (createDirectoryIfMissing, makeAbsolute)
 import System.Environment (getArgs)
-import System.FilePath ((</>), takeDirectory)
+import System.FilePath ((</>))
 import Numeric (readHex)
 import Text.Read (readMaybe)
 
 newtype FrameBytes = FrameBytes Int
 data CandidateCode = CandidateCode B.ByteString [(Word32,Int)] FrameBytes
-newtype TableImage = TableImage B.ByteString
 
 digest :: B.ByteString -> String
 digest = Sha.sha256Hex . Sha.sha256
 
-tableRegions :: TableImage -> Scenario -> [(String,Word32,String,B.ByteString)]
-tableRegions (TableImage image) s =
-  [("node-registry",root,"r",slice root 512),("node-record",recordAddress,"r",slice recordAddress 40)] ++
-  [("child-table",children,"r",slice children 256) | children/=0]
-  where
-    root=0x81babc
-    NodeId n=node s
-    wordAt address = sum [fromIntegral (B.index (slice address 4) i)*256^i | i<-[0..3]]
-    recordAddress=wordAt (root+4*n)
-    children=wordAt (recordAddress+0x20)
-    slice address count
-      | address<0x61c400 || toInteger address+toInteger count>0x61c400+toInteger (B.length image) = error "menu table slice outside pinned image 4"
-      | otherwise = B.take count (B.drop (fromIntegral (address-0x61c400)) image)
 
 loadCandidate :: FilePath -> FilePath -> String -> IO CandidateCode
 loadCandidate binary symbols frameText = do
@@ -122,7 +109,7 @@ scenarios =
   , base {scenarioName="flat-hooks-default", rows=[hooks DefaultLeaf (row i) | i<-[0..2]]}
   , base {scenarioName="flat-hooks-handled", rows=[hooks Handled (row i) | i<-[0..2]]}
   ] ++
-  [ base { scenarioName="source-"++show who++"-"++show kind++"-m"++show m, caller=who, snapshotKind=kind, mode=DrawMode m
+  [ base { scenarioName="source-"++map toLower (show who++"-"++show kind)++"-m"++show m, caller=who, snapshotKind=kind, mode=DrawMode m
          , nestedRows=map nestedRow [0..4], scroll=ScrollTop 1
          , grid=if who==SecondaryTree then Grid 6 4 0 2 else grid base
          , nestedGrid=if who==SecondaryTree then Grid 14 3 0 2 else nestedGrid base }
@@ -406,8 +393,8 @@ registers s = object [K.fromString name .= addressText value | (name,value)<-val
         values=[("r0",n),("r1",fromIntegral x),("r2",fromIntegral y),("r3",fromIntegral dx)] ++ savedRegisters s ++
           [("r12",0xcccccccc),("sp",entrySP),("lr",returnAddress s),("cpsr",0x10)]
 
-emit :: FilePath -> B.ByteString -> TableImage -> Maybe CandidateCode -> Scenario -> IO FilePath
-emit output image tables candidate s = do
+emit :: FilePath -> B.ByteString -> Maybe CandidateCode -> Scenario -> IO FilePath
+emit output image candidate s = do
   let initialStack=case caller s of MenuList->B.replicate 0x2000 0; SecondaryTree->put 0x1024 (B.replicate 68 0xa5) (B.replicate 0x2000 0)
       stack=put 0x1000 (callerFrame s) initialStack
       DrawMode special=sideMode s
@@ -416,7 +403,7 @@ emit output image tables candidate s = do
         ("side",sideAddress,"rw",wordsLE [0x12345678,0x89abcdef,0x55555555,0x77777777,0x99999999,special]),
         ("font",fontAddress,"rw",wordsLE [9]),("menu",0x9571d0,"rw",wordsLE (snapshot s) <> B.replicate (0x430-44) 0),
         ("palette",0x15e6680,"rw",B.replicate 64 0)] ++
-        [("report",reportAddress s,"rw",B.replicate 68 0xa5) | caller s==MenuList] ++ tableRegions tables s ++
+        [("report",reportAddress s,"rw",B.replicate 68 0xa5) | caller s==MenuList] ++
         case candidate of Nothing -> []; Just (CandidateCode bytes _ _) -> [("candidate-code",0x01800000,"rx",bytes)]
       (entry,functions,frameBytes)=case candidate of
         Nothing -> (0x1164e1c,[(0x1164e1c,3204)],352)
@@ -432,7 +419,7 @@ emit output image tables candidate s = do
       DrawMode m=mode s
       side=wordsLE [if null (drawnRows s) then 0x12345678 else 3,0x89abcdef,if null (drawnRows s) then 0x55555555 else if effectiveKind s==2 || m `elem` [5,6,11,12] then 1 else 0,0x77777777,0x99999999,special]
       value=object ["schema_version" .= (1::Int),"id" .= scenarioName s,"origin" .= ("stock"::String),
-        "provenance" .= ("Expected calls and memory derive from X-M1 image-6 bytes 0x1164e1c..0x1165aa0 and caller 0x116bff4..0x116c058, documented in reports/display-render-contracts/tree-list.md. Cases cover live and both saved slots, flat and nested tree flow, report preservation, and both caller return sites. SecondaryTree preserves its actual outgoing stack arguments and report at entry SP+36. All menu accessors and draw leaves remain scripted retained boundaries; pinned table slices are not executed."::String),
+        "provenance" .= ("Expected calls and memory derive from X-M1 image-6 bytes 0x1164e1c..0x1165aa0 and caller 0x116bff4..0x116c058, documented in reports/display-render-contracts/tree-list.md. Cases cover live and both saved slots, flat and nested tree flow, report preservation, and both caller return sites. SecondaryTree preserves its actual outgoing stack arguments and report at entry SP+36. All menu accessors and draw leaves remain scripted retained boundaries."::String),
         "cpu" .= object ["architecture" .= ("arm"::String),"model" .= ("cortex-r5f"::String),"mode" .= ("arm"::String),"endian" .= ("little"::String)],
         "artifacts" .= artifacts,"entry" .= addressText entry,"exit" .= addressText (returnAddress s),
         "registers" .= registers s,"regions" .= map regionJSON regions,
@@ -468,11 +455,9 @@ main = do
       ensure (digest bytes=="ee211bdaad39005b4f72e3443a76ca194905381a967cab787d6a4ef14e2d889d") "image 6 SHA-256 differs"
       let body=B.take 3204 (B.drop (0x1164e1c-0x1100000) bytes)
       ensure (digest body=="785cbbbfbd3a4542c8798970e5038eecb7c4b5e694e84331d6b75334379a84d9") "tree function SHA-256 differs from contract"
-      tableBytes<-B.readFile (takeDirectory (takeDirectory image) </> "lz" </> "id4-0061c400.bin")
-      ensure (digest tableBytes=="f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16") "menu table image 4 SHA-256 differs"
       output<-makeAbsolute destination
       createDirectoryIfMissing True output
-      paths<-mapM (emit output bytes (TableImage tableBytes) candidate) scenarios
+      paths<-mapM (emit output bytes candidate) scenarios
       forM_ runner $ \binary -> do
         results<-forM paths $ \path -> do
           (_,result)<-runCase binary path

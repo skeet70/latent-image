@@ -7,14 +7,31 @@ import Data.Aeson (Value, encode, object, (.=))
 import qualified Data.Aeson.Key as K
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
-import Data.Char (isAlphaNum, toLower)
+import Data.Char (isAlphaNum, isAscii, toLower)
 import Data.Word (Word32)
+import Emulation.NativeCase (CaseId (..))
 import Emulation.RenderCases
 import Emulation.Sha256 (sha256, sha256Hex)
 import Emulation.ValuePickerCases
 import System.Directory (createDirectoryIfMissing)
 import System.Environment (getArgs)
 import System.FilePath ((</>))
+import Text.Read (readMaybe)
+
+newtype FrameBytes = FrameBytes Int
+
+newtype CaseName = CaseName String
+data CaseRole = StockCase | CandidateCase
+
+encodeCaseId :: CaseName -> CaseRole -> CaseId
+encodeCaseId (CaseName name) role = CaseId (boundedStem ++ "-" ++ suffix)
+  where
+    stem = "picker-" ++ map (\ch -> if isAscii ch && isAlphaNum ch then toLower ch else '-') name
+    suffix = case role of StockCase -> "stock"; CandidateCase -> "candidate"
+    stemLimit = 63 - length suffix
+    boundedStem
+      | length stem <= stemLimit = stem
+      | otherwise = take (stemLimit - 17) stem ++ "-" ++ take 16 (sha256Hex (sha256 (BL.toStrict (encode name))))
 
 main :: IO ()
 main = do
@@ -23,7 +40,10 @@ main = do
       analysis = option "--analysis" "private-data/analysis/x-m1-1.50" args
       candidate = optional "--candidate" args
       candidateBank = optional "--candidate-bank" args
-  unless ((candidate == Nothing) == (candidateBank == Nothing)) (fail "--candidate and --candidate-bank must be supplied together")
+  frames <- case (candidate, candidateBank, optional "--frame-bytes" args, optional "--bank-frame-bytes" args) of
+    (Nothing, Nothing, Nothing, Nothing) -> pure Nothing
+    (Just _, Just _, Just plain, Just bank) -> Just <$> ((,) <$> parseFrame plain <*> parseFrame bank)
+    _ -> fail "--candidate, --candidate-bank, --frame-bytes and --bank-frame-bytes must be supplied together"
   image <- B.readFile (analysis </> "lz/plain-01100000.bin")
   image4 <- B.readFile (analysis </> "lz/id4-0061c400.bin")
   unless (sha256Hex (sha256 image) == "ee211bdaad39005b4f72e3443a76ca194905381a967cab787d6a4ef14e2d889d") (fail "image 6 identity differs")
@@ -42,9 +62,7 @@ main = do
     B.writeFile (out </> path) bytes
     pure (name,object ["id" .= name,"path" .= path,"size" .= B.length bytes,"sha256" .= sha256Hex (sha256 bytes)])
   entries <- forM pickerCases $ \c -> do
-    let ident = "picker-" ++ map (\ch -> if isAlphaNum ch then toLower ch else '-') (pickerName c)
-        role = maybe "stock" (const "candidate") owned
-        caseId = ident ++ "-" ++ role
+    let CaseId caseId = encodeCaseId (CaseName (pickerName c)) (maybe StockCase (const CandidateCase) owned)
         reportOffset = pickerReportOffset c
         reportAddress = 0x03100000 + fromIntegral reportOffset
         reportRegion = "stack"
@@ -59,19 +77,22 @@ main = do
         ownedCode = case pickerGate c of StockGate -> owned; BankGate -> ownedBank
         ownedArtifact = case pickerGate c of StockGate -> "candidate"; BankGate -> "candidate-bank"
         codeEntry = maybe 0x01163f2c (const 0x02000000) owned
+        FrameBytes privateFrame = case frames of
+          Nothing -> FrameBytes 344
+          Just (plainFrame, bankFrame) -> case pickerGate c of StockGate -> plainFrame; BankGate -> bankFrame
         regions = [region "stock-code" 0x01163000 0x2000 "rx" useCode,region "brackets" 0x0110ba2c 12 "r" "table",region "palette" 0x01113be4 20 "rw" "palette",region "font" 0x015e46c0 4 "rw" "font",region "side" 0x015e64d8 20 "rw" "side",region "report" 0x03000000 0x44 "rw" "report",region "stack" 0x03100000 0x1100 "rw" "case-stack",zeroRegion "exit" returnAddress 4 "rx",zeroRegion "menu" 0x009571d0 44 "rw"] ++ maybe [] (\bytes -> [region "candidate-code" 0x02000000 (B.length bytes) "rx" ownedArtifact]) ownedCode
         NodeId node = pickerNode c
         registers = object [K.fromString name .= addressText value | (name,value) <- [("r0",node),("r1",pickerX c),("r2",pickerY c),("r3",pickerWidth c),("r12",0)] ++ preserved ++ [("sp",0x03101000),("lr",returnAddress),("cpsr",0x10)]]
         funcs = [object ["address" .= addressText codeEntry,"size" .= maybe (3824::Int) B.length ownedCode]]
         spec = object
           ["schema_version" .= (1::Int),"id" .= caseId,"origin" .= ("stock"::String)
-          ,"provenance" .= ("X-M1 1.50 image-6 SHA pinned above, picker 01163f2c..01164e18 and eight actual caller LRs/stack-report offsets. x70view 55436fc choice_list_renderer.c is NONMATCHING and X70-specific; X-M1 instruction bytes define expected calls, records and report before execution."::String)
+          ,"provenance" .= ("X-M1 1.50 image-6 SHA pinned above, picker 01163f2c..01164e18 and eight actual caller LRs/stack-report offsets. x70view 55436fc choice_list_renderer.c is NONMATCHING and X70-specific; X-M1 instruction bytes define expected calls, records and report before execution. Case: " ++ pickerName c)
           ,"cpu" .= object ["architecture" .= ("arm"::String),"model" .= ("cortex-r5f"::String),"mode" .= ("arm"::String),"endian" .= ("little"::String)]
           ,"artifacts" .= (map snd artifactJSON ++ [stackArtifact]),"entry" .= addressText codeEntry,"exit" .= addressText returnAddress,"registers" .= registers,"regions" .= regions,"functions" .= funcs
           ,"stubs" .= callsJSON targets (pickerCalls c),"limits" .= object ["instructions" .= (100000::Int),"wall_ms" .= (10000::Int)]
           ,"expected" .= object ["status" .= ("returned"::String),"registers" .= object [K.fromString name .= addressText value | (name,value) <- ("sp",0x03101000):preserved]
               ,"memory" .= [object ["region" .= (reportRegion::String),"offset" .= (reportOffset::Int),"hex" .= hexBytes (pickerReport c)]]
-              ,"ignored_memory" .= [object ["region" .= ("stack"::String),"offset" .= (0x100::Int),"length" .= (0xf00::Int)]]
+              ,"ignored_memory" .= [object ["region" .= ("stack"::String),"offset" .= (0x1000-privateFrame),"length" .= privateFrame]]
               ,"events" .= eventsJSON (pickerCalls c)]
           ,"exclusions" .= (["All callees are scripted services. No stock leaf drawing, task scheduling, hardware display or package-node ownership is qualified.","Private callee stack scratch is excluded; stack guard, caller arguments, report, side state, panel font and all other mapped bytes remain checked."]::[String])]
     BL.writeFile (out </> caseId ++ ".json") (encode spec)
@@ -96,3 +117,8 @@ optional _ [] = Nothing
 optional name (key:value:rest) | name == key = Just value
                                | otherwise = optional name rest
 optional _ [_] = Nothing
+
+parseFrame :: String -> IO FrameBytes
+parseFrame text = case readMaybe text of
+  Just bytes | bytes > 0 && bytes <= 0xf00 && bytes `mod` 4 == 0 -> pure (FrameBytes bytes)
+  _ -> fail "private frame must be a positive multiple of four no greater than 3840 bytes"

@@ -81,6 +81,7 @@ xm1_rust_staticlib(
     name = "tree-list-case",
     src = "native/tree.rs",
     data = [":module", "//replacement/render_commands:module"],
+    rustc_flags = ["-C", "target-feature=+strict-align"],
     opt_level = "2",
     testonly = True,
 )
@@ -115,7 +116,7 @@ sh_test(
     name = "tree-list-control-" + control,
     src = "native/tree.rs",
     data = [":module", "//replacement/render_commands:module"],
-    rustc_flags = ["--cfg=tree_" + control.replace("-", "_")],
+    rustc_flags = ["-C", "target-feature=+strict-align", "--cfg=tree_" + control.replace("-", "_")],
     opt_level = "2",
     testonly = True,
 ) for control in ["selected-unstyled", "page-off-by-one", "side-state-wrong"]]

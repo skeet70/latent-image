@@ -4433,6 +4433,7 @@ haskell_binary(
         ":value-picker-cases-lib",
         ":render-cases-lib",
         ":case-sha256",
+        ":native-adapter",
         "//host:base",
         "//host:aeson",
         "//host:bytestring",

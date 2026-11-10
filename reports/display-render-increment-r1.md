@@ -151,6 +151,16 @@ Both defect pair checks report `render draw order/state differs` after equal eng
 
 Receipts are `private-data/scratch/RenderDefectControls/{stock,owned,tree,picker}/`; each retains `e2e-result.json`, task-33 diagnostics and the raw observations. `evidence.json` in that scratch directory binds receipt and archive digests, commands and the stock shell's post-receipt launcher error. Reproduction uses its `run-control.sh ROLE` followed by `compare-controls.sh`; the latter calls the existing required-draw, settings and image comparators. The retained control archives and their role-specific prelinked packages/configurations come from `RenderSourcePort/control-{tree,picker}`; no package rebuild is implied. Guests run serially with one emulator slot and a 4 GiB guest cap, retaining the 100 GiB disk reserve. No build, test or formatter ran for this evidence increment.
 
+### Expanded native model qualification
+
+`E-RENDER-R1-HOST-CASES-150` qualifies all 141 tree and 381 picker scenarios in each stock/owned role, including saved snapshots, nested lists and the additional source-bound callers. All 1,044 native case judgments pass. Four SDK processes overlap within each matrix; the aligned tree cohort records 927,632,721 ns of four-way overlap. The frozen driver, SDK, generated inputs and linked artifacts remain bound in `private-data/scratch/RenderNativeExpanded/renderer-native-proof-04.json`.
+
+The first expanded owned tree image faults on an unaligned halfword store to report offset `0x15`. The native tree and its controls now compile with `target-feature=+strict-align`, matching the existing property-service convention. The failed image and observations remain retained. The current canonical linked callee frames are 496 bytes for tree and 384 bytes for both picker images; the three tree controls require 464, 496 and 504 bytes. Stock frames remain 352 and 344 bytes. Exclusions cover only those callee frames; caller arguments, report, side state, font and other mapped bytes remain checked.
+
+All eight native controls have their intended semantic witnesses: tree selection palette, page and side state, plus picker selection palette, scrolling, hidden rows, disabled rows and nested report offset. Six stop at the exact semantic stub boundary; their later ABI or unfinished-report mismatches are not additional witnesses. The other two return with the declared report or side-state defect.
+
+The generators emit public case ids within the 64-character admission bound and preserve full picker names in provenance. Picker candidate images and their exact frame sizes must be supplied together. Tree cases no longer traverse an unused stock table image: every accessor is a declared scripted boundary. This proof executes neither stock drawing leaves nor scheduling, display hardware or packaged guest drawers. Installation admission remains the separate conservative classifier contract.
+
 
 ## 7. Shims
 
