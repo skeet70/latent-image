@@ -696,6 +696,7 @@ haskell_test(
         "ram-push-review.json",
     ],
     ghcopts = _GHCOPTS,
+    tags = ["manual"],
     deps = _GATE_DEPS,
 )
 
@@ -745,6 +746,7 @@ haskell_test(
         "ram-push-cc-review.json",
     ],
     ghcopts = _GHCOPTS,
+    tags = ["manual"],
     deps = _GATE_DEPS,
 )
 
@@ -773,6 +775,7 @@ haskell_test(
         "ram-push-cc-icon-review.json",
     ],
     ghcopts = _GHCOPTS,
+    tags = ["manual"],
     deps = _GATE_DEPS,
 )
 
@@ -801,6 +804,7 @@ haskell_test(
         "ram-push-toggle-review.json",
     ],
     ghcopts = _GHCOPTS,
+    tags = ["manual"],
     deps = _GATE_DEPS,
 )
 
@@ -1073,10 +1077,12 @@ haskell_test(
     data = ["ram-push-review.json"],
     ghcopts = _GHCOPTS,
     main_file = "RamPushReviewedIdentityTest.hs",
-    # The private inputs are read from the checkout, which Bazel does not track.
+    # The private inputs are read from the checkout, which Bazel does not track;
+    # only the holder of those inputs runs it, in the pre-go gate.
     tags = [
         "external",
         "local",
+        "manual",
     ],
     deps = [
         ":camera-core",

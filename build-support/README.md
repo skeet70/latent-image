@@ -298,14 +298,14 @@ macOS on Apple silicon builds the same graph from the same pinned inputs and run
 - FujiMod's macOS-only `apple-cf` dependency builds a Swift bridge, so `fujimod.nix` and `fujimod-xm1.nix` add nixpkgs Swift; `fujimod-xm1.nix` links the SDK's Swift overlays and `-lobjc`. FujiMod defaults its H.264 encoder to VideoToolbox on macOS; the X-M1 run document selects `software`.
 - `exr2-gcc.nix` applies x70view's macOS host patches and clang's GNU89 warning relaxations.
 - APFS is case-insensitive, so GHC's default `.` search path resolves module `Emulation.X` to `emulation/X.hs`. A `Main` beside an `Emulation/` module of the same name builds with `-i` (`_NO_DOT_SEARCH` in `emulation/BUILD.bazel`).
-- `host-build` and emulator slots find no systemd user session and run without their memory caps. A slot pins its executable from the executable path, which a relink during the slot wait can replace, rather than from `/proc/self/exe`.
+- `host-build` and emulator slots find no systemd user session and run without their memory caps. Without `/proc/self/exe`, a slot opens its executable path before the slot wait and pins its copy from that handle.
 - Targets that need systemd, `/proc` or glibc declare `target_compatible_with = ["@platforms//os:linux"]`, and `bazel build //...` and `bazel test //...` skip them: `//build-support:storage-maintenance` and its tests, `//reports/review:f03-critical`.
 - Darwin refuses a 256 MiB `RLIMIT_AS`, so `lz/fflzd.c` and the framing probe keep their CPU, file-size and wall-clock limits there without the address-space limit.
 - Transport tests stage journaled sessions on `/dev/shm` where it exists, else in the test's temporary directory.
-- `FujiAF.Host.readRegularWith` passes Linux's numeric `O_NONBLOCK|O_NOFOLLOW` to `open(2)`; on Darwin those bits are other flags, so only its `lstat`/`fstat` checks apply. `host/FujiAF/Host.hs` is pinned by the RAM-push review records, so changing it needs a review.
-- Armv7r artifacts built on macOS, such as `//replacement/bank:bank`, differ in bytes from the Linux builds the RAM-push review records pin. The review gates and the camera's RAM-push pins refuse them; build camera payloads on Linux.
+- The RAM-push review records pin the relink toolchain's store paths and the `//replacement/bank:bank` archive bytes, and both differ on macOS: the archive's symbol names carry host-dependent crate hashes. The camera's RAM-push pins refuse macOS relinks; build camera payloads on Linux. Linked armv7r images can still match, as `//replacement/rtos_scheduler:scheduler-a.bin` and `scheduler-b.bin` match their Linux pins.
+- Unicorn on Apple silicon reports a sub-word store's whole source register to memory hooks; the native-case runner records only the stored bytes.
 
-`bazel test //...` on macOS still fails these targets: the RAM-push review byte gates and `//host/firmware:build-recipe-bank-ram-tests` (Linux toolchain bytes), `//transport:ram-push-reviewed-identity` (needs `private-data/`), `//replacement/rtos_scheduler/oracle:scheduler-oracle-tests` (`equivalent-reset` differs on 2 of 19 cases), `//af-session:session-tests` (large-ROI acutance) and `//host/firmware:container-build-tests` (`build-extension` runs `sha256sum` from `PATH`). `//af:simulation-tests`, `//emulation:native-runner-tests`, `//emulation:host-build-tests` and `//emulation:cached-native-batch-tests` failed alongside a parallel FujiMod build and passed on rerun.
+The RAM-push review gates are tagged `manual` on every host and run in the [pre-go gate](../transport/README.md#pre-go-gate).
 
 ## Extending the graph
 

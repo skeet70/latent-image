@@ -27,7 +27,7 @@ import qualified FujiAF.Host as H
 import qualified FujiAF.Lz.Encode as Encode
 import qualified FujiAF.UpdateContainer as U
 import System.Directory (canonicalizePath, createDirectoryIfMissing, doesFileExist, doesPathExist)
-import System.Environment (getArgs)
+import System.Environment (getArgs, lookupEnv)
 import System.Exit (ExitCode (..), exitFailure)
 import System.FilePath ((</>))
 import System.IO (hPutStrLn, stderr)
@@ -1018,6 +1018,7 @@ fontCases checked rebuilder applier decoder encoder builder = H.withTemporary "f
             setBytes = BL.toStrict (A.encode (fontSet current))
         B.writeFile setPath setBytes
         setSha <- H.sha256 setBytes
+        path <- lookupEnv "PATH"
         B.writeFile
           manifestPath
           ( BL.toStrict
@@ -1035,7 +1036,7 @@ fontCases checked rebuilder applier decoder encoder builder = H.withTemporary "f
           )
         (code, _, err) <-
           readCreateProcessWithExitCode
-            (proc builder [decoder, applier, encoder, rebuilder, "--unpinned", manifestPath, stockPath, output]) {env = Just [("BUILD_WORKSPACE_DIRECTORY", workspace)]}
+            (proc builder [decoder, applier, encoder, rebuilder, "--unpinned", manifestPath, stockPath, output]) {env = Just (("BUILD_WORKSPACE_DIRECTORY", workspace) : [("PATH", directories) | Just directories <- [path]])}
             ""
         pure (code, err, output)
   (acceptCode, acceptErr, acceptOutput) <- runExtension "font-accept" (U.word32At window 0x1000)

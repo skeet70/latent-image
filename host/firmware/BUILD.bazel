@@ -1692,14 +1692,8 @@ haskell_test(
         "BuildRecipeBankRamTests.hs",
         "RamPushLayout.hs",
     ],
-    args = [
-        "$(location //replacement/bank:bank)",
-        "$(location :build-recipe-bank)",
-    ],
-    data = [
-        ":build-recipe-bank",
-        "//replacement/bank:bank",
-    ],
+    args = ["$(location :build-recipe-bank)"],
+    data = [":build-recipe-bank"],
     ghcopts = [
         "-Wall",
         "-Werror",
@@ -1711,7 +1705,6 @@ haskell_test(
     deps = [
         "//host:base",
         "//host:bytestring",
-        "//host:cryptohash-sha256",
         "//host:process",
     ],
 )
