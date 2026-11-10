@@ -318,8 +318,12 @@ executeMode scope = do
   when occupied (failH "qualification preparation must start outside an emulator slot")
   requireCleanSource
   verifyInputs
-  policy <- slotPolicyFromEnvironment
-  let SlotCount slots = slotCount policy
+  configuredPolicy <- slotPolicyFromEnvironment
+  memoryOverride <- lookupEnv "XM1_EMULATOR_MEMORY_MAX"
+  let policy = case memoryOverride of
+        Nothing -> configuredPolicy { memoryMax = Admission.MemoryMax "2G" }
+        Just _ -> configuredPolicy
+      SlotCount slots = slotCount policy
   unless (slots == 1 && Admission.memoryMaxBytes (memoryMax policy) == memoryMaxBytes)
     (failH "qualification requires XM1_EMULATOR_SLOTS=1 and a 2G emulator cap")
   checkStorageBudget qualRoot

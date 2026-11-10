@@ -67,6 +67,10 @@ run source = do
   secondAdmission <- admission second
   bothOk <- expect "two probes limited to one slot each hold both host slots at once"
     (sort (map admittedSlot [firstAdmission, secondAdmission]) == [Just "1", Just "2"])
+  let Admission firstLines _ = firstAdmission
+      Admission secondLines _ = secondAdmission
+  memoryOk <- expect "both admitted scopes enforce the 4 GiB verification budget"
+    (all (elem "probe-memory-max 4294967296") [firstLines, secondLines])
   copyFile source probe
   setFileMode probe 0o700
   third <- spawnProbe probe environment
@@ -105,7 +109,13 @@ run source = do
     (proc source []) {env = Just lowStorageEnvironment} ""
   storageOk <- expect "insufficient disk reserve prevents an emulator-slot admission"
     (lowStorageCode /= ExitSuccess && not (any (isInfixOf "probe-in-slot ") (lines lowStorageOutput)))
-  let outcomes = [bothOk, startedOk, waitedOk, takenOk, codeOk, originalOk, sessionlessOk, storageOk]
+  let overBudgetEnvironment = ("XM1_EMULATOR_MEMORY_MAX", "8G")
+        : filter ((/= "XM1_EMULATOR_MEMORY_MAX") . fst) environment
+  (overBudgetCode, overBudgetOutput, _) <- readCreateProcessWithExitCode
+    (proc source []) {env = Just overBudgetEnvironment} ""
+  capOk <- expect "a scope above the 4 GiB class budget is refused"
+    (overBudgetCode /= ExitSuccess && not (any (isInfixOf "probe-in-slot ") (lines overBudgetOutput)))
+  let outcomes = [bothOk, memoryOk, startedOk, waitedOk, takenOk, codeOk, originalOk, sessionlessOk, storageOk, capOk]
       shown (Admission seen slot) = show seen ++ " -> " ++ show slot
   unless (and outcomes) $ putStrLn ("probe admissions: " ++ unwords (map shown [firstAdmission, secondAdmission, thirdAdmission, aloneAdmission]))
   pure (and outcomes)
@@ -157,5 +167,5 @@ probeEnvironment home = do
       keep name value environment =
         if any ((== name) . fst) environment then environment else (name, value) : environment
   pure (("HOME", home) : ("XM1_EMULATOR_SLOTS", "1") : ("XM1_STORAGE_MIN_FREE", "1")
-    : filter ((`notElem` ["XM1_EMULATOR_SLOT", "XM1_STORAGE_MIN_FREE"]) . fst)
+    : filter ((`notElem` ["HOME", "XM1_EMULATOR_SLOTS", "XM1_EMULATOR_SLOT", "XM1_EMULATOR_MEMORY_MAX", "XM1_STORAGE_MIN_FREE"]) . fst)
       (keep "XDG_RUNTIME_DIR" runtime (keep "DBUS_SESSION_BUS_ADDRESS" ("unix:path=" ++ runtime ++ "/bus") inherited)))

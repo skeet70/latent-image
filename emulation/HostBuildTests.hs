@@ -1,12 +1,9 @@
--- | Host build admission through the real @host-build@ binary and a fake
--- @bazel@ on PATH: two competing commands serialize, killing the holder admits
--- the waiter and terminates the holder's Bazel, failures keep Bazel's status,
--- and a caller holding an emulator slot is refused.
+-- | Host build admission through the real @host-build@ binary.
 module Main (main) where
 
 import Control.Concurrent (threadDelay)
 import Control.Exception (IOException, try)
-import Control.Monad (unless, void)
+import Control.Monad (unless)
 import Data.Char (isDigit)
 import Data.List (elemIndex, isInfixOf, isPrefixOf)
 import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
@@ -15,11 +12,11 @@ import System.Directory (canonicalizePath, createDirectoryIfMissing, doesFileExi
 import System.Environment (getArgs, getEnvironment, getExecutablePath, lookupEnv)
 import System.Exit (ExitCode (..), exitFailure)
 import System.FilePath (takeDirectory, (</>))
-import System.IO (IOMode (WriteMode), SeekMode (AbsoluteSeek), hClose, hGetContents, openFile, utf8)
+import System.IO (BufferMode (LineBuffering), IOMode (WriteMode), SeekMode (AbsoluteSeek), hClose, hGetContents, hSetBuffering, openFile, stdout, utf8)
 import System.Posix.Files (setFileMode)
 import System.Posix.IO (LockRequest (WriteLock), OpenFileFlags (creat), OpenMode (ReadWrite), closeFd, defaultFileFlags, openFd, setLock)
 import System.Posix.Process (getProcessID)
-import System.Posix.Signals (signalProcess, sigKILL)
+import System.Posix.Signals (signalProcess, sigCONT, sigKILL, sigSTOP)
 import System.Posix.Types (FileOffset)
 import System.Posix.User (getEffectiveUserID)
 import System.Process (CreateProcess (..), ProcessHandle, StdStream (CreatePipe, NoStream, UseHandle), createProcess, getPid, proc, waitForProcess)
@@ -42,23 +39,25 @@ expect name ok = do
 
 main :: IO ()
 main = do
+  hSetBuffering stdout LineBuffering
   setForeignEncoding utf8
   arguments <- getArgs
   case arguments of
-    "--hold-range" : range -> holdRange range
+    "--hold-range" : range -> holdRange 1 range
+    "--hold-all" : range -> holdRange 0 range
     [binary] -> makeAbsolute binary >>= run >>= \passed -> unless passed exitFailure
     _ -> ioError (userError "usage: host-build-tests HOST_BUILD | --hold-range LOCK OFFSET READY RELEASE")
 
 -- | A controlled external holder: one byte-range write lock on the shared lock
 -- file until @RELEASE@ appears, then the descriptor closes and the lock drops.
-holdRange :: [String] -> IO ()
-holdRange arguments = case arguments of
+holdRange :: FileOffset -> [String] -> IO ()
+holdRange size arguments = case arguments of
   [lockPath, offsetText, readyPath, releasePath] ->
     case (readMaybe offsetText :: Maybe FileOffset) of
       Just offset -> do
         createDirectoryIfMissing True (takeDirectory lockPath)
         fd <- openFd lockPath ReadWrite defaultFileFlags {creat = Just 0o600}
-        setLock fd (WriteLock, AbsoluteSeek, offset, 1)
+        setLock fd (WriteLock, AbsoluteSeek, offset, size)
         getProcessID >>= \pid -> writeFile readyPath (show pid)
         waitRelease releasePath (600 :: Int)
         closeFd fd
@@ -114,24 +113,34 @@ run binary = do
 
   first <- start "first" []
   firstStarted <- waitFor (started "first")
-  writeFile (release "second") ""
   second <- start "second" []
+  secondStarted <- waitFor (started "second")
+  third <- start "third" []
   threadDelay 1_500_000
-  secondEarly <- started "second"
+  thirdEarly <- started "third"
   writeFile (release "first") ""
   firstCode <- waitForProcess (invocationProcess first)
   firstErr <- invocationStderr first
+  thirdStarted <- waitFor (started "third")
+  secondStillRunning <- maybe (pure False) running =<< startedPid "second"
+  writeFile (release "second") ""
+  writeFile (release "third") ""
   secondCode <- waitForProcess (invocationProcess second)
   secondErr <- invocationStderr second
-  order <- lines <$> readFile' logFile
-  let position line = lookup line (zip order [0 :: Int ..])
-      startLine name = fromMaybe "" (listToMaybe [line | line <- order, ("start " ++ name ++ " ") `isPrefixOf` line])
-  serialized <- expect "a second host build waits for the first to finish"
-    (firstStarted && not secondEarly
-      && maybe False id ((<) <$> position "end first" <*> position (startLine "second")))
-  passed <- expect "both builds pass with a passed verdict"
-    (firstCode == ExitSuccess && secondCode == ExitSuccess
+  thirdCode <- waitForProcess (invocationProcess third)
+  _ <- invocationStderr third
+  overlapped <- expect "two builds overlap and a third waits until a lane is released"
+    (firstStarted && secondStarted && not thirdEarly && thirdStarted && secondStillRunning)
+  passed <- expect "all three builds pass with passed verdicts"
+    (firstCode == ExitSuccess && secondCode == ExitSuccess && thirdCode == ExitSuccess
       && "\"verdict\":\"passed\"" `isInfixOf` firstErr && "\"verdict\":\"passed\"" `isInfixOf` secondErr)
+
+  self <- getExecutablePath
+  let lockPath = home </> ".cache" </> "xm1-host-build" </> "build.lock"
+      laneReady = root </> "lane-ready"
+      laneRelease = root </> "lane-release"
+  peer <- start "peer" []
+  peerStarted <- waitFor (started "peer")
 
   holder <- start "holder" []
   holderStarted <- waitFor (started "holder")
@@ -145,9 +154,17 @@ run binary = do
   holderGone <- waitFor (maybe (pure False) (fmap not . running) holderPid)
   lockKept <- doesFileExist (home </> ".cache" </> "xm1-host-build" </> "build.lock")
   waiterErr <- invocationStderr waiter
-  released <- expect "killing the lock holder admits the waiter and terminates the holder's bazel"
-    (holderStarted && waiterCode == Just ExitSuccess && holderGone && lockKept)
+  peerAlive <- maybe (pure False) running =<< startedPid "peer"
+  released <- expect "killing one holder admits its waiter without stopping the other build"
+    (peerStarted && peerAlive && holderStarted && waiterCode == Just ExitSuccess && holderGone && lockKept)
   unless released (putStrLn (show (waiterCode, holderGone, lockKept) ++ "\n" ++ waiterErr))
+  writeFile (release "peer") ""
+  peerCode <- waitForProcess (invocationProcess peer)
+  _ <- invocationStderr peer
+  reservedLane <- spawnHolder self root lockPath 1 laneReady laneRelease
+  lanePid <- waitForPid laneReady
+  laneHeld <- expect "the surviving build exits normally and a lane can be reserved"
+    (peerCode == ExitSuccess && lanePid /= Nothing)
 
   writeFile (release "failing") ""
   failing <- start "failing" [("FAKE_EXIT", "3")]
@@ -163,11 +180,9 @@ run binary = do
   refused <- expect "a caller holding an emulator slot is refused without running bazel"
     (slottedCode == ExitFailure 2 && not slottedRan)
 
-  self <- getExecutablePath
-  let lockPath = home </> ".cache" </> "xm1-host-build" </> "build.lock"
-      readyA = root </> "holder-a-ready"
-      readyB = root </> "holder-b-ready"
+  let readyA = root </> "holder-a-ready"
       releaseA = root </> "holder-a-release"
+      readyB = root </> "holder-b-ready"
       releaseB = root </> "holder-b-release"
       diagnosticLog = root </> "diagnostic-stderr"
   holderA <- spawnHolder self root lockPath 0 readyA releaseA
@@ -179,46 +194,45 @@ run binary = do
     Just owner -> waitFor (fmap (("pid=" ++ owner) `isInfixOf`) (readFile' diagnosticLog))
     Nothing -> pure False
   threadDelay 3_500_000
-  firstReportedOnce <- case pidA of
-    Just owner -> do
-      text <- readFile' diagnosticLog
-      pure (length (filter (== owner) (mapMaybe reportedPid (lines text))) == 1)
+  diagnosticEarly <- started "diagnostic"
+  diagnosticPid <- getPid (invocationProcess diagnostic)
+  maybe (pure ()) (signalProcess sigSTOP) diagnosticPid
+  diagnosticStopped <- waitFor $ case diagnosticPid of
     Nothing -> pure False
-  holderB <- spawnHolder self root lockPath 1 readyB releaseB
-  pidB <- waitForPid readyB
+    Just waiterPid -> do
+      status <- readFile' ("/proc/" ++ show waiterPid ++ "/stat")
+      pure $ case words (drop 1 (dropWhile (/= ')') status)) of
+        state : _ -> state `elem` ["T", "t"]
+        _ -> False
+  unless diagnosticStopped $ do
+    maybe (pure ()) (signalProcess sigCONT) diagnosticPid
+    ioError (userError "diagnostic waiter did not stop before the holder handoff")
   writeFile releaseA ""
+  _ <- waitForProcess (holderProcess holderA)
+  holderB <- spawnHolder self root lockPath 0 readyB releaseB
+  pidB <- waitForPid readyB
+  maybe (pure ()) (signalProcess sigCONT) diagnosticPid
   changedSeen <- case pidB of
     Just owner -> waitFor (fmap (("pid=" ++ owner) `isInfixOf`) (readFile' diagnosticLog))
     Nothing -> pure False
-  early <- started "diagnostic"
+  stillWaiting <- fmap not (started "diagnostic")
   writeFile releaseB ""
   diagnosticCode <- timeout 20_000_000 (waitForProcess (invocationProcess diagnostic))
-  case diagnosticCode of
-    Just _ -> pure ()
-    Nothing -> do
-      getPid (invocationProcess diagnostic) >>= maybe (pure ()) (signalProcess sigKILL)
-      void (waitForProcess (invocationProcess diagnostic))
   diagnosticErr <- invocationStderr diagnostic
-  _ <- waitForProcess (holderProcess holderA)
   _ <- waitForProcess (holderProcess holderB)
   canonicalRoot <- canonicalizePath root
   let sampled = mapMaybe reportedPid (lines diagnosticErr)
       context = ("cwd=" ++ canonicalRoot) `isInfixOf` diagnosticErr
-      count owner = length (filter (== owner) sampled)
-      before earlier later = case (elemIndex earlier sampled, elemIndex later sampled) of
-        (Just earlierAt, Just laterAt) -> earlierAt < laterAt
+      reportedOnce = maybe False (\owner -> length (filter (== owner) sampled) == 1) pidA
+      changedInOrder = case (pidA, pidB) of
+        (Just previousOwner, Just nextOwner) ->
+          maybe False id ((<) <$> elemIndex previousOwner sampled <*> elemIndex nextOwner sampled)
+            && previousOwner `notElem` drop 1 (dropWhile (/= nextOwner) sampled)
         _ -> False
-      sequenceOk = case (pidA, pidB) of
-        (Just firstPid, Just secondPid) ->
-          count firstPid == 1
-            && count secondPid >= 1
-            && before firstPid secondPid
-            && firstPid `notElem` drop 1 (dropWhile (/= secondPid) sampled)
-        _ -> False
-  holders <- expect "contention names the first and changed kernel owner while admission waits"
-    (firstSeen && firstReportedOnce && changedSeen && not early
-      && diagnosticCode == Just ExitSuccess && sequenceOk && context)
-  unless holders (putStrLn (show (pidA, pidB, diagnosticCode, sampled, context) ++ "\n" ++ diagnosticErr))
+  holders <- expect "saturated admission reports an owner handoff without stale holder details"
+    (firstSeen && reportedOnce && changedSeen && changedInOrder && stillWaiting
+      && not diagnosticEarly && diagnosticCode == Just ExitSuccess && context)
+  unless holders (putStrLn diagnosticErr)
 
   let holderBase = root </> "hb"
       waiterBase = root </> "wb"
@@ -269,7 +283,25 @@ run binary = do
           (held && unavailable && holderCode == ExitSuccess && externalWaiterCode == ExitSuccess
             && not ("command_log=" `isInfixOf` diagnosticText))
   boundaries <- mapM unavailableBase [OverBoundBase, CutBaseArgument, ControlByteBase, NonAsciiBase]
-  pure (and ([storageRefused, invalidReserveRefused, serialized, passed, released, failed, refused, holders, baseObserved] ++ boundaries))
+  writeFile laneRelease ""
+  _ <- waitForProcess (holderProcess reservedLane)
+  let legacyReady = root </> "legacy-ready"
+      legacyRelease = root </> "legacy-release"
+  (_, _, _, legacy) <- createProcess
+    (proc self ["--hold-all", lockPath, "0", legacyReady, legacyRelease])
+    { cwd = Just root, std_out = NoStream, std_err = NoStream }
+  legacyPid <- waitForPid legacyReady
+  writeFile (release "legacy-waiter") ""
+  legacyWaiter <- start "legacy-waiter" []
+  threadDelay 1_500_000
+  legacyEarly <- started "legacy-waiter"
+  writeFile legacyRelease ""
+  legacyCode <- waitForProcess (invocationProcess legacyWaiter)
+  _ <- invocationStderr legacyWaiter
+  _ <- waitForProcess legacy
+  legacyCompatible <- expect "a legacy whole-file lock blocks both build lanes"
+    (legacyPid /= Nothing && not legacyEarly && legacyCode == ExitSuccess)
+  pure (and ([storageRefused, invalidReserveRefused, overlapped, passed, laneHeld, released, failed, refused, holders, baseObserved, legacyCompatible] ++ boundaries))
 
 data UnavailableOutputBase = OverBoundBase | CutBaseArgument | ControlByteBase | NonAsciiBase
 

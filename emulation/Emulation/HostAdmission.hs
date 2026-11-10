@@ -1,12 +1,10 @@
 -- | Host resource classes and admitted Bazel commands.
 --
--- 'Build' admits one Bazel command at a time host-wide: a POSIX record lock on
--- @~/.cache/xm1-host-build/build.lock@, held for the whole command, which runs
--- as @bazel --batch@ in a systemd user scope capped at 'classMemoryMax'.
--- 'Emulator' is the slot pool of "Emulation.EmulatorSlot". The worst case on the
--- 30.4 GiB host, one 6 GiB build and two 8 GiB emulator runs, leaves 8.4 GiB for
--- the OS, interactive work and Nix daemon builders, which run in
--- @nix-daemon.service@ outside every class and are not capped.
+-- 'Build' admits two Bazel commands host-wide using byte-range locks on
+-- @~/.cache/xm1-host-build/build.lock@. Each runs as @bazel --batch@ in a 6 GiB
+-- systemd user scope. 'Emulator' admits two runs of at most 4 GiB each.
+-- The 20 GiB maximum leaves 10.4 GiB for the OS, interactive work and Nix
+-- daemon builders, which run outside these scopes.
 module Emulation.HostAdmission
   ( ResourceClass (..)
   , MemoryMax (..)
@@ -52,13 +50,13 @@ newtype MemoryMax = MemoryMax String
 
 -- | Simultaneous admissions host-wide.
 classConcurrency :: ResourceClass -> Int
-classConcurrency Build = 1
+classConcurrency Build = 2
 classConcurrency Emulator = 2
 
 -- | The memory cap of one admission; an emulator run may ask for less.
 classMemoryMax :: ResourceClass -> MemoryMax
 classMemoryMax Build = MemoryMax "6G"
-classMemoryMax Emulator = MemoryMax "8G"
+classMemoryMax Emulator = MemoryMax "4G"
 
 parseMemoryMax :: String -> Maybe MemoryMax
 parseMemoryMax text = case span isDigit text of
@@ -157,14 +155,14 @@ admit requestedBase command rest = do
   directory <- (</> ".cache" </> "xm1-host-build") <$> getHomeDirectory
   createDirectoryIfMissing True directory
   waitStart <- getMonotonicTime
-  lock <- acquireBuildLock directory
+  (lock, lane) <- acquireBuildLock directory
   waited <- subtract waitStart <$> getMonotonicTime
   scoped <- userScopeAvailable
   let MemoryMax memory = classMemoryMax Build
   pid <- getProcessID
   let unit = "xm1-host-build-" ++ show pid ++ ".scope"
   if scoped
-    then stopPreviousScope directory unit
+    then stopPreviousScope directory lane unit
     else hPutStrLn stderr ("No systemd user session: host build runs without the " ++ memory ++ " memory cap") >> hFlush stderr
   checkStorageBudget directory
     `catch` (\problem -> refuseAccounting (show (problem :: StorageFailure)))
@@ -243,15 +241,23 @@ data OutputBase = NoOutputBase | OutputBaseUnavailable | OutputBaseObserved File
 
 data OwnerSample = OwnerNone | OwnerUnknown | OwnerReported ProcessID (Maybe HolderDetails)
 
-acquireBuildLock :: FilePath -> IO Fd
+newtype BuildLane = BuildLane Int
+
+acquireBuildLock :: FilePath -> IO (Fd, BuildLane)
 acquireBuildLock directory = do
   fd <- openFd (directory </> "build.lock") ReadWrite defaultFileFlags {creat = Just 0o600}
   setFdOption fd CloseOnExec True
-  let attempt announced = do
-        locked <- try (setLock fd (WriteLock, AbsoluteSeek, 0, 0)) :: IO (Either IOException ())
+  let firstFree [] = pure Nothing
+      firstFree (lane : rest) = do
+        locked <- try (setLock fd (WriteLock, AbsoluteSeek, fromIntegral lane, 1)) :: IO (Either IOException ())
         case locked of
-          Right () -> pure fd
-          Left _ -> do
+          Right () -> pure (Just (BuildLane lane))
+          Left _ -> firstFree rest
+      attempt announced = do
+        available <- firstFree [0 .. classConcurrency Build - 1]
+        case available of
+          Just lane -> pure (fd, lane)
+          Nothing -> do
             announced' <- announceContention directory fd announced
             threadDelay 1_000_000
             attempt announced'
@@ -284,7 +290,7 @@ sampleOf KernelUnknown _ = OwnerUnknown
 
 queryKernelOwner :: Fd -> IO KernelOwner
 queryKernelOwner fd = do
-  result <- try (getLock fd (WriteLock, AbsoluteSeek, 0, 0))
+  result <- try (getLock fd (WriteLock, AbsoluteSeek, 0, 1))
     :: IO (Either IOException (Maybe (ProcessID, FileLock)))
   pure $ case result of
     Right (Just (pid, _)) | pid > 0 -> KernelOwner pid
@@ -377,9 +383,9 @@ outputBaseText (OutputBaseObserved base) =
 
 -- | Stops the scope of this lock's previous holder when its processes outlived
 -- the holder, then records @unit@ as the current holder's scope.
-stopPreviousScope :: FilePath -> String -> IO ()
-stopPreviousScope directory unit = do
-  let record = directory </> "scope"
+stopPreviousScope :: FilePath -> BuildLane -> String -> IO ()
+stopPreviousScope directory (BuildLane lane) unit = do
+  let record = directory </> (if lane == 0 then "scope" else "scope-" ++ show lane)
   previous <- try (readFile record >>= \text -> evaluate (length text) >> pure (trim text)) :: IO (Either IOException String)
   case previous of
     Right name | "xm1-host-build-" `isPrefixOf` name -> do

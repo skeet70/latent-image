@@ -1583,7 +1583,7 @@ main = do
   BL.writeFile reportPath (encode (object
     [ "schema" .= (2 :: Int)
     , "scope" .= ("host emulation and native case suites; no camera or USB device" :: T.Text)
-    , "resource_scope" .= ("fresh emulator routes use the launcher default 2G/Swap0; completed routes retain the scopes recorded for their run" :: T.Text)
+    , "resource_scope" .= ("fresh emulator routes use the launcher default 4G/Swap0 unless explicitly overridden; completed routes retain the scopes recorded for their run" :: T.Text)
     , "workspace" .= rootPath
     , "run" .= run
     , "checkpoint" .= checkpointPath
