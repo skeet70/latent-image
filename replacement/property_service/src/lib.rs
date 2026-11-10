@@ -5,6 +5,8 @@ extern crate xm1_settings_storage_core as storage;
 #[cfg(property_embedded_storage)]
 use crate as storage;
 mod property_table;
+#[cfg(property_recipe_edit)]
+mod recipe_edit;
 #[cfg(not(test))]
 pub(crate) mod storage_boundary;
 use storage::table;
@@ -343,6 +345,10 @@ pub fn write_property<B: HeaderBackend, C: SettingsConfiguration>(storage: &mut 
 #[no_mangle]
 pub unsafe extern "C" fn xm1_property_get(id: u32, bank: u32, defaults: u32, selection: u32) -> u32 {
     let Some(id) = PropertyId::decode(id) else { return rejected_id(id) };
+    #[cfg(property_recipe_edit)]
+    if let Some(field) = recipe_edit::RecipeEditProperty::parse(id.0) {
+        return unsafe { field.stored_code() }.word();
+    }
     let Some(bank) = SettingsBank::from_abi(bank) else { return 0 };
     let Some(selection) = ProfileSelection::from_abi(selection) else { return 0 };
     if cfg!(storage_defect_wrapped_selector_rejected) && selection == ProfileSelection::WrappedPredecessor { return 0; }
@@ -360,6 +366,10 @@ pub unsafe extern "C" fn xm1_property_get(id: u32, bank: u32, defaults: u32, sel
 #[no_mangle]
 pub unsafe extern "C" fn xm1_property_set(id: u32, value: u32, bank: u32, selection: u32) -> u32 {
     let Some(id) = PropertyId::decode(id) else { return rejected_id(id) };
+    #[cfg(property_recipe_edit)]
+    if recipe_edit::RecipeEditProperty::parse(id.0).is_some() {
+        return 0;
+    }
     let Some(bank) = SettingsBank::from_abi(bank) else { return 0 };
     let Some(selection) = ProfileSelection::from_abi(selection) else { return 0 };
     if cfg!(storage_defect_wrapped_selector_rejected) && selection == ProfileSelection::WrappedPredecessor { return 0; }

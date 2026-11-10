@@ -1,6 +1,6 @@
 module Emulation.Image4Staging
   ( Tools (..), ScratchDirectory, validateScratchDirectory, scratchDirectoryPath, StagedCandidate, runImage4Staging
-  , candidateDat, candidateSha256, candidateImage4Sha256
+  , candidateDat, candidateSha256, candidateImage4Sha256, runImage4Replacement
   ) where
 
 import Data.Bits (complement)
@@ -8,6 +8,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import Data.List (tails)
 import Emulation.FirstStageWitness (sha256Hex)
+import qualified Emulation.Sha256 as SHA
 import qualified FujiAF.Host as H
 import qualified FujiAF.UpdateContainer as U
 import System.Directory (canonicalizePath, doesDirectoryExist)
@@ -61,9 +62,15 @@ scratchDirectoryPath (ScratchDirectory path) = path
 
 -- The second DAT carries startup edits; its image4 record is still canonical.
 runImage4Staging :: Tools -> ScratchDirectory -> B.ByteString -> B.ByteString -> B.ByteString -> IO StagedCandidate
-runImage4Staging tools (ScratchDirectory scratch) canonical base decoded = H.withTemporaryAt scratch "image4-stage-" $ \root -> do
+runImage4Staging tools scratch canonical base decoded = do
   H.ensure (sha256Hex canonical == "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490")
     "image4 staging requires the canonical X-M1 1.50 DAT"
+  expected <- either H.failH pure (SHA.parseSha256Hex "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16")
+  runImage4Replacement tools scratch canonical base expected decoded
+
+runImage4Replacement :: Tools -> ScratchDirectory -> B.ByteString -> B.ByteString -> SHA.Sha256 -> B.ByteString -> IO StagedCandidate
+runImage4Replacement tools (ScratchDirectory scratch) canonical base expected decoded =
+ H.withTemporaryAt scratch "image4-stage-" $ \root -> do
   source <- either H.failH pure (U.parseContainer canonical)
   staged <- either H.failH pure (U.parseContainer base)
   let sourceParts = U.parsedParts source
@@ -86,8 +93,8 @@ runImage4Staging tools (ScratchDirectory scratch) canonical base decoded = H.wit
   B.writeFile originalRecordPath (B.map complement (U.serializeRecord originalRecord))
   runTool root (decoderPath tools) [originalRecordPath,"0",originalDecodedPath,show sourceSize]
   originalDecoded <- H.readRegular (16*1024*1024) originalDecodedPath
-  H.ensure (sha256Hex originalDecoded == "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16")
-    "image4 staging canonical record decodes to a different source"
+  H.ensure (SHA.sha256 originalDecoded == expected)
+    "image4 staging record decodes to a different admitted source"
   B.writeFile basePath base
   B.writeFile decodedPath decoded
   runTool root (encoderPath tools) ["0x160000",decodedPath,recordPath]

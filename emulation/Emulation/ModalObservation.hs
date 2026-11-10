@@ -29,6 +29,7 @@ module Emulation.ModalObservation
   , modalRequest
   , modalRequestLimit
   , parseModalBeginRequest
+  , parseModalBeginRequestForPackage
   , parseRecordedModalBeginRequest
   , modalBeginRequestJson
   , ModalPolicy (..)
@@ -47,6 +48,7 @@ module Emulation.ModalObservation
   , ModalLifetimeGuard (..)
   , ModalLifetimeSource
   , bindModalLifetimeSource
+  , bindModalLifetimeSourceForPackage
   , modalLifetimeSourceJson
   , lifetimeModalRequest
   , withRetiredExecution
@@ -95,10 +97,15 @@ import qualified Data.Vector as V
 import Data.Word (Word16, Word32, Word64)
 import Data.Bits ((.&.))
 import Emulation.WatchObservation
-import Emulation.Sha256 (Sha256, sha256, sha256Hex)
+import Emulation.Sha256 (Sha256, sha256, sha256Hex, parseSha256Hex)
 import qualified FujiAF.RamPush as Ram
 import Emulation.LoaderCode (loaderSpans)
+import qualified Emulation.ContextCatalogue as Catalogue
 import qualified RamPushLayout as Layout
+import qualified FujiAF.UpdateContainer as Update
+import qualified Replacement.RtosTimer.RootPackage as Root
+import qualified Replacement.StartupArtifact.Targets as Targets
+import qualified Replacement.StartupArtifact.Types as Startup
 import Numeric (readHex)
 
 
@@ -314,6 +321,52 @@ scopedBankVariants = [Layout.modalScopedBankVariant, Layout.modalEngineBankVaria
 guardPublicationCounts :: [Int]
 guardPublicationCounts = stockPublicationCount : scopedPublicationCounts
 
+newtype PublicationCardinality = PublicationCardinality Word64
+
+newtype PropertyDeltaWords = PropertyDeltaWords Word32 deriving (Eq, Show)
+data PropertyPublicationCounts = PropertyPublicationCounts PropertyDeltaWords Layout.PublicationCounts deriving (Eq, Show)
+
+propertyCountsLayout :: PropertyPublicationCounts -> Layout.PublicationCounts
+propertyCountsLayout (PropertyPublicationCounts _ counts) = counts
+
+publicationCardinality :: Layout.BankVariant -> Maybe PropertyPublicationCounts -> PublicationCardinality
+publicationCardinality variant counts = PublicationCardinality
+  (fromIntegral (maybe (Layout.publicationCountFor variant) (Layout.publicationActualCount . propertyCountsLayout) counts))
+
+parsePropertyCounts :: Layout.BankVariant -> Value -> Either String PropertyPublicationCounts
+parsePropertyCounts variant value = do
+  delta <- modalWord32 value
+  unless (delta >= 1 && delta <= fromIntegral Layout.propertyCarrierWordBound)
+    (Left "modal property_delta_words must be1..3767")
+  layout <- Layout.propertyPublicationLayout variant
+  counts <- Layout.propertyPublicationCounts layout (fromIntegral delta)
+  pure (PropertyPublicationCounts (PropertyDeltaWords delta) counts)
+
+propertyCountsFromRuntime :: Layout.PublicationCounts -> Either String PropertyPublicationCounts
+propertyCountsFromRuntime counts = do
+  let delta = Layout.publicationActualSetupCount counts - Layout.publicationSetupCount + 18
+  parsed <- parsePropertyCounts Layout.modalRenderBankVariant (Number (fromIntegral delta))
+  unless (propertyCountsLayout parsed == counts) (Left "modal runtime property counts disagree with their bounded delta")
+  pure parsed
+
+propertyDeltaValue :: PropertyPublicationCounts -> Value
+propertyDeltaValue (PropertyPublicationCounts (PropertyDeltaWords delta) _) = Number (fromIntegral delta)
+
+validatePropertyPublicationPlan :: WatchRange -> Maybe PropertyPublicationCounts -> [PublicationBinding] -> Either String ()
+validatePropertyPublicationPlan _ Nothing _ = Right ()
+validatePropertyPublicationPlan runtime (Just plan@(PropertyPublicationCounts (PropertyDeltaWords delta) _)) rows = do
+  let counts = propertyCountsLayout plan
+      (low, high) = watchRangeBounds runtime
+      addressOf (PublicationBinding address _ _) = watchAddressValue address
+      propertyRows = filter (\row -> addressOf row >= 0x62c120 && addressOf row < 0x62fbfc) rows
+      obsolete row = let address = addressOf row in (address >= 0x61eac4 && address < 0x61eae8) || (address >= 0x625064 && address < 0x625088)
+      changed (PublicationBinding _ old new) = old /= new
+  unless (high - low == 0x3dc80
+    && length rows == Layout.publicationActualCount counts
+    && length propertyRows == fromIntegral delta
+    && all changed propertyRows && not (any obsolete rows))
+    (Left "modal property publication plan differs from its runtime, carrier delta or retired table")
+
 routePublicationCounts :: Maybe scope -> [Int]
 routePublicationCounts = maybe [stockPublicationCount] (const scopedPublicationCounts)
 
@@ -501,6 +554,10 @@ checkModalBegin (ModalRequest _ scoped _ lifetime) report = do
   forM_ lifetime $ \binding -> do
     unless (modalPhysicalCoverage report) (Left "modal lifetime physical guard did not arm")
     checkTask33StackGuardReceipt binding (modalLifetimeReceipt report)
+    receipt <- maybe (Left "modal lifetime did not return its initial receipt") Right (modalLifetimeReceipt report)
+    unless (receiptPropertyCounts receipt == lifetimePropertyCounts binding
+      && countValue (receiptPublicationCount receipt) == fromIntegral (length (lifetimePublications binding)))
+      (Left "modal initial receipt publication plan differs from source")
   forM_ (modalReportFailure report) (Left . T.unpack)
 
 checkModalEnd :: ModalReport -> Either String ()
@@ -515,7 +572,8 @@ checkScopedModalRoute report = do
   unless (modalReportPolicy report == ScopedOwned75) (Left "modal route requires scoped-owned75 policy")
   unless (modalLifetimeCoverage report && modalTaskIdentityVerified report)
     (Left "scoped modal route requires completed physical and task lifetime coverage")
-  unless (maybe False ((`elem` scopedPublicationCounts) . fromIntegral . countValue . receiptPublicationCount) (modalLifetimeReceipt report))
+  unless (maybe False (\receipt -> isJust (receiptPropertyCounts receipt)
+    || fromIntegral (countValue (receiptPublicationCount receipt)) `elem` scopedPublicationCounts) (modalLifetimeReceipt report))
     (Left "scoped modal route requires a complete scoped publication vector")
   let counts = modalReportCounts report
       owned = toInteger (countValue (modalOwnedHandoffs counts))
@@ -531,10 +589,16 @@ checkScopedModalRoute report = do
 data BeginRequestFormat = CurrentBeginRequest | RecordedStockBeginRequest deriving (Eq)
 
 parseModalBeginRequest :: Value -> Either String ModalRequest
-parseModalBeginRequest = parseModalBeginRequestFor CurrentBeginRequest
+parseModalBeginRequest = parseModalBeginRequestUsing CurrentBeginRequest Catalogue.parseContextCatalogue
 
-parseModalBeginRequestFor :: BeginRequestFormat -> Value -> Either String ModalRequest
-parseModalBeginRequestFor format value = do
+parseModalBeginRequestForPackage :: Root.RootPackage -> Value -> Either String ModalRequest
+parseModalBeginRequestForPackage package =
+  parseModalBeginRequestUsing CurrentBeginRequest (Catalogue.parseContextCatalogueForPackage package)
+
+type CatalogueParser = Value -> [Catalogue.ContextSourceSlice] -> Either String Catalogue.ContextCatalogue
+
+parseModalBeginRequestUsing :: BeginRequestFormat -> CatalogueParser -> Value -> Either String ModalRequest
+parseModalBeginRequestUsing format parseCatalogue value = do
   let required = ["command", "stock", "linked", "seam", "owned", "limit"]
       optional = case value of Object fields -> [key | key <- ["owned_prehook", "helpers", "context_sources", "lifetime"], KM.member key fields]; _ -> []
   modalKeys (required ++ optional) value
@@ -580,7 +644,7 @@ parseModalBeginRequestFor format value = do
   request <- modalRequest stock scoped limit
   case (optionalField "context_sources" value, optionalField "lifetime" value) of
     (Nothing, Nothing) -> pure request
-    (Just context, Just lifetime) -> parseLifetimeBinding format scoped context lifetime >>= lifetimeModalRequest request
+    (Just context, Just lifetime) -> parseLifetimeBinding format parseCatalogue scoped context lifetime >>= lifetimeModalRequest request
     _ -> Left "modal lifetime request requires both context sources and lifetime"
  where
   byteArray = parseModalBytes
@@ -596,9 +660,9 @@ parseRecordedModalBeginRequest observation = do
     Just _ -> parseModalBeginRequest request
     Nothing -> do
       binding <- modalField "source" observation >>= modalField "lifetime"
-      unless (modalField "loader_a_sha256" binding == Right (String (T.pack loaderADigest))
-        && modalField "loader_b_sha256" binding == Right (String (T.pack loaderBDigest)))
-        (Left "recorded stock lifetime loader identities differ")
+      first <- modalField "loader_a_sha256" binding
+      second <- modalField "loader_b_sha256" binding
+      Catalogue.validateRecordedStockLoaderDigests first second
       context <- modalField "context_sources" request
       declaredLifetime <- modalField "lifetime" binding
       let withoutReadonly (Object fields) = Right (KM.delete "readonly" fields)
@@ -607,7 +671,8 @@ parseRecordedModalBeginRequest observation = do
       requestFields <- withoutReadonly lifetime
       unless (modalField "context_sources" binding == Right context && declaredFields == requestFields)
         (Left "recorded stock lifetime source differs from its request")
-      decoded@(ModalRequest _ scoped _ source) <- parseModalBeginRequestFor RecordedStockBeginRequest request
+      decoded@(ModalRequest _ scoped _ source) <-
+        parseModalBeginRequestUsing RecordedStockBeginRequest Catalogue.parseContextCatalogue request
       bound <- maybe (Left "recorded stock request has no lifetime source") Right source
       declaredImages <- modalField "readonly" declaredLifetime
         >>= modalList (either error id (modalLimit 64)) >>= mapM parseSourceImage
@@ -617,21 +682,15 @@ parseRecordedModalBeginRequest observation = do
             ++ [SourceImage start bytes | Just (ModalLinked start bytes, _) <- [scoped]]
       unless (sortOn imageStart declaredImages == sortOn imageStart completeImages)
         (Left "recorded stock readonly images differ from the complete request source")
-      forM_ stockContextInstructions $ \(pc, word) -> do
-        let slices = [B.take 4 (B.drop (fromInteger offset) bytes)
+      forM_ Catalogue.stockContextInstructions $ \instruction -> do
+        let pc = watchAddressValue (Catalogue.catalogueInstructionAddress instruction)
+            slices = [B.take 4 (B.drop (fromInteger offset) bytes)
               | SourceImage start bytes <- images
               , let offset = toInteger pc - toInteger (watchAddressValue start)
-              , offset >= 0, offset + 4 <= toInteger (B.length bytes)]
-        unless (slices == [littleWord word])
+              , offset >=0, offset +4 <= toInteger (B.length bytes)]
+        unless (slices == [Catalogue.catalogueInstructionBytes instruction])
           (Left "recorded stock context instruction differs from the stock catalogue")
       pure decoded
-
-stockContextInstructions :: [(Word32, Word32)]
-stockContextInstructions =
-  [(base + offset, word) | base <- [0x40000, 0xd0000]
-    , (offset, word) <- [(0x240, 0xe5820000), (0x31c, 0xe5823000), (0x36b8, 0xe5821000)
-      , (0x3690, 0xe5863000), (0x36f0, 0xe5863000), (0x3720, 0xe5863000)
-      , (0x3848, 0xe5832000), (0x2440, 0xe5835000)]]
 
 modalRequestLimit :: ModalRequest -> ModalLimit
 modalRequestLimit (ModalRequest _ _ limit _) = limit
@@ -726,7 +785,17 @@ newtype InstructionWord = InstructionWord Word32 deriving (Eq, Show)
 data SourceInstruction = SourceInstruction WatchAddress InstructionWord deriving (Eq, Show)
 data PublicationBinding = PublicationBinding WatchAddress Ram.WordValue Ram.WordValue deriving (Eq, Show)
 data PublicationRoutine = PublicationRoutine SourceInstruction SourceInstruction deriving (Eq, Show)
-data ContextCatalogue = StockContextCatalogue | OwnedUnionContextCatalogue deriving (Eq)
+type ContextCatalogue = Catalogue.ContextCatalogueKind
+data CatalogueBinding = RuntimeContextUnbound | SourceContextBound Catalogue.ContextCatalogue deriving (Eq)
+
+contextCatalogueTag :: ContextCatalogue -> T.Text
+contextCatalogueTag Catalogue.StockContextCatalogue = "stock"
+contextCatalogueTag Catalogue.OwnedUnionContextCatalogue = "owned_union"
+
+catalogueBindingValue :: CatalogueBinding -> Value
+catalogueBindingValue RuntimeContextUnbound = object
+  ["source_bound" .= False, "installed_lifetime_admitted" .= False]
+catalogueBindingValue (SourceContextBound catalogue) = Catalogue.contextCatalogueProvenance catalogue
 data ModalLifetimeSource = ModalLifetimeSource
   { lifetimeVariant :: Layout.BankVariant
   , lifetimeCatalogue :: ContextCatalogue
@@ -739,6 +808,7 @@ data ModalLifetimeSource = ModalLifetimeSource
   , lifetimeContext :: [SourceImage]
   , lifetimeElfDigest :: Maybe Sha256
   , lifetimeRuntimeDigest :: Maybe Sha256
+  , lifetimeManifestDigest :: Maybe Sha256
   -- | Stock code no CPU may fetch through any alias from the first through the
   -- last publication-writer row.
   , lifetimeRetired :: [WatchRange]
@@ -747,6 +817,9 @@ data ModalLifetimeSource = ModalLifetimeSource
   -- | Reloads whose copy stores the guard admits between a core's call and return fetches.
   , lifetimeSettingsReloads :: [SettingsReload]
   , lifetimeTask33StackGuard :: Maybe Task33StackGuard
+  , lifetimeLoaderDigests :: Maybe (Sha256, Sha256)
+  , lifetimeCatalogueBinding :: CatalogueBinding
+  , lifetimePropertyCounts :: Maybe PropertyPublicationCounts
   } deriving (Eq)
 
 newtype Task33StackGuard = Task33StackGuard B.ByteString deriving (Eq, Show)
@@ -903,11 +976,13 @@ rangesOverlap left right =
   in leftLow < rightHigh && rightLow < leftHigh
 
 lifetimeRequestJson :: ModalLifetimeSource -> Value
-lifetimeRequestJson source = object $
+lifetimeRequestJson source = object
+  (("context_catalogue" .= contextCatalogueTag (lifetimeCatalogue source)) : lifetimeContractFields source)
+
+lifetimeContractFields :: ModalLifetimeSource -> [(K.Key, Value)]
+lifetimeContractFields source =
   [ "bank_variant" .= Layout.bankVariantTag (lifetimeVariant source)
-  , "context_catalogue" .= case lifetimeCatalogue source of
-      StockContextCatalogue -> ("stock" :: T.Text)
-      OwnedUnionContextCatalogue -> "owned_union"
+  , "property_delta_words" .= fmap propertyDeltaValue (lifetimePropertyCounts source)
   , "runtime" .= extentJson (lifetimeRuntime source)
   , "resident" .= extentJson (lifetimeResident source)
   , "readonly" .= map sourceImageJson (lifetimeReadonly source)
@@ -928,29 +1003,46 @@ modalLifetimeSourceJson :: ModalLifetimeSource -> Value
 modalLifetimeSourceJson source = object
   [ "bound_elf_sha256" .= fmap sha256Hex (lifetimeElfDigest source)
   , "runtime_sha256" .= fmap sha256Hex (lifetimeRuntimeDigest source)
-  , "loader_a_sha256" .= loaderADigest
-  , "loader_b_sha256" .= loaderBDigest
+  , "manifest_sha256" .= fmap sha256Hex (lifetimeManifestDigest source)
+  , "loader_a_sha256" .= fmap (sha256Hex . fst) (lifetimeLoaderDigests source)
+  , "loader_b_sha256" .= fmap (sha256Hex . snd) (lifetimeLoaderDigests source)
   , "context_sources" .= map sourceImageJson (lifetimeContext source)
+  , "context_catalogue_provenance" .= catalogueBindingValue (lifetimeCatalogueBinding source)
   , "lifetime" .= lifetimeRequestJson source
   ]
 
-loaderADigest, loaderBDigest :: String
-loaderADigest = "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882"
-loaderBDigest = "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec"
 
 immutableLoaderSpans :: Word32 -> Word32 -> [(Word32, Word32)]
 immutableLoaderSpans base end = [(fromIntegral low, fromIntegral high) | (low, high) <- loaderSpans (fromIntegral base) (fromIntegral (end - base))]
 
 bindModalLifetimeSource :: Ram.RamPushManifest -> B.ByteString -> B.ByteString -> B.ByteString -> Either String ModalLifetimeSource
 bindModalLifetimeSource manifest elfBytes loaderA loaderB = do
-  unless (B.length loaderA == 0xdae0 && sha256Hex (sha256 loaderA) == loaderADigest
-    && B.length loaderB == 0xdaa0 && sha256Hex (sha256 loaderB) == loaderBDigest)
-    (Left "modal lifetime requires complete pinned LoaderA and LoaderB")
-  ModalRuntimeSource source <- bindModalRuntimeSource manifest elfBytes
+  catalogue <- Catalogue.bindStockContextCatalogue loaderA loaderB
+  bound <- bindModalRuntimeSource manifest elfBytes
+  bindLifetimeContext catalogue bound loaderA loaderB
+
+bindModalLifetimeSourceForPackage :: Root.RootPackage -> B.ByteString -> Ram.RamPushManifest -> B.ByteString -> Either String ModalLifetimeSource
+bindModalLifetimeSourceForPackage package finalDat manifest elfBytes = do
+  parsed <- Update.parseContainer finalDat
+  actual <- either (Left . show) Right (Targets.extractPreTable (Update.parsedParts parsed))
+  let expected target = Targets.targetOf (Root.packageTargets package) target
+  forM_ [Startup.LoaderA, Startup.LoaderB] $ \target ->
+    unless (M.lookup target actual == Just (expected target))
+      (Left "modal lifetime final DAT loaders differ from the admitted root platform package")
+  bound <- bindModalRuntimeSource manifest elfBytes
+  catalogue <- Catalogue.bindOwnedUnionContextCatalogueForPackage package
+  bindLifetimeContext catalogue bound (expected Startup.LoaderA) (expected Startup.LoaderB)
+
+bindLifetimeContext :: Catalogue.ContextCatalogue -> ModalRuntimeSource -> B.ByteString -> B.ByteString -> Either String ModalLifetimeSource
+bindLifetimeContext catalogue (ModalRuntimeSource source) loaderA loaderB = do
+  unless (B.length loaderA == 0xdae0 && B.length loaderB == 0xdaa0)
+    (Left "modal lifetime context requires both complete loader domains")
   let context = [SourceImage (watchAddress low) (B.take (fromIntegral (high - low)) (B.drop (fromIntegral (low - base_)) bytes))
         | (base_, end_, bytes) <- [(0x40000, 0x4dae0, loaderA), (0xd0000, 0xddaa0, loaderB)]
         , (low, high) <- immutableLoaderSpans base_ end_]
-  pure source { lifetimeContext = context }
+  pure source { lifetimeCatalogue = Catalogue.contextCatalogueKind catalogue
+    , lifetimeContext = context, lifetimeLoaderDigests = Just (sha256 loaderA, sha256 loaderB)
+    , lifetimeCatalogueBinding = SourceContextBound catalogue }
 
 newtype ModalRuntimeSource = ModalRuntimeSource ModalLifetimeSource
 
@@ -958,15 +1050,24 @@ modalRuntimeSourceJson :: ModalRuntimeSource -> Value
 modalRuntimeSourceJson (ModalRuntimeSource source) = object
   [ "bound_elf_sha256" .= fmap sha256Hex (lifetimeElfDigest source)
   , "runtime_sha256" .= fmap sha256Hex (lifetimeRuntimeDigest source)
-  , "lifetime" .= lifetimeRequestJson source ]
+  , "manifest_sha256" .= fmap sha256Hex (lifetimeManifestDigest source)
+  , "context_binding" .= ("runtime-only-no-loader-catalogue" :: T.Text)
+  , "runtime_contract" .= object (lifetimeContractFields source) ]
 
 bindModalRuntimeSource :: Ram.RamPushManifest -> B.ByteString -> Either String ModalRuntimeSource
 bindModalRuntimeSource manifest elfBytes = do
   variant <- maybe (Left "modal lifetime requires a typed bank variant") Right (Ram.manifestBankVariant manifest)
+  extension <- Ram.manifestPropertyCounts manifest
+  propertyPlan <- traverse (propertyCountsFromRuntime . snd) extension
+  manifestHash <- parseSha256Hex (Ram.manifestDigest manifest)
+  let expectedCount = maybe (Layout.publicationCountFor variant) (Layout.publicationActualCount . snd) extension
+  expectedSize <- case extension of
+    Nothing -> Right (Layout.runtimeAllocationSizeFor variant)
+    Just (layout, _) -> Layout.propertyAllocationSize layout (Ram.unAddress (Ram.allocationBase manifest))
   unless (variant `elem` (Layout.standardBankVariant : scopedBankVariants)
-    && length (Ram.manifestPublications manifest) == Layout.publicationCountFor variant
-    && Ram.allocationSize manifest == fromIntegral (Layout.runtimeAllocationSizeFor variant))
-    (Left "modal lifetime bank variant, publication count or allocation differs")
+    && length (Ram.manifestPublications manifest) == expectedCount
+    && Ram.allocationSize manifest == fromIntegral expectedSize)
+    (Left "modal runtime source bank variant, publication count or allocation differs")
   let runtime = Ram.runtimeBytes manifest
       runtimeDigest = sha256 runtime
       base = Ram.unAddress (Ram.allocationBase manifest)
@@ -979,9 +1080,9 @@ bindModalRuntimeSource manifest elfBytes = do
   unless (size > 0 && base `mod` 4 == 0 && size `mod` 4 == 0 && B.length runtime == size && end <= 0x20000000
     && sha256Hex runtimeDigest == Ram.runtimeDigest manifest)
     (Left "modal lifetime runtime must match the full manifest allocation and digest")
-  unless (length publications `elem` guardPublicationCounts && length (nub addresses) == length addresses
+  unless (length publications == expectedCount && length (nub addresses) == length addresses
     && all (\address -> address `mod` 4 == 0 && address < 0x20000000) addresses)
-    (Left "modal lifetime publication vector requires a guarded variant's count of unique canonical aligned addresses")
+    (Left "modal runtime source publication vector requires unique canonical aligned addresses")
   runtimeExtent <- watchRange (watchAddress base) (watchAddress (fromInteger end))
   elf <- ELF.parseElf elfBytes
   let symbol kind name = case filter ((== name) . ELF.symbolName) (ELF.elfSymbols elf) of
@@ -1039,7 +1140,11 @@ bindModalRuntimeSource manifest elfBytes = do
   rollback <- routine "ram_push_rollback" (Ram.unAddress (Ram.rollbackEntry (Ram.manifestEntries manifest))) "restore_old_words"
   let bindings = [PublicationBinding (watchAddress (Ram.unAddress (Ram.publicationAddress publication)))
         (Ram.publicationOld publication) (Ram.publicationNew publication) | publication <- publications]
-  pure (ModalRuntimeSource (ModalLifetimeSource variant StockContextCatalogue runtimeExtent residentExtent readonly install rollback bindings [] (Just (sha256 elfBytes)) (Just runtimeDigest) [] [stockPropertySetter] [stockSettingsReload, stockSettingsRestore, stockSettingsHeaderReload] Nothing))
+  validatePropertyPublicationPlan runtimeExtent propertyPlan bindings
+  pure (ModalRuntimeSource (ModalLifetimeSource variant Catalogue.StockContextCatalogue
+    runtimeExtent residentExtent readonly install rollback bindings [] (Just (sha256 elfBytes)) (Just runtimeDigest)
+    (Just manifestHash) [] [stockPropertySetter] [stockSettingsReload, stockSettingsRestore, stockSettingsHeaderReload]
+    Nothing Nothing RuntimeContextUnbound propertyPlan))
 
 littleWord :: Word32 -> B.ByteString
 littleWord word = B.pack [fromIntegral (word `div` (256 ^ index)) | index <- [0 .. 3 :: Int]]
@@ -1047,8 +1152,13 @@ littleWord word = B.pack [fromIntegral (word `div` (256 ^ index)) | index <- [0 
 lifetimeModalRequest :: ModalRequest -> ModalLifetimeSource -> Either String ModalRequest
 lifetimeModalRequest (ModalRequest stock scoped _ _) source = do
   unless (length (lifetimeContext source) == 16) (Left "modal lifetime requires complete loader context binding")
+  case lifetimeCatalogueBinding source of
+    RuntimeContextUnbound -> Left "modal lifetime requires a source-bound context catalogue"
+    SourceContextBound catalogue -> unless (Catalogue.contextCatalogueKind catalogue == lifetimeCatalogue source)
+      (Left "modal lifetime catalogue differs from its instruction-source proof")
+  let PublicationCardinality expectedCount = publicationCardinality (lifetimeVariant source) (lifetimePropertyCounts source)
   unless (lifetimeVariant source `elem` maybe [Layout.standardBankVariant] (const scopedBankVariants) scoped
-    && length (lifetimePublications source) == Layout.publicationCountFor (lifetimeVariant source))
+    && fromIntegral (length (lifetimePublications source)) == expectedCount)
     (Left "modal lifetime bank variant or publication count differs from stock or scoped route")
   when (lifetimeVariant source == Layout.modalRenderBankVariant) $
     unless (all (\(Layout.PublicationAddress hook) -> any (\(PublicationBinding address old _) ->
@@ -1171,6 +1281,7 @@ data LifetimeReceipt = LifetimeReceipt
   , receiptReloadWrites :: ModalCount
   , receiptFailure :: Maybe LifetimeFailure
   , receiptTask33StackGuard :: Maybe Task33StackGuardReceipt
+  , receiptPropertyCounts :: Maybe PropertyPublicationCounts
   } deriving (Eq, Show)
 
 lifetimePhaseText :: LifetimePhase -> T.Text
@@ -1212,11 +1323,14 @@ coreValue Core1 = 1
 parseLifetimeReceipt :: Value -> Either String LifetimeReceipt
 parseLifetimeReceipt value = do
   let guardValue = optionalField "task33_stack_guard" value
+      propertyValue = optionalField "property_delta_words" value
   modalKeys (["phase", "publication_count", "forward_writes", "reverse_writes", "pending_stores",
     "install_core", "rollback_core", "checked_resource_writes", "checked_identity_writes",
     "checked_scheduler_writes", "checked_context_writes", "checked_vfp_owner_writes", "audited_writes", "admitted_settings_writes",
-    "admitted_reload_writes", "failure"] ++ ["task33_stack_guard" | isJust guardValue]) value
+    "admitted_reload_writes", "failure"] ++ ["task33_stack_guard" | isJust guardValue]
+    ++ ["property_delta_words" | isJust propertyValue]) value
   stackGuard <- traverse parseTask33StackGuardReceipt guardValue
+  propertyCounts <- traverse (parsePropertyCounts Layout.modalRenderBankVariant) propertyValue
   let count key = ModalCount <$> (modalField key value >>= modalWord)
   phase <- modalField "phase" value >>= parseClosed lifetimePhaseText
   failure <- modalField "failure" value >>= parseNullable (\entry -> do
@@ -1227,7 +1341,7 @@ parseLifetimeReceipt value = do
     <*> (modalField "rollback_core" value >>= parseNullable parseCore)
     <*> count "checked_resource_writes" <*> count "checked_identity_writes"
     <*> count "checked_scheduler_writes" <*> count "checked_context_writes" <*> count "checked_vfp_owner_writes"
-    <*> count "audited_writes" <*> count "admitted_settings_writes" <*> count "admitted_reload_writes" <*> pure failure <*> pure stackGuard
+    <*> count "audited_writes" <*> count "admitted_settings_writes" <*> count "admitted_reload_writes" <*> pure failure <*> pure stackGuard <*> pure propertyCounts
 
 lifetimeReceiptJson :: LifetimeReceipt -> Value
 lifetimeReceiptJson receipt = object $
@@ -1249,6 +1363,7 @@ lifetimeReceiptJson receipt = object $
   , "failure" .= fmap (\failure -> object ["kind" .= lifetimeFailureText failure]) (receiptFailure receipt)
   ]
   ++ ["task33_stack_guard" .= task33StackGuardReceiptJson guard | Just guard <- [receiptTask33StackGuard receipt]]
+  ++ ["property_delta_words" .= propertyDeltaValue counts | Just counts <- [receiptPropertyCounts receipt]]
 
 data PhysicalGuard = PhysicalGuard ModalCount ModalCount ModalCount ModalCount (Maybe ModalFailure) deriving (Eq, Show)
 
@@ -1350,7 +1465,10 @@ modalLifetimeCoverage report = case modalLifetimeReceipt report of
   Nothing -> False
   Just receipt ->
     let count = countValue (receiptPublicationCount receipt)
-    in receiptPhase receipt == Ended && fromIntegral count `elem` guardPublicationCounts
+        validCount = case receiptPropertyCounts receipt of
+          Nothing -> fromIntegral count `elem` guardPublicationCounts
+          Just counts -> let PublicationCardinality expected = publicationCardinality Layout.modalRenderBankVariant (Just counts) in count == expected
+    in receiptPhase receipt == Ended && validCount
       && countValue (receiptForwardWrites receipt) == count && countValue (receiptReverseWrites receipt) == count
       && countValue (receiptPendingStores receipt) == 0 && receiptInstallCore receipt /= Nothing
       && receiptRollbackCore receipt /= Nothing && receiptFailure receipt == Nothing
@@ -1367,6 +1485,8 @@ checkCompletedModalLifetime (ModalRequest (ModalStock stock) scoped _ source) au
   binding <- maybe (Left "modal request has no installed lifetime binding") Right source
   receipt <- maybe (Left "modal report has no lifetime receipt") Right (modalLifetimeReceipt report)
   checkTask33StackGuardReceipt binding (Just receipt)
+  unless (receiptPropertyCounts receipt == lifetimePropertyCounts binding)
+    (Left "modal lifetime receipt property publication plan differs from source")
   unless (modalLifetimeCoverage report && countValue (receiptPublicationCount receipt) == fromIntegral (length (lifetimePublications binding)))
     (Left "modal lifetime did not complete exact publication and reverse rollback")
   unless (modalPhysicalCoverage report) (Left "modal lifetime lacks healthy physical fetch coverage")
@@ -1552,23 +1672,21 @@ parseSourceImage value = do
   _ <- sourceImageRange image
   pure image
 
-parseLifetimeBinding :: BeginRequestFormat -> Maybe (ModalLinked, ModalScope) -> Value -> Value -> Either String ModalLifetimeSource
-parseLifetimeBinding format scoped contextValue value = do
+parseLifetimeBinding :: BeginRequestFormat -> CatalogueParser -> Maybe (ModalLinked, ModalScope) -> Value -> Value -> Either String ModalLifetimeSource
+parseLifetimeBinding format parseCatalogue scoped contextValue value = do
   let guardValue = optionalField "task33_stack_guard" value
+      propertyValue = optionalField "property_delta_words" value
   modalKeys (["bank_variant", "runtime", "resident", "readonly", "install", "rollback", "publications", "retired", "settings_writers", "settings_reloads"]
     ++ ["context_catalogue" | format == CurrentBeginRequest]
-    ++ ["task33_stack_guard" | isJust guardValue]) value
+    ++ ["task33_stack_guard" | isJust guardValue]
+    ++ ["property_delta_words" | format == CurrentBeginRequest && isJust propertyValue]) value
   stackGuard <- traverse parseTask33StackGuard guardValue
   variant <- modalField "bank_variant" value >>= \entry -> case entry of
     String tag -> Layout.parseBankVariantTag (T.unpack tag)
     _ -> Left "modal lifetime bank_variant must be text"
-  catalogue <- case format of
-    RecordedStockBeginRequest -> Right StockContextCatalogue
-    CurrentBeginRequest -> modalField "context_catalogue" value >>= \entry -> case entry of
-      String "stock" -> Right StockContextCatalogue
-      _ -> Left "modal lifetime requires a source-bound stock context catalogue"
   runtime <- modalField "runtime" value >>= parseModalExtent
   resident <- modalField "resident" value >>= parseModalExtent
+  propertyCounts <- maybe (Right Nothing) (parseNullable (parsePropertyCounts variant)) propertyValue
   let (runtimeLow, runtimeHigh) = watchRangeBounds runtime
       (residentLow, residentHigh) = watchRangeBounds resident
       contained span_ = let (low, high) = watchRangeBounds span_ in runtimeLow <= low && high <= runtimeHigh
@@ -1580,6 +1698,10 @@ parseLifetimeBinding format scoped contextValue value = do
   let expectedContext = [(fromIntegral low, fromIntegral high) | (base, end) <- [(0x40000, 0x4dae0), (0xd0000, 0xddaa0)], (low, high) <- immutableLoaderSpans base end]
   unless (map watchRangeBounds contextRanges == expectedContext)
     (Left "modal lifetime requires exactly the 16 ordered immutable loader spans")
+  catalogueValue <- case format of
+    CurrentBeginRequest -> modalField "context_catalogue" value
+    RecordedStockBeginRequest -> Right (String "stock")
+  catalogue <- parseCatalogue catalogueValue [Catalogue.ContextSourceSlice start bytes | SourceImage start bytes <- context]
   readonly <- modalField "readonly" value >>= modalList (either error id (modalLimit 1024)) >>= mapM parseSourceImage
   let linkedImages = [SourceImage start bytes | Just (ModalLinked start bytes, _) <- [scoped]]
       allImages = readonly ++ linkedImages
@@ -1610,15 +1732,19 @@ parseLifetimeBinding format scoped contextValue value = do
         pure (PublicationRoutine begin writer)
   install <- modalField "install" value >>= routine
   rollback <- modalField "rollback" value >>= routine
-  publications <- modalField "publications" value >>= modalList (either error id (modalLimit (fromIntegral (maximum guardPublicationCounts)))) >>= mapM (\entry -> do
+  let PublicationCardinality expectedCount = publicationCardinality variant propertyCounts
+  publications <- modalField "publications" value >>= modalList (either error id (modalLimit expectedCount)) >>= mapM (\entry -> do
     modalKeys ["address", "old", "new"] entry
     address <- modalField "address" entry >>= modalWord32
     unless (address `mod` 4 == 0 && address < 0x20000000) (Left "modal lifetime publication is not aligned canonical RAM")
     PublicationBinding (watchAddress address) <$> (Ram.WordValue <$> (modalField "old" entry >>= modalWord32))
       <*> (Ram.WordValue <$> (modalField "new" entry >>= modalWord32)))
   let addresses = [address | PublicationBinding address _ _ <- publications]
-  unless (length publications `elem` routePublicationCounts scoped && length (nub addresses) == length addresses)
+  unless (fromIntegral (length publications) == expectedCount
+    && (isJust propertyCounts || length publications `elem` routePublicationCounts scoped)
+    && length (nub addresses) == length addresses)
     (Left "modal lifetime publication count or uniqueness differs from route")
+  validatePropertyPublicationPlan runtime propertyCounts publications
   retired <- modalField "retired" value >>= modalList (either error id (modalLimit 64)) >>= mapM parseModalExtent
   checkRetiredExtents retired
   unless (not (any (rangesOverlap runtime) retired)) (Left "modal retired extents overlap the uploaded runtime")
@@ -1633,7 +1759,9 @@ parseLifetimeBinding format scoped contextValue value = do
   unless (length (nub reloadSites) == length reloadSites && not (any (rangesOverlap runtime) reloadSites)
     && not (any (inWriter . watchAddressValue . reloadCopyStore) settingsReloads))
     (Left "modal settings reload sites repeat or enter the runtime, or a copy store lies in a settings writer")
-  pure (ModalLifetimeSource variant catalogue runtime resident allImages install rollback publications context Nothing Nothing retired settingsWriters settingsReloads stackGuard)
+  pure (ModalLifetimeSource variant (Catalogue.contextCatalogueKind catalogue)
+    runtime resident allImages install rollback publications context Nothing Nothing Nothing
+    retired settingsWriters settingsReloads stackGuard Nothing (SourceContextBound catalogue) propertyCounts)
 
 modalLifetimeWatchRanges :: ModalRequest -> Either String [WatchRange]
 modalLifetimeWatchRanges (ModalRequest _ scoped _ source) = do
@@ -1661,13 +1789,16 @@ modalLifetimeWatchRanges (ModalRequest _ scoped _ source) = do
 checkModalLifetimeWatchSources :: ModalRequest -> Value -> Either String ()
 checkModalLifetimeWatchSources (ModalRequest _ scoped _ source) value = do
   binding <- maybe (Left "modal lifetime request lacks source binding") Right source
+  catalogue <- case lifetimeCatalogueBinding binding of
+    RuntimeContextUnbound -> Left "modal cache-only watch lacks a source-bound context catalogue"
+    SourceContextBound proof -> Right proof
   _ <- projectCacheOnlyWatch value
   attribution <- modalField "fetch_attribution" value
   actual <- modalField "ranges" attribution >>= modalList (either error id (modalLimit 65536)) >>= mapM parseModalExtent
   let instructionPc (SourceInstruction pc _) = watchAddressValue pc
       routinePcs (PublicationRoutine entry writer) = map instructionPc [entry, writer]
       fixedPcs = [0x00bfb028,0x00bfb02c .. 0x00bfb120]
-        ++ [0x40240,0x4031c,0x436b8,0x43690,0x436f0,0x43720,0x43848,0x42440,0xd0240,0xd031c,0xd36b8,0xd3690,0xd36f0,0xd3720,0xd3848,0xd2440]
+        ++ map (watchAddressValue . Catalogue.catalogueInstructionAddress) (Catalogue.contextCatalogueInstructions catalogue)
         ++ routinePcs (lifetimeInstall binding) ++ routinePcs (lifetimeRollback binding)
       scopedPcs = case scoped of
         Nothing -> []

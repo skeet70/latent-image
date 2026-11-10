@@ -100,6 +100,7 @@ haskell_library(
         "//host/firmware:bank-allowlist-composition",
         "//host/firmware:ram-push-layout",
         "//host/firmware:ram-push-toolchain",
+        "//replacement/general_heap:general-heap-artifact",
     ],
 )
 
@@ -437,6 +438,7 @@ haskell_test(
         "//host:filepath",
         "//host:unix",
         "//host/firmware:ram-push-layout",
+        "//replacement/general_heap:general-heap-artifact",
     ],
 )
 

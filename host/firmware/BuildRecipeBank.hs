@@ -3,6 +3,8 @@
 -- The three-argument invocation emits a separate pre-bootstrap diagnostic.
 -- --complete consumes linked kernel/boot artifacts and pinned D3 decodes.
 -- BuildRecipePackage composes the resulting DAT.
+-- --ram-push-property-prepublication emits an unfilled capacity-sized installer
+-- and property-prepublication.json, not a completed RAM-push manifest.
 module Main where
 
 import Control.Monad (foldM, forM, forM_, unless, when)
@@ -45,7 +47,7 @@ uiTexts =
 data BuildMode
   = PreBootstrap
   | FlashPackage FilePath FilePath FilePath FilePath
-  | RamPush BankVariant Word32 FilePath FilePath FilePath FilePath
+  | RamPush BankVariant Word32 FilePath FilePath FilePath FilePath (Maybe PropertyPublicationLayout)
 
 runtimeMode :: BuildMode -> Bool
 runtimeMode PreBootstrap = False
@@ -54,12 +56,12 @@ runtimeMode _ = True
 modeKernel :: BuildMode -> Maybe FilePath
 modeKernel PreBootstrap = Nothing
 modeKernel (FlashPackage kernel _ _ _) = Just kernel
-modeKernel (RamPush _ _ linkedDir _ _ _) = Just linkedDir
+modeKernel (RamPush _ _ linkedDir _ _ _ _) = Just linkedDir
 
 modeLifecycle :: BuildMode -> Bool
 modeLifecycle PreBootstrap = False
 modeLifecycle FlashPackage {} = False
-modeLifecycle (RamPush variant _ _ _ _ _) =
+modeLifecycle (RamPush variant _ _ _ _ _ _) =
   hasPublicationGroup LifecyclePublications variant
 
 -- | Refuses unless the relink script ran with exactly the compiled tool paths.
@@ -92,17 +94,30 @@ main = do
       putStrLn (hex32 (runtimeAllocationSizeFor variant))
       exitSuccess
     _ -> pure ()
+  case arguments of
+    ["--ram-push-property-allocation-size", groups] -> do
+      variant <- either H.failH pure (parseBankVariantTag groups)
+      layout <- either H.failH pure (propertyPublicationLayout variant)
+      size <- either H.failH pure (propertyAllocationSize layout 0)
+      putStrLn (hex32 size)
+      exitSuccess
+    _ -> pure ()
   (specPath, outPath, outDir, buildMode) <- case arguments of
     [s, o, d] -> pure (s, o, d, PreBootstrap)
     ["--complete", s, o, d, kernel, boot, d3, stock] ->
       pure (s, o, d, FlashPackage kernel boot d3 stock)
     ["--ram-push", base, s, o, d, linkedDir, rc0Id4, rc0Id5, rc0Plain] -> do
       requirePinnedToolchain
-      pure (s, o, d, RamPush standardBankVariant (hexValue base) linkedDir rc0Id4 rc0Id5 rc0Plain)
+      pure (s, o, d, RamPush standardBankVariant (hexValue base) linkedDir rc0Id4 rc0Id5 rc0Plain Nothing)
     ["--ram-push-variant", groups, base, s, o, d, linkedDir, rc0Id4, rc0Id5, rc0Plain] -> do
       variant <- either H.failH pure (parseBankVariantTag groups)
       requirePinnedToolchain
-      pure (s, o, d, RamPush variant (hexValue base) linkedDir rc0Id4 rc0Id5 rc0Plain)
+      pure (s, o, d, RamPush variant (hexValue base) linkedDir rc0Id4 rc0Id5 rc0Plain Nothing)
+    ["--ram-push-property-prepublication", groups, base, s, o, d, linkedDir, rc0Id4, rc0Id5, rc0Plain] -> do
+      variant <- either H.failH pure (parseBankVariantTag groups)
+      extension <- either H.failH pure (propertyPublicationLayout variant)
+      requirePinnedToolchain
+      pure (s, o, d, RamPush variant (hexValue base) linkedDir rc0Id4 rc0Id5 rc0Plain (Just extension))
     _ ->
       H.failH
         "usage: build-recipe-bank SPEC.json OUT.json OUT_DIR | --complete SPEC.json OUT.json OUT_DIR KERNEL_DIR BOOT_DIR D3_DIR STOCK_DAT | --ram-push-allocation-size | --ram-push-variant-allocation-size GROUPS | --ram-push BASE SPEC.json OUT.json OUT_DIR LINKED_DIR RC0_ID4 RC0_ID5 RC0_PLAIN | --ram-push-variant GROUPS BASE SPEC.json OUT.json OUT_DIR LINKED_DIR RC0_ID4 RC0_ID5 RC0_PLAIN (GROUPS: lifecycle | modal75 | lifecycle,modal75 | modal75,menu-engine | modal75,menu-engine,render)"
@@ -110,7 +125,7 @@ main = do
   spec <- case buildMode of
     PreBootstrap -> pure original
     FlashPackage kernel _ d3 _ -> carveSpec original kernel d3
-    RamPush _ base linkedDir _ _ _ ->
+    RamPush _ base linkedDir _ _ _ _ ->
       carveSpecAt (RamCarve (RuntimeBase base)) original linkedDir ramNameImagePath
   H.fields spec "schema image4 image4_base image5 image5_base image2 image2_base image2_compiled_name boot slots placement payload_defaults" "recipe bank spec"
   unless (H.str (H.get spec "schema") == "recipe-bank-spec-1") $
@@ -698,8 +713,8 @@ main = do
     PreBootstrap -> pure ()
     FlashPackage kernel boot d3 stock ->
       emitPackage spec sources plan kernel boot d3 stock outDir
-    RamPush variant base linkedDir rc0Id4 rc0Id5 rc0Plain ->
-      emitRamPush variant base plan specPath linkedDir rc0Id4 rc0Id5 rc0Plain outDir
+    RamPush variant base linkedDir rc0Id4 rc0Id5 rc0Plain extension ->
+      emitRamPush extension variant base plan specPath linkedDir rc0Id4 rc0Id5 rc0Plain outDir
   putStrLn
     ( "recipe-bank: "
         ++ show count
@@ -1125,11 +1140,23 @@ relocatedD3 base rc0Id4 rc0Id5 d3Id4 = do
        [RamPublication 0x00d50a48 (readWord rc0Id5 0x00bf1a00 0x00d50a48) branch,
         RamPublication 0x00d5a088 (readWord rc0Id5 0x00bf1a00 0x00d5a088) 0xe320f000])
 
-emitRamPush :: BankVariant -> Word32 -> WritePlan -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO ()
-emitRamPush variant base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out = do
+emitRamPush :: Maybe PropertyPublicationLayout -> BankVariant -> Word32 -> WritePlan -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO ()
+emitRamPush extension variant base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out = do
   setFileMode out 0o700
-  unless (base .&. 7 == 0 && base <= maxBound - runtimeAllocationSizeFor variant) $
-    H.failH "ram-push: base must be 8-byte aligned with room for the fixed allocation"
+  forM_ extension $ \_ -> do
+    completedExists <- doesFileExist (out ++ "/ram-push-manifest.json")
+    when completedExists $
+      H.failH "ram-push: preliminary property output contains a completed manifest"
+  size <- either H.failH pure $ case extension of
+    Nothing -> Right (runtimeAllocationSizeFor variant)
+    Just layout -> propertyAllocationSize layout base
+  engineStartExpected <- either H.failH pure $ case extension of
+    Nothing -> Right (menuEngineRegionStartFor variant base)
+    Just layout -> propertyMenuEngineRegionStart layout base
+  let installerExtentExpected = maybe (runtimeInstallerExtentFor variant) propertyInstallerExtent extension
+      engineExtentExpected = maybe (menuEngineRegionExtentFor variant) propertyMenuEngineRegionExtent extension
+  unless (base .&. 7 == 0 && base <= maxBound - size) $
+    H.failH "ram-push: base must be 8-byte aligned with room for the allocation"
   rc0Id4 <- B.readFile rc0Id4Path
   rc0Id5 <- B.readFile rc0Id5Path
   rc0Plain <- B.readFile rc0PlainPath
@@ -1149,8 +1176,8 @@ emitRamPush variant base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainP
         && rbEnd <= runtimeDataBase base
         && installerStart == runtimeInstallerBase base
         && installerStart < linkedEnd
-        && linkedEnd - installerStart == runtimeInstallerExtentFor variant
-        && linkedEnd - base <= runtimeAllocationSizeFor variant
+        && linkedEnd - installerStart == installerExtentExpected
+        && linkedEnd - base <= size
     ) $
     H.failH "ram-push: linked runtime does not match the fixed allocation contract"
   linkedImageEnd <- if hasPublicationGroup MenuEnginePublication variant
@@ -1158,11 +1185,11 @@ emitRamPush variant base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainP
       engineStart <- linked symbols "__rb_menu_engine_start"
       engineEnd <- linked symbols "__rb_menu_engine_end"
       resume <- linked symbols "__rb_menu_engine_stock_resume"
-      unless (engineStart == menuEngineRegionStartFor variant base && engineStart >= linkedEnd
-          && engineEnd <= menuEngineRegionStartFor variant base + menuEngineRegionExtentFor variant && resume == 0x00bf95cc) $
+      unless (engineStart == engineStartExpected && engineStart >= linkedEnd
+          && engineEnd <= engineStartExpected + engineExtentExpected && resume == 0x00bf95cc) $
         H.failH "ram-push: menu engine region differs from the layout contract"
       elf <- B.readFile (linkedDir ++ "/kernel.elf") >>= either H.failH pure . ELF.parseElf
-      let inRuntime address = base <= address && address - base < runtimeAllocationSizeFor variant
+      let inRuntime address = base <= address && address - base < size
       stack <- either (H.failH . ("ram-push: " ++)) pure (checkEngineStack taskOneBudget elf inRuntime)
       putStrLn
         ( "menu engine stack: engine " ++ show (reportEngine stack) ++ " + modal dispatcher "
@@ -1178,8 +1205,7 @@ emitRamPush variant base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainP
       when (any ((== "__rb_menu_engine_start") . symbolName) symbols) $
         H.failH "ram-push: unselected menu engine region is linked"
       pure linkedEnd
-  let size = runtimeAllocationSizeFor variant
-      runtimeRegions = ["menu_values", "menu_labels", "name_records", "menu_parent", "edit_half"]
+  let runtimeRegions = ["menu_values", "menu_labels", "name_records", "menu_parent", "edit_half"]
       runtimeWrites =
         [w | w <- planWrites plan, writeRegion w `elem` runtimeRegions]
       publications =
@@ -1307,7 +1333,9 @@ emitRamPush variant base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainP
   enginePublications <- if hasPublicationGroup MenuEnginePublication variant
     then do
       target <- linked symbols "rb_menu_engine_entry"
-      word <- either H.failH pure (menuEngineHookWordFor variant base target (readWord rc0Id5 0x00bf1a00 0x00bf95c8))
+      word <- either H.failH pure $ case extension of
+        Nothing -> menuEngineHookWordFor variant base target (readWord rc0Id5 0x00bf1a00 0x00bf95c8)
+        Just layout -> propertyHookWordFor layout base menuEngineHookAddress target (readWord rc0Id5 0x00bf1a00 0x00bf95c8)
       pure [RamPublication 0x00bf95c8 0xe92d4818 word]
     else do
       when (any ((== "rb_menu_engine_entry") . symbolName) symbols) $
@@ -1321,7 +1349,9 @@ emitRamPush variant base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainP
       resume <- linked symbols resumeSymbol
       unless (resume == address + 4) $
         H.failH "ram-push: render stock resume differs from the hook continuation"
-      word <- either H.failH pure (renderHookWordFor variant base hook target (readWord rc0Plain 0x01100000 address))
+      word <- either H.failH pure $ case extension of
+        Nothing -> renderHookWordFor variant base hook target (readWord rc0Plain 0x01100000 address)
+        Just layout -> propertyHookWordFor layout base hook target (readWord rc0Plain 0x01100000 address)
       pure (RamPublication address 0xe92d4ff0 word)
     else pure []
   let capturePublication = RamPublication 0x00e9e038 0xe92d4870 captureWord
@@ -1367,9 +1397,19 @@ emitRamPush variant base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainP
     else pure Nothing
   publicationsStart <- linked symbols "__ram_push_publications_start"
   publicationsEnd <- linked symbols "__ram_push_publications_end"
-  unless
-    (publicationsEnd - publicationsStart == fromIntegral (B.length installerPublications)) $
-    H.failH "ram-push: installer publication section differs from the ABI size"
+  case extension of
+    Nothing -> unless
+      (publicationsEnd - publicationsStart == fromIntegral (B.length installerPublications)) $
+        H.failH "ram-push: installer publication section differs from the ABI size"
+    Just layout -> do
+      either H.failH pure (validatePropertyPublicationExtent layout publicationsStart publicationsEnd)
+      configStart <- linked symbols "ram_push_publication_config"
+      unless (configStart == installerStart + propertyPublicationConfigOffset
+          && publicationsStart == installerStart + propertyPublicationTableOffset
+          && B.all (== 0) (B.take 16 (B.drop (fromIntegral (configStart - linkedStart)) linkedBytes))
+          && B.all (== 0) (B.take (fromIntegral (publicationsEnd - publicationsStart))
+            (B.drop (fromIntegral (publicationsStart - linkedStart)) linkedBytes))) $
+        H.failH "ram-push: preliminary property table or config differs"
   runtime0 <- overlay (B.replicate (fromIntegral size) 0)
     [(linkedStart - base, linkedBytes)]
   runtime1 <- overlay runtime0
@@ -1378,8 +1418,9 @@ emitRamPush variant base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainP
         <> [(address - base, bytes) | (address, bytes) <- d3Chunks]
         <> [(ccData - base, CC.encodeDataBlock parameters)]
     )
-  runtime <- overlay runtime1
-    [(publicationsStart - base, installerPublications)]
+  runtime <- case extension of
+    Nothing -> overlay runtime1 [(publicationsStart - base, installerPublications)]
+    Just _ -> pure runtime1
   when (base /= carveBase && not (null (staleFixedReferences carveBase 0x00bebb20 runtime))) $
     H.failH "ram-push: relinked runtime retains an absolute reference into the fixed bank range"
   runtimeHash <- H.sha256 runtime
@@ -1529,7 +1570,27 @@ emitRamPush variant base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainP
     emitSaveLifecycleProgram symbols
       (LifecycleImageExtent base (base + fromIntegral (B.length runtime))) out
     setFileMode (out ++ "/save-lifecycle-program.json") 0o600
-  B.writeFile (out ++ "/ram-push-manifest.json") (encodeCanonical (H.obj $
+  extensionMetadata <- case extension of
+    Nothing -> pure []
+    Just layout -> do
+      elfHash <- H.sha256 =<< B.readFile (linkedDir ++ "/kernel.elf")
+      pure
+        [ ("phase", H.s "prepublication")
+        , ("kernel_elf_sha256", H.s elfHash)
+        , ("property_extension", H.obj
+            [ ("capacity", H.n (fromIntegral (propertyPublicationCapacity layout)))
+            , ("carrier_word_bound", H.n (fromIntegral propertyCarrierWordBound))
+            , ("config_offset", H.s (hex32 propertyPublicationConfigOffset))
+            , ("table_offset", H.s (hex32 propertyPublicationTableOffset))
+            , ("installer_extent", H.n (fromIntegral (propertyInstallerExtent layout)))
+            , ("engine_start", H.s (hex32 engineStartExpected))
+            , ("engine_extent", H.n (fromIntegral engineExtentExpected))
+            ])
+        ]
+  let manifestPath = out ++ case extension of
+        Nothing -> "/ram-push-manifest.json"
+        Just _ -> "/property-prepublication.json"
+  B.writeFile manifestPath (encodeCanonical (H.obj $
     [ ("schema", H.n 1)
     , ("source_identity", H.obj (sourceIdentity <> rc0Identity <> rustIdentity <> toolIdentity
         <> [("bank_allowlist_composed_sha256", H.s composedAllowlistHash)]))
@@ -1552,8 +1613,9 @@ emitRamPush variant base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainP
             ]
         | (position, logicalIndex, publication) <- zip3 [0 :: Int ..] safeOrder ordered
         ])
-    ] <> [("bank_variant", H.s (bankVariantTag variant)) | hasPublicationGroup RenderPublication variant]))
-  setFileMode (out ++ "/ram-push-manifest.json") 0o600
+    ] <> [("bank_variant", H.s (bankVariantTag variant)) | hasPublicationGroup RenderPublication variant]
+      <> extensionMetadata))
+  setFileMode manifestPath 0o600
   forM_ modalScope $ \scope -> do
     B.writeFile (out ++ "/modal-scope.json") (encodeCanonical (H.obj
       [ ("schema", H.n 1)

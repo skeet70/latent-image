@@ -243,6 +243,25 @@ walkerTests = do
         Right _ -> putStrLn ("admitted " ++ label)
         Left failure -> fail (label ++ ": " ++ show failure)
       leaf = GuestAddress 0x61d59c
+  let callback = FunctionExtent (FunctionName "recipe-getter") (GuestAddress 0x2000) (GuestAddress 0x2008)
+      callbackLayout = CodeLayout
+        { layoutBase = GuestAddress 0x1000
+        , layoutFunctions = [FunctionExtent (FunctionName "caller") (GuestAddress 0x1000) (GuestAddress 0x100c)]
+        , layoutMappings = [ArmSpan (AddressSpan (GuestAddress 0x1000) (GuestAddress 0x100c))]
+        , layoutLiteralPointers = []
+        , layoutData = []
+        , layoutStoreSites = []
+        , layoutStockLeaves = []
+        , layoutStockSites = []
+        }
+      callbackCode = B.concat (map U.putWord32 [0xe92d4800, 0xeb0003fd, 0xe8bd8800])
+  case admitCodeWithCallbacks [callback] callbackLayout callbackCode of
+    Left failure -> fail ("bound callback refused: " ++ show failure)
+    Right _ -> pure ()
+  refusedBy "callback requires an admitted dependency" 0x1004 (CallOutsideOwned (GuestAddress 0x2000))
+    (admitCode callbackLayout callbackCode)
+  refusedBy "callback interior is not callable" 0x1004 (CallOutsideOwned (GuestAddress 0x2004))
+    (admitCodeWithCallbacks [callback] callbackLayout (putWordAt 0x1000 0x1004 0xeb0003fe callbackCode))
   case walkWithStores [GuestAddress 0x1000] [] [] [0xe5801000, 0xe12fff1e] of
     Right _ -> pure ()
     Left failure -> fail ("admitted boundary store refused: " ++ show failure)

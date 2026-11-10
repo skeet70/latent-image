@@ -54,6 +54,21 @@ case "${RB_PUBLICATION_GROUPS:-}" in
   *) printf 'invalid RB_PUBLICATION_GROUPS selection\n' >&2; exit 1 ;;
 esac
 
+property_compile=()
+case "${RB_PROPERTY_PUBLICATION:-0}" in
+  0) ;;
+  1)
+    [[ ${RB_PUBLICATION_GROUPS:-} == modal75,menu-engine,render ]] || {
+      printf 'property publication requires modal75,menu-engine,render\n' >&2; exit 1;
+    }
+    allocation_size=0x3dc80
+    builder_mode=(--ram-push-property-prepublication modal75,menu-engine,render)
+    property_compile=(-DRAM_PUSH_PROPERTY_PUBLICATION=1 -DRAM_PUSH_PUBLICATION_CAPACITY=3977u)
+    variant_link+=(-Wl,--defsym=RAM_PUSH_PROPERTY_PUBLICATION=1 -Wl,--defsym=RAM_PUSH_PUBLICATION_CAPACITY=3977)
+    ;;
+  *) printf 'invalid RB_PROPERTY_PUBLICATION selection\n' >&2; exit 1 ;;
+esac
+
 BASE="${1:?usage: build-recipe-bank-ram.sh BASE OUT_DIR}"
 OUT="${2:?usage: build-recipe-bank-ram.sh BASE OUT_DIR}"
 BUILDER="${RAM_PUSH_BUILDER:?}"
@@ -96,6 +111,9 @@ if (( ${#engine_link[@]} )); then
   engine_start=$((base_value + 0x1dcc0))
   if [[ ${RB_PUBLICATION_GROUPS:-} == modal75,menu-engine,render ]]; then
     engine_start=$((base_value + 0x1dd00))
+  fi
+  if [[ ${RB_PROPERTY_PUBLICATION:-0} == 1 ]]; then
+    engine_start=$((base_value + 0x2dcc0))
   fi
   printf -v rb_engine_start '0x%08x' "$engine_start"
   printf -v rb_engine_end '0x%08x' "$((base_value + allocation_size))"
@@ -149,7 +167,7 @@ else
 fi
 NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" "${FREE[@]}" -Oz -Wall -Wextra \
   -DRAM_PUSH_PUBLICATION_COUNT="${publication_count}u" -DRAM_PUSH_SETUP_COUNT=131u \
-  -DRAM_PUSH_ACTIVATION_COUNT="${activation_count}u" -DRAM_PUSH_ABI_VERSION=5u \
+  -DRAM_PUSH_ACTIVATION_COUNT="${activation_count}u" -DRAM_PUSH_ABI_VERSION=5u "${property_compile[@]}" \
   -ffunction-sections -fdata-sections -c menu/ram_push_installer.c \
   -o "$OUT/ram_push_installer.o"
 objects+=("$OUT/ram_push_installer.o")
@@ -177,4 +195,8 @@ NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" "${LINK[@]}" -Wl,-T,menu/recipe_bank_
 
 "$BUILDER" "${builder_mode[@]}" "$BASE" "$SPEC" \
   "$OUT/bank-plan.json" "$OUT" "$OUT" "$RC0_ID4" "$RC0_ID5" "$RC0_PLAIN"
-printf 'runtime: %s/runtime.bin\nmanifest: %s/ram-push-manifest.json\n' "$OUT" "$OUT"
+if [[ ${RB_PROPERTY_PUBLICATION:-0} == 1 ]]; then
+  printf 'prepublication runtime: %s/runtime.bin\nprepublication metadata: %s/property-prepublication.json\n' "$OUT" "$OUT"
+else
+  printf 'runtime: %s/runtime.bin\nmanifest: %s/ram-push-manifest.json\n' "$OUT" "$OUT"
+fi

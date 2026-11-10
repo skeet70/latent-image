@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Replacement.RtosTimer.RootPackage
-  ( RootPackage, joinRootPlatform, packageDat, packageTargets, packageStartupTargets, packageCarriers, packageContract, j5Manifest
+  ( RootPackage, joinRootPlatform, packageDat, packageTargets, packageStartupTargets, packagePlatform, packageCarriers, packageContract, j5Manifest
   ) where
 
 import Control.Monad (forM, forM_, unless)

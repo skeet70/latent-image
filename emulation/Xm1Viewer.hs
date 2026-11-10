@@ -9,8 +9,9 @@ import qualified Emulation.ViewerRuntime as ViewerRuntime
 import FujiModPaths (fujimodRamPushBridge, fujimodRun)
 import FujiAF.RamPush (Payload)
 import Xm1RamPushE2E (AllowlistPolicy (..), AttachHold (..), BootMode (..), CardMode (..), E2ESettings (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), OverrideReason (..), PushMode (..), RelinkMode (..), SymbolRead, UiConversionProfile (..), bankD3Payload, bankModal75Payload, bankModalEnginePayload, bankModalRenderPayload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromeIconPayload, classicChromePayload, experimentPayload, loadModalOwnedPackage, parseSymbolRead, runMenuCrawlE2E, runMenuObserveE2E, runRamDiffE2E, runRamPushE2E, warmAttachCheckpoint)
+import qualified Xm1RamPushE2E as RamE2E
 import Data.List (isPrefixOf, nub)
-import Data.Maybe (isJust)
+import Data.Maybe (isJust, isNothing)
 import Data.Char (isAscii, isAlphaNum)
 import qualified Data.Text as T
 import Data.Word (Word16)
@@ -75,6 +76,9 @@ data Options = Options
   , menuEngineOwnedOption :: Bool
   , renderOwnedOption :: Bool
   , screenProbeOption :: Maybe ScreenProbe
+  , propertyAllocationKeeperOption :: Bool
+  , allocationImage4Option :: Maybe FilePath
+  , allocationContractOption :: Maybe FilePath
   }
 
 -- | A no-install observation that drives its own keys from held snapshots, with its config path.
@@ -98,6 +102,13 @@ usage = unlines
   , "  --sd-card-image PATH   Regular raw virtual-card image beneath private-data/"
   , "  --ff80-rehearsal       Run our Haskell service client against pinned FujiMod"
   , "  --ram-push-e2e        Run allocation, relink, install, bank UI and unload in emulation"
+  , "  --property-allocation-keeper  Allocate the typed 253056-byte property layout, then hold this session"
+  , "                         Requires --cardless --fujimod --fresh-boot, firmware, NAND and fresh receipt"
+  , "                         No install, relink or trajectory. Emits keeper-ready JSON with session_id."
+  , "                         stdin: status SESSION_ID, readback SESSION_ID, stop SESSION_ID (one per line)"
+  , "                         stop destroys the emulator; EOF, invalid input or changed readback fails closed"
+  , "  --allocation-image4 PATH  Exact admitted full02 decoded image4 sidecar (allocation keeper only)"
+  , "  --allocation-contract PATH  Exact admitted full02 composition contract (allocation keeper only)"
   , "  --cardless             --ram-push-e2e: boot the installed DAT and adjustment NAND with no SD"
   , "                         card through the cardless RAM-push bridge"
   , "  --fujimod              Run RAM-push E2E or the closed ff80 rehearsal on pinned FujiMod"
@@ -173,8 +184,8 @@ parseCommand args
   | "--help" `elem` args = pure Help
   | otherwise = Launch <$> go defaults args
   where
-    defaults = Options Nothing Nothing Nothing Nothing Nothing Nothing False False ReviewedRelink Nothing CheckpointedBoot Nothing RamPush Nothing BankD3Choice [] NoAttachHold DeclaredUiCpuFallback Nothing WithCard RetainedChoice (Port 0) IPv4Loopback False NoModalDiagnostic NoModalLifetimeGuard Nothing Nothing Nothing Nothing False False Nothing
-    go options [] = validateModalLifetimeOptions options >> pure options
+    defaults = Options Nothing Nothing Nothing Nothing Nothing Nothing False False ReviewedRelink Nothing CheckpointedBoot Nothing RamPush Nothing BankD3Choice [] NoAttachHold DeclaredUiCpuFallback Nothing WithCard RetainedChoice (Port 0) IPv4Loopback False NoModalDiagnostic NoModalLifetimeGuard Nothing Nothing Nothing Nothing False False Nothing False Nothing Nothing
+    go options [] = validateModalLifetimeOptions options >> validateAllocationKeeperOptions options >> pure options
     go options ("--port" : value : rest) = do
       port <- case readMaybe value :: Maybe Integer of
         Just number | number >= 0 && number <= 65535 -> pure (Port (fromInteger number))
@@ -206,6 +217,15 @@ parseCommand args
       go options { ff80RehearsalOption = True } rest
     go options ("--ram-push-e2e" : rest) =
       go options { ramPushE2EOption = True } rest
+    go options ("--property-allocation-keeper" : rest) = do
+      require (not (propertyAllocationKeeperOption options)) "--property-allocation-keeper may appear only once"
+      go options { propertyAllocationKeeperOption = True } rest
+    go options ("--allocation-image4" : value : rest) = do
+      require (not (null value) && allocationImage4Option options == Nothing) "--allocation-image4 requires one nonempty path"
+      go options { allocationImage4Option = Just value } rest
+    go options ("--allocation-contract" : value : rest) = do
+      require (not (null value) && allocationContractOption options == Nothing) "--allocation-contract requires one nonempty path"
+      go options { allocationContractOption = Just value } rest
     go options ("--unreviewed-relink" : rest) =
       go options { relinkModeOption = UnreviewedRelink EnforceAllowlist } rest
     go options ("--allowlist-override" : value : rest) = do
@@ -299,6 +319,31 @@ parseCommand args
       require (not (renderOwnedOption options)) "--render-owned may appear only once"
       go options { renderOwnedOption = True } rest
     go _ (argument : _) = ioError (userError ("Unknown option or missing value: " ++ argument ++ "\n" ++ usage))
+
+validateAllocationKeeperOptions :: Options -> IO ()
+validateAllocationKeeperOptions options = do
+  require (propertyAllocationKeeperOption options || (allocationImage4Option options == Nothing && allocationContractOption options == Nothing))
+    "allocation source sidecars require --property-allocation-keeper"
+  when (propertyAllocationKeeperOption options) validate
+  where
+   validate = do
+    require (isJust (allocationImage4Option options) && isJust (allocationContractOption options))
+      "property allocation keeper requires --allocation-image4 and --allocation-contract"
+    require (not (ramPushE2EOption options) && not (ff80RehearsalOption options))
+      "property allocation keeper is separate from RAM-push E2E and ff80 rehearsal"
+    require (runtimeOption options == FujiModChoice && cardModeOption options == WithoutCard
+      && virtualSDImageOption options == Nothing && bootModeOption options == FreshBoot)
+      "property allocation keeper requires --cardless --fujimod --fresh-boot"
+    require (relinkModeOption options == ReviewedRelink && allowlistOverrideOption options == Nothing
+      && pushModeOption options == RamPush && ramPayloadOption options == BankD3Choice
+      && trajectoriesOption options == Nothing && segmentsOption options == Nothing
+      && null (readSymbolsOption options) && attachHoldOption options == NoAttachHold
+      && not (warmCheckpointOption options) && modalDiagnosticOption options == NoModalDiagnostic
+      && modalLifetimeGuardOption options == NoModalLifetimeGuard && screenProbeOption options == Nothing
+      && modal75ArchiveOption options == Nothing && modal75RetiredOption options == Nothing
+      && prelinkedModalOption options == Nothing && not (menuEngineOwnedOption options)
+      && not (renderOwnedOption options) && isNothing (fixedSceneFrameOption options))
+      "property allocation keeper refuses publication, trajectory, checkpoint and diagnostic options"
 
 validateModalLifetimeOptions :: Options -> IO ()
 validateModalLifetimeOptions options = do
@@ -411,7 +456,7 @@ launch options = do
   nand <- traverse (validateInstalledNand root) (installedNandOption options)
   receipt <- traverse (freshReceiptDirectory root) (receiptDirectoryOption options)
   let ff80 = ff80RehearsalOption options
-      e2e = ramPushE2EOption options
+      e2e = ramPushE2EOption options || propertyAllocationKeeperOption options
       experiment = case ramPayloadOption options of ExperimentChoice _ -> True; _ -> False
       cardless = cardModeOption options == WithoutCard || (experiment && media == Nothing)
       selectedCard = if cardless then WithoutCard else WithCard
@@ -478,9 +523,11 @@ launch options = do
   require (allowlistOverrideOption options == Nothing || relinkModeOption options /= ReviewedRelink)
     "--allowlist-override belongs to --unreviewed-relink"
   -- Without `--output`, `--ram-push-e2e` restages into one fixed directory.
-  let fallback = if e2e
-        then ReplacedRuntime ("emulator-runtimes" </> "xm1-ram-push-e2e")
-        else UniqueRuntime "xm1-viewer"
+  let fallback = if propertyAllocationKeeperOption options
+        then UniqueRuntime "xm1-property-allocation-keeper"
+        else if e2e
+          then ReplacedRuntime ("emulator-runtimes" </> "xm1-ram-push-e2e")
+          else UniqueRuntime "xm1-viewer"
       stageFujiMod = do
         (Runtime path, source) <- ViewerRuntime.stageFujiModRuntime root (outputOption options) fallback (firmwareOption options)
         pure (path, source, fujimodRamPushBridge)
@@ -556,15 +603,22 @@ launch options = do
             let selected = if fujimodVariant then variant else defaultTrajectories
             present <- doesFileExist (resolve root selected)
             pure (if experiment && not present then Nothing else Just (resolve root selected))
-        case (warmCheckpointOption options, screenProbeOption options) of
-          (True, _) -> warmAttachCheckpoint e2eSettings executable stagedFirmwarePath nandPath (destination </> "warm-attach")
-          (False, Just (MenuCrawlProbe path)) ->
-            runMenuCrawlE2E e2eSettings executable workspacePath (resolve root path) stagedFirmwarePath nandPath receiptPath
-          (False, Just (RamDiffProbe path)) ->
-            runRamDiffE2E e2eSettings executable workspacePath (resolve root path) stagedFirmwarePath nandPath receiptPath
-          (False, Just (MenuObserveProbe path)) ->
-            runMenuObserveE2E e2eSettings executable workspacePath (resolve root path) stagedFirmwarePath nandPath receiptPath
-          (False, Nothing) -> runRamPushE2E e2eSettings executable workspacePath trajectory stagedFirmwarePath nandPath receiptPath
+        if propertyAllocationKeeperOption options
+          then do
+            image4 <- maybe (ioError (userError "allocation image4 missing"))
+              (privateRegularInput root "--allocation-image4") (allocationImage4Option options)
+            contract <- maybe (ioError (userError "allocation contract missing"))
+              (privateRegularInput root "--allocation-contract") (allocationContractOption options)
+            RamE2E.runPropertyAllocationKeeper e2eSettings executable stagedFirmwarePath nandPath image4 contract receiptPath
+          else case (warmCheckpointOption options, screenProbeOption options) of
+            (True, _) -> warmAttachCheckpoint e2eSettings executable stagedFirmwarePath nandPath (destination </> "warm-attach")
+            (False, Just (MenuCrawlProbe path)) ->
+              runMenuCrawlE2E e2eSettings executable workspacePath (resolve root path) stagedFirmwarePath nandPath receiptPath
+            (False, Just (RamDiffProbe path)) ->
+              runRamDiffE2E e2eSettings executable workspacePath (resolve root path) stagedFirmwarePath nandPath receiptPath
+            (False, Just (MenuObserveProbe path)) ->
+              runMenuObserveE2E e2eSettings executable workspacePath (resolve root path) stagedFirmwarePath nandPath receiptPath
+            (False, Nothing) -> runRamPushE2E e2eSettings executable workspacePath trajectory stagedFirmwarePath nandPath receiptPath
       else do
         let Port port = portOption options
             mediaArguments = case media of

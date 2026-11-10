@@ -22,6 +22,8 @@ import FujiAF.Rehearsal (rehearseRamAlloc, rehearseRamPush, rehearseRamFree, reh
 import FujiAF.Transport
 import qualified FujiAF.Broker as P
 import RamPushLayout (installerInstallOffset, installerRollbackOffset, installerStatusOffset, runtimeAllocationSize, runtimeAllocationSizeFor, runtimeInstallerBase, standardBankVariant, modalScopedBankVariant, lifecycleBankVariant, modalLifecycleBankVariant, modalEngineBankVariant, modalRenderBankVariant, bankVariantTag)
+import qualified RamPushLayout as Layout
+import qualified Replacement.GeneralHeap.Admission as Heap
 import RamPushModel
 
 contract :: ReviewedContract
@@ -114,6 +116,63 @@ main = do
   root <- mkdtemp "/dev/shm/fuji-af-ram-push-tests-XXXXXX"
   setFileMode root 0o700
 
+  propertyLayout <- either (error . ("property layout: " ++)) pure (Layout.propertyPublicationLayout modalRenderBankVariant)
+  (_, propertyArena) <- either (error . show) pure (Heap.decodeGeometry
+    [0x48454150,1,0xa71a00,0xbf1a00,0x470,0xa71e70,32,17,16,16,16,8,32,16])
+  check "property-only extent is not a normal payload or camera CLI allocation"
+    (Layout.propertyAllocationSize propertyLayout base == Right 253056
+      && fmap payloadKind (payloadOfSize 253056) == Nothing && ramAllocArguments ["253056"] == Nothing)
+  let propertyDir = root </> "property-only"
+      propertyClock = Clock (pure 0)
+  makeDir propertyDir
+  propertyModel <- newModel Nothing
+  forM_ (zip [base-16,base-12..base-4] [0x584d3148,0x3dc80,0x34a2c8a6,0x3dc89]) $ \(address, value) ->
+    writeWord (modelMemory propertyModel) address value
+  propertyOutcome <- runPropertyAllocationWith PeerCacheBound propertyLayout propertyArena propertyClock (modelApi propertyModel) propertyDir
+  propertyPath <- case propertyOutcome of
+    RamAllocated path -> pure path
+    other -> error ("property allocation failed: " ++ show other)
+  propertyState <- readRamAllocState propertyPath
+  check "property-only allocation returns its actual extent, base and whole-block guard"
+    (allocSize propertyState == 253056 && allocBase propertyState == Address base
+      && allocGuard propertyState == sha256 (B.replicate 253056 0))
+  propertyDocument <- B.readFile propertyPath
+  check "property state is allocation-only" ("xm1-property-allocation-only-state" `B.isInfixOf` propertyDocument)
+  propertyPush <- runRamPushWith PeerCacheBound NoRamPushObserver propertyState manifest propertyClock (modelApi propertyModel) propertyDir
+  check "property allocation is not installable through normal RAM push"
+    (case propertyPush of RamPushRefused _ -> True; _ -> False)
+  forM_
+    [ ("size", propertyState { allocSize = 253048 })
+    , ("base", propertyState { allocBase = Address 0xfffffff8 })
+    , ("identity", propertyState { allocProduct = "X-T1" })
+    , ("core", propertyState { allocCpu0 = 0x4004 })
+    , ("bootstrap", propertyState { allocBootstrap = B.replicate 32 0 })
+    , ("slot", propertyState { allocSlotWord = WordValue 0 })
+    ] $ \(label, invalid) -> do
+      let directory = root </> ("property-state-" ++ label)
+      makeDir directory
+      path <- writeAllocStateFile directory invalid
+      parsed <- try (readRamAllocState path) :: IO (Either SomeException RamAllocState)
+      check ("property allocation state rejects " ++ label) (case parsed of Left _ -> True; Right _ -> False)
+  forM_
+    [ ("peer", PeerCacheUnbound, \_ -> pure ())
+    , ("identity", PeerCacheBound, \model -> modifyIORef' (modelIdentity model) (\bytes -> take 2 bytes ++ [0] ++ drop 3 bytes))
+    , ("f7", PeerCacheBound, \model -> modifyIORef' (modelConfig model) (\bytes -> take (36+0xf7) bytes ++ [0] ++ drop (37+0xf7) bytes))
+    , ("session", PeerCacheBound, \model -> writeWord (modelMemory model) (unAddress callbackTablePointerAddress) 0)
+    ] $ \(label, peer, change) -> do
+      let directory = root </> ("property-refusal-" ++ label)
+      makeDir directory
+      model <- newModel Nothing
+      change model
+      result <- runPropertyAllocationWith peer propertyLayout propertyArena propertyClock (modelApi model) directory
+      check ("property allocation refuses " ++ label) (case result of RamAllocRefused _ -> True; _ -> False)
+      readIORef (modelHostWrites model) >>= check ("property refusal writes nothing: " ++ label) . null
+  let invalidHeaderDir = root </> "property-invalid-header"
+  makeDir invalidHeaderDir
+  invalidHeaderModel <- newModel Nothing
+  invalidHeaderOutcome <- runPropertyAllocationWith PeerCacheBound propertyLayout propertyArena propertyClock (modelApi invalidHeaderModel) invalidHeaderDir
+  check "returned pointer without owned heap header is not admitted"
+    (case invalidHeaderOutcome of RamAllocUncertain _ -> True; _ -> False)
   check "bootstraps are exactly 32 bytes" (all ((==32) . B.length) [bootstrapBytes,peerPrepareBytes,freeBootstrapBytes])
   check "allocator preserves callback output pointer" (B.take 4 (B.drop 4 bootstrapBytes) == B.pack [0x01,0x50,0xa0,0xe1])
   check "peer preparation calls the worker unconditionally" (B.index peerPrepareBytes 19 == 0xeb)

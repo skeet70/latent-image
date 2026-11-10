@@ -92,6 +92,7 @@ RB_RENDER_CALL rb_render_call_1159168, 0x1159168, 0
 RB_RENDER_ENTRY rb_render_tree_entry, rb_render_tree_apply, __rb_render_tree_stock_resume
 RB_RENDER_CALL rb_render_call_61ca2c, 0x61ca2c, 0
 RB_RENDER_CALL rb_render_call_bf8e64, 0xbf8e64, 0
+RB_RENDER_CALL rb_render_call_11730dc, 0x11730dc, 1
 RB_RENDER_CALL rb_render_call_bf8d20, 0xbf8d20, 0
 RB_RENDER_CALL rb_render_call_bf9360, 0xbf9360, 0
 RB_RENDER_CALL rb_render_call_1163e04, 0x1163e04, 0

@@ -1,7 +1,12 @@
 #include "ram_push_abi.h"
 
 __attribute__((section(".ram_push.publications"), aligned(4), used))
-struct ram_push_publication ram_push_publications[RAM_PUSH_PUBLICATION_COUNT] = {{0}};
+struct ram_push_publication ram_push_publications[RAM_PUSH_PUBLICATION_CAPACITY] = {{0}};
+
+#ifdef RAM_PUSH_PROPERTY_PUBLICATION
+__attribute__((section(".ram_push.config"), aligned(4), used))
+struct ram_push_publication_config ram_push_publication_config = {0};
+#endif
 
 __attribute__((section(".ram_push.mailbox"), aligned(32), used))
 volatile struct ram_push_mailbox ram_push_mailbox;
@@ -311,10 +316,22 @@ __attribute__((noinline)) static int32_t validate_rollback_words(void) {
     return RAM_PUSH_OK;
 }
 
+#ifdef RAM_PUSH_PROPERTY_PUBLICATION
+__attribute__((always_inline)) static inline void store_publication_word(volatile uint32_t *target, uint32_t word) {
+    register volatile uint32_t *address __asm__("r1") = target;
+    register uint32_t value __asm__("r3") = word;
+    __asm__ volatile("str r3, [r1]" : : "r"(address), "r"(value) : "memory");
+}
+#endif
+
 __attribute__((noinline)) static void store_new_words(void) {
     for (uint32_t index = 0; index < RAM_PUSH_PUBLICATION_COUNT; ++index) {
         const struct ram_push_publication *publication = &ram_push_publications[index];
+#ifdef RAM_PUSH_PROPERTY_PUBLICATION
+        store_publication_word((volatile uint32_t *)(uintptr_t)publication->address, publication->new_word);
+#else
         *(volatile uint32_t *)(uintptr_t)publication->address = publication->new_word;
+#endif
         if (index < RAM_PUSH_SETUP_COUNT) {
             ram_push_mailbox.setup_stored++;
         } else {
@@ -326,7 +343,11 @@ __attribute__((noinline)) static void store_new_words(void) {
 __attribute__((noinline)) static void restore_old_words(void) {
     for (uint32_t index = RAM_PUSH_PUBLICATION_COUNT; index > 0; --index) {
         const struct ram_push_publication *publication = &ram_push_publications[index - 1u];
+#ifdef RAM_PUSH_PROPERTY_PUBLICATION
+        store_publication_word((volatile uint32_t *)(uintptr_t)publication->address, publication->old_word);
+#else
         *(volatile uint32_t *)(uintptr_t)publication->address = publication->old_word;
+#endif
         ram_push_mailbox.restored++;
     }
 }
@@ -513,6 +534,15 @@ static int32_t run_rendezvous(uint32_t nonce, uint32_t operation) {
 }
 
 static int32_t validate_layout(void) {
+#ifdef RAM_PUSH_PROPERTY_PUBLICATION
+    if (ram_push_publication_config.capacity != RAM_PUSH_PUBLICATION_CAPACITY ||
+        RAM_PUSH_PUBLICATION_COUNT > RAM_PUSH_PUBLICATION_CAPACITY ||
+        RAM_PUSH_SETUP_COUNT <= 113u || RAM_PUSH_SETUP_COUNT > 3880u ||
+        RAM_PUSH_ACTIVATION_COUNT != 97u ||
+        RAM_PUSH_SETUP_COUNT + RAM_PUSH_ACTIVATION_COUNT != RAM_PUSH_PUBLICATION_COUNT) {
+        return RAM_PUSH_BAD_ABI;
+    }
+#endif
     for (uint32_t index = 0; index < RAM_PUSH_PUBLICATION_COUNT; ++index) {
         const struct ram_push_publication *publication = &ram_push_publications[index];
         uint32_t expected_phase = index < RAM_PUSH_SETUP_COUNT ? RAM_PUSH_PHASE_SETUP : RAM_PUSH_PHASE_ACTIVATION;

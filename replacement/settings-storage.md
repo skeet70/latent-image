@@ -6,6 +6,17 @@
 
 [`property_service/`](property_service/) provides the classifier, table generator, Rust service, artifact admission, stager and native oracle. The [build declarations](property_service/BUILD.bazel) name its artifacts and controls. Generated encoding is defined by the [classification/generation code](property_service/Replacement/PropertyService/), not a second hand-maintained property table here.
 
+### Optional recipe producer source
+
+The current-base source port adds `RecipeArtifact`, `RecipeEditNative`, `RecipeEditOracle` and `property_service/recipe.bzl`. The canonical property image remains the default build entry. Recipe builds retain the current Settings core, public getter/setter entries, ROM defaults, storage boundaries, header model and defect controls. Only recipe host ids `0x267..0x26f` bypass ordinary field dispatch: getters pass host-minus-one to the package getter and return its stored code unchanged; setters return zero without changing storage.
+
+`property_service_recipe_image` consumes the linker include emitted by the opaque `RecipeEditPackage`. `deriveRecipeArtifact` takes that same package, current classified properties, the admitted carrier and `ArtifactInput` containing the actual binary, symbols and ELF. Admission binds the callback's actual entry/extent and package identity, retains ELF/mapping and ROM-default checks, and requires a decoded call to the bound callback. No historical callback address or fixed-word patch is used.
+
+`derivePropertyVariantPublication` takes an admitted canonical artifact first and the recipe artifact second. It produces an opaque, bounded carrier-word delta with canonical/recipe words and linked/carrier digests; swapping those words restores the canonical carrier. The staged contract retains source, binary, symbols and ELF identities and records the recipe package identity. The native fixture maps actual package ELF sections and initially inactive runtime bytes; it refuses active sessions without actual open/load service context.
+
+This is a source-only port, not a new qualification. No build, test, guest execution or artifact generation was performed for this port. Callback AAPCS behavior and stack depth, active-session initialization, parked consumers, publication, cache coherence, rollback, installed code lifetime and total admission remain unproved. Frozen private observations and artifacts are unchanged.
+
+
 ### Qualification driver
 
 ```sh

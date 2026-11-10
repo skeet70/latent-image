@@ -7,6 +7,7 @@ rb_stock_present_continue = 0x00d3d898;
 rb_stock_draw_root_continue = 0x01158160;
 __rb_modal_stock_resume = 0x00bfb02c;
 RAM_PUSH_LINK_PUBLICATION_COUNT = DEFINED(RAM_PUSH_PUBLICATION_COUNT) ? RAM_PUSH_PUBLICATION_COUNT : 223;
+RAM_PUSH_LINK_PUBLICATION_CAPACITY = DEFINED(RAM_PUSH_PUBLICATION_CAPACITY) ? RAM_PUSH_PUBLICATION_CAPACITY : RAM_PUSH_LINK_PUBLICATION_COUNT;
 
 SECTIONS {
   __ram_push_start = RAM_PUSH_BASE;
@@ -46,6 +47,11 @@ SECTIONS {
     *(.ram_push.rodata.*)
   }
   . = ALIGN(4);
+  . = DEFINED(RAM_PUSH_PROPERTY_PUBLICATION) ? RAM_PUSH_INSTALLER_START + 0x1ff0 : .;
+  .ram_push.config : {
+    KEEP(*(.ram_push.config))
+  }
+  . = DEFINED(RAM_PUSH_PROPERTY_PUBLICATION) ? RAM_PUSH_INSTALLER_START + 0x2000 : .;
   .ram_push.publications : {
     __ram_push_publications_start = .;
     KEEP(*(.ram_push.publications))
@@ -75,7 +81,11 @@ ASSERT(__rb_image_end <= RAM_PUSH_BASE + 0xa800, "bank executable overlaps gener
 ASSERT(RAM_PUSH_BANK_END <= RAM_PUSH_INSTALLER_START, "generated bank data overlaps the executable bundle")
 ASSERT(__ram_push_installer_start == RAM_PUSH_INSTALLER_START, "installer placement changed")
 ASSERT((RAM_PUSH_INSTALLER_START & 31) == 0, "installer is not 32-byte aligned")
-ASSERT(__ram_push_publications_end - __ram_push_publications_start == RAM_PUSH_LINK_PUBLICATION_COUNT * 16, "publication table ABI changed")
+ASSERT(__ram_push_publications_end - __ram_push_publications_start == RAM_PUSH_LINK_PUBLICATION_CAPACITY * 16, "publication table ABI changed")
+ASSERT(RAM_PUSH_LINK_PUBLICATION_COUNT <= RAM_PUSH_LINK_PUBLICATION_CAPACITY, "publication count exceeds capacity")
+ASSERT(!DEFINED(RAM_PUSH_PROPERTY_PUBLICATION) || SIZEOF(.ram_push.text) <= 0x1ff0, "property installer code exceeds reserved extent")
+ASSERT(!DEFINED(RAM_PUSH_PROPERTY_PUBLICATION) || SIZEOF(.ram_push.config) == 16, "property publication config ABI changed")
+ASSERT(!DEFINED(RAM_PUSH_PROPERTY_PUBLICATION) || RAM_PUSH_LINK_PUBLICATION_CAPACITY == 3977, "property publication carrier bound changed")
 ASSERT(__ram_push_start == RAM_PUSH_BASE, "RAM-push runtime start changed")
 ASSERT(__ram_push_mailbox_end - __ram_push_mailbox_start == 104, "mailbox ABI changed")
 ASSERT(__ram_push_rendezvous_end - __ram_push_rendezvous_start == 128, "rendezvous ABI changed")

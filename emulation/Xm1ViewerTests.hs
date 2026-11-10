@@ -4,6 +4,8 @@ import Control.Exception (IOException, try)
 import Control.Monad (forM_, unless)
 import qualified Xm1Viewer as Viewer
 import Xm1RamPushE2E (ModalDiagnostic (..), ModalLifetimeGuard (..), ModalOwnedPackage (..), loadModalOwnedPackage)
+import qualified Xm1RamPushE2E as RamE2E
+import Emulation.Sha256 (parseSha256Hex)
 import FujiAF.RamPush (payloadPublicationCount)
 import Emulation.LiveSettings (LiveSettingChange (..), liveSettingChange, liveSettings)
 import qualified Data.ByteString as B
@@ -29,6 +31,46 @@ refuses label arguments = do
 
 main :: IO ()
 main = do
+  let keeper = ["--property-allocation-keeper", "--cardless", "--fujimod", "--fresh-boot"
+        , "--allocation-image4", "image4.bin", "--allocation-contract", "composition.json"]
+  held <- acceptedOptions keeper
+  check "allocation keeper is separate from normal E2E"
+    (Viewer.propertyAllocationKeeperOption held && not (Viewer.ramPushE2EOption held))
+  forM_ ["--cardless", "--fujimod", "--fresh-boot"] $ \required ->
+    refuses ("allocation keeper requires " ++ required) (filter (/= required) keeper)
+  refuses "allocation keeper requires source sidecars" (take 4 keeper)
+  refuses "source sidecars do not activate a keeper" (drop 4 keeper)
+  forM_
+    [ ["--ram-push-e2e"], ["--ff80-rehearsal"], ["--unreviewed-relink"]
+    , ["--warm-checkpoint"], ["--flash-candidate"], ["--property-allocation-keeper"]
+    , ["--trajectories", "route.json"], ["--segments", "all"], ["--sd-card-image", "card.img"]
+    , ["--classic-chrome"], ["--experiment", "hello"], ["--attach-hold-q"]
+    , ["--menu-observe", "observe.json"], ["--allocation-size", "253048"]
+    ] $ \extra -> refuses ("allocation keeper rejects " ++ unwords extra) (keeper ++ extra)
+  let sessionText = replicate 64 'a'
+      session = either error id (RamE2E.keeperSessionId sessionText)
+      transition = RamE2E.keeperTransition session
+  check "keeper status retains the holding state"
+    (transition RamE2E.KeeperHolding ("status " ++ sessionText) == Right (RamE2E.KeeperStatus, RamE2E.KeeperHolding))
+  check "keeper readback retains the holding state"
+    (transition RamE2E.KeeperHolding ("readback " ++ sessionText) == Right (RamE2E.KeeperReadback, RamE2E.KeeperHolding))
+  check "authenticated stop ends the keeper"
+    (transition RamE2E.KeeperHolding ("stop " ++ sessionText) == Right (RamE2E.KeeperStop, RamE2E.KeeperStopped))
+  forM_ ["status", "stop " ++ replicate 64 'b', "install " ++ sessionText, "status " ++ sessionText ++ " extra", replicate 161 'a'] $ \line ->
+    check "keeper rejects malformed, wrong-session or publication requests" (case transition RamE2E.KeeperHolding line of Left _ -> True; _ -> False)
+  forM_ ["status ", "readback ", "stop "] $ \command ->
+    check "stopped keeper refuses every command"
+      (case transition RamE2E.KeeperStopped (command ++ sessionText) of Left _ -> True; _ -> False)
+  let digest = either error id . parseSha256Hex
+      dat = digest "cd2f3d7d187ab72151abdb325891bac5b5a3257db8640c6b0c0e836d29b37626"
+      image4 = digest "40d7fe9afdcd067a4441df8a079cef1fb4ee9e18a8240d9abd492a6db545dbdf"
+      contract = digest "1b839ebdb8f7448c211014a619bb004832b5cecc3eac673faf045f8226d841eb"
+      other = digest (replicate 64 '0')
+  check "keeper accepts the immutable admitted source triple"
+    (RamE2E.checkPropertyAllocationSource dat image4 contract == Right ())
+  forM_ [(other,image4,contract), (dat,other,contract), (dat,image4,other)] $ \(d,i,c) ->
+    check "keeper rejects a changed DAT, image4 or composition identity"
+      (case RamE2E.checkPropertyAllocationSource d i c of Left _ -> True; _ -> False)
   let stock = ["--ram-push-e2e", "--cardless", "--fujimod", "--unreviewed-relink"]
       guard = "--modal-lifetime-guard"
       scoped = "--ram-push-modal-scoped"

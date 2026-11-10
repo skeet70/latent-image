@@ -3,13 +3,35 @@
 
 #include <stdint.h>
 
-/* Each payload's relink script passes these four with -D. */
+/* Property publication adds a capacity and fills actual counts after relinking. */
 #if !defined(RAM_PUSH_PUBLICATION_COUNT) || !defined(RAM_PUSH_SETUP_COUNT) || \
     !defined(RAM_PUSH_ACTIVATION_COUNT) || !defined(RAM_PUSH_ABI_VERSION)
 #error "RAM-push payload counts and ABI version are undefined"
 #endif
 _Static_assert(RAM_PUSH_SETUP_COUNT + RAM_PUSH_ACTIVATION_COUNT == RAM_PUSH_PUBLICATION_COUNT,
                "setup and activation counts do not sum to the publication count");
+#ifndef RAM_PUSH_PUBLICATION_CAPACITY
+#define RAM_PUSH_PUBLICATION_CAPACITY RAM_PUSH_PUBLICATION_COUNT
+#endif
+_Static_assert(RAM_PUSH_PUBLICATION_CAPACITY >= RAM_PUSH_PUBLICATION_COUNT,
+               "publication count exceeds table capacity");
+#ifdef RAM_PUSH_PROPERTY_PUBLICATION
+_Static_assert(RAM_PUSH_PUBLICATION_CAPACITY == 3977u,
+               "property publication capacity differs from the admitted carrier");
+struct ram_push_publication_config {
+    uint32_t capacity;
+    uint32_t count;
+    uint32_t setup_count;
+    uint32_t activation_count;
+};
+extern struct ram_push_publication_config ram_push_publication_config;
+#undef RAM_PUSH_PUBLICATION_COUNT
+#undef RAM_PUSH_SETUP_COUNT
+#undef RAM_PUSH_ACTIVATION_COUNT
+#define RAM_PUSH_PUBLICATION_COUNT (ram_push_publication_config.count)
+#define RAM_PUSH_SETUP_COUNT (ram_push_publication_config.setup_count)
+#define RAM_PUSH_ACTIVATION_COUNT (ram_push_publication_config.activation_count)
+#endif
 #define RAM_PUSH_MAILBOX_MAGIC 0x31504d52u
 #define RAM_PUSH_EXPECTED_SERVICE_CORE 0x4003u
 
@@ -76,7 +98,7 @@ struct ram_push_mailbox {
     uint32_t reserved;
 };
 
-extern struct ram_push_publication ram_push_publications[RAM_PUSH_PUBLICATION_COUNT];
+extern struct ram_push_publication ram_push_publications[RAM_PUSH_PUBLICATION_CAPACITY];
 extern volatile struct ram_push_mailbox ram_push_mailbox;
 
 int32_t ram_push_install(uint32_t nonce, uintptr_t *output, uint32_t *length);

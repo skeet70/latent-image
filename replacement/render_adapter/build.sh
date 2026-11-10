@@ -29,7 +29,7 @@ llvm_bin=$(realpath "${external}lab_llvm/bin")
 coreutils_bin=$(realpath "${external}lab_coreutils/bin")
 RB_MODAL75_TABLE="$PWD/$modal75" RB_MENU_ENGINE_TREE="$PWD/$out/menu-tree.rs" RB_MENU_ENGINE_RECORDS="$PWD/$out/menu-records.rs" \
   "${external}lab_xm1_rust/bin/rustc" --crate-name=bank --edition=2021 --crate-type=staticlib -C opt-level=z \
-  --target=armv7r-none-eabi -C panic=abort -C relocation-model=static -C target-cpu=cortex-r4f -C codegen-units=1 \
+  --target=armv7r-none-eabi -C panic=abort -C relocation-model=static -C target-cpu=cortex-r4f -C target-feature=+strict-align -C codegen-units=1 \
   -C debuginfo=0 -C llvm-args=-min-jump-table-entries=4096 --cfg rb_modal_scoped --cfg rb_modal75_owned \
   --cfg rb_menu_engine_owned --cfg rb_render_owned replacement/bank/lib.rs -o "$out/bank-modal75-engine-render.a"
 RB_PUBLICATION_GROUPS=modal75,menu-engine,render \

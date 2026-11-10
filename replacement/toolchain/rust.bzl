@@ -104,7 +104,8 @@ def xm1_rust_elf(
         extra_ldflags = [],
         link_map = False,
         testonly = False,
-        visibility = None):
+        visibility = None,
+        tags = []):
     """Links a Rust staticlib with C/assembly into an ELF, flat image and symbol list.
 
     The linker script owns the load addresses. `link_includes` are scripts it
@@ -183,6 +184,7 @@ def xm1_rust_elf(
         message = "Linking %s for armv7r-none-eabi" % name,
         testonly = testonly,
         tools = [_CLANG, _LLD, _OBJCOPY, _NM, _OBJDUMP],
+        tags = tags,
         visibility = visibility,
     )
 

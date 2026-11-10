@@ -1,4 +1,4 @@
-exports_files(["class.rs"])
+exports_files(["class.rs", "build.sh"])
 
 filegroup(
     name = "module",

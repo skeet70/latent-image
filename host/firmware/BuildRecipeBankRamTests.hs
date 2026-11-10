@@ -177,6 +177,62 @@ main = do
       && runtimeAllocationSizeFor render == 0x2dcc0
       && menuEngineRegionStartFor render 0 == 0x1dd00 && menuEngineRegionExtentFor render == 0xffc0
       && all (\base -> runtimeInstallerBase base - base + runtimeInstallerExtentFor render <= menuEngineRegionStartFor render base - base) alignedBases)
+  propertyLayout <- either fail pure (propertyPublicationLayout render)
+  smallCounts <- either fail pure (propertyPublicationCounts propertyLayout 1)
+  fullCounts <- either fail pure (propertyPublicationCounts propertyLayout propertyCarrierWordBound)
+  smallConfig <- either fail pure (encodePropertyPublicationConfig propertyLayout smallCounts)
+  let phases = replicate (publicationActualSetupCount smallCounts) 0 <> replicate 97 1
+      config capacity count setup activation = B.concat
+        [B.pack [fromIntegral (value `div` (256 ^ index)) | index <- [0 .. 3 :: Int]]
+        | value <- [capacity, count, setup, activation] :: [Word32]]
+  check "property extension reserves the carrier but publishes only changed words"
+    (propertyPublicationCapacity propertyLayout == 3977
+      && publicationActualCount smallCounts == 211
+      && publicationActualSetupCount smallCounts == 114
+      && publicationActualActivationCount smallCounts == 97
+      && publicationActualCount fullCounts == propertyPublicationCapacity propertyLayout
+      && decodePropertyPublicationConfig propertyLayout smallConfig == Right smallCounts)
+  check "property extension refuses other bank variants"
+    (all (isLeft . propertyPublicationLayout) legacyVariants)
+  check "property extension refuses empty, excessive and overflowing deltas"
+    (all (isLeft . propertyPublicationCounts propertyLayout) [minBound, -1, 0, 3768, maxBound])
+  check "property extension rejects config count capacity and arithmetic mismatches"
+    (all (isLeft . decodePropertyPublicationConfig propertyLayout)
+      [config 3976 211 114 97, config 3977 3978 3881 97
+      , config 3977 212 114 97, config 3977 211 114 96
+      , config 3977 0 maxBound 1, B.take 15 smallConfig, smallConfig <> B.singleton 0])
+  check "property extension rejects count padding and misplaced activation phases"
+    (validatePropertyPublicationRecords propertyLayout 1 phases == Right smallCounts
+      && all (isLeft . validatePropertyPublicationRecords propertyLayout 1)
+        [take (length phases - 1) phases, phases <> [0], 1 : drop 1 phases, replicate (length phases) 0])
+  check "property table extent uses capacity rather than count"
+    (validatePropertyPublicationExtent propertyLayout 0x1000 (0x1000 + 3977 * 16) == Right ()
+      && all (isLeft . uncurry (validatePropertyPublicationExtent propertyLayout))
+        [(0x1000, 0x1000 + 211 * 16), (0x1000, 0x1000 + 3977 * 16 - 4)
+        , (maxBound - 15, 0), (0x2000, 0x1000)])
+  check "property allocation contains the installer at every admitted alignment"
+    (propertyInstallerExtent propertyLayout == 0x119a0
+      && all (\base ->
+        propertyAllocationSize propertyLayout base == Right 0x3dc80
+        && propertyMenuEngineRegionStart propertyLayout base == Right (base + 0x2dcc0)
+        && runtimeInstallerBase base - base + propertyInstallerExtent propertyLayout <= 0x2dcc0) alignedBases)
+  check "property allocation refuses misalignment and address overflow"
+    (all (isLeft . propertyAllocationSize propertyLayout) [1, 0xfffffffc, 0xfffffff8]
+      && isLeft (propertyMenuEngineRegionStart propertyLayout 0xfffffff8))
+  forM_ (menuEngineHookAddress : renderHookAddresses) $ \propertyHook -> do
+    let base = 0x00c40000
+        target = base + 0x2dcc0
+        source = if propertyHook == menuEngineHookAddress then 0xe92d4818 else 0xe92d4ff0
+        expected = 0xea000000 + ((target - publicationAddress propertyHook - 8) `div` 4 .&. 0x00ffffff)
+    check "property hook targets the capacity-relocated engine"
+      (propertyHookWordFor propertyLayout base propertyHook target source == Right expected)
+    check "property hook refuses wrong source, invalid extent, and allocation overflow"
+      (isLeft (propertyHookWordFor propertyLayout base propertyHook target 0)
+        && all (\entry -> isLeft (propertyHookWordFor propertyLayout base propertyHook entry source))
+          [target - 4, target + 2, target + 0xffc0]
+        && isLeft (propertyHookWordFor propertyLayout 0xfffffff8 propertyHook target source))
+  check "property table rejects unaligned extents with the correct byte count"
+    (isLeft (validatePropertyPublicationExtent propertyLayout 0x1001 (0x1001 + 3977 * 16)))
   check "render hooks activate after modal and engine, tree then picker then pane"
     (renderHookAddresses == map PublicationAddress [0x01164e1c, 0x01163f2c, 0x011662a0]
       && renderOrder == Right (order <> map PublicationIndex [223 .. 227])

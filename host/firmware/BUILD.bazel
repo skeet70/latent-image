@@ -1,5 +1,6 @@
 load("@rules_cc//cc:defs.bzl", "cc_binary")
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+load("//replacement/rtos_timer:synthetic.bzl", "synthetic_combined_host_source_fixture")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -2418,3 +2419,5 @@ haskell_test(
     ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021"],
     deps = [":reference-scan-model", "//host:base", "//host:bytestring"],
 )
+
+synthetic_combined_host_source_fixture(name = "synthetic-host-source-validation")

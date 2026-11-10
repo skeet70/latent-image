@@ -14,6 +14,8 @@ Tree classification calls the retained read-only kind getter `0x0061ca2c`. Its o
 
 `picker.rs` and `tree.rs` implement the widget service traits through A32 `blx` trampolines. The trampolines preserve stacked arguments for the six- and seven-argument stock services. The remainder service adapts the loader's r1 remainder result into an ordinary r0 result. The widgets write the caller's 0x44-byte report, preserve their contract's panel-font save/restore sequence and, for the tree, publish side-state words at `0x015e64d8` and `0x015e64e0`. Picker labels use the installed `0x849` bound.
 
+The production tree caller forwards original stack words 1..4 into the nested grid's coordinates and steps. `rb_render_call_11730dc` forwards the resolver's fifth argument with the same stacked-argument trampoline. The retained ABI is `FUN_011730dc(event, phase, setting_out, code_out, value_out)` in `decomp/firmwares/xm1-150/app/ui/menus/ov44_menu_leftovers.c` at x70view commit `55436fc85c0560dd252b0410af6f2427fe198cd3`. Its 124-byte plain-image span hashes to `ae88c4d11e931196aee85dc87cbc4398b82ba367fd92c1041d5b3d50f501ec00`, matching that pin's function index.
+
 `FnPicker` passes x=14, y=3 and its report through r6 from caller `fp-0x58`, picker-entry SP+76. The native picker matrix exercises this in-frame report with node `0x63`; `render-picker-fn-return` reads 68 bytes at SP+76. The independent pair classifier admits the same live stock-node class and refuses saved/skipped modes and package/unknown records.
 
 The pane owns node 1 from LR `0x01158184` with modes `{0,1,3,4,6,8,9,10,12,14,255}`, live snapshot depths `{0,1,2}` and node types `{0,1,2,3,9}`. Other modes, types, callers, nodes and package/unknown records fall back before preparation or drawing. `pane.rs` retains `0x01165aa0(node,mode)` and reads its published D/N/R state. Its root-value service returns resource zero for navigation children `0x281` and `0x285`; nested lookups remain unchanged. The independent Haskell classifier reads mode from r1 and derives live depth from the composed tables. Its return capture reads the global report at `0x015e650c` and all seven D words plus three summary words at `0x015e64d8`.
@@ -31,6 +33,8 @@ devenv shell -- replacement/render_adapter/build.sh \
 ```
 
 The script builds the host tools through `host-build` and the pinned toolchain, generates the composed tree, builds one bank staticlib with `--cfg rb_render_owned`, relinks the explicit `modal75,menu-engine,render` variant and checks its composed allowlist. It then runs `//transport:render-manifest-admission-tests` on that manifest through the same `readRamPushManifest`/`parseRamPushManifest` admission used before installation. `RB_BAZEL_OUTPUT_BASE` selects the Bazel output base; its default is `$HOME/.cache/bazel/latent-image-RenderAdapter`. Stock input paths and hashes are enforced by the existing RAM-push builder. Nothing is installed or run in a guest.
+
+The render-bank Rust compilation enables `-C target-feature=+strict-align`. Draw reports contain byte fields at unaligned offsets, including `report+0x15`.
 
 `xm1-viewer` accepts opt-in GHC RTS heap limits. `RENDER_VIEWER_GHCRTS` applies them only to the viewer launched by `run-render-pairs.sh`, leaving admission and comparison tools unchanged. These bound the host viewer, not the native emulator or their combined memory scope.
 

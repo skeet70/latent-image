@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), E2ESettings (..), ModalOwnedPackage (..), loadModalOwnedPackage, SymbolRead, parseSymbolRead, Payload, bankD3Payload, bankModal75Payload, bankModalEnginePayload, bankModalRenderPayload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromePayload, classicChromeIconPayload, experimentPayload, runMenuCrawlE2E, runMenuObserveE2E, runRamDiffE2E, runRamPushE2E, warmAttachCheckpoint) where
+module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), E2ESettings (..), ModalOwnedPackage (..), loadModalOwnedPackage, SymbolRead, parseSymbolRead, Payload, bankD3Payload, bankModal75Payload, bankModalEnginePayload, bankModalRenderPayload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromePayload, classicChromeIconPayload, experimentPayload, runMenuCrawlE2E, runMenuObserveE2E, runRamDiffE2E, runRamPushE2E, warmAttachCheckpoint, KeeperSessionId, keeperSessionId, KeeperState (..), KeeperAction (..), keeperTransition, checkPropertyAllocationSource, runPropertyAllocationKeeper) where
 
 import Control.Applicative ((<|>))
 import Control.Exception (IOException, SomeException, bracket, catch, displayException, finally, mask, throwIO, try)
@@ -24,12 +24,12 @@ import Numeric (readHex, showFFloat, showHex)
 import System.Directory (createDirectory, doesDirectoryExist, doesFileExist, getCurrentDirectory, getFileSize, listDirectory, removeDirectory, removeDirectoryRecursive, removeFile, setCurrentDirectory)
 import System.Environment (getExecutablePath, lookupEnv)
 import System.FilePath (isAbsolute, replaceExtension, takeDirectory, takeFileName, (</>))
-import System.IO (BufferMode (LineBuffering), IOMode (WriteMode), hFlush, hSetBuffering, stdout, withFile)
+import System.IO (BufferMode (LineBuffering), IOMode (WriteMode), hFlush, hSetBuffering, hIsEOF, hGetChar, stdin, stdout, withFile)
 import System.Posix.Files (setFileMode)
 import System.Posix.Temp (mkdtemp)
 import Text.Read (readMaybe)
 import Emulation.CheckpointKey (CheckpointRoute (..), Interpreter (..), RouteKey (..), UnicornLibrary (..), guestState, hostProcedure, procedureHex, routeKey, routeKeyHex)
-import Emulation.Sha256 (parseSha256Hex, sha256, sha256File, sha256Hex)
+import Emulation.Sha256 (Sha256, parseSha256Hex, sha256, sha256File, sha256Hex)
 import Emulation.SegmentReceipt (SegmentReceipt (..), SegmentResult (..), elapsedSeconds, segmentName, segmentNameText)
 import Emulation.Symbols (SymbolTable, parseSymbolTable, resolveSymbol)
 import Emulation.PreservationObservation
@@ -57,6 +57,10 @@ import RamPushProcedure (procedureSourcesDigest)
 import RamPushCcReviewedPins (reviewedCcContract)
 import RamPushCcIconReviewedPins (reviewedCcIconContract)
 import RamPushToggleReviewedPins (reviewedToggleContract)
+import qualified RamPushLayout as Layout
+import qualified Emulation.CpuWorkerSource as CpuWorker
+import qualified FujiAF.Host as Host
+import qualified Replacement.GeneralHeap.Admission as Heap
 
 -- | Unreviewed skips the compiled source-identity and publication-contract pins; its policy
 -- decides whether a bank that fails the ELF allowlist is still pushed. Reviewed enforces it.
@@ -613,6 +617,205 @@ warmAttachCheckpoint given python installedMedia adjustmentNand output = do
       putStrLn ("attach checkpoint: " ++ show (bootStart start) ++ " in " ++ seconds (ended - started))
       C.putStrLn (BL.toStrict (encode (startRecord start)))
 
+data RuntimeSourceRole = ViewerExecutable | SdkBridgeExecutable | RunDocumentSource | BootRomSource | AdjustmentNandSource
+data RuntimeFileBinding = RuntimeFileBinding RuntimeSourceRole FilePath Sha256
+
+runtimeFileBindings :: EmulationRuntime -> FilePath -> IO [RuntimeFileBinding]
+runtimeFileBindings runtime adjustment = case runtime of
+  RetainedRuntime -> ioError (userError "lifetime source binding requires the FujiMod SDK runtime")
+  FujiModRuntime bridge -> forM
+    [ViewerExecutable, SdkBridgeExecutable, RunDocumentSource, BootRomSource, AdjustmentNandSource] $ \role -> do
+      path <- case role of
+        ViewerExecutable -> getExecutablePath
+        SdkBridgeExecutable -> pure (fujimodBridge bridge)
+        RunDocumentSource -> pure (fujimodRunDocument bridge)
+        BootRomSource -> pure (fujimodBootRom bridge)
+        AdjustmentNandSource -> pure adjustment
+      digest <- sha256File path
+      pure (RuntimeFileBinding role path digest)
+
+runtimeFileBindingValue :: RuntimeFileBinding -> Value
+runtimeFileBindingValue (RuntimeFileBinding role path digest) = object
+  ["role" .= label, "path" .= path, "sha256" .= sha256Hex digest]
+  where
+    label :: T.Text
+    label = case role of
+      ViewerExecutable -> "viewer"
+      SdkBridgeExecutable -> "bridge"
+      RunDocumentSource -> "run_document"
+      BootRomSource -> "boot_rom"
+      AdjustmentNandSource -> "adjustment_nand"
+
+newtype KeeperSessionId = KeeperSessionId Sha256 deriving (Eq)
+
+keeperSessionId :: String -> Either String KeeperSessionId
+keeperSessionId = fmap KeeperSessionId . parseSha256Hex
+
+data HeldAllocationReadback = HeldAllocationReadback B.ByteString Heap.OwnedAllocation
+
+data KeeperState = KeeperHolding | KeeperStopped deriving (Eq, Show)
+data KeeperAction = KeeperStatus | KeeperReadback | KeeperStop deriving (Eq, Show)
+
+keeperTransition :: KeeperSessionId -> KeeperState -> String -> Either String (KeeperAction, KeeperState)
+keeperTransition (KeeperSessionId session) state line = do
+  require_ (state == KeeperHolding) "allocation keeper is stopped"
+  require_ (length line <= 160) "allocation keeper command exceeds 160 bytes"
+  require_ (all (\character -> character >= ' ' && character <= '~') line) "allocation keeper command is not printable ASCII"
+  case words line of
+    [command, identity] | identity == sha256Hex session -> case command of
+      "status" -> Right (KeeperStatus, KeeperHolding)
+      "readback" -> Right (KeeperReadback, KeeperHolding)
+      "stop" -> Right (KeeperStop, KeeperStopped)
+      _ -> Left "unknown allocation keeper command"
+    _ -> Left "allocation keeper command or session identity mismatch"
+  where require_ accepted reason = unless accepted (Left reason)
+
+checkPropertyAllocationSource :: Sha256 -> Sha256 -> Sha256 -> Either String ()
+checkPropertyAllocationSource digest image4 contract = do
+  unless (sha256Hex digest == "cd2f3d7d187ab72151abdb325891bac5b5a3257db8640c6b0c0e836d29b37626")
+    (Left "property allocation keeper requires the immutable admitted full02 stage3 DAT")
+  unless (sha256Hex image4 == "40d7fe9afdcd067a4441df8a079cef1fb4ee9e18a8240d9abd492a6db545dbdf")
+    (Left "property allocation keeper image4 sidecar differs from the admitted full02 pair")
+  unless (sha256Hex contract == "1b839ebdb8f7448c211014a619bb004832b5cecc3eac673faf045f8226d841eb")
+    (Left "property allocation keeper composition contract differs from the admitted full02 pair")
+
+runPropertyAllocationKeeper :: E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO ()
+runPropertyAllocationKeeper settings python installedMedia adjustmentNand image4Path contractPath receipt = do
+  require (emulationCardMode settings == Cardless && bootMode settings == FreshBoot
+    && pushMode settings == RamPush && segmentSelection settings == Nothing
+    && relinkMode settings == ReviewedRelink && payloadKind (e2ePayload settings) == RecipeBankD3
+    && modalDiagnostic settings == NoModalDiagnostic && modalLifetimeGuard settings == NoModalLifetimeGuard
+    && not (isJust (modalOwnedPackage settings)) && not (isJust (prelinkedModalBuild settings))
+    && null (experimentReads settings) && attachHold settings == NoAttachHold)
+    "property allocation keeper requires a fresh allocation-only cardless session"
+  bridge <- case emulationRuntime settings of
+    FujiModRuntime value -> pure value
+    _ -> ioError (userError "property allocation keeper requires the pinned FujiMod bridge")
+  dat <- sha256File installedMedia
+  image4 <- Host.readRegular (16*1024*1024) image4Path
+  contract <- Host.readRegular (4*1024*1024) contractPath
+  either (ioError . userError) pure (checkPropertyAllocationSource dat (sha256 image4) (sha256 contract))
+  workerSource <- either (ioError . userError) pure (CpuWorker.bindCpuWorkerSource image4)
+  layout <- either (ioError . userError) pure (Layout.propertyPublicationLayout Layout.modalRenderBankVariant)
+  expectedSize <- either (ioError . userError) (pure . fromIntegral) (Layout.propertyAllocationSize layout 0)
+  exists <- doesDirectoryExist receipt
+  if exists
+    then listDirectory receipt >>= \entries -> require (null entries) "allocation keeper receipt must be fresh or empty"
+    else privateDirectory receipt
+  setFileMode receipt 0o700
+  ensurePrivateDirectory receipt
+  let allocationDirectory = receipt </> "alloc"
+      keeperPath = receipt </> "allocation-keeper.json"
+      json path value = writePrivateBytes path (BL.toStrict (encode value) <> "\n")
+      inactive = object ["schema" .= (1 :: Int), "state" .= ("stopped" :: T.Text)
+        , "live" .= False, "installable" .= False, "total" .= False, "installed_lifetime_admitted" .= False
+        , "owned_union_writer_catalog_admitted" .= False]
+  privateDirectory allocationDirectory
+  runtime <- getCurrentDirectory
+  provenance <- map runtimeFileBindingValue <$> runtimeFileBindings (FujiModRuntime bridge) adjustmentNand
+  (executable, arguments) <- sessionBridge settings python installedMedia adjustmentNand FreshBoot receipt
+  hSetBuffering stdout LineBuffering
+  bracket (startEmulator executable runtime arguments (\_ -> pure (Nothing, ())))
+    (\(emulator, _, _) -> stopEmulator emulator `finally` json keeperPath inactive) $ \(emulator, start, ()) -> do
+      require (bootStart start `elem` [ColdStart, FreshBootStart]) "property allocation keeper refuses a restored session"
+      emulatorTraceSitesReading emulator [(unAddress bootstrapAddress, "property-allocation-bootstrap",
+        [SiteRead 0x40054760 4, SiteRead 0x400545a4 4])]
+      (traceStart, _) <- emulatorTraceHits emulator 0
+      before <- emulatorReadMemory emulator 0x00829a08 4
+      clock <- emulatedClock
+      outcome <- stagedSession allocationDirectory
+        (runPropertyAllocationWith xm1PeerCacheAvailability layout (CpuWorker.cpuWorkerArena workerSource) clock (emulatorUsbApi emulator))
+      allocationPath <- case outcome of
+        RamAllocated path -> pure (allocationDirectory </> takeFileName path)
+        other -> ioError (userError ("property allocation failed: " ++ show other))
+      allocation <- readRamAllocState allocationPath
+      require (allocSize allocation == expectedSize) "property allocation state extent differs"
+      actualSize <- either (ioError . userError) (pure . fromIntegral)
+        (Layout.propertyAllocationSize layout (unAddress (allocBase allocation)))
+      require (allocSize allocation == actualSize) "property allocation base leaves the layout domain"
+      allocationLayout <- either (ioError . userError . show) pure (Heap.boundOwnedAllocation
+        (CpuWorker.cpuWorkerArena workerSource) (Heap.HeapAddress (unAddress (allocBase allocation)))
+        (Heap.AllocationBytes (fromIntegral (allocSize allocation))))
+      let Heap.HeapAddress headerAddress = Heap.allocationHeaderAddress allocationLayout
+      after <- emulatorReadMemory emulator 0x00829a08 4
+      (_, hits) <- emulatorTraceHits emulator traceStart
+      taskNodes <- forM hits $ \hit -> do
+        require (traceSite hit == "property-allocation-bootstrap" && traceCore hit == 0
+          && maybe False (\sp -> sp `mod` 8 == 0) (traceSp hit))
+          "allocation bootstrap lacks CPU0 task-stack provenance"
+        case traceMemory hit of
+          [nodeBytes, contextBytes] | B.length nodeBytes == 4 && B.length contextBytes == 4 -> do
+            let node = leWord nodeBytes 0
+            require (node >= 0x4005ff0c && node < 0x4005ff0c + 56*120
+              && (node - 0x4005ff0c) `mod` 56 == 0 && leWord contextBytes 0 == 0)
+              "allocation bootstrap lacks a live primary-kernel task context"
+            pure node
+          _ -> ioError (userError "allocation bootstrap task-context reads unavailable")
+      require (length taskNodes == 2 && length (nub taskNodes) == 1)
+        "allocation and peer-preparation bootstraps did not run in the same live task"
+      let readback = B.concat <$> forM [0,65536..allocSize allocation-1] (\offset ->
+            emulatorReadMemory emulator (unAddress (allocBase allocation) + fromIntegral offset)
+              (min 65536 (allocSize allocation-offset)))
+          checkReadback = do
+            header <- emulatorReadMemory emulator headerAddress 16
+            owned <- either (ioError . userError . show) pure (Heap.admitOwnedAllocation allocationLayout header)
+            bytes <- readback
+            require (sha256Hex (sha256 bytes) == allocGuard allocation) "retained property allocation readback changed"
+            slot <- emulatorReadMemory emulator (unAddress callbackSlotAddress) 4
+            table <- emulatorReadMemory emulator (unAddress callbackTablePointerAddress) 4
+            require (leWord slot 0 == unWordValue callbackStockWord && leWord table 0 == unAddress callbackTableAddress)
+              "retained allocation callback bindings changed"
+            pure (HeldAllocationReadback bytes owned)
+      HeldAllocationReadback bytes owned <- checkReadback
+      writePrivateBytes (receipt </> "allocation-readback.bin") bytes
+      allocationDocument <- B.readFile allocationPath
+      nonce <- getMonotonicTime
+      let identity = sha256Hex (sha256 (allocationDocument <> C.pack (show nonce) <> BL.toStrict (encode provenance)))
+      session <- either (ioError . userError) pure (keeperSessionId identity)
+      let held event = object
+            [ "schema" .= (1 :: Int), "event" .= (event :: T.Text), "session_id" .= identity
+            , "state" .= ("holding" :: T.Text), "live" .= True, "installable" .= False
+            , "total" .= False, "installed_lifetime_admitted" .= False, "runtime_delivery_observed" .= False
+            , "owned_union_writer_catalog_admitted" .= False
+            , "base" .= hexAddress (unAddress (allocBase allocation)), "size" .= allocSize allocation
+            , "allocation_state" .= allocationPath, "allocation_state_sha256" .= sha256Hex (sha256 allocationDocument)
+            , "cpu_worker_source" .= CpuWorker.cpuWorkerSourceValue workerSource
+            , "owned_heap_allocation" .= Heap.ownedAllocationValue owned
+            , "image4_sha256" .= sha256Hex (sha256 image4), "composition_contract_sha256" .= sha256Hex (sha256 contract)
+            , "readback_sha256" .= allocGuard allocation, "installed_dat_sha256" .= sha256Hex dat
+            , "heap_break_before" .= hexBytes before, "heap_break_after" .= hexBytes after
+            , "bootstrap_sha256" .= sha256Hex (sha256 bootstrapBytes), "sources" .= provenance
+            , "checkpoint" .= startRecord start, "bootstrap_hits" .= map (traceHitValue [] []) hits
+            , "lifetime" .= ("valid only while this keeper process and exact emulator session remain holding" :: T.Text) ]
+          emit event = C.putStrLn (BL.toStrict (encode (held event))) >> hFlush stdout
+          loop state = do
+            line <- boundedKeeperLine
+            (action, next) <- either (ioError . userError) pure (keeperTransition session state line)
+            case action of
+              KeeperStop -> pure ()
+              _ -> do
+                HeldAllocationReadback current _ <- checkReadback
+                when (action == KeeperReadback) (writePrivateBytes (receipt </> "allocation-readback.bin") current)
+                emit (if action == KeeperStatus then "keeper-status" else "keeper-readback")
+                loop next
+      json (receipt </> "allocation-provenance.json") (object
+        ["schema" .= (1 :: Int), "live_witness" .= False, "recorded_ready_event" .= held "keeper-ready"])
+      json keeperPath (held "keeper-ready")
+      emit "keeper-ready"
+      loop KeeperHolding
+  C.putStrLn (BL.toStrict (encode inactive))
+  where
+    boundedKeeperLine = go []
+      where
+        go reversed = do
+          eof <- hIsEOF stdin
+          require (not eof) "allocation keeper stdin closed before authenticated stop"
+          character <- hGetChar stdin
+          if character == '\n' then pure (reverse reversed) else do
+            require (length reversed < 160 && character >= ' ' && character <= '~')
+              "allocation keeper input is non-ASCII or exceeds 160 bytes"
+            go (character : reversed)
+
 -- | Runs the whole trajectory in one process, or with `segmentSelection` each named segment (and
 -- what it requires) in its own process from the install checkpoint, under RECEIPT/segment-NAME.
 runRamPushE2E :: E2ESettings -> FilePath -> FilePath -> Maybe FilePath -> FilePath -> FilePath -> FilePath -> IO ()
@@ -908,6 +1111,7 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
         Address base = allocBase allocation
     manifest <- readRamPushManifest (relinkDirectory </> "ram-push-manifest.json")
     modalObservation <- if lifetimeGuarded then do
+      runtimeSources <- map runtimeFileBindingValue <$> runtimeFileBindings (emulationRuntime settings) adjustmentNand
       runtimeBytes <- B.readFile (relinkDirectory </> "runtime.bin")
       elfBytes <- B.readFile (relinkDirectory </> "kernel.elf")
       loaderA <- B.readFile "private-data/analysis/x-m1-1.50/decode/loader-40000.bin"
@@ -940,7 +1144,8 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
           pure (request, Null)
       request <- either (ioError . userError) pure (lifetimeModalRequest baseRequest lifetimeSource)
       let source = object ["stock" .= stockSource, "linked" .= linkedSource, "lifetime" .= modalLifetimeSourceJson lifetimeSource
-            , "manifest_sha256" .= manifestDigest manifest, "source_identity" .= sourceIdentity manifest]
+            , "manifest_sha256" .= manifestDigest manifest, "source_identity" .= sourceIdentity manifest
+            , "runtime_sources" .= runtimeSources, "emulator_start" .= startRecord start]
       writeIORef lifetimeSession (ModalLifetimePrepared request source [])
       pure (Just request)
       else pure Nothing

@@ -11,6 +11,7 @@ _RUST_DATA = [
     "src/property_table.rs",
     "src/table.rs",
     "src/storage_boundary.rs",
+    "src/recipe_edit.rs",
 ]
 
 _CORE_DEFECTS = [
@@ -40,6 +41,14 @@ xm1_rust_staticlib(
     src = "src/lib.rs",
     crate_name = "xm1_property_service",
     rustc_flags = _RUSTC_FLAGS,
+    data = _RUST_DATA + ["//replacement/settings_storage:property-core"],
+)
+
+xm1_rust_staticlib(
+    name = "property-service-recipe-edit-rust",
+    src = "src/lib.rs",
+    crate_name = "xm1_property_service",
+    rustc_flags = _RUSTC_FLAGS + ["--cfg", "property_recipe_edit"],
     data = _RUST_DATA + ["//replacement/settings_storage:property-core"],
 )
 
@@ -154,6 +163,7 @@ haskell_library(
     srcs = [
         "Replacement/PropertyService/Admission.hs",
         "Replacement/PropertyService/Artifact.hs",
+        "Replacement/PropertyService/Artifact/Internal.hs",
         "Replacement/PropertyService/Placement.hs",
     ],
     src_strip_prefix = ".",
@@ -426,5 +436,79 @@ haskell_test(
         "//host:containers",
         "//host/firmware:bank-allowlist",
         "//replacement/media_permit:property-fields",
+    ],
+)
+
+exports_files(["entry.S", "storage-boundary.S", "property-service.ld", "recipe.bzl"])
+
+haskell_library(
+    name = "property-service-recipe-artifact",
+    srcs = ["Replacement/PropertyService/RecipeArtifact.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":classify",
+        ":property-service-artifact",
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:update-container",
+        "//replacement/rtos_timer:bank-package",
+    ],
+)
+
+haskell_library(
+    name = "property-recipe-edit-oracle-lib",
+    srcs = ["Replacement/PropertyService/RecipeEditOracle.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":classify",
+        ":property-oracle-lib",
+        "//emulation:native-observation",
+        "//host:base",
+        "//host:containers",
+        "//replacement/media_permit:property-fields",
+    ],
+)
+
+haskell_test(
+    name = "property-recipe-edit-oracle-tests",
+    srcs = ["RecipeEditOracleTests.hs"],
+    main_file = "RecipeEditOracleTests.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":classify",
+        ":property-oracle-lib",
+        ":property-recipe-edit-oracle-lib",
+        ":property-service-artifact",
+        "//emulation:native-observation",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//replacement/media_permit:property-fields",
+    ],
+)
+
+haskell_library(
+    name = "property-recipe-edit-native-lib",
+    srcs = ["Replacement/PropertyService/RecipeEditNative.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":classify",
+        ":property-oracle-lib",
+        ":property-recipe-edit-oracle-lib",
+        ":property-service-artifact",
+        ":property-service-recipe-artifact",
+        "//emulation:native-adapter",
+        "//emulation:native-observation",
+        "//emulation:owned-case",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host/firmware:bank-allowlist",
+        "//replacement/rtos_timer:bank-package",
     ],
 )

@@ -2,6 +2,8 @@
 -- menu/ram_push_installer.c linked at a 32-byte boundary, then its
 -- publication table, rendezvous and mailbox. The runtime section is the
 -- recipe bank, relocated D3 and Classic Chrome payload.
+-- Property publication reserves its carrier-bound table before getter binding;
+-- the completed vector supplies a separately validated actual count.
 module RamPushLayout
   ( installerInstallOffset
   , installerRollbackOffset
@@ -54,6 +56,26 @@ module RamPushLayout
   , publicationActivationCount
   , publicationCount
   , staleFixedReferences
+  , PropertyPublicationLayout
+  , PublicationCounts
+  , propertyPublicationLayout
+  , propertyCarrierWordBound
+  , propertyPublicationCapacity
+  , propertyPublicationCounts
+  , publicationActualCount
+  , publicationActualSetupCount
+  , publicationActualActivationCount
+  , propertyInstallerExtent
+  , propertyAllocationSize
+  , propertyMenuEngineRegionStart
+  , propertyMenuEngineRegionExtent
+  , propertyPublicationTableOffset
+  , propertyPublicationConfigOffset
+  , encodePropertyPublicationConfig
+  , decodePropertyPublicationConfig
+  , validatePropertyPublicationRecords
+  , validatePropertyPublicationExtent
+  , propertyHookWordFor
   ) where
 
 import Control.Monad (when)
@@ -252,6 +274,116 @@ runtimeAllocationSizeFor variant
   | otherwise =
       runtimeAllocationSize + runtimeInstallerExtentFor variant - runtimeInstallerExtent
         + if variant == modalLifecycleBankVariant then 32 else 0
+
+newtype PropertyPublicationLayout = PropertyPublicationLayout BankVariant
+  deriving (Eq, Show)
+
+data PublicationCounts = PublicationCounts
+  { publicationActualCount :: Int
+  , publicationActualSetupCount :: Int
+  , publicationActualActivationCount :: Int
+  } deriving (Eq, Show)
+
+propertyCarrierWordBound :: Int
+propertyCarrierWordBound = 3767
+
+propertyPublicationLayout :: BankVariant -> Either String PropertyPublicationLayout
+propertyPublicationLayout variant = do
+  when (variant /= modalRenderBankVariant) $
+    Left "property publication requires the admitted modal render bank"
+  pure (PropertyPublicationLayout variant)
+
+propertyPublicationCapacity :: PropertyPublicationLayout -> Int
+propertyPublicationCapacity (PropertyPublicationLayout variant) =
+  publicationCountFor variant - 18 + propertyCarrierWordBound
+
+propertyPublicationCounts :: PropertyPublicationLayout -> Int -> Either String PublicationCounts
+propertyPublicationCounts (PropertyPublicationLayout variant) delta = do
+  when (delta <= 0 || delta > propertyCarrierWordBound) $
+    Left "property publication delta leaves the admitted carrier bound"
+  let setup = publicationSetupCount - 18 + delta
+      activation = publicationActivationCountFor variant
+  pure (PublicationCounts (setup + activation) setup activation)
+
+propertyPublicationConfigOffset, propertyPublicationTableOffset :: Word32
+propertyPublicationConfigOffset = 0x1ff0
+propertyPublicationTableOffset = 0x2000
+
+propertyInstallerExtent :: PropertyPublicationLayout -> Word32
+propertyInstallerExtent layout =
+  align32 (align32 (propertyPublicationTableOffset + 16 * fromIntegral (propertyPublicationCapacity layout)) + 128 + 104 + 1)
+ where
+  align32 offset = (offset + 31) .&. 0xffffffe0
+
+propertyMenuEngineRegionStart :: PropertyPublicationLayout -> Word32 -> Either String Word32
+propertyMenuEngineRegionStart layout base = do
+  _ <- propertyAllocationSize layout base
+  pure (base + propertyEngineOffset layout)
+
+propertyEngineOffset :: PropertyPublicationLayout -> Word32
+propertyEngineOffset layout =
+  (runtimeAllocationSize + propertyInstallerExtent layout - runtimeInstallerExtent + 31) .&. 0xffffffe0
+
+propertyMenuEngineRegionExtent :: PropertyPublicationLayout -> Word32
+propertyMenuEngineRegionExtent _ = menuEngineRegionExtentFor modalRenderBankVariant
+
+propertyAllocationSize :: PropertyPublicationLayout -> Word32 -> Either String Word32
+propertyAllocationSize layout base = do
+  let size = propertyEngineOffset layout + propertyMenuEngineRegionExtent layout
+  when (base .&. 7 /= 0 || toInteger base + toInteger size > toInteger (maxBound :: Word32)) $
+    Left "property allocation leaves the aligned address domain"
+  pure size
+
+encodePropertyPublicationConfig :: PropertyPublicationLayout -> PublicationCounts -> Either String B.ByteString
+encodePropertyPublicationConfig layout counts = do
+  expected <- propertyPublicationCounts layout (publicationActualSetupCount counts - publicationSetupCount + 18)
+  when (counts /= expected || publicationActualCount counts > propertyPublicationCapacity layout) $
+    Left "property publication counts disagree"
+  pure (foldMap (word32 . fromIntegral)
+    [propertyPublicationCapacity layout, publicationActualCount counts, publicationActualSetupCount counts, publicationActualActivationCount counts])
+
+decodePropertyPublicationConfig :: PropertyPublicationLayout -> B.ByteString -> Either String PublicationCounts
+decodePropertyPublicationConfig layout bytes = do
+  when (B.length bytes /= 16) $
+    Left "property publication config extent differs"
+  let wordAt offset = sum
+        [fromIntegral (B.index bytes (offset + index)) `shiftL` (8 * index) | index <- [0 .. 3]] :: Word32
+      delta = toInteger (wordAt 8) - 113
+  when (wordAt 0 /= fromIntegral (propertyPublicationCapacity layout)
+      || delta <= 0 || delta > toInteger propertyCarrierWordBound) $
+    Left "property publication capacity or setup count differs"
+  counts <- propertyPublicationCounts layout (fromInteger delta)
+  when (wordAt 4 /= fromIntegral (publicationActualCount counts)
+      || wordAt 12 /= fromIntegral (publicationActualActivationCount counts)) $
+    Left "property publication actual counts disagree"
+  pure counts
+
+propertyHookWordFor :: PropertyPublicationLayout -> Word32 -> PublicationAddress -> Word32 -> Word32 -> Either String Word32
+propertyHookWordFor layout base hook target source = do
+  size <- propertyAllocationSize layout base
+  start <- propertyMenuEngineRegionStart layout base
+  expected <- if hook == menuEngineHookAddress then Right 0xe92d4818
+    else if hook `elem` renderHookAddresses then Right 0xe92d4ff0
+    else Left "property publication hook is not an engine or render entry"
+  when (source /= expected || target .&. 3 /= 0 || target < start
+      || target - start >= propertyMenuEngineRegionExtent layout) $
+    Left "property publication hook source or target differs"
+  when (not (toInteger (publicationAddress hook) + 4 <= toInteger base
+      || toInteger (publicationAddress hook) >= toInteger base + toInteger size)) $
+    Left "property publication hook overlaps the allocation"
+  hookBranchWord modalRenderBankVariant base hook target
+
+validatePropertyPublicationExtent :: PropertyPublicationLayout -> Word32 -> Word32 -> Either String ()
+validatePropertyPublicationExtent layout start end =
+  when (start .&. 3 /= 0 || toInteger end - toInteger start /= 16 * toInteger (propertyPublicationCapacity layout)) $
+    Left "property publication table extent differs from its capacity"
+
+validatePropertyPublicationRecords :: PropertyPublicationLayout -> Int -> [Word32] -> Either String PublicationCounts
+validatePropertyPublicationRecords layout delta phases = do
+  counts <- propertyPublicationCounts layout delta
+  when (phases /= replicate (publicationActualSetupCount counts) 0 <> replicate (publicationActualActivationCount counts) 1) $
+    Left "property publication count or phases disagree"
+  pure counts
 
 newtype PublicationAddress = PublicationAddress { publicationAddress :: Word32 }
   deriving (Eq, Ord, Show)

@@ -10,7 +10,7 @@ module FujiAF.RamPush
   , queryOutputAddress, configGateIndex, mailboxBytes
   , reviewedAllocationSize, installerAbiVersion, publicationCount, setupCount, activationCount
   , PayloadKind(..), Payload(..), bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, bankModalEnginePayload, bankModalRenderPayload, classicChromePayload, classicChromeIconPayload, usbTogglePayload, afRingPayload, experimentPayload, experimentHookCapacity, payloads, payloadOfSize, payloadPublicationCount, payloadEntries
-  , readRamPushManifest, parseRamPushManifest, readRamAllocState, readRetainedAllocation, readRamPushState
+  , readRamPushManifest, parseRamPushManifest, readRamPushPrepublication, manifestPropertyCounts, readRamAllocState, readRetainedAllocation, readRamPushState
   , consumedMarkerPath, writeAllocStateFile, writeStateFile
   , ramAllocArguments, ramPushArguments, ramFreeArguments, ramUnloadArguments, ramRelinkArguments
   , ramAllocJournalCapBytes, ramPushJournalCapBytes, ramFreeJournalCapBytes, ramUnloadJournalCapBytes
@@ -18,7 +18,7 @@ module FujiAF.RamPush
   , RamPushRelinker(..), RustBankInputs(..), runfilesRelinker, PinnedBuild(..)
   , AllowlistPolicy(..), OverrideReason(..), AllowlistOutcome(..), allowlistReceipt, checkRelinkedBank
   , pinnedReviewedManifest, withPinnedReviewedBuild, withPinnedReviewedBuildUsing, withRelinkedBuildUsing
-  , runRamAlloc, runRamAllocWith, runRamPush, runRamPushWith, runRamRelink
+  , runRamAlloc, runRamAllocWith, runPropertyAllocationWith, runRamPush, runRamPushWith, runRamRelink
   , runRamFree, runRamFreeWith, runRamUnload, runRamUnloadWith
   ) where
 
@@ -58,6 +58,7 @@ import qualified FujiAF.Broker as P
 import RamPushToolchain (RamPushToolchain(..), ramPushToolchain)
 import BankAllowlist (Report, checkBankFile, renderFinding, reportValue, violations)
 import BankAllowlistComposition (bankAllowlistSourcePaths, composeBankAllowlist)
+import qualified Replacement.GeneralHeap.Admission as Heap
 import qualified RamPushLayout as Layout
 
 newtype Address = Address { unAddress :: Word32 } deriving (Eq, Ord, Show)
@@ -174,6 +175,12 @@ data Payload = Payload
   , payloadRelinkInputs :: [(String,FilePath)]
   , payloadBankVariant :: Maybe Layout.BankVariant
   }
+
+data AllocationRequest = PayloadAllocation Payload | PropertyAllocation Heap.ArenaLayout
+
+allocationRequestBytes :: AllocationRequest -> Heap.AllocationBytes
+allocationRequestBytes (PayloadAllocation payload) = Heap.AllocationBytes (fromIntegral (payloadAllocationSize payload))
+allocationRequestBytes (PropertyAllocation _) = Heap.AllocationBytes (fromIntegral propertyAllocationBytes)
 
 bankD3Payload, classicChromePayload, classicChromeIconPayload :: Payload
 bankD3Payload = Payload
@@ -544,10 +551,13 @@ validateManifest manifest = do
       entryAddresses = map unAddress [installEntry entries,rollbackEntry entries,statusEntry entries]
   require (B.length (runtimeBytes manifest) == size) "runtime.bin length differs from manifest size"
   require (sha256 (runtimeBytes manifest) == runtimeDigest manifest) "runtime.bin SHA256 differs from manifest"
-  payload <- payloadWithVariant (manifestBankVariant manifest) size
-  let count = payloadPublicationCount payload
-      setups = payloadSetupCount payload
-      activations = payloadActivationCount payload
+  extension <- either P.reject pure (manifestPropertyCounts manifest)
+  (count, setups, activations) <- case extension of
+    Nothing -> do
+      payload <- payloadWithVariant (manifestBankVariant manifest) size
+      pure (payloadPublicationCount payload, payloadSetupCount payload, payloadActivationCount payload)
+    Just (_, counts) -> pure (Layout.publicationActualCount counts, Layout.publicationActualSetupCount counts,
+      Layout.publicationActualActivationCount counts)
   require (base .&. 7 == 0 && end <= 0x100000000) "manifest allocation range is invalid"
   require (length publications == count && sort (map publicationIndex publications) == [0..count-1]) ("manifest publication indexes must be a permutation of 0.."++show (count-1))
   require (map publicationPhase publications == replicate setups Setup ++ replicate activations Activation) ("manifest publication phases must be "++show setups++" setup then "++show activations++" activation")
@@ -564,6 +574,12 @@ validateManifest manifest = do
 parseRamPushManifest :: FilePath -> B.ByteString -> B.ByteString -> IO RamPushManifest
 parseRamPushManifest path document runtime = do
   value <- either P.reject pure (decodeStrictIntegers document)
+  case value of
+    Object object | M.member "property_extension" object -> parsePropertyManifest path document runtime value
+    _ -> parseOrdinaryManifest path document runtime value
+
+parseOrdinaryManifest :: FilePath -> B.ByteString -> B.ByteString -> Value -> IO RamPushManifest
+parseOrdinaryManifest path document runtime value = do
   closed value (variantDocumentKeys value ["base","entry","publications","runtime_sha256","schema","size","source_identity"])
   _ <- integer (field value "schema") 1 1
   Address base <- Address <$> hex32 (field value "base")
@@ -572,16 +588,7 @@ parseRamPushManifest path document runtime = do
   payload <- payloadWithVariant variant size
   digest <- text (field value "runtime_sha256") 64
   require (hexDigest digest) "runtime_sha256 must be lowercase SHA256"
-  identity <- case field value "source_identity" of
-    Object object -> do
-      require (not (M.null object)) "source_identity must be nonempty"
-      require (M.size object <= 68) "source_identity exceeds 68 entries"
-      forM (M.toList object) $ \(key,item) -> do
-        name <- pure (K.toString key)
-        hash <- text item 64
-        require (not (null name) && length name <= 256 && hexDigest hash) "source_identity entry is invalid"
-        pure (name,hash)
-    _ -> P.reject "source_identity object required"
+  identity <- parseSourceIdentity (field value "source_identity")
   entries <- parseEntries (field value "entry")
   publications <- array (field value "publications") (payloadPublicationCount payload) (payloadPublicationCount payload) >>= mapM (parsePublication (payloadPublicationCount payload))
   validateManifest (RamPushManifest path (takeDirectory path </> "runtime.bin") (sha256 document) identity (Address base) size digest runtime entries publications variant)
@@ -591,6 +598,149 @@ readRamPushManifest path = do
   document <- privateRegular "RAM-push manifest" path (512*1024)
   runtime <- privateRegular "RAM-push runtime" (takeDirectory path </> "runtime.bin") (512*1024)
   parseRamPushManifest path document runtime
+
+parseSourceIdentity :: Value -> IO [(String, String)]
+parseSourceIdentity (Object object) = do
+  require (not (M.null object)) "source_identity must be nonempty"
+  require (M.size object <= 68) "source_identity exceeds 68 entries"
+  forM (M.toList object) $ \(key, item) -> do
+    hash <- text item 64
+    let name = K.toString key
+    require (not (null name) && length name <= 256 && hexDigest hash) "source_identity entry is invalid"
+    pure (name, hash)
+parseSourceIdentity _ = P.reject "source_identity object required"
+
+readRamPushPrepublication :: FilePath -> IO (RamPushManifest, B.ByteString)
+readRamPushPrepublication path = do
+  document <- privateRegular "RAM-push prepublication" path (512 * 1024)
+  runtime <- privateRegular "RAM-push prepublication runtime" (takeDirectory path </> "runtime.bin") (512 * 1024)
+  elf <- privateRegular "RAM-push prepublication ELF" (takeDirectory path </> "kernel.elf") (8 * 1024 * 1024)
+  value <- either P.reject pure (decodeStrictIntegers document)
+  closed value ["base", "entry", "publications", "runtime_sha256", "schema", "size", "source_identity",
+    "bank_variant", "phase", "kernel_elf_sha256", "property_extension"]
+  _ <- integer (field value "schema") 1 1
+  phase <- text (field value "phase") 16
+  require (phase == "prepublication") "RAM-push package is not preliminary linked source"
+  tag <- text (field value "bank_variant") 64
+  variant <- either P.reject pure (Layout.parseBankVariantTag tag)
+  layout <- either P.reject pure (Layout.propertyPublicationLayout variant)
+  base <- hex32 (field value "base")
+  expectedSize <- either P.reject pure (Layout.propertyAllocationSize layout base)
+  size <- integer (field value "size") (fromIntegral expectedSize) (fromIntegral expectedSize)
+  digest <- text (field value "runtime_sha256") 64
+  elfDigest <- text (field value "kernel_elf_sha256") 64
+  require (hexDigest digest && digest == sha256 runtime && B.length runtime == size)
+    "prepublication runtime length or digest differs"
+  require (hexDigest elfDigest && elfDigest == sha256 elf) "prepublication ELF identity differs"
+  let extension = field value "property_extension"
+  closed extension ["capacity", "carrier_word_bound", "config_offset", "table_offset",
+    "installer_extent", "engine_start", "engine_extent"]
+  let exact key expected = integer (field extension key) expected expected >> pure ()
+  exact "capacity" (Layout.propertyPublicationCapacity layout)
+  exact "carrier_word_bound" Layout.propertyCarrierWordBound
+  exact "installer_extent" (fromIntegral (Layout.propertyInstallerExtent layout))
+  exact "engine_extent" (fromIntegral (Layout.propertyMenuEngineRegionExtent layout))
+  configOffset <- hex32 (field extension "config_offset")
+  tableOffset <- hex32 (field extension "table_offset")
+  engineStart <- hex32 (field extension "engine_start")
+  expectedEngine <- either P.reject pure (Layout.propertyMenuEngineRegionStart layout base)
+  require (configOffset == Layout.propertyPublicationConfigOffset && tableOffset == Layout.propertyPublicationTableOffset
+    && engineStart == expectedEngine) "prepublication extension placement differs"
+  identity <- parseSourceIdentity (field value "source_identity")
+  entries <- parseEntries (field value "entry")
+  let count = Layout.publicationCountFor variant
+      setups = Layout.publicationSetupCount
+      entryAddresses = map unAddress [installEntry entries, rollbackEntry entries, statusEntry entries]
+  publications <- array (field value "publications") count count >>= mapM (parsePublication count)
+  let addresses = map (unAddress . publicationAddress) publications
+      end = toInteger base + toInteger size
+      distinct values = let ordered = sort values in and (zipWith (/=) ordered (drop 1 ordered))
+  require (sort (map publicationIndex publications) == [0 .. count - 1]
+    && map publicationPhase publications == replicate setups Setup ++ replicate (count - setups) Activation)
+    "prepublication logical vector order or phase differs"
+  require (distinct addresses && all (\address -> address .&. 3 == 0
+    && not (toInteger base <= toInteger address && toInteger address < end)
+    && address /= unAddress callbackSlotAddress
+    && not (unAddress bootstrapAddress <= address && address < unAddress bootstrapAddress + 32)) addresses)
+    "prepublication logical vector addresses overlap or are unaligned"
+  require (distinct entryAddresses && all (\address -> address .&. 3 == 0
+    && base <= address && toInteger address + 4 <= end) entryAddresses)
+    "prepublication installer entries differ from the declared allocation"
+  pure (RamPushManifest path (takeDirectory path </> "runtime.bin") (sha256 document) identity
+    (Address base) size digest runtime entries publications (Just variant), elf)
+
+propertyCountsForRuntime :: Layout.BankVariant -> Word32 -> B.ByteString -> Either String (Layout.PropertyPublicationLayout, Layout.PublicationCounts)
+propertyCountsForRuntime variant base runtime = do
+  layout <- Layout.propertyPublicationLayout variant
+  size <- Layout.propertyAllocationSize layout base
+  require_ (B.length runtime == fromIntegral size) "property publication runtime size differs from the reserved layout"
+  let offset = fromIntegral (Layout.runtimeInstallerBase base - base + Layout.propertyPublicationConfigOffset)
+  counts <- Layout.decodePropertyPublicationConfig layout (B.take 16 (B.drop offset runtime))
+  pure (layout, counts)
+  where require_ condition failure = unless condition (Left failure)
+
+manifestPropertyCounts :: RamPushManifest -> Either String (Maybe (Layout.PropertyPublicationLayout, Layout.PublicationCounts))
+manifestPropertyCounts manifest = case manifestBankVariant manifest of
+  Nothing -> Right Nothing
+  Just variant
+    | allocationSize manifest == fromIntegral (Layout.runtimeAllocationSizeFor variant) -> Right Nothing
+    | otherwise -> do
+        let base = unAddress (allocationBase manifest)
+            runtime = runtimeBytes manifest
+        (layout, counts) <- propertyCountsForRuntime variant base runtime
+        let offset = fromIntegral (Layout.runtimeInstallerBase base - base + Layout.propertyPublicationTableOffset)
+            table = B.take (Layout.propertyPublicationCapacity layout * 16) (B.drop offset runtime)
+            records = B.pack (concatMap (concatMap word32le . wordsOf) (manifestPublications manifest))
+            delta = Layout.publicationActualSetupCount counts - Layout.publicationSetupCount + 18
+        checked <- Layout.validatePropertyPublicationRecords layout delta
+          [if publicationPhase publication == Setup then 0 else 1 | publication <- manifestPublications manifest]
+        unless (counts == checked && B.length table == Layout.propertyPublicationCapacity layout * 16
+          && B.take (B.length records) table == records
+          && B.all (== 0) (B.drop (B.length records) table))
+          (Left "property publication table differs from its actual vector or zero reserved tail")
+        pure (Just (layout, counts))
+  where
+    wordsOf publication = [unAddress (publicationAddress publication), unWordValue (publicationOld publication),
+      unWordValue (publicationNew publication), if publicationPhase publication == Setup then 0 else 1]
+
+parsePropertyManifest :: FilePath -> B.ByteString -> B.ByteString -> Value -> IO RamPushManifest
+parsePropertyManifest path document runtime value = do
+  closed value ["base", "entry", "publications", "runtime_sha256", "schema", "size", "source_identity",
+    "bank_variant", "property_extension"]
+  _ <- integer (field value "schema") 1 1
+  base <- hex32 (field value "base")
+  tag <- text (field value "bank_variant") 64
+  variant <- either P.reject pure (Layout.parseBankVariantTag tag)
+  (layout, counts) <- either P.reject pure (propertyCountsForRuntime variant base runtime)
+  expectedSize <- either P.reject pure (Layout.propertyAllocationSize layout base)
+  size <- integer (field value "size") (fromIntegral expectedSize) (fromIntegral expectedSize)
+  digest <- text (field value "runtime_sha256") 64
+  require (hexDigest digest && digest == sha256 runtime) "property publication runtime digest differs"
+  let extension = field value "property_extension"
+      delta = Layout.publicationActualSetupCount counts - Layout.publicationSetupCount + 18
+  closed extension ["capacity", "carrier_word_bound", "config_offset", "table_offset",
+    "installer_extent", "engine_start", "engine_extent", "delta_words", "count", "setup_count", "activation_count"]
+  let exact key expected = integer (field extension key) expected expected >> pure ()
+  exact "capacity" (Layout.propertyPublicationCapacity layout)
+  exact "carrier_word_bound" Layout.propertyCarrierWordBound
+  exact "installer_extent" (fromIntegral (Layout.propertyInstallerExtent layout))
+  exact "engine_extent" (fromIntegral (Layout.propertyMenuEngineRegionExtent layout))
+  exact "delta_words" delta
+  exact "count" (Layout.publicationActualCount counts)
+  exact "setup_count" (Layout.publicationActualSetupCount counts)
+  exact "activation_count" (Layout.publicationActualActivationCount counts)
+  configOffset <- hex32 (field extension "config_offset")
+  tableOffset <- hex32 (field extension "table_offset")
+  engineStart <- hex32 (field extension "engine_start")
+  expectedEngine <- either P.reject pure (Layout.propertyMenuEngineRegionStart layout base)
+  require (configOffset == Layout.propertyPublicationConfigOffset && tableOffset == Layout.propertyPublicationTableOffset
+    && engineStart == expectedEngine) "property publication extension placement differs"
+  identity <- parseSourceIdentity (field value "source_identity")
+  entries <- parseEntries (field value "entry")
+  let count = Layout.publicationActualCount counts
+  publications <- array (field value "publications") count count >>= mapM (parsePublication count)
+  validateManifest (RamPushManifest path (takeDirectory path </> "runtime.bin") (sha256 document) identity
+    (Address base) size digest runtime entries publications (Just variant))
 
 hexWord :: Word32 -> String
 hexWord value = "0x" ++ replicate (8 - length digits) '0' ++ digits where digits = showHex value ""
@@ -665,7 +815,7 @@ entriesValue entries = Object (M.fromList
 
 allocStateValue :: RamAllocState -> Value
 allocStateValue state = Object (M.fromList
-  [ ("schema", Number 1), ("kind", String "xm1-ram-alloc-state")
+  [ ("schema", Number 1), ("kind", String (if allocSize state == propertyAllocationBytes then "xm1-property-allocation-only-state" else "xm1-ram-alloc-state"))
   , ("base", String (T.pack (hexWord (unAddress (allocBase state)))))
   , ("size", Number (fromIntegral (allocSize state)))
   , ("cpu0", String (T.pack (hexWord (allocCpu0 state))))
@@ -703,10 +853,15 @@ parseAllocState document = do
   value <- either P.reject pure (decodeStrictIntegers document)
   closed value ["base","bootstrap","config_f7","cpu0","guard","kind","product","schema","size","slot_old","table_pointer"]
   _ <- integer (field value "schema") 1 1
-  require (field value "kind" == String "xm1-ram-alloc-state") "RAM allocation state kind mismatch"
+  let propertyOnly = field value "kind" == String "xm1-property-allocation-only-state"
+  require (propertyOnly || field value "kind" == String "xm1-ram-alloc-state") "RAM allocation state kind mismatch"
   base <- Address <$> hex32 (field value "base")
-  size <- integer (field value "size") (minimum (map payloadAllocationSize payloads)) (maximum (map payloadAllocationSize payloads))
-  _ <- requirePayload size
+  size <- if propertyOnly
+    then integer (field value "size") propertyAllocationBytes propertyAllocationBytes
+    else do
+      bytes <- integer (field value "size") (minimum (map payloadAllocationSize payloads)) (maximum (map payloadAllocationSize payloads))
+      _ <- requirePayload bytes
+      pure bytes
   cpu0 <- hex32 (field value "cpu0")
   table <- Address <$> hex32 (field value "table_pointer")
   slot <- WordValue <$> hex32 (field value "slot_old")
@@ -716,6 +871,10 @@ parseAllocState document = do
   f7 <- integer (field value "config_f7") 1 255
   require (hexDigest guard) "allocation state guard SHA256 is invalid"
   require (unAddress base /= 0 && unAddress base .&. 7 == 0) "allocation state base is invalid"
+  when propertyOnly $ do
+    layout <- either P.reject pure (Layout.propertyPublicationLayout Layout.modalRenderBankVariant)
+    _ <- either P.reject pure (Layout.propertyAllocationSize layout (unAddress base))
+    pure ()
   require (cpu0 == 0x4003 && table == callbackTableAddress && slot == callbackStockWord) "allocation state X-M1 bindings are invalid"
   require (original == bootstrapBytes && modelName == "X-M1") "allocation state session identity is invalid"
   pure (RamAllocState base size cpu0 table slot original guard modelName (fromIntegral f7))
@@ -868,9 +1027,16 @@ ramJournalCapFor exchanges = ramJournalMarginBytes
   + sum (map txJournalBytes (concatMap exchangeTransfers (sessionExchanges exchanges)))
 
 ramAllocJournalCapBytes, ramPushJournalCapBytes, ramFreeJournalCapBytes, ramUnloadJournalCapBytes :: Payload -> Int
-ramAllocJournalCapBytes payload = ramJournalCapFor $
-  replicate 2 (ReadExchange 4) ++ bootstrapExchanges ++ [ReadExchange 8] ++ verifiedWriteExchanges 4
-  ++ bootstrapExchanges ++ [ReadExchange 4] ++ chunkedExchanges payload (pure . ReadExchange)
+ramAllocJournalCapBytes payload = allocationJournalCapBytes (PayloadAllocation payload)
+
+allocationJournalCapBytes :: AllocationRequest -> Int
+allocationJournalCapBytes request = ramJournalCapFor $
+  replicate 2 (ReadExchange 4) ++ bootstrapExchanges ++ [ReadExchange 8]
+  ++ (case request of PayloadAllocation _ -> []; PropertyAllocation _ -> [ReadExchange 16])
+  ++ verifiedWriteExchanges 4 ++ bootstrapExchanges ++ [ReadExchange 4]
+  ++ [ReadExchange (min 248 (size-offset)) | offset <- [0,248..size-1]]
+  where Heap.AllocationBytes bytes = allocationRequestBytes request
+        size = fromIntegral bytes
 ramPushJournalCapBytes payload = ramJournalCapFor $
   replicate 2 (ReadExchange 4) ++ publicationReadExchanges payload ++ chunkedExchanges payload (pure . ReadExchange)
   ++ chunkedExchanges payload verifiedWriteExchanges ++ retargetExchanges ++ retargetExchanges ++ outputCallExchanges
@@ -1119,10 +1285,29 @@ runRamAlloc size clock api directory
 runRamAllocWith :: PeerCacheAvailability -> Int -> Clock -> UsbApi -> FilePath -> IO RamAllocOutcome
 runRamAllocWith availability size clock api directory
   | availability == PeerCacheUnbound = pure (RamAllocRefused "X-M1 peer-core cache binding is unbound; no camera write sent")
-  | Nothing <- payloadOfSize size = pure (RamAllocRefused ("allocation size must equal a payload's extent: "++unwords [hexWord (fromIntegral (payloadAllocationSize p)) | p <- payloads]))
-  | Just payload <- payloadOfSize size = do
-      let chunks = (size+247) `div` 248
-          cap = ramAllocJournalCapBytes payload
+  | otherwise = case payloadOfSize size of
+      Nothing -> pure (RamAllocRefused ("allocation size must equal a payload's extent: "++unwords [hexWord (fromIntegral (payloadAllocationSize p)) | p <- payloads]))
+      Just payload -> runBoundedAllocation (PayloadAllocation payload) clock api directory
+
+propertyAllocationBytes :: Int
+propertyAllocationBytes = fromIntegral (either error id $ do
+  layout <- Layout.propertyPublicationLayout Layout.modalRenderBankVariant
+  Layout.propertyAllocationSize layout 0)
+
+runPropertyAllocationWith :: PeerCacheAvailability -> Layout.PropertyPublicationLayout -> Heap.ArenaLayout -> Clock -> UsbApi -> FilePath -> IO RamAllocOutcome
+runPropertyAllocationWith availability layout arena clock api directory
+  | availability == PeerCacheUnbound = pure (RamAllocRefused "X-M1 peer-core cache binding is unbound; no emulator write sent")
+  | otherwise = case Layout.propertyAllocationSize layout 0 of
+      Left reason -> pure (RamAllocRefused reason)
+      Right bytes | fromIntegral bytes == propertyAllocationBytes -> runBoundedAllocation (PropertyAllocation arena) clock api directory
+      Right _ -> pure (RamAllocRefused "property allocation extent differs from the bounded layout")
+
+runBoundedAllocation :: AllocationRequest -> Clock -> UsbApi -> FilePath -> IO RamAllocOutcome
+runBoundedAllocation request clock api directory = do
+      let Heap.AllocationBytes requested = allocationRequestBytes request
+          size = fromIntegral requested
+          chunks = (size+247) `div` 248
+          cap = allocationJournalCapBytes request
           deadline = transferTimeoutMs*(200 + 4*chunks)
       session <- newSession clock api directory cap deadline
       held <- newHeld
@@ -1139,6 +1324,15 @@ runRamAllocWith availability size clock api directory
         output <- readMemory live queryOutputAddress 8
         let base = wordAt output; core = fromWord32le (drop 4 (B.unpack output))
         require (core == 0x4003 && base /= 0 && base .&. 7 == 0) "allocator bootstrap returned an invalid base or CPU0 identity"
+        require (toInteger base + toInteger size <= toInteger (maxBound :: Word32)) "allocator bootstrap extent overflows the address domain"
+        case request of
+          PayloadAllocation _ -> pure ()
+          PropertyAllocation arena -> do
+            bound <- either (P.reject . show) pure (Heap.boundOwnedAllocation arena (Heap.HeapAddress base) (Heap.AllocationBytes requested))
+            let Heap.HeapAddress headerAddress = Heap.allocationHeaderAddress bound
+            header <- readMemory live (Address headerAddress) 16
+            _ <- either (P.reject . show) pure (Heap.admitOwnedAllocation bound header)
+            note session "owned-heap-header" ("prefix="++hexWord headerAddress++";bytes="++show (B.unpack header))
         note session "allocation-owned" ("base="++hexWord base++";size="++show size)
         writeWordVerified live (Address (unAddress queryOutputAddress + 4)) (fromIntegral size)
         peerReply <- bootstrapCall live peerPrepareBytes 6

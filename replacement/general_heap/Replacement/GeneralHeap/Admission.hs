@@ -5,12 +5,14 @@ module Replacement.GeneralHeap.Admission
   , frameEntry, frameLow, frameCalls, cumulativeDepth
   , BackendGeometry, ArenaLayout, decodeGeometry, geometryValue, arenaValue, arenaBounds
   , RedesignItem (..), redesignId, redesignValue
+  , HeapAddress (..), AllocationBytes (..), AllocationLayout, boundOwnedAllocation, allocationHeaderAddress
+  , OwnedAllocation, admitOwnedAllocation, ownedAllocationValue
   ) where
 
 import qualified A32 as A
 import Control.Monad (unless)
 import Data.Aeson (Value, object, (.=))
-import Data.Bits (shiftR, xor, (.&.))
+import Data.Bits (complement, rotateL, shiftR, xor, (.&.), (.|.))
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
@@ -24,6 +26,12 @@ data CallBoundary = CallBoundary Word32 Word32 Int deriving (Eq, Ord, Show)
 data FrameProof = FrameProof Word32 Int [CallBoundary] [Word32] [Word32] [(Word32,Word32)]
 data BackendGeometry = Rlsf023U32U16F17S16 deriving (Eq, Show)
 data ArenaLayout = ArenaLayout Word32 Word32 Word32 Word32 deriving (Eq, Show)
+newtype HeapAddress = HeapAddress Word32 deriving (Eq, Show)
+newtype AllocationBytes = AllocationBytes Word32 deriving (Eq, Show)
+newtype StockTag = StockTag Word32 deriving (Eq, Show)
+newtype HeaderIntegrity = HeaderIntegrity Word32
+data AllocationLayout = AllocationLayout HeapAddress AllocationBytes HeapAddress StockTag HeaderIntegrity
+data OwnedAllocation = OwnedAllocation HeapAddress AllocationBytes StockTag deriving (Eq, Show)
 
 decodeGeometry :: [Word32] -> Either AdmissionError (BackendGeometry,ArenaLayout)
 decodeGeometry [magic,version,base,end,state,pool,guard,first,second,granularity,prefix,alignment,firstBits,secondBits] = do
@@ -133,6 +141,31 @@ validateStockHeader available tag = do
   let chunk = tag .&. 0xfffffffc
   unless (tag .&. 3 == 1 && chunk >= 4 && chunk - 4 <= available) (Left HeaderRejected)
   pure (chunk - 4)
+
+boundOwnedAllocation :: ArenaLayout -> HeapAddress -> AllocationBytes -> Either AdmissionError AllocationLayout
+boundOwnedAllocation (ArenaLayout _ end _ pool) address@(HeapAddress payload) bytes@(AllocationBytes requested) = do
+  unless (payload .&. 7 == 0 && requested <= 0x7ffffff4
+    && toInteger payload >= toInteger pool + 16) (Left HeaderRejected)
+  let raw = payload - 16
+      chunk = max 16 ((toInteger requested + 11) .&. complement 7)
+      tag = fromInteger chunk .|. 1
+      integrity = 0x584d3148 `xor` rotateL raw 7 `xor` rotateL requested 13 `xor` rotateL tag 23
+  unless (toInteger payload + chunk - 4 <= toInteger end - 32) (Left HeaderRejected)
+  _ <- validateStockHeader (end - 32 - payload) tag
+  pure (AllocationLayout address bytes (HeapAddress raw) (StockTag tag) (HeaderIntegrity integrity))
+
+allocationHeaderAddress :: AllocationLayout -> HeapAddress
+allocationHeaderAddress (AllocationLayout _ _ address _ _) = address
+
+admitOwnedAllocation :: AllocationLayout -> B.ByteString -> Either AdmissionError OwnedAllocation
+admitOwnedAllocation (AllocationLayout address bytes@(AllocationBytes requested) _ tag@(StockTag expectedTag) (HeaderIntegrity integrity)) header = do
+  unless (B.length header == 16 && U.word32At header 0 == 0x584d3148 && U.word32At header 4 == requested
+    && U.word32At header 8 == integrity && U.word32At header 12 == expectedTag) (Left HeaderRejected)
+  pure (OwnedAllocation address bytes tag)
+
+ownedAllocationValue :: OwnedAllocation -> Value
+ownedAllocationValue (OwnedAllocation (HeapAddress address) (AllocationBytes bytes) (StockTag tag)) = object
+  ["payload" .= address, "requested_bytes" .= bytes, "stock_tag" .= tag, "heap_header_validated" .= True]
 
 validateFetch :: [FrameProof] -> Word32 -> Word32 -> Word32 -> Either AdmissionError ()
 validateFetch proofs pc expected actual = unless (pc `elem` instructionPCs proofs && expected == actual) (Left FetchRejected)

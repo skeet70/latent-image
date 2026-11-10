@@ -2,6 +2,11 @@
   "schema": 1,
   "stock_calls": [
     {
+      "address": "0x011730dc",
+      "name": "rb_render_call_11730dc",
+      "source": "replacement/render_adapter/tree.rs; retained nested selection resolver"
+    },
+    {
       "address": "0x011662a4",
       "name": "__rb_render_pane_stock_resume",
       "source": "replacement/render_adapter/entry.S; pane after push r4-r11,lr"

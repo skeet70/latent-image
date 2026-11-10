@@ -136,6 +136,19 @@ filegroup(
 )
 
 filegroup(
+    name = "modal-render-relink-sources",
+    srcs = [
+        ":modal-engine-relink-sources",
+        "//replacement/modal_runtime:modal75-owned-sources",
+        "//replacement/menu_widgets:module",
+        "//replacement/render_adapter:module",
+        "//replacement/render_adapter:build.sh",
+        "//replacement/render_commands:module",
+    ],
+    visibility = ["//emulation:__pkg__", "//host/firmware:__pkg__", "//transport:__pkg__"],
+)
+
+filegroup(
     name = "lifecycle-relink-sources",
     srcs = [
         ":relink-sources",

@@ -71,6 +71,10 @@ pub unsafe extern "C" fn rb_render_tree_apply(registers: &EntryRegisters, stack:
     let [node, first, second, first_step] = registers.arguments;
     let args = crate::menu_widgets::tree_list::DrawArgs {
         node: NodeId(node), first: first as u16, second: second as u16, first_step,
+        nested: crate::menu_widgets::tree_list::NestedGrid {
+            first: stack[1] as u16, second: stack[2] as u16,
+            first_step: stack[3], second_step: stack[4],
+        },
         second_step: stack[0], mode: crate::menu_widgets::tree_list::DrawMode(stack[5]),
     };
     crate::menu_widgets::tree_list::tree_list(&mut tree::StockServices, args, unsafe { &mut *report });

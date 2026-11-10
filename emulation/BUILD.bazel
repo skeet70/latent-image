@@ -311,6 +311,22 @@ haskell_library(
     deps = ["//host:base"],
 )
 
+haskell_library(
+    name = "sdk-context-admission",
+    srcs = ["Emulation/SdkContextAdmission.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":case-sha256",
+        ":fujimod-paths",
+        "//host:aeson",
+        "//host:base",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:text",
+    ],
+)
+
 genrule(
     name = "fujimod-native-paths-module",
     srcs = ["@lab_fujimod_native//:share/fujimod-xm1/store-path"],
@@ -1353,6 +1369,9 @@ haskell_binary(
         "//host:aeson",
         "//host:text",
         "//host:update-container",
+        "//host/firmware:ram-push-layout",
+        "//host:host-support",
+        "//replacement/general_heap:general-heap-artifact",
         "//transport:camera-core",
         "//transport:ram-push-cc-icon-pins",
         "//transport:ram-push-cc-pins",
@@ -1401,6 +1420,9 @@ haskell_test(
         "//host:aeson",
         "//host:text",
         "//host:update-container",
+        "//host/firmware:ram-push-layout",
+        "//host:host-support",
+        "//replacement/general_heap:general-heap-artifact",
         "//transport:camera-core",
         "//transport:ram-push-cc-icon-pins",
         "//transport:ram-push-cc-pins",
@@ -2718,7 +2740,7 @@ haskell_library(
 
 haskell_library(
     name = "modal-observation",
-    srcs = ["Emulation/ModalObservation.hs"],
+    srcs = ["Emulation/ContextCatalogue.hs", "Emulation/CpuWorkerSource.hs", "Emulation/ModalObservation.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     src_strip_prefix = ".",
     visibility = ["//visibility:public"],
@@ -2729,6 +2751,13 @@ haskell_library(
         ":watch-observation",
         ":loader-code-layout",
         "//transport:camera-core",
+        "//host:update-container",
+        "//host:first-stage",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//replacement/rtos_platform:platform-artifact",
+        "//replacement/rtos_timer:root-package",
+        "//replacement/startup_artifact:startup-artifact",
+        "//replacement/general_heap:general-heap-artifact",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -3159,6 +3188,7 @@ haskell_library(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     visibility = ["//visibility:public"],
     deps = [
+        ":case-sha256",
         ":first-stage-witness-lib",
         "//host:base",
         "//host:bytestring",
@@ -4558,6 +4588,37 @@ haskell_test(
     main_file = "ValuePickerCasesTests.hs",
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [":value-picker-cases-lib", ":render-cases-lib", "//host:base", "//host:bytestring"],
+)
+
+haskell_test(
+    name = "cpu-worker-source-tests",
+    srcs = ["CpuWorkerSourceTests.hs"],
+    main_file = "CpuWorkerSourceTests.hs",
+    tags = ["manual"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":modal-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
+
+haskell_test(
+    name = "context-catalogue-tests",
+    srcs = ["ContextCatalogueTests.hs"],
+    main_file = "ContextCatalogueTests.hs",
+    tags = ["manual"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":loader-code-layout",
+        ":modal-observation",
+        ":watch-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:text",
+    ],
 )
 
 haskell_library(

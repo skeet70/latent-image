@@ -16,6 +16,7 @@ import qualified Data.ByteString.Lazy as BL
 import Data.Bits ((.&.), shiftR)
 import Data.Either (isLeft)
 import Data.Word (Word32)
+import qualified Emulation.ContextCatalogue as Catalogue
 import Emulation.ModalObservation
 import Emulation.ModalWatchStream (readFinalModalWatchFrom)
 import Emulation.WatchObservation
@@ -283,7 +284,12 @@ main = getArgs >>= \arguments -> case arguments of
   ["--shutdown-fixture-success"] -> shutdownBridgeFixture ExitSuccess
   ["--shutdown-fixture-failure"] -> shutdownBridgeFixture (ExitFailure 7)
   ["--watch-spool-fixture", mode] -> watchSpoolFixture mode
-  _ -> runTests arguments
+  ["--owned-context", loaderA, loaderB, symbolsA, symbolsB] -> do
+    inputs <- Catalogue.OwnedUnionCatalogueInputs <$> B.readFile loaderA <*> B.readFile loaderB
+      <*> B.readFile symbolsA <*> B.readFile symbolsB
+    runTests (Just inputs) []
+  "--owned-context" : _ -> fail "usage: --owned-context LOADER_A LOADER_B SYMBOLS_A SYMBOLS_B"
+  _ -> runTests Nothing arguments
 
 shutdownBridgeFixture :: ExitCode -> IO ()
 shutdownBridgeFixture status = do
@@ -421,8 +427,8 @@ watchSpoolTests = do
       _ <- try (stopEmulator emulator) :: IO (Either IOException ())
       pure ()
 
-runTests :: [String] -> IO ()
-runTests arguments = do
+runTests :: Maybe Catalogue.OwnedUnionCatalogueInputs -> [String] -> IO ()
+runTests ownedInputs arguments = do
   shutdownTests
   watchSpoolTests
   let diagnosticSource = object
@@ -557,7 +563,7 @@ runTests arguments = do
   scopedSourceTests
   observerConfigurationTests
   lifetimeTests
-  runtimeBindingTests
+  runtimeBindingTests ownedInputs
   mapM_ legacyReceiptBindingTests arguments
   putStrLn "modal array writer observations passed"
 
@@ -874,7 +880,8 @@ runtimeElfFixture text fields = header <> text <> readonly <> symbols <> names <
 
 runtimeManifestFixture :: B.ByteString -> Ram.RamPushManifest
 runtimeManifestFixture runtime = Ram.RamPushManifest
-  { Ram.manifestPath = "manifest.json", Ram.runtimePath = "runtime.bin", Ram.manifestDigest = "fixture"
+  { Ram.manifestPath = "manifest.json", Ram.runtimePath = "runtime.bin"
+  , Ram.manifestDigest = sha256Hex (sha256 "synthetic-runtime-manifest-v1")
   , Ram.sourceIdentity = [], Ram.allocationBase = Ram.Address 0x10000, Ram.allocationSize = B.length runtime
   , Ram.runtimeDigest = sha256Hex (sha256 runtime), Ram.runtimeBytes = runtime
   , Ram.manifestEntries = Ram.RamPushEntries (Ram.Address 0x10000) (Ram.Address 0x10010) (Ram.Address 0x10060)
@@ -883,8 +890,8 @@ runtimeManifestFixture runtime = Ram.RamPushManifest
       | (index,address) <- zip [222,221 .. 0] [0x20000,0x20004 .. 0x20378] ]
   , Ram.manifestBankVariant = Just Layout.standardBankVariant }
 
-runtimeBindingTests :: IO ()
-runtimeBindingTests = do
+runtimeBindingTests :: Maybe Catalogue.OwnedUnionCatalogueInputs -> IO ()
+runtimeBindingTests ownedInputs = do
   let text = runtimeTextFixture
       runtime = text <> B.pack [1 .. 16] <> B.replicate (0x1dc98 - 144) 0
       elf = runtimeElfFixture text runtimeSymbolsFixture
@@ -907,6 +914,7 @@ runtimeBindingTests = do
         , ("duplicate source-bound STR",runtimeManifestFixture duplicateRuntime,duplicateElf)
         , ("manifest entry inside rather than at ELF function",shiftedEntry,elf)
         , ("stale runtime digest",manifest { Ram.runtimeDigest = replicate 64 '0' },elf)
+        , ("malformed manifest digest",manifest { Ram.manifestDigest = "fixture" },elf)
         , ("allocation extent differs from bytes",manifest { Ram.allocationSize = 0x504 },elf)
         , ("readonly nontext bytes differ from runtime",runtimeManifestFixture mismatchedReadonly,elf)
         , ("resident initial bytes nonzero",runtimeManifestFixture nonzeroResident,elf)
@@ -915,7 +923,7 @@ runtimeBindingTests = do
         ]
   bound <- either (error . ("runtime source fixture: " ++)) pure (bind manifest elf)
   let evidence = modalRuntimeSourceJson bound
-      lifetime = get "lifetime" evidence
+      lifetime = set "context_catalogue" (String "stock") (get "runtime_contract" evidence)
       rows = values (get "publications" lifetime)
       images = values (get "readonly" lifetime)
   check "runtime binding retains complete nontext readonly source" $
@@ -926,6 +934,9 @@ runtimeBindingTests = do
   check "source binding retains runtime and complete ELF digests" $
     get "bound_elf_sha256" evidence == get "digest" (object ["digest" .= sha256Hex (sha256 elf)])
       && get "runtime_sha256" evidence == get "digest" (object ["digest" .= sha256Hex (sha256 runtime)])
+      && get "manifest_sha256" evidence == String (T.pack (Ram.manifestDigest manifest))
+  check "runtime-only source is not an installed lifetime request" $
+    get "lifetime" evidence == Null && get "context_catalogue" (get "runtime_contract" evidence) == Null
   let renderRuntime = runtime <> B.replicate (0x2dcc0 - B.length runtime) 0
       render = manifest
         { Ram.runtimeBytes = renderRuntime, Ram.allocationSize = B.length renderRuntime
@@ -990,6 +1001,9 @@ runtimeBindingTests = do
         , ("publication alias",changeLifetime "publications" (array (map (set "address" (Number 0x40020000)) (take 1 rows) ++ drop 1 rows)))
         , ("missing bank variant",set "lifetime" (case lifetime of Object fields -> Object (KM.delete "bank_variant" fields); other -> other) declaration)
         , ("unsupported bank variant",changeLifetime "bank_variant" (String "lifecycle,modal75"))
+        , ("missing context catalogue",set "lifetime" (case lifetime of Object fields -> Object (KM.delete "context_catalogue" fields); other -> other) declaration)
+        , ("unknown context catalogue",changeLifetime "context_catalogue" (String "unchecked"))
+        , ("owned catalogue with other loader sources",changeLifetime "context_catalogue" (String "owned_union"))
         , ("missing settings reloads",set "lifetime" (case lifetime of Object fields -> Object (KM.delete "settings_reloads" fields); other -> other) declaration)
         , ("unaligned reload call",changeReload "call" (Number 0x006309ee))
         , ("reload return equal to its call",changeReload "return" (Number 0x006309ec))
@@ -1021,15 +1035,18 @@ runtimeBindingTests = do
             (B.replicate (fromIntegral (high - low)) 0)
             [(pc, opcode) | (pc, opcode) <- stores, low <= pc, pc + 4 <= high])]
         | (low, high) <- contextRanges]
-      untaggedLifetime = case lifetime of Object fields -> Object (KM.delete "context_catalogue" fields); other -> other
-      recorded stores =
+      untaggedLifetime = case lifetime of
+        Object fields -> Object (KM.delete "context_catalogue" (KM.delete "property_delta_words" fields))
+        other -> other
+      recordedWith descriptor stores =
         let contexts = array (historicalContext stores)
-            original = set "context_sources" contexts (set "lifetime" untaggedLifetime declaration)
+            original = set "context_sources" contexts (set "lifetime" descriptor declaration)
             binding = object
               [ "loader_a_sha256" .= ("21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882" :: String)
               , "loader_b_sha256" .= ("8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec" :: String)
-              , "context_sources" .= contexts, "lifetime" .= untaggedLifetime ]
+              , "context_sources" .= contexts, "lifetime" .= descriptor ]
         in object ["schema" .= (2 :: Int), "request" .= original, "source" .= object ["lifetime" .= binding]]
+      recorded = recordedWith untaggedLifetime
       historicalObservation = recorded fixtureStores
       incompatibleStores = [(pc, if pc == 0x436b8 then 0xe5001008 else opcode) | (pc, opcode) <- fixtureStores]
   historicalRequest <- either (error . ("historical stock fixture: " ++)) pure
@@ -1049,6 +1066,8 @@ runtimeBindingTests = do
   check "recorded stock requests refuse context bytes differing from their source binding"
     (isLeft (parseRecordedModalBeginRequest
       (set "request" (set "context_sources" (array context) (get "request" historicalObservation)) historicalObservation)))
+  check "recorded stock requests refuse property publication extensions"
+    (isLeft (parseRecordedModalBeginRequest (recordedWith (set "property_delta_words" (Number 1) untaggedLifetime) fixtureStores)))
   expectedWrites <- either error pure (modalLifetimeWatchRanges request)
   let stackGuard = object
         [ "node" .= (0x4006060c :: Word32), "creation" .= (0x4005c3ac :: Word32)
@@ -1160,6 +1179,33 @@ runtimeBindingTests = do
   check "source-bound cache-only attribution binds every protected point" (checkModalLifetimeWatchSources request fullWatch == Right ())
   check "missing protected instruction fetch refuses" (isLeft (checkModalLifetimeWatchSources request
     (set "fetch_attribution" (fetchJson (drop 1 fetches)) fullWatch)))
+  forM_ ownedInputs $ \inputs -> do
+    _ <- either error pure (Catalogue.bindOwnedUnionContextCatalogue inputs)
+    let encodeContext domainBase loader =
+          [object ["start" .= low, "bytes" .= B.unpack (B.take (fromIntegral (high-low))
+            (B.drop (fromIntegral (low-domainBase)) loader))]
+          | (low, high) <- contextRanges, low >= domainBase
+          , high <= domainBase + fromIntegral (B.length loader)]
+        ownedContext = encodeContext 0x40000 (Catalogue.catalogueLoaderA inputs)
+          ++ encodeContext 0xd0000 (Catalogue.catalogueLoaderB inputs)
+        ownedDeclaration = set "context_sources" (array ownedContext)
+          (changeLifetime "context_catalogue" (String "owned_union"))
+        ownedFetches = unionWatchRanges (range 0x00bfb028 0x00bfb124 :
+          [range pc (pc+4) | pc <- [0x10000,0x10010,0x10024,0x10044
+            ,0x40240,0x4031c,0x43d48,0x43d2c,0x43d84,0x43db8,0x43848,0x42440
+            ,0xd0240,0xd031c,0xd3d04,0xd3ce8,0xd3d40,0xd3d74,0xd3848,0xd2440]])
+        ownedWatch = set "fetch_attribution" (fetchJson ownedFetches) fullWatch
+    ownedRequest <- either error pure (parseModalBeginRequest ownedDeclaration)
+    check "source-qualified owned catalogue consumes the SDK's actual owned fetch ranges"
+      (checkModalLifetimeWatchSources ownedRequest ownedWatch == Right ())
+    check "owned fetch validation retains the separate stock catalogue"
+      (isLeft (checkModalLifetimeWatchSources ownedRequest fullWatch)
+        && isLeft (checkModalLifetimeWatchSources request ownedWatch))
+    ownedAudit <- either error pure (checkLifetimeArrayAudit ownedRequest (Right ownedWatch) (parseFinalModalWatch ownedWatch))
+    ownedFinal <- either error pure (parseFinalModalWatch ownedWatch)
+    ownedReport <- either error pure (parseModalReport permitLimit (set "watch" (withoutRecords ownedWatch) clean))
+    check "completed owned-catalogue audit consumes its bound instruction profile"
+      (checkCompletedModalLifetime ownedRequest ownedAudit ownedFinal ownedReport == Right ())
   linked <- either error pure (modalLinked (watchAddress 0x10000) text)
   scope <- either error pure (modalScope linked (range 0x10000 0x10038) (range 0x10038 0x10060)
     (ModalHelpers (range 0x10060 0x10070) (range 0x10070 0x10080)) (Just (watchAddress 0x10060)))
@@ -1172,7 +1218,7 @@ runtimeBindingTests = do
       truncatedHelperFetches = unionWatchRanges (range 0x10000 0x1007c : fetches)
   scopedRequest <- either error pure (parseModalBeginRequest scopedDeclaration)
   let ownedOriginalLifetime = case scopedLifetime of
-        Object fields -> Object (KM.delete "context_catalogue" fields)
+        Object fields -> Object (KM.delete "context_catalogue" (KM.delete "property_delta_words" fields))
         other -> other
       ownedOriginalRequest = set "context_sources" (get "context_sources" (get "request" historicalObservation))
         (set "lifetime" ownedOriginalLifetime scopedDeclaration)
@@ -1196,6 +1242,60 @@ runtimeBindingTests = do
   renderRanges <- either error pure (modalLifetimeWatchRanges renderRequest)
   check "all three render hooks enter the Haskell lifetime write watches"
     (all (\address -> any (\span_ -> let (low,high) = watchRangeBounds span_ in low <= fromIntegral address && fromIntegral address + 4 <= high) renderRanges) renderHooks)
+  let propertyTemplate = renderDeclaration renderRows
+      propertyRows :: Word32 -> [Value]
+      propertyRows delta = take 205 rows ++ drop 223 renderRows ++
+        [object ["address" .= (0x62c120 + 4 * index :: Word32), "old" .= (0 :: Word32), "new" .= (1 :: Word32)]
+        | index <- [0 .. delta - 1]]
+      propertyDeclaration :: Word32 -> Value
+      propertyDeclaration delta = set "lifetime"
+        (set "property_delta_words" (Number (fromIntegral delta))
+        (set "runtime" (array [Number 0x10000, Number 0x4dc80])
+        (set "publications" (array (propertyRows delta)) (get "lifetime" propertyTemplate)))) propertyTemplate
+      preparedReceipt :: Word32 -> Value
+      preparedReceipt delta = foldr (\key -> set key Null)
+        (set "phase" (String "prepared") (set "forward_writes" (Number 0) (set "reverse_writes" (Number 0)
+        (set "publication_count" (Number (fromIntegral (210 + delta)))
+        (set "property_delta_words" (Number (fromIntegral delta)) exactReceipt)))))
+        ["install_core", "rollback_core"]
+      beginValue receipt = set "enabled" (Bool True)
+        (set "policy" (String "scoped-owned75") (set "lifetime" receipt clean))
+  forM_ [1, 18, 3767] $ \delta -> do
+    let value = propertyDeclaration delta
+    propertyRequest <- either error pure (parseModalBeginRequest value)
+    check "bounded property plan survives its public wire round trip"
+      (modalBeginRequestJson propertyRequest == value)
+    propertyBegin <- either error pure (parseModalReport permitLimit (beginValue (preparedReceipt delta)))
+    check "initial receipt binds the exact typed property plan"
+      (checkModalBegin propertyRequest propertyBegin == Right ())
+  propertyRequest <- either error pure (parseModalBeginRequest (propertyDeclaration 18))
+  let eighteen = propertyDeclaration 18
+      changeProperty key value = set "lifetime" (set key value (get "lifetime" eighteen)) eighteen
+      changedFirstCarrier change = changeProperty "publications"
+        (array (take 210 (propertyRows 18) ++ [change (propertyRows 18 !! 210)] ++ drop 211 (propertyRows 18)))
+      ordinaryReceipt = case preparedReceipt 18 of
+        Object fields -> Object (KM.delete "property_delta_words" fields)
+        value -> value
+  ordinaryBegin <- either error pure (parseModalReport permitLimit (beginValue ordinaryReceipt))
+  check "ordinary render and property plans cannot be inferred from their equal228 publication counts"
+    (checkModalBegin renderRequest ordinaryBegin == Right ()
+      && isLeft (checkModalBegin propertyRequest ordinaryBegin))
+  forM_ [ ordinaryReceipt, set "property_delta_words" (Number 17) (preparedReceipt 18)
+        , set "publication_count" (Number 227) (preparedReceipt 18), Null ] $ \receipt -> do
+    wrongBegin <- either error pure (parseModalReport permitLimit (beginValue receipt))
+    check "initial property receipt rejects absent or mismatched source plans"
+      (isLeft (checkModalBegin propertyRequest wrongBegin))
+  forM_ [ changeProperty "property_delta_words" (Number 0)
+        , changeProperty "property_delta_words" (Number 3768)
+        , changeProperty "property_delta_words" (Number 17)
+        , changeProperty "bank_variant" (String "modal75,menu-engine")
+        , changeProperty "runtime" (array [Number 0x10000, Number 0x2dc98])
+        , changedFirstCarrier (set "address" (Number 0x62fbfc))
+        , changedFirstCarrier (set "new" (Number 0))
+        , changedFirstCarrier (set "address" (Number 0x61eac4))
+        , changedFirstCarrier (set "address" (Number 0x625064)) ] $ \invalid ->
+    check "property source refuses wrong counts, runtime, carrier and legacy table publications"
+      (isLeft (parseModalBeginRequest invalid))
   forM_ [225,226,227] $ \index -> do
     let change row = take index renderRows ++ [row] ++ drop (index+1) renderRows
     check "missing render hook refuses in Haskell"
@@ -1292,7 +1392,7 @@ runtimeBindingTests = do
     (fmap (map (\write -> (get "writer" write, get "pc" write, get "value" write)) . values . get "writes" . settingsWritesJson)
       (parseFinalModalWatch (settingsWatch 0x0062ff54) >>= completedSettingsWrites historicalRequest)
       == Right [(String "setter", Number 0x0062ff54, Number 0x21)])
-  check "historical owned evidence derives the original setter effect"
+  check "historical scoped evidence derives the original setter effect"
     (fmap (map (\write -> (get "writer" write, get "pc" write, get "value" write)) . values . get "writes" . settingsWritesJson)
       (parseFinalModalWatch (settingsWatch 0x0062ff54) >>= completedSettingsWrites ownedHistoricalRequest)
       == Right [(String "setter", Number 0x0062ff54, Number 0x21)])

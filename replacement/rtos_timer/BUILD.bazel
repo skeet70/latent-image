@@ -167,3 +167,193 @@ haskell_binary(
         "//replacement/startup_artifact:startup-artifact",
     ],
 )
+
+haskell_library(
+    name = "candidate-composition",
+    srcs = ["package/Replacement/RtosTimer/Candidate.hs"],
+    src_strip_prefix = "package",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":root-package",
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//replacement/property_service:property-service-artifact",
+        "//replacement/startup_artifact:startup-artifact",
+    ],
+)
+
+_CANDIDATE_LINKED_INPUTS = _ROOT_LINKED_INPUTS[24:] + [
+    "//replacement/property_service:property-service-image.bin",
+    "//replacement/property_service:property-service-image.symbols",
+    "//replacement/property_service:property-service-image.elf",
+    "//replacement/record_store_carrier:record-store-image.bin",
+    "//replacement/record_store_carrier:record-store-image.symbols",
+]
+
+haskell_binary(
+    name = "stage-owned-candidate",
+    srcs = ["package/CandidateMain.hs"],
+    main_file = "package/CandidateMain.hs",
+    args = [
+        "$(rootpath //lz:lz-encode)",
+        "$(rootpath //host/firmware:rebuild-update)",
+        "$(rootpath //lz:fflzd)",
+    ] + ["$(rootpath %s)" % path for path in _CANDIDATE_LINKED_INPUTS],
+    data = [
+        "//host/firmware:rebuild-update",
+        "//lz:fflzd",
+        "//lz:lz-encode",
+    ] + _CANDIDATE_LINKED_INPUTS,
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":bank-package",
+        ":combined-publication",
+        ":candidate-composition",
+        ":root-package",
+        "//emulation:case-sha256",
+        "//emulation:image4-staging-lib",
+        "//emulation:scheduler-pair-lib",
+        "//emulation:modal-observation",
+        "//emulation:sdk-context-admission",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//replacement/media_permit:service-inventory",
+        "//replacement/property_service:property-service-artifact",
+        "//replacement/property_service:property-service-recipe-artifact",
+        "//replacement/record_store_carrier:record-store-artifact",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//replacement/rtos_platform:aggregate",
+        "//replacement/rtos_platform:platform-artifact",
+        "//replacement/rtos_task_records/oracle:task-records-system-lib",
+        "//replacement/startup_artifact:startup-artifact",
+        "//transport:camera-core",
+    ],
+)
+
+haskell_test(
+    name = "candidate-composition-tests",
+    srcs = ["package/CandidateTests.hs"],
+    main_file = "package/CandidateTests.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":candidate-composition",
+        "//host:base",
+        "//host:bytestring",
+        "//replacement/startup_artifact:startup-artifact",
+    ],
+)
+
+haskell_library(
+    name = "bank-package",
+    srcs = ["package/Replacement/RtosTimer/BankPackage.hs"],
+    src_strip_prefix = "package",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//emulation:case-sha256",
+        "//emulation:modal-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+        "//host/firmware:bank-allowlist",
+        "//host/firmware:ram-push-layout",
+        "//transport:camera-core",
+    ],
+)
+
+haskell_test(
+    name = "bank-package-canonical-tests",
+    srcs = ["package/BankPackageTests.hs"],
+    main_file = "package/BankPackageTests.hs",
+    tags = ["manual"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":bank-package",
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:host-support",
+        "//transport:camera-core",
+    ],
+)
+
+haskell_library(
+    name = "combined-publication",
+    srcs = ["package/Replacement/RtosTimer/CombinedPublication.hs"],
+    src_strip_prefix = "package",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":bank-package",
+        ":candidate-composition",
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:update-container",
+        "//host/firmware:ram-push-layout",
+        "//replacement/property_service:property-service-artifact",
+        "//replacement/property_service:property-service-recipe-artifact",
+        "//transport:camera-core",
+    ],
+)
+
+haskell_test(
+    name = "combined-publication-tests",
+    srcs = ["package/CombinedPublicationTests.hs"],
+    main_file = "package/CombinedPublicationTests.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":bank-package",
+        ":combined-publication",
+        "//host:base",
+        "//host:update-container",
+        "//replacement/property_service:property-service-artifact",
+        "//transport:camera-core",
+    ],
+)
+
+haskell_binary(
+    name = "synthetic-combined",
+    srcs = ["package/SyntheticCombinedMain.hs"],
+    main_file = "package/SyntheticCombinedMain.hs",
+    tags = ["manual"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":bank-package",
+        ":combined-publication",
+        "//emulation:case-sha256",
+        "//emulation:modal-observation",
+        "//emulation:sdk-context-admission",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:update-container",
+        "//host/firmware:bank-allowlist",
+        "//host/firmware:ram-push-layout",
+        "//replacement/media_permit:service-inventory",
+        "//replacement/property_service:classify",
+        "//replacement/property_service:property-service-artifact",
+        "//replacement/property_service:property-service-recipe-artifact",
+        "//transport:camera-core",
+    ],
+)
+
+alias(
+    name = "synthetic-host-source-validation",
+    actual = "//host/firmware:synthetic-host-source-validation",
+    tags = ["manual"],
+)

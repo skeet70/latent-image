@@ -16,6 +16,7 @@ module Replacement.PropertyService.Admission
   , Violation (..)
   , AdmissionError (..)
   , admitCode
+  , admitCodeWithCallbacks
   ) where
 
 import qualified A32 as A
@@ -61,7 +62,7 @@ data CodeLayout = CodeLayout
     layoutStockSites :: [(GuestAddress, GuestAddress, StackOffset)]
   }
 
-data CallKind = Call | TailCall | StockLeafCall | StockLeafTailCall | StockSiteCall deriving (Eq, Ord, Show)
+data CallKind = Call | TailCall | StockLeafCall | StockLeafTailCall | StockSiteCall | CallbackCall | CallbackTailCall deriving (Eq, Ord, Show)
 
 data CallEdge = CallEdge
   { edgeSite :: GuestAddress
@@ -157,8 +158,8 @@ mappedData layout address = any (\mapping -> case mapping of
   ArmSpan _ -> False) (layoutMappings layout)
 
 -- | Summaries require a successful instruction, flow and frame walk.
-nonreturningEntries :: CodeLayout -> B.ByteString -> S.Set Word32
-nonreturningEntries layout bytes = close S.empty
+nonreturningEntries :: [FunctionExtent] -> CodeLayout -> B.ByteString -> S.Set Word32
+nonreturningEntries callbacks layout bytes = close S.empty
   where
     GuestAddress base = layoutBase layout
     close known =
@@ -166,10 +167,11 @@ nonreturningEntries layout bytes = close S.empty
             [ start
             | function@(FunctionExtent _ (GuestAddress start) _) <- layoutFunctions layout
             , not (S.member start known)
-            , Right (frame, instructions, _) <- [walkFunction layout bytes known function]
+            , Right (frame, instructions, _) <- [walkFunction callbacks layout bytes known function]
             , all (not . returns) (S.toList instructions)
             , all (\edge -> case edgeKind edge of
                 StockLeafTailCall -> False
+                CallbackTailCall -> False
                 TailCall -> let GuestAddress target = edgeTarget edge in S.member target known
                 _ -> True) (frameCalls frame)
             ])
@@ -180,7 +182,11 @@ nonreturningEntries layout bytes = close S.empty
       _ -> False
 
 admitCode :: CodeLayout -> B.ByteString -> Either AdmissionError CodeProof
-admitCode layout bytes = do
+admitCode = admitCodeWithCallbacks []
+
+-- | Callback bodies and their stack depths are outside this proof.
+admitCodeWithCallbacks :: [FunctionExtent] -> CodeLayout -> B.ByteString -> Either AdmissionError CodeProof
+admitCodeWithCallbacks callbacks layout bytes = do
   let GuestAddress baseWord = layoutBase layout
       endInteger = toInteger baseWord + toInteger (B.length bytes)
       validSpan (AddressSpan (GuestAddress begin) (GuestAddress finish)) =
@@ -194,8 +200,8 @@ admitCode layout bytes = do
     && all (\(GuestAddress begin, GuestAddress finish) -> begin .&. 3 == 0 && finish .&. 3 == 0 && begin <= finish
       && all (mappedData layout) [begin, begin + 4 .. finish - 4]) (filter (uncurry (/=)) (layoutData layout)))
     (Left (AdmissionError (layoutBase layout) LayoutInvalid))
-  let nonreturning = nonreturningEntries layout bytes
-  walked <- mapM (walkFunction layout bytes nonreturning) (layoutFunctions layout)
+  let nonreturning = nonreturningEntries callbacks layout bytes
+  walked <- mapM (walkFunction callbacks layout bytes nonreturning) (layoutFunctions layout)
   let instructions = S.unions [pcs | (_, pcs, _) <- walked]
       literals = S.unions [lits | (_, _, lits) <- walked]
       GuestAddress base = layoutBase layout
@@ -222,18 +228,21 @@ compose frames leaves visiting done entry
               StockLeafCall -> let StackOffset leafLow = leaves M.! target in Just (at + leafLow)
               StockLeafTailCall -> let StackOffset leafLow = leaves M.! target in Just (at + leafLow)
               StockSiteCall -> Nothing
+              CallbackCall -> Nothing
+              CallbackTailCall -> Nothing
               _ -> let StackOffset calleeLow = done' M.! target in Just (at + calleeLow)
             low = minimum (own : [depth | Just depth <- map through calls])
         when (low < negate stackLimit) (Left (AdmissionError entry StackUnbounded))
         pure (M.insert entry (StackOffset low) done')
 
 -- | Every return restores incoming sp, r11 and the return address.
-walkFunction :: CodeLayout -> B.ByteString -> S.Set Word32 -> FunctionExtent -> Either AdmissionError (EntryFrame, S.Set Word32, S.Set Word32)
-walkFunction layout bytes nonreturning (FunctionExtent _ (GuestAddress start) (GuestAddress end)) =
+walkFunction :: [FunctionExtent] -> CodeLayout -> B.ByteString -> S.Set Word32 -> FunctionExtent -> Either AdmissionError (EntryFrame, S.Set Word32, S.Set Word32)
+walkFunction callbacks layout bytes nonreturning (FunctionExtent _ (GuestAddress start) (GuestAddress end)) =
   go M.empty [PathState start 0 Nothing LinkLive R11Entry M.empty] 0 [] S.empty
   where
     GuestAddress base = layoutBase layout
     callable = S.fromList [entry | FunctionExtent _ (GuestAddress entry) _ <- layoutFunctions layout]
+    callbackEntries = S.fromList [entry | FunctionExtent _ (GuestAddress entry) _ <- callbacks]
     storeSites = S.fromList [site | GuestAddress site <- layoutStoreSites layout]
     leaves = S.fromList [target | (GuestAddress target, _) <- layoutStockLeaves layout]
     stockSites = M.fromList [((site, target), offset) | (GuestAddress site, GuestAddress target, StackOffset offset) <- layoutStockSites layout]
@@ -318,6 +327,7 @@ walkFunction layout bytes nonreturning (FunctionExtent _ (GuestAddress start) (G
         A.Branch _ True target
           | S.member target callable -> call Call
           | S.member target leaves -> call StockLeafCall
+          | S.member target callbackEntries -> call CallbackCall
           | Just required <- M.lookup (pc, target) stockSites -> do
               unless (sp == required) (Left StockCallBelowEntry)
               call StockSiteCall
@@ -331,6 +341,7 @@ walkFunction layout bytes nonreturning (FunctionExtent _ (GuestAddress start) (G
           | target >= start && target < end -> Right (Outcome (skip [state {statePc = target}]) sp [] [])
           | S.member target callable -> tailTo TailCall
           | S.member target leaves -> tailTo StockLeafTailCall
+          | S.member target callbackEntries -> tailTo CallbackTailCall
           | otherwise -> Left (BranchOutsideOwned (GuestAddress target))
           where
             tailTo kind = do
