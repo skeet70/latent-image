@@ -1,7 +1,12 @@
--- | Host-wide class limits and a shared 20 GiB managed-memory budget.
+-- | Host-wide class limits and a shared 64 GiB RAM-plus-swap budget.
 module Emulation.HostAdmission
   ( ResourceClass (..)
   , MemoryMax (..)
+  , MemorySwapMax (..)
+  , classMemorySwapMax
+  , parseMemorySwapMax
+  , memorySwapMaxBytes
+  , configuredMemory
   , classConcurrency
   , classMemoryMax
   , parseMemoryMax
@@ -47,6 +52,8 @@ data ResourceClass = Build | Emulator | NativeVerification
 -- | A systemd @MemoryMax=@ value: decimal bytes with an optional K, M, G or T suffix.
 newtype MemoryMax = MemoryMax String
 
+newtype MemorySwapMax = MemorySwapMax String
+
 -- | Simultaneous admissions host-wide.
 classConcurrency :: ResourceClass -> Int
 classConcurrency Build = 2
@@ -55,9 +62,35 @@ classConcurrency NativeVerification = 8
 
 -- | The memory cap of one admission; an emulator run may ask for less.
 classMemoryMax :: ResourceClass -> MemoryMax
-classMemoryMax Build = MemoryMax "6G"
-classMemoryMax Emulator = MemoryMax "4G"
-classMemoryMax NativeVerification = MemoryMax "4G"
+classMemoryMax Build = MemoryMax "12G"
+classMemoryMax Emulator = MemoryMax "8G"
+classMemoryMax NativeVerification = MemoryMax "12G"
+
+classMemorySwapMax :: ResourceClass -> MemorySwapMax
+classMemorySwapMax _ = MemorySwapMax "8G"
+
+configuredMemory :: ResourceClass -> IO (MemoryMax, MemorySwapMax)
+configuredMemory resource = do
+  let prefix = case resource of
+        Build -> "XM1_HOST_BUILD"
+        Emulator -> "XM1_EMULATOR"
+        NativeVerification -> "XM1_NATIVE"
+      memoryName = prefix ++ "_MEMORY_MAX"
+      swapName = prefix ++ "_SWAP_MAX"
+      limit = memoryMaxBytes (MemoryMax "32G")
+  rawMemory <- lookupEnv memoryName
+  memory <- case rawMemory of
+    Nothing -> pure (classMemoryMax resource)
+    Just text | Just value <- parseMemoryMax text, memoryMaxBytes value <= limit -> pure value
+    _ -> ioError (userError (memoryName ++ " must be positive and at most 32G"))
+  rawSwap <- lookupEnv swapName
+  swap <- case rawSwap of
+    Nothing -> pure (classMemorySwapMax resource)
+    Just text | Just value <- parseMemorySwapMax text, memorySwapMaxBytes value <= limit -> pure value
+    _ -> ioError (userError (swapName ++ " must be between 0 and 32G"))
+  unless (memoryMaxBytes memory + memorySwapMaxBytes swap <= 64 * 1024 ^ (3 :: Int)) $
+    ioError (userError "combined memory and swap reservation exceeds 64 GiB")
+  pure (memory, swap)
 
 newtype ScopeName = ScopeName String
   deriving (Eq)
@@ -69,7 +102,7 @@ parseScopeName text
   | otherwise = Nothing
 
 -- | Reservations are acquired inside an already-started scope.
-reserveMemory :: MemoryMax -> ScopeName -> IO Fd
+reserveMemory :: MemoryMax -> MemorySwapMax -> ScopeName -> IO Fd
 reserveMemory = reserveMemoryWithLegacy Nothing
 
 newtype InvocationId = InvocationId String
@@ -80,14 +113,14 @@ data ScopeCgroup = ScopeCgroup FilePath FileID
   deriving (Eq)
 data ScopeIdentity = ScopeIdentity ScopeName InvocationId ScopeCgroup
   deriving (Eq)
-data ScopeIdentityState = ScopeIdentityActive InvocationId MemoryMax | ScopeIdentityInactive
+data ScopeIdentityState = ScopeIdentityActive InvocationId MemoryMax MemorySwapMax | ScopeIdentityInactive
 
-reserveMemoryWithLegacy :: Maybe LegacyReservation -> MemoryMax -> ScopeName -> IO Fd
-reserveMemoryWithLegacy legacy memory scope = do
+reserveMemoryWithLegacy :: Maybe LegacyReservation -> MemoryMax -> MemorySwapMax -> ScopeName -> IO Fd
+reserveMemoryWithLegacy legacy memory swap scope = do
   let quantum = 256 * 1024 * 1024
-      tokens = fromInteger ((memoryMaxBytes memory + quantum - 1) `div` quantum)
-  unless (tokens > 0 && tokens <= 80) $
-    ioError (userError "managed memory reservation must fit the 20 GiB host budget")
+      tokens = fromInteger ((memoryMaxBytes memory + memorySwapMaxBytes swap + quantum - 1) `div` quantum)
+  unless (tokens > 0 && tokens <= 256) $
+    ioError (userError "managed RAM-plus-swap reservation must fit the 64 GiB host budget")
   directory <- (</> ".cache" </> "xm1-host-memory") <$> getHomeDirectory
   createDirectoryIfMissing True directory
   let attempt = do
@@ -104,7 +137,7 @@ reserveMemoryWithLegacy legacy memory scope = do
                 when recorded (ioError (userError "this legacy invocation already has a persistent reservation"))
             fd <- openFd (directory </> "memory.lock") ReadWrite defaultFileFlags {creat = Just 0o600}
             setFdOption fd CloseOnExec False
-            chosen <- collect fd tokens (filter (`notElem` protected) [0 .. 79]) []
+            chosen <- collect fd tokens (filter (`notElem` protected) [0 .. 255]) []
             case chosen of
               Nothing -> do
                 closeFd fd
@@ -134,9 +167,9 @@ reserveMemoryWithLegacy legacy memory scope = do
 announceMemory :: FilePath -> Int -> IO ()
 announceMemory directory tokens = do
   fd <- openFd (directory </> "memory.lock") ReadWrite defaultFileFlags
-  owners <- mapM (\index -> getLock fd (WriteLock, AbsoluteSeek, index, 1)) [0 .. 79]
+  owners <- mapM (\index -> getLock fd (WriteLock, AbsoluteSeek, index, 1)) [0 .. 255]
   closeFd fd
-  hPutStrLn stderr ("host admission: waiting for managed memory (" ++ show tokens ++ " x 256MiB of 20GiB); owners=" ++ show (nub [pid | Just (pid, _) <- owners]))
+  hPutStrLn stderr ("host admission: waiting for managed RAM+swap (" ++ show tokens ++ " x 256MiB of 64GiB); owners=" ++ show (nub [pid | Just (pid, _) <- owners]))
   hFlush stderr
 
 claimScopeRecord :: FilePath -> ScopeName -> IO ()
@@ -156,7 +189,7 @@ currentScopeIdentity :: ScopeName -> IO ScopeIdentity
 currentScopeIdentity scope@(ScopeName unit) = do
   state <- scopeIdentityState scope
   invocation <- case state of
-    ScopeIdentityActive identity _ -> pure identity
+    ScopeIdentityActive identity _ _ -> pure identity
     ScopeIdentityInactive -> ioError (userError "cannot claim an inactive admission scope")
   (_, out, _) <- readProcessWithExitCode "systemctl" ["--user", "show", unit, "-p", "ControlGroup", "--value"] ""
   let group = trim out
@@ -166,7 +199,7 @@ currentScopeIdentity scope@(ScopeName unit) = do
     inode <- fileID <$> getFdStatus fd
     confirmed <- scopeIdentityState scope
     case confirmed of
-      ScopeIdentityActive current _ | current == invocation -> pure (ScopeIdentity scope invocation (ScopeCgroup group inode))
+      ScopeIdentityActive current _ _ | current == invocation -> pure (ScopeIdentity scope invocation (ScopeCgroup group inode))
       _ -> ioError (userError "scope invocation changed during admission")
 
 scopeIdentityLines :: ScopeIdentity -> [String]
@@ -235,7 +268,7 @@ sameInvocationActive (ScopeIdentity scope expected cgroup) = do
   if ended then pure False else do
     state <- scopeIdentityState scope
     case state of
-      ScopeIdentityActive invocation _ | invocation == expected -> pure True
+      ScopeIdentityActive invocation _ _ | invocation == expected -> pure True
       _ -> ioError (userError "populated original cgroup no longer has its recorded scope invocation")
 
 reapScope :: ScopeIdentity -> IO ()
@@ -258,6 +291,15 @@ parseMemoryMax text = case span isDigit text of
   (digits@(_ : _), suffix) | suffix `elem` ["", "K", "M", "G", "T"], read digits > (0 :: Integer) ->
     Just (MemoryMax (digits ++ suffix))
   _ -> Nothing
+
+parseMemorySwapMax :: String -> Maybe MemorySwapMax
+parseMemorySwapMax text = case span isDigit text of
+  (digits@(_ : _), suffix) | suffix `elem` ["", "K", "M", "G", "T"] ->
+    Just (MemorySwapMax (digits ++ suffix))
+  _ -> Nothing
+
+memorySwapMaxBytes :: MemorySwapMax -> Integer
+memorySwapMaxBytes (MemorySwapMax text) = memoryMaxBytes (MemoryMax text)
 
 memoryMaxBytes :: MemoryMax -> Integer
 memoryMaxBytes (MemoryMax text) = read digits * scale suffix
@@ -348,6 +390,7 @@ hostBuildMain arguments = case arguments of
 admit :: Maybe FilePath -> String -> [String] -> IO ()
 admit requestedBase command rest = do
   refuseNested
+  (memory, swap) <- configuredMemory Build
   outputBase <- maybe worktreeOutputBase (pure . Just) requestedBase
   directory <- (</> ".cache" </> "xm1-host-build") <$> getHomeDirectory
   createDirectoryIfMissing True directory
@@ -375,9 +418,9 @@ admit requestedBase command rest = do
           ++ rest
   when running (removeIfPresent script)
   setEnv admittedVariable "1"
-  outcome <- runContained scoped unit (buildScopeRecord directory lane) bazelArguments
+  outcome <- runContained memory swap scoped unit (buildScopeRecord directory lane) bazelArguments
   let verdict = judge outcome
-  hPutStrLn stderr ("host-build verdict " ++ renderVerdict command waited verdict outcome)
+  hPutStrLn stderr ("host-build verdict " ++ renderVerdict memory swap command waited verdict outcome)
   hFlush stderr
   case (verdict, running) of
     (Passed, True) -> do
@@ -421,10 +464,14 @@ reserveLegacy scope@(ScopeName unit) = do
   refuseNested
   current <- currentScopeIdentity scope
   let reservation = LegacyReservation current
+  state <- scopeIdentityState scope
+  (memory, swap) <- case state of
+    ScopeIdentityActive _ cap swapCap -> pure (cap, swapCap)
+    ScopeIdentityInactive -> ioError (userError "legacy reservation requires an active scope")
   active <- legacyReservationActive reservation
-  unless active (ioError (userError "legacy reservation requires a populated scope capped at exactly 4 GiB"))
-  _ <- reserveMemoryWithLegacy (Just reservation) (MemoryMax "4G") scope
-  hPutStrLn stderr ("legacy reservation ready: " ++ unit ++ " 4GiB")
+  unless active (ioError (userError "legacy reservation requires a populated capped scope"))
+  _ <- reserveMemoryWithLegacy (Just reservation) memory swap scope
+  hPutStrLn stderr ("legacy reservation ready: " ++ unit ++ " RAM+swap bytes=" ++ show (memoryMaxBytes memory + memorySwapMaxBytes swap))
   hFlush stderr
   let wait = do
         occupied <- legacyReservationActive reservation
@@ -434,7 +481,7 @@ reserveLegacy scope@(ScopeName unit) = do
 scopeIdentityState :: ScopeName -> IO ScopeIdentityState
 scopeIdentityState (ScopeName unit) = do
   (_, out, _) <- readProcessWithExitCode "systemctl"
-    ["--user", "show", unit, "-p", "ActiveState", "-p", "MemoryMax", "-p", "InvocationID"] ""
+    ["--user", "show", unit, "-p", "ActiveState", "-p", "MemoryMax", "-p", "MemorySwapMax", "-p", "InvocationID"] ""
   let properties = [(key, drop 1 value) | line <- lines out, let (key, value) = break (== '=') line]
   case lookup "ActiveState" properties of
     Just "inactive" -> pure ScopeIdentityInactive
@@ -442,7 +489,9 @@ scopeIdentityState (ScopeName unit) = do
       , Just rawIdentity <- lookup "InvocationID" properties
       , Just identity <- parseInvocationId rawIdentity
       , Just rawCap <- lookup "MemoryMax" properties
-      , Just cap <- parseMemoryMax rawCap -> pure (ScopeIdentityActive identity cap)
+      , Just cap <- parseMemoryMax rawCap
+      , Just rawSwap <- lookup "MemorySwapMax" properties
+      , Just swap <- parseMemorySwapMax rawSwap -> pure (ScopeIdentityActive identity cap swap)
     _ -> ioError (userError ("cannot validate scope identity and cap: " ++ unit))
 
 parseInvocationId :: String -> Maybe InvocationId
@@ -456,9 +505,9 @@ legacyReservationActive (LegacyReservation owner@(ScopeIdentity scope expected _
   if not occupied then pure False else do
     state <- scopeIdentityState scope
     case state of
-      ScopeIdentityActive identity cap | identity == expected -> do
-        unless (memoryMaxBytes cap == memoryMaxBytes (MemoryMax "4G")) $
-          ioError (userError "an adopted legacy scope no longer has its validated 4 GiB cap")
+      ScopeIdentityActive identity cap swap | identity == expected -> do
+        unless (memoryMaxBytes cap + memorySwapMaxBytes swap <= 64 * 1024 ^ (3 :: Int)) $
+          ioError (userError "legacy scope RAM-plus-swap cap exceeds the shared budget")
         pure True
       _ -> ioError (userError "cannot validate populated legacy scope identity")
 
@@ -480,9 +529,16 @@ protectedLegacyTokens directory = do
           | name == rawIdentity
           , Just owner <- parseScopeIdentity [unit, rawIdentity, group, rawInode]
           , Just indices <- readMaybe rawIndices
-          , length indices == 16 && length (nub indices) == 16 && all (\index -> index >= 0 && index < 80) indices -> do
+          , not (null indices) && length (nub indices) == length indices && all (\index -> index >= 0 && index < 256) indices -> do
               active <- legacyReservationActive (LegacyReservation owner)
-              when active $ hPutStrLn stderr ("host admission: legacy memory owner=" ++ unit ++ " invocation=" ++ rawIdentity ++ " 4GiB")
+              when active $ do
+                state <- scopeIdentityState (case owner of ScopeIdentity scope _ _ -> scope)
+                case state of
+                  ScopeIdentityActive _ cap swap -> unless
+                    (fromIntegral (length indices) * 256 * 1024 * 1024 >= memoryMaxBytes cap + memorySwapMaxBytes swap)
+                    (ioError (userError "legacy scope caps exceed its persistent reservation"))
+                  ScopeIdentityInactive -> pure ()
+                hPutStrLn stderr ("host admission: legacy memory owner=" ++ unit ++ " invocation=" ++ rawIdentity ++ " reserved tokens=" ++ show (length indices))
               pure (if active then indices else [])
         _ -> ioError (userError ("invalid persistent legacy memory reservation: " ++ name))
 
@@ -755,8 +811,8 @@ data Outcome = Outcome
 -- | Runs Bazel through a scope child that reports Bazel's exit status and
 -- stays alive until the unit's result has been read; systemd collects a
 -- successful scope once its last process exits.
-runContained :: Bool -> String -> FilePath -> [String] -> IO Outcome
-runContained scoped unit record bazelArguments = do
+runContained :: MemoryMax -> MemorySwapMax -> Bool -> String -> FilePath -> [String] -> IO Outcome
+runContained memoryCap swapCap scoped unit record bazelArguments = do
   before <- daemonCounters
   start <- getMonotonicTime
   (reportRead, reportWrite) <- createPipe
@@ -764,13 +820,14 @@ runContained scoped unit record bazelArguments = do
   setFdOption reportRead CloseOnExec True
   setFdOption releaseWrite CloseOnExec True
   self <- getExecutablePath
-  let MemoryMax memory = classMemoryMax Build
+  let MemoryMax memory = memoryCap
+      MemorySwapMax swap = swapCap
       child = ["--scope-child", fdText reportWrite, fdText releaseRead, if scoped then unit else "-", record] ++ ("bazel" : bazelArguments)
       process
         | scoped = proc "systemd-run" $
             [ "--user", "--scope", "--quiet", "--unit=" ++ unit
             , "--property=MemoryMax=" ++ memory
-            , "--property=MemorySwapMax=0"
+            , "--property=MemorySwapMax=" ++ swap
             , "--property=OOMPolicy=stop"
             , "--", self
             ] ++ child
@@ -856,7 +913,10 @@ scopeChild report release unit record program arguments = do
     void (readProcessWithExitCode "systemctl" ["--user", "stop", "--no-block", unit] "")
     putMVar released ()
   claimScopeRecord record scope
-  _ <- reserveMemory (classMemoryMax Build) scope
+  state <- scopeIdentityState scope
+  case state of
+    ScopeIdentityActive _ memory swap -> void (reserveMemory memory swap scope)
+    ScopeIdentityInactive -> ioError (userError "build scope became inactive before reservation")
   (_, _, _, child) <- createProcess (proc program arguments)
   code <- waitForProcess child
   _ <- try (hPutStrLn reportHandle (show (exitNumber code)) >> hFlush reportHandle) :: IO (Either IOException ())
@@ -888,8 +948,8 @@ verdictExit verdict outcome = case verdict of
     Just code | code < 0 -> ExitFailure (128 - code)
     _ -> ExitFailure 1
 
-renderVerdict :: String -> Double -> Verdict -> Outcome -> String
-renderVerdict command waited verdict outcome =
+renderVerdict :: MemoryMax -> MemorySwapMax -> String -> Double -> Verdict -> Outcome -> String
+renderVerdict (MemoryMax memory) swapCap@(MemorySwapMax swap) command waited verdict outcome =
   "{" ++ commaSeparated
     [ field "verdict" (quoted verdictName)
     , field "resource_failure" resource
@@ -898,6 +958,8 @@ renderVerdict command waited verdict outcome =
     , field "unit" (maybe "null" quoted (outcomeUnit outcome))
     , field "unit_result" (quoted (filter safe (unitResult state)))
     , field "memory_max" (quoted memory)
+    , field "memory_swap_max" (quoted swap)
+    , field "reserved_memory_bytes" (show (memoryMaxBytes (MemoryMax memory) + memorySwapMaxBytes swapCap))
     , field "lock_wait_seconds" (seconds waited)
     , field "wall_seconds" (seconds (outcomeWall outcome))
     , field "scope_cpu_seconds" (maybe "null" (\nanos -> seconds (fromIntegral nanos / 1e9)) (unitCpuNanos state))
@@ -907,7 +969,6 @@ renderVerdict command waited verdict outcome =
     ] ++ "}"
   where
     state = outcomeState outcome
-    MemoryMax memory = classMemoryMax Build
     (verdictName, resource) = case verdict of
       Passed -> ("passed", "null")
       Failed -> ("failed", "null")

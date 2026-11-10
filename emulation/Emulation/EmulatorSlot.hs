@@ -17,7 +17,7 @@ import qualified Data.ByteString as B
 import Data.Char (isDigit)
 import Data.List (isSuffixOf, stripPrefix)
 import qualified Emulation.HostAdmission as Host
-import Emulation.HostAdmission (MemoryMax (..), ResourceClass (Emulator), ScopeName, claimScopeRecord, classConcurrency, classMemoryMax, lockOwnerText, memoryMaxBytes, parseMemoryMax, parseScopeName, reserveMemory, userScopeAvailable)
+import Emulation.HostAdmission (MemoryMax (..), MemorySwapMax (..), ResourceClass (Emulator), ScopeName, claimScopeRecord, classConcurrency, configuredMemory, lockOwnerText, memoryMaxBytes, memorySwapMaxBytes, parseScopeName, reserveMemory, userScopeAvailable)
 import FujiAF.StorageBudget (checkStorageBudget)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, getCurrentDirectory, getHomeDirectory, listDirectory, removeFile)
 import System.Environment (getExecutablePath, lookupEnv, setEnv, unsetEnv)
@@ -38,15 +38,15 @@ data ExecutionClass = NativeVerification | FullSystem
 data SlotPolicy = SlotPolicy
   { slotCount :: SlotCount
   , memoryMax :: MemoryMax
+  , memorySwapMax :: MemorySwapMax
   , executionClass :: ExecutionClass
   }
 
 newtype Slot = Slot Int
 
-slotVariable, slotsVariable, memoryVariable :: String
+slotVariable, slotsVariable :: String
 slotVariable = "XM1_EMULATOR_SLOT"
 slotsVariable = "XM1_EMULATOR_SLOTS"
-memoryVariable = "XM1_EMULATOR_MEMORY_MAX"
 
 
 resourceClass :: ExecutionClass -> Host.ResourceClass
@@ -66,20 +66,13 @@ slotPolicyForClass execution = do
   let resource = resourceClass execution
       maximumSlots = classConcurrency resource
       slotsName = if execution == FullSystem then slotsVariable else "XM1_NATIVE_SLOTS"
-      memoryName = if execution == FullSystem then memoryVariable else "XM1_NATIVE_MEMORY_MAX"
-      MemoryMax cap = classMemoryMax resource
+  (memory, swap) <- configuredMemory resource
   slotsText <- lookupEnv slotsName
   slots <- case slotsText >>= readMaybe of
     Just count | count >= 1 && count <= maximumSlots -> pure (SlotCount count)
     Nothing | slotsText == Nothing -> pure (SlotCount maximumSlots)
     _ -> ioError (userError (slotsName ++ " must be an integer 1.." ++ show maximumSlots))
-  memoryText <- lookupEnv memoryName
-  memory <- case memoryText of
-    Nothing -> pure (if execution == NativeVerification then MemoryMax "2G" else classMemoryMax resource)
-    Just text -> case parseMemoryMax text of
-      Just value | memoryMaxBytes value <= memoryMaxBytes (MemoryMax cap) -> pure value
-      _ -> ioError (userError (memoryName ++ " must be positive and at most " ++ cap))
-  pure (SlotPolicy slots memory execution)
+  pure (SlotPolicy slots memory swap execution)
 
 -- | Re-execs a pinned inode into a capped scope before taking resource locks.
 reexecInSlot :: SlotPolicy -> [String] -> IO ()
@@ -87,7 +80,10 @@ reexecInSlot policy arguments = do
   let resource = resourceClass (executionClass policy)
       SlotCount requestedSlots = slotCount policy
   unless (requestedSlots >= 1 && requestedSlots <= classConcurrency resource
-      && memoryMaxBytes (memoryMax policy) <= memoryMaxBytes (classMemoryMax resource)) $
+      && memoryMaxBytes (memoryMax policy) > 0
+      && memoryMaxBytes (memoryMax policy) <= 32 * 1024 ^ (3 :: Int)
+      && memorySwapMaxBytes (memorySwapMax policy) <= 32 * 1024 ^ (3 :: Int)
+      && memoryMaxBytes (memoryMax policy) + memorySwapMaxBytes (memorySwapMax policy) <= 64 * 1024 ^ (3 :: Int)) $
     ioError (userError "invalid verification class policy")
   storage <- lookupEnv "XM1_STORAGE_PATH" >>= maybe defaultStoragePath pure
   checkStorageBudget storage
@@ -113,7 +109,12 @@ reexecInSlot policy arguments = do
             ioError (userError "admission scope does not contain this process")
           scope <- maybe (ioError (userError "invalid admission scope")) pure (parseScopeName unit)
           Slot slot <- acquire directory (executionClass policy) scope
-          _ <- reserveMemory (memoryMax policy) scope
+          _ <- reserveMemory (memoryMax policy) (memorySwapMax policy) scope
+          hPutStrLn stderr ("verification admission: class=" ++ show (executionClass policy)
+            ++ " memory_max_bytes=" ++ show (memoryMaxBytes (memoryMax policy))
+            ++ " memory_swap_max_bytes=" ++ show (memorySwapMaxBytes (memorySwapMax policy))
+            ++ " reserved_memory_bytes=" ++ show (memoryMaxBytes (memoryMax policy) + memorySwapMaxBytes (memorySwapMax policy)))
+          hFlush stderr
           checkStorageBudget storage
           unsetEnv "XM1_ADMISSION_SCOPE"
           setEnv slotVariable (show slot)
@@ -129,11 +130,12 @@ reexecInSlot policy arguments = do
           pid <- getProcessID
           let unit = "xm1-verification-" ++ show pid ++ ".scope"
               MemoryMax memory = memoryMax policy
+              MemorySwapMax swap = memorySwapMax policy
           setEnv "XM1_ADMISSION_SCOPE" unit
           executeFile "systemd-run" True
             ([ "--user", "--scope", "--quiet", "--collect", "--unit=" ++ unit
              , "--property=MemoryMax=" ++ memory
-             , "--property=MemorySwapMax=0", "--property=OOMPolicy=stop"
+             , "--property=MemorySwapMax=" ++ swap, "--property=OOMPolicy=stop"
              ] ++ ["--property=CPUWeight=1000" | executionClass policy == NativeVerification]
                ++ ["--", executable] ++ arguments) Nothing
 

@@ -3,7 +3,7 @@ module Main (main) where
 
 import Control.Concurrent (threadDelay)
 import Control.Exception (IOException, try)
-import Control.Monad (unless)
+import Control.Monad (forM, unless)
 import Data.Char (isDigit)
 import Data.List (elemIndex, isInfixOf, isPrefixOf)
 import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
@@ -27,6 +27,13 @@ fakeBazel :: String
 fakeBazel = unlines
   [ "#!/bin/sh"
   , "echo \"start $FAKE_NAME $$ $*\" >> \"$FAKE_LOG\""
+  , "while IFS=: read -r hierarchy controllers group; do"
+  , "  if [ \"$hierarchy\" = 0 ]; then"
+  , "    read -r memory < \"/sys/fs/cgroup$group/memory.max\""
+  , "    read -r swap < \"/sys/fs/cgroup$group/memory.swap.max\""
+  , "    echo \"memory $FAKE_NAME $memory $swap\" >> \"$FAKE_LOG\""
+  , "  fi"
+  , "done < /proc/self/cgroup"
   , "while [ ! -e \"$FAKE_RELEASE\" ]; do sleep 0.1; done"
   , "echo \"end $FAKE_NAME\" >> \"$FAKE_LOG\""
   , "exit \"${FAKE_EXIT:-0}\""
@@ -110,6 +117,32 @@ run binary = do
   invalidReserveRan <- started "invalid-reserve"
   invalidReserveRefused <- expect "an invalid storage reserve cannot authorize a build"
     (invalidReserveCode == ExitFailure 75 && not invalidReserveRan)
+
+  memoryCases <- forM
+    [ ("default-memory", [], "12884901888 8589934592")
+    , ("override-memory", [("XM1_HOST_BUILD_MEMORY_MAX", "24G"), ("XM1_HOST_BUILD_SWAP_MAX", "4G")], "25769803776 4294967296")
+    , ("zero-swap", [("XM1_HOST_BUILD_MEMORY_MAX", "8G"), ("XM1_HOST_BUILD_SWAP_MAX", "0")], "8589934592 0")
+    , ("maximum-memory", [("XM1_HOST_BUILD_MEMORY_MAX", "32G"), ("XM1_HOST_BUILD_SWAP_MAX", "32G")], "34359738368 34359738368")
+    ] $ \(name, overrides, limits) -> do
+      writeFile (release name) ""
+      invocation <- start name overrides
+      code <- waitForProcess (invocationProcess invocation)
+      _ <- invocationStderr invocation
+      entries <- lines <$> readFile' logFile
+      expect (name ++ " enforces RAM and swap for the whole build scope")
+        (code == ExitSuccess && ("memory " ++ name ++ " " ++ limits) `elem` entries)
+  invalidMemoryCases <- forM
+    [ ("invalid-ram", [("XM1_HOST_BUILD_MEMORY_MAX", "33G")])
+    , ("zero-ram", [("XM1_HOST_BUILD_MEMORY_MAX", "0")])
+    , ("invalid-swap", [("XM1_HOST_BUILD_SWAP_MAX", "33G")])
+    , ("negative-swap", [("XM1_HOST_BUILD_SWAP_MAX", "-1")])
+    ] $ \(name, overrides) -> do
+      writeFile (release name) ""
+      invocation <- start name overrides
+      code <- waitForProcess (invocationProcess invocation)
+      _ <- invocationStderr invocation
+      ran <- started name
+      expect (name ++ " refuses a build before bazel runs") (code /= ExitSuccess && not ran)
 
   first <- start "first" []
   firstStarted <- waitFor (started "first")
@@ -301,7 +334,7 @@ run binary = do
   _ <- waitForProcess legacy
   legacyCompatible <- expect "a legacy whole-file lock blocks both build lanes"
     (legacyPid /= Nothing && not legacyEarly && legacyCode == ExitSuccess)
-  pure (and ([storageRefused, invalidReserveRefused, overlapped, passed, laneHeld, released, failed, refused, holders, baseObserved, legacyCompatible] ++ boundaries))
+  pure (and ([storageRefused, invalidReserveRefused, overlapped, passed, laneHeld, released, failed, refused, holders, baseObserved, legacyCompatible] ++ boundaries ++ memoryCases ++ invalidMemoryCases))
 
 data UnavailableOutputBase = OverBoundBase | CutBaseArgument | ControlByteBase | NonAsciiBase
 
@@ -397,7 +430,8 @@ testEnvironment home bin logFile = do
       keep name value environment =
         if any ((== name) . fst) environment then environment else (name, value) : environment
       dropped = ["HOME", "PATH", "XM1_EMULATOR_SLOT", "XM1_HOST_BUILD", "XM1_STORAGE_MIN_FREE",
-        "XM1_STORAGE_ACCOUNTING_CONFIG", "XM1_STORAGE_ACCOUNTING_STATE", "XM1_STORAGE_ACCOUNTING_TOOL"]
+        "XM1_HOST_BUILD_MEMORY_MAX", "XM1_HOST_BUILD_SWAP_MAX", "XM1_EMULATOR_MEMORY_MAX", "XM1_EMULATOR_SWAP_MAX",
+        "XM1_NATIVE_MEMORY_MAX", "XM1_NATIVE_SWAP_MAX", "XM1_STORAGE_ACCOUNTING_CONFIG", "XM1_STORAGE_ACCOUNTING_STATE", "XM1_STORAGE_ACCOUNTING_TOOL"]
   pure $ ("HOME", home) : ("PATH", path) : ("FAKE_LOG", logFile) : ("XM1_STORAGE_MIN_FREE", "1")
     : filter ((`notElem` dropped) . fst)
       (keep "XDG_RUNTIME_DIR" runtime (keep "DBUS_SESSION_BUS_ADDRESS" ("unix:path=" ++ runtime ++ "/bus") inherited))

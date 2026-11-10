@@ -3,9 +3,11 @@
 -- until its stdin closes.
 module Main (main) where
 
-import Control.Exception (IOException, catch, displayException, evaluate, try)
+import Control.Exception (IOException, bracket, catch, displayException, evaluate, try)
 import Data.Maybe (fromMaybe)
 import Emulation.EmulatorSlot (ExecutionClass (..), reexecInSlot, slotPolicyForClass)
+import Foreign.Marshal.Alloc (free, mallocBytes)
+import Foreign.Marshal.Utils (fillBytes)
 import System.Environment (getExecutablePath, lookupEnv)
 import System.Exit (ExitCode (..), exitFailure, exitWith)
 import System.Posix.Process (getProcessID)
@@ -37,6 +39,11 @@ main = run `catch` \failure -> do
           case limit of
             Right value -> putStrLn ("probe-memory-max " ++ unwords (words value))
             Left _ -> pure ()
+          swapLimit <- try (readFile ("/sys/fs/cgroup" ++ group ++ "/memory.swap.max") >>= \text -> evaluate (length text) >> pure text)
+            :: IO (Either IOException String)
+          case swapLimit of
+            Right value -> putStrLn ("probe-memory-swap-max " ++ unwords (words value))
+            Left _ -> pure ()
         _ -> pure ()
       pid <- getProcessID
       putStrLn ("probe-pid " ++ show pid)
@@ -54,8 +61,25 @@ main = run `catch` \failure -> do
           (code, _, _) <- readProcessWithExitCode self [] ""
           putStrLn ("probe-nested-exit " ++ show code)
         _ -> pure ()
-      putStrLn ("probe-in-slot " ++ fromMaybe "unassigned" slot)
-      hFlush stdout
-      _ <- getContents >>= evaluate . length
-      status <- lookupEnv "XM1_PROBE_EXIT"
-      exitWith (maybe ExitSuccess ExitFailure (status >>= readMaybe))
+      withProbeAllocation $ do
+        putStrLn ("probe-in-slot " ++ fromMaybe "unassigned" slot)
+        hFlush stdout
+        _ <- getContents >>= evaluate . length
+        status <- lookupEnv "XM1_PROBE_EXIT"
+        exitWith (maybe ExitSuccess ExitFailure (status >>= readMaybe))
+
+newtype AllocationBytes = AllocationBytes Int
+
+withProbeAllocation :: IO a -> IO a
+withProbeAllocation action = do
+  requested <- lookupEnv "XM1_PROBE_ALLOCATE_BYTES"
+  case requested of
+    Nothing -> action
+    Just text -> case AllocationBytes <$> readMaybe text of
+      Just (AllocationBytes bytes) | bytes > 0 && toInteger bytes <= 8 * 1024 * 1024 * 1024 ->
+        bracket (mallocBytes bytes) free $ \buffer -> do
+          fillBytes buffer 165 bytes
+          putStrLn ("probe-allocated-bytes " ++ show bytes)
+          hFlush stdout
+          action
+      _ -> ioError (userError "XM1_PROBE_ALLOCATE_BYTES must be positive and at most 8589934592")
