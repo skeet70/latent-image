@@ -90,8 +90,7 @@ scriptedStub _=False
 contractMemory :: Value -> IO ContractMemory
 contractMemory item=do
  let selectors=filter (`elem` keys item)["address","register","indirect_register"]
- ensure(length selectors==1) "memory target must have exactly one selector"
- let selector=head selectors
+ selector<-case selectors of [one]->pure one;_->failH "memory target must have exactly one selector"
  fields item (selector++" offset hex") "stub memory"
  target<-if selector=="address" then AbsoluteTarget <$> address(get item selector) else do
    let name=str(get item selector)

@@ -793,8 +793,8 @@ scriptAdapterRegressions :: IO ()
 scriptAdapterRegressions=withTemporary "fuji-script-adapter"$ \root->do
  base<-B.readFile "emulation/fixtures/explicit-stub.json" >>= jsonRead
  copyFile "emulation/fixtures/explicit-stub.bin"(root </> "explicit-stub.bin")
+ legacy<-case list(get base "stubs") of [one]->pure one;_->failH "explicit stub fixture must contain one stub"
  let path=root </> "script.json"
-     legacy=head(list(get base "stubs"))
      memory selector value offset=obj[(selector,s value),("offset",n offset),("hex",s "00")]
      call=obj[("inputs",set "sp"(s "0x00003020")(get legacy "inputs")),("outputs",get legacy "outputs"),("reads",arr[memory "address" "0x00002004" 0,memory "register" "sp" (-1),memory "indirect_register" "r2" 4]),("writes",arr[])]
      stub calls=obj[("address",get legacy "address"),("calls",arr calls)]
