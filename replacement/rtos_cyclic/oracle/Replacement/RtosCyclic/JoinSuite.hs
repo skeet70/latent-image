@@ -40,6 +40,7 @@ import qualified Replacement.RtosOwnFirst.Regions as R
 import qualified Replacement.RtosPlatform.Aggregate as Aggregate
 import qualified Replacement.RtosPlatform.Union as Union
 import qualified Replacement.RtosTimer.Suite as Timer
+import System.Directory (createDirectory)
 import System.FilePath ((</>))
 
 data Inputs = Inputs
@@ -1132,13 +1133,48 @@ payloadHolds inputs observation = all unchanged
   where
     unchanged (name, bytes) = lookup (RegionId (fromString name)) (nativeMemory observation) == Just bytes
 
-runOneStage :: FilePath -> FilePath -> Inputs -> Variant -> (State, State) -> IO (CaseRun, CaseRun, State, State, BatchReuse, NativeObservation, NativeObservation)
-runOneStage runner cacheRoot inputs variant (stockState, ownedState) = do
-  let patchedStock = patchState layoutA variant stockState
+newtype JoinWorkspace = JoinWorkspace { workspaceRoot :: FilePath }
+
+data JoinStage
+  = RegisterPhase30 | TickAt0 | TickAt10 | TickAt20 | TickAt30
+  | UnregisterPhase30 | TickAfterUnregister | FaultStage Variant
+
+newWorkspace :: FilePath -> IO JoinWorkspace
+newWorkspace resultsDirectory = do
+  let directory = resultsDirectory </> "stages"
+  createDirectory directory
+  pure (JoinWorkspace directory)
+
+stageDirectory :: JoinWorkspace -> JoinStage -> FilePath
+stageDirectory (JoinWorkspace root) stage = root </> case stage of
+  RegisterPhase30 -> "register-30"
+  TickAt0 -> "tick-0"
+  TickAt10 -> "tick-10"
+  TickAt20 -> "tick-20"
+  TickAt30 -> "tick-30"
+  UnregisterPhase30 -> "unregister-30001"
+  TickAfterUnregister -> "tick-after-unregister"
+  FaultStage variant -> variantName variant
+
+stageVariant :: JoinStage -> Variant
+stageVariant stage = case stage of
+  RegisterPhase30 -> Register 30
+  TickAt0 -> Tick
+  TickAt10 -> Tick
+  TickAt20 -> Tick
+  TickAt30 -> Tick
+  UnregisterPhase30 -> Unregister 30001
+  TickAfterUnregister -> Tick
+  FaultStage variant -> variant
+
+runOneStage :: FilePath -> FilePath -> JoinWorkspace -> Inputs -> JoinStage -> (State, State) -> IO (CaseRun, CaseRun, State, State, BatchReuse, NativeObservation, NativeObservation)
+runOneStage runner cacheRoot workspace inputs stage (stockState, ownedState) = do
+  let variant = stageVariant stage
+      patchedStock = patchState layoutA variant stockState
       patchedOwned = patchState layoutA variant ownedState
       stockSpec = buildCase layoutA inputs Stock variant patchedStock
       ownedSpec = buildCase layoutA inputs Owned variant patchedOwned
-      directory = cacheRoot </> variantName variant
+      directory = stageDirectory workspace stage
   (reuse, pairs) <- runBatch runner cacheRoot directory [stockSpec, ownedSpec]
   let stockObservation = observationOf (variantName variant ++ "-stock") pairs
       ownedObservation = observationOf (variantName variant ++ "-owned") pairs
@@ -1164,8 +1200,9 @@ runOneStage runner cacheRoot inputs variant (stockState, ownedState) = do
 
 runJoin :: Scope -> FilePath -> FilePath -> FilePath -> Inputs -> IO ([CaseRun], [ControlRun])
 runJoin scope runner resultsDirectory cacheRoot inputs = do
+  workspace <- newWorkspace resultsDirectory
   let rootSpec = rootPrepCase layoutA (inLoaderA inputs)
-  (rootReuse, rootPairs) <- runBatch runner cacheRoot (resultsDirectory </> "prep-root") [rootSpec]
+  (rootReuse, rootPairs) <- runBatch runner cacheRoot (workspaceRoot workspace </> "prep-root") [rootSpec]
   let rootObservation = observationOf "prep-root" rootPairs
       rootChecks observation =
         [ ("root table " ++ describe check', either (const False) (const True) (evaluateWith [("root", lRoot layoutA, 0x1700)] layoutA Stock observation check'))
@@ -1186,7 +1223,7 @@ runJoin scope runner resultsDirectory cacheRoot inputs = do
          in CaseRun "prep-root" "fixture" checks [description | (description, False) <- checks] rootReuse
       rootBytes = regionBytesOf rootObservation (RegionId "root")
   let interfaceSpec = interfacesPrepCase inputs
-  (interfaceReuse, interfacePairs) <- runBatch runner cacheRoot (resultsDirectory </> "prep-interfaces") [interfaceSpec]
+  (interfaceReuse, interfacePairs) <- runBatch runner cacheRoot (workspaceRoot workspace </> "prep-interfaces") [interfaceSpec]
   let interfaceObservation = observationOf "prep-interfaces" interfacePairs
       interfaceChecks observation =
         [ ("interface table " ++ describe check', either (const False) (const True) (evaluateWith [("interfaces", interfacesAddress, 8)] layoutA Stock observation check'))
@@ -1203,19 +1240,19 @@ runJoin scope runner resultsDirectory cacheRoot inputs = do
       initialStock = seedState layoutA Stock rootBytes interfaceBytes
       initialOwned = seedState layoutA Owned rootBytes interfaceBytes
   (registerStock, registerOwned, afterRegisterStock, afterRegisterOwned, _, _, _) <-
-    runOneStage runner cacheRoot inputs (Register 30) (initialStock, initialOwned)
+    runOneStage runner cacheRoot workspace inputs RegisterPhase30 (initialStock, initialOwned)
   (tick0Stock, tick0Owned, afterTick0Stock, afterTick0Owned, _, _, _) <-
-    runOneStage runner cacheRoot inputs Tick (afterRegisterStock, afterRegisterOwned)
+    runOneStage runner cacheRoot workspace inputs TickAt0 (afterRegisterStock, afterRegisterOwned)
   (tick10Stock, tick10Owned, afterTick10Stock, afterTick10Owned, _, _, _) <-
-    runOneStage runner cacheRoot inputs Tick (afterTick0Stock, afterTick0Owned)
+    runOneStage runner cacheRoot workspace inputs TickAt10 (afterTick0Stock, afterTick0Owned)
   (tick20Stock, tick20Owned, afterTick20Stock, afterTick20Owned, _, _, noDeliveryOwned) <-
-    runOneStage runner cacheRoot inputs Tick (afterTick10Stock, afterTick10Owned)
+    runOneStage runner cacheRoot workspace inputs TickAt20 (afterTick10Stock, afterTick10Owned)
   (deliverStock, deliverOwned, afterDeliverStock, afterDeliverOwned, deliverReuse, _, deliveryOwned) <-
-    runOneStage runner cacheRoot inputs Tick (afterTick20Stock, afterTick20Owned)
+    runOneStage runner cacheRoot workspace inputs TickAt30 (afterTick20Stock, afterTick20Owned)
   (unregisterStock, unregisterOwned, afterUnregisterStock, afterUnregisterOwned, _, _, _) <-
-    runOneStage runner cacheRoot inputs (Unregister 30001) (afterDeliverStock, afterDeliverOwned)
+    runOneStage runner cacheRoot workspace inputs UnregisterPhase30 (afterDeliverStock, afterDeliverOwned)
   (postTickStock, postTickOwned, _, _, _, _, _) <-
-    runOneStage runner cacheRoot inputs Tick (afterUnregisterStock, afterUnregisterOwned)
+    runOneStage runner cacheRoot workspace inputs TickAfterUnregister (afterUnregisterStock, afterUnregisterOwned)
   let faultInputs = case scope of
         LifecycleSmoke -> []
         FullScope ->
@@ -1227,7 +1264,7 @@ runJoin scope runner resultsDirectory cacheRoot inputs = do
           , (TickRegistryFault, (afterTick20Stock, afterTick20Owned))
           ]
   faultRuns <- forM faultInputs $ \(variant, state) -> do
-    (stock, owned, _, _, _, _, _) <- runOneStage runner cacheRoot inputs variant state
+    (stock, owned, _, _, _, _, _) <- runOneStage runner cacheRoot workspace inputs (FaultStage variant) state
     pure [stock, owned]
   let runs =
         [ rootRun rootObservation

@@ -150,6 +150,8 @@ devenv shell -- "$HB" --output_base="$OB" run --jobs=4 \
 
 For that package, the app join additionally takes `--startup-loader-a PACKAGE/startup-loader-a.bin --packaged-image4 PACKAGE/image4.bin`. Loader admission reconstructs the platform change over the recorded admitted startup loader instead of canonical stock; stock comparison still uses pinned canonical input. App admission checks the emitted dispatcher and caller spans in final image4. Owned execution maps its app, dispatcher and retained callback/checker bytes from that final image4. These bounded mappings do not execute the complete image4 or boot its root task.
 
+The app join owns a fresh `<results-directory>/stages` workspace. Publication, each of the five ordinary ticks and every fault stage have separate directories; an existing workspace is refused before case materialization. The shared cache stores reusable observations, not mutable stage work. The ownership-fixed full join rejudges all 28 original wires from cache with 596 checks and 21 controls, zero semantic failures, and retains 28 separate case files and 28 generic judgments. Its 316 historical cache-workspace files remain unchanged, with no added/removed cache keys or shared-cache growth. Generic judgments retain 28 failed exact-memory statuses; terminal observations remain 27 returned and one declared stop-address.
+
 ### Bounded native scopes and admission plan
 
 The timer, cyclic and app-join CLIs accept `--scope smoke|full`, defaulting to `full`. Smoke selection changes case selection, not expectations or applicable status/admission checks.
@@ -168,14 +170,16 @@ Cache reuse requires the canonical immutable runner path and its bytes, the comp
 
 After explicit slot and output admission, use Bazel's `--run_under` with the parent-verified main slot wrapper. Host-build owns `--script_path` internally; supplying another one creates the requested launcher but breaks host-build's follow-on handoff. `--run_under` starts the contained qualifier after build admission is released. Keep `XM1_EMULATOR_SLOTS=1` and explicit 2 GiB for these small native scopes. `RUN` must be a newly admitted output directory, `P` the newly staged package, `B` this output base's `bazel-bin`, and `CACHE` the shared native cache. Replace `smoke` with `full` only under its own allowance.
 
+The wrapper normally honors `BUILD_WORKING_DIRECTORY`; remove that variable only around a Bazel `--run_under` wrapper so relative runfiles arguments retain Bazel's working directory. The executed private plans instead record absolute argv for every linked input and avoid this cwd dependency.
+
 ```sh
 STOCK="$PWD/private-data/analysis/x-m1-1.50"
 B="$PWD/bazel-bin"
 P="$PWD/private-data/scratch/TimerAppSystemJoin/root-closure-composed-01"
 CACHE="$PWD/private-data/scratch/TimerAppSystemJoin/native-cache"
 mkdir -p "$RUN"
-SLOT_WRAPPER=/var/home/murph/.cache/bazel/_bazel_murph/4aa8d9b0a55ca9b1b9553dfd7cc9563e/execroot/_main/bazel-out/k8-fastbuild/bin/emulation/emulator-slot
-XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=2G devenv shell -- "$HB" --output_base="$OB" run --jobs=4 --run_under="$SLOT_WRAPPER" \
+SLOT_WRAPPER=/var/home/murph/Code/latent-image/private-data/scratch/HostAdmission/bin/emulator-slot-six
+XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=2G devenv shell -- "$HB" --output_base="$OB" run --jobs=4 --run_under="env -u BUILD_WORKING_DIRECTORY $SLOT_WRAPPER" \
   //replacement/rtos_timer/oracle:timer-oracle -- --scope smoke \
   --loader-a "$STOCK/decode/loader-40000.bin" --loader-b "$STOCK/decode/loader-d0000.bin" \
   --aggregate-a-bin "$P/effective-carrier-a.bin" --aggregate-a-symbols "$B/replacement/rtos_platform/platform-a.symbols" \
@@ -188,7 +192,7 @@ XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=2G devenv shell -- "$HB" --output_b
 The cyclic and app commands use separate work directories:
 
 ```sh
-XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=2G devenv shell -- "$HB" --output_base="$OB" run --jobs=4 --run_under="$SLOT_WRAPPER" \
+XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=2G devenv shell -- "$HB" --output_base="$OB" run --jobs=4 --run_under="env -u BUILD_WORKING_DIRECTORY $SLOT_WRAPPER" \
   //replacement/rtos_cyclic/oracle:cyclic-oracle -- --scope smoke \
   --loader-a "$STOCK/decode/loader-40000.bin" --loader-b "$STOCK/decode/loader-d0000.bin" \
   --aggregate-a-bin "$P/effective-carrier-a.bin" --aggregate-a-symbols "$B/replacement/rtos_platform/platform-a.symbols" \
@@ -196,7 +200,7 @@ XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=2G devenv shell -- "$HB" --output_b
   --aggregate-b-bin "$P/effective-carrier-b.bin" --aggregate-b-symbols "$B/replacement/rtos_platform/platform-b.symbols" \
   --aggregate-b-placements "$B/replacement/rtos_platform/placement-b.json" \
   --aggregate-carriers "$PWD/replacement/rtos_platform/carriers.json" --cache-root "$CACHE" --results "$RUN/cyclic/results.json"
-XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=2G devenv shell -- "$HB" --output_base="$OB" run --jobs=4 --run_under="$SLOT_WRAPPER" \
+XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=2G devenv shell -- "$HB" --output_base="$OB" run --jobs=4 --run_under="env -u BUILD_WORKING_DIRECTORY $SLOT_WRAPPER" \
   //replacement/rtos_cyclic/oracle:join-oracle -- --scope smoke \
   --image4 "$STOCK/lz/id4-0061c400.bin" \
   --loader-a "$STOCK/decode/loader-40000.bin" --loader-b "$STOCK/decode/loader-d0000.bin" \
@@ -208,4 +212,4 @@ XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=2G devenv shell -- "$HB" --output_b
   --aggregate-carriers "$PWD/replacement/rtos_platform/carriers.json" --cache-root "$CACHE" --results "$RUN/app/results.json"
 ```
 
-All runtime commands above remain unexecuted for this source revision. The minimum changed timer-publication smoke is four native observations; the composed-package and native-slot grants are separate prerequisites for the packaged sequence. No core-1 app caller is admitted.
+The actual `root-closure-composed-01` package passes file-only loader/app admission. Its two independently guarded leaf smokes pass 2 comparisons and 4 fresh observations each: timer has 72 checks/56 controls; cyclic has 80 checks/23 controls. All semantic checks hold. The eight generic exact-memory native receipts retain `failed` statuses for writable-region changes; all eight runner observations returned. Whole scopes overlap for 0.326 seconds, both with observed 2 GiB memory limits and no reserve or retention violation. `stage-receipt.json`, `smoke-plan.json` and `smoke-receipt.json` retain exact commands, identities and measured allocation. These are bounded semantic-oracle results, not generic native-case passes, natural root boot, physical arena exclusivity or a core-1 app caller.

@@ -117,6 +117,7 @@ haskell_library(
         "//host:bytestring",
         "//host:containers",
         "//host:filepath",
+        "//host:directory",
         "//replacement/rtos_own_first/stage:own-first-artifact",
         "//replacement/rtos_platform:aggregate",
         "//replacement/rtos_platform:platform-artifact",
