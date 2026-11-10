@@ -4037,6 +4037,7 @@ haskell_library(
         "//host:attoparsec",
         "//host:base",
         "//host:bytestring",
+        "//host:cryptohash-sha256",
         "//host:directory",
         "//host:filepath",
         "//host:json",

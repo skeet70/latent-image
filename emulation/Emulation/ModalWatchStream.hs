@@ -4,6 +4,7 @@ module Emulation.ModalWatchStream
   ( readFinalModalWatch, readFinalModalWatchFrom, compactFinalWatch ) where
 
 import Control.Monad (unless)
+import qualified Crypto.Hash.SHA256 as SHA256
 import Data.Aeson (Value (..), eitherDecodeStrict', encode, object, (.=))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
@@ -11,7 +12,9 @@ import qualified Data.Aeson.Types as J
 import qualified Data.Attoparsec.ByteString as A
 import qualified Data.Attoparsec.ByteString.Char8 as C
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Builder as BB
 import qualified Data.ByteString.Lazy as BL
+import qualified Data.ByteString.Lazy.Char8 as BLC
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Emulation.ModalObservation (FinalModalWatch, finalModalWatchFromRecords, modalLifetimeWriterLimit)
@@ -21,7 +24,7 @@ import FujiAF.JSON (valueParser)
 import System.Directory (doesFileExist, getFileSize, removeFile, renameFile)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, takeFileName, (</>))
-import System.IO (IOMode (ReadMode), withBinaryFile)
+import System.IO (IOMode (ReadMode, WriteMode), withBinaryFile)
 import System.Posix.Files (setFileMode)
 import System.Process (CreateProcess (..), StdStream (..), proc, readProcessWithExitCode, terminateProcess, waitForProcess, withCreateProcess)
 
@@ -90,8 +93,8 @@ readCompacted finalPath summary reference = do
         if size /= toInteger (referenceBytes reference) then pure (Left "compacted watch sidecar size differs")
         else if size > compressedLimit then pure (Left "compacted watch sidecar exceeds its compressed bound")
         else do
-          compressed <- B.readFile sidecar
-          if sha256Hex (sha256 compressed) /= T.unpack (referenceSha256 reference)
+          compressedDigest <- withBinaryFile sidecar ReadMode $ \handle -> hashChunks (B.hGetSome handle 65536) SHA256.init
+          if compressedDigest /= T.unpack (referenceSha256 reference)
             then pure (Left "compacted watch sidecar digest differs")
             else do
               streamed <- streamSidecar sidecar
@@ -107,6 +110,15 @@ readCompacted finalPath summary reference = do
                 finalModalWatchFromRecords summary rows
  where
   compressedLimit = 512 * 1024 * 1024 :: Integer
+
+digestHex :: SHA256.Ctx -> String
+digestHex = BLC.unpack . BB.toLazyByteString . BB.byteStringHex . SHA256.finalize
+
+hashChunks :: IO B.ByteString -> SHA256.Ctx -> IO String
+hashChunks next !context = do
+  chunk <- next
+  if B.null chunk then pure (digestHex context)
+  else hashChunks next (SHA256.update context chunk)
 
 streamSidecar :: FilePath -> IO (Either String ([WatchRecord], String))
 streamSidecar sidecar =
@@ -130,12 +142,12 @@ streamSidecar sidecar =
  where
   lineLimit = 1024 * 1024
   decodedLimit = 1024 * 1024 * 1024
-  readLines handle = go handle B.empty 0 0 [] []
-  go handle partial !total !count records digest = do
+  readLines handle = go handle B.empty 0 0 [] SHA256.init
+  go handle partial !total !count records !digest = do
     chunk <- B.hGetSome handle 65536
     if B.null chunk
       then if B.null partial
-        then pure (Right (reverse records, sha256Hex (sha256 (B.concat (reverse digest)))))
+        then pure (Right (reverse records, digestHex digest))
         else pure (Left "compacted watch row is not LF terminated")
       else do
         let pieces = B.split 10 (partial <> chunk)
@@ -145,8 +157,8 @@ streamSidecar sidecar =
         else case consume complete total count records digest of
           Left problem -> pure (Left problem)
           Right (nextTotal, nextCount, nextRecords, nextDigest) -> go handle rest nextTotal nextCount nextRecords nextDigest
-  consume [] total count records digest = Right (total, count, records, digest)
-  consume (piece : remaining) total count records digest
+  consume [] !total !count records !digest = Right (total, count, records, digest)
+  consume (piece : remaining) !total !count records !digest
     | B.null piece = Left "compacted watch contains a blank row"
     | B.length piece > lineLimit = Left "compacted watch row exceeds its line bound"
     | total + B.length piece + 1 > decodedLimit = Left "compacted watch rows exceed their decoded bound"
@@ -155,7 +167,8 @@ streamSidecar sidecar =
         Left problem -> Left ("compacted watch row: " ++ problem)
         Right value -> case parseWatchRecord value of
           Left problem -> Left ("compacted watch row: " ++ problem)
-          Right record -> consume remaining (total + B.length piece + 1) (count + 1) (record : records) ((piece <> "\n") : digest)
+          Right record -> consume remaining (total + B.length piece + 1) (count + 1) (record : records)
+            (SHA256.update (SHA256.update digest piece) "\n")
 
 compactFinalWatch :: FilePath -> FilePath -> IO (Either String ())
 compactFinalWatch rawPath finalPath = do
@@ -163,9 +176,11 @@ compactFinalWatch rawPath finalPath = do
   case A.parseOnly (watchRowsParser <* jsonSpace <* A.endOfInput) raw of
     Left problem -> pure (Left problem)
     Right (summary, rows) -> do
-      let jsonl = finalPath ++ ".records.jsonl"
+      let !rowCount = length rows
+          jsonl = finalPath ++ ".records.jsonl"
           compressed = jsonl ++ ".gz"
-      B.writeFile jsonl (B.concat [row <> "\n" | row <- rows])
+      withBinaryFile jsonl WriteMode $ \handle ->
+        mapM_ (\row -> B.hPut handle row >> B.hPut handle "\n") rows
       (code, _, errors) <- readProcessWithExitCode "gzip" ["-n", "-f", jsonl] ""
       case code of
         ExitSuccess -> do
@@ -174,7 +189,7 @@ compactFinalWatch rawPath finalPath = do
                 [ "schema" .= (1 :: Int)
                 , "path" .= takeFileName compressed
                 , "sha256" .= sha256Hex (sha256 compressedBytes)
-                , "count" .= length rows
+                , "count" .= rowCount
                 , "bytes" .= B.length compressedBytes ]
               final = case summary of
                 Object fields -> Object (KM.insert "records" reference fields)

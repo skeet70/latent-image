@@ -54,12 +54,12 @@ hostSlots = classConcurrency Emulator
 insideSlot :: IO Bool
 insideSlot = maybe False (const True) <$> lookupEnv slotVariable
 
--- | All host slots at 2G by default; @XM1_EMULATOR_SLOTS@ (1..'hostSlots') and
+-- | All host slots at 4G by default; @XM1_EMULATOR_SLOTS@ (1..'hostSlots') and
 -- @XM1_EMULATOR_MEMORY_MAX@ (at most the class cap) override them.
 slotPolicyFromEnvironment :: IO SlotPolicy
 slotPolicyFromEnvironment = do
   slots <- lookupEnv slotsVariable >>= maybe (pure (SlotCount hostSlots)) parseSlots
-  memory <- lookupEnv memoryVariable >>= maybe (pure (MemoryMax "2G")) parseMemory
+  memory <- lookupEnv memoryVariable >>= maybe (pure (classMemoryMax Emulator)) parseMemory
   pure (SlotPolicy slots memory)
   where
     parseSlots text = case readMaybe text of

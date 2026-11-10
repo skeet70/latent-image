@@ -16,7 +16,10 @@ import Emulation.ModalWatchStream (compactFinalWatch, readFinalModalWatch, readF
 import Emulation.Sha256 (sha256, sha256Hex)
 import EmulatorUsb (decodeBridgeWatchLine)
 import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, removeFile, removePathForcibly)
+import System.Environment (getArgs)
 import System.FilePath ((</>))
+import System.Exit (ExitCode (..))
+import System.Process (readProcessWithExitCode)
 
 row :: Int -> Value
 row ordinal = object
@@ -56,7 +59,8 @@ compactionTests = do
   let root = base </> "modal-watch-compaction"
   removePathForcibly root
   createDirectoryIfMissing True root
-  let fixture = watch [row 1, row 2]
+  let fixtureRows = map row [1 .. 8192]
+      fixture = watch fixtureRows
       raw = root </> "raw.json"
       compact = root </> "e2e-modal-watch-final.json"
   B.writeFile raw (BL.toStrict (encode fixture))
@@ -65,7 +69,7 @@ compactionTests = do
   result <- compactFinalWatch raw compact
   check "compaction succeeds" (result == Right ())
   compacted <- readFinalModalWatch compact
-  check "compacted watch preserves the summary and row digest"
+  check "long compacted watch preserves the summary and row digest"
     (fmap finalModalWatchSummary compacted == fmap finalModalWatchSummary inline)
   compactBytes <- B.readFile compact
   finalValue <- either (ioError . userError) pure (eitherDecodeStrict' compactBytes) :: IO Value
@@ -87,6 +91,17 @@ compactionTests = do
         bad <- readFinalModalWatch compact
         check label (isLeft bad)
       sidecar = compact ++ ".records.jsonl.gz"
+      jsonl = compact ++ ".records.jsonl"
+      rowBytes = [BL.toStrict (encode value) <> "\n" | value <- fixtureRows]
+      jsonlBytes = B.concat rowBytes
+      replaceRows bytes = do
+        B.writeFile jsonl bytes
+        (code, _, errors) <- readProcessWithExitCode "gzip" ["-n", "-f", jsonl] ""
+        check ("fixture compression failed: " ++ errors) (code == ExitSuccess)
+        compressed <- B.readFile sidecar
+        setReference
+          [ ("sha256", String (T.pack (sha256Hex (sha256 compressed))))
+          , ("bytes", toJSON (B.length compressed)) ]
   writeFinal finalValue
   setReference [("count", Number 3)]
   reject "compacted watch rejects a wrong row count"
@@ -112,12 +127,58 @@ compactionTests = do
   reject "compacted watch rejects a corrupt gzip CRC"
   writeFinal finalValue
   B.writeFile sidecar sidecarBytes
+  setSummary "views" (String "observe")
+  reject "long compacted watch rejects an invalid summary"
+  writeFinal finalValue
+  replaceRows (B.concat (reverse rowBytes))
+  reject "long compacted watch rejects reordered rows with the original digest"
+  writeFinal finalValue
+  replaceRows (B.init jsonlBytes)
+  reject "long compacted watch rejects a final row without LF"
+  writeFinal finalValue
+  replaceRows (jsonlBytes <> "\n")
+  reject "long compacted watch rejects a trailing blank row"
+  writeFinal finalValue
+  replaceRows (jsonlBytes <> "{\n")
+  reject "long compacted watch rejects malformed JSON after valid rows"
+  writeFinal finalValue
+  let invalidRow = case row 8192 of
+        Object fields -> Object (KM.insert "size" (Number 8) fields)
+        value -> value
+      invalidBytes = B.concat (init rowBytes) <> BL.toStrict (encode invalidRow) <> "\n"
+  replaceRows invalidBytes
+  setSummary "records_sha256" (String (T.pack (sha256Hex (sha256 invalidBytes))))
+  reject "long compacted watch rejects an invalid late witness with matching digests"
+  writeFinal finalValue
+  replaceRows (jsonlBytes <> B.replicate (1024 * 1024 + 1) 32 <> "\n")
+  reject "long compacted watch rejects an oversized late row"
+  writeFinal finalValue
+  let spacedBytes = B.concat [" \t" <> B.init bytes <> " \r\n" | bytes <- rowBytes]
+  replaceRows spacedBytes
+  setSummary "records_sha256" (String (T.pack (sha256Hex (sha256 spacedBytes))))
+  spaced <- readFinalModalWatch compact
+  check "long compacted watch hashes exact row bytes including JSON whitespace"
+    (either (const False) (const True) spaced)
+  writeFinal finalValue
+  B.writeFile sidecar sidecarBytes
   removeFile sidecar
   reject "compacted watch rejects a missing sidecar"
   removePathForcibly root
 
 main :: IO ()
 main = do
+  arguments <- getArgs
+  case arguments of
+    [] -> runTests
+    ["--read-final", path] -> do
+      result <- readFinalModalWatch path
+      case result of
+        Left problem -> ioError (userError problem)
+        Right final -> BL.putStr (encode (finalModalWatchSummary final) <> "\n")
+    _ -> ioError (userError "usage: modal-watch-stream-tests [--read-final PATH]")
+
+runTests :: IO ()
+runTests = do
   let fixture = watch [row 1, row 2]
       encoded value = BL.toStrict (encode value)
       old bytes = finalModalWatchSummary <$> parseFinalModalWatch (decodeBridgeWatchLine bytes)

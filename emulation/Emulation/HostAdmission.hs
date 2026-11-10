@@ -54,7 +54,7 @@ classConcurrency Emulator = 2
 -- | The memory cap of one admission; an emulator run may ask for less.
 classMemoryMax :: ResourceClass -> MemoryMax
 classMemoryMax Build = MemoryMax "6G"
-classMemoryMax Emulator = MemoryMax "8G"
+classMemoryMax Emulator = MemoryMax "4G"
 
 parseMemoryMax :: String -> Maybe MemoryMax
 parseMemoryMax text = case span isDigit text of
