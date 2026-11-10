@@ -21,10 +21,12 @@ impl PickerServices for StockServices {
     }
     fn clear_report(&mut self, report: &mut DrawReport) { call!(0x7221c8, unsafe extern "C" fn(*mut DrawReport,u32,u32), report,0,68); }
     fn panel_font(&mut self) -> FontId { FontId(unsafe { core::ptr::read_volatile(0x015e46c0 as *const u32) }) }
-    fn snapshot(&mut self, node: NodeId, saved: bool) -> Snapshot {
+    fn snapshot(&mut self, node: NodeId, selection: SnapshotSelection) -> Snapshot {
         let mut value = Snapshot::default();
-        if saved { call!(0x61ce1c, unsafe extern "C" fn(u32,u32,*mut Snapshot), node.0,2,&mut value); }
-        else { call!(0x61cd14, unsafe extern "C" fn(*mut Snapshot), &mut value); }
+        match selection {
+            SnapshotSelection::SavedSlotTwo => call!(0x61ce1c, unsafe extern "C" fn(u32,u32,*mut Snapshot), node.0,2,&mut value),
+            SnapshotSelection::Live => call!(0x61cd14, unsafe extern "C" fn(*mut Snapshot), &mut value),
+        }
         value
     }
     fn summary(&mut self, node: NodeId, parent: u32) -> Summary {

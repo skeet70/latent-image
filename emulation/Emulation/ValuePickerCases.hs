@@ -4,6 +4,7 @@ module Emulation.ValuePickerCases
   , LabelId (..), NodeId (..), HookResult (..), Setting44 (..), LabelGate (..)
   , pickerCases, pickerCalls, pickerReport, pickerSnapshot, targets, sideState
   , ReportAddress (..), PickerSite (..), pickerStackArguments, pickerReturnAddress, pickerX, pickerY
+  , pickerWidth, pickerReportOffset
   ) where
 
 import qualified Data.ByteString as B
@@ -22,7 +23,7 @@ data HookResult = DrawLeaf | HookHandled deriving (Eq, Show)
 data Setting44 = SettingZero | SettingNonzero deriving (Eq, Show)
 data LabelGate = StockGate | BankGate deriving (Eq, Show)
 data Row = Row { rowId :: Word32, rowState :: RowState, rowLabel :: LabelId } deriving (Eq, Show)
-data PickerSite = MenuPicker | FnPicker deriving (Eq, Show)
+data PickerSite = MenuPicker | FnPicker | Picker9304 | Picker9a14 | Pickera1b8 | Pickera8b0 | Pickerb52c | Pickerb568 deriving (Eq, Show)
 data PickerCase = PickerCase
   { pickerName :: String, pickerKind :: PickerKind, pickerRows :: [Row]
   , pickerPageSize :: Word32, pickerVisibleRows :: Word32, pickerLayout :: Layout
@@ -54,17 +55,67 @@ pickerSnapshot c = wordsLE [0x17,0x30,kindWord (pickerKind c),0x39,pickerCursor 
   where (page,top) = case pickerLayout c of Scroll n -> (1,n); Page n -> (n,0)
 
 pickerStackArguments :: PickerCase -> ReportAddress -> B.ByteString
-pickerStackArguments c (ReportAddress report) = wordsLE [0,2,0,scrollFlag,1,pickerMode c,report]
+pickerStackArguments c (ReportAddress report) = wordsLE [columnStep c,rowStep c,style c,scrollFlag,1,pickerMode c,report]
   where scrollFlag = case pickerLayout c of Scroll _ -> 1; Page _ -> 0
 
 pickerReturnAddress :: PickerCase -> Word32
-pickerReturnAddress c = case pickerSite c of MenuPicker -> 0x01168ce4; FnPicker -> 0x0116c588
+pickerReturnAddress c = case pickerSite c of
+  MenuPicker -> 0x01168ce4
+  FnPicker -> 0x0116c588
+  Picker9304 -> 0x01169308
+  Picker9a14 -> 0x01169a18
+  Pickera1b8 -> 0x0116a1bc
+  Pickera8b0 -> 0x0116a8b4
+  Pickerb52c -> 0x0116b530
+  Pickerb568 -> 0x0116b56c
+
+pickerReportOffset :: PickerCase -> Int
+pickerReportOffset c = case pickerSite c of
+  MenuPicker -> 0x109c
+  FnPicker -> 0x104c
+  Picker9304 -> 0x10ac
+  Picker9a14 -> 0x1054
+  Pickera1b8 -> 0x1084
+  Pickera8b0 -> 0x105c
+  Pickerb52c -> 0x106c
+  Pickerb568 -> 0x106c
 
 pickerX :: PickerCase -> Word32
-pickerX c = case pickerSite c of MenuPicker -> 4; FnPicker -> 14
+pickerX c = case pickerSite c of
+  MenuPicker -> 4
+  FnPicker -> 14
+  Picker9304 -> 4
+  Picker9a14 -> 6
+  Pickera1b8 -> 3
+  Pickera8b0 -> 14
+  Pickerb52c -> 1
+  Pickerb568 -> 1
 
 pickerY :: PickerCase -> Word32
-pickerY c = case pickerSite c of MenuPicker -> 4; FnPicker -> 3
+pickerY c = case pickerSite c of
+  MenuPicker -> 4
+  FnPicker -> 3
+  Picker9304 -> 3
+  Picker9a14 -> 4
+  Pickera1b8 -> 5
+  Pickera8b0 -> 4
+  Pickerb52c -> 4
+  Pickerb568 -> 4
+
+pickerWidth :: PickerCase -> Word32
+pickerWidth c = if pickerSite c == Pickera1b8 then 6 else 0
+
+horizontal :: PickerCase -> Bool
+horizontal c = pickerSite c `elem` [Pickerb52c,Pickerb568]
+
+columnStep :: PickerCase -> Word32
+columnStep c = if horizontal c then 255 else 0
+
+rowStep :: PickerCase -> Word32
+rowStep c = if horizontal c then 0 else 2
+
+style :: PickerCase -> Word32
+style c = if pickerSite c == Pickera1b8 then 3 else 0
 
 capacity :: PickerCase -> Word32
 capacity c = max 1 (pickerPageSize c)
@@ -128,8 +179,8 @@ visits c = go 0 0 0 0 initialTop (pickerRows c)
           _ -> Visit raw hidden r True drawn : go (raw+1) hidden (pageCount+1) (drawn+1) top rs
       where quotient = (pageCount+capacity c) `div` capacity c
 
-resource :: Word32 -> Word32 -> Word32 -> B.ByteString
-resource label x y = wordsLE [label] <> halfLE (map fromIntegral [(x-1)*20,(y-1)*24,0xffec,24]) <> wordsLE [0,0,0,0,0]
+resource :: PickerCase -> Word32 -> Word32 -> Word32 -> B.ByteString
+resource c label x y = wordsLE [label] <> halfLE (map fromIntegral [(x-1)*20,(y-1)*24,(pickerWidth c-1)*20,(rowStep c-1)*24]) <> wordsLE [0,0,style c,0,0]
 
 hookRecord :: PickerCase -> Row -> Word32 -> Word32 -> B.ByteString
 hookRecord c r x y = wordsLE [nodeWord c,0x39,rowId r] <> sideState <> wordsLE [signed16 x,signed16 y,0,if rowId r == pickerCursor c then 1 else 0,labelWord r,0,0,0]
@@ -149,11 +200,12 @@ rowCalls c (Visit _ _ r drawn ordinal)
   | otherwise = [labelCall c r 1 label,widthCall 0x83d label,font 12] ++ base ++ highlight ++ details
   where
     label = labelWord r
-    x = xPosition c
-    y = pickerY c+2*centering+2*ordinal
+    x = xPosition c + if columnStep c == 255 then sum [width (labelWord previous) + if pickerKind c == BracketKind && rowId previous == pickerCursor c then 2 else 0 | Visit _ _ previous True _ <- takeDrawn ordinal] else ordinal*columnStep c
+    takeDrawn count = take (fromIntegral count) [v | v@(Visit _ _ _ True _) <- visits c]
+    y = pickerY c+rowStep c*(centering+ordinal)
     centering = if nodeWord c /= 0x4c && capacity c > pickerVisibleRows c then ((capacity c-pickerVisibleRows c) `shiftR` 1) .&. 255 else 0
     selected = rowId r == pickerCursor c
-    bytes = resource label x y
+    bytes = resource c label x y
     base | pickerKind c /= BracketKind = [palette (if selected then 0x69 else if rowState r == Disabled then 0x6b else 0x6a),hook c r x y] ++ [leaf bytes | pickerHook c == DrawLeaf]
          | not selected = [font 12,palette (if rowState r == Disabled then 0x6b else 0),leaf bytes]
          | otherwise = bracketCalls c r x y
@@ -167,9 +219,9 @@ rowCalls c (Visit _ _ r drawn ordinal)
             | otherwise = valueDetails c r y
 
 bracketCalls :: PickerCase -> Row -> Word32 -> Word32 -> [ServiceCall]
-bracketCalls _ r x y =
+bracketCalls c r x y =
   [font 12,service 0x1112e38 [] 0,service 0x1138a00 [2] 0x23,service 0x1137cf8 [7,255,0x23,255] 0
-  ,leaf (resource (labelWord r) (x+1) y)
+  ,leaf (resource c (labelWord r) (x+1) y)
   ,service 0x111236c [signed8 x,signed8 y,0xff00035f] 0
   ,service 0x111236c [signed8 (x+width (labelWord r)+1),signed8 y,0xff000360] 0
   ,service 0x1112e58 [] 0,service 0x1130e68 [0] 0,font 15
@@ -243,10 +295,18 @@ pickerReport c = foldl patch (B.replicate 0x44 0) (base ++ rows)
     rows = concat [ [byte 0x3d index | rowId r == pickerCurrent c] ++ (if rowId r == pickerCursor c then [byte 0x3c index,word 0x34 (rowId r),word 0x40 (0x700+rowId r)] else []) | Visit raw hidden r True _ <- visits c,let index = raw-hidden-top-capacity c*(page-1)]
 
 pickerCases :: [PickerCase]
-pickerCases = nubBy (\a b -> pickerName a == pickerName b) (original ++ fnCases)
+pickerCases = nubBy (\a b -> pickerName a == pickerName b) (original ++ fnCases ++ callerCases)
   where
     original = basics ++ states ++ modes ++ details ++ bounds
     fnCases = [c {pickerName="fn-"++pickerName c,pickerNode=NodeId 0x63,pickerSite=FnPicker} | c <- original, Scroll _ <- [pickerLayout c]]
+    callerCases =
+      [ c {pickerName=show site++"-"++pickerName c,pickerSite=site,pickerNode=NodeId node,pickerLayout=if site `elem` [Pickerb52c,Pickerb568] then case pickerLayout c of Scroll _ -> Page 1; layout -> layout else pickerLayout c}
+      | (site,node) <- [(Picker9304,0x30),(Picker9a14,0x21),(Pickera1b8,0x62),(Pickera8b0,0x1a),(Pickerb52c,10),(Pickerb568,11)]
+      , c <- original
+      , pickerGate c == StockGate
+      , if site `elem` [Pickera1b8,Pickerb52c,Pickerb568] then pickerMode c == 0 else True
+      , if site `elem` [Picker9304,Pickera1b8,Pickera8b0] then case pickerLayout c of Scroll _ -> True; _ -> False else True
+      ]
     rows n = [Row i Offered (LabelId 0x83d) | i <- [1..n]]
     base name n size layout cursor = PickerCase name GenericKind (rows n) size n layout cursor n 0 DrawLeaf SettingZero StockGate (NodeId 0x30) False MenuPicker
     basics = [base ("rows-"++show n++"-cursor-"++show cursor) n 3 (Scroll 0) cursor | n <- [1,3,5],cursor <- [1,(n+1) `div` 2,n]]
@@ -255,7 +315,7 @@ pickerCases = nubBy (\a b -> pickerName a == pickerName b) (original ++ fnCases)
       ++ [(base "normalized-page-size" 1 0 (Scroll 0) 1), (base "centered-short-list" 1 5 (Scroll 0) 1)]
       ++ [base "zero-children" 0 3 (Scroll 0) 99]
     states = [(base ("state-"++show s++"-hook-"++show h) 3 3 (Scroll 0) 2) {pickerRows=[Row 1 s (LabelId 1),Row 2 Offered (LabelId 0x83e),Row 3 Disabled (LabelId 0x849)],pickerHook=h} | s <- [Offered,Disabled,Hidden,Variant],h <- [DrawLeaf,HookHandled]]
-    modes = [(base ("mode-"++show m) 1 1 (Scroll 0) 1) {pickerMode=m} | m <- [2,3,7,13,5,6,14]]
+    modes = [(base ("mode-"++show m) 1 1 (Scroll 0) 1) {pickerMode=m} | m <- [2,3,7,9,13,5,6,11,12,14,255,0xffffffff]]
       ++ [(base "node-4c-highlight" 1 5 (Scroll 0) 1) {pickerMode=7,pickerNode=NodeId 0x4c}]
     details = [(base ("kind-"++show k++"-setting-"++show s) 1 1 (Scroll 0) 1) {pickerKind=k,pickerSetting=s,pickerDetail=True,pickerNode=NodeId 6} | k <- [ValueKind,GenericKind,VariantKind],s <- [SettingZero,SettingNonzero]]
     bounds = [(base ("bracket-"++show gate++"-label-"++show label) 1 1 (Scroll 0) 99) {pickerKind=BracketKind,pickerRows=[Row 1 Offered (LabelId label)],pickerGate=gate} | gate <- [StockGate,BankGate],label <- [0x83d,0x83e,0x849,0x84a]]

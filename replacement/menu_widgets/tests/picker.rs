@@ -7,6 +7,7 @@ use widgets::value_picker::*;
 #[derive(Default)]
 struct Frame {
     snapshot: Snapshot,
+    saved_snapshot: Snapshot,
     summary: Summary,
     children: Vec<Child>,
     drawn: Vec<ResourceRecord>,
@@ -22,7 +23,12 @@ impl PickerServices for Frame {
     }
     fn clear_report(&mut self, report: &mut DrawReport) { *report = DrawReport::zeroed(); }
     fn panel_font(&mut self) -> FontId { FontId(self.font) }
-    fn snapshot(&mut self, _: NodeId, _: bool) -> Snapshot { self.snapshot }
+    fn snapshot(&mut self, _: NodeId, selection: SnapshotSelection) -> Snapshot {
+        match selection {
+            SnapshotSelection::Live => self.snapshot,
+            SnapshotSelection::SavedSlotTwo => self.saved_snapshot,
+        }
+    }
     fn summary(&mut self, _: NodeId, _: u32) -> Summary { self.summary }
     fn child(&mut self, _: NodeId, _: u32, index: RowIndex) -> Child { self.children[index.0 as usize] }
     fn label(&mut self, _: NodeId, _: u32, child: u32, field: LabelField) -> ResourceId { ResourceId(if field == LabelField::Main { child } else { 0 }) }
@@ -115,5 +121,26 @@ fn horizontal_centering_respects_the_installed_prepass_label_bound() {
         let mut report = DrawReport::zeroed(); value_picker(&mut frame,args,&mut report);
         assert_eq!(frame.drawn.iter().map(|r| (r.label,r.x)).collect::<Vec<_>>(),vec![(label,expected_x)]);
         assert_eq!(frame.font,99);
+    }
+}
+
+#[test]
+fn saved_modes_render_saved_selection_and_other_modes_render_live_selection() {
+    for (mode, selected, auxiliary, ordinal) in [
+        (7, 13u32, 103u32, 2), (9, 13, 103, 2), (13, 13, 103, 2),
+        (0, 12, 102, 1), (5, 12, 102, 1), (6, 12, 102, 1),
+        (11, 12, 102, 1), (12, 12, 102, 1), (14, 12, 102, 1),
+        (255, 12, 102, 1), (u32::MAX, 12, 102, 1),
+    ] {
+        let mut frame = frame();
+        frame.saved_snapshot = Snapshot { selected: 13, remembered: 13, ..frame.snapshot };
+        let mut args = args();
+        args.mode = DrawMode(mode);
+        let mut report = DrawReport([0xaa; 68]);
+        value_picker(&mut frame, args, &mut report);
+        assert_eq!(&report.0[0x34..0x38], &selected.to_le_bytes());
+        assert_eq!(&report.0[0x40..0x44], &auxiliary.to_le_bytes());
+        assert_eq!(report.0[0x3c], ordinal);
+        assert_eq!(frame.font, 99);
     }
 }

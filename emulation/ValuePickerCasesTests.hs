@@ -35,6 +35,29 @@ main = do
   check "Fn caller has its own geometry and return" (pickerX fn == 14 && pickerY fn == 3 && pickerReturnAddress fn == 0x0116c588)
   check "Fn caller passes the in-frame report" (pickerStackArguments fn (ReportAddress 0x0310104c) == wordsLE [0,2,0,1,1,0,0x0310104c])
   check "Fn centering report feeds the caller marker position" (B.index (pickerReport fn) 0x3e == 2)
+  let callerFrames =
+        [ ("Picker9304",0x01169308,0x10ac,4,3,0,[0,2,0,1,1,0,0x031010ac])
+        , ("Picker9a14",0x01169a18,0x1054,6,4,0,[0,2,0,1,1,0,0x03101054])
+        , ("Pickera1b8",0x0116a1bc,0x1084,3,5,6,[0,2,3,1,1,0,0x03101084])
+        , ("Pickera8b0",0x0116a8b4,0x105c,14,4,0,[0,2,0,1,1,0,0x0310105c])
+        , ("Pickerb52c",0x0116b530,0x106c,1,4,0,[255,0,0,0,1,0,0x0310106c])
+        , ("Pickerb568",0x0116b56c,0x106c,1,4,0,[255,0,0,0,1,0,0x0310106c])
+        ]
+  mapM_ (\(site,lr,offset,x,y,w,stack) -> do
+    let c = named (site++"-rows-3-cursor-2")
+    check (site++" caller registers and lifetime") (pickerReturnAddress c == lr && pickerReportOffset c == offset && pickerX c == x && pickerY c == y && pickerWidth c == w)
+    check (site++" private stack arguments") (pickerStackArguments c (ReportAddress (0x03100000+fromIntegral offset)) == wordsLE stack)) callerFrames
+  mapM_ (\site -> mapM_ (\mode -> do
+    let c = named (site++"mode-"++show mode)
+    check "skipped callers preserve report and clear only hook" (pickerReport c == B.replicate 68 0xa5 && map serviceAddress (pickerCalls c) == [ServiceAddress 0x43550])) ([2,3] :: [Int])) ["","fn-","Picker9304-","Picker9a14-","Pickera8b0-"]
+  mapM_ (\mode -> do
+    let calls = pickerCalls (named ("mode-"++show mode))
+    check "saved selection uses slot two" (case calls of _:snapshot:_ -> serviceAddress snapshot == ServiceAddress 0x61ce1c && serviceInputs snapshot == [(Argument 0,0x30),(Argument 1,2)]; _ -> False)) ([7,9,13] :: [Int])
+  mapM_ (\mode -> check "other modes use the current snapshot" (case pickerCalls (named ("mode-"++show mode)) of _:snapshot:_ -> serviceAddress snapshot == ServiceAddress 0x61cd14; _ -> False)) ([5,6,11,12,14,255,0xffffffff] :: [Int])
+  let horizontalLeaves = [bytes | c <- pickerCalls (named "Pickerb52c-rows-3-cursor-2"), serviceAddress c == ServiceAddress 0x1112e78, MemoryArgument (Argument 0) 0 bytes <- serviceReads c]
+  check "horizontal caller advances columns without advancing rows" (map (B.take 8 . B.drop 4) horizontalLeaves == map halfLE [[0,72,0xffec,0xffe8],[60,72,0xffec,0xffe8],[120,72,0xffec,0xffe8]])
+  let styledLeaves = [bytes | c <- pickerCalls (named "Pickera1b8-rows-3-cursor-2"), serviceAddress c == ServiceAddress 0x1112e78, MemoryArgument (Argument 0) 0 bytes <- serviceReads c]
+  check "assignment caller retains width and style" (all (\bytes -> B.take 2 (B.drop 8 bytes) == halfLE [100] && B.take 4 (B.drop 20 bytes) == wordsLE [3]) styledLeaves)
   putStrLn "value-picker generator contract tests passed"
   where
     names = map pickerName pickerCases

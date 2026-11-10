@@ -10,9 +10,16 @@ impl LabelBound {
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DrawMode(pub u32);
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SnapshotSelection { Live, SavedSlotTwo }
 impl DrawMode {
-    pub fn skipped(self) -> bool { self.0 == 2 || self.0 == 3 }
-    pub fn saved_slot_two(self) -> bool { self.0 <= 13 && (1u32 << self.0) & 0x2280 != 0 }
+    pub fn snapshot(self) -> Option<SnapshotSelection> {
+        match self.0 {
+            2 | 3 => None,
+            7 | 9 | 13 => Some(SnapshotSelection::SavedSlotTwo),
+            _ => Some(SnapshotSelection::Live),
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[repr(C)]
@@ -65,7 +72,7 @@ pub trait PickerServices {
     fn empty_hook(&mut self) -> HookRecord;
     fn clear_report(&mut self, report: &mut DrawReport);
     fn panel_font(&mut self) -> FontId;
-    fn snapshot(&mut self, node: NodeId, saved_slot_two: bool) -> Snapshot;
+    fn snapshot(&mut self, node: NodeId, selection: SnapshotSelection) -> Snapshot;
     fn summary(&mut self, node: NodeId, parent: u32) -> Summary;
     fn child(&mut self, node: NodeId, parent: u32, index: RowIndex) -> Child;
     fn label(&mut self, node: NodeId, parent: u32, child: u32, field: LabelField) -> ResourceId;
@@ -105,8 +112,8 @@ fn detail_draw(s: &mut impl PickerServices, font: u32, palette: u32, record: &Re
 pub fn value_picker(s: &mut impl PickerServices, args: DrawArgs, report: &mut DrawReport) {
     let mut hook = s.empty_hook();
     let saved_font = s.panel_font();
-    if args.mode.skipped() { return; }
-    let snap = s.snapshot(args.node, args.mode.saved_slot_two());
+    let Some(selection) = args.mode.snapshot() else { return; };
+    let snap = s.snapshot(args.node, selection);
     s.clear_report(report);
     report.put_word(0, snap.kind); report.put_word(4, args.node.0);
     report.0[0x3d] = 255;
