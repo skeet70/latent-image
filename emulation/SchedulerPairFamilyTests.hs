@@ -2,7 +2,6 @@
 module Main (main) where
 
 import Control.Monad (unless)
-import qualified Data.Aeson as J
 import qualified Data.ByteString.Char8 as B
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
@@ -92,6 +91,42 @@ flagSetCall writes r0 trace =
 
 flagSetTrace :: Word32 -> CallTrace
 flagSetTrace r0 = traceOf (withStack 0 r0) [] Returned
+
+-- Project-authored synthetic call with a foreign flag clear between Save and Resume.
+suspendedFlagSetCall :: Call
+suspendedFlagSetCall =
+  let patternAddress = flagControlAddress+0x0c
+      before = M.fromList
+        [ (Address flagConfigAddress,0), (Address (flagConfigAddress+8),1)
+        , (Address flagControlAddress,0x9000), (Address (flagControlAddress+4),0x9000)
+        , (Address patternAddress,0), (Address 0x9000,flagControlAddress)
+        , (Address 0x9004,flagControlAddress), (Address 0x9014,flagWaitAddress)
+        , (Address flagWaitAddress,0), (Address (flagWaitAddress+0x0c),4)
+        , (Address (flagWaitAddress+0x10),0), (Address (flagWaitAddress+0x14),0)
+        , (Address 0x400545a4,0), (Address 0x400545c0,1), (Address 0x400545c4,1)
+        ]
+      prefix =
+        [ Written (Address patternAddress) 4 4
+        , Written (Address (flagWaitAddress+0x14)) 4 4
+        , Written (Address flagControlAddress) 4 flagControlAddress
+        , Written (Address (flagControlAddress+4)) 4 flagControlAddress
+        , Written (Address 0x400545c0) 4 0, Written (Address 0x400545c4) 4 0
+        ]
+      clear = Written (Address patternAddress) 4 0
+      savedMemory = applyWrites before prefix
+      after = applyWrites savedMemory [clear]
+      state pc = registers (take 14 (withStack 0x8080 0)++[0x48140,pc])
+      caller = WriteOrigin 0 (Address 0x4813c) (Address 0x8080) 0x13 (Address 0x9200) 0 15
+      foreignWriter = caller { writerTask=Address 0x9000,writerInstructions=30 }
+      boundary kind pc at memory writes origins =
+        Boundary kind (Address pc) at 0 (state pc) memory writes [] Nothing 0x9200 origins [] S.empty
+      saved = boundary SaveBoundary 0x43640 20 savedMemory prefix (replicate (length prefix) caller)
+      resumed = boundary ResumeBoundary 0x43668 40 after [clear] [foreignWriter]
+      returned = boundary ReturnBoundary 0x48140 50 after [] []
+      trace = CallTrace (state 0x4813c) (state 0x48140) Returned [saved,resumed,returned] Nothing
+  in (callOf DomainA 0x4813c (FamilySemantic FlagSet) [1,4,0,0] before after 0 trace (prefix++[clear]))
+    { callTask=0x9200,callKernelContext=0,callTaskStack=Just (TaskStack (Address 0x8000) (Address 0x8100))
+    , callWriteOrigins=replicate (length prefix) caller++[foreignWriter] }
 
 flagWaitBefore :: Memory
 flagWaitBefore = M.union (M.fromList
@@ -235,23 +270,23 @@ isLeft result = case result of Left _ -> True; Right _ -> False
 
 main :: IO ()
 main = do
-  retained <- either error pure . J.eitherDecodeStrict' =<< B.readFile "emulation/family-flag-set-rewait.json"
-  assertRight "retained flag setter permits foreign clear while suspended" (checkCall retained)
-  retainedTrace <- maybe (error "retained flag setter has no trace") pure (callTrace retained)
+  let retained = suspendedFlagSetCall
+  assertRight "synthetic flag setter permits foreign clear while suspended" (checkCall retained)
+  retainedTrace <- maybe (error "synthetic flag setter has no trace") pure (callTrace retained)
   let changeHistory f call = call { callTrace = fmap (\trace -> trace { traceHistory = map f (traceHistory trace) }) (callTrace call) }
       changeSave f = changeHistory (\boundary -> if boundaryKind boundary==SaveBoundary then f boundary else boundary) retained
       invalidSaves =
         [ ("ordinary return", changeSave (\boundary -> boundary { boundaryKind=ReturnBoundary }))
-        , ("wrong task", changeSave (\boundary -> boundary { boundaryTask=0x400609c4 }))
+        , ("wrong task", changeSave (\boundary -> boundary { boundaryTask=0x9000 }))
         , ("wrong core", changeSave (\boundary -> boundary { boundaryCore=1 }))
         , ("same-task IRQ", changeSave (\boundary -> boundary
             { boundaryRegisters=(boundaryRegisters boundary) { D.processorState=0x92 } }))
-        , ("save after resume", changeSave (\boundary -> boundary { boundaryInstructions=240124150 }))
+        , ("save after resume", changeSave (\boundary -> boundary { boundaryInstructions=45 }))
         , ("wrong save entry", changeSave (\boundary -> boundary { boundaryAddress=Address 0x43644 }))
         , ("missing resume", changeHistory (\boundary -> if boundaryKind boundary==ResumeBoundary then boundary { boundaryKind=ReturnBoundary } else boundary) retained)
         , ("missing prefix", changeSave (\boundary -> boundary { boundaryWrites=[] }))
         , ("unreadable save", changeSave (\boundary -> boundary { boundaryMemory=M.empty }))
-        , ("unexplained final effect", retained { callAfter=M.insert (Address 0x400627d0) 1 (callAfter retained) })
+        , ("unexplained final effect", retained { callAfter=M.insert (Address (flagControlAddress+0x0c)) 1 (callAfter retained) })
         ]
       changeEvent kind f = changeHistory (\boundary -> if boundaryKind boundary==kind then f boundary else boundary) retained
       invalidContinuations =
@@ -266,21 +301,21 @@ main = do
               let state = boundaryRegisters boundary
                   values = D.registers state
               in boundary { boundaryRegisters=state { D.registers=take 13 values++[0x70000800]++drop 14 values } })
-          , ("wrong task",\boundary -> boundary { boundaryTask=0x400609c4 })
+          , ("wrong task",\boundary -> boundary { boundaryTask=0x9000 })
           , ("wrong core",\boundary -> boundary { boundaryCore=1 })
           ]
-        ] ++ [("return before resume",changeEvent ReturnBoundary (\boundary -> boundary { boundaryInstructions=240118750 }))]
+        ] ++ [("return before resume",changeEvent ReturnBoundary (\boundary -> boundary { boundaryInstructions=30 }))]
   mapM_ (\(label,invalid) -> assert ("flag suspension rejects " ++ label) (isLeft (checkCall invalid))) (invalidSaves++invalidContinuations)
   let retainSetPattern call =
         let rewrite (Written address size value) = Written address size
-              (if address==Address 0x400627d0 && value==0 then 0x400000 else value)
+              (if address==Address (flagControlAddress+0x0c) && value==0 then 4 else value)
             boundaryPattern boundary = boundary
-              { boundaryMemory=if boundaryInstructions boundary>=240119092
-                  then M.insert (Address 0x400627d0) 0x400000 (boundaryMemory boundary)
+              { boundaryMemory=if boundaryInstructions boundary>=30
+                  then M.insert (Address (flagControlAddress+0x0c)) 4 (boundaryMemory boundary)
                   else boundaryMemory boundary
               , boundaryWrites=map rewrite (boundaryWrites boundary) }
         in (changeHistory boundaryPattern call)
-          { callAfter=M.insert (Address 0x400627d0) 0x400000 (callAfter call)
+          { callAfter=M.insert (Address (flagControlAddress+0x0c)) 4 (callAfter call)
           , callWrites=map rewrite (callWrites call) }
   assertRight "saved endpoint also permits an unchanged final pattern" (checkCall (retainSetPattern retained))
   mapM_ (\(label,invalid) -> assertLeft ("matching final pattern cannot hide "++label)
@@ -315,18 +350,18 @@ main = do
             (\boundary -> if boundaryKind boundary==SaveBoundary then [foreignSave boundary,boundary] else [boundary]) (traceHistory trace) }) (callTrace retained)
         , callUnreadable=S.insert (Address 0x400545a4) (callUnreadable retained) }
   assertRight "known foreign IRQ does not need the caller context word" (checkCall interposed)
-  let corrupt = Written (Address 0x400627d0) 4 1
+  let corrupt = Written (Address (flagControlAddress+0x0c)) 4 1
       callerOrigin = WriteOrigin (callCore retained) (callAddress retained)
         (Address (D.registers (traceBefore retainedTrace) !! 13)) (callCpsr retained)
-        (Address (callTask retained)) (callKernelContext retained) 240124150
+        (Address (callTask retained)) (callKernelContext retained) 45
       withSuffix origin =
         let changeReturn boundary = if boundaryKind boundary==ReturnBoundary
-              then boundary { boundaryMemory=M.insert (Address 0x400627d0) 1 (boundaryMemory boundary)
+              then boundary { boundaryMemory=M.insert (Address (flagControlAddress+0x0c)) 1 (boundaryMemory boundary)
                             , boundaryWrites=boundaryWrites boundary++[corrupt]
                             , boundaryWriteOrigins=boundaryWriteOrigins boundary++[origin] }
               else boundary
         in (changeHistory changeReturn retained)
-          { callAfter=M.insert (Address 0x400627d0) 1 (callAfter retained)
+          { callAfter=M.insert (Address (flagControlAddress+0x0c)) 1 (callAfter retained)
           , callWrites=callWrites retained++[corrupt]
           , callWriteOrigins=callWriteOrigins retained++[origin] }
   assertLeft "caller cannot corrupt flag after resume" FamilyLifetime (checkCall (withSuffix callerOrigin))
