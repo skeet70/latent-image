@@ -124,7 +124,9 @@ run source builder wrapper = do
   thirdSeen <- admission thirdNative
   atomicOk <- expect "over-budget admission waits without retaining partial tokens"
     (overBudget && admitted smallDuringWaitSeen && admitted thirdSeen)
-  release (fst (head full))
+  case full of
+    (firstFull, _) : _ -> release firstFull
+    [] -> ioError (userError "no full-system probes were started")
   fifthSeen@(Admission fifthLines _) <- admission fifth
   pinnedOk <- expect "a saturated full-system waiter runs its pinned executable after replacement"
     (admitted fifthSeen && not (any (isInfixOf "replacement-ran") fifthLines))
@@ -166,7 +168,9 @@ run source builder wrapper = do
     pure (job, seen)
   ninthNative <- spawn (change "XM1_NATIVE_MEMORY_MAX" "256M" native)
   ninthWaiting <- waiting ninthNative
-  release (fst (head nativeClass))
+  case nativeClass of
+    (firstNativeClass, _) : _ -> release firstNativeClass
+    [] -> ioError (userError "no native class probes were started")
   ninthSeen <- admission ninthNative
   nativeLimit <- expect "eight small native scopes overlap and a ninth waits for its class"
     (all (admitted . snd) nativeClass && ninthWaiting && admitted ninthSeen)
@@ -247,7 +251,7 @@ run source builder wrapper = do
   legacyBlocked <- waiting legacyWaiter
   legacyAlive <- case observedPid "probe-pid " legacySeen of
     Nothing -> pure False
-    Just owner -> either (const False) (const True) <$> (try (signalProcess nullSignal owner) :: IO (Either IOException ()))
+    Just legacyOwner -> either (const False) (const True) <$> (try (signalProcess nullSignal legacyOwner) :: IO (Either IOException ()))
   release legacy
   _ <- finish legacy
   legacyResumed <- admission legacyWaiter
