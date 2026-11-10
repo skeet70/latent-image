@@ -38,9 +38,17 @@ genrule(
     tools = ["@lab_llvm//:bin/llvm-objcopy"],
 )
 
+genrule(
+    name = "secondary-consumer-payload",
+    srcs = [":af-result.elf"],
+    outs = ["af-result-0103fd88.bin"],
+    cmd = "$(location @lab_llvm//:bin/llvm-objcopy) --only-section=.af_secondary -O binary $(location :af-result.elf) $@",
+    tools = ["@lab_llvm//:bin/llvm-objcopy"],
+)
+
 filegroup(
     name = "sparse-payload",
-    srcs = [":selector-rotate-payload", ":reserve-release-payload"],
+    srcs = [":selector-rotate-payload", ":reserve-release-payload", ":secondary-consumer-payload"],
 )
 
 genrule(

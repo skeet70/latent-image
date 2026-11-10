@@ -1,4 +1,7 @@
-use super::{release, reserve, rotate, select, Address, Bus, Group, Pool, Slot};
+use super::{
+    consume, release, reserve, rotate, select, Address, Bus, ConsumerMode, Group, Pool, Route,
+    SecondaryBank, Slot,
+};
 use std::collections::{BTreeMap, VecDeque};
 use std::vec::Vec;
 
@@ -60,6 +63,21 @@ impl Memory {
         assert!(!self.inside);
         assert_eq!(self.entries, calls);
         assert_eq!(self.exits, calls);
+    }
+
+    fn expect_secondary(&self, before: &BTreeMap<u32, u32>, base: u32, states: &[u32], flags: &[u32]) {
+        let mut expected = before.clone();
+        for (slot, (&state, &flag)) in states.iter().zip(flags).enumerate() {
+            expected.insert(base + slot as u32 * 0x18 + 4, state);
+            expected.insert(base + slot as u32 * 0x18 + 16, flag);
+        }
+        assert_eq!(self.words, expected);
+        for &(address, _) in &self.writes {
+            assert!(
+                (0..7).any(|slot| address == base + slot as u32 * 0x18 + 4
+                    || address == base + slot as u32 * 0x18 + 16)
+            );
+        }
     }
 }
 
@@ -527,4 +545,127 @@ fn rotation_reuses_first_record_state_across_ready_and_active_searches() {
     let before = memory.words.clone();
     rotate(&mut memory, Pool { base: Address(GROUP0), count: 5 });
     memory.expect_states(&before, GROUP0, &[0, 0, 0, 0x77, 0]);
+}
+
+fn secondary_memory(states: &[u32], flags: &[u32]) -> Memory {
+    let mut memory = Memory::pool(GROUP1, states);
+    for (slot, &flag) in flags.iter().enumerate() {
+        memory.set(GROUP1 + slot as u32 * 0x18 + 16, flag);
+    }
+    memory
+}
+
+fn secondary() -> SecondaryBank {
+    SecondaryBank::new(Address(GROUP1))
+}
+
+#[test]
+fn normal_release_retires_first_prior_and_selects_first_candidate() {
+    for (route, candidate, expected_states) in [
+        (Route::FirstCurrent, 3, [0, 6, 5, 0, 0, 0, 0]),
+        (Route::FirstMarked, 2, [0, 6, 5, 0, 0, 0, 0]),
+    ] {
+        let flags = [0x1234_0000, 0x10, 0x0004_0000, 0, 0, 0, 0];
+        let mut memory = secondary_memory(&[6, 5, candidate, 0, 0, 0, 0], &flags);
+        let before = memory.words.clone();
+        consume(&mut memory, secondary(), ConsumerMode::Normal, route);
+        memory.expect_secondary(&before, GROUP1, &expected_states, &flags);
+        assert!(memory.writes.iter().all(|&(_, value)| value != 0x0004_0000));
+    }
+}
+
+#[test]
+fn normal_candidate_without_prior_selects_and_skips_absent_retirement() {
+    for (route, candidate) in [(Route::FirstCurrent, 3), (Route::FirstMarked, 2)] {
+        for slot in 0..7 {
+            let mut states = [0u32; 7];
+            states[slot] = candidate;
+            let flags = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77];
+            let mut memory = secondary_memory(&states, &flags);
+            let before = memory.words.clone();
+            let mut expected = states;
+            expected[slot] = 5;
+            consume(&mut memory, secondary(), ConsumerMode::Normal, route);
+            memory.expect_secondary(&before, GROUP1, &expected, &flags);
+        }
+    }
+}
+
+#[test]
+fn normal_candidate_absent_leaves_prior_five_and_flags_unchanged() {
+    for states in [[5, 0, 0, 0, 0, 0, 0], [0, 5, 0, 0, 0, 0, 0], [5, 5, 0xd, 0x1b, 0, 0, 0]] {
+        let flags = [0x10, 0x20, 0x40, 0x80, 0x100, 0x200, 0x400];
+        let mut memory = secondary_memory(&states, &flags);
+        let before = memory.words.clone();
+        consume(&mut memory, secondary(), ConsumerMode::Normal, Route::FirstCurrent);
+        memory.expect_secondary(&before, GROUP1, &states, &flags);
+        assert!(memory.writes.is_empty());
+    }
+}
+
+#[test]
+fn normal_retires_only_the_first_prior_five() {
+    let flags = [0; 7];
+    let mut memory = secondary_memory(&[5, 5, 3, 0, 0, 0, 0], &flags);
+    let before = memory.words.clone();
+    consume(&mut memory, secondary(), ConsumerMode::Normal, Route::FirstCurrent);
+    memory.expect_secondary(&before, GROUP1, &[6, 5, 5, 0, 0, 0, 0], &flags);
+}
+
+#[test]
+fn tagged_release_clears_only_flag_ten_and_selects_first_tagged_record() {
+    let flags = [0x10, 0x0004_0020, 0x0004_0000, 0, 0, 0, 0];
+    let mut memory = secondary_memory(&[6, 5, 5, 0, 0, 0, 0], &flags);
+    let before = memory.words.clone();
+    consume(&mut memory, secondary(), ConsumerMode::Tagged, Route::FirstCurrent);
+    memory.expect_secondary(&before, GROUP1, &[0, 5, 6, 0, 0, 0, 0], &[0, 0x20, 0x0004_0000, 0, 0, 0, 0]);
+}
+
+#[test]
+fn tagged_without_a_tag_keeps_the_release_and_retires_nothing() {
+    let flags = [0x10, 0, 0, 0, 0, 0, 0];
+    let mut memory = secondary_memory(&[6, 5, 0xd, 0x1b, 0, 0, 0], &flags);
+    let before = memory.words.clone();
+    consume(&mut memory, secondary(), ConsumerMode::Tagged, Route::FirstCurrent);
+    memory.expect_secondary(&before, GROUP1, &[0, 5, 0xd, 0x1b, 0, 0, 0], &[0, 0, 0, 0, 0, 0, 0]);
+}
+
+#[test]
+fn tagged_prefers_slot_zero_and_retires_every_old_five() {
+    let flags = [0x0004_0000, 0x0004_0000, 0, 0, 0, 0, 0];
+    let mut memory = secondary_memory(&[5, 5, 5, 0, 0, 0, 0], &flags);
+    let before = memory.words.clone();
+    consume(&mut memory, secondary(), ConsumerMode::Tagged, Route::FirstCurrent);
+    memory.expect_secondary(&before, GROUP1, &[5, 6, 6, 0, 0, 0, 0], &[0, 0x0004_0000, 0, 0, 0, 0, 0]);
+}
+
+#[test]
+fn opaque_states_and_flags_survive_when_no_rule_matches() {
+    let states = [0xd, 0x1b, 0x77, 0x83, u32::MAX, 1, 2];
+    let flags = [1, 2, 4, 8, 0x10, 0x0004_0000, 0x8000_0000];
+    for mode in [ConsumerMode::Normal, ConsumerMode::Tagged] {
+        let mut memory = secondary_memory(&states, &flags);
+        let before = memory.words.clone();
+        consume(&mut memory, secondary(), mode, Route::FirstCurrent);
+        if mode == ConsumerMode::Normal {
+            memory.expect_secondary(&before, GROUP1, &states, &flags);
+            assert!(memory.writes.is_empty());
+        } else {
+            memory.expect_secondary(
+                &before,
+                GROUP1,
+                &[0xd, 0x1b, 0x77, 0x83, u32::MAX, 5, 2],
+                &[1, 2, 4, 8, 0x10, 0, 0x8000_0000],
+            );
+        }
+    }
+}
+
+#[test]
+fn consumer_never_enters_the_critical_section_itself() {
+    let mut memory = secondary_memory(&[6, 5, 3, 0, 0, 0, 0], &[0; 7]);
+    consume(&mut memory, secondary(), ConsumerMode::Normal, Route::FirstCurrent);
+    consume(&mut memory, secondary(), ConsumerMode::Tagged, Route::FirstCurrent);
+    assert_eq!(memory.entries, 0);
+    assert_eq!(memory.exits, 0);
 }
