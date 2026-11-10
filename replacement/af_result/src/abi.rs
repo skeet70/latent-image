@@ -1,9 +1,13 @@
-use super::{release, reserve, rotate, select, Address, Bus, Group, Pool, Slot};
+use super::{
+    consume, release, reserve, rotate, select, Address, Bus, ConsumerMode, Group, Pool, Route,
+    SecondaryBank, Slot,
+};
 use core::ptr::{read_volatile, write_volatile};
 
 extern "C" {
     fn xm1_af_critical_enter() -> u32;
     fn xm1_af_critical_leave(token: u32);
+    fn xm1_af_secondary_mode() -> u32;
 }
 
 struct Firmware;
@@ -52,6 +56,22 @@ pub unsafe extern "C" fn xm1_af_reserve(requested: u32, group: u32) -> u32 {
 #[link_section = ".text.af_release"]
 pub unsafe extern "C" fn xm1_af_release(group: u32) {
     release(&mut Firmware, Group::from_raw(group));
+}
+
+#[no_mangle]
+#[link_section = ".af_secondary_entry"]
+pub unsafe extern "C" fn xm1_af_secondary_consumer() {
+    let mut firmware = Firmware;
+    let token = unsafe { xm1_af_critical_enter() };
+    let mode = ConsumerMode::from_raw(unsafe { xm1_af_secondary_mode() });
+    let route = Route::from_raw(firmware.read_word(Address(0x0170_327c)));
+    consume(
+        &mut firmware,
+        SecondaryBank::new(Address(0x016f_ed28)),
+        mode,
+        route,
+    );
+    unsafe { xm1_af_critical_leave(token) };
 }
 
 #[panic_handler]

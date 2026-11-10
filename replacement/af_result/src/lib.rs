@@ -163,3 +163,150 @@ pub fn release(bus: &mut impl Bus, group: Group) {
     rotate(bus, pool);
     bus.leave(token);
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SecondaryBank {
+    pub base: Address,
+}
+impl SecondaryBank {
+    pub const COUNT: u16 = 7;
+    pub const fn new(base: Address) -> Self {
+        Self { base }
+    }
+    #[inline(always)]
+    fn record(self, slot: Slot) -> Record {
+        Record(Address(self.base.0.wrapping_add(slot.0.wrapping_mul(24))))
+    }
+    #[inline(always)]
+    fn state(self, bus: &mut impl Bus, slot: Slot) -> RecordState {
+        self.record(slot).state(bus)
+    }
+    #[inline(always)]
+    fn set_state(self, bus: &mut impl Bus, slot: Slot, state: RecordState) {
+        self.record(slot).set_state(bus, state);
+    }
+    #[inline(always)]
+    fn flags(self, bus: &mut impl Bus, slot: Slot) -> u32 {
+        self.record(slot).flags(bus)
+    }
+    #[inline(always)]
+    fn set_flags(self, bus: &mut impl Bus, slot: Slot, flags: u32) {
+        self.record(slot).set_flags(bus, flags);
+    }
+    #[inline(always)]
+    fn find(self, bus: &mut impl Bus, state: RecordState) -> Option<Slot> {
+        let mut index = 0u16;
+        while index < Self::COUNT {
+            let slot = Slot(u32::from(index));
+            if self.state(bus, slot) == state {
+                return Some(slot);
+            }
+            index = index.wrapping_add(1);
+        }
+        None
+    }
+    #[inline(always)]
+    fn find_flag(self, bus: &mut impl Bus, flag: u32) -> Option<Slot> {
+        let mut index = 0u16;
+        while index < Self::COUNT {
+            let slot = Slot(u32::from(index));
+            if self.flags(bus, slot) & flag != 0 {
+                return Some(slot);
+            }
+            index = index.wrapping_add(1);
+        }
+        None
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Record(Address);
+impl Record {
+    #[inline(always)]
+    fn state(self, bus: &mut impl Bus) -> RecordState {
+        RecordState(bus.read_word(Address(self.0.0.wrapping_add(4))))
+    }
+    #[inline(always)]
+    fn set_state(self, bus: &mut impl Bus, state: RecordState) {
+        bus.write_word(Address(self.0.0.wrapping_add(4)), state.0);
+    }
+    #[inline(always)]
+    fn flags(self, bus: &mut impl Bus) -> u32 {
+        bus.read_word(Address(self.0.0.wrapping_add(16)))
+    }
+    #[inline(always)]
+    fn set_flags(self, bus: &mut impl Bus, flags: u32) {
+        bus.write_word(Address(self.0.0.wrapping_add(16)), flags);
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConsumerMode {
+    Normal,
+    Tagged,
+}
+impl ConsumerMode {
+    pub const fn from_raw(value: u32) -> Self {
+        if value == 1 { Self::Tagged } else { Self::Normal }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Route {
+    FirstMarked,
+    FirstCurrent,
+}
+impl Route {
+    pub const fn from_raw(value: u32) -> Self {
+        if value == 1 { Self::FirstMarked } else { Self::FirstCurrent }
+    }
+}
+
+#[inline(never)]
+#[cfg_attr(feature = "stage", link_section = ".af_secondary_core")]
+pub fn consume(bus: &mut impl Bus, bank: SecondaryBank, mode: ConsumerMode, route: Route) {
+    match mode {
+        ConsumerMode::Normal => consume_normal(bus, bank, route),
+        ConsumerMode::Tagged => consume_tagged(bus, bank),
+    }
+}
+
+#[inline(always)]
+fn consume_normal(bus: &mut impl Bus, bank: SecondaryBank, route: Route) {
+    if let Some(slot) = bank.find(bus, RecordState(6)) {
+        bank.set_state(bus, slot, RecordState(0));
+    }
+    let prior = bank.find(bus, RecordState(5));
+    let candidate_state = match route {
+        Route::FirstMarked => RecordState(2),
+        Route::FirstCurrent => RecordState(3),
+    };
+    if let Some(slot) = bank.find(bus, candidate_state) {
+        bank.set_state(bus, slot, RecordState(5));
+        if let Some(prior) = prior {
+            bank.set_state(bus, prior, RecordState(6));
+        }
+    }
+}
+
+#[inline(always)]
+fn consume_tagged(bus: &mut impl Bus, bank: SecondaryBank) {
+    if let Some(slot) = bank.find(bus, RecordState(6)) {
+        bank.set_state(bus, slot, RecordState(0));
+        let flags = bank.flags(bus, slot);
+        bank.set_flags(bus, slot, flags & !0x10);
+    }
+    if let Some(selected) = bank.find_flag(bus, 0x40000) {
+        let mut index = 0u16;
+        while index < SecondaryBank::COUNT {
+            let slot = Slot(u32::from(index));
+            if bank.state(bus, slot) == RecordState(5) {
+                bank.set_state(bus, slot, RecordState(6));
+            }
+            index = index.wrapping_add(1);
+        }
+        let flags = bank.flags(bus, selected);
+        bank.set_flags(bus, selected, flags & !0x40000);
+        bank.set_state(bus, selected, RecordState(5));
+    }
+}

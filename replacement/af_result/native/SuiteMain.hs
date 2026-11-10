@@ -20,20 +20,21 @@ runMain mode = do
     _ : value : _ -> makeAbsolute value
     _ -> fail "--runner requires a value"
   image <- required args "--image5"
+  oldElf <- required args "--old-owned-elf"
   elf <- required args "--owned-elf"
   cache <- required args "--cache-root"
   directory <- required args "--output"
   results <- required args "--results"
   checkStorageBudget directory
   checkStorageBudget (takeDirectory results)
-  scope <- readScope image elf
+  scope <- readScope image oldElf elf
   createDirectoryIfMissing True cache
   createDirectoryIfMissing True directory
   createDirectoryIfMissing True (takeDirectory results)
   runs <- runSuite mode runner cache directory scope
   let failures = [(runName result,problem) | result <- runs, problem <- runDifferences result ++ ["control not detected: " ++ label | (label,False) <- runControls result]]
   B.writeFile results (encode (object
-    [ "source" .= sourceIdentity
+    [ "source" .= consumerSourceIdentity
     , "mode" .= show mode
     , "scope" .= ("Synthetic differential execution only; no physical locking, timing, scheduler or stall claims." :: String)
     , "cases" .= [object ["name" .= runName result,"differences" .= runDifferences result,"controls" .= [object ["defect" .= label,"detected" .= detected] | (label,detected) <- runControls result]] | result <- runs]
