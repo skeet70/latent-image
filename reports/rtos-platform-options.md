@@ -1008,7 +1008,7 @@ The current aggregate stages and restores the canonical DAT with changes confine
 | Packaged app full | 28 records | 28, 28/0 | 596 | 21 | 0 |
 | Workspace-fixed app rejudgment | 28 records | 28, 0/28 | 596 | 21 | 0 |
 
-The three full scopes overlap for 7.034 seconds. Each whole qualifier has a 2 GiB/no-swap cap; observed peaks are 479,678,464 bytes for timer, 222,437,376 for cyclic and 1,180,938,240 for app. Corrected retained charges are 92,741,632, 39,100,416 and 108,863,488 bytes against 128/64/256 MiB allowances. Minimum observed free space is 236,230,823,936 bytes, above the 100 GiB reserve.
+The three guarded launcher intervals overlap for 7.034 seconds; journal-recorded cgroup lifecycle intervals overlap for 6.884 seconds. Each whole qualifier has a 2 GiB/no-swap cap; observed peaks are 479,678,464 bytes for timer, 222,437,376 for cyclic and 1,180,938,240 for app. Corrected retained charges are 92,741,632, 39,100,416 and 108,863,488 bytes against 128/64/256 MiB allowances. Minimum observed free space is 236,230,823,936 bytes, above the 100 GiB reserve.
 
 Generic exact-memory judgments are not promoted to passes. Timer retains 118 failed generic judgments; its two instruction-budget observations are the deliberately detected wrong-lock mutants. Cyclic retains 96 failed generic judgments; its two stock zero-period expiries deliberately exhaust the budget while the owned path delivers once and returns. App raw observations are 27 returned and one declared publisher stop-address. The original app materialization retained only 20 generic judgments; the ownership-fixed rejudgment retains all 28 failed generic judgments with unchanged case and wire hashes. The semantic checks and returned-status controls remain the acceptance boundary.
 
