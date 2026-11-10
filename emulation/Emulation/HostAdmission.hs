@@ -16,7 +16,7 @@ module Emulation.HostAdmission
 
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
-import Control.Exception (IOException, bracket, catch, evaluate, try)
+import Control.Exception (IOException, bracket, catch, evaluate, onException, try)
 import Control.Monad (forM_, unless, void, when)
 import qualified Data.ByteString as ByteString
 import qualified Data.ByteString.Char8 as ByteString8
@@ -29,14 +29,14 @@ import Numeric (showFFloat)
 import System.Directory (createDirectoryIfMissing, findExecutable, getHomeDirectory, removeFile, renameFile)
 import System.Environment (getExecutablePath, lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (..), exitWith)
-import System.FilePath (isAbsolute, takeDirectory, takeFileName, (</>))
+import System.FilePath (isAbsolute, splitDirectories, takeDirectory, takeFileName, (</>))
 import System.IO (IOMode (ReadMode), SeekMode (AbsoluteSeek), hFlush, hGetContents, hGetLine, hPutStrLn, stderr, withBinaryFile)
 import System.IO.Error (catchIOError, isDoesNotExistError)
-import System.Posix.Files (readSymbolicLink)
+import System.Posix.Files (fileID, getFdStatus, readSymbolicLink)
 import System.Posix.IO (FdOption (CloseOnExec), FileLock, LockRequest (WriteLock), OpenFileFlags (creat), OpenMode (ReadOnly, ReadWrite), closeFd, createPipe, defaultFileFlags, fdToHandle, getLock, openFd, setFdOption, setLock)
 import System.Posix.Process (executeFile, getProcessID)
 import System.Posix.Signals (Handler (Catch), installHandler, sigINT)
-import System.Posix.Types (Fd (..), FileOffset, ProcessID)
+import System.Posix.Types (Fd (..), FileID, FileOffset, ProcessID)
 import System.Process (CreateProcess (..), createProcess, proc, readProcessWithExitCode, waitForProcess)
 import System.Timeout (timeout)
 import Text.Read (readMaybe)
@@ -74,8 +74,10 @@ reserveMemory = reserveMemoryWithLegacy Nothing
 newtype InvocationId = InvocationId String
   deriving (Eq)
 
-data LegacyReservation = LegacyReservation ScopeName InvocationId
-data ScopeIdentity = ScopeIdentity ScopeName InvocationId
+newtype LegacyReservation = LegacyReservation ScopeIdentity
+data ScopeCgroup = ScopeCgroup FilePath FileID
+  deriving (Eq)
+data ScopeIdentity = ScopeIdentity ScopeName InvocationId ScopeCgroup
   deriving (Eq)
 data ScopeIdentityState = ScopeIdentityActive InvocationId MemoryMax | ScopeIdentityInactive
 
@@ -138,81 +140,111 @@ claimScopeRecord record = claimScopeRecords [record]
 
 claimScopeRecords :: [FilePath] -> ScopeName -> IO ()
 claimScopeRecords records scope = do
-  current@(ScopeIdentity (ScopeName unit) (InvocationId invocation)) <- currentScopeIdentity scope
+  current <- currentScopeIdentity scope
   reclaimScopeRecords records current
   pid <- getProcessID
   forM_ records $ \record -> do
     let temporary = record ++ "." ++ show pid
-    writeFile temporary (unlines [unit, invocation])
+    writeFile temporary (unlines (scopeIdentityLines current))
     renameFile temporary record
 
 currentScopeIdentity :: ScopeName -> IO ScopeIdentity
-currentScopeIdentity scope = do
+currentScopeIdentity scope@(ScopeName unit) = do
   state <- scopeIdentityState scope
-  case state of
-    ScopeIdentityActive invocation _ -> pure (ScopeIdentity scope invocation)
+  invocation <- case state of
+    ScopeIdentityActive identity _ -> pure identity
     ScopeIdentityInactive -> ioError (userError "cannot claim an inactive admission scope")
+  (_, out, _) <- readProcessWithExitCode "systemctl" ["--user", "show", unit, "-p", "ControlGroup", "--value"] ""
+  let group = trim out
+  unless (validCgroupPath unit group) (ioError (userError ("invalid scope cgroup: " ++ unit)))
+  bracket (openFd ("/sys/fs/cgroup" ++ group) ReadOnly defaultFileFlags) closeFd $ \fd -> do
+    setFdOption fd CloseOnExec True
+    inode <- fileID <$> getFdStatus fd
+    confirmed <- scopeIdentityState scope
+    case confirmed of
+      ScopeIdentityActive current _ | current == invocation -> pure (ScopeIdentity scope invocation (ScopeCgroup group inode))
+      _ -> ioError (userError "scope invocation changed during admission")
+
+scopeIdentityLines :: ScopeIdentity -> [String]
+scopeIdentityLines (ScopeIdentity (ScopeName unit) (InvocationId invocation) (ScopeCgroup group inode)) =
+  [unit, invocation, group, show inode]
+
+parseScopeIdentity :: [String] -> Maybe ScopeIdentity
+parseScopeIdentity [unit, rawInvocation, group, rawInode]
+  | Just scope <- parseScopeName unit
+  , Just invocation <- parseInvocationId rawInvocation
+  , validCgroupPath unit group
+  , Just inode <- readMaybe rawInode
+  , inode > 0 = Just (ScopeIdentity scope invocation (ScopeCgroup group inode))
+parseScopeIdentity _ = Nothing
+
+validCgroupPath :: String -> FilePath -> Bool
+validCgroupPath unit group =
+  isAbsolute group && takeFileName group == unit && ".." `notElem` splitDirectories group
 
 readScopeRecord :: FilePath -> IO (Maybe ScopeIdentity)
 readScopeRecord record = do
   previous <- (Just <$> (readFile record >>= \text -> evaluate (length text) >> pure text))
     `catchIOError` \problem -> if isDoesNotExistError problem then pure Nothing else ioError problem
-  case lines <$> previous of
+  case previous of
     Nothing -> pure Nothing
-    Just [name, rawInvocation]
-      | Just scope <- parseScopeName name
-      , Just invocation <- parseInvocationId rawInvocation -> pure (Just (ScopeIdentity scope invocation))
-    Just [name] | Just scope <- parseScopeName name -> do
-      state <- scopeIdentityState scope
-      case state of
-        ScopeIdentityInactive -> pure Nothing
-        _ -> ioError (userError ("active old scope record lacks InvocationID; migrate before admission: " ++ record))
-    _ -> ioError (userError ("invalid admission scope identity record: " ++ record))
+    Just text -> case parseScopeIdentity (lines text) of
+      Just identity -> pure (Just identity)
+      Nothing -> ioError (userError ("scope record lacks original cgroup identity; migrate before admission: " ++ record))
 
 reclaimScopeRecords :: [FilePath] -> ScopeIdentity -> IO ()
 reclaimScopeRecords records current = do
   previous <- mapM readScopeRecord records
   mapM_ reapScope (nub [prior | Just prior <- previous, prior /= current])
 
+withOriginalCgroup :: ScopeCgroup -> IO a -> (Fd -> IO a) -> IO a
+withOriginalCgroup (ScopeCgroup group expectedInode) absent action =
+  bracket open (mapM_ closeFd) (maybe absent action)
+  where
+    open = do
+      descriptor <- (Just <$> openFd ("/sys/fs/cgroup" ++ group) ReadOnly defaultFileFlags)
+        `catchIOError` \problem -> if isDoesNotExistError problem then pure Nothing else ioError problem
+      case descriptor of
+        Nothing -> pure Nothing
+        Just fd -> do
+          inode <- (fileID <$> getFdStatus fd) `onException` closeFd fd
+          if inode /= expectedInode
+            then closeFd fd >> pure Nothing
+            else setFdOption fd CloseOnExec True >> pure (Just fd)
+
+emptyCgroup :: Fd -> IO Bool
+emptyCgroup fd = (do
+  contents <- readFile ("/proc/self/fd" </> fdText fd </> "cgroup.events")
+  _ <- evaluate (length contents)
+  case [value | ["populated", value] <- map words (lines contents)] of
+    ["0"] -> pure True
+    ["1"] -> pure False
+    _ -> ioError (userError "cannot establish original scope cgroup population"))
+  `catchIOError` \problem -> if isDoesNotExistError problem then pure True else ioError problem
+
 sameInvocationActive :: ScopeIdentity -> IO Bool
-sameInvocationActive (ScopeIdentity scope expected) = do
-  state <- scopeIdentityState scope
-  pure $ case state of
-    ScopeIdentityActive invocation _ -> invocation == expected
-    ScopeIdentityInactive -> False
+sameInvocationActive (ScopeIdentity scope expected cgroup) = do
+  ended <- withOriginalCgroup cgroup (pure True) emptyCgroup
+  if ended then pure False else do
+    state <- scopeIdentityState scope
+    case state of
+      ScopeIdentityActive invocation _ | invocation == expected -> pure True
+      _ -> ioError (userError "populated original cgroup no longer has its recorded scope invocation")
 
 reapScope :: ScopeIdentity -> IO ()
-reapScope owner@(ScopeIdentity (ScopeName unit) _) = do
-  active <- sameInvocationActive owner
-  when active $ do
-    (_, out, _) <- readProcessWithExitCode "systemctl" ["--user", "show", unit, "-p", "ControlGroup", "--value"] ""
-    let group = trim out
-    unless (isAbsolute group && takeFileName group == unit) $
-      ioError (userError ("cannot identify scope cgroup: " ++ unit))
-    opened <- try (openFd ("/sys/fs/cgroup" ++ group) ReadOnly defaultFileFlags) :: IO (Either IOException Fd)
-    case opened of
-      Left problem -> do
-        stillActive <- sameInvocationActive owner
-        when stillActive (ioError problem)
-      Right directory -> bracket (pure directory) closeFd $ \fd -> do
-        setFdOption fd CloseOnExec True
-        confirmed <- sameInvocationActive owner
-        when confirmed $ do
-          let root = "/proc/self/fd" </> fdText fd
-              empty = (do
-                contents <- readFile (root </> "cgroup.events")
-                _ <- evaluate (length contents)
-                pure (["populated", "0"] `elem` map words (lines contents)))
-                `catchIOError` \problem -> if isDoesNotExistError problem then pure True else ioError problem
-              settle 0 = ioError (userError ("scope still has work: " ++ unit))
-              settle remaining = do
-                ended <- empty
-                unless ended (threadDelay 50_000 >> settle (remaining - 1))
-          killed <- try (writeFile (root </> "cgroup.kill") "1\n") :: IO (Either IOException ())
-          case killed of
-            Left problem -> empty >>= \ended -> unless ended (ioError problem)
-            Right () -> pure ()
-          settle (200 :: Int)
+reapScope owner@(ScopeIdentity (ScopeName unit) _ cgroup) =
+  withOriginalCgroup cgroup (pure ()) $ \fd -> do
+    confirmed <- sameInvocationActive owner
+    when confirmed $ do
+      let settle 0 = ioError (userError ("scope still has work: " ++ unit))
+          settle remaining = do
+            ended <- emptyCgroup fd
+            unless ended (threadDelay 50_000 >> settle (remaining - 1))
+      killed <- try (writeFile ("/proc/self/fd" </> fdText fd </> "cgroup.kill") "1\n") :: IO (Either IOException ())
+      case killed of
+        Left problem -> emptyCgroup fd >>= \ended -> unless ended (ioError problem)
+        Right () -> pure ()
+      settle (200 :: Int)
 
 parseMemoryMax :: String -> Maybe MemoryMax
 parseMemoryMax text = case span isDigit text of
@@ -379,17 +411,16 @@ worktreeOutputBase = do
 reserveLegacy :: ScopeName -> IO ()
 reserveLegacy scope@(ScopeName unit) = do
   refuseNested
-  state <- scopeIdentityState scope
-  invocation <- case state of
-    ScopeIdentityActive identity cap | memoryMaxBytes cap == memoryMaxBytes (MemoryMax "4G") -> pure identity
-    _ -> ioError (userError "legacy reservation requires an active scope capped at exactly 4 GiB")
-  let reservation = LegacyReservation scope invocation
+  current <- currentScopeIdentity scope
+  let reservation = LegacyReservation current
+  active <- legacyReservationActive reservation
+  unless active (ioError (userError "legacy reservation requires a populated scope capped at exactly 4 GiB"))
   _ <- reserveMemoryWithLegacy (Just reservation) (MemoryMax "4G") scope
   hPutStrLn stderr ("legacy reservation ready: " ++ unit ++ " 4GiB")
   hFlush stderr
   let wait = do
-        active <- legacyReservationActive reservation
-        when active (threadDelay 1_000_000 >> wait)
+        occupied <- legacyReservationActive reservation
+        when occupied (threadDelay 1_000_000 >> wait)
   wait
 
 scopeIdentityState :: ScopeName -> IO ScopeIdentityState
@@ -398,8 +429,8 @@ scopeIdentityState (ScopeName unit) = do
     ["--user", "show", unit, "-p", "ActiveState", "-p", "MemoryMax", "-p", "InvocationID"] ""
   let properties = [(key, drop 1 value) | line <- lines out, let (key, value) = break (== '=') line]
   case lookup "ActiveState" properties of
-    Just state | state `elem` ["inactive", "failed"] -> pure ScopeIdentityInactive
-    Just state | state `elem` ["active", "activating", "deactivating"]
+    Just "inactive" -> pure ScopeIdentityInactive
+    Just state | state `elem` ["active", "activating", "deactivating", "failed"]
       , Just rawIdentity <- lookup "InvocationID" properties
       , Just identity <- parseInvocationId rawIdentity
       , Just rawCap <- lookup "MemoryMax" properties
@@ -412,14 +443,16 @@ parseInvocationId text
   | otherwise = Nothing
 
 legacyReservationActive :: LegacyReservation -> IO Bool
-legacyReservationActive (LegacyReservation scope expected) = do
-  state <- scopeIdentityState scope
-  case state of
-    ScopeIdentityActive identity cap | identity == expected -> do
-      unless (memoryMaxBytes cap == memoryMaxBytes (MemoryMax "4G")) $
-        ioError (userError "an adopted legacy scope no longer has its validated 4 GiB cap")
-      pure True
-    _ -> pure False
+legacyReservationActive (LegacyReservation owner@(ScopeIdentity scope expected _)) = do
+  occupied <- sameInvocationActive owner
+  if not occupied then pure False else do
+    state <- scopeIdentityState scope
+    case state of
+      ScopeIdentityActive identity cap | identity == expected -> do
+        unless (memoryMaxBytes cap == memoryMaxBytes (MemoryMax "4G")) $
+          ioError (userError "an adopted legacy scope no longer has its validated 4 GiB cap")
+        pure True
+      _ -> ioError (userError "cannot validate populated legacy scope identity")
 
 protectedLegacyTokens :: FilePath -> IO [FileOffset]
 protectedLegacyTokens directory = do
@@ -428,24 +461,23 @@ protectedLegacyTokens directory = do
   case contents of
     Nothing -> pure []
     Just text -> case lines text of
-      [name, rawIdentity, rawIndices]
-        | Just scope <- parseScopeName name
-        , Just identity <- parseInvocationId rawIdentity
+      [name, rawIdentity, group, rawInode, rawIndices]
+        | Just owner <- parseScopeIdentity [name, rawIdentity, group, rawInode]
         , Just indices <- readMaybe rawIndices
         , length indices == 16 && length (nub indices) == 16 && all (\index -> index >= 0 && index < 80) indices -> do
-            active <- legacyReservationActive (LegacyReservation scope identity)
+            active <- legacyReservationActive (LegacyReservation owner)
             when active $ hPutStrLn stderr ("host admission: legacy memory owner=" ++ name ++ " invocation=" ++ rawIdentity ++ " 4GiB")
             pure (if active then indices else [])
       _ -> ioError (userError "invalid persistent legacy memory reservation")
 
 writeLegacyReservation :: FilePath -> LegacyReservation -> [FileOffset] -> IO ()
-writeLegacyReservation directory reservation@(LegacyReservation (ScopeName unit) (InvocationId identity)) indices = do
+writeLegacyReservation directory reservation@(LegacyReservation owner) indices = do
   active <- legacyReservationActive reservation
   unless active (ioError (userError "legacy scope ended before reservation was recorded"))
   pid <- getProcessID
   let destination = directory </> "legacy-reservation"
       temporary = destination ++ "." ++ show pid
-  writeFile temporary (unlines [unit, identity, show indices])
+  writeFile temporary (unlines (scopeIdentityLines owner ++ [show indices]))
   renameFile temporary destination
 
 -- | Parallelism within the build scope; Bazel's resource estimate excludes its

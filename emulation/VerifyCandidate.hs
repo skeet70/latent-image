@@ -250,11 +250,8 @@ routeInvocation context route receipt = case route of
        in launcher "//emulation:updater-f7"
             [ "--recovery-ram", card' </> "terminal-valid-ram.bin", "--sd-image", card' </> "firmware-ram-recovery-sd.img"
             , "--installed-nand", storedF7One, "--receipt-output", receipt ]
-    -- Each emulator route runs in its own user scope at the default CPUWeight
-    -- of 100, where niceness does not reach; the suites get ten times that.
-    native mode = Invocation "systemd-run"
-      [ "--user", "--scope", "--quiet", "--collect", "--property=CPUWeight=1000", "--"
-      , "bash", root </> "emulation" </> "build-recipe-bank-cases.sh" ]
+    native mode = Invocation (tool "emulator-slot")
+      [ "--native", "bash", root </> "emulation" </> "build-recipe-bank-cases.sh" ]
       [ ("RB_MODE", mode), ("JOBS", show (contextNativeJobs context))
       , ("BUILD_DIR", run </> "builds" </> routeName route), ("OUT_DIR", receipt)
       , ("RUNNER", tool "native-runner"), ("GEN", tool "recipe-bank-cases"), ("INTEROP", tool "recipe-bank-interop")

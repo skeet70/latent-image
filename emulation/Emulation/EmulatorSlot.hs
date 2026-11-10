@@ -134,8 +134,8 @@ reexecInSlot policy arguments = do
             ([ "--user", "--scope", "--quiet", "--collect", "--unit=" ++ unit
              , "--property=MemoryMax=" ++ memory
              , "--property=MemorySwapMax=0", "--property=OOMPolicy=stop"
-             , "--", executable
-             ] ++ arguments) Nothing
+             ] ++ ["--property=CPUWeight=1000" | executionClass policy == NativeVerification]
+               ++ ["--", executable] ++ arguments) Nothing
 
 defaultStoragePath :: IO FilePath
 defaultStoragePath = do

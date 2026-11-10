@@ -14,7 +14,7 @@ import Data.List (intercalate, sort)
 import qualified Data.Map.Strict as M
 import Data.Maybe (listToMaybe)
 import Data.String (fromString)
-import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
+import Emulation.EmulatorSlot (ExecutionClass (NativeVerification), reexecInSlot, slotPolicyForClass)
 import Emulation.OwnedCase (caseIdText, required)
 import Emulation.Sha256 (Sha256, parseSha256Hex, sha256, sha256Hex)
 import FujiAF.Host (ensure, failH, get, keys, readRegular, str)
@@ -337,7 +337,7 @@ verifyInputs recorded current = do
 
 enterSlot :: [String] -> IO ()
 enterSlot arguments = do
-  policy <- slotPolicyFromEnvironment
+  policy <- slotPolicyForClass NativeVerification
   reexecInSlot policy arguments
 
 -- | Resolves a relative input against the current directory, the running executable's runfiles tree

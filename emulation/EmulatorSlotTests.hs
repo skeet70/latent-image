@@ -7,7 +7,7 @@ import Control.Monad (forM, unless)
 import Data.IORef (modifyIORef, newIORef, readIORef)
 import Data.List (isInfixOf, stripPrefix)
 import Data.Maybe (fromMaybe, mapMaybe)
-import System.Directory (copyFile, createDirectoryIfMissing, getTemporaryDirectory, makeAbsolute, removeFile)
+import System.Directory (copyFile, createDirectoryIfMissing, findExecutable, getTemporaryDirectory, makeAbsolute, removeFile)
 import System.Environment (getArgs, getEnvironment, lookupEnv)
 import System.Exit (ExitCode (..), exitFailure)
 import System.FilePath ((</>))
@@ -31,14 +31,15 @@ main :: IO ()
 main = do
   arguments <- getArgs
   case arguments of
-    [source, builder] -> do
+    [source, builder, wrapper] -> do
       sourcePath <- makeAbsolute source
       builderPath <- makeAbsolute builder
-      run sourcePath builderPath >>= \ok -> unless ok exitFailure
-    _ -> ioError (userError "usage: emulator-slot-tests PROBE HOST-BUILD")
+      wrapperPath <- makeAbsolute wrapper
+      run sourcePath builderPath wrapperPath >>= \ok -> unless ok exitFailure
+    _ -> ioError (userError "usage: emulator-slot-tests PROBE HOST-BUILD EMULATOR-SLOT")
 
-run :: FilePath -> FilePath -> IO Bool
-run source builder = do
+run :: FilePath -> FilePath -> FilePath -> IO Bool
+run source builder wrapper = do
   temporary <- getTemporaryDirectory
   base <- fromMaybe temporary <$> lookupEnv "TEST_TMPDIR"
   pid <- getProcessID
@@ -51,11 +52,38 @@ run source builder = do
   writeFile (bin </> "bazel") "#!/bin/sh\necho 'probe-in-slot build'\ncat >/dev/null\nexit 0\n"
   setFileMode (bin </> "bazel") 0o700
   inherited <- probeEnvironment home
+  realSystemctl <- findExecutable "systemctl" >>= maybe (ioError (userError "systemctl is required")) pure
+  let failedBin = root </> "failed-state-bin"
+  createDirectoryIfMissing True failedBin
+  writeFile (failedBin </> "systemctl") (unlines
+    [ "#!/bin/sh"
+    , "matched=0"
+    , "for argument do [ \"$argument\" != \"$XM1_FAILED_UNIT\" ] || matched=1; done"
+    , "if [ \"$matched\" = 0 ]; then exec \"$XM1_REAL_SYSTEMCTL\" \"$@\"; fi"
+    , "\"$XM1_REAL_SYSTEMCTL\" \"$@\" | while IFS= read -r line; do"
+    , "case \"$line\" in"
+    , "ActiveState=active|ActiveState=activating|ActiveState=deactivating) printf 'ActiveState=failed\\n';;"
+    , "*) printf '%s\\n' \"$line\";;"
+    , "esac"
+    , "done"
+    ])
+  setFileMode (failedBin </> "systemctl") 0o700
   let environment = change "PATH" (bin ++ ":" ++ fromMaybe "" (lookup "PATH" inherited)) inherited
       native = change "XM1_PROBE_CLASS" "native" environment
       spawn env = start (proc source []) {env = Just env}
       build = start (proc builder ["build", "//fake:target"]) {env = Just environment}
       rawScope unit = start (proc "systemd-run" ["--user", "--scope", "--quiet", "--collect", "--unit=" ++ unit, "--property=MemoryMax=4G", "--property=MemorySwapMax=0", "--", source]) {env = Just (change "XM1_PROBE_LEGACY" "1" environment)}
+      failedState unit env =
+        change "XM1_FAILED_UNIT" unit
+          (change "XM1_REAL_SYSTEMCTL" realSystemctl
+            (change "PATH" (failedBin ++ ":" ++ fromMaybe "" (lookup "PATH" env)) env))
+  nativeCli <- start (proc wrapper ["--native", source])
+    {env = Just (change "XM1_PROBE_EXIT" "37" native)}
+  Admission nativeCliLines nativeCliSlot <- admission nativeCli
+  release nativeCli
+  nativeCliCode <- finish nativeCli
+  nativeCliOk <- expect "the actual --native wrapper admits its command under a 2 GiB cap and propagates exit"
+    (nativeCliSlot /= Nothing && "probe-memory-max 2147483648" `elem` nativeCliLines && nativeCliCode == Just (ExitFailure 37))
   full <- forM [1 :: Int .. 4] $ \_ -> do
     job <- spawn environment
     seen <- admission job
@@ -173,12 +201,12 @@ run source builder = do
   survivorSeen <- admission survivorJob
   release survivorJob
   _ <- finish survivorJob
-  afterSurvivor <- spawn native
+  afterSurvivor <- spawn (failedState (fromMaybe "missing.scope" (observedText "probe-unit " survivorSeen)) native)
   recoveredSurvivor <- admission afterSurvivor
   gone <- maybe (pure False) (waitGone 50) (observedPid "probe-survivor " survivorSeen)
   release afterSurvivor
   _ <- finish afterSurvivor
-  survivorOk <- expect "memory reuse stops an old scope's surviving descendants" (admitted recoveredSurvivor && gone)
+  survivorOk <- expect "a failed-state scope retains its memory until its surviving descendants are reaped" (admitted recoveredSurvivor && gone)
   originalOwner <- spawn environment
   originalSeen <- admission originalOwner
   let reusedUnit = fromMaybe "missing.scope" (observedText "probe-unit " originalSeen)
@@ -215,7 +243,7 @@ run source builder = do
   legacyNativeSeenA <- admission legacyNativeA
   legacyNativeB <- spawn native
   legacyNativeSeenB <- admission legacyNativeB
-  legacyWaiter <- spawn native
+  legacyWaiter <- spawn (failedState legacyUnit native)
   legacyBlocked <- waiting legacyWaiter
   legacyAlive <- case observedPid "probe-pid " legacySeen of
     Nothing -> pure False
@@ -264,7 +292,7 @@ run source builder = do
   _ <- finish afterStartup
   startupOk <- expect "failed scope startup propagates exit without leaking resource locks"
     (startupCode == ExitFailure 43 && admitted afterStartupSeen)
-  pure (and [fullOk, largeNativeOk, overlap, atomicOk, pinnedOk, exitsOk, buildOverlap, buildBudget, buildExit, smallOk, nativeLimit, nestedOk, nestedBuildOk, exitOk, crashOk, survivorOk, reusedManagedOk, legacyOk, reusedLegacyOk, invalidLegacyOk, storageOk, capOk, sessionOk, startupOk])
+  pure (and [nativeCliOk, fullOk, largeNativeOk, overlap, atomicOk, pinnedOk, exitsOk, buildOverlap, buildBudget, buildExit, smallOk, nativeLimit, nestedOk, nestedBuildOk, exitOk, crashOk, survivorOk, reusedManagedOk, legacyOk, reusedLegacyOk, invalidLegacyOk, storageOk, capOk, sessionOk, startupOk])
 
 change :: String -> String -> [(String, String)] -> [(String, String)]
 change key value environment = (key, value) : filter ((/= key) . fst) environment

@@ -208,10 +208,12 @@ haskell_test(
     args = [
         "$(rootpath :emulator-slot-probe)",
         "$(rootpath :host-build)",
+        "$(rootpath :emulator-slot)",
     ],
     data = [
         ":emulator-slot-probe",
         ":host-build",
+        ":emulator-slot",
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     tags = ["no-sandbox"],
@@ -2929,6 +2931,7 @@ haskell_binary(
     srcs = ["VerifyCandidate.hs"],
     data = [
         ":e2e-observation-compare",
+        ":emulator-slot",
         ":flash-boot-check",
         ":fujimod-flash-boot-check",
         ":native-runner",
