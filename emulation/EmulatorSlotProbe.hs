@@ -31,6 +31,7 @@ main = run `catch` \failure -> do
       groups <- readFile "/proc/self/cgroup"
       case [drop 3 line | line <- lines groups, take 3 line == "0::"] of
         [group] -> do
+          putStrLn ("probe-unit " ++ reverse (takeWhile (/= '/') (reverse group)))
           limit <- try (readFile ("/sys/fs/cgroup" ++ group ++ "/memory.max") >>= \text -> evaluate (length text) >> pure text)
             :: IO (Either IOException String)
           case limit of

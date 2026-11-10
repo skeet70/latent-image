@@ -17,7 +17,7 @@ import System.Posix.Process (getProcessID)
 import System.Posix.Signals (nullSignal, sigKILL, signalProcess)
 import System.Posix.Types (ProcessID)
 import System.Posix.User (getEffectiveUserID)
-import System.Process (CreateProcess (..), ProcessHandle, StdStream (CreatePipe), createProcess, getPid, getProcessExitCode, proc, readCreateProcessWithExitCode, waitForProcess)
+import System.Process (CreateProcess (..), ProcessHandle, StdStream (CreatePipe), createProcess, getPid, getProcessExitCode, proc, readCreateProcessWithExitCode, readProcessWithExitCode, waitForProcess)
 import System.Timeout (timeout)
 import Text.Read (readMaybe)
 
@@ -55,6 +55,7 @@ run source builder = do
       native = change "XM1_PROBE_CLASS" "native" environment
       spawn env = start (proc source []) {env = Just env}
       build = start (proc builder ["build", "//fake:target"]) {env = Just environment}
+      rawScope unit = start (proc "systemd-run" ["--user", "--scope", "--quiet", "--collect", "--unit=" ++ unit, "--property=MemoryMax=4G", "--property=MemorySwapMax=0", "--", source]) {env = Just (change "XM1_PROBE_LEGACY" "1" environment)}
   full <- forM [1 :: Int .. 4] $ \_ -> do
     job <- spawn environment
     seen <- admission job
@@ -165,11 +166,30 @@ run source builder = do
   release afterSurvivor
   _ <- finish afterSurvivor
   survivorOk <- expect "memory reuse stops an old scope's surviving descendants" (admitted recoveredSurvivor && gone)
+  originalOwner <- spawn environment
+  originalSeen <- admission originalOwner
+  let reusedUnit = fromMaybe "missing.scope" (observedText "probe-unit " originalSeen)
+  originalInvocation <- invocationOf reusedUnit
+  release originalOwner
+  _ <- finish originalOwner
+  waitUnitEnded 50 reusedUnit
+  unrelatedOwner <- rawScope reusedUnit
+  unrelatedSeen <- admission unrelatedOwner
+  unrelatedInvocation <- invocationOf reusedUnit
+  nativeAfterReuse <- spawn native
+  nativeAfterReuseSeen <- admission nativeAfterReuse
+  fullAfterReuse <- spawn environment
+  fullAfterReuseSeen <- admission fullAfterReuse
+  unrelatedAlive <- processAlive unrelatedSeen
+  reusedManagedOk <- expect "managed memory and class records never stop a reused unit's different invocation"
+    (admitted originalSeen && admitted unrelatedSeen && not (null originalInvocation) && originalInvocation /= unrelatedInvocation && admitted nativeAfterReuseSeen && admitted fullAfterReuseSeen && unrelatedAlive)
+  mapM_ release [unrelatedOwner, nativeAfterReuse, fullAfterReuse]
+  mapM_ finish [unrelatedOwner, nativeAfterReuse, fullAfterReuse]
 
   let legacyUnit = "xm1-test-legacy-" ++ show pid ++ ".scope"
-      legacyEnv = change "XM1_PROBE_LEGACY" "1" environment
-  legacy <- start (proc "systemd-run" ["--user", "--scope", "--quiet", "--collect", "--unit=" ++ legacyUnit, "--property=MemoryMax=4G", "--property=MemorySwapMax=0", "--", source]) {env = Just legacyEnv}
+  legacy <- rawScope legacyUnit
   legacySeen <- admission legacy
+  originalLegacyInvocation <- invocationOf legacyUnit
   (_, _, Just ready, reservation) <- createProcess (proc builder ["--reserve-legacy", legacyUnit]) {env = Just environment, std_err = CreatePipe}
   reserved <- timeout 10_000_000 (hGetLine ready)
   getPid reservation >>= mapM_ (signalProcess sigKILL)
@@ -194,6 +214,17 @@ run source builder = do
     (admitted legacySeen && maybe False (isInfixOf "legacy reservation ready:") reserved && all admitted [legacyBuildSeenA, legacyBuildSeenB, legacyNativeSeenA, legacyNativeSeenB] && legacyBlocked && legacyAlive && reservationCode /= Nothing && reservationCode /= Just ExitSuccess && admitted legacyResumed)
   mapM_ release [legacyBuildA, legacyBuildB, legacyNativeA, legacyNativeB, legacyWaiter]
   mapM_ finish [legacyBuildA, legacyBuildB, legacyNativeA, legacyNativeB, legacyWaiter]
+  waitUnitEnded 50 legacyUnit
+  reusedLegacy <- rawScope legacyUnit
+  reusedLegacySeen <- admission reusedLegacy
+  reusedLegacyInvocation <- invocationOf legacyUnit
+  afterLegacyReuse <- spawn native
+  afterLegacyReuseSeen <- admission afterLegacyReuse
+  reusedLegacyAlive <- processAlive reusedLegacySeen
+  reusedLegacyOk <- expect "expired legacy protection never stops a different invocation reusing its unit name"
+    (admitted reusedLegacySeen && originalLegacyInvocation /= reusedLegacyInvocation && admitted afterLegacyReuseSeen && reusedLegacyAlive)
+  mapM_ release [reusedLegacy, afterLegacyReuse]
+  mapM_ finish [reusedLegacy, afterLegacyReuse]
   (invalidLegacy, _, _) <- readCreateProcessWithExitCode (proc builder ["--reserve-legacy", "missing.scope"]) {env = Just environment} ""
   invalidLegacyOk <- expect "legacy reservation refuses a missing or unvalidated scope" (invalidLegacy /= ExitSuccess)
 
@@ -220,7 +251,7 @@ run source builder = do
   _ <- finish afterStartup
   startupOk <- expect "failed scope startup propagates exit without leaking resource locks"
     (startupCode == ExitFailure 43 && admitted afterStartupSeen)
-  pure (and [fullOk, overlap, atomicOk, pinnedOk, exitsOk, buildOverlap, buildBudget, buildExit, smallOk, nativeLimit, nestedOk, nestedBuildOk, exitOk, crashOk, survivorOk, legacyOk, invalidLegacyOk, storageOk, capOk, sessionOk, startupOk])
+  pure (and [fullOk, overlap, atomicOk, pinnedOk, exitsOk, buildOverlap, buildBudget, buildExit, smallOk, nativeLimit, nestedOk, nestedBuildOk, exitOk, crashOk, survivorOk, reusedManagedOk, legacyOk, reusedLegacyOk, invalidLegacyOk, storageOk, capOk, sessionOk, startupOk])
 
 change :: String -> String -> [(String, String)] -> [(String, String)]
 change key value environment = (key, value) : filter ((/= key) . fst) environment
@@ -232,6 +263,29 @@ observedPid :: String -> Admission -> Maybe ProcessID
 observedPid prefix (Admission seen _) = case mapMaybe (\line -> stripPrefix prefix line >>= readMaybe) seen of
   pid : _ -> Just pid
   [] -> Nothing
+
+observedText :: String -> Admission -> Maybe String
+observedText prefix (Admission seen _) = case mapMaybe (stripPrefix prefix) seen of
+  value : _ -> Just value
+  [] -> Nothing
+
+processAlive :: Admission -> IO Bool
+processAlive seen = case observedPid "probe-pid " seen of
+  Nothing -> pure False
+  Just owner -> either (const False) (const True) <$> (try (signalProcess nullSignal owner) :: IO (Either IOException ()))
+
+invocationOf :: String -> IO String
+invocationOf unit = do
+  (_, out, _) <- readProcessWithExitCode "systemctl" ["--user", "show", unit, "-p", "InvocationID", "--value"] ""
+  pure (unwords (words out))
+
+waitUnitEnded :: Int -> String -> IO ()
+waitUnitEnded attempts unit = do
+  (_, out, _) <- readProcessWithExitCode "systemctl" ["--user", "show", unit, "-p", "ActiveState", "--value"] ""
+  let active = unwords (words out) `elem` ["active", "activating", "deactivating"]
+  if active && attempts > 0
+    then threadDelay 100_000 >> waitUnitEnded (attempts - 1) unit
+    else pure ()
 
 waitGone :: Int -> ProcessID -> IO Bool
 waitGone attempts pid = do

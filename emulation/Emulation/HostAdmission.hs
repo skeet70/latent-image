@@ -16,7 +16,7 @@ module Emulation.HostAdmission
 
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
-import Control.Exception (IOException, catch, evaluate, try)
+import Control.Exception (IOException, bracket, catch, evaluate, try)
 import Control.Monad (forM_, unless, void, when)
 import qualified Data.ByteString as ByteString
 import qualified Data.ByteString.Char8 as ByteString8
@@ -33,7 +33,7 @@ import System.FilePath (isAbsolute, takeDirectory, takeFileName, (</>))
 import System.IO (IOMode (ReadMode), SeekMode (AbsoluteSeek), hFlush, hGetContents, hGetLine, hPutStrLn, stderr, withBinaryFile)
 import System.IO.Error (catchIOError, isDoesNotExistError)
 import System.Posix.Files (readSymbolicLink)
-import System.Posix.IO (FdOption (CloseOnExec), FileLock, LockRequest (WriteLock), OpenFileFlags (creat), OpenMode (ReadWrite), closeFd, createPipe, defaultFileFlags, fdToHandle, getLock, openFd, setFdOption, setLock)
+import System.Posix.IO (FdOption (CloseOnExec), FileLock, LockRequest (WriteLock), OpenFileFlags (creat), OpenMode (ReadOnly, ReadWrite), closeFd, createPipe, defaultFileFlags, fdToHandle, getLock, openFd, setFdOption, setLock)
 import System.Posix.Process (executeFile, getProcessID)
 import System.Posix.Signals (Handler (Catch), installHandler, sigINT)
 import System.Posix.Types (Fd (..), FileOffset, ProcessID)
@@ -75,7 +75,9 @@ newtype InvocationId = InvocationId String
   deriving (Eq)
 
 data LegacyReservation = LegacyReservation ScopeName InvocationId
-data LegacyScopeState = LegacyScopeActive InvocationId MemoryMax | LegacyScopeInactive
+data ScopeIdentity = ScopeIdentity ScopeName InvocationId
+  deriving (Eq)
+data ScopeIdentityState = ScopeIdentityActive InvocationId MemoryMax | ScopeIdentityInactive
 
 reserveMemoryWithLegacy :: Maybe LegacyReservation -> MemoryMax -> ScopeName -> IO Fd
 reserveMemoryWithLegacy legacy memory scope = do
@@ -105,10 +107,13 @@ reserveMemoryWithLegacy legacy memory scope = do
                 threadDelay 500_000
                 attempt
               Just indices -> do
-                claimScopeRecords [directory </> ("scope-" ++ show index) | index <- indices] scope
+                let records = [directory </> ("scope-" ++ show index) | index <- indices]
                 case legacy of
-                  Nothing -> pure ()
-                  Just reservation -> writeLegacyReservation directory reservation indices
+                  Nothing -> claimScopeRecords records scope
+                  Just reservation -> do
+                    current <- currentScopeIdentity scope
+                    reclaimScopeRecords records current
+                    writeLegacyReservation directory reservation indices
                 closeFd gate
                 pure fd
       collect _ 0 _ selected = pure (Just selected)
@@ -132,40 +137,82 @@ claimScopeRecord :: FilePath -> ScopeName -> IO ()
 claimScopeRecord record = claimScopeRecords [record]
 
 claimScopeRecords :: [FilePath] -> ScopeName -> IO ()
-claimScopeRecords records scope@(ScopeName unit) = do
-  previous <- mapM readRecord records
-  mapM_ reapScope (nub [prior | Just prior <- previous, prior /= scope])
+claimScopeRecords records scope = do
+  current@(ScopeIdentity (ScopeName unit) (InvocationId invocation)) <- currentScopeIdentity scope
+  reclaimScopeRecords records current
   pid <- getProcessID
   forM_ records $ \record -> do
     let temporary = record ++ "." ++ show pid
-    writeFile temporary (unit ++ "\n")
+    writeFile temporary (unlines [unit, invocation])
     renameFile temporary record
-  where
-    readRecord record = do
-      previous <- (Just <$> (readFile record >>= \text -> evaluate (length text) >> pure (trim text)))
-        `catchIOError` \problem -> if isDoesNotExistError problem then pure Nothing else ioError problem
-      case previous of
-        Just name -> case parseScopeName name of
-          Just prior -> pure (Just prior)
-          Nothing -> ioError (userError ("invalid admission scope record: " ++ record))
-        Nothing -> pure Nothing
 
-scopeActive :: ScopeName -> IO Bool
-scopeActive (ScopeName unit) = do
-  (_, out, _) <- readProcessWithExitCode "systemctl" ["--user", "show", unit, "-p", "ActiveState", "--value"] ""
-  case trim out of
-    state | state `elem` ["active", "activating", "deactivating"] -> pure True
-    state | state `elem` ["inactive", "failed"] -> pure False
-    _ -> ioError (userError ("cannot establish scope state: " ++ unit))
+currentScopeIdentity :: ScopeName -> IO ScopeIdentity
+currentScopeIdentity scope = do
+  state <- scopeIdentityState scope
+  case state of
+    ScopeIdentityActive invocation _ -> pure (ScopeIdentity scope invocation)
+    ScopeIdentityInactive -> ioError (userError "cannot claim an inactive admission scope")
 
-reapScope :: ScopeName -> IO ()
-reapScope scope@(ScopeName unit) = do
-  active <- scopeActive scope
+readScopeRecord :: FilePath -> IO (Maybe ScopeIdentity)
+readScopeRecord record = do
+  previous <- (Just <$> (readFile record >>= \text -> evaluate (length text) >> pure text))
+    `catchIOError` \problem -> if isDoesNotExistError problem then pure Nothing else ioError problem
+  case lines <$> previous of
+    Nothing -> pure Nothing
+    Just [name, rawInvocation]
+      | Just scope <- parseScopeName name
+      , Just invocation <- parseInvocationId rawInvocation -> pure (Just (ScopeIdentity scope invocation))
+    Just [name] | Just scope <- parseScopeName name -> do
+      state <- scopeIdentityState scope
+      case state of
+        ScopeIdentityInactive -> pure Nothing
+        _ -> ioError (userError ("active old scope record lacks InvocationID; migrate before admission: " ++ record))
+    _ -> ioError (userError ("invalid admission scope identity record: " ++ record))
+
+reclaimScopeRecords :: [FilePath] -> ScopeIdentity -> IO ()
+reclaimScopeRecords records current = do
+  previous <- mapM readScopeRecord records
+  mapM_ reapScope (nub [prior | Just prior <- previous, prior /= current])
+
+sameInvocationActive :: ScopeIdentity -> IO Bool
+sameInvocationActive (ScopeIdentity scope expected) = do
+  state <- scopeIdentityState scope
+  pure $ case state of
+    ScopeIdentityActive invocation _ -> invocation == expected
+    ScopeIdentityInactive -> False
+
+reapScope :: ScopeIdentity -> IO ()
+reapScope owner@(ScopeIdentity (ScopeName unit) _) = do
+  active <- sameInvocationActive owner
   when active $ do
-    (code, _, err) <- readProcessWithExitCode "systemctl" ["--user", "stop", unit] ""
-    unless (code == ExitSuccess) (ioError (userError ("cannot reap scope " ++ unit ++ ": " ++ err)))
-    remaining <- scopeActive scope
-    when remaining (ioError (userError ("scope still has work: " ++ unit)))
+    (_, out, _) <- readProcessWithExitCode "systemctl" ["--user", "show", unit, "-p", "ControlGroup", "--value"] ""
+    let group = trim out
+    unless (isAbsolute group && takeFileName group == unit) $
+      ioError (userError ("cannot identify scope cgroup: " ++ unit))
+    opened <- try (openFd ("/sys/fs/cgroup" ++ group) ReadOnly defaultFileFlags) :: IO (Either IOException Fd)
+    case opened of
+      Left problem -> do
+        stillActive <- sameInvocationActive owner
+        when stillActive (ioError problem)
+      Right directory -> bracket (pure directory) closeFd $ \fd -> do
+        setFdOption fd CloseOnExec True
+        confirmed <- sameInvocationActive owner
+        when confirmed $ do
+          let root = "/proc/self/fd" </> fdText fd
+              empty = (do
+                contents <- readFile (root </> "cgroup.events")
+                _ <- evaluate (length contents)
+                pure (["populated", "0"] `elem` map words (lines contents)))
+                `catchIOError` \problem -> if isDoesNotExistError problem then pure True else ioError problem
+              settle 0 = ioError (userError ("scope still has work: " ++ unit))
+              settle remaining = do
+                ended <- empty
+                unless ended (threadDelay 50_000 >> settle (remaining - 1))
+          killed <- try (writeFile (root </> "cgroup.kill") "1\n") :: IO (Either IOException ())
+          case killed of
+            Left problem -> empty >>= \ended -> unless ended (ioError problem)
+            Right () -> pure ()
+          settle (200 :: Int)
 
 parseMemoryMax :: String -> Maybe MemoryMax
 parseMemoryMax text = case span isDigit text of
@@ -247,9 +294,9 @@ checkConfiguredAccounting = do
 hostBuildMain :: [String] -> IO ()
 hostBuildMain arguments = case arguments of
   ["--reserve-legacy", name] | Just scope <- parseScopeName name -> reserveLegacy scope
-  "--scope-child" : report : release : unit : program : rest
+  "--scope-child" : report : release : unit : record : program : rest
     | Just reportFd <- readMaybe report, Just releaseFd <- readMaybe release ->
-        scopeChild (Fd reportFd) (Fd releaseFd) unit program rest
+        scopeChild (Fd reportFd) (Fd releaseFd) unit record program rest
   option : command : rest
     | Just base <- stripPrefix "--output_base=" option, not (null base), not ("-" `isPrefixOf` command) ->
         admit (Just base) command rest
@@ -271,7 +318,7 @@ admit requestedBase command rest = do
   pid <- getProcessID
   let unit = "xm1-host-build-" ++ show pid ++ ".scope"
   if scoped
-    then stopPreviousScope directory lane unit
+    then stopPreviousScope directory lane
     else ioError (userError "host-build requires a systemd user scope to enforce its memory cap")
   checkStorageBudget directory
     `catch` (\problem -> refuseAccounting (show (problem :: StorageFailure)))
@@ -288,7 +335,7 @@ admit requestedBase command rest = do
           ++ rest
   when running (removeIfPresent script)
   setEnv admittedVariable "1"
-  outcome <- runContained scoped unit bazelArguments
+  outcome <- runContained scoped unit (buildScopeRecord directory lane) bazelArguments
   let verdict = judge outcome
   hPutStrLn stderr ("host-build verdict " ++ renderVerdict command waited verdict outcome)
   hFlush stderr
@@ -332,14 +379,12 @@ worktreeOutputBase = do
 reserveLegacy :: ScopeName -> IO ()
 reserveLegacy scope@(ScopeName unit) = do
   refuseNested
-  state <- legacyScopeState scope
+  state <- scopeIdentityState scope
   invocation <- case state of
-    LegacyScopeActive identity cap | memoryMaxBytes cap == memoryMaxBytes (MemoryMax "4G") -> pure identity
+    ScopeIdentityActive identity cap | memoryMaxBytes cap == memoryMaxBytes (MemoryMax "4G") -> pure identity
     _ -> ioError (userError "legacy reservation requires an active scope capped at exactly 4 GiB")
-  pid <- getProcessID
-  let helperScope = ScopeName ("xm1-legacy-reservation-" ++ show pid ++ ".scope")
-      reservation = LegacyReservation scope invocation
-  _ <- reserveMemoryWithLegacy (Just reservation) (MemoryMax "4G") helperScope
+  let reservation = LegacyReservation scope invocation
+  _ <- reserveMemoryWithLegacy (Just reservation) (MemoryMax "4G") scope
   hPutStrLn stderr ("legacy reservation ready: " ++ unit ++ " 4GiB")
   hFlush stderr
   let wait = do
@@ -347,19 +392,19 @@ reserveLegacy scope@(ScopeName unit) = do
         when active (threadDelay 1_000_000 >> wait)
   wait
 
-legacyScopeState :: ScopeName -> IO LegacyScopeState
-legacyScopeState (ScopeName unit) = do
+scopeIdentityState :: ScopeName -> IO ScopeIdentityState
+scopeIdentityState (ScopeName unit) = do
   (_, out, _) <- readProcessWithExitCode "systemctl"
     ["--user", "show", unit, "-p", "ActiveState", "-p", "MemoryMax", "-p", "InvocationID"] ""
   let properties = [(key, drop 1 value) | line <- lines out, let (key, value) = break (== '=') line]
   case lookup "ActiveState" properties of
-    Just state | state `elem` ["inactive", "failed"] -> pure LegacyScopeInactive
+    Just state | state `elem` ["inactive", "failed"] -> pure ScopeIdentityInactive
     Just state | state `elem` ["active", "activating", "deactivating"]
       , Just rawIdentity <- lookup "InvocationID" properties
       , Just identity <- parseInvocationId rawIdentity
       , Just rawCap <- lookup "MemoryMax" properties
-      , Just cap <- parseMemoryMax rawCap -> pure (LegacyScopeActive identity cap)
-    _ -> ioError (userError ("cannot validate legacy scope identity and cap: " ++ unit))
+      , Just cap <- parseMemoryMax rawCap -> pure (ScopeIdentityActive identity cap)
+    _ -> ioError (userError ("cannot validate scope identity and cap: " ++ unit))
 
 parseInvocationId :: String -> Maybe InvocationId
 parseInvocationId text
@@ -368,9 +413,9 @@ parseInvocationId text
 
 legacyReservationActive :: LegacyReservation -> IO Bool
 legacyReservationActive (LegacyReservation scope expected) = do
-  state <- legacyScopeState scope
+  state <- scopeIdentityState scope
   case state of
-    LegacyScopeActive identity cap | identity == expected -> do
+    ScopeIdentityActive identity cap | identity == expected -> do
       unless (memoryMaxBytes cap == memoryMaxBytes (MemoryMax "4G")) $
         ioError (userError "an adopted legacy scope no longer has its validated 4 GiB cap")
       pure True
@@ -564,21 +609,14 @@ outputBaseText OutputBaseUnavailable = " output_base=unavailable"
 outputBaseText (OutputBaseObserved base) =
   " output_base=" ++ base ++ " command_log=" ++ (base </> "command.log")
 
--- | Stops the scope of this lock's previous holder when its processes outlived
--- the holder, then records @unit@ as the current holder's scope.
-stopPreviousScope :: FilePath -> BuildLane -> String -> IO ()
-stopPreviousScope directory (BuildLane lane) unit = do
-  let record = directory </> (if lane == 0 then "scope" else "scope-" ++ show lane)
-  previous <- try (readFile record >>= \text -> evaluate (length text) >> pure (trim text)) :: IO (Either IOException String)
-  case previous of
-    Right name | "xm1-host-build-" `isPrefixOf` name -> do
-      (_, out, _) <- readProcessWithExitCode "systemctl" ["--user", "show", name, "-p", "ActiveState"] ""
-      when (trim out `elem` ["ActiveState=active", "ActiveState=activating", "ActiveState=deactivating"]) $ do
-        hPutStrLn stderr ("host-build: stopping " ++ name ++ ", left running by the lock's previous holder")
-        void (readProcessWithExitCode "systemctl" ["--user", "stop", name] "")
-      void (readProcessWithExitCode "systemctl" ["--user", "reset-failed", name] "")
-    _ -> pure ()
-  writeFile record (unit ++ "\n")
+buildScopeRecord :: FilePath -> BuildLane -> FilePath
+buildScopeRecord directory (BuildLane lane) =
+  directory </> (if lane == 0 then "scope" else "scope-" ++ show lane)
+
+stopPreviousScope :: FilePath -> BuildLane -> IO ()
+stopPreviousScope directory lane = do
+  previous <- readScopeRecord (buildScopeRecord directory lane)
+  mapM_ reapScope previous
 
 data UnitState = UnitState
   { unitResult :: String
@@ -603,8 +641,8 @@ data Outcome = Outcome
 -- | Runs Bazel through a scope child that reports Bazel's exit status and
 -- stays alive until the unit's result has been read; systemd collects a
 -- successful scope once its last process exits.
-runContained :: Bool -> String -> [String] -> IO Outcome
-runContained scoped unit bazelArguments = do
+runContained :: Bool -> String -> FilePath -> [String] -> IO Outcome
+runContained scoped unit record bazelArguments = do
   before <- daemonCounters
   start <- getMonotonicTime
   (reportRead, reportWrite) <- createPipe
@@ -613,7 +651,7 @@ runContained scoped unit bazelArguments = do
   setFdOption releaseWrite CloseOnExec True
   self <- getExecutablePath
   let MemoryMax memory = classMemoryMax Build
-      child = ["--scope-child", fdText reportWrite, fdText releaseRead, if scoped then unit else "-"] ++ ("bazel" : bazelArguments)
+      child = ["--scope-child", fdText reportWrite, fdText releaseRead, if scoped then unit else "-", record] ++ ("bazel" : bazelArguments)
       process
         | scoped = proc "systemd-run" $
             [ "--user", "--scope", "--quiet", "--unit=" ++ unit
@@ -690,8 +728,8 @@ daemonCounters = do
 -- | Runs inside the scope. Reports Bazel's exit status on @report@ and exits
 -- once @release@ reaches end of file; an end of file while Bazel runs means
 -- the admitting process died, and the scope is stopped.
-scopeChild :: Fd -> Fd -> String -> String -> [String] -> IO ()
-scopeChild report release unit program arguments = do
+scopeChild :: Fd -> Fd -> String -> FilePath -> String -> [String] -> IO ()
+scopeChild report release unit record program arguments = do
   _ <- installHandler sigINT (Catch (pure ())) Nothing
   setFdOption report CloseOnExec True
   setFdOption release CloseOnExec True
@@ -703,6 +741,7 @@ scopeChild report release unit program arguments = do
     _ <- try (hGetContents releaseHandle >>= evaluate . length) :: IO (Either IOException Int)
     void (readProcessWithExitCode "systemctl" ["--user", "stop", "--no-block", unit] "")
     putMVar released ()
+  claimScopeRecord record scope
   _ <- reserveMemory (classMemoryMax Build) scope
   (_, _, _, child) <- createProcess (proc program arguments)
   code <- waitForProcess child
