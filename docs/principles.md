@@ -62,6 +62,8 @@ Deleting files under `private-data/analysis/` also requires the owner's confirma
 
 Research compaction retains current findings, unresolved failures, reproduction inputs and the minimum supporting evidence in their authoritative homes before removing superseded raw output. Age or missing textual citations alone never establish that a file is disposable. Keep a full counterexample for each unresolved failure class; distinguish raw diagnostics from the narrower public behavior a comparator accepts. Build/cache cleanup and research compaction are separate operations.
 
+A historical command, output-root argument or completed deletion-plan listing is not a blanket retention requirement for every descendant. Current reports name the evidence set and reproduction inputs they still require. A baseline or live consumer that reads an entire tree remains a whole-tree dependency.
+
 ## Issues and comments
 
 Issues and their comments are a public record for people who were not in the session: a contributor deciding what to pick up, someone following the project, or an agent starting a task. Write them as a maintainer of an ordinary open-source project would: the problem, what changed, what was found, what it means for the project, the decision needed and what blocks progress. Detail lives in the report, ledger entry or commit, and the comment links to it; a comment is a few sentences or a short list.
