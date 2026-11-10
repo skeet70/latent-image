@@ -25,7 +25,7 @@ import qualified Data.Text as T
 import GHC.Generics (Generic)
 import Foreign.C.Types (CUInt (..), CULong (..))
 import Numeric (readHex, showHex)
-import System.Directory (canonicalizePath, doesDirectoryExist, findExecutable, makeAbsolute, removeFile)
+import System.Directory (canonicalizePath, findExecutable, makeAbsolute, removeFile)
 import System.Environment (getArgs)
 import System.Exit (ExitCode (..), die)
 import System.FilePath ((</>), isAbsolute, normalise, splitDirectories, takeDirectory, takeExtension)
@@ -48,6 +48,7 @@ newtype LinkCount = LinkCount Integer deriving stock (Eq, Show, Generic) derivin
 newtype ProcessId = ProcessId Integer deriving (Eq, Ord, Show)
 newtype DeviceCoordinates = DeviceCoordinates (CUInt, CUInt) deriving (Eq, Ord)
 data Inspector = DefaultInspector | PinnedInspector AbsolutePath
+data InspectionView = ProcessFiles | TaskFiles
 data FileKind = FilesystemFile | KernelObject | UnavailableFile deriving Eq
 data Descriptor = AccessibleDescriptor | MappedDescriptor | InaccessibleDescriptors deriving Eq
 data OpenFile = OpenFile Descriptor (Maybe DeviceId) (Maybe InodeId) FileKind (Maybe AbsolutePath)
@@ -326,9 +327,14 @@ busyFiles inspector (Owner dataOwner) devices = do
   forM_ exemptions $ \path -> hPutStrLn stderr ("Inspecting processes without statting noncandidate FUSE mount " ++ path)
   let ownerFilter = if caller == 0 then [] else ["-a", "-u", show dataOwner]
   let filesystemOptions = concatMap (\path -> ["-e", path]) exemptions
-  (status, output, warnings) <- readInspection inspector (["+w", "-K", "-nP"] ++ filesystemOptions ++ ownerFilter ++ ["-F0pfiDtn"])
-  ensure (status `elem` [ExitSuccess, ExitFailure 1] && B.null warnings) ("lsof inspection incomplete; no deletion permitted (" ++ show status ++ "): " ++ BC.unpack (B.take 2048 warnings))
-  (busy, mapped, unavailable, probes) <- either (ioError . userError) pure (go Nothing Nothing Set.empty Set.empty Set.empty Set.empty (map (BC.dropWhile (== '\n')) (BC.split '\0' output)))
+  let scan view (busy, mapped, unavailable, probes) = do
+        let taskOptions = case view of ProcessFiles -> []; TaskFiles -> ["-K"]
+        (status, output, warnings) <- readInspection inspector (["+w", "-nP"] ++ taskOptions ++ filesystemOptions ++ ownerFilter ++ ["-F0pfiDtn"])
+        ensure (status `elem` [ExitSuccess, ExitFailure 1] && B.null warnings) ("lsof inspection incomplete; no deletion permitted (" ++ show status ++ "): " ++ BC.unpack (B.take 2048 warnings))
+        either (ioError . userError) pure (go Nothing Nothing busy mapped unavailable probes (map (BC.dropWhile (== '\n')) (BC.split '\0' output)))
+  -- Task-only lsof output omits single-threaded processes.
+  processes <- scan ProcessFiles (Set.empty, Set.empty, Set.empty, Set.empty)
+  (busy, mapped, unavailable, probes) <- scan TaskFiles processes
   reconciled <- forM (Set.toList probes) $ \path ->
     (do
       statusNow <- getSymbolicLinkStatus (takeDirectory (absolute path))
@@ -336,9 +342,12 @@ busyFiles inspector (Owner dataOwner) devices = do
       statusNowFile <- getFileStatus (absolute path)
       pure (Just (DeviceId (fromIntegral (deviceID statusNowFile)), InodeId (fromIntegral (fileID statusNowFile)))))
     `catch` \(problem :: IOException) -> if isDoesNotExistError problem then pure Nothing else ioError problem
-  forM_ (Set.toList unavailable) $ \(ProcessId pid) -> do
-    exists <- doesDirectoryExist ("/proc/" ++ show pid)
-    ensure (not exists) ("lsof could not inspect live process " ++ show pid ++ "; obtain privileged inspection")
+  forM_ (Set.toList unavailable) $ \(ProcessId pid) ->
+    (do
+      statusNow <- B.readFile ("/proc/" ++ show pid ++ "/status")
+      let kernelThread = any ((== ["Kthread:", "1"]) . BC.words) (BC.lines statusNow)
+      ensure kernelThread ("lsof could not inspect live userspace process " ++ show pid ++ "; obtain privileged inspection"))
+    `catch` \(problem :: IOException) -> if isDoesNotExistError problem then pure () else ioError problem
   pure (BusyFiles (Set.union busy (Set.fromList [value | Just value <- reconciled])) mapped)
  where
   finish _ Nothing busy mapped unavailable probes = Right (busy, mapped, unavailable, probes)

@@ -24,7 +24,7 @@ import System.Posix.IO (OpenMode (ReadOnly), closeFd, defaultFileFlags, openFd)
 import System.Posix.Process (getProcessID)
 import System.Posix.Temp (mkdtemp)
 import System.Posix.Types (COff (..), Fd (..))
-import System.Process (readProcessWithExitCode)
+import System.Process (CreateProcess (std_in, std_out, std_err), StdStream (UseHandle, NoStream), createProcess, getPid, proc, readProcessWithExitCode, terminateProcess, waitForProcess)
 
 foreign import ccall unsafe "unshare" c_unshare :: CInt -> IO CInt
 foreign import ccall unsafe "mmap" c_mmap :: Ptr Word8 -> CSize -> CInt -> CInt -> CInt -> COff -> IO (Ptr Word8)
@@ -47,7 +47,9 @@ fixtureInspector arguments = do
       putStr ("p" ++ pid ++ "\0f" ++ descriptor ++ "\0tunknown\0n/proc/" ++ pid ++ "/fd/" ++ descriptor ++ " (readlink: No such file or directory)\0\n")
     _ -> do
       executable <- getEnv "COMPACTION_FIXTURE_LSOF"
-      (status, output, errors) <- readProcessWithExitCode executable (arguments ++ ["-a", "-p", pid]) ""
+      consumer <- lookupEnv "COMPACTION_FIXTURE_CONSUMER"
+      let processes = maybe pid (\child -> pid ++ "," ++ child) consumer
+      (status, output, errors) <- readProcessWithExitCode executable (arguments ++ ["-a", "-p", processes]) ""
       putStr output
       hPutStr stderr errors
       exitWith status
@@ -81,6 +83,16 @@ withMappedFile path action = bracket acquire release action
     check (address /= intPtrToPtr (-1)) "cannot map the fixture file"
     pure address
   release address = c_munmap address 1 >>= \result -> check (result == 0) "cannot release the fixture mapping"
+
+withSingleThreadFile :: FilePath -> IO () -> IO ()
+withSingleThreadFile path action = bracket acquire release $ \process -> do
+  pid <- getPid process >>= maybe (ioError (userError "consumer process missing")) pure
+  bracket_ (setEnv "COMPACTION_FIXTURE_CONSUMER" (show pid)) (unsetEnv "COMPACTION_FIXTURE_CONSUMER") action
+ where
+  acquire = withBinaryFile path ReadMode $ \handle -> do
+    (_, _, _, process) <- createProcess (proc "sleep" ["600"]) {std_in = UseHandle handle, std_out = NoStream, std_err = NoStream}
+    pure process
+  release process = terminateProcess process >> void (waitForProcess process)
 
 check :: Bool -> String -> IO ()
 check ok message = unless ok (ioError (userError message))
@@ -169,6 +181,15 @@ runTests input = do
       path <- makePlan executable workspace root ["old.json"] []
       bracket_ (setEnv "COMPACTION_FIXTURE_INSPECTION" "unavailable") (unsetEnv "COMPACTION_FIXTURE_INSPECTION") (apply executable path False)
       assertContents (root </> "old.json") "obsolete"
+
+    fixture parent "single-thread-consumer" $ \workspace root -> do
+      B.writeFile (root </> "held.json") "single thread evidence"
+      B.writeFile (root </> "idle.json") "obsolete"
+      path <- makePlan executable workspace root ["held.json", "idle.json"] []
+      withSingleThreadFile (root </> "held.json") (apply executable path True)
+      assertContents (root </> "held.json") "single thread evidence"
+      exists <- doesPathExist (root </> "idle.json")
+      check (not exists) "idle result survived single-thread consumer inspection"
 
     fixture parent "thread-descriptor" $ \workspace root -> do
       B.writeFile (root </> "held.json") "thread owned"
