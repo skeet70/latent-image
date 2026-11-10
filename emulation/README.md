@@ -521,6 +521,8 @@ Before every aggregate single-instruction `Machine::run(1)`, the worker validate
 
 For rewrite increments, follow [native rewrite qualification](../replacement/README.md#native-rewrite-qualification) for build selection, affected-caller checks, admission diagnostics and full-integration boundaries.
 
+Native SDK tests execute inside the managed `host-build test` scope. They do not start nested admission scopes.
+
 ```sh
 devenv shell -- host-build test --jobs=2 --local_test_jobs=1 //emulation:native-sdk-tests //emulation:native-runner-tests
 devenv shell -- host-build build --jobs=2 //emulation:native-runner

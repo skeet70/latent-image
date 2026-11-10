@@ -2351,9 +2351,7 @@ haskell_test(
     size = "medium",
     srcs = ["OwnedCaseNativeInitializationTests.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
-    tags = ["no-sandbox"],
     deps = [
-        ":emulator-slot-lib",
         ":fujimod-native-paths",
         ":native-adapter",
         ":native-observation",

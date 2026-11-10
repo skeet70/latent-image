@@ -7,14 +7,12 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
 import Data.Bits ((.&.), (.|.), shiftL, shiftR)
 import Data.Word (Word8, Word32)
-import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
 import qualified Emulation.NativeCase as C
 import qualified Emulation.NativeObservation as N
 import qualified Emulation.OwnedCase as O
 import FujiAF.Host (ensure, withTemporary)
 import FujiModNativePaths (fujimodNativeCase)
 import System.Directory (canonicalizePath)
-import System.Environment (getArgs)
 import System.FilePath ((</>))
 
 data Tile = Tile
@@ -27,9 +25,6 @@ data Scenario = RoundTrip | RefuseWrite Tile
 
 main :: IO ()
 main = do
-  arguments <- getArgs
-  policy <- slotPolicyFromEnvironment
-  reexecInSlot policy arguments
   runner <- canonicalizePath fujimodNativeCase
   withTemporary "owned-case-native-initialization" $ \root -> do
     let large = tiles (88 * 1024) 7
