@@ -4043,9 +4043,11 @@ haskell_test(
     size = "small",
     srcs = ["SchedulerPairFamilyTests.hs"],
     main_file = "SchedulerPairFamilyTests.hs",
+    data = ["family-flag-set-rewait.json"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":scheduler-pair-lib",
+        "//host:aeson",
         "//host:base",
         "//host:bytestring",
         "//host:containers",

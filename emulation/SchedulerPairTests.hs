@@ -249,6 +249,21 @@ main = do
       disabled=call {callSemantic=ServiceSemantic DisableDispatch,callCpsr=0x13,callArguments=Arguments [0,0,0,0],
         callBefore=serviceMemory,callAfter=serviceFinal,callTrace=Just (CallTrace serviceRegisters serviceRegisters Returned [acquired,returned] Nothing)}
   assert "service judges state after contended acquisition" (checkCall disabled==Right ())
+  let unreadableEvent kind = returned
+        { boundaryKind=kind, boundaryInstructions=35
+        , boundaryMemory=M.delete (Address 0x400545a4) serviceMemory
+        , boundaryUnreadable=S.singleton (Address 0x400545a4)
+        , boundaryWrites=[], boundaryWriteOrigins=[] }
+      interposedService event = disabled
+        { callTrace=Just (CallTrace serviceRegisters serviceRegisters Returned [acquired,event,returned] Nothing)
+        , callUnreadable=S.singleton (Address 0x400545a4) }
+  forM_ [SaveBoundary,NoSaveBoundary,RetryBoundary,CallbackBoundary,ReturnBoundary,ResumeBoundary,CallbackReturnBoundary,AcquiredBoundary] $ \kind ->
+    assert ("unreadable service ownership cannot be skipped "++show kind)
+      (checkCall (interposedService (unreadableEvent kind))==Left EntryUnreadable)
+  let foreignIrq = (unreadableEvent ReturnBoundary)
+        { boundaryRegisters=serviceRegisters { D.processorState=0x92 } }
+  assert "known foreign IRQ service event does not require caller context"
+    (checkCall (interposedService foreignIrq)==Right ())
   assert "direct service retains A equality" (checkCall disabled {callTrace=Just (CallTrace serviceRegisters serviceRegisters Returned
     [acquired,returned {boundaryRegisters=serviceRegisters {D.processorState=0x113}}] Nothing)}==Left ProcessorState)
   assert "service still requires dispatch disable write" (checkCall disabled {callTrace=Just (CallTrace serviceRegisters serviceRegisters Returned
@@ -365,6 +380,13 @@ main = do
   forM_ [(remoteParent,remoteNotify),(otherParent,otherNotify)] $ \(parent,target) -> do
     assert "remote wake fixture refuses only its missing bank write" (checkCall parent==Left BankWrites)
     assert "first missing notify also explains its enclosing service bank failure" (controlFailure SilentNotify (controlled parent target)==Right ())
+    let contextAddress = Address (V.contextWord (V.domainWords (callDomain parent)))
+        unknownParent = (changeBoundary ReturnBoundary (\boundary -> boundary
+          { boundaryMemory=M.delete contextAddress (boundaryMemory boundary)
+          , boundaryUnreadable=S.insert contextAddress (boundaryUnreadable boundary) }) parent)
+          { callUnreadable=S.insert contextAddress (callUnreadable parent) }
+    assert "unreadable caller return cannot establish an enclosing notify defect"
+      (case controlFailure SilentNotify (controlled unknownParent target) of Left _ -> True; Right () -> False)
   assert "foreign bank effects remain separate from a missing invocation transaction" (controlFailure SilentNotify
     (controlled (bankedParent ownOrigin {writerCore=1,writerTask=Address 0xa000,writerPc=Address 0xd3fd4}) remoteNotify)==Right ())
   assert "unexpected owned bank effects are not missing-transaction propagation" (controlFailure SilentNotify

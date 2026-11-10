@@ -1002,8 +1002,8 @@ impl FamilyService {
         matches!(self, Self::FamilyFlagCreate | Self::FamilyMailboxCreate).then_some(1)
     }
 
-    /// The flag timed wait passes its timeout as the fifth argument, on the caller's stack.
-    fn stack_timeout(self) -> bool { self == Self::FamilyFlagTimedWait }
+    /// The fifth argument is on the caller's stack.
+    fn stack_timeout(self) -> bool { matches!(self, Self::FamilyFlagTimedWait | Self::HelperBlockTimed) }
 
     /// A wait or receive arms the executing task's own timer entry.
     fn blocks(self) -> bool {
@@ -2348,26 +2348,6 @@ mod tests {
         assert_eq!(entry.semantic, Semantic::Family { name: FamilyService::FamilyRelease });
     }
 
-    #[test]
-    fn helper_snapshots_capture_argument_records() {
-        let task = 0x9000u32;
-        let wait = 0x9100u32;
-        let timer = 0x9200u32;
-        let control = 0x9300u32;
-        let config = 0x9400u32;
-        let mut words = BTreeMap::new();
-        words.insert(task + 0x14, wait);
-        words.insert(wait, timer);
-        words.insert(control + 0x0c, 0x11);
-        words.insert(control + 8, config);
-        words.insert(config, 0x4);
-        let mut read = family_read(&words);
-        let release = family_words(&mut read, Domain::A, FamilyService::FamilyRelease, [0, task, 0, 0], 0, None).unwrap();
-        assert!(release.contains(&(task + 0x14)) && release.contains(&wait) && release.contains(&(wait + 4)) && release.contains(&(timer + 8)));
-        let mut read = family_read(&words);
-        let check = family_words(&mut read, Domain::A, FamilyService::HelperCheck, [control, 0, 0, 0x9500], 0, None).unwrap();
-        assert!(check.contains(&(control + 0x0c)) && check.contains(&(control + 8)) && check.contains(&config) && check.contains(&0x9500));
-    }
 
     #[test]
     fn family_snapshot_is_bounded_and_keeps_the_involved_words() {

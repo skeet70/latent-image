@@ -12,7 +12,7 @@ import Data.Word (Word32, Word64)
 import Emulation.SchedulerPairCatalog (Address (..), Semantic (..), SemaphoreService (..))
 import Emulation.SchedulerPairFamily
   ( FamilyBoundary (..), FamilyBoundaryKind (..), FamilyCompletion (..), FamilyRefusal (..), FamilyTrace (..), Pending (..)
-  , TimerKind (..), TimerWitness (..), ReleaseWitness (..) )
+  , FamilySuspension (..), TimerKind (..), TimerWitness (..), ReleaseWitness (..) )
 import Emulation.SchedulerPairModel (Memory)
 import Emulation.SchedulerPairPlan (Role (..))
 import Replacement.RtosOwnFirst.Regions (Domain (..))
@@ -32,7 +32,7 @@ class SemaphoreCall c where
   semaphoreEpoch :: c -> Word64
   semaphoreService :: c -> Maybe SemaphoreService
   semaphoreTrace :: c -> Maybe FamilyTrace
-  semaphoreSuspension :: c -> Maybe (Memory, [(Address, Int, Word32)])
+  semaphoreSuspension :: c -> Either FamilyRefusal (Maybe FamilySuspension)
   semaphoreWriters :: c -> [SemaphoreWriter]
 
 expect :: FamilyRefusal -> Bool -> Either FamilyRefusal ()
@@ -251,7 +251,8 @@ checkDelete role call domain slot = do
 checkSignal :: SemaphoreCall c => c -> Domain -> Word32 -> Either FamilyRefusal ()
 checkSignal call domain slot = do
   let control = controlAddress domain slot
-  effect <- signalEffect call domain
+  suspension <- semaphoreSuspension call
+  effect <- signalEffect call domain suspension
   first <- wordAt control (semaphoreBefore call)
   if first == control
     then do
@@ -270,10 +271,10 @@ checkSignal call domain slot = do
       byteAt (first + 0x0c) effect >>= expect FamilyLifetime . (== expected)
       next <- wordAt first (semaphoreBefore call)
       wordAt control effect >>= expect FamilyEffect . (== next)
-      case semaphoreSuspension call of
+      case suspension of
         Nothing -> pure ()
-        Just (_, prefix) -> do
-          let suffix = drop (length prefix) (zip (semaphoreWrites call) (semaphoreWriters call))
+        Just witness -> do
+          let suffix = drop (length (suspensionWrites witness)) (zip (semaphoreWrites call) (semaphoreWriters call))
               protected = [(control, 0x10), (first, 0x38), (wait, 0x0c)]
               overlaps (Address address, size, _) (base, bytes) =
                 toInteger address < toInteger base + bytes && toInteger base < toInteger address + toInteger size
@@ -282,24 +283,21 @@ checkSignal call domain slot = do
               expect FamilyLifetime (not (any (overlaps write) protected))
 
 -- A signal may switch to its released waiter before returning to its caller.
-signalEffect :: SemaphoreCall c => c -> Domain -> Either FamilyRefusal Memory
-signalEffect call object = case semaphoreSuspension call of
+signalEffect :: SemaphoreCall c => c -> Domain -> Maybe FamilySuspension -> Either FamilyRefusal Memory
+signalEffect call object suspension = case suspension of
   Nothing -> pure (semaphoreAfter call)
-  Just (snapshot, writes) -> do
+  Just witness -> do
+    let snapshot = suspensionMemory witness
+        writes = suspensionWrites witness
+        saved = suspensionSave witness
+        resumed = suspensionResume witness
+        returned = suspensionReturn witness
+        entry = case semaphoreDomain call of DomainA -> 0x43640; DomainB -> 0xd3640
     expect FamilyAssociation (length (semaphoreWriters call) == length (semaphoreWrites call))
     expect FamilyEffect (writes == take (length writes) (semaphoreWrites call))
-    trace <- maybe (Left FamilyContinuation) Right (semaphoreTrace call)
-    let history = familyTraceHistory trace
-        saves = filter ((== FamilySaveKind) . familyBoundaryKind) history
-        resumes = filter ((== FamilyResumeKind) . familyBoundaryKind) history
-        returns = filter ((== FamilyReturnKind) . familyBoundaryKind) history
-        entry = case semaphoreDomain call of DomainA -> 0x43640; DomainB -> 0xd3640
-    case (saves, resumes, returns) of
-      (saved : _, resumed : _, returned : _) -> do
-        expect FamilyContinuation (familyBoundaryAddress saved == Address entry)
-        expect FamilyContinuation (familyBoundaryInstructions saved < familyBoundaryInstructions resumed
-          && familyBoundaryInstructions resumed < familyBoundaryInstructions returned)
-      _ -> Left FamilyContinuation
+    expect FamilyContinuation (familyBoundaryAddress saved == Address entry)
+    expect FamilyContinuation (familyBoundaryInstructions saved < familyBoundaryInstructions resumed
+      && familyBoundaryInstructions resumed < familyBoundaryInstructions returned)
     replayed <- foldM replayWrite (semaphoreBefore call) writes
     forM_ (M.keys (semaphoreBefore call)) $ \address ->
       expect FamilyEffect (M.lookup address replayed == M.lookup address snapshot)

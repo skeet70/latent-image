@@ -2,6 +2,7 @@
 module Main (main) where
 
 import Control.Monad (unless)
+import qualified Data.Aeson as J
 import qualified Data.ByteString.Char8 as B
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
@@ -132,6 +133,19 @@ flagWaitCall :: [Written] -> Word32 -> [Boundary] -> Call
 flagWaitCall writes r0 history =
   callOf DomainA 0x48b30 (FamilySemantic FlagTimedWait) [1,1,0,0x8100] flagWaitBefore (applyWrites flagWaitBefore writes) r0 (traceOf (withStack 0x8000 r0) history Returned) writes
 
+helperBlockTimedCall :: Word32 -> Maybe Word32 -> Call
+helperBlockTimedCall timeout armed =
+  let before = M.fromList [(Address 0x8000,timeout),(Address flagWaitAddress,0xdead)
+        ,(Address (flagWaitAddress+4),0),(Address (flagTimerAddress+8),0),(Address 0x9014,0)]
+      timerWrites = case armed of
+        Nothing -> [Written (Address flagWaitAddress) 4 0]
+        Just timer -> [Written (Address flagWaitAddress) 4 timer,Written (Address (timer+8)) 4 0x9000]
+      writes = timerWrites ++ [Written (Address (flagWaitAddress+4)) 4 flagControlAddress
+        ,Written (Address 0x9014) 4 flagWaitAddress]
+      history = [timerBoundary TimerInsertBoundary timer 0x9000 | Just timer <- [armed]]
+  in callOf DomainA 0x448e4 (FamilySemantic HelperBlockTimed) [1,flagControlAddress,flagWaitAddress,flagTimerAddress]
+      before (applyWrites before writes) 0 (traceOf (withStack 0x8000 0) history Returned) writes
+
 flagDeleteWrites :: [Written]
 flagDeleteWrites =
   [ Written (Address flagConfigAddress) 4 0
@@ -221,7 +235,146 @@ isLeft result = case result of Left _ -> True; Right _ -> False
 
 main :: IO ()
 main = do
+  retained <- either error pure . J.eitherDecodeStrict' =<< B.readFile "emulation/family-flag-set-rewait.json"
+  assertRight "retained flag setter permits foreign clear while suspended" (checkCall retained)
+  retainedTrace <- maybe (error "retained flag setter has no trace") pure (callTrace retained)
+  let changeHistory f call = call { callTrace = fmap (\trace -> trace { traceHistory = map f (traceHistory trace) }) (callTrace call) }
+      changeSave f = changeHistory (\boundary -> if boundaryKind boundary==SaveBoundary then f boundary else boundary) retained
+      invalidSaves =
+        [ ("ordinary return", changeSave (\boundary -> boundary { boundaryKind=ReturnBoundary }))
+        , ("wrong task", changeSave (\boundary -> boundary { boundaryTask=0x400609c4 }))
+        , ("wrong core", changeSave (\boundary -> boundary { boundaryCore=1 }))
+        , ("same-task IRQ", changeSave (\boundary -> boundary
+            { boundaryRegisters=(boundaryRegisters boundary) { D.processorState=0x92 } }))
+        , ("save after resume", changeSave (\boundary -> boundary { boundaryInstructions=240124150 }))
+        , ("wrong save entry", changeSave (\boundary -> boundary { boundaryAddress=Address 0x43644 }))
+        , ("missing resume", changeHistory (\boundary -> if boundaryKind boundary==ResumeBoundary then boundary { boundaryKind=ReturnBoundary } else boundary) retained)
+        , ("missing prefix", changeSave (\boundary -> boundary { boundaryWrites=[] }))
+        , ("unreadable save", changeSave (\boundary -> boundary { boundaryMemory=M.empty }))
+        , ("unexplained final effect", retained { callAfter=M.insert (Address 0x400627d0) 1 (callAfter retained) })
+        ]
+      changeEvent kind f = changeHistory (\boundary -> if boundaryKind boundary==kind then f boundary else boundary) retained
+      invalidContinuations =
+        [ (label++" "++show kind,changeEvent kind f)
+        | kind <- [ResumeBoundary,ReturnBoundary]
+        , (label,f) <-
+          [ ("same-task IRQ",\boundary -> boundary
+              { boundaryRegisters=(boundaryRegisters boundary) { D.processorState=0x92 } })
+          , ("wrong context",\boundary -> boundary
+              { boundaryMemory=M.insert (Address 0x400545a4) 1 (boundaryMemory boundary) })
+          , ("foreign stack",\boundary ->
+              let state = boundaryRegisters boundary
+                  values = D.registers state
+              in boundary { boundaryRegisters=state { D.registers=take 13 values++[0x70000800]++drop 14 values } })
+          , ("wrong task",\boundary -> boundary { boundaryTask=0x400609c4 })
+          , ("wrong core",\boundary -> boundary { boundaryCore=1 })
+          ]
+        ] ++ [("return before resume",changeEvent ReturnBoundary (\boundary -> boundary { boundaryInstructions=240118750 }))]
+  mapM_ (\(label,invalid) -> assert ("flag suspension rejects " ++ label) (isLeft (checkCall invalid))) (invalidSaves++invalidContinuations)
+  let retainSetPattern call =
+        let rewrite (Written address size value) = Written address size
+              (if address==Address 0x400627d0 && value==0 then 0x400000 else value)
+            boundaryPattern boundary = boundary
+              { boundaryMemory=if boundaryInstructions boundary>=240119092
+                  then M.insert (Address 0x400627d0) 0x400000 (boundaryMemory boundary)
+                  else boundaryMemory boundary
+              , boundaryWrites=map rewrite (boundaryWrites boundary) }
+        in (changeHistory boundaryPattern call)
+          { callAfter=M.insert (Address 0x400627d0) 0x400000 (callAfter call)
+          , callWrites=map rewrite (callWrites call) }
+  assertRight "saved endpoint also permits an unchanged final pattern" (checkCall (retainSetPattern retained))
+  mapM_ (\(label,invalid) -> assertLeft ("matching final pattern cannot hide "++label)
+    FamilyContinuation (checkCall (retainSetPattern invalid))) invalidContinuations
+  let unknownContext kind keepCommitted call =
+        let unreadable boundary = if boundaryKind boundary==kind then boundary
+              { boundaryMemory=if keepCommitted then boundaryMemory boundary else M.delete (Address 0x400545a4) (boundaryMemory boundary)
+              , boundaryUnreadable=S.insert (Address 0x400545a4) (boundaryUnreadable boundary) }
+              else boundary
+        in (changeHistory unreadable call)
+          { callUnreadable=S.insert (Address 0x400545a4) (callUnreadable call) }
+      stablePattern = retainSetPattern retained
+  mapM_ (\kind -> assertLeft ("unreadable ownership cannot hide behind final pattern "++show kind)
+    FamilyContinuation (checkCall (unknownContext kind False stablePattern))) [SaveBoundary,ResumeBoundary,ReturnBoundary]
+  assertLeft "an unreadable Save cannot borrow a committed context" FamilyContinuation
+    (checkCall (unknownContext SaveBoundary True stablePattern))
+  let withoutResume = changeHistory (\boundary -> if boundaryKind boundary==ResumeBoundary
+        then boundary { boundaryKind=SelectedBoundary } else boundary) stablePattern
+  assertLeft "unreadable Save and absent Resume cannot select final memory" FamilyContinuation
+    (checkCall (unknownContext SaveBoundary False withoutResume))
+  let foreignSave boundary =
+        let state = boundaryRegisters boundary
+            values = D.registers state
+        in boundary
+          { boundaryInstructions=boundaryInstructions boundary-1
+          , boundaryRegisters=state { D.processorState=0x92, D.registers=take 13 values++[0x70000800]++drop 14 values }
+          , boundaryMemory=M.delete (Address 0x400545a4) (boundaryMemory boundary)
+          , boundaryUnreadable=S.insert (Address 0x400545a4) (boundaryUnreadable boundary)
+          , boundaryWrites=[], boundaryWriteOrigins=[], boundaryBank=[], boundaryBankOrigins=[] }
+      interposed = retained
+        { callTrace=fmap (\trace -> trace { traceHistory=concatMap
+            (\boundary -> if boundaryKind boundary==SaveBoundary then [foreignSave boundary,boundary] else [boundary]) (traceHistory trace) }) (callTrace retained)
+        , callUnreadable=S.insert (Address 0x400545a4) (callUnreadable retained) }
+  assertRight "known foreign IRQ does not need the caller context word" (checkCall interposed)
+  let corrupt = Written (Address 0x400627d0) 4 1
+      callerOrigin = WriteOrigin (callCore retained) (callAddress retained)
+        (Address (D.registers (traceBefore retainedTrace) !! 13)) (callCpsr retained)
+        (Address (callTask retained)) (callKernelContext retained) 240124150
+      withSuffix origin =
+        let changeReturn boundary = if boundaryKind boundary==ReturnBoundary
+              then boundary { boundaryMemory=M.insert (Address 0x400627d0) 1 (boundaryMemory boundary)
+                            , boundaryWrites=boundaryWrites boundary++[corrupt]
+                            , boundaryWriteOrigins=boundaryWriteOrigins boundary++[origin] }
+              else boundary
+        in (changeHistory changeReturn retained)
+          { callAfter=M.insert (Address 0x400627d0) 1 (callAfter retained)
+          , callWrites=callWrites retained++[corrupt]
+          , callWriteOrigins=callWriteOrigins retained++[origin] }
+  assertLeft "caller cannot corrupt flag after resume" FamilyLifetime (checkCall (withSuffix callerOrigin))
+  let irqOrigin = callerOrigin { writerContext=1, writerCpsr=0x92, writerSp=Address 0x70000800 }
+  assertRight "same-task IRQ remains a foreign writer" (checkCall (withSuffix irqOrigin))
+  let noWaiterBefore = M.insert (Address 0x400545a4) 0
+        (M.insert (Address flagControlAddress) flagControlAddress
+        (M.insert (Address (flagControlAddress+4)) flagControlAddress
+        (M.insert (Address flagConfigAddress) 4 flagBefore)))
+      noWaiter value =
+        let after = M.insert (Address (flagControlAddress+0x0c)) value noWaiterBefore
+            ordinaryReturn = Boundary ReturnBoundary (Address 0x43640) 20 0 (registers (withStack 0 0)) after [] [] Nothing 0x9000 [] [] S.empty
+        in (callOf DomainA 0x4813c (FamilySemantic FlagSet) [1,4,0,0] noWaiterBefore after 0
+          (traceOf (withStack 0 0) [ordinaryReturn] Returned) [Written (Address (flagControlAddress+0x0c)) 4 value])
+          { callKernelContext=0 }
+  assertRight "ordinary return without waiter retains the set pattern" (checkCall (noWaiter 5))
+  assertLeft "ordinary return cannot erase an unmatched set pattern" FamilyEffect (checkCall (noWaiter 0))
+  mapM_ (\role -> do
+    assertRight ("ordinary flag-set effect is checked for " ++ roleName role)
+      (checkCallFor role (noWaiter 5))
+    assertLeft ("stock binding cannot bypass an erased flag pattern: " ++ roleName role)
+      FamilyEffect (checkCallFor role (noWaiter 0))) [Stock,Owned]
+  assertLeft "no-Save return still requires readable caller provenance" FamilyContinuation
+    (checkCall (unknownContext ReturnBoundary False (noWaiter 5)))
+  let unknownResume = Boundary ResumeBoundary (Address 0x43668) 19 0
+        (registers (take 15 (withStack 0 0)++[0x43668])) (M.delete (Address 0x400545a4) noWaiterBefore)
+        [] [] Nothing 0x9000 [] [] (S.singleton (Address 0x400545a4))
+      unknownNoSave = (noWaiter 5)
+        { callTrace=fmap (\trace -> trace { traceHistory=unknownResume:traceHistory trace }) (callTrace (noWaiter 5))
+        , callUnreadable=S.singleton (Address 0x400545a4) }
+  assertLeft "no-Save path cannot skip an unreadable Resume" FamilyContinuation (checkCall unknownNoSave)
   let correctCall = flagSetCall flagSetWrites 0 (flagSetTrace 0)
+  mapM_ (\timeout -> assertRight "nonpositive helper timeout leaves timer unarmed"
+    (checkFamilyCall (helperBlockTimedCall timeout Nothing) [])) [0,0xffffffff,0xfffffffe,0x80000000]
+  mapM_ (\timeout -> assertRight "positive helper timeout arms timer"
+    (checkFamilyCall (helperBlockTimedCall timeout (Just flagTimerAddress)) [])) [1,10,0x7fffffff]
+  assertLeft "positive helper timeout cannot omit its timer" FamilyEffect
+    (checkFamilyCall (helperBlockTimedCall 1 Nothing) [])
+  assertLeft "infinite helper timeout cannot arm a timer" FamilyEffect
+    (checkFamilyCall (helperBlockTimedCall 0xffffffff (Just flagTimerAddress)) [])
+  let missingTimeout = helperBlockTimedCall 0xffffffff Nothing
+      uncapturedTimeout = missingTimeout
+        { callBefore=M.delete (Address 0x8000) (callBefore missingTimeout)
+        , callAfter=M.delete (Address 0x8000) (callAfter missingTimeout) }
+  assertLeft "helper timeout must be captured at entry" FamilyEffect
+    (checkFamilyCall uncapturedTimeout [])
+  mapM_ (\role -> assertLeft ("role cannot bypass an uncaptured helper timeout: " ++ roleName role)
+    FamilyEffect (checkCallFor role uncapturedTimeout)) [Stock,Owned]
   assertRight "correct flag set" (checkFamilyCall correctCall [])
   let forgedResult = [Written (Address (flagWaitAddress+0x14)) 4 6
                      ,Written (Address (flagControlAddress+0x0c)) 4 5

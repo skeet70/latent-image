@@ -2,7 +2,7 @@
 {-# OPTIONS_GHC -Wno-orphans #-}
 module Emulation.SchedulerPairCheck where
 
-import Control.Monad (foldM, forM_, unless)
+import Control.Monad (foldM, forM_, unless, when)
 import Data.Aeson (FromJSON (..), Value, object, withObject, (.:), (.:?), (.=))
 import qualified Data.Aeson as J
 import Data.Aeson.Types (Parser)
@@ -339,14 +339,24 @@ ownedWrites call = go
     pure (if owned then write:remaining else remaining)
   go _ _ = Left WrittenWords
 
-ownsBoundary :: Call -> Boundary -> Bool
-ownsBoundary call boundary = boundaryCore boundary==callCore call && boundaryTask boundary==callTask call
-  && D.processorState (boundaryRegisters boundary) .&. 0x1f==callCpsr call .&. 0x1f
-  && M.lookup (Address (V.contextWord (V.domainWords (callDomain call)))) (boundaryMemory boundary)==Just (callKernelContext call)
-  && case (callTaskStack call,drop 13 (D.registers (boundaryRegisters boundary))) of
-    (Nothing,_) -> True
-    (Just (TaskStack (Address lo) (Address hi)),sp:_) -> lo<=sp && sp<=hi
-    _ -> False
+data BoundaryOwnership = CallerBoundary | ForeignBoundary | UnreadableBoundary deriving (Eq,Show)
+
+boundaryOwnership :: Call -> Boundary -> BoundaryOwnership
+boundaryOwnership call boundary
+  | boundaryCore boundary/=callCore call || boundaryTask boundary/=callTask call
+      || D.processorState (boundaryRegisters boundary) .&. 0x1f/=callCpsr call .&. 0x1f = ForeignBoundary
+  | maybe False (/=callKernelContext call) context || stack==Just False = ForeignBoundary
+  | context==Nothing || stack==Nothing = UnreadableBoundary
+  | otherwise = CallerBoundary
+ where
+  contextAddress = Address (V.contextWord (V.domainWords (callDomain call)))
+  context = if S.member contextAddress (boundaryUnreadable boundary)
+    then Nothing else M.lookup contextAddress (boundaryMemory boundary)
+  stack = case (callTaskStack call,drop 13 (D.registers (boundaryRegisters boundary))) of
+    (Nothing,_) -> Just True
+    (Just (TaskStack (Address lo) (Address hi)),sp:_) -> Just (lo<=sp && sp<=hi)
+    _ -> Nothing
+
 checkHelperCall :: Call -> Either Refusal ()
 checkHelperCall = checkHelperCallWith V.PerDomainPredicate
 
@@ -603,10 +613,10 @@ controlFailure role observation = case role of
       && (role/=WrongPredicate || controlMask==0xff)
       && all (not . ownsOrigin call) (callBankOrigins call)
       && all (all (not . ownsOrigin call) . boundaryBankOrigins) (traceHistory trace)
-      && any (\boundary -> boundaryKind boundary==ReturnBoundary && ownsBoundary call boundary
+      && checkServiceCallWith (if role==WrongPredicate then WrongNotifyService else MissingNotifyAtReturn transaction) service call==Right ()
+      && any (\boundary -> boundaryKind boundary==ReturnBoundary && boundaryOwnership call boundary==CallerBoundary
         && boundaryInstructions boundary>callFirst target
         && case boundaryAddress boundary of Address pc -> drop 15 (D.registers (boundaryRegisters boundary))==[pc]) (traceHistory trace)
-      && checkServiceCallWith (if role==WrongPredicate then WrongNotifyService else MissingNotifyAtReturn transaction) service call==Right ()
     _ -> False
 
 failureValue :: Observation -> Value
@@ -668,7 +678,6 @@ checkCallForInWitnesses witnesses role call = do
       expect ProcessorState (callCpsr call .&. 0x1ff==callReturnCpsr call .&. 0x1ff)
     DispatchSemantic point -> dispatchTags role point call >> pure ()
     TaskRecordSemantic point -> checkTaskRecordCall role point call
-    FamilySemantic _ | role == Stock -> pure ()
     FamilySemantic _ -> checkFamilyCall call witnesses
     SemaphoreSemantic _ | role == Stock -> pure ()
     SemaphoreSemantic _ -> checkSemaphoreCall role call witnesses
@@ -722,13 +731,7 @@ instance Sem.SemaphoreCall Call where
   semaphoreService call = case callSemantic call of SemaphoreSemantic service -> Just service; _ -> Nothing
   semaphoreTrace call = fmap familyTraceOf (callTrace call)
   semaphoreWriters call = [if ownsOrigin call origin then Sem.SignalCaller else Sem.OtherWriter | origin <- callWriteOrigins call]
-  semaphoreSuspension call = do
-    trace <- callTrace call
-    let (prefix, rest) = break (\boundary -> boundaryKind boundary == SaveBoundary && ownsBoundary call boundary) (traceHistory trace)
-    case rest of
-      saved : _ -> Just (boundaryMemory saved,
-        [(address, size, value) | boundary <- prefix ++ [saved], Written address size value <- boundaryWrites boundary])
-      [] -> Nothing
+  semaphoreSuspension = callerSuspension
 
 instance F.FamilyCall Call where
   familyDomain = callDomain
@@ -742,6 +745,36 @@ instance F.FamilyCall Call where
   familyEpoch = callFirst
   familyService call = case callSemantic call of FamilySemantic service -> Just service; _ -> Nothing
   familyTrace call = fmap familyTraceOf (callTrace call)
+  familyWriters call = [if ownsOrigin call origin then F.FamilyCaller else F.OtherFamilyWriter | origin <- callWriteOrigins call]
+  familySuspension = callerSuspension
+
+callerSuspension :: Call -> Either F.FamilyRefusal (Maybe F.FamilySuspension)
+callerSuspension call = do
+  trace <- maybe (Left F.FamilyContinuation) Right (callTrace call)
+  forM_ (traceHistory trace) $ \boundary ->
+    when (boundaryKind boundary `elem` [SaveBoundary,ResumeBoundary,ReturnBoundary]) $
+      unless (boundaryOwnership call boundary/=UnreadableBoundary) (Left F.FamilyContinuation)
+  seek [] (traceHistory trace)
+ where
+  seek _ [] = pure Nothing
+  seek prefix (saved:afterSave)
+    | boundaryKind saved/=SaveBoundary = seek (saved:prefix) afterSave
+    | otherwise = case boundaryOwnership call saved of
+        ForeignBoundary -> seek (saved:prefix) afterSave
+        UnreadableBoundary -> Left F.FamilyContinuation
+        CallerBoundary -> do
+          resumed <- nextOwned ResumeBoundary afterSave
+          returned <- nextOwned ReturnBoundary afterSave
+          pure (Just (F.FamilySuspension (boundaryMemory saved)
+            [(address,size,value) | boundary <- reverse (saved:prefix), Written address size value <- boundaryWrites boundary]
+            (familyBoundaryOf saved) (familyBoundaryOf resumed) (familyBoundaryOf returned)))
+  nextOwned _ [] = Left F.FamilyContinuation
+  nextOwned kind (boundary:rest)
+    | boundaryKind boundary/=kind = nextOwned kind rest
+    | otherwise = case boundaryOwnership call boundary of
+        CallerBoundary -> pure boundary
+        ForeignBoundary -> nextOwned kind rest
+        UnreadableBoundary -> Left F.FamilyContinuation
 
 familyTraceOf :: CallTrace -> F.FamilyTrace
 familyTraceOf trace = F.FamilyTrace
@@ -805,19 +838,23 @@ checkServiceCall = checkServiceCallWith StockService
 checkServiceCallWith :: ServiceCheckPolicy -> Service -> Call -> Either Refusal ()
 checkServiceCallWith policy service call = do
   trace <- maybe (Left MissingTrace) Right (callTrace call)
+  forM_ (traceHistory trace) $ \boundary ->
+    when (boundaryKind boundary `elem` [SaveBoundary,NoSaveBoundary,RetryBoundary,CallbackBoundary,ReturnBoundary,ResumeBoundary,CallbackReturnBoundary,AcquiredBoundary]) $
+      expect EntryUnreadable (boundaryOwnership call boundary/=UnreadableBoundary)
   let domain=callDomain call
       initial = case policy of
         WrongNotifyService -> C.serviceCallWithNotify (C.PredicateNotify (V.NotificationTarget 1) V.PrimaryPredicate)
           domain service (callCpsr call) (callArguments call)
         _ -> serviceModel domain service (callCpsr call) (callArguments call)
       controlMask = naturalControlMask call
-      significant boundary = boundaryKind boundary `elem` [SaveBoundary,NoSaveBoundary,RetryBoundary,CallbackBoundary,ReturnBoundary] && ownsBoundary call boundary
-      seek wanted boundaries = case dropWhile (\boundary -> boundaryKind boundary/=wanted || not (ownsBoundary call boundary)) boundaries of
+      significant boundary = boundaryKind boundary `elem` [SaveBoundary,NoSaveBoundary,RetryBoundary,CallbackBoundary,ReturnBoundary]
+        && boundaryOwnership call boundary==CallerBoundary
+      seek wanted boundaries = case dropWhile (\boundary -> boundaryKind boundary/=wanted || boundaryOwnership call boundary/=CallerBoundary) boundaries of
         [] -> Left CompletionMismatch
         boundary:rest -> Right (boundary,rest)
       loop predicted previous boundaries = do
         let (prefix,rest)=break significant boundaries
-        atAcquisition <- case reverse [boundary | boundary <- prefix,boundaryKind boundary==AcquiredBoundary,ownsBoundary call boundary] of
+        atAcquisition <- case reverse [boundary | boundary <- prefix,boundaryKind boundary==AcquiredBoundary,boundaryOwnership call boundary==CallerBoundary] of
           [] -> Right previous
           acquired:_ -> do
             acquiredWrites <- ownedWrites call (boundaryWrites acquired) (boundaryWriteOrigins acquired)

@@ -460,6 +460,61 @@ main = do
   mapM_ (\(label, invalid) -> case checkCall invalid of
     Left _ -> pure ()
     Right () -> error ("signal suspension accepted " ++ label)) invalidSaves
+  let changedEndpoint kind change = changeHistory (\boundary -> if boundaryKind boundary == kind then change boundary else boundary) retained
+      wrongMode boundary = boundary { boundaryRegisters = (boundaryRegisters boundary) { D.processorState = 0x92 } }
+      wrongContext boundary = boundary { boundaryMemory = M.insert (Address 0x400545a4) 1 (boundaryMemory boundary) }
+      wrongStack boundary = boundary { boundaryRegisters = (boundaryRegisters boundary)
+        { D.registers = take 13 (D.registers (boundaryRegisters boundary)) ++ [0x70002000] ++ drop 14 (D.registers (boundaryRegisters boundary)) } }
+      endpointChanges =
+        [ ("mode", wrongMode)
+        , ("context", wrongContext)
+        , ("stack", wrongStack)
+        , ("task", \boundary -> boundary { boundaryTask = 0x40060bf4 })
+        , ("core", \boundary -> boundary { boundaryCore = 1 })
+        ]
+  mapM_ (\(kind, label, change) -> case checkCall (changedEndpoint kind change) of
+    Left _ -> pure ()
+    Right () -> error ("signal suspension accepted foreign endpoint " ++ show kind ++ " " ++ label))
+    [(kind, label, change) | kind <- [ResumeBoundary, ReturnBoundary], (label, change) <- endpointChanges]
+  let foreignEndpoint boundary
+        | boundaryKind boundary `elem` [ResumeBoundary, ReturnBoundary] =
+            [ (wrongStack . wrongContext . wrongMode $ boundary)
+                { boundaryInstructions = boundaryInstructions boundary - 1
+                , boundaryWrites = [], boundaryWriteOrigins = [], boundaryBank = [], boundaryBankOrigins = [] }
+            , boundary ]
+        | otherwise = [boundary]
+      interleavedEndpoints = retained { callTrace = fmap (\trace -> trace
+        { traceHistory = concatMap foreignEndpoint (traceHistory trace) }) (callTrace retained) }
+  case checkCall interleavedEndpoints of
+    Right () -> pure ()
+    result -> error ("foreign interrupt endpoints cannot replace caller endpoints: " ++ show result)
+  let readyWrite write@(Written address size value)
+        | address == Address 0x40060c00 && size == 1 && value == 50 = Written address size 1
+        | otherwise = write
+      matchingBoundary boundary = boundary
+        { boundaryWrites = map readyWrite (boundaryWrites boundary)
+        , boundaryMemory = if boundaryInstructions boundary >= 34779212
+            then M.insert (Address 0x40060c00) 0x301 (boundaryMemory boundary)
+            else boundaryMemory boundary }
+      matchingFinal = (changeHistory matchingBoundary retained)
+        { callWrites = map readyWrite (callWrites retained)
+        , callAfter = M.insert (Address 0x40060c00) 0x301 (callAfter retained) }
+      omitResume boundary = if boundaryKind boundary == ResumeBoundary
+        then boundary { boundaryKind = SelectedBoundary } else boundary
+      missingResume = changeHistory omitResume matchingFinal
+      unreadableOwnership boundary = if boundaryKind boundary == SaveBoundary
+        then boundary { boundaryMemory = M.delete (Address 0x400545a4) (boundaryMemory boundary)
+                      , boundaryUnreadable = S.insert (Address 0x400545a4) (boundaryUnreadable boundary) }
+        else boundary
+      unreadableSaveMatchingFinal = (changeHistory unreadableOwnership missingResume)
+        { callUnreadable = S.insert (Address 0x400545a4) (callUnreadable missingResume) }
+  case checkCall matchingFinal of
+    Right () -> pure ()
+    result -> error ("matching final release with owned endpoints: " ++ show result)
+  mapM_ (\(label, invalid) -> case checkCall invalid of
+    Left _ -> pure ()
+    Right () -> error ("final release cannot replace " ++ label))
+    [("missing owned resume", missingResume), ("unreadable Save ownership", unreadableSaveMatchingFinal)]
   accepts "poll acquires from one" [pollCall 1 0 0] []
   refuses "poll count one timeout refuses" [pollCall 1 (fromIntegral (-50 :: Int)) 1] []
   refuses "poll empty acquire refuses" [pollCall 0 0 0] []

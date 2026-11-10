@@ -434,7 +434,7 @@ data Qualified = Qualified
 
 -- | `emulation/fujimod-xm1/data/xm1-150.json` and the 1.50 boot ROM the pair runs on.
 runDocumentSha256, bootRomSha256 :: String
-runDocumentSha256 = "6e6ac441c0661470b5b26abe7628f19ec118ac568967938378c88dea448835cb"
+runDocumentSha256 = "efa32ff8d2a378ba9e098ac28015faf82856765c866d5db5b97cb1c38342deef"
 bootRomSha256 = "4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be"
 
 -- | Every qualifying observation must reach these.

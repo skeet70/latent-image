@@ -4,6 +4,7 @@
 -- layout and the independent expected-state rules.
 module Emulation.SchedulerPairFamily
   ( FamilyCall (..), FamilyTrace (..), FamilyBoundary (..), FamilyBoundaryKind (..), FamilyCompletion (..)
+  , FamilySuspension (..), FamilyWriter (..)
   , TimerKind (..), TimerWitness (..), Pending (..), ReleaseWitness (..), FamilyRefusal (..), checkFamilyCall, checkPendingFamily, familyTimerDeferred ) where
 
 import Control.Monad (foldM, forM, forM_, unless, when)
@@ -36,6 +37,15 @@ data FamilyTrace = FamilyTrace
   , familyTraceHistory :: [FamilyBoundary]
   } deriving (Eq,Show)
 
+data FamilyWriter = FamilyCaller | OtherFamilyWriter deriving (Eq,Show)
+data FamilySuspension = FamilySuspension
+  { suspensionMemory :: Memory
+  , suspensionWrites :: [(Address,Int,Word32)]
+  , suspensionSave :: FamilyBoundary
+  , suspensionResume :: FamilyBoundary
+  , suspensionReturn :: FamilyBoundary
+  } deriving (Eq,Show)
+
 class FamilyCall c where
   familyDomain :: c -> Domain
   familyCore :: c -> Int
@@ -48,6 +58,8 @@ class FamilyCall c where
   familyEpoch :: c -> Word64
   familyService :: c -> Maybe FamilyService
   familyTrace :: c -> Maybe FamilyTrace
+  familySuspension :: c -> Either FamilyRefusal (Maybe FamilySuspension)
+  familyWriters :: c -> [FamilyWriter]
 
 data FamilyRefusal = FamilyReturn | FamilyEffect | FamilyLifetime | FamilyTimer | FamilyDestructor | FamilyContinuation | FamilyAssociation deriving (Eq,Show)
 
@@ -59,6 +71,13 @@ data TimerWitness = TimerWitness
   , timerArmedAt :: Word64
   , timerKind :: TimerKind
   } deriving (Eq,Show)
+
+data HelperTimeout = Untimed | Finite deriving (Eq,Show)
+
+helperTimeout :: FamilyCall c => c -> Either FamilyRefusal HelperTimeout
+helperTimeout call = do
+  timeout <- stackTimeout call
+  pure (if signedWord timeout>0 then Finite else Untimed)
 
 expect :: FamilyRefusal -> Bool -> Either FamilyRefusal ()
 expect refusal valid = unless valid (Left refusal)
@@ -278,11 +297,49 @@ checkFamilyCall call witnesses = do
   replayed <- foldM replayWrite (familyBefore call) (familyWrites call)
   expect FamilyEffect (replayed==familyAfter call)
   expected <- familyExpected call
-  forM_ (expectedWords expected) $ \(address,value) -> wordAt address (familyAfter call) >>= expect FamilyEffect . (==value)
-  forM_ (expectedOutput expected) $ \(address,value) -> wordAt address (familyAfter call) >>= expect FamilyEffect . (==value)
+  effect <- case familyService call of
+    Just FlagSet -> flagSetEffect call
+    Just FlagSetHandler -> flagSetEffect call
+    _ -> pure (familyAfter call)
+  forM_ (expectedWords expected) $ \(address,value) -> wordAt address effect >>= expect FamilyEffect . (==value)
+  forM_ (expectedOutput expected) $ \(address,value) -> wordAt address effect >>= expect FamilyEffect . (==value)
   expect FamilyReturn (familyR0 call==expectedR0 expected)
   checkContinuation call trace
   checkTimerPath call witnesses expected trace
+
+flagSetEffect :: FamilyCall c => c -> Either FamilyRefusal Memory
+flagSetEffect call = familySuspension call >>= \suspended -> case suspended of
+  Nothing -> pure (familyAfter call)
+  Just (FamilySuspension snapshot writes saved resumed returned) -> do
+    expect FamilyAssociation (length (familyWriters call)==length (familyWrites call))
+    expect FamilyEffect (writes==take (length writes) (familyWrites call))
+    let entry = case familyDomain call of DomainA -> 0x43640; DomainB -> 0xd3640
+    expect FamilyContinuation (familyBoundaryAddress saved==Address entry)
+    expect FamilyContinuation (familyBoundaryInstructions saved<familyBoundaryInstructions resumed
+      && familyBoundaryInstructions resumed<familyBoundaryInstructions returned)
+    replayed <- foldM replayWrite (familyBefore call) writes
+    forM_ (M.keys (familyBefore call)) $ \address ->
+      expect FamilyEffect (M.lookup address replayed==M.lookup address snapshot)
+    idWord <- argAt (familyArguments call) 0
+    (object,slot) <- resolveFlag (familyDomain call) idWord
+    let control = flagControl (layout object) slot
+        config = flagConfig (layout object) slot
+        schedulerLock = case familyDomain call of DomainA -> 0x400545c0; DomainB -> 0x400e4580
+        objectLock = case object of DomainA -> 0x400545c4; DomainB -> 0x400e4584
+    forM_ [schedulerLock,objectLock] $ \lock -> do
+      expect FamilyLifetime ((Address lock,4,0) `elem` writes)
+      wordAt lock snapshot >>= expect FamilyLifetime . (==0)
+    first <- wordAt control (familyBefore call)
+    protected <- if first==control then pure [(control,0x10),(config,0x0c)] else do
+      wait <- wordAt (first+0x14) (familyBefore call)
+      pure [(control,0x10),(config,0x0c),(first,0x38),(wait,0x18)]
+    let suffix = drop (length writes) (zip (familyWrites call) (familyWriters call))
+        overlaps (Address address,size,_) (base,bytes) =
+          toInteger address<toInteger base+bytes && toInteger base<toInteger address+toInteger size
+    forM_ suffix $ \(write,writer) ->
+      when (writer==FamilyCaller) $
+        expect FamilyLifetime (not (any (overlaps write) protected))
+    pure snapshot
 
 familyAlias :: Word32 -> Word32
 familyAlias value = value .&. complement 0x40000000
@@ -509,11 +566,14 @@ carrierBlockTimed call = do
   queue <- argAt (familyArguments call) 1
   wait <- argAt (familyArguments call) 2
   timer <- argAt (familyArguments call) 3
+  timeout <- helperTimeout call
+  let timed = timeout==Finite
   pure FamilyExpected
     { expectedR0=familyR0 call
-    , expectedWords=[(wait,timer),(wait+4,queue),(timer+8,familyTask call),(familyTask call+0x14,wait)]
+    , expectedWords=[(wait,if timed then timer else 0),(wait+4,queue),(familyTask call+0x14,wait)]
+        ++ [(timer+8,familyTask call) | timed]
     , expectedOutput=Nothing
-    , expectedTimer=TimerPath [timer] [] [] True False False False
+    , expectedTimer=if timed then TimerPath [timer] [] [] True False False False else forbidTimer
     }
 
 carrierCheck :: FamilyCall c => c -> Either FamilyRefusal FamilyExpected

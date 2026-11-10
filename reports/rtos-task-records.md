@@ -46,7 +46,6 @@ The standalone artifact does not fit those stock extents and remains linked at n
 ## Verification
 
 - Host: the 15 task-record cases and the integrated layout, semaphore and fixed-pool host suites pass.
-- Native: the existing `Emulation.CachedNativeBatch.cachedObservedBatch` oracle passes 31 cases per loader, 62 total and 466 controls, with zero failures. Current stock observations are reused and the changed owned emissions execute. Four emitted `smoke-create`/`smoke-delete` cases return and match across both domains. The same technical review cycle clears the shared typed implementation; evidence is `E-RTOS-TASK-RECORD-HOST-150` and `private-data/scratch/MainTaskRecords/review-packet.json`.
 - Each case checks the actual `nativeStatus`, caller SP, R4-R11, CPSR I/F and the declared C/T/map bytes. Equal cases compare stock and owned bytes; repair cases assert the stock effect and the owned no-write. Controls refuse a changed CPSR I or F, SP, R4, status, declared region, equal-region byte and publication barrier.
 
 Native-fixture acceptance does not establish full-native, system, live-placement or hardware qualification.
