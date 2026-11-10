@@ -9,7 +9,7 @@ import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Text as T
-import Emulation.ModalObservation (SettingsWrite, compareSettingsWrites, completedSettingsWrites, parseModalBeginRequest, settingsWritesJson)
+import Emulation.ModalObservation (SettingsWrite, compareSettingsWrites, completedSettingsWrites, parseRecordedModalBeginRequest, settingsWritesJson)
 import Emulation.ModalWatchStream (readFinalModalWatch)
 import Emulation.Sha256 (sha256File, sha256Hex)
 import System.Directory (doesPathExist)
@@ -81,7 +81,7 @@ loadRole scoped directory = do
         problem <- field "observation_error" observation
         unless (problem == Null) (Left "the completed lifetime check did not pass")
         requestValue <- field "request" observation
-        request <- parseModalBeginRequest requestValue
+        request <- parseRecordedModalBeginRequest observation
         ownedExtent <- field "owned" requestValue
         unless ((ownedExtent /= Null) == scoped && packaged == scoped)
           (Left (if scoped then "the receipt is not a scoped owned-package run" else "the receipt is not an unscoped stock run"))

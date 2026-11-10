@@ -1008,6 +1008,47 @@ runtimeBindingTests = do
   request <- either (error . ("lifetime declaration fixture: " ++)) pure (parseModalBeginRequest declaration)
   check "typed lifetime request preserves source images and physical vector order" (modalBeginRequestJson request == declaration)
   mapM_ (\(label,value) -> check ("lifetime request refuses " ++ label) (isLeft (parseModalBeginRequest value))) malformedDeclarations
+  -- Synthetic loader spans contain only the sixteen stock context-store instructions.
+  let fixtureStores =
+        [(base_ + offset, opcode) | base_ <- [0x40000, 0xd0000]
+          , (offset, opcode) <- [(0x240, 0xe5820000), (0x31c, 0xe5823000), (0x36b8, 0xe5821000)
+            , (0x3690, 0xe5863000), (0x36f0, 0xe5863000), (0x3720, 0xe5863000)
+            , (0x3848, 0xe5832000), (0x2440, 0xe5835000)]] :: [(Word32, Word32)]
+      historicalContext stores =
+        [object ["start" .= low, "bytes" .= B.unpack
+          (foldr (\(pc, opcode) bytes -> let offset = fromIntegral (pc - low)
+            in B.take offset bytes <> wordBytes opcode <> B.drop (offset + 4) bytes)
+            (B.replicate (fromIntegral (high - low)) 0)
+            [(pc, opcode) | (pc, opcode) <- stores, low <= pc, pc + 4 <= high])]
+        | (low, high) <- contextRanges]
+      untaggedLifetime = case lifetime of Object fields -> Object (KM.delete "context_catalogue" fields); other -> other
+      recorded stores =
+        let contexts = array (historicalContext stores)
+            original = set "context_sources" contexts (set "lifetime" untaggedLifetime declaration)
+            binding = object
+              [ "loader_a_sha256" .= ("21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882" :: String)
+              , "loader_b_sha256" .= ("8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec" :: String)
+              , "context_sources" .= contexts, "lifetime" .= untaggedLifetime ]
+        in object ["schema" .= (2 :: Int), "request" .= original, "source" .= object ["lifetime" .= binding]]
+      historicalObservation = recorded fixtureStores
+      incompatibleStores = [(pc, if pc == 0x436b8 then 0xe5001008 else opcode) | (pc, opcode) <- fixtureStores]
+  historicalRequest <- either (error . ("historical stock fixture: " ++)) pure
+    (parseRecordedModalBeginRequest historicalObservation)
+  check "current requests refuse an absent catalogue tag"
+    (isLeft (parseModalBeginRequest (get "request" historicalObservation)))
+  check "current requests refuse an unknown catalogue tag"
+    (isLeft (parseModalBeginRequest (changeLifetime "context_catalogue" (String "unknown"))))
+  check "recorded stock requests refuse owned-context instructions"
+    (isLeft (parseRecordedModalBeginRequest (recorded incompatibleStores)))
+  check "recorded stock requests require their original observation schema"
+    (isLeft (parseRecordedModalBeginRequest (set "schema" (Number 3) historicalObservation)))
+  check "recorded stock requests require their pinned loader binding"
+    (isLeft (parseRecordedModalBeginRequest
+      (set "source" (object ["lifetime" .= set "loader_a_sha256" (String (T.replicate 64 "0"))
+        (get "lifetime" (get "source" historicalObservation))]) historicalObservation)))
+  check "recorded stock requests refuse context bytes differing from their source binding"
+    (isLeft (parseRecordedModalBeginRequest
+      (set "request" (set "context_sources" (array context) (get "request" historicalObservation)) historicalObservation)))
   expectedWrites <- either error pure (modalLifetimeWatchRanges request)
   let stackGuard = object
         [ "node" .= (0x4006060c :: Word32), "creation" .= (0x4005c3ac :: Word32)
@@ -1130,6 +1171,21 @@ runtimeBindingTests = do
       helperFetches = unionWatchRanges (range 0x10000 0x10080 : fetches)
       truncatedHelperFetches = unionWatchRanges (range 0x10000 0x1007c : fetches)
   scopedRequest <- either error pure (parseModalBeginRequest scopedDeclaration)
+  let ownedOriginalLifetime = case scopedLifetime of
+        Object fields -> Object (KM.delete "context_catalogue" fields)
+        other -> other
+      ownedOriginalRequest = set "context_sources" (get "context_sources" (get "request" historicalObservation))
+        (set "lifetime" ownedOriginalLifetime scopedDeclaration)
+      ownedOriginalBinding = set "lifetime" (set "readonly" (array images) ownedOriginalLifetime)
+        (get "lifetime" (get "source" historicalObservation))
+      ownedHistoricalObservation = object
+        ["schema" .= (2 :: Int), "request" .= ownedOriginalRequest, "source" .= object ["lifetime" .= ownedOriginalBinding]]
+  ownedHistoricalRequest <- either (error . ("historical owned fixture: " ++)) pure
+    (parseRecordedModalBeginRequest ownedHistoricalObservation)
+  check "recorded owned requests require the separately declared linked source"
+    (isLeft (parseRecordedModalBeginRequest
+      (set "source" (object ["lifetime" .= set "lifetime" ownedOriginalLifetime ownedOriginalBinding])
+        ownedHistoricalObservation)))
   let renderHooks = [0x01164e1c,0x01163f2c,0x011662a0] :: [Word32]
       renderRows = rows ++
         [object ["address" .= address,"old" .= (0xe92d4ff0 :: Word32),"new" .= (0xea000000 :: Word32)]
@@ -1232,6 +1288,14 @@ runtimeBindingTests = do
   check "the completed settings writes name the setter row"
     (fmap (map (get "pc") . values . get "writes" . settingsWritesJson)
       (parseFinalModalWatch (settingsWatch 0x0062ff54) >>= completedSettingsWrites scopedRequest) == Right [Number 0x0062ff54])
+  check "historical stock evidence derives the original setter effect"
+    (fmap (map (\write -> (get "writer" write, get "pc" write, get "value" write)) . values . get "writes" . settingsWritesJson)
+      (parseFinalModalWatch (settingsWatch 0x0062ff54) >>= completedSettingsWrites historicalRequest)
+      == Right [(String "setter", Number 0x0062ff54, Number 0x21)])
+  check "historical owned evidence derives the original setter effect"
+    (fmap (map (\write -> (get "writer" write, get "pc" write, get "value" write)) . values . get "writes" . settingsWritesJson)
+      (parseFinalModalWatch (settingsWatch 0x0062ff54) >>= completedSettingsWrites ownedHistoricalRequest)
+      == Right [(String "setter", Number 0x0062ff54, Number 0x21)])
   let fetchOn core physical = set "core" (toJSON (core :: Int)) (fetchRow physical 100)
       reloadStore core address = set "pc" (Number 0x00722134) (set "value" (Number 0xa9c9) (set "before" (array [Number 0x20, Number 0x20])
         (cpu core address address 2 100)))
