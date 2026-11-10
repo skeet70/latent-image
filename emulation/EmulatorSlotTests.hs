@@ -7,7 +7,7 @@ import Control.Monad (forM, unless)
 import Data.IORef (modifyIORef, newIORef, readIORef)
 import Data.List (isInfixOf, stripPrefix)
 import Data.Maybe (fromMaybe, mapMaybe)
-import System.Directory (copyFile, createDirectoryIfMissing, getTemporaryDirectory, removeFile)
+import System.Directory (copyFile, createDirectoryIfMissing, getTemporaryDirectory, makeAbsolute, removeFile)
 import System.Environment (getArgs, getEnvironment, lookupEnv)
 import System.Exit (ExitCode (..), exitFailure)
 import System.FilePath ((</>))
@@ -17,7 +17,7 @@ import System.Posix.Process (getProcessID)
 import System.Posix.Signals (nullSignal, sigKILL, signalProcess)
 import System.Posix.Types (ProcessID)
 import System.Posix.User (getEffectiveUserID)
-import System.Process (CreateProcess (..), ProcessHandle, StdStream (CreatePipe), createProcess, getProcessExitCode, proc, readCreateProcessWithExitCode, waitForProcess)
+import System.Process (CreateProcess (..), ProcessHandle, StdStream (CreatePipe), createProcess, getPid, getProcessExitCode, proc, readCreateProcessWithExitCode, waitForProcess)
 import System.Timeout (timeout)
 import Text.Read (readMaybe)
 
@@ -31,7 +31,10 @@ main :: IO ()
 main = do
   arguments <- getArgs
   case arguments of
-    [source, builder] -> run source builder >>= \ok -> unless ok exitFailure
+    [source, builder] -> do
+      sourcePath <- makeAbsolute source
+      builderPath <- makeAbsolute builder
+      run sourcePath builderPath >>= \ok -> unless ok exitFailure
     _ -> ioError (userError "usage: emulator-slot-tests PROBE HOST-BUILD")
 
 run :: FilePath -> FilePath -> IO Bool
@@ -169,6 +172,8 @@ run source builder = do
   legacySeen <- admission legacy
   (_, _, Just ready, reservation) <- createProcess (proc builder ["--reserve-legacy", legacyUnit]) {env = Just environment, std_err = CreatePipe}
   reserved <- timeout 10_000_000 (hGetLine ready)
+  getPid reservation >>= mapM_ (signalProcess sigKILL)
+  reservationCode <- timeout 10_000_000 (waitForProcess reservation)
   legacyBuildA <- build
   legacyBuildSeenA <- admission legacyBuildA
   legacyBuildB <- build
@@ -179,12 +184,14 @@ run source builder = do
   legacyNativeSeenB <- admission legacyNativeB
   legacyWaiter <- spawn native
   legacyBlocked <- waiting legacyWaiter
+  legacyAlive <- case observedPid "probe-pid " legacySeen of
+    Nothing -> pure False
+    Just owner -> either (const False) (const True) <$> (try (signalProcess nullSignal owner) :: IO (Either IOException ()))
   release legacy
   _ <- finish legacy
-  reservationCode <- timeout 10_000_000 (waitForProcess reservation)
   legacyResumed <- admission legacyWaiter
-  legacyOk <- expect "a validated temporary 4 GiB legacy reservation consumes budget until its scope ends"
-    (admitted legacySeen && maybe False (isInfixOf "legacy reservation ready:") reserved && all admitted [legacyBuildSeenA, legacyBuildSeenB, legacyNativeSeenA, legacyNativeSeenB] && legacyBlocked && reservationCode == Just ExitSuccess && admitted legacyResumed)
+  legacyOk <- expect "legacy memory remains reserved after helper death without stopping the healthy scope"
+    (admitted legacySeen && maybe False (isInfixOf "legacy reservation ready:") reserved && all admitted [legacyBuildSeenA, legacyBuildSeenB, legacyNativeSeenA, legacyNativeSeenB] && legacyBlocked && legacyAlive && reservationCode /= Nothing && reservationCode /= Just ExitSuccess && admitted legacyResumed)
   mapM_ release [legacyBuildA, legacyBuildB, legacyNativeA, legacyNativeB, legacyWaiter]
   mapM_ finish [legacyBuildA, legacyBuildB, legacyNativeA, legacyNativeB, legacyWaiter]
   (invalidLegacy, _, _) <- readCreateProcessWithExitCode (proc builder ["--reserve-legacy", "missing.scope"]) {env = Just environment} ""

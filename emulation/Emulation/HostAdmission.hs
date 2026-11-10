@@ -20,7 +20,7 @@ import Control.Exception (IOException, catch, evaluate, try)
 import Control.Monad (forM_, unless, void, when)
 import qualified Data.ByteString as ByteString
 import qualified Data.ByteString.Char8 as ByteString8
-import Data.Char (isDigit, isPrint, isSpace)
+import Data.Char (isDigit, isHexDigit, isPrint, isSpace)
 import Data.List (dropWhileEnd, isPrefixOf, nub, stripPrefix)
 import Data.Maybe (isNothing)
 import GHC.Clock (getMonotonicTime)
@@ -36,7 +36,7 @@ import System.Posix.Files (readSymbolicLink)
 import System.Posix.IO (FdOption (CloseOnExec), FileLock, LockRequest (WriteLock), OpenFileFlags (creat), OpenMode (ReadWrite), closeFd, createPipe, defaultFileFlags, fdToHandle, getLock, openFd, setFdOption, setLock)
 import System.Posix.Process (executeFile, getProcessID)
 import System.Posix.Signals (Handler (Catch), installHandler, sigINT)
-import System.Posix.Types (Fd (..), ProcessID)
+import System.Posix.Types (Fd (..), FileOffset, ProcessID)
 import System.Process (CreateProcess (..), createProcess, proc, readProcessWithExitCode, waitForProcess)
 import System.Timeout (timeout)
 import Text.Read (readMaybe)
@@ -69,7 +69,16 @@ parseScopeName text
 
 -- | Reservations are acquired inside an already-started scope.
 reserveMemory :: MemoryMax -> ScopeName -> IO Fd
-reserveMemory memory scope = do
+reserveMemory = reserveMemoryWithLegacy Nothing
+
+newtype InvocationId = InvocationId String
+  deriving (Eq)
+
+data LegacyReservation = LegacyReservation ScopeName InvocationId
+data LegacyScopeState = LegacyScopeActive InvocationId MemoryMax | LegacyScopeInactive
+
+reserveMemoryWithLegacy :: Maybe LegacyReservation -> MemoryMax -> ScopeName -> IO Fd
+reserveMemoryWithLegacy legacy memory scope = do
   let quantum = 256 * 1024 * 1024
       tokens = fromInteger ((memoryMaxBytes memory + quantum - 1) `div` quantum)
   unless (tokens > 0 && tokens <= 80) $
@@ -82,9 +91,12 @@ reserveMemory memory scope = do
         case entered of
           Left _ -> closeFd gate >> threadDelay 100_000 >> attempt
           Right () -> do
+            protected <- protectedLegacyTokens directory
+            when (not (isNothing legacy) && not (null protected)) $
+              ioError (userError "an active legacy reservation already exists")
             fd <- openFd (directory </> "memory.lock") ReadWrite defaultFileFlags {creat = Just 0o600}
             setFdOption fd CloseOnExec False
-            chosen <- collect fd tokens [0 .. 79] []
+            chosen <- collect fd tokens (filter (`notElem` protected) [0 .. 79]) []
             case chosen of
               Nothing -> do
                 closeFd fd
@@ -94,6 +106,9 @@ reserveMemory memory scope = do
                 attempt
               Just indices -> do
                 claimScopeRecords [directory </> ("scope-" ++ show index) | index <- indices] scope
+                case legacy of
+                  Nothing -> pure ()
+                  Just reservation -> writeLegacyReservation directory reservation indices
                 closeFd gate
                 pure fd
       collect _ 0 _ selected = pure (Just selected)
@@ -317,17 +332,76 @@ worktreeOutputBase = do
 reserveLegacy :: ScopeName -> IO ()
 reserveLegacy scope@(ScopeName unit) = do
   refuseNested
-  (code, out, _) <- readProcessWithExitCode "systemctl"
-    ["--user", "show", unit, "-p", "ActiveState", "-p", "MemoryMax"] ""
-  unless (code == ExitSuccess && "ActiveState=active" `elem` lines out && "MemoryMax=4294967296" `elem` lines out) $
-    ioError (userError "legacy reservation requires an active scope capped at exactly 4 GiB")
-  _ <- reserveMemory (MemoryMax "4G") scope
+  state <- legacyScopeState scope
+  invocation <- case state of
+    LegacyScopeActive identity cap | memoryMaxBytes cap == memoryMaxBytes (MemoryMax "4G") -> pure identity
+    _ -> ioError (userError "legacy reservation requires an active scope capped at exactly 4 GiB")
+  pid <- getProcessID
+  let helperScope = ScopeName ("xm1-legacy-reservation-" ++ show pid ++ ".scope")
+      reservation = LegacyReservation scope invocation
+  _ <- reserveMemoryWithLegacy (Just reservation) (MemoryMax "4G") helperScope
   hPutStrLn stderr ("legacy reservation ready: " ++ unit ++ " 4GiB")
   hFlush stderr
   let wait = do
-        (_, state, _) <- readProcessWithExitCode "systemctl" ["--user", "show", unit, "-p", "ActiveState", "--value"] ""
-        when (trim state `elem` ["active", "activating", "deactivating"]) (threadDelay 1_000_000 >> wait)
+        active <- legacyReservationActive reservation
+        when active (threadDelay 1_000_000 >> wait)
   wait
+
+legacyScopeState :: ScopeName -> IO LegacyScopeState
+legacyScopeState (ScopeName unit) = do
+  (_, out, _) <- readProcessWithExitCode "systemctl"
+    ["--user", "show", unit, "-p", "ActiveState", "-p", "MemoryMax", "-p", "InvocationID"] ""
+  let properties = [(key, drop 1 value) | line <- lines out, let (key, value) = break (== '=') line]
+  case lookup "ActiveState" properties of
+    Just state | state `elem` ["inactive", "failed"] -> pure LegacyScopeInactive
+    Just state | state `elem` ["active", "activating", "deactivating"]
+      , Just rawIdentity <- lookup "InvocationID" properties
+      , Just identity <- parseInvocationId rawIdentity
+      , Just rawCap <- lookup "MemoryMax" properties
+      , Just cap <- parseMemoryMax rawCap -> pure (LegacyScopeActive identity cap)
+    _ -> ioError (userError ("cannot validate legacy scope identity and cap: " ++ unit))
+
+parseInvocationId :: String -> Maybe InvocationId
+parseInvocationId text
+  | length text == 32 && all isHexDigit text = Just (InvocationId text)
+  | otherwise = Nothing
+
+legacyReservationActive :: LegacyReservation -> IO Bool
+legacyReservationActive (LegacyReservation scope expected) = do
+  state <- legacyScopeState scope
+  case state of
+    LegacyScopeActive identity cap | identity == expected -> do
+      unless (memoryMaxBytes cap == memoryMaxBytes (MemoryMax "4G")) $
+        ioError (userError "an adopted legacy scope no longer has its validated 4 GiB cap")
+      pure True
+    _ -> pure False
+
+protectedLegacyTokens :: FilePath -> IO [FileOffset]
+protectedLegacyTokens directory = do
+  contents <- (Just <$> (readFile (directory </> "legacy-reservation") >>= \text -> evaluate (length text) >> pure text))
+    `catchIOError` \problem -> if isDoesNotExistError problem then pure Nothing else ioError problem
+  case contents of
+    Nothing -> pure []
+    Just text -> case lines text of
+      [name, rawIdentity, rawIndices]
+        | Just scope <- parseScopeName name
+        , Just identity <- parseInvocationId rawIdentity
+        , Just indices <- readMaybe rawIndices
+        , length indices == 16 && length (nub indices) == 16 && all (\index -> index >= 0 && index < 80) indices -> do
+            active <- legacyReservationActive (LegacyReservation scope identity)
+            when active $ hPutStrLn stderr ("host admission: legacy memory owner=" ++ name ++ " invocation=" ++ rawIdentity ++ " 4GiB")
+            pure (if active then indices else [])
+      _ -> ioError (userError "invalid persistent legacy memory reservation")
+
+writeLegacyReservation :: FilePath -> LegacyReservation -> [FileOffset] -> IO ()
+writeLegacyReservation directory reservation@(LegacyReservation (ScopeName unit) (InvocationId identity)) indices = do
+  active <- legacyReservationActive reservation
+  unless active (ioError (userError "legacy scope ended before reservation was recorded"))
+  pid <- getProcessID
+  let destination = directory </> "legacy-reservation"
+      temporary = destination ++ "." ++ show pid
+  writeFile temporary (unlines [unit, identity, show indices])
+  renameFile temporary destination
 
 -- | Parallelism within the build scope; Bazel's resource estimate excludes its
 -- own 2 GiB heap.
