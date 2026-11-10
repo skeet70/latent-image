@@ -2259,6 +2259,11 @@ impl State {
         for (target, memory) in targets.iter_mut().zip(call.writes.iter()) {
             *target = memory.address(cpu, case, Need::Write)?;
         }
+        for (target, memory) in targets.iter().zip(call.writes.iter()) {
+            if self.monitor.clobbered(None, u64::from(*target), memory.bytes.len() as u64) {
+                return Err(Step::Stop(Status::UnsupportedInstruction));
+            }
+        }
         if self.captures.iter().any(|capture| capture.service == stub.address.0) {
             let mut registers = [0; 15];
             for (index, value) in registers.iter_mut().enumerate() { *value = read(cpu, arm::CORE[index])?; }

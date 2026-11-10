@@ -1107,20 +1107,20 @@ fn legacy_stub_wires_keep_repeatable_and_optional_calls() {
 fn legacy_wire_bytes_and_return_behavior_match_the_fixed_fixture() {
     let mut case = Case::new(&[BX_LR]);
     case.exit = CODE + 4;
-    case.registers[13] = STACK + 4;
+    case.registers[13] = STACK + 8;
     case.registers[14] = CODE + 4;
     case.regions[0].size = 8;
     case.regions[0].bytes = words(&[BX_LR, 0]);
-    case.regions[1].size = 4;
-    case.regions[1].bytes = vec![0; 4];
+    case.regions[1].size = 8;
+    case.regions[1].bytes = vec![0; 8];
     let fixture = concat!(
         "FUJI_NATIVE_V1\n",
         "cortex-r5f-arm-le\n",
         "1000 1004 1000 1000\n",
-        "0 0 0 0 0 0 0 0 0 0 0 0 0 3004 1004 10\n",
+        "0 0 0 0 0 0 0 0 0 0 0 0 0 3008 1004 10\n",
         "2 1 0\n",
         "1000 8 5 1eff2fe100000000\n",
-        "3000 4 3 00000000\n",
+        "3000 8 3 0000000000000000\n",
         "1000 4\n",
     );
     assert_eq!(case.wire().as_bytes(), fixture.as_bytes());
@@ -1128,7 +1128,38 @@ fn legacy_wire_bytes_and_return_behavior_match_the_fixed_fixture() {
     assert!(observed.returned);
     assert_eq!(observed.status(), Status::Returned);
     assert_eq!(observed.register("pc"), CODE + 4);
-    assert_eq!(observed.register("sp"), STACK + 4);
+    assert_eq!(observed.register("sp"), STACK + 8);
+    assert!(observed.observation.events.is_empty());
+}
+
+#[test]
+fn scripted_writes_over_an_exclusive_reservation_are_refused_before_all_outputs() {
+    let observed = Case::new(&[
+        PUSH_LR,
+        LDREX_R1_R2,
+        branch(CODE + 8, STUB, true),
+        STREX_R3_R1_R2,
+        POP_PC,
+    ])
+    .kernel(Kernel::default())
+    .region(DATA, READ_WRITE, &words(&[5, 0]))
+    .register(0, 17)
+    .register(2, DATA)
+    .register(3, 23)
+    .script(STUB, vec![ScriptCall {
+        outputs: vec![(0, 99)],
+        writes: vec![
+            ScriptMemory::new(MemoryTarget::Absolute(DATA + 4), 0, &8u32.to_le_bytes()),
+            ScriptMemory::new(MemoryTarget::Register(2), 0, &9u32.to_le_bytes()),
+        ],
+        ..ScriptCall::default()
+    }])
+    .run();
+    observed.assert_stopped(Status::UnsupportedInstruction, CODE + 8);
+    assert_eq!(observed.bytes(DATA), "0500000000000000");
+    assert_eq!(observed.register("r0"), 17);
+    assert_eq!(observed.register("r1"), 5);
+    assert_eq!(observed.register("r3"), 23);
     assert!(observed.observation.events.is_empty());
 }
 
