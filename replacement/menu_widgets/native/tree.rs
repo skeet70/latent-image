@@ -9,11 +9,46 @@ mod tree_list;
 use render_commands::{DrawReport, FontId, NodeId, ResourceId, SideState};
 use tree_list::{Child, DrawArgs, DrawMode, DrawServices, HookRecord, NestedChild, NestedGrid, ResourceDescriptor, Selection, Snapshot, SnapshotSource, Summary};
 
-macro_rules! stock {
-    ($address:expr, $signature:ty, $($argument:expr),* $(,)?) => {{
-        let function: $signature = unsafe { core::mem::transmute($address as usize) };
-        unsafe { function($($argument),*) }
+macro_rules! stock_target {
+    ($address:expr, $result:ty, [$($name:ident: $argument_type:ty),*], [$($argument:expr),*]) => {{
+        #[inline(never)]
+        unsafe extern "C" fn invoke<const ADDRESS: usize>($($name: $argument_type),*) -> $result {
+            let function: unsafe extern "C" fn($($argument_type),*) -> $result =
+                unsafe { core::mem::transmute(ADDRESS) };
+            unsafe { function($($name),*) }
+        }
+        unsafe { invoke::<{ $address }>($($argument),*) }
     }};
+}
+
+macro_rules! stock {
+    ($address:expr, unsafe extern "C" fn($($argument_type:ty),*), $($argument:expr),* $(,)?) => {
+        stock!($address, unsafe extern "C" fn($($argument_type),*) -> (), $($argument),*)
+    };
+    ($address:expr, unsafe extern "C" fn() -> $result:ty, $(,)?) => {
+        stock_target!($address, $result, [], [])
+    };
+    ($address:expr, unsafe extern "C" fn($t0:ty) -> $result:ty, $($argument:expr),* $(,)?) => {
+        stock_target!($address, $result, [a0: $t0], [$($argument),*])
+    };
+    ($address:expr, unsafe extern "C" fn($t0:ty, $t1:ty) -> $result:ty, $($argument:expr),* $(,)?) => {
+        stock_target!($address, $result, [a0: $t0, a1: $t1], [$($argument),*])
+    };
+    ($address:expr, unsafe extern "C" fn($t0:ty, $t1:ty, $t2:ty) -> $result:ty, $($argument:expr),* $(,)?) => {
+        stock_target!($address, $result, [a0: $t0, a1: $t1, a2: $t2], [$($argument),*])
+    };
+    ($address:expr, unsafe extern "C" fn($t0:ty, $t1:ty, $t2:ty, $t3:ty) -> $result:ty, $($argument:expr),* $(,)?) => {
+        stock_target!($address, $result, [a0: $t0, a1: $t1, a2: $t2, a3: $t3], [$($argument),*])
+    };
+    ($address:expr, unsafe extern "C" fn($t0:ty, $t1:ty, $t2:ty, $t3:ty, $t4:ty) -> $result:ty, $($argument:expr),* $(,)?) => {
+        stock_target!($address, $result, [a0: $t0, a1: $t1, a2: $t2, a3: $t3, a4: $t4], [$($argument),*])
+    };
+    ($address:expr, unsafe extern "C" fn($t0:ty, $t1:ty, $t2:ty, $t3:ty, $t4:ty, $t5:ty) -> $result:ty, $($argument:expr),* $(,)?) => {
+        stock_target!($address, $result, [a0: $t0, a1: $t1, a2: $t2, a3: $t3, a4: $t4, a5: $t5], [$($argument),*])
+    };
+    ($address:expr, unsafe extern "C" fn($t0:ty, $t1:ty, $t2:ty, $t3:ty, $t4:ty, $t5:ty, $t6:ty) -> $result:ty, $($argument:expr),* $(,)?) => {
+        stock_target!($address, $result, [a0: $t0, a1: $t1, a2: $t2, a3: $t3, a4: $t4, a5: $t5, a6: $t6], [$($argument),*])
+    };
 }
 
 struct StockServices;
