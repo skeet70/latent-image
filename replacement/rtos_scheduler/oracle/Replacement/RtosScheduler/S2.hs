@@ -134,7 +134,9 @@ aggregateFunctions image retained = case imageAggregate image of
         merge ((a,z):rest) = extend a z rest
         extend a z ((lo,hi):rest) | lo < z = extend a (max z hi) rest
         extend a z rest = (a,z) : merge rest
-        entries = sort (nub ([entryOffset False e | e <- [minBound..maxBound]] ++ [Agg.symbolAddress s-b | s <- symbols]))
+        -- These entry labels share a fallthrough section with their predecessor.
+        continuations = [relocOffset (imageReloc image) (entryOffset False e) | e <- [Select, IrqTail]]
+        entries = sort (nub ([entryOffset False e | e <- [minBound..maxBound]] ++ [Agg.symbolAddress s-b | s <- symbols, Agg.symbolAddress s-b `notElem` continuations]))
      in [(lo,hi) | (a,z) <- merge (sortOn fst spans), let cuts = a : filter (\v -> a < v && v < z) entries ++ [z], (lo,hi) <- zip cuts (drop 1 cuts)]
 redesignId :: Redesign -> String
 redesignId NullOwnRegisters = "null-selection-own-registers"
