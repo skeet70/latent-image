@@ -9,95 +9,136 @@ mod tree_list;
 use render_commands::{DrawReport, FontId, NodeId, ResourceId, SideState};
 use tree_list::{Child, DrawArgs, DrawMode, DrawServices, HookRecord, NestedChild, NestedGrid, ResourceDescriptor, Selection, Snapshot, SnapshotSource, Summary};
 
-macro_rules! stock_target {
-    ($address:expr, $result:ty, [$($name:ident: $argument_type:ty),*], [$($argument:expr),*]) => {{
-        #[inline(never)]
-        unsafe extern "C" fn invoke<const ADDRESS: usize>($($name: $argument_type),*) -> $result {
-            let function: unsafe extern "C" fn($($argument_type),*) -> $result =
-                unsafe { core::mem::transmute(ADDRESS) };
-            unsafe { function($($name),*) }
-        }
-        unsafe { invoke::<{ $address }>($($argument),*) }
-    }};
+core::arch::global_asm!(r#"
+.syntax unified
+.arm
+.macro RB_TREE_CALL name, address
+.section .text.\name,"ax",%progbits
+.balign 4
+.global \name
+.type \name,%function
+\name:
+    movw r12, #:lower16:\address
+    movt r12, #:upper16:\address
+    bx r12
+.size \name, .-\name
+.endm
+RB_TREE_CALL rb_tree_call_43550, 0x43550
+RB_TREE_CALL rb_tree_call_61cd14, 0x61cd14
+RB_TREE_CALL rb_tree_call_61ce1c, 0x61ce1c
+RB_TREE_CALL rb_tree_call_11730dc, 0x11730dc
+RB_TREE_CALL rb_tree_call_bf8f4c, 0xbf8f4c
+RB_TREE_CALL rb_tree_call_bf90f0, 0xbf90f0
+RB_TREE_CALL rb_tree_call_bf93e0, 0xbf93e0
+RB_TREE_CALL rb_tree_call_116f948, 0x116f948
+RB_TREE_CALL rb_tree_call_116d4e4, 0x116d4e4
+RB_TREE_CALL rb_tree_call_1159168, 0x1159168
+RB_TREE_CALL rb_tree_call_7221c8, 0x7221c8
+RB_TREE_CALL rb_tree_call_bf8e64, 0xbf8e64
+RB_TREE_CALL rb_tree_call_bf8d20, 0xbf8d20
+RB_TREE_CALL rb_tree_call_4d978, 0x4d978
+RB_TREE_CALL rb_tree_call_bf9360, 0xbf9360
+RB_TREE_CALL rb_tree_call_1112b2c, 0x1112b2c
+RB_TREE_CALL rb_tree_call_1163e04, 0x1163e04
+RB_TREE_CALL rb_tree_call_1112da4, 0x1112da4
+RB_TREE_CALL rb_tree_call_1112d84, 0x1112d84
+RB_TREE_CALL rb_tree_call_1113514, 0x1113514
+RB_TREE_CALL rb_tree_call_116dce0, 0x116dce0
+RB_TREE_CALL rb_tree_call_1112e78, 0x1112e78
+RB_TREE_CALL rb_tree_call_1177e10, 0x1177e10
+RB_TREE_CALL rb_tree_call_1163c1c, 0x1163c1c
+RB_TREE_CALL rb_tree_call_111236c, 0x111236c
+RB_TREE_CALL rb_tree_call_116cf50, 0x116cf50
+RB_TREE_CALL rb_tree_call_1112ce4, 0x1112ce4
+RB_TREE_CALL rb_tree_call_116e264, 0x116e264
+RB_TREE_CALL rb_tree_call_1137cf8, 0x1137cf8
+RB_TREE_CALL rb_tree_call_1138060, 0x1138060
+"#);
+
+unsafe extern "C" {
+    fn rb_tree_call_43550(record: *mut HookRecord, value: u32, bytes: u32);
+    fn rb_tree_call_61cd14(out: *mut Snapshot);
+    fn rb_tree_call_61ce1c(node: u32, slot: u32, out: *mut Snapshot);
+    fn rb_tree_call_11730dc(node: u32, kind: u32, record: *mut u32, selection: *mut u32, index: *mut u32) -> u32;
+    fn rb_tree_call_bf8f4c(node: u32, parent: u32, out: *mut Summary);
+    fn rb_tree_call_bf90f0(node: u32, parent: u32, index: u32, out: *mut NestedChild);
+    fn rb_tree_call_bf93e0(node: u32, parent: u32, selection: u32, field: u32) -> u32;
+    fn rb_tree_call_116f948(record: *mut HookRecord) -> u32;
+    fn rb_tree_call_116d4e4(node: u32, parent: u32, selection: u32);
+    fn rb_tree_call_1159168(node: u32, parent: u32, selection: u32);
+    fn rb_tree_call_7221c8(report: *mut DrawReport, value: u32, bytes: u32);
+    fn rb_tree_call_bf8e64(node: u32, out: *mut Summary);
+    fn rb_tree_call_bf8d20(node: u32, index: u32, out: *mut Child);
+    fn rb_tree_call_4d978(numerator: u32, denominator: u32) -> u32;
+    fn rb_tree_call_bf9360(node: u32, index: u32, field: u32) -> u32;
+    fn rb_tree_call_1112b2c(font: u32);
+    fn rb_tree_call_1163e04(selected: u32, state: u32);
+    fn rb_tree_call_1112da4();
+    fn rb_tree_call_1112d84();
+    fn rb_tree_call_1113514(first: i32, second: i32, right: i32, bottom: i32, stroke: u32, colour: u32, alpha: u32);
+    fn rb_tree_call_116dce0(record: *mut HookRecord) -> u32;
+    fn rb_tree_call_1112e78(descriptor: *mut ResourceDescriptor);
+    fn rb_tree_call_1177e10(parser: u32, enabled: u32, reserved: u32);
+    fn rb_tree_call_1163c1c(selected: u32, state: u32);
+    fn rb_tree_call_111236c(first: u32, second: i32, resource: u32);
+    fn rb_tree_call_116cf50(node: u32, child: u32) -> u32;
+    fn rb_tree_call_1112ce4(palette: u32);
+    fn rb_tree_call_116e264(record: *mut HookRecord) -> u32;
+    fn rb_tree_call_1137cf8(index: u32, first: u32, second: u32, third: u32);
+    fn rb_tree_call_1138060(left: u32, right: u32, row: i32, height: u32, mode: u32, resource: u32);
 }
 
 macro_rules! stock {
-    ($address:expr, unsafe extern "C" fn($($argument_type:ty),*), $($argument:expr),* $(,)?) => {
-        stock!($address, unsafe extern "C" fn($($argument_type),*) -> (), $($argument),*)
-    };
-    ($address:expr, unsafe extern "C" fn() -> $result:ty, $(,)?) => {
-        stock_target!($address, $result, [], [])
-    };
-    ($address:expr, unsafe extern "C" fn($t0:ty) -> $result:ty, $($argument:expr),* $(,)?) => {
-        stock_target!($address, $result, [a0: $t0], [$($argument),*])
-    };
-    ($address:expr, unsafe extern "C" fn($t0:ty, $t1:ty) -> $result:ty, $($argument:expr),* $(,)?) => {
-        stock_target!($address, $result, [a0: $t0, a1: $t1], [$($argument),*])
-    };
-    ($address:expr, unsafe extern "C" fn($t0:ty, $t1:ty, $t2:ty) -> $result:ty, $($argument:expr),* $(,)?) => {
-        stock_target!($address, $result, [a0: $t0, a1: $t1, a2: $t2], [$($argument),*])
-    };
-    ($address:expr, unsafe extern "C" fn($t0:ty, $t1:ty, $t2:ty, $t3:ty) -> $result:ty, $($argument:expr),* $(,)?) => {
-        stock_target!($address, $result, [a0: $t0, a1: $t1, a2: $t2, a3: $t3], [$($argument),*])
-    };
-    ($address:expr, unsafe extern "C" fn($t0:ty, $t1:ty, $t2:ty, $t3:ty, $t4:ty) -> $result:ty, $($argument:expr),* $(,)?) => {
-        stock_target!($address, $result, [a0: $t0, a1: $t1, a2: $t2, a3: $t3, a4: $t4], [$($argument),*])
-    };
-    ($address:expr, unsafe extern "C" fn($t0:ty, $t1:ty, $t2:ty, $t3:ty, $t4:ty, $t5:ty) -> $result:ty, $($argument:expr),* $(,)?) => {
-        stock_target!($address, $result, [a0: $t0, a1: $t1, a2: $t2, a3: $t3, a4: $t4, a5: $t5], [$($argument),*])
-    };
-    ($address:expr, unsafe extern "C" fn($t0:ty, $t1:ty, $t2:ty, $t3:ty, $t4:ty, $t5:ty, $t6:ty) -> $result:ty, $($argument:expr),* $(,)?) => {
-        stock_target!($address, $result, [a0: $t0, a1: $t1, a2: $t2, a3: $t3, a4: $t4, a5: $t5, a6: $t6], [$($argument),*])
-    };
+    ($function:ident, $($argument:expr),* $(,)?) => { unsafe { $function($($argument),*) } };
 }
 
 struct StockServices;
 impl DrawServices for StockServices {
     fn initialize_hook(&mut self) -> HookRecord {
         let mut hook = core::mem::MaybeUninit::<HookRecord>::uninit();
-        stock!(0x43550, unsafe extern "C" fn(*mut HookRecord, u32, u32), hook.as_mut_ptr(), 0, 64);
+        stock!(rb_tree_call_43550, hook.as_mut_ptr(), 0, 64);
         unsafe { hook.assume_init() }
     }
     fn panel_font(&self) -> FontId { FontId(unsafe { core::ptr::read_volatile(0x15e46c0 as *const u32) }) }
     fn snapshot(&mut self, node: NodeId, source: SnapshotSource, out: &mut Snapshot) {
         match source {
-            SnapshotSource::Live => stock!(0x61cd14, unsafe extern "C" fn(*mut Snapshot), out),
-            SnapshotSource::SavedSlot1 => stock!(0x61ce1c, unsafe extern "C" fn(u32,u32,*mut Snapshot), node.0,1,out),
-            SnapshotSource::SavedSlot2 => stock!(0x61ce1c, unsafe extern "C" fn(u32,u32,*mut Snapshot), node.0,2,out),
+            SnapshotSource::Live => stock!(rb_tree_call_61cd14, out),
+            SnapshotSource::SavedSlot1 => stock!(rb_tree_call_61ce1c, node.0,1,out),
+            SnapshotSource::SavedSlot2 => stock!(rb_tree_call_61ce1c, node.0,2,out),
         }
     }
     fn resolve_selection(&mut self, node: NodeId, selection: &mut Selection) -> bool {
-        stock!(0x11730dc, unsafe extern "C" fn(u32,u32,*mut u32,*mut u32,*mut u32)->u32, node.0,2,&mut selection.record,&mut selection.selection,&mut selection.index) != 0
+        stock!(rb_tree_call_11730dc, node.0,2,&mut selection.record,&mut selection.selection,&mut selection.index) != 0
     }
     fn nested_summary(&mut self, node: NodeId, parent: u32, out: &mut Summary) {
-        stock!(0xbf8f4c, unsafe extern "C" fn(u32,u32,*mut Summary), node.0,parent,out);
+        stock!(rb_tree_call_bf8f4c, node.0,parent,out);
     }
     fn nested_child(&mut self, node: NodeId, parent: u32, index: u32, out: &mut NestedChild) {
-        stock!(0xbf90f0, unsafe extern "C" fn(u32,u32,u32,*mut NestedChild), node.0,parent,index,out);
+        stock!(rb_tree_call_bf90f0, node.0,parent,index,out);
     }
     fn nested_label(&mut self, node: NodeId, parent: u32, selection: u32) -> ResourceId {
-        ResourceId(stock!(0xbf93e0, unsafe extern "C" fn(u32,u32,u32,u32)->u32,node.0,parent,selection,1))
+        ResourceId(stock!(rb_tree_call_bf93e0,node.0,parent,selection,1))
     }
     fn selection_hook(&mut self, record: &mut HookRecord) -> u32 {
-        stock!(0x116f948, unsafe extern "C" fn(*mut HookRecord)->u32,record)
+        stock!(rb_tree_call_116f948,record)
     }
     fn selected_detail(&mut self, node: NodeId, parent: u32, selection: u32) {
-        stock!(0x116d4e4, unsafe extern "C" fn(u32,u32,u32),node.0,parent,selection);
+        stock!(rb_tree_call_116d4e4,node.0,parent,selection);
     }
     fn footer(&mut self, node: NodeId, parent: u32, selection: u32) {
-        stock!(0x1159168, unsafe extern "C" fn(u32,u32,u32),node.0,parent,selection);
+        stock!(rb_tree_call_1159168,node.0,parent,selection);
     }
     fn clear_report(&mut self, out: &mut DrawReport) {
-        stock!(0x7221c8, unsafe extern "C" fn(*mut DrawReport, u32, u32), out, 0, 68);
+        stock!(rb_tree_call_7221c8, out, 0, 68);
     }
     fn summarize(&mut self, node: NodeId, out: &mut Summary) {
-        stock!(0xbf8e64, unsafe extern "C" fn(u32, *mut Summary), node.0, out);
+        stock!(rb_tree_call_bf8e64, node.0, out);
     }
     fn describe(&mut self, node: NodeId, index: u32, out: &mut Child) {
-        stock!(0xbf8d20, unsafe extern "C" fn(u32, u32, *mut Child), node.0, index, out);
+        stock!(rb_tree_call_bf8d20, node.0, index, out);
     }
     fn divide(&mut self, numerator: u32, denominator: u32) -> u32 {
-        stock!(0x4d978, unsafe extern "C" fn(u32, u32) -> u32, numerator, denominator)
+        stock!(rb_tree_call_4d978, numerator, denominator)
     }
     fn remainder(&mut self, numerator: u32, denominator: u32) -> u32 {
         let remainder;
@@ -107,9 +148,9 @@ impl DrawServices for StockServices {
         remainder
     }
     fn label(&mut self, node: NodeId, index: u32) -> ResourceId {
-        ResourceId(stock!(0xbf9360, unsafe extern "C" fn(u32, u32, u32) -> u32, node.0, index, 0))
+        ResourceId(stock!(rb_tree_call_bf9360, node.0, index, 0))
     }
-    fn font(&mut self, font: FontId) { stock!(0x1112b2c, unsafe extern "C" fn(u32), font.0); }
+    fn font(&mut self, font: FontId) { stock!(rb_tree_call_1112b2c, font.0); }
     fn side_state(&mut self, state: SideState) {
         unsafe {
             core::ptr::write_volatile(0x15e64e0 as *mut u32, state.alternate_font as u32);
@@ -117,44 +158,44 @@ impl DrawServices for StockServices {
         }
     }
     fn selection_palette(&mut self, selected: bool, state: u32) {
-        stock!(0x1163e04, unsafe extern "C" fn(u32,u32), selected as u32, state);
+        stock!(rb_tree_call_1163e04, selected as u32, state);
     }
-    fn disable_format(&mut self) { stock!(0x1112da4, unsafe extern "C" fn(),); }
-    fn enable_format(&mut self) { stock!(0x1112d84, unsafe extern "C" fn(),); }
+    fn disable_format(&mut self) { stock!(rb_tree_call_1112da4,); }
+    fn enable_format(&mut self) { stock!(rb_tree_call_1112d84,); }
     fn cell_box(&mut self, first:i32, second:i32, right:i32, bottom:i32, stroke:u32, colour:u32, alpha:u32) {
-        stock!(0x1113514, unsafe extern "C" fn(i32,i32,i32,i32,u32,u32,u32), first,second,right,bottom,stroke,colour,alpha);
+        stock!(rb_tree_call_1113514, first,second,right,bottom,stroke,colour,alpha);
     }
     fn label_hook(&mut self, record:&mut HookRecord) -> u32 {
-        stock!(0x116dce0, unsafe extern "C" fn(*mut HookRecord)->u32, record)
+        stock!(rb_tree_call_116dce0, record)
     }
     fn resource(&mut self, descriptor:&mut ResourceDescriptor) {
-        stock!(0x1112e78, unsafe extern "C" fn(*mut ResourceDescriptor), descriptor);
+        stock!(rb_tree_call_1112e78, descriptor);
     }
     fn special_mode(&self) -> u32 { unsafe { core::ptr::read_volatile(0x15e64ec as *const u32) } }
     fn text_format(&mut self, enabled:bool) {
-        stock!(0x1177e10, unsafe extern "C" fn(u32,u32,u32), 0x1113bf4, enabled as u32, 0);
+        stock!(rb_tree_call_1177e10, 0x1113bf4, enabled as u32, 0);
     }
     fn descriptor_highlight(&mut self, state:u32) {
-        stock!(0x1163c1c, unsafe extern "C" fn(u32,u32), 0,state);
+        stock!(rb_tree_call_1163c1c, 0,state);
     }
     fn grid_resource(&mut self, first:u32, second:i32, resource:ResourceId) {
-        stock!(0x111236c, unsafe extern "C" fn(u32,i32,u32), first,second,resource.0);
+        stock!(rb_tree_call_111236c, first,second,resource.0);
     }
     fn palette_override(&mut self, node:NodeId, child:u32) -> u32 {
-        stock!(0x116cf50, unsafe extern "C" fn(u32,u32)->u32, node.0,child)
+        stock!(rb_tree_call_116cf50, node.0,child)
     }
-    fn primary_palette(&mut self, palette:u32) { stock!(0x1112ce4, unsafe extern "C" fn(u32),palette); }
+    fn primary_palette(&mut self, palette:u32) { stock!(rb_tree_call_1112ce4,palette); }
     fn value(&mut self, node:NodeId, child:u32, variant:u32) -> ResourceId {
-        ResourceId(stock!(0xbf93e0, unsafe extern "C" fn(u32,u32,u32,u32)->u32,node.0,child,variant,0))
+        ResourceId(stock!(rb_tree_call_bf93e0,node.0,child,variant,0))
     }
     fn value_hook(&mut self, record:&mut HookRecord) -> u32 {
-        stock!(0x116e264, unsafe extern "C" fn(*mut HookRecord)->u32,record)
+        stock!(rb_tree_call_116e264,record)
     }
     fn palette_components(&mut self,index:u32,first:u32,second:u32,third:u32) {
-        stock!(0x1137cf8, unsafe extern "C" fn(u32,u32,u32,u32),index,first,second,third);
+        stock!(rb_tree_call_1137cf8,index,first,second,third);
     }
     fn grid_rectangle(&mut self,second:i32) {
-        stock!(0x1138060, unsafe extern "C" fn(u32,u32,i32,u32,u32,u32),24,30,second,1,2,0xff000101);
+        stock!(rb_tree_call_1138060,24,30,second,1,2,0xff000101);
     }
 }
 
