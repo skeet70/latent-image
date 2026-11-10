@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings, ForeignFunctionInterface, ScopedTypeVariables #-}
+{-# LANGUAGE OverloadedStrings, ScopedTypeVariables #-}
 module FujiAF.Host where
 import Control.Concurrent
 import Control.Exception
@@ -12,8 +12,6 @@ import qualified Data.Text as T
 import qualified Data.Vector as V
 import Data.Scientific (floatingOrInteger)
 import Data.IORef
-import Foreign.C.String
-import Foreign.C.Types
 import FujiAF.JSON
 import System.Directory
 import System.Exit
@@ -26,7 +24,6 @@ import System.Posix.Signals
 import System.Process
 import System.Timeout
 
-foreign import ccall unsafe "open" c_open :: CString -> CInt -> IO CInt
 failH :: String -> IO a
 failH = ioError . userError
 ensure :: Bool -> String -> IO ()
@@ -75,17 +72,15 @@ jsonRead = either failH pure . decodeStrict
 jsonPrint :: Value -> IO ()
 jsonPrint = BC.putStrLn . encodeCanonical
 
--- Linux host: inspect both the pathname and the opened descriptor. Nonblocking
--- open ensures a regular-file-to-FIFO replacement cannot wait for a writer.
+-- Inspect both the pathname and the opened descriptor. Nonblocking open ensures
+-- a regular-file-to-FIFO replacement cannot wait for a writer.
 readRegularWith :: IO () -> Bool -> Int -> FilePath -> IO B.ByteString
 readRegularWith between noLinks limit path = do
   status <- (if noLinks then getSymbolicLinkStatus else getFileStatus) path
   ensure (isRegularFile status && fileSize status <= fromIntegral limit) "input must be a capped regular file"
   between
-  bracket (withCString path $ \p -> do
-    fd <- c_open p (2048 + if noLinks then 131072 else 0)
-    ensure (fd >= 0) "input open failed"
-    pure (Fd fd)) closeFd $ \fd -> do
+  let flags = defaultFileFlags { nonBlock = True, nofollow = noLinks }
+  bracket (openFd path ReadOnly flags `catch` \(_ :: IOException) -> failH "input open failed") closeFd $ \fd -> do
       opened <- getFdStatus fd
       ensure (isRegularFile opened && fileSize opened <= fromIntegral limit) "input descriptor must be a capped regular file"
       -- duplicate ownership: the bracket owns fd; the Handle owns its duplicate.

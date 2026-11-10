@@ -596,6 +596,56 @@ haskell_test(
     ],
 )
 
+# Each record's `linked` digests against the payload's linked images, which
+# need no private inputs (README.md "Linked images").
+_LINKED = [
+    ("", "ram-push-review.json", "bank", ["00c40000", "00c4fc88"]),
+    ("-cc", "ram-push-cc-review.json", "classic-chrome", ["00c20000", "00c21f88"]),
+    ("-cc-icon", "ram-push-cc-icon-review.json", "classic-chrome-icon", ["00c20000", "00c21f88"]),
+    ("-toggle", "ram-push-toggle-review.json", "usb-toggle", ["00c20000", "00c21f88"]),
+]
+
+_LINK_DIGEST_DEPS = [
+    ":ram-push-review-record",
+    "//host:base",
+    "//host:bytestring",
+    "//host:cryptohash-sha256",
+    "//host:filepath",
+]
+
+[haskell_test(
+    name = "ram-push" + prefix + "-link-digests",
+    srcs = ["RamPushLinkDigests.hs"],
+    args = ["check", "$(rootpath " + record + ")"] + [
+        "0x%s=$(rootpath //host/firmware:%s-linked-%s)" % (base, payload, base)
+        for base in bases
+    ],
+    data = [record] + ["//host/firmware:%s-linked-%s" % (payload, base) for base in bases],
+    ghcopts = _GHCOPTS,
+    deps = _LINK_DIGEST_DEPS,
+) for prefix, record, payload, bases in _LINKED]
+
+# Rewrites every record's `linked` digests from the current tree; `bazel run` only.
+haskell_binary(
+    name = "ram-push-link-repin",
+    srcs = ["RamPushLinkDigests.hs"],
+    args = ["repin"] + [
+        argument
+        for _, record, payload, bases in _LINKED
+        for argument in [record] + [
+            "0x%s=$(rootpath //host/firmware:%s-linked-%s)" % (base, payload, base)
+            for base in bases
+        ]
+    ],
+    data = [
+        "//host/firmware:%s-linked-%s" % (payload, base)
+        for _, _, payload, bases in _LINKED
+        for base in bases
+    ],
+    ghcopts = _GHCOPTS,
+    deps = _LINK_DIGEST_DEPS,
+)
+
 filegroup(
     name = "ram-push-pinned-workspace-files",
     srcs = [
@@ -696,6 +746,7 @@ haskell_test(
         "ram-push-review.json",
     ],
     ghcopts = _GHCOPTS,
+    tags = ["manual"],
     deps = _GATE_DEPS,
 )
 
@@ -745,6 +796,7 @@ haskell_test(
         "ram-push-cc-review.json",
     ],
     ghcopts = _GHCOPTS,
+    tags = ["manual"],
     deps = _GATE_DEPS,
 )
 
@@ -773,6 +825,7 @@ haskell_test(
         "ram-push-cc-icon-review.json",
     ],
     ghcopts = _GHCOPTS,
+    tags = ["manual"],
     deps = _GATE_DEPS,
 )
 
@@ -801,6 +854,7 @@ haskell_test(
         "ram-push-toggle-review.json",
     ],
     ghcopts = _GHCOPTS,
+    tags = ["manual"],
     deps = _GATE_DEPS,
 )
 
@@ -1073,10 +1127,12 @@ haskell_test(
     data = ["ram-push-review.json"],
     ghcopts = _GHCOPTS,
     main_file = "RamPushReviewedIdentityTest.hs",
-    # The private inputs are read from the checkout, which Bazel does not track.
+    # The private inputs are read from the checkout, which Bazel does not track;
+    # only the holder of those inputs runs it, in the pre-go gate.
     tags = [
         "external",
         "local",
+        "manual",
     ],
     deps = [
         ":camera-core",

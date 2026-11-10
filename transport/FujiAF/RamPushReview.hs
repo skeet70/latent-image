@@ -1,12 +1,13 @@
 {-# LANGUAGE OverloadedStrings #-}
--- | Source identities and publication contract pinned by the camera, with their review states.
+-- | Source identities and publication contract pinned by the camera, with their review states,
+-- and the payload's linked-image digests at its reference bases.
 module FujiAF.RamPushReview
   ( Sha256Hex, unSha256Hex, sha256Hex
   , CommitId, unCommitId, commitId, ReviewId, unReviewId, reviewIdentifier, CheckId, unCheckId, checkIdentifier, IsoDate, unIsoDate
   , PinIdentity(..), PinSource(..), Component(..), ReviewVerdict(..), PinStatus(..)
-  , ArtifactRef(..), Review(..), ContentCheck(..), Pin(..), ContractPin(..), RecordKind(..), ReviewRecord(..)
+  , ArtifactRef(..), Review(..), ContentCheck(..), Pin(..), ContractPin(..), LinkedOutput(..), RecordKind(..), ReviewRecord(..)
   , Subject(..), GateFinding(..)
-  , parseReviewRecord, renderReviewRecord, repin, verdictFindings, describeFinding, pinsModuleSource
+  , parseReviewRecord, renderReviewRecord, repin, relinkOutputs, linkedFindings, verdictFindings, describeFinding, pinsModuleSource
   ) where
 
 import Control.Monad (forM, forM_, unless)
@@ -18,6 +19,8 @@ import Data.List (intercalate, isPrefixOf, nub, sort, sortOn)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import Data.Scientific (toBoundedInteger)
+import Data.Word (Word32)
+import Numeric (readHex, showHex)
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import FujiAF.JSON (decodeStrictIntegers, encodeCanonical)
@@ -87,6 +90,10 @@ data Pin = Pin
 
 data ContractPin = ContractPin { contractDigest :: Sha256Hex, contractStatus :: PinStatus } deriving (Eq, Show)
 
+-- | SHA-256 of the payload's flat linked image (`linked.bin`) at one reference
+-- base, which the relink script produces without private inputs.
+data LinkedOutput = LinkedOutput { linkedBase :: Word32, linkedDigest :: Sha256Hex } deriving (Eq, Show)
+
 -- | The payload a record pins.
 data RecordKind = BankD3Record | ClassicChromeRecord | ClassicChromeIconRecord | UsbToggleRecord deriving (Eq, Show)
 
@@ -96,6 +103,7 @@ data ReviewRecord = ReviewRecord
   , recordContentChecks :: [ContentCheck]
   , recordPins :: [Pin]
   , recordContract :: ContractPin
+  , recordLinked :: [LinkedOutput]
   } deriving (Eq, Show)
 
 kindText :: RecordKind -> String
@@ -281,13 +289,26 @@ parseContract value = do
   ContractPin <$> digestField "publication_contract sha256" (field value "sha256")
               <*> parseStatus "publication_contract status" (field value "status")
 
+parseLinked :: Value -> Parse LinkedOutput
+parseLinked value = do
+  closed "linked output" value ["base","sha256"]
+  baseText <- text "linked output base" (field value "base")
+  base <- case baseText of
+    '0' : 'x' : digits | length digits == 8, all lowerHex digits, [(parsed, "")] <- readHex digits -> pure parsed
+    _ -> reject "linked output base: 0x and eight lowercase hex digits required"
+  LinkedOutput base <$> digestField "linked output sha256" (field value "sha256")
+
+hexBase :: Word32 -> String
+hexBase base = "0x" ++ replicate (8 - length digits) '0' ++ digits
+  where digits = showHex base ""
+
 parseReviewRecord :: B.ByteString -> Either String ReviewRecord
 parseReviewRecord document = do
   value <- decodeStrictIntegers document
-  closed "review record" value ["content_checks","kind","pins","publication_contract","reviews","schema"]
+  closed "review record" value ["content_checks","kind","linked","pins","publication_contract","reviews","schema"]
   case field value "schema" of
-    Number n | toBoundedInteger n == Just (1 :: Int) -> pure ()
-    _ -> reject "review record schema must be 1"
+    Number n | toBoundedInteger n == Just (2 :: Int) -> pure ()
+    _ -> reject "review record schema must be 2"
   kind <- case field value "kind" of
     String kindName | T.unpack kindName == kindText BankD3Record -> pure BankD3Record
                     | T.unpack kindName == kindText ClassicChromeRecord -> pure ClassicChromeRecord
@@ -299,6 +320,10 @@ parseReviewRecord document = do
   pinValues <- list "pins" (field value "pins") 68
   pins <- forM pinValues parsePin
   contract <- parseContract (field value "publication_contract")
+  linked <- list "linked" (field value "linked") 2 >>= mapM parseLinked
+  case linked of
+    [lower, upper] | linkedBase lower < linkedBase upper -> pure ()
+    _ -> reject "linked: two reference bases in ascending order required"
   let reviewIds = map reviewId reviews
       checkIds = map checkId checks
       identities = map pinIdentity pins
@@ -320,7 +345,26 @@ parseReviewRecord document = do
   case contractStatus contract of
     ContentChecked _ -> reject "publication_contract: content-checked applies only to bank-content pins"
     _ -> pure ()
-  pure (ReviewRecord kind reviews checks pins contract)
+  pure (ReviewRecord kind reviews checks pins contract linked)
+
+-- | Replaces the linked-image digests; the result is the record re-read
+-- through 'parseReviewRecord'.
+relinkOutputs :: [LinkedOutput] -> ReviewRecord -> Either String ReviewRecord
+relinkOutputs linked record = do
+  require (map linkedBase linked == map linkedBase (recordLinked record)) "linked outputs must name the record's reference bases"
+  parseReviewRecord (renderReviewRecord record { recordLinked = linked })
+
+-- | One line per reference base whose built linked image differs from the record.
+linkedFindings :: ReviewRecord -> [LinkedOutput] -> [String]
+linkedFindings record built =
+  [ hexBase base ++ ": linked.bin " ++ problem
+  | LinkedOutput base recorded <- recordLinked record
+  , Just problem <- [case lookup base [(linkedBase output, linkedDigest output) | output <- built] of
+      Nothing -> Just "was not built"
+      Just digest | digest == recorded -> Nothing
+                  | otherwise -> Just ("recorded " ++ unSha256Hex recorded ++ ", built " ++ unSha256Hex digest)]
+  ]
+  ++ [hexBase (linkedBase output) ++ ": not a reference base of the record" | output <- built, linkedBase output `notElem` map linkedBase (recordLinked record)]
 
 -- | Pins and the contract whose status does not admit them to a camera run:
 -- unreviewed, or approved by a review whose verdict is changes-required.
@@ -370,16 +414,17 @@ pinsModuleSource record = unlines $
       UsbToggleRecord -> ("ram-push-toggle-pins-module", "ram-push-toggle-review.json", "RamPushToggleReviewedPins", "reviewedToggleContract")
 
 -- | The record's checked-in layout: one canonical JSON line per review,
--- content check and pin.
+-- content check, pin and linked output.
 renderReviewRecord :: ReviewRecord -> B.ByteString
 renderReviewRecord record = C.pack (unlines (
   [ "{"
-  , "  \"schema\": 1,"
+  , "  \"schema\": 2,"
   , "  \"kind\": \"" ++ kindText (recordKind record) ++ "\","
   , "  \"reviews\": " ++ items (map reviewValue (recordReviews record)) ++ ","
   , "  \"content_checks\": " ++ items (map checkValue (recordContentChecks record)) ++ ","
   , "  \"pins\": " ++ items (map pinValue (recordPins record)) ++ ","
-  , "  \"publication_contract\": " ++ canonical (contractValue (recordContract record))
+  , "  \"publication_contract\": " ++ canonical (contractValue (recordContract record)) ++ ","
+  , "  \"linked\": " ++ items (map linkedValue (recordLinked record))
   , "}" ]))
   where
     canonical = C.unpack . encodeCanonical
@@ -415,6 +460,8 @@ renderReviewRecord record = C.pack (unlines (
       ++ sourceFields (pinSource pin))
     contractValue contract = object
       [ ("sha256", str (unSha256Hex (contractDigest contract))), ("status", statusValue (contractStatus contract)) ]
+    linkedValue output = object
+      [ ("base", str (hexBase (linkedBase output))), ("sha256", str (unSha256Hex (linkedDigest output))) ]
 
 -- | Sets each named subject's digest to the given one and its status to
 -- `status`; the result is the record re-read through 'parseReviewRecord'.

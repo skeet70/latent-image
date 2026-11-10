@@ -88,10 +88,13 @@ reexecInSlot policy arguments = do
     Just _ -> pure ()
     Nothing -> do
       directory <- slotDirectory
-      Slot slot <- acquire directory
+      executable <- getExecutablePath
+      (Slot slot, pinned) <- withBinaryFile (runningImage executable) ReadMode $ \running -> do
+        acquired <- acquire directory
+        pinned <- pinExecutable directory executable running
+        pure (acquired, pinned)
       checkStorageBudget storage
       setEnv slotVariable (show slot)
-      executable <- pinExecutable directory
       scoped <- userScopeAvailable
       let MemoryMax memory = memoryMax policy
       if scoped
@@ -100,12 +103,12 @@ reexecInSlot policy arguments = do
            , "--property=MemoryMax=" ++ memory
            , "--property=MemorySwapMax=0"
            , "--"
-           , executable
+           , pinned
            ] ++ arguments) Nothing
         else do
           hPutStrLn stderr ("No systemd user session: emulator slot " ++ show slot ++ " runs without the " ++ memory ++ " memory cap")
           hFlush stderr
-          executeFile executable False arguments Nothing
+          executeFile pinned False arguments Nothing
 
 defaultStoragePath :: IO FilePath
 defaultStoragePath = do
@@ -143,25 +146,24 @@ firstFree directory (slot : rest) = do
     Left _ -> closeFd fd >> firstFree directory rest
 
 -- | A private copy of the running executable beneath the slot directory, named
--- @pin-<pid>@ for the PID execve preserves, copied from 'runningImage'.
-pinExecutable :: FilePath -> IO FilePath
-pinExecutable directory = do
+-- @pin-<pid>@ for the PID execve preserves, copied from RUNNING, a handle on
+-- 'runningImage'.
+pinExecutable :: FilePath -> FilePath -> Handle -> IO FilePath
+pinExecutable directory executable running = do
   sweepPinned directory
   pid <- getProcessID
-  executable <- getExecutablePath
   let pinned = directory </> ("pin-" ++ show pid)
   -- A crashed run with a reused PID can leave either path behind.
   removeIfPresent pinned
   removeIfPresent (pinned ++ ".runfiles")
-  withBinaryFile (runningImage executable) ReadMode $ \running ->
-    withBinaryFile pinned WriteMode $ \copy -> copyChunks running copy
+  withBinaryFile pinned WriteMode $ \copy -> copyChunks running copy
   setFileMode pinned 0o700
   linkRunfiles executable pinned
   pure pinned
 
--- | On Linux the running inode through @/proc/self/exe@, which no relink of the
--- on-disk file changes; elsewhere the executable's path, which a relink during
--- the slot wait can replace.
+-- | On Linux the running inode through @/proc/self/exe@; elsewhere the
+-- executable's path, opened before the slot wait, so an unlink and relink of
+-- that path during the wait leaves the open image unchanged.
 runningImage :: FilePath -> FilePath
 runningImage executable
   | os == "linux" = "/proc/self/exe"

@@ -51,10 +51,20 @@ document :: [String] -> [String] -> [String] -> String -> C.ByteString
 document = documentOfKind "xm1-ram-push-review-record"
 
 documentOfKind :: String -> [String] -> [String] -> [String] -> String -> C.ByteString
-documentOfKind kind reviews checks pins contract = C.pack $
-  "{\"schema\":1,\"kind\":" ++ quoted kind ++ ",\"reviews\":[" ++ intercalate "," reviews
+documentOfKind kind reviews checks pins contract = documentWithLinked kind reviews checks pins contract defaultLinked
+
+defaultLinked :: [String]
+defaultLinked = [linked "0x00c40000" (digest '4'), linked "0x00c4fc88" (digest '5')]
+
+linked :: String -> String -> String
+linked base sha = "{\"base\":" ++ quoted base ++ ",\"sha256\":" ++ quoted sha ++ "}"
+
+documentWithLinked :: String -> [String] -> [String] -> [String] -> String -> [String] -> C.ByteString
+documentWithLinked kind reviews checks pins contract outputs = C.pack $
+  "{\"schema\":2,\"kind\":" ++ quoted kind ++ ",\"reviews\":[" ++ intercalate "," reviews
   ++ "],\"content_checks\":[" ++ intercalate "," checks ++ "],\"pins\":[" ++ intercalate "," pins
-  ++ "],\"publication_contract\":{\"sha256\":" ++ quoted (digest 'd') ++ ",\"status\":" ++ contract ++ "}}"
+  ++ "],\"publication_contract\":{\"sha256\":" ++ quoted (digest 'd') ++ ",\"status\":" ++ contract
+  ++ "},\"linked\":[" ++ intercalate "," outputs ++ "]}"
 
 subjects :: [GateFinding] -> [Subject]
 subjects findings = [subject | Unapproved subject _ <- findings]
@@ -102,6 +112,13 @@ main = do
     (isLeft (parsed (document [] [] [pinWithDigest (replicate 64 'C') "build-recipe-bank" "builder" "mechanism" unreviewed] unreviewed)))
   expect "an unknown key is refused"
     (isLeft (parsed (document [] [] [init (builderPin unreviewed) ++ ",\"note\":\"x\"}"] unreviewed)))
+  let kind = "xm1-ram-push-review-record"
+  expect "a record without both reference bases is refused"
+    (isLeft (parsed (documentWithLinked kind [] [] [installerPin unreviewed] unreviewed [linked "0x00c40000" (digest '4')])))
+  expect "reference bases out of order are refused"
+    (isLeft (parsed (documentWithLinked kind [] [] [installerPin unreviewed] unreviewed (reverse defaultLinked))))
+  expect "a short base is refused"
+    (isLeft (parsed (documentWithLinked kind [] [] [installerPin unreviewed] unreviewed [linked "0xc40000" (digest '4'), linked "0x00c4fc88" (digest '5')])))
 
   let toggleBuilder = pin "build-usb-toggle-ram" "builder" "mechanism" unreviewed
       toggleStub = pin "usb_toggle_stub" "usb-toggle-stub" "mechanism" unreviewed
@@ -149,6 +166,20 @@ main = do
         (isLeft (repin (Unreviewed commit) [(PinSubject (PinIdentity "menu/other.c"), fresh)] record))
       expect "repin to content-checked on a mechanism pin is refused"
         (isLeft (repin (ContentChecked candidate) [(PinSubject (PinIdentity "menu/ram_push_installer.c"), fresh)] record))
+      let built base char = LinkedOutput base (maybe (error "digest") id (sha256Hex (digest char)))
+      expect "built linked images equal to the record have no findings"
+        (null (linkedFindings record [built 0x00c40000 '4', built 0x00c4fc88 '5']))
+      expect "a changed linked image at one base is one finding"
+        (length (linkedFindings record [built 0x00c40000 '4', built 0x00c4fc88 '6']) == 1)
+      expect "a reference base that was not built is a finding"
+        (length (linkedFindings record [built 0x00c40000 '4']) == 1)
+      case relinkOutputs [built 0x00c40000 '7', built 0x00c4fc88 '8'] record of
+        Left reason -> expect ("relinkOutputs succeeds: " ++ reason) False
+        Right updated -> do
+          expect "relinkOutputs replaces the linked digests and keeps the pins"
+            (null (linkedFindings updated [built 0x00c40000 '7', built 0x00c4fc88 '8']) && recordPins updated == recordPins record)
+      expect "relinkOutputs refuses other bases"
+        (isLeft (relinkOutputs [built 0x00c20000 '7', built 0x00c4fc88 '8'] record))
 
   count <- readIORef failures
   unless (count == 0) exitFailure

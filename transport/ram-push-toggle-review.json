@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "kind": "xm1-usb-toggle-ram-push-review-record",
   "reviews": [
     {"commit":"11e9c0609e3acdb8aed7539b9eebe9be60a8532f","date":"2026-11-04","id":"MenuEngineScopeReview","reviewer":"ReviewedContract.MenuEngineScopeReview (anthropic/claude-opus-5-5)","scope":"MenuEngineScopeReview approves only the standalone Classic Chrome, icon and USB-toggle builder identities (build-classic-chrome-ram 5161860b...58cb, build-classic-chrome-icon-ram bd49e422...b38a, build-usb-toggle-ram de40a21c...244d) and the toggle's host/firmware/RamPushLayout.hs pin (404e0efc...a790) at 11e9c060. From 211ad9ce to 11e9c060 the only changed member of the three builder source filegroups is RamPushLayout.hs, which adds the menu-engine bank variant and menuEngineHook* definitions and factors hookBranchWord out of modalHookWordFor. installerExtent, installerHasCallClosure, the installer offsets and encodePublicationRecord, the only imports the standalone builders use, are unchanged. Relinks at 0x00c20000 and 0x00c21f88 at both commits give byte-identical runtimes and manifests outside source_identity, so publications and contracts are unchanged. It does not approve the bank, whose pins stay unreviewed at 11e9c060.","session":"latent-image agent session 2026-11-04, transcript history://ReviewedContract.MenuEngineScopeReview (private)","verdict":"approve"},
@@ -33,5 +33,9 @@
     {"component":"mechanism","identity":"rc0_image5","path":"private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin","sha256":"3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a","source":"private","status":{"commit":"9b10f289ee5e1e5cfb5d80f08190602eb05ca8e2","review":"ToggleMechanismReview","verdict":"approved"}},
     {"component":"mechanism","identity":"usb_toggle_stub","sha256":"35a7e9597f06bdc1dda250d991df4a468d2401e5ae3c24c22e37403318746d62","source":"usb-toggle-stub","status":{"commit":"9b10f289ee5e1e5cfb5d80f08190602eb05ca8e2","review":"ToggleMechanismReview","verdict":"approved"}}
   ],
-  "publication_contract": {"sha256":"9689704f21b660df2806a52a481cda1909182cac593007e094d569d69764334c","status":{"commit":"9b10f289ee5e1e5cfb5d80f08190602eb05ca8e2","review":"ToggleMechanismReview","verdict":"approved"}}
+  "publication_contract": {"sha256":"9689704f21b660df2806a52a481cda1909182cac593007e094d569d69764334c","status":{"commit":"9b10f289ee5e1e5cfb5d80f08190602eb05ca8e2","review":"ToggleMechanismReview","verdict":"approved"}},
+  "linked": [
+    {"base":"0x00c20000","sha256":"2bfcf471640ce27854465dbdfd5ce34ca6c58d4627db89685a88cd6c97cf6e17"},
+    {"base":"0x00c21f88","sha256":"d765a11af11cbcddee3c7a5401c2fac626bcf504e3b7ccda72b7ee2007edbfd2"}
+  ]
 }

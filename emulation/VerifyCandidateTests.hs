@@ -14,7 +14,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Vector as V
-import System.Directory (copyFile, createDirectory, createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getTemporaryDirectory, makeAbsolute, removeDirectoryRecursive, removeFile)
+import System.Directory (canonicalizePath, copyFile, createDirectory, createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getTemporaryDirectory, makeAbsolute, removeDirectoryRecursive, removeFile)
 import System.Environment (getArgs, getEnvironment, lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (..), exitFailure)
 import System.FilePath ((</>), makeRelative)
@@ -61,7 +61,8 @@ withWorkspace :: (FilePath -> IO a) -> IO a
 withWorkspace = bracket setup removeDirectoryRecursive
   where
     setup = do
-      temporary <- getTemporaryDirectory
+      -- The verifier reports canonical paths; Darwin's /tmp and /var are symlinks into /private.
+      temporary <- getTemporaryDirectory >>= canonicalizePath
       (root, handle) <- openTempFile temporary "verify-candidate-test"
       hClose handle
       removeFile root
@@ -73,6 +74,13 @@ withWorkspace = bracket setup removeDirectoryRecursive
 
 jsonFile :: FilePath -> Value -> IO ()
 jsonFile path = BL.writeFile path . encode
+
+-- | The observation comparison sources the verifier binds to a source manifest.
+writeObservationSources :: FilePath -> IO ()
+writeObservationSources root = do
+  writeFile (root </> "emulation/E2EObservationCompare.hs") "observation compare\n"
+  writeFile (root </> "emulation/Emulation/ObservationCompare.hs") "observation comparison\n"
+  writeFile (root </> "emulation/Emulation/ObservationStream.hs") "observation stream\n"
 
 qualificationWord :: Qualification -> Maybe T.Text
 qualificationWord qualification = case qualification of
@@ -122,9 +130,9 @@ verify tool route evidence source parity qualification = withWorkspace $ \root -
                       (object [ "menu_receipts" .= [object ["menu_id" .= menuValue]]
                               , "outcome" .= String "candidate-qualified"])
                     jsonFile (segment </> "e2e-observation-0.json")
-                      (object ["schema" .= (1 :: Int), "reads" .= [object ["value" .= observationValue]]])) names
+                      (object ["schema" .= (1 :: Int), "reads" .= [object ["value" .= observationValue]], "trace_hits" .= ([] :: [Value])])) names
             jsonFile (directory </> "e2e-observation-0.json")
-              (object ["schema" .= (1 :: Int), "reads" .= [object ["value" .= value]]])
+              (object ["schema" .= (1 :: Int), "reads" .= [object ["value" .= value]], "trace_hits" .= ([] :: [Value])])
             case fixtureQualification of
               MissingOutcome -> pure ()
               ControlReceipt -> jsonFile (directory </> "e2e-control.json")
@@ -779,6 +787,7 @@ ledgerChecks tool = do
     writeFile (root </> "emulation/Emulation/ExecutionJournal.hs") "journal\n"
     writeFile (root </> "emulation/Emulation/CandidateRoute.hs") "routes\n"
     writeFile (root </> "emulation/Emulation/CandidateBaseline.hs") "comparator\n"
+    writeObservationSources root
     writeFile firstManifest "0000000000000000000000000000000000000000000000000000000000000000  emulation/VerifyCandidate.hs\n"
     writeFile secondManifest "1111111111111111111111111111111111111111111111111111111111111111  emulation/VerifyCandidate.hs\n"
     (_, _, _) <- runVerifier tool root (arguments firstManifest)
@@ -802,6 +811,7 @@ ledgerChecks tool = do
     writeFile (root </> "emulation/Emulation/ExecutionJournal.hs") "journal\n"
     writeFile (root </> "emulation/Emulation/CandidateRoute.hs") "routes\n"
     writeFile comparator "comparator-a\n"
+    writeObservationSources root
     coordinatorBytes <- B.readFile coordinator
     writeFile sourceManifest (sha256Hex (sha256 coordinatorBytes) ++ "  emulation/VerifyCandidate.hs\n")
     (_, _, firstErr) <- runVerifier tool root arguments

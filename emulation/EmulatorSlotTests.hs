@@ -1,13 +1,13 @@
 -- | Slot admission through the library: two probes limited to one slot each
 -- hold both host slots at once, and a third waits, survives replacement of its
--- executable on disk, and re-executes the original program into the slot the
--- first releases.
+-- executable on disk during the wait, and re-executes the original program
+-- into the slot the first releases.
 module Main (main) where
 
 import Control.Exception (IOException, try)
 import Control.Monad (unless)
 import Data.IORef (modifyIORef, newIORef, readIORef)
-import Data.List (isInfixOf, sort, stripPrefix)
+import Data.List (isInfixOf, isPrefixOf, sort, stripPrefix)
 import Data.Maybe (fromMaybe)
 import System.Directory (copyFile, createDirectoryIfMissing, getTemporaryDirectory, removeFile)
 import System.Environment (getArgs, getEnvironment, lookupEnv)
@@ -69,9 +69,11 @@ run source = do
     (sort (map admittedSlot [firstAdmission, secondAdmission]) == [Just "1", Just "2"])
   copyFile source probe
   setFileMode probe 0o700
-  third <- spawnProbe probe environment
+  (third, thirdErr) <- spawnWaitingProbe probe environment
   beginning <- try (hGetLine (probeOut third)) :: IO (Either IOException String)
-  startedOk <- expect "a third probe starts while both slots are held" (beginning == Right "probe-starting")
+  waiting <- timeout 10_000_000 (untilWaiting thirdErr)
+  startedOk <- expect "a third probe starts while both slots are held"
+    (beginning == Right "probe-starting" && waiting == Just True)
   removeFile probe
   writeFile probe replacementScript
   setFileMode probe 0o700
@@ -145,6 +147,23 @@ spawnProbe probe environment = do
   case started of
     (Just input, Just out, _, process) -> pure (Probe input out process)
     _ -> ioError (userError "the probe's stdin or stdout did not open")
+
+-- | A probe whose stderr is a pipe, for 'untilWaiting'.
+spawnWaitingProbe :: FilePath -> [(String, String)] -> IO (Probe, Handle)
+spawnWaitingProbe probe environment = do
+  started <- createProcess (proc probe []) {std_in = CreatePipe, std_out = CreatePipe, std_err = CreatePipe, env = Just environment}
+  case started of
+    (Just input, Just out, Just err, process) -> pure (Probe input out process, err)
+    _ -> ioError (userError "the probe's stdin, stdout or stderr did not open")
+
+-- | Reads stderr through the announcement that the probe waits for a slot.
+untilWaiting :: Handle -> IO Bool
+untilWaiting err = do
+  line <- try (hGetLine err) :: IO (Either IOException String)
+  case line of
+    Left _ -> pure False
+    Right text | "Waiting for one of the host's" `isPrefixOf` text -> pure True
+               | otherwise -> untilWaiting err
 
 -- | A private HOME so the probe's slot locks are its own, one slot per
 -- invocation, and no inherited slot claim. The user bus settings keep
