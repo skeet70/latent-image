@@ -1,3 +1,6 @@
+#[path = "common/modal_lifetime_fixture.rs"]
+mod lifetime_fixture;
+
 use fujimod_emulator::board::{bus::{Bus, Mode}, factory::{self, Graph, MemoryMap, Processor, Ram}, memory::BusMapping};
 use fujimod_emulator::session::Session;
 use fujimod_emulator_cpu::{ExecutionPolicy, Model, Register, arm, timeline::Ratio};
@@ -384,4 +387,94 @@ fn failed_user_point_rearm_retains_active_modal_evidence_and_refuses_advancement
     assert_eq!(report.counts.returns, 1);
     assert_eq!(report.stock_fetches.len(), 2);
     assert_eq!(report.captured_domains.len(), 1);
+}
+
+#[derive(Clone, Copy)]
+enum CurrentStoreCase { Valid, WrongTarget, Underflow, WrongCore }
+
+struct InstalledCurrentCase {
+    machine: Machine,
+    config: Config,
+    current: Guest,
+    node: fujimod_xm1::modal_lifetime::Word,
+}
+
+fn installed_current_case(kernel: fujimod_xm1::modal_permit::CoreId, case: CurrentStoreCase) -> InstalledCurrentCase {
+    use fujimod_xm1::{modal_lifetime::Word, modal_task::source_layouts};
+    let request = lifetime_fixture::owned_union_request(false);
+    let layout = source_layouts()[kernel.0];
+    let core = if matches!(case, CurrentStoreCase::WrongCore) { 1 - kernel.0 } else { kernel.0 };
+    let pc = [0x43d48u64, 0xd3d04][kernel.0];
+    let node = Word(layout.nodes.start().0 + 0x4000_0000 + 56);
+    let base = match case {
+        CurrentStoreCase::WrongTarget => layout.selected.start().0 + 0x4000_0004,
+        CurrentStoreCase::Underflow => 4,
+        _ => layout.selected.start().0 + 0x4000_0000,
+    };
+    let mappings: Vec<_> = (0..2).flat_map(|core| [
+        MemoryMap { core, address: 0, physical: 0, size: 0x0130_0000, permissions: 7 },
+        MemoryMap { core, address: 0x4000_0000, physical: 0, size: 0x0130_0000, permissions: 7 },
+    ]).collect();
+    let graph = Graph {
+        processors: (0..2).map(|index| Processor {
+            model: Model::CortexR5F, rprofile: Some(Default::default()), mprofile: None, released: index == core,
+            registers: vec![(Register::Pc, pc), (Register::Pstate, 0x93),
+                (arm::CORE[0], u64::from(base)), (arm::CORE[1], u64::from(node.0)),
+                (Register::Arm32(arm::Register::R(13)), 0x8000)],
+        }).collect(),
+        ram: vec![Ram { base: 0, size: 0x0130_0000 }],
+        dma_mappings: vec![BusMapping::ram(0, 0x0130_0000)],
+        decoders: vec![], peripherals: vec![], mappings,
+        instructions_per_tick: Ratio::new(1, 1).unwrap(),
+    };
+    let mut board = graph.build(factory::Options {
+        engine: factory::Engine::Unicorn, translation_cache_bytes: 1 << 20,
+    }, Bus::new(Mode::Strict), None).unwrap();
+    board.set_execution_policy(ExecutionPolicy::Exact).unwrap();
+    let store = |address, value: &serde_json::Value| {
+        let bytes: Vec<u8> = serde_json::from_value(value.clone()).unwrap();
+        board.write_physical(address, &bytes).unwrap();
+    };
+    store(u64::from(STOCK_ENTRY.0), &request["stock"]);
+    for image in request["context_sources"].as_array().unwrap().iter()
+        .chain(request["lifetime"]["readonly"].as_array().unwrap()) {
+        store(image["start"].as_u64().unwrap(), &image["bytes"]);
+    }
+    board.write_physical(u64::from(layout.selected.start().0), &node.0.to_le_bytes()).unwrap();
+    let config = serde_json::from_value::<BeginRequest>(request).unwrap()
+        .into_config(board.mappings().to_vec()).unwrap();
+    let session = Session {
+        definition: serde_json::Value::Null, board, controls: None, contact_driver: None,
+        resources: Resources::default(), nodes: BTreeMap::new(), contacts: BTreeMap::new(), recording_frames: Default::default(),
+    };
+    let mut document = RunDocument::parse(include_bytes!("../data/xm1-150.json")).unwrap();
+    document.execution.quantum = 1;
+    InstalledCurrentCase { machine: Machine::new(document, session).unwrap(), config, current: layout.current.start(), node }
+}
+
+#[test]
+fn installed_owned_current_stores_execute_only_at_the_bound_core_and_effective_address() {
+    use fujimod_xm1::modal_permit::CoreId;
+    for kernel in [CoreId(0), CoreId(1)] {
+        for case in [CurrentStoreCase::Valid, CurrentStoreCase::WrongTarget, CurrentStoreCase::Underflow, CurrentStoreCase::WrongCore] {
+            let InstalledCurrentCase { mut machine, config, current, node } = installed_current_case(kernel, case);
+            machine.traces.begin_modal_observation(&machine.session, config).unwrap();
+            let outcome = machine.run(4);
+            let mut bytes = [0; 4];
+            machine.session.board.read_physical(u64::from(current.0), &mut bytes).unwrap();
+            let report = serde_json::to_value(machine.traces.modal_observation_report()).unwrap();
+            if matches!(case, CurrentStoreCase::Valid) {
+                assert!(matches!(outcome, RunOutcome::Completed));
+                machine.require_running().unwrap();
+                assert_eq!(u32::from_le_bytes(bytes), node.0);
+                assert_eq!(report["lifetime"]["checked_context_writes"], serde_json::json!(1));
+                assert_eq!(report["lifetime"]["pending_stores"], serde_json::json!(0));
+                assert!(report["failure"].is_null());
+            } else {
+                assert!(matches!(outcome, RunOutcome::Failed));
+                assert_eq!(bytes, [0; 4]);
+                assert!(!report["failure"].is_null());
+            }
+        }
+    }
 }

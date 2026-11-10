@@ -56,6 +56,8 @@ pub(crate) fn request(scoped: bool) -> Value {
         "context_sources":context_sources(),"limit":128,
         "lifetime":{
             "bank_variant":if scoped { "modal75" } else { "standard" },
+            "context_catalogue":"stock",
+            "property_delta_words":null,
             "runtime":[RUNTIME,RUNTIME + 0x1000],"resident":[RUNTIME + 0x800,RUNTIME + 0xc00],
             "readonly":readonly,
             "install":{"entry":{"pc":RUNTIME + 0x200,"word":0xe92d_4010u32},"writer":{"pc":RUNTIME + 0x204,"word":0xe581_3000u32}},
@@ -63,4 +65,24 @@ pub(crate) fn request(scoped: bool) -> Value {
             "publications":publications,
         },
     })
+}
+
+pub(crate) fn owned_union_request(scoped: bool) -> Value {
+    let mut value = request(scoped);
+    value["lifetime"]["context_catalogue"] = json!("owned_union");
+    for (pc, word) in [
+        (0x43d48u32, 0xe500_1008u32), (0x43d2c, 0xe586_3000), (0x43d84, 0xe586_3000), (0x43db8, 0xe586_3000),
+        (0xd3d04, 0xe500_1008), (0xd3ce8, 0xe586_3000), (0xd3d40, 0xe586_3000), (0xd3d74, 0xe586_3000),
+        (0x43d4c, 0xeaff_fffe), (0xd3d08, 0xeaff_fffe),
+    ] {
+        let image = value["context_sources"].as_array_mut().unwrap().iter_mut().find(|image| {
+            let start = image["start"].as_u64().unwrap();
+            start <= u64::from(pc) && u64::from(pc) + 4 <= start + image["bytes"].as_array().unwrap().len() as u64
+        }).unwrap();
+        let offset = (u64::from(pc) - image["start"].as_u64().unwrap()) as usize;
+        for (index, byte) in word.to_le_bytes().into_iter().enumerate() {
+            image["bytes"][offset + index] = json!(byte);
+        }
+    }
+    value
 }

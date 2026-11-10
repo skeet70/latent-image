@@ -1,3 +1,6 @@
+#[path = "common/modal_lifetime_fixture.rs"]
+mod lifetime_fixture;
+
 use fujimod_xm1::{modal_trace::BeginRequest, provenance::Guest};
 use serde_json::{Value, json};
 
@@ -62,6 +65,7 @@ fn request(scoped: bool) -> Value {
             "install":{"entry":{"pc":RUNTIME + 0x200,"word":0xe92d_4010u32},"writer":{"pc":RUNTIME + 0x204,"word":0xe581_3000u32}},
             "rollback":{"entry":{"pc":RUNTIME + 0x208,"word":0xe92d_4010u32},"writer":{"pc":RUNTIME + 0x20c,"word":0xe581_3000u32}},
             "publications":publications,
+            "context_catalogue":"stock",
         },
     })
 }
@@ -147,6 +151,22 @@ fn installed_lifetime_observations_are_bounded_by_the_lifetime_writer_limit() {
         value["limit"] = json!(1u64 << 20);
         assert!(accepted(value.clone()));
         value["limit"] = json!((1u64 << 20) + 1);
+        assert!(!accepted(value));
+    }
+}
+
+#[test]
+fn owned_union_catalogue_binds_each_actual_domain_specific_source_word() {
+    assert!(accepted(lifetime_fixture::owned_union_request(false)));
+    assert!(accepted(lifetime_fixture::owned_union_request(true)));
+    for pc in [0x43d48u64, 0x43d2c, 0x43d84, 0x43db8, 0xd3d04, 0xd3ce8, 0xd3d40, 0xd3d74] {
+        let mut value = lifetime_fixture::owned_union_request(false);
+        let image = value["context_sources"].as_array_mut().unwrap().iter_mut().find(|image| {
+            let start = image["start"].as_u64().unwrap();
+            start <= pc && pc + 4 <= start + image["bytes"].as_array().unwrap().len() as u64
+        }).unwrap();
+        let offset = (pc - image["start"].as_u64().unwrap()) as usize;
+        image["bytes"][offset] = json!(image["bytes"][offset].as_u64().unwrap() ^ 1);
         assert!(!accepted(value));
     }
 }

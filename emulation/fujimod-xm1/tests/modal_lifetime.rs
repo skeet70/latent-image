@@ -44,6 +44,8 @@ fn request() -> Value {
         "install": {"entry": {"pc": INSTALL, "word": words[0]}, "writer": {"pc": INSTALL_WRITER, "word": STR}},
         "rollback": {"entry": {"pc": ROLLBACK, "word": words[2]}, "writer": {"pc": ROLLBACK_WRITER, "word": STR}},
         "publications": publications,
+        "context_catalogue": "stock",
+        "property_delta_words": null,
     })
 }
 fn config(value: Value) -> Result<LifetimeConfig, LifetimeFailure> {
@@ -54,7 +56,9 @@ fn config(value: Value) -> Result<LifetimeConfig, LifetimeFailure> {
     ])
 }
 fn fixture() -> (LifetimeMonitor, Memory) {
-    let config = config(request()).unwrap();
+    fixture_for(config(request()).unwrap())
+}
+fn fixture_for(config: LifetimeConfig) -> (LifetimeMonitor, Memory) {
     let mut memory = Memory::default();
     for (extent, bytes) in config.readonly_images() { memory.store(extent.start().0, bytes); }
     memory.store(SETTINGS, &[0x5a; 450]);
@@ -926,4 +930,150 @@ fn lazy_vfp_owner_stores_refuse_other_values_modes_aliases_cores_and_unpermitted
     assert_eq!(cpu_write(&mut monitor, layout.vfp_owner.start().0, &VfpOwner::UNOWNED.to_le_bytes(), 3), Err(LifetimeFailure::MissingPermit));
     let (mut monitor, _) = fixture();
     assert_eq!(cpu_write(&mut monitor, layout.vfp_owner.start().0 - 4, &[0; 4], 0), Err(LifetimeFailure::ImmutableWrite));
+}
+
+fn owned_union_fixture() -> (LifetimeMonitor, Memory) {
+    let mut value = request();
+    value["context_catalogue"] = json!("owned_union");
+    fixture_for(config(value).unwrap())
+}
+
+fn owned_current_store(monitor: &mut LifetimeMonitor, kernel: usize, loaded: u32, selected: u32, before: u32) -> Result<(), LifetimeFailure> {
+    let layout = source_layouts()[kernel];
+    let pc = Guest([0x43d48, 0xd3d04][kernel]);
+    let mut registers = [0; 13];
+    registers[0] = layout.selected.start().0 + 0x4000_0000;
+    registers[1] = loaded;
+    monitor.prepare_current_store(CoreId(kernel), pc, Word(0xe500_1008), &registers, Word(before), Cpsr(0x93),
+        CurrentState { selected: Word(selected), context_depth: Word(0) })?;
+    monitor.observe_write(WriteAttempt::cpu(CoreId(kernel), pc, Guest(registers[0] - 8), layout.current.start(), &before.to_le_bytes(), u64::from(loaded)))
+}
+
+#[test]
+fn context_catalogue_is_closed_and_required() {
+    let mut missing = request();
+    missing.as_object_mut().unwrap().remove("context_catalogue");
+    assert!(serde_json::from_value::<LifetimeRequest>(missing).is_err());
+    for catalogue in [json!("unchecked"), json!({"owned_union": {"pc": 0x43d48}})] {
+        let mut value = request();
+        value["context_catalogue"] = catalogue;
+        assert!(serde_json::from_value::<LifetimeRequest>(value).is_err());
+    }
+}
+
+#[test]
+fn owned_union_current_stores_use_their_actual_domain_specific_register_form() {
+    for kernel in 0..2 {
+        let node = source_layouts()[kernel].nodes.start().0 + 0x4000_0000 + 56;
+        let (mut owned, _) = owned_union_fixture();
+        owned_current_store(&mut owned, kernel, node, node, 0).unwrap();
+        assert_eq!(owned.receipt().checked_context_writes, 1);
+        assert_eq!(owned.receipt().pending_stores, 0);
+        let (mut stock, _) = fixture();
+        assert_eq!(owned_current_store(&mut stock, kernel, node, node, 0), Err(LifetimeFailure::WrongWriter));
+        let (mut owned, _) = owned_union_fixture();
+        assert_eq!(current_store(&mut owned, kernel, node, node, 0), Err(LifetimeFailure::WrongWriter));
+        let (mut owned, _) = owned_union_fixture();
+        let mut registers = [0; 13];
+        registers[0] = 4;
+        registers[1] = node;
+        assert_eq!(owned.prepare_current_store(CoreId(kernel), Guest([0x43d48, 0xd3d04][kernel]), Word(0xe500_1008),
+            &registers, Word(0), Cpsr(0x93), CurrentState { selected: Word(node), context_depth: Word(0) }), Err(LifetimeFailure::WrongAddress));
+    }
+}
+
+#[test]
+fn owned_union_context_transitions_preserve_before_values_and_core_identity() {
+    for (kernel, transitions) in [
+        (0, [(0x43d2c, 0u32, 0u32), (0x43d84, 0, 1), (0x43db8, 1, 0)]),
+        (1, [(0xd3ce8, 0, 0), (0xd3d40, 0, 1), (0xd3d74, 1, 0)]),
+    ] {
+        let (mut monitor, _) = owned_union_fixture();
+        let layout = source_layouts()[kernel];
+        for (pc, before, after) in transitions {
+            let mut registers = [0; 13];
+            registers[3] = after;
+            registers[6] = layout.context.start().0 + 0x4000_0000;
+            monitor.prepare_store(CoreId(kernel), Guest(pc), Word(0xe586_3000), &registers, Word(before), Cpsr(0x93)).unwrap();
+            monitor.observe_write(WriteAttempt::cpu(CoreId(kernel), Guest(pc), Guest(registers[6]), layout.context.start(),
+                &before.to_le_bytes(), u64::from(after))).unwrap();
+        }
+        assert_eq!(monitor.receipt().checked_context_writes, 3);
+    }
+}
+
+#[test]
+fn owned_union_supersession_requires_the_actual_other_core_insert_writer() {
+    for kernel in 0..2 {
+        let other = 1 - kernel;
+        let node = |index: u32| source_layouts()[kernel].nodes.start().0 + 0x4000_0000 + 56 * index;
+        let (previous, loaded, selected) = (node(1), node(2), node(3));
+        let (mut monitor, _) = owned_union_fixture();
+        selected_write(&mut monitor, kernel, other, [0x43d0c, 0xd3cc8][other], loaded, selected).unwrap();
+        owned_current_store(&mut monitor, kernel, loaded, selected, previous).unwrap();
+        let (mut monitor, _) = owned_union_fixture();
+        selected_write(&mut monitor, kernel, other, MAKE_READY[other], loaded, selected).unwrap();
+        assert_eq!(owned_current_store(&mut monitor, kernel, loaded, selected, previous), Err(LifetimeFailure::InvalidContext));
+    }
+}
+
+#[test]
+fn owned_union_current_store_consumes_selected_cell_supersession() {
+    for kernel in 0..2 {
+        let other = 1 - kernel;
+        let node = |index: u32| source_layouts()[kernel].nodes.start().0 + 0x4000_0000 + 56 * index;
+        let (previous, loaded, selected) = (node(1), node(2), node(3));
+        let (mut monitor, _) = owned_union_fixture();
+        selected_write(&mut monitor, kernel, other, [0x43d0c, 0xd3cc8][other], loaded, selected).unwrap();
+        owned_current_store(&mut monitor, kernel, loaded, selected, previous).unwrap();
+        assert_eq!(owned_current_store(&mut monitor, kernel, loaded, selected, loaded), Err(LifetimeFailure::InvalidContext));
+    }
+}
+
+fn property_request(delta: u16) -> Value {
+    let mut value = request();
+    value["bank_variant"] = json!("modal75,menu-engine,render");
+    value["runtime"] = json!([INSTALL, INSTALL + 0x3dc80]);
+    value["property_delta_words"] = json!(delta);
+    let mut rows: Vec<_> = (0..210u32).map(|index| json!({"address": 0x0120_0000 + index * 4, "old": 0, "new": index + 1})).collect();
+    rows.extend((0..u32::from(delta)).map(|index| json!({"address": 0x0062_c120 + index * 4, "old": 0, "new": 0xe1a0_0000u32})));
+    value["publications"] = json!(rows);
+    value
+}
+
+#[test]
+fn synthetic_property_vectors_bind_exact_bounded_counts_and_complete_inverse() {
+    for delta in [1, 18, 3767] {
+        let (mut monitor, mut memory) = fixture_for(config(property_request(delta)).unwrap());
+        let encoded = serde_json::to_value(monitor.receipt()).unwrap();
+        assert_eq!(encoded["property_delta_words"], json!(delta));
+        entry(&mut monitor, 0, false).unwrap();
+        publish(&mut monitor, &mut memory, 0, false);
+        entry(&mut monitor, 1, true).unwrap();
+        publish(&mut monitor, &mut memory, 1, true);
+        monitor.verify_rollback(&memory, 0).unwrap();
+        monitor.end().unwrap();
+        assert_eq!(monitor.receipt().forward_writes, 210 + u64::from(delta));
+        assert_eq!(monitor.receipt().reverse_writes, 210 + u64::from(delta));
+    }
+}
+
+#[test]
+fn property_plan_rejects_wrong_variant_extent_delta_and_legacy_table_writes() {
+    for delta in [0, 3768] {
+        assert!(serde_json::from_value::<LifetimeRequest>(property_request(delta)).is_err());
+    }
+    for change in 0..6 {
+        let mut value = property_request(1);
+        match change {
+            0 => value["bank_variant"] = json!("standard"),
+            1 => value["runtime"] = json!([INSTALL, INSTALL + 0x2dcc0]),
+            2 => value["property_delta_words"] = json!(2),
+            3 => value["publications"][0]["address"] = json!(0x0061_eac4),
+            4 => value["publications"][210]["address"] = json!(0x0062_fbfc),
+            5 => value["publications"][210]["new"] = json!(0),
+            _ => unreachable!(),
+        }
+        assert!(matches!(config(value), Err(LifetimeFailure::InvalidRequest)));
+    }
 }

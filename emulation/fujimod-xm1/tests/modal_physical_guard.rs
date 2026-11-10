@@ -906,6 +906,7 @@ fn retired_monitor() -> LifetimeMonitor {
         "install": {"entry": {"pc": INSTALL, "word": words[0]}, "writer": {"pc": INSTALL + 4, "word": words[1]}},
         "rollback": {"entry": {"pc": INSTALL + 8, "word": words[2]}, "writer": {"pc": INSTALL + 12, "word": words[3]}},
         "publications": publications,
+        "context_catalogue": "stock",
         "retired": [[CODE as u32, CODE as u32 + 8]],
     })).unwrap();
     let config = request.into_config(vec![
@@ -1000,6 +1001,7 @@ fn reload_monitor() -> LifetimeMonitor {
         "install": {"entry": {"pc": INSTALL, "word": words[0]}, "writer": {"pc": INSTALL + 4, "word": words[1]}},
         "rollback": {"entry": {"pc": INSTALL + 8, "word": words[2]}, "writer": {"pc": INSTALL + 12, "word": words[3]}},
         "publications": publications,
+        "context_catalogue": "stock",
         "settings_writers": [[0x0062_4694, 0x0063_09c4]],
         "settings_reloads": [{"call": RELOAD_CALL, "return": RELOAD_RETURN, "copy_store": COPY_STORE, "target": [RELOAD_TARGET, 0x0096_cd8c]}],
     })).unwrap();

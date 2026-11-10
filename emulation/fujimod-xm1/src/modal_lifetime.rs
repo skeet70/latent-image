@@ -24,6 +24,23 @@ impl std::error::Error for LifetimeFailure {}
 
 type Result<T, E = LifetimeFailure> = std::result::Result<T, E>;
 
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ContextCatalogue { Stock, OwnedUnion }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(try_from = "u16")]
+pub struct PropertyDeltaWords(u16);
+impl TryFrom<u16> for PropertyDeltaWords {
+    type Error = LifetimeFailure;
+    fn try_from(value: u16) -> Result<Self> {
+        if value == 0 || value > 3767 { return Err(LifetimeFailure::InvalidRequest); }
+        Ok(Self(value))
+    }
+}
+
+/// The wire request requires `context_catalogue`: `stock` or `owned_union`.
+/// Property plans supply `property_delta_words`; ordinary plans leave it absent or null.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LifetimeRequest {
@@ -33,6 +50,8 @@ pub struct LifetimeRequest {
     install: ServiceRequest,
     rollback: ServiceRequest,
     publications: Vec<PublicationRequest>,
+    context_catalogue: ContextCatalogue,
+    property_delta_words: Option<PropertyDeltaWords>,
     #[serde(default)]
     bank_variant: Option<String>,
     #[serde(default)]
@@ -148,7 +167,7 @@ pub struct Word(pub u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CodeSite { pub pc: Guest, pub word: Word }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CodeSiteRole { Entry, PublicationStore, ContextStore(CoreId), CurrentStore(CoreId), VfpOwnerStore(CoreId) }
+pub enum CodeSiteRole { Entry, PublicationStore, ContextStore(CoreId), CurrentStore(CoreId), SelectedRelativeCurrentStore(CoreId), VfpOwnerStore(CoreId) }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SourceSite { pub instruction: CodeSite, pub role: CodeSiteRole }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -183,6 +202,8 @@ pub struct LifetimeConfig {
     settings_reloads: Vec<SettingsReload>,
     sites: Vec<CodeSite>,
     task33_stack_guard: Option<Task33StackGuard>,
+    context_catalogue: ContextCatalogue,
+    property_delta_words: Option<PropertyDeltaWords>,
 }
 
 fn extent(start: u32, end: u32) -> Result<PhysicalExtent> {
@@ -259,8 +280,20 @@ impl LifetimeRequest {
             None => GuardedVariant::ALL.iter().copied().find(|variant| variant.publications() == self.publications.len())
                 .ok_or(LifetimeFailure::InvalidRequest)?,
         };
+        let expected_publications = if let Some(delta) = self.property_delta_words {
+            let carrier = 0x0062_c120..0x0062_fbfc;
+            if !matches!(variant, GuardedVariant::Modal75MenuEngineRender) || runtime.bytes() != 0x3dc80
+                || self.publications.iter().filter(|row| carrier.contains(&row.address)).count() != usize::from(delta.0)
+                || self.publications.iter().any(|row| (0x0061_eac4..0x0061_eae8).contains(&row.address)
+                    || (0x0062_5064..0x0062_5088).contains(&row.address)) {
+                return Err(LifetimeFailure::InvalidRequest);
+            }
+            210 + usize::from(delta.0)
+        } else {
+            variant.publications()
+        };
         if resident.bytes() != 1024 || !contains(runtime, resident)
-            || variant.publications() != self.publications.len() || immutable_sources.is_empty()
+            || expected_publications != self.publications.len() || immutable_sources.is_empty()
             || runtime.bytes() as usize > MAX_RUNTIME_BYTES || readonly_bytes > MAX_RUNTIME_BYTES
             || self.readonly.len() > 64 {
             return Err(LifetimeFailure::InvalidRequest);
@@ -334,7 +367,7 @@ impl LifetimeRequest {
         let mut addresses: Vec<_> = publications.iter().map(|row| row.address).collect();
         addresses.sort();
         if addresses.windows(2).any(|pair| pair[0] == pair[1]) { return Err(LifetimeFailure::InvalidRequest); }
-        for spec in CONTEXT_SITES {
+        for spec in self.context_catalogue.sites() {
             let code_site = spec.site();
             if !immutable_sources.iter().any(|source| contains(*source, word_extent(code_site.pc).expect("fixed code site"))) {
                 return Err(LifetimeFailure::InvalidSource);
@@ -403,7 +436,7 @@ impl LifetimeRequest {
         let mut reload_sites: Vec<_> = settings_reloads.iter().flat_map(|reload| [reload.call, reload.resume]).collect();
         reload_sites.sort();
         if reload_sites.windows(2).any(|pair| pair[0] == pair[1]) { return Err(LifetimeFailure::InvalidRequest); }
-        Ok(LifetimeConfig { runtime, resident, readonly, sources: immutable_sources, install, rollback, publications, publication_addresses: addresses, watched: merged, retired, settings_writers, settings_reloads, sites, task33_stack_guard })
+        Ok(LifetimeConfig { runtime, resident, readonly, sources: immutable_sources, install, rollback, publications, publication_addresses: addresses, watched: merged, retired, settings_writers, settings_reloads, sites, task33_stack_guard, context_catalogue: self.context_catalogue, property_delta_words: self.property_delta_words })
     }
 }
 
@@ -416,9 +449,10 @@ impl LifetimeConfig {
         let instruction = self.sites[index];
         let role = if pc == self.install.entry.pc || pc == self.rollback.entry.pc {
             CodeSiteRole::Entry
-        } else if let Some(site) = CONTEXT_SITES.iter().find(|site| site.pc == pc.0) {
+        } else if let Some(site) = self.context_catalogue.sites().iter().find(|site| site.pc == pc.0) {
             match site.kind {
                 ContextKind::Current => CodeSiteRole::CurrentStore(CoreId(site.core)),
+                ContextKind::CurrentSelectedRelative => CodeSiteRole::SelectedRelativeCurrentStore(CoreId(site.core)),
                 ContextKind::VfpOwner => CodeSiteRole::VfpOwnerStore(CoreId(site.core)),
                 _ => CodeSiteRole::ContextStore(CoreId(site.core)),
             }
@@ -466,6 +500,8 @@ pub struct LifetimeReceipt {
     pub failure: Option<LifetimeFailure>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task33_stack_guard: Option<Task33StackGuardReceipt>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub property_delta_words: Option<PropertyDeltaWords>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -548,7 +584,7 @@ enum PermitKind { Forward, Reverse, Context, VfpOwner }
 #[derive(Clone, Copy)]
 struct StorePermit { pc: Guest, address: Guest, physical: Guest, before: Word, value: Word, kind: PermitKind }
 #[derive(Clone, Copy)]
-enum ContextKind { Increment, Decrement, Current, Clear, Set, Initialize, VfpOwner }
+enum ContextKind { Increment, Decrement, Current, CurrentSelectedRelative, NoSaveClear, Clear, Set, Initialize, VfpOwner }
 #[derive(Clone, Copy)]
 struct ContextSite { pc: u32, core: usize, kind: ContextKind }
 impl ContextSite {
@@ -557,18 +593,19 @@ impl ContextSite {
             ContextKind::Increment => 0xe582_0000,
             ContextKind::Decrement => 0xe582_3000,
             ContextKind::Current => 0xe582_1000,
-            ContextKind::Clear | ContextKind::Set => 0xe586_3000,
+            ContextKind::CurrentSelectedRelative => 0xe500_1008,
+            ContextKind::NoSaveClear | ContextKind::Clear | ContextKind::Set => 0xe586_3000,
             ContextKind::Initialize => 0xe583_2000,
             ContextKind::VfpOwner => 0xe583_5000,
         };
         CodeSite { pc: Guest(self.pc), word: Word(word) }
     }
 }
-const CONTEXT_SITES: [ContextSite; 16] = [
+const STOCK_CONTEXT_SITES: [ContextSite; 16] = [
     ContextSite { pc: 0x40240, core: 0, kind: ContextKind::Increment },
     ContextSite { pc: 0x4031c, core: 0, kind: ContextKind::Decrement },
     ContextSite { pc: 0x436b8, core: 0, kind: ContextKind::Current },
-    ContextSite { pc: 0x43690, core: 0, kind: ContextKind::Clear },
+    ContextSite { pc: 0x43690, core: 0, kind: ContextKind::NoSaveClear },
     ContextSite { pc: 0x436f0, core: 0, kind: ContextKind::Set },
     ContextSite { pc: 0x43720, core: 0, kind: ContextKind::Clear },
     ContextSite { pc: 0x43848, core: 0, kind: ContextKind::Initialize },
@@ -576,12 +613,41 @@ const CONTEXT_SITES: [ContextSite; 16] = [
     ContextSite { pc: 0xd0240, core: 1, kind: ContextKind::Increment },
     ContextSite { pc: 0xd031c, core: 1, kind: ContextKind::Decrement },
     ContextSite { pc: 0xd36b8, core: 1, kind: ContextKind::Current },
-    ContextSite { pc: 0xd3690, core: 1, kind: ContextKind::Clear },
+    ContextSite { pc: 0xd3690, core: 1, kind: ContextKind::NoSaveClear },
     ContextSite { pc: 0xd36f0, core: 1, kind: ContextKind::Set },
     ContextSite { pc: 0xd3720, core: 1, kind: ContextKind::Clear },
     ContextSite { pc: 0xd3848, core: 1, kind: ContextKind::Initialize },
     ContextSite { pc: 0xd2440, core: 1, kind: ContextKind::VfpOwner },
 ];
+const OWNED_UNION_CONTEXT_SITES: [ContextSite; 16] = [
+    ContextSite { pc: 0x40240, core: 0, kind: ContextKind::Increment },
+    ContextSite { pc: 0x4031c, core: 0, kind: ContextKind::Decrement },
+    ContextSite { pc: 0x43d48, core: 0, kind: ContextKind::CurrentSelectedRelative },
+    ContextSite { pc: 0x43d2c, core: 0, kind: ContextKind::NoSaveClear },
+    ContextSite { pc: 0x43d84, core: 0, kind: ContextKind::Set },
+    ContextSite { pc: 0x43db8, core: 0, kind: ContextKind::Clear },
+    ContextSite { pc: 0x43848, core: 0, kind: ContextKind::Initialize },
+    ContextSite { pc: 0x42440, core: 0, kind: ContextKind::VfpOwner },
+    ContextSite { pc: 0xd0240, core: 1, kind: ContextKind::Increment },
+    ContextSite { pc: 0xd031c, core: 1, kind: ContextKind::Decrement },
+    ContextSite { pc: 0xd3d04, core: 1, kind: ContextKind::CurrentSelectedRelative },
+    ContextSite { pc: 0xd3ce8, core: 1, kind: ContextKind::NoSaveClear },
+    ContextSite { pc: 0xd3d40, core: 1, kind: ContextKind::Set },
+    ContextSite { pc: 0xd3d74, core: 1, kind: ContextKind::Clear },
+    ContextSite { pc: 0xd3848, core: 1, kind: ContextKind::Initialize },
+    ContextSite { pc: 0xd2440, core: 1, kind: ContextKind::VfpOwner },
+];
+impl ContextCatalogue {
+    fn sites(self) -> &'static [ContextSite; 16] {
+        match self { Self::Stock => &STOCK_CONTEXT_SITES, Self::OwnedUnion => &OWNED_UNION_CONTEXT_SITES }
+    }
+    fn selected_store(self, core: CoreId) -> Guest {
+        match self {
+            Self::Stock => [Guest(0x43d08), Guest(0xd3cc4)][core.0],
+            Self::OwnedUnion => [Guest(0x43d0c), Guest(0xd3cc8)][core.0],
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 pub struct CurrentState { pub selected: Word, pub context_depth: Word }
@@ -591,8 +657,6 @@ pub struct VfpOwnerState { pub before: VfpOwner, pub current: TaskId }
 #[derive(Clone, Copy)]
 enum StoreState { Plain, Current(CurrentState), VfpOwner(VfpOwnerState) }
 
-/// Make-ready's store of a higher-priority node into a domain's selected cell, indexed by the writing core.
-const MAKE_READY_SELECTED_STORES: [Guest; 2] = [Guest(0x43d08), Guest(0xd3cc4)];
 /// Each replacement has strictly higher priority; a kernel has 16 ready-queue levels, plus null.
 const SUPERSEDED_LIMIT: usize = 17;
 /// Values a kernel's selected cell held before the other core's make-ready replaced them, since that
@@ -645,11 +709,13 @@ impl LifetimeMonitor {
         }
         let publication_count = config.publications.len();
         let task33_stack_guard = config.task33_stack_guard.as_ref().map(|guard| guard.receipt);
+        let property_delta_words = config.property_delta_words;
         Ok(Self { config, settings, pending: [None; 2], reloads: [None; 2], superseded: [Superseded::EMPTY; 2], receipt: LifetimeReceipt {
             phase: LifetimePhase::Prepared, publication_count, forward_writes: 0, reverse_writes: 0,
             pending_stores: 0, install_core: None, rollback_core: None, checked_resource_writes: 0,
             checked_identity_writes: 0, checked_scheduler_writes: 0, checked_context_writes: 0, checked_vfp_owner_writes: 0,
             audited_writes: 0, admitted_settings_writes: 0, admitted_reload_writes: 0, failure: None, task33_stack_guard,
+            property_delta_words,
         } })
     }
     pub fn config(&self) -> &LifetimeConfig { &self.config }
@@ -690,7 +756,7 @@ impl LifetimeMonitor {
     }
     pub fn prepare_current_store(&mut self, core: CoreId, pc: Guest, word: Word, registers: &[u32; 13], before: Word, cpsr: Cpsr, current: CurrentState) -> Result<()> {
         self.healthy()?;
-        if !CONTEXT_SITES.iter().any(|spec| spec.pc == pc.0 && matches!(spec.kind, ContextKind::Current)) {
+        if !self.config.context_catalogue.sites().iter().any(|spec| spec.pc == pc.0 && matches!(spec.kind, ContextKind::Current | ContextKind::CurrentSelectedRelative)) {
             return Err(self.refuse(LifetimeFailure::WrongWriter));
         }
         let result = self.prepare(core, pc, word, registers, before, cpsr, StoreState::Current(current));
@@ -698,7 +764,7 @@ impl LifetimeMonitor {
     }
     pub fn prepare_vfp_owner_store(&mut self, core: CoreId, pc: Guest, word: Word, registers: &[u32; 13], before: Word, cpsr: Cpsr, state: VfpOwnerState) -> Result<()> {
         self.healthy()?;
-        if !CONTEXT_SITES.iter().any(|spec| spec.pc == pc.0 && matches!(spec.kind, ContextKind::VfpOwner)) {
+        if !self.config.context_catalogue.sites().iter().any(|spec| spec.pc == pc.0 && matches!(spec.kind, ContextKind::VfpOwner)) {
             return Err(self.refuse(LifetimeFailure::WrongWriter));
         }
         let result = self.prepare(core, pc, word, registers, before, cpsr, StoreState::VfpOwner(state));
@@ -723,7 +789,7 @@ impl LifetimeMonitor {
             if before != old { return Err(LifetimeFailure::WrongBefore); }
             StorePermit { pc, address: row.address, physical: row.address, before: old, value: new, kind }
         } else {
-            let spec = CONTEXT_SITES.iter().find(|spec| spec.pc == pc.0).ok_or(LifetimeFailure::WrongWriter)?;
+            let spec = self.config.context_catalogue.sites().iter().find(|spec| spec.pc == pc.0).ok_or(LifetimeFailure::WrongWriter)?;
             if spec.core != core.0 { return Err(LifetimeFailure::WrongCore); }
             if spec.site().word != word { return Err(LifetimeFailure::WrongWriter); }
             // Kernel stores run in SVC; the lazy-VFP store runs in the undefined-instruction handler. Both mask IRQ.
@@ -734,9 +800,10 @@ impl LifetimeMonitor {
             let layout = source_layouts()[core.0];
             let (address, value, target) = match spec.kind {
                 ContextKind::Current => (Guest(registers[2]), Word(registers[1]), layout.current),
+                ContextKind::CurrentSelectedRelative => (Guest(registers[0].checked_sub(8).ok_or(LifetimeFailure::WrongAddress)?), Word(registers[1]), layout.current),
                 ContextKind::Increment => (Guest(registers[2]), Word(registers[0]), layout.context),
                 ContextKind::Decrement => (Guest(registers[2]), Word(registers[3]), layout.context),
-                ContextKind::Clear | ContextKind::Set => (Guest(registers[6]), Word(registers[3]), layout.context),
+                ContextKind::NoSaveClear | ContextKind::Clear | ContextKind::Set => (Guest(registers[6]), Word(registers[3]), layout.context),
                 ContextKind::VfpOwner => (Guest(registers[3]), Word(registers[5]), layout.vfp_owner),
                 ContextKind::Initialize => return Err(LifetimeFailure::InvalidContext),
             };
@@ -748,17 +815,18 @@ impl LifetimeMonitor {
             let valid = match (spec.kind, state) {
                 (ContextKind::Increment, StoreState::Plain) => before.0.checked_add(1) == Some(value.0),
                 (ContextKind::Decrement, StoreState::Plain) => before.0.checked_sub(1) == Some(value.0),
-                (ContextKind::Current, StoreState::Current(current)) => current.context_depth == Word(0)
+                (ContextKind::Current | ContextKind::CurrentSelectedRelative, StoreState::Current(current)) => current.context_depth == Word(0)
                     && (current.selected == value || self.superseded[spec.core].contains(value))
                     && valid_node(value) && valid_node(before),
-                (ContextKind::Clear, StoreState::Plain) => value == Word(0) && before == Word(if spec.pc == 0x43690 || spec.pc == 0xd3690 { 0 } else { 1 }),
+                (ContextKind::NoSaveClear, StoreState::Plain) => value == Word(0) && before == Word(0),
+                (ContextKind::Clear, StoreState::Plain) => value == Word(0) && before == Word(1),
                 (ContextKind::Set, StoreState::Plain) => value == Word(1) && before == Word(0),
                 (ContextKind::VfpOwner, StoreState::VfpOwner(owner)) => before == Word(owner.before.word())
                     && value == Word(u32::from(owner.current.get())),
                 _ => false,
             };
             if !valid { return Err(LifetimeFailure::InvalidContext); }
-            if matches!(spec.kind, ContextKind::Current) { self.superseded[spec.core].clear(); }
+            if matches!(spec.kind, ContextKind::Current | ContextKind::CurrentSelectedRelative) { self.superseded[spec.core].clear(); }
             let kind = if matches!(spec.kind, ContextKind::VfpOwner) { PermitKind::VfpOwner } else { PermitKind::Context };
             StorePermit { pc, address, physical: target.start(), before, value, kind }
         };
@@ -856,7 +924,7 @@ impl LifetimeMonitor {
             let before = attempt.before.word().ok_or(LifetimeFailure::InvalidWrite)?;
             self.receipt.checked_scheduler_writes += 1;
             if attempt.core.0 == kernel { self.superseded[kernel].clear(); }
-            else if attempt.pc == MAKE_READY_SELECTED_STORES[attempt.core.0] { self.superseded[kernel].push(before)?; }
+            else if attempt.pc == self.config.context_catalogue.selected_store(attempt.core) { self.superseded[kernel].push(before)?; }
             return Ok(());
         }
         let next_publication = self.config.publication_addresses.partition_point(|address| address.0 + 4 <= target.start().0);
@@ -983,6 +1051,8 @@ mod tests {
             },
             publications,
             bank_variant: Some("modal75,menu-engine,render".into()),
+            context_catalogue: ContextCatalogue::Stock,
+            property_delta_words: None,
             retired: vec![],
             settings_writers: vec![],
             settings_reloads: vec![],

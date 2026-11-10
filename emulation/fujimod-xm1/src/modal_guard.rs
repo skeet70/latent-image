@@ -322,7 +322,11 @@ impl InstalledGuard {
             registers[index] = u32::try_from(session.board.read_register(core.0,
                 Register::Arm32(arm::Register::R(register)))?).map_err(|_| "modal store register exceeds32bits")?;
         }
-        let target = Guest(registers[usize::from(base)]);
+        let target = Guest(match site.role {
+            CodeSiteRole::SelectedRelativeCurrentStore(_) => registers[usize::from(base)]
+                .checked_sub(8).ok_or("modal selected-relative store target underflows")?,
+            _ => registers[usize::from(base)],
+        });
         let layout = source_layouts().get(core.0).copied().ok_or("modal lifecycle store core is invalid")?;
         let expected = match site.role {
             CodeSiteRole::PublicationStore => {
@@ -332,10 +336,10 @@ impl InstalledGuard {
                 target
             }
             CodeSiteRole::ContextStore(expected_core) | CodeSiteRole::CurrentStore(expected_core)
-            | CodeSiteRole::VfpOwnerStore(expected_core) => {
+            | CodeSiteRole::SelectedRelativeCurrentStore(expected_core) | CodeSiteRole::VfpOwnerStore(expected_core) => {
                 if core != expected_core { return Err("modal context writer runs on the wrong core".into()); }
                 let extent = match site.role {
-                    CodeSiteRole::CurrentStore(_) => layout.current,
+                    CodeSiteRole::CurrentStore(_) | CodeSiteRole::SelectedRelativeCurrentStore(_) => layout.current,
                     CodeSiteRole::VfpOwnerStore(_) => layout.vfp_owner,
                     _ => layout.context,
                 };
@@ -354,7 +358,7 @@ impl InstalledGuard {
         };
         let before = read_word(expected)?;
         match site.role {
-            CodeSiteRole::CurrentStore(_) => {
+            CodeSiteRole::CurrentStore(_) | CodeSiteRole::SelectedRelativeCurrentStore(_) => {
                 let selected = read_word(layout.selected.start())?;
                 let context_depth = read_word(layout.context.start())?;
                 self.lifetime.prepare_current_store(core, pc, word, &registers, before, cpsr,
