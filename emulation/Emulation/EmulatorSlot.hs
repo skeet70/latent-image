@@ -75,7 +75,7 @@ slotPolicyForClass execution = do
     _ -> ioError (userError (slotsName ++ " must be an integer 1.." ++ show maximumSlots))
   memoryText <- lookupEnv memoryName
   memory <- case memoryText of
-    Nothing -> pure (classMemoryMax resource)
+    Nothing -> pure (if execution == NativeVerification then MemoryMax "2G" else classMemoryMax resource)
     Just text -> case parseMemoryMax text of
       Just value | memoryMaxBytes value <= memoryMaxBytes (MemoryMax cap) -> pure value
       _ -> ioError (userError (memoryName ++ " must be positive and at most " ++ cap))

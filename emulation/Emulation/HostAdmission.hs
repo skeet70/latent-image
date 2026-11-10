@@ -56,7 +56,7 @@ classConcurrency NativeVerification = 8
 classMemoryMax :: ResourceClass -> MemoryMax
 classMemoryMax Build = MemoryMax "6G"
 classMemoryMax Emulator = MemoryMax "4G"
-classMemoryMax NativeVerification = MemoryMax "2G"
+classMemoryMax NativeVerification = MemoryMax "4G"
 
 newtype ScopeName = ScopeName String
   deriving (Eq)

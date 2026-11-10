@@ -69,6 +69,19 @@ run source builder = do
   removeFile replacement
   writeFile replacement "#!/bin/sh\necho replacement-ran\nexit 42\n"
   setFileMode replacement 0o700
+  largeNative <- spawn (change "XM1_NATIVE_MEMORY_MAX" "4G" native)
+  Admission largeNativeLines largeNativeSlot <- admission largeNative
+  largeNativeWaiter <- spawn native
+  largeNativeBlocked <- waiting largeNativeWaiter
+  release largeNative
+  Admission nativeDefaultLines nativeDefaultSlot <- admission largeNativeWaiter
+  release largeNativeWaiter
+  largeNativeCode <- finish largeNative
+  nativeDefaultCode <- finish largeNativeWaiter
+  largeNativeOk <- expect "explicit 4 GiB native scopes consume 4 GiB of the shared budget while native defaults remain 2 GiB"
+    (largeNativeSlot /= Nothing && "probe-memory-max 4294967296" `elem` largeNativeLines && largeNativeBlocked
+      && nativeDefaultSlot /= Nothing && "probe-memory-max 2147483648" `elem` nativeDefaultLines
+      && largeNativeCode == Just ExitSuccess && nativeDefaultCode == Just ExitSuccess)
   firstNative <- spawn native
   firstSeen <- admission firstNative
   secondNative <- spawn (change "XM1_NATIVE_MEMORY_MAX" "1G" native)
@@ -233,7 +246,7 @@ run source builder = do
   storageOk <- expect "insufficient disk reserve prevents admission"
     (lowStorageCode /= ExitSuccess && not ("probe-in-slot " `isInfixOf` lowStorageOutput))
   (capCode, capOutput, _) <- readCreateProcessWithExitCode
-    (proc source []) {env = Just (change "XM1_NATIVE_MEMORY_MAX" "4G" native)} ""
+    (proc source []) {env = Just (change "XM1_NATIVE_MEMORY_MAX" "8G" native)} ""
   capOk <- expect "native scopes above their class cap are refused"
     (capCode /= ExitSuccess && not ("probe-in-slot " `isInfixOf` capOutput))
   (sessionCode, _, _) <- readCreateProcessWithExitCode
@@ -251,7 +264,7 @@ run source builder = do
   _ <- finish afterStartup
   startupOk <- expect "failed scope startup propagates exit without leaking resource locks"
     (startupCode == ExitFailure 43 && admitted afterStartupSeen)
-  pure (and [fullOk, overlap, atomicOk, pinnedOk, exitsOk, buildOverlap, buildBudget, buildExit, smallOk, nativeLimit, nestedOk, nestedBuildOk, exitOk, crashOk, survivorOk, reusedManagedOk, legacyOk, reusedLegacyOk, invalidLegacyOk, storageOk, capOk, sessionOk, startupOk])
+  pure (and [fullOk, largeNativeOk, overlap, atomicOk, pinnedOk, exitsOk, buildOverlap, buildBudget, buildExit, smallOk, nativeLimit, nestedOk, nestedBuildOk, exitOk, crashOk, survivorOk, reusedManagedOk, legacyOk, reusedLegacyOk, invalidLegacyOk, storageOk, capOk, sessionOk, startupOk])
 
 change :: String -> String -> [(String, String)] -> [(String, String)]
 change key value environment = (key, value) : filter ((/= key) . fst) environment
