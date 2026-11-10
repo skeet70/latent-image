@@ -17,6 +17,7 @@ in {
     diffutils
     util-linux
     btrfs-progs
+    lsof
     gnumake
     pkg-config
     clang

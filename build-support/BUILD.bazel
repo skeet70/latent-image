@@ -80,6 +80,44 @@ haskell_binary(
     ],
 )
 
+haskell_binary(
+    name = "research-compaction",
+    srcs = ["ResearchCompaction.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-rtsopts"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:cryptohash-sha256",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//host:text",
+        "//host:unix",
+    ],
+)
+
+haskell_test(
+    name = "research-compaction-tests",
+    srcs = ["ResearchCompactionTests.hs"],
+    args = ["$(rootpath :research-compaction)"],
+    data = [":research-compaction"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
+    tags = ["local"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:cryptohash-sha256",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//host:unix",
+    ],
+)
+
 haskell_test(
     name = "storage-maintenance-tests",
     srcs = ["StorageMaintenanceTests.hs"],

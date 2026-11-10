@@ -55,6 +55,36 @@ devenv shell -- host-build test --jobs=2 --local_test_jobs=1 //emulation:native-
 
 Research output is compacted under the [evidence ledger rules](../docs/principles.md#evidence-ledger). A deletion plan names the current conclusions and failure classes preserved, the retained evidence and the exact redundant files to remove. Record path hashes and preservation checks under `private-data/scratch/reclaim/`, and recheck active runs, current baselines and unmerged work before applying it.
 
+### Research evidence compaction
+
+`//build-support:research-compaction` turns an explicitly reviewed research selection into a hash-bound plan. It does not discover disposable research, infer that an uncited file is obsolete, or authorize recurring deletion. Integrate the report and ledger changes that retire the selected evidence, check current baselines and unmerged consumers, and retain reproduction inputs and unresolved counterexamples before applying a plan.
+
+Selection schema 1 contains `roots` with canonical absolute `path` values and explicit relative `files`, plus absolute `protected` paths and `limitations`. Each file has `path`, `reason` and a semantic `basis`. Reasons are `superseded-success-diagnostic`, `reproducible-attempt-state` or `obsolete-reuse-cache`. Protected files bind identity and SHA-256; protected directories exclude their descendants from selection and bind directory identity, not recursive contents.
+
+```sh
+devenv shell -- host-build build --jobs=2 //build-support:research-compaction
+tool="$(realpath bazel-bin/build-support/research-compaction)"
+workspace="$(pwd -P)"
+selection="$workspace/private-data/scratch/reclaim/reviewed-selection.json"
+plan="$workspace/private-data/scratch/reclaim/reviewed-plan.json"
+"$tool" plan --workspace "$workspace" --selection "$selection" --out "$plan" +RTS -M2G -RTS
+sha256sum "$plan"
+# Review the exact plan and record its digest before apply.
+"$tool" apply --plan "$plan" --sha256 APPROVED_SHA256 +RTS -M2G -RTS
+```
+
+Only named subtrees of the workspace's `private-data/scratch/` are eligible. The scratch root, reclaim records, analysis, firmware, provenance, sessions, read plans, Git metadata and `.dat`/`.nand`/`.img`/`.dump` files are refused. Candidates must be regular single-link files owned by the workspace owner. Planning hashes the selected files and binds ancestor identities; apply rechecks those identities, metadata and contents and skips changed, missing or in-use files. New files are outside the plan.
+
+Apply inspects processes before and after content validation. Ordinary invocations inspect the data owner's processes; inaccessible live processes or inspector warnings refuse deletion. Mapped files are protected by inode across reported device aliases, including deleted mappings. Cross-filesystem inode collisions can retain extra candidates. Numeric descriptors require exact device/inode matches; a descriptor that vanishes during inspection is reconciled through its validated procfs path.
+
+A privileged invocation requires an explicitly reviewed immutable `/nix/store/.../bin/lsof` supplied with `--inspector`. Run the already-built executable under sudo, never Bazel. It inspects all visible userspace processes, then permanently drops supplementary groups, GID and UID to the workspace owner before creating the audit or unlinking files. Noncandidate FUSE mounts may be excluded from inspector stat calls only after comparing their device identities with every candidate device; exemptions are printed and incomplete process records still refuse deletion. Privileged inspection is a separately approved operation, not a timer policy.
+
+Selected cohorts and their ancestor namespace must remain retired and stable. Ancestor checks and unlink are not atomic, and two process snapshots do not protect against a future consumer. Other work may continue outside those cohorts; this command is not safe against concurrent replacement of selected paths.
+
+Apply creates an exclusive `PLAN.audit.jsonl` with start, removal, skip and completion events. An exception after audit creation records interruption; inspect a partial audit before preparing another reviewed plan. A completed audit verifies the protected bindings, not a recursive snapshot of protected directories. Recheck filesystem availability separately: apparent selected bytes are not a physical recovery promise on reflinked filesystems.
+
+### Compiler-output maintenance
+
 Build cleanup is restricted to positively identified compiler outputs under Cargo's guards; open or mapped candidates are retained. Source, application databases, generated imports, reports and input artifacts are never deletion targets, even inside a build directory.
 
 `//build-support:storage-maintenance` provides explicit Cargo cache inventory, plan and apply operations. Inventory reads metadata, Cargo provenance and compiler headers without hashing application contents. Planning queues on Cargo's BSD `flock` guards and hashes only positively identified compiler artifacts and their success fingerprints. Apply queues on the guards, rechecks ownership, identities and approved contents, and skips missing, changed, open or mapped candidates. New files are outside the plan's deletion scope. Source trees and Git metadata, databases, imports, reports, firmware inputs, top-level executables, examples, unknown files and hardlinked files are retained. Test executables require an exact unit-hash match to a validated Cargo test fingerprint and an ELF header; an executable-looking filename alone is insufficient. Only success fingerprints associated with an artifact actually selected for removal are invalidated.
