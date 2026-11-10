@@ -27,7 +27,7 @@ import Data.Maybe (isNothing)
 import GHC.Clock (getMonotonicTime)
 import FujiAF.StorageBudget (StorageFailure, checkStorageBudget)
 import Numeric (showFFloat)
-import System.Directory (createDirectoryIfMissing, findExecutable, getHomeDirectory, removeFile, renameFile)
+import System.Directory (createDirectoryIfMissing, doesFileExist, findExecutable, getHomeDirectory, listDirectory, removeFile, renameFile)
 import System.Environment (getExecutablePath, lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (..), exitWith)
 import System.FilePath (isAbsolute, splitDirectories, takeDirectory, takeFileName, (</>))
@@ -97,8 +97,11 @@ reserveMemoryWithLegacy legacy memory scope = do
           Left _ -> closeFd gate >> threadDelay 100_000 >> attempt
           Right () -> do
             protected <- protectedLegacyTokens directory
-            when (not (isNothing legacy) && not (null protected)) $
-              ioError (userError "an active legacy reservation already exists")
+            case legacy of
+              Nothing -> pure ()
+              Just reservation -> do
+                recorded <- doesFileExist (legacyReservationPath directory reservation)
+                when recorded (ioError (userError "this legacy invocation already has a persistent reservation"))
             fd <- openFd (directory </> "memory.lock") ReadWrite defaultFileFlags {creat = Just 0o600}
             setFdOption fd CloseOnExec False
             chosen <- collect fd tokens (filter (`notElem` protected) [0 .. 79]) []
@@ -189,6 +192,9 @@ readScopeRecord record = do
     `catchIOError` \problem -> if isDoesNotExistError problem then pure Nothing else ioError problem
   case previous of
     Nothing -> pure Nothing
+    Just text | ["expired-build-scope", unit] <- lines text
+      , "xm1-host-build-" `isPrefixOf` unit
+      , Just _ <- parseScopeName unit -> pure Nothing
     Just text -> case parseScopeIdentity (lines text) of
       Just identity -> pure (Just identity)
       Nothing -> ioError (userError ("scope record lacks original cgroup identity; migrate before admission: " ++ record))
@@ -326,6 +332,7 @@ checkConfiguredAccounting = do
 -- scope child.
 hostBuildMain :: [String] -> IO ()
 hostBuildMain arguments = case arguments of
+  ["--migrate-build-records"] -> migrateBuildRecords
   ["--reserve-legacy", name] | Just scope <- parseScopeName name -> reserveLegacy scope
   "--scope-child" : report : release : unit : record : program : rest
     | Just reportFd <- readMaybe report, Just releaseFd <- readMaybe release ->
@@ -335,7 +342,7 @@ hostBuildMain arguments = case arguments of
         admit (Just base) command rest
   command : rest | not ("-" `isPrefixOf` command) -> admit Nothing command rest
   _ -> do
-    hPutStrLn stderr "usage: host-build [--output_base=PATH] COMMAND [ARGUMENT...]  (a Bazel command such as build, test or run)"
+    hPutStrLn stderr "usage: host-build [--output_base=PATH] COMMAND [ARGUMENT...]\n       host-build --reserve-legacy UNIT.scope\n       host-build --migrate-build-records"
     exitWith (ExitFailure 2)
 
 admit :: Maybe FilePath -> String -> [String] -> IO ()
@@ -457,27 +464,40 @@ legacyReservationActive (LegacyReservation owner@(ScopeIdentity scope expected _
 
 protectedLegacyTokens :: FilePath -> IO [FileOffset]
 protectedLegacyTokens directory = do
-  contents <- (Just <$> (readFile (directory </> "legacy-reservation") >>= \text -> evaluate (length text) >> pure text))
-    `catchIOError` \problem -> if isDoesNotExistError problem then pure Nothing else ioError problem
-  case contents of
-    Nothing -> pure []
-    Just text -> case lines text of
-      [name, rawIdentity, group, rawInode, rawIndices]
-        | Just owner <- parseScopeIdentity [name, rawIdentity, group, rawInode]
-        , Just indices <- readMaybe rawIndices
-        , length indices == 16 && length (nub indices) == 16 && all (\index -> index >= 0 && index < 80) indices -> do
-            active <- legacyReservationActive (LegacyReservation owner)
-            when active $ hPutStrLn stderr ("host admission: legacy memory owner=" ++ name ++ " invocation=" ++ rawIdentity ++ " 4GiB")
-            pure (if active then indices else [])
-      _ -> ioError (userError "invalid persistent legacy memory reservation")
+  let recordsDirectory = directory </> "legacy-reservations"
+  names <- listDirectory recordsDirectory
+    `catchIOError` \problem -> if isDoesNotExistError problem then pure [] else ioError problem
+  protected <- concat <$> mapM (readReservation recordsDirectory) names
+  unless (length protected == length (nub protected)) $
+    ioError (userError "persistent legacy memory reservations overlap")
+  pure protected
+  where
+    readReservation recordRoot name = do
+      text <- readFile (recordRoot </> name)
+      _ <- evaluate (length text)
+      case lines text of
+        [unit, rawIdentity, group, rawInode, rawIndices]
+          | name == rawIdentity
+          , Just owner <- parseScopeIdentity [unit, rawIdentity, group, rawInode]
+          , Just indices <- readMaybe rawIndices
+          , length indices == 16 && length (nub indices) == 16 && all (\index -> index >= 0 && index < 80) indices -> do
+              active <- legacyReservationActive (LegacyReservation owner)
+              when active $ hPutStrLn stderr ("host admission: legacy memory owner=" ++ unit ++ " invocation=" ++ rawIdentity ++ " 4GiB")
+              pure (if active then indices else [])
+        _ -> ioError (userError ("invalid persistent legacy memory reservation: " ++ name))
+
+legacyReservationPath :: FilePath -> LegacyReservation -> FilePath
+legacyReservationPath directory (LegacyReservation (ScopeIdentity _ (InvocationId invocation) _)) =
+  directory </> "legacy-reservations" </> invocation
 
 writeLegacyReservation :: FilePath -> LegacyReservation -> [FileOffset] -> IO ()
 writeLegacyReservation directory reservation@(LegacyReservation owner) indices = do
   active <- legacyReservationActive reservation
   unless active (ioError (userError "legacy scope ended before reservation was recorded"))
   pid <- getProcessID
-  let destination = directory </> "legacy-reservation"
-      temporary = destination ++ "." ++ show pid
+  let destination = legacyReservationPath directory reservation
+      temporary = directory </> ("legacy-record-" ++ takeFileName destination ++ "." ++ show pid)
+  createDirectoryIfMissing True (takeDirectory destination)
   writeFile temporary (unlines (scopeIdentityLines owner ++ [show indices]))
   renameFile temporary destination
 
@@ -650,6 +670,62 @@ outputBaseText (OutputBaseObserved base) =
 buildScopeRecord :: FilePath -> BuildLane -> FilePath
 buildScopeRecord directory (BuildLane lane) =
   directory </> (if lane == 0 then "scope" else "scope-" ++ show lane)
+
+-- Name-only build records belong to systemd-run's default app.slice.
+migrateBuildRecords :: IO ()
+migrateBuildRecords = do
+  refuseNested
+  directory <- (</> ".cache" </> "xm1-host-build") <$> getHomeDirectory
+  createDirectoryIfMissing True directory
+  bracket (openFd (directory </> "build.lock") ReadWrite defaultFileFlags {creat = Just 0o600}) closeFd $ \fd -> do
+    setFdOption fd CloseOnExec True
+    forM_ [0 .. classConcurrency Build - 1] $ \lane -> do
+      locked <- try (setLock fd (WriteLock, AbsoluteSeek, fromIntegral lane, 1)) :: IO (Either IOException ())
+      case locked of
+        Right () -> pure ()
+        Left _ -> ioError (userError ("build lane " ++ show lane ++ " is held; finish existing builds before metadata migration"))
+    (_, out, _) <- readProcessWithExitCode "systemctl" ["--user", "show", "app.slice", "-p", "ControlGroup", "--value"] ""
+    let slice = trim out
+    unless (validCgroupPath "app.slice" slice) $
+      ioError (userError "cannot establish the legacy build scope slice")
+    forM_ [0 .. classConcurrency Build - 1] $ \lane -> do
+      let record = buildScopeRecord directory (BuildLane lane)
+      exists <- doesFileExist record
+      when exists $ do
+        text <- readFile record
+        _ <- evaluate (length text)
+        case lines text of
+          [unit] | "xm1-host-build-" `isPrefixOf` unit, Just scope <- parseScopeName unit ->
+            migrateExpiredBuildRecord record slice scope
+          _ -> void (readScopeRecord record)
+
+migrateExpiredBuildRecord :: FilePath -> FilePath -> ScopeName -> IO ()
+migrateExpiredBuildRecord record slice (ScopeName unit) = do
+  (code, out, err) <- readProcessWithExitCode "systemctl"
+    ["--user", "show", unit, "-p", "LoadState", "-p", "ActiveState", "-p", "ControlGroup"] ""
+  let properties = [(key, drop 1 value) | line <- lines out, let (key, value) = break (== '=') line]
+      group = slice </> unit
+      observedGroup = maybe "" id (lookup "ControlGroup" properties)
+  unless (lookup "LoadState" properties `elem` map Just ["loaded", "not-found"]
+      && lookup "ActiveState" properties `elem` map Just ["inactive", "failed"]
+      && (null observedGroup || observedGroup == group)) $
+    ioError (userError ("legacy build scope has not completed: " ++ unit ++ " " ++ show (code, out, err)))
+  empty <- bracket
+    ((Just <$> openFd ("/sys/fs/cgroup" ++ group) ReadOnly defaultFileFlags)
+      `catchIOError` \problem -> if isDoesNotExistError problem then pure Nothing else ioError problem)
+    (mapM_ closeFd)
+    (maybe (pure True) emptyCgroup)
+  unless empty (ioError (userError ("legacy build cgroup remains populated: " ++ group)))
+  pid <- getProcessID
+  let archive = record ++ ".legacy-" ++ show pid
+      temporary = record ++ ".migrated-" ++ show pid
+  archived <- doesFileExist archive
+  when archived (ioError (userError ("migration archive already exists: " ++ archive)))
+  writeFile temporary (unlines ["expired-build-scope", unit])
+  renameFile record archive
+  renameFile temporary record
+  hPutStrLn stderr ("host-build migration: verified empty " ++ group ++ "; archived=" ++ archive)
+  hFlush stderr
 
 stopPreviousScope :: FilePath -> BuildLane -> IO ()
 stopPreviousScope directory lane = do

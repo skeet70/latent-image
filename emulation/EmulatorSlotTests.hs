@@ -242,27 +242,44 @@ run source builder wrapper = do
   legacySeen <- admission legacy
   originalLegacyInvocation <- invocationOf environment legacyUnit
   (_, _, Just ready, reservation) <- createProcess (proc builder ["--reserve-legacy", legacyUnit]) {env = Just environment, std_err = CreatePipe}
-  reserved <- timeout 10_000_000 (hGetLine ready)
+  reserved <- awaitLegacyReady ready
   getPid reservation >>= mapM_ (signalProcess sigKILL)
   reservationCode <- timeout 10_000_000 (waitForProcess reservation)
+  let secondLegacyUnit = "xm1-test-legacy-second-" ++ show pid ++ ".scope"
+  secondLegacy <- rawScope secondLegacyUnit
+  secondLegacySeen <- admission secondLegacy
+  (_, _, Just secondReady, secondReservation) <- createProcess
+    (proc builder ["--reserve-legacy", secondLegacyUnit]) {env = Just environment, std_err = CreatePipe}
+  secondReserved <- awaitLegacyReady secondReady
+  getPid secondReservation >>= mapM_ (signalProcess sigKILL)
+  secondReservationCode <- timeout 10_000_000 (waitForProcess secondReservation)
   legacyBuildA <- build
   legacyBuildSeenA <- admission legacyBuildA
   legacyBuildB <- build
   legacyBuildSeenB <- admission legacyBuildB
-  legacyNativeA <- spawn native
-  legacyNativeSeenA <- admission legacyNativeA
-  legacyNativeB <- spawn native
-  legacyNativeSeenB <- admission legacyNativeB
   legacyWaiter <- spawn (failedState legacyUnit native)
   legacyBlocked <- waiting legacyWaiter
   legacyAlive <- case observedPid "probe-pid " legacySeen of
     Nothing -> pure False
     Just legacyOwner -> either (const False) (const True) <$> (try (signalProcess nullSignal legacyOwner) :: IO (Either IOException ()))
+  secondLegacyAlive <- processAlive secondLegacySeen
   release legacy
   _ <- finish legacy
   legacyResumed <- admission legacyWaiter
-  legacyOk <- expect "legacy memory remains reserved after helper death without stopping the healthy scope"
-    (admitted legacySeen && maybe False (isInfixOf "legacy reservation ready:") reserved && all admitted [legacyBuildSeenA, legacyBuildSeenB, legacyNativeSeenA, legacyNativeSeenB] && legacyBlocked && legacyAlive && reservationCode /= Nothing && reservationCode /= Just ExitSuccess && admitted legacyResumed)
+  legacyNativeA <- spawn native
+  legacyNativeSeenA <- admission legacyNativeA
+  legacyNativeB <- spawn (failedState secondLegacyUnit native)
+  secondLegacyBlocked <- waiting legacyNativeB
+  secondLegacyStillAlive <- processAlive secondLegacySeen
+  release secondLegacy
+  _ <- finish secondLegacy
+  legacyNativeSeenB <- admission legacyNativeB
+  legacyOk <- expect "two legacy scopes retain separate 4 GiB reservations after helper death and release independently without killing either scope"
+    (admitted legacySeen && admitted secondLegacySeen && reserved && secondReserved
+      && all admitted [legacyBuildSeenA, legacyBuildSeenB, legacyNativeSeenA, legacyNativeSeenB]
+      && legacyBlocked && secondLegacyBlocked && legacyAlive && secondLegacyAlive && secondLegacyStillAlive
+      && reservationCode /= Nothing && reservationCode /= Just ExitSuccess
+      && secondReservationCode /= Nothing && secondReservationCode /= Just ExitSuccess && admitted legacyResumed)
   mapM_ release [legacyBuildA, legacyBuildB, legacyNativeA, legacyNativeB, legacyWaiter]
   mapM_ finish [legacyBuildA, legacyBuildB, legacyNativeA, legacyNativeB, legacyWaiter]
   waitUnitEnded environment 50 legacyUnit
@@ -308,7 +325,48 @@ run source builder wrapper = do
   _ <- finish afterStartup
   startupOk <- expect "failed scope startup propagates exit without leaking resource locks"
     (startupCode == ExitFailure 43 && admitted afterStartupSeen)
-  pure (and [nativeCliOk, fullOk, largeNativeOk, overlap, atomicOk, pinnedOk, exitsOk, buildOverlap, buildBudget, buildExit, smallOk, nativeLimit, nestedOk, nestedBuildOk, exitOk, crashOk, survivorOk, reusedManagedOk, legacyOk, reusedLegacyOk, invalidLegacyOk, storageOk, capOk, sessionOk, startupOk])
+  heldMigration <- build
+  heldMigrationSeen <- admission heldMigration
+  (heldMigrationCode, _, _) <- readCreateProcessWithExitCode
+    (proc builder ["--migrate-build-records"]) {env = Just environment} ""
+  heldMigrationStatus <- case heldMigration of Probe _ _ process -> getProcessExitCode process
+  release heldMigration
+  _ <- finish heldMigration
+  migrationLockOk <- expect "legacy build metadata migration refuses a held build lane without disturbing its owner"
+    (admitted heldMigrationSeen && heldMigrationCode /= ExitSuccess && heldMigrationStatus == Nothing)
+  let migrationUnit = "xm1-host-build-fixture-" ++ show pid ++ ".scope"
+      oldRecord = home </> ".cache" </> "xm1-host-build" </> "scope"
+  migrationScope <- rawScope migrationUnit
+  migrationSeen <- admission migrationScope
+  writeFile oldRecord (migrationUnit ++ "\n")
+  (liveMigrationCode, _, _) <- readCreateProcessWithExitCode
+    (proc builder ["--migrate-build-records"]) {env = Just environment} ""
+  migrationAlive <- processAlive migrationSeen
+  release migrationScope
+  _ <- finish migrationScope
+  waitUnitEnded environment 50 migrationUnit
+  (completedMigrationCode, _, _) <- readCreateProcessWithExitCode
+    (proc builder ["--migrate-build-records"]) {env = Just environment} ""
+  (repeatedMigrationCode, _, _) <- readCreateProcessWithExitCode
+    (proc builder ["--migrate-build-records"]) {env = Just environment} ""
+  reusedMigration <- rawScope migrationUnit
+  reusedMigrationSeen <- admission reusedMigration
+  afterMigration <- build
+  afterMigrationSeen <- admission afterMigration
+  reusedMigrationAlive <- processAlive reusedMigrationSeen
+  release afterMigration
+  afterMigrationCode <- finish afterMigration
+  release reusedMigration
+  _ <- finish reusedMigration
+  migrationOk <- expect "verified empty legacy metadata migrates idempotently and never signals a reused unit"
+    (admitted migrationSeen && liveMigrationCode /= ExitSuccess && migrationAlive
+      && completedMigrationCode == ExitSuccess && repeatedMigrationCode == ExitSuccess
+      && admitted afterMigrationSeen && afterMigrationCode == Just ExitSuccess && reusedMigrationAlive)
+  writeFile oldRecord "unknown-format\n"
+  (unknownMigrationCode, _, _) <- readCreateProcessWithExitCode
+    (proc builder ["--migrate-build-records"]) {env = Just environment} ""
+  unknownMigrationOk <- expect "unknown legacy metadata is refused rather than cleared" (unknownMigrationCode /= ExitSuccess)
+  pure (and [nativeCliOk, fullOk, largeNativeOk, overlap, atomicOk, pinnedOk, exitsOk, buildOverlap, buildBudget, buildExit, smallOk, nativeLimit, nestedOk, nestedBuildOk, exitOk, crashOk, survivorOk, reusedManagedOk, legacyOk, reusedLegacyOk, invalidLegacyOk, storageOk, capOk, sessionOk, startupOk, migrationLockOk, migrationOk, unknownMigrationOk])
 
 change :: String -> String -> [(String, String)] -> [(String, String)]
 change key value environment = (key, value) : filter ((/= key) . fst) environment
@@ -330,6 +388,16 @@ processAlive :: Admission -> IO Bool
 processAlive seen = case observedPid "probe-pid " seen of
   Nothing -> pure False
   Just owner -> either (const False) (const True) <$> (try (signalProcess nullSignal owner) :: IO (Either IOException ()))
+
+awaitLegacyReady :: Handle -> IO Bool
+awaitLegacyReady stream = fromMaybe False <$> timeout 10_000_000 go
+  where
+    go = do
+      line <- try (hGetLine stream) :: IO (Either IOException String)
+      case line of
+        Left _ -> pure False
+        Right text | "legacy reservation ready:" `isInfixOf` text -> pure True
+        Right _ -> go
 
 invocationOf :: [(String, String)] -> String -> IO ObservedInvocation
 invocationOf environment unit = do
