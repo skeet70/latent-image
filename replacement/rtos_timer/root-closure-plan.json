@@ -1,13 +1,17 @@
 {
   "schema": 1,
-  "status": "source-and-host-tested; composed-file-and-native-admission-not-granted",
+  "status": "source-host-file-and-bounded-native-qualified; natural-root-and-physical-gates-open",
   "body": "X-M1",
   "firmware": "1.50",
   "camera_io": false,
   "domain_b_app": "excluded: no evidenced core-1 caller",
   "command_reference": "replacement/rtos.md: Composed root and timer package; Bounded native scopes and admission plan",
   "source_baseline": "f0069440",
+  "source_owner_base": "bb089175",
+  "source_commit": "dc843c23",
+  "source_commit_chain": ["1d2e0e02", "caf5a2ea", "56cd2f3b", "ab7c2023", "2f95d445", "07233783", "034ec8d1", "f0069440", "18671c83", "f9a2bd6d", "180298c8", "dc843c23"],
   "source_build": {
+    "scope": "host closure before the subsequently exercised guard and workspace ownership repairs",
     "invocation": "626c3892-04c2-4dac-abea-1e3394bd8900",
     "verdict": "passed",
     "jobs": 4,
@@ -37,12 +41,21 @@
     "host_cases": {"timer": 17, "cyclic_and_app": 37},
     "argument_resolution_counterexample": "Invocation 80a6e123-952e-4ecc-bd01-07050423b726 failed before building because singular host-test labels were supplied; the declared plural labels passed in the final invocation."
   },
+  "repair_builds": {
+    "j5_guard": {"invocation": "368ac920-b6a4-4d07-b0bb-0415ce254fdd", "root_package_test": "fresh pass", "startup_artifact_test": "cached pass", "stager": "built", "memory_peak_bytes": 4006617088},
+    "app_workspace": {"invocation": "61a193b2-e057-49a3-8fd1-0df9ce9a1b6b", "join_admission_test": "fresh pass", "join_oracle": "built", "memory_peak_bytes": 1864097792},
+    "jobs": 4,
+    "local_test_jobs": 2,
+    "memory_max": "6G",
+    "sdk_rebuilt": false
+  },
   "built_executable_sha256": {
     "path_base": "/var/home/murph/Code/latent-image-worktrees/TimerAppSystemJoin/bazel-bin",
-    "replacement/rtos_timer/stage-root-platform": "c3c03a7f38e725fbe379ffba871f1864f3c3ff280b970f8175e9311110596064",
+    "replacement/rtos_timer/stage-root-platform": "594b1d64df33208f76eec8729613fe4087a5ea553c2ac5021c68fb2ed975801b",
     "replacement/rtos_timer/oracle/timer-oracle": "697c2ff2a24e5662d53f6a2c030d80d78d4886df04e04b933b03b7732bfdf089",
     "replacement/rtos_cyclic/oracle/cyclic-oracle": "c6adb3bfcfaaa1ef4ab65cfbb65349156f1614e8ee45904d2b20785064b1efa1",
-    "replacement/rtos_cyclic/oracle/join-oracle": "4720fab4bc42c85b29b1048230551ad659d12f0f2d9bb14d08746f2083f83c61"
+    "replacement/rtos_cyclic/oracle/join-oracle": "0ddb180fdb9a3c9df41ed0972576a6d62eaaf25cc99c63f5ca8748f0815090d5",
+    "pre_workspace_fix_join_oracle": "4720fab4bc42c85b29b1048230551ad659d12f0f2d9bb14d08746f2083f83c61"
   },
   "composition": {
     "target": "//replacement/rtos_timer:stage-root-platform",
@@ -61,7 +74,7 @@
     "outputs": ["composed.DAT", "record1.bin", "record2.bin", "loader-a.bin", "loader-b.bin", "image4.bin", "image5.bin", "composed-contract.json", "startup-loader-a.bin", "startup-loader-b.bin", "effective-carrier-a.bin", "effective-carrier-b.bin"],
     "contract_identities": ["startup DAT", "candidate DAT", "both startup loader references", "final image4", "platform contract"],
     "runtime_witness_scope": "Nested startup attach/application contracts describe the pre-platform input and require requalification on the final package.",
-    "actual_private_composed_stage_executed": false,
+    "actual_private_composed_stage_executed": true,
     "bounded_native_join": "Uses final loader plus its recorded startup reference; admits emitted dispatcher/caller spans in final image4 and maps selected owned app and retained guard/checker bytes from that image. It does not execute the complete image4 or root boot."
   },
   "scopes": {
@@ -80,7 +93,9 @@
       "smoke": {"selection": "two publication preparations and seven lifecycle stages in both roles", "observations": 16, "controls": 21, "proposed_retained_cap_bytes": 167772160},
       "full": {"observations": 28, "controls": 21, "proposed_fresh_retained_cap_bytes": 268435456}
     },
-    "current_source_guest_observations_executed": 0
+    "fresh_native_observations_executed": 246,
+    "cached_native_observations_rejudged": 32,
+    "full_system_guests_executed": 0
   },
   "estimate_evidence": {
     "timer_prior_work_bytes": 54112256,
@@ -139,6 +154,7 @@
     "bulk_arena_overwrite_established": false,
     "physical_arena_exclusion_established": false
   },
+  "retained_body_scope": "Retained bodies used by bounded qualifier fixtures or root seams. Stock root preparation executes kernel_publish_interfaces at0x40430; the candidate owns its J5 primary-publisher body there, which that fixture does not execute.",
   "retained_bodies": [
     "kernel_publish_interfaces 0x40430",
     "image4 publisher prefix 0x725a04..0x725a34",
@@ -150,9 +166,58 @@
     "default error callback 0x723330..0x723344",
     "root cleanup self path 0x72612c..0x7261cc"
   ],
+  "qualified_execution": {
+    "candidate_scope": "nine-piece J5 root/task-storage/app plus platform union; not the later generalized sixteen-piece candidate",
+    "output": "private-data/scratch/TimerAppSystemJoin/root-closure-composed-01",
+    "candidate_dat_sha256": "ae134290bf12804cf55a8d496573dd2b8e0702b434c3e824a9ad07b9dad51aea",
+    "loader_a_sha256": "927394ef7ec2e3fadee6cbb86710ff67d67af3aa225d68efe50023dd953780a5",
+    "loader_b_sha256": "dfd5891012fb40879711d17f2af0b3f846944656ec9d515f9dc60b35fb198afa",
+    "image4_sha256": "362b6f3f527c82b2cea41bd38cb4b7c9e7074d76fd9c32718482e4a1ca8b0b3d",
+    "contract_sha256": "c86bc6ddf7d57f0e45252dd5e97d194e741dc41e6329d0443afe3bb4d69d1bd1",
+    "stage_receipt_sha256": "86133eae84c3d3480574f81623dcccaae2a57e05de58bb856fd43104ecb5a4ff",
+    "smoke_receipt_sha256": "8223a065013fcb34e4aa28003038106dddf6a764577b0c78e1627fb7987e2ebe",
+    "full_receipt_sha256": "7dd708239efb407e25b8e3c2ddb255b4abd8094caf0f5bf446252ae741f98278",
+    "file_admission": "passed; inverse platform restoration equals admitted startup DAT in memory; packaged app admission executed no guest",
+    "smokes": {"timer": {"comparisons": 2, "fresh": 4, "checks": 72, "controls": 56, "semantic_failures": 0}, "cyclic": {"comparisons": 2, "fresh": 4, "checks": 80, "controls": 23, "semantic_failures": 0}, "whole_scope_overlap_seconds": 0.3256289659984759},
+    "full": {
+      "timer": {"comparisons": 56, "observations": 118, "fresh": 114, "reused": 4, "checks": 3444, "controls": 280, "semantic_failures": 0, "observed_memory_peak_bytes": 479678464, "corrected_retained_bytes": 92741632},
+      "cyclic": {"comparisons": 48, "observations": 96, "fresh": 96, "reused": 0, "checks": 1512, "controls": 179, "semantic_failures": 0, "observed_memory_peak_bytes": 222437376, "corrected_retained_bytes": 39100416},
+      "app": {"records": 28, "fresh": 28, "reused": 0, "checks": 596, "controls": 21, "semantic_failures": 0, "observed_memory_peak_bytes": 1180938240, "corrected_retained_bytes": 108863488},
+      "three_way_whole_scope_overlap_seconds": 7.033947495001485,
+      "each_scope_memory_max": "2G",
+      "minimum_observed_free_bytes": 236230823936
+    },
+    "raw_statuses": {
+      "timer": "118 generic failed judgments;116 returned and2 instruction-budget wrong-lock mutants, detected by the executed controls",
+      "cyclic": "96 generic failed judgments;94 returned and2 deliberately preserved stock zero-period instruction-budget observations",
+      "app_original": "28 raw observations:27 returned,1 declared stop_address;20 retained generic failed judgments because8 intermediate tick judgments were overwritten",
+      "app_rejudged": "28 separate generic failed judgments,27 returned and1 stop_address; no generic status is promoted to passed"
+    },
+    "app_workspace_repair": {
+      "commit": "dc843c23",
+      "issue": "https://github.com/skeet70/latent-image/issues/162",
+      "output": "private-data/scratch/TimerAppSystemJoin/root-closure-app-rejudge-01",
+      "records": 28, "checks": 596, "controls": 21, "semantic_failures": 0,
+      "fresh": 0, "reused": 28, "case_files": 28, "generic_judgment_files": 28,
+      "all_original_case_and_wire_hashes_equal": true,
+      "historical_non_v1_files_unchanged": 316,
+      "new_or_removed_cache_keys": 0, "shared_cache_growth_bytes": 0,
+      "observations_reused": 28, "batch_cache_entries_reused": 15,
+      "final_output_allocated_bytes": 128864256, "retained_cap_bytes": 167772160,
+      "observed_memory_peak_bytes": 2147483648, "memory_max_bytes": 2147483648, "exit_code": 0,
+      "memory_note": "Peak reached the cap; no margin is claimed. OOM events were not sampled.",
+      "original_unaccounted_mutable_workspace_growth_bytes": 22581248,
+      "original_corrected_retention_within_256MiB": true
+    }
+  },
   "runtime_and_storage_gate": {
-    "current_grant": "none beyond the closed file-only root-closure-stage-01 allowance",
+    "current_grant": "completed:64MiB composed output plus512MiB transient;8MiB each leaf smoke;128/64/256MiB full timer/cyclic/app;160MiB repaired app rejudgment",
     "outstanding_additional_output_commitment_bytes": 0,
+    "final_composed_output_allocated_bytes_before_source_packet_copy": 47202304,
+    "final_control_allocated_bytes": 28672,
+    "shared_cache_allocated_bytes": 652677120,
+    "shared_cache_growth_since_first_smokes_bytes": 165601280,
+    "final_available_bytes": 232719347712,
     "closed_stage_allocated_bytes": 38604800,
     "closed_stage_image4": "stock; not a reduced-bound/root/app package",
     "proposed_composed_file_retained_cap_bytes": 67108864,
@@ -171,25 +236,25 @@
       "separate_restored_dat_proposed_retained_cap_bytes": 100663296,
       "transient_codec_scratch_included": false
     },
-    "transient_codec_peak": "unmeasured; admit and guard separately before staging",
+    "peak_observed_transient_codec_bytes": 84770816,
+    "transient_codec_cap_bytes": 536870912,
     "slots_per_scope": 1,
     "host_full_system_slots": 6,
-    "parent_verified_slot_wrapper": "/var/home/murph/Code/latent-image/bazel-bin/emulation/emulator-slot",
+    "parent_verified_slot_wrapper": "private-data/scratch/HostAdmission/bin/emulator-slot-six",
+    "slot_wrapper_sha256": "a85096f9a4fc1d17ed6558f3423fda0ef03a2d7ad146fab1bdda7636d341cd6f",
+    "new_launches": "legacy admission paused by parent pending weighted cutover; completed evidence is not relabeled",
     "parent_slot_policy_invocation": "5d548687-ad1f-4970-8aa5-59cca26756a5",
     "small_native_explicit_memory_max": "2G",
     "minimum_free_bytes": 107374182400,
     "unexecuted": [
-      "Actual private reduced-bound/root/app/platform DAT staging and exact final-artifact admission smoke",
-      "Current-source timer initialization native smoke and full regression",
-      "Current-source aggregate cyclic receipt/rearm smoke and full regression",
-      "Current-source packaged app lifecycle smoke and full join",
+      "Requalification of a different generalized sixteen-piece candidate; these receipts bind only the named nine-piece candidate",
       "Continuous initialization, root registration, cleanup and tick ordering",
       "Live reduced allocation bound, allocation cursor/high-water and all later writers",
       "Remaining tick/cyclic indirect-frame premises and independent-lock contention",
       "Physical alias/cache memory laws",
       "Full-native, composed-system and hardware acceptance"
     ],
-    "frame_receipt": "private-data/scratch/TimerAppSystemJoin/root-closure-stage-01/contract.json",
+    "frame_receipt": "private-data/scratch/TimerAppSystemJoin/root-closure-composed-01/composed-contract.json#platform_contract",
     "closed_frame_entries_each_domain": ["timer_initialize", "timer_insert", "timer_remove", "cyclic_configure", "cyclic_create"],
     "unclosed_frame_entries_each_domain": ["timer_tick", "cyclic_schedule", "cyclic_expire", "cyclic_initialize", "cyclic_start", "cyclic_stop", "cyclic_delete"],
     "global_stack_unbounded_pcs": {"a": 277896, "b": 867652},
