@@ -58,6 +58,7 @@ main = do
             , caseExpectedStatus = Returned
             , caseExpectedRegisters = [(R0,0),(Sp,0x959ff0)]
             , caseExpectedMemory = []
+            , caseIgnoredMemory = []
             , caseCp14Identity = Nothing
             , caseKernel = Nothing
             }

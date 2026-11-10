@@ -21,22 +21,30 @@ pub struct BootIdentity {
     run_document: String,
     installed_dat: String,
     boot_rom: String,
-    adjustment_nand: String,
+    adjustment_nand: Option<String>,
     record_nand: Option<String>,
+    committed_nand: Option<String>,
+    source_kind: NandSourceKind,
     card_sha256: Option<String>,
     procedure: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum NandSourceKind { InitialSeeded, FullCommitted }
+
 impl BootIdentity {
     pub fn new(document: &[u8], update: &[u8], boot_rom: &[u8], adjustment: &[u8], card_sha256: Option<&str>, procedure: &[u8]) -> Self {
         Self {
-            schema: 2,
+            schema: 3,
             model: env!("XM1_CHECKPOINT_MODEL_ID"),
             run_document: sha256(document),
             installed_dat: sha256(update),
             boot_rom: sha256(boot_rom),
-            adjustment_nand: sha256(adjustment),
+            adjustment_nand: Some(sha256(adjustment)),
             record_nand: None,
+            committed_nand: None,
+            source_kind: NandSourceKind::InitialSeeded,
             card_sha256: card_sha256.map(str::to_owned),
             procedure: sha256(procedure),
         }
@@ -44,6 +52,16 @@ impl BootIdentity {
 
     pub fn with_record_nand(mut self, records: Option<&[u8]>) -> Self {
         self.record_nand = records.map(sha256);
+        self
+    }
+
+    pub fn with_committed_nand(mut self, committed: Option<&[u8]>) -> Self {
+        self.committed_nand = committed.map(sha256);
+        if committed.is_some() {
+            self.adjustment_nand = None;
+            self.record_nand = None;
+            self.source_kind = NandSourceKind::FullCommitted;
+        }
         self
     }
 

@@ -1,7 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Emulation.LocalUiMenu
   ( LocalUiMenu (..), MenuNodeAddress (..), MenuIdentifier (..), SettingIdentifier (..), MenuCursor (..), MenuDepth (..)
-  , parseLocalUiMenu, LocalUiMode, parseLocalUiMode
+  , parseLocalUiMenu, LocalUiMode, parseLocalUiMode, Mode, previousPrevious
+  , SourceModeView, sourceModeView
   ) where
 
 import Control.Monad (unless)
@@ -30,17 +31,46 @@ instance ToJSON LocalUiMenu where
 newtype Mode = Mode Word32 deriving (Eq, Show)
 newtype ModeRequest = ModeRequest Word32 deriving (Eq, Show)
 newtype TransitionLatch = TransitionLatch Word8 deriving (Eq, Show)
-data LocalUiMode = LocalUiMode Mode Mode Mode ModeRequest TransitionLatch deriving (Eq, Show)
+newtype SourceModeView = SourceModeView B.ByteString deriving (Eq, Show)
+
+data LocalUiMode = LocalUiMode
+  { currentMode :: Mode
+  , previousMode :: Mode
+  , previousPrevious :: Mode
+  , pendingMode :: Mode
+  , modeRequest :: ModeRequest
+  , transitionLatch :: TransitionLatch
+  , sourceModeView :: SourceModeView
+  } deriving Show
+
+instance Eq LocalUiMode where
+  left == right = currentMode left == currentMode right
+    && previousMode left == previousMode right
+    && previousPrevious left == previousPrevious right
+    && pendingMode left == pendingMode right
+    && modeRequest left == modeRequest right
+    && transitionLatch left == transitionLatch right
+
+instance ToJSON Mode where
+  toJSON (Mode value) = toJSON value
+
+instance ToJSON SourceModeView where
+  toJSON (SourceModeView bytes) = toJSON (B.unpack bytes)
 
 instance ToJSON LocalUiMode where
-  toJSON (LocalUiMode (Mode current) (Mode previous) (Mode pending) (ModeRequest request) (TransitionLatch latch)) = object
-    ["current" .= current, "previous" .= previous, "pending" .= pending, "request" .= request, "transition_latch" .= latch]
+  toJSON mode = object
+    [ "current" .= currentMode mode, "previous" .= previousMode mode
+    , "previous_previous" .= previousPrevious mode, "pending" .= pendingMode mode
+    , "request" .= request, "transition_latch" .= latch, "raw_source_mode" .= sourceModeView mode ]
+   where
+    ModeRequest request = modeRequest mode
+    TransitionLatch latch = transitionLatch mode
 
 parseLocalUiMode :: Value -> Either String LocalUiMode
 parseLocalUiMode view = do
   bytes <- rawView 0x9500ec 40 view
-  pure (LocalUiMode (Mode (word bytes 0)) (Mode (word bytes 4)) (Mode (word bytes 12))
-    (ModeRequest (word bytes 20)) (TransitionLatch (B.index bytes 36)))
+  pure (LocalUiMode (Mode (word bytes 0)) (Mode (word bytes 4)) (Mode (word bytes 8)) (Mode (word bytes 12))
+    (ModeRequest (word bytes 20)) (TransitionLatch (B.index bytes 36)) (SourceModeView bytes))
 
 parseLocalUiMenu :: Value -> Either String LocalUiMenu
 parseLocalUiMenu ui = do

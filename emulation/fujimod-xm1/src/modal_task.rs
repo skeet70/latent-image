@@ -210,6 +210,16 @@ pub fn sample(
     Ok(TaskExecution { identity, stack, creation_words, execution_core })
 }
 
+/// Samples identity and stack metadata independently of execution mode and context depth.
+pub fn sample_validated_context(
+    memory: &impl ValidatedTaskMemory, core: CoreId,
+) -> Result<ContextSample, TaskError> {
+    let context = sample_context(memory, core)?;
+    let stack = StackExtent(PhysicalExtent::new(Guest(context.descriptor[5]), context.descriptor[4])?);
+    memory.validate_stack(stack).map_err(TaskError::Memory)?;
+    Ok(context)
+}
+
 /// The current task of `core`'s kernel, without the task-execution mode and context-depth checks of [`sample`].
 /// A task context sample: the current identity and creation descriptor plus the kernel context
 /// depth, which may be nonzero for a nested context.

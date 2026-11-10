@@ -1,0 +1,123 @@
+diff --git a/crates/emulator-devices/src/parts/nand.rs b/crates/emulator-devices/src/parts/nand.rs
+--- a/crates/emulator-devices/src/parts/nand.rs
++++ b/crates/emulator-devices/src/parts/nand.rs
+@@ -69,21 +69,37 @@
+-    pub fn with_changes(&self, changes: &Changes) -> Result<Self, String> {
+-        if changes.identity != self.immutable_identity() {
+-            return Err("NAND durable input identity differs".into());
+-        }
+-        let rows = self.options.bytes / self.options.page_bytes as u64;
+-        if changes
+-            .pages
+-            .iter()
+-            .any(|(&row, bytes)| row as u64 >= rows || bytes.len() != self.options.page_bytes)
+-            || changes
+-                .written_spare
+-                .iter()
+-                .any(|(&row, bytes)| row as u64 >= rows || bytes.len() != self.options.spare_bytes)
+-        {
+-            return Err("NAND durable page extent differs".into());
+-        }
+-        let mut medium = self.clone();
+-        medium.pages = changes.pages.clone();
+-        medium.written_spare = changes.written_spare.clone();
+-        Ok(medium)
+-    }
++    pub fn with_changes(&self, changes: &Changes) -> Result<Self, String> {
++        if changes.identity != self.immutable_identity() {
++            return Err("NAND durable input identity differs".into());
++        }
++        self.validate_committed_pages(&changes.pages, &changes.written_spare)?;
++        let mut medium = self.clone();
++        medium.pages = changes.pages.clone();
++        medium.written_spare = changes.written_spare.clone();
++        Ok(medium)
++    }
++    pub fn with_committed_pages(
++        mut self,
++        pages: BTreeMap<u32, Vec<u8>>,
++        written_spare: BTreeMap<u32, Vec<u8>>,
++    ) -> Result<Self, String> {
++        self.validate_committed_pages(&pages, &written_spare)?;
++        self.pages = pages;
++        self.written_spare = written_spare;
++        Ok(self)
++    }
++    fn validate_committed_pages(
++        &self,
++        pages: &BTreeMap<u32, Vec<u8>>,
++        written_spare: &BTreeMap<u32, Vec<u8>>,
++    ) -> Result<(), String> {
++        let rows = self.options.bytes / self.options.page_bytes as u64;
++        if pages
++            .iter()
++            .any(|(&row, bytes)| row as u64 >= rows || bytes.len() != self.options.page_bytes)
++            || written_spare
++                .iter()
++                .any(|(&row, bytes)| row as u64 >= rows || bytes.len() != self.options.spare_bytes)
++        {
++            return Err("NAND durable page extent differs".into());
++        }
++        Ok(())
++    }
+diff --git a/crates/emulator-devices/tests/owned_nand_pages.rs b/crates/emulator-devices/tests/owned_nand_pages.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/emulator-devices/tests/owned_nand_pages.rs
+@@ -0,0 +1,56 @@
++use fujimod_emulator_devices::parts::nand::{Nand, Options, Overlay};
++use std::{collections::BTreeMap, sync::Arc};
++
++fn medium(page_bytes: usize, spare_bytes: usize) -> Nand {
++    Nand::new(
++        Options { bytes: page_bytes as u64 * 96, page_bytes, pages_per_block: 32, spare_bytes },
++        Arc::from(vec![0x77; page_bytes]),
++        vec![Overlay { offset: page_bytes as u64, bytes: Arc::from(vec![0x35; page_bytes]) }],
++        BTreeMap::from([(2, vec![0x42; spare_bytes])]),
++    ).unwrap()
++}
++
++#[test]
++fn owned_restore_replaces_programmed_state_and_preserves_immutable_inputs() {
++    for (page_bytes, spare_bytes) in [(512, 16), (2048, 512)] {
++        let mut original = medium(page_bytes, spare_bytes);
++        original.program(0, &vec![0; page_bytes], &vec![0; spare_bytes]).unwrap();
++        let restored = original.with_committed_pages(
++            BTreeMap::from([(4, vec![0xa5; page_bytes])]),
++            BTreeMap::from([(4, vec![0x24; spare_bytes])]),
++        ).unwrap();
++        let mut data = vec![0; page_bytes];
++        for (row, expected) in [(0, 0x77), (1, 0x35), (3, 0xff), (4, 0xa5)] {
++            restored.read(row * page_bytes as u64, &mut data).unwrap();
++            assert_eq!(data, vec![expected; page_bytes]);
++        }
++        let mut spare = vec![0; spare_bytes];
++        for (row, expected) in [(0, 0xff), (2, 0x42), (4, 0x24)] {
++            restored.read_spare(row, &mut spare).unwrap();
++            assert_eq!(spare, vec![expected; spare_bytes]);
++        }
++        let mut expected = medium(page_bytes, spare_bytes);
++        expected.program(4, &vec![0xa5; page_bytes], &vec![0x24; spare_bytes]).unwrap();
++        assert_eq!(restored.committed_image().unwrap(), expected.committed_image().unwrap());
++        let borrowed = medium(page_bytes, spare_bytes).with_changes(&restored.changes()).unwrap();
++        assert_eq!(borrowed.committed_image().unwrap(), restored.committed_image().unwrap());
++        let empty = restored.with_committed_pages(BTreeMap::new(), BTreeMap::new()).unwrap();
++        assert_eq!(empty.committed_image().unwrap(), medium(page_bytes, spare_bytes).committed_image().unwrap());
++    }
++}
++
++#[test]
++fn owned_restore_rejects_rows_and_data_or_spare_extent_mismatches() {
++    for (page_bytes, spare_bytes) in [(512, 16), (2048, 512)] {
++        for (row, length) in [(96, page_bytes), (0, page_bytes - 1), (0, page_bytes + 1)] {
++            assert!(medium(page_bytes, spare_bytes).with_committed_pages(
++                BTreeMap::from([(row, vec![0; length])]), BTreeMap::new(),
++            ).is_err());
++        }
++        for (row, length) in [(96, spare_bytes), (0, spare_bytes - 1), (0, spare_bytes + 1)] {
++            assert!(medium(page_bytes, spare_bytes).with_committed_pages(
++                BTreeMap::new(), BTreeMap::from([(row, vec![0; length])]),
++            ).is_err());
++        }
++    }
++}

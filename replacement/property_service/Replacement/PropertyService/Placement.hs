@@ -1,11 +1,10 @@
 {-# LANGUAGE GHC2021 #-}
 
--- | Where the owned property service sits in image4: the carrier, the stock references that would
--- reach it, and the getter and setter table words repointed at the owned stubs.
+-- | Entry adapters, retained islands and reference closure for owned dispatch.
 module Replacement.PropertyService.Placement
   ( GuestAddress (..)
   , Carrier (..)
-  , StubAddresses (..)
+  , EntryAddresses (..)
   , ScanImage (..)
   , ScanDepth (..)
   , Reference (..)
@@ -14,19 +13,16 @@ module Replacement.PropertyService.Placement
   , DataSite (..)
   , ExemptedHit (..)
   , HullScan (..)
-  , TableSide (..)
-  , TableWord (..)
-  , TablePatch (..)
   , PlacementError (..)
-  , getterTableBase
-  , setterTableBase
-  , setterFallback
+  , retiredHull
+  , retainedWrappers
+  , stage4Carrier
+  , getterStockEntry
+  , setterStockEntry
+  , retainedRegions
   , carrierBytes
   , inCarrier
   , scanDepth
-  , setterHull
-  , carrierIntervals
-  , checkPreceding
   , scanReferences
   , hitTarget
   , referencesInto
@@ -36,30 +32,23 @@ module Replacement.PropertyService.Placement
   , dataSites
   , siteWindow
   , partitionHits
-  , derivePatch
-  , patchCount
   ) where
 
 import qualified A32 as A
 import Data.Bits (shiftL, shiftR, testBit, (.&.), (.|.))
 import qualified Data.ByteString as B
-import Data.List (sortOn)
-import qualified Data.Map.Strict as M
-import Data.Maybe (listToMaybe)
-import Data.Ord (Down (..))
 import qualified Data.Set as S
 import Data.Word (Word32)
 import qualified Emulation.Sha256 as SHA
 import qualified FujiAF.UpdateContainer as U
 import Numeric (showHex)
-import PropertyFields (PropertyId (..))
 import Replacement.PropertyService.Classify
-import ServiceInventory (Image (..), imageWord)
+import ServiceInventory (Image (..))
 
--- | A half-open run [start, end) of stock setter arms.
+-- | A half-open guest address interval.
 data Carrier = Carrier { carrierStart :: GuestAddress, carrierEnd :: GuestAddress } deriving (Eq, Show)
 
-data StubAddresses = StubAddresses { getterStub :: GuestAddress, setterStub :: GuestAddress } deriving (Eq, Show)
+data EntryAddresses = EntryAddresses { getterEntry :: GuestAddress, setterEntry :: GuestAddress } deriving (Eq, Show)
 
 data ScanImage = ScanImage4 | ScanImage5 | ScanPlain | ScanLoaderA | ScanLoaderB | ScanImage2 | ScanImage3
   deriving (Eq, Ord, Show, Enum, Bounded)
@@ -110,35 +99,20 @@ data HullScan = HullScan
   , hullCarrier :: Maybe Carrier
   }
 
-data TableSide = GetterTable | SetterTable deriving (Eq, Ord, Show)
-
-data TableWord = TableWord
-  { wordSide :: TableSide
-  , wordProperty :: PropertyId
-  , wordAddress :: GuestAddress
-  , wordOriginal :: GuestAddress
-  , wordPatched :: GuestAddress
-  }
-  deriving (Eq, Show)
-
-newtype TablePatch = TablePatch [TableWord] deriving (Eq, Show)
-
 data PlacementError
-  = NoOwnedRun
-  | CarrierNotCandidate GuestAddress
-  | LargerCarrierAdmissible Carrier
-  | TableShape
-  | TableWordDisagrees TableSide PropertyId
-  | CarrierWordNotOwned PropertyId
-  | PrecedingNotTransfer Word32
-  | PrecedingMissing
+  = CarrierNotCandidate GuestAddress
   | CarrierReferenced [ScanHit]
+  | ExecutableReference ScanHit
   deriving (Eq, Show)
 
-getterTableBase, setterTableBase, setterFallback :: GuestAddress
-getterTableBase = GuestAddress 0x61e12c
-setterTableBase = GuestAddress 0x6246cc
-setterFallback = GuestAddress 0x6301fc
+retiredHull, retainedWrappers, stage4Carrier :: Carrier
+retiredHull = Carrier (GuestAddress 0x61e110) (GuestAddress 0x6309c4)
+retainedWrappers = Carrier (GuestAddress 0x6245f8) (GuestAddress 0x624694)
+stage4Carrier = Carrier (GuestAddress 0x62c120) (GuestAddress 0x62fbfc)
+
+getterStockEntry, setterStockEntry :: GuestAddress
+getterStockEntry = GuestAddress 0x61e110
+setterStockEntry = GuestAddress 0x624694
 
 carrierBytes :: Carrier -> Int
 carrierBytes (Carrier (GuestAddress start) (GuestAddress end)) = fromIntegral (end - start)
@@ -152,54 +126,16 @@ scanDepth label = case label of
   ScanImage3 -> WordsOnly
   _ -> InstructionsAndWords
 
--- | Distinct setter arm targets below the setter fallback, ascending, each with whether every
--- property using it is owned.
-armTargets :: [Property] -> [(GuestAddress, Bool)]
-armTargets properties = M.toAscList (M.fromListWith (&&) [(propertySetterArm p, owns (propertyClass p)) | p <- properties, propertySetterArm p < setterFallback])
-  where
-    owns verdict = case verdict of
-      Owned OwnedUnassigned -> False
-      Owned _ -> True
-      Delegated _ -> False
-
--- | [lowest setter arm, setter fallback).
-setterHull :: [Property] -> Maybe Carrier
-setterHull properties = case armTargets properties of
-  (low, _) : _ -> Just (Carrier low setterFallback)
-  [] -> Nothing
-
--- | Each maximal run of consecutive owned arm targets as its arm starts followed by its end: the next
--- distinct target, else the setter fallback.
-ownedRuns :: [Property] -> [[GuestAddress]]
-ownedRuns properties = collect (zip targets (map (Just . fst) (drop 1 targets) ++ [Nothing]))
-  where
-    targets = armTargets properties
-    collect entries = case dropWhile (not . snd . fst) entries of
-      [] -> []
-      started ->
-        let (run, rest) = span (snd . fst) started
-            end = maybe setterFallback id (snd (last run))
-        in (map (fst . fst) run ++ [end]) : collect rest
-
--- | Every interval of an owned run that starts and ends at arm boundaries, largest first, lowest
--- address on a tie.
-carrierIntervals :: [Property] -> [Carrier]
-carrierIntervals properties =
-  sortOn (\(Carrier (GuestAddress start) (GuestAddress end)) -> (Down (end - start), start))
-    [Carrier start end | boundaries <- ownedRuns properties, (index, start) <- zip [1 :: Int ..] boundaries, end <- drop index boundaries]
-
--- | The stock word before the carrier when it transfers unconditionally: B with condition AL or
--- `pop {..., pc}`.
-checkPreceding :: Image -> Carrier -> Either PlacementError Word32
-checkPreceding image (Carrier (GuestAddress start) _) = case imageWord image (start - 4) of
-  Just word | transfers (A.decode (start - 4) word) -> Right word
-  Just word -> Left (PrecedingNotTransfer word)
-  Nothing -> Left PrecedingMissing
-  where
-    transfers instruction = case instruction of
-      A.Branch (A.Cond 14) False _ -> True
-      A.LoadMultiple (A.Cond 14) base A.IncrementAfter True registers -> base == A.sp && A.pc `elem` registers
-      _ -> False
+-- | Unresolved external data references reserve two aligned words.
+retainedRegions :: HullScan -> [Carrier]
+retainedRegions scan = retainedWrappers :
+  [ Carrier (GuestAddress low) (GuestAddress (low + 8))
+  | hit <- referencesInto retiredHull (hullHits scan)
+  , hitTarget hit `notElem` [getterStockEntry, setterStockEntry]
+  , not (inCarrier retainedWrappers (hitTarget hit))
+  , let GuestAddress target = hitTarget hit
+  , let low = target .&. 0xfffffffc
+  ]
 
 -- | Every aligned word of the images that equals an address in `region`. For images scanned as
 -- instructions, also every word that branches, loads PC-relative or forms an ADR into it, and every
@@ -236,25 +172,19 @@ hitTarget (ScanHit _ _ word reference) = case reference of
 referencesInto :: Carrier -> [ScanHit] -> [ScanHit]
 referencesInto interval = filter (\hit -> inCarrier interval (hitTarget hit) && not (hitImage hit == ScanImage4 && inCarrier interval (hitSite hit)))
 
--- | The first of `carrierIntervals` whose preceding word transfers unconditionally and that no hit
--- from outside it reaches.
 chooseCarrier :: Image -> [Property] -> [ScanHit] -> Maybe Carrier
-chooseCarrier image properties hits = listToMaybe [interval | interval <- carrierIntervals properties, admissible interval]
+chooseCarrier _ _ hits
+  | any overlaps reservations = Nothing
+  | otherwise = Just stage4Carrier
   where
-    byTarget = M.fromListWith (++) [(target, [hit]) | hit <- hits, let GuestAddress target = hitTarget hit]
-    admissible interval@(Carrier (GuestAddress low) (GuestAddress high)) =
-      either (const False) (const True) (checkPreceding image interval)
-        && null (referencesInto interval (concat (M.elems (M.takeWhileAntitone (< high) (M.dropWhileAntitone (< low) byTarget)))))
+    reservations = retainedRegions (HullScan retiredHull hits [] Nothing)
+    overlaps (Carrier low high) = low < carrierEnd stage4Carrier && carrierStart stage4Carrier < high
 
--- | The hull scan of `scanned` for the classified properties. The repointed setter table words of
--- owned properties are exempt.
+-- | Scan the whole hull without exempting tables or dead instructions.
 scanHull :: Image -> [(ScanImage, Image)] -> [Property] -> Either PlacementError HullScan
 scanHull image4 scanned properties = do
-  hull <- maybe (Left NoOwnedRun) Right (setterHull properties)
-  let GuestAddress setterTable = setterTableBase
-      exempt = S.fromList [GuestAddress (setterTable + 4 * (n - 1)) | Property (PropertyId n) _ _ (Owned _) <- properties]
-      (refused, exempted) = partitionHits scanned dataSites (scanReferences hull scanned exempt)
-  pure (HullScan hull refused exempted (chooseCarrier image4 properties refused))
+  let (refused, exempted) = partitionHits scanned dataSites (scanReferences retiredHull scanned S.empty)
+  pure (HullScan retiredHull refused exempted (chooseCarrier image4 properties refused))
 
 -- | The target of B, BL or BLX (immediate).
 branchTarget :: Word32 -> Word32 -> Maybe Word32
@@ -300,6 +230,23 @@ hitListing (ScanHit label (GuestAddress site) word reference) =
 dataSites :: [DataSite]
 dataSites =
   [ DataSite ScanPlain (GuestAddress 0x12ba48c) 0xcacdc8b4 (reviewed "4cfc92baaac6d3aa300630892294888e194d4e2d188ba40808af0c94f4bffbc8") HighEntropyData
+  , DataSite ScanImage4 (GuestAddress 0x7e3be0) 0x0bf90bc3 (reviewed "3e20ec40e999ccbcdaafc7204fcd3224289970bae3b8c46d281dc67cd6da3139") HighEntropyData
+  , DataSite ScanImage5 (GuestAddress 0x101f378) 0x0bd80bd7 (reviewed "7ff8574a10b28ad47727da1a2a2d18d884e1a5e18a6282abae5215b0c9ec886b") HighEntropyData
+  , DataSite ScanImage5 (GuestAddress 0x10210dc) 0x1ad81ad7 (reviewed "34c62daa86dc8ec655391abff310e66b5dd48af915f3fce6f1fbc7411fe569fc") HighEntropyData
+  , DataSite ScanImage5 (GuestAddress 0x1092bb0) 0xdbd67414 (reviewed "dd02d733eb10199502204258d936a4a9345c3a89486d6aed0e163a42c8c5ee9d") HighEntropyData
+  , DataSite ScanImage5 (GuestAddress 0x109fcbc) 0xfbd60cda (reviewed "18656f6cee168419580024c493fbe110f29a4aa50a67d30c8085cdbf0cb53402") HighEntropyData
+  , DataSite ScanImage5 (GuestAddress 0x10a3e8c) 0x2bd5fff3 (reviewed "76b947f09460180f28040d7dc774443ea7f3a3235c60719d36afcf22a6b47c08") HighEntropyData
+  , DataSite ScanImage5 (GuestAddress 0x10a41f8) 0x2bd5f607 (reviewed "b29db04c776ef3bc20671edd0608c54bbfe487f6917a5c305b09aa8c0b7ac1e5") HighEntropyData
+  , DataSite ScanImage5 (GuestAddress 0x10bfafc) 0x8bd59396 (reviewed "ed94ad49ce53673b3bec53b6ce370180fbbbd8d71d90450116535df78ee687d7") HighEntropyData
+  , DataSite ScanImage5 (GuestAddress 0x10c4e90) 0x9ad58486 (reviewed "2e952f4bbf4f327954b6684d49229823d594c85b7656d06ea2665b708971733d") HighEntropyData
+  , DataSite ScanImage5 (GuestAddress 0x10dee14) 0x6ad51452 (reviewed "19c6ac59db48e8393103eef2275dab3980a2098d20dfb45bff44761d7e8d0216") HighEntropyData
+  , DataSite ScanPlain (GuestAddress 0x12b7004) 0xbacda046 (reviewed "236c4ed14aca7f50f34df17f5a2316688fe29259686c9e85be0ea2479e658844") HighEntropyData
+  , DataSite ScanPlain (GuestAddress 0x12bd64c) 0xfacdae43 (reviewed "71694b90376f5442ad2e1b5a5b6c8385239b64b13a0ec3787f4539eabc6bf32c") HighEntropyData
+  , DataSite ScanPlain (GuestAddress 0x12c0860) 0x2bcd81a1 (reviewed "5fb2fd62901fd5e6062725bcc621d18eeee470a463a3ae1aceb6d51eef97c31f") HighEntropyData
+  , DataSite ScanPlain (GuestAddress 0x12c43dc) 0x0acd76bb (reviewed "a03ee8098bebd6eb2aba9ee601b27aad9208c95df61bcb79d23cef395335ddce") HighEntropyData
+  , DataSite ScanPlain (GuestAddress 0x12c5dd0) 0x1bcd7865 (reviewed "5e9593ee693bf5d01837571a9748e5cc94d818d96690086086a8b01a0a697db0") HighEntropyData
+  , DataSite ScanPlain (GuestAddress 0x12cba78) 0x7bcd506b (reviewed "29913b96e1c293b9d07ae5af977b99120ed5acdbfc78bdb488a5bef6fdd79496") HighEntropyData
+  , DataSite ScanPlain (GuestAddress 0x12d1b88) 0x5acd3750 (reviewed "8ed771c2fdc3542da55525fba82b7548513fff3b794355e48cdd18945e2767f6") HighEntropyData
   ]
   where
     reviewed text = either (error . ("data site digest: " ++)) id (SHA.parseSha256Hex text)
@@ -326,32 +273,3 @@ partitionHits images sites = foldr place ([], [])
     rejectedWords (GuestAddress address) window =
       length [() | index <- [0 .. 15], A.Rejected _ <- [A.decode (address - 32 + 4 * fromIntegral index) (U.word32At window (4 * index))]]
 
--- | Every owned property's getter and setter word repointed at the stubs, after checking each stock
--- word against its classified arm and every carrier-reaching setter word against ownership.
-derivePatch :: Image -> [Property] -> Carrier -> StubAddresses -> Either PlacementError TablePatch
-derivePatch image properties carrier (StubAddresses getter setter) = do
-  if map propertyId properties == [PropertyId n | n <- [1 .. 645]] then Right () else Left TableShape
-  TablePatch . concat <$> mapM one properties
-  where
-    one (Property identifier@(PropertyId n) getterArm setterArm verdict) = do
-      let at (GuestAddress base) = GuestAddress (base + 4 * (n - 1))
-          check side (GuestAddress address) (GuestAddress expected) = case imageWord image address of
-            Just actual | actual == expected -> Right ()
-            _ -> Left (TableWordDisagrees side identifier)
-          owned = case verdict of
-            Owned _ -> True
-            Delegated _ -> False
-      check GetterTable (at getterTableBase) getterArm
-      check SetterTable (at setterTableBase) setterArm
-      if inCarrier carrier setterArm && not owned then Left (CarrierWordNotOwned identifier) else Right ()
-      pure
-        [ word
-        | owned
-        , word <-
-            [ TableWord GetterTable identifier (at getterTableBase) getterArm getter
-            , TableWord SetterTable identifier (at setterTableBase) setterArm setter
-            ]
-        ]
-
-patchCount :: TableSide -> TablePatch -> Int
-patchCount side (TablePatch words') = length (filter ((== side) . wordSide) words')

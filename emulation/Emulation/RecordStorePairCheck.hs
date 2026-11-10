@@ -26,7 +26,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.Vector as V
 import Data.Word (Word32, Word64)
 import Emulation.LocalUiMenu (LocalUiMenu (..), MenuNodeAddress (..), MenuIdentifier (..), SettingIdentifier (..), MenuCursor (..), MenuDepth (..), parseLocalUiMenu, LocalUiMode, parseLocalUiMode)
-import Emulation.PropertyPairPlan (PhysicalRange (..), settingsRanges, preKeyIdle)
+import Emulation.PropertyPairPlan (PhysicalRange (..), recordSettingsRanges, preKeyIdle)
 import Emulation.PropertyPairRoutes
 import Emulation.Sha256 (sha256, sha256Hex)
 import Emulation.WatchObservation hiding (checkWatch)
@@ -291,7 +291,7 @@ parseRegions snapshot value = do
     exact ["start","bytes"] row
     (,) <$> (Address <$> (field "start" row >>= word)) <*> (field "bytes" row >>= hex))
   let ordered = sortOn fst rows
-      settings = [(rangeStart range,rangeEnd range) | range <- settingsRanges]
+      settings = [(rangeStart range,rangeEnd range) | range <- recordSettingsRanges]
       expected = case snapshot of
         SettingsSnapshot -> settings
         ResetSnapshot role -> settings ++ retired role
@@ -518,7 +518,7 @@ checkWatch role code activation views value = do
   need (views == actualViews) "watch decoder policy differs"
   classes <- field "classes" value >>= array
   let dataRanges = retired role
-      writes = [(rangeStart range,rangeEnd range) | range <- settingsRanges] ++ dataRanges
+      writes = [(rangeStart range,rangeEnd range) | range <- recordSettingsRanges] ++ dataRanges
       fetches = guardFetches role code
       expected kind | kind `elem` ["cpu-write","host-write","model-bus-write"] = merge writes
                     | kind == "cpu-read" = merge dataRanges
@@ -706,7 +706,7 @@ qualify role bindings observation = do
         ++ [(0x6fb7c8,"nand-write"),(0x6fb57c,"nand-erase")])
       sitesValue = object [K.fromString ("0x" ++ showHex site "") .= label | (site,label) <- M.toList declaredSites]
   need (field "sites" spec == Right sitesValue && field "raw_residual_count" receipt == Right (A.toJSON (length residuals))) "record observation sites differ from carrier reference scan"
-  let writes = [(rangeStart range,rangeEnd range) | range <- settingsRanges] ++ retired role
+  let writes = [(rangeStart range,rangeEnd range) | range <- recordSettingsRanges] ++ retired role
       fetches = guardFetches role code
   need (field "write_ranges" spec == Right (rangesValue writes) && field "read_ranges" spec == Right (rangesValue (retired role)) && field "fetch_ranges" spec == Right (rangesValue fetches)) "observation guard specification differs"
   need (field "hit_limit" spec == Right (Number 1500000) && field "watch_limit" spec == Right (Number 1048576)) "observation limits differ"

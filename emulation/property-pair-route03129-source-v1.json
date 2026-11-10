@@ -1,0 +1,55 @@
+{
+  "schema": 1,
+  "revision": "bounded-post-settle-prefix-03129-v1",
+  "baseline_routes_sha256": "f0ac7aedfd1cc067686f9a3be206c1ab1b0de2a76bd94b351990628b4c9c8689",
+  "route": "crawl-trial-03129",
+  "crawl_trial": 3129,
+  "keys": ["ok", "left", "up", "down"],
+  "change": "Append the source-derived suffix to this route's existing ordered effects. All other route expectations, keys, selection and exclusions are unchanged.",
+  "boundary": {
+    "kind": "bounded-post-settle-prefix",
+    "ticks": 833334,
+    "claim": "Finite compared prefix, not UI quiescence or future stability."
+  },
+  "source": {
+    "repository": "x70view",
+    "commit": "c44204c8c1c87e00ed15a7d33572968afadd1b29",
+    "firmware": "x-m1-1.50",
+    "image4_sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
+    "image5_sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+    "files": [
+      "decomp/firmwares/xm1-150/app/ui/machines/ui_m100_actions.c",
+      "decomp/firmwares/xm1-150/app/ui/machines/tu_00d2496c.c",
+      "decomp/firmwares/xm1-150/app/ui/machines/tu_00d191a4.c",
+      "decomp/firmwares/xm1-150/app/ui/record/ui_profile_service_bodies.c"
+    ]
+  },
+  "dispatch": [
+    {"machine": 0, "state": 3, "event": 48, "row": "0xce0290", "word": "0x00010061", "action": 97, "callback": "0xc24994"},
+    {"machine": 74, "state": 0, "event": 151, "row": "0xcf0090", "word": "0x000101d8", "action": 472, "callback": "0xc6bc78"},
+    {"machine": 100, "state": 0, "event": 2, "row": "0xce07bc", "word": "0x00010004", "action": 4, "callback": "0xca445c"}
+  ],
+  "derivation": [
+    "ui_m100_action_4 at 0xca445c calls 0xd25a68 when word 0x9504cc equals 1; the raw pre-call word is 01000000.",
+    "0xd25a68 calls 0xd1ac18 unconditionally at 0xd25adc.",
+    "0xd1ac18 calls 0x646424 with selectors 0x23 then 0x24, followed by setters for 0x27f then 0x280.",
+    "0x646424 reads bytes 0x9568e1 and 0x9568e2 for selectors 0x23 and 0x24 and subtracts 1; raw bytes 0101 yield values 0 and 0.",
+    "The final two calls read eligibility bytes 0x94339f and 0x94339e; both raw bytes are 00.",
+    "All four source calls forward bank 0. No expected suffix value is derived from the setter receipt."
+  ],
+  "suffix": [
+    {"kind": "setter", "property": "0x1c9", "value": 0, "bank": 0, "selector_site": "0xd1ac9c", "word": "0xe3a00023", "instructions": 576552337},
+    {"kind": "setter", "property": "0x1c8", "value": 0, "bank": 0, "selector_site": "0xd1aca4", "word": "0xe3a00024", "instructions": 576555718},
+    {"kind": "setter", "property": "0x27f", "value": 0, "bank": 0, "selector_site": "0xd1acb8", "word": "0xe300027f", "instructions": 576567810},
+    {"kind": "setter", "property": "0x280", "value": 0, "bank": 0, "selector_site": "0xd1acd0", "word": "0xe3a00d0a", "instructions": 576571190}
+  ],
+  "diagnostic_evidence": {
+    "directory": "private-data/scratch/PropertyService2/stage4-route03129-source-2",
+    "receipt_sha256": "f1df0204c9d6e4772857b448c2889cbb252c6b0a6ada6a94a1d2aa509b2c4db2",
+    "hits_sha256": "08d273cf7ddbaf9c4931e4be7c6b4f459e74c5f5631c4294338f1591adf28d64",
+    "diagnostic_sha256": "0de23ce915cacccc9429eb5450edd9bfa141b13ec4458f1845471499f86d8091",
+    "prefix_start_instructions": 575314584,
+    "prefix_end_instructions": 582740695,
+    "status": "Diagnostic-only refusal, not full-pair qualification."
+  }
+}

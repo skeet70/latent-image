@@ -805,6 +805,7 @@ caseFor facts domain role stockImage ownedImage ownedSymbols aggregates one =
             Tick -> [(R0, expectedTickResult one)]
             _ -> []
     , caseExpectedMemory = []
+    , caseIgnoredMemory = []
     , caseCp14Identity = Just (if domain == DomainA then 0x4003 else 0x4004)
     , caseKernel = Just (KernelCase plainLimit Nothing (Just 0x80001234) (Just 0) (Just 0) [R1, R2, R3, R12, Lr] [])
     }
@@ -1383,6 +1384,7 @@ composeCaseFor facts d role stockImage otherImage timerImage timerSymbols s3dIma
         , (Sp, composeStackTop), (R0, 0)
         ]
     , caseExpectedMemory = []
+    , caseIgnoredMemory = []
     , caseCp14Identity = Just (if d == DomainA then 0x4003 else 0x4004)
     , caseKernel = Just (KernelCase (InstructionLimit 40000) Nothing (Just 0x80001234) (Just 0) (Just 0) [R1, R2, R3, R12, Lr, Pc, Cpsr] [])
     }

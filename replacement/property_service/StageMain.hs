@@ -10,8 +10,8 @@ import qualified Emulation.Image4Staging as Image4
 import qualified FujiAF.Host as H
 import Numeric (showHex)
 import Replacement.PropertyService.Artifact
-import Replacement.PropertyService.Placement (Carrier (..), GuestAddress (..), HullScan (..), PlacementError (..), hitListing)
-import System.Directory (doesPathExist)
+import Replacement.PropertyService.Placement (Carrier (..), GuestAddress (..), HullScan (..), PlacementError (..), carrierBytes, hitListing, stage4Carrier)
+import System.Directory (createDirectoryIfMissing, doesPathExist)
 import System.Environment (getArgs)
 
 refuse :: ArtifactError -> IO a
@@ -25,7 +25,7 @@ main :: IO ()
 main = do
   arguments <- getArgs
   case arguments of
-    [encoder, rebuild, decoder, datPath, image4Path, loaderAPath, loaderBPath, image5Path, plainPath, image2Path, linkedPath, symbolsPath, scratchPath, outputPath, contractPath, image4OutputPath] -> do
+    [encoder, rebuild, decoder, datPath, image4Path, loaderAPath, loaderBPath, image5Path, plainPath, image2Path, linkedPath, symbolsPath, elfPath, scratchPath, outputPath, contractPath, image4OutputPath] -> do
       forM_ [outputPath, contractPath, image4OutputPath] $ \path -> doesPathExist path >>= \exists -> when exists (H.failH (path ++ " already exists"))
       dat <- H.readRegular (64 * 1024 * 1024) datPath
       image4 <- H.readRegular 0x300000 image4Path
@@ -34,16 +34,18 @@ main = do
       image5 <- H.readRegular 0x800000 image5Path
       plain <- H.readRegular 0x800000 plainPath
       image2 <- H.readRegular 0x800000 image2Path
-      linked <- H.readRegular 0x2000 linkedPath
+      linked <- H.readRegular (carrierBytes stage4Carrier) linkedPath
       symbols <- H.readRegular 0x10000 symbolsPath
+      elf <- H.readRegular (16 * 1024 * 1024) elfPath
       source <- either refuse pure (canonicalSource dat image4 loaderA loaderB image5 plain image2)
-      carrier@(Carrier (GuestAddress low) (GuestAddress high)) <- maybe (refuse (PlacementRejected NoOwnedRun)) pure (hullCarrier (sourceHull source))
+      carrier@(Carrier (GuestAddress low) (GuestAddress high)) <- maybe (refuse (PlacementRejected (CarrierNotCandidate (carrierStart stage4Carrier)))) pure (hullCarrier (sourceHull source))
       putStrLn ("carrier [0x" ++ showHex low "" ++ ", 0x" ++ showHex high "" ++ ")")
-      artifact <- either refuse pure (deriveArtifact (sourceProperties source) carrier linked symbols)
+      artifact <- either refuse pure (deriveArtifact ProductionArtifact (sourceProperties source) carrier (ArtifactInput linked symbols elf))
       staged <- either refuse pure (stageImage4 source artifact)
+      createDirectoryIfMissing True scratchPath
       scratch <- Image4.validateScratchDirectory scratchPath
       candidate <- stageCandidate (Image4.Tools encoder rebuild decoder) scratch staged
       B.writeFile image4OutputPath (stagedBytes staged)
       B.writeFile outputPath (candidateBytes candidate)
       L.writeFile contractPath (J.encode (candidateContractValue candidate) <> "\n")
-    _ -> H.failH "usage: stage-property-service ENCODER REBUILD DECODER SOURCE_DAT IMAGE4 LOADER_A LOADER_B IMAGE5 PLAIN IMAGE2 LINKED_BIN SYMBOLS SCRATCH_DIR OUT_DAT OUT_CONTRACT OUT_IMAGE4"
+    _ -> H.failH "usage: stage-property-service ENCODER REBUILD DECODER SOURCE_DAT IMAGE4 LOADER_A LOADER_B IMAGE5 PLAIN IMAGE2 LINKED_BIN SYMBOLS LINKED_ELF SCRATCH_DIR OUT_DAT OUT_CONTRACT OUT_IMAGE4"

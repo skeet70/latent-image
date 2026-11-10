@@ -126,6 +126,7 @@ caseSpec role (Body bytes walk) row@(Row name _ table) stop = CaseSpec
   , caseExpectedStatus = maybe (expectedStatus row) (const N.StopAddress) stop
   , caseExpectedRegisters = [(N.R5,sentinel N.R5)]
   , caseExpectedMemory = []
+  , caseIgnoredMemory = []
   , caseCp14Identity = Nothing
   , caseKernel = Just (KernelCase (InstructionLimit 12000) (address <$> stop) Nothing Nothing Nothing [] [])
   }

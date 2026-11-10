@@ -25,12 +25,13 @@ rustc --target=armv7r-none-eabi --crate-type=staticlib \
   -C codegen-units=1 -C debuginfo=0 -C opt-level=z SRC -o NAME.a
 ```
 
-`xm1_rust_elf(name, rust_staticlib, c_srcs, asm_srcs, asm_defines, link_script, link_includes, entry, extra_ldflags)` compiles C with `--target=armv7r-none-eabi -march=armv7-r -marm -mfloat-abi=soft -ffreestanding -nostdlib -fno-builtin -fno-stack-protector -mno-unaligned-access -Oz`, assembles each `.S` with `-D` for every `asm_defines` name, links with LLD and emits four files in the caller's package:
+`xm1_rust_elf(name, rust_staticlib, c_srcs, asm_srcs, asm_defines, link_script, link_includes, entry, extra_ldflags, link_map)` compiles C with `--target=armv7r-none-eabi -march=armv7-r -marm -mfloat-abi=soft -ffreestanding -nostdlib -fno-builtin -fno-stack-protector -mno-unaligned-access -Oz`, assembles each `.S` with `-D` for every `asm_defines` name, links with LLD and emits four files by default in the caller's package:
 
 - `NAME.elf`
 - `NAME.bin`: flat image from the ELF
 - `NAME.symbols`: `llvm-nm -S --defined-only --numeric-sort`, one `<address> <size> <type> <name>` row per symbol
 - `NAME.disasm`: `llvm-objdump -d --no-show-raw-insn`
+- `NAME.map`, when `link_map = True`: the same LLD invocation's input-section placement, size and alignment map
 
 The linker script owns all load addresses; the link recipe adds `-nostdlib -static -fuse-ld=lld -Wl,--no-dynamic-linker -Wl,--build-id=none` and the caller's `-Wl,-e,SYMBOL`. Each `link_includes` script is staged and its directory added with `-Wl,-L`, so the link script can `INCLUDE` it by file name.
 

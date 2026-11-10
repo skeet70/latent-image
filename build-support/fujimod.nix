@@ -32,6 +32,8 @@ let
       ./fujimod-rprofile-byte-exclusives.patch
       ./fujimod-translation-admission.patch
       ./fujimod-observation-context.patch
+      ./fujimod-observation-backing-tests.patch
+      ./fujimod-owned-nand-pages.patch
     ] ++ extraPatches;
   };
   # Upstream's mise.toml pins Rust 1.99.1; cargo 1.98 rejects the workspace's
@@ -57,6 +59,8 @@ rustPlatform.buildRustPackage {
   RUST_TEST_THREADS = 1;
   dontUseCargoParallelTests = true;
   preCheck = ''
+    cargo test -p fujimod-emulator-devices --test owned_nand_pages --locked -j "$CARGO_BUILD_JOBS" --profile release \
+      --target ${pkgs.stdenv.targetPlatform.rust.rustcTargetSpec} --offline
     cargo test -p fujimod-emulator-exr2-codecs --all-features --locked -j "$CARGO_BUILD_JOBS" --profile release \
       --target ${pkgs.stdenv.targetPlatform.rust.rustcTargetSpec} --offline
     cargo test -p fujimod-emulator --locked -j "$CARGO_BUILD_JOBS" --profile release \

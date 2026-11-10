@@ -134,7 +134,7 @@ fn select_cache(tags: &mut [u32; 2], ages: &[u32; 2], tag: CacheTag) -> (usize, 
     (slot, true)
 }
 fn access_cache(ages: &mut [u32; 2], timestamp: &mut u32, slot: usize) {
-    ages[slot] = *timestamp;
+    *ages.get_mut(slot).unwrap_or_else(|| contract_violation()) = *timestamp;
     *timestamp = timestamp.wrapping_add(1);
 }
 pub struct LocalBlock<'a> {

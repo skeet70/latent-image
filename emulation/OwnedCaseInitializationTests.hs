@@ -34,6 +34,7 @@ example (C.CaseId ident) seed = O.CaseSpec
   , O.caseExpectedStatus = N.Returned
   , O.caseExpectedRegisters = [(N.R0, 42)]
   , O.caseExpectedMemory = []
+  , O.caseIgnoredMemory = []
   , O.caseCp14Identity = Nothing
   , O.caseKernel = Nothing
   }

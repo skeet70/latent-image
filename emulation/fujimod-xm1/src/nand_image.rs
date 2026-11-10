@@ -96,6 +96,7 @@ fn spare_input(record: &Value) -> Result<Vec<u8>, String> {
     hex_any(data)
 }
 
+
 impl CommittedImage {
     pub fn parse(gzip: &[u8]) -> Result<Self, String> {
         let mut json = Vec::new();
@@ -121,10 +122,20 @@ impl CommittedImage {
         Ok(Self { base: document.base, data_overlays: document.data_overlays, spare_pages: document.spare_pages, pages })
     }
 
-    /// Replaces the unexecuted session's NAND `medium` with this image. The
-    /// session's flash base must be the image's base; every committed block
-    /// is erased and its pages programmed, which records them as written.
+    /// Replaces the unexecuted session's NAND with this image.
     pub fn apply(&self, session: &mut Session, medium: &NodeName, flash_base: &[u8]) -> Result<(), String> {
+        let nand = self.initialized_medium(session, medium, flash_base)?;
+        let (pages, spare) = self.pages.iter().map(|(row, (data, spare))| ((*row, data.clone()), (*row, spare.clone()))).unzip();
+        session.retain_nand(&medium.0, nand.with_committed_pages(pages, spare)?)
+    }
+
+    pub fn apply_owned(&mut self, session: &mut Session, medium: &NodeName, flash_base: &[u8]) -> Result<(), String> {
+        let nand = self.initialized_medium(session, medium, flash_base)?;
+        let (pages, spare) = std::mem::take(&mut self.pages).into_iter().map(|(row, (data, spare))| ((row, data), (row, spare))).unzip();
+        session.retain_nand(&medium.0, nand.with_committed_pages(pages, spare)?)
+    }
+
+    fn initialized_medium(&self, session: &Session, medium: &NodeName, flash_base: &[u8]) -> Result<Nand, String> {
         if flash_base.len() != self.base.size || format!("{:x}", Sha256::digest(flash_base)) != self.base.sha256 {
             return Err("committed NAND base differs from the session's flash base".into());
         }
@@ -142,18 +153,12 @@ impl CommittedImage {
             .iter()
             .map(|(row, record)| Ok((*row, spare_input(record)?)))
             .collect::<Result<BTreeMap<u32, Vec<u8>>, String>>()?;
-        let mut nand = session.nand_medium(&medium.0)?.with_inputs(overlays, spare)?;
-        let blocks: std::collections::BTreeSet<u32> = self.pages.keys().map(|row| row / PAGES_PER_BLOCK).collect();
-        for block in &blocks {
-            if (block * PAGES_PER_BLOCK..(block + 1) * PAGES_PER_BLOCK).any(|row| !self.pages.contains_key(&row)) {
-                return Err(format!("committed NAND block {block:#x} is only partly committed"));
-            }
-            nand.erase(block * PAGES_PER_BLOCK)?;
+        let options = session.nand_medium(&medium.0)?.options().clone();
+        if options.bytes != u64::from(BLOCKS * PAGES_PER_BLOCK) * PAGE_BYTES as u64
+            || options.page_bytes != PAGE_BYTES || options.spare_bytes != SPARE_BYTES || options.pages_per_block != PAGES_PER_BLOCK {
+            return Err("committed NAND session geometry differs".into());
         }
-        for (row, (data, spare)) in &self.pages {
-            nand.program(*row, data, spare)?;
-        }
-        session.retain_nand(&medium.0, nand)
+        Nand::new(options, flash_base.to_vec().into(), overlays, spare)
     }
 
     /// The blocks with at least one committed page.
@@ -197,6 +202,32 @@ impl CommittedImage {
             .filter(|(row, (_, spare))| *row % PAGES_PER_BLOCK == 0 && spare.starts_with(tag))
             .map(|(row, _)| row / PAGES_PER_BLOCK)
             .collect()
+    }
+
+    pub fn from_medium(nand: &Nand) -> Result<Self, String> {
+        #[derive(Deserialize)]
+        struct Inputs {
+            base_sha256: String,
+            base_bytes: usize,
+            overlays: Vec<(u64, Vec<u8>)>,
+            spare: Vec<(u32, Vec<u8>)>,
+        }
+        let inputs: Inputs = serde_json::from_slice(&nand.committed_image()?).map_err(|e| e.to_string())?;
+        Ok(Self {
+            base: Base { sha256: inputs.base_sha256, size: inputs.base_bytes },
+            data_overlays: inputs.overlays.into_iter().map(|(offset, bytes)| serde_json::json!({
+                "offset": offset, "data": encode_hex(&bytes), "sha256": format!("{:x}", Sha256::digest(&bytes)),
+                "provenance": {"source": "initialized-session-nand"}
+            })).collect(),
+            spare_pages: inputs.spare.into_iter().map(|(row, bytes)| (row, serde_json::json!({
+                "data": encode_hex(&bytes), "provenance": {"source": "initialized-session-nand"}
+            }))).collect(),
+            pages: BTreeMap::new(),
+        })
+    }
+
+    pub fn base_identity(&self) -> Value {
+        serde_json::json!({"sha256": self.base.sha256, "bytes": self.base.size})
     }
 
     /// The committed image of `nand`, keeping this image's recorded inputs.

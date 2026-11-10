@@ -856,6 +856,7 @@ caseSpec env domain body label helper row =
     , caseExpectedStatus = if rowSpins helper row then InstructionBudget else Returned
     , caseExpectedRegisters = [(R4, sentinel R4)]
     , caseExpectedMemory = []
+    , caseIgnoredMemory = []
     , caseCp14Identity = Nothing
     , caseKernel = Just (KernelCase instructionLimit Nothing Nothing Nothing Nothing (uncomparedRegisters helper row) [])
     }

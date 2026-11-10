@@ -7,4 +7,5 @@ pkgs.haskellPackages.ghcWithPackages (packages: [
   packages.attoparsec
   packages.cryptohash-sha256
   packages.JuicyPixels
+  packages.zlib
 ])

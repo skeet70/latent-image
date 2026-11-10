@@ -143,7 +143,6 @@ Current integration at `a8691be8` passes all seven affected host test targets an
 The injected-input endpoint does not establish render quiescence, future timer stability or complete application handling of every key. Unreached record operations and the kind 0/1/4 and area-2 lifecycle-save routes retain their native-only scope. Physical NAND timing, ECC, partial program, power-cut and bad-block laws remain open.
 
 The old one-region policy is withdrawn in §3.2. Stock-only timing offsets did not reproduce its continuation (`E-RECORD-STORE-PICKER246-CONTROL-150`); matching aggregate entered instructions does not align board-clock phase. The earlier reset-to-attach event-phase origin remains unexplained. Historical mismatches and strict-drain refusals keep their original identities and are not qualification of this two-slot carrier. The intended-functionality policy corrects the observed emulator mismatch without claiming its exclusive timing cause or broader picker acceptance.
-
 ## 7. Shims
 
 | Shim | What it does | Removal condition |

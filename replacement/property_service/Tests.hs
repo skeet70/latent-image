@@ -1,6 +1,7 @@
 module Main (main) where
 
-import Control.Monad (unless)
+import Control.Monad (forM_, unless)
+import qualified ArmElf as ELF
 import Data.Bits (shiftR, testBit, (.&.), (.|.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
@@ -154,139 +155,82 @@ dataSiteTests = do
 
 carrierTests :: IO ()
 carrierTests = do
-  let fieldArm = Owned (OwnedField (FieldArm (BankOffset 0) Byte (BitRange 0 8) (FieldDefaultOnly (DefaultConstant 0)) NoSave NoHook))
+  let image = Image "image4" "" 0x61c400 B.empty
+      hit = ScanHit ScanPlain (GuestAddress 0x1100000) 0x62c124 WordInto
+      dead = hit {hitImage = ScanImage4, hitSite = GuestAddress 0x620000}
       slotArm = Owned (OwnedSlotField (SlotArm (BankBranch (BankOffset 0x95) Byte (BitRange 4 4) (BankConstant 3)) (RecordBranch (RecordOffset 0x24) Byte (BitRange 4 4)) SaveBank0Previous SlotDefaultsRecord NoMirror))
-      delegated = Delegated ExitAdjusts
-      classified arms = [Property (PropertyId n) (GuestAddress 0x61e200) (GuestAddress arm) verdict | (n, (arm, verdict)) <- zip [1 ..] arms]
-      carriers runs = [Carrier (GuestAddress low) (GuestAddress high) | (low, high) <- runs]
-      twoRuns = classified [(0x1000, fieldArm), (0x1100, slotArm), (0x1200, delegated), (0x2000, fieldArm), (0x2400, delegated)]
-      -- `b` before every arm of both runs, zeros elsewhere.
-      runImage extra = Image "image4" "" 0x800 (foldl (\bytes (address, value) -> putWordAt 0x800 address value bytes) (B.replicate 0x2000 0)
-        ([(arm - 4, branchWord False (arm - 4) 0x630200) | arm <- [0x1000, 0x1100, 0x2000]] ++ extra))
-      hitsIn image = scanReferences (Carrier (GuestAddress 0x1000) (GuestAddress 0x2400)) [(ScanImage4, image)] S.empty
-      chosen extra = chooseCarrier (runImage extra) twoRuns (hitsIn (runImage extra))
-  expect "intervals largest first, lowest address on a tie" (carriers [(0x2000, 0x2400), (0x1000, 0x1200), (0x1000, 0x1100), (0x1100, 0x1200)])
-    (carrierIntervals twoRuns)
-  expect "a run ending at the setter fallback" (carriers [(0x630000, 0x6301fc)])
-    (carrierIntervals (classified [(0x1000, delegated), (0x630000, fieldArm)]))
-  expect "the largest interval nothing refers into" (Just (Carrier (GuestAddress 0x2000) (GuestAddress 0x2400))) (chosen [])
-  expect "a word into the larger run passes it over" (Just (Carrier (GuestAddress 0x1000) (GuestAddress 0x1200))) (chosen [(0x2400, 0x2010)])
-  expect "a reference from inside an interval keeps it" (Just (Carrier (GuestAddress 0x1000) (GuestAddress 0x1200))) (chosen [(0x2400, 0x2010), (0x1150, 0x1050)])
-  expect "a dead site between intervals refuses the one it reaches" (Just (Carrier (GuestAddress 0x1100) (GuestAddress 0x1200)))
-    (chosen [(0x2400, 0x2010), (0x1700, 0x1050)])
-  expect "a conditional preceding word refuses an interval" (Just (Carrier (GuestAddress 0x1000) (GuestAddress 0x1200))) (chosen [(0x1ffc, 0x0a000000)])
-  expect "128 slot fields fill the slot table" (Right 128) (length . encodedSlots <$> encodeTables (replicate 128 slotArm))
-  expect "a 129th slot field is refused" (Left SlotTableFull) (encodeTables (replicate 129 slotArm))
+  expect "fixed carrier without arm alignment" (Just stage4Carrier) (chooseCarrier image [] [])
+  expect "external carrier word blocks placement" Nothing (chooseCarrier image [] [hit])
+  expect "reservation crossing carrier start blocks placement" Nothing (chooseCarrier image [] [hit {hitWord = 0x62c11c}])
+  expect "retired internal reference does not reserve carrier" (Just stage4Carrier) (chooseCarrier image [] [dead])
+  expect "128 slot fields fill table" (Right 128) (length . encodedSlots <$> encodeTables (replicate 128 slotArm))
+  expect "129 slot fields refused" (Left SlotTableFull) (encodeTables (replicate 129 slotArm))
 
--- | A stock image4 holding the two tables of `properties`, `b 0x630200` before the carrier and zeros.
 syntheticImage4 :: [Property] -> B.ByteString
-syntheticImage4 properties = foldl (\bytes (address, value) -> putWordAt base address value bytes) (B.replicate 0x14000 0) placed
-  where
-    base = 0x61c400
-    GuestAddress getterTable = getterTableBase
-    GuestAddress setterTable = setterTableBase
-    placed =
-      (carrierStartAddress - 4, branchWord False (carrierStartAddress - 4) 0x630200)
-        : concat
-          [ [(getterTable + 4 * (n - 1), getter), (setterTable + 4 * (n - 1), setter)]
-          | Property (PropertyId n) (GuestAddress getter) (GuestAddress setter) _ <- properties
-          ]
+syntheticImage4 _ = B.replicate 0x16000 0
 
--- | Placement of the artifact for `classified` with its last two owned fields delegated, their setter
--- arms ending the carrier.
 placementTests :: [Property] -> LinkedArtifact -> IO ()
-placementTests classified artifact = do
-  let lastFields = take 2 (reverse [propertyId p | p@(Property _ _ _ (Owned (OwnedField _))) <- classified])
-      properties = [if propertyId p `elem` lastFields then Property (propertyId p) (GuestAddress 0x61e300) (GuestAddress carrierEndAddress) (Delegated ExitAdjusts) else p | p <- classified]
-      stock = syntheticImage4 properties
-      image4 bytes = Image "image4" "" 0x61c400 bytes
-      scanOf props bytes = either (Left . PlacementRejected) Right (scanHull (image4 bytes) [(ScanImage4, image4 bytes)] props)
-      stage props bytes = scanOf props bytes >>= \scan -> stagePlacement props (image4 bytes) scan artifact
-      with address value = putWordAt 0x61c400 address value stock
-      GuestAddress getterTable = getterTableBase
-      GuestAddress setterTable = setterTableBase
-      wordIn bytes address = U.word32At bytes (fromIntegral (address - 0x61c400))
-      StubAddresses (GuestAddress getterStubAddress) (GuestAddress setterStubAddress) = artifactStubs artifact
-      linked = linkedBytes artifact
-      carrierOffset = fromIntegral (carrierStartAddress - 0x61c400)
-      firstOf predicate = case [p | p <- properties, predicate (propertyClass p)] of
-        p : _ -> pure p
-        [] -> fail "synthetic classification lacks a class"
-  owned <- firstOf (\verdict -> case verdict of Owned (OwnedField _) -> True; _ -> False)
-  delegatedProperty <- firstOf (\verdict -> case verdict of Delegated _ -> True; _ -> False)
-  let PropertyId ownedId = propertyId owned
-      PropertyId delegatedId = propertyId delegatedProperty
-  placement <- either (fail . ("synthetic staging refused: " ++) . show) pure (stage properties stock)
+placementTests properties artifact = do
+  let stock = syntheticImage4 properties
+      image bytes = Image "image4" "" 0x61c400 bytes
+      stage bytes = do
+        scan <- either (Left . PlacementRejected) Right (scanHull (image bytes) [(ScanImage4, image bytes)] properties)
+        stagePlacement properties (image bytes) scan artifact
+      EntryAddresses (GuestAddress getter) (GuestAddress setter) = artifactEntries artifact
+      changed address value = putWordAt 0x61c400 address value
+  placement <- either (fail . show) pure (stage stock)
   let staged = placementBytes placement
-      fill = B.drop (carrierOffset + B.length linked) (B.take (carrierOffset + carrierBytes testCarrier) staged)
-  expect "staged length" (B.length stock) (B.length staged)
-  expect "carrier starts with the linked bytes" linked (B.take (B.length linked) (B.drop carrierOffset staged))
-  expect "carrier fill" (B.concat (replicate (B.length fill `div` 4) (U.putWord32 0xe7f000f0))) fill
-  expect "owned getter word" getterStubAddress (wordIn staged (getterTable + 4 * (ownedId - 1)))
-  expect "owned setter word" setterStubAddress (wordIn staged (setterTable + 4 * (ownedId - 1)))
-  expect "delegated words" (wordIn stock (getterTable + 4 * (delegatedId - 1)), wordIn stock (setterTable + 4 * (delegatedId - 1)))
-    (wordIn staged (getterTable + 4 * (delegatedId - 1)), wordIn staged (setterTable + 4 * (delegatedId - 1)))
-  expect "bytes outside the carrier and tables" (B.take 0x1d2c stock) (B.take 0x1d2c staged)
-  expect "preceding word" (wordIn stock (carrierStartAddress - 4)) (placementPreceding placement)
-  expectRefusal "changed delegated word" (PlacementRejected (TableWordDisagrees GetterTable (PropertyId delegatedId)))
-    (stage properties (with (getterTable + 4 * (delegatedId - 1)) 0x61e400))
-  let intoCarrier = [if propertyId p == propertyId delegatedProperty then p {propertySetterArm = GuestAddress carrierStartAddress} else p | p <- properties]
-  expectRefusal "delegated setter word into the carrier" (PlacementRejected (CarrierWordNotOwned (PropertyId delegatedId)))
-    (stage intoCarrier (syntheticImage4 intoCarrier))
-  let hit site word reference = PlacementRejected (CarrierReferenced [ScanHit ScanImage4 (GuestAddress site) word reference])
-      callWord = branchWord True 0x620000 0x62c600
-      deadLoad = 0xe51f0020
-  expectRefusal "word equal to a carrier address" (hit 0x620000 0x62c500 WordInto) (stage properties (with 0x620000 0x62c500))
-  expectRefusal "stock BL into the carrier" (hit 0x620000 callWord (BranchInto (GuestAddress 0x62c600))) (stage properties (with 0x620000 callWord))
-  expectRefusal "MOVW/MOVT building a carrier address" (hit 0x620000 0xe30c3500 (MovPairInto (GuestAddress 0x62c500)))
-    (stage properties (putWordAt 0x61c400 0x620004 0xe3403062 (with 0x620000 0xe30c3500)))
-  expectRefusal "PC-relative load into the carrier" (hit 0x62c100 0xe59f0020 (PcRelativeInto (GuestAddress 0x62c128)))
-    (stage properties (with 0x62c100 0xe59f0020))
-  expectRefusal "ADR into the carrier" (hit 0x62c104 0xe28f0020 (PcRelativeInto (GuestAddress 0x62c12c)))
-    (stage properties (with 0x62c104 0xe28f0020))
-  expectRefusal "dead arm in the hull loading from the carrier" (hit 0x62fc00 deadLoad (PcRelativeInto (GuestAddress 0x62fbe8)))
-    (stage properties (with 0x62fc00 deadLoad))
-  case stage properties (with 0x62c200 0xe59f0020) of
-    Right _ -> putStrLn "admitted a PC-relative load from inside the carrier into it"
-    Left failure -> fail ("load inside the carrier refused: " ++ show failure)
-  expectRefusal "conditional preceding word" (PlacementRejected (PrecedingNotTransfer 0x0a000000))
-    (stage properties (with (carrierStartAddress - 4) 0x0a000000))
-  let larger = Carrier (GuestAddress 0x624500) (GuestAddress 0x62b000)
-      moved = [ if propertyId p == propertyId owned then p {propertySetterArm = GuestAddress 0x624500}
-                else if propertyId p == propertyId delegatedProperty then p {propertySetterArm = GuestAddress 0x62b000}
-                else p
-              | p <- properties ]
-      precededImage = putWordAt 0x61c400 0x6244fc (branchWord False 0x6244fc 0x630200) (syntheticImage4 moved)
-      literalLoad = 0xe51f0020
-  expect "a larger interval comes first" (take 2 (carrierIntervals moved)) [larger, testCarrier]
-  expectRefusal "larger interval that staging admits" (PlacementRejected (LargerCarrierAdmissible larger)) (stage moved precededImage)
-  let referenced = putWordAt 0x61c400 0x62b010 literalLoad precededImage
-  case (stage moved referenced, scanOf moved referenced) of
-    (Right _, Right scan) -> do
-      expect "the larger interval's reference is a hull hit"
-        [ScanHit ScanImage4 (GuestAddress 0x62b010) literalLoad (PcRelativeInto (GuestAddress 0x62aff8))]
-        (referencesInto larger (hullHits scan))
-      expect "the hull scan chooses the carrier" (Just testCarrier) (hullCarrier scan)
-    (Left failure, _) -> fail ("next interval refused: " ++ show failure)
-    (_, Left failure) -> fail ("hull scan refused: " ++ show failure)
+      word :: Word32 -> Word32
+      word address = U.word32At staged (fromIntegral (address - 0x61c400))
+  expect "getter tail adapter" (branchWord False 0x61e110 getter) (word 0x61e110)
+  expect "setter tail adapter" (branchWord False 0x624694 setter) (word 0x624694)
+  expect "retired getter dispatch" 0xe7f000f0 (word 0x61e128)
+  expect "retired setter tail" 0xe7f000f0 (word 0x630200)
+  expect "unaltered wrapper" 0 (word 0x6245f8)
+  expect "valid staged image" (Right ()) (validateStagedImage4 (placementScan placement) artifact stock staged)
+  let refusal label address value = expectRefusal label StagingRejected (validateStagedImage4 (placementScan placement) artifact stock (changed address value staged))
+  refusal "getter adapter redirected" 0x61e110 (branchWord False 0x61e110 setter)
+  refusal "setter adapter redirected" 0x624694 (branchWord False 0x624694 getter)
+  refusal "getter adapter BL" 0x61e110 (branchWord True 0x61e110 getter)
+  refusal "setter adapter BL" 0x624694 (branchWord True 0x624694 setter)
+  refusal "retained wrapper overwritten" 0x6245f8 1
+  refusal "getter tail restored" 0x624400 0xe12fff1e
+  refusal "setter tail restored" 0x630200 0xe12fff1e
+  refusal "stock table restored" 0x61e12c 0x61eb40
+  let reservedStock = changed 0x61c400 0x61eb40 stock
+  reserved <- either (fail . show) pure (stage reservedStock)
+  expectRefusal "reserved literal overwritten" StagingRejected
+    (validateStagedImage4 (placementScan reserved) artifact reservedStock (changed 0x61eb44 1 (placementBytes reserved)))
+  let target = GuestAddress 0x61eb40
+      site = 0x61c400
+      call = branchWord True site 0x61eb40
+  expectRefusal "external branch into retired body"
+    (PlacementRejected (ExecutableReference (ScanHit ScanImage4 (GuestAddress site) call (BranchInto target))))
+    (stage (changed site call stock))
+  case stage (changed 0x61c400 0x62c124 stock) of
+    Left (PlacementRejected (CarrierNotCandidate _)) -> pure ()
+    other -> fail ("external carrier reference admitted: " ++ either show (const "success") other)
 
--- | Functions at 0x1000 holding `code`, admitted alone or with the listed roots, frame pops, stock leaves and stock sites.
-walkWith :: [GuestAddress] -> [GuestAddress] -> [(GuestAddress, StackOffset)] -> [(GuestAddress, GuestAddress)] -> [Word32] -> Either AdmissionError CodeProof
-walkWith roots pops leaves sites code = admitCode layout (B.concat (map U.putWord32 code))
+-- | Admit one callable function with retained leaves and bracket sites.
+walkWith :: [(GuestAddress, StackOffset)] -> [(GuestAddress, GuestAddress, StackOffset)] -> [Word32] -> Either AdmissionError CodeProof
+walkWith = walkWithStores []
+
+walkWithStores :: [GuestAddress] -> [(GuestAddress, StackOffset)] -> [(GuestAddress, GuestAddress, StackOffset)] -> [Word32] -> Either AdmissionError CodeProof
+walkWithStores stores leaves sites code = admitCode layout (B.concat (map U.putWord32 code))
   where
     layout = CodeLayout
       { layoutBase = GuestAddress 0x1000
       , layoutFunctions = [FunctionExtent (FunctionName "f") (GuestAddress 0x1000) (GuestAddress (0x1000 + 4 * fromIntegral (length code)))]
+      , layoutMappings = [ArmSpan (AddressSpan (GuestAddress 0x1000) (GuestAddress (0x1000 + 4 * fromIntegral (length code))))]
+      , layoutLiteralPointers = []
       , layoutData = []
-      , layoutStoreAccessors = []
-      , layoutRoots = roots
-      , layoutFramePops = pops
+      , layoutStoreSites = stores
       , layoutStockLeaves = leaves
       , layoutStockSites = sites
       }
 
 walk :: [Word32] -> Either AdmissionError CodeProof
-walk = walkWith [] [] [] []
+walk = walkWith [] []
 
 walkerTests :: IO ()
 walkerTests = do
@@ -295,16 +239,74 @@ walkerTests = do
         Left other -> fail (label ++ ": expected " ++ show violation ++ " at 0x" ++ showHex site "" ++ ", got " ++ show other)
         Right _ -> fail (label ++ ": admitted")
       refused label site violation code = refusedBy label site violation (walk code)
-      root = [GuestAddress 0x1000]
+      admitted label code = case walk code of
+        Right _ -> putStrLn ("admitted " ++ label)
+        Left failure -> fail (label ++ ": " ++ show failure)
       leaf = GuestAddress 0x61d59c
+  case walkWithStores [GuestAddress 0x1000] [] [] [0xe5801000, 0xe12fff1e] of
+    Right _ -> pure ()
+    Left failure -> fail ("admitted boundary store refused: " ++ show failure)
+  refusedBy "unlisted store beside admitted site" 0x1004 NonStackStore
+    (walkWithStores [GuestAddress 0x1000] [] [] [0xe5801000, 0xe5801000, 0xe12fff1e])
+  refusedBy "multiple store at single-store boundary" 0x1000 NonStackStore
+    (walkWithStores [GuestAddress 0x1000] [] [] [0xe8800006, 0xe12fff1e])
   case walk [0xe92d4800, 0xe1a0b00d, 0xe8bd8800] of
     Right _ -> putStrLn "admitted push {r11, lr}; mov r11, sp; pop {r11, pc}"
     Left failure -> fail ("framed return refused: " ++ show failure)
   refused "bx r0" 0x1000 PcWrite [0xe12fff10]
   refused "unbalanced pop" 0x1004 StackUnbalanced [0xe92d4010, 0xe8bd8030]
   refused "recursion" 0x1000 Recursion [0xe92d4800, 0xebfffffd, 0xe8bd8800]
-  refused "literal also executed" 0x1004 UnwalkedWord [0xe51f0004, 0xe12fff1e]
-  refused "store through a copy of sp" 0x1004 NonStackStore [0xe1a0100d, 0xe5810000, 0xe12fff1e]
+  refused "literal also executed" 0x1000 LiteralNotData [0xe51f0004, 0xe12fff1e]
+  refused "store through copied sp without an allocated frame" 0x1004 NonStackStore [0xe1a0100d, 0xe5810000, 0xe12fff1e]
+  forM_ [0x40,0x44] $ \offset ->
+    admitted ("frame-local aggregate store at offset " ++ show offset)
+      [0xe92d4ff0,0xe28db01c,0xe24dd064,0xe28d3000 .|. offset,0xe3570000,0xe8835005,0xe28dd064,0xe8bd8ff0]
+  admitted "chained local stack aliases"
+    [0xe24dd020,0xe1a0300d,0xe283200c,0xe2421004,0xe8810005,0xe28dd020,0xe12fff1e]
+  admitted "local alias derived from r11"
+    [0xe92d4800,0xe1a0b00d,0xe24dd010,0xe24b3008,0xe5830004,0xe28dd010,0xe8bd8800]
+  forM_ [0xe8835005,0xe9835005,0xe8035005,0xe9035005] $ \store ->
+    admitted ("bounded local multiple-store mode " ++ showHex store "")
+      [0xe24dd030,0xe28d3010,store,0xe28dd030,0xe12fff1e]
+  admitted "local byte store at the frame's final byte"
+    [0xe24dd010,0xe28d300f,0xe5c30000,0xe28dd010,0xe12fff1e]
+  admitted "bounded stack-alias loop reaches a finite proof"
+    [0xe24dd010,0xe1a0300d,0xe2833001,branchWord False 0x100c 0x1008]
+  refused "incoming caller pointer has no local stack proof" 0x1004 NonStackStore
+    [0xe24dd020,0xe5803000,0xe28dd020,0xe12fff1e]
+  refused "unknown multiple-store base" 0x1004 NonStackStore
+    [0xe24dd020,0xe8835005,0xe28dd020,0xe12fff1e]
+  refused "immediate write destroys a local alias" 0x100c NonStackStore
+    [0xe24dd020,0xe28d3004,0xe3a03000,0xe8835005,0xe28dd020,0xe12fff1e]
+  refused "load destroys a local alias" 0x100c NonStackStore
+    [0xe24dd020,0xe28d3004,0xe59d3000,0xe8835005,0xe28dd020,0xe12fff1e]
+  refused "multiple load destroys a local alias" 0x100c NonStackStore
+    [0xe24dd020,0xe28d3004,0xe89d0008,0xe8835005,0xe28dd020,0xe12fff1e]
+  refused "loading the return address destroys an lr stack alias" 0x1018 NonStackStore
+    [0xe92d4000,0xe24dd010,0xe28de014,0xe28dd010,0xe49de004,0xe24dd010,0xe50e0004,0xe28dd010,0xe12fff1e]
+  refused "one proved branch cannot credit an unknown branch" 0x100c NonStackStore
+    [0xe24dd020,0xe3500000,0x028d3004,0xe8835005,0xe28dd020,0xe12fff1e]
+  admitted "different proved aliases at a branch join"
+    [0xe24dd020,0xe1a0300d,0xe3500000,0x128d3004,0xe8835005,0xe28dd020,0xe12fff1e]
+  refused "deallocated alias does not revive after reallocation" 0x1010 NonStackStore
+    [0xe24dd020,0xe28d3004,0xe28dd020,0xe24dd020,0xe8835005,0xe28dd020,0xe12fff1e]
+  refused "multiple-store span exceeds the live frame" 0x1008 NonStackStore
+    [0xe24dd010,0xe28d3004,0xe8835005,0xe28dd010,0xe12fff1e]
+  refused "decrementing multiple store precedes the live frame" 0x1008 NonStackStore
+    [0xe24dd010,0xe1a0300d,0xe9030005,0xe28dd010,0xe12fff1e]
+  refused "halfword span exceeds the live frame" 0x1008 NonStackStore
+    [0xe24dd010,0xe28d300f,0xe1c300b0,0xe28dd010,0xe12fff1e]
+  refused "register-indexed alias store has no bounded offset" 0x1008 NonStackStore
+    [0xe24dd010,0xe1a0300d,0xe7830004,0xe28dd010,0xe12fff1e]
+  refused "multiple-store writeback is not an admitted alias transfer" 0x1008 NonStackStore
+    [0xe24dd020,0xe28d3004,0xe8a30005,0xe28dd020,0xe12fff1e]
+  forM_ [0x10,0x14] $ \offset ->
+    refused ("local alias overlaps saved r11/lr at offset " ++ show offset) 0x100c NonStackStore
+      [0xe92d4800,0xe24dd010,0xe28d3000 .|. offset,0xe8830001,0xe28dd010,0xe8bd8800]
+  forM_ [(0xe28d3004,0xe5830000),(0xe28d4004,0xe5840000)] $ \(derive,store) ->
+    refusedBy ("call destroys local alias used by " ++ showHex store "") 0x1014 NonStackStore
+      (walkWith [(leaf,StackOffset (-4))] []
+        [0xe92d4800,0xe1a0b00d,0xe24dd010,derive,branchWord True 0x1010 0x61d59c,store,0xe28dd010,0xe8bd8800])
   refused "loaded return address" 0x1004 ReturnAddressLost [0xe590e000, 0xe12fff1e]
   refused "store over the saved lr" 0x1004 NonStackStore [0xe92d4800, 0xe58d0004, 0xe8bd8800]
   refused "r11 changed at return" 0x1004 FramePointerLost [0xe1a0b000, 0xe12fff1e]
@@ -312,53 +314,118 @@ walkerTests = do
   case walk [0xe92d4800, 0xe3a0e000, 0xe8bd8800] of
     Right _ -> putStrLn "admitted lr as scratch while the return address is saved"
     Left failure -> fail ("lr scratch refused: " ++ show failure)
-  case walkWith root [GuestAddress 0x1004] [] [] [0xe1a0000c, 0xe8bd8830] of
-    Right _ -> putStrLn "admitted a root popping the stock frame at its frame-pop site"
-    Left failure -> fail ("stock-frame pop refused: " ++ show failure)
-  refusedBy "a stock-frame pop at another site" 0x1004 StackUnbalanced (walkWith root [GuestAddress 0x1000] [] [] [0xe1a0000c, 0xe8bd8830])
-  refusedBy "a stock-frame pop below the entry sp" 0x1004 StackUnbalanced (walkWith root [GuestAddress 0x1004] [] [] [0xe24dd008, 0xe8bd8830])
-  case walkWith [] [] [(leaf, StackOffset (-4))] [] [0xe92d4800, branchWord True 0x1004 0x61d59c, 0xe8bd8800] of
+  refused "stock-frame pop without owned prologue" 0x1004 StackUnbalanced [0xe1a0000c, 0xe8bd8830]
+  case walkWith [(leaf, StackOffset (-4))] [] [0xe92d4800, branchWord True 0x1004 0x61d59c, 0xe8bd8800] of
     Right proof -> expect "a stock leaf call adds the leaf's stack" (Just (StackOffset (-12))) (M.lookup (GuestAddress 0x1000) (proofComposed proof))
     Left failure -> fail ("stock leaf call refused: " ++ show failure)
-  case walkWith [] [] [(leaf, StackOffset (-4))] [] [0xe92d4800, 0xe8bd4800, branchWord False 0x1008 0x61d59c] of
+  case walkWith [(leaf, StackOffset (-4))] [] [0xe92d4800, 0xe8bd4800, branchWord False 0x1008 0x61d59c] of
     Right proof -> expect "a tail branch to a stock leaf after the frame pop" (Just (StackOffset (-8))) (M.lookup (GuestAddress 0x1000) (proofComposed proof))
     Left failure -> fail ("stock leaf tail branch refused: " ++ show failure)
   refusedBy "a tail branch to a stock leaf inside the frame" 0x1004 StackUnbalanced
-    (walkWith [] [] [(leaf, StackOffset (-4))] [] [0xe92d4800, branchWord False 0x1004 0x61d59c])
+    (walkWith [(leaf, StackOffset (-4))] [] [0xe92d4800, branchWord False 0x1004 0x61d59c])
   case walk [0xe92d4800, 0xe1a0b00d, 0xe24dd008, 0xe50b0004, 0xe28dd008, 0xe8bd8800] of
     Right _ -> putStrLn "admitted a store through r11 into the frame"
     Left failure -> fail ("frame store through r11 refused: " ++ show failure)
   refused "a store through r11 over the saved lr" 0x100c NonStackStore [0xe92d4800, 0xe1a0b00d, 0xe24dd008, 0xe58b0004, 0xe28dd008, 0xe8bd8800]
   refused "a store through r11 below sp" 0x100c NonStackStore [0xe92d4800, 0xe1a0b00d, 0xe24dd008, 0xe50b000c, 0xe28dd008, 0xe8bd8800]
-  refusedBy "a stock site call below the entry sp" 0x1004 StockCallBelowEntry
-    (walkWith root [GuestAddress 0x100c] [] [(GuestAddress 0x1004, GuestAddress 0x61da3c)] [0xe24dd008, branchWord True 0x1004 0x61da3c, 0xe28dd008, 0xe8bd89f8])
-  case walkWith root [GuestAddress 0x1004] [] [(GuestAddress 0x1000, GuestAddress 0x61da3c)] [branchWord True 0x1000 0x61da3c, 0xe8bd89f8] of
-    Right _ -> putStrLn "admitted a stock site call at the entry sp"
-    Left failure -> fail ("stock site call refused: " ++ show failure)
-  refusedBy "a stock site call from an unlisted site" 0x1000 (CallOutsideOwned (GuestAddress 0x61da3c))
-    (walkWith root [GuestAddress 0x1004] [] [(GuestAddress 0x1004, GuestAddress 0x61da3c)] [branchWord True 0x1000 0x61da3c, 0xe8bd89f8])
+  let bracket = [(GuestAddress 0x1004, GuestAddress 0x61da3c, StackOffset (-32))]
+  refusedBy "bracket at minus 40" 0x1008 StockCallBelowEntry
+    (walkWith [] [(GuestAddress 0x1008, GuestAddress 0x61da3c, StackOffset (-32))]
+      [0xe92d49f8, 0xe24dd008, branchWord True 0x1008 0x61da3c, 0xe28dd008, 0xe8bd89f8])
+  case walkWith [] bracket [0xe92d49f8, branchWord True 0x1004 0x61da3c, 0xe8bd89f8] of
+    Right _ -> pure ()
+    Left failure -> fail ("owned bracket call refused: " ++ show failure)
+  refusedBy "bracket from unlisted site" 0x1000 (CallOutsideOwned (GuestAddress 0x61da3c))
+    (walkWith [] bracket [branchWord True 0x1000 0x61da3c, 0xe12fff1e])
+
+literalPoolTests :: IO ()
+literalPoolTests = do
+  let spanAt low high = AddressSpan (GuestAddress low) (GuestAddress high)
+      function name low high = FunctionExtent (FunctionName name) (GuestAddress low) (GuestAddress high)
+      layout = CodeLayout
+        { layoutBase = GuestAddress 0x1000
+        , layoutFunctions = [function "caller" 0x1000 0x1018, function "expect" 0x1018 0x1024, function "panic" 0x1024 0x1030, function "trap" 0x1030 0x103c]
+        , layoutMappings = [ArmSpan (spanAt 0x1000 0x1010), DataSpan (spanAt 0x1010 0x1018), ArmSpan (spanAt 0x1018 0x103c), DataSpan (spanAt 0x103c 0x1054)]
+        , layoutLiteralPointers = [OwnedReadonly (spanAt 0x103c 0x1054)]
+        , layoutData = [(GuestAddress 0x103c, GuestAddress 0x1054)]
+        , layoutStoreSites = []
+        , layoutStockLeaves = []
+        , layoutStockSites = []
+        }
+      code = B.concat (map U.putWord32
+        [ 0xe59f0008, 0xe3a0100b, 0xe59f2004, branchWord True 0x100c 0x1018
+        , 0x103c, 0x1048
+        , 0xe92d4800, 0xe1a0b00d, branchWord True 0x1020 0x1024
+        , 0xe92d4800, 0xe1a0b00d, branchWord True 0x102c 0x1030
+        , 0xe92d4800, 0xe1a0b00d, branchWord False 0x1038 0x1038
+        ]) <> C.pack "tail byte\0\0\0" <> B.replicate 12 0
+      admit = admitCode layout
+      changed address value = putWordAt 0x1000 address value code
+      rejected label outcome = case outcome of
+        Left _ -> putStrLn ("refused " ++ label)
+        Right _ -> fail (label ++ ": admitted")
+  proof <- either (fail . show) pure (admit code)
+  expect "emitted LDR pair before a nonreturning call admits data pointers"
+    (S.fromList [GuestAddress 0x1010, GuestAddress 0x1014]) (proofLiterals proof)
+  expect "nonreturning calls retain composed frame depth" (Just (StackOffset (-24)))
+    (M.lookup (GuestAddress 0x1000) (proofComposed proof))
+  rejected "direct branch into a mapped literal pool" (admit (changed 0x1004 (branchWord False 0x1004 0x1010)))
+  rejected "fallthrough into a mapped literal pool" (admit (changed 0x100c 0xe1a00000))
+  rejected "conditional nonreturning call still falls through" (admit (changed 0x100c (0x1b000000 .|. (branchWord True 0x100c 0x1018 .&. 0xffffff))))
+  rejected "returning callee restores the call continuation" (admit (changed 0x1038 0xe8bd8800))
+  rejected "unowned literal pointer" (admit (changed 0x1010 0x2000))
+  rejected "literal referent crosses its owned extent" (admit (changed 0x1010 0x1051))
+  let headerLayout=layout {layoutLiteralPointers=RetainedStorage (spanAt 0x409c29b8 0x409c29c8) : layoutLiteralPointers layout}
+      headerLiteral pointer=admitCode headerLayout (changed 0x1010 pointer)
+  either (fail . ("canonical header literal refused: " ++) . show) (const (pure ())) (headerLiteral 0x409c29b8)
+  expect "prebiased header literal" (Left (AdmissionError (GuestAddress 0x1000) LiteralPointerOutsideOwned))
+    (() <$ headerLiteral 0x409c29b7)
+  rejected "literal load crosses its function extent" (admit (changed 0x1000 0xe59f0034))
+  rejected "unresolved PC-relative register offset" (admit (changed 0x1000 0xe79f0001))
+  rejected "literal referent is executable code" (admit (changed 0x1010 0x1018))
+  rejected "overlapping code and data mappings" (admitCode layout
+    { layoutMappings = ArmSpan (spanAt 0x1010 0x1018) : layoutMappings layout } code)
+  rejected "unclassified literal pool" (admitCode layout
+    { layoutMappings = [ArmSpan (spanAt 0x1000 0x1010), ArmSpan (spanAt 0x1018 0x103c), DataSpan (spanAt 0x103c 0x1054)] } code)
+  rejected "data pool relabeled as instructions" (admitCode layout
+    { layoutMappings = [ArmSpan (spanAt 0x1000 0x103c), DataSpan (spanAt 0x103c 0x1054)] } code)
+  rejected "unsupported trap prevents a nonreturn summary" (admit (changed 0x1038 0xe1200070))
+  rejected "non-stack trap store prevents a nonreturn summary" (admit (changed 0x1034 0xe5801000))
 
 main :: IO ()
 main = do
   arguments <- getArgs
-  (bytes, symbolText) <- case arguments of
-    [binPath, symbolsPath] -> (,) <$> B.readFile binPath <*> B.readFile symbolsPath
-    _ -> fail "usage: property-service-artifact-tests LINKED_BIN SYMBOLS"
+  if arguments == ["--literal-pools"] then walkerTests >> literalPoolTests else artifactTests arguments
+
+artifactTests :: [String] -> IO ()
+artifactTests arguments = do
+  (bytes, symbolText, elfBytes) <- case arguments of
+    [binPath, symbolsPath, elfPath] -> (,,) <$> B.readFile binPath <*> B.readFile symbolsPath <*> B.readFile elfPath
+    _ -> fail "usage: property-service-artifact-tests LINKED_BIN SYMBOLS LINKED_ELF"
+  elf <- either fail pure (ELF.parseElf elfBytes)
+  section <- case [item | item <- ELF.elfSections elf, ELF.sectionAllocated item] of
+    [item] -> pure item
+    _ -> fail "expected one allocated section"
+  let changedElf linked =
+        let offset = fromIntegral (ELF.sectionOffset section)
+        in B.take offset elfBytes <> linked <> B.drop (offset + B.length linked) elfBytes
   let symbols = symbolRows symbolText
       properties = syntheticClassification bytes symbols
-      admit linked names = deriveArtifact properties testCarrier linked names
+      admit linked names = deriveArtifact ProductionArtifact properties testCarrier (ArtifactInput linked names (changedElf linked))
       Symbol setStart setSize _ = symbolNamed symbols (== "xm1_property_set")
       Symbol tableAddress _ _ = symbolNamed symbols ("10PROPERTIES" `isSuffixOf`)
       Symbol slotAddress _ _ = symbolNamed symbols ("5SLOTS" `isSuffixOf`)
       Symbol specialAddress _ _ = symbolNamed symbols ("8SPECIALS" `isSuffixOf`)
-      Symbol configLoad8 _ _ = symbolNamed symbols (== "xm1_config_load8")
-      Symbol getterStubAddress getterStubSize _ = symbolNamed symbols (== "xm1_getter_stub")
-      Symbol setterStubAddress setterStubSize _ = symbolNamed symbols (== "xm1_setter_stub")
-      Symbol bankStore8 _ _ = symbolNamed symbols (== "xm1_bank_store8")
-      Symbol bankLoad16 _ _ = symbolNamed symbols (== "xm1_bank_load16")
-      Symbol slotDefaultsLoad8 _ _ = symbolNamed symbols (== "xm1_slot_defaults_load8")
-      Symbol tailDefaultsLoad8 _ _ = symbolNamed symbols (== "xm1_tail_defaults_load8")
-      Symbol tailDefaultsLoad16 _ _ = symbolNamed symbols (== "xm1_tail_defaults_load16")
+      Symbol slotDefaults _ _ = symbolNamed symbols (== "SLOT_BYTES")
+      Symbol tailDefaults _ _ = symbolNamed symbols (== "TAIL_BYTES")
+      Symbol getterStubAddress getterStubSize _ = symbolNamed symbols (== "xm1_property_get_entry")
+      Symbol setterStubAddress setterStubSize _ = symbolNamed symbols (== "xm1_property_set_entry")
+      Symbol store8 _ _ = symbolNamed symbols (== storageStoreName StorageByte)
+      Symbol store16 _ _ = symbolNamed symbols (== storageStoreName StorageHalf)
+      Symbol mirrorWrite _ _ = symbolNamed symbols (== "xm1_storage_write")
+      Symbol output8 _ _ = symbolNamed symbols (== "xm1_storage_output8")
+      Symbol output16 _ _ = symbolNamed symbols (== storageOutputName StorageHalf)
+      Symbol status32 _ _ = symbolNamed symbols (== "xm1_storage_status32")
       calls = [site | site <- [setStart, setStart + 4 .. setStart + setSize - 4], U.word32At bytes (fromIntegral (site - carrierStartAddress)) .&. 0xff000000 == 0xeb000000]
       getterPop = getterStubAddress + getterStubSize - 4
       setterPop = setterStubAddress + setterStubSize - 4
@@ -368,59 +435,131 @@ main = do
   artifact <- either (fail . ("real artifact refused: " ++) . show) pure (admit bytes symbolText)
   unless (artifactCarrier artifact == testCarrier) (fail "carrier differs")
   putStrLn "admitted the linked artifact against the synthetic classification"
-  expect "the setter stub's stock-site calls are the open and close at the stock frame's sp"
-    [(setterStubAddress + 32, 0x61da3c, StackOffset 0), (setterStubAddress + 72, 0x61d944, StackOffset 0)]
-    [ (site, target, depth)
-    | EntryFrame (GuestAddress entry) _ edges <- proofFrames (artifactProof artifact), entry == setterStubAddress
-    , CallEdge (GuestAddress site) (GuestAddress target) depth StockSiteCall <- edges
-    ]
+  let proof = artifactProof artifact
+      emittedPools =
+        [ (literal, entry)
+        | GuestAddress literal <- S.toList (proofLiterals proof)
+        , S.member (GuestAddress (literal - 4)) (proofInstructions proof)
+        , FunctionExtent _ (GuestAddress entry) (GuestAddress finish) <- artifactFunctions artifact
+        , entry < literal, literal < finish
+        ]
+      refusedPool label changed = case admit changed symbolText of
+        Left (CodeRejected _) -> putStrLn ("refused " ++ label)
+        Left other -> fail (label ++ ": expected a code-policy refusal, got " ++ show other)
+        Right _ -> fail (label ++ ": admitted")
+  case emittedPools of
+    [] -> pure ()
+    (literal, entry) : _ -> do
+      refusedPool "direct branch into the emitted pool" (replaceWord entry (branchWord False entry literal) bytes)
+      refusedPool "fallthrough into the emitted pool" (replaceWord (literal - 4) 0xe1a00000 bytes)
+      refusedPool "unowned pointer in the emitted pool" (replaceWord literal 0x2000 bytes)
+  expectRefusal "missing mandatory ELF evidence" ElfRejected
+    (deriveArtifact ProductionArtifact properties testCarrier (ArtifactInput bytes symbolText B.empty))
+  expectRefusal "ELF bytes differ from the linked artifact" ElfRejected
+    (deriveArtifact ProductionArtifact properties testCarrier (ArtifactInput (replaceWord firstCall 0xe1a00000 bytes) symbolText elfBytes))
+  symtab <- case [item | item <- ELF.elfSections elf, ELF.sectionName item == ".symtab"] of
+    [item] -> pure item
+    _ -> fail "expected one symbol table"
+  armMarker <- case [index | (index, item) <- zip [0 :: Word32 ..] (ELF.elfSymbols elf), take 2 (ELF.symbolName item) == "$a"] of
+    index : _ -> pure index
+    [] -> fail "missing ARM mapping evidence"
+  dataMarker <- case [index | (index, item) <- zip [0 :: Word32 ..] (ELF.elfSymbols elf), take 2 (ELF.symbolName item) == "$d"] of
+    index : _ -> pure index
+    [] -> fail "missing data mapping evidence"
+  let markerField index field = ELF.sectionOffset symtab + index * 16 + field
+      withElf changed = deriveArtifact ProductionArtifact properties testCarrier (ArtifactInput bytes symbolText changed)
+      unaligned = putWordAt 0 (markerField armMarker 4) (carrierStartAddress + 2) elfBytes
+      conflict = putWordAt 0 (markerField dataMarker 4) carrierStartAddress elfBytes
+      armName = U.word32At elfBytes (fromIntegral (markerField armMarker 0))
+      relabeled = putWordAt 0 (markerField dataMarker 0) armName elfBytes
+  expectRefusal "unaligned ELF mapping" MappingRejected (withElf unaligned)
+  expectRefusal "conflicting ELF code and data mappings" MappingRejected (withElf conflict)
+  case withElf relabeled of
+    Left _ -> putStrLn "refused data relabeled as instructions in ELF"
+    Right _ -> fail "ELF data relabeled as instructions admitted"
+  forM_ [("slot",slotDefaults),("tail",tailDefaults)] $ \(name,address) -> do
+    boundary <- case [ELF.symbolValue item | item <- ELF.elfSymbols elf
+      ,take 2 (ELF.symbolName item) `elem` ["$a","$d","$t"],ELF.symbolValue item <= address] of
+      [] -> fail ("missing mapping for embedded " ++ name ++ " defaults")
+      points -> pure (maximum points)
+    let dataMarkers=[index | (index,item) <- zip [0::Word32 ..] (ELF.elfSymbols elf)
+          ,ELF.symbolValue item == boundary,take 2 (ELF.symbolName item) == "$d"]
+        asInstructions=foldl (\current index -> putWordAt 0 (markerField index 0) armName current) elfBytes dataMarkers
+    unless (not (null dataMarkers)) (fail ("embedded " ++ name ++ " defaults are not mapped data"))
+    expectRefusal ("embedded " ++ name ++ " defaults relabeled as instructions")
+      (CodeRejected (AdmissionError (GuestAddress carrierStartAddress) LayoutInvalid)) (withElf asInstructions)
   let flippedAt address = let at = fromIntegral (address - carrierStartAddress) + 1 in B.take at bytes <> B.singleton (B.index bytes at + 1) <> B.drop (at + 1) bytes
   expectRefusal "mutated PROPERTIES byte" TableRejected (admit (flippedAt tableAddress) symbolText)
   expectRefusal "mutated SLOTS byte" SlotTableRejected (admit (flippedAt slotAddress) symbolText)
   let unsaved = [case propertyClass p of Owned (OwnedSlotField arm) -> p {propertyClass = Owned (OwnedSlotField arm {slotSave = NoSave})}; _ -> p | p <- properties]
-  expectRefusal "slot fields the SLOTS table does not hold" SlotTableRejected (deriveArtifact unsaved testCarrier bytes symbolText)
+  expectRefusal "slot fields the SLOTS table does not hold" SlotTableRejected (deriveArtifact ProductionArtifact unsaved testCarrier (ArtifactInput bytes symbolText elfBytes))
   expectRefusal "mutated SPECIALS byte" SpecialTableRejected (admit (flippedAt specialAddress) symbolText)
   let swapped = [case propertyClass p of Owned (OwnedField arm@(FieldArm _ _ _ (FieldStock _ provisional) _ _)) -> p {propertyClass = Owned (OwnedField arm {fieldSource = FieldStock Stock61d5f0 provisional})}; _ -> p | p <- properties]
-  expectRefusal "stock defaults the SPECIALS table does not hold" SpecialTableRejected (deriveArtifact swapped testCarrier bytes symbolText)
-  expectRefusal "configuration accessor base changed" (EncodingRejected (AccessorEncoding (Accessor ConfigImage Load8)))
-    (admit (replaceWord (configLoad8 + 4) 0xe340c097 bytes) symbolText)
+  expectRefusal "stock defaults the SPECIALS table does not hold" SpecialTableRejected (deriveArtifact ProductionArtifact swapped testCarrier (ArtifactInput bytes symbolText elfBytes))
+  expectRefusal "mutated embedded slot defaults" (DefaultTableRejected (FunctionName "SLOT_BYTES")) (admit (flippedAt slotDefaults) symbolText)
+  expectRefusal "mutated embedded tail defaults" (DefaultTableRejected (FunctionName "TAIL_BYTES")) (admit (flippedAt tailDefaults) symbolText)
   expectRefusal "stock leaf symbol moved" SymbolRejected (admit bytes (moveSymbol "xm1_stock_61d59c" 0x61d5a0 symbolText))
   expectRefusal "BL from Rust to a bracket callee" (CodeRejected (AdmissionError (GuestAddress firstCall) (CallOutsideOwned (GuestAddress 0x61da3c))))
     (admit (replaceWord firstCall (branchWord True firstCall 0x61da3c) bytes) symbolText)
   expectRefusal "artifact linked away from the hull scan's carrier" (PlacementRejected (CarrierNotCandidate (GuestAddress carrierStartAddress)))
-    (deriveArtifact properties (Carrier (GuestAddress 0x62c4b0) (GuestAddress carrierEndAddress)) bytes symbolText)
-  expectRefusal "setter stub passing r7 as the slot" (EncodingRejected (StubEncoding SetterStub))
-    (admit (replaceWord (setterStubAddress + 48) 0xe1a03007 bytes) symbolText)
-  expectRefusal "setter stub ending b 0x630200" (EncodingRejected (StubEncoding SetterStub))
+    (deriveArtifact ProductionArtifact properties (Carrier (GuestAddress 0x62c4b0) (GuestAddress carrierEndAddress)) (ArtifactInput bytes symbolText elfBytes))
+  expectRefusal "setter entry calls rather than tail branches" (EncodingRejected (EntryEncoding SetterEntry))
+    (admit (replaceWord setterStubAddress (branchWord True setterStubAddress setStart) bytes) symbolText)
+  expectRefusal "setter ending b 0x630200" (EncodingRejected (EntryEncoding SetterEntry))
     (admit (replaceWord setterPop (branchWord False setterPop 0x630200) bytes) symbolText)
-  expectRefusal "setter stub without the open call" (EncodingRejected (StubEncoding SetterStub))
-    (admit (replaceWord (setterStubAddress + 32) 0xe320f000 bytes) symbolText)
-  expectRefusal "setter stub closing at the open's site" (EncodingRejected (StubEncoding SetterStub))
-    (admit (replaceWord (setterStubAddress + 32) (branchWord True (setterStubAddress + 32) 0x61d944) bytes) symbolText)
-  expectRefusal "bracket callee symbol moved" SymbolRejected (admit bytes (moveSymbol "xm1_stock_61da3c" 0x61da40 symbolText))
   let delegating = case break (\p -> case propertyClass p of Owned (OwnedField _) -> True; _ -> False) properties of
         (before, p : after) -> before ++ p {propertyClass = Delegated ExitAdjusts} : after
         (before, []) -> before
       unbracketed = [case propertyClass p of Owned (OwnedField arm@(FieldArm _ _ _ _ _ Bank0Bracket)) -> p {propertyClass = Owned (OwnedField arm {fieldHook = NoHook})}; _ -> p | p <- properties]
-  expectRefusal "a classification delegating a property" TableRejected (deriveArtifact delegating testCarrier bytes symbolText)
-  expectRefusal "bracket hooks the tables do not hold" TableRejected (deriveArtifact unbracketed testCarrier bytes symbolText)
-  expectRefusal "getter stub popping the setter list" (EncodingRejected (StubEncoding GetterStub))
-    (admit (replaceWord getterPop 0xe8bd89f8 bytes) symbolText)
-  expectRefusal "slot-defaults accessor base changed" (EncodingRejected (AccessorEncoding (Accessor SlotDefaultsImage Load8)))
-    (admit (replaceWord (slotDefaultsLoad8 + 4) 0xe340c07d bytes) symbolText)
-  expectRefusal "tail-defaults accessor storing" (EncodingRejected (AccessorEncoding (Accessor TailDefaultsImage Load8)))
-    (admit (replaceWord (tailDefaultsLoad8 + 8) 0xe7cc1000 bytes) symbolText)
-  expectRefusal "tail-defaults halfword accessor reading a byte" (EncodingRejected (AccessorEncoding (Accessor TailDefaultsImage Load16)))
-    (admit (replaceWord (tailDefaultsLoad16 + 8) 0xe7dc0000 bytes) symbolText)
-  expectRefusal "moved stub" SymbolRejected (admit bytes (moveSymbol "xm1_setter_stub" (setterStubAddress + 4) symbolText))
-  expectRefusal "store outside an accessor" (CodeRejected (AdmissionError (GuestAddress firstCall) NonStackStore))
+  expectRefusal "a classification delegating a property" TableRejected (deriveArtifact ProductionArtifact delegating testCarrier (ArtifactInput bytes symbolText elfBytes))
+  expectRefusal "bracket hooks the tables do not hold" TableRejected (deriveArtifact ProductionArtifact unbracketed testCarrier (ArtifactInput bytes symbolText elfBytes))
+  expectRefusal "getter uses implicit r12" (EncodingRejected (EntryEncoding GetterEntry))
+    (admit (replaceWord getterPop 0xe1a0000c bytes) symbolText)
+  expectRefusal "store boundary lower bound changed" (EncodingRejected (StorageEncoding StorageByte))
+    (admit (replaceWord store8 0xe300c000 bytes) symbolText)
+  expectRefusal "store boundary range check removed" (EncodingRejected (StorageEncoding StorageByte))
+    (admit (replaceWord (store8 + 12) 0xe320f000 bytes) symbolText)
+  expectRefusal "halfword boundary widened by a byte" (EncodingRejected (StorageEncoding StorageHalf))
+    (admit (replaceWord (store16 + 16) (U.word32At bytes (fromIntegral (store8 + 16 - carrierStartAddress))) bytes) symbolText)
+  expectRefusal "mirror byte driver target changed" (EncodingRejected (MirrorEncoding (FunctionName "xm1_storage_write")))
+    (admit (replaceWord (mirrorWrite + 8) (branchWord True (mirrorWrite + 8) 0x6a59bc) bytes) symbolText)
+  expectRefusal "mirror boundary called without saving lr" (EncodingRejected (MirrorEncoding (FunctionName "xm1_storage_write")))
+    (admit (replaceWord mirrorWrite 0xe320f000 bytes) symbolText)
+  expectRefusal "mirror absolute target moved" SymbolRejected
+    (admit bytes (moveSymbol "xm1_backup_write6a59b8" 0x6a59bc symbolText))
+  expectRefusal "mirror retained target called outside its boundary" (CodeRejected (AdmissionError (GuestAddress firstCall) (CallOutsideOwned (GuestAddress 0x6a59b8))))
+    (admit (replaceWord firstCall (branchWord True firstCall 0x6a59b8) bytes) symbolText)
+  expectRefusal "area-3 writer called by the header path" (CodeRejected (AdmissionError (GuestAddress firstCall) (CallOutsideOwned (GuestAddress 0x61d92c))))
+    (admit (replaceWord firstCall (branchWord True firstCall 0x61d92c) bytes) symbolText)
+  expectRefusal "moved entry" SymbolRejected (admit bytes (moveSymbol "xm1_property_set_entry" (setterStubAddress + 4) symbolText))
+  expectRefusal "store outside a boundary" (CodeRejected (AdmissionError (GuestAddress firstCall) NonStackStore))
     (admit (replaceWord firstCall 0xe5810000 bytes) symbolText)
   expectRefusal "BL to an outside address" (CodeRejected (AdmissionError (GuestAddress firstCall) (CallOutsideOwned (GuestAddress 0x700000))))
     (admit (replaceWord firstCall (branchWord True firstCall 0x700000) bytes) symbolText)
-  expectRefusal "accessor base changed" (EncodingRejected (AccessorEncoding (Accessor BankImage Store8)))
-    (admit (replaceWord (bankStore8 + 4) 0xe340c097 bytes) symbolText)
-  expectRefusal "accessor variant encoding" (EncodingRejected (AccessorEncoding (Accessor BankImage Load16)))
-    (admit (replaceWord (bankLoad16 + 8) 0xe19c0fb0 bytes) symbolText)
+  expectRefusal "caller-output length bound removed" (EncodingRejected (OutputEncoding StorageByte))
+    (admit (replaceWord (output8 + 8) 0xe320f000 bytes) symbolText)
+  expectRefusal "caller-output overflow bound removed" (EncodingRejected (OutputEncoding StorageByte))
+    (admit (replaceWord (output8 + 16) 0xe320f000 bytes) symbolText)
+  expectRefusal "caller-output index bound removed" (EncodingRejected (OutputEncoding StorageByte))
+    (admit (replaceWord (output8 + 24) 0xe320f000 bytes) symbolText)
+  forM_
+    [ ("halfword output length bound removed",8,0xe320f000)
+    , ("halfword output span overflow bound removed",16,0xe320f000)
+    , ("halfword output index overflow bound removed",24,0xe320f000)
+    , ("halfword output whole-write bound removed",32,0xe320f000)
+    , ("halfword output alignment bound removed",44,0xe320f000)
+    , ("halfword output narrowed to a byte",48,0xe5cc3000)
+    ] $ \(label,offset,instruction) ->
+      expectRefusal label (EncodingRejected (OutputEncoding StorageHalf))
+        (admit (replaceWord (output16+offset) instruction bytes) symbolText)
+  expectRefusal "mapped status store narrowed to a byte" (EncodingRejected StatusEncoding)
+    (admit (replaceWord (status32 + 8) 0xe5cc0000 bytes) symbolText)
+  expectRefusal "mapped status word moved" (EncodingRejected StatusEncoding)
+    (admit (replaceWord status32 0xe30ecdc8 bytes) symbolText)
+  expectRefusal "store boundary width changed" (EncodingRejected (StorageEncoding StorageByte))
+    (admit (replaceWord (store8 + 132) 0xe5801000 bytes) symbolText)
+  expectRefusal "store boundary writes through another pointer" (EncodingRejected (StorageEncoding StorageHalf))
+    (admit (replaceWord (store16 + 132) 0xe1c210b0 bytes) symbolText)
   expectRefusal "B into stock" (CodeRejected (AdmissionError (GuestAddress firstCall) (BranchOutsideOwned (GuestAddress 0x61e110))))
     (admit (replaceWord firstCall (branchWord False firstCall 0x61e110) bytes) symbolText)
   expectRefusal "a stock-frame pop inside Rust" (CodeRejected (AdmissionError (GuestAddress firstCall) PcWrite))
@@ -433,3 +572,4 @@ main = do
   carrierTests
   placementTests properties artifact
   walkerTests
+  literalPoolTests

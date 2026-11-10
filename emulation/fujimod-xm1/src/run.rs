@@ -26,7 +26,7 @@ use std::collections::BTreeMap;
 #[serde(transparent)]
 pub struct Address(pub u64);
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, serde::Serialize)]
 #[serde(transparent)]
 pub struct NodeName(pub String);
 

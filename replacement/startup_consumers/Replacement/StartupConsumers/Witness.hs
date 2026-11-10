@@ -77,7 +77,7 @@ admitInputs sources installer dispatcher producer installerCandidate dispatcherC
   joinedMetadata <- inner "composition" (C.candidateContractValue joinedCandidate)
   require (installerMetadata == I.contractValue installation && dispatcherMetadata == D.contractValue dispatch
     && joinedMetadata == C.contractValue composition) ContractRejected
-  require (hash (producerRun producer) == Digest "efa32ff8d2a378ba9e098ac28015faf82856765c866d5db5b97cb1c38342deef"
+  require (hash (producerRun producer) == Digest "6e6ac441c0661470b5b26abe7628f19ec118ac568967938378c88dea448835cb"
     && hash (producerRom producer) == Digest "4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be"
     && not (B.null (producerExecutable producer))) IdentityRejected
   require (nativeContract installer == L.toStrict (J.encode (I.candidateContractValue installerCandidate))
@@ -107,7 +107,7 @@ admitLoaderJoinedInputs sources loaderA loaderB dispatcher installer producer ca
   require (recorded == LS.contractValue canonical artifact
     && manifest == L.toStrict (J.encode (LS.candidateContractValue candidate))
     && loaderProducerDat producer == LS.candidateBytes candidate) ContractRejected
-  require (hash (loaderProducerRun producer) == Digest "efa32ff8d2a378ba9e098ac28015faf82856765c866d5db5b97cb1c38342deef"
+  require (hash (loaderProducerRun producer) == Digest "6e6ac441c0661470b5b26abe7628f19ec118ac568967938378c88dea448835cb"
     && hash (loaderProducerRom producer) == Digest "4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be"
     && not (B.null (loaderProducerExecutable producer))) IdentityRejected
   pure (Inputs model (native installer) (native dispatcher) (LoaderJoinedProducer producer)

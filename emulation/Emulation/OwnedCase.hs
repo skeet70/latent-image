@@ -11,6 +11,8 @@ module Emulation.OwnedCase
   , CaseRegion (..)
   , mkRegion
   , CaseSpec (..)
+  , IgnoredMemory (..)
+  , IgnoredReason (..)
   , KernelCase (..)
   , StackContext
   , mkStackContext
@@ -27,6 +29,7 @@ module Emulation.OwnedCase
   , CaseId (..)
   , writeBatch
   , writeBatchWithProfile
+  , writeBatchWithInputPool
   , loadObservedBatch
   , registerValue
   , regionBytesOf
@@ -40,6 +43,7 @@ module Emulation.OwnedCase
   , required
   ) where
 
+import Control.Exception (IOException, try)
 import Control.Monad (foldM, forM_, unless, when)
 import Data.Aeson (Value, object, (.=))
 import qualified Data.ByteString as B
@@ -73,12 +77,15 @@ import Emulation.NativeObservation
   , reportRunnerExit
   , runnerStatusLabel
   )
-import Emulation.Sha256 (sha256, sha256Hex)
+import qualified Emulation.NativeEvidence as E
+import Emulation.Sha256 (sha256, sha256File, sha256Hex)
 import FujiAF.Host (get, str)
 import FujiAF.JSON (encodeCanonical)
 import Numeric (showHex)
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>), takeDirectory)
+import System.IO.Error (isDoesNotExistError)
+import System.Posix.Files (FileStatus, getSymbolicLinkStatus, isRegularFile)
 
 guestWord :: GuestAddress -> Word32
 guestWord = fromIntegral . guestAddress
@@ -150,6 +157,10 @@ permissionLabel ReadWrite = "rw"
 permissionLabel ReadExecute = "rx"
 permissionLabel Device = "device"
 
+reasonLabel :: IgnoredReason -> String
+reasonLabel PrivateFrame = "private-frame"
+reasonLabel CallerOutput = "caller-output"
+
 data CaseRegion = CaseRegion
   { caseRegion :: Region
   , casePermission :: Permission
@@ -172,6 +183,15 @@ mkRegion ident base size permission bytes =
     )
     permission
 
+data IgnoredReason = PrivateFrame | CallerOutput deriving (Eq, Show)
+
+data IgnoredMemory = IgnoredMemory
+  { ignoredRegion :: RegionId
+  , ignoredOffset :: Int
+  , ignoredExtent :: Int
+  , ignoredReason :: IgnoredReason
+  } deriving (Eq, Show)
+
 data CaseSpec = CaseSpec
   { caseId :: String
   , caseProvenance :: String
@@ -184,6 +204,7 @@ data CaseSpec = CaseSpec
   , caseExpectedStatus :: RunnerStatus
   , caseExpectedRegisters :: [(Register, Word32)]
   , caseExpectedMemory :: [(RegionId, B.ByteString)]
+  , caseIgnoredMemory :: [IgnoredMemory]
   , -- | The value MRC p14, 0, Rt, c2, c0, 0 reads; only a privileged case may name one.
     caseCp14Identity :: Maybe Word32
   , -- | Only a privileged case may be a kernel case.
@@ -388,6 +409,13 @@ caseValue profile file initializers@(Initializers artifacts _) spec =
           ]
     , "exclusions" .= [caseExclusion spec]
     ]
+      ++ [ "ignored_memory" .=
+             [ object (["region" .= regionName (ignoredRegion range), "offset" .= ignoredOffset range, "length" .= ignoredExtent range]
+                 ++ ["reason" .= reasonLabel (ignoredReason range) | ignoredReason range /= PrivateFrame])
+             | range <- caseIgnoredMemory spec
+             ]
+         | not (null (caseIgnoredMemory spec))
+         ]
       ++ ["cp14_identity" .= hexWord32 identity | Just identity <- [caseCp14Identity spec]]
       ++ ["kernel" .= kernelJson kernel | Just kernel <- [caseKernel spec]]
       ++ ["memory_profile" .= ("resource8" :: String) | profile == Resource8]
@@ -427,18 +455,25 @@ loadObserved runner path = do
 -- | Writes the cases into one directory as @ID.case.json@, every distinct initial-bytes artifact
 -- once as @SHA256.bin@, and the batch file @batch.json@, whose path is returned.
 writeBatch :: FilePath -> [CaseSpec] -> IO FilePath
-writeBatch = writeBatchWithProfile DefaultMemory
+writeBatch = writeBatchUsing DefaultMemory B.writeFile
 
 writeBatchWithProfile :: MemoryProfile -> FilePath -> [CaseSpec] -> IO FilePath
-writeBatchWithProfile profile directory specs = do
+writeBatchWithProfile profile = writeBatchUsing profile B.writeFile
+
+-- | Stages shared initial bytes through the input pool.
+writeBatchWithInputPool :: E.InputPool -> FilePath -> [CaseSpec] -> IO FilePath
+writeBatchWithInputPool pool = writeBatchUsing DefaultMemory (stageChecked pool)
+
+writeBatchUsing :: MemoryProfile -> (FilePath -> B.ByteString -> IO ()) -> FilePath -> [CaseSpec] -> IO FilePath
+writeBatchUsing profile writeAsset directory specs = do
   let ids = map caseId specs
-  when (nub ids /= ids) (error "writeBatch: duplicate case id")
+  when (nub ids /= ids) (error "writeBatchUsing: duplicate case id")
   createDirectoryIfMissing True directory
   let planned = [(spec, initializersFor profile spec) | spec <- specs]
       file artifact = case initializerDigest artifact of DigestHex digest -> digest ++ ".bin"
       caseFile spec = caseId spec ++ ".case.json"
       artifacts = M.fromList [(file artifact, initializerBytes artifact) | (_, Initializers initializers _) <- planned, artifact <- initializers]
-  forM_ (M.toList artifacts) $ \(name, bytes) -> B.writeFile (directory </> name) bytes
+  forM_ (M.toList artifacts) $ \(name, bytes) -> writeAsset (directory </> name) bytes
   forM_ planned $ \(spec, initializers) -> B.writeFile (directory </> caseFile spec) (encodeCanonical (caseValue profile file initializers spec))
   let path = directory </> "batch.json"
   B.writeFile path $
@@ -449,6 +484,24 @@ writeBatchWithProfile profile directory specs = do
           ]
       )
   pure path
+
+stageChecked :: E.InputPool -> FilePath -> B.ByteString -> IO ()
+stageChecked pool path content = do
+  existing <- try (getSymbolicLinkStatus path) :: IO (Either IOException FileStatus)
+  case existing of
+    Left exception
+      | isDoesNotExistError exception -> stage
+      | otherwise -> ioError exception
+    Right status
+      | not (isRegularFile status) -> fail ("staged asset is not a regular file: " ++ path)
+      | otherwise -> do
+          actual <- sha256File path
+          unless (actual == sha256 content) (fail ("staged asset content differs: " ++ path))
+          stage
+  where
+    stage = do
+      _ <- E.stageInput pool path content
+      pure ()
 
 -- | Runs a batch in one runner process, writes each case's report beside the batch as
 -- @ID.native-result.json@ and returns every case's observation in batch order, as

@@ -4,356 +4,23 @@ module Main (main) where
 import Control.Monad (unless)
 import Data.Aeson (Value (..), object, (.=))
 import qualified Data.Aeson as A
-import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
-import Data.Aeson.Types (parseMaybe)
-import Data.Bits (shiftR, (.&.), (.|.))
+import Data.Bits ((.&.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
 import Data.Either (isLeft)
-import Data.List (find, zip5)
-import Data.Maybe (fromMaybe)
+import Data.List (find)
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
-import qualified Data.Vector as V
-import Data.Word (Word32, Word8)
+import Emulation.LocalUiMenu (parseLocalUiMenu)
 import Emulation.PropertyPairCheck
-import Emulation.PropertyPairPlan
+import Emulation.PropertyPairPlan hiding (image4Base)
 import Emulation.PropertyPairRoutes
-import Emulation.Sha256 (sha256, sha256Hex)
+import Emulation.Sha256 (sha256)
 import EmulatorUsb (CrawlKey (..))
-import Numeric (showHex)
+import PropertyPairFixture
 import System.Exit (exitFailure)
-
-check :: String -> Bool -> IO Bool
-check name passed = do
-  unless passed (putStrLn ("FAIL " ++ name))
-  pure passed
-
-digestOf :: B.ByteString -> String
-digestOf = sha256Hex . sha256
-
-hex :: Word32 -> String
-hex value = "0x" ++ showHex value ""
-
-littleWords :: [Word32] -> B.ByteString
-littleWords values = B.pack [fromIntegral (value `shiftR` (8 * index)) | value <- values, index <- [0 .. 3 :: Int]]
-
-putWord :: Word32 -> Word32 -> B.ByteString -> B.ByteString
-putWord address value bytes = let offset = fromIntegral (address - image4Base) in
-  B.take offset bytes <> littleWords [value] <> B.drop (offset + 4) bytes
-
--- A synthetic image4, carrier and contract.
-
-image4Base, carrierStart, carrierEnd, fillWord, rustBody, retiredGetter, retiredSetter, slotGetter, slotSetter, getterCall, setterCall :: Word32
-image4Base = 0x61c400
-carrierStart = 0x62c4b0
-carrierEnd = 0x62c530
-fillWord = 0xe7f000f0
-rustBody = 0x62c4f0
-retiredGetter = 0x621100
-retiredSetter = 0x622100
-slotGetter = 0x621180
-slotSetter = 0x622280
-getterCall = 0x620000
-setterCall = 0x620010
-
-branchLink :: Word32 -> Word32 -> Word32
-branchLink site target = 0xeb000000 .|. (((target - (site + 8)) `shiftR` 2) .&. 0xffffff)
-
--- | The four store accessors, then one body word.
-linked :: B.ByteString
-linked = littleWords
-  [ 0xe30ccc64, 0xe340c096, 0xe7cc1000, 0xe12fff1e
-  , 0xe30ccc64, 0xe340c096, 0xe18c10b0, 0xe12fff1e
-  , 0xe30ecc00, 0xe340c089, 0xe7cc1000, 0xe12fff1e
-  , 0xe30ecc00, 0xe340c089, 0xe18c10b0, 0xe12fff1e
-  , 0xe1a00000 ]
-
-storeSite :: StoreAccessor -> Word32
-storeSite accessor = carrierStart + 16 * fromIntegral (fromEnum accessor) + 8
-
-canonical4 :: B.ByteString
-canonical4 = foldr (uncurry putWord) (B.replicate 0x20000 0)
-  [ (getterCall, branchLink getterCall getterEntry), (setterCall, branchLink setterCall setterEntry)
-  , (0x623000, retiredGetter), (0x623004, retiredSetter), (0x623008, slotGetter), (0x62300c, slotSetter) ]
-
-staged4 :: B.ByteString
-staged4 = foldr (uncurry putWord) spliced
-  [(0x623000, carrierStart), (0x623004, carrierStart + 0x10), (0x623008, carrierStart), (0x62300c, carrierStart + 0x10)]
- where
-  offset address = fromIntegral (address - image4Base)
-  fill = littleWords (replicate ((fromIntegral (carrierEnd - carrierStart) - B.length linked) `div` 4) fillWord)
-  spliced = B.take (offset carrierStart) canonical4 <> linked <> fill <> B.drop (offset carrierEnd) canonical4
-
-otherImages :: [(ImageName, Word32)]
-otherImages = [(Image5, 0xbf1a00), (Plain, 0x1100000), (LoaderA, 0x40000), (LoaderB, 0xd0000)]
-
-images :: M.Map ImageName B.ByteString
-images = M.fromList ((Image4, canonical4) : [(name, B.replicate 16 0) | (name, _) <- otherImages])
-
-sourceDat, ownedDat, symbols, observer :: String
-sourceDat = replicate 64 'a'
-ownedDat = replicate 64 'b'
-symbols = replicate 64 'c'
-observer = replicate 64 'd'
-
-contractBytes :: B.ByteString
-contractBytes = BL.toStrict (A.encode (object
-  [ "schema" .= (1 :: Int)
-  , "carrier" .= object ["start" .= carrierStart, "end" .= carrierEnd, "fill_word" .= fillWord]
-  , "patch" .= object ["words" .=
-      [ object ["address" .= (0x623000 :: Word32), "original" .= retiredGetter, "patched" .= carrierStart, "property" .= (5 :: Int), "table" .= ("getter" :: T.Text)]
-      , object ["address" .= (0x623004 :: Word32), "original" .= retiredSetter, "patched" .= (carrierStart + 0x10), "property" .= (5 :: Int), "table" .= ("setter" :: T.Text)]
-      , object ["address" .= (0x623008 :: Word32), "original" .= slotGetter, "patched" .= carrierStart, "property" .= (7 :: Int), "table" .= ("getter" :: T.Text)]
-      , object ["address" .= (0x62300c :: Word32), "original" .= slotSetter, "patched" .= (carrierStart + 0x10), "property" .= (7 :: Int), "table" .= ("setter" :: T.Text)] ]]
-  , "classification" .= object ["properties" .= [property index | index <- [0 .. 644 :: Word32]]]
-  , "source_sha256" .= object ["dat" .= sourceDat]
-  , "scan" .= object ["images" .= (scanImage "image4" image4Base canonical4 : [scanImage (imageNameWire name) base (images M.! name) | (name, base) <- otherImages])]
-  , "candidate_dat_sha256" .= ownedDat
-  , "linked_sha256" .= digestOf linked
-  , "linked_bytes" .= B.length linked
-  , "symbols_sha256" .= symbols
-  , "staged_image4_sha256" .= digestOf staged4
-  , "stack" .= object ["entries" .= [object ["name" .= storeAccessorName accessor, "entry" .= (storeSite accessor - 8)] | accessor <- [minBound .. maxBound]]]
-  ]))
- where
-  scanImage name base bytes = object ["image" .= (name :: T.Text), "base" .= base, "bytes" .= B.length bytes, "sha256" .= digestOf bytes]
-  property index = let (kind, getter, setter) = arms index in
-    object ["class" .= (kind :: T.Text), "property" .= hex index, "getterArm" .= hex getter, "setterArm" .= hex setter]
-  arms index
-    | index == 5 = ("owned-field", retiredGetter, retiredSetter)
-    | index == 6 = ("delegated", 0x621140, 0x622200)
-    | index == 7 = ("owned-slot-field", slotGetter, slotSetter)
-    | index == 8 = ("delegated", 0x6211c0, 0x6222c0)
-    | index == 9 = ("owned-read-only-field", 0x621000, 0x622000)
-    | index == 10 = ("owned-write-only-pair", 0x621000, 0x622000)
-    | otherwise = ("delegated", 0x621000, 0x622000)
-
-crawlRoute :: RouteName
-crawlRoute = RouteName "crawl-trial-00001"
-
-routesBytes :: B.ByteString
-routesBytes = routesWith [SetterEffect 5, CommitEffect]
-
--- | A route file whose crawl route records the given effects.
-routesWith :: [CrawlEffect] -> B.ByteString
-routesWith effects = BL.toStrict (encodeRouteFile (RouteFile (replicate 64 '0') "test" CrawlEffectsSource []
-  (phaseRoutes ++ [Route crawlRoute (KeyRoute [KeyOk] (CrawlTrial 1 effects))])))
-
-bindings :: Bindings
-bindings = Bindings sourceDat ownedDat routesBytes contractBytes linked symbols images observer
-
--- Synthetic observations.
-
-type Regions = M.Map Word32 B.ByteString
-
-zeroRegions :: Regions
-zeroRegions = M.fromList [(rangeStart range, B.replicate (fromIntegral (rangeEnd range - rangeStart range)) 0) | range <- settingsRanges]
-
-poke :: [(Word32, Word8)] -> Regions -> Regions
-poke bytes regions = foldl set regions bytes
- where
-  set current (address, byte) = case M.lookupLE address current of
-    Just (start, region) | address - start < fromIntegral (B.length region) ->
-      let offset = fromIntegral (address - start) in M.insert start (B.take offset region <> B.singleton byte <> B.drop (offset + 1) region) current
-    _ -> current
-
-regionsValue :: Regions -> Value
-regionsValue regions = toArray [object ["start" .= start, "bytes" .= concatMap byteHex (B.unpack bytes)] | (start, bytes) <- M.toList regions]
- where
-  byteHex byte = let text = showHex byte "" in replicate (2 - length text) '0' ++ text
-
-toArray :: [Value] -> Value
-toArray = A.toJSON
-
-hit :: SiteLabel -> Word32 -> [Word32] -> Word32 -> Word32 -> Value
-hit label address arguments sp lr = object
-  [ "site" .= siteLabelWire label, "address" .= hex address, "core" .= (0 :: Int), "instructions" .= (0 :: Int)
-  , "registers" .= object [K.fromString register .= hex value | (register, value) <- zip ["r0", "r1", "r2", "r3"] (arguments ++ repeat 0)]
-  , "sp" .= hex sp, "lr" .= hex lr, "cpsr" .= (0 :: Int) ]
-
-cpuWrite :: Word32 -> Int -> Maybe Integer -> [Word8] -> Word32 -> Value
-cpuWrite address width value before pc = object
-  [ "source" .= ("cpu-write" :: T.Text), "address" .= address, "physical" .= address, "size" .= width
-  , "value" .= value, "before" .= before, "byte_order" .= ("little" :: T.Text), "core" .= (0 :: Int)
-  , "pc" .= pc, "instructions" .= (0 :: Int), "tick" .= (0 :: Int) ]
-
-hostWrite :: Word32 -> Int -> Value
-hostWrite address width = object ["source" .= ("host-write" :: T.Text), "physical" .= address, "size" .= width]
-
-watch :: T.Text -> [Value] -> Value
-watch views rows = object
-  [ "enabled" .= True, "ranges" .= [[rangeStart range, rangeEnd range] | range <- settingsRanges]
-  , "records" .= rows, "violation" .= Null, "classes" .= ([] :: [Value]), "views" .= views ]
-
--- | Step n of a chain presses OK n times from the attached state; `stepBefore` overrides its
--- parent's after regions.
-data Step = Step { stepHits :: [Value], stepRows :: [Value], stepAfter :: Regions, stepStatus :: T.Text, stepMenu :: Value, stepBefore :: Maybe Regions }
-
-observation :: Role -> Step -> Observation
-observation role step = chain role [step]
-
-chain :: Role -> [Step] -> Observation
-chain = chainWith routesBytes
-
-chainWith :: B.ByteString -> Role -> [Step] -> Observation
-chainWith routes role chained = Observation receipt spec reset hits steps session
- where
-  plan = either error id (derivePlan (PlanInputs role (either error id (decodeContract contractBytes)) images linked Nothing))
-  spec = BL.toStrict (A.encode (specValue plan))
-  segment phase = object ["phase" .= phase, "instructions" .= (0 :: Int), "hits_end" .= (0 :: Int), "watch" .= watch "observe" [], "regions" .= regionsValue zeroRegions]
-  reset = BL.toStrict (A.encode (object
-    [ "schema" .= (1 :: Int), "reset" .= object ["instructions" .= (0 :: Int)], "regions_at_reset" .= regionsValue zeroRegions
-    , "segments" .= [segment phase | phase <- [minBound .. maxBound :: AttachPhase]] ]))
-  hits = B.concat [BL.toStrict (A.encode value) <> "\n" | value <- concatMap stepHits chained]
-  ends = scanl (+) 0 (map (length . stepHits) chained)
-  befores = zipWith fromMaybe (zeroRegions : map stepAfter chained) (map stepBefore chained)
-  steps = BL.toStrict (A.encode [ object
-    [ "step" .= number, "parent" .= (number - 1), "keys" .= replicate number KeyOk, "hits" .= [from, to]
-    , "idle" .= object ["instructions" .= (0 :: Int), "ran" .= instructionsValue preKeyIdle]
-    , "press" .= object ["failure" .= Null, "settle" .= object ["status" .= stepStatus step], "menu" .= stepMenu step]
-    , "watch" .= watch "fixed" (stepRows step), "regions_before" .= regionsValue before, "regions_after" .= regionsValue (stepAfter step) ]
-    | (number, step, before, from, to) <- zip5 [1 :: Int ..] chained befores ends (drop 1 ends) ])
-  session = digestOf "session"
-  image4 = if role == RetainedRole then canonical4 else staged4
-  digest bytes = object ["sha256" .= digestOf bytes]
-  same text = object ["sha256" .= (text :: String)]
-  receipt = BL.toStrict (A.encode (object
-    [ "role" .= roleWire role
-    , "inputs" .= object
-        [ "dat" .= same (if role == RetainedRole then sourceDat else ownedDat), "routes" .= digest routes
-        , "contract" .= digest contractBytes, "linked" .= digest linked, "symbols" .= same symbols, "observer" .= same observer
-        , "run" .= digest "run", "boot_rom" .= digest "rom", "adjustment_nand" .= digest "nand", "bridge" .= digest "bridge"
-        , "analysis" .= object [K.fromText (imageNameWire name) .= digestOf bytes | (name, bytes) <- M.toList images]
-        , "role_image4_sha256" .= digestOf image4 ]
-    , "files" .= object
-        [ "spec.json" .= digestOf spec, "reset-observation.json" .= digestOf reset, "hits.jsonl" .= digestOf hits
-        , "steps.json" .= digestOf steps, "emulator-session.json" .= session ]
-    , "outcome" .= object ["status" .= ("completed" :: T.Text)]
-    , "bounds" .= object ["hit_limit" .= hitLimit, "watch_limit" .= watchLimit]
-    , "probe" .= Null
-    , "pre_key_idle_instructions" .= instructionsValue preKeyIdle ]))
-
-stackPointer, written :: Word32
-stackPointer = 0x1000
-written = 0x96cc74
-
-setterIn, commit, setterOut, getterIn, getterOut :: Value
-setterIn = hit SetterEntry setterEntry [5, 1] stackPointer (setterCall + 4)
-commit = hit PropertyCommit propertyCommit [] stackPointer 0
-setterOut = hit SetterReturn (setterCall + 4) [0] stackPointer 0
-getterIn = hit GetterEntry getterEntry [5] stackPointer (getterCall + 4)
-getterOut = hit GetterReturn (getterCall + 4) [0xab] stackPointer 0
-
-storeHit :: StoreAccessor -> Word32 -> Word32 -> Value
-storeHit accessor offset value = hit (AccessorStore accessor) (storeSite accessor) [offset, value] stackPointer 0
-
-menu :: Value
-menu = object ["node" .= (1 :: Int)]
-
--- | The owned setter stores 0xab through the bank accessor; the retained one from its stock arm.
-ownedStep, retainedStep :: Step
-ownedStep = Step [setterIn, commit, storeHit BankStore8 0x10 0xab, setterOut, getterIn, getterOut]
-  [cpuWrite written 1 (Just 0xab) [0] (storeSite BankStore8)] (poke [(written, 0xab)] zeroRegions) "packet-consumed" menu Nothing
-retainedStep = ownedStep
-  { stepHits = [setterIn, commit, setterOut, getterIn, getterOut]
-  , stepRows = [cpuWrite written 1 (Just 0xab) [0] retiredSetter] }
-
-qualified :: Role -> Step -> Either Refusal Qualified
-qualified role step = qualify bindings role (observation role step)
-
-refusal :: Role -> Step -> Maybe Refusal
-refusal role step = either Just (const Nothing) (qualified role step)
-
-crawlResult :: Role -> Step -> Maybe RouteResult
-crawlResult role step = either (const Nothing) (lookup crawlRoute . map (\result -> (resultRoute result, result)) . qualifiedRoutes) (qualified role step)
-
-compared :: Step -> Step -> Either Refusal ()
-compared retained owned = comparedChains [retained] [owned]
-
-comparedChains :: [Step] -> [Step] -> Either Refusal ()
-comparedChains retained owned = do
-  left <- qualify bindings RetainedRole (chain RetainedRole retained)
-  right <- qualify bindings OwnedRole (chain OwnedRole owned)
-  () <$ compareRoles left right
-
--- | A crawl route's comparison output from its ordered setter calls alone.
-comparedSetters :: [Call] -> [Call] -> Either Refusal Value
-comparedSetters retained owned = comparisonValue left right <$> compareRoles left right
- where
-  left = qualifiedWith RetainedRole retained
-  right = qualifiedWith OwnedRole owned
-  qualifiedWith role setters = Qualified role [] 0 1 [RouteResult crawlRoute CrawlClass [] setters [] [] [] [] [] []] []
-
-getterKey5, getterKey6 :: GetterKey
-getterKey5 = GetterKey (getterCall + 4) [5, 0, 0, 0]
-getterKey6 = GetterKey (getterCall + 4) [6, 0, 0, 0]
-
--- | A getter call of the property returning the value.
-getterPair :: Word32 -> Word32 -> [Value]
-getterPair property value = [hit GetterEntry getterEntry [property] stackPointer (getterCall + 4), hit GetterReturn (getterCall + 4) [value] stackPointer 0]
-
--- | An empty child step of a one-step chain, with the given hits.
-childWith :: [Value] -> Step
-childWith hits = retainedStep { stepHits = hits, stepRows = [] }
-
--- | The retained crawl route's reported effect block runs, as (position, first effect, repeats), when
--- its route file records `recorded` and its step's hits end with `extra` after the standard setter,
--- commit and getter calls.
-effectBlocksWith :: [CrawlEffect] -> [Value] -> Either Refusal (Maybe [(Int, Int, Int)])
-effectBlocksWith recorded extra = do
-  let routes = routesWith recorded
-  result <- qualify bindings { bindRoutes = routes } RetainedRole (chainWith routes RetainedRole [retainedStep { stepHits = stepHits retainedStep ++ extra }])
-  pure $ case qualifiedValue result of
-    Object top | Just (Array summaries) <- KM.lookup "per_route" top ->
-      case [runs | Object summary <- V.toList summaries, KM.lookup "route" summary == Just (A.toJSON crawlRoute), Just runs <- [KM.lookup "effect_block_runs" summary]] of
-        [runs] -> parseMaybe (A.withArray "runs" (mapM (A.withObject "run" (\run -> (,,) <$> run A..: "position" <*> run A..: "first_effect" <*> run A..: "repeats")) . V.toList)) runs
-        _ -> Nothing
-    _ -> Nothing
-
--- | A setter entry for the property and its return.
-setterPair :: Word32 -> [Value]
-setterPair property = [hit SetterEntry setterEntry [property, 0] stackPointer (setterCall + 4), hit SetterReturn (setterCall + 4) [0] stackPointer 0]
-
-blockHits :: [Value]
-blockHits = concatMap setterPair timeDrivenSequence
-
--- | The retained and owned setter block runs of the first compared route, as (position, first call, repeats).
-blockRunsOf :: Value -> Maybe ([(Int, Int, Int)], [(Int, Int, Int)])
-blockRunsOf comparison = case comparison of
-  Object top | Just (Array routes) <- KM.lookup "per_route" top, Just (Object route) <- routes V.!? 0
-             , Just (Object runs) <- KM.lookup "setter_block_runs" route ->
-    (,) <$> (KM.lookup "retained" runs >>= decodeRuns) <*> (KM.lookup "owned" runs >>= decodeRuns)
-  _ -> Nothing
- where
-  decodeRuns = parseMaybe (A.withArray "runs" (mapM (A.withObject "run" (\run -> (,,) <$> run A..: "position" <*> run A..: "first_call" <*> run A..: "repeats")) . V.toList))
-
-blockCall :: Word32 -> Word32 -> Call
-blockCall value property = Call [property, value, 0, 1] 0x630a04 (Just 1)
-
-timeBlock, changedBlock :: [Call]
-timeBlock = map (blockCall 0) timeDrivenSequence
-changedBlock = map (blockCall 1) timeDrivenSequence
-
-otherSetter :: Call
-otherSetter = Call [5, 1, 0, 0] (setterCall + 4) (Just 0)
-
-retainedSidecars :: Role -> T.Text -> RetainedObservation
-retainedSidecars role status = retainedSidecarsWith role status [retainedStep]
-
--- | Sidecars for a chain whose steps carry the given hits.
-retainedSidecarsWith :: Role -> T.Text -> [Step] -> RetainedObservation
-retainedSidecarsWith role status steps' = RetainedObservation receipt (obsSteps base) (obsHits base)
- where
-  base = chain role steps'
-  receipt = case A.eitherDecodeStrict' (obsReceipt base) of
-    Right (Object fields) -> BL.toStrict (A.encode (Object (KM.insert "outcome" (object ["status" .= status]) fields)))
-    _ -> error "test receipt is not an object"
-
-refusedAs :: Either Refusal a -> Refusal -> Bool
-refusedAs result expected = either (== expected) (const False) result
 
 main :: IO ()
 main = do
@@ -373,6 +40,7 @@ main = do
       file source routes = RouteFile (replicate 64 '0') "test" source [Exclusion "reason" playbackTrials] routes
       roundTrip source routes = decodeRouteFile (BL.toStrict (encodeRouteFile (file source routes)))
       retainedSource = RetainedObservationSource (sha256 "receipt") (sha256 "steps") (sha256 "hits")
+      revisedSource = SourceRevisedObservationSource (sha256 "receipt") (sha256 "steps") (sha256 "hits") (sha256 "source binding")
       valid = phaseRoutes ++ selected ++ declaredRoutes
       ownedWith hits = ownedStep { stepHits = hits }
       wide = 0x9c281c
@@ -384,12 +52,124 @@ main = do
   results <- sequence
     [ check "one route per ordered effect sequence, fewest presses then lowest trial"
         (map routeKeys selected == [[KeyOk, KeyOk], [KeyDown], [KeyBack, KeyBack, KeyOk], [KeyOk, KeyPlay], [KeyLeft]])
+    , check "composed publication binds the complete staged image4"
+        (fmap (digestOf . inputLinked) composedInputs == Right (digestOf composedImage)
+          && (composedInputs >>= roleImage4) == Right composedImage)
+    , check "composed plans qualify both instances of a shared boundary and the custom boundary"
+        (case composedInputs >>= derivePlan of
+          Right plan -> all (\(accessor,address,_,index) -> M.lookup (address+fromIntegral (index*4)) (planStores plan) == Just accessor) composedBoundaries
+            && classifyWriter plan (composedCodeStart+0x80) == CarrierBody
+          Left _ -> False)
+    , check "composed plans guard retired bank custom and record interiors but not live entries"
+        (case composedInputs >>= derivePlan of
+          Right plan -> all (\address -> M.lookup address (planSites plan) == Just (Guard RetiredStorage)) [0x61d8e0,0x6a8488,0x6ac2b8]
+            && all (\(address,_) -> M.lookup address (planSites plan) == if address == area3Append then Just Area3Append else Nothing) composedEntries
+          Left _ -> False)
+    , check "composed plans reject a modified checked store encoding"
+        (isLeft (do inputs <- composedInputs
+                    let changed = putWord (composedCodeStart+4) 0 (inputLinked inputs)
+                        contract = (inputContract inputs){contractLinkedSha256=digestOf changed,contractStagedImage4=digestOf changed}
+                    derivePlan inputs{inputContract=contract,inputLinked=changed}))
+    , check "composed plans reject narrowed custom halfword and word stores"
+        (all (\(_,address,_,index) -> isLeft (do
+          inputs <- composedInputs
+          let changed = putWord (address+fromIntegral (4*index)) 0xe5c01000 (inputLinked inputs)
+              contract = (inputContract inputs){contractLinkedSha256=digestOf changed,contractStagedImage4=digestOf changed}
+          derivePlan inputs{inputContract=contract,inputLinked=changed}))
+          [boundary | boundary@(accessor,_,_,_) <- composedBoundaries, accessor `elem` [CustomHalf,CustomWord]])
+    , check "composed plans reject raw shim substitutions rather than falling back"
+        (isLeft (do inputs <- composedInputs
+                    let contract = inputContract inputs
+                    derivePlan inputs{inputContract=contract{contractEntries=[("xm1_bank_store8",composedCodeStart)]}}))
+    , check "guarded absolute stores resolve their actual destination and reject whole-write overflow"
+        (storeEffect StorageByte [0x409c295c,0xab] == Just (0x409c295c,1,0xab)
+          && storeEffect StorageHalf [0x96d1a9,0x1234] == Nothing
+          && storeEffect CustomByte [0x89f86f,0x45] == Just (0x89f86f,1,0x45)
+          && storeEffect CustomByte [0x89f870,0x45] == Nothing
+          && storeEffect OutputByte [0x89ec00,40,39,0x67] == Just (0x89ec27,1,0x67)
+          && storeEffect OutputByte [0x89ec00,40,40,0x67] == Nothing
+          && storeEffect StatusWord [0xffffffc1] == Just (0x89edc4,4,0xffffffc1))
+    , check "custom halfword writes retain exact aligned materialization windows"
+        (storeEffect CustomHalf [0x89f838,0x1234] == Just (0x89f838,2,0x1234)
+          && storeEffect CustomHalf [0x89f86a,0x1234] == Just (0x89f86a,2,0x1234)
+          && storeEffect CustomHalf [0x89f874,0x1234] == Just (0x89f874,2,0x1234)
+          && storeEffect CustomHalf [0x89f8a6,0x1234] == Just (0x89f8a6,2,0x1234)
+          && storeEffect CustomHalf [0x409c295c,0x1234] == Just (0x409c295c,2,0x1234)
+          && storeEffect CustomHalf [0x409c2982,0x1234] == Just (0x409c2982,2,0x1234)
+          && all ((== Nothing) . storeEffect CustomHalf . (\address -> [address,0x1234]))
+            [0x89f834,0x89f836,0x89f839,0x89f86c,0x89f86e,0x89f872,0x89f8a8,0x409c295a,0x409c2984])
+    , check "custom word writes retain reset previous and handle boundaries only"
+        (storeEffect CustomWord [0x89f834,1] == Just (0x89f834,4,1)
+          && storeEffect CustomWord [0x89f838,0x12345678] == Just (0x89f838,4,0x12345678)
+          && storeEffect CustomWord [0x89f86c,0x89f8f8] == Just (0x89f86c,4,0x89f8f8)
+          && all ((== Nothing) . storeEffect CustomWord . (\address -> [address,0x12345678]))
+            [0x89f830,0x89f835,0x89f86e,0x89f870,0x89f874,0x409c295c])
+    , check "halfword output bounds the whole even-addressed write"
+        (storeEffect OutputHalf [0x89ec00,40,38,0x1234] == Just (0x89ec26,2,0x1234)
+          && storeEffect OutputHalf [0x89ec01,4,1,0x1234] == Just (0x89ec02,2,0x1234)
+          && all ((== Nothing) . storeEffect OutputHalf)
+            [ [0x89ec00,40,39,0x1234], [0x89ec00,40,1,0x1234]
+            , [0x89ec01,40,0,0x1234], [0xfffffffe,2,0,0x1234]
+            , [0x89ec00,40,0xffffffff,0x1234] ])
+    , check "composed persistence keeps append wire payload read program and status in order"
+        (case customPersistence [customAppend,customRead,customProgram,customProgramResult,customRead] of
+          Right [CustomAppend {},CustomRead {},CustomProgram {},CustomProgramResult {},CustomRead {}] -> True
+          _ -> False)
+    , check "typed and retained append ABI boundaries normalize the same captured request"
+        (customPersistence [customAppend,customProgram,customProgramResult]
+          == customPersistence [customAppendAt area3Append [0x89f8f8,0,0x89f874],customProgram,customProgramResult])
+    , check "an append count without captured logical wire is refused"
+        (isLeft (customPersistence [hit Area3Append area3Append [0x89f8f8,0,0x89f874] stackPointer 0]))
+    , check "a program count without the physical staging bytes is refused"
+        (isLeft (customPersistence [customAppend,hit RecordProgram 0x6ab2f4 [0x89fa80,0,52,0x600] stackPointer 0,customProgramResult]))
+    , check "custom physical programs require 0x600 rather than logical or bank record extents"
+        (all (\count -> isLeft (customPersistence [customAppend,memoryHit RecordProgram 0x6ab2f4 [0x89fa80,0,52,count] [B.take (fromIntegral count) customProgramBytes],customProgramResult])) [52,0x1c2])
+    , check "a program with changed append metadata is refused"
+        (isLeft (customPersistence [customAppend,memoryHit RecordProgram 0x6ab2f4 [0x89fa80,0,52,0x600] [B.take 2 customProgramBytes <> B.singleton 0xee <> B.drop 3 customProgramBytes],customProgramResult]))
+    , check "equal append counts do not hide physical tail changes"
+        (let original = customPersistence [customAppend,customProgram,customProgramResult]
+             changed = customPersistence [customAppend,memoryHit RecordProgram 0x6ab2f4 [0x89fa80,0,52,0x600] [B.take 100 customProgramBytes <> B.singleton 0xee <> B.drop 101 customProgramBytes],customProgramResult]
+         in not (isLeft original) && not (isLeft changed) && original /= changed)
+    , check "equal append counts do not hide medium error status"
+        (let success = customPersistence [customAppend,customProgram,customProgramResult]
+             failure = customPersistence [customAppend,customProgram,hit RecordProgramResult 0x6ab390 [0xffffffff] stackPointer 0]
+         in not (isLeft success) && not (isLeft failure) && success /= failure)
+    , check "a custom medium request requires its matching result"
+        (isLeft (customPersistence [customAppend,customProgram])
+          && isLeft (customPersistence [customProgramResult])
+          && isLeft (customPersistence [customAppend,customProgram,hit RecordEraseResult 0x6ab4c0 [0] stackPointer 0]))
+    , check "nonexecuted conditional returns are not medium results"
+        (customPersistence [customAppend,customProgram,hitFlags 0x40000000 (hit RecordProgramResult 0x6ab314 [0xffffffff] stackPointer 0),customProgramResult]
+          == customPersistence [customAppend,customProgram,customProgramResult]
+          && persistenceStatusExecutes 0x6ab348 0x20000000
+          && not (persistenceStatusExecutes 0x6ab348 0x60000000))
+    , check "both cache destinations are diagnostic and read scheduling does not change persistence equivalence"
+        (let stockReads =
+               [ customRead
+               , hit RecordRead 0x6aad94 [0xb20000,0x8c0080] stackPointer 0
+               , customRead ]
+             ownedReads = [hit RecordRead 0x6aad94 [0xb20000,0x8a0080] stackPointer 0]
+         in comparedPersistence (customAppend:stockReads ++ [customProgram,customProgramResult])
+              (customAppend:ownedReads ++ [customProgram,customProgramResult]) == Right ()
+           && customPersistence stockReads /= customPersistence ownedReads)
+    , check "read diagnostics reject a destination outside either real cache"
+        (isLeft (customPersistence [hit RecordRead 0x6aad94 [0xb00000,0x8e0080] stackPointer 0]))
+    , check "ignoring cache-read diagnostics still compares physical program tails and status"
+        (let normal = [customAppend,customRead,customProgram,customProgramResult]
+             tailChange = memoryHit RecordProgram 0x6ab2f4 [0x89fa80,0,52,0x600]
+               [B.take 100 customProgramBytes <> B.singleton 0xee <> B.drop 101 customProgramBytes]
+         in isLeft (comparedPersistence normal [customAppend,tailChange,customProgramResult])
+           && isLeft (comparedPersistence normal [customAppend,customProgram,hit RecordProgramResult 0x6ab390 [0xffffffff] stackPointer 0]))
+    , check "erase failures retain their typed event before the subsequent program"
+        (case customPersistence [customAppend,hit RecordErase 0x6ab458 [1] stackPointer 0,hit RecordEraseResult 0x6ab4c0 [0xffffffff] stackPointer 0,customProgram,customProgramResult] of
+          Right [CustomAppend {},CustomErase {},CustomEraseResult {},CustomProgram {},CustomProgramResult {}] -> True
+          _ -> False)
     , check "an edge leaving the screen PLAY opened is left out and listed" (playbackTrials == [18])
     , check "an edge whose only effects are the time-driven block is left out and listed, one with another setter is kept" (timeDrivenTrials == [21])
     , check "an edge without a property effect is not a route" (all ((/= [KeyOk]) . routeKeys) selected)
     , check "a crawl route keeps its edge's effects" (map routeBody (take 1 selected) == [KeyRoute [KeyOk, KeyOk] (CrawlTrial 7 [SetterEffect 4, CommitEffect])])
-    , check "route files round-trip with either effects source"
-        (and [roundTrip source valid == Right (file source valid) | source <- [CrawlEffectsSource, retainedSource]])
+    , check "route files round-trip with crawl, retained, and source-revised provenance"
+        (and [roundTrip source valid == Right (file source valid) | source <- [CrawlEffectsSource, retainedSource, revisedSource]])
     , check "a route file without the attach phases first is refused" (isLeft (roundTrip CrawlEffectsSource (selected ++ phaseRoutes)))
     , check "a key route needs a key" (isLeft (decodeRouteFile (C.pack (concat
         [ "{\"schema\":1,\"crawl_graph_sha256\":\"0\",\"selection\":\"t\",\"effects_source\":{\"kind\":\"crawl\"},\"exclusions\":[],\"routes\":["
@@ -398,6 +178,11 @@ main = do
     , check "repeated route names are refused" (isLeft (roundTrip CrawlEffectsSource (phaseRoutes ++ selected ++ take 1 selected)))
     , check "an effects source with a key its kind does not have is refused"
         (isLeft (A.eitherDecodeStrict' @EffectsSource (C.pack "{\"kind\":\"crawl\",\"receipt_sha256\":\"00\"}")))
+    , check "a source revision requires a valid binding digest"
+        (case A.toJSON revisedSource of
+          Object fields -> all (isLeft . A.eitherDecodeStrict' @EffectsSource . BL.toStrict . A.encode . Object)
+            [KM.delete "binding_sha256" fields, KM.insert "binding_sha256" (String "invalid") fields]
+          _ -> False)
     , check "a crawl route without effects is refused from the crawl and admitted from a retained observation"
         (let silent = phaseRoutes ++ [Route crawlRoute (KeyRoute [KeyOk] (CrawlTrial 1 []))]
          in isLeft (roundTrip CrawlEffectsSource silent) && roundTrip retainedSource silent == Right (file retainedSource silent))
@@ -431,6 +216,21 @@ main = do
         (fmap (\result -> (map effectWriter (resultWrites result), map callResult (resultSetters result), map callResult (resultGetters result))) (crawlResult OwnedRole ownedStep)
           == Just ([OwnedAccessor], [Just 0], [Just 0xab]))
     , check "retained and owned observations of the same effects compare equal" (compared retainedStep ownedStep == Right ())
+    , check "equivalent spec JSON encoding preserves the retained-owned comparison"
+        (let base = observation OwnedRole ownedStep
+             spec = " \n" <> obsSpec base <> " \n"
+             receipt = case A.eitherDecodeStrict' (obsReceipt base) of
+               Right (Object fields) -> case KM.lookup "files" fields of
+                 Just (Object files) -> BL.toStrict (A.encode (Object
+                   (KM.insert "files" (Object (KM.insert "spec.json" (A.toJSON (digestOf spec)) files)) fields)))
+                 _ -> error "test receipt files are not an object"
+               _ -> error "test receipt is not an object"
+             edited = base { obsSpec = spec, obsReceipt = receipt }
+             comparedEncoding = do
+               retained <- qualify bindingsAdmitted RetainedRole (observation RetainedRole retainedStep)
+               owned <- qualify bindingsAdmitted OwnedRole edited
+               () <$ compareRoles retained owned
+         in comparedEncoding == Right ())
 
     , check "a wide write's unknown bytes come from the next preimage, then the after regions"
         (fmap (concatMap effectBytes . take 1 . drop 1 . resultWrites) (crawlResult RetainedRole wideStep)
@@ -463,7 +263,7 @@ main = do
         (let contract = either error id (decodeContract contractBytes)
              controlled = do
                patch <- controlPatch contract 7
-               roleImage4 (PlanInputs ControlRole contract images linked (Just (controlWord patch)))
+               roleImage4 (PlanInputs ControlRole contract images linked (Just (controlWord patch)) Nothing)
              wordAt address bytes = word32At bytes (fromIntegral (address - image4Base))
          in fmap (\bytes -> map (`wordAt` bytes) [0x623000, 0x623004, 0x623008, 0x62300c]) controlled
               == Right [carrierStart, carrierStart + 0x10, carrierStart, slotSetter]
@@ -477,6 +277,40 @@ main = do
     , check "the next live arm and the retained image carry no guard"
         (refusal OwnedRole (guardHit (retiredGetter + 0x40)) == Just (UnarmedSite 6)
           && refusal RetainedRole retainedStep { stepHits = stepHits retainedStep ++ [hit (Guard RetiredGetterArm) retiredGetter [] stackPointer 0] } == Just (UnarmedSite 5))
+    , check "a schema-2 owned image fills the hull but for the adapters, the carrier and the retained regions"
+        (let contract = either error id (decodeContract hullContractBytes)
+             wordAt address bytes = word32At bytes (fromIntegral (address - image4Base))
+         in fmap (\bytes -> map (`wordAt` bytes) [getterEntry, setterEntry, retiredGetter, retiredSetter, 0x6245f8, getterCall, carrierStart])
+              (roleImage4 (PlanInputs OwnedRole contract hullImages linked Nothing Nothing))
+              == Right [getterAdapter, setterAdapter, fillWord, fillWord, islandWord, branchLink getterCall getterEntry, word32At linked 0])
+    , check "a schema-2 plan guards every retired hull word at both spellings and no adapter, retained-region or carrier code word"
+        (let contract = either error id (decodeContract hullContractBytes)
+             sites = planSites <$> derivePlan (PlanInputs OwnedRole contract hullImages linked Nothing Nothing)
+             at address = (>>= M.lookup address) . either (const Nothing) Just
+         in at retiredGetter sites == Just (Guard RetiredGetterArm)
+              && at (setterEntry + 4) sites == Just (Guard RetiredSetterArm)
+              && at (setterEntry + 0x40000004) sites == Just (Guard RetiredSetterArm)
+              && at (hullEnd' - 4) sites == Just (Guard RetiredSetterArm)
+              && at (carrierEnd - 4) sites == Just (Guard CarrierFill)
+              && at getterEntry sites == Just GetterEntry && at setterEntry sites == Just SetterEntry
+              && all (\address -> at address sites == Nothing) [0x6245f8, 0x624690, carrierStart, carrierStart + 4, getterCall])
+    , check "a schema-2 control detours the setter entry through the next, guarded word to the owned setter"
+        (let contract = either error id (decodeContract hullContractBytes)
+             control = setterEntryControl contract
+             detour = setterEntry + 4
+             wordAt address bytes = word32At bytes (fromIntegral (address - image4Base))
+             branchTarget site word = site + 8 + 4 * (word .&. 0xffffff)
+             controlled = control >>= \word -> roleImage4 (PlanInputs ControlRole contract hullImages linked (Just word) Nothing)
+         in fmap controlTarget control == Right detour
+              && fmap (\bytes -> map (`wordAt` bytes) [setterEntry, getterEntry]) controlled == Right [0xe1a00000, getterAdapter]
+              && fmap (\bytes -> branchTarget detour (wordAt detour bytes)) controlled == Right (branchTarget setterEntry setterAdapter)
+              && isLeft (controlPatch contract 5)
+              && isLeft (roleImage4 (PlanInputs ControlRole contract hullImages linked (Just (ControlWord Nothing [(setterEntry, 0)] detour)) Nothing)))
+    , check "a control manifest decodes to the control it was written for"
+        (let control = ControlWord Nothing [(setterEntry, 0xe1a00000), (setterEntry + 4, 0xea001f85)] (setterEntry + 4)
+             slot = ControlWord (Just 7) [(0x62300c, slotSetter)] slotSetter
+             manifestRoundTrip word = decodeControlManifest (BL.toStrict (A.encode (controlManifestValue word "dat" "image4" "owned" "staged")))
+         in manifestRoundTrip control == Right (control, "dat", "image4") && manifestRoundTrip slot == Right (slot, "dat", "image4"))
 
     , check "an owned settings write from linked code outside the accessors is refused"
         (refusal OwnedRole ownedStep { stepRows = stepRows ownedStep ++ [cpuWrite 0x96cc80 1 (Just 3) [0] rustBody], stepAfter = poke [(0x96cc80, 3)] (stepAfter ownedStep) }
@@ -497,26 +331,61 @@ main = do
              edited key value = base { obsReceipt = case A.eitherDecodeStrict' (obsReceipt base) of
                Right (Object fields) -> BL.toStrict (A.encode (Object (KM.insert key value fields)))
                _ -> error "test receipt is not an object" }
-             refusedWith key value = either Just (const Nothing) (qualify bindings OwnedRole (edited key value))
+             refusedWith key value = either Just (const Nothing) (qualify bindingsAdmitted OwnedRole (edited key value))
          in refusedWith "probe" (object ["path" .= ["right" :: T.Text]]) == Just (ReceiptShape "probe")
-              && refusedWith "pre_key_idle_instructions" (A.toJSON (0 :: Int)) == Just (ReceiptShape "pre-key idle"))
-    , check "a step without the pre-key idle is refused"
+              && refusedWith "pre_key_idle_instructions" (A.toJSON (0 :: Int)) == Just (ReceiptShape "pre-key idle")
+              && refusedWith "post_settle_prefix_ticks" (A.toJSON (0 :: Int)) == Just (ReceiptShape "post-settle prefix ticks"))
+    , check "a step without its pre-key idle or bounded prefix endpoint is refused"
         (let base = observation OwnedRole ownedStep
-             withoutIdle = case A.eitherDecodeStrict' (obsSteps base) of
-               Right (Array steps) -> BL.toStrict (A.encode (Array (fmap (\step -> case step of
-                 Object fields -> Object (KM.insert "idle" Null fields)
-                 other -> other) steps)))
-               _ -> error "test steps are not an array"
-             edited = base { obsSteps = withoutIdle }
-             rebound = edited { obsReceipt = case A.eitherDecodeStrict' (obsReceipt edited) of
-               Right (Object fields) -> BL.toStrict (A.encode (Object (KM.insert "files" (object
-                 [ "spec.json" .= digestOf (obsSpec edited), "reset-observation.json" .= digestOf (obsReset edited)
-                 , "hits.jsonl" .= digestOf (obsHits edited), "steps.json" .= digestOf withoutIdle
-                 , "emulator-session.json" .= obsSessionDigest edited ]) fields)))
-               _ -> error "test receipt is not an object" }
-         in case qualify bindings OwnedRole rebound of
-              Left (StepShape 1 _) -> True
-              _ -> False)
+             refusedWithout key =
+               let withoutIdle = case A.eitherDecodeStrict' (obsSteps base) of
+                     Right (Array steps) -> BL.toStrict (A.encode (Array (fmap (\step -> case step of
+                       Object fields -> Object (KM.insert key Null fields)
+                       other -> other) steps)))
+                     _ -> error "test steps are not an array"
+                   edited = base { obsSteps = withoutIdle }
+                   rebound = edited { obsReceipt = case A.eitherDecodeStrict' (obsReceipt edited) of
+                     Right (Object fields) -> BL.toStrict (A.encode (Object (KM.insert "files" (object
+                       [ "spec.json" .= digestOf (obsSpec edited), "reset-observation.json" .= digestOf (obsReset edited)
+                       , "hits.jsonl" .= digestOf (obsHits edited), "steps.json" .= digestOf withoutIdle
+                       , "emulator-session.json" .= digestOf (obsSession edited) ]) fields)))
+                     _ -> error "test receipt is not an object" }
+                in case qualify bindingsAdmitted OwnedRole rebound of
+                     Left (StepShape 1 _) -> True
+                     _ -> False
+          in all refusedWithout ["idle", "bounded_post_settle_prefix"])
+    , check "a bounded prefix endpoint is admitted at the exact tick boundary"
+        (refusal OwnedRole ownedStep == Nothing)
+    , check "unaligned endpoint nodes leave identity words unavailable"
+        (let ui first = object
+               [ "menu" .= uiView 0x9571d0 [0x1001, 0, 0]
+               , "depth" .= uiView 0x9575f4 [0], "node" .= uiView 0x1000 [first, 0, 5] ]
+          in case (parseLocalUiMenu (ui 0x100), parseLocalUiMenu (ui 0x200)) of
+               (Right left, Right right) -> left == right
+               _ -> False)
+    , check "matching pending source-mode transitions compare as a finite prefix"
+        (let pending = prefixWith ["state", "source_mode"] (uiView 0x9500ec [4, 5, 3, 3, 5, 1, 0, 0, 1, 1])
+          in compared retainedStep { stepPrefix = pending } ownedStep { stepPrefix = pending } == Right ())
+    , check "early, late, advanced or malformed prefix evidence is refused"
+        (all (\endpoint -> case refusal OwnedRole ownedStep { stepPrefix = endpoint } of
+            Just (StepShape 1 _) -> True
+            _ -> False)
+          [ prefixWith ["elapsed", "ticks"] (A.toJSON (tickValue postSettle - 1))
+          , prefixWith ["elapsed", "ticks"] (A.toJSON (tickValue postSettle + 1))
+          , prefixWith ["state", "instructions"] (A.toJSON (11 :: Int))
+          , prefixWith ["state", "source_mode"] (uiView 0x9500ec [0])
+          , prefixWith ["state", "source_mode"] (object
+              ["address" .= (0x9500ec :: Int), "physical" .= ("00000000" :: T.Text), "spellings" .= ([] :: [Value])]) ])
+    , check "each compared source-mode field is part of the finite boundary"
+        (all (\index ->
+          let words' = [if offset == index then 1 else if offset == 0 then 3 else 0 | offset <- [0..9 :: Int]]
+          in compared retainedStep ownedStep { stepPrefix = prefixWith ["state", "source_mode"] (uiView 0x9500ec words') }
+              == Left (PressDiffers crawlRoute)) [0, 1, 2, 3, 5, 9])
+    , check "uninterpreted source-mode bytes remain raw evidence without changing finite-prefix equality"
+        (all (\index ->
+          let bytes=flippedByte index (littleWords [3,0,0,0,0,0,0,0,0,0])
+          in compared retainedStep ownedStep {stepPrefix=prefixWith ["state","source_mode"] (uiViewBytes 0x9500ec bytes)} == Right ())
+          ([16..19] ++ [24..35] ++ [37..39]))
     , check "a crawl route whose last step lacks its recorded effects is refused"
         (refusal OwnedRole (ownedWith (filter (/= commit) (stepHits ownedStep))) == Just (RouteEffectsDiffer crawlRoute))
     , check "recorded and observed effects that differ only in a time-driven block's repeat count qualify, with the observed count"
@@ -549,14 +418,14 @@ main = do
     , check "the stale getter control sets a call inside the first run to the next distinct value and is refused"
         (let owned = observation OwnedRole (ownedWith (stepHits ownedStep ++ getterPair 5 0xab ++ getterPair 5 0xab ++ getterPair 5 0xac))
              retained = observation RetainedRole retainedStep { stepHits = stepHits retainedStep ++ getterPair 5 0xab ++ getterPair 5 0xab ++ getterPair 5 0xac }
-         in case runControl bindings OwnedRole owned retained StaleGetterResult of
+         in case runControl bindingsAdmitted OwnedRole owned retained StaleGetterResult of
               Right result -> controlStale result == Just (StaleGetter getterKey5 1 7 0xab 0xac)
                 && controlObserved result == Left (GetterSequenceDiffers getterKey5 2)
               Left _ -> False)
     , check "the stale getter control sets a call inside a later run to the previous distinct value and is refused"
         (let owned = observation OwnedRole (ownedWith (stepHits ownedStep ++ getterPair 5 0xac ++ getterPair 5 0xac ++ getterPair 5 0xac))
              retained = observation RetainedRole retainedStep { stepHits = stepHits retainedStep ++ getterPair 5 0xac ++ getterPair 5 0xac ++ getterPair 5 0xac }
-         in case runControl bindings OwnedRole owned retained StaleGetterResult of
+         in case runControl bindingsAdmitted OwnedRole owned retained StaleGetterResult of
               Right result -> controlStale result == Just (StaleGetter getterKey5 2 9 0xac 0xab)
                 && controlObserved result == Left (GetterSequenceDiffers getterKey5 2)
               Left _ -> False)
@@ -564,11 +433,12 @@ main = do
         (compared retainedStep ownedStep { stepRows = stepRows ownedStep ++ [cpuWrite 0x96cc80 1 (Just 0) [0] retiredSetter] } == Right ())
     , check "settle status differs only through an exhausted budget; the menu always counts"
         (compared retainedStep ownedStep { stepStatus = "budget-exhausted" } == Right ()
-          && compared retainedStep ownedStep { stepMenu = object ["node" .= (2 :: Int)] } == Left (PressDiffers crawlRoute))
+          && compared retainedStep ownedStep { stepMenu = object ["node" .= (2 :: Int)] } == Left (PressDiffers crawlRoute)
+          && compared retainedStep ownedStep { stepPrefix = prefixWith ["state", "ui", "menu"] (uiView 0x9571d0 [0x1000, 0, 1]) } == Left (PressDiffers crawlRoute))
     , check "a child step continues from its parent step's after regions"
         (let child = retainedStep { stepHits = [], stepRows = [] } in
-          either Just (const Nothing) (qualify bindings RetainedRole (chain RetainedRole [retainedStep, child])) == Nothing
-            && either Just (const Nothing) (qualify bindings RetainedRole (chain RetainedRole [retainedStep, child { stepBefore = Just zeroRegions }]))
+          either Just (const Nothing) (qualify bindingsAdmitted RetainedRole (chain RetainedRole [retainedStep, child])) == Nothing
+            && either Just (const Nothing) (qualify bindingsAdmitted RetainedRole (chain RetainedRole [retainedStep, child { stepBefore = Just zeroRegions }]))
                  == Just (RegionContinuity (StepInterval 2)))
 
     , check "setter sequences that differ only in a time-driven block's repeat count compare equal and report the counts"
@@ -585,6 +455,19 @@ main = do
         (fmap blockRunsOf (comparedSetters (timeBlock ++ [otherSetter] ++ timeBlock) (timeBlock ++ [otherSetter] ++ timeBlock))
           == Right (Just ([(0, 0, 1), (2, 5, 1)], [(0, 0, 1), (2, 5, 1)]))
           && comparedSetters (timeBlock ++ [otherSetter] ++ timeBlock) (timeBlock ++ timeBlock ++ [otherSetter]) `refusedAs` SetterSequenceDiffers crawlRoute)
+    , check "the ordered refresh suffix cannot be omitted, reordered, or assigned another value"
+        (let expected = [otherSetter] ++ timeBlock
+             reordered = [otherSetter] ++ reverse timeBlock
+             wrongValue = [otherSetter] ++ changedBlock
+         in not (isLeft (comparedSetters expected expected))
+              && comparedSetters expected [otherSetter] `refusedAs` SetterSequenceDiffers crawlRoute
+              && comparedSetters expected reordered `refusedAs` SetterSequenceDiffers crawlRoute
+              && comparedSetters expected wrongValue `refusedAs` SetterSequenceDiffers crawlRoute)
     ]
-  unless (and results) exitFailure
-  putStrLn ("property-pair-tests: " ++ show (length results) ++ " passed")
+  matrixResults <- mapM (uncurry check) matrixParserCases
+  bankResults <- mapM (uncurry check) bankCallerCases
+  bankProofResults <- mapM (uncurry check) bankProofBindingCases
+  sourceModeResults <- mapM (uncurry check) sourceModeCases
+  let allResults = results ++ matrixResults ++ bankResults ++ bankProofResults ++ sourceModeResults
+  unless (and allResults) exitFailure
+  putStrLn ("property-pair-tests: " ++ show (length allResults) ++ " passed")

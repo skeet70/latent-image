@@ -113,6 +113,7 @@ fixture ident regions scenario = O.CaseSpec
   , O.caseExpectedMemory =
       [(N.RegionId "code", code), (N.RegionId "exit", O.word32le 0xe7f000f0), (N.RegionId "sink", sinkFinal), (N.RegionId "stack", B.replicate 32 0xa5)]
       ++ [(tileId tile, finalBytes tile) | tile <- regions]
+  , O.caseIgnoredMemory = []
   , O.caseCp14Identity = Nothing
   , O.caseKernel = Nothing
   }

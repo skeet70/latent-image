@@ -17,7 +17,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import Data.Word (Word32)
-import Emulation.PropertyPairPlan (PhysicalRange (..), settingsRanges, preKeyIdle)
+import Emulation.PropertyPairPlan (PhysicalRange (..), recordSettingsRanges, preKeyIdle)
 import Emulation.PropertyPairRoutes
 import Emulation.Sha256 (sha256File, sha256Hex)
 import Emulation.WatchObservation (Tick (..))
@@ -138,7 +138,7 @@ captureSpec = object [K.fromString (hexWord site) .= capture site | site <- entr
     | otherwise = []
 
 settings :: Emulator -> IO Value
-settings emulator = A.toJSON <$> forM settingsRanges (\range -> do
+settings emulator = A.toJSON <$> forM recordSettingsRanges (\range -> do
   bytes <- emulatorReadMemory emulator (rangeStart range) (fromIntegral (rangeEnd range - rangeStart range))
   pure (object ["start" .= rangeStart range,"bytes" .= hex bytes]))
 
@@ -217,7 +217,7 @@ observe options directory record = do
       siteMap = M.fromList (residualSites ++ [(address,"record-entry") | address <- entries] ++ [(0x6fb7c8,"nand-write"),(0x6fb57c,"nand-erase")])
       sites = object [K.fromString (hexWord address) .= (label::T.Text) | (address,label) <- M.toList siteMap]
       dataRanges = retiredData
-      writes = [(rangeStart range,rangeEnd range) | range <- settingsRanges] ++ dataRanges
+      writes = [(rangeStart range,rangeEnd range) | range <- recordSettingsRanges] ++ dataRanges
       fetches = if role options == Owned then mergeRanges ((0x6ac2b4,0x6ac2b8) : complementSpan owned) else [(0x6ac2b4,0x6ae114)]
       spec = object ["schema" .= (1::Int),"sites" .= sites,"hit_limit" .= (1500000::Int),"captures" .= captureSpec
         ,"write_ranges" .= rangesValue writes,"read_ranges" .= rangesValue dataRanges,"fetch_ranges" .= rangesValue fetches,"watch_limit" .= (1048576::Int)]

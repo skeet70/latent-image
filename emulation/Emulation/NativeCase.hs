@@ -34,7 +34,7 @@ regs=map (("r"++).show) [0::Int ..12]++["sp","lr","cpsr"]
 -- larger engine limit: an execution records far more events than a case declares (e.g., 184 recorded
 -- vs. 0 declared), measured over 2738 recipe-bank SD cases with a maximum of 284 events.
 -- Largest case measured over the recipe-bank and UI generators and 2,314 generated cases:
--- 1131576 artifact bytes, 1888202 total mapped bytes, 19 artifacts, 16 regions, 210 functions,
+-- 1131576 artifact bytes, 1888202 total mapped bytes, 19 artifacts, 16 measured regions, 210 functions,
 -- 12 stubs, 59 expected events, 49 expected memory entries, 525916 expected memory bytes.
 sizeBytes :: Int
 sizeBytes=2*1024*1024
@@ -57,6 +57,9 @@ profileJsonBytes DefaultMemory=caseBytes
 profileJsonBytes Resource8=64*1024*1024
 profileOutputBytes DefaultMemory=8*1024*1024
 profileOutputBytes Resource8=40*1024*1024
+profileInstructions :: MemoryProfile -> Integer
+profileInstructions DefaultMemory=4000000
+profileInstructions Resource8=16000000
 profileWireBytes :: MemoryProfile -> Bool -> Int
 profileWireBytes Resource8 _=40*1024*1024
 profileWireBytes DefaultMemory scripted=(if scripted then 20 else 16)*1024*1024
@@ -202,7 +205,8 @@ loadCaseWith reader input = do
  let sizeBytes=profileSizeBytes envelope; totalBytes=profileTotalBytes envelope
      byteString=profileByteString envelope
      optional=[key|key<-["cp14_identity","kernel","memory_profile"],key `elem` keys c]
- fields c (unwords(words "schema_version id origin provenance cpu artifacts entry exit registers regions functions stubs limits expected exclusions"++optional)) "case"
+     ignored=["ignored_memory"|"ignored_memory" `elem` keys c]
+ fields c (unwords(words "schema_version id origin provenance cpu artifacts entry exit registers regions functions stubs limits expected exclusions"++optional++ignored)) "case"
  void(integer(get c "schema_version")1 1 "schema version")
  ensure(get c "origin" `elem` [s "synthetic",s "stock"]) "origin must be synthetic or stock; a stock case needs an independently known result"
  ensure(validId(get c "id")) "invalid case id"
@@ -222,7 +226,7 @@ loadCaseWith reader input = do
  ensure(profile/=UserEntry || all(=="memory_profile")optional) "a CP14 identity or kernel needs a privileged entry"
  ensure(reg "lr"==exit && reg "sp" `mod` 8==0) "LR must be exit and SP eight-byte aligned"
  fields(get c "limits") "instructions wall_ms" "limits"
- budget<-integer(get(get c "limits")"instructions")1 4000000 "instructions"
+ budget<-integer(get(get c "limits")"instructions")1(profileInstructions envelope) "instructions"
  wall<-integer(get(get c "limits")"wall_ms")1 10000 "wall_ms"
  inventory<-arrayCheck(get c "artifacts")0 artifactCount "artifacts limit"
  artifacts<-foldM (\done item->do
@@ -415,25 +419,73 @@ checkResult :: Value -> [Region] -> Value -> IO [String]
 checkResult c regions result=do
  envelope<-memoryProfile c
  let byteString=profileByteString envelope
- ignored<-validateIgnoredMemory c regions
+ expectedIgnored<-validateIgnoredMemory c regions
+ initial<-bindings(get c "registers")regs
  let expected=get c "expected"
+     reg k=maybe 0 id(lookup k initial)
      status=["status differs"|get result "status"/=get expected "status"]
      registers=["register "++k++": differs"|k<-keys(get expected "registers"),get(get result "registers")k/=get(get expected "registers")k]
      events=["stub events differ"|get result "events"/=get expected "events"]
      kernel=["kernel register "++k++": differs"|"kernel" `elem` keys expected,k<-keys(get expected "kernel"),get(get result "kernel")k/=get(get expected "kernel")k]
      memory=list(get result "memory")
+ ignored<-if "ignored_memory" `notElem` keys c then pure [] else do
+   rows<-arrayCheck(get c "ignored_memory")0 memoryCount "ignored memory limit"
+   foldM(\done item->do
+     fields item (unwords (["region","offset","length"] ++ ["reason"|"reason" `elem` keys item])) "ignored memory"
+     let ident=str(get item "region")
+         reason=if "reason" `elem` keys item then str(get item "reason") else "private-frame"
+     ensure(reason `elem` ["private-frame","caller-output"]) "ignored memory reason must be private-frame or caller-output"
+     r<-maybe(failH "unknown ignored region")pure(find(\region->get(description region)"id"==s ident)regions)
+     offset<-integer(get item "offset")0(fromIntegral(regionSize r)) "ignored offset"
+     length'<-integer(get item "length")1(fromIntegral(regionSize r)) "ignored length"
+     let end=offset+length'
+         offsetI=fromIntegral offset
+         lengthI=fromIntegral length'
+         sp=fromInteger(reg "sp")
+         base=fromIntegral(baseAddress r)
+         dead=max 0(min(toInteger(regionSize r))(sp-base))
+         writable=str(get(description r)"permissions") `elem` ["rw","device"]
+         asserted=[(fromInteger(num(get change "offset")),fromInteger(num(get change "offset"))+toInteger(length(str(get change "hex"))`div`2))|change<-list(get expected "memory"),get change "region"==s ident]
+     ensure(end<=toInteger(regionSize r)) "ignored memory exceeds its region"
+     case reason of
+       "private-frame"->do
+         ensure(ident=="stack") "only stack private frames may be ignored as private frames"
+         ensure(get expected "status"==s "returned") "ignored memory requires a returned case"
+         ensure(end<=toInteger(regionSize r) && end<=dead) "ignored memory is not a dead private frame"
+         ensure(all(\(lo,hi)->hi<=offset || end<=lo)asserted) "private frame overlaps asserted memory"
+       _->do
+         ensure(writable) "caller-output ignored memory must be writable"
+         ensure(get expected "status"==s "returned") "ignored memory requires a returned case"
+         ensure(not(null asserted)) "caller-output ignored memory needs an asserted prefix"
+         ensure(all(\(_,hi)->hi<=offset)asserted) "caller-output ignored memory must follow the asserted prefix"
+     ensure(all(\(name,lo,extent)->name/=ident || lo+extent<=offsetI || offsetI+lengthI<=lo)done) "ignored memory overlaps"
+     pure((ident,offsetI,lengthI):done))[]rows
+ let sortedIgnored=sortOn(\(name,offset,_)->(name,offset))
+       (ignored++[(str ident,fromInteger low,fromInteger(high-low))|IgnoredFrameSpan ident low high<-expectedIgnored])
  mem<-if length memory/=length regions then pure["memory region count differs"] else fmap concat$forM(zip regions memory)$ \(r,actual)->do
    desired<-foldM(\bytes change->if get change "region"==get(description r)"id" then do
      value<-byteString(get change "hex")
      let offset=fromInteger(num(get change "offset"))
      pure(B.take offset bytes<>value<>B.drop(offset+B.length value)bytes)
     else pure bytes)(regionBytes r)(list(get expected "memory"))
-   let actualBytes=str(get actual "bytes")
-       desiredBytes=hexBytes desired
-       spans=[(fromInteger low*2,fromInteger high*2)|IgnoredFrameSpan ident low high<-ignored,ident==get(description r)"id"]
-       project bytes=foldl'(\value (low,high)->take low value++replicate(high-low)'0'++drop high value)bytes spans
-   pure["memory "++str(get(description r)"id")++": differs from exact allowed final bytes"|get actual "address"/=get(description r)"address" || length actualBytes/=length desiredBytes || any (`notElem` "0123456789abcdef") actualBytes || project actualBytes/=project desiredBytes]
+   let ident=str(get(description r)"id")
+       ranges=[(offset,length')|(name,offset,length')<-sortedIgnored,name==ident]
+       intervals=complementRanges(B.length desired)ranges
+       actualHex=str(get actual "bytes")
+       desiredHex=hexBytes desired
+       same
+         | null ranges = actualHex==desiredHex
+         | otherwise = all(\(offset,length')->take(2*length')(drop(2*offset)actualHex)==take(2*length')(drop(2*offset)desiredHex))intervals
+   pure["memory "++ident++": differs from exact allowed final bytes"|get actual "address"/=get(description r)"address" || length actualHex/=2*B.length desired || any (`notElem` "0123456789abcdef") actualHex || not same]
  pure(status++registers++events++kernel++mem)
+
+complementRanges :: Int -> [(Int,Int)] -> [(Int,Int)]
+complementRanges total ranges=go 0 ranges
+ where
+  go position []=[(position,total-position)|position<total]
+  go position ((offset,length'):rest)=
+    (if offset>position then [(position,offset-position)] else [])
+    ++go(max position(offset+length'))rest
 unknownReport :: Value
 unknownReport=obj[("schema_version",n 1),("profile",s "unknown")]
 caseReport :: Value -> [(String,Value)] -> Value
@@ -804,7 +856,10 @@ executeBatch executable hash batchDigest cases sink=do
  let admitted=[a|(_,Right a)<-cases]
      artifacts=batchArtifacts admitted
      index=M.fromList(zip(map artifactDigest artifacts)[0..])
-     record entry=modifyIORef' statuses(entry:)
+     record entry=do
+      _<-evaluate(batchCaseStatus entry)
+      forM_(batchCaseDigest entry)$ \(DigestHex digest)->evaluate(foldr seq()digest)
+      modifyIORef' statuses(entry:)
      emit ident regions code value=do
       sink(CaseReport ident regions code value)
       record(BatchCase ident(caseStatusOf value)(reportDigest value))

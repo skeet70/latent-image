@@ -35,6 +35,7 @@ write observation graphPath output = do
   let sourceText = case source of
         CrawlEffectsSource -> "; each route records its crawl edge's effects"
         RetainedObservationSource receipt _ _ -> "; each route records the setter-entry r0 values and commits of its last step in the retained observation with receipt sha256 " ++ sha256Hex receipt
+        SourceRevisedObservationSource receipt _ _ binding -> "; retained baseline receipt sha256 " ++ sha256Hex receipt ++ "; source-derived revision binding sha256 " ++ sha256Hex binding
       file = RouteFile
         { routeCrawlGraph = sha256Hex (sha256 bytes)
         , routeSelection = T.pack ("reached crawl edges with a crawl-property-setter or crawl-property-commit effect, other than edges leaving the no-card playback screen and edges whose only effects are the 0x1c9/0x1c8/0x27f/0x280 block, one per ordered effect sequence (setter property ids and commits), the fewest presses from the attach root then the lowest trial" ++ sourceText)

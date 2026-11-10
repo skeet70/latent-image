@@ -5,31 +5,38 @@
 module Replacement.PropertyService.Artifact
   ( CanonicalSource
   , LinkedArtifact
+  , ArtifactInput (..)
+  , ArtifactPurpose (..)
   , StagedImage4
   , StagedCandidate
   , StagedPlacement (..)
   , ArtifactError (..)
-  , Stub (..)
-  , AccessorImage (..)
-  , AccessorOperation (..)
-  , Accessor (..)
+  , EntrySide (..)
+  , StorageWidth (..)
+  , DefaultImage (..)
   , EncodingPart (..)
   , canonicalSource
   , sourceProperties
   , sourceHull
   , deriveArtifact
   , artifactCarrier
-  , artifactStubs
+  , artifactEntries
   , artifactTable
   , artifactSlotTable
   , artifactSpecialTable
+  , artifactDefaultWindows
   , artifactFunctions
   , artifactProof
   , linkedBytes
-  , accessorName
-  , accessors
+  , storageStoreName
+  , storageStoreWords
+  , storageOutputName
+  , storageOutputWords
+  , storageStatusWords
+  , mirrorBoundaries
   , stagePlacement
   , stageImage4
+  , validateStagedImage4
   , stagedImage4Bytes
   , stagedBytes
   , stageCandidate
@@ -38,12 +45,13 @@ module Replacement.PropertyService.Artifact
   ) where
 
 import qualified A32 as A
+import qualified ArmElf as ELF
 import Control.Monad (forM_, unless)
 import Data.Aeson (Value, object, (.=))
-import Data.Bits (shiftR, (.&.))
+import Data.Bits (shiftL, shiftR, (.&.), (.|.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
-import Data.List (isSuffixOf, nub, sortOn)
+import Data.List (isPrefixOf, isSuffixOf, nub, sortOn)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Word (Word32)
@@ -52,7 +60,6 @@ import qualified Emulation.Sha256 as SHA
 import qualified FujiAF.FirstStage as F
 import qualified FujiAF.FontWindow as FW
 import qualified FujiAF.UpdateContainer as U
-import PropertyFields (PropertyId (..))
 import Replacement.PropertyService.Admission
 import Replacement.PropertyService.ClassRecord (classValue, summaryValue)
 import Replacement.PropertyService.Classify
@@ -66,6 +73,10 @@ newtype SourceIdentity = SourceIdentity SHA.Sha256
 data SourceRole = SourceDat | SourceImage4 | SourceLoaderA | SourceLoaderB | SourceImage5 | SourcePlain | SourceImage2 | SourceImage3
   deriving (Eq, Ord, Show, Enum, Bounded)
 
+-- | The closed admission authority of an artifact derivation.
+data ArtifactPurpose = ProductionArtifact | CloseAppendArea3Control
+  deriving (Eq, Show)
+
 data CanonicalSource = CanonicalSource
   { sourceDat :: B.ByteString
   , sourceImage4 :: Image
@@ -75,24 +86,30 @@ data CanonicalSource = CanonicalSource
   , sourceHull :: HullScan
   }
 
+data ArtifactInput = ArtifactInput
+  { inputBytes :: B.ByteString
+  , inputSymbols :: B.ByteString
+  , inputElf :: B.ByteString
+  }
+
 data LinkedArtifact = LinkedArtifact
   { linkedBytes :: B.ByteString
   , linkedIdentity :: SourceIdentity
   , symbolIdentity :: SourceIdentity
+  , elfIdentity :: SourceIdentity
   , artifactCarrier :: Carrier
-  , artifactStubs :: StubAddresses
+  , artifactEntries :: EntryAddresses
   , artifactFunctions :: [FunctionExtent]
   , artifactTable :: GuestAddress
   , artifactSlotTable :: GuestAddress
   , artifactSpecialTable :: GuestAddress
+  , artifactDefaultWindows :: [(DefaultImage, GuestAddress)]
   , artifactProof :: CodeProof
   }
 
 -- | The placement checks' results and the staged image4 they admit.
 data StagedPlacement = StagedPlacement
-  { placementPreceding :: Word32
-  , placementPatch :: TablePatch
-  , placementScan :: HullScan
+  { placementScan :: HullScan
   , placementBytes :: B.ByteString
   }
 
@@ -100,20 +117,15 @@ data StagedImage4 = StagedImage4 CanonicalSource LinkedArtifact StagedPlacement
 
 data StagedCandidate = StagedCandidate StagedImage4 Image4.StagedCandidate
 
-data Stub = GetterStub | SetterStub deriving (Eq, Show)
+data EntrySide = GetterEntry | SetterEntry deriving (Eq, Show)
 
--- | The bank images 0x96cc64, the previous-value image 0x89ec00, the slot-defaults records
--- 0x7cb804, the defaults table 0x81b074 and the configuration bytes 0x96b400.
-data AccessorImage = BankImage | SaveImage | SlotDefaultsImage | TailDefaultsImage | ConfigImage deriving (Eq, Show, Enum, Bounded)
+data DefaultImage = SlotDefaultBytes | TailDefaultBytes deriving (Eq, Show)
+data StorageWidth = StorageByte | StorageHalf deriving (Eq, Show, Enum, Bounded)
 
-data AccessorOperation = Load8 | Load16 | Store8 | Store16 deriving (Eq, Show, Enum, Bounded)
-
-data Accessor = Accessor AccessorImage AccessorOperation deriving (Eq, Show)
-
-data EncodingPart = StubEncoding Stub | AccessorEncoding Accessor deriving (Eq, Show)
+data EncodingPart = EntryEncoding EntrySide | StorageEncoding StorageWidth | OutputEncoding StorageWidth | StatusEncoding | MirrorEncoding FunctionName deriving (Eq, Show)
 
 -- | An llvm-nm symbol type the artifact may carry.
-data SymbolKind = GlobalText | LocalText | AbsoluteSymbol | OtherSection deriving (Eq, Show)
+data SymbolKind = GlobalText | LocalText | ReadOnlyData | AbsoluteSymbol | OtherSection deriving (Eq, Show)
 
 data ArtifactError
   = SourceMismatch SourceRole
@@ -125,7 +137,10 @@ data ArtifactError
   | TableRejected
   | SlotTableRejected
   | SpecialTableRejected
+  | DefaultTableRejected FunctionName
   | CodeRejected AdmissionError
+  | ElfRejected
+  | MappingRejected
   | StagingRejected
   deriving (Eq, Show)
 
@@ -194,73 +209,51 @@ canonicalSource dat four loaderA loaderB five plain two = do
   hull <- either (Left . PlacementRejected) Right (scanHull image4 scanned properties)
   pure (CanonicalSource dat image4 scanned identities properties hull)
 
--- | Loads and stores of the bank and previous-value images, and loads of the two defaults images
--- and of configuration bytes.
-accessors :: [Accessor]
-accessors =
-  [Accessor image operation | image <- [BankImage, SaveImage], operation <- [minBound .. maxBound]]
-    ++ [Accessor SlotDefaultsImage Load8, Accessor SlotDefaultsImage Load16, Accessor TailDefaultsImage Load8, Accessor TailDefaultsImage Load16, Accessor ConfigImage Load8]
+storageStoreName :: StorageWidth -> String
+storageStoreName width = case width of
+  StorageByte -> "xm1_storage_store8"
+  StorageHalf -> "xm1_storage_store16"
 
-accessorName :: Accessor -> String
-accessorName (Accessor image operation) = "xm1_" ++ imagePart ++ "_" ++ operationPart
+storageWindows :: [(Word32, Word32)]
+storageWindows = [(0x96cc64, 0x96d1aa), (0x89ec00, 0x89ede0), (0x409c281c, 0x409c29b6), (0x409c29b8, 0x409c29c8)]
+
+-- | The checked whole-write windows in storage-boundary.S.
+storageStoreWords :: StorageWidth -> [Word32]
+storageStoreWords width = concat [window index low high | (index, (low, high)) <- zip [0 ..] storageWindows] ++ [0xe12fff1e, store, 0xe12fff1e]
   where
-    imagePart = case image of
-      BankImage -> "bank"
-      SaveImage -> "save"
-      SlotDefaultsImage -> "slot_defaults"
-      TailDefaultsImage -> "tail_defaults"
-      ConfigImage -> "config"
-    operationPart = case operation of
-      Load8 -> "load8"
-      Load16 -> "load16"
-      Store8 -> "store8"
-      Store16 -> "store16"
+    bytes = case width of StorageByte -> 1; StorageHalf -> 2
+    store = case width of StorageByte -> 0xe5c01000; StorageHalf -> 0xe1c010b0
+    constant address = [0xe300c000 .|. ((address .&. 0xf000) `shiftL` 4) .|. (address .&. 0xfff), 0xe340c000 .|. (((address `shiftR` 16) .&. 0xf000) `shiftL` 4) .|. ((address `shiftR` 16) .&. 0xfff)]
+    branch site target = 0x3a000000 .|. (fromIntegral (target - site - 2 :: Int) .&. 0xffffff)
+    window index low high = constant low ++ [0xe150000c, branch (index * 8 + 3) ((index + 1) * 8)]
+      ++ constant (high - bytes + 1) ++ [0xe150000c, branch (index * 8 + 7) 33]
 
-storing :: Accessor -> Bool
-storing (Accessor _ operation) = operation `elem` [Store8, Store16]
+storageOutputName :: StorageWidth -> String
+storageOutputName width = case width of
+  StorageByte -> "xm1_storage_output8"
+  StorageHalf -> "xm1_storage_output16"
 
-accessorCode :: Accessor -> [A.Instruction]
-accessorCode (Accessor image operation) =
-  [ A.MoveWide always r12 (base .&. 0xffff)
-  , A.MoveTop always r12 (base `shiftR` 16)
-  , transfer
-  , A.BranchExchange always False A.lr
+storageOutputWords :: StorageWidth -> [Word32]
+storageOutputWords width = case width of
+  StorageByte -> [0xe300c19a,0xe151000c,0x812fff1e,0xe090c001,0x212fff1e,0xe1520001,0x212fff1e,0xe7c03002,0xe12fff1e]
+  StorageHalf -> [0xe300c19a,0xe151000c,0x812fff1e,0xe090c001,0x212fff1e,0xe292c002,0x212fff1e,0xe15c0001,0x812fff1e,0xe080c002,0xe31c0001,0x112fff1e,0xe1cc30b0,0xe12fff1e]
+
+storageStatusWords :: [Word32]
+storageStatusWords = [0xe30ecdc4,0xe340c089,0xe58c0000,0xe12fff1e]
+
+mirrorBoundaries :: [(String, String, Word32)]
+mirrorBoundaries =
+  [ ("xm1_storage_context", "xm1_backup_context723cb8", 0x723cb8)
+  , ("xm1_storage_acquire", "xm1_backup_acquire724b68", 0x724b68)
+  , ("xm1_storage_release", "xm1_backup_release724c00", 0x724c00)
+  , ("xm1_storage_diagnostic", "xm1_backup_diagnostic726c74", 0x726c74)
+  , ("xm1_storage_write", "xm1_backup_write6a59b8", 0x6a59b8)
+  , ("xm1_storage_report", "xm1_backup_report633594", 0x633594)
   ]
-  where
-    base = case image of
-      BankImage -> bankBase
-      SaveImage -> saveBase
-      SlotDefaultsImage -> slotDefaultsBase
-      TailDefaultsImage -> tailDefaultsBase
-      ConfigImage -> configBase
-    indexed = A.OffsetRegister True (A.Reg 0) A.LSL 0
-    transfer = case operation of
-      Load8 -> A.Load always A.Byte False (A.Reg 0) r12 indexed A.OffsetOnly
-      Load16 -> A.Load always A.Half False (A.Reg 0) r12 indexed A.OffsetOnly
-      Store8 -> A.Store always A.Byte (A.Reg 1) r12 indexed A.OffsetOnly
-      Store16 -> A.Store always A.Half (A.Reg 1) r12 indexed A.OffsetOnly
-
--- | The assembled accessor words: movw/movt r12 with the base, the transfer, `bx lr`.
-accessorWords :: Accessor -> [Word32]
-accessorWords (Accessor image operation) = base ++ [transfer, 0xe12fff1e]
-  where
-    base = case image of
-      BankImage -> [0xe30ccc64, 0xe340c096]
-      SaveImage -> [0xe30ecc00, 0xe340c089]
-      SlotDefaultsImage -> [0xe30bc804, 0xe340c07c]
-      TailDefaultsImage -> [0xe30bc074, 0xe340c081]
-      ConfigImage -> [0xe30bc400, 0xe340c096]
-    transfer = case operation of
-      Load8 -> 0xe7dc0000
-      Load16 -> 0xe19c00b0
-      Store8 -> 0xe7cc1000
-      Store16 -> 0xe18c10b0
 
 always :: A.Cond
 always = A.Cond 14
 
-r12 :: A.Reg
-r12 = A.Reg 12
 
 propertiesSuffix, slotsSuffix, specialsSuffix :: String
 propertiesSuffix = "14property_table10PROPERTIES"
@@ -282,38 +275,31 @@ stockLeaves =
 stockLeafStack :: StackOffset
 stockLeafStack = StackOffset (-4)
 
--- | The bank-0 open and close, each bound by an absolute linker symbol and called only from the
--- setter stub.
-bracketCallees :: [(String, Word32)]
-bracketCallees = [("xm1_stock_61da3c", 0x61da3c), ("xm1_stock_61d944", 0x61d944)]
-
 symbolKind :: C.ByteString -> SymbolKind
 symbolKind text = case C.unpack text of
   "T" -> GlobalText
   "t" -> LocalText
+  "R" -> ReadOnlyData
+  "r" -> ReadOnlyData
   "A" -> AbsoluteSymbol
   _ -> OtherSection
 
--- | A stub word: a fixed instruction or a BL to a symbol.
-data StubWord = Fixed Word32 | CallTo String
+getterEntryTarget, setterEntryTarget :: String
+getterEntryTarget = "xm1_property_get"
+setterEntryTarget = "xm1_property_set"
 
--- | The getter's `mov r0, r12; bl; pop {r4, r5, r11, pc}` and the setter's bracketing sequence of
--- entry.S, each ending with the pop of its stock prologue's push. The setter's words also fix which
--- registers are live across its two bracket calls.
-getterStubWords, setterStubWords :: [StubWord]
-getterStubWords = [Fixed 0xe1a0000c, CallTo "xm1_property_get", Fixed 0xe8bd8830]
-setterStubWords =
-  [ Fixed 0xe1a00004, Fixed 0xe1a01006, CallTo "xm1_set_bracketed", Fixed 0xe1a07000, Fixed 0xe3570000, Fixed 0x0a000002
-  , Fixed 0xe30c0c64, Fixed 0xe3400096, CallTo "xm1_stock_61da3c"
-  , Fixed 0xe1a00004, Fixed 0xe1a01005, Fixed 0xe1a02006, Fixed 0xe1a03008, CallTo "xm1_property_set", Fixed 0xe3570000, Fixed 0x0a000006
-  , Fixed 0xe30c0c64, Fixed 0xe3400096, CallTo "xm1_stock_61d944"
-  , Fixed 0xe1a00004, Fixed 0xe1a01005, Fixed 0xe1a02006, CallTo "xm1_property_set_after"
-  , Fixed 0xe8bd89f8
-  ]
+-- | The area-3 handle cell, 0x89f86c..0x89f874 in the settings service contract.
+area3HandleCell :: AddressSpan
+area3HandleCell = AddressSpan (GuestAddress 0x89f86c) (GuestAddress 0x89f874)
+
+-- | The only retained pointer span each purpose may add to literal admission.
+purposeRetained :: ArtifactPurpose -> [AddressSpan]
+purposeRetained ProductionArtifact = []
+purposeRetained CloseAppendArea3Control = [area3HandleCell]
 
 -- | The linked artifact admitted at `carrier`, which staging derives from the hull scan.
-deriveArtifact :: [Property] -> Carrier -> B.ByteString -> B.ByteString -> Either ArtifactError LinkedArtifact
-deriveArtifact properties carrier@(Carrier (GuestAddress carrierLow) (GuestAddress carrierHigh)) bytes symbolBytes = do
+deriveArtifact :: ArtifactPurpose -> [Property] -> Carrier -> ArtifactInput -> Either ArtifactError LinkedArtifact
+deriveArtifact purpose properties carrier@(Carrier (GuestAddress carrierLow) (GuestAddress carrierHigh)) (ArtifactInput bytes symbolBytes elfBytes) = do
   symbols <- either (const (Left SymbolRejected)) Right (F.parseSymbols symbolBytes)
   let rows = [(F.symbolName symbol, symbolKind kind) | (symbol, row) <- zip symbols (filter (not . C.null) (C.lines symbolBytes)), [_, _, kind, _] <- [C.words row]]
       kindOf = M.fromList rows
@@ -329,48 +315,69 @@ deriveArtifact properties carrier@(Carrier (GuestAddress carrierLow) (GuestAddre
   require (start == carrierLow) (PlacementRejected (CarrierNotCandidate (GuestAddress start)))
   require (end >= start && end <= carrierHigh && end .&. 3 == 0
     && toInteger (B.length bytes) == toInteger (end - start)) ExtentRejected
-  require (sortOn fst [(F.symbolName entry, F.symbolAddress entry) | entry <- symbols, kindIs [AbsoluteSymbol] entry] == sortOn fst (stockLeaves ++ bracketCallees)) SymbolRejected
+  require (sortOn fst [(F.symbolName entry, F.symbolAddress entry) | entry <- symbols, kindIs [AbsoluteSymbol] entry] == sortOn fst (stockLeaves ++ [(external, address) | (_, external, address) <- mirrorBoundaries])) SymbolRejected
   forM_ symbols $ \entry -> unless (kindIs [AbsoluteSymbol] entry) $
-    require (kindIs [GlobalText, LocalText] entry && F.symbolAddress entry >= start
+    require (kindIs [GlobalText, LocalText, ReadOnlyData] entry && F.symbolAddress entry >= start
       && toInteger (F.symbolAddress entry) + toInteger (F.symbolSize entry) <= toInteger end) ExtentRejected
-  let getterStubAddress = start
-      getterStubBytes = 4 * fromIntegral (length getterStubWords)
-      setterStubAddress = start + getterStubBytes
-      setterStubBytes = 4 * fromIntegral (length setterStubWords)
-      accessorAddresses = zip accessors [setterStubAddress + setterStubBytes + 0x10 * index | index <- [0 ..]]
-  placed "xm1_getter_stub" getterStubAddress getterStubBytes
-  placed "xm1_setter_stub" setterStubAddress setterStubBytes
-  forM_ accessorAddresses $ \(accessor, address) -> placed (accessorName accessor) address 0x10
-  rustEntries <- mapM at ["xm1_property_get", "xm1_property_set", "xm1_set_bracketed", "xm1_property_set_after"]
+  let getterEntryAddress = start
+      getterEntryBytes = 4
+      setterEntryAddress = start + getterEntryBytes
+      setterEntryBytes = 4
+  placed "xm1_property_get_entry" getterEntryAddress getterEntryBytes
+  placed "xm1_property_set_entry" setterEntryAddress setterEntryBytes
+  storeAddresses <- mapM (\width -> do
+    address <- at (storageStoreName width)
+    placed (storageStoreName width) address (4 * fromIntegral (length (storageStoreWords width)))
+    pure (width, address)) [minBound .. maxBound]
+  outputAddresses <- mapM (\width -> do
+    address <- at (storageOutputName width)
+    placed (storageOutputName width) address (4 * fromIntegral (length (storageOutputWords width)))
+    pure (width,address)) [minBound .. maxBound]
+  statusAddress <- at "xm1_storage_status32"
+  placed "xm1_storage_status32" statusAddress (4 * fromIntegral (length storageStatusWords))
+  mirrorAddresses <- mapM (\(name, _, target) -> do
+    address <- at name
+    placed name address 16
+    pure (name, address, target)) mirrorBoundaries
+  rustEntries <- mapM at [getterEntryTarget, setterEntryTarget]
   let tableNamed suffix = case [entry | entry <- symbols, suffix `isSuffixOf` F.symbolName entry] of
         [entry] -> Right entry
         _ -> Left SymbolRejected
   tableSymbol <- tableNamed propertiesSuffix
   slotSymbol <- tableNamed slotsSuffix
   specialSymbol <- tableNamed specialsSuffix
+  defaultSymbols <- mapM (\(name, size, digest) -> do
+    entry <- symbol name
+    let address = F.symbolAddress entry
+        content = B.take size (B.drop (fromIntegral (address-start)) bytes)
+    require (F.symbolSize entry == fromIntegral size && address .&. 3 == 0 && identityText (identity content) == digest) (DefaultTableRejected (FunctionName name))
+    pure entry)
+    [ ("SLOT_BYTES",200,"f556b0f2f3cf1232809b5bedf6e4b7354d6f4e3ff62b740269573d1a1f705bb6")
+    , ("TAIL_BYTES",40,"7e6a0e9ab8e0bfdea806e3f11a5a1f567c22c4275e4e5382f33d23baccac58c9")
+    ]
   let functions =
         sortOn functionStart
           [ FunctionExtent (FunctionName (F.symbolName entry)) (GuestAddress (F.symbolAddress entry)) (GuestAddress (F.symbolAddress entry + F.symbolSize entry))
-          | entry <- symbols, F.symbolSize entry > 0, entry `notElem` [tableSymbol, slotSymbol, specialSymbol], kindIs [GlobalText, LocalText] entry
+          | entry <- symbols, F.symbolSize entry > 0, entry `notElem` ([tableSymbol, slotSymbol, specialSymbol] ++ defaultSymbols), kindIs [GlobalText, LocalText] entry
           ]
       disjoint = and (zipWith (\(FunctionExtent _ _ a) (FunctionExtent _ b _) -> a <= b) functions (drop 1 functions))
   require (disjoint && all (\(FunctionExtent _ (GuestAddress low) (GuestAddress high)) -> low .&. 3 == 0 && high .&. 3 == 0) functions) ExtentRejected
   require (all (`elem` map functionStart functions) (map GuestAddress rustEntries)) SymbolRejected
   let word address = U.word32At bytes (fromIntegral (address - start))
       wordsAt address count = map word (take count [address, address + 4 ..])
-      code address count = [A.decode a (word a) | a <- take count [address, address + 4 ..]]
-      resolved stubWord = case stubWord of
-        Fixed fixed -> Right (Left fixed)
-        CallTo name -> Right <$> at name
-      stubMatches address expected = and (zipWith3 (\a want instruction -> either (== word a) (\callee -> instruction == A.Branch always True callee) want)
-        [address, address + 4 ..] expected (code address (length expected)))
-      stubSites address expected = [(GuestAddress a, GuestAddress callee) | (a, Right callee) <- zip [address, address + 4 ..] expected, callee `elem` map snd bracketCallees]
-  getterExpected <- mapM resolved getterStubWords
-  setterExpected <- mapM resolved setterStubWords
-  require (stubMatches getterStubAddress getterExpected) (EncodingRejected (StubEncoding GetterStub))
-  require (stubMatches setterStubAddress setterExpected) (EncodingRejected (StubEncoding SetterStub))
-  forM_ accessorAddresses $ \(accessor, address) ->
-    require (code address 4 == accessorCode accessor && wordsAt address 4 == accessorWords accessor) (EncodingRejected (AccessorEncoding accessor))
+  getterTarget <- at getterEntryTarget
+  setterTarget <- at setterEntryTarget
+  require (A.decode getterEntryAddress (word getterEntryAddress) == A.Branch always False getterTarget) (EncodingRejected (EntryEncoding GetterEntry))
+  require (A.decode setterEntryAddress (word setterEntryAddress) == A.Branch always False setterTarget) (EncodingRejected (EntryEncoding SetterEntry))
+  forM_ storeAddresses $ \(width, address) ->
+    require (wordsAt address (length (storageStoreWords width)) == storageStoreWords width) (EncodingRejected (StorageEncoding width))
+  forM_ outputAddresses $ \(width,address) ->
+    require (wordsAt address (length (storageOutputWords width)) == storageOutputWords width) (EncodingRejected (OutputEncoding width))
+  require (wordsAt statusAddress (length storageStatusWords) == storageStatusWords) (EncodingRejected StatusEncoding)
+  forM_ mirrorAddresses $ \(name, address, target) ->
+    require (wordsAt address 2 == [0xe92d4800, 0xe1a0b00d]
+      && A.decode (address + 8) (word (address + 8)) == A.Branch always True target
+      && word (address + 12) == 0xe8bd8800) (EncodingRejected (MirrorEncoding (FunctionName name)))
   EncodedTables entries slots specials <- either (Left . encodingRejected) Right (encodeTables (map propertyClass properties))
   let tableAddress = F.symbolAddress tableSymbol
       slotAddress = F.symbolAddress slotSymbol
@@ -383,18 +390,26 @@ deriveArtifact properties carrier@(Carrier (GuestAddress carrierLow) (GuestAddre
   require ([EncodedSlot (word address) | address <- take (length slots) [slotAddress, slotAddress + 4 ..]] == slots) SlotTableRejected
   require (F.symbolSize specialSymbol == specialBytes && specialAddress .&. 3 == 0) SpecialTableRejected
   require ([EncodedSpecial (word address) (word (address + 4)) | address <- take (length specials) [specialAddress, specialAddress + 8 ..]] == specials) SpecialTableRejected
+  (mappings, readonly) <- artifactMappings start end functions bytes symbolBytes elfBytes
   let layout = CodeLayout
         { layoutBase = GuestAddress start
         , layoutFunctions = functions
+        , layoutMappings = mappings
+        , layoutLiteralPointers = map OwnedReadonly readonly
+            ++ [RetainedStorage retainedSpan | retainedSpan <- purposeRetained purpose]
+            ++ [RetainedStorage (AddressSpan (GuestAddress low) (GuestAddress high)) | (low, high) <- storageWindows]
+            ++ [RetainedConfiguration (AddressSpan (GuestAddress configBase) (GuestAddress (configBase + configBytes)))]
         , layoutData = [(GuestAddress tableAddress, GuestAddress (tableAddress + 2580)), (GuestAddress slotAddress, GuestAddress (slotAddress + slotBytes)), (GuestAddress specialAddress, GuestAddress (specialAddress + specialBytes))]
-        , layoutStoreAccessors = [GuestAddress address | (accessor, address) <- accessorAddresses, storing accessor]
-        , layoutRoots = [GuestAddress getterStubAddress, GuestAddress setterStubAddress]
-        , layoutFramePops = [GuestAddress (getterStubAddress + getterStubBytes - 4), GuestAddress (setterStubAddress + setterStubBytes - 4)]
+            ++ [(GuestAddress (F.symbolAddress entry), GuestAddress (F.symbolAddress entry + F.symbolSize entry)) | entry <- defaultSymbols]
+            ++ [(low, high) | DataSpan (AddressSpan low high) <- mappings
+                , not (any (\(FunctionExtent _ begin finish) -> begin < high && low < finish) functions)]
+        , layoutStoreSites = [GuestAddress (address + case width of StorageByte -> 28; StorageHalf -> 48) | (width,address) <- outputAddresses]
+            ++ [GuestAddress (statusAddress + 8)] ++ [GuestAddress (address + 132) | (_, address) <- storeAddresses]
         , layoutStockLeaves = [(GuestAddress address, stockLeafStack) | (_, address) <- stockLeaves]
-        , layoutStockSites = stubSites setterStubAddress setterExpected
+        , layoutStockSites = [(GuestAddress (address + 8), GuestAddress target, StackOffset (-8)) | (_, address, target) <- mirrorAddresses]
         }
   proof <- either (Left . CodeRejected) Right (admitCode layout bytes)
-  pure (LinkedArtifact bytes (identity bytes) (identity symbolBytes) carrier (StubAddresses (GuestAddress getterStubAddress) (GuestAddress setterStubAddress)) functions (GuestAddress tableAddress) (GuestAddress slotAddress) (GuestAddress specialAddress) proof)
+  pure (LinkedArtifact bytes (identity bytes) (identity symbolBytes) (identity elfBytes) carrier (EntryAddresses (GuestAddress getterEntryAddress) (GuestAddress setterEntryAddress)) functions (GuestAddress tableAddress) (GuestAddress slotAddress) (GuestAddress specialAddress) (zip [SlotDefaultBytes,TailDefaultBytes] [GuestAddress (F.symbolAddress entry) | entry <- defaultSymbols]) proof)
   where
     encodingRejected failure = case failure of
       DelegatedProperty -> TableRejected
@@ -402,41 +417,103 @@ deriveArtifact properties carrier@(Carrier (GuestAddress carrierLow) (GuestAddre
       SpecialTableFull -> SpecialTableRejected
       SpecialDefaultUnencodable -> SpecialTableRejected
 
+
+artifactMappings :: Word32 -> Word32 -> [FunctionExtent] -> B.ByteString -> B.ByteString -> B.ByteString -> Either ArtifactError ([MappedSpan], [AddressSpan])
+artifactMappings start end functions bytes symbolBytes elfBytes = do
+  elf <- either (const (Left ElfRejected)) Right (ELF.parseElf elfBytes)
+  (sectionIndex, section) <- case [(index, item) | (index, item) <- zip [0 ..] (ELF.elfSections elf), ELF.sectionAllocated item] of
+    [item] -> Right item
+    _ -> Left ElfRejected
+  require (ELF.elfEntry elf == start && ELF.sectionType section == 1 && ELF.sectionExecutable section && not (ELF.sectionWritable section)
+    && ELF.sectionAddress section == start && toInteger (ELF.sectionSize section) == toInteger end - toInteger start
+    && B.take (B.length bytes) (B.drop (fromIntegral (ELF.sectionOffset section)) elfBytes) == bytes) ElfRejected
+  require (all (\segment -> not (ELF.loadSegment segment) || not (ELF.segmentWritable segment)) (ELF.elfSegments elf)) ElfRejected
+  require ([(ELF.segmentAddress segment, ELF.segmentOffset segment, ELF.segmentFileSize segment, ELF.segmentMemorySize segment)
+      | segment <- ELF.elfSegments elf, ELF.loadSegment segment, ELF.segmentExecutable segment]
+    == [(start, ELF.sectionOffset section, ELF.sectionSize section, ELF.sectionSize section)]) ElfRejected
+  symbols <- either (const (Left SymbolRejected)) Right (F.parseSymbols symbolBytes)
+  let elfSymbols = ELF.elfSymbols elf
+      matching entry = [symbol | symbol <- elfSymbols, ELF.symbolName symbol == F.symbolName entry]
+  forM_ symbols $ \entry -> case matching entry of
+    [symbol] -> require (ELF.symbolValue symbol == F.symbolAddress entry && ELF.symbolSize symbol == F.symbolSize entry
+      && ELF.symbolSection symbol `elem` [ELF.Absolute, ELF.InSection sectionIndex]) ElfRejected
+    _ -> Left ElfRejected
+  require (all (\symbol -> ELF.symbolKind symbol `notElem` [ELF.FunctionSymbol, ELF.ObjectSymbol]
+    || any (\entry -> F.symbolName entry == ELF.symbolName symbol) symbols) elfSymbols) ElfRejected
+  require (sortOn functionStart functions == sortOn functionStart
+    [FunctionExtent (FunctionName (ELF.symbolName symbol)) (GuestAddress (ELF.symbolValue symbol))
+      (GuestAddress (ELF.symbolValue symbol + ELF.symbolSize symbol))
+    | symbol <- elfSymbols, ELF.symbolKind symbol == ELF.FunctionSymbol, ELF.symbolSize symbol > 0]) ElfRejected
+  let mappingName name = name `elem` ["$a", "$d", "$t"] || any (`isPrefixOf` name) ["$a.", "$d.", "$t."]
+      markers = [symbol | symbol <- elfSymbols, mappingName (ELF.symbolName symbol)]
+  require (not (null markers) && all (\symbol -> ELF.symbolSection symbol == ELF.InSection sectionIndex
+    && ELF.symbolSize symbol == 0 && ELF.symbolValue symbol >= start && ELF.symbolValue symbol < end
+    && ELF.symbolValue symbol .&. 3 == 0 && take 2 (ELF.symbolName symbol) /= "$t") markers) MappingRejected
+  let points = sortOn fst (nub [(ELF.symbolValue symbol, take 2 (ELF.symbolName symbol) == "$a") | symbol <- markers])
+  case points of
+    (first, _) : _ -> require (first == start && length (nub (map fst points)) == length points) MappingRejected
+    [] -> Left MappingRejected
+  let mappings = [ (if code then ArmSpan else DataSpan) (AddressSpan (GuestAddress low) (GuestAddress high))
+        | ((low, code), high) <- zip points (map fst (drop 1 points) ++ [end]) ]
+      readonly = [bounds | DataSpan bounds <- mappings]
+  pure (mappings, readonly)
+
 -- | Undefined-instruction fill for the carrier past the linked bytes.
 fillWord :: Word32
 fillWord = 0xe7f000f0
 
--- | The staged image4 for the classified properties: the preceding-word check, the table patch, no
--- hull hit from outside the carrier into it, the carrier being the hull scan's choice, the carrier
--- write and the check that every other byte of image4 is unchanged.
+-- | Stage the owned text and adapters, retaining only admitted islands.
 stagePlacement :: [Property] -> Image -> HullScan -> LinkedArtifact -> Either ArtifactError StagedPlacement
-stagePlacement properties image4@(Image _ _ base original) scan artifact = do
-  let carrier@(Carrier (GuestAddress low) _) = artifactCarrier artifact
-      linked = linkedBytes artifact
-  preceding <- placementStep (checkPreceding image4 carrier)
-  patch@(TablePatch patched) <- placementStep (derivePatch image4 properties carrier (artifactStubs artifact))
-  case referencesInto carrier (hullHits scan) of
-    [] -> Right ()
-    hits -> Left (PlacementRejected (CarrierReferenced hits))
-  case hullCarrier scan of
-    Just best | best == carrier -> Right ()
-    Just best -> Left (PlacementRejected (LargerCarrierAdmissible best))
-    Nothing -> Left (PlacementRejected (CarrierNotCandidate (GuestAddress low)))
-  let offset address = fromIntegral (address - base)
-      carrierOffset = offset low
-      fillCount = (carrierBytes carrier - B.length linked) `div` 4
-      carried = linked <> B.concat (replicate fillCount (U.putWord32 fillWord))
-      replace at replacement bytes = B.take at bytes <> replacement <> B.drop (at + B.length replacement) bytes
-      withCarrier = replace carrierOffset carried original
-      staged = foldl (\bytes (TableWord _ _ (GuestAddress address) _ (GuestAddress target)) -> replace (offset address) (U.putWord32 target) bytes) withCarrier patched
-      restored = foldl (\bytes (TableWord _ _ (GuestAddress address) _ _) -> replace (offset address) (B.take 4 (B.drop (offset address) original)) bytes)
-        (replace carrierOffset (B.take (carrierBytes carrier) (B.drop carrierOffset original)) staged) patched
-  require (B.length linked `mod` 4 == 0 && B.length carried == carrierBytes carrier && B.length staged == B.length original && restored == original
-    && B.take (carrierBytes carrier) (B.drop carrierOffset staged) == carried
-    && all (\(TableWord _ _ (GuestAddress address) _ (GuestAddress target)) -> U.word32At staged (offset address) == target) patched) StagingRejected
-  pure (StagedPlacement preceding patch scan staged)
-  where
-    placementStep = either (Left . PlacementRejected) Right
+stagePlacement _ (Image _ _ base original) scan artifact = do
+  require (artifactCarrier artifact == stage4Carrier && hullCarrier scan == Just stage4Carrier)
+    (PlacementRejected (CarrierNotCandidate (carrierStart (artifactCarrier artifact))))
+  let external = referencesInto retiredHull (hullHits scan)
+  forM_ external $ \hit -> case hitReference hit of
+    BranchInto target | target `notElem` [getterStockEntry, setterStockEntry] && not (inCarrier retainedWrappers target) ->
+      Left (PlacementRejected (ExecutableReference hit))
+    _ -> Right ()
+  let regions = retainedRegions scan
+      EntryAddresses getter setter = artifactEntries artifact
+      wordAt address
+        | address == getterStockEntry = adapterWord address getter
+        | address == setterStockEntry = adapterWord address setter
+        | inCarrier stage4Carrier address = let GuestAddress codeLow = carrierStart stage4Carrier; GuestAddress at = address
+                                           in if fromIntegral (at - codeLow) < B.length (linkedBytes artifact)
+                                              then U.word32At (linkedBytes artifact) (fromIntegral (at - codeLow)) else fillWord
+        | any (`inCarrier` address) regions = let GuestAddress at = address in U.word32At original (fromIntegral (at - base))
+        | otherwise = fillWord
+      Carrier (GuestAddress low) (GuestAddress high) = retiredHull
+      offset = fromIntegral (low - base)
+      hull = B.concat [U.putWord32 (wordAt (GuestAddress address)) | address <- [low, low + 4 .. high - 4]]
+      staged = B.take offset original <> hull <> B.drop (offset + B.length hull) original
+  validateWithRegions artifact regions original staged
+  pure (StagedPlacement scan staged)
+
+adapterWord :: GuestAddress -> GuestAddress -> Word32
+adapterWord (GuestAddress site) (GuestAddress target) = 0xea000000 .|. (((target - site - 8) `shiftR` 2) .&. 0x00ffffff)
+
+validateStagedImage4 :: HullScan -> LinkedArtifact -> B.ByteString -> B.ByteString -> Either ArtifactError ()
+validateStagedImage4 scan artifact = validateWithRegions artifact (retainedRegions scan)
+
+validateWithRegions :: LinkedArtifact -> [Carrier] -> B.ByteString -> B.ByteString -> Either ArtifactError ()
+validateWithRegions artifact regions original staged = do
+  require (B.length original == B.length staged) StagingRejected
+  let EntryAddresses getter setter = artifactEntries artifact
+      Carrier (GuestAddress low) (GuestAddress high) = retiredHull
+      Carrier (GuestAddress codeLow) _ = artifactCarrier artifact
+      word bytes address = U.word32At bytes (fromIntegral (address - 0x61c400))
+  forM_ [(getterStockEntry, getter), (setterStockEntry, setter)] $ \(site@(GuestAddress address), target@(GuestAddress destination)) ->
+    require (A.decode address (adapterWord site target) == A.Branch always False destination) StagingRejected
+  forM_ [0x61c400, 0x61c404 .. 0x61c400 + fromIntegral (B.length original) - 4] $ \address -> do
+    let guest = GuestAddress address
+        expected
+          | guest == getterStockEntry = adapterWord guest getter
+          | guest == setterStockEntry = adapterWord guest setter
+          | inCarrier (artifactCarrier artifact) guest = if fromIntegral (address - codeLow) < B.length (linkedBytes artifact)
+              then U.word32At (linkedBytes artifact) (fromIntegral (address - codeLow)) else fillWord
+          | address < low || address >= high || any (`inCarrier` guest) regions = word original address
+          | otherwise = fillWord
+    require (word staged address == expected) StagingRejected
 
 stageImage4 :: CanonicalSource -> LinkedArtifact -> Either ArtifactError StagedImage4
 stageImage4 source artifact = StagedImage4 source artifact <$> stagePlacement (sourceProperties source) (sourceImage4 source) (sourceHull source) artifact
@@ -457,30 +534,26 @@ candidateBytes :: StagedCandidate -> B.ByteString
 candidateBytes (StagedCandidate _ candidate) = Image4.candidateDat candidate
 
 candidateContractValue :: StagedCandidate -> Value
-candidateContractValue (StagedCandidate staged@(StagedImage4 source artifact (StagedPlacement preceding patch@(TablePatch patched) scan image)) candidate) = object
-  [ "schema" .= (1 :: Int)
-  , "qualification" .= ("conditional-owned-property-service-stage-3" :: String)
+candidateContractValue (StagedCandidate staged@(StagedImage4 source artifact (StagedPlacement scan _)) candidate) = object
+  [ "schema" .= (2 :: Int)
+  , "qualification" .= ("conditional-owned-property-service-stage-4" :: String)
   , "source_sha256" .= M.fromList [(roleLabel role, identityText digest) | (role, digest) <- sourceIdentities source]
   , "linked_sha256" .= identityText (linkedIdentity artifact)
   , "symbols_sha256" .= identityText (symbolIdentity artifact)
+  , "elf_sha256" .= identityText (elfIdentity artifact)
   , "linked_bytes" .= B.length (linkedBytes artifact)
   , "carrier" .= object ["start" .= low, "end" .= high, "bytes" .= carrierBytes carrier, "fill_words" .= ((carrierBytes carrier - B.length (linkedBytes artifact)) `div` 4), "fill_word" .= fillWord]
-  , "preceding" .= object ["address" .= (low - 4), "word" .= preceding, "instruction" .= show (A.decode (low - 4) preceding)]
   , "hull" .= object
       [ "start" .= hullLow, "end" .= hullHigh, "bytes" .= carrierBytes (hullRegion scan)
-      , "rule" .= ("the carrier is the largest arm-aligned interval of an owned run, lowest address on a tie, whose preceding word transfers unconditionally and that no hit from a site outside it reaches; image4 sites inside the hull count, including dead stock arms and arms of delegated ids" :: String)
+      , "rule" .= ("fixed carrier; full hull retired except entry adapters, wrappers and external data reservations" :: String)
       , "hits" .= [object ["image" .= scanLabel label, "site" .= site, "word" .= word, "target" .= target, "reference" .= show reference, "listing" .= hitListing hit] | hit@(ScanHit label (GuestAddress site) word reference) <- hullHits scan, let GuestAddress target = hitTarget hit]
       ]
-  , "stubs" .= object ["getter" .= getterAddress, "setter" .= setterAddress]
-  , "patch" .= object
-      [ "getter_table" .= getterTableAddress, "setter_table" .= setterTableAddress
-      , "getter_words" .= patchCount GetterTable patch, "setter_words" .= patchCount SetterTable patch
-      , "table_words_unchanged" .= length [() | address <- tableWords, wordAt image4Bytes address == wordAt image address]
-      , "words" .=
-          [ object ["table" .= sideLabel side, "property" .= identifier, "address" .= address, "original" .= original, "patched" .= target]
-          | TableWord side (PropertyId identifier) (GuestAddress address) (GuestAddress original) (GuestAddress target) <- patched
-          ]
+  , "entries" .= object ["getter" .= getterAddress, "setter" .= setterAddress]
+  , "adapters" .=
+      [ object ["address" .= address, "word" .= adapterWord (GuestAddress address) target]
+      | (address, target) <- [(0x61e110, getterEntry (artifactEntries artifact)), (0x624694, setterEntry (artifactEntries artifact))]
       ]
+  , "retained_regions" .= [object ["start" .= a, "end" .= b] | Carrier (GuestAddress a) (GuestAddress b) <- retainedRegions scan]
   , "scan" .= object
       [ "images" .=
           [ object ["image" .= scanLabel label, "base" .= imageBase scannedImage, "bytes" .= B.length (imageBytes scannedImage), "sha256" .= identityText (identity (imageBytes scannedImage)), "instructions" .= (scanDepth label == InstructionsAndWords)]
@@ -505,31 +578,27 @@ candidateContractValue (StagedCandidate staged@(StagedImage4 source artifact (St
   , "classification" .= object ["summary" .= summaryValue (sourceProperties source), "encoding" .= encodingDescription, "properties" .= map classValue (sourceProperties source)]
   , "stack" .= object
       [ "entries" .= [frameValue frame | frame <- proofFrames proof]
-      , "stub_max_depth_bytes" .= object ["getter" .= depth getterAddress, "setter" .= depth setterAddress]
+      , "entry_max_depth_bytes" .= object ["getter" .= depth getterAddress, "setter" .= depth setterAddress]
       ]
   , "owned_instruction_count" .= S.size (proofInstructions proof)
   , "literal_words" .= [address | GuestAddress address <- S.toList (proofLiterals proof)]
+  , "nonreturning_entries" .= [address | GuestAddress address <- S.toList (proofNonreturning proof)]
+  , "literal_pointer_contract" .= ("Each literal word supplies a pointer whose first four bytes lie in ELF-mapped owned readonly data, a fixed storage window or the classified retained configuration window. This does not establish an object size or confine downstream loads." :: String)
   , "staged_image4_sha256" .= identityText (identity (stagedBytes staged))
   , "candidate_dat_sha256" .= Image4.candidateSha256 candidate
   , "candidate_image4_sha256" .= Image4.candidateImage4Sha256 candidate
   , "open_premises" .=
       ([ "loads are not confined: owned code may read any address; the native oracle confines reads"
-       , "stack depths are bytes below the stock getter or setter frame's sp at the arm; the stock frames supply the depth above it"
-       , "the stock getter prologue pushed {r4, r5, r11, lr} and the stock setter prologue {r3-r8, r11, lr}; the stubs pop those frames, and the setter holds property, value and bank in r4-r6 and the slot in r8 at the arm"
-       , "the setter stub calls the stock open 0x61da3c and close 0x61d944 at the stock setter frame's sp, keeping live only r4-r7 across the open and r4-r6 across the close, as the stock arms do; the bracket chain's stack depth and register use are not proved"
+       , "stack depths are bytes below the owned callable entry sp"
+       , "the setter owns its 32-byte frame and calls retained brackets at incoming sp minus 32; bracket chain depth and register use are not proved"
        , "the code policy checks sp, r11 and the return address at every exit; other callee-saved registers follow AAPCS unproved"
        , "the reference scan reads image4, image5, plain, loader A and loader B as instructions and words, and image2 and image3 (the FONT_ICON.FDL window extracted from the DAT) as words; it does not cover computed addresses"
        ] :: [String])
   ]
   where
     carrier@(Carrier (GuestAddress low) (GuestAddress high)) = artifactCarrier artifact
-    StubAddresses (GuestAddress getterAddress) (GuestAddress setterAddress) = artifactStubs artifact
+    EntryAddresses (GuestAddress getterAddress) (GuestAddress setterAddress) = artifactEntries artifact
     Carrier (GuestAddress hullLow) (GuestAddress hullHigh) = hullRegion scan
-    GuestAddress getterTableAddress = getterTableBase
-    GuestAddress setterTableAddress = setterTableBase
-    Image _ _ imageBase4 image4Bytes = sourceImage4 source
-    tableWords = [table + 4 * index | table <- [getterTableAddress, setterTableAddress], index <- [0 .. 644]]
-    wordAt bytes address = U.word32At bytes (fromIntegral (address - imageBase4))
     proof = artifactProof artifact
     names = M.fromList [(entry, name) | FunctionExtent (FunctionName name) entry _ <- artifactFunctions artifact]
     depth address = maybe 0 (\(StackOffset offset) -> negate offset) (M.lookup (GuestAddress address) (proofComposed proof))
@@ -543,8 +612,5 @@ candidateContractValue (StagedCandidate staged@(StagedImage4 source artifact (St
           | CallEdge (GuestAddress site) (GuestAddress target) (StackOffset at) kind <- calls
           ]
       ]
-    sideLabel side = case side of
-      GetterTable -> "getter" :: String
-      SetterTable -> "setter"
     reasonText reason = case reason of
       HighEntropyData -> "high-entropy-data" :: String

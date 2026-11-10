@@ -9,8 +9,9 @@ import Data.Bits (complement, (.&.))
 import qualified Data.ByteString as B
 import Data.Char (isAsciiLower, isDigit)
 import Data.Either (isLeft)
-import Data.Maybe (fromMaybe)
 import Data.List (nub)
+import qualified Data.Set as S
+import Emulation.OwnedCase (CaseSpec (..), readWordAt)
 import Data.Word (Word32, Word8)
 import qualified Data.Map.Strict as M
 import Emulation.NativeObservation
@@ -18,6 +19,7 @@ import PropertyFields (PropertyId (..))
 import Replacement.PropertyService.Classify hiding (GuestAddress (..))
 import qualified Replacement.PropertyService.Classify as C
 import Replacement.PropertyService.Oracle
+import qualified Replacement.PropertyService.HeaderBoundary as H
 import System.Exit (exitFailure)
 
 check :: String -> Bool -> IO Bool
@@ -43,6 +45,7 @@ handFixture =
     (placed 0xc8 [(0x2c, 0x30), (0x7c, 0x90), (0x04, 0xe0)])
     (placed 0x1c2 [(0xc, 0x7f)])
     [placed 0x200 [(0x35, 7), (0x138, 0xe5), (0xe8, 1)]]
+    (map H.BackupKey [15..30])
 
 handConfig :: B.ByteString
 handConfig = placed 0x200 [(0x35, 7), (0x138, 0xe5)]
@@ -106,7 +109,7 @@ observation :: Word -> RunnerStatus -> [(Register, Word)] -> Provenance -> Nativ
 observation instructions status overrides provenance = NativeObservation
   { nativeStatus = status
   , nativeRegisters = M.fromList [(register, fromIntegral (M.findWithDefault 0 register (M.fromList overrides))) | register <- registerLabels]
-  , nativeMemory = [(RegionId "banks", B.replicate 0x384 1), (RegionId "previous", B.replicate 0x1c2 2), (RegionId "config", B.replicate 0x200 3), (RegionId "calls", B.replicate 0x20 0), (RegionId "stack", B.replicate 0x7f0 4), (RegionId "caller-frame", B.replicate 0x10 0)]
+  , nativeMemory = [(RegionId "banks", B.replicate 0x546 1), (RegionId "previous", B.replicate 0x1e0 2), (RegionId "config", B.replicate 0x200 3), (RegionId "calls", B.replicate H.callsBytes 0), (RegionId "backing", B.replicate 0x1ac 0), (RegionId "stack", B.replicate 0x7f0 4), (RegionId "caller-frame", B.replicate 0x10 0)]
   , nativeProvenance = provenance
   , nativeInstructions = InstructionCount (fromIntegral instructions)
   , nativeEngineError = EngineError 0
@@ -169,23 +172,26 @@ main = do
       pairArm = PairArm (BankOffset 0xe) (BankOffset 0x126) 0xaa SaveBank0Previous
       pairDefault = model (OwnedWriteOnlyPair pairArm) (Set Bank0 (slot 0) SetDefaultRequest)
       pairBank1 = model (OwnedWriteOnlyPair pairArm) (Set Bank1 (slot 0) SetOne)
-      always = A.Cond 14
-      r = A.Reg
-      quad = map A.Reg [1, 2, 3, 12]
-      openProbe =
-        [ A.MoveWide always (r 12) 0x8e00, A.MoveTop always (r 12) 0x95, A.Store always A.Word (r 0) (r 12) (A.OffsetImmediate 0) A.OffsetOnly
-        , A.MoveWide always (r 1) 0x8d00, A.MoveTop always (r 1) 0x95, A.LoadMultiple always (r 1) A.IncrementAfter False quad
-        , A.StoreMultiple always (r 0) A.IncrementAfter False quad, A.BranchExchange always False A.lr
-        ]
-      closeProbe =
-        [ A.MoveWide always (r 12) 0x8e00, A.MoveTop always (r 12) 0x95, A.Store always A.Word (r 0) (r 12) (A.OffsetImmediate 4) A.OffsetOnly
-        , A.LoadMultiple always (r 0) A.IncrementAfter False quad, A.MoveWide always (r 0) 0x8e10, A.MoveTop always (r 0) 0x95
-        , A.StoreMultiple always (r 0) A.IncrementAfter False quad, A.BranchExchange always False A.lr
-        ]
+      bracketExpected = modelExpectation handFixture (OwnedField bracketField) (Set Bank0 (slot 0) SetZero)
+      expectedRegion name expected = expected >>= lookup (RegionId name) . expectedMemory
+      adapterLabels = map (caseLabelText . entryLabel) entryCases
+      probe = EntryCase (OracleCase (PropertyId 646) (Get Bank0 LiveRead (slot 0xffffffff))) DirectCall 0xffffffff 0x80000000 (slot 0xffffffff) True
+      probeSpec = entryCaseSpec B.empty stockFunctions handFixture (entryLabel probe) OutOfRange probe placeholderExpectation
   results <- sequence
     [ check "the grid is 80 cases per id over ids 0..646" (length operations == 80 && length caseGrid == 51760 && map oracleProperty caseGrid == concatMap (replicate 80) propertyIds && propertyIds == map PropertyId [0 .. 646])
     , check "slot arguments are 0, 1, 2, 3 and 0xffffffff" (slotArguments == map slot [0, 1, 2, 3, 0xffffffff])
     , check "case labels are distinct runner ids" (length (nub labels) == length labels && all validId labels)
+    , check "entry adapter ids include unsigned boundaries" (S.fromList (map (oracleProperty . entryOperation) entryCases) == S.fromList (propertyIds ++ map PropertyId [647, 0x7fffffff, 0x80000000, 0xfffffffe, 0xffffffff]))
+    , check "entry adapter labels are unique runner ids" (S.size (S.fromList adapterLabels) == length adapterLabels && all validId adapterLabels)
+    , check "entry adapters preserve raw selectors, banks and slots" (lookup R0 (caseInitial probeSpec) == Just 646 && lookup R1 (caseInitial probeSpec) == Just 0x80000000 && lookup R2 (caseInitial probeSpec) == Just 0xffffffff && lookup R3 (caseInitial probeSpec) == Just 0xffffffff && lookup R12 (caseInitial probeSpec) /= Just 646)
+    , check "each caller return veneer is outside declared functions" (and
+        [ let spec = entryCaseSpec B.empty stockFunctions handFixture (entryLabel c) OutOfRange c placeholderExpectation
+              GuestAddress exit = caseExit spec
+           in all (\(GuestAddress start, size) -> exit < start || exit >= start + fromIntegral size) (caseFunctions spec)
+        | mode <- [minBound .. maxBound], alternate <- [False, True]
+        , let c = probe {entryCallMode = mode, entryReturnVariant = alternate}
+        ])
+    , check "raw sentinel alone requests the field default" (byteIn effectBanks (0x1c2 + 5) (setting Bank1 (SetRaw 0x1affffff)) == Just 0xb8 && byteIn effectBanks (0x1c2 + 5) (setting Bank1 (SetRaw 0x1b000000)) == Just 0xa0 && byteIn effectBanks (0x1c2 + 5) (setting Bank1 (SetRaw 0x1afffffe)) == Just 0xb8)
     , check "three banks: bank 1 is bank 0's complement, bank 2 a third stream" (bank1 == B.map complement bank0 && bank2 /= bank0 && bank2 /= bank1 && B.length bank2 == 0x1c2 && bank0 /= B.take 0x1c2 (fixturePrevious stockFixture))
     , check "the previous-value image covers slot 3's record" (B.length (fixturePrevious stockFixture) == 0x1e0)
     , check "no 4-byte window of bank 0 repeats" (length (nub (windows bank0)) == length (windows bank0))
@@ -241,7 +247,7 @@ main = do
     , check "a moved slot-defaults base reads the next record" (r0Of' (stockLayout {layoutSlotDefaults = 0x7cb82c}) (Get Bank0 DefaultRead (slot 0)) == Just 0 && fmap (layoutSlotDefaults . layoutOf . third) (exposingSlot handFixture SlotDefaultsMoved [slotProperty slotOwned]) == Just 0x7cb82c)
     , check "a moved tail base needs a tail-byte default" (exposingSlot handFixture TailDefaultsMoved [slotProperty slotOwned] == Nothing && fmap (layoutTailDefaults . layoutOf . third) (exposingSlot handFixture TailDefaultsMoved [slotProperty (OwnedSlotField (slotArm (BankTailByte (TailOffset 0xc))))]) == Just 0x81b075)
     , check "movw and movt r12 decode to the address halves" (A.decode 0x62c4b0 (movwWord 0x7cb82c) == A.MoveWide (A.Cond 14) (A.Reg 12) 0xb82c && A.decode 0x62c4b4 (movtWord 0x7cb82c) == A.MoveTop (A.Cond 14) (A.Reg 12) 0x7c)
-    , check "the split leaves the carrier to its own functions" (splitFunctions (0x62c4b0, 0x62d674) [FunctionSpan 0x62c4b0 0x62c4c4] == [FunctionSpan 0x61d59c 0x61d5f0, FunctionSpan 0x61d5f0 0x61d618, FunctionSpan 0x61d618 0x61d65c, FunctionSpan 0x61d65c 0x61d8a4, FunctionSpan 0x61d8a4 0x61d8dc, FunctionSpan 0x61d944 0x61d994, FunctionSpan 0x61da3c 0x61da8c, FunctionSpan 0x61df44 0x61e110, FunctionSpan 0x61e110 0x624620, FunctionSpan 0x624694 0x62c4b0, FunctionSpan 0x62c4b0 0x62c4c4, FunctionSpan 0x62d674 0x6309c4])
+    , check "the split leaves the carrier to its owned functions" (let functions = splitFunctions (0x62c4b0,0x62d674) [FunctionSpan 0x62c4b0 0x62c4c4] in [function | function@(FunctionSpan low high) <- functions,low < 0x62d674 && high > 0x62c4b0] == [FunctionSpan 0x62c4b0 0x62c4c4] && all (`elem` functions) headerSpans)
     , check "0x61d59c maps 0-3 to 2, 4-8 and 0x81 to 1, 0x82 to 2, others to 0" (map (leaf Stock61d59c) [0, 3, 4, 8, 9, 0x81, 0x82, 0x83, 0xff] == [2, 2, 1, 1, 0, 1, 2, 0, 0])
     , check "0x61d65c maps 0-10 through its table, 0x86-0x88 to 2-4, other high values to 1, the rest to 8" (map (leaf (Stock61d65c Profile2)) [0, 3, 4, 5, 10, 11, 0x7f, 0x86, 0x87, 0x88, 0x80] == [7, 7, 8, 11, 25, 8, 8, 2, 3, 4, 1])
     , check "0x61d65c reads 0x96b481, 0x96b482 and 0x96b483 for selectors 2, 3 and 4" (map (fst . stockRead . Stock61d65c) [Profile2, Profile3, Profile4] == [0x81, 0x82, 0x83])
@@ -261,8 +267,9 @@ main = do
     , check "0x61d65c's selectors 2 and 3 differ in some image" (or [stockResult (Stock61d65c Profile2) config /= stockResult (Stock61d65c Profile3) config | config <- streamConfigs])
     , check "the gate byte is 0 in some image and not in another, and differs from its neighbour's zero-ness in one" (any (\config -> B.index config 0xe8 == 0) streamConfigs && any (\config -> B.index config 0xe8 /= 0) streamConfigs && any (\config -> (B.index config 0xe8 == 0) /= (B.index config 0xe9 == 0)) streamConfigs)
     , check "the configuration default's byte has bits 5-7 set in a variant" (any (\config -> B.index config 0x138 .&. 0xe0 /= 0) (drop 1 streamConfigs))
-    , check "the open probe logs r0 at 0x958e00 and copies the window at 0x958d00 to [r0, r0 + 16)" (map (A.decode 0) (fromMaybe [] (lookup 0x61da3c probes)) == openProbe)
-    , check "the close probe logs r0 at 0x958e04 and copies [r0, r0 + 16) to 0x958e10" (map (A.decode 0) (fromMaybe [] (lookup 0x61d944 probes)) == closeProbe)
+    , check "header requests update the mapped status word" (fmap (\bytes -> readWordAt bytes 0x1c4) (expectedRegion "previous" bracketExpected) == Just 0)
+    , check "the header backing checksum balances all sixteen bytes" (fmap (B.foldl' (+) (0::Word8) . B.take 16) (expectedRegion "backing" bracketExpected) == Just 0)
+    , check "header requests expose semaphore and byte-driver events" (maybe False (\bytes -> readWordAt bytes 0 >= 4 && readWordAt bytes 4 == 0x724b68 && readWordAt bytes 8 == 0x25) (expectedRegion "calls" bracketExpected))
     , check "the backup window is bank 0's bytes 0-15 complemented" (backupWindow handFixture == B.replicate 16 0xff)
     , check "a bracketed bank-0 set saves and stores the refreshed byte, and the close copies bank 0's bytes after the store"
         (byteIn effectBanks 0xb bracketSet == Just 0xfd && byteIn effectPrevious 0xb bracketSet == Just 0x02

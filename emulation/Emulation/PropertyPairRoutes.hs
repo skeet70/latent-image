@@ -110,17 +110,18 @@ data RouteFile = RouteFile
   , routeList :: [Route]
   } deriving (Eq, Show)
 
--- | Where the crawl routes' effects come from: the crawl edges, or the last steps of a retained
--- observation, bound by its receipt, steps and hits digests.
+-- | The crawl or retained baseline, with an optional source-derived expectation revision.
 data EffectsSource
   = CrawlEffectsSource
   | RetainedObservationSource { sourceReceipt :: Sha256, sourceSteps :: Sha256, sourceHits :: Sha256 }
+  | SourceRevisedObservationSource { sourceReceipt :: Sha256, sourceSteps :: Sha256, sourceHits :: Sha256, sourceRevisionBinding :: Sha256 }
   deriving Eq
 
 instance Show EffectsSource where
   show source = case source of
     CrawlEffectsSource -> "CrawlEffectsSource"
     RetainedObservationSource receipt steps hits -> unwords ["RetainedObservationSource", sha256Hex receipt, sha256Hex steps, sha256Hex hits]
+    SourceRevisedObservationSource receipt steps hits binding -> unwords ["SourceRevisedObservationSource", sha256Hex receipt, sha256Hex steps, sha256Hex hits, sha256Hex binding]
 
 instance FromJSON EffectsSource where
   parseJSON = withObject "effects source" $ \fields -> do
@@ -131,7 +132,11 @@ instance FromJSON EffectsSource where
         exactKeys ["kind", "receipt_sha256", "steps_sha256", "hits_sha256"] fields
         let digest name = fields .: name >>= either fail pure . parseSha256Hex
         RetainedObservationSource <$> digest "receipt_sha256" <*> digest "steps_sha256" <*> digest "hits_sha256"
-      _ -> fail "an effects source is crawl or retained-observation"
+      "source-revised-observation-v1" -> do
+        exactKeys ["kind", "receipt_sha256", "steps_sha256", "hits_sha256", "binding_sha256"] fields
+        let digest name = fields .: name >>= either fail pure . parseSha256Hex
+        SourceRevisedObservationSource <$> digest "receipt_sha256" <*> digest "steps_sha256" <*> digest "hits_sha256" <*> digest "binding_sha256"
+      _ -> fail "an effects source is crawl, retained-observation, or source-revised-observation-v1"
 
 instance ToJSON EffectsSource where
   toJSON source = case source of
@@ -139,6 +144,9 @@ instance ToJSON EffectsSource where
     RetainedObservationSource receipt steps hits -> object
       [ "kind" .= ("retained-observation" :: T.Text), "receipt_sha256" .= sha256Hex receipt
       , "steps_sha256" .= sha256Hex steps, "hits_sha256" .= sha256Hex hits ]
+    SourceRevisedObservationSource receipt steps hits binding -> object
+      [ "kind" .= ("source-revised-observation-v1" :: T.Text), "receipt_sha256" .= sha256Hex receipt
+      , "steps_sha256" .= sha256Hex steps, "hits_sha256" .= sha256Hex hits, "binding_sha256" .= sha256Hex binding ]
 
 -- | Crawl edges with a property effect the selection leaves out, and why.
 data Exclusion = Exclusion { exclusionReason :: T.Text, exclusionTrials :: [Int] } deriving (Eq, Show)

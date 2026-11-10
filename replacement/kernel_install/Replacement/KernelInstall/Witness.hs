@@ -260,7 +260,7 @@ admitReceipt inputs observed = do
       native = inputNative inputs; producer = inputProducer inputs
       update = if receiptProgram receipt == Owned then producerCandidate producer else sourceDat (inputSource inputs)
   require (identity == Identity
-    (Digest "efa32ff8d2a378ba9e098ac28015faf82856765c866d5db5b97cb1c38342deef") (hash update)
+    (Digest "6e6ac441c0661470b5b26abe7628f19ec118ac568967938378c88dea448835cb") (hash update)
     (Digest "4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be")
     (hash (nativeImage native)) (hash (nativeSymbols native)) (hash (producerContract producer)) (hash (producerExecutable producer))) ProducerIdentityRejected
   require (receiptSchema receipt == 1 && receiptError receipt == Nothing && receiptMachineFailure receipt == Nothing

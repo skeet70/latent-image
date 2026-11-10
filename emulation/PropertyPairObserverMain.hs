@@ -6,45 +6,53 @@ module Main (main) where
 
 import Control.Exception (Exception, SomeException, displayException, fromException, throwIO, try)
 import Control.Monad (forM, forM_, unless, when)
+import qualified CustomAdmission as StorageBoundaries
 import Data.Aeson (Value (..), object, (.=))
 import qualified Data.Aeson as A
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
-import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
 import Data.IORef
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import qualified Data.Vector as V
+import Data.Word (Word32)
 import Emulation.PropertyPairPlan
 import Emulation.PropertyPairRoutes
+import qualified Emulation.SettingsStorageMatrix as Storage
+import Emulation.SettingsStorageObserver
 import Emulation.Sha256 (sha256, sha256File, sha256Hex)
 import qualified Emulation.WatchObservation as W
 import EmulatorUsb
 import FujiModPaths (fujimodRamPushBridge)
-import Numeric (readHex, showHex)
+import qualified Replacement.PropertyService.Placement as Placement
 import System.Directory (createDirectory, doesPathExist, makeAbsolute)
 import System.Environment (getArgs, getExecutablePath)
 import System.Exit (exitFailure)
 import System.FilePath ((</>))
 import System.IO (IOMode (..), hFlush, hSetBuffering, BufferMode (..), stdout, withBinaryFile)
 import Text.Printf (printf)
+data RouteInput = KeyRouteFile FilePath | StorageMatrixFile FilePath
+data RouteDocument = KeyRouteDocument RouteFile | StorageMatrixDocument Storage.StorageMatrix
+
 
 data Options = Options
   { optRole :: Role
-  , optRoutes :: FilePath
+  , optRouteInput :: RouteInput
   , optUpdate :: FilePath
   , optAnalysis :: FilePath
   , optLinked :: FilePath
   , optSymbols :: FilePath
+  , optElf :: Maybe FilePath
   , optContract :: FilePath
   , optControl :: Maybe FilePath
   , optRun :: FilePath
   , optBootRom :: FilePath
-  , optNand :: FilePath
+  , optNand :: ObserverNand
   , optOutput :: FilePath
   , optProbe :: Maybe Probe
+  , optProbeDrain :: Maybe Tick
   }
 
 -- | A discriminating run: only this key path from the root, with the guest idle for the given
@@ -52,9 +60,9 @@ data Options = Options
 data Probe = Probe [CrawlKey] (Maybe Instructions)
 
 usage :: String
-usage = "usage: property-pair-observe --role retained|owned|control --routes ROUTES --update DAT --analysis ROOT \
-  \--linked BIN --symbols SYMBOLS --contract CONTRACT [--control MANIFEST] --run RUN --boot-rom ROM \
-  \--adjustment-nand NAND --output NEW_DIRECTORY [--probe-path KEY,KEY,... [--probe-idle INSTRUCTIONS]]"
+usage = "usage: property-pair-observe --role retained|owned|control (--routes ROUTES | --storage-matrix MATRIX) --update DAT --analysis ROOT \
+  \--linked BIN --symbols SYMBOLS [--elf ELF (required for schema 3)] --contract CONTRACT [--control MANIFEST] --run RUN --boot-rom ROM \
+  \(--adjustment-nand NAND | --committed-nand NAND) --output NEW_DIRECTORY [--probe-path KEY,KEY,... [--probe-idle INSTRUCTIONS] [--probe-drain-ticks TICKS]]"
 
 parseOptions :: [String] -> Either String Options
 parseOptions arguments = do
@@ -62,6 +70,17 @@ parseOptions arguments = do
   let value name = lookup name pairs
       need name = maybe (Left (usage ++ "\nmissing " ++ name)) Right (value name)
   unless (all ((`elem` names) . fst) pairs && length pairs == length (M.fromList pairs)) (Left usage)
+  routeInput <- case (value "--routes",value "--storage-matrix") of
+    (Just path,Nothing) -> Right (KeyRouteFile path)
+    (Nothing,Just path) -> Right (StorageMatrixFile path)
+    _ -> Left "name exactly one of --routes and --storage-matrix"
+  nand <- case (value "--adjustment-nand",value "--committed-nand") of
+    (Just path,Nothing) -> Right (AdjustmentSeed path)
+    (Nothing,Just path) -> Right (CommittedSeed path)
+    _ -> Left "name exactly one of --adjustment-nand and --committed-nand"
+  case (routeInput,nand) of
+    (KeyRouteFile _,CommittedSeed _) -> Left "--committed-nand requires --storage-matrix"
+    _ -> Right ()
   role <- need "--role" >>= parseRole
   unless ((role == ControlRole) == (value "--control" /= Nothing)) (Left "--control names the control role's manifest")
   probe <- case (value "--probe-path", value "--probe-idle") of
@@ -74,11 +93,17 @@ parseOptions arguments = do
         [(count, "")] | count >= 1 && count <= instructionsValue maxIdle -> Right (Instructions count)
         _ -> Left ("--probe-idle must be 1.." ++ show (instructionsValue maxIdle))
       Right (Just (Probe keys instructions))
-  Options role <$> need "--routes" <*> need "--update" <*> need "--analysis" <*> need "--linked" <*> need "--symbols"
-    <*> need "--contract" <*> pure (value "--control") <*> need "--run" <*> need "--boot-rom" <*> need "--adjustment-nand" <*> need "--output"
-    <*> pure probe
+  diagnostic <- forM (value "--probe-drain-ticks") $ \text -> case reads text of
+    [(ticks, "")] | ticks > 0 && ticks <= tickValue postSettle && value "--probe-path" /= Nothing && value "--probe-idle" == Nothing -> Right (Tick ticks)
+    _ -> Left "--probe-drain-ticks needs --probe-path, no --probe-idle, and a positive cap no larger than postSettle"
+  case routeInput of
+    StorageMatrixFile _ -> unless (case probe of Nothing -> True; Just _ -> False) (Left "storage matrices do not accept diagnostic probes")
+    KeyRouteFile _ -> Right ()
+  Options role routeInput <$> need "--update" <*> need "--analysis" <*> need "--linked" <*> need "--symbols" <*> pure (value "--elf")
+    <*> need "--contract" <*> pure (value "--control") <*> need "--run" <*> need "--boot-rom" <*> pure nand <*> need "--output"
+    <*> pure probe <*> pure diagnostic
  where
-  names = ["--role", "--routes", "--update", "--analysis", "--linked", "--symbols", "--contract", "--control", "--run", "--boot-rom", "--adjustment-nand", "--output", "--probe-path", "--probe-idle"]
+  names = ["--role", "--routes", "--storage-matrix", "--update", "--analysis", "--linked", "--symbols", "--elf", "--contract", "--control", "--run", "--boot-rom", "--adjustment-nand", "--committed-nand", "--output", "--probe-path", "--probe-idle", "--probe-drain-ticks"]
   parseKey wire = maybe (Left ("unknown key " ++ wire)) Right (lookup wire [(crawlKeyWire key, key) | key <- [minBound .. maxBound]])
   splitOn text = case break (== ',') text of
     (key, []) -> [key]
@@ -120,18 +145,45 @@ insertPath (key : rest) (Trie children) = Trie $ case lookup key children of
 hitPage :: Int
 hitPage = 65536
 
-regionValues :: Emulator -> IO Value
-regionValues emulator = fmap toJSONList . forM settingsRanges $ \range -> do
-  bytes <- emulatorReadMemory emulator (rangeStart range) (fromIntegral (rangeEnd range - rangeStart range))
-  pure (object ["start" .= rangeStart range, "bytes" .= C.unpack (hex bytes)])
- where
-  toJSONList = Array . V.fromList
-  hex = B.concatMap (\byte -> C.pack (pad (showHex byte "")))
-  pad text = replicate (2 - length text) '0' ++ text
 
 field :: T.Text -> Value -> Maybe Value
 field name (Object fields) = KM.lookup (K.fromText name) fields
 field _ _ = Nothing
+
+drainDiagnostics :: Emulator -> IO Value
+drainDiagnostics emulator = do
+  mode <- emulatorReadMemory emulator 0x9500ec 0x28
+  cells <- forM
+    [(0x949dd0, 8), (0x94f5d8, 8), (0x950098, 4), (0x950148, 4), (0x951424, 4), (0x951528, 4),
+     (22955789, 1), (22956064, 4), (9807516, 4), (9807520, 4), (9807528, 4), (9807532, 4), (9765112, 4), (9765136, 1),
+     (22955728, 4), (21902010, 4), (21902136, 4), (22955752, 4), (0x9571d0, 12), (0x1467588, 0x400),
+     (0xd3d53c, 4), (0x944580, 0x50), (0x1708e3c, 0x18), (0x170952c, 0x70), (0x1715a5c, 0x18)] $ \(address, size) ->
+      raw address <$> emulatorReadMemory emulator address size
+  keys <- forM [14 .. 20] $ \row -> do
+    let address = 8552736 + row * 28 + 21
+    raw address <$> emulatorReadMemory emulator address 1
+  tables <- forM [1074087440, 1074087572] $ \record -> do
+    header <- emulatorReadMemory emulator (record - 0x40000000) 8
+    let table = word32At header 0
+        count = word32At header 4
+        physical address = if address >= 0x40000000 then address - 0x40000000 else address
+    rows <- if count < 1 || count > 128 then pure [] else forM [0 .. count - 1] $ \index -> do
+      let address = physical table + index * 0x38
+      bytes <- emulatorReadMemory emulator address 0x38
+      descriptor <- emulatorReadMemory emulator (physical (word32At bytes 8)) 0x28
+      stack <- if word32At descriptor 8 == 0xc22f60 && word32At descriptor 16 <= 65536
+        then Just . raw (word32At descriptor 20) <$> emulatorReadMemory emulator (physical (word32At descriptor 20)) (fromIntegral (word32At descriptor 16))
+        else pure Nothing
+      pure (object ["row" .= raw address bytes, "descriptor" .= raw (word32At bytes 8) descriptor, "task1_stack" .= stack])
+    pure (object ["record" .= raw record header, "rows" .= rows])
+  pure (object
+    [ "outcome" .= (if word32At mode 12 /= 0 || B.index mode 36 /= 0 then "source-mode-pending" else "diagnostic-only" :: String)
+    , "source_mode" .= object ["current" .= word32At mode 0, "previous" .= word32At mode 4,
+        "pending" .= word32At mode 12, "request" .= word32At mode 20, "transition_latch" .= B.index mode 36]
+    , "source_mode_raw" .= raw 0x9500ec mode, "cells" .= cells, "keys" .= keys, "task_tables" .= tables ])
+ where
+  raw :: Word32 -> B.ByteString -> Value
+  raw address bytes = object ["address" .= address, "bytes" .= B.unpack bytes]
 
 main :: IO ()
 main = do
@@ -178,29 +230,48 @@ observe options output = do
 
 run :: Options -> FilePath -> (K.Key -> Value -> IO ()) -> IO ()
 run options output record = do
-  (routesPath, routesBytes) <- readBound (optRoutes options)
+  (routesPath, routesBytes) <- readBound (case optRouteInput options of KeyRouteFile path -> path; StorageMatrixFile path -> path)
   (datPath, datBytes) <- readBound (optUpdate options)
   (contractPath, contractBytes) <- readBound (optContract options)
   (linkedPath, linked) <- readBound (optLinked options)
   (symbolsPath, symbols) <- readBound (optSymbols options)
+  elf <- forM (optElf options) readBound
   (runPath, runBytes) <- readBound (optRun options)
   (romPath, rom) <- readBound (optBootRom options)
-  (nandPath, nand) <- readBound (optNand options)
+  (nandPath, nand) <- readBound (case optNand options of AdjustmentSeed path -> path; CommittedSeed path -> path)
   analysis <- makeAbsolute (optAnalysis options)
   images <- M.fromList <$> forM codeImages (\name -> (,) name <$> B.readFile (analysisPath analysis name))
   observer <- getExecutablePath
   observerDigest <- sha256File observer
   bridgeDigest <- sha256File fujimodRamPushBridge
-  routes <- either (refuse . InputRefused . ("route file: " ++)) pure (decodeRouteFile routesBytes)
+  routes <- case optRouteInput options of
+    KeyRouteFile _ -> KeyRouteDocument <$> either (refuse . InputRefused . ("route file: " ++)) pure (decodeRouteFile routesBytes)
+    StorageMatrixFile _ -> StorageMatrixDocument <$> either (refuse . InputRefused . ("storage matrix: " ++)) pure (Storage.decodeStorageMatrix routesBytes)
   contract <- either (refuse . InputRefused . ("contract: " ++)) pure (decodeContract contractBytes)
+  bankBoundary <- case (contractPublishedElf contract,elf) of
+    (Just identity,Just (_,bytes)) -> do
+      unless (digestOf bytes == publishedElfSha256 identity) (refuse (InputRefused "ELF differs from the composed publication"))
+      publication <- maybe (refuse (InputRefused "ELF has no composed publication")) pure (contractPublication contract)
+      boundary <- either (refuse . InputRefused . ("bank apply ELF: " ++)) pure
+        (StorageBoundaries.admitBankApplyElf StorageBoundaries.BankApplyElfInput
+          { StorageBoundaries.bankApplyImageBase = Placement.GuestAddress image4Base
+          , StorageBoundaries.bankApplyCarriers = [Placement.Carrier (Placement.GuestAddress low) (Placement.GuestAddress high) | PhysicalRange low high <- publicationCarriers publication]
+          , StorageBoundaries.bankApplyLinkedBytes = linked
+          , StorageBoundaries.bankApplySymbolBytes = symbols
+          , StorageBoundaries.bankApplyElfBytes = bytes
+          })
+      pure (Just boundary)
+    (Just _,Nothing) -> refuse (InputRefused "composed publication requires --elf")
+    (Nothing,Just _) -> refuse (InputRefused "--elf requires a composed publication")
+    (Nothing,Nothing) -> pure Nothing
   control <- forM (optControl options) $ \path -> do
     (manifestPath, manifest) <- readBound path
     parsed <- either (refuse . InputRefused . ("control manifest: " ++)) pure (decodeControlManifest manifest)
     pure (manifestPath, manifest, parsed)
   let role = optRole options
-      inputs = PlanInputs role contract images linked (fmap (\(_, _, (word, _, _)) -> word) control)
+      inputs = PlanInputs role contract images linked (fmap (\(_, _, (word, _, _)) -> word) control) bankBoundary
       bound path bytes = object ["path" .= path, "sha256" .= digestOf bytes]
-  plan <- either (refuse . InputRefused) pure (derivePlan inputs)
+  plan <- either (refuse . InputRefused) pure (case routes of KeyRouteDocument _ -> derivePlan inputs; StorageMatrixDocument matrix -> deriveStoragePlan inputs matrix)
   image4 <- either (refuse . InputRefused) pure (roleImage4 inputs)
   unless (digestOf symbols == contractSymbolsSha256 contract) (refuse (InputRefused "symbols differ from the contract"))
   expectedDat <- case (role, control) of
@@ -213,31 +284,51 @@ run options output record = do
   unless (digestOf datBytes == expectedDat) (refuse (InputRefused ("DAT is not the " ++ roleWire role ++ " role's DAT")))
   record "schema" (Number 1)
   record "role" (String (T.pack (roleWire role)))
-  record "inputs" $ object
+  record "inputs" $ object (
     [ "dat" .= bound datPath datBytes, "routes" .= bound routesPath routesBytes, "contract" .= bound contractPath contractBytes
     , "linked" .= bound linkedPath linked, "symbols" .= bound symbolsPath symbols, "run" .= bound runPath runBytes
-    , "boot_rom" .= bound romPath rom, "adjustment_nand" .= bound nandPath nand
+    , "boot_rom" .= bound romPath rom, "adjustment_nand" .= (case optNand options of AdjustmentSeed _ -> bound nandPath nand; CommittedSeed _ -> Null)
     , "analysis" .= object [K.fromText (imageNameWire name) .= digestOf bytes | (name, bytes) <- M.toList images]
     , "role_image4_sha256" .= digestOf image4
     , "control" .= fmap (\(path, bytes, _) -> bound path bytes) control
     , "bridge" .= object ["path" .= fujimodRamPushBridge, "sha256" .= sha256Hex bridgeDigest]
     , "observer" .= object ["path" .= observer, "sha256" .= sha256Hex observerDigest]
-    ]
+    ] ++ ["committed_nand" .= (case optNand options of AdjustmentSeed _ -> Null; CommittedSeed _ -> bound nandPath nand) | case routes of StorageMatrixDocument _ -> True; KeyRouteDocument _ -> False]
+      ++ ["elf" .= bound path bytes | Just (path,bytes) <- [elf]])
   record "bounds" (object ["hit_limit" .= hitLimit, "watch_limit" .= watchLimit])
-  record "route_exclusions" (A.toJSON (routeExclusions routes))
+  record "route_exclusions" (case routes of KeyRouteDocument document -> A.toJSON (routeExclusions document); StorageMatrixDocument _ -> A.toJSON ([]::[Value]))
   let spec = specValue plan
       specPath = output </> "spec.json"
   BL.writeFile specPath (A.encode spec <> "\n")
   record "sites" (object [K.fromString (siteLabelWire label) .= length [() | l <- M.elems (planSites plan), l == label] | label <- siteLabels])
+  let seed = case optNand options of AdjustmentSeed _ -> AdjustmentSeed nandPath; CommittedSeed _ -> CommittedSeed nandPath
+      boot = StorageObserverInputs fujimodRamPushBridge runPath romPath datPath seed specPath
+  case routes of
+    KeyRouteDocument document -> runKeyRoutes options output document boot record
+    StorageMatrixDocument matrix -> do
+      record "execution" (String "settings-storage-lifecycle")
+      record "probe" Null
+      record "pre_key_idle_instructions" (A.toJSON (instructionsValue preKeyIdle))
+      record "post_settle_prefix_ticks" (A.toJSON (tickValue postSettle))
+      runStorageMatrix boot output matrix record
+
+runKeyRoutes :: Options -> FilePath -> RouteFile -> StorageObserverInputs -> (K.Key -> Value -> IO ()) -> IO ()
+runKeyRoutes options output routes boot record = do
+  let runPath = storageRun boot
+      romPath = storageRom boot
+      datPath = storageDat boot
+      specPath = storageSpec boot
+      medium = case storageInitialNand boot of AdjustmentSeed path -> ["--adjustment-nand",path]; CommittedSeed path -> ["--committed-nand",path]
   let arguments =
-        [ "--run", runPath, "--boot-rom", romPath, "--installed-dat", datPath, "--adjustment-nand", nandPath
-        , "--output", output, "--ram-push-checkpoints", output </> "unused-checkpoints"
-        , "--fresh-boot", "--reset-observation", specPath ]
+        [ "--run", runPath, "--boot-rom", romPath, "--installed-dat", datPath ]
+        ++ medium ++ [ "--output", output, "--ram-push-checkpoints", output </> "unused-checkpoints"
+                     , "--fresh-boot", "--reset-observation", specPath ]
   limit <- either (refuse . InputRefused) pure (W.watchLimit watchLimit)
   ranges <- either (refuse . InputRefused) pure
     (mapM (\range -> W.watchRange (W.watchAddress (rangeStart range)) (W.watchAddress (rangeEnd range))) settingsRanges)
   record "probe" (maybe Null (\(Probe path idle) -> object ["path" .= map crawlKeyWire path, "idle_instructions" .= fmap instructionsValue idle]) (optProbe options))
   record "pre_key_idle_instructions" (maybe (A.toJSON (instructionsValue preKeyIdle)) (const Null) (optProbe options))
+  record "post_settle_prefix_ticks" (A.toJSON (tickValue postSettle))
   let routeKeyPaths = maybe [routeKeys route | route <- routeList routes, not (null (routeKeys route))] (\(Probe path _) -> [path]) (optProbe options)
   let trie = foldl (flip insertPath) (Trie []) routeKeyPaths
   withBinaryFile (output </> "hits.jsonl") WriteMode $ \hitsFile -> do
@@ -278,12 +369,13 @@ run options output record = do
                   when (index == length children - 1) (emulatorSnapshotDrop emulator name)
                 stepId <- atomicModifyIORef' stepCounter (\n -> (n + 1, n + 1))
                 let keys = path ++ [key]
-                before <- regionValues emulator
+                before <- readSettingsRegions emulator
                 hitsStart <- readIORef cursor
                 armed <- emulatorExecutionWatchBegin emulator ranges [] limit
                 unless (field "armed" armed == Just (Bool True)) (refuse (BridgeFailed ("watch-begin refused: " ++ show armed)))
                 idled <- case optProbe options of
                   Nothing -> Just <$> emulatorIdle emulator preKeyIdle
+                  Just _ | optProbeDrain options /= Nothing -> Just <$> emulatorIdle emulator preKeyIdle
                   Just (Probe probed (Just instructions)) | keys == probed -> Just <$> emulatorIdle emulator instructions
                   Just _ -> pure Nothing
                 press <- emulatorDisplayKey emulator key
@@ -292,12 +384,22 @@ run options output record = do
                   _ -> do
                     _ <- try (drainHits emulator) :: IO (Either SomeException Int)
                     refuse (PressFailed (map crawlKeyWire keys) press)
+                postIdle <- case (optProbe options, optProbeDrain options) of
+                  (Just (Probe probed _), Just ticks) | keys == probed -> do
+                    elapsed <- emulatorIdleTicks emulator ticks
+                    diagnostic <- drainDiagnostics emulator
+                    hitsEnd <- drainHits emulator
+                    BL.writeFile (output </> "local-ui-drain-diagnostic.json") (A.encode (object
+                      ["keys" .= map crawlKeyWire keys, "press" .= press, "elapsed" .= elapsed, "state" .= diagnostic,
+                       "hits" .= [hitsStart, hitsEnd]]) <> "\n")
+                    refuse (BridgeFailed "diagnostic-only bounded UI sample")
+                  _ -> observeBoundedPrefix emulator
                 watch <- emulatorWatchEnd emulator
-                after <- regionValues emulator
+                after <- readSettingsRegions emulator
                 hitsEnd <- drainHits emulator
                 modifyIORef' steps (object
                   [ "step" .= stepId, "parent" .= parentStep, "keys" .= map crawlKeyWire keys
-                  , "hits" .= [hitsStart, hitsEnd], "idle" .= idled, "press" .= press, "watch" .= watch
+                  , "hits" .= [hitsStart, hitsEnd], "idle" .= idled, "press" .= press, "bounded_post_settle_prefix" .= postIdle, "watch" .= watch
                   , "regions_before" .= before, "regions_after" .= after ] :)
                 printf "step %d %s: hits %d..%d\n" stepId (unwords (map crawlKeyWire keys)) hitsStart hitsEnd
                 walk keys stepId child
@@ -315,16 +417,3 @@ run options output record = do
       (Right (), Left failure) -> refuse (BridgeFailed ("bridge stop: " ++ displayException (failure :: SomeException)))
       (Right (), Right ()) -> pure ()
 
--- | The control builder's manifest: the restored setter table word and the control's digests.
-decodeControlManifest :: B.ByteString -> Either String (ControlWord, String, String)
-decodeControlManifest bytes = do
-  value <- A.eitherDecodeStrict' bytes
-  let text name = case field name value of
-        Just (String content) -> Right (T.unpack content)
-        _ -> Left ("control manifest lacks " ++ T.unpack name)
-      word name = text name >>= \content -> case content of
-        '0' : 'x' : digits | [(parsed, "")] <- readHex digits, parsed <= (0xffffffff :: Integer) -> Right (fromIntegral parsed)
-        _ -> Left ("control manifest " ++ T.unpack name ++ " is not a hexadecimal word")
-  unless (field "schema" value == Just (Number 1)) (Left "control manifest schema differs")
-  control <- ControlWord <$> word "property" <*> word "address" <*> word "target"
-  (,,) control <$> text "dat_sha256" <*> text "image4_sha256"

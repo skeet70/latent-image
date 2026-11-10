@@ -443,6 +443,7 @@ caseFor facts executing role loader payload one
           then (R0, expectedResult one) : [(register, seed register) | register <- [R4 .. R11]] ++ [(Sp, callerSp one)]
           else [(Pc, stopAddress), (Sp, targetStackPointer)]
       , caseExpectedMemory = [(RegionId "caller-frame", callerBytes)]
+      , caseIgnoredMemory = []
       , caseCp14Identity = Just (if executing == DomainA then 0x4003 else 0x4004)
       , caseKernel = Just (KernelCase plainLimit (if caseBoundary one == TaskArrival then Just (wireAddress (GuestAddress stopAddress)) else Nothing) (Just 0x80001234) (Just 0) (Just 0) ignored [])
       }

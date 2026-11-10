@@ -1643,6 +1643,18 @@ cc_binary(
     deps = ["@lab_unicorn//:unicorn"],
 )
 
+# Nested Bazel invocations may rematerialize the external repository during a suite.
+genrule(
+    name = "native-runner-bin",
+    srcs = [
+        "@lab_fujimod_xm1//:bin/fujimod-xm1-native-case",
+        "@lab_fujimod_xm1//:share/fujimod-xm1/store-path",
+    ],
+    outs = ["native-runner.bin"],
+    cmd = "cp -L $(location @lab_fujimod_xm1//:bin/fujimod-xm1-native-case) $@ && chmod +x $@",
+    executable = True,
+)
+
 # The bounded native-case runner: FUJI_NATIVE_V1 on stdin, one observation on stdout.
 sh_binary(
     name = "native-runner",
@@ -2318,6 +2330,7 @@ haskell_library(
     deps = [
         ":case-sha256",
         ":native-adapter",
+        ":native-evidence",
         ":native-observation",
         "//host:aeson",
         "//host:base",
@@ -2327,6 +2340,7 @@ haskell_library(
         "//host:filepath",
         "//host:host-support",
         "//host:json",
+        "//host:unix",
     ],
 )
 
@@ -2386,7 +2400,9 @@ haskell_library(
         "//host:filepath",
         "//host:host-support",
         "//host:json",
+        "//host:storage-budget",
         "//host:unix",
+        "//host:zlib",
     ],
 )
 
@@ -2403,10 +2419,14 @@ haskell_test(
     ],
     deps = [
         ":cached-native-batch",
+        ":case-sha256",
         ":fujimod-native-paths",
         ":native-adapter",
+        ":native-evidence",
         ":native-observation",
         ":owned-case",
+        ":parallel-cases",
+        "//replacement/settings_storage:storage-oracle-lib",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -2414,6 +2434,7 @@ haskell_test(
         "//host:filepath",
         "//host:host-support",
         "//host:unix",
+        "//host:zlib",
     ],
 )
 
@@ -3594,6 +3615,7 @@ haskell_library(
     srcs = [
         "Emulation/PropertyPairPlan.hs",
         "Emulation/PropertyPairRoutes.hs",
+        "Emulation/SettingsStorageMatrix.hs",
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     src_strip_prefix = ".",
@@ -3601,12 +3623,16 @@ haskell_library(
         ":case-sha256",
         ":emulator-usb",
         ":watch-observation",
+        "//replacement/property_service:property-service-artifact",
+        "//replacement/settings_storage:custom-oracle-lib",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
         "//host:containers",
         "//host:filepath",
+        "//host:scientific",
         "//host:text",
+        "//host:vector",
     ],
 )
 
@@ -3618,7 +3644,11 @@ haskell_library(
     deps = [
         ":case-sha256",
         ":emulator-usb",
+        ":local-ui-menu",
         ":property-pair-lib",
+        "//replacement/property_service:property-service-artifact",
+        "//replacement/record_store:oracle-lib",
+        "//replacement/settings_storage:custom-oracle-lib",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -3647,7 +3677,8 @@ haskell_binary(
 
 haskell_binary(
     name = "property-pair-observe",
-    srcs = ["PropertyPairObserverMain.hs"],
+    srcs = ["PropertyPairObserverMain.hs", "Emulation/SettingsStorageObserver.hs"],
+    main_file = "PropertyPairObserverMain.hs",
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":case-sha256",
@@ -3655,6 +3686,8 @@ haskell_binary(
         ":fujimod-paths",
         ":property-pair-lib",
         ":watch-observation",
+        "//replacement/property_service:property-service-artifact",
+        "//replacement/settings_storage:custom-oracle-lib",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -3710,6 +3743,68 @@ haskell_binary(
     ],
 )
 
+haskell_library(
+    name = "property-pair-fixture",
+    testonly = True,
+    srcs = ["PropertyPairFixture.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":case-sha256",
+        ":emulator-usb",
+        ":local-ui-menu",
+        ":property-pair-check-lib",
+        ":property-pair-lib",
+        "//replacement/property_service:property-service-artifact",
+        "//replacement/settings_storage:bank-apply-fixture",
+        "//replacement/settings_storage:custom-oracle-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:text",
+        "//host:vector",
+    ],
+)
+
+haskell_library(
+    name = "settings-storage-matrix-test-fixture",
+    testonly = True,
+    srcs = [
+        "SettingsStorageEeFixture.hs",
+        "SettingsStorageFixtureWire.hs",
+        "SettingsStorageMatrixTests.hs",
+        "SettingsStorageS1Fixture.hs",
+    ],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":case-sha256",
+        ":emulator-usb",
+        ":property-pair-check-lib",
+        ":property-pair-fixture",
+        ":property-pair-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:text",
+        "//host:vector",
+    ],
+)
+
+haskell_test(
+    name = "settings-storage-matrix-tests",
+    size = "medium",
+    srcs = ["SettingsStorageMatrixTestMain.hs"],
+    main_file = "SettingsStorageMatrixTestMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":settings-storage-matrix-test-fixture",
+        "//host:base",
+    ],
+)
+
 haskell_test(
     name = "property-pair-tests",
     size = "small",
@@ -3718,14 +3813,16 @@ haskell_test(
     deps = [
         ":case-sha256",
         ":emulator-usb",
+        ":local-ui-menu",
         ":property-pair-check-lib",
         ":property-pair-lib",
+        ":property-pair-fixture",
+        ":settings-storage-matrix-test-fixture",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
         "//host:containers",
         "//host:text",
-        "//host:vector",
     ],
 )
 
@@ -4072,6 +4169,7 @@ haskell_library(
         "-O2",
     ],
     src_strip_prefix = ".",
+    visibility = ["//replacement/settings_storage:__pkg__"],
     deps = [
         ":case-sha256",
         ":native-observation",

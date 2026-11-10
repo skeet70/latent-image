@@ -8,6 +8,8 @@ use fujimod_xm1::attach_boot::{Attachment, attach};
 use fujimod_xm1::checkpoint::{BootIdentity, CheckpointKey, initialized_reset};
 use fujimod_xm1::record_medium::RecordMedium;
 use fujimod_xm1::bridge::{self, Inputs, SNAPSHOT, emit, load_card, menu_value, read, restore, sha256, write};
+use fujimod_xm1::bridge::BootSource;
+use fujimod_xm1::nand_image::CommittedImage;
 use fujimod_xm1::ff80::{Ff80, RENDEZVOUS_LOCKED, RendezvousInputs, Transfer, encode_hex};
 use fujimod_xm1::guest::{DialTurn, ModeDialPosition, PhysicalShutterPosition, Press, RouteKey};
 use fujimod_xm1::machine::{KeyPulse, Machine, ReleaseSegment, RunOutcome, SCANNED_HOLD, key_pulse};
@@ -21,7 +23,7 @@ use fujimod_emulator::board::preservation::{
 };
 use fujimod_xm1::sd_host::{Backing, MediaImage, SectorAddress, SectorCount};
 use fujimod_xm1::nand_read::{RowAddress, RowCount};
-use fujimod_xm1::trace::{CAPTURE_OBSERVATION_BOUNDS, CaptureCursor, CaptureScope, CaptureSnapshot, Hit, InstructionCount, SiteRead, parse_site_reads};
+use fujimod_xm1::trace::{CAPTURE_OBSERVATION_BOUNDS, CaptureCursor, CaptureScope, CaptureSnapshot, Hit, InstructionCount, SiteRead, parse_site_reads, TaskCapture};
 use serde::{Deserialize, Serialize};
 use fujimod_emulator_devices::Device;
 use fujimod_emulator_exr2_isp_input::ImageInput;
@@ -35,7 +37,7 @@ use std::{
 };
 
 const USAGE: &str = "Usage: fujimod-xm1-ram-push --run RUN.json --boot-rom ROM --installed-dat DAT \
---adjustment-nand NAND [--record-nand NAND] --output DIR --ram-push-checkpoints DIR [--sd-card-image CARD] \
+(--adjustment-nand NAND [--record-nand NAND] | --committed-nand NAND --fresh-boot) --output DIR --ram-push-checkpoints DIR [--sd-card-image CARD] \
 [--attach-hold-key KEY] [--fresh-boot [--reset-observation SPEC.json]]\n";
 
 const ATTACH_RECORD: &str = "ram-push-attach.json";
@@ -67,7 +69,8 @@ struct Arguments {
     run: PathBuf,
     boot_rom: PathBuf,
     installed_dat: PathBuf,
-    adjustment_nand: PathBuf,
+    adjustment_nand: Option<PathBuf>,
+    committed_nand: Option<PathBuf>,
     record_nand: Option<PathBuf>,
     output: PathBuf,
     checkpoints: PathBuf,
@@ -101,6 +104,7 @@ fn arguments() -> Result<Arguments, String> {
             "--installed-dat",
             "--adjustment-nand",
             "--record-nand",
+            "--committed-nand",
             "--output",
             "--ram-push-checkpoints",
             "--sd-card-image",
@@ -117,6 +121,9 @@ fn arguments() -> Result<Arguments, String> {
     }
     let sd_card_image = values.remove("--sd-card-image");
     let record_nand = values.remove("--record-nand");
+    let adjustment_nand = values.remove("--adjustment-nand");
+    let committed_nand = values.remove("--committed-nand");
+    validate_sources(adjustment_nand.is_some(), record_nand.is_some(), committed_nand.is_some(), fresh_boot)?;
     let reset_observation = values.remove("--reset-observation");
     if reset_observation.is_some() && !fresh_boot {
         return Err(USAGE.into());
@@ -126,7 +133,8 @@ fn arguments() -> Result<Arguments, String> {
         run: take("--run")?,
         boot_rom: take("--boot-rom")?,
         installed_dat: take("--installed-dat")?,
-        adjustment_nand: take("--adjustment-nand")?,
+        adjustment_nand,
+        committed_nand,
         record_nand,
         output: take("--output")?,
         checkpoints: take("--ram-push-checkpoints")?,
@@ -137,6 +145,13 @@ fn arguments() -> Result<Arguments, String> {
     })
 }
 
+
+fn validate_sources(adjustment: bool, records: bool, committed: bool, fresh: bool) -> Result<(), String> {
+    if (committed && (adjustment || records || !fresh)) || (!committed && !adjustment) {
+        return Err("use adjustment NAND with optional record fixture, or committed NAND with --fresh-boot".into());
+    }
+    Ok(())
+}
 /// The attach checkpoint's key and the identity document it hashes.
 struct BootKey {
     key: CheckpointKey,
@@ -154,7 +169,7 @@ enum StartKind {
     Installed,
 }
 
-fn boot_key(arguments: &Arguments, inputs: &Inputs, adjustment: &[u8], records: Option<&[u8]>) -> Result<BootKey, String> {
+fn boot_key(arguments: &Arguments, inputs: &Inputs, adjustment: &[u8], records: Option<&[u8]>, committed: Option<&[u8]>) -> Result<BootKey, String> {
     let procedure = serde_json::to_vec(&json!({
         "source": include_str!("attach_boot.rs"),
         "attach_hold_key": arguments.attach_hold,
@@ -164,7 +179,7 @@ fn boot_key(arguments: &Arguments, inputs: &Inputs, adjustment: &[u8], records: 
     let identity = BootIdentity::new(
         &inputs.document_bytes, &inputs.update, &inputs.boot_rom, adjustment,
         inputs.card.as_ref().map(|card| card.image.sha256.as_str()), &procedure,
-    ).with_record_nand(records);
+    ).with_record_nand(records).with_committed_nand(committed);
     Ok(BootKey { key: identity.key(), inputs: identity.document() })
 }
 
@@ -251,8 +266,10 @@ enum DisplayCompletion { AvailablePlane, AcknowledgedFrame }
 #[serde(tag = "command", rename_all = "kebab-case")]
 enum Request {
     List,
+    NandExport { label: NandArtifactLabel },
     Transfer(Transfer),
-    TraceSites { sites: BTreeMap<String, String>, #[serde(default)] reads: BTreeMap<String, Vec<SiteRead>> },
+    TraceSites { sites: BTreeMap<String, String>, #[serde(default)] reads: BTreeMap<String, Vec<SiteRead>>,
+        #[serde(default)] task: TaskCapture },
     TraceHits { from: usize, #[serde(default)] limit: Option<std::num::NonZeroUsize> },
     RenderStackDiagnosticBegin(fujimod_xm1::render_stack::BeginRequest),
     RenderStackDiagnosticReport,
@@ -307,6 +324,7 @@ enum Request {
 #[serde(rename_all = "kebab-case")]
 enum RequestKind {
     List,
+    NandExport,
     Transfer,
     TraceSites,
     TraceHits,
@@ -354,6 +372,7 @@ impl Request {
     fn kind(&self) -> RequestKind {
         match self {
             Request::List => RequestKind::List,
+            Request::NandExport { .. } => RequestKind::NandExport,
             Request::Transfer(_) => RequestKind::Transfer,
             Request::TraceSites { .. } => RequestKind::TraceSites,
             Request::TraceHits { .. } => RequestKind::TraceHits,
@@ -443,6 +462,8 @@ struct Server {
     capture_evidence_error: Option<String>,
     /// In-memory guest snapshots by client name.
     snapshots: BTreeMap<SnapshotName, (Vec<u8>, fujimod_xm1::trace::calls::Calls)>,
+    nand_template: CommittedImage,
+    nand_source: NandSourceKind,
 }
 
 /// About 120 MB per held snapshot of the X-M1 run document.
@@ -489,6 +510,35 @@ impl From<SnapshotName> for String {
 }
 
 /// A physical press as named on the wire, parsed once.
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum NandSourceKind { InitialSeeded, FullCommitted }
+
+#[derive(Deserialize)]
+#[serde(transparent)]
+struct NandArtifactLabel(SnapshotName);
+
+#[derive(Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum NandExportRefusal { Busy, Mutation, Unsupported }
+
+#[derive(Serialize)]
+struct NandBoundary { instructions: u64, clock: Value }
+
+#[derive(Serialize)]
+struct NandArtifact { path: PathBuf, sha256: String, bytes: usize }
+
+#[derive(Serialize)]
+#[serde(tag = "status", rename_all = "kebab-case")]
+enum NandExport {
+    Exported {
+        artifact: NandArtifact, medium: NodeName, source_kind: NandSourceKind,
+        base: Value, inputs: Value, boundary: NandBoundary, after: NandBoundary,
+        fingerprint: Value, format: &'static str, geometry: Value,
+    },
+    Refused { reason: NandExportRefusal },
+}
 #[derive(Clone, Deserialize)]
 #[serde(try_from = "String")]
 struct PressName {
@@ -760,6 +810,49 @@ struct CaptureProgress<'a> {
 }
 
 impl Server {
+    fn export_nand(&self, label: NandArtifactLabel) -> Result<Value, String> {
+        let refused = |reason| serde_json::to_value(NandExport::Refused { reason }).map_err(|e| e.to_string());
+        if self.pending_capture.is_some() || self.bridge.rendezvous_active() {
+            return refused(NandExportRefusal::Mutation);
+        }
+        let machine = &self.bridge.machine;
+        let medium = &machine.document.nand;
+        let state = machine.session.nand_state(&medium.0)?;
+        match state.get("busy").and_then(Value::as_bool) {
+            Some(true) => return refused(NandExportRefusal::Busy),
+            None => return refused(NandExportRefusal::Unsupported),
+            Some(false) => (),
+        }
+        let boundary = NandBoundary { instructions: machine.instructions(), clock: machine.session.board.state()["timeline"].clone() };
+        let nand = machine.session.nand_medium(&medium.0)?;
+        let fingerprint = nand.fingerprint();
+        let bytes = self.nand_template.export(&nand)?;
+        let after = NandBoundary { instructions: machine.instructions(), clock: machine.session.board.state()["timeline"].clone() };
+        if after.instructions != boundary.instructions || after.clock != boundary.clock
+            || machine.session.nand_state(&medium.0)? != state
+            || machine.session.nand_medium(&medium.0)?.fingerprint() != fingerprint {
+            return refused(NandExportRefusal::Mutation);
+        }
+        std::fs::create_dir_all(&self.output).map_err(|e| e.to_string())?;
+        let path = self.output.join(format!("nand-{}.nand.gz", label.0.0));
+        static SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let serial = SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let temporary = self.output.join(format!(".nand-{}-{}-{serial}.partial", label.0.0, std::process::id()));
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&temporary).map_err(|e| format!("{}: {e}", temporary.display()))?;
+        let published = file.write_all(&bytes).and_then(|()| file.sync_all()).and_then(|()| std::fs::hard_link(&temporary, &path));
+        drop(file);
+        let cleanup = std::fs::remove_file(&temporary);
+        published.map_err(|e| format!("{}: {e}", path.display()))?;
+        cleanup.map_err(|e| format!("{}: {e}", temporary.display()))?;
+        serde_json::to_value(NandExport::Exported {
+            artifact: NandArtifact { path, sha256: sha256(&bytes), bytes: bytes.len() },
+            medium: medium.clone(), source_kind: self.nand_source,
+            base: self.nand_template.base_identity(), inputs: self.key.inputs.clone(), boundary, after, fingerprint,
+            format: "type1-nand-committed-image",
+            geometry: json!({"blocks":1024,"pages_per_block":64,"page_bytes":2048,"spare_bytes":512}),
+        }).map_err(|e| e.to_string())
+    }
+
     fn start_capture_operation(&mut self, operation: CaptureOperation) -> Result<Value, String> {
         self.bridge.machine.require_running()?;
         if !self.bridge.machine.traces.capture_observation_active() {
@@ -848,14 +941,14 @@ impl Server {
         }
     }
 
-    fn arm(&mut self, requested: &BTreeMap<String, String>) -> Result<usize, String> {
+    fn arm(&mut self, requested: &BTreeMap<String, String>, task: TaskCapture) -> Result<usize, String> {
         let parsed = requested.iter()
             .map(|(address, label)| Ok((parse_address(address)?, label.clone())))
             .collect::<Result<BTreeMap<u32, String>, String>>()?;
-        self.arm_sites(&parsed)
+        self.arm_sites(&parsed, Some(task))
     }
 
-    fn arm_sites(&mut self, requested: &BTreeMap<u32, String>) -> Result<usize, String> {
+    fn arm_sites(&mut self, requested: &BTreeMap<u32, String>, task: Option<TaskCapture>) -> Result<usize, String> {
         let mut sites: BTreeMap<u32, String> =
             FIXED_SITES.iter().map(|(address, label)| (*address, (*label).to_owned())).collect();
         sites.extend(requested.iter().map(|(address, label)| (*address, label.clone())));
@@ -863,7 +956,10 @@ impl Server {
         let machine = &mut self.bridge.machine;
         sites.extend(machine.traces.sites.iter().filter(|(_, label)| label.as_str() == "call-return")
             .map(|(address, label)| (*address, label.clone())));
-        machine.traces.arm(&machine.session, sites)?;
+        match task {
+            Some(task) => machine.traces.arm_with_task_capture(&machine.session, sites, task)?,
+            None => machine.traces.arm(&machine.session, sites)?,
+        }
         machine.traces.stop_labels = [RENDEZVOUS_LOCKED.to_owned()].into();
         if !requested.is_empty() {
             self.bridge.enable_keepalive();
@@ -998,7 +1094,7 @@ impl Server {
         }
         let read_only = tail_request || matches!(&request, Request::List | Request::TraceHits { .. }
             | Request::ImageInputFingerprint { .. } | Request::ReadMemory { .. } | Request::MediaRead { .. } | Request::NandRead { .. }
-            | Request::WatchState | Request::PreservationState | Request::MediaState | Request::UiState);
+            | Request::WatchState | Request::PreservationState | Request::MediaState | Request::NandExport { .. } | Request::UiState);
         if !read_only {
             if let Some(failure) = self.bridge.machine.traces.modal_observation_report().failure {
                 return Err(failure.to_owned());
@@ -1034,6 +1130,7 @@ impl Server {
     fn handle(&mut self, request: Request) -> Result<Option<Value>, String> {
         self.admit_request(&request)?;
         Ok(Some(match request {
+            Request::NandExport { label } => self.export_nand(label)?,
             Request::List => {
                 let c = &self.attachment.configuration;
                 let byte = |index: usize| c.get(index).copied().ok_or("configuration descriptor is short");
@@ -1046,9 +1143,9 @@ impl Server {
                 let (count, payload) = self.bridge.transfer(&transfer)?;
                 json!({"count": count, "bytes": encode_hex(&payload)})
             }
-            Request::TraceSites { sites, reads } => {
+            Request::TraceSites { sites, reads, task } => {
                 let site_reads = parse_site_reads(&sites, &reads)?;
-                let count = self.arm(&sites)?;
+                let count = self.arm(&sites, task)?;
                 self.bridge.machine.traces.site_reads = site_reads;
                 json!({"sites": count})
             }
@@ -1582,7 +1679,8 @@ fn drive() -> Result<(), String> {
     fujimod_emulator_models::register();
     let started = Instant::now();
     let arguments = arguments()?;
-    let adjustment_bytes = read(&arguments.adjustment_nand)?;
+    let adjustment_bytes = arguments.adjustment_nand.as_deref().map(read).transpose()?.unwrap_or_default();
+    let committed_bytes = arguments.committed_nand.as_deref().map(read).transpose()?;
     let record_bytes = arguments.record_nand.as_deref().map(read).transpose()?;
     let document_bytes = read(&arguments.run)?;
     let card = arguments
@@ -1595,13 +1693,19 @@ fn drive() -> Result<(), String> {
         document_bytes,
         update: read(&arguments.installed_dat)?,
         boot_rom: read(&arguments.boot_rom)?,
-        adjustment: AdjustmentNand::parse(&adjustment_bytes)?,
-        records: record_bytes.as_deref().map(RecordMedium::parse).transpose()?,
+        nand: match &committed_bytes {
+            Some(bytes) => BootSource::FullCommitted(CommittedImage::parse(bytes)?),
+            None => BootSource::InitialSeeded {
+                adjustment: AdjustmentNand::parse(&adjustment_bytes)?,
+                records: record_bytes.as_deref().map(RecordMedium::parse).transpose()?,
+            },
+        },
         card,
     };
     std::fs::create_dir_all(&arguments.output).map_err(|e| format!("{}: {e}", arguments.output.display()))?;
     let observation = arguments.reset_observation.as_deref().map(|path| ResetObservationSpec::parse(&read(path)?)).transpose()?;
-    let key = boot_key(&arguments, &inputs, &adjustment_bytes, record_bytes.as_deref())?;
+    let key = boot_key(&arguments, &inputs, &adjustment_bytes, record_bytes.as_deref(), committed_bytes.as_deref())?;
+    let nand_source = if committed_bytes.is_some() { NandSourceKind::FullCommitted } else { NandSourceKind::InitialSeeded };
     let key_seconds = started.elapsed().as_secs_f64();
     let root = arguments.checkpoints.clone();
     let installed = if arguments.fresh_boot { Vec::new() } else { install_checkpoints(&root, &key.key)? };
@@ -1613,7 +1717,7 @@ fn drive() -> Result<(), String> {
         })
         .collect();
     let mut options = json!({"ok": true, "event": "start-options", "boot_key": key.key, "installed": listed});
-    if let Some(records) = &inputs.records {
+    if let BootSource::InitialSeeded { records: Some(records), .. } = &inputs.nand {
         options["record_nand"] = records.summary();
     }
     emit(&options)?;
@@ -1622,6 +1726,7 @@ fn drive() -> Result<(), String> {
     let start: Start = serde_json::from_str(&line).map_err(|e| format!("RAM-push start: {e}"))?;
     let attach_directory = root.join(key.key.as_str());
     let restore_started = Instant::now();
+    let mut initialized_template = None;
     let (bridge, attachment, checkpoint) = match start.installed {
         Some(_) if observation.is_some() => return Err("a reset observation starts from no install checkpoint".into()),
         Some(directory) => {
@@ -1659,13 +1764,16 @@ fn drive() -> Result<(), String> {
         }
         None => {
             let boot_started = Instant::now();
-            let mut machine = inputs.machine()?;
-            if observation.is_some() {
-                let identity = BootIdentity::new(
+            let identity = if observation.is_some() {
+                Some(BootIdentity::new(
                     &inputs.document_bytes, &inputs.update, &inputs.boot_rom, &adjustment_bytes,
                     inputs.card.as_ref().map(|card| card.image.sha256.as_str()),
                     b"initialized-adjusted-card-state-v1:before-reset-observation",
-                ).with_record_nand(record_bytes.as_deref());
+                ).with_record_nand(record_bytes.as_deref()).with_committed_nand(committed_bytes.as_deref()))
+            } else { None };
+            let (mut machine, template) = inputs.into_machine()?;
+            initialized_template = Some(template);
+            if let Some(identity) = identity {
                 machine = initialized_reset(machine, &identity, &root.join("initialized-reset"))?;
             }
             let mut observer = observation.as_ref().map(|spec| ResetObserver::begin(&mut machine, spec)).transpose()?;
@@ -1695,6 +1803,10 @@ fn drive() -> Result<(), String> {
             (bridge, attachment, checkpoint)
         }
     };
+    let nand_template = match initialized_template {
+        Some(template) => template,
+        None => CommittedImage::from_medium(&bridge.machine.session.nand_medium(&bridge.machine.document.nand.0)?)?,
+    };
     let mut server = Server {
         bridge,
         attachment,
@@ -1711,8 +1823,10 @@ fn drive() -> Result<(), String> {
         pending_capture: None,
         capture_evidence_error: None,
         snapshots: BTreeMap::new(),
+        nand_template,
+        nand_source,
     };
-    server.arm_sites(observation.as_ref().map_or(&BTreeMap::new(), ResetObservationSpec::sites))?;
+    server.arm_sites(observation.as_ref().map_or(&BTreeMap::new(), ResetObservationSpec::sites), None)?;
     server.serve()
 }
 
@@ -1966,7 +2080,162 @@ mod tests {
             key_log: Vec::new(), requests: RequestProfile::default(),
             rendezvous, pending_capture: None,
             capture_evidence_error: None, snapshots: BTreeMap::new(),
+            nand_template: CommittedImage::parse(&CommittedImage::compose(&[0; 2048], &BTreeMap::new()).unwrap()).unwrap(),
+            nand_source: NandSourceKind::InitialSeeded,
         }
+    }
+
+    #[test]
+    fn nand_export_reboots_exact_partial_rows_spare_holes_and_calibration() {
+        use fujimod_emulator_devices::parts::nand::Overlay;
+        let mut first = server(&[0xeaff_fffe]);
+        let medium_name = first.bridge.machine.document.nand.clone();
+        let mut nand = first.bridge.machine.session.nand_medium(&medium_name.0).unwrap().with_inputs(
+            vec![Overlay { offset: 66 * 2048, bytes: vec![0x93; 2048].into() },
+                Overlay { offset: 0x381 * 64 * 2048, bytes: vec![0x7b; 2048].into() }],
+            BTreeMap::from([(66, vec![0x37; 512]), (67, vec![0x51; 32])]),
+        ).unwrap();
+        nand.program(65, &vec![0x29; 2048], &vec![0xa7; 512]).unwrap();
+        nand.erase(128).unwrap();
+        first.nand_template = CommittedImage::from_medium(&nand).unwrap();
+        first.bridge.machine.session.retain_nand(&medium_name.0, nand.clone()).unwrap();
+        assert_eq!(first.bridge.machine.run(7), RunOutcome::Completed);
+        let before = first.bridge.machine.session.board.fingerprint().unwrap();
+        let response = first.handle(request(json!({"command":"nand-export","label":"reboot-0001"}))).unwrap().unwrap();
+        assert_eq!(response["status"], "exported");
+        assert_eq!(response["boundary"], response["after"]);
+        assert_eq!(before, first.bridge.machine.session.board.fingerprint().unwrap());
+        let artifact = read(Path::new(response["artifact"]["path"].as_str().unwrap())).unwrap();
+        assert_eq!(response["artifact"]["sha256"], sha256(&artifact));
+        assert_eq!(response["artifact"]["bytes"], artifact.len());
+        let document = RunDocument::parse(include_bytes!("../data/xm1-150.json")).unwrap();
+        let inputs = Inputs {
+            document_bytes: include_bytes!("../data/xm1-150.json").to_vec(),
+            update: vec![0xff; document.update_flash_offset + 2048],
+            boot_rom: vec![0; 16384],
+            nand: BootSource::FullCommitted(CommittedImage::parse(&artifact).unwrap()), card: None,
+        };
+        let (reboot, template) = inputs.into_machine().unwrap();
+        assert_eq!(reboot.instructions(), 0);
+        let retained = reboot.session.nand_medium(&reboot.document.nand.0).unwrap();
+        assert_eq!(retained.fingerprint(), nand.fingerprint());
+        for row in [0, 64, 65, 66, 67, 127, 128, 191, 192, 0x381 * 64] {
+            let mut expected = vec![0; 2048];
+            let mut actual = vec![0; 2048];
+            nand.read(row * 2048, &mut expected).unwrap();
+            retained.read(row * 2048, &mut actual).unwrap();
+            assert_eq!(actual, expected, "row {row}");
+        }
+        let mut second = server(&[0xeaff_fffe]);
+        second.bridge.machine = reboot;
+        second.nand_source = NandSourceKind::FullCommitted;
+        second.nand_template = template;
+        let response2 = second.handle(request(json!({"command":"nand-export","label":"reboot-0002"}))).unwrap().unwrap();
+        let artifact2 = read(Path::new(response2["artifact"]["path"].as_str().unwrap())).unwrap();
+        assert_ne!(response["artifact"]["path"], response2["artifact"]["path"]);
+        assert_eq!(artifact, artifact2);
+        assert_eq!(response2["source_kind"], "full-committed");
+        let mut wrong = Inputs {
+            document_bytes: include_bytes!("../data/xm1-150.json").to_vec(),
+            update: vec![0xff; document.update_flash_offset + 2048],
+            boot_rom: vec![0; 16384],
+            nand: BootSource::FullCommitted(CommittedImage::parse(&artifact).unwrap()), card: None,
+        };
+        wrong.update[document.update_flash_offset] = 0;
+        assert!(wrong.machine().is_err());
+        let mut image: Value = serde_json::from_reader(flate2::read::GzDecoder::new(artifact.as_slice())).unwrap();
+        image["geometry"]["spare_bytes"] = json!(64);
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        serde_json::to_writer(&mut encoder, &image).unwrap();
+        assert!(CommittedImage::parse(&encoder.finish().unwrap()).is_err());
+    }
+
+    #[test]
+    fn nand_full_physical_image_imports_all_committed_erased_rows() {
+        use fujimod_xm1::nand_image::{PAGE_BYTES, SPARE_BYTES};
+        fujimod_emulator_exr2_board::register_board_builder();
+        fujimod_emulator_models::register();
+        let pages = (0..65536).map(|row| (row, (vec![0xff; PAGE_BYTES], vec![0xff; SPARE_BYTES]))).collect();
+        let bytes = CommittedImage::compose(&[0; 2048], &pages).unwrap();
+        drop(pages);
+        let document = RunDocument::parse(include_bytes!("../data/xm1-150.json")).unwrap();
+        let inputs = Inputs {
+            document_bytes: include_bytes!("../data/xm1-150.json").to_vec(),
+            update: vec![0xff; document.update_flash_offset + 2048],
+            boot_rom: vec![0; 16384],
+            nand: BootSource::FullCommitted(CommittedImage::parse(&bytes).unwrap()), card: None,
+        };
+        let (machine, template) = inputs.into_machine().unwrap();
+        assert_eq!(machine.instructions(), 0);
+        let nand = machine.session.nand_medium(&machine.document.nand.0).unwrap();
+        let fingerprint = nand.fingerprint();
+        assert_eq!(fingerprint["pages"].as_array().unwrap().len(), 65536);
+        assert_eq!(fingerprint["written_spare"].as_array().unwrap().len(), 65536);
+        let mut data = [0; PAGE_BYTES];
+        let mut spare = [0; SPARE_BYTES];
+        for row in 0..65536 {
+            nand.read(u64::from(row) * PAGE_BYTES as u64, &mut data).unwrap();
+            nand.read_spare(row, &mut spare).unwrap();
+            assert_eq!(data, [0xff; PAGE_BYTES]);
+            assert_eq!(spare, [0xff; SPARE_BYTES]);
+        }
+        let exported = template.export(&nand).unwrap();
+        assert_eq!(exported, bytes);
+    }
+
+    #[test]
+    fn nand_export_failed_publication_cleans_temporary_and_allows_label_retry() {
+        let mut server = server(&[0xeaff_fffe]);
+        let destination = server.output.join("nand-retry.nand.gz");
+        std::fs::create_dir_all(&destination).unwrap();
+        assert!(server.handle(request(json!({"command":"nand-export","label":"retry"}))).is_err());
+        let entries: Vec<_> = std::fs::read_dir(&server.output).unwrap().map(|entry| entry.unwrap().file_name()).collect();
+        assert_eq!(entries, vec![std::ffi::OsString::from("nand-retry.nand.gz")]);
+        std::fs::remove_dir(&destination).unwrap();
+        let exported = server.handle(request(json!({"command":"nand-export","label":"retry"}))).unwrap().unwrap();
+        assert_eq!(exported["status"], "exported");
+        let original = read(&destination).unwrap();
+        assert!(server.handle(request(json!({"command":"nand-export","label":"retry"}))).is_err());
+        assert_eq!(read(&destination).unwrap(), original);
+        assert_eq!(std::fs::read_dir(&server.output).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn nand_export_refuses_busy_and_incomplete_mutation_without_execution() {
+        let mut busy = server(&[
+            0xe59f0018, 0xe3a01001, 0xe5801000, 0xe59f1010,
+            0xe580101c, 0xe59f100c, 0xe5801008, 0xeafffffe,
+            0xfff52000, 0xff007000, 0x800007,
+        ]);
+        assert_eq!(busy.bridge.machine.run(7), RunOutcome::Completed);
+        let before = busy.bridge.machine.session.board.fingerprint().unwrap();
+        let response = busy.handle(request(json!({"command":"nand-export","label":"busy"}))).unwrap().unwrap();
+        assert_eq!(response, json!({"status":"refused","reason":"busy"}));
+        assert_eq!(before, busy.bridge.machine.session.board.fingerprint().unwrap());
+        let mut changing = rendezvous_server(0x04, RendezvousInputs::DialPush);
+        changing.bridge.advance(100).unwrap();
+        let before = changing.bridge.machine.session.board.fingerprint().unwrap();
+        let response = changing.handle(request(json!({"command":"nand-export","label":"changing"}))).unwrap().unwrap();
+        assert_eq!(response, json!({"status":"refused","reason":"mutation"}));
+        assert_eq!(before, changing.bridge.machine.session.board.fingerprint().unwrap());
+    }
+
+    #[test]
+    fn nand_boot_sources_and_export_labels_are_closed() {
+        for (adjustment, records, committed, fresh) in [
+            (true,false,true,true), (false,true,true,true), (false,false,true,false), (false,false,false,true),
+        ] {
+            assert!(validate_sources(adjustment, records, committed, fresh).is_err());
+        }
+        assert!(validate_sources(true, true, false, false).is_ok());
+        assert!(validate_sources(false, false, true, true).is_ok());
+        for label in ["", "../escape", "UPPER", &"x".repeat(65)] {
+            assert!(serde_json::from_value::<Request>(json!({"command":"nand-export","label":label})).is_err());
+        }
+        let identity = |bytes: &[u8]| BootIdentity::new(b"run",b"dat",b"rom",b"",None,b"reset").with_committed_nand(Some(bytes));
+        assert_ne!(identity(b"first").key(), identity(b"second").key());
+        assert_eq!(identity(b"first").document()["committed_nand"], sha256(b"first"));
+        assert!(identity(b"first").document()["adjustment_nand"].is_null());
     }
 
     #[test]
@@ -2205,7 +2474,7 @@ mod tests {
         server.arm(&BTreeMap::from([
             ("0x006d76ec".to_owned(), "render-osd-buffer".to_owned()),
             ("0x006d7d44".to_owned(), "render-osd-increment".to_owned()),
-        ])).unwrap();
+        ]), TaskCapture::Off).unwrap();
         let mut output = Vec::new();
         server.serve_io(b"{\"command\":\"display-key\",\"key\":\"back\"}\n".as_slice(), &mut output).unwrap();
         let responses: Vec<Value> = output.split(|byte| *byte == b'\n').filter(|line| !line.is_empty())
@@ -2873,15 +3142,15 @@ mod tests {
             document_bytes: b"run".to_vec(),
             update: b"dat".to_vec(),
             boot_rom: b"rom".to_vec(),
-            adjustment: AdjustmentNand::parse(&adjustment).unwrap(),
-            records: None,
+            nand: BootSource::InitialSeeded { adjustment: AdjustmentNand::parse(&adjustment).unwrap(), records: None },
             card: None,
         };
         let arguments = |record_nand: Option<&str>| Arguments {
             run: "run.json".into(),
             boot_rom: "rom".into(),
             installed_dat: "dat".into(),
-            adjustment_nand: "adjustment.nand".into(),
+            adjustment_nand: Some("adjustment.nand".into()),
+            committed_nand: None,
             record_nand: record_nand.map(PathBuf::from),
             output: "out".into(),
             checkpoints: "checkpoints".into(),
@@ -2890,10 +3159,10 @@ mod tests {
             attach_hold: None,
             fresh_boot: false,
         };
-        let without = boot_key(&arguments(None), &inputs, &adjustment, None).unwrap();
-        let first = boot_key(&arguments(Some("a.nand")), &inputs, &adjustment, Some(b"first")).unwrap();
-        let moved = boot_key(&arguments(Some("b.nand")), &inputs, &adjustment, Some(b"first")).unwrap();
-        let second = boot_key(&arguments(Some("a.nand")), &inputs, &adjustment, Some(b"second")).unwrap();
+        let without = boot_key(&arguments(None), &inputs, &adjustment, None, None).unwrap();
+        let first = boot_key(&arguments(Some("a.nand")), &inputs, &adjustment, Some(b"first"), None).unwrap();
+        let moved = boot_key(&arguments(Some("b.nand")), &inputs, &adjustment, Some(b"first"), None).unwrap();
+        let second = boot_key(&arguments(Some("a.nand")), &inputs, &adjustment, Some(b"second"), None).unwrap();
         assert!(without.inputs["record_nand"].is_null());
         assert_eq!(first.inputs["record_nand"], sha256(b"first"));
         assert_eq!(first.key, moved.key);

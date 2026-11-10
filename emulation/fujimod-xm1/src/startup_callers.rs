@@ -317,6 +317,7 @@ mod tests {
     fn primary_code_admits_canonical_fetch_and_refuses_unsampled_alias() {
         let hit = Hit { site: "primary-code-word".into(), address: "0x40430".into(), core: 0,
             instructions: 1, registers: BTreeMap::new(), sp: "0x40063450".into(),
+            task: None,
             render_object_provenance_sequence: None,
             lr: "0x409e0".into(), cpsr: 0xd3,
             code_word: Some(CodeWord { guest: 0xe320f000, physical: 0xe320f000, expected: 0xe320f000, tcm: [[0; 2]; 2] }), memory: Vec::new(), stack_memory: Vec::new(), observation: None };

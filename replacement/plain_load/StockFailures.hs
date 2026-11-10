@@ -41,7 +41,7 @@ fixture image index route = CaseSpec
   , caseInitial = [(R0, if aggregate then 0x200000 else if stopOnly then 1 else 0), (R1, if aggregate then 0x200100 else 1), (R2, if aggregate then 1 else 0x210000), (R3, 0), (Sp, 0x308000), (Lr, 0x100000), (Cpsr, 0x13)] ++ [(reg,0) | reg <- [R4 .. R12]]
   , caseExpectedStatus = if busy then InstructionBudget else Returned
   , caseExpectedRegisters = if busy then [(R2, 0xfff52890)] else [(R0, expected), (Sp, 0x308000)]
-  , caseExpectedMemory = [], caseCp14Identity = Nothing
+  , caseExpectedMemory = [], caseIgnoredMemory = [], caseCp14Identity = Nothing
   , caseKernel = Just (KernelCase (InstructionLimit budget) Nothing Nothing Nothing Nothing [] [])
   }
   where

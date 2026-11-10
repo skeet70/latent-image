@@ -1,457 +1,388 @@
-#![no_std]
-//! Owned arms of the X-M1 1.50 property getter 0x61e110 and setter 0x624694. The stubs in
-//! `entry.S` run inside the stock frame and pop it themselves.
-//!
-//! The oracle's defect builds set one `property_defect_*` cfg each.
+#![cfg_attr(all(not(test), not(property_embedded_storage)), no_std)]
 
+#[cfg(not(property_embedded_storage))]
+extern crate xm1_settings_storage_core as storage;
+#[cfg(property_embedded_storage)]
+use crate as storage;
 mod property_table;
-mod table;
-
+#[cfg(not(test))]
+pub(crate) mod storage_boundary;
+use storage::table;
 use property_table::{PROPERTIES, SLOTS, SPECIALS};
-use table::{
-    BankDefault, BankOffset, Bits, ConfigOffset, FieldDefault, Hook, HookedField, Kind, ProfileSelector, RecordOffset, Save, SlotDefault, SlotIndex,
-    SlotRecord, Source, SpecialField, SpecialIndex, StockDefault, Width, WriteOnlyPair,
-};
+use storage::{Field, SlotField, FieldValue, HeaderField, MirrorSession, PreviousUpdate, ProfileSelection, SettingsBank, HeaderBackend, SettingsConfiguration, SettingsStorage, SlotDefaultsWindow, TailDefaults, WriteValue};
+use table::{BankDefault, BankOffset, Bits, FieldDefault, Hook, HookedField, Kind, ProfileSelector, Save, SlotDefault, SlotIndex, SlotRecord, Source, SpecialField, SpecialIndex, StockDefault, WriteOnlyPair};
+#[cfg(not(test))]
+use storage::native_configuration::NativeConfiguration;
 
-/// Bytes per bank image at 0x96cc64.
-const BANK_STRIDE: u32 = 0x1c2;
-
-/// Offset of slot record 0 within a bank image and the previous-value image.
-const RECORD_BASE: u32 = 0x140;
-
-/// Bytes per slot record, in the bank images and the slot defaults at 0x7cb804.
-const RECORD_STRIDE: u32 = 0x28;
-
-/// The setter value the stock prologue turns into a default request.
-const DEFAULT_REQUEST: u32 = 0x1affffff;
-
-#[derive(Clone, Copy)]
-struct PropertyId(u32);
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct BankIndex(u32);
-
-/// The getter's and setter's argument 3; 1 selects the bank branch of a slot field.
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct SlotNumber(u32);
-
-const BANK_BRANCH: SlotNumber = SlotNumber(1);
-
-const RECORD_ZERO: SlotNumber = SlotNumber(0);
-
-#[derive(Clone, Copy)]
-enum ReadMode {
-    Live,
-    Default,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PropertyId(u32);
+impl PropertyId {
+    pub fn decode(raw: u32) -> Option<Self> { if raw.wrapping_sub(1) <= 644 { Some(Self(raw)) } else { None } }
 }
-
-#[derive(Clone, Copy)]
-enum SetValue {
-    Default,
-    Value(u32),
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ValueBits(u32);
+impl ValueBits {
+    pub const fn new(value: u32) -> Self { Self(value) }
+    pub const fn get(self) -> u32 { self.0 }
 }
-
-/// Byte offset from the base of the image an accessor reads or writes.
+impl FieldValue for ValueBits {
+    fn from_bits(value: u32) -> Self { Self(value) }
+    fn bits(self) -> u32 { self.0 }
+}
 #[derive(Clone, Copy)]
-#[repr(transparent)]
-struct ImageOffset(u32);
-
-extern "C" {
-    fn xm1_bank_load8(offset: ImageOffset) -> u32;
-    fn xm1_bank_load16(offset: ImageOffset) -> u32;
-    fn xm1_bank_store8(offset: ImageOffset, value: u32);
-    fn xm1_bank_store16(offset: ImageOffset, value: u32);
-    fn xm1_save_load8(offset: ImageOffset) -> u32;
-    fn xm1_save_load16(offset: ImageOffset) -> u32;
-    fn xm1_save_store8(offset: ImageOffset, value: u32);
-    fn xm1_save_store16(offset: ImageOffset, value: u32);
-    fn xm1_slot_defaults_load8(offset: ImageOffset) -> u32;
-    fn xm1_slot_defaults_load16(offset: ImageOffset) -> u32;
-    fn xm1_tail_defaults_load8(offset: ImageOffset) -> u32;
-    fn xm1_tail_defaults_load16(offset: ImageOffset) -> u32;
-    fn xm1_config_load8(offset: ConfigOffset) -> u32;
-    fn xm1_stock_61df44() -> u32;
-    fn xm1_stock_61d8a4() -> u32;
-    fn xm1_stock_61d59c() -> u32;
-    fn xm1_stock_61d618() -> u32;
-    fn xm1_stock_61d5f0() -> u32;
-    fn xm1_stock_61d65c(selector: ProfileSelector) -> u32;
+pub enum ReadMode { Live, Default }
+#[derive(Clone, Copy)]
+enum Location<'a> { Bank(Field<ValueBits>), Slot(&'a SlotField<ValueBits>, ProfileSelection) }
+struct Target<'a> { bank: SettingsBank, location: Location<'a>, update: PreviousUpdate }
+trait FieldWrites { fn write_target(&mut self, target: &Target<'_>, value: ValueBits, update: PreviousUpdate); }
+impl<B> FieldWrites for SettingsStorage<'_, B> {
+    #[inline(never)]
+    fn write_target(&mut self, target: &Target<'_>, value: ValueBits, update: PreviousUpdate) {
+        match target.location {
+            Location::Bank(field) => self.write(target.bank, field, value, update),
+            Location::Slot(field, selection) => self.write_slot(target.bank, selection, field, value, update),
+        }
+    }
+}
+impl<B: HeaderBackend> FieldWrites for MirrorSession<'_, '_, B> {
+    #[inline(never)]
+    fn write_target(&mut self, target: &Target<'_>, value: ValueBits, update: PreviousUpdate) {
+        let Location::Bank(field) = target.location else { panic!("slot in header session") };
+        assert!(target.bank == SettingsBank::Active);
+        self.write(HeaderField::try_from(field).ok().unwrap(), value, update);
+    }
 }
 
 #[inline(always)]
 fn entry(id: PropertyId) -> Option<Kind> {
-    match PROPERTIES.get(id.0.wrapping_sub(1) as usize) {
-        Some(entry) => entry.kind(),
-        None => None,
+    let index = if cfg!(property_defect_index_without_subtract) { id.0 } else { id.0 - 1 };
+    PROPERTIES.get(index as usize)?.kind()
+}
+#[inline(always)]
+fn slot_record(index: SlotIndex) -> Option<SlotRecord> { SLOTS.get(index.0 as usize)?.record() }
+#[inline(always)]
+fn special(index: SpecialIndex) -> Option<SpecialField> { SPECIALS.get(index.0 as usize)?.field() }
+#[inline(always)]
+fn field(offset: BankOffset, bits: Bits) -> Field<ValueBits> { Field::from_bank_layout(offset, bits).unwrap() }
+#[inline(always)]
+fn slot_field(current: Field<ValueBits>, record: SlotRecord) -> SlotField<ValueBits> {
+    SlotField::from_layout(current, record.offset, record.bits).unwrap()
+}
+#[inline(always)]
+fn previous_update(bits: Bits, save: Save) -> PreviousUpdate {
+    match save {
+        Save::None => PreviousUpdate::None,
+        Save::Bank0Previous if bits.whole() => PreviousUpdate::WholeContainer,
+        Save::Bank0Previous => PreviousUpdate::FieldBits,
     }
+}
+#[inline(always)]
+fn target<'a>(bank: SettingsBank, location: Location<'a>, bits: Bits, save: Save) -> Target<'a> {
+    Target { bank, location, update: previous_update(bits, save) }
 }
 
 #[inline(always)]
-fn slot_record(index: SlotIndex) -> Option<SlotRecord> {
-    match SLOTS.get(index.0 as usize) {
-        Some(slot) => slot.record(),
-        None => None,
-    }
+fn slot_target<'a>(bank: SettingsBank, descriptor: &'a SlotField<ValueBits>, selection: ProfileSelection, current_bits: Bits, record: &SlotRecord) -> Target<'a> {
+    target(bank, Location::Slot(descriptor, selection), if selection == ProfileSelection::Current { current_bits } else { record.bits }, record.save)
 }
 
-#[inline(always)]
-fn special(index: SpecialIndex) -> Option<SpecialField> {
-    match SPECIALS.get(index.0 as usize) {
-        Some(special) => special.field(),
-        None => None,
-    }
+#[cfg(any(storage_read_before_open, storage_defect_read_bank_before_refresh))]
+#[inline(never)]
+fn restore_stale_header<B: HeaderBackend>(session: &mut MirrorSession<'_, '_, B>, field: Field<ValueBits>, value: ValueBits) {
+    session.write(HeaderField::try_from(field).ok().unwrap(), value, PreviousUpdate::None);
 }
-
-fn bank_offset(bank: BankIndex, offset: BankOffset) -> ImageOffset {
-    ImageOffset(bank.0.wrapping_mul(BANK_STRIDE).wrapping_add(offset.0))
-}
-
-/// Offset of a slot's record field from a bank-0-layout image base, without the bank term.
-fn record_offset(slot: SlotNumber, offset: RecordOffset) -> u32 {
-    RECORD_BASE.wrapping_add(slot.0.wrapping_mul(RECORD_STRIDE)).wrapping_add(offset.0)
-}
-
-fn bank_record_offset(bank: BankIndex, slot: SlotNumber, offset: RecordOffset) -> ImageOffset {
-    ImageOffset(bank.0.wrapping_mul(BANK_STRIDE).wrapping_add(record_offset(slot, offset)))
-}
-
-fn slot_defaults_offset(slot: SlotNumber, offset: RecordOffset) -> ImageOffset {
-    ImageOffset(slot.0.wrapping_mul(RECORD_STRIDE).wrapping_add(offset.0))
-}
-
-unsafe fn bank_load(offset: ImageOffset, width: Width) -> u32 {
-    match width {
-        Width::Byte => xm1_bank_load8(offset),
-        Width::Half => xm1_bank_load16(offset),
-    }
-}
-
-unsafe fn bank_store(offset: ImageOffset, width: Width, value: u32) {
-    match width {
-        Width::Byte => xm1_bank_store8(offset, value),
-        Width::Half => xm1_bank_store16(offset, value),
-    }
-}
-
-unsafe fn save_load(offset: ImageOffset, width: Width) -> u32 {
-    match width {
-        Width::Byte => xm1_save_load8(offset),
-        Width::Half => xm1_save_load16(offset),
-    }
-}
-
-unsafe fn save_store(offset: ImageOffset, width: Width, value: u32) {
-    match width {
-        Width::Byte => xm1_save_store8(offset, value),
-        Width::Half => xm1_save_store16(offset, value),
-    }
-}
-
-unsafe fn slot_defaults_load(offset: ImageOffset, width: Width) -> u32 {
-    match width {
-        Width::Byte => xm1_slot_defaults_load8(offset),
-        Width::Half => xm1_slot_defaults_load16(offset),
-    }
-}
-
-unsafe fn bank_default(default: BankDefault) -> u32 {
+fn bank_default(default: BankDefault) -> u32 {
     match default {
         BankDefault::Constant(value) => value,
-        BankDefault::TailByte(offset) => xm1_tail_defaults_load8(ImageOffset(offset.0)),
+        BankDefault::TailByte(offset) => {
+            let offset = if cfg!(storage_tail_defaults_moved) { table::TailOffset(if offset.0 == 39 { 0 } else { offset.0 + 1 }) } else { offset };
+            u32::from(TailDefaults::byte(offset).unwrap())
+        }
     }
 }
-
-unsafe fn field_default(default: FieldDefault) -> u32 {
+fn field_default(default: FieldDefault) -> u32 {
     match default {
         FieldDefault::Constant(value) => value,
-        FieldDefault::TailByte(offset) => xm1_tail_defaults_load8(ImageOffset(offset.0)),
-        FieldDefault::TailHalf(offset) => xm1_tail_defaults_load16(ImageOffset(offset.0)),
+        FieldDefault::TailByte(offset) => u32::from(TailDefaults::byte(offset).unwrap()),
+        FieldDefault::TailHalf(offset) => {
+            let offset = if cfg!(storage_tail16_moved) { table::TailOffset(offset.0 + 4) } else { offset };
+            let value = u32::from(TailDefaults::halfword(offset).unwrap());
+            if cfg!(storage_tail16_byte) || cfg!(storage_defect_halfword_default_truncated) { value & 0xff } else { value }
+        }
     }
 }
-
-unsafe fn stock_default(stock: StockDefault) -> u32 {
+fn stock_default<C: SettingsConfiguration>(configuration: &C, stock: StockDefault) -> u32 {
+    use storage::DefaultProfile;
     match stock {
-        StockDefault::Stock61df44 => xm1_stock_61df44(),
-        StockDefault::Stock61d8a4 => xm1_stock_61d8a4(),
-        StockDefault::Stock61d59c => xm1_stock_61d59c(),
-        StockDefault::Stock61d618 => xm1_stock_61d618(),
-        StockDefault::Stock61d5f0 => xm1_stock_61d5f0(),
-        StockDefault::Stock61d65c(selector) => xm1_stock_61d65c(selector),
-    }
+        StockDefault::Stock61df44 => configuration.default_61df44(),
+        StockDefault::Stock61d8a4 => configuration.default_61d8a4(),
+        StockDefault::Stock61d59c => configuration.default_61d59c(),
+        StockDefault::Stock61d618 => configuration.default_61d618(),
+        StockDefault::Stock61d5f0 => configuration.default_61d5f0(),
+        StockDefault::Stock61d65c(profile) => configuration.default_61d65c(match profile { ProfileSelector::Two => DefaultProfile::Two, ProfileSelector::Three => DefaultProfile::Three, ProfileSelector::Four => DefaultProfile::Four }),
+    }.0
 }
-
-/// The getter's configuration default: the whole byte.
-unsafe fn config_default(bits: Bits, offset: ConfigOffset) -> u32 {
-    let byte = xm1_config_load8(offset);
-    if cfg!(property_defect_mask_config_default) {
-        extract(bits, byte)
-    } else {
-        byte
-    }
+fn config_default<C: SettingsConfiguration>(configuration: &C, bits: Bits) -> u32 {
+    let byte = u32::from(configuration.network_name_default().0);
+    if cfg!(property_defect_mask_config_default) { (byte >> bits.lsb()) & bits.mask() } else { byte }
 }
-
-/// `container` with the field's bits replaced by the low bits of `value`, as BFI does.
-fn insert(bits: Bits, container: u32, value: u32) -> u32 {
-    let mask = bits.mask() << bits.lsb();
-    (container & !mask) | ((value << bits.lsb()) & mask)
+#[inline(never)]
+fn write_stock_default<W: FieldWrites, C: SettingsConfiguration>(writer: &mut W, configuration: &C, target: &Target<'_>, provisional: u32, stock: StockDefault) {
+    if !cfg!(property_defect_drop_provisional) { writer.write_target(target, ValueBits(provisional), target.update); }
+    let value = stock_default(configuration, stock);
+    let update = if cfg!(property_defect_drop_second_save) { PreviousUpdate::None } else { target.update };
+    writer.write_target(target, ValueBits(value), update);
 }
-
-fn extract(bits: Bits, container: u32) -> u32 {
-    (container >> bits.lsb()) & bits.mask()
-}
-
-/// One field a set writes: `live` is its offset in `bank`'s image and `saved` its offset in the
-/// previous-value image, which is also its offset in bank 0. Only inlined functions take it.
-#[derive(Clone, Copy)]
-struct Target {
-    bits: Bits,
-    save: Save,
-    bank: BankIndex,
-    live: ImageOffset,
-    saved: ImageOffset,
-}
-
-/// The setter's save and store of one field.
-unsafe fn write(bits: Bits, save: Save, bank: BankIndex, live: ImageOffset, saved: ImageOffset, stored: u32) {
-    if bank == BankIndex(0) && save == Save::Bank0Previous {
-        let previous = bank_load(live, bits.width());
-        let copied = if bits.whole() { previous } else { insert(bits, save_load(saved, bits.width()), previous >> bits.lsb()) };
-        save_store(saved, bits.width(), copied);
-    }
-    let container = if bits.whole() { stored } else { insert(bits, bank_load(live, bits.width()), stored) };
-    bank_store(live, bits.width(), container);
-}
-
-#[inline(always)]
-unsafe fn write_to(target: Target, stored: u32) {
-    write(target.bits, target.save, target.bank, target.live, target.saved, stored);
-}
-
-/// A default request with a stock default: the provisional write, then the leaf's result written
-/// with a second save, which copies the provisional bits.
-#[inline(always)]
-unsafe fn write_stock_default(target: Target, provisional: u32, stock: StockDefault) {
-    if !cfg!(property_defect_drop_provisional) {
-        write_to(target, provisional);
-    }
-    let result = stock_default(stock);
-    let save = if cfg!(property_defect_drop_second_save) { Save::None } else { target.save };
-    write_to(Target { save, ..target }, result);
-}
-
-/// A default request with a configuration default: the provisional write, then the byte's low bits
-/// stored without a save.
-#[inline(always)]
-unsafe fn write_config_default(target: Target, provisional: u32, offset: ConfigOffset) {
-    write_to(target, provisional);
-    let save = if cfg!(property_defect_config_save) { target.save } else { Save::None };
-    write_to(Target { save, ..target }, xm1_config_load8(offset));
-}
-
-unsafe fn get_special(field: SpecialField, bank: BankIndex, mode: ReadMode) -> u32 {
-    let (bits, offset, default) = match field {
-        SpecialField::Hooked(hooked) => (hooked.bits, hooked.offset, hooked.source),
-        SpecialField::ReadOnly(read_only) => (read_only.bits, read_only.offset, Source::Constant(read_only.default)),
-        SpecialField::WriteOnlyPair(_) => return 0,
-    };
-    match mode {
-        ReadMode::Live => extract(bits, bank_load(bank_offset(bank, offset), bits.width())),
-        ReadMode::Default => match default {
-            Source::Constant(value) => value,
-            Source::Stock(stock, _) => stock_default(stock),
-            Source::Config(config, _) => config_default(bits, config),
-        },
-    }
-}
-
-#[inline(always)]
-unsafe fn set_hooked(field: HookedField, value: SetValue, bank: BankIndex) {
-    let target = Target { bits: field.bits, save: field.save, bank, live: bank_offset(bank, field.offset), saved: bank_offset(BankIndex(0), field.offset) };
+#[inline(never)]
+fn apply_hooked<W: FieldWrites, C: SettingsConfiguration>(writer: &mut W, configuration: &C, field: HookedField, value: WriteValue<ValueBits>, bank: SettingsBank) {
+    let target = target(bank, Location::Bank(self::field(field.offset, field.bits)), field.bits, field.save);
     let stored = match (value, field.source) {
-        (SetValue::Value(value), _) | (SetValue::Default, Source::Constant(value)) => value,
-        (SetValue::Default, Source::Stock(stock, provisional)) => return write_stock_default(target, provisional, stock),
-        (SetValue::Default, Source::Config(config, provisional)) => return write_config_default(target, provisional, config),
+        (WriteValue::Value(value), _) => value.0,
+        (WriteValue::Default, Source::Constant(value)) => value,
+        (WriteValue::Default, Source::Stock(stock, provisional)) => return write_stock_default(writer, configuration, &target, provisional, stock),
+        (WriteValue::Default, Source::Config(_, provisional)) => {
+            writer.write_target(&target, ValueBits(provisional), target.update);
+            let update = if cfg!(property_defect_config_save) { target.update } else { PreviousUpdate::None };
+            writer.write_target(&target, ValueBits(u32::from(configuration.network_name_default().0)), update);
+            return;
+        }
     };
-    write_to(target, stored);
-    if let Hook::GatedResave(gate) = field.hook {
-        if (xm1_config_load8(gate) == 0) != cfg!(property_defect_invert_gate) {
-            write_to(target, stored);
+    writer.write_target(&target, ValueBits(stored), target.update);
+    if let Hook::GatedResave(_) = field.hook {
+        if (configuration.startup_resave_policy() == storage::StartupResavePolicy::Resave) != cfg!(property_defect_invert_gate) {
+            writer.write_target(&target, ValueBits(stored), target.update);
         }
     }
 }
-
-/// One byte of a write-only pair.
-#[inline(always)]
-unsafe fn write_pair_byte(pair: WriteOnlyPair, offset: BankOffset, value: SetValue, bank: BankIndex) {
-    let stored = match value {
-        SetValue::Default => pair.default,
-        SetValue::Value(value) => value,
-    };
-    write(pair.bits, pair.save, bank, bank_offset(bank, offset), bank_offset(BankIndex(0), offset), stored);
+#[inline(never)]
+fn write_pair<W: FieldWrites>(writer: &mut W, pair: WriteOnlyPair, offset: BankOffset, value: WriteValue<ValueBits>, bank: SettingsBank) {
+    let value = match value { WriteValue::Value(value) => value, WriteValue::Default => ValueBits(pair.default) };
+    let target = target(bank, Location::Bank(field(offset, pair.bits)), pair.bits, pair.save);
+    writer.write_target(&target, value, target.update);
 }
-
-/// Whether the setter stub calls 0x61da3c before and 0x61d944 after a set of `field` on `bank`.
-#[inline(always)]
-fn bracketed(field: SpecialField, bank: BankIndex) -> bool {
-    bank == BankIndex(0)
-        && match field {
-            SpecialField::Hooked(hooked) => matches!(hooked.hook, Hook::Bank0Bracket),
-            SpecialField::WriteOnlyPair(_) => true,
-            SpecialField::ReadOnly(_) => false,
-        }
-}
-
-#[inline(always)]
-fn special_of(id: PropertyId) -> Option<SpecialField> {
+fn get<B, C: SettingsConfiguration>(storage: &SettingsStorage<'_, B>, configuration: &C, id: PropertyId, bank: SettingsBank, mode: ReadMode, selection: ProfileSelection) -> u32 {
     match entry(id) {
-        Some(Kind::Special(index)) => special(index),
-        _ => None,
-    }
-}
-
-fn set_value(value: u32) -> SetValue {
-    if value == DEFAULT_REQUEST {
-        SetValue::Default
-    } else {
-        SetValue::Value(value)
-    }
-}
-
-unsafe fn get(id: PropertyId, bank: BankIndex, mode: ReadMode, slot: SlotNumber) -> u32 {
-    match entry(id) {
-        Some(Kind::Field(field)) => match mode {
-            ReadMode::Default => field_default(field.default),
-            ReadMode::Live => extract(field.bits, bank_load(bank_offset(bank, field.offset), field.bits.width())),
+        Some(Kind::Field(layout)) => match mode {
+            ReadMode::Default => field_default(layout.default),
+            ReadMode::Live => storage.read(bank, field(layout.offset, layout.bits)).0,
         },
-        Some(Kind::SlotField(slot_field)) => {
-            let Some(record) = slot_record(slot_field.index) else { return 0 };
-            let slot = if slot_field.mirror { RECORD_ZERO } else { slot };
-            match (slot == BANK_BRANCH, mode, record.default) {
-                (_, ReadMode::Default, SlotDefault::Stock(stock)) => stock_default(stock),
-                (true, ReadMode::Default, SlotDefault::Record) => bank_default(record.bank_default),
-                (true, ReadMode::Live, _) => extract(slot_field.bits, bank_load(bank_offset(bank, slot_field.offset), slot_field.bits.width())),
-                (false, ReadMode::Default, SlotDefault::Record) => extract(record.bits, slot_defaults_load(slot_defaults_offset(slot, record.offset), record.bits.width())),
-                (false, ReadMode::Live, _) => extract(record.bits, bank_load(bank_record_offset(bank, slot, record.offset), record.bits.width())),
+        Some(Kind::SlotField(layout)) => {
+            let selection = swapped_selection(selection);
+            let Some(record) = slot_record(layout.index) else { return 0 };
+            let selection = if layout.mirror { ProfileSelection::Record0 } else { selection };
+            let descriptor = slot_field(field(layout.offset, layout.bits), record);
+            match (selection, mode, record.default) {
+                (_, ReadMode::Default, SlotDefault::Stock(stock)) => stock_default(configuration, stock),
+                (ProfileSelection::Current, ReadMode::Default, SlotDefault::Record) => bank_default(record.bank_default),
+                (_, ReadMode::Default, SlotDefault::Record) => SlotDefaultsWindow::read(selection, &descriptor).0,
+                (_, ReadMode::Live, _) => storage.read_slot(bank, selection, &descriptor).0,
             }
         }
-        Some(Kind::Special(index)) => match special(index) {
-            Some(field) => get_special(field, bank, mode),
-            None => 0,
-        },
+        Some(Kind::Special(index)) => {
+            let (bits, offset, source) = match special(index) {
+                Some(SpecialField::Hooked(field)) => (field.bits, field.offset, field.source),
+                Some(SpecialField::ReadOnly(field)) => (field.bits, field.offset, Source::Constant(field.default)),
+                Some(SpecialField::WriteOnlyPair(_)) | None => return 0,
+            };
+            match mode {
+                ReadMode::Live => storage.read(bank, field(offset, bits)).0,
+                ReadMode::Default => match source {
+                    Source::Constant(value) => value,
+                    Source::Stock(stock, _) => stock_default(configuration, stock),
+                    Source::Config(_, _) => config_default(configuration, bits),
+                },
+            }
+        }
         Some(Kind::Unassigned) | None => 0,
     }
 }
-
-unsafe fn set(id: PropertyId, value: SetValue, bank: BankIndex, slot: SlotNumber) -> u32 {
+#[inline(always)]
+fn set<B: HeaderBackend, C: SettingsConfiguration>(storage: &mut SettingsStorage<'_, B>, configuration: &C, id: PropertyId, value: WriteValue<ValueBits>, bank: SettingsBank, selection: ProfileSelection) -> PropertyWriteResult {
     match entry(id) {
-        Some(Kind::Field(field)) => {
-            let stored = match value {
-                SetValue::Default => field_default(field.default),
-                SetValue::Value(value) => value,
-            };
-            write(field.bits, field.save, bank, bank_offset(bank, field.offset), bank_offset(BankIndex(0), field.offset), stored);
-            1
+        Some(Kind::Field(layout)) => {
+            let value = match value { WriteValue::Default => ValueBits(field_default(layout.default)), WriteValue::Value(value) => value };
+            let target = target(bank, Location::Bank(field(layout.offset, layout.bits)), layout.bits, layout.save);
+            storage.write_target(&target, value, target.update);
+            PropertyWriteResult::assigned(None)
         }
-        Some(Kind::SlotField(slot_field)) => {
-            let Some(record) = slot_record(slot_field.index) else { return 0 };
-            let record_target = |slot: SlotNumber| Target {
-                bits: record.bits,
-                save: record.save,
-                bank,
-                live: bank_record_offset(bank, slot, record.offset),
-                saved: ImageOffset(record_offset(slot, record.offset)),
-            };
-            let record_default = |slot: SlotNumber| extract(record.bits, slot_defaults_load(slot_defaults_offset(slot, record.offset), record.bits.width()));
-            let target = if slot == BANK_BRANCH {
-                Target { bits: slot_field.bits, save: record.save, bank, live: bank_offset(bank, slot_field.offset), saved: bank_offset(BankIndex(0), slot_field.offset) }
-            } else {
-                record_target(slot)
-            };
+        Some(Kind::SlotField(layout)) => {
+            let selection = swapped_selection(selection);
+            let Some(record) = slot_record(layout.index) else { return PropertyWriteResult::unassigned() };
+            let descriptor = slot_field(field(layout.offset, layout.bits), record);
+            let target = slot_target(bank, &descriptor, selection, layout.bits, &record);
             match value {
-                SetValue::Value(value) => write_to(target, value),
-                SetValue::Default => {
-                    let stage2 = if slot == BANK_BRANCH { bank_default(record.bank_default) } else { record_default(slot) };
+                WriteValue::Value(value) => storage.write_target(&target, value, target.update),
+                WriteValue::Default => {
+                    let provisional = if selection == ProfileSelection::Current { bank_default(record.bank_default) } else { SlotDefaultsWindow::read(selection, &descriptor).0 };
                     match record.default {
-                        SlotDefault::Record => write_to(target, stage2),
-                        SlotDefault::Stock(stock) => write_stock_default(target, stage2, stock),
+                        SlotDefault::Record => storage.write_target(&target, ValueBits(provisional), target.update),
+                        SlotDefault::Stock(stock) => write_stock_default(storage, configuration, &target, provisional, stock),
                     }
                 }
             }
-            if slot_field.mirror {
-                let stored = match value {
-                    SetValue::Value(value) => value,
-                    SetValue::Default => record_default(RECORD_ZERO),
-                };
-                write_to(record_target(RECORD_ZERO), stored);
+            if layout.mirror && !cfg!(storage_defect_e9_record0_mirror_omitted) {
+                let stored = match value { WriteValue::Value(value) => value, WriteValue::Default => SlotDefaultsWindow::read(ProfileSelection::Record0, &descriptor) };
+                let target = slot_target(bank, &descriptor, ProfileSelection::Record0, layout.bits, &record);
+                storage.write_target(&target, stored, target.update);
             }
-            1
+            PropertyWriteResult::assigned(None)
         }
         Some(Kind::Special(index)) => match special(index) {
-            Some(SpecialField::Hooked(field)) => {
-                set_hooked(field, value, bank);
-                1
+            Some(SpecialField::Hooked(layout)) => {
+                let bracket = matches!(layout.hook, Hook::Bank0Bracket) && (bank == SettingsBank::Active || cfg!(storage_bracket_bank1) || cfg!(storage_defect_bracket_bank1));
+                let mirror = if bracket && !cfg!(storage_open_removed) {
+                    #[cfg(any(storage_read_before_open, storage_defect_read_bank_before_refresh))]
+                    let stale_field = field(layout.offset, layout.bits);
+                    #[cfg(any(storage_read_before_open, storage_defect_read_bank_before_refresh))]
+                    let stale = storage.read(bank, stale_field);
+                    let mut session = storage.open_header();
+                    let opened = session.opened;
+                    #[cfg(any(storage_read_before_open, storage_defect_read_bank_before_refresh))]
+                    restore_stale_header(&mut session, stale_field, stale);
+                    let closed = if cfg!(storage_close_before_set) || cfg!(storage_defect_close_before_field_store) {
+                        let closed = session.close();
+                        apply_hooked(storage, configuration, layout, value, bank);
+                        closed
+                    } else {
+                        apply_hooked(&mut session, configuration, layout, value, SettingsBank::Active);
+                        session.close()
+                    };
+                    Some(PropertyMirrorOutcome { opened: Some(opened), closed })
+                } else {
+                    apply_hooked(storage, configuration, layout, value, bank);
+                    if bracket {
+                        let closed = storage.write_active_header();
+                        Some(PropertyMirrorOutcome { opened: None, closed })
+                    } else { None }
+                };
+                PropertyWriteResult::assigned(mirror)
             }
-            Some(field @ SpecialField::WriteOnlyPair(pair)) => {
-                write_pair_byte(pair, pair.first, value, bank);
-                if !bracketed(field, bank) {
-                    write_pair_byte(pair, pair.second, value, bank);
-                }
-                1
+            Some(SpecialField::WriteOnlyPair(pair)) => {
+                let mirror = if bank == SettingsBank::Active || cfg!(storage_bracket_bank1) || cfg!(storage_defect_bracket_bank1) {
+                    let mirror = if cfg!(storage_open_removed) {
+                        write_pair(storage, pair, pair.first, value, bank);
+                        let closed = storage.write_active_header();
+                        PropertyMirrorOutcome { opened: None, closed }
+                    } else {
+                        #[cfg(any(storage_read_before_open, storage_defect_read_bank_before_refresh))]
+                        let stale_field = field(pair.first, pair.bits);
+                        #[cfg(any(storage_read_before_open, storage_defect_read_bank_before_refresh))]
+                        let stale = storage.read(bank, stale_field);
+                        let mut session = storage.open_header();
+                        let opened = session.opened;
+                        #[cfg(any(storage_read_before_open, storage_defect_read_bank_before_refresh))]
+                        restore_stale_header(&mut session, stale_field, stale);
+                        let closed = if cfg!(storage_close_before_set) || cfg!(storage_defect_close_before_field_store) {
+                            let closed = session.close();
+                            write_pair(storage, pair, pair.first, value, bank);
+                            closed
+                        } else {
+                            write_pair(&mut session, pair, pair.first, value, SettingsBank::Active);
+                            #[cfg(any(storage_pair_before_close, storage_defect_pair_close_after_both_writes))]
+                            unsafe {
+                                extern "C" { fn xm1_storage_store8(address: *mut u8, value: u32); }
+                                let stored = match value { WriteValue::Default => pair.default, WriteValue::Value(value) => value.0 };
+                                xm1_storage_store8((0x96cc64 + pair.second.0) as *mut u8, stored);
+                            }
+                            session.close()
+                        };
+                        PropertyMirrorOutcome { opened: Some(opened), closed }
+                    };
+                    write_pair(storage, pair, pair.second, value, bank);
+                    Some(mirror)
+                } else {
+                    write_pair(storage, pair, pair.first, value, bank);
+                    write_pair(storage, pair, pair.second, value, bank);
+                    None
+                };
+                PropertyWriteResult::assigned(mirror)
             }
-            Some(SpecialField::ReadOnly(_)) | None => 0,
+            Some(SpecialField::ReadOnly(_)) | None => PropertyWriteResult::unassigned(),
         },
-        Some(Kind::Unassigned) | None => 0,
+        Some(Kind::Unassigned) | None => PropertyWriteResult::unassigned(),
     }
 }
 
-/// Getter arm body: `id` is the stock r12, `bank` r1, `defaults` r2 and `slot` r3 at the arm.
-///
+fn swapped_selection(selection: ProfileSelection) -> ProfileSelection {
+    if cfg!(storage_bank_slot_swap) {
+        if selection == ProfileSelection::Current { ProfileSelection::Record0 } else { ProfileSelection::Current }
+    } else { selection }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PropertyWriteOutcome { Assigned, Unassigned }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PropertyMirrorOutcome {
+    pub opened: Option<storage::RequestOutcome>,
+    pub closed: storage::MirrorOutcome,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PropertyWriteResult {
+    pub assignment: PropertyWriteOutcome,
+    pub mirror: Option<PropertyMirrorOutcome>,
+}
+impl PropertyWriteResult {
+    #[inline(always)]
+    fn assigned(mirror: Option<PropertyMirrorOutcome>) -> Self { Self { assignment: PropertyWriteOutcome::Assigned, mirror } }
+    #[inline(always)]
+    fn unassigned() -> Self { Self { assignment: PropertyWriteOutcome::Unassigned, mirror: None } }
+}
+
+pub fn read_property<B, C: SettingsConfiguration>(storage: &SettingsStorage<'_, B>, configuration: &C, id: PropertyId, bank: SettingsBank, mode: ReadMode, selection: ProfileSelection) -> ValueBits {
+    ValueBits(get(storage, configuration, id, bank, mode, selection))
+}
+pub fn write_property<B: HeaderBackend, C: SettingsConfiguration>(storage: &mut SettingsStorage<'_, B>, configuration: &C, id: PropertyId, value: WriteValue<ValueBits>, bank: SettingsBank, selection: ProfileSelection) -> PropertyWriteResult {
+    set(storage, configuration, id, value, bank, selection)
+}
+
+
+#[cfg(not(test))]
 /// # Safety
-/// The bank image for `bank` must be mapped at 0x96cc64 + 0x1c2 * bank, the slot-defaults records
-/// for `slot` and slot 0 at 0x7cb804 + 0x28 * slot, the defaults table at 0x81b074, and the
-/// configuration bytes [0x96b400, 0x96b600). The stock leaves 0x61df44, 0x61d8a4, 0x61d59c,
-/// 0x61d618, 0x61d5f0 and 0x61d65c must be the image4 functions, which follow AAPCS, read one
-/// configuration byte and use 4 bytes of stack.
+/// The X-M1 compatibility backing and retained configuration callbacks must be mapped and exclusively accessible for this call.
 #[no_mangle]
-pub unsafe extern "C" fn xm1_property_get(id: u32, bank: u32, defaults: u32, slot: u32) -> u32 {
-    get(PropertyId(id), BankIndex(bank), if defaults == 1 { ReadMode::Default } else { ReadMode::Live }, SlotNumber(slot))
+pub unsafe extern "C" fn xm1_property_get(id: u32, bank: u32, defaults: u32, selection: u32) -> u32 {
+    let Some(id) = PropertyId::decode(id) else { return rejected_id(id) };
+    let Some(bank) = SettingsBank::from_abi(bank) else { return 0 };
+    let Some(selection) = ProfileSelection::from_abi(selection) else { return 0 };
+    if cfg!(storage_defect_wrapped_selector_rejected) && selection == ProfileSelection::WrappedPredecessor { return 0; }
+    let defaults = if cfg!(property_defect_nonzero_means_default) { defaults != 0 } else { defaults == 1 };
+    let configuration = unsafe { NativeConfiguration::adopt() };
+    unsafe { storage_boundary::with_storage(|storage| {
+        #[cfg(storage_defect_handover_reinitialize_all_banks)]
+        storage.clear_images();
+        get(storage, &configuration, id, bank, if defaults { ReadMode::Default } else { ReadMode::Live }, selection)
+    }) }
 }
-
-/// Setter arm body up to the setter stub's close call: `id`, `value`, `bank` and `slot` are the
-/// stock r4, r5, r6 and r8 at the arm. When `xm1_set_bracketed` returned 1 it runs after the open
-/// call, and `slot` is not the stock r8.
-///
+#[cfg(not(test))]
 /// # Safety
-/// As `xm1_property_get`, and for bank 0 the previous-value image must be mapped at 0x89ec00.
+/// The requirements of `xm1_property_get` apply.
 #[no_mangle]
-pub unsafe extern "C" fn xm1_property_set(id: u32, value: u32, bank: u32, slot: u32) -> u32 {
-    set(PropertyId(id), set_value(value), BankIndex(bank), SlotNumber(slot))
+pub unsafe extern "C" fn xm1_property_set(id: u32, value: u32, bank: u32, selection: u32) -> u32 {
+    let Some(id) = PropertyId::decode(id) else { return rejected_id(id) };
+    let Some(bank) = SettingsBank::from_abi(bank) else { return 0 };
+    let Some(selection) = ProfileSelection::from_abi(selection) else { return 0 };
+    if cfg!(storage_defect_wrapped_selector_rejected) && selection == ProfileSelection::WrappedPredecessor { return 0; }
+    let value = if cfg!(property_defect_sentinel_plus_one) && value == 0x1b000000 { WriteValue::Default } else if cfg!(property_defect_sentinel_plus_one) { WriteValue::Value(ValueBits(value)) } else { WriteValue::from_abi(value) };
+    let configuration = unsafe { NativeConfiguration::adopt() };
+    let result = unsafe { storage_boundary::with_storage(|storage| {
+        if cfg!(storage_defect_snapshot_entire_bank_per_set) && bank == SettingsBank::Active { storage.capture_active(); }
+        let result = set(storage, &configuration, id, value, bank, selection).assignment;
+        #[cfg(storage_defect_save_on_bank1)]
+        if bank == SettingsBank::Alternate { storage.capture_alternate(); }
+        if cfg!(storage_defect_save_after_final_store) && bank == SettingsBank::Active { storage.capture_active(); }
+        result
+    }) };
+    match result { PropertyWriteOutcome::Assigned => 1, PropertyWriteOutcome::Unassigned => 0 }
 }
-
-/// 1 when the setter stub brackets the set with 0x61da3c and 0x61d944 (a bank-0 set of a
-/// bracketed field or a write-only pair), else 0.
-#[no_mangle]
-pub extern "C" fn xm1_set_bracketed(id: u32, bank: u32) -> u32 {
-    match special_of(PropertyId(id)) {
-        Some(field) => bracketed(field, BankIndex(bank)) as u32,
-        None => 0,
-    }
+#[cfg(not(test))]
+fn rejected_id(raw: u32) -> u32 {
+    let index = raw.wrapping_sub(1);
+    if cfg!(property_defect_signed_bound) && (index as i32) <= 644 || cfg!(property_defect_upper_bound_plus_one) && index == 645 { 1 } else { 0 }
 }
-
-/// Setter arm body after the setter stub's close call: a write-only pair's second byte. Returns
-/// the stock r0, 1.
-///
-/// # Safety
-/// As `xm1_property_set`.
-#[no_mangle]
-pub unsafe extern "C" fn xm1_property_set_after(id: u32, value: u32, bank: u32) -> u32 {
-    if let Some(SpecialField::WriteOnlyPair(pair)) = special_of(PropertyId(id)) {
-        write_pair_byte(pair, pair.second, set_value(value), BankIndex(bank));
-    }
-    1
-}
-
+#[cfg(not(test))]
 #[panic_handler]
-fn panic(_: &core::panic::PanicInfo) -> ! {
-    loop {}
-}
+fn panic(_: &core::panic::PanicInfo) -> ! { loop {} }
+
+#[cfg(test)]
+mod tests;

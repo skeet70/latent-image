@@ -62,8 +62,7 @@ module Replacement.PropertyService.Oracle
   , FunctionSpan (..)
   , stockFunctions
   , leafSpans
-  , probeSpans
-  , probes
+  , headerSpans
   , splitFunctions
   , caseSpec
   , Patch (..)
@@ -88,6 +87,14 @@ module Replacement.PropertyService.Oracle
   , branchWord
   , movwWord
   , movtWord
+  , CallMode (..)
+  , EntryCase (..)
+  , entryCases
+  , entryLabel
+  , entryCaseSpec
+  , ownedFunctions
+  , Wrapper (..)
+  , wrapperCaseSpec
   , image4Base
   ) where
 
@@ -106,6 +113,7 @@ import FujiAF.Host (get, list, num, str)
 import Numeric (readHex, showHex)
 import PropertyFields (PropertyId (..))
 import Replacement.PropertyService.Classify
+import qualified Replacement.PropertyService.HeaderBoundary as H
 
 data Bank = Bank0 | Bank1 deriving (Eq, Ord, Show, Enum, Bounded)
 
@@ -120,8 +128,8 @@ slotArguments :: [SlotArgument]
 slotArguments = map SlotArgument [0, 1, 2, 3, 0xffffffff]
 
 -- | The setter's argument 1, resolved against the field by 'setValue'.
-data SetChoice = SetZero | SetOne | SetFieldMax | SetAboveMax | SetAllOnes | SetDefaultRequest
-  deriving (Eq, Ord, Show, Enum, Bounded)
+data SetChoice = SetZero | SetOne | SetFieldMax | SetAboveMax | SetAllOnes | SetDefaultRequest | SetRaw Word32
+  deriving (Eq, Ord, Show)
 
 data Operation = Get Bank ReadMode SlotArgument | Set Bank SlotArgument SetChoice deriving (Eq, Ord, Show)
 
@@ -139,7 +147,7 @@ propertyIds = [PropertyId n | n <- [0 .. 646]]
 operations :: [Operation]
 operations =
   [Get bank mode slot | bank <- [minBound .. maxBound], mode <- [minBound .. maxBound], slot <- slotArguments]
-    ++ [Set bank slot choice | bank <- [minBound .. maxBound], slot <- slotArguments, choice <- [minBound .. maxBound]]
+    ++ [Set bank slot choice | bank <- [minBound .. maxBound], slot <- slotArguments, choice <- [SetZero, SetOne, SetFieldMax, SetAboveMax, SetAllOnes, SetDefaultRequest]]
 
 caseGrid :: [OracleCase]
 caseGrid = [OracleCase identifier operation | identifier <- propertyIds, operation <- operations]
@@ -162,6 +170,7 @@ caseLabel (OracleCase (PropertyId n) operation) = CaseLabel ("p" ++ pad 3 (showH
       SetAboveMax -> "above-max"
       SetAllOnes -> "all-ones"
       SetDefaultRequest -> "default-request"
+      SetRaw value -> "raw-" ++ showHex value ""
 
 pad :: Int -> String -> String
 pad width text = replicate (width - length text) '0' ++ text
@@ -194,6 +203,7 @@ setValue standing slot choice = case choice of
   SetAboveMax -> maximal + 1
   SetAllOnes -> 0xffffffff
   SetDefaultRequest -> defaultRequest
+  SetRaw value -> value
   where
     maximal = case standing of
       Classified (Owned (OwnedField arm)) -> rangeMask (fieldBits arm)
@@ -213,6 +223,7 @@ data Fixture = Fixture
   , fixtureSlotDefaults :: B.ByteString
   , fixtureTailDefaults :: B.ByteString
   , fixtureConfigVariants :: [B.ByteString]
+  , fixtureBackupKeys :: [H.BackupKey]
   }
   deriving (Eq, Show)
 
@@ -244,6 +255,7 @@ fixture image4 =
     (slice image4 slotDefaultsWindow slotDefaultsBytes)
     (slice image4 tailDefaultsBase tailDefaultsBytes)
     (replicate 3 config)
+    (H.keysFromImage image4)
   where
     bank0 = stream bankStrideBytes 0x9e3779b9
     config = stream 0x200 0x6c8e9cf5
@@ -401,8 +413,7 @@ data Layout = Layout
 stockLayout :: Layout
 stockLayout = Layout slotDefaultsBase tailDefaultsBase RecordSaveAtRecord OpenBeforeSet
 
--- | The calls region's bytes: the open's and close's r0 at offsets 0 and 4, the close's copy of
--- bank-0 bytes [0, 16) at 0x10.
+-- | Internal model summary: open and close markers, then the header observed at close.
 callsBytes :: Int
 callsBytes = 0x20
 
@@ -410,8 +421,7 @@ callsBytes = 0x20
 backupWindow :: Fixture -> B.ByteString
 backupWindow fx = B.map complement (B.take 16 (fixtureBanks fx))
 
--- | The probes' writes: the open logs 0x96cc64 at calls + 0 and copies `backup` over bank-0 bytes
--- [0, 16); the close logs 0x96cc64 at calls + 4 and copies bank-0 bytes [0, 16) to calls + 0x10.
+-- | Refresh bank 0 from the independently supplied shadow header.
 openCall :: B.ByteString -> (B.ByteString, B.ByteString) -> (B.ByteString, B.ByteString)
 openCall backup (banks, calls) = (backup <> B.drop 16 banks, placeAt 0 (word32le bankBase) calls)
 
@@ -482,7 +492,7 @@ writeField (WriteTarget width bits save bank live savedFrom savedTo) stored (ban
 -- | The owned semantics: the return value and the final bank, previous-value and calls images, or
 -- Nothing when an access falls outside the fixture.
 modelEffectIn :: Layout -> Fixture -> Owned -> Operation -> Maybe Effect
-modelEffectIn layout fx@(Fixture banks previous config slotDefaults tailDefaults _) owned operation = case (owned, operation) of
+modelEffectIn layout fx@(Fixture banks previous config slotDefaults tailDefaults _ _) owned operation = case (owned, operation) of
   (OwnedUnassigned, _) -> Just (unchanged 0)
   (OwnedReadOnlyField arm, Get bank mode _) -> getField arm bank mode
   (OwnedReadOnlyField _, Set {}) -> Just (unchanged 0)
@@ -609,7 +619,7 @@ sentinel register = 0xa5a50000 + fromIntegral (fromEnum register)
 comparedRegisters :: [Register]
 comparedRegisters = R0 : calleeSaved ++ [Sp]
 
-banksId, previousId, configId, codeId, slotDefaultsId, tailDefaultsId, stackId, callerFrameId, exitId, backupId, callsId :: RegionId
+banksId, previousId, configId, codeId, slotDefaultsId, tailDefaultsId, stackId, callerFrameId, exitId, backingId, callsId :: RegionId
 banksId = RegionId "banks"
 previousId = RegionId "previous"
 configId = RegionId "config"
@@ -619,7 +629,7 @@ tailDefaultsId = RegionId "tail-defaults"
 stackId = RegionId "stack"
 callerFrameId = RegionId "caller-frame"
 exitId = RegionId "exit"
-backupId = RegionId "backup"
+backingId = RegionId "backing"
 callsId = RegionId "calls"
 
 -- | The rw regions whose final bytes and writes the verdict compares; the stack below entry sp is scratch.
@@ -628,16 +638,15 @@ comparedRegions =
   [ (banksId, bankBase, bankCount * bankStrideBytes)
   , (previousId, saveBase, previousBytes)
   , (configId, configBase, 0x200)
-  , (callsId, callsBase, callsBytes)
+  , (callsId, H.callsBase, H.callsBytes)
+  , (backingId, H.backingBase, 0x1ac)
   , (callerFrameId, stackPointer, fromIntegral (stackTop - stackPointer))
   ]
 
-stackBase, stackTop, exitAddress, backupBase, callsBase, image4Base :: Word32
+stackBase, stackTop, exitAddress, image4Base :: Word32
 stackBase = 0x959000
 stackTop = 0x959800
 exitAddress = 0x958f00
-backupBase = 0x958d00
-callsBase = 0x958e00
 image4Base = 0x61c400
 
 stackPointer :: Word32
@@ -648,9 +657,28 @@ modelExpectation :: Fixture -> Owned -> Operation -> Maybe Expectation
 modelExpectation fx owned operation = expected <$> modelEffect fx owned operation
   where
     expected effect =
-      Expectation Returned ((R0, effectR0 effect) : preserved)
-        [(banksId, effectBanks effect), (previousId, effectPrevious effect), (configId, fixtureConfig fx), (callsId, effectCalls effect), (callerFrameId, B.replicate (fromIntegral (stackTop - stackPointer)) 0)]
+      let (backing,events,previous) = headerEffects fx effect
+      in Expectation Returned ((R0, effectR0 effect) : preserved)
+        [(banksId, effectBanks effect), (previousId, previous), (configId, fixtureConfig fx), (callsId, H.encodeEvents events), (backingId, backing), (callerFrameId, B.replicate (fromIntegral (stackTop - stackPointer)) 0)]
     preserved = [(register, sentinel register) | register <- calleeSaved] ++ [(Sp, stackPointer)]
+
+headerEffects :: Fixture -> Effect -> (B.ByteString,[H.BoundaryEvent],B.ByteString)
+headerEffects fx effect = (finalBacking,events,previous)
+  where
+    summary = effectCalls effect
+    opened = readWordAt summary 0 /= 0
+    closed = readWordAt summary 4 /= 0
+    initial = H.initialBacking (fixtureBanks fx)
+    sealed = H.sealedHeader (B.take 16 (B.drop 16 summary))
+    finalBacking = if closed then placeAt 0x19c sealed (placeAt 0 sealed initial) else initial
+    drivers = [H.BoundaryEvent 0x6a59b8 (fromIntegral key) (fromIntegral value) (fromIntegral old * 256 + fromIntegral deferred * 65536)
+      | (index,H.BackupKey key) <- zip [0..15] (fixtureBackupKeys fx)
+      , let value = B.index sealed index
+      , let old = B.index (backupWindow fx) index
+      , value /= old]
+    deferred = B.index (fixtureBanks fx) 0x126
+    events = (if opened then H.requestEvents [] else []) ++ (if closed then H.requestEvents drivers else [])
+    previous = if opened || closed then placeAt 0x1c4 (word32le 0) (effectPrevious effect) else effectPrevious effect
 
 -- | A delegated case before any observation: the runner needs a claim, which is not judged.
 placeholderExpectation :: Expectation
@@ -786,37 +814,109 @@ leafSpans =
   , FunctionSpan 0x61df44 0x61e110
   ]
 
--- | The bank-0 open 0x61da3c and close 0x61d944, which both roles run as `probes`.
-probeSpans :: [FunctionSpan]
-probeSpans = [FunctionSpan 0x61d944 0x61d994, FunctionSpan 0x61da3c 0x61da8c]
-
--- | The words both roles carry at the start of each probe span. The open is `movw/movt r12,
--- 0x958e00; str r0, [r12]; movw/movt r1, 0x958d00; ldm r1, {r1-r3, r12}; stm r0, {r1-r3, r12};
--- bx lr`; the close is `movw/movt r12, 0x958e00; str r0, [r12, #4]; ldm r0, {r1-r3, r12};
--- movw/movt r0, 0x958e10; stm r0, {r1-r3, r12}; bx lr`.
-probes :: [(Word32, [Word32])]
-probes =
-  [ (0x61da3c, [0xe308ce00, 0xe340c095, 0xe58c0000, 0xe3081d00, 0xe3401095, 0xe891100e, 0xe880100e, 0xe12fff1e])
-  , (0x61d944, [0xe308ce00, 0xe340c095, 0xe58c0004, 0xe890100e, 0xe3080e10, 0xe3400095, 0xe880100e, 0xe12fff1e])
-  ]
+-- | Stock header/request code executes unchanged; only device/runtime leaves are modeled.
+headerSpans :: [FunctionSpan]
+headerSpans = [FunctionSpan low high | (low,high) <- H.functionSpans]
 
 -- | The mapped stock code: the callee region and the getter and setter.
 codeStart :: Word32
 codeStart = 0x61d59c
 
 stockFunctions :: [FunctionSpan]
-stockFunctions = leafSpans ++ probeSpans ++ [getterSpan, setterSpan]
+stockFunctions = leafSpans ++ headerSpans ++ [getterSpan, setterSpan]
 
 -- | The stock spans with the setter cut around [start, end), plus the functions declared inside it.
 splitFunctions :: (Word32, Word32) -> [FunctionSpan] -> [FunctionSpan]
 splitFunctions (start, end) inner =
-  sortOn spanStart (leafSpans ++ probeSpans ++ [getterSpan, FunctionSpan (spanStart setterSpan) start, FunctionSpan end (spanEnd setterSpan)] ++ inner)
+  sortOn spanStart (leafSpans ++ headerSpans ++ [getterSpan, FunctionSpan (spanStart setterSpan) start, FunctionSpan end (spanEnd setterSpan)] ++ inner)
 
--- | The mapped code bytes of a role's image4, with the probes in place.
-codeBytes :: B.ByteString -> B.ByteString
-codeBytes image = foldl place (slice image codeStart (fromIntegral (spanEnd setterSpan - codeStart))) probes
+-- | The three retained wrappers between the getter and the setter, one function each.
+wrapperSpans :: [FunctionSpan]
+wrapperSpans = [FunctionSpan 0x6245f8 0x624620, FunctionSpan 0x624620 0x62464c, FunctionSpan 0x62464c 0x624694]
+
+ownedFunctions :: [FunctionSpan] -> [FunctionSpan]
+ownedFunctions inner = sortOn spanStart (leafSpans ++ headerSpans ++ [FunctionSpan 0x61e110 0x61e114] ++ wrapperSpans ++ [FunctionSpan 0x624694 0x624698] ++ inner)
+
+data CallMode = DirectCall | RegisterCall | TailCall deriving (Eq, Ord, Show, Enum, Bounded)
+
+data EntryCase = EntryCase
+  { entryOperation :: OracleCase
+  , entryCallMode :: CallMode
+  , entrySelector :: Word32
+  , entryBank :: Word32
+  , entrySlot :: SlotArgument
+  , entryReturnVariant :: Bool
+  } deriving (Eq, Ord, Show)
+
+entryLabel :: EntryCase -> CaseLabel
+entryLabel c = CaseLabel ("entry-" ++ caseLabelText (caseLabel (entryOperation c)) ++ "-" ++ show (fromEnum (entryCallMode c)) ++ "-" ++ showHex (entrySelector c) "" ++ "-" ++ showHex (entryBank c) "" ++ "-" ++ if entryReturnVariant c then "v1" else "v0")
+
+entryCases :: [EntryCase]
+entryCases =
+  [ EntryCase (OracleCase identifier operation) mode selector bank slot alternate
+  | identifier <- nub (propertyIds ++ map PropertyId [647, 0x7fffffff, 0x80000000, 0xfffffffe, 0xffffffff])
+  , bank <- if invalid identifier then [0, 1, 0x7fffffff, 0x80000000, 0xffffffff] else [0, 1]
+  , slot <- if invalid identifier then map SlotArgument [0, 1, 2, 3, 0x7fffffff, 0x80000000, 0xffffffff] else slotArguments
+  , (selector, operation) <- [(s, Get (normalBank bank) (if s == 1 then DefaultRead else LiveRead) slot) | s <- [0, 1, 2, 0xffffffff]]
+      ++ [(0, Set (normalBank bank) slot (SetRaw value)) | value <- [0, 1, 0x1afffffe, 0x1affffff, 0x1b000000, 0xffffffff]]
+  , mode <- [minBound .. maxBound]
+  , alternate <- [False, True]
+  ]
   where
-    place bytes (address, words') = placeAt (fromIntegral (address - codeStart)) (B.concat (map word32le words')) bytes
+    invalid (PropertyId identifier) = identifier == 0 || identifier > 645
+    normalBank bank = if bank == 1 then Bank1 else Bank0
+
+entryCaseSpec :: B.ByteString -> [FunctionSpan] -> Fixture -> CaseLabel -> Standing -> EntryCase -> Expectation -> CaseSpec
+entryCaseSpec image functions fx label standing c expected =
+  base
+    { caseEntry = N.GuestAddress (fromIntegral caller)
+    , caseExit = N.GuestAddress (fromIntegral returnTarget)
+    , caseRegions = caseRegions base ++ [region (RegionId "entry-caller") caller 32 ReadExecute (B.concat (map word32le words'))]
+    , caseFunctions = caseFunctions base ++ [(N.GuestAddress (fromIntegral caller), 24)]
+    , caseInitial = map initial (caseInitial base)
+    }
+  where
+    base = caseSpec image functions fx label standing (entryOperation c) expected
+    caller = 0x958a00
+    returnTarget = caller + if entryReturnVariant c then 28 else 24
+    target = case oracleOperation (entryOperation c) of Get {} -> 0x61e110; Set {} -> 0x624694
+    words' = case entryCallMode c of
+      DirectCall -> [0xe92d4010, branchLinkWord (caller + 4) target, 0xe8bd8010, 0xe1a00000, target, 0xe1a00000, 0xe12fff1e, 0xe12fff1e]
+      RegisterCall -> [0xe92d4010, 0xe59fc004, 0xe12fff3c, 0xe8bd8010, target, 0xe1a00000, 0xe12fff1e, 0xe12fff1e]
+      TailCall -> [branchWord caller target, 0xe1a00000, 0xe1a00000, 0xe1a00000, target, 0xe1a00000, 0xe12fff1e, 0xe12fff1e]
+    initial pair@(register, _) = case register of
+      R12 -> (R12, 0x5a5a1234)
+      Lr -> (Lr, returnTarget)
+      R1 | Get {} <- oracleOperation (entryOperation c) -> (R1, entryBank c)
+      R2 -> case oracleOperation (entryOperation c) of Get {} -> (R2, entrySelector c); Set {} -> (R2, entryBank c)
+      R3 -> let SlotArgument value = entrySlot c in (R3, value)
+      _ -> pair
+
+data Wrapper = DefaultWrapper | LiveWrapper | CompareWrapper deriving (Eq, Ord, Show, Enum, Bounded)
+
+wrapperCaseSpec :: Wrapper -> B.ByteString -> [FunctionSpan] -> Fixture -> CaseLabel -> Standing -> OracleCase -> CaseSpec
+wrapperCaseSpec wrapper image functions fx label standing c =
+  base
+    { caseEntry = N.GuestAddress (fromIntegral target)
+    , caseFunctions = [(N.GuestAddress (fromIntegral start), end - start) | FunctionSpan start end <- wrapperFunctions]
+    , caseRegions = caseRegions base ++ [region (RegionId "wrapper-selector") 0x6439e0 8 ReadExecute (word32le 0xe3a00002 <> word32le 0xe12fff1e)]
+    , caseInitial = map argument (caseInitial base)
+    }
+  where
+    base = caseSpec image functions fx label standing c placeholderExpectation
+    target :: Word32
+    target = case wrapper of DefaultWrapper -> 0x6245f8; LiveWrapper -> 0x624620; CompareWrapper -> 0x62464c
+    wrapperFunctions = nub (FunctionSpan 0x6439e0 0x6439e8 : wrapperSpans ++ [if f == getterSpan then FunctionSpan 0x61e110 0x6245f8 else f | f <- functions, f `notElem` [FunctionSpan 0x6245f8 0x624694]])
+    argument pair@(register, _) = case (wrapper, register) of
+      (DefaultWrapper, _) -> pair
+      (LiveWrapper, R1) -> (R1, 1)
+      (CompareWrapper, R1) -> (R1, 2)
+      (CompareWrapper, R2) -> (R2, 1)
+      (CompareWrapper, R3) -> (R3, 3)
+      _ -> pair
+
+codeBytes :: B.ByteString -> B.ByteString
+codeBytes image = H.codeWindow image codeStart (fromIntegral (spanEnd setterSpan - codeStart))
 
 slice :: B.ByteString -> Word32 -> Int -> B.ByteString
 slice image address size = B.take size (B.drop (fromIntegral (address - image4Base)) image)
@@ -835,13 +935,17 @@ caseSpec image functions fx (CaseLabel label) standing (OracleCase (PropertyId i
     , caseExit = N.GuestAddress (fromIntegral exitAddress)
     , caseRegions =
         [ region codeId codeStart (fromIntegral (spanEnd setterSpan - codeStart)) ReadExecute (codeBytes image)
-        , region slotDefaultsId slotDefaultsWindow (B.length (fixtureSlotDefaults fx)) ReadOnly (fixtureSlotDefaults fx)
+        , region slotDefaultsId H.keysBase (8 + B.length (fixtureSlotDefaults fx)) ReadOnly (B.take 8 (H.keyBytes (fixtureBackupKeys fx)) <> fixtureSlotDefaults fx)
         , region tailDefaultsId tailDefaultsBase (B.length (fixtureTailDefaults fx)) ReadOnly (fixtureTailDefaults fx)
         , region banksId bankBase (B.length (fixtureBanks fx)) ReadWrite (fixtureBanks fx)
         , region previousId saveBase (B.length (fixturePrevious fx)) ReadWrite (fixturePrevious fx)
         , region configId configBase (B.length (fixtureConfig fx)) ReadWrite (fixtureConfig fx)
-        , region backupId backupBase 16 ReadOnly (backupWindow fx)
-        , region callsId callsBase callsBytes ReadWrite (B.replicate callsBytes 0)
+        , region backingId H.backingBase 0x1ac ReadWrite (H.initialBacking (fixtureBanks fx))
+        , region callsId H.callsBase H.callsBytes ReadWrite (B.replicate H.callsBytes 0)
+        , region (RegionId "header-mirror-code") 0x6a59b8 (0x6a6fd8-0x6a59b8) ReadExecute (H.codeWindow image 0x6a59b8 (0x6a6fd8-0x6a59b8))
+        , region (RegionId "header-runtime-code") 0x722054 (0x72b3fc-0x722054) ReadExecute (H.codeWindow image 0x722054 (0x72b3fc-0x722054))
+        , region (RegionId "header-reporter") 0x633594 (4 * length (H.callback 0x633594)) ReadExecute (B.concat (map word32le (H.callback 0x633594)))
+        , region (RegionId "header-log") H.helperBase (4 * length H.helperWords) ReadExecute (B.concat (map word32le H.helperWords))
         , region stackId stackBase (fromIntegral (stackPointer - stackBase)) ReadWrite (B.replicate (fromIntegral (stackPointer - stackBase)) 0)
         , region callerFrameId stackPointer (fromIntegral (stackTop - stackPointer)) ReadWrite (B.replicate (fromIntegral (stackTop - stackPointer)) 0)
         , region exitId exitAddress 4 ReadExecute (word32le 0xe12fff1e)
@@ -854,6 +958,7 @@ caseSpec image functions fx (CaseLabel label) standing (OracleCase (PropertyId i
     , caseExpectedStatus = expectedStatus expected
     , caseExpectedRegisters = expectedRegisters expected
     , caseExpectedMemory = expectedMemory expected
+    , caseIgnoredMemory = []
     , caseCp14Identity = Nothing
     , caseKernel = Nothing
     }

@@ -93,6 +93,13 @@ impl MemoryEnvelope {
             Self::Resource8 => u64::from(RESOURCE_BYTES),
         }
     }
+    fn instructions(self) -> u32 {
+        match self {
+            Self::Default => MAX_INSTRUCTIONS,
+            Self::Resource8 => 16_000_000,
+        }
+    }
+
 
     fn wire_bytes(self, scripted: bool) -> usize {
         match self {
@@ -924,7 +931,7 @@ fn parse_case(
     tokens.literal(b"cortex-r5f-arm-le", "CPU profile must be cortex-r5f-arm-le")?;
     let entry = Address(tokens.word()?);
     let exit = Address(tokens.word()?);
-    let budget = tokens.count(MAX_INSTRUCTIONS)?;
+    let budget = tokens.count(envelope.instructions())?;
     let wall_ms = tokens.count(MAX_WALL_MS)?;
     if budget == 0 || wall_ms == 0 {
         return Err(WireError("instruction and wall budgets must be nonzero"));

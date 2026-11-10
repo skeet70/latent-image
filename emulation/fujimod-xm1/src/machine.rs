@@ -285,6 +285,10 @@ impl Machine {
                     return RunOutcome::Failed;
                 }
             }
+            if let Err(error) = self.traces.before_advance(&self.session) {
+                self.failure = Some(error);
+                return RunOutcome::Failed;
+            }
             if let Some(collector) = &self.render_provenance {
                 if let Err(error) = collector.begin_advance(&self.session) {
                     self.failure = Some(error);

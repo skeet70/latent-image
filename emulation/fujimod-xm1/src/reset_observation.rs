@@ -4,7 +4,7 @@ use crate::bridge::sha256;
 use crate::ff80::encode_hex;
 use crate::machine::Machine;
 use crate::run;
-use crate::trace::{RegisterCapture, SiteRead, parse_site_reads};
+use crate::trace::{RegisterCapture, SiteRead, TaskCapture, parse_site_reads};
 use fujimod_emulator::board::factory::MemoryMap;
 use fujimod_emulator::board::observation::{MemoryWatch, ViewPolicy, WatchKinds, WatchRange};
 use serde::{Deserialize, Serialize};
@@ -28,6 +28,8 @@ struct RawSpec {
     reads: BTreeMap<String, Vec<SiteRead>>,
     #[serde(default)]
     registers: RegisterCapture,
+    #[serde(default)]
+    task: TaskCapture,
     hit_limit: NonZeroUsize,
     write_ranges: Vec<[u32; 2]>,
     watch_limit: usize,
@@ -43,6 +45,7 @@ pub struct Spec {
     sites: BTreeMap<u32, String>,
     site_reads: BTreeMap<u32, Vec<SiteRead>>,
     registers: RegisterCapture,
+    task: TaskCapture,
     hit_limit: NonZeroUsize,
     write_ranges: Vec<[u32; 2]>,
     watch_limit: usize,
@@ -83,7 +86,7 @@ impl Spec {
             Ok((address, capture))
         }).collect::<Result<BTreeMap<_, _>, _>>()?;
         Calls::validate(&captures)?;
-        Ok(Self { sites, site_reads, registers: raw.registers, hit_limit: raw.hit_limit,
+        Ok(Self { sites, site_reads, registers: raw.registers, task: raw.task, hit_limit: raw.hit_limit,
             write_ranges: raw.write_ranges, watch_limit: raw.watch_limit,
             read_ranges: raw.read_ranges, fetch_ranges: raw.fetch_ranges, captures })
     }
@@ -172,7 +175,7 @@ impl ResetObserver {
             return Err("restored reset executed instructions".into());
         }
         machine.traces.bound_registers(spec.hit_limit, spec.registers);
-        machine.traces.arm(&machine.session, spec.sites.clone())?;
+        machine.traces.arm_with_task_capture(&machine.session, spec.sites.clone(), spec.task)?;
         machine.traces.site_reads = spec.site_reads.clone();
         machine.traces.calls.captures = spec.captures.clone();
         let region_ranges: Vec<_> = spec.write_ranges.iter().map(|range| WatchRange {

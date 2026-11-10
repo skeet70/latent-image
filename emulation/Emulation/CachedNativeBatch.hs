@@ -1,23 +1,43 @@
 {-# LANGUAGE GHC2021 #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE ForeignFunctionInterface #-}
 -- | Reuse raw native-runner observations keyed by the ordered case wire and the canonical Nix
 -- runner path. A committed entry binds raw runner JSON, its recorded exit and the run's provenance;
 -- the current case expectation is re-judged on every read.
 module Emulation.CachedNativeBatch
   ( BatchReuse (..)
   , CacheEscape
+  , ResultPolicy (..)
+  , CacheBinding
+  , cacheBindingEntry
+  , cacheBindingManifestSha256
+  , CacheInspection (..)
+  , CacheVerdict (..)
+  , inspectCachedBatch
+  , readCachedPayload
+  , CacheOnlyRunner
+  , cacheOnlyRunner
+  , cachedObservedBatchOnly
   , cachedObservedBatch
+  , cachedObservedBatchWith
+  , cachedObservedBatchWithBinding
   ) where
 
-import Control.Exception (Exception, IOException, catch, onException, throwIO, try)
+import qualified Codec.Compression.GZip as GZip
+import qualified Codec.Compression.Zlib.Internal as Z
+import Control.Concurrent (threadDelay)
+import Control.Exception (Exception, IOException, bracket, catch, evaluate, onException, throwIO, try)
 import Control.Monad (forM, forM_, when)
 import Data.Aeson (Value (..))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
+import qualified Data.ByteString.Lazy as BL
 import Data.Char (isDigit)
 import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (isPrefixOf, nub)
+import Foreign.C.Error (eAGAIN, eWOULDBLOCK, getErrno, throwErrno)
+import Foreign.C.Types (CInt (..))
 import GHC.Clock (getMonotonicTimeNSec)
 import Emulation.NativeCase
   ( Admitted (..)
@@ -31,6 +51,9 @@ import Emulation.NativeCase
   , batchCaseStatus
   , batchStatusLabel
   , judgeRunner
+  , memoryProfile
+  , profileOutputBytes
+  , MemoryProfile (Resource8)
   , materialize
   , prepareBatch
   , readBatch
@@ -43,7 +66,7 @@ import Emulation.NativeCase
   , validId
   )
 import Emulation.NativeObservation (NativeObservation, observeNative, renderObservationError, reportRunnerExit)
-import Emulation.Sha256 (sha256, sha256Hex)
+import Emulation.Sha256 (Sha256, sha256, sha256Hex)
 import FujiAF.Host
   ( arr
   , ensure
@@ -60,12 +83,12 @@ import FujiAF.Host
   , set
   , str
   )
+import FujiAF.StorageBudget (checkStorageBudget)
 import FujiAF.JSON (encodeCanonical)
 import System.Directory
   ( canonicalizePath
   , createDirectory
   , createDirectoryIfMissing
-  , doesDirectoryExist
   , removeDirectoryRecursive
   , renameDirectory
   )
@@ -74,6 +97,32 @@ import System.FilePath (addTrailingPathSeparator, takeDirectory, (</>))
 import System.IO.Error (isDoesNotExistError, tryIOError)
 import System.Posix.Files (getSymbolicLinkStatus, isDirectory, isSymbolicLink)
 import System.Posix.Process (getProcessID)
+import System.Posix.IO (FdOption (CloseOnExec), OpenFileFlags (creat), OpenMode (ReadWrite), closeFd, defaultFileFlags, openFd, setFdOption)
+import System.Posix.Types (Fd (..))
+
+foreign import ccall unsafe "flock" flock :: CInt -> CInt -> IO CInt
+
+withCacheFlight :: CacheRoot -> CacheKey -> IO a -> IO a
+withCacheFlight root key action = do
+  directory <- ownedDirectory (rootPath root) ["flights"]
+  let path = ownedPath directory </> cacheKeyText key
+      acquire = do
+        status <- tryIOError (getSymbolicLinkStatus path)
+        case status of
+          Left problem | isDoesNotExistError problem -> pure ()
+          Left problem -> throwIO problem
+          Right entry -> when (isSymbolicLink entry) (refuseEscape ("cache lock is a symbolic link: " ++ path))
+        fd <- openFd path ReadWrite defaultFileFlags {creat = Just 0o600}
+        setFdOption fd CloseOnExec True `onException` closeFd fd
+        pure fd
+      wait fd@(Fd descriptor) = do
+        result <- flock descriptor 6
+        if result == 0 then pure () else do
+          problem <- getErrno
+          if problem == eAGAIN || problem == eWOULDBLOCK
+            then threadDelay 10000 >> wait fd
+            else throwErrno "native cache flock"
+  bracket acquire closeFd $ \fd -> wait fd >> action
 
 data BatchReuse = BatchExecuted | BatchReused
   deriving (Eq, Show)
@@ -170,15 +219,35 @@ ownedDirectory parent components = do
   createDirectoryIfMissing True (ownedPath target)
   admitComponents (ownedPath (rootPath root)) full
   resolved <- canonicalizePath (ownedPath target)
-  ensure
-    (withinRoot root resolved)
-    ("cache path resolves outside its root: " ++ resolved)
+  when (not (withinRoot root resolved))
+    (refuseEscape ("cache path resolves outside its root: " ++ resolved))
   pure target
 
 canonicalRoot :: FilePath -> IO CacheRoot
 canonicalRoot path = do
   createDirectoryIfMissing True path
   CacheRoot <$> canonicalizePath path
+
+requireDirectory :: OwnedPath -> [FilePath] -> IO OwnedPath
+requireDirectory parent components =
+  admitDirectory parent components >>= maybe (failH "cache directory is missing") pure
+
+ownedFilePresent :: OwnedPath -> FilePath -> IO Bool
+ownedFilePresent directory name = do
+  admitted <- requireDirectory (rootPath (ownedCacheRoot directory)) (ownedRelative directory)
+  let path = ownedPath admitted </> name
+  status <- tryIOError (getSymbolicLinkStatus path)
+  case status of
+    Left problem | isDoesNotExistError problem -> pure False
+    Left problem -> throwIO problem
+    Right entry -> do
+      when (isSymbolicLink entry) (refuseEscape ("cache file is a symbolic link: " ++ path))
+      pure True
+
+readOwnedRegular :: OwnedPath -> FilePath -> Int -> IO B.ByteString
+readOwnedRegular directory name limit = do
+  _ <- ownedFilePresent directory name
+  readRegularWith (pure ()) True limit (ownedPath directory </> name)
 
 data RunnerIdentity = RunnerIdentity
   { identityPath :: FilePath
@@ -198,7 +267,7 @@ data CurrentCase = CurrentCase
   , currentReport :: Value
   }
 
-data CacheRead = CacheAbsent | CacheInvalid String | CacheHit [(CaseId, NativeObservation)]
+data CacheRead = CacheAbsent | CacheInvalid String | CacheHit [(CaseId, NativeObservation, CacheVerdict)]
 
 data ManifestCase = ManifestCase
   { manifestCaseId :: CaseId
@@ -281,20 +350,57 @@ parseExit bytes =
             Right (if value == 0 then ExitSuccess else ExitFailure value)
           _ -> Left "cached native batch: invalid recorded runner exit"
 
+data ResultPolicy = WriteAllResults | WriteFailedResults deriving (Eq)
+
+data CacheBinding = CacheBinding
+  { bindingRoot :: CacheRoot
+  , bindingKey :: CacheKey
+  , cacheBindingManifestSha256 :: Sha256
+  , bindingCurrentIds :: [CaseId]
+  }
+
+cacheBindingEntry :: CacheBinding -> FilePath
+cacheBindingEntry binding = ownedPath (ownedChild (rootPath (bindingRoot binding)) ["v1", cacheKeyText (bindingKey binding)])
+
+makeBinding :: CacheRoot -> CacheKey -> [CurrentCase] -> IO CacheBinding
+makeBinding root key cases = do
+  entry <- requireDirectory (rootPath root) ["v1", cacheKeyText key]
+  encoded <- readOwnedRegular entry "manifest.json" manifestLimit
+  pure (CacheBinding root key (sha256 encoded) (map currentId cases))
+
+data CacheVerdict = CacheVerdict CaseStatus [String]
+
+data CacheInspection
+  = InspectionRawHit FilePath CacheBinding [(CaseId, CacheVerdict)]
+  | InspectionAbsent FilePath
+  | InspectionInvalid FilePath String
+  | InspectionIneligible FilePath
+
 cachedObservedBatch :: FilePath -> FilePath -> FilePath -> IO (BatchReuse, [(CaseId, NativeObservation)])
-cachedObservedBatch cacheRoot runner batchPath = do
+cachedObservedBatch = cachedObservedBatchWith WriteAllResults
+
+cachedObservedBatchWith :: ResultPolicy -> FilePath -> FilePath -> FilePath -> IO (BatchReuse, [(CaseId, NativeObservation)])
+cachedObservedBatchWith policy cacheRoot runner batchPath = do
+  (reuse, observed, _) <- cachedObservedBatchWithBinding policy cacheRoot runner batchPath
+  pure (reuse, observed)
+
+cachedObservedBatchWithBinding :: ResultPolicy -> FilePath -> FilePath -> FilePath -> IO (BatchReuse, [(CaseId, NativeObservation)], Maybe CacheBinding)
+cachedObservedBatchWithBinding policy cacheRoot runner batchPath = do
   root <- canonicalRoot cacheRoot
   (batchSha256, cases) <- prepareCurrent batchPath
   identity <- runnerIdentity runner
   let key = cacheKey identity cases
       executed = do
+        checkStorageBudget cacheRoot
+        checkStorageBudget (takeDirectory batchPath)
+        createDirectoryIfMissing True cacheRoot
         temporary <-
           if identityImmutable identity
             then Just <$> createAttempt root key
             else pure Nothing
         let cleanup = maybe (pure ()) removeAttempt temporary
         (observed, manifests) <-
-          executeValidated identity batchSha256 batchPath cases temporary `onException` cleanup
+          executeValidated policy identity batchSha256 batchPath cases temporary `onException` cleanup
         if identityImmutable identity
           then case temporary of
             Just directory -> do
@@ -306,16 +412,172 @@ cachedObservedBatch cacheRoot runner batchPath = do
           else pure ()
         pure (BatchExecuted, observed)
   if not (identityImmutable identity)
-    then executed
-    else do
-      cached <- readCached root identity key cases batchPath
-      case cached of
-        CacheHit observed -> pure (BatchReused, observed)
+    then do
+      (reuse, observed) <- executed
+      pure (reuse, observed, Nothing)
+    else withCacheFlight root key $ do
+      cached <- readCache (PersistResults policy batchPath) root identity key cases
+      (reuse, observed) <- case cached of
+        CacheHit items -> pure (BatchReused, [(ident, observation) | (ident, observation, _) <- items])
         CacheAbsent -> executed
         CacheInvalid _reason -> do
           quarantine root key
           executed
+      binding <- makeBinding root key cases
+      pure (reuse, observed, Just binding)
 
+newtype CacheOnlyRunner = CacheOnlyRunner RunnerIdentity
+
+cacheOnlyRunner :: FilePath -> Sha256 -> IO CacheOnlyRunner
+cacheOnlyRunner path digest = do
+  canonical <- canonicalizePath path
+  ensure (canonical == path && "/nix/store/" `isPrefixOf` canonical) "cache-only runner requires its exact immutable path"
+  pure (CacheOnlyRunner (RunnerIdentity canonical (DigestHex (sha256Hex digest)) True))
+
+cachedObservedBatchOnly :: ResultPolicy -> FilePath -> CacheOnlyRunner -> FilePath -> IO (BatchReuse, [(CaseId, NativeObservation)], Maybe CacheBinding)
+cachedObservedBatchOnly policy cacheRoot (CacheOnlyRunner identity) batchPath = do
+  root <- CacheRoot <$> canonicalizePath cacheRoot
+  (_, cases) <- prepareCurrent batchPath
+  let key = cacheKey identity cases
+      entry = cacheRoot </> "v1" </> cacheKeyText key
+  cached <- readCache (PersistResults policy batchPath) root identity key cases
+  case cached of
+    CacheHit items -> do
+      binding <- makeBinding root key cases
+      pure (BatchReused, [(ident, observation) | (ident, observation, _) <- items], Just binding)
+    CacheAbsent -> failH ("cache-only runner observation missing: " ++ entry)
+    CacheInvalid reason -> failH ("cache-only runner observation invalid: " ++ reason)
+
+inspectCachedBatch :: FilePath -> FilePath -> FilePath -> IO CacheInspection
+inspectCachedBatch cacheRoot runner batchPath = do
+  root <- CacheRoot <$> canonicalizePath cacheRoot
+  (_, cases) <- prepareCurrent batchPath
+  identity <- runnerIdentity runner
+  let key = cacheKey identity cases
+      entry = cacheRoot </> "v1" </> cacheKeyText key
+  if not (identityImmutable identity)
+    then pure (InspectionIneligible entry)
+    else do
+      readResult <- readCache SkipResults root identity key cases
+      case readResult of
+        CacheAbsent -> pure (InspectionAbsent entry)
+        CacheInvalid reason -> pure (InspectionInvalid entry reason)
+        CacheHit items -> do
+          binding <- makeBinding root key cases
+          pure (InspectionRawHit (cacheBindingEntry binding) binding [(ident, verdict) | (ident, _, verdict) <- items])
+
+data ValidationDestination
+  = SkipResults
+  | PersistResults ResultPolicy FilePath
+
+readCache :: ValidationDestination -> CacheRoot -> RunnerIdentity -> CacheKey -> [CurrentCase] -> IO CacheRead
+readCache destination root identity key cases = do
+  entry <- admitDirectory (rootPath root) ["v1", cacheKeyText key]
+  case entry of
+    Nothing -> pure CacheAbsent
+    Just ownedEntry -> do
+      result <- try (validateCachedWith destination identity key cases ownedEntry)
+      pure $ case result of
+        Left (problem :: IOException) -> CacheInvalid (show problem)
+        Right observed -> CacheHit observed
+
+validateCachedWith :: ValidationDestination -> RunnerIdentity -> CacheKey -> [CurrentCase] -> OwnedPath -> IO [(CaseId, NativeObservation, CacheVerdict)]
+validateCachedWith destination identity key cases entry = do
+  encodedManifest <- readOwnedRegular entry "manifest.json" manifestLimit
+  manifest <- parseManifest =<< jsonRead encodedManifest
+  ensure (manifestKey manifest == key) "cache manifest key differs"
+  ensure
+    (manifestRunner manifest == RunnerRecord (identityPath identity) (identitySha256 identity))
+    "cache manifest runner differs"
+  let items = manifestCases manifest
+  ensure (length items == length cases) "cache manifest case count differs"
+  let originalIds = map manifestCaseId items
+  ensure (length (nub originalIds) == length originalIds) "cache manifest case ids duplicate"
+  forM (zip cases items) $ \(current, item) -> do
+    ensure
+      (manifestCaseWireSha256 item == currentWireSha256 current)
+      "cache manifest wire differs"
+    caseDirectory <- requireDirectory entry ["cases", caseIdText (manifestCaseId item)]
+    exitBytes' <- readOwnedRegular caseDirectory "exit" 16
+    ensure
+      (digestBytes exitBytes' == manifestCaseExitSha256 item)
+      "cache recorded runner exit digest differs"
+    exit <- either failH pure (parseExit exitBytes')
+    ensure (exit == manifestCaseRunnerExit item) "cache recorded runner exit differs from its manifest"
+    profile <- memoryProfile (currentValue current)
+    ensure (manifestCaseRawBytes item <= profileOutputBytes profile) "cache payload exceeds case memory profile"
+    rawBytes <- readRawPayload caseDirectory (manifestCaseRawBytes item)
+    ensure
+      (B.length rawBytes == manifestCaseRawBytes item)
+      "cache raw runner observation length differs"
+    ensure
+      (digestBytes rawBytes == manifestCaseRawSha256 item)
+      "cache raw runner observation digest differs"
+    raw <- jsonRead rawBytes
+    provenanceBytes <- readOwnedRegular caseDirectory "provenance.json" payloadLimit
+    ensure
+      (digestBytes provenanceBytes == manifestCaseProvenanceSha256 item)
+      "cache provenance digest differs"
+    provenance <- parseProvenance =<< jsonRead provenanceBytes
+    validateProvenance identity (manifestBatchSha256 manifest) item provenance
+    (observation, judged) <- judgeRaw identity current exit raw rawBytes
+    case destination of
+      SkipResults -> pure ()
+      PersistResults policy batchPath -> writeResult policy batchPath current judged
+    pure (currentId current, observation, verdictFromJudged judged)
+
+readCachedPayload :: CacheBinding -> CaseId -> IO B.ByteString
+readCachedPayload binding ident = do
+  entry <- requireDirectory (rootPath (bindingRoot binding)) ["v1", cacheKeyText (bindingKey binding)]
+  encoded <- readOwnedRegular entry "manifest.json" manifestLimit
+  ensure (sha256 encoded == cacheBindingManifestSha256 binding) "cache manifest changed"
+  manifest <- parseManifest =<< jsonRead encoded
+  ensure (manifestKey manifest == bindingKey binding) "cache manifest key differs"
+  let items = manifestCases manifest
+  ensure (length items == length (bindingCurrentIds binding)) "cache manifest case count differs"
+  item <- case [stored | (current, stored) <- zip (bindingCurrentIds binding) items, current == ident] of
+    [found] -> pure found
+    _ -> failH "cache payload case identity is not unique"
+  directory <- requireDirectory entry ["cases", caseIdText (manifestCaseId item)]
+  bytes <- readRawPayload directory (manifestCaseRawBytes item)
+  ensure (B.length bytes == manifestCaseRawBytes item) "cache raw runner observation length differs"
+  ensure (digestBytes bytes == manifestCaseRawSha256 item) "cache raw runner observation digest differs"
+  pure bytes
+
+readRawPayload :: OwnedPath -> Int -> IO B.ByteString
+readRawPayload directory declared = do
+  compressed <- ownedFilePresent directory "runner.json.gz"
+  if not compressed
+    then readOwnedRegular directory "runner.json" declared
+    else do
+      legacy <- ownedFilePresent directory "runner.json"
+      ensure (not legacy) "cache has ambiguous raw payload encodings"
+      encoded <- readOwnedRegular directory "runner.json.gz" (declared + 1024 * 1024)
+      decode encoded
+  where
+    decode encoded = go (Just encoded) 0 []
+      (Z.decompressIO Z.gzipFormat Z.defaultDecompressParams
+        {Z.decompressBufferSize = 32768, Z.decompressAllMembers = False})
+    go pending total chunks stream = case stream of
+      Z.DecompressInputRequired next -> case pending of
+        Just bytes -> next bytes >>= go Nothing total chunks
+        Nothing -> next B.empty >>= finishInput total chunks
+      Z.DecompressOutputAvailable chunk next -> do
+        ensure (B.length chunk <= declared - total) "cache decoded payload exceeds declared size"
+        next >>= go pending (total + B.length chunk) (chunk : chunks)
+      Z.DecompressStreamEnd trailing -> do
+        ensure (B.null trailing && maybe True B.null pending) "cache compressed payload has trailing bytes"
+        ensure (total == declared) "cache decoded payload length differs"
+        pure (B.concat (reverse chunks))
+      Z.DecompressStreamError problem -> failH ("cache compressed payload invalid: " ++ show problem)
+    finishInput total chunks stream = case stream of
+      Z.DecompressInputRequired _ -> failH "cache compressed payload truncated"
+      _ -> go Nothing total chunks stream
+
+verdictFromJudged :: Value -> CacheVerdict
+verdictFromJudged judged = case str (get judged "status") of
+  "passed" -> CacheVerdict CasePassed []
+  _ -> CacheVerdict CaseFailed [str item | item <- list (get judged "mismatches")]
 prepareCurrent :: FilePath -> IO (DigestHex, [CurrentCase])
 prepareCurrent batchPath = do
   (rawBatch, entries) <- readBatch batchPath
@@ -367,8 +629,8 @@ cacheKey identity cases =
     [cacheVersion, identityPath identity, digestHex (identitySha256 identity)]
       ++ map (digestHex . currentWireSha256) cases
 
-executeValidated :: RunnerIdentity -> DigestHex -> FilePath -> [CurrentCase] -> Maybe OwnedPath -> IO ([(CaseId, NativeObservation)], [ManifestCase])
-executeValidated identity batchSha256 batchPath cases temporary = do
+executeValidated :: ResultPolicy -> RunnerIdentity -> DigestHex -> FilePath -> [CurrentCase] -> Maybe OwnedPath -> IO ([(CaseId, NativeObservation)], [ManifestCase])
+executeValidated policy identity batchSha256 batchPath cases temporary = do
   observations <- newIORef []
   manifests <- newIORef []
   remaining <- newIORef cases
@@ -406,7 +668,8 @@ executeValidated identity batchSha256 batchPath cases temporary = do
               `catch` \(_ :: IOException) -> pure ()
             throwIO problem
           Right (observation, judged, exit, rawBytes) -> do
-            writeResult batchPath current judged
+            checkStorageBudget (takeDirectory batchPath)
+            writeResult policy batchPath current judged
             modifyIORef' observations ((currentId current, observation) :)
             case temporary of
               Nothing -> pure ()
@@ -414,10 +677,13 @@ executeValidated identity batchSha256 batchPath cases temporary = do
                 caseDirectory <- ownedDirectory directory ["cases", ident]
                 let provenance = provenanceValue identity batchSha256 current exit
                     provenanceBytes = encodeCanonical provenance
-                B.writeFile (ownedPath caseDirectory </> "runner.json") rawBytes
+                checkStorageBudget (ownedPath caseDirectory)
+                BL.writeFile (ownedPath caseDirectory </> "runner.json.gz")
+                  (GZip.compressWith GZip.defaultCompressParams (BL.fromStrict rawBytes))
                 B.writeFile (ownedPath caseDirectory </> "exit") (exitBytes exit)
                 B.writeFile (ownedPath caseDirectory </> "provenance.json") provenanceBytes
-                modifyIORef' manifests (manifestCase current exit rawBytes provenanceBytes :)
+                manifest <- evaluate (forceManifestCase (manifestCase current exit rawBytes provenanceBytes))
+                modifyIORef' manifests (manifest :)
             writeIORef remaining rest
   observed <- reverse <$> readIORef observations
   manifested <- reverse <$> readIORef manifests
@@ -469,6 +735,20 @@ manifestCase current exit rawBytes provenanceBytes =
     , manifestCaseProvenanceSha256 = digestBytes provenanceBytes
     }
 
+forceManifestCase :: ManifestCase -> ManifestCase
+forceManifestCase item =
+  forceText (caseIdText (manifestCaseId item)) `seq`
+    forceDigest (manifestCaseWireSha256 item) `seq`
+      forceDigest (manifestCaseCaseSha256 item) `seq`
+        exitNumber (manifestCaseRunnerExit item) `seq`
+          forceDigest (manifestCaseRawSha256 item) `seq`
+            manifestCaseRawBytes item `seq`
+              forceDigest (manifestCaseExitSha256 item) `seq`
+                forceDigest (manifestCaseProvenanceSha256 item) `seq` item
+  where
+    forceText = foldr seq ()
+    forceDigest = forceText . digestHex
+
 judgeRaw :: RunnerIdentity -> CurrentCase -> ExitCode -> Value -> B.ByteString -> IO (NativeObservation, Value)
 judgeRaw identity current exit raw rawBytes = do
   let ident = caseIdText (currentId current)
@@ -492,12 +772,13 @@ judgeRaw identity current exit raw rawBytes = do
     nonEmpty "" = Nothing
     nonEmpty text = Just text
 
-writeResult :: FilePath -> CurrentCase -> Value -> IO ()
-writeResult batchPath current judged =
-  B.writeFile
-    (takeDirectory batchPath </> (caseIdText (currentId current) ++ ".native-result.json"))
-    (encodeCanonical judged)
-
+writeResult :: ResultPolicy -> FilePath -> CurrentCase -> Value -> IO ()
+writeResult policy batchPath current judged =
+  when
+    (policy == WriteAllResults || str (get judged "status") == "failed")
+    (B.writeFile
+      (takeDirectory batchPath </> (caseIdText (currentId current) ++ ".native-result.json"))
+      (encodeCanonical judged))
 -- The incomplete report is retained beside the batch in the existing CaseReport format; a failed
 -- validation never reaches publishAttempt.
 preserveFailureReport :: FilePath -> CaseId -> Value -> IO ()
@@ -506,60 +787,6 @@ preserveFailureReport batchPath ident value =
     (takeDirectory batchPath </> (caseIdText ident ++ ".native-result.json"))
     (encodeCanonical value)
 
-readCached :: CacheRoot -> RunnerIdentity -> CacheKey -> [CurrentCase] -> FilePath -> IO CacheRead
-readCached root identity key cases batchPath = do
-  entry <- admitDirectory (rootPath root) ["v1", cacheKeyText key]
-  case entry of
-    Nothing -> pure CacheAbsent
-    Just ownedEntry -> do
-      result <- try (validateCached identity key cases ownedEntry batchPath)
-      pure $ case result of
-        Left (problem :: IOException) -> CacheInvalid (show problem)
-        Right observed -> CacheHit observed
-
-validateCached :: RunnerIdentity -> CacheKey -> [CurrentCase] -> OwnedPath -> FilePath -> IO [(CaseId, NativeObservation)]
-validateCached identity key cases entry batchPath = do
-  encodedManifest <- readRegularWith (pure ()) True manifestLimit (ownedPath entry </> "manifest.json")
-  manifest <- parseManifest =<< jsonRead encodedManifest
-  ensure (manifestKey manifest == key) "cache manifest key differs"
-  ensure
-    (manifestRunner manifest == RunnerRecord (identityPath identity) (identitySha256 identity))
-    "cache manifest runner differs"
-  let items = manifestCases manifest
-  ensure (length items == length cases) "cache manifest case count differs"
-  let originalIds = map manifestCaseId items
-  ensure (length (nub originalIds) == length originalIds) "cache manifest case ids duplicate"
-  caseDirectories <-
-    forM items $ \item -> do
-      admitted <- admitDirectory entry ["cases", caseIdText (manifestCaseId item)]
-      maybe (failH "cache case directory is missing") pure admitted
-  forM (zip3 cases items caseDirectories) $ \(current, item, caseDirectory) -> do
-    ensure
-      (manifestCaseWireSha256 item == currentWireSha256 current)
-      "cache manifest wire differs"
-    exitBytes' <- readRegularWith (pure ()) True 16 (ownedPath caseDirectory </> "exit")
-    ensure
-      (digestBytes exitBytes' == manifestCaseExitSha256 item)
-      "cache recorded runner exit digest differs"
-    exit <- either failH pure (parseExit exitBytes')
-    ensure (exit == manifestCaseRunnerExit item) "cache recorded runner exit differs from its manifest"
-    rawBytes <- readRegularWith (pure ()) True payloadLimit (ownedPath caseDirectory </> "runner.json")
-    ensure
-      (B.length rawBytes == manifestCaseRawBytes item)
-      "cache raw runner observation length differs"
-    ensure
-      (digestBytes rawBytes == manifestCaseRawSha256 item)
-      "cache raw runner observation digest differs"
-    raw <- jsonRead rawBytes
-    provenanceBytes <- readRegularWith (pure ()) True payloadLimit (ownedPath caseDirectory </> "provenance.json")
-    ensure
-      (digestBytes provenanceBytes == manifestCaseProvenanceSha256 item)
-      "cache provenance digest differs"
-    provenance <- parseProvenance =<< jsonRead provenanceBytes
-    validateProvenance identity (manifestBatchSha256 manifest) item provenance
-    (observation, judged) <- judgeRaw identity current exit raw rawBytes
-    writeResult batchPath current judged
-    pure (currentId current, observation)
 
 parseManifest :: Value -> IO CacheManifest
 parseManifest value = do
@@ -591,7 +818,7 @@ parseManifestCase value = do
   caseSha256 <- digestValue "cache manifest case identity" (get value "case_sha256")
   runnerExit <- exitValue "cache manifest runner exit" (get value "runner_exit")
   rawSha256 <- digestValue "cache manifest raw" (get value "raw_sha256")
-  rawBytes <- integer (get value "raw_bytes") 0 (fromIntegral payloadLimit) "cache manifest raw bytes"
+  rawBytes <- integer (get value "raw_bytes") 0 (fromIntegral (profileOutputBytes Resource8)) "cache manifest raw bytes"
   exitSha256 <- digestValue "cache manifest exit" (get value "exit_sha256")
   provenanceSha256 <- digestValue "cache manifest provenance" (get value "provenance_sha256")
   pure
@@ -675,7 +902,6 @@ removeAttempt directory =
         Nothing -> pure ()
   )
     `catch` (\(_ :: IOException) -> pure ())
-    `catch` (\(_ :: CacheEscape) -> pure ())
 
 publishAttempt :: CacheRoot -> RunnerIdentity -> CacheKey -> DigestHex -> OwnedPath -> [ManifestCase] -> IO Bool
 publishAttempt root identity key batchSha256 temporary manifests = do
@@ -692,8 +918,10 @@ publishAttempt root identity key batchSha256 temporary manifests = do
       case result of
         Right () -> pure True
         Left (problem :: IOException) -> do
-          present <- doesDirectoryExist final
-          if present then pure False else throwIO problem
+          present <- admitDirectory (rootPath root) ["v1", cacheKeyText key]
+          case present of
+            Just _ -> pure False
+            Nothing -> throwIO problem
 
 manifestBytes :: RunnerIdentity -> CacheKey -> DigestHex -> [ManifestCase] -> B.ByteString
 manifestBytes identity key batchSha256 manifests =

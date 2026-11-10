@@ -1,6 +1,7 @@
 //! Labelled instruction points on every core and the entries recorded at them.
 
 use crate::provenance::Guest;
+use crate::modal_permit::CoreId;
 use crate::memory_view::{MemoryAddress, MemoryCore, TcmRegister, static_span, tcm_window};
 use crate::modal_trace::{Config as ModalConfig, ModalTrace, Report as ModalReport};
 use fujimod_emulator::board::factory::{Graph, MemoryMap};
@@ -15,6 +16,9 @@ mod save_lifecycle;
 pub use save_lifecycle::{CaptureScope, LifecycleProgram};
 use save_lifecycle::LifecycleContext;
 
+#[path = "trace_task_context.rs"]
+mod task_context;
+pub use task_context::{TaskCapture, TaskContext};
 #[path = "trace_calls.rs"]
 pub mod calls;
 
@@ -25,6 +29,8 @@ pub struct Hit {
     pub address: String,
     pub core: usize,
     pub instructions: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task: Option<TaskContext>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub render_object_provenance_sequence: Option<u64>,
     pub registers: BTreeMap<&'static str, String>,
@@ -1041,6 +1047,7 @@ pub struct TraceSites {
     modal_observation: Option<ModalTrace>,
     stack_scope: Option<StackScope>,
     presentation: Option<crate::presentation::Tracker>,
+    task_context: Option<task_context::Observer>,
     pub(crate) render_object_provenance_sequence: Option<u64>,
 }
 
@@ -1224,6 +1231,9 @@ impl TraceSites {
     }
 
     pub fn begin_capture_observation(&mut self, scope: CaptureScope) -> Result<(), String> {
+        if self.task_context.is_some() {
+            return Err("capture arena does not record logical task context".into());
+        }
         if self.stack_scope.is_some() {
             return Err("capture observation conflicts with stack scope".into());
         }
@@ -1355,11 +1365,19 @@ impl TraceSites {
 
     /// Replaces the armed sites on every core.
     pub fn arm(&mut self, session: &Session, sites: BTreeMap<u32, String>) -> Result<(), String> {
-        self.arm_selection(session, sites, CoreSelection::All)
+        self.arm_selection(session, sites, CoreSelection::All, None)
+    }
+
+    pub fn arm_with_task_capture(&mut self, session: &Session, sites: BTreeMap<u32, String>, task: TaskCapture) -> Result<(), String> {
+        self.arm_selection(session, sites, CoreSelection::All, Some(task))
+    }
+
+    pub(crate) fn before_advance(&self, session: &Session) -> Result<(), String> {
+        self.task_context.as_ref().map_or(Ok(()), |observer| observer.before_advance(session))
     }
 
     pub fn arm_primary(&mut self, session: &Session, sites: BTreeMap<u32, String>) -> Result<(), String> {
-        self.arm_selection(session, sites, CoreSelection::Primary)
+        self.arm_selection(session, sites, CoreSelection::Primary, None)
     }
 
     /// Arms `sites` on every core through one persistent all-PC point set per core. Later site and modal changes,
@@ -1413,6 +1431,7 @@ impl TraceSites {
         session: &Session,
         sites: BTreeMap<u32, String>,
         cores: CoreSelection,
+        task: Option<TaskCapture>,
     ) -> Result<(), String> {
         if self.stack_scope.is_some() {
             return Err("stack scope sites cannot be replaced".into());
@@ -1423,7 +1442,13 @@ impl TraceSites {
         if self.capture_observation_active() {
             return Err("capture observation sites are frozen until the session ends".into());
         }
+        let context = match task {
+            None => None,
+            Some(TaskCapture::Off) => Some(None),
+            Some(TaskCapture::Logical) => Some(Some(task_context::Observer::new(session)?)),
+        };
         self.end_points(session)?;
+        if let Some(context) = context { self.task_context = context; }
         self.sites = sites;
         self.cores = cores;
         self.point_set_mode = PointSetMode::Fixed;
@@ -1490,6 +1515,7 @@ impl TraceSites {
 
     /// Removes from the last core; a set whose removal fails stays owned.
     fn end_points(&mut self, session: &Session) -> Result<(), String> {
+        if let Some(observer) = &mut self.task_context { observer.disarm()?; }
         while let Some((core, points)) = self.points.last_mut() {
             session.board.instruction_points_end(*core, points)?;
             self.points.pop();
@@ -1572,6 +1598,7 @@ impl TraceSites {
                 let current = session.board.read_register(*core, Register::Pc)?;
                 if current == u64::from(marker.pc.0) && counts[*core] == marker.entered.0 {
                     points.resume(current, u64::from(marker.pc.0));
+                    if let Some(observer) = &self.task_context { observer.resume(CoreId(*core), Some(marker.pc)); }
                 }
             }
         }
@@ -1584,9 +1611,11 @@ impl TraceSites {
         for ((core, points), pending) in self.points.iter().zip(&self.pending_points) {
             let current = session.board.read_register(*core, Register::Pc)?;
             let marker = self.resumed.get(core).filter(|marker| counts[*core] == marker.entered.0)
-                .map(|marker| u64::from(marker.pc.0));
+                .map(|marker| marker.pc);
             // `resume` keeps a skip only for a member observed at the current PC, so `!current` cancels it.
-            points.resume(current, pending.map(|pending| u64::from(pending.pc.0)).or(marker).unwrap_or(!current));
+            let observed = pending.map(|pending| pending.pc).or(marker);
+            points.resume(current, observed.map(|pc| u64::from(pc.0)).unwrap_or(!current));
+            if let Some(observer) = &self.task_context { observer.resume(CoreId(*core), observed.filter(|pc| u64::from(pc.0) == current)); }
         }
         Ok(())
     }
@@ -1629,6 +1658,7 @@ impl TraceSites {
                 self.points.push((core, points));
                 self.pending_points.push(None);
             }
+            if let Some(observer) = &mut self.task_context { observer.arm_core(CoreId(core), &addresses)?; }
         }
         Ok(())
     }
@@ -1667,7 +1697,8 @@ impl TraceSites {
             return Err("trace instruction points were not fully removed".into());
         }
         self.take_events()?;
-        for ((_, points), addresses) in self.points.iter().zip(memberships) {
+        for ((core, points), addresses) in self.points.iter().zip(memberships) {
+            if let Some(observer) = &mut self.task_context { observer.arm_core(CoreId(*core), &addresses)?; }
             points.replace_addresses(addresses)?;
         }
         Ok(())
@@ -1675,6 +1706,7 @@ impl TraceSites {
 
     fn install(&mut self, session: &Session, memberships: Vec<Vec<u64>>) -> Result<(), String> {
         for (core, addresses) in memberships.into_iter().enumerate() {
+            if let Some(observer) = &mut self.task_context { observer.arm_core(CoreId(core), &addresses)?; }
             match session.board.instruction_points_begin_mutable(core, addresses) {
                 Ok(points) => {
                     self.points.push((core, points));
@@ -1708,10 +1740,17 @@ impl TraceSites {
             points.event();
             *pending = None;
         }
+        if let Some(observer) = &self.task_context { observer.discard_events(); }
     }
 
     /// Pending hooks are retained until their details fit in the capture arena.
     pub fn collect(&mut self, session: &Session, instructions: InstructionCount) -> Result<CollectionOutcome, String> {
+        let result = self.collect_entries(session, instructions);
+        if let Some(observer) = &self.task_context { observer.check()?; }
+        result
+    }
+
+    fn collect_entries(&mut self, session: &Session, instructions: InstructionCount) -> Result<CollectionOutcome, String> {
         if self.stack_scope.as_ref().is_some_and(|scope| scope.summary.violation.is_some()) {
             return Err("trace stack scope has already refused".into());
         }
@@ -1757,6 +1796,7 @@ impl TraceSites {
                         crate::presentation::FramePointer(frame), crate::presentation::CoreInstructions(counts[*core]), result);
                 }
             }
+            let task = self.task_context.as_ref().map(|observer| observer.take(CoreId(*core), pending.point)).transpose()?.flatten();
             if let Some(modal) = self.modal_observation.as_mut().filter(|modal| modal.active()) {
                 if modal.contains(Guest(address)) {
                     new_returns[*core] = modal.observe(session, *core, Guest(address), instructions, pending.point)?;
@@ -1767,6 +1807,7 @@ impl TraceSites {
             let Some(site) = self.sites.get(&address).filter(|_| selected) else {
                 let current = session.board.read_register(*core, Register::Pc)?;
                 points.resume(current, pc);
+                if let Some(observer) = &self.task_context { observer.resume(CoreId(*core), (current == pc).then_some(pending.pc)); }
                 self.pending_points[point_index] = None;
                 if current == pc {
                     self.resumed.insert(*core, ResumeMarker {
@@ -1877,6 +1918,7 @@ impl TraceSites {
                     address: format!("{address:#x}"),
                     core: *core,
                     instructions,
+                    task,
                     render_object_provenance_sequence: self.render_object_provenance_sequence,
                     registers,
                     sp: format!("{sp:#x}"),
@@ -1895,6 +1937,7 @@ impl TraceSites {
             }
             let current = session.board.read_register(*core, Register::Pc)?;
             points.resume(current, pc);
+            if let Some(observer) = &self.task_context { observer.resume(CoreId(*core), (current == pc).then_some(pending.pc)); }
             self.pending_points[point_index] = None;
             if current == pc {
                 self.resumed.insert(*core, ResumeMarker {

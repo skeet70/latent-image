@@ -672,6 +672,7 @@ caseSpec domain body label slot row =
     , caseExpectedStatus = Returned
     , caseExpectedRegisters = [(R4, sentinel R4)]
     , caseExpectedMemory = []
+    , caseIgnoredMemory = []
     , caseCp14Identity = rowIdentity row
     , caseKernel = Nothing
     }

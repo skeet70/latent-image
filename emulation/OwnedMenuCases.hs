@@ -224,6 +224,7 @@ scenario context identifier queryResult sessionValue transitionResult sessionRea
       , caseExpectedStatus = Returned
       , caseExpectedRegisters = [(Sp, 0x00959ff0)]
       , caseExpectedMemory = []
+      , caseIgnoredMemory = []
       , caseCp14Identity = Nothing
       , caseKernel = Nothing
       }
@@ -242,6 +243,7 @@ scenario context identifier queryResult sessionValue transitionResult sessionRea
       , caseExpectedStatus = Returned
       , caseExpectedRegisters = [(Sp, 0x00959ff0)]
       , caseExpectedMemory = []
+      , caseIgnoredMemory = []
       , caseCp14Identity = Nothing
       , caseKernel = Nothing
       }
@@ -327,6 +329,7 @@ guardCase context = CaseSpec
   , caseExpectedStatus = Returned
   , caseExpectedRegisters = [(R0, 0)]
   , caseExpectedMemory = []
+  , caseIgnoredMemory = []
   , caseCp14Identity = Nothing
   , caseKernel = Nothing
   }

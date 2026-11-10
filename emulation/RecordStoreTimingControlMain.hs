@@ -16,7 +16,7 @@ import Data.List (sortOn)
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import Data.Word (Word32)
-import Emulation.PropertyPairPlan (Instructions (..), PhysicalRange (..), maxIdle, preKeyIdle, settingsRanges)
+import Emulation.PropertyPairPlan (Instructions (..), PhysicalRange (..), maxIdle, preKeyIdle, recordSettingsRanges)
 import Emulation.Sha256 (Sha256, parseSha256Hex, sha256, sha256File, sha256Hex)
 import EmulatorUsb
 import Numeric (showHex)
@@ -257,7 +257,7 @@ observe options inputs spec = do
       writeJson (directory </> "start.json") (startRecord start)
       _ <- drain emulator
       forM_ (zip [1 :: Int ..] keys) $ \(step,key) -> do
-        before <- readouts emulator settingsRanges
+        before <- readouts emulator recordSettingsRanges
         HitCursor first <- readIORef cursor
         _ <- emulatorBridgeCommand emulator (watchRequest spec)
         let delta = if step == perturbationStep (perturbationPoint options) then phaseShiftValue (perturbation options) else 0
@@ -266,7 +266,7 @@ observe options inputs spec = do
         press <- emulatorDisplayKey emulator key
         observed <- emulatorWatchEnd emulator
         lastHit <- drain emulator
-        after <- readouts emulator settingsRanges
+        after <- readouts emulator recordSettingsRanges
         modifyIORef' steps (object ["step" .= step,"parent" .= (step-1),"keys" .= map crawlKeyWire (take step keys),"hits" .= [first,lastHit]
           ,"perturbation_idle" .= extra,"idle" .= idle,"press" .= press,"watch" .= observed,"regions_before" .= before,"regions_after" .= after] :)
         writeJson (directory </> "steps.json") . A.toJSON . reverse =<< readIORef steps

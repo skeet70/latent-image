@@ -46,6 +46,8 @@ haskell_toolchain_library(name = "unix")
 
 haskell_toolchain_library(name = "vector")
 
+haskell_toolchain_library(name = "zlib")
+
 haskell_library(
     name = "json",
     srcs = ["FujiAF/JSON.hs"],

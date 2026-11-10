@@ -109,7 +109,7 @@ admitInputs role source = do
     ,(sourceImage source,"f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16")
     ,(sourceA source,"21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882")
     ,(sourceB source,"8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec")
-    ,(sourceRun source,"efa32ff8d2a378ba9e098ac28015faf82856765c866d5db5b97cb1c38342deef")
+    ,(sourceRun source,"6e6ac441c0661470b5b26abe7628f19ec118ac568967938378c88dea448835cb")
     ,(sourceRom source,"4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be")]
   mapM_ (\(low,high) -> do
     derived <- either (const (Left CodeRejected)) Right

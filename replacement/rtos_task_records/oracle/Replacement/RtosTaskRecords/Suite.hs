@@ -673,6 +673,7 @@ caseFor facts domain role stockImage ownedImage symbols one =
           : [(register, seedRegister register) | register <- [R4 .. R11]]
           ++ [(Sp, stackPointer)]
     , caseExpectedMemory = []
+    , caseIgnoredMemory = []
     , caseCp14Identity = Nothing
     , caseKernel = Just (KernelCase plainLimit Nothing (Just 0x8000_1234) (Just 0) (Just 0) [R1, R2, R3, R12, Lr, Cpsr] [])
     }

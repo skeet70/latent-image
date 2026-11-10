@@ -94,15 +94,26 @@ functionLimitRegressions runner=withTemporary "fuji-function-limit-tests"$ \root
   (code,report)<-runCase runner path
   ensure(code==expected && get report "status"==s status)("function limit with "++show(count+length declared)++" functions: "++show report)
 
-instructionLimitRegressions :: FilePath -> IO ()
-instructionLimitRegressions runner=withTemporary "fuji-instruction-limit-tests"$ \root->do
+instructionLimitRegressions :: FilePath -> FilePath -> IO ()
+instructionLimitRegressions runner checker=withTemporary "fuji-instruction-limit-tests"$ \root->do
  base<-B.readFile "emulation/fixtures/arithmetic.json" >>= jsonRead
  copyFile "emulation/fixtures/arithmetic.bin"(root </> "arithmetic.bin")
  let path=root </> "instruction-limit.json"
- forM_[(4000000,0,"passed"),(4000001,1,"invalid_case")]$ \(budget,expected,status)->do
-  B.writeFile path(encodeCanonical(set "limits" (obj[("instructions",n budget),("wall_ms",n finishingWallMs)])base))
+ forM_[(DefaultMemory,4000000,True),(DefaultMemory,4000001,False)
+      ,(Resource8,4000001,True),(Resource8,16000000,True),(Resource8,16000001,False)]$ \(profile,budget,accepted)->do
+  let fixture=set "limits"(obj[("instructions",n budget),("wall_ms",n finishingWallMs)])base
+      profiled=case profile of DefaultMemory->fixture;Resource8->set "memory_profile"(s "resource8")fixture
+  B.writeFile path(encodeCanonical profiled)
+  (timed,schemaCode,_,_)<-runBounded 15000000(1024*1024)checker["--schemafile","schemas/native-case.schema.json",path]B.empty
+  ensure(not timed && schemaCode==(if accepted then ExitSuccess else ExitFailure 1))("instruction schema boundary "++show(profile,budget))
   (code,report)<-runCase runner path
-  ensure(code==expected && get report "status"==s status)("instruction limit "++show budget++": "++show report)
+  ensure(code==(if accepted then 0 else 1) && get report "status"==s(if accepted then "passed" else "invalid_case"))("instruction limit "++show(profile,budget)++": "++show report)
+ (_,countdownPath)<-isolationCase root "resource-countdown"[0xe2500001,0x1afffffd,0xe12fff1e]
+  [("r0",2100000)](16000000,finishingWallMs)(expectation "returned"[("r0",0),("cpsr",0x60000010),("pc",0xa000)][])
+ countdown<-B.readFile(root</>countdownPath)>>=jsonRead
+ B.writeFile path(encodeCanonical(set "memory_profile"(s "resource8")countdown))
+ (code,report)<-runCase runner path
+ ensure(code==0 && get report "status"==s "passed" && num(get(get report "runner")"instructions")==4200001)("resource execution beyond default instructions: "++show report)
 -- Each public contract limit admits a case at the limit and refuses one past it.
 -- The size, total and JSON boundaries are adapter admissions; the counts that
 -- stay small also run to a passing result through the engine.
@@ -299,7 +310,7 @@ schemaContract=do
  expect "stubs maxItems"(get(get props "stubs")"maxItems")(toInteger stubCount)
  expect "expected memory maxItems"(get(get(get(get props "expected")"properties")"memory")"maxItems")(toInteger memoryCount)
  expect "expected events maxItems"(get(get(get(get props "expected")"properties")"events")"maxItems")(toInteger eventCount)
- expect "instructions maximum"(get(get(get(get props "limits")"properties")"instructions")"maximum") 4000000
+ expect "instructions maximum"(get(get(get(get props "limits")"properties")"instructions")"maximum")(profileInstructions Resource8)
  expect "wall_ms maximum"(get(get(get(get props "limits")"properties")"wall_ms")"maximum") 10000
  expect "initial offset maximum"(get(get(get sliced "properties")"offset")"maximum")(toInteger(profileSizeBytes Resource8))
  expect "expected offset maximum"(get(get(get memory "properties")"offset")"maximum")(toInteger(profileSizeBytes Resource8))
@@ -610,6 +621,7 @@ ownedBatchApi runner=withTemporary "fuji-owned-batch"$ \root->do
       , O.caseExpectedStatus=N.Returned
       , O.caseExpectedRegisters=expected
       , O.caseExpectedMemory=memory
+      , O.caseIgnoredMemory=[]
       , O.caseCp14Identity=Nothing
       , O.caseKernel=Nothing
       }
@@ -662,6 +674,21 @@ ownedBatchApi runner=withTemporary "fuji-owned-batch"$ \root->do
  case failed of
   Left(e::SomeException)->ensure("broken: invalid_case"`isInfixOf`show e)("loadObservedBatch failure names: "++show e)
   Right _->failH "loadObservedBatch returned for a batch with an invalid case"
+ let packed=(spec "packed"[0xe5921000,0xe12fff1e][(N.R2,0x380000)][(N.R1,0x15151515)][])
+       { O.caseRegions=
+          [r|r<-O.caseRegions(spec "packed"[0xe5921000,0xe12fff1e][][][]),N.regionIdOf(O.caseRegion r)/=N.RegionId "data"]
+          ++[O.mkRegion(N.RegionId("payload"++show i))(N.GuestAddress(0x100000+0x20000*fromIntegral i))(100*1024)O.ReadOnly(B.replicate(100*1024)(fromIntegral(i+1)))|i<-[0..20::Int]]
+       }
+ packedPath<-O.writeBatch(root</>"packed")[packed]
+ packedBatch<-B.readFile packedPath>>=jsonRead
+ packedCase<-case list(get packedBatch "cases") of
+  [entry]->pure(root</>"packed"</>str(get entry "path"))
+  _->failH "packed batch case count differs"
+ (_,regions,_,_)<-loadCase packedCase
+ forM_[0..20::Int]$ \i->
+  ensure([regionBytes r|r<-regions,N.regionIdOf r==N.RegionId("payload"++show i)]==[B.replicate(100*1024)(fromIntegral(i+1))])("packed payload differs: "++show i)
+ packedObserved<-O.loadObservedBatch runner packedPath
+ ensure(map(N.lookupRegister N.R1 . snd)packedObserved==[Just 0x15151515])"packed last-region read differs"
 
 -- Two lock-acquisition shapes and a spin that clears the monitor, all on one held word, share one
 -- outcome and compare equal with PC and the CPSR flags excluded; spinning on another held word,
@@ -690,6 +717,7 @@ kernelOutcomes runner=withTemporary "fuji-kernel-outcomes"$ \root->do
       , O.caseExpectedStatus=status
       , O.caseExpectedRegisters=[(N.Sp,0xb020)]
       , O.caseExpectedMemory=[]
+      , O.caseIgnoredMemory=[]
       , O.caseCp14Identity=Nothing
       , O.caseKernel=Just kernel
       }
@@ -919,7 +947,7 @@ main=do
   when(name=="kernel-barriers.json")$ensure(map(\p->(get p "kind",get p "barrier"))provenance==[(s "write",Null),(s "barrier",s "dmb"),(s "barrier",s "dsb"),(s "barrier",s "isb")])"barrier markers in execution order"
  dispatchRegressions runner
  functionLimitRegressions runner
- instructionLimitRegressions runner
+ instructionLimitRegressions runner checker
  recordingLimitRegressions runner
  contractLimitRegressions runner
  regionCountRegressions runner

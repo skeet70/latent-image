@@ -117,7 +117,7 @@ callbackCode domain row = wordsBytes (capture ++ mode ++ [0xe12fff1e])
       _ -> []
 
 spec :: (Word32, Word32) -> [(Word32, Word32)] -> [(Word32, Word32)] -> Domain -> Entry -> Row -> B.ByteString -> String -> CaseSpec
-spec (codeLo, codeHi) functionSpans readonlySpans domain entry row code ident = CaseSpec ident "X-M1 1.50 S3c contracts at 55436fc85c, synthetic typed scheduler state" "one native service call, no concurrent CPU or devices beyond IRQ pending words; blocking calls stop at the real dispatcher entry" (ga (entryAt domain entry)) (ga 0x920000) (regions ++ [exitRegion]) ([(ga at,size) | (at,size) <- functionSpans] ++ [(ga 0x900000,64),(ga 0x900040,64),(ga 0x930000,16)]) initial Returned [(R4,0xabc00004)] [] Nothing (Just kernel)
+spec (codeLo, codeHi) functionSpans readonlySpans domain entry row code ident = CaseSpec ident "X-M1 1.50 S3c contracts at 55436fc85c, synthetic typed scheduler state" "one native service call, no concurrent CPU or devices beyond IRQ pending words; blocking calls stop at the real dispatcher entry" (ga (entryAt domain entry)) (ga 0x920000) (regions ++ [exitRegion]) ([(ga at,size) | (at,size) <- functionSpans] ++ [(ga 0x900000,64),(ga 0x900040,64),(ga 0x930000,16)]) initial Returned [(R4,0xabc00004)] [] [] Nothing (Just kernel)
   where
     ga = GuestAddress . fromIntegral
     codeRegions = [mkRegion (RegionId ("code-loader-" ++ show lo)) (ga lo) (fromIntegral (hi-lo)) permission (B.take (fromIntegral (hi-lo)) (B.drop (fromIntegral (lo-loaderBase domain)) code)) | (lo,hi) <- zip boundaries (drop 1 boundaries), let permission = if any (\(at,size) -> at <= lo && hi <= at+size) readonlySpans then ReadOnly else ReadExecute]

@@ -1,13 +1,13 @@
 {-# LANGUAGE GHC2021 #-}
 
--- | Code policy over the linked owned text: every word is a walked A32 instruction or a literal it
--- loads, control stays in owned functions apart from the stubs' stock-frame pops and the listed stock
--- calls, the only non-stack stores are the store accessors', and each entry's stack is bounded and
--- composes over an acyclic call graph.
+-- | Decoded owned-code policy and bounded stack composition.
 module Replacement.PropertyService.Admission
   ( FunctionName (..)
   , FunctionExtent (..)
   , CodeLayout (..)
+  , MappedSpan (..)
+  , AddressSpan (..)
+  , PointerSpan (..)
   , StackOffset (..)
   , CallKind (..)
   , CallEdge (..)
@@ -37,24 +37,28 @@ data FunctionExtent = FunctionExtent
   }
   deriving (Eq, Show)
 
+data AddressSpan = AddressSpan GuestAddress GuestAddress deriving (Eq, Show)
+
+data MappedSpan = ArmSpan AddressSpan | DataSpan AddressSpan deriving (Eq, Show)
+
+data PointerSpan = OwnedReadonly AddressSpan | RetainedStorage AddressSpan | RetainedConfiguration AddressSpan deriving (Eq, Show)
+
 -- | Bytes relative to the stack pointer at a function's entry.
 newtype StackOffset = StackOffset Int deriving (Eq, Ord, Show)
 
 data CodeLayout = CodeLayout
   { layoutBase :: GuestAddress
   , layoutFunctions :: [FunctionExtent]
+  , layoutMappings :: [MappedSpan]
+  , layoutLiteralPointers :: [PointerSpan]
   , -- | Extents holding no code.
     layoutData :: [(GuestAddress, GuestAddress)]
-  , -- | Entries of the functions whose stores are not confined to the stack.
-    layoutStoreAccessors :: [GuestAddress]
-  , -- | Entries no owned code calls.
-    layoutRoots :: [GuestAddress]
-  , -- | Sites where a root pops the stock frame it entered in.
-    layoutFramePops :: [GuestAddress]
+  , -- | Exact instruction sites admitted by the fixed backing-boundary policy.
+    layoutStoreSites :: [GuestAddress]
   , -- | Stock leaf functions any owned function may call, with the lowest stack offset each reaches.
     layoutStockLeaves :: [(GuestAddress, StackOffset)]
-  , -- | BL sites in roots and the stock function each calls at the root's entry sp; no stack depth is claimed for them.
-    layoutStockSites :: [(GuestAddress, GuestAddress)]
+  , -- | Retained boundary call sites, callees and required offsets from owned entry sp.
+    layoutStockSites :: [(GuestAddress, GuestAddress, StackOffset)]
   }
 
 data CallKind = Call | TailCall | StockLeafCall | StockLeafTailCall | StockSiteCall deriving (Eq, Ord, Show)
@@ -81,6 +85,7 @@ data CodeProof = CodeProof
     proofComposed :: M.Map GuestAddress StackOffset
   , proofInstructions :: S.Set GuestAddress
   , proofLiterals :: S.Set GuestAddress
+  , proofNonreturning :: S.Set GuestAddress
   }
   deriving (Eq, Show)
 
@@ -101,6 +106,10 @@ data Violation
   | ReturnAddressLost
   | FramePointerLost
   | StockCallBelowEntry
+  | DataExecuted
+  | LiteralNotData
+  | LayoutInvalid
+  | LiteralPointerOutsideOwned
   deriving (Eq, Show)
 
 data AdmissionError = AdmissionError GuestAddress Violation deriving (Eq, Show)
@@ -115,20 +124,78 @@ data LinkState = LinkLive | LinkSaved Int | LinkLost deriving (Eq, Ord, Show)
 -- or holds another value with no copy of the caller's.
 data FrameRegister = R11Entry | R11Saved Int | R11Changed deriving (Eq, Ord, Show)
 
--- | A path state: pc, stack offset, the stack offset r11 holds when known, lr and r11 integrity.
 data PathState = PathState
   { statePc :: Word32
   , stateSp :: Int
   , stateFp :: Maybe Int
   , stateLink :: LinkState
   , stateR11 :: FrameRegister
+  , -- | Local aliases lie between current SP and entry SP, inclusive.
+    stateAliases :: M.Map A.Reg StackOffset
   }
 
 data Outcome = Outcome [PathState] Int [CallEdge] [Word32]
 
+containsBytes :: Integer -> AddressSpan -> Bool
+containsBytes address (AddressSpan (GuestAddress low) (GuestAddress high)) =
+  toInteger low <= address && address + 4 <= toInteger high
+
+pointerBounds :: PointerSpan -> AddressSpan
+pointerBounds pointer = case pointer of
+  OwnedReadonly bounds -> bounds
+  RetainedStorage bounds -> bounds
+  RetainedConfiguration bounds -> bounds
+
+mappedCode :: CodeLayout -> Word32 -> Bool
+mappedCode layout address = any (\mapping -> case mapping of
+  ArmSpan bounds -> containsBytes (toInteger address) bounds
+  DataSpan _ -> False) (layoutMappings layout)
+
+mappedData :: CodeLayout -> Word32 -> Bool
+mappedData layout address = any (\mapping -> case mapping of
+  DataSpan bounds -> containsBytes (toInteger address) bounds
+  ArmSpan _ -> False) (layoutMappings layout)
+
+-- | Summaries require a successful instruction, flow and frame walk.
+nonreturningEntries :: CodeLayout -> B.ByteString -> S.Set Word32
+nonreturningEntries layout bytes = close S.empty
+  where
+    GuestAddress base = layoutBase layout
+    close known =
+      let next = S.union known (S.fromList
+            [ start
+            | function@(FunctionExtent _ (GuestAddress start) _) <- layoutFunctions layout
+            , not (S.member start known)
+            , Right (frame, instructions, _) <- [walkFunction layout bytes known function]
+            , all (not . returns) (S.toList instructions)
+            , all (\edge -> case edgeKind edge of
+                StockLeafTailCall -> False
+                TailCall -> let GuestAddress target = edgeTarget edge in S.member target known
+                _ -> True) (frameCalls frame)
+            ])
+      in if next == known then known else close next
+    returns address = case A.decode address (U.word32At bytes (fromIntegral (address - base))) of
+      A.BranchExchange _ False register -> register == A.lr
+      A.LoadMultiple _ _ _ _ registers -> A.pc `elem` registers
+      _ -> False
+
 admitCode :: CodeLayout -> B.ByteString -> Either AdmissionError CodeProof
 admitCode layout bytes = do
-  walked <- mapM (walkFunction layout bytes) (layoutFunctions layout)
+  let GuestAddress baseWord = layoutBase layout
+      endInteger = toInteger baseWord + toInteger (B.length bytes)
+      validSpan (AddressSpan (GuestAddress begin) (GuestAddress finish)) =
+        begin .&. 3 == 0 && finish .&. 3 == 0 && baseWord <= begin && begin < finish && toInteger finish <= endInteger
+      bounds mapping = case mapping of ArmSpan extent -> extent; DataSpan extent -> extent
+      wordsOwned = [baseWord, baseWord + 4 .. baseWord + fromIntegral (B.length bytes) - 4]
+  unless (not (B.null bytes) && B.length bytes `mod` 4 == 0 && endInteger <= toInteger (maxBound :: Word32)
+    && all (validSpan . bounds) (layoutMappings layout)
+    && all (\(FunctionExtent _ begin finish) -> validSpan (AddressSpan begin finish)) (layoutFunctions layout)
+    && all (\address -> length [() | mapping <- layoutMappings layout, containsBytes (toInteger address) (bounds mapping)] == 1) wordsOwned
+    && all (\(GuestAddress begin, GuestAddress finish) -> begin .&. 3 == 0 && finish .&. 3 == 0 && begin <= finish
+      && all (mappedData layout) [begin, begin + 4 .. finish - 4]) (filter (uncurry (/=)) (layoutData layout)))
+    (Left (AdmissionError (layoutBase layout) LayoutInvalid))
+  let nonreturning = nonreturningEntries layout bytes
+  walked <- mapM (walkFunction layout bytes nonreturning) (layoutFunctions layout)
   let instructions = S.unions [pcs | (_, pcs, _) <- walked]
       literals = S.unions [lits | (_, _, lits) <- walked]
       GuestAddress base = layoutBase layout
@@ -139,7 +206,7 @@ admitCode layout bytes = do
     [] -> pure ()
   let frames = [frame | (frame, _, _) <- walked]
   composed <- foldM (compose (M.fromList [(frameEntry frame, frame) | frame <- frames]) (M.fromList (layoutStockLeaves layout)) S.empty) M.empty (map frameEntry frames)
-  pure (CodeProof frames composed (S.map GuestAddress instructions) (S.map GuestAddress literals))
+  pure (CodeProof frames composed (S.map GuestAddress instructions) (S.map GuestAddress literals) (S.map GuestAddress nonreturning))
 
 -- | Owned edges compose through their callee's depth and stock leaf edges through the leaf's;
 -- stock site edges add nothing.
@@ -160,39 +227,57 @@ compose frames leaves visiting done entry
         when (low < negate stackLimit) (Left (AdmissionError entry StackUnbounded))
         pure (M.insert entry (StackOffset low) done')
 
--- | Every function returns with sp, r11 and the return address it entered with; stubs (roots) enter
--- with no return address in lr and leave only by popping the stock frame at their frame-pop sites.
-walkFunction :: CodeLayout -> B.ByteString -> FunctionExtent -> Either AdmissionError (EntryFrame, S.Set Word32, S.Set Word32)
-walkFunction layout bytes (FunctionExtent _ (GuestAddress start) (GuestAddress end)) =
-  go M.empty [PathState start 0 Nothing entryLink R11Entry] 0 [] S.empty
+-- | Every return restores incoming sp, r11 and the return address.
+walkFunction :: CodeLayout -> B.ByteString -> S.Set Word32 -> FunctionExtent -> Either AdmissionError (EntryFrame, S.Set Word32, S.Set Word32)
+walkFunction layout bytes nonreturning (FunctionExtent _ (GuestAddress start) (GuestAddress end)) =
+  go M.empty [PathState start 0 Nothing LinkLive R11Entry M.empty] 0 [] S.empty
   where
     GuestAddress base = layoutBase layout
-    entryLink = if GuestAddress start `elem` layoutRoots layout then LinkLost else LinkLive
-    callable = S.fromList [entry | FunctionExtent _ (GuestAddress entry) _ <- layoutFunctions layout, GuestAddress entry `notElem` layoutRoots layout]
-    accessor = GuestAddress start `elem` layoutStoreAccessors layout
-    framePops = S.fromList [site | GuestAddress site <- layoutFramePops layout]
+    callable = S.fromList [entry | FunctionExtent _ (GuestAddress entry) _ <- layoutFunctions layout]
+    storeSites = S.fromList [site | GuestAddress site <- layoutStoreSites layout]
     leaves = S.fromList [target | (GuestAddress target, _) <- layoutStockLeaves layout]
-    stockSites = S.fromList [(site, target) | (GuestAddress site, GuestAddress target) <- layoutStockSites layout]
+    stockSites = M.fromList [((site, target), offset) | (GuestAddress site, GuestAddress target, StackOffset offset) <- layoutStockSites layout]
     go seen [] low calls literals =
       Right (EntryFrame (GuestAddress start) (StackOffset low) (S.toList (S.fromList calls)), M.keysSet seen, literals)
     go seen (state : pending) low calls literals =
       let pc = statePc state
-          key = (stateSp state, stateFp state, stateLink state, stateR11 state)
+          key = (stateSp state, stateFp state, stateLink state, stateR11 state, stateAliases state)
       in case M.lookup pc seen of
         Just keys | S.member key keys -> go seen pending low calls literals
-        Just keys | any (\(sp, _, _, _) -> sp /= stateSp state) (S.toList keys) -> Left (AdmissionError (GuestAddress pc) StackUnbalanced)
+        Just keys | any (\(sp, _, _, _, _) -> sp /= stateSp state) (S.toList keys) -> Left (AdmissionError (GuestAddress pc) StackUnbalanced)
         _
           | pc < start || pc >= end || pc .&. 3 /= 0 -> Left (AdmissionError (GuestAddress pc) FlowLeavesFunction)
+          | not (mappedCode layout pc) -> Left (AdmissionError (GuestAddress pc) DataExecuted)
           | otherwise -> do
               let word = U.word32At bytes (fromIntegral (pc - base))
               Outcome next touched edges literalAddresses <- either (Left . AdmissionError (GuestAddress pc)) Right (step state word)
               go (M.insertWith S.union pc (S.singleton key) seen) (next ++ pending) (min low touched) (edges ++ calls) (S.union literals (S.fromList literalAddresses))
-    step state@(PathState pc sp fp link frame) word = do
+    step state@(PathState pc sp fp link frame aliases) word = do
       let instruction = A.decode pc word
           conditional = word `shiftR` 28 < 14
           skip paths = paths ++ [state {statePc = pc + 4} | conditional]
           advance next = Right (Outcome (skip [next {statePc = pc + 4}]) (min sp (stateSp next)) [] [])
           terminal = Right (Outcome (skip []) sp [] [])
+          baseOffset register
+            | register == A.sp = Just sp
+            | register == r11 = fp
+            | otherwise = case M.lookup register aliases of
+                Just (StackOffset offset) -> Just offset
+                Nothing -> Nothing
+          affine operation source operand = do
+            offset <- case (operation,operand) of
+              (A.MOV,A.ShiftedImmediate moved A.LSL 0) -> toInteger <$> baseOffset moved
+              (A.ADD,A.Immediate amount) -> (\known -> toInteger known + toInteger amount) <$> baseOffset source
+              (A.SUB,A.Immediate amount) -> (\known -> toInteger known - toInteger amount) <$> baseOffset source
+              _ -> Nothing
+            if toInteger sp <= offset && offset <= 0
+              then Just (StackOffset (fromInteger offset))
+              else Nothing
+          remember register known current = case known of
+            Nothing -> current
+            Just value@(StackOffset offset)
+              | register == r11 -> current {stateFp=Just offset}
+              | otherwise -> current {stateAliases=M.insert register value (stateAliases current)}
           slots = [slot | LinkSaved slot <- [link]] ++ [slot | R11Saved slot <- [frame]]
           clear low high = unless (all (\slot -> slot + 4 <= low || slot >= high) slots) (Left NonStackStore)
           bound offset = do
@@ -201,6 +286,7 @@ walkFunction layout bytes (FunctionExtent _ (GuestAddress start) (GuestAddress e
             unless (offset >= negate stackLimit) (Left StackUnbounded)
           moveSp offset current = current
             { stateSp = offset
+            , stateAliases = M.filter (\(StackOffset address) -> offset <= address && address <= 0) (stateAliases current)
             , stateLink = case stateLink current of
                 LinkSaved slot | slot < offset -> LinkLost
                 other -> other
@@ -213,10 +299,11 @@ walkFunction layout bytes (FunctionExtent _ (GuestAddress start) (GuestAddress e
             { stateFp = if r11 `elem` registers then Nothing else stateFp current
             , stateLink = if A.lr `elem` registers && stateLink current == LinkLive then LinkLost else stateLink current
             , stateR11 = if r11 `elem` registers && stateR11 current == R11Entry then R11Changed else stateR11 current
+            , stateAliases = foldr M.delete (stateAliases current) registers
             }
           restored (register, address) current
-            | register == A.lr = current {stateLink = if stateLink current == LinkSaved address then LinkLive else LinkLost}
-            | register == r11 && stateR11 current == R11Saved address = current {stateFp = Nothing, stateR11 = R11Entry}
+            | register == A.lr = (written [register] current) {stateLink = if stateLink current == LinkSaved address then LinkLive else LinkLost}
+            | register == r11 && stateR11 current == R11Saved address = (written [register] current) {stateFp = Nothing, stateR11 = R11Entry}
             | otherwise = written [register] current
           leaving current = do
             unless (stateSp current == 0) (Left StackUnbalanced)
@@ -231,15 +318,15 @@ walkFunction layout bytes (FunctionExtent _ (GuestAddress start) (GuestAddress e
         A.Branch _ True target
           | S.member target callable -> call Call
           | S.member target leaves -> call StockLeafCall
-          | S.member (pc, target) stockSites -> do
-              unless (sp == 0) (Left StockCallBelowEntry)
+          | Just required <- M.lookup (pc, target) stockSites -> do
+              unless (sp == required) (Left StockCallBelowEntry)
               call StockSiteCall
           | otherwise -> Left (CallOutsideOwned (GuestAddress target))
           where
             call kind = do
               unless (sp `mod` 8 == 0) (Left StackMisaligned)
-              let next = state {statePc = pc + 4, stateLink = if link == LinkLive then LinkLost else link}
-              Right (Outcome (skip [next]) sp [CallEdge (GuestAddress pc) (GuestAddress target) (StackOffset sp) kind] [])
+              let next = state {statePc = pc + 4, stateLink = if link == LinkLive then LinkLost else link, stateAliases=M.empty}
+              Right (Outcome (skip [next | not (S.member target nonreturning)]) sp [CallEdge (GuestAddress pc) (GuestAddress target) (StackOffset sp) kind] [])
         A.Branch _ False target
           | target >= start && target < end -> Right (Outcome (skip [state {statePc = target}]) sp [] [])
           | S.member target callable -> tailTo TailCall
@@ -266,25 +353,19 @@ walkFunction layout bytes (FunctionExtent _ (GuestAddress start) (GuestAddress e
                     (R11Entry, Just slot) -> R11Saved slot
                     _ -> frame
                 }
-          | register == A.sp && not writeback -> do
+          | not writeback, Just offset <- baseOffset register -> do
               let count = 4 * length registers
                   lowest = case mode of
-                    A.IncrementAfter -> sp
-                    A.IncrementBefore -> sp + 4
-                    A.DecrementAfter -> sp - count + 4
-                    A.DecrementBefore -> sp - count
+                    A.IncrementAfter -> offset
+                    A.IncrementBefore -> offset + 4
+                    A.DecrementAfter -> offset - count + 4
+                    A.DecrementBefore -> offset - count
               unless (lowest >= sp && lowest + count <= 0) (Left NonStackStore)
               clear lowest (lowest + count)
               advance state
-          | accessor && not writeback -> advance state
           | otherwise -> Left NonStackStore
         A.LoadMultiple _ register mode writeback registers
           | A.sp `elem` registers -> Left StackUnbounded
-          | register == A.sp && S.member pc framePops -> do
-              unless (mode == A.IncrementAfter && writeback && A.pc `elem` registers) (Left PcWrite)
-              unless (sp == 0) (Left StackUnbalanced)
-              unless (frame == R11Entry) (Left FramePointerLost)
-              terminal
           | register == A.sp && mode == A.IncrementAfter && writeback -> do
               let after = sp + 4 * length registers
                   addressed = zip registers [sp, sp + 4 ..]
@@ -311,7 +392,8 @@ walkFunction layout bytes (FunctionExtent _ (GuestAddress start) (GuestAddress e
               advance (written [r11] state) {stateFp = Just (sp + fromIntegral amount)}
           | destination == r11, operation == A.MOV, A.ShiftedImmediate moved A.LSL 0 <- operand, moved == A.sp ->
               advance (written [r11] state) {stateFp = Just sp}
-          | otherwise -> advance (written [destination | operation `notElem` [A.CMP, A.CMN, A.TST, A.TEQ]] state)
+          | otherwise -> advance (remember destination (affine operation source operand)
+              (written [destination | operation `notElem` [A.CMP, A.CMN, A.TST, A.TEQ]] state))
         A.Store _ width _ register offset indexing
           | register == A.sp -> case offset of
               A.OffsetImmediate amount -> do
@@ -323,12 +405,12 @@ walkFunction layout bytes (FunctionExtent _ (GuestAddress start) (GuestAddress e
                 bound after
                 advance (moveSp after state)
               A.OffsetRegister {} -> Left NonStackStore
-          | register == r11, indexing == A.OffsetOnly, Just saved <- fp, A.OffsetImmediate amount <- offset -> do
+          | indexing == A.OffsetOnly, Just saved <- baseOffset register, A.OffsetImmediate amount <- offset -> do
               let address = saved + fromIntegral amount
               unless (address >= sp && address + widthBytes width <= 0) (Left NonStackStore)
               clear address (address + widthBytes width)
               advance state
-          | accessor && indexing == A.OffsetOnly -> advance state
+          | S.member pc storeSites && indexing == A.OffsetOnly -> advance state
           | otherwise -> Left NonStackStore
         A.Load _ width _ destination@(A.Reg number) register offset indexing
           | destination == A.pc || (width == A.Dual && number == 14) -> Left PcWrite
@@ -336,11 +418,16 @@ walkFunction layout bytes (FunctionExtent _ (GuestAddress start) (GuestAddress e
           | register == A.pc && indexing /= A.OffsetOnly -> Left PcWrite
           | register == A.pc -> case offset of
               A.OffsetImmediate amount -> do
-                let address = fromIntegral (toInteger pc + 8 + toInteger amount)
+                let literalAddress = toInteger pc + 8 + toInteger amount
+                    address = fromInteger literalAddress
                     addresses = if width == A.Dual then [address, address + 4] else [address]
-                unless (width `elem` [A.Word, A.Dual] && all (\a -> a .&. 3 == 0 && a >= start && a < end) addresses) (Left LiteralOutsideFunction)
+                unless (width `elem` [A.Word, A.Dual]
+                  && literalAddress >= toInteger start && literalAddress + toInteger (widthBytes width) <= toInteger end
+                  && address .&. 3 == 0) (Left LiteralOutsideFunction)
+                unless (all (mappedData layout) addresses) (Left LiteralNotData)
+                unless (all (\a -> any (containsBytes (toInteger (U.word32At bytes (fromIntegral (a - base)))) . pointerBounds) (layoutLiteralPointers layout)) addresses) (Left LiteralPointerOutsideOwned)
                 Right (Outcome (skip [(written (loaded destination width) state) {statePc = pc + 4}]) sp [] addresses)
-              A.OffsetRegister {} -> advance (written (loaded destination width) state)
+              A.OffsetRegister {} -> Left LiteralOutsideFunction
           | register == A.sp && indexing /= A.OffsetOnly -> case offset of
               A.OffsetImmediate amount -> do
                 let moved = sp + fromIntegral amount

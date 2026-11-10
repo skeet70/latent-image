@@ -5,6 +5,7 @@ use crate::adjustment::AdjustmentNand;
 use crate::guest::MenuState;
 use crate::machine::Machine;
 use crate::record_medium::RecordMedium;
+use crate::nand_image::CommittedImage;
 use crate::run::{self, RunDocument, ValidatedUpdate};
 use crate::sd_host::{self, Backing, RetainedCard};
 use serde_json::{Value, json};
@@ -43,21 +44,56 @@ pub struct Inputs {
     pub document_bytes: Vec<u8>,
     pub update: Vec<u8>,
     pub boot_rom: Vec<u8>,
-    pub adjustment: AdjustmentNand,
-    /// Record-area blocks programmed after the adjustment blocks; absent leaves the record areas erased.
-    pub records: Option<RecordMedium>,
+    pub nand: BootSource,
     /// The card inserted before the first instruction; absent leaves the slot empty.
     pub card: Option<RetainedCard>,
 }
 
+pub enum BootSource {
+    InitialSeeded { adjustment: AdjustmentNand, records: Option<RecordMedium> },
+    FullCommitted(CommittedImage),
+}
+
+
 impl Inputs {
+    pub fn into_machine(self) -> Result<(Machine, CommittedImage), String> {
+        let document = RunDocument::parse(&self.document_bytes)?;
+        let update = ValidatedUpdate(self.update);
+        let mut session = run::open(&document, &update, &self.boot_rom)?;
+        session.board.set_execution_policy(document.execution_policy.into())?;
+        let template = match self.nand {
+            BootSource::InitialSeeded { adjustment, records } => {
+                adjustment.apply(&mut session, &document.nand)?;
+                if let Some(records) = records {
+                    records.apply(&mut session, &document.nand)?;
+                }
+                CommittedImage::from_medium(&session.nand_medium(&document.nand.0)?)?
+            }
+            BootSource::FullCommitted(mut image) => {
+                image.apply_owned(&mut session, &document.nand, run::nand_base(&document, &update)?.as_ref())?;
+                image
+            }
+        };
+        let mut machine = Machine::new(document, session)?;
+        if let Some(card) = self.card {
+            machine.insert_card(card)?;
+        }
+        Ok((machine, template))
+    }
+
     pub fn machine(&self) -> Result<Machine, String> {
         let document = RunDocument::parse(&self.document_bytes)?;
-        let mut session = run::open(&document, &ValidatedUpdate(self.update.clone()), &self.boot_rom)?;
+        let update = ValidatedUpdate(self.update.clone());
+        let mut session = run::open(&document, &update, &self.boot_rom)?;
         session.board.set_execution_policy(document.execution_policy.into())?;
-        self.adjustment.apply(&mut session, &document.nand)?;
-        if let Some(records) = &self.records {
-            records.apply(&mut session, &document.nand)?;
+        match &self.nand {
+            BootSource::InitialSeeded { adjustment, records } => {
+                adjustment.apply(&mut session, &document.nand)?;
+                if let Some(records) = records {
+                    records.apply(&mut session, &document.nand)?;
+                }
+            }
+            BootSource::FullCommitted(image) => image.apply(&mut session, &document.nand, run::nand_base(&document, &update)?.as_ref())?,
         }
         let mut machine = Machine::new(document, session)?;
         if let Some(card) = &self.card {

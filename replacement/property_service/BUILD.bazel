@@ -1,14 +1,23 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+load("//replacement/settings_storage:storage_controls.bzl", "PROPERTY_STORAGE_VARIANTS")
 
 package(default_visibility = ["//visibility:public"])
 
 # The native runner refuses unaligned accesses, and admission refuses computed branches.
-_RUSTC_FLAGS = ["-C", "target-feature=+strict-align", "-C", "jump-tables=no"]
+_RUSTC_FLAGS = ["-C", "target-feature=+strict-align", "-C", "jump-tables=no", "--extern", "xm1_settings_storage_core=$(location //replacement/settings_storage:property-core)"]
 
 _RUST_DATA = [
     "src/property_table.rs",
     "src/table.rs",
+    "src/storage_boundary.rs",
+]
+
+_CORE_DEFECTS = [
+    "storage_open_removed", "storage_close_before_set", "storage_bracket_bank1",
+    "storage_read_before_open", "storage_pair_before_close", "storage_record_save_at_bank",
+    "storage_slot_defaults_moved", "storage_tail_defaults_moved", "storage_tail16_moved",
+    "storage_tail16_byte", "storage_bank_slot_swap",
 ]
 
 # The oracle's must-fail controls that change Rust code: each links the crate with one
@@ -19,21 +28,40 @@ _DEFECTS = [
     "mask_config_default",
     "config_save",
     "invert_gate",
-]
+    "index_without_subtract",
+    "signed_bound",
+    "upper_bound_plus_one",
+    "nonzero_means_default",
+    "sentinel_plus_one",
+] + _CORE_DEFECTS
 
 xm1_rust_staticlib(
     name = "property-service-rust",
     src = "src/lib.rs",
     crate_name = "xm1_property_service",
     rustc_flags = _RUSTC_FLAGS,
-    data = _RUST_DATA,
+    data = _RUST_DATA + ["//replacement/settings_storage:property-core"],
+)
+
+genrule(
+    name = "property-service-rust-test-binary",
+    srcs = ["src/lib.rs", "src/tests.rs"] + _RUST_DATA + ["//replacement/settings_storage:property-core-host"],
+    outs = ["property-service-rust-tests-bin"],
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test --crate-name=property_service_tests --extern xm1_settings_storage_core=$(location //replacement/settings_storage:property-core-host) $(location src/lib.rs) -o $@",
+    tools = ["@lab_xm1_rust//:bin/rustc"],
+    executable = True,
+    testonly = True,
+)
+sh_test(
+    name = "property-service-rust-tests",
+    srcs = [":property-service-rust-test-binary"],
 )
 
 xm1_rust_elf(
     name = "property-service-image",
     rust_staticlib = ":property-service-rust",
-    asm_srcs = ["entry.S"],
-    entry = "xm1_getter_stub",
+    asm_srcs = ["entry.S", "storage-boundary.S"],
+    entry = "xm1_property_get_entry",
     link_script = "property-service.ld",
     extra_ldflags = ["-Wl,--gc-sections"],
 )
@@ -43,8 +71,8 @@ xm1_rust_elf(
         name = "property-service-rust-defect-" + defect.replace("_", "-"),
         src = "src/lib.rs",
         crate_name = "xm1_property_service",
-        rustc_flags = _RUSTC_FLAGS + ["--cfg", "property_defect_" + defect],
-        data = _RUST_DATA,
+        rustc_flags = (["-C", "target-feature=+strict-align", "-C", "jump-tables=no", "--extern", "xm1_settings_storage_core=$(location //replacement/settings_storage:property-core-" + defect.replace("_", "-") + ")", "--cfg", defect] if defect in _CORE_DEFECTS else _RUSTC_FLAGS + ["--cfg", "property_defect_" + defect]),
+        data = _RUST_DATA + ["//replacement/settings_storage:property-core-" + defect.replace("_", "-") if defect in _CORE_DEFECTS else "//replacement/settings_storage:property-core"],
     )
     for defect in _DEFECTS
 ]
@@ -53,12 +81,38 @@ xm1_rust_elf(
     xm1_rust_elf(
         name = "property-service-defect-" + defect.replace("_", "-"),
         rust_staticlib = ":property-service-rust-defect-" + defect.replace("_", "-"),
-        asm_srcs = ["entry.S"],
-        entry = "xm1_getter_stub",
+        asm_srcs = ["entry.S", "storage-boundary.S"],
+        entry = "xm1_property_get_entry",
         link_script = "property-service.ld",
         extra_ldflags = ["-Wl,--gc-sections"],
     )
     for defect in _DEFECTS
+]
+
+[
+    xm1_rust_staticlib(
+        name = "property-service-storage-rust-" + variant,
+        src = "src/lib.rs",
+        crate_name = "xm1_property_service",
+        rustc_flags = [
+            "-C", "target-feature=+strict-align", "-C", "jump-tables=no",
+            "--extern", "xm1_settings_storage_core=$(location //replacement/settings_storage:property-core-control-" + variant + ")",
+            "--cfg", flag,
+        ],
+        data = _RUST_DATA + ["//replacement/settings_storage:property-core-control-" + variant],
+    )
+    for variant, flag in PROPERTY_STORAGE_VARIANTS.items()
+]
+[
+    xm1_rust_elf(
+        name = "property-service-storage-refusal-image" if variant == "refusal" else "property-service-storage-control-" + variant,
+        rust_staticlib = ":property-service-storage-rust-" + variant,
+        asm_srcs = ["entry.S", "storage-boundary.S"],
+        entry = "xm1_property_get_entry",
+        link_script = "property-service.ld",
+        extra_ldflags = ["-Wl,--gc-sections"],
+    )
+    for variant in PROPERTY_STORAGE_VARIANTS
 ]
 
 haskell_library(
@@ -150,8 +204,9 @@ haskell_test(
     args = [
         "$(rootpath :property-service-image.bin)",
         "$(rootpath :property-service-image.symbols)",
+        "$(rootpath :property-service-image.elf)",
     ],
-    data = [":property-service-image.bin", ":property-service-image.symbols"],
+    data = [":property-service-image.bin", ":property-service-image.symbols", ":property-service-image.elf"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":classify",
@@ -161,6 +216,27 @@ haskell_test(
         "//host:bytestring",
         "//host:containers",
         "//host:update-container",
+        "//host/firmware:bank-allowlist",
+        "//replacement/media_permit:property-fields",
+        "//replacement/media_permit:service-inventory",
+    ],
+)
+
+haskell_test(
+    name = "property-service-literal-tests",
+    srcs = ["Tests.hs"],
+    main_file = "Tests.hs",
+    args = ["--literal-pools"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":classify",
+        ":property-service-artifact",
+        "//emulation:case-sha256",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:update-container",
+        "//host/firmware:bank-allowlist",
         "//replacement/media_permit:property-fields",
         "//replacement/media_permit:service-inventory",
     ],
@@ -168,7 +244,7 @@ haskell_test(
 
 haskell_library(
     name = "property-oracle-lib",
-    srcs = ["Replacement/PropertyService/Oracle.hs"],
+    srcs = ["Replacement/PropertyService/Oracle.hs", "Replacement/PropertyService/HeaderBoundary.hs"],
     src_strip_prefix = ".",
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
@@ -289,6 +365,7 @@ haskell_binary(
         "$(rootpath :property-service-image.bin)",
         "--symbols",
         "$(rootpath :property-service-image.symbols)",
+        "--elf", "$(rootpath :property-service-image.elf)",
     ] + [
         argument
         for defect in _DEFECTS
@@ -297,15 +374,17 @@ haskell_binary(
             defect,
             "$(rootpath :property-service-defect-%s.bin)" % defect.replace("_", "-"),
             "$(rootpath :property-service-defect-%s.symbols)" % defect.replace("_", "-"),
+            "$(rootpath :property-service-defect-%s.elf)" % defect.replace("_", "-"),
         ]
     ],
     data = [
         ":property-service-image.bin",
         ":property-service-image.symbols",
+        ":property-service-image.elf",
     ] + [
         ":property-service-defect-%s.%s" % (defect.replace("_", "-"), suffix)
         for defect in _DEFECTS
-        for suffix in ["bin", "symbols"]
+        for suffix in ["bin", "symbols", "elf"]
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
@@ -340,6 +419,7 @@ haskell_test(
         ":classify",
         ":property-oracle-lib",
         "//emulation:native-observation",
+        "//emulation:owned-case",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",

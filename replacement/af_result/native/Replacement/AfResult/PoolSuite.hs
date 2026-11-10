@@ -198,6 +198,7 @@ caseFor role (Scope image oldElf _) one = CaseSpec
   , caseExpectedStatus = Returned
   , caseExpectedRegisters = [(r,seed r) | r <- [R4 .. R11]] ++ [(Sp,stackPointer)]
   , caseExpectedMemory = []
+  , caseIgnoredMemory = []
   , caseCp14Identity = Nothing
   , caseKernel = Nothing
   }
@@ -572,6 +573,7 @@ consumerSpec role scope one = base
       , caseExpectedStatus = Returned
       , caseExpectedRegisters = [(R6,seed R6)]
       , caseExpectedMemory = []
+      , caseIgnoredMemory = []
       , caseCp14Identity = Nothing
       , caseKernel = Nothing
       }
@@ -643,6 +645,7 @@ callerSpec role scope one = base
       , caseExpectedStatus = Returned
       , caseExpectedRegisters = [(R6,seed R6)]
       , caseExpectedMemory = []
+      , caseIgnoredMemory = []
       , caseCp14Identity = Nothing
       , caseKernel = Nothing
       }

@@ -1161,6 +1161,7 @@ caseSpec contract facts executing role loader owned one
       , caseExpectedStatus = if isJust budget then InstructionBudget else if arrival then StopAddress else Returned
       , caseExpectedRegisters = expectedRegisters
       , caseExpectedMemory = [(RegionId "caller-frame", callerBytes)]
+      , caseIgnoredMemory = []
       , caseCp14Identity = Just (if executing == DomainA then 0x4003 else 0x4004)
       , caseKernel = Just (KernelCase (maybe plainLimit id budget) (if arrival then Just (wire stopAddress) else Nothing) (Just 0x80001234) (Just 0) (Just 0) ignored stacks)
       }

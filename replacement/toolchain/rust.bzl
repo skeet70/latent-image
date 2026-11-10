@@ -102,6 +102,7 @@ def xm1_rust_elf(
         link_includes = [],
         entry = None,
         extra_ldflags = [],
+        link_map = False,
         testonly = False,
         visibility = None):
     """Links a Rust staticlib with C/assembly into an ELF, flat image and symbol list.
@@ -110,6 +111,7 @@ def xm1_rust_elf(
     `INCLUDE`s by file name. `asm_defines` are `-D` names for
     the preprocessed assembly sources. The outputs are <name>.elf, <name>.bin,
     <name>.symbols and <name>.disasm in the caller's package.
+    `link_map` adds <name>.map from the same link invocation.
     """
     srcs = [rust_staticlib] + rust_components + c_srcs + asm_srcs + link_includes
     if link_script != None:
@@ -154,6 +156,8 @@ def xm1_rust_elf(
         link += ["-Wl,--end-group"]
     else:
         link += ["$(location %s)" % rust_staticlib]
+    if link_map:
+        link.append("-Wl,--Map=$(@D)/%s.map" % name)
     link += [
         "-o",
         "$(@D)/%s.elf" % name,
@@ -174,7 +178,7 @@ def xm1_rust_elf(
     native.genrule(
         name = name,
         srcs = srcs,
-        outs = [name + ".elf", name + ".bin", name + ".symbols", name + ".disasm"],
+        outs = [name + ".elf", name + ".bin", name + ".symbols", name + ".disasm"] + ([name + ".map"] if link_map else []),
         cmd = "\n".join(commands),
         message = "Linking %s for armv7r-none-eabi" % name,
         testonly = testonly,

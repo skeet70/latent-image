@@ -130,12 +130,15 @@ driverCode c = [A.at "fn_driver", A.push [12,14], A.sub 13 13 24] ++ concat (zip
 -- Range rows come from the pinned decomp index; only the executed closure is declared.
 data Function = Function Word32 Word32 deriving (Eq, Show)
 functionClosure :: B.ByteString -> [Function] -> [Word32] -> [Function]
-functionClosure image ranges roots = go [] roots
+functionClosure = functionClosureExcept []
+
+functionClosureExcept :: [Word32] -> B.ByteString -> [Function] -> [Word32] -> [Function]
+functionClosureExcept seams image ranges roots = go [] roots
   where
     go seen [] = seen
     go seen (entry:rest)
       | any (\(Function address size) -> entry >= address && entry < address+size) seen = go seen rest
-      | entry `elem` [0x724b68,0x724c00,0x42634,0x4263c,0x6faf00,0x6faf40,0x6fb904,0x6fb7c8,0x6fb57c] = go seen rest
+      | entry `elem` seams || entry `elem` [0x724b68,0x724c00,0x42634,0x4263c,0x6faf00,0x6faf40,0x6fb904,0x6fb7c8,0x6fb57c] = go seen rest
       | otherwise = case [f | f@(Function address size) <- ranges, entry >= address && entry < address+size] of
           [] -> error ("missing stock function extent " ++ show entry)
           f@(Function start size):_ ->
@@ -175,6 +178,7 @@ caseSpec image loader ranges c = CaseSpec
   , caseExpectedStatus = if isStop then MemoryGuard else Returned
   , caseExpectedRegisters = [(R0,0x5150) | isStop] ++ [(Sp,stackTop) | not isStop] ++ [(r,value) | not isStop, (r,value) <- zip [R4,R5,R6,R7,R8,R9,R10,R11] [0x44440004..0x4444000b]]
   , caseExpectedMemory = [(RegionId ident,bytes) | (ident,bytes) <- [("results",expectedResults expected),("caller",expectedCaller expected),("medium",expectedMedium c expected),("requests",B.concat (map encodeRequest (requests expectedPersistence))),("callbacks",B.concat (map encodeCallback (callbackEvents (expectedStore expected))))], not (B.null bytes)]
+  , caseIgnoredMemory = []
   , caseCp14Identity = Nothing, caseKernel = Nothing
   }
   where

@@ -2645,6 +2645,75 @@ const CACHE: u32 = 0x0100_0000;
 const CACHE_BYTES: usize = 0x420000;
 
 #[test]
+fn instruction_limits_follow_each_case_envelope_for_both_service_wires() {
+    for resource8 in [false, true] {
+        let maximum = if resource8 { 16_000_000 } else { 4_000_000 };
+        for scripted in [false, true] {
+            let mut case = if scripted {
+                Case::new(&[branch(CODE, STUB, false)]).script(STUB, vec![ScriptCall::default()])
+            } else {
+                Case::new(&[BX_LR])
+            };
+            case.resource8 = resource8;
+            case.instructions = maximum;
+            case.run().assert_returned();
+            case.instructions = maximum + 1;
+            assert_eq!(case.run().status(), Status::InvalidCase);
+            case.instructions = 4_000_001;
+            if resource8 {
+                case.run().assert_returned();
+            } else {
+                assert_eq!(case.run().status(), Status::InvalidCase);
+            }
+        }
+    }
+}
+
+#[test]
+fn resource8_batches_do_not_raise_default_case_instruction_limits() {
+    let mut resource = Case::new(&[BX_LR]);
+    resource.resource8 = true;
+    resource.instructions = 16_000_000;
+    let mut default = Case::new(&[BX_LR]);
+    default.instructions = 4_000_001;
+    let mut excessive = resource.clone();
+    excessive.instructions += 1;
+    let mut output = Vec::new();
+    let bodies = [batch_case(&resource), batch_case(&default), batch_case(&excessive)];
+    assert!(native_case::run_batch(&batch_wire("FUJI_NATIVE_RESOURCE8_BATCH_V1", &resource.regions, &bodies), &mut output).unwrap());
+    let text = String::from_utf8(output).unwrap();
+    let statuses: Vec<_> = text.lines().skip(1).step_by(2)
+        .map(|line| serde_json::from_str::<Observation>(line).unwrap().status).collect();
+    assert_eq!(statuses, [Status::Returned, Status::InvalidCase, Status::InvalidCase]);
+}
+
+#[test]
+fn resource8_executes_two_complete_calibration_cache_clears_beyond_default_budget() {
+    let cache = vec![0x5a; CACHE_BYTES];
+    let mut case = Case::new(&[
+        STR_R0_R1_POST_4, 0xe252_2001, 0x1aff_fffc,
+        0xe1a0_1003, 0xe1a0_2004,
+        STR_R0_R1_POST_4, 0xe252_2001, 0x1aff_fffc, BX_LR,
+    ])
+    .region(CACHE, READ_WRITE, &cache)
+    .register(1, CACHE)
+    .register(2, (CACHE_BYTES / 4) as u32)
+    .register(3, CACHE)
+    .register(4, (CACHE_BYTES / 4) as u32);
+    case.resource8 = true;
+    case.instructions = 16_000_000;
+    case.wall_ms = 10_000;
+    let observed = case.run();
+    observed.assert_returned();
+    assert_eq!(observed.instructions(), 6_488_067);
+    assert_eq!(observed.register("r1"), CACHE + CACHE_BYTES as u32);
+    assert_eq!(observed.register("r2"), 0);
+    assert!(observed.bytes(CACHE).bytes().all(|byte| byte == b'0'));
+    case.resource8 = false;
+    assert_eq!(case.run().status(), Status::InvalidCase);
+}
+
+#[test]
 fn resource8_executes_against_the_whole_calibration_cache() {
     let mut cache = vec![0x5a; CACHE_BYTES];
     cache[..4].copy_from_slice(&7u32.to_le_bytes());

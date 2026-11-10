@@ -17,7 +17,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.Word (Word32)
 import Emulation.LocalUiMenu (MenuNodeAddress (..), SettingIdentifier (..), MenuCursor (..), MenuDepth (..))
-import Emulation.PropertyPairPlan (PhysicalRange (..), settingsRanges)
+import Emulation.PropertyPairPlan (PhysicalRange (..), recordSettingsRanges)
 import Emulation.PropertyPairRoutes
 import Emulation.RecordStorePairCheck
 import Emulation.Sha256 (sha256, sha256Hex)
@@ -83,7 +83,7 @@ fetches Owned = [0x6ac2b4,0x6ac328] : zipWith (\low high -> [low,high]) (map (+4
 retired :: Role -> [[Word32]]
 retired _ = [[0x89f8f0,0x89f8f8],[0x917fa8,0x917fe4]]
 writes :: Role -> [[Word32]]
-writes role = [[rangeStart range,rangeEnd range] | range <- settingsRanges] ++ retired role
+writes role = [[rangeStart range,rangeEnd range] | range <- recordSettingsRanges] ++ retired role
 extents :: Value
 extents = object ["code" .= code,"ram" .= ram,"unwatched_owned_ram" .= ram,"activation_fetch" .= ([0x6ac2b4,0x6ac2b8]::[Word32]),"rule" .= ("fixture"::T.Text)] where
   ram = [[0x89f8f8,0x89fa60],[0x89fa60,0x89fa68],[0x8a0080,0x8e0080],[0x8e0080,0x8e008c]]::[[Word32]]
@@ -95,7 +95,7 @@ bindings = Bindings contract (B.replicate 7776 0) symbols routes where
 regions :: Mutation -> Value
 regions = A.toJSON . settingRows
 settingRows :: Mutation -> [Value]
-settingRows mutation = [object ["start" .= rangeStart range,"bytes" .= hex (B.replicate (fromIntegral (rangeEnd range-rangeStart range)) (if mutation == BadSettings then 1 else 0))] | range <- settingsRanges]
+settingRows mutation = [object ["start" .= rangeStart range,"bytes" .= hex (B.replicate (fromIntegral (rangeEnd range-rangeStart range)) (if mutation == BadSettings then 1 else 0))] | range <- recordSettingsRanges]
 resetRegions :: Role -> Mutation -> Value
 resetRegions role mutation = A.toJSON (settingRows mutation ++
   [object ["start" .= low,"bytes" .= hex (B.replicate (fromIntegral (high-low)) (if mutation == RetiredSnapshotDifference then 1 else 0))]
@@ -255,6 +255,19 @@ fixture role mutation = Observation receipt files where
       ++ [K.fromString name .= binding (if mutation == BadBinding && name == "run" then "different-run" else "cohort") | name <- ["run","boot-rom","adjustment-nand","observer","bridge"]])
     ,"files" .= object [K.fromString (sidecarName name) .= hash bytes | (name,bytes) <- M.toList files],"ram_rule" .= extents,"raw_residual_count" .= (0::Int),"settings_at_attach" .= regions mutation,"medium_at_attach" .= medium mutation])
 
+withSpecWriteRanges :: [[Word32]] -> Observation
+withSpecWriteRanges ranges = original { receiptBytes = changedReceipt, sidecars = M.insert Spec changedSpec (sidecars original) }
+ where
+  original = fixture Stock Original
+  changedSpec = case A.eitherDecodeStrict' (maybe (error "record fixture spec is absent") id (M.lookup Spec (sidecars original))) of
+    Right (Object fields) -> encode (Object (KM.insert "write_ranges" (A.toJSON ranges) fields))
+    _ -> error "record fixture spec is not an object"
+  changedReceipt = case A.eitherDecodeStrict' (receiptBytes original) of
+    Right (Object receipt) -> case KM.lookup "files" receipt of
+      Just (Object files) -> encode (Object (KM.insert "files" (Object (KM.insert "spec.json" (A.toJSON (hash changedSpec)) files)) receipt))
+      _ -> error "record fixture receipt files are absent"
+    _ -> error "record fixture receipt is not an object"
+
 data ResetEvidence = ResetAppends | ResetWithoutAppend | BudgetedKey deriving (Eq)
 
 data PrefixEvidence = Sampled | MissingPrefix | MissingUi | MissingMenu | MissingDepth | MissingNode | MenuAddressDiffers | MenuAliasDisagrees | MissingMode | ModeAddressDiffers | ModeAliasDisagrees | ShortMode | ChangedCurrent | ChangedPrevious | ChangedPending | ChangedRequest | ChangedLatch | ShortTicks | ExcessTicks | ExcessRan | TickOverflow | InstructionOverflow | RanOverflow | SnapshotInstructionDiffers | SnapshotTickOverflow | UnlatchedPress | PriorRenderPending | IncompleteRecordCall deriving (Eq, Show, Enum, Bounded)
@@ -363,7 +376,7 @@ imageSizeFixture role evidence = (bound,Observation receipt files)
   stalled = evidence `elem` [StalledChoice,ErasedStalledChoice]
   pending point = point == DownPoint && evidence /= NoDownChange || point `elem` [UpPoint,BackPoint] && stalled
   selecting point = point `elem` [EntryPoint,DownPoint,UpPoint] || point == BackPoint && stalled
-  rows point = [object ["start" .= rangeStart range,"bytes" .= hex (B.pack [at range index | index <- [0::Int ..fromIntegral (rangeEnd range-rangeStart range)-1]])] | range <- settingsRanges]
+  rows point = [object ["start" .= rangeStart range,"bytes" .= hex (B.pack [at range index | index <- [0::Int ..fromIntegral (rangeEnd range-rangeStart range)-1]])] | range <- recordSettingsRanges]
    where
     at range index
       | index == 0x6e = if selecting point then 0x20 else 0
@@ -449,6 +462,8 @@ main = do
       intendedDifference = imageSizeReport imageSizeComparison StalledChoice IntendedChoice
       intendedMatch = imageSizeReport imageSizeComparison IntendedChoice IntendedChoice
       erasedFiniteMatch = imageSizeReport imageSizeComparison ErasedStalledChoice ErasedStalledChoice
+      storageBoundaryRefused = isLeft (qualify Stock bindings (withSpecWriteRanges
+        ([[0x89ec00,0x89ede0],[0x96cc64,0x96d1aa],[0x9c281c,0x9c2c94],[0x89f834,0x89f870],[0x89f874,0x89f8a8]] ++ retired Stock)))
       intendedCasesReported = case reportField "intended_cases" intendedDifference of
         Just (Array cases) -> length cases == 2 && all intended cases && any restoredSynchronization cases
         _ -> False
@@ -546,6 +561,7 @@ main = do
       wrongCacheField name value = wrongCache (changedObject name value cacheContract)
       wrongSymbols extra = rejectBinding id (<> C.pack extra)
       tests = [("nine-entry observation matches",matched Original)
+        ,("record boundary refuses the settings-storage write ranges",storageBoundaryRefused)
         ,("changed endpoint cursor fails with equal press-time menus",endpointCursorDiffers)
         ,("defaults reset with successful append and program request admits comparison",let (bound,observation) = resetFixture ResetAppends in not (isLeft (qualify Owned bound observation)))
         ,("defaults reset without a record append refuses",let (bound,observation) = resetFixture ResetWithoutAppend in isLeft (qualify Owned bound observation))

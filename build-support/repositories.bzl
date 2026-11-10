@@ -54,10 +54,12 @@ _FUJIMOD_NIX_DEPS = [
     "//build-support:fujimod-composite-cpu.patch",
     "//build-support:fujimod-composite-watch.patch",
     "//build-support:fujimod-fetch-attribution.patch",
+    "//build-support:fujimod-observation-context.patch",
+    "//build-support:fujimod-observation-backing-tests.patch",
+    "//build-support:fujimod-owned-nand-pages.patch",
     "//build-support:fujimod-rprofile-byte-exclusives.patch",
     "//build-support:fujimod-timer-upcount.patch",
     "//build-support:fujimod-translation-admission.patch",
-    "//build-support:fujimod-observation-context.patch",
     "//build-support:fujimod-unicorn-context-align.patch",
     "//build-support:fujimod-wifi-unanswered-cmd53.patch",
     "//build-support:fujimod.nix",
@@ -191,6 +193,7 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/src/trace.rs",
     "//emulation:fujimod-xm1/src/trace_calls.rs",
     "//emulation:fujimod-xm1/src/trace_save_lifecycle.rs",
+    "//emulation:fujimod-xm1/src/trace_task_context.rs",
     "//emulation:fujimod-xm1/src/ui_conversion.rs",
     "//emulation:fujimod-xm1/src/updater.rs",
     "//emulation:fujimod-xm1/src/witness.rs",
@@ -212,6 +215,7 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/tests/support/composed_nand_fixture.rs",
     "//emulation:fujimod-xm1/tests/trace_throughput.rs",
     "//emulation:fujimod-xm1/tests/trace_throughput_retain.rs",
+    "//emulation:fujimod-xm1/tests/trace_task_context.rs",
 ]
 
 _NIX_BUILD_CAP = ["--max-jobs", "2", "--cores", "2"]

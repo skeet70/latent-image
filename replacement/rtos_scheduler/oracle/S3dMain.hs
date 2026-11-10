@@ -623,6 +623,7 @@ specFor d role one loaderA loaderB aggregates owned = CaseSpec
   , caseExpectedStatus = expectedStatus
   , caseExpectedRegisters = expectedRegisters
   , caseExpectedMemory = []
+  , caseIgnoredMemory = []
   , caseCp14Identity = Just (if d == DomainA then 0x4003 else 0x4004)
   , caseKernel = Just (KernelCase (InstructionLimit 4000) stop (Just 0x80001234) (Just 0) (Just 0) uncompared [])
   }

@@ -511,8 +511,7 @@ fn drive() -> Result<(), String> {
         document_bytes: read(&arguments.run)?,
         update: read(&arguments.installed_dat)?,
         boot_rom: read(&arguments.boot_rom)?,
-        adjustment: AdjustmentNand::parse(&adjustment_bytes)?,
-        records: None,
+        nand: bridge::BootSource::InitialSeeded { adjustment: AdjustmentNand::parse(&adjustment_bytes)?, records: None },
         card: None,
     };
     std::fs::create_dir_all(&arguments.output).map_err(|e| format!("{}: {e}", arguments.output.display()))?;

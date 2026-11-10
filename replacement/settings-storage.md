@@ -61,6 +61,16 @@ This table owns the stage-3 shim/removal contract. The ledger owns the current c
 
 The [artifact policy and placement admission](property_service/Replacement/PropertyService/) own exact encodings, carrier/reference scans and stack premises. The [Rust service](property_service/src/) owns field/default behavior. Do not reintroduce delegated arms or treat native arm qualification as retirement of the retained entry bodies.
 
+## Owned settings storage
+
+[`settings_storage/`](settings_storage/) owns bank projections, previous values, ROM defaults, typed configuration, the shared header mirror and custom-record lifecycle. The custom-record admission and native comparison boundary are defined by [`bank-record-native-contract.md`](settings_storage/bank-record-native-contract.md). Property entry ownership, this storage implementation and full-system adoption are separate gates.
+
+`//replacement/settings_storage:custom-oracle` qualifies bank/property composition, joined record operations, custom save/recall, preemption and EE helpers. Its Bazel defaults supply the linked artifacts and controls. `--runner`, `--stock-runner` and `--joined-stock-runner` select explicit immutable execution identities; they do not relabel existing observations. `--joined-stock-runner-cache-sha256` makes the joined stock role cache-only. Other roles can execute on a cache miss. Use the existing cache-only API when a rejudgment must forbid every new execution.
+
+`--native-jobs N` bounds independent host pipelines inside one admitted native scope. Shared input pooling and the raw observation cache preserve exact wire/runner identities; current model and caller-frame checks run again on reuse. Successful staged files are compacted only after a verified cache binding exists. Failed/incomplete cases and their consumer judgments remain retained. Cache inspection and cache-only reads reject symlink escapes, missing/corrupt entries, ambiguous compressed payloads and incomplete provenance without running the SDK.
+
+The frozen native cohort in `E-SETTINGS-STORAGE-COMPOSED-NATIVE-150` qualifies its own source, runner and artifacts. Importing its source into the current SDK does not rebind those observations. Composed cold boot, repeated set/get, custom save/recall, cancellation/restore, handback and physical persistence remain separate acceptance.
+
 ## Record-store build and staging
 
 The core in [`record_store/`](record_store/) is allocation-free and address-independent; the guest adapter retains raw NAND and synchronization services. Its comparison boundary is [design §5](../reports/owned-record-store-design.md#5-native-oracle-host-qualification), not every internal native-runner diagnostic.
@@ -88,7 +98,7 @@ XM1_EMULATOR_SLOTS=1 devenv shell -- bazel-bin/emulation/emulator-slot \
   --out private-data/scratch/RecordOracle/NEW_RUN
 ```
 
-Without `--runner` the command generates/validates cases only. Without `--candidate` it compares the stock role with the independent model. `--filter FAMILY` selects identifiers containing the text. `--stock-output DIR` reuses stock observations only when regenerated execution inputs (excluding `expected`) and runner digest match. `--control` requires the supplied candidate to differ on at least one case while the model still agrees with stock; use it for each control artifact. Keep native batches serial with `--native-jobs 1` and the documented 2 GiB/no-swap cap.
+Without `--runner` the command generates/validates cases only. Without `--candidate` it compares the stock role with the independent model. `--filter FAMILY` selects identifiers containing the text. `--stock-output DIR` reuses stock observations only when regenerated execution inputs (excluding `expected`) and runner digest match. `--control` requires the supplied candidate to differ on at least one case while the model still agrees with stock; use it for each control artifact. Keep this oracle serial with `--native-jobs 1`; the current [native admission policy](../build-support/README.md#commands) supplies RAM and swap limits.
 
 `summary.json` is the verdict. Compare caller-visible statuses, preserved registers/SP, client words and caller buffers, returned pointers/records, skipped counts, callback order, programs/erases with payloads and final medium. Void-close r0, raw reads, caches, private stack/wrapper state and unobservable staging bytes are excluded. Generic transport `mismatches` can include those excluded internals and are not the record-store verdict. The stock contract leaves malformed kinds, zero-size division and invalid pointers outside the safe domain; the medium model does not establish physical NAND laws.
 

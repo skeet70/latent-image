@@ -71,10 +71,14 @@ module EmulatorUsb
   , CrawlKey (..)
   , crawlKeyWire
   , emulatorDisplayKey
+  , emulatorDisplayHalfPress
   , emulatorIdle
   , emulatorIdleTicks
   , emulatorLocalUiDrain
   , emulatorUiState
+  , NandExportLabel
+  , nandExportLabel
+  , emulatorNandExport
   , emulatedClock
   ) where
 
@@ -840,6 +844,9 @@ instance ToJSON CrawlKey where
 emulatorDisplayKey :: Emulator -> CrawlKey -> IO Value
 emulatorDisplayKey emulator key = Object <$> rpc emulator (object ["command" .= String "display-key", "key" .= crawlKeyWire key])
 
+emulatorDisplayHalfPress :: Emulator -> IO Value
+emulatorDisplayHalfPress emulator = Object <$> rpc emulator (object ["command" .= String "display-key", "key" .= String "half-press"])
+
 -- | Runs the guest for the given instructions with no input; the reply is undecoded.
 emulatorIdle :: Emulator -> Instructions -> IO Value
 emulatorIdle emulator instructions = Object <$> rpc emulator (object ["command" .= String "idle", "instructions" .= instructionsValue instructions])
@@ -854,6 +861,16 @@ emulatorLocalUiDrain emulator ticks = Object <$> rpc emulator (object ["command"
 
 emulatorUiState :: Emulator -> IO Value
 emulatorUiState emulator = Object <$> rpc emulator (object ["command" .= String "ui-state"])
+
+newtype NandExportLabel = NandExportLabel T.Text
+
+nandExportLabel :: T.Text -> Either String NandExportLabel
+nandExportLabel label
+  | not (T.null label) && T.length label <= 64 && T.all (\c -> c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') label = Right (NandExportLabel label)
+  | otherwise = Left "invalid committed NAND export label"
+
+emulatorNandExport :: Emulator -> NandExportLabel -> IO Value
+emulatorNandExport emulator (NandExportLabel label) = Object <$> rpc emulator (object ["command" .= String "nand-export", "label" .= label])
 
 menuReading :: M.KeyMap Value -> IO MenuReading
 menuReading fields = objectField "menu" fields >>= \value -> case value of

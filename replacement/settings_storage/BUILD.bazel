@@ -1,0 +1,583 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+load(":storage_controls.bzl", "BANK_STORAGE_CONTROLS", "PROPERTY_STORAGE_CONTROLS", "PROPERTY_STORAGE_VARIANTS", _CUSTOM_ORACLE_DEFECTS = "CUSTOM_ORACLE_DEFECTS", _CUSTOM_VARIANTS = "CUSTOM_STORAGE_VARIANTS")
+
+package(default_visibility = ["//visibility:public"])
+
+_RUST_DATA = glob(["src/*.rs"], exclude = ["src/lib.rs"]) + [
+    "//replacement/property_service:src/lib.rs",
+    "//replacement/property_service:src/table.rs",
+    "//replacement/property_service:src/property_table.rs",
+    "//replacement/property_service:src/storage_boundary.rs",
+]
+
+_ARM_FLAGS = "--target=armv7r-none-eabi -C panic=abort -C relocation-model=static -C target-cpu=cortex-r4f -C codegen-units=1 -C target-feature=+strict-align -C jump-tables=no -C opt-level=z"
+_PROPERTY_FLAGS = ["-C", "target-feature=+strict-align", "-C", "jump-tables=no", "--cfg", "property_embedded_storage", "--cfg", "settings_storage_firmware", "--cfg", "settings_storage_property"]
+_CORE_DEFECTS = [
+    "storage_open_removed", "storage_close_before_set", "storage_bracket_bank1",
+    "storage_read_before_open", "storage_pair_before_close", "storage_record_save_at_bank",
+    "storage_slot_defaults_moved", "storage_tail_defaults_moved", "storage_tail16_moved",
+    "storage_tail16_byte", "storage_bank_slot_swap",
+]
+
+[
+    genrule(
+        name = "property-core" + ("-" + defect.replace("_", "-") if defect else ""),
+        srcs = ["src/lib.rs"] + _RUST_DATA,
+        outs = [(defect + "/" if defect else "") + "libxm1_settings_storage_core.rlib"],
+        cmd = "$(location @lab_xm1_rust//:bin/rustc) --crate-name=xm1_settings_storage_core --edition=2021 --crate-type=rlib " + _ARM_FLAGS + " --cfg settings_storage_library --cfg settings_storage_firmware --cfg settings_storage_property --cfg settings_storage_header_only " + ("--cfg " + defect + " " if defect else "") + "$(location src/lib.rs) -o $@",
+        tools = ["@lab_xm1_rust//:bin/rustc"],
+    )
+    for defect in [""] + _CORE_DEFECTS
+]
+
+[
+    genrule(
+        name = "property-core-control-" + variant,
+        srcs = ["src/lib.rs"] + _RUST_DATA,
+        outs = ["control-" + variant + "/libxm1_settings_storage_core.rlib"],
+        cmd = "$(location @lab_xm1_rust//:bin/rustc) --crate-name=xm1_settings_storage_core --edition=2021 --crate-type=rlib " + _ARM_FLAGS + " --cfg settings_storage_library --cfg settings_storage_firmware --cfg settings_storage_property --cfg settings_storage_header_only --cfg " + flag + " $(location src/lib.rs) -o $@",
+        tools = ["@lab_xm1_rust//:bin/rustc"],
+    )
+    for variant, flag in PROPERTY_STORAGE_VARIANTS.items()
+]
+
+[
+    genrule(
+        name = "record-store-" + variant + "-rlib",
+        srcs = [
+            "//replacement/record_store:src/lib.rs",
+            "//replacement/record_store:src/lifecycle.rs",
+        ] + (["//replacement/record_store:src/guest.rs"] if variant == "guest" else []),
+        outs = [variant + "/librecord_store.rlib"],
+        cmd = "$(location @lab_xm1_rust//:bin/rustc) --crate-name=record_store --edition=2021 --crate-type=rlib " + (_ARM_FLAGS + " --cfg 'feature=\"guest\"' " if variant == "guest" else "") + "$(location //replacement/record_store:src/lib.rs) -o $@",
+        tools = ["@lab_xm1_rust//:bin/rustc"],
+    )
+    for variant in ["host", "guest"]
+]
+
+genrule(
+    name = "record-store-guest-rlib-unlock-before-copy",
+    srcs = [
+        "//replacement/record_store:src/lib.rs",
+        "//replacement/record_store:src/lifecycle.rs",
+        "//replacement/record_store:src/guest.rs",
+    ],
+    outs = ["guest-unlock-before-copy/librecord_store.rlib"],
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --crate-name=record_store --edition=2021 --crate-type=rlib " + _ARM_FLAGS + " --cfg 'feature=\"guest\"' --cfg 'feature=\"control-unlock-before-copy\"' $(location //replacement/record_store:src/lib.rs) -o $@",
+    tools = ["@lab_xm1_rust//:bin/rustc"],
+)
+[
+    genrule(
+        name = "area3-validator-" + variant + "-rlib",
+        srcs = ["//replacement/validator:validator.rs"],
+        outs = [variant + "/libarea3_validator.rlib"],
+        cmd = "$(location @lab_xm1_rust//:bin/rustc) --crate-name=area3_validator --edition=2021 --crate-type=rlib " + (_ARM_FLAGS + " " if variant == "arm" else "") + "$(location //replacement/validator:validator.rs) -o $@",
+        tools = ["@lab_xm1_rust//:bin/rustc"],
+    )
+    for variant in ["host", "arm"]
+]
+_HOST_DEPS = [":record-store-host-rlib", ":area3-validator-host-rlib"]
+_HOST_FLAGS = "--extern record_store=$(location :record-store-host-rlib) --extern area3_validator=$(location :area3-validator-host-rlib)"
+
+genrule(
+    name = "property-core-host",
+    srcs = ["src/lib.rs"] + _RUST_DATA,
+    outs = ["host/libxm1_settings_storage_core.rlib"],
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --crate-name=xm1_settings_storage_core --edition=2021 --crate-type=rlib --cfg settings_storage_library --cfg settings_storage_property --cfg settings_storage_header_only $(location src/lib.rs) -o $@",
+    tools = ["@lab_xm1_rust//:bin/rustc"],
+)
+
+xm1_rust_staticlib(
+    name = "settings-storage-rust",
+    src = "src/lib.rs",
+    crate_name = "xm1_settings_storage",
+    data = _RUST_DATA,
+    rustc_flags = _PROPERTY_FLAGS,
+)
+xm1_rust_elf(
+    name = "settings-storage-image",
+    rust_staticlib = ":settings-storage-rust",
+    asm_srcs = ["entry.S", "//replacement/property_service:storage-boundary.S"],
+    link_script = "settings-storage.ld",
+    entry = "xm1_getter_owned",
+    extra_ldflags = ["-Wl,--gc-sections"],
+)
+
+genrule(
+    name = "rust-test-binary",
+    srcs = ["src/lib.rs"] + _RUST_DATA + _HOST_DEPS,
+    outs = ["settings-storage-tests-bin"],
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test --crate-name=settings_storage_tests " + _HOST_FLAGS + " $(location src/lib.rs) -o $@",
+    tools = ["@lab_xm1_rust//:bin/rustc"],
+    executable = True,
+)
+sh_test(name = "settings-storage-tests", srcs = [":rust-test-binary"])
+
+genrule(
+    name = "rust-full-export-control",
+    srcs = ["src/lib.rs"] + _RUST_DATA + _HOST_DEPS,
+    outs = ["settings-storage-full-export-mutant"],
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test --crate-name=settings_storage_tests --cfg storage_defect_full_export_tail_zero_invented " + _HOST_FLAGS + " $(location src/lib.rs) -o $@",
+    tools = ["@lab_xm1_rust//:bin/rustc"],
+    executable = True,
+)
+sh_test(
+    name = "full-export-tail-zero-invented-control",
+    srcs = ["full-export-control.sh"],
+    args = [
+        "$(location :rust-test-binary)",
+        "$(location :rust-full-export-control)",
+    ],
+    data = [":rust-test-binary", ":rust-full-export-control"],
+)
+
+sh_test(
+    name = "custom-oracle-scope-boundary",
+    srcs = ["scope-boundary.sh"],
+    args = ["$(rootpath :custom-oracle)"],
+    data = [":custom-oracle"],
+)
+
+[
+    xm1_rust_staticlib(
+        name = "custom-settings-rust" + ("-" + variant.name if variant.name else ""),
+        src = "src/lib.rs",
+        crate_name = "xm1_settings_storage_custom",
+        data = _RUST_DATA + [variant.record, ":area3-validator-arm-rlib"],
+        rustc_flags = [
+            "-C", "target-feature=+strict-align", "-C", "jump-tables=no",
+            "--cfg", "settings_storage_library", "--cfg", "settings_custom_native",
+            "--cfg", "settings_bank_native", "--cfg", "settings_storage_firmware",
+            "--extern", "record_store=$(location " + variant.record + ")",
+            "--extern", "area3_validator=$(location :area3-validator-arm-rlib)",
+        ] + (["--cfg", variant.flag] if variant.flag else []),
+    )
+    for variant in _CUSTOM_VARIANTS
+]
+[
+    xm1_rust_elf(
+        name = "custom-settings-image" + ("-" + variant.name if variant.name else ""),
+        rust_staticlib = ":custom-settings-rust" + ("-" + variant.name if variant.name else ""),
+        asm_srcs = ["entry.S", "custom_entry.S", "bank_entry.S", "//replacement/property_service:storage-boundary.S", "//replacement/record_store_carrier:entry.S"],
+        link_script = "custom-settings.ld",
+        link_includes = ["//replacement/record_store_carrier:imports.ld"],
+        entry = "settings_custom_boot_entry",
+        link_map = True,
+        extra_ldflags = ["-Wl,--gc-sections"],
+    )
+    for variant in _CUSTOM_VARIANTS
+]
+
+genrule(
+    name = "custom-publication-linker",
+    srcs = [":custom-settings-image.symbols", ":custom-settings-image.map", "custom-settings.ld"],
+    outs = ["custom-settings-published.ld"],
+    cmd = """set -eu
+tmp=$$(mktemp -d)
+trap 'rm -rf "$$tmp"' EXIT
+cp "$(location :custom-settings-image.symbols)" "$$tmp/host.symbols"
+cp "$(location :custom-settings-image.map)" "$$tmp/host.map"
+cp "$(location custom-settings.ld)" "$$tmp/host.ld"
+"$(location :custom-publication)" prepare "$$tmp/host.symbols" "$$tmp/host.map" "$$tmp/host.ld" "$@"
+""",
+    tools = [":custom-publication"],
+)
+xm1_rust_elf(
+    name = "custom-settings-published-image",
+    rust_staticlib = ":custom-settings-rust",
+    asm_srcs = ["entry.S", "custom_entry.S", "bank_entry.S", "//replacement/property_service:storage-boundary.S", "//replacement/record_store_carrier:entry.S"],
+    link_script = ":custom-settings-published.ld",
+    link_includes = ["//replacement/record_store_carrier:imports.ld"],
+    entry = "settings_custom_boot_entry",
+    link_map = True,
+    extra_ldflags = ["-Wl,--gc-sections"],
+)
+
+haskell_library(
+    name = "custom-publication-lib",
+    srcs = ["Replacement/SettingsStorage/Publication.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":custom-oracle-lib",
+        "//replacement/property_service:property-service-artifact",
+        "//replacement/record_store_carrier:record-store-artifact",
+        "//replacement/media_permit:service-inventory",
+        "//host:base", "//host:aeson", "//host:bytestring", "//host:containers",
+    ],
+)
+haskell_binary(
+    name = "custom-publication",
+    srcs = ["PublicationMain.hs"],
+    main_file = "PublicationMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":custom-publication-lib", ":custom-oracle-lib",
+        "//replacement/property_service:property-service-artifact",
+        "//replacement/record_store_carrier:record-store-artifact",
+        "//replacement/media_permit:service-inventory",
+        "//emulation:owned-case", "//emulation:image4-staging-lib", "//emulation:case-sha256",
+        "//host:base", "//host:aeson", "//host:bytestring", "//host:directory",
+        "//host:host-support",
+    ],
+)
+haskell_test(
+    name = "custom-publication-tests",
+    srcs = ["PublicationTests.hs"],
+    main_file = "PublicationTests.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":custom-publication-lib",
+        "//replacement/record_store_carrier:record-store-artifact",
+        "//replacement/property_service:property-service-artifact",
+        "//replacement/media_permit:service-inventory",
+        "//host:base", "//host:bytestring",
+    ],
+)
+
+_CUSTOM_CONTROLS = [
+    "compare_sequence", "skip_metadata", "append_unchanged", "omit_sequence_reload",
+    "omit_reset_clear", "first_payload_only", "accept_rejected", "seal_before_sequence",
+    "static_defaults", "hide_program_error", "skip_reread",
+    "accept_high_row_bits", "drop_recovery",
+]
+[
+    genrule(
+        name = "custom-control-" + control.replace("_", "-"),
+        srcs = ["src/lib.rs"] + _RUST_DATA + _HOST_DEPS,
+        outs = ["custom-control-" + control.replace("_", "-") + ".detected"],
+        cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test --crate-name=settings_storage_tests --cfg custom_control_" + control + " " + _HOST_FLAGS + " $(location src/lib.rs) -o $(@D)/custom-control-" + control.replace("_", "-") + " && if $(@D)/custom-control-" + control.replace("_", "-") + " 'custom::tests::'; then exit 1; else touch $@; fi",
+        tools = ["@lab_xm1_rust//:bin/rustc"],
+        testonly = True,
+    )
+    for control in _CUSTOM_CONTROLS
+]
+genrule(
+    name = "record-store-host-control-9-rlib",
+    srcs = ["//replacement/record_store:src/lib.rs", "//replacement/record_store:src/lifecycle.rs"],
+    outs = ["control9/librecord_store.rlib"],
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --crate-name=record_store --edition=2021 --crate-type=rlib --cfg 'feature=\"control-9\"' $(location //replacement/record_store:src/lib.rs) -o $@",
+    tools = ["@lab_xm1_rust//:bin/rustc"],
+    testonly = True,
+)
+genrule(
+    name = "custom-control-program-only-logical34",
+    srcs = ["src/lib.rs"] + _RUST_DATA + [":record-store-host-control-9-rlib", ":area3-validator-host-rlib"],
+    outs = ["custom-control-program-only-logical34.detected"],
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test --crate-name=settings_storage_tests --extern record_store=$(location :record-store-host-control-9-rlib) --extern area3_validator=$(location :area3-validator-host-rlib) $(location src/lib.rs) -o $(@D)/custom-control-program-only-logical34 && if $(@D)/custom-control-program-only-logical34 'custom::tests::'; then exit 1; else touch $@; fi",
+    tools = ["@lab_xm1_rust//:bin/rustc"],
+    testonly = True,
+)
+
+haskell_library(
+    name = "custom-oracle-lib",
+    srcs = ["CustomAdmission.hs", "CustomNative.hs", "CustomPreemptionNative.hs", "SettingsEeNative.hs", "ControlArtifact.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":storage-oracle-lib",
+        "//replacement/record_store:oracle-lib",
+        "//replacement/record_store_carrier:record-store-artifact",
+        "//replacement/property_service:property-service-artifact",
+        "//replacement/property_service:property-oracle-lib",
+        "//replacement/property_service:classify",
+        "//replacement/media_permit:property-fields",
+        "//replacement/media_permit:service-inventory",
+        "//host/firmware:bank-allowlist",
+        "//host:first-stage",
+        "//emulation:native-adapter",
+        "//emulation:owned-case", "//emulation:native-observation", "//emulation:case-sha256",
+        "//host:base", "//host:bytestring", "//host:containers", "//host:aeson",
+    ],
+)
+_CUSTOM_ORACLE_DEFAULTS = [
+    "--linked", "$(rootpath :custom-settings-image.bin)",
+    "--symbols", "$(rootpath :custom-settings-image.symbols)",
+    "--base", "0x5d0000",
+    "--property-refusal-linked", "$(rootpath //replacement/property_service:property-service-storage-refusal-image.bin)",
+    "--property-refusal-symbols", "$(rootpath //replacement/property_service:property-service-storage-refusal-image.symbols)",
+    "--property-elf", "$(rootpath //replacement/property_service:property-service-image.elf)",
+    "--property-refusal-elf", "$(rootpath //replacement/property_service:property-service-storage-refusal-image.elf)",
+] + [
+    argument
+    for defect in _CUSTOM_ORACLE_DEFECTS
+    for argument in [
+        "--defect", defect,
+        "$(rootpath :custom-settings-image-%s.bin)" % defect,
+        "$(rootpath :custom-settings-image-%s.symbols)" % defect,
+    ]
+] + [
+    argument
+    for defect in BANK_STORAGE_CONTROLS
+    for argument in [
+        "--bank-defect", defect,
+        "$(rootpath :custom-settings-image-bank-%s.bin)" % defect,
+        "$(rootpath :custom-settings-image-bank-%s.symbols)" % defect,
+    ]
+] + [
+    argument
+    for defect in PROPERTY_STORAGE_CONTROLS
+    for argument in [
+        "--property-defect", defect,
+        "$(rootpath //replacement/property_service:property-service-storage-control-%s.bin)" % defect,
+        "$(rootpath //replacement/property_service:property-service-storage-control-%s.symbols)" % defect,
+        "$(rootpath //replacement/property_service:property-service-storage-control-%s.elf)" % defect,
+    ]
+]
+
+_CUSTOM_ORACLE_DEFAULT_DATA = [
+    ":custom-settings-image.bin", ":custom-settings-image.symbols",
+    "//replacement/property_service:property-service-image.bin",
+    "//replacement/property_service:property-service-image.symbols",
+    "//replacement/property_service:property-service-storage-refusal-image.bin",
+    "//replacement/property_service:property-service-storage-refusal-image.symbols",
+    "//replacement/property_service:property-service-image.elf",
+    "//replacement/property_service:property-service-storage-refusal-image.elf",
+] + [
+    ":custom-settings-image-%s.%s" % (defect, suffix)
+    for defect in _CUSTOM_ORACLE_DEFECTS
+    for suffix in ["bin", "symbols"]
+] + [
+    ":custom-settings-image-bank-%s.%s" % (defect, suffix)
+    for defect in BANK_STORAGE_CONTROLS
+    for suffix in ["bin", "symbols"]
+] + [
+    "//replacement/property_service:property-service-storage-control-%s.%s" % (defect, suffix)
+    for defect in PROPERTY_STORAGE_CONTROLS
+    for suffix in ["bin", "symbols", "elf"]
+]
+
+_QUALIFICATION_DEFAULTS = _CUSTOM_ORACLE_DEFAULTS + [
+    "--full-export-control-producer", "$(location full-export-control.sh)",
+    "--full-export-control-correct", "$(location :rust-test-binary)",
+    "--full-export-control-mutant", "$(location :rust-full-export-control)",
+]
+
+haskell_binary(
+    name = "custom-oracle",
+    srcs = ["CustomOracleMain.hs", "BankRecordNative.hs"],
+    main_file = "CustomOracleMain.hs",
+    args = _CUSTOM_ORACLE_DEFAULTS,
+    data = _CUSTOM_ORACLE_DEFAULT_DATA,
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
+    deps = [
+        ":custom-oracle-lib",
+        ":storage-oracle-lib",
+        "//replacement/property_service:property-oracle-lib",
+        "//replacement/property_service:classify",
+        "//replacement/media_permit:property-fields",
+        "//replacement/media_permit:service-inventory",
+        "//replacement/record_store:oracle-lib",
+        "//replacement/record_store_carrier:record-store-artifact",
+        "//replacement/property_service:property-service-artifact",
+        "//host/firmware:bank-allowlist",
+        "//emulation:fujimod-native-paths",
+        "//emulation:native-adapter",
+        "//emulation:cached-native-batch",
+        "//emulation:native-evidence",
+        "//emulation:parallel-cases",
+        "//emulation:owned-case", "//emulation:native-observation", "//emulation:case-sha256",
+        "//host:base", "//host:bytestring", "//host:containers", "//host:aeson",
+        "//host:directory", "//host:filepath", "//host:host-support", "//host:json",
+        "//host:first-stage",
+        "//host:storage-budget",
+        "//host:process",
+    ],
+)
+
+haskell_binary(
+    name = "custom-oracle-qualification",
+    srcs = ["CustomOracleQualificationMain.hs"],
+    main_file = "CustomOracleQualificationMain.hs",
+    args = _QUALIFICATION_DEFAULTS,
+    data = [":custom-oracle"] + _CUSTOM_ORACLE_DEFAULT_DATA + [
+        ":rust-test-binary", ":rust-full-export-control", "full-export-control.sh",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:unix",
+    ],
+)
+
+haskell_library(
+    name = "retirement-planner-lib",
+    srcs = ["RetirementPlanner.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:cached-native-batch",
+        "//emulation:native-adapter",
+        "//emulation:primary-initializer-source-lib",
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:json",
+        "//host:host-support",
+    ],
+)
+
+haskell_binary(
+    name = "retirement-planner",
+    srcs = ["RetirementPlannerMain.hs"],
+    main_file = "RetirementPlannerMain.hs",
+    testonly = True,
+    tags = ["manual"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":retirement-planner-lib",
+        ":custom-oracle-lib",
+        ":storage-oracle-lib",
+        "//emulation:cached-native-batch",
+        "//emulation:owned-case",
+        "//emulation:native-adapter",
+        "//emulation:primary-initializer-source-lib",
+        "//emulation:case-sha256",
+        "//replacement/property_service:property-service-artifact",
+        "//replacement/property_service:property-oracle-lib",
+        "//replacement/property_service:classify",
+        "//replacement/media_permit:property-fields",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:aeson",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//host:storage-budget",
+    ],
+)
+
+haskell_test(
+    name = "retirement-planner-tests",
+    srcs = ["RetirementPlannerTests.hs"],
+    main_file = "RetirementPlannerTests.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":retirement-planner-lib",
+        "//emulation:cached-native-batch",
+        "//emulation:native-adapter",
+        "//emulation:primary-initializer-source-lib",
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:json",
+    ],
+)
+
+haskell_binary(
+    name = "cache-accounting",
+    srcs = ["CacheAccountingMain.hs"],
+    main_file = "CacheAccountingMain.hs",
+    testonly = True,
+    tags = ["manual"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":custom-oracle-lib",
+        ":storage-oracle-lib",
+        "//emulation:cached-native-batch",
+        "//emulation:owned-case",
+        "//emulation:native-adapter",
+        "//emulation:case-sha256",
+        "//replacement/property_service:property-service-artifact",
+        "//replacement/property_service:property-oracle-lib",
+        "//replacement/property_service:classify",
+        "//replacement/media_permit:property-fields",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:aeson",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//host:process",
+    ],
+)
+
+haskell_binary(
+    name = "generate-defaults",
+    srcs = ["DefaultsMain.hs"],
+    main_file = "DefaultsMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = ["//emulation:case-sha256", "//host:base", "//host:bytestring", "//host:directory"],
+)
+
+haskell_library(
+    name = "storage-oracle-lib",
+    srcs = ["Admission.hs", "Oracle.hs", "Native.hs", "StorageRun.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//replacement/property_service:property-oracle-lib",
+        "//replacement/property_service:property-service-artifact",
+        "//host/firmware:bank-allowlist",
+        "//replacement/property_service:classify",
+        "//replacement/media_permit:property-fields",
+        "//replacement/media_permit:service-inventory",
+        "//emulation:owned-case",
+        "//emulation:native-evidence",
+        "//emulation:parallel-cases",
+        "//emulation:native-observation",
+        "//emulation:native-adapter",
+        "//emulation:cached-native-batch",
+        "//emulation:case-sha256",
+        "//host:host-support",
+        "//host:json",
+        "//host:storage-budget",
+        "//host:deepseq",
+        "//host:directory", "//host:filepath",
+        "//host:aeson", "//host:base", "//host:bytestring", "//host:containers",
+    ],
+)
+haskell_library(
+    name = "bank-apply-fixture",
+    testonly = True,
+    srcs = ["BankApplyFixture.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":custom-oracle-lib",
+        ":storage-oracle-lib",
+        "//emulation:owned-case",
+        "//replacement/property_service:property-service-artifact",
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
+
+haskell_test(
+    name = "storage-oracle-tests",
+    srcs = ["OracleTests.hs"],
+    main_file = "OracleTests.hs",
+    args = ["$(rootpath :settings-storage-image.bin)", "$(rootpath :settings-storage-image.symbols)", "$(rootpath :custom-settings-image.bin)", "$(rootpath :custom-settings-image.symbols)"],
+    data = [":settings-storage-image.bin", ":settings-storage-image.symbols", ":custom-settings-image.bin", ":custom-settings-image.symbols"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [":storage-oracle-lib", ":custom-oracle-lib", ":bank-apply-fixture", "//replacement/property_service:property-oracle-lib", "//replacement/property_service:property-service-artifact", "//emulation:owned-case", "//emulation:native-adapter", "//emulation:native-observation", "//host:base", "//host:bytestring", "//host:containers", "//host:first-stage"],
+)
+
+haskell_test(
+    name = "close-append-purpose-tests",
+    srcs = ["CloseAppendPurposeTests.hs"],
+    main_file = "CloseAppendPurposeTests.hs",
+    local = True,
+    tags = ["manual", "local"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":custom-oracle-lib",
+        "//replacement/property_service:property-service-artifact",
+        "//replacement/property_service:property-oracle-lib",
+        "//host/firmware:bank-allowlist",
+        "//emulation:owned-case",
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
