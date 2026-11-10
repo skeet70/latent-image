@@ -1,0 +1,80 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["src/lib.rs", "src/publication.rs", "src/abi.rs"])
+
+[
+    xm1_rust_staticlib(
+        name = "calibration-liveview-rust" + suffix,
+        src = "src/lib.rs",
+        crate_name = "xm1_calibration_liveview" + suffix.replace("-", "_"),
+        data = ["src/publication.rs", "src/abi.rs"],
+        rustc_flags = flags,
+    )
+    for suffix, flags in [
+        ("", []),
+        ("-wrong-field", ["--cfg", "control_wrong_field"]),
+        ("-wrong-dirty", ["--cfg", "control_wrong_dirty"]),
+        ("-dirty-before-store", ["--cfg", "control_dirty_before_store"]),
+        ("-wrong-request", ["--cfg", "control_wrong_request"]),
+        ("-alias-reread", ["--cfg", "control_alias_reread"]),
+        ("-copy-zero", ["--cfg", "control_copy_zero"]),
+        ("-copy-five", ["--cfg", "control_copy_five"]),
+        ("-caller-stack", ["--cfg", "control_caller_stack"]),
+    ]
+]
+
+[
+    xm1_rust_elf(
+        name = "calibration-liveview" + suffix,
+        rust_staticlib = ":calibration-liveview-rust" + suffix,
+        asm_srcs = ["entry.S"],
+        entry = "xm1_liveview_publish",
+        link_script = "calibration-liveview.ld",
+        extra_ldflags = ["-Wl,--gc-sections", "-Wl,--orphan-handling=error"],
+    )
+    for suffix in ["", "-wrong-field", "-wrong-dirty", "-dirty-before-store", "-wrong-request", "-alias-reread", "-copy-zero", "-copy-five", "-caller-stack"]
+]
+
+genrule(
+    name = "host-tests-build",
+    srcs = ["src/lib.rs", "src/publication.rs", "src/tests.rs"],
+    outs = ["calibration-liveview-host-tests"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location src/lib.rs) -o $@",
+    executable = True,
+    tools = ["@lab_clang//:bin/clang", "@lab_rustc//:bin/rustc"],
+)
+
+sh_test(
+    name = "host-tests",
+    size = "small",
+    srcs = ["host-test.sh"],
+    args = ["$(location :host-tests-build)"],
+    data = [":host-tests-build"],
+)
+
+haskell_binary(
+    name = "native-suite",
+    srcs = ["native/Main.hs"],
+    main_file = "native/Main.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
+    deps = [
+        "//emulation:case-sha256",
+        "//emulation:native-adapter",
+        "//emulation:native-observation",
+        "//emulation:owned-case",
+        "//emulation:parallel-cases",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:filepath",
+        "//host:directory",
+        "//host:host-support",
+        "//host:json",
+        "//host/firmware:bank-allowlist",
+    ],
+)
