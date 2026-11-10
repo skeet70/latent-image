@@ -68,6 +68,9 @@ readScope imagePath oldElfPath elfPath = do
   elf <- either fail pure . E.parseElf =<< B.readFile elfPath
   validateElf "old owned" (take 4 entries) ranges oldElf
   validateElf "owned" entries ownedRanges elf
+  case legacyPayloadMismatch oldElf elf of
+    Just address -> fail ("legacy payload differs from old ELF at 0x" ++ showHex address)
+    Nothing -> pure ()
   let wordsAt :: Word32 -> Word32 -> [Word32]
       wordsAt address count = [readWordAt image (fromIntegral (address - 0xbf1a00 + 4 * i)) | i <- [0 .. count - 1]]
   unless (wordsAt 0x102f1b0 11 == [0xe92d48f0,0xe28db014,0xe24dde12,0xe30f0fff,0xe3a01000,0xeb004261,0xe1a06000,0xe30f0fff,0xe3a01001,0xeb00425d,0xe1a04000]) (fail "retained pair caller bytes differ")
@@ -83,6 +86,11 @@ validateElf label expectedEntries expectedRanges elf = do
   forM_ (filter (\s -> E.sectionAllocated s && E.sectionSize s > 0) (E.elfSections elf)) $ \section ->
     unless (E.sectionType section == 1 && not (E.sectionWritable section) && any (\(base, width) -> E.sectionAddress section >= base && toInteger (E.sectionAddress section) + toInteger (E.sectionSize section) <= toInteger base + toInteger width) expectedRanges) (fail (label ++ " allocated section escapes sparse ranges"))
   forM_ expectedRanges $ \(base, size) -> unless (all (\a -> E.byteAt elf a /= Nothing) [base .. base + size - 1]) (fail (label ++ " sparse range has missing bytes"))
+
+legacyPayloadMismatch :: E.Elf -> E.Elf -> Maybe Word32
+legacyPayloadMismatch oldElf elf = case [base + offset | (base,size) <- ranges, offset <- [0 .. size - 1], E.byteAt oldElf (base + offset) /= E.byteAt elf (base + offset)] of
+  [] -> Nothing
+  address : _ -> Just address
 
 poolBase :: Pool -> Word32
 poolBase Ordinary0 = 0x16fedd0
@@ -460,8 +468,7 @@ fullConsumerCases = normalMatrix ++ normalDuplicates ++ normalOpaque ++ taggedMa
       ]
 
 correctionCases :: Mode -> [CorrectionCase]
-correctionCases Smoke = [correctionCase RouteCurrent 0 True, correctionCase RouteCurrent 0 False]
-correctionCases Qualification = [correctionCase route slot guard | route <- [RouteCurrent, RouteMarked], slot <- [0 :: Int .. 6], guard <- [False,True]]
+correctionCases _ = [correctionCase route slot guard | route <- [RouteCurrent, RouteMarked], slot <- [0 :: Int .. 6], guard <- [False,True]]
 
 correctionCase :: Route -> Int -> Bool -> CorrectionCase
 correctionCase route slot guard = CorrectionCase
@@ -627,7 +634,7 @@ callerSpec role scope one = base
     base = CaseSpec
       { caseId = ""
       , caseProvenance = consumerSourceIdentity
-      , caseExclusion = "Synthetic retained caller path; deferred queue, scheduler, downstream commands and result publication are recording stubs. No queue lifetime, scheduler, timing or stall claim."
+      , caseExclusion = "Direct retained callback entry points 0x01031c54, 0x01032b40 and 0x01033344 are invoked directly; queue posting and deferred delivery, selector changes between posting and callback, scheduler, downstream commands and result publication are outside this bounded case and are not claimed. Downstream calls are recording stubs."
       , caseEntry = guest (callerEntry one)
       , caseExit = guest exitAddress
       , caseRegions = []
@@ -718,7 +725,7 @@ runCorrectionCases mode runner cache directory scope = do
   forM selected $ \one -> case (M.lookup (correctionName one) stockBy,M.lookup (correctionName one) ownedBy) of
     (Just stock,Just owned) -> do
       let differences = correctionChecks one stock owned
-      pure (Run (correctionName one) differences (consumerControls owned))
+      pure (Run (correctionName one) differences (correctionControls one stock owned))
     _ -> pure (Run (correctionName one) ["missing stock or owned observation"] [])
 
 runCallerCases :: Mode -> FilePath -> FilePath -> FilePath -> Scope -> IO [Run]
@@ -815,6 +822,7 @@ correctionChecks one stock owned =
           ++ ["stock flags changed" | any (\slot -> secondaryFlag stock slot /= correctionFlags one !! slot) [0 .. 6]]
     ownedChecks =
       ["owned status " ++ show (nativeStatus owned) | nativeStatus owned /= Returned]
+      ++ ["owned secondary bank " ++ show (secondaryBytesOf owned) | secondaryBytesOf owned /= expectedCorrectionBank one]
       ++ ["owned states " ++ show [secondaryState owned slot | slot <- [0 .. 6]] | any (\slot -> secondaryState owned slot /= correctionExpectedStates one !! slot) [0 .. 6]]
       ++ ["owned flags " ++ show [secondaryFlag owned slot | slot <- [0 .. 6]] | any (\slot -> secondaryFlag owned slot /= correctionFlags one !! slot) [0 .. 6]]
       ++ ["owned escaped write " ++ show (witness "escaped-write-witness" owned) | witness "escaped-write-witness" owned /= word32le 0xa5a5a5a5]
@@ -825,6 +833,38 @@ correctionChecks one stock owned =
       ++ ["owned callee-saved " ++ registerLabel r | r <- [R4 .. R11], registerValue owned r /= seed r]
       ++ ["owned caller stack" | registerValue owned Sp /= stackPointer]
       ++ ["owned stack guard" | not (stackGuards owned)]
+
+expectedCorrectionBank :: CorrectionCase -> B.ByteString
+expectedCorrectionBank one = B.concat
+  [ word32le 0xa5a5a5a5
+    <> word32le (if slot == correctionSlot one then 5 else correctionStates one !! slot)
+    <> word32le 0xa5a5a5a5
+    <> word32le 0xa5a5a5a5
+    <> word32le (correctionFlags one !! slot)
+    <> word32le 0xa5a5a5a5
+  | slot <- [0 :: Int .. 6]
+  ]
+
+mutateStateWord :: NativeObservation -> Int -> Word32 -> NativeObservation
+mutateStateWord observation offset value = observation { nativeMemory = [(key,if key == RegionId "state" then poke bytes (fromIntegral offset) value else bytes) | (key,bytes) <- nativeMemory observation] }
+
+mutateLateWord :: NativeObservation -> Int -> Word32 -> NativeObservation
+mutateLateWord observation offset value = observation { nativeMemory = [(key,if key == RegionId "late-state" then poke bytes (fromIntegral offset) value else bytes) | (key,bytes) <- nativeMemory observation] }
+
+correctionControls :: CorrectionCase -> NativeObservation -> NativeObservation -> [(String,Bool)]
+correctionControls one stock owned =
+  [ ("status", not (null (correctionChecks one stock owned { nativeStatus = MemoryGuard })))
+  , ("unknown-word-0", not (null (correctionChecks one stock (mutateStateWord owned secondaryOffset 0))))
+  , ("unknown-word-8", not (null (correctionChecks one stock (mutateStateWord owned (secondaryOffset + 8) 0))))
+  , ("unknown-word-12", not (null (correctionChecks one stock (mutateStateWord owned (secondaryOffset + 12) 0))))
+  , ("unknown-word-20", not (null (correctionChecks one stock (mutateStateWord owned (secondaryOffset + 20) 0))))
+  , ("candidate-state", not (null (correctionChecks one stock (mutateStateWord owned (secondaryOffset + correctionSlot one * 24 + 4) 0))))
+  , ("candidate-flag", not (null (correctionChecks one stock (mutateStateWord owned (secondaryOffset + correctionSlot one * 24 + 16) 0))))
+  , ("route", not (null (correctionChecks one stock (mutateLateWord owned routeOffset (routeRaw (correctionRoute one) `xor` 1)))))
+  , ("witness", not (null (correctionChecks one stock (mutateRegion (RegionId "escaped-write-witness") owned))))
+  , ("receipts", not (null (correctionChecks one stock (mutateRegion (RegionId "receipts") owned))))
+  , ("stack", not (null (correctionChecks one stock (mutateRegion (RegionId "stack") owned))))
+  ]
 
 callerChecks :: CallerCase -> NativeObservation -> [String]
 callerChecks one observation =
