@@ -37,6 +37,13 @@
     "host_cases": {"timer": 17, "cyclic_and_app": 37},
     "argument_resolution_counterexample": "Invocation 80a6e123-952e-4ecc-bd01-07050423b726 failed before building because singular host-test labels were supplied; the declared plural labels passed in the final invocation."
   },
+  "built_executable_sha256": {
+    "path_base": "/var/home/murph/Code/latent-image-worktrees/TimerAppSystemJoin/bazel-bin",
+    "replacement/rtos_timer/stage-root-platform": "c3c03a7f38e725fbe379ffba871f1864f3c3ff280b970f8175e9311110596064",
+    "replacement/rtos_timer/oracle/timer-oracle": "697c2ff2a24e5662d53f6a2c030d80d78d4886df04e04b933b03b7732bfdf089",
+    "replacement/rtos_cyclic/oracle/cyclic-oracle": "c6adb3bfcfaaa1ef4ab65cfbb65349156f1614e8ee45904d2b20785064b1efa1",
+    "replacement/rtos_cyclic/oracle/join-oracle": "4720fab4bc42c85b29b1048230551ad659d12f0f2d9bb14d08746f2083f83c61"
+  },
   "composition": {
     "target": "//replacement/rtos_timer:stage-root-platform",
     "pieces": ["first-stage", "record2-link", "primary-publisher", "loader-startup", "task-submission", "task-storage", "idle-task", "root-task", "app-callback"],
@@ -117,7 +124,18 @@
     "mpu_path": "0x73badc selects regions 5/6/7 and calls 0x73ba50; 0x61c700 and 0x61c724 contain CP15 c6 writes and no RAM store",
     "vector_path": "0x73b9ec stores at argument + 0xffff0000; shown submissions through 0x73ba18 use arguments 0x2c and 0x30",
     "global_path": "0x73bc34 reads base/length from 0x40a6c7e0",
-    "unknown": ["all reachable descriptor/global base and length values", "complete cpu_submit_call copy/delivery semantics", "all other callers and writers", "physical alias/cache laws"],
+    "payload_copy": {
+      "evidence": "id4.dis 0x6b090c..0x6b09c4; exact cpu_submit_wrappers.c and runtime/copy_bytes.c at the pinned decomp",
+      "wrapper_kind": 1,
+      "length_argument": "Low byte of stacked length; the shown restore submission passes 8.",
+      "slot_index": "0..4 from the five-slot search",
+      "destination": "0x409c2f5c + 268 * slot_index",
+      "copy": "app_copy_bytes at 0x722054 copies exactly the nonzero supplied byte count before message submission.",
+      "eight_byte_destination_envelope": "[0x409c2f5c,0x409c3394), comprising five separated eight-byte spans",
+      "queue_frontier": "0x6b09e4..0x6b0a40 constructs and sends a 28-byte request containing task, core, callback, copied-payload pointer, length, completion callback 0x6b0704 and slot index.",
+      "caveat": "cpu_submit_job C is NONMATCHING; these argument, copy and queue facts are byte-grounded. The downstream queue delivery and completion laws remain open."
+    },
+    "unknown": ["all reachable descriptor/global base and length values", "downstream queue delivery and completion semantics", "all other callers and writers", "physical alias/cache laws"],
     "bulk_arena_overwrite_established": false,
     "physical_arena_exclusion_established": false
   },
@@ -138,10 +156,27 @@
     "closed_stage_allocated_bytes": 38604800,
     "closed_stage_image4": "stock; not a reduced-bound/root/app package",
     "proposed_composed_file_retained_cap_bytes": 67108864,
+    "retained_projection": {
+      "canonical_dat_bytes": 38405148,
+      "decoded_image4_bytes": 2631680,
+      "decoded_image5_bytes": 5185120,
+      "record1_and_record2_bytes": 131072,
+      "final_loaders_bytes": 112000,
+      "startup_loader_references_bytes": 112000,
+      "effective_carrier_slices_bytes": 105404,
+      "baseline_payload_bytes": 46682424,
+      "unknown_delta": "Recompressed changed image4, contract JSON, filesystem allocation and receipt metadata.",
+      "inverse_restoration": "Required in-memory equality check; no separate restored DAT is written by the stager.",
+      "with_separate_restored_dat_baseline_bytes": 85087572,
+      "separate_restored_dat_proposed_retained_cap_bytes": 100663296,
+      "transient_codec_scratch_included": false
+    },
     "transient_codec_peak": "unmeasured; admit and guard separately before staging",
     "slots_per_scope": 1,
-    "host_full_system_slots": 2,
-    "older_wrapper_explicit_memory_max": "2G",
+    "host_full_system_slots": 6,
+    "parent_verified_slot_wrapper": "/var/home/murph/Code/latent-image/bazel-bin/emulation/emulator-slot",
+    "parent_slot_policy_invocation": "5d548687-ad1f-4970-8aa5-59cca26756a5",
+    "small_native_explicit_memory_max": "2G",
     "minimum_free_bytes": 107374182400,
     "unexecuted": [
       "Actual private reduced-bound/root/app/platform DAT staging and exact final-artifact admission smoke",
