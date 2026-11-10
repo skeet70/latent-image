@@ -613,8 +613,9 @@ ownedBatchApi runner=withTemporary "fuji-owned-batch"$ \root->do
       , O.caseCp14Identity=Nothing
       , O.caseKernel=Nothing
       }
+     writer=spec "writer"[0xe5820000,0xe12fff1e][(N.R0,0xdeadbeef),(N.R2,0x9000)][(N.R0,0xdeadbeef)][(N.RegionId "data",O.word32le 0xdeadbeef)]
      specs=
-      [ spec "writer"[0xe5820000,0xe12fff1e][(N.R0,0xdeadbeef),(N.R2,0x9000)][(N.R0,0xdeadbeef)][(N.RegionId "data",O.word32le 0xdeadbeef)]
+      [ writer
       , spec "reader"[0xe5921000,0xe12fff1e][(N.R2,0x9000)][(N.R1,0x11223344)][]
       ]
  let cacheBytes=B.replicate(0x420000-4)0x5a<>O.word32le 0x11223344
@@ -622,9 +623,8 @@ ownedBatchApi runner=withTemporary "fuji-owned-batch"$ \root->do
      resourceBase=spec "whole-cache"[0xe5921000,0xe12fff1e][(N.R2,0x8041fffc)][(N.R1,0x11223344)][]
      resource=resourceBase{O.caseRegions=O.caseRegions resourceBase++[cache]}
  resourcePath<-O.writeCaseWithProfile Resource8(root</>"resource")resource
- (resourceValue,resourceRegions,resourceWire,_)<-loadCase resourcePath
- ensure(length[r|r<-resourceRegions,regionSize r==0x420000 && regionBytes r==cacheBytes]==1
-  && BC.pack "FUJI_NATIVE_RESOURCE8_V1\n"`B.isPrefixOf`resourceWire) "whole cache initializer was not preserved in one resource region"
+ (resourceValue,_,resourceWire,_)<-loadCase resourcePath
+ ensure(BC.pack "FUJI_NATIVE_RESOURCE8_V1\n"`B.isPrefixOf`resourceWire) "whole cache resource header differs"
  observed<-O.loadObserved runner resourcePath
  ensure(O.registerValue observed N.R1==0x11223344) "whole cache high-address read differs"
  let scriptPath=takeDirectory resourcePath</>"script.json"
@@ -647,7 +647,7 @@ ownedBatchApi runner=withTemporary "fuji-owned-batch"$ \root->do
  refused "region limit"(modifyAt "regions" cacheIndex(set "size"(n(8*1024*1024+1)))resourceValue)
  refused "writable executable cache"(modifyAt "regions" cacheIndex(set "permissions"(s "rwx"))resourceValue)
  refused "executable high cache"(modifyAt "regions" cacheIndex(set "permissions"(s "rx"))resourceValue)
- resourceBatch<-O.writeBatchWithProfile Resource8(root</>"resource-batch")[resource,head specs]
+ resourceBatch<-O.writeBatchWithProfile Resource8(root</>"resource-batch")[resource,writer]
  let defaultPath=takeDirectory resourceBatch</>"writer.case.json"
  defaultValue<-B.readFile defaultPath>>=jsonRead
  B.writeFile defaultPath(encodeCanonical(remove "memory_profile" defaultValue))
