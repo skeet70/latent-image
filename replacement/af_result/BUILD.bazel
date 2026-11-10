@@ -1,0 +1,61 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["src/lib.rs", "src/abi.rs"])
+
+xm1_rust_staticlib(
+    name = "af-result-rust",
+    src = "src/lib.rs",
+    crate_name = "xm1_af_result",
+    data = ["src/abi.rs"],
+    rustc_flags = ["--cfg", "'feature=\"stage\"'"],
+)
+
+xm1_rust_elf(
+    name = "af-result",
+    rust_staticlib = ":af-result-rust",
+    asm_srcs = ["entry.S"],
+    entry = "xm1_af_reserve",
+    link_script = "af-result.ld",
+    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--orphan-handling=error"],
+)
+
+genrule(
+    name = "selector-rotate-payload",
+    srcs = [":af-result.elf"],
+    outs = ["af-result-0103f190.bin"],
+    cmd = "$(location @lab_llvm//:bin/llvm-objcopy) --only-section=.af_select --only-section=.af_rotate -O binary $(location :af-result.elf) $@",
+    tools = ["@lab_llvm//:bin/llvm-objcopy"],
+)
+
+genrule(
+    name = "reserve-release-payload",
+    srcs = [":af-result.elf"],
+    outs = ["af-result-0103fb50.bin"],
+    cmd = "$(location @lab_llvm//:bin/llvm-objcopy) --only-section=.af_reserve --only-section=.af_release -O binary $(location :af-result.elf) $@",
+    tools = ["@lab_llvm//:bin/llvm-objcopy"],
+)
+
+filegroup(
+    name = "sparse-payload",
+    srcs = [":selector-rotate-payload", ":reserve-release-payload"],
+)
+
+genrule(
+    name = "host-tests-build",
+    srcs = ["src/lib.rs", "src/tests.rs"],
+    outs = ["af-result-host-tests-bin"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location src/lib.rs) -o $@",
+    executable = True,
+    tools = ["@lab_clang//:bin/clang", "@lab_rustc//:bin/rustc"],
+)
+
+sh_test(
+    name = "host-tests",
+    size = "small",
+    srcs = ["host-test.sh"],
+    args = ["$(location :host-tests-build)"],
+    data = [":host-tests-build"],
+)
