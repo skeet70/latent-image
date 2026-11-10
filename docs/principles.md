@@ -64,6 +64,8 @@ Research compaction retains current findings, unresolved failures, reproduction 
 
 A historical command, output-root argument or completed deletion-plan listing is not a blanket retention requirement for every descendant. Current reports name the evidence set and reproduction inputs they still require. A baseline or live consumer that reads an entire tree remains a whole-tree dependency.
 
+Bulk research producers retain compact behavioral receipts and representative full diagnostics for successes, rather than a full diagnostic copy per case. Failures and exact-diagnostic comparisons retain the evidence their acceptance contract requires. Reused inputs keep their identities and reproduction path. Cache eviction requires durable evidence for current findings outside the evictable cache.
+
 ## Issues and comments
 
 Issues and their comments are a public record for people who were not in the session: a contributor deciding what to pick up, someone following the project, or an agent starting a task. Write them as a maintainer of an ordinary open-source project would: the problem, what changed, what was found, what it means for the project, the decision needed and what blocks progress. Detail lives in the report, ledger entry or commit, and the comment links to it; a comment is a few sentences or a short list.
@@ -89,6 +91,6 @@ Publish tools, implementations, and distilled findings; don’t redistribute pro
 
 Original implementations, technical maps, synthetic fixtures with provenance, and reusable research methods belong in the public tree. Firmware copies, extracted proprietary code/data, dumps, calibration, private identities, raw camera logs, irrelevant test shots, and local development archaeology stay private. Review copied instruction sequences, tables, disassembly excerpts, and captured fixtures individually for redistribution rights; neither public availability nor a “finding” label establishes those rights.
 
-Reproduction uses documented owner-supplied inputs, identity checks, and extraction commands instead of bundled proprietary inputs. Publish evidence scope, uncertainty, and current safety constraints with the findings. Distill historical narratives into present-tense knowledge; preserve raw artifacts privately.
+Reproduction uses documented owner-supplied inputs, identity checks, and extraction commands instead of bundled proprietary inputs. Publish evidence scope, uncertainty, and current safety constraints with the findings. Distill historical narratives into present-tense knowledge; retained raw artifacts stay private under the evidence-ledger rules.
 
 Original Latent Image software uses AGPL-3.0-only; commercial use is allowed. Preserve upstream licenses, notices and the permission to redistribute jitl (justjake)'s x70view work with credit, without inferring an AGPL relicensing grant. The [public history boundary](../LICENSING.md#release-decisions) keeps the full research history private and the public repository separate. Later reviewed changes enter as source-only imports, never merges of private-history branches. Review each import's privacy, provenance and attribution; review actual combined artifacts and dependency closures before distributing them. Source publication does not establish runtime verification or camera clearance.
