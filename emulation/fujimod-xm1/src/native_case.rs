@@ -56,8 +56,10 @@ use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::time::{Duration, Instant};
 
-/// Wire bound read by the binary; a complete 4 MiB case is about 8.4 MB.
+/// Legacy wire byte bound.
 pub const MAX_WIRE_BYTES: usize = 16 * 1024 * 1024;
+/// Hex for 4 MiB mapped bytes and 4 MiB contracts, plus 4 MiB framing allowance.
+pub const MAX_SCRIPT_WIRE_BYTES: usize = 20 * 1024 * 1024;
 /// Batch wire bound: 256 MiB of distinct artifacts plus case bodies, each
 /// shorter than its case JSON, of which a batch carries at most 256 MiB.
 pub const MAX_BATCH_WIRE_BYTES: usize = 768 * 1024 * 1024;
@@ -852,9 +854,6 @@ impl Kernel {
 }
 
 fn parse(wire: &[u8]) -> Result<Case, WireError> {
-    if wire.len() > MAX_WIRE_BYTES {
-        return Err(WireError("wire exceeds its byte limit"));
-    }
     parse_case(wire, |tokens, bytes| tokens.bytes(bytes))
 }
 
@@ -863,12 +862,19 @@ fn parse_case(
     wire: &[u8],
     mut initial: impl FnMut(&mut Tokens<'_>, u32) -> Result<Box<[u8]>, WireError>,
 ) -> Result<Case, WireError> {
+    if wire.len() > MAX_SCRIPT_WIRE_BYTES {
+        return Err(WireError("wire exceeds its byte limit"));
+    }
     let mut tokens = Tokens { rest: wire };
     let scripted = match tokens.next()? {
         b"FUJI_NATIVE_V1" => false,
         b"FUJI_NATIVE_SCRIPT_V1" => true,
         _ => return Err(WireError("unsupported native wire version")),
     };
+    let limit = if scripted { MAX_SCRIPT_WIRE_BYTES } else { MAX_WIRE_BYTES };
+    if wire.len() > limit {
+        return Err(WireError("wire exceeds its byte limit"));
+    }
     tokens.literal(b"cortex-r5f-arm-le", "CPU profile must be cortex-r5f-arm-le")?;
     let entry = Address(tokens.word()?);
     let exit = Address(tokens.word()?);
@@ -1157,7 +1163,7 @@ fn frame(wire: &[u8]) -> Result<Batch<'_>, WireError> {
     }
     let mut cases = Vec::with_capacity(case_count as usize);
     for _ in 0..case_count {
-        let length = tokens.count(MAX_WIRE_BYTES as u32)?;
+        let length = tokens.count(MAX_SCRIPT_WIRE_BYTES as u32)?;
         cases.push(tokens.raw(length)?);
     }
     tokens.finish()?;

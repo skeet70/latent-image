@@ -5,13 +5,13 @@
 //! one frame per case on stdout (`native_case::run_batch`). Exit 0 means every
 //! case ran, 1 a refused batch framing, 2 an I/O failure.
 
-use fujimod_xm1::native_case::{self, MAX_BATCH_WIRE_BYTES, MAX_WIRE_BYTES};
+use fujimod_xm1::native_case::{self, MAX_BATCH_WIRE_BYTES, MAX_SCRIPT_WIRE_BYTES};
 use std::io::{Read, Write};
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
     let batch = std::env::args_os().skip(1).eq(["--batch"]);
-    let limit = if batch { MAX_BATCH_WIRE_BYTES } else { MAX_WIRE_BYTES };
+    let limit = if batch { MAX_BATCH_WIRE_BYTES } else { MAX_SCRIPT_WIRE_BYTES };
     let mut wire = Vec::new();
     if let Err(error) = std::io::stdin().lock().take(limit as u64 + 1).read_to_end(&mut wire) {
         eprintln!("native-case: reading stdin failed: {error}");

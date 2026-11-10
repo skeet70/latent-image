@@ -1164,6 +1164,35 @@ fn scripted_writes_over_an_exclusive_reservation_are_refused_before_all_outputs(
 }
 
 #[test]
+fn combined_mapping_and_script_contracts_can_exceed_the_legacy_wire_cap() {
+    const TWO_MIB: usize = 2 * 1024 * 1024;
+    let payload = vec![9; TWO_MIB];
+    let case = Case::new(&[branch(CODE, STUB, false)])
+        .region(0x0040_0000, READ_WRITE, &vec![0; TWO_MIB])
+        .region(0x0080_0000, READ, &vec![0; TWO_MIB - 0x200])
+        .script(STUB, vec![ScriptCall {
+            writes: vec![
+                ScriptMemory::new(MemoryTarget::Absolute(0x0040_0000), 0, &payload),
+                ScriptMemory::new(MemoryTarget::Absolute(0x0040_0000), 0, &payload),
+            ],
+            ..ScriptCall::default()
+        }]);
+    let wire = case.wire();
+    assert!(wire.len() > native_case::MAX_WIRE_BYTES);
+    let observed = observe(wire.as_bytes());
+    observed.assert_returned();
+    assert_eq!(observed.observation.events.len(), 1);
+    assert_eq!(observed.bytes(0x0040_0000), "09".repeat(TWO_MIB));
+}
+
+#[test]
+fn legacy_wires_above_the_original_byte_cap_remain_invalid() {
+    let mut wire = Case::new(&[BX_LR]).wire();
+    wire.extend(std::iter::repeat_n(' ', native_case::MAX_WIRE_BYTES + 1 - wire.len()));
+    assert_eq!(observe(wire.as_bytes()).status(), Status::InvalidCase);
+}
+
+#[test]
 fn an_entry_tail_stub_returns_to_the_exit_with_lr_preserved() {
     // bx r12
     let tail = Case::new(&[0xe12f_ff1c]).stub(STUB, &[(1, 7)], &[(0, 0x55)]).register(12, STUB);
