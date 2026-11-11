@@ -315,8 +315,8 @@ loadCaseWith reader input = do
   ensure(isKernel profile) "expected kernel registers need a kernel case"
   void(bindings(get expected "kernel")["tpidrurw","fpexc","reserved"])
  expectedRegs<-bindings(get expected "registers")(regs++["pc"])
- ensure(not(null expectedRegs)) "at least one independently expected register required"
  differences<-arrayCheck(get expected "memory")0 memoryCount "expected memory limit"
+ ensure(not(null expectedRegs) || (isKernel profile && get expected "status"==s "instruction_budget" && not(null differences))) "independent registers required except bounded kernel instruction stops with expected memory"
  void$foldM(\occupied item->do
    fields item "region offset hex" "expected memory"
    r<-maybe(failH "unknown expected region")pure(find(\r->get(description r)"id"==get item "region")regions)

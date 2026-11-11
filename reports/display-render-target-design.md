@@ -130,6 +130,7 @@ The design we would build from scratch: the owned menu (#128) and later owned sc
 - Owns one display engine's register blocks (scanout, timing, formatter) through a typed register image (`EngineImage { groups: [LayerGroup; 2] }`, layers with origin, size, address, enable, alpha), committed at the engine's frame interrupt.
 - Exposes layer publication for the frame publisher and for image-plane producers, and the per-frame callback service retained clients need (section 2.5, S8).
 - Panel bring-up (timing configuration, formatter configuration, reset handshake) is part of the target and comes last, once its laws are grounded.
+- The current CPU implementation is [`replacement/display_scanout`](../replacement/display_scanout/BUILD.bazel), with its [stock and owned boundary contract](display-render-contracts/scanout.md). It owns timing staging/default reads, full prepared commit/capture, shadow setters, blanking, scheduler/ISRs, reset/readiness loops, full base formatter configuration/strobe, live source transforms and record/AVout routing. The `libdisplay_scanout_panel` component adds the queue-0x22 LCDDEVF consumer, command 0..6 recipes, serial/PWM/HDMI CPU programming and actual shared Power executor callbacks; it is not merely a request constructor or stock software forwarder. Its ARM adapters preserve stock layout only at the edge. The standalone native suite covers its declared scanout scenarios, not the whole Power/panel composition. Host qualification, expected-fault/held cases and integrated caller migration remain required; this source addition does not retire S7-S9 or qualify a physical display.
 
 ### 2.5 Shims
 
@@ -143,7 +144,7 @@ The design we would build from scratch: the owned menu (#128) and later owned sc
 | S6 Shared OSD surface | Stock VGLIB keeps drawing screens not yet owned; owned and stock producers take the surface in turn, handed over at screen transitions | Every screen on the surface is owned |
 | S7 Stock publication below the owned renderer | The owned renderer writes the VGLIB back buffer and publishes through `display_set_item_configuration` and `display_queue_secondary_callbacks` with VGLIB's front byte kept in step | The owned scanout driver publishes |
 | S8 Stock per-frame scheduler | Retained clients (VGLIB one-shots, live view) keep registering through `FUN_006c7318` | No retained client registers, or the owned driver serves the same request contract |
-| S9 Stock panel bring-up | `display_engine_flush_configuration`, formatter configuration and the reset handshake stay stock | Timing, formatter and reset laws are grounded (section 3) and owned bring-up passes |
+| S9 Stock panel bring-up | The owned CPU timing, formatter and reset sequences exist in `replacement/display_scanout`; retained callers and ungrounded device laws prevent cutover | Timing, formatter and reset laws are grounded (section 3), caller migration is complete and owned bring-up passes |
 
 The menu engine's row "Stock redraw and render path: Redraw requests after the engine; removed when the render layer owns menu drawing" covers S1 and S2 seen from the engine. Its removal condition becomes: S1 and S2 are both removed.
 

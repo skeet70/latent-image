@@ -17,6 +17,18 @@ impl CalibrationStorage for Store {
     }
 }
 fn backing() -> Box<[u8; CACHE_SIZE]> { vec![0xa5; CACHE_SIZE].into_boxed_slice().try_into().ok().unwrap() }
+
+#[test]
+fn shared_live_reader_observes_later_byte_updates() {
+    let mut bytes=backing();
+    let base=core::ptr::NonNull::new(bytes.as_mut_ptr()).unwrap();
+    let reader=unsafe { InitializedCalibrationBase::from_initialized_base(base) };
+    let offset=CalibrationOffset::parse(0x1083).unwrap();
+    assert_eq!(reader.read_byte(offset),CalibrationByte(0xa5));
+    unsafe { core::ptr::write_volatile(base.as_ptr().add(0x1083),0x37); }
+    assert_eq!(reader.read_byte(offset),CalibrationByte(0x37));
+    assert_eq!(bytes[0x1082],0xa5);
+}
 #[test]
 fn cold_primary_fallback_and_defaults_preserve_distinct_effects() {
     let defaults = Defaults::parse(&[0xf7,0,2,0,0xd8,0,0x17,0,0xff,0xff,0,0]).unwrap();

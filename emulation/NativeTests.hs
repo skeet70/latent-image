@@ -921,11 +921,58 @@ scriptAdapterRegressions=withTemporary "fuji-script-adapter"$ \root->do
  ordinaryProblems<-checkResult fixture ordinaryRegions(result 0xff)
  ensure(not(null ordinaryProblems)) "ordinary memory comparison ignored private bytes"
 
+boundedKernelMemoryAdmission :: FilePath -> FilePath -> IO ()
+boundedKernelMemoryAdmission runner checker=withTemporary "fuji-kernel-memory-admission"$ \root->do
+ let spec=O.CaseSpec
+      { O.caseId="held-memory"
+      , O.caseProvenance="NativeTests.hs: synthetic store followed by an unconditional held loop"
+      , O.caseExclusion="Kernel instruction-stop admission only; no return ABI or device progress"
+      , O.caseEntry=N.GuestAddress 0x8000
+      , O.caseExit=N.GuestAddress 0xa000
+      , O.caseRegions=
+         [ O.mkRegion(N.RegionId "code")(N.GuestAddress 0x8000)12 O.ReadExecute(O.assemble[0xe3a0005a,0xe5820000,0xeafffffe])
+         , O.mkRegion(N.RegionId "state")(N.GuestAddress 0x2000)4 O.ReadWrite(B.replicate 4 0)
+         , O.mkRegion(N.RegionId "exit")(N.GuestAddress 0xa000)4 O.ReadExecute(O.assemble[0xe12fff1e])
+         , O.mkRegion(N.RegionId "stack")(N.GuestAddress 0xb000)32 O.ReadWrite(B.replicate 32 0)
+         ]
+      , O.caseFunctions=[(N.GuestAddress 0x8000,12)]
+      , O.caseInitial=[(r,if r==N.R2 then 0x2000 else 0)|r<-[N.R0 .. N.R12]]++[(N.Sp,0xb020),(N.Lr,0xa000),(N.Cpsr,0x13)]
+      , O.caseExpectedStatus=N.InstructionBudget
+      , O.caseExpectedRegisters=[]
+      , O.caseExpectedMemory=[(N.RegionId "state",O.word32le 0x5a)]
+      , O.caseIgnoredMemory=[]
+      , O.caseCp14Identity=Nothing
+      , O.caseKernel=Just(O.KernelCase(O.InstructionLimit 64)Nothing Nothing Nothing Nothing [] [])
+      }
+ path<-O.writeCase(root</>"valid")spec
+ let schemaAccepts candidate wanted=do
+       (timed,code,_,_)<-runBounded 15000000(1024*1024)checker["--schemafile","schemas/native-case.schema.json",candidate]B.empty
+       ensure(not timed && code==(if wanted then ExitSuccess else ExitFailure 1))"bounded kernel schema admission differs"
+ schemaAccepts path True
+ (fixture,regions,_,_)<-loadCase path
+ (code,report)<-runCase runner path
+ ensure(code==0 && get report "status"==s "passed" && get(get report "runner")"status"==s "instruction_budget")"held kernel memory effect was not accepted"
+ let expected=get fixture "expected"
+     rejected name value=do
+       let invalidPath=takeDirectory path</>(name<.>"json")
+       B.writeFile invalidPath(encodeCanonical value)
+       schemaAccepts invalidPath False
+       admitted<-try(loadCase invalidPath)::IO(Either SomeException(Value,[Region],B.ByteString,[(String,Value)]))
+       ensure(case admitted of Left _->True;Right _->False)(name++" was admitted")
+ rejected "returned-empty-registers"(set "expected"(set "status"(s "returned")expected)fixture)
+ rejected "nonkernel-budget-empty-registers"(remove "kernel" fixture)
+ rejected "kernel-budget-empty-memory"(set "expected"(set "memory"(arr[])expected)fixture)
+ rejected "wall-budget-empty-registers"(set "expected"(set "status"(s "wall_budget")expected)fixture)
+ let wrongMemory=set "expected"(set "memory"(arr[obj[("region",s "state"),("offset",n 0),("hex",s "59000000")]])expected)fixture
+ mismatches<-checkResult wrongMemory regions(get report "runner")
+ ensure(not(null mismatches))"held kernel admission ignored its independent memory effect"
+
 main :: IO ()
 main=do
  [runner,generator,checker]<-getArgs
  scriptAdapterRegressions
  defaultWireRegression
+ boundedKernelMemoryAdmission runner checker
  names<-sort.filter((==".json").takeExtension) <$> listDirectory "emulation/fixtures"
  forM_ names$ \name->do
   let path="emulation/fixtures" </> name

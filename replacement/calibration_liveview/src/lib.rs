@@ -1,7 +1,7 @@
 #![no_std]
 
 pub mod publication;
-#[cfg(target_arch = "arm")]
+#[cfg(all(target_arch = "arm", not(feature = "library")))]
 mod abi;
 
 pub const CACHE_SIZE: usize = 0x420000;
@@ -10,8 +10,8 @@ pub const FIXED_SIZE: usize = 0x42000;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CalibrationOffset(usize);
 impl CalibrationOffset {
-    pub fn parse(value: usize) -> Option<Self> {
-        (value < CACHE_SIZE).then_some(Self(value))
+    pub const fn parse(value: usize) -> Option<Self> {
+        if value < CACHE_SIZE { Some(Self(value)) } else { None }
     }
     pub const fn byte_offset(self) -> usize { self.0 }
 }
@@ -21,6 +21,16 @@ pub struct CalibrationValue(pub u32);
 pub struct SignedCalibrationValue(pub i32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CalibrationByte(pub u8);
+
+pub struct InitializedCalibrationBase(core::ptr::NonNull<u8>);
+impl InitializedCalibrationBase {
+    /// # Safety
+    /// The base addresses an initialized, readable CACHE_SIZE-byte calibration cache for every read through this value.
+    pub unsafe fn from_initialized_base(base: core::ptr::NonNull<u8>) -> Self { Self(base) }
+    pub fn read_byte(&self, offset: CalibrationOffset) -> CalibrationByte {
+        CalibrationByte(unsafe { core::ptr::read_volatile(self.0.as_ptr().add(offset.byte_offset())) })
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LoadPath { Primary, Fixed, Defaults }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -144,7 +154,7 @@ impl CalibrationRegion {
     }
 }
 
-#[cfg(target_arch = "arm")]
+#[cfg(all(target_arch = "arm", not(feature = "library")))]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo<'_>) -> ! { loop { core::hint::spin_loop(); } }
 

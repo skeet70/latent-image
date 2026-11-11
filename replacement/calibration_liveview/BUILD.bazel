@@ -1,10 +1,18 @@
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary")
-load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
 
 package(default_visibility = ["//visibility:public"])
 
 exports_files(["src/lib.rs", "src/publication.rs", "src/abi.rs"])
+
+xm1_rust_rlib(
+    name = "libcalibration_liveview",
+    src = "src/lib.rs",
+    crate_name = "calibration_liveview",
+    data = ["src/publication.rs"],
+    rustc_flags = ["--cfg", "'feature=\"library\"'"],
+)
 
 [
     xm1_rust_staticlib(

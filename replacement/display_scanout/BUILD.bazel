@@ -1,0 +1,71 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(glob(["src/*.rs"]))
+
+core_sources = glob(["src/*.rs"], exclude = ["src/lib.rs", "src/*_tests.rs"])
+
+filegroup(
+    name = "core-sources",
+    srcs = core_sources,
+)
+
+xm1_rust_rlib(
+    name = "libdisplay_scanout_panel",
+    src = "src/lib.rs",
+    crate_name = "display_scanout_panel",
+    data = core_sources + ["//replacement/calibration_liveview:libcalibration_liveview"],
+    rustc_flags = ["--cfg", "'feature=\"library\"'", "--cfg", "'feature=\"panel\"'", "--extern", "calibration_liveview=$(location //replacement/calibration_liveview:libcalibration_liveview)"],
+)
+
+xm1_rust_staticlib(
+    name = "display-scanout-rust",
+    src = "src/lib.rs",
+    crate_name = "xm1_display_scanout",
+    data = core_sources + ["//replacement/calibration_liveview:libcalibration_liveview"],
+    rustc_flags = ["--extern", "calibration_liveview=$(location //replacement/calibration_liveview:libcalibration_liveview)"],
+)
+
+xm1_rust_elf(
+    name = "display-scanout",
+    rust_staticlib = ":display-scanout-rust",
+    entry = "xm1_scanout_commit",
+    link_script = "display-scanout.ld",
+    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--orphan-handling=error"],
+)
+
+genrule(
+    name = "host-calibration-library",
+    srcs = ["//replacement/calibration_liveview:src/lib.rs", "//replacement/calibration_liveview:src/publication.rs"],
+    outs = ["libcalibration_liveview_host.rlib"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --crate-name calibration_liveview --crate-type rlib $(location //replacement/calibration_liveview:src/lib.rs) -o $@",
+    tools = ["@lab_rustc//:bin/rustc"],
+)
+
+genrule(
+    name = "host-tests-build",
+    srcs = glob(["src/*.rs"]) + [":host-calibration-library"],
+    outs = ["display-scanout-host-tests"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) --extern calibration_liveview=$(location :host-calibration-library) $(location src/lib.rs) -o $@",
+    executable = True,
+    tools = ["@lab_clang//:bin/clang", "@lab_rustc//:bin/rustc"],
+)
+
+sh_test(
+    name = "host-tests",
+    size = "small",
+    srcs = ["host-test.sh"],
+    args = ["$(location :host-tests-build)"],
+    data = [":host-tests-build"],
+)
+
+haskell_binary(
+    name = "native-suite",
+    srcs = ["native/Main.hs"],
+    main_file = "native/Main.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
+    deps = ["//emulation:case-sha256", "//emulation:native-adapter", "//emulation:native-observation", "//emulation:owned-case", "//emulation:parallel-cases", "//host:aeson", "//host:base", "//host:bytestring", "//host:containers", "//host:filepath", "//host:directory", "//host:host-support", "//host:json", "//host/firmware:bank-allowlist"],
+)

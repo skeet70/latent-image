@@ -70,7 +70,7 @@
       "required": ["status", "registers", "memory", "events"],
       "properties": {
         "status": {"enum": ["returned", "instruction_budget", "wall_budget", "memory_guard", "fetch_guard", "unknown_call", "unsupported_instruction", "stub_contract", "stop_address"]},
-        "registers": {"$ref": "#/$defs/registers", "minProperties": 1},
+        "registers": {"$ref": "#/$defs/registers"},
         "memory": {
           "type": "array", "maxItems": 64,
           "items": {"type": "object", "additionalProperties": false, "required": ["region", "offset", "hex"], "properties": {"region": {"$ref": "#/$defs/id"}, "offset": {"type": "integer", "minimum": 0, "maximum": 8388608}, "hex": {"type": "string", "pattern": "^([0-9a-f]{2})+$", "maxLength": 16777216}}}
@@ -122,6 +122,14 @@
     }
   },
   "allOf": [
+    {
+      "if": {
+        "required": ["kernel"],
+        "properties": {"expected": {"properties": {"status": {"const": "instruction_budget"}, "memory": {"minItems": 1}}}}
+      },
+      "then": {},
+      "else": {"properties": {"expected": {"properties": {"registers": {"minProperties": 1}}}}}
+    },
     {
       "if": {"not": {"required": ["memory_profile"]}},
       "then": {"properties": {

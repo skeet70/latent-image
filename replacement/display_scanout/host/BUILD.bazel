@@ -1,0 +1,24 @@
+package(default_visibility = ["//visibility:public"])
+
+genrule(
+    name = "calibration-liveview-rlib",
+    srcs = [
+        "//replacement/calibration_liveview:src/lib.rs",
+        "//replacement/calibration_liveview:src/publication.rs",
+    ],
+    outs = ["libcalibration_liveview.rlib"],
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --crate-name calibration_liveview --crate-type rlib --cfg 'feature=\"library\"' $(location //replacement/calibration_liveview:src/lib.rs) -o $@",
+    tools = ["@lab_xm1_rust//:bin/rustc"],
+)
+
+genrule(
+    name = "display-scanout-panel",
+    srcs = [
+        "//replacement/display_scanout:core-sources",
+        "//replacement/display_scanout:src/lib.rs",
+        ":calibration-liveview-rlib",
+    ],
+    outs = ["libdisplay_scanout_panel.rlib"],
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --crate-name display_scanout_panel --crate-type rlib --cfg 'feature=\"library\"' --cfg 'feature=\"panel\"' --extern calibration_liveview=$(location :calibration-liveview-rlib) $(location //replacement/display_scanout:src/lib.rs) -o $@",
+    tools = ["@lab_xm1_rust//:bin/rustc"],
+)
