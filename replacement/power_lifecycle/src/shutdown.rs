@@ -107,6 +107,7 @@ pub struct ServiceMessage<'a> {
 // The service copies payload bytes before returning, as 0x72503c does.
 pub trait ShutdownRtos {
     fn current_task(&mut self) -> TaskId;
+    fn try_current_task(&mut self) -> Result<TaskId, KernelStatus> { Ok(self.current_task()) }
     fn post(&mut self, message: ServiceMessage<'_>) -> Result<(), KernelStatus>;
     fn set_event_flag(&mut self, flag: u32, bits: u32) -> Result<(), KernelStatus>;
 }
@@ -120,7 +121,7 @@ pub fn post_lifecycle(
     request: LifecycleRequest,
     caller_payload: &mut [u8; 16],
 ) -> Result<(), KernelStatus> {
-    let sender = rtos.current_task();
+    let sender = rtos.try_current_task()?;
     match request {
         LifecycleRequest::Save(token) => {
             caller_payload[..4].copy_from_slice(&token.0.to_le_bytes());
@@ -152,14 +153,14 @@ pub fn post_application_record(
     caller_record: &[u8; 76],
 ) -> Result<(), KernelStatus> {
     let request = u32::from_le_bytes(caller_record[..4].try_into().unwrap());
-    let sender = rtos.current_task();
+    let sender = rtos.try_current_task()?;
     let destination = match events.routing {
         UiRouting::Primary if request & 0x900 != 0 => QueueId(7),
         UiRouting::Primary | UiRouting::Other => QueueId(1),
     };
     let result = rtos.post(ServiceMessage { operation: RequestId(0), sender, destination, payload: caller_record });
     if request == 0x91b && events.first_request_task.0 == 0 {
-        events.first_request_task = rtos.current_task();
+        events.first_request_task = sender;
     }
     result
 }
@@ -253,7 +254,7 @@ impl Shutdown {
         operation: RequestId,
         token: TransitionToken,
         storage_scratch: &mut [u8; 8],
-    ) -> Option<crate::shutdown_start::StartupObservation> {
+    ) -> Option<Result<crate::shutdown_start::StartupObservation, KernelStatus>> {
         if !self.receive_barrier_start(operation, token) { return None; }
         unsafe { core::ptr::write_volatile(0x15c1e5c as *mut u32, 0) };
         Some(unsafe { crate::shutdown_start::start_native(storage_scratch) })
@@ -272,7 +273,7 @@ impl Shutdown {
             task8_readiness: crate::shutdown_requests::Task8Readiness(unsafe {
                 core::ptr::read_volatile(0x409c34c4 as *const u32)
             }),
-            task8_completion: crate::shutdown_requests::OwnedCompletionAddress::task8(),
+            task8_completion: crate::shutdown_requests::OwnedCompletionAddress::task8_word(),
             calendar_completion: crate::shutdown_requests::OwnedCompletionAddress::calendar(),
             task8_payload: task8_scratch,
         };
@@ -313,11 +314,9 @@ impl Shutdown {
         let _ = unsafe { xm1_power_timers_stop() };
         let _ = crate::shutdown_pins::transfer_pipeline_noop();
         let _ = unsafe { xm1_power_audio_release(xm1_power_audio_shutdown_callback as usize as u32) };
+        // 0xec674c continues without testing 0xec6748's status.
         let mut observed = 0;
-        if let Err(error) = unsafe { crate::shutdown_rtos::wait_current_task(1, &mut observed) } {
-            self.phase = ShutdownPhase::ReleaseFailed;
-            return Err(error);
-        }
+        let _ = unsafe { crate::shutdown_rtos::wait_current_task(1, &mut observed) };
         let mut pins = crate::shutdown_pins::PinLifecycle::from_abi(unsafe {
             core::ptr::read_volatile(0x9743e8 as *const u32)
         });

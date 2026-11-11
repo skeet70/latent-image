@@ -26,7 +26,8 @@ pub struct HardwareTimerRequest {
     pub period: u32,
     pub units: u32,
     pub mode: u32,
-    pub callback: Option<unsafe extern "C" fn()>,
+    /// 0 means none.
+    pub callback: u32,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Configuration { pub period: Period, pub units: Units, pub mode: Mode, pub callback: Option<Callback> }

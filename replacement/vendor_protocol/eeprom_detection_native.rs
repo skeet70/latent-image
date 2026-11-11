@@ -6,7 +6,7 @@ use core::sync::atomic::{AtomicPtr, Ordering};
 extern "C" {
     fn xm1_power_interrupt_lock() -> u32;
     fn xm1_power_interrupt_unlock(saved: u32);
-    fn xm1_power_timer_irq_attach(source: u32, handler: unsafe extern "C" fn(), output: *mut u32) -> i32;
+    fn xm1_power_timer_irq_attach(source: u32, handler: u32, output: *mut u32) -> i32;
     fn xm1_power_timer_release_handle(handle: u32) -> i32;
 }
 
@@ -33,8 +33,9 @@ impl DetectionIo for NativeDetectionIo {
             DetectionSource::Low => low_irq,
             DetectionSource::Probe => probe_irq,
         };
+        let handler = match register_handler(handler) { Ok(handler) => handler, Err(error) => return Err(ServiceStatus(error.status())) };
         let mut token = 0;
-        let status = unsafe { xm1_power_timer_irq_attach(source.number(), handler, &mut token) };
+        let status = unsafe { xm1_power_timer_irq_attach(source.number(), handler.0 as u32, &mut token) };
         if status == 0 { Ok(DetectionIrqToken(token)) } else { Err(ServiceStatus(status)) }
     }
     fn release_irq(&self, token: DetectionIrqToken) -> Result<(), ServiceStatus> {

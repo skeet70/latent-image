@@ -6,7 +6,7 @@ use super::super::executor::NodeAddress;
 extern "C" {
     fn xm1_power_save_irq() -> u32;
     fn xm1_power_restore_irq(saved: u32);
-    fn xm1_power_timer_irq_attach(source: u32, handler: unsafe extern "C" fn(), output: *mut u32) -> i32;
+    fn xm1_power_timer_irq_attach(source: u32, handler: u32, output: *mut u32) -> i32;
     fn xm1_power_timer_release_handle(handle: u32) -> i32;
     fn xm1_power_dcache_clean_range(address: u32, length: u32);
     fn xm1_power_operation_action(address: u32) -> i32;
@@ -20,7 +20,8 @@ impl InstalledIo for NativeIo {
     fn restore_irq(&mut self, saved: SavedIrq) { unsafe { xm1_power_restore_irq(saved.0); } }
     fn attach_irq(&mut self, _memory: &mut impl ConstructionMemory, source: IrqSource, completion: Completion, output: Address) -> ServiceStatus {
         let handler: unsafe extern "C" fn() = match completion { Completion::Receive => xm1_power_audio_stream_receive_complete, Completion::Send => xm1_power_audio_stream_send_complete };
-        ServiceStatus(unsafe { xm1_power_timer_irq_attach(source.0, handler, output.0 as *mut u32) })
+        let handler = match register_completion(handler) { Ok(handler) => handler, Err(error) => return ServiceStatus(crate::callback_registry::refused(error)) };
+        ServiceStatus(unsafe { xm1_power_timer_irq_attach(source.0, handler.0 as u32, output.0 as *mut u32) })
     }
     fn release_irq(&mut self, handle: IrqHandle) -> ServiceStatus { ServiceStatus(unsafe { xm1_power_timer_release_handle(handle.0) }) }
     fn clean_data_cache(&mut self) { unsafe { xm1_power_dcache_clean_range(0, 0); } }

@@ -4,7 +4,6 @@ use crate::hardware_timer_registry::HardwareTimerRequest;
 use crate::queue_construction::QueueConfiguration;
 use crate::shutdown_receive::{ReceiveDescriptor, ReceiveTimeout};
 use crate::shutdown_rtos::NativeShutdownRtos;
-use crate::task6_executor::native::TaskDescriptor;
 use crate::timer_abi;
 use core::mem::MaybeUninit;
 
@@ -12,16 +11,13 @@ const SERVICE: u32 = 0x0096_bd40;
 const ARGUMENTS: u32 = 0x0089_f770;
 fn read(at: u32) -> u32 { unsafe { core::ptr::read_volatile(at as *const u32) } }
 fn write(at: u32, value: u32) { unsafe { core::ptr::write_volatile(at as *mut u32, value) }; }
+use crate::task_abi::{xm1_power_queue_create, xm1_power_queue_delete, xm1_task_release, xm1_task_submit, TaskDescriptor};
 extern "C" {
-    fn xm1_power_queue_create(queue: u32, configuration: *const QueueConfiguration) -> i32;
-    fn xm1_power_queue_delete(queue: u32) -> i32;
-    fn xm1_task_submit(descriptor: u32) -> i32;
-    fn xm1_task_release(index: u32) -> i32;
     fn xm1_power_software_timer_tick();
     fn xm1_power_command_diagnostic(class: u32, code: u32) -> i32;
 }
 fn invoke(address: u32) {
-    if let Ok(callback) = callbacks().resolve::<unsafe extern "C" fn()>(CallbackWord(address)) { unsafe { callback() }; }
+    if let Ok(callback) = callbacks().resolve::<unsafe extern "C" fn()>(CallbackWord(address as usize)) { unsafe { callback() }; }
 }
 struct NativeCallbacks;
 impl TimerServiceCallbacks for NativeCallbacks {
@@ -37,9 +33,10 @@ pub unsafe extern "C" fn xm1_power_software_timer_service_irq() {
 }
 
 fn start_timer(selector: u32, callback: u32, fallback: u32) -> i32 {
+    if let Err(error) = callbacks().ensure(xm1_power_software_timer_service_irq as unsafe extern "C" fn()) { return crate::callback_registry::refused(error); }
     let status = unsafe { timer_abi::xm1_power_hardware_timer_acquire(selector, (SERVICE + 12) as *mut u32) };
     if status != 0 { return status; }
-    let request = HardwareTimerRequest { period: 2500, units: 1, mode: 1, callback: Some(xm1_power_software_timer_service_irq) };
+    let request = HardwareTimerRequest { period: 2500, units: 1, mode: 1, callback: xm1_power_software_timer_service_irq as usize as u32 };
     let status = unsafe { timer_abi::xm1_power_hardware_timer_start(read(SERVICE + 12), &request) };
     if status == 0 {
         write(SERVICE + 16, callback);
@@ -87,7 +84,7 @@ pub extern "C" fn xm1_power_software_timer_initialize(fallback: u32) -> i32 {
     if read(0x0095_ab1c) != 0 { return -255; }
     write(0x0095_ab1c, 1);
     let tick: unsafe extern "C" fn() = xm1_power_software_timer_tick;
-    let _ = callbacks().ensure(tick);
+    if let Err(error) = callbacks().ensure(tick) { return crate::callback_registry::refused(error); }
     let status = unsafe { xm1_power_software_timer_service_start(2, 7, tick as usize as u32, fallback) };
     if status == 0 { 0 } else {
         let _ = unsafe { xm1_power_command_diagnostic(2, 0x1c) };
@@ -98,7 +95,10 @@ pub extern "C" fn xm1_power_software_timer_initialize(fallback: u32) -> i32 {
 #[no_mangle]
 pub extern "C" fn xm1_power_software_timer_service_delete() -> i32 {
     let status = unsafe { timer_abi::xm1_power_hardware_timer_stop(read(SERVICE + 12)) };
-    if status != 0 { return status; }
+    if status != 0 {
+        let _ = unsafe { xm1_power_command_diagnostic(2, 0x1d) };
+        return status;
+    }
     let status = unsafe { timer_abi::xm1_power_hardware_timer_release(read(SERVICE + 12)) };
     if status != 0 { return status; }
     if unsafe { xm1_power_queue_delete(9) } != 0 { return -255; }
@@ -108,7 +108,7 @@ pub extern "C" fn xm1_power_software_timer_service_delete() -> i32 {
 extern "C" {
     fn xm1_power_interrupt_lock() -> u32;
     fn xm1_power_interrupt_unlock(saved: u32);
-    fn xm1_power_timer_irq_attach(source: u32, handler: unsafe extern "C" fn(), output: *mut u32) -> i32;
+    fn xm1_power_timer_irq_attach(source: u32, handler: u32, output: *mut u32) -> i32;
     fn xm1_power_timer_release_handle(handle: u32) -> i32;
 }
 struct NativeDetectionOutput;
@@ -129,11 +129,12 @@ impl DetectionOutputBackend for NativeDetectionOutput {
             DetectionMode::Off => detection_low_irq,
             DetectionMode::On | DetectionMode::Probe => detection_high_irq,
         };
+        if let Err(error) = callbacks().ensure(handler) { return Err(ServiceStatus(crate::callback_registry::refused(error))); }
         let mut token = 0;
-        let status = unsafe { xm1_power_timer_irq_attach(mode.irq_source().index() as u32, handler, &mut token) };
+        let status = unsafe { xm1_power_timer_irq_attach(mode.irq_source().index() as u32, handler as usize as u32, &mut token) };
         if status == 0 { Ok(DetectionIrqToken(token)) } else { Err(ServiceStatus(status)) }
     }
-    fn invoke(&mut self, callback: DetectionCallback) { invoke(callback.0); }
+    fn invoke(&mut self, callback: DetectionCallback) { let _ = invoke_detection_callback(callbacks(), CallbackWord(callback.0 as usize)); }
 }
 unsafe extern "C" fn detection_low_irq() { detection_interrupt(&mut NativeDetectionOutput, DetectionMode::Off); }
 unsafe extern "C" fn detection_high_irq() { detection_interrupt(&mut NativeDetectionOutput, DetectionMode::On); }
@@ -147,12 +148,22 @@ pub extern "C" fn xm1_power_detection_set_mode(mode: u32) -> i32 {
 #[no_mangle]
 pub extern "C" fn xm1_power_detection_output(mode: u32, callback: u32) -> i32 {
     let Some(mode) = DetectionMode::from_abi(mode) else { return -30; };
+    if callback != 0 {
+        if let Err(error) = callbacks().resolve::<unsafe extern "C" fn()>(CallbackWord(callback as usize)) {
+            return crate::callback_registry::refused(error);
+        }
+    }
     let callback = if callback == 0 { None } else { Some(DetectionCallback(callback)) };
     match detection_output(&mut NativeDetectionOutput, mode, callback) { Ok(()) => 0, Err(status) => status.0 }
 }
 #[no_mangle]
 pub extern "C" fn xm1_power_detection_output_continuous(mode: u32, callback: u32) -> i32 {
     let Some(mode) = DetectionMode::from_abi(mode) else { return -30; };
+    if callback != 0 {
+        if let Err(error) = callbacks().resolve::<unsafe extern "C" fn()>(CallbackWord(callback as usize)) {
+            return crate::callback_registry::refused(error);
+        }
+    }
     let callback = if callback == 0 { None } else { Some(DetectionCallback(callback)) };
     match continuous_detection_output(&mut NativeDetectionOutput, mode, callback) { Ok(()) => 0, Err(status) => status.0 }
 }

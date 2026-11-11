@@ -16,8 +16,12 @@ fn required(source: GuestAddress) -> Option<GuestAddress> {
     if source.get() == 0 { None } else { Some(source) }
 }
 
-fn word(payload: &mut [u8], at: usize, value: u32) {
-    payload[at..at + 4].copy_from_slice(&value.to_le_bytes());
+trait Word { fn value(self) -> u32; }
+impl Word for u32 { fn value(self) -> u32 { self } }
+impl Word for usize { fn value(self) -> u32 { self as u32 } }
+
+fn word(payload: &mut [u8], at: usize, value: impl Word) {
+    payload[at..at + 4].copy_from_slice(&value.value().to_le_bytes());
 }
 
 fn half(payload: &mut [u8], at: usize, value: u16) {
@@ -384,63 +388,63 @@ mod native {
 
     command_export!(xm1_power_record_helper_1039b48,
         (main: *const u8, first: *const u8, second: *const u8, extra: *const u8, completion: u32),
-        (GuestAddress::new(main as u32), GuestAddress::new(first as u32), GuestAddress::new(second as u32), GuestAddress::new(extra as u32), CallbackWord(completion)),
+        (GuestAddress::new(main as u32), GuestAddress::new(first as u32), GuestAddress::new(second as u32), GuestAddress::new(extra as u32), CallbackWord(completion as usize)),
         super::helper_1039b48);
     command_export!(xm1_power_record_helper_1039c7c,
         (descriptor: *const u8, dimensions: *const u8, extended: *const u8, mode: *const u8, snapshot: *const u8, channel: *const u8, optional: *const u8, enabled: u32, completion: u32),
-        (GuestAddress::new(descriptor as u32), GuestAddress::new(dimensions as u32), GuestAddress::new(extended as u32), GuestAddress::new(mode as u32), GuestAddress::new(snapshot as u32), GuestAddress::new(channel as u32), GuestAddress::new(optional as u32), enabled, CallbackWord(completion)),
+        (GuestAddress::new(descriptor as u32), GuestAddress::new(dimensions as u32), GuestAddress::new(extended as u32), GuestAddress::new(mode as u32), GuestAddress::new(snapshot as u32), GuestAddress::new(channel as u32), GuestAddress::new(optional as u32), enabled, CallbackWord(completion as usize)),
         super::helper_1039c7c);
     command_export!(xm1_power_record_helper_1039e48,
         (record: *const u8, first: *const u8, second: *const u8, third: *const u8, fourth: *const u8, fifth: *const u8, optional: *const u8, enabled: u32, selection: *const u32, value: u32, first_word: u32, second_word: u32, completion: u32, first_callback: u32, second_callback: u32),
-        (GuestAddress::new(record as u32), GuestAddress::new(first as u32), GuestAddress::new(second as u32), GuestAddress::new(third as u32), GuestAddress::new(fourth as u32), GuestAddress::new(fifth as u32), GuestAddress::new(optional as u32), enabled, GuestAddress::new(selection as u32), value, first_word, second_word, CallbackWord(completion), CallbackWord(first_callback), CallbackWord(second_callback)),
+        (GuestAddress::new(record as u32), GuestAddress::new(first as u32), GuestAddress::new(second as u32), GuestAddress::new(third as u32), GuestAddress::new(fourth as u32), GuestAddress::new(fifth as u32), GuestAddress::new(optional as u32), enabled, GuestAddress::new(selection as u32), value, first_word, second_word, CallbackWord(completion as usize), CallbackWord(first_callback as usize), CallbackWord(second_callback as usize)),
         super::helper_1039e48);
     command_export!(xm1_power_record_helper_103a00c,
         (record: *const u8, callback: u32, pair: u32),
-        (GuestAddress::new(record as u32), CallbackWord(callback), CallbackWord(pair)),
+        (GuestAddress::new(record as u32), CallbackWord(callback as usize), CallbackWord(pair as usize)),
         super::helper_103a00c);
     command_export!(xm1_power_record_helper_103a09c, (value: u32), (value), super::helper_103a09c);
     command_export!(xm1_power_record_helper_103a0f0, (), (), super::helper_103a0f0);
     command_export!(xm1_power_record_helper_103a13c,
         (record: *const u8, callback: u32),
-        (GuestAddress::new(record as u32), CallbackWord(callback)),
+        (GuestAddress::new(record as u32), CallbackWord(callback as usize)),
         super::helper_103a13c);
     command_export!(xm1_power_record_helper_103a1a8, (first: u32, second: u32), (first, second), super::helper_103a1a8);
     command_export!(xm1_power_record_helper_103a200, (value: u32), (value), super::helper_103a200);
     command_export!(xm1_power_record_helper_103a254,
         (record: *const u8, callback: u32),
-        (GuestAddress::new(record as u32), CallbackWord(callback)),
+        (GuestAddress::new(record as u32), CallbackWord(callback as usize)),
         super::helper_103a254);
     command_export!(xm1_power_record_helper_103a2c0,
         (record: *const u8, callback: u32),
-        (GuestAddress::new(record as u32), CallbackWord(callback)),
+        (GuestAddress::new(record as u32), CallbackWord(callback as usize)),
         super::helper_103a2c0);
     command_export!(xm1_power_record_helper_103a32c,
         (record: *const u8, callback: u32),
-        (GuestAddress::new(record as u32), CallbackWord(callback)),
+        (GuestAddress::new(record as u32), CallbackWord(callback as usize)),
         super::helper_103a32c);
     command_export!(xm1_power_record_helper_103a398,
         (record: *const u8, callback: u32),
-        (GuestAddress::new(record as u32), CallbackWord(callback)),
+        (GuestAddress::new(record as u32), CallbackWord(callback as usize)),
         super::helper_103a398);
     command_export!(xm1_power_record_helper_103a404,
         (record: *const u8, callback: u32),
-        (GuestAddress::new(record as u32), CallbackWord(callback)),
+        (GuestAddress::new(record as u32), CallbackWord(callback as usize)),
         super::helper_103a404);
     command_export!(xm1_power_record_helper_103a470,
         (record: *const u8, mode: u32, callback: u32),
-        (GuestAddress::new(record as u32), mode as u16, CallbackWord(callback)),
+        (GuestAddress::new(record as u32), mode as u16, CallbackWord(callback as usize)),
         super::helper_103a470);
     command_export!(xm1_power_record_helper_103a594,
         (record: *const u8, callback: u32, pair: u32, extra: *const u8),
-        (GuestAddress::new(record as u32), CallbackWord(callback), CallbackWord(pair), GuestAddress::new(extra as u32)),
+        (GuestAddress::new(record as u32), CallbackWord(callback as usize), CallbackWord(pair as usize), GuestAddress::new(extra as u32)),
         super::helper_103a594);
     command_export!(xm1_power_record_helper_103a694,
         (value: u32, record: *const u8, first: u32, enabled: u32, second: u32),
-        (value, GuestAddress::new(record as u32), CallbackWord(first), enabled, CallbackWord(second)),
+        (value, GuestAddress::new(record as u32), CallbackWord(first as usize), enabled, CallbackWord(second as usize)),
         super::helper_103a694);
     command_export!(xm1_power_record_helper_103a708,
         (first: u32, second: u32, record: *const u32, ratio: *const u32, tail: u32),
-        (CallbackWord(first), second, GuestAddress::new(record as u32), GuestAddress::new(ratio as u32), tail),
+        (CallbackWord(first as usize), second, GuestAddress::new(record as u32), GuestAddress::new(ratio as u32), tail),
         super::helper_103a708);
 }
 

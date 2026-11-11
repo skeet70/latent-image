@@ -1,5 +1,5 @@
 use super::*;
-use crate::callback_registry::{registry, CallbackWord};
+use crate::callback_registry::kernel_slot;
 use core::ptr::{read_volatile, write_volatile};
 
 extern "C" {
@@ -60,9 +60,8 @@ impl ChargeTransport for NativeChargeTimers {
     }
     fn status(&mut self, handle: SerialHandle) -> (ServiceStatus, SerialStatus) {
         // The private charge handle remains registered until close. Status writes all seven words.
-        let mut words = core::mem::MaybeUninit::<[u32; 7]>::uninit();
-        let status = unsafe { xm1_power_serial_status(handle.0, words.as_mut_ptr().cast::<u32>()) };
-        let words = unsafe { words.assume_init() };
+        let mut words = [0u32; 7];
+        let status = unsafe { xm1_power_serial_status(handle.0, words.as_mut_ptr()) };
         (ServiceStatus(status), SerialStatus { state: words[1], available: words[3] })
     }
     fn read_response(&mut self, handle: SerialHandle) -> ServiceStatus {
@@ -76,16 +75,16 @@ impl ChargeTransport for NativeChargeTimers {
 impl TimerHandleRegistry for NativeChargeTimers {
     fn handle(&mut self, index: usize) -> InterfaceHandle { InterfaceHandle(load(0x940e9c + index * 4)) }
     fn prepare_interface(&mut self, index: usize) -> ServiceStatus {
-        let root = load(0x96bd20) as usize;
-        let current: unsafe extern "C" fn() -> u32 = match registry().resolve(CallbackWord(load(root + 0x1618))) { Ok(entry) => entry, Err(error) => return ServiceStatus(error.status()) };
-        let interface = load(0x96bd20 + unsafe { current() } as usize * 4) as usize;
-        let enter: unsafe extern "C" fn() -> u32 = match registry().resolve(CallbackWord(load(interface + 0x164))) { Ok(entry) => entry, Err(error) => return ServiceStatus(error.status()) };
-        let stop: unsafe extern "C" fn(u32) -> i32 = match registry().resolve(CallbackWord(load(interface + 0x15c))) { Ok(entry) => entry, Err(error) => return ServiceStatus(error.status()) };
-        let clear: unsafe extern "C" fn(u32, u32) -> i32 = match registry().resolve(CallbackWord(load(interface + 0x160))) { Ok(entry) => entry, Err(error) => return ServiceStatus(error.status()) };
-        let leave: unsafe extern "C" fn(u32) = match registry().resolve(CallbackWord(load(interface + 0x168))) { Ok(entry) => entry, Err(error) => return ServiceStatus(error.status()) };
+        let root = load(0x96bd20);
+        let current: unsafe extern "C" fn() -> u32 = unsafe { kernel_slot(root, 0x1618) };
+        let interface = load(0x96bd20 + unsafe { current() } as usize * 4);
+        let enter: unsafe extern "C" fn() -> u32 = unsafe { kernel_slot(interface, 0x164) };
+        let stop: unsafe extern "C" fn(u32) -> i32 = unsafe { kernel_slot(interface, 0x15c) };
+        let clear: unsafe extern "C" fn(u32, *const u32) -> i32 = unsafe { kernel_slot(interface, 0x160) };
+        let leave: unsafe extern "C" fn(u32) = unsafe { kernel_slot(interface, 0x168) };
         let saved = unsafe { enter() };
         unsafe { stop(index as u32) };
-        unsafe { clear(index as u32, 0) };
+        unsafe { clear(index as u32, core::ptr::null()) };
         unsafe { leave(saved) };
         ServiceStatus(0)
     }
@@ -124,13 +123,13 @@ impl TimerIrqRegistry for NativeChargeTimers {
             IrqTrigger::Mode3 => (1, 1),
         };
         let record = [0, handler.address(), route.priority(), polarity, mode];
-        let root = load(0x96bd20) as usize;
-        let current: unsafe extern "C" fn() -> u32 = match registry().resolve(CallbackWord(load(root + 0x1618))) { Ok(entry) => entry, Err(error) => return ServiceStatus(error.status()) };
-        let interface = load(0x96bd20 + unsafe { current() } as usize * 4) as usize;
-        let enter: unsafe extern "C" fn() -> u32 = match registry().resolve(CallbackWord(load(interface + 0x164))) { Ok(entry) => entry, Err(error) => return ServiceStatus(error.status()) };
-        let configure: unsafe extern "C" fn(u32, *const u32) -> i32 = match registry().resolve(CallbackWord(load(interface + 0x160))) { Ok(entry) => entry, Err(error) => return ServiceStatus(error.status()) };
-        let enable: unsafe extern "C" fn(u32) -> i32 = match registry().resolve(CallbackWord(load(interface + 0x158))) { Ok(entry) => entry, Err(error) => return ServiceStatus(error.status()) };
-        let leave: unsafe extern "C" fn(u32) = match registry().resolve(CallbackWord(load(interface + 0x168))) { Ok(entry) => entry, Err(error) => return ServiceStatus(error.status()) };
+        let root = load(0x96bd20);
+        let current: unsafe extern "C" fn() -> u32 = unsafe { kernel_slot(root, 0x1618) };
+        let interface = load(0x96bd20 + unsafe { current() } as usize * 4);
+        let enter: unsafe extern "C" fn() -> u32 = unsafe { kernel_slot(interface, 0x164) };
+        let configure: unsafe extern "C" fn(u32, *const u32) -> i32 = unsafe { kernel_slot(interface, 0x160) };
+        let enable: unsafe extern "C" fn(u32) -> i32 = unsafe { kernel_slot(interface, 0x158) };
+        let leave: unsafe extern "C" fn(u32) = unsafe { kernel_slot(interface, 0x168) };
         let saved = unsafe { enter() };
         unsafe { configure(route.slot() as u32, record.as_ptr()) };
         unsafe { enable(route.slot() as u32) };
@@ -142,12 +141,15 @@ impl TimerIrqRegistry for NativeChargeTimers {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn xm1_power_timer_irq_attach(source: u32, handler: unsafe extern "C" fn(), output: *mut u32) -> i32 {
+pub unsafe extern "C" fn xm1_power_timer_irq_attach(source: u32, handler: u32, output: *mut u32) -> i32 {
     let Some(source) = IrqSource::from_abi(source) else {
         xm1_power_command_diagnostic(2, 15);
         return -30;
     };
-    let Some(handler) = IrqHandler::from_abi(handler as usize as u32) else {
+    if let Err(error) = crate::charge_timers::admit_irq_handler(crate::callback_registry::CallbackWord(handler as usize)) {
+        return crate::callback_registry::refused(error);
+    }
+    let Some(handler) = IrqHandler::from_abi(handler) else {
         xm1_power_command_diagnostic(2, 15);
         return -30;
     };

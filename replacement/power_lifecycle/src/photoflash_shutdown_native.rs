@@ -1,5 +1,5 @@
 use super::*;
-use crate::callback_registry::registry as callbacks;
+use crate::callback_registry::{registry as callbacks, CallbackWord};
 use crate::callback_slots;
 use crate::shutdown::{QueueId, RequestId, ServiceMessage, ShutdownRtos};
 use crate::shutdown_receive::{ReceiveDescriptor, ReceiveTimeout};
@@ -9,6 +9,7 @@ use core::ptr::{read_volatile, write_volatile};
 extern "C" {
     fn xm1_power_software_timer_cancel(handle: u32) -> i32;
     fn xm1_power_software_timer_start(period: u32, mode: u32, callback: u32, token: *mut u32) -> i32;
+    fn xm1_power_owned_callback_register(word: u32, shape: u32) -> i32;
     fn xm1_power_timer_release_handle(handle: u32) -> i32;
     fn xm1_power_interrupt_lock() -> u32;
     fn xm1_power_interrupt_unlock(saved: u32);
@@ -31,7 +32,7 @@ impl Runtime for NativePhotoflash {
             let call: unsafe extern "C" fn(*const u32) = unsafe { core::mem::transmute(callback.0) };
             unsafe { call(argument.0 as *const u32); }
         } else {
-            let _ = callback_slots::call_no_arguments(callbacks(), callback.0);
+            let _ = callback_slots::call_no_arguments(callbacks(), CallbackWord(callback.0 as usize));
         }
     }
     fn log_stop(&mut self, message: Address) { unsafe { xm1_power_append_stream_text(10, message.0); } }
@@ -55,6 +56,10 @@ pub extern "C" fn xm1_power_photoflash_reset() { reset(&mut NativePhotoflash); }
 pub extern "C" fn xm1_power_photoflash_initialize(completion: u32) -> i32 {
     reset(&mut NativePhotoflash);
     NativePhotoflash.write32(at(CONTEXT, 0x60), completion);
+    let registered = unsafe { xm1_power_owned_callback_register(xm1_power_photoflash_poll_timer as *const () as u32, crate::callback_registry::COMPLETION_SHAPE) };
+    if registered != 0 {
+        return registered;
+    }
     unsafe { xm1_power_software_timer_start(50, 1, xm1_power_photoflash_poll_timer as *const () as u32, at(CONTEXT, 0x68).0 as *mut u32) }
 }
 #[no_mangle]

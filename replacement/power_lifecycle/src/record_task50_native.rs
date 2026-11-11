@@ -1,5 +1,5 @@
 #![cfg(target_arch = "arm")]
-use crate::callback_registry::registry as callbacks;
+use crate::callback_registry::{registry as callbacks, CallbackWord};
 use crate::callback_slots;
 use core::ptr::{read_volatile, write_volatile};
 use crate::record_task50::{self as task, Event, Job, JobPolicy, JobState, Opcode, ReceiveStatus, Synchronization, Task50Io};
@@ -61,7 +61,7 @@ impl Task50Io for NativeTask50 {
         let callback = runtime(0xc4);
         if callback == 0 { return; }
         let flags = if runtime(0xf4) == 1 { 3 } else { 1 } | if runtime(0xfc) == 1 { 4 } else { 0 };
-        let _ = callback_slots::call_argument(callbacks(), callback, flags);
+        let _ = callback_slots::call_argument(callbacks(), CallbackWord(callback as usize), flags);
     }
     fn notify_position(&mut self) {
         if runtime(0xcc) != 1 { return; }
@@ -78,7 +78,7 @@ impl Task50Io for NativeTask50 {
         let callback = runtime(0xc4);
         if callback == 0 { return; }
         let flags = if runtime(0xf4) == 1 { 6 } else { 4 } | if runtime(0xf8) == 1 { 1 } else { 0 };
-        let _ = callback_slots::call_argument(callbacks(), callback, flags);
+        let _ = callback_slots::call_argument(callbacks(), CallbackWord(callback as usize), flags);
     }
     fn dispatch(&mut self, event: Event, argument: JobState) { unsafe { xm1_power_task50_dispatch_event(event.0, argument.0); } }
 }

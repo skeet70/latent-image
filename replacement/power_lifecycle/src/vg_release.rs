@@ -1,5 +1,5 @@
 use core::ptr::{read_volatile, write_volatile};
-use crate::callback_registry::registry as callbacks;
+use crate::callback_registry::{registry as callbacks, CallbackWord};
 use crate::callback_slots;
 use crate::shutdown::{QueueId, RequestId, ServiceMessage, ShutdownRtos};
 use crate::shutdown_rtos::NativeShutdownRtos;
@@ -295,7 +295,7 @@ unsafe fn complete_waiters() {
             let target = word(slot);
             if target != 0 {
                 put_word(slot, 0);
-                let _ = callback_slots::call_signed_argument(callbacks(), target, word(RENDER + 0x4c) as i32);
+                let _ = callback_slots::call_signed_argument(callbacks(), CallbackWord(target as usize), word(RENDER + 0x4c) as i32);
             }
         }
         put_word(RENDER + 0x4c, 0);

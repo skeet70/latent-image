@@ -65,6 +65,10 @@ Required information:
 
 Qualification maps existing execution diagnostics onto pass within scope, behavioral failure, blocked prerequisite and unknown/unsupported execution. A native `returned` outcome passes only if its observations satisfy the contract; `unknown_call` or `unsupported_instruction` prevents qualification when required execution remains unsupported. A known forbidden effect is a behavioral failure, not a missing-model excuse. Preserve the underlying runner status and diagnostics. Required blocked or unknown cases prevent qualification. Matching expected refusals can validate a negative case, but two matching failures do not establish successful capability execution.
 
+### Power Services callback refusals
+
+The Power Services leaf (`replacement/power_lifecycle`) admits a callback word before the entry that consumes it, and refuses an unadmitted word with -255. Stock cannot fail at two of those entries: `xm1_power_software_timer_start` (0x69b328) stores the word unchecked and the tick enters it when it is nonzero at 0x69bf34, and `xm1_power_settings_set_text_producer` (0x6b00cc) is one unconditional store. `xm1_power_timer_irq_attach` (0x64e918) does refuse: it returns -30 for a source above 0x7a or a zero handler (0x64e954..0x64e978). The leaf's registry is the only admission point, so a word it has not admitted cannot be stored and entered later. A stock word in image 4, 5 or 6 text, or an owned word registered through `xm1_power_owned_callback_register`, is admitted. Kernel interface slots are not callbacks: they are read from the kernel root and entered wi…
+
 ## Repeatable replacement loop
 
 1. Select a whole subsystem behind a usable interface from the capability/dependency inventory. Prefer high feature leverage, observable behavior and bounded effects over raw function count. Use function-level units only where no usable subsystem boundary exists yet or as internal subsystem milestones. Name the target design and record each shim with its removal condition.

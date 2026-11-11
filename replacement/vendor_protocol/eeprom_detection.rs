@@ -6,6 +6,7 @@ use xm1_lens_transport::control_device::DeviceCallback;
 use xm1_lens_transport::control_runtime::ControlSender;
 use xm1_lens_transport::control_types::{CompletionStatus, ControlError, ControlMessage, ControlOpcode, ControlPayload, DetectionCompletion};
 pub use xm1_power_services::primitives::ServiceStatus;
+use xm1_power_services::callback_registry::{registry as callbacks, CallbackError, CallbackFn, CallbackWord};
 use xm1_power_services::software_timer_service::{self as detection, DetectionCallback, DetectionField, DetectionIrqToken, DetectionOutputBackend, DetectionRegister};
 pub use xm1_power_services::software_timer_service::DetectionMode;
 use xm1_power_services::storage_shutdown_actor::MediumStatus;
@@ -17,6 +18,12 @@ impl DetectionSource {
     pub const fn number(self) -> u32 { self.mode().irq_source().index() as u32 }
     pub const fn mode(self) -> DetectionMode { match self { Self::High => DetectionMode::On, Self::Low => DetectionMode::Off, Self::Probe => DetectionMode::Probe } }
     pub const fn from_mode(mode: DetectionMode) -> Self { match mode { DetectionMode::Off => Self::Low, DetectionMode::On => Self::High, DetectionMode::Probe => Self::Probe } }
+}
+
+/// Registers a detection handler so the timer entry resolves it, and returns its word.
+pub fn register_handler(handler: unsafe extern "C" fn()) -> Result<CallbackWord, CallbackError> {
+    callbacks().ensure(handler)?;
+    Ok(handler.word())
 }
 pub trait DetectionIo {
     type SavedCritical;

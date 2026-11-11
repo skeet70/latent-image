@@ -1,4 +1,5 @@
 use crate::panel_device::*;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::vec::Vec;
 use std::vec;
 
@@ -208,4 +209,45 @@ fn kind_three_configuration_still_programs_when_the_active_target_is_other() {
     let mut runtime = Runtime::new();
     assert_eq!(set_parameters(&mut state, BackendDevice::parse(3).unwrap(), HardwareParameters { format: FormatCode(13), second: PhaseCode(0), third: OverrideValue(0) }, &mut runtime), SetterOutcome::Held);
     assert_eq!(runtime.effects, vec![Effect::Read(0xdf5)]);
+}
+
+static TIMER_STEP: AtomicU32 = AtomicU32::new(0);
+static TIMER_WORD: AtomicU32 = AtomicU32::new(0);
+unsafe extern "C" fn register_timer(word: u32, shape: u32) -> i32 {
+    assert_eq!(shape, COMPLETION_SHAPE);
+    assert_eq!(TIMER_STEP.load(Ordering::SeqCst), 0);
+    TIMER_WORD.store(word, Ordering::SeqCst);
+    TIMER_STEP.store(1, Ordering::SeqCst);
+    0
+}
+unsafe extern "C" fn start_timer(ticks: u32, mode: u32, word: u32, token: *mut u32) -> i32 {
+    assert_eq!(ticks, 5);
+    assert_eq!(mode, 1);
+    // The Power entry refuses a word the registry has not admitted.
+    if TIMER_STEP.load(Ordering::SeqCst) != 1 { return -255; }
+    assert_eq!(word, TIMER_WORD.load(Ordering::SeqCst));
+    unsafe { *token = 0x37; }
+    0
+}
+
+#[test]
+fn timer_start_registers_the_owned_handler_before_the_entry() {
+    TIMER_STEP.store(0, Ordering::SeqCst);
+    TIMER_WORD.store(0, Ordering::SeqCst);
+    assert_eq!(unsafe { start_owned_timer(5, 0x0093_0000, register_timer, start_timer) }, Ok(0x37));
+    assert_eq!(TIMER_WORD.load(Ordering::SeqCst), 0x0093_0000);
+}
+
+static REFUSED_STARTS: AtomicU32 = AtomicU32::new(0);
+unsafe extern "C" fn refuse_registration(_: u32, _: u32) -> i32 { -255 }
+unsafe extern "C" fn refused_start(_: u32, _: u32, _: u32, _: *mut u32) -> i32 {
+    REFUSED_STARTS.fetch_add(1, Ordering::SeqCst);
+    0
+}
+
+#[test]
+fn refused_registration_keeps_the_timer_entry_from_running() {
+    REFUSED_STARTS.store(0, Ordering::SeqCst);
+    assert_eq!(unsafe { start_owned_timer(5, 0x0093_0004, refuse_registration, refused_start) }, Err(-255));
+    assert_eq!(REFUSED_STARTS.load(Ordering::SeqCst), 0);
 }

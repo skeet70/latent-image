@@ -1,3 +1,4 @@
+use crate::callback_registry::{CallbackError, CallbackWord};
 use crate::shutdown::{KernelStatus, QueueId, RequestId, ServiceMessage, ShutdownRtos};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -24,6 +25,16 @@ pub fn consume(callbacks: &mut impl Task6Callbacks, receive: Result<(), KernelSt
     if dispatch(callbacks, residue).is_err() { callbacks.failure(); }
 }
 
+/// Registers the executor tick so the timer entry resolves it.
+pub fn register_executor_tick(tick: unsafe extern "C" fn()) -> Result<(), CallbackError> {
+    crate::callback_registry::registry().ensure(tick)
+}
+
+/// The admission `xm1_power_executor_timer_start` performs before it acquires the timer.
+pub fn admit_timer_callback(callback: CallbackWord) -> Result<(), CallbackError> {
+    crate::callback_registry::registry().resolve::<unsafe extern "C" fn()>(callback).map(|_| ())
+}
+
 #[cfg(target_arch = "arm")]
 pub mod native {
     use super::*;
@@ -33,26 +44,20 @@ pub mod native {
     use crate::shutdown_rtos::NativeShutdownRtos;
     use crate::timer_abi;
     use core::{mem::MaybeUninit, ptr::{read_volatile, write_volatile}};
-    #[repr(C)]
-    pub struct TaskDescriptor { pub identifier: u32, pub name: u32, pub priority: u32, pub stack: u32, pub entry: unsafe extern "C" fn(*const u32) -> !, pub argument: *const u32, pub reserved: MaybeUninit<u32> }
-    #[repr(C)]
-    pub struct QueueConfiguration { pub flags: u32, pub message_size: u32 }
+    use crate::queue_construction::QueueConfiguration;
+    use crate::task_abi::{xm1_power_queue_create, xm1_power_queue_delete, xm1_task_release, xm1_task_submit, TaskDescriptor};
     extern "C" {
         fn xm1_power_audio_operation_tick();
-        fn xm1_power_queue_create(queue: u32, configuration: *const QueueConfiguration) -> i32;
-        fn xm1_task_submit(descriptor: u32) -> i32;
-        fn xm1_power_queue_delete(queue: u32) -> i32;
-        fn xm1_task_release(index: u32) -> i32;
     }
     struct NativeCallbacks;
     impl Task6Callbacks for NativeCallbacks {
         fn execute(&mut self) {
             let callback = unsafe { read_volatile(0x95dc18 as *const u32) };
-            if let Ok(invoke) = callbacks().resolve::<unsafe extern "C" fn()>(CallbackWord(callback)) { unsafe { invoke() }; }
+            if let Ok(invoke) = callbacks().resolve::<unsafe extern "C" fn()>(CallbackWord(callback as usize)) { unsafe { invoke() }; }
         }
         fn failure(&mut self) {
             let callback = unsafe { read_volatile(0x95dc1c as *const u32) };
-            if let Ok(invoke) = callbacks().resolve::<unsafe extern "C" fn()>(CallbackWord(callback)) { unsafe { invoke() }; }
+            if let Ok(invoke) = callbacks().resolve::<unsafe extern "C" fn()>(CallbackWord(callback as usize)) { unsafe { invoke() }; }
         }
     }
     #[no_mangle]
@@ -68,8 +73,12 @@ pub mod native {
     }
     #[no_mangle]
     pub unsafe extern "C" fn xm1_power_task6_start(error_callback: Option<unsafe extern "C" fn()>) -> i32 {
+        if let Some(callback) = error_callback {
+            if let Err(error) = admit_timer_callback(CallbackWord(callback as usize)) {
+                return crate::callback_registry::refused(error);
+            }
+        }
         if unsafe { xm1_power_queue_create(6, &QueueConfiguration { flags: 0x30, message_size: 12 }) } != 0 { return -255; }
-        if let Some(callback) = error_callback { let _ = callbacks().ensure(callback); }
         unsafe { write_volatile(0x89f76c as *mut u32, error_callback.map_or(0, |callback| callback as usize as u32)) };
         let descriptor = TaskDescriptor { identifier: 6, name: 0x781938, priority: 3, stack: 0xc00, entry: xm1_power_task6_entry, argument: 0x89f76c as *const u32, reserved: MaybeUninit::uninit() };
         if unsafe { xm1_task_submit(&descriptor as *const TaskDescriptor as u32) } == 0 { 0 } else { -255 }
@@ -81,13 +90,14 @@ pub mod native {
     }
     #[no_mangle]
     pub unsafe extern "C" fn xm1_power_executor_timer_start(callback: unsafe extern "C" fn()) -> i32 {
+        if let Err(error) = admit_timer_callback(CallbackWord(callback as usize)) { return crate::callback_registry::refused(error); }
+        if let Err(error) = callbacks().ensure(xm1_power_task6_timer_irq as unsafe extern "C" fn()) { return crate::callback_registry::refused(error); }
         let handle = 0x95dc14 as *mut u32;
         let status = unsafe { timer_abi::xm1_power_hardware_timer_acquire(1, handle) };
         if status != 0 { return status; }
-        let request = HardwareTimerRequest { period: 1000, units: 1, mode: 1, callback: Some(xm1_power_task6_timer_irq) };
+        let request = HardwareTimerRequest { period: 1000, units: 1, mode: 1, callback: xm1_power_task6_timer_irq as usize as u32 };
         let status = unsafe { timer_abi::xm1_power_hardware_timer_start(read_volatile(handle), &request) };
         if status == 0 {
-            let _ = callbacks().ensure(callback);
             unsafe { write_volatile(0x95dc18 as *mut u32, callback as usize as u32) };
         }
         status
@@ -100,7 +110,10 @@ pub mod native {
         unsafe { timer_abi::xm1_power_hardware_timer_release(handle) }
     }
     #[no_mangle]
-    pub unsafe extern "C" fn xm1_power_executor_timer_start_owned() -> i32 { unsafe { xm1_power_executor_timer_start(xm1_power_audio_operation_tick) } }
+    pub unsafe extern "C" fn xm1_power_executor_timer_start_owned() -> i32 {
+        if let Err(error) = register_executor_tick(xm1_power_audio_operation_tick as unsafe extern "C" fn()) { return crate::callback_registry::refused(error); }
+        unsafe { xm1_power_executor_timer_start(xm1_power_audio_operation_tick) }
+    }
 }
 
 #[cfg(test)]

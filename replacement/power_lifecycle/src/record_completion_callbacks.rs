@@ -1,6 +1,6 @@
 #![cfg(target_arch = "arm")]
 
-use crate::callback_registry::registry as callbacks;
+use crate::callback_registry::{registry as callbacks, CallbackWord};
 use crate::callback_slots;
 use core::ptr::{read_volatile, write_volatile};
 
@@ -25,7 +25,7 @@ macro_rules! scalar_callback {
         pub unsafe extern "C" fn $name(status: u32) {
             let callback = unsafe { word($slot) };
             unsafe { clear($channel, status); }
-            let _ = callback_slots::call_argument(callbacks(), callback, status);
+            let _ = callback_slots::call_argument(callbacks(), CallbackWord(callback as usize), status);
         }
     };
 }
@@ -123,14 +123,14 @@ pub unsafe extern "C" fn xm1_power_record_helper_efb590(status: u32, flags: u32)
         if flags & 1 != 0 { unsafe { word(0x0169_d278) } } else { 0 }
     } else { unsafe { word(0x0169_d278) } };
     unsafe { clear(26, status); }
-    let _ = callback_slots::call_pair(callbacks(), callback, status, flags);
+    let _ = callback_slots::call_pair(callbacks(), CallbackWord(callback as usize), status, flags);
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn xm1_power_record_helper_efb604(status: u32, value: u32) {
     let callback = unsafe { word(0x0169_d28c) };
     unsafe { clear(27, status); }
-    let _ = callback_slots::call_pair(callbacks(), callback, status, value);
+    let _ = callback_slots::call_pair(callbacks(), CallbackWord(callback as usize), status, value);
 }
 
 #[no_mangle]
@@ -145,7 +145,7 @@ pub unsafe extern "C" fn xm1_power_record_helper_efb654(status: u32, a: u32, b: 
 
 #[no_mangle]
 pub unsafe extern "C" fn xm1_power_record_callback2(callback: u32, a: u32, b: u32) {
-    let _ = callback_slots::call_pair(callbacks(), callback, a, b);
+    let _ = callback_slots::call_pair(callbacks(), CallbackWord(callback as usize), a, b);
 }
 
 scalar_callback!(xm1_power_record_helper_efba90, 39, 0x0169_d310);
@@ -182,5 +182,5 @@ scalar_callback!(xm1_power_record_helper_efb8ec, 35, 0x0169_d2dc);
 pub unsafe extern "C" fn xm1_power_record_helper_efb934(status: u32, value: u32) {
     let callback = unsafe { word(0x0169_d2e8) };
     unsafe { clear(36, status); }
-    let _ = callback_slots::call_pair(callbacks(), callback, status, value);
+    let _ = callback_slots::call_pair(callbacks(), CallbackWord(callback as usize), status, value);
 }

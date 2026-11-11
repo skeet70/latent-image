@@ -17,8 +17,6 @@ extern "C" {
     fn xm1_power_semaphore_wait(id: i32, timeout: i32) -> i32;
     fn xm1_power_semaphore_signal(id: i32) -> i32;
     fn xm1_power_software_timer_start(period: u32, mode: u32, callback: u32, token: *mut u32) -> i32;
-    fn xm1_power_queue_create(queue: u32, configuration: *const QueueConfiguration) -> i32;
-    fn xm1_task_submit(descriptor: u32) -> i32;
     fn xm1_power_settings_output(source: *const u8);
     fn xm1_power_settings_reconstruct();
 }
@@ -26,7 +24,7 @@ unsafe fn word(address: u32) -> u32 { unsafe { read_volatile(address as *const u
 unsafe fn put(address: u32, value: u32) { unsafe { write_volatile(address as *mut u32, value); } }
 unsafe fn byte(address: u32) -> u8 { unsafe { read_volatile(address as *const u8) } }
 unsafe fn callback(address: u32) {
-    if let Ok(call) = callbacks().resolve::<unsafe extern "C" fn()>(CallbackWord(address)) { unsafe { call() }; }
+    if let Ok(call) = callbacks().resolve::<unsafe extern "C" fn()>(CallbackWord(address as usize)) { unsafe { call() }; }
 }
 fn halt() -> ! { loop { core::hint::spin_loop(); } }
 unsafe fn clear(address: u32, bytes: usize) { unsafe { core::ptr::write_bytes(address as *mut u8, 0, bytes); } }
@@ -60,19 +58,20 @@ pub unsafe extern "C" fn xm1_power_settings_timer_notify() {
     let sender = rtos.current_task();
     let _ = rtos.post(ServiceMessage { operation: RequestId(0x6303), sender, destination: QueueId(83), payload: &[] });
 }
-unsafe fn start_transfer() {
+unsafe fn start_transfer() -> i32 {
+    let notify: unsafe extern "C" fn() = xm1_power_settings_timer_notify;
+    if let Err(error) = callbacks().ensure(notify) { return crate::callback_registry::refused(error); }
     unsafe {
         put(CONTEXT + 0x30, word(CONTEXT + 0x18));
         put(CONTEXT + 0x34, word(CONTEXT + 0x1c));
         put(CONTEXT + 0x18c, 1);
         put(CONTEXT + 0x38, word(CONTEXT + 0x2c));
         put(CONTEXT + 0x3c, word(CONTEXT + 0x14));
-        let notify: unsafe extern "C" fn() = xm1_power_settings_timer_notify;
-        let _ = callbacks().ensure(notify);
         let _ = xm1_power_software_timer_start(30000, 1, notify as usize as u32, (CONTEXT + 0x48) as *mut u32);
         if word(CONTEXT + 0x34) != 0 { cached_entries(false); xm1_power_settings_output(DESCRIPTOR as *const u8); }
         put(CONTEXT, 1);
     }
+    0
 }
 unsafe fn update_transfer() {
     unsafe {
@@ -137,7 +136,7 @@ unsafe fn periodic_transfer() {
     unsafe {
         let producer = word(CONTEXT + 0xdc);
         if producer == 0 { return; }
-        let Ok(producer) = callbacks().resolve::<unsafe extern "C" fn(*mut u8, u32)>(CallbackWord(producer)) else { return };
+        let Ok(producer) = callbacks().resolve::<unsafe extern "C" fn(*mut u8, u32)>(CallbackWord(producer as usize)) else { return };
         producer((CONTEXT + 0x4c) as *mut u8, 72);
         let mode = word(CONTEXT + 0x18c);
         if xm1_power_configuration_byte(0x97d5) != 0 || mode == 2 { configured_text(); }
@@ -163,27 +162,27 @@ pub unsafe extern "C" fn xm1_power_settings_dispatch() -> i32 {
     let Some(action) = actor::dispatch_route(operation, state) else { return -255; };
     if action == actor::TransferAction::Release { return unsafe { xm1_power_settings_dispatch_release() }; }
     if unsafe { xm1_power_semaphore_wait(97, -1) } != 0 { return -10; }
-    unsafe {
+    let result = unsafe {
         match action {
             actor::TransferAction::Start => start_transfer(),
-            actor::TransferAction::Update => update_transfer(),
-            actor::TransferAction::Restart => restart_transfer(),
-            actor::TransferAction::Callback => callback(word(CONTEXT + 0x14)),
-            actor::TransferAction::Refresh => refresh_transfer(),
-            actor::TransferAction::Poll => periodic_transfer(),
-            actor::TransferAction::Release | actor::TransferAction::NoAction => {}
+            actor::TransferAction::Update => { update_transfer(); 0 }
+            actor::TransferAction::Restart => { restart_transfer(); 0 }
+            actor::TransferAction::Callback => { callback(word(CONTEXT + 0x14)); 0 }
+            actor::TransferAction::Refresh => { refresh_transfer(); 0 }
+            actor::TransferAction::Poll => { periodic_transfer(); 0 }
+            actor::TransferAction::Release | actor::TransferAction::NoAction => 0,
         }
-    }
-    if unsafe { xm1_power_semaphore_signal(97) } == 0 { 0 } else { -10 }
+    };
+    if unsafe { xm1_power_semaphore_signal(97) } == 0 { result } else { -10 }
 }
-#[repr(C)]
-struct QueueConfiguration { flags: u32, message_size: u32 }
-#[repr(C)]
-struct TaskDescriptor { identifier: u32, name: u32, priority: u32, stack: u32, entry: unsafe extern "C" fn(*const u32) -> !, argument: *const u32, reserved: MaybeUninit<u32> }
+use crate::queue_construction::QueueConfiguration;
+use crate::task_abi::{xm1_power_queue_create, xm1_task_submit, TaskDescriptor};
 #[no_mangle]
 pub unsafe extern "C" fn xm1_power_settings_start(error_callback: Option<unsafe extern "C" fn()>) -> i32 {
+    if let Some(callback) = error_callback {
+        if let Err(error) = callbacks().resolve::<unsafe extern "C" fn()>(CallbackWord(callback as usize as u32 as usize)) { return crate::callback_registry::refused(error); }
+    }
     if unsafe { xm1_power_queue_create(83, &QueueConfiguration { flags: 48, message_size: 36 }) } != 0 { return -255; }
-    if let Some(callback) = error_callback { let _ = callbacks().ensure(callback); }
     unsafe { put(0x8e1f24, error_callback.map_or(0, |callback| callback as usize as u32)); }
     let descriptor = TaskDescriptor { identifier: 83, name: 0x781a38, priority: 4, stack: 3072, entry: xm1_power_settings_entry, argument: 0x8e1f24 as *const u32, reserved: MaybeUninit::uninit() };
     if unsafe { xm1_task_submit(&descriptor as *const TaskDescriptor as u32) } == 0 { 0 } else { -255 }
@@ -212,7 +211,7 @@ pub unsafe extern "C" fn xm1_power_settings_output_copy(source: *const u8) {
 }
 #[no_mangle]
 pub unsafe extern "C" fn xm1_power_settings_output_post(record: *const u8) {
-    let status = installed_callbacks::device_notification(callbacks(), CallbackWord(unsafe { word(0x829a0c) }), record, |record| unsafe {
+    let status = installed_callbacks::device_notification(callbacks(), CallbackWord(unsafe { word(0x829a0c) } as usize), record, |record| unsafe {
         let routing = if word(0x9134f8) == 1 { UiRouting::Primary } else { UiRouting::Other };
         let mut events = UiEvents::from_runtime(routing, TaskId(byte(0x954884)));
         match post_application_record(&mut NativeShutdownRtos, &mut events, &*(record as *const [u8; 76])) {
@@ -238,7 +237,10 @@ pub extern "C" fn xm1_power_settings_poll_request() {
     let _ = rtos.post(ServiceMessage { operation: RequestId(0x6304), sender, destination: QueueId(83), payload: &[] });
 }
 #[no_mangle]
-pub unsafe extern "C" fn xm1_power_settings_set_text_producer(producer: Option<unsafe extern "C" fn(*mut u8, u32)>) {
-    if let Some(producer) = producer { let _ = callbacks().ensure(producer); }
+pub unsafe extern "C" fn xm1_power_settings_set_text_producer(producer: Option<unsafe extern "C" fn(*mut u8, u32)>) -> i32 {
+    if let Some(producer) = producer {
+        if let Err(error) = callbacks().resolve::<unsafe extern "C" fn(*mut u8, u32)>(CallbackWord(producer as usize as u32 as usize)) { return crate::callback_registry::refused(error); }
+    }
     unsafe { put(CONTEXT + 0xdc, producer.map_or(0, |producer| producer as usize as u32)); }
+    0
 }

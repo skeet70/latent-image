@@ -1,6 +1,6 @@
 //! Installed application callbacks and the default 0x72b210 queue sender.
 
-use crate::callback_registry::{registry as callbacks, CallbackError};
+use crate::callback_registry::{registry as callbacks, CallbackError, CallbackWord};
 use crate::shutdown::{KernelStatus, QueueId, RequestId, ServiceMessage, ShutdownRtos, TaskId, UiRouting};
 
 pub type ApplicationCallback = crate::callback_slots::Application;
@@ -101,7 +101,7 @@ pub fn register_native_callback(callback: Option<ApplicationCallback>) -> Result
 pub fn resolve_native_callback(installed: u32) -> Result<NativeCallback, CallbackError> {
     if installed == 0x72b318 { return Ok(NativeCallback::Buffered); }
     if installed == 0x72b210 { return Ok(NativeCallback::Ready(InstalledCallback::Default)); }
-    let callback = crate::callback_slots::resolve_application(callbacks(), installed)?;
+    let callback = crate::callback_slots::resolve_application(callbacks(), CallbackWord(installed as usize))?;
     Ok(NativeCallback::Ready(InstalledCallback::Owned(callback)))
 }
 

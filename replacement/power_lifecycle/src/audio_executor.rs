@@ -193,7 +193,7 @@ pub mod native {
     extern "C" {
         fn xm1_power_save_irq() -> u32;
         fn xm1_power_restore_irq(saved: u32);
-        fn xm1_power_executor_timer_start(callback: unsafe extern "C" fn()) -> i32;
+        fn xm1_power_executor_timer_start_owned() -> i32;
         fn xm1_power_executor_timer_stop() -> i32;
         fn xm1_power_command_diagnostic(category: u32, code: u32) -> i32;
         fn xm1_power_lcd_operation_action(address: u32) -> i32;
@@ -235,7 +235,9 @@ pub mod native {
         type SavedIrq = u32;
         fn save_irq(&mut self) -> u32 { unsafe { xm1_power_save_irq() } }
         fn restore_irq(&mut self, saved: u32) { unsafe { xm1_power_restore_irq(saved) }; }
-        fn start_tick_timer(&mut self) -> ServiceStatus { ServiceStatus(unsafe { xm1_power_executor_timer_start(xm1_power_audio_operation_tick) }) }
+        fn start_tick_timer(&mut self) -> ServiceStatus {
+            ServiceStatus(unsafe { xm1_power_executor_timer_start_owned() })
+        }
         fn stop_tick_timer(&mut self) -> ServiceStatus { ServiceStatus(unsafe { xm1_power_executor_timer_stop() }) }
         fn invoke(&mut self, action: Action) -> Result<(), Action> {
             match action {
@@ -315,3 +317,7 @@ pub mod native {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "audio_executor_tests.rs"]
+mod tests;

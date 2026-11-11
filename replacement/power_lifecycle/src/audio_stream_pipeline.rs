@@ -1,4 +1,5 @@
 use super::stream::{ByteLength, PcmAddress};
+use crate::callback_registry::{registry as callbacks, CallbackError, CallbackFn, CallbackWord};
 use crate::primitives::ServiceStatus;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Completion { Receive, Send }
@@ -236,6 +237,16 @@ pub fn cancel(pipeline: &mut impl PipelineLifecycle, event: EventHandle) -> Serv
     }
 }
 
+/// Registers a stream completion handler so the timer entry resolves it, and returns its word.
+pub fn register_completion(handler: unsafe extern "C" fn()) -> Result<CallbackWord, CallbackError> {
+    callbacks().ensure(handler)?;
+    Ok(handler.word())
+}
+
 #[cfg(target_arch = "arm")]
 #[path = "audio_stream_pipeline_native.rs"]
 pub mod native;
+
+#[cfg(test)]
+#[path = "audio_stream_pipeline_tests.rs"]
+mod tests;

@@ -362,3 +362,13 @@ fn stale_task99_cancellation_preserves_active_actuator_registration() {
     assert_eq!(actuator_events.take(), Some(callback));
     assert!(sender.messages.lock().unwrap().is_empty());
 }
+
+unsafe extern "C" fn detection_irq() {}
+
+#[test]
+fn detection_handler_registers_before_the_timer_entry_resolves_it() {
+    let handler = detection_irq as unsafe extern "C" fn();
+    let word = register_handler(handler).unwrap();
+    assert_eq!(word, handler.word());
+    assert_eq!(callbacks().resolve::<unsafe extern "C" fn()>(word).map(|callback| callback.word()), Ok(word));
+}

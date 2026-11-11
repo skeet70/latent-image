@@ -9,6 +9,22 @@ use xm1_power_services::{
     shutdown_task7_8_transport::{RegistrationRegistry, UsbCompletionPolicy, UsbRegistrationSlot, UsbRegistrationStorage, UsbSecondaryMode},
 };
 
+use xm1_power_services::callback_registry::COMPLETION_SHAPE;
+
+#[cfg(any(target_arch = "arm", test))]
+extern "C" {
+    /// The Power Services leaf's owned-callback entry: `shape` 0 is `extern "C" fn()`. It returns
+    /// 0 when the word is registered and -255 when the leaf refuses it.
+    fn xm1_power_owned_callback_register(word: u32, shape: u32) -> i32;
+}
+
+/// Registers a timer producer so the Power software-timer entry resolves it.
+#[cfg(any(target_arch = "arm", test))]
+pub(crate) fn register_timer_callback(word: u32) -> Result<(), ServiceStatus> {
+    let status = unsafe { xm1_power_owned_callback_register(word, COMPLETION_SHAPE) };
+    if status == 0 { Ok(()) } else { Err(ServiceStatus(status)) }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PollPeriod { Connection, Vendor }
 impl PollPeriod {
@@ -190,8 +206,14 @@ impl TimerRegistry for NativeTimerRegistry<'_> {
             TimerEvent::ShortTransfer => self.entries.short_transfer,
             TimerEvent::LongTransfer => self.entries.long_transfer,
         };
+        let word = callback as usize as u32;
+        register_timer_callback(word)?;
         let mut handle = 0;
-        let status = unsafe { xm1_power_software_timer_start(period.0, 1, callback as usize as u32, &mut handle) };
+        let status = unsafe { xm1_power_software_timer_start(period.0, 1, word, &mut handle) };
         if status == 0 { Ok(RegistryHandle(handle)) } else { Err(ServiceStatus(status)) }
     }
 }
+
+#[cfg(test)]
+#[path = "controller_registration_tests.rs"]
+mod tests;

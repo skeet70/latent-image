@@ -97,7 +97,7 @@ pub fn dispatch(timers: &mut impl DeviceTimers, operation: DeviceTimerOperation)
 }
 
 pub fn post_unregister(rtos: &mut impl ShutdownRtos, index: u32) -> ServiceStatus {
-    let sender = rtos.current_task();
+    let sender = match rtos.try_current_task() { Ok(sender) => sender, Err(status) => return ServiceStatus(status.0) };
     let payload = index.to_le_bytes();
     let result = rtos.post(ServiceMessage { operation: RequestId(0x3501), sender, destination: QueueId(37), payload: &payload });
     ServiceStatus(if result.is_ok() { 0 } else { -255 })

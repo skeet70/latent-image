@@ -7,7 +7,7 @@
 use core::task::Poll;
 use crate::transport::cpu::{CacheInstructions, clean_invalidate_all};
 #[cfg(target_arch = "arm")]
-use xm1_power_services::callback_registry::{registry as callbacks, CallbackWord};
+use xm1_power_services::callback_registry::KernelSlot;
 
 pub const BASE: u32 = 0xfff5_1000;
 
@@ -777,12 +777,8 @@ impl NativeInterruptRouter {
             let index = xm1_rtos_own_first_slot_1618();
             core::ptr::read_volatile((0x0096_bd20 + index * 4) as *const u32)
         };
-        let configure: unsafe extern "C" fn(u32, *const u32) -> i32 = callbacks()
-            .resolve(CallbackWord(unsafe { core::ptr::read_volatile((interface + 0x160) as *const u32) }))
-            .map_err(|_| ControlError::Os)?;
-        let enable: unsafe extern "C" fn(u32) -> i32 = callbacks()
-            .resolve(CallbackWord(unsafe { core::ptr::read_volatile((interface + 0x158) as *const u32) }))
-            .map_err(|_| ControlError::Os)?;
+        let configure: unsafe extern "C" fn(u32, *const u32) -> i32 = unsafe { KernelSlot::read(interface, 0x160).entry() };
+        let enable: unsafe extern "C" fn(u32) -> i32 = unsafe { KernelSlot::read(interface, 0x158).entry() };
         let record = [0, handler, priority, polarity, 2];
         let saved = unsafe { xm1_power_interrupt_lock() };
         unsafe {

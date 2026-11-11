@@ -29,6 +29,7 @@ pub mod charge_timers;
 pub mod queue_construction;
 pub mod hardware_timer_registry;
 pub mod timer_abi;
+pub mod task_abi;
 pub mod callback_registry;
 pub mod installed_callbacks;
 pub mod shutdown;

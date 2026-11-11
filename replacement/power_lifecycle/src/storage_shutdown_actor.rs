@@ -15,7 +15,7 @@ pub fn post_shutdown(
     scratch: &mut [u8; 8],
 ) -> Result<(), StoragePostError> {
     scratch[..4].copy_from_slice(&completion.0.to_le_bytes());
-    let sender = rtos.current_task();
+    let sender = rtos.try_current_task().map_err(|_| StoragePostError)?;
     rtos.post(ServiceMessage { operation: RequestId(0x7401), sender, destination: QueueId(100), payload: scratch })
         .map_err(|_| StoragePostError)
 }

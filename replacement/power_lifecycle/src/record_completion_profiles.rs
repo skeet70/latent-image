@@ -1,6 +1,6 @@
 #![cfg(target_arch = "arm")]
 
-use crate::callback_registry::registry as callbacks;
+use crate::callback_registry::{registry as callbacks, CallbackWord};
 use crate::callback_slots;
 use core::mem::MaybeUninit;
 use core::ptr::{copy_nonoverlapping, read_volatile, write_volatile};
@@ -183,7 +183,7 @@ pub unsafe extern "C" fn xm1_power_record_helper_efab18(profile: u32, status: u3
             _ => {}
         }
         let callback = word(slot);
-        let _ = callback_slots::call_argument(callbacks(), callback, status);
+        let _ = callback_slots::call_argument(callbacks(), CallbackWord(callback as usize), status);
     }
 }
 
@@ -199,6 +199,6 @@ pub unsafe extern "C" fn xm1_power_record_helper_efae88(profile: u32, status: u3
             if destination != 0 { xm1_power_record_helper_75af54(destination, snapshot.as_ptr() as u32); }
         }
         let callback = word(slot);
-        let _ = callback_slots::call_argument(callbacks(), callback, 0);
+        let _ = callback_slots::call_argument(callbacks(), CallbackWord(callback as usize), 0);
     }
 }

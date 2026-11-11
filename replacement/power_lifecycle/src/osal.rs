@@ -74,7 +74,7 @@ fn divide(timer: &mut impl DelayTimer, dividend: u32, divisor: u32) -> u32 {
 #[cfg(target_arch = "arm")]
 mod native {
     use super::*;
-    use crate::callback_registry::{registry as callbacks, CallbackWord};
+    use crate::callback_registry::{kernel_slot, refused, CallbackError};
     use core::ptr::{read_volatile, write_volatile};
     extern "C" {
         fn xm1_rtos_own_first_slot_1618() -> u32;
@@ -86,11 +86,12 @@ mod native {
         fn xm1_power_service_error(operation: u32, id: i32, status: i32);
     }
     unsafe fn root(core: CpuCore) -> u32 { read_volatile((0x96bd20 + core.index() * 4) as *const u32) }
-    unsafe fn slot(core: CpuCore, offset: u32) -> usize { read_volatile((root(core) + offset) as *const u32) as usize }
-    fn core() -> CpuCore { CpuCore::from_abi(unsafe { xm1_rtos_own_first_slot_1618() }).unwrap() }
+    fn core() -> Result<CpuCore, CallbackError> { CpuCore::from_abi(unsafe { xm1_rtos_own_first_slot_1618() }).ok_or(CallbackError::Invalid) }
     struct NativeKernel;
     impl CriticalKernel for NativeKernel {
-        fn core(&self) -> CpuCore { core() }
+        fn core(&self) -> CpuCore {
+            match core() { Ok(core) => core, Err(error) => { refused(error); CpuCore::First } }
+        }
         fn mask_interrupts(&mut self) -> SavedInterrupts { SavedInterrupts(unsafe { xm1_rtos_own_first_slot_164() }) }
         fn restore_interrupts(&mut self, saved: SavedInterrupts) { unsafe { let _ = xm1_rtos_own_first_slot_168(saved.0); } }
         fn observe_global_lock(&mut self) -> LockStamp { LockStamp(unsafe { xm1_rtos_global_lock_observe(0) }) }
@@ -115,24 +116,26 @@ mod native {
     }
     #[no_mangle]
     pub unsafe extern "C" fn xm1_power_semaphore_wait(id: i32, timeout: i32) -> i32 {
-        let wait: unsafe extern "C" fn(i32, i32) -> i32 = match callbacks().resolve(CallbackWord(slot(core(), 0x7c) as u32)) { Ok(entry) => entry, Err(error) => return error.status() };
+        let core = match core() { Ok(core) => core, Err(error) => return refused(error) };
+        let wait: unsafe extern "C" fn(i32, i32) -> i32 = unsafe { kernel_slot(root(core), 0x7c) };
         let status = wait(encoded_semaphore(id), timeout);
         if status != 0 && status != -50 { xm1_power_service_error(24, id, status); }
         status
     }
     #[no_mangle]
     pub unsafe extern "C" fn xm1_power_semaphore_signal(id: i32) -> i32 {
-        let core = core();
-        let context: unsafe extern "C" fn() -> u32 = match callbacks().resolve(CallbackWord(slot(core, 0x148) as u32)) { Ok(entry) => entry, Err(error) => return error.status() };
+        let core = match core() { Ok(core) => core, Err(error) => return refused(error) };
+        let context: unsafe extern "C" fn() -> u32 = unsafe { kernel_slot(root(core), 0x148) };
         let offset = if context() == 1 { 0x70 } else { 0x6c };
-        let signal: unsafe extern "C" fn(i32) -> i32 = match callbacks().resolve(CallbackWord(slot(core, offset) as u32)) { Ok(entry) => entry, Err(error) => return error.status() };
+        let signal: unsafe extern "C" fn(i32) -> i32 = unsafe { kernel_slot(root(core), offset) };
         let status = signal(encoded_semaphore(id));
         if status != 0 { xm1_power_service_error(25, id, status); }
         status
     }
     #[no_mangle]
     pub unsafe extern "C" fn xm1_power_current_task() -> u32 {
-        let current: unsafe extern "C" fn() -> u32 = match callbacks().resolve(CallbackWord(slot(core(), 0x16c) as u32)) { Ok(entry) => entry, Err(_) => return 0 };
+        let core = match core() { Ok(core) => core, Err(error) => { refused(error); return 0; } };
+        let current: unsafe extern "C" fn() -> u32 = unsafe { kernel_slot(root(core), 0x16c) };
         current()
     }
     #[no_mangle]

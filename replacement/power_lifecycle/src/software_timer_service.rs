@@ -18,6 +18,13 @@ pub fn physical_tick(rtos: &mut impl ShutdownRtos, callbacks: &mut impl TimerSer
 }
 pub fn consume(callbacks: &mut impl TimerServiceCallbacks) { callbacks.timer_callback(); }
 
+/// The shape `storage_shutdown_dma` registers.
+pub fn invoke_detection_callback(registry: &crate::callback_registry::CallbackRegistry, word: crate::callback_registry::CallbackWord) -> Result<(), crate::callback_registry::CallbackError> {
+    let call: unsafe extern "C" fn() = registry.resolve(word)?;
+    unsafe { call() };
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum DetectionMode { Off = 0, On = 1, Probe = 2 }

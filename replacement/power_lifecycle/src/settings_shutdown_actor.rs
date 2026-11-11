@@ -33,7 +33,7 @@ pub trait ReleaseRuntime {
 }
 
 pub fn post_release(rtos: &mut impl ShutdownRtos, callback: CallbackToken) -> Result<(), KernelStatus> {
-    let sender = rtos.current_task();
+    let sender = rtos.try_current_task()?;
     rtos.post(ServiceMessage { operation: RELEASE_COMMAND, sender, destination: SETTINGS_QUEUE, payload: &callback.0.to_le_bytes() })
 }
 
@@ -56,7 +56,7 @@ pub const fn dispatch_route(operation: RequestId, state: TransferState) -> Optio
 #[repr(transparent)]
 pub struct TransferRequest(pub [u8; 28]);
 pub fn post_transfer(rtos: &mut impl ShutdownRtos, request: &TransferRequest) -> Result<(), KernelStatus> {
-    let sender = rtos.current_task();
+    let sender = rtos.try_current_task()?;
     rtos.post(ServiceMessage { operation: RequestId(0x6300), sender, destination: SETTINGS_QUEUE, payload: &request.0 })
 }
 

@@ -309,6 +309,36 @@ fn codec_edits_preserve_register_tags_and_bits_outside_the_selected_field() {
     assert_eq!(edit_value(0x8c00, CacheKeep(0xffff), CacheBits(0x20)), 0x8c20);
 }
 
+unsafe extern "C" fn audio_stream_receive() {}
+unsafe extern "C" fn audio_stream_send() {}
+unsafe extern "C" fn audio_operation_tick() {}
+
+#[test]
+fn stream_completion_registers_the_handler_the_timer_entry_resolves() {
+    use crate::callback_registry::{registry, CallbackFn};
+    for handler in [audio_stream_receive as unsafe extern "C" fn(), audio_stream_send as unsafe extern "C" fn()] {
+        let word = stream_pipeline::register_completion(handler).unwrap();
+        assert_eq!(word, handler.word());
+        assert_eq!(registry().resolve::<unsafe extern "C" fn()>(word).map(|callback| callback.word()), Ok(word));
+    }
+}
+
+#[test]
+fn executor_tick_registers_before_the_timer_entry_resolves_it() {
+    use crate::callback_registry::{registry, CallbackFn};
+    let handler = audio_operation_tick as unsafe extern "C" fn();
+    crate::task6_executor::register_executor_tick(handler).unwrap();
+    let word = handler.word();
+    assert_eq!(registry().resolve::<unsafe extern "C" fn()>(word).map(|callback| callback.word()), Ok(word));
+}
+
+#[test]
+fn executor_tick_refusal_is_returned() {
+    use crate::callback_registry::CallbackError;
+    let null: unsafe extern "C" fn() = unsafe { core::mem::transmute(0usize) };
+    assert_eq!(crate::task6_executor::register_executor_tick(null), Err(CallbackError::Invalid));
+}
+
 #[test]
 fn capture_gpio_recipe_restores_output_modes_and_drives_both_pins_high() {
     use capture_callbacks::{CaptureAction, CaptureCompletion, CaptureEvent, CaptureField, CaptureGpio, CaptureHardware, ClockSourceState, FieldValue, GpioLevel};

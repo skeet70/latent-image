@@ -1,30 +1,61 @@
+use crate::callback_registry::{CallbackError, CallbackRegistry, CallbackWord};
 use crate::shutdown::{KernelStatus, QueueId, RequestId, ServiceMessage, ShutdownRtos};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Task8Readiness(pub u32);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct OwnedCompletionAddress(u32);
+pub struct OwnedCompletionAddress(CallbackWord);
 impl OwnedCompletionAddress {
-    pub const fn word(self) -> u32 { self.0 }
-    pub fn from_entry(entry: extern "C" fn() -> i32) -> Self { Self(entry as usize as u32) }
+    pub const fn word(self) -> u32 { self.0.0 as u32 }
+    pub const fn callback(self) -> CallbackWord { self.0 }
+    pub fn from_entry(entry: extern "C" fn() -> i32) -> Self { Self(CallbackWord(entry as usize)) }
+    /// The entry is registered for the shape the completion consumers resolve.
+    pub fn register(registry: &CallbackRegistry, entry: extern "C" fn() -> i32) -> Result<Self, CallbackError> {
+        let callback: unsafe extern "C" fn() -> i32 = entry;
+        registry.ensure(callback)?;
+        Ok(Self::from_entry(entry))
+    }
     #[cfg(target_arch = "arm")]
     pub fn calendar() -> Self { Self::from_entry(xm1_power_calendar_shutdown_callback) }
     #[cfg(target_arch = "arm")]
-    pub fn task8() -> Self { Self(xm1_power_task8_shutdown_callback as usize as u32) }
+    pub fn task8() -> Result<Self, CallbackError> { Self::register(crate::callback_registry::registry(), xm1_power_task8_shutdown_callback) }
+    /// The word `start_native` registers before the task 2 completion loop.
+    #[cfg(target_arch = "arm")]
+    pub fn task8_word() -> Self { Self::from_entry(xm1_power_task8_shutdown_callback) }
     #[cfg(target_arch = "arm")]
     pub fn storage() -> Self { Self::from_entry(xm1_power_storage_shutdown_callback) }
     #[cfg(target_arch = "arm")]
-    pub fn settings() -> Self { Self::from_entry(xm1_power_settings_shutdown_callback) }
+    pub fn settings() -> Result<Self, CallbackError> { Self::register(crate::callback_registry::registry(), xm1_power_settings_shutdown_callback) }
     #[cfg(target_arch = "arm")]
     pub fn device() -> Self { Self::from_entry(xm1_power_device_shutdown_callback) }
     #[cfg(target_arch = "arm")]
-    pub fn task7() -> Self { Self::from_entry(xm1_power_task7_shutdown_callback) }
+    pub fn task7() -> Result<Self, CallbackError> { Self::register(crate::callback_registry::registry(), xm1_power_task7_shutdown_callback) }
     #[cfg(target_arch = "arm")]
     pub fn display() -> Self { Self::from_entry(xm1_power_display_shutdown_callback) }
 }
 
+/// 0x6b0eb0..0x6b0ebc and 0xecc2a0..0xecc2ac discard the status.
+pub fn invoke_status_completion(registry: &CallbackRegistry, word: CallbackWord) -> Result<(), CallbackError> {
+    let entry: unsafe extern "C" fn() -> i32 = registry.resolve(word)?;
+    unsafe { entry() };
+    Ok(())
+}
+
+fn post_completion(rtos: &mut impl ShutdownRtos, event: u16) -> i32 {
+    let sender = match rtos.try_current_task() { Ok(sender) => sender, Err(status) => return status.0 };
+    match rtos.post(ServiceMessage { operation: RequestId(event), sender, destination: QueueId(2), payload: &[] }) {
+        Ok(()) => 0,
+        Err(status) => status.0,
+    }
+}
+pub fn task7_completion(rtos: &mut impl ShutdownRtos) -> i32 { post_completion(rtos, 0x9701) }
+pub fn task8_completion(rtos: &mut impl ShutdownRtos) -> i32 { post_completion(rtos, 0x9801) }
+pub fn settings_completion(rtos: &mut impl ShutdownRtos) -> i32 { post_completion(rtos, 0xe301) }
+pub fn storage_completion(rtos: &mut impl ShutdownRtos) -> i32 { post_completion(rtos, 0xf401) }
+pub fn device_completion(rtos: &mut impl ShutdownRtos) -> i32 { post_completion(rtos, 0x9a0c) }
+
 pub fn optional_shutdown(rtos: &mut impl ShutdownRtos) -> Result<(), KernelStatus> {
-    let sender = rtos.current_task();
+    let sender = rtos.try_current_task()?;
     rtos.post(ServiceMessage { operation: RequestId(0xf107), sender, destination: QueueId(2), payload: &[] })
 }
 
@@ -35,8 +66,8 @@ pub fn task8_shutdown(
     caller_payload: &mut [u8; 16],
 ) -> Result<(), KernelStatus> {
     if readiness.0 != 1 { return Err(KernelStatus(-255)); }
-    caller_payload[12..16].copy_from_slice(&completion.0.to_le_bytes());
-    let sender = rtos.current_task();
+    caller_payload[12..16].copy_from_slice(&completion.word().to_le_bytes());
+    let sender = rtos.try_current_task()?;
     rtos.post(ServiceMessage { operation: RequestId(0x1801), sender, destination: QueueId(8), payload: caller_payload })
         .map_err(|_| KernelStatus(-255))
 }
@@ -48,30 +79,22 @@ pub fn calendar_shutdown(
     let mut payload = [0u8; 8];
     payload[..4].copy_from_slice(&completion.word().to_le_bytes());
     payload[4..].copy_from_slice(&1u32.to_le_bytes());
-    let sender = rtos.current_task();
+    let sender = rtos.try_current_task()?;
     rtos.post(ServiceMessage { operation: RequestId(0x2c01), sender, destination: QueueId(101), payload: &payload })
 }
+
+pub fn calendar_completion(rtos: &mut impl ShutdownRtos) -> i32 { post_completion(rtos, 0xac01) }
 
 #[cfg(target_arch = "arm")]
 #[no_mangle]
 pub extern "C" fn xm1_power_calendar_shutdown_callback() -> i32 {
-    let rtos = &mut crate::shutdown_rtos::NativeShutdownRtos;
-    let sender = rtos.current_task();
-    match rtos.post(ServiceMessage { operation: RequestId(0xac01), sender, destination: QueueId(2), payload: &[] }) {
-        Ok(()) => 0,
-        Err(status) => status.0,
-    }
+    calendar_completion(&mut crate::shutdown_rtos::NativeShutdownRtos)
 }
 
 #[cfg(target_arch = "arm")]
 #[no_mangle]
 pub extern "C" fn xm1_power_task8_shutdown_callback() -> i32 {
-    let rtos = &mut crate::shutdown_rtos::NativeShutdownRtos;
-    let sender = rtos.current_task();
-    match rtos.post(ServiceMessage { operation: RequestId(0x9801), sender, destination: QueueId(2), payload: &[] }) {
-        Ok(()) => 0,
-        Err(status) => status.0,
-    }
+    task8_completion(&mut crate::shutdown_rtos::NativeShutdownRtos)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -82,7 +105,7 @@ pub fn device_shutdown(
     completion: OwnedCompletionAddress,
 ) -> Result<(), KernelStatus> {
     if phase.0 == 14 { return Ok(()); }
-    let sender = rtos.current_task();
+    let sender = rtos.try_current_task()?;
     rtos.post(ServiceMessage {
         operation: RequestId(0x1a0c),
         sender,
@@ -92,32 +115,25 @@ pub fn device_shutdown(
 }
 
 pub fn controller_shutdown(rtos: &mut impl ShutdownRtos) -> Result<(), KernelStatus> {
-    let sender = rtos.current_task();
+    let sender = rtos.try_current_task()?;
     rtos.post(ServiceMessage { operation: RequestId(0xc901), sender, destination: QueueId(2), payload: &[] })
 }
 
 #[cfg(target_arch = "arm")]
 macro_rules! completion_entry {
-    ($name:ident, $event:expr) => {
+    ($name:ident, $body:path) => {
         #[no_mangle]
-        pub extern "C" fn $name() -> i32 {
-            let rtos = &mut crate::shutdown_rtos::NativeShutdownRtos;
-            let sender = rtos.current_task();
-            match rtos.post(ServiceMessage { operation: RequestId($event), sender, destination: QueueId(2), payload: &[] }) {
-                Ok(()) => 0,
-                Err(status) => status.0,
-            }
-        }
+        pub extern "C" fn $name() -> i32 { $body(&mut crate::shutdown_rtos::NativeShutdownRtos) }
     };
 }
 #[cfg(target_arch = "arm")]
-completion_entry!(xm1_power_storage_shutdown_callback, 0xf401);
+completion_entry!(xm1_power_storage_shutdown_callback, storage_completion);
 #[cfg(target_arch = "arm")]
-completion_entry!(xm1_power_settings_shutdown_callback, 0xe301);
+completion_entry!(xm1_power_settings_shutdown_callback, settings_completion);
 #[cfg(target_arch = "arm")]
-completion_entry!(xm1_power_device_shutdown_callback, 0x9a0c);
+completion_entry!(xm1_power_device_shutdown_callback, device_completion);
 #[cfg(target_arch = "arm")]
-completion_entry!(xm1_power_task7_shutdown_callback, 0x9701);
+completion_entry!(xm1_power_task7_shutdown_callback, task7_completion);
 
 #[cfg(target_arch = "arm")]
 #[no_mangle]
@@ -152,7 +168,7 @@ mod tests {
     fn unavailable_task8_never_enqueues_a_shutdown() {
         let mut queue = Queue::default();
         let mut payload = [0x9d; 16];
-        assert_eq!(task8_shutdown(&mut queue, Task8Readiness(0), OwnedCompletionAddress(0x1234), &mut payload), Err(KernelStatus(-255)));
+        assert_eq!(task8_shutdown(&mut queue, Task8Readiness(0), OwnedCompletionAddress(CallbackWord(0x1234)), &mut payload), Err(KernelStatus(-255)));
         assert!(queue.0.is_empty());
         assert_eq!(payload, [0x9d; 16]);
     }
@@ -160,7 +176,7 @@ mod tests {
     fn shutdown_preserves_all_unwritten_payload_bytes() {
         let mut queue = Queue::default();
         let mut payload = [0x9d; 16];
-        assert_eq!(task8_shutdown(&mut queue, Task8Readiness(1), OwnedCompletionAddress(0x1234), &mut payload), Ok(()));
+        assert_eq!(task8_shutdown(&mut queue, Task8Readiness(1), OwnedCompletionAddress(CallbackWord(0x1234)), &mut payload), Ok(()));
         assert_eq!(queue.0[0].0, RequestId(0x1801));
         assert_eq!(queue.0[0].1, QueueId(8));
         assert_eq!(&queue.0[0].2[..12], &[0x9d; 12]);

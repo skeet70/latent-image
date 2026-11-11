@@ -21,7 +21,7 @@ pub fn task7_shutdown(
 pub enum Task7Dispatch { Handled, OtherUsbRoute }
 
 pub fn usb_release_acknowledged(rtos: &mut impl ShutdownRtos) -> Result<(), KernelStatus> {
-    let sender = rtos.current_task();
+    let sender = rtos.try_current_task()?;
     rtos.post(ServiceMessage {
         operation: RequestId(0xb401), sender, destination: QueueId(7), payload: &[],
     })
@@ -31,7 +31,7 @@ pub fn request_usb_release(
     rtos: &mut impl ShutdownRtos,
     residue: &[u8; 24],
 ) -> Result<(), KernelStatus> {
-    let sender = rtos.current_task();
+    let sender = rtos.try_current_task()?;
     rtos.post(ServiceMessage {
         operation: RequestId(0x3401), sender, destination: QueueId(36), payload: residue,
     })
@@ -104,7 +104,7 @@ mod native {
         fn clear_readiness(&mut self) { unsafe { write_volatile(0x409c34c4 as *mut u32, 0) }; }
         fn completion(&mut self) -> Task8CompletionWord { Task8CompletionWord(unsafe { read_volatile(0x409c34b0 as *const u32) }) }
         fn invoke_completion(&mut self, completion: Task8CompletionWord) {
-            if let Ok(callback) = callbacks().resolve::<unsafe extern "C" fn()>(CallbackWord(completion.0)) { unsafe { callback() }; }
+            let _ = crate::shutdown_requests::invoke_status_completion(callbacks(), CallbackWord(completion.0 as usize));
         }
         fn stop_task8(&mut self) -> ServiceStatus {
             unsafe { crate::primitives::retire_current_task(TaskId(8)) }
@@ -132,7 +132,7 @@ mod native {
 
     unsafe fn notify_error() {
         let address = unsafe { read_volatile(0x409c34c8 as *const u32) };
-        if let Ok(callback) = callbacks().resolve::<unsafe extern "C" fn()>(CallbackWord(address)) { unsafe { callback() }; }
+        if let Ok(callback) = callbacks().resolve::<unsafe extern "C" fn()>(CallbackWord(address as usize)) { unsafe { callback() }; }
     }
 
     pub unsafe fn consume_task7_shutdown(
@@ -159,11 +159,8 @@ mod native {
             unsafe { write_volatile(0x15c20ba as *mut u16, 3) };
             if state != 2 { return Task7Dispatch::OtherUsbRoute; }
             let completion = unsafe { read_volatile(0x15c2120 as *const u32) };
-            if let Ok(callback) = callbacks().resolve::<unsafe extern "C" fn()>(CallbackWord(completion)) {
-                unsafe {
-                    callback();
-                    write_volatile(0x15c2120 as *mut u32, 0);
-                }
+            if crate::shutdown_requests::invoke_status_completion(callbacks(), CallbackWord(completion as usize)).is_ok() {
+                unsafe { write_volatile(0x15c2120 as *mut u32, 0) };
             }
             unsafe { write_volatile(0x15c20ae as *mut u16, 0) };
             Task7Dispatch::Handled

@@ -35,13 +35,13 @@ impl DeviceTimers for NativeTimers {
     }
     fn register_software(&mut self, index: DeviceTimerIndex, period: TimerPeriod) -> (ServiceStatus, TimerHandle) {
         let callback: unsafe extern "C" fn() = producers()[index.index()];
-        let _ = registry().ensure(callback);
+        if let Err(error) = registry().ensure(callback) { return (ServiceStatus(crate::callback_registry::refused(error)), TimerHandle(0)); }
         software_start(period, SoftwareTimerMode::from_abi(1), TimerCallback(callback as usize as u32), self.handle(index), |handle| write(STATE + 44 + index.index() as u32 * 4, handle.0))
     }
     fn unregister_cyclic(&mut self, handle: TimerHandle) -> ServiceStatus { ServiceStatus(unsafe { xm1_app_unregister_callback(handle.0 as i32) }) }
     fn unregister_software(&mut self, handle: TimerHandle) -> ServiceStatus { software_cancel(handle) }
     fn invoke(&mut self, callback: TimerCallback) {
-        if let Ok(call) = registry().resolve::<unsafe extern "C" fn()>(CallbackWord(callback.0)) { unsafe { call() }; }
+        if let Ok(call) = registry().resolve::<unsafe extern "C" fn()>(CallbackWord(callback.0 as usize)) { unsafe { call() }; }
     }
 }
 
@@ -95,6 +95,11 @@ fn software_start(period: TimerPeriod, mode: SoftwareTimerMode, callback: TimerC
 
 #[no_mangle]
 pub unsafe extern "C" fn xm1_power_software_timer_start(period: u32, mode: u32, callback: u32, token: *mut u32) -> i32 {
+    if callback != 0 {
+        if let Err(error) = registry().resolve::<unsafe extern "C" fn()>(CallbackWord(callback as usize)) {
+            return crate::callback_registry::refused(error);
+        }
+    }
     let (status, _) = software_start(TimerPeriod(period), SoftwareTimerMode::from_abi(mode), TimerCallback(callback), TimerHandle(0), |handle| unsafe { core::ptr::write_volatile(token, handle.0) });
     status.0
 }
@@ -153,7 +158,7 @@ pub extern "C" fn xm1_power_software_timer_tick() {
         write(slot + 4, next);
         if next != 0 { continue; }
         let callback = read(slot + 16);
-        if let Ok(call) = registry().resolve::<unsafe extern "C" fn()>(CallbackWord(callback)) { unsafe { call() }; }
+        if let Ok(call) = registry().resolve::<unsafe extern "C" fn()>(CallbackWord(callback as usize)) { unsafe { call() }; }
         if SoftwareTimerMode::from_abi(read(slot + 12)).is_periodic() {
             write(slot + 4, read(slot + 8));
         } else {

@@ -210,6 +210,13 @@ pub fn attach_timer_irq(registry: &mut impl TimerIrqRegistry, source: IrqSource,
     if status.0 == 0 { Ok(handle) } else { Err(ServiceStatus(-255)) }
 }
 
+/// The admission `xm1_power_timer_irq_attach` performs before it configures a source.
+pub fn admit_irq_handler(handler: crate::callback_registry::CallbackWord) -> Result<(), crate::callback_registry::CallbackError> {
+    crate::callback_registry::registry()
+        .resolve::<unsafe extern "C" fn()>(handler)
+        .map(|_| ())
+}
+
 #[cfg(target_arch = "arm")]
 #[path = "charge_timers_native.rs"]
 mod native;

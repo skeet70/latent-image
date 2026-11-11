@@ -5,15 +5,15 @@
 use crate::callback_registry::{CallbackError, CallbackRegistry, CallbackWord};
 
 /// The app installs `0x6470fc` at `0x4004f15c` (`0x647380`, `0x6473cc`); kernel0 `0x41568` calls it.
-pub const LOG_HOOK_DEFAULT: CallbackWord = CallbackWord(0x0064_70fc);
+pub const LOG_HOOK_DEFAULT: CallbackWord = CallbackWord(0x0064_70fc as usize);
 /// The empty body at `0x723330`, the initial word of the `0x4089ea8c` and `0x4089ea94` slots.
-pub const EMPTY_STUB: CallbackWord = CallbackWord(0x0072_3330);
+pub const EMPTY_STUB: CallbackWord = CallbackWord(0x0072_3330 as usize);
 /// `0x72835c`, the status handler installed at `0x4089ea8c`.
-pub const ERROR_HANDLER_DEFAULT: CallbackWord = CallbackWord(0x0072_835c);
+pub const ERROR_HANDLER_DEFAULT: CallbackWord = CallbackWord(0x0072_835c as usize);
 /// `0x726478`, the trace body installed at `0x4089ea94`.
-pub const SERVICE_TRACE_DEFAULT: CallbackWord = CallbackWord(0x0072_6478);
+pub const SERVICE_TRACE_DEFAULT: CallbackWord = CallbackWord(0x0072_6478 as usize);
 /// `0x72b210`, the router `0x72b6f4` installs at `0x829a0c`.
-pub const DEVICE_NOTIFICATION_ROUTER: CallbackWord = CallbackWord(0x0072_b210);
+pub const DEVICE_NOTIFICATION_ROUTER: CallbackWord = CallbackWord(0x0072_b210 as usize);
 
 /// kernel0 `0x41568`: `if (hook != 0) hook(&buffer, &entry)`.
 pub fn log_hook(

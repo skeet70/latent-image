@@ -4,12 +4,28 @@ impl TimerStatus { pub(crate) const fn new(value: i32) -> Self { Self(value) } }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GpioError { Busy, Attach(TimerStatus) }
 
+use xm1_power_services::callback_registry::COMPLETION_SHAPE;
+
+#[cfg(any(target_arch = "arm", test))]
+extern "C" {
+    /// The Power Services leaf's owned-callback entry: `shape` 0 is `extern "C" fn()`. It returns
+    /// 0 when the word is registered and -255 when the leaf refuses it.
+    fn xm1_power_owned_callback_register(word: u32, shape: u32) -> i32;
+}
+
+/// Registers the continuous detection handler so the Power detection entry resolves it.
+#[cfg(any(target_arch = "arm", test))]
+pub(crate) unsafe fn register_completion(word: u32) -> Result<(), TimerStatus> {
+    let status = unsafe { xm1_power_owned_callback_register(word, COMPLETION_SHAPE) };
+    if status == 0 { Ok(()) } else { Err(TimerStatus(status)) }
+}
+
 #[cfg(target_arch = "arm")]
 pub use native::GpioCompletion;
 
 #[cfg(target_arch = "arm")]
 mod native {
-    use super::{GpioError, TimerStatus};
+    use super::{register_completion, GpioError, TimerStatus};
     use core::sync::atomic::{AtomicBool, Ordering};
 
     unsafe extern "C" {
@@ -43,7 +59,9 @@ mod native {
             self.disarm();
             let status = unsafe { xm1_power_detection_set_mode(0) };
             if status != 0 { return Err(GpioError::Attach(TimerStatus(status))); }
-            let status = unsafe { xm1_power_detection_output_continuous(1, completed as *const () as u32) };
+            let handler = completed as *const () as u32;
+            if let Err(status) = unsafe { register_completion(handler) } { return Err(GpioError::Attach(status)); }
+            let status = unsafe { xm1_power_detection_output_continuous(1, handler) };
             if status != 0 { return Err(GpioError::Attach(TimerStatus(status))); }
             self.armed = true;
             Ok(())
@@ -54,3 +72,7 @@ mod native {
     }
     unsafe extern "C" fn completed() { NOTIFIED.store(true, Ordering::Release); }
 }
+
+#[cfg(test)]
+#[path = "updater_peripheral_gpio_tests.rs"]
+mod tests;

@@ -38,16 +38,18 @@ pub fn start_after_display(
 }
 
 #[cfg(target_arch = "arm")]
-pub unsafe fn start_native(storage_scratch: &mut [u8; 8]) -> StartupObservation {
+pub unsafe fn start_native(storage_scratch: &mut [u8; 8]) -> Result<StartupObservation, KernelStatus> {
+    let failure = |error: crate::callback_registry::CallbackError| KernelStatus(error.status());
+    OwnedCompletionAddress::task8().map_err(failure)?;
     let callbacks = StartupCallbacks {
         display: OwnedCompletionAddress::display(),
-        task7: OwnedCompletionAddress::task7(),
+        task7: OwnedCompletionAddress::task7().map_err(failure)?,
         device: OwnedCompletionAddress::device(),
-        settings: OwnedCompletionAddress::settings(),
+        settings: OwnedCompletionAddress::settings().map_err(failure)?,
         storage: OwnedCompletionAddress::storage(),
     };
     let display = unsafe { display_scanout_panel::panel::xm1_scanout_panel_command(6, callbacks.display.word()) };
     let display = if display == 0 { Ok(()) } else { Err(KernelStatus(-255)) };
     let device_phase = DevicePhase(unsafe { core::ptr::read_volatile(0x4089ea5c as *const u32) });
-    start_after_display(&mut crate::shutdown_rtos::NativeShutdownRtos, &callbacks, device_phase, storage_scratch, display)
+    Ok(start_after_display(&mut crate::shutdown_rtos::NativeShutdownRtos, &callbacks, device_phase, storage_scratch, display))
 }

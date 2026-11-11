@@ -17,7 +17,7 @@ fn log_callback() -> unsafe extern "C" fn(u32, u32) { record_log }
 #[test]
 fn log_hook_enters_the_installed_word_once_with_the_buffer_and_entry() {
     let registry = CallbackRegistry::new();
-    registry.register(log_callback()).unwrap();
+    registry.ensure(log_callback()).unwrap();
     let result = log_hook(&registry, log_callback().word(), 0x400a0800, 0x400a0834, |_, _| panic!("stock default ran"));
     assert_eq!(result, Ok(()));
     assert_eq!(LOG_CALLS.load(Ordering::SeqCst), 1);
@@ -29,7 +29,7 @@ fn log_hook_enters_the_installed_word_once_with_the_buffer_and_entry() {
 fn log_hook_zero_word_returns_without_calling() {
     let registry = CallbackRegistry::new();
     let defaults = Cell::new(0);
-    let result = log_hook(&registry, CallbackWord(0), 0x400a0800, 0x400a0834, |_, _| defaults.set(defaults.get() + 1));
+    let result = log_hook(&registry, CallbackWord(0 as usize), 0x400a0800, 0x400a0834, |_, _| defaults.set(defaults.get() + 1));
     assert_eq!(result, Ok(()));
     assert_eq!(defaults.get(), 0);
 }
@@ -38,7 +38,7 @@ fn log_hook_zero_word_returns_without_calling() {
 fn log_hook_refuses_an_unregistered_word() {
     let registry = CallbackRegistry::new();
     let defaults = Cell::new(0);
-    let result = log_hook(&registry, CallbackWord(0x0060_1000), 0x400a0800, 0x400a0834, |_, _| defaults.set(defaults.get() + 1));
+    let result = log_hook(&registry, CallbackWord(0x0060_1000 as usize), 0x400a0800, 0x400a0834, |_, _| defaults.set(defaults.get() + 1));
     assert_eq!(result, Err(CallbackError::Unadmitted));
     assert_eq!(defaults.get(), 0);
 }
@@ -67,7 +67,7 @@ fn error_callback() -> unsafe extern "C" fn(i32) { record_error }
 #[test]
 fn error_handler_enters_the_installed_word_once_with_the_status() {
     let registry = CallbackRegistry::new();
-    registry.register(error_callback()).unwrap();
+    registry.ensure(error_callback()).unwrap();
     let result = error_handler(&registry, error_callback().word(), -5, |_| panic!("stock default ran"));
     assert_eq!(result, Ok(()));
     assert_eq!(ERROR_CALLS.load(Ordering::SeqCst), 1);
@@ -77,7 +77,7 @@ fn error_handler_enters_the_installed_word_once_with_the_status() {
 #[test]
 fn error_handler_refuses_a_zero_word() {
     let registry = CallbackRegistry::new();
-    assert_eq!(error_handler(&registry, CallbackWord(0), -5, |_| panic!("stock default ran")), Err(CallbackError::Invalid));
+    assert_eq!(error_handler(&registry, CallbackWord(0 as usize), -5, |_| panic!("stock default ran")), Err(CallbackError::Invalid));
 }
 
 #[test]
@@ -110,7 +110,7 @@ fn trace_callback() -> unsafe extern "C" fn(u32) { record_trace }
 #[test]
 fn service_trace_enters_the_installed_word_once_with_the_header() {
     let registry = CallbackRegistry::new();
-    registry.register(trace_callback()).unwrap();
+    registry.ensure(trace_callback()).unwrap();
     let result = service_trace(&registry, trace_callback().word(), 0x40a5b5e0, |_| panic!("stock default ran"));
     assert_eq!(result, Ok(()));
     assert_eq!(TRACE_CALLS.load(Ordering::SeqCst), 1);
@@ -126,7 +126,7 @@ fn service_trace_does_nothing_for_the_empty_stub() {
 #[test]
 fn service_trace_refuses_a_zero_word() {
     let registry = CallbackRegistry::new();
-    assert_eq!(service_trace(&registry, CallbackWord(0), 0x40a5b5e0, |_| panic!("stock default ran")), Err(CallbackError::Invalid));
+    assert_eq!(service_trace(&registry, CallbackWord(0 as usize), 0x40a5b5e0, |_| panic!("stock default ran")), Err(CallbackError::Invalid));
 }
 
 #[test]
@@ -156,7 +156,7 @@ unsafe extern "C" fn refuse_notification(_: *const u8) -> i32 { 7 }
 #[test]
 fn device_notification_enters_the_installed_word_once_with_the_record_pointer() {
     let registry = CallbackRegistry::new();
-    registry.register(notification_callback()).unwrap();
+    registry.ensure(notification_callback()).unwrap();
     let record = [0u8; 76];
     let result = device_notification(&registry, notification_callback().word(), record.as_ptr(), |_| panic!("stock default ran"));
     assert_eq!(result, Ok(0));
@@ -167,7 +167,7 @@ fn device_notification_enters_the_installed_word_once_with_the_record_pointer() 
 #[test]
 fn device_notification_returns_the_installed_status() {
     let registry = CallbackRegistry::new();
-    registry.register(refuse_notification as unsafe extern "C" fn(*const u8) -> i32).unwrap();
+    registry.ensure(refuse_notification as unsafe extern "C" fn(*const u8) -> i32).unwrap();
     let installed = (refuse_notification as unsafe extern "C" fn(*const u8) -> i32).word();
     assert_eq!(device_notification(&registry, installed, core::ptr::null(), |_| 0), Ok(7));
 }
@@ -189,6 +189,6 @@ fn device_notification_runs_the_stock_default_for_the_router_word() {
 #[test]
 fn device_notification_refuses_a_zero_word() {
     let registry = CallbackRegistry::new();
-    assert_eq!(device_notification(&registry, CallbackWord(0), core::ptr::null(), |_| panic!("stock default ran")), Err(CallbackError::Invalid));
+    assert_eq!(device_notification(&registry, CallbackWord(0 as usize), core::ptr::null(), |_| panic!("stock default ran")), Err(CallbackError::Invalid));
 }
 

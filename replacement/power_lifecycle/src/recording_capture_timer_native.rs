@@ -5,6 +5,7 @@ const STATE: u32 = 0x015b_7698;
 extern "C" {
     fn xm1_power_software_timer_start(period: u32, mode: u32, callback: u32, token: *mut u32) -> i32;
     fn xm1_power_software_timer_cancel(handle: u32) -> i32;
+    fn xm1_power_owned_callback_register(word: u32, shape: u32) -> i32;
     fn xm1_power_interrupt_lock() -> u32;
     fn xm1_power_interrupt_unlock(saved: u32);
     fn xm1_power_current_task() -> u32;
@@ -35,6 +36,10 @@ impl RecordingTimerRuntime for NativeRecordingTimer {
     }
     fn register(&mut self) -> i32 {
         let seconds = unsafe { xm1_power_configuration_byte(0x947e) };
+        let registered = unsafe { xm1_power_owned_callback_register(xm1_power_recording_timer_expired as *const () as u32, crate::callback_registry::COMPLETION_SHAPE) };
+        if registered != 0 {
+            return registered;
+        }
         unsafe { xm1_power_software_timer_start(seconds.wrapping_mul(1000), 0, xm1_power_recording_timer_expired as *const () as u32, (STATE + 4) as *mut u32) }
     }
     fn cancel(&mut self, handle: RecordingTimerHandle) -> i32 {

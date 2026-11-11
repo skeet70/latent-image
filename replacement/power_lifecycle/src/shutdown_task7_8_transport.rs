@@ -57,10 +57,10 @@ pub fn set_completion_policy(storage: &mut impl UsbRegistrationStorage, policy: 
 mod native {
     use super::*;
     use core::ptr::{read_volatile, write_volatile};
+    extern "C" { fn xm1_power_command_diagnostic(category: u32, code: u32) -> i32; }
 
-    pub type OwnedSecondaryCompletion = unsafe extern "C" fn(ServiceStatus);
     pub struct NativeUsbRegistrations {
-        pub secondary_completion: Option<OwnedSecondaryCompletion>,
+        pub secondary_completion: Option<u32>,
     }
     pub struct NativeRegistrationRegistry;
     impl RegistrationRegistry for NativeRegistrationRegistry {
@@ -86,7 +86,11 @@ mod native {
         }
         fn secondary_active(&mut self) -> bool { (unsafe { read_volatile(0x146a0a8 as *const u32) }) == 1 }
         fn complete_secondary(&mut self, status: ServiceStatus) {
-            if let Some(completion) = self.secondary_completion { unsafe { completion(status) }; }
+            let Some(word) = self.secondary_completion else { return; };
+            match crate::callback_registry::registry().resolve::<unsafe extern "C" fn(i32)>(crate::callback_registry::CallbackWord(word as usize)) {
+                Ok(completion) => unsafe { completion(status.0) },
+                Err(error) => { let _ = crate::callback_registry::refused(error); }
+            }
         }
         fn clear_secondary_activity(&mut self) { unsafe { write_volatile(0x146a0a8 as *mut u32, 0) }; }
         fn set_completion_policy(&mut self, policy: UsbCompletionPolicy) {
@@ -102,8 +106,14 @@ mod native {
         unregister_primary(&mut NativeUsbRegistrations { secondary_completion: None }, &mut NativeRegistrationRegistry).0
     }
     #[no_mangle]
-    pub unsafe extern "C" fn xm1_power_usb_unregister_secondary(completion: Option<OwnedSecondaryCompletion>) -> i32 {
-        unregister_secondary(&mut NativeUsbRegistrations { secondary_completion: completion }, &mut NativeRegistrationRegistry).0
+    pub unsafe extern "C" fn xm1_power_usb_unregister_secondary() -> i32 {
+        let mut storage = NativeUsbRegistrations { secondary_completion: None };
+        if storage.secondary_mode() == UsbSecondaryMode::Mode2 && storage.secondary_active() {
+            let context = unsafe { read_volatile(0x146a0c4 as *const u32) };
+            let word = unsafe { read_volatile((context + 0x10) as *const u32) };
+            storage.secondary_completion = if word == 0 { None } else { Some(word) };
+        }
+        unregister_secondary(&mut storage, &mut NativeRegistrationRegistry).0
     }
     #[no_mangle]
     pub extern "C" fn xm1_power_usb_set_completion_policy(suppress: u32) {
@@ -112,7 +122,7 @@ mod native {
     }
 }
 #[cfg(target_arch = "arm")]
-pub use native::{NativeRegistrationRegistry, NativeUsbRegistrations, OwnedSecondaryCompletion};
+pub use native::{NativeRegistrationRegistry, NativeUsbRegistrations};
 
 #[cfg(test)]
 #[path = "shutdown_task7_8_transport_tests.rs"]

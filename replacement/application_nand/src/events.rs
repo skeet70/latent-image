@@ -47,9 +47,14 @@ extern "C" {
     fn xm1_power_clear_current_flags() -> i32;
     fn xm1_power_wait_current_all(bits: u32, observed: *mut u32, timeout: i32) -> i32;
     fn xm1_power_set_task_flags(task: u32, bits: u32) -> i32;
-    fn xm1_power_timer_irq_attach(source: u32, handler: unsafe extern "C" fn(), output: *mut u32) -> i32;
+    fn xm1_power_owned_callback_register(word: u32, shape: u32) -> i32;
+    fn xm1_power_timer_irq_attach(source: u32, handler: u32, output: *mut u32) -> i32;
     fn xm1_power_timer_release_handle(handle: u32) -> i32;
 }
+
+/// `OwnedShape::Completion` in the Power Services leaf: `extern "C" fn()`.
+#[cfg(target_arch = "arm")]
+const COMPLETION_SHAPE: u32 = 0;
 
 #[cfg(target_arch = "arm")]
 fn event_status(operation: EventOperation, status: i32) -> Result<(), Error> {
@@ -76,7 +81,12 @@ unsafe fn prepare_interrupt() -> Result<PendingCommand, Error> {
         return Err(error);
     }
     let mut handle = 0;
-    if let Err(error) = event_status(EventOperation::AttachInterrupt, unsafe { xm1_power_timer_irq_attach(0x4a, xm1_app_nand_ready_irq, &mut handle) }) {
+    let handler = xm1_app_nand_ready_irq as *const () as u32;
+    if let Err(error) = event_status(EventOperation::AttachInterrupt, unsafe { xm1_power_owned_callback_register(handler, COMPLETION_SHAPE) }) {
+        WAITER.store(NO_WAITER, Ordering::Release);
+        return Err(error);
+    }
+    if let Err(error) = event_status(EventOperation::AttachInterrupt, unsafe { xm1_power_timer_irq_attach(0x4a, handler, &mut handle) }) {
         WAITER.store(NO_WAITER, Ordering::Release);
         return Err(error);
     }

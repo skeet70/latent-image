@@ -17,6 +17,7 @@ mod owned_primitives {
         fn xm1_power_interrupt_lock() -> u32;
         fn xm1_power_interrupt_unlock(token: u32);
         fn xm1_power_task_delay(ticks: u32) -> i32;
+        fn xm1_power_owned_callback_register(word: u32, shape: u32) -> i32;
         fn xm1_power_timer_irq_attach(source: u32, handler: unsafe extern "C" fn(), output: *mut u32) -> i32;
         fn xm1_power_timer_release_handle(handle: u32) -> i32;
     }
@@ -24,6 +25,8 @@ mod owned_primitives {
     pub(super) unsafe fn scanout_leave_critical(token: u32) { unsafe { xm1_power_interrupt_unlock(token); } }
     pub(super) unsafe fn scanout_yield(value: u32) { unsafe { let _ = xm1_power_task_delay(value); } }
     pub(super) unsafe fn scanout_irq_configure(source: u32, handler: u32, output: *mut u32) -> i32 {
+        let registered = unsafe { xm1_power_owned_callback_register(handler, crate::panel_device::COMPLETION_SHAPE) };
+        if registered != 0 { return registered; }
         let handler: unsafe extern "C" fn() = unsafe { core::mem::transmute(handler as usize) };
         unsafe { xm1_power_timer_irq_attach(source, handler, output) }
     }

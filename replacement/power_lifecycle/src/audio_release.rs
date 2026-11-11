@@ -183,7 +183,7 @@ pub fn signal_shutdown_complete(rtos: &mut impl crate::shutdown::ShutdownRtos) -
 #[cfg(target_arch = "arm")]
 pub mod native {
     use super::*;
-    use crate::callback_registry::registry as callbacks;
+    use crate::callback_registry::{registry as callbacks, CallbackWord};
     use crate::callback_slots;
     use crate::primitives::{retire_current_task, CpuCore, NativeQueueStorage, OwnedQueueRtos, QueueDiagnostics};
     use crate::shutdown::{QueueId, RequestId, ServiceMessage, ShutdownRtos};
@@ -263,7 +263,7 @@ pub mod native {
     pub struct NativeAudioCallbacks;
     impl AudioCallbacks for NativeAudioCallbacks {
         fn invoke(&mut self, completion: CompletionAddress) {
-            let _ = callback_slots::call_no_arguments(callbacks(), completion.address());
+            let _ = callback_slots::call_no_arguments(callbacks(), CallbackWord(completion.address() as usize));
         }
         fn retire_task41(&mut self) -> ServiceStatus {
             unsafe { retire_current_task(crate::shutdown::TaskId(41)) }

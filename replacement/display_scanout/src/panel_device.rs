@@ -277,11 +277,34 @@ pub const fn pack_serial(register: PanelRegister, value: u16) -> u16 { value | (
 pub struct SerialStatus { pub transferred: bool, pub failed: bool }
 impl SerialStatus { pub const fn stopped(self) -> bool { self.transferred || self.failed } }
 
+/// `OwnedShape::Completion` in the Power Services leaf: `extern "C" fn()`.
+#[cfg(any(target_arch = "arm", test))]
+pub(crate) const COMPLETION_SHAPE: u32 = 0;
+
+/// The Power timer entry resolves the word through the registry and refuses an unregistered one
+/// with -255.
+#[cfg(any(target_arch = "arm", test))]
+pub(crate) unsafe fn start_owned_timer(
+    ticks: u32,
+    handler: u32,
+    register: unsafe extern "C" fn(u32, u32) -> i32,
+    start: unsafe extern "C" fn(u32, u32, u32, *mut u32) -> i32,
+) -> Result<u32, i32> {
+    let registered = unsafe { register(handler, COMPLETION_SHAPE) };
+    if registered != 0 { return Err(registered); }
+    let mut token = 0;
+    let status = unsafe { start(ticks, 1, handler, &mut token) };
+    if status == 0 { Ok(token) } else { Err(status) }
+}
+
 #[cfg(all(target_arch = "arm", feature = "panel"))]
 pub(crate) mod native {
     use super::*;
     use core::ptr::{read_volatile, write_volatile};
     extern "C" {
+        /// The Power Services leaf's owned-callback entry: `shape` 0 is `extern "C" fn()`. It
+        /// returns 0 when the word is registered and -255 when the leaf refuses it.
+        fn xm1_power_owned_callback_register(word: u32, shape: u32) -> i32;
         fn xm1_power_serial_open(port: u32, mode: u32, out: *mut u32) -> i32;
         fn xm1_power_serial_configure(handle: u32, delay: u32) -> i32;
         fn xm1_power_serial_write_with_residue(handle: u32, word: u32, residue: u32) -> i32;
@@ -367,7 +390,10 @@ pub(crate) mod native {
         fn signal_event2(&mut self) { unsafe { crate::panel_actor::xm1_scanout_panel_signal_event2(); } }
         fn signal_event4(&mut self) { unsafe { crate::panel_actor::xm1_scanout_panel_signal_event4(); } }
         fn signal_complete(&mut self, target: u8) { unsafe { crate::panel_actor::xm1_scanout_panel_signal_complete(u32::from(target)); } }
-        fn timer_start(&mut self, ticks: DelayTicks) -> Result<u32, i32> { unsafe { let mut token = 0; let status = xm1_power_software_timer_start(ticks.0, 1, crate::panel_actor::xm1_scanout_panel_post_timer_command as *const () as u32, &mut token); if status == 0 { Ok(token) } else { Err(status) } } }
+        fn timer_start(&mut self, ticks: DelayTicks) -> Result<u32, i32> {
+            let handler = crate::panel_actor::xm1_scanout_panel_post_timer_command as *const () as u32;
+            unsafe { start_owned_timer(ticks.0, handler, xm1_power_owned_callback_register, xm1_power_software_timer_start) }
+        }
         fn timer_cancel(&mut self, token: u32) { unsafe { let _ = xm1_power_software_timer_cancel(token); } }
         fn timer_store(&mut self, token: TimerToken) { unsafe { write_volatile(0x96bf40 as *mut u32, token.0); } }
         fn notify_error(&mut self) { unsafe { crate::panel_actor::xm1_scanout_panel_notify_error(); } }
