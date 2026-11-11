@@ -153,6 +153,12 @@ pub use xm1_power_services::settings_shutdown_native;
 pub mod vg_release;
 pub mod capture_profile_conversions_a;
 pub mod capture_profile_conversions_b;
+pub mod capture_profile_bindings;
+pub mod capture_profile_compare;
+pub mod capture_profile_primary;
+pub mod capture_profile_secondary;
+#[cfg(test)]
+mod capture_profile_tests;
 pub mod capture_settings_predicates;
 pub mod capture_settings_predicates_runtime;
 #[cfg(test)]
@@ -165,6 +171,10 @@ pub mod capture_task3_scalar;
 pub mod capture_task3_scalar_configuration;
 pub mod capture_task3_scalar_difference;
 pub mod record_address_space;
+pub mod record_native_boundary;
+pub mod record_native_exports;
+#[cfg(test)]
+mod record_native_boundary_tests;
 pub mod record_helper_constants;
 pub mod record_helper_image5_state;
 #[cfg(target_arch = "arm")]
@@ -245,6 +255,7 @@ pub mod record_scan_bounds_modes;
 pub mod record_scan_bounds_state;
 pub mod record_scan_bounds_votes;
 pub mod record_scan_core_image;
+pub mod record_scan_core_profile;
 pub mod record_scan_core_initialization;
 pub mod record_scan_core_memory;
 pub mod record_scan_core_samples;
@@ -273,7 +284,6 @@ pub mod record_statistics_queries;
 pub mod record_statistics_windows;
 #[cfg(target_arch = "arm")]
 pub mod record_task43;
-#[cfg(target_arch = "arm")]
 pub mod record_task43_application;
 #[cfg(target_arch = "arm")]
 pub mod record_task43_aux_adjustment;
@@ -393,6 +403,14 @@ core::arch::global_asm!(include_str!("record_task43_residue.S"), options(raw));
 core::arch::global_asm!(include_str!("record_task43_selection_lists_residue.S"), options(raw));
 
 pub use xm1_power_services::{mirror, record_store};
+
+pub mod record_deep_geometry;
+pub mod record_image_geometry_query;
+pub mod record_frontend;
+pub mod record_hardware_requests;
+pub mod record_hardware_deep_entries;
+pub mod record_capture_dispatch_callbacks;
+pub mod record_frontend_transfer;
 
 #[cfg(test)]
 extern crate std;

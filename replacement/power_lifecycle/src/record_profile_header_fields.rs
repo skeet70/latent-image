@@ -84,6 +84,7 @@ leaf_getter!(helper_75bddc, HeaderField::Byte(0x66));
 leaf_getter!(helper_75be10, HeaderField::Byte(0x67));
 leaf_getter!(helper_75bed4, HeaderField::Byte(0x68));
 leaf_getter!(helper_75bf08, HeaderField::Byte(0x69));
+leaf_getter!(helper_75bf3c, HeaderField::Halfword(0x2c));
 leaf_getter!(helper_75bf70, HeaderField::Byte(0x6c));
 leaf_getter!(helper_75bfa4, HeaderField::Byte(0x6d));
 leaf_setter!(helper_75b06c, HeaderField::Byte(0x30), 0x1, 0x0);

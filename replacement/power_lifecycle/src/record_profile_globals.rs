@@ -18,6 +18,7 @@ pub fn helper_76da84<M: GuestAddressSpace, E>(context: &mut RecordContext<M, E>)
 pub fn helper_76dad4<M: GuestAddressSpace, E>(context: &mut RecordContext<M, E>) -> Result<u32, MemoryError> {
     Ok(match context.read_u32(address(0x104))? { 0 => 0, 1 => 1, 2 => 2, _ => 3 })
 }
+pub fn helper_76da94<M: GuestAddressSpace, E>(context: &mut RecordContext<M, E>) -> Result<u32, MemoryError> { crate::record_configuration::helper_69fec8(context, 0x003e_0243) }
 macro_rules! selection {
     ($name:ident, $forced:expr, $selected:expr) => { pub fn $name<M: GuestAddressSpace, E>(context: &mut RecordContext<M, E>) -> Result<u32, MemoryError> {
         if context.read_u32(address($forced))? == 1 { Ok(2) } else { context.read_u32(address($selected)).map(|value| u32::from(value == 1)) }

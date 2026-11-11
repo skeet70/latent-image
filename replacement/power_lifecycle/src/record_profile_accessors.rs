@@ -267,6 +267,8 @@ header_setter!(helper_750e20, HeaderField::Byte(0x6c), 0x80, 0x80000000);
 pub fn helper_75a8c0<M: GuestAddressSpace, E>(context: &mut RecordContext<M, E>, handle: u32, field: u32) -> Result<u32, MemoryError> { can_write(context, ProfileHandle(handle), ProfileField(field)).map(u32::from) }
 pub fn helper_75a910<M: GuestAddressSpace, E>(context: &mut RecordContext<M, E>, handle: u32, field: u32) -> Result<u32, MemoryError> { can_read(context, ProfileHandle(handle), ProfileField(field)).map(u32::from) }
 pub fn helper_75a960<M: GuestAddressSpace, E>(_context: &mut RecordContext<M, E>, first: u32, second: u32) -> Result<u32, MemoryError> { Ok((second & 15) | ((first & 15) << 4)) }
+pub fn helper_75e618<M: GuestAddressSpace, E>(context: &mut RecordContext<M, E>, handle: u32) -> Result<u32, MemoryError> { handle_bank(context, ProfileHandle(handle)).map(|bank| bank.0) }
+pub fn helper_75e1ec<M: GuestAddressSpace, E>(context: &mut RecordContext<M, E>) -> Result<u32, MemoryError> { selected_bank(context).map(|bank| bank.0) }
 pub fn helper_75a7c4<M: GuestAddressSpace, E>(_context: &mut RecordContext<M, E>, handle: u32, field: u32, access: u32, tag: u32) -> Result<u32, MemoryError> {
     if handle == u32::MAX || (field != 63 && field > 42) || access & !3 != 0 { return Ok(u32::MAX); }
     let previous = (handle >> 18) & 63;

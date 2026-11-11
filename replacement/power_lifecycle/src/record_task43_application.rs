@@ -105,6 +105,7 @@ pub fn resolve_native_callback(installed: u32) -> Result<NativeCallback, Callbac
     Ok(NativeCallback::Ready(InstalledCallback::Owned(callback)))
 }
 
+#[cfg(target_arch = "arm")]
 #[no_mangle]
 pub unsafe extern "C" fn xm1_power_record_application_install_callback(callback: Option<ApplicationCallback>) {
     let address = match register_native_callback(callback) {
@@ -114,6 +115,7 @@ pub unsafe extern "C" fn xm1_power_record_application_install_callback(callback:
     unsafe { core::ptr::write_volatile(0x829a0c as *mut u32, address) };
 }
 
+#[cfg(target_arch = "arm")]
 unsafe extern "C" {
     fn xm1_power_record_application_gate_marker();
     fn xm1_power_interrupt_lock() -> u32;
@@ -123,10 +125,14 @@ unsafe extern "C" {
     fn xm1_pipeline_image_send_message(channel: u32, message: *const crate::record_task43::StorageMessage) -> i32;
 }
 
+#[cfg(target_arch = "arm")]
 fn word(address: usize) -> u32 { unsafe { core::ptr::read_volatile(address as *const u32) } }
+#[cfg(target_arch = "arm")]
 fn byte(address: usize) -> u8 { unsafe { core::ptr::read_volatile(address as *const u8) } }
+#[cfg(target_arch = "arm")]
 fn put_word(address: usize, value: u32) { unsafe { core::ptr::write_volatile(address as *mut u32, value) }; }
 
+#[cfg(target_arch = "arm")]
 #[no_mangle]
 pub unsafe extern "C" fn xm1_power_record_helper_72b680(record: u32) -> i32 {
     let installed = match resolve_native_callback(word(0x829a0c)) { Ok(installed) => installed, Err(error) => return error.status() };
