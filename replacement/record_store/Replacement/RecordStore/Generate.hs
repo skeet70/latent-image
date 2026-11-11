@@ -4,6 +4,8 @@ module Replacement.RecordStore.Generate
   , GenerationConfig
   , mkGenerationConfig
   , generateCases
+  , generationVersion
+  , generationVersionText
   , ValidCase
   , validCase
   , oracleCase
@@ -11,12 +13,24 @@ module Replacement.RecordStore.Generate
   ) where
 
 import Control.Monad (forM_)
-import Data.Bits ((.&.), shiftR, xor)
+import Data.Bits ((.&.), shiftR)
 import qualified Data.ByteString as B
 import Data.Char (isAsciiLower, isDigit)
 import Data.List (nub, sort)
 import qualified Data.Map.Strict as M
 import Data.Word (Word8, Word16, Word32, Word64)
+import Emulation.ScenarioGeneration
+  ( GeneratedScenarios (..)
+  , Generator (..)
+  , GeneratorVersion (..)
+  , Rng
+  , ScenarioSeed (..)
+  , SequenceBounds (..)
+  , drawElement
+  , drawWord64
+  , generateScenarios
+  , mkSequenceBounds
+  )
 import Numeric (showHex)
 import Replacement.RecordStore.Cases
   ( CaseName (..)
@@ -80,22 +94,45 @@ newtype ValidCase = ValidCase OracleCase
 oracleCase :: ValidCase -> OracleCase
 oracleCase (ValidCase c) = c
 
-generateCases :: GenerationConfig -> [ValidCase]
-generateCases config = [generateCase config index | index <- [0 .. generationCount config - 1]]
+-- | Bump when a seed starts producing different scenarios.
+generationVersion :: GeneratorVersion
+generationVersion = GeneratorVersion generationVersionText
 
-generateCase :: GenerationConfig -> Int -> ValidCase
-generateCase config index = selectValid [candidate { callbacks = chosen } | chosen <- nub (drawn : callbackChoices)]
+generationVersionText :: String
+generationVersionText = "record-store-cases/1"
+
+minimumGeneratedOperations :: Int
+minimumGeneratedOperations = 3
+
+generateCases :: GenerationConfig -> [ValidCase]
+generateCases config =
+  case generateScenarios (recordStoreGenerator bounds) (ScenarioSeed seed) (generationCount config) of
+    Right generated -> generatedScenarios generated
+    Left problem -> error ("record-store generation: " ++ show problem)
   where
-    seed = generationSeed config
+    seed = case generationSeed config of GenerationSeed value -> value
+    bounds = either (error . show) id (mkSequenceBounds minimumGeneratedOperations (generationMaxOperations config))
+
+recordStoreGenerator :: SequenceBounds -> Generator ValidCase Operation
+recordStoreGenerator bounds =
+  Generator
+    { generatorVersion = generationVersion
+    , generatorBounds = bounds
+    , generatorEvents = operations . oracleCase
+    , generatorScenario = generateScenario
+    }
+
+generateScenario :: ScenarioSeed -> Int -> SequenceBounds -> Rng -> ValidCase
+generateScenario (ScenarioSeed seed) index bounds rng0 = selectValid [candidate { callbacks = chosen } | chosen <- nub (drawn : callbackChoices)]
+  where
     kind' = toEnum (index `mod` 5) :: Kind
     family = families !! (index `mod` length families)
-    rng0 = caseRng seed index
     (bank0, rng1) = buildBank kind' (planBank0 (familyBanks family)) rng0
     (bank1, rng2) = buildBank kind' (planBank1 (familyBanks family)) rng1
     (drawn, rng3) = case familyCallback family of
       Just chosen -> (chosen, rng2)
       Nothing -> drawElement callbackChoices rng2
-    plan = take (generationMaxOperations config - 2) (familyBody family)
+    plan = take (maximumEvents bounds - 2) (familyBody family)
     (body, _) = materializeBody kind' plan rng3
     g = geometry kind'
     candidate = OracleCase
@@ -298,8 +335,8 @@ families =
       Nothing
   ]
 
-generatedName :: GenerationSeed -> Int -> Family -> String
-generatedName (GenerationSeed seed) index family =
+generatedName :: Word64 -> Int -> Family -> String
+generatedName seed index family =
   "gen-" ++ hex16 seed ++ "-" ++ show index ++ "-" ++ familyTag family
   where
     hex16 value = let digits = showHex value "" in replicate (16 - length digits) '0' ++ digits
@@ -402,22 +439,3 @@ nextActive :: Bool -> Operation -> Bool
 nextActive _ (Register Normal) = True
 nextActive _ Close = False
 nextActive active _ = active
-
-newtype Rng = Rng Word64
-
-drawWord64 :: Rng -> (Word64, Rng)
-drawWord64 (Rng state) = (mix64 state, Rng (state + 0x9e3779b97f4a7c15))
-
-mix64 :: Word64 -> Word64
-mix64 z0 = z2 `xor` (z2 `shiftR` 31)
-  where
-    z1 = (z0 `xor` (z0 `shiftR` 30)) * 0xbf58476d1ce4e5b9
-    z2 = (z1 `xor` (z1 `shiftR` 27)) * 0x94d049bb133111eb
-
-caseRng :: GenerationSeed -> Int -> Rng
-caseRng (GenerationSeed seed) index = Rng (mix64 (seed + fromIntegral index * 0x9e3779b97f4a7c15))
-
-drawElement :: [a] -> Rng -> (a, Rng)
-drawElement items rng = (items !! fromIntegral (draw `mod` fromIntegral (length items)), rng')
-  where
-    (draw, rng') = drawWord64 rng

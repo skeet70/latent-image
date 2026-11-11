@@ -26,7 +26,7 @@ import FujiModNativePaths (fujimodNativeCase)
 import Replacement.RecordStore.CaseJson (decodeCase, encodeCase)
 import Replacement.RecordStore.Cases (caseName, name)
 import Replacement.RecordStore.Execution
-import Replacement.RecordStore.Generate (GenerationSeed (..), ValidCase, generateCases, mkGenerationConfig, oracleCase)
+import Replacement.RecordStore.Generate (GenerationSeed (..), ValidCase, generateCases, generationVersionText, mkGenerationConfig, oracleCase)
 import Replacement.RecordStore.Harness (Function, caseSpec)
 import Replacement.RecordStore.Minimize hiding (Inconclusive)
 import System.Directory hiding (isSymbolicLink)
@@ -598,6 +598,7 @@ identityObject options context =
     , "stock_role" .= ("stock" :: String)
     , "candidate_role" .= ("candidate" :: String)
     , "seed" .= optionSeed options
+    , "generator_version" .= generationVersionText
     , "cases" .= optionCaseCount options
     , "operations" .= optionOperationBound options
     , "shrink_budget" .= optionBudget options

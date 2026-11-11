@@ -10,10 +10,11 @@ module Replacement.RecordStore.Minimize
   , shrinkCase
   ) where
 
-import Data.List (nub)
 import qualified Data.ByteString as B
 import Data.Word (Word16)
 import Emulation.NativeObservation (Register)
+import Emulation.ScenarioMinimization (ShrinkBudget, mkShrinkBudget)
+import qualified Emulation.ScenarioMinimization as Scenario
 import Replacement.RecordStore.Cases hiding (bank)
 import Replacement.RecordStore.Generate (ValidCase, oracleCase, validCase)
 import Replacement.RecordStore.Model
@@ -45,13 +46,6 @@ data Trial
   | Inconclusive TrialBlock
   deriving (Eq, Show)
 
-newtype ShrinkBudget = ShrinkBudget Int deriving (Eq, Show)
-
-mkShrinkBudget :: Int -> Either String ShrinkBudget
-mkShrinkBudget count
-  | count >= 1 && count <= 256 = Right (ShrinkBudget count)
-  | otherwise = Left "shrink budget must be between 1 and 256"
-
 data ReductionStatus
   = FixedPoint
   | UnresolvedTrials
@@ -66,13 +60,55 @@ data ShrinkResult = ShrinkResult
   , reductionStatus :: ReductionStatus
   } deriving (Eq, Show)
 
+-- | The returned case is always the last one that reproduced the boundary.
+-- 'FixedPoint' means every strictly smaller proposal for the final case had a
+-- complete predicate outcome and none reproduced the original boundary; the
+-- claim is minimality under the implemented reductions only. 'UnresolvedTrials'
+-- means at least one such proposal stayed 'Inconclusive', so local minimality is
+-- not established. 'BaselineInconclusive' carries the block that stopped the
+-- original trial, so neither reproduction nor non-reproduction is established.
+shrinkCase :: ShrinkBudget -> Boundary -> (ValidCase -> IO Trial) -> ValidCase -> IO ShrinkResult
+shrinkCase budget boundary oracle original = do
+  result <- Scenario.shrinkScenario budget (strategy boundary) original (\valid -> toShared <$> oracle valid)
+  pure
+    ShrinkResult
+      { minimizedCase = Scenario.minimizedScenario result
+      , trialCount = Scenario.trialsUsed result
+      , reductionStatus = fromSharedStatus (Scenario.reductionStatus result)
+      }
+  where
+    toShared Matches = Scenario.Matches
+    toShared (Differs boundaries) = Scenario.Differs boundaries
+    toShared (Inconclusive block) = Scenario.Inconclusive block
+    fromSharedStatus Scenario.FixedPoint = FixedPoint
+    fromSharedStatus Scenario.UnresolvedTrials = UnresolvedTrials
+    fromSharedStatus Scenario.BudgetExhausted = BudgetExhausted
+    fromSharedStatus Scenario.OriginalDoesNotReproduce = OriginalDoesNotReproduce
+    fromSharedStatus (Scenario.BaselineInconclusive block) = BaselineInconclusive block
+
+strategy :: Boundary -> Scenario.ShrinkStrategy ValidCase Operation [Boundary]
+strategy boundary =
+  Scenario.ShrinkStrategy
+    { Scenario.scenarioSize = semanticSize . oracleCase
+    , Scenario.scenarioEvents = operations . oracleCase
+    , Scenario.setScenarioEvents = \events valid ->
+        case validCase (oracleCase valid) {operations = events} of
+          Left _ -> Nothing
+          Right accepted -> Just accepted
+    , Scenario.simplifyEvent = simplifyOperation
+    , Scenario.setupReductions = setupCandidates
+    , Scenario.prepareScenario = \valid ->
+        case validCase (oracleCase valid) of
+          Left _ -> Nothing
+          Right accepted -> Just accepted
+    , Scenario.reproducesDifference = \_ candidate -> boundary `elem` candidate
+    }
+
 -- | Semantic size, ordered lexicographically: operation count, occupied records,
 -- then scalar weights. All three components are natural numbers and every
 -- accepted proposal strictly decreases this order, so reduction terminates.
-data SemanticSize = SemanticSize !Int !Int !Int deriving (Eq, Ord, Show)
-
-semanticSize :: OracleCase -> SemanticSize
-semanticSize c = SemanticSize operations' records' scalars'
+semanticSize :: OracleCase -> (Int, Int, Int)
+semanticSize c = (operations', records', scalars')
   where
     g = geometry (kind c)
     medium' = initialMedium c
@@ -112,57 +148,24 @@ mediumWeight :: Geometry -> Bank -> Medium -> Int
 mediumWeight g bank medium =
   sum [fromIntegral sequenceNumber | position <- [0 .. bankOccupancy g bank medium - 1], let Sequence sequenceNumber = sequenceOf (recordAt g bank (Position position) medium)]
 
--- | 'FixedPoint' means every strictly smaller proposal for the final case had a
--- complete predicate outcome and none reproduced the original boundary; the
--- claim is minimality under the implemented reductions only. 'UnresolvedTrials'
--- means at least one such proposal stayed 'Inconclusive', so local minimality is
--- not established. 'BaselineInconclusive' carries the block that stopped the
--- original trial, so neither reproduction nor non-reproduction is established.
--- The returned case is always the last one that reproduced the boundary.
-shrinkCase :: ShrinkBudget -> Boundary -> (ValidCase -> IO Trial) -> ValidCase -> IO ShrinkResult
-shrinkCase (ShrinkBudget budget) originalBoundary oracle original = do
-  baseline <- oracle original
-  case baseline of
-    Differs boundaries | originalBoundary `elem` boundaries -> descend 1 original
-    Inconclusive block -> pure (ShrinkResult original 1 (BaselineInconclusive block))
-    _ -> pure (ShrinkResult original 1 OriginalDoesNotReproduce)
-  where
-    -- Unresolved status belongs to the current case; accepting a smaller case
-    -- discards it.
-    descend used current = search used current False (proposals current)
+simplifyOperation :: Operation -> [Operation]
+simplifyOperation operation = case operation of
+  Append (Seed seed) source ->
+    [Append (Seed 0) source | seed /= 0]
+      ++ [Append (Seed seed) CallerSource | source == StagingSource]
+  ReadAt (BytePosition offset) lengthBytes ->
+    [ReadAt (BytePosition 0) lengthBytes | offset /= 0]
+      ++ [ReadAt (BytePosition offset) 1 | lengthBytes > 1]
+  _ -> []
 
-    search used current unresolved [] =
-      pure (ShrinkResult current used (if unresolved then UnresolvedTrials else FixedPoint))
-    search used current unresolved (candidate:rest) =
-      case validCase candidate of
-        Left _ -> search used current unresolved rest
-        Right valid
-          | semanticSize (oracleCase valid) >= semanticSize (oracleCase current) -> search used current unresolved rest
-          | used >= budget -> pure (ShrinkResult current used BudgetExhausted)
-          | otherwise -> do
-              result <- oracle valid
-              case result of
-                Differs boundaries | originalBoundary `elem` boundaries -> descend (used + 1) valid
-                Inconclusive _ -> search (used + 1) current True rest
-                _ -> search (used + 1) current unresolved rest
-
-proposals :: ValidCase -> [OracleCase]
-proposals valid =
-  deletions c ++ truncations c ++ operationSimplifications c ++ callbackSimplifications c ++ mediumSimplifications c
+setupCandidates :: ValidCase -> [ValidCase]
+setupCandidates valid =
+  [ accepted
+  | proposal <- truncations c ++ callbackSimplifications c ++ mediumSimplifications c
+  , Right accepted <- [validCase proposal]
+  ]
   where
     c = oracleCase valid
-
-deletions :: OracleCase -> [OracleCase]
-deletions c = [c {operations = candidate} | candidate <- nub candidates]
-  where
-    (prefix, body) = splitAt 2 (operations c)
-    candidates =
-      [prefix ++ before ++ after
-      | size <- [length body, length body - 1 .. 1]
-      , start <- [0 .. length body - size]
-      , let (before, rest) = splitAt start body
-            after = drop size rest
-      ]
 
 truncations :: OracleCase -> [OracleCase]
 truncations c = concat [truncationsIn bank | bank <- [Bank0, Bank1]]
@@ -179,19 +182,6 @@ truncateBank g bank kept medium = putBank g bank truncated medium
     bytes = bankBytes g bank medium
     used = min blockBytes (kept * recordBytes g)
     truncated = B.take used bytes <> B.replicate (blockBytes - used) 0xff
-
-operationSimplifications :: OracleCase -> [OracleCase]
-operationSimplifications c = concat
-  [simplify position operation | (position, operation) <- zip [0 ..] (operations c), position >= 2]
-  where
-    simplify position operation = case operation of
-      Append (Seed seed) source ->
-        [c {operations = setAt position (Append (Seed 0) source) (operations c)} | seed /= 0]
-        ++ [c {operations = setAt position (Append (Seed seed) CallerSource) (operations c)} | source == StagingSource]
-      ReadAt (BytePosition offset) lengthBytes ->
-        [c {operations = setAt position (ReadAt (BytePosition 0) lengthBytes) (operations c)} | offset /= 0]
-        ++ [c {operations = setAt position (ReadAt (BytePosition offset) 1) (operations c)} | lengthBytes > 1]
-      _ -> []
 
 callbackSimplifications :: OracleCase -> [OracleCase]
 callbackSimplifications c = case callbacks c of
@@ -212,6 +202,3 @@ mediumSimplifications c = concat [simplificationsIn bank | bank <- [Bank0, Bank1
 setSequence :: Geometry -> Bank -> Int -> Word16 -> Medium -> Medium
 setSequence g bank position sequenceNumber medium =
   putBank g bank (replace (position * recordBytes g) (half sequenceNumber) (bankBytes g bank medium)) medium
-
-setAt :: Int -> a -> [a] -> [a]
-setAt position value items = take position items ++ [value] ++ drop (position + 1) items

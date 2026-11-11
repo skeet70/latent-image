@@ -2189,6 +2189,63 @@ haskell_library(
     ],
 )
 
+haskell_library(
+    name = "scenario-generation",
+    srcs = ["Emulation/ScenarioGeneration.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+    ],
+    src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//host:base",
+    ],
+)
+
+haskell_library(
+    name = "scenario-minimization",
+    srcs = ["Emulation/ScenarioMinimization.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+    ],
+    src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//host:base",
+    ],
+)
+
+haskell_test(
+    name = "scenario-generation-tests",
+    size = "small",
+    srcs = ["ScenarioGenerationTests.hs"],
+    main_file = "ScenarioGenerationTests.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-O2"],
+    deps = [
+        ":scenario-generation",
+        "//host:base",
+    ],
+)
+
+haskell_test(
+    name = "scenario-minimization-tests",
+    size = "small",
+    srcs = ["ScenarioMinimizationTests.hs"],
+    main_file = "ScenarioMinimizationTests.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-O2"],
+    deps = [
+        ":scenario-generation",
+        ":scenario-minimization",
+        "//host:base",
+    ],
+)
+
 haskell_binary(
     name = "native-case",
     srcs = ["NativeCaseMain.hs"],
