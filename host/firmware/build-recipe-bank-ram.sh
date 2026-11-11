@@ -41,6 +41,16 @@ case "${RB_PUBLICATION_GROUPS:-}" in
     activation_count=94
     modal_link=(-Wl,--undefined=rb_modal_entry -Wl,--undefined=rb_menu_engine_entry)
     engine_link=(-Wl,-T,menu/recipe_bank_ram_engine.ld)
+    # The rlib archive carries core and compiler_builtins as members; without
+    # collection every section of every extracted member is placed and .text
+    # overlaps the bank's data. The manifest names the three installer entries
+    # and the builder reads the SELECT CUSTOM SETTING arrays and the
+    # develop-wait pair, which no owned relocation reaches.
+    gc_link=(-Wl,--gc-sections -Wl,--undefined=ram_push_install
+      -Wl,--undefined=ram_push_rollback -Wl,--undefined=ram_push_status
+      -Wl,--undefined=rb_select_values -Wl,--undefined=rb_select_labels
+      -Wl,--undefined=rb_capture_develop_wait -Wl,--undefined=cc_ram_data
+      -Wl,--undefined=cc_ram_convert)
     ;;
   modal75,menu-engine,menu-value)
     builder_mode=(--ram-push-variant modal75,menu-engine,menu-value)

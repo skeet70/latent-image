@@ -67,6 +67,40 @@ xm1_rust_staticlib(
     ],
 )
 
+# The 225-publication modal75,menu-engine link unit: the full engine unit
+# without the render rlibs and cfg, so drawing stays stock.
+_ENGINE_STOCK_DRAW_RLIB_DEPS = {
+    crate: label
+    for crate, label in _ENGINE_RLIB_DEPS.items()
+    if crate not in ("libm", "menu_widgets", "render_adapter", "render_commands")
+}
+
+_ENGINE_STOCK_DRAW_FLAGS = [
+    "--cfg",
+    "rb_modal_scoped",
+    "--cfg",
+    "rb_modal75_owned",
+    "--cfg",
+    "rb_menu_engine_owned",
+    "-C",
+    "target-feature=+strict-align",
+    "-C",
+    "llvm-args=-min-jump-table-entries=4096",
+]
+
+xm1_rust_staticlib(
+    name = "bank-modal75-engine",
+    src = "lib.rs",
+    crate_name = "bank",
+    rustc_flags = _ENGINE_STOCK_DRAW_FLAGS,
+    rlib_deps = _ENGINE_STOCK_DRAW_RLIB_DEPS,
+    visibility = [
+        "//emulation:__pkg__",
+        "//host/firmware:__pkg__",
+        "//transport:__pkg__",
+    ],
+)
+
 # The same link unit with the owned value transaction seam.
 _ENGINE_VALUE_RLIB_DEPS = dict(_ENGINE_RLIB_DEPS)
 _ENGINE_VALUE_RLIB_DEPS.update({
