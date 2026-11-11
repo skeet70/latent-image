@@ -4,14 +4,16 @@
 -- Aggregate mode takes --aggregate-{a,b}-{bin,symbols,placements} and
 -- --aggregate-carriers. Standalone mode also takes --owned-{a,b}-{bin,symbols}
 -- and --s3d-{a,b}-{bin,symbols}.
--- Both modes require --runner, --layout, --loader-a, --loader-b, --cache-root
--- and --results. The last occurrence of an option overrides Bazel defaults.
+-- Both modes require --runner, --layout, --loader-a, --loader-b and --results;
+-- --cache-root defaults to the shared private-data/cache/native. The last
+-- occurrence of an option overrides Bazel defaults.
 module Main (main) where
 
 import Control.Monad (forM_, unless)
 import Data.Aeson (object, (.=), encode)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
+import Emulation.CachedNativeBatch (defaultNativeCacheRoot)
 import Emulation.Sha256 (sha256, sha256File, sha256Hex)
 import FujiAF.Host (failH)
 import FujiAF.StorageBudget (checkStorageBudget)
@@ -41,7 +43,7 @@ main = do
     , "--aggregate-b-bin", "--aggregate-b-symbols", "--aggregate-b-placements"
     , "--aggregate-carriers"
     ]
-  cacheRoot <- required "--cache-root"
+  cacheRoot <- maybe defaultNativeCacheRoot id <$> optional "--cache-root"
   resultsPath <- required "--results"
   facts <- either failH pure . parseFacts =<< B.readFile layoutPath
   loaderABytes <- B.readFile loaderA

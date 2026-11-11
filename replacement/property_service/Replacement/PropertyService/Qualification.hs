@@ -18,6 +18,7 @@ module Replacement.PropertyService.Qualification
   , ControlSummary (..)
   , parseOracleSummary
   , resolveWithin
+  , resolveCacheOutput
   ) where
 
 import Control.Exception (IOException, SomeException, bracketOnError, displayException, finally, mask, try)
@@ -34,6 +35,7 @@ import Data.Maybe (isJust, isNothing)
 import Data.Scientific (floatingOrInteger)
 import Data.String (fromString)
 import qualified Data.Text as T
+import Emulation.CachedNativeBatch (defaultNativeCacheRoot)
 import Emulation.Sha256 (sha256, sha256Hex, sha256File)
 import FujiAF.Host (failH, readRegular, runBounded)
 import FujiAF.JSON (encodeCanonical)
@@ -111,7 +113,7 @@ defaultOptions =
     , optLinked = ""
     , optSymbols = ""
     , optOut = ""
-    , optCache = ""
+    , optCache = defaultNativeCacheRoot
     , optIds = Nothing
     , optRunner = fujimodNativeCase
     , optSlot = ""
@@ -146,7 +148,7 @@ parseOptions = go defaultOptions
             [ ("--dat", optDat options), ("--image4", optImage4 options), ("--loader-a", optLoaderA options)
             , ("--loader-b", optLoaderB options), ("--image5", optImage5 options), ("--plain", optPlain options)
             , ("--image2", optImage2 options), ("--linked", optLinked options), ("--symbols", optSymbols options)
-            , ("--out", optOut options), ("--cache", optCache options), ("--runner", optRunner options)
+            , ("--out", optOut options), ("--runner", optRunner options)
             , ("--emulator-slot", optSlot options)
             , ("--oracle", optOracle options), ("--stage", optStage options)
             , ("--stage-encoder", optStageEncoder options), ("--stage-rebuild", optStageRebuild options)
@@ -204,6 +206,16 @@ privateScratchRoot = do
   createDirectoryIfMissing True "private-data/scratch"
   canonicalizePath "private-data/scratch"
 
+privateCacheRoot :: IO FilePath
+privateCacheRoot = do
+  createDirectoryIfMissing True "private-data/cache"
+  canonicalizePath "private-data/cache"
+
+canonicalExisting :: FilePath -> IO FilePath
+canonicalExisting candidate = do
+  exists <- doesDirectoryExist candidate
+  if exists then canonicalizePath candidate else canonicalExisting (takeDirectory candidate)
+
 resolveOutput :: String -> FilePath -> FilePath -> IO (Either String FilePath)
 resolveOutput flag scratch path = do
   absolute <- makeAbsolute path
@@ -218,10 +230,29 @@ resolveOutput flag scratch path = do
         Left problem ->
           Left (flag ++ ": " ++ problem ++ "; use private-data/scratch/QualificationAutomation/jobs or .../cache")
         Right canonical -> Right canonical
+
+-- | A cache root below private-data/scratch or private-data/cache.
+resolveCacheOutput :: String -> FilePath -> FilePath -> FilePath -> IO (Either String FilePath)
+resolveCacheOutput flag scratch cache path = do
+  absolute <- makeAbsolute path
+  parent <- canonicalExisting (takeDirectory absolute)
+  let roots = [scratch, cache]
+      parentInside = any (\root -> splitDirectories root `isPrefixOf` splitDirectories parent) roots
+  if not parentInside
+    then pure (Left (flag ++ " must resolve under private-data/scratch or private-data/cache; use private-data/cache/native"))
+    else do
+      createDirectoryIfMissing True absolute
+      resolved <- firstRoot roots
+      pure $ case resolved of
+        Nothing -> Left (flag ++ ": " ++ absolute ++ " resolves outside private-data/scratch and private-data/cache")
+        Just canonical -> Right canonical
   where
-    canonicalExisting candidate = do
-      exists <- doesDirectoryExist candidate
-      if exists then canonicalizePath candidate else canonicalExisting (takeDirectory candidate)
+    firstRoot [] = pure Nothing
+    firstRoot (root : rest) = do
+      outcome <- resolveWithin root absolute
+      case outcome of
+        Right canonical -> pure (Just canonical)
+        Left _ -> firstRoot rest
 
 -- Typed oracle results ---------------------------------------------------------
 
@@ -733,8 +764,9 @@ setupJob options = do
     then pure (Left "--image4 is not the canonical X-M1 1.50 image4")
     else do
       scratch <- privateScratchRoot
+      cache <- privateCacheRoot
       outResult <- resolveOutput "--out" scratch (optOut resolved)
-      cacheResult <- resolveOutput "--cache" scratch (optCache resolved)
+      cacheResult <- resolveCacheOutput "--cache" scratch cache (optCache resolved)
       case (outResult, cacheResult) of
         (Left problem, _) -> pure (Left problem)
         (_, Left problem) -> pure (Left problem)

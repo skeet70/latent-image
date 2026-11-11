@@ -230,6 +230,7 @@ haskell_binary(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":family-suite",
+        "//emulation:cached-native-batch",
         "//emulation:fujimod-native-paths",
         "//host:aeson",
         "//host:storage-budget",

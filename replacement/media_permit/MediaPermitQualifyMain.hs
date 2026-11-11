@@ -4,7 +4,7 @@
 
 module Main where
 
-import Control.Exception (Exception, IOException, SomeException, catch, displayException, fromException, throwIO, try)
+import Control.Exception (Exception, IOException, SomeException, displayException, fromException, throwIO, try)
 import Control.Monad (forM_, unless, when)
 import qualified ArmElf as E
 import Data.Aeson (Value (Null), encode, object, (.=))
@@ -16,7 +16,7 @@ import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
 import Data.List (intercalate, isInfixOf, isPrefixOf, isSuffixOf)
 import qualified Data.Map.Strict as M
 import Data.Word (Word32)
-import Emulation.CachedNativeBatch (BatchReuse (..), CacheEscape, ResultPolicy (WriteAllResults), cachedObservedBatchWith)
+import Emulation.CachedNativeBatch (BatchReuse (..), CacheEscape, ResultPolicy (WriteAllResults), cachedObservedBatchWith, defaultNativeCacheRoot)
 import Emulation.NativeCase (CaseId (..))
 import qualified Emulation.NativeObservation as N
 import Emulation.Sha256 (sha256, sha256Hex)
@@ -25,7 +25,7 @@ import FujiAF.JSON (encodeCanonical)
 import FujiModNativePaths (fujimodNativeCase)
 import Numeric (showHex)
 import StockInventory (FunctionDeclaration (..), FunctionDerivation (..), FunctionSize (..), GuestAddress (..), PremiseUse (..), ProgramCounter (..), checkedStockFunctions, requiredReturnPremises, returnPremiseLabel)
-import System.Directory (canonicalizePath, createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getCurrentDirectory, listDirectory, removeDirectoryRecursive, removeFile)
+import System.Directory (canonicalizePath, createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getCurrentDirectory, listDirectory, removeFile)
 import System.Environment (getArgs, getExecutablePath, lookupEnv, setEnv)
 import System.Exit (ExitCode (..), exitWith)
 import System.FilePath ((</>), isAbsolute)
@@ -1203,7 +1203,7 @@ data Report = Report
   , reportValue :: Value
   }
 
-report :: CandidateSelection -> Int -> Bool -> ExecutionCounts -> Maybe FilePath -> [(Scenario, Result, Result)] -> Scenario -> Result -> Result -> [Control] -> Report
+report :: CandidateSelection -> Int -> Bool -> ExecutionCounts -> FilePath -> [(Scenario, Result, Result)] -> Scenario -> Result -> Result -> [Control] -> Report
 report candidateMode expectedPairs subset counts cachePath results faultScenario fault forbidden boundaryControls =
   Report
     { reportStatus = outcome
@@ -1329,6 +1329,7 @@ usage =
   unlines
     [ "usage: media-permit-qualification [--runner PATH] [--build-root DIR] [--stock-elf PATH]"
     , "       --out DIR [--cache DIR] [--scenario NAME]... [--candidate current|defect]"
+    , "       --cache defaults to private-data/cache/native"
     , "       media-permit-qualification --inventory-only STOCK_ELF"
     ]
 
@@ -1375,7 +1376,7 @@ data Paths = Paths
   , pathBuildRoot :: FilePath
   , pathStockElf :: FilePath
   , pathOut :: FilePath
-  , pathCache :: Maybe FilePath
+  , pathCache :: FilePath
   }
 
 resolvePaths :: Options -> IO Paths
@@ -1391,7 +1392,7 @@ resolvePaths options = do
   let runner = resolve workspace (maybe fujimodNativeCase id (optionRunner options))
       stockElf = resolve workspace (maybe "private-data/analysis/x-m1-1.50/lz/id5.elf" id (optionStockElf options))
       out = resolve workspace (optionOut options)
-      cache = fmap (resolve workspace) (optionCache options)
+      cache = resolve workspace (maybe defaultNativeCacheRoot id (optionCache options))
   pure Paths {pathRunner = runner, pathBuildRoot = buildRoot, pathStockElf = stockElf, pathOut = out, pathCache = cache}
   where
     resolve root path = if isAbsolute path then path else root </> path
@@ -1416,11 +1417,10 @@ prepareOutputPaths paths = do
   canonicalOut <- canonicalizePath out
   stale <- listDirectory canonicalOut
   unless (null stale) (prerequisite ("output directory must be fresh: " ++ canonicalOut))
-  cache <- case pathCache paths of
-    Nothing -> pure Nothing
-    Just path -> do
-      createDirectoryIfMissing True path
-      Just <$> canonicalizePath path
+  cache <- do
+    let path = pathCache paths
+    createDirectoryIfMissing True path
+    canonicalizePath path
   pure paths {pathOut = canonicalOut, pathCache = cache}
 
 setStoragePath :: Paths -> IO ()
@@ -1437,7 +1437,7 @@ prepareAndRun options arguments = do
 writeResults :: FilePath -> Report -> IO ()
 writeResults out attemptReport = BL.writeFile (out </> "results.json") (encode (reportValue attemptReport))
 
-prerequisiteReport :: CandidateSelection -> Maybe FilePath -> String -> Report
+prerequisiteReport :: CandidateSelection -> FilePath -> String -> Report
 prerequisiteReport candidateMode cachePath message =
   Report
     { reportStatus = OutcomePrerequisite
@@ -1456,14 +1456,6 @@ prerequisiteReport candidateMode cachePath message =
           , "problems" .= [message]
           ]
     }
-
-cleanupEphemeral :: Options -> FilePath -> IO ()
-cleanupEphemeral options cachePath =
-  case optionCache options of
-    Just _ -> pure ()
-    Nothing -> do
-      present <- doesDirectoryExist cachePath
-      when present (removeDirectoryRecursive cachePath)
 
 terminalMessage :: FilePath -> [Scenario] -> Bool -> ExecutionCounts -> Report -> String
 terminalMessage out selected subset counts attemptReport =
@@ -1494,17 +1486,17 @@ terminalMessage out selected subset counts attemptReport =
 
 runQualification :: Paths -> Options -> IO (ExitCode, String)
 runQualification paths options = do
-  let cachePath = maybe (pathOut paths </> ".cache") id (pathCache paths)
+  let cachePath = pathCache paths
   loaded <- try (loadInputs (pathBuildRoot paths) (pathStockElf paths)) :: IO (Either Prerequisite Inputs)
   case loaded of
     Left (Prerequisite message) -> do
-      let failureReport = prerequisiteReport (optionCandidate options) (pathCache paths) message
+      let failureReport = prerequisiteReport (optionCandidate options) cachePath message
       writeResults (pathOut paths) failureReport
       pure (outcomeExitCode (reportStatus failureReport), "media-permit: prerequisite: " ++ message)
     Right inputs ->
       case selectScenarios (optionScenarios options) of
         Left message -> do
-          let failureReport = prerequisiteReport (optionCandidate options) (pathCache paths) message
+          let failureReport = prerequisiteReport (optionCandidate options) cachePath message
           writeResults (pathOut paths) failureReport
           pure (outcomeExitCode (reportStatus failureReport), "media-permit: prerequisite: " ++ message)
         Right (selected, subset) -> do
@@ -1532,10 +1524,9 @@ runQualification paths options = do
           forbidden <- runForbiddenBody attempt selectedInputs forbiddenScenario
           boundaryControls <- runBoundaryControls attempt selectedInputs
           counts <- ExecutionCounts <$> readIORef executed <*> readIORef reused <*> readIORef failed
-          let attemptReport = report (optionCandidate options) (length selected) subset counts (pathCache paths) results faultScenario fault forbidden boundaryControls
+          let attemptReport = report (optionCandidate options) (length selected) subset counts cachePath results faultScenario fault forbidden boundaryControls
               code = outcomeExitCode (reportStatus attemptReport)
           writeResults (pathOut paths) attemptReport
-          cleanupEphemeral options cachePath `catch` \(_ :: IOException) -> pure ()
           pure (code, terminalMessage (pathOut paths) selected subset counts attemptReport)
 
 runInventory :: FilePath -> IO ()

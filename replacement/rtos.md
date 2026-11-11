@@ -71,7 +71,7 @@ The [scheduler report](../reports/rtos-platform-options.md#413-owned-thread-laye
 | `:s3a-oracle` | `--loader-a LOADER_A --loader-b LOADER_B --work NEW_DIRECTORY --summary NEW_JSON` |
 | `:s3b-oracle` | `RUNNER STOCK_LOADER_A STOCK_LOADER_B OWNED_A_BIN OWNED_B_BIN NEW_WORK_DIRECTORY` (all positional, including under Bazel) |
 | `:s3c-oracle` | `--loader-a LOADER_A --loader-b LOADER_B --work NEW_DIRECTORY` |
-| `:s3d-oracle` | `--loader-a LOADER_A --loader-b LOADER_B --cache-root CACHE --results RESULTS` |
+| `:s3d-oracle` | `--loader-a LOADER_A --loader-b LOADER_B --results RESULTS` |
 
 S1 compares lock/ready/notification behavior and checks barrier order separately. S2 stops before exception-return execution beyond the runner's admitted subset and uses independent expected repairs for tagged defects. S3 services may stop at a dispatcher entry with an active frame; private active frames are not returned-call ABI. Blocking stops alone do not establish scheduling or resumed callers.
 
@@ -88,11 +88,11 @@ The first stages S1 alone, not own-first. It also accepts `stock-insert`, `silen
 
 ## Cached family oracles
 
-Family CLIs use `Emulation.CachedNativeBatch`: completed raw observations can be reused while current artifact admission and semantic comparison run again. Bazel supplies the runner, generated layout, owned images/symbols and timer dependencies where needed. Inspect the family's `BUILD.bazel` and CLI when overriding those inputs; their argument sets differ.
+Family CLIs use `Emulation.CachedNativeBatch`: completed raw observations can be reused while current artifact admission and semantic comparison run again. Every family CLI defaults `--cache-root` to the shared bounded `private-data/cache/native`; pass it only to override that root. Bazel supplies the runner, generated layout, owned images/symbols and timer dependencies where needed. Inspect the family's `BUILD.bazel` and CLI when overriding those inputs; their argument sets differ.
 
-- Flags/mailboxes: `//replacement/rtos_objects:family-suite-runner` takes `--layout`, `--loader-a`, `--loader-b`, `--owned-a-bin`, `--owned-b-bin`, `--cache-root`, `--results`. The usual layout is `bazel-bin/replacement/rtos_scheduler/oracle/layout.json`. Its [family contract](../reports/rtos-platform-options.md#414-owned-eventflag-and-mailbox-family-the-recovered-0xd4-body-and-the-family-design) distinguishes host pending-token semantics, selected-task arrival and actual suspended-service resumption.
-- Global lock: `//replacement/rtos_global_lock/oracle:global-lock-oracle --loader-a LOADER_A --loader-b LOADER_B --cache-root CACHE --results RESULTS`. Direct-helper ABI, stamp conventions and exclusive-monitor limits are in its [package](rtos_global_lock/) and platform report.
-- Data queues: `//replacement/rtos_data_queue:data-queue-oracle --loader-a LOADER_A --loader-b LOADER_B --cache-root CACHE --results RESULTS --review REVIEW`. The [family contract](../reports/rtos-platform-options.md#417-owned-data-queue-family-blocking-returns-and-the-timer-seam) distinguishes actual blocking caller returns, per-role timer membership, the retry IRQ window and the task-context caller requirement. Inspect the semantic results/review packet separately from the host-build launcher verdict.
+- Flags/mailboxes: `//replacement/rtos_objects:family-suite-runner` takes `--layout`, `--loader-a`, `--loader-b`, `--owned-a-bin`, `--owned-b-bin`, `--results`. The usual layout is `bazel-bin/replacement/rtos_scheduler/oracle/layout.json`. Its [family contract](../reports/rtos-platform-options.md#414-owned-eventflag-and-mailbox-family-the-recovered-0xd4-body-and-the-family-design) distinguishes host pending-token semantics, selected-task arrival and actual suspended-service resumption.
+- Global lock: `//replacement/rtos_global_lock/oracle:global-lock-oracle --loader-a LOADER_A --loader-b LOADER_B --results RESULTS`. Direct-helper ABI, stamp conventions and exclusive-monitor limits are in its [package](rtos_global_lock/) and platform report.
+- Data queues: `//replacement/rtos_data_queue:data-queue-oracle --loader-a LOADER_A --loader-b LOADER_B --results RESULTS --review REVIEW`. The [family contract](../reports/rtos-platform-options.md#417-owned-data-queue-family-blocking-returns-and-the-timer-seam) distinguishes actual blocking caller returns, per-role timer membership, the retry IRQ window and the task-context caller requirement. Inspect the semantic results/review packet separately from the host-build launcher verdict.
 - Cyclic: `//replacement/rtos_cyclic/oracle:cyclic-oracle` supplies the current cyclic/timer dependencies through [its build target](rtos_cyclic/oracle/BUILD.bazel). The [lifecycle contract](../reports/rtos-platform-options.md#421-owned-cyclic-handler-family-lifecycle-expiry-and-reentrancy) covers callback reentrancy and zero-period policy. Native scratch placement does not admit installation over overlapping stock code.
 
 ## Manual timer composition
@@ -122,7 +122,7 @@ XM1_EMULATOR_SLOTS=1 devenv shell -- host-build run --jobs=4 \
   --packaged-loader-a STAGED_LOADER_A \
   --aggregate-bin-a AGGREGATE_BIN_A --aggregate-symbols-a AGGREGATE_SYMBOLS_A \
   --aggregate-placements-a AGGREGATE_PLACEMENT_A --aggregate-carriers CARRIERS_JSON \
-  --cache-root SHARED_NATIVE_CACHE --results NEW_RESULTS_JSON --admission-only
+  --results NEW_RESULTS_JSON --admission-only
 ```
 
 This bounded qualifier executes registration, repeated ticks, delivery and unregistration through the published root/interface tables into the actual union image. Admission reconstructs that loader from pinned stock, declared UDF-filled carriers, emitted functions and every allocated section, including readonly zeros. The shared cyclic aggregate binder preserves readonly exclusions and public ABI fetch boundaries. Every owned observation must retain its complete loader bytes. Contexts, registry, heap and lock callbacks remain fixture state; this does not boot the staged DAT or exercise a core-1 app caller. Run only with an admitted emulator slot and retained-output allowance.
@@ -168,7 +168,7 @@ The measured canonical sizes give a 46,682,424-byte baseline for all normal reta
 
 Cache reuse requires the canonical immutable runner path and its bytes, the complete ordered expectation-free batch wire, and valid raw/exit/provenance digests. Expectations are judged again on every read. Changing the ordered cohort changes the batch key: cyclic smoke cannot be assumed to reuse a full cohort. Timer initialization batches and the app lifecycle prefix can be reused only if those identities remain equal. The current runner hash is `2bd58d3bc0d30d6fd9de6c22cd94c2c95c40189a0c55bb8232996a421583e8f3`; older `21ff2236ea7060c7c51958668c1debf0b560855b106c9375629a154d50b3aefc` receipts cannot be preclaimed as hits. Budget fresh observations until admission proves otherwise.
 
-After explicit slot and output admission, use Bazel's `--run_under` with the parent-verified main slot wrapper. Host-build owns `--script_path` internally; supplying another one creates the requested launcher but breaks host-build's follow-on handoff. `--run_under` starts the contained qualifier after build admission is released. Keep `XM1_EMULATOR_SLOTS=1` and explicit 2 GiB for these small native scopes. `RUN` must be a newly admitted output directory, `P` the newly staged package, `B` this output base's `bazel-bin`, and `CACHE` the shared native cache. Replace `smoke` with `full` only under its own allowance.
+After explicit slot and output admission, use Bazel's `--run_under` with the parent-verified main slot wrapper. Host-build owns `--script_path` internally; supplying another one creates the requested launcher but breaks host-build's follow-on handoff. `--run_under` starts the contained qualifier after build admission is released. Keep `XM1_EMULATOR_SLOTS=1` and explicit 2 GiB for these small native scopes. `RUN` must be a newly admitted output directory, `P` the newly staged package and `B` this output base's `bazel-bin`. The native cache root defaults to the shared bounded `private-data/cache/native`. Replace `smoke` with `full` only under its own allowance.
 
 The wrapper normally honors `BUILD_WORKING_DIRECTORY`; remove that variable only around a Bazel `--run_under` wrapper so relative runfiles arguments retain Bazel's working directory. The executed private plans instead record absolute argv for every linked input and avoid this cwd dependency.
 
@@ -176,7 +176,6 @@ The wrapper normally honors `BUILD_WORKING_DIRECTORY`; remove that variable only
 STOCK="$PWD/private-data/analysis/x-m1-1.50"
 B="$PWD/bazel-bin"
 P="$PWD/private-data/scratch/TimerAppSystemJoin/root-closure-composed-01"
-CACHE="$PWD/private-data/scratch/TimerAppSystemJoin/native-cache"
 mkdir -p "$RUN"
 SLOT_WRAPPER=/var/home/murph/Code/latent-image/private-data/scratch/HostAdmission/bin/emulator-slot-six
 XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=2G devenv shell -- "$HB" --output_base="$OB" run --jobs=4 --run_under="env -u BUILD_WORKING_DIRECTORY $SLOT_WRAPPER" \
@@ -186,7 +185,7 @@ XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=2G devenv shell -- "$HB" --output_b
   --aggregate-a-placements "$B/replacement/rtos_platform/placement-a.json" \
   --aggregate-b-bin "$P/effective-carrier-b.bin" --aggregate-b-symbols "$B/replacement/rtos_platform/platform-b.symbols" \
   --aggregate-b-placements "$B/replacement/rtos_platform/placement-b.json" \
-  --aggregate-carriers "$PWD/replacement/rtos_platform/carriers.json" --cache-root "$CACHE" --results "$RUN/timer/results.json"
+  --aggregate-carriers "$PWD/replacement/rtos_platform/carriers.json" --results "$RUN/timer/results.json"
 ```
 
 The cyclic and app commands use separate work directories:
@@ -199,7 +198,7 @@ XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=2G devenv shell -- "$HB" --output_b
   --aggregate-a-placements "$B/replacement/rtos_platform/placement-a.json" \
   --aggregate-b-bin "$P/effective-carrier-b.bin" --aggregate-b-symbols "$B/replacement/rtos_platform/platform-b.symbols" \
   --aggregate-b-placements "$B/replacement/rtos_platform/placement-b.json" \
-  --aggregate-carriers "$PWD/replacement/rtos_platform/carriers.json" --cache-root "$CACHE" --results "$RUN/cyclic/results.json"
+  --aggregate-carriers "$PWD/replacement/rtos_platform/carriers.json" --results "$RUN/cyclic/results.json"
 XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=2G devenv shell -- "$HB" --output_base="$OB" run --jobs=4 --run_under="env -u BUILD_WORKING_DIRECTORY $SLOT_WRAPPER" \
   //replacement/rtos_cyclic/oracle:join-oracle -- --scope smoke \
   --image4 "$STOCK/lz/id4-0061c400.bin" \
@@ -209,7 +208,7 @@ XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=2G devenv shell -- "$HB" --output_b
   --aggregate-bin-a "$B/replacement/rtos_platform/platform-a.bin" \
   --aggregate-symbols-a "$B/replacement/rtos_platform/platform-a.symbols" \
   --aggregate-placements-a "$B/replacement/rtos_platform/placement-a.json" \
-  --aggregate-carriers "$PWD/replacement/rtos_platform/carriers.json" --cache-root "$CACHE" --results "$RUN/app/results.json"
+  --aggregate-carriers "$PWD/replacement/rtos_platform/carriers.json" --results "$RUN/app/results.json"
 ```
 
 The actual `root-closure-composed-01` package passes file-only loader/app admission. Its two independently guarded leaf smokes pass 2 comparisons and 4 fresh observations each: timer has 72 checks/56 controls; cyclic has 80 checks/23 controls. All semantic checks hold. The eight generic exact-memory native receipts retain `failed` statuses for writable-region changes; all eight runner observations returned. Guarded launcher intervals overlap for 0.326 seconds. Both have observed 2 GiB memory limits and no reserve or retention violation; their subsecond cgroups have journal start records but no journal end records. `stage-receipt.json`, `smoke-plan.json` and `smoke-receipt.json` retain exact commands, identities and measured allocation. These are bounded semantic-oracle results, not generic native-case passes, natural root boot, physical arena exclusivity or a core-1 app caller.

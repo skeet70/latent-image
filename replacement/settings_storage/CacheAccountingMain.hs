@@ -11,7 +11,7 @@ import qualified Data.Map.Strict as M
 import Data.List (nub)
 import Data.Maybe (fromMaybe)
 import Data.String (fromString)
-import Emulation.CachedNativeBatch (CacheInspection(..), CacheVerdict(..), inspectCachedBatch)
+import Emulation.CachedNativeBatch (CacheInspection(..), CacheVerdict(..), defaultNativeCacheRoot, inspectCachedBatch)
 import Emulation.NativeCase (CaseStatus(..))
 import Emulation.OwnedCase (CaseSpec, Symbol, parseSymbols, writeBatch)
 import Emulation.Sha256 (sha256File, sha256Hex)
@@ -73,7 +73,8 @@ main = do
   binary <- required args "--linked" >>= readRegular 0x200000
   symbols <- required args "--symbols" >>= readSymbolsFile
   planPath <- required args "--plan"
-  cacheRoot <- required args "--cache"
+  cacheRoot <- maybe defaultNativeCacheRoot id (argument args "--cache")
+  createDirectoryIfMissing True cacheRoot
   runner <- required args "--runner"
   output <- required args "--out"
   sourceCommit <- required args "--source-commit"

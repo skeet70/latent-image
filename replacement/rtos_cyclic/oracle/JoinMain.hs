@@ -10,6 +10,7 @@ import Control.Monad (unless, when)
 import Data.Aeson (Value, object, (.=), encode)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
+import Emulation.CachedNativeBatch (defaultNativeCacheRoot)
 import Emulation.Sha256 (sha256File, sha256Hex)
 import FujiAF.Host (failH)
 import FujiAF.StorageBudget (checkStorageBudget)
@@ -43,7 +44,7 @@ main = do
   cyclicSymbolsPath <- required "--cyclic-symbols"
   timerPath <- required "--timer-bin"
   timerSymbolsPath <- required "--timer-symbols"
-  cacheRoot <- required "--cache-root"
+  cacheRoot <- maybe defaultNativeCacheRoot id <$> optional "--cache-root"
   resultsPath <- required "--results"
   image4 <- B.readFile image4Path
   loaderA <- B.readFile loaderAPath
@@ -214,3 +215,11 @@ required flag = do
     [] -> failH (flag ++ " is required")
     [_] -> failH (flag ++ " needs a value")
     _ : value : _ -> pure value
+
+optional :: String -> IO (Maybe FilePath)
+optional flag = do
+  arguments <- getArgs
+  case dropWhile (/= flag) arguments of
+    [] -> pure Nothing
+    [_] -> failH (flag ++ " needs a value")
+    _ : value : _ -> pure (Just value)

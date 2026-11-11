@@ -151,6 +151,7 @@ haskell_binary(
     ghcopts = ["-XGHC2021", "-Wall", "-O2"],
     deps = [
         ":data-queue-suite",
+        "//emulation:cached-native-batch",
         "//emulation:case-sha256",
         "//emulation:native-observation",
         "//host:aeson",

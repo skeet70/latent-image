@@ -6,6 +6,7 @@ import Control.Monad (unless)
 import Data.Aeson (object, (.=), encode)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
+import Emulation.CachedNativeBatch (defaultNativeCacheRoot)
 import Emulation.OwnedCase (required)
 import Emulation.Sha256 (sha256File, sha256Hex)
 import FujiAF.Host (failH)
@@ -26,7 +27,10 @@ main = do
   stockImagePath <- required arguments "--stock-image"
   ownedPath <- required arguments "--owned-bin"
   symbolsPath <- required arguments "--owned-symbols"
-  cacheRoot <- required arguments "--cache-root"
+  cacheRoot <- case dropWhile (/= "--cache-root") arguments of
+    [] -> pure defaultNativeCacheRoot
+    [_] -> failH "--cache-root needs a value"
+    _ : value : _ -> pure value
   resultsPath <- required arguments "--results"
   stockImage <- B.readFile stockImagePath
   ownedImage <- B.readFile ownedPath

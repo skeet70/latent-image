@@ -24,11 +24,10 @@ XM1_EMULATOR_SLOTS=1 devenv shell -- host-build run --jobs=2 \
   //replacement/property_service:qualify -- \
   --dat SOURCE_DAT --image4 IMAGE4 --loader-a LOADER_A --loader-b LOADER_B \
   --image5 IMAGE5 --plain PLAIN --image2 IMAGE2 \
-  --out private-data/scratch/PropertyQualification/job \
-  --cache private-data/scratch/PropertyQualification/cache
+  --out private-data/scratch/PropertyQualification/job
 ```
 
-Bazel supplies the current linked image, symbols, emulator-slot wrapper, oracle, stager, staging tools and defect images. `--ids HEX,...` narrows property comparisons, but all controls still run. Without it the driver runs the full native domain. Both output and cache must resolve under `private-data/scratch/`.
+Bazel supplies the current linked image, symbols, emulator-slot wrapper, oracle, stager, staging tools and defect images. `--ids HEX,...` narrows property comparisons, but all controls still run. Without it the driver runs the full native domain. Output must resolve under `private-data/scratch/`; the cache root defaults to the shared bounded `private-data/cache/native` and may resolve under `private-data/scratch/` or `private-data/cache/`.
 
 Each invocation regenerates cases, admits current artifacts and rejudges model, candidate and controls. It never accepts an old passed verdict. The default runner is the pinned SDK's canonical Nix-store executable; `--runner PATH` overrides it. Raw batches are reusable only when complete and integrity-checked, keyed by ordered native wires and canonical runner path/digest. Mutable non-Nix runners execute without reuse. Changed expectations are rejudged without forcing unchanged execution.
 
@@ -54,7 +53,7 @@ XM1_EMULATOR_SLOTS=1 devenv shell -- host-build run \
   --out private-data/scratch/PropertyOracle/NEW_RUN
 ```
 
-Bazel supplies the staging tools and oracle dependencies. Staging output paths must not exist. The oracle restages from canonical sources and the linked artifact and refuses a candidate-image mismatch. `--smoke` runs one canonical batch; `--ids HEX,...` selects ids plus every control's cases; `--cache CACHE_ROOT` enables the same raw-execution reuse contract. Batch summaries and `results.json` carry identities, boundary verdicts, control outcomes and bounded differences.
+Bazel supplies the staging tools and oracle dependencies. Staging output paths must not exist. The oracle restages from canonical sources and the linked artifact and refuses a candidate-image mismatch. `--smoke` runs one canonical batch; `--ids HEX,...` selects ids plus every control's cases; the cache root defaults to the shared bounded `private-data/cache/native`, and `--cache CACHE_ROOT` overrides it. Batch summaries and `results.json` carry identities, boundary verdicts, control outcomes and bounded differences.
 
 ### Property compatibility shims
 
@@ -128,7 +127,7 @@ XM1_EMULATOR_SLOTS=1 devenv shell -- host-build run --jobs=2 \
   --replay SAVED.case.json --out private-data/scratch/RecordCounterexample/REPLAY
 ```
 
-Bazel supplies the current carrier, symbols and pinned runner. `--image`, `--loader` and `--index` override stock paths, with identities still pinned; `--runner` overrides execution. `--cache ROOT` reuses integrity-checked observations and rejudges them. Output must be fresh; output/cache resolve under `private-data/scratch/` or `private-data/verify-candidate/runs/`, cannot overlap and refuse cache-owned symlinks beneath the canonical root.
+Bazel supplies the current carrier, symbols and pinned runner. `--image`, `--loader` and `--index` override stock paths, with identities still pinned; `--runner` overrides execution. The cache root defaults to the shared bounded `private-data/cache/native` and `--cache ROOT` overrides it; observations are integrity-checked and rejudged. Output must be fresh; output resolves under `private-data/scratch/` or `private-data/verify-candidate/runs/`, the cache resolves under `private-data/scratch/`, `private-data/verify-candidate/runs/` or `private-data/cache/`, output and cache cannot overlap, and cache-owned symlinks beneath the canonical root are refused.
 
 The seed is unsigned 64-bit. Case count is 1..64, operation count 3..12 and shrink budget 1..256 actual oracle calls including baseline. Cases select one of the five stock geometries, two valid banks, an open/registration prefix and lifecycle-valid operations; callbacks are synthetic. Replay validates the same domain.
 

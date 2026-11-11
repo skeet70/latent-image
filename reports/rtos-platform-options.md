@@ -1081,7 +1081,7 @@ host-build verdict {"verdict":"passed","resource_failure":null,"command":"build"
 ```sh
 devenv shell -- host-build --output_base="$HOME/.cache/bazel/latent-image-RtosSemaphore" test --jobs=2 --local_test_jobs=1 //replacement/rtos_semaphore:semaphore-host-tests
 devenv shell -- host-build --output_base="$HOME/.cache/bazel/latent-image-RtosSemaphore" build --jobs=2 //replacement/rtos_semaphore:semaphore-a //replacement/rtos_semaphore:semaphore-b
-XM1_EMULATOR_SLOTS=1 devenv shell -- host-build --output_base="$HOME/.cache/bazel/latent-image-RtosSemaphore" run --jobs=2 //replacement/rtos_semaphore:family-suite -- --cache-root NEW_DIRECTORY --layout bazel-bin/replacement/rtos_semaphore/layout.json --loader-a private-data/analysis/x-m1-1.50/decode/loader-40000.bin --loader-b private-data/analysis/x-m1-1.50/decode/loader-d0000.bin --owned-a-bin bazel-bin/replacement/rtos_semaphore/semaphore-a.bin --owned-b-bin bazel-bin/replacement/rtos_semaphore/semaphore-b.bin --results NEW_JSON
+XM1_EMULATOR_SLOTS=1 devenv shell -- host-build --output_base="$HOME/.cache/bazel/latent-image-RtosSemaphore" run --jobs=2 //replacement/rtos_semaphore:family-suite -- --layout bazel-bin/replacement/rtos_semaphore/layout.json --loader-a private-data/analysis/x-m1-1.50/decode/loader-40000.bin --loader-b private-data/analysis/x-m1-1.50/decode/loader-d0000.bin --owned-a-bin bazel-bin/replacement/rtos_semaphore/semaphore-a.bin --owned-b-bin bazel-bin/replacement/rtos_semaphore/semaphore-b.bin --results NEW_JSON
 ```
 
 

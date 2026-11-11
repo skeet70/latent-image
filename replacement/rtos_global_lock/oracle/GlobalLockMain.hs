@@ -9,6 +9,7 @@ import Data.Aeson (object, (.=), encode)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.List (isPrefixOf)
+import Emulation.CachedNativeBatch (defaultNativeCacheRoot)
 import Emulation.Sha256 (sha256File, sha256Hex)
 import FujiAF.Host (failH)
 import FujiAF.StorageBudget (checkStorageBudget)
@@ -46,7 +47,7 @@ main = do
       pure (a, b, aggregateImage imageA, aggregateImage imageB,
         aggregateSymbols imageA, aggregateSymbols imageB, [imageA, imageB])
     _ -> failH "aggregate mode requires both binary/symbol/placement triples and --aggregate-carriers"
-  cacheRoot <- required "--cache-root"
+  cacheRoot <- maybe defaultNativeCacheRoot id <$> optional "--cache-root"
   resultsPath <- required "--results"
   loaderABytes <- B.readFile loaderA
   loaderBBytes <- B.readFile loaderB

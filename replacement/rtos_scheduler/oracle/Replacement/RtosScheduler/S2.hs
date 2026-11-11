@@ -11,7 +11,7 @@ import Data.List (isPrefixOf, nub, sort, sortOn)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe)
 import Data.Word (Word32)
-import Emulation.CachedNativeBatch (cachedObservedBatch)
+import Emulation.CachedNativeBatch (cachedObservedBatch, defaultNativeCacheRoot)
 import Emulation.NativeObservation
 import Emulation.OwnedCase
 import Emulation.Sha256 (sha256, sha256Hex)
@@ -408,6 +408,11 @@ expected image role row o
       && and [word "stack" (fromIntegral (stackPointer-stackBase-bytes+4*n)) o==value | (n,value)<-zip [0..] values]
       where values = [0x13,0x93,context d] ++ [0xa5a50000+n | n<-[7..11]] ++ [0x958e00 | bytes==36]
 
+optional :: [String] -> String -> IO (Maybe String)
+optional args name = case dropWhile (/= name) args of
+  _ : value : _ -> pure (Just value)
+  _ -> pure Nothing
+
 main :: IO ()
 main = do
   args <- getArgs
@@ -419,8 +424,9 @@ main = do
   paths <- mapM input (["--loader-a","--loader-b"] ++ if aggregateMode then aggregateFlags else ["--owned-a","--owned-b","--symbols-a","--symbols-b"])
   work <- required args "--work" >>= makeAbsolute
   summary <- required args "--summary" >>= makeAbsolute
-  cache <- required args "--cache-root" >>= makeAbsolute
+  cacheFlag <- optional args "--cache-root"
   lookupEnv "BUILD_WORKSPACE_DIRECTORY" >>= mapM_ setCurrentDirectory
+  cache <- maybe (pure defaultNativeCacheRoot) makeAbsolute cacheFlag
   forM_ [work,summary] $ \p -> doesPathExist p >>= \exists -> when exists (fail (p++" already exists"))
   images <- if aggregateMode then case paths of
     [la,lb,oa,sa,pa,ob,sb,pb,carrierPath] -> do

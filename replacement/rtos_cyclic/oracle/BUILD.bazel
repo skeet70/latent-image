@@ -89,6 +89,7 @@ haskell_binary(
     tags = ["manual"],
     deps = [
         ":app-suite",
+        "//emulation:cached-native-batch",
         "//emulation:case-sha256",
         "//emulation:owned-case",
         "//host:aeson",
@@ -175,6 +176,7 @@ haskell_binary(
         ":app-suite",
         ":cyclic-oracle-lib",
         ":join-suite",
+        "//emulation:cached-native-batch",
         "//emulation:case-sha256",
         "//host:aeson",
         "//host:base",
@@ -233,6 +235,7 @@ haskell_binary(
     ghcopts = _GHCOPTS,
     deps = [
         ":cyclic-oracle-lib",
+        "//emulation:cached-native-batch",
         "//emulation:case-sha256",
         "//host:aeson",
         "//host:base",

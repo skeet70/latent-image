@@ -18,7 +18,7 @@ import Data.Maybe (fromMaybe, isJust, isNothing, listToMaybe)
 import qualified Data.Set as S
 import Data.String (fromString)
 import Data.Word (Word32)
-import Emulation.CachedNativeBatch (BatchReuse (..), ResultPolicy (WriteAllResults), cachedObservedBatchWith)
+import Emulation.CachedNativeBatch (BatchReuse (..), ResultPolicy (WriteAllResults), cachedObservedBatchWith, defaultNativeCacheRoot)
 import Emulation.NativeObservation (RunnerStatus (Returned), runnerStatusLabel)
 import Emulation.OwnedCase (CaseId (..), CaseSpec, loadObservedBatch, readWordAt, required, writeBatch)
 import Emulation.Sha256 (sha256, sha256File, sha256Hex)
@@ -236,12 +236,12 @@ subsetIds arguments = case dropWhile (/= "--ids") arguments of
       '0' : 'x' : digits | [(n, "")] <- readHex digits, n <= 646 -> pure (PropertyId n)
       _ -> failH ("--ids: " ++ item ++ " is not a hex id from 0x0 to 0x286")
 
--- | The optional native batch cache root. Absent keeps the uncached one-shot batch behavior.
+-- | The native batch cache root. Absent selects the shared cache.
 cacheOption :: [String] -> IO (Maybe FilePath)
 cacheOption arguments = case dropWhile (/= "--cache") arguments of
   _ : value : _ -> Just <$> makeAbsolute value
   [_] -> failH "--cache needs a value"
-  [] -> pure Nothing
+  [] -> Just <$> makeAbsolute defaultNativeCacheRoot
 
 oracle :: [String] -> FilePath -> FilePath -> FilePath -> FilePath -> IO ()
 oracle arguments runner linkedPath symbolsPath elfPath = do

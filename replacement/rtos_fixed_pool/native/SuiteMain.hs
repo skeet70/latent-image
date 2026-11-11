@@ -10,6 +10,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Map.Strict as M
 import Data.Word (Word32)
+import Emulation.CachedNativeBatch (defaultNativeCacheRoot)
 import FujiAF.Host (failH)
 import FujiAF.StorageBudget (checkStorageBudget)
 import FujiModNativePaths (fujimodNativeCase)
@@ -27,7 +28,7 @@ main = do
     [] -> pure fujimodNativeCase
     [_] -> failH "--runner needs a value"
     _ : value : _ -> makeAbsolute value
-  cacheRoot <- required "--cache-root"
+  cacheRoot <- maybe defaultNativeCacheRoot id <$> optional "--cache-root"
   layoutPath <- required "--layout"
   loaderA <- required "--loader-a"
   loaderB <- required "--loader-b"

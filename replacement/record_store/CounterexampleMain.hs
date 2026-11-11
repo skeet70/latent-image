@@ -15,7 +15,7 @@ import Data.List (intercalate, isPrefixOf, nub, sort, stripPrefix)
 import qualified Data.Map.Strict as M
 import Data.Maybe (listToMaybe)
 import Data.Word (Word64)
-import Emulation.CachedNativeBatch (ResultPolicy (WriteAllResults), cachedObservedBatchWith)
+import Emulation.CachedNativeBatch (ResultPolicy (WriteAllResults), cachedObservedBatchWith, defaultNativeCacheRoot)
 import Emulation.EmulatorSlot (ExecutionClass (NativeVerification), reexecInSlot, slotPolicyForClass)
 import Emulation.NativeObservation (NativeObservation (..), RunnerStatus (..), runnerStatusLabel)
 import Emulation.OwnedCase (CaseId, CaseSpec, caseId, loadObservedBatch, writeBatch)
@@ -202,9 +202,7 @@ resolveOptions anchor raw = do
   loader <- makeAbsolute (rawLoader raw)
   index <- makeAbsolute (rawIndex raw)
   replay <- traverse makeAbsolute (rawReplay raw)
-  cache <- case rawCache raw of
-    Nothing -> pure (Right Nothing)
-    Just path -> fmap (fmap Just) (admitCache roots path)
+  cache <- fmap (fmap Just) (admitCache roots (maybe defaultNativeCacheRoot id (rawCache raw)))
   admittedOut <- admitOutput roots (rawOut raw)
   case (candidate, symbols, runner) of
     (Right candidatePath, Right symbolsPath, Right runnerPath) ->
@@ -291,6 +289,7 @@ resolveBundled anchor relative = do
 data PrivateRoots = PrivateRoots
   { scratchRoot :: FilePath
   , runRoot :: FilePath
+  , cacheRoot :: FilePath
   }
 
 privateRoots :: IO PrivateRoots
@@ -299,10 +298,11 @@ privateRoots = do
   private <- canonicalExisting (workspace </> "private-data")
   scratch <- canonicalExisting (private </> "scratch")
   runs <- canonicalExisting (private </> "verify-candidate" </> "runs")
+  cache <- canonicalExisting (private </> "cache")
   let inside root = splitDirectories private `isPrefixOf` splitDirectories root
-  unless (inside scratch && inside runs) $
-    throwIO (ToolFailure FailureInvalid "scratch and run roots resolve outside private-data")
-  pure (PrivateRoots scratch runs)
+  unless (inside scratch && inside runs && inside cache) $
+    throwIO (ToolFailure FailureInvalid "scratch, run and cache roots resolve outside private-data")
+  pure (PrivateRoots scratch runs cache)
 
 canonicalExisting :: FilePath -> IO FilePath
 canonicalExisting path = do
@@ -329,26 +329,26 @@ canonicalExisting path = do
 -- components are refused before resolution, and a symlink in the existing
 -- prefix resolves before the prefix check, so a suffix that does not exist yet
 -- cannot carry the destination outside the root.
-admitPrivatePath :: PrivateRoots -> String -> Bool -> FilePath -> IO (Either String FilePath)
-admitPrivatePath roots label allowRoot path = do
+admitPrivatePath :: [FilePath] -> String -> String -> Bool -> FilePath -> IO (Either String FilePath)
+admitPrivatePath roots description label allowRoot path = do
   absolute <- makeAbsolute path
   if ".." `elem` splitDirectories absolute
     then pure (Left (label ++ " must not contain '..' components: " ++ absolute))
     else do
       destination <- canonicalExisting absolute
       let components = splitDirectories destination
-          rootComponents = map splitDirectories [scratchRoot roots, runRoot roots]
+          rootComponents = map splitDirectories roots
           strict = any (\root -> root `isPrefixOf` components && length components > length root) rootComponents
           equal = any (== components) rootComponents
       pure
         ( if strict || (allowRoot && equal)
             then Right destination
-            else Left (label ++ " must resolve under private-data/scratch or private-data/verify-candidate/runs: " ++ destination)
+            else Left (label ++ " must resolve under " ++ description ++ ": " ++ destination)
         )
 
 admitOutput :: PrivateRoots -> FilePath -> IO (Either String FilePath)
 admitOutput roots path = do
-  admitted <- admitPrivatePath roots "output" False path
+  admitted <- admitPrivatePath (outputRoots roots) outputDescription "output" False path
   case admitted of
     Left message -> pure (Left message)
     Right destination -> do
@@ -356,17 +356,27 @@ admitOutput roots path = do
       pure (if exists then Left (destination ++ " already exists") else Right destination)
 
 admitCache :: PrivateRoots -> FilePath -> IO (Either String FilePath)
-admitCache roots path = admitPrivatePath roots "cache" True path
+admitCache roots path = admitPrivatePath (cacheRoots roots) cacheDescription "cache" True path
+
+outputRoots :: PrivateRoots -> [FilePath]
+outputRoots roots = [scratchRoot roots, runRoot roots]
+
+cacheRoots :: PrivateRoots -> [FilePath]
+cacheRoots roots = outputRoots roots ++ [cacheRoot roots]
+
+outputDescription, cacheDescription :: String
+outputDescription = "private-data/scratch or private-data/verify-candidate/runs"
+cacheDescription = "private-data/scratch, private-data/verify-candidate/runs or private-data/cache"
 
 overlaps :: FilePath -> FilePath -> Bool
 overlaps left right =
   splitDirectories left `isPrefixOf` splitDirectories right
     || splitDirectories right `isPrefixOf` splitDirectories left
 
-revalidatePrivate :: PrivateRoots -> String -> Bool -> FilePath -> IO FilePath
-revalidatePrivate roots label allowRoot path = do
+revalidatePrivate :: [FilePath] -> String -> String -> Bool -> FilePath -> IO FilePath
+revalidatePrivate roots description label allowRoot path = do
   resolved <- canonicalizePath path
-  admitted <- admitPrivatePath roots label allowRoot resolved
+  admitted <- admitPrivatePath roots description label allowRoot resolved
   either (throwIO . ToolFailure FailureInvalid) pure admitted
 
 freshOutput :: PrivateRoots -> FilePath -> IO FilePath
@@ -376,7 +386,7 @@ freshOutput roots path = do
   createDirectoryIfMissing True (takeDirectory destination)
   createDirectory destination
   setFileMode destination 0o700
-  revalidatePrivate roots "output" False destination
+  revalidatePrivate (outputRoots roots) outputDescription "output" False destination
 
 reexecArguments :: Options -> [String]
 reexecArguments options =
@@ -549,7 +559,7 @@ buildContext options = do
       existed <- doesDirectoryExist destination
       createDirectoryIfMissing True destination
       unless existed (setFileMode destination 0o700)
-      Just <$> revalidatePrivate roots "cache" True destination
+      Just <$> revalidatePrivate (cacheRoots roots) cacheDescription "cache" True destination
   out <- freshOutput roots outDestination
   let indexDigest = sha256 (stockIndexBytes stock)
   pure

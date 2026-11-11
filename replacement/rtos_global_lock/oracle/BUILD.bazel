@@ -52,6 +52,7 @@ haskell_binary(
     ghcopts = _GHCOPTS,
     deps = [
         ":global-lock-oracle-lib",
+        "//emulation:cached-native-batch",
         "//emulation:case-sha256",
         "//host:aeson",
         "//host:base",
