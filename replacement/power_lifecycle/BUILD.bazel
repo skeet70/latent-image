@@ -1,5 +1,6 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -152,3 +153,52 @@ haskell_binary(
         ("compare-sequence", "power_control_compare_sequence"),
     ]
 ]
+
+_RECORD_HELPER_COMPARED = [
+    "ef9bc0", "ef9c00", "ef9d18", "ef9dc0", "ef9ddc", "ef9e14", "ef9e4c", "ef9e84",
+    "ef9ea0", "ef9ebc", "ef9ed8", "ef9f10", "ef9f64",
+    "75a440", "75a61c", "f160ac", "f1fd84", "f21a3c",
+]
+
+xm1_rust_elf(
+    name = "record-helpers",
+    rust_staticlib = ":power-lifecycle-rust",
+    link_script = "native/record-helpers.ld",
+    entry = "xm1_power_record_helper_ef9bc0",
+    extra_ldflags = ["-Wl,--gc-sections"] + ["-Wl,--undefined=xm1_power_record_helper_" + address for address in _RECORD_HELPER_COMPARED],
+    testonly = True,
+)
+
+haskell_library(
+    name = "record-helper-suite-lib",
+    srcs = ["native/Replacement/PowerLifecycle/RecordHelperSuite.hs"],
+    src_strip_prefix = "native",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:cached-native-batch",
+        "//emulation:case-sha256",
+        "//emulation:native-observation",
+        "//emulation:owned-case",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:filepath",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_binary(
+    name = "record-helper-suite",
+    srcs = ["native/Main.hs"],
+    main_file = "native/Main.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":record-helper-suite-lib",
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+    ],
+)
