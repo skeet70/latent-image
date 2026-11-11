@@ -13,6 +13,7 @@ xm1_rust_rlib(
     crate_name = "capture",
     out = "libcapture.rlib",
     data = [":module"],
+    rustc_flags = ["-C", "target-feature=+strict-align"],
     visibility = ["//replacement/bank:__pkg__"],
 )
 

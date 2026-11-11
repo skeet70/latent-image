@@ -16,6 +16,7 @@ xm1_rust_rlib(
     crate_name = "recipe_ui",
     out = "librecipe_ui.rlib",
     data = [":module"],
+    rustc_flags = ["-C", "target-feature=+strict-align"],
     rlib_deps = {"menu_engine": "//replacement/menu_engine:arm"},
     visibility = ["//replacement/bank:__pkg__"],
 )

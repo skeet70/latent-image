@@ -3,6 +3,20 @@
 //! service call writes the in-progress state's changed words to them first, and
 //! the transition's final state is written back before the result returns.
 
+#![no_std]
+
+extern crate menu_engine;
+
+use owned_menu::owned_menu;
+
+#[cfg(rb_menu_value_owned)]
+extern crate menu_value;
+#[cfg(rb_menu_value_owned)]
+use menu_value::adapter as menu_value_adapter;
+
+#[cfg(target_arch = "arm")]
+core::arch::global_asm!(include_str!("entry.S"), options(raw));
+
 use core::ptr::{read_volatile, write_volatile};
 
 use crate::menu_engine::block::{
@@ -26,9 +40,15 @@ use crate::menu_engine::{
 include!(env!("RB_MENU_ENGINE_TREE"));
 include!(env!("RB_MENU_ENGINE_RECORDS"));
 
-#[cfg(rb_render_owned)]
-pub(crate) fn render_node_origin(record_id: NodeId, current: RecordAddress) -> crate::render_adapter::class::NodeOrigin {
-    use crate::render_adapter::class::NodeOrigin;
+/// Which record table a render entry's node belongs to.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NodeOrigin {
+    Stock,
+    Package,
+    Unknown,
+}
+
+pub fn render_node_origin(record_id: NodeId, current: RecordAddress) -> NodeOrigin {
     for (node, &address) in TREE.nodes.iter().zip(RECORDS.records) {
         if node.id == record_id && address == current {
             return NodeOrigin::Stock;

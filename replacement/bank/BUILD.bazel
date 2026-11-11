@@ -23,6 +23,71 @@ xm1_rust_staticlib(
     ],
 )
 
+# The full modal75,menu-engine,render link unit. Every subsystem and adapter is
+# an rlib; the generated tables are declared inputs of //replacement/bank/tables.
+_ENGINE_RLIB_DEPS = {
+    "capture": "//replacement/capture:arm",
+    "libm": "//replacement/render_commands:libm-arm",
+    "menu_engine": "//replacement/menu_engine:arm",
+    "menu_engine_adapter": "//replacement/menu_engine:adapter-arm",
+    "menu_widgets": "//replacement/menu_widgets:arm",
+    "modal_runtime": "//replacement/modal_runtime:arm-modal75",
+    "owned_menu": "//replacement/owned_menu:arm",
+    "recipe_ui": "//replacement/recipe_ui:arm",
+    "render_adapter": "//replacement/render_adapter:arm",
+    "render_commands": "//replacement/render_commands:runtime-arm",
+    "service": "//replacement/service:arm",
+}
+
+_ENGINE_FLAGS = [
+    "--cfg",
+    "rb_modal_scoped",
+    "--cfg",
+    "rb_modal75_owned",
+    "--cfg",
+    "rb_menu_engine_owned",
+    "--cfg",
+    "rb_render_owned",
+    "-C",
+    "target-feature=+strict-align",
+    "-C",
+    "llvm-args=-min-jump-table-entries=4096",
+]
+
+xm1_rust_staticlib(
+    name = "bank-modal75-engine-render",
+    src = "lib.rs",
+    crate_name = "bank",
+    rustc_flags = _ENGINE_FLAGS,
+    rlib_deps = _ENGINE_RLIB_DEPS,
+    visibility = [
+        "//emulation:__pkg__",
+        "//host/firmware:__pkg__",
+        "//transport:__pkg__",
+    ],
+)
+
+# The same link unit with the owned value transaction seam.
+_ENGINE_VALUE_RLIB_DEPS = dict(_ENGINE_RLIB_DEPS)
+_ENGINE_VALUE_RLIB_DEPS.update({
+    "menu_engine_adapter": "//replacement/menu_engine:adapter-value-arm",
+    "menu_value": "//replacement/menu_value:arm-owned",
+    "render_adapter": "//replacement/render_adapter:arm-value",
+})
+
+xm1_rust_staticlib(
+    name = "bank-modal75-engine-render-value",
+    src = "lib.rs",
+    crate_name = "bank",
+    rustc_flags = _ENGINE_FLAGS + ["--cfg", "rb_menu_value_owned"],
+    rlib_deps = _ENGINE_VALUE_RLIB_DEPS,
+    visibility = [
+        "//emulation:__pkg__",
+        "//host/firmware:__pkg__",
+        "//transport:__pkg__",
+    ],
+)
+
 xm1_rust_staticlib(
     name = "bank-modal",
     src = "lib.rs",

@@ -15,6 +15,11 @@ xm1_rust_rlib(
     crate_name = "owned_menu",
     out = "libowned_menu.rlib",
     data = [":module"],
+    rustc_flags = ["-C", "target-feature=+strict-align"],
     rlib_deps = {"menu_engine": "//replacement/menu_engine:arm"},
-    visibility = ["//replacement/bank:__pkg__"],
+    visibility = [
+        "//replacement/bank:__pkg__",
+        "//replacement/menu_engine:__pkg__",
+        "//replacement/render_adapter:__pkg__",
+    ],
 )

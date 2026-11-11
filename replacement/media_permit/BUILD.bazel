@@ -23,7 +23,12 @@ xm1_rust_rlib(
         ":module",
         "src/stock.rs",
     ],
-    rustc_flags = ["--cfg", "rb_media_permit_image"],
+    rustc_flags = [
+        "-C",
+        "target-feature=+strict-align",
+        "--cfg",
+        "rb_media_permit_image",
+    ],
     visibility = ["//replacement/bank:__pkg__"],
 )
 

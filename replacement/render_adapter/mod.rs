@@ -1,3 +1,13 @@
+#![no_std]
+
+extern crate menu_engine;
+extern crate menu_engine_adapter;
+extern crate menu_widgets;
+extern crate render_commands;
+
+#[cfg(target_arch = "arm")]
+core::arch::global_asm!(include_str!("entry.S"), options(raw));
+
 pub(crate) mod class;
 mod picker;
 mod tree;
