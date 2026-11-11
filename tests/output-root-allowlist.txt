@@ -1,0 +1,40 @@
+# Code files permitted to name an output root (private-data/scratch or private-data/verify-candidate/runs).
+# Rule 1 keeps this list shrinking: delete a line when its writer calls run-output.
+# A line ending in `# pending` marks a file another branch is adding, so a missing file is not a failure, but an existing one must name an output root.
+# Sorted in byte order; comments and blank lines are ignored.
+build-support/RunOutputTests.hs # pending
+build-support/ScratchExpiry.hs
+build-support/ScratchExpiryTests.hs
+build-support/xm1-decomp.sh
+emulation/CriticalPairWitness.hs
+emulation/Emulation/Image4Staging.hs
+emulation/MediaRouteSmoke.hs
+emulation/VerifyCandidate.hs
+emulation/menu-engine-pair-trajectories/fn-oracle.jq
+emulation/menu-engine-pair-trajectories/oracle.jq
+emulation/menu-engine-pair-trajectories/prepare-draw-route-probe.sh
+emulation/menu-engine-pair-trajectories/run-render-pairs.sh
+emulation/modal75-picker-trajectories/trajectories.jq
+host/FujiAF/RunOutput.hs # pending
+host/firmware/EngineStack.hs
+host/firmware/build-recipe-bank-ram.sh
+replacement/application_pump/Replacement/ApplicationPump/Staging.hs
+replacement/image5_init/OracleMain.hs
+replacement/modal_runtime/MenuEngineTreeMain.hs
+replacement/modal_runtime/QualifyBoundedMain.hs
+replacement/property_service/OracleMain.hs
+replacement/property_service/Replacement/PropertyService/Qualification.hs
+replacement/property_service/class-diff-stage3.jq
+replacement/property_service/class-diff.jq
+replacement/record5_staging/BUILD.bazel
+replacement/record_store/CounterexampleMain.hs
+replacement/record_store/CounterexampleTests.hs
+replacement/record_store/Replacement/RecordStore/Execution.hs
+replacement/render_adapter/build.sh
+replacement/rtos_own_first/stage/Replacement/RtosOwnFirst/Pins.hs
+replacement/rtos_timer/synthetic.bzl
+replacement/settings_storage/CustomOracleMain.hs
+replacement/startup_artifact/Replacement/StartupArtifact/Adapters.hs
+replacement/startup_artifact/Replacement/StartupArtifact/Footprint/Image5Init.hs
+replacement/startup_artifact/Replacement/StartupArtifact/Joins.hs
+replacement/startup_artifact/Replacement/StartupArtifact/Stage.hs

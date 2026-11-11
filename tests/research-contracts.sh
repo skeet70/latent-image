@@ -41,6 +41,17 @@ if [[ -n "$fuji_af_duplicate_ids" ]]; then
   exit 1
 fi
 
+# A record replaces an older one on the same topic rather than sitting beside it.
+fuji_af_duplicate_topics="$("$fuji_af_jq" -rs '
+  map(select(.topic != null and .topic != ""))
+  | group_by(.topic)
+  | map(select(length > 1) | "\(.[0].topic): \(map(.id) | join(", "))")
+  | .[]' docs/evidence.jsonl)"
+if [[ -n "$fuji_af_duplicate_topics" ]]; then
+  printf 'Duplicate evidence topics (topic: ids):\n%s\n' "$fuji_af_duplicate_topics" >&2
+  exit 1
+fi
+
 # Every E- token in a tracked file, the ledger included, names a current record. Tokens followed by a signed
 # or decimal number are camera key names. E-D is the exposure-compensation dial; E-MODEL is a placeholder file name.
 # The runfiles ledger links back to the checkout.
@@ -162,3 +173,50 @@ for fuji_af_mutation in \
     exit 1
   fi
 done
+
+# New code cannot define its own output root: the literals live only in the admission module and in
+# tests/output-root-allowlist.txt, which shrinks as writers move to run-output.
+fuji_af_checkout="${fuji_af_ledger%/docs/evidence.jsonl}"
+fuji_af_output_root_allowlist=tests/output-root-allowlist.txt
+fuji_af_output_root_literals=(private-data/scratch private-data/verify-candidate/runs)
+
+declare -A fuji_af_output_root_allowed=()
+fuji_af_output_root_errors=()
+while IFS= read -r fuji_af_allowlist_line; do
+  fuji_af_allowlist_entry="${fuji_af_allowlist_line%%#*}"
+  fuji_af_allowlist_entry="${fuji_af_allowlist_entry#"${fuji_af_allowlist_entry%%[![:space:]]*}"}"
+  fuji_af_allowlist_entry="${fuji_af_allowlist_entry%"${fuji_af_allowlist_entry##*[![:space:]]}"}"
+  [[ -n "$fuji_af_allowlist_entry" ]] || continue
+  fuji_af_output_root_allowed["$fuji_af_allowlist_entry"]=1
+  if [[ ! -f "$fuji_af_checkout/$fuji_af_allowlist_entry" ]]; then
+    [[ "$fuji_af_allowlist_line" == *'# pending'* ]] || fuji_af_output_root_errors+=("$fuji_af_allowlist_entry: file does not exist")
+    continue
+  fi
+  grep -F -q -e "${fuji_af_output_root_literals[0]}" -e "${fuji_af_output_root_literals[1]}" \
+    "$fuji_af_checkout/$fuji_af_allowlist_entry" ||
+    fuji_af_output_root_errors+=("$fuji_af_allowlist_entry: names no output root")
+done < "$fuji_af_output_root_allowlist"
+
+fuji_af_output_root_files="$("$fuji_af_git" -C "$fuji_af_checkout" grep -l -F \
+  -e "${fuji_af_output_root_literals[0]}" -e "${fuji_af_output_root_literals[1]}" \
+  -- '*.hs' '*.rs' '*.sh' '*.jq' '*.nix' '*.bzl' '*.bazel' 'BUILD' ':(glob)**/BUILD' \
+  ':(exclude)tests/research-contracts.sh' || [[ $? -eq 1 ]])"
+fuji_af_output_root_offenders=()
+while IFS= read -r fuji_af_output_root_file; do
+  [[ -n "$fuji_af_output_root_file" ]] || continue
+  [[ -n "${fuji_af_output_root_allowed[$fuji_af_output_root_file]:-}" ]] ||
+    fuji_af_output_root_offenders+=("$fuji_af_output_root_file: names an output root")
+done <<< "$fuji_af_output_root_files"
+
+fuji_af_output_root_failed=
+if (( ${#fuji_af_output_root_offenders[@]} > 0 )); then
+  printf 'Code files outside %s that name an output root:\n' "$fuji_af_output_root_allowlist" >&2
+  printf '%s\n' "${fuji_af_output_root_offenders[@]}" >&2
+  fuji_af_output_root_failed=1
+fi
+if (( ${#fuji_af_output_root_errors[@]} > 0 )); then
+  printf 'Stale entries in %s:\n' "$fuji_af_output_root_allowlist" >&2
+  printf '%s\n' "${fuji_af_output_root_errors[@]}" >&2
+  fuji_af_output_root_failed=1
+fi
+[[ -z "$fuji_af_output_root_failed" ]] || exit 1
