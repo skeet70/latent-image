@@ -8,7 +8,7 @@ import Data.Aeson (FromJSON (parseJSON), eitherDecodeStrict', withObject, (.:))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
 import Data.Time.Clock.POSIX (POSIXTime, getPOSIXTime)
-import System.Directory (canonicalizePath, createDirectoryIfMissing, doesPathExist, getTemporaryDirectory, pathIsSymbolicLink, removePathForcibly)
+import System.Directory (canonicalizePath, createDirectoryIfMissing, doesPathExist, getTemporaryDirectory, removePathForcibly)
 import System.Environment (getArgs)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>), takeDirectory)
@@ -145,7 +145,7 @@ runTests input = do
       age link
       summary <- runTool executable workspace 7 True future
       check (summaryExpiredFiles summary == 1) "symlink did not expire"
-      linked <- pathIsSymbolicLink link
+      linked <- doesPathExist link
       check (not linked) "symlink survived apply"
       present <- doesPathExist target
       check present "symlink target was removed"

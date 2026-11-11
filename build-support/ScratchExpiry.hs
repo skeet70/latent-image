@@ -272,7 +272,7 @@ sweepRoot sweep directory relative = do
       | otherwise -> pure ()
 
 walkDirectory :: Sweep -> DeviceID -> FilePath -> RelativePath -> Bool -> IO Bool
-walkDirectory sweep rootDevice directory relative isRoot = do
+walkDirectory sweep rootDevice directory relative keepDirectory = do
   allGone <-
     bracket (openDirStream directory) closeDirStream (loop directory relative)
       `catch` \(problem :: IOException) ->
@@ -281,7 +281,7 @@ walkDirectory sweep rootDevice directory relative isRoot = do
           else do
             recordFailure (sweepCounts sweep)
             pure False
-  if isRoot || not (sweepApply sweep) || not allGone
+  if keepDirectory || not (sweepApply sweep) || not allGone
     then pure False
     else removeDirectoryEntry sweep directory
  where
@@ -314,7 +314,7 @@ visitEntry sweep rootDevice absolutePath relative = do
             then do
               bumpOwnedDirectory (sweepCounts sweep)
               pure False
-            else walkDirectory sweep rootDevice absolutePath relative False
+            else walkDirectory sweep rootDevice absolutePath relative (not (isExpired sweep status))
       | otherwise -> do
           let bytes = ByteCount (fromIntegral (fileSize status))
           if isPinned (sweepPins sweep) relative
@@ -332,10 +332,10 @@ visitEntry sweep rootDevice absolutePath relative = do
 
 isPinned :: Pins -> RelativePath -> Bool
 isPinned (Pins exact keep) relative@(RelativePath value) =
-  Set.member relative exact || any (\candidate -> Set.member candidate keep) (prefixes value)
+  Set.member relative exact || any (\candidate -> Set.member candidate keep) prefixes
  where
-  prefixes text = [RelativePath (joinPath (take count components)) | count <- [1 .. length components]]
-  components = splitDirectories text
+  components = splitDirectories value
+  prefixes = [RelativePath (joinPath (take count components)) | count <- [1 .. length components]]
 
 isExpired :: Sweep -> FileStatus -> Bool
 isExpired sweep status =
@@ -422,7 +422,7 @@ chunksOf size values
   | otherwise = let (prefix, suffix) = splitAt size values in prefix : chunksOf size suffix
 
 stripTrailing :: String -> String
-stripTrailing = reverse . dropWhile (`elem` ".,)/") . reverse
+stripTrailing = reverse . dropWhile (`elem` (".,)/" :: String)) . reverse
 
 firstLine :: String -> String
 firstLine = takeWhile (/= '\n')
