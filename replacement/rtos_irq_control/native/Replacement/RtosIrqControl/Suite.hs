@@ -232,6 +232,7 @@ caseFor domain role loader owned symbols one =
     , caseExpectedStatus = Returned
     , caseExpectedRegisters = [(R0, caseResult one)]
     , caseExpectedMemory = []
+    , caseIgnoredMemory = []
     , caseCp14Identity = Just (caseIdentity one)
     , caseKernel = Just (KernelCase (InstructionLimit 2500) Nothing Nothing Nothing Nothing [R1, R2, R3, R12, Lr] [])
     }

@@ -118,7 +118,7 @@ fn p(n: u32) -> Priority {
 /// with a definition of priority 15.
 struct World {
     m: Model,
-    words: &'static layout::DomainWords,
+    words: layout::DomainWords,
     record: KernelContext,
 }
 

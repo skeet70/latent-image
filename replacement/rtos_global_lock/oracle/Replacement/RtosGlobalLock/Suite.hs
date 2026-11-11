@@ -383,6 +383,7 @@ caseFor domain role stockImage ownedImage symbols aggregates one =
           ++ [ (RegionId "stack", overlay stackBase stackSize [(stackPointer - 8, seedRegister R11), (stackPointer - 4, exitAddress)])
              | not direct
              ]
+    , caseIgnoredMemory = []
     , caseCp14Identity = Just (if domain == DomainA then 0x4003 else 0x4004)
     , caseKernel = Just (KernelCase plainLimit Nothing (Just 0x8000_1234) (Just 0) (Just 0) [R1, R2, R3, R12, Lr] [])
     }

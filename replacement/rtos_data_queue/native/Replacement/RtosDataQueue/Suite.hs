@@ -866,6 +866,7 @@ caseFor facts domain owned aggregate timerImage ownedSymbols image stockImage on
     , caseExpectedStatus = Returned
     , caseExpectedRegisters = expectedRegisters one
     , caseExpectedMemory = [(RegionId "caller-frame", callerBytes)]
+    , caseIgnoredMemory = []
     , caseCp14Identity = Just (if domain == DomainA then 0x4003 else 0x4004)
     , caseKernel = Just (KernelCase plainLimit Nothing (Just 0x80001234) (Just 0) (Just 0) [R0, R1, R2, R3, R12, Lr] stackContexts)
     }

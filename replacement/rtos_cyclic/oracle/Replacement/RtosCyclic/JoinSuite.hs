@@ -977,6 +977,7 @@ buildCase layout inputs role variant state =
           : [(register, seedRegister register) | register <- [R4 .. R11]]
           ++ [(Sp, stackPointer)]
     , caseExpectedMemory = []
+    , caseIgnoredMemory = []
     , caseCp14Identity = Just (lCp14 layout)
     , caseKernel = Just (KernelCase plainLimit Nothing (Just 0x80001234) (Just 0) (Just 0) [R1, R2, R3, R12, Lr] [])
     }
@@ -1066,6 +1067,7 @@ rootPrepCase layout loader =
     , caseExpectedStatus = Returned
     , caseExpectedRegisters = [(Sp, stackPointer)]
     , caseExpectedMemory = []
+    , caseIgnoredMemory = []
     , caseCp14Identity = Nothing
     , caseKernel = Nothing
     }
@@ -1093,6 +1095,7 @@ interfacesPrepCase inputs =
     , caseExpectedStatus = StopAddress
     , caseExpectedRegisters = [(Sp, stackPointer - 8)]
     , caseExpectedMemory = []
+    , caseIgnoredMemory = []
     , caseCp14Identity = Nothing
     , caseKernel = Just (KernelCase plainLimit (Just (GuestAddress 0x725a34)) Nothing Nothing Nothing [R1, R2, R3, R12, Lr] [])
     }

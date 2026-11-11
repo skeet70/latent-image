@@ -27,32 +27,6 @@ xm1_rust_staticlib(
 )
 
 [
-    xm1_rust_staticlib(
-        name = "objects-f2-adapter-%s" % domain,
-        src = "stage/adapter.rs",
-        crate_name = "xm1_rtos_objects_f2_adapter",
-        data = [
-            "src/admission.rs",
-            "src/block.rs",
-            "src/create.rs",
-            "src/id.rs",
-            "src/lib.rs",
-            "src/locked.rs",
-            "src/matching.rs",
-            "src/message.rs",
-            "src/order.rs",
-            "src/status.rs",
-        "src/teardown.rs",
-            "src/timeout.rs",
-            "src/wake.rs",
-            "//replacement/rtos_layout:src/lib.rs", "//replacement/rtos_reservation:src/lib.rs",
-        ],
-        rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain, "--cfg", "'feature=\"stage\"'"],
-    )
-    for domain in ["a", "b"]
-]
-
-[
     xm1_rust_rlib(
         name = "scheduler-%s-component" % domain,
         src = "//replacement/rtos_scheduler:src/lib.rs",
@@ -76,27 +50,6 @@ xm1_rust_staticlib(
         crate_name = "xm1_rtos_scheduler_s2",
         data = ["//replacement/rtos_layout:src/lib.rs", "//replacement/rtos_reservation:src/lib.rs"],
         rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain, "--cfg", "'feature=\"component\"'"],
-    )
-    for domain in ["a", "b"]
-]
-
-
-
-[
-    xm1_rust_elf(
-        name = "objects-f2-stage-%s" % domain,
-        rust_staticlib = ":objects-f2-adapter-%s" % domain,
-        rust_components = [
-            ":scheduler-%s-component" % domain,
-            ":scheduler-s2-%s-component" % domain,
-        ],
-        link_script = "stage/f2-%s.ld" % domain,
-        extra_ldflags = ["-Wl,--gc-sections", "-Wl,--orphan-handling=error"],
-        link_includes = [
-            "//replacement/rtos_scheduler:scheduler-%s-placement.ld" % domain,
-            "//replacement/rtos_scheduler:scheduler-s2-%s-placement.ld" % domain,
-        ],
-        entry = "xm1_rtos_objects_f2_set_flag",
     )
     for domain in ["a", "b"]
 ]
@@ -263,8 +216,8 @@ haskell_binary(
     srcs = ["native/SuiteMain.hs"],
     main_file = "native/SuiteMain.hs",
     args = [
-        "--owned-a-bin", "$(rootpath :objects-f2-stage-a.bin)",
-        "--owned-b-bin", "$(rootpath :objects-f2-stage-b.bin)",
+        "--owned-a-bin", "$(rootpath :objects-family-stage-a.bin)",
+        "--owned-b-bin", "$(rootpath :objects-family-stage-b.bin)",
         "--layout", "$(rootpath //replacement/rtos_scheduler/oracle:layout.json)",
     ],
     data = [

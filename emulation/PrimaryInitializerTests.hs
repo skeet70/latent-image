@@ -29,7 +29,7 @@ receiptIdentity = object
   [ "role" .= ("retained-primary" :: String)
   , "source_sha256" .= ("43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490" :: String)
   , "loader_a_sha256" .= ("21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882" :: String)
-  , "run_sha256" .= ("6e6ac441c0661470b5b26abe7628f19ec118ac568967938378c88dea448835cb" :: String)
+  , "run_sha256" .= ("efa32ff8d2a378ba9e098ac28015faf82856765c866d5db5b97cb1c38342deef" :: String)
   , "boot_rom_sha256" .= ("4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be" :: String)
   ]
 
