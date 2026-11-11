@@ -245,9 +245,25 @@ haskell_library(
         "//host:bytestring",
         "//host:directory",
         "//host:filepath",
+        "//host:process",
         "//host:time",
         "//host:unix",
         "//host:update-container",
+    ],
+)
+
+haskell_test(
+    name = "viewer-runtime-tests",
+    size = "small",
+    srcs = ["ViewerRuntimeTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":viewer-runtime-lib",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:unix",
     ],
 )
 
