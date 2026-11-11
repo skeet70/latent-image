@@ -381,7 +381,7 @@ fn reset_machine(document: RunDocument, update: Vec<u8>, rom: &[u8], identity: &
     let machine = Machine::new(document, session)?;
     match checkpoint {
         BootCheckpoint::Fresh => Ok(machine),
-        BootCheckpoint::Reuse(root) => initialized_reset(machine, identity, &root),
+        BootCheckpoint::Reuse(root) => initialized_reset(machine, identity, &root, None, fujimod_xm1::checkpoint::ResetCachePolicy::ReuseOrCreate).map(|reset| reset.machine),
     }
 }
 
@@ -624,6 +624,7 @@ mod tests {
 
     const RUN: &[u8] = include_bytes!("../data/xm1-150.json");
     static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    static VM_LOCK:std::sync::Mutex<()>=std::sync::Mutex::new(());
 
     fn inputs() -> (RunDocument, Vec<u8>, Vec<u8>, BootIdentity) {
         fujimod_emulator_exr2_board::register_board_builder();
@@ -643,6 +644,7 @@ mod tests {
 
     #[test]
     fn reused_reset_still_executes_the_first_guest_instruction() {
+        let _vm=VM_LOCK.lock().unwrap();
         let root = root();
         let (document, update, rom, identity) = inputs();
         let mut cold = reset_machine(document, update, &rom, &identity, BootCheckpoint::Reuse(root.clone())).unwrap();
@@ -659,14 +661,33 @@ mod tests {
 
     #[test]
     fn startup_checkpoint_cannot_replace_reset_evidence() {
+        let _vm=VM_LOCK.lock().unwrap();
         let root = root();
         let (document, update, rom, identity) = inputs();
         let mut machine = reset_machine(document, update, &rom, &identity, BootCheckpoint::Fresh).unwrap();
         assert!(!root.exists());
         assert!(matches!(machine.run(1), RunOutcome::Completed));
-        fujimod_xm1::bridge::save_checkpoint(&mut machine, &root, &format!("reset-{}", identity.key()), "initialized-reset.json", &identity.document()).unwrap();
+        fujimod_xm1::bridge::save_checkpoint(&mut machine, &root, &format!("reset-{}", identity.key()), "initialized-reset.json", &identity.document(), None).unwrap();
         let (document, update, rom, identity) = inputs();
         assert!(reset_machine(document, update, &rom, &identity, BootCheckpoint::Reuse(root.clone())).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bounded_reset_refuses_before_writing_snapshot_bytes() {
+        let _vm=VM_LOCK.lock().unwrap();
+        let root=root();
+        let (document,update,rom,identity)=inputs();
+        let mut machine=reset_machine(document,update,&rom,&identity,BootCheckpoint::Fresh).unwrap();
+        let budget=fujimod_xm1::bridge::CheckpointBudget::new(1).unwrap();
+        assert!(fujimod_xm1::bridge::save_checkpoint(
+            &mut machine,&root,"bounded","initialized-reset.json",&identity.document(),Some(budget),
+        ).is_err());
+        assert!(!root.join("bounded").exists());
+        for entry in std::fs::read_dir(&root).unwrap() {
+            assert!(!entry.unwrap().path().join(fujimod_xm1::bridge::SNAPSHOT).exists());
+        }
+        assert_eq!(machine.instructions(),0);
         std::fs::remove_dir_all(root).unwrap();
     }
 }

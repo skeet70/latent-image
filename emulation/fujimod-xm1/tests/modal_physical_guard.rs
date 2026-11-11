@@ -50,6 +50,7 @@ fn board(program: &[u32]) -> (Board, usize) {
             rprofile: Some(rprofile::core::Options {
                 tcm: rprofile::tcm::Options {
                     atcm: rprofile::tcm::BankOptions { bytes: 0x1000, reset: 0 },
+                    btcm: rprofile::tcm::BankOptions { bytes: 0x1000, reset: 0 },
                     ..Default::default()
                 },
                 ..Default::default()
@@ -891,9 +892,7 @@ impl LifetimeMemory for LifetimeBytes {
     }
 }
 
-/// A lifetime monitor over a synthetic 223-publication request, past its
-/// install entry, whose retired extent is [CODE, CODE+8).
-fn retired_monitor() -> LifetimeMonitor {
+fn prepared_retired_monitor() -> LifetimeMonitor {
     const INSTALL: u32 = 0x0100_0000;
     let words = [0xe92d_4010u32, 0xe581_3000, 0xe92d_4010, 0xe581_3000];
     let bytes: Vec<_> = words.into_iter().flat_map(u32::to_le_bytes).collect();
@@ -917,17 +916,25 @@ fn retired_monitor() -> LifetimeMonitor {
     for (extent, image) in config.readonly_images() {
         memory.0.extend(image.iter().enumerate().map(|(index, byte)| (extent.start().0 + index as u32, *byte)));
     }
-    let mut monitor = LifetimeMonitor::new(config, &memory).unwrap();
-    monitor.observe_entry(CoreId(0), Guest(INSTALL), Word(words[0])).unwrap();
+    LifetimeMonitor::new(config, &memory).unwrap()
+}
+
+fn retired_monitor() -> LifetimeMonitor {
+    let mut monitor=prepared_retired_monitor();
+    monitor.observe_entry(CoreId(0),Guest(0x0100_0000),Word(0xe92d_4010)).unwrap();
     monitor
 }
 
 #[test]
 fn retired_lifetime_extents_refuse_canonical_and_aliased_fetches_on_both_cores() {
-    for (core, pc) in [(0, CODE), (1, CODE), (0, ALIAS), (1, ALIAS), (0, DECODER), (1, DECODER)] {
+    #[derive(Clone,Copy)]
+    enum Stage { BeforeInstall, Publishing }
+    for (core, pc, sources, stage) in [(0, CODE), (1, CODE), (0, ALIAS), (1, ALIAS), (0, DECODER), (1, DECODER)]
+        .into_iter().flat_map(|(core,pc)| [CpuDataAttribution::None,CpuDataAttribution::Writes].map(move |sources| (core,pc,sources)))
+        .flat_map(|(core,pc,sources)| [Stage::BeforeInstall,Stage::Publishing].map(move |stage| (core,pc,sources,stage))) {
         let (board, _) = board(&[0xe2800001, 0xeafffffe]);
         let protected = range(0x2000, 0x2004);
-        let attribution = FetchAttribution::new(CpuDataAttribution::None, vec![protected]).unwrap()
+        let attribution = FetchAttribution::new(sources, vec![range(CODE,CODE+8),protected]).unwrap()
             .with_instruction_guards(vec![PhysicalInstructionGuard::arm32_little(
                 protected, GuestAddress(0x2000), InstructionCores::Both,
             ).unwrap()]).unwrap();
@@ -941,9 +948,20 @@ fn retired_lifetime_extents_refuse_canonical_and_aliased_fetches_on_both_cores()
         let fetch = rows.iter().find(|row| row["source"] == "cpu-fetch").expect("a retired fetch row");
         assert_eq!(fetch["physical"].as_u64(), Some(CODE));
         assert_eq!(fetch["core"].as_u64(), Some(core as u64));
-        let mut monitor = retired_monitor();
-        assert_eq!(monitor.observe_row(fetch), Err(LifetimeFailure::RetiredFetch));
-        assert_eq!(monitor.receipt().failure, Some(LifetimeFailure::RetiredFetch));
+        let mut monitor = match stage {
+            Stage::BeforeInstall => prepared_retired_monitor(),
+            Stage::Publishing => retired_monitor(),
+        };
+        let result = match sources {
+            CpuDataAttribution::None => monitor.observe_row(fetch),
+            _ => monitor.observe_attributed_row(fetch,board.mappings()),
+        };
+        let expected = match stage {
+            Stage::BeforeInstall => Ok(()),
+            Stage::Publishing => Err(LifetimeFailure::RetiredFetch),
+        };
+        assert_eq!(result,expected);
+        assert_eq!(monitor.receipt().failure,expected.err());
         drop(records);
         board.memory_watch_end(&mut watch).unwrap();
     }
@@ -1046,4 +1064,311 @@ fn executed_reload_call_brackets_its_copy_store_in_row_order_on_either_core() {
         drop(records);
         board.memory_watch_end(&mut watch).unwrap();
     }
+}
+
+fn set_af_tcm(board: &Board, core: usize, bank: u32, address: u64, enabled: bool) {
+    board.cpu(core).unwrap().coprocessor(arm::Coprocessor {
+        cp: 15, opc1: 0, crn: 9, crm: 1, opc2: bank, secure: 0, wide: false,
+    }, Some(address | u64::from(enabled))).unwrap();
+}
+
+#[test]
+fn af_cpu_visible_reads_preserve_private_bank_bytes_on_both_cores() {
+    use fujimod_xm1::af_ownership::memory::{ReadCore, ReadProvenance, read_cpu_visible};
+    for core in 0..2 {
+        for bank in 0..2 {
+            let (board, _) = board(&[0xeafffffe]);
+            board.write_physical(DATA, &[1, 2, 3, 4]).unwrap();
+            set_af_tcm(&board, core, bank, DATA, true);
+            board.write_memory(core, DATA, &[5, 6, 7, 8]).unwrap();
+            let mut bytes = [0; 4];
+            let provenance = read_cpu_visible(&board, board.mappings(), ReadCore::from_index(core).unwrap(), Guest(DATA as u32), &mut bytes).unwrap();
+            assert_eq!(bytes, [5, 6, 7, 8]);
+            assert!(matches!(provenance, ReadProvenance::Tcm { core: selected, bank: selected_bank, offset: 0, .. } if selected.index() == core && selected_bank.index() == bank as usize));
+            assert_eq!(word(&board, DATA), 0x0403_0201);
+            let wrong_core = ReadCore::from_index(1 - core).unwrap();
+            assert!(read_cpu_visible(&board, board.mappings(), wrong_core, Guest(DATA as u32), &mut bytes).is_err());
+        }
+    }
+}
+
+#[test]
+fn af_cpu_visible_reads_follow_live_remap_disable_and_full_span_boundaries() {
+    use fujimod_xm1::af_ownership::memory::{ReadCore, ReadProvenance, read_cpu_visible};
+    for core in 0..2 {
+        for bank in 0..2 {
+            let (board, _) = board(&[0xeafffffe]);
+            let selected = ReadCore::from_index(core).unwrap();
+            let base = 0x7000_0000u64;
+            set_af_tcm(&board, core, bank, base, true);
+            board.write_memory(core, base + 0xffc, &[9, 8, 7, 6]).unwrap();
+            let mut bytes = [0; 4];
+            assert!(matches!(read_cpu_visible(&board, board.mappings(), selected, Guest((base + 0xffc) as u32), &mut bytes).unwrap(), ReadProvenance::Tcm { .. }));
+            assert_eq!(bytes, [9, 8, 7, 6]);
+            for address in [base - 1, base + 0xffd, base + 0x1000] {
+                assert!(read_cpu_visible(&board, board.mappings(), selected, Guest(address as u32), &mut bytes).is_err());
+            }
+            set_af_tcm(&board, core, bank, base + 0x2000, true);
+            assert!(read_cpu_visible(&board, board.mappings(), selected, Guest(base as u32), &mut bytes).is_err());
+            board.write_memory(core, base + 0x2000, &[4, 3, 2, 1]).unwrap();
+            read_cpu_visible(&board, board.mappings(), selected, Guest((base + 0x2000) as u32), &mut bytes).unwrap();
+            assert_eq!(bytes, [4, 3, 2, 1]);
+            set_af_tcm(&board, core, bank, base + 0x2000, false);
+            assert!(read_cpu_visible(&board, board.mappings(), selected, Guest((base + 0x2000) as u32), &mut bytes).is_err());
+            assert!(read_cpu_visible(&board, board.mappings(), selected, Guest(0x2000_0000), &mut bytes).is_err());
+        }
+    }
+}
+
+#[test]
+fn af_tcm_configuration_refuses_overlap_and_reads_refuse_shared_private_disagreement() {
+    use fujimod_xm1::af_ownership::memory::{ReadCore, ReadProvenance, read_cpu_visible};
+    for core in 0..2 {
+        let (board, _) = board(&[0xeafffffe]);
+        set_af_tcm(&board, core, 0, DATA, true);
+        board.write_memory(core, DATA, &[9, 8, 7, 6]).unwrap();
+        assert!(board.cpu(core).unwrap().coprocessor(arm::Coprocessor {
+            cp: 15, opc1: 0, crn: 9, crm: 1, opc2: 1, secure: 0, wide: false,
+        }, Some(DATA | 1)).is_err());
+        let mut bytes = [0; 4];
+        let selected = ReadCore::from_index(core).unwrap();
+        assert!(matches!(read_cpu_visible(&board, board.mappings(), selected, Guest(DATA as u32), &mut bytes).unwrap(),
+            ReadProvenance::Tcm { bank, .. } if bank.index() == 0));
+        assert_eq!(bytes, [9, 8, 7, 6]);
+        set_af_tcm(&board, core, 0, DATA, false);
+        set_af_tcm(&board, core, 1, DATA, false);
+        board.cpu(core).unwrap().unmap(0, 0x10000).unwrap();
+        board.cpu(core).unwrap().map_zeroed(0, 0x10000, 7).unwrap();
+        board.write_memory(core, DATA, &[1, 2, 3, 4]).unwrap();
+        assert!(read_cpu_visible(&board, board.mappings(), ReadCore::from_index(core).unwrap(), Guest(DATA as u32), &mut [0; 4]).is_err());
+    }
+}
+
+#[test]
+fn af_reads_preserve_exclusive_store_success_against_no_read_control() {
+    use fujimod_xm1::af_ownership::memory::{ReadCore, read_cpu_visible};
+    for core in 0..2 {
+        for read in [false, true] {
+            let (board, _) = board(&[0xe191_2f9f, 0xe181_3f90, 0xeaff_fffe]);
+            let base = 0x7000_0000;
+            set_af_tcm(&board, core, 1, base, true);
+            board.write_memory(core, base, &[4, 3, 2, 1]).unwrap();
+            run(&board, core, CODE, 1);
+            assert_eq!(board.read_register(core, arm::CORE[2]).unwrap(), 0);
+            if read {
+                let selected = ReadCore::from_index(core).unwrap();
+                let mut bytes = [0; 4];
+                read_cpu_visible(&board, board.mappings(), selected, Guest(DATA as u32), &mut bytes).unwrap();
+                assert_eq!(bytes, [0; 4]);
+                read_cpu_visible(&board, board.mappings(), selected, Guest(base as u32), &mut bytes).unwrap();
+                assert_eq!(bytes, [4, 3, 2, 1]);
+            }
+            run(&board, core, CODE + 4, 1);
+            assert_eq!(board.read_register(core, arm::CORE[3]).unwrap(), 0);
+            assert_eq!(word(&board, DATA), 7);
+            run(&board, core, CODE, 1);
+            if read {
+                read_cpu_visible(&board, board.mappings(), ReadCore::from_index(core).unwrap(), Guest(DATA as u32), &mut [0; 4]).unwrap();
+            }
+            run(&board, core, CODE + 4, 1);
+            assert_eq!(board.read_register(core, arm::CORE[3]).unwrap(), 0);
+            assert_eq!(word(&board, DATA), 7);
+        }
+    }
+}
+
+#[test]
+fn actual_attributed_publication_writes_preserve_guard_progress_and_refusals() {
+    const WRITER: u64 = 0x0100_0004;
+    const BYTES: usize = 0x0140_0000;
+    #[derive(Clone, Copy)]
+    enum Case { Valid, WrongValue, UnknownBase, WrongClock, UnknownFetch }
+    for case in [Case::Valid, Case::WrongValue, Case::UnknownBase, Case::WrongClock, Case::UnknownFetch] {
+        let mut receipts = Vec::new();
+        for attributed in [false, true] {
+            let mut monitor = retired_monitor();
+            let publication = monitor.config().publications()[0];
+            let mut registers = [0u32; 13];
+            registers[1] = publication.address.0;
+            registers[3] = publication.new.0;
+            monitor.prepare_store(CoreId(0), Guest(WRITER as u32), Word(0xe581_3000),
+                &registers, publication.old, Cpsr(0x13)).unwrap();
+            let graph = Graph {
+                processors: (0..2).map(|_| Processor {
+                    model: Model::CortexR5F, mprofile: None, released: true,
+                    rprofile: Some(rprofile::core::Options::default()),
+                    registers: vec![(Register::Pc, WRITER), (Register::Pstate, 0x13),
+                        (arm::CORE[1], u64::from(registers[1])), (arm::CORE[3], u64::from(registers[3]))],
+                }).collect(),
+                ram: vec![Ram { base: 0, size: BYTES }],
+                mappings: (0..2).flat_map(|core| [0, 0x4000_0000].map(|address|
+                    MemoryMap { core, address, physical: 0, size: BYTES, permissions: 7 })).collect(),
+                dma_mappings: vec![BusMapping::ram(0, BYTES)],
+                decoders: vec![], peripherals: vec![], instructions_per_tick: Ratio::new(1,1).unwrap(),
+            };
+            let board = graph.build(factory::Options {
+                engine: factory::Engine::Unicorn, translation_cache_bytes: 1 << 20,
+            }, Bus::new(Mode::Strict), None).unwrap();
+            board.write_physical(WRITER, &0xe581_3000u32.to_le_bytes()).unwrap();
+            board.write_physical(u64::from(publication.address.0), &publication.old.0.to_le_bytes()).unwrap();
+            let sources = if attributed { CpuDataAttribution::Writes } else { CpuDataAttribution::None };
+            let mut watch = board.memory_watch_begin_with_fetch_attribution(
+                vec![WatchRange { start: u64::from(publication.address.0),
+                    end: u64::from(publication.address.0)+4, kinds: WatchKinds::CPU_WRITE }],
+                FetchAttribution::new(sources,vec![range(WRITER,WRITER+4)]).unwrap(),
+                4,board.mappings().to_vec(),ViewPolicy::Fixed,
+            ).unwrap();
+            run(&board,0,WRITER,1);
+            assert_eq!(word(&board,u64::from(publication.address.0)),publication.new.0);
+            let mut row = watch.records.borrow().rows_since(0).unwrap()[0].clone();
+            board.memory_watch_end(&mut watch).unwrap();
+            if attributed {
+                let fetch = &row["latest_fetch"];
+                assert_eq!(fetch["source"], "cpu-fetch");
+                assert_eq!(fetch["physical"], WRITER);
+                assert_eq!(fetch["core"], row["core"]);
+                assert_eq!(fetch["pc"], row["pc"]);
+                assert_eq!(fetch["instructions"], row["instructions"]);
+                assert_eq!(fetch["tick"], row["tick"]);
+                assert!(row["core_instructions"].as_u64().is_some());
+                assert_eq!(fetch["core_instructions"], row["core_instructions"]);
+            }
+            match case {
+                Case::Valid => {}
+                Case::WrongValue => row["value"] = serde_json::json!(publication.new.0 ^ 1),
+                Case::UnknownBase => row["unrecognized"] = serde_json::json!(0),
+                Case::WrongClock => row["core_instructions"] = serde_json::json!("invalid"),
+                Case::UnknownFetch => {
+                    if attributed { row["latest_fetch"]["unrecognized"] = serde_json::json!(0); }
+                    else { row["latest_fetch"] = serde_json::json!({"unrecognized":0}); }
+                }
+            }
+            let expected = match case {
+                Case::Valid => Ok(()),
+                Case::WrongValue => Err(LifetimeFailure::WrongValue),
+                _ => Err(LifetimeFailure::MalformedRow),
+            };
+            let result = if attributed { monitor.observe_attributed_row(&row,board.mappings()) } else { monitor.observe_row(&row) };
+            assert_eq!(result,expected);
+            assert_eq!(monitor.receipt().forward_writes,u64::from(result.is_ok()));
+            assert_eq!(monitor.receipt().pending_stores,usize::from(result.is_err()));
+            receipts.push(serde_json::to_value(monitor.receipt()).unwrap());
+        }
+        assert_eq!(receipts[0],receipts[1]);
+    }
+}
+
+static CATALOG_LOCK:std::sync::Mutex<()>=std::sync::Mutex::new(());
+
+fn catalog_board() -> Board {
+    let document:fujimod_xm1::run::RunDocument=serde_json::from_slice(include_bytes!("../data/xm1-150.json")).unwrap();
+    let resolved=fujimod_xm1::run::resolved(&document).unwrap();
+    let graph=fujimod_emulator::boot::graph::assemble_with_starts(
+        &resolved.reference,document.execution.instructions_per_tick,None,&[],
+    ).unwrap();
+    graph.validate().unwrap();
+    let mut board=graph.build(factory::Options {
+        engine:factory::Engine::Unicorn,translation_cache_bytes:1<<20,
+    },Bus::new(Mode::Strict),None).unwrap();
+    board.set_execution_policy(ExecutionPolicy::Exact).unwrap();
+    board
+}
+
+#[test]
+fn attributed_watch_admits_the_actual_xm1_catalog_without_bridging_backing_holes() {
+    let _catalog=CATALOG_LOCK.lock().unwrap();
+    let board=catalog_board();
+    let guarded=range(0x0103_fd88,0x0103_fd8c);
+    let classes=vec![WatchRange{start:0x016f_ed28,end:0x016f_ed2c,kinds:WatchKinds::WRITES}];
+    let attribution=|ranges|FetchAttribution::new(CpuDataAttribution::Writes,ranges).unwrap()
+        .with_instruction_guards(vec![PhysicalInstructionGuard::arm32_little(
+            guarded,GuestAddress(0x0103_fd88),InstructionCores::Both,
+        ).unwrap()]).unwrap();
+    assert!(board.memory_watch_begin_with_fetch_attribution(
+        classes.clone(),attribution(vec![range(0,1<<32)]),4,board.mappings().to_vec(),ViewPolicy::Fixed,
+    ).is_err());
+    let ranges=fujimod_xm1::af_ownership::attribution_ranges(board.mappings()).unwrap();
+    let mut watch=board.memory_watch_begin_with_fetch_attribution(
+        classes,attribution(ranges),4,board.mappings().to_vec(),ViewPolicy::Fixed,
+    ).unwrap();
+    assert_eq!(board.instruction_counts(),vec![0,0]);
+    board.memory_watch_end(&mut watch).unwrap();
+    assert_eq!(board.instruction_counts(),vec![0,0]);
+}
+
+fn catalog_projection_fixture() -> (
+    fujimod_emulator::session::Session,
+    std::sync::Arc<Vec<MemoryMap>>,
+    fujimod_xm1::af_ownership::Plan,
+) {
+    use fujimod_xm1::af_ownership::{Plan,Site,SiteKind};
+    let board=catalog_board();
+    let session=fujimod_emulator::session::Session {
+        definition:serde_json::Value::Null,board,controls:None,contact_driver:None,
+        resources:fujimod_emulator_exr2_plan::Resources::default(),nodes:Default::default(),
+        contacts:Default::default(),recording_frames:Default::default(),
+    };
+    let mappings=std::sync::Arc::new(session.board.mappings().to_vec());
+    let required=[
+        (0x0103_fd88,SiteKind::Consumer),(0x0103_e988,SiteKind::ModeHelper),
+        (0x0103_1664,SiteKind::Primary),(0x0104_01f0,SiteKind::Current),(0x0104_0250,SiteKind::Set),
+        (0x0102_dec8,SiteKind::Callback),(0x0104_0288,SiteKind::Clear),(0x0103_a254,SiteKind::Request),
+        (0x0072_503c,SiteKind::QueuePost),(0x0072_5318,SiteKind::Dequeue),(0x0102_8b54,SiteKind::Select),
+        (0x0102_8bc4,SiteKind::DispatchCallback),(0x0105_44e4,SiteKind::WorkPost),(0x0105_47b8,SiteKind::Callback),
+        (0x0102_f1b0,SiteKind::ReservePrimary),(0x0102_f1c8,SiteKind::ReserveSecondary),(0x0102_f1d8,SiteKind::ReserveSecondary),
+    ];
+    let mut sites:Vec<_>=required.into_iter().map(|(pc,kind)|Site {
+        pc,word:0,kind,reads:Vec::new(),register_reads:Vec::new(),
+    }).collect();
+    sites.sort_unstable_by_key(|site|site.pc);
+    let plan=Plan{sites,identity:serde_json::json!({"sdk":"test","viewer":"test","bridge":"test","model":"test","package":"test"})};
+    (session,mappings,plan)
+}
+
+#[test]
+fn blocked_pair_projection_keeps_its_prefix_and_fingerprint_detects_catalog_state_mutations() {
+    let _catalog=CATALOG_LOCK.lock().unwrap();
+    use fujimod_xm1::af_ownership::Projection;
+    let (mut session,mappings,plan)=catalog_projection_fixture();
+    let mut projection=Projection::new(plan,&session,mappings.clone()).unwrap();
+    projection.sync_retention(fujimod_emulator::board::observation::PassiveRetentionStatus::Unarmed);
+    projection.arm(&session,&mappings).unwrap();
+    projection.sync_retention(fujimod_emulator::board::observation::PassiveRetentionStatus::Armed);
+    session.board.write_register(0,Register::Pstate,0x13).unwrap();
+    let mut points=session.board.instruction_points_begin(0,vec![0x0102_f1b0]).unwrap();
+    run(&session.board,0,0x0102_f1b0,1);
+    let point=points.event_context().unwrap();
+    for _ in 0..341 {projection.observe(&session,&mappings,point);}
+    let receipt=serde_json::to_value(&projection).unwrap();
+    assert_eq!(receipt["status"],"blocked");
+    assert_eq!(receipt["context_count"],128);
+    assert_eq!(session.board.instruction_counts(),vec![0,0]);
+    projection.row(&serde_json::json!({"physical":0x016f_ed28u32,"size":4}));
+    assert_eq!(serde_json::to_value(&projection).unwrap()["context_count"],128);
+    session.board.instruction_points_end(0,&mut points).unwrap();
+    let proof=fujimod_xm1::machine_fingerprint::fingerprint(&session).unwrap();
+    assert_eq!(proof["status"],"complete");
+    let saved=session.checkpoint(None).unwrap();
+    let writable=mappings.iter().find(|mapping|mapping.permissions&2!=0
+        && mapping.physical%4==0 && mapping.size>=4).unwrap().physical;
+    let mut bytes=[0;4];
+    session.board.read_physical(writable,&mut bytes).unwrap();
+    bytes[0]^=1;
+    session.board.write_physical(writable,&bytes).unwrap();
+    let changed=fujimod_xm1::machine_fingerprint::fingerprint(&session).unwrap();
+    assert_ne!(changed["machine_sha256"],proof["machine_sha256"]);
+    session.restore(&saved).unwrap();
+    assert_eq!(fujimod_xm1::machine_fingerprint::fingerprint(&session).unwrap(),proof);
+    let register=session.board.read_register(0,arm::CORE[0]).unwrap();
+    session.board.write_register(0,arm::CORE[0],register^1).unwrap();
+    let changed=fujimod_xm1::machine_fingerprint::fingerprint(&session).unwrap();
+    assert_ne!(changed["machine_sha256"],proof["machine_sha256"]);
+    session.restore(&saved).unwrap();
+    assert_eq!(fujimod_xm1::machine_fingerprint::fingerprint(&session).unwrap(),proof);
+    session.board.set_execution_policy(ExecutionPolicy::Interactive).unwrap();
+    let changed=fujimod_xm1::machine_fingerprint::fingerprint(&session).unwrap();
+    assert_ne!(changed["machine_sha256"],proof["machine_sha256"]);
+    session.restore(&saved).unwrap();
+    assert_eq!(fujimod_xm1::machine_fingerprint::fingerprint(&session).unwrap(),proof);
+    assert_eq!(session.board.instruction_counts(),vec![0,0]);
 }

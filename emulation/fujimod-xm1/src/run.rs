@@ -253,6 +253,10 @@ pub fn memory_backings(document: &RunDocument) -> Result<Vec<factory::Ram>, Stri
     Ok(graph(document)?.1.ram)
 }
 
+pub fn mapping_catalogue(document: &RunDocument) -> Result<Vec<factory::MemoryMap>, String> {
+    Ok(graph(document)?.1.mappings)
+}
+
 /// Construct an unexecuted strict board. Mirrors `fujimod_emulator::boot::open_prepared`
 /// with the catalog DAT identity check replaced by the caller's validation.
 pub fn open(document: &RunDocument, update: &ValidatedUpdate, boot_rom: &[u8]) -> Result<Session, String> {
@@ -375,6 +379,26 @@ mod tests {
         for (core, identity) in [(0, 0x4003), (1, 0x8003)] {
             assert_eq!(session.board.cpu(core).unwrap().rprofile_identity(None).unwrap(), identity, "core {core}");
         }
+    }
+
+    #[test]
+    fn exported_mapping_catalogue_matches_the_actual_zero_instruction_model() {
+        fujimod_emulator_models::register();
+        let document = RunDocument::parse(include_bytes!("../data/xm1-150.json")).unwrap();
+        let catalogue = mapping_catalogue(&document).unwrap();
+        let rom = [0x5a; 0x4000];
+        let session = session(&rom);
+        assert_eq!(catalogue, session.board.mappings());
+        for core in 0..2 {
+            let address = document.boot_rom.address.0;
+            assert!(catalogue.iter().any(|mapping| mapping.core == core
+                && mapping.address <= address && address + 4 <= mapping.address + mapping.size as u64));
+            let mut observed = [0; 4];
+            session.board.read_memory(core, address, &mut observed).unwrap();
+            assert_eq!(observed, [0x5a; 4]);
+        }
+        assert_eq!(session.board.instruction_counts(), vec![0, 0]);
+        assert_eq!(session.board.now(), 0);
     }
 
     #[test]

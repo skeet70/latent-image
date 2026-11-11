@@ -479,3 +479,365 @@ fn installed_owned_current_stores_execute_only_at_the_bound_core_and_effective_a
         }
     }
 }
+
+fn prepare_exclusive_control(machine: &Machine) {
+    let code:Vec<_>=[0xe191_2f9fu32,0xe181_3f90,0xeaff_fffe].into_iter().flat_map(u32::to_le_bytes).collect();
+    machine.session.board.write_physical(0x1000,&code).unwrap();
+}
+
+fn reserve_control_word(machine: &Machine,core:usize) {
+    let board=&machine.session.board;
+    board.write_register(core,arm::CORE[0],0x1234_5678).unwrap();
+    board.write_register(core,arm::CORE[1],0x3000).unwrap();
+    board.cpu(core).unwrap().run(fujimod_emulator_cpu::Run {
+        begin:0x1000,until:None,instructions:Some(1),watchdog_us:0,
+    }).unwrap();
+}
+
+fn require_exclusive_store_success(machine: &Machine,core:usize) {
+    let board=&machine.session.board;
+    board.cpu(core).unwrap().run(fujimod_emulator_cpu::Run {
+        begin:0x1004,until:None,instructions:Some(1),watchdog_us:0,
+    }).unwrap();
+    assert_eq!(board.read_register(core,arm::CORE[3]).unwrap(),0);
+    let mut bytes=[0;4];
+    board.read_physical(0x3000,&mut bytes).unwrap();
+    assert_eq!(u32::from_le_bytes(bytes),0x1234_5678);
+}
+
+#[test]
+fn baseline_modal_observer_begin_end_preserve_reservations_against_no_observer() {
+    for core in 0..2 {
+        for enabled in [false,true] {
+            let mut machine=machine([false,false],true);
+            prepare_exclusive_control(&machine);
+            let config=baseline(&machine);
+            reserve_control_word(&machine,core);
+            if enabled { machine.traces.begin_modal_observation(&machine.session,config).unwrap(); }
+            require_exclusive_store_success(&machine,core);
+            reserve_control_word(&machine,core);
+            if enabled { machine.traces.end_modal_observation(&machine.session).unwrap(); }
+            require_exclusive_store_success(&machine,core);
+            assert!(!machine.traces.modal_observation_report().enabled);
+        }
+    }
+}
+
+fn execute_lifetime_control_instruction(machine:&mut Machine,core:usize,pc:u64) {
+    machine.session.board.write_register(core,Register::Pc,pc).unwrap();
+    assert!(matches!(machine.run(1),RunOutcome::Completed));
+    machine.require_running().unwrap();
+}
+
+fn complete_control_publication_cycle(machine:&mut Machine,core:usize) {
+    let runtime=u64::from(lifetime_fixture::RUNTIME);
+    execute_lifetime_control_instruction(machine,core,runtime+0x200);
+    for index in 0..223u64 {
+        machine.session.board.write_register(core,arm::CORE[1],0x0120_0000+index*4).unwrap();
+        machine.session.board.write_register(core,arm::CORE[3],index+1).unwrap();
+        execute_lifetime_control_instruction(machine,core,runtime+0x204);
+    }
+    execute_lifetime_control_instruction(machine,core,runtime+0x208);
+    for index in (0..223u64).rev() {
+        machine.session.board.write_register(core,arm::CORE[1],0x0120_0000+index*4).unwrap();
+        machine.session.board.write_register(core,arm::CORE[3],0).unwrap();
+        execute_lifetime_control_instruction(machine,core,runtime+0x20c);
+    }
+}
+
+#[test]
+fn installed_lifetime_guarded_modal_begin_end_preserve_reservations_against_no_observer() {
+    for core in 0..2 {
+        for enabled in [false,true] {
+            let InstalledCurrentCase{mut machine,config,..}=installed_current_case(
+                fujimod_xm1::modal_permit::CoreId(core),CurrentStoreCase::Valid);
+            prepare_exclusive_control(&machine);
+            reserve_control_word(&machine,core);
+            if enabled { machine.traces.begin_modal_observation(&machine.session,config).unwrap(); }
+            require_exclusive_store_success(&machine,core);
+            complete_control_publication_cycle(&mut machine,core);
+            reserve_control_word(&machine,core);
+            if enabled {
+                machine.traces.end_modal_observation(&machine.session).unwrap();
+                let report=serde_json::to_value(machine.traces.modal_observation_report()).unwrap();
+                assert_eq!(report["lifetime"]["phase"],serde_json::json!("ended"));
+                assert_eq!(report["lifetime"]["forward_writes"],serde_json::json!(223));
+                assert_eq!(report["lifetime"]["reverse_writes"],serde_json::json!(223));
+                assert!(report["failure"].is_null());
+            }
+            require_exclusive_store_success(&machine,core);
+            assert!(!machine.traces.modal_observation_report().enabled);
+        }
+    }
+}
+
+fn passive_control_watch(machine: &Machine) -> Box<fujimod_emulator::board::observation::MemoryWatch> {
+    use fujimod_emulator::board::observation::{
+        CpuDataAttribution, FetchAttribution, GuestAddress, InstructionCores, PassiveFetchAttribution, PassiveRetention,
+        PhysicalInstructionGuard, ViewPolicy, WatchKinds, WatchRange,
+    };
+    let protected = WatchRange { start: 0x3000, end: 0x3004, kinds: WatchKinds::WRITES };
+    machine.session.board.memory_watch_begin_with_passive_fetch_attribution(
+        vec![protected.clone()],
+        FetchAttribution::new(CpuDataAttribution::None, vec![
+            WatchRange { start: 0x1000, end: 0x1008, kinds: WatchKinds::CPU_FETCH },
+        ]).unwrap().with_instruction_guards(vec![PhysicalInstructionGuard::arm32_little(
+            WatchRange { start: 0x1000, end: 0x1008, kinds: WatchKinds::CPU_FETCH },
+            GuestAddress(0x1000), InstructionCores::Both,
+        ).unwrap()]).unwrap(),
+        3, machine.session.board.mappings().to_vec(), ViewPolicy::Fixed,
+        PassiveRetention::new(vec![
+            protected,
+            WatchRange { start: 0x4000, end: 0x4004, kinds: WatchKinds::WRITES },
+        ], 2).unwrap().with_fetch_attribution(PassiveFetchAttribution::new(CpuDataAttribution::Writes, vec![
+            WatchRange { start: 0x1000, end: 0x1008, kinds: WatchKinds::CPU_FETCH },
+            WatchRange { start: 0x2000, end: 0x2008, kinds: WatchKinds::CPU_FETCH },
+        ]).unwrap()),
+    ).unwrap()
+}
+
+fn require_protected_native_refusal(machine: &mut Machine,
+    watch: &fujimod_emulator::board::observation::MemoryWatch) {
+    machine.session.board.run_for_instructions(8, 1).unwrap();
+    assert!(watch.records.borrow().violation().is_some());
+    assert!(watch.instruction_guard_status().unwrap().first_failure.is_some());
+    for core in 0..2 {
+        assert!(machine.session.board.cpu(core).unwrap().execution_refused());
+    }
+    let counts = machine.session.board.instruction_counts();
+    machine.session.board.run_for_instructions(8, 1).unwrap();
+    assert_eq!(machine.session.board.instruction_counts(), counts);
+}
+
+#[derive(Clone, Copy)]
+enum PublicAdvance { Run, RunUntil }
+
+fn require_protected_public_refusal(machine: &mut Machine,
+    watch: &fujimod_emulator::board::observation::MemoryWatch, api: PublicAdvance) {
+    let outcome = match api {
+        PublicAdvance::Run => machine.run(8),
+        PublicAdvance::RunUntil => machine.run_until(8, None),
+    };
+    assert!(matches!(outcome, RunOutcome::Failed));
+    let cause = machine.native_execution_refusal().unwrap();
+    assert_eq!(cause.core, fujimod_xm1::modal_permit::CoreId(0));
+    assert!(machine.require_running().is_err());
+    let counts = machine.session.board.instruction_counts();
+    assert!(matches!(machine.run(8), RunOutcome::Failed));
+    assert!(matches!(machine.run_until(8, None), RunOutcome::Failed));
+    assert_eq!(machine.session.board.instruction_counts(), counts);
+    assert_eq!(machine.native_execution_refusal().unwrap().core, cause.core);
+    require_protected_native_refusal(machine, watch);
+}
+
+#[test]
+fn passive_overflow_preserves_original_budget_and_later_protected_refusal() {
+    use fujimod_emulator::board::observation::{PassiveRetentionStatus, PassiveStopReason};
+    let mut machine = machine([false, false], false);
+    let code: Vec<_> = [0xe581_0000u32, 0xeaff_fffd].into_iter().flat_map(u32::to_le_bytes).collect();
+    machine.session.board.write_physical(0x1000, &code).unwrap();
+    machine.session.board.write_register(1, Register::Pc, 0x2000).unwrap();
+    let peer_code: Vec<_> = [0xe581_0000u32, 0xeaff_fffe].into_iter().flat_map(u32::to_le_bytes).collect();
+    machine.session.board.write_physical(0x2000, &peer_code).unwrap();
+    machine.session.board.write_register(1, arm::CORE[1], 0x3000).unwrap();
+    machine.session.board.write_register(0, arm::CORE[1], 0x4000).unwrap();
+    let mut watch = passive_control_watch(&machine);
+    machine.session.board.write_physical(0x4000, &[1; 4]).unwrap();
+    assert_eq!(watch.records.borrow().row_count(), 0);
+    watch.records.borrow_mut().arm_passive_retention().unwrap();
+    machine.session.board.write_physical(0x3000, &[1; 4]).unwrap();
+    let before = machine.instructions();
+    let original_left_budget = 64;
+    assert!(matches!(machine.run(original_left_budget), RunOutcome::Completed));
+    machine.require_running().unwrap();
+    assert_eq!(machine.instructions() - before, original_left_budget);
+    {
+        let records = watch.records.borrow();
+        assert_eq!(records.passive_retention_status(),
+            PassiveRetentionStatus::Stopped(PassiveStopReason::CapacityExceeded));
+        assert!(records.violation().is_none());
+        let rows = records.rows_since(0).unwrap();
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[0]["source"], "host-write");
+        assert_eq!(rows[0]["physical"], 0x3000);
+        let af_rows: Vec<_> = rows.iter().filter(|row| row["physical"] == 0x4000).collect();
+        assert_eq!(af_rows.len(), 2);
+        assert!(rows.iter().any(|row| row["source"] == "cpu-write" && row["physical"] == 0x3000));
+        for row in af_rows {
+            assert_eq!(row["source"], "cpu-write");
+            assert_eq!(row["latest_fetch"]["physical"], 0x1000);
+        }
+    }
+    machine.session.board.write_physical(0x4000, &[2; 4]).unwrap();
+    machine.session.board.write_physical(0x3000, &[2; 4]).unwrap();
+    assert_eq!(watch.records.borrow().row_count(), 5);
+    machine.session.board.write_register(0, arm::CORE[1], 0x3000).unwrap();
+    require_protected_public_refusal(&mut machine, &watch, PublicAdvance::Run);
+    machine.session.board.memory_watch_end(&mut watch).unwrap();
+}
+
+#[test]
+fn passive_end_and_refusal_stop_only_af_rows_and_protected_overlap_survives() {
+    use fujimod_emulator::board::observation::{PassiveRetentionStatus, PassiveStopReason};
+    for reason in [PassiveStopReason::End, PassiveStopReason::Refused] {
+        let mut machine = machine([false, false], false);
+        let mut watch = passive_control_watch(&machine);
+        machine.session.board.write_physical(0x4000, &[1; 4]).unwrap();
+        assert_eq!(watch.records.borrow().row_count(), 0);
+        watch.records.borrow_mut().arm_passive_retention().unwrap();
+        machine.session.board.write_physical(0x4000, &[2; 4]).unwrap();
+        watch.records.borrow_mut().stop_passive_retention(reason).unwrap();
+        for value in 3..32 {
+            machine.session.board.write_physical(0x4000, &[value; 4]).unwrap();
+        }
+        machine.session.board.write_physical(0x3000, &[3; 4]).unwrap();
+        assert!(matches!(machine.run(16), RunOutcome::Completed));
+        machine.require_running().unwrap();
+        {
+            let records = watch.records.borrow();
+            assert_eq!(records.passive_retention_status(), PassiveRetentionStatus::Stopped(reason));
+            assert_eq!(records.row_count(), 2);
+            assert!(records.violation().is_none());
+            assert_eq!(records.rows_since(0).unwrap()[1]["physical"], 0x3000);
+        }
+        assert!(watch.records.borrow_mut().arm_passive_retention().is_err());
+        machine.session.board.memory_watch_end(&mut watch).unwrap();
+    }
+}
+
+#[test]
+fn missing_passive_fetch_on_protected_overlap_preserves_canonical_row_and_execution() {
+    use fujimod_emulator::board::observation::{PassiveRetentionStatus, PassiveStopReason};
+    let mut machine = machine([false, false], false);
+    let code: Vec<_> = [0xe581_0000u32, 0xeaff_fffe].into_iter().flat_map(u32::to_le_bytes).collect();
+    machine.session.board.write_physical(0x1000, &code).unwrap();
+    machine.session.board.write_physical(0x5000, &code).unwrap();
+    machine.session.board.write_register(0, Register::Pc, 0x5000).unwrap();
+    machine.session.board.write_register(1, Register::Pc, 0x2000).unwrap();
+    machine.session.board.write_register(0, arm::CORE[0], 0x1234_5678).unwrap();
+    machine.session.board.write_register(0, arm::CORE[1], 0x3000).unwrap();
+    let mut watch = passive_control_watch(&machine);
+    watch.records.borrow_mut().arm_passive_retention().unwrap();
+    let before = machine.instructions();
+    assert!(matches!(machine.run(64), RunOutcome::Completed));
+    machine.require_running().unwrap();
+    assert_eq!(machine.instructions() - before, 64);
+    {
+        let records = watch.records.borrow();
+        assert_eq!(records.passive_retention_status(),
+            PassiveRetentionStatus::Stopped(PassiveStopReason::ProvenanceUnavailable));
+        assert!(records.violation().is_none());
+        let rows = records.rows_since(0).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["source"], "cpu-write");
+        assert_eq!(rows[0]["physical"], 0x3000);
+        assert_eq!(rows[0]["pc"], 0x5000);
+        assert_eq!(rows[0]["value"], 0x1234_5678);
+        assert!(rows[0].get("latest_fetch").is_none());
+        assert!(rows[0].get("core_instructions").is_none());
+    }
+    let mut bytes = [0; 4];
+    machine.session.board.read_physical(0x3000, &mut bytes).unwrap();
+    assert_eq!(u32::from_le_bytes(bytes), 0x1234_5678);
+    watch.records.borrow_mut().stop_passive_retention(PassiveStopReason::End).unwrap();
+    assert_eq!(watch.records.borrow().passive_retention_status(),
+        PassiveRetentionStatus::Stopped(PassiveStopReason::ProvenanceUnavailable));
+    machine.session.board.write_physical(0x4000, &[1; 4]).unwrap();
+    assert_eq!(watch.records.borrow().row_count(), 1);
+    for value in [1, 2] {
+        machine.session.board.write_physical(0x3000, &[value; 4]).unwrap();
+    }
+    machine.session.board.write_register(0, Register::Pc, 0x1000).unwrap();
+    require_protected_public_refusal(&mut machine, &watch, PublicAdvance::RunUntil);
+    machine.session.board.memory_watch_end(&mut watch).unwrap();
+}
+
+#[test]
+fn public_machine_consumes_a_standalone_physical_guard_refusal() {
+    for api in [PublicAdvance::Run, PublicAdvance::RunUntil] {
+        let mut machine = machine([false, false], true);
+        machine.session.board.write_register(0, Register::Pc, 0x4000_1000).unwrap();
+        machine.session.board.write_register(1, Register::Pc, 0x2000).unwrap();
+        let mut watch = passive_control_watch(&machine);
+        let counts = machine.session.board.instruction_counts();
+        require_protected_public_refusal(&mut machine, &watch, api);
+        assert_eq!(machine.session.board.instruction_counts(), counts);
+        machine.session.board.memory_watch_end(&mut watch).unwrap();
+    }
+}
+
+#[test]
+fn legitimate_wait_until_deadline_is_not_a_native_execution_failure() {
+    let mut machine = machine([false, false], false);
+    machine.session.board.write_physical(0x1000, &0xe320_f003u32.to_le_bytes()).unwrap();
+    let counts = machine.instructions();
+    let deadline = machine.session.board.now() + 2;
+    assert!(matches!(machine.run_until(64, Some(deadline)), RunOutcome::Completed));
+    assert!(machine.instructions() - counts < 64);
+    assert_eq!(machine.session.board.state()["waiting"], serde_json::json!([true, true]));
+    assert!(machine.native_execution_refusal().is_none());
+    machine.require_running().unwrap();
+    for core in 0..2 {
+        assert!(!machine.session.board.cpu(core).unwrap().execution_refused());
+    }
+}
+
+#[test]
+fn owned_physical_guard_failure_precedes_generic_native_refusal() {
+    let InstalledCurrentCase { mut machine, config, .. } = installed_current_case(
+        fujimod_xm1::modal_permit::CoreId(0), CurrentStoreCase::Valid);
+    machine.traces.begin_modal_observation(&machine.session, config).unwrap();
+    machine.session.board.write_register(0, Register::Pstate, 0xf3).unwrap();
+    assert!(matches!(machine.run(8), RunOutcome::Failed));
+    assert!(machine.traces.modal_observation_report().failure.is_some());
+    assert!(machine.session.board.cpu(0).unwrap().execution_refused());
+    assert!(machine.native_execution_refusal().is_none());
+    let counts = machine.session.board.instruction_counts();
+    assert!(matches!(machine.run_until(8, None), RunOutcome::Failed));
+    assert_eq!(machine.session.board.instruction_counts(), counts);
+    assert!(machine.native_execution_refusal().is_none());
+}
+
+#[test]
+fn prelatched_protected_overflow_precedes_zero_budget_and_elapsed_deadline() {
+    for api in [PublicAdvance::Run, PublicAdvance::RunUntil] {
+        let mut machine = machine([false, false], false);
+        let mut watch = passive_control_watch(&machine);
+        for value in 0..4 {
+            machine.session.board.write_physical(0x3000, &[value; 4]).unwrap();
+        }
+        let counts = machine.session.board.instruction_counts();
+        let outcome = match api {
+            PublicAdvance::Run => machine.run(0),
+            PublicAdvance::RunUntil => {
+                let deadline = machine.session.board.now();
+                machine.run_until(8, Some(deadline))
+            }
+        };
+        assert!(matches!(outcome, RunOutcome::Failed));
+        assert_eq!(machine.session.board.instruction_counts(), counts);
+        require_protected_public_refusal(&mut machine, &watch, api);
+        assert_eq!(machine.session.board.instruction_counts(), counts);
+        machine.session.board.memory_watch_end(&mut watch).unwrap();
+    }
+}
+
+#[test]
+fn prelatched_native_refusal_precedes_an_outstanding_capture_page() {
+    use fujimod_xm1::trace::CaptureCursor;
+    let mut machine = machine([false, false], false);
+    machine.traces.arm(&machine.session, BTreeMap::from([(0x1000, "loop".into())])).unwrap();
+    machine.traces.begin_capture_observation(CaptureScope::Capture).unwrap();
+    assert!(matches!(machine.run(1000), RunOutcome::DrainRequired));
+    let page = serde_json::to_value(machine.traces.capture_observation_page(CaptureCursor::new(0)).unwrap()).unwrap();
+    let mut watch = passive_control_watch(&machine);
+    for value in 0..4 {
+        machine.session.board.write_physical(0x3000, &[value; 4]).unwrap();
+    }
+    let counts = machine.session.board.instruction_counts();
+    require_protected_public_refusal(&mut machine, &watch, PublicAdvance::Run);
+    assert_eq!(machine.session.board.instruction_counts(), counts);
+    let retained = serde_json::to_value(machine.traces.capture_observation_page(CaptureCursor::new(0)).unwrap()).unwrap();
+    assert_eq!(retained, page);
+    machine.session.board.memory_watch_end(&mut watch).unwrap();
+}

@@ -1092,6 +1092,7 @@ haskell_library(
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
+        "//host:containers",
         "//host:text",
     ],
 )
@@ -1318,6 +1319,21 @@ haskell_binary(
     ],
 )
 
+haskell_library(
+    name = "machine-fingerprint-lib",
+    srcs = ["Emulation/MachineFingerprint.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        ":case-sha256",
+        "//host:base",
+        "//host:aeson",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:text",
+    ],
+)
+
 haskell_binary(
     name = "xm1-viewer",
     srcs = [
@@ -1351,6 +1367,7 @@ haskell_binary(
         ":modal-observation",
         ":ui-trajectory-lib",
         ":live-settings-lib",
+        ":machine-fingerprint-lib",
         ":menu-crawl-lib",
         ":capture-stream-lib",
         ":save-lifecycle-lib",
@@ -1402,6 +1419,7 @@ haskell_test(
         ":modal-observation",
         ":ui-trajectory-lib",
         ":live-settings-lib",
+        ":machine-fingerprint-lib",
         ":menu-crawl-lib",
         ":capture-stream-lib",
         ":save-lifecycle-lib",
@@ -2069,6 +2087,7 @@ genrule(
         "EmulatorUsb.hs",
         "Xm1RamPushE2E.hs",
         "Emulation/LiveSettings.hs",
+        "Emulation/MachineFingerprint.hs",
         "Emulation/CaptureStream.hs",
         "Emulation/SaveLifecycle.hs",
         "Emulation/SaveLifecycleRun.hs",

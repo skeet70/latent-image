@@ -11,6 +11,7 @@ module EmulatorUsb
   , BridgeExchange
   , bridgeUsbApi
   , emulatorBridgeCommand
+  , emulatorAfCommandRaw
   , emulatorTraceSites
   , emulatorTraceSitesReading
   , SiteRead (..)
@@ -51,6 +52,7 @@ module EmulatorUsb
   , decodeBridgeWatchLine
   , ModalResponse (..)
   , emulatorModalObservationBegin
+  , emulatorModalObservationBeginWithAfOwnership
   , emulatorModalObservationReport
   , emulatorModalObservationEnd
   , bridgeModalObservationBegin
@@ -213,6 +215,18 @@ watchRpc = bridgeWatchRpc . exchangeLine
 
 emulatorBridgeCommand :: Emulator -> Value -> IO Value
 emulatorBridgeCommand emulator request = Object <$> rpc emulator request
+
+emulatorAfCommandRaw :: Emulator -> Value -> IO B.ByteString
+emulatorAfCommandRaw emulator request = withMVar (emulatorLock emulator) $ \_ ->
+  exchangeLockedReading emulator (collect [] 0) (encode request)
+  where
+    collect chunks size = do
+      bytes <- B.hGetSome (emulatorOutput emulator) 65536
+      let next = size + B.length bytes
+          retained = B.concat (reverse (bytes : chunks))
+      if B.null bytes || next > 134217728 || B.elem 10 bytes
+        then pure retained
+        else collect (bytes : chunks) next
 
 bridgeWatchRpc :: BridgeExchange -> Value -> IO Value
 bridgeWatchRpc exchange request = decodeBridgeWatchLine <$> exchange (encode request)
@@ -711,6 +725,17 @@ data ModalResponse = ModalResponse
 
 emulatorModalObservationBegin :: Emulator -> ModalRequest -> IO ModalResponse
 emulatorModalObservationBegin = bridgeModalObservationBegin . exchangeLine
+
+emulatorModalObservationBeginWithAfOwnership :: Emulator -> Value -> ModalRequest -> IO ModalResponse
+emulatorModalObservationBeginWithAfOwnership emulator plan request = do
+  fields <- case modalBeginRequestJson request of
+    Object fields -> pure fields
+    _ -> ioError (userError "modal begin request is not an object")
+  response <- modalRpc (exchangeLine emulator) (modalRequestLimit request) (Object (M.insert "af_ownership" plan fields))
+  pure response { modalParsedResponse = do
+    report <- modalParsedResponse response
+    checkModalBegin request report
+    pure report }
 
 bridgeModalObservationBegin :: BridgeExchange -> ModalRequest -> IO ModalResponse
 bridgeModalObservationBegin exchange request = do

@@ -58,32 +58,36 @@ index 7f9a76d..acf241b 100644
  #[cfg(test)]
  mod tests;
 diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/board/observation.rs
-index 5cd2e8c..28c7b6f 100644
 --- a/crates/emulator/src/board/observation.rs
 +++ b/crates/emulator/src/board/observation.rs
-@@ -1,8 +1,9 @@
+@@ -1,5 +1,6 @@
  //! Explicit, bounded CPU/bus observation. No device consumes these records.
  pub mod calls;
 +pub mod scoped;
  mod fetch_attribution;
- pub use fetch_attribution::{CpuDataAttribution, FetchAttribution};
+ pub use fetch_attribution::{CpuDataAttribution, FetchAttribution, PassiveFetchAttribution};
+ mod passive;
+@@ -7,7 +8,7 @@
+ mod passive_tests;
+ pub use passive::{PassiveCaptureFailure, PassiveCaptureRefusal, PassiveRetention, PassiveRetentionStatus, PassiveStopReason};
+ use passive::{PassiveCapture, RetentionClass};
 -use fetch_attribution::{CpuAttribution, CpuCapture, CpuObservation, CpuSource, ObservedWord};
 +use fetch_attribution::{Attribution, CpuAttribution, CpuCapture, CpuObservation, CpuSource, ObservedWord};
  pub use fetch_attribution::{AccessBytes, ByteOrder, CoreIndex, FetchEvent, GuestAddress, InstructionCores, InstructionExecutionState, InstructionGuardFailure, InstructionGuardRefusal, InstructionGuardStatus, PhysicalAddress, PhysicalInstructionGuard};
  use super::{Board, State, factory::MemoryMap, scalar};
  use fujimod_emulator_cpu::{Access, Cpu, Hook, HookId, HookRange, Model, Register, arm};
-@@ -94,6 +95,7 @@ pub struct Records {
+@@ -144,6 +145,7 @@
      /// Empty for an unclassified watch, which records every source.
      classes: Vec<WatchRange>,
      views: ViewPolicy,
 +    scoped: Option<Box<scoped::Scoped>>,
      fetch_attribution: Option<fetch_attribution::FetchCapture>,
+     passive: Option<PassiveCapture>,
  }
- impl Records {
-@@ -123,10 +125,14 @@ impl Records {
+@@ -174,10 +176,14 @@
              return;
          }
-         if self.rows.len() == self.limit {
+         if self.passive.as_ref().map_or(self.rows.len(), |capture| capture.protected_rows) == self.limit {
 -            self.violation = Some(format!(
 -                "Memory watch exceeded its {} record bound",
 -                self.limit
@@ -98,8 +102,8 @@ index 5cd2e8c..28c7b6f 100644
 +            }
          } else {
              self.rows.push(row);
-         }
-@@ -145,14 +151,18 @@ impl Records {
+             if let Some(capture) = &mut self.passive { capture.protected_rows += 1; }
+@@ -199,14 +205,18 @@
      pub(super) fn view_changed(&mut self) {
          if let Some(capture) = &mut self.fetch_attribution { capture.view_changed(); }
          if self.views == ViewPolicy::Fixed {
@@ -121,7 +125,7 @@ index 5cd2e8c..28c7b6f 100644
              state["classes"] = self
                  .classes
                  .iter()
-@@ -163,6 +173,9 @@ impl Records {
+@@ -217,6 +227,9 @@
                  ViewPolicy::Fixed => "fixed",
              });
          }
@@ -129,9 +133,9 @@ index 5cd2e8c..28c7b6f 100644
 +            scoped.describe(&mut state);
 +        }
          if let Some(capture) = &self.fetch_attribution { capture.describe(&mut state); }
+         if let Some(capture) = &self.passive { capture.describe(&mut state); }
          state
-     }
-@@ -173,6 +186,16 @@ pub struct MemoryWatch {
+@@ -228,6 +241,16 @@
      contexts: Vec<Box<MemoryContext>>,
      hooks: Vec<(usize, HookId)>,
      refusal: Option<ExecutionRefusal>,
@@ -148,19 +152,19 @@ index 5cd2e8c..28c7b6f 100644
  }
  struct MemoryContext {
      state: Weak<RefCell<State>>,
-@@ -181,6 +204,11 @@ struct MemoryContext {
+@@ -235,6 +258,11 @@
+     records: Rc<RefCell<Records>>,
      maps: Vec<MemoryMap>,
      core: usize,
- }
++}
 +impl Attribution {
 +    fn capture(state: &State, cpu: &dyn Cpu, core: usize) -> Result<Self, String> {
 +        Ok(CpuAttribution::capture(state, cpu, CoreIndex(core), false)?.clock)
 +    }
-+}
+ }
  impl MemoryContext {
      fn physical(&self, state: &State, address: u64, size: u64) -> Option<u64> {
-         state.decoders.observed_physical(self.core, address, size).or_else(|| {
-@@ -350,6 +378,9 @@ impl Board {
+@@ -445,6 +473,9 @@
          if self.preservation_active() {
              return Err("A preservation observation conflicts with memory watch".into());
          }
@@ -170,7 +174,7 @@ index 5cd2e8c..28c7b6f 100644
          let ranges = union(ranges);
          self.watch_backing(&ranges)?;
          let records = Rc::new(RefCell::new(Records {
-@@ -358,12 +389,7 @@ impl Board {
+@@ -453,12 +484,7 @@
              limit,
              ..Default::default()
          }));
@@ -184,7 +188,7 @@ index 5cd2e8c..28c7b6f 100644
          for (core, cpu) in self.cpus.iter().enumerate() {
              let mut views = maps
                  .iter()
-@@ -476,6 +502,9 @@ impl Board {
+@@ -571,6 +597,9 @@
          if self.preservation_active() {
              return Err("A preservation observation conflicts with memory watch".into());
          }
@@ -194,7 +198,7 @@ index 5cd2e8c..28c7b6f 100644
          let ranges = union(classes.iter().map(|range| (range.start, range.end)).collect());
          self.watch_backing(&ranges)?;
          let records = Rc::new(RefCell::new(Records {
-@@ -486,12 +515,7 @@ impl Board {
+@@ -581,12 +610,7 @@
              views,
              ..Default::default()
          }));
@@ -208,7 +212,7 @@ index 5cd2e8c..28c7b6f 100644
          if let Some(gate) = watch.refusal.clone() {
              for cpu in self.cpus.iter() {
                  if let Err(error) = cpu.arm_execution_refusal(gate.clone()) {
-@@ -573,8 +597,34 @@ impl Board {
+@@ -668,8 +692,34 @@
              .replace(Some(Rc::downgrade(&records)));
          Ok(watch)
      }
@@ -1572,7 +1576,7 @@ new file mode 100644
 index 0000000..3d05a02
 --- /dev/null
 +++ b/crates/emulator/src/board/scoped_watch_tests.rs
-@@ -0,0 +1,691 @@
+@@ -0,0 +1,727 @@
 +use super::bus::{Bus, Mode};
 +use super::factory::{Engine, Graph, MemoryMap, Options, Processor, Ram};
 +use super::memory::BusMapping;
@@ -2263,4 +2267,40 @@ index 0000000..3d05a02
 +    begin(&board, host_writes()).end().unwrap();
 +    drop(host_only());
 +    assert!(board.memory_watch_begin_scoped(host_writes(), maps.clone()).is_err());
++}
++
++#[test]
++fn passive_and_scoped_retention_cannot_share_or_replace_an_active_watch() {
++    use super::observation::{CpuDataAttribution, FetchAttribution, PassiveRetention, PassiveStopReason};
++    let board = board();
++    let maps = board.mappings().to_vec();
++    let passive = || {
++        board.memory_watch_begin_with_passive_fetch_attribution(
++            host_writes().classes,
++            FetchAttribution::new(CpuDataAttribution::Writes, vec![
++                WatchRange { start: 0x10000, end: 0x10004, kinds: WatchKinds::CPU_FETCH },
++            ]).unwrap(),
++            8, maps.clone(), ViewPolicy::Fixed,
++            PassiveRetention::new(vec![
++                WatchRange { start: SHARED_PHYSICAL, end: SHARED_PHYSICAL + 4, kinds: WatchKinds::HOST_READ },
++            ], 1).unwrap(),
++        )
++    };
++    let mut scoped = begin(&board, host_writes());
++    assert!(scoped.state().get("passive_retention").is_none());
++    assert!(passive().is_err());
++    board.write_physical(SHARED_PHYSICAL, &[1]).unwrap();
++    assert_eq!(rows(&scoped.state()["records"]).len(), 1);
++    board.memory_watch_end_scoped(&mut scoped).unwrap();
++
++    let mut passive_watch = passive().unwrap();
++    passive_watch.records.borrow_mut().arm_passive_retention().unwrap();
++    assert!(board.memory_watch_begin_scoped(host_writes(), maps.clone()).is_err());
++    passive_watch.records.borrow_mut().stop_passive_retention(PassiveStopReason::End).unwrap();
++    assert!(board.memory_watch_begin_scoped(host_writes(), maps.clone()).is_err());
++    board.write_physical(SHARED_PHYSICAL, &[2]).unwrap();
++    assert_eq!(passive_watch.records.borrow().row_count(), 1);
++    board.memory_watch_end(&mut passive_watch).unwrap();
++    let mut scoped = begin(&board, host_writes());
++    board.memory_watch_end_scoped(&mut scoped).unwrap();
 +}

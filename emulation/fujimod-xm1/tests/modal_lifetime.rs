@@ -95,6 +95,46 @@ fn cpu_write(monitor: &mut LifetimeMonitor, address: u32, before: &[u8], value: 
 }
 
 #[test]
+fn af_projection_preserves_canonical_publications_and_validates_optional_fetch_metadata() {
+    use fujimod_emulator::board::factory::MemoryMap;
+    let maps = vec![MemoryMap { core: 0, address: u64::from(INSTALL), physical: u64::from(INSTALL),
+        size: 0x10000, permissions: 7 }];
+    for attributed in [false, true] {
+        let (mut monitor, _) = fixture();
+        entry(&mut monitor, 0, false).unwrap();
+        for index in 0..monitor.config().publications().len() {
+            let publication = monitor.config().publications()[index];
+            prepare(&mut monitor, 0, publication, false).unwrap();
+            let mut row = publication_row(publication, 0, false);
+            if attributed {
+                row["core_instructions"] = json!(50);
+                row["latest_fetch"] = json!({"source":"cpu-fetch","address":INSTALL_WRITER,
+                    "physical":INSTALL_WRITER,"size":4,"core":0,"pc":INSTALL_WRITER,
+                    "instructions":100,"tick":100,"value":null,"before":null,
+                    "byte_order":"little","core_instructions":50});
+            }
+            monitor.observe_attributed_row(&row, &maps).unwrap();
+        }
+        assert_eq!(monitor.receipt().phase, LifetimePhase::Installed);
+        assert_eq!(monitor.receipt().forward_writes, 223);
+    }
+    for metadata in [
+        json!({"core_instructions":50}),
+        json!({"latest_fetch":null}),
+        json!({"core_instructions":50,"latest_fetch":{"source":"cpu-fetch"}}),
+    ] {
+        let (mut monitor, _) = fixture();
+        entry(&mut monitor, 0, false).unwrap();
+        let publication = monitor.config().publications()[0];
+        prepare(&mut monitor, 0, publication, false).unwrap();
+        let mut row = publication_row(publication, 0, false);
+        row.as_object_mut().unwrap().extend(metadata.as_object().unwrap().clone());
+        assert!(monitor.observe_attributed_row(&row, &maps).is_err());
+        assert_eq!(monitor.receipt().forward_writes, 0);
+    }
+}
+
+#[test]
 fn full_finite_lifetime_requires_actual_entries_and_old_word_verification() {
     let (mut monitor, mut memory) = fixture();
     assert_eq!(monitor.receipt().phase, LifetimePhase::Prepared);

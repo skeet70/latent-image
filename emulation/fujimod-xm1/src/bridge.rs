@@ -109,20 +109,39 @@ pub fn load_card(document_bytes: &[u8], path: &Path, backing: Backing) -> Result
     let (sectors, max_dirty_sectors) = sd_host::card_geometry(&document.sd_host()?)?;
     sd_host::load_image(path, sectors, max_dirty_sectors, backing)
 }
+#[derive(Clone,Copy)]
+pub struct CheckpointBudget(std::num::NonZeroU64);
+impl CheckpointBudget {
+    pub fn new(bytes:u64)->Result<Self,String> {
+        Ok(Self(std::num::NonZeroU64::new(bytes).ok_or("checkpoint budget must be positive")?))
+    }
+    pub(crate) fn admit(self,snapshot:u64,record:u64)->Result<(),String> {
+        if snapshot.checked_add(record).is_none_or(|bytes|bytes>self.0.get()) {
+            return Err("checkpoint retained-byte budget exhausted".into());
+        }
+        Ok(())
+    }
+}
 
-/// Saves the machine's session under `root/name` through a partial directory,
-/// replacing an existing checkpoint of the same name.
-pub fn save_checkpoint(machine: &mut Machine, root: &Path, name: &str, record_file: &str, record: &Value) -> Result<PathBuf, String> {
+
+/// Publishes through a partial directory. Unbounded saves replace an existing
+/// checkpoint; bounded saves refuse an existing checkpoint.
+pub fn save_checkpoint(machine: &mut Machine, root: &Path, name: &str, record_file: &str, record: &Value, budget:Option<CheckpointBudget>) -> Result<PathBuf, String> {
     std::fs::create_dir_all(root).map_err(|e| format!("{}: {e}", root.display()))?;
     let partial = root.join(format!(".partial-{name}-{}", std::process::id()));
     std::fs::create_dir(&partial).map_err(|e| format!("{}: {e}", partial.display()))?;
     machine.disarm()?;
     let snapshot = machine.session.checkpoint(None).and_then(|snapshot| snapshot.export());
     machine.rearm()?;
-    write(&partial.join(SNAPSHOT), &snapshot?)?;
-    write(&partial.join(record_file), format!("{record:#}\n").as_bytes())?;
-    let target = root.join(name);
+    let snapshot=snapshot?;
+    let record=format!("{record:#}\n");
+    if let Some(budget)=budget {budget.admit(snapshot.len() as u64,record.len() as u64)?;}
+    let target=root.join(name);
+    if budget.is_some() && target.exists() {return Err("bounded checkpoint already exists".into());}
+    write(&partial.join(SNAPSHOT), &snapshot)?;
+    write(&partial.join(record_file), record.as_bytes())?;
     if target.exists() {
+        if budget.is_some() {return Err("bounded checkpoint already exists".into());}
         let stale = root.join(format!(".stale-{name}-{}", std::process::id()));
         std::fs::rename(&target, &stale).map_err(|e| e.to_string())?;
         std::fs::rename(&partial, &target).map_err(|e| e.to_string())?;

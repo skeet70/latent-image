@@ -9,7 +9,7 @@ use crate::{
     provenance::Guest,
     trace::{InstructionCount, read_identity_bytes, read_mapped_bytes, sample_bound_word},
 };
-use fujimod_emulator::{board::{factory::MemoryMap, observation::InstructionPointEvent}, session::Session};
+use fujimod_emulator::{board::{factory::MemoryMap, observation::{InstructionPointEvent, PassiveStopReason}}, session::Session};
 use fujimod_emulator_cpu::{Register, arm};
 use serde::{Deserialize, Serialize, Serializer, ser::SerializeMap};
 use std::{collections::BTreeMap, num::NonZeroU64};
@@ -43,6 +43,7 @@ pub struct BeginRequest {
     #[serde(default)]
     context_sources: Vec<LinkedSource>,
     lifetime: Option<LifetimeRequest>,
+    af_ownership: Option<crate::af_ownership::Plan>,
 }
 
 impl BeginRequest {
@@ -67,16 +68,20 @@ impl BeginRequest {
         let bound = if self.lifetime.is_some() { MAX_LIFETIME_OBSERVATIONS } else { MAX_OBSERVATIONS };
         let config = Config::bounded(layout, self.stock, linked, maps, limit, bound)?
             .with_owned_prehook(self.owned_prehook.map(Guest))?;
-        match self.lifetime {
+        let config = match self.lifetime {
             Some(lifetime) => {
                 let contexts = self.context_sources.into_iter()
                     .map(|source| SourceImage::new(Guest(source.start), source.bytes))
                     .collect::<Result<Vec<_>, _>>()?;
-                config.with_lifetime(contexts, lifetime)
+                config.with_lifetime(contexts, lifetime)?
             }
-            None if self.context_sources.is_empty() => Ok(config),
-            None => Err("task context sources require an installed-lifetime observation".into()),
+            None if self.context_sources.is_empty() => config,
+            None => return Err("task context sources require an installed-lifetime observation".into()),
+        };
+        if self.af_ownership.is_some() && config.guard.is_none() {
+            return Err("AF ownership requires the installed-lifetime observer".into());
         }
+        Ok(Config { af_ownership: self.af_ownership, ..config })
     }
 }
 
@@ -112,10 +117,11 @@ pub struct Config {
     layout: Layout,
     limit: ObservationLimit,
     images: Vec<SourceImage>,
-    maps: Vec<MemoryMap>,
+    maps: std::sync::Arc<Vec<MemoryMap>>,
     owned_prehook: Option<Guest>,
     entry_branch: Option<Word>,
     guard: Option<GuardConfig>,
+    af_ownership: Option<crate::af_ownership::Plan>,
 }
 
 impl Config {
@@ -157,7 +163,7 @@ impl Config {
         let mut images = Vec::with_capacity(2);
         images.push(SourceImage::new(STOCK_ENTRY, stock)?);
         images.extend(linked);
-        Ok(Self { layout, limit, images, maps, owned_prehook: None, entry_branch, guard: None })
+        Ok(Self { layout, limit, images, maps:std::sync::Arc::new(maps), owned_prehook: None, entry_branch, guard: None, af_ownership: None })
     }
 
     pub fn with_owned_prehook(mut self, pc: Option<Guest>) -> Result<Self, String> {
@@ -345,6 +351,7 @@ pub(crate) struct ModalTrace {
     task_entries: Vec<TaskEntry>,
     guard: Option<InstalledGuard>,
     failure: Option<String>,
+    af_ownership: Option<crate::af_ownership::Projection>,
     enabled: bool,
 }
 
@@ -369,20 +376,26 @@ impl ModalTrace {
             }
         }
         let capacity = config.limit.0.get() as usize;
+        let mut af_ownership = config.af_ownership.take()
+            .map(|plan| crate::af_ownership::Projection::new(plan, session, config.maps.clone())).transpose()?;
         let monitor = Monitor::new(config.layout, config.limit);
         let guard = config.guard.take().map(|guard| InstalledGuard::new(guard, session,
-            &config.maps, config.instruction_sites(), config.layout)).transpose()?;
+            &config.maps, config.instruction_sites(), config.layout, af_ownership.as_ref())).transpose()?;
+        if let (Some(guard), Some(projection)) = (&guard, &mut af_ownership) {
+            guard.sync_af_retention(projection);
+        }
         let task_capacity = if guard.is_some() && config.layout.policy() == Policy::ScopedOwned75 { capacity } else { 0 };
         Ok(Self { config, monitor, returns: BTreeMap::new(),
             stock_fetches: Vec::with_capacity(capacity.min(MAX_OBSERVATIONS as usize)),
             captured_domains: Vec::with_capacity(capacity.min(MAX_OBSERVATIONS as usize)),
             task_entries: Vec::with_capacity(task_capacity.min(MAX_OBSERVATIONS as usize)),
-            guard, failure: None, enabled: true })
+            guard, af_ownership, failure: None, enabled: true })
     }
 
     pub(crate) fn sites(&self) -> impl Iterator<Item = Guest> + '_ {
         self.config.instruction_sites().chain(self.guard.iter().flat_map(InstalledGuard::sites))
             .chain(self.returns.keys().copied())
+            .chain(self.af_ownership.iter().flat_map(|projection| projection.sites().map(Guest)))
     }
 
     pub(crate) fn active(&self) -> bool { self.enabled }
@@ -394,10 +407,12 @@ impl ModalTrace {
             || self.config.layout.helpers().any(|range| range.start() <= pc && pc < range.end())
             || self.config.owned_prehook == Some(pc) || self.returns.contains_key(&pc)
             || self.guard.as_ref().is_some_and(|guard| guard.contains(pc))
+            || self.af_ownership.as_ref().is_some_and(|projection| projection.contains(pc.0))
     }
 
     pub(crate) fn fail(&mut self, failure: String) {
-        self.failure.get_or_insert(failure);
+        self.failure.get_or_insert_with(|| failure.clone());
+        self.af_ownership_refuse(failure);
     }
 
     pub(crate) fn guarded(&self) -> bool { self.guard.is_some() }
@@ -405,7 +420,8 @@ impl ModalTrace {
     pub(crate) fn check_interval(&mut self) -> Result<(), String> {
         if let Some(failure) = &self.failure { return Err(failure.clone()); }
         if let Some(guard) = &mut self.guard {
-            if let Err(failure) = guard.check() {
+            if let Err(failure) = guard.check(&self.config.maps,self.af_ownership.as_mut()) {
+                self.af_ownership_refuse(failure.clone());
                 self.failure = Some(failure.clone());
                 return Err(failure);
             }
@@ -417,13 +433,33 @@ impl ModalTrace {
         instructions: InstructionCount, point: Option<InstructionPointEvent>) -> Result<Option<Guest>, String> {
         if let Some(failure) = &self.failure { return Err(failure.clone()); }
         let observed = self.observe_inner(session, core, pc, instructions, point);
-        if let Err(failure) = &observed { self.failure = Some(failure.clone()); }
+        if let Err(failure) = &observed { self.fail(failure.clone()); }
         observed
     }
 
     fn observe_inner(&mut self, session: &Session, core: usize, pc: Guest,
         instructions: InstructionCount, point: Option<InstructionPointEvent>) -> Result<Option<Guest>, String> {
         if !self.contains(pc) { return Err("instruction point outside modal observation".into()); }
+        if self.af_ownership.as_ref().is_some_and(|projection| projection.contains(pc.0)) {
+            self.check_interval()?;
+            let observed = (|| {
+                let point = point.ok_or("AF point lacks its instruction-entry identity")?;
+                if point.core.0 != core || point.entry.address != u64::from(pc.0)
+                    || point.entry.physical != Some(u64::from(pc.0))
+                    || point.entry.bytes != 4
+                    || session.board.read_register(core, Register::Pc)? != u64::from(pc.0)
+                    || point.entry.tcm.iter().flatten().any(|window| window.address < u64::from(pc.0)+4
+                        && u64::from(pc.0) < window.address+window.bytes as u64) {
+                    return Err("AF point differs from its canonical physical instruction".into());
+                }
+                self.af_ownership.as_mut().ok_or("AF projection missing")?
+                    .observe(session, &self.config.maps, point);
+                Ok::<(),String>(())
+            })();
+            if let Err(failure) = observed {self.af_ownership_refuse(failure);}
+            self.check_interval()?;
+            return Ok(None);
+        }
         let cpsr = Cpsr(read_register(session, core, arm::Register::Cpsr)?);
         let word = if self.guard.is_some() && pc == STOCK_ENTRY {
             let mut bytes = [0; 4];
@@ -546,12 +582,53 @@ impl ModalTrace {
             physical_guard: self.guard.as_ref().and_then(InstalledGuard::report),
             context_source_spans, task_entries: &self.task_entries,
             lifetime: self.guard.as_ref().map(InstalledGuard::receipt),
-            watch: self.guard.as_ref().map(InstalledGuard::watch_summary),
+            watch: self.guard.as_ref().map(|guard|guard.watch_summary(&self.config.maps)),
+        }
+    }
+
+    pub(crate) fn af_ownership_arm(&mut self, session: &Session) -> Result<(), String> {
+        if !self.enabled || !self.guard.as_ref().is_some_and(InstalledGuard::installed) {
+            return Err("AF ownership requires the fully installed publication lifecycle".into());
+        }
+        self.check_interval()?;
+        let result = (|| {
+            self.af_ownership.as_mut().ok_or("AF ownership plan is absent")?.arm(session, &self.config.maps)?;
+            self.guard.as_mut().ok_or("AF installed guard is absent")?.arm_af_retention()
+        })();
+        if let Err(failure) = &result { self.af_ownership_refuse(failure.clone()); }
+        if let (Some(guard), Some(projection)) = (&self.guard, &mut self.af_ownership) {
+            guard.sync_af_retention(projection);
+        }
+        result
+    }
+
+    pub(crate) fn af_ownership_end(&mut self, session: &Session) -> Result<(), String> {
+        let checked = self.check_interval();
+        if let Some(guard) = &mut self.guard {
+            guard.stop_af_retention(PassiveStopReason::End)?;
+            if let Some(projection) = &mut self.af_ownership { guard.sync_af_retention(projection); }
+        }
+        let ended = self.af_ownership.as_mut().ok_or("AF ownership plan is absent")?.end(session, &self.config.maps);
+        if let Err(failure) = &ended { self.af_ownership_refuse(failure.clone()); }
+        checked.and(ended)
+    }
+
+    pub(crate) fn af_ownership_report(&self) -> Result<&crate::af_ownership::Projection, String> {
+        self.af_ownership.as_ref().ok_or_else(|| "AF ownership plan is absent".into())
+    }
+
+    pub(crate) fn af_ownership_refuse(&mut self, failure:String) {
+        if let Some(projection) = &mut self.af_ownership {
+            projection.fail(failure);
+            if let Some(guard) = &mut self.guard {
+                if let Err(failure) = guard.stop_af_retention(PassiveStopReason::Refused) { projection.fail(failure); }
+                guard.sync_af_retention(projection);
+            }
         }
     }
 
     pub(crate) fn watch_evidence(&self) -> Option<WatchEvidence<'_>> {
-        self.guard.as_ref().map(InstalledGuard::watch_evidence)
+        self.guard.as_ref().map(|guard|guard.watch_evidence(&self.config.maps))
     }
 
     pub(crate) fn check_finish(&mut self, session: &Session) -> Result<(), String> {
@@ -563,7 +640,7 @@ impl ModalTrace {
             return Err(failure);
         }
         if let Some(guard) = &mut self.guard {
-            if let Err(failure) = guard.prepare_finish(session, &self.config.maps, self.monitor.receipt().active_frames.0) {
+            if let Err(failure) = guard.prepare_finish(session, &self.config.maps, self.monitor.receipt().active_frames.0, self.af_ownership.as_mut()) {
                 self.failure = Some(failure.clone());
                 return Err(failure);
             }

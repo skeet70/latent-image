@@ -79,6 +79,8 @@ data Options = Options
   , propertyAllocationKeeperOption :: Bool
   , allocationImage4Option :: Maybe FilePath
   , allocationContractOption :: Maybe FilePath
+  , afOwnershipPlanOption :: Maybe FilePath
+  , afOwnershipControlOption :: Bool
   }
 
 -- | A no-install observation that drives its own keys from held snapshots, with its config path.
@@ -138,6 +140,8 @@ usage = unlines
   , "                         Requires --ram-push-e2e --cardless --fujimod --unreviewed-relink,"
   , "                         enforced allowlist, a full nonsegmented route and successful unload"
   , "                         Refuses --modal-observation, --flash-candidate, --warm-checkpoint and other payloads"
+  , "  --af-ownership-plan FILE Installed AF diagnostic plan; requires the continuous modal lifetime guard"
+  , "  --af-ownership-control Observer-disabled arm; requires --af-ownership-plan and --fresh-boot"
   , "  --classic-chrome       --ram-push-e2e: push the Classic Chrome payload in place of the recipe bank and D3"
   , "  --classic-chrome-icon  --ram-push-e2e: push the Classic Chrome payload with its icon and live-view words"
   , "  --experiment NAME      --ram-push-e2e: push experiments/NAME with no card unless --sd-card-image is supplied"
@@ -184,7 +188,7 @@ parseCommand args
   | "--help" `elem` args = pure Help
   | otherwise = Launch <$> go defaults args
   where
-    defaults = Options Nothing Nothing Nothing Nothing Nothing Nothing False False ReviewedRelink Nothing CheckpointedBoot Nothing RamPush Nothing BankD3Choice [] NoAttachHold DeclaredUiCpuFallback Nothing WithCard RetainedChoice (Port 0) IPv4Loopback False NoModalDiagnostic NoModalLifetimeGuard Nothing Nothing Nothing Nothing False False Nothing False Nothing Nothing
+    defaults = Options Nothing Nothing Nothing Nothing Nothing Nothing False False ReviewedRelink Nothing CheckpointedBoot Nothing RamPush Nothing BankD3Choice [] NoAttachHold DeclaredUiCpuFallback Nothing WithCard RetainedChoice (Port 0) IPv4Loopback False NoModalDiagnostic NoModalLifetimeGuard Nothing Nothing Nothing Nothing False False Nothing False Nothing Nothing Nothing False
     go options [] = validateModalLifetimeOptions options >> validateAllocationKeeperOptions options >> pure options
     go options ("--port" : value : rest) = do
       port <- case readMaybe value :: Maybe Integer of
@@ -254,6 +258,12 @@ parseCommand args
     go options ("--menu-observe" : value : rest) = do
       require (not (null value) && screenProbeOption options == Nothing) "--menu-observe takes one nonempty config path and excludes the other screen probes"
       go options { screenProbeOption = Just (MenuObserveProbe value) } rest
+    go options ("--af-ownership-plan" : value : rest) = do
+      require (not (null value) && afOwnershipPlanOption options == Nothing) "--af-ownership-plan takes one nonempty path and may appear only once"
+      go options { afOwnershipPlanOption = Just value } rest
+    go options ("--af-ownership-control" : rest) = do
+      require (not (afOwnershipControlOption options)) "--af-ownership-control may appear only once"
+      go options { afOwnershipControlOption = True } rest
     go options ("--modal-lifetime-guard" : rest) = do
       require (modalLifetimeGuardOption options == NoModalLifetimeGuard) "--modal-lifetime-guard may appear only once"
       go options { modalLifetimeGuardOption = ContinuousModalLifetimeGuard } rest
@@ -347,6 +357,14 @@ validateAllocationKeeperOptions options = do
 
 validateModalLifetimeOptions :: Options -> IO ()
 validateModalLifetimeOptions options = do
+  when (afOwnershipControlOption options) $
+    require (isJust (afOwnershipPlanOption options)) "--af-ownership-control requires --af-ownership-plan"
+  when (isJust (afOwnershipPlanOption options)) $ do
+    require (bootModeOption options == FreshBoot) "--af-ownership-plan requires --fresh-boot"
+    require (modalLifetimeGuardOption options == ContinuousModalLifetimeGuard)
+      "--af-ownership-plan requires the continuous installed modal lifetime guard"
+    require (isJust (trajectoriesOption options) && screenProbeOption options == Nothing)
+      "--af-ownership-plan requires an explicit trajectory, not a screen probe"
   when (modalLifetimeGuardOption options == ContinuousModalLifetimeGuard
     || ramPayloadOption options `elem` [BankModal75Choice, BankModalLifecycleChoice]) $ do
     require (ramPushE2EOption options && not (ff80RehearsalOption options))
@@ -595,6 +613,8 @@ launch options = do
               (attachHoldOption options)
               (uiConversionProfileOption options) cardInput (fixedSceneFrameOption options) Nothing runtime dat (readSymbolsOption options) (modalDiagnosticOption options)
               (modalLifetimeGuardOption options) owned prelinked
+              (resolve root <$> afOwnershipPlanOption options)
+              (afOwnershipControlOption options)
         trajectory <- case trajectoriesOption options of
           Just (TrajectoryFile path) -> pure (Just (resolve root path))
           Nothing -> do

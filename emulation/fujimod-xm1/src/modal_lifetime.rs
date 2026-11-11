@@ -544,12 +544,31 @@ pub struct WriteAttempt<'a> {
     before: Before<'a>,
     value: StoreValue,
 }
+#[derive(Clone, Copy)]
+pub(crate) enum RowProjection<'a> { Canonical, AfAttribution(&'a [fujimod_emulator::board::factory::MemoryMap]) }
+impl RowProjection<'_> {
+    pub(crate) fn retains(self, key: &str) -> bool {
+        match self {
+            Self::Canonical => true,
+            Self::AfAttribution(_) => !matches!(key, "latest_fetch" | "core_instructions"),
+        }
+    }
+    pub(crate) fn validates(self, row: &Value) -> bool {
+        match self {
+            Self::Canonical => true,
+            Self::AfAttribution(maps) => crate::af_ownership_receipt::validates_projection_metadata(row,maps),
+        }
+    }
+}
 impl<'a> WriteAttempt<'a> {
     pub fn cpu(core: CoreId, pc: Guest, address: Guest, physical: Guest, before: &'a [u8], value: u64) -> Self {
         Self { source: WriteSource::Cpu, core, pc, address, physical, width: WriteWidth::from_bytes(before.len()), before: Before::Bytes(before), value: StoreValue(value) }
     }
     pub fn with_source(mut self, source: WriteSource) -> Self { self.source = source; self }
     pub fn from_row(row: &'a Value) -> Result<Self> {
+        Self::from_projected_row(row, RowProjection::Canonical)
+    }
+    fn from_projected_row(row: &'a Value, projection: RowProjection<'_>) -> Result<Self> {
         let row = row.as_object().ok_or(LifetimeFailure::MalformedRow)?;
         let source = match row.get("source").and_then(Value::as_str) {
             Some("cpu-write") => WriteSource::Cpu,
@@ -558,7 +577,7 @@ impl<'a> WriteAttempt<'a> {
             _ => return Err(LifetimeFailure::MalformedRow),
         };
         const KEYS: [&str; 12] = ["source", "address", "physical", "size", "value", "before", "byte_order", "core", "pc", "instructions", "tick", "tcm"];
-        if row.keys().any(|key| !KEYS.contains(&key.as_str())) || row.contains_key("tcm")
+        if row.keys().filter(|key| projection.retains(key)).any(|key| !KEYS.contains(&key.as_str())) || row.contains_key("tcm")
             || row.get("byte_order").and_then(Value::as_str) != Some("little") {
             return Err(LifetimeFailure::MalformedRow);
         }
@@ -837,6 +856,12 @@ impl LifetimeMonitor {
     /// publication write. A reload call fetch opens its core's reload bracket and a
     /// reload return fetch closes it, in any phase.
     pub fn observe_row(&mut self, row: &Value) -> Result<()> {
+        self.observe_projected_row(row, RowProjection::Canonical)
+    }
+    pub fn observe_attributed_row(&mut self, row: &Value, maps: &[fujimod_emulator::board::factory::MemoryMap]) -> Result<()> {
+        self.observe_projected_row(row, RowProjection::AfAttribution(maps))
+    }
+    fn observe_projected_row(&mut self, row: &Value, projection: RowProjection<'_>) -> Result<()> {
         if matches!(row.get("source").and_then(Value::as_str), Some("host-write" | "model-bus-write")) {
             let target = row.get("physical").and_then(Value::as_u64)
                 .and_then(|physical| u32::try_from(physical).ok())
@@ -848,6 +873,9 @@ impl LifetimeMonitor {
             }
         }
         self.healthy()?;
+        if !projection.validates(row) {
+            return Err(self.refuse(LifetimeFailure::MalformedRow));
+        }
         if row.get("source").and_then(Value::as_str) == Some("cpu-fetch") {
             let physical = row.get("physical").and_then(Value::as_u64).and_then(|physical| u32::try_from(physical).ok());
             if let Some(site) = physical.map(Guest) {
@@ -867,7 +895,7 @@ impl LifetimeMonitor {
             if retired && !published { return Ok(()); }
             return Err(self.refuse(if retired { LifetimeFailure::RetiredFetch } else { LifetimeFailure::MalformedRow }));
         }
-        let attempt = WriteAttempt::from_row(row);
+        let attempt = WriteAttempt::from_projected_row(row, projection);
         match attempt { Ok(attempt) => self.observe_write(attempt), Err(failure) => Err(self.refuse(failure)) }
     }
     pub fn observe_write(&mut self, attempt: WriteAttempt<'_>) -> Result<()> {

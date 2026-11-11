@@ -38,7 +38,7 @@ use std::{
 
 const USAGE: &str = "Usage: fujimod-xm1-ram-push --run RUN.json --boot-rom ROM --installed-dat DAT \
 (--adjustment-nand NAND [--record-nand NAND] | --committed-nand NAND --fresh-boot) --output DIR --ram-push-checkpoints DIR [--sd-card-image CARD] \
-[--attach-hold-key KEY] [--fresh-boot [--reset-observation SPEC.json]]\n";
+[--attach-hold-key KEY] [--fresh-boot [--reset-observation SPEC.json] [--af-prestate-proof | --prepare-af-reset-cache]]\n";
 
 const ATTACH_RECORD: &str = "ram-push-attach.json";
 const INSTALL_RECORD: &str = "ram-push-install.json";
@@ -65,6 +65,13 @@ const FIXED_SITES: [(u32, &str); 9] = [
     (0x006b0704, "cpu1-worker-completion"),
 ];
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AfResetMode { Disabled, Prepare, RequireRestored }
+
+impl AfResetMode {
+    fn active(self) -> bool { self != Self::Disabled }
+}
+
 struct Arguments {
     run: PathBuf,
     boot_rom: PathBuf,
@@ -78,15 +85,22 @@ struct Arguments {
     reset_observation: Option<PathBuf>,
     attach_hold: Option<RouteKey>,
     fresh_boot: bool,
+    af_reset: AfResetMode,
 }
 
 fn arguments() -> Result<Arguments, String> {
     let mut values: BTreeMap<String, PathBuf> = BTreeMap::new();
     let mut fresh_boot = false;
     let mut attach_hold = None;
+    let mut af_reset = AfResetMode::Disabled;
     let mut args = std::env::args_os().skip(1);
     while let Some(flag) = args.next() {
         let flag = flag.to_str().ok_or(USAGE)?.to_owned();
+        if matches!(flag.as_str(), "--af-prestate-proof" | "--prepare-af-reset-cache") {
+            if af_reset.active() { return Err(USAGE.into()); }
+            af_reset = if flag == "--af-prestate-proof" { AfResetMode::RequireRestored } else { AfResetMode::Prepare };
+            continue;
+        }
         if flag == "--fresh-boot" {
             fresh_boot = true;
             continue;
@@ -125,8 +139,11 @@ fn arguments() -> Result<Arguments, String> {
     let committed_nand = values.remove("--committed-nand");
     validate_sources(adjustment_nand.is_some(), record_nand.is_some(), committed_nand.is_some(), fresh_boot)?;
     let reset_observation = values.remove("--reset-observation");
-    if reset_observation.is_some() && !fresh_boot {
+    if (reset_observation.is_some() || af_reset.active()) && !fresh_boot {
         return Err(USAGE.into());
+    }
+    if af_reset.active() && (reset_observation.is_some() || attach_hold.is_some()) {
+        return Err("AF reset proof does not admit a reset observer or held input".into());
     }
     let mut take = |name: &str| values.remove(name).ok_or_else(|| USAGE.to_owned());
     Ok(Arguments {
@@ -142,6 +159,7 @@ fn arguments() -> Result<Arguments, String> {
         reset_observation,
         attach_hold,
         fresh_boot,
+        af_reset,
     })
 }
 
@@ -243,7 +261,7 @@ fn install_checkpoints(root: &Path, key: &CheckpointKey) -> Result<Vec<(PathBuf,
 /// Releases a held rendezvous first.
 fn save_checkpoint(host: &mut Ff80, root: &Path, name: &str, record_file: &str, record: &Value) -> Result<PathBuf, String> {
     host.release_rendezvous()?;
-    bridge::save_checkpoint(&mut host.machine, root, name, record_file, record)
+    bridge::save_checkpoint(&mut host.machine, root, name, record_file, record, None)
 }
 
 
@@ -277,6 +295,9 @@ enum Request {
     ModalObservationBegin(ModalBeginRequest),
     ModalObservationReport,
     ModalObservationEnd,
+    AfOwnershipArm,
+    AfOwnershipEnd,
+    MachineFingerprint,
     CaptureObservationBegin { #[serde(default)] scope: CaptureScope },
     CaptureObservationHits { from: CaptureCursor },
     CaptureObservationAck { next: CaptureCursor },
@@ -334,6 +355,9 @@ enum RequestKind {
     ModalObservationBegin,
     ModalObservationReport,
     ModalObservationEnd,
+    AfOwnershipArm,
+    AfOwnershipEnd,
+    MachineFingerprint,
     CaptureObservationBegin,
     CaptureObservationHits,
     CaptureObservationAck,
@@ -382,6 +406,9 @@ impl Request {
             Request::ModalObservationBegin(_) => RequestKind::ModalObservationBegin,
             Request::ModalObservationReport => RequestKind::ModalObservationReport,
             Request::ModalObservationEnd => RequestKind::ModalObservationEnd,
+            Request::AfOwnershipArm => RequestKind::AfOwnershipArm,
+            Request::AfOwnershipEnd => RequestKind::AfOwnershipEnd,
+            Request::MachineFingerprint => RequestKind::MachineFingerprint,
             Request::CaptureObservationBegin { .. } => RequestKind::CaptureObservationBegin,
             Request::CaptureObservationHits { .. } => RequestKind::CaptureObservationHits,
             Request::CaptureObservationAck { .. } => RequestKind::CaptureObservationAck,
@@ -1085,7 +1112,7 @@ impl Server {
     fn admit_request(&self, request: &Request) -> Result<(), String> {
         let tail_request = matches!(&request, Request::CaptureObservationHits { .. } | Request::CaptureObservationAck { .. }
             | Request::CaptureObservationState | Request::WatchState | Request::Finish
-            | Request::ModalObservationReport | Request::ModalObservationEnd
+            | Request::ModalObservationReport | Request::ModalObservationEnd | Request::AfOwnershipEnd | Request::MachineFingerprint
             | Request::RenderStackDiagnosticReport | Request::RenderStackDiagnosticEnd);
         let recovers = matches!(&request, Request::TraceHits { .. } | Request::SnapshotRestore { .. }
             | Request::SnapshotKey { .. } | Request::SnapshotDrop { .. });
@@ -1204,6 +1231,15 @@ impl Server {
                 serde_json::to_value(machine.traces.modal_observation_report())
                     .map_err(|failure| format!("modal-observation-end: {failure}"))?
             }
+            Request::AfOwnershipArm => {
+                let machine = &mut self.bridge.machine;
+                machine.traces.af_ownership_boundary(&machine.session, false)?
+            }
+            Request::AfOwnershipEnd => {
+                let machine = &mut self.bridge.machine;
+                machine.traces.af_ownership_boundary(&machine.session, true)?
+            }
+            Request::MachineFingerprint => fujimod_xm1::machine_fingerprint::fingerprint(&self.bridge.machine.session)?,
             Request::CaptureObservationBegin { scope } => {
                 self.bridge.begin_capture_observation(scope)?;
                 json!({"protocol": 2, "active": true, "scope": scope, "bounds": CAPTURE_OBSERVATION_BOUNDS})
@@ -1674,7 +1710,38 @@ impl Server {
     }
 }
 
+fn af_reset_identity(inputs: &Inputs, adjustment: &[u8], records: Option<&[u8]>, committed: Option<&[u8]>) -> BootIdentity {
+    BootIdentity::new(
+        &inputs.document_bytes, &inputs.update, &inputs.boot_rom, adjustment,
+        inputs.card.as_ref().map(|card| card.image.sha256.as_str()),
+        b"initialized-adjusted-card-state-v2:af-hit-restored",
+    ).with_record_nand(records).with_committed_nand(committed)
+}
+
+fn af_reset_proof(machine: &Machine, identity: &BootIdentity, root: &Path,
+    cache: fujimod_xm1::checkpoint::ResetCache, live_before_reset: Value) -> Result<Value, String> {
+    if machine.session.board.instruction_counts().iter().any(|count| *count != 0) || machine.session.board.now() != 0 {
+        return Err("AF reset proof requires zero instructions and board time".into());
+    }
+    let proof = fujimod_xm1::machine_fingerprint::fingerprint(&machine.session)?;
+    let directory = root.join(format!("reset-{}", identity.key()));
+    let snapshot_sha256 = fujimod_xm1::machine_fingerprint::snapshot_digest(&directory.join(SNAPSHOT))?;
+    Ok(json!({"schema":1,"status":"complete","identity":identity.document(),
+        "key":identity.key(),"snapshot_sha256":snapshot_sha256,"fingerprint":proof,
+        "reset_cache":cache,"live_before_reset":live_before_reset}))
+}
+
+fn write_af_reset_proof(output: &Path, record: &Value) -> Result<(), String> {
+    let bytes = serde_json::to_vec(record).map_err(|error| error.to_string())?;
+    if bytes.len() > 16 * 1024 * 1024 { return Err("AF reset proof metadata capacity exhausted".into()); }
+    write(output, &bytes)
+}
+
 fn drive() -> Result<(), String> {
+    let command_args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if let Some(response) = fujimod_xm1::observation_contract::execute(&command_args, std::io::stdin().lock()) {
+        return emit(&serde_json::to_value(response?).map_err(|error| error.to_string())?);
+    }
     fujimod_emulator_exr2_board::register_board_builder();
     fujimod_emulator_models::register();
     let started = Instant::now();
@@ -1708,6 +1775,20 @@ fn drive() -> Result<(), String> {
     let nand_source = if committed_bytes.is_some() { NandSourceKind::FullCommitted } else { NandSourceKind::InitialSeeded };
     let key_seconds = started.elapsed().as_secs_f64();
     let root = arguments.checkpoints.clone();
+    if arguments.af_reset == AfResetMode::Prepare {
+        let identity = af_reset_identity(&inputs, &adjustment_bytes, record_bytes.as_deref(), committed_bytes.as_deref());
+        let (machine, _) = inputs.into_machine()?;
+        if machine.session.board.instruction_counts().iter().any(|count| *count != 0) || machine.session.board.now() != 0 {
+            return Err("AF reset cache preparation requires an unexecuted initialized machine".into());
+        }
+        let live_before_reset = fujimod_xm1::machine_fingerprint::fingerprint(&machine.session)?;
+        let budget = Some(bridge::CheckpointBudget::new(512*1024*1024-16384)?);
+        let reset = initialized_reset(machine, &identity, &root.join("initialized-reset"), budget,
+            fujimod_xm1::checkpoint::ResetCachePolicy::ReuseOrCreate)?;
+        let record = af_reset_proof(&reset.machine, &identity, &root.join("initialized-reset"), reset.cache, live_before_reset)?;
+        write_af_reset_proof(&arguments.output.join("af-reset-cache-prepared.json"), &record)?;
+        return emit(&json!({"ok":true,"event":"af-reset-cache-prepared","proof":record}));
+    }
     let installed = if arguments.fresh_boot { Vec::new() } else { install_checkpoints(&root, &key.key)? };
     let listed: Vec<Value> = installed
         .iter()
@@ -1728,7 +1809,7 @@ fn drive() -> Result<(), String> {
     let restore_started = Instant::now();
     let mut initialized_template = None;
     let (bridge, attachment, checkpoint) = match start.installed {
-        Some(_) if observation.is_some() => return Err("a reset observation starts from no install checkpoint".into()),
+        Some(_) if observation.is_some() || arguments.af_reset.active() => return Err("reset proofs start from no install checkpoint".into()),
         Some(directory) => {
             let (directory, record) = installed
                 .into_iter()
@@ -1764,7 +1845,9 @@ fn drive() -> Result<(), String> {
         }
         None => {
             let boot_started = Instant::now();
-            let identity = if observation.is_some() {
+            let identity = if arguments.af_reset == AfResetMode::RequireRestored {
+                Some(af_reset_identity(&inputs, &adjustment_bytes, record_bytes.as_deref(), committed_bytes.as_deref()))
+            } else if observation.is_some() {
                 Some(BootIdentity::new(
                     &inputs.document_bytes, &inputs.update, &inputs.boot_rom, &adjustment_bytes,
                     inputs.card.as_ref().map(|card| card.image.sha256.as_str()),
@@ -1774,7 +1857,18 @@ fn drive() -> Result<(), String> {
             let (mut machine, template) = inputs.into_machine()?;
             initialized_template = Some(template);
             if let Some(identity) = identity {
-                machine = initialized_reset(machine, &identity, &root.join("initialized-reset"))?;
+                let af_proof = arguments.af_reset == AfResetMode::RequireRestored;
+                let budget = if af_proof { Some(bridge::CheckpointBudget::new(512*1024*1024-16384)?) } else { None };
+                let live_before_reset = af_proof
+                    .then(|| fujimod_xm1::machine_fingerprint::fingerprint(&machine.session)).transpose()?;
+                let policy = if af_proof { fujimod_xm1::checkpoint::ResetCachePolicy::RequireHitRestored }
+                    else { fujimod_xm1::checkpoint::ResetCachePolicy::ReuseOrCreate };
+                let reset = initialized_reset(machine, &identity, &root.join("initialized-reset"), budget, policy)?;
+                machine = reset.machine;
+                if let Some(live_before_reset) = live_before_reset {
+                    let record = af_reset_proof(&machine, &identity, &root.join("initialized-reset"), reset.cache, live_before_reset)?;
+                    write_af_reset_proof(&arguments.output.join("af-reset-prestate.json"), &record)?;
+                }
             }
             let mut observer = observation.as_ref().map(|spec| ResetObserver::begin(&mut machine, spec)).transpose()?;
             let (mut bridge, attachment) = attach(machine, rendezvous, arguments.attach_hold, observer.as_mut())?;
@@ -1789,6 +1883,9 @@ fn drive() -> Result<(), String> {
                         "key_seconds": key_seconds, "start": start, "boot_seconds": boot_seconds, "saved": false,
                         "reset_observation": {"path": path, "sha256": sha256(&bytes)}})
                 }
+                None if arguments.af_reset == AfResetMode::RequireRestored => json!({"key":key.key,"inputs":key.inputs,
+                    "key_seconds":key_seconds,"start":start,"boot_seconds":boot_seconds,"saved":false,
+                    "reset_prestate":"af-reset-prestate.json"}),
                 None => {
                     let save_started = Instant::now();
                     let record = json!({"schema": CHECKPOINT_SCHEMA, "key": key.key, "inputs": key.inputs,
@@ -3158,6 +3255,7 @@ mod tests {
             reset_observation: None,
             attach_hold: None,
             fresh_boot: false,
+            af_reset: AfResetMode::Disabled,
         };
         let without = boot_key(&arguments(None), &inputs, &adjustment, None, None).unwrap();
         let first = boot_key(&arguments(Some("a.nand")), &inputs, &adjustment, Some(b"first"), None).unwrap();

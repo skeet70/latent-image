@@ -74,11 +74,46 @@ impl BootIdentity {
     }
 }
 
-pub fn initialized_reset(mut machine: crate::machine::Machine, identity: &BootIdentity, root: &std::path::Path) -> Result<crate::machine::Machine, String> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CacheLookup { Hit, Miss }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ResetRestore { Restored, NotRestored }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct ResetCache {
+    lookup: CacheLookup,
+    restore: ResetRestore,
+}
+
+impl ResetCache {
+    pub fn lookup(self) -> CacheLookup { self.lookup }
+    pub fn restore(self) -> ResetRestore { self.restore }
+}
+
+pub struct InitializedReset {
+    pub machine: crate::machine::Machine,
+    pub cache: ResetCache,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResetCachePolicy { ReuseOrCreate, RequireHitRestored }
+
+
+pub fn initialized_reset(mut machine: crate::machine::Machine, identity: &BootIdentity, root: &std::path::Path, budget:Option<crate::bridge::CheckpointBudget>, policy: ResetCachePolicy) -> Result<InitializedReset, String> {
     const RECORD: &str = "initialized-reset.json";
     let name = format!("reset-{}", identity.key());
     let directory = root.join(&name);
+    if policy == ResetCachePolicy::RequireHitRestored && !directory.is_dir() {
+        return Err("AF reset requires an existing authenticated zero-instruction cache".into());
+    }
+    let cache;
     if directory.exists() {
+        if let Some(budget)=budget {
+            let size=|name|std::fs::metadata(directory.join(name)).map(|metadata|metadata.len()).map_err(|error|error.to_string());
+            budget.admit(size(crate::bridge::SNAPSHOT)?,size(RECORD)?)?;
+        }
         let recorded: serde_json::Value = serde_json::from_slice(&crate::bridge::read(&directory.join(RECORD))?)
             .map_err(|error| format!("initialized-reset identity: {error}"))?;
         if recorded != identity.document() { return Err("initialized-reset checkpoint identity differs".into()); }
@@ -86,12 +121,18 @@ pub fn initialized_reset(mut machine: crate::machine::Machine, identity: &BootId
         machine.disarm()?;
         machine.session.restore(&snapshot)?;
         machine.rearm()?;
+        cache = ResetCache { lookup: CacheLookup::Hit, restore: ResetRestore::Restored };
+    } else {
+        cache = ResetCache { lookup: CacheLookup::Miss, restore: ResetRestore::NotRestored };
     }
     if machine.session.board.instruction_counts().iter().any(|count| *count != 0) {
         return Err("initialized-reset checkpoint omits startup evidence".into());
     }
-    if !directory.exists() {
-        crate::bridge::save_checkpoint(&mut machine, root, &name, RECORD, &identity.document())?;
+    if policy == ResetCachePolicy::RequireHitRestored && machine.session.board.now() != 0 {
+        return Err("AF reset cache must have zero board time".into());
     }
-    Ok(machine)
+    if !directory.exists() {
+        crate::bridge::save_checkpoint(&mut machine, root, &name, RECORD, &identity.document(), budget)?;
+    }
+    Ok(InitializedReset { machine, cache })
 }

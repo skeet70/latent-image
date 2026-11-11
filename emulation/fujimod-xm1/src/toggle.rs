@@ -446,7 +446,7 @@ impl Server {
                 }
                 let record = json!({"schema": CHECKPOINT_SCHEMA, "key": self.key, "inputs": self.inputs,
                     "instructions": self.bridge.machine.instructions()});
-                let target = bridge::save_checkpoint(&mut self.bridge.machine, &self.root, self.key.as_str(), RECORD, &record)?;
+                let target = bridge::save_checkpoint(&mut self.bridge.machine, &self.root, self.key.as_str(), RECORD, &record, None)?;
                 json!({"directory": std::fs::canonicalize(&target).map_err(|e| e.to_string())?,
                     "instructions": self.bridge.machine.instructions()})
             }

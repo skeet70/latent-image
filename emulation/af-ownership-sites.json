@@ -1,0 +1,596 @@
+[
+  {
+    "pc": 7491644,
+    "word": 3912059120,
+    "kind": "queue-post",
+    "reads": [],
+    "register_reads": [
+      {
+        "register": 1,
+        "offset": 0,
+        "bytes": 12
+      }
+    ]
+  },
+  {
+    "pc": 7491720,
+    "word": 2583691275,
+    "kind": "queue-post",
+    "reads": [
+      [
+        1084291852,
+        4
+      ]
+    ],
+    "register_reads": []
+  },
+  {
+    "pc": 7492020,
+    "word": 3778019123,
+    "kind": "queue-post",
+    "reads": [],
+    "register_reads": [
+      {
+        "register": 1,
+        "offset": 0,
+        "bytes": 40
+      }
+    ]
+  },
+  {
+    "pc": 7492024,
+    "word": 3785375744,
+    "kind": "queue-post",
+    "reads": [
+      [
+        1084291116,
+        4
+      ]
+    ],
+    "register_reads": []
+  },
+  {
+    "pc": 7492376,
+    "word": 3912060400,
+    "kind": "dequeue",
+    "reads": [],
+    "register_reads": []
+  },
+  {
+    "pc": 7492548,
+    "word": 3788583092,
+    "kind": "dequeue",
+    "reads": [],
+    "register_reads": [
+      {
+        "register": 1,
+        "offset": 0,
+        "bytes": 40
+      }
+    ]
+  },
+  {
+    "pc": 15968308,
+    "word": 3912058880,
+    "kind": "dispatch-callback",
+    "reads": [],
+    "register_reads": []
+  },
+  {
+    "pc": 15971996,
+    "word": 3912058880,
+    "kind": "request",
+    "reads": [],
+    "register_reads": []
+  },
+  {
+    "pc": 15972028,
+    "word": 3942906596,
+    "kind": "request",
+    "reads": [],
+    "register_reads": [
+      {
+        "register": 0,
+        "offset": 0,
+        "bytes": 24
+      }
+    ]
+  },
+  {
+    "pc": 16943932,
+    "word": 3818913840,
+    "kind": "dequeue",
+    "reads": [
+      [
+        24112204,
+        4
+      ]
+    ],
+    "register_reads": []
+  },
+  {
+    "pc": 16943956,
+    "word": 3885367555,
+    "kind": "select",
+    "reads": [
+      [
+        16957576,
+        64
+      ]
+    ],
+    "register_reads": []
+  },
+  {
+    "pc": 16944068,
+    "word": 3778019123,
+    "kind": "dispatch-callback",
+    "reads": [
+      [
+        24111660,
+        40
+      ]
+    ],
+    "register_reads": []
+  },
+  {
+    "pc": 16945544,
+    "word": 3912058880,
+    "kind": "callback",
+    "reads": [
+      [
+        24112204,
+        4
+      ]
+    ],
+    "register_reads": []
+  },
+  {
+    "pc": 16945564,
+    "word": 3851624748,
+    "kind": "callback",
+    "reads": [
+      [
+        24111956,
+        4
+      ]
+    ],
+    "register_reads": []
+  },
+  {
+    "pc": 16945580,
+    "word": 360915004,
+    "kind": "callback",
+    "reads": [
+      [
+        24111608,
+        4
+      ]
+    ],
+    "register_reads": []
+  },
+  {
+    "pc": 16945596,
+    "word": 3957089246,
+    "kind": "callback",
+    "reads": [
+      [
+        24111932,
+        28
+      ]
+    ],
+    "register_reads": []
+  },
+  {
+    "pc": 16945616,
+    "word": 3813867521,
+    "kind": "callback",
+    "reads": [
+      [
+        24112204,
+        4
+      ]
+    ],
+    "register_reads": []
+  },
+  {
+    "pc": 16945648,
+    "word": 3778019123,
+    "kind": "dispatch-callback",
+    "reads": [
+      [
+        24111608,
+        4
+      ]
+    ],
+    "register_reads": []
+  },
+  {
+    "pc": 16945672,
+    "word": 3809360948,
+    "kind": "callback",
+    "reads": [
+      [
+        24129744,
+        4
+      ]
+    ],
+    "register_reads": []
+  },
+  {
+    "pc": 16946224,
+    "word": 3912058880,
+    "kind": "callback",
+    "reads": [
+      [
+        24129744,
+        4
+      ],
+      [
+        24111608,
+        4
+      ]
+    ],
+    "register_reads": []
+  },
+  {
+    "pc": 16949132,
+    "word": 3912058992,
+    "kind": "callback",
+    "reads": [
+      [
+        24129744,
+        4
+      ],
+      [
+        24111608,
+        4
+      ]
+    ],
+    "register_reads": []
+  },
+  {
+    "pc": 16965320,
+    "word": 3912058880,
+    "kind": "callback",
+    "reads": [
+      [
+        24112592,
+        120
+      ]
+    ],
+    "register_reads": []
+  },
+  {
+    "pc": 16965368,
+    "word": 3942664418,
+    "kind": "clear",
+    "reads": [
+      [
+        24112592,
+        120
+      ]
+    ],
+    "register_reads": []
+  },
+  {
+    "pc": 16970160,
+    "word": 3912059120,
+    "kind": "reserve-primary",
+    "reads": [
+      [
+        24112424,
+        288
+      ]
+    ],
+    "register_reads": []
+  },
+  {
+    "pc": 16970184,
+    "word": 3785383936,
+    "kind": "reserve-secondary",
+    "reads": [
+      [
+        24112424,
+        288
+      ]
+    ],
+    "register_reads": []
+  },
+  {
+    "pc": 16970200,
+    "word": 3785375744,
+    "kind": "reserve-secondary",
+    "reads": [
+      [
+        24112424,
+        288
+      ]
+    ],
+    "register_reads": []
+  },
+  {
+    "pc": 16979556,
+    "word": 3912058928,
+    "kind": "primary",
+    "reads": [
+      [
+        24112592,
+        120
+      ]
+    ],
+    "register_reads": []
+  },
+  {
+    "pc": 16980112,
+    "word": 3942660718,
+    "kind": "set",
+    "reads": [
+      [
+        24112592,
+        120
+      ]
+    ],
+    "register_reads": []
+  },
+  {
+    "pc": 16980220,
+    "word": 3942681517,
+    "kind": "work-post",
+    "reads": [],
+    "register_reads": [
+      {
+        "register": 1,
+        "offset": 0,
+        "bytes": 72
+      }
+    ]
+  },
+  {
+    "pc": 17015380,
+    "word": 3912058896,
+    "kind": "request",
+    "reads": [],
+    "register_reads": [
+      {
+        "register": 0,
+        "offset": 0,
+        "bytes": 24
+      }
+    ]
+  },
+  {
+    "pc": 17015464,
+    "word": 3957042019,
+    "kind": "queue-post",
+    "reads": [],
+    "register_reads": [
+      {
+        "register": 1,
+        "offset": 0,
+        "bytes": 12
+      },
+      {
+        "register": 4,
+        "offset": 0,
+        "bytes": 28
+      }
+    ]
+  },
+  {
+    "pc": 17033608,
+    "word": 3912058880,
+    "kind": "mode-helper",
+    "reads": [
+      [
+        24129877,
+        1
+      ],
+      [
+        24131588,
+        4
+      ]
+    ],
+    "register_reads": []
+  },
+  {
+    "pc": 17038160,
+    "word": 3912060912,
+    "kind": "reserve-secondary",
+    "reads": [
+      [
+        24112424,
+        288
+      ]
+    ],
+    "register_reads": []
+  },
+  {
+    "pc": 17038728,
+    "word": 3912058928,
+    "kind": "consumer",
+    "reads": [
+      [
+        24112424,
+        168
+      ]
+    ],
+    "register_reads": []
+  },
+  {
+    "pc": 17039856,
+    "word": 3912058904,
+    "kind": "current",
+    "reads": [
+      [
+        24112592,
+        120
+      ]
+    ],
+    "register_reads": []
+  },
+  {
+    "pc": 17039952,
+    "word": 3912058928,
+    "kind": "set",
+    "reads": [
+      [
+        24112592,
+        120
+      ]
+    ],
+    "register_reads": []
+  },
+  {
+    "pc": 17040008,
+    "word": 3912059000,
+    "kind": "clear",
+    "reads": [
+      [
+        24112592,
+        120
+      ]
+    ],
+    "register_reads": []
+  },
+  {
+    "pc": 17119716,
+    "word": 3912059120,
+    "kind": "consumer",
+    "reads": [],
+    "register_reads": [
+      {
+        "register": 0,
+        "offset": 0,
+        "bytes": 76
+      }
+    ]
+  },
+  {
+    "pc": 17120312,
+    "word": 3912058992,
+    "kind": "consumer",
+    "reads": [
+      [
+        24145004,
+        4
+      ],
+      [
+        24145008,
+        460
+      ]
+    ],
+    "register_reads": []
+  },
+  {
+    "pc": 17121020,
+    "word": 3912058904,
+    "kind": "consumer",
+    "reads": [
+      [
+        24145004,
+        4
+      ]
+    ],
+    "register_reads": []
+  },
+  {
+    "pc": 17122256,
+    "word": 3912059384,
+    "kind": "dequeue",
+    "reads": [
+      [
+        24144440,
+        8
+      ]
+    ],
+    "register_reads": []
+  },
+  {
+    "pc": 17122392,
+    "word": 3957015470,
+    "kind": "dequeue",
+    "reads": [
+      [
+        24144448,
+        40
+      ]
+    ],
+    "register_reads": []
+  },
+  {
+    "pc": 17122404,
+    "word": 3885367555,
+    "kind": "select",
+    "reads": [
+      [
+        17122904,
+        8
+      ]
+    ],
+    "register_reads": []
+  },
+  {
+    "pc": 17122516,
+    "word": 3778019123,
+    "kind": "dispatch-callback",
+    "reads": [
+      [
+        24144448,
+        40
+      ]
+    ],
+    "register_reads": []
+  },
+  {
+    "pc": 17122532,
+    "word": 3912058928,
+    "kind": "work-post",
+    "reads": [],
+    "register_reads": [
+      {
+        "register": 1,
+        "offset": 0,
+        "bytes": 76
+      }
+    ]
+  },
+  {
+    "pc": 17122592,
+    "word": 3957015237,
+    "kind": "queue-post",
+    "reads": [],
+    "register_reads": [
+      {
+        "register": 1,
+        "offset": 0,
+        "bytes": 12
+      }
+    ]
+  },
+  {
+    "pc": 17123256,
+    "word": 3912058880,
+    "kind": "callback",
+    "reads": [],
+    "register_reads": [
+      {
+        "register": 1,
+        "offset": 0,
+        "bytes": 72
+      }
+    ]
+  },
+  {
+    "pc": 17123296,
+    "word": 3959422783,
+    "kind": "work-post",
+    "reads": [],
+    "register_reads": [
+      {
+        "register": 1,
+        "offset": 0,
+        "bytes": 76
+      }
+    ]
+  }
+]

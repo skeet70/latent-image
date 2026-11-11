@@ -1,0 +1,969 @@
+Subject: Add opt-in passive AF retention to the existing classified watch
+
+Pinned engine: 3d90035d7d8d651e126f89f94f30765506e6f53f
+Pinned recursive fetch source: /nix/store/ql75l53gr8bffdc0asbqapk6i92k9mwx-fujimod-3d90035
+Baseline: current build-support/fujimod.nix patches through owned-nand-pages,
+including observation-context and observation-backing-tests, applied in order.
+The old wzc1yy92 reference ends at translation-admission and is not the baseline.
+Selected baseline SHA-256:
+  observation.rs: 6654adec50ddf497e7bd2530a174fbc6556cf3a2af2ee9824e6ae11144d8f218
+  observation/fetch_attribution.rs: 40bf59e5d2888e49e27f8b9d150c2ab2c2928f57be6c5e6a8d6b3613f5bfa9d6
+Source-only staging: 101262 baseline bytes across three selected source files.
+No vendored engine tree, C/C++ sources, compiler artifacts or new dependencies.
+Original constructors remain default-off. Only the new constructor declares the
+independent passive classes and bounded quota. Protected source/range overlaps
+always take the protected path. Passive retention changes no installed hooks.
+
+diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/board/observation.rs
+--- a/crates/emulator/src/board/observation.rs
++++ b/crates/emulator/src/board/observation.rs
+@@ -1,7 +1,12 @@
+ //! Explicit, bounded CPU/bus observation. No device consumes these records.
+ pub mod calls;
+ mod fetch_attribution;
+-pub use fetch_attribution::{CpuDataAttribution, FetchAttribution};
++pub use fetch_attribution::{CpuDataAttribution, FetchAttribution, PassiveFetchAttribution};
++mod passive;
++#[cfg(test)]
++mod passive_tests;
++pub use passive::{PassiveCaptureFailure, PassiveCaptureRefusal, PassiveRetention, PassiveRetentionStatus, PassiveStopReason};
++use passive::{PassiveCapture, RetentionClass};
+ use fetch_attribution::{CpuAttribution, CpuCapture, CpuObservation, CpuSource, ObservedWord};
+ pub use fetch_attribution::{AccessBytes, ByteOrder, CoreIndex, FetchEvent, GuestAddress, InstructionCores, InstructionExecutionState, InstructionGuardFailure, InstructionGuardRefusal, InstructionGuardStatus, PhysicalAddress, PhysicalInstructionGuard};
+ use super::{Board, State, factory::MemoryMap, scalar};
+@@ -140,6 +145,7 @@
+     classes: Vec<WatchRange>,
+     views: ViewPolicy,
+     fetch_attribution: Option<fetch_attribution::FetchCapture>,
++    passive: Option<PassiveCapture>,
+ }
+ impl Records {
+     fn overlaps(&self, address: u64, bytes: u64) -> bool {
+@@ -167,13 +173,14 @@
+         if self.violation.is_some() {
+             return;
+         }
+-        if self.rows.len() == self.limit {
++        if self.passive.as_ref().map_or(self.rows.len(), |capture| capture.protected_rows) == self.limit {
+             self.violation = Some(format!(
+                 "Memory watch exceeded its {} record bound",
+                 self.limit
+             ));
+         } else {
+             self.rows.push(row);
++            if let Some(capture) = &mut self.passive { capture.protected_rows += 1; }
+         }
+         if self.violation.is_some() {
+             if let Some(capture) = &mut self.fetch_attribution { capture.observation_failed(); }
+@@ -181,9 +188,11 @@
+     }
+     pub(super) fn transfer(&mut self, source: &str, physical: u64, address: u64, bytes: usize) {
+         if self.wants(source, physical, bytes as u64) {
+-            self.push(
++            let retention = self.retention(source, physical, bytes as u64);
++            if retention == RetentionClass::Skip { return; }
++            self.push_retained(
+                 json!({"source":source,"physical":physical,"address":address,
+-                "size":bytes,"core":null,"pc":null,"instructions":null,"tick":null}),
++                "size":bytes,"core":null,"pc":null,"instructions":null,"tick":null}), retention,
+             );
+         }
+     }
+@@ -209,6 +218,7 @@
+             });
+         }
+         if let Some(capture) = &self.fetch_attribution { capture.describe(&mut state); }
++        if let Some(capture) = &self.passive { capture.describe(&mut state); }
+         state
+     }
+ }
+@@ -238,41 +248,76 @@
+         let state = state.borrow();
+         let physical = self.physical(&state, address, size);
+         let mut records = self.records.borrow_mut();
++        let passive_only = if source == CpuSource::CpuFetch {
++            records.passive_fetch_only(self.core, address, size)
++        } else if let Some(physical) = physical {
++            records.passive_only(source.name(), physical, size)
++        } else {
++            !records.original_cpu_hook(self.core, source, address, size)
++        };
++        if source != CpuSource::CpuFetch && passive_only
++            && records.passive_retention_status() != PassiveRetentionStatus::Armed { return Ok(()); }
+         let Some(physical) = physical else {
++            if passive_only {
++                if let Some(capture) = &mut records.fetch_attribution { capture.clear_passive(self.core); }
++                records.passive_failed(PassiveCaptureFailure::UnresolvedPhysical,
++                    format!("Passive CPU{} access at {address:#x} has no resolved physical memory", self.core));
++                return Ok(());
++            }
+             return if records.views == ViewPolicy::Fixed {
+                 Err(format!("Memory watch cannot resolve CPU{} access at {address:#x} to physical memory", self.core))
+             } else { Ok(()) };
+         };
+         let logged = records.wants(source.name(), physical, size);
+-        let cached = source == CpuSource::CpuFetch && records.fetch_attribution.as_ref().is_some_and(|capture| capture.wants(PhysicalAddress(physical),AccessBytes(size)));
++        if source != CpuSource::CpuFetch && logged && records.retention(source.name(), physical, size) == RetentionClass::Skip {
++            return Ok(());
++        }
++        let cached = source == CpuSource::CpuFetch && records.fetch_attribution.as_ref().is_some_and(|capture|
++            capture.wants(PhysicalAddress(physical), AccessBytes(size)) || capture.wants_passive(PhysicalAddress(physical), AccessBytes(size)));
+         let capture = match (logged,cached) {
+             (true,true) => CpuCapture::ClassifiedAndCached,
+             (true,false) => CpuCapture::Classified,
+             (false,true) => CpuCapture::Cached,
+             (false,false) => return Ok(()),
+         };
+-        if tcm_overlap(&*cpu, address, size)? { return Err("Memory watch intersects a CPU-private TCM overlay".into()); }
+-        let byte_order = ByteOrder::of(&*cpu)?;
+-        let before = if source != CpuSource::CpuFetch {
+-            if !(1..=16).contains(&size) { return Err("Memory watch cannot capture this CPU access width".into()); }
+-            let mut bytes = vec![0; size as usize];
+-            cpu.read_memory(address, &mut bytes)?;
+-            Some(bytes)
+-        } else { None };
+-        let value = if source == CpuSource::CpuRead && size <= 8 {
+-            Some(byte_order.decode(before.as_ref().unwrap()))
+-        } else { value };
+-        let attributed = records.fetch_attribution.as_ref().is_some_and(fetch_attribution::FetchCapture::attributes_data);
+-        let attribution = if source != CpuSource::CpuFetch && attributed {
+-            CpuAttribution::capture_data(&state, &*cpu, CoreIndex(self.core))?
+-        } else {
+-            CpuAttribution::capture(&state, &*cpu, CoreIndex(self.core), source == CpuSource::CpuFetch && records.fetch_attribution.is_some())?
+-        };
+-        records.record_cpu(CpuObservation {
+-            source, capture, address: GuestAddress(address), physical: PhysicalAddress(physical), size: AccessBytes(size),
+-            value: value.map(ObservedWord), before, byte_order,
+-            attribution,
+-        })
++        let result = (|| {
++            if tcm_overlap(&*cpu, address, size)? { return Err("Memory watch intersects a CPU-private TCM overlay".into()); }
++            if source == CpuSource::CpuFetch && passive_only {
++                let entry = cpu.instruction_entry().ok_or("Passive fetch lacks an instruction entry")?;
++                if entry.physical != Some(physical) {
++                    return Err("Passive fetch instruction backing does not match its declared mapping".into());
++                }
++            }
++            let byte_order = ByteOrder::of(&*cpu)?;
++            let before = if source != CpuSource::CpuFetch {
++                if !(1..=16).contains(&size) { return Err("Memory watch cannot capture this CPU access width".into()); }
++                let mut bytes = vec![0; size as usize];
++                cpu.read_memory(address, &mut bytes)?;
++                Some(bytes)
++            } else { None };
++            let value = if source == CpuSource::CpuRead && size <= 8 {
++                Some(byte_order.decode(before.as_ref().unwrap()))
++            } else { value };
++            let attributed = records.fetch_attribution.as_ref().is_some_and(|capture| capture.attributes_data()
++                || (records.passive_data(source.name(), physical, size) && capture.attributes_passive_data()));
++            let attribution = if source != CpuSource::CpuFetch && attributed {
++                CpuAttribution::capture_data(&state, &*cpu, CoreIndex(self.core))?
++            } else {
++                CpuAttribution::capture(&state, &*cpu, CoreIndex(self.core), source == CpuSource::CpuFetch && records.fetch_attribution.is_some())?
++            };
++            records.record_cpu(CpuObservation {
++                source, capture, address: GuestAddress(address), physical: PhysicalAddress(physical), size: AccessBytes(size),
++                value: value.map(ObservedWord), before, byte_order,
++                attribution,
++            })
++        })();
++        if passive_only {
++            if let Err(error) = result {
++                if let Some(capture) = &mut records.fetch_attribution { capture.clear_passive(self.core); }
++                records.passive_failed(PassiveCaptureFailure::CpuCapture, error);
++            }
++            Ok(())
++        } else { result }
+     }
+     fn fail(&self, error: String) {
+         let mut records = self.records.borrow_mut();
+@@ -306,6 +351,11 @@
+ }
+ unsafe fn fetch(address: u64, size: u32, data: *mut c_void) {
+     let context = unsafe { &*data.cast::<MemoryContext>() };
++    let passive_only = context.records.borrow().passive_fetch_only(context.core, address, u64::from(size));
++    if passive_only {
++        let _ = context.record(CpuSource::CpuFetch, address, u64::from(size), None);
++        return;
++    }
+     if context.guarded_fetch(address, u64::from(size)) { return; }
+     if let Err(error) = context.record(CpuSource::CpuFetch, address, size as u64, None) {
+         context.fail(error);
+diff --git a/crates/emulator/src/board/observation/fetch_attribution.rs b/crates/emulator/src/board/observation/fetch_attribution.rs
+--- a/crates/emulator/src/board/observation/fetch_attribution.rs
++++ b/crates/emulator/src/board/observation/fetch_attribution.rs
+@@ -14,6 +14,7 @@
+     sources: CpuDataAttribution,
+     ranges: Vec<WatchRange>,
+     guards: Vec<PhysicalInstructionGuard>,
++    pub(super) passive: Option<PassiveFetchAttribution>,
+ }
+ impl FetchAttribution {
+     pub fn new(sources: CpuDataAttribution, mut ranges: Vec<WatchRange>) -> Result<Self, String> {
+@@ -34,7 +35,7 @@
+             }
+         }
+         ranges.truncate(kept);
+-        Ok(Self { sources, ranges, guards: Vec::new() })
++        Ok(Self { sources, ranges, guards: Vec::new(), passive: None })
+     }
+     pub fn with_instruction_guards(mut self, guards: Vec<PhysicalInstructionGuard>) -> Result<Self, String> {
+         if guards.is_empty() || guards.len() > 64 || guards.iter().enumerate().any(|(index, guard)| {
+@@ -45,6 +46,28 @@
+         }
+         self.guards = guards;
+         Ok(self)
++    }
++    pub(super) fn terminal_spans<'a>(&self, maps: impl Iterator<Item = &'a MemoryMap>, classes: &[WatchRange]) -> Vec<Span> {
++        let ranges = self.ranges.iter().chain(classes).copied().collect::<Vec<_>>();
++        mapped_spans(maps, &ranges)
++    }
++    fn wants(&self, physical: PhysicalAddress, size: AccessBytes) -> bool {
++        self.ranges.iter().any(|range| physical.0 < range.end && range.start < physical.0.saturating_add(size.0))
++    }
++    fn selected(&self, source: CpuSource) -> bool {
++        self.sources != CpuDataAttribution::None
++            && (source == CpuSource::CpuWrite || (source == CpuSource::CpuRead && self.sources == CpuDataAttribution::ReadsAndWrites))
++    }
++}
++
++pub struct PassiveFetchAttribution {
++    sources: CpuDataAttribution,
++    ranges: Vec<WatchRange>,
++}
++impl PassiveFetchAttribution {
++    pub fn new(sources: CpuDataAttribution, ranges: Vec<WatchRange>) -> Result<Self, String> {
++        let validated = FetchAttribution::new(sources, ranges)?;
++        Ok(Self { sources: validated.sources, ranges: validated.ranges })
+     }
+     fn wants(&self, physical: PhysicalAddress, size: AccessBytes) -> bool {
+         self.ranges.iter().any(|range| physical.0 < range.end && range.start < physical.0.saturating_add(size.0))
+@@ -171,6 +194,7 @@
+ pub(super) struct FetchCapture {
+     specification: FetchAttribution,
+     latest: [Option<CapturedFetch>; 2],
++    passive_latest: [Option<CapturedFetch>; 2],
+     guard_status: InstructionGuardStatus,
+     pause: std::rc::Rc<std::cell::Cell<bool>>,
+     refusal: Option<ExecutionRefusal>,
+@@ -178,6 +202,13 @@
+ impl FetchCapture {
+     pub(super) fn wants(&self, physical: PhysicalAddress, size: AccessBytes) -> bool { self.specification.wants(physical, size) }
+     pub(super) fn attributes_data(&self) -> bool { self.specification.sources != CpuDataAttribution::None }
++    pub(super) fn wants_passive(&self, physical: PhysicalAddress, size: AccessBytes) -> bool {
++        self.specification.passive.as_ref().is_some_and(|passive| passive.wants(physical, size))
++    }
++    pub(super) fn clear_passive(&mut self, core: usize) { self.passive_latest[core] = None; }
++    pub(super) fn attributes_passive_data(&self) -> bool {
++        self.specification.passive.as_ref().is_some_and(|passive| passive.sources != CpuDataAttribution::None)
++    }
+     pub(super) fn describe(&self, state: &mut Value) {
+         let sources = match self.specification.sources {
+             CpuDataAttribution::None => json!([]),
+@@ -186,52 +217,89 @@
+         };
+         state["fetch_attribution"] = json!({"sources":sources,"ranges":self.specification.ranges.iter()
+             .map(|range| [range.start,range.end]).collect::<Vec<_>>()});
++        if let Some(passive) = &self.specification.passive {
++            state["passive_fetch_attribution"] = json!({
++                "sources": match passive.sources {
++                    CpuDataAttribution::None => vec![],
++                    CpuDataAttribution::Writes => vec!["cpu-write"],
++                    CpuDataAttribution::ReadsAndWrites => vec!["cpu-read", "cpu-write"],
++                },
++                "ranges": passive.ranges.iter().map(|range| [range.start, range.end]).collect::<Vec<_>>(),
++            });
++        }
+     }
+ }
+ impl Records {
+     pub(super) fn record_cpu(&mut self, observed: CpuObservation) -> Result<(), String> {
++        let retention = if observed.capture.classified() {
++            self.retention(observed.source.name(), observed.physical.0, observed.size.0)
++        } else { super::RetentionClass::Skip };
++        let passive_data = self.passive_data(observed.source.name(), observed.physical.0, observed.size.0);
+         let captured = self.fetch_attribution.as_ref().is_some_and(FetchCapture::attributes_data);
+         let mut latest = None;
++        let mut passive_latest = None;
+         let mut selected = false;
++        let mut passive_selected = false;
+         if let Some(capture) = &mut self.fetch_attribution {
+             let core = observed.attribution.core.0;
+             if observed.source == CpuSource::CpuFetch && observed.capture.cached() {
+                 if !matches!(observed.size.0, 2 | 4) || observed.address.0 != observed.attribution.clock.pc {
+                     return Err("Fetch attribution observed an invalid instruction fetch".into());
+                 }
+-                capture.latest[core] = Some(CapturedFetch {
++                let fetched = Some(CapturedFetch {
+                     address: observed.address, physical: observed.physical, size: observed.size,
+                     byte_order: observed.byte_order, attribution: observed.attribution,
+                 });
+-            }
+-            selected = capture.specification.selected(observed.source);
++                if capture.wants(observed.physical, observed.size) { capture.latest[core] = fetched; }
++                if capture.wants_passive(observed.physical, observed.size) { capture.passive_latest[core] = fetched; }
++            }
++            selected = retention == super::RetentionClass::Protected && capture.specification.selected(observed.source);
++            passive_selected = passive_data && capture.specification.passive.as_ref()
++                .is_some_and(|passive| passive.selected(observed.source));
+             if selected {
+                 latest = capture.latest[core].filter(|fetch| fetch.attribution == observed.attribution && fetch.byte_order == observed.byte_order);
+             }
+-        }
+-        if !observed.capture.classified() { return Ok(()); }
++            if passive_selected {
++                passive_latest = capture.passive_latest[core].filter(|fetch| fetch.attribution == observed.attribution && fetch.byte_order == observed.byte_order);
++            }
++        }
++        if retention == super::RetentionClass::Skip { return Ok(()); }
++        let passive_metadata = passive_selected
++            && (retention != super::RetentionClass::Protected || passive_latest.is_some());
+         let mut row = json!({"source":observed.source,"address":observed.address.0,"physical":observed.physical.0,
+             "size":observed.size.0,"value":observed.value.map(|value| value.0),"before":observed.before,
+             "byte_order":observed.byte_order,"core":observed.attribution.core.0,"pc":observed.attribution.clock.pc,
+             "instructions":observed.attribution.clock.instructions,"tick":observed.attribution.clock.tick});
+-        if captured {
++        if captured || passive_metadata {
+             row["core_instructions"] = json!(observed.attribution.core_instructions.0);
+-            if selected { row["latest_fetch"] = latest.map(CapturedFetch::value).unwrap_or(Value::Null); }
+-        }
+-        self.push(row);
++            if selected || passive_metadata {
++                row["latest_fetch"] = if selected { latest } else { passive_latest }
++                    .map(CapturedFetch::value).unwrap_or(Value::Null);
++            }
++        }
++        self.push_retained(row, retention);
+         if selected && latest.is_none() {
+             self.violation.get_or_insert_with(|| "Monitored CPU data access lacks its matching actual instruction fetch".into());
+             if let Some(capture) = &mut self.fetch_attribution { capture.observation_failed(); }
+         }
++        if passive_selected && passive_latest.is_none() {
++            self.passive_failed(super::PassiveCaptureFailure::MissingFetch,
++                "Passive CPU data access lacks its matching actual instruction fetch".into());
++        }
+         Ok(())
+     }
+ }
+ 
+-fn mapped_spans<'a>(maps: impl Iterator<Item = &'a MemoryMap>, ranges: &[WatchRange]) -> Vec<Span> {
++pub(super) fn mapped_spans<'a>(maps: impl Iterator<Item = &'a MemoryMap>, ranges: &[WatchRange]) -> Vec<Span> {
++    mapped_spans_for(maps, ranges, WatchKinds::CPU_FETCH)
++}
++pub(super) fn mapped_spans_for<'a>(
++    maps: impl Iterator<Item = &'a MemoryMap>, ranges: &[WatchRange], kind: WatchKinds,
++) -> Vec<Span> {
+     let mut spans = Vec::new();
+     for map in maps {
+         for range in ranges {
+-            if !range.kinds.contains(WatchKinds::CPU_FETCH) { continue; }
++            if !range.kinds.contains(kind) { continue; }
+             let start = range.start.max(map.physical);
+             let end = range.end.min(map.physical + map.size as u64);
+             if start < end { spans.push(((map.address + start - map.physical).saturating_sub(15), map.address + end - map.physical)); }
+@@ -249,10 +317,13 @@
+             return Err("Physical instruction guards require fixed memory views".into());
+         }
+         for range in &attribution.ranges { self.watch_backing(&[(range.start,range.end)])?; }
++        if let Some(passive) = &attribution.passive {
++            for range in &passive.ranges { self.watch_backing(&[(range.start, range.end)])?; }
++        }
+         let refusal = (!attribution.guards.is_empty()).then(ExecutionRefusal::default);
+         let mut watch = self.memory_watch_begin_classified_with_refusal(classes, limit, maps, views, refusal)?;
+         watch.records.borrow_mut().fetch_attribution = Some(FetchCapture {
+-            specification: attribution, latest: [None; 2], guard_status: InstructionGuardStatus::default(),
++            specification: attribution, latest: [None; 2], passive_latest: [None; 2], guard_status: InstructionGuardStatus::default(),
+             pause: self.host_pause.clone(),
+             refusal: watch.refusal.clone(),
+         });
+@@ -263,8 +334,12 @@
+                 let (cached, ordinary) = {
+                     let records = watch.records.borrow();
+                     let capture = records.fetch_attribution.as_ref().ok_or("Fetch attribution configuration absent")?;
+-                    (mapped_spans(context.maps.iter().chain(&decoder_maps), &capture.specification.ranges),
+-                        mapped_spans(context.maps.iter().chain(&decoder_maps), &records.classes))
++                    let mut cached = mapped_spans(context.maps.iter().chain(&decoder_maps), &capture.specification.ranges);
++                    if let Some(passive) = &capture.specification.passive {
++                        cached.extend(mapped_spans(context.maps.iter().chain(&decoder_maps), &passive.ranges));
++                        cached = union(cached);
++                    }
++                    (cached, mapped_spans(context.maps.iter().chain(&decoder_maps), &records.classes))
+                 };
+                 let data = (context as *const MemoryContext).cast_mut().cast();
+                 for (mut begin, end) in cached {
+@@ -496,11 +571,15 @@
+                     if capture.wants(PhysicalAddress(physical), AccessBytes(size)) {
+                         match CpuAttribution::capture(&state, &*cpu, CoreIndex(self.core), true) {
+                             Ok(attribution) => {
+-                                capture.latest[self.core] = Some(CapturedFetch {
++                                let fetched = Some(CapturedFetch {
+                                     address: GuestAddress(address), physical: PhysicalAddress(physical), size: AccessBytes(size),
+                                     byte_order: if entry.pstate & (1 << 9) == 0 { ByteOrder::Little } else { ByteOrder::Big },
+                                     attribution,
+                                 });
++                                capture.latest[self.core] = fetched;
++                                if capture.wants_passive(PhysicalAddress(physical), AccessBytes(size)) {
++                                    capture.passive_latest[self.core] = fetched;
++                                }
+                                 None
+                             }
+                             Err(_) => Some(InstructionGuardFailure::MissingEntry),
+diff --git a/crates/emulator/src/board/observation/passive.rs b/crates/emulator/src/board/observation/passive.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/emulator/src/board/observation/passive.rs
+@@ -0,0 +1,180 @@
++use super::{Board, CpuSource, FetchAttribution, MemoryMap, MemoryWatch, PassiveFetchAttribution, Records, Span, ViewPolicy, WatchKinds, WatchRange};
++use serde_json::{Value, json};
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
++#[serde(rename_all = "kebab-case")]
++pub enum PassiveStopReason { End, Refused, CapacityExceeded, ProvenanceUnavailable }
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
++#[serde(tag = "state", content = "reason", rename_all = "kebab-case")]
++pub enum PassiveRetentionStatus { Disabled, Unarmed, Armed, Stopped(PassiveStopReason) }
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
++#[serde(rename_all = "kebab-case")]
++pub enum PassiveCaptureFailure { UnresolvedPhysical, CpuCapture, MissingFetch }
++
++#[derive(Debug, serde::Serialize)]
++pub struct PassiveCaptureRefusal {
++    pub kind: PassiveCaptureFailure,
++    pub detail: String,
++}
++
++pub struct PassiveRetention {
++    classes: Vec<WatchRange>,
++    row_limit: usize,
++    attribution: Option<PassiveFetchAttribution>,
++}
++impl PassiveRetention {
++    pub fn new(classes: Vec<WatchRange>, row_limit: usize) -> Result<Self, String> {
++        if classes.is_empty() || classes.len() > 256 || row_limit == 0 || row_limit > 65_536
++            || classes.iter().any(|range| range.start >= range.end || range.end > 1 << 32 || range.kinds.0 == 0)
++        {
++            return Err("Passive retention requires bounded classified ranges and at most 65536 rows".into());
++        }
++        Ok(Self { classes, row_limit, attribution: None })
++    }
++    pub fn with_fetch_attribution(mut self, attribution: PassiveFetchAttribution) -> Self {
++        self.attribution = Some(attribution);
++        self
++    }
++}
++
++struct TerminalCpuSpans {
++    reads: Vec<Span>,
++    writes: Vec<Span>,
++    fetches: Vec<Span>,
++}
++pub(super) struct PassiveCapture {
++    protected: Vec<WatchRange>,
++    classes: Vec<WatchRange>,
++    terminal_hooks: Vec<TerminalCpuSpans>,
++    pub(super) protected_rows: usize,
++    passive_rows: usize,
++    row_limit: usize,
++    status: PassiveRetentionStatus,
++    failure: Option<PassiveCaptureRefusal>,
++}
++impl PassiveCapture {
++    pub(super) fn describe(&self, state: &mut Value) {
++        state["passive_retention"] = json!({
++            "mode":"passive-class-retention-v1", "status":self.status,
++            "protected_rows":self.protected_rows, "passive_rows":self.passive_rows,
++            "row_limit":self.row_limit, "failure":self.failure,
++        });
++    }
++    fn matches(classes: &[WatchRange], source: &str, address: u64, bytes: u64) -> bool {
++        WatchKinds::from_source(source).is_some_and(|kind| classes.iter().any(|range| {
++            range.kinds.contains(kind) && address < range.end && range.start < address.saturating_add(bytes)
++        }))
++    }
++}
++
++#[derive(Clone, Copy, PartialEq, Eq)]
++pub(super) enum RetentionClass { Protected, Passive, Skip }
++
++impl Records {
++    pub fn passive_retention_status(&self) -> PassiveRetentionStatus {
++        self.passive.as_ref().map_or(PassiveRetentionStatus::Disabled, |capture| capture.status)
++    }
++    pub fn passive_retention_failure(&self) -> Option<&PassiveCaptureRefusal> {
++        self.passive.as_ref().and_then(|capture| capture.failure.as_ref())
++    }
++    pub(super) fn passive_failed(&mut self, kind: PassiveCaptureFailure, detail: String) {
++        if let Some(capture) = &mut self.passive {
++            if capture.status == PassiveRetentionStatus::Armed {
++                capture.status = PassiveRetentionStatus::Stopped(PassiveStopReason::ProvenanceUnavailable);
++                capture.failure = Some(PassiveCaptureRefusal { kind, detail });
++            }
++        }
++    }
++    pub(super) fn passive_data(&self, source: &str, address: u64, bytes: u64) -> bool {
++        self.passive.as_ref().is_some_and(|capture| capture.status == PassiveRetentionStatus::Armed
++            && PassiveCapture::matches(&capture.classes, source, address, bytes))
++    }
++    pub(super) fn passive_only(&self, source: &str, address: u64, bytes: u64) -> bool {
++        self.passive.as_ref().is_some_and(|capture| !PassiveCapture::matches(&capture.protected, source, address, bytes))
++    }
++    pub(super) fn original_cpu_hook(&self, core: usize, source: CpuSource, address: u64, bytes: u64) -> bool {
++        self.passive.as_ref().is_none_or(|capture| {
++            let hooks = &capture.terminal_hooks[core];
++            let spans = match source {
++                CpuSource::CpuRead => &hooks.reads,
++                CpuSource::CpuWrite => &hooks.writes,
++                CpuSource::CpuFetch => &hooks.fetches,
++            };
++            spans.iter().any(|&(start, end)| address < end && start < address.saturating_add(bytes))
++        })
++    }
++    pub(super) fn passive_fetch_only(&self, core: usize, address: u64, bytes: u64) -> bool {
++        !self.original_cpu_hook(core, CpuSource::CpuFetch, address, bytes)
++    }
++    pub fn arm_passive_retention(&mut self) -> Result<(), String> {
++        let capture = self.passive.as_mut().ok_or("Passive retention is disabled")?;
++        if capture.status != PassiveRetentionStatus::Unarmed {
++            return Err("Passive retention can only be armed once".into());
++        }
++        capture.status = PassiveRetentionStatus::Armed;
++        Ok(())
++    }
++    pub fn stop_passive_retention(&mut self, reason: PassiveStopReason) -> Result<(), String> {
++        if matches!(reason, PassiveStopReason::CapacityExceeded | PassiveStopReason::ProvenanceUnavailable) {
++            return Err("Passive recorder failures can only be reported by the recorder".into());
++        }
++        let capture = self.passive.as_mut().ok_or("Passive retention is disabled")?;
++        if matches!(capture.status, PassiveRetentionStatus::Unarmed | PassiveRetentionStatus::Armed) {
++            capture.status = PassiveRetentionStatus::Stopped(reason);
++        }
++        Ok(())
++    }
++    pub(super) fn retention(&mut self, source: &str, address: u64, bytes: u64) -> RetentionClass {
++        let Some(capture) = &mut self.passive else { return RetentionClass::Protected; };
++        let protected = PassiveCapture::matches(&capture.protected, source, address, bytes);
++        if protected { return RetentionClass::Protected; }
++        if capture.status != PassiveRetentionStatus::Armed { return RetentionClass::Skip; }
++        if capture.passive_rows == capture.row_limit {
++            capture.status = PassiveRetentionStatus::Stopped(PassiveStopReason::CapacityExceeded);
++            return RetentionClass::Skip;
++        }
++        RetentionClass::Passive
++    }
++    pub(super) fn push_retained(&mut self, row: Value, retention: RetentionClass) {
++        match retention {
++            RetentionClass::Protected => self.push(row),
++            RetentionClass::Passive if self.violation.is_none() => {
++                self.rows.push(row);
++                self.passive.as_mut().unwrap().passive_rows += 1;
++            }
++            RetentionClass::Passive | RetentionClass::Skip => {}
++        }
++    }
++}
++
++impl Board {
++    pub fn memory_watch_begin_with_passive_fetch_attribution(
++        &self, protected_classes: Vec<WatchRange>, mut attribution: FetchAttribution, protected_limit: usize,
++        maps: Vec<MemoryMap>, views: ViewPolicy, passive: PassiveRetention,
++    ) -> Result<Box<MemoryWatch>, String> {
++        if protected_classes.is_empty() || protected_limit == 0 || protected_limit > 1_048_576 {
++            return Err("Passive watch requires protected classes and at most 1048576 protected rows".into());
++        }
++        let terminal_hooks = self.cpus.iter().enumerate().map(|(core, _)| {
++            let decoder_maps = self.state.borrow().decoders.observation_maps(core);
++            let processor_maps = maps.iter().filter(|map| map.core == core).chain(&decoder_maps);
++            TerminalCpuSpans {
++                reads: super::fetch_attribution::mapped_spans_for(processor_maps.clone(), &protected_classes, WatchKinds::CPU_READ),
++                writes: super::fetch_attribution::mapped_spans_for(processor_maps.clone(), &protected_classes, WatchKinds::CPU_WRITE),
++                fetches: attribution.terminal_spans(processor_maps, &protected_classes),
++            }
++        }).collect();
++        attribution.passive = passive.attribution;
++        let mut classes = protected_classes.clone();
++        classes.extend(passive.classes.iter().copied());
++        let watch = self.memory_watch_begin_with_fetch_attribution(classes, attribution, protected_limit, maps, views)?;
++        watch.records.borrow_mut().passive = Some(PassiveCapture {
++            protected: protected_classes, protected_rows: 0, passive_rows: 0,
++            classes: passive.classes, terminal_hooks, failure: None,
++            row_limit: passive.row_limit, status: PassiveRetentionStatus::Unarmed,
++        });
++        Ok(watch)
++    }
++}
+diff --git a/crates/emulator/src/board/observation/passive_tests.rs b/crates/emulator/src/board/observation/passive_tests.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/emulator/src/board/observation/passive_tests.rs
+@@ -0,0 +1,369 @@
++use super::*;
++use crate::board::{Ratio, bus::{self, Bus}, factory::*};
++use fujimod_emulator_cpu_unicorn::rprofile;
++
++fn board() -> (Board, Vec<MemoryMap>) {
++    board_with_tcm(None)
++}
++fn board_with_tcm(base: Option<u32>) -> (Board, Vec<MemoryMap>) {
++    let maps = vec![MemoryMap { core: 0, address: 0x10000, physical: 0x10000, size: 0x2000, permissions: 7 }];
++    let graph = Graph {
++        decoders: vec![],
++        processors: vec![Processor {
++            rprofile: Some(rprofile::core::Options {
++                tcm: base.map(|base| rprofile::tcm::Options {
++                    atcm: rprofile::tcm::BankOptions { bytes: 0x1000, reset: base | 1 },
++                    ..Default::default()
++                }).unwrap_or_default(),
++                ..Default::default()
++            }), mprofile: None, model: Model::CortexR5F,
++            registers: vec![(Register::Pc, 0x10000), (Register::Arm32(arm::Register::R(1)), 0x11000)],
++            released: true,
++        }],
++        dma_mappings: vec![crate::board::memory::BusMapping::ram(0x10000, 0x2000)], ram: vec![Ram { base: 0x10000, size: 0x2000 }],
++        mappings: maps.clone(), peripherals: vec![], instructions_per_tick: Ratio::new(1, 1).unwrap(),
++    };
++    let board = graph.build(
++        Options { engine: Engine::Unicorn, translation_cache_bytes: 1024 * 1024 },
++        Bus::new(bus::Mode::Strict), None,
++    ).unwrap();
++    let code = [0xe3a00029u32, 0xe5810000, 0xe5912000, 0xeafffffd];
++    board.write_physical(0x10000, &code.into_iter().flat_map(u32::to_le_bytes).collect::<Vec<_>>()).unwrap();
++    if base == Some(0x10000) {
++        board.cpu(0).unwrap().write_memory(0x10000,
++            &code.into_iter().flat_map(u32::to_le_bytes).collect::<Vec<_>>()).unwrap();
++    }
++    (board, maps)
++}
++fn protected() -> Vec<WatchRange> {
++    vec![WatchRange { start: 0x11000, end: 0x11004, kinds: WatchKinds::WRITES }]
++}
++fn passive(limit: usize) -> PassiveRetention {
++    PassiveRetention::new(vec![WatchRange { start: 0x11000, end: 0x11008, kinds: WatchKinds::ALL }], limit).unwrap()
++}
++fn attribution(canonical: u64) -> FetchAttribution {
++    let physical = WatchRange { start: 0x10000, end: 0x10010, kinds: WatchKinds::CPU_FETCH };
++    FetchAttribution::new(CpuDataAttribution::ReadsAndWrites, vec![physical]).unwrap()
++        .with_instruction_guards(vec![PhysicalInstructionGuard::arm32_little(
++            physical, GuestAddress(canonical), InstructionCores::Core0,
++        ).unwrap()]).unwrap()
++}
++fn install(board: &Board, maps: Vec<MemoryMap>, protected_limit: usize, passive_limit: usize) -> Box<MemoryWatch> {
++    board.memory_watch_begin_with_passive_fetch_attribution(
++        protected(), attribution(0x10000), protected_limit, maps, ViewPolicy::Fixed, passive(passive_limit),
++    ).unwrap()
++}
++
++#[test]
++fn default_watch_retains_its_fail_closed_capacity_and_state_shape() {
++    let (board, maps) = board();
++    let mut watch = board.memory_watch_begin_with_fetch_attribution(
++        protected(), attribution(0x10000), 1, maps, ViewPolicy::Fixed,
++    ).unwrap();
++    assert_eq!(watch.records.borrow().passive_retention_status(), PassiveRetentionStatus::Disabled);
++    assert!(watch.records.borrow_mut().arm_passive_retention().is_err());
++    board.write_physical(0x11000, &[1]).unwrap();
++    board.write_physical(0x11000, &[2]).unwrap();
++    assert_eq!(watch.records.borrow().row_count(), 1);
++    assert!(watch.records.borrow().violation().is_some());
++    assert!(watch.records.borrow().state().get("passive_retention").is_none());
++    assert_eq!(watch.instruction_guard_status().unwrap().first_failure.unwrap().kind, InstructionGuardFailure::ObservationFailed);
++    board.memory_watch_end(&mut watch).unwrap();
++}
++
++#[test]
++fn passive_exhaustion_preserves_protected_rows_order_fetch_provenance_and_guards() {
++    let (mut board, maps) = board();
++    let mut watch = install(&board, maps, 4, 2);
++    let mut byte = [0];
++    for _ in 0..100 { board.read_physical(0x11000, &mut byte).unwrap(); }
++    assert_eq!(watch.records.borrow().row_count(), 0);
++    board.write_physical(0x11000, &[1]).unwrap();
++    watch.records.borrow_mut().arm_passive_retention().unwrap();
++    board.read_physical(0x11000, &mut byte).unwrap();
++    board.write_physical(0x11004, &[2]).unwrap();
++    board.read_physical(0x11004, &mut byte).unwrap();
++    assert_eq!(watch.records.borrow().passive_retention_status(), PassiveRetentionStatus::Stopped(PassiveStopReason::CapacityExceeded));
++    assert!(watch.records.borrow().violation().is_none());
++    assert!(watch.instruction_guard_status().unwrap().first_failure.is_none());
++    board.write_physical(0x11000, &[3]).unwrap();
++    board.run_until(4, 100).unwrap();
++    let records = watch.records.borrow();
++    let rows = records.rows_since(0).unwrap();
++    assert_eq!(rows.iter().map(|row| row["source"].as_str().unwrap()).collect::<Vec<_>>(),
++        vec!["host-write", "host-read", "host-write", "host-write", "cpu-write"]);
++    assert!(rows[4]["latest_fetch"].is_object());
++    assert_eq!(rows[4]["physical"], json!(0x11000));
++    assert!(records.violation().is_none());
++    drop(records);
++    assert!(watch.instruction_guard_status().unwrap().first_failure.is_none());
++    assert!(watch.records.borrow_mut().arm_passive_retention().is_err());
++    watch.records.borrow_mut().stop_passive_retention(PassiveStopReason::End).unwrap();
++    assert_eq!(watch.records.borrow().passive_retention_status(), PassiveRetentionStatus::Stopped(PassiveStopReason::CapacityExceeded));
++    board.memory_watch_end(&mut watch).unwrap();
++}
++
++#[test]
++fn overlapping_events_spend_only_protected_capacity_and_protected_overflow_still_fails() {
++    let (board, maps) = board();
++    let mut watch = install(&board, maps, 2, 1);
++    watch.records.borrow_mut().arm_passive_retention().unwrap();
++    board.write_physical(0x11000, &[1]).unwrap();
++    board.write_physical(0x11000, &[2]).unwrap();
++    assert_eq!(watch.records.borrow().passive_retention_status(), PassiveRetentionStatus::Armed);
++    let mut byte = [0];
++    board.read_physical(0x11000, &mut byte).unwrap();
++    assert_eq!(watch.records.borrow().row_count(), 3);
++    assert!(watch.records.borrow().violation().is_none());
++    board.write_physical(0x11000, &[3]).unwrap();
++    assert_eq!(watch.records.borrow().row_count(), 3);
++    assert!(watch.records.borrow().violation().is_some());
++    assert_eq!(watch.instruction_guard_status().unwrap().first_failure.unwrap().kind, InstructionGuardFailure::ObservationFailed);
++    board.memory_watch_end(&mut watch).unwrap();
++}
++
++#[test]
++fn prearm_end_and_refusal_skip_only_passive_rows_without_disarming_fetch_guards() {
++    for reason in [PassiveStopReason::End, PassiveStopReason::Refused] {
++        for armed in [false, true] {
++            let (mut board, maps) = board();
++            let mut watch = board.memory_watch_begin_with_passive_fetch_attribution(
++                protected(), attribution(0x20000), 2, maps, ViewPolicy::Fixed, passive(1),
++            ).unwrap();
++            if armed { watch.records.borrow_mut().arm_passive_retention().unwrap(); }
++            watch.records.borrow_mut().stop_passive_retention(reason).unwrap();
++            let mut byte = [0];
++            for _ in 0..100 { board.read_physical(0x11000, &mut byte).unwrap(); }
++            board.write_physical(0x11000, &[1]).unwrap();
++            assert_eq!(watch.records.borrow().row_count(), 1);
++            assert_eq!(watch.records.borrow().passive_retention_status(), PassiveRetentionStatus::Stopped(reason));
++            assert!(watch.records.borrow_mut().arm_passive_retention().is_err());
++            let _ = board.run_until(1, 100);
++            assert_eq!(watch.instruction_guard_status().unwrap().first_failure.unwrap().kind, InstructionGuardFailure::Alias);
++            board.memory_watch_end(&mut watch).unwrap();
++        }
++    }
++}
++
++#[test]
++fn invalid_passive_bounds_and_forged_capacity_stop_are_rejected() {
++    assert!(PassiveRetention::new(vec![], 1).is_err());
++    let classes = vec![WatchRange { start: 0x11000, end: 0x11008, kinds: WatchKinds::ALL }];
++    assert!(PassiveRetention::new(classes.clone(), 0).is_err());
++    assert!(PassiveRetention::new(classes, 65_537).is_err());
++    let (board, maps) = board();
++    assert!(board.memory_watch_begin_with_passive_fetch_attribution(
++        protected(), attribution(0x10000), 1_048_577, maps.clone(), ViewPolicy::Fixed, passive(1),
++    ).is_err());
++    let mut watch = install(&board, maps, 1, 1);
++    assert!(watch.records.borrow_mut().stop_passive_retention(PassiveStopReason::CapacityExceeded).is_err());
++    assert!(watch.records.borrow_mut().stop_passive_retention(PassiveStopReason::ProvenanceUnavailable).is_err());
++    assert_eq!(watch.records.borrow().passive_retention_status(), PassiveRetentionStatus::Unarmed);
++    watch.records.borrow_mut().arm_passive_retention().unwrap();
++    assert!(watch.records.borrow_mut().arm_passive_retention().is_err());
++    board.memory_watch_end(&mut watch).unwrap();
++}
++
++#[test]
++fn skipped_passive_cpu_reads_need_no_fetch_but_retained_reads_still_do() {
++    let (mut board, maps) = board();
++    let code = [0xe5912004u32, 0xeafffffd];
++    board.write_physical(0x10000, &code.into_iter().flat_map(u32::to_le_bytes).collect::<Vec<_>>()).unwrap();
++    let fetches = vec![WatchRange { start: 0x10010, end: 0x10020, kinds: WatchKinds::CPU_FETCH }];
++    let attribution = FetchAttribution::new(CpuDataAttribution::None, fetches.clone()).unwrap();
++    let passive = passive(1).with_fetch_attribution(PassiveFetchAttribution::new(
++        CpuDataAttribution::ReadsAndWrites, fetches,
++    ).unwrap());
++    let mut watch = board.memory_watch_begin_with_passive_fetch_attribution(
++        protected(), attribution, 1, maps, ViewPolicy::Fixed, passive,
++    ).unwrap();
++    board.run_until(2, 100).unwrap();
++    assert_eq!(watch.records.borrow().row_count(), 0);
++    assert!(watch.records.borrow().violation().is_none());
++    watch.records.borrow_mut().arm_passive_retention().unwrap();
++    board.run_until(4, 100).unwrap();
++    assert_eq!(watch.records.borrow().row_count(), 1);
++    assert!(watch.records.borrow().rows_since(0).unwrap()[0]["latest_fetch"].is_null());
++    assert!(watch.records.borrow().violation().is_none());
++    assert_eq!(watch.records.borrow().passive_retention_status(),
++        PassiveRetentionStatus::Stopped(PassiveStopReason::ProvenanceUnavailable));
++    assert_eq!(watch.records.borrow().passive_retention_failure().unwrap().kind, PassiveCaptureFailure::MissingFetch);
++    board.write_physical(0x11000, &[1]).unwrap();
++    assert_eq!(watch.records.borrow().row_count(), 2);
++    board.memory_watch_end(&mut watch).unwrap();
++}
++
++#[derive(Clone, Copy)]
++enum PassivePhase { Unarmed, Armed, Ended, Refused }
++fn phase(watch: &MemoryWatch, phase: PassivePhase) {
++    match phase {
++        PassivePhase::Unarmed => {}
++        PassivePhase::Armed => watch.records.borrow_mut().arm_passive_retention().unwrap(),
++        PassivePhase::Ended => watch.records.borrow_mut().stop_passive_retention(PassiveStopReason::End).unwrap(),
++        PassivePhase::Refused => watch.records.borrow_mut().stop_passive_retention(PassiveStopReason::Refused).unwrap(),
++    }
++}
++fn status_after_passive_failure(phase: PassivePhase) -> PassiveRetentionStatus {
++    match phase {
++        PassivePhase::Unarmed => PassiveRetentionStatus::Unarmed,
++        PassivePhase::Armed => PassiveRetentionStatus::Stopped(PassiveStopReason::ProvenanceUnavailable),
++        PassivePhase::Ended => PassiveRetentionStatus::Stopped(PassiveStopReason::End),
++        PassivePhase::Refused => PassiveRetentionStatus::Stopped(PassiveStopReason::Refused),
++    }
++}
++fn remote_attribution(sources: CpuDataAttribution) -> FetchAttribution {
++    let physical = WatchRange { start: 0x10100, end: 0x10104, kinds: WatchKinds::CPU_FETCH };
++    FetchAttribution::new(sources, vec![physical]).unwrap().with_instruction_guards(vec![
++        PhysicalInstructionGuard::arm32_little(physical, GuestAddress(physical.start), InstructionCores::Core0).unwrap(),
++    ]).unwrap()
++}
++fn write_code(board: &Board, address: u64, code: &[u32]) {
++    board.cpu(0).unwrap().write_memory(address,
++        &code.iter().flat_map(|word| word.to_le_bytes()).collect::<Vec<_>>()).unwrap();
++}
++
++#[test]
++fn passive_tcm_data_capture_is_isolated_in_every_phase_but_protected_overlap_still_fails() {
++    for current in [PassivePhase::Unarmed, PassivePhase::Armed, PassivePhase::Ended, PassivePhase::Refused] {
++        let (mut board, maps) = board_with_tcm(Some(0x11000));
++        write_code(&board, 0x10000, &[0xe3a00029, 0xe5810004, 0xe5912004, 0xeafffffe]);
++        let mut watch = install(&board, maps, 4, 8);
++        phase(&watch, current);
++        board.run_until(4, 100).unwrap();
++        assert_eq!(board.read_register(0, Register::Arm32(arm::Register::R(2))).unwrap(), 41);
++        assert_eq!(watch.records.borrow().row_count(), 0);
++        assert!(watch.records.borrow().violation().is_none());
++        assert!(watch.instruction_guard_status().unwrap().first_failure.is_none());
++        assert_eq!(watch.records.borrow().passive_retention_status(), status_after_passive_failure(current));
++        if matches!(current, PassivePhase::Armed) {
++            assert_eq!(watch.records.borrow().passive_retention_failure().unwrap().kind, PassiveCaptureFailure::CpuCapture);
++        }
++        write_code(&board, 0x10000, &[0xe3a00029, 0xe5810000, 0xeafffffe]);
++        board.write_register(0, Register::Pc, 0x10000).unwrap();
++        let _ = board.run_until(8, 100);
++        assert!(watch.records.borrow().violation().is_some());
++        assert_eq!(watch.instruction_guard_status().unwrap().first_failure.unwrap().kind, InstructionGuardFailure::ObservationFailed);
++        board.memory_watch_end(&mut watch).unwrap();
++    }
++}
++
++#[derive(Clone, Copy)]
++enum CodeBacking { Tcm, Unbacked }
++
++#[test]
++fn cache_only_fetch_failures_stop_only_active_passive_capture_and_preserve_original_guard_scope() {
++    for backing in [CodeBacking::Tcm, CodeBacking::Unbacked] {
++        for current in [PassivePhase::Unarmed, PassivePhase::Armed, PassivePhase::Ended, PassivePhase::Refused] {
++            let (mut board, maps) = board_with_tcm(match backing { CodeBacking::Tcm => Some(0x10000), CodeBacking::Unbacked => None });
++            if matches!(backing, CodeBacking::Unbacked) {
++                board.cpu(0).unwrap().unmap(0x10000, 0x1000).unwrap();
++                board.cpu(0).unwrap().map_zeroed(0x10000, 0x1000, 7).unwrap();
++            }
++            write_code(&board, 0x10000, &[0xe3a00029, 0xe5810000, 0xe5912000, 0xeafffffe]);
++            write_code(&board, 0x10100, &[0xe320f000]);
++            let passive = passive(8).with_fetch_attribution(PassiveFetchAttribution::new(
++                CpuDataAttribution::Writes,
++                vec![WatchRange { start: 0x10000, end: 0x10010, kinds: WatchKinds::CPU_FETCH }],
++            ).unwrap());
++            let mut watch = board.memory_watch_begin_with_passive_fetch_attribution(
++                protected(), remote_attribution(CpuDataAttribution::None), 4, maps, ViewPolicy::Fixed, passive,
++            ).unwrap();
++            phase(&watch, current);
++            board.run_until(4, 100).unwrap();
++            assert_eq!(board.read_register(0, Register::Arm32(arm::Register::R(2))).unwrap(), 41);
++            assert!(watch.records.borrow().violation().is_none());
++            assert!(watch.instruction_guard_status().unwrap().first_failure.is_none());
++            assert_eq!(watch.records.borrow().passive_retention_status(), status_after_passive_failure(current));
++            let state = watch.records.borrow().state();
++            assert_eq!(state["fetch_attribution"]["ranges"], json!([[0x10100, 0x10104]]));
++            assert_eq!(state["fetch_attribution"]["sources"], json!([]));
++            assert_eq!(state["passive_fetch_attribution"]["ranges"], json!([[0x10000, 0x10010]]));
++            board.write_register(0, Register::Pc, 0x10100).unwrap();
++            let _ = board.run_until(5, 100);
++            let expected = match backing { CodeBacking::Tcm => InstructionGuardFailure::Tcm, CodeBacking::Unbacked => InstructionGuardFailure::UnresolvedBacking };
++            assert_eq!(watch.instruction_guard_status().unwrap().first_failure.unwrap().kind, expected);
++            board.memory_watch_end(&mut watch).unwrap();
++        }
++    }
++}
++
++#[test]
++fn missing_passive_fetch_on_protected_overlap_is_incomplete_without_adding_a_protected_validation() {
++    let (mut board, maps) = board();
++    let passive = passive(8).with_fetch_attribution(PassiveFetchAttribution::new(CpuDataAttribution::Writes,
++        vec![WatchRange { start: 0x10100, end: 0x10104, kinds: WatchKinds::CPU_FETCH }]).unwrap());
++    let mut watch = board.memory_watch_begin_with_passive_fetch_attribution(
++        protected(), remote_attribution(CpuDataAttribution::None), 2, maps, ViewPolicy::Fixed, passive,
++    ).unwrap();
++    watch.records.borrow_mut().arm_passive_retention().unwrap();
++    board.run_until(4, 100).unwrap();
++    assert!(watch.records.borrow().violation().is_none());
++    assert!(watch.instruction_guard_status().unwrap().first_failure.is_none());
++    assert_eq!(watch.records.borrow().passive_retention_status(),
++        PassiveRetentionStatus::Stopped(PassiveStopReason::ProvenanceUnavailable));
++    assert!(watch.records.borrow().rows_since(0).unwrap()[0].get("latest_fetch").is_none());
++    assert!(watch.records.borrow().rows_since(0).unwrap()[0].get("core_instructions").is_none());
++    board.write_physical(0x11000, &[1]).unwrap();
++    board.write_physical(0x11000, &[2]).unwrap();
++    assert!(watch.records.borrow().violation().is_some());
++    assert_eq!(watch.instruction_guard_status().unwrap().first_failure.unwrap().kind, InstructionGuardFailure::ObservationFailed);
++    board.memory_watch_end(&mut watch).unwrap();
++}
++
++#[test]
++fn valid_passive_cache_cannot_satisfy_an_original_protected_fetch_requirement() {
++    let (mut board, maps) = board();
++    let passive = passive(8).with_fetch_attribution(PassiveFetchAttribution::new(CpuDataAttribution::Writes,
++        vec![WatchRange { start: 0x10000, end: 0x10010, kinds: WatchKinds::CPU_FETCH }]).unwrap());
++    let mut watch = board.memory_watch_begin_with_passive_fetch_attribution(
++        protected(), remote_attribution(CpuDataAttribution::Writes), 2, maps, ViewPolicy::Fixed, passive,
++    ).unwrap();
++    watch.records.borrow_mut().arm_passive_retention().unwrap();
++    let _ = board.run_until(4, 100);
++    assert!(watch.records.borrow().violation().is_some());
++    assert_eq!(watch.instruction_guard_status().unwrap().first_failure.unwrap().kind, InstructionGuardFailure::ObservationFailed);
++    assert!(watch.records.borrow().rows_since(0).unwrap()[0]["latest_fetch"].is_null());
++    board.memory_watch_end(&mut watch).unwrap();
++}
++
++#[test]
++fn unresolved_accesses_in_original_data_hook_padding_keep_source_specific_terminal_scope() {
++    for (instruction, protected_access) in [(0xe5810000u32, true), (0xe5912000, false)] {
++        for current in [PassivePhase::Unarmed, PassivePhase::Armed, PassivePhase::Ended, PassivePhase::Refused] {
++            let maps = vec![
++                MemoryMap { core: 0, address: 0x10000, physical: 0x10000, size: 0x1000, permissions: 7 },
++                MemoryMap { core: 0, address: 0x20000, physical: 0x11000, size: 0x1000, permissions: 7 },
++            ];
++            let graph = Graph {
++                decoders: vec![], processors: vec![Processor {
++                    rprofile: Some(Default::default()), mprofile: None, model: Model::CortexR5F,
++                    registers: vec![(Register::Pc, 0x10000), (Register::Arm32(arm::Register::R(1)), 0x1fff4)],
++                    released: true,
++                }],
++                dma_mappings: vec![crate::board::memory::BusMapping::ram(0x10000, 0x2000)],
++                ram: vec![Ram { base: 0x10000, size: 0x2000 }], mappings: maps.clone(), peripherals: vec![],
++                instructions_per_tick: Ratio::new(1, 1).unwrap(),
++            };
++            let mut board = graph.build(
++                Options { engine: Engine::Unicorn, translation_cache_bytes: 1024 * 1024 },
++                Bus::new(bus::Mode::Strict), None,
++            ).unwrap();
++            board.cpu(0).unwrap().map_zeroed(0x1f000, 0x1000, 7).unwrap();
++            write_code(&board, 0x10000, &[0xe3a00029, instruction, 0xeafffffe]);
++            let mut watch = install(&board, maps, 4, 8);
++            phase(&watch, current);
++            let run = board.run_until(3, 100);
++            if protected_access {
++                assert!(watch.records.borrow().violation().is_some());
++                assert_eq!(watch.instruction_guard_status().unwrap().first_failure.unwrap().kind, InstructionGuardFailure::ObservationFailed);
++            } else {
++                run.unwrap();
++                assert!(watch.records.borrow().violation().is_none());
++                assert!(watch.instruction_guard_status().unwrap().first_failure.is_none());
++                assert_eq!(watch.records.borrow().passive_retention_status(), status_after_passive_failure(current));
++            }
++            assert_eq!(watch.records.borrow().row_count(), 0);
++            board.memory_watch_end(&mut watch).unwrap();
++        }
++    }
++}

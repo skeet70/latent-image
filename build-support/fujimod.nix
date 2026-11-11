@@ -34,6 +34,7 @@ let
       ./fujimod-observation-context.patch
       ./fujimod-observation-backing-tests.patch
       ./fujimod-owned-nand-pages.patch
+      ./fujimod-passive-af-retention.patch
     ] ++ extraPatches;
   };
   # Upstream's mise.toml pins Rust 1.99.1; cargo 1.98 rejects the workspace's

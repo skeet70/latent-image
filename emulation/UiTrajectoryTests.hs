@@ -2,8 +2,9 @@
 -- | Decoding of e2e trajectory files: the checked-in files and synthetic trace-site and segment cases.
 module Main (main) where
 
-import Control.Monad (unless)
+import Control.Monad (forM_, unless)
 import qualified Data.ByteString.Char8 as C
+import qualified Data.ByteString.Lazy as BL
 import Data.Aeson (Value (..), eitherDecode, encode, object, toJSON, (.=))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
@@ -85,6 +86,30 @@ expect name ok = do
 
 main :: IO ()
 main = do
+  afReceiptControls
+  let afSegment phase key action = object
+        ["phase" .= (phase :: String), "steps" .= [[String key, Number 1, Number 246, Number 1]], "af_ownership" .= (action :: String)]
+      down = afSegment "original-down" "down" "arm"
+      left = afSegment "original-left" "left" "end"
+      afRoute :: Bool -> [Value] -> [Value] -> Either String ()
+      afRoute enabled before after = do
+        trajectories <- decodeTrajectories (BL.toStrict (encode (object ["schema" .= (1 :: Int), "before_unload" .= before, "after_unload" .= after])))
+        checkAfOwnershipRoute enabled (beforeUnload trajectories) (afterUnload trajectories)
+      identity = object ["sdk" .= String "/nix/store/exact-sdk", "viewer" .= String "viewer-hash", "bridge" .= String "bridge-hash", "model" .= String "model-hash", "package" .= String "package-hash"]
+      site = object ["pc" .= (4096 :: Int), "word" .= (0xe1a00000 :: Integer), "kind" .= String "consumer", "reads" .= [[8192 :: Int, 4]]]
+      afPlan :: Value -> [Value] -> Either String AfOwnershipPlan
+      afPlan bound sites = decodeAfOwnershipPlan (BL.toStrict (encode (object ["identity" .= bound, "sites" .= sites])))
+      rejected = either (const True) (const False)
+  unless (afRoute True [down, left] [] == Right ()) (ioError (userError "AF original DOWN/LEFT route must admit"))
+  unless (all rejected
+    [afRoute False [down, left] [], afRoute True [left, down] [], afRoute True [down] [], afRoute True [down] [left],
+     afRoute True [afSegment "wrong-key" "right" "arm", left] [], afRoute True [down, down, left] []])
+    (ioError (userError "AF route refusal controls"))
+  unless (either (const False) ((== identity) . afOwnershipIdentity) (afPlan identity [site]))
+    (ioError (userError "AF plan identity round trip"))
+  unless (rejected (afPlan (object ["sdk" .= String "only-sdk"]) [site]) && rejected (afPlan identity []) && rejected (afPlan identity [site, site])
+    && refused (segmentDocument ",\"af_ownership\":\"report\""))
+    (ioError (userError "AF plan and action refusal controls"))
   files <- sort . filter ("-trajectories.json" `isSuffixOf`) <$> listDirectory "emulation"
   checkedIn <- mapM (\file -> do
       decoded <- decodeTrajectories <$> C.readFile ("emulation" </> file)
@@ -864,3 +889,157 @@ preservedExecutionReceipt =
       ["cpu_writes" .= (1 :: Int), "protected_identity_cpu_stores" .= (1 :: Int), "host_writes" .= (0 :: Int)
       , "model_bus_writes" .= (0 :: Int), "first_violation" .= Null])
   $ positiveExecutionReceipt
+
+afReceiptControls :: IO ()
+afReceiptControls = do
+  let identity = object ["sdk" .= String "/nix/store/exact-sdk", "viewer" .= String "viewer-hash", "bridge" .= String "bridge-hash", "model" .= String "model-hash", "package" .= String "package-hash"]
+      site dynamic = object (["pc" .= (4096 :: Int), "word" .= (0xe1a00000 :: Integer), "kind" .= String "consumer"]
+        ++ if dynamic then ["reads" .= ([] :: [[Int]]), "register_reads" .= [object ["register" .= (0 :: Int), "offset" .= (0 :: Int), "bytes" .= (4 :: Int)]]]
+           else ["reads" .= [[8192 :: Int, 4]]])
+      plan dynamic = either error id (decodeAfOwnershipPlan (BL.toStrict (encode (object ["identity" .= identity, "sites" .= [site dynamic]]))))
+      counts = [1, 0 :: Int]
+      addresses = [0x016fec3c, 0x016fec4c] ++ [0x016fed28,0x016fed2c .. 0x016fee44]
+        ++ [0x0170306c, 0x01703080, 0x01703084, 0x017030d0, 0x01703160, 0x0170319c, 0x017031a4, 0x0170327c :: Int]
+      snapshot clock = object ["counts" .= (clock :: [Int]), "words" .= [object ["address" .= address, "value" .= (if clock == counts && address == 0x016fec3c then 1 else 0 :: Int)] | address <- addresses]]
+      mapping core alias = object ["core" .= (core :: Int), "address" .= (alias :: Integer), "physical" .= (0 :: Int), "size" .= (0x10000000 :: Int), "permissions" .= (7 :: Int)]
+      shared = object ["kind" .= String "shared-physical", "physical" .= (8192 :: Int), "observed_tcm" .= [[0,0],[0,0 :: Int]]]
+      tcm = object ["kind" .= String "tcm", "core" .= String "primary", "bank" .= String "btcm", "register" .= (0x200d :: Int)
+        , "window_start" .= (8192 :: Int), "window_end" .= (12288 :: Int), "offset" .= (0 :: Int), "observed_tcm" .= [[0x200d,0],[0,0 :: Int]]]
+      readWith provenance = object ["address" .= (8192 :: Int), "bytes" .= [0x12,0x34,0x56,0x78 :: Int], "provenance" .= provenance]
+      entry = object ["opaque_id" .= String "InstructionEntryId { fixture: 1 }", "address" .= (4096 :: Int), "bytes" .= (4 :: Int)
+        , "progress" .= (1 :: Int), "pstate" .= (0xd3 :: Int), "physical" .= (4096 :: Int), "tcm" .= [Null,Null]]
+      tcmWindow address bytes = object ["address" .= (address :: Int), "bytes" .= (bytes :: Int)]
+      entryFor (Object provenance) | KM.lookup "observed_tcm" provenance == Just (toJSON [[0x200d,0],[0,0 :: Int]]) =
+        replaceField "tcm" (toJSON [tcmWindow 8192 4096, Null]) entry
+      entryFor _ = entry
+      context provenance = object ["sequence" .= (0 :: Int), "core" .= (0 :: Int), "pc" .= (4096 :: Int)
+        , "word" .= (0xe1a00000 :: Integer), "kind" .= String "consumer", "cpsr" .= (0xd3 :: Int)
+        , "registers" .= (8192 : replicate 12 0 :: [Int]), "sp" .= (16384 :: Int), "lr" .= (4100 :: Int)
+        , "sampled_task" .= object ["status" .= String "refused", "error" .= String "no active task", "context_depth" .= Null]
+        , "entry" .= entryFor provenance, "counts" .= counts, "cursor" .= (0 :: Int), "reads" .= [readWith provenance]]
+      row = object ["af_sequence" .= (0 :: Int), "source" .= String "host-write", "address" .= (0x016fec3c :: Int)
+        , "physical" .= (0x016fec3c :: Int), "size" .= (1 :: Int), "core" .= Null, "pc" .= Null
+        , "instructions" .= (1 :: Int), "tick" .= (1 :: Int), "before" .= [0 :: Int], "value" .= (1 :: Int), "byte_order" .= String "little"]
+      receipt provenance = object ["schema" .= (4 :: Int), "status" .= String "complete", "identity" .= identity
+        , "mode" .= String "passive", "retention" .= object ["status" .= String "stopped", "reason" .= String "end"]
+        , "initial" .= snapshot [0,0], "final" .= snapshot counts, "rows" .= [row], "contexts" .= [context provenance]
+        , "failure" .= Null, "read_refusal" .= Null, "row_count" .= (1 :: Int), "context_count" .= (1 :: Int)
+        , "limits" .= object ["rows" .= (65536 :: Int), "contexts" .= (8192 :: Int), "pairs" .= (128 :: Int), "output_bytes" .= (134217728 :: Int)]
+        , "mappings" .= [mapping core alias | core <- [0,1], alias <- [0,0x40000000]]]
+      catalogue = either error id (afMappingCatalogue (toJSON
+        [object ["core" .= core, "address" .= address, "physical" .= (0 :: Int)
+          , "size" .= (268435456 :: Int), "permissions" .= (7 :: Int)]
+        | core <- [0,1 :: Int], address <- [0,1073741824 :: Integer]]))
+      validate dynamic = validateAfOwnershipReceipt catalogue (plan dynamic) EndAfOwnership
+      accepts label dynamic value = unless (validate dynamic value == Right ()) (ioError (userError label))
+      refuses label dynamic value = unless (either (const True) (const False) (validate dynamic value)) (ioError (userError label))
+      contexts value = replaceField "contexts" (toJSON [value]) (receipt shared)
+      delete name (Object fields) = Object (KM.delete name fields)
+      delete _ value = value
+  accepts "complete shared-physical receipt" False (receipt shared)
+  accepts "register-derived shared read remains physical" True (receipt shared)
+  accepts "complete executing-core TCM receipt" True (receipt tcm)
+  let armed = replaceField "retention" (object ["status" .= String "armed"])
+        . replaceField "status" (String "armed") . replaceField "final" Null
+        . replaceField "rows" (toJSON ([] :: [Value])) . replaceField "contexts" (toJSON ([] :: [Value]))
+        . replaceField "row_count" (toJSON (0 :: Int)) . replaceField "context_count" (toJSON (0 :: Int)) $ receipt shared
+  unless (validateAfOwnershipReceipt catalogue (plan False) ArmAfOwnership armed == Right ()) (ioError (userError "complete armed receipt"))
+  forM_ ["initial","final","identity","rows","contexts","mappings","read_refusal","mode","retention"] $ \name ->
+    refuses ("missing receipt " ++ show name) False (delete name (receipt shared))
+  forM_ [("schema",toJSON (2 :: Int)),("status",String "blocked"),("identity",object []),("failure",String "read failed")
+        ,("read_refusal",object ["reason" .= String "payload-unreadable"]),("row_count",toJSON (0 :: Int))
+        ,("context_count",toJSON (8193 :: Int)),("unknown",Null),("rows",toJSON ([] :: [Value]))] $ \(name,value) ->
+    refuses ("receipt refusal " ++ show name) False (replaceField name value (receipt shared))
+  forM_ ["entry","registers","sp","lr","sampled_task","counts","reads"] $ \name ->
+    refuses ("missing preread context " ++ show name) False (contexts (delete name (context shared)))
+  forM_ [("cpsr",toJSON (0xf3 :: Int)),("pc",toJSON (4100 :: Int)),("word",toJSON (0 :: Int))
+        ,("sequence",toJSON (1 :: Int)),("cursor",toJSON (2 :: Int)),("counts",toJSON [2,0 :: Int]),("unknown",Null)] $ \(name,value) ->
+    refuses ("context refusal " ++ show name) False (contexts (replaceField name value (context shared)))
+  refuses "missing read payload" False (contexts (replaceField "reads" (toJSON [delete "bytes" (readWith shared)]) (context shared)))
+  refuses "short read mask" False (contexts (replaceField "reads" (toJSON [replaceField "bytes" (toJSON [0 :: Int]) (readWith shared)]) (context shared)))
+  refuses "read mask cannot disappear" False (contexts (replaceField "reads" (toJSON ([] :: [Value])) (context shared)))
+  refuses "fixed physical read cannot claim TCM" False (receipt tcm)
+  refuses "TCM read cannot fake physical" True (receipt (replaceField "observed_tcm" (toJSON [[0x200d,0],[0,0 :: Int]]) shared))
+  forM_ [("core",String "secondary"),("bank",String "unknown"),("offset",toJSON (1 :: Int)),("window_end",toJSON (16384 :: Int))] $ \(name,value) ->
+    refuses ("TCM identity " ++ show name) True (receipt (replaceField name value tcm))
+  refuses "shared physical mismatch" False (receipt (replaceField "physical" (toJSON (8193 :: Int)) shared))
+  refuses "unknown memory view" False (receipt (replaceField "kind" (String "virtual") shared))
+  refuses "register-derived read overflow" True (contexts (replaceField "registers" (toJSON (4294967295 : replicate 12 0 :: [Integer])) (context shared)))
+  refuses "reordered contexts" False (replaceField "context_count" (toJSON (2 :: Int))
+    (replaceField "contexts" (toJSON [replaceField "sequence" (toJSON (1 :: Int)) (context shared),context shared]) (receipt shared)))
+  forM_ [("address",toJSON (4097 :: Int)),("progress",toJSON (0 :: Int)),("pstate",toJSON (0x13 :: Int)),("physical",Null),("unknown",Null)] $ \(name,value) ->
+    refuses ("actual instruction entry " ++ show name) False (contexts (replaceField "entry" (replaceField name value entry) (context shared)))
+  refuses "failure with full preread evidence never passes" False
+    (replaceField "failure" (String "payload-unreadable") (contexts (replaceField "reads" (toJSON ([] :: [Value])) (context shared))))
+  refuses "unknown write source" False (replaceField "rows" (toJSON [replaceField "source" (String "unknown") row]) (receipt shared))
+  refuses "write payload overflow" False (replaceField "rows" (toJSON [replaceField "value" (toJSON (256 :: Int)) row]) (receipt shared))
+  refuses "reordered boundary words" False (replaceField "initial" (object ["counts" .= [0,0 :: Int]
+    , "words" .= [object ["address" .= address, "value" .= (0 :: Int)] | address <- reverse addresses]]) (receipt shared))
+  refuses "boundary clock overflow" False (replaceField "final" (object ["counts" .= [18446744073709551615,1 :: Integer]
+    , "words" .= [object ["address" .= address, "value" .= (0 :: Int)] | address <- addresses]]) (receipt shared))
+  unless (either (const True) (const False) (decodeAfOwnershipPlan (BL.toStrict (encode (object ["identity" .= identity,"sites" .= [site False]])) <> " trailing")))
+    (ioError (userError "AF plan trailing bytes refuse"))
+  refuses "captured write preimage mismatch" False (replaceField "rows" (toJSON [replaceField "before" (toJSON [1 :: Int]) row]) (receipt shared))
+  refuses "final snapshot cannot conceal write" False (replaceField "final" (object ["counts" .= counts
+    , "words" .= [object ["address" .= address, "value" .= (0 :: Int)] | address <- addresses]]) (receipt shared))
+  let withTcmEntry windows = replaceField "contexts"
+        (toJSON [replaceField "entry" (replaceField "tcm" (toJSON windows) (entryFor tcm)) (context tcm)]) (receipt tcm)
+  forM_ [("null", [Null,Null]), ("wrong-bank", [Null,tcmWindow 8192 4096])
+        ,("remapped", [tcmWindow 16384 4096,Null]), ("wrong-size", [tcmWindow 8192 8192,Null])] $ \(label,windows) ->
+    refuses ("instruction entry TCM " ++ label) True (withTcmEntry windows)
+  refuses "disabled observed TCM cannot retain entry window" True
+    (replaceField "contexts" (toJSON [replaceField "reads"
+      (toJSON [readWith (replaceField "observed_tcm" (toJSON [[0,0],[0,0 :: Int]]) tcm)]) (context tcm)]) (receipt tcm))
+  refuses "disabled TCM cannot appear in shared entry" False
+    (contexts (replaceField "entry" (replaceField "tcm" (toJSON [tcmWindow 8192 4096,Null]) entry) (context shared)))
+  let substitutedMaps = toJSON [replaceField "permissions" (toJSON (3 :: Int)) (mapping core alias)
+        | core <- [0,1], alias <- [0,0x40000000]]
+      substitutedReceipt = replaceField "mappings" substitutedMaps (receipt shared)
+      substitutedCatalogue = either error id (afMappingCatalogue substitutedMaps)
+  unless (validateAfOwnershipReceipt substitutedCatalogue (plan False) EndAfOwnership substitutedReceipt == Right ())
+    (ioError (userError "substituted catalogue receipt is internally consistent"))
+  refuses "receipt cannot substitute a self-consistent mapping catalogue" False substitutedReceipt
+  forM_ [Null, object [], object ["status" .= String "disabled"], object ["status" .= String "unarmed"]
+        ,object ["status" .= String "armed"], object ["status" .= String "default"], object ["status" .= String "unknown"]
+        ,object ["status" .= String "stopped", "reason" .= String "refused"]
+        ,object ["status" .= String "stopped", "reason" .= String "capacity-exceeded"]
+        ,object ["status" .= String "stopped", "reason" .= String "unknown"]
+        ,object ["status" .= String "stopped", "reason" .= String "end", "unknown" .= Null]] $ \retention ->
+    refuses "end receipt requires passive retention stopped at end" False (replaceField "retention" retention (receipt shared))
+  forM_ [Null, String "default", String "active", String "unknown"] $ \mode ->
+    refuses "capture mode is closed and passive" False (replaceField "mode" mode (receipt shared))
+  refuses "schema3 has no passive retention proof" False (replaceField "schema" (toJSON (3 :: Int)) (receipt shared))
+  forM_ [Null, object ["status" .= String "disabled"], object ["status" .= String "unarmed"]
+        ,object ["status" .= String "stopped", "reason" .= String "end"]
+        ,object ["status" .= String "armed", "unknown" .= Null]] $ \retention ->
+    unless (either (const True) (const False) (validateAfOwnershipReceipt catalogue (plan False) ArmAfOwnership (replaceField "retention" retention armed)))
+      (ioError (userError "arm receipt requires passive retention armed"))
+  forM_ [0,1 :: Int] $ \core ->
+    forM_ [0,1 :: Int] $ \bank -> do
+      let observed = [[if sampledCore == core && sampledBank == bank then Null else toJSON (0 :: Int)
+                      | sampledBank <- [0,1 :: Int]] | sampledCore <- [0,1 :: Int]]
+      refuses ("shared provenance requires sampled TCM register " ++ show (core,bank)) False
+        (receipt (replaceField "observed_tcm" (toJSON observed) shared))
+      refuses ("dynamic shared provenance requires sampled TCM register " ++ show (core,bank)) True
+        (receipt (replaceField "observed_tcm" (toJSON observed) shared))
+  let crossingWrite = replaceField "address" (toJSON (0x016fec30 :: Int))
+        . replaceField "physical" (toJSON (0x016fec30 :: Int))
+        . replaceField "size" (toJSON (8 :: Int))
+        . replaceField "before" (toJSON (replicate 8 (0 :: Int)))
+        . replaceField "value" (toJSON (0x0807060504030201 :: Integer)) $ row
+      crossingReceipt = replaceField "rows" (toJSON [crossingWrite])
+        (replaceField "final" (object ["counts" .= counts
+          , "words" .= [object ["address" .= address, "value" .= (0 :: Int)] | address <- addresses]]) (receipt shared))
+      withCrossingWrite value = replaceField "rows" (toJSON [value]) crossingReceipt
+  accepts "write straddling selected queue end remains captured" False crossingReceipt
+  refuses "fully disjoint write cannot claim AF capture" False
+    (withCrossingWrite (replaceField "address" (toJSON (0x01800000 :: Int))
+      (replaceField "physical" (toJSON (0x01800000 :: Int)) crossingWrite)))
+  refuses "captured write virtual extent cannot overflow" False
+    (withCrossingWrite (replaceField "address" (toJSON (0xfffffffc :: Integer))
+      (replaceField "physical" (toJSON (0xbffffffc :: Integer)) crossingWrite)))
+  forM_ ["address","physical"] $ \field ->
+    refuses ("captured write address domain " ++ show field) False
+      (withCrossingWrite (replaceField field (toJSON (4294967296 :: Integer)) crossingWrite))
+  refuses "unavailable provenance retention cannot pass as complete" False
+    (replaceField "retention" (object ["status" .= String "stopped", "reason" .= String "provenance-unavailable"]) (receipt shared))

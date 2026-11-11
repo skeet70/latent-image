@@ -1,7 +1,7 @@
 use crate::{
     loader_code::immutable_loader_spans,
     modal_lifetime::{CodeSiteRole, CurrentState, LifetimeConfig, LifetimeMemory, LifetimeMonitor,
-        LifetimeReceipt, LifetimeRequest, VfpOwnerState, Word},
+        LifetimeReceipt, LifetimeRequest, RowProjection, VfpOwnerState, Word},
     modal_memory::FixedMemory,
     modal_permit::{CoreId, Cpsr, Layout},
     modal_task::{PhysicalExtent, VfpOwner, current_task_id, source_layouts, vfp_owner},
@@ -10,7 +10,8 @@ use crate::{
 };
 use fujimod_emulator::{board::{factory::MemoryMap, observation::{ByteOrder, CoreIndex,
     CpuDataAttribution, FetchAttribution, InstructionCores, InstructionExecutionState, InstructionPointEvent,
-    MemoryWatch, PhysicalInstructionGuard, WatchKinds, WatchRange}}, session::Session};
+    MemoryWatch, PassiveFetchAttribution, PassiveRetention, PassiveRetentionStatus, PassiveStopReason, PhysicalInstructionGuard,
+    WatchKinds, WatchRange}}, session::Session};
 use fujimod_emulator_cpu::{Register, arm};
 use serde::{Serialize, Serializer, ser::{SerializeMap, SerializeSeq}};
 use sha2::{Digest, Sha256};
@@ -139,13 +140,15 @@ pub(crate) struct InstalledGuard {
     row_cursor: usize,
     physical_failure: Option<String>,
     row_digest: RefCell<RowDigest>,
+    af_ranges: Vec<WatchRange>,
+    lifetime_rows: usize,
 }
 
 /// SHA-256 over each retained row's compact JSON encoding followed by LF, in row order.
 #[derive(Default)]
 struct RowDigest { rows: usize, hasher: Sha256 }
 impl RowDigest {
-    fn advance(&mut self, rows: &[serde_json::Value]) -> Result<(), String> {
+    fn advance<T: Serialize>(&mut self, rows: &[T]) -> Result<(), String> {
         for row in rows {
             self.hasher.update(serde_json::to_vec(row).map_err(|failure| failure.to_string())?);
             self.hasher.update(b"\n");
@@ -175,7 +178,8 @@ fn merged_ranges(sites: &[Guest]) -> Vec<WatchRange> {
 
 impl InstalledGuard {
     pub(crate) fn new(config: GuardConfig, session: &Session, maps: &[MemoryMap],
-        static_sites: impl Iterator<Item = Guest>, layout: Layout) -> Result<Self, String> {
+        static_sites: impl Iterator<Item = Guest>, layout: Layout,
+        af: Option<&crate::af_ownership::Projection>) -> Result<Self, String> {
         let memory = FixedMemory { session, maps };
         let mut observed = [0; 256];
         for image in &config.contexts {
@@ -224,6 +228,11 @@ impl InstalledGuard {
                 fujimod_emulator::board::observation::GuestAddress(range.start), InstructionCores::Both)?
                 .with_execution_state(state));
         }
+        let af_sites: Vec<_> = af.into_iter().flat_map(|projection| projection.sites().map(Guest)).collect();
+        if af_sites.iter().any(|site| protected_sites.binary_search(site).is_ok()) {
+            return Err("AF site overlaps an installed lifecycle instruction".into());
+        }
+        let af_ranges = if af.is_some() { crate::af_ownership::ranges() } else { Vec::new() };
         let attribution = FetchAttribution::new(CpuDataAttribution::None, fetch_ranges.clone())?
             .with_instruction_guards(guards)?;
         let write_ranges: Vec<_> = lifetime.config().watched_extents().iter().map(|extent| WatchRange {
@@ -236,11 +245,25 @@ impl InstalledGuard {
         if fetch_classes.iter().any(|class| fetch_ranges.iter().any(|site| site.start < class.end && class.start < site.end)) {
             return Err("modal retired extent or settings reload site overlaps a guarded instruction site".into());
         }
-        let watch = session.board.memory_watch_begin_with_fetch_attribution(
-            write_ranges.iter().chain(&fetch_classes).cloned().collect(),
-            attribution, WRITE_LIMIT, maps.to_vec(), fujimod_emulator::board::observation::ViewPolicy::Fixed)?;
+        let protected_classes = write_ranges.iter().chain(&fetch_classes).cloned().collect();
+        let watch = if af.is_some() {
+            session.board.memory_watch_begin_with_passive_fetch_attribution(
+                protected_classes, attribution, WRITE_LIMIT, maps.to_vec(),
+                fujimod_emulator::board::observation::ViewPolicy::Fixed,
+                PassiveRetention::new(af_ranges.clone(), crate::af_ownership::ROW_LIMIT)?
+                    .with_fetch_attribution(PassiveFetchAttribution::new(CpuDataAttribution::Writes,
+                        crate::af_ownership::attribution_ranges(maps)?)?))?
+        } else {
+            session.board.memory_watch_begin_with_fetch_attribution(
+                protected_classes, attribution, WRITE_LIMIT, maps.to_vec(),
+                fujimod_emulator::board::observation::ViewPolicy::Fixed)?
+        };
         Ok(Self { contexts: config.contexts, lifetime, watch, write_ranges, fetch_ranges, fetch_classes,
-            protected_sites, row_cursor: 0, physical_failure: None, row_digest: RefCell::default() })
+            protected_sites, row_cursor: 0, physical_failure: None, row_digest: RefCell::default(), af_ranges, lifetime_rows: 0 })
+    }
+
+    pub(crate) fn installed(&self) -> bool {
+        self.lifetime.receipt().phase == crate::modal_lifetime::LifetimePhase::Installed
     }
 
     pub(crate) fn sites(&self) -> impl Iterator<Item = Guest> + '_ {
@@ -260,7 +283,35 @@ impl InstalledGuard {
             }))
     }
 
-    pub(crate) fn check(&mut self) -> Result<(), String> {
+    pub(crate) fn arm_af_retention(&mut self) -> Result<(), String> {
+        self.watch.records.borrow_mut().arm_passive_retention()
+    }
+
+    pub(crate) fn stop_af_retention(&mut self, reason: PassiveStopReason) -> Result<(), String> {
+        let mut records = self.watch.records.borrow_mut();
+        if matches!(records.passive_retention_status(), PassiveRetentionStatus::Unarmed | PassiveRetentionStatus::Armed) {
+            records.stop_passive_retention(reason)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn sync_af_retention(&self, af: &mut crate::af_ownership::Projection) {
+        af.sync_retention(self.watch.records.borrow().passive_retention_status());
+    }
+
+    fn protects_row(&self, row: &serde_json::Value) -> Result<bool, String> {
+        let start = row.get("physical").and_then(serde_json::Value::as_u64).ok_or("modal row lacks physical address")?;
+        let width = row.get("size").and_then(serde_json::Value::as_u64).filter(|width| *width > 0).ok_or("modal row lacks width")?;
+        let end = start.checked_add(width).ok_or("modal row wraps")?;
+        let classes = match row.get("source").and_then(serde_json::Value::as_str) {
+            Some("cpu-write" | "host-write" | "model-bus-write") => &self.write_ranges,
+            Some("cpu-fetch") => &self.fetch_classes,
+            _ => return Err("modal row has an unknown source".into()),
+        };
+        Ok(classes.iter().any(|range| range.start < end && start < range.end))
+    }
+
+    pub(crate) fn check(&mut self, maps: &[MemoryMap], mut af: Option<&mut crate::af_ownership::Projection>) -> Result<(), String> {
         if let Some(status) = self.watch.instruction_guard_status() {
             if let Some(failure) = status.first_failure {
                 let message = self.physical_failure.get_or_insert_with(|| format!("{failure:?}"));
@@ -272,9 +323,36 @@ impl InstalledGuard {
         let records = self.watch.records.borrow();
         if let Some(failure) = records.violation() { return Err(failure.to_owned()); }
         for row in records.rows_since(self.row_cursor)? {
-            self.lifetime.observe_row(row).map_err(|failure| failure.to_string())?;
+            let is_af = if self.af_ranges.is_empty() { false } else {
+                match crate::af_ownership::selects(row) {
+                    Ok(selected) => selected,
+                    Err(failure) => {
+                        if let Some(projection) = af.as_deref_mut() { projection.fail(failure); }
+                        false
+                    }
+                }
+            };
+            if is_af {
+                af.as_deref_mut().ok_or("AF projection missing from its installed watch")?.row(row);
+            }
+            let protected_overlap = self.af_ranges.is_empty() || self.protects_row(row)?;
+            if protected_overlap {
+                if self.lifetime_rows == WRITE_LIMIT {return Err("modal lifetime write-row capacity exhausted".into());}
+                self.lifetime_rows += 1;
+                let result = if self.af_ranges.is_empty() { self.lifetime.observe_row(row) }
+                    else { self.lifetime.observe_attributed_row(row,maps) };
+                result.map_err(|failure| failure.to_string())?;
+            }
         }
         self.row_cursor = records.row_count();
+        drop(records);
+        if let Some(projection) = af {
+            self.sync_af_retention(projection);
+            if !projection.active() && matches!(self.watch.records.borrow().passive_retention_status(), PassiveRetentionStatus::Armed) {
+                self.stop_af_retention(PassiveStopReason::Refused)?;
+                self.sync_af_retention(projection);
+            }
+        }
         Ok(())
     }
 
@@ -378,8 +456,8 @@ impl InstalledGuard {
     }
 
     pub(crate) fn prepare_finish(&mut self, session: &Session, maps: &[MemoryMap],
-        active_frames: usize) -> Result<(), String> {
-        self.check()?;
+        active_frames: usize, af: Option<&mut crate::af_ownership::Projection>) -> Result<(), String> {
+        self.check(maps,af)?;
         self.lifetime.verify_rollback(&FixedMemory { session, maps }, active_frames)
             .map_err(|failure| failure.to_string())
     }
@@ -404,14 +482,14 @@ impl InstalledGuard {
             failure: self.physical_failure.as_deref(),
         })
     }
-    pub(crate) fn watch_evidence(&self) -> WatchEvidence<'_> { WatchEvidence { guard: self, records: WatchRecords::Rows } }
-    pub(crate) fn watch_summary(&self) -> WatchEvidence<'_> { WatchEvidence { guard: self, records: WatchRecords::Count } }
+    pub(crate) fn watch_evidence<'a>(&'a self, maps: &'a [MemoryMap]) -> WatchEvidence<'a> { WatchEvidence { guard: self, records: WatchRecords::Rows, maps } }
+    pub(crate) fn watch_summary<'a>(&'a self, maps: &'a [MemoryMap]) -> WatchEvidence<'a> { WatchEvidence { guard: self, records: WatchRecords::Count, maps } }
 }
 
 /// Watch-state carries the rows; modal reports carry only their count and digest.
 #[derive(Clone, Copy)]
 enum WatchRecords { Rows, Count }
-pub(crate) struct WatchEvidence<'a> { guard: &'a InstalledGuard, records: WatchRecords }
+pub(crate) struct WatchEvidence<'a> { guard: &'a InstalledGuard, records: WatchRecords, maps: &'a [MemoryMap] }
 struct RangeEvidence<'a>(&'a [WatchRange]);
 impl Serialize for RangeEvidence<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -450,6 +528,19 @@ impl Serialize for ClassEvidence<'_> {
         sequence.end()
     }
 }
+struct LifetimeRow<'a>(&'a serde_json::Value, bool, &'a [MemoryMap]);
+impl Serialize for LifetimeRow<'_> {
+    fn serialize<S: Serializer>(&self, serializer:S)->Result<S::Ok,S::Error> {
+        if !self.1 || !RowProjection::AfAttribution(self.2).validates(self.0) {return self.0.serialize(serializer);}
+        let fields=self.0.as_object().ok_or_else(||serde::ser::Error::custom("lifetime projection row is not an object"))?;
+        let mut map=serializer.serialize_map(None)?;
+        for (key,value) in fields {
+            if RowProjection::AfAttribution(self.2).retains(key) {map.serialize_entry(key,value)?;}
+        }
+        map.end()
+    }
+}
+
 impl Serialize for WatchEvidence<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         #[derive(Serialize)]
@@ -457,13 +548,33 @@ impl Serialize for WatchEvidence<'_> {
         let guard = self.guard;
         let records = guard.watch.records.borrow();
         let mut digest = guard.row_digest.borrow_mut();
-        let pending = records.rows_since(digest.rows).map_err(serde::ser::Error::custom)?;
-        digest.advance(pending).map_err(serde::ser::Error::custom)?;
+        let all = records.rows_since(0).map_err(serde::ser::Error::custom)?;
+        let old_rows=digest.rows;
+        let mut index=0;
+        for row in all {
+            if !guard.af_ranges.is_empty() && !guard.protects_row(row).map_err(serde::ser::Error::custom)? {continue;}
+            if index>=old_rows {
+                digest.advance(std::slice::from_ref(&LifetimeRow(row,!guard.af_ranges.is_empty(),self.maps))).map_err(serde::ser::Error::custom)?;
+            }
+            index+=1;
+        }
         let mut state = serializer.serialize_map(Some(if matches!(self.records, WatchRecords::Rows) { 9 } else { 8 }))?;
         state.serialize_entry("enabled", &true)?;
         state.serialize_entry("ranges", &union_ranges(&guard.write_ranges, &guard.fetch_classes))?;
         if matches!(self.records, WatchRecords::Rows) {
-            state.serialize_entry("records", records.rows_since(0).map_err(serde::ser::Error::custom)?)?;
+            struct Rows<'a> { rows: &'a [serde_json::Value], guard: &'a InstalledGuard, maps: &'a [MemoryMap] }
+            impl Serialize for Rows<'_> {
+                fn serialize<T: Serializer>(&self, serializer:T) -> Result<T::Ok,T::Error> {
+                    let mut sequence=serializer.serialize_seq(None)?;
+                    for row in self.rows {
+                        if self.guard.af_ranges.is_empty() || self.guard.protects_row(row).map_err(serde::ser::Error::custom)? {
+                            sequence.serialize_element(&LifetimeRow(row,!self.guard.af_ranges.is_empty(),self.maps))?;
+                        }
+                    }
+                    sequence.end()
+                }
+            }
+            state.serialize_entry("records", &Rows { rows: all, guard, maps:self.maps })?;
         }
         state.serialize_entry("record_count", &digest.rows)?;
         state.serialize_entry("records_sha256", &digest.hex())?;

@@ -3,6 +3,7 @@
 
 use crate::frame_capture::CapturedFrame;
 use crate::guest::{DialTurn, GpioKey, MenuState, ModeDialPosition, ModeDialWindow, PhysicalShutterPosition, Press, RouteKey, ShutterStage, set_adc};
+use crate::modal_permit::CoreId;
 use crate::r4f::Guard;
 use crate::run::RunDocument;
 use crate::sd_host::{Contacts, MediaRead, RetainedCard, SectorAddress, SectorCount, SdHost};
@@ -26,6 +27,19 @@ pub enum RunOutcome {
     DrainRequired,
     Failed,
 }
+
+/// Lowest-index CPU with a sticky native execution refusal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NativeExecutionRefusal {
+    pub core: CoreId,
+}
+
+impl std::fmt::Display for NativeExecutionRefusal {
+    fn fmt(&self, output: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(output, "native execution refusal on core {}", self.core.0)
+    }
+}
+
 /// How long a press holds its input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Hold {
@@ -139,6 +153,7 @@ pub struct Machine {
     pub key_release_observations: Vec<KeyReleaseObservation>,
     release_context: ReleaseContext,
     release_log: Option<PathBuf>,
+    native_refusal: Option<NativeExecutionRefusal>,
 }
 
 pub fn instructions(session: &Session) -> u64 {
@@ -160,6 +175,7 @@ impl Machine {
                 segment: None,
             },
             release_log: std::env::var_os("XM1_KEY_RELEASE_LOG").map(PathBuf::from),
+            native_refusal: None,
         })
     }
 
@@ -242,6 +258,28 @@ impl Machine {
         instructions(&self.session)
     }
 
+    pub fn native_execution_refusal(&self) -> Option<NativeExecutionRefusal> {
+        self.native_refusal
+    }
+
+    fn pending_native_refusal(&self) -> Option<NativeExecutionRefusal> {
+        let mut core = CoreId(0);
+        // Board CPU indices are dense; cpu() fails only for an out-of-bounds index.
+        while let Ok(cpu) = self.session.board.cpu(core.0) {
+            if cpu.execution_refused() {
+                return Some(NativeExecutionRefusal { core });
+            }
+            core.0 += 1;
+        }
+        None
+    }
+
+    fn consume_native_refusal(&mut self, cause: NativeExecutionRefusal) -> RunOutcome {
+        self.native_refusal = Some(cause);
+        self.failure = Some(cause.to_string());
+        RunOutcome::Failed
+    }
+
     /// Records every armed site entered, and returns early after a stop label's entry.
     pub fn run(&mut self, count: u64) -> RunOutcome {
         self.run_until(count, None)
@@ -252,7 +290,8 @@ impl Machine {
         if self.failure.is_some() {
             return RunOutcome::Failed;
         }
-        if self.traces.capture_page_outstanding() {
+        let entry_native_refusal = self.pending_native_refusal();
+        if self.traces.capture_page_outstanding() && entry_native_refusal.is_none() {
             return RunOutcome::DrainRequired;
         }
         let mut current = match InstructionCount::from_board(&self.session) {
@@ -263,16 +302,28 @@ impl Machine {
             }
         };
         let end = current.value().saturating_add(count);
-        if self.traces.capture_observation_active() || self.traces.modal_observation_active() || self.traces.presentation_tracking_active() {
+        let collected = if self.traces.capture_observation_active() || self.traces.modal_observation_active() || self.traces.presentation_tracking_active() {
             match self.traces.collect(&self.session, current) {
-                Ok(CollectionOutcome::DrainRequired) => return RunOutcome::DrainRequired,
-                Ok(CollectionOutcome::Stop) => return RunOutcome::Stopped,
-                Ok(CollectionOutcome::Continue) => {}
+                Ok(collected) => collected,
                 Err(error) => {
                     self.failure = Some(error);
                     return RunOutcome::Failed;
                 }
             }
+        } else {
+            CollectionOutcome::Continue
+        };
+        if let Some(cause) = entry_native_refusal {
+            if let Err(error) = self.guard.scan(&self.session.board) {
+                self.failure = Some(error);
+                return RunOutcome::Failed;
+            }
+            return self.consume_native_refusal(cause);
+        }
+        match collected {
+            CollectionOutcome::Stop => return RunOutcome::Stopped,
+            CollectionOutcome::DrainRequired => return RunOutcome::DrainRequired,
+            CollectionOutcome::Continue => {}
         }
         loop {
             if current.value() >= end || until.is_some_and(|tick| self.session.board.now() >= tick) {
@@ -315,14 +366,20 @@ impl Machine {
                 self.failure = Some(error);
                 return RunOutcome::Failed;
             }
-            match self.traces.collect(&self.session, current) {
-                Ok(CollectionOutcome::Stop) => return RunOutcome::Stopped,
-                Ok(CollectionOutcome::DrainRequired) => return RunOutcome::DrainRequired,
-                Ok(CollectionOutcome::Continue) => {}
+            let collected = match self.traces.collect(&self.session, current) {
+                Ok(collected) => collected,
                 Err(error) => {
                     self.failure = Some(error);
                     return RunOutcome::Failed;
                 }
+            };
+            if let Some(cause) = self.pending_native_refusal() {
+                return self.consume_native_refusal(cause);
+            }
+            match collected {
+                CollectionOutcome::Stop => return RunOutcome::Stopped,
+                CollectionOutcome::DrainRequired => return RunOutcome::DrainRequired,
+                CollectionOutcome::Continue => {}
             }
         }
     }

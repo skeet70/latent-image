@@ -1,11 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), E2ESettings (..), ModalOwnedPackage (..), loadModalOwnedPackage, SymbolRead, parseSymbolRead, Payload, bankD3Payload, bankModal75Payload, bankModalEnginePayload, bankModalRenderPayload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromePayload, classicChromeIconPayload, experimentPayload, runMenuCrawlE2E, runMenuObserveE2E, runRamDiffE2E, runRamPushE2E, warmAttachCheckpoint, KeeperSessionId, keeperSessionId, KeeperState (..), KeeperAction (..), keeperTransition, checkPropertyAllocationSource, runPropertyAllocationKeeper) where
+module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), E2ESettings (..), ModalOwnedPackage (..), loadModalOwnedPackage, SymbolRead, parseSymbolRead, Payload, bankD3Payload, bankModal75Payload, bankModalEnginePayload, bankModalRenderPayload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromePayload, classicChromeIconPayload, experimentPayload, runMenuCrawlE2E, runMenuObserveE2E, runRamDiffE2E, runRamPushE2E, warmAttachCheckpoint, KeeperSessionId, keeperSessionId, KeeperState (..), KeeperAction (..), keeperTransition, checkPropertyAllocationSource, runPropertyAllocationKeeper, validateAfResetProof, validateAfResetPair, AfArchiveBinding (..), validateAfArchiveBinding) where
 
 import Control.Applicative ((<|>))
 import Control.Exception (IOException, SomeException, bracket, catch, displayException, finally, mask, throwIO, try)
 import Control.Monad (forM, forM_, unless, when)
 import Data.Aeson (FromJSON (..), Value (..), eitherDecodeStrict', encode, object, toJSON, withObject, (.:), (.=))
-import Data.Aeson.Types (parseEither)
+import Data.Aeson.Types (Parser, parseEither)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (find, nub, sort)
 import Data.Maybe (catMaybes, isJust)
@@ -21,12 +21,14 @@ import Data.Bits (shiftL, shiftR, (.|.))
 import Data.Int (Int32)
 import Data.Word (Word32)
 import Numeric (readHex, showFFloat, showHex)
-import System.Directory (createDirectory, doesDirectoryExist, doesFileExist, getCurrentDirectory, getFileSize, listDirectory, removeDirectory, removeDirectoryRecursive, removeFile, setCurrentDirectory)
+import System.Directory (canonicalizePath, createDirectory, doesDirectoryExist, doesFileExist, getCurrentDirectory, getFileSize, listDirectory, removeDirectory, removeDirectoryRecursive, removeFile, setCurrentDirectory)
 import System.Environment (getExecutablePath, lookupEnv)
-import System.FilePath (isAbsolute, replaceExtension, takeDirectory, takeFileName, (</>))
-import System.IO (BufferMode (LineBuffering), IOMode (WriteMode), hFlush, hSetBuffering, hIsEOF, hGetChar, stdin, stdout, withFile)
+import System.FilePath (isAbsolute, replaceExtension, splitDirectories, takeDirectory, takeFileName, (</>))
+import System.IO (BufferMode (LineBuffering), IOMode (WriteMode), hClose, hFlush, hSetBuffering, hIsEOF, hGetChar, stdin, stdout, withFile)
 import System.Posix.Files (setFileMode)
 import System.Posix.Temp (mkdtemp)
+import System.Exit (ExitCode (..))
+import System.Process (CreateProcess (..), StdStream (..), proc, waitForProcess, withCreateProcess)
 import Text.Read (readMaybe)
 import Emulation.CheckpointKey (CheckpointRoute (..), Interpreter (..), RouteKey (..), UnicornLibrary (..), guestState, hostProcedure, procedureHex, routeKey, routeKeyHex)
 import Emulation.Sha256 (Sha256, parseSha256Hex, sha256, sha256File, sha256Hex)
@@ -36,6 +38,7 @@ import Emulation.PreservationObservation
 import Emulation.ModalObservation
 import Emulation.ModalWatchStream (compactFinalWatch, readFinalModalWatch)
 import Emulation.LiveSettings (describeLiveSettingChange, liveSettingChange, readLiveSettings)
+import Emulation.MachineFingerprint (parseMachineFingerprintEnvelope)
 import qualified Emulation.CaptureStream as CaptureJournal
 import qualified Emulation.SaveLifecycle as SaveLifecycle
 import Emulation.SaveLifecycleRun (runSaveLifecycle)
@@ -165,6 +168,8 @@ data E2ESettings = E2ESettings
   , modalLifetimeGuard :: ModalLifetimeGuard
   , modalOwnedPackage :: Maybe ModalOwnedPackage
   , prelinkedModalBuild :: Maybe FilePath
+  , afOwnershipPlanFile :: Maybe FilePath
+  , afOwnershipControl :: Bool
   }
 
 -- | A bank Rust archive built with the owned controller-75 table, and the
@@ -246,6 +251,8 @@ cardRecord mode = object
 sessionBridge :: E2ESettings -> FilePath -> FilePath -> FilePath -> BootMode -> FilePath -> IO (FilePath, [String])
 sessionBridge settings python installedMedia adjustmentNand boot output = case (emulationRuntime settings, emulationCardMode settings) of
   (FujiModRuntime bridge, card) -> do
+    when (isJust (afOwnershipPlanFile settings)) $
+      require (boot == FreshBoot) "AF prestate proof requires fresh boot"
     require (card /= Cardless || attachHold settings == NoAttachHold) "the cardless RAM-push bridge holds no key across the attach edge"
     require (null (fixedSceneFrame settings)) "the FujiMod RAM-push bridge takes no --fixed-scene-frame"
     pure (fujimodBridge bridge,
@@ -255,7 +262,7 @@ sessionBridge settings python installedMedia adjustmentNand boot output = case (
       , "--adjustment-nand", adjustmentNand
       , "--output", output
       , "--ram-push-checkpoints", checkpointRoot settings
-      ] ++ freshArguments ++ cardArguments card ++ attachHoldArguments (attachHold settings))
+      ] ++ freshArguments ++ ["--af-prestate-proof" | isJust (afOwnershipPlanFile settings)] ++ cardArguments card ++ attachHoldArguments (attachHold settings))
   (RetainedRuntime, CardBacked cardImage) -> do
     key <- maybe (ioError (userError "the card attach key is unset")) pure (cardAttachKey settings)
     pure (python,
@@ -830,6 +837,12 @@ runRamPushE2E given python workspace trajectoryFile installedMedia adjustmentNan
 runRamPushE2EUsing :: E2ESettings -> FilePath -> FilePath -> Maybe FilePath -> FilePath -> FilePath -> FilePath -> IO ()
 runRamPushE2EUsing given python workspace trajectoryFile installedMedia adjustmentNand receipt = do
   hSetBuffering stdout LineBuffering
+  when (afOwnershipControl given) $
+    require (isJust (afOwnershipPlanFile given)) "AF ownership control requires an ownership plan"
+  when (isJust (afOwnershipPlanFile given)) $
+    require (pushMode given == RamPush && modalLifetimeGuard given == ContinuousModalLifetimeGuard
+      && bootMode given == FreshBoot && segmentSelection given == Nothing && trajectoryFile /= Nothing)
+      "AF ownership requires fresh boot and an explicit continuous installed modal trajectory"
   bytes <- maybe (pure defaultExperimentTrajectory) B.readFile trajectoryFile
   trajectories <- either (ioError . userError . ("invalid RAM-push e2e trajectories: " ++)) pure (decodeTrajectories bytes)
   let lifecycleRequested = any (isJust . segmentSaveLifecycle) (beforeUnload trajectories ++ afterUnload trajectories)
@@ -868,6 +881,7 @@ runRamPushE2EUsing given python workspace trajectoryFile installedMedia adjustme
     require (not (null (beforeUnload trajectories)) && null (afterUnload trajectories)
       && all ((== "retained-film-route") . segmentPhase) (beforeUnload trajectories))
       "modal observation requires the retained-film-route physical-key trajectory"
+  either (ioError . userError) pure (checkAfOwnershipRoute (isJust (afOwnershipPlanFile given)) (beforeUnload trajectories) (afterUnload trajectories))
   let settleCaps = [ () | segment <- beforeUnload trajectories ++ afterUnload trajectories
                         , step <- segmentSteps segment, isJust (keyTimingSettle (stepTiming step)) || isJust (stepIdle step) || stepCompletion step /= PacketCompletion ]
   case emulationRuntime given of
@@ -925,6 +939,11 @@ seconds value = showFFloat (Just 1) value " s"
 runSession :: E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> Plan -> FilePath -> IO ()
 runSession settings python runtime installedMedia adjustmentNand plan e2e = do
   stackDiagnostic <- lookupEnv "XM1_RENDER_STACK_DIAGNOSTIC" >>= traverse readRenderStackDiagnosticConfig
+  afPlan <- traverse (\path -> do
+    bytes <- B.readFile path
+    require (B.length bytes <= 1024 * 1024) "AF ownership plan exceeds 1 MiB"
+    either (ioError . userError) pure (decodeAfOwnershipPlan bytes)) (afOwnershipPlanFile settings)
+  let enabledAfPlan = if afOwnershipControl settings then Nothing else afPlan
   lifecycle <- case [action | segment <- planBefore plan ++ planAfter plan, Just action <- [segmentSaveLifecycle segment]] of
     [] -> pure Nothing
     [action] -> do
@@ -1046,12 +1065,40 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
     either (ioError . userError) pure (checkModalLifetimeRoute
       (if planFromInstall plan then RestoredModalInstall else FreshModalInstall)
       (if planUnload plan then ModalUnloadRequested else ModalUnloadOmitted))
+  when (isJust afPlan) $ do
+    require lifetimeGuarded "AF ownership capture requires the continuous installed modal lifetime guard"
+    require (pushMode settings == RamPush && segmentSelection settings == Nothing)
+      "AF ownership capture refuses no-install and segmented routes"
+    either (ioError . userError) pure (checkAfOwnershipRoute True (planBefore plan) (planAfter plan))
   lifetimeSession <- newIORef ModalLifetimeUnconfigured
+  afBinding <- traverse (\_ -> case emulationRuntime settings of
+    FujiModRuntime bridge -> loadAfArchiveValidator bridge
+    _ -> ioError (userError "AF archive binding requires the native FujiMod bridge")) afPlan
+  afCatalogue <- traverse (\validator -> case emulationRuntime settings of
+    FujiModRuntime bridge -> loadAfMappingCatalogue validator (fujimodRunDocument bridge) (e2e </> "af-source-catalogue")
+    _ -> ioError (userError "AF mapping catalogue requires the native FujiMod bridge")) afBinding
   (executable, arguments) <- sessionBridge settings python installedMedia adjustmentNand (bootMode settings) e2e
   published <- bracket (timed "emulator-start" (startEmulator executable runtime arguments choose))
-    (\(emulator, _, _) -> finishModalLifetime emulator e2e lifetimeSession `finally` stopEmulator emulator) $ \(emulator, start, installed) -> recordModalLifetimeFailure lifetimeSession $ do
+    (\(emulator, _, _) -> ((finishAfOwnership emulator e2e enabledAfPlan `catch` \(_ :: SomeException) -> pure ()) `finally` finishModalLifetime emulator e2e lifetimeSession) `finally` stopEmulator emulator) $ \(emulator, start, installed) -> recordModalLifetimeFailure lifetimeSession $ do
     putStrLn ("emulator start: " ++ show (bootStart start) ++ "; relink: " ++ T.unpack (relinkModeText (relinkMode settings))
       ++ "; payload: " ++ T.unpack (payloadText selected))
+    forM_ afPlan $ \_ -> do
+      proofBytes <- B.readFile (e2e </> "af-reset-prestate.json")
+      proof <- either (ioError . userError) pure (eitherDecodeStrict' proofBytes)
+      bridge <- case emulationRuntime settings of
+        FujiModRuntime bridge -> pure bridge
+        _ -> ioError (userError "AF reset proof requires FujiMod")
+      modelDigest <- sha256File (fujimodRunDocument bridge)
+      installedDigest <- sha256File (runtime </> installedMedia)
+      either (ioError . userError) pure (validateAfResetProof modelDigest installedDigest proof)
+      forM_ afBinding $ \validator@(AfArchiveValidator _ (AfArchiveBinding expectedModel _)) -> do
+        fingerprints <- either (ioError . userError) pure $ flip parseEither proof $ withObject "bound AF reset proof" $ \fields -> do
+          identity <- fields .: "identity"
+          model <- withObject "bound AF reset model" (\values -> values .: "model" >>= parseFingerprintDigest) identity
+          unless (model == expectedModel) (fail "AF reset compiled model differs from the selected SDK")
+          mapM (\name -> (,) name <$> fields .: name) ["fingerprint", "live_before_reset"]
+        forM_ fingerprints $ \(name, fingerprint) ->
+          authenticateAfFingerprint validator (e2e </> ("af-reset-" ++ T.unpack (K.toText name))) fingerprint
     let api = emulatorUsbApi emulator
         allocationDirectory = e2e </> "alloc"
         relinkDirectory = e2e </> "relinked"
@@ -1143,6 +1190,20 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
           request <- either (ioError . userError) pure (modalRequest stock Nothing (either error id (modalLimit 65536)))
           pure (request, Null)
       request <- either (ioError . userError) pure (lifetimeModalRequest baseRequest lifetimeSource)
+      forM_ afPlan $ \af -> do
+        bridge <- case emulationRuntime settings of
+          FujiModRuntime bridge -> pure bridge
+          _ -> ioError (userError "AF ownership capture requires FujiMod")
+        bridgePath <- canonicalizePath (fujimodBridge bridge)
+        let sdk = takeDirectory (takeDirectory bridgePath)
+        require (take 3 (splitDirectories sdk) == ["/", "nix", "store"] && takeDirectory sdk == "/nix/store")
+          "AF SDK binding requires an immutable Nix store executable"
+        viewer <- getExecutablePath >>= sha256File
+        bridgeDigest <- sha256File bridgePath
+        model <- sha256File (fujimodRunDocument bridge)
+        let actual = object ["sdk" .= sdk, "viewer" .= sha256Hex viewer, "bridge" .= sha256Hex bridgeDigest, "model" .= sha256Hex model, "package" .= manifestDigest manifest]
+        require (afOwnershipIdentity af == actual) "AF ownership identity does not match the exact SDK/viewer/bridge/model/package"
+        writePrivateBytes (e2e </> "af-ownership-plan.json") (BL.toStrict (encode (afOwnershipPlanJson af)) <> "\n")
       let source = object ["stock" .= stockSource, "linked" .= linkedSource, "lifetime" .= modalLifetimeSourceJson lifetimeSource
             , "manifest_sha256" .= manifestDigest manifest, "source_identity" .= sourceIdentity manifest
             , "runtime_sources" .= runtimeSources, "emulator_start" .= startRecord start]
@@ -1203,7 +1264,7 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
         writePrivateBytes path (hostPushState host)
         pure (path, hostInstallMailbox host)
       Nothing -> do
-        let observer = maybe NoRamPushObserver (\_ -> BeforeRamPublication (armModalLifetime emulator e2e lifetimeSession)) modalObservation
+        let observer = maybe NoRamPushObserver (\_ -> BeforeRamPublication (armModalLifetime emulator e2e lifetimeSession (afOwnershipPlanJson <$> enabledAfPlan))) modalObservation
         pushClock <- emulatedClock
         settingsBeforePush <- readLiveSettings emulator
         statePath <- timed "ram-push" (stagedSession pushDirectory (pushWith observer retained manifest pushClock api)) >>= \outcome -> case outcome of
@@ -1237,7 +1298,7 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
               | caught = ioError (userError (show phase ++ " failed: " ++ message))
               | otherwise = stop phase message
         newRunner <- newSegmentRunner emulator e2e (\label action -> timed label action) readAddress segmentStop plan
-        let runner = newRunner { runnerOverlayExits = emulationRuntime settings == RetainedRuntime && pushMode settings == RamPush }
+        let runner = newRunner { runnerOverlayExits = emulationRuntime settings == RetainedRuntime && pushMode settings == RamPush, runnerAfOwnership = afPlan, runnerAfOwnershipControl = afOwnershipControl settings, runnerAfArchiveBinding = afBinding, runnerAfMappingCatalogue = afCatalogue }
             segments = runSegments (if lifetimeGuarded then runner { runnerSnapshotPolicy = DifferentialSnapshotPreservation } else runner)
             protection = planProtection plan
             expect = planExpect plan
@@ -1646,6 +1707,10 @@ data SegmentRunner = SegmentRunner
   , runnerRendezvousExits :: IORef [Value]
   , runnerReads :: IORef [CapturedRead]
   , runnerSnapshotPolicy :: SnapshotPolicy
+  , runnerAfOwnership :: Maybe AfOwnershipPlan
+  , runnerAfOwnershipControl :: Bool
+  , runnerAfArchiveBinding :: Maybe AfArchiveValidator
+  , runnerAfMappingCatalogue :: Maybe AfMappingCatalogue
   }
 
 newSegmentRunner :: Emulator -> FilePath -> (T.Text -> IO (Maybe Value) -> IO (Maybe Value))
@@ -1656,7 +1721,7 @@ newSegmentRunner emulator receipt timedAction readAddress stopAction plan = do
   SegmentRunner emulator receipt timedAction readAddress stopAction (map traceSiteLabel (planTraceSites plan))
     [traceSiteLabel site | site <- planTraceSites plan, traceSiteLr site == RecordsLr]
     [traceSiteLabel site | site <- planTraceSites plan, traceSiteSp site == RecordsSp]
-    <$> newIORef 0 <*> newIORef [] <*> pure False <*> newIORef [] <*> newIORef [] <*> pure EnforceSnapshotPreservation
+    <$> newIORef 0 <*> newIORef [] <*> pure False <*> newIORef [] <*> newIORef [] <*> pure EnforceSnapshotPreservation <*> pure Nothing <*> pure False <*> pure Nothing <*> pure Nothing
 
 -- | The plan's trajectory-declared sites in the bridge's form, with each site's entry reads.
 resolveTraceSites :: (String -> IO Word32) -> [TraceSite] -> IO [(Word32, String, [SiteRead])]
@@ -1677,6 +1742,221 @@ resolveTraceSites resolve sites = do
 
 eightHex :: Word32 -> String
 eightHex = drop 2 . hexAddress
+
+data AfArchiveBinding = AfArchiveBinding Sha256 Sha256
+data AfArchiveValidator = AfArchiveValidator FilePath AfArchiveBinding
+data AfOfflineRequest = AuthenticateAfArchive Value | ReadAfMappingCatalogue FilePath
+
+loadAfArchiveValidator :: FujiModBridge -> IO AfArchiveValidator
+loadAfArchiveValidator bridge = do
+  path <- canonicalizePath (fujimodBridge bridge)
+  let sdk = takeDirectory (takeDirectory path)
+  require (take 3 (splitDirectories sdk) == ["/", "nix", "store"] && takeDirectory sdk == "/nix/store")
+    "AF archive binding requires an immutable SDK store executable"
+  modelBytes <- B.readFile (sdk </> "share/fujimod-xm1/checkpoint-model-id")
+  model <- either (ioError . userError) pure (parseSha256Hex (T.unpack (T.strip (TE.decodeUtf8 modelBytes))))
+  binding <- AfArchiveBinding model <$> sha256File path
+  pure (AfArchiveValidator path binding)
+
+validateAfArchiveBinding :: AfArchiveBinding -> Value -> Either String ()
+validateAfArchiveBinding (AfArchiveBinding expectedModel expectedExecutable) = parseEither $ withObject "bound AF machine fingerprint" $ \fields -> do
+  archive <- fields .: "exact_state"
+  flip (withObject "AF exact immutable identity") archive $ \identity -> do
+    model <- identity .: "checkpoint_model_id" >>= parseFingerprintDigest
+    executable <- identity .: "executable_sha256" >>= parseFingerprintDigest
+    definition <- identity .: "model_definition_sha256" >>= parseFingerprintDigest
+    unless (model == expectedModel && executable == expectedExecutable && definition == sha256 "null")
+      (fail "AF exact archive immutable SDK identity differs")
+
+runAfOfflineRequest :: AfArchiveValidator -> FilePath -> AfOfflineRequest -> IO Value
+runAfOfflineRequest (AfArchiveValidator executable (AfArchiveBinding expectedModel expectedExecutable)) path request = do
+  let output = path ++ ".validation.raw"
+      arguments = case request of
+        AuthenticateAfArchive _ -> ["--validate-machine-fingerprint",
+          "--expected-checkpoint-model", sha256Hex expectedModel,
+          "--expected-definition", sha256Hex (sha256 "null"),
+          "--expected-executable", sha256Hex expectedExecutable]
+        ReadAfMappingCatalogue runDocument -> ["--af-mapping-catalogue", "--run", runDocument]
+  exit <- withFile output WriteMode $ \receipt -> do
+    setFileMode output 0o600
+    withCreateProcess (proc executable arguments) { std_in = CreatePipe, std_out = UseHandle receipt, std_err = UseHandle receipt } $ \input _ _ process -> do
+      stream <- maybe (ioError (userError "AF validator stdin was not created")) pure input
+      case request of
+        AuthenticateAfArchive fingerprint -> BL.hPutStr stream (encode fingerprint)
+        ReadAfMappingCatalogue _ -> pure ()
+      hClose stream
+      waitForProcess process
+  require (exit == ExitSuccess) "AF offline SDK validation refused; raw response retained"
+  outputBytes <- getFileSize output
+  require (outputBytes <= 16777216) "AF offline SDK response exceeds 16 MiB"
+  bytes <- B.readFile output
+  either (ioError . userError) pure (eitherDecodeStrict' bytes)
+
+authenticateAfFingerprint :: AfArchiveValidator -> FilePath -> Value -> IO ()
+authenticateAfFingerprint validator@(AfArchiveValidator _ binding@(AfArchiveBinding expectedModel expectedExecutable)) path fingerprint = do
+  either (ioError . userError) pure (validateAfArchiveBinding binding fingerprint)
+  response <- runAfOfflineRequest validator path (AuthenticateAfArchive fingerprint)
+  expected <- either (ioError . userError) pure $ flip parseEither fingerprint $ withObject "AF authenticated fingerprint binding" $ \fields -> do
+    machine <- fields .: "machine_sha256" :: Parser Value
+    counts <- fields .: "counts" :: Parser Value
+    now <- fields .: "now" :: Parser Value
+    pure (object ["schema" .= (1 :: Int), "status" .= String "complete",
+      "checkpoint_model_id" .= sha256Hex expectedModel, "model_definition_sha256" .= sha256Hex (sha256 "null"),
+      "executable_sha256" .= sha256Hex expectedExecutable, "machine_sha256" .= machine, "counts" .= counts, "now" .= now])
+  require (response == expected) "AF exact-state SDK authentication response differs from its input"
+
+loadAfMappingCatalogue :: AfArchiveValidator -> FilePath -> FilePath -> IO AfMappingCatalogue
+loadAfMappingCatalogue validator@(AfArchiveValidator _ (AfArchiveBinding expectedModel expectedExecutable)) runDocument path = do
+  expectedRun <- sha256File runDocument
+  response <- runAfOfflineRequest validator path (ReadAfMappingCatalogue runDocument)
+  either (ioError . userError) pure $ flip parseEither response $ withObject "AF source mapping catalogue" $ \fields -> do
+    unless (sort (KM.keys fields) == sort ["schema", "status", "checkpoint_model_id", "executable_sha256", "run_document_sha256", "mappings"])
+      (fail "AF source mapping catalogue fields differ")
+    schema <- fields .: "schema" :: Parser Int
+    status <- fields .: "status" :: Parser T.Text
+    model <- fields .: "checkpoint_model_id" >>= parseFingerprintDigest
+    executable <- fields .: "executable_sha256" >>= parseFingerprintDigest
+    run <- fields .: "run_document_sha256" >>= parseFingerprintDigest
+    unless (schema == 1 && status == "complete" && model == expectedModel && executable == expectedExecutable && run == expectedRun)
+      (fail "AF source mapping catalogue immutable bindings differ")
+    mappings <- fields .: "mappings"
+    either fail pure (afMappingCatalogue mappings)
+
+captureAfResponse :: Emulator -> FilePath -> Value -> IO Value
+captureAfResponse emulator path request = do
+  raw <- emulatorAfCommandRaw emulator request
+  writePrivateBytes (path ++ ".raw") raw
+  require (B.length raw <= 134217728 && not (B.null raw) && B.last raw == 10 && B.count 10 raw == 1)
+    "AF response is oversized, incomplete, or contains trailing protocol lines"
+  response <- either (ioError . userError) pure (eitherDecodeStrict' raw)
+  pure $ case response of
+    Object fields | KM.lookup "ok" fields == Just (Bool True) -> Object (KM.delete "ok" fields)
+    value -> value
+
+finishAfOwnership :: Emulator -> FilePath -> Maybe AfOwnershipPlan -> IO ()
+finishAfOwnership emulator receipt plan = when (isJust plan) $ do
+  armed <- doesFileExist (receipt </> "af-ownership-arm.json")
+  ended <- doesFileExist (receipt </> "af-ownership-end.json")
+  when (armed && not ended) $ do
+    result <- try (captureAfResponse emulator (receipt </> "af-ownership-end.json") (object ["command" .= String "af-ownership-end"]))
+      :: IO (Either SomeException Value)
+    let retained = either (\failure -> object ["failure" .= displayException failure]) id result
+    writePrivateBytes (receipt </> "af-ownership-end.json") (BL.toStrict (encode retained) <> "\n")
+      `catch` \(_ :: SomeException) -> pure ()
+
+runAfOwnershipBoundary :: SegmentRunner -> AfOwnershipAction -> IO ()
+runAfOwnershipBoundary runner action = do
+  captureAfMachineState runner action
+  unless (runnerAfOwnershipControl runner) (runEnabledAfOwnershipBoundary runner action)
+
+captureAfMachineState :: SegmentRunner -> AfOwnershipAction -> IO ()
+captureAfMachineState runner action = do
+  let filename = case action of
+        ArmAfOwnership -> "af-state-initial.json"
+        EndAfOwnership -> "af-state-final.json"
+  result <- try (captureAfResponse (runnerEmulator runner) (runnerReceipt runner </> filename) (object ["command" .= String "machine-fingerprint"]))
+    :: IO (Either SomeException Value)
+  let retained = either (\failure -> object ["failure" .= displayException failure]) id result
+  writePrivateBytes (runnerReceipt runner </> filename) (BL.toStrict (encode retained) <> "\n")
+  response <- either throwIO pure result
+  either (ioError . userError) (const (pure ())) (parseEither parseMachineFingerprintEnvelope response)
+  validator <- maybe (ioError (userError "AF fingerprint has no trusted SDK validator")) pure (runnerAfArchiveBinding runner)
+  authenticateAfFingerprint validator (runnerReceipt runner </> filename) response
+
+
+parseFingerprintDigest :: T.Text -> Parser Sha256
+parseFingerprintDigest = either fail pure . parseSha256Hex . T.unpack
+
+validateAfResetProof :: Sha256 -> Sha256 -> Value -> Either String ()
+validateAfResetProof expectedRun expectedInstalled value = parseEither (withObject "AF reset prestate proof" $ \fields -> do
+  unless (BL.length (encode value) <= 16777216) (fail "AF reset proof metadata exceeds 16 MiB")
+  unless (sort (KM.keys fields) == sort ["schema", "status", "identity", "key", "snapshot_sha256", "fingerprint", "reset_cache", "live_before_reset"])
+    (fail "AF reset proof fields differ")
+  schema <- fields .: "schema"
+  unless (schema == (1 :: Int)) (fail "AF reset proof schema differs")
+  status <- fields .: "status"
+  unless (status == String "complete") (fail "AF reset proof is incomplete")
+  _ <- fields .: "key" >>= parseFingerprintDigest
+  _ <- fields .: "snapshot_sha256" >>= parseFingerprintDigest
+  identity <- fields .: "identity"
+  flip (withObject "AF initialized reset identity") identity $ \identityFields -> do
+    unless (sort (KM.keys identityFields) == sort ["schema", "model", "run_document", "installed_dat", "boot_rom", "adjustment_nand", "record_nand", "committed_nand", "source_kind", "card_sha256", "procedure"])
+      (fail "AF reset identity fields differ")
+    identitySchema <- identityFields .: "schema"
+    unless (identitySchema == (3 :: Int)) (fail "AF reset identity schema differs")
+    run <- identityFields .: "run_document" >>= parseFingerprintDigest
+    installed <- identityFields .: "installed_dat" >>= parseFingerprintDigest
+    unless (run == expectedRun && installed == expectedInstalled) (fail "AF reset identity differs from the selected run or installed DAT")
+    forM_ ["model", "boot_rom"] $ \name -> do
+      _ <- identityFields .: name >>= parseFingerprintDigest
+      pure ()
+    procedure <- identityFields .: "procedure" >>= parseFingerprintDigest
+    unless (procedure == sha256 "initialized-adjusted-card-state-v2:af-hit-restored") (fail "AF reset procedure differs")
+    sourceKind <- identityFields .: "source_kind" :: Parser T.Text
+    unless (sourceKind `elem` ["initial-seeded", "full-committed"]) (fail "AF reset source kind differs")
+    forM_ ["adjustment_nand", "record_nand", "committed_nand", "card_sha256"] $ \name -> do
+      optionalDigest <- identityFields .: name :: Parser (Maybe T.Text)
+      forM_ optionalDigest $ \digest -> do
+        _ <- parseFingerprintDigest digest
+        pure ()
+    adjustment <- identityFields .: "adjustment_nand" :: Parser (Maybe T.Text)
+    records <- identityFields .: "record_nand" :: Parser (Maybe T.Text)
+    committed <- identityFields .: "committed_nand" :: Parser (Maybe T.Text)
+    unless (if sourceKind == "initial-seeded" then isJust adjustment && committed == Nothing else adjustment == Nothing && records == Nothing && isJust committed)
+      (fail "AF reset source identity disagrees with its NAND inputs")
+  branch <- fields .: "reset_cache"
+  withObject "AF reset cache branch" (\branchFields -> do
+    unless (sort (KM.keys branchFields) == sort ["lookup", "restore"])
+      (fail "AF reset cache branch fields differ")
+    lookupResult <- branchFields .: "lookup"
+    restoreResult <- branchFields .: "restore"
+    unless ((lookupResult, restoreResult) == (String "hit", String "restored"))
+      (fail "AF reset cache branch is inconsistent")) branch
+  before <- fields .: "live_before_reset" >>= parseMachineFingerprintEnvelope
+  unless (before == (0, 0)) (fail "AF incoming reset fingerprint is not zero-count")
+  counts <- fields .: "fingerprint" >>= parseMachineFingerprintEnvelope
+  unless (counts == (0, 0)) (fail "AF reset fingerprint is not zero-count")
+  forM_ ["live_before_reset", "fingerprint"] $ \name -> do
+    fingerprint <- fields .: name
+    now <- withObject "AF zero-time fingerprint" (.: "now") fingerprint :: Parser Integer
+    unless (now == 0) (fail "AF reset fingerprint has advanced virtual time")
+  pure ()) value
+
+validateAfResetPair :: Sha256 -> Sha256 -> Value -> Value -> Either String ()
+validateAfResetPair expectedRun expectedInstalled enabled control = do
+  unless (BL.length (encode enabled) + BL.length (encode control) <= 16777216)
+    (Left "AF paired reset proof metadata exceeds 16 MiB")
+  validateAfResetProof expectedRun expectedInstalled enabled
+  validateAfResetProof expectedRun expectedInstalled control
+  let field name (Object fields) = KM.lookup name fields
+      field _ _ = Nothing
+  unless (all (\name -> field name enabled == field name control)
+      ["identity", "key", "snapshot_sha256", "reset_cache", "fingerprint"])
+    (Left "AF arms did not restore the same immutable zero-state cache proof")
+
+runEnabledAfOwnershipBoundary :: SegmentRunner -> AfOwnershipAction -> IO ()
+runEnabledAfOwnershipBoundary runner action = do
+  plan <- maybe (ioError (userError "AF boundary has no ownership plan")) pure (runnerAfOwnership runner)
+  let (operation, filename) = case action of
+        ArmAfOwnership -> ("af-ownership-arm", "af-ownership-arm.json")
+        EndAfOwnership -> ("af-ownership-end", "af-ownership-end.json")
+  result <- try (captureAfResponse (runnerEmulator runner) (runnerReceipt runner </> filename) (object ["command" .= (operation :: T.Text)]))
+    :: IO (Either SomeException Value)
+  let retained = either (\failure -> object ["failure" .= displayException failure]) id result
+      bytes = BL.toStrict (encode retained) <> "\n"
+  writePrivateBytes (runnerReceipt runner </> filename) bytes
+  require (B.length bytes <= 134217728) "AF diagnostic exceeds output byte bound"
+  response <- either throwIO pure result
+  catalogue <- maybe (ioError (userError "AF capture has no trusted source mapping catalogue")) pure (runnerAfMappingCatalogue runner)
+  either (ioError . userError) pure (validateAfOwnershipReceipt catalogue plan action response)
+  when (action == EndAfOwnership) $ do
+    armBytes <- B.readFile (runnerReceipt runner </> "af-ownership-arm.json")
+    armed <- either (ioError . userError) pure (eitherDecodeStrict' armBytes)
+    either (ioError . userError) pure (validateAfOwnershipReceipt catalogue plan ArmAfOwnership armed)
+    let field name (Object fields) = KM.lookup name fields
+        field _ _ = Nothing
+    require (all (\name -> field name armed == field name response) ["identity", "initial", "mappings", "limits"])
+      "AF final response differs from its armed immutable capture"
 
 traceSiteValues :: [(Word32, String, [SiteRead])] -> [Value]
 traceSiteValues sites =
@@ -1748,10 +2028,20 @@ runSegments runner segments = forM (zip [0 :: Int ..] segments) $ \(index, liste
       entry <- writeRendezvousExit runner segment step pressed atExit afterExit
       modifyIORef' (runnerRendezvousExits runner) (++ [entry])
       pure (TraceHitCursor afterExit, leadingSources)
-  observed <- if segmentObserve segment
+  when (segmentAfOwnership segment == Just ArmAfOwnership) $
+    runAfOwnershipBoundary runner ArmAfOwnership
+  observed <- (if segmentObserve segment
     then observe emulator (segmentKeyPulse segment) (segmentSteps segment)
     else [] <$ (presses emulator (segmentKeyPulse segment) (segmentSteps segment) `catch` \(failure :: IOException) ->
-      stop (segmentPhase segment) (displayException failure))
+      stop (segmentPhase segment) (displayException failure)))
+    `catch` \(failure :: SomeException) -> do
+      when (segmentAfOwnership segment == Just EndAfOwnership) $ do
+        captureAfMachineState runner EndAfOwnership `catch` \(_ :: SomeException) -> pure ()
+        unless (runnerAfOwnershipControl runner) $
+          finishAfOwnership emulator (runnerReceipt runner) (runnerAfOwnership runner) `catch` \(_ :: SomeException) -> pure ()
+      throwIO failure
+  when (segmentAfOwnership segment == Just EndAfOwnership) $
+    runAfOwnershipBoundary runner EndAfOwnership
   captured <- traverse (emulatorCapture emulator) (segmentCapture segment)
   capturedWindows <- mapM (\(label, location, count) -> do
       address <- runnerReadAddress runner location
@@ -2305,8 +2595,8 @@ recordModalLifetimeBoundary session boundary = modifyIORef' session $ \state -> 
     { lifetimeAttemptBoundaries = lifetimeAttemptBoundaries attempt ++ [boundary] }
   _ -> state
 
-armModalLifetime :: Emulator -> FilePath -> IORef ModalLifetimeSession -> IO ()
-armModalLifetime emulator receipt session = do
+armModalLifetime :: Emulator -> FilePath -> IORef ModalLifetimeSession -> Maybe Value -> IO ()
+armModalLifetime emulator receipt session afPlan = do
   state <- readIORef session
   case state of
     ModalLifetimePrepared request source problem -> do
@@ -2316,7 +2606,8 @@ armModalLifetime emulator receipt session = do
             unless (not (modalReportEnabled report)) (Left "another modal observer is active before RAM publication")
       begun <- case idle of
         Left failure -> pure (Left failure)
-        Right () -> captureModalResponse (emulatorModalObservationBegin emulator request)
+        Right () -> captureModalResponse (maybe (emulatorModalObservationBegin emulator request)
+          (\plan -> emulatorModalObservationBeginWithAfOwnership emulator plan request) afPlan)
       let ownsObserver = case (idle, begun) of
             (Right (), Right response) -> case modalRawResponse response of
               Object fields -> KM.lookup "enabled" fields == Just (Bool True)

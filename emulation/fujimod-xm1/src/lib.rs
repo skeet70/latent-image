@@ -1,5 +1,7 @@
 //! X-M1 1.50 on jitl (justjake)'s FujiMod EXR II runtime.
 pub mod adapters;
+pub mod af_ownership;
+pub mod af_ownership_receipt;
 pub mod attach_boot;
 pub mod checkpoint;
 pub mod adjustment;
@@ -14,6 +16,9 @@ pub mod pool_allocation;
 pub mod ff80;
 pub mod frame_capture;
 pub mod guest;
+pub mod machine_fingerprint;
+pub mod exact_cpu_archive;
+pub mod observation_contract;
 pub mod handoff;
 pub mod machine;
 mod loader_code;

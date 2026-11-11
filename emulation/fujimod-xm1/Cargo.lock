@@ -814,6 +814,8 @@ dependencies = [
 name = "fujimod-xm1"
 version = "0.1.0"
 dependencies = [
+ "ciborium",
+ "ciborium-ll",
  "flate2",
  "fujimod-catalog",
  "fujimod-emulator",

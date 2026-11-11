@@ -1176,6 +1176,16 @@ impl TraceSites {
         self.modal_observation.as_ref().and_then(ModalTrace::watch_evidence)
     }
 
+    pub fn af_ownership_boundary(&mut self, session: &Session, end: bool) -> Result<serde_json::Value, String> {
+        let instructions = InstructionCount::from_board(session)?;
+        let collected = self.collect(session, instructions);
+        let modal = self.modal_observation.as_mut().ok_or("AF ownership requires an installed observer")?;
+        if let Err(failure) = collected { modal.fail(failure); }
+        let result = if end { modal.af_ownership_end(session) } else { modal.af_ownership_arm(session) };
+        if let Err(failure) = result { modal.af_ownership_refuse(failure); }
+        serde_json::to_value(modal.af_ownership_report()?).map_err(|error| error.to_string())
+    }
+
     pub fn begin_modal_observation(&mut self, session: &Session, config: ModalConfig) -> Result<(), String> {
         if self.stack_scope.is_some() {
             return Err("modal observation conflicts with stack scope".into());

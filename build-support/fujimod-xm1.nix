@@ -93,6 +93,7 @@ craneLib.mkCargoDerivation (common // {
       | while read -r executable; do cp "$executable" $out/bin/; done
     cp data/xm1-150.json $out/share/fujimod-xm1/
     printf '%s\n' "$out" > $out/share/fujimod-xm1/store-path
+    printf '%s\n' "$XM1_CHECKPOINT_MODEL_ID" > $out/share/fujimod-xm1/checkpoint-model-id
     jq -r 'select(.reason == "compiler-artifact" and .profile.test == true and .executable != null) | .executable' test-artifacts.json \
       | while read -r executable; do
           cp "$executable" "$tests/libexec/fujimod-xm1-tests/"
