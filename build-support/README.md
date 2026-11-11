@@ -72,6 +72,8 @@ Bazel 7.6's native disk-cache garbage collector keeps this cache within 20 GiB a
 
 Concurrent agents also work in separate git worktrees, so an edit in one never invalidates another agent's build or emulator run. `build-support/agent-worktree.sh NAME [BASE]` creates `../latent-image-worktrees/NAME` on branch `agent/NAME`, symlinks the checkout's ignored `private-data/` into it and prints the output base to use. The agent commits on its `agent/NAME` branch; the integration owner merges it. Once the branch is merged into the main work branch, the integration owner removes the worktree (`git worktree remove ../latent-image-worktrees/NAME`), deletes the branch and deletes `~/.cache/bazel/latent-image-NAME`.
 
+Disable OMP's clone-first worktrees with `worktree.clone = false`. Clone-first also copies ignored research and build trees; reflinked copies retain old extents after their canonical files are deleted. Use the helper above for Git-only worktrees with shared private data, and commit shared source changes before branching.
+
 ```sh
 devenv shell -- host-build test --jobs=2 --local_test_jobs=1 //emulation:native-sdk-tests //emulation:native-runner-tests
 ```

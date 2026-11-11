@@ -22,6 +22,7 @@ module Emulation.ViewerRuntime
   , stageFujiModRuntime
   , stagedFirmwarePath
   , stagedRomPath
+  , stageFile
   ) where
 
 import Control.Monad (forM_, unless, when)
@@ -32,10 +33,12 @@ import Data.Word (Word64)
 import qualified FujiAF.UpdateContainer as U
 import System.Directory (canonicalizePath, copyFile, createDirectory, createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getCurrentDirectory, getFileSize, listDirectory, pathIsSymbolicLink, removeDirectoryRecursive, setCurrentDirectory)
 import System.Environment (getExecutablePath, lookupEnv, setEnv)
+import System.Exit (ExitCode (..))
 import System.FilePath ((</>), isAbsolute, splitDirectories, takeDirectory, takeFileName)
 import System.IO (IOMode (ReadMode), withBinaryFile)
 import System.Posix.Files (setFileMode)
 import System.Posix.Process (getProcessID)
+import System.Process (readProcessWithExitCode)
 import Text.Read (readMaybe)
 
 newtype Workspace = Workspace FilePath
@@ -114,10 +117,16 @@ copyTree source destination = do
         copyTree (source </> name) (destination </> name)
     else copyFile source destination
 
+-- | Stages an independent regular file: a copy-on-write clone where the
+-- filesystem supports reflinks, a full copy elsewhere.
 stageFile :: FilePath -> FilePath -> IO ()
 stageFile source destination = do
   createDirectoryIfMissing True (takeDirectory destination)
-  copyFile source destination
+  (code, _, errors) <- readProcessWithExitCode "cp"
+    ["--reflink=auto", "--preserve=mode", "--", source, destination] ""
+  case code of
+    ExitSuccess -> pure ()
+    _ -> ioError (userError ("cannot stage " ++ source ++ ": " ++ errors))
 
 freshRuntime :: Workspace -> Maybe Runtime -> DefaultRuntime -> IO Runtime
 freshRuntime root supplied fallback = do
