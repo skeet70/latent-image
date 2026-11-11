@@ -4885,3 +4885,52 @@ haskell_test(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
     deps = [":parallel-cases", "//host:base"],
 )
+
+haskell_library(
+    name = "mutation",
+    srcs = ["Emulation/Mutation.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":judge-lib",
+        ":scenario-generation",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_binary(
+    name = "mutants",
+    srcs = ["MutantsMain.hs"],
+    main_file = "MutantsMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":case-sha256",
+        ":mutation",
+        ":scenario-generation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_test(
+    name = "mutation-tests",
+    size = "small",
+    srcs = ["MutationTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":judge-lib",
+        ":mutation",
+        ":scenario-generation",
+        "//host:base",
+        "//host:bytestring",
+        "//host/firmware:bank-allowlist",
+    ],
+)

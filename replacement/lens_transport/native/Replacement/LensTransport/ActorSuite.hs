@@ -1,7 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Replacement.LensTransport.ActorSuite (runSuite, sourceIdentity, CaseResult (..), ControlResult (..), ReplyResult (..), StockEvidence (..), handlerExtents) where
+module Replacement.LensTransport.ActorSuite (runSuite, runMutants, checkInputs, cases, sourceIdentity, CaseResult (..), ControlResult (..), ReplyResult (..), StockEvidence (..), handlerExtents) where
 
 import qualified ArmElf as E
+import Control.Exception (evaluate)
 import Control.Monad (forM, forM_, unless)
 import Data.Bits ((.&.), (.|.), shiftL, shiftR)
 import qualified Data.ByteString as B
@@ -11,9 +12,11 @@ import Data.List (findIndex, isPrefixOf, nub, sort)
 import Data.Maybe (fromMaybe)
 import Data.Word (Word32)
 import Emulation.Judge (StockEvidence (..), evidenceAt, evidenceProblems)
+import Emulation.Mutation (Variant (..), VariantOutcome (..))
 import Emulation.NativeObservation
 import Emulation.OwnedCase
 import Emulation.Sha256 (sha256, sha256Hex)
+import System.Directory (removeDirectoryRecursive)
 import System.FilePath ((</>))
 
 sourceIdentity :: String
@@ -811,8 +814,12 @@ controlsFor image directory runner attachDefect stopDefect externals stocks =
         , coDiagnostics = []
         }
 
-runSuite :: FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO ([CaseResult], [ControlResult], [ReplyResult])
-runSuite runner directory imagePath elfPath codecElfPath codecDefect attachDefect stopDefect = do
+-- | The inputs every actor run needs: the image4 identity, the authenticated
+-- handler extents, the owned ELF's entries and its admitted bank. The mutant
+-- run checks the same inputs as the suite, so a variant is only ever a
+-- one-word change to an ELF the suite would have accepted.
+checkInputs :: FilePath -> FilePath -> IO (B.ByteString, E.Elf)
+checkInputs imagePath elfPath = do
   image <- B.readFile imagePath
   unless (sha256Hex (sha256 image) == "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16") (fail "image4 identity differs")
   forM_ handlerExtents $ \(address, size, digest) ->
@@ -823,6 +830,11 @@ runSuite runner directory imagePath elfPath codecElfPath codecDefect attachDefec
     _ -> fail ("missing owned function: " ++ name)
   forM_ (filter (\s -> E.sectionAllocated s && E.sectionSize s > 0) (E.elfSections elf)) $ \s ->
     unless (E.sectionAddress s >= 0x100000 && toInteger (E.sectionAddress s) + toInteger (E.sectionSize s) <= 0x180000) (fail "owned allocated section escapes admitted bank")
+  pure (image, elf)
+
+runSuite :: FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO ([CaseResult], [ControlResult], [ReplyResult])
+runSuite runner directory imagePath elfPath codecElfPath codecDefect attachDefect stopDefect = do
+  (image, elf) <- checkInputs imagePath elfPath
   -- The branch walk cannot see a callee reached through a switch table or an indirect call, so
   -- every declared service stub is a boundary by definition, not only the reachable ones.
   let externals = nub (sort (outsideTargets image (slice image codeLow (codeHigh - codeLow)) ++ map fst recording))
@@ -864,4 +876,79 @@ data RoleRun = RoleRun
   { rrObservations :: M.Map String NativeObservation
   , rrEvidence :: M.Map String StockEvidence
   }
+
+-- | Runs every case against each variant of the owned ELF in place of the
+-- owned binary. The stock side runs once and is reused: the image, the runner
+-- and the cases are the same for every variant. A variant is detected when
+-- some case's comparison reports a difference; a variant no case reports is a
+-- survivor. Each variant's batch directory is removed once its observations
+-- are read, so the run holds one variant's output at a time.
+runMutants :: FilePath -> FilePath -> FilePath -> FilePath -> [(Variant, FilePath)] -> IO ([CaseResult], [VariantOutcome])
+runMutants runner directory imagePath elfPath variants = do
+  (image, elf) <- checkInputs imagePath elfPath
+  let externals = nub (sort (outsideTargets image (slice image codeLow (codeHigh - codeLow)) ++ map fst recording))
+      batches = zip [0 :: Int ..] (chunks cases)
+      runOwned variantElf label = do
+        observed <- forM batches $ \(index, selected) -> do
+          batch <- writeBatch (directory </> label </> show index) (map (makeCase image variantElf Owned externals) selected)
+          rows <- loadObservedBatch runner batch
+          mapM_ (evaluateObservation . snd) rows
+          pure rows
+        pure (M.fromList
+          [ (cId c, o)
+          | ((_, selected), rows) <- zip batches observed
+          , (c, (_, o)) <- zip selected rows
+          ])
+  stockBatches <- forM batches $ \(index, selected) -> do
+    let label = directory </> "base" </> show index </> "Stock"
+    batch <- writeBatch label (map (makeCase image elf Stock externals) selected)
+    observed <- loadObservedBatch runner batch
+    mapM_ (evaluateObservation . snd) observed
+    evidence <- forM (zip selected observed) $ \(c, _) -> do
+      found <- stockEvidence image (label </> (cId c ++ ".native-result.json")) c
+      pure (cId c, found)
+    pure ( M.fromList [(cId c, o) | (c, (_, o)) <- zip selected observed]
+         , M.fromList evidence
+         )
+  let stocks = M.unions (map fst stockBatches)
+      evidence = M.unions (map snd stockBatches)
+  baseObserved <- runOwned elf "base-owned"
+  let results =
+        [ CaseResult (cId c) found (compareResult c s o ++ controls c s o ++ evidenceProblems found)
+        | c <- cases
+        , Just s <- [M.lookup (cId c) stocks]
+        , Just o <- [M.lookup (cId c) baseObserved]
+        , Just found <- [M.lookup (cId c) evidence]
+        ]
+  -- The base comparison's strings are what the report keeps; forcing them
+  -- releases the base observations before the variants run.
+  forM_ results $ \result -> evaluate (length (crDifferences result))
+  outcomes <- forM variants $ \(variant, path) -> do
+    variantElf <- either fail pure . E.parseElf =<< B.readFile path
+    let label = "mutant-" ++ show (variantIndex variant)
+    observed <- runOwned variantElf label
+    let differing =
+          [ c
+          | c <- cases
+          , Just s <- [M.lookup (cId c) stocks]
+          , Just o <- [M.lookup (cId c) observed]
+          , not (null (compareResult c s o))
+          ]
+        differences = case differing of
+          (c : _) -> case (M.lookup (cId c) stocks, M.lookup (cId c) observed) of
+            (Just s, Just o) -> map ((cId c ++ ": ") ++) (compareResult c s o)
+            _ -> []
+          [] -> []
+    _ <- evaluate (length differences)
+    removeDirectoryRecursive (directory </> label)
+    pure VariantOutcome
+      { outcomeVariant = variant
+      , outcomeDetected = not (null differing)
+      , outcomeCases = map cId differing
+      , outcomeDifferences = differences
+      }
+  pure (results, outcomes)
+  where
+    chunks [] = []
+    chunks rest = let (batch, remaining) = splitAt 16 rest in batch : chunks remaining
 
