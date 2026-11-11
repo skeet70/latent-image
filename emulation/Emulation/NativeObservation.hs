@@ -34,6 +34,7 @@ module Emulation.NativeObservation
   , lookupRegister
   , ObservationError (..)
   , observeNative
+  , evaluateObservation
   , reportRunnerExit
   , renderObservationError
   , regionIdOf
@@ -43,6 +44,7 @@ module Emulation.NativeObservation
   , hexWord32
   ) where
 
+import Control.Exception (evaluate)
 import Control.Monad (forM, when)
 import Data.Aeson (Value (..))
 import qualified Data.ByteString as B
@@ -310,6 +312,44 @@ observeNative exit regions value = do
   where
     kernelRow (OrderedWrite _ _) = False
     kernelRow _ = True
+
+-- | Force every field of an observation, so a caller that keeps observations
+-- for many cases does not retain the parsed report each one was built from.
+evaluateObservation :: NativeObservation -> IO ()
+evaluateObservation observation = do
+  _ <- evaluate (nativeStatus observation)
+  _ <- evaluate (sum (M.elems (nativeRegisters observation)))
+  _ <- evaluate (sum [B.length bytes | (_, bytes) <- nativeMemory observation])
+  _ <- evaluate (provenanceCount (nativeProvenance observation))
+  _ <- evaluate (provenanceRetained (nativeProvenance observation))
+  case provenanceWrites (nativeProvenance observation) of
+    Nothing -> pure ()
+    Just writes -> do
+      _ <- evaluate (sum (map writeWeight writes))
+      pure ()
+  _ <- evaluate (instructionCount (nativeInstructions observation))
+  _ <- evaluate (engineError (nativeEngineError observation))
+  case nativeKernel observation of
+    Nothing -> pure ()
+    Just kernel -> do
+      _ <- evaluate (observedTpidrurw kernel)
+      _ <- evaluate (observedFpexc kernel)
+      _ <- evaluate (observedReserved kernel)
+      case observedOrder kernel of
+        Nothing -> pure ()
+        Just order -> do
+          _ <- evaluate (sum (map orderedWeight order))
+          pure ()
+  pure ()
+
+writeWeight :: Write -> Int
+writeWeight write = fromIntegral (guestAddress (writeAddress write)) + fromIntegral (writeBytes (writeLength write))
+
+orderedWeight :: Ordered -> Int
+orderedWeight ordered = case ordered of
+  OrderedWrite write (WriteValue value) -> writeWeight write + fromIntegral value
+  OrderedBarrier _ -> 1
+  OrderedSystemWrite _ word -> fromIntegral word
 
 renderObservationError :: ObservationError -> String
 renderObservationError errorValue = case errorValue of

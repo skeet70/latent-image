@@ -764,6 +764,99 @@ for a bound entry, carrying no detected wrong variant, naming no firmware or
 naming another firmware gets the matching non-pass verdict with its reason. A
 diagnostic difference leaves the verdict unchanged.
 
+## Wrong variants
+
+`//emulation:mutants` makes wrong variants of an owned ELF. Each differs from
+it in one word: a conditional plain `b` with its condition inverted, or a
+`str`, `strb`, `strh`, `stm` or `push` replaced by `mov r0, r0` under the
+store's own condition. Sites are drawn from the function extents the caller
+names by symbol, with the seed handling of `Emulation.ScenarioGeneration`, so
+`variants.json` records the seed, generator version and sites that regenerate
+the set.
+
+```sh
+devenv shell -- host-build run //emulation:mutants -- \
+  --elf ACTOR.elf --crate xm1_lens_actor --function lens_actor_request \
+  --seed 20261111 --count 40 --out VARIANT_DIR
+```
+
+`--function` names one function; `--crate` selects every function whose
+mangled symbol contains the crate name. A site must be an instruction the
+`A32` decoder classifies with certainty and must not be data: a `$d` mapping
+symbol makes the region data until the next mapping symbol, a word a
+PC-relative load or address computation targets is data, and only words the
+extent's control flow reaches from its entry are instructions. A Thumb extent
+is refused rather than decoded as A32.
+
+A suite runs its cases against each variant in place of the owned binary and
+records one control row per variant (`Emulation.Mutation`'s `variantControl`),
+named by index, kind and address. A variant some case reports different is
+detected; a variant no case reports is a survivor, so the judge lists it under
+its address and kind. A survivor is information, not a failure of the tool: it
+names a projection that looks at too little.
+`//replacement/lens_transport/native:actor-mutants` does this for the actor
+suite, with `RUNNER OUTPUT IMAGE4 OWNED_ACTOR_ELF SEED COUNT` as its
+arguments; the stock side runs once and every variant reuses it.
+
+`//emulation:mutation-tests` covers the site rule on a synthetic ELF built in
+the test: the classified forms are the eligible sites, literal-pool words and
+unreached or load-targeted data are never touched, the same seed gives the
+same variants, and each variant differs in exactly one word.
+
+## Stock-side branch coverage
+
+`//emulation:coverage` folds the native runner's per-extent bitmaps over a
+cohort and reports, for every declared stock function extent, which conditional
+branches were reached in both directions, in one direction or not at all, and
+which instructions never executed. Its inputs are the runner reports and a
+census of stock function extents; it prints a table and can write the same
+result as JSON.
+
+```sh
+devenv shell -- host-build run //emulation:coverage -- \
+  --extents emulation/suite-audit-cases/lens-actor.json \
+  --reports RUN_DIR --json COVERAGE.json
+# or, from the workspace root, after a build:
+bazel-bin/emulation/coverage --extents emulation/suite-audit-cases/lens-actor.json \
+  --report RUN/0/Stock/case.native-result.json --json COVERAGE.json
+```
+
+`--extents` reads the census shape `emulation/suite-audit-cases/*.json` writes,
+or a bare array of `{"base":ADDRESS,"bytes":COUNT}` rows. Each row's
+`stock.sha256`, when present, authenticates the extent: the bytes are taken
+from a report's final memory and must hash to that digest, or the report is
+counted as foreign and contributes no coverage. Without a digest the extent is
+reported unauthenticated. `--report FILE` may be repeated and `--reports DIR`
+recurses for `*.json`; a judged `native-result.json` is read through its
+`runner` object, and a bare observation is read directly. Pass one cohort's
+reports only; the tool does not filter by role.
+
+Each report must carry the runner's `executed` rows, which a runner built before
+the per-extent bitmaps does not write. Every `executed` row covers one declared
+function extent: `executed` has a bit per entered word, `condition_passed` a bit
+per evaluation whose condition passed, and `condition_failed` a bit per
+evaluation whose condition failed, all in address order with the first word in
+bit 0. A census extent is read at its offset inside any declared row that
+contains it, so a handler inside a case's whole-region function declaration is
+covered; an extent beyond the runner's 256 KiB per-case bitmap budget appears in
+`executed_unobserved` instead and is counted as unobserved.
+
+The table has one row per extent (`cases`, `unobserved`, `foreign`, branch
+counts by direction, unexecuted count, authenticated) followed by one row per
+conditional branch (`condition`, `direction`) and one row per unexecuted
+instruction (`word`). The JSON carries the same rows plus cohort totals. A
+branch is a word whose condition is not AL/NV and whose opcode is `B`, `BL`,
+`BX`, `BLX`, `LDR pc` or `LDM`/`POP` with PC in the list; every other word in a
+declared extent is reported only as executed or unexecuted, so a literal pool
+inside an extent appears as unexecuted instructions.
+
+`//emulation:coverage-tests` covers the fold on synthetic reports: a
+straight-line extent has no branch and no unexecuted word, one branch reached
+in both directions across two cases is `both`, one direction is `passed-only`
+or `failed-only`, an unentered branch is `never`, bytes that differ from the
+census digest are foreign, an `executed_unobserved` row is counted, and the
+JSON and table carry the result.
+
 ## Outputs and limitations
 
 The report identifies the exact case, verified artifacts, wire and runner by SHA256. It preserves full register/final logical memory state, instruction count, monotonic elapsed nanoseconds, the engine error code, stub events and the last 64 instruction/access records. `trace_total` and `access_total` expose truncation; access values are meaningful for writes, while read hook values are unspecified. The access log holds reads, writes and faults, not fetches, and a refused access is its last entry. Expected memory spans define the entire permitted final change set; every undeclared byte must equal its initial value. A normal return alone cannot satisfy a fixture. Invalid case, runner error, expectation mismatch and external timeout all exit nonzero with diagnostics.

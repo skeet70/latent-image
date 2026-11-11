@@ -2,7 +2,9 @@
 //! Cortex-R4F exclusions of `r4f::classify_a32`. Input is the
 //! native case wire written by `Emulation.NativeCase`, or a batch wire of such
 //! cases; output is the runner observation read by `Emulation.NativeObservation`,
-//! one per case.
+//! one per case. Each observation carries, besides the last 64 entered
+//! instructions, one bitmap of entered words and one of condition outcomes per
+//! declared function extent.
 //!
 //! Engine pages carry the union of the permissions of the regions they touch.
 //! The memory hook admits each access against exact logical regions and
@@ -155,6 +157,11 @@ const MAX_RECORDED_EVENTS: usize = 512;
 const MAX_DEPTH: usize = 32;
 const MAX_STACK_CONTEXTS: usize = 16;
 const LOG_SIZE: usize = 64;
+/// Bytes of executed-word and condition-outcome bitmap one case may allocate, across all of its
+/// declared extents and all three maps. A word costs three bits, so this covers 2,796,192 bytes
+/// of declared code; an extent that does not fit the remaining budget is reported as unobserved
+/// rather than silently recorded.
+const EXECUTED_BITMAP_BUDGET: usize = 256 * 1024;
 const PROVENANCE_SIZE: usize = 4096;
 const PAGE: u64 = 4096;
 const TRANSLATION_CACHE_BYTES: u32 = 4 * 1024 * 1024;
@@ -1433,6 +1440,95 @@ struct TraceEntry {
     instruction: Word,
 }
 
+/// One declared function extent's executed words, one bit per word in address order, and both
+/// outcomes of each word's condition. A word that never executed has no bit in any map. A word
+/// that executed has its `executed` bit and one `condition_passed` or `condition_failed` bit per
+/// evaluation, so a conditional word that took both directions in one case has both bits.
+#[derive(Serialize)]
+struct ExecutedExtentReport {
+    base: Word,
+    bytes: Count,
+    executed: HexBytes,
+    condition_passed: HexBytes,
+    condition_failed: HexBytes,
+}
+
+/// A declared function extent the case did not observe because its bitmaps did not fit the budget.
+#[derive(Serialize)]
+struct UnobservedExtentReport {
+    base: Word,
+    bytes: Count,
+}
+
+#[derive(Clone)]
+enum ExecutedExtent {
+    Observed { base: u32, bytes: u32, executed: Vec<u8>, passed: Vec<u8>, failed: Vec<u8> },
+    Unobserved { base: u32, bytes: u32 },
+}
+
+impl ExecutedExtent {
+    /// The three bitmaps for one declared extent, or `Unobserved` when the remaining budget
+    /// cannot hold all three.
+    fn new(span: Span, spent: &mut usize) -> Self {
+        let words = (u64::from(span.bytes) + 3) / 4;
+        let bitmap = (words + 7) / 8;
+        match usize::try_from(bitmap) {
+            Ok(bitmap) if spent.saturating_add(bitmap.saturating_mul(3)) <= EXECUTED_BITMAP_BUDGET => {
+                *spent += bitmap * 3;
+                Self::Observed {
+                    base: span.base,
+                    bytes: span.bytes,
+                    executed: vec![0; bitmap],
+                    passed: vec![0; bitmap],
+                    failed: vec![0; bitmap],
+                }
+            }
+            _ => Self::Unobserved { base: span.base, bytes: span.bytes },
+        }
+    }
+
+    /// The three bitmaps and the word index of one address inside this extent.
+    fn word(&mut self, address: u32) -> Option<(&mut Vec<u8>, &mut Vec<u8>, &mut Vec<u8>, usize)> {
+        match self {
+            Self::Observed { base, bytes, executed, passed, failed } => {
+                let offset = address.wrapping_sub(*base);
+                if offset >= *bytes {
+                    return None;
+                }
+                let word = (offset / 4) as usize;
+                Some((executed, passed, failed, word))
+            }
+            Self::Unobserved { .. } => None,
+        }
+    }
+
+    fn mark_executed(&mut self, address: u32) {
+        if let Some((executed, _, _, word)) = self.word(address) {
+            executed[word / 8] |= 1 << (word % 8);
+        }
+    }
+
+    fn mark_condition(&mut self, address: u32, passed: bool) {
+        if let Some((_, pass_bits, fail_bits, word)) = self.word(address) {
+            let bits = if passed { pass_bits } else { fail_bits };
+            bits[word / 8] |= 1 << (word % 8);
+        }
+    }
+
+    fn report(self, observed: &mut Vec<ExecutedExtentReport>, unobserved: &mut Vec<UnobservedExtentReport>) {
+        match self {
+            Self::Observed { base, bytes, executed, passed, failed } => observed.push(ExecutedExtentReport {
+                base: Word(base),
+                bytes: Count(u64::from(bytes)),
+                executed: HexBytes(executed),
+                condition_passed: HexBytes(passed),
+                condition_failed: HexBytes(failed),
+            }),
+            Self::Unobserved { base, bytes } => unobserved.push(UnobservedExtentReport { base: Word(base), bytes: Count(u64::from(bytes)) }),
+        }
+    }
+}
+
 /// The `type` of an access record: Unicorn's published `uc_mem_type` numbering.
 #[derive(Clone, Copy, Default)]
 enum AccessType {
@@ -1568,6 +1664,11 @@ struct Observation<'a> {
     accesses: Vec<AccessEntry>,
     memory_provenance_total: Count,
     memory_provenance: Vec<LogEntry>,
+    /// One row per declared function extent: every word the case entered, and each word's
+    /// condition outcome.
+    executed: Vec<ExecutedExtentReport>,
+    /// Declared function extents this case did not observe because their bitmap did not fit.
+    executed_unobserved: Vec<UnobservedExtentReport>,
     /// Present exactly for an executed kernel case.
     #[serde(skip_serializing_if = "Option::is_none")]
     kernel: Option<KernelRegisters>,
@@ -1605,6 +1706,8 @@ impl<'a> Observation<'a> {
             accesses: Vec::new(),
             memory_provenance_total: Count(0),
             memory_provenance: Vec::new(),
+            executed: Vec::new(),
+            executed_unobserved: Vec::new(),
             kernel: None,
         }
     }
@@ -1960,6 +2063,7 @@ struct State {
     events: Vec<(usize, usize)>,
     stub_calls: [usize; MAX_STUBS as usize],
     trace: [TraceEntry; LOG_SIZE],
+    executed: Vec<ExecutedExtent>,
     accesses: [AccessEntry; LOG_SIZE],
     access_total: u64,
     provenance: Vec<LogEntry>,
@@ -1975,6 +2079,8 @@ struct State {
 impl State {
     fn new(case: &Case) -> Self {
         let kernel = case.profile.kernel();
+        let mut spent = 0;
+        let executed = case.functions.iter().map(|span| ExecutedExtent::new(*span, &mut spent)).collect();
         Self {
             status: None,
             detail: None,
@@ -1987,6 +2093,7 @@ impl State {
             captures: Vec::new(),
             snapshots: Vec::new(),
             trace: [TraceEntry::default(); LOG_SIZE],
+            executed,
             accesses: [AccessEntry::default(); LOG_SIZE],
             access_total: 0,
             provenance: Vec::with_capacity(PROVENANCE_SIZE),
@@ -2079,7 +2186,8 @@ impl State {
         if case.stops_at(pc) {
             return Err(Step::Stop(Status::StopAddress));
         }
-        if !case.functions[self.shadow.state().current].contains(address, 4) {
+        let function = self.shadow.state().current;
+        if !case.functions[function].contains(address, 4) {
             return Err(Step::Stop(Status::UnknownCall));
         }
         if self.entered >= u64::from(case.budget.0) {
@@ -2088,9 +2196,15 @@ impl State {
         let word = read_word(cpu, address)?;
         self.trace[(self.entered % LOG_SIZE as u64) as usize] = TraceEntry { pc: Word(pc), instruction: Word(word) };
         self.entered += 1;
+        if let Some(extent) = self.executed.get_mut(function) {
+            extent.mark_executed(pc);
+        }
         self.instruction = Instruction { pc, word, transfer: None };
         let class = case.profile.classify(word);
         let passes = arm::condition_passes(word >> 28, cpsr);
+        if let Some(extent) = self.executed.get_mut(function) {
+            extent.mark_condition(pc, passes);
+        }
         match class {
             ProfileWord::Excluded => return Err(Step::Stop(Status::UnsupportedInstruction)),
             ProfileWord::IdentityRead(target, identity) => {
@@ -2591,6 +2705,11 @@ impl State {
         }
         let first = self.entered.saturating_sub(LOG_SIZE as u64);
         let first_access = self.access_total.saturating_sub(LOG_SIZE as u64);
+        let mut executed = Vec::with_capacity(self.executed.len());
+        let mut executed_unobserved = Vec::new();
+        for extent in std::mem::take(&mut self.executed) {
+            extent.report(&mut executed, &mut executed_unobserved);
+        }
         Observation {
             wire_version: 1,
             status: self.status.unwrap_or(Status::EngineError),
@@ -2617,6 +2736,8 @@ impl State {
                 .collect(),
             memory_provenance_total: Count(self.provenance_total),
             memory_provenance: std::mem::take(&mut self.provenance),
+            executed,
+            executed_unobserved,
             kernel: case.profile.kernel().map(|_| KernelRegisters {
                 tpidrurw: self.system.tpidrurw.map(|value| Word(value.0)),
                 fpexc: self.system.fpexc.map(|value| Word(value.0)),
