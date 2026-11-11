@@ -1080,14 +1080,14 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
   afBinding <- traverse (\_ -> case emulationRuntime settings of
     FujiModRuntime bridge -> loadAfArchiveValidator bridge
     _ -> ioError (userError "AF archive binding requires the native FujiMod bridge")) afPlan
-  afCatalogue <- traverse (\validator -> case emulationRuntime settings of
-    FujiModRuntime bridge -> loadAfMappingCatalogue validator (fujimodRunDocument bridge) (e2e </> "af-source-catalogue")
-    _ -> ioError (userError "AF mapping catalogue requires the native FujiMod bridge")) afBinding
   (executable, arguments) <- sessionBridge settings python installedMedia adjustmentNand (bootMode settings) e2e
   published <- bracket (timed "emulator-start" (startEmulator executable runtime arguments choose))
     (\(emulator, _, _) -> ((finishAfOwnership emulator e2e enabledAfPlan `catch` \(_ :: SomeException) -> pure ()) `finally` finishModalLifetime emulator e2e lifetimeSession) `finally` stopEmulator emulator) $ \(emulator, start, installed) -> recordModalLifetimeFailure lifetimeSession $ do
     putStrLn ("emulator start: " ++ show (bootStart start) ++ "; relink: " ++ T.unpack (relinkModeText (relinkMode settings))
       ++ "; payload: " ++ T.unpack (payloadText selected))
+    afCatalogue <- traverse (\validator -> case emulationRuntime settings of
+      FujiModRuntime bridge -> loadAfMappingCatalogue validator (fujimodRunDocument bridge) (e2e </> "af-source-catalogue")
+      _ -> ioError (userError "AF mapping catalogue requires the native FujiMod bridge")) afBinding
     forM_ afPlan $ \_ -> do
       proofBytes <- B.readFile (e2e </> "af-reset-prestate.json")
       proof <- either (ioError . userError) pure (eitherDecodeStrict' proofBytes)
