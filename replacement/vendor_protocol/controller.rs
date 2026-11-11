@@ -53,7 +53,7 @@ pub fn publish_secondary_status(status: xm1_power_services::primitives::ServiceS
 }
 
 #[cfg(target_arch = "arm")]
-pub unsafe extern "C" fn secondary_status_consumer(status: xm1_power_services::primitives::ServiceStatus) {
+pub extern "C" fn secondary_status_consumer(status: xm1_power_services::primitives::ServiceStatus) {
     let _ = publish_secondary_status(status, &mut xm1_power_services::shutdown_rtos::NativeShutdownRtos);
 }
 
@@ -123,6 +123,7 @@ impl QueueController {
     }
 
     /// On `Deferred` the caller queues the 0x3401 message.
+    /// Stock 0x00d846c4..0x00d84840 writes phase 0 and calls the consumers whatever the stages returned.
     pub fn shutdown<S: UsbRegistrationStorage, R: RegistrationRegistry, T: SessionTeardown, O: ShutdownRtos, F: ProtocolFiles>(
         &mut self, resources: &mut ShutdownResources<'_, S, R, T, O, F>,
     ) -> Result<ShutdownDisposition, ControllerError> {
@@ -133,6 +134,7 @@ impl QueueController {
                 _ => self.shutdown = Some(ShutdownStage::Begin),
             }
         }
+        let mut first = None;
         loop {
             match self.shutdown {
                 Some(ShutdownStage::Begin) => {
@@ -167,10 +169,12 @@ impl QueueController {
                     });
                 }
                 Some(ShutdownStage::Teardown) => {
-                    match resources.teardown.resume().map_err(ControllerError::Transport)? {
-                        TeardownProgress::Pending => return Ok(ShutdownDisposition::Pending),
-                        TeardownProgress::Complete => self.shutdown = Some(ShutdownStage::Cleanup),
+                    match resources.teardown.resume() {
+                        Ok(TeardownProgress::Pending) => return Ok(ShutdownDisposition::Pending),
+                        Ok(TeardownProgress::Complete) => {}
+                        Err(error) => { first.get_or_insert(ControllerError::Transport(error)); }
                     }
+                    self.shutdown = Some(ShutdownStage::Cleanup);
                 }
                 Some(ShutdownStage::Cleanup) => {
                     if matches!(self.state, ControllerState::ActiveVendor | ControllerState::PendingVendor) {
@@ -191,14 +195,18 @@ impl QueueController {
                     self.shutdown = Some(match publication { Some(publication) => ShutdownStage::Publish(publication), None => ShutdownStage::Acknowledge });
                 }
                 Some(ShutdownStage::Publish(publication)) => {
-                    publish_controller_status(publication, resources.rtos).map_err(ControllerError::Acknowledgement)?;
+                    if let Err(error) = publish_controller_status(publication, resources.rtos) {
+                        first.get_or_insert(ControllerError::Acknowledgement(error));
+                    }
                     self.shutdown = Some(ShutdownStage::Acknowledge);
                 }
                 Some(ShutdownStage::Acknowledge) => {
                     // The task-7 acknowledgement is the installed close consumer at 0x00ecfe20.
-                    shutdown_task7_8::usb_release_acknowledged(resources.rtos).map_err(ControllerError::Acknowledgement)?;
+                    if let Err(error) = shutdown_task7_8::usb_release_acknowledged(resources.rtos) {
+                        first.get_or_insert(ControllerError::Acknowledgement(error));
+                    }
                     self.shutdown = None;
-                    return Ok(ShutdownDisposition::Complete);
+                    return match first { Some(error) => Err(error), None => Ok(ShutdownDisposition::Complete) };
                 }
                 None => return Ok(ShutdownDisposition::Ignored),
             }

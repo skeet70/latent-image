@@ -17,7 +17,7 @@ use scheduler::{InterruptState, SwitchReason, TimerEntry};
 use std::{cell::{Cell as StdCell, RefCell}, collections::{BTreeMap, VecDeque}};
 use xm1_power_services::{
     device_timer_release::TimerPeriod,
-    shutdown::{QueueId, RequestId, ServiceMessage, TaskId},
+    shutdown::{KernelStatus, QueueId, RequestId, ServiceMessage, ShutdownRtos, TaskId},
     shutdown_task7_8::RegistryHandle,
     shutdown_task7_8_transport::RegistrationRegistry,
 };
@@ -177,7 +177,7 @@ impl RootHost for Host {
 }
 
 #[derive(Default)]
-struct Rtos { queue36: VecDeque<(RequestId, Vec<u8>)>, task7: Vec<(RequestId, Vec<u8>)>, fail_task7: bool }
+struct Rtos { queue36: VecDeque<(RequestId, Vec<u8>)>, task7: Vec<(RequestId, Vec<u8>)>, priorities: Vec<(TaskId, u32)>, fail_task7: bool }
 impl ShutdownRtos for Rtos {
     fn current_task(&mut self) -> TaskId { TaskId(36) }
     fn post(&mut self, message: ServiceMessage<'_>) -> Result<(), KernelStatus> {
@@ -190,6 +190,11 @@ impl ShutdownRtos for Rtos {
         Ok(())
     }
     fn set_event_flag(&mut self, _: u32, _: u32) -> Result<(), KernelStatus> { Ok(()) }
+}
+impl ControllerRtos for Rtos {
+    fn set_task_priority(&mut self, task: TaskId, priority: u32) -> Result<(), KernelStatus> {
+        self.priorities.push((task, priority)); Ok(())
+    }
 }
 
 struct Feed<'a>(&'a RefCell<Rtos>);
@@ -212,10 +217,14 @@ fn tables() -> CallbackTables {
     }
 }
 
-#[derive(Default)]
-struct Channels { taken: u32 }
+struct Channels { taken: u32, opened: [bool; 2] }
+impl Default for Channels { fn default() -> Self { Self { taken: 0, opened: [true, true] } } }
 impl SessionChannels for Channels {
-    fn take(&mut self) -> [ChannelLease; 2] { self.taken += 1; leases() }
+    fn take(&mut self) -> [Option<ChannelLease>; 2] {
+        self.taken += 1;
+        let [zero, one] = leases();
+        [self.opened[0].then_some(zero), self.opened[1].then_some(one)]
+    }
 }
 
 fn leases() -> [ChannelLease; 2] {
@@ -392,6 +401,65 @@ fn close_requested_during_the_file_abort_is_acknowledged_after_the_abort_complet
 }
 
 #[test]
+fn a_failed_close_acknowledgement_in_state_eight_leaves_the_controller_ready_for_initialize() {
+    with_bench(|root, bench| {
+        open(root, bench, 3);
+        assert_eq!(root.runtime.controller.state(), ControllerState::State8);
+        bench.take_task7();
+        bench.rtos.borrow_mut().fail_task7 = true;
+        bench.post(Queue36Event::Shutdown, &[]);
+        drive(root, bench);
+        assert_eq!(root.runtime.controller.state(), ControllerState::Stopped);
+        assert_eq!(bench.channels.taken, 1);
+        assert!(matches!(root.take_fault(), Some(RootError::Controller(ControllerError::Acknowledgement(_)))));
+
+        bench.rtos.borrow_mut().fail_task7 = false;
+        bench.post(Queue36Event::Shutdown, &[]);
+        drive(root, bench);
+        assert_eq!(bench.channels.taken, 1);
+        bench.post(Queue36Event::Initialize, &[]);
+        drive(root, bench);
+        assert_eq!(root.runtime.controller.state(), ControllerState::Starting);
+    });
+}
+
+#[test]
+fn a_session_that_never_opened_the_second_channel_tears_down_without_it() {
+    with_bench(|root, bench| {
+        bench.channels.opened = [true, false];
+        open(root, bench, 3);
+        assert_eq!(root.runtime.controller.state(), ControllerState::State8);
+        bench.take_task7();
+        bench.post(Queue36Event::Shutdown, &[]);
+        drive(root, bench);
+        assert_eq!(root.runtime.controller.state(), ControllerState::Stopped);
+        assert_eq!(bench.channels.taken, 1);
+        assert_eq!(bench.platform.closed, [Channel::Zero]);
+    });
+}
+
+#[test]
+fn a_failed_close_publication_in_state_two_leaves_the_controller_ready_for_initialize() {
+    with_bench(|root, bench| {
+        root.runtime.initialize_phase(&mut *bench.rtos.borrow_mut()).unwrap();
+        root.runtime.initialize_completion(ConnectionSnapshot::Disconnected, &mut *bench.rtos.borrow_mut()).unwrap();
+        drive(root, bench);
+        assert_eq!(root.runtime.controller.state(), ControllerState::State2);
+        bench.rtos.borrow_mut().fail_task7 = true;
+        bench.post(Queue36Event::Shutdown, &[]);
+        drive(root, bench);
+        assert_eq!(root.runtime.controller.state(), ControllerState::Stopped);
+        assert_eq!(bench.channels.taken, 0);
+        assert!(matches!(root.take_fault(), Some(RootError::Controller(ControllerError::Acknowledgement(_)))));
+
+        bench.rtos.borrow_mut().fail_task7 = false;
+        bench.post(Queue36Event::Initialize, &[]);
+        drive(root, bench);
+        assert_eq!(root.runtime.controller.state(), ControllerState::Starting);
+    });
+}
+
+#[test]
 fn handle_four_opens_the_file_phase_and_a_disconnect_there_aborts_into_state_six() {
     with_bench(|root, bench| {
         open(root, bench, 4);
@@ -524,6 +592,19 @@ fn sixteen_differing_link_polls_publish_the_connection_and_vote_the_clock() {
 }
 
 #[test]
+fn a_link_poll_sets_task36_priority_eight_then_eleven() {
+    with_bench(|root, bench| {
+        root.runtime.initialize_phase(&mut *bench.rtos.borrow_mut()).unwrap();
+        root.runtime.initialize_completion(ConnectionSnapshot::Disconnected, &mut *bench.rtos.borrow_mut()).unwrap();
+        drive(root, bench);
+        assert_eq!(root.runtime.controller.state(), ControllerState::State2);
+        root.runtime.registrations.fire(TimerEvent::ConnectionPoll, &mut *bench.rtos.borrow_mut()).unwrap();
+        drive(root, bench);
+        assert_eq!(bench.rtos.borrow().priorities, [(TaskId(36), 8), (TaskId(36), 11)]);
+    });
+}
+
+#[test]
 fn class_registrars_carry_the_mode_and_status_into_queue36() {
     with_bench(|root, bench| {
         root.runtime.class_initialized(RequestHandle(4), &mut *bench.rtos.borrow_mut()).unwrap();
@@ -537,22 +618,23 @@ fn class_registrars_carry_the_mode_and_status_into_queue36() {
 }
 
 #[test]
-fn print_submission_reads_the_file_copies_and_inline_date_text() {
+fn print_submission_reads_the_file_copies_and_inline_date_bytes() {
     let mut bytes = [0; 24];
     bytes[..4].copy_from_slice(&0x1234u32.to_le_bytes());
     bytes[4..8].copy_from_slice(&3u32.to_le_bytes());
     bytes[8..18].copy_from_slice(b"2013/01/02");
     let payload = Queue36Payload::parse(&bytes).unwrap();
-    let request = print_request(&payload).unwrap();
-    assert_eq!((request.file, request.copies, request.date), (FileId(0x1234), Copies::Count(3), Some("2013/01/02")));
+    let request = print_request(&payload);
+    assert_eq!((request.file, request.copies, request.date), (FileId(0x1234), Copies::Count(3), Some(&b"2013/01/02"[..])));
     bytes[4..8].copy_from_slice(&0x0d00_0000u32.to_le_bytes());
     bytes[8..23].copy_from_slice(b"123456789012345");
     let payload = Queue36Payload::parse(&bytes).unwrap();
-    let request = print_request(&payload).unwrap();
-    assert_eq!((request.copies, request.date), (Copies::Mpo, Some("123456789012345")));
-    bytes[8] = 0;
+    let request = print_request(&payload);
+    assert_eq!((request.copies, request.date), (Copies::Mpo, Some(&b"123456789012345"[..])));
+    bytes[8] = 0xff;
+    bytes[9] = 0;
     let payload = Queue36Payload::parse(&bytes).unwrap();
-    assert_eq!(print_request(&payload).unwrap().date, None);
+    assert_eq!(print_request(&payload).date, Some(&[0xff][..]));
 }
 
 #[test]

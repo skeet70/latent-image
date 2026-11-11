@@ -360,7 +360,7 @@ impl<'a> UsbStart<'a> {
         self.memory.put(CONTROLLER, 0);
     }
     /// The channel and reset part of the session teardown; the reset flag is the word at 0x01469790.
-    pub fn teardown(&self, channels: [transport::ChannelLease; 2]) -> transport::ControllerTeardown {
+    pub fn teardown(&self, channels: [Option<transport::ChannelLease>; 2]) -> transport::ControllerTeardown {
         transport::ControllerTeardown::new(None, channels, self.memory.word(CONTROLLER + 0x28) == 1)
     }
     pub fn finish_teardown(&mut self) { self.memory.put(CONTROLLER + 0x28, 1); }

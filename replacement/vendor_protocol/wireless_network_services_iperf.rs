@@ -237,7 +237,7 @@ impl<'a> IperfRuntime<'a> {
     fn teardown(&mut self, lan: &mut LanRuntime<'_>, cancel: bool) {
         if let Some(socket) = self.udp.take() { let _ = lan.close_udp(socket); }
         if let Some(socket) = self.listener.take() { let _ = lan.cancel_tcp(socket); }
-        if let Some(socket) = self.tcp.take() { if cancel { let _ = lan.cancel_tcp(socket); } else { let _ = lan.close_tcp(socket); } }
+        if let Some(socket) = self.tcp.take() { if cancel { let _ = lan.cancel_tcp(socket); } else { let _ = lan.release_tcp(socket); } }
     }
     fn complete(&mut self, lan: &mut LanRuntime<'_>, failure: Option<IperfError>) -> IperfPoll {
         let failure = failure.or(self.configuration_failure);
@@ -417,7 +417,7 @@ impl<'a> IperfRuntime<'a> {
         if self.phase == Phase::Closing {
             let socket = self.tcp.unwrap();
             let status = lan.tcp_status(socket).map_err(IperfError::Network)?;
-            if status.phase == SocketPhase::Closed { return self.finish_leg(lan, now); }
+            if matches!(status.phase, SocketPhase::TimeWait | SocketPhase::Closed) { return self.finish_leg(lan, now); }
             if let Some(error) = status.failure { return Err(IperfError::Network(LanError::Transport(error))); }
             return Ok(IperfPoll::Pending);
         }

@@ -1,10 +1,10 @@
 use core::cell::RefCell;
 use core::sync::atomic::{AtomicBool, Ordering};
-use crate::{controller::RequestKind, controller_runtime::DeferredMessages, transport_connection_cpu::ConnectionState};
+use crate::{controller::RequestKind, controller_rtos::ControllerRtos, controller_runtime::DeferredMessages, transport_connection_cpu::ConnectionState};
 use xm1_power_services::{
     device_timer_release::TimerPeriod,
     primitives::ServiceStatus,
-    shutdown::{KernelStatus, QueueId, RequestId, ServiceMessage, ShutdownRtos},
+    shutdown::{KernelStatus, QueueId, RequestId, ServiceMessage, ShutdownRtos, TaskId},
     shutdown_task7_8::RegistryHandle,
     shutdown_task7_8_transport::{RegistrationRegistry, UsbCompletionPolicy, UsbRegistrationSlot, UsbRegistrationStorage, UsbSecondaryMode},
 };
@@ -21,11 +21,11 @@ impl TimerEvent {
     pub const fn opcode(self) -> u16 {
         match self { Self::ConnectionPoll => 0x340d, Self::SessionPoll => 0x340f, Self::ShortTransfer => 0x3410, Self::LongTransfer => 0x3411 }
     }
-    pub fn publish(self, rtos: &mut impl ShutdownRtos) -> Result<(), KernelStatus> {
+    pub fn publish(self, rtos: &mut impl ControllerRtos) -> Result<(), KernelStatus> {
         let payload = [0; 24];
         let sender = rtos.current_task();
         let result = rtos.post(ServiceMessage { operation: RequestId(self.opcode()), sender, destination: QueueId(36), payload: &payload });
-        if self == Self::ConnectionPoll { let _ = rtos.set_event_flag(36, 8); }
+        if self == Self::ConnectionPoll { return rtos.set_task_priority(TaskId(36), 8); }
         result
     }
 }
@@ -37,7 +37,7 @@ pub trait TimerRegistry: RegistrationRegistry {
 pub struct TimerProducers { primary: AtomicBool, secondary: AtomicBool }
 impl TimerProducers {
     pub const fn new() -> Self { Self { primary: AtomicBool::new(false), secondary: AtomicBool::new(false) } }
-    pub fn fire(&self, event: TimerEvent, rtos: &mut impl ShutdownRtos) -> Result<(), KernelStatus> {
+    pub fn fire(&self, event: TimerEvent, rtos: &mut impl ControllerRtos) -> Result<(), KernelStatus> {
         let pending = match event {
             TimerEvent::ConnectionPoll => Some(&self.primary),
             TimerEvent::SessionPoll => Some(&self.secondary),
@@ -65,7 +65,7 @@ impl<'state> ControllerRegistrations<'state> {
     pub const fn secondary(&self) -> Option<RegistryHandle> { self.secondary }
     pub const fn short(&self) -> Option<RegistryHandle> { self.short }
     pub const fn long(&self) -> Option<RegistryHandle> { self.long }
-    pub fn fire(&self, event: TimerEvent, rtos: &mut impl ShutdownRtos) -> Result<(), KernelStatus> {
+    pub fn fire(&self, event: TimerEvent, rtos: &mut impl ControllerRtos) -> Result<(), KernelStatus> {
         self.producers.fire(event, rtos)
     }
     pub fn primary_pending(&self) -> bool { self.producers.primary.load(Ordering::Acquire) }
@@ -125,6 +125,9 @@ impl<O: ShutdownRtos> ShutdownRtos for SharedRtos<'_, O> {
     fn post(&mut self, message: ServiceMessage<'_>) -> Result<(), KernelStatus> { self.0.borrow_mut().post(message) }
     fn set_event_flag(&mut self, flag: u32, bits: u32) -> Result<(), KernelStatus> { self.0.borrow_mut().set_event_flag(flag, bits) }
 }
+impl<O: ControllerRtos> ControllerRtos for SharedRtos<'_, O> {
+    fn set_task_priority(&mut self, task: TaskId, priority: u32) -> Result<(), KernelStatus> { self.0.borrow_mut().set_task_priority(task, priority) }
+}
 
 pub struct ShutdownRegistrationParts<'a, O> {
     pub storage: RegistrationStorage<'a, O>,
@@ -163,10 +166,10 @@ impl<O: ShutdownRtos> UsbRegistrationStorage for RegistrationStorage<'_, O> {
 
 #[cfg(target_arch = "arm")]
 pub struct TimerCallbackEntries {
-    pub connection_poll: unsafe extern "C" fn(),
-    pub session_poll: unsafe extern "C" fn(),
-    pub short_transfer: unsafe extern "C" fn(),
-    pub long_transfer: unsafe extern "C" fn(),
+    pub connection_poll: extern "C" fn(),
+    pub session_poll: extern "C" fn(),
+    pub short_transfer: extern "C" fn(),
+    pub long_transfer: extern "C" fn(),
 }
 #[cfg(target_arch = "arm")]
 pub struct NativeTimerRegistry<'a> {

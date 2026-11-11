@@ -20,7 +20,7 @@ impl Copies {
     /// Stock compares the copies word with 0x0d000000 to select the MPO file type.
     pub const fn parse(raw: u32) -> Self { if raw == 0x0d00_0000 { Self::Mpo } else { Self::Count(raw) } }
 }
-pub struct PrintRequest<'a> { pub file: FileId, pub copies: Copies, pub date: Option<&'a str> }
+pub struct PrintRequest<'a> { pub file: FileId, pub copies: Copies, pub date: Option<&'a [u8]> }
 pub struct Identity<'a> { pub vendor: &'a str, pub product: &'a str, pub serial: &'a str }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Phase { Disabled, Configure, Idle, Configuring, DateCapability, TypeCapability, Start, Abort, Continue, DeviceStatus, JobStatus }
@@ -114,7 +114,7 @@ impl PictBridge {
     pub fn take_publication(&mut self) -> Option<Publication> { self.publication.take() }
     pub fn set_request(&mut self, request: PrintRequest<'_>) {
         self.file = request.file; self.copies = request.copies; self.date_length = 0;
-        if let Some(date) = request.date { for byte in date.bytes().take(15).take_while(|byte| *byte != 0) { self.date[self.date_length] = byte; self.date_length += 1; } }
+        if let Some(date) = request.date { for byte in date.iter().take(15).take_while(|byte| **byte != 0) { self.date[self.date_length] = *byte; self.date_length += 1; } }
         self.date[self.date_length] = 0; self.progress[0] = 0; self.images[0] = 0;
         self.start_pending = true; self.abort_pending = false; self.continue_pending = false;
     }
@@ -138,7 +138,7 @@ impl PictBridge {
                 if self.copies == Copies::Mpo { out.word_field("fileType", 0x53180000, 4)?; } else { out.word_field("datePrint", if self.date_supported && self.date_length != 0 { 0x54020000 } else { 0x54010000 }, 4)?; }
                 out.append("\t\t\t</jobConfig>\n\t\t\t<printInfo>\n")?; out.word_field("fileID", self.file.0, 4)?;
                 if let Copies::Count(count) = self.copies {
-                    if self.date_supported && self.date_length != 0 { out.field("date", core::str::from_utf8(&self.date[..self.date_length]).map_err(|_| XmlError::Malformed)?, 4)?; }
+                    if self.date_supported && self.date_length != 0 { out.bytes_field("date", &self.date[..self.date_length], 4)?; }
                     if count > 1 { let count = count.min(999); self.copies = Copies::Count(count); out.append("\t\t\t\t<copies>")?; write!(out, "{count:03}").map_err(|_| XmlError::Capacity)?; out.append("</copies>\n")?; } else { self.copies = Copies::Count(1); }
                 }
                 out.append("\t\t\t</printInfo>\n\t\t</startJob>\n")?;

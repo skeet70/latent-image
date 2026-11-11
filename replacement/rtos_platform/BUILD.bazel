@@ -107,6 +107,8 @@ xm1_rust_staticlib(
             "'feature=\"stage\"'",
             "--cfg",
             "'feature=\"component\"'",
+            "--cfg",
+            "'feature=\"timer-entry\"'",
         ],
     )
     for domain in ["a", "b"]

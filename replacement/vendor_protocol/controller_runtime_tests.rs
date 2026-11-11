@@ -6,7 +6,7 @@ use xm1_power_services::{device_timer_release::TimerPeriod, shutdown::TaskId,
     shutdown_task7_8::RegistryHandle, shutdown_task7_8_transport::RegistrationRegistry};
 
 #[derive(Debug, Eq, PartialEq)]
-enum Effect { Message(RequestId, QueueId, Vec<u8>), Flag(u32, u32), Release(RegistryHandle) }
+enum Effect { Message(RequestId, QueueId, Vec<u8>), Priority(TaskId, u32), Release(RegistryHandle) }
 struct Queue { effects: Vec<Effect>, failure: Option<KernelStatus> }
 impl Queue { fn new() -> Self { Self { effects: Vec::new(), failure: None } } }
 impl ShutdownRtos for Queue {
@@ -15,8 +15,11 @@ impl ShutdownRtos for Queue {
         self.effects.push(Effect::Message(message.operation, message.destination, message.payload.to_vec()));
         self.failure.map_or(Ok(()), Err)
     }
-    fn set_event_flag(&mut self, task: u32, flags: u32) -> Result<(), KernelStatus> {
-        self.effects.push(Effect::Flag(task, flags)); Ok(())
+    fn set_event_flag(&mut self, _: u32, _: u32) -> Result<(), KernelStatus> { unreachable!() }
+}
+impl ControllerRtos for Queue {
+    fn set_task_priority(&mut self, task: TaskId, priority: u32) -> Result<(), KernelStatus> {
+        self.effects.push(Effect::Priority(task, priority)); Ok(())
     }
 }
 
@@ -121,9 +124,9 @@ fn connection_poll_coalesces_until_consumed_and_wakes_even_when_post_fails() {
     let producers = TimerProducers::new();
     let mut registrations = ControllerRegistrations::new(&producers);
     let mut queue = Queue::new(); queue.failure = Some(KernelStatus(-50));
-    assert_eq!(registrations.fire(TimerEvent::ConnectionPoll, &mut queue), Err(KernelStatus(-50)));
+    assert_eq!(registrations.fire(TimerEvent::ConnectionPoll, &mut queue), Ok(()));
     registrations.fire(TimerEvent::ConnectionPoll, &mut queue).unwrap();
-    assert_eq!(queue.effects, vec![Effect::Message(RequestId(0x340d), QueueId(36), vec![0; 24]), Effect::Flag(36, 8)]);
+    assert_eq!(queue.effects, vec![Effect::Message(RequestId(0x340d), QueueId(36), vec![0; 24]), Effect::Priority(TaskId(36), 8)]);
     registrations.acknowledge_primary_poll();
     queue.failure = None;
     registrations.fire(TimerEvent::ConnectionPoll, &mut queue).unwrap();
@@ -225,4 +228,44 @@ fn each_session_poll_reopens_its_coalesced_producer_and_a_restart_forgets_the_co
     assert!(!connection.secondary_active());
     registrations.fire(TimerEvent::SessionPoll, &mut queue).unwrap();
     assert_eq!(queue.effects.len(), 3);
+}
+
+const STOCK_TABLE: &str = include_str!("controller_runtime_table.fixture");
+
+struct StockCell { event: Queue36Event, state: ControllerState, handler: u32, next: Option<ControllerState> }
+
+fn stock_cells() -> Vec<StockCell> {
+    let mut cells = Vec::new();
+    for line in STOCK_TABLE.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') { continue; }
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let [event, state, _tag, handler, next] = fields[..] else { panic!("malformed cell {line}") };
+        cells.push(StockCell {
+            event: Queue36Event::ALL[event.parse::<usize>().unwrap()],
+            state: ControllerState::parse(state.parse().unwrap()).unwrap(),
+            handler: u32::from_str_radix(handler, 16).unwrap(),
+            next: ControllerState::parse(u32::from_str_radix(next, 16).unwrap()).ok(),
+        });
+    }
+    cells
+}
+
+#[test]
+fn every_stock_cell_matches_the_operation_class_and_next_phase() {
+    let cells = stock_cells();
+    assert_eq!(cells.len(), Queue36Event::ALL.len() * 12);
+    for event in Queue36Event::ALL {
+        for phase in 0..12u32 {
+            let state = ControllerState::parse(phase).unwrap();
+            assert_eq!(cells.iter().filter(|cell| cell.event == event && cell.state == state).count(), 1);
+        }
+    }
+    for cell in &cells {
+        let cell_name = format!("{:?}/{:?}", cell.event, cell.state);
+        let operation = operation(cell.event, cell.state);
+        assert_eq!(operation == ControllerOperation::Ignore, cell.handler == 0, "{cell_name}");
+        assert_eq!(table_next_state(cell.event, cell.state), cell.next, "{cell_name}");
+    }
+    assert_eq!(cells.iter().filter(|cell| cell.handler != 0).count(), 119);
 }

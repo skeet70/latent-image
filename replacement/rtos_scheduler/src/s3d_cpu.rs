@@ -2,6 +2,8 @@ use core::arch::asm;
 use core::ptr::{read_volatile, write_volatile};
 use super::s3d::layout::{Domain, GuestAddress, KernelContext, LockRecord, Task};
 use super::s3d::{InterruptState, Machine, SwitchReason, TimerEntry};
+#[cfg(not(feature = "timer-entry"))]
+use super::s3d::timer_heap_active;
 extern "C" {
     fn s3d_remove_ready(context: u32, task: u32) -> u32;
     fn s3d_insert_ready(context: u32, task: u32) -> u32;
@@ -11,7 +13,15 @@ extern "C" {
     fn s3d_switch(reason: i32);
     fn s3d_timer_insert(context: u32, entry: u32, expiry: u32);
     fn s3d_timer_remove(context: u32, entry: u32);
+    #[cfg(feature = "timer-entry")]
     fn s3d_timer_active(context: u32, entry: u32) -> bool;
+}
+
+/// The acquire and release carriers at 0x439d8 and 0x43a14.
+#[cfg(feature = "bound-locks")]
+extern "C" {
+    fn xm1_rtos_scheduler_acquire(lock: u32) -> u32;
+    fn xm1_rtos_scheduler_release(lock: u32);
 }
 
 pub struct Cpu {
@@ -26,21 +36,29 @@ impl Cpu {
     pub const fn domain(&self) -> Domain { self.domain }
 }
 
+/// # Safety
+/// `at` must name a mapped 32-bit word of the executing domain's address space.
 #[inline(always)]
 fn load(at: GuestAddress) -> u32 {
     unsafe { read_volatile(at.0 as *const u32) }
 }
 
+/// # Safety
+/// `at` must name a mapped 32-bit word of the executing domain's address space.
 #[inline(always)]
 fn store(at: GuestAddress, value: u32) {
     unsafe { write_volatile(at.0 as *mut u32, value) }
 }
 
+/// # Safety
+/// `at` must name a mapped byte of the executing domain's address space.
 #[inline(always)]
 fn load_byte(at: GuestAddress) -> u8 {
     unsafe { read_volatile(at.0 as *const u8) }
 }
 
+/// # Safety
+/// `at` must name a mapped byte of the executing domain's address space.
 #[inline(always)]
 fn store_byte(at: GuestAddress, value: u8) {
     unsafe { write_volatile(at.0 as *mut u8, value) }
@@ -126,15 +144,25 @@ impl Machine for Cpu {
 
     #[inline(always)]
     fn lock_acquire(&self, lock: LockRecord) -> bool {
-        let acquire: unsafe extern "C" fn(u32) -> u32 =
-            unsafe { core::mem::transmute(load(lock.acquire())) };
-        unsafe { acquire(lock.0 .0) == 0 }
+        #[cfg(feature = "bound-locks")]
+        { unsafe { xm1_rtos_scheduler_acquire(lock.0 .0) == 0 } }
+        #[cfg(not(feature = "bound-locks"))]
+        {
+            let acquire: unsafe extern "C" fn(u32) -> u32 =
+                unsafe { core::mem::transmute(load(lock.acquire())) };
+            unsafe { acquire(lock.0 .0) == 0 }
+        }
     }
 
     #[inline(always)]
     fn lock_release(&self, lock: LockRecord) {
-        let release: unsafe extern "C" fn(u32) = unsafe { core::mem::transmute(load(lock.release())) };
-        unsafe { release(lock.0 .0) };
+        #[cfg(feature = "bound-locks")]
+        { unsafe { xm1_rtos_scheduler_release(lock.0 .0) }; }
+        #[cfg(not(feature = "bound-locks"))]
+        {
+            let release: unsafe extern "C" fn(u32) = unsafe { core::mem::transmute(load(lock.release())) };
+            unsafe { release(lock.0 .0) };
+        }
     }
 
     #[inline(always)]
@@ -179,6 +207,9 @@ impl Machine for Cpu {
 
     #[inline(always)]
     fn timer_active(&self, context: KernelContext, entry: TimerEntry) -> bool {
-        unsafe { s3d_timer_active(context.0 .0, entry.0 .0) }
+        #[cfg(feature = "timer-entry")]
+        { unsafe { s3d_timer_active(context.0 .0, entry.0 .0) } }
+        #[cfg(not(feature = "timer-entry"))]
+        { timer_heap_active(self, context, entry) }
     }
 }

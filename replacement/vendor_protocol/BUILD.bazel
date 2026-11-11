@@ -127,7 +127,7 @@ genrule(
     name = "core-arm",
     srcs = ["lib.rs"] + _CORE_SOURCES + _ARM_DEPS + _IRQ_SOURCES + _SCHEDULER_SOURCES,
     outs = ["arm/libxm1_vendor_protocol.rlib"],
-    cmd = _UNPACK_CRYPTO["arm"] + "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --crate-type=rlib --crate-name=xm1_vendor_protocol --cfg 'feature=\"stage\"'" + _ARM_FLAGS + _ARM_EXTERNS + _ARM_LINK_PATHS + " $(location lib.rs) -o $@",
+    cmd = _UNPACK_CRYPTO["arm"] + "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --crate-type=rlib --crate-name=xm1_vendor_protocol --cfg 'feature=\"stage\"' --cfg 'feature=\"bound-locks\"'" + _ARM_FLAGS + _ARM_EXTERNS + _ARM_LINK_PATHS + " $(location lib.rs) -o $@",
     tools = ["@lab_xm1_rust//:bin/rustc", "@lab_gnutar//:bin/tar"],
 )
 
@@ -142,7 +142,7 @@ genrule(
 
 genrule(
     name = "rust-test-binary",
-    srcs = ["lib.rs"] + _CORE_SOURCES + _DEPS + _IRQ_SOURCES + _SCHEDULER_SOURCES,
+    srcs = ["lib.rs", "controller_runtime_table.fixture"] + _CORE_SOURCES + _DEPS + _IRQ_SOURCES + _SCHEDULER_SOURCES,
     outs = ["vendor-protocol-tests-bin"],
     cmd = _UNPACK_CRYPTO["host"] + "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test --crate-name=vendor_protocol_tests --cfg 'feature=\"stage\"' -C linker=$(location @lab_clang//:bin/clang)" + _EXTERN + " $(location lib.rs) -o $@",
     tools = ["@lab_xm1_rust//:bin/rustc", "@lab_gnutar//:bin/tar", "@lab_clang//:bin/clang"],

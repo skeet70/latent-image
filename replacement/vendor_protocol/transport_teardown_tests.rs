@@ -76,10 +76,11 @@ struct Device {
     enabled: u16,
     disconnect: u16,
     closed: Vec<Channel>,
+    interrupts: Vec<Channel>,
     released: Vec<cpu::DriverHandle>,
 }
 impl Device {
-    fn new() -> Self { Self { zero_status: 0, one_status: 0, reset: 0x80, enabled: 7, disconnect: 8, closed: Vec::new(), released: Vec::new() } }
+    fn new() -> Self { Self { zero_status: 0, one_status: 0, reset: 0x80, enabled: 7, disconnect: 8, closed: Vec::new(), interrupts: Vec::new(), released: Vec::new() } }
 }
 impl ControllerIo for Device {
     fn read32(&mut self, register: Register) -> u32 {
@@ -95,7 +96,7 @@ impl ControllerIo for Device {
 }
 impl TeardownPlatform for Device {
     fn release_interrupt(&mut self, handle: cpu::DriverHandle) -> Result<(), TransportError> { self.released.push(handle); Ok(()) }
-    fn release_channel_interrupt(&mut self, _: Channel) -> Result<(), TransportError> { Ok(()) }
+    fn release_channel_interrupt(&mut self, channel: Channel) -> Result<(), TransportError> { self.interrupts.push(channel); Ok(()) }
     fn release_channel(&mut self, channel: Channel, _: cpu::DriverHandle) -> Result<(), TransportError> { self.closed.push(channel); Ok(()) }
 }
 fn teardown() -> ControllerTeardown {
@@ -106,8 +107,8 @@ fn teardown() -> ControllerTeardown {
     one.state = ChannelState::Armed;
     one.callback = Some(ChannelCallback::Transmit);
     ControllerTeardown::new(Some(cpu::DriverHandle::from_raw(3).unwrap()), [
-        ChannelLease::new(zero, cpu::DriverHandle::from_raw(1).unwrap()),
-        ChannelLease::new(one, cpu::DriverHandle::from_raw(2).unwrap()),
+        Some(ChannelLease::new(zero, cpu::DriverHandle::from_raw(1).unwrap())),
+        Some(ChannelLease::new(one, cpu::DriverHandle::from_raw(2).unwrap())),
     ], false)
 }
 
@@ -135,6 +136,23 @@ fn teardown_waits_for_both_dma_channels_before_releasing_or_resetting() {
     assert_eq!(shutdown.resume(&mut device, &clock, Domain::A), Ok(TeardownProgress::Complete));
     assert_eq!(clock.now.get(), 200);
     assert_eq!(device.closed.len(), 2);
+}
+
+#[test]
+fn a_channel_that_was_never_opened_is_neither_stopped_nor_closed() {
+    let clock = Clock::new();
+    let mut device = Device::new();
+    let mut zero = DmaChannel::open(Channel::Zero);
+    zero.state = ChannelState::Armed;
+    let mut shutdown = ControllerTeardown::new(None, [
+        Some(ChannelLease::new(zero, cpu::DriverHandle::from_raw(1).unwrap())),
+        None,
+    ], true);
+    assert_eq!(shutdown.resume(&mut device, &clock, Domain::A), Ok(TeardownProgress::Complete));
+    assert_eq!(device.interrupts, [Channel::Zero]);
+    assert_eq!(device.closed, [Channel::Zero]);
+    assert_eq!(device.reset, 0x80);
+    assert_eq!(clock.now.get(), 0);
 }
 
 #[test]

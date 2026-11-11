@@ -5,6 +5,7 @@ use crate::{
     commands::{Backend, CompletionDisposition, ControllerState, PreparedPayload, ProtocolCompletion, VendorCompletion},
     controller::{publish_secondary_status, CompletionHandle, ControllerError, ProtocolFiles, RequestKind, SessionTeardown, ShutdownDisposition, ShutdownResources},
     controller_registration::{PollPeriod, SharedRtos, TimerProducers, TimerRegistry},
+    controller_rtos::ControllerRtos,
     controller_runtime::{operation, publish_status, table_next_state, ConnectionLevel, ControllerOperation, ControllerRuntime,
         Queue36Message, Queue36Payload, Queue36Receive, Queue36ReceiveError, RuntimeError, StatusConsumer},
     pictbridge_runtime::{AbortStyle, Copies, DpsTransport, FileId, Identity, PictBridge, PrintRequest, Publication},
@@ -19,7 +20,7 @@ use crate::{
 };
 use xm1_power_services::{
     primitives::ServiceStatus,
-    shutdown::{KernelStatus, ShutdownRtos},
+    shutdown::KernelStatus,
     shutdown_task7_8_transport::unregister_secondary,
 };
 
@@ -48,7 +49,8 @@ pub trait ProtocolApplication: ProtocolFiles {
 
 /// The DMA channel leases of the open USB session, handed over once for its teardown.
 pub trait SessionChannels {
-    fn take(&mut self) -> [ChannelLease; 2];
+    /// A channel is absent when the session never transferred on it; stock opens them at 0x00d7ca10 and 0x00d7ccec.
+    fn take(&mut self) -> [Option<ChannelLease>; 2];
 }
 
 /// Task-7 and Power services stock calls directly from the cells.
@@ -91,13 +93,12 @@ impl Faults {
     }
 }
 
-/// Stock 0x00d85320 passes payload words 0 and 1 and the text at payload+8; 0x00d954d0 keeps at most 15 bytes of it.
-pub fn print_request(payload: &Queue36Payload) -> Result<PrintRequest<'_>, XmlError> {
+/// Stock 0x00d85320 passes payload words 0 and 1 and the text at payload+8; 0x00d954f0..0x00d95538 copies at most 15 of its bytes.
+pub fn print_request(payload: &Queue36Payload) -> PrintRequest<'_> {
     let bytes = payload.bytes();
     let text = &bytes[8..23];
     let length = text.iter().position(|byte| *byte == 0).unwrap_or(text.len());
-    let date = core::str::from_utf8(&text[..length]).map_err(|_| XmlError::Malformed)?;
-    Ok(PrintRequest { file: FileId(word(bytes, 0)), copies: Copies::parse(word(bytes, 4)), date: if length == 0 { None } else { Some(date) } })
+    PrintRequest { file: FileId(word(bytes, 0)), copies: Copies::parse(word(bytes, 4)), date: if length == 0 { None } else { Some(&text[..length]) } }
 }
 
 fn word(bytes: &[u8; 24], at: usize) -> u32 {
@@ -115,7 +116,16 @@ pub struct ControllerRoot<'a, B> {
 }
 
 impl<'a, B: Backend> ControllerRoot<'a, B> {
+    /// The timer callbacks fire `TIMER_PRODUCERS`, so an ARM image has one producer instance.
+    #[cfg(target_arch = "arm")]
+    pub fn new(service: Service<'a, B>, usb: UsbStart<'a>) -> Self { Self::with_producers(service, &TIMER_PRODUCERS, usb) }
+
+    #[cfg(not(target_arch = "arm"))]
     pub fn new(service: Service<'a, B>, producers: &'a TimerProducers, usb: UsbStart<'a>) -> Self {
+        Self::with_producers(service, producers, usb)
+    }
+
+    fn with_producers(service: Service<'a, B>, producers: &'a TimerProducers, usb: UsbStart<'a>) -> Self {
         Self { runtime: ControllerRuntime::new(service, producers), connection: ConnectionState::new(),
             ptp: PtpRuntime::new(), bridge: PictBridge::new(), usb, pump: TransportPump::new(), fault: None }
     }
@@ -131,7 +141,7 @@ impl<'a, B: Backend> ControllerRoot<'a, B> {
         &mut self, message: Queue36Message, p: &mut RootProviders<'_, '_, '_, '_, 'a, K, I, T, M, G, P, C, F, A, H, O>,
     ) -> Result<(), RootError>
     where K: irq_control::Backend, I: StartIo, T: cpu::DelayCounter, M: scheduler::Machine, G: TimerRegistry, P: TeardownPlatform,
-        C: SessionChannels, F: ActiveFileClose, A: ProtocolApplication, H: RootHost, O: ShutdownRtos,
+        C: SessionChannels, F: ActiveFileClose, A: ProtocolApplication, H: RootHost, O: ControllerRtos,
     {
         let state = self.runtime.controller.state();
         let mut cell = Cell { root: self, p, faults: Faults(None) };
@@ -153,7 +163,7 @@ impl<'a, B: Backend> ControllerRoot<'a, B> {
         &mut self, receiver: &mut impl Queue36Receive, p: &mut RootProviders<'_, '_, '_, '_, 'a, K, I, T, M, G, P, C, F, A, H, O>,
     ) -> RootError
     where K: irq_control::Backend, I: StartIo, T: cpu::DelayCounter, M: scheduler::Machine, G: TimerRegistry, P: TeardownPlatform,
-        C: SessionChannels, F: ActiveFileClose, A: ProtocolApplication, H: RootHost, O: ShutdownRtos,
+        C: SessionChannels, F: ActiveFileClose, A: ProtocolApplication, H: RootHost, O: ControllerRtos,
     {
         loop {
             let result = match self.runtime.next_message(receiver) {
@@ -202,7 +212,7 @@ struct Cell<'x, 'r, 's, 'irq, 'd, 'a, B, K, I, T, M, G, P, C, F, A, H, R> {
 
 impl<'a, B, K, I, T, M, G, P, C, F, A, H, R> Cell<'_, '_, '_, '_, '_, 'a, B, K, I, T, M, G, P, C, F, A, H, R>
 where B: Backend, K: irq_control::Backend, I: StartIo, T: cpu::DelayCounter, M: scheduler::Machine, G: TimerRegistry, P: TeardownPlatform,
-    C: SessionChannels, F: ActiveFileClose, A: ProtocolApplication, H: RootHost, R: ShutdownRtos,
+    C: SessionChannels, F: ActiveFileClose, A: ProtocolApplication, H: RootHost, R: ControllerRtos,
 {
     fn kind(&self) -> RequestKind { self.root.runtime.controller.request_handle().kind() }
 
@@ -351,10 +361,7 @@ where B: Backend, K: irq_control::Backend, I: StartIo, T: cpu::DelayCounter, M: 
             }
             O::SubmitPrint => {
                 self.root.runtime.deferred.set_blocked(false);
-                match print_request(&message.payload) {
-                    Ok(request) => self.root.bridge.set_request(request),
-                    Err(error) => self.faults.note(Err::<(), _>(error)),
-                }
+                self.root.bridge.set_request(print_request(&message.payload));
             }
             O::PrintResponse => {
                 self.root.runtime.deferred.set_blocked(false);
@@ -534,13 +541,13 @@ mod native {
 
     fn fire(event: TimerEvent) { let _ = TIMER_PRODUCERS.fire(event, &mut NativeShutdownRtos); }
     /// Stock 0x00d813ac.
-    unsafe extern "C" fn connection_poll_entry() { fire(TimerEvent::ConnectionPoll); }
+    extern "C" fn connection_poll_entry() { fire(TimerEvent::ConnectionPoll); }
     /// Stock 0x00d81344.
-    unsafe extern "C" fn session_poll_entry() { fire(TimerEvent::SessionPoll); }
+    extern "C" fn session_poll_entry() { fire(TimerEvent::SessionPoll); }
     /// Stock 0x00d81300.
-    unsafe extern "C" fn short_transfer_entry() { fire(TimerEvent::ShortTransfer); }
+    extern "C" fn short_transfer_entry() { fire(TimerEvent::ShortTransfer); }
     /// Stock 0x00d812bc.
-    unsafe extern "C" fn long_transfer_entry() { fire(TimerEvent::LongTransfer); }
+    extern "C" fn long_transfer_entry() { fire(TimerEvent::LongTransfer); }
 
     pub static TIMER_ENTRIES: TimerCallbackEntries = TimerCallbackEntries {
         connection_poll: connection_poll_entry, session_poll: session_poll_entry,

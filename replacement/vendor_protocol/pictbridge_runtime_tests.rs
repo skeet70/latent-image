@@ -25,11 +25,11 @@ fn discovery_configure_and_capabilities_publish_real_xml() {
 #[test]
 fn start_uses_printer_permission_real_file_id_date_and_clamped_copies() {
     let mut entries = objects(); let mut transport = DpsTransport::new(&mut entries, &[]); let mut runtime = PictBridge::new(); ready(&mut runtime, &mut transport);
-    runtime.set_request(PrintRequest { file: FileId(0x1234), copies: Copies::Count(1001), date: Some("2026/11/10") });
+    runtime.set_request(PrintRequest { file: FileId(0x1234), copies: Copies::Count(1001), date: Some(b"2026/11/10") });
     runtime.service(&IDENTITY, &mut transport).unwrap(); assert_eq!(runtime.take_publication(), Some(Publication::Start(Completion::Failed)));
     runtime.receive_request(b"<?xml version=\"1.0\"?><dps><input><notifyDeviceStatus><newJobOK>76010000</newJobOK></notifyDeviceStatus></input></dps>", &transport).unwrap();
     runtime.service(&IDENTITY, &mut transport).unwrap(); transport.complete_send(); runtime.take_publication();
-    runtime.set_request(PrintRequest { file: FileId(0x1234), copies: Copies::Count(1001), date: Some("2026/11/10") }); runtime.service(&IDENTITY, &mut transport).unwrap();
+    runtime.set_request(PrintRequest { file: FileId(0x1234), copies: Copies::Count(1001), date: Some(b"2026/11/10") }); runtime.service(&IDENTITY, &mut transport).unwrap();
     let text = core::str::from_utf8(runtime.request_bytes()).unwrap(); assert!(text.contains("<fileID>00001234</fileID>")); assert!(text.contains("<copies>999</copies>")); assert!(text.contains("<date>2026/11/10</date>"));
     transport.complete_send(); runtime.receive_response(response("<startJob/>").as_bytes()); assert_eq!(runtime.take_publication(), Some(Publication::Start(Completion::Success)));
 }
@@ -84,7 +84,7 @@ fn mpo_job_omits_date_and_copies_and_unknown_packet_paths_fail() {
     let mut entries = objects(); let mut transport = DpsTransport::new(&mut entries, &[]); let mut runtime = PictBridge::new(); ready(&mut runtime, &mut transport);
     runtime.receive_request(b"<?xml version=\"1.0\"?><dps><input><notifyDeviceStatus><newJobOK>76010000</newJobOK></notifyDeviceStatus></input></dps>", &transport).unwrap();
     runtime.service(&IDENTITY, &mut transport).unwrap(); transport.complete_send();
-    runtime.set_request(PrintRequest { file: FileId(17), copies: Copies::Mpo, date: Some("2026/11/10") }); runtime.service(&IDENTITY, &mut transport).unwrap();
+    runtime.set_request(PrintRequest { file: FileId(17), copies: Copies::Mpo, date: Some(b"2026/11/10") }); runtime.service(&IDENTITY, &mut transport).unwrap();
     let text = core::str::from_utf8(runtime.request_bytes()).unwrap();
     assert!(text.contains("<fileType>53180000</fileType>")); assert!(!text.contains("<date>")); assert!(!text.contains("<copies>"));
     assert_eq!(runtime.dispatch_packet("Z:\\UNKNOWN.DPS", b"", &transport).unwrap(), 0x80000000);

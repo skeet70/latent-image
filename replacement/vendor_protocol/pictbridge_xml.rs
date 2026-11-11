@@ -9,9 +9,10 @@ impl XmlBuffer {
     pub const fn new() -> Self { Self { bytes: [0; 2048], length: 0 } }
     pub fn clear(&mut self) { self.length = 0; }
     pub fn bytes(&self) -> &[u8] { &self.bytes[..self.length] }
-    pub fn append(&mut self, text: &str) -> Result<(), XmlError> {
-        let end = self.length.checked_add(text.len()).filter(|end| *end <= self.bytes.len()).ok_or(XmlError::Capacity)?;
-        self.bytes[self.length..end].copy_from_slice(text.as_bytes()); self.length = end; Ok(())
+    pub fn append(&mut self, text: &str) -> Result<(), XmlError> { self.append_bytes(text.as_bytes()) }
+    pub fn append_bytes(&mut self, bytes: &[u8]) -> Result<(), XmlError> {
+        let end = self.length.checked_add(bytes.len()).filter(|end| *end <= self.bytes.len()).ok_or(XmlError::Capacity)?;
+        self.bytes[self.length..end].copy_from_slice(bytes); self.length = end; Ok(())
     }
     pub fn word(&mut self, value: u32) -> Result<(), XmlError> { write!(self, "{value:08X}").map_err(|_| XmlError::Capacity) }
     pub fn begin(&mut self, output: bool) -> Result<(), XmlError> {
@@ -19,9 +20,10 @@ impl XmlBuffer {
         self.append(if output { "\t<output>\n" } else { "\t<input>\n" })
     }
     pub fn end(&mut self, output: bool) -> Result<(), XmlError> { self.append(if output { "\t</output>\n</dps>\n" } else { "\t</input>\n</dps>\n" }) }
-    pub fn field(&mut self, tag: &str, text: &str, tabs: usize) -> Result<(), XmlError> {
+    pub fn field(&mut self, tag: &str, text: &str, tabs: usize) -> Result<(), XmlError> { self.bytes_field(tag, text.as_bytes(), tabs) }
+    pub fn bytes_field(&mut self, tag: &str, bytes: &[u8], tabs: usize) -> Result<(), XmlError> {
         for _ in 0..tabs { self.append("\t")?; }
-        self.append("<")?; self.append(tag)?; self.append(">")?; self.append(text)?;
+        self.append("<")?; self.append(tag)?; self.append(">")?; self.append_bytes(bytes)?;
         self.append("</")?; self.append(tag)?; self.append(">\n")
     }
     pub fn word_field(&mut self, tag: &str, value: u32, tabs: usize) -> Result<(), XmlError> {

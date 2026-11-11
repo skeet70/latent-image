@@ -30,6 +30,7 @@ fn read_position_requires_the_command_response_and_its_acknowledgement() {
     actor.submit(&mut runtime, LensRequest::ReadPosition { client: client(8) }).unwrap();
     received(&mut runtime, &physical, &[0, 0, 0, 0]);
     expire(&mut runtime, &physical);
+    // 0x006bdf44 compares the ack's nine-bit command field at 0x006be210..0x006be228 with the command on the wire.
     received(&mut runtime, &physical, &[0x08, 0, 0xc8, 0x3a]);
     assert_eq!(runtime.pop_publication(), None);
     expire(&mut runtime, &physical);

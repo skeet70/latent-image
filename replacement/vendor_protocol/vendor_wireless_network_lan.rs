@@ -329,6 +329,7 @@ impl<'a> LanRuntime<'a> {
     pub fn send_tcp(&mut self, handle: SocketHandle, payload: &[u8]) -> Result<usize, LanError> { self.transport.send(handle, payload).map_err(LanError::Transport) }
     pub fn receive_tcp(&mut self, handle: SocketHandle, output: &mut [u8]) -> Result<ReceiveOutcome, LanError> { self.transport.recv(handle, output).map_err(LanError::Transport) }
     pub fn close_tcp(&mut self, handle: SocketHandle) -> Result<(), LanError> { self.transport.close(handle).map_err(LanError::Transport) }
+    pub fn release_tcp(&mut self, handle: SocketHandle) -> Result<(), LanError> { self.transport.release(handle).map_err(LanError::Transport) }
     pub fn cancel_tcp(&mut self, handle: SocketHandle) -> Result<(), LanError> { self.transport.cancel(handle).map_err(LanError::Transport) }
     pub fn tcp_status(&self, handle: SocketHandle) -> Result<SocketStatus, LanError> { self.transport.status(handle).map_err(LanError::Transport) }
     pub fn configure_tcp(&mut self, handle: SocketHandle, configuration: SocketConfiguration) -> Result<(), LanError> { self.transport.configure(handle, configuration).map_err(LanError::Transport) }

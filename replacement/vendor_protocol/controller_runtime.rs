@@ -2,12 +2,13 @@ use crate::{
     commands::{Backend, CompletionDisposition, CompletionError, ControllerState, PreparedPayload, VendorCompletion},
     controller::{CompletionHandle, ControllerError, QueueController, RequestHandle},
     controller_registration::{ControllerRegistrations, TimerProducers},
+    controller_rtos::ControllerRtos,
     service::{Service, ServiceError},
     transport_start_cpu::{vote_connection, StartIo},
 };
 use xm1_power_services::{
     primitives::ServiceStatus,
-    shutdown::{KernelStatus, QueueId, RequestId, ServiceMessage, ShutdownRtos},
+    shutdown::{KernelStatus, QueueId, RequestId, ServiceMessage, ShutdownRtos, TaskId},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -250,6 +251,7 @@ impl Queue36Receive for xm1_power_services::shutdown_rtos::NativeShutdownRtos {
         let (header, length) = ReceiveKernel::header(self, block);
         let mut payload = [0; 24];
         if length == 24 {
+            // Safety: `payload` is 24 bytes and the copy length is exactly 24.
             unsafe { ReceiveKernel::copy_payload(self, block, PayloadAddress(payload.as_mut_ptr() as u32), 24); }
         }
         ReceiveKernel::release(self, queue, block);
@@ -376,7 +378,7 @@ impl<'a, B: Backend> ControllerRuntime<'a, B> {
         Queue36Message { event, payload: Queue36Payload::EMPTY }.publish(rtos)
     }
     /// Stock 0x00d81d04.
-    pub fn poll_connection(&mut self, level: ConnectionLevel, io: &mut impl StartIo, rtos: &mut impl ShutdownRtos) -> Result<(), KernelStatus> {
+    pub fn poll_connection(&mut self, level: ConnectionLevel, io: &mut impl StartIo, rtos: &mut impl ControllerRtos) -> Result<(), KernelStatus> {
         let effect = self.polling.poll(self.controller.state(), self.controller.completion_handle(), level);
         let result = match effect {
             ConnectionPollEffect::Change(level) => self.update_connection_handle(level.handle(), io, rtos),
@@ -388,8 +390,8 @@ impl<'a, B: Backend> ControllerRuntime<'a, B> {
         };
         self.registrations.acknowledge_primary_poll();
         if effect == ConnectionPollEffect::Change(ConnectionLevel::Connected) { return result; }
-        let signaled = rtos.set_event_flag(36, 11);
-        result.and(signaled)
+        let priority = rtos.set_task_priority(TaskId(36), 11);
+        result.and(priority)
     }
     pub fn publish(&self, consumer: StatusConsumer, status: ServiceStatus, rtos: &mut impl ShutdownRtos) -> Result<(), KernelStatus> {
         publish_status(consumer, self.consumers, self.controller.completion_handle(), self.controller.request_handle(), status, rtos)

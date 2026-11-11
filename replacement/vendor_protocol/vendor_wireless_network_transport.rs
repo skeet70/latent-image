@@ -127,6 +127,7 @@ struct Socket<const BUFFER: usize> {
     rx_head: usize,
     eof: bool,
     failure: Option<TransportError>,
+    detached: bool,
 }
 impl<const BUFFER: usize> Socket<BUFFER> {
     const fn new() -> Self {
@@ -143,7 +144,7 @@ impl<const BUFFER: usize> Socket<BUFFER> {
             no_delay: false, segment_limit: None, receive_capacity: BUFFER, send_capacity: BUFFER, traffic_class: TrafficClass(0),
             tx_flags: 0, pending: false, due: TransportTick(0), attempts: 0, ack_pending: false,
             probe_due: TransportTick(0), probe_pending: false,
-            rx: [0; BUFFER], rx_length: 0, rx_head: 0, eof: false, failure: None }
+            rx: [0; BUFFER], rx_length: 0, rx_head: 0, eof: false, failure: None, detached: false }
     }
     fn fail(&mut self, error: TransportError) {
         self.phase = SocketPhase::Failed;
@@ -216,10 +217,10 @@ pub struct TransportRuntime<const SOCKETS: usize, const BUFFER: usize> {
 impl<const SOCKETS: usize, const BUFFER: usize> TransportRuntime<SOCKETS, BUFFER> {
     pub const fn new() -> Self { Self { sockets: [const { Socket::new() }; SOCKETS], now: TransportTick(0), identification: 0, next_ephemeral: 49152 } }
     fn socket(&self, handle: SocketHandle) -> Result<&Socket<BUFFER>, TransportError> {
-        self.sockets.get(handle.index).filter(|socket| socket.used && socket.generation == handle.generation).ok_or(TransportError::InvalidHandle)
+        self.sockets.get(handle.index).filter(|socket| socket.used && !socket.detached && socket.generation == handle.generation).ok_or(TransportError::InvalidHandle)
     }
     fn socket_mut(&mut self, handle: SocketHandle) -> Result<&mut Socket<BUFFER>, TransportError> {
-        self.sockets.get_mut(handle.index).filter(|socket| socket.used && socket.generation == handle.generation).ok_or(TransportError::InvalidHandle)
+        self.sockets.get_mut(handle.index).filter(|socket| socket.used && !socket.detached && socket.generation == handle.generation).ok_or(TransportError::InvalidHandle)
     }
     fn allocate(&mut self, local: SocketBinding) -> Result<SocketHandle, TransportError> {
         let index = self.sockets.iter().position(|socket| !socket.used).ok_or(TransportError::Full)?;
@@ -447,6 +448,30 @@ impl<const SOCKETS: usize, const BUFFER: usize> TransportRuntime<SOCKETS, BUFFER
         }
         Ok(())
     }
+    /// 0x01311770 issues the close and returns; the slot frees when the time-wait expires.
+    pub fn release(&mut self, handle: SocketHandle) -> Result<(), TransportError> {
+        let now = self.now;
+        let socket = self.socket_mut(handle)?;
+        match socket.phase {
+            SocketPhase::Established | SocketPhase::CloseWait => {
+                if socket.pending { return Err(TransportError::WouldBlock); }
+                socket.phase = if socket.phase == SocketPhase::CloseWait { SocketPhase::LastAck } else { SocketPhase::FinWait1 };
+                socket.queue(FIN | ACK, 0, now);
+            }
+            SocketPhase::Listen => {
+                socket.used = false;
+                for child in &mut self.sockets {
+                    if child.used && child.parent == Some(handle) && !child.accepted { child.fail(TransportError::Cancelled); child.used = false; }
+                }
+                return Ok(());
+            }
+            SocketPhase::SynSent | SocketPhase::SynReceived => socket.fail(TransportError::Cancelled),
+            SocketPhase::Closed | SocketPhase::Failed => { socket.used = false; return Ok(()); }
+            _ => {}
+        }
+        socket.detached = true;
+        Ok(())
+    }
     pub fn cancel(&mut self, handle: SocketHandle) -> Result<(), TransportError> {
         let now = self.now;
         let socket = self.socket_mut(handle)?;
@@ -478,6 +503,7 @@ impl<const SOCKETS: usize, const BUFFER: usize> TransportRuntime<SOCKETS, BUFFER
             let socket = &mut self.sockets[index];
             if !socket.used { continue; }
             if socket.phase == SocketPhase::TimeWait && now.reached(socket.due) { socket.phase = SocketPhase::Closed; }
+            if socket.detached && matches!(socket.phase, SocketPhase::Closed | SocketPhase::Failed) { socket.used = false; continue; }
             if socket.pending && now.reached(socket.due) && socket.attempts >= 6 { socket.fail(TransportError::TimedOut); }
             if socket.parent.is_some() && !socket.accepted && matches!(socket.phase, SocketPhase::Failed | SocketPhase::Closed) {
                 socket.used = false;

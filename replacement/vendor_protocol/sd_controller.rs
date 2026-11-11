@@ -6,6 +6,8 @@
 
 use core::task::Poll;
 use crate::transport::cpu::{CacheInstructions, clean_invalidate_all};
+#[cfg(target_arch = "arm")]
+use xm1_power_services::callback_registry::{registry as callbacks, CallbackWord};
 
 pub const BASE: u32 = 0xfff5_1000;
 
@@ -739,6 +741,7 @@ extern "C" {
     fn xm1_power_resource_route_request(selector: u32, slot: u32, level: u32) -> i32;
     fn xm1_power_interrupt_lock() -> u32;
     fn xm1_power_interrupt_unlock(saved: u32);
+    fn xm1_rtos_own_first_slot_1618() -> u32;
     fn xm1_power_semaphore_wait(id: i32, timeout: i32) -> i32;
     fn xm1_power_semaphore_signal(id: i32) -> i32;
 }
@@ -770,20 +773,22 @@ impl NativeInterruptRouter {
     /// `handler` routes IRQ79 into the exclusively owned Host and wireless notification consumer.
     pub unsafe fn acquire(handler: unsafe extern "C" fn()) -> Self { Self { handler } }
     fn configure(&mut self, handler: u32, priority: u32, polarity: u32) -> Result<(), ControlError> {
+        let interface = unsafe {
+            let index = xm1_rtos_own_first_slot_1618();
+            core::ptr::read_volatile((0x0096_bd20 + index * 4) as *const u32)
+        };
+        let configure: unsafe extern "C" fn(u32, *const u32) -> i32 = callbacks()
+            .resolve(CallbackWord(unsafe { core::ptr::read_volatile((interface + 0x160) as *const u32) }))
+            .map_err(|_| ControlError::Os)?;
+        let enable: unsafe extern "C" fn(u32) -> i32 = callbacks()
+            .resolve(CallbackWord(unsafe { core::ptr::read_volatile((interface + 0x158) as *const u32) }))
+            .map_err(|_| ControlError::Os)?;
+        let record = [0, handler, priority, polarity, 2];
+        let saved = unsafe { xm1_power_interrupt_lock() };
         unsafe {
-            let root = 0x0096_bd20 as *const u32;
-            let primary = core::ptr::read_volatile(root) as usize;
-            let current: extern "C" fn() -> u32 = core::mem::transmute(core::ptr::read_volatile((primary + 0x1618) as *const u32));
-            let interface = core::ptr::read_volatile(root.add(current() as usize)) as usize;
-            let enter: extern "C" fn() -> u32 = core::mem::transmute(core::ptr::read_volatile((interface + 0x164) as *const u32));
-            let leave: extern "C" fn(u32) = core::mem::transmute(core::ptr::read_volatile((interface + 0x168) as *const u32));
-            let configure: extern "C" fn(u32, *const u32) -> i32 = core::mem::transmute(core::ptr::read_volatile((interface + 0x160) as *const u32));
-            let enable: extern "C" fn(u32) -> i32 = core::mem::transmute(core::ptr::read_volatile((interface + 0x158) as *const u32));
-            let record = [0, handler, priority, polarity, 2];
-            let saved = enter();
             configure(79, record.as_ptr());
             enable(79);
-            leave(saved);
+            xm1_power_interrupt_unlock(saved);
         }
         Ok(())
     }

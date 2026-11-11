@@ -35,6 +35,7 @@ pub mod configuration_storage;
 pub mod controller;
 pub mod controller_registration;
 pub mod controller_root;
+pub mod controller_rtos;
 pub mod controller_runtime;
 pub mod debug_events;
 pub mod eeprom_detection;

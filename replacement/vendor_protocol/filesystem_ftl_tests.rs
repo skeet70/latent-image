@@ -74,8 +74,8 @@ const CONFIGURATIONS: [HostConfiguration; 2] = [
     HostConfiguration::LegacyAndCommitFailedStatus,
 ];
 
-/// The image model charges one timeout tick per 512 transferred bytes, and retiring a
-/// block programs PAGES_PER_BLOCK pages of PAGE_BYTES plus spare.
+/// Each timeout tick advances one 512-byte step of a request; a page program carries
+/// PAGE_BYTES plus 16 spare bytes and so costs five, and 1000 covers 200 of them.
 const TIMEOUT: Timeout = Timeout::new(1000);
 
 struct NandFixture {

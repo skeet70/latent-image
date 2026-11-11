@@ -108,18 +108,23 @@ fn tcp_client_server_transfer_and_fin_teardown_use_the_canonical_lan() {
     let mut client = IperfRuntime::new(&mut client_buffer); let mut server = IperfRuntime::new(&mut server_buffer);
     server.start(b"-s", Milliseconds(0)).unwrap();
     client.start(b"-c 192.168.1.2 -n 8192", Milliseconds(0)).unwrap();
-    // The client's graceful close waits for the 120-second time-wait to expire.
-    for tick in 0..200_000 {
+    // 0x01314df4 returns once 0x01311770 has issued the close; only the 120-second expiry frees the socket.
+    let mut completed = None;
+    for tick in 0..1_000 {
         let now = Milliseconds(tick);
         step(&mut server, &mut server_lan, &mut client_lan, now);
         step(&mut client, &mut client_lan, &mut server_lan, now);
         pump(&mut client_lan, &mut server_lan, now); pump(&mut server_lan, &mut client_lan, now);
-        if client.result().is_some() && server.result().is_some() { break; }
+        if client.result().is_some() && server.result().is_some() { completed = Some(now); break; }
     }
+    let completed = completed.expect("both legs complete inside the transfer");
     let sent = client.result().unwrap(); let received = server.result().unwrap();
     assert_eq!(sent.failure, None); assert_eq!(received.failure, None);
     assert_eq!(sent.progress.sent, 8192); assert_eq!(received.progress.received, 8192);
     assert_eq!(sent.status(), 0);
+    for tick in completed.0..completed.0 + 120_001 {
+        pump(&mut client_lan, &mut server_lan, Milliseconds(tick)); pump(&mut server_lan, &mut client_lan, Milliseconds(tick));
+    }
     for _ in 0..8 { assert!(client_lan.open_tcp_unbound().is_ok()); }
 }
 

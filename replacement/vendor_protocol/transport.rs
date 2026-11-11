@@ -557,17 +557,18 @@ pub enum TeardownProgress { Pending, Complete }
 
 pub struct ControllerTeardown {
     controller_irq: Option<cpu::DriverHandle>,
-    channels: [ChannelLease; 2],
+    channels: [Option<ChannelLease>; 2],
     reset_already_complete: bool,
     phase: TeardownPhase,
 }
 impl ControllerTeardown {
-    pub fn new(controller_irq: Option<cpu::DriverHandle>, channels: [ChannelLease; 2], reset_already_complete: bool) -> Self {
+    /// A channel is absent until its transfer opened it; stock 0x00d7c0f4 and 0x00d7bf24 return on a failed lookup.
+    pub fn new(controller_irq: Option<cpu::DriverHandle>, channels: [Option<ChannelLease>; 2], reset_already_complete: bool) -> Self {
         Self { controller_irq, channels, reset_already_complete, phase: TeardownPhase::Interrupt }
     }
 
     pub fn completion_interrupt(&mut self, channel: Channel, io: &mut impl ControllerIo) -> Option<ChannelCallback> {
-        self.channels[channel as usize].dma.completion_interrupt(io)
+        self.channels[channel as usize].as_mut()?.dma.completion_interrupt(io)
     }
 
     #[cfg(target_arch = "arm")]
@@ -606,29 +607,38 @@ impl ControllerTeardown {
                 }
                 TeardownPhase::StopZero | TeardownPhase::StopOne => {
                     let index = if self.phase == TeardownPhase::StopZero { 0 } else { 1 };
-                    let dma = &mut self.channels[index].dma;
-                    if dma.state == ChannelState::Armed { dma.begin_stop(io)?; }
-                    if dma.state == ChannelState::Stopping && dma.poll_stop(io)? == StopProgress::Pending {
-                        return Ok(TeardownProgress::Pending);
+                    match self.channels[index].as_mut() {
+                        None => if index == 0 { TeardownPhase::InterruptZero } else { TeardownPhase::InterruptOne },
+                        Some(lease) => {
+                            let dma = &mut lease.dma;
+                            if dma.state == ChannelState::Armed { dma.begin_stop(io)?; }
+                            if dma.state == ChannelState::Stopping && dma.poll_stop(io)? == StopProgress::Pending {
+                                return Ok(TeardownProgress::Pending);
+                            }
+                            if index == 0 { TeardownPhase::InterruptZero } else { TeardownPhase::InterruptOne }
+                        }
                     }
-                    if index == 0 { TeardownPhase::InterruptZero } else { TeardownPhase::InterruptOne }
                 }
                 TeardownPhase::InterruptZero => {
-                    io.release_channel_interrupt(self.channels[0].dma.channel)?;
+                    if let Some(lease) = self.channels[0].as_mut() { io.release_channel_interrupt(lease.dma.channel)?; }
                     TeardownPhase::StopOne
                 }
                 TeardownPhase::InterruptOne => {
-                    io.release_channel_interrupt(self.channels[1].dma.channel)?;
+                    if let Some(lease) = self.channels[1].as_mut() { io.release_channel_interrupt(lease.dma.channel)?; }
                     TeardownPhase::CloseZero
                 }
                 TeardownPhase::CloseZero => {
-                    io.release_channel(self.channels[0].dma.channel, self.channels[0].handle)?;
-                    self.channels[0].dma.state = ChannelState::Closed;
+                    if let Some(lease) = self.channels[0].as_mut() {
+                        io.release_channel(lease.dma.channel, lease.handle)?;
+                        lease.dma.state = ChannelState::Closed;
+                    }
                     TeardownPhase::CloseOne
                 }
                 TeardownPhase::CloseOne => {
-                    io.release_channel(self.channels[1].dma.channel, self.channels[1].handle)?;
-                    self.channels[1].dma.state = ChannelState::Closed;
+                    if let Some(lease) = self.channels[1].as_mut() {
+                        io.release_channel(lease.dma.channel, lease.handle)?;
+                        lease.dma.state = ChannelState::Closed;
+                    }
                     if self.reset_already_complete { TeardownPhase::Complete } else { TeardownPhase::AssertReset }
                 }
                 TeardownPhase::AssertReset => {
