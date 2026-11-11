@@ -165,6 +165,12 @@ pub mod capture_task3_scalar;
 pub mod capture_task3_scalar_configuration;
 pub mod capture_task3_scalar_difference;
 pub mod record_address_space;
+pub mod record_helper_constants;
+pub mod record_helper_image5_state;
+#[cfg(target_arch = "arm")]
+pub mod record_helper_native_memory;
+pub mod record_helper_profile_resource;
+pub mod record_helper_shared_state;
 pub mod record_analysis_schedule_timing;
 pub mod record_capture_dispatch_routes;
 pub mod record_capture_dispatch_storage;
