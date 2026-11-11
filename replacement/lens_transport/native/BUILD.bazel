@@ -1,0 +1,97 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["codec.ld", "control-entry.S", "control-roots.ld"])
+
+_CLANG = "@lab_clang//:bin/clang"
+_JQ = "@lab_jq//:bin/jq"
+
+genrule(
+    name = "root-admission",
+    srcs = ["control-roots.ld", "//replacement/rtos_platform:carriers.json"],
+    outs = ["lens-root-admission.S"],
+    cmd = """
+set -e
+ld=$(location control-roots.ld)
+carriers=$(location //replacement/rtos_platform:carriers.json)
+out=$@
+printf '.syntax unified\\n.arm\\n' > "$$out"
+for domain in a b; do
+  entries=$$(awk -v prefix="xm1_lens_root_$${domain}_" '$$1 ~ "^" prefix { address=$$3; sub(";", "", address); print $$1, address }' "$$ld")
+  if [ -z "$$entries" ]; then echo "lens root $$domain has no control-roots.ld entries" >&2; exit 1; fi
+  echo "$$entries" | while read -r name address; do
+    case "$${name#xm1_lens_root_$${domain}_}" in
+      queue_create) symbol=xm1_rtos_data_queue_create ;;
+      queue_delete) symbol=xm1_rtos_data_queue_delete ;;
+      send) symbol=xm1_rtos_data_queue_send_poll ;;
+      send_irq) symbol=xm1_rtos_data_queue_send_poll_handler ;;
+      receive) symbol=xm1_rtos_data_queue_receive ;;
+      task_create) symbol=xm1_rtos_task_create ;;
+      task_delete) symbol=xm1_rtos_task_delete ;;
+      activate) symbol=xm1_s3b_activate ;;
+      delay) symbol=s3d_delay ;;
+      cyclic_create) symbol=xm1_rtos_cyclic_create ;;
+      cyclic_delete) symbol=xm1_rtos_cyclic_delete ;;
+      cyclic_start) symbol=xm1_rtos_cyclic_start ;;
+      cyclic_stop) symbol=xm1_rtos_cyclic_stop ;;
+      *) echo "lens root $$domain has no carrier role for $$name" >&2; exit 1 ;;
+    esac
+    found=$$($(location %s) -r --arg domain "$$domain" --arg address "$$address" --arg symbol "$$symbol" '[.domains[$$domain].entries[] | select((.address | ascii_downcase) == ($$address | ascii_downcase) and .symbol == $$symbol)] | length' "$$carriers")
+    if [ "$$found" -eq 0 ]; then echo "lens root $$domain has no admitted $$symbol at $$address" >&2; exit 1; fi
+  done
+  printf '.global xm1_lens_root_%%s_package_admitted\\n.set xm1_lens_root_%%s_package_admitted, 1\\n' "$$domain" "$$domain" >> "$$out"
+done
+""" % _JQ,
+    tools = [_JQ],
+)
+
+genrule(
+    name = "root-objects",
+    srcs = [":root-admission", "control-entry.S"],
+    outs = ["lens-root-admission.o", "lens-root-entry.o"],
+    cmd = """
+set -e
+NIX_HARDENING_ENABLE= $(location %s) --target=armv7r-none-eabi -march=armv7-r -marm -c $(location :root-admission) -o $(@D)/lens-root-admission.o
+NIX_HARDENING_ENABLE= $(location %s) --target=armv7r-none-eabi -march=armv7-r -marm -c $(location control-entry.S) -o $(@D)/lens-root-entry.o
+""" % (_CLANG, _CLANG),
+    tools = [_CLANG],
+)
+
+filegroup(
+    name = "root-components",
+    srcs = ["//replacement/lens_transport:transport-rust", ":root-objects", "control-roots.ld"],
+)
+
+haskell_library(
+    name = "codec-suite-lib",
+    srcs = ["Replacement/LensTransport/CodecSuite.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:cached-native-batch",
+        "//emulation:case-sha256",
+        "//emulation:native-observation",
+        "//emulation:owned-case",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:filepath",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_binary(
+    name = "codec-suite",
+    srcs = ["Main.hs"],
+    main_file = "Main.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":codec-suite-lib",
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+    ],
+)

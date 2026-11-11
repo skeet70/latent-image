@@ -2096,6 +2096,29 @@ fn reserved_barrier_options_and_other_cp15_c7_words_are_refused() {
 }
 
 #[test]
+fn cache_identification_and_set_way_maintenance_require_a_stateful_model() {
+    for word in [
+        0xee30_0f30, // mrc p15, 1, r0, c0, c0, 1
+        0xee50_0f10, // mrc p15, 2, r0, c0, c0, 0
+        0xee40_0f10, // mcr p15, 2, r0, c0, c0, 0
+        0xee30_0f10, // mrc p15, 1, r0, c0, c0, 0
+        0xee07_0f56, // mcr p15, 0, r0, c7, c6, 2
+        0xee07_0f5a, // mcr p15, 0, r0, c7, c10, 2
+        0xee07_0f5e, // mcr p15, 0, r0, c7, c14, 2
+    ] {
+        for condition in [0xe000_0000, 0x1000_0000] {
+            let instruction = word & 0x0fff_ffff | condition;
+            let case = Case::new(&[instruction, STR_R0_R2, BX_LR])
+                .kernel(Kernel::default())
+                .region(DATA, READ_WRITE, &words(&[0x1122_3344]))
+                .register(0, 0xc000_0020)
+                .register(2, DATA);
+            assert_status_write_has_no_effect(&case, &case.run());
+        }
+    }
+}
+
+#[test]
 fn nop_is_the_only_admitted_hint() {
     let observed = Case::new(&[NOP, ADD_R0_1, BX_LR]).kernel(Kernel::default()).run();
     observed.assert_returned();

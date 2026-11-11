@@ -1,0 +1,73 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(glob(["src/*.rs"]))
+
+genrule(
+    name = "host-core",
+    srcs = glob(["src/*.rs"]),
+    outs = ["host/libxm1_lens_transport.rlib"],
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --crate-type=rlib --crate-name=xm1_lens_transport $(location src/lib.rs) -o $@",
+    tools = ["@lab_xm1_rust//:bin/rustc"],
+)
+
+xm1_rust_rlib(
+    name = "libxm1_lens_transport",
+    src = "src/lib.rs",
+    crate_name = "xm1_lens_transport",
+    data = glob(["src/*.rs"], exclude = ["src/lib.rs"]),
+    rustc_flags = ["--cfg", "'feature=\"firmware-abi\"'"],
+)
+
+xm1_rust_staticlib(
+    name = "transport-rust",
+    src = "src/native_root.rs",
+    crate_name = "xm1_lens_transport_root",
+    data = [":libxm1_lens_transport"],
+    rustc_flags = ["--extern", "xm1_lens_transport=$(location :libxm1_lens_transport)"],
+)
+
+xm1_rust_staticlib(
+    name = "codec-rust",
+    src = "src/lib.rs",
+    crate_name = "xm1_lens_codec",
+    data = glob(["src/*.rs"], exclude = ["src/lib.rs"]),
+    rustc_flags = ["--cfg", "'feature=\"native-codec\"'"],
+    testonly = True,
+)
+
+xm1_rust_elf(
+    name = "codec",
+    rust_staticlib = ":codec-rust",
+    link_script = "//replacement/lens_transport/native:codec.ld",
+    entry = "lens_codec_command",
+    extra_ldflags = [
+        "-Wl,--gc-sections",
+        "-Wl,--undefined=lens_codec_command",
+        "-Wl,--undefined=lens_codec_read",
+        "-Wl,--undefined=lens_codec_write",
+        "-Wl,--undefined=lens_codec_ack",
+        "-Wl,--undefined=lens_codec_response",
+    ],
+    testonly = True,
+)
+
+genrule(
+    name = "host-tests-build",
+    srcs = glob(["src/*.rs"]),
+    outs = ["lens-transport-host-tests-bin"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location src/lib.rs) -o $@",
+    executable = True,
+    tools = ["@lab_clang//:bin/clang", "@lab_rustc//:bin/rustc"],
+    testonly = True,
+)
+
+sh_test(
+    name = "host-tests",
+    size = "small",
+    srcs = ["host-test.sh"],
+    args = ["$(location :host-tests-build)"],
+    data = [":host-tests-build"],
+)

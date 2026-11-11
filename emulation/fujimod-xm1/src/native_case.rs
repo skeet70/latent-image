@@ -41,6 +41,36 @@
 //!
 //! A kernel case may declare up to sixteen private stacks; its `ldr pc, [Rn, #imm]`
 //! then also resumes the context holding SP, which may be the active one.
+//!
+//! # Cache admission prerequisite
+//!
+//! Cache identification and maintenance remain unsupported in both role cases.
+//! `build-support/fujimod.nix` pins FujiMod `3d90035d7d8d651e126f89f94f30765506e6f53f`,
+//! whose Unicorn gitlink is `ba96845e5c8dcb650a66b07d6d6f0e48ca03440a`.
+//! At that pin, FULL `rprofile/core/backend.rs:90-120` substitutes TCM and PMU only;
+//! `rprofile/core.rs:795-813` leaves cache transfers to Unicorn. Unicorn's
+//! `qemu/target/arm/cpu.c:1533-1569` R5/R5F initializers supply no CLIDR or CCSIDR
+//! geometry, and `helper.c:545-547` registers wildcard CACHEMAINT as ARM_CP_NOP.
+//! Its explicit set/way entries at `helper.c:4607-4618` are also ARM_CP_NOP.
+//! FujiMod's XP4 CCSIDR override is Cortex-A7-specific, not an R4 cache model.
+//!
+//! Source proposal, not admitted behavior: a shared R-profile cache owner must
+//! mediate CPU loads/stores, instruction fetch, uncached aliases and DMA backing.
+//! Each core needs selector state and tagged lines with valid/dirty data.
+//! Cleaning publishes a selected dirty line to backing and clears dirty;
+//! invalidation discards the selected line; clean-and-invalidate publishes then
+//! discards. DMA uses backing, not another core's private cache.
+//! The closed configuration must bind geometry, reset state, allocation/replacement
+//! and memory attributes to X-M1 evidence and the reviewed model revision.
+//! CLIDR is `p15,1,c0,c0,1`; CSSELR read/write is `p15,2,c0,c0,0`;
+//! CCSIDR is `p15,1,c0,c0,0`. Set/way writes are `p15,0,c7,c6,2`
+//! (invalidate), `p15,0,c7,c10,2` (clean), and `p15,0,c7,c14,2`
+//! (clean-and-invalidate). Operand level/set/way bounds must follow that geometry.
+//! Admission must retain condition handling, privilege checks, PC-register refusal,
+//! ordered maintenance provenance and refusal of every undeclared selector.
+//! Missing prerequisites are evidence-bound R4 geometry and this stateful CPU/DMA
+//! memory integration in the pinned FULL model. Shared-backing coherence and zero
+//! cache identifiers do not establish those laws or qualify a whole-CPU claim.
 
 use crate::r4f;
 use fujimod_emulator_cpu::{
