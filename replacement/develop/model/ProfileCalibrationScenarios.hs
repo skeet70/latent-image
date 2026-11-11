@@ -298,8 +298,8 @@ profileCalibrationScenarios image5 _resolve = factorCases ++ clampCases ++ geome
            result=clampProfileValues (if exposure < 100 then SecondaryClamp else PrimaryClamp) parameters (CalibrationValues 10 20 30)
        in make ("geometry-"++show exposure++"-"++show rate++"-null-"++show nullable) 0xef4b1c "clamp_geometry"
          [0xdeadbeef,input,rate,output,if nullable then 0 else output+16,fromIntegral (exposure :: Int32),metadata]
-         [calibrationValuesPatch (Address input) (CalibrationValues 10 20 30),Patch (Address 0) (B.singleton 0x5a)]
-         ([calibrationValuesPatch (Address output) (clampedValues result),wordsAt (metadata+0x9e6b0) [applied,if nullable then 0x5a else applied .&. 255,upperFlags result,lowerFlags result]]++
+         [calibrationValuesPatch (Address input) (CalibrationValues 10 20 30),Patch (Address 0) (B.singleton 0xe5)]
+         ([calibrationValuesPatch (Address output) (clampedValues result),wordsAt (metadata+0x9e6b0) [applied,if nullable then 0xe5 else applied .&. 255,upperFlags result,lowerFlags result]]++
           if nullable then [] else [Patch (Address (output+16)) (B.singleton (fromIntegral applied))]) Nothing
       | exposure <- [50,100], rate <- [0,10,20], nullable <- [False,True]]
     outputCases =
@@ -401,8 +401,8 @@ profileCalibrationFaultScenarios :: [StreamFaultScenario]
 profileCalibrationFaultScenarios =
   [fault "disabled-mask" 0x699ee0 "pfp_set_interrupt_mask" [input] [wordsAt 0x89f75c [0,0,0,0],word input 31] StreamNotEnabled,
    fault "pending-mask" 0x699ee0 "pfp_set_interrupt_mask" [input] [wordsAt 0x89f75c [1,1,0,0],word input 31] StreamPending,
-   fault "null-source-reads-low-word-four" 0x6998d0 "pfp_set_source" [0] [wordsAt 0x89f75c [1,0,0,0],word 4 0x10000000] StreamNull,
-   fault "null-span-reads-low-word-zero" 0x699ab8 "pfp_set_span" [0] [wordsAt 0x89f75c [1,0,0,0],word 0 0x10000000] StreamNull,
+   fault "null-source-reads-low-word-four" 0x6998d0 "pfp_set_source" [0] [wordsAt 0x89f75c [1,0,0,0],word 4 0xe59ff018] StreamNull,
+   fault "null-span-reads-low-word-zero" 0x699ab8 "pfp_set_span" [0] [wordsAt 0x89f75c [1,0,0,0],word 0 0xe59ff018] StreamNull,
    fault "unaligned-span" 0x699ab8 "pfp_set_span" [input] [wordsAt 0x89f75c [1,0,0,0],wordsAt input [0x10000001,1]] StreamAlignment,
    fault "out-of-range-span" 0x699ab8 "pfp_set_span" [input] [wordsAt 0x89f75c [1,0,0,0],wordsAt input [0x10000000,0x40000]] StreamRange,
    fault "invalid-coefficient-sum" 0x699bec "pfp_set_coefficients" [input] [wordsAt 0x89f75c [1,0,0,0],word input 1] StreamAlignment]

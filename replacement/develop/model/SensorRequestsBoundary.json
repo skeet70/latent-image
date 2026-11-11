@@ -2,6 +2,16 @@
   "sourceRevision": "55436fc85c0560dd252b0410af6f2427fe198cd3",
   "sourceIndex": "55436fc85c0560dd252b0410af6f2427fe198cd3-a5daad359532.tsv",
   "ownership": "CPU sensor requests, settings, template projection, geometry, descriptor publication, capture and register field packing",
+  "lowMemoryObservation": {
+    "route": "ram-push-attach E8 hold-Q, FujiMod warm attach",
+    "checkpointKey": "077ae1f82a750d5f8348c47911350b08cf807587febb329fe6795ad763052d0d",
+    "checkpointModel": "4749314705ded8fa56cdac00326937797452db9aee73ce262255347c57760bba",
+    "sessionSha256": "b46b83d0996d70fb3d4c663cb48174b497cd913b67773d5f4927e8bbc77d4d38",
+    "physicalPrefixSha256": "f190b84a53e46869fb63cf8e612f817adda7b75c71f42df8705674dfa44596e6",
+    "readerReceipt": "private-data/scratch/DevelopReader/low-prefix-receipt.json",
+    "observed": {"word0": "0xe59ff018", "word4": "0xe59ff018", "prefixBytes": 21540},
+    "binding": "Constructor-root requests leave word6 zero, so e57758 reads the physical word at address4. configure_filters with zero request+d8 or request+dc copies from address0, including 0x5424 bytes for the large table. Direct-helper fixtures supply non-null pointers and no scenario binds either low read. The observation is one warm-attach route, not cold-boot state."
+  },
   "sourceImages": [
     {
       "base": "0x61c400",
@@ -2548,11 +2558,11 @@
   "consumerLawGaps": [
     {
       "source": "e58cb8/e58e10 -> e57758",
-      "fact": "Constructors clear32 request bytes, leaving word6 zero. e57758 unconditionally reads word6+4. Source-root qualification needs proven address4 contents. Valid direct-helper fixtures supply a non-null auxiliary pointer and are not constructor-root evidence."
+      "fact": "Constructors clear32 request bytes, leaving word6 zero. e57758 unconditionally reads word6+4. Source-root qualification needs proven address4 contents; the warm-attach observation records word4 0xe59ff018. Valid direct-helper fixtures supply a non-null auxiliary pointer and are not constructor-root evidence."
     },
     {
       "source": "e57758 -> da426c -> 722054",
-      "fact": "Output pointer5 is zero; da426c unconditionally copies0xc68 bytes from request+d8 and0x5424 bytes from request+dc. Low-memory provenance is required. Owned code preserves actual copies without null guards or zero-fill."
+      "fact": "Output pointer5 is zero; da426c unconditionally copies0xc68 bytes from request+d8 and0x5424 bytes from request+dc. Low-memory provenance is required; the warm-attach observation records the first0x5424 bytes of the physical prefix with word0 0xe59ff018. Owned code preserves actual copies without null guards or zero-fill."
     },
     {
       "source": "6983f8",

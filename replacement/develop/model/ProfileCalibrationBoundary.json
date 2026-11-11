@@ -2,6 +2,16 @@
   "sourcePin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
   "integrationBase": "279a7b77",
   "qualification": "Source implementation complete. Portable-core extraction and physical adapters are unqualified until joint integration gates. No build, formatter, test, native run or admission performed in this child. Full calibration-overlay frontend remains unqualified at the documented real device-law boundary.",
+  "lowMemoryObservation": {
+    "route": "ram-push-attach E8 hold-Q, FujiMod warm attach",
+    "checkpointKey": "077ae1f82a750d5f8348c47911350b08cf807587febb329fe6795ad763052d0d",
+    "checkpointModel": "4749314705ded8fa56cdac00326937797452db9aee73ce262255347c57760bba",
+    "sessionSha256": "b46b83d0996d70fb3d4c663cb48174b497cd913b67773d5f4927e8bbc77d4d38",
+    "physicalPrefixSha256": "f190b84a53e46869fb63cf8e612f817adda7b75c71f42df8705674dfa44596e6",
+    "readerReceipt": "private-data/scratch/DevelopReader/low-prefix-receipt.json",
+    "observed": {"byte0": "0xe5", "word0": "0xe59ff018", "word4": "0xe59ff018"},
+    "binding": "clamp_geometry with a null effective pointer reads physical byte0; pfp_set_source with a null descriptor reads physical word4; pfp_set_span with a null span reads physical word0. The geometry and fault fixtures use these observed values. The observation is one warm-attach route, not cold-boot state."
+  },
   "portableCore": {
     "module": "calibration_core",
     "files": ["src/calibration_core.rs", "src/calibration_core/mapped.rs", "src/calibration_core/curves.rs", "src/calibration_core/math.rs"],
@@ -765,7 +775,7 @@
     "coverage": [
       "Factor modes and untouched halfword fields; calibrate metadata and null metadata.",
       "Coupled minimum and maximum repairs, signed overflow, zero divisors, class2, class86 flag shift wrap and optional flags.",
-      "Geometry threshold/rate behavior and explicit physical address0 byte fixture; aliased and disjoint output clamps.",
+      "Geometry threshold/rate behavior and physical address0 byte read of the observed low prefix (lowMemoryObservation); aliased and disjoint output clamps.",
       "Negative, positive and encoded-difference exposure application, unsigned high gains and unchanged nonnegative branches.",
       "Decimal rounding, configuration pointer wrap, curve-bank boundaries and invalid counts/indices.",
       "Independent Float power model over mapped signed-halfword boundary/special exponents.",

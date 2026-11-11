@@ -56,7 +56,13 @@ struct IdentityDocument {
     card_sha256: Option<Sha256Hex>,
 }
 #[derive(Deserialize)]
-struct PreAttach { instructions: u64 }
+struct AttachHold { released_instructions: u64 }
+#[derive(Deserialize)]
+struct PreAttach {
+    instructions: u64,
+    #[serde(default)]
+    attach_hold: Option<AttachHold>,
+}
 #[derive(Deserialize)]
 struct AttachRecord { key: Sha256Hex, inputs: serde_json::Value, pre_attach: PreAttach }
 
@@ -162,7 +168,11 @@ fn extract(receipt: &mut Receipt) -> Result<(), Refusal> {
     };
     let machine = bridge::restore(&inputs, &checkpoint).map_err(sdk)?;
     let before = machine.session.board.instruction_counts();
-    let expected_count = before.len() == 2 && before.iter().copied().sum::<u64>() == record.pre_attach.instructions;
+    // attach() enumerates the port after the live-view boundary and, for a held key, releases
+    // it and advances one ATTACH_HOLD_PULSE, so the saved state is past the recorded boundary.
+    let boundary = record.pre_attach.attach_hold.as_ref()
+        .map_or(record.pre_attach.instructions, |hold| hold.released_instructions);
+    let expected_count = before.len() == 2 && before.iter().copied().sum::<u64>() > boundary;
     receipt.entered_instructions_before = Some(before);
     if !expected_count { return Err(Refusal::CheckpointInstructionCount); }
     let mut physical = [0u8; LOW_BYTES];

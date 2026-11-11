@@ -8,6 +8,16 @@
   "cropEngineModel": "replacement/develop/model/CropEngineScenarios.hs",
   "cropEngineModelIntegration": "ImageGeometryScenarios includes cropEnginePublications and cropEngineScenarios. CropProcessScenarios imports the independent cropEngineLaw/cropEngineLawWithSerial phased constructors.",
   "verification": "Source inspection and actual image extent hashes only. Builds, native execution, tests and formatting are reserved for the integration owner.",
+  "lowMemoryObservation": {
+    "route": "ram-push-attach E8 hold-Q, FujiMod warm attach",
+    "checkpointKey": "077ae1f82a750d5f8348c47911350b08cf807587febb329fe6795ad763052d0d",
+    "checkpointModel": "4749314705ded8fa56cdac00326937797452db9aee73ce262255347c57760bba",
+    "sessionSha256": "b46b83d0996d70fb3d4c663cb48174b497cd913b67773d5f4927e8bbc77d4d38",
+    "physicalPrefixSha256": "f190b84a53e46869fb63cf8e612f817adda7b75c71f42df8705674dfa44596e6",
+    "readerReceipt": "private-data/scratch/DevelopReader/low-prefix-receipt.json",
+    "observed": {"word4": "0xe59ff018"},
+    "binding": "reduce_border and transform_border construct requests10/11/12 with word6 zero, so the stock request preparation they reach reads the physical word at address4. The geometry scenarios model process_planes directly and no current case composes that request preparation, so no geometry expected value depends on it. The observation is one warm-attach route, not cold-boot state."
+  },
   "planeLayout": {"size": 28, "alignment": 4, "words": ["mode", "address", "size", "stride", "width", "height", "flags"]},
   "cropLayout": {"size": 56, "words": ["source_mode", "target_mode", "reserved_8", "stride", "option", "limit", "flags", "red", "green", "blue", "option_0", "option_1", "option_2", "option_3"]},
   "routes": [

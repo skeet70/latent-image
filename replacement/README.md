@@ -32,6 +32,12 @@ The task-99 control modules implement the six-state opcode dispatcher, initializ
 
 `Task99Client::begin_snapshot` returns an allocation-free `SnapshotRequest` that can be retained between task polls. `try_complete` returns `None` until a matching task99 completion is delivered; dropping the ticket releases its mailbox registration. The asynchronous `snapshot` method uses the same registration and decoding path.
 
+## Develop pipeline
+
+[`develop/`](develop/) holds the develop transaction framework, the image, sensor, processing, output, metadata and font pipeline stages, and the portable calibration and font cores other units mount. `//replacement/develop:develop-candidate` links the whole unit for ARM with no duplicate or undefined symbol. `//replacement/develop:portable-cores-tests` is the only test target that executes; it covers the calibration and font cores.
+
+The pipeline stages have no executed test. `develop/model/` contains 61 Haskell scenario modules; `:develop-qualification` compiles eight of them (the shared scenario base, transaction, dispatcher, permit, save, entry, publications and source admission), and the other 53, one or more per pipeline stage, are not part of any Bazel target. Their boundary records are documentation until those modules build and run. The low-memory words some scenarios depend on come from one warm-attach observation (`checkpoint-low-prefix` over an SDK checkpoint), not from cold-boot state.
+
 ## Native rewrite qualification
 
 For an applicable native-only increment, run the native SDK and runner suites plus the affected caller's qualification command:

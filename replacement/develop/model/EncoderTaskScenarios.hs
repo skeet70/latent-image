@@ -200,8 +200,8 @@ encoderTaskScenarios _ resolve = registryCases++metadataCases++descriptorCases++
       [Patch (Address params) (B.pack [0..63])]
       [Patch (Address (0x9c0000+19036)) (B.pack [32,36,34,35,40,44,42,43]),Patch (Address (0x9c0000+19356)) (B.pack [32,36,34,35,40,44,42,43])] Nothing [] []
    ,make "null-primary-retains-original-low-address-consumer-premise" 0x11d28e8 [image,params,0,0,0,0,0,0,0,0]
-      [word (image+0xf2fc) 0,word (image+0xf4) 123,word (image+0xf8) 456,word 12 0x9a9000]
-      [wordsAt (image+0x2c8) [123,456],word (image+0x2d4) 0x9a9000] Nothing [] []
+      [word (image+0xf2fc) 0,word (image+0xf4) 123,word (image+0xf8) 456,word 12 0xe59ff018]
+      [wordsAt (image+0x2c8) [123,456],word (image+0x2d4) 0xe59ff018] Nothing [] []
    ]++
    [make ("quantization-"++show (scale,multiplier)) 0xd98a18 [params,params+0x100,scale,multiplier]
       [Patch (Address params) (B.pack [0..63]),Patch (Address 0xd99324) (B.pack [63,62..0]),Patch (Address 0x14c574c) (B.replicate 64 0xa5)]

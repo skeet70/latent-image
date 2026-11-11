@@ -2,6 +2,16 @@
   "sourcePin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
   "image": {"base": "0x00bf1a00", "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"},
   "image4": {"base":"0x0061c400","sha256":"f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"},
+  "lowMemoryObservation": {
+    "route": "ram-push-attach E8 hold-Q, FujiMod warm attach",
+    "checkpointKey": "077ae1f82a750d5f8348c47911350b08cf807587febb329fe6795ad763052d0d",
+    "checkpointModel": "4749314705ded8fa56cdac00326937797452db9aee73ce262255347c57760bba",
+    "sessionSha256": "b46b83d0996d70fb3d4c663cb48174b497cd913b67773d5f4927e8bbc77d4d38",
+    "physicalPrefixSha256": "f190b84a53e46869fb63cf8e612f817adda7b75c71f42df8705674dfa44596e6",
+    "readerReceipt": "private-data/scratch/DevelopReader/low-prefix-receipt.json",
+    "observed": {"word4": "0xe59ff018"},
+    "binding": "Geometry requests10/11/12 leave word6 zero, so the stock request preparation at e57850 reads the physical word at address4. No active fixture composes that request preparation, so no scenario expected value depends on it. The observation is one warm-attach route, not cold-boot state."
+  },
   "publications": [
     {"address":"0x00e650dc","symbol":"xm1_pipeline_image_process_crop","abi":"u32(stage:u32,parameters:*const CropParameters14,input:*const ImagePlane7,output:*mut ImagePlane7)","size":396,"sha256":"5b6f651fcfdfe2fc0db18b47be8bf5599408a9a6a3300f95d01f01974d66ec85"},
     {"address":"0x00e65268","symbol":"xm1_pipeline_image_scale_configuration","abi":"u32(stage:u32,request:*const ScaleRequest2,input:*const ImagePlane7,output:*mut ImagePlane7)","size":360,"sha256":"a8889bd47d70696b88721516ce97b892ab31d69f782a4ebc2e55c2ab3d5a1591"},
@@ -89,7 +99,7 @@
     {"address":"0x00042634","symbol":"xm1_pipeline_image_copy_cache_flush","abi":"u32(value:u32,option:u32)","law":"Kernel cache-maintenance ABI, invoked with both arguments zero before hardware enable."}
   ],
   "consumerLawGaps":[
-    {"address":"0x00e57850","law":"Request preparation unconditionally dereferences request.word6+4, even when processing flags disable the consumer. Geometry requests10/11/12 contain word6=0 and therefore read address4. Active fixture must bind that word to source memory, not suppress the read."},
+    {"address":"0x00e57850","law":"Request preparation unconditionally dereferences request.word6+4, even when processing flags disable the consumer. Geometry requests10/11/12 contain word6=0 and therefore read address4. Active fixture must bind that word to source memory, not suppress the read. The warm-attach observation records word4 0xe59ff018; no active fixture composes this path."},
     {"address":"0x00e6532c","law":"Scale packet and copied runtime retain a pointer to the wrapper's stack coefficient array after return. Models assert coefficient MMIO results and omit these two dead pointer cells, not their pointed-to CPU algorithm."},
     {"address":"0x006def88","law":"Actual A32 registers scale interrupt source0x3a, not source0x3b from the NONMATCHING C lead. Shared IRQ table maps source0x3a to line67, priority13, mode1."}
   ],
