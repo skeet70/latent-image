@@ -103,6 +103,8 @@ data PlacementError
   = CarrierNotCandidate GuestAddress
   | CarrierReferenced [ScanHit]
   | ExecutableReference ScanHit
+  | RetiredReferenced [ScanHit]
+  | PublicEntryDisagrees
   deriving (Eq, Show)
 
 retiredHull, retainedWrappers, stage4Carrier :: Carrier

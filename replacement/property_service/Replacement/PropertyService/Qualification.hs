@@ -16,9 +16,23 @@ module Replacement.PropertyService.Qualification
   , OracleSummary (..)
   , DifferenceSample (..)
   , ControlSummary (..)
+  , ControlEvidence (..)
+  , GuestControlKind (..)
   , parseOracleSummary
   , resolveWithin
   , resolveCacheOutput
+  , resolveRuntimePath
+  , StorageAdmission (..)
+  , StorageLimitBytes (..)
+  , StorageBytes (..)
+  , StorageSnapshot (..)
+  , measureStorage
+  , CheckpointPhase (..)
+  , BatchCheckpoint (..)
+  , parseStorageLimit
+  , parseBatchCheckpoint
+  , checkStoragePaths
+  , storageCheckpoint
   ) where
 
 import Control.Exception (IOException, SomeException, bracketOnError, displayException, finally, mask, try)
@@ -28,6 +42,7 @@ import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
+import Data.Char (isDigit)
 import Data.Foldable (toList)
 import Data.List (intercalate, isPrefixOf, nub, sortOn)
 import qualified Data.Map.Strict as M
@@ -37,8 +52,10 @@ import Data.String (fromString)
 import qualified Data.Text as T
 import Emulation.CachedNativeBatch (defaultNativeCacheRoot)
 import Emulation.Sha256 (sha256, sha256Hex, sha256File)
+import Emulation.NativeObservation (RunnerStatus, runnerStatusFromLabel, runnerStatusLabel)
 import FujiAF.Host (failH, readRegular, runBounded)
 import FujiAF.JSON (encodeCanonical)
+import FujiAF.StorageBudget (checkStorageBudget)
 import FujiModNativePaths (fujimodNativeCase)
 import Numeric (readHex, showHex)
 import PropertyFields (PropertyId (..))
@@ -56,11 +73,13 @@ import System.Directory
   , renameFile
   , setCurrentDirectory
   )
-import System.Environment (lookupEnv)
+import System.Environment (getExecutablePath, lookupEnv)
 import System.Exit (ExitCode (..))
 import System.FilePath (splitDirectories, takeDirectory, takeFileName, (</>))
 import System.IO (SeekMode (AbsoluteSeek), hClose, openTempFile)
 import System.Posix.IO (FdOption (CloseOnExec), LockRequest (WriteLock), OpenFileFlags (creat), OpenMode (ReadWrite), closeFd, defaultFileFlags, openFd, setFdOption, setLock)
+import System.Process (readProcessWithExitCode)
+import Text.Read (readMaybe)
 
 canonicalImage4 :: String
 canonicalImage4 = "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"
@@ -86,6 +105,9 @@ data Options = Options
   , optImage2 :: FilePath
   , optLinked :: FilePath
   , optSymbols :: FilePath
+  , optElf :: FilePath
+  , optStorageRoot :: FilePath
+  , optStorageLimit :: Maybe StorageLimitBytes
   , optOut :: FilePath
   , optCache :: FilePath
   , optIds :: Maybe PropertySelection
@@ -96,7 +118,7 @@ data Options = Options
   , optStageEncoder :: FilePath
   , optStageRebuild :: FilePath
   , optStageDecoder :: FilePath
-  , optDefects :: [(String, FilePath, FilePath)]
+  , optDefects :: [(String, FilePath, FilePath, FilePath)]
   }
   deriving (Eq, Show)
 
@@ -112,6 +134,9 @@ defaultOptions =
     , optImage2 = ""
     , optLinked = ""
     , optSymbols = ""
+    , optElf = ""
+    , optStorageRoot = ""
+    , optStorageLimit = Nothing
     , optOut = ""
     , optCache = defaultNativeCacheRoot
     , optIds = Nothing
@@ -125,14 +150,16 @@ defaultOptions =
     , optDefects = []
     }
 
--- | Each value flag replaces the earlier value. `--defect NAME BIN SYMBOLS` may repeat; a repeated
--- name replaces the earlier binary and symbol list.
+-- | Each value flag replaces the earlier value. Repeated defect names keep the last artifact.
 parseOptions :: [String] -> Either String Options
 parseOptions = go defaultOptions
   where
-    go options ("--defect" : name : bin : symbols : rest) =
-      go options {optDefects = optDefects options ++ [(name, bin, symbols)]} rest
-    go _ ("--defect" : _) = Left "--defect needs NAME BIN SYMBOLS"
+    go options ("--defect" : name : bin : symbols : elf : rest) =
+      go options {optDefects = optDefects options ++ [(name, bin, symbols, elf)]} rest
+    go _ ("--defect" : _) = Left "--defect needs NAME BIN SYMBOLS ELF"
+    go options ("--storage-limit-bytes" : value : rest) = do
+      limit <- parseStorageLimit value
+      go options {optStorageLimit = Just limit} rest
     go options ("--ids" : value : rest) = do
       selection <- parseSelection value
       go options {optIds = Just selection} rest
@@ -148,13 +175,14 @@ parseOptions = go defaultOptions
             [ ("--dat", optDat options), ("--image4", optImage4 options), ("--loader-a", optLoaderA options)
             , ("--loader-b", optLoaderB options), ("--image5", optImage5 options), ("--plain", optPlain options)
             , ("--image2", optImage2 options), ("--linked", optLinked options), ("--symbols", optSymbols options)
+            , ("--elf", optElf options), ("--storage-root", optStorageRoot options)
             , ("--out", optOut options), ("--runner", optRunner options)
             , ("--emulator-slot", optSlot options)
             , ("--oracle", optOracle options), ("--stage", optStage options)
             , ("--stage-encoder", optStageEncoder options), ("--stage-rebuild", optStageRebuild options)
             , ("--stage-decoder", optStageDecoder options)
             ]
-          missing = [flag | (flag, value) <- required, null value]
+          missing = [flag | (flag, value) <- required, null value] ++ ["--storage-limit-bytes" | isNothing (optStorageLimit options)]
        in if null missing
             then Right options {optDefects = dedupeDefects (optDefects options)}
             else Left ("missing required flags: " ++ unwords missing)
@@ -169,6 +197,8 @@ parseOptions = go defaultOptions
       , ("--image2", \options value -> options {optImage2 = value})
       , ("--linked", \options value -> options {optLinked = value})
       , ("--symbols", \options value -> options {optSymbols = value})
+      , ("--elf", \options value -> options {optElf = value})
+      , ("--storage-root", \options value -> options {optStorageRoot = value})
       , ("--out", \options value -> options {optOut = value})
       , ("--cache", \options value -> options {optCache = value})
       , ("--runner", \options value -> options {optRunner = value})
@@ -180,9 +210,9 @@ parseOptions = go defaultOptions
       , ("--stage-decoder", \options value -> options {optStageDecoder = value})
       ]
 
-dedupeDefects :: [(String, FilePath, FilePath)] -> [(String, FilePath, FilePath)]
+dedupeDefects :: [(String, FilePath, FilePath, FilePath)] -> [(String, FilePath, FilePath, FilePath)]
 dedupeDefects defects =
-  [(name, bin, symbols) | (name, (bin, symbols)) <- M.toList (M.fromList [(name, (bin, symbols)) | (name, bin, symbols) <- defects])]
+  [(name, bin, symbols, elf) | (name, (bin, symbols, elf)) <- M.toList (M.fromList [(name, (bin, symbols, elf)) | (name, bin, symbols, elf) <- defects])]
 
 -- Output boundary --------------------------------------------------------------
 
@@ -254,6 +284,17 @@ resolveCacheOutput flag scratch cache path = do
         Right canonical -> pure (Just canonical)
         Left _ -> firstRoot target rest
 
+admitOutputs :: Options -> IO Options
+admitOutputs options = do
+  limit <- maybe (failH "--storage-limit-bytes is required") pure (optStorageLimit options)
+  let admission = StorageAdmission (optStorageRoot options) limit
+  checkStoragePaths admission [optOut options, optCache options]
+  scratch <- privateScratchRoot
+  cacheRoot <- privateCacheRoot
+  out <- resolveOutput "--out" scratch (optOut options) >>= either failH pure
+  cache <- resolveCacheOutput "--cache" scratch cacheRoot (optCache options) >>= either failH pure
+  pure options {optOut = out, optCache = cache}
+
 -- Typed oracle results ---------------------------------------------------------
 
 data DifferenceSample = DifferenceSample
@@ -263,14 +304,19 @@ data DifferenceSample = DifferenceSample
   }
   deriving (Eq, Show)
 
+data GuestControlKind = MustFail | MustPass deriving (Eq, Show)
+
+data ControlEvidence
+  = GuestControl GuestControlKind String Int Int [DifferenceSample]
+  | AdmissionRefusal
+  | EntryControl Int [RunnerStatus]
+  | UnavailableControl
+  deriving (Eq, Show)
+
 data ControlSummary = ControlSummary
   { controlName :: String
-  , controlKind :: String
-  , controlNote :: String
-  , controlCases :: Int
-  , controlFailedCases :: Int
   , controlHolds :: Bool
-  , controlFirstDifferences :: [DifferenceSample]
+  , controlEvidence :: ControlEvidence
   }
   deriving (Eq, Show)
 
@@ -300,6 +346,12 @@ parseOracleSummary :: Value -> Either String OracleSummary
 parseOracleSummary root = do
   schema <- intField "schema_version" root
   unless (schema == 1) (Left "schema_version: 1 required")
+  scope <- stringField "qualification_scope" root
+  unless (scope == "staged-candidate") (Left "qualification_scope: actual staged candidate required")
+  coverage <- stringField "coverage" root
+  unless (coverage == "current-source-matrix") (Left "coverage: complete current-source matrix required")
+  retirement <- boolField "dat_retirement_admitted" root
+  unless (not retirement) (Left "native oracle results cannot admit DAT retirement")
   passed <- boolField "passed" root
   shape <- field "case_shape" root
   subset <- boolField "subset" shape
@@ -346,13 +398,32 @@ parseOracleSummary root = do
   where
     parseControl value = do
       name <- stringField "name" value
-      kind <- stringField "kind" value
+      holds <- boolField "holds" value
+      fields <- asObject "control" value
+      evidence <- case KM.lookup "kind" fields of
+        Just kindValue -> do
+          kind <- asString "kind" kindValue
+          case kind of
+            "admission-refusal" -> pure AdmissionRefusal
+            "must-fail" -> parseGuestControl MustFail value
+            "must-pass" -> parseGuestControl MustPass value
+            _ -> Left ("unknown control kind: " ++ kind)
+        Nothing
+          | KM.member "statuses" fields -> do
+              failed <- intField "failed_cases" value
+              statuses <- arrayField "statuses" value >>= mapM (fmap runnerStatusFromLabel . asString "status")
+              pure (EntryControl failed statuses)
+          | KM.size fields == 2 -> do
+              unless (not holds) (Left "unavailable control cannot hold")
+              pure UnavailableControl
+          | otherwise -> Left "control has no recognized evidence shape"
+      pure (ControlSummary name holds evidence)
+    parseGuestControl kind value = do
       note <- stringField "note" value
       cases <- intField "cases" value
       failed <- intField "failed_cases" value
-      holds <- boolField "holds" value
       samples <- arrayField "first_differences" value >>= mapM parseControlSample
-      pure (ControlSummary name kind note cases failed holds samples)
+      pure (GuestControl kind note cases failed samples)
     parseControlSample value = do
       caseId <- stringField "case" value
       kind <- stringField "kind" value
@@ -590,12 +661,13 @@ data StageDigests = StageDigests
   , digestsSources :: M.Map String String
   , digestsLinked :: String
   , digestsSymbols :: String
+  , digestsElf :: String
   }
 
 data JobDigests = JobDigests
   { jobValue :: Value
   , jobRunnerSha256 :: String
-  , jobDefects :: [(String, FilePath, FilePath, String, String)]
+  , jobDefects :: [(String, FilePath, FilePath, FilePath, String, String, String)]
   }
 
 sourceRoles :: Options -> [(String, FilePath)]
@@ -615,6 +687,7 @@ stageIdentityFor options = do
   sources <- digestsOf (sourceRoles options)
   linked <- fileDigest (optLinked options)
   symbols <- fileDigest (optSymbols options)
+  elf <- fileDigest (optElf options)
   tools <-
     digestsOf
       [ ("stage", optStage options)
@@ -626,7 +699,7 @@ stageIdentityFor options = do
         object
           [ "schema_version" .= (1 :: Int)
           , "sources" .= object [fromString role .= digest | (role, digest) <- sources]
-          , "candidate" .= object ["linked" .= linked, "symbols" .= symbols]
+          , "candidate" .= object ["linked" .= linked, "symbols" .= symbols, "elf" .= elf]
           , "tools" .= object [fromString role .= digest | (role, digest) <- tools]
           ]
   pure
@@ -635,6 +708,7 @@ stageIdentityFor options = do
       , digestsSources = M.fromList sources
       , digestsLinked = linked
       , digestsSymbols = symbols
+      , digestsElf = elf
       }
 
 jobIdentityFor :: Options -> StageDigests -> String -> IO JobDigests
@@ -642,22 +716,23 @@ jobIdentityFor options stage stageKey = do
   oracleDigest <- fileDigest (optOracle options)
   runnerDigest <- fileDigest (optRunner options)
   slotDigest <- fileDigest (optSlot options)
-  defects <- forM (optDefects options) $ \(name, bin, symbolPath) -> do
+  defects <- forM (optDefects options) $ \(name, bin, symbolPath, elfPath) -> do
     binDigest <- fileDigest bin
     symbolsDigest <- fileDigest symbolPath
-    pure (name, bin, symbolPath, binDigest, symbolsDigest)
+    elfDigest <- fileDigest elfPath
+    pure (name, bin, symbolPath, elfPath, binDigest, symbolsDigest, elfDigest)
   let value =
         object
           [ "schema_version" .= (1 :: Int)
           , "stage_key" .= stageKey
           , "sources" .= object [fromString role .= digest | (role, digest) <- M.toList (digestsSources stage)]
-          , "candidate" .= object ["linked" .= digestsLinked stage, "symbols" .= digestsSymbols stage]
+          , "candidate" .= object ["linked" .= digestsLinked stage, "symbols" .= digestsSymbols stage, "elf" .= digestsElf stage]
           , "comparison" .= object
               [ "ids" .= fmap selectionIds (optIds options)
               , "full_native" .= isNothing (optIds options)
               , "defects" .=
-                  [ object ["name" .= name, "bin_sha256" .= binDigest, "symbols_sha256" .= symbolsDigest]
-                  | (name, _, _, binDigest, symbolsDigest) <- defects
+                  [ object ["name" .= name, "bin_sha256" .= binDigest, "symbols_sha256" .= symbolsDigest, "elf_sha256" .= elfDigest]
+                  | (name, _, _, _, binDigest, symbolsDigest, elfDigest) <- defects
                   ]
               ]
           , "oracle" .= object ["path" .= optOracle options, "sha256" .= oracleDigest]
@@ -674,10 +749,12 @@ expectedInputsFor options stage files jobs =
     , ("contract", (stageContractPath files, stageContractSha256 files))
     , ("linked", (optLinked options, digestsLinked stage))
     , ("symbols", (optSymbols options, digestsSymbols stage))
+    , ("elf", (optElf options, digestsElf stage))
     ]
       ++ [(role, (path, digest)) | (role, path) <- sourceRoles options, Just digest <- [M.lookup role (digestsSources stage)]]
-      ++ [("defect_" ++ name, (bin, binDigest)) | (name, bin, _, binDigest, _) <- jobDefects jobs]
-      ++ [("defect_" ++ name ++ "_symbols", (symbols, symbolsDigest)) | (name, _, symbols, _, symbolsDigest) <- jobDefects jobs]
+      ++ [("defect_" ++ name, (bin, binDigest)) | (name, bin, _, _, binDigest, _, _) <- jobDefects jobs]
+      ++ [("defect_" ++ name ++ "_symbols", (symbols, symbolsDigest)) | (name, _, symbols, _, _, symbolsDigest, _) <- jobDefects jobs]
+      ++ [("defect_" ++ name ++ "_elf", (elf, elfDigest)) | (name, _, _, elf, _, _, elfDigest) <- jobDefects jobs]
 
 -- Driver -----------------------------------------------------------------------
 
@@ -718,18 +795,21 @@ runQualification :: Options -> IO (Int, Value)
 runQualification supplied = do
   invocation <- getCurrentDirectory
   workspace <- lookupEnv "BUILD_WORKSPACE_DIRECTORY" >>= maybe (pure invocation) makeAbsolute
-  options <- anchorRuntimePaths invocation workspace supplied
-  setCurrentDirectory workspace
-  prepared <- try (setupJob options) :: IO (Either SomeException (Either String Setup))
-  case prepared of
-    Left exception -> publishSetupError options (displayException exception)
-    Right (Left message) -> publishSetupError options message
-    Right (Right setup) -> do
-      locked <- withOutLock (setupOut setup) (runLocked setup)
-      case locked of
-        Left message ->
-          pure (2, preJobVerdict (setupOptions setup) "" ("--out is busy: " ++ message))
-        Right outcome -> pure outcome
+  anchored <- try (anchorRuntimePaths invocation workspace supplied) :: IO (Either SomeException Options)
+  case anchored of
+    Left exception -> pure (2, preJobVerdict supplied "" (displayException exception))
+    Right options -> do
+      setCurrentDirectory workspace
+      prepared <- try (setupJob options) :: IO (Either SomeException (Either String Setup))
+      case prepared of
+        Left exception -> publishSetupError options (displayException exception)
+        Right (Left message) -> publishSetupError options message
+        Right (Right setup) -> do
+          locked <- withOutLock (setupOut setup) (runLocked setup)
+          case locked of
+            Left message ->
+              pure (2, preJobVerdict (setupOptions setup) "" ("--out is busy: " ++ message))
+            Right outcome -> pure outcome
 
 anchorRuntimePaths :: FilePath -> FilePath -> Options -> IO Options
 anchorRuntimePaths invocation workspace options = do
@@ -742,23 +822,40 @@ anchorRuntimePaths invocation workspace options = do
   decoder <- anchor (optStageDecoder options)
   linked <- anchor (optLinked options)
   symbols <- anchor (optSymbols options)
-  defects <- forM (optDefects options) $ \(name, image, syms) -> do
+  elf <- anchor (optElf options)
+  storageRoot <- makeAbsolute (invocation </> optStorageRoot options) >>= canonicalizePath
+  defects <- forM (optDefects options) $ \(name, image, syms, elfPath) -> do
     anchoredImage <- anchor image
     anchoredSymbols <- anchor syms
-    pure (name, anchoredImage, anchoredSymbols)
+    anchoredElf <- anchor elfPath
+    pure (name, anchoredImage, anchoredSymbols, anchoredElf)
   pure options
     { optRunner = runner, optSlot = slot, optOracle = oracle, optStage = stage
     , optStageEncoder = encoder, optStageRebuild = rebuild, optStageDecoder = decoder
-    , optLinked = linked, optSymbols = symbols, optDefects = defects
+    , optLinked = linked, optSymbols = symbols, optElf = elf, optDefects = defects, optStorageRoot = storageRoot
     }
   where
     anchor path = do
       present <- doesFileExist (invocation </> path)
-      makeAbsolute ((if present then invocation else workspace) </> path)
+      if present then canonicalizePath (invocation </> path) else do
+        inWorkspace <- doesFileExist (workspace </> path)
+        if inWorkspace then canonicalizePath (workspace </> path) else resolveRuntimePath path
+
+resolveRuntimePath :: FilePath -> IO FilePath
+resolveRuntimePath path = do
+  direct <- makeAbsolute path
+  directory <- lookupEnv "RUNFILES_DIR"
+  executable <- getExecutablePath
+  let roots = maybe [] pure directory ++ [executable ++ ".runfiles"]
+      locate [] = failH ("runtime input not found: " ++ path)
+      locate (candidate : rest) = do
+        present <- doesFileExist candidate
+        if present then canonicalizePath candidate else locate rest
+  locate (direct : [root </> "_main" </> path | root <- roots])
 
 setupJob :: Options -> IO (Either String Setup)
 setupJob options = do
-  resolved <- resolveInputs options
+  resolved <- resolveInputs options >>= admitOutputs
   digest <- fileDigest (optImage4 resolved)
   if digest /= canonicalImage4
     then pure (Left "--image4 is not the canonical X-M1 1.50 image4")
@@ -772,6 +869,12 @@ setupJob options = do
         (_, Left problem) -> pure (Left problem)
         (Right out, Right cache) -> do
           let withPaths = resolved {optOut = out, optCache = cache}
+          limit <- maybe (failH "--storage-limit-bytes is required") pure (optStorageLimit withPaths)
+          let admission = StorageAdmission (optStorageRoot withPaths) limit
+          checkStoragePaths admission [out, cache]
+          storageCheckpoint BeforeBatch admission Nothing
+          createDirectoryIfMissing True out
+          createDirectoryIfMissing True cache
           stage <- stageIdentityFor withPaths
           let stageKey = identityHash (digestsValue stage)
           jobs <- jobIdentityFor withPaths stage stageKey
@@ -798,6 +901,7 @@ resolveInputs options = do
   image2 <- resolve (optImage2 options) "--image2"
   linked <- resolve (optLinked options) "--linked"
   symbols <- resolve (optSymbols options) "--symbols"
+  elf <- resolve (optElf options) "--elf"
   runner <- resolve (optRunner options) "--runner"
   slot <- resolve (optSlot options) "--emulator-slot"
   oracle <- resolve (optOracle options) "--oracle"
@@ -805,10 +909,11 @@ resolveInputs options = do
   encoder <- resolve (optStageEncoder options) "--stage-encoder"
   rebuild <- resolve (optStageRebuild options) "--stage-rebuild"
   decoder <- resolve (optStageDecoder options) "--stage-decoder"
-  defects <- forM (optDefects options) $ \(name, bin, symbolPath) -> do
+  defects <- forM (optDefects options) $ \(name, bin, symbolPath, elfPath) -> do
     resolvedBin <- resolve bin ("--defect " ++ name ++ " binary")
     resolvedSymbols <- resolve symbolPath ("--defect " ++ name ++ " symbols")
-    pure (name, resolvedBin, resolvedSymbols)
+    resolvedElf <- resolve elfPath ("--defect " ++ name ++ " ELF")
+    pure (name, resolvedBin, resolvedSymbols, resolvedElf)
   pure
     options
       { optDat = dat
@@ -820,6 +925,7 @@ resolveInputs options = do
       , optImage2 = image2
       , optLinked = linked
       , optSymbols = symbols
+      , optElf = elf
       , optRunner = runner
       , optSlot = slot
       , optOracle = oracle
@@ -851,7 +957,10 @@ withOutLock out action = mask $ \restore -> do
 runLocked :: Setup -> IO (Either String (Int, Value))
 runLocked setup = do
   let options = setupOptions setup
-      scratchBase = "private-data/scratch/PropertyService2/qualify" </> setupJobKey setup </> "attempts"
+      scratchBase = optOut options </> "attempts"
+  _ <- admitOutputs options
+  limit <- maybe (failH "--storage-limit-bytes is required") pure (optStorageLimit options)
+  checkStoragePaths (StorageAdmission (optStorageRoot options) limit) [scratchBase]
   createDirectoryIfMissing True scratchBase
   reserved <- reserveDirectory scratchBase "attempt-"
   case reserved of
@@ -922,12 +1031,11 @@ publishAttemptError view attempt predicate problem = do
 
 publishSetupError :: Options -> String -> IO (Int, Value)
 publishSetupError options message = do
-  outAttempt <- try (privateScratchRoot >>= \scratch -> resolveOutput "--out" scratch (optOut options))
+  outAttempt <- try (admitOutputs options)
   case outAttempt of
-    Left (exception :: IOException) -> pure (2, preJobVerdict options "" (displayException exception))
-    Right (Left problem) -> pure (2, preJobVerdict options "" problem)
-    Right (Right out) -> do
-      let resolved = options {optOut = out}
+    Left (exception :: SomeException) -> pure (2, preJobVerdict options "" (message ++ "; publication refused: " ++ displayException exception))
+    Right resolved -> do
+      let out = optOut resolved
       target <- try (do
         createDirectoryIfMissing True (out </> "results")
         reserveDirectory (out </> "results") "error-")
@@ -995,7 +1103,7 @@ prepareStage options identity stageKey jobKey logDirectory = do
       case reserved of
         Left problem -> pure (Left ("cannot reserve a staging directory: " ++ problem))
         Right temp -> do
-          let scratch = "private-data/scratch/PropertyService2/qualify" </> jobKey </> "stage"
+          let scratch = optOut options </> "scratch" </> jobKey </> "stage"
               stdoutLog = logDirectory </> "stage.stdout.log"
               stderrLog = logDirectory </> "stage.stderr.log"
               arguments =
@@ -1011,6 +1119,7 @@ prepareStage options identity stageKey jobKey logDirectory = do
                 , optImage2 options
                 , optLinked options
                 , optSymbols options
+                , optElf options
                 , scratch
                 , temp </> "candidate.dat"
                 , temp </> "contract.json"
@@ -1052,6 +1161,9 @@ oracleArguments view directory =
     [ ["--runner", optRunner options]
     , ["--linked", optLinked options]
     , ["--symbols", optSymbols options]
+    , ["--elf", optElf options]
+    , ["--storage-root", optStorageRoot options]
+    , maybe [] (\(StorageLimitBytes limit) -> ["--storage-limit-bytes", show limit]) (optStorageLimit options)
     , ["--image4", optImage4 options]
     , ["--candidate-image4", stageImage4Path (jobStageFiles view)]
     , ["--contract", stageContractPath (jobStageFiles view)]
@@ -1065,7 +1177,7 @@ oracleArguments view directory =
     , ["--cache", optCache options]
     ]
     ++ maybe [] (\selection -> ["--ids", intercalate "," (selectionIds selection)]) (optIds options)
-    ++ concat [["--defect", name, bin, symbols] | (name, bin, symbols) <- optDefects options]
+    ++ concat [["--defect", name, bin, symbols, elf] | (name, bin, symbols, elf) <- optDefects options]
   where
     options = jobOptions view
 
@@ -1075,7 +1187,7 @@ runAttempt view parent = do
       directory = parent </> "results"
       stdoutLog = parent </> "stdout.log"
       stderrLog = parent </> "stderr.log"
-  outcome <- try (runBounded oracleTimeoutMicros oracleOutputCap (optSlot options) (optOracle options : oracleArguments view directory) B.empty)
+  outcome <- try (runBounded oracleTimeoutMicros oracleOutputCap (optSlot options) ("--native" : optOracle options : oracleArguments view directory) B.empty)
   case outcome of
     Left (exception :: SomeException) -> do
       B.writeFile stdoutLog B.empty
@@ -1173,10 +1285,13 @@ failureRows attempt summary =
     controlRows = concatMap controlRowsOf (summaryControls summary)
     controlRowsOf control
       | controlHolds control = []
-      | otherwise = case controlFirstDifferences control of
-          sample : _ ->
+      | otherwise = case controlEvidence control of
+          GuestControl _ _ _ _ (sample : _) ->
             [FailureRow ("control:" ++ controlName control) (sampleCase sample) (sampleKind sample) (sampleDetail sample)]
-          [] -> [FailureRow ("control:" ++ controlName control) "" "" "control recorded no failing case"]
+          GuestControl {} -> [FailureRow ("control:" ++ controlName control) "" "" "guest control did not hold"]
+          AdmissionRefusal -> [FailureRow ("control:" ++ controlName control) "" "" "admission accepted the mutation"]
+          EntryControl {} -> [FailureRow ("control:" ++ controlName control) "" "" "entry control did not hold"]
+          UnavailableControl -> [FailureRow ("control:" ++ controlName control) "" "" "control unavailable"]
     exitRows = [FailureRow "oracle_exit" "" "" ("oracle exited " ++ show (attemptExit attempt)) | attemptExit attempt /= 0]
     declaredRow =
       [ FailureRow "results" "" "" "results.json reports failure with no failure row"
@@ -1198,6 +1313,8 @@ verdictValue view attempt summary status rows =
     [ "schema_version" .= (1 :: Int)
     , "verdict" .= status
     , "native_only" .= True
+    , "qualification_scope" .= ("staged-candidate" :: String)
+    , "dat_retirement_admitted" .= False
     , "scope" .= object ["subset" .= subset, "ids" .= ids, "full_native" .= not subset]
     , "identity" .= identityValue view
     , "stage" .= stageValue view
@@ -1297,6 +1414,8 @@ attemptErrorVerdict view attempt predicate detail =
     [ "schema_version" .= (1 :: Int)
     , "verdict" .= ("error" :: String)
     , "native_only" .= True
+    , "qualification_scope" .= ("staged-candidate" :: String)
+    , "dat_retirement_admitted" .= False
     , "scope" .= object ["subset" .= sub, "ids" .= ids, "full_native" .= not sub]
     , "identity" .= identityValue view
     , "stage" .= stageValue view
@@ -1362,15 +1481,16 @@ reviewScope summary =
     subset = maybe False summarySubset summary
 
 controlRow :: ControlSummary -> Value
-controlRow control =
-  object
-    [ "name" .= controlName control
-    , "kind" .= controlKind control
-    , "note" .= controlNote control
-    , "cases" .= controlCases control
-    , "failed_cases" .= controlFailedCases control
-    , "holds" .= controlHolds control
-    ]
+controlRow control = object $
+  ["name" .= controlName control, "holds" .= controlHolds control] ++ case controlEvidence control of
+    GuestControl kind note cases failed samples ->
+      [ "kind" .= (case kind of MustFail -> "must-fail"; MustPass -> "must-pass" :: String)
+      , "note" .= note, "cases" .= cases, "failed_cases" .= failed
+      , "first_differences" .= [object ["case" .= sampleCase sample, "kind" .= sampleKind sample, "detail" .= sampleDetail sample] | sample <- samples]
+      ]
+    AdmissionRefusal -> ["kind" .= ("admission-refusal" :: String)]
+    EntryControl failed statuses -> ["failed_cases" .= failed, "statuses" .= map runnerStatusLabel statuses]
+    UnavailableControl -> []
 
 attemptErrorReview :: JobView -> Attempt -> String -> String -> Value
 attemptErrorReview view attempt predicate detail =
@@ -1392,6 +1512,8 @@ preJobVerdict options directory message =
     [ "schema_version" .= (1 :: Int)
     , "verdict" .= ("error" :: String)
     , "native_only" .= True
+    , "qualification_scope" .= ("staged-candidate" :: String)
+    , "dat_retirement_admitted" .= False
     , "scope" .= object ["subset" .= isJust (optIds options), "ids" .= maybe [] selectionIds (optIds options), "full_native" .= isNothing (optIds options)]
     , "identity" .= Null
     , "stage" .= Null
@@ -1500,3 +1622,80 @@ parseSelection text = PropertySelection . nub <$> mapM parse (split text)
 
 selectionIds :: PropertySelection -> [String]
 selectionIds (PropertySelection identifiers) = ["0x" ++ showHex identifier "" | PropertyId identifier <- identifiers]
+
+newtype StorageLimitBytes = StorageLimitBytes Integer deriving (Eq, Ord, Show)
+data StorageAdmission = StorageAdmission FilePath StorageLimitBytes deriving (Eq, Show)
+data CheckpointPhase = BeforeBatch | AfterBatch deriving (Eq, Show)
+newtype BatchCheckpoint = BatchCheckpoint Int deriving (Eq, Show)
+
+parseStorageLimit :: String -> Either String StorageLimitBytes
+parseStorageLimit text = do
+  bytes <- decimal text
+  if bytes > 0 then Right (StorageLimitBytes bytes) else Left "storage limit must be positive"
+
+parseBatchCheckpoint :: String -> Either String BatchCheckpoint
+parseBatchCheckpoint text = do
+  StorageLimitBytes count <- parseStorageLimit text
+  if count <= toInteger (maxBound :: Int)
+    then Right (BatchCheckpoint (fromInteger count))
+    else Left "batch checkpoint exceeds the supported batch count"
+
+checkStoragePaths :: StorageAdmission -> [FilePath] -> IO ()
+checkStoragePaths (StorageAdmission root _) paths = do
+  exists <- doesDirectoryExist root
+  unless exists (failH "--storage-root must be an existing directory")
+  rootCanonical <- canonicalizePath root
+  let rootComponents = splitDirectories rootCanonical
+  mapM_ (check rootCanonical rootComponents) paths
+  where
+    check rootCanonical rootComponents path = do
+      result <- try (canonicalizePath path)
+      case result of
+        Left (exception :: IOException) -> failH (path ++ ": " ++ displayException exception)
+        Right canonical -> do
+          let components = splitDirectories canonical
+          unless (rootComponents `isPrefixOf` components && length components > length rootComponents)
+            (failH (path ++ " resolves outside " ++ rootCanonical))
+
+storageCheckpoint :: CheckpointPhase -> StorageAdmission -> Maybe FilePath -> IO ()
+storageCheckpoint phase admission@(StorageAdmission _ (StorageLimitBytes limit)) cache = do
+  StorageSnapshot (StorageBytes used) (StorageBytes available) (StorageBytes cacheUsed) <- measureStorage admission cache
+  let gib = 1024 ^ (3 :: Int)
+      margin = case phase of BeforeBatch -> 2 * gib; AfterBatch -> 0
+  unless (used + margin <= limit) (failH "storage root allocation exceeds batch admission")
+  unless (available >= 108 * gib) (failH "storage available bytes are below the 100GiB reserve and 8GiB margin")
+  unless (cacheUsed <= used) (failH "storage cache allocation exceeds its containing root")
+  putStrLn ("storage " ++ show phase ++ ": allocated=" ++ show used ++ " available=" ++ show available ++ " limit=" ++ show limit ++ " cache=" ++ show cacheUsed)
+
+newtype StorageBytes = StorageBytes Integer deriving (Eq, Ord, Show)
+data StorageSnapshot = StorageSnapshot
+  { storageAllocated :: !StorageBytes
+  , storageAvailable :: !StorageBytes
+  , storageCache :: !StorageBytes
+  } deriving (Eq, Show)
+
+measureStorage :: StorageAdmission -> Maybe FilePath -> IO StorageSnapshot
+measureStorage admission@(StorageAdmission root _) cache = do
+  checkStoragePaths admission (maybe [] pure cache)
+  checkStorageBudget root
+  used <- allocated root
+  (code, out, err) <- readProcessWithExitCode "df" ["-B1", "--output=avail", "--", root] ""
+  unless (code == ExitSuccess) (failH ("storage df failed: " ++ err))
+  available <- case lines out of
+    [header, row] | words header == ["Avail"], [digits] <- words row -> either failH pure (decimal digits)
+    _ -> failH "storage df did not return exactly one available-byte count"
+  cacheUsed <- maybe (pure 0) allocated cache
+  pure (StorageSnapshot (StorageBytes used) (StorageBytes available) (StorageBytes cacheUsed))
+
+allocated :: FilePath -> IO Integer
+allocated path = do
+  (code, out, err) <- readProcessWithExitCode "du" ["-s", "-B1", "--", path] ""
+  unless (code == ExitSuccess) (failH ("storage du failed: " ++ err))
+  case lines out of
+    [row] | (digits, '\t' : measured) <- break (== '\t') row, measured == path -> either failH pure (decimal digits)
+    _ -> failH "storage du did not return exactly one allocated-byte count"
+
+decimal :: String -> Either String Integer
+decimal text
+  | not (null text), all isDigit text, Just value <- readMaybe text = Right value
+  | otherwise = Left "storage measurement is not an unsigned decimal byte count"

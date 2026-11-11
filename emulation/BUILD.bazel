@@ -4271,7 +4271,7 @@ haskell_library(
         "-O2",
     ],
     src_strip_prefix = ".",
-    visibility = ["//replacement/settings_storage:__pkg__"],
+    visibility = ["//replacement/settings_storage:__pkg__", "//replacement/property_service:__pkg__"],
     deps = [
         ":case-sha256",
         ":native-observation",

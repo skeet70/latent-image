@@ -3,29 +3,72 @@
 module Main (main) where
 
 import qualified A32 as A
+import Control.Exception (IOException, bracket, try)
 import Control.Monad (unless)
-import Data.Aeson (Value, object, (.=))
+import Data.Aeson (Value, eitherDecodeStrict', object, (.=))
 import Data.Bits (complement, (.&.))
 import qualified Data.ByteString as B
 import Data.Char (isAsciiLower, isDigit)
 import Data.Either (isLeft)
 import Data.List (nub)
 import qualified Data.Set as S
-import Emulation.OwnedCase (CaseSpec (..), readWordAt)
+import Emulation.OwnedCase (CaseRegion (..), CaseSpec (..), IgnoredMemory (..), IgnoredReason (..), Permission (..), assemble, hexAddress, mkRegion, readWordAt, writeCase)
 import Data.Word (Word32, Word8)
 import qualified Data.Map.Strict as M
+import Emulation.NativeCase (Region (..), checkResult, loadCase)
 import Emulation.NativeObservation
 import PropertyFields (PropertyId (..))
 import Replacement.PropertyService.Classify hiding (GuestAddress (..))
 import qualified Replacement.PropertyService.Classify as C
+import Replacement.PropertyService.Frame (FrameDepth (..), caseFrameDepth, withPrivateFrame)
 import Replacement.PropertyService.Oracle
 import qualified Replacement.PropertyService.HeaderBoundary as H
+import qualified StockStack as Stack
+import System.Directory (createDirectory, getTemporaryDirectory, removeDirectoryRecursive, removeFile)
+import System.FilePath ((</>))
+import System.IO (hClose, openTempFile)
+import Numeric (showHex)
 import System.Exit (exitFailure)
 
 check :: String -> Bool -> IO Bool
 check label holds = do
   putStrLn ((if holds then "ok   " else "FAIL ") ++ label)
   pure holds
+
+caseConsumerTests :: CaseSpec -> CaseSpec -> CaseSpec -> IO [Bool]
+caseConsumerTests adjacent dense gap = bracket temporary removeDirectoryRecursive $ \root -> do
+  let prepared spec = spec {caseExpectedRegisters = [(R0, 0)]}
+      admit name spec = writeCase (root </> name) (prepared spec) >>= loadCase
+      refuses name spec = do
+        path <- writeCase (root </> name) (prepared spec)
+        outcome <- try (loadCase path >> pure ()) :: IO (Either IOException ())
+        check name (isLeft outcome)
+  _ <- admit "first-adjacent-entry" adjacent {caseEntry = GuestAddress 0x62c120}
+  _ <- admit "second-adjacent-entry" adjacent {caseEntry = GuestAddress 0x62c12c}
+  (_, regions, _, _) <- admit "dense-function-envelope" dense
+  let materializedByteAt address = case
+        [B.index (regionBytes mapped) (fromIntegral (address - baseAddress mapped))
+        | mapped <- regions, baseAddress mapped <= address, address < baseAddress mapped + regionSize mapped] of
+        [value] -> Just value
+        _ -> Nothing
+  contents <- check "serialized physical code retains every byte across adjacent function entries" (all (\address -> materializedByteAt address == Just 0x5a) [0x62c120 .. 0x62c4df])
+  sequence
+    [ pure contents
+    , refuses "entry inside a function is not a declared entry" adjacent {caseEntry = GuestAddress 0x62c124}
+    , refuses "retired getter code cannot be an execution entry" adjacent {caseEntry = GuestAddress 0x61e114}
+    , refuses "retired setter code cannot be an execution entry" adjacent {caseEntry = GuestAddress 0x624698}
+    , refuses "readonly gap cannot be an execution entry" gap {caseEntry = GuestAddress 0x62c12c}
+    , refuses "function extent cannot cross a readonly gap" gap {caseFunctions = (GuestAddress 0x62c120,28) : filter (\(address, _) -> address < GuestAddress 0x62c120 || address >= GuestAddress 0x62c13c) (caseFunctions gap)}
+    , refuses "function extent cannot overflow the guest address space" adjacent {caseFunctions = (GuestAddress 0xfffffffc,8) : caseFunctions adjacent}
+    ]
+  where
+    temporary = do
+      parent <- getTemporaryDirectory
+      (path, handle) <- openTempFile parent "property-case-consumer"
+      hClose handle
+      removeFile path
+      createDirectory path
+      pure path
 
 -- | Bytes at the given offsets of a zero image of the given size.
 placed :: Int -> [(Int, Int)] -> B.ByteString
@@ -105,6 +148,128 @@ callerWrite = WriteEvent 0x9597f4 4 0x11223344
 baseRun :: Run
 baseRun = Run Returned [(R0, 1), (Sp, 0x9597f0)] [(RegionId "banks", B.pack [0xab])] (Just [WriteEvent 0x96cc64 1 0xab])
 
+-- | A case that enters one function and returns: @push {r4, lr}; pop {r4, pc}@, so its entry path
+-- reaches eight bytes below its entry SP.
+frameFixture :: CaseSpec
+frameFixture = CaseSpec
+  { caseId = "frame"
+  , caseProvenance = "private frame fixture"
+  , caseExclusion = "synthetic entry path"
+  , caseEntry = GuestAddress 0x1000
+  , caseExit = GuestAddress 0x1004
+  , caseRegions =
+      [ mkRegion (RegionId "code") (GuestAddress 0x1000) 8 ReadExecute (assemble [0xe92d4010, 0xe8bd8010])
+      , mkRegion (RegionId "stack") (GuestAddress 0x2000) 16 ReadWrite (B.replicate 16 0)
+      ]
+  , caseFunctions = [(GuestAddress 0x1000, 8)]
+  , caseInitial = [(Sp, 0x2010), (Lr, 0x1004), (Cpsr, 0x10)]
+  , caseExpectedStatus = Returned
+  , caseExpectedRegisters = [(Sp, 0x2010)]
+  , caseExpectedMemory = []
+  , caseIgnoredMemory = []
+  , caseCp14Identity = Nothing
+  , caseKernel = Nothing
+  }
+
+hexBytes :: B.ByteString -> String
+hexBytes = concatMap (\word -> let text = showHex word "" in replicate (2 - length text) '0' ++ text) . B.unpack
+
+-- | A case whose only difference from the fixture is inside its declared private frame passes; one
+-- byte below that frame still fails.
+frameTests :: IO [Bool]
+frameTests = bracket temporary removeDirectoryRecursive $ \root -> do
+  let declared = case caseFrameDepth [] (Stack.Supplied M.empty) frameFixture of
+        Left refusal -> error ("private frame: " ++ show refusal)
+        Right depth -> either (error . ("private frame: " ++)) id (withPrivateFrame depth frameFixture)
+      regions = map caseRegion (caseRegions declared)
+      result stackBytes = object
+        [ "status" .= ("returned" :: String)
+        , "registers" .= object ["sp" .= hexWord32 0x2010]
+        , "memory" .=
+            [ object ["address" .= hexAddress (GuestAddress (fromIntegral (baseAddress region)))
+                     , "bytes" .= hexBytes (if regionIdOf region == RegionId "stack" then stackBytes else regionBytes region)]
+            | region <- regions ]
+        , "events" .= ([] :: [Value])
+        ]
+      judge stackBytes = do
+        path <- writeCase (root </> "declared") declared
+        c <- B.readFile path >>= either fail pure . eitherDecodeStrict'
+        checkResult c regions (result stackBytes)
+  inside <- judge (B.replicate 8 0 <> B.pack [1, 2, 3, 4, 5, 6, 7, 8])
+  outside <- judge (B.replicate 7 0 <> B.singleton 1 <> B.replicate 8 0)
+  sequence
+    [ check "the entry path's own frame is the depth the case declares" (caseFrameDepth [] (Stack.Supplied M.empty) frameFixture == Right (FrameDepth 8))
+    , check "the declared span is the top of the stack region below the entry SP"
+        (caseIgnoredMemory declared == [IgnoredMemory (RegionId "stack") 8 8 PrivateFrame])
+    , check "a case whose only difference is inside its declared frame passes" (null inside)
+    , check "one byte below the declared frame still fails" (outside == ["memory stack: differs from exact allowed final bytes"])
+    ]
+  where
+    temporary = do
+      parent <- getTemporaryDirectory
+      (path, handle) <- openTempFile parent "property-private-frame"
+      hClose handle
+      removeFile path
+      createDirectory path
+      pure path
+
+writeComparisonControls :: IO [Bool]
+writeComparisonControls = sequence
+  [ check "approved headers compare little-endian bytes across store widths" $
+      all (\base -> same (packed base) (bytes base) && same (bytes base) (packed base)) headers
+  , check "approved headers retain missing and extra byte effects" $
+      all (\base -> differs (bytes base) (take 3 (bytes base)) && differs (bytes base) (bytes base ++ [WriteEvent (base + 4) 1 0x55])) headers
+  , check "approved headers retain duplicate effects even when final bytes agree" $
+      all (\base -> differs (bytes base) (bytes base ++ [WriteEvent base 1 0x11])) headers
+  , check "approved headers retain byte order even when final bytes agree" $
+      all (\base -> differs (bytes base) (reverse (bytes base))) headers
+  , check "approved headers retain changed byte effects" $
+      all (\base -> differs (packed base) (WriteEvent base 1 0x10 : drop 1 (bytes base))) headers
+  , check "approved headers retain repeated writes and intervening physical events" $
+      same [WriteEvent 0x96cc64 2 0x2211, callerWrite, WriteEvent 0x96cc64 2 0x2211]
+        [WriteEvent 0x96cc64 1 0x11, WriteEvent 0x96cc65 1 0x22, callerWrite, WriteEvent 0x96cc64 1 0x11, WriteEvent 0x96cc65 1 0x22]
+        && differs [WriteEvent 0x96cc64 2 0x2211, callerWrite] [WriteEvent 0x96cc64 1 0x11, callerWrite, WriteEvent 0x96cc65 1 0x22]
+  , check "approved headers accept fully contained stores through their final byte" $
+      all (\base -> same [WriteEvent (base + 8) 8 0x8877665544332211]
+        [WriteEvent (base + 8) 4 0x44332211, WriteEvent (base + 12) 4 0x88776655]) headers
+  , check "outside approved RAM physical widths remain observable" $
+      all (\base -> differs (packed base) (bytes base))
+        [0x96cc74, 0x96ce26, 0x409c282c, 0x409c29b8, 0x9597f0, 0xdead0000, 0x10000000]
+  , check "physical events retain changed order and duplicates" $
+      differs [callerWrite, WriteEvent 0x10000000 4 1] [WriteEvent 0x10000000 4 1, callerWrite]
+        && differs [callerWrite] [callerWrite, callerWrite]
+  , check "a write crossing either header boundary fails closed on either side" $
+      and [rejects (HeaderBoundaryCrossing header crossing) crossing
+          | (header, base) <- [(ActiveHeader, 0x96cc64), (BackupHeader, 0x409c281c)]
+          , crossing <- [WriteEvent (base - 1) 2 0x2211, WriteEvent (base + 15) 2 0x2211, WriteEvent (base - 4) 8 0x8877665544332211]]
+  , check "overflowing write extents fail closed inside and outside RAM" $
+      all (\bad -> rejects (WriteAddressOverflow bad) bad)
+        [WriteEvent 0xffffffff 2 1, WriteEvent 0xfffffffc 8 1]
+  , check "invalid write widths fail closed inside and outside RAM" $
+      and [rejects (InvalidWriteWidth bad) bad
+          | base <- [0x96cc64, 0x409c281c, 0x10000000]
+          , width <- [-1, 0, 3, 5, 6, 7, 9, maxBound]
+          , let bad = WriteEvent base width 1]
+  , check "the last address is a valid exact physical byte write" $
+      same [WriteEvent 0xffffffff 1 0x55] [WriteEvent 0xffffffff 1 0x55]
+  , check "no writes differ from an approved RAM write" $
+      same [] [] && differs [] [WriteEvent 0x96cc64 1 0] && differs [WriteEvent 0x96cc64 1 0] []
+  , check "truncation remains a failure on each side" $
+      compareRuns baseRun {runWrites = Nothing} baseRun == [ReferenceTruncated]
+        && compareRuns baseRun {runWrites = Nothing} baseRun {runWrites = Nothing} == [ReferenceTruncated, SubjectTruncated]
+  ]
+  where
+    headers = [0x96cc64, 0x409c281c]
+    packed base = [WriteEvent base 4 0x44332211]
+    bytes base = [WriteEvent base 1 0x11, WriteEvent (base + 1) 1 0x22, WriteEvent (base + 2) 1 0x33, WriteEvent (base + 3) 1 0x44]
+    compareWrites expected actual = compareRuns baseRun {runWrites = Just expected} baseRun {runWrites = Just actual}
+    same expected actual = null (compareWrites expected actual)
+    differs expected actual = compareWrites expected actual == [WritesDiffer]
+    rejects problem bad =
+      compareWrites [] [bad] == [SubjectWriteProjectionFailed problem]
+        && compareWrites [bad] [] == [ReferenceWriteProjectionFailed problem]
+        && compareWrites [bad] [bad] == [ReferenceWriteProjectionFailed problem, SubjectWriteProjectionFailed problem]
+
 observation :: Word -> RunnerStatus -> [(Register, Word)] -> Provenance -> NativeObservation
 observation instructions status overrides provenance = NativeObservation
   { nativeStatus = status
@@ -177,10 +342,53 @@ main = do
       adapterLabels = map (caseLabelText . entryLabel) entryCases
       probe = EntryCase (OracleCase (PropertyId 646) (Get Bank0 LiveRead (slot 0xffffffff))) DirectCall 0xffffffff 0x80000000 (slot 0xffffffff) True
       probeSpec = entryCaseSpec B.empty stockFunctions handFixture (entryLabel probe) OutOfRange probe placeholderExpectation
+      specFor operation functions = caseSpec B.empty functions handFixture (caseLabel (OracleCase (PropertyId 1) operation)) owned3 (OracleCase (PropertyId 1) operation) placeholderExpectation
+      readModes = [LiveRead, DefaultRead, LiveReadTwo, LiveReadAllOnes]
+      candidateSpec = specFor (Get Bank0 LiveRead (slot 0)) (ownedFunctions [FunctionSpan 0x62c120 0x62c12c, FunctionSpan 0x62c12c 0x62c138])
+      permissionsFor spec address =
+        [ casePermission mapped
+        | mapped <- caseRegions spec
+        , let memory = caseRegion mapped
+        , baseAddress memory <= address, address < baseAddress memory + regionSize memory
+        ]
+      permissionsAt = permissionsFor candidateSpec
+      denseFunctions = [FunctionSpan start (start + 12) | index <- [0 .. 79], let start = 0x62c120 + 12 * index]
+      denseSpec = caseSpec (B.replicate 0x20000 0x5a) (ownedFunctions denseFunctions) handFixture (CaseLabel "dense") owned3 (OracleCase (PropertyId 1) (Get Bank0 LiveRead (slot 0))) placeholderExpectation
+      gapSpec = specFor (Get Bank0 LiveRead (slot 0)) (ownedFunctions [FunctionSpan 0x62c120 0x62c12c, FunctionSpan 0x62c130 0x62c13c])
+      executable ReadExecute = True
+      executable _ = False
+      onlyReadOnly [ReadOnly] = True
+      onlyReadOnly _ = False
+      onlyExecutable [ReadExecute] = True
+      onlyExecutable _ = False
+      longLabel = prefixedCaseLabel (CaseLabel (replicate 64 'a')) (CaseLabel "first")
+      otherLongLabel = prefixedCaseLabel (CaseLabel (replicate 64 'a')) (CaseLabel "second")
+      wrapperSpecs =
+        [ wrapperCaseSpec wrapper B.empty functions handFixture (prefixedCaseLabel (CaseLabel "wrapper") (CaseLabel (show (fromEnum wrapper)))) owned3 (OracleCase (PropertyId 1) (Get Bank1 DefaultRead (slot 2)))
+        | wrapper <- [DefaultWrapper, LiveWrapper, CompareWrapper]
+        , functions <- [stockFunctions, ownedFunctions [FunctionSpan 0x62c120 0x62c12c, FunctionSpan 0x62c12c 0x62c138]]
+        ]
+      executableSpan spec start size = any (\mapped ->
+        let memory = caseRegion mapped
+         in executable (casePermission mapped) && baseAddress memory <= start && start + size <= baseAddress memory + regionSize memory) (caseRegions spec)
   results <- sequence
-    [ check "the grid is 80 cases per id over ids 0..646" (length operations == 80 && length caseGrid == 51760 && map oracleProperty caseGrid == concatMap (replicate 80) propertyIds && propertyIds == map PropertyId [0 .. 646])
+    [ check "the grid is 120 cases per id over 649 unsigned ids" (length propertyIds == 649 && length operations == 120 && length caseGrid == 77880 && map oracleProperty caseGrid == concatMap (replicate 120) propertyIds && propertyIds == map PropertyId ([0 .. 646] ++ [0x80000000, 0xffffffff]))
     , check "slot arguments are 0, 1, 2, 3 and 0xffffffff" (slotArguments == map slot [0, 1, 2, 3, 0xffffffff])
     , check "case labels are distinct runner ids" (length (nub labels) == length labels && all validId labels)
+    , check "short prefixed labels remain readable and long labels are distinct runner ids" (prefixedCaseLabel (CaseLabel "variant") (CaseLabel "case") == CaseLabel "variant-case" && validId (caseLabelText longLabel) && length (caseLabelText longLabel) == 64 && longLabel /= otherLongLabel)
+    , check "four raw getter modes serialize without truncation" (map (\mode -> lookup R2 (caseInitial (specFor (Get Bank1 mode (slot 0)) stockFunctions))) readModes == map Just [0, 1, 2, 0xffffffff])
+    , check "only raw mode one reads the field default" (map (\mode -> r0Of (OwnedField (byteField NoSave)) (Get Bank1 mode (slot 1))) readModes == map Just [5, 6, 5, 5])
+    , check "non-one modes read live slot records and ignore stock defaults" (map (\mode -> r0Of (OwnedSlotField (slotArm (BankConstant 6)) {slotDefault = SlotStock Stock61df44}) (Get Bank1 mode (slot 2))) readModes == map Just [0xc, 7, 0xc, 0xc])
+    , check "named sentinel neighbors serialize as ordinary set values" (map (setValue owned3 (slot 0)) [SetBelowDefaultRequest, SetDefaultRequest, SetAboveDefaultRequest] == [0x1afffffe, 0x1affffff, 0x1b000000] && byteIn effectBanks (0x1c2 + 5) (setting Bank1 SetBelowDefaultRequest) == Just 0xb8 && byteIn effectBanks (0x1c2 + 5) (setting Bank1 SetAboveDefaultRequest) == Just 0xa0)
+    , check "setter private ABI claims preserve the original slot" (and [fmap (lookup R3 . expectedRegisters) (modelExpectation handFixture OwnedUnassigned (Set Bank1 (slot value) SetOne)) == Just (Just value) | value <- [0, 1, 2, 0xffffffff]] && fmap (lookup R3 . expectedRegisters) (modelExpectation handFixture OwnedUnassigned (Get Bank1 LiveRead (slot 2))) == Just Nothing)
+    , check "observations retain setter r3 for private ABI comparison" (fmap (lookup R3 . runRegisters) (runOf (observation 1 Returned [(R3, 0xffffffff)] (complete [])) []) == Right (Just 0xffffffff))
+    , check "retired public bodies are nonexecutable while roots and owned wrappers execute" (all (onlyReadOnly . permissionsAt) [0x61e114, 0x6245f4, 0x624698, 0x62c11c, 0x62c138] && all (onlyExecutable . permissionsAt) [0x61e110, 0x624694, 0x6245f8, 0x624620, 0x62464c, 0x62c120, 0x62c12c])
+    , check "an undeclared gap remains nonexecutable between executable functions" (onlyReadOnly (permissionsFor gapSpec 0x62c12c) && all (onlyExecutable . permissionsFor gapSpec) [0x62c128,0x62c130])
+    , check "all wrapper families in both roles have executable declared entries and functions" (length wrapperSpecs == 6 && all (\spec ->
+        let GuestAddress entry = caseEntry spec
+         in executableSpan spec (fromIntegral entry) 4
+           && any (\(GuestAddress start, size) -> start <= entry && entry < start + fromIntegral size) (caseFunctions spec)
+           && all (\(GuestAddress start, size) -> executableSpan spec (fromIntegral start) (fromIntegral size)) (caseFunctions spec)) wrapperSpecs)
     , check "entry adapter ids include unsigned boundaries" (S.fromList (map (oracleProperty . entryOperation) entryCases) == S.fromList (propertyIds ++ map PropertyId [647, 0x7fffffff, 0x80000000, 0xfffffffe, 0xffffffff]))
     , check "entry adapter labels are unique runner ids" (S.size (S.fromList adapterLabels) == length adapterLabels && all validId adapterLabels)
     , check "entry adapters preserve raw selectors, banks and slots" (lookup R0 (caseInitial probeSpec) == Just 646 && lookup R1 (caseInitial probeSpec) == Just 0x80000000 && lookup R2 (caseInitial probeSpec) == Just 0xffffffff && lookup R3 (caseInitial probeSpec) == Just 0xffffffff && lookup R12 (caseInitial probeSpec) /= Just 646)
@@ -227,6 +435,12 @@ main = do
     , check "a truncated observation has no writes" (fmap runWrites (runOf (observation 1 Returned [] (Truncated (ProvenanceTotal 5000))) []) == Right Nothing)
     , check "report writes must match the provenance" (isLeft (runOf (observation 1 Returned [] (complete [bankWrite])) [stackWrite]))
     , check "report writes are the write events in order" (reportWrites (report [event "read" "0x0096cc64" 1 "0x00000000000000ab", event "write" "0x0096cc69" 1 "0x000000000000000c", event "write" "0x009597ec" 4 "0x0000000012345678"]) == Right [bankWrite, stackWrite])
+    , check "report write addresses cannot alias guest RAM through narrowing"
+        (all (\address -> isLeft (reportWrites (report [event "write" address 2 "0x0000000000002211"])))
+          ["0x10096cc64", "0x1409c281c", "0x100000000", "0xffffffffffffffff", "0x10000000000000000"])
+    , check "report writes retain full eight-byte values and the final guest address"
+        (reportWrites (report [event "write" "0x0096cc64" 8 "0x8877665544332211", event "write" "0xffffffff" 1 "0x55"])
+          == Right [WriteEvent 0x96cc64 8 0x8877665544332211, WriteEvent 0xffffffff 1 0x55])
     , check "a patch replaces exactly its word" (applyPatches [Patch patchAt 0xe1a0c004 0xe3a0c000] image == Right (B.take 0x100 image <> B.pack [0, 0xc0, 0xa0, 0xe3] <> B.drop 0x104 image))
     , check "a patch refuses an unexpected word" (isLeft (applyPatches [Patch patchAt 0xe3a0c000 0xe1a0c004] image))
     , check "branch words decode to their targets" (all (\target -> A.decode 0x62c4d8 (branchWord 0x62c4d8 target) == A.Branch (A.Cond 14) False target) [0x630200, 0x62ff60, 0x61e110])
@@ -288,4 +502,7 @@ main = do
     , check "a write-only pair reads 0 and its largest set value is 0xff"
         (r0Of (OwnedWriteOnlyPair pairArm) (Get Bank0 LiveRead (slot 0)) == Just 0 && setValue (Classified (Owned (OwnedWriteOnlyPair pairArm))) (slot 0) SetFieldMax == 0xff)
     ]
-  unless (and results) exitFailure
+  consumerResults <- caseConsumerTests candidateSpec denseSpec gapSpec
+  writeResults <- writeComparisonControls
+  frameResults <- frameTests
+  unless (and (results ++ consumerResults ++ writeResults ++ frameResults)) exitFailure

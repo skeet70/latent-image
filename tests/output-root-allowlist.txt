@@ -22,7 +22,6 @@ replacement/application_pump/Replacement/ApplicationPump/Staging.hs
 replacement/image5_init/OracleMain.hs
 replacement/modal_runtime/MenuEngineTreeMain.hs
 replacement/modal_runtime/QualifyBoundedMain.hs
-replacement/property_service/OracleMain.hs
 replacement/property_service/Replacement/PropertyService/Qualification.hs
 replacement/property_service/class-diff-stage3.jq
 replacement/property_service/class-diff.jq

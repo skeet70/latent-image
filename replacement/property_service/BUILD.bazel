@@ -14,6 +14,34 @@ _RUST_DATA = [
     "src/recipe_edit.rs",
 ]
 
+_ORACLE_DRIVER_DEPS = [
+    ":classify",
+    ":property-compact",
+    ":property-oracle-lib",
+    ":property-service-artifact",
+    ":qualification",
+    "//emulation:cached-native-batch",
+    "//emulation:fujimod-native-paths",
+    "//emulation:case-sha256",
+    "//emulation:native-adapter",
+    "//emulation:native-observation",
+    "//emulation:owned-case",
+    "//host:aeson",
+    "//host:base",
+    "//host:bytestring",
+    "//host:containers",
+    "//host:directory",
+    "//host:filepath",
+    "//host:host-support",
+    "//host:json",
+    "//host:process",
+    "//host:text",
+    "//host/firmware:bank-allowlist",
+    "//host/firmware:stock-stack",
+    "//replacement/media_permit:property-fields",
+    "//replacement/media_permit:service-inventory",
+]
+
 _CORE_DEFECTS = [
     "storage_open_removed", "storage_close_before_set", "storage_bracket_bank1",
     "storage_read_before_open", "storage_pair_before_close", "storage_record_save_at_bank",
@@ -75,6 +103,16 @@ xm1_rust_elf(
     extra_ldflags = ["-Wl,--gc-sections"],
 )
 
+# The same owned body behind the two public wrappers the stock image calls.
+xm1_rust_elf(
+    name = "property-service-public-image",
+    rust_staticlib = ":property-service-rust",
+    asm_srcs = ["entry-public.S", "storage-boundary.S"],
+    entry = "xm1_public_get",
+    link_script = "property-service-public.ld",
+    extra_ldflags = ["-Wl,--gc-sections"],
+)
+
 [
     xm1_rust_staticlib(
         name = "property-service-rust-defect-" + defect.replace("_", "-"),
@@ -93,6 +131,18 @@ xm1_rust_elf(
         asm_srcs = ["entry.S", "storage-boundary.S"],
         entry = "xm1_property_get_entry",
         link_script = "property-service.ld",
+        extra_ldflags = ["-Wl,--gc-sections"],
+    )
+    for defect in _DEFECTS
+]
+
+[
+    xm1_rust_elf(
+        name = "property-service-public-defect-" + defect.replace("_", "-"),
+        rust_staticlib = ":property-service-rust-defect-" + defect.replace("_", "-"),
+        asm_srcs = ["entry-public.S", "storage-boundary.S"],
+        entry = "xm1_public_get",
+        link_script = "property-service-public.ld",
         extra_ldflags = ["-Wl,--gc-sections"],
     )
     for defect in _DEFECTS
@@ -165,6 +215,9 @@ haskell_library(
         "Replacement/PropertyService/Artifact.hs",
         "Replacement/PropertyService/Artifact/Internal.hs",
         "Replacement/PropertyService/Placement.hs",
+        "Replacement/PropertyService/PlacementNative.hs",
+        "Replacement/PropertyService/RetainedGvff.hs",
+        "Replacement/PropertyService/RetainedScalar.hs",
     ],
     src_strip_prefix = ".",
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
@@ -222,6 +275,33 @@ haskell_test(
         ":classify",
         ":property-service-artifact",
         "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:update-container",
+        "//host/firmware:bank-allowlist",
+        "//replacement/media_permit:property-fields",
+        "//replacement/media_permit:service-inventory",
+    ],
+)
+
+haskell_test(
+    name = "property-service-public-artifact-tests",
+    srcs = ["NativeTests.hs"],
+    main_file = "NativeTests.hs",
+    args = [
+        "$(rootpath :property-service-public-image.bin)",
+        "$(rootpath :property-service-public-image.symbols)",
+        "$(rootpath :property-service-public-image.elf)",
+    ],
+    data = [":property-service-public-image.bin", ":property-service-public-image.symbols", ":property-service-public-image.elf"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":classify",
+        ":property-service-artifact",
+        "//emulation:case-sha256",
+        "//host:aeson",
         "//host:base",
         "//host:bytestring",
         "//host:containers",
@@ -242,6 +322,7 @@ haskell_test(
         ":classify",
         ":property-service-artifact",
         "//emulation:case-sha256",
+        "//host:aeson",
         "//host:base",
         "//host:bytestring",
         "//host:containers",
@@ -254,11 +335,17 @@ haskell_test(
 
 haskell_library(
     name = "property-oracle-lib",
-    srcs = ["Replacement/PropertyService/Oracle.hs", "Replacement/PropertyService/HeaderBoundary.hs"],
+    srcs = [
+        "Replacement/PropertyService/Frame.hs",
+        "Replacement/PropertyService/Oracle.hs",
+        "Replacement/PropertyService/HeaderBoundary.hs",
+    ],
     src_strip_prefix = ".",
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":classify",
+        "//emulation:case-sha256",
+        "//emulation:native-adapter",
         "//emulation:native-observation",
         "//emulation:owned-case",
         "//host:aeson",
@@ -266,6 +353,7 @@ haskell_library(
         "//host:bytestring",
         "//host:containers",
         "//host:host-support",
+        "//host/firmware:stock-stack",
         "//replacement/media_permit:property-fields",
     ],
 )
@@ -279,6 +367,7 @@ haskell_library(
         "//emulation:cached-native-batch",
         "//emulation:case-sha256",
         "//emulation:fujimod-native-paths",
+        "//emulation:native-observation",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -287,6 +376,8 @@ haskell_library(
         "//host:filepath",
         "//host:host-support",
         "//host:json",
+        "//host:process",
+        "//host:storage-budget",
         "//host:scientific",
         "//host:text",
         "//host:unix",
@@ -315,6 +406,8 @@ haskell_binary(
         "$(rootpath :property-service-image.bin)",
         "--symbols",
         "$(rootpath :property-service-image.symbols)",
+        "--elf",
+        "$(rootpath :property-service-image.elf)",
     ] + [
         argument
         for defect in _DEFECTS
@@ -323,12 +416,14 @@ haskell_binary(
             defect,
             "$(rootpath :property-service-defect-%s.bin)" % defect.replace("_", "-"),
             "$(rootpath :property-service-defect-%s.symbols)" % defect.replace("_", "-"),
+            "$(rootpath :property-service-defect-%s.elf)" % defect.replace("_", "-"),
         ]
     ],
     data = [
         ":property-oracle",
         ":property-service-image.bin",
         ":property-service-image.symbols",
+        ":property-service-image.elf",
         ":stage-property-service",
         "//emulation:emulator-slot",
         "//host/firmware:rebuild-update",
@@ -337,7 +432,7 @@ haskell_binary(
     ] + [
         ":property-service-defect-%s.%s" % (defect.replace("_", "-"), suffix)
         for defect in _DEFECTS
-        for suffix in ["bin", "symbols"]
+        for suffix in ["bin", "symbols", "elf"]
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
@@ -368,10 +463,24 @@ haskell_test(
     ],
 )
 
+haskell_test(
+    name = "qualification-storage-tests",
+    srcs = ["QualificationTests.hs"],
+    main_file = "QualificationTests.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":qualification",
+        "//host:base",
+        "//host:directory",
+        "//host:filepath",
+    ],
+)
+
 haskell_binary(
     name = "property-oracle",
     srcs = ["OracleMain.hs"],
     main_file = "OracleMain.hs",
+    main_function = "OracleMain.main",
     args = [
         "--linked",
         "$(rootpath :property-service-image.bin)",
@@ -390,6 +499,11 @@ haskell_binary(
         ]
     ],
     data = [
+        "OracleMain.hs",
+        "Replacement/PropertyService/Compact.hs",
+        "Replacement/PropertyService/CompactReceipt.hs",
+        "Replacement/PropertyService/Oracle.hs",
+        "Replacement/PropertyService/Qualification.hs",
         ":property-service-image.bin",
         ":property-service-image.symbols",
         ":property-service-image.elf",
@@ -399,27 +513,7 @@ haskell_binary(
         for suffix in ["bin", "symbols", "elf"]
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
-    deps = [
-        ":classify",
-        ":property-oracle-lib",
-        ":property-service-artifact",
-        "//emulation:cached-native-batch",
-        "//emulation:fujimod-native-paths",
-        "//emulation:case-sha256",
-        "//emulation:native-observation",
-        "//emulation:owned-case",
-        "//host:aeson",
-        "//host:base",
-        "//host:bytestring",
-        "//host:containers",
-        "//host:directory",
-        "//host:filepath",
-        "//host:host-support",
-        "//host:json",
-        "//host/firmware:bank-allowlist",
-        "//replacement/media_permit:property-fields",
-        "//replacement/media_permit:service-inventory",
-    ],
+    deps = _ORACLE_DRIVER_DEPS,
 )
 
 haskell_test(
@@ -430,18 +524,213 @@ haskell_test(
     deps = [
         ":classify",
         ":property-oracle-lib",
+        "//emulation:native-adapter",
         "//emulation:native-observation",
         "//emulation:owned-case",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
         "//host:containers",
+        "//host:directory",
+        "//host:filepath",
         "//host/firmware:bank-allowlist",
+        "//host/firmware:stock-stack",
         "//replacement/media_permit:property-fields",
     ],
 )
 
-exports_files(["entry.S", "storage-boundary.S", "property-service.ld", "recipe.bzl"])
+haskell_test(
+    name = "property-oracle-rejudge-tests",
+    srcs = ["OracleMain.hs", "OracleRejudgeTests.hs"],
+    main_file = "OracleRejudgeTests.hs",
+    main_function = "OracleRejudgeTests.main",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = _ORACLE_DRIVER_DEPS,
+)
+
+_COMPACT_DEPS = [
+    ":property-oracle-lib",
+    "//emulation:case-sha256",
+    "//emulation:native-adapter",
+    "//emulation:native-observation",
+    "//emulation:owned-case",
+    "//host:aeson",
+    "//host:base",
+    "//host:bytestring",
+    "//host:containers",
+    "//host:directory",
+    "//host:filepath",
+    "//host:host-support",
+    "//host:json",
+    "//host:process",
+    "//host:scientific",
+    "//host:text",
+    "//host:unix",
+    "//host:zlib",
+]
+
+haskell_library(
+    name = "property-compact-receipt",
+    srcs = ["Replacement/PropertyService/CompactReceipt.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = _COMPACT_DEPS,
+)
+
+haskell_library(
+    name = "property-compact",
+    srcs = ["Replacement/PropertyService/Compact.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = _COMPACT_DEPS + [":property-compact-receipt", "//emulation:native-evidence"],
+)
+
+haskell_test(
+    name = "property-compact-receipt-tests",
+    srcs = ["CompactReceiptTests.hs"],
+    main_file = "CompactReceiptTests.hs",
+    main_function = "CompactReceiptTests.main",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = _COMPACT_DEPS + [":property-compact-receipt"],
+)
+
+haskell_test(
+    name = "property-compact-tests",
+    srcs = ["CompactTests.hs"],
+    main_file = "CompactTests.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = _COMPACT_DEPS + [":property-compact"],
+)
+
+haskell_test(
+    name = "property-compact-admission-tests",
+    srcs = ["OracleMain.hs", "OracleCompactTests.hs"],
+    main_file = "OracleCompactTests.hs",
+    main_function = "OracleCompactTests.main",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = _ORACLE_DRIVER_DEPS,
+)
+
+haskell_binary(
+    name = "stage-property-service-public",
+    srcs = ["StageMainPublic.hs"],
+    main_file = "StageMainPublic.hs",
+    args = [
+        "$(rootpath //lz:lz-encode)",
+        "$(rootpath //host/firmware:rebuild-update)",
+        "$(rootpath //lz:fflzd)",
+    ],
+    data = ["//lz:lz-encode", "//host/firmware:rebuild-update", "//lz:fflzd"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":property-service-artifact",
+        "//emulation:image4-staging-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:host-support",
+    ],
+)
+
+haskell_binary(
+    name = "property-oracle-public",
+    srcs = ["OracleMain.hs"],
+    main_file = "OracleMain.hs",
+    main_function = "OracleMain.main",
+    args = [
+        "--public-entries",
+        "--linked",
+        "$(rootpath :property-service-public-image.bin)",
+        "--symbols",
+        "$(rootpath :property-service-public-image.symbols)",
+        "--elf",
+        "$(rootpath :property-service-public-image.elf)",
+    ] + [
+        argument
+        for defect in _DEFECTS
+        for argument in [
+            "--defect",
+            defect,
+            "$(rootpath :property-service-public-defect-%s.bin)" % defect.replace("_", "-"),
+            "$(rootpath :property-service-public-defect-%s.symbols)" % defect.replace("_", "-"),
+            "$(rootpath :property-service-public-defect-%s.elf)" % defect.replace("_", "-"),
+        ]
+    ],
+    data = [
+        "OracleMain.hs",
+        "Replacement/PropertyService/Compact.hs",
+        "Replacement/PropertyService/CompactReceipt.hs",
+        "Replacement/PropertyService/Oracle.hs",
+        "Replacement/PropertyService/Qualification.hs",
+        ":property-service-public-image.bin",
+        ":property-service-public-image.symbols",
+        ":property-service-public-image.elf",
+    ] + [
+        ":property-service-public-defect-%s.%s" % (defect.replace("_", "-"), suffix)
+        for defect in _DEFECTS
+        for suffix in ["bin", "symbols", "elf"]
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = _ORACLE_DRIVER_DEPS,
+)
+
+haskell_binary(
+    name = "qualify-public",
+    srcs = ["QualifyMain.hs"],
+    main_file = "QualifyMain.hs",
+    args = [
+        "--emulator-slot",
+        "$(rootpath //emulation:emulator-slot)",
+        "--oracle",
+        "$(rootpath :property-oracle-public)",
+        "--stage",
+        "$(rootpath :stage-property-service-public)",
+        "--stage-encoder",
+        "$(rootpath //lz:lz-encode)",
+        "--stage-rebuild",
+        "$(rootpath //host/firmware:rebuild-update)",
+        "--stage-decoder",
+        "$(rootpath //lz:fflzd)",
+        "--linked",
+        "$(rootpath :property-service-public-image.bin)",
+        "--symbols",
+        "$(rootpath :property-service-public-image.symbols)",
+        "--elf",
+        "$(rootpath :property-service-public-image.elf)",
+    ] + [
+        argument
+        for defect in _DEFECTS
+        for argument in [
+            "--defect",
+            defect,
+            "$(rootpath :property-service-public-defect-%s.bin)" % defect.replace("_", "-"),
+            "$(rootpath :property-service-public-defect-%s.symbols)" % defect.replace("_", "-"),
+            "$(rootpath :property-service-public-defect-%s.elf)" % defect.replace("_", "-"),
+        ]
+    ],
+    data = [
+        ":property-oracle-public",
+        ":property-service-public-image.bin",
+        ":property-service-public-image.symbols",
+        ":property-service-public-image.elf",
+        ":stage-property-service-public",
+        "//emulation:emulator-slot",
+        "//host/firmware:rebuild-update",
+        "//lz:fflzd",
+        "//lz:lz-encode",
+    ] + [
+        ":property-service-public-defect-%s.%s" % (defect.replace("_", "-"), suffix)
+        for defect in _DEFECTS
+        for suffix in ["bin", "symbols", "elf"]
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":qualification",
+        "//host:base",
+        "//host:host-support",
+    ],
+)
+
+exports_files(["entry.S", "entry-public.S", "storage-boundary.S", "property-service.ld", "property-service-public.ld", "recipe.bzl"])
 
 haskell_library(
     name = "property-service-recipe-artifact",

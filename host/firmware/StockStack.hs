@@ -1,8 +1,8 @@
 -- | A static stack-depth bound over flat stock code: the depth of an entry is the deepest SP
 -- offset any path from it reaches, a call adding the callee's depth at the call's offset. The
 -- walk follows control flow (no function extents), tracks the offset per instruction and refuses
--- where two paths reach one instruction at different offsets. Owned code is not walked: its
--- depth is supplied, and entering owned code elsewhere refuses.
+-- where two paths reach one instruction at different offsets. Owned code is not walked: a supplied
+-- entry is taken at its depth wherever a path reaches it, and entering owned code elsewhere refuses.
 module StockStack
   ( StockCode
   , stockCode
@@ -233,6 +233,9 @@ stockDepths code (Supplied supplied) indirect switches entries = go M.empty entr
           | Just (known, knownFrame) <- M.lookup address offsets, (known, knownFrame) /= (offset, frame) =
               (Left (if known /= offset then OffsetMismatch address else FrameUnknown address), memo)
           | S.member address (switchEnds switches) = loop memo rest offsets' seen' best'
+          | Just (StackDepth depth) <- M.lookup address supplied =
+              loop memo rest offsets' seen'
+                (deeper best (Result (StackDepth (fromIntegral offset + depth)) [address] [entry, address] S.empty S.empty))
           | owned code address = (Left (OwnedCode address), memo)
           | otherwise = case codeWord code address of
               Nothing -> (Left (NoCode address), memo)

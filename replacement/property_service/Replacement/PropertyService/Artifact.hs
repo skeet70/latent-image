@@ -6,6 +6,7 @@ module Replacement.PropertyService.Artifact
   , ArtifactInput (..)
   , ArtifactPurpose (..)
   , StagedImage4
+  , NativeImage4View
   , StagedCandidate
   , StagedPlacement (..)
   , ArtifactError (..)
@@ -13,10 +14,15 @@ module Replacement.PropertyService.Artifact
   , StorageWidth (..)
   , DefaultImage (..)
   , EncodingPart (..)
+  , PublicEntryShape (..)
   , canonicalSource
   , sourceProperties
   , sourceHull
+  , sourceImage4
+  , sourceScanned
+  , sourceRetainedFieldEvidence
   , deriveArtifact
+  , derivePublicArtifact
   , artifactCarrier
   , artifactEntries
   , artifactTable
@@ -33,6 +39,14 @@ module Replacement.PropertyService.Artifact
   , storageStatusWords
   , mirrorBoundaries
   , stagePlacement
+  , stageNativePlacement
+  , validateLocalImage4
+  , nativeImage4View
+  , nativeViewBytes
+  , nativeViewIdentityValue
+  , validateNativeImage4View
+  , nativeRetiredReferences
+  , stageNativeImage4
   , stageImage4
   , validateStagedImage4
   , stagedImage4Bytes
@@ -40,6 +54,7 @@ module Replacement.PropertyService.Artifact
   , stageCandidate
   , candidateBytes
   , candidateContractValue
+  , publicCandidateContractValue
   ) where
 
 import Replacement.PropertyService.Artifact.Internal

@@ -5,6 +5,7 @@
 module Replacement.PropertyService.Oracle
   ( Bank (..)
   , ReadMode (..)
+  , readModeValue
   , SlotArgument (..)
   , slotArguments
   , SetChoice (..)
@@ -16,6 +17,7 @@ module Replacement.PropertyService.Oracle
   , operations
   , caseGrid
   , caseLabel
+  , prefixedCaseLabel
   , standingOf
   , modelled
   , setValue
@@ -47,6 +49,8 @@ module Replacement.PropertyService.Oracle
   , placeholderExpectation
   , observedExpectation
   , WriteEvent (..)
+  , ApprovedRamHeader (..)
+  , WriteProjectionError (..)
   , Run (..)
   , Difference (..)
   , differenceKind
@@ -102,6 +106,7 @@ import Control.Monad (foldM, unless)
 import Data.Aeson (Value)
 import Data.Bits (complement, shiftL, shiftR, xor, (.&.), (.|.))
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Char8 as BC
 import Data.List (nub, sortOn)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isNothing, listToMaybe)
@@ -109,6 +114,7 @@ import Data.Word (Word16, Word32, Word64, Word8)
 import qualified Emulation.NativeObservation as N
 import Emulation.NativeObservation (Register (..), RegionId (..), RunnerStatus (..))
 import Emulation.OwnedCase (CaseRegion, CaseSpec (..), Permission (..), mkRegion, readWordAt, word32le)
+import Emulation.Sha256 (sha256, sha256Hex)
 import FujiAF.Host (get, list, num, str)
 import Numeric (readHex, showHex)
 import PropertyFields (PropertyId (..))
@@ -117,8 +123,15 @@ import qualified Replacement.PropertyService.HeaderBoundary as H
 
 data Bank = Bank0 | Bank1 deriving (Eq, Ord, Show, Enum, Bounded)
 
--- | The getter's argument 2: 0 reads the live field, 1 the default.
-data ReadMode = LiveRead | DefaultRead deriving (Eq, Ord, Show, Enum, Bounded)
+-- | The getter selects defaults only for argument 2 equal to 1.
+data ReadMode = LiveRead | DefaultRead | LiveReadTwo | LiveReadAllOnes deriving (Eq, Ord, Show, Enum, Bounded)
+
+readModeValue :: ReadMode -> Word32
+readModeValue mode = case mode of
+  LiveRead -> 0
+  DefaultRead -> 1
+  LiveReadTwo -> 2
+  LiveReadAllOnes -> 0xffffffff
 
 -- | Argument 3 of both functions; a slot field takes its bank branch for 1 and its record branch otherwise.
 newtype SlotArgument = SlotArgument Word32 deriving (Eq, Ord, Show)
@@ -128,7 +141,7 @@ slotArguments :: [SlotArgument]
 slotArguments = map SlotArgument [0, 1, 2, 3, 0xffffffff]
 
 -- | The setter's argument 1, resolved against the field by 'setValue'.
-data SetChoice = SetZero | SetOne | SetFieldMax | SetAboveMax | SetAllOnes | SetDefaultRequest | SetRaw Word32
+data SetChoice = SetZero | SetOne | SetFieldMax | SetAboveMax | SetAllOnes | SetDefaultRequest | SetBelowDefaultRequest | SetAboveDefaultRequest | SetRaw Word32
   deriving (Eq, Ord, Show)
 
 data Operation = Get Bank ReadMode SlotArgument | Set Bank SlotArgument SetChoice deriving (Eq, Ord, Show)
@@ -138,16 +151,22 @@ data OracleCase = OracleCase { oracleProperty :: PropertyId, oracleOperation :: 
 -- | A case's identifier within a batch and its file stem.
 newtype CaseLabel = CaseLabel { caseLabelText :: String } deriving (Eq, Ord, Show)
 
+prefixedCaseLabel :: CaseLabel -> CaseLabel -> CaseLabel
+prefixedCaseLabel (CaseLabel prefix) (CaseLabel suffix) =
+  CaseLabel (if length label <= 64 then label else 'c' : take 63 (sha256Hex (sha256 (BC.pack label))))
+  where
+    label = prefix ++ "-" ++ suffix
+
 -- | What the oracle knows of a property id: a classified class, or outside the 645-entry tables.
 data Standing = Classified Class | OutOfRange deriving (Eq, Show)
 
 propertyIds :: [PropertyId]
-propertyIds = [PropertyId n | n <- [0 .. 646]]
+propertyIds = map PropertyId ([0 .. 646] ++ [0x80000000, 0xffffffff])
 
 operations :: [Operation]
 operations =
   [Get bank mode slot | bank <- [minBound .. maxBound], mode <- [minBound .. maxBound], slot <- slotArguments]
-    ++ [Set bank slot choice | bank <- [minBound .. maxBound], slot <- slotArguments, choice <- [SetZero, SetOne, SetFieldMax, SetAboveMax, SetAllOnes, SetDefaultRequest]]
+    ++ [Set bank slot choice | bank <- [minBound .. maxBound], slot <- slotArguments, choice <- [SetZero, SetOne, SetFieldMax, SetAboveMax, SetAllOnes, SetDefaultRequest, SetBelowDefaultRequest, SetAboveDefaultRequest]]
 
 caseGrid :: [OracleCase]
 caseGrid = [OracleCase identifier operation | identifier <- propertyIds, operation <- operations]
@@ -163,6 +182,8 @@ caseLabel (OracleCase (PropertyId n) operation) = CaseLabel ("p" ++ pad 3 (showH
     modeLabel mode = case mode of
       LiveRead -> "live"
       DefaultRead -> "default"
+      LiveReadTwo -> "live-two"
+      LiveReadAllOnes -> "live-all-ones"
     choiceLabel choice = case choice of
       SetZero -> "zero"
       SetOne -> "one"
@@ -170,6 +191,8 @@ caseLabel (OracleCase (PropertyId n) operation) = CaseLabel ("p" ++ pad 3 (showH
       SetAboveMax -> "above-max"
       SetAllOnes -> "all-ones"
       SetDefaultRequest -> "default-request"
+      SetBelowDefaultRequest -> "below-default-request"
+      SetAboveDefaultRequest -> "above-default-request"
       SetRaw value -> "raw-" ++ showHex value ""
 
 pad :: Int -> String -> String
@@ -203,6 +226,8 @@ setValue standing slot choice = case choice of
   SetAboveMax -> maximal + 1
   SetAllOnes -> 0xffffffff
   SetDefaultRequest -> defaultRequest
+  SetBelowDefaultRequest -> 0x1afffffe
+  SetAboveDefaultRequest -> 0x1b000000
   SetRaw value -> value
   where
     maximal = case standing of
@@ -531,10 +556,10 @@ modelEffectIn layout fx@(Fixture banks previous config slotDefaults tailDefaults
           _
             | bankBranchSelected slot -> case mode of
                 DefaultRead -> bankDefault fallback
-                LiveRead -> extractRange bits <$> load bankBase banks (bankAddress bank offset) width
+                _ -> extractRange bits <$> load bankBase banks (bankAddress bank offset) width
             | otherwise -> extractRange recordBits' <$> case mode of
                 DefaultRead -> load slotDefaultsWindow slotDefaults (slotDefaultsAddress slot record) recordWidth'
-                LiveRead -> load bankBase banks (recordAddress bank slot record) recordWidth'
+                _ -> load bankBase banks (recordAddress bank slot record) recordWidth'
   (OwnedSlotField (SlotArm (BankBranch offset width bits fallback) (RecordBranch record recordWidth' recordBits') save slotDefault' mirror), Set bank slot choice) -> do
     let recordTarget recordSlot =
           let recordSaved = saveBase + recordBase + slotStride recordSlot + recordOffsetWord record
@@ -582,10 +607,10 @@ modelEffectIn layout fx@(Fixture banks previous config slotDefaults tailDefaults
       let value = setValue (Classified (Owned owned)) slot choice
        in if value == defaultRequest then Nothing else Just value
     getField (FieldArm offset width bits source _ _) bank mode = unchanged <$> case (mode, source) of
-      (LiveRead, _) -> extractRange bits <$> load bankBase banks (bankAddress bank offset) width
       (DefaultRead, FieldDefaultOnly fallback) -> fieldDefault fallback
       (DefaultRead, FieldStock stock _) -> stockResult stock config
       (DefaultRead, FieldConfig offset' _) -> configValue offset'
+      _ -> extractRange bits <$> load bankBase banks (bankAddress bank offset) width
     configValue :: ConfigOffset -> Maybe Word32
     configValue (ConfigOffset offset) = fromIntegral <$> configByteAt config (fromIntegral offset)
     bankAddress bank (BankOffset offset) = bankBase + fromIntegral (bankStrideBytes * fromEnum bank) + fromIntegral offset
@@ -619,11 +644,10 @@ sentinel register = 0xa5a50000 + fromIntegral (fromEnum register)
 comparedRegisters :: [Register]
 comparedRegisters = R0 : calleeSaved ++ [Sp]
 
-banksId, previousId, configId, codeId, slotDefaultsId, tailDefaultsId, stackId, callerFrameId, exitId, backingId, callsId :: RegionId
+banksId, previousId, configId, slotDefaultsId, tailDefaultsId, stackId, callerFrameId, exitId, backingId, callsId :: RegionId
 banksId = RegionId "banks"
 previousId = RegionId "previous"
 configId = RegionId "config"
-codeId = RegionId "code"
 slotDefaultsId = RegionId "slot-defaults"
 tailDefaultsId = RegionId "tail-defaults"
 stackId = RegionId "stack"
@@ -660,7 +684,9 @@ modelExpectation fx owned operation = expected <$> modelEffect fx owned operatio
       let (backing,events,previous) = headerEffects fx effect
       in Expectation Returned ((R0, effectR0 effect) : preserved)
         [(banksId, effectBanks effect), (previousId, previous), (configId, fixtureConfig fx), (callsId, H.encodeEvents events), (backingId, backing), (callerFrameId, B.replicate (fromIntegral (stackTop - stackPointer)) 0)]
-    preserved = [(register, sentinel register) | register <- calleeSaved] ++ [(Sp, stackPointer)]
+    preserved = [(register, sentinel register) | register <- calleeSaved] ++ [(Sp, stackPointer)] ++ case operation of
+      Set _ (SlotArgument slot) _ -> [(R3, slot)]
+      Get {} -> []
 
 headerEffects :: Fixture -> Effect -> (B.ByteString,[H.BoundaryEvent],B.ByteString)
 headerEffects fx effect = (finalBacking,events,previous)
@@ -694,6 +720,58 @@ data WriteEvent = WriteEvent
   }
   deriving (Eq, Show)
 
+data ApprovedRamHeader = ActiveHeader | BackupHeader deriving (Eq, Show)
+
+data WriteProjectionError
+  = InvalidWriteWidth WriteEvent
+  | WriteAddressOverflow WriteEvent
+  | HeaderBoundaryCrossing ApprovedRamHeader WriteEvent
+  deriving (Eq, Show)
+
+data WriteWidth = WriteByte | WriteHalf | WriteWord | WriteDouble deriving (Eq, Show)
+
+newtype RamByteAddress = RamByteAddress Word32 deriving (Eq, Show)
+
+data ComparedWrite
+  = PhysicalWrite WriteEvent
+  | RamByteEffect RamByteAddress Word8
+  deriving (Eq, Show)
+
+-- | HeaderBoundary.initialBacking and headerEffects expose the first 16 bytes at each base.
+-- settings_storage's HEADER_BYTES and NativeHeaderBackend use these ordinary-RAM arrays.
+-- This fixture contract establishes no interrupt, concurrent-access or silicon atomic-width equivalence.
+approvedRamHeaders :: [(ApprovedRamHeader, Word32, Word32)]
+approvedRamHeaders =
+  [(ActiveHeader, bankBase, bankBase + 16), (BackupHeader, H.backingBase, H.backingBase + 16)]
+
+projectWrites :: [WriteEvent] -> Either WriteProjectionError [ComparedWrite]
+projectWrites = fmap concat . mapM project
+  where
+    project event = do
+      width <- case eventWidth event of
+        1 -> Right WriteByte
+        2 -> Right WriteHalf
+        4 -> Right WriteWord
+        8 -> Right WriteDouble
+        _ -> Left (InvalidWriteWidth event)
+      let size = case width of
+            WriteByte -> 1
+            WriteHalf -> 2
+            WriteWord -> 4
+            WriteDouble -> 8
+          start = toInteger (eventAddress event)
+          end = start + size
+          overlaps = [(header, toInteger low, toInteger high) | (header, low, high) <- approvedRamHeaders, start < toInteger high, end > toInteger low]
+      if end > toInteger (maxBound :: Word32) + 1
+        then Left (WriteAddressOverflow event)
+        else case overlaps of
+          [] -> Right [PhysicalWrite event]
+          [(header, low, high)]
+            | start >= low && end <= high ->
+                Right [RamByteEffect (RamByteAddress (fromInteger (start + offset))) (fromIntegral (eventValue event `shiftR` fromInteger (8 * offset))) | offset <- [0 .. size - 1]]
+            | otherwise -> Left (HeaderBoundaryCrossing header event)
+          (header, _, _) : _ -> Left (HeaderBoundaryCrossing header event)
+
 -- | The compared part of one observation. 'runWrites' is Nothing when the provenance log was truncated.
 data Run = Run
   { runStatus :: !RunnerStatus
@@ -705,7 +783,9 @@ data Run = Run
 
 forceRun :: Run -> Run
 forceRun run =
-  sum (map snd (runRegisters run)) `seq` sum (map (B.length . snd) (runMemory run)) `seq` maybe 0 length (runWrites run) `seq` run
+  sum (map snd (runRegisters run)) `seq` sum (map (B.length . snd) (runMemory run)) `seq` maybe () forceEvents (runWrites run) `seq` run
+  where
+    forceEvents = foldr (\event rest -> event `seq` rest) ()
 
 data Difference
   = StatusDiffers RunnerStatus RunnerStatus
@@ -714,6 +794,8 @@ data Difference
   | WritesDiffer
   | ReferenceTruncated
   | SubjectTruncated
+  | ReferenceWriteProjectionFailed WriteProjectionError
+  | SubjectWriteProjectionFailed WriteProjectionError
   | -- | The model reads or writes outside the fixture for this case.
     ModelOutsideFixture
   deriving (Eq, Show)
@@ -726,6 +808,8 @@ differenceKind difference = case difference of
   WritesDiffer -> "writes"
   ReferenceTruncated -> "truncated"
   SubjectTruncated -> "truncated"
+  ReferenceWriteProjectionFailed _ -> "writes"
+  SubjectWriteProjectionFailed _ -> "writes"
   ModelOutsideFixture -> "model"
 
 differenceDetail :: Difference -> String
@@ -733,9 +817,11 @@ differenceDetail difference = case difference of
   StatusDiffers expected actual -> N.runnerStatusLabel actual ++ ", expected " ++ N.runnerStatusLabel expected
   RegisterDiffers register expected actual -> N.registerLabel register ++ " " ++ N.hexWord32 actual ++ ", expected " ++ N.hexWord32 expected
   MemoryDiffers ident -> "final bytes of " ++ regionName ident
-  WritesDiffer -> "ordered write sequence"
+  WritesDiffer -> "ordered write effects (approved RAM bytes; physical events elsewhere)"
   ReferenceTruncated -> "reference provenance truncated"
   SubjectTruncated -> "subject provenance truncated"
+  ReferenceWriteProjectionFailed problem -> "reference write projection: " ++ show problem
+  SubjectWriteProjectionFailed problem -> "subject write projection: " ++ show problem
   ModelOutsideFixture -> "model access outside the fixture"
 
 expectationDifferences :: Expectation -> Run -> [Difference]
@@ -758,7 +844,11 @@ compareRuns reference subject =
   expectationDifferences (observedExpectation reference) subject
     ++ [ReferenceTruncated | isNothing (runWrites reference)]
     ++ [SubjectTruncated | isNothing (runWrites subject)]
-    ++ [WritesDiffer | Just expected <- [runWrites reference], Just actual <- [runWrites subject], expected /= actual]
+    ++ case (projectWrites <$> runWrites reference, projectWrites <$> runWrites subject) of
+      (expected, actual) ->
+        [ReferenceWriteProjectionFailed problem | Just (Left problem) <- [expected]]
+          ++ [SubjectWriteProjectionFailed problem | Just (Left problem) <- [actual]]
+          ++ [WritesDiffer | Just (Right wanted) <- [expected], Just (Right observed) <- [actual], wanted /= observed]
 
 -- | The write events of a case report's @runner.memory_provenance@, in order.
 reportWrites :: Value -> Either String [WriteEvent]
@@ -770,6 +860,7 @@ reportWrites report = do
       "read" -> Right Nothing
       "write" -> do
         address <- hexField value "address"
+        unless (address <= fromIntegral (maxBound :: Word32)) (Left "provenance address outside 32-bit guest space")
         width <- case num (get value "size") of
           size | size >= 1 && size <= 8 -> Right (fromInteger size)
           _ -> Left "provenance size"
@@ -784,7 +875,7 @@ reportWrites report = do
 -- | The compared part of an observation and its report's write events.
 runOf :: N.NativeObservation -> [WriteEvent] -> Either String Run
 runOf observation writes = do
-  registers <- mapM (\register -> maybe (Left ("register " ++ N.registerLabel register)) (Right . (,) register) (N.lookupRegister register observation)) comparedRegisters
+  registers <- mapM (\register -> maybe (Left ("register " ++ N.registerLabel register)) (Right . (,) register) (N.lookupRegister register observation)) (R3 : comparedRegisters)
   memory <- mapM (\(ident, _, _) -> maybe (Left ("region " ++ regionName ident)) (Right . (,) ident . B.copy) (lookup ident (N.nativeMemory observation))) comparedRegions
   retained <- case N.nativeProvenance observation of
     N.Truncated _ -> Right Nothing
@@ -849,7 +940,7 @@ data EntryCase = EntryCase
   } deriving (Eq, Ord, Show)
 
 entryLabel :: EntryCase -> CaseLabel
-entryLabel c = CaseLabel ("entry-" ++ caseLabelText (caseLabel (entryOperation c)) ++ "-" ++ show (fromEnum (entryCallMode c)) ++ "-" ++ showHex (entrySelector c) "" ++ "-" ++ showHex (entryBank c) "" ++ "-" ++ if entryReturnVariant c then "v1" else "v0")
+entryLabel c = prefixedCaseLabel (CaseLabel "entry") (CaseLabel (caseLabelText (caseLabel (entryOperation c)) ++ "-" ++ show (fromEnum (entryCallMode c)) ++ "-" ++ showHex (entrySelector c) "" ++ "-" ++ showHex (entryBank c) "" ++ "-" ++ if entryReturnVariant c then "v1" else "v0"))
 
 entryCases :: [EntryCase]
 entryCases =
@@ -903,7 +994,7 @@ wrapperCaseSpec wrapper image functions fx label standing c =
     , caseInitial = map argument (caseInitial base)
     }
   where
-    base = caseSpec image functions fx label standing c placeholderExpectation
+    base = caseSpec image wrapperFunctions fx label standing c placeholderExpectation
     target :: Word32
     target = case wrapper of DefaultWrapper -> 0x6245f8; LiveWrapper -> 0x624620; CompareWrapper -> 0x62464c
     wrapperFunctions = nub (FunctionSpan 0x6439e0 0x6439e8 : wrapperSpans ++ [if f == getterSpan then FunctionSpan 0x61e110 0x6245f8 else f | f <- functions, f `notElem` [FunctionSpan 0x6245f8 0x624694]])
@@ -924,6 +1015,28 @@ slice image address size = B.take size (B.drop (fromIntegral (address - image4Ba
 region :: RegionId -> Word32 -> Int -> Permission -> B.ByteString -> CaseRegion
 region ident address = mkRegion ident (N.GuestAddress (fromIntegral address))
 
+data CodeRegionSpan = CodeRegionSpan Word32 Word32 Permission
+
+codeRegions :: B.ByteString -> [FunctionSpan] -> [CaseRegion]
+codeRegions image functions =
+  [ region (RegionId ("code-" ++ show start)) start (fromIntegral (end - start)) permission
+      (B.take (fromIntegral (end - start)) (B.drop (fromIntegral (start - codeStart)) bytes))
+  | CodeRegionSpan start end permission <- foldr join [] spans
+  ]
+  where
+    bytes = codeBytes image
+    boundaries = sortOn id (nub (codeStart : spanEnd setterSpan : [boundary | declared <- functions, boundary <- [spanStart declared, spanEnd declared], codeStart < boundary, boundary < spanEnd setterSpan]))
+    spans =
+      [ CodeRegionSpan start end (if any (\declared -> spanStart declared <= start && end <= spanEnd declared) functions then ReadExecute else ReadOnly)
+      | (start, end) <- zip boundaries (drop 1 boundaries)
+      ]
+    join (CodeRegionSpan start end permission) (CodeRegionSpan nextStart nextEnd nextPermission : rest)
+      | end == nextStart && samePermission permission nextPermission = CodeRegionSpan start nextEnd permission : rest
+    join current rest = current : rest
+    samePermission ReadExecute ReadExecute = True
+    samePermission ReadOnly ReadOnly = True
+    samePermission _ _ = False
+
 -- | One native case of a role's image4 bytes and declared functions.
 caseSpec :: B.ByteString -> [FunctionSpan] -> Fixture -> CaseLabel -> Standing -> OracleCase -> Expectation -> CaseSpec
 caseSpec image functions fx (CaseLabel label) standing (OracleCase (PropertyId identifier) operation) expected =
@@ -934,8 +1047,8 @@ caseSpec image functions fx (CaseLabel label) standing (OracleCase (PropertyId i
     , caseEntry = N.GuestAddress (fromIntegral entry)
     , caseExit = N.GuestAddress (fromIntegral exitAddress)
     , caseRegions =
-        [ region codeId codeStart (fromIntegral (spanEnd setterSpan - codeStart)) ReadExecute (codeBytes image)
-        , region slotDefaultsId H.keysBase (8 + B.length (fixtureSlotDefaults fx)) ReadOnly (B.take 8 (H.keyBytes (fixtureBackupKeys fx)) <> fixtureSlotDefaults fx)
+        codeRegions image functions ++
+        [ region slotDefaultsId H.keysBase (8 + B.length (fixtureSlotDefaults fx)) ReadOnly (B.take 8 (H.keyBytes (fixtureBackupKeys fx)) <> fixtureSlotDefaults fx)
         , region tailDefaultsId tailDefaultsBase (B.length (fixtureTailDefaults fx)) ReadOnly (fixtureTailDefaults fx)
         , region banksId bankBase (B.length (fixtureBanks fx)) ReadWrite (fixtureBanks fx)
         , region previousId saveBase (B.length (fixturePrevious fx)) ReadWrite (fixturePrevious fx)
@@ -965,7 +1078,7 @@ caseSpec image functions fx (CaseLabel label) standing (OracleCase (PropertyId i
   where
     hex value = "0x" ++ showHex value ""
     (entry, entryName, arguments) = case operation of
-      Get bank mode (SlotArgument slot) -> (0x61e110 :: Word32, "getter 0x61e110", [identifier, bankWord bank, fromIntegral (fromEnum mode), slot])
+      Get bank mode (SlotArgument slot) -> (0x61e110 :: Word32, "getter 0x61e110", [identifier, bankWord bank, readModeValue mode, slot])
       Set bank slot@(SlotArgument slotWord) choice -> (0x624694, "setter 0x624694", [identifier, setValue standing slot choice, bankWord bank, slotWord])
     bankWord = fromIntegral . fromEnum
 
@@ -1005,7 +1118,7 @@ entryControlOperations :: EntryControl -> [Operation]
 entryControlOperations control = filter relevant operations
   where
     relevant operation = case (control, operation) of
-      (OffsetMoved, Get _ mode _) -> mode == LiveRead
+      (OffsetMoved, Get _ mode _) -> mode /= DefaultRead
       (OffsetMoved, Set _ _ _) -> True
       (SaveCleared, Set bank _ _) -> bank == Bank0
       (SaveCleared, Get _ _ _) -> False

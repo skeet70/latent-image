@@ -16,6 +16,12 @@ The current-base source port adds `RecipeArtifact`, `RecipeEditNative`, `RecipeE
 
 This is a source-only port, not a new qualification. No build, test, guest execution or artifact generation was performed for this port. Callback AAPCS behavior and stack depth, active-session initialization, parked consumers, publication, cache coherence, rollback, installed code lifetime and total admission remain unproved. Frozen private observations and artifacts are unchanged.
 
+### Public-entry variant
+
+`//replacement/property_service:property-service-public-image` places the same owned body behind `xm1_public_get` and `xm1_public_set` at `0x62c120` and `0x62c12c`. The getter saves and restores `r4`, `r5` and `r11`; the setter saves and restores `r3` through `r8` and `r11`, so the setter's original `r3` survives. Both then call the owned getter or setter. The canonical `property-service-image` keeps the direct branches and is unchanged. `derivePublicArtifact` admits the wrapper encoding; `nativeImage4View`, `validateNativeImage4View` and `stageNativeImage4` place and check it without a DAT or retirement claim. `stage-property-service-public`, `property-oracle-public` and `qualify-public` are the variant's stager, oracle and qualification driver; `property-service-public-artifact-tests` is its host test. The compact measurement, rejudgment and typed storage-admission targets are shared with the canonical qualification.
+
+The local view changes only the fixed carrier and the two public root branches. Retirement is not admitted: the production stager refuses while any retained reference is unresolved. The current frontier is 188 findings, including all 93 GVFF sites and the six FDL sites; historical entropy windows and retained-target islands do not discharge them. A refusal is not a candidate or retirement claim.
+
 
 ### Qualification driver
 

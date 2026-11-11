@@ -8,6 +8,7 @@ module Replacement.PropertyService.Artifact.Internal
   , ArtifactInput (..)
   , ArtifactPurpose (..)
   , StagedImage4
+  , NativeImage4View
   , StagedCandidate
   , StagedPlacement (..)
   , ArtifactError (..)
@@ -15,10 +16,15 @@ module Replacement.PropertyService.Artifact.Internal
   , StorageWidth (..)
   , DefaultImage (..)
   , EncodingPart (..)
+  , PublicEntryShape (..)
   , canonicalSource
   , sourceProperties
   , sourceHull
+  , sourceImage4
+  , sourceScanned
+  , sourceRetainedFieldEvidence
   , deriveArtifact
+  , derivePublicArtifact
   , deriveRecipeArtifactInternal
   , RecipeDependency (..)
   , RecipePackageIdentity (..)
@@ -39,6 +45,14 @@ module Replacement.PropertyService.Artifact.Internal
   , storageStatusWords
   , mirrorBoundaries
   , stagePlacement
+  , stageNativePlacement
+  , validateLocalImage4
+  , nativeImage4View
+  , nativeViewBytes
+  , nativeViewIdentityValue
+  , validateNativeImage4View
+  , nativeRetiredReferences
+  , stageNativeImage4
   , stageImage4
   , validateStagedImage4
   , stagedImage4Bytes
@@ -46,6 +60,7 @@ module Replacement.PropertyService.Artifact.Internal
   , stageCandidate
   , candidateBytes
   , candidateContractValue
+  , publicCandidateContractValue
   ) where
 
 import qualified A32 as A
@@ -69,6 +84,7 @@ import Replacement.PropertyService.ClassRecord (classValue, summaryValue)
 import Replacement.PropertyService.Classify
 import Replacement.PropertyService.Encoding
 import Replacement.PropertyService.Placement
+import Replacement.PropertyService.PlacementNative (RetainedFieldEvidence, retainedFieldEvidence, retiredReferences)
 import ServiceInventory (Image (..))
 
 newtype SourceIdentity = SourceIdentity SHA.Sha256
@@ -308,13 +324,20 @@ purposeRetained CloseAppendArea3Control = [area3HandleCell]
 
 -- | The linked artifact admitted at `carrier`, which staging derives from the hull scan.
 deriveArtifact :: ArtifactPurpose -> [Property] -> Carrier -> ArtifactInput -> Either ArtifactError LinkedArtifact
-deriveArtifact purpose = deriveArtifactUsing purpose Nothing
+deriveArtifact purpose = deriveArtifactUsing CanonicalEntry purpose Nothing
+
+-- | The linked artifact whose public roots are the owned getter and setter wrappers.
+derivePublicArtifact :: ArtifactPurpose -> [Property] -> Carrier -> ArtifactInput -> Either ArtifactError LinkedArtifact
+derivePublicArtifact purpose = deriveArtifactUsing PublicWrapperEntry purpose Nothing
 
 deriveRecipeArtifactInternal :: RecipeDependency -> [Property] -> Carrier -> ArtifactInput -> Either ArtifactError LinkedArtifact
-deriveRecipeArtifactInternal dependency = deriveArtifactUsing ProductionArtifact (Just dependency)
+deriveRecipeArtifactInternal dependency = deriveArtifactUsing CanonicalEntry ProductionArtifact (Just dependency)
 
-deriveArtifactUsing :: ArtifactPurpose -> Maybe RecipeDependency -> [Property] -> Carrier -> ArtifactInput -> Either ArtifactError LinkedArtifact
-deriveArtifactUsing purpose dependency properties carrier@(Carrier (GuestAddress carrierLow) (GuestAddress carrierHigh)) (ArtifactInput bytes symbolBytes elfBytes) = do
+-- | Which owned bodies the image places at the carrier start.
+data PublicEntryShape = CanonicalEntry | PublicWrapperEntry deriving (Eq, Show)
+
+deriveArtifactUsing :: PublicEntryShape -> ArtifactPurpose -> Maybe RecipeDependency -> [Property] -> Carrier -> ArtifactInput -> Either ArtifactError LinkedArtifact
+deriveArtifactUsing shape purpose dependency properties carrier@(Carrier (GuestAddress carrierLow) (GuestAddress carrierHigh)) (ArtifactInput bytes symbolBytes elfBytes) = do
   symbols <- either (const (Left SymbolRejected)) Right (F.parseSymbols symbolBytes)
   let rows = [(F.symbolName symbol, symbolKind kind) | (symbol, row) <- zip symbols (filter (not . C.null) (C.lines symbolBytes)), [_, _, kind, _] <- [C.words row]]
       kindOf = M.fromList rows
@@ -341,12 +364,16 @@ deriveArtifactUsing purpose dependency properties carrier@(Carrier (GuestAddress
   forM_ symbols $ \entry -> unless (kindIs [AbsoluteSymbol] entry) $
     require (kindIs [GlobalText, LocalText, ReadOnlyData] entry && F.symbolAddress entry >= start
       && toInteger (F.symbolAddress entry) + toInteger (F.symbolSize entry) <= toInteger end) ExtentRejected
-  let getterEntryAddress = start
-      getterEntryBytes = 4
+  let (getterEntryName, getterEntryBytes) = case shape of
+        CanonicalEntry -> ("xm1_property_get_entry", 4)
+        PublicWrapperEntry -> ("xm1_public_get", 12)
+      (setterEntryName, setterEntryBytes) = case shape of
+        CanonicalEntry -> ("xm1_property_set_entry", 4)
+        PublicWrapperEntry -> ("xm1_public_set", 12)
+      getterEntryAddress = start
       setterEntryAddress = start + getterEntryBytes
-      setterEntryBytes = 4
-  placed "xm1_property_get_entry" getterEntryAddress getterEntryBytes
-  placed "xm1_property_set_entry" setterEntryAddress setterEntryBytes
+  placed getterEntryName getterEntryAddress getterEntryBytes
+  placed setterEntryName setterEntryAddress setterEntryBytes
   storeAddresses <- mapM (\width -> do
     address <- at (storageStoreName width)
     placed (storageStoreName width) address (4 * fromIntegral (length (storageStoreWords width)))
@@ -389,8 +416,17 @@ deriveArtifactUsing purpose dependency properties carrier@(Carrier (GuestAddress
       wordsAt address count = map word (take count [address, address + 4 ..])
   getterTarget <- at getterEntryTarget
   setterTarget <- at setterEntryTarget
-  require (A.decode getterEntryAddress (word getterEntryAddress) == A.Branch always False getterTarget) (EncodingRejected (EntryEncoding GetterEntry))
-  require (A.decode setterEntryAddress (word setterEntryAddress) == A.Branch always False setterTarget) (EncodingRejected (EntryEncoding SetterEntry))
+  case shape of
+    CanonicalEntry -> do
+      require (A.decode getterEntryAddress (word getterEntryAddress) == A.Branch always False getterTarget) (EncodingRejected (EntryEncoding GetterEntry))
+      require (A.decode setterEntryAddress (word setterEntryAddress) == A.Branch always False setterTarget) (EncodingRejected (EntryEncoding SetterEntry))
+    PublicWrapperEntry -> do
+      require (wordsAt getterEntryAddress 1 == [0xe92d4830]
+        && A.decode (getterEntryAddress + 4) (word (getterEntryAddress + 4)) == A.Branch always True getterTarget
+        && word (getterEntryAddress + 8) == 0xe8bd8830) (EncodingRejected (EntryEncoding GetterEntry))
+      require (wordsAt setterEntryAddress 1 == [0xe92d49f8]
+        && A.decode (setterEntryAddress + 4) (word (setterEntryAddress + 4)) == A.Branch always True setterTarget
+        && word (setterEntryAddress + 8) == 0xe8bd89f8) (EncodingRejected (EntryEncoding SetterEntry))
   forM_ storeAddresses $ \(width, address) ->
     require (wordsAt address (length (storageStoreWords width)) == storageStoreWords width) (EncodingRejected (StorageEncoding width))
   forM_ outputAddresses $ \(width,address) ->
@@ -540,8 +576,103 @@ validateWithRegions artifact regions original staged = do
           | otherwise = fillWord
     require (word staged address == expected) StagingRejected
 
+-- | The local image4 placement of an artifact whose public roots are owned wrappers.
+data NativeImage4View = NativeImage4View CanonicalSource LinkedArtifact StagedPlacement
+
+sourceRetainedFieldEvidence :: CanonicalSource -> [ScanHit] -> [RetainedFieldEvidence]
+sourceRetainedFieldEvidence source = retainedFieldEvidence (sourceScanned source)
+
+nativeRetiredReferences :: CanonicalSource -> [ScanHit]
+nativeRetiredReferences = retiredReferences . sourceScanned
+
+-- | Place only the fixed carrier and the two public root branches; no retirement is admitted.
+stageNativePlacement :: [Property] -> Image -> LinkedArtifact -> Either ArtifactError StagedPlacement
+stageNativePlacement properties (Image _ _ base original) artifact = do
+  require (artifactCarrier artifact == stage4Carrier)
+    (PlacementRejected (CarrierNotCandidate (carrierStart (artifactCarrier artifact))))
+  require (length properties == 645 && all (\property -> case propertyClass property of Owned _ -> True; Delegated _ -> False) properties) TableRejected
+  require (base == 0x61c400
+    && U.word32At original (fromIntegral (0x61e110 - base)) == 0xe92d4830
+    && U.word32At original (fromIntegral (0x624694 - base)) == 0xe92d49f8)
+    (PlacementRejected PublicEntryDisagrees)
+  let EntryAddresses getter setter = artifactEntries artifact
+      Carrier (GuestAddress low) _ = artifactCarrier artifact
+      offset address = fromIntegral (address - base)
+      carried = linkedBytes artifact <> B.concat (replicate ((carrierBytes stage4Carrier - B.length (linkedBytes artifact)) `div` 4) (U.putWord32 fillWord))
+      replace at replacement bytes = B.take at bytes <> replacement <> B.drop (at + B.length replacement) bytes
+      withCarrier = replace (offset low) carried original
+      staged = foldl (\bytes (site@(GuestAddress address), target) -> replace (offset address) (U.putWord32 (adapterWord site target)) bytes)
+        withCarrier [(getterStockEntry, getter), (setterStockEntry, setter)]
+  validateLocalImage4 artifact original staged
+  pure (StagedPlacement (HullScan retiredHull [] [] (Just stage4Carrier)) staged)
+
+-- | Check a locally placed image4: only the carrier and the two root branches may differ.
+validateLocalImage4 :: LinkedArtifact -> B.ByteString -> B.ByteString -> Either ArtifactError ()
+validateLocalImage4 artifact original staged = do
+  require (B.length original == B.length staged && B.length original `mod` 4 == 0
+    && artifactCarrier artifact == stage4Carrier
+    && artifactEntries artifact == EntryAddresses (GuestAddress 0x62c120) (GuestAddress 0x62c12c)
+    && B.length (linkedBytes artifact) <= carrierBytes stage4Carrier
+    && B.length (linkedBytes artifact) `mod` 4 == 0) StagingRejected
+  let EntryAddresses getter setter = artifactEntries artifact
+      Carrier (GuestAddress codeLow) _ = artifactCarrier artifact
+      word bytes address = U.word32At bytes (fromIntegral (address - 0x61c400))
+  forM_ [(getterStockEntry, getter), (setterStockEntry, setter)] $ \(site@(GuestAddress address), target@(GuestAddress destination)) ->
+    require (A.decode address (adapterWord site target) == A.Branch always False destination) StagingRejected
+  forM_ [0x61c400, 0x61c404 .. 0x61c400 + fromIntegral (B.length original) - 4] $ \address -> do
+    let guest = GuestAddress address
+        expected
+          | guest == getterStockEntry = adapterWord guest getter
+          | guest == setterStockEntry = adapterWord guest setter
+          | inCarrier (artifactCarrier artifact) guest = if fromIntegral (address - codeLow) < B.length (linkedBytes artifact)
+              then U.word32At (linkedBytes artifact) (fromIntegral (address - codeLow)) else fillWord
+          | otherwise = word original address
+    require (word staged address == expected) StagingRejected
+
+nativeImage4View :: CanonicalSource -> LinkedArtifact -> Either ArtifactError NativeImage4View
+nativeImage4View source artifact =
+  NativeImage4View source artifact <$> stageNativePlacement (sourceProperties source) (sourceImage4 source) artifact
+
+nativeViewBytes :: NativeImage4View -> B.ByteString
+nativeViewBytes (NativeImage4View _ _ placement) = placementBytes placement
+
+validateNativeImage4View :: NativeImage4View -> B.ByteString -> Either ArtifactError ()
+validateNativeImage4View (NativeImage4View source artifact _) =
+  validateLocalImage4 artifact (imageBytes (sourceImage4 source))
+
+nativeViewIdentityValue :: NativeImage4View -> Value
+nativeViewIdentityValue view@(NativeImage4View source artifact _) = object
+  [ "schema" .= (1 :: Int)
+  , "qualification_scope" .= ("native-only" :: String)
+  , "dat_retirement_admitted" .= False
+  , "source_sha256" .= M.fromList [(roleLabel role, identityText digest) | (role, digest) <- sourceIdentities source]
+  , "linked_sha256" .= identityText (linkedIdentity artifact)
+  , "symbols_sha256" .= identityText (symbolIdentity artifact)
+  , "elf_sha256" .= identityText (elfIdentity artifact)
+  , "linked_bytes" .= B.length (linkedBytes artifact)
+  , "native_image4_sha256" .= identityText (identity (nativeViewBytes view))
+  , "carrier" .= object ["start" .= low, "end" .= high, "bytes" .= carrierBytes carrier, "fill_word" .= fillWord]
+  , "public_wrappers" .= object ["getter" .= getter, "setter" .= setter]
+  , "public_entry_words" .=
+      [object ["address" .= address, "original" .= U.word32At original (fromIntegral (address - 0x61c400)), "patched" .= adapterWord (GuestAddress address) target]
+      | (address, target) <- [(0x61e110, getterEntry (artifactEntries artifact)), (0x624694, setterEntry (artifactEntries artifact))]]
+  , "owned_instruction_count" .= S.size (proofInstructions (artifactProof artifact))
+  , "recipe_edit_package_sha256" .= fmap (\(RecipePackageIdentity digest) -> SHA.sha256Hex digest) (artifactRecipeIdentity artifact)
+  ]
+  where
+    carrier@(Carrier (GuestAddress low) (GuestAddress high)) = artifactCarrier artifact
+    EntryAddresses (GuestAddress getter) (GuestAddress setter) = artifactEntries artifact
+    original = imageBytes (sourceImage4 source)
+
 stageImage4 :: CanonicalSource -> LinkedArtifact -> Either ArtifactError StagedImage4
 stageImage4 source artifact = StagedImage4 source artifact <$> stagePlacement (sourceProperties source) (sourceImage4 source) (sourceHull source) artifact
+
+-- | The locally placed image4, refusing while any retired reference is unresolved.
+stageNativeImage4 :: CanonicalSource -> LinkedArtifact -> Either ArtifactError StagedImage4
+stageNativeImage4 source artifact = do
+  let hits = retiredReferences (sourceScanned source)
+  require (null hits) (PlacementRejected (RetiredReferenced hits))
+  StagedImage4 source artifact <$> stageNativePlacement (sourceProperties source) (sourceImage4 source) artifact
 
 -- | The staged image4 for an admitted artifact, or the refusal `stageImage4` gives.
 stagedImage4Bytes :: CanonicalSource -> LinkedArtifact -> Either ArtifactError B.ByteString
@@ -559,7 +690,38 @@ candidateBytes :: StagedCandidate -> B.ByteString
 candidateBytes (StagedCandidate _ candidate) = Image4.candidateDat candidate
 
 candidateContractValue :: StagedCandidate -> Value
-candidateContractValue (StagedCandidate staged@(StagedImage4 source artifact (StagedPlacement scan _)) candidate) = object $
+candidateContractValue = candidateContractValueWith canonicalHullRule canonicalOpenPremises
+
+-- | The candidate contract of the locally placed public-entry image.
+publicCandidateContractValue :: StagedCandidate -> Value
+publicCandidateContractValue = candidateContractValueWith publicHullRule publicOpenPremises
+
+canonicalHullRule :: String
+canonicalHullRule = "fixed carrier; full hull retired except entry adapters, wrappers and external data reservations"
+
+publicHullRule :: String
+publicHullRule = "only two public root branches and the fixed carrier change; no retirement admitted with unknown references"
+
+canonicalOpenPremises :: [String]
+canonicalOpenPremises =
+  [ "loads are not confined: owned code may read any address; the native oracle confines reads"
+  , "stack depths are bytes below the owned callable entry sp"
+  , "the setter owns its 32-byte frame and calls retained brackets at incoming sp minus 32; bracket chain depth and register use are not proved"
+  , "the code policy checks sp, r11 and the return address at every exit; other callee-saved registers follow AAPCS unproved"
+  , "the reference scan reads image4, image5, plain, loader A and loader B as instructions and words, and image2 and image3 (the FONT_ICON.FDL window extracted from the DAT) as words; it does not cover computed addresses"
+  ]
+
+publicOpenPremises :: [String]
+publicOpenPremises =
+  [ "loads are not confined: owned code may read any address; the native oracle confines reads"
+  , "stack depths are bytes below the owned callable entry sp"
+  , "public wrappers preserve r4-r11 and the setter's original r3; retained bracket chain depth and register use are not proved"
+  , "the code policy checks sp, r4-r11 and the return address at every exit"
+  , "the reference scan reads image4, image5, plain, loader A and loader B as instructions and words, and image2 and image3 (the FONT_ICON.FDL window extracted from the DAT) as words; it does not cover computed addresses"
+  ]
+
+candidateContractValueWith :: String -> [String] -> StagedCandidate -> Value
+candidateContractValueWith hullRule premises (StagedCandidate staged@(StagedImage4 source artifact (StagedPlacement scan _)) candidate) = object $
   [ "schema" .= (2 :: Int)
   , "qualification" .= ("conditional-owned-property-service-stage-4" :: String)
   , "source_sha256" .= M.fromList [(roleLabel role, identityText digest) | (role, digest) <- sourceIdentities source]
@@ -570,7 +732,7 @@ candidateContractValue (StagedCandidate staged@(StagedImage4 source artifact (St
   , "carrier" .= object ["start" .= low, "end" .= high, "bytes" .= carrierBytes carrier, "fill_words" .= ((carrierBytes carrier - B.length (linkedBytes artifact)) `div` 4), "fill_word" .= fillWord]
   , "hull" .= object
       [ "start" .= hullLow, "end" .= hullHigh, "bytes" .= carrierBytes (hullRegion scan)
-      , "rule" .= ("fixed carrier; full hull retired except entry adapters, wrappers and external data reservations" :: String)
+      , "rule" .= hullRule
       , "hits" .= [object ["image" .= scanLabel label, "site" .= site, "word" .= word, "target" .= target, "reference" .= show reference, "listing" .= hitListing hit] | hit@(ScanHit label (GuestAddress site) word reference) <- hullHits scan, let GuestAddress target = hitTarget hit]
       ]
   , "entries" .= object ["getter" .= getterAddress, "setter" .= setterAddress]
@@ -613,12 +775,7 @@ candidateContractValue (StagedCandidate staged@(StagedImage4 source artifact (St
   , "candidate_dat_sha256" .= Image4.candidateSha256 candidate
   , "candidate_image4_sha256" .= Image4.candidateImage4Sha256 candidate
   , "open_premises" .=
-      ([ "loads are not confined: owned code may read any address; the native oracle confines reads"
-       , "stack depths are bytes below the owned callable entry sp"
-       , "the setter owns its 32-byte frame and calls retained brackets at incoming sp minus 32; bracket chain depth and register use are not proved"
-       , "the code policy checks sp, r11 and the return address at every exit; other callee-saved registers follow AAPCS unproved"
-       , "the reference scan reads image4, image5, plain, loader A and loader B as instructions and words, and image2 and image3 (the FONT_ICON.FDL window extracted from the DAT) as words; it does not cover computed addresses"
-       ] ++
+      (premises ++
        [ "the recipe callback AAPCS behavior, stack depth, publication and installed lifetime remain unproved"
        | Just _ <- [artifactRecipeIdentity artifact]
        ] :: [String])

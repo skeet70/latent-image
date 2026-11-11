@@ -94,9 +94,9 @@ pub enum Source {
 #[derive(Clone, Copy)]
 pub enum Hook {
     None,
-    /// On bank 0 the setter stub calls 0x61da3c before and 0x61d944 after them.
+    /// Active-bank writes refresh and persist the settings mirror.
     Bank0Bracket,
-    /// Repeats them when the byte at 0x96b400 + offset is 0.
+    /// Repeats the write when startup configuration selects resaving.
     GatedResave(ConfigOffset),
 }
 
@@ -166,8 +166,7 @@ pub struct ReadOnlyField {
     pub default: u32,
 }
 
-/// Two whole bytes a set stores with one value; on bank 0 the setter stub's bracket calls surround
-/// the first. Get returns 0.
+/// Two whole-byte writes sharing one value; the active-bank mirror brackets the first. Get returns 0.
 #[derive(Clone, Copy)]
 pub struct WriteOnlyPair {
     pub bits: Bits,

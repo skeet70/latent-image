@@ -68,6 +68,14 @@ main = do
             case depth [pushR4Lr, bl 1 3, popR4Pc, 0xffffffff] (Supplied (M.fromList [(at 3, StackDepth 100)])) noTargets noSwitches of
               Right report -> reportDepth report == StackDepth 108 && reportSupplied report == [at 3]
               _ -> False)
+        , ("a supplied entry reached by a branch is taken at its depth",
+            case depth [pushR4Lr, branch always 1 3, 0xffffffff] (Supplied (M.fromList [(at 3, StackDepth 100)])) noTargets noSwitches of
+              Right report -> reportDepth report == StackDepth 108 && reportSupplied report == [at 3]
+              _ -> False)
+        , ("a supplied entry inside owned code is taken at its depth",
+            stockDepth (stockCode [(base, B.pack (concatMap (\w -> [fromIntegral (w `shiftR` s) | s <- [0, 8, 16, 24]]) [pushR4Lr, branch always 1 3, bxLr]))] [(at 3, at 4)])
+              (Supplied (M.fromList [(at 3, StackDepth 100)])) noTargets noSwitches base
+              == Right (StackReport (StackDepth 108) [at 3] [base, at 3] S.empty [base]))
         , ("entering owned code refuses",
             stockDepth (stockCode [(base, B.pack (concatMap (\w -> [fromIntegral (w `shiftR` s) | s <- [0, 8, 16, 24]]) [pushR4Lr, bl 1 3, popR4Pc, bxLr]))] [(at 3, at 4)])
               none noTargets noSwitches base == Left (OwnedCode (at 3)))
