@@ -85,7 +85,9 @@ impl WordCell {
 /// Stock bindings used by the owned actions. `busy`, `node_id`, `class`,
 /// `cursor_token` and `read_word` have no stock side effect.
 pub trait PickerServices {
-    /// `0x63a0f8(0x53) != 0`.
+    /// `0x63a0f8(0x53) != 0`. Stock's engine `0xbf95c8` and its value seam
+    /// `0xd51b58` make no such call, so the action is the one place the
+    /// admission is made.
     fn busy(&mut self) -> bool;
     /// `0x61d154`.
     fn node_id(&mut self) -> NodeId;
