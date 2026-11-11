@@ -1,0 +1,63 @@
+{
+  "target": "Fujifilm X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "evidence": "source-inspected and original-byte disassembly inspected; no execution qualification",
+  "source_guide": "reports/xm1-decomp.md",
+  "sources": [
+    "decomp/firmwares/xm1-150/app/capture/pipeline/capture_entry_statistics.h",
+    "decomp/firmwares/xm1-150/app/capture/pipeline/capture_statistics_readers.h",
+    "decomp/firmwares/xm1-150/app/capture/pipeline/tu_00feea1c.c",
+    "decomp/firmwares/xm1-150/app/capture/pipeline/capture_request_wrappers.c"
+  ],
+  "instruction_extents": {
+    "entry_statistics": "id5.dis:fec494..fec804",
+    "sample_statistics": "id5.dis:fef5e8..fef8e4",
+    "bank_readers_and_correction": "id5.dis:fe988c..fea2f0",
+    "offset_query": "id5.dis:edae88..edaeac,ee04f0..ee0748",
+    "entry_parameters": "id5.dis:ed8af4..ed8b0c,feb4cc..feb554",
+    "calibration": "id5.dis:ed7d84..ed7dac,edb08c..edb0a8,ee631c..ee6410,ef52e4..ef5330,ef5448..ef546c,ef563c..ef5654,ef56cc..ef578c",
+    "calibrated_gain": "id5.dis:da1900..da1948,daa46c..daa4c0,dab6f8..dab8d0",
+    "configuration_halfword_composition": "id4.dis:69fec8..69feec,69ff7c..69ffa0"
+  },
+  "modules": [
+    "record_hardware_deep_banks",
+    "record_hardware_deep_samples",
+    "record_hardware_deep_calibration",
+    "record_hardware_deep_correction",
+    "record_hardware_deep_entries"
+  ],
+  "owned_canonical_symbols": [
+    "fec494", "fef5e8", "fe988c", "fe99f0", "fe9adc", "fe9c04", "edae88", "ee04f0",
+    "feb4cc", "ed8af4", "ef5310", "ef5448", "ef5768", "ef56cc", "ed7d84",
+    "da1900", "daa46c", "dab6f8", "ee631c", "ee6394", "edb08c", "fe9d30"
+  ],
+  "entry_abi": {
+    "symbol": "record_hardware_deep_entries::helper_fec494",
+    "arguments": ["index", "grid", "regions", "black", "dimensions", "region_dimensions", "black_dimensions", "first_report", "second_report", "token", "adjusted"],
+    "argument_words": 11,
+    "context": "&mut RecordContext<M,E>, M:GuestAddressSpace, E unconstrained; all ten pointer arguments are GuestAddress; errors propagate as MemoryError",
+    "return": "Result<u32,MemoryError>: one for matched resident queue, zero for unmatched index",
+    "sample_symbol": "record_hardware_deep_samples::helper_fef5e8(context,request:GuestAddress)->Result<u32,MemoryError>"
+  },
+  "lifetime": {
+    "execution": "Synchronous reads of resident completed-statistics queues and immediate writes to caller-owned output buffers.",
+    "entry_queues": ["0x016f0d94", "0x016f0e00"],
+    "sample_queues": ["0x016f1314", "0x016f1344"],
+    "temporary_storage": "Entry parameter, compact and report values are local Rust arrays consumed directly by the concrete geometry core; no host pointer is cast to a guest address.",
+    "callbacks": "These instruction extents do not register callbacks, enqueue requests, retain caller pointers, or synthesize completion acknowledgements.",
+    "asynchronous_ownership": "The request and completion wrappers remain owned by PowerLifecycleNext.PowerRecordCompletionServices; this increment consumes their already-resident statistics banks."
+  },
+  "concrete_shared_providers": [
+    {"symbol": "record_deep_geometry::calculate_entry_report", "owner": "PowerApplicationJoin.RecordDeepGeometryCpu", "abi": "(context,&[u8;72],&[u8;12],&mut[u8;208])->Result<(),MemoryError>"},
+    {"symbol": "record_configuration::helper_69f8fc/read_halfword", "owner": "PowerApplicationJoin integration", "abi": "shared RecordContext and typed ConfigurationKey"}
+  ],
+  "integration": {
+    "root_and_build_owner": "PowerApplicationJoin",
+    "wrapper_owner": "PowerLifecycleNext.PowerRecordCompletionServices",
+    "selection_caller_owner": "PowerLifecycleNext.PowerRecordSelectionMode",
+    "required_module_declarations": "Declare each modules entry as a sibling in the power_lifecycle crate and include each Rust file in the build source set.",
+    "architecture": "One generic CPU engine uses GuestAddressSpace for both host and native memory. Root owns admitted regions, native C ABI bridges and context construction."
+  },
+  "behavioral_tests_added": ["actual word-bank copies through HostAddressSpace", "missing output rejection before window access", "bank selector resolution", "actual configuration calibration lookup and channel ordering", "decimal gain rounding boundaries"],
+  "verification_executed": []
+}

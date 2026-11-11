@@ -1,0 +1,27 @@
+{
+  "target": "Fujifilm X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "image4_sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
+  "evidence": "Installed image-4 ARM instruction inspection",
+  "module": "record_profile_shared_cpu",
+  "function_prefix": "helper_",
+  "owned_symbols": ["75606c", "75610c", "7561ac", "756e5c", "7560b8", "756158", "75624c", "756298", "7562e4", "756338", "75638c", "7563d4", "75641c", "756478", "7564c0", "756508", "756550", "756598", "7565e0", "756628", "756670", "7566b8", "756734", "756754", "756788", "7567b8", "7567ec", "756840", "756878", "7568b8", "7568f8", "756e24", "756f3c", "756f60", "756fb8", "757004", "757050", "7570a0", "7570f0", "757140", "757190", "7571e0", "75722c", "757274", "7572c0", "757310", "757360", "7573ac", "7573f4", "758208", "758250", "7582c0", "758300", "758360", "7585dc", "7588e8", "7589e0", "758c34", "758c68", "758c98", "758cc4"],
+  "execution": "One generic engine over RecordContext<M,E>, M: GuestAddressSpace, no Effects bounds; every function returns Result<_,MemoryError>",
+  "canonical_dependencies": {
+    "record_address_space": ["RecordContext", "GuestAddressSpace", "GuestAddress", "ByteCount", "MemoryError"],
+    "record_profile_accessors": ["ProfileHandle", "ProfileField", "ProfileBank", "can_write", "read_bank", "write_bank", "resource_address", "copy_words"]
+  },
+  "memory": {
+    "shared_base": "0x0091904c", "shared_extent": "0x9d4", "resource_base": "0x0096ebd0", "resource_stride": "0x2158",
+    "configuration_list_offset": "0x7a0", "configuration_record_stride": "0x68", "configuration_record_index": "Wrapping u32 retained ABI arithmetic"
+  },
+  "buffer_contract": "All snapshot inputs and outputs are GuestAddress. Callers use admitted guest regions or RecordContext guest frames, never native host pointer casts. Native C bridges belong to the root.",
+  "copy_order": "LDM/STM copies use canonical copy_words with preloaded register groups; memcpy calls use GuestAddressSpace::copy_bytes. Consumed setter r0 values are captured at the original load group.",
+  "copy_sizes": {"756734":132, "756788":32, "7567ec":12, "756840":48, "7568b8":64, "756e24":20, "756f3c":80, "7582c0":40, "7585dc":20, "7588e8":76, "758c68":28, "758c98":8},
+  "consumed_setter_results": {"denied":0,"756754":"0x0091904c","756f60":"0x009191f8","7567b8":"Source word4","756e5c":"Source word0"},
+  "tests_added": ["snapshot_fault_preserves_completed_output_groups", "shared_snapshot_is_read_back_without_handle_permission"],
+  "native_only_implementation_retained": false,
+  "unresolved_extern_symbols": [],
+  "integration_required": "Declare record_profile_shared_cpu and include source/evidence in canonical build target; migrate callers to context-first GuestAddress buffer signatures",
+  "verification": "Not run by assignment: no build, test, formatter, native runner, SDK, guest, or camera commands"
+}

@@ -1,0 +1,315 @@
+{
+  "source_revision": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "extent_source": "decomp/firmwares/xm1-150/function-ranges.json",
+  "raw_source": "private-data/analysis/x-m1-1.50/lz/id4.dis and id5.dis; binary bytes id4-0061c400.bin and id5-00bf1a00.bin",
+  "functions": [
+    {
+      "address": "0x6e4ab4",
+      "end": "0x6e4ae0",
+      "size": 44,
+      "pinned_name": "audio_zoom_release",
+      "raw_sha256": "252e6e4ccf2a14db6f0615278f2809336d16d6777bdd1b3f5ae27edda130418b",
+      "manifest_sha256": "252e6e4ccf2a14db6f0615278f2809336d16d6777bdd1b3f5ae27edda130418b"
+    },
+    {
+      "address": "0x6ea094",
+      "end": "0x6ea0e8",
+      "size": 84,
+      "pinned_name": "audio_zoom_queue_release",
+      "raw_sha256": "5148a545eec869bafd0c17538e6da09c1e04d94a25d43bf9e733270fbdc64dc8",
+      "manifest_sha256": "5148a545eec869bafd0c17538e6da09c1e04d94a25d43bf9e733270fbdc64dc8"
+    },
+    {
+      "address": "0x6e9dec",
+      "end": "0x6e9e24",
+      "size": 56,
+      "pinned_name": "audio_zoom_schedule_movie_zoom",
+      "raw_sha256": "42a99853d4626a23ccec58eac0001dd33cbfeb1bcb4a20c56bd787ee9ba24b4d",
+      "manifest_sha256": "42a99853d4626a23ccec58eac0001dd33cbfeb1bcb4a20c56bd787ee9ba24b4d"
+    },
+    {
+      "address": "0x6e9f68",
+      "end": "0x6e9fb8",
+      "size": 80,
+      "pinned_name": "audio_zoom_destroy_task",
+      "raw_sha256": "80b7cc9a4ea5e8eceed82bae8ee98195c827832116c82f90dcc16b58223ac227",
+      "manifest_sha256": "80b7cc9a4ea5e8eceed82bae8ee98195c827832116c82f90dcc16b58223ac227"
+    },
+    {
+      "address": "0x6e6de4",
+      "extent_manifest": "absent",
+      "raw_instruction_extent": [
+        "0x6e6de4",
+        "0x6e6df8"
+      ],
+      "raw_behavior": "no-op returning incoming r0; no executable body beyond prologue/epilogue",
+      "sha256": "06923057baae437a94c3b2f5904ebc40a3d725722555328069576625b3fe02c8"
+    },
+    {
+      "address": "0x6e87c8",
+      "end": "0x6e87f0",
+      "size": 40,
+      "pinned_name": "FUN_006e87c8",
+      "raw_sha256": "7bb2f34e2160cc67202a457a831a62ddab1519b63a30ca946b029d57b1d81170",
+      "manifest_sha256": "7bb2f34e2160cc67202a457a831a62ddab1519b63a30ca946b029d57b1d81170"
+    },
+    {
+      "address": "0x6e878c",
+      "end": "0x6e87c8",
+      "size": 60,
+      "pinned_name": "FUN_006e878c",
+      "raw_sha256": "820a22aca1b3332f591efc79845b5f7123653e8f928b93ba6deea18246fd58b5",
+      "manifest_sha256": "820a22aca1b3332f591efc79845b5f7123653e8f928b93ba6deea18246fd58b5"
+    },
+    {
+      "address": "0x6e706c",
+      "end": "0x6e70b8",
+      "size": 76,
+      "pinned_name": "FUN_006e706c",
+      "raw_sha256": "e5a510541015e0f9b143fcf5a5ec3aaab838500f26f6d71d0845ace226eca03b",
+      "manifest_sha256": "e5a510541015e0f9b143fcf5a5ec3aaab838500f26f6d71d0845ace226eca03b"
+    },
+    {
+      "address": "0x6e7858",
+      "end": "0x6e78e4",
+      "size": 140,
+      "pinned_name": "audio_codec_write",
+      "raw_sha256": "9c3d0b19b920608770a3b5de4b1403a10aca4d873094d9cef96b0c163bb672d5",
+      "manifest_sha256": "9c3d0b19b920608770a3b5de4b1403a10aca4d873094d9cef96b0c163bb672d5"
+    },
+    {
+      "address": "0xec5660",
+      "end": "0xec5678",
+      "size": 24,
+      "pinned_name": "FUN_00ec5660",
+      "raw_sha256": "db9a5f77d50a97bff36520812f5e1c0cec982ae2f6208b899aa7b8baaf0af0ec",
+      "manifest_sha256": "db9a5f77d50a97bff36520812f5e1c0cec982ae2f6208b899aa7b8baaf0af0ec"
+    },
+    {
+      "address": "0x724558",
+      "end": "0x724638",
+      "size": 224,
+      "pinned_name": "dispatch_send_notification",
+      "raw_sha256": "852ac7eae12c48792ba77973428e36c7be22ef2d8ae7abd845ab12cdc01dc73d",
+      "manifest_sha256": "852ac7eae12c48792ba77973428e36c7be22ef2d8ae7abd845ab12cdc01dc73d"
+    },
+    {
+      "address": "0x72612c",
+      "end": "0x72627c",
+      "size": 336,
+      "pinned_name": "FUN_0072612c",
+      "raw_sha256": "1fa997e0d86eb485baa365d5a7559d3aaddff9289740b0e7e39e768913097a9e",
+      "manifest_sha256": "1fa997e0d86eb485baa365d5a7559d3aaddff9289740b0e7e39e768913097a9e"
+    },
+    {
+      "address": "0x64dc9c",
+      "end": "0x64df64",
+      "size": 712,
+      "pinned_name": "FUN_0064dc9c",
+      "raw_sha256": "eed3a9b6c79c082b60196daaf8ad66ea2ba8937932f4a7a6a3bd171bf8af38cf",
+      "manifest_sha256": "eed3a9b6c79c082b60196daaf8ad66ea2ba8937932f4a7a6a3bd171bf8af38cf"
+    },
+    {
+      "address": "0x6e77ec",
+      "end": "0x6e7858",
+      "size": 108,
+      "pinned_name": "audio_zoom_dispatch_event",
+      "raw_sha256": "d7c4c23424445a03351ab6a088477ded52e26762ad7b7d7b268c3087cd92f7ce",
+      "manifest_sha256": "d7c4c23424445a03351ab6a088477ded52e26762ad7b7d7b268c3087cd92f7ce"
+    },
+    {
+      "address": "0x724b68",
+      "end": "0x724c00",
+      "size": 152,
+      "pinned_name": "FUN_00724b68",
+      "raw_sha256": "6008c26df7818441ce9a7ece5f9802eca2d1f58e1da311c5a9ab09fcf1da39e4",
+      "manifest_sha256": "6008c26df7818441ce9a7ece5f9802eca2d1f58e1da311c5a9ab09fcf1da39e4"
+    },
+    {
+      "address": "0x724c00",
+      "end": "0x724cbc",
+      "size": 188,
+      "pinned_name": "FUN_00724c00",
+      "raw_sha256": "25383bb5f9a7c8baddf3ef1bdf38005651ffa2f64e26f17dfc83731f06d843c9",
+      "manifest_sha256": "25383bb5f9a7c8baddf3ef1bdf38005651ffa2f64e26f17dfc83731f06d843c9"
+    },
+    {
+      "address": "0x72503c",
+      "end": "0x725214",
+      "size": 472,
+      "pinned_name": "dispatch_send_message",
+      "raw_sha256": "0c02b587b70e68d634585bde3cd9f34240350253bb3a4f22341f742ed7da8b37",
+      "manifest_sha256": "0c02b587b70e68d634585bde3cd9f34240350253bb3a4f22341f742ed7da8b37"
+    },
+    {
+      "address": "0x723cb8",
+      "end": "0x723ce8",
+      "size": 48,
+      "pinned_name": "dispatch_current_task",
+      "raw_sha256": "92681accf48089835d3c844a4fd99a7c3211ea1009cccd0f88273ce3de93a245",
+      "manifest_sha256": "92681accf48089835d3c844a4fd99a7c3211ea1009cccd0f88273ce3de93a245"
+    },
+    {
+      "address": "0x64a65c",
+      "end": "0x64bd1c",
+      "size": 5824,
+      "pinned_name": "FUN_0064a65c",
+      "raw_sha256": "db9e72815d1d0efff6a8cad0df30b4edcbb6d8be45df9f7227dc7c40645ce3bd",
+      "manifest_sha256": "db9e72815d1d0efff6a8cad0df30b4edcbb6d8be45df9f7227dc7c40645ce3bd"
+    },
+    {
+      "address": "0x64bf40",
+      "end": "0x64c1cc",
+      "size": 652,
+      "pinned_name": "FUN_0064bf40",
+      "raw_sha256": "33c7e5a9ea84baf7f6915e7c381a0c0ecaadd1b82dcf190431c90000550bd26a",
+      "manifest_sha256": "33c7e5a9ea84baf7f6915e7c381a0c0ecaadd1b82dcf190431c90000550bd26a"
+    },
+    {
+      "address": "0x64c4e0",
+      "end": "0x64c61c",
+      "size": 316,
+      "pinned_name": "FUN_0064c4e0",
+      "raw_sha256": "525f78e1aa42b482cfbbe7d281f06fbe822e1adc074cde2053227eb80091c907",
+      "manifest_sha256": "525f78e1aa42b482cfbbe7d281f06fbe822e1adc074cde2053227eb80091c907"
+    },
+    {
+      "address": "0x64d29c",
+      "end": "0x64d430",
+      "size": 404,
+      "pinned_name": "FUN_0064d29c",
+      "raw_sha256": "35ffc19e24903befb72a1eb4f4b86d3f19ee1e4a4b707e05a2e908a70deb48e6",
+      "manifest_sha256": "35ffc19e24903befb72a1eb4f4b86d3f19ee1e4a4b707e05a2e908a70deb48e6"
+    },
+    {
+      "address": "0x64c1cc",
+      "end": "0x64c4e0",
+      "size": 788,
+      "pinned_name": "FUN_0064c1cc",
+      "raw_sha256": "ffa1086f5533bb3ecff8c77ec7b4e898220ef744a9953e0aa0dc10dea5a136f2",
+      "manifest_sha256": "ffa1086f5533bb3ecff8c77ec7b4e898220ef744a9953e0aa0dc10dea5a136f2"
+    },
+    {
+      "address": "0x64bd1c",
+      "end": "0x64bf40",
+      "size": 548,
+      "pinned_name": "FUN_0064bd1c",
+      "raw_sha256": "36acab1040ae03b5a3a988caec7833ef526cbd5c2bf9fb87afa592bef5e0155e",
+      "manifest_sha256": "36acab1040ae03b5a3a988caec7833ef526cbd5c2bf9fb87afa592bef5e0155e"
+    },
+    {
+      "address": "0x724f08",
+      "end": "0x72503c",
+      "size": 308,
+      "pinned_name": "FUN_00724f08",
+      "raw_sha256": "d6373ed492e9a38bf64a33627c2efa1e3963deb09aa1465f533155b9621b57d3",
+      "manifest_sha256": "d6373ed492e9a38bf64a33627c2efa1e3963deb09aa1465f533155b9621b57d3"
+    },
+    {
+      "address": "0x64e130",
+      "end": "0x64e4ac",
+      "size": 892,
+      "pinned_name": "FUN_0064e130",
+      "raw_sha256": "9f18871cf3344bf66edd232ba210167afe4d05aea672edd40e5a011bca85b682",
+      "manifest_sha256": "9f18871cf3344bf66edd232ba210167afe4d05aea672edd40e5a011bca85b682"
+    },
+    {
+      "address": "0x65722c",
+      "end": "0x657384",
+      "size": 344,
+      "pinned_name": "driver_allocate_handle",
+      "raw_sha256": "586895bacfe3ad6ed738b7bd629ca35dc07e037a21884e0f2e1f90272248fa7f",
+      "manifest_sha256": "586895bacfe3ad6ed738b7bd629ca35dc07e037a21884e0f2e1f90272248fa7f"
+    },
+    {
+      "address": "0x657384",
+      "end": "0x65744c",
+      "size": 200,
+      "pinned_name": "driver_find_handle",
+      "raw_sha256": "906044b5d122e5b38be1c45ff5cdc3a443efed825b96ed816f0f7a81d4d1ad57",
+      "manifest_sha256": "906044b5d122e5b38be1c45ff5cdc3a443efed825b96ed816f0f7a81d4d1ad57"
+    },
+    {
+      "address": "0x65744c",
+      "end": "0x6574b4",
+      "size": 104,
+      "pinned_name": "FUN_0065744c",
+      "raw_sha256": "c4bb3980c11c048de8e422ded354347ee9cf6040dc314cd40f01e5e02b22b435",
+      "manifest_sha256": "c4bb3980c11c048de8e422ded354347ee9cf6040dc314cd40f01e5e02b22b435"
+    }
+  ],
+  "sequence": {
+    "address": "0x7d1c28",
+    "nodes": [
+      "0x6e6de4",
+      "0x6e87c8",
+      "0x6e878c",
+      "0x6e706c"
+    ],
+    "terminator": 0
+  },
+  "dispatch": {
+    "table": "0x8292b0",
+    "command_bounds": [
+      "0x3900",
+      "0x3916"
+    ],
+    "phase_bounds": [
+      1,
+      13
+    ],
+    "stride": 13,
+    "release_request_indices": [
+      1,
+      7
+    ],
+    "shutdown_consumer_index": 83,
+    "shutdown_consumer": "0x6e9f68"
+  },
+  "completion": {
+    "producer": "0xec5660",
+    "service": "0x724558",
+    "kind": "event flag",
+    "id": 2,
+    "bits": 1,
+    "codec_semaphore": 41
+  },
+  "composition": {
+    "serial": [
+      "xm1_power_serial_open",
+      "xm1_power_serial_configure",
+      "xm1_power_serial_write_with_residue(handle,value,0)",
+      "xm1_power_serial_status",
+      "xm1_power_serial_stop",
+      "xm1_power_serial_close"
+    ],
+    "transport": "shutdown_rtos::NativeShutdownRtos",
+    "destructor": "primitives::destroy_queue",
+    "task_retirement": [
+      "xm1_rtos_objects_family_flag_delete",
+      "xm1_power_save_irq",
+      "xm1_rtos_task_delete_body",
+      "xm1_s3a_exit_task"
+    ]
+  },
+  "shared_callback_cpu": {
+    "engine": "audio_callback_cpu.rs",
+    "entry": "audio_release::callbacks::invoke(memory, physical_io, action)",
+    "memory": "audio_release::stream_construction::ConstructionMemory, including halfword accesses",
+    "effects": "PhysicalIo extends canonical AudioDevice and ConstructionIo; all post, panel, resource, callback, signal and bank-publication effects receive the same memory",
+    "native_adapter": "audio_callback_native.rs",
+    "residue": "Distinct terminal, idle-notify and unchanged-notify assembly producers retain their existing 76-byte record frames; terminal backed entry invokes the shared phase-restoration engine",
+    "codec": "Cache edits, preclear order, settings lookup, gain selection, bank iteration, clock setup and timer waits execute in one host/ARM engine; write_codec retains the canonical serial device algorithm",
+    "integration": "Requires ConstructionMemory generic cutover and half/put_half additions from fd5a25ee; include audio_callback_cpu.rs, audio_callback_native.rs and audio_callback_cpu_tests.rs in the source graph",
+    "verification": "Source changes only; no build or execution performed"
+  },
+  "retained_physical_effects": [
+    "serial endpoint transactions via serial_cpu native ABI"
+  ],
+  "integration_frontier": [
+    "release dispatch is a typed task41 consumer entry; task41 nonrelease command dispatch remains outside this module",
+    "native queue diagnostics supplied by diagnostics::NativeQueueDiagnostics",
+    "audio codec, capture and delay callbacks compose source-owned modules; installed transfer ready continuations, ring, request send and DMA/controller pipeline compose audio_stream*.rs and audio_packet_ring.rs; LCD actions compose the display owner; task41 admission remains the Vendor runtime producer boundary"
+  ],
+  "scheduling": "Exact ten-slot operation reservation, unique wrapping generations, descriptor publication and timer wake compose task6_executor. Four descriptor nodes execute on four task6 ticks before a real 0x3906 message is consumed by task41."
+}

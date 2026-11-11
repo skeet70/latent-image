@@ -1,0 +1,37 @@
+{
+  "pin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "extents": [
+    {"name":"standby93","start":"0x69cd58","end":"0x69cdf8","sha256":"7f162de5287d905c2ac78af7f03fa9ff0c05d21fe60ff69c4974b58cfda31ee2","source":"app/platform/cpu/cpu_startup_phases.c:207-239","bytes":"id4.dis:131675-131714"},
+    {"name":"gpio_reset","start":"0x6568ec","end":"0x656a34","sha256":"d99520d1a906b29ca5763c2bb9b40c0929cffe47b4505e2da3a445ffd36bc03c","bytes":"id4.dis:59712-59793"},
+    {"name":"terminal","start":"0xec5804","end":"0xec581c","sha256":"4bca46723f5bc8f217259d56365dc844c790cec866f9e63feda346756e3a8183","bytes":"id5.dis:734538-734543"},
+    {"name":"queue_destructor","start":"0x724f08","end":"0x72503c","sha256":"d6373ed492e9a38bf64a33627c2efa1e3963deb09aa1465f533155b9621b57d3","bytes":"id4.dis:271047-271123","repair":"Replace mailbox delete+d0 with owned dataqueue delete+a4"},
+    {"name":"power_ic_success","start":"0x6a564c","end":"0x6a5664","sha256":"aab533f64e7d3f50628f3b74c122bcfaae90f7a06e1282e0e04e4d03d9706543","bytes":"id4.dis:140440-140445","words":["e52db004","e28db000","e3a00000","e28bd000","e8bd0800","e12fff1e"]},
+    {"name":"power_pin_write_f0","start":"0x6a5c08","end":"0x6a5c98","sha256":"d178463307334db5fb98b7344da5f33da5c6d2baac969223f1e105cb5f4700f2","bytes":"id4.dis:140807-140842","source":"app/drivers/power/power_pin_startup_values.c"},
+    {"name":"power_serial_byte","start":"0x6a5750","end":"0x6a57e4","sha256":"53916ab00e5ce9dbcc82adbc0c753cd2d765cd4ee99ac07fc908e1eb53735c61","bytes":"id4.dis:140505-140541"},
+    {"name":"power_serial_mask","start":"0x6a57e4","end":"0x6a5920","sha256":"1d7630c2a9a08a6b4f97504190a470023c6f1613a0e387feb44d17d61b9e3940","bytes":"id4.dis:140542-140620","source_status":"NONMATCHING; use actual machine shifts/masks"},
+    {"name":"power_pin_write_field","start":"0x6a59b8","end":"0x6a5aac","sha256":"83980f2fbe8722ce201d94a5ef27be87152ba10bb58c0891975050f0f6b28cb5","bytes":"id4.dis:140659-140719","source_status":"NONMATCHING; use actual machine shifts/masks"},
+    {"name":"power_pin_descriptors","start":"0x7c9b54","end":"0x7c9c26","sha256":"2b689103a1e012ea72ebf56e7ff1c874d64406297b61355db71777b35434357f","layout":"35 records of6 bytes: commandu16,shiftu8,widthu8,defaultu8,reservedu8"},
+    {"name":"power_endpoint_descriptor9","start":"0x7c8990","end":"0x7c89b4","sha256":"3297e10466a3f070fb9d7bf4dcb6b6e7ba555a29c8188ad979739bb2f1ca32f1","words":["1","c0003","0","0","1","30000","0","0","0"]}
+  ],
+  "owned_guest_composition": ["xm1_rtos_objects_family_flag_timed_wait", "xm1_rtos_data_queue_receive_poll_body", "xm1_rtos_data_queue_delete_body", "xm1_rtos_fixed_pool_release_body", "xm1_rtos_fixed_pool_delete_body", "helper_try", "helper_release"],
+  "owned_shared_controller": {"owner":"PowerLifecycle.PowerSerialCpu","symbols":["xm1_power_serial_open","xm1_power_serial_configure","xm1_power_serial_write_with_residue","xm1_power_serial_status","xm1_power_serial_read","xm1_power_serial_stop","xm1_power_serial_close"],"power_endpoint":"descriptor9,mode2; shared channel1,semaphore0x16(decimal22),noDMA","fifo_residue":"Actual6a5750 configure result is not a gate. A successful configure leavesGPIOselector0; a configureerror retains prioropen semaphore0x16 inoriginalentrySP-20. Producer passes explicitresidue0 or0x16 to write_with_residue, preserving lowFIFOword3311 or3317.","poll_gate":"packed_status[3]!=0 AND packed_status[1]==1; status/timeout never implies completion"},
+  "native_cpu": {
+    "standby_frame":"32 bytes total; output entrySP-28 persists and is never initialized; assembly load preserves machine behavior without a Rust uninitialized value",
+    "cache":"42574/4257c IRQ-only mask;425e8 disable;42600 enable;42634(0,0)->426fc->4272c whole-cache clean/invalidate; literals42830=3ff,42834=7fff",
+    "cache_range":"xm1_power_dcache_clean_range owns4263c->4264c->426a8, opcodeMCRp15,c7,c10,1; 32-byte alignment, end=address+length, signedBLT continuation; eitherinputzero selects42708 wholecacheclean operation2 MCRc7,c10,2. xm1_power_dcache_clean_invalidate_all owns426fc operation1 wholecache loop. Byteproof loader-40000.dis2424-2438,2451-2457,2472-2518.",
+    "storage_release":"7233dc clears only 409c390c+12*index under IRQ and existing owned stamped lock409c280c; 240 records; no heap free",
+    "queue_active":"409c3500+8*(slot-1+9600)+f64",
+    "error_word":"40a0f82c, not donor-model9121b8"
+  },
+  "unowned_cpu_dependencies": [],
+  "resolved_cpu_dependencies": {
+    "configuration":"NativePowerConfigurationSource -> diagnostics.rs xm1_power_configuration_byte, actual69f8fc publishedpointerload",
+    "queue_diagnostics":"diagnostics.rs NativeQueueDiagnostics owns41a34/serviceevent and723398 admittedinstalledhandlers",
+    "standby_error":"shutdown_rtos.rs xm1_power_wait_current_any selects current interface+9c, mode0; nonzero except-50 reports operation0x12 with actual current task",
+    "calendar":"diagnostic_calendar.rs owns69d328->6b199c both plain and mirrored-offset branches",
+    "shared_controller":"PowerLifecycle.PowerSerialCpu owns serial_driver.rs/serial_native.rs; exactexports in owned_shared_controller",
+    "callback_admission":"PowerLifecycleInstalledDiagnosticHandlers in diagnostics_dependencies.json; ownerinstallers publish own functions"
+  },
+  "physical_boundaries": ["GPIO MMIO fff89000/fff88084", "interrupt wake MMIO fffb4080/fffb40a0", "CP15 cache registers", "CPSR IRQ mask", "WFI wake is not predicted or synthesized"],
+  "verification":"Source-only. No build, test, lint, formatter, or camera access."
+}

@@ -1,0 +1,30 @@
+{
+  "target": "Fujifilm X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "image4_sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
+  "evidence": "Installed image-4 ARM instruction inspection",
+  "module": "record_profile_arithmetic",
+  "function_prefix": "helper_",
+  "owned_symbols": ["746120", "7461a8", "747a08", "748730", "749254", "7498e0", "749e98", "749fac"],
+  "execution": "One generic engine over RecordContext<M,E>, M: GuestAddressSpace, no Effects bounds; all functions return Result<_,MemoryError>",
+  "canonical_dependencies": {
+    "record_configuration": ["ConfigurationKey", "read_byte", "read_halfword"],
+    "record_profile_mapping": {"owner":"PowerApplicationJoin.ProfileMappingCpu", "functions":["helper_747374", "helper_747aac", "helper_74947c"]},
+    "record_profile_diagnostics_adjust": {"owner":"PowerApplicationJoin.ProfileDiagnosticsCpu", "functions":["helper_748398", "helper_747408"]},
+    "record_profile_diagnostics_float": {"owner":"PowerApplicationJoin.ProfileDiagnosticsCpu", "functions":["helper_747b50", "helper_748818", "helper_74888c"]}
+  },
+  "memory": {"configuration_base_pointer":"0x0096ca50", "calibration_base":"0x40a6c7ec", "calibration_bank_stride":202, "calibration_entries":101, "calibration_element":"signed 16-bit"},
+  "buffer_contract": "helper_749e98 and helper_749fac output GuestAddress; helper_7498e0 takes two optional GuestAddress outputs, zero meaning absent. No host pointers, native-only engine, or fabricated scratch mapping.",
+  "behavior": {
+    "749fac_disabled":"Leaves output unchanged when configuration byte3e0009 equals1",
+    "749e98_disabled":"Zeros all three output words before configuration mode check",
+    "749fac_interpolation":"Signed truncating fixed16 interpolation for initial position; logical fixed16 interpolation for calibration width; fallback when width iszero",
+    "7498e0":"Independently optional 16-bit guest output stores",
+    "746120":"Signed midpoint search returns0 through100",
+    "749254":"Wrapped signed numerator; denominatorzero replaced with1; installed multiply-high conversion and16-bit result"
+  },
+  "tests_added": ["calibration_lookup_handles_midpoint_ties_and_endpoints"],
+  "unresolved_extern_symbols": [],
+  "integration_required":"Declare module, include source/evidence in canonical target, merge context-first mapping and diagnostics providers, and bind native root bridges to admitted memory",
+  "verification":"Not run by assignment: no build, test, formatter, native runner, SDK, guest, or camera commands"
+}

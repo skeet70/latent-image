@@ -1,0 +1,28 @@
+{
+  "target": "Fujifilm X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "modules": ["record_image_geometry_query.rs", "record_image_geometry_query_profiles.rs", "record_image_geometry_query_tests.rs"],
+  "owned_entries": ["10510e8", "10512cc", "10515f4", "10517a0", "ef5138", "ef5190", "ef5a8c", "ef5ab8", "ef5b5c", "ef5cc4", "ef5d44"],
+  "authority": {
+    "query_branches": "id5.dis:1108143-1108594; NONMATCHING ui/record/tu_01050654.c used only as reading aid",
+    "snapshot": "id5.dis:1095904-1095940",
+    "record_projection": "id5.dis:1095941-1095982",
+    "fixed_viewport": "id5.dis:1108005-1108019",
+    "percentage_rectangle": "id5.dis:769629-769661",
+    "profile_tables": "id5.dis:782901-783007,783297-783382,783438-783455,783489-783590,783633-783760"
+  },
+  "context_contract": "One RecordContext<GuestAddressSpace,Effects> implementation for host and ARM. Guest pointers are GuestAddress. No global host context or native fixed-address engine.",
+  "effects_contract": "SnapshotLock acquire/release bind semaphore167 through canonical concrete root services; release follows successful acquire even if admitted-memory access fails.",
+  "dependencies": {
+    "record_address_space": "Root owner PowerApplicationJoin",
+    "record_deep_geometry::helper_ef6030": "PowerApplicationJoin.RecordDeepGeometryCpu; context plus six input words returns eight output words",
+    "configuration_and_profile_readers": "Concrete same-context accessors in record_image_geometry_query::profiles"
+  },
+  "behavior": {
+    "invalid_arguments": "Status132 before any query or snapshot access",
+    "unavailable_snapshot": "Publishes availability/state, writes zero record count, preserves other output words",
+    "snapshot_copy": "10517a0 excludes source dimensions and publishes0x420bytes with zero-filled tail",
+    "two_stage_query": "10515f4 clears0x414byte scratch01466e34 before snapshot, then performs both geometry projections"
+  },
+  "verification": "Tests added, not run. No build, lint, format, native, SDK, guest, emulator, or camera operations run."
+}

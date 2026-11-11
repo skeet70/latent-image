@@ -1,0 +1,21 @@
+{
+  "scope": "X-M1 1.50 parameter setters750eb0..751cf0 and record export751d3c",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_paths": ["decomp/firmwares/xm1-150/app/settings/tu_007500bc.c", "decomp/firmwares/xm1-150/app/settings/tu_0075115c.c"],
+  "source_status": "Setter prototypes and751d3c marked NONMATCHING. Translation uses installed byte control flow, argument registers, store widths and offsets.",
+  "byte_evidence": "private-data/analysis/x-m1-1.50/lz/id4.dis:316081-317034,327425-327718",
+  "setter_entries": ["750eb0", "750f48", "750fe0", "751078", "751110", "7511a8", "751240", "7512d8", "751370", "751408", "7514a0", "751538", "7515d0", "751668", "751700", "751798", "751830", "7518c8", "751960", "7519f8", "751a90", "751b28", "751bc0", "751c58", "751cf0"],
+  "semantics": [
+    "All25 setters accept handle inr0 and untruncated value inr1; field1 write permission is checked before obtaining the resource pointer.",
+    "Denied setters perform no payload access or write; r0 remains0 from permission rejection.",
+    "Admitted setters select the canonical handle bank and access resource.parameters at offset90.",
+    "The first22 setters store only the low16 bits at consecutive halfword offsets0..2a.",
+    "The final3 setters store full32-bit values at offsets2c,30,34.",
+    "Admitted scalar leaves preserve the parameter-record base inr0; exports return that actual address.",
+    "No setter marks header masks or changes neighboring parameter words.",
+    "751d3c accepts destination inr0 and handle inr1, selects the field2 readable bank or canonical selected-bank fallback, copies124 bytes from resource+c8, and returns the original destination."
+  ],
+  "shared_dependencies": ["record_profile_accessors::ProfileHandle", "record_profile_accessors::ProfileField", "record_profile_accessors::ProfileWords", "record_profile_accessors::write_bank", "record_profile_accessors::read_bank", "record_profile_accessors::resource_address", "record_profile_accessors::copy_words"],
+  "integration": "Parent registers new record_profile_parameter_writers module with canonical profile core; no root or build-file edits in this commit.",
+  "qualification": "Source-only. No builds, tests, lint, formatting, native execution, SDK, guest or camera I/O."
+}

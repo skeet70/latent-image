@@ -1,0 +1,61 @@
+{
+  "status": "source-inspected",
+  "target": "Fujifilm X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_files": [
+    "decomp/firmwares/xm1-150/app/control/af/area/tu_00f4bc58.c",
+    "decomp/firmwares/xm1-150/app/control/af/workflow/rate_selection_transfer.c",
+    "decomp/firmwares/xm1-150/app/control/af/workflow/rate_rectangle_clipping.c",
+    "decomp/firmwares/xm1-150/app/control/af/contrast/sample/scale_key_pairs.c",
+    "decomp/firmwares/xm1-150/app/control/motion/tu_00fac78c.c",
+    "decomp/firmwares/xm1-150/app/capture/record/rate_grid_weights.c",
+    "decomp/firmwares/xm1-150/app/settings/profile_configuration_tables.c",
+    "decomp/firmwares/xm1-150/app/platform/diag/diagnostic_trace_callbacks.c"
+  ],
+  "byte_confirmation": {
+    "image5": "private-data/analysis/x-m1-1.50/lz/id5.dis",
+    "image5_sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+    "image4": "private-data/analysis/x-m1-1.50/lz/id4.dis",
+    "image4_sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
+    "ranges": ["00f4c958..00f4d34f", "00fabf48..00fabf73", "00faf730..00fafa93", "00ee98a0..00ee9927", "00ee99f0..00ee9a43", "00ef643c..00ef64f3", "0072872c..007287a3", "0074dbe4..0074dc0f"],
+    "notes": "NONMATCHING drafts are reading aids. The coordinate axes, halfword truncations, 3c0d packet offsets, scale at region+0x22, range-result 12-byte writes, weighted accumulation, lookup tables and trace writes were taken from the target instructions. Exact C specifies all weight-query branches and mode-triplet selection."
+  },
+  "modules": ["record_scan_geometry", "record_scan_geometry_native", "record_scan_geometry_tests"],
+  "exports_prefix": "xm1_power_record_helper_",
+  "exports": ["f4c958", "f4ca3c", "f4ca60", "f4ce2c", "f4ce44", "f4cf9c", "f4d080", "f4d0b8", "f4d144", "f4d2dc", "fabf48", "faf730", "faf8a0", "ef3434", "ef643c", "74dbe4", "74dc78", "72872c"],
+  "layout": {
+    "rectangle": "u32 vertical origin, horizontal origin, horizontal extent, vertical extent",
+    "centre": "u32 vertical, horizontal at region+0x10",
+    "region_scale": "u16 at +0x22",
+    "selection_result": "u32 profile, u16 first, u16 second, u32 auxiliary",
+    "range_packet": "220 bytes: two callback words followed by 212 bytes of captured values; command 0x3c0d"
+  },
+  "lifetime": {
+    "f4c958": "Reads request[0] during the call and writes exactly twelve output bytes. Neither request nor a local result pointer escapes.",
+    "f4ca60": "Copies all request/state values into a single stack packet. f49598 must copy the complete packet synchronously. Callback words are values; their implementations belong to the calling machine owner.",
+    "f4d2dc": "Both temporary output halfwords remain alive through synchronous 74b05c.",
+    "faf8a0": "Temporary curve parameters and coefficient output bytes remain alive throughout synchronous numeric calls; weighted accumulation uses wrapping 64-bit sums and wrapping 32-bit sample products."
+  },
+  "effects": [
+    "Clipping rejection leaves the region unchanged and writes accepted=0; unset outputs are always all-ones.",
+    "Clipping acceptance updates the rectangle, both centre words and the halfword scale only.",
+    "Null-source rescaling clears six output words and does not clear the trailing record.",
+    "72872c increments the enabled trace count up to 0x1540 and writes operation, MMIO timer offset and tick register.",
+    "faf8a0 emits entry and exit trace operations around the sample calculation.",
+    "Immutable firmware lookup data remains data, not executable retained code."
+  ],
+  "canonical_dependencies": {
+    "PowerLifecycleNext.PowerRecordProfileAccessors": ["74e648", "74e7a0", "74f564", "74fa2c", "74f454", "74f894", "750034", "7500bc", "74fcec", "74f344", "751b74", "751454", "76f340"],
+    "PowerApplicationJoin.ProfileSlotCpu": ["752a40", "752af0", "752ba0", "752c50", "752d00", "752f10", "753120", "753a10", "753f90", "753330", "753ee0"],
+    "PowerApplicationJoin.ProfileMappingCpu": ["746bf8", "746c2c"],
+    "PowerApplicationJoin.ProfileDiagnosticsCpu": ["7482d0", "7482f0"],
+    "PowerApplicationJoin.ProfileInterpolationCpu": ["74b05c"],
+    "PowerApplicationJoin.RecordHardwareDeepCpu": ["ef5310", "ef5448"],
+    "PowerApplicationJoin.RecordStatisticsCpu": ["ef53d0"],
+    "PowerApplicationJoin.RecordJobCpu": ["f49598"],
+    "PowerApplicationJoin.RecordNumericCpu": ["fa6590", "fa6c04"],
+    "existing_power_diagnostics": ["xm1_power_configuration_byte"]
+  },
+  "integration": "Integration owner adds modules, host test module and Bazel source entries. Direct constant queries f4d774 onward and f4d350 onward serializers are excluded.",
+  "verification": "No build, test, lint, formatter, native, SDK, guest or camera execution was performed."
+}

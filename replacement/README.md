@@ -38,6 +38,12 @@ The task-99 control modules implement the six-state opcode dispatcher, initializ
 
 The pipeline stages have no executed test. `//replacement/develop:model` builds all 61 Haskell scenario modules under `develop/model/`, one or more per pipeline stage, and `:develop-qualification` links it, but the qualifier runs only the transaction, dispatcher, permit, save, entry, publication and source-admission scenarios; no stage scenario has been executed against stock or owned code. The image-geometry border and radial scenarios disagree with the Rust `xm1_pipeline_image_configure_borders`, and which side matches stock is not settled. The low-memory words some scenarios depend on come from one warm-attach observation (`checkpoint-low-prefix` over an SDK checkpoint), not from cold-boot state.
 
+## Power lifecycle
+
+[`power_lifecycle/`](power_lifecycle/) is two crates. `xm1_power_services` (root `src/services.rs`) is the services leaf: OSAL and delay primitives, the timer services, queue construction, resource routes, the serial driver, area 2, standby, the shutdown path with its task 6, 7 and 8 executors, the settings and storage shutdown actors, a typed callback registry and the dispatch of stock's installed-callback words through it. `:services-host-tests` runs its host tests and `:services-arm` builds the ARM rlib.
+
+The application crate (root `src/lib.rs`) holds the mode frontends, audio release, capture task 3 and the recording path (the task 43 machines, scan, profiles, statistics and completion callbacks) over a shared guest address space. `:host-tests` runs its host tests and `:arm-core` builds the ARM rlib. It cannot link: the ARM rlib leaves over a thousand `xm1_power_record_helper_*` symbols undefined that no unit provides, 34 sites call a guest word as a function pointer instead of resolving it through the leaf's registry, and the unit's review findings are open. Nothing links either crate into a firmware image, and the event-flag carriers the application needs from the RTOS platform are not in the platform images.
+
 ## Native rewrite qualification
 
 For an applicable native-only increment, run the native SDK and runner suites plus the affected caller's qualification command:

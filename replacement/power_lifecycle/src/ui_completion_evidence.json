@@ -1,0 +1,61 @@
+{
+  "pin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "range_source": "x70view:decomp/firmwares/xm1-150/function-ranges.json",
+  "instruction_sources": ["private-data/analysis/x-m1-1.50/lz/id5.dis", "private-data/analysis/x-m1-1.50/decode/img6.dis"],
+  "ranges": [
+    {"start":"0xd38d28","size":112,"sha256":"a8dd56e80457b5b1590314a4be2a3c7375f363f00268823b96a5c8cc74c0315e"},
+    {"start":"0xdb6464","size":128,"sha256":"165f05fe1a49ec762a677c17d0bbb61673acc5f6673e2f5f81340036ab0e2359"},
+    {"start":"0xdb6804","size":216,"sha256":"fe3e07112039fedaa299c286239c36c83c000f3c31d5a3fe86a178568ece131d"},
+    {"start":"0xdb68dc","size":7712,"sha256":"cf5610d1952ed2363650363a302ae75e17339c5a7e9e071a8929c316ded1adfb"},
+    {"start":"0xdb87c0","size":120,"sha256":"64c2746c04c0619c220692df105b63f165ff807fbbbd63279b9396714b9d9bc8"},
+    {"start":"0xdb8838","size":184,"sha256":"2a6fbae54e057e09896aa69ef49f2cf4df459b861b049d0c0d1d87d7ff2eed78"},
+    {"start":"0x1108350","size":744,"sha256":"0219a4535d6a5b2b5afe7fd50edeb6f866e3f41514432bbd8d67d6103ebbdd42"},
+    {"start":"0x1108674","size":128,"sha256":"b21da07bd1eac610995655ee8806b0ff7737ae89584a823913c9fe427a66c655"},
+    {"start":"0x1108a2c","size":412,"sha256":"c5e2aa158b9bc8aa9010b67d8f7f8cfd8196284c77755b2633ac021d1869194d"},
+    {"start":"0x1109018","size":140,"sha256":"abba2c3ab5ab8db0991d05c359841da2bf704db6f9fe7af940e342d33236e65c"},
+    {"start":"0x11090a4","size":140,"sha256":"b8093372fb1207727de1a4702377f956978ecbed3074b2cfb88622aecb478315"}
+  ],
+  "anchors": [
+    {"pc":"0xd38d90","word":"eb01f6d1","fact":"Calls db68dc after BE5C==0, FCF8!=1 and the BED4/lower-family guard."},
+    {"pc":"0xdb6904","word":"e353001d","fact":"Overflow when count exceeds 29 precedes adjacent-duplicate suppression; count 29 accepts the thirtieth entry."},
+    {"pc":"0xdb855c","word":"00db8590","fact":"Request a04 selects mov r0,#14; db85bc ORs 5000."},
+    {"pc":"0xdb8690","word":"e1c300b0","fact":"Writes last translated code at 14e32b6 before db6804."},
+    {"pc":"0xdb64ac","word":"ebe5bae2","fact":"Queue33 producer uses 72503c with operation3100, twelve-byte payload, actual current task sender."},
+    {"pc":"0xdb64b0","word":"e3700012","fact":"Only -18 and -62 cause delay100 and retry, ten attempts including a delay after the last failed attempt."},
+    {"pc":"0xdb6864","word":"e1510003","fact":"Same current code with advance mode is suppressed unless sequence14e32bc equals expected14e3338."},
+    {"pc":"0xdb8864","word":"ebffffd5","fact":"Clears suspended then initializes; busy initialization reasserts suspended. Drain reloads count and does not clear it."},
+    {"pc":"0xdb88c4","word":"ebfff7ce","fact":"After drain posts b000 then requests50b. Already-unsuspended entry posts only b000."},
+    {"pc":"0x11090bc","word":"ebd87095","fact":"Actual receive on queue33 waits forever and delivers only after success."},
+    {"pc":"0x11090e0","word":"15c23000","fact":"A nonzero received sequence updates14e3338 before stale-sequence classification. Family5000 is never discarded by that classifier."},
+    {"pc":"0x1108b58","word":"ebfffdfc","fact":"Initialized500e posts a2f before the blocked15c check."},
+    {"pc":"0x11086d0","word":"ebffff1e","fact":"If not blocked, invokes the500e callback and posts through1108350 again."},
+    {"pc":"0x11085e8","word":"03003a2f","fact":"Family5000 lowe selects application eventa2f."},
+    {"pc":"0x1108374","word":"e50b30ec","fact":"Application record word1 is110; bytes8..75 retain caller stack residue."}
+  ],
+  "callback": {
+    "table_address":"0x1110618",
+    "raw_source":"private-data/analysis/x-m1-1.50/lz/plain-01100000.bin",
+    "file_offset":67096,
+    "words":["0112710c","00000001"],
+    "target":"0x112710c",
+    "target_words":["e52db004","e28db000","e28bd000","e8bd0800","e12fff1e"],
+    "effect":"Empty callback body. This is software completion, not scanout acknowledgment.",
+    "range_map":"No exact-address entry for112710c was present in the pinned function-ranges query; raw instruction extent112710c..1127120 is used."
+  },
+  "integration": {
+    "queue":"Uses existing ShutdownRtos producer and shutdown_receive native CPU receive; queue RAM is not a device.",
+    "menu":"Concrete ui_completion::menu::NativeMenuResume<OwnedProperties> owns110495c dirty flags and db64e4 double-buffer snapshot. Neither helper is equivalent to the menu-engine frame snapshot.",
+    "application":"ApplicationEvents adapter owns72b680 fanout into existing modal runtime; no direct shutdown shortcut.",
+    "other_messages":"Delivery::Other carries non500e packet to the existing owned menu dispatcher.",
+    "native_receive_workspace":"15e46d0 is existing CPU queue33 payload workspace, not MMIO."
+  },
+  "menu_software": {
+    "selection_range":{"start":"0x110495c","size":3820,"sha256":"09d1cfcbc81b480e3f6be9078178f62cc6020cf4da51a6f6dfef7e22f5d3abee"},
+    "snapshot_range":{"start":"0xdb64e4","size":292,"sha256":"d95d38812a0ac4ff9748a96bb4fba51d4a1bc7a99b67916a77a4f77ab85ba494"},
+    "property_abi":"id4.dis61c93c→624620 preserves property/bank, sets defaultmode0, uses6439e0 result as selection. 6439e0 reads951480+e4: selection0 when word==3, else1. OwnedProperties reuses canonical xm1_public_get(property,0,0,selection), supplied by PropertyEntryOwnership.",
+    "selection_ram":"Thirty words at15e46c4+990..a04; untouched9e0 remains caller state. Native context reads93ade4 root +fc,+4c,+c8,+0,+4 and940de4 root +bf88.",
+    "snapshot_ram":"When940de4 root+bb6c==3, chooses active15da918 XOR1 unless candidate firstword is occupied; writes snapshot metadata and ten records to15e5174 + selected*336, publishes selected only when candidate unoccupied.",
+    "reuse":"No owned_menu frame API represents these dirty-flag or display-record effects; existing menu controllers remain unchanged."
+  },
+  "checks":"Source-only. No builds, tests, lint, formatter, commits, or camera access."
+}

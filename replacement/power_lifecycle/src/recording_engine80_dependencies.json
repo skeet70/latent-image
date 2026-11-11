@@ -1,0 +1,35 @@
+{
+  "schema": "xm1-recording-engine80-source-v1",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "image5_sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+  "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00decd8c.c;tu_00df7460.c;tu_00dfc0a0.c;tu_00e36c8c.c",
+  "confirmation": "Source-inspected pinned C plus A32 inspection for NONMATCHING controller dff76c, dispatcher df74ec and callbacks e36d04 through e36d5c. Local image5 SHA256 equals pinned stock section. Function extent hashes match committed ranges for ded710, df74ec, dff76c, dee00c, dee024, de8e64, de8e80, e36d34, e36d48, e36d5c.",
+  "memory": {
+    "recording": "0x01526a78",
+    "request": "recording+0xc248, eight bytes",
+    "output": "recording+0xc250, one byte copied when requested",
+    "selection": "0x01545790+0xa0, u16",
+    "state": "0x01545850+0xa0, u16, valid states 0..3"
+  },
+  "tables": {
+    "callbacks": "0x00e3ad6c: indices 2=e36d04 complete,3=e36d1c pending,4=e36d34 resume,5=e36d48 defer,6=e36d5c suspend",
+    "matrix": "0x00e3ec90, six rows, four states, two-byte cells",
+    "stride": "u16 at 0x00e3b000 = 4",
+    "actions": "0x00e3f4d0, indices 0..3 null",
+    "transition_rule": "Callback executes before signed action byte. Action <=0 publishes negated action as state. Positive action1 has null action callback and preserves state."
+  },
+  "native_exports": [
+    "xm1_power_recording_step_request(*const u32,*mut u8)->i32",
+    "xm1_power_recording_engine_resumed()->void",
+    "xm1_power_recording_engine_suspended()->void"
+  ],
+  "owned_dependencies": [
+    "PowerRecordingContinuation xm1_power_recording_defer_current()->i32",
+    "PowerRecordingContinuation xm1_power_recording_send_task_message(u32,u32,*const u8)->i32",
+    "PowerRecordingContinuation xm1_power_recording_report_missing_state()->void for null input, then return1 and optional output copy",
+    "PowerRecordingContinuation xm1_power_recording_halt_error(i32)->! with status-255 for invalid published state outside0..3",
+    "NativeShutdownRtos current_task and post: queue99 operations7308/7309, payload24 firstword owned native callback"
+  ],
+  "service_completion_contract": "Task99 must parse the native callback boundary into its owned CallbackToken registry, preserve callback lifetime through ModeComplete, and invoke the corresponding owned engine notification only after actual mode completion. No synthetic completion is produced by this module. Task99 concrete actor publication is the provider composition owner's responsibility.",
+  "verification": "Host source and instruction inspection only. No builds, tests, formatting, SDK, guest execution or camera operations performed."
+}

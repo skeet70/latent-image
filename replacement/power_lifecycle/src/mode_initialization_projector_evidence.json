@@ -1,0 +1,119 @@
+{
+  "pin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "extent_source": "git show PIN:decomp/firmwares/xm1-150/function-ranges.json",
+  "actual_bytes": "private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin",
+  "raw_disassembly": "private-data/analysis/x-m1-1.50/lz/id4.dis",
+  "functions": [
+    {
+      "entry": "0x0061c93c",
+      "end_exclusive": "0x0061c94c",
+      "bytes": 16,
+      "pinned_name": "ui_setting_get_current_profile_value_forward",
+      "pinned_sha256": "f77a4993471b01392d723707f73d01f0159db726e933592ed0ed5ffe5a53fef7",
+      "actual_bytes_sha256": "f77a4993471b01392d723707f73d01f0159db726e933592ed0ed5ffe5a53fef7"
+    },
+    {
+      "entry": "0x00624620",
+      "end_exclusive": "0x0062464c",
+      "bytes": 44,
+      "pinned_name": "ui_setting_get_current_profile_value",
+      "pinned_sha256": "6dbee04f29f3aefe35673c6e5f14251e01ab7d9115738bcf0fdaf89891bf8dc2",
+      "actual_bytes_sha256": "6dbee04f29f3aefe35673c6e5f14251e01ab7d9115738bcf0fdaf89891bf8dc2"
+    },
+    {
+      "entry": "0x0069f8e4",
+      "end_exclusive": "0x0069f8fc",
+      "bytes": 24,
+      "pinned_name": "configuration_success",
+      "pinned_sha256": "aab533f64e7d3f50628f3b74c122bcfaae90f7a06e1282e0e04e4d03d9706543",
+      "actual_bytes_sha256": "aab533f64e7d3f50628f3b74c122bcfaae90f7a06e1282e0e04e4d03d9706543"
+    },
+    {
+      "entry": "0x0069f8fc",
+      "end_exclusive": "0x0069f920",
+      "bytes": 36,
+      "pinned_name": "read_cfgdata_byte",
+      "pinned_sha256": "0491e27ccb707594c468745512f2212604611381f49a88242f83241025c74966",
+      "actual_bytes_sha256": "0491e27ccb707594c468745512f2212604611381f49a88242f83241025c74966"
+    },
+    {
+      "entry": "0x0073acfc",
+      "end_exclusive": "0x0073ad10",
+      "bytes": 20,
+      "pinned_name": "initialization_reset_configuration",
+      "pinned_sha256": "de797491b7fe78a19b21a33629b94fbf69258ee299986dd74098468ef5bb2ba5",
+      "actual_bytes_sha256": "de797491b7fe78a19b21a33629b94fbf69258ee299986dd74098468ef5bb2ba5"
+    },
+    {
+      "entry": "0x0069f4e0",
+      "end_exclusive": "0x0069f520",
+      "bytes": 64,
+      "pinned_name": "FUN_0069f4e0",
+      "pinned_sha256": "ff4e35089505e9f56fd7fcca2ac44be21bcfefaa35fea7633b464b252f75a4d8",
+      "actual_bytes_sha256": "ff4e35089505e9f56fd7fcca2ac44be21bcfefaa35fea7633b464b252f75a4d8"
+    },
+    {
+      "entry": "0x0069f600",
+      "end_exclusive": "0x0069f8b8",
+      "bytes": 696,
+      "pinned_name": "FUN_0069f600",
+      "pinned_sha256": "4dbf49c66086a006600d3662c58546314dc661a6fd6dfe71e6280a318b550752",
+      "actual_bytes_sha256": "4dbf49c66086a006600d3662c58546314dc661a6fd6dfe71e6280a318b550752"
+    },
+    {
+      "entry": "0x0069f8b8",
+      "end_exclusive": "0x0069f8e4",
+      "bytes": 44,
+      "pinned_name": "FUN_0069f8b8",
+      "pinned_sha256": "2e373ab3b889e8b0670cecdd0bacfb4fe8e3f980aee699a01b89f86baf5405b4",
+      "actual_bytes_sha256": "2e373ab3b889e8b0670cecdd0bacfb4fe8e3f980aee699a01b89f86baf5405b4"
+    },
+    {
+      "entry": "0x0072b8c4",
+      "end_exclusive": "0x0072c6fc",
+      "bytes": 3640,
+      "pinned_name": "FUN_0072b8c4",
+      "pinned_sha256": "58caf22c6ea15ea255a18a23d0e2f9bcbede23aa2a2b2731331495f89c70cfc1",
+      "actual_bytes_sha256": "58caf22c6ea15ea255a18a23d0e2f9bcbede23aa2a2b2731331495f89c70cfc1"
+    }
+  ],
+  "runtime_output": {
+    "address": "0x0096b400",
+    "minimum_bytes": 363,
+    "preserves_unwritten_bytes": true
+  },
+  "configuration": {
+    "pointer_cell": "0x0096ca50",
+    "largest_read_offset": "0x1641d",
+    "minimum_backing_bytes": 91166,
+    "byte_helper_has_bounds_check": false
+  },
+  "direct_projector_callees": [
+    "0x0069f4e0",
+    "0x0069f600",
+    "0x0069f8b8",
+    "0x0069f8e4",
+    "0x0069f8fc"
+  ],
+  "software_composition": {
+    "0x0069f4e0": "Copy configuration bytes 0x204/0x205; local terminator is not copied to runtime output.",
+    "0x0069f600": "Packed decimal conversion, partial invalid-pair zeroing, ASCII-digit prefix scan, right padding and nibble expansion. Its 0x7221c8 fill becomes a local eight-byte array initialization.",
+    "0x0069f8b8": "Read configuration 0x103 first, then 0x102 and combine little endian.",
+    "0x0069f8e4": "Actual software body returns zero.",
+    "0x0069f8fc": "Read byte from configuration pointer plus requested offset.",
+    "0x0073acfc": "Invoke full projector on caller output and return zero. Public native adapter supplies initializer output 0x96b400."
+  },
+  "property_query_boundary": {
+    "used_by_projector": false,
+    "0x0061c93c": "Forwards to 0x624620 with id and bank, not default mode.",
+    "0x00624620": "Preserves id/bank, calls 0x6439e0 for profile selection, invokes owned getter 0x61e110 with live mode zero. No property interpreter is duplicated."
+  },
+  "observable_details": [
+    "Offset 0x33 retains values <=50, otherwise receives 10.",
+    "Repeated halfword stores at 0x9c and 0xa6 are retained; no writes are invented at adjacent holes.",
+    "Repeated configuration queries and staged high-byte halfword writes are retained.",
+    "Offsets 0xf2 and 0xf4 contain configuration byte times 56 divided by 10.",
+    "Output is not cleared before projection."
+  ],
+  "verification": "Source-only implementation and behavioral test source; no builds, tests, formatters, lint, commits, or camera actions."
+}

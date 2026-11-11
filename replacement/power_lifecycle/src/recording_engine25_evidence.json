@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "status": "source-inspected",
+  "firmware": "X-M1 1.50",
+  "x70view_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "scope": "Controller25 output and controller42 finalization, including CPU action effects, message callback producers, task43 packet publication, output buffer acquisition, capture handle release and recording software timer reset.",
+  "source_units": ["app/capture/reccont/tu_00defaf4.c", "app/capture/reccont/tu_00df7460.c", "app/capture/reccont/tu_00dfc0a0.c", "app/capture/reccont/tu_00e22f58.c", "app/capture/reccont/tu_00e25d5c.c", "app/capture/reccont/tu_00dcb6c0.c", "app/capture/reccont/tu_00dcba28.c", "app/capture/reccont/reccont_processing_steps.c", "app/capture/record/record_packet_dispatch.c", "app/capture/record/record_command_words.c", "app/capture/record/tu_00eb2eb8.c", "app/capture/record/tu_00eaa494.c"],
+  "byte_inspection": "NONMATCHING controller selectors and transitive helpers were inspected as ARM instructions from pinned image5 at base0xbf1a00 and image4 at base0x61c400. Constant-return action veneers have no function-range rows and were inspected directly at e22f28/e22f40/e267f8/e26810. No sibling-camera source establishes these effects.",
+  "entry_extents": [
+    {"address":"0xdf1798","size":40,"sha256":"7c64834bc77db5c79295e56ff48ce5b2f89fb320afa955c4364635d4926acad1"},
+    {"address":"0xdefff0","size":32,"sha256":"49a4ebb03ba582a7be23df4c4f86ce4439647a20c9dd95c1f0803fa4e5527357"},
+    {"address":"0xdfb0b4","size":380,"sha256":"96a3d1cd9032bcc28818ee4047783e32b6ee5e58466820dfab3e022da6fd2db5"},
+    {"address":"0xdfc314","size":184,"sha256":"9352e1596e8ab3a62f262b736c88636ed3181be1ace12884bdb0b267c635f0c8"}
+  ],
+  "dispatch_tables": [
+    {"address":"0xe3c51c","bytes":80,"sha256":"d6ca29ea60a3aff3056b9f97c519ba24bdd898e4ed8df2a93181d835a1d7df75","rows":10,"columns":4},
+    {"address":"0xe3e720","bytes":20,"sha256":"73aacaa4b13d4c300acd158d87080adad1cfaded43962dfea2137df96ae7304c","rows":5,"columns":2},
+    {"address":"0xe3ec14","bytes":40,"sha256":"95413d970b88b8453d4dcf07f43bd942f53817ef010c65aeebeb84c2c74b4227"},
+    {"address":"0xe3ad48","bytes":28,"sha256":"a21a97e5a16990822cb440dc65a207707ac4549498e647c58a4e930db106490b"}
+  ],
+  "state": {"recording":"0x01526a78","rows":"0x01545790","states":"0x01545850","output_index":25,"finalize_index":42,"output_request_offsets":["0x9604","0x9608"],"finalize_request_offset":"0x93c8"},
+  "dispatch_semantics": "Every selector branch returns df74ec's actual action result. NONMATCHING C drops most branch results; ARM pop returns retain them. Signed next-state bytes <=0 publish the negated state after action execution; positive next-state byte1 selects a null effect for both controllers.",
+  "output_actions": {"e22f28":"returns1","e22f40":"returns0","e22f58":"clear9614, apply flags13, start command4","e22f90":"defer current message","e22fa4":"post command5","e22fc8":"acquire buffers once, publish settings","e23014":"acquire buffers once, finish output and notifications907/908/930, return1","e23060":"set960c=1, publish settings, return1"},
+  "finalize_actions": {"e267f8":"returns1","e26810":"returns0","e26828":"release current capture handles, reset recording timer, publish command1","e2683c":"defer current message","e26850":"clear81d8, return1"},
+  "corrected_draft_facts": ["df186c calls737cb4 with settings bytee8; that helper preserves its input, including80.", "ef8f88 calls76f420, which returns0 at this pin.", "dcc4e4 receives both flags and settings address; r1 is live across the caller's pointer checks.", "dcd010 is a returning missing-state reporter, not a fatal error.", "75e6f0 returns without effects and75e6d8 returns1; buffer acquisition uses these exact native leaf semantics.", "The command1 request fromdf0010 is task43 operation3b01, not task99 operation7301."],
+  "composition": {
+    "recording_continuation": ["xm1_power_recording_defer_current", "xm1_power_recording_post_notification", "xm1_power_recording_send_task_message", "xm1_power_recording_report_missing_state", "xm1_power_recording_halt_error"],
+    "develop_transport": ["xm1_pipeline_image_current_task", "xm1_pipeline_image_send_message"],
+    "power_services": ["xm1_power_interrupt_lock", "xm1_power_interrupt_unlock", "xm1_power_task_delay", "xm1_power_software_timer_cancel", "xm1_power_configuration_byte", "xm1_power_append_stream_text", "xm1_power_application_post", "xm1_power_dcache_clean_invalidate_all"],
+    "task43_consumer": "Separate recording task43 owner consumes real copied native callback pointers for commands1/4/5. These modules publish real packets and do not synthesize completions."
+  },
+  "verification": "Source inspection only. No build, test, lint, formatter, SDK, guest or camera execution."
+}

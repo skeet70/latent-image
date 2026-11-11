@@ -1,0 +1,1389 @@
+{
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "image_base": "0x00bf1a00",
+  "provider_abi": "xm1_power_record_task43_machineN(handler_index:u32,event:u32,request:u32)->i32",
+  "state_base": "0x0169d4b4",
+  "state_stride": 2,
+  "selected_row_base": "0x0169d468",
+  "null_slots": [
+    0,
+    1
+  ],
+  "execution": "Source translation only. No builds, tests, emulator, SDK or camera operations run.",
+  "machines": [
+    {
+      "machine": 18,
+      "source_interval": [
+        "0x00f0ba44",
+        "0x00f0bd4c"
+      ],
+      "stock_sha256": "4f8118ad62221e221d4881a3d28caff8b9e33887c9e4113f26cce898ede6c83c",
+      "handler_table": "0x00f10808",
+      "handler_slots": [
+        "0x00000000",
+        "0x00000000",
+        "0x00f0ba44",
+        "0x00f0ba70",
+        "0x00f0ba84",
+        "0x00f0ba98",
+        "0x00f0bab4",
+        "0x00f0bae8",
+        "0x00f0bafc",
+        "0x00f0bbb0",
+        "0x00f0bbc0",
+        "0x00f0bbe0",
+        "0x00f0bbf4",
+        "0x00f0bc04",
+        "0x00f0bc90",
+        "0x00f0bcd8",
+        "0x00f0bd34"
+      ],
+      "dependencies": [
+        {
+          "symbol": "xm1_power_record_task43_event",
+          "arguments": "machine: u32, event: u32, request: u32",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f46c20",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f290a4",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f290b8",
+          "arguments": "request: u32",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f29120",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f29160",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f29194",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f29260",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f292a4",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f292c4",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f292f0",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f29304",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f29318",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2a11c",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2a12c",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2a1cc",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2a240",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2a468",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2ab5c",
+          "arguments": "event: u32",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_task43_machine18",
+          "arguments": "handler_index: u32, event: u32, request: u32",
+          "return": "-> i32 {\n    unsafe {\n        match handler_index {\n            2 => { xm1_power_record_helper_f290b8(request)"
+        }
+      ]
+    },
+    {
+      "machine": 19,
+      "source_interval": [
+        "0x00f0bd4c",
+        "0x00f0bf38"
+      ],
+      "stock_sha256": "504b72cc5f2d0641488628cb765a41d90f5f81cdcd322aaa7b80abda50e24573",
+      "handler_table": "0x00f13d6c",
+      "handler_slots": [
+        "0x00000000",
+        "0x00000000",
+        "0x00f0bd4c",
+        "0x00f0bd70",
+        "0x00f0bd84",
+        "0x00f0be08",
+        "0x00f0be20",
+        "0x00f0be3c",
+        "0x00f0be8c",
+        "0x00f0bea0",
+        "0x00f0bef4",
+        "0x00f0bf08",
+        "0x00f0bf20"
+      ],
+      "dependencies": [
+        {
+          "symbol": "xm1_power_record_helper_f46c20",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2afc8",
+          "arguments": "request: u32",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2afe8",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2b014",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2be34",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2be60",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2becc",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2beec",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2c05c",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2c128",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2c188",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2c36c",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2c3f8",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2c434",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2c4bc",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2c898",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2c8ac",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2c8d4",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2c908",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_task43_machine19",
+          "arguments": "handler_index: u32, _event: u32, request: u32",
+          "return": "-> i32 {\n    unsafe {\n        match handler_index {\n            2 => {\n                xm1_power_record_helper_f2afc8(request)"
+        }
+      ]
+    },
+    {
+      "machine": 20,
+      "source_interval": [
+        "0x00f0bf38",
+        "0x00f0c06c"
+      ],
+      "stock_sha256": "6bb87a6c07b12871a8c8c638c3603d7397562de07f6e7ef9bc19267896113591",
+      "handler_table": "0x00f133cc",
+      "handler_slots": [
+        "0x00000000",
+        "0x00000000",
+        "0x00f0bf38",
+        "0x00f0bfa8",
+        "0x00f0bfbc",
+        "0x00f0bfcc",
+        "0x00f0bfe4",
+        "0x00f0c048"
+      ],
+      "dependencies": [
+        {
+          "symbol": "xm1_power_record_task43_event",
+          "arguments": "machine: u32, event: u32, request: u32",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f46c20",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f201dc",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f201f8",
+          "arguments": "request: u32",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f20300",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2032c",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_task43_machine20",
+          "arguments": "handler_index: u32, event: u32, request: u32",
+          "return": "-> i32 {\n    unsafe {\n        match handler_index {\n            2 => {\n                xm1_power_record_helper_f201dc()"
+        }
+      ]
+    },
+    {
+      "machine": 21,
+      "source_interval": [
+        "0x00f0c06c",
+        "0x00f0c0dc"
+      ],
+      "stock_sha256": "988244fd4388a1c84d1f774c74a40a15cd2680e3f4c6776ab201933059d4c842",
+      "handler_table": "0x00f12058",
+      "handler_slots": [
+        "0x00000000",
+        "0x00000000",
+        "0x00f0c06c",
+        "0x00f0c084",
+        "0x00f0c098",
+        "0x00f0c0b0",
+        "0x00f0c0c4"
+      ],
+      "dependencies": [
+        {
+          "symbol": "xm1_power_record_helper_f46c20",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f1d1c0",
+          "arguments": "request: u32",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f1a190",
+          "arguments": "request: u32",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f1e468",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_task43_machine21",
+          "arguments": "handler_index: u32, _event: u32, request: u32",
+          "return": "-> i32 {\n    unsafe {\n        match handler_index {\n            2 => { xm1_power_record_helper_f1d1c0(request)"
+        }
+      ]
+    },
+    {
+      "machine": 22,
+      "source_interval": [
+        "0x00f0c0dc",
+        "0x00f0c99c"
+      ],
+      "stock_sha256": "70044386133dc375792a12d405db07a14289db432c461c6d8b61563b5daec940",
+      "handler_table": "0x00f11960",
+      "handler_slots": [
+        "0x00000000",
+        "0x00000000",
+        "0x00f0c0dc",
+        "0x00f0c1d4",
+        "0x00f0c1e8",
+        "0x00f0c1fc",
+        "0x00f0c210",
+        "0x00f0c228",
+        "0x00f0c23c",
+        "0x00f0c250",
+        "0x00f0c270",
+        "0x00f0c2d0",
+        "0x00f0c2e8",
+        "0x00f0c34c",
+        "0x00f0c360",
+        "0x00f0c37c",
+        "0x00f0c398",
+        "0x00f0c3ac",
+        "0x00f0c3c4",
+        "0x00f0c414",
+        "0x00f0c454",
+        "0x00f0c4dc",
+        "0x00f0c600",
+        "0x00f0c6c0",
+        "0x00f0c6f4",
+        "0x00f0c7cc",
+        "0x00f0c7e8",
+        "0x00f0c808",
+        "0x00f0c830",
+        "0x00f0c848",
+        "0x00f0c87c",
+        "0x00f0c88c",
+        "0x00f0c8c4"
+      ],
+      "dependencies": [
+        {
+          "symbol": "xm1_power_record_task43_event",
+          "arguments": "machine: u32, event: u32, request: u32",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f46c20",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2cb3c",
+          "arguments": "request: u32",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2cb5c",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2cb90",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2cbb4",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2cc00",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2d000",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2d094",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2d0b8",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2d0e4",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2d108",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2d130",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2d154",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2d180",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2d1a4",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2d1bc",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2d338",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2d358",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2d440",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2d480",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2d4d0",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2d4e0",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2d5d0",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2d624",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2d67c",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2d68c",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2d6fc",
+          "arguments": "value: u32",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2d71c",
+          "arguments": "value: u32",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2d73c",
+          "arguments": "value: u32",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2d75c",
+          "arguments": "value: u32",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2d77c",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2d79c",
+          "arguments": "",
+          "return": "-> u32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2d7b4",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2d8b0",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2dcf4",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2dd20",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2ddd4",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2e30c",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2e360",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2e5b8",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2e5d4",
+          "arguments": "mode: u32",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f2e65c",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_task43_machine22",
+          "arguments": "handler_index: u32, event: u32, request: u32",
+          "return": "-> i32 {\n    unsafe {\n        match handler_index {\n            2 => {\n                xm1_power_record_helper_f2cb3c(request)"
+        }
+      ]
+    },
+    {
+      "machine": 23,
+      "source_interval": [
+        "0x00f0c99c",
+        "0x00f0dd24"
+      ],
+      "stock_sha256": "9050b0cdf2e49ae7983c704723dd94c6b6fda4ab73508fbb44748c25065584e9",
+      "handler_table": "0x00f1296c",
+      "handler_slots": [
+        "0x00000000",
+        "0x00000000",
+        "0x00f0c99c",
+        "0x00f0c9b0",
+        "0x00f0c9c4",
+        "0x00f0c9f4",
+        "0x00f0ca0c",
+        "0x00f0ca70",
+        "0x00f0cae8",
+        "0x00f0cb78",
+        "0x00f0cbe4",
+        "0x00f0cbfc",
+        "0x00f0cc60",
+        "0x00f0cce0",
+        "0x00f0cdc8",
+        "0x00f0cde0",
+        "0x00f0ce14",
+        "0x00f0ce40",
+        "0x00f0ce6c",
+        "0x00f0ced8",
+        "0x00f0cfc4",
+        "0x00f0d0f0",
+        "0x00f0d214",
+        "0x00f0d328",
+        "0x00f0d414",
+        "0x00f0d508",
+        "0x00f0d5f4",
+        "0x00f0d6c0",
+        "0x00f0d788",
+        "0x00f0d7d0",
+        "0x00f0d880",
+        "0x00f0d8c8",
+        "0x00f0d99c",
+        "0x00f0da40",
+        "0x00f0da60",
+        "0x00f0daa4",
+        "0x00f0db1c",
+        "0x00f0db6c",
+        "0x00f0dbbc",
+        "0x00f0dc50",
+        "0x00f0dc6c",
+        "0x00f0dcb4",
+        "0x00f0dd0c"
+      ],
+      "dependencies": [
+        {
+          "symbol": "xm1_power_record_task43_event",
+          "arguments": "machine: u32, event: u32, request: u32",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f46c20",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3c17c",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3c428",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3d3e0",
+          "arguments": "value: u32",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3d400",
+          "arguments": "value: u32",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3d420",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3d45c",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3d490",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3d500",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3d544",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3d904",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3da6c",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3e280",
+          "arguments": "item: u32",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3e2f8",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3e32c",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3e380",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3e3c8",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3e6f0",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3e9cc",
+          "arguments": "value: u32",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3eaf0",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3eb3c",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3ebd4",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3ec34",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f400fc",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f40300",
+          "arguments": "mode: i32, profile: i32",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f40944",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f429d0",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f438c4",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f43d94",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f44fec",
+          "arguments": "",
+          "return": "-> u32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f46074",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f46754",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f467cc",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_task43_machine23",
+          "arguments": "handler_index: u32, _event: u32, request: u32",
+          "return": "-> i32 {\n    unsafe {\n        match handler_index {\n            2 => { xm1_power_record_helper_f3c17c()"
+        }
+      ]
+    },
+    {
+      "machine": 24,
+      "source_interval": [
+        "0x00f0dd24",
+        "0x00f0def0"
+      ],
+      "stock_sha256": "0af9fc8971b3bbdf05bbe44593eeaa1e2594c5e9e1f33f38e5103b1fefb6d862",
+      "handler_table": "0x00f12d44",
+      "handler_slots": [
+        "0x00000000",
+        "0x00000000",
+        "0x00f0dd24",
+        "0x00f0dd64",
+        "0x00f0dd78",
+        "0x00f0ddd4",
+        "0x00f0ddec",
+        "0x00f0de00",
+        "0x00f0de18",
+        "0x00f0de30",
+        "0x00f0de44",
+        "0x00f0de58",
+        "0x00f0de6c",
+        "0x00f0de84",
+        "0x00f0deb8",
+        "0x00f0ded8"
+      ],
+      "dependencies": [
+        {
+          "symbol": "xm1_power_record_helper_f46c20",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f339f8",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f33a18",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f33ef4",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f34710",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f34c70",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f34c98",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3515c",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3557c",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3579c",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f35d14",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f363b8",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f363d8",
+          "arguments": "request: u32",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f36658",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f36eac",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_task43_prepare24",
+          "arguments": "_event: u32, request: u32",
+          "return": "{\n    unsafe { xm1_power_record_helper_f363d8(request) }"
+        },
+        {
+          "symbol": "xm1_power_record_task43_machine24",
+          "arguments": "handler_index: u32, _event: u32, _request: u32",
+          "return": "-> i32 {\n    unsafe {\n        match handler_index {\n            2 => { xm1_power_record_helper_f339f8()"
+        }
+      ]
+    },
+    {
+      "machine": 25,
+      "source_interval": [
+        "0x00f0def0",
+        "0x00f0e0f4"
+      ],
+      "stock_sha256": "b31d36ed671d868c12f22a5f6f8740b5873b5736efd647b88e7381e999663043",
+      "handler_table": "0x00f13680",
+      "handler_slots": [
+        "0x00000000",
+        "0x00000000",
+        "0x00f0def0",
+        "0x00f0dfac",
+        "0x00f0dfc0",
+        "0x00f0dfd8",
+        "0x00f0e060",
+        "0x00f0e0c0"
+      ],
+      "dependencies": [
+        {
+          "symbol": "xm1_power_record_task43_event",
+          "arguments": "machine: u32, event: u32, request: u32",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f46c20",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f156e8",
+          "arguments": "request: u32",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f16ffc",
+          "arguments": "enabled: u32",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3c0bc",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3c0d0",
+          "arguments": "request: u32",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3c0f0",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_task43_prepare25",
+          "arguments": "_event: u32, request: u32",
+          "return": "{\n    unsafe { xm1_power_record_helper_f3c0d0(request) }"
+        },
+        {
+          "symbol": "xm1_power_record_task43_machine25",
+          "arguments": "handler_index: u32, event: u32, request: u32",
+          "return": "-> i32 {\n    unsafe {\n        match handler_index {\n            2 => {\n                xm1_power_record_helper_f3c0bc()"
+        }
+      ]
+    },
+    {
+      "machine": 26,
+      "source_interval": [
+        "0x00f0e0f4",
+        "0x00f0eb20"
+      ],
+      "stock_sha256": "67ab0bf16db49a03f8850a20d7cd2aac706af95bc77b1bcf61e37293a2e40c69",
+      "handler_table": "0x00f12aac",
+      "handler_slots": [
+        "0x00000000",
+        "0x00000000",
+        "0x00f0e0f4",
+        "0x00f0e164",
+        "0x00f0e178",
+        "0x00f0e1d0",
+        "0x00f0e1e8",
+        "0x00f0e200",
+        "0x00f0e218",
+        "0x00f0e234",
+        "0x00f0e250",
+        "0x00f0e264",
+        "0x00f0e28c",
+        "0x00f0e2a0",
+        "0x00f0e2b8",
+        "0x00f0e2cc",
+        "0x00f0e2e0",
+        "0x00f0e2f8",
+        "0x00f0e314",
+        "0x00f0e33c",
+        "0x00f0e358",
+        "0x00f0e370",
+        "0x00f0e390",
+        "0x00f0e3b0",
+        "0x00f0e3c8",
+        "0x00f0e3e0",
+        "0x00f0e3f4",
+        "0x00f0e40c",
+        "0x00f0e44c",
+        "0x00f0e464",
+        "0x00f0e47c",
+        "0x00f0e4e8",
+        "0x00f0e530",
+        "0x00f0e578",
+        "0x00f0e608",
+        "0x00f0e620",
+        "0x00f0e638",
+        "0x00f0e670",
+        "0x00f0e684",
+        "0x00f0e748",
+        "0x00f0e80c",
+        "0x00f0e8d0",
+        "0x00f0e994",
+        "0x00f0e9ac",
+        "0x00f0e9c0",
+        "0x00f0e9d4",
+        "0x00f0e9e8",
+        "0x00f0ea48",
+        "0x00f0ea5c",
+        "0x00f0ea74",
+        "0x00f0ea8c",
+        "0x00f0eaa4",
+        "0x00f0eab8",
+        "0x00f0ead0",
+        "0x00f0eb08"
+      ],
+      "dependencies": [
+        {
+          "symbol": "xm1_power_record_helper_f46c20",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3aa94",
+          "arguments": "event: u32",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3aab4",
+          "arguments": "value: u32",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3adbc",
+          "arguments": "query: u32",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3ae2c",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3ae54",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3aec0",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3aedc",
+          "arguments": "",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3af14",
+          "arguments": "value: u32",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3af90",
+          "arguments": "value: u32",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3b058",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3b0fc",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3b110",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3b150",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3b168",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3b178",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3b190",
+          "arguments": "value: u32",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3b318",
+          "arguments": "event: u32",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3b370",
+          "arguments": "event: u32",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3b3c8",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3b3f4",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3b420",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3b448",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3b460",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3b5b0",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3b69c",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3b700",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3b774",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3b930",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3b95c",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3bb10",
+          "arguments": "enabled: u32",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3bb44",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3bbac",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3bccc",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3bd8c",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3bed8",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3bf04",
+          "arguments": "request: u32",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3bf44",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3bfa4",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3bfe0",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3c030",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f3c08c",
+          "arguments": "status: u32",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_task43_prepare26",
+          "arguments": "_event: u32, request: u32",
+          "return": "{\n    unsafe { xm1_power_record_helper_f3bf04(request) }"
+        },
+        {
+          "symbol": "xm1_power_record_task43_machine26",
+          "arguments": "handler_index: u32, event: u32, _request: u32",
+          "return": "-> i32 {\n    unsafe {\n        match handler_index {\n            2 | 4 => {\n                xm1_power_record_helper_f3aa94(event)"
+        }
+      ]
+    },
+    {
+      "machine": 27,
+      "source_interval": [
+        "0x00f0eb20",
+        "0x00f0edb8"
+      ],
+      "stock_sha256": "da7d892665ccf4051ac6224c613a6efb7d3fcf99eb48fd312499a2a3dfc2dbbe",
+      "handler_table": "0x00f13610",
+      "handler_slots": [
+        "0x00000000",
+        "0x00000000",
+        "0x00f0eb20",
+        "0x00f0eb48",
+        "0x00f0eb5c",
+        "0x00f0eb70",
+        "0x00f0eb88",
+        "0x00f0ebb0",
+        "0x00f0ebd8",
+        "0x00f0ebf0",
+        "0x00f0ec08",
+        "0x00f0ec20",
+        "0x00f0ec48",
+        "0x00f0ec70",
+        "0x00f0ec98",
+        "0x00f0ecbc",
+        "0x00f0ece4",
+        "0x00f0ecfc",
+        "0x00f0ed10",
+        "0x00f0ed28",
+        "0x00f0ed40",
+        "0x00f0ed58",
+        "0x00f0ed7c",
+        "0x00f0ed90"
+      ],
+      "dependencies": [
+        {
+          "symbol": "xm1_power_record_task43_event",
+          "arguments": "machine: u32, event: u32, request: u32",
+          "return": "-> i32"
+        },
+        {
+          "symbol": "xm1_power_record_helper_f46c20",
+          "arguments": "",
+          "return": "()"
+        },
+        {
+          "symbol": "xm1_power_record_task43_machine27",
+          "arguments": "handler_index: u32, event: u32, request: u32",
+          "return": "-> i32 {\n    unsafe {\n        match handler_index {\n            2 => { state(1)"
+        }
+      ]
+    }
+  ]
+}

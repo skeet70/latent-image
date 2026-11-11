@@ -1,0 +1,45 @@
+{
+  "target": "Fujifilm X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_unit": "decomp/firmwares/xm1-150/app/settings/tu_00748398.c",
+  "source_status": "NONMATCHING C used as a reading aid; control flow and arithmetic confirmed from installed image bytes",
+  "image": {
+    "path": "private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin",
+    "base": "0x0061c400",
+    "sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"
+  },
+  "instruction_extents": [
+    ["0x00741fa0", "0x00741fec", "signed nearest-tenths rounding"],
+    ["0x0074657c", "0x0074661c", "signed selected distance offset, scale clamped to 240"],
+    ["0x007468b8", "0x0074690c", "logarithmic mapped conversion"],
+    ["0x0074695c", "0x007469a0", "exponential mapped conversion"],
+    ["0x00747408", "0x00747604", "biased key selection and nullable limit pair outputs"],
+    ["0x0074782c", "0x007479c8", "eleven-point signed-coordinate interpolation"],
+    ["0x00747a88", "0x00747aac", "interpolation at the biased primary coordinate"],
+    ["0x00747af8", "0x00747b50", "register-shifted primary limits"],
+    ["0x00748018", "0x00748270", "mode classification and optional packed limits"],
+    ["0x007482d0", "0x00748398", "position validity, signed-byte clamp and distance decomposition"],
+    ["0x00748398", "0x00748730", "three-segment selected-position correction"],
+    ["0x00748818", "0x00748928", "scaled curve and mapped value bounds"],
+    ["0x00748928", "0x00749254", "complete 527-instruction diagnostic export"]
+  ],
+  "effects": [
+    "Null destination returns before reading configuration or changing memory.",
+    "Destination markers are written at offsets 0xb174c and 0xb19f0 before array export.",
+    "All five arrays preserve per-element provider ordering and receive a 0xfdfd terminator.",
+    "The two signed curve reads at destination offsets 0xb17d0 and 0xb17d4 remain separate configuration reads.",
+    "All fifty mode-limit calls preserve the five groups and ten-argument ordering from bytes.",
+    "The lens-position accessor is called once after the mode-limit exports.",
+    "Banks below signed ten receive three additional selected-position corrections; other banks receive zeroes at those three output offsets.",
+    "No diagnostic logging call exists in the 0x748928 byte extent; numerical logarithms use the shared libm implementation."
+  ],
+  "canonical_dependencies": [
+    {"provider": "PowerApplicationJoin.ProfileMappingCpu", "exports": ["74677c", "746834", "746864", "746944", "747374"]},
+    {"provider": "PowerApplicationJoin.ProfileSharedCpu", "exports": ["747a08"]},
+    {"provider": "PowerLifecycleNext.PowerRecordProfileAccessors", "exports": ["76f340"]},
+    {"provider": "diagnostics", "export": "xm1_power_configuration_byte"},
+    {"provider": "libm", "exports": ["logf", "powf"], "build_dependency": "//replacement/render_commands:libm-arm"}
+  ],
+  "integration": "PowerApplicationJoin owns lib.rs, Root.rs and BUILD integration; register all four record_profile_diagnostics Rust modules and wire the canonical libm dependency.",
+  "verification": "Source inspection only. No build, test, lint, formatting, SDK, native runner, guest execution or camera operation performed."
+}

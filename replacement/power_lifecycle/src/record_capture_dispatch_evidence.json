@@ -1,0 +1,27 @@
+{
+  "firmware": "X-M1 1.50",
+  "decomp_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "evidence": "installed ARM instructions source-inspected",
+  "instruction_source": "private-data/analysis/x-m1-1.50/lz/id5.dis:1001268-1002133",
+  "state_table": "0x00fe9210 has 17 entries, states 0 through 16. State zero has no handler table. 0x00fe945c is an instruction, not the table.",
+  "implemented": {
+    "record_capture_dispatch_routes": "Complete state/event-to-handler selection from the installed table, including sentinel defaults. This does not execute child processors.",
+    "record_capture_dispatch_storage": "Shared-context payload-pointer initialization, exact 244-byte saved request copy at fe9540, current request address at fe9564, pending request restoration at fe8c68, bounded control snapshot fe8ff8 and queue snapshot fe9474."
+  },
+  "layout": {
+    "queue_context": "0x016f0aa4, 492 bytes: queue word, current descriptor plus 232 payload bytes, saved descriptor plus 232 payload bytes.",
+    "current_request": "0x016f0aa8",
+    "saved_request": "0x016f0b9c",
+    "control_context": "0x016f08c0, 252 bytes",
+    "pending_request": "0x016f08c8",
+    "descriptor": "u16 operation, u8 source, u8 destination, u32 length, u32 payload address, then 232 inline bytes. Snapshot preserves the copied payload-address word."
+  },
+  "integration_prerequisites": [
+    "An actual generic 100297c child capture processor, not only table selection.",
+    "Canonical shared-context child processors and reset functions feb2f8/fec46c/ff0354/fef5c0/feda50/ff2990/ff563c/ffe358.",
+    "The concrete generic fe9580 copied-payload queue contract and root callback-lifetime composition.",
+    "The timer/recovery helper graph fe7f7c..fe89b0, fe8e10 and fea2f4/fea35c.",
+    "A non-cyclic composition location for the vendor-owned ffc270/ffc074/ffb1d4 resource machine."
+  ],
+  "verification": "Behavioral source tests were added for saved request lifetime and bounded snapshots. No builds, tests, linters, formatters or runtime checks were run. No actual outer event-loop completion claim is made."
+}

@@ -1,0 +1,24 @@
+{
+  "firmware": "X-M1 1.50",
+  "decomp_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source": "decomp/firmwares/xm1-150/app/settings/tu_00758cf0.c",
+  "evidence": "source-inspected with installed ARM instruction confirmation",
+  "confirmed_extents": ["0x00759250..0x0075a178", "0x0075ac74..0x0075ace4", "0x0075b054..0x0075bfd8", "0x00758cf0..0x00759250", "0x0075deac..0x0075e0e4"],
+  "entry": "record_profile_merge::helper_759250(context, destination_handle, source_header_guest_address)",
+  "rules": [
+    "The NONMATCHING C reverses source and destination. Installed r0 is the destination handle and r1 is the raw source header.",
+    "Clear both destination mask pairs in the field-zero read-selected resource before evaluating any source mask.",
+    "Each source mask is tested at its original position, including when source aliases destination storage.",
+    "Primary and secondary mask fields use the canonical raw header predicate; secondary high-bit selects the secondary pair and does not require the stored high bit.",
+    "Each canonical setter independently checks field-zero write permission and resolves the handle bank.",
+    "Packed fields at offsets 0, 4, 12, 14, 114 and 118 are snapshotted before their setter call.",
+    "All scalar, signed-halfword, packed and extended header slots in the installed merger are included in installed order."
+  ],
+  "dependencies": {
+    "record_profile_accessors": "PowerLifecycleNext.PowerRecordProfileAccessors owns registry/resource types, read_bank/write_bank, mask predicate/marking, scalar setters and packed setters 74eca0/74fb10/74ff68/750bbc.",
+    "record_profile_merge_accessors": "This family owns setters 758d34/758dbc/758e4c/758edc/758f64/758fec/759074/7590fc/759184/75920c and getters 7591c8/758cf0/758d78/758f20/758e00/758e90.",
+    "record_task43_machines0": "PowerLifecycleNext.PowerRecordMachines0 owns the slot16 caller with source address 0x0169d130."
+  },
+  "integration": ["Declare record_profile_merge and record_profile_merge_accessors in power_lifecycle lib.rs and BUILD.bazel through the integration owner.", "All helpers use the shared RecordContext and GuestAddressSpace for host and ARM. Packed snapshots use canonical with_guest_frame over the root-admitted stack, preserving register-group copies. Native C ABI bridges belong to the root."],
+  "verification": "No builds, tests, formatters, native execution, SDK, guest or camera runs were performed."
+}

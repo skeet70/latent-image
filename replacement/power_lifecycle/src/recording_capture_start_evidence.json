@@ -1,0 +1,54 @@
+{
+  "schema": 1,
+  "scope": "X-M1 1.50 host/source-only capture engine90 resource setup",
+  "decomp_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "qualification": "source-inspected; NONMATCHING drafts cross-checked against preserved stock disassembly; no build, test, SDK, guest or camera execution",
+  "sources": [
+    "app/capture/reccont/tu_00deee28.c:294-327",
+    "app/capture/reccont/tu_00decd8c.c:684-1039",
+    "app/capture/reccont/tu_00dcc01c.c:1127-1178",
+    "app/capture/record/tu_00eaa494.c:3335-3619",
+    "app/capture/record/tu_00eb11dc.c:766-945",
+    "app/capture/record/tu_00eb2eb8.c:319-470",
+    "app/capture/record/recording_soft_timer.c:10-37",
+    "app/settings/tu_007371dc.c:249-267,908-929",
+    "app/settings/tu_00ef88a8.c:237-268",
+    "app/settings/tu_0072d51c.c:235-270",
+    "app/settings/conversion_state_updates.c:88-91"
+  ],
+  "byte_confirmed_facts": [
+    "def448 initializes thirteen bitmap pools, acquires root slot zero, selects configured settings or initializes fallback settings/work, applies zero output scratch and clears five pending handle words only after profile application",
+    "deeb64 selects movie output parameters only for settings word2c equal9, applies primary and secondary output tuples, updates limits, initializes profile, snapshots conversion0d into0e, posts command0 with the supplied callback, then initializes recording soft timer from settings4c",
+    "Resource slot1 acquisition starts at eb276c, not eb27cc; eb27cc is an interior instruction of that function",
+    "Resource pools are at15b7428, thirteen records of30hex bytes; first twelve capacity202 and last capacity1; bitmap begins8bytes into each pool; initialization preserves bytes2through7",
+    "737854 returns0 when settings100 is nonzero; otherwise maps settingsfc 0to1,1to2,othersto3",
+    "7389b8 updates descriptor words0,4,8 to work halfwordea,16,configuration byte254, retaining equality-gated writes",
+    "738a28 leaves profile word8 as stack residue; nine defined words occupy offsets0,4,c,10,14,18,1c,20,24",
+    "ef8db4 copies primary90hex bytes before clearing primary80through8f; copy category30 equal1800 selects signed calibration6904, otherwise category22 is retained; packet dirty mask is marked400000",
+    "ef8db4 packet stores callback0,arg4,primary8through97,secondary98,limits9c,profilea0; finalworda4 is stack residue",
+    "Recording timer initialization writes stopped1,armed0,enabled0,handle0,owner and preserves reserved byte3; failed cancel retains handle; expiry retains armed; failed start retains pre-registration stopped0/armed1 effects"
+  ],
+  "native_runtime_dependencies": {
+    "shared_profiles": ["xm1_power_record_helper_73964c", "xm1_power_record_helper_738800"],
+    "task43": "xm1_power_record_helper_ef9a94(command,payload,length), canonical copied command submission; actual command0 machine and callback execution owned by task43 composition",
+    "software_timers": ["xm1_power_software_timer_start", "xm1_power_software_timer_cancel"],
+    "configuration": ["xm1_power_configuration_byte", "xm1_calibration_i16"],
+    "diagnostics": ["xm1_power_current_task", "xm1_power_append_stream_text"],
+    "critical_sections": ["xm1_power_interrupt_lock", "xm1_power_interrupt_unlock"],
+    "completion": "Engine90 supplies its actual dee95c callback; status0 queues1394 and nonzero reports missing state"
+  },
+  "portable_helpers": {
+    "context": "record_address_space::RecordContext<M,E>, M:GuestAddressSpace; no effects bound on resources and bounded setup helpers",
+    "resources": "recording_capture_resources::helper_eb25d8/eb26ac/eb276c/eb288c/eb2838/eb2958/eb34bc/eb35ec",
+    "setup": "recording_capture_setup::helper_737854/72daac/72dafc/72db7c/eb02f8/7389b8",
+    "configuration": "record_configuration::helper_69f8fc",
+    "error_effects": "Allocation publishes pool bit and record slot before resource clearing. Memory errors retain completed writes.",
+    "qualification": "Source-only. Portable behavioral tests added but not executed."
+  },
+  "integration": {
+    "modules": ["recording_capture_defaults", "recording_capture_resources", "recording_capture_setup", "recording_capture_timer"],
+    "arm_modules": ["recording_capture_resources_native", "recording_capture_setup_native", "recording_capture_timer_native", "recording_capture_start_native"],
+    "test_modules": ["recording_capture_resources_tests", "recording_capture_setup_tests", "recording_capture_timer_tests"],
+    "assembly": "recording_capture_setup_residue.S is included by recording_capture_setup_native with global_asm"
+  }
+}

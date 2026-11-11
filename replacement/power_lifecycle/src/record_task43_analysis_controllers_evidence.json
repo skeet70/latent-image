@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "target": "X-M1 1.50 task43 machine26 internal analysis controllers",
+  "evidence_class": "source-inspected with original A32 byte inspection",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_files": [
+    "decomp/firmwares/xm1-150/app/control/af/profile/tu_00f3e3ec.c",
+    "decomp/firmwares/xm1-150/app/control/af/area/tu_00f3c17c.c"
+  ],
+  "source_status": "All five controller definitions are NONMATCHING drafts. State access widths, direct call arguments, bitmask tests and return branches were read from the original A32 listing.",
+  "image": {
+    "base": "0x00bf1a00",
+    "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"
+  },
+  "modules": [
+    "record_task43_analysis_controllers",
+    "record_task43_analysis_controllers_initial",
+    "record_task43_analysis_controllers_sweep",
+    "record_task43_analysis_controllers_tracking"
+  ],
+  "providers": [
+    {"entry": "0x00f411b8", "size": 2488, "sha256": "ddfe051e5fb54f7abf3c7691cacb70dd9d8f3f8874c142dc1a6548101c3afd82", "symbol": "xm1_power_record_helper_f411b8", "abi": "() -> i32", "module": "record_task43_analysis_controllers_sweep"},
+    {"entry": "0x00f41b70", "size": 216, "sha256": "e2e9c6a0eb0a0b411be8d4d79d9c3c69bc1ce3aaf2a745fb78b814dee0a64899", "symbol": "xm1_power_record_helper_f41b70", "abi": "() -> ()", "module": "record_task43_analysis_controllers"},
+    {"entry": "0x00f41c48", "size": 3464, "sha256": "c3293d97774610831da7e60efdecb9ed3809f18e2b5c65fcf6c740a608c2483b", "symbol": "xm1_power_record_helper_f41c48", "abi": "() -> i32", "module": "record_task43_analysis_controllers_initial"},
+    {"entry": "0x00f429d0", "size": 156, "sha256": "bdd5950af7bdb5f2c13d9081b579ce15083d91998aad3ff7f94fabc73e4b6346", "symbol": "xm1_power_record_helper_f429d0", "abi": "() -> ()", "module": "record_task43_analysis_controllers"},
+    {"entry": "0x00f42abc", "size": 3592, "sha256": "625ac0d8b635655e9f93f70a763f93265562593661e40047e6eee6a664507652", "symbol": "xm1_power_record_helper_f42abc", "abi": "() -> i32", "module": "record_task43_analysis_controllers_tracking"}
+  ],
+  "partition_exception": {
+    "entry": "0x00f42a6c",
+    "owner": "PowerLifecycleNext.PowerRecordActiveSelections",
+    "symbol": "xm1_power_record_helper_f42a6c",
+    "abi": "(record: u32, index: u32) -> i32",
+    "behavior": "Copy a 20-byte history record when the low index byte is below seven; address multiplication uses the full index word."
+  },
+  "state": "Uses crate::record_task43_machine26_state only. No independent global state or callback registry is created.",
+  "lifetime": "All controller calls are synchronous. The exposure snapshot occupies eight bytes and is consumed before return. History records occupy twenty bytes and are consumed before return. No stack pointer is retained or registered.",
+  "byte_confirmed_contracts": [
+    "State step counter at +4, direction at +0x2c/+0x2d, masks at +0x27c/+0x27d/+0xe88 and history counters are bytes.",
+    "Positions, selection step, capture count and initial waiting count are halfwords; signed position comparisons use sign extension.",
+    "The apparent code_t calls in the draft are byte AND tests of +0xe88 with +0x27c or +0x27d, not callbacks.",
+    "The mode snapshot helper 0x006c1630 writes eight bytes from configuration keys 0x3e0000 through 0x3e0007.",
+    "Peak sample collection clamps the halfword sample index to 255, writes three word histories and increments the index to at most 256.",
+    "Initial analysis includes settling inhibition, mode-dependent step scaling, range limiting, position-averaged scores, waiting counters, motion rejection, natural scan-controller decisions, bound selection and reversal compensation.",
+    "Sweep and tracking analysis include mode changes, invalidation, sample and peak publication, score-change masks, position-displacement decisions, both end stops, repeated reversals and requested completion."
+  ],
+  "owned_dependencies": {
+    "machine26_early": ["f3e1cc", "f3e054", "f3e0d0", "f3e3ec", "f3e440", "f3e468", "f3e4bc", "f3e63c", "f3dca8", "f3de28", "f3db9c", "f3d554", "f3d5c4", "f3ec14"],
+    "machine23_scan": ["f3c5d0", "f3c6c0", "f3c8d8", "f3c9f4"],
+    "active_selections": ["f3ec50", "f3f938", "f3fa34", "f41000", "f41094", "f42a6c"],
+    "profile_and_platform": ["69fec8", "6c1630", "76f360", "76dac4", "757470", "74e5c0", "faab3c", "faa928", "fa7ce0", "ee9718"]
+  },
+  "integration": "The application integration owner registers these four modules and joins their canonical dependency providers.",
+  "verification": {
+    "build": "not run",
+    "tests": "not run",
+    "lint": "not run",
+    "format": "not run",
+    "native_execution": "not run",
+    "hardware": "not run"
+  }
+}

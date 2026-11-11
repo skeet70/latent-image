@@ -1,0 +1,130 @@
+{
+  "firmware": "X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "status": "shared-source-implementation-unexecuted",
+  "providers": [
+    {
+      "entry": "0xed89b0",
+      "end_exclusive": "0xed8a38",
+      "sha256": "a82e1f8e244ed0e90f18dcc2f7f7dfd522322e176da32974330ea602d58f758e"
+    },
+    {
+      "entry": "0xf4c3b8",
+      "end_exclusive": "0xf4c3d0",
+      "sha256": "0b711f40317ef2a33ada51a7b0fefd71a8d003e74fae1f435b8afc410640519b"
+    },
+    {
+      "entry": "0xfea418",
+      "end_exclusive": "0xfea428",
+      "sha256": "dc718bfb8ecc16df74240fff47453eba6893df56dce12ef68ba8dd41b50a0843"
+    },
+    {
+      "entry": "0xfea428",
+      "end_exclusive": "0xfea438",
+      "sha256": "faad9d32869557dd652b93d796b1a6b2014781660961649c033dfcd09906e4d5"
+    },
+    {
+      "entry": "0x1039610",
+      "end_exclusive": "0x1039638",
+      "sha256": "39e191d82c4e1fcbaea4252319420934ec5b59002b45a65ee7cd01ee714b9e76"
+    },
+    {
+      "entry": "0x1050f8c",
+      "end_exclusive": "0x1050fa4",
+      "sha256": "aab533f64e7d3f50628f3b74c122bcfaae90f7a06e1282e0e04e4d03d9706543"
+    },
+    {
+      "entry": "0x1050fa4",
+      "end_exclusive": "0x1050fbc",
+      "sha256": "aab533f64e7d3f50628f3b74c122bcfaae90f7a06e1282e0e04e4d03d9706543"
+    },
+    {
+      "entry": "0x1051fb4",
+      "end_exclusive": "0x1051fcc",
+      "sha256": "aab533f64e7d3f50628f3b74c122bcfaae90f7a06e1282e0e04e4d03d9706543"
+    },
+    {
+      "entry": "0x1051fcc",
+      "end_exclusive": "0x1051fe4",
+      "sha256": "aab533f64e7d3f50628f3b74c122bcfaae90f7a06e1282e0e04e4d03d9706543"
+    },
+    {
+      "entry": "0x10546d0",
+      "end_exclusive": "0x10546e0",
+      "sha256": "9e971be91d5c81f30360b818d2a6a7e91e028167474d69770caa423b7e23d72c"
+    },
+    {
+      "entry": "0x10546e0",
+      "end_exclusive": "0x10546f0",
+      "sha256": "d6ae36563ddbaaa48c72f2e1c1d9ea7b5428e822bddfed312a20d7a9fb7af92f"
+    },
+    {
+      "entry": "0xf4c384",
+      "end_exclusive": "0xf4c3b8",
+      "sha256": "59ee2062a51a77643efec0a5d4965ee2f67b5503e0ded0fcec3a3d84d19d82b7"
+    },
+    {
+      "entry": "0x1039580",
+      "end_exclusive": "0x1039610",
+      "sha256": "7a7dca047130d4ecdaae184a3465665813bccb8f0013d6f998dd9ee574331b56"
+    },
+    {
+      "entry": "0xed87b0",
+      "end_exclusive": "0xed89b0",
+      "sha256": "8ef44d2c7605d39e57d30a99a31c09cac887b1fa3e58f0bb0333f83a2dbc7065"
+    }
+  ],
+  "modules": [
+    "record_image_init_state",
+    "record_image_init_result",
+    "record_image_init_dcf",
+    "record_image_init_diagnostic",
+    "record_image_init_display"
+  ],
+  "abi": {
+    "state_helpers": "record_image_init_state::helper_<address><M:GuestAddressSpace,E>(&mut RecordContext<M,E>,typedargs)->Result<_,ImageInitError>",
+    "fea418": "window:GuestAddress; reads words0/1 only",
+    "1039610": "callback:Option<CallbackId>,registry:&CallbackRegistry<RecordContext<M,E>,N>; returnsu32=0",
+    "1039580": "record_image_init_result::helper_1039580; window:GuestAddress,callback:Option<CallbackId>,registry; E:CriticalKernel plus canonicaldisplayeffectbounds",
+    "ed87b0": "record_image_init_dcf::helper_ed87b0(ctx,residue:DiagnosticResidue)->Result<(),ImageInitError>",
+    "ed89b0": "record_image_init_dcf::helper_ed89b0(ctx)->Result<IdleResetResult,ImageInitError>; repru32 Complete0/AlreadyIdle17/Busy129",
+    "native": "ROOT supplies only CABI bridges and admittedNativeAddressSpace; no localnativefunctions/interpreter/absoluteCPUpointers"
+  },
+  "invariants": [
+    "Physical retained-consumer state is shared at016fec34,01698a50,016f08c0,016c2370,01706a3c; no mirrored shadow state.",
+    "Initial zero buffer words preserve previous buffer bases.",
+    "1039580 does not read uninitialized caller window word3.",
+    "Buffer descriptors preserve the sixth word of every24-byte slot.",
+    "Native75e6d8/75e704 return1 without reading arguments;75e6f0 andee418c have no effects. Calls are eliminated, not acknowledged hardware operations.",
+    "Only synchronous callback invocation occurs in this family; no buffer pointer ownership transfer is inferred.",
+    "Resource strings and profile/logarithm tables remain read-only firmware data, not executable delegates.",
+    "eea6f8/logarithm32 zero-input output half remains unwritten. DiagnosticResidue carries the caller-owned frame observation; no default zero or invented native stackvalue.",
+    "CallbackRegistry generation/signature errors and callback RecordErrors propagate; no arbitrary integer-to-function conversion.",
+    "Zero denominator in selected_ratio returns ImageInitError::DivideByZero; nativeROOT maps actual43614->43604 svc1010/fatal boundary."
+  ],
+  "dependencies": {
+    "record_address_space": "RecordContext,GuestAddressSpace,CallbackId,CallbackRegistry; primary PowerApplicationJoin owns source and root registration",
+    "record_configuration": "helper_69f8fc(ctx,key)->Result<u32,MemoryError>",
+    "osal": "CriticalKernel and actualinterrupt_lock/interrupt_unlock CPU; errors insidelayout releasecriticalstate",
+    "record_profile_diagnostics_float": "helper_7468b8(ctx,index,bank)->Result<u32,MemoryError>, ProfileDiagnosticsCpu confirmed exclusive portable owner",
+    "display_scanout_panel": "LiveViewDisplayOwnership confirmed actual9nativefrontends; sharedfalliblememoryAPI packet pending owner implementation"
+  },
+  "checks_exercised": [],
+  "not_run": [
+    "build",
+    "tests",
+    "lint",
+    "formatter",
+    "native",
+    "SDK",
+    "guest",
+    "camera"
+  ],
+  "integration_owner": "PowerApplicationJoin registers new modules and source files in root/lib/BUILD; Task43 retains f146d4/f14824 callerframe wrappers.",
+  "tests_added": [
+    "render reset neighbor preservation and300values",
+    "wrappingbufferbase and zero-secondary retention",
+    "pendingclear-before-successcallback",
+    "idle reset repetition,busyrefusal,outputclearing"
+  ]
+}

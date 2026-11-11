@@ -1,0 +1,48 @@
+{
+  "status": "open",
+  "target": "Fujifilm X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source": "decomp/firmwares/xm1-150/app/capture/pipeline/tu_01000a18.c",
+  "image": {
+    "base": "0x00bf1a00",
+    "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"
+  },
+  "evidence_class": "source-inspected and authenticated instruction inspection",
+  "implemented": [
+    { "entry": "0x01002924", "api": "record_capture_machine::helper_1002924", "behavior": "Reset the recovered fields and the 64-byte pending-control region without clearing the descriptor or callbacks." },
+    { "entry": "0x010028f4", "api": "record_capture_machine::helper_10028f4", "behavior": "Copy min(requested length, 576) bytes of the capture context through the shared admitted address space." },
+    { "entry": "0x00fea3a0", "api": "record_capture_machine::helper_fea3a0", "behavior": "Select the request or fallback enable bit using capture kind and reject mode 3." },
+    { "entry": "0x00ed8af4", "api": "record_capture_machine::helper_ed8af4", "behavior": "Copy the 72-byte DCF parameter record." },
+    { "entry": "0x00ed8b10", "api": "record_capture_machine::helper_ed8b10", "behavior": "Copy the 200-byte DCF status snapshot." },
+    { "entry": "0x00edbad4", "api": "record_capture_machine::helper_edbad4", "behavior": "Store the selected DCF value at controller offset 252." }
+  ],
+  "routing": {
+    "table": "0x01002bf4",
+    "context": "0x016f82fc",
+    "context_length": 576,
+    "state_offset": 176,
+    "event_offset": 180,
+    "states": 12,
+    "api": "record_capture_machine::select_handler",
+    "scope": "Writes the current event and selects its typed handler. Does not execute the selected handler and is not a replacement for entry 0x0100297c.",
+    "names": "State and handler names are inferred; numeric routing comes from the authenticated X-M1 table."
+  },
+  "authenticated_target_extents": [
+    { "entry": "0x01001624", "length": 2220, "sha256": "56b2bc2294f1f69fa1ef5f61a5fa4d7d5d72504ace985df203ef6dbbfaa747e1" },
+    { "entry": "0x01001ed0", "length": 816, "sha256": "d3a2cb06b5878231e3aea712591265693d803c61062504d2a79e97c7bf030e77" },
+    { "entry": "0x0100231c", "length": 1064, "sha256": "df48246527004e5c265dfd2d5b88a18883f75ff660546ddd8951584283ac59c2" },
+    { "entry": "0x01002744", "length": 284, "sha256": "7b6476bf74dd7be28e5cb332d40e977e528b5bea163b23e0a0143c8026ddbcf1" },
+    { "entry": "0x0100297c", "length": 44, "sha256": "b5251b6fc09810771e7ccd99dcf2615a2fc2e3b42e6813670f5c0f2ec251f39c" },
+    { "entry": "0x010029bc", "length": 28, "sha256": "20e8db2419d0c050b34c172caaf80452c9b1219a877e1925b52f243dfac83bca" }
+  ],
+  "actual_target_dependencies": {
+    "0x010029bc": ["0x00ed8b2c", "0x00edbcf0"],
+    "capture_handlers": ["0x010001ac", "0x01000428", "0x01000484", "0x01000af4", "0x01000bd0", "0x01000d10", "0x01000da4", "0x01000ddc", "0x01000e40", "0x01000e7c", "0x01000f34", "0x01000fb4", "0x010010c0", "0x01001104", "0x010012e4", "0x0100150c", "0x01002200", "0x01002280", "0x010022d0", "0x01002860"],
+    "sensor_and_dcf": ["0x00ed8b2c", "0x00ed8d20", "0x00ed9f54", "0x00eda1f4", "0x00eda3c8", "0x00edb140", "0x00edb160", "0x00edb19c", "0x00edb208", "0x00edb630", "0x00edbcf0", "0x00edbdc8", "0x00edbdd8"],
+    "control": ["0x00ffe410", "0x00ffe428", "0x00ffe54c", "0x00ffe55c", "0x00ffe590", "0x00ffe5c0", "0x00ffe5e0", "0x00ffe61c", "0x00ffe664", "0x00ffe7e4", "0x00ffe90c", "0x00ffe95c", "0x00ffea84", "0x00ffeb1c", "0x00ffed60", "0x00ffeea4", "0x00fff368", "0x00fff4b8", "0x00fff6d8", "0x00fff7c0", "0x00fff864", "0x00fffb4c", "0x00fffba4", "0x00fffbf4", "0x00fffca0"],
+    "geometry": ["0x01004124", "0x0100444c", "0x01004638", "0x01004660", "0x0100467c", "0x010046d4", "0x01004744", "0x010047ac", "0x01004fe8", "0x0100500c", "0x01005024", "0x01005034", "0x01006efc", "0x0100834c"],
+    "asynchronous_publication": ["0x00fe95c8", "0x00fe9624", "0x00fe96c4", "0x00fea2f4", "0x00fea35c", "0x00eece64", "0x01000ca8"]
+  },
+  "remaining_boundary": "The six assigned processor entries are not implemented by these modules. Their lower CPU and physical-completion providers have no confirmed complete shared-context implementation in this assignment. Native-only source with unresolved extern providers was removed during the shared HOST/ARM cutover. No full-closure, callback-lifetime or physical-completion claim is made.",
+  "verification": "No builds, tests, linters, formatters, native runs, SDK runs, guest execution or camera operations were performed. Image SHA-256 authentication and source/disassembly reading only."
+}

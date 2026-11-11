@@ -1,0 +1,143 @@
+{
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "raw_images": {
+    "id4": {
+      "path": "private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin",
+      "base": "0x0061c400",
+      "sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"
+    },
+    "id5": {
+      "path": "private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin",
+      "base": "0x00bf1a00",
+      "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"
+    }
+  },
+  "draft_sources": [
+    "decomp/firmwares/xm1-150/app/drivers/usb/tu_00ecc028.c",
+    "decomp/firmwares/xm1-150/app/drivers/usb/tu_00ed1154.c",
+    "decomp/firmwares/xm1-150/app/platform/system/tu_00ec2c64.c"
+  ],
+  "extents": [
+    {
+      "name": "task7_request_1701",
+      "start": "0x00ed1154",
+      "end_exclusive": "0x00ed117c",
+      "size": 40,
+      "sha256": "06398e178307d21e7441aa64304eeb7e59b75aa150ac36ea243b0760cb61b82b"
+    },
+    {
+      "name": "task7_dispatch_1701",
+      "start": "0x00eca298",
+      "end_exclusive": "0x00eca2d8",
+      "size": 64,
+      "sha256": "34601f4dafd1e536a01e596102770173bdb1de131e145c9acb244df0e38661eb"
+    },
+    {
+      "name": "task7_shutdown_action",
+      "start": "0x00ecc274",
+      "end_exclusive": "0x00ecc290",
+      "size": 28,
+      "sha256": "429023adba1967c788d691cb7402d1202d7466089c5c2788d45848e8b2d6d646"
+    },
+    {
+      "name": "task7_shutdown_complete",
+      "start": "0x00ecc290",
+      "end_exclusive": "0x00ecc2c8",
+      "size": 56,
+      "sha256": "248c5d895c02a73935da012ac88f2cb1d90f1199b9e4d80ef59a2646f61558fc"
+    },
+    {
+      "name": "usb_release_request",
+      "start": "0x00d822f8",
+      "end_exclusive": "0x00d82348",
+      "size": 80,
+      "sha256": "cacd163918b910e46ead84d86f67975a035dd9a52fa87213146a62d99db9cc2c"
+    },
+    {
+      "name": "usb_release_ack",
+      "start": "0x00ecfe20",
+      "end_exclusive": "0x00ecfe64",
+      "size": 68,
+      "sha256": "2c779130c8a77095ce5f4bfc91bb38f529eb4f5edca6a044bc031630db7785d7"
+    },
+    {
+      "name": "task8_producer",
+      "start": "0x006b15e8",
+      "end_exclusive": "0x006b1654",
+      "size": 108,
+      "sha256": "c90635730029ef397233377ef51ef0df755c00feda81648c769e5522298cb74a"
+    },
+    {
+      "name": "task8_dispatch",
+      "start": "0x006b1308",
+      "end_exclusive": "0x006b1354",
+      "size": 76,
+      "sha256": "9f8a13f39d6fd0f722bba7bd4287d9aff8034bb6fc0b698d82f6ca5cb725ffc4"
+    },
+    {
+      "name": "task8_teardown",
+      "start": "0x006b0e74",
+      "end_exclusive": "0x006b0ef0",
+      "size": 124,
+      "sha256": "3d7c46c5f8e79ae848aeded3e25849a80bad6cf06de2eca6685ebf28f334f135"
+    },
+    {
+      "name": "task8_registry_release",
+      "start": "0x0069b7a4",
+      "end_exclusive": "0x0069b86c",
+      "size": 200,
+      "sha256": "4658d8a66e172a5a9b223e33d26ecd6a14ad9792917d4348dd2dbeb8bff62b08"
+    },
+    {
+      "name": "task8_configuration_clear",
+      "start": "0x006b207c",
+      "end_exclusive": "0x006b20a0",
+      "size": 36,
+      "sha256": "686e67ef5d3c05fecdbda2bf322bf3fa4fc5a2a9868a8fb29bffe615a0b812ce"
+    },
+    {
+      "name": "task8_receive_loop",
+      "start": "0x006b14e4",
+      "end_exclusive": "0x006b153c",
+      "size": 88,
+      "sha256": "74001fb656fc2b3203ec70ed971818324435ff7ffed79d3908c93a78c9a56fdd"
+    },
+    {
+      "name": "controller1_event_state_table",
+      "start": "0x00ece1e4",
+      "end_exclusive": "0x00ece2a8",
+      "size": 196,
+      "sha256": "7ab3241dd537169f8fec2bb5cf104f1b8dc1d8e660e8a81a932c061bf625554a"
+    }
+  ],
+  "corrections": [
+    "Task7 is USB controller, not owned_menu or modal_runtime.",
+    "ed1154 preserves callback argument r1 in four-byte payload; pinned draft incorrectly calls it unused2.",
+    "Controller table index is event*7+state. Shutdown event2 in states3/6 selects action5 and nextstate2. Release acknowledgement event3 in state2 selects action6 and nextstate0.",
+    "Task8 readiness is live word409c34c4, not an assumed ready value.",
+    "Task8 callback executes before queue8 destruction and task8 retirement."
+  ],
+  "software_dependencies": [
+    {
+      "entry": "0x00d822f8",
+      "owned": "request_usb_release and consume_task7_shutdown",
+      "requires": "Actual queue36 command3401 consumer d80f94 dispatches event6 through d80dd8, table d834d8, actions d8467c..d84880. VendorCommands confirmed event6 actions and integration remain unimplemented at wrap. It must invoke registered callback0146a0e0 after real teardown. The24-byte producer payload is entirely caller residue."
+    },
+    {
+      "entry": "0x00ed03bc",
+      "requires": "USB nonshutdown/impossible-cell route error091b through ecf894 to72b680. OtherUsbRoute deliberately does not manufacture its return or completion."
+    },
+    {
+      "entry": "0x006b1404",
+      "requires": "Existing task8 initialization owns descriptor capacity16 and payload409c34a4. Receiver preserves actual initialized descriptor and does not assert startup readiness."
+    }
+  ],
+  "composition": {
+    "receive": "shutdown_receive::NativeShutdownRtos::receive",
+    "queue_destroy": "primitives::destroy_queue(queue8), actual pool and queue storage release",
+    "retire": "primitives::retire_current_task(TaskId(8))",
+    "critical_section": "osal xm1_power_interrupt_lock/unlock",
+    "task8_producer": "shutdown_requests::task8_shutdown, owned by PowerCpuShutdown"
+  },
+  "verification": "Source-only. No builds, tests, linters, formatters, commits, or camera writes."
+}

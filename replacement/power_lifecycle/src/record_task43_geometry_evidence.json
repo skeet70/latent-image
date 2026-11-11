@@ -1,0 +1,38 @@
+{
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_unit": "app/control/af/profile/tu_00f27c94.c",
+  "derivation": "A32 instruction operands and branch targets from X-M1 1.50 image 5, not NONMATCHING C types",
+  "image_base": "0x00bf1a00",
+  "image_sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+  "functions": [
+    {"address": "0x00f2abb4", "end": "0x00f2ac70", "sha256": "1e56c867ce25337a34752313429cf9a515b33c2ccb4e34122ef182013e0fba69", "export": "helper_f2abb4", "abi": "(context:&mut RecordContext<M,E>,size:GuestAddress,pitch:GuestAddress,step:GuestAddress,state:GuestAddress,start:GuestAddress,end:GuestAddress)->Result<(),MemoryError>"},
+    {"address": "0x00f2aed8", "end": "0x00f2afc8", "sha256": "96fddb7def5f57d3d90fa0c25cfda4c912186f046e5197ee02598bf7acbabae7", "export": "helper_f2aed8", "abi": "(context:&mut RecordContext<M,E>,output:GuestAddress,records:GuestAddress,count:u8)->Result<(),MemoryError>"},
+    {"address": "0x00f2b014", "end": "0x00f2bdf0", "literal_pool_start": "0x00f2bde4", "sha256": "9de4e6dc7113a9a716a4d61e10c4508abf394cf2910282545d96a15129231acc", "export": "helper_f2b014", "abi": "(context:&mut RecordContext<M,E>,callbacks:GeometryCallbacks)->Result<(),RecordError>", "effect_bound": "E:record_frontend::FrontendEffects<M>, alias of record_hardware_requests::CaptureQueue<M>; context has root-admitted GuestStack"}
+  ],
+  "registration": {"module": "record_task43_geometry", "owner": "PowerApplicationJoin", "files": ["record_task43_geometry.rs", "record_task43_geometry_math.rs", "record_task43_geometry_cpu.rs", "record_task43_geometry_tests.rs"], "execution": "One generic CPU for host and ARM, direct canonical module calls, no native extern engine"},
+  "layouts": {
+    "Pair": "two u32 words; interpretation follows the boundary",
+    "GridStep": "two u16 words",
+    "DisplayRecord": "104 bytes: vertical origin u32, horizontal origin u32, horizontal extent u32, vertical extent u32, 88 remaining bytes",
+    "OutputRectangle": "four u32 words, each value truncated to u16",
+    "GeometryInput": "crate::record_frontend::GeometryInput, 108 bytes, shift u16 at 104",
+    "CurveInput": "34 bytes; mode at 0, curve at 12, mapped curve at 16, scale pair at 20, packed dimensions at 30",
+    "GridResult": "184 bytes; dimensions pair at 0, pitch pair at 64, step pair at 80"
+  },
+  "shared_state": {"base": "0x016b751c", "geometry_base": "0x016b76bc", "geometry_bytes": 424, "radius_offset": 804, "shift_offset": 806},
+  "caller": "Task43 machine19 slot2: f2afc8(request), f2c128(), f2afe8(), f2b014()",
+  "callbacks": {"owner": "PowerLifecycleNext.PowerRecordMachines18", "required_first": "helper_f2ad34(context,u32)", "required_second": "helper_f2ad08(context,u32,u8)", "transport_owner": "PowerApplicationJoin.RecordFrontendCpu", "transport": "record_frontend::helper_feab6c", "lifetime": "GeometryCallbacks contains registered generation-bearing CallbackId values; transport owns the 108-byte GeometryInput; no host pointer or raw callback integer", "integration_dependency": "Root must provide actual registered portable callback implementations and the machine19 continuation; Machines18 reports its preserved callback and machine19 source is native-only"},
+  "dependency_owners": {
+    "f4ce2c,f4ce44,f4d080,f4d144,f4d2dc": "PowerApplicationJoin.RecordScanGeometryCpu",
+    "752*,754*,755*": "PowerApplicationJoin.ProfileSlotCpu",
+    "756*": "PowerApplicationJoin.ProfileSharedCpu",
+    "74e*,74f*,750*,76d9c8,76f340,76da84,76dad4": "PowerLifecycleNext.PowerRecordProfileAccessors",
+    "747aac": "PowerApplicationJoin.ProfileMappingCpu",
+    "f51b94": "PowerApplicationJoin.RecordScanBackendCpu",
+    "eda668": "PowerApplicationJoin.RecordDeepGeometryCpu",
+    "feab6c": "PowerApplicationJoin.RecordFrontendCpu",
+    "ef5b5c,ef5d44": "PowerApplicationJoin.ProfileMappingCpu",
+    "record_configuration::helper_69f8fc": "canonical shared configuration engine"
+  },
+  "verification": "Not run: builds, tests, lint, format, native execution, SDK, guest and camera operations are excluded by assignment"
+}

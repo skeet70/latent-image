@@ -1,0 +1,42 @@
+{
+  "pin":"55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "pin_repository":"/var/home/murph/Code/x70view",
+  "pinned_sources":["decomp/firmwares/xm1-150/app/platform/osal/driver_periodic_initialize.c","decomp/firmwares/xm1-150/app/platform/osal/driver_periodic_notifications.c","decomp/firmwares/xm1-150/app/platform/osal/software_timer_start.c"],
+  "raw_image":"private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin",
+  "raw_origin":"0x61c400",
+  "extent_convention":"half-open addresses, SHA256 of actual raw bytes",
+  "extents":[
+    {"name":"software_initialize","start":"0x69b1a0","end":"0x69b228","sha256":"686dae638fcf56dca76445908dca16040241861fe1a659a213f23a49ff3645f6","disassembly":"id4.dis:129901-129934"},
+    {"name":"service_irq","start":"0x69c4d8","end":"0x69c548","sha256":"a7fd32a876352bf57e201162623bd6df7b9a1d0b47c213d170a62540ce8ddf9f","disassembly":"id4.dis:131131-131158"},
+    {"name":"service_timer_start","start":"0x69c548","end":"0x69c5d4","sha256":"1e0c9b3c8df0ce4d7306e838a32bf0e624366f199422705e6285d881f459b1b6","disassembly":"id4.dis:131159-131193"},
+    {"name":"service_entry","start":"0x69c5d4","end":"0x69c628","sha256":"0a9ad705ca498a77c9b4f75f9e0dff644d581e21adb7823ad811bdc56cafaee6","disassembly":"id4.dis:131194-131214"},
+    {"name":"service_construct","start":"0x69c648","end":"0x69c6f4","sha256":"26d38224b376a36e5d328533af909544a9aafc5161aa2188ab2f684e726857c8","disassembly":"id4.dis:131223-131265"},
+    {"name":"service_delete","start":"0x69c6f4","end":"0x69c75c","sha256":"453c4cca3290de4f4067838fb408646e01b82ba5f0bbc5352cf83033104935c4","disassembly":"id4.dis:131266-131291"}
+  ],
+  "closure":[
+    "69b1a0 checks95ab1c, sets initialized1 before task creation, starts task9 selector2,argument7,owned software tick callback,fallback from caller; creation failure diagnoses(2,1c) and returns-32 without clearing initialized",
+    "69c648 creates queue9 flags48,size12, writes selector,priority,callback,fallback to89f770 and submits task9 name781940,priority3,stack0xc00,owned entry,argument89f770",
+    "Task9 startup acquires physical timer selector2 through shared owned hardware registry and programs2500,1,1,owned service IRQ; on success stores main and fallback callback then zeros96e97c",
+    "Physical IRQ posts1900,source9,destination9,zero payload; failed post invokes fallback before incrementing96e97c",
+    "Task9 blocks on shared actual queue receive then invokes main callback regardless receive status and message code, preserving raw behavior",
+    "Main callback is xm1_power_software_timer_tick, so physical timer IRQ, real queue delivery and software32slot timer expiration compose without synchronous substitute",
+    "69c6f4 stops/releases actual hardware timer then deletes queue9 and releases task9"
+  ],
+  "owned_dependencies":["hardware_timer_registry::HardwareTimerRequest","xm1_power_hardware_timer_acquire","xm1_power_hardware_timer_start","xm1_power_hardware_timer_stop","xm1_power_hardware_timer_release","queue_construction::QueueConfiguration","task6_executor::native::TaskDescriptor","xm1_power_queue_create","xm1_power_queue_delete","xm1_task_submit","xm1_task_release","shutdown_receive::ReceiveDescriptor","shutdown_rtos::NativeShutdownRtos","xm1_power_command_diagnostic"],
+  "native_exports":["xm1_power_software_timer_service_irq","xm1_power_software_timer_service_entry","xm1_power_software_timer_service_start","xm1_power_software_timer_initialize","xm1_power_software_timer_service_delete"],
+  "integration":{"module":"software_timer_service","startup69b1a0":"xm1_power_software_timer_initialize","task9_constructor69c648":"xm1_power_software_timer_service_start","task9_entry69c5d4":"xm1_power_software_timer_service_entry","physical_timer_irq69c4d8":"xm1_power_software_timer_service_irq"},
+  "detection_output": {
+    "source": "decomp/firmwares/xm1-150/app/platform/osal/tu_006b7a8c.c",
+    "confirmation": "NONMATCHING mode functions confirmed against id4.dis:159594-159825; initialization clock writes confirmed at id4.dis:160483-160496",
+    "core": "software_timer_service::{initialize_detection_output,set_detection_mode,detection_output,continuous_detection_output,detection_interrupt}",
+    "native_exports": ["xm1_power_detection_initialize", "xm1_power_detection_set_mode", "xm1_power_detection_output", "xm1_power_detection_output_continuous"],
+    "state_base": "0x91a548",
+    "clock_registers": ["0xfff89004", "0xfff89000"],
+    "clock_value": "0x800000",
+    "irq_sources": {"off": "0x75", "on": "0x74", "probe": "0x76"},
+    "semantics": "6b8194 handles all three modes; 6b8284 invokes immediately unless phase1 and mode0 permit phase2 deferral; 6b83b4 shares registration with phase3 persistent callbacks; IRQ qualification reads input bit80 ten times; phase2 clears callback before invocation",
+    "status": "Detection APIs return actual IRQ attach/release shim results. The stock RTOS IRQ configuration shim and zero-tick rotation wrapper discard underlying method statuses after performing their effects; id4.dis at723994 and723d2c.",
+    "publication": "IRQ registration and shared token publication execute within one outer critical section; CPU backend results use primitives::ServiceStatus and native ABI results use i32."
+  },
+  "verification":"Source-only. No builds, tests, lint, formatting, native execution, SDK execution or camera operations."
+}

@@ -1,0 +1,38 @@
+{
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "firmware": "X-M1 1.50",
+  "source_units": ["app/settings/tu_00746018.c", "app/settings/tu_00748398.c"],
+  "implementation": "record_profile_interpolation.rs",
+  "evidence_kind": "source-inspected and stock-instruction-inspected",
+  "providers": ["7462e8", "746380", "7472ec", "747604", "7492ac", "749430", "74b044", "74b05c", "74b5fc", "74bd64", "74c568"],
+  "execution_contract": "One generic helper_<address> CPU engine takes RecordContext<M,E> where M implements canonical GuestAddressSpace. No native address casts or retained calls occur in the engine. HalfwordOutput is a closed guest-address or borrowed-local destination and preserves the original write points.",
+  "root_bridge": "Root integration owns native C ABI exports and context construction. It wraps guest output addresses in HalfwordOutput::Guest. Actual Rust local halfwords use HalfwordOutput::Local.",
+  "portable_tests": ["fixed_profile_groups_do_not_require_calibration_memory", "margin_export_reads_unaligned_little_endian_calibration_fields", "margin_export_observes_calibration_pointer_aliases_between_writes"],
+  "instruction_ranges": [
+    "7462e8..7463b4", "7472ec..747304", "747604..74782c",
+    "7492ac..74947c", "74b044..74b80c", "74bd64..74bdd4", "74c568..74c5e8"
+  ],
+  "dependencies": {
+    "record_configuration": ["read_byte", "read_halfword"],
+    "record_profile_arithmetic": ["749254"],
+    "record_profile_mapping": ["747aac", "74947c"],
+    "record_profile_diagnostics_float": ["748818", "74888c"],
+    "record_profile_diagnostics_limits": ["747af8", "748144", "748210"],
+    "record_profile_diagnostics_adjust": ["746298", "747408", "747584", "7482d0", "74831c", "748398"]
+  },
+  "memory": {
+    "calibration_base_word": "0096ca50",
+    "descriptor_table": "0081867c",
+    "runtime_channel_selectors": "40a77dc + bank * 6 + ef8",
+    "local_frames": "747584 uses an admitted four-byte canonical GuestStack frame; 74831c uses an admitted eight-byte canonical GuestStack frame. Neither frame is initialized by the caller."
+  },
+  "instruction_corrections": [
+    "74b5fc runtime channel selector stride is six bytes per bank, not two bytes per selector.",
+    "747604 selects the nearest of three signed profile reference values; ties retain the earlier reference. The selected byte factor is capped at 240 before signed multiplication and truncating division by 240.",
+    "74b05c independently selects low and high calibration margin keys, adjusts signed 16-bit endpoints, clips them against original endpoints plus margins, and maps both endpoints through 74947c.",
+    "7472ec and 74b044 actually return zero without writing memory in the installed instructions. Their zero results are not replacement acknowledgments.",
+    "7492ac stores the unbounded converted sample before applying the optional configuration cap and requested bounds. Bounds compare as unsigned words after signed 16-bit extension.",
+    "749430 multiplies in wrapping 32-bit arithmetic and returns the low 16 bits of an unsigned quotient. A zero scale divisor is changed to one."
+  ],
+  "verification": "Source-only implementation. No builds, tests, formatters, native runs, SDK runs, guest execution, or camera operations performed."
+}

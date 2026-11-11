@@ -1,0 +1,17 @@
+{
+  "pin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "actual_image": "private-data/analysis/x-m1-1.50/lz/id4.dis",
+  "functions": [
+    {"range": "0x632fc0..0x632fe0", "effect": "current-task u8 then726658 text publication", "bytes": ["632fcc:eb03c339", "632fd0:e6ef0070", "632fd8:eb03cd9e"], "owned_boundary": "xm1_power_append_stream_text"},
+    {"range": "0x633470..0x6334dc", "effect": "trace packet op0/dest1/length76, current sender; only first2 payload words assigned", "bytes": ["633494:eb03c207", "6334a0:e54b300d", "6334a4:e3a0304c", "6334b8:e50b305c", "6334c0:e50b3058", "6334c8:eb03cbea"], "owned_boundary": "xm1_power_owned_service_trace"},
+    {"range": "0x6334dc..0x633594", "effect": "text UI EventSend, trace event withc0 cleared, original event+argument application post, storestatus107e8, failure633594 ifnonzero", "bytes": ["633504:e3c430c0", "633520:ebfffea6", "633550:ebffffc6", "633560:eb03e046", "633578:e7830002", "633584:eb000002"], "owned_boundary": "shutdown::post_application_record"},
+    {"range": "0x633594..0x633704", "effect": "Error:- plus negated status decimal2, clearstatus before trace, machine-name plus state/action decimal2 trace, post a81/0 even when initial statuszero", "bytes": ["6335d4:e7933002", "633614:e2611000", "633618:e3a02002", "633628:e7853004", "63365c:e30b2dfe", "633690:e30b3e02", "6336c4:e3a03cbe", "6336f0:e3000a81", "6336f8:ebffff77"]},
+    {"range": "0x722218..0x72232c", "effect": "decimal conversion skips leadingzero; rejects width smaller than digitcount before destination writes; zero-fillwidth then digitcopy then nullterminate", "bytes": ["7222ac:e1520006", "7222b0:33e00000", "7222c4:e3a01030", "72231c:07c93004"]},
+    {"range": "0x633390..0x6333d0", "effect": "reset91b firsttask byteframe10304 reads zero sentinel before current-task query", "bytes": ["6333a0:e3a02fc1", "6333a4:e3402001", "6333ac:e3530000", "6333b4:eb03c23f", "6333c8:e7c30002"]},
+    {"range": "0x73abec..0x73ac0c", "effect": "queue routing selector reads9134f8", "bytes": ["73abf4:e30334f8", "73abf8:e3403091", "73abfc:e5930000"]}
+  ],
+  "literal_bytes": {"7818ec": "UI EventSend", "7818fc": "Error:-", "781904": " (", "781908": ", ", "78195c": ")"},
+  "residue": "mode_events_residue.S admits existing stack bytes for trace76 and application76; Rust writes only source-assigned first8 bytes. No zero residue default.",
+  "failure": "Nonzero post status is retained as function return after failure handler. Failure handler clears shared status then recursively posts a81; an a81 failure takes same source path.",
+  "verification": "Source and actual binary/disassembly reads only. No build, test, formatter or device operation."
+}

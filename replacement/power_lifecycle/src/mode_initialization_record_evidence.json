@@ -1,0 +1,19 @@
+{
+  "pin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "range_source": "x70view:decomp/firmwares/xm1-150/function-ranges.json via git show",
+  "byte_source": "private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin",
+  "instruction_source": "private-data/analysis/x-m1-1.50/lz/id4.dis",
+  "entries": [
+    {"entry": "0x639500", "size": 492, "sha256": "4aed43f05f3e4c84eefb8ee5120a658b543035182d5542dcddf6007868d18f55", "scope": "argument126 formatter", "facts": ["seven assigned command words, no opaque payload", "selector1/2/3/4/default => 114/113/112/116/115", "capture mode3 bytebe34==1 chooses80 else81", "output priority category22c0 then framecfe0 then category2080", "recording priority956938==1 disables, otherwise956934 2=>cc 1=>cb", "noncapture only bef0==cb preservescb", "enabled81 because6394e8 returns0"], "bytes": ["639518:e7933002", "639594:e351007f", "6395bc:03a03080", "6395fc:e3500001", "639620:03a03f41", "639638:03003105", "639684:03a030cc", "639694:03a030cb", "6396b0:e35300cb", "6396e4:15843018"]},
+    {"entry": "0x6396ec", "size": 112, "sha256": "c32f56490f222095b09517e9eade90ff9cf69df367b4a04d9bd0a70d6c87d7b2", "facts": ["argument126", "publication status stored954d68", "nonzero invokes canonical633594", "returns original publication status"], "bytes": ["639720:ebffff76", "639728:eb03c733", "639740:e7830002", "63974c:ebffe790", "639750:e1a00004"]},
+    {"entry": "0x72b3fc", "size": 644, "sha256": "ca4712bec28daf85f0351577ebe1db5d956248f8134f14123fb2b5392feddc4b", "facts": ["mode80/ad/83/cf/12e..136 =>1..13, unmatched=>0", "selector112 returns0 before remaining validation", "selector114/113/116/115=>1/2/3/0", "flip11b/11c=>1/0", "source11e/11f/11d=>1/2/0", "output103/104/105/15=>0/1/2/3", "recordingcc/cb/15=>0/1/2", "enabled80/81=>1/0", "both6d13b4 and6d1748 run; OR results maps nonzero to-63"], "bytes": ["72b4f0:e3a00000", "72b528:13e0003e", "72b634:e1a00004", "72b638:ebfe975d", "72b644:ebfe983f", "72b648:e1800004", "72b654:13e0003e"]},
+    {"entry": "0x6d13b4", "size": 180, "sha256": "b26322826cfa9eb2ef3142ccb360b6a71a1cd5a7c1c429a1c37c1b24dae1e945", "facts": ["first consumer6ce5fc forwards6args to6d2bec", "normalized mode2 or5..13 becomes1", "live flag955b20==0 and955b08==1", "6ce460 always invoked even first consumer failure", "OR both statuses"]},
+    {"entry": "0x6d2bec", "size": 164, "sha256": "6ea48563961b6ffa8d13319a0e1e8bddf54b04fb2419d562412a6da9155b7c15", "facts": ["mode0..13 except2", "selector<4 flip<2 output<4 recording<3 enabled<=1", "invalid=>-30", "valid forwards96bd74 kind and6args to6d42b8"]},
+    {"entry": "0x6d1748", "size": 20, "sha256": "ff945069b4fa0cf8e837de8800e8635ef4b0209d34c219aae579f52c01b80a68", "facts": ["calls6d20a4 then returns0"]},
+    {"entry": "0x6394e8", "size": 24, "sha256": "aab533f64e7d3f50628f3b74c122bcfaae90f7a06e1282e0e04e4d03d9706543", "facts": ["returns0"]}
+  ],
+  "conditional_closure": {"632ea8": "639500 only calls this for argument127; initial argument126 cannot reach it", "632a3c": "only class2000 queries22c0/2080 reachable; bit index(token>>6)&63 reads64bit bitmap94f890", "633594": "mode_events::xm1_power_frontend_failure canonical owned reporter"},
+  "native_boundaries": {"xm1_scanout_panel_device_configuration": "6d42b8 exact7argument ABI, display owner", "xm1_scanout_panel_initial_live_configuration": "6ce460 exact4argument ABI, display owner", "xm1_scanout_panel_record_source": "6d20a4 exact1argument ABI, display owner"},
+  "storage_semantics": "This is controller configuration, not durable record_store or settings_storage publication. No name-based storage adaptation.",
+  "tests": "mode_initialization_record_tests.rs; source only, not executed"
+}

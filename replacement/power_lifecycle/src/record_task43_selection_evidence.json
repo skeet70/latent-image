@@ -1,0 +1,91 @@
+{
+  "pin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "target": "Fujifilm X-M1 1.50 application CPU",
+  "raw_image": "private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin",
+  "raw_origin": "0xbf1a00",
+  "raw_sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+  "pinned_sources": [
+    "decomp/firmwares/xm1-150/app/control/af/area/tu_00f1ad58.c",
+    "decomp/firmwares/xm1-150/app/control/af/area/tu_00f1bbb0.c",
+    "decomp/firmwares/xm1-150/app/control/af/profile/tu_00f201b0.c",
+    "decomp/firmwares/xm1-150/app/control/af/profile/tu_00f2095c.c",
+    "decomp/firmwares/xm1-150/app/control/af/profile/saved_buffers.c",
+    "decomp/firmwares/xm1-150/app/control/af/profile/saved_buffers_rest.c"
+  ],
+  "byte_semantics": {
+    "disassembly": "private-data/analysis/x-m1-1.50/lz/id5.dis",
+    "selection_entry_and_dispatch": "825543-825932",
+    "saved_profile_publication": "825933-826414",
+    "saved_profile_callback_and_reference_restore": "826415-826526",
+    "selection_result_application": "826527-826756",
+    "measurement_initialization_and_descriptors": "827055-827729",
+    "measurement_refinement_and_predicates": "827730-828147",
+    "result_descriptors_and_state_queries": "828148-828612",
+    "mode_policy_latches_and_scan_plan": "828613-829159",
+    "channel_snapshot_and_state_queries": "826757-826795,826869-826879",
+    "status": "NONMATCHING C used only alongside the X-M1 disassembly"
+  },
+  "modules": [
+    "record_task43_selection_memory",
+    "record_task43_selection_mode",
+    "record_task43_selection_messages",
+    "record_task43_selection_saved",
+    "record_task43_selection_result"
+  ],
+  "export_prefix": "xm1_power_record_helper_",
+  "exports": [
+    "f1eddc", "f1ee10", "f1ee48", "f1ef44", "f1efe0", "f1f058", "f1f07c", "f1f104", "f1f130", "f1f148", "f1f164", "f1f1d8", "f1f1f0", "f1f21c", "f1f23c", "f1f250", "f1f260", "f1f2b0", "f1f460", "f1f4a0", "f1f4d0", "f1f4ec", "f1fbe8", "f1fc08", "f1fc5c", "f1fd40", "f1fd60", "f1fda8",
+    "f20140", "f20188", "f201b0", "f20300",
+    "f20380", "f203b4", "f20418", "f204fc", "f20518", "f20534", "f20550", "f2056c", "f20594", "f205c0", "f205e8", "f20604", "f20628", "f207f8", "f208d8", "f2095c", "f2096c", "f20980", "f20994", "f209a8", "f209e4", "f20a88", "f20b38", "f20b60", "f20ea0", "f20ec0", "f21074", "f212e8", "f21304", "f2131c", "f21378", "f213d4", "f216fc", "f21744", "f21a3c", "f21a5c", "f21ae4", "f21b20", "f21b40", "f21b60", "f21b80", "f21ba0", "f21bc0", "f21be0", "f21c00", "f21c20", "f21c40", "f21c60", "f21c80", "f21ca4", "f21cc8", "f21de4", "f21e08", "f21e18", "f21e40", "f22150", "f2216c", "f2218c", "f221b0", "f221d4", "f221f8", "f22224", "f22238", "f2225c", "f22298", "f222c4", "f2230c", "f2267c", "f226a4"
+  ],
+  "abi": {
+    "authority": "Rust extern C declarations in the five modules specify every exact dependency signature",
+    "addresses": "u32 native application addresses",
+    "actions": "void returns; no fabricated success values",
+    "predicates_and_queries": "u32 except f20628 initialization returns i32",
+    "index_predicate": "f1f148(index:u32)->u32 tests index != 255",
+    "mode_predicate": "f21de4(value:u32)->u32 accepts 1 or 21",
+    "descriptor_writers": "751ec8/751f58/751fe8 use (item:u32,descriptor:u32) native pointer ABI coordinated with ProfileSlotCpu"
+  },
+  "mapped_state": {
+    "command": "0x169d05c",
+    "saved_selection": "0x169e580",
+    "job": "0x16b3ddc",
+    "dispatch": "0x16b504c",
+    "profile": "0x16b51a8",
+    "channel": "0x16b5284",
+    "message_latch": "0x16b52a0",
+    "scan_plan": "0x16b52a4",
+    "measurement": "0x16b5428",
+    "resumed_mode": "0x16b5624",
+    "reference_snapshot": "0x41717a54"
+  },
+  "behavior": [
+    "Selection entry publishes the request and source snapshot before invoking the job backend; source mode 7 skips reference-context expansion",
+    "Measurement initialization retains the existing 508-byte state in mode 6, writes the item and workspace before backend failure, and only publishes backend output after a zero status",
+    "Selection callbacks copy the saved settings and publish the actual task43 events; no completion is synthesized",
+    "Saved profile publication preserves diagnostic branches, per-channel signed halfword adjustments, channel-history publication and source-controlled completion",
+    "Scan policy preserves count-dependent table writes, threshold rejection, mode latches, diagnostic configuration reads, signed halfword correction and the mode-3 early return",
+    "Descriptors retain unspecified padding through MaybeUninit storage and memory copies; fixed mapped state is not replaced by shadow state",
+    "f1f23c and f22224 are empty in the inspected firmware bytes"
+  ],
+  "provider_families": {
+    "task43": "PowerLifecycleNext.PowerRecordTask43",
+    "trace": "recording_capture_observation::xm1_power_recording_capture_trace_begin",
+    "selection_timing": "PowerLifecycleNext.PowerRecordSelectionTiming",
+    "profile_accessors": "PowerLifecycleNext.PowerRecordProfileAccessors",
+    "profile_slot_fields": "PowerApplicationJoin.ProfileSlotCpu",
+    "job_frontend": "PowerApplicationJoin.RecordJobCpu",
+    "job_backend": "PowerApplicationJoin.RecordJobBackendCpu",
+    "scan_frontend": "PowerApplicationJoin.RecordScanBackendCpu",
+    "scan_core": "PowerApplicationJoin.RecordScanCoreCpu",
+    "image_commands": "PowerApplicationJoin.RecordImageCommandCpu",
+    "completion_transport": "PowerLifecycleNext.PowerRecordCompletionServices",
+    "hardware_statistics": "PowerApplicationJoin.RecordHardwareDeepCpu",
+    "profile_display": "PowerApplicationJoin.RecordDisplaySelectionCpu"
+  },
+  "integration_primitive_requirements": [
+    "740e0c", "740e24", "740e3c", "742054", "742064", "742088", "742098", "89aa90", "772f28", "ef592c", "ef7d1c", "ef7eb4", "ef87b0", "ef8b78", "ef8bc0", "f51b50"
+  ],
+  "verification": "Source and host byte inspection only. Firmware image SHA-256 observed. No build, test, lint, formatter, SDK, guest execution or camera I/O. Native integration remains unqualified until the integration owner supplies all canonical providers and exercises verification."
+}

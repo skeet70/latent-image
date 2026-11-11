@@ -1,0 +1,108 @@
+{
+  "firmware": "X-M1 1.50",
+  "pin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_units": [
+    "app/settings/tu_0073958c.c",
+    "app/settings/tu_007371dc.c"
+  ],
+  "instruction_source": "private-data/analysis/x-m1-1.50/lz/id4.dis",
+  "raw_image": "private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin",
+  "extents": [
+    {
+      "entry": "0x73964c",
+      "size": 4416,
+      "pinned_sha256": "3b0e43c3012ae24d6efb13f6eccfe48c0ee67e7569f6a0ceaff71060f87b8166",
+      "raw_sha256": "3b0e43c3012ae24d6efb13f6eccfe48c0ee67e7569f6a0ceaff71060f87b8166"
+    },
+    {
+      "entry": "0x738800",
+      "size": 440,
+      "pinned_sha256": "f64d7ff0921393f23158826cde90ab69c8ef7f68c3b4d529c82cb5e6de6a4a84",
+      "raw_sha256": "f64d7ff0921393f23158826cde90ab69c8ef7f68c3b4d529c82cb5e6de6a4a84"
+    },
+    {
+      "entry": "0x735d54",
+      "size": 88,
+      "pinned_sha256": "a29e834bbcc4d4307ea57a3c62226651db481a3f54ae71a58147ea687050415a",
+      "raw_sha256": "a29e834bbcc4d4307ea57a3c62226651db481a3f54ae71a58147ea687050415a"
+    },
+    {
+      "entry": "0x735dac",
+      "size": 76,
+      "pinned_sha256": "a592180affa08cf26ad77091163ee60e108755d4dad19e921679d7d73540743a",
+      "raw_sha256": "a592180affa08cf26ad77091163ee60e108755d4dad19e921679d7d73540743a"
+    },
+    {
+      "entry": "0x735df8",
+      "size": 76,
+      "pinned_sha256": "24c73b1033842fcadce2794dec0cb042ddea2687db5b6a82534aa2404bfe9fd9",
+      "raw_sha256": "24c73b1033842fcadce2794dec0cb042ddea2687db5b6a82534aa2404bfe9fd9"
+    },
+    {
+      "entry": "0x73611c",
+      "size": 92,
+      "pinned_sha256": "87c445ab08c112107c3166b53c64c2d75360c6e3d6eb25b99b027d91158246b6",
+      "raw_sha256": "87c445ab08c112107c3166b53c64c2d75360c6e3d6eb25b99b027d91158246b6"
+    },
+    {
+      "entry": "0x7378cc",
+      "size": 48,
+      "pinned_sha256": "e4ecf77fa0da8765ea6516b71b1655e8ba43391973d3953881224ace0cb22bfa",
+      "raw_sha256": "e4ecf77fa0da8765ea6516b71b1655e8ba43391973d3953881224ace0cb22bfa"
+    },
+    {
+      "entry": "0x7378fc",
+      "size": 16,
+      "pinned_sha256": "3d952489967a41b7b40db65eec1c1cfcdc08a2621d74fbc712ef2f013f227a42",
+      "raw_sha256": "3d952489967a41b7b40db65eec1c1cfcdc08a2621d74fbc712ef2f013f227a42"
+    },
+    {
+      "entry": "0x737968",
+      "size": 32,
+      "pinned_sha256": "f283e0abc668d4aad356c39f8165b0a3d5ee9c052b38fdf5cffacbc1b3040e46",
+      "raw_sha256": "f283e0abc668d4aad356c39f8165b0a3d5ee9c052b38fdf5cffacbc1b3040e46"
+    },
+    {
+      "entry": "0x737988",
+      "size": 24,
+      "pinned_sha256": "aab533f64e7d3f50628f3b74c122bcfaae90f7a06e1282e0e04e4d03d9706543",
+      "raw_sha256": "aab533f64e7d3f50628f3b74c122bcfaae90f7a06e1282e0e04e4d03d9706543"
+    }
+  ],
+  "native_exports": {
+    "737968": "(value)->value==1",
+    "737988": "()->0",
+    "738800": "(raw_auxiliary,settings1000,work360)->r0 residue",
+    "73964c": "(raw_header,settings1000,optional_outputs12,conversion,burst,option,state,config65c,config678,config_extra)->r0 residue",
+    "7378cc": "(out16)->out",
+    "7378fc": "(out16)->out",
+    "735d54": "(raw_header,input4)->0 if unchanged, otherwise canonical setter residue",
+    "735dac": "(raw_header,input8)->0 if unchanged, otherwise canonical setter residue",
+    "735df8": "(raw_header,input6)->0 if unchanged, otherwise canonical setter residue",
+    "73611c": "(raw_header,input2)->0 if unchanged, otherwise canonical setter residue"
+  },
+  "boundary_layouts": {
+    "primary": "Canonical record_profile_accessors::ProfileHeader raw90byte object, not a ProfileHandle",
+    "secondary": "Canonical record_profile_aux_data::ProfileAuxiliary raw0x68byte object, not a ProfileHandle",
+    "settings": "Borrowed [u32;250]; reads remain volatile and ordered by projection",
+    "work": "Borrowed [u32;90]; secondary reads word at0x164",
+    "outputs": "Optional borrowed12bytes copied to source cache009134dc; three halfwords at0,2,4 projected",
+    "primary_scratch": "Actual entrySP-48 andentrySP-44 captured by A32 entry shim before Rust stack use; invalid7368c4 preserves native residue",
+    "secondary_scratch": "Sevenwords at actualentrySP-52. Default rectangle initializes first4 to0,0,480,640; nativeentrySP-36/-32/-28 remain exact incoming bytes on partial737aa8 paths"
+  },
+  "dependencies": {
+    "selection737854": "PowerLifecycleNext.PowerCaptureStart owns canonical xm1_power_record_helper_737854(first,second)->u32",
+    "primary_accessors": "PowerLifecycleNext.PowerRecordProfileAccessors canonical75b054..75bfbc leaves and packed getters/setters, rawpointer ABI",
+    "auxiliary_accessors": "PowerApplicationJoin.ProfileAuxCpu canonical75d/e scalar/packed fields and735fc0/7360a4/7360f0 compare providers",
+    "conversion": "capture_profile_conversions_a.rs andcapture_profile_conversions_b.rs; dedicated evidence inventories native table/config addresses",
+    "root": "PowerApplicationJoin declares Rust modules and includes entry.S text as compile inputs; Start calls73964c/738800 exports"
+  },
+  "test_source": "capture_profile_tests.rs synthetic boundary, flag, mapping, signedwidth, rememberedselection and partialwrite behavior. Not executed.",
+  "independent_source_review": {
+    "projection_and_abi": "Correct within reviewed scope and stated canonical integration contracts after resolving the missing738578 provider. Confirmed primary and secondary entry scratch positions, ten-argument forwarding, final r0 residue and compare wrappers. No remaining actionable finding.",
+    "conversion_family": "Correct after adding unary738578 export. Reviewed NONMATCHING raw behavior, configuration/numeric table dependencies, remembered selection, partial writes and packed channel byte order. No remaining blocking finding.",
+    "repair": "Both independent reviewers identified the same missing738578 export. Added unsigned wrapping_sub(5)<2 predicate, canonical export, ownership evidence and boundary test source; both reviewers confirmed the repair by source inspection.",
+    "execution": "No checks were run."
+  },
+  "admission": "Source-only implementation and source-inspected byte extents. No build, test, formatter, lint, native, SDK, guest or camera run. Canonical root composition and hardware laws are separately owned; no qualification transferred."
+}

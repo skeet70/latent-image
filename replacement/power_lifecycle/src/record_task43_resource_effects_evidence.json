@@ -1,0 +1,34 @@
+{
+  "target": "X-M1 1.50",
+  "x70view_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source": "decomp/firmwares/xm1-150/app/control/af/profile/tu_00f46c00.c",
+  "byte_confirmation": {"image":"id5-00bf1a00.bin","base":"0x00bf1a00","disassembly":"private-data/analysis/x-m1-1.50/lz/id5.dis","lines":[866419,866839]},
+  "qualification": "unqualified-source-only",
+  "shared_context_forwarder": {"module":"record_task43_resource_forward","function":"helper_f47300","contract":"RecordContext<M,E> plus seven scalar words -> Result<u32,MemoryError>","dependency":"record_profile_mapping::helper_74947c","byte_extent":["0x00f47300","0x00f47330"]},
+  "exports": {
+    "xm1_power_record_helper_f46cf8": "(status:u32)->()",
+    "xm1_power_record_helper_f46ea8": "(resource:u32)->()",
+    "xm1_power_record_helper_f46f28": "(resource:u32)->()",
+    "xm1_power_record_helper_f46f4c": "(resource:u32)->()",
+    "xm1_power_record_helper_f470d0": "(resource:u32,direct:u32)->()",
+    "xm1_power_record_helper_f47100": "(resource:u32)->i32",
+    "xm1_power_record_helper_f47234": "(resource:u32)->()",
+    "xm1_power_record_helper_f47330": "(resource:u32)->i32"
+  },
+  "local_transitive_implementations": ["f46d08 remap calculation","f46e18 gated publication","f46e6c current lens publication","f46fd4 session update","f4711c session completion"],
+  "inlined_getters": {"ef9f48":"0x0169d2fc","ef9f80":"0x0169d310"},
+  "owned_callback": "Registers native xm1_power_record_helper_f15070, never original executable address 0x00f15070",
+  "session": {"size":28,"enabled_offset":0,"pair_offsets":[4,8],"position_offset":12,"uninitialized_padding_offsets":[14,15],"lens_value_offset":16,"value_offset":20,"mode_offset":24,"padding_contract":"Shared session provider copies residual bytes as MaybeUninit storage without interpreting them as initialized u32"},
+  "native_dependencies_by_owner": {
+    "PowerLifecycleNext.PowerRecordProfileAccessors": ["74e020","74e648","74f784","74e5c0","74fa2c","74f9a4","7503ec","7569a4","74fab4","76da38","76d9a8","76d9c8","76da84","76dad4","76f340"],
+    "PowerApplicationJoin.ProfileSlotCpu": ["752278"],
+    "PowerApplicationJoin.ProfileSharedCpu": ["758c34","749fac","749e98","748730"],
+    "PowerApplicationJoin.ProfileMappingCpu": ["746018","76dbb4"],
+    "PowerApplicationJoin.RecordLensScheduleCpu": ["76fbac","76fc4c","76f5dc","76fb54"],
+    "PowerLifecycleNext.PowerRecordCompletionServices": ["efb73c","efb984","efb9f0","efba90"],
+    "selection_timing_owner": ["f15070"],
+    "settings_configuration_owner": ["69f8fc"]
+  },
+  "checks_exercised": [],
+  "limits": "Source and bytes only. No build, test, formatter, lint, SDK, guest or camera execution. Integration owner supplies module/build registration and independently qualifies the full native leaf-provider closure."
+}

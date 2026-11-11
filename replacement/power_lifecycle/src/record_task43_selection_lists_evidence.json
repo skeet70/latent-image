@@ -1,0 +1,40 @@
+{
+  "revision": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "target": "X-M1 1.50 IMAGE5",
+  "source": "decomp/firmwares/xm1-150/app/control/af/profile/tu_00f156d4.c",
+  "bytes": "private-data/analysis/x-m1-1.50/lz/id5.dis",
+  "image_sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+  "implemented_ranges": [["0xf156d4", "0xf1667c"], ["0xf17838", "0xf17b40"]],
+  "implemented": ["f156d4", "f156e8", "f15708", "f1572c", "f1582c", "f15a48", "f15ab4", "f15b70", "f15cbc", "f15d5c", "f15f40", "f1608c", "f160ac", "f160d0", "f160f4", "f16118", "f1613c", "f16160", "f16184", "f161a8", "f161cc", "f161f0", "f1626c", "f162a8", "f162e4", "f165fc", "f1661c", "f16640", "f16664", "f17838", "f17984", "f17a4c", "f17a84", "f17abc", "f17ad8", "f17af8", "f17b1c"],
+  "native_modules": ["record_task43_selection_lists.rs", "record_task43_selection_lists_residue.S"],
+  "dependencies": {
+    "PowerApplicationJoin.ProfileSharedCpu": ["75638c", "756478", "756508", "756158", "756298", "756338", "756598", "756628", "7566b8", "7560b8"],
+    "PowerLifecycleNext.PowerRecordProfileAccessors": ["74e5c0", "74e648", "74e7f0", "74e878", "74e900", "74eb20", "74ec30", "74f09c", "74f124", "74fc64", "750034", "7502dc", "75060c", "7509c4"],
+    "PowerApplicationJoin.ProfileSlotCpu": ["7527f8", "752890", "754d9c", "75582c", "755dfc", "755eac"],
+    "PowerApplicationJoin.RecordStatisticsCpu": ["dca798", "eeccc0", "eecddc", "eed3d8", "eedc84", "eedf48", "eee0f4", "eee214"],
+    "PowerApplicationJoin.ProfileMappingCpu": ["10510e8", "10512cc", "10515f4", "10517a0"],
+    "PowerApplicationJoin.RecordNumericCpu": ["fa67a8", "fa7954"],
+    "PowerApplicationJoin.RecordJobCpu": ["f5fc00", "f625ec"],
+    "default_limit_provider": ["f1aac4", "f1abec"],
+    "geometry_kind_provider": ["f51b50"],
+    "motion_provider": ["76d9c8", "76f340", "76f438"],
+    "PowerApplicationJoin.SelectionCoreCpu": ["f156b4"],
+    "PowerLifecycleNext.PowerRecordCompletionServices": ["efa3f8"],
+    "PowerServicesNext": ["xm1_power_current_task", "xm1_power_wait_current_all", "xm1_power_clear_current_flags", "xm1_power_read_interface_word_174"],
+    "power_lifecycle": ["xm1_power_configuration_byte", "xm1_power_recording_capture_trace_begin"]
+  },
+  "byte_semantics": {
+    "f156d4": "Function has no state effect; f156d4..f156e4 is the complete frame-only body.",
+    "f15ab4": "No identifiers are emitted for count zero or one; each accepted identifier preserves first-list order and duplicates; count and output indices wrap at eight bits.",
+    "f15b70": "Each bank clears the shared 0x414-byte scratch record, copies matching 0x68-byte entries in requested identifier order, writes the full output count word, then copies the entire scratch record back before visiting the next bank.",
+    "f15cbc": "Nonzero selects three banks, zero selects four. Scratch and output effects retain the native sequential bank order.",
+    "f1572c": "The wait and current-task flag clear occur even when eeccc0 returns failure. The eecddc cleanup occurs only after a zero start result.",
+    "f1582c_f15d5c": "743dc8 passes an output pointer to7257a8. That service always writes the word behind the selected interface slot174. Query scratch is copied after failed queries without replacement or reset.",
+    "f162e4": "DefaultListQuery is28 bytes. Actual fa7954 returned r0 is consumed by f16384 despite the donor void declaration. Count fields are byte writes; values, repeated grid rows and extra fields are word writes.",
+    "f17838_f17984": "The dca798 output window is not initialized when the helper does not write it. Assembly boundaries retain the source stack locations: f17838 r11-20, f17984 r11-28.",
+    "f165fc": "ef9bc0 is a constant accessor for169d05c. This predicate reads its kind word at169d060 and compares with5.",
+    "f16664": "Function returns literal1 in the image.",
+    "f17a4c": "Null owner returns0; otherwise only owner kind6 returns0.",
+    "f17abc_f17ad8": "Copy exactly0x218 bytes from/to4171783c without clearing adjacent state."
+  }
+}

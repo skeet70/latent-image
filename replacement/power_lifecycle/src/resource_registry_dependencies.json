@@ -1,0 +1,152 @@
+{
+  "schema_version": 1,
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_only": true,
+  "software_closure": "constructor/acquire/release and handle allocation/find/clear translated without retained software thunks",
+  "pinned_source": [
+    "decomp/firmwares/xm1-150/app/drivers/isp/routes/output_route_initialization.c",
+    "decomp/app/platform/osal/driver_handle_allocator.c"
+  ],
+  "raw_extents": [
+    {
+      "address": "0x00649624",
+      "size": 520,
+      "name": "FUN_00649624",
+      "raw_sha256": "24c1d75962a213a18390ee91ce331d9132f2fe2c6662ee91f98c68b1acad589b"
+    },
+    {
+      "address": "0x00649c4c",
+      "size": 400,
+      "name": "FUN_00649c4c",
+      "raw_sha256": "b52b7b9b32b4179290694ced0c5f8759ba48d90448ee28c4d657411f30ea2c88"
+    },
+    {
+      "address": "0x00649ddc",
+      "size": 564,
+      "name": "FUN_00649ddc",
+      "raw_sha256": "a9dd33460b1b170391778733820db1fa00638743b1280a28e707cb7cb7c0727a"
+    },
+    {
+      "address": "0x0065722c",
+      "size": 344,
+      "name": "driver_allocate_handle",
+      "raw_sha256": "586895bacfe3ad6ed738b7bd629ca35dc07e037a21884e0f2e1f90272248fa7f"
+    },
+    {
+      "address": "0x00657384",
+      "size": 200,
+      "name": "driver_find_handle",
+      "raw_sha256": "906044b5d122e5b38be1c45ff5cdc3a443efed825b96ed816f0f7a81d4d1ad57"
+    },
+    {
+      "address": "0x0065744c",
+      "size": 104,
+      "name": "FUN_0065744c",
+      "raw_sha256": "c4bb3980c11c048de8e422ded354347ee9cf6040dc314cd40f01e5e02b22b435"
+    }
+  ],
+  "api": {
+    "acquire": "unsafe fn(ResourceId) -> Result<RegistrationHandle, RegistryError>",
+    "release": "unsafe fn(RegistrationHandle) -> Result<(), RegistryError>",
+    "ffi_acquire": "xm1_power_resource_acquire(u32, *mut u32) -> i32",
+    "ffi_release": "xm1_power_resource_release(u32) -> i32",
+    "ffi_constructor": "xm1_power_resource_initialize_routes()"
+  },
+  "requested_route": {
+    "source": "resource_requested_route.rs imported alone from d4798a78",
+    "stock_address": "0x0064982c",
+    "ffi": "xm1_power_output_route_set_requested_level(u32, u32, u32) -> i32",
+    "slots": "0..=18",
+    "levels": "0..=8",
+    "arbitration": "maximum of global minimum and all19 requests, clamped to global maximum",
+    "application": "existing resource_route::set_request at selectors0 and0x101, requestslot0; both results ignored",
+    "serialization": "shared interrupt lock over request publication, arbitration and both applications",
+    "physical_callback": false
+  },
+  "registry": {
+    "count": 47,
+    "valid_resource_ids": "0..=46",
+    "route_state": "0x409c1e30..0x409c2644",
+    "active_words": "0x409c24cc..0x409c2588",
+    "handle_words": "0x409c2588..0x409c2644",
+    "serial_word": "0x409c2804",
+    "mask_table": "0x007c86d4..0x007c884c",
+    "mask_table_raw_sha256": "74362780ea8f4ce26d3b8aab841bef0e588875adb511e32de086f5355b12a4b0"
+  },
+  "acquisition": {
+    "serialization": "whole operation under xm1_power_interrupt_lock/unlock; individual device write additionally uses xm1_power_save_irq/restore_irq",
+    "invalid_resource": -30,
+    "occupied_resource": -20,
+    "failure_writes": "no serial increment, handle/active/device/output writes",
+    "serial": "increment shared RAM word wrapping32bit, skip0, scan all47handles and retry collision; no reset on acquire",
+    "publication_order": [
+      "handle table",
+      "caller output",
+      "active word1",
+      "clock mask device register"
+    ],
+    "device_write": "bank0 fff8802c, other bank fff88030; preserve unrelatedbits and set selectedmask",
+    "boot_marker_gate": false
+  },
+  "release": {
+    "unknown_or_zero_handle": -20,
+    "order": [
+      "find matching nonzero handle",
+      "active word0",
+      "OR masks for every remaining active==1 in samebank",
+      "mask selectedbits not required by remaining active users",
+      "skip devicewrite when word4089e810==19790515, else IRQ-protected clear",
+      "handle slot0"
+    ],
+    "success": 0
+  },
+  "constructor_lifetime": {
+    "explicit_startup_only": true,
+    "precondition": "no live resource registrations or route requests; call at actual649624 startup phase",
+    "cleared_words": 517,
+    "base": "0x409c1e30",
+    "channel_maximum_defaults": [
+      8,
+      8,
+      8,
+      9,
+      8,
+      10,
+      8,
+      8,
+      8,
+      11
+    ],
+    "channel_minimum_defaults": "all0",
+    "global_maximum": 8,
+    "global_minimum": 0,
+    "source_default_writes": {
+      "0xf0": 8,
+      "0x190": 8,
+      "0x550": 8
+    },
+    "serial_untouched": true,
+    "lazy_initialization": false,
+    "shadow_registry": false,
+    "handle_reuse": "nonzero32bit handles may be reused after wrap or constructor reset; parsedhandles require current constructor lifetime"
+  },
+  "owned_runtime_dependencies": [
+    "xm1_power_interrupt_lock",
+    "xm1_power_interrupt_unlock",
+    "xm1_power_save_irq",
+    "xm1_power_restore_irq"
+  ],
+  "migrated_local_client": "vg_release.rs uses xm1_power_resource_release; old private registry destructor removed",
+  "peer_clients": [
+    "PowerAudioRelease ids31/35",
+    "PowerInputInitialization id34",
+    "PanelProgrammingCpu suppliedIDs"
+  ],
+  "verification": {
+    "build": false,
+    "tests": false,
+    "lint": false,
+    "formatter": false,
+    "camera_writes": false
+  }
+}

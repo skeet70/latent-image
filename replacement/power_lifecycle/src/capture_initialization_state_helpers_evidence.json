@@ -1,0 +1,37 @@
+{
+  "status": "source-inspected",
+  "firmware": "X-M1 1.50",
+  "decomp_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "module": "capture_initialization_state_helpers.rs",
+  "owned_entries": ["0x636508..0x6373f4", "0x63d688", "0x646550", "0x6465a4", "0x72b774", "0x72b858", "0x72b868"],
+  "source_units": [
+    "app/native_ui_snapshots/xm1_ui_snapshots.c",
+    "app/ui/record/ui_frame_policy_fields_3.c",
+    "app/ui/record/ui_record_state_accessors.c",
+    "app/ui/record/ui_record_state_bodies_2.c",
+    "app/ui/record/ui_record_state_bodies_exact2.c",
+    "app/ui/record/ui_profile_service_accessors_1.c",
+    "app/ui/record/ui_record_setting_values.c",
+    "app/drivers/strobe/device_unpack_status.c",
+    "app/platform/osal/tu_007291d8.c",
+    "app/drivers/hdmi/hdmi_configuration.c"
+  ],
+  "byte_confirmation": {
+    "candidate_fields": "0x636508..0x637478 inspected from exact image4 bytes; flag writes are bytes at snapshot stride0x35c, candidate writes are words at stride4, clears write14 words without clearing flags or cached value",
+    "nonmatching_63d688": "0x63d688..0x63db24 inspected from image4; strobe mode query result must be0 and configured byte neither0 nor15; extended-query status ignored; 6348b0/6348d0 write INPUT+0x1c/+0x18; 6338ec writes INPUT+0x14; final projection consumes63d3bc return",
+    "nonmatching_63717c": "Raw instruction STRB uses snapshot stride0x35c, not draft C word index scaling",
+    "serial_decoders": "0x69e644..0x69e6dc and0x69e840..0x69e920 inspected; command buffers zeroed before serial read; decoding and configured-state write occur even on read error",
+    "configuration": "0x69f8fc..0x69f920 loads pointer0x96ca50 then reads byte at offset0x1367",
+    "osal_forwarding": "0x72b858..0x72b878 preserves argument and return through calls69e644/69e840",
+    "hdmi_source": "Raw direct-BL chain72b774->6ce870->6d4920->6d6e04; getter0x6d6e04..0x6d6e2c reads0x93a778, writes output word0 and returns0; mapper translates source modes0/3/4/5/6/9/10 and writes81 with-63 for every other mode"
+  },
+  "dependencies": {
+    "capture_initialization_state": ["FRAME", "INPUT", "read_word", "read_byte", "write_word", "write_byte"],
+    "capture_initialization_helpers_a": ["PropertyKey", "SettingValue", "property", "project", "preferred_value", "value_available"],
+    "capture_initialization": ["f_63d3bc", "f_63d5fc", "f_63d614"],
+    "capture_initialization_conversions": ["f_643c4c", "f_6464f4"],
+    "mode_initialization": ["CaptureModeId", "FlagId", "query_flag"],
+    "xm1_vendor_device_serial_read": "Concrete owned command-reader ABI, backed by canonical vendor configuration_imaging_strobe::read and NativeHardware; not a retained CPU entry"
+  },
+  "qualification": "Source integration only; no build, test, lint, formatter, SDK, guest execution or camera I/O. Root/module registration and concrete command-reader linkage belong to integration owner."
+}

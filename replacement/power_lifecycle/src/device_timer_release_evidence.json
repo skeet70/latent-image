@@ -1,0 +1,44 @@
+{
+  "pin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "pin_repository": "/var/home/murph/Code/x70view",
+  "pinned_sources": [
+    "decomp/firmwares/xm1-150/app/platform/osal/device_timer_controls.c",
+    "decomp/firmwares/xm1-150/app/platform/osal/device_timer_state.h",
+    "decomp/firmwares/xm1-150/app/platform/osal/device_timer_start.c",
+    "decomp/firmwares/xm1-150/app/platform/osal/software_timer_start.c",
+    "decomp/firmwares/xm1-150/app/platform/osal/software_timer_controls.c",
+    "decomp/app/platform/osal/software_timer_tick.c"
+  ],
+  "raw_image": "private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin",
+  "raw_origin": "0x61c400",
+  "extent_convention": "half-open virtual addresses; SHA256 of actual raw bytes",
+  "extents": [
+    {"name":"constructor","start":"0x6b789c","end":"0x6b7924","sha256":"302d524871044633956aeda2007a4a22727939f830035e5ff211a99975ccffe6","disassembly":"id4.dis:159020-159053"},
+    {"name":"post_unregister","start":"0x6b79b8","end":"0x6b7a0c","sha256":"b38921b5f765982dd03ccc196f64023d195c2b2ea88846a2cb0e35b26bacce44","disassembly":"id4.dis:159091-159111"},
+    {"name":"start","start":"0x6b7b60","end":"0x6b7c44","sha256":"fc9c0d855e50f4c9b48541806bf68ed011c4d8a9e5382189cfb797032eed5bc1","disassembly":"id4.dis:159197-159253"},
+    {"name":"stop","start":"0x6b7c44","end":"0x6b7cf4","sha256":"193b9ac2d65d485bbad14c83f3167443eee332e15a4460e54fc2c159a5d1bab0","disassembly":"id4.dis:159254-159297"},
+    {"name":"invoke","start":"0x6b7cf4","end":"0x6b7d20","sha256":"c2bac3a4cc45c790f469cf4f3d0f9705224175471f3e656954c572f61dd4086e","disassembly":"id4.dis:159298-159308"},
+    {"name":"dispatch","start":"0x6b7d20","end":"0x6b7d7c","sha256":"e70a57968c0ff6cd6d617cc6385e39e35bfa7c6b49bd24f79d106ec5a2317aec","disassembly":"id4.dis:159309-159331"},
+    {"name":"task","start":"0x6b7d7c","end":"0x6b7db8","sha256":"ae45986052b624cab510981223516742f44f3e4ecdfd64184f9777187f5ea70d","disassembly":"id4.dis:159332-159346"},
+    {"name":"software_start","start":"0x69b328","end":"0x69b7a4","sha256":"a25c615de3641e96231579054a8511362790993904b8eb72751570dfcf62099f","disassembly":"id4.dis:129999-130285"},
+    {"name":"software_cancel","start":"0x69b7a4","end":"0x69b86c","sha256":"4658d8a66e172a5a9b223e33d26ecd6a14ad9792917d4348dd2dbeb8bff62b08","disassembly":"id4.dis:130286-130335"},
+    {"name":"allocate_handle","start":"0x65722c","end":"0x657384","sha256":"586895bacfe3ad6ed738b7bd629ca35dc07e037a21884e0f2e1f90272248fa7f","disassembly":"id4.dis:60304-60389"},
+    {"name":"software_tick","start":"0x69bde4","end":"0x69c03c","sha256":"b6640341cb996f28f4ad8767702712b46b97bd023f148148e8f61f6da6e2d7a1","disassembly":"id4.dis:130686-130835"}
+  ],
+  "constructor": {"queue":37,"queue_configuration":[48,20],"priority":4,"stack_bytes":3072,"name_address":"0x781d40","entry":"0x6b7d7c","argument":0},
+  "state": {"base":"0x93ad40","request_bytes":12,"payload_offset":12,"periods_offset":24,"handles_offset":44,"callbacks_offset":64,"slots":5},
+  "message_sequence": [
+    "6a0210 calls6b79b8(0) when registered; PowerTimerCharge owns6a0210",
+    "6b79b8 emits operation3501, current-task source, destination37, four-byte index payload through shared owned NativeShutdownRtos",
+    "task37 receives indefinitely through actual owned dataqueue timeout receive and releases the actual fixedpool block",
+    "operation3501 validates index0..4, skips zero handle, clears callback, unregisters cyclic when period divisible by10 or cancels software slot otherwise, then clears period and handle even after cancellation failure",
+    "operations3502..3506 invoke the corresponding callback only when nonzero",
+    "task37 ignores receive and dispatch status; no acknowledgement, event flag or synchronous release completion is produced"
+  ],
+  "owned_dependencies": ["shutdown_rtos::NativeShutdownRtos", "shutdown_receive::ReceiveDescriptor", "shutdown_receive::ReceiveTimeout", "xm1_app_register_callback", "xm1_app_unregister_callback", "xm1_power_interrupt_lock", "xm1_power_interrupt_unlock", "xm1_power_command_diagnostic"],
+  "integration": {"module":"device_timer_release","native_exports":["xm1_power_device_timer_unregister", "xm1_power_device_timer_receive", "xm1_power_device_timer_dispatch", "xm1_power_device_timer_task", "xm1_power_software_timer_tick", "xm1_power_software_timer_cancel", "xm1_power_software_timer_start"],"task_constructor_entry":"xm1_power_device_timer_task","software_timer_irq_callback":"xm1_power_software_timer_tick","software_timer_irq_install_owner":"software_timer_service.rs owns actual task9 construction69c648 and physical timer callback69c4d8"},
+  "raw_source_difference": "Raw69bf34 invokes callback before checking periodic and reloading or freeing. Pinned generic software_timer_tick.c invokes after reload/free. Native replacement follows raw bytes.",
+  "receive_capacity": "Queue37 configured block payload limit12; state payload region holds12 bytes. Shared owned receive supplies framing, copy, block release and receive-error diagnostics.",
+  "diagnostics": "Software-start uninitialized and exhausted-slot branches call shared xm1_power_command_diagnostic(2,0x1c) and(2,0x1f). Message diagnostics are supplied by shared post/receive.",
+  "verification": "Source-only. No build, test execution, lint, formatting, camera or commit performed."
+}

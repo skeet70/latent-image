@@ -1,0 +1,64 @@
+{
+  "firmware": "X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "scope": "source-only; no build, test, native, SDK, guest, or camera execution",
+  "modules": ["recording_capture_selected", "recording_capture_selected_output", "recording_capture_selected_conversion"],
+  "entrypoints": {
+    "recording_capture_selected::request(kind:u32,settings:u32,selected:u32)->i32": ["0x00df4e14", "0x00dfbaf0", "controller33"],
+    "recording_capture_selected::output(kind:u32,settings:u32)->i32": ["0x00df48b4", "0x00dfbbb4", "controller34"]
+  },
+  "owned_controllers": [31, 33, 34, 35, 36, 37, 38, 61, 76],
+  "source_units": [
+    "app/capture/reccont/tu_00df4370.c",
+    "app/capture/reccont/tu_00df5560.c",
+    "app/capture/reccont/tu_00df7460.c",
+    "app/capture/reccont/tu_00dfc0a0.c",
+    "app/capture/reccont/tu_00deee28.c",
+    "app/capture/reccont/record_message_wrappers.c",
+    "app/capture/reccont/tu_00e23dc8.c",
+    "app/capture/reccont/tu_00e25d5c.c",
+    "app/capture/reccont/tu_00e3100c.c",
+    "app/capture/reccont/tu_00e349c0.c",
+    "app/capture/record/record_command_words.c",
+    "app/capture/record/tu_00ef8e7c.c",
+    "app/settings/conversion_state_updates.c",
+    "app/settings/conversion_state_fields.c",
+    "app/settings/conversion_record_helpers.c",
+    "app/settings/conversion_flag_helpers.c",
+    "app/settings/tu_0072f30c.c",
+    "app/settings/tu_0075abd4.c",
+    "app/drivers/lens/control/tu_0075b6a8.c"
+  ],
+  "byte_confirmations": [
+    {"address": "0x00dd1220", "fact": "Returns1 without inputs or effects; the scalar selected-setting request stores94f0/94f4 and completes synchronously."},
+    {"address": "0x00df5620", "fact": "Copies32 request bytes to9460 and clears9480; there is no controller62 dispatch."},
+    {"address": "0x00dfbaf0", "fact": "Every valid row returns controller33's result, including rows whose draft C discards it."},
+    {"address": "0x00dfbbb4", "fact": "Every valid row returns controller34's result, including rows whose draft C discards it."},
+    {"address": "0x00e3a444", "fact": "Controller callback pointers were decoded from the pinned image5 bytes."},
+    {"address": "0x00e3af60", "fact": "Controllers31/34/35/36/37/38 have stride2,33 stride10,61/76 stride4."},
+    {"address": "0x00e3c3a0", "fact": "Transition pairs were decoded from each controller table, including61's seven rows and76's six rows."},
+    {"address": "0x00e24d98", "fact": "Selected apply and resume read settings from93d4;93f4 remains the request wrapper's stored argument."},
+    {"address": "0x00df4bcc", "fact": "Refreshes policy and descriptor state, records the current message triple, conditionally notifies, and returns0."},
+    {"address": "0x00ef9264", "fact": "The0xa0-byte command0d packet has callback at0,payload at8,selection at152,extra at156; signed timing comes from69ff7c, not the donor945730 address."},
+    {"address": "0x00731c18", "fact": "Upper bound ignores category, reads configuration byte3e232d+selection, maps its index through738d7c and truncates to byte."},
+    {"address": "0x00731c38", "fact": "Lower bound ignores category, reads configuration byte3e22c8+selection, maps its index through738d7c and truncates to byte."},
+    {"address": "0x00732a4c", "fact": "Descriptor refresh gates on selection and category/mode, updates conversion limits and writes optional byte/halfword destinations."},
+    {"address": "0x00738d7c", "fact": "Initializes first admissible index at9134f4 once under9134e8 and returns(index+1-first)&ffff."}
+  ],
+  "shared_dependency_owners": {
+    "recording_capture_backends_native": ["rec", "put", "word", "half", "store", "store_half", "command", "send", "missing", "defer", "notify"],
+    "recording_capture_resources_native": ["xm1_power_record_helper_eb2838", "xm1_power_record_helper_eb34bc"],
+    "recording_capture_start_native": ["xm1_power_record_helper_72daac", "xm1_power_record_helper_72dafc", "xm1_power_record_helper_72db7c", "xm1_power_record_helper_737854"],
+    "recording_engine25_native": ["update_work_settings"],
+    "CaptureProfileCpu": ["xm1_power_record_helper_738800", "xm1_power_record_helper_73964c", "xm1_power_record_helper_7378fc", "xm1_power_record_helper_73788c", "xm1_power_record_helper_73790c", "xm1_power_record_helper_7379a0", "xm1_power_record_helper_7379d8", "xm1_power_record_helper_737a4c", "xm1_power_record_helper_737a90", "xm1_power_record_helper_737aa8", "xm1_power_record_helper_736f98"],
+    "PowerApplicationJoin.ProfileMappingCpu": ["xm1_power_record_helper_746834", "xm1_power_record_helper_746864", "xm1_power_record_helper_74677c"],
+    "PowerApplicationJoin.ProfileDiagnosticsCpu": ["xm1_power_record_helper_7468b8", "xm1_power_record_helper_747b50"],
+    "PowerApplicationJoin.CaptureTask3Cpu": ["xm1_power_record_helper_dcbe68", "xm1_power_record_helper_dccbb0"],
+    "recording_continuation": ["xm1_power_recording_repeat_current_notification"],
+    "diagnostics": ["xm1_power_configuration_byte"]
+  },
+  "separate_ownership": {
+    "controller62": "PowerApplicationJoin.CaptureTask3ScalarCpu owns the scalar/display-transition familye311c8-e31cfc; df5620 does not invoke it.",
+    "Engine90": "e38fcc acknowledgement,dd14b8 selection-change and747cfc(0)limit are outside selected-controller reachability and were reported to PowerApplicationJoin for separate concrete ownership."
+  }
+}

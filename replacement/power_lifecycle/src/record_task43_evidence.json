@@ -1,0 +1,52 @@
+{
+  "target": "Fujifilm X-M1 1.50",
+  "decomp_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "scope": "Source and installed-byte inspection only; no build, runtime or camera qualification",
+  "owned_modules": ["record_task43.rs", "record_task43_events.rs", "record_task43_common.rs", "record_task43_initialization.rs", "record_task43_application.rs", "record_task43_residue.S"],
+  "receiver": {
+    "entry": "0x00f01bc8",
+    "queue": 43,
+    "message_state": "0x0169d374",
+    "payload_destination": "0x0169d380",
+    "payload_storage_table": "0x00efbb20",
+    "command_enabled_bytes": "0x0169cf24",
+    "behavior": "Receive through the canonical image queue service, report nonzero receive status and continue using actual message state, copy payload for commands zero through 45, mark the command enabled, then dispatch machine zero. Out-of-range events still reach its default row."
+  },
+  "dispatch": {
+    "stock_function": "0x00efca6c",
+    "transition_pointer_table": "0x00f12f70",
+    "handler_pointer_table": "0x00f133ec",
+    "action_pointer_table": "0x00f12074",
+    "state_widths": "0x00f1158c",
+    "rows": "0x0169d468",
+    "states": "0x0169d4b4",
+    "behavior": "Compute the wrapping halfword row times width plus entry state, run the owned Rust executor for the table slot, then read the continuation byte. Positive continuations preserve the handler's state changes; nonpositive continuations overwrite state with the negated signed byte.",
+    "positive_continuations": "All valid pinned cells have positive continuation one or a nonpositive state. Action one is null for all 37 machines. Handler slots zero and one are null; neither invokes a CPU address.",
+    "event_mapping": "The event-row map is derived from the installed A32 conditional branches and halfword stores, including grouped ranges in machine twelve. NONMATCHING C is not used to fill omitted selectors."
+  },
+  "callbacks": {
+    "command0": "0x0169cf58, status",
+    "command1": "0x0169d000, status",
+    "command2": "0x0169d004, status,a,b,stored_word24,c,d",
+    "command3": "0x0169d020, status,a,b,stored_word20,c,d",
+    "command4": "0x0169d038, status,a,b,c",
+    "command5": "0x0169d050, status,a",
+    "release": "Clear the command-enabled byte before callback invocation exactly when signed status is nonpositive, 20, or 21. Null callbacks still permit the release. Native callback pointers are supplied by owned producers; no stock callback address is invoked."
+  },
+  "common": {
+    "banking": "0x00f149e8 moves an occupied bank to bank plus five only for kind three; reserves if empty, obtains the current resource and applies the command header. 0x00f14aac releases a nonempty bank and clears it after the release call.",
+    "failure": "0x00f46c20 and logger 0x007420b4 use a native assembly ABI frame which writes only the diagnostic event 0x91b and argument zero. The remaining 68 bytes retain the actual frame residue. Application ingress reads installed callback 0x00829a0c: stock default 0x0072b210 owns actual queue routing and first-task publication, initial 0x0072b318 owns IRQ-locked early buffering, and registered owned native overrides receive the record. Stream text task two at 0x00f4738c follows the callback. The diagnostic returns even after queue failure.",
+    "completion_flags": "0x00f46c4c queries three channel states and the selection mode in order, snapshots three changed flags, clears the flags, and invokes channel14 completion with status, mode, any-changed and the source-derived channel mask.",
+    "initialization": "0x00f146d4 and 0x00f14824 retain the actual ordered image-reset and resource-initialization calls. A native ABI frame supplies the mode words and both geometry windows. The upper halfword of the second mode word and word three of the six-word window remain unwritten.",
+    "application": "Shared host ApplicationIngress represents early buffering or the installed active sender. The early sender changes only eight bytes of each 76-byte slot and returns -63 with its overflow diagnostic when 64 slots are occupied. The active sender preserves record bytes, handles the 0x82e issued/consumed gate, propagates actual queue status, and records the first 0x91b task even after queue failure."
+  },
+  "dependencies": [
+    "Owned machine executors zero through 36 and side-effect preparation providers",
+    "Canonical xm1_pipeline_image_receive_message, xm1_pipeline_image_send_message, xm1_pipeline_image_current_task",
+    "Concrete profile resource accessors and resource reservation/release services",
+    "Concrete channel-state queries and recording completion14",
+    "Owned native application callback registry and stream text",
+    "Actual kernel syslog_thread_name(0x782048) for an occupied application gate",
+    "Concrete image initialization roots fea418/fea428, f4c384/f4c3b8, 1039580/1039610, 10546d0/10546e0, 1050f8c/1050fa4, 1051fb4/1051fcc, ed87b0/ed89b0"
+  ]
+}

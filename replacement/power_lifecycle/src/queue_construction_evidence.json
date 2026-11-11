@@ -1,0 +1,36 @@
+{
+  "pin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "range_manifest": "decomp/firmwares/xm1-150/function-ranges.json",
+  "raw_image": "private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin",
+  "raw_disassembly": "private-data/analysis/x-m1-1.50/lz/id4.dis",
+  "extent_grounding": "Pinned manifest records obtained with git show; SHA256 calculated from actual image slices at load address 0x61c400 agrees for all three extents.",
+  "functions": [
+    {"entry": "0x7233dc", "end_exclusive": "0x723470", "bytes": 148, "sha256": "8f6cc2d7a776a5d3eed3ae006a84dc5d2ce1f0e65e6f88ea2450dda14570c9be", "ownership": "Reused primitives::NativeQueueStorage::release_storage; clears reservation-in-use at 0x409c390c + 12 * slot under IRQ masking and lock word 0x409c280c."},
+    {"entry": "0x723470", "end_exclusive": "0x7235d8", "bytes": 360, "sha256": "615150a83e4d063f3a0228b6008e3bc103b3e6e5d8cdf0e53aa2ff9e5cc091fd", "ownership": "NativeConstruction::reserve owns fixed service-storage reservation records at 0x409c3904 + 12 * slot, service cursor at 0x4089ea90, base 0x409c4460, capacity 0x4b000. Reuse requires identical requested size and inactive reservation; otherwise -33 or -18. New reservations advance cursor by requested & !3. No heap or shadow RTOS."},
+    {"entry": "0x724cdc", "end_exclusive": "0x724f08", "bytes": 556, "sha256": "9b06d01ff6e811af342eacf6006454021dd07219ea6aeec35c39c4f4d7e002ea", "ownership": "create_queue composes actual owned data_queue_create_body and fixed_pool_create_body, with IRQ/global critical section from owned osal. Data queue packet is [0, flags, ring]; fixed pool packet is [0, flags, message_size + 4, buffer]."}
+  ],
+  "abi": {
+    "create": "xm1_power_queue_create(channel: u32, configuration: *const repr(C) {flags: u32, message_size: u32}) -> i32",
+    "delete": "xm1_power_queue_delete(channel: u32) -> i32",
+    "delete_composition": "primitives::destroy_queue + OwnedQueueRtos + NativeQueueStorage<diagnostics::NativeQueueDiagnostics>",
+    "bounds": "QueueId admits low16 channel slots 1 through 120; reservation slot bounds 0 through 239 precede record access. Native owned RTOS creation admits its own encoded-id domain. Named constructor queues 6,37,83,100 have class1 in actual 0x7cad9c map bytes."
+  },
+  "metadata": {
+    "class_map": "0x7cad9c + 4 * (queue - 1)",
+    "ring": "0x40a0f870 + 4 * (queue - 1)",
+    "message_size": "0x40a0fa50 + 4 * (queue - 1)",
+    "pool_address": "0x409c3500 + 8 * (queue - 1 + 0x9600) + 0xf64",
+    "pool_bytes": "pool_address + 4",
+    "ring_reservation_slot": "queue + 119",
+    "pool_reservation_slot": "queue - 1"
+  },
+  "storage_reuse_decision": "Existing task_storage::xm1_task_storage_transition binds task-specific records 0x40a0fc44, cursor0x4089ea98, and TASK_POOL allocation domain; it cannot allocate service723470 storage without corrupting task-stack lifetime. Native service allocator uses the actual separate reservation domain instead.",
+  "repairs": [
+    "Data queue create failure releases the newly reserved ring.",
+    "Pool reservation failure deletes the newly created queue and releases ring reservation.",
+    "Pool create failure deletes the newly created queue and releases both reservations; pool-active metadata is cleared.",
+    "Successful queue destruction delegates to repaired typed destroy_queue, not the mismatched stock tail slot."
+  ],
+  "remaining_boundary": "Physical CPU IRQ masking and hardware synchronization instructions beneath owned RTOS and lock adapters.",
+  "verification": "Source and byte evidence only. No build, tests, lint, formatter, firmware execution, or camera activity run. Behavioral test source supplied in queue_construction_tests.rs."
+}

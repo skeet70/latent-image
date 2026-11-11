@@ -1,0 +1,34 @@
+{
+  "target": "Fujifilm X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "implementation": "record_profile_mapping.rs",
+  "authority": "image 4 instruction inspection; NONMATCHING C used only as a reading aid",
+  "owned_entries": ["740888", "7409f0", "740a00", "743dc8", "746054", "746454", "74677c", "746834", "746864", "746944", "7469a0", "746a80", "746bf8", "746c2c", "74714c", "747374", "747aac", "74947c", "75c874", "75c8a4", "76dbb4"],
+  "instruction_ranges": {
+    "channel_mapping": "id4.dis:305378-306065",
+    "calibration_correction": "id4.dis:305522-305692",
+    "charge_callback_registration": "id4.dis:132884-132899,132932-132966",
+    "curve_primitives": "id4.dis:305139-305251,306146-306182,306608-306626",
+    "curve_remapping": "id4.dis:308260-308382",
+    "rounding": "id4.dis:300781-300799",
+    "normalization_global": "id4.dis:341948-341954,345586-345589",
+    "profile_fields": "id4.dis:327970-327985",
+    "published_pointers": "id4.dis:299303-299327",
+    "tick_snapshot": "id4.dis:271599-271612",
+    "lens_metadata": "id4.dis:172544-172557,173768-173780,174436-174445,304922-304941"
+  },
+  "interfaces": {
+    "calibration": "Reads current calibration base from 0x96ca50; halfwords assembled from individual bytes",
+    "mapping_results": "746944,7469a0,746a80,746bf8,746c2c,747374,747aac,74947c and75c8a4 return signed16 values sign-extended in the u32 ABI",
+    "746454": "bank, channel, seven signed32 source words, seven signed32 output words",
+    "74947c": "value, bank, source channel, destination channel, two unused ABI words, direction",
+    "743dc8": "Caller-provided word receives selected-core tick through existing RTOS interface root",
+    "746054": "Reads cached lens metadata kind while holding existing power interrupt lock"
+  },
+  "excluded_owners": {
+    "74a214,74a740": "PowerLifecycleNext.PowerRecordProfileAccessors",
+    "748928 and diagnostic dependency closure": "PowerApplicationJoin.ProfileDiagnosticsCpu",
+    "76dd,76de,76e callback scheduling": "PowerApplicationJoin.RecordLensScheduleCpu"
+  },
+  "verification": "No builds, tests, formatting, lint, native, SDK, guest, emulator or camera operations run"
+}

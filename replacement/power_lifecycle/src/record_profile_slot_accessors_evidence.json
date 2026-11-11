@@ -1,0 +1,12 @@
+{
+  "scope": "Only X-M1 1.50 profile slot13 getters75502c and75516c",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "authority": "Installed byte semantics; no sibling profile layouts",
+  "byte_evidence": "private-data/analysis/x-m1-1.50/lz/id4.dis:320272-320291,320352-320371,328917-328923,328941-328947",
+  "selection": "Each getter queries read permission for field13, uses handle bank when admitted and selected bank otherwise, through canonical record_profile_accessors::read_bank.",
+  "layout": "Resource base96ebd0 stride2158; slot13 offset20b0; first u32 at slot+1c, second u32 at slot+24.",
+  "exports": ["xm1_power_record_helper_75502c(handle:u32)->u32", "xm1_power_record_helper_75516c(handle:u32)->u32"],
+  "dependencies": ["record_profile_accessors::ProfileHandle", "record_profile_accessors::ProfileField", "record_profile_accessors::read_bank", "record_profile_accessors::resource_address"],
+  "integration": "Register record_profile_slot_accessors with the canonical record_profile_accessors module. No replacement backing state or permission implementation.",
+  "qualification": "Source-only. No builds, tests, lint, formatter, SDK, guest or camera I/O."
+}

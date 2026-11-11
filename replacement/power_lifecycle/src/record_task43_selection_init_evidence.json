@@ -1,0 +1,31 @@
+{
+  "target": "Fujifilm X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source": "decomp/firmwares/xm1-150/app/control/af/profile/tu_00f156d4.c",
+  "source_status": "NONMATCHING reading aid, branches and arguments recovered from pinned X-M1 instructions",
+  "instruction_evidence": "private-data/analysis/x-m1-1.50/lz/id5.dis:816852-817986",
+  "owned_functions": [
+    {"entry": "0x00f1667c", "end_exclusive": "0x00f169ec", "symbol": "xm1_power_record_helper_f1667c", "behavior": "Initialize slot fields, shared defaults and callback operations 3 and 4"},
+    {"entry": "0x00f169ec", "end_exclusive": "0x00f16a24", "symbol": "xm1_power_record_helper_f169ec", "behavior": "Apply active owner when resource byte42 is one"},
+    {"entry": "0x00f16a24", "end_exclusive": "0x00f16a40", "symbol": "xm1_power_record_helper_f16a24", "behavior": "Restore owner buffer"},
+    {"entry": "0x00f16a40", "end_exclusive": "0x00f16a88", "symbol": "xm1_power_record_helper_f16a40", "behavior": "Apply owner setting when property a8 bit7 is set"},
+    {"entry": "0x00f16a88", "end_exclusive": "0x00f16ae0", "symbol": "xm1_power_record_helper_f16a88", "behavior": "Resource modes4 through6 publication, using runtime handle at16c21fc"},
+    {"entry": "0x00f16ae0", "end_exclusive": "0x00f16ffc", "symbol": "xm1_power_record_helper_f16ae0", "behavior": "Export five diagnostic records, two7x7 planes and five nested averages per record"},
+    {"entry": "0x00f16ffc", "end_exclusive": "0x00f17838", "symbol": "xm1_power_record_helper_f16ffc", "behavior": "Owner/single selection initialization, geometry and retained field publication"}
+  ],
+  "exclusions": ["0x00f156d4..0x00f1667b", "0x00f17838..0x00f17b3f"],
+  "native_boundary": {
+    "reset_tail": "The24-byte copy atf2f400 includes two bytes nativef16ffc leaves untouched atentrySP-358. The ARM entry adapter loads this halfword before Rust changes the stack and passes it as an explicit initialized value. The reset record zeros bytes0..21 and preserves bytes22..23.",
+    "status_index": "7535f0 returns slotword28 inr0. ef53d0 consumes that index; it is an explicit Rust value.",
+    "owner_lookup": "ef9bc0 returns169d05c without reading incomingr0 (id5.dis:787595-787601).",
+    "single_mode": "The native nonzero mode clears context owner, then subsequent native branches read low mapped addresses4,10,18. The address wrapper preserves numerical target-address reads rather than creating Rust references to null owner structures. Integration must supply the native address-space mapping.",
+    "callbacks": "Operations3 and4 each reload owner callback and callback data. Mode and flags are queried independently before each callback."
+  },
+  "integration": {
+    "root_module": "record_task43_selection_init",
+    "architecture": "arm only",
+    "extra_source": "record_task43_selection_init_residue.S",
+    "provider_convention": "xm1_power_record_helper_<actual hexadecimal entry>; boundary module lists every exact linked symbol",
+    "verification": "Not run by instruction. Source implementation is not a qualified dependency closure."
+  }
+}

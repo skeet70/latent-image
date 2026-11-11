@@ -1,0 +1,487 @@
+{
+  "pin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "range_source": "decomp/firmwares/xm1-150/function-ranges.json",
+  "raw_source": "private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin",
+  "raw_section_sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+  "extents": [
+    {
+      "entry": "0xf2907c",
+      "end_exclusive": "0xf290a4",
+      "name": "s54_post_message_83_0126ee10",
+      "raw_sha256": "a643af6b3bc9254d3a522d4cea1a3ec12c5462f3cd0124d930da2c47b11a1319",
+      "authenticated_extent_sha256": "a643af6b3bc9254d3a522d4cea1a3ec12c5462f3cd0124d930da2c47b11a1319"
+    },
+    {
+      "entry": "0xf290a4",
+      "end_exclusive": "0xf290b8",
+      "name": "s54_display_value_unused_hook",
+      "raw_sha256": "06923057baae437a94c3b2f5904ebc40a3d725722555328069576625b3fe02c8",
+      "authenticated_extent_sha256": "06923057baae437a94c3b2f5904ebc40a3d725722555328069576625b3fe02c8"
+    },
+    {
+      "entry": "0xf290d8",
+      "end_exclusive": "0xf29120",
+      "name": "s54_apply_enabled_display_selection",
+      "raw_sha256": "9f7702d4c76a86ee72159deb93657fb55ba325580191b4a234e7f21a5e0c09f1",
+      "authenticated_extent_sha256": "9f7702d4c76a86ee72159deb93657fb55ba325580191b4a234e7f21a5e0c09f1"
+    },
+    {
+      "entry": "0xf29260",
+      "end_exclusive": "0xf29284",
+      "name": "s54_clear_display_value_property_8",
+      "raw_sha256": "53939bb4a5d5f46e52c4214dbe09602ce67b0563312b883feffdb9fb2aa14fd6",
+      "authenticated_extent_sha256": "53939bb4a5d5f46e52c4214dbe09602ce67b0563312b883feffdb9fb2aa14fd6"
+    },
+    {
+      "entry": "0xf292a4",
+      "end_exclusive": "0xf292c4",
+      "name": "s54_apply_display_selection_mode_seven",
+      "raw_sha256": "01c1a011f7950a1e6523ced7dbe9b2d082dcdb690f18c840124dac90e7c2e38f",
+      "authenticated_extent_sha256": "01c1a011f7950a1e6523ced7dbe9b2d082dcdb690f18c840124dac90e7c2e38f"
+    },
+    {
+      "entry": "0xf292c4",
+      "end_exclusive": "0xf292f0",
+      "name": "s54_clear_display_selection_mode",
+      "raw_sha256": "d60a6f97f6fddd401584964f0c66299006a03f8d2c4d111800d10b816009bd8e",
+      "authenticated_extent_sha256": "d60a6f97f6fddd401584964f0c66299006a03f8d2c4d111800d10b816009bd8e"
+    },
+    {
+      "entry": "0xf2a1cc",
+      "end_exclusive": "0xf2a200",
+      "name": "s54_complete_display_selection",
+      "raw_sha256": "d58110bb1ded61612f89cc35eecf3faae8da854692e5418c6a968132af092593",
+      "authenticated_extent_sha256": "d58110bb1ded61612f89cc35eecf3faae8da854692e5418c6a968132af092593"
+    },
+    {
+      "entry": "0xf2a200",
+      "end_exclusive": "0xf2a240",
+      "name": "s54_limit_selection_count",
+      "raw_sha256": "4648d6f23a6941067df69e663de6c89a82955a9548ce3d2e963ca21e568c6f8e",
+      "authenticated_extent_sha256": "4648d6f23a6941067df69e663de6c89a82955a9548ce3d2e963ca21e568c6f8e"
+    },
+    {
+      "entry": "0xf29000",
+      "end_exclusive": "0xf2903c",
+      "name": "FUN_00f29000",
+      "raw_sha256": "9da84c47567e9cb249294f78dfbadb0ec1c6c0a1cffae4fa694820a7d81d3e88",
+      "authenticated_extent_sha256": "9da84c47567e9cb249294f78dfbadb0ec1c6c0a1cffae4fa694820a7d81d3e88"
+    },
+    {
+      "entry": "0xf2903c",
+      "end_exclusive": "0xf2907c",
+      "name": "FUN_00f2903c",
+      "raw_sha256": "9c9cf90b414f6fb25d700f15bc737782118d3eb4e96912ed5d25a6dde1d21bbe",
+      "authenticated_extent_sha256": "9c9cf90b414f6fb25d700f15bc737782118d3eb4e96912ed5d25a6dde1d21bbe"
+    },
+    {
+      "entry": "0xf290b8",
+      "end_exclusive": "0xf290d8",
+      "name": "FUN_00f290b8",
+      "raw_sha256": "40a806f8cf677938dd41446a6b3a779e0cff3704c2965f86d0085c5577eed710",
+      "authenticated_extent_sha256": "40a806f8cf677938dd41446a6b3a779e0cff3704c2965f86d0085c5577eed710"
+    },
+    {
+      "entry": "0xf29120",
+      "end_exclusive": "0xf29160",
+      "name": "FUN_00f29120",
+      "raw_sha256": "bb03679bf53efa280c69b08f500b61271d9661c9a51dc98b4f5933a3d4c829a9",
+      "authenticated_extent_sha256": "bb03679bf53efa280c69b08f500b61271d9661c9a51dc98b4f5933a3d4c829a9"
+    },
+    {
+      "entry": "0xf29160",
+      "end_exclusive": "0xf29194",
+      "name": "FUN_00f29160",
+      "raw_sha256": "d77f7352a8d509dcea65817ccf08deb2e4a55e2a1a6375e8bdf0df4ad7fda4b6",
+      "authenticated_extent_sha256": "d77f7352a8d509dcea65817ccf08deb2e4a55e2a1a6375e8bdf0df4ad7fda4b6"
+    },
+    {
+      "entry": "0xf29194",
+      "end_exclusive": "0xf29240",
+      "name": "FUN_00f29194",
+      "raw_sha256": "ebf963f1efc5a5b081ca1b799dd1ade28b524dd69e3922947059da304ba45ac2",
+      "authenticated_extent_sha256": "ebf963f1efc5a5b081ca1b799dd1ade28b524dd69e3922947059da304ba45ac2"
+    },
+    {
+      "entry": "0xf29240",
+      "end_exclusive": "0xf29260",
+      "name": "FUN_00f29240",
+      "raw_sha256": "8070eed0e9727a000ef3c61fecdb4b69f1849bcb36b90633a133e3e310c2a11a",
+      "authenticated_extent_sha256": "8070eed0e9727a000ef3c61fecdb4b69f1849bcb36b90633a133e3e310c2a11a"
+    },
+    {
+      "entry": "0xf29284",
+      "end_exclusive": "0xf292a4",
+      "name": "FUN_00f29284",
+      "raw_sha256": "5724a54d6908a78437425bf6608408edeea4a1674c811886b074a0ad6c68699d",
+      "authenticated_extent_sha256": "5724a54d6908a78437425bf6608408edeea4a1674c811886b074a0ad6c68699d"
+    },
+    {
+      "entry": "0xf292f0",
+      "end_exclusive": "0xf29304",
+      "name": "FUN_00f292f0",
+      "raw_sha256": "1d5c1e7ac3e77e5f6a5a9108214fa64435f7b20a05bfc2767e82d6c5b5a8f157",
+      "authenticated_extent_sha256": "1d5c1e7ac3e77e5f6a5a9108214fa64435f7b20a05bfc2767e82d6c5b5a8f157"
+    },
+    {
+      "entry": "0xf29304",
+      "end_exclusive": "0xf29318",
+      "name": "FUN_00f29304",
+      "raw_sha256": "d457f61fee75462d9af1f91fdab15cc6ca31a519af5e02602987f4596401f3d8",
+      "authenticated_extent_sha256": "d457f61fee75462d9af1f91fdab15cc6ca31a519af5e02602987f4596401f3d8"
+    },
+    {
+      "entry": "0xf29318",
+      "end_exclusive": "0xf2a11c",
+      "name": "FUN_00f29318",
+      "raw_sha256": "3aa6791b520c44721044b9a4f3be1aae845bbc57d195d35734cdf431d463fb1b",
+      "authenticated_extent_sha256": "3aa6791b520c44721044b9a4f3be1aae845bbc57d195d35734cdf431d463fb1b"
+    },
+    {
+      "entry": "0xf2a11c",
+      "end_exclusive": "0xf2a12c",
+      "name": "FUN_00f2a11c",
+      "raw_sha256": "02e330d7622dc458a7cb269ee88a1aeb53682d9c35715d210daf38464cef4ce8",
+      "authenticated_extent_sha256": "02e330d7622dc458a7cb269ee88a1aeb53682d9c35715d210daf38464cef4ce8"
+    },
+    {
+      "entry": "0xf2a12c",
+      "end_exclusive": "0xf2a1cc",
+      "name": "FUN_00f2a12c",
+      "raw_sha256": "ca588341b309283d6bbf8d0bfff9e947e56e65cbd2496d784a58c6ec24aa984e",
+      "authenticated_extent_sha256": "ca588341b309283d6bbf8d0bfff9e947e56e65cbd2496d784a58c6ec24aa984e"
+    },
+    {
+      "entry": "0xf2a468",
+      "end_exclusive": "0xf2ab5c",
+      "name": "FUN_00f2a468",
+      "raw_sha256": "916c6a9aacccd0626a3b9cd14f468bd5b32c3b4be1e91bdcbc491316ef6cb36f",
+      "authenticated_extent_sha256": "916c6a9aacccd0626a3b9cd14f468bd5b32c3b4be1e91bdcbc491316ef6cb36f"
+    },
+    {
+      "entry": "0xf2ab5c",
+      "end_exclusive": "0xf2ab7c",
+      "name": "FUN_00f2ab5c",
+      "raw_sha256": "c51c8d7331148833c4f0448723f78d079512fa5b5c68626a530abd2746afed15",
+      "authenticated_extent_sha256": "c51c8d7331148833c4f0448723f78d079512fa5b5c68626a530abd2746afed15"
+    },
+    {
+      "entry": "0xf2a240",
+      "end_exclusive": "0xf2a468",
+      "name": "FUN_00f2a240",
+      "raw_sha256": "b34fa870ea7fdc17b14c26264bc3c31117b852869fd7088b41781c06534c5231",
+      "authenticated_extent_sha256": "b34fa870ea7fdc17b14c26264bc3c31117b852869fd7088b41781c06534c5231"
+    },
+    {
+      "entry": "0x10029a8",
+      "end_exclusive": "0x10029bc",
+      "name": "FUN_010029a8",
+      "raw_sha256": "06923057baae437a94c3b2f5904ebc40a3d725722555328069576625b3fe02c8",
+      "authenticated_extent_sha256": "06923057baae437a94c3b2f5904ebc40a3d725722555328069576625b3fe02c8"
+    }
+  ],
+  "modules": {
+    "record_task43_selection_resources.rs": [
+      {
+        "symbol": "xm1_power_record_helper_f29000",
+        "arguments": "",
+        "returns": "()"
+      },
+      {
+        "symbol": "xm1_power_record_helper_f2903c",
+        "arguments": "item: u32, values: *const u32",
+        "returns": "()"
+      },
+      {
+        "symbol": "xm1_power_record_helper_f2907c",
+        "arguments": "value: u32",
+        "returns": "()"
+      },
+      {
+        "symbol": "xm1_power_record_helper_f290a4",
+        "arguments": "",
+        "returns": "()"
+      },
+      {
+        "symbol": "xm1_power_record_helper_f290b8",
+        "arguments": "item: u32",
+        "returns": "()"
+      },
+      {
+        "symbol": "xm1_power_record_helper_f290d8",
+        "arguments": "",
+        "returns": "()"
+      },
+      {
+        "symbol": "xm1_power_record_helper_f29120",
+        "arguments": "",
+        "returns": "()"
+      },
+      {
+        "symbol": "xm1_power_record_helper_f29160",
+        "arguments": "",
+        "returns": "()"
+      },
+      {
+        "symbol": "xm1_power_record_helper_f29194",
+        "arguments": "",
+        "returns": "i32"
+      },
+      {
+        "symbol": "xm1_power_record_helper_f29240",
+        "arguments": "",
+        "returns": "u32"
+      },
+      {
+        "symbol": "xm1_power_record_helper_f29260",
+        "arguments": "",
+        "returns": "()"
+      },
+      {
+        "symbol": "xm1_power_record_helper_f29284",
+        "arguments": "",
+        "returns": "u32"
+      },
+      {
+        "symbol": "xm1_power_record_helper_f292a4",
+        "arguments": "",
+        "returns": "()"
+      },
+      {
+        "symbol": "xm1_power_record_helper_f292c4",
+        "arguments": "",
+        "returns": "()"
+      },
+      {
+        "symbol": "xm1_power_record_helper_f292f0",
+        "arguments": "",
+        "returns": "()"
+      },
+      {
+        "symbol": "xm1_power_record_helper_f29304",
+        "arguments": "",
+        "returns": "()"
+      },
+      {
+        "symbol": "xm1_power_record_helper_f2a11c",
+        "arguments": "",
+        "returns": "()"
+      },
+      {
+        "symbol": "xm1_power_record_helper_f2a12c",
+        "arguments": "",
+        "returns": "()"
+      },
+      {
+        "symbol": "xm1_power_record_helper_f2a1cc",
+        "arguments": "",
+        "returns": "()"
+      },
+      {
+        "symbol": "xm1_power_record_helper_f2a200",
+        "arguments": "count: u32, limit: u32",
+        "returns": "u32"
+      },
+      {
+        "symbol": "xm1_power_record_helper_f2a240",
+        "arguments": "",
+        "returns": "i32"
+      },
+      {
+        "symbol": "xm1_power_record_helper_f2ab5c",
+        "arguments": "event: u32",
+        "returns": "i32"
+      }
+    ],
+    "record_task43_selection_serialize.rs": [
+      {
+        "symbol": "xm1_power_record_helper_f29318",
+        "arguments": "",
+        "returns": "()"
+      }
+    ],
+    "record_task43_selection_publish.rs": [
+      {
+        "symbol": "xm1_power_record_helper_10029a8",
+        "arguments": "",
+        "returns": "()"
+      },
+      {
+        "symbol": "xm1_power_record_helper_f2a468",
+        "arguments": "",
+        "returns": "()"
+      },
+      {
+        "symbol": "xm1_power_record_helper_f2bdf0",
+        "arguments": "item:u32",
+        "returns": "()"
+      },
+      {
+        "symbol": "xm1_power_record_helper_f2c0c4",
+        "arguments": "value:u32",
+        "returns": "()"
+      },
+      {
+        "symbol": "xm1_power_record_helper_f2c0e4",
+        "arguments": "",
+        "returns": "()"
+      }
+    ]
+  },
+  "native_dependency_symbols": [
+    "xm1_power_record_helper_10029bc",
+    "xm1_power_record_helper_10029d8",
+    "xm1_power_record_helper_1004438",
+    "xm1_power_record_helper_1005044",
+    "xm1_power_record_helper_100585c",
+    "xm1_power_record_helper_1039b48",
+    "xm1_power_record_helper_1039dd4",
+    "xm1_power_record_helper_103b054",
+    "xm1_power_record_helper_69f8fc",
+    "xm1_power_record_helper_69fec8",
+    "xm1_power_record_helper_72872c",
+    "xm1_power_record_helper_740888",
+    "xm1_power_record_helper_7409f0",
+    "xm1_power_record_helper_740a00",
+    "xm1_power_record_helper_746054",
+    "xm1_power_record_helper_746a80",
+    "xm1_power_record_helper_748928",
+    "xm1_power_record_helper_74947c",
+    "xm1_power_record_helper_74e1a4",
+    "xm1_power_record_helper_74e284",
+    "xm1_power_record_helper_74e648",
+    "xm1_power_record_helper_74e718",
+    "xm1_power_record_helper_74e7f0",
+    "xm1_power_record_helper_74e878",
+    "xm1_power_record_helper_74e900",
+    "xm1_power_record_helper_74ea10",
+    "xm1_power_record_helper_74eb20",
+    "xm1_power_record_helper_74eba8",
+    "xm1_power_record_helper_74ec30",
+    "xm1_power_record_helper_74ed6c",
+    "xm1_power_record_helper_74edf4",
+    "xm1_power_record_helper_74ee7c",
+    "xm1_power_record_helper_74ef04",
+    "xm1_power_record_helper_74f09c",
+    "xm1_power_record_helper_74f124",
+    "xm1_power_record_helper_74f1ac",
+    "xm1_power_record_helper_74f278",
+    "xm1_power_record_helper_74f2bc",
+    "xm1_power_record_helper_74f344",
+    "xm1_power_record_helper_74f388",
+    "xm1_power_record_helper_74f454",
+    "xm1_power_record_helper_74f564",
+    "xm1_power_record_helper_74f5ec",
+    "xm1_power_record_helper_74f674",
+    "xm1_power_record_helper_74f6fc",
+    "xm1_power_record_helper_74f784",
+    "xm1_power_record_helper_74f894",
+    "xm1_power_record_helper_74f9a4",
+    "xm1_power_record_helper_74fa2c",
+    "xm1_power_record_helper_74fcec",
+    "xm1_power_record_helper_750034",
+    "xm1_power_record_helper_7500bc",
+    "xm1_power_record_helper_7503ec",
+    "xm1_power_record_helper_750474",
+    "xm1_power_record_helper_75060c",
+    "xm1_power_record_helper_752714",
+    "xm1_power_record_helper_7527f8",
+    "xm1_power_record_helper_752890",
+    "xm1_power_record_helper_752928",
+    "xm1_power_record_helper_752a40",
+    "xm1_power_record_helper_752bf8",
+    "xm1_power_record_helper_752e08",
+    "xm1_power_record_helper_752eb8",
+    "xm1_power_record_helper_753540",
+    "xm1_power_record_helper_753960",
+    "xm1_power_record_helper_753a10",
+    "xm1_power_record_helper_753c78",
+    "xm1_power_record_helper_753e88",
+    "xm1_power_record_helper_754098",
+    "xm1_power_record_helper_754148",
+    "xm1_power_record_helper_754300",
+    "xm1_power_record_helper_7543b0",
+    "xm1_power_record_helper_754d9c",
+    "xm1_power_record_helper_75502c",
+    "xm1_power_record_helper_75516c",
+    "xm1_power_record_helper_755b58",
+    "xm1_power_record_helper_755c00",
+    "xm1_power_record_helper_756734",
+    "xm1_power_record_helper_756754",
+    "xm1_power_record_helper_7582c0",
+    "xm1_power_record_helper_758360",
+    "xm1_power_record_helper_7585dc",
+    "xm1_power_record_helper_75a238",
+    "xm1_power_record_helper_75a4ac",
+    "xm1_power_record_helper_75ae78",
+    "xm1_power_record_helper_75c874",
+    "xm1_power_record_helper_75c8a4",
+    "xm1_power_record_helper_76d9c8",
+    "xm1_power_record_helper_76da84",
+    "xm1_power_record_helper_76dad4",
+    "xm1_power_record_helper_76dbb4",
+    "xm1_power_record_helper_76f340",
+    "xm1_power_record_helper_dca798",
+    "xm1_power_record_helper_ee8bb0",
+    "xm1_power_record_helper_ee96e0",
+    "xm1_power_record_helper_ee96f4",
+    "xm1_power_record_helper_ef8934",
+    "xm1_power_record_helper_ef9a94",
+    "xm1_power_record_helper_efab18",
+    "xm1_power_record_helper_efae88",
+    "xm1_power_record_helper_efb004",
+    "xm1_power_record_helper_efb04c",
+    "xm1_power_record_helper_efb104",
+    "xm1_power_record_helper_f15708",
+    "xm1_power_record_helper_f160d0",
+    "xm1_power_record_helper_f160f4",
+    "xm1_power_record_helper_f16118",
+    "xm1_power_record_helper_f1613c",
+    "xm1_power_record_helper_f161a8",
+    "xm1_power_record_helper_f161cc",
+    "xm1_power_record_helper_f17af8",
+    "xm1_power_record_helper_f17b1c",
+    "xm1_power_record_helper_f1db30",
+    "xm1_power_record_helper_f2d6dc",
+    "xm1_power_record_helper_f2e600",
+    "xm1_power_record_helper_f2f00c",
+    "xm1_power_record_helper_f2f400",
+    "xm1_power_record_helper_f2f440",
+    "xm1_power_record_helper_f2f480",
+    "xm1_power_record_helper_f49138",
+    "xm1_power_record_helper_f4e620",
+    "xm1_power_record_helper_f4ed28",
+    "xm1_power_record_helper_f51b50",
+    "xm1_power_record_helper_f51b94",
+    "xm1_power_record_helper_f60efc",
+    "xm1_power_record_helper_fa6904"
+  ],
+  "inlined_pointer_queries": {
+    "0xf4d774": "0x16c59e4",
+    "0xf4d8a0": "0x16c73b0",
+    "0xf4d94c": "0x16c2c40",
+    "0xf4dbfc": "0x16c5e0c",
+    "0xf4dc34": "0x16c2970",
+    "0xf4de88": "0x16c5e20",
+    "0xf4dfe8": "0x16cbea8",
+    "0xf4e004": "0x16cc820",
+    "0xf4e020": "0x16cc8a8",
+    "0xf4e03c": "0x16cc904"
+  },
+  "transitive_byte_extents": [
+    {"entry":"0xf2bdf0","end_exclusive":"0xf2be34","sha256":"a3ae6a26b71ab75a487b440b5e583b0a5ba1766baa5a88baaa8c185eece018b6"},
+    {"entry":"0xf2c0c4","end_exclusive":"0xf2c0e4","sha256":"6087e8dc04a36b14ee5c6ed2de8a5c4373ae743e73232d180ed889349ee5803d"},
+    {"entry":"0xf2c0e4","end_exclusive":"0xf2c128","sha256":"b92878cd92a3855d6dfa15cffee0d3880ce76add2f256d1c5854cb9a4d2fdf9d"},
+    {"entry":"0xf4d774","end_exclusive":"0xf4d790","sha256":"1bc6c9ad7db479bc426284b1d3cd1af07ff2fd22a86b83645bc2043fa29e6e53"},
+    {"entry":"0xf4d8a0","end_exclusive":"0xf4d8bc","sha256":"fa066d659520b70990556b48e96b390280a33cef8059ce1b4acbe04aa4c13420"},
+    {"entry":"0xf4d94c","end_exclusive":"0xf4d968","sha256":"f119eba9a600fe83c51601200c12589c10efcec09c01310c9d42316ec92eb673"},
+    {"entry":"0xf4dbfc","end_exclusive":"0xf4dc18","sha256":"711e7c813232dfca16366ee728b8272b5c6ab4c7759f208651f6393dbbc52e02"},
+    {"entry":"0xf4dc34","end_exclusive":"0xf4dc50","sha256":"1bf4bb0c36d36ae0ba7a613a2dc29f05dbd11b1904309a58cd3ca5f60f46f108"},
+    {"entry":"0xf4de88","end_exclusive":"0xf4dea4","sha256":"e43e212eacfd305ca17f9fc39c9198eedaed15e86ef4c72cddd23a02a2cac795"},
+    {"entry":"0xf4dfe8","end_exclusive":"0xf4e004","sha256":"3516924513035f62febf38b4068c19e5132b779380d4a1b6197634b6c03a2c99"},
+    {"entry":"0xf4e004","end_exclusive":"0xf4e020","sha256":"e0ca83f38b33e2bba8eb958afbcaa7a52cc404b2e6e02f2aa3f90b252fb44ff0"},
+    {"entry":"0xf4e020","end_exclusive":"0xf4e03c","sha256":"2cb3fde9778e364c7aeb86d9d22d2bd8a95e335604864c3b6216eccf89bbbb4c"},
+    {"entry":"0xf4e03c","end_exclusive":"0xf4e058","sha256":"a8c31dd5ede0fda9d47206cde056d7f702c3795e418f495cdb0b8017d673746f"}
+  ],
+  "evidence_scope": "Source inspection and ARM disassembly only. No builds, tests, lint, format, SDK, guest or camera operations."
+}

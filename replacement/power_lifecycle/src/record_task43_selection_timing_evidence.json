@@ -1,0 +1,996 @@
+{
+  "target": "Fujifilm X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_units": [
+    "app/control/af/profile/tu_00f156d4.c",
+    "app/control/af/profile/tu_00f17f04.c",
+    "app/control/af/profile/timing_updates.c",
+    "app/control/af/workflow/item_property_selection.c"
+  ],
+  "byte_evidence": [
+    "id5.dis:818181-820597",
+    "id5.dis:770262-770265",
+    "id4.dis:323912-323956"
+  ],
+  "owned_functions": [
+    "f17b40",
+    "f17c14",
+    "f17c30",
+    "f17c4c",
+    "f17c68",
+    "f17d0c",
+    "f17d54",
+    "f17da4",
+    "f17dbc",
+    "f17dcc",
+    "f17ddc",
+    "f17dec",
+    "f17e2c",
+    "f17e50",
+    "f17e70",
+    "f17e90",
+    "f17eb8",
+    "f17ee0",
+    "f17f04",
+    "f17f14",
+    "f17f6c",
+    "f17f8c",
+    "f17fd8",
+    "f18148",
+    "f18520",
+    "f1859c",
+    "f1886c",
+    "f18898",
+    "f188b0",
+    "f188c8",
+    "f18b94",
+    "f19204",
+    "f19634",
+    "f1a0a8",
+    "f1a0bc",
+    "ee8ba0",
+    "758940",
+    "758980",
+    "75890c"
+  ],
+  "excluded": [
+    {
+      "range": "f17838..f17b3f",
+      "owner": "PowerLifecycleNext.PowerRecordSelectionTiming",
+      "functions": [
+        "f17838",
+        "f17984",
+        "f17a4c",
+        "f17abc",
+        "f17ad8",
+        "f17af8",
+        "f17b1c"
+      ]
+    }
+  ],
+  "abi_facts": [
+    "Actual callback entries are f17c14/f17c30/f17c4c. f17c00/f17c20/f17c44 are interior instructions.",
+    "ee8ba0 invokes its callback synchronously.",
+    "76e654 receives a static owned Rust callback for message 0x3a; 76e1ac receives a static owned Rust callback for message 0x35.",
+    "f19634 retains the original 792-byte frame and writes its 48-byte callback publication at entry-SP minus 300; halfword padding at payload offsets 10 and 18 remains unchanged.",
+    "The private signed-halfword focus cache is owned Rust state initialized to 0x7fff, replacing the literal at f1a100.",
+    "All helper ABI scalars are 32-bit raw words; signed halfword conversion occurs at the load or store boundary."
+  ],
+  "integration": {
+    "root_owner": "PowerApplicationJoin",
+    "module": "record_task43_selection_timing",
+    "target": "arm",
+    "extra_sources": [
+      "record_task43_selection_timing_abi.rs",
+      "record_task43_selection_timing_records.rs",
+      "record_task43_selection_timing_publish.rs",
+      "record_task43_selection_timing_residue.S",
+      "record_task43_selection_timing_tests.rs"
+    ],
+    "root_edits": false
+  },
+  "verification": {
+    "executed": [],
+    "required": [
+      "Compile and link canonical ARM Power crate after provider integration.",
+      "Exercise native task43 timing branches and callback publication, including padding preservation.",
+      "Run callback unit test in the integrated test graph."
+    ]
+  },
+  "dependencies": [
+    {
+      "symbol": "xm1_power_record_helper_742064",
+      "words": 0,
+      "returns": "i32",
+      "owner": "ownership requested from PowerApplicationJoin"
+    },
+    {
+      "symbol": "xm1_power_record_helper_747b50",
+      "words": 0,
+      "returns": "i32",
+      "owner": "ownership requested from PowerApplicationJoin"
+    },
+    {
+      "symbol": "xm1_power_record_helper_76da84",
+      "words": 0,
+      "returns": "i32",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_76dac4",
+      "words": 0,
+      "returns": "i32",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_76da38",
+      "words": 0,
+      "returns": "i32",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_76d9a8",
+      "words": 0,
+      "returns": "i32",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_76f340",
+      "words": 0,
+      "returns": "i32",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_76dad4",
+      "words": 0,
+      "returns": "i32",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_76d9c8",
+      "words": 0,
+      "returns": "i32",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_76fc4c",
+      "words": 0,
+      "returns": "i32",
+      "owner": "PowerApplicationJoin.RecordLensScheduleCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_10538a4",
+      "words": 0,
+      "returns": "i32",
+      "owner": "ownership requested from PowerApplicationJoin"
+    },
+    {
+      "symbol": "xm1_power_record_helper_f20300",
+      "words": 0,
+      "returns": "i32",
+      "owner": "ownership requested from PowerApplicationJoin"
+    },
+    {
+      "symbol": "xm1_power_record_helper_f21bc0",
+      "words": 0,
+      "returns": "i32",
+      "owner": "ownership requested from PowerApplicationJoin"
+    },
+    {
+      "symbol": "xm1_power_record_helper_f21b80",
+      "words": 0,
+      "returns": "i32",
+      "owner": "ownership requested from PowerApplicationJoin"
+    },
+    {
+      "symbol": "xm1_power_record_helper_f201b0",
+      "words": 0,
+      "returns": "i32",
+      "owner": "ownership requested from PowerApplicationJoin"
+    },
+    {
+      "symbol": "xm1_power_record_helper_f20188",
+      "words": 0,
+      "returns": "i32",
+      "owner": "ownership requested from PowerApplicationJoin"
+    },
+    {
+      "symbol": "xm1_power_record_helper_f153a0",
+      "words": 0,
+      "returns": "i32",
+      "owner": "PowerApplicationJoin.SelectionCoreCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_f15414",
+      "words": 0,
+      "returns": "i32",
+      "owner": "PowerApplicationJoin.SelectionCoreCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_f154b0",
+      "words": 0,
+      "returns": "i32",
+      "owner": "PowerApplicationJoin.SelectionCoreCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_ef9c00",
+      "words": 0,
+      "returns": "i32",
+      "owner": "ownership requested from PowerApplicationJoin"
+    },
+    {
+      "symbol": "xm1_power_record_helper_f21a3c",
+      "words": 0,
+      "returns": "i32",
+      "owner": "ownership requested from PowerApplicationJoin"
+    },
+    {
+      "symbol": "xm1_power_record_helper_f16664",
+      "words": 0,
+      "returns": "i32",
+      "owner": "PowerLifecycleNext.PowerRecordSelectionTiming"
+    },
+    {
+      "symbol": "xm1_power_record_helper_f160d0",
+      "words": 0,
+      "returns": "i32",
+      "owner": "PowerLifecycleNext.PowerRecordSelectionTiming"
+    },
+    {
+      "symbol": "xm1_power_record_helper_f2f460",
+      "words": 0,
+      "returns": "i32",
+      "owner": "ownership requested from PowerApplicationJoin"
+    },
+    {
+      "symbol": "xm1_power_record_helper_7509c4",
+      "words": 1,
+      "returns": "i32",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_754d9c",
+      "words": 1,
+      "returns": "i32",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_74fa2c",
+      "words": 1,
+      "returns": "i32",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_757b78",
+      "words": 1,
+      "returns": "i32",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_756fe4",
+      "words": 1,
+      "returns": "i32",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_74e5c0",
+      "words": 1,
+      "returns": "i32",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_746018",
+      "words": 0,
+      "returns": "i32",
+      "owner": "ownership requested from PowerApplicationJoin"
+    },
+    {
+      "symbol": "xm1_power_record_helper_744ae8",
+      "words": 0,
+      "returns": "i32",
+      "owner": "ownership requested from PowerApplicationJoin"
+    },
+    {
+      "symbol": "xm1_power_record_helper_750efc",
+      "words": 1,
+      "returns": "i32",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_751914",
+      "words": 1,
+      "returns": "i32",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_7519ac",
+      "words": 1,
+      "returns": "i32",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_75060c",
+      "words": 1,
+      "returns": "i32",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_7503ec",
+      "words": 1,
+      "returns": "i32",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_74f5ec",
+      "words": 1,
+      "returns": "i32",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_75a440",
+      "words": 1,
+      "returns": "i32",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_751b74",
+      "words": 1,
+      "returns": "i32",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_75a58c",
+      "words": 1,
+      "returns": "i32",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_75a61c",
+      "words": 1,
+      "returns": "i32",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_756b9c",
+      "words": 1,
+      "returns": "i32",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_69f8fc",
+      "words": 1,
+      "returns": "i32",
+      "owner": "ownership requested from PowerApplicationJoin"
+    },
+    {
+      "symbol": "xm1_power_record_helper_69fec8",
+      "words": 1,
+      "returns": "i32",
+      "owner": "ownership requested from PowerApplicationJoin"
+    },
+    {
+      "symbol": "xm1_power_record_helper_ef9bc0",
+      "words": 1,
+      "returns": "i32",
+      "owner": "ownership requested from PowerApplicationJoin"
+    },
+    {
+      "symbol": "xm1_power_record_helper_752a40",
+      "words": 2,
+      "returns": "i32",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_752990",
+      "words": 2,
+      "returns": "i32",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_7536a0",
+      "words": 2,
+      "returns": "i32",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_752ba0",
+      "words": 2,
+      "returns": "i32",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_753750",
+      "words": 2,
+      "returns": "i32",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_753800",
+      "words": 2,
+      "returns": "i32",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_7538b0",
+      "words": 2,
+      "returns": "i32",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_752c50",
+      "words": 2,
+      "returns": "i32",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_752d00",
+      "words": 2,
+      "returns": "i32",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_752f10",
+      "words": 2,
+      "returns": "i32",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_753120",
+      "words": 2,
+      "returns": "i32",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_f2a200",
+      "words": 2,
+      "returns": "i32",
+      "owner": "ownership requested from PowerApplicationJoin"
+    },
+    {
+      "symbol": "xm1_power_record_helper_f616e8",
+      "words": 2,
+      "returns": "i32",
+      "owner": "PowerApplicationJoin.RecordJobCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_f612dc",
+      "words": 2,
+      "returns": "i32",
+      "owner": "PowerApplicationJoin.RecordJobCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_f60b18",
+      "words": 1,
+      "returns": "i32",
+      "owner": "PowerApplicationJoin.RecordJobCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_f60b48",
+      "words": 1,
+      "returns": "i32",
+      "owner": "PowerApplicationJoin.RecordJobCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_f60b60",
+      "words": 1,
+      "returns": "i32",
+      "owner": "PowerApplicationJoin.RecordJobCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_f60adc",
+      "words": 1,
+      "returns": "i32",
+      "owner": "PowerApplicationJoin.RecordJobCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_747aac",
+      "words": 3,
+      "returns": "i32",
+      "owner": "ownership requested from PowerApplicationJoin"
+    },
+    {
+      "symbol": "xm1_power_record_helper_f4e620",
+      "words": 3,
+      "returns": "i32",
+      "owner": "PowerApplicationJoin.RecordScanPublicationCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_f1b050",
+      "words": 3,
+      "returns": "i32",
+      "owner": "ownership requested from PowerApplicationJoin"
+    },
+    {
+      "symbol": "xm1_power_record_helper_f4c930",
+      "words": 6,
+      "returns": "i32",
+      "owner": "PowerApplicationJoin.RecordScanBackendCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_f47300",
+      "words": 8,
+      "returns": "i32",
+      "owner": "ownership requested from PowerApplicationJoin"
+    },
+    {
+      "symbol": "xm1_power_record_helper_f60efc",
+      "words": 7,
+      "returns": "i32",
+      "owner": "PowerApplicationJoin.RecordJobCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_f1d6a0",
+      "words": 8,
+      "returns": "i32",
+      "owner": "ownership requested from PowerApplicationJoin"
+    },
+    {
+      "symbol": "xm1_power_record_helper_756840",
+      "words": 2,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.ProfileSharedCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_756878",
+      "words": 2,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.ProfileSharedCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_758940",
+      "words": 1,
+      "returns": "i32",
+      "owner": "this family"
+    },
+    {
+      "symbol": "xm1_power_record_helper_758980",
+      "words": 2,
+      "returns": "()",
+      "owner": "this family"
+    },
+    {
+      "symbol": "xm1_power_record_helper_756940",
+      "words": 2,
+      "returns": "()",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_756970",
+      "words": 2,
+      "returns": "()",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_752110",
+      "words": 2,
+      "returns": "()",
+      "owner": "ownership requested from PowerApplicationJoin"
+    },
+    {
+      "symbol": "xm1_power_record_helper_76fbac",
+      "words": 2,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.RecordLensScheduleCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_7588e8",
+      "words": 1,
+      "returns": "i32",
+      "owner": "PowerApplicationJoin.ProfileSharedCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_75890c",
+      "words": 2,
+      "returns": "()",
+      "owner": "this family"
+    },
+    {
+      "symbol": "xm1_power_record_helper_7582c0",
+      "words": 1,
+      "returns": "i32",
+      "owner": "PowerApplicationJoin.ProfileSharedCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_75ae78",
+      "words": 2,
+      "returns": "()",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_efa3f8",
+      "words": 2,
+      "returns": "()",
+      "owner": "PowerLifecycleNext.PowerRecordCompletionServices"
+    },
+    {
+      "symbol": "xm1_power_record_helper_75a414",
+      "words": 2,
+      "returns": "()",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_75a324",
+      "words": 2,
+      "returns": "()",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_75a374",
+      "words": 2,
+      "returns": "()",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_7529e8",
+      "words": 3,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_752a98",
+      "words": 3,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_752bf8",
+      "words": 3,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_752ca8",
+      "words": 3,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_752d58",
+      "words": 3,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_752b48",
+      "words": 3,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_753648",
+      "words": 3,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_7532d8",
+      "words": 3,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_753178",
+      "words": 3,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_753388",
+      "words": 3,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_753438",
+      "words": 3,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_7534e8",
+      "words": 3,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_753228",
+      "words": 3,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_752f68",
+      "words": 3,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_753018",
+      "words": 3,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_7530c8",
+      "words": 3,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_753598",
+      "words": 3,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_753f38",
+      "words": 3,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_753fe8",
+      "words": 3,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_7544b8",
+      "words": 3,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_754568",
+      "words": 3,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_7536f8",
+      "words": 3,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_7537a8",
+      "words": 3,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_753858",
+      "words": 3,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_753908",
+      "words": 3,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_7539b8",
+      "words": 3,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_753a68",
+      "words": 3,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_753b18",
+      "words": 3,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_753bc8",
+      "words": 3,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_7542a8",
+      "words": 3,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_754148",
+      "words": 3,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_754098",
+      "words": 3,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_75a464",
+      "words": 3,
+      "returns": "()",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_752928",
+      "words": 3,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.ProfileSlotCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_756fb8",
+      "words": 2,
+      "returns": "()",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_757004",
+      "words": 2,
+      "returns": "()",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_757050",
+      "words": 2,
+      "returns": "()",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_7570a0",
+      "words": 2,
+      "returns": "()",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_7570f0",
+      "words": 2,
+      "returns": "()",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_757140",
+      "words": 2,
+      "returns": "()",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_757190",
+      "words": 2,
+      "returns": "()",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_7571e0",
+      "words": 2,
+      "returns": "()",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_75722c",
+      "words": 2,
+      "returns": "()",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_757274",
+      "words": 2,
+      "returns": "()",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_757360",
+      "words": 2,
+      "returns": "()",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_7573ac",
+      "words": 2,
+      "returns": "()",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_7572c0",
+      "words": 2,
+      "returns": "()",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_7573f4",
+      "words": 2,
+      "returns": "()",
+      "owner": "PowerLifecycleNext.PowerRecordProfileAccessors"
+    },
+    {
+      "symbol": "xm1_power_record_helper_ef9a94",
+      "words": 3,
+      "returns": "()",
+      "owner": "ownership requested from PowerApplicationJoin"
+    },
+    {
+      "symbol": "xm1_power_record_helper_f6030c",
+      "words": 3,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.RecordJobCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_76fb00",
+      "words": 5,
+      "returns": "()",
+      "owner": "ownership requested from PowerApplicationJoin"
+    },
+    {
+      "symbol": "xm1_power_record_helper_f602ec",
+      "words": 5,
+      "returns": "()",
+      "owner": "PowerApplicationJoin.RecordJobCpu"
+    },
+    {
+      "symbol": "xm1_power_record_helper_f1c6b4",
+      "words": 5,
+      "returns": "()",
+      "owner": "ownership requested from PowerApplicationJoin"
+    },
+    {
+      "symbol": "xm1_power_record_helper_749e98",
+      "words": 7,
+      "returns": "()",
+      "owner": "ownership requested from PowerApplicationJoin"
+    },
+    {
+      "symbol": "xm1_power_record_helper_749fac",
+      "words": 8,
+      "returns": "()",
+      "owner": "ownership requested from PowerApplicationJoin"
+    },
+    {
+      "symbol": "xm1_power_record_helper_f1d5d4",
+      "words": 8,
+      "returns": "()",
+      "owner": "ownership requested from PowerApplicationJoin"
+    },
+    {
+      "symbol": "xm1_power_record_helper_efb9f0",
+      "words": 2,
+      "returns": "()",
+      "owner": "ownership requested from PowerApplicationJoin"
+    },
+    {
+      "symbol": "xm1_power_record_helper_f16160",
+      "words": 1,
+      "returns": "()",
+      "owner": "PowerLifecycleNext.PowerRecordSelectionTiming"
+    },
+    {
+      "symbol": "xm1_power_record_helper_f20140",
+      "words": 1,
+      "returns": "()",
+      "owner": "ownership requested from PowerApplicationJoin"
+    },
+    {
+      "symbol": "xm1_power_record_helper_f1d134",
+      "words": 1,
+      "returns": "()",
+      "owner": "ownership requested from PowerApplicationJoin"
+    },
+    {
+      "symbol": "xm1_power_record_helper_f17af8",
+      "words": 1,
+      "returns": "()",
+      "owner": "PowerLifecycleNext.PowerRecordSelectionTiming"
+    },
+    {
+      "symbol": "xm1_power_recording_capture_trace_begin",
+      "words": 1,
+      "returns": "()",
+      "owner": "ownership requested from PowerApplicationJoin"
+    }
+  ]
+}

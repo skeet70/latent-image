@@ -1,0 +1,27 @@
+{
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "target": "X-M1 1.50",
+  "source_units": [
+    "app/ui/record/ui_record_state_bodies.c",
+    "app/ui/record/ui_record_state_bodies_2.c",
+    "app/platform/osal/tu_007291d8.c",
+    "app/drivers/lens/control/tu_00770080.c"
+  ],
+  "byte_confirmation": {
+    "capture_helpers": "id4.dis:63ba0c..63d060, including argument flow and byte/halfword field widths",
+    "aperture_gate_and_actions": "id4.dis:63a244..63a2a8,63a4f4..63a544,63a6fc..63a760,63b8bc..63b96c,646458..646490",
+    "aperture_index": "id4.dis:72c854..72c864,7319dc..7319fc,731f6c..731fe8",
+    "aperture_configuration_conversion": "id4.dis:72ccbc..72cccc,74677c..7468b8,74708c..7470bc,69f8fc..69f920,69fcb8..69fcd8,69fec8..69fef0,6a0010..6a0028",
+    "halfword_conversion": "id4.dis:72ccac..72ccbc,772ea8..772eb8,76ffd4..76ffec",
+    "shutter_conversion": "id4.dis:63a5f8..63a648,63b96c..63ba0c,72c864..72cc6c",
+    "white_balance_shift": "id4.dis:63b2c0..63b480,6341cc..6341ec",
+    "tracker_accessors": "id4.dis:63647c..6364a4,636508..6373f4,6376a0..63772c; loader-40000.dis:4357c..435ac"
+  },
+  "dependencies": {
+    "mode_initialization": ["CaptureModeId::new/raw", "FlagId::new", "query_flag"],
+    "capture_initialization_helpers_a": ["PropertyKey", "SettingValue", "property", "project", "value_available", "preferred_value", "available_count", "save"],
+    "capture_initialization_conversions": ["f_643f30", "f_644004", "f_644054", "f_6440b4", "f_6444a0", "f_6460c0"]
+  },
+  "retained_cpu_calls": [],
+  "verification": "Not run: assignment excludes builds, tests, linters, formatters, SDK, guest and camera I/O."
+}
