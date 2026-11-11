@@ -1,4 +1,4 @@
-load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_toolchain_library")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test", "haskell_toolchain_library")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
 
@@ -105,6 +105,24 @@ haskell_library(
         "//host:bytestring",
         "//host:containers",
         "//host:text",
+    ],
+)
+
+genrule(
+    name = "model-module-list",
+    srcs = glob(["model/*.hs"]),
+    outs = ["DevelopModelModules.hs"],
+    cmd = """{ echo 'module DevelopModelModules (modelModules) where'; echo; echo 'modelModules :: [String]'; echo 'modelModules ='; echo '  ['; sep=''; for f in $(SRCS); do n=$${f##*/}; n=$${n%.hs}; printf '  %s"%s"\\n' "$$sep" "$$n"; sep=','; done; echo '  ]'; } > $@""",
+)
+
+haskell_test(
+    name = "model-catalogue-test",
+    main_file = "DevelopModelModulesTest.hs",
+    srcs = ["DevelopModelModulesTest.hs", "DevelopModelModules.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":model",
+        "//host:base",
     ],
 )
 

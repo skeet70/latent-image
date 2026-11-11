@@ -29,7 +29,8 @@ marker = 0x009cfe00
 transformsScenarios :: B.ByteString -> (StagePublication -> Address) -> [StageScenario]
 transformsScenarios bytes resolve = concatMap (\pub -> zipWith number [0 :: Int ..] (cases pub ++ edgeCases pub)) transformsPublications
  where
-  number index scenario = scenario { stageCaseName = StageCaseName (show (stageCaseName scenario) ++ "-" ++ show index) }
+  number index scenario = scenario { stageCaseName = StageCaseName (caseText (stageCaseName scenario) ++ "-" ++ show index) }
+   where caseText (StageCaseName text) = text
   edgeCases pub =
     let address = addressWord (stageStockEntry pub)
         operation = case address of

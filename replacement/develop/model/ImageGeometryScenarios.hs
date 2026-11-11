@@ -175,10 +175,25 @@ configureBorders plane top bottom left right memory = foldl' middle cleared (bet
   groups row start stop=[address+row*(stride .&. complement 7)+group*8+b | group <- between start stop,b <- [0..7]]
   clearRow row m=clear (groups row 0 (width `div` 8)++[address+row*stride+b | b <- between (width .&. complement 7) width]) m
   cleared=foldl' (flip clearRow) memory (indices top++between end height)
+  -- Stock scales left and right by 20, or by 10 when flag 0x10000 is set, then divides
+  -- the extent by 10 and the group count by 80 (e4f504, e4f508, e4f510, e4f534-e4f544).
+  -- factor is that scale divided by 10: 2, or 1 with the flag.
   middle m row
    | planeFlags plane .&. 0x10010 == 16 = clearPacked m row
-   | otherwise = let factor=if planeFlags plane .&. 0x10000/=0 then 1 else 2; bytes=left*factor; first=width-right*factor; aligned=(first+7) .&. complement 7; remaining=max aligned (width .&. complement 7); locations=groups row 0 (bytes `div` 8)++[address+row*stride+b | b <- between (bytes .&. complement 7) bytes]++[address+row*stride+b | b <- between first aligned]++groups row (aligned `div` 8) (width `div` 8)++[address+row*stride+b | b <- between remaining width] in clear locations m
-  clearPacked m row=foldl' (\out pixel -> let bitOffset=pixel*12; a=address+row*(stride .&. complement 3)+bitOffset `div` 8; offset=fromIntegral (bitOffset `mod` 8); value=foldl' (\v b -> v .|. (fromIntegral (byte out (a+b)) `shiftL` fromIntegral (8*b))) (0::Word32) [0..2]; result=value .&. complement (0xfff `shiftL` offset) in foldl' (\out' b -> M.insert (a+b) (fromIntegral (result `shiftR` fromIntegral (8*b))) out') out [0..2]) m (indices left++between (width*2 `div` 3-right) (width*2 `div` 3))
+   | otherwise = clear (groups row 0 (left*factor `div` 8)++[address+row*stride+b | b <- between (left*factor .&. complement 7) (left*factor)]++[address+row*stride+b | b <- between first aligned]++groups row (aligned `div` 8) (width `div` 8)++[address+row*stride+b | b <- between (max aligned (width .&. complement 7)) width]) m
+   where
+    factor=if planeFlags plane .&. 0x10000/=0 then 1 else 2
+    first=width-right*factor
+    aligned=(first+7) .&. complement 7
+  -- Left edge: eight-pixel groups then single pixels (e4f690-e4f71c). Right edge: single
+  -- pixels up to the next group boundary, then twelve-byte groups to width/12 (e4f72c-e4f808).
+  clearPacked m row=foldl' clearPixel (foldl' clearGroup m (between 0 (left `div` 8)++between (alignedPixel `div` 8) (width `div` 12))) (between (8*(left `div` 8)) left++between pixel alignedPixel)
+   where
+    pixel=(width*10-right*15) `div` 15
+    alignedPixel=(pixel+7) .&. complement 7
+    packedBase=address+row*(stride .&. complement 3)
+    clearGroup out group=foldl' (\p b -> M.insert (packedBase+group*12+b) 0 p) out [0..11]
+    clearPixel out current=let bitOffset=current*12; a=packedBase+bitOffset `div` 8; offset=fromIntegral (bitOffset `mod` 8); value=foldl' (\v b -> v .|. (fromIntegral (byte out (a+b)) `shiftL` fromIntegral (8*b))) (0::Word32) [0..2]; result=value .&. complement (0xfff `shiftL` offset) in foldl' (\out' b -> M.insert (a+b) (fromIntegral (result `shiftR` fromIntegral (8*b))) out') out [0..2]
 
 imageGeometryScenarios :: B.ByteString -> (StagePublication -> Address) -> [StageScenario]
 imageGeometryScenarios image resolve = radialCases ++ rowCases ++ paddingCases ++ readyCases ++ viewCases ++ flagCases ++ borderCases ++ levelCases ++ singleReduction ++ packedCases ++ prepareCases ++ transformCases ++ reductionCases ++ E.cropEngineScenarios image resolve
@@ -219,6 +234,10 @@ imageGeometryScenarios image resolve = radialCases ++ rowCases ++ paddingCases +
     (priorityInitial task++[planePatch params input,pixelPatch initial]) [pixelPatch (configureBorders input 1 1 3 5 initial)] Nothing
     (currentTaskCalls task++[cache]++priorityCalls task 12++priorityCalls task 6++[cache])
     | flags <- [0,16,0x10010],let input=Plane 0 pixelsAddress 256 64 (if flags==16 then 48 else 47) 4 flags,let initial=pixelsInitial True 0]
+    ++[make "geometry-clear-borders-packed-50" 0xe4f3b0 "configure_borders" [params,1,1,3,5]
+      (priorityInitial task++[planePatch params packed,pixelPatch initial]) [pixelPatch (configureBorders packed 1 1 3 5 initial)] Nothing
+      (currentTaskCalls task++[cache]++priorityCalls task 12++priorityCalls task 6++[cache])
+      | let packed=Plane 0 pixelsAddress 256 64 50 4 16,let initial=pixelsInitial True 0]
   levelCases=
     [make "geometry-levels-secondary-average" 0xe56da8 "geometry_levels" [state,0,1,params]
       [word (state+0x640) 1,Patch (Address (state+0x2584)) (B.pack [10,0,20,0,30,0,40,0,11,0,21,0,31,0,41,0])]
