@@ -61,6 +61,10 @@ _ENVIRONMENT_INPUTS = {
 
 def _synthetic_inputs_impl(ctx):
     environment = {name: ctx.os.environ.get(name, "") for name in _ENVIRONMENT_INPUTS.values() + ["SYNTHETIC_SOURCE_ROOT"]}
+    if not any(environment.values()):
+        outputs = _ENVIRONMENT_INPUTS.keys() + ["source/" + path for path in _PRIVATE] + ["provenance.txt"]
+        ctx.file("BUILD.bazel", "genrule(name = \"unconfigured\", outs = %s, cmd = \"echo 'synthetic source inputs require the SYNTHETIC_* --repo_env paths' >&2; exit 1\", visibility = [\"//visibility:public\"])\n" % repr(outputs))
+        return
     for name, value in environment.items():
         if not value.startswith("/"):
             fail("%s requires an absolute source path" % name)
