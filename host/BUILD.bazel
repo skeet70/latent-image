@@ -492,7 +492,10 @@ haskell_library(
 
 haskell_library(
     name = "storage-budget",
-    srcs = ["FujiAF/StorageBudget.hs"],
+    srcs = [
+        "FujiAF/RunOutput.hs",
+        "FujiAF/StorageBudget.hs",
+    ],
     ghcopts = [
         "-XGHC2021",
         "-Wall",
@@ -501,10 +504,16 @@ haskell_library(
     ],
     src_strip_prefix = ".",
     deps = [
+        ":aeson",
         ":base",
+        ":bytestring",
+        ":containers",
+        ":cryptohash-sha256",
         ":directory",
         ":filepath",
         ":process",
+        ":text",
+        ":time",
         ":unix",
     ],
 )
