@@ -77,15 +77,26 @@ qbank e = 0xfff6a000+e*0x3000
 fbank e = 0xfff69000+e*0x3000
 
 regions :: [(String,Word32,Int)]
-regions = [("globals",0x916600,0x20),("scheduler",0x917c00,0x400),("timing",0x9429f0,0xc0),("runtime",0x9553c0,0x700),("shadow",0x96b9b0,0x360),("cache-pointer",0x96ca50,4),("cache",0x4000000,0x1100),("packet",0x200000,0x100),("journal",0x210000,0x1000)] ++ [("registers-"++show e,0xfff69000+e*0x3000,0x3000) | e <- [0,1]]
+regions = [("globals",0x916600,0x20),("scheduler",0x917c00,0x400),("timing",0x9429f0,0xc0),("runtime",0x9553c0,0x700),("mode",0x955b00,0x60),("shadow",0x96b9b0,0x360),("cache-pointer",0x96ca50,4),("cache",0x4000000,0x1100),("packet",0x200000,0x100),("journal",0x210000,0x1000)] ++ [("registers-"++show e,0xfff69000+e*0x3000,0x3000) | e <- [0,1]]
 
 seed :: Memory
-seed = changes ([(0x96ca50,0x4000000),(0x210f04,0x7a11),(0x9553d8,0x51c002),(0x955430,0x51c102)]++[(0x210c00+n*16,0x200080) | n <- [1..6]]) $ put 0x4001080 (B.pack [0,1,0x23,3]) $ foldr initializeInputs (foldr initialize empty regions) [0,1]
+seed = changes ([(0x96ca50,0x4000000),(0x210f04,0x7a11),(0x9553d8,0x51c002),(0x955430,0x51c102)]++[(0x210c00+n*16,0x200080) | n <- [1..6]]++[(0x955b00+n*4,0x4d000000+n*0x10101) | n <- [0..0x17]]) $ put 0x4001080 (B.pack [0,1,0x23,3]) $ foldr initializeInputs (foldr initialize empty regions) [0,1]
   where
     initialize (_,a,n) m = if a>=0xfff00000 || a==0x96b9b0 then put a (B.concat [word32le (0xa5310000+(a .&. 0xffff)*0x100+fromIntegral i*0x10203) | i <- [0..n `div` 4-1]]) m else m
     initializeInputs e=put (ibase e) (assemble [0xb6420000+e*0x10101+n*0x10203 | n <- [0..0x23c `div` 4-1]])
 
-data Root = Item | Range | Enable | Options | Blank | Flush | Defaults | Stage | Immediate | Reset | Wait | Formatter | Strobe | Register | IsrZero | IsrOne | Commit | CommitZero | CommitOne | Capture deriving (Eq,Show,Enum,Bounded)
+data Root = Item | Range | Enable | Options | Blank | Flush | Defaults | Stage | Immediate | Reset | Wait | Formatter | Strobe | Register | IsrZero | IsrOne | Commit | CommitZero | CommitOne | Capture
+  | EngineInitialize | OperationRelease | ModeWindow | ModeBacking | ModeEnabled | ModeRange | ModeColour | ModeScale | ModeWindowSize | ModeColourPacket deriving (Eq,Show,Enum,Bounded)
+
+-- The panel-feature build is a second artifact; the standalone firmware ELF does not export these.
+data ElfRole = MainElf | PanelElf deriving (Eq,Show)
+
+rootRole :: Root -> ElfRole
+rootRole op = case op of
+  EngineInitialize -> PanelElf; OperationRelease -> PanelElf
+  ModeWindow -> PanelElf; ModeBacking -> PanelElf; ModeEnabled -> PanelElf; ModeRange -> PanelElf
+  ModeColour -> PanelElf; ModeScale -> PanelElf; ModeWindowSize -> PanelElf; ModeColourPacket -> PanelElf
+  _ -> MainElf
 
 root :: Root -> (String,Word32)
 root op = case op of
@@ -109,6 +120,16 @@ root op = case op of
   CommitZero -> ("commit_zero",0x6cb0c4)
   CommitOne -> ("commit_one",0x6cb0d8)
   Capture -> ("capture",0x6c926c)
+  EngineInitialize -> ("engine_initialize",0x6cbb88)
+  OperationRelease -> ("operation_release",0x6c8ee8)
+  ModeWindow -> ("mode_window",0x6cfed0)
+  ModeBacking -> ("mode_backing",0x6cffbc)
+  ModeEnabled -> ("mode_enabled",0x6d01bc)
+  ModeRange -> ("mode_range",0x6d0498)
+  ModeColour -> ("mode_colour",0x6d0ee4)
+  ModeScale -> ("mode_scale",0x6d0000)
+  ModeWindowSize -> ("mode_window_size",0x6cfe14)
+  ModeColourPacket -> ("mode_colour_packet",0x6d0244)
 
 data Scenario = Scenario
   { label :: String, operation :: Root, arguments :: [Word32], initial :: Memory
@@ -412,8 +433,8 @@ irqReceipt source=changes [(0x210100,1),(0x210104,source),(0x210404,if source==1
 releaseReceipt :: Word32 -> Memory -> Memory
 releaseReceipt handle=changes [(0x210200,1),(0x210204,handle)]
 
-ownedSource :: E.Elf -> Either String ([CaseRegion],[(GuestAddress,Word32)],M.Map String Word32)
-ownedSource elf = do
+ownedSource :: E.Elf -> [Root] -> Either String ([CaseRegion],[(GuestAddress,Word32)],M.Map String Word32)
+ownedSource elf roots = do
   let allocated=[s | s <- E.elfSections elf,E.sectionAllocated s,E.sectionSize s>0]
   unless (not (null allocated) && all (\s -> not (E.sectionWritable s) && E.sectionType s==1 && E.sectionAddress s>=0x2000000 && toInteger (E.sectionAddress s)+toInteger (E.sectionSize s)<=0x2040000) allocated) (Left "owned ELF escapes read-only artifact")
   code <- forM (zip [0::Int ..] allocated) $ \(n,s) -> do
@@ -421,7 +442,7 @@ ownedSource elf = do
     pure (mkRegion (RegionId ("owned-"++show n)) (address (E.sectionAddress s)) (fromIntegral (E.sectionSize s)) (if E.sectionExecutable s then ReadExecute else ReadOnly) (B.pack bytes))
   let functions=M.toAscList (M.fromListWith max [(address (E.symbolValue s),E.symbolSize s) | s <- E.elfSymbols elf,E.symbolKind s==E.FunctionSymbol,E.symbolSize s>0,E.symbolValue s>=0x2000000,E.symbolValue s<0x2040000])
       names=M.fromList [(E.symbolName s,E.symbolValue s) | s <- E.elfSymbols elf,E.symbolKind s==E.FunctionSymbol,E.symbolSize s>0]
-  forM_ ([("xm1_scanout_"++fst (root op)) | op <- [minBound..maxBound]]++["xm1_scanout_commit_zero","xm1_scanout_commit_one"]) $ \name ->
+  forM_ (["xm1_scanout_"++fst (root op) | op <- roots]++["xm1_scanout_commit_zero","xm1_scanout_commit_one"]) $ \name ->
     unless (length [s | s <- E.elfSymbols elf,E.symbolName s==name,E.symbolKind s==E.FunctionSymbol,E.symbolSize s>0]==1) (Left ("owned ELF export missing or ambiguous: "++name))
   pure (code,functions,names)
 
@@ -445,7 +466,7 @@ regionLayout :: Scenario -> [(String,Word32,Int)]
 regionLayout c=[(name,a,if name=="cache" then 0x420000 else n) | (name,a,n) <- regions,name/="cache" || usesCalibration c,a<0xfff00000 || paired c && operation c `notElem` [Defaults,Stage]]++[("yield-receipt",0x211000,8) | operation c==Wait]
 
 usesCalibration :: Scenario -> Bool
-usesCalibration c=paired c && operation c `elem` [Immediate,Defaults,Stage]
+usesCalibration c=paired c && operation c `elem` [Immediate,Defaults,Stage,EngineInitialize]
 
 caller :: Scenario -> Word32 -> [CaseRegion] -> [(GuestAddress,Word32)] -> (Word32,[CaseRegion],[(GuestAddress,Word32)])
 caller c entry code functions
@@ -502,8 +523,156 @@ boundaryCases =
   ++ [let before=put 0x200000 (assemble packet) seed in reject (key "boundary-stage" (e:packet)) Stage [e,0x200000] before | e <- [0,1],packet <- [[10,0,0],[0xffffffff,0,0],[0,4,0],[0,0xffffffff,0],[0,0,6],[0,0,0xffffffff]]]
   where reject name op args before=(scenario name op args before before (Just (negate 30))) {paired=False}
 
+-- Panel-cohort entries whose bodies touch only RAM: no device page and no retained callback.
+selectedEngine :: Memory -> Word32
+selectedEngine m = if getWord m 0x955b20==0 && getWord m 0x955b08==1 then 1 else 0
+
+modeSeed :: Word32 -> Word32 -> Memory
+modeSeed forced mode = changes [(0x955b20,forced),(0x955b08,mode)] seed
+
+packetHalfwords :: [Word32] -> B.ByteString
+packetHalfwords = B.concat . map (B.take 2 . word32le)
+
+modeCases :: [Scenario]
+modeCases = concat
+  [ [windowCase f m sel packet | f <- [0,1],m <- [0,1,2],sel <- [0,1,2,3],packet <- [[0x111,0x222,5,3],[0xfff,0,1,0xffff],[0,0,0,0]]]
+  , [backingCase f m v | f <- [0,1],m <- [0,1],v <- [0,0x3fffffff,0xffffffff,0x12345678]]
+  , [enabledCase f m initialized alt v | f <- [0,1],m <- [0,1],initialized <- [0,1],alt <- [0,1],v <- [0,1,2]]
+  , [modeRangeCase f m g i v | f <- [0,1],m <- [0,1],g <- [0,1],i <- [0,1,3,255,4],v <- [0,1,2]]
+  , [colourCase f m v | f <- [0,1],m <- [0,1],v <- [0,0x123456,0xffffff,0xffffffff]]
+  , [colourPacketCase f m first second third flag v | f <- [0,1],m <- [0,1],(first,second,third) <- [(0x11,0x22,0x33),(0xff,0,0x80)],flag <- [0,1],v <- [0,0x89abcdef]]
+  , [windowSizeCase f m sel | f <- [0,1],m <- [0,1],sel <- [0,1,2,3]]
+  ]
+
+windowCase :: Word32 -> Word32 -> Word32 -> [Word32] -> Scenario
+windowCase forced mode selector packet = scenario (key "mode-window" (forced:mode:selector:packet)) ModeWindow [selector,0x200000] before after (Just rc)
+  where
+    before=put 0x200000 (packetHalfwords packet) (modeSeed forced mode)
+    e=selectedEngine before
+    rc=if selector>2 then negate 30 else 0
+    origin=sbase e+0x1c+selector*8
+    size=sbase e+0x20+selector*8
+    originValue=(getWord before origin .&. 0xf000f000) .|. ((packet!!0 .&. 0xfff) `shiftL` 16) .|. (packet!!1 .&. 0xfff)
+    sizeValue=(getWord before size .&. 0xf000f000) .|. (((packet!!2-1) .&. 0xfff) `shiftL` 16) .|. ((packet!!3-1) .&. 0xfff)
+    after=if rc/=0 then before else word size sizeValue (word origin originValue before)
+
+backingCase :: Word32 -> Word32 -> Word32 -> Scenario
+backingCase forced mode value = scenario (key "mode-backing" [forced,mode,value]) ModeBacking [value] before after (Just 0)
+  where
+    before=modeSeed forced mode
+    at=sbase (selectedEngine before)+0x3c
+    after=word at ((getWord before at .&. 0xc0000000) .|. (value .&. 0x3fffffff)) before
+
+enabledCase :: Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> Scenario
+enabledCase forced mode initialized alternate value = scenario (key "mode-enabled" [forced,mode,initialized,alternate,value]) ModeEnabled [value] before after (Just rc)
+  where
+    base=modeSeed forced mode
+    e=selectedEngine base
+    before=byte (rbase e+0x54) initialized (byte 0x916610 alternate base)
+    rc=if initialized==0 then negate 10 else 0
+    saved=sbase e
+    alternateWord=ibase e
+    flag=if value==1 then 1 else 0
+    after
+      | initialized==0=before
+      | alternate/=0=word alternateWord ((getWord before alternateWord .&. complement 1) .|. flag) (byte saved (getByte before saved .&. 0xfe) before)
+      | otherwise=byte saved ((getByte before saved .&. 0xfe) .|. flag) before
+
+modeRangeCase :: Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> Scenario
+modeRangeCase forced mode group item value = scenario (key "mode-range" [forced,mode,group,item,value]) ModeRange [group,item,value] before after (Just rc)
+  where
+    base=modeSeed forced mode
+    e=selectedEngine base
+    before=byte (rbase e+0x54) 1 base
+    mask | item==255=0x1111
+         | item<4=1 `shiftL` fromIntegral (item*4)
+         | otherwise=0
+    rc | item>3 && item/=255=negate 30
+       | otherwise=0
+    at | getByte before 0x916610/=0=ibase e+4+group*4
+       | otherwise=sbase e+0x54+group*0x4c
+    old=getHalf before at
+    new=(old .&. (complement (mask .&. 0xffff) .&. 0xffff)) .|. (if value==1 then mask else 0)
+    after=if rc/=0 then before else half at new before
+
+colourCase :: Word32 -> Word32 -> Word32 -> Scenario
+colourCase forced mode value = scenario (key "mode-colour" [forced,mode,value]) ModeColour [value] before after (Just 0)
+  where
+    before=modeSeed forced mode
+    at=sbase (selectedEngine before)+0x180
+    after=byte (at+2) (value .&. 0xff) (byte (at+1) ((value `shiftR` 8) .&. 0xff) (byte at ((value `shiftR` 16) .&. 0xff) before))
+
+colourPacketCase :: Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> Scenario
+colourPacketCase forced mode first second third flag value = scenario (key "mode-colour-packet" [forced,mode,first,second,third,flag,value]) ModeColourPacket [0x200000] before after (Just 0)
+  where
+    base=modeSeed forced mode
+    e=selectedEngine base
+    bytes=B.pack [fromIntegral flag,0,0,0,fromIntegral first,fromIntegral second,fromIntegral third,0] <> word32le value <> B.pack [0,0,0,0]
+    before=put 0x200000 bytes base
+    at=sbase e
+    after=word (at+0x1a0) value (byte (at+0x19f) ((getByte before (at+0x19f) .&. 0xfe) .|. flag) (byte (at+0x19e) third (byte (at+0x19c) (((second .&. 0xf) `shiftL` 4) .|. (first .&. 0xf)) before)))
+
+windowSizeCase :: Word32 -> Word32 -> Word32 -> Scenario
+windowSizeCase forced mode selector = scenario (key "mode-window-size" [forced,mode,selector]) ModeWindowSize [selector,0x200000] before before (Just 0)
+  where before=put 0x200000 (B.pack [0,0,0,0,0x34,0x12,0,0]) (modeSeed forced mode)
+
+leaseCases :: [Scenario]
+leaseCases = [releaseCase e initialized count | e <- [0,1],initialized <- [0,1],count <- [0,1,2,0xff]]
+
+releaseCase :: Word32 -> Word32 -> Word32 -> Scenario
+releaseCase e initialized count = scenario (key "operation-release" [e,initialized,count]) OperationRelease [e] before after (Just rc)
+  where
+    before=byte (rbase e+0x55) count (byte (rbase e+0x54) initialized seed)
+    rc | initialized==0=negate 10
+       | count==1=0
+       | otherwise=negate 12
+    after=if initialized==0 then before else byte (rbase e+0x55) (count-1) before
+
+-- 0x6cbb88..0x6cbf24: every input is a calibration byte from the initialized cache.
+engineCases :: [Scenario]
+engineCases = [engineCase e route mode | e <- [0,1],route <- [0..3],mode <- [0,1,2,3,5,9]]
+
+engineCase :: Word32 -> Word32 -> Word32 -> Scenario
+engineCase e route mode = scenario (key "engine-initialize" [e,route,mode]) EngineInitialize [e,route,mode] before after Nothing
+  where
+    before=calibrationSeed
+    base=sbase e
+    pipeline=ibase e
+    c offset=getByte calibrationSeed (0x4000000+offset)
+    pair high low=(c low .|. (c high `shiftL` 8)) .&. 0xffff
+    direct=route==3
+    fixed | not direct=Nothing
+          | mode>=5=Just (1919,1079,4096,4096,1920,1080)
+          | mode==3 || mode==4=Just (1279,719,4096,4096,1280,720)
+          | mode==2=Just (719,479,0xe33,4096,640,480)
+          | otherwise=Nothing
+    widthKeys | direct=(0x1041,0x1040)
+              | route==2=(0xe32,0xe33)
+              | otherwise=(0xe2e,0xe2f)
+    heightKeys | direct=(if mode==1 then (0x1048,0x1047) else (0x1046,0x1045))
+               | route==2=(0xe34,0xe35)
+               | otherwise=(0xe30,0xe31)
+    (width,height,horizontal,vertical,outputWidth,outputHeight)=case fixed of
+      Just values->values
+      Nothing->(pair (fst widthKeys) (snd widthKeys),pair (fst heightKeys) (snd heightKeys)
+               ,if direct then pair 0x1043 0x1042 else 4096
+               ,if direct then (if mode==1 then pair 0x104c 0x104b else pair 0x104a 0x1049) else 4096
+               ,if route<=1 then 720 else (pair (fst widthKeys) (snd widthKeys) .&. 0xfff)+1
+               ,if route<=1 then 480 else (pair (fst heightKeys) (snd heightKeys) .&. 0xfff)+1)
+    interlaced=case fixed of
+      Just _->mode `elem` [2,3,4,7,8,9]
+      Nothing->route/=3 && (c (if route==2 then 0xe2d else 0xe2c) .&. 1)/=0
+    dimension old value=(old .&. complement 0xfff) .|. (value .&. 0xfff)
+    afterDimensions=half (base+18) (dimension (getHalf before (base+18)) width) (half (base+16) (dimension (getHalf before (base+16)) height) before)
+    afterScales=half (base+0x186) horizontal (half (base+0x184) vertical afterDimensions)
+    afterOutput=word (pipeline+0x234) outputWidth (word (pipeline+0x238) outputHeight afterScales)
+    afterOrigins=word (pipeline+0x34) 0 (word (pipeline+0x38) 0 afterOutput)
+    afterCopy=half (base+22) ((getHalf afterOrigins (base+22) .&. complement 0xfff) .|. (getHalf afterOrigins (base+18) .&. 0xfff))
+             (half (base+20) ((getHalf afterOrigins (base+20) .&. complement 0xfff) .|. (getHalf afterOrigins (base+16) .&. 0xfff)) afterOrigins)
+    after=if interlaced then byte (base+1) ((getByte afterCopy (base+1) .&. 0xfe) .|. 1) afterCopy else afterCopy
+
 caseGroups :: B.ByteString -> [(String,[Scenario])]
-caseGroups image=[("shadow",shadowCases),("timing",timingCases image),("scheduler",schedulerCases),("commit",commitCases),("capture",captureCases),("boundary",boundaryCases)]
+caseGroups image=[("shadow",shadowCases),("timing",timingCases image),("scheduler",schedulerCases),("commit",commitCases),("capture",captureCases),("boundary",boundaryCases),("mode",modeCases),("lease",leaseCases),("engine",engineCases)]
 
 proofLimit :: Integer
 proofLimit=256*1024*1024
@@ -543,41 +712,64 @@ loadBoundedObserved runner path limit=do
 stockExtents :: [(Word32,Word32,String)]
 stockExtents =
   [(0x6c6eb0,0x6ce384,"d6bb1379ce0bca32e65d08ace6c291c0657d69f616c34122ad29f4eafaddbcd1")
+  ,(0x6cfe14,0x6d0f28,"9aaeaa0c847ac165e6b14375d9c6a8e138bd4967b05db6ebd52e5f7bbb046f81")
   ,(0x722054,0x722218,"3830f1e4dff71c4b79ebce225a2dede0cfa9da3a203da54df030e3d10be78c51")
   ,(0x89bcd8,0x89be8c,"ddead5f2a3ec281f83a3a1aca971cb8ad41dd2331b012996cc9ca69b83521355")]
+
+stockFunctions :: [Word32] -> [(GuestAddress,Word32)]
+stockFunctions starts=concat [spans low high | (low,high,_) <- stockExtents]
+  where
+    spans low high=case filter (\s -> s>=low && s<high) starts of
+      [] -> [(address low,high-low)]
+      roots -> zip (map address roots) (zipWith (-) (drop 1 roots++[high]) roots)
+
+panelRoots :: [Root]
+panelRoots=[op | op <- [minBound..maxBound],rootRole op==PanelElf]
+
+mainRoots :: [Root]
+mainRoots=[op | op <- [minBound..maxBound],rootRole op==MainElf]
 
 main :: IO ()
 main = do
   args <- getArgs
   case args of
     ["list"] -> forM_ (caseGroups B.empty) $ \(category,cases) -> forM_ cases $ \c -> putStrLn (category++" "++label c)
-    ["stage",runner,imagePath,elfPath,out] -> run StageCases runner imagePath elfPath out "all"
-    ["execute",runner,imagePath,elfPath,out] -> run ExecuteCases runner imagePath elfPath out "all"
-    ["stage",runner,imagePath,elfPath,out,selection] -> run StageCases runner imagePath elfPath out selection
-    ["execute",runner,imagePath,elfPath,out,selection] -> run ExecuteCases runner imagePath elfPath out selection
-    _ -> fail "usage: display-scanout-native list | (stage|execute) RUNNER IMAGE4 OWNED_ELF PRIVATE_OUTPUT [all|shadow|timing|scheduler|commit|capture|boundary|CASE_ID]"
+    ["stage",runner,imagePath,elfPath,out] -> run StageCases runner imagePath elfPath Nothing out "all"
+    ["execute",runner,imagePath,elfPath,out] -> run ExecuteCases runner imagePath elfPath Nothing out "all"
+    ["stage",runner,imagePath,elfPath,out,selection] -> run StageCases runner imagePath elfPath Nothing out selection
+    ["execute",runner,imagePath,elfPath,out,selection] -> run ExecuteCases runner imagePath elfPath Nothing out selection
+    ["stage",runner,imagePath,elfPath,panelElf,out,selection] -> run StageCases runner imagePath elfPath (Just panelElf) out selection
+    ["execute",runner,imagePath,elfPath,panelElf,out,selection] -> run ExecuteCases runner imagePath elfPath (Just panelElf) out selection
+    _ -> fail "usage: display-scanout-native list | (stage|execute) RUNNER IMAGE4 OWNED_ELF PRIVATE_OUTPUT [all|CATEGORY|CASE_ID] | (stage|execute) RUNNER IMAGE4 OWNED_ELF PANEL_ELF PRIVATE_OUTPUT [all|CATEGORY|CASE_ID]"
 
-run :: Action -> FilePath -> FilePath -> FilePath -> FilePath -> String -> IO ()
-run action runner imagePath elfPath out selection = do
+run :: Action -> FilePath -> FilePath -> FilePath -> Maybe FilePath -> FilePath -> String -> IO ()
+run action runner imagePath elfPath panelElfPath out selection = do
   image <- B.readFile imagePath
   unless (sha256Hex (sha256 image)=="f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16") (fail "image4 identity differs")
   elf <- either fail pure . E.parseElf =<< B.readFile elfPath
-  (ownedCode,ownedFunctions,names) <- either fail pure (ownedSource elf)
+  (mainCode,mainFunctions,mainNames) <- either fail pure (ownedSource elf mainRoots)
+  panel <- traverse (\path -> do
+    parsed <- either fail pure . E.parseElf =<< B.readFile path
+    either fail pure (ownedSource parsed panelRoots)) panelElfPath
+  let ownedFor role=case role of
+        MainElf->pure (mainCode,mainFunctions,mainNames)
+        PanelElf->maybe (fail ("panel cohort case needs a PANEL_ELF argument: "++selection)) pure panel
   let slice a b=B.take (fromIntegral (b-a)) (B.drop (fromIntegral (a-0x61c400)) image)
   forM_ stockExtents $ \(a,b,digest) ->
     unless (sha256Hex (sha256 (slice a b))==digest) (fail ("stock executable extent differs: "++show a))
   let stockCode=[mkRegion (RegionId ("stock-"++show a)) (address a) (fromIntegral (b-a)) ReadExecute (slice a b) | (a,b,_) <- stockExtents]
         ++[mkRegion (RegionId ("selectors-"++show a)) (address a) (fromIntegral (b-a)) ReadOnly (slice a b) | (a,b) <- [(0x7cd640,0x7cd7d0),(0x828918,0x828d98)]]
       starts=sort (map (snd . root) [minBound..maxBound])
-      stockFunctions=zip (map address starts) (zipWith (-) (drop 1 starts++[0x6ce384]) starts)++[(address a,b-a) | (a,b,_) <- drop 1 stockExtents]
+      functions=stockFunctions starts
       groups=caseGroups image
       allCases=concatMap snd groups
       selected=if selection=="all" then allCases else maybe (filter ((==selection) . label) allCases) id (lookup selection groups)
   unless (not (null selected)) (fail "unknown or empty scanout scenario selection")
   present <- existingBytes out
   prospective <- foldM (\total c -> do
+    (ownedCode,ownedFunctions,names) <- ownedFor (rootRole (operation c))
     ownedCase <- either fail pure (ownedScenario names c)
-    let (stockEntry,stockCallerCode,stockCallerFunctions)=caller c (snd (root (operation c))) stockCode stockFunctions
+    let (stockEntry,stockCallerCode,stockCallerFunctions)=caller c (snd (root (operation c))) stockCode functions
         (ownedEntry,ownedCallerCode,ownedCallerFunctions)=caller ownedCase 0 ownedCode ownedFunctions
         stockSpec=makeSpec "stock" stockEntry stockCallerCode stockCallerFunctions c
         ownedSpec=makeSpec "owned" ownedEntry ownedCallerCode ownedCallerFunctions ownedCase
@@ -588,13 +780,14 @@ run action runner imagePath elfPath out selection = do
     [s] -> pure (E.symbolValue s)
     _ -> fail "owned timing::reset function missing or ambiguous for isolated capture receipt"
   forM_ selected $ \c -> do
+    (ownedCode,ownedFunctions,names) <- ownedFor (rootRole (operation c))
     let (name,stockEntry)=root (operation c)
     ownedEntry <- maybe (fail ("missing owned export xm1_scanout_"++name)) pure (M.lookup ("xm1_scanout_"++name) names)
     ownedCase <- either fail pure (ownedScenario names c)
     stockCaseCode <- either fail pure (if needsResetReceipt c then patchCode 0x6c9160 resetBoundary stockCode else Right stockCode)
     ownedCaseCode <- either fail pure (if needsResetReceipt c then patchCode resetEntry resetBoundary ownedCode else Right ownedCode)
     let profile=if usesCalibration c then Resource8 else DefaultMemory
-        (stockCall,stockCallCode,stockCallFunctions)=caller c stockEntry stockCaseCode stockFunctions
+        (stockCall,stockCallCode,stockCallFunctions)=caller c stockEntry stockCaseCode functions
         (ownedCall,ownedCallCode,ownedCallFunctions)=caller ownedCase ownedEntry ownedCaseCode ownedFunctions
         stockSpec=makeSpec "stock" stockCall stockCallCode stockCallFunctions c
         ownedSpec=makeSpec "owned" ownedCall ownedCallCode ownedCallFunctions ownedCase
