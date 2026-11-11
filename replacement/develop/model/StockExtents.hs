@@ -3,6 +3,10 @@ module StockExtents
   ( StockExtent (..)
   , stockExtents
   , stockExtent
+  , RetainedImage (..)
+  , RetainedExtent (..)
+  , retainedExtents
+  , retainedExtent
   ) where
 
 import qualified Data.Map.Strict as M
@@ -346,10 +350,23 @@ stockExtents =
   , StockExtent 0x00ea07ec 328 "5f3138d237d1869fa8030f8291aaed0fdbcead708e248b1aa6328c4bc37daa8d"
   , StockExtent 0x00ea0934 3740 "ed9a50cce0667f8ff039d99a81836824aab4331bae766f26212a2b9c8adb990c"
   , StockExtent 0x00ea17d0 104 "8b48d3f8f9ced52fc8dfb098050501b009e6e3d032e3822aadca58b332f782fb"
+  , StockExtent 0x00ea256c 80 "3a3d09f1a763badf8377366d4e5f22da962e8d6cb67069d034013ead146cae79"
+  , StockExtent 0x00ea25bc 108 "0b6967ed4807f756d0294aa7f733c27202ae6e45876a37197a04c23346503cac"
+  , StockExtent 0x00ea2628 60 "941081389f6527b3a8c06773b715f57c5630cd554fa956797bf0ea9eb61c2336"
+  , StockExtent 0x00ea2664 60 "489fb1a5748c7257c3f2db47288666f826e20308be025a7c01f5abf31b3f960e"
   , StockExtent 0x00ea26a0 244 "82f7d1713360066d13cd37c402d4230db673e05b4cc9f8c010105932af98e06e"
   , StockExtent 0x00ea2794 132 "50841e7767d49aeebebe9e19ec5f32af5bfa37612a8d16caa39f06e4391bee98"
   , StockExtent 0x00ea2818 120 "ff7790e39e8a3efde2b4bda26bccd3e7877cc0b82ca9f525be34d8dc1efd4b9f"
+  , StockExtent 0x00ea2890 88 "a83ad79b880dce654bca6d5ea229366fbc05a7d814051c63cfc81d7559e18439"
+  , StockExtent 0x00ea28e8 24 "aab533f64e7d3f50628f3b74c122bcfaae90f7a06e1282e0e04e4d03d9706543"
   , StockExtent 0x00ea2900 100 "57a144745f4ea34a1e41d7600d3da64f25df0f48b48d56e8527f809c6feca4f5"
+  , StockExtent 0x00ea2964 44 "d355ee40d436734982028887624d18625fc1f1babcaee34b3c4b6e7e3e843480"
+  , StockExtent 0x00ea2990 40 "8030e964556d178da58c85e23b237892f2190e31dea880c75dd3b0fffeb83229"
+  , StockExtent 0x00ea29b8 100 "192d58b867e4ca25d384b128042269dbba79d2728175b5c22ed1af04a64e8c6c"
+  , StockExtent 0x00ea2a1c 108 "766d82e9229eb4919e5a16cf678235dc3ef8b45cd834a4f09249c07213de8e3d"
+  , StockExtent 0x00ea2a88 40 "9a9f79a09b4befdb3bc349158e47e8e0cda75efb44932438a8d6fd68f441a6eb"
+  , StockExtent 0x00ea2ab0 76 "44f904411effc59da6c5c2296bd7d2948e2fc569e069d5caef7b262626c3e5e2"
+  , StockExtent 0x00ea2afc 80 "ddf6ae07ca028c85ecf3a1f727ada022223637b73a9bc61705d55262c6435a87"
   , StockExtent 0x00ea9790 56 "70458c4dbd90d30c85a2aa4f8df6a3a51ce060bcc7f8cd255de55394bc79cb03"
   , StockExtent 0x00ea97c8 148 "a7d449137e125ec83067dd192292647779f15c5cbd0290964692fc7ebfd837ea"
   , StockExtent 0x00ea985c 396 "a5671a8329ee4856c320ad46e95882bb3b9740733b17830ce505f29736f9373d"
@@ -385,6 +402,45 @@ stockExtents =
   , StockExtent 0x00eb0ea0 56 "14caaf67cf033d8377c80b75b45cde3442c08bfd55a546d6cc3562b4b211009c"
   , StockExtent 0x00eb0f38 68 "2ca04fb7376bc0f1adcc11b70e0d78e07b69ba3fb77fabef52a9fb7a723a0e28"
   ]
+
+-- Stock functions outside the develop region that the develop entries enter as retained
+-- services. Each extent is the listing's own range row; the stage harness maps the bytes as
+-- code for both sides and checks the digest against the image it reads.
+data RetainedImage = Image4 | Kernel0 deriving (Eq, Show)
+
+data RetainedExtent = RetainedExtent
+  { retainedImage :: RetainedImage
+  , retainedStock :: StockExtent
+  } deriving (Eq, Show)
+
+retainedExtents :: [RetainedExtent]
+retainedExtents =
+  [ RetainedExtent Image4 (StockExtent 0x00723398 28 "71c79e0240a3c9ff4dbd17c4a0e21bd6c6d8488a64c41ef6796e7c7b35357d0e")
+  , RetainedExtent Image4 (StockExtent 0x007235d8 216 "b0e6aeb81c94b2452fc91ad3da77e36906b3fce7faadc7e904ac9c244fa09100")
+  , RetainedExtent Image4 (StockExtent 0x007236b0 224 "b25e942d182f58be142c11444355092b42f92b72b2464370114b2ecc4e0a44a8")
+  , RetainedExtent Image4 (StockExtent 0x00723a14 184 "24a319889cf448e9ccc5ff16707828629b5ca74ae3b3d56be8cce1ee1b61ddc3")
+  , RetainedExtent Image4 (StockExtent 0x00723cb8 48 "92681accf48089835d3c844a4fd99a7c3211ea1009cccd0f88273ce3de93a245")
+  , RetainedExtent Image4 (StockExtent 0x00723ce8 160 "7983ca8534cbb4802db6c83a8e42c6e94872ca39992ac9c0e306a8fdc23bfe8e")
+  , RetainedExtent Image4 (StockExtent 0x007243a8 216 "0a48860fce1d679fdf3eb0637ec8afe1ec324809394d20387218e598a3b6e96a")
+  , RetainedExtent Image4 (StockExtent 0x00724558 224 "852ac7eae12c48792ba77973428e36c7be22ef2d8ae7abd845ab12cdc01dc73d")
+  , RetainedExtent Image4 (StockExtent 0x00724638 184 "efa03c82be58b5a9bc4eb628c4d0f28020751579e2dbc75f6d0cb0df91b58361")
+  , RetainedExtent Image4 (StockExtent 0x007247ac 456 "123948672abc1a1f78e7a7cfe2c5aebb882e5f7ef4b143658c3327e7675fa6e7")
+  , RetainedExtent Image4 (StockExtent 0x00724974 356 "c51a13ec4d0b71fad1792207a218afcdcc54e6b3671ae27fae0fe860dd33558c")
+  , RetainedExtent Image4 (StockExtent 0x00724b68 152 "6008c26df7818441ce9a7ece5f9802eca2d1f58e1da311c5a9ab09fcf1da39e4")
+  , RetainedExtent Image4 (StockExtent 0x00724c00 188 "25383bb5f9a7c8baddf3ef1bdf38005651ffa2f64e26f17dfc83731f06d843c9")
+  , RetainedExtent Image4 (StockExtent 0x00724cdc 556 "9b06d01ff6e811af342eacf6006454021dd07219ea6aeec35c39c4f4d7e002ea")
+  , RetainedExtent Image4 (StockExtent 0x00722054 292 "fdd89402855fb6d349f227be3f77f6d84336f1dfd1ff5e4ffe5bb88e27d8187f")
+  , RetainedExtent Image4 (StockExtent 0x00726658 352 "c567d25550ae9bc39712ba689664c0766fbbabf521090dca27b33a60f99b8c8f")
+  , RetainedExtent Kernel0 (StockExtent 0x00042188 336 "94f2cd1cba9b37172b93a59072b293bb07966fe314b75ae413ec3aff3c951a9c")
+  , RetainedExtent Kernel0 (StockExtent 0x0004d978 244 "aff8e98aeffcf942b2bc3d5b9211a3af7239271251c0b5806e72d1d09f7b2d96")
+  , RetainedExtent Kernel0 (StockExtent 0x0004da6c 32 "9b06fde96b63386ad0c8c8f75a34da5e4f97d06d27d3882eab9cecc6fbaa4b16")
+  ]
+
+retainedIndex :: M.Map Word32 StockExtent
+retainedIndex = M.fromList [(extentStart extent, extent) | RetainedExtent _ extent <- retainedExtents]
+
+retainedExtent :: Word32 -> Maybe StockExtent
+retainedExtent address = M.lookup address retainedIndex
 
 stockExtentIndex :: M.Map Word32 StockExtent
 stockExtentIndex = M.fromList [(extentStart extent, extent) | extent <- stockExtents]

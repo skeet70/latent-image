@@ -3,7 +3,6 @@
 //! Stock enters those words with `blx`.
 
 use core::cell::UnsafeCell;
-use core::sync::atomic::{AtomicU32, Ordering};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CallbackWord(pub u32);
@@ -62,46 +61,26 @@ callback_functions! {
     Reclaim => unsafe extern "C" fn(u32, u32, u32) -> i32,
 }
 
-struct IrqMask {
-    #[cfg(target_arch = "arm")]
-    saved: u32,
-}
-impl IrqMask {
-    fn enter() -> Self {
-        #[cfg(target_arch = "arm")]
-        {
-            let saved: u32;
-            unsafe { core::arch::asm!("mrs {saved}, cpsr", "cpsid if", saved = out(reg) saved, options(nostack, preserves_flags)); }
-            Self { saved }
-        }
-        #[cfg(not(target_arch = "arm"))]
-        Self {}
-    }
-}
-impl Drop for IrqMask {
-    fn drop(&mut self) {
-        #[cfg(target_arch = "arm")]
-        unsafe {
-            if self.saved & 0x40 == 0 { core::arch::asm!("cpsie f", options(nostack, preserves_flags)); }
-            if self.saved & 0x80 == 0 { core::arch::asm!("cpsie i", options(nostack, preserves_flags)); }
-        }
-    }
-}
-
-struct Shared<T> { locked: AtomicU32, value: UnsafeCell<T> }
+/// The registry's mutable state is written under the kernel interrupt lock stock uses for
+/// its own tables (`dispatch_enter_nested_critical`) and read without one: a read on this
+/// single-core CPU cannot observe a write that the lock has masked.
+struct Shared<T> { value: UnsafeCell<T> }
 unsafe impl<T: Send> Sync for Shared<T> {}
 impl<T> Shared<T> {
-    const fn new(value: T) -> Self { Self { locked: AtomicU32::new(0), value: UnsafeCell::new(value) } }
+    const fn new(value: T) -> Self { Self { value: UnsafeCell::new(value) } }
+    fn read<R>(&self, operation: impl FnOnce(&T) -> R) -> R {
+        operation(unsafe { &*self.value.get() })
+    }
+    #[cfg(target_arch = "arm")]
     fn with<R>(&self, operation: impl FnOnce(&mut T) -> R) -> R {
-        let irq = IrqMask::enter();
-        while self.locked.compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed).is_err() { core::hint::spin_loop(); }
-        struct Unlock<'a>(&'a AtomicU32);
-        impl Drop for Unlock<'_> { fn drop(&mut self) { self.0.store(0, Ordering::Release); } }
-        let unlock = Unlock(&self.locked);
+        let token = unsafe { super::buffers::xm1_develop_enter_critical() };
         let result = operation(unsafe { &mut *self.value.get() });
-        drop(unlock);
-        drop(irq);
+        unsafe { super::buffers::xm1_develop_leave_critical(token) };
         result
+    }
+    #[cfg(not(target_arch = "arm"))]
+    fn with<R>(&self, operation: impl FnOnce(&mut T) -> R) -> R {
+        operation(unsafe { &mut *self.value.get() })
     }
 }
 
@@ -117,6 +96,11 @@ pub struct CallbackRegistry { state: Shared<State> }
 impl CallbackRegistry {
     pub const fn new() -> Self {
         Self { state: Shared::new(State { entries: [None; ENTRIES], regions: [None; REGIONS], next: FIRST_TOKEN }) }
+    }
+    const fn with_region(region: CodeRegion) -> Self {
+        let mut regions = [None; REGIONS];
+        regions[0] = Some(region);
+        Self { state: Shared::new(State { entries: [None; ENTRIES], regions, next: FIRST_TOKEN }) }
     }
     /// Admits a stock code region supplied by the composition.
     pub fn admit(&self, region: CodeRegion) -> Result<(), CallbackError> {
@@ -147,17 +131,18 @@ impl CallbackRegistry {
     /// Records a word the guest supplies, such as an interface-table entry, for one shape.
     pub fn admit_word<F: CallbackFn>(&self, word: CallbackWord) -> Result<(), CallbackError> {
         if word.0 == 0 { return Err(CallbackError::Invalid); }
-        self.state.with(|state| {
-            if let Some(entry) = state.entries.iter().flatten().find(|entry| entry.word == word) {
-                return if entry.shape == F::SHAPE { Ok(()) } else { Err(CallbackError::Shape) };
-            }
-            let slot = state.entries.iter().position(Option::is_none).ok_or(CallbackError::Full)?;
-            if state.next >= 0x8000_0000 { return Err(CallbackError::Full); }
-            let token = CallbackToken(state.next);
-            state.next += 1;
-            state.entries[slot] = Some(CallbackEntry { token, word, address: word.0 as usize, shape: F::SHAPE });
-            Ok(())
-        })
+        self.state.with(|state| Self::admit_word_into::<F>(state, word))
+    }
+    fn admit_word_into<F: CallbackFn>(state: &mut State, word: CallbackWord) -> Result<(), CallbackError> {
+        if let Some(entry) = state.entries.iter().flatten().find(|entry| entry.word == word) {
+            return if entry.shape == F::SHAPE { Ok(()) } else { Err(CallbackError::Shape) };
+        }
+        let slot = state.entries.iter().position(Option::is_none).ok_or(CallbackError::Full)?;
+        if state.next >= 0x8000_0000 { return Err(CallbackError::Full); }
+        let token = CallbackToken(state.next);
+        state.next += 1;
+        state.entries[slot] = Some(CallbackEntry { token, word, address: word.0 as usize, shape: F::SHAPE });
+        Ok(())
     }
     pub fn release(&self, token: CallbackToken) -> bool {
         self.state.with(|state| {
@@ -169,7 +154,7 @@ impl CallbackRegistry {
     /// composition admitted the region that contains it.
     pub fn resolve<F: CallbackFn>(&self, word: CallbackWord) -> Result<F, CallbackError> {
         if word.0 == 0 { return Err(CallbackError::Invalid); }
-        self.state.with(|state| {
+        self.state.read(|state| {
             if let Some(entry) = state.entries.iter().flatten().find(|entry| entry.word == word && entry.shape == F::SHAPE) {
                 return Ok(unsafe { F::from_address(entry.address) });
             }
@@ -185,15 +170,12 @@ impl Default for CallbackRegistry {
     fn default() -> Self { Self::new() }
 }
 
-static REGISTRY: CallbackRegistry = CallbackRegistry::new();
-
 /// The develop unit's own stock extents; stock installs crop and font callbacks from there.
 pub const DEVELOP_STOCK_REGION: CodeRegion = CodeRegion::new(0x00e4_0000, 0x00eb_2000);
 
-static ADMITTED: AtomicU32 = AtomicU32::new(0);
+static REGISTRY: CallbackRegistry = CallbackRegistry::with_region(DEVELOP_STOCK_REGION);
 
 pub fn registry() -> &'static CallbackRegistry {
-    if ADMITTED.swap(1, Ordering::AcqRel) == 0 { let _ = REGISTRY.admit(DEVELOP_STOCK_REGION); }
     &REGISTRY
 }
 
@@ -234,15 +216,48 @@ pub fn call_reclaim(registry: &CallbackRegistry, word: CallbackWord, heap: u32, 
     Ok(unsafe { callback(heap, amount, attempt) })
 }
 
+/// Resolves a stock interface-table word. An unregistered word is entered directly, as stock
+/// enters it; a word registered for another shape stays refused.
 pub fn interface_call<F: CallbackFn>(registry: &CallbackRegistry, word: CallbackWord) -> Result<F, CallbackError> {
-    registry.admit_word::<F>(word)?;
-    registry.resolve::<F>(word)
+    if word.0 == 0 { return Err(CallbackError::Invalid); }
+    match registry.resolve::<F>(word) {
+        Ok(callback) => Ok(callback),
+        Err(CallbackError::Unadmitted) => Ok(unsafe { F::from_address(word.0 as usize) }),
+        Err(error) => Err(error),
+    }
+}
+
+pub fn call_interface_task(registry: &CallbackRegistry, word: CallbackWord) -> Result<u32, CallbackError> {
+    let callback: unsafe extern "C" fn() -> u32 = interface_call(registry, word)?;
+    Ok(unsafe { callback() })
+}
+
+pub fn call_interface_pair_status(registry: &CallbackRegistry, word: CallbackWord, first: u32, second: u32) -> Result<i32, CallbackError> {
+    let callback: unsafe extern "C" fn(u32, u32) -> i32 = interface_call(registry, word)?;
+    Ok(unsafe { callback(first, second) })
+}
+
+pub fn call_interface_wait_status(registry: &CallbackRegistry, word: CallbackWord, first: u32, second: u32, third: u32, output: *mut u32, timeout: i32) -> Result<i32, CallbackError> {
+    let callback: unsafe extern "C" fn(u32, u32, u32, *mut u32, i32) -> i32 = interface_call(registry, word)?;
+    Ok(unsafe { callback(first, second, third, output, timeout) })
+}
+
+pub fn call_interface_argument_status(registry: &CallbackRegistry, word: CallbackWord, argument: u32) -> Result<i32, CallbackError> {
+    let callback: unsafe extern "C" fn(u32) -> i32 = interface_call(registry, word)?;
+    Ok(unsafe { callback(argument) })
+}
+
+pub fn call_interface_signed_argument(registry: &CallbackRegistry, word: CallbackWord, argument: i32) -> Result<(), CallbackError> {
+    let callback: unsafe extern "C" fn(i32) = interface_call(registry, word)?;
+    unsafe { callback(argument) };
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::AtomicI32;
+    use core::sync::atomic::Ordering;
+    use std::sync::atomic::{AtomicI32, AtomicU32};
 
     static CALLS: AtomicU32 = AtomicU32::new(0);
     static SEEN: AtomicI32 = AtomicI32::new(0);
@@ -291,10 +306,11 @@ mod tests {
     }
 
     #[test]
-    fn guest_interface_word_is_admitted_for_one_shape_only() {
+    fn guest_interface_word_is_entered_directly_and_a_registered_word_keeps_its_shape() {
         let registry = CallbackRegistry::new();
         let word = CallbackWord(0x0072_3cb8);
         assert_eq!(interface_call::<unsafe extern "C" fn() -> u32>(&registry, word).is_ok(), true);
+        registry.admit_word::<unsafe extern "C" fn() -> u32>(word).unwrap();
         assert_eq!(interface_call::<unsafe extern "C" fn(u32, u32) -> i32>(&registry, word), Err(CallbackError::Shape));
     }
 

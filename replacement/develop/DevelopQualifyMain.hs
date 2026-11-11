@@ -4,7 +4,7 @@
 module Main where
 
 import Control.Exception (IOException, SomeException, displayException, evaluate, try)
-import Control.Monad (forM, forM_, unless)
+import Control.Monad (forM, forM_, unless, when)
 import qualified ArmElf as E
 import Data.Aeson (Value, encode, object, parseJSON, withObject, (.:), (.=))
 import Data.Aeson.Types (Parser, parseEither)
@@ -15,7 +15,7 @@ import qualified Data.ByteString.Char8 as BC
 import qualified Data.ByteString.Lazy as BL
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit, isHexDigit, toLower)
 import Data.Int (Int32)
-import Data.List (nub, transpose)
+import Data.List (isPrefixOf, nub, transpose)
 import qualified Data.Map.Strict as M
 import Data.Maybe (mapMaybe)
 import Data.Word (Word8, Word32)
@@ -27,7 +27,7 @@ import FujiAF.Host hiding (sha256)
 import Scenarios hiding (base)
 import PipelineModel (StageCaseName (..), StagePublication (..), StageScenario (..), StageSymbol (..), stageStockEntry)
 import StageCatalogue (Stage (..), StageCaseView (..), StageImage (..), stages)
-import StockExtents (StockExtent (..), stockExtent, stockExtents)
+import StockExtents (StockExtent (..), retainedExtent, retainedExtents, RetainedExtent (..), RetainedImage (..), stockExtent, stockExtents)
 import DispatcherScenarios (dispatcherScenarios)
 import PermitScenarios (permitScenarios, frameKindCount, frameKindTable)
 import SaveScenarios (saveScenarios)
@@ -37,7 +37,7 @@ import EntryScenarios (entryScenarios)
 import qualified SourceAdmission as A
 import GHC.Clock (getMonotonicTime)
 import System.Directory (canonicalizePath, createDirectoryIfMissing, listDirectory, removeDirectoryRecursive)
-import System.Environment (getArgs, getExecutablePath)
+import System.Environment (getArgs, getExecutablePath, lookupEnv)
 import System.Exit (ExitCode (..), exitFailure)
 import System.FilePath ((</>), takeDirectory)
 import Text.Read (readMaybe)
@@ -162,8 +162,11 @@ stageExpectation stage = Expectation N.Returned ([(N.Pc,exit)] ++ preserved ++ [
 -- A stageCodePointers cell holds the side's own publication address, so the pointer patches
 -- follow the scenario's own patches and win over them.
 stageSpec :: (StagePublication -> Address) -> String -> StageScenario -> CaseSpec
-stageSpec entryAddress ident stage = CaseSpec ident (stageArguments stage) (stageInitial stage++pointers) (stageFinal stage++pointers) (stageCalls stage) (stageExpectation stage) provenance False
+stageSpec entryAddress ident stage = CaseSpec ident (stageArguments stage) (stageInitial stage++stackArguments++pointers) (stageFinal stage++pointers) (stageCalls stage) (stageExpectation stage) provenance False
  where
+  -- The fifth argument and later are passed on the stack at the entry stack pointer, as
+  -- the stock and owned entries both read them through their frame pointer.
+  stackArguments = [word (stackTop+4*fromIntegral (index-4)) value | (index,value) <- zip [0::Int ..] (stageArguments stage),index >= 4]
   pointers = [word (addressWord cell) (addressWord (entryAddress publication)) | (cell,publication) <- stageCodePointers stage]
   provenance = scenarioProvenance ++ "; scenario " ++ caseNameText (stageCaseName stage)
   caseNameText (StageCaseName text) = text
@@ -284,7 +287,7 @@ regionPieces patches = [Piece name address "rw" (apply address (B.replicate size
 -- The stage models place the dispatch pointer at 0x0096bd20 and the interface table at
 -- 0x009b6000, so the stage smoke maps both and widens state to the table's end.
 stageRegionPieces :: [Patch] -> [Piece]
-stageRegionPieces patches = [Piece name address "rw" (apply address (B.replicate size 0) patches) | (name,address,size) <- [("context",context,0x4000),("state",state,0x8000),("globals",0x01500000,0xc0000),("frames",0x01600000,0x20000),("stack",0x009a8000,0x4000),("dispatch",0x00960000,0x10000),("reserved",0x00930000,0x10000),("priority",0x007ca000,0x1000),("error-callback",0x4089ea8c,4),("error-code",0x40a0f82c,4)]]
+stageRegionPieces patches = [Piece name address "rw" (apply address (B.replicate size 0) patches) | (name,address,size) <- [("context",context,0x4000),("state",state,0x8000),("globals",0x01500000,0xc0000),("frames",0x01600000,0x20000),("stack",0x009a8000,0x4000),("dispatch",0x00960000,0x10000),("reserved",0x00930000,0x10000),("priority",0x007ca000,0x1000),("logging",0x40a5b000,0x1000),("error-callback",0x4089ea8c,4),("error-code",0x40a0f82c,4)]]
 
 pieceWordAt :: Piece -> Word32 -> Maybe Word32
 pieceWordAt (Piece _ base _ bytes) address
@@ -375,6 +378,15 @@ equivalentObservations :: [String] -> Maybe (N.NativeObservation,EffectJournal) 
 equivalentObservations names (Just (original,originalJournal)) (Just (candidate,candidateJournal)) = canonicalMemory names original == canonicalMemory names candidate && originalJournal == candidateJournal
 equivalentObservations _ _ _ = False
 
+-- Cases whose owned route deliberately differs from stock. The qualifier records the
+-- comparison rather than hiding it, and treats one as an intentional difference only while
+-- the owned side meets its own declared final state.
+intentionalDifference :: Word32 -> String -> Maybe Value
+intentionalDifference entry ident
+  | entry == 0xe9ac44 = Just (object ["issue" .= ("172"::String),"reason" .= ("The owned dispatcher route preserves frame+0x408..0x423; stock copies seven never-initialised private stack words there."::String)])
+  | "image-reduce-pair-owned-outcome-" `isPrefixOf` ident = Just (object ["issue" .= ("173"::String),"reason" .= ("An insufficient mesh input leaves the previous origins and reports failure; stock copies two never-initialised stack words and can accept the result."::String)])
+  | otherwise = Nothing
+
 untilFailure :: (a -> IO Value) -> [a] -> IO [Value]
 untilFailure _ [] = pure []
 untilFailure action (current:rest) = do
@@ -395,21 +407,74 @@ describeEntry address = case stockExtent address of
 describeCall :: Word32 -> String
 describeCall address = hex address ++ maybe "" (\extent -> "+" ++ show (extentSize extent)) (stockExtent address)
 
+-- The first piece that maps `address`, in list order.
+piecesWordAt :: [Piece] -> Word32 -> Maybe Word32
+piecesWordAt [] _ = Nothing
+piecesWordAt (piece:rest) address = case pieceWordAt piece address of
+  Just value -> Just value
+  Nothing -> piecesWordAt rest address
+
+retainedImageBytes :: B.ByteString -> B.ByteString -> RetainedImage -> (String,B.ByteString,Word32)
+retainedImageBytes image4 kernel0 image = case image of
+  Image4 -> ("image4",image4,0x61c400)
+  Kernel0 -> ("kernel0",kernel0,0x40000)
+
+retainedPieces :: B.ByteString -> B.ByteString -> [Piece]
+retainedPieces image4 kernel0 =
+  [ Piece ("stock-"++tag) start "rx" (B.take (fromIntegral size) (B.drop (fromIntegral (start-base)) bytes))
+  | image <- [Image4, Kernel0]
+  , let (tag,bytes,base) = retainedImageBytes image4 kernel0 image
+        starts = [extentStart extent | RetainedExtent current extent <- retainedExtents, current == image]
+        ends = [extentStart extent + extentSize extent | RetainedExtent current extent <- retainedExtents, current == image]
+        start = minimum starts
+        size = maximum ends - start
+  ]
+
+retainedRanges :: [(Word32,Word32)]
+retainedRanges = [(extentStart extent,extentStart extent + extentSize extent) | RetainedExtent _ extent <- retainedExtents]
+
+pieceOverlapsRetained :: Piece -> Bool
+pieceOverlapsRetained (Piece _ address _ bytes) = any (\(start,end) -> address < end && start < address + fromIntegral (B.length bytes)) retainedRanges
+
+pieceContains :: Word32 -> Int -> Piece -> Bool
+pieceContains address size (Piece _ base _ bytes) = address >= base && address + fromIntegral size <= base + fromIntegral (B.length bytes)
+
+functionOverlapsRetained :: Word32 -> Int -> Bool
+functionOverlapsRetained address size = any (\(start,end) -> address < end && start < address + fromIntegral size) retainedRanges
+
+verifyRetained :: B.ByteString -> B.ByteString -> IO ()
+verifyRetained image4 kernel0 = forM_ retainedExtents $ \(RetainedExtent image extent) -> do
+  let (_,bytes,base) = retainedImageBytes image4 kernel0 image
+      start = extentStart extent
+      size = fromIntegral (extentSize extent)
+      offset = fromIntegral (start-base)
+  ensure (sha256Hex (sha256 (B.take size (B.drop offset bytes))) == extentDigest extent) ("retained stock extent digest differs: " ++ hex start)
+
+knownEntryExtent :: Word32 -> Bool
+knownEntryExtent address = stockExtent address /= Nothing || retainedExtent address /= Nothing
+
 -- Runs one stage stock against owned through the same case builder, runner and comparison the
--- transaction qualification uses, keeping every wire and native report. Cases are taken
--- round-robin over the stage's stock entries, so a small bound still covers every entry.
-runStageSmoke :: String -> Int -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO ()
-runStageSmoke name limit runnerPath candidatePath servicesPath imagePath admissionPath output = do
+-- transaction qualification uses. Cases are taken round-robin over the stage's stock entries,
+-- so a small bound still covers every entry. A run under `run-output` keeps the wire and case
+-- artifacts of failing cases under `$XM1_RUN_WORK` and writes the verdict under
+-- `$XM1_RUN_RESULT`; a passing case loses its artifacts.
+runStageSmoke :: String -> Int -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO ()
+runStageSmoke name limit runnerPath candidatePath servicesPath image4Path imagePath kernel0Path admissionPath output = do
   image <- B.readFile imagePath
+  image4 <- B.readFile image4Path
+  kernel0 <- B.readFile kernel0Path
+  verifyRetained image4 kernel0
   authority <- loadAuthority =<< B.readFile admissionPath
   spans <- admit image authority
   elf <- either failH pure . E.parseElf =<< B.readFile candidatePath
   serviceElf <- either failH pure . E.parseElf =<< B.readFile servicesPath
   owned <- elfPieces "candidate" candidateBounds elf
   servicePieces <- elfPieces "model" serviceBounds serviceElf
-  let models = [piece | piece@(Piece _ address _ _) <- servicePieces,address < 0xe40000 || address >= 0xeb2000]++[Piece "observer" exit "rx" (wordBytes 0xeafffffe)]
-      modelFunctions = functionSpans serviceElf
+  let models = [piece | piece@(Piece _ address _ _) <- servicePieces,address < 0xe40000 || address >= 0xeb2000,not (pieceOverlapsRetained piece)]++[Piece "observer" exit "rx" (wordBytes 0xeafffffe)]
+      modelFunctions = filter modelFunctionKept (functionSpans serviceElf)
+      modelFunctionKept (address,size) = not (functionOverlapsRetained address size) && ((address >= 0xe40000 && address + fromIntegral size <= 0xeb2000) || any (pieceContains address size) (retained++models))
       ownedFunctions = functionSpans elf
+      retained = retainedPieces image4 kernel0
       observable = ["context","state","globals","frames"]
       stage = case [current | current <- stages,stageName current == name] of
         [current] -> current
@@ -422,14 +487,19 @@ runStageSmoke name limit runnerPath candidatePath servicesPath imagePath admissi
       stockScenarios = build image stageStockEntry
       ownedScenarios = build image ownedResolve
       caseIds = stageCaseIds [stageCaseText current | current <- stockScenarios]
-      stockSpans = [(extentStart extent,fromIntegral (extentSize extent)) | extent <- stockExtents]
+      stockSpans = [(extentStart extent,fromIntegral (extentSize extent)) | extent <- stockExtents]++[(extentStart extent,fromIntegral (extentSize extent)) | RetainedExtent _ extent <- retainedExtents]
       entries = nub [addressWord (stageStockEntry (stagePublication current)) | current <- stockScenarios]
       indexed = zip3 caseIds stockScenarios ownedScenarios
       selected = take limit (concat (transpose [[pair | pair@(_,current,_) <- indexed,addressWord (stageStockEntry (stagePublication current)) == entry] | entry <- entries]))
   ensure (stageImage stage == Image5) "the stage smoke supplies image5 only"
   ensure (length stockScenarios == length ownedScenarios) "stage case count differs between sides"
-  forM_ stockScenarios $ \current -> ensure (maybe False (const True) (stockExtent (addressWord (stageStockEntry (stagePublication current))))) ("no stock extent for stage entry " ++ hex (addressWord (stageStockEntry (stagePublication current))))
-  createDirectoryIfMissing True output
+  forM_ stockScenarios $ \current -> ensure (knownEntryExtent (addressWord (stageStockEntry (stagePublication current)))) ("no stock extent for stage entry " ++ hex (addressWord (stageStockEntry (stagePublication current))))
+  work <- lookupEnv "XM1_RUN_WORK"
+  verdict <- lookupEnv "XM1_RUN_RESULT"
+  let caseRoot = maybe output id work
+      verdictPath = maybe (output </> "results.json") (\root -> root </> (name ++ ".json")) verdict
+  createDirectoryIfMissing True caseRoot
+  createDirectoryIfMissing True (takeDirectory verdictPath)
   started <- getMonotonicTime
   results <- forM (zip [1::Int ..] selected) $ \(index,(ident,stockScenario,ownedScenario)) -> do
     let stockSpec = stageSpec stageStockEntry ident stockScenario
@@ -439,34 +509,50 @@ runStageSmoke name limit runnerPath candidatePath servicesPath imagePath admissi
         entryOwned = addressWord (ownedResolve (stagePublication ownedScenario))
         stockRoots = entryStock : [addressWord (stageStockEntry publication) | (_,publication) <- stageCodePointers stockScenario]
         ownedRoots = entryOwned : [addressWord (ownedResolve publication) | (_,publication) <- stageCodePointers ownedScenario]
-        stockDeclared = declaredExtents (dedupeSpans (reachableSpans (pieceWordAt stockPieceFor) stockSpans stockRoots++spans++modelFunctions)) (specCalls stockSpec)
-        ownedDeclared = declaredExtents (dedupeSpans (reachableSpans (E.wordAt elf) ownedFunctions ownedRoots++modelFunctions)) (specCalls ownedSpec)
+        stockReadWord address = piecesWordAt (stockPieceFor:retained) address
+        ownedReadWord address = case piecesWordAt (stockPieceFor:retained) address of
+          Just value -> Just value
+          Nothing -> E.wordAt elf address
+        stockDeclared = declaredExtents (dedupeSpans (reachableSpans stockReadWord stockSpans stockRoots++spans++modelFunctions)) (specCalls stockSpec)
+        ownedDeclared = declaredExtents (dedupeSpans (reachableSpans ownedReadWord ownedFunctions ownedRoots++modelFunctions)) (specCalls ownedSpec)
     ensure (specId stockSpec == specId ownedSpec) "stage case names differ between sides"
     ensure (entryStock `elem` map fst stockDeclared) ("stock entry extent contains a scripted call: " ++ hex entryStock)
     ensure (entryOwned `elem` map fst ownedDeclared) ("owned entry is not a declared function: " ++ hex entryOwned)
     caseStarted <- getMonotonicTime
-    (stockResult,stockObservation) <- runCase runnerPath output "stock" entryStock stockDeclared stockSpec (stageRegionPieces (specInitial stockSpec)++[stockPieceFor]++models)
-    (ownedResult,ownedObservation) <- runCase runnerPath output "owned" entryOwned ownedDeclared ownedSpec (stageRegionPieces (specInitial ownedSpec)++[stockPieceFor]++models++owned)
+    (stockResult,stockObservation) <- runCase runnerPath caseRoot "stock" entryStock stockDeclared stockSpec (stageRegionPieces (specInitial stockSpec)++[stockPieceFor]++retained++models)
+    (ownedResult,ownedObservation) <- runCase runnerPath caseRoot "owned" entryOwned ownedDeclared ownedSpec (stageRegionPieces (specInitial ownedSpec)++[stockPieceFor]++retained++models++owned)
     caseFinished <- getMonotonicTime
-    stockBytes <- directoryBytes (output </> specId stockSpec </> "stock")
-    ownedBytes <- directoryBytes (output </> specId ownedSpec </> "owned")
-    let equivalent = equivalentObservations observable stockObservation ownedObservation
+    let difference = intentionalDifference entryStock (specId stockSpec)
+        equivalent = equivalentObservations observable stockObservation ownedObservation
+        ownedPassed = str (get ownedResult "status") == "passed"
         passed = if null runnerPath
           then str (get stockResult "status") == "admitted" && str (get ownedResult "status") == "admitted"
           else equivalent && str (get stockResult "status") == "passed" && str (get ownedResult "status") == "passed"
+        status = if passed then "passed" else if ownedPassed && difference /= Nothing then "intentional-difference" else "failed"
         problems = ["stock: "++problem | problem <- map str (list (get stockResult "problems"))]++["owned: "++problem | problem <- map str (list (get ownedResult "problems"))]
-        receipt = object ["id" .= specId stockSpec,"status" .= (if passed then "passed" else "failed"::String),"equivalent" .= equivalent,"entry_stock" .= hex entryStock,"entry_owned" .= hex entryOwned,"stock_status" .= get stockResult "status","owned_status" .= get ownedResult "status","problems" .= problems,"wall_seconds" .= (caseFinished-caseStarted),"output_bytes" .= (stockBytes+ownedBytes)]
-    putStrLn (show index++" "++specId stockSpec++" "++(if passed then "passed" else "failed")++" "++show (caseFinished-caseStarted)++"s "++show (stockBytes+ownedBytes)++"B"++concat [" "++problem | problem <- problems])
+    (stockBytes,ownedBytes) <- if passed
+      then do
+        _ <- try (removeDirectoryRecursive (caseRoot </> specId stockSpec)) :: IO (Either IOException ())
+        pure (0,0)
+      else do
+        stockBytes <- directoryBytes (caseRoot </> specId stockSpec </> "stock")
+        ownedBytes <- directoryBytes (caseRoot </> specId ownedSpec </> "owned")
+        pure (stockBytes,ownedBytes)
+    let receipt = object ["id" .= specId stockSpec,"status" .= (status::String),"equivalent" .= equivalent,"entry_stock" .= hex entryStock,"entry_owned" .= hex entryOwned,"stock_status" .= get stockResult "status","owned_status" .= get ownedResult "status","problems" .= problems,"intentional_difference" .= difference,"intentional_issue" .= maybe "" (str . (`get` "issue")) difference,"wall_seconds" .= (caseFinished-caseStarted),"output_bytes" .= (stockBytes+ownedBytes)]
+    putStrLn (show index++" "++specId stockSpec++" "++status++" "++show (caseFinished-caseStarted)++"s "++show (stockBytes+ownedBytes)++"B"++concat [" "++problem | problem <- problems])
     pure (caseFinished-caseStarted,fromIntegral (stockBytes+ownedBytes) :: Double,receipt)
   finished <- getMonotonicTime
   let receipts = [receipt | (_,_,receipt) <- results]
       passed = length [() | (_,_,receipt) <- results,str (get receipt "status") == "passed"]
+      intentional = length [() | (_,_,receipt) <- results,str (get receipt "status") == "intentional-difference"]
+      intentionalIssues = M.toAscList (M.fromListWith (+) [(str (get receipt "intentional_issue"),1::Int) | receipt <- receipts,str (get receipt "status") == "intentional-difference"])
       classes = M.toAscList (M.fromListWith (+) [(problem,1::Int) | receipt <- receipts,problem <- map str (list (get receipt "problems"))])
       wall = sum [caseWall | (caseWall,_,_) <- results]
       bytes = sum [caseBytes | (_,caseBytes,_) <- results]
-      report = object ["profile" .= ("develop-stage-smoke"::String),"stage" .= name,"declared_cases" .= length stockScenarios,"selected_cases" .= length selected,"passed" .= passed,"failed" .= (length receipts-passed),"difference_classes" .= [object ["problem" .= problem,"cases" .= count] | (problem,count) <- classes],"case_wall_seconds" .= wall,"case_output_bytes" .= bytes,"run_wall_seconds" .= (finished-started),"cases" .= receipts]
-  BL.writeFile (output </> "results.json") (encode report)
-  BL.putStr (encode (object ["stage" .= name,"declared_cases" .= length stockScenarios,"selected_cases" .= length selected,"passed" .= passed,"failed" .= (length receipts-passed),"difference_classes" .= [object ["problem" .= problem,"cases" .= count] | (problem,count) <- classes],"case_wall_seconds" .= wall,"case_output_bytes" .= bytes,"run_wall_seconds" .= (finished-started)]) <> "\n")
+      report = object ["profile" .= ("develop-stage-smoke"::String),"stage" .= name,"declared_cases" .= length stockScenarios,"selected_cases" .= length selected,"passed" .= passed,"intentional_differences" .= intentional,"intentional_difference_issues" .= [object ["issue" .= issue,"cases" .= count] | (issue,count) <- intentionalIssues],"failed" .= (length receipts-passed-intentional),"difference_classes" .= [object ["problem" .= problem,"cases" .= count] | (problem,count) <- classes],"case_wall_seconds" .= wall,"case_output_bytes" .= bytes,"run_wall_seconds" .= (finished-started),"cases" .= receipts]
+  BL.writeFile verdictPath (encode report)
+  BL.putStr (encode (object ["stage" .= name,"declared_cases" .= length stockScenarios,"selected_cases" .= length selected,"passed" .= passed,"intentional_differences" .= intentional,"intentional_difference_issues" .= [object ["issue" .= issue,"cases" .= count] | (issue,count) <- intentionalIssues],"failed" .= (length receipts-passed-intentional),"difference_classes" .= [object ["problem" .= problem,"cases" .= count] | (problem,count) <- classes],"case_wall_seconds" .= wall,"case_output_bytes" .= bytes,"run_wall_seconds" .= (finished-started)]) <> "\n")
+  when (length receipts - passed - intentional > 0) exitFailure
 
 -- One line per stage and per case, then the distinct stock extents the stage needs. Nothing
 -- is executed; a case or stage whose generator fails is reported and skipped.
@@ -601,16 +687,16 @@ main = do
       image4 <- B.readFile image4Path
       image5 <- B.readFile image5Path
       listStages image4 image5
-    ["--stage",name,limitText,runner,candidatePath,servicesPath,imagePath,admissionPath,output] -> do
+    ["--stage",name,limitText,runner,candidatePath,servicesPath,image4Path,imagePath,kernel0Path,admissionPath,output] -> do
       limit <- case readMaybe limitText :: Maybe Int of
         Just value | value > 0 -> pure value
         _ -> failH "stage smoke limit must be a positive integer"
-      runStageSmoke name limit runner candidatePath servicesPath imagePath admissionPath output
-    ["--stage-check",name,limitText,candidatePath,servicesPath,imagePath,admissionPath,output] -> do
+      runStageSmoke name limit runner candidatePath servicesPath image4Path imagePath kernel0Path admissionPath output
+    ["--stage-check",name,limitText,candidatePath,servicesPath,image4Path,imagePath,kernel0Path,admissionPath,output] -> do
       limit <- case readMaybe limitText :: Maybe Int of
         Just value | value > 0 -> pure value
         _ -> failH "stage check limit must be a positive integer"
-      runStageSmoke name limit "" candidatePath servicesPath imagePath admissionPath output
+      runStageSmoke name limit "" candidatePath servicesPath image4Path imagePath kernel0Path admissionPath output
     [runner,candidatePath,servicesPath,imagePath,admissionPath,output] -> do
       image <- B.readFile imagePath
       admission <- B.readFile admissionPath
@@ -737,4 +823,4 @@ main = do
       BL.writeFile (output </> "results.json") (encode boundReport)
       BL.putStr (encode boundReport <> "\n")
       unless qualified exitFailure
-    _ -> failH "usage: develop-qualification RUNNER CANDIDATE_ELF SERVICES_ELF IMAGE5 SOURCE_ADMISSION OUTPUT_DIRECTORY [--source-bound-prefix R10_RESULTS]"
+    _ -> failH "usage: develop-qualification RUNNER CANDIDATE_ELF SERVICES_ELF IMAGE5 SOURCE_ADMISSION OUTPUT_DIRECTORY [--source-bound-prefix R10_RESULTS]; develop-qualification --stage NAME LIMIT RUNNER CANDIDATE_ELF SERVICES_ELF IMAGE4 IMAGE5 KERNEL0 SOURCE_ADMISSION OUTPUT_DIRECTORY"

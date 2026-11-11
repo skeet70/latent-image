@@ -100,7 +100,7 @@ objectAllocatorScenarios _ _ = priorityCases++overlapCases++rangeCases++waiterCa
       (base++[wordsAt params [20,0x45],wordsAt 0x154c32c [21,0x46,20,0x45,22,0x47]])
       [wordsAt (0x154c32c+8) [0,0]] Nothing criticalCalls]
   notifyCases=
-   [make "notify-snapshot-order" 0xe46018 [] (base++[wordsAt 0x154c32c [20,0x45,0,0,22,0x47]]) [] Nothing
+   [make "notify-snapshot-order" 0xe46018 [] (base++[wordsAt 0x154c32c [20,0x45,0,0,22,0x47],word (0x7cad9c+((0x47 .&. 0xffff)-1)*4) 3]) [] Nothing
       (criticalCalls++notificationCalls 0x45 16 0 0++notificationCalls 0x47 16 0 0)]
   orderCases=
    [make ("order-"++show blocked) 0xe453d8 [33,9,params]
