@@ -54,12 +54,12 @@ bitmapAddress (RasterFixture _ _ (BitmapAddress address)) = address
 
 rasterHandlerInitial :: RasterFixture -> [Word8] -> [Patch]
 rasterHandlerInitial fixture program =
- [Patch (Address context) (B.replicate 0x9000 0), wordsAt (context+0x48) [programAddress fixture]
- ,word (vm+8) context,word (vm+0x3c) (fromIntegral (length program)),word (vm+0x40) 0
+ [Patch (Address vmContext) (B.replicate 0x9000 0), wordsAt (vmContext+0x48) [programAddress fixture]
+ ,word (vm+8) vmContext,word (vm+0x3c) (fromIntegral (length program)),word (vm+0x40) 0
  ,wordsAt (vm+0x54) [8,8],word (vm+0x68) (bitmapAddress fixture),word (vm+0x6c) 1
  ,wordsAt (vm+0x74) [0x7fff,0x7fff,0,0],Patch (Address (programAddress fixture)) (B.pack program)
  ,Patch (Address (bitmapAddress fixture)) (B.replicate 64 0)]
- where vm=vmAddress fixture; context=vm-0xb8
+ where vm=vmAddress fixture; vmContext=vm-0xb8
 
 wordSigned :: Word32 -> Int32 -> Patch
 wordSigned address value = word address (fromIntegral value)
@@ -69,8 +69,11 @@ halvesAt :: Word32 -> [Int32] -> Patch
 halvesAt address values = Patch (Address address) (B.concat (map halfBytes values))
 position :: Int32 -> Int32 -> Position
 position x y = Position (Coordinate x) (Coordinate y)
-positionWords :: Position -> [Word32]
-positionWords (Position (Coordinate x) (Coordinate y)) = [fromIntegral x,fromIntegral y]
+positionBounds :: Position -> (Word32,Word32)
+positionBounds (Position (Coordinate x) (Coordinate y)) = (fromIntegral x,fromIntegral y)
+firstPosition :: [Position] -> Position
+firstPosition (point:_) = point
+firstPosition [] = error "a raster fixture has no points"
 positionRecord :: Position -> [Int32]
 positionRecord (Position (Coordinate x) (Coordinate y)) = [y,x]
 
@@ -108,12 +111,12 @@ fontRasterHandlersScenarios _ _ = scaleCases ++ setupCases ++ arithmeticCases ++
     [wordsAt (vm+0x7dc0) [100,300,500,700],wordsAt (vm+0x7e00) [200,400,600,800],word (vm+0x3c) 0] (Just 0)
    | entry<-[0x11a2f68,0x11a2f80]]
   arithmeticCases =
-   [direct ("font-raster-coordinate-"++show (entry,index,amount)) entry (concat (replicate reads (B.unpack (halfBytes amount))))
+   [direct ("font-raster-coordinate-"++show (entry,index,amount)) entry (concat (replicate readCount (B.unpack (halfBytes amount))))
     [Patch (Address (vm+0x7dbc)) (B.singleton (fromIntegral (opcode+index)))
     ,wordsAt (vm+0x7e60) (map fromIntegral xScales),wordsAt (vm+0x7e80) (map fromIntegral yScales)]
     [wordSigned (vm+destination) (origin + sign*(if scaled then selected*amount `quot` 256 else selected))
-    ,word (vm+0x40) (fromIntegral (2*reads)),word (vm+0x3c) 0] (Just 0)
-   | (entry,opcode,reads,scaled,isY,sourceY,sign)<-arithmeticOperations,index<-[0,7],amount<-[-129,255]
+    ,word (vm+0x40) (fromIntegral (2*readCount)),word (vm+0x3c) 0] (Just 0)
+   | (entry,opcode,readCount,scaled,isY,sourceY,sign)<-arithmeticOperations,index<-[0,7],amount<-[-129,255]
    ,let xScales=[-257,-128,-1,0,1,128,257,65535]::[Int32]
    ,let yScales=[128,129,130,131,132,133,134,-511]::[Int32]
    ,let useY=opcode `elem` [0x40,0x48,0x60,0x68,0xa0,0xc0,0xc8,0xe0,0xe8]
@@ -151,8 +154,8 @@ fontRasterHandlersScenarios _ _ = scaleCases ++ setupCases ++ arithmeticCases ++
    [make ("font-raster-program-arithmetic-decode-"++show (opcode,index)) 0x11ab010 [vm,1]
     (rasterHandlerInitial fixture program ++ [word (vm+0x58) 16,word (vm+0x30) 8,Patch (Address (vm+0x34)) (B.pack [1,3,5,7,9,11,13,15])])
     [wordSigned (vm+if isY then 0x7e04 else 0x7dc4) result,word (vm+0x40) (fromIntegral (length program)),word (vm+0x3c) 0] (Just 0)
-   | (_,opcode,reads,scaled,isY,_,sign)<-arithmeticOperations,index<-[0..7]
-   ,let program=[fromIntegral (opcode+index),0x01] ++ concat (replicate reads [128,0]) ++ [0x71,0]
+   | (_,opcode,readCount,scaled,isY,_,sign)<-arithmeticOperations,index<-[0..7]
+   ,let program=[fromIntegral (opcode+index),0x01] ++ concat (replicate readCount [128,0]) ++ [0x71,0]
    ,let useY=opcode `elem` [0x40,0x48,0x60,0x68,0xa0,0xc0,0xc8,0xe0,0xe8]
    ,let coefficient=fromIntegral ((if useY then 8 else 16)*(1+2*index))::Int32
    ,let result=sign*(if scaled then coefficient `quot` 2 else coefficient)] ++
@@ -190,7 +193,8 @@ fontRasterHandlersScenarios _ _ = scaleCases ++ setupCases ++ arithmeticCases ++
    ,let scaleY=fromIntegral (height*multiplier)::Int32
    ,let small=max scaleX scaleY<128
    ,let shift=if small then 8 else 3
-   ,let scaled dimension value=let raw=armLeft (fromIntegral value) shift in if small then (dimension*raw+128) `quot` 256 else raw]
+   ,let scaled :: Int32 -> Word32 -> Int32
+        scaled dimension value=let raw=armLeft (fromIntegral value) shift in if small then (dimension*raw+128) `quot` 256 else raw]
 
 armLeft :: Int32 -> Int32 -> Int32
 armLeft value shift = if amount>=32 then 0 else value `shiftL` fromIntegral amount where amount=shift .&. 255
@@ -233,13 +237,13 @@ curveFixture direct vm fixture (entry,opcode,width,basis,termination,crossed) =
   [Patch (Address (vm+0x7dbc)) (B.singleton opcode)]
   ([halvesAt (bitmapAddress fixture) (concatMap (concatMap positionRecord) records)
    ,word (vm+0x805c) (bitmapAddress fixture+fromIntegral (length records*12)),word (vm+0x40) (fromIntegral (length program)),word (vm+0x3c) 0]
-   ++ case termination of CloseStored -> []; _ -> [word (vm+0x7dc4) (head (positionWords end)),word (vm+0x7e0c) (last (positionWords end))]) (Just 0)
+   ++ case termination of CloseStored -> []; _ -> let (leftWord,rightWord)=positionBounds end in [word (vm+0x7dc4) leftWord,word (vm+0x7e0c) rightWord]) (Just 0)
  | count<-if termination==CloseStored then [2,4] else [2]
  ,let pairs=if width==ShortOperand then [(64,-128),(128,64),(-64,128)] else [(255,128),(128,64),(64,255)]
  ,let origin=case crossed of Nothing -> position 40 (-20); Just True -> position 100 800; Just False -> position 100 600
  ,let extent=case crossed of Nothing -> position 512 (-256); Just True -> position 200 (-200); Just False -> position 200 200
  ,let points=map (transformPoint width basis origin extent) pairs
- ,let start=if termination==StartRead then let Position x _=head points in Position x (Coordinate 600) else position 100 600
+ ,let start=if termination==StartRead then let Position x _=firstPosition points in Position x (Coordinate 600) else position 100 600
  ,let control=points!!if termination==StartRead then 1 else 0
  ,let end=points!!if termination==StartRead then 2 else 1
  ,let records=case termination of CloseStored -> if count==2 then [[start,control,position 300 800]] else [[start,control,end],[end,points!!2,position 300 800]]; _ -> [[start,control,end]]
@@ -263,7 +267,7 @@ lineFixture direct vm fixture (entry,opcode,width,basis,segment,sameY) =
  | side<-[0,4],alias<-[False,True]
  ,let pairs=if width==ShortOperand then [(64,-128),(128,64)] else [(255,128),(128,64)]
  ,let points=map (transformPoint width basis (position 40 (-20)) (position 512 (-256))) pairs
- ,let start=if alias then if opcode==3 then position 100 200 else head points else if segment then let Position x _=head points in Position x (Coordinate 600) else position 100 600
+ ,let start=if alias then if opcode==3 then position 100 200 else firstPosition points else if segment then let Position x _=firstPosition points in Position x (Coordinate 600) else position 100 600
  ,let readEnd=points!!if segment then 1 else 0
  ,let end=if opcode==3 then if alias then position 100 200 else position 300 800 else let Position x y=readEnd in Position x (if sameY || alias then y else Coordinate 800)
  ,let program=if opcode==3 then [] else pointOperands width (take (if segment then 2 else 1) pairs)

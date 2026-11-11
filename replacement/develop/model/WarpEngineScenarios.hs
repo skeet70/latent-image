@@ -105,7 +105,7 @@ routeReleaseCalls startupPreservesClock = routeRequestCalls (not startupPreserve
 warpEngineScenarios :: B.ByteString -> (StagePublication -> Address) -> [StageScenario]
 warpEngineScenarios _ resolve = buildCases ++ programCases ++ configureCases ++ formatCases ++ filterCases ++ releaseCases ++ startCases ++ completionCases ++ driverCases ++ routeCases ++ interruptCases ++ diagnosticCases
  where
-  make name pub args initial final result pointers calls = StageScenario (StageCaseName name) pub args initial final result pointers calls
+  make name stagePublication args initial final result pointers calls = StageScenario (StageCaseName name) stagePublication args initial final result pointers calls
   c = warpConfigurationFixture
   p = warpParameterFixture
   request = 0x9a1000

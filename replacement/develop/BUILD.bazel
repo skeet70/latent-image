@@ -1,4 +1,4 @@
-load("@rules_haskell//haskell:defs.bzl", "haskell_binary")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_toolchain_library")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
 
@@ -91,12 +91,30 @@ xm1_rust_elf(
     extra_ldflags = ["-Wl,--gc-sections"],
 )
 
+haskell_toolchain_library(name = "array")
+
+haskell_library(
+    name = "model",
+    srcs = glob(["model/*.hs"]),
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":array",
+        "//emulation:native-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:text",
+    ],
+)
+
 haskell_binary(
     name = "develop-qualification",
     main_file = "DevelopQualifyMain.hs",
-    srcs = ["DevelopQualifyMain.hs", "model/Scenarios.hs", "model/DispatcherScenarios.hs", "model/PermitScenarios.hs", "model/SaveScenarios.hs", "model/TransactionScenarios.hs", "model/EntryScenarios.hs", "model/Publications.hs", "model/SourceAdmission.hs"],
+    srcs = ["DevelopQualifyMain.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
     deps = [
+        ":model",
         "//emulation:case-sha256",
         "//emulation:native-adapter",
         "//emulation:native-observation",

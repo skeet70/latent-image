@@ -228,9 +228,9 @@ fontFdlScenarios _bytes _resolve = concatMap cases fontFdlPublications
   request = addressWord (fontRequestAddress fixture)
   text = addressWord (fontTextAddress fixture)
   header = layout+0x600
-  raw at values = Patch (Address at) (B.pack values)
-  zero at bytes = Patch (Address at) (B.replicate bytes 0)
-  halves at values = Patch (Address at) (B.concat [bytes | (index,value) <- zip [0..] values, let Patch _ bytes = half (at+index*2) value])
+  raw atAddress values = Patch (Address atAddress) (B.pack values)
+  zero atAddress bytes = Patch (Address atAddress) (B.replicate bytes 0)
+  halves atAddress values = Patch (Address atAddress) (B.concat [bytes | (index,value) <- zip [0..] values, let Patch _ bytes = half (atAddress+index*2) value])
   outlineBytes = case halves 0
       [7,6,1,831,375,2,999,375,2,999,1759,2,855,1759,2,855,823,2,831,375,4
       ,7,6,1,191,375,2,511,1423,2,567,1759,2,455,1759,2,167,823,2,191,375,4
@@ -561,9 +561,6 @@ fontFdlScenarios _bytes _resolve = concatMap cases fontFdlPublications
     0x118ed64 ->
       [make pub "refresh-raster-metrics-through-real-initializer" [engine,output] (fontRasterInitial fixture++[word (engine+0x1070) 1,marker])
         [wordsAt output [32,28,4,0,0,32,0,4],word (workspace+0x54) 0xf726] (Just 0) (fontRasterCodePointers fixture)]
-    0x117f51c ->
-      [make pub "aligned-zero-count-still-writes-four" [bitmap,0x11,0] [raw bitmap (replicate 8 0xa5)]
-        [raw bitmap [0x11,0x11,0x11,0x11,0xa5,0xa5,0xa5,0xa5]] (Just bitmap) []]
     0x117f64c ->
       [make pub "forward-byte-overlap-propagates-first-byte" [bitmap+1,bitmap,5] [raw bitmap [0..9]]
         [raw bitmap [0,0,0,0,0,0,6,7,8,9]] Nothing []]
@@ -715,8 +712,8 @@ fontFdlScenarios _bytes _resolve = concatMap cases fontFdlPublications
         (fontRasterInitial fixture++[word (object+12) 2,word (engine+0xff4) 2,wordsAt (object+20) [19,23]])
         [wordsAt (object+20) [19,23],word (object+0x5c) 0x200e,word (object+0x68) 4] Nothing []]
     0x11805f0 ->
-      [make pub ("rendering-mode-"++show kind++"-"++show request) [kind,request] (base++[marker]) [marker] (Just result) []
-      | (kind,request,result) <- [(0,1,1),(0,2,3),(0,8,4),(0,4,5),(1,2,2),(1,8,8),(3,2,8),(0,3,8)]]
+      [make pub ("rendering-mode-"++show kind++"-"++show renderRequest) [kind,renderRequest] (base++[marker]) [marker] (Just result) []
+      | (kind,renderRequest,result) <- [(0,1,1),(0,2,3),(0,8,4),(0,4,5),(1,2,2),(1,8,8),(3,2,8),(0,3,8)]]
     0x1180290 ->
       [make pub "open-reference-binds-original-embedded-icon-resource" [constructorReference,0xffffffff,0,0]
         (base++constructorRegistry 0) [wordsAt (constructorReference+0x64) [0x3bc000,0x7cfd1,1]] (Just 1) []

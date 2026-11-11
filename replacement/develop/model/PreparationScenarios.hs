@@ -45,7 +45,7 @@ preparationScenarios image _resolve = map (lowerRtos . lowerDiagnostics . lowerO
       | callAddress retained == Address 0x726658 = Logging.textCalls
       | callAddress retained `elem` [Address 0xeb0cbc,Address 0xeb0ccc] = Logging.traceCalls
       | otherwise = [retained]
-  overlay patches = [Patch (Address address) (B.singleton value) | (address,value) <- List.nubBy (\first second -> fst first == fst second) (reverse [(address+fromIntegral offset,value) | Patch (Address address) content <- patches,(offset,value) <- zip [0..] (B.unpack content)])]
+  overlay patches = [Patch (Address address) (B.singleton value) | (address,value) <- List.nubBy (\first second -> fst first == fst second) (reverse [(address+fromIntegral offset,value) | Patch (Address address) content <- patches,(offset,value) <- zip [0::Int ..] (B.unpack content)])]
   lowerObjects scenario
     | null bindings = scenario
     | otherwise = scenario
@@ -105,6 +105,7 @@ preparationScenarios image _resolve = map (lowerRtos . lowerDiagnostics . lowerO
     [ [make operation (name++"-transition") (enable operation ++ [word (context+0x44) 0,word (state+0x38) 0x102,word 0xea254c (context+0x1900),wordsAt (context+0x1900) [operation,0x101,0]]) [] 5 (take 3 (beginCalls (plan operation))),
        make operation (name++"-simple-refusal") (enable operation ++ [word (context+0x48) 0,word 0xea1ee0 (context+0x1900),wordsAt (context+0x1900) [operation,0x80]]) [] 6 (take 3 (beginCalls (plan operation)))]
     | (_,operation,name) <- preparationEntries]
+  enable :: Word32 -> [Patch]
   enable operation
     | operation == 0x56 = [word (state+0x2790) 1]
     | operation == 0x55 = [word (state+0x2780) 1,word (state+0x2784) 0]
@@ -113,7 +114,7 @@ preparationScenarios image _resolve = map (lowerRtos . lowerDiagnostics . lowerO
   cfg key value = call 0x69f8fc [key] value
   cfg16 key value = [cfg (key+1) (value `shiftR` 8),cfg key (value .&. 255)]
   half key value = call 0x69fec8 [key] value
-  lookup group descriptor = call 0xe44dbc [state+0x7c,group,0] descriptor
+  objectLookup group descriptor = call 0xe44dbc [state+0x7c,group,0] descriptor
   blendEvents = [call 0x723cb8 [] 0x123,call 0x723a14 [0x123,12] 0,call 0xeb0d04 [] 0,call 0xeb0d04 [] 0,call 0x723a14 [0x123,6] 0]
   goldenRow = B.concat [B.replicate 4 value | value <- [32,80,128,176]]
   blended address rows = [Patch (Address (address+row*64)) goldenRow | row <- [0..rows-1]]
@@ -125,7 +126,7 @@ preparationScenarios image _resolve = map (lowerRtos . lowerDiagnostics . lowerO
   edgeBlendCases =
     [active 0x56 ("blend-edge-"++show displacement) (enable 0x56 ++ [word (state+0x5cc) 0,Patch (Address (state+0x1680)) (B.pack [2,0]),word (state+0x3198) displacement,word (state+0x3178) 0,word (state+0x3174) 0,word (state+0x3154) 0,word (state+0x3168) 4,Patch (Address (state+0x3194)) (B.singleton 16),wordsAt (state+0x184) (plane secondPixels 32 8),wordsAt objects (plane firstPixels 32 32)])
       (blended (firstPixels+496+if displacement == 1 then 64 else 0) 4) 1
-      ([cfg 0x9f64 2,lookup 0x28 objects,cfg 0x9f0f 8,cfg 0x9f0f 8,cfg 0x9f0f 8]++blendEvents)
+      ([cfg 0x9f64 2,objectLookup 0x28 objects,cfg 0x9f0f 8,cfg 0x9f0f 8,cfg 0x9f0f 8]++blendEvents)
     | displacement <- [0,1,0xffffffff]] ++
     [active 0x56 ("edge-bypass-count-"++show count) (enable 0x56 ++ [Patch (Address (state+0x1680)) (B.pack [count,0])]) [] 1 [] | count <- [0,1]] ++
     [active 0x56 "edge-bypass-frame-kind" (enable 0x56 ++ [word (state+0x5cc) 0,Patch (Address (state+0x1680)) (B.pack [2,0]),Patch (Address (state+0x3194)) (B.singleton 8)]) [] 1 [cfg 0x9f64 2]]
@@ -146,40 +147,40 @@ preparationScenarios image _resolve = map (lowerRtos . lowerDiagnostics . lowerO
       ((if predicted then predictionEvents else []) ++ motionEvents False ++ cfg16 0x9f02 1600 ++ cfg16 0x9f6d 2 ++ cfg16 0x9f18 100 ++ cfg16 0x9f20 20 ++ cfg16 0x9f00 1600 ++ cfg16 0x9f14 16)
     | predicted <- [False,True],let operation = if predicted then 0x58 else 0x55]
   planeOperation input output effects = ScriptCall (Address 0xe657ac) [(N.R0,state),(N.R3,2)] [(N.R0,1)]
-    [Relative N.R1 0 (wordBytes 7),Indirect N.R2 0 (bytes input),Indirect N.SP 0 (bytes output)] (map Absolute effects)
+    [Relative N.R1 0 (wordBytes 7),Indirect N.R2 0 (bytes input),Indirect N.Sp 0 (bytes output)] (map Absolute effects)
   copyCases =
     [active 0x61 ("copy-pair-"++show displacement) [word (preparation+0x100) displacement,wordsAt objects (plane destinationPixels 32 16)]
       [wordsAt (preparation+0x38) (plane outputAddress 32 16),word (preparation+0xfc) 6,Patch (Address destinationPixels) (B.replicate 32 32)] 1
-      [lookup 0x36 objects,half 0x9f12 16,planeOperation (plane firstPixels 32 16) (plane (destinationPixels+negative) 32 16) [Patch (Address destinationPixels) (B.replicate 32 32)],half 0x9f12 16,planeOperation (plane (secondPixels+4) 32 16) (plane outputAddress 32 16) []]
+      [objectLookup 0x36 objects,half 0x9f12 16,planeOperation (plane firstPixels 32 16) (plane (destinationPixels+negative) 32 16) [Patch (Address destinationPixels) (B.replicate 32 32)],half 0x9f12 16,planeOperation (plane (secondPixels+4) 32 16) (plane outputAddress 32 16) []]
     | displacement <- [0,1,0xffffffff],let negative = if displacement == 0xffffffff then 64 else 0,let positive = if displacement == 1 then 64 else 0,let outputAddress = destinationPixels+positive+12]
   referenceCases =
     [active 0x5e "blend-reference-active" [wordsAt objects (plane destinationPixels 32 8)]
       ([wordsAt (preparation+0x1c) (plane destinationPixels 32 8)]++blended referencePixels 8) 1
-      [lookup 0x33 objects,planeOperation (plane firstPixels 32 8) (plane destinationPixels 32 8) [Patch (Address destinationPixels) (B.replicate 512 32)],cfg 0x9fa9 8,cfg 0x9fa9 8] `withEvents` blendEvents]
+      [objectLookup 0x33 objects,planeOperation (plane firstPixels 32 8) (plane destinationPixels 32 8) [Patch (Address destinationPixels) (B.replicate 512 32)],cfg 0x9fa9 8,cfg 0x9fa9 8] `withEvents` blendEvents]
   withEvents scenario events = scenario {stageCalls = let original = stageCalls scenario; suffix = completeCalls (plan 0x5e) 1; prefix = take (length original-length suffix) original in prefix++events++[planeOperation (plane referencePixels 32 8) (plane (destinationPixels+4) 32 8) []]++suffix}
   featureCases =
     [active 0x5b "feature-pyramid-minimum-level" [wordsAt objects (plane destinationPixels 32 8)] [] 1
-      [cfg 0x9fc5 0,lookup 0x3a objects,cfg 0x9fc5 0,lookup 0x3a objects,cfg 0x9fc5 0]]
+      [cfg 0x9fc5 0,objectLookup 0x3a objects,cfg 0x9fc5 0,objectLookup 0x3a objects,cfg 0x9fc5 0]]
   scaleOperation input output effects = ScriptCall (Address 0xe65268) [(N.R0,state)] [(N.R0,1)]
     [Relative N.R1 0 (wordBytes 64),Relative N.R2 0 (bytes input),Relative N.R3 0 (bytes output)] (map Absolute effects)
   shearCases =
     [active 0x5f ("shear-pair-"++show displacement)
       [word (preparation+0x100) displacement,wordsAt (preparation+0x1c) (plane firstPixels 32 32),wordsAt (preparation+0x38) (plane secondPixels 32 32),wordsAt objects (plane destinationPixels 32 32),wordsAt (objects+28) (plane referencePixels 32 32)]
       [wordsAt (preparation+0x1c) (plane destinationPixels 32 32),wordsAt (preparation+0x38) (plane referencePixels 32 32),word (preparation+0x130) slope,word (preparation+0x100) displacement,Patch (Address (destinationPixels+256)) (B.replicate 32 32),Patch (Address (referencePixels+256)) (B.replicate 32 224)] 1
-      [lookup 0x34 objects,lookup 0x35 (objects+28),cfg 0x9fdf 0,
+      [objectLookup 0x34 objects,objectLookup 0x35 (objects+28),cfg 0x9fdf 0,
        scaleOperation (plane firstPixels 32 32) [1,destinationPixels+256,768,64,32,24,0] [Patch (Address (destinationPixels+256)) (B.replicate 32 32)],
        cfg 0x9fdf 0,scaleOperation (plane secondPixels 32 32) [1,referencePixels+256,768,64,32,24,0] [Patch (Address (referencePixels+256)) (B.replicate 32 224)]]
     | displacement <- [2,0xfffffffe],let slope = if displacement == 2 then 6553 else 0xffffe667]
   resizeOperation input output effects = ScriptCall (Address 0xe64a44) [(N.R0,state),(N.R1,0),(N.R2,0)] [(N.R0,1)]
-    [Relative N.R3 4 (bytes (take 5 (drop 1 input))),Indirect N.SP 0 (bytes output),Relative N.SP 8 (bytes [0,1])] (map Absolute effects)
+    [Relative N.R3 4 (bytes (take 5 (drop 1 input))),Indirect N.Sp 0 (bytes output),Relative N.Sp 8 (bytes [0,1])] (map Absolute effects)
   reduceOperation input output = ScriptCall (Address 0xe64a44) [(N.R0,state),(N.R1,0),(N.R2,0)] [(N.R0,1)]
-    [Relative N.R3 4 (bytes (take 5 (drop 1 input))),Indirect N.SP 0 (bytes output),Relative N.SP 8 (bytes [0,2])] []
+    [Relative N.R3 4 (bytes (take 5 (drop 1 input))),Indirect N.Sp 0 (bytes output),Relative N.Sp 8 (bytes [0,2])] []
   widePlane address width height = [1,address,512*height,512,width,height,0]
   trimPlane address = [1,address,6912,512,108,64,0]
   alignmentInitial = [wordsAt objects (widePlane firstPixels 256 128),wordsAt (objects+28) (widePlane referencePixels 128 64),wordsAt (objects+56) (widePlane destinationPixels 128 64),wordsAt (objects+84) (widePlane destinationPixels 108 64),wordsAt (objects+112) (widePlane referencePixels 108 64),word (state+0x321c) 256,Patch (Address firstPixels) (B.replicate 65536 32)]
   alignmentPrefix =
-    [lookup 0x28 objects,cfg 0x9f6f 0] ++ cfg16 0x9f12 64 ++ cfg16 0x9f12 64 ++ cfg16 0x9f12 64 ++
-    [cfg 0x9f66 0,lookup 0x2a (objects+28),lookup 0x2b (objects+56)] ++ cfg16 0x9fa2 2 ++
+    [objectLookup 0x28 objects,cfg 0x9f6f 0] ++ cfg16 0x9f12 64 ++ cfg16 0x9f12 64 ++ cfg16 0x9f12 64 ++
+    [cfg 0x9f66 0,objectLookup 0x2a (objects+28),objectLookup 0x2b (objects+56)] ++ cfg16 0x9fa2 2 ++
     [reduceOperation [1,firstPixels+4096,8192,512,128,64,0] (widePlane destinationPixels 128 64)]
   alignmentBaseFinal =
     [wordsAt (preparation+0x20) [firstPixels+4336,30464,512,272,112],wordsAt (preparation+0x38) [1,firstPixels+4096,30464,512,272,112,0],word (preparation+0x104) 128]
@@ -192,7 +193,7 @@ preparationScenarios image _resolve = map (lowerRtos . lowerDiagnostics . lowerO
       (alignmentPrefix++[cfg 0x9fa4 1,reduceOperation [1,firstPixels+4480,8192,512,128,64,0] (widePlane referencePixels 128 64)]++
        motionEvents True++cfg16 0x9f12 64++cfg16 0x9f12 64++cfg16 0x9f12 64++
        [cfg 0x9fa4 1]++cfg16 0x9fa0 4++cfg16 0x9fe8 8++
-       [lookup 0x3f (objects+84),lookup 0x40 (objects+112),
+       [objectLookup 0x3f (objects+84),objectLookup 0x40 (objects+112),
         planeOperation (trimPlane (firstPixels+4500)) (widePlane destinationPixels 108 64) [Patch (Address destinationPixels) (B.replicate 8 32)],
         planeOperation (trimPlane (firstPixels+4096)) (widePlane referencePixels 108 64) [Patch (Address referencePixels) (B.replicate 8 32)]])]
   resizeCases =
@@ -201,7 +202,7 @@ preparationScenarios image _resolve = map (lowerRtos . lowerDiagnostics . lowerO
        if selected then [Patch (Address (frames+0xa0)) (B.singleton 16),wordsAt (frames+0xa8) [12,52]] else [])
       ([wordsAt (state+0x184) [1,destinationPixels+528,16*outputHeight,64,16,outputHeight,0],word 0x15b0cd4 (if shape == PadOdd then 1 else 0),Patch (Address (destinationPixels+528)) (B.replicate 16 32)]++
        [Patch (Address (firstPixels+start+delta+row*64)) (B.concat (replicate 10 (wordBytes 0x80800909))) | (start,rows) <- fillRegions,row <- [0..rows-1]]) 1
-      ([lookup 0x36 objects,lookup 0x37 (objects+28)]++(if selected then replicate 3 (cfg 0x9f66 2) else [cfg 0x9f66 0])++cfg16 0x9f1a 0++
+      ([objectLookup 0x36 objects,objectLookup 0x37 (objects+28)]++(if selected then replicate 3 (cfg 0x9f66 2) else [cfg 0x9f66 0])++cfg16 0x9f1a 0++
        [half 0x9f12 32,half 0x9f62 outputHeight,half 0x9f5c 8,half 0x9f5c 8,half 0x9f62 outputHeight]++
        (if padding then [cfg 0x9fac 9,cfg 0x9fac 9,call 0x723a14 [11,12] 0,call 0x723a14 [11,0] 0,call 0x723a14 [11,12] 0,call 0x723a14 [11,0] 0] else [])++
        [resizeOperation [1,firstPixels+sourceOffset,8*targetHeight,64,8,targetHeight,0] [1,destinationPixels+528,16*outputHeight,64,16,outputHeight,0] [Patch (Address (destinationPixels+528)) (B.replicate 16 32)]])
@@ -214,4 +215,4 @@ preparationScenarios image _resolve = map (lowerRtos . lowerDiagnostics . lowerO
   extractionCases =
     [active 0x5a "extract-invalid-output" [wordsAt objects (plane destinationPixels 32 8),wordsAt (objects+28) (plane 0 32 8)]
       [Patch (Address 0x1571534) (B.replicate 0x15c 0)] 0
-      [lookup 0x3a objects,lookup 0x2c (objects+28),Call (Address 0x7221c8) [(N.R0,0x1571534),(N.R1,0),(N.R2,0x15c)] [(N.R0,0)] [Patch (Address 0x1571534) (B.replicate 0x15c 0)]]]
+      [objectLookup 0x3a objects,objectLookup 0x2c (objects+28),Call (Address 0x7221c8) [(N.R0,0x1571534),(N.R1,0),(N.R2,0x15c)] [(N.R0,0)] [Patch (Address 0x1571534) (B.replicate 0x15c 0)]]]

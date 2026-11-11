@@ -11,7 +11,7 @@ module ImagePixelsScenarios
 
 import qualified Data.ByteString as B
 import Data.Int (Int32, Int64)
-import Data.Word (Word32)
+import Data.Word (Word8, Word32)
 import ImagePlanesScenarios (priorityInitial, priorityCalls, priorityCallsWith, currentTaskCalls, debugDisabledInitial, reservedInitial, reservedWaitCalls, reservedSignalCalls, waitCalls)
 import qualified CropProcessScenarios as Crop
 import qualified ImageOperationsScenarios as Operations
@@ -39,9 +39,9 @@ arithmeticInitial kernel image4 =
    slice image4 0x61c400 0x89aa90 0x148,slice image4 0x61c400 0x89be8c 0xa8c,
    slice image4 0x61c400 0x7221a0 0x78]
  where
-  slice bytes base entry size
-    | B.length bytes < fromIntegral (entry-base+size) = error "arithmetic image extent is missing"
-    | otherwise = Patch (Address entry) (B.take (fromIntegral size) (B.drop (fromIntegral (entry-base)) bytes))
+  slice bytes imageBase entry size
+    | B.length bytes < fromIntegral (entry-imageBase+size) = error "arithmetic image extent is missing"
+    | otherwise = Patch (Address entry) (B.take (fromIntegral size) (B.drop (fromIntegral (entry-imageBase)) bytes))
 
 blendCalls :: Word32 -> [Call]
 blendCalls task = currentTaskCalls task ++ priorityCalls task 12 ++ [call 0xeb0d04 [] 0,call 0xeb0d04 [] 0] ++ priorityCalls task 6
@@ -58,7 +58,9 @@ imagePixelsScenarios :: B.ByteString -> (StagePublication -> Address) -> [StageS
 imagePixelsScenarios image resolve = blendCases ++ blendPriorityErrors ++ affineCases ++ blockCases ++ safetyCases ++ filterCases ++ bandCases ++ sqrtCases ++ candidateCases ++ meshCases ++ triangleCases ++ rotateCases ++ shearCases ++ prepareAffineCases ++ copyCases
  where
   make name entry suffix arguments initial final returned calls = StageScenario (StageCaseName name) (publication entry suffix) arguments (configuration ++ initial) final returned [] calls
+  configByte :: Word32 -> Word8 -> Patch
   configByte key value = Patch (Address (0x9e0000+key)) (B.singleton (fromIntegral value))
+  configHalf :: Word32 -> Word32 -> Patch
   configHalf key value = Patch (Address (0x9e0000+key)) (B.take 2 (wordBytes value))
   configuration = [word 0x96ca50 0x9e0000,configHalf 0x9f12 16,configHalf 0x9fa7 16] ++
     [configByte key value | (key,value) <- [(0x9fa5,0),(0x9fa6,64),(0x9fa9,8),(0x9faa,8),(0x9fb6,0),(0x9fb7,2),(0x9fe5,0),(0x9fe4,3)]]
@@ -170,7 +172,7 @@ imagePixelsScenarios image resolve = blendCases ++ blendPriorityErrors ++ affine
   meshEffects =
     [wordsAt meshPoints meshCorners,wordsAt meshMapped meshCorners,wordsAt meshTriangles meshTriangleWords,
      wordsAt meshWorkspace (concat (replicate 4 meshIdentity)),
-     Patch (Address meshLabels) (B.concat [if offset `mod` 992 < 64 then wordBytes 0x00100008 else wordBytes 0 | offset <- [0,4..992*16-4]])] ++
+     Patch (Address meshLabels) (B.concat [if offset `mod` 992 < 64 then wordBytes 0x00100008 else wordBytes 0 | offset <- ([0,4..992*16-4] :: [Int])])] ++
     [Patch (Address (meshDestination+row*40)) (B.take 32 (B.drop (fromIntegral (row*64+16)) meshPixels)) | row <- [0..15]]
   meshCases =
     [make ("image-mesh-warp-threshold-"++show threshold) 0xdae42c "mesh_warp" [params,params+0x40,meshWorkspace,params+0xc0,params+0x100]
@@ -231,12 +233,13 @@ imagePixelsScenarios image resolve = blendCases ++ blendPriorityErrors ++ affine
     [make ("image-blend-"++show (firstWidth,width,height,vertical,selector)) 0xe5a9c0 "blend_pixels" [state,params,params+0x40,fromIntegral vertical,selector]
       (priorityInitial 0x45 ++ [wordsAt params [0,a,256,32,firstWidth,4,0],wordsAt (params+0x40) [0,b,256,32,width,height,0],Patch (Address a) firstBytes,Patch (Address b) secondBytes])
       (blendEffects firstWidth width height vertical selector) Nothing (blendCalls 0x45)
-    | width <- [0,1,2,6,16,30], firstWidth <- if width > 2 then [2,width] else [width], height <- [1,3], vertical <- [-1,0,1 :: Int32], selector <- [0,1]]
+    | width <- [0,1,2,6,16,30], firstWidth <- if width > 2 then [2,width] else [width], height <- [1,3], vertical <- ([-1,0,1] :: [Int32]), selector <- [0,1]]
   blendPriorityErrors =
     [make "image-blend-priority-error-preserves-pixels-and-restore" 0xe5a9c0 "blend_pixels" [state,params,params+0x40,0,0]
       (priorityInitial 0x45 ++ [wordsAt params [0,a,256,32,16,4,0],wordsAt (params+0x40) [0,b,256,32,16,3,0],Patch (Address a) firstBytes,Patch (Address b) secondBytes])
       (word 0x40a0f82c 0xfffffffb : blendEffects 16 16 3 0 0) Nothing
       (currentTaskCalls 0x45 ++ priorityCallsWith 0x45 12 0xfffffffb ++ [call 0xeb0d04 [] 0,call 0xeb0d04 [] 0] ++ priorityCalls 0x45 6)]
+  blendEffects :: Word32 -> Word32 -> Word32 -> Int32 -> Word32 -> [Patch]
   blendEffects firstWidth width height vertical selector =
     [Patch (Address (output+row*32+column*2)) (B.pack [pixel lane row column | lane <- [0..3]])
     | width > 1, height /= distance, column <- takeWhile (< width `div` 2) [0,2..], row <- [0..height-distance-1]]
@@ -329,7 +332,9 @@ imagePixelsOwnedFailureScenarios image _resolve =
   destinationPlane = [0,destination,640,40,40,16,0x5678]
   pixels = B.pack [fromIntegral ((n*13+37) `mod` 256) | n <- [0..1023 :: Int]]
   warpedPixels = B.concat [B.take 32 (B.drop (row*64+16) pixels) <> B.replicate 8 0xa5 | row <- [0..15]]
+  configByte :: Word32 -> Word8 -> Patch
   configByte key value = Patch (Address (0x9e0000+key)) (B.singleton (fromIntegral value))
+  configHalf :: Word32 -> Word32 -> Patch
   configHalf key value = Patch (Address (0x9e0000+key)) (B.take 2 (wordBytes value))
   configuration threshold =
     [word 0x96ca50 0x9e0000,configHalf 0x9f12 16,configHalf 0x9fa7 16

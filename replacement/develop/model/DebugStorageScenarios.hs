@@ -50,13 +50,13 @@ directoryName = 0x9d0100
 filenamePrefix = 0x9d0120
 
 namingInitial :: Word16 -> Word16 -> Word16 -> Word8 -> Word32 -> [Patch]
-namingInitial directory number sequence numberingMode prefixMode =
+namingInitial directory number sequenceValue numberingMode prefixMode =
   [word 0x910204 storage,word (storage+0x114) 0,word (storage+0x16bd8) 0
   ,word (storage+0x2210) 1,byte (storage+0x2600) 1
   ,half (storage+0x21d4) directory,half (storage+0x21d6) number
   ,word (storage+0x2168) (fromIntegral directory),word (storage+0x21b8) (fromIntegral directory)
   ,word (storage+0x2794) 0,word (storage+0x16c6c) 0
-  ,half (storage+0x127d4) sequence,byte (storage+0x16bd0) numberingMode
+  ,half (storage+0x127d4) sequenceValue,byte (storage+0x16bd0) numberingMode
   ,word (storage+0x16bd4) prefixMode,Patch (Address storage) (C.pack "DSCF")
   ,Patch (Address (storage+0x21da)) (C.pack "FUJI_")
   ,Patch (Address 0x814730) (B.pack [65,1,0,0]),Patch (Address 0x814738) (B.pack [66,1,1,0])
@@ -119,10 +119,10 @@ debugStorageScenarios _ _resolve = namingCases ++ decimalCases ++ validationCase
     (StageCaseName ("debug-storage-"++name)) (publication address symbol) arguments initial final returned pointers calls
   namingCases =
     [make name 0x70fbfc "prepare_debug_basename" [output,0,0]
-      (namingInitial directory number sequence mode 0)
+      (namingInitial directory number sequenceValue mode 0)
       ([text output expected,half (storage+0x127d4) finalSequence,byte (storage+0x16bd0) finalMode])
       (Just 0) [] []
-    | (name,directory,number,sequence,mode,expected,finalSequence,finalMode) <-
+    | (name,directory,number,sequenceValue,mode,expected,finalSequence,finalMode) <-
       [("ordinary",100,41,7,0,"A:\\DCIM\\100FUJI_\\DSCF0042",7,0)
       ,("thousand-rollover",100,999,7,0,"A:\\DCIM\\101FUJI_\\DSCF1001",1,0)
       ,("group-digit-ahead",100,2000,7,0,"A:\\DCIM\\102FUJI_\\DSCF2001",1,0)
@@ -154,7 +154,7 @@ debugStorageScenarios _ _resolve = namingCases ++ decimalCases ++ validationCase
   validationCases =
     [make ("validate-"++show index) 0x70f840 "storage_validate_name" [output,fromIntegral (length name)]
       [text output name] [] (Just result) [] []
-    | (index,name,result) <- [(0,"AZaz09_",0),(1,"",0),(2,"a-b",8),(3,"a b",8),(4,"a/b",8)]]
+    | (index,name,result) <- ([(0,"AZaz09_",0),(1,"",0),(2,"a-b",8),(3,"a b",8),(4,"a/b",8)] :: [(Int,String,Word32)])]
   routeCases =
     [make ("drive-"++show device) 0x70ec08 "storage_drive_for_device" [device]
       (namingInitial 100 41 7 0 0) [] (Just expected) [] [] | (device,expected) <- [(0,65),(1,66),(2,67),(0xffffffff,67)]]

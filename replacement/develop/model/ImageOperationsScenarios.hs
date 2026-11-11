@@ -80,14 +80,14 @@ conversionWaitCalls :: Word32 -> Word32 -> [Call]
 conversionWaitCalls active result=criticalCalls++[call 0x68157c [] 0]++[call 0x64eb20 [0x123] result | active/=0]
 
 radialMask :: Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> [[Word8]]
-radialMask width height normalWidth normalHeight strength shift=
+radialMask width height normalWidth normalHeight strength shiftAmount=
  [[fromIntegral (min 255 (shiftValue (factor*(square x (width `shiftR` 1)+square y (height `shiftR` 1))))) | x<-[0..width]] | y<-[0..height]]
  where
   factor=(fromIntegral (strength .&. 255)*10000000 :: Word64) `div` fromIntegral (normalWidth*normalWidth+normalHeight*normalHeight)
   square position center=let delta=fromIntegral (fromIntegral position::Int32)-fromIntegral center::Integer; value=delta*delta in fromIntegral value::Word64
   shiftValue value
-   | (fromIntegral (shift-32)::Int32)>=0 = lsr high (shift-32)
-   | otherwise = lsr low shift .|. lsl high (32-shift)
+   | (fromIntegral (shiftAmount-32)::Int32)>=0 = lsr high (shiftAmount-32)
+   | otherwise = lsr low shiftAmount .|. lsl high (32-shiftAmount)
    where
     low=fromIntegral value::Word32
     high=fromIntegral (value `shiftR` 32)::Word32
@@ -140,8 +140,8 @@ data LinearFrontend = LinearFrontend
   } deriving (Eq,Show)
 
 linearFrontend :: GeometryPlane -> GeometryPlane -> GeometryPlane -> [Int32] -> Bool -> LinearFrontend
-linearFrontend source second destination coefficients reverse =
- LinearFrontend (map Just (if reverse then [second,source] else [source,second])++replicate 3 Nothing) 2 coefficients
+linearFrontend source second destination coefficients reversed =
+ LinearFrontend (map Just (if reversed then [second,source] else [source,second])++replicate 3 Nothing) 2 coefficients
   destination {geometryWidth=geometryWidth source,geometryHeight=geometryHeight source}
 
 centerPlane :: Word32 -> Word32 -> GeometryPlane -> GeometryPlane
@@ -150,11 +150,11 @@ centerPlane width height plane=plane
   geometryWidth=width*2,geometryHeight=height}
 
 gradientMask :: Word32 -> Word32 -> Word32 -> Int32 -> Int32 -> Int32 -> Int32 -> Word8 -> Bool -> [[Word8]]
-gradientMask width height pivot slopeFirst slopeSecond offsetFirst offsetSecond maximum transposed=
+gradientMask width height pivot slopeFirst slopeSecond offsetFirst offsetSecond maximumValue transposed=
  [[value (if transposed then x else y) | x<-[0..width]] | y<-[0..height]]
  where
   extent=if transposed then width else height
-  value position=fromIntegral (max 0 (min (fromIntegral maximum) signed))
+  value position=fromIntegral (max 0 (min (fromIntegral maximumValue) signed))
    where
     numerator=if position<=pivot then fromIntegral slopeFirst*(pivot-position) else fromIntegral slopeSecond*(position-pivot)
     offset=if position<=pivot then offsetFirst else offsetSecond
@@ -214,16 +214,16 @@ dmaFillCalls plane value completed=
   contiguous=geometryStride plane==geometryWidth plane
   totalBytes=if contiguous then geometryWidth plane*geometryHeight plane else geometryWidth plane
   bytes=totalBytes .&. complement 3
-  words=totalBytes `shiftR` 2
+  wordCount=totalBytes `shiftR` 2
   destinations=if contiguous then [geometryAddress plane] else [geometryAddress plane+row*geometryStride plane | row<-if geometryHeight plane==0 then [] else [0..geometryHeight plane-1]]
   transfer destination=
-   let burst | destination .&. 31==0 && words .&. 7==0 = 5
-             | destination .&. 15==0 && words .&. 3==0 = 4
-             | destination .&. 7==0 && words .&. 1==0 = 3
+   let burst | destination .&. 31==0 && wordCount .&. 7==0 = 5
+             | destination .&. 15==0 && wordCount .&. 3==0 = 4
+             | destination .&. 7==0 && wordCount .&. 1==0 = 3
              | otherwise = 2
        control=0x00500400 .|. (burst `shiftL` 12) .|. (burst `shiftL` 16)
        request=[control,0,0,0x157a0e0,destination,bytes,0,0,0,0,0]
-       pixels=Patch (Address destination) (B.concat (replicate (fromIntegral words) (wordBytes value)))
+       pixels=Patch (Address destination) (B.concat (replicate (fromIntegral wordCount) (wordBytes value)))
     in [ScriptCall (Address 0x665ac4) [(N.R0,channel),(N.R1,0x157b9d0)] [(N.R0,0)] [Absolute (wordsAt 0x157b9d0 request)] []]
        ++ currentTaskCalls 0x45
        ++ [ScriptCall (Address 0x665540) [(N.R0,channel),(N.R1,0x157b9fc)] [(N.R0,0)] [Absolute (wordsAt 0x157b9fc [4,completed])] [Absolute pixels]]

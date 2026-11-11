@@ -9,7 +9,6 @@ module OutputExpansionPairLaw
 import Data.Bits ((.&.), shiftL, shiftR)
 import qualified Data.ByteString as B
 import Data.Int (Int64)
-import Data.List (foldl')
 import Data.Word (Word8, Word16, Word32, Word64)
 import OutputCoefficientsScenarios (CoefficientSources(..))
 import PipelineModel

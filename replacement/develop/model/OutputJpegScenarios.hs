@@ -143,7 +143,7 @@ outputJpegScenarios _ _ = scatterCases ++ packetCases ++ appendCases ++ rawCases
   serializerCases =
     [make ("output-padding-"++show size) 0x11d24f4 "fill_jpeg_padding" [request,size,0]
       [Patch (Address request) (B.replicate 520 0xa5)]
-      [Patch (Address request) (B.pack (take (fromIntegral size) (concat [[fromIntegral n,fromIntegral (128+n)] | n<-take 260 (cycle [0..127])])))] Nothing
+      [Patch (Address request) (B.pack (take (fromIntegral size) (concat [[fromIntegral n,fromIntegral (128+n)] | n<-take 260 (cycle [0..127::Int])])))] Nothing
     | size<-[0,1,2,3,256,257,512]] ++
     [make ("output-padding-resume-"++show (preceding,lastByte)) 0x11d24f4 "fill_jpeg_padding" [request+2,6,1]
       [Patch (Address request) (B.pack [preceding,lastByte]<>B.replicate 6 0xa5)]

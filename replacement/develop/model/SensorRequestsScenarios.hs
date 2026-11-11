@@ -4,7 +4,7 @@ import qualified Data.ByteString as B
 import Data.Bits
 import Data.Word
 import PipelineModel
-import Scenarios (Address(..),Call,Patch(..),word,wordBytes,wordsAt)
+import Scenarios (Address(..),Call,Patch(..),word,wordsAt)
 import BuffersScenarios (configurationInitial)
 import qualified SensorSettingsScenarios as Settings
 import OutputExpansionScenarios (ExpansionPhase(..),ExpansionMemory(..),expansionEffectsFromImage)

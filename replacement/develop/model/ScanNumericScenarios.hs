@@ -6,10 +6,9 @@ module ScanNumericScenarios
   ) where
 
 import qualified Data.ByteString as B
-import Data.List (foldl')
 import Data.Word
 import PipelineModel
-import Scenarios (Address(..),Patch(..),word,wordsAt,wordBytes)
+import Scenarios (Address(..),Patch(..),word,wordBytes)
 
 data CalibrationMode = ReferenceCalibration | SpatialCalibration deriving (Eq,Show)
 data PrimaryAmount = QuarterAmount | HalfAmount deriving (Eq,Show)
@@ -36,8 +35,6 @@ scanNumericPublications = [publication address name | (address,name) <-
 
 add :: Address -> Word32 -> Address
 add (Address address) offset = Address (address+offset)
-addressWord :: Address -> Word32
-addressWord (Address address) = address
 atWord :: Address -> Word32 -> Word32 -> Patch
 atWord address offset = word (addressWord address+offset)
 rawPixels, shading, brightnessCurve, calibration, gridRed, gridBlue :: Address
@@ -103,8 +100,8 @@ configurationEdits amount =
   [BufferEdit key (halfWords [0..511]) | key<-[0x19400,0x1a400]] ++
   [BufferEdit key (B.replicate 512 100) | key<-[0x1b000,0x1b800]]
 
-planeWords :: [Word32]
-planeWords=[addressWord rawPixels,8,8,12,addressWord shading,0x55aa0008,0,0,0,0,0,0,0]
+planeHeaderWords :: [Word32]
+planeHeaderWords=[addressWord rawPixels,8,8,12,addressWord shading,0x55aa0008,0,0,0,0,0,0,0]
 regionWords :: [Word32]
 regionWords=[0,0,8,8,0,0,0,0,0,0,0,0,0]
 profileWords :: CalibrationMode -> [Word32]
@@ -121,7 +118,7 @@ scanNumericInitial request workspace scratch mode amount =
   [Patch request (B.replicate 0x2ac 0),atWord request 0 1,Patch (add request 4) (fullWords regionWords),
    Patch (add request 0x20c) (halfWords [256,256,256]),Patch (add request 0x212) (halfWords [256,256,256]),
    Patch (add request 0x220) (fullWords (profileWords mode)),atWord request 0x254 (addressWord brightnessCurve),
-   Patch (add request 0x258) (fullWords planeWords),atWord request 0x290 37,atWord request 0x298 (addressWord scratch),
+   Patch (add request 0x258) (fullWords planeHeaderWords),atWord request 0x290 37,atWord request 0x298 (addressWord scratch),
    word 0x96ca50 (addressWord calibration),Patch calibration (buffer 0x1bc00 0 (configurationEdits amount)),
    Patch rawPixels inputPixels,Patch shading (B.replicate 256 0),
    Patch brightnessCurve (B.pack [fromIntegral (index `div` 16) | index<-[0..4095::Int]]),
@@ -201,7 +198,7 @@ scanNumericScenarios _ _=selectionCases++brightnessCases++measurementCases++adju
       (base ReferenceCalibration HalfAmount++[atWord plane 12 bits]) [Patch output (halfBytes expected)] Nothing | (bits,expected)<-[(10,51),(14,4)]]
   measurementCases=
     [makeWords "measure-nonzero-cfa" 0xd6e564 "measure_region" (map addressWord [plane,region,brightnessCurve,levels]++[1]++map addressWord [workspace,scratch])
-      (base ReferenceCalibration HalfAmount) [measured,Patch scratch measuredScratch,Patch plane (fullWords planeWords),Patch rawPixels inputPixels] (Just 1),
+      (base ReferenceCalibration HalfAmount) [measured,Patch scratch measuredScratch,Patch plane (fullWords planeHeaderWords),Patch rawPixels inputPixels] (Just 1),
      make "analyze-nonzero-cfa" 0xd6e600 "analyze_samples" [plane,region,levels,workspace,scratch,output]
       (base ReferenceCalibration HalfAmount)
       [expectedWorkspace [wordEdit 20 200,wordEdit 0x414 100,wordEdit 0x814 150],Patch output (halfBytes 1),Patch scratch (buffer 0x4820 0xa5 [BufferEdit 0x4720 (B.replicate 256 0),BufferEdit 0x320 (B.replicate 0x1400 0),wordEdit 0x320 100,wordEdit 0x720 200,wordEdit 0xb20 150,wordEdit 0x1720 50,wordEdit 0x1b20 75,BufferEdit 0x1f20 (fullWords (replicate 50 0++[1]++replicate 461 0)),BufferEdit 0x2720 (fullWords (replicate 75 0++[1]++replicate 436 0))])]

@@ -51,7 +51,7 @@ cropProcessScenarios image resolve = debugCases ++ completionCases ++ copyProgra
   debugCases = [make ("crop-debug-disabled-"++show entry) entry arguments (configurationBytePatches 0xa8 0) [] Nothing [] | entry <- [0xe65518,0xe64ffc,0xe641a8], let arguments=if entry==0xe641a8 then [8,state] else [state]] ++
    [make ("crop-debug-active-"++show counter) 0xe64ffc [state]
     (configurationBytePatches 0xa8 0x80 ++ [word (state+0x220c) debug,word (debug+0xdbb08) counter] ++ zipWith word cropRegisters values)
-    ([word (debug+0xdb984) 0x53545052] ++ zipWith word [debug+0xdb988+min counter 24*16+offset | offset<-[0,4,8,12]] values ++ [word (debug+0xdbb0c) 0x4c415052,word (debug+0xdbb08) (if counter>=24 then head values+1 else counter+1)]) Nothing []
+    ([word (debug+0xdb984) 0x53545052] ++ zipWith word [debug+0xdb988+min counter 24*16+offset | offset<-[0,4,8,12]] values ++ [word (debug+0xdbb0c) 0x4c415052,word (debug+0xdbb08) (if counter>=24 then firstValue+1 else counter+1)]) Nothing []
    | counter <- [0,23,24,0xffffffff]] ++
    [make ("geometry-debug-active-"++show counter) 0xe65518 [state]
     (configurationBytePatches 0xa8 0x80 ++ [word (state+0x220c) debug,word (debug+0xdbf34) counter,word 0x014ce578 0,word 0xfff48004 timestampRegister] ++ zipWith word geometryRegisters geometryValues)
@@ -61,6 +61,7 @@ cropProcessScenarios image resolve = debugCases ++ completionCases ++ copyProgra
   debug = 0x02000000
   cropRegisters = [0xfff43008,0xfff43030,0xfff43034,0xfff43038]
   values = [0x10203040,0x11223344,0x55667788,0xaabbccdd]
+  firstValue = case values of (value:_) -> value; [] -> error "crop debug register values are empty"
   geometryRegisters = [0xfff48060,0xfff48064] ++ [0xfff48070,0xfff48074..0xfff480b8]
   geometryValues = [0x12340000+index | index <- [0..20]]
   timestampRegister = 0xfacebea8
@@ -69,16 +70,16 @@ cropProcessScenarios image resolve = debugCases ++ completionCases ++ copyProgra
    [make ("crop-complete-active-"++show (entry,mode,result)) entry [] (priorityInitial 0x45 ++ [word slot 0x45]) [] Nothing (notificationCalls 0x45 0x10 mode result) | (entry,slot)<-completionSlots,mode<-[0,1],result<-[0,0xfffffffe]] ++
    [make ("saved-request-constant-"++show entry) entry [state] [] [] (Just result) [] | (entry,result)<-[(0xe563b0,1),(0xe563c8,0)]]
   completionSlots = [(0xe63f04,0x0157bcfc),(0xe63ed0,0x0157bd00),(0xe63e9c,0x0157bd04),(0xe63f6c,0x0157bcf0)]
-  copyProgramCases = [make ("copy-program-"++show values) 0x68d9c0 [params] [wordsAt params values]
-    [word address value | (address,value)<-copyHardwareEffects values] (Just (copyHardwareStatus values)) []
-   | values <- [[0,0,0,0,16,8,0x009c0000,0x009d0000],[5,2,7,0x3ff,8192,8192,0xe09c0000,0xe09d0000],[6,0,0,0,16,8,0x009c0000,0x009d0000],[0,1,0,0,8193,8,0x009c0000,0x009d0000],[0,1,0,0,16,8,0x009c0001,0x009d0000],[0,1,0,0,16,8,0x009c0000,0x009d0001]]]
-  copyPublishErrors = [make ("copy-publish-invalid-"++show values) 0xda9914 [params]
-    [wordsAt params values,wordsAt 0x014ce6c8 (replicate 12 0)]
-    ([wordsAt 0x014ce6d0 values,word 0x014ce6ec 0,word 0x014ce6f0 0] ++
-      [word 0x014ce6e8 shift | let combined=values!!1 .|. values!!2,combined .&. 7==0,let shift=if combined .&. 31==0 then 2 else if combined .&. 15==0 then 1 else 0] ++
-      [word address value | (address,value)<-copyHardwareEffects (take 1 values++[0,0,0]++take 4 (drop 1 values)),(values!!1 .|. values!!2) .&. 7==0])
+  copyProgramCases = [make ("copy-program-"++show packet) 0x68d9c0 [params] [wordsAt params packet]
+    [word address value | (address,value)<-copyHardwareEffects packet] (Just (copyHardwareStatus packet)) []
+   | packet <- [[0,0,0,0,16,8,0x009c0000,0x009d0000],[5,2,7,0x3ff,8192,8192,0xe09c0000,0xe09d0000],[6,0,0,0,16,8,0x009c0000,0x009d0000],[0,1,0,0,8193,8,0x009c0000,0x009d0000],[0,1,0,0,16,8,0x009c0001,0x009d0000],[0,1,0,0,16,8,0x009c0000,0x009d0001]]]
+  copyPublishErrors = [make ("copy-publish-invalid-"++show packet) 0xda9914 [params]
+    [wordsAt params packet,wordsAt 0x014ce6c8 (replicate 12 0)]
+    ([wordsAt 0x014ce6d0 packet,word 0x014ce6ec 0,word 0x014ce6f0 0] ++
+      [word 0x014ce6e8 shift | let combined=packet!!1 .|. packet!!2,combined .&. 7==0,let shift=if combined .&. 31==0 then 2 else if combined .&. 15==0 then 1 else 0] ++
+      [word address value | (address,value)<-copyHardwareEffects (take 1 packet++[0,0,0]++take 4 (drop 1 packet)),(packet!!1 .|. packet!!2) .&. 7==0])
     (Just 0xffffffe2) []
-   | values <- [[0,7,8,0x009c0000,0x009d0000,0],[6,16,8,0x009c0000,0x009d0000,0]]]
+   | packet <- [[0,7,8,0x009c0000,0x009d0000,0],[6,16,8,0x009c0000,0x009d0000,0]]]
   activeCases = [fromLaw ("crop-process-"++show completion) 0xe650dc [state,params,params+0x100,params+0x200]
     [wordsAt params (cropParameterWords cropParameters),wordsAt (params+0x100) (cropPlaneWords cropInput),wordsAt (params+0x200) (cropPlaneWords cropOutput)]
     completion (cropProcessLaw image resolve state cropParameters cropInput cropOutput completion) | completion<-[Completed,Failed]] ++
@@ -142,9 +143,9 @@ copyHardwareStatus [format,_,_,_,width,height,source,destination]
  | otherwise = 0
 copyHardwareStatus _ = error "copy hardware configuration requires eight ABI words"
 copyHardwareEffects :: [Word32] -> [(Word32,Word32)]
-copyHardwareEffects [format,shift,enabled,length,width,height,source,destination]
+copyHardwareEffects [format,shift,enabled,lengthField,width,height,source,destination]
  | format>=6 = []
- | otherwise = [(0xfff6f008,(format .&. 7) .|. ((shift .&. 3) `shiftL` 4)),(0xfff6f00c,((enabled .&. 7) `shiftL` 28) .|. ((length .&. 0x3ff) `shiftL` 16))] ++
+ | otherwise = [(0xfff6f008,(format .&. 7) .|. ((shift .&. 3) `shiftL` 4)),(0xfff6f00c,((enabled .&. 7) `shiftL` 28) .|. ((lengthField .&. 0x3ff) `shiftL` 16))] ++
    if width>8192 || height>8192 || (width .|. height) .&. 7/=0 then [] else
     [(0xfff6f010,(((width-1) .&. 0x1fff) `shiftL` 16) .|. ((height-1) .&. 0x1fff))] ++
     if source .&. 7/=0 then [] else [(0xfff6f014,source .&. 0x1fffffff)] ++
@@ -165,7 +166,7 @@ copyResetCall :: Call
 copyResetCall = Call (Address 0x68d954) [] [] [word 0xfff6f000 0x10000]
 
 copyEngineLaw :: (StagePublication -> Address) -> [Word32] -> CopyEngineLaw
-copyEngineLaw resolve packet@[format,width,height,source,destination,completed]
+copyEngineLaw resolve packet@[format,width,height,source,destination,_]
  | (width .|. height) .&. 7/=0 || format>=6 || width>8192 || height>8192 || (source .|. destination) .&. 7/=0 = error "copy engine law requires an admitted hardware configuration"
  | otherwise = CopyEngineLaw
    (Warp.routeInitial ++ Warp.interruptInitial ++ reservedInitial 6 ++ [wordsAt 0x00955964 [0,0,0],word 0xfff8800c 0,word 0xfff8802c 0])

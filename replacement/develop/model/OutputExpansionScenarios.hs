@@ -5,7 +5,6 @@ module OutputExpansionScenarios
 import Data.Bits
 import qualified Data.ByteString as B
 import Data.Int (Int8, Int16, Int32)
-import Data.List (foldl')
 import Data.Word
 import PipelineModel
 import Scenarios (Address(..), Patch(..), wordBytes)
@@ -183,9 +182,9 @@ flagBytes fields state = emit [putBytes (plus (outputBase state) destination) [f
 whenWord :: Word32 -> (Word32 -> Bool) -> Expansion -> Expansion
 whenWord offset predicate action state = if predicate (atWord (descriptorBytes state) offset) then action state else state
 mark :: Int -> Expansion
-mark bit state = emit [putWord (plus (descriptorBase state) 0x14c) (setBit (atWord (descriptorBytes state) 0x14c) bit)] state
+mark flagBit state = emit [putWord (plus (descriptorBase state) 0x14c) (setBit (atWord (descriptorBytes state) 0x14c) flagBit)] state
 marked :: Word32 -> (Word32 -> Bool) -> Int -> Expansion -> Expansion
-marked offset predicate bit action = whenWord offset predicate (run [action,mark bit])
+marked offset predicate flagBit action = whenWord offset predicate (run [action,mark flagBit])
 
 data ExpansionPart = ProfileBlock | GridBlock | PairBlock | NibblePairs | Matrix15 | PairedChannels | ChannelLimits | ChannelControls
   | MixedGains | MixLimits | ChannelGains | SignedLimits | GroupGains Word32 | GroupSelector Word32
@@ -206,10 +205,14 @@ leaf sources cfg part offset state = emit patches state
     d=descriptorBase state
     cb key=fromIntegral (cfg key) :: Word32
     ch key=fromIntegral (cfg key)+fromIntegral (cfg (key+1))*256 :: Word16
-    kb table index=cb (romHalf sources (table+index*2))
-    kh table index=ch (romHalf sources (table+index*2))
-    keyBytes table count=[fromIntegral (kb table (fromIntegral index)) | index<-[0..count-1]]
-    keyHalves table count=[kh table (fromIntegral index) | index<-[0..count-1]]
+    kb :: Word32 -> Word32 -> Word32
+    kb table entry=cb (romHalf sources (table+entry*2))
+    kh :: Word32 -> Word32 -> Word16
+    kh table entry=ch (romHalf sources (table+entry*2))
+    keyBytes :: Word32 -> Int -> [Word8]
+    keyBytes table count=[fromIntegral (kb table (fromIntegral slot)) | slot<-[0..count-1]]
+    keyHalves :: Word32 -> Int -> [Word16]
+    keyHalves table count=[kh table (fromIntegral slot) | slot<-[0..count-1]]
     put offset'=putBytes (plus block offset')
     halves offset'=putHalves (plus block offset')
     word offset'=putWord (plus block offset')
@@ -239,7 +242,7 @@ leaf sources cfg part offset state = emit patches state
             gainIndex=fromIntegral band :: Word16
             band2=if raw<fromIntegral (romHalf sources 0x7c2de8) then 0 else gainIndex
             bandGain=if raw>=fromIntegral (romHalf sources 0x7c2de8) then band2 else 0
-            split low high=let value=w 0xf4; first=cb low; second=cb high in if first>=second || value<=first then 0 else if value<second then 1 else 2
+            split low high=let value=w 0xf4; lowValue=cb low; highValue=cb high in if lowValue>=highValue || value<=lowValue then 0 else if value<highValue then 1 else 2
             first=split 0xaf2a 0xaf2b
             second=split 0xaf82 0xaf83
             signed=signFill 0xfe00 (ch (romHalf sources (0xd60c48+second*2)))
@@ -273,6 +276,7 @@ leaf sources cfg part offset state = emit patches state
         let factors=map toInteger [kb 0xd63974 (w 0x194),kb 0xd63980 modeBand,kb 0xd63210 (w 0x13c),kb 0xd63224 modeCode]
             gains=keyBytes (0xd63658+index*8) 4
             scale=kb 0xd6396c (w 0x160)
+            pair :: Word8 -> [Word8]
             pair value=
               let primary=fromInteger ((product factors*toInteger value `div` 65536) `mod` 4294967296) :: Word32
                   secondary=primary*scale `shiftR` 4
@@ -302,7 +306,7 @@ leaf sources cfg part offset state = emit patches state
             first=keyBytes base 4
             exposure=selectedExposure descriptor
             second=if exposure==100 then replicate 4 0 else [fromIntegral value :: Int8 | value<-keyBytes (0xd5f7ac+(exposure-exposure `div` 10*7)*8) 4]
-            values=if disabled then replicate 4 0 else zipWith (\\a z -> fromIntegral (max 0 (min 63 (fromIntegral a+fromIntegral z::Int)))) first second
+            values=if disabled then replicate 4 0 else zipWith (\a z -> fromIntegral (max 0 (min 63 (fromIntegral a+fromIntegral z::Int)))) first second
         in [put 0x19 values]
       FilterLimits ->
         let chosen=kb (if activeFilter then 0xd5f460 else 0xd5f680) (if activeFilter then w 0x1d8 else index)
@@ -318,10 +322,10 @@ leaf sources cfg part offset state = emit patches state
             common=keyBytes 0xd66b54 4
         in [put 0x44 (values++[common!!2,common!!1,common!!0,common!!3])]
       TemplateControls -> [put 0x4b (keyBytes (templateTable 0xd66604 0xd66a6c 0xd668b4) 4)]
-      TemplateLookup -> fromPacket LookupControls (\\value -> [Patch (plus block 0x4f) (B.take 4 (B.drop 3 value))])
-      TemplateExport -> fromPacket ExportCoefficients (\\value -> [Patch (plus block 0x54) (B.take 44 (B.drop 8 value))])
-      TemplateMatrix -> fromPacket MatrixCoefficients (\\value -> [put 4 [atByte value 0x2c],Patch (plus block 0x80) (B.take 18 (B.drop 0x2e value))])
-      TemplateBlend -> fromPacket BlendedLookup (\\value -> [Patch (plus block 0x92) (B.take 9 (B.drop 0x40 value)),Patch (plus block 0x9c) (B.take 56 (B.drop 0x4a value)),halves 0xd4 [atHalf value 0x84,0x3fff]])
+      TemplateLookup -> fromPacket LookupControls (\value -> [Patch (plus block 0x4f) (B.take 4 (B.drop 3 value))])
+      TemplateExport -> fromPacket ExportCoefficients (\value -> [Patch (plus block 0x54) (B.take 44 (B.drop 8 value))])
+      TemplateMatrix -> fromPacket MatrixCoefficients (\value -> [put 4 [atByte value 0x2c],Patch (plus block 0x80) (B.take 18 (B.drop 0x2e value))])
+      TemplateBlend -> fromPacket BlendedLookup (\value -> [Patch (plus block 0x92) (B.take 9 (B.drop 0x40 value)),Patch (plus block 0x9c) (B.take 56 (B.drop 0x4a value)),halves 0xd4 [atHalf value 0x84,0x3fff]])
       TemplateSmall ->
         let table=templateTable (0xd66a74+w 0x128*20) 0xd66824 0xd66c24
             chosen=kb table (w 0xf4)
@@ -495,7 +499,7 @@ exposureEffects sources cfg descriptor block =
       [fromIntegral (kb 0xd5fa90 (w 0x1e0*2)),fromIntegral (kb 0xd5fa92 (w 0x1e0*2))])]
   where
     w=atWord descriptor
-    kb table index=fromIntegral (cfg (romHalf sources (table+index*2))) :: Word32
+    kb romBase entry=fromIntegral (cfg (romHalf sources (romBase+entry*2))) :: Word32
     chosen=kb 0xd5f278 (w 0x1e0)
     enabled=w 0xe8/=4 && chosen>=1 && chosen<=3 && w 0x1e4==0
     values | not enabled = [0,0,0,0,16,0,16,0,16,0,16]
@@ -563,11 +567,11 @@ channelLimitEffects sources cfg descriptor block template =
 mixedGains :: CoefficientSources -> (Word32 -> Word8) -> B.ByteString -> [Word8]
 mixedGains sources cfg descriptor
   | mode==2 = replicate 8 (cfg 0xb577)
-  | otherwise = concat (zipWith (\first second -> [fromIntegral first,fromIntegral second]) mixedPrimary mixedSecondary)
+  | otherwise = concat (zipWith (\primaryValue secondaryValue -> [fromIntegral primaryValue,fromIntegral secondaryValue]) mixedPrimary mixedSecondary)
   where
     w=atWord descriptor
     mode=gainMixMode cfg descriptor
-    kb table index=fromIntegral (cfg (romHalf sources (table+index*2))) :: Word32
+    kb romBase entry=fromIntegral (cfg (romHalf sources (romBase+entry*2))) :: Word32
     bytes table count=[cfg (romHalf sources (table+lane*2)) | lane<-[0..count-1]]
     selected=if w 0xe4==53 && w 0x1b0==1 then w 0x180 else w 0xf4
     index=selected+w 0x160*10
@@ -602,7 +606,7 @@ templateNoiseEffects sources cfg state block = external++
   where
     descriptor=descriptorBytes state
     w=atWord descriptor
-    kb table index=fromIntegral (cfg (romHalf sources (table+index*2))) :: Word32
+    kb romBase entry=fromIntegral (cfg (romHalf sources (romBase+entry*2))) :: Word32
     cb key=fromIntegral (cfg key) :: Word32
     (controls,external)=coefficientPacket sources cfg NoiseControls state
     mode=w 0x140
@@ -682,26 +686,32 @@ outputExpansionScenarios bundle _resolve = resetCases++rootCases++builderCases++
     recordInput=B.replicate 4704 0xa5
     initialDescriptor=foldl' (applyBytes descriptor) (B.replicate 572 0<>B.replicate 8 0x6d)
       [putHalf (plus descriptor 0x1a4) 100,putHalf (plus descriptor 0x1a6) 100]
+    input :: [(Word32,Word32)] -> B.ByteString
     input fields=foldl' (applyBytes descriptor) initialDescriptor [putWord (plus descriptor offset) value | (offset,value)<-fields]
     tables=[Patch (Address address) (sourceBytes sources address count) | (address,count)<-
       [(0x7c2de0,22708),(0x8179a0,2200),(0x824bc4,2668),(0x825630,10852),(0x829a10,512),(0xd5f21c,0xbb00)]]
     gainKeys=[romHalf sources table | table<-[0xd5f468,0xd5f2e0,0xd5f26c,0xd5f6e4,0xd5f874,0xd5faa0,0xd5fa24]]++
       [romWord sources 0x829a5c,romWord sources 0x829a10]
+    cfg :: Word32 -> Word32 -> Word8
     cfg flavor key
       | key==0xb5 || key==0xcb74 = 0
       | key>=0xa924 && key<=0xa92c = fromIntegral ((key-0xa923)*10)
       | key>=0x3e451a && key<=0x3e4522 = fromIntegral ((key-0x3e4519)*10)
       | flavor==1 && key `elem` gainKeys = 64
       | otherwise = 1
+    configuration :: Word32 -> [Patch]
     configuration flavor=
       [putWord (Address 0x96ca50) configBase,
        Patch (Address configBase) (B.pack [cfg flavor key | key<-[0..0x20000]]),
        Patch (Address (configBase+0x3e3d50)) (B.pack [cfg flavor key | key<-[0x3e3d50..0x3e4522]]),
        Patch (Address (configBase+0x408a00)) (B.pack [cfg flavor key | key<-[0x408a00..0x412000]])]
+    initial :: Word32 -> [Patch] -> B.ByteString -> [Patch]
     initial flavor cacheInput descriptorInput=tables++configuration flavor++cacheInput++
       [Patch descriptor descriptorInput,Patch record recordInput,putBytes (plus record 4704) [0x39],
        Patch (Address 0x1467a88) (B.replicate 88 0x5a)]
+    args :: ExpansionPhase -> [Word32]
     args phase=if phase==SubmitDescriptor then [0x9a1000,0x9a0000] else [0x9a0000,0x9a1000]
+    rootCase :: String -> ExpansionPhase -> [(Word32,Word32)] -> [Patch] -> Word32 -> StageScenario
     rootCase label phase fields cacheInput flavor=
       let descriptorInput=input fields
           expected=expansionEffects sources (cfg flavor) (ExpansionMemory cacheInput) descriptor descriptorInput record recordInput phase

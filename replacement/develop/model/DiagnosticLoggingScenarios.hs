@@ -18,8 +18,8 @@ monthDays :: Word8 -> Word8 -> Word8
 monthDays year month | month==2 && year .&. 3==0 =29
                      | otherwise=[31,28,31,30,31,30,31,31,30,31,30,31]!!(fromIntegral month-1)
 adjustCalendar :: Bool -> Word8 -> Word8 -> CalendarFields -> CalendarFields
-adjustCalendar subtract hours minutes fields@(CalendarFields year month day hour minute second)
- | not subtract = CalendarFields year' month' day' hour' minute' second
+adjustCalendar backwards hours minutes (CalendarFields year month day hour minute second)
+ | not backwards = CalendarFields year' month' day' hour' minute' second
  | otherwise = CalendarFields backYear backMonth backDay backHour backMinute second
  where
   minutesSum=minute+minutes
@@ -72,10 +72,10 @@ textEffects buffer offset category text calendar =
   payload=B.take 32 (B.takeWhile (/=0) text<>B.replicate 32 0)
 
 markerEffects :: Word32 -> Word32 -> Word32 -> Word32 -> [Patch]
-markerEffects buffer offset length marker
+markerEffects buffer offset count marker
  | buffer==0=[]
  | otherwise=(if padding/=0 then [Patch (Address (buffer+offset)) (B.replicate (fromIntegral padding) 0),word 0x40a5b5e4 (offset+padding)] else [])++[word (buffer+offset+padding) marker]
- where padding=if length .&. 3==0 then 0 else 4-(length .&. 3)
+ where padding=if count .&. 3==0 then 0 else 4-(count .&. 3)
 
 diagnosticLoggingPublications :: [StagePublication]
 diagnosticLoggingPublications=[StagePublication (Address address) (StageSymbol symbol) | (address,symbol)<-
@@ -97,7 +97,7 @@ diagnosticLoggingScenarios _ _=traceCases++markerCases++textCases++calendarCases
    | (entry,flag)<-[(0x72872c,0),(0xeb0cbc,0),(0xeb0ccc,0x10000000),(0xeb0ce0,0x20000000)],count<-[0,1,0x153f,0x1540],(timer,ticks)<-[(0,0),(29999,0x12345678),(30001,0xffffffff)]]++
    [make "trace-disabled" 0xeb0cbc [0x6020700] traceDisabledInitial [] Nothing []]
   markerCases=
-   [make ("marker-"++show length) 0x7263ec [length,0x55555555] [word 0x40a5b5ec buffer,word 0x40a5b5e4 64,Patch (Address (buffer+64)) (B.replicate 8 0xa5)] (markerEffects buffer 64 length 0x55555555) Nothing [] | length<-[0..7]]++
+   [make ("marker-"++show count) 0x7263ec [count,0x55555555] [word 0x40a5b5ec buffer,word 0x40a5b5e4 64,Patch (Address (buffer+64)) (B.replicate 8 0xa5)] (markerEffects buffer 64 count 0x55555555) Nothing [] | count<-[0..7]]++
    [make "marker-disabled" 0x7263ec [7,0x55555555] textDisabledInitial [] Nothing []]
   textCases=
    [make ("text-"++show (offset,category,B.length text)) 0x726658 [category,params]
@@ -106,11 +106,11 @@ diagnosticLoggingScenarios _ _=traceCases++markerCases++textCases++calendarCases
    | offset<-[8,8148,8152],category<-[0,0x45,0x123],text<-[B.empty,B.pack [65,66,67],B.replicate 31 65,B.replicate 32 66,B.replicate 40 67]]++
    [make "text-disabled" 0x726658 [0x45,0] textDisabledInitial [] Nothing []]
   calendarCases=
-   [make ("calendar-"++show (entry,enabled,subtract,hours,minutes,fields)) entry [params]
-      (criticalInitial++[calendarPatch 0x409c34b8 fields,Patch (Address 0x409c2878) (B.singleton (if enabled then 0x80 else 0)),Patch (Address 0x409c2877) (B.singleton (if subtract then 0x80 else 0)),Patch (Address 0x409c2844) (B.singleton hours),Patch (Address 0x409c283c) (B.singleton ((minutes `div` 15) `shiftL` 6))])
-      [calendarPatch params (if entry==0x6b1770 || (entry/=0x6b1738 && enabled) then adjustCalendar subtract hours minutes fields else fields)]
+   [make ("calendar-"++show (entry,enabled,backwards,hours,minutes,fields)) entry [params]
+      (criticalInitial++[calendarPatch 0x409c34b8 fields,Patch (Address 0x409c2878) (B.singleton (if enabled then 0x80 else 0)),Patch (Address 0x409c2877) (B.singleton (if backwards then 0x80 else 0)),Patch (Address 0x409c2844) (B.singleton hours),Patch (Address 0x409c283c) (B.singleton ((minutes `div` 15) `shiftL` 6))])
+      [calendarPatch params (if entry==0x6b1770 || (entry/=0x6b1738 && enabled) then adjustCalendar backwards hours minutes fields else fields)]
       (if entry==0x69d328 then Nothing else Just 0) criticalCalls
-   | entry<-[0x69d328,0x6b199c,0x6b1738,0x6b1770],enabled<-[False,True],subtract<-[False,True],(hours,minutes)<-[(0,0),(1,15),(23,45)],fields<-[calendar,CalendarFields 24 2 29 23 50 59,CalendarFields 0 1 1 0 0 0,CalendarFields 50 12 31 23 50 0]]
+   | entry<-[0x69d328,0x6b199c,0x6b1738,0x6b1770],enabled<-[False,True],backwards<-[False,True],(hours,minutes)<-[(0,0),(1,15),(23,45)],fields<-[calendar,CalendarFields 24 2 29 23 50 59,CalendarFields 0 1 1 0 0 0,CalendarFields 50 12 31 23 50 0]]
   profileCases=
    [make ("clock-fields-"++show (direction,hours,quarters)) 0x6a7878 [params,params+4,params+8]
       [Patch (Address 0x409c2877) (B.singleton direction),Patch (Address 0x409c2844) (B.singleton hours),Patch (Address 0x409c283c) (B.singleton (quarters `shiftL` 6))]

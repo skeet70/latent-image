@@ -45,7 +45,7 @@ objectBindings :: [(Word32,Word32,Word32,Buffers.Plane)]
 objectBindings = [(group,kind,objectAddress group,toPlane (objectPlane group)) | (group,kind) <- [(group,0) | group <- [0x14..0x56]]++[(0x25,5),(0x29,1),(0x50,9)]]
 
 toPlane :: [Word32] -> Buffers.Plane
-toPlane [format,address,length,stride,width,height,flags] = Buffers.Plane format address length stride width height flags
+toPlane [format,address,byteLength,stride,width,height,flags] = Buffers.Plane format address byteLength stride width height flags
 toPlane _ = error "processing plane fixture must contain seven words"
 
 objectRecords :: [Buffers.ObjectRecord]

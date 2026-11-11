@@ -58,13 +58,18 @@ outputMetadataScenarios bundle _ = writerCases ++ markerCases ++ directoryCases 
   source = 0x9b0000
   destination = 0x9d0000
   result = 0x9f0000
-  state = 0x1600000
+  stateBase = 0x1600000
   dataBase = 0x1650000
   parser = 0x9a0000
+  make :: String -> Word32 -> String -> [Word32] -> [Patch] -> [Patch] -> Maybe Word32 -> StageScenario
   make name address suffix arguments initial final returned = StageScenario (StageCaseName name) (publication address suffix) arguments initial final returned [] []
+  bytes :: Word32 -> [Word8] -> Patch
   bytes address values = Patch (Address address) (B.pack values)
+  zero :: Word32 -> Int -> Patch
   zero address count = Patch (Address address) (B.replicate count 0)
+  poison :: Word32 -> Int -> Patch
   poison address count = Patch (Address address) (B.replicate count 0xa5)
+  half :: Word32 -> Word32 -> Patch
   half address value = bytes address [fromIntegral value,fromIntegral (value `div` 256)]
   writerCases =
     [make "metadata-exif-header-composes-real-primary-exif-maker-interoperability-thumbnail" 0x11db098 "write_exif_header"
@@ -126,24 +131,24 @@ outputMetadataScenarios bundle _ = writerCases ++ markerCases ++ directoryCases 
       [half (source+2) kind,word (source+4) count,poison result 4]
       [half result width,half (result+2) indirect] Nothing
     | (kind,count,width,indirect) <- [(1,4,1,0),(7,5,1,1),(3,2,2,0),(3,3,2,1),(4,1,4,0),(9,2,4,1),(5,0,8,1),(10,1,8,1),(6,99,0,0)]]
-  queryInitial = [word 0x14e9e50 state,word 0x14e9e58 0x1640000,wordsAt dataBase [8,74],bytes (dataBase+8) recordBytes,word (dataBase+66) 74,poison result 12]
+  queryInitial = [word 0x14e9e50 stateBase,word 0x14e9e58 0x1640000,wordsAt dataBase [8,74],bytes (dataBase+8) recordBytes,word (dataBase+66) 74,poison result 12]
   queryCases =
     [make ("metadata-query-record-tag-"++show tag) 0x11c2490 "find_primary_directory_tag" [dataBase,82,0,tag,result]
       queryInitial [word result count,word (result+4) address,half (result+8) kind,bytes (result+10) [165,165]] (Just 0)
     | (tag,count,address,kind) <- [(0x100,1,dataBase+18,4),(0x1000,1,dataBase+30,3),(0x1001,3,dataBase+42,7),(0x1020,1,dataBase+54,4),(0x1021,8,dataBase+74,7)]] ++
-    [make ("metadata-query-rejects-"++show (offset,length,size,tag)) 0x11c2490 "find_primary_directory_tag" [dataBase,size,0,tag,result]
-      (queryInitial++[wordsAt dataBase [offset,length]]) [word result 0,word (result+4) 0,half (result+8) 0] (Just 0xffffffff)
-    | (offset,length,size,tag) <- [(0,74,82,0x100),(8,0,82,0x100),(8,74,81,0x100),(8,65,82,0x100),(8,74,82,0x9999)]] ++
+    [make ("metadata-query-rejects-"++show (offset,byteLength,size,tag)) 0x11c2490 "find_primary_directory_tag" [dataBase,size,0,tag,result]
+      (queryInitial++[wordsAt dataBase [offset,byteLength]]) [word result 0,word (result+4) 0,half (result+8) 0] (Just 0xffffffff)
+    | (offset,byteLength,size,tag) <- [(0,74,82,0x100),(8,0,82,0x100),(8,74,81,0x100),(8,65,82,0x100),(8,74,82,0x9999)]] ++
     [make "metadata-saved-parser-read-primary" 0x11c2154 "transfer_saved_parser" [parser,0,0]
-      [poison parser 28,word 0x14e9e50 state,word 0x14e9e58 dataBase]
-      [wordsAt parser [0,dataBase,0,0,0,state,0]] (Just 0)
+      [poison parser 28,word 0x14e9e50 stateBase,word 0x14e9e58 dataBase]
+      [wordsAt parser [0,dataBase,0,0,0,stateBase,0]] (Just 0)
     ,make "metadata-saved-parser-publish-secondary" 0x11c2154 "transfer_saved_parser" [parser,1,1]
-      [wordsAt parser [1,dataBase,2,3,4,state,5]] [word 0x14e9e4c dataBase,word 0x14e9e54 state] (Just 0)
+      [wordsAt parser [1,dataBase,2,3,4,stateBase,5]] [word 0x14e9e4c dataBase,word 0x14e9e54 stateBase] (Just 0)
     ,make "metadata-saved-parser-rejects-bank" 0x11c2154 "transfer_saved_parser" [parser,2,0]
       [poison parser 28] [poison parser 28] (Just 0xffffffff)]
-  savedInitial present = [word 0x14e9e50 state,word 0x14e9e58 dataBase,zero (state+0x250c) (155*12)
-    ,wordsAt (state+0x250c+75*12) [2,0,5],bytes (state+0x2c44) [11,22,33,44,55,66,77,88]
-    ,wordsAt (state+0x250c+14*12) [if present then 1 else 0,8,3],half (state+0x2c4c) 321]
+  savedInitial present = [word 0x14e9e50 stateBase,word 0x14e9e58 dataBase,zero (stateBase+0x250c) (155*12)
+    ,wordsAt (stateBase+0x250c+75*12) [2,0,5],bytes (stateBase+0x2c44) [11,22,33,44,55,66,77,88]
+    ,wordsAt (stateBase+0x250c+14*12) [if present then 1 else 0,8,3],half (stateBase+0x2c4c) 321]
   specialCases =
     [make ("metadata-special-no-records-"++show (enabled,present)) 0xebfd78 "populate_special_metadata" [source,destination]
       (savedInitial present++[word (source+0x19b0) dataBase,word (dataBase+0x680) enabled,half (dataBase+0x650) 0,poison (destination+0x1d38) 4])
@@ -155,10 +160,10 @@ outputMetadataScenarios bundle _ = writerCases ++ markerCases ++ directoryCases 
     [make ("metadata-special-negative-selection-skips-"++show invalidDescriptor) 0xebfd78 "populate_special_metadata" [source,destination]
       (savedInitial True ++
        [word (source+0x19b0) dataBase,word (dataBase+0x680) 1,half (dataBase+0x650) 1,word (dataBase+0x654) result,half result 0xffff
-       ,wordsAt (state+0x250c+117*12) [164,16,7]
-       ,wordsAt (state+0x2c54) [if invalidDescriptor then 0 else 16,74,90,74]
-       ,bytes (state+0x2c64) recordBytes,word (state+0x2c6e) 0xffffffff,word (state+0x2c9e) 82
-       ,bytes (state+0x2cae) recordBytes,word (state+0x2ce8) 156,poison (destination+0x1d3c) 832])
+       ,wordsAt (stateBase+0x250c+117*12) [164,16,7]
+       ,wordsAt (stateBase+0x2c54) [if invalidDescriptor then 0 else 16,74,90,74]
+       ,bytes (stateBase+0x2c64) recordBytes,word (stateBase+0x2c6e) 0xffffffff,word (stateBase+0x2c9e) 82
+       ,bytes (stateBase+0x2cae) recordBytes,word (stateBase+0x2ce8) 156,poison (destination+0x1d3c) 832])
       [word (destination+0x1d38) 1,word (destination+0x1d3c) 1,word (destination+0x1d40) 0x11223344,half (destination+0x1d44) 3
        ,bytes (destination+0x1d46) [97,98,99,165],word (destination+0x1d68) 0x55667788,bytes (destination+0x1d6c) [1,2,3,4,5,6,7,8]
        ,half (destination+1420) 0xffff,bytes (destination+0xe898) [11,22,33,44,55,66,77,88],half (destination+0x6e) 321] Nothing

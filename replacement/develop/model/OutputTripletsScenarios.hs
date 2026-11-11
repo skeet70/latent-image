@@ -54,12 +54,12 @@ bytes address = Patch (Address address) . B.pack
 scenarios :: B.ByteString -> (StagePublication -> Address) -> [StageScenario]
 scenarios image _ = gammaCases ++ pixelCases ++ transformCases ++ bandCases ++ scaleCases ++ rateCases ++ formatCases ++ selectedFormatCases ++ scalarCases ++ stampThresholdCases ++ calibrationDataCases ++ inactiveTripletCases ++ tuningCases ++ activeCalibrationCases ++ overlayCases ++ outputNotificationCases ++ outputBypassCases ++ stampCases ++ previewSnapshotCases
  where
-  pixelPublication = head publications
+  pixelPublication = case publications of (publication:_) -> publication; [] -> error "no pixel triplet publication"
   gammaPublication = publications !! 1
   make name publication arguments initial final result = StageScenario
     (StageCaseName name) publication arguments initial final result [] []
-  gammaTable maximum offset = Patch (Address 0x009b0000)
-    (B.pack (1 : replicate 9 0) <> halves ([0,100..2700] ++ [offset,maximum]))
+  gammaTable maximumValue offset = Patch (Address 0x009b0000)
+    (B.pack (1 : replicate 9 0) <> halves ([0,100..2700] ++ [offset,maximumValue]))
   gammaCases =
     [make ("gamma-segment-" ++ show segment ++ "-offset-" ++ show offset) gammaPublication
       [segment * 64 + offset, 0x009b0000] [gammaTable 4095 0] [] (Just (segment * 300 + result))
@@ -222,7 +222,7 @@ scenarios image _ = gammaCases ++ pixelCases ++ transformCases ++ bandCases ++ s
           independent = Profile.ClampParameters (Profile.CalibrationValues 256 256 256) (Profile.CalibrationValues 32767 32767 32767) 0
           amplified = if exposure == 0 then bounded else Profile.scaleProfileValues (Profile.profileHistoryPercent image exposure) bounded
           (attenuated,attenuation) = if negative then Profile.negativeProfileValues image (-33) (Profile.CalibrationValues 100 200 300) amplified else (amplified,0)
-          result = Profile.clampedValues (Profile.clampProfileValues (Profile.IndependentClamp 3) independent attenuated)]
+          result = Profile.clampedValues (Profile.clampProfileValues (Profile.clampMode 3) independent attenuated)]
   overlayRegistry ready =
     [wordsAt 0x0061c004 [0x009b5000],wordsAt 0x009b5000 [0x009b5100]
     ,wordsAt 0x009b5100 [0,0,0,0,1,200,2,0,0,0,ready,201,0xffffffff,0,0,0,0,0]]

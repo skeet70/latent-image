@@ -17,7 +17,7 @@ import Data.Bits ((.&.), (.|.), shiftL, shiftR)
 import qualified Data.ByteString as B
 import Data.Int (Int32)
 import Data.Word (Word32)
-import PipelineModel
+import PipelineModel hiding (Plane (..), planeWords, planePatch)
 import Scenarios (Address (..), Patch (..), word, wordsAt)
 
 publication :: Word32 -> String -> StagePublication

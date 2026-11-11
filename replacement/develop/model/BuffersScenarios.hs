@@ -18,6 +18,7 @@ cropWords c = [cropWidth c,cropHeight c,cropTop c,cropBottom c,cropLeft c,cropRi
 expandPlanes :: Word8 -> Word32 -> Plane -> Plane -> [Plane]
 expandPlanes count parity source auxiliary = source : go 1 source
  where
+  go :: Int -> Plane -> [Plane]
   go i previous | i >= fromIntegral count = []
                 | otherwise = next : go (i+1) next
    where
@@ -32,6 +33,7 @@ expandPlanes count parity source auxiliary = source : go 1 source
 splitPlanes :: Word8 -> Plane -> Plane -> [Plane]
 splitPlanes count source auxiliary = source : go 1 source
  where
+  go :: Int -> Plane -> [Plane]
   go i previous | i >= fromIntegral count = []
                 | otherwise = next : go (i+1) next
    where

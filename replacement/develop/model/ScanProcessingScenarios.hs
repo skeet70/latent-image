@@ -58,7 +58,7 @@ halfBytes value = B.pack [fromIntegral value, fromIntegral (value `shiftR` 8)]
 halves :: Word32 -> [Word16] -> Patch
 halves address = Patch (Address address) . B.concat . map halfBytes
 blank :: Word32 -> Int -> Word8 -> Patch
-blank address length value = Patch (Address address) (B.replicate length value)
+blank address count value = Patch (Address address) (B.replicate count value)
 
 context, request, workspace, output, plane, profile, debug, scratch, configuration :: Word32
 context = 0x9a0000
@@ -136,7 +136,7 @@ emptyDiagnostics :: B.ByteString
 emptyDiagnostics = encode 0xd1c ([(0,wordBytes 0x53544644),(0xd18,wordBytes 0x4c414644)])
 
 encode :: Int -> [(Int,B.ByteString)] -> B.ByteString
-encode length fields = B.pack [value index | index <- [0..length-1]]
+encode count fields = B.pack [value index | index <- [0..count-1]]
   where value index = foldl (\prior (offset,bytes) -> if index >= offset && index < offset+B.length bytes then B.index bytes (index-offset) else prior) 0 fields
 
 preparedRequest :: B.ByteString

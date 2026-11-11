@@ -38,7 +38,7 @@ operationPredicatesScenarios = formatCases ++ planeCases ++ halfCases ++ constan
     , (group,value,expected) <- [(accepted,0,0),(accepted,1,1),(accepted,2,0),(accepted,0xffffffff,0),(0,1,0)]]
   halfCases = [fixture 0xea2890 "halfword_mode_split" (show (group,value)) group
     [Patch (Address (state+0x1682)) (B.pack [fromIntegral value,fromIntegral (value `div` 256),0xa5,0x5a])] expected
-    | (group,value,expected) <- [(0x1a,0,0),(0x1a,1,1),(0x1a,257,0),(0x1b,0,1),(0x1b,1,0),(0x1b,65535,1),(0,1,0)]]
+    | (group,value,expected) <- ([(0x1a,0,0),(0x1a,1,1),(0x1a,257,0),(0x1b,0,1),(0x1b,1,0),(0x1b,65535,1),(0,1,0)] :: [(Word32,Word32,Word32)])]
   constantCases = [fixture 0xea28e8 "never" (show group) group [] 0 | group <- [0,0x19,0xffffffff]]
   featureCases = concat
     [ cases 0xea2964 "feature_enabled" [(0,0,0),(0,1,1),(0,2,0),(0xffffffff,1,1)] 0x2fb8
