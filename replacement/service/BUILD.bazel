@@ -13,7 +13,12 @@ xm1_rust_rlib(
     crate_name = "service",
     out = "libservice.rlib",
     data = [":module"],
-    rustc_flags = ["-C", "target-feature=+strict-align"],
+    rustc_flags = [
+        "-C",
+        "target-feature=+strict-align",
+        "-C",
+        "llvm-args=-min-jump-table-entries=4096",
+    ],
     visibility = ["//replacement/bank:__pkg__"],
 )
 

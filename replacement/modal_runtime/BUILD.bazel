@@ -47,6 +47,8 @@ xm1_rust_rlib(
         "target-feature=+strict-align",
         "--cfg",
         "rb_modal75_owned",
+        "-C",
+        "llvm-args=-min-jump-table-entries=4096",
     ],
     visibility = ["//replacement/bank:__pkg__"],
 )
