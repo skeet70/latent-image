@@ -1,0 +1,135 @@
+{
+  "schema": 1,
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "extent_source": "decomp/firmwares/xm1-150/function-ranges.json",
+  "stock_image": "private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin",
+  "functions": [
+    {
+      "entry": "0x64e918",
+      "end_exclusive": "0x64eb20",
+      "size": 520,
+      "pinned_name": "FUN_0064e918",
+      "pinned_sha256": "fadd1e9211aa1e156fcc4ad5b88d2e4b72df3e532d66d8ef1d1ac94a21183d27",
+      "raw_sha256": "fadd1e9211aa1e156fcc4ad5b88d2e4b72df3e532d66d8ef1d1ac94a21183d27",
+      "pinned_hash_matches_raw": true
+    },
+    {
+      "entry": "0x65722c",
+      "end_exclusive": "0x657384",
+      "size": 344,
+      "pinned_name": "driver_allocate_handle",
+      "pinned_sha256": "586895bacfe3ad6ed738b7bd629ca35dc07e037a21884e0f2e1f90272248fa7f",
+      "raw_sha256": "586895bacfe3ad6ed738b7bd629ca35dc07e037a21884e0f2e1f90272248fa7f",
+      "pinned_hash_matches_raw": true
+    },
+    {
+      "entry": "0x723870",
+      "end_exclusive": "0x7239a0",
+      "size": 304,
+      "pinned_name": "dispatch_configure_handle_mode_copy",
+      "pinned_sha256": "33bdbfa384256bc7809ddfc6cbf8b5f1f7e34fcdba25523e6fad07115017f24d",
+      "raw_sha256": "33bdbfa384256bc7809ddfc6cbf8b5f1f7e34fcdba25523e6fad07115017f24d",
+      "pinned_hash_matches_raw": true
+    },
+    {
+      "entry": "0x69e3a4",
+      "end_exclusive": "0x69e404",
+      "size": 96,
+      "pinned_name": "FUN_0069e3a4",
+      "pinned_sha256": "d5455c3b52d4a8f27e473a56f24f3173e303021687c6d486385158ea38a46184",
+      "raw_sha256": "d5455c3b52d4a8f27e473a56f24f3173e303021687c6d486385158ea38a46184",
+      "pinned_hash_matches_raw": true
+    },
+    {
+      "entry": "0x6a0210",
+      "end_exclusive": "0x6a02ac",
+      "size": 156,
+      "pinned_name": "FUN_006a0210",
+      "pinned_sha256": "4c3c16a164a54f9ceab3a4a3f94c39849becd1bae214b22ba1e3948e4bb1f8da",
+      "raw_sha256": "4c3c16a164a54f9ceab3a4a3f94c39849becd1bae214b22ba1e3948e4bb1f8da",
+      "pinned_hash_matches_raw": true
+    },
+    {
+      "entry": "0x69e358",
+      "end_exclusive": "0x69e3a4",
+      "size": 76,
+      "pinned_name": "FUN_0069e358",
+      "pinned_sha256": "5f3f2f89d4dd8609dd24f5b66341385c8c458cc466f0d66a43935f59c9eaf75e",
+      "raw_sha256": "5f3f2f89d4dd8609dd24f5b66341385c8c458cc466f0d66a43935f59c9eaf75e",
+      "pinned_hash_matches_raw": true
+    },
+    {
+      "entry": "0x69e188",
+      "end_exclusive": "0x69e2a0",
+      "size": 280,
+      "pinned_name": "FUN_0069e188",
+      "pinned_sha256": "a182ae9d0c0ffe44ceca0283d95759475ee2f7eefa6b540fd4e51122c1ac5df2",
+      "raw_sha256": "a182ae9d0c0ffe44ceca0283d95759475ee2f7eefa6b540fd4e51122c1ac5df2",
+      "pinned_hash_matches_raw": true
+    },
+    {
+      "entry": "0x64eb20",
+      "end_exclusive": "0x64ebd0",
+      "size": 176,
+      "pinned_name": "FUN_0064eb20",
+      "pinned_sha256": "7f8b5f37c59e3d347c5e66ff10822ebb4e9366e72f6f8df5249d90751902bad1",
+      "raw_sha256": "7f8b5f37c59e3d347c5e66ff10822ebb4e9366e72f6f8df5249d90751902bad1",
+      "pinned_hash_matches_raw": true
+    },
+    {
+      "entry": "0x657384",
+      "end_exclusive": "0x65744c",
+      "size": 200,
+      "pinned_name": "driver_find_handle",
+      "pinned_sha256": "906044b5d122e5b38be1c45ff5cdc3a443efed825b96ed816f0f7a81d4d1ad57",
+      "raw_sha256": "906044b5d122e5b38be1c45ff5cdc3a443efed825b96ed816f0f7a81d4d1ad57",
+      "pinned_hash_matches_raw": true
+    },
+    {
+      "entry": "0x65744c",
+      "end_exclusive": "0x6574b4",
+      "size": 104,
+      "pinned_name": "FUN_0065744c",
+      "pinned_sha256": "c4bb3980c11c048de8e422ded354347ee9cf6040dc314cd40f01e5e02b22b435",
+      "raw_sha256": "c4bb3980c11c048de8e422ded354347ee9cf6040dc314cd40f01e5e02b22b435",
+      "pinned_hash_matches_raw": true
+    },
+    {
+      "entry": "0x7239a0",
+      "end_exclusive": "0x723a14",
+      "size": 116,
+      "pinned_name": "peripheral_prepare_interface_handle",
+      "pinned_sha256": "a3289c4f01f5d1e363a0be26542611a2e2c17553d8f23ceb234d44ae75c2070b",
+      "raw_sha256": "a3289c4f01f5d1e363a0be26542611a2e2c17553d8f23ceb234d44ae75c2070b",
+      "pinned_hash_matches_raw": true
+    }
+  ],
+  "semantics": {
+    "0x64e918": "Validate source0..122 and handler nonzero; read route triplets7c9124, validate slot0..127/priority0..15/trigger0..3. Reserve route slot under nested critical, increment shared token409c2804 wrapping and skipping zero or collisions across128 handles940e9c. Busy slot returns-20 plus diagnostic2,15. Under second critical install IRQ, write companion source94109c and return handle. Install failure maps-255 and preserves reservation/source.",
+    "0x723870": "RTOS interface critical164; configure160 with five words[0,handler,priority,polarity,mode]; enable158; restore168; always return0. Trigger0 maps0,2; trigger1 maps0,1; trigger2 maps1,2; trigger3 maps1,1.",
+    "0x69e3a4": "Unregister callback token89f7ac; wait semaphore66 infinite; clear9552f4; signal66; encode flags0,1,0 into packet1,2 and transmit. Final transport status is returned.",
+    "0x6a0210": "When89f7c8 nonzero send3501 with timer0, clear registration only on success. Each of five slots93c4f4+8*i has separate global interrupt critical section. Nonzero handles released and cleared even on release error. OR statuses; return0 or-1.",
+    "0x64eb20": "Search128 handles940e9c. Zero or missing returns-20. Prepare matching interface; map failure-255; set companion940e9c+512+4*i toFFFFFFFF and clear handle even on prepare failure. Not heap free.",
+    "0x69e188": "Open serial10 mode2 before MMIOfff892c4=40004; configure100; send bytes and poll state1/nonzero available until response. Between bytes delay200 four times. Final delay40, stop then close, OR status. Always restore pin40000."
+  },
+  "serial_write_residue": {
+    "status_buffer_invariant": "Successful owned open installs a unique nonzero private handle and phase1. Configure only changes1to2; write/status/read/delay retain handle and nonzero phase. Other reserve rejects occupied channel; only close with the private handle clears it, after this transaction finishes polling. Thus every charge-loop status call resolves and writes all seven output words. Native status uses uninitialized output storage with no zero fallback. This requires all serial producers to respect private handle ownership and no external direct RAM mutation.",
+    "meaning": "Full incoming stack word at64c4e0 entrySP-20, loaded64c554 before OR3311. It is not a register-residue argument.",
+    "first_byte_success": "69e188 configure64bf40 uses same entrySP as following64c4e0.64c0c0 writes[r11-16] from endpoint10 GPIO select, value0.64bf40 returns0 after that write. Native config success supplies StatusResidue(0).",
+    "first_byte_config_failure": "Before configure, successful endpoint10 open leaves channel0 semaphore0x15 at shared stack slot.64bf40 error branches precede64c0c0 and preserve that slot. Native config failure supplies StatusResidue(0x15).",
+    "later_bytes": "69e238..69e254 performs four delay200 calls before next byte.723ffc hasr11=entrySP-4;724010 readsfff91004 and724014 stores that exact timer reload at[r11-16]. No later instruction in723ffc overwrites the slot. The fourth delay return is carried as full StatusResidue, including all bits not forced byOR3311.",
+    "boundary": "xm1_power_delay_us_with_residue returns the same initial hardware timer reload used for delay. No second hardware read and no mask or zero fallback.",
+    "native_write": "xm1_power_serial_write_with_residue(handle,byte,residue) receives explicit source-bound word. Generic entry-stack capture shim is not used by charge."
+  },
+  "shared_owners": {
+    "rtos_cyclic": "7256c4/xm1_app_unregister_callback",
+    "osal.rs": "724b68,724c00,7235d8,7236b0,723ffc",
+    "serial_native.rs": "64a65c,64bf40,64c4e0,64d29c,64d1f0,64c1cc,64bd1c",
+    "device_timer_release.rs": "6b79b8 and queue37 consumer"
+  },
+  "retained_boundaries": [
+    "Actual MMIOfff892c4 charge pin",
+    "Existing owned RTOS interface dispatch for7239a0 methods1618,164,15c,160,168 and723870 methods1618,164,160,158,168"
+  ],
+  "verification": "Source evidence extracted only; no build/test/lint/formatter/device execution."
+}

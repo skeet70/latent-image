@@ -1,0 +1,532 @@
+{
+  "schema_version": 1,
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "stock_image": "private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin",
+  "stock_load": "0x0061c400",
+  "source_only": true,
+  "cpu_shutdown_closed": false,
+  "admitted": false,
+  "abi": {
+    "power_vg_release_output": "unsafe extern C fn() -> i32",
+    "release_output": "unsafe fn() -> Result<(), ReleaseError>",
+    "release_vglib": "unsafe fn(Option<unsafe extern C fn(i32)>) -> i32",
+    "consume_release_message": "unsafe fn(*const u32); task73 command0x5901 only"
+  },
+  "stock_behavior": {
+    "reference_byte": "0x00955b2c",
+    "nonfinal_status": -12,
+    "secondary_selection": "word0x955b20 == 0 && word0x955b08 == 1",
+    "returned_status": "display stop status; VGLIB completion status and route status ignored",
+    "vgl_reference_count": "0x008fa5dc wrapping32-bit decrement",
+    "completion_flag": "byte0x008fa7e0",
+    "completion_status": "word0x008fa5f8",
+    "wait": "repeat real delay5 while completion byte0; no timeout",
+    "completion_message": "task73 command0x5901 payload4-byte actual api_complete pointer",
+    "completion_actions": [
+      "0x006d7438 real context and12surface teardown",
+      "0x006d6fb4 actual waiter delivery"
+    ],
+    "route": "0x006499d0(0x304,0x15,0), channel3 request21 and37 request scan"
+  },
+  "raw_extents": [
+    {
+      "address": "0x006499d0",
+      "size": 224,
+      "name": "FUN_006499d0",
+      "raw_sha256": "1535dcb1a27d6cb67f1fa7ccd31d6b52baef728f7c574709e2feaa5ddf10cbb2"
+    },
+    {
+      "address": "0x00649ddc",
+      "size": 564,
+      "name": "FUN_00649ddc",
+      "raw_sha256": "a9dd33460b1b170391778733820db1fa00638743b1280a28e707cb7cb7c0727a"
+    },
+    {
+      "address": "0x0064a0bc",
+      "size": 360,
+      "name": "FUN_0064a0bc",
+      "raw_sha256": "929aaea7576732a9a8008b87ba04f9f0de4fbab3c22ecaf741af806a7341b884"
+    },
+    {
+      "address": "0x0064a224",
+      "size": 1008,
+      "name": "FUN_0064a224",
+      "raw_sha256": "5020375e1deb3f9dcecccdef35fc4da80c4bf6a5f1ad6bbcd9d72b6311c896d4"
+    },
+    {
+      "address": "0x00657384",
+      "size": 200,
+      "name": "driver_find_handle",
+      "raw_sha256": "906044b5d122e5b38be1c45ff5cdc3a443efed825b96ed816f0f7a81d4d1ad57"
+    },
+    {
+      "address": "0x0065744c",
+      "size": 104,
+      "name": "FUN_0065744c",
+      "raw_sha256": "c4bb3980c11c048de8e422ded354347ee9cf6040dc314cd40f01e5e02b22b435"
+    },
+    {
+      "address": "0x006c6d6c",
+      "size": 116,
+      "name": "FUN_006c6d6c",
+      "raw_sha256": "79b10c997d22c70fdb696dbe6f76a98fb85aa372319f09ace0a5cac675fea888"
+    },
+    {
+      "address": "0x006c6de0",
+      "size": 208,
+      "name": "FUN_006c6de0",
+      "raw_sha256": "9574d0e437eca5b3b722a502f818a2f6508cb8dc9e2719a79cd9174a82b7ab9d"
+    },
+    {
+      "address": "0x006c75f0",
+      "size": 200,
+      "name": "FUN_006c75f0",
+      "raw_sha256": "607bfca12a48c9ffd7f0b96dfb8042331fb7b41b96add8a5aed93b8cd6dbca07"
+    },
+    {
+      "address": "0x006c7b34",
+      "size": 20,
+      "name": "hdmi_bridge_noop_00960508",
+      "raw_sha256": "06923057baae437a94c3b2f5904ebc40a3d725722555328069576625b3fe02c8"
+    },
+    {
+      "address": "0x006c86d4",
+      "size": 20,
+      "name": "display_engine_noop_00961094",
+      "raw_sha256": "06923057baae437a94c3b2f5904ebc40a3d725722555328069576625b3fe02c8"
+    },
+    {
+      "address": "0x006c8e74",
+      "size": 116,
+      "name": "FUN_006c8e74",
+      "raw_sha256": "081faa3d46dd53b897a5472b3dd68c4923d79cd7544f994d068f19d62b02b672"
+    },
+    {
+      "address": "0x006c8ee8",
+      "size": 80,
+      "name": "display_release_reset",
+      "raw_sha256": "c250fd437413ebc6c11e38b2d8d96c8bb2dae365ee9cd21774372e7588fda29e"
+    },
+    {
+      "address": "0x006c9160",
+      "size": 180,
+      "name": "FUN_006c9160",
+      "raw_sha256": "d45f54ae0daac5d1be944a1c7577e7128d73544e050b273b71d9c2db2103d104"
+    },
+    {
+      "address": "0x006cc054",
+      "size": 304,
+      "name": "FUN_006cc054",
+      "raw_sha256": "17a2b3a203c250dce789c78f52bd18722161ff62fa4ea78612e0ee1f4d2819e0"
+    },
+    {
+      "address": "0x006ce2c4",
+      "size": 24,
+      "name": "FUN_006ce2c4",
+      "raw_sha256": "aab533f64e7d3f50628f3b74c122bcfaae90f7a06e1282e0e04e4d03d9706543"
+    },
+    {
+      "address": "0x006cee00",
+      "size": 112,
+      "name": "FUN_006cee00",
+      "raw_sha256": "41a29d7abc1dea98d7e7c976390eb3da1232ba244af75e458be589b06cad6fcc"
+    },
+    {
+      "address": "0x006cee70",
+      "size": 108,
+      "name": "FUN_006cee70",
+      "raw_sha256": "eaf8107ee1fab4a37859724d9646e7a56a589646be8a34b214bbfe7a0c76a96c"
+    },
+    {
+      "address": "0x006ceedc",
+      "size": 116,
+      "name": "FUN_006ceedc",
+      "raw_sha256": "d68bbd46a6031521c644ddf7e463482d956e885ed81edeaf19df64c21559a7ab"
+    },
+    {
+      "address": "0x006cf2f8",
+      "size": 160,
+      "name": "FUN_006cf2f8",
+      "raw_sha256": "2abf451e3872762130887703573e4c87941058710416258ab139695a2bd09c98"
+    },
+    {
+      "address": "0x006d481c",
+      "size": 24,
+      "name": "lcdevf_backend_constant_c",
+      "raw_sha256": "aab533f64e7d3f50628f3b74c122bcfaae90f7a06e1282e0e04e4d03d9706543"
+    },
+    {
+      "address": "0x006d6fb4",
+      "size": 88,
+      "name": "FUN_006d6fb4",
+      "raw_sha256": "11cab75d809e404b9fdbaf2dbf97e316bafe6d272c27d222fc350d42008973e2"
+    },
+    {
+      "address": "0x006d7438",
+      "size": 220,
+      "name": "render_release_context",
+      "raw_sha256": "e8afd444943610b5503bfb5b4c921cd59390bbc29a205e6ef61ef3a6625921a1"
+    },
+    {
+      "address": "0x006d7f48",
+      "size": 64,
+      "name": "vglib_post_message",
+      "raw_sha256": "0041f17fd32d069daaf36fff7caeefb3cc4c74b920bdc973317fbfd84f79ff33"
+    },
+    {
+      "address": "0x006d8094",
+      "size": 52,
+      "name": "vglib_send_completion",
+      "raw_sha256": "60fee0253c15b7e9662fc4b3e2416ea9d586f943cb2f84be37216c3af3138aa8"
+    },
+    {
+      "address": "0x006d8e90",
+      "size": 52,
+      "name": "vglib_cache_clear_active",
+      "raw_sha256": "fec9f4e7b6c14934213dc3a57e9ca5cb62debc82d86f2ab2a473c46a835cd25f"
+    },
+    {
+      "address": "0x006d8ec4",
+      "size": 36,
+      "name": "vglib_list_initialize",
+      "raw_sha256": "416d7fb053a0d4723dc138fc70dbff1882aa23b462b558ae6a6262d586e8d7ca"
+    },
+    {
+      "address": "0x006d8ee8",
+      "size": 64,
+      "name": "vglib_list_clear",
+      "raw_sha256": "820a9574f6c68884adf828fe6744a37c6e082c902004c91ff4b45a575564ca38"
+    },
+    {
+      "address": "0x006d8f28",
+      "size": 156,
+      "name": "FUN_006d8f28",
+      "raw_sha256": "d91f6634ba2235286b7a527432ed459044c56121134dec8eb32190ba98af4434"
+    },
+    {
+      "address": "0x006d8fc4",
+      "size": 104,
+      "name": "FUN_006d8fc4",
+      "raw_sha256": "292b6ce6f715106614cda37ef91d7c4951dad84fc32dc88bf427e101145f6418"
+    },
+    {
+      "address": "0x006d902c",
+      "size": 112,
+      "name": "vglib_list_remove",
+      "raw_sha256": "57d1ee115c172f260966c935e51bc06640b5f61ce57fc0cab4906d11d7747f09"
+    },
+    {
+      "address": "0x006d909c",
+      "size": 148,
+      "name": "vglib_list_find",
+      "raw_sha256": "125045daa3e9ed4774b43d86b7447d5ac24ac684ab4051940497ab1dfa386bcb"
+    },
+    {
+      "address": "0x006d91fc",
+      "size": 16,
+      "name": "vglib_groups_clear_active",
+      "raw_sha256": "c887a4de1c8c2083e4321eeab9fa10972b36bae9ccee7db4d6c1648209c26cec"
+    },
+    {
+      "address": "0x006d925c",
+      "size": 124,
+      "name": "FUN_006d925c",
+      "raw_sha256": "20417b08b3c0a3994da7407b1b2ddaa4522cfea95707a4ff7553453391fb52f9"
+    },
+    {
+      "address": "0x006d92d8",
+      "size": 216,
+      "name": "FUN_006d92d8",
+      "raw_sha256": "38503e4097fd44527db62987d721f3a0af9a9772d5b63b1def2a8457f982eac9"
+    },
+    {
+      "address": "0x006dc414",
+      "size": 64,
+      "name": "vglib_release_list_object",
+      "raw_sha256": "b916912b6689f742a9adc78c6ad047833ab486a4554206893a7a28ca00cc2462"
+    },
+    {
+      "address": "0x006dca18",
+      "size": 204,
+      "name": "FUN_006dca18",
+      "raw_sha256": "6cff5941d6bda7ee04b2a94729cefd0faa47ba29b5d2a1dc67083efd102cd54a"
+    },
+    {
+      "address": "0x0088fff0",
+      "size": 20,
+      "name": "graphics_native_shutdown",
+      "raw_sha256": "1cec01fafa51d901bb1be56373093165679d90cbece0dbd46d2b0fc8bee4f173"
+    },
+    {
+      "address": "0x00891084",
+      "size": 24,
+      "name": "graphics_platform_shutdown_stub",
+      "raw_sha256": "aab533f64e7d3f50628f3b74c122bcfaae90f7a06e1282e0e04e4d03d9706543"
+    },
+    {
+      "address": "0x0089cdc4",
+      "size": 32,
+      "name": "free",
+      "raw_sha256": "fca956deb0e0194c9086689ea6090abf69ccb238f58cceb7cf4cdc7f515d81f4"
+    }
+  ],
+  "range_index_gaps": [
+    {
+      "address": "0x006dbf6c",
+      "end_exclusive": "0x006dbf94",
+      "size": 40,
+      "evidence": "id4.dis196320-196329",
+      "role": "done-byte and status completion callback",
+      "index_coverage": false
+    }
+  ],
+  "owned_reuse": [
+    {
+      "symbol": "xm1_power_resource_route_request",
+      "owner": "power_lifecycle/resource_route.rs",
+      "stock": "0x6499d0/0x64a0bc/0x64a224",
+      "lifecycle_map": "resource_route_dependencies.json"
+    },
+    {
+      "symbol": "xm1_power_resource_release",
+      "owner": "power_lifecycle/resource_registry.rs",
+      "stock": "0x649ddc",
+      "lifecycle_map": "resource_registry_dependencies.json"
+    },
+    {
+      "symbol": "xm1_power_interrupt_lock/xm1_power_interrupt_unlock",
+      "owner": "power_lifecycle/osal.rs",
+      "stock": "0x7235d8/0x7236b0"
+    },
+    {
+      "symbol": "NativeShutdownRtos::post/current_task",
+      "owner": "power_lifecycle/shutdown_rtos.rs",
+      "stock": "0x72503c/0x723cb8"
+    },
+    {
+      "symbol": "xm1_power_delay_us",
+      "owner": "power_lifecycle/osal.rs",
+      "stock": "0x723ce8"
+    },
+    {
+      "symbol": "xm1_power_save_irq/xm1_power_restore_irq",
+      "owner": "power_lifecycle/native.S",
+      "stock": "0x42574/0x4257c"
+    },
+    {
+      "symbol": "xm1_power_timer_release_handle",
+      "owner": "PowerTimerCharge",
+      "stock": "0x64eb20"
+    },
+    {
+      "symbol": "xm1_heap_free_r",
+      "owner": "replacement/general_heap/src.rs",
+      "stock": "0x89e560; wrapper0x89cdc4 reads context at0x89c970"
+    }
+  ],
+  "unowned_software": [
+    {
+      "required_symbol": "power_owned_egl_bind",
+      "address": "0x0088b76c",
+      "name": "FUN_0088b76c",
+      "size": 2088,
+      "direct_software_callees": [
+        "0x88477c",
+        "0x8847d4",
+        "0x88480c",
+        "0x884838",
+        "0x88484c",
+        "0x884874",
+        "0x884a40",
+        "0x884a68",
+        "0x884eb0",
+        "0x885138",
+        "0x885190",
+        "0x8851c8",
+        "0x8851f4",
+        "0x88604c",
+        "0x886090",
+        "0x886130",
+        "0x886318",
+        "0x8865a0",
+        "0x886614",
+        "0x88dda8",
+        "0x88deac",
+        "0x88dfac",
+        "0x88e044",
+        "0x88e074",
+        "0x89120c",
+        "0x891548"
+      ],
+      "raw_sha256": "1dfca45ca49bbb0444116d131077ccb4b1e50e58f31fd7f1a9b91bee582b0e83"
+    },
+    {
+      "required_symbol": "power_owned_egl_destroy_surface",
+      "address": "0x00889688",
+      "name": "egl_destroy_registered_surface",
+      "size": 288,
+      "direct_software_callees": [
+        "0x884eb0",
+        "0x884f1c",
+        "0x88515c",
+        "0x8851f4",
+        "0x885adc",
+        "0x88604c",
+        "0x886090",
+        "0x8865a0",
+        "0x886614"
+      ],
+      "raw_sha256": "2b8f27ea9883ecf28c80d376b1accd1a0fc7965eab2bd78c178b611534a876c4"
+    },
+    {
+      "required_symbol": "power_owned_egl_destroy_context",
+      "address": "0x0088b64c",
+      "name": "egl_destroy_registered_context",
+      "size": 288,
+      "direct_software_callees": [
+        "0x8847a0",
+        "0x884838",
+        "0x884bb0",
+        "0x884eb0",
+        "0x884f1c",
+        "0x88604c",
+        "0x886090",
+        "0x8865a0",
+        "0x886614"
+      ],
+      "raw_sha256": "65b9f3deab3893bf357d637854755a8f70271e035bda3e28e4521947613e64d2"
+    },
+    {
+      "required_symbol": "power_owned_egl_terminate",
+      "address": "0x00887458",
+      "name": "egl_terminate_display",
+      "size": 616,
+      "direct_software_callees": [
+        "0x8847a0",
+        "0x884838",
+        "0x884bb0",
+        "0x884c18",
+        "0x884c9c",
+        "0x884d80",
+        "0x884f1c",
+        "0x884fcc",
+        "0x88515c",
+        "0x8851f4",
+        "0x885adc",
+        "0x88604c",
+        "0x886090",
+        "0x886130",
+        "0x886318",
+        "0x8865a0",
+        "0x886614",
+        "0x8873a8"
+      ],
+      "raw_sha256": "5ea26f4b502a7ac09b0f761ecd994648e453a736d8db55265ec27d8ed9641a26"
+    },
+    {
+      "required_symbol": "power_owned_egl_release_thread",
+      "address": "0x00889b64",
+      "name": "egl_release_current_thread",
+      "size": 400,
+      "direct_software_callees": [
+        "0x883490",
+        "0x885fd0",
+        "0x886090",
+        "0x886130",
+        "0x886318",
+        "0x8865a0",
+        "0x886614",
+        "0x8873a8",
+        "0x891548"
+      ],
+      "raw_sha256": "00675523d66fdcae40d926dfba041365b62281c07d1d57103e36e68f151ef1a3"
+    },
+    {
+      "required_symbol": "power_owned_vglib_destroy_object",
+      "operation": "dispatch object.operations+0xa4 to source-owned destructor; never invoke retained vtable code",
+      "known_destructor_roots": [
+        {
+          "address": "0x6d8798",
+          "size": 68,
+          "direct_software_callees": [
+            "0x85b448",
+            "0x886d1c"
+          ]
+        },
+        {
+          "address": "0x6d94ac",
+          "size": 188,
+          "direct_software_callees": [
+            "0x85a3e0",
+            "0x85af48",
+            "0x89cdc4"
+          ]
+        },
+        {
+          "address": "0x6d9fe0",
+          "size": 180,
+          "direct_software_callees": [
+            "0x85a3e0",
+            "0x85af48",
+            "0x89cdc4"
+          ]
+        },
+        {
+          "address": "0x6dadb8",
+          "size": 188,
+          "direct_software_callees": [
+            "0x85a3e0",
+            "0x85af48",
+            "0x89cdc4"
+          ]
+        }
+      ],
+      "dynamic_target_set_closed": false
+    }
+  ],
+  "integration_gaps": [
+    "Task73 receiver/registration must route0x5901 to consume_release_message; existing stock task6d7540 is not an owned consumer.",
+    "Other task73 initialization/parameter messages and in-flight transition ordering remain outside this module.",
+    "GraphicsRuntime two-buffer Publisher is not equivalent to retained12 EGL surfaces and VGLIB object clients.",
+    "Five EGL imports and the VGLIB destructor import have no implementations in this source unit."
+  ],
+  "device_boundaries": [
+    {
+      "addresses": [
+        "0xfff6b000",
+        "0xfff6e000"
+      ],
+      "operation": "selected display register clear, real bit16 reset handshake; wait for actual register bit16, then restore saved control|bit16",
+      "retained_software_thunk": false
+    },
+    {
+      "addresses": [
+        "0xfff8800c"
+      ],
+      "operation": "channel3 routing source field low3bits, IRQ save/restore",
+      "retained_software_thunk": false
+    },
+    {
+      "addresses": [
+        "0xfff8802c",
+        "0xfff88030"
+      ],
+      "operation": "registration-gated clock mask removal, skip device access when word0x4089e810==0x19790515",
+      "retained_software_thunk": false
+    }
+  ],
+  "elided_proven_noops": [
+    "0x6c7b34",
+    "0x6c86d4",
+    "0x6ce2c4",
+    "0x6d2fd0 -> 0x6d481c",
+    "0x88fff0 -> 0x891084"
+  ],
+  "verification": {
+    "build": false,
+    "tests": false,
+    "lint": false,
+    "formatter": false,
+    "camera_writes": false
+  }
+}

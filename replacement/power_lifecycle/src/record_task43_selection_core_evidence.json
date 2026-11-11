@@ -1,0 +1,37 @@
+{
+  "target": "Fujifilm X-M1 1.50 IMAGE5",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_files": [
+    "app/control/af/profile/selection_core.c",
+    "app/control/af/profile/tu_00f14eac.c",
+    "app/control/af/profile/tu_00f14eac_exact.c",
+    "app/control/af/profile/tu_00f15300.c",
+    "app/capture/record/tu_00f03368.c"
+  ],
+  "instruction_evidence": "X-M1 IMAGE5 id5.dis f14c20..f156d3",
+  "owned_extent": { "start": "0x00f14c20", "end_exclusive": "0x00f156d4" },
+  "excluded_extent": "SelectionTiming owns f156d4..f1667b and its selection_lists module",
+  "native_state": [
+    { "address": "0x0169d508", "effects": "request bits in byte 0, remaining count in byte 1, pending latch in byte 2" },
+    { "address": "0x0169d370", "effects": "saved selection input reads at offsets 10,14,18,1c hex" },
+    { "address": "0x016a049c", "effects": "callback signals the task flag handle read at offset 8" },
+    { "address": "0x00954dbc", "effects": "selection parameter word read" }
+  ],
+  "interface_notes": [
+    "f14c20 copies source offset 4 into destination offset c, despite the transferred name saying offset 8",
+    "f14f7c replaces the second flag with 1; the other flag combiners OR it",
+    "f15264 and f15278 are actual no-effect returns",
+    "f15070 writes a halfword followed by an aligned word; unused padding is normalized to zero",
+    "All callback references use Rust symbols, not retained firmware PCs"
+  ],
+  "external_owners": {
+    "PowerRecordProfileAccessors": ["75a210", "75a960", "75a7c4", "7503ec", "76d9a8", "76da38", "76dba4", "76d9c8"],
+    "profile_shared_accessors": ["756840", "756878", "756b74"],
+    "RecordLensScheduleCpu": ["76ddb0", "76dd24", "76de3c", "76dec8", "76df7c", "76e008", "76e1ac", "76ffec", "76dbe4", "76dc90"],
+    "selection_common": ["f14b8c", "f14b50", "f14b14", "f14be4", "f14bc8", "f14ae4"],
+    "record_completion_services": ["ef9cc4", "ef9ce0", "ef9b50", "ef9b6c", "ef9ca8", "ef9e30", "ef9ff0", "ef9b88", "ef9ba4", "ef9bc0", "efb194", "efb1dc", "efb6ac", "efb104", "efb604", "efb654", "efa348", "efa3a8", "ef9a94", "ef7d1c"],
+    "existing_diagnostics": ["xm1_power_configuration_byte"]
+  },
+  "integration_dependencies_requiring_owner_confirmation": ["76f420", "f3bf24", "f221b0", "fa8018", "fea468", "740b18", "74046c", "740404", "742054", "742a6c", "724558"],
+  "verification": "Not run: assignment prohibits builds, tests, lint, format, native, SDK, guest, and camera runs"
+}

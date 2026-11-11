@@ -1,0 +1,41 @@
+{
+  "pin":"55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "pin_repository":"/var/home/murph/Code/x70view",
+  "pinned_source":"decomp/firmwares/xm1-150/app/platform/osal/software_delay_channel_start.c",
+  "raw_image":"private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin",
+  "raw_origin":"0x61c400",
+  "extent_convention":"half-open addresses; SHA256 of actual raw bytes",
+  "extents":[
+    {"name":"delay_start","start":"0x69b9c4","end":"0x69bdc0","sha256":"a638fae0f7dbcef42e5cd0c3890005d103fc2c4079ef1ed04c8c7beef9a792d5","disassembly":"id4.dis:130422-130676"},
+    {"name":"delay_tick","start":"0x69c03c","end":"0x69c244","sha256":"297184b119ad98c0d73100b00025617d48838083738a2b23ab94d3a9d029ddb1","disassembly":"id4.dis:130836-130965"},
+    {"name":"semaphore_create","start":"0x7247ac","end":"0x724974","sha256":"123948672abc1a1f78e7a7cfe2c5aebb882e5f7ef4b143658c3327e7675fa6e7","disassembly":"id4.dis:270576-270689"},
+    {"name":"semaphore_poll","start":"0x724ad8","end":"0x724b68","sha256":"3f817b4de3b99b690010847dbb52fea01edce74846706d786f208a534632758e","disassembly":"id4.dis:270779-270814"},
+    {"name":"task_lock","start":"0x723efc","end":"0x723f7c","sha256":"2f59e72445960c790da207ee9434d1b6d1f6282a3511e07f66b9e9f60c9a2a6f","disassembly":"id4.dis:270020-270051"},
+    {"name":"task_unlock","start":"0x723f7c","end":"0x723ffc","sha256":"ff6361ac08f7b8678b6de66bcf3cd8398db3c6ddcd8b8e5f118c8d3171e6a994","disassembly":"id4.dis:270052-270083"},
+    {"name":"set_priority","start":"0x723a14","end":"0x723acc","sha256":"24a319889cf448e9ccc5ff16707828629b5ca74ae3b3d56be8cce1ee1b61ddc3","disassembly":"id4.dis:269706-269751"},
+    {"name":"get_priority","start":"0x723acc","end":"0x723b84","sha256":"9b190f1ad5e94e9567653dd884087ae2a547a3893fdf83286e15a6c49f9708e1","disassembly":"id4.dis:269752-269797"},
+    {"name":"task_delay","start":"0x723ce8","end":"0x723d88","sha256":"7983ca8534cbb4802db6c83a8e42c6e94872ca39992ac9c0e306a8fdc23bfe8e","disassembly":"id4.dis:269887-269926"}
+  ],
+  "delay_state":{"base":"0x954de4","timer_offset":0,"task_stride":12,"task_semaphore_offset":4,"task_remaining_offset":8,"task_done_offset":12,"producer_tasks":"1..104"},
+  "behavior":[
+    "69b9c4 lazily allocates a semaphore with requested id0 and initial=max1, polls it even on allocation failure, then rejects failed allocation with-255",
+    "Under actual task dispatch lock723efc, clears task done, sets ceil(period*1000/2500) ticks plus one when timer already running; zero period always sets one",
+    "Starts real shared software timer with mode1 and owned delay tick callback, publishes timer token before active phase; unlocks dispatch through723f7c then waits on real semaphore forever",
+    "69c03c scans tasks1..104, decrements pending counts, signals actual semaphore at zero and marks done even if signal reports failure",
+    "Pending flag is set before count decrement, so shared software timer cancels on the tick after the final completion, not during that completion tick",
+    "No software timeout or synthetic completion path exists; every nonzero wait status maps-255",
+    "Task ids beyond104 are rejected before indexing the fixed delay state region"
+  ],
+  "osal_semantics":[
+    "723ce8(0) queries currentcore and invokes owned scheduler root+11c rotate-ready-queue(0), discards its result and returns0 as raw; nonzero ticks call root+4c actualtaskdelay, diagnosesoperation9 on error and returnsstatus",
+    "7247ac parameter0 is requested identifier, not initial count. Parameter1 supplies both initial and maximum count",
+    "Dynamic semaphore allocation descends from40a0f86c while candidate>168; core0class1,core1class2,othercore-63; publishes class93e6f4 and cursor under actual IRQ mask/restore",
+    "724ad8 encodes ids<=169 through class table93e6f4, larger ids forceclass1; polls actual kernel root+78, diagnoses nonzero except-50 as operation23",
+    "723efc/723f7c invoke actual owned scheduler root+140/+144, not interrupt mask; diagnose operations11/12 with current task",
+    "Despite exported phase names,723a14/723acc are actual task priority set/get through owned scheduler root+1c/+20, with task0 resolved through root+16c and class encoding7cad9c. Diagnostics5/60. No raw priority field writes"
+  ],
+  "modules":["software_delay_channel","osal_delay_primitives (ARM only)","osal_task_priority (ARM only)"],
+  "exports":["xm1_power_software_delay_start","xm1_power_software_delay_tick","xm1_power_semaphore_create","xm1_power_semaphore_poll","xm1_power_task_lock","xm1_power_task_unlock","xm1_power_set_task_phase","xm1_power_get_task_phase","xm1_power_task_delay"],
+  "owned_dependencies":["xm1_power_current_task","xm1_power_semaphore_wait","xm1_power_semaphore_signal","xm1_power_software_timer_start","xm1_power_software_timer_cancel","xm1_power_service_error","actual installed owned kernel interface table96bd20"],
+  "verification":"Source-only; no builds/tests/lint/formatters/commits/camera performed"
+}

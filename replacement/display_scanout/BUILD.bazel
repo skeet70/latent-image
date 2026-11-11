@@ -37,6 +37,22 @@ xm1_rust_elf(
     extra_ldflags = ["-Wl,--gc-sections", "-Wl,--orphan-handling=error"],
 )
 
+xm1_rust_staticlib(
+    name = "display-scanout-panel-rust",
+    src = "src/lib.rs",
+    crate_name = "xm1_display_scanout",
+    data = core_sources + ["//replacement/calibration_liveview:libcalibration_liveview"],
+    rustc_flags = ["--cfg", "'feature=\"panel\"'", "--extern", "calibration_liveview=$(location //replacement/calibration_liveview:libcalibration_liveview)"],
+)
+
+xm1_rust_elf(
+    name = "display-scanout-panel",
+    rust_staticlib = ":display-scanout-panel-rust",
+    entry = "xm1_scanout_commit",
+    link_script = "display-scanout-panel.ld",
+    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--orphan-handling=error"],
+)
+
 genrule(
     name = "host-calibration-library",
     srcs = ["//replacement/calibration_liveview:src/lib.rs", "//replacement/calibration_liveview:src/publication.rs"],

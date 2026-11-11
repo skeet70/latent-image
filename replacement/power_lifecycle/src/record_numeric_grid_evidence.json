@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "status": "source-inspected",
+  "firmware": "X-M1 1.50",
+  "x70view_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_units": ["app/control/motion/tu_00fa79b4.c", "app/control/motion/tu_00fa9588.c"],
+  "byte_inspection": "Pinned image5 ARM instructions fa816c-fa89b8, fa91b0-fa9320, fa95a8-fa992c and f52440-f525ec. Draft C is NONMATCHING for the numerical roots; instruction widths, arguments, history limits, signed arithmetic, ordering and profile offsets were read from these bytes.",
+  "scope": "256-cell motion differences and centroid, signed wrapping difference magnitude, iterative displacement estimate, speed and class histories, ordered setting-based filter selection, diagnostic initialization and physical-memory snapshot publication.",
+  "roots": ["fa8520", "fa95b8", "fa91b0", "fa898c"],
+  "owned_transitives": ["fa816c", "fa8188", "fa81a4", "fa81fc", "fa82c4", "fa82e0", "fa82fc", "fa8334", "fa8388", "fa83c0", "fa95a8", "f52440", "f5246c", "f524e4", "f5251c"],
+  "state": {
+    "grid": "0x016d8780",
+    "difference_grid": "0x016d8508",
+    "speed_history": "0x016d8ff4",
+    "class_history": "0x016d8764",
+    "snapshot": "0x5ffe6f80"
+  },
+  "corrected_draft_facts": [
+    "fa8334 accepts its class in r0; fa82fc normalizes it before insertion.",
+    "Grid diagnostic count, validity, rate, speed and filter fields are halfwords, not the draft's int-sized overlapping stores.",
+    "The centroid y denominator is count multiplied by the high halfword of 74ec30's result.",
+    "Differences truncate to signed 16 bits before absolute value; -32768 remains negative when compared to the threshold.",
+    "The speed history accumulates modulo 65536 before averaging and requires every requested entry to be initialized.",
+    "The profile is a 40-byte global snapshot. 7582c0 ignores r1. The grid updates its first word and halfword at offset4; the filter updates word16 and halfwords20/22.",
+    "The class histogram tie is resolved by four settings in their original call order.",
+    "Snapshot sample arrays widen signed halfwords into words, while histories and diagnostic halfwords widen unsigned.",
+    "Snapshot starts at output+4 and retains output+0 unchanged. The final speed is written at output+0x8d0."
+  ],
+  "providers": {
+    "69f8fc": "Canonical setting provider",
+    "7582c0": "ProfileSharedCpu 40-byte profile getter",
+    "758300": "ProfileSharedCpu profile publisher",
+    "74ec30": "ProfileAccessors packed dimensions",
+    "757254": "record_profile_shared_accessors duration selector",
+    "757ff0": "record_profile_shared_accessors duration sample record",
+    "1005f60": "record_task43_selection_clock canonical generic clock projection",
+    "f52440": "Owned diagnostic initialization word stores",
+    "f5251c": "Owned diagnostic buffers initialization",
+    "f5246c": "Owned diagnostic profile publication, preserving incoming profile argument",
+    "f524e4": "Owned conditional physical-memory diagnostic snapshot copy"
+  },
+  "memory": "One generic RecordContext<M,E> engine uses canonical GuestAddressSpace and direct canonical provider functions on HOST and ARM. Root-admitted GuestStack supplies scoped, uncleared guest scratch frames for actual profile getter/publisher buffers. No native-only engine, global shadow memory, CPU provider trait, retained PC, interpreter or raw host cast of guest pointers remains.",
+  "verification": "Source and instruction inspection only. No builds, tests, lint, formatter, SDK, guest or camera execution."
+}

@@ -1,0 +1,50 @@
+{
+  "scope": "X-M1 1.50 task43 recording active selections",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "baseline": "e366600b",
+  "source_paths": [
+    "decomp/firmwares/xm1-150/app/control/af/profile/adjustment_notifications.c",
+    "decomp/firmwares/xm1-150/app/control/af/area/selection_auxiliary_dispatch.c",
+    "decomp/firmwares/xm1-150/app/control/af/area/tu_00f2ff10.c",
+    "decomp/firmwares/xm1-150/app/control/motion/tu_00fa9588.c",
+    "decomp/firmwares/xm1-150/app/control/af/contrast/sample/rate_policy_keys.c"
+  ],
+  "byte_evidence": [
+    "private-data/analysis/x-m1-1.50/lz/id5.dis:845451-845480,845862-846040,846039-846211",
+    "private-data/analysis/x-m1-1.50/lz/id5.dis:964581-964650,965198-965228,965345-965373,967041-967205",
+    "private-data/analysis/x-m1-1.50/lz/id5.dis:1015991-1016000,1030784-1030787,1030891-1031120,1031175-1031233,1031324-1031363",
+    "private-data/analysis/x-m1-1.50/lz/id4.dis:293376-293382,300826-300838,313461-313477,315426-315442,323329-323358"
+  ],
+  "owned_entries": ["f32530", "f32558", "f32580", "f325a8", "f32cc0", "f32dd8", "f32e60", "f32e88", "f32f1c", "f32f60", "f32f80", "f3300c", "f330e4"],
+  "composed_cpu": ["fa7c60", "fa992c", "fa72bc", "f32bc4", "f32c74", "fea7bc", "ff5690", "ff6fc0", "fa95a8", "1005f60"],
+  "native_dependencies": [
+    "xm1_power_configuration_byte",
+    "xm1_power_record_helper_74e5c0",
+    "xm1_power_record_helper_750474",
+    "xm1_power_record_helper_75502c",
+    "xm1_power_record_helper_75516c",
+    "xm1_power_record_helper_7569a4",
+    "xm1_power_record_helper_757ff0",
+    "xm1_power_record_helper_758028"
+  ],
+  "state": {
+    "adjustment": "0x016be044: primary+1, secondary+2, first stage+3, second stage+4, handle+16",
+    "policy": "0x016d8778 byte first cursor, 0x016d877c word classification, 0x016d8ff0 byte pass, 0x016d8ff1 byte second cursor",
+    "history": "48-byte native profile record, ten entries and halfword count at40; trailing six bytes preserved",
+    "counter": "word0x016f672c",
+    "parameter164": "0x0169d22c"
+  },
+  "semantics": [
+    "No retained CPU calls or queued synthetic completions.",
+    "f325a8 returns the original u32 input carried unchanged in stock r0; its byte write truncates separately.",
+    "Stage7 unconditionally clears the addressed completion byte; other stages write only for status2.",
+    "Policy cursors and pass are bytes, classification is a word, and skipped stages do not reset the cursor.",
+    "The second-stage branch resets both cursors only when both local selections are7; a disabled first-stage branch leaves its local selection8.",
+    "Category membership scans at most eight table entries and stops on sentinel7.",
+    "Clock conversion accepts only source kinds2,3,5; rejected kinds preserve the output word and return133.",
+    "The selected clock projection implements the first output of1005d0c for kinds2,3,5; its other kinds cannot reach1005f60's conversion branch.",
+    "Ignored clock errors preserve an unwritten native stack word rather than installing a synthetic zero value.",
+    "Clock multiplication uses u32 wrapping before division, tenths round upward at remainder5 then clear the low bit, and rate conversion truncates to16 bits."
+  ],
+  "qualification": "Source and host inspection only. No builds, tests, lint, formatter, SDK, guest execution or camera I/O. Parent owns ARM module registration, build graph, integration and verification."
+}

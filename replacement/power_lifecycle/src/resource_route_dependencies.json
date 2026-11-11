@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_only": true,
+  "pinned_source": "decomp/firmwares/xm1-150/app/drivers/isp/routes/output_route_initialization.c",
+  "raw_extents": [
+    {
+      "address": "0x006499d0",
+      "size": 224,
+      "name": "FUN_006499d0",
+      "raw_sha256": "1535dcb1a27d6cb67f1fa7ccd31d6b52baef728f7c574709e2feaa5ddf10cbb2"
+    },
+    {
+      "address": "0x0064a0bc",
+      "size": 360,
+      "name": "FUN_0064a0bc",
+      "raw_sha256": "929aaea7576732a9a8008b87ba04f9f0de4fbab3c22ecaf741af806a7341b884"
+    },
+    {
+      "address": "0x0064a224",
+      "size": 1008,
+      "name": "FUN_0064a224",
+      "raw_sha256": "5020375e1deb3f9dcecccdef35fc4da80c4bf6a5f1ad6bbcd9d72b6311c896d4"
+    }
+  ],
+  "abi": "unsafe extern C xm1_power_resource_route_request(u32,u32,u32)->i32",
+  "typed_api": "unsafe set_request(ResourceSelector,RequestSlot,RequestLevel)->Result<(),RouteError>",
+  "input_law": {
+    "request_slot_max": 36,
+    "request_level_max": 11,
+    "selector_low_byte_max": 18,
+    "channel": "bits8..15; no additional channel bound in6499d0",
+    "selector_high16": "discarded byactualu8extraction",
+    "failure_status": -30,
+    "validation": "inside canonical nestedcritical, before requestwrite"
+  },
+  "request_store": "0x409c1e30+160channel+0x5c+4slot",
+  "resolve": {
+    "minimum": "channelstate+0x58",
+    "requests": 37,
+    "operation": "unsignedmaximumofminimumandallrequests then unsignedminimumwithchannelstate+0x54"
+  },
+  "apply": {
+    "source_table": "0x007a20d4+4*(12channel+resolvedlevel)",
+    "unavailable_source": "0xffffffff -> -30, no cachedsource write",
+    "cachedsource": "channelstate+0xf0",
+    "cached_source_match": "no devicewrite; writescachedsource andreturns0",
+    "unsupported_channel": "ifchannel>9 andcachedsource differs, returns-30 after sourcecheck",
+    "request_rollback_on_error": false,
+    "source_value_masked": false,
+    "device_registers": {
+      "channels0through8": "0xfff88000+4channel; (old&~7)|source",
+      "channel9": "0xfff88024; (old&0x8fffffff)|(source<<28)"
+    },
+    "device_write_serialization": "xm1_power_save_irq/restore_irq insidecanonicalwholeoperationnestedcritical",
+    "successful_apply": "store resolvedlevel tochannelstate+0xf0"
+  },
+  "constructor": "resource_registry::xm1_power_resource_initialize_routes, startup-only, shared0x205words, neverresetonrequest",
+  "owned_dependencies": [
+    "xm1_power_interrupt_lock",
+    "xm1_power_interrupt_unlock",
+    "xm1_power_save_irq",
+    "xm1_power_restore_irq"
+  ],
+  "migrated_local_client": "vg_release.rs calls sharedcanonicalexportfor0x304/0x15/0",
+  "coordinated_peer_clients": [
+    "PowerAudioRelease0x90f/1/v",
+    "PowerAudioRelease0x202/10/v"
+  ],
+  "avout649ab0": "notimplementedhere; LiveViewDisplayOwnership.ScanoutCommitTyped owns panel_route.rs helper",
+  "verification": {
+    "build": false,
+    "tests": false,
+    "lint": false,
+    "formatter": false,
+    "camera_writes": false
+  }
+}

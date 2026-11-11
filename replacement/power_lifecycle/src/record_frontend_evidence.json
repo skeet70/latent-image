@@ -1,0 +1,35 @@
+{
+  "status": "source-inspected",
+  "target": "Fujifilm X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "image": "stream-002c025c",
+  "image_sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+  "modules": ["record_frontend", "record_frontend_native", "record_frontend_processor"],
+  "entries": ["fea468", "fea634", "fea6ac", "feab6c", "feaba8", "feabb8", "feac54", "feac84", "feacac", "feacd4", "feacfc", "fead0c", "fead28", "ffcfd0", "ffd04c", "ffd244", "ffd3a0", "ffde64", "ffde8c", "ed8af4"],
+  "source_units": ["app/capture/pipeline/capture_request_wrappers_rest.c", "app/capture/pipeline/tu_00fea36c.c", "app/capture/pipeline/tu_00fe044c.c", "app/capture/pipeline/capture_configuration_wrappers.c", "app/capture/pipeline/tu_00ffb534.c"],
+  "payloads": {
+    "3f46": {"length": 116, "copied_input_length": 108, "callbacks": ["fn(u32)", "fn(u32,u8)"]},
+    "3f2e": {"length": 44, "copied_input_length": 36, "callback": "fn(u32,u16,u32)", "padding": "zero-initialized"},
+    "3f47": {"length": 8, "copied_input_length": 4},
+    "3f4a": {"length": 12},
+    "3f4e": {"length": 20, "copied_input_length": 20},
+    "3f4f": {"length": 4, "callback": "fn(u32)"},
+    "3f16": {"length": 16},
+    "3f2f": {"length": 0}
+  },
+  "byte_confirmed_corrections": [
+    "feab6c copies 0x6c geometry bytes, then sends 0x74 bytes including two callbacks",
+    "fea634 consumes 36 input bytes; sends callback, input and a trailing unused word in 44 bytes",
+    "feacac preserves six arguments through ffde64 into ffd3a0",
+    "ffcfd0 writes the source pointer and copies optional 152-byte report and 216-byte metadata",
+    "ffd3a0 writes control offsets 0x24 and 0x28 when configuration is enabled"
+  ],
+  "function_sha256": {
+    "feab6c": "0b855a91162fbf8c00b9344f142731b784a8d5ccc0131f9ecff4913e3b73ecde",
+    "fea634": "d0ad7ec2afa43cd9d1201c749d54fdb3bfebabbd2a45e583a58c9afb13dc035a",
+    "ffd04c": "88285fd211e7d31fac64b352bd6986c1667e94dac1c4795d90db127520bf2984",
+    "ffd3a0": "8020a253cfb71aea1c56439a18a278f9c4fb741b1414a75ea890a4c907376344"
+  },
+  "execution": "Source-owned synchronous statistics processing and asynchronous messages sent through canonical fe9580. The outer capture dispatcher owns request copies and callback execution; no retained instruction address is invoked.",
+  "verification": "No builds, tests, formatters, native execution, SDK execution, guest execution or camera operations run."
+}

@@ -1,0 +1,67 @@
+{
+  "scope": "X-M1 1.50 recording controller90 capture request4 and poll11",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_repository": "x70view",
+  "evidence_class": "source-inspected and instruction-inspected, not runtime-qualified",
+  "source_files": [
+    "decomp/firmwares/xm1-150/app/capture/reccont/record_message_wrappers.c",
+    "decomp/firmwares/xm1-150/app/capture/reccont/tu_00dff914.c",
+    "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e374f4.c",
+    "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e39160.c",
+    "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e39160_exact.c"
+  ],
+  "image": {
+    "path": "private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin",
+    "base": "0x00bf1a00",
+    "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"
+  },
+  "instruction_windows": [
+    {"address": "0x00e00374", "size": "0x3d0", "sha256": "1df03f5ef12eeb62f7647d0acc4d5dda4de4d8e824ae44eb9030bc59f824e3a6"},
+    {"address": "0x00e38f5c", "size": "0x204", "sha256": "fd869c946a09fedc8f28d03a424e699a16ec42da1157a6fc82f673dfe01db8e3"},
+    {"address": "0x00e39160", "size": "0xcc8", "sha256": "acd5e26c0fdadc5478ea04e98431955fed6c921049f7af61ac270bd271e30275"},
+    {"address": "0x00deeae4", "size": "0x80", "sha256": "dcb4907c6df7ae929b5b628153e5a761e9f5a05f49ae5a9b02aff8a0f3618cfe"}
+  ],
+  "controller": {
+    "index": 90,
+    "state_count": 9,
+    "handler_table": "0x00e3b56c",
+    "transition_table": "0x00e3c7c0",
+    "request4_event": 5,
+    "request4_actions": [16, 12, 12, 12, 12, 12, 12, 12, 12],
+    "poll16_actions": [24, 23, 25, 26, 26, 27, 23, 23, 28],
+    "poll17_actions": [24, 29, 30, 31, 32, 33, 34, 35, 36],
+    "fallback18_actions": [12, 12, 12, 12, 12, 12, 12, 12, 12],
+    "state_storage": "0x01545850+0xb4",
+    "event_storage": "0x01545790+0xb4",
+    "request_result_storage": "0x01526a78+0x81f4"
+  },
+  "behavior": [
+    "Request4 preserves optional request fields, clears the scalar request value, executes the state0 start action before publishing controller state1, and defers in busy states.",
+    "Resource completion status0 produces actual task43 message1394; nonzero status uses the shared missing-state report.",
+    "Poll11 classifies the current task message before event17; an ordinary poll uses event16, and callback messages use events9 through15.",
+    "Controller state and request result are separate storage. Poll completion reloads controller state after receiver execution.",
+    "Settings retries preserve partial flags; resumed states retain distinct auxiliary, motor, parameter and settings completion paths."
+  ],
+  "integration": {
+    "module": "recording_capture_engine90",
+    "native_export": "xm1_power_recording_capture_request(kind:u32)->i32",
+    "provider_owners": {
+      "shared_task43_notification_and_deferral": "PowerRecordingContinuation",
+      "prepare_and_start_resource": "PowerCaptureStart",
+      "settings_auxiliary_motor_and_slot_engines": "PowerCaptureBackends",
+      "output_request": "PowerRecordingEngine25"
+    },
+    "observation_module": "recording_capture_observation",
+    "observation_instruction_windows": [
+      {"address": "0x0072872c", "size": "0x78", "sha256": "1a82c880495fcac5a7d78559761026dc8b5af7d2e006692bfd9123562cc57cda"},
+      {"address": "0x00731b90", "size": "0x88", "sha256": "739e04e7eda27cd7a2327253f35be0c08f84f0d0c7876df5e5a293bb973f06b8"},
+      {"address": "0x00732210", "size": "0x94", "sha256": "36b86bce444808497876fc71c51bcd56ac875e1c05157858a6f181f2beb24a2e"}
+    ],
+    "remaining_provider_contracts": [
+      "capture_acknowledge_resource",
+      "capture_select_changed",
+      "capture_conversion_limit"
+    ]
+  },
+  "verification": "Source and host instruction inspection only. No build, test, lint, formatter, SDK, guest or camera execution. Native integration must provide every declared CPU symbol before qualification."
+}

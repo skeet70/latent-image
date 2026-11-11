@@ -1,0 +1,65 @@
+{
+  "pin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "raw_image": "private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin",
+  "image_base": "0x0061c400",
+  "extents": [
+    {"role": "task100 dispatcher", "start": "0x006c0c98", "end_exclusive": "0x006c12d8", "bytes": 1600, "sha256": "384e11066f70047f88300d1d063dba2ca01c06f5e4e44bdf936d99d1f09565d8"},
+    {"role": "profile receive", "start": "0x006c0280", "end_exclusive": "0x006c061c", "bytes": 924, "sha256": "e50b5d9214be92f5ac5c8c4802d581f14dae51384a2782b821f79152525b4e8d"},
+    {"role": "profile load and defaults fallback", "start": "0x006c061c", "end_exclusive": "0x006c0890", "bytes": 628, "sha256": "f706e67e0a24337921885a4fe7da778a3ad4db7ae2b841d5d62128c8fea977f9"},
+    {"role": "page write loop", "start": "0x006bfd90", "end_exclusive": "0x006bfe88", "bytes": 248, "sha256": "61f0271a260bc0a29394e3444341dc1deea137d191021be31a39df4178070199"},
+    {"role": "page plan selection", "start": "0x006c0b48", "end_exclusive": "0x006c0c98", "bytes": 336, "sha256": "ccfa4a1f8a98cb9091f937eb318909865fee9c194cc6dfdb83ec479c706f0d84"},
+    {"role": "metadata map setup including literal pool", "start": "0x006a90ac", "end_exclusive": "0x006a9268", "bytes": 444, "sha256": "7a57da735a6fa34b6e51e5a4f8a9d6e240e7a5323dbc9ebdde49b3c6c8647052"},
+    {"role": "medium startup", "start": "0x006a9354", "end_exclusive": "0x006a93e8", "bytes": 148, "sha256": "7f585dc6326b4fdca734317e60f627a0ef95d846a2bde5f35377522ba886b9df"},
+    {"role": "default profile reader", "start": "0x006aa1fc", "end_exclusive": "0x006aa384", "bytes": 392, "sha256": "f62c2afe6fec18539a271ba3a4b74523ddbafe32d79dff3fe9553b0e8e155a47"},
+    {"role": "indexed read wrappers", "start": "0x006a8f1c", "end_exclusive": "0x006a9010", "bytes": 244, "sha256": "93f70967a19a9d396acf9e612b653fd1ff04b92b53d84496bb384faeceb40bcd"},
+    {"role": "page plan table", "start": "0x00774ab0", "end_exclusive": "0x00774b10", "bytes": 96, "sha256": "31e6a81febc2fbc28e330fb34aaa85757a4e6986ff9af2c0c28e3aae9cdaa5d9"},
+    {"role": "producer", "start": "0x006c13f0", "end_exclusive": "0x006c1444", "bytes": 84, "sha256": "56099d20025fff2482f23a78f260a352daf448eaae836f8fab792c23918ff003"},
+    {"role": "task100 body and context initialization including literal pool", "start": "0x006c12d8", "end_exclusive": "0x006c13f0", "bytes": 280, "sha256": "0efd71d9ea579a0d9d9dd7ef53ea5ae7ad9c59b3e91e81b2a74524d8fa3b2986"},
+    {"role": "persist profile and cache", "start": "0x006bffc4", "end_exclusive": "0x006c0280", "bytes": 700, "sha256": "36eca68aa6616969e6e7bb0eaafb6349ed438482ffe4e33899b6296b41592c1a"},
+    {"role": "refresh profile cache entry", "start": "0x006bfe88", "end_exclusive": "0x006bffc4", "bytes": 316, "sha256": "c6951e2bdbeca7ef5c0988a010194a12ab9e7b02d97c80ea9bddd7ec4a61b6c9"},
+    {"role": "IRQ-locked lens snapshot", "start": "0x006c6144", "end_exclusive": "0x006c6184", "bytes": 64, "sha256": "cc0024af1c901de172f05388a215a675c17874891c44f1a07de4dbf36eba139f"},
+    {"role": "profile/cache medium wrappers", "start": "0x006ac16c", "end_exclusive": "0x006ac2b4", "bytes": 328, "sha256": "b03a2b3e1fa4bfa24194ed8550f8d60b1d1ff9758aa3f2c3d7dcdf1310cf4dfe"}
+  ],
+  "pinned_c": [
+    "decomp/firmwares/xm1-150/app/control/af/profile/tu_006c096c.c",
+    "decomp/firmwares/xm1-150/app/drivers/lens/tu_006bfa80.c",
+    "decomp/firmwares/xm1-150/app/storage/service/tu_006ab254.c"
+  ],
+  "semantics": {
+    "queue": 100,
+    "command": "0x7401",
+    "payload_bytes": 8,
+    "payload": ["callback address", "preserved caller stack word"],
+    "post_failure": -255,
+    "completion": "callback invoked after persist even when persist returns error; ARM r0 contains persist result",
+    "completion_event": "queue2 operation0xf401 via owned shutdown callback",
+    "context": "0x956774, bytes0xc0; payload pointer context+12; +0x3c equals1 after initialization",
+    "cache": "0x919b40, bytes0xa08, magic0xabc123f9, twenty128-byte profile slots",
+    "startup": "read cache, reset only head/tail/count on invalid bounds or magic; repair magic only when mismatched",
+    "persistence": "snapshot before checking context+0x3c; if1 return0; otherwise mutate LRU then erase cache block, erase selected two profile blocks, write profile two blocks, write cache0xa08 bytes; stop on first medium error",
+    "filesystem": "No file close or filesystem release operation occurs on the actual7401 route",
+    "progress": "Canonical receive/load/page/lifecycle/actor functions are async; waits retain their parser, page cursor, descriptor and cleanup scopes across Pending",
+    "cancellation": "Dropping a DMA wait unregisters its callback and restores the three pulse registers; dropping primary/extended save unregisters its callback; dropping full-profile receive after synchronization releases the lens",
+    "dma_cpu": "Native storage DMA functions forward to the single software_timer_service detection mode/continuous output implementation; no storage-local IRQ or retained-context state machine",
+    "byte_confirmation": "Image4 instructions 0x006c0280..0x006c088c confirm receive/load filters, marker check, completion ordering and stock -255 mapping; 0x006b8194..0x006b8574 confirm detection mode, continuous registration and ten-sample IRQ qualification",
+    "provider_failure": "LensLoadSoftware requires software_status; canonical receive/load success exits return it and dispatch checks it before successful completion or persistence",
+    "record_store_reuse": "Not reused: journal append/compaction is not lens profile LRU replacement"
+  },
+  "closure": {
+    "native_task100_entry": "async native::run_task100 awaits the canonical actor; concrete task scheduler and provider composition belong to integration owners",
+    "owned_cpu": ["producer", "borrowed shared cache/context initialization", "profile refresh and LRU replacement", "persist error ordering", "all task100 command orchestration", "6c061c profile load and defaults fallback", "6c0280 profile receive", "page read/write loops", "page completion callbacks", "6a8 NAND request construction and native owned-driver bridge", "6aa1fc default profile reader", "6a90ac metadata map and 6a9354 startup", "queue98 producers/ring/two-state machine/control algorithms", "shutdown DMA callback registration"],
+    "software_dependencies": [
+      {"entry": "0x006bdc88..0x006bf800", "role": "lens wire framing, sixteen-state engine, physical MMIO and autonomous IRQ", "owner": "LensTransport", "state": "Transport request and completion APIs inspected; source integration required"},
+      {"entry": "0x006b9c68", "role": "concrete queue98 adapter composing owned ring/machine/control and wire engine", "owner": "VendorProtocolJoin", "state": "LensQueueRuntime submit/publication/read_data/complete_page APIs supplied by ProtocolLensQueueRuntime; async task100 provider owned by VendorProtocolJoin"},
+      {"entry": "0x006c58d8/0x006c5a7c/0x006c5b20", "role": "task99 synchronization7303 and finish730a producers plus actual consumers", "owner": "LensTransport", "state": "ControlActor/ControlDevice supplied; concrete queue adapter integration assigned to lens continuation"},
+      {"entry": "0x00772e70", "role": "configuration projection through actual74c5e8,7700fc,7450b0,740db4,740dc8", "owner": "VendorProtocolJoin", "state": "fresh source implementation assigned"},
+      {"entry": "0x0072c844/0x007319fc", "role": "configuration publication", "owner": "VendorProtocolJoin", "state": "fresh source implementation assigned"},
+      {"entry": "0x006b8194/0x006b8284/0x006b83b4", "role": "canonical detection mode and callback CPU state", "owner": "PowerServicesNext.PowerServiceModes", "state": "storage native bridge forwards to canonical exports; actual owned LensQueueRuntime backend composition belongs to vendor provider"},
+      {"entry": "0x006faf00/0x006faf40/0x006fb57c/0x006fb38c/0x006fb7c8/0x006fb904/0x006fb49c/0x006fb058/0x006fb1f4", "role": "application NAND request and physical driver", "owner": "BootMediaLoader.ApplicationNandCpu", "state": "owner reports exports include lifecycle semaphore36 and request semaphore52 guards; parent must supply owned OSAL symbols and actual semaphore creation; not linked or qualified here"},
+      {"entry": "0x00725318", "role": "shared NativeShutdownRtos receiver", "owner": "PowerLifecycle", "state": "composed by generic task100 loop"},
+      {"role": "module visibility, shared source placement, concrete task100 constructor entry and qualification", "owner": "PowerLifecycle", "state": "parent integration required"}
+    ],
+    "not_device_boundaries": ["lens service producers", "configuration getters", "NAND handle/map management", "NAND requests", "RTOS receive", "completion callbacks"],
+    "verification": "Source-only changes; no builds, tests, formatters, lint, native execution, SDK or camera operations run"
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "schema": 1,
+  "x70view_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "firmware_section": {
+    "base": "0x0061c400",
+    "sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"
+  },
+  "source_units": [
+    "app/settings/tu_0074dfb4.c",
+    "app/settings/tu_0074f09c.c",
+    "app/settings/tu_007500bc.c",
+    "app/settings/tu_00755eac.c",
+    "app/settings/tu_00756c94.c",
+    "app/settings/tu_00757674.c",
+    "app/settings/tu_00758068.c",
+    "app/settings/tu_00758cf0.c",
+    "app/drivers/lens/control/tu_0075e0fc.c"
+  ],
+  "confirmation": "NONMATCHING signatures, register use, widths, fixed storage addresses and branch predicates confirmed against installed image-4 instruction bytes. No runtime qualification performed.",
+  "layouts": {
+    "profile_resource": {
+      "address": "0x0096ebd0",
+      "stride": "0x2158",
+      "header_size": "0x90",
+      "parameters_offset": "0x90",
+      "parameters_size": "0x38",
+      "primary_mask": "0x80",
+      "secondary_mask": "0x88"
+    },
+    "registry": {
+      "address": "0x00915d38",
+      "selected_bank_offset": "0x8",
+      "slots_offset": "0xc",
+      "slot_stride": "0x38",
+      "serial_offset": "0x0",
+      "bank_offset": "0x8",
+      "permissions_offset": "0xc",
+      "permissions_count": 43
+    },
+    "shared_profile": {
+      "address": "0x0091904c",
+      "history_offset": "0x864",
+      "history_size": "0x30"
+    },
+    "global_profile": {
+      "address": "0x00942ab0"
+    }
+  },
+  "permission_rules": {
+    "75a910": "Reject invalid handle/field or mismatched field other than63; permit bit0.",
+    "75a8c0": "Reject invalid handle/field or mismatched field other than63; require secondary handle bit17 and permission bit1.",
+    "invalid_read": "Use selected resource bank.",
+    "invalid_write": "Return before reading source or mutating state."
+  },
+  "modules": [
+    "record_profile_accessors",
+    "record_profile_header_fields",
+    "record_profile_shared_accessors",
+    "record_profile_globals"
+  ],
+  "external_cpu_dependencies": [
+    {
+      "symbol": "xm1_power_configuration_byte",
+      "signature": "unsafe extern C fn(u32) -> u32",
+      "provider": "diagnostics.rs, PowerServicesNext commit376acba3",
+      "semantics": "Actual69f8fc configuration byte read. Each call reloads published pointer at0x0096ca50."
+    }
+  ],
+  "integration": "Parent adds modules to lib.rs and BUILD. Sibling slot/shared/mapping/merge/callback providers are separate modules consuming this canonical resource state."
+}

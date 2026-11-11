@@ -1,0 +1,40 @@
+{
+  "target": "Fujifilm X-M1 firmware1.50",
+  "source_revision": "62876536052549cbcba1e9f6abc1437e773dba2f",
+  "input_sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+  "status": "unimplemented-execution-dependency",
+  "task48": {
+    "registration": "1039500 registers task48 with queue argument256, stack3072, entry1028b04",
+    "actor": "1028b04 receives copied messages into16fea2c, reads operation at16fea28+4, selects handler-table by16fec34+18 through102c088, then scans8-byte operation/function entries. The terminalffff entry supplies the default handler.",
+    "state2_table": "102c138",
+    "handlers": [
+      {"operation": "4002", "sender": "1039638", "payload_bytes": 208, "handler": "10324e8"},
+      {"operation": "4003", "sender": "1039798", "payload_bytes": 176, "handler": "1032d4c"},
+      {"operation": "4004", "sender": "10398b0 mode0", "handler": "1033b90"},
+      {"operation": "4005", "sender": "1039b48", "payload_bytes": 148, "handler": "1029d00"},
+      {"operation": "4006", "sender": "1039c7c and10398b0 alternate", "payload_bytes": 204, "handler": "10344f0"},
+      {"operation": "4007", "sender": "1039dd4", "payload_bytes": 12, "handler": "1028c4c"},
+      {"operation": "4008", "sender": "1039e48", "payload_bytes": 248, "handler": "1034820"},
+      {"operation": "4009", "sender": "103a1a8", "payload_bytes": 8, "handler": "1029724", "note": "Handler is empty in state2; other state tables must be recovered before asserting completion behavior."}
+    ],
+    "actual_layouts": {
+      "1039638": "Six mandatory copied records:16,24,16,16,56,56bytes at offsets0,16,40,56,72,128. Optional12bytes at184, zeroed whennull. Completion pointer196, enabled200, value204.",
+      "1039798": "Mandatory pointers arguments0,2,3,4,5 copied16,16,16,56,56bytes at offsets0,20,36,52,108. Argument1 scalarformat16. Argument6 flags164. Callback arguments7/8 at168/172. Nineargs, not donor thirteenargs.",
+      "1039b48": "Mandatory record copies56,16,16,56bytes at0,56,72,88. Callback144.",
+      "1039c7c": "Six mandatory copied records:16,24,16,16,56,56bytes at offsets0,16,40,56,72,128. Optional12bytes184 zeroed whennull. Enabled196, callback200.",
+      "1039dd4": "Three words first,second,callback at0,4,8. Return0 on queue acceptance or134 on queue error; acceptance is not physical completion.",
+      "1039e48": "Six mandatory copied records16,24,16,16,56,56bytes at0,16,40,56,72,128. Optional12bytes184 zeroed whennull. Enabled196; extra argument8 is a mandatory3word pointer and conditionally overwrites payload200/204/208 only for nonzero values. Payload212/216/220 remain unspecified. Value argument9 at224; argument10/11 copied228/232; first callbackargument12 at236; remaining callbacksarguments13/14 at240/244 and both required nonzero.",
+      "103a1a8": "Two words argument0,callback at0/4; same134 queue error mapping."
+    },
+    "callback_lifetime": "Stack records must be synchronously copied into owned queue storage. Callback registrations must stay live until physical actor completion, including delayed subordinate-task responses. Sender return does not invoke a callback.",
+    "padding": "Copy unspecified native stack padding as MaybeUninit bytes; do not form initialized u8 slices or read unspecified scalar fields."
+  },
+  "task55": {
+    "106631c": "Copy request3words pluscallback into16byte payload and send operation4703 via1066230. Return0 on acceptance or-255 on queue error.",
+    "106637c": "Forward106d02c: state41716304+28c mustbe1or4; then execute full106c024 reset and setstate1. Otherwise return-255.",
+    "106638c": "Forwards full106a2f0 synchronous query.",
+    "106c024": "May execute1062404 and1067e00 accordingto41716304+4; resets10objects through1069540, clears face state, executes1066a18, zeroes14da440/14d8920 buffers. It is not a single state assignment."
+  },
+  "byte_evidence": "id5.dis1066865-1066918 task48actor;1070283-1070346 tables;1083907-1084064/1084231-1084535/1084639-1084660 senders;1129597-1129628 task55frontends;1135551-1135590 fullreset;1136577-1136593 statecheck.",
+  "qualification": "No execution result. This map identifies remaining real CPU dependencies and prevents treating queued packet acceptance as device execution or callback completion."
+}

@@ -30,6 +30,7 @@ pub mod queue_construction;
 pub mod hardware_timer_registry;
 pub mod timer_abi;
 pub mod callback_registry;
+pub mod installed_callbacks;
 pub mod shutdown;
 pub mod shutdown_pins;
 pub mod shutdown_rtos;

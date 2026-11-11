@@ -1,0 +1,144 @@
+{
+  "pin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "range_source": "decomp/firmwares/xm1-150/function-ranges.json",
+  "raw_source": "private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin",
+  "extents": [
+    {
+      "entry": "0x69c244",
+      "end_exclusive": "0x69c28c",
+      "name": "hw_image_timer_dispatch6",
+      "raw_sha256": "de20a23bbcc5933fc69944bcde691d059b4f9074f588aa618ec026fd26e94bbb",
+      "authenticated_extent_sha256": "de20a23bbcc5933fc69944bcde691d059b4f9074f588aa618ec026fd26e94bbb"
+    },
+    {
+      "entry": "0x69c28c",
+      "end_exclusive": "0x69c2b0",
+      "name": "hw_image_timer_report_error6",
+      "raw_sha256": "3df7650724929764d720d7b79111adb0bcb2063cbf108de7719a04e8a9b3a82b",
+      "authenticated_extent_sha256": "3df7650724929764d720d7b79111adb0bcb2063cbf108de7719a04e8a9b3a82b"
+    },
+    {
+      "entry": "0x69c2b0",
+      "end_exclusive": "0x69c304",
+      "name": "delay_worker",
+      "raw_sha256": "d592f40df5e3f61d9d41c946593f8decb4aaebe32b3fa61be5814e577b856162",
+      "authenticated_extent_sha256": "d592f40df5e3f61d9d41c946593f8decb4aaebe32b3fa61be5814e577b856162"
+    },
+    {
+      "entry": "0x69c304",
+      "end_exclusive": "0x69c364",
+      "name": "driver_secondary_periodic_notify",
+      "raw_sha256": "fd342b878774944823585c9ec8d72721280e3e4f34cb93a36570fadb63991091",
+      "authenticated_extent_sha256": "fd342b878774944823585c9ec8d72721280e3e4f34cb93a36570fadb63991091"
+    },
+    {
+      "entry": "0x69c364",
+      "end_exclusive": "0x69c3f8",
+      "name": "delay_worker_start",
+      "raw_sha256": "74040ba78e07966ac8cbdfd49a510ea7a772dacc7483a474ff5bee50eba22dd9",
+      "authenticated_extent_sha256": "74040ba78e07966ac8cbdfd49a510ea7a772dacc7483a474ff5bee50eba22dd9"
+    },
+    {
+      "entry": "0x69c3f8",
+      "end_exclusive": "0x69c430",
+      "name": "hw_image_timer_delete_channel6",
+      "raw_sha256": "2a9c44ce69585e036626bbfc8e699c6d26597f7c28cad23f4416e0a4410c525f",
+      "authenticated_extent_sha256": "2a9c44ce69585e036626bbfc8e699c6d26597f7c28cad23f4416e0a4410c525f"
+    },
+    {
+      "entry": "0x69c430",
+      "end_exclusive": "0x69c4a4",
+      "name": "driver_secondary_periodic_initialize",
+      "raw_sha256": "79d592dac00fefdfef5f3630751ff0b1322629075b34c73ba554f3bffc98aeec",
+      "authenticated_extent_sha256": "79d592dac00fefdfef5f3630751ff0b1322629075b34c73ba554f3bffc98aeec"
+    },
+    {
+      "entry": "0x69c4a4",
+      "end_exclusive": "0x69c4d8",
+      "name": "hw_image_timer_delete_handle6",
+      "raw_sha256": "77435188102e623dcb27c9e1965f7d3c0d439535698ecfba9730a6e6f26dd861",
+      "authenticated_extent_sha256": "77435188102e623dcb27c9e1965f7d3c0d439535698ecfba9730a6e6f26dd861"
+    },
+    {
+      "entry": "0x725318",
+      "end_exclusive": "0x725424",
+      "name": "dispatch_receive_message",
+      "raw_sha256": "2fbc20604b7a5221ec42d3aefa73dbd5e7546f72dc98244feb86cd878f310b8e",
+      "authenticated_extent_sha256": "2fbc20604b7a5221ec42d3aefa73dbd5e7546f72dc98244feb86cd878f310b8e"
+    }
+  ],
+  "task6": {
+    "command": "0x1600",
+    "queue": 6,
+    "callback": "0x95dc18",
+    "failure_callback": "0x95dc1c",
+    "receive_descriptor": "0x95dc08",
+    "constructor_argument": "0x89f76c",
+    "queue_configuration": [
+      48,
+      12
+    ],
+    "task_priority": 3,
+    "stack_bytes": 3072,
+    "name": "0x781938",
+    "receive_failure": "Invokes failure callback and still dispatches persistent descriptor. Invalid residue invokes failure callback again.",
+    "timer_registration": "0x69c430 opens requested selector, configures period1000 units1 mode1 IRQ producer69c304, publishes caller callback only on successful configuration. Async executor caller requests selector1.",
+    "supported_commands": [
+      "0x1600"
+    ],
+    "lifetime": "No software stop command; external69c3f8 destroys queue6 then releases task6."
+  },
+  "receive": {
+    "entry": "0x725318",
+    "layout": "u16 operation,u8 sender,u8 destination,u32 length,u32 caller_payload_address",
+    "failure": "Descriptor remains unchanged. -50 returns without diagnostics; other errors publish31 and record status at40a0f82c.",
+    "success": "Copy header then exactly length payload bytes if nonzero; release pool block; ignore release result.",
+    "boundary": "Native selects the current core root through slot1618, then invokes receive slotc8 and release slotf8. Integration must bind both domain-specific owned RTOS artifacts at their actual carrier addresses."
+  },
+  "dependencies": [
+    {
+      "symbol": "xm1_power_queue_create",
+      "status": "Implemented by PowerQueueConstruction in queue_construction.rs; parent module integration required. Existing task_constructors stock724cdc binding is not used."
+    },
+    {
+      "symbol": "xm1_power_queue_delete",
+      "status": "Implemented by PowerQueueConstruction in queue_construction.rs via primitives::destroy_queue and NativeQueueDiagnostics; parent module integration required."
+    },
+    {
+      "symbols": [
+        "xm1_task_submit",
+        "xm1_task_release"
+      ],
+      "owner": "replacement/task_submission; storage transitively replacement/task_storage"
+    },
+    {
+      "symbols": [
+        "xm1_power_hardware_timer_acquire",
+        "xm1_power_hardware_timer_start",
+        "xm1_power_hardware_timer_stop",
+        "xm1_power_hardware_timer_release"
+      ],
+      "owner": "PowerHardwareTimerCpu"
+    },
+    {
+      "symbol": "xm1_power_audio_operation_tick",
+      "owner": "PowerAudioRelease/audio_executor.rs",
+      "stock_address": "0x64e130"
+    },
+    {
+      "symbol": "xm1_power_service_error",
+      "status": "Shared diagnostic publication dependency. Parent owns closure."
+    }
+  ],
+  "native_exports": [
+    "xm1_power_task6_start",
+    "xm1_power_task6_entry",
+    "xm1_power_task6_timer_irq",
+    "xm1_power_task6_delete",
+    "xm1_power_executor_timer_start",
+    "xm1_power_executor_timer_stop",
+    "xm1_power_executor_timer_start_owned",
+    "xm1_power_queue_receive"
+  ],
+  "verification": "No builds/tests/lint/formatters run. Behavioral test sources supplied."
+}

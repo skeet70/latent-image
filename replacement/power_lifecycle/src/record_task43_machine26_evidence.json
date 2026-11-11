@@ -1,0 +1,37 @@
+{
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_kind": "X-M1 1.50 instruction-inspected Rust translation",
+  "source_units": ["app/control/af/area/tu_00f3c17c.c", "app/control/af/profile/tu_00f3b058.c", "app/control/af/profile/tu_00f3b058_exact.c", "app/control/af/profile/tu_00f3e3ec.c"],
+  "byte_source": {"image_base": "0x00bf1a00", "image_sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a", "instruction_intervals": ["0x00f3d3e0..0x00f3ec4f", "0x00f44fec..0x00f453d3", "0x00f46754..0x00f46a53"]},
+  "module_registration": ["record_task43_machine26_state", "record_task43_machine26_selection", "record_task43_machine26_peaks", "record_task43_machine26_requests", "record_task43_machine26_snapshot", "record_task43_machine26_transition"],
+  "integration_owner": "PowerApplicationJoin",
+  "dispatcher_owner": "PowerLifecycleNext.PowerRecordMachines18",
+  "partition_owners": {"0x00f3ec50..0x00f44feb": "PowerLifecycleNext.PowerRecordActiveSelections, excluding controllers owned by PowerApplicationJoin.RecordAnalysisControllersCpu", "0x00f411b8..0x00f42abc": "PowerApplicationJoin.RecordAnalysisControllersCpu", "0x00f453d4..0x00f46753": "PowerLifecycleNext.PowerRecordMachines28"},
+  "export_prefix": "xm1_power_record_helper_",
+  "exports": {
+    "f3d3e0": "(value:u32)->()", "f3d400": "(value:u32)->()", "f3d420": "()->()", "f3d45c": "()->()", "f3d490": "()->i32", "f3d500": "()->()", "f3d544": "()->()", "f3d554": "()->i32", "f3d5c4": "()->()", "f3d608": "()->i32", "f3d728": "()->i32", "f3d808": "()->i32", "f3d818": "()->i32", "f3d868": "()->i32", "f3d904": "()->i32", "f3d968": "()->i32", "f3da5c": "()->i32", "f3da6c": "()->i32", "f3dad0": "(channel:u32)->()", "f3daf0": "()->i32", "f3db9c": "()->i32", "f3dca8": "(mask:u32)->()", "f3de28": "(mask:u32)->()", "f3e054": "()->()", "f3e0d0": "()->()", "f3e18c": "()->()", "f3e1cc": "()->()", "f3e1f8": "(item:u32)->i32", "f3e280": "(item:u32)->i32", "f3e2f8": "()->i32", "f3e32c": "()->()", "f3e380": "()->()", "f3e3c8": "()->()", "f3e3ec": "()->()", "f3e440": "(score:u32,position:i16)->()", "f3e468": "(score:u32,position:u16)->()", "f3e4bc": "(score:u32,position:i16)->i32", "f3e63c": "()->i32", "f3e6bc": "()->i32", "f3e6f0": "()->i32", "f3e8e0": "()->u32", "f3e994": "()->i32", "f3e9cc": "(value:u32)->()", "f3eaf0": "()->i32", "f3eb3c": "()->i32", "f3ebd4": "()->i32", "f3ec14": "(value:u32)->()", "f3ec34": "()->()", "f44fec": "()->u32", "f46754": "()->i32", "f467cc": "()->i32"
+  },
+  "invariants": [
+    "f44fec returns settings 0x8791 in r0, or the optional f47e00 result. f453bc..f453d0 stores the initialized word without modifying r0. The dispatcher passes this result to f3e280(item).",
+    "f3d420 has no incoming request argument. It loads 0x0169d380, halfword 0x0169d384, and 0x0169d388 into channel offsets 12, 16 and 20.",
+    "f3d490 reads the combined halfword at state offset f5c, then clears both pending bytes before resetting step state.",
+    "f3e280 increments the byte counter modulo 256, replacing 255 with 254. Step distance is a halfword and direction is a signed byte.",
+    "f3e6f0 receives the actual 28-byte profile snapshot. The canonical 746054 provider takes no arguments and ignores the stock residual r0.",
+    "f3e9cc passes a 36-byte PeakPositionRequest to fea634. That provider owns the copy before return; callback f3c14c is a concrete RecordMachine23Cpu function.",
+    "f467cc calls f3ec14(0), not the donor-named property setter in the nonmatching C. It records the actual result of f438c4 or f46754 at state f78."
+  ],
+  "dependency_owners": {
+    "f3c104,f3c14c,f3c5d0": "PowerApplicationJoin.RecordMachine23Cpu",
+    "f3edcc,f438c4,f44f58": "PowerLifecycleNext.PowerRecordActiveSelections",
+    "f460ec": "PowerLifecycleNext.PowerRecordMachines28",
+    "fa767c,fa9320,fa936c,fa9488,fa9588": "PowerApplicationJoin.RecordNumericCpu",
+    "faa7f4,fa9554": "PowerApplicationJoin.RecordAnalysisScheduleCpu",
+    "ee9928": "PowerApplicationJoin.RecordStatisticsCpu",
+    "f4c400": "PowerApplicationJoin.RecordScanBackendCpu",
+    "fea634,fea6ac": "PowerApplicationJoin.RecordFrontendCpu",
+    "756940,7569ec,74e5c0,75060c": "PowerLifecycleNext.PowerRecordProfileAccessors",
+    "7567ec,756a0c,757b78": "PowerApplicationJoin.ProfileSharedCpu",
+    "746054": "PowerApplicationJoin.ProfileMappingCpu"
+  },
+  "verification": "No builds, tests, lint, formatting, native execution, SDK, guest or camera operations executed. Source registration and final integrated verification belong to the integration owner."
+}

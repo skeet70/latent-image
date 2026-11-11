@@ -1,6 +1,8 @@
 #[cfg(target_arch = "arm")]
 mod native {
     use core::ptr::{read_volatile, write_volatile};
+    use crate::callback_registry::{registry as callbacks, CallbackWord};
+    use crate::installed_callbacks;
     use crate::primitives::{QueueDiagnostic, QueueDiagnostics, ServiceStatus};
 
     extern "C" {
@@ -18,9 +20,6 @@ mod native {
     unsafe fn byte(at: u32) -> u8 { read_volatile(at as *const u8) }
     unsafe fn put_byte(at: u32, value: u8) { write_volatile(at as *mut u8, value); }
     unsafe fn copy(to: u32, from: u32, count: u32) { for offset in 0..count { put_byte(to + offset, byte(from + offset)); } }
-    fn unowned_callback(address: u32) -> ! {
-        unsafe { core::arch::asm!("2: b 2b", in("r0") address, options(noreturn, nostack)); }
-    }
     unsafe fn thread() -> u32 {
         let first: u32;
         core::arch::asm!("mrc p15,0,{value},c13,c0,2", value = out(reg) first, options(nostack));
@@ -94,13 +93,13 @@ mod native {
     #[no_mangle]
     pub unsafe extern "C" fn xm1_power_owned_log_trace(header: u32, entry: u32) { trace(header, entry); }
     #[no_mangle]
-    pub unsafe extern "C" fn xm1_power_install_log_trace() { put(0x4004f15c, xm1_power_owned_log_trace as *const () as u32); }
+    pub unsafe extern "C" fn xm1_power_install_log_trace() {
+        let _ = callbacks().ensure(xm1_power_owned_log_trace as unsafe extern "C" fn(u32, u32));
+        put(0x4004f15c, xm1_power_owned_log_trace as *const () as u32);
+    }
     unsafe fn publish() {
-        let hook = word(0x4004f15c);
-        if hook != 0 {
-            if hook != 0x6470fc && hook != xm1_power_owned_log_trace as *const () as u32 { unowned_callback(hook); }
-            trace(0x400a0800, 0x400a0834 + u32::from(half(0x400a081e)) * 16);
-        }
+        let entry = 0x400a0834 + u32::from(half(0x400a081e)) * 16;
+        let _ = installed_callbacks::log_hook(callbacks(), CallbackWord(word(0x4004f15c)), 0x400a0800, entry, |buffer, entry| unsafe { trace(buffer, entry) });
         let next = half(0x400a081e).wrapping_add(1);
         put_half(0x400a081e, next);
         if half(0x400a081c) <= next { put_half(0x400a081e, 0); }
@@ -200,10 +199,7 @@ mod native {
         let _ = xm1_power_command_diagnostic(2, code);
     }
     unsafe fn dispatch_error(status: i32) {
-        let handler = word(0x4089ea8c);
-        if handler == 0x723330 { return; }
-        if handler == 0x72835c || handler == xm1_power_diagnostic_report_status as *const () as u32 { xm1_power_diagnostic_report_status(status); return; }
-        unowned_callback(handler);
+        let _ = installed_callbacks::error_handler(callbacks(), CallbackWord(word(0x4089ea8c)), status, |status| unsafe { xm1_power_diagnostic_report_status(status) });
     }
     #[no_mangle]
     pub unsafe extern "C" fn xm1_power_service_event(operation: u32, id: i32, status: i32) {
@@ -291,17 +287,20 @@ mod native {
     }
     #[no_mangle]
     pub unsafe extern "C" fn xm1_power_service_post_trace(header: u32) {
-        let installed = word(0x4089ea94);
-        if installed == 0x723330 { return; }
-        if installed != 0x726478 && installed != xm1_power_owned_service_trace as *const () as u32 { unowned_callback(installed); }
-        append_service_event(header);
+        let _ = installed_callbacks::service_trace(callbacks(), CallbackWord(word(0x4089ea94)), header, |header| unsafe { append_service_event(header) });
     }
     #[no_mangle]
     pub unsafe extern "C" fn xm1_power_owned_service_trace(header: u32) { append_service_event(header); }
     #[no_mangle]
-    pub unsafe extern "C" fn xm1_power_install_service_trace() { put(0x4089ea94, xm1_power_owned_service_trace as *const () as u32); }
+    pub unsafe extern "C" fn xm1_power_install_service_trace() {
+        let _ = callbacks().ensure(xm1_power_owned_service_trace as unsafe extern "C" fn(u32));
+        put(0x4089ea94, xm1_power_owned_service_trace as *const () as u32);
+    }
     #[no_mangle]
-    pub unsafe extern "C" fn xm1_power_install_status_handler() { put(0x4089ea8c, xm1_power_diagnostic_report_status as *const () as u32); }
+    pub unsafe extern "C" fn xm1_power_install_status_handler() {
+        let _ = callbacks().ensure(xm1_power_diagnostic_report_status as unsafe extern "C" fn(i32));
+        put(0x4089ea8c, xm1_power_diagnostic_report_status as *const () as u32);
+    }
 
     pub struct NativeQueueDiagnostics;
     impl QueueDiagnostics for NativeQueueDiagnostics {

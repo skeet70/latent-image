@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "pin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "index": "decomp/firmwares/xm1-150/function-ranges.json",
+  "raw": "private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin",
+  "disassembly": "private-data/analysis/x-m1-1.50/lz/id4.dis",
+  "roots": [
+    {"entry": "0x632000", "end": "0x63219c", "bytes": 412, "index_and_raw_sha256": "48af92fff6cbefbaba3769d806b95e3c0539722f80718c8daaabdeb8d50130ed", "rust": "refresh_system_snapshot", "native": "xm1_power_refresh_system_snapshot"},
+    {"entry": "0x634b40", "end": "0x634d28", "bytes": 488, "index_and_raw_sha256": "e5d6e070959395f5ff50b3c6f6f1ce7d595f671a95fc230f3df3158d39e784bd", "rust": "initialize_input_policy", "native": "xm1_power_initialize_input_policy"},
+    {"entry": "0x637478", "end": "0x6376a0", "bytes": 552, "index_and_raw_sha256": "1d30d2355509a399086bc431bc5b422d4c15ee66ea6c603fe708aa9dbb8a7921", "rust": "initialize_input_categories", "native": "xm1_power_initialize_input_categories"}
+  ],
+  "owned_cpu": [
+    {"entry": "0x6322f0", "end": "0x632478", "rust": "bitmap", "index_and_raw_sha256": "1dffd20b52b07d763cbee046741591cd7f5a0451aaed942b28200b32e7c0dcc8", "semantics": "Bounds check precedes every operation. Keys use quotient /63 and bit (key+quotient)&63. Query returns the masked word, not a normalized boolean."},
+    {"entry": "0x73acb4", "end": "0x73acfc", "rust": "drain_policy_records", "index_and_raw_sha256": "8228cd8f38634c8b9424ada6c799d00fbe9196c0d7db0fb533a5f9597205940b", "semantics": "Copies all 0x1304 bytes under canonical interrupt lock, then clears source count at 0x914820."},
+    {"entry": "0x73ad10", "end": "0x73ad44", "rust": "initialize_input_categories key sample predicate", "index_and_raw_sha256": "6d17194ee04403072a8f40dcfeeee66fa6dfa1f560fa0fcc26c15dee840b82e1"},
+    {"entry": "0x71f6ac", "end": "0x71f708", "rust": "initialize_input_categories selected channel normalization", "index_and_raw_sha256": "7fa34818efb8adaacecfc3cf80adb6db537d712eeab90e257cdf7b853a3e0a27"},
+    {"entry": "0x6f52f8", "end": "0x6f5330", "rust": "KeyChannel::parse and sample normalization", "index_and_raw_sha256": "fbf083d2c162db04693e6b94d37ba889c3e0a0a183acaba5158c317992bca2c2"},
+    {"entry": "0x6eddc0", "end": "0x6ede40", "rust": "sample_key", "index_and_raw_sha256": "de93467b915faaf94c2b49bd6931ccec94228e9098f550feb2ecc9e7f0f8f975"},
+    {"entry": "0x6edaec", "end": "0x6edbb8", "rust": "sample_key configured-type1 branch", "scope": "Only argument1 is reachable from the assigned initialization roots. Resource acquisition reuses shared resource_registry."},
+    {"entry": "0x6373f4", "end": "0x637478", "rust": "initialize_input_categories selection mapping"},
+    {"entry": "0x646958", "end": "0x6469a0", "rust": "initialize_input_categories property selection"},
+    {"entry": "0x63a760", "end": "0x63a7dc", "rust": "first_flag", "table": "0x77496c", "fallback": "table word6, not a synthetic default"},
+    {"entry": "0x63a4f4", "end": "0x63a544", "rust": "first_flag", "table": "0x79fed4", "stride": 8},
+    {"entry": "0x63b728", "end": "0x63b7fc", "rust": "category_number", "semantics": "Closed 0x304..0x31c dispatch with default0, including every table branch."}
+  ],
+  "reuse": {
+    "settings_read_and_projection": "mode_initialization::setting/project_setting/project_setting_columns",
+    "flags": "mode_initialization::query_flag/set_flag/active_mode_token",
+    "setting_application": "xm1_storage_apply, actual6309c4",
+    "setting_write": "xm1_setter_owned, actual624694 tail adapter",
+    "application_events": "mode_events::xm1_power_application_post, actual6334dc",
+    "gpio_registration": "resource_registry::xm1_power_resource_acquire, actual649c4c",
+    "critical_sections": "osal::xm1_power_interrupt_lock/unlock"
+  },
+  "physical_effects": ["Reads 0xfff89314 bit7 for configured type6", "Reads 0xfff52014 bit2 for configured type1", "Type1 clears 0x03000000 in 0xfff88028 before acquiring resource34"],
+  "stateful_branches": ["Policy modifier0xc0 preserves the existing flag", "0x600..0x603 use dedicated flag words", "Policy3 dominates policy1 and2", "Policy15 absent preserves previous policy word", "Record17 forwards original encoded event and argument", "Category lookup takes first active entry and preserves source-defined fallback", "GPIO registration failure preserves invalid retained handle and does not skip physical sample", "Category activation preserves previous enabled state when the predicate is false"],
+  "verification": "Source and raw-byte inspection only. No builds, tests, formatters, lint, commits or camera operations executed."
+}

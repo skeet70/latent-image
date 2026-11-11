@@ -1,0 +1,58 @@
+{
+  "pin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "range_source": "x70view decomp/firmwares/xm1-150/function-ranges.json read with git show",
+  "admission": "source-only; complete power-lifecycle runtime not admitted",
+  "current_flag_clear": {
+    "range": ["0x724638", "0x7246f0"],
+    "sha256": "efa03c82be58b5a9bc4eb628c4d0f28020751579e2dbc75f6d0cb0df91b58361",
+    "source": "decomp/firmwares/xm1-150/app/platform/osal/dispatch/startup_requests.c",
+    "implementation": "shutdown_rtos::xm1_power_clear_current_flags",
+    "encoding": "shared shutdown_rtos encoded(task low16) using7cad9c class map",
+    "execution": "current interface slot0x90 owned event-flag clear(id,0); both owned per-domain root carriers required",
+    "error": "actual status returned; nonzero reports operation0x14 and current task through owned service_error"
+  },
+  "selected_interface_dispatch": {
+    "clear": "current interface+0x90; keep0",
+    "set": "current interface+0x148 context; context1 selects+0x8c, other+0x88",
+    "post": "current interface+0x170 allocation,+0xac task or+0xb0 handler send,+0xf8 release",
+    "send_failure_order": "service event, release block, publish last error and invoke error handler",
+    "wait_any": "xm1_power_wait_current_any(bits,*mutu32,timeout) uses selected+0x9c with mode0 and diagnostic0x12",
+    "standby": "native.S calls wait_current_any(1,persistent output,-1); no output initialization or duplicate diagnostic",
+    "slot174": "xm1_power_read_interface_word_174(*mutu32) unconditionally copies**(selectedinterface+0x174); caller-source bytes7257a8 id4.dis271599..271612",
+    "root_requirement": "both domain-specialized owned RTOS carriers and root tables installed before Services calls"
+  },
+  "extents": [
+    {"range": ["0xec2870", "0xec28a8"], "sha256": "d780465fafda166c7c92dfb02281b6932f8215ff0c20885bad40422f22a8682c", "implementation": "shutdown_actions::xm1_power_stop_usb_and_display", "bytes": "id5.dis:731555-731568"},
+    {"range": ["0xec290c", "0xec2940"], "sha256": "c9041f1a3275b967ed3bc1f987e67b0fafaf56550bf82c8991f12e4222027328", "implementation": null, "frontier": "native settings_reset::reset OrdinaryAndCustom composition and token at 0x15c2040", "bytes": "id5.dis:731594-731606"},
+    {"range": ["0xec2d04", "0xec2d18"], "sha256": "12219767705777d450ca51cd5deedb3afeba51c6ee3c4d789a25acf82c090510", "implementation": "Shutdown::reject_startup_cell", "bytes": "id5.dis:731848-731852"},
+    {"range": ["0xec2d18", "0xec2d90"], "sha256": "5a8471fb3b2aa6eb09493474486dfd827c73a7a85cea190934b97163e89f1b93", "implementation": "Shutdown::receive_barrier_start_native and shutdown_start::start_native", "bytes": "id5.dis:731853-731882"},
+    {"range": ["0xec2f40", "0xec2fb0"], "sha256": "08945fafbdd584616fd8e358d04c350fcb2245c507e8c9e10b3e4649bf8f0e8e", "implementation": "Shutdown::completion and CompletionRequests::submit", "bytes": "id5.dis:731991-732018", "correction": "actual callback 0xec59e4 posts 0xf107, not the f307 name in provisional C"},
+    {"range": ["0xec31f0", "0xec3200"], "sha256": "c32c4611c39fdba1bd796d9f6b55a19eddbd4ddf37db150baf7df22ced16d3c1", "implementation": "shutdown_actions::xm1_power_terminal_action", "bytes": "id5.dis:732163-732166"},
+    {"range": ["0xec6708", "0xec6778"], "sha256": "3da01af40fec6c2335e2371f5950a9b2c515d122a528999fd52cad8a088b7833", "implementation": "Shutdown::finish_native", "bytes": "id5.dis:735499-735526", "gate": "VGLIB release must return zero; actual current-task event flag wait must complete; no timeout-success"},
+    {"range": ["0xec6778", "0xec6790"], "sha256": "9c46681a6825980bd89de2fa0f7a939913f5c03287f1b9bb43e9eaf506f3d5eb", "implementation": "post_transition request 0x91b with argument zero", "bytes": "id5.dis:735527-735532"},
+    {"range": ["0x69ddfc", "0x69de38"], "sha256": "0a5be803029927f5970bf207cab8cfd2fe7d3cdf5c18e7b79fe3531e0295e4d0", "implementation": "shutdown_requests::device_shutdown", "bytes": "id4.dis:132740-132754", "gate": "state 14 suppresses enqueue and does not synthesize completion"},
+    {"range": ["0x6b76d0", "0x6b76e0"], "sha256": "ad34220822bcf7b09acb0e1bbbfa999090075c91cb22051b30c805f640ac2914", "implementation": "shutdown_requests::controller_shutdown", "bytes": "id4.dis:158905-158908 and 158605-158611", "fact": "actual callback 0xec5b40 synchronously posts 0xc901"},
+    {"range": ["0x64e7a4", "0x64e860"], "sha256": "dde0cffb840a4e4e7831e349e7ac482cc6f5c500103cb645c89382435d853273", "implementation": "shutdown_pins::PinLifecycle::release", "bytes": "id4.dis:51438-51484"},
+    {"range": ["0x64e860", "0x64e918"], "sha256": "e512096e036b56021392d893d3d57c97d4823935e14882868ffd59874b172f7a", "implementation": "shutdown_pins::PinLifecycle::set", "bytes": "id4.dis:51485-51530", "fact": "value mask is low ten bits, not bit 22"},
+    {"range": ["0x6d15d4", "0x6d160c"], "sha256": "71d3e41c7019a135ac4b008651fce3ad30e7d6469065ece7b15296a5cbe88417", "implementation": "selected presets 6 and 0 through owned display_scanout_panel", "bytes": "id4.dis:185466-185479", "table": "actual 0x7cedf0[6] words {6,6}"},
+    {"range": ["0xdca4f4", "0xdca544"], "sha256": "3b3deac350b0c5980c2ac21e203171dd4935d1fe174c5f54c4d8ee211900799a", "implementation": "shutdown_persistence::request_continuation", "bytes": "id5.dis:482319-482338"},
+    {"range": ["0xec6a50", "0xec6a94"], "sha256": "c326f84e8c2bb98c173a2f88639911d7894657f3cf146e4b605ab37ec4923d43", "implementation": "shutdown_persistence::xm1_power_persistence_shutdown_callback", "bytes": "id5.dis:735709-735725"},
+    {"range": ["0x72503c", "0x725214"], "sha256": "0c02b587b70e68d634585bde3cd9f34240350253bb3a4f22341f742ed7da8b37", "implementation": "shutdown_rtos::NativeShutdownRtos and xm1_power_service_post", "bytes": "id4.dis:271124-271224", "dependencies": "owned RTOS fixed pool/data queue, owned OSAL current task, owned diagnostics trace/error"},
+    {"range": ["0x7243a8", "0x724480"], "sha256": "0a48860fce1d679fdf3eb0637ec8afe1ec324809394d20387218e598a3b6e96a", "implementation": "shutdown_rtos::wait_current_task and xm1_power_wait_current_all", "bytes": "id4.dis:270319-270370", "fact": "r0 is bits, r1 output pointer, r2 timeout; flag identifier is the current task, not r0"}
+  ],
+  "group4": {
+    "matrix": "0xec4778", "width": 2, "actions": "0xec4a84", "transitions": "0xec49e8",
+    "state0_opcode2": "0xec2cb8 close selector 1, then state 1",
+    "state1_events": {"0x93e7": "start", "0x1200": 1, "0xac01": 2, "0x9701": 4, "0x9a0c": 8, "0x9801": 16, "0xc901": 32, "0xe301": 64, "0xf107": 128, "0xf401": 256},
+    "full_mask": 511,
+    "late": "state reset at 0x15b8080; request 0x91b, never another 0x816"
+  },
+  "remaining_runtime_composition": [
+    "queue2/op2 native area2 close + VendorProtocol extra_configuration commit + queue3 continuation producer into the task2 runtime root",
+    "queue3 0x13e7: rec_output_publish_status4 selects recording controller 4 event 3; state 0 action 0xe01c10 then state 5, states 1..6 action 0xe01bd8; no synthetic 0x93e7 callback is admitted",
+    "alternate action 0xec290c native reset composition uses existing VendorProtocol settings_reset API",
+    "register actual task actor dispatchers, modal frontend, terminal selector, and cross-unit display library at the parent root",
+    "downstream actor/graphics/NAND frontiers remain the corresponding owners' evidence, not closure claims of this slice"
+  ],
+  "verification": "No builds, tests, linters, formatters, guest runs, or camera writes performed. Host behavioral test source added."
+}

@@ -1,0 +1,70 @@
+{
+  "status": "source-inspected",
+  "target": "Fujifilm X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source": "decomp/firmwares/xm1-150/app/settings/tu_007371dc.c",
+  "additional_source": "decomp/firmwares/xm1-150/app/settings/conversion_count_limits.c:conversion_selection_is_5_or_6, actual738578",
+  "primary_consumer": "decomp/firmwares/xm1-150/app/settings/tu_0073958c.c:FUN_0073964c",
+  "raw_confirmation": {
+    "path": "private-data/analysis/x-m1-1.50/lz/id4.dis",
+    "image": "private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin",
+    "image_base": "0x0061c400",
+    "image_sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
+    "nonmatching_extents": [
+      "0x7371dc..0x737254", "0x7372bc..0x7372d4",
+      "0x7377e8..0x73782c", "0x737830..0x737850",
+      "0x73788c..0x7378c8", "0x73790c..0x737964",
+      "0x737aa8..0x737c38", "0x737df8..0x737ed4",
+      "0x737ed8..0x737fec", "0x738154..0x7381a8",
+      "0x7381ac..0x738200", "0x738394..0x738438",
+      "0x738608..0x738634", "0x738670..0x7386dc",
+      "0x7386e0..0x7387fc", "0x738ee4..0x738f8c"
+    ]
+  },
+  "providers": {
+    "unary_u32": ["7371dc", "73729c", "7372bc", "737604", "737620", "737640", "737cb4", "737cd0", "738030", "738090", "738134", "738154", "7381ac", "738394", "738510", "738578", "73859c", "7385c8", "7385e8", "738608", "738650", "738670", "738ee4"],
+    "binary_u32": ["737258", "737830", "73788c", "73790c"],
+    "ternary_u32": ["7379a0", "737df8", "737ed8"],
+    "five_u32": ["7377e8"],
+    "zero_arguments": ["7375ec", "737a90", "738530", "738548", "738560", "738638"],
+    "output_two_words": "737278(context, output: GuestAddress, first: u32, second: u32)",
+    "output_two_bytes": "73845c(context, output: GuestAddress, first: u32, second: u32)",
+    "output_rectangle": "7379d8(context, output: GuestAddress, mode: u32)",
+    "output_pair": "737a4c(context, output: GuestAddress, mode: u32)",
+    "output_seven_words": "737aa8(context, output: GuestAddress, mode: u32, code: u32, value: u32)",
+    "channel_projection": "7386e0(context, profile: GuestAddress, snapshot: GuestAddress, scratch: GuestAddress)"
+  },
+  "canonical_api": {
+    "naming": "helper_ADDRESS<M: GuestAddressSpace, E>",
+    "context": "&mut RecordContext<M, E> is the first argument of every helper, including pure conversions.",
+    "result": "Every helper returns Result<u32, MemoryError>. Pointer-writing leaves preserve incoming output address. 7386e0 returns final invoked75df60 or75df80 residue.",
+    "memory": "Every address is GuestAddress. GuestAddressSpace performs all reads and writes. Scratch is caller-admitted four-byte guest storage.",
+    "dependency_calls": "Direct canonical Rust calls use the same context. No C exports, native externs, raw pointer casts, process-global remembered selection or retained CPU callbacks remain in this module.",
+    "boundary_ownership": "The root owns native C bridges and context construction."
+  },
+  "dependencies": [
+    {"address": "69f8fc", "abi": "(context, key: u32) -> Result<u32, MemoryError>", "provider": "record_configuration", "consumer": "738090", "semantics": "Read configuration byte keys0x9235..0x9239 for selection0..4; other selections return100 without reading."},
+    {"address": "73395c", "abi": "(context, index: u32) -> Result<u32, MemoryError>", "provider": "capture_profile_conversions_b", "consumer": "738394", "semantics": "Read numeric table entry. Selection7 still performs lookup0x30 and returns660; all other results sign extend low16bits."},
+    {"address": "75df14", "abi": "(context, profile: GuestAddress, output: GuestAddress) -> Result<u32, MemoryError>", "provider": "record_profile_aux_native", "consumer": "7386e0", "semantics": "Read four-byte first channel group through canonical profile accessor."},
+    {"address": "75df34", "abi": "(context, profile: GuestAddress, input: GuestAddress) -> Result<u32, MemoryError>", "provider": "record_profile_aux_native", "consumer": "7386e0", "semantics": "Write first channel group only on difference."},
+    {"address": "75df60", "abi": "(context, profile: GuestAddress, output: GuestAddress) -> Result<u32, MemoryError>", "provider": "record_profile_aux_native", "consumer": "7386e0", "semantics": "Read four-byte second channel group through canonical profile accessor."},
+    {"address": "75df80", "abi": "(context, profile: GuestAddress, input: GuestAddress) -> Result<u32, MemoryError>", "provider": "record_profile_aux_native", "consumer": "7386e0", "semantics": "Write second channel group only on difference."}
+  ],
+  "branch_and_residue_facts": [
+    "738578 is included as unary native export; raw738580..73858c returns1 exactly for unsigned selection5 or6 and0 for every other input.",
+    "Raw7379d8..737a48 writes four words160,120,240,320 for mode1 and four zero words for every other mode. Raw737a4c..737a8c writes two words40,320 for mode1 and two zero words otherwise. Both preserve output pointer in r0.",
+    "Raw737cb4..737ccc is identity despite inferred neighboring C names. Raw737cd0..737d04 preserves0x80/0xff, maps0 to0xa0 and subtracts1 otherwise. The canonical helpers follow raw addresses.",
+    "737278 wraps word arithmetic. 73845c truncates only at byte stores.",
+    "7372bc returns1 only for unsigned input0. Subtraction borrow rejects every input greater than1.",
+    "73788c accepts mode2 or selections5,7,10. 73790c accepts enabled1 and codes0xd0..0xd9, mappingd0/d4 to1,d1 to2 and remaining valid codes to3.",
+    "737aa8 reads and writes persistent guestword009134d8 through its context. Only mode1 valid codes0x41..0x44 update the word. Mode0 accepts remembered1/2/4/8; every other remembered value maps0.",
+    "737aa8 always writes words0 and1 as zero first. Mode0 loads remembered valid bit1/2/4/8 into word0, writes word2=1 and clears words3..6. Mode1 valid codes write the bit to words0/1, word2=1 and value to one of words3..6 while clearing the others.",
+    "737aa8 mode1 invalid code preserves all16tail bytes and writes words0/1=0,word2=1. Other modes preserve word2 and all16tail bytes and write only words0/1=0. Output extent is28bytes.",
+    "737df8 preserves mapped selections only for mode3/7, returns0xffff for mode1 outside categories15/29, otherwise1. 737ed8 preserves mapped selections for mode3/7 and mode1 outside categories15/29, otherwise0.",
+    "738608 returns0/1 unchanged and never returns for every other input, matching self-branch738624.",
+    "Raw738578..738598 accepts only selections5/6, using unsigned subtraction and comparison.",
+    "7386e0 packs snapshot offsets3a4,3a6,3aa,3a8 into first four-byte group and3a5,3a7,3ab,3a9 into second group. Each group is compared before its conditional canonical setter. Both getters always run."
+  ],
+  "ownership_exclusions": ["737854 selector", "738800 secondary", "73964c primary", "7378cc default rectangle", "7378fc default rectangle wrapper", "75xxx canonical profile accessors"],
+  "verification": "Source and raw instruction inspection only. No build, test, lint, formatter, SDK, native, guest or camera run was performed."
+}

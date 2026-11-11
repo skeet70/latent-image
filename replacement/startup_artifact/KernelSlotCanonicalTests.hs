@@ -62,14 +62,14 @@ main :: IO ()
 main = do
   arguments <- getArgs
   (encoder, rebuild, decoder, imagePaths, datPath, scratchPath) <- case arguments of
-    encoder : rebuild : decoder : rest | length rest == 35 ->
-      pure (encoder, rebuild, decoder, take 33 rest, rest !! 33, rest !! 34)
-    _ -> H.failH "usage: startup-artifact-kernel-slot-canonical-tests ENCODER REBUILD DECODER (J6 IMAGE SYMBOLS){13} SLOT_A_BIN SLOT_A_SYMBOLS SLOT_B_BIN SLOT_B_SYMBOLS REGIONS HEAP_BIN HEAP_SYMBOLS CANONICAL_DAT SCRATCH_DIR"
+    encoder : rebuild : decoder : rest | length rest == 37 ->
+      pure (encoder, rebuild, decoder, take 35 rest, rest !! 35, rest !! 36)
+    _ -> H.failH "usage: startup-artifact-kernel-slot-canonical-tests ENCODER REBUILD DECODER (J6 IMAGE SYMBOLS){14} SLOT_A_BIN SLOT_A_SYMBOLS SLOT_B_BIN SLOT_B_SYMBOLS REGIONS HEAP_BIN HEAP_SYMBOLS CANONICAL_DAT SCRATCH_DIR"
   resolved <- mapM canonicalizePath imagePaths
   [firstBin, firstSymbols, pairBin, pairSymbols, publisherBin, publisherSymbols, orchestrationABin, orchestrationASymbols
     , orchestrationBBin, orchestrationBSymbols, dispatcherBin, dispatcherSymbols, installerBin, installerSymbols
     , submissionBin, submissionSymbols, storageBin, storageSymbols, idleBin, idleSymbols, rootBin, rootSymbols
-    , image5Bin, image5Symbols, plainBin, plainSymbols, slotABin, slotASymbols, slotBBin, slotBSymbols, regionsPath, heapBin, heapSymbols] <- pure resolved
+    , _appBin, _appSymbols, image5Bin, image5Symbols, plainBin, plainSymbols, slotABin, slotASymbols, slotBBin, slotBSymbols, regionsPath, heapBin, heapSymbols] <- pure resolved
   tools <- Tools.Tools <$> canonicalizePath encoder <*> canonicalizePath rebuild <*> canonicalizePath decoder
   counter <- newIORef 0
   let ok = check counter

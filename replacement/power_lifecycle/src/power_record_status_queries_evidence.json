@@ -1,0 +1,43 @@
+{
+  "pin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "status": "source-implemented-unqualified",
+  "scope": "X-M1 1.50 task43 recording status/query helpers f387c0..f3a564 and their locally owned shared accessors",
+  "sources": [
+    "x70view:decomp/firmwares/xm1-150/app/control/af/profile/tu_00f336cc.c",
+    "x70view:decomp/firmwares/xm1-150/app/control/af/profile/tu_00f2e67c.c",
+    "x70view:decomp/firmwares/xm1-150/app/control/af/profile/record_notifications_rest.c",
+    "x70view:decomp/firmwares/xm1-150/app/control/af/profile/channel_notifications_rest.c",
+    "x70view:decomp/firmwares/xm1-150/app/control/af/profile/tu_00f336cc_exact2.c"
+  ],
+  "instruction_sources": [
+    "private-data/analysis/x-m1-1.50/lz/id5.dis:f38600..f3a764",
+    "private-data/analysis/x-m1-1.50/lz/id5.dis:ff6f94..ff6fbc",
+    "private-data/analysis/x-m1-1.50/lz/id4.dis:756b0c..7581e4",
+    "private-data/analysis/x-m1-1.50/lz/id4.dis:76b45c..76b540"
+  ],
+  "entries": [
+    {"entry": "f387c0", "facts": ["disabled resource class or resource mode other than1 clears selection flags", "mode2 reuses stored primary and alternate profile pointers", "other enabled modes export profile, cap four ring lengths at10, clear four byte positions and0x4ec ring bytes, seed each ring, publish selection"]},
+    {"entry": "f38d54", "facts": ["clears one byte at16c007c without changing adjacent bytes"]},
+    {"entry": "f38d78", "facts": ["preserves previous selection weight in byte16c06a0 before clearing enabled flag, pointers and weight"]},
+    {"entry": "f38de0", "facts": ["clears0x30 bytes16c0088 and captures current profile summary"]},
+    {"entry": "f38e0c", "facts": ["exports63 halfwords into four independent rings of28,22,9,4 elements", "all four ring positions advance even when one weighted group is unavailable", "weighted sums include every saved sample and the current sample multiplied by configured weight", "signed A32 division and rounding use tenths with ties away from zero", "smoothing divides signed correction by128 with truncation toward zero", "last group uses signed halfwords, other groups unsigned halfwords", "zero denominator skips only that group and prevents final selection publication", "selection first word is unwritten stack residue in installed bytes"]},
+    {"entry": "f39784", "facts": ["disabled query leaves cycle byte unchanged", "enabled query increments byte with wrapping then caps values above3 to1", "returns whether final cycle byte equals1"]},
+    {"entry": "f39808/f39870/f3a160/f3a1b8", "facts": ["completion flags depend on exact override words equal1 at942ba4/942ba8/942bac", "primary override maps bit1, secondary bit0, auxiliary bit2", "enabled mode dispatch status is-94, otherwise0"]},
+    {"entry": "f398d8/f3990c", "facts": ["resource mode must equal0", "history property comparison is unsigned <=1"]},
+    {"entry": "f39940/f3996c", "facts": ["pending words are cleared at16c06a4/6a8/6ac", "reset leaves r0 equal0", "pending consumption priority returns a3,a4,a6 and clears only chosen word", "empty pending state returns109"]},
+    {"entry": "f39b8c/f3a0c4", "facts": ["captures callback before querying mode or loading saved source", "reset invokes prior callback before clearing snapshot", "reset initializes current and previous position halfwords, selection and resource flags", "direct completion writes saved callback status before invocation"]},
+    {"entry": "f39c74", "facts": ["current position moves to previous before new position query", "negative resulting position is clamped to0 after halfword wrapping", "changed selection latches snapshot word20", "latched selection clears resource mode before snapshot status is read", "resource mode is set2 after status publication"]},
+    {"entry": "f39f48/f39fd0", "facts": ["sets channel property8 before reading request selector and saved position", "request position fields sign-extend halfwords", "capture completion callbacks are native f39b64 and f39b3c"]},
+    {"entry": "f39b64", "facts": ["message47 carries8 bytes, second word remains stack residue"]},
+    {"entry": "f3a464/f3a48c/f3a4c0/f3a564", "facts": ["permission-gated shared resource flag update", "extended enable flag clears only after stop callback", "source kind outside1..2 stops active extended selection", "extended request has0x4c bytes with unwritten word1c", "start effect precedes extended flag publication and request submission"]},
+    {"entry": "fea7ac", "facts": ["copies0x5c4 bytes from16f496c plus selector times0x5c4", "no selector validation exists in installed helper chain"]}
+  ],
+  "owned_shared_entries": ["756b2c", "756dfc", "756e90", "756ebc", "757828", "757c10", "757c60", "757df0", "757e38", "757e80", "7580ec", "75810c", "758134", "75817c", "7581b4"],
+  "shared_provider_dependency": "record_profile_accessors::{can_write,ProfileHandle,ProfileField}",
+  "shared_return_abi": {"756e90": "returns destination pointer", "756ebc": "returns copied first word on allowed write; returns0 on denied write"},
+  "external_helper_abi_prefix": "xm1_power_record_helper_ followed by six hexadecimal address digits",
+  "external_helpers": ["04d978", "64744c", "69f8fc", "69fec8", "72872c", "746bf8", "746c2c", "74a740", "74e020", "74e5c0", "74e7a0", "74eba8", "74ec30", "74ece4", "74ed6c", "74ef04", "74ef8c", "74f014", "74f09c", "74f124", "74f1f0", "74f5ec", "74fa2c", "7503ec", "752714", "754d9c", "756940", "756970", "756a7c", "756ac4", "756b0c", "756b54", "75741c", "75743c", "76d9b8", "76d9c8", "76da48", "76da84", "76f394", "772f28", "dca798", "ed80a8", "ed80c4", "ee9ab0", "eef1c0", "eef3f0", "ef72d4", "ef74e4", "ef9a94", "efa258", "efa2d0", "efb104", "efb328", "efb3a8", "efb3f0", "efb438", "f4c3d0", "f4c4d8", "f4c6e8", "f4f16c", "fa7634", "fa79b4", "fa7edc", "fa8018", "fa9588", "faa770", "faa790", "fab43c", "fea6c8", "fea70c", "fea738", "fea760"],
+  "callback_provider": "xm1_power_record_callback2(callback:u32,first:u32,second:u32), live native callback slots only",
+  "tests": "power_record_status_queries_tests.rs; authored only, not executed",
+  "qualification": "No build, test, formatter, lint, SDK, guest or camera execution performed. Root/lib/BUILD integration and provider closure belong to PowerApplicationJoin."
+}

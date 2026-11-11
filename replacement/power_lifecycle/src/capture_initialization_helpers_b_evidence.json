@@ -1,0 +1,34 @@
+{
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "preserved_application_commit": "e366600b",
+  "scope": "Host/source reconstruction of capture initialization helpers 006402b8 through 006433f0, including the nested 00641438 orchestration and 006427bc default initialization.",
+  "modules": ["capture_initialization_helpers_b.rs", "capture_initialization_defaults.rs"],
+  "sources": [
+    "decomp/firmwares/xm1-150/app/native_ui_commands/xm1_ui_commands.c:417-474",
+    "decomp/firmwares/xm1-150/app/native_record_settings/xm1_record_settings.c:463-469",
+    "decomp/firmwares/xm1-150/app/ui/record/ui_record_state_bodies.c:841-1009",
+    "decomp/firmwares/xm1-150/app/ui/record/ui_record_state_bodies_2.c:2290-2434",
+    "decomp/firmwares/xm1-150/app/ui/record/ui_record_state_bodies_3.c:97-491",
+    "decomp/firmwares/xm1-150/app/ui/record/ui_profile_service_accessors_1.c:20-28",
+    "decomp/firmwares/xm1-150/app/ui/record/ui_profile_service_bodies.c:92-112",
+    "decomp/firmwares/xm1-150/app/ui/record/ui_profile_service_bodies_2.c:344-855"
+  ],
+  "byte_evidence": {
+    "image": "private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin",
+    "disassembly": "private-data/analysis/x-m1-1.50/lz/id4.dis",
+    "ranges": ["006337f8..00634af8", "006358d8..00635af4", "006400b8..00642524", "006425ec..006434f8"],
+    "corrections_to_draft_c": [
+      "Input +338 and frame +d02c/+d074/+d0f4/+d1f4/+d375 are bytes.",
+      "The 0063462c cache setter writes a halfword at input +124.",
+      "006411e0 forwards its mode argument into 0063e8fc.",
+      "00641438 recomputes the continuous operation after count/rate clamping.",
+      "00641438 uses unsigned operation bounds and excludes operation 6 from its final +80 predicate.",
+      "006425ec calls the record-mode auto-ISO getter at 00643ec4.",
+      "006427bc consumes return values in r0 for scalar setters missing arguments in draft C.",
+      "006394d0, 006394e8 and 0063a0e0 are constant-return functions and are folded at their callers."
+    ]
+  },
+  "native_boundary": "xm1_property_get(id, bank, defaults, selection) -> u32; the explicit selection used by 006427bc is derived from frame +cfe4.",
+  "integration": "Register capture_initialization_helpers_b at the crate root. Its defaults module is nested and needs no root registration. Shared state, helper A/C, conversion, list-state and orchestration APIs are supplied by their assigned owners.",
+  "verification": "No builds, tests, linters, formatters, SDK operations, guest execution or camera I/O were performed."
+}

@@ -89,14 +89,14 @@ main :: IO ()
 main = do
   arguments <- getArgs
   (encoder, rebuild, decoder, imagePaths, heapPaths, datPath, scratchPath) <- case arguments of
-    encoder : rebuild : decoder : rest | length rest == 30 ->
-      pure (encoder, rebuild, decoder, take 26 rest, take 2 (drop 26 rest), rest !! 28, rest !! 29)
-    _ -> H.failH "usage: startup-artifact-j7-heap-canonical-tests ENCODER REBUILD DECODER (J6 IMAGE SYMBOLS){13} HEAP_BIN HEAP_SYMBOLS CANONICAL_DAT SCRATCH_DIR"
+    encoder : rebuild : decoder : rest | length rest == 32 ->
+      pure (encoder, rebuild, decoder, take 28 rest, take 2 (drop 28 rest), rest !! 30, rest !! 31)
+    _ -> H.failH "usage: startup-artifact-j7-heap-canonical-tests ENCODER REBUILD DECODER (J6 IMAGE SYMBOLS){14} HEAP_BIN HEAP_SYMBOLS CANONICAL_DAT SCRATCH_DIR"
   resolved <- mapM canonicalizePath imagePaths
   [firstBin, firstSymbols, pairBin, pairSymbols, publisherBin, publisherSymbols, orchestrationABin, orchestrationASymbols
     , orchestrationBBin, orchestrationBSymbols, dispatcherBin, dispatcherSymbols, installerBin, installerSymbols
     , submissionBin, submissionSymbols, storageBin, storageSymbols, idleBin, idleSymbols, rootBin, rootSymbols
-    , image5Bin, image5Symbols, plainBin, plainSymbols] <- pure resolved
+    , _appBin, _appSymbols, image5Bin, image5Symbols, plainBin, plainSymbols] <- pure resolved
   [heapBin, heapSymbols] <- mapM canonicalizePath heapPaths
   tools <- Tools.Tools <$> canonicalizePath encoder <*> canonicalizePath rebuild <*> canonicalizePath decoder
   counter <- newIORef 0

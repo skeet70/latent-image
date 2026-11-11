@@ -1,0 +1,77 @@
+{
+  "firmware": "Fujifilm X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "evidence_kind": "source-inspected ARM bytes",
+  "image": "id5-00bf1a00.bin",
+  "image_base": "0x00bf1a00",
+  "source_interval": ["0x00f3a768", "0x00f3d3e0"],
+  "decompilation_sources": [
+    "app/control/af/profile/extended_value_notifications.c",
+    "app/control/af/profile/callback_descriptors.c",
+    "app/control/af/profile/tu_00f3b058.c"
+  ],
+  "integration": {
+    "root_owner": "PowerApplicationJoin",
+    "modules": [
+      "record_task43_machine23_callbacks",
+      "record_task43_machine23_state",
+      "record_task43_machine23_notifications",
+      "record_task43_machine23_descriptors",
+      "record_task43_machine23_submissions",
+      "record_task43_machine23_scan"
+    ],
+    "target": "ARM32 native helper ABI",
+    "exports": "xm1_power_record_helper_<six hexadecimal address digits>",
+    "dispatcher_owner": "PowerLifecycleNext.PowerRecordMachines18",
+    "dispatcher_changes": "Forward the incoming event to f3aa94 and f3b370. Consume r0 from f3aef8. Do not add a slot dispatcher to these modules.",
+    "adjacent_owner": "PowerApplicationJoin.RecordMachine26Cpu starts at f3d3e0",
+    "required_type_module": "crate::record_profile_accessors::ProfileWords",
+    "callback_payload_type": "crate::record_task43_machine23_submissions::CallbackPayload",
+    "host_execution": "Raw mapped X-M1 memory is required. These modules are not portable host-memory implementations."
+  },
+  "abi_facts": {
+    "f3aa94": "event:u32 -> (); writes word 0x016c0714",
+    "f3aef8": "() -> u32; forwards resource byte getter 7501cc return r0",
+    "f3b370": "event:u32 -> (); event 18/19 select completion command 21, event 10/177 select resource command 21",
+    "f3bf24": "value:u32 -> (); writes word 0x016c0724",
+    "f3c104": "first:u32,second:u32 -> (); copies 8-byte event 0x89 payload",
+    "f3c14c": "first:u32,second:u16,third:u32 -> (); copies 12-byte event 0x46 payload",
+    "f3aa40": "five u32 values, row:*const u8, tail:u32 -> (); copies 40 row bytes into 64-byte event 0x79 payload",
+    "f3bfe0": "Snapshots 0x404 bytes before callback. Callback receives four u32 register words and by-value 0x404-byte outgoing stack payload.",
+    "f3c9f4": "() -> i32; complete classifier body extends through f3d3df, including its literal pool",
+    "stock_empty_bodies": ["f3b0fc", "f3c0bc"]
+  },
+  "lifetime_contract": {
+    "ef9a94": "Must synchronously copy the supplied stack payload before returning; no stack pointer may be retained.",
+    "image_command_records": "1039638,1039c7c,1039e48 and record submission providers must copy borrowed descriptors into owned asynchronous command storage before returning.",
+    "callbacks": "All supplied function pointers name the new owned canonical callbacks, not retained firmware PCs.",
+    "75573c": "Must return an owned callback with CallbackPayload by-value ABI, never reinterpret a retained guest PC as a native function pointer."
+  },
+  "provider_ownership": {
+    "PowerLifecycleNext.PowerRecordProfileAccessors": ["74e020", "74e520", "74e5c0", "74e7a0", "74ea10", "74eb20", "74eba8", "74ec30", "74ece4", "74ed6c", "74ee7c", "74ef04", "74ef8c", "74f014", "74f124", "74f1f0", "74fc64", "74fdfc", "74fe84", "750144", "7501cc", "7503ec", "750474", "7509c4", "750d98", "756b0c", "756b54", "76d9c8", "76da84"],
+    "PowerApplicationJoin.ProfileSlotCpu": ["752714", "7527ac", "7527f8", "752890", "754d9c", "754e3c", "754edc", "754f8c", "75502c", "7550cc", "75520c", "7552bc", "75536c", "75540c", "7554ac", "75554c", "7555ec", "75569c", "75573c"],
+    "PowerApplicationJoin.ProfileSharedCpu": ["756e24", "757bc0", "757da0", "758098", "7580ec", "758154", "7589c0"],
+    "PowerLifecycleNext.PowerRecordStatusQueries": ["756e90", "756b2c", "757c10", "757df0"],
+    "PowerApplicationJoin.RecordNumericCpu": ["fa7634", "faab3c"],
+    "PowerApplicationJoin.RecordSelectionTailCpu": ["fa7a5c", "faaea8"],
+    "PowerApplicationJoin.RecordStatisticsCpu": ["dca798", "ef43b8", "ee9ab0"],
+    "PowerApplicationJoin.RecordScanCoreCpu": ["7590b8"],
+    "PowerApplicationJoin.RecordProfileMergeCpu": ["759140"],
+    "PowerApplicationJoin.RecordImageCommandCpu": ["1039638", "1039c7c", "1039e48", "1039dd4", "103a00c", "103a09c", "103a0f0", "103a13c", "103a1a8", "103a200", "103a254", "103a2c0", "103a32c", "103a398", "103a404", "103a470", "103a594", "103a694", "103a708", "103aff0"],
+    "PowerLifecycleNext.PowerRecordCompletionServices": ["efaf24", "efaf74", "efb224", "efb298", "efb2e0", "efb500", "efb548", "efb590", "efb6f4", "efb73c", "efb784", "efb7cc", "efb814", "efb85c", "efb8a4", "efb934"],
+    "PowerLifecycleNext.PowerRecordTask43": ["ef9a94"],
+    "configuration_boundary": ["69f8fc", "69fec8"],
+    "integration_owner_resolution": ["6a7de0", "6a7e68", "72872c", "740d50", "746054", "772f28", "edb554", "f47468", "f48e74", "f48f1c", "f48f54", "f4929c", "f5206c", "f525ec", "f60ab8"],
+    "75516c": "ActiveSelections owner"
+  },
+  "verification": {
+    "builds_run": false,
+    "tests_run": false,
+    "linters_run": false,
+    "formatters_run": false,
+    "native_runs": false,
+    "sdk_runs": false,
+    "emulator_runs": false,
+    "camera_operations": false
+  }
+}

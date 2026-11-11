@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "admission": "unadmitted-source-handoff",
+  "reference_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source": ["app/control/af/area/tu_00f2ff10.c", "app/control/af/profile/tu_00f2e67c.c"],
+  "byte_evidence": "Pinned X-M1 id5.dis actual instructions f308d4..f31673 and f2f684/f2f6ac/f2f6d8/f2f778. Draft NONMATCHING C is not authoritative for widths, stack offsets, argument alignment or snapshot sizes.",
+  "extents": [
+    {"entry":"f308d4","bytes":1468,"sha256":"e4a2b4a198804d458e6058934e296ffbb4d79ad7dba8ec5f72b12f5575353c24"},
+    {"entry":"f30e90","bytes":212,"sha256":"38d688c02da18459b782203db2569c972267f6f2012aa0d2b3fa54ef5a91cb21"},
+    {"entry":"f30f64","bytes":1508,"sha256":"104df0be32f597eea036bce5c183ad8a8b2c900d48086d72d937b2576f182110"},
+    {"entry":"f31548","bytes":116,"sha256":"7f393694f9fd372c548e4c0e43a2af9f556685655ebcf9d42aff7ef9680dc329"},
+    {"entry":"f315bc","bytes":96,"sha256":"fd764712446445926183c5032aceb1099df05bb27afabfcf0fa46fda9db431c9"},
+    {"entry":"f3161c","bytes":88,"sha256":"381520bb2973469b8d61508bd16aaabaa86c8c0e6bcd6bb1547037e8274832ba"},
+    {"entry":"f2f684","bytes":40,"sha256":"3425dff01a13b5b0dc6d52d9ad437f3433231fdc50b185c05f036aacbed0539c"},
+    {"entry":"f2f6ac","bytes":44,"sha256":"2e799c5b6661f36b9067e2a3a4ae58614f65af79687c08ffb89e20adc595b4f8"},
+    {"entry":"f2f6d8","bytes":40,"sha256":"273bbc7a7d30f9b462abaece70edd2d03f138860f80df6352b0ba495d90e3974"},
+    {"entry":"f2f778","bytes":40,"sha256":"91a98db1da6942e5ad29b76c28dcd830439725013241729de1191a294c0a7386"}
+  ],
+  "implementation": {
+    "mode": "record_task43_configure_mode.rs implements every mode/default branch, writes mode before reset words and retains conditional callback/start ordering.",
+    "restore": "record_task43_configure_restore.rs preserves repeated76da84 reads, signed16 final value and snapshot writeback only on active restoration. Snapshot756840/756878 covers48 bytes, active word at+32 and saved candidate+8.",
+    "payload": "record_task43_configure_payload.rs reconstructs actual stack-relative field offsets in528-byte aligned storage without initializing unwritten bytes. Actual request begins at originalFP-240. It publishes both statistics snapshots before storing previous mode and submitting request.",
+    "callbacks": "Owned native callbacks post events99,74,75,65 via canonical ef9a94. Event75 writes word0 and byte4 and preserves unwritten padding5..7. Callback fields contain owned function pointers, not retained guest CPU addresses.",
+    "leaf_cpu": "ed8af4 copies72 bytes from169953c; ed8b10 copies200 bytes from1699584. ef7820 is the pure value3-or4 predicate. ee9ab0 signed quotient, ROM coefficient lookup, wrapping product and ARM low-byte register shift semantics are inlined."
+  },
+  "provider_owners": {
+    "f30828/f3088c/f2fcd0/faaea8/faac8c": "PowerApplicationJoin.RecordSelectionTailCpu",
+    "74/75 profile fields": "PowerRecordProfileAccessors, PowerRecordStatusQueries, ProfileSharedCpu and profile slot/merge owners, canonical xm1_power_record_helper exports",
+    "fa numeric/state": "PowerApplicationJoin.RecordNumericCpu",
+    "dca798": "PowerApplicationJoin.RecordStatisticsCpu",
+    "ef9b50/ef9dc0": "PowerRecordTask43 confirmed direct literal snapshots169d004/169d22c; inlined"
+  },
+  "integration_dependencies": ["Parent must register configure_mode, configure_restore and configure_payload modules.", "Canonical configuration byte and actual profile/numeric providers must be linked.", "Canonical owned eecd94, ed8b2c, ed8b6c, f46e6c, f472bc, f47300, fea49c, fea7dc, 740d50 and758fa8 providers require integration-owner routing."],
+  "verification": "No builds, tests, lint, formatting, native qualification, SDK, guest execution or camera I/O performed. Extent hashes above are pinned index metadata, not a new hash verification."
+}

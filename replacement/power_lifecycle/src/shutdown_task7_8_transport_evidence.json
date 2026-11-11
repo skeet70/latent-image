@@ -1,0 +1,40 @@
+{
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "raw_image": "private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin",
+  "extents": [
+    {
+      "name": "completion_policy",
+      "start": "0xd818ac",
+      "end_exclusive": "0xd818e4",
+      "size": 56,
+      "sha256": "122f2323ad098d854d57c28275e374c56cb4872ebbe5014b16cb5474194ed4ce"
+    },
+    {
+      "name": "unregister_primary",
+      "start": "0xd81cdc",
+      "end_exclusive": "0xd81d04",
+      "size": 40,
+      "sha256": "933e34b26170fbbaa96133522ea6af37973e501531bf01d5f1a31bb469b072c4"
+    },
+    {
+      "name": "unregister_secondary",
+      "start": "0xd81e94",
+      "end_exclusive": "0xd81f18",
+      "size": 132,
+      "sha256": "f2add7e23eca8093675d8ae162d8132b0d6436d15e1bf064c5365aa4060f1624"
+    }
+  ],
+  "primitives": {
+    "d818ac": "Always clear01469d1c, then write1 only for argument0. This is completion policy, not controller state.",
+    "d81cdc": "Unregister handle0146a09c through shared registry69b7a4, then clearhandle andactivity0146a094.",
+    "d81e94": "Only mode0146a0c0==2. If0146a0a8==1 invoke optional owned secondary callback(-11), then clearactivity. Unregister0146a0b4 andclearhandle."
+  },
+  "callback_contract": "Native secondary unregister receives the actual owned callback from the vendor transport owner. It does not convert a stock application address into an owned callback. None represents a null registered completion slot.",
+  "shared_registry": "shutdown_task7_8::unregister_registry_handle and C symbol xm1_power_unregister_registry_handle; shared with task8, no duplicate registry implementation.",
+  "ownership": {
+    "VendorProtocol.VendorCommands": "Assignment only. Event6 all12actions and primitive integration remain unimplemented when parent requested wrapping the current step.",
+    "VendorProtocol.VendorTransport": "Assignment only. d7c790 manager teardown and d82038/d82084 timer cancellation remain unimplemented; shared registry release is available.",
+    "PowerLifecycle.PowerTaskSevenEight": "Only d818ac/d81cdc/d81e94 primitives and task7/task8 shutdown routing"
+  },
+  "verification": "Source-only. Behavioral tests added but not run."
+}

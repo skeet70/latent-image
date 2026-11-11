@@ -12,9 +12,10 @@ use crate::{
     ptp_runtime::PtpRuntime,
     ptp_types::BatteryLevel,
     service::Service,
-    transport::{cpu, irq_control, scheduler, ChannelLease, ControllerTeardown, PublishedRegion, TeardownPlatform, TeardownProgress, TransportError},
+    transport::{cpu, irq_control, scheduler, ChannelLease, ControllerTeardown, PublishedRegion, Register, TeardownPlatform, TeardownProgress, TransportError},
     transport_connection_cpu::{ActiveFileClose, CloseError, ConnectionState},
-    transport_start_cpu::{bulk_packet_size, link_connected, CallbackTable, SessionMode, StartError, StartIo, StartProgress, StartRuntime, UsbStart},
+    transport_pump::{TransportPump, UsbEvent},
+    transport_start_cpu::{bulk_packet_size, link_connected, CallbackTable, SessionMode, StartError, StartIo, StartProgress, StartRegister, StartRuntime, UsbStart},
 };
 use xm1_power_services::{
     primitives::ServiceStatus,
@@ -45,11 +46,6 @@ pub trait ProtocolApplication: ProtocolFiles {
     fn complete(&mut self, completion: ProtocolCompletion);
 }
 
-/// Stock 0x00d7d154.
-pub trait TransportPump {
-    fn flush(&mut self) -> Result<(), TransportError>;
-}
-
 /// The DMA channel leases of the open USB session, handed over once for its teardown.
 pub trait SessionChannels {
     fn take(&mut self) -> [ChannelLease; 2];
@@ -67,7 +63,7 @@ pub trait RootHost {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CallbackTables { pub protocol: PublishedRegion, pub service: PublishedRegion, pub unselected: PublishedRegion }
 
-pub struct RootProviders<'r, 's, 'irq, 'd, 'a, K, I, T, M, G, P, C, F, A, U, H, O> {
+pub struct RootProviders<'r, 's, 'irq, 'd, 'a, K, I, T, M, G, P, C, F, A, H, O> {
     pub start: &'r mut StartRuntime<'s, 'irq, K, I, T>,
     pub machine: &'r M,
     pub domain: scheduler::layout::Domain,
@@ -76,7 +72,6 @@ pub struct RootProviders<'r, 's, 'irq, 'd, 'a, K, I, T, M, G, P, C, F, A, U, H, 
     pub channels: &'r mut C,
     pub files: &'r mut F,
     pub application: &'r mut A,
-    pub pump: &'r mut U,
     pub host: &'r mut H,
     pub rtos: &'r RefCell<O>,
     pub tables: CallbackTables,
@@ -115,24 +110,28 @@ pub struct ControllerRoot<'a, B> {
     pub ptp: PtpRuntime,
     pub bridge: PictBridge,
     usb: UsbStart<'a>,
+    pump: TransportPump,
     fault: Option<RootError>,
 }
 
 impl<'a, B: Backend> ControllerRoot<'a, B> {
     pub fn new(service: Service<'a, B>, producers: &'a TimerProducers, usb: UsbStart<'a>) -> Self {
         Self { runtime: ControllerRuntime::new(service, producers), connection: ConnectionState::new(),
-            ptp: PtpRuntime::new(), bridge: PictBridge::new(), usb, fault: None }
+            ptp: PtpRuntime::new(), bridge: PictBridge::new(), usb, pump: TransportPump::new(), fault: None }
     }
+
+    /// The events of the latest 0x00d7d154 pass.
+    pub fn pumped(&self) -> crate::transport_pump::Pumped { self.pump.last() }
 
     /// The first failure of the latest failed step that `run` continued past.
     pub fn take_fault(&mut self) -> Option<RootError> { self.fault.take() }
 
     /// Executes one stock dispatch (0x00d80e98). Every effect of the cell runs; the first failure is returned afterwards.
-    pub fn step<K, I, T, M, G, P, C, F, A, U, H, O>(
-        &mut self, message: Queue36Message, p: &mut RootProviders<'_, '_, '_, '_, 'a, K, I, T, M, G, P, C, F, A, U, H, O>,
+    pub fn step<K, I, T, M, G, P, C, F, A, H, O>(
+        &mut self, message: Queue36Message, p: &mut RootProviders<'_, '_, '_, '_, 'a, K, I, T, M, G, P, C, F, A, H, O>,
     ) -> Result<(), RootError>
     where K: irq_control::Backend, I: StartIo, T: cpu::DelayCounter, M: scheduler::Machine, G: TimerRegistry, P: TeardownPlatform,
-        C: SessionChannels, F: ActiveFileClose, A: ProtocolApplication, U: TransportPump, H: RootHost, O: ShutdownRtos,
+        C: SessionChannels, F: ActiveFileClose, A: ProtocolApplication, H: RootHost, O: ShutdownRtos,
     {
         let state = self.runtime.controller.state();
         let mut cell = Cell { root: self, p, faults: Faults(None) };
@@ -150,11 +149,11 @@ impl<'a, B: Backend> ControllerRoot<'a, B> {
     }
 
     /// Stock 0x00d81218. Returns only when the queue receive fails.
-    pub fn run<K, I, T, M, G, P, C, F, A, U, H, O>(
-        &mut self, receiver: &mut impl Queue36Receive, p: &mut RootProviders<'_, '_, '_, '_, 'a, K, I, T, M, G, P, C, F, A, U, H, O>,
+    pub fn run<K, I, T, M, G, P, C, F, A, H, O>(
+        &mut self, receiver: &mut impl Queue36Receive, p: &mut RootProviders<'_, '_, '_, '_, 'a, K, I, T, M, G, P, C, F, A, H, O>,
     ) -> RootError
     where K: irq_control::Backend, I: StartIo, T: cpu::DelayCounter, M: scheduler::Machine, G: TimerRegistry, P: TeardownPlatform,
-        C: SessionChannels, F: ActiveFileClose, A: ProtocolApplication, U: TransportPump, H: RootHost, O: ShutdownRtos,
+        C: SessionChannels, F: ActiveFileClose, A: ProtocolApplication, H: RootHost, O: ShutdownRtos,
     {
         loop {
             let result = match self.runtime.next_message(receiver) {
@@ -195,17 +194,62 @@ impl<K: irq_control::Backend, I, T, P: TeardownPlatform, M: scheduler::Machine, 
     }
 }
 
-struct Cell<'x, 'r, 's, 'irq, 'd, 'a, B, K, I, T, M, G, P, C, F, A, U, H, R> {
+struct Cell<'x, 'r, 's, 'irq, 'd, 'a, B, K, I, T, M, G, P, C, F, A, H, R> {
     root: &'x mut ControllerRoot<'a, B>,
-    p: &'x mut RootProviders<'r, 's, 'irq, 'd, 'a, K, I, T, M, G, P, C, F, A, U, H, R>,
+    p: &'x mut RootProviders<'r, 's, 'irq, 'd, 'a, K, I, T, M, G, P, C, F, A, H, R>,
     faults: Faults,
 }
 
-impl<'a, B, K, I, T, M, G, P, C, F, A, U, H, R> Cell<'_, '_, '_, '_, '_, 'a, B, K, I, T, M, G, P, C, F, A, U, H, R>
+impl<'a, B, K, I, T, M, G, P, C, F, A, H, R> Cell<'_, '_, '_, '_, '_, 'a, B, K, I, T, M, G, P, C, F, A, H, R>
 where B: Backend, K: irq_control::Backend, I: StartIo, T: cpu::DelayCounter, M: scheduler::Machine, G: TimerRegistry, P: TeardownPlatform,
-    C: SessionChannels, F: ActiveFileClose, A: ProtocolApplication, U: TransportPump, H: RootHost, R: ShutdownRtos,
+    C: SessionChannels, F: ActiveFileClose, A: ProtocolApplication, H: RootHost, R: ShutdownRtos,
 {
     fn kind(&self) -> RequestKind { self.root.runtime.controller.request_handle().kind() }
+
+    /// The 0x340e cell: stock 0x00d7d154 through the state-8 and active cells at 0x00d84174/0x00d84188.
+    fn flush_transport(&mut self) {
+        let pumped = self.root.pump.read(&mut self.root.usb, &mut self.p.start.io);
+        for event in pumped.events() { self.apply_pump_event(event); }
+        TransportPump::finish(&mut self.root.usb, &mut self.p.start.io, pumped);
+    }
+
+    fn apply_pump_event(&mut self, event: UsbEvent) {
+        match event {
+            UsbEvent::CompletionReset => {
+                self.p.start.io.write32(Register::InterruptReset, 0x8181_0303);
+                let result = self.root.runtime.update_connection_handle(CompletionHandle(0), &mut self.p.start.io,
+                    &mut SharedRtos(self.p.rtos));
+                self.faults.note(result);
+            }
+            UsbEvent::TransferReset => self.transfer_reset(),
+            UsbEvent::BusState | UsbEvent::ControlComplete | UsbEvent::ControlPacket
+            | UsbEvent::ControlTransferZero | UsbEvent::ControlTransferOne | UsbEvent::ChannelThree
+            | UsbEvent::ChannelOneComplete | UsbEvent::ChannelTwoRequest
+            | UsbEvent::ChannelTwoTransfer | UsbEvent::ChannelOneTransfer => {
+                // The callback table at 0x01469768+0x0c and the DMA transfers at 0x01469798/0x014697fc
+                // are not implemented; `pumped` exposes these events.
+            }
+        }
+    }
+
+    /// Stock 0x00d7d360's register effects; the channel stop at 0x01469768+4/+8 has no owned provider.
+    fn transfer_reset(&mut self) {
+        self.root.usb.reset_transfer_state();
+        let io = &mut self.p.start.io;
+        io.write32(Register::OutStart, 0);
+        let mask = io.read16(Register::InMaskHigh);
+        io.write16(Register::InMaskHigh, mask & 0xfffc);
+        let control = io.start_read16(StartRegister::EndpointControl);
+        io.start_write16(StartRegister::EndpointControl, control | 0xc);
+        io.write32(Register::OutInitialize, 0x101);
+        let result = cpu::spin_delay(&mut self.p.start.timer, 1);
+        self.faults.note(result);
+        let io = &mut self.p.start.io;
+        io.write16(Register::EndpointPulse, 0xfff);
+        let bus = io.read16(Register::BusSpeed);
+        let control = io.read32(Register::OutControl);
+        io.write32(Register::OutControl, (control & !0x1000) | (u32::from((bus & 0x7fff) >> 14) << 12));
+    }
 
     fn publish(&mut self, consumer: StatusConsumer, status: i32) {
         let result = self.root.runtime.publish(consumer, ServiceStatus(status), &mut SharedRtos(self.p.rtos));
@@ -229,7 +273,7 @@ where B: Backend, K: irq_control::Backend, I: StartIo, T: cpu::DelayCounter, M: 
                 let result = self.root.runtime.poll_connection(level, &mut self.p.start.io, &mut SharedRtos(self.p.rtos));
                 self.faults.note(result);
             }
-            O::FlushTransport => { let result = self.p.pump.flush(); self.faults.note(result); }
+            O::FlushTransport => self.flush_transport(),
             O::Defer => self.root.runtime.deferred.defer(message),
             O::EnterPending => self.root.runtime.deferred.set_blocked(false),
             O::Complete | O::CompleteUnlessService | O::CompleteAndActivate => { self.complete(state, message); return PhaseWrite::Unchanged; }

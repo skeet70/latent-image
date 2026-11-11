@@ -1,0 +1,37 @@
+{
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "firmware": "Fujifilm X-M1 1.50",
+  "source_units": ["app/control/af/profile/tu_00f336cc.c", "app/control/af/profile/tu_00f2e67c.c"],
+  "byte_evidence": "private-data/analysis/x-m1-1.50/lz/id5.dis:847953-850761",
+  "implementation_status": "Source-only native translation. Shared CPU cutover is incomplete; no qualification transfers to these sources.",
+  "checks_executed": [],
+  "native_modules": {
+    "record_task43_aux_grid": ["f34c70", "f34c98"],
+    "record_task43_aux_packets": ["f3515c", "f3557c"],
+    "record_task43_aux_snapshot": ["f3579c"],
+    "record_task43_aux_refresh": ["f35d14"],
+    "record_task43_aux_completion": ["f363b8", "f363d8", "f363f8", "f36658", "f36760"],
+    "record_task43_aux_adjustment": ["f367a4", "f36e74"],
+    "record_task43_aux_live": ["f36eac"]
+  },
+  "portable_modules": {"record_task43_aux_state": ["f363b8", "f363d8", "f36760"]},
+  "ownership": {
+    "head_and_preludes": "PowerLifecycleNext.PowerCaptureStart: f3313c,f33164,f33520,f33568,f335b0,f336cc,f3382c,f339f8,f33a18,f33ef4,f34710",
+    "caller": "PowerLifecycleNext.PowerRecordMachines18: machine24 calls f339f8,f33a18,f33ef4,f34710,f34c70,f34c98,f3515c,f3557c,f3579c,f35d14,f363b8,f363d8,f36658,f36eac",
+    "resource_callers": "PowerLifecycleNext.PowerRecordResourceProfiles: f254bc calls f363f8;f24bd0 calls f36760,f367a4",
+    "resource_profiles": "PowerLifecycleNext.PowerRecordResourceProfiles: f2476c,f249f0,f2519c,f253a0,f24b58,f24ba8",
+    "numeric": "PowerApplicationJoin.RecordNumericCpu: fa numeric helpers",
+    "shared_accessors": "PowerApplicationJoin.ProfileSharedCpu: 756734,756754,756840,shared snapshot copies",
+    "profile_accessors": "PowerLifecycleNext.PowerRecordProfileAccessors: 74/75 accessors and f76414..f7a0cc exposure math",
+    "indexed_accessors": "PowerApplicationJoin.ProfileSlotCpu: 752/753 indexed accessors",
+    "mapping": "PowerApplicationJoin.ProfileMappingCpu: 746834,746bf8,746c2c,74714c",
+    "jobs": "PowerApplicationJoin.RecordJobCpu: f5f9fc,f5fc00",
+    "scan_publication": "PowerApplicationJoin.RecordScanPublicationCpu: f4dd50,f4ddbc",
+    "scan_messages": "PowerApplicationJoin.RecordScanBackendCpu: f4c584,f4c620,f4f16c"
+  },
+  "cutover_prerequisites": [
+    "Port every complex helper to RecordContext with GuestStack frames preserving gated getter residue and partial copy ordering.",
+    "Replace native function-pointer transmutation and numeric callback arguments with canonical typed CallbackRegistry registrations and generation metadata.",
+    "Resolve canonical concrete providers and portable ABIs for f5f368,f624a8,f625ec,f162e4,f17abc,f1d134,f1d5d4,f1fbe8,f1fc5c,f332d0,f51b94,f5206c,f521d8,f5ecb0,f5ecc0,ef5310,ef74e4,ef7820,7407b0,74081c,740888,740e74,74213c."
+  ]
+}

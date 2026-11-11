@@ -1,0 +1,61 @@
+{
+  "source_commit": "x70view55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "scope": "Task3 command13e7, controller4 event3, controller15 continuation and controller51 auxiliary completion events",
+  "source_files": [
+    "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e016fc.c",
+    "decomp/firmwares/xm1-150/app/capture/reccont/tu_00dcb6c0.c",
+    "decomp/firmwares/xm1-150/app/capture/reccont/tu_00de8784.c",
+    "decomp/firmwares/xm1-150/app/capture/reccont/tu_00df7460.c",
+    "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e09420.c",
+    "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e0a9dc.c",
+    "decomp/firmwares/xm1-150/app/capture/reccont/tu_00debebc.c",
+    "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e2716c.c"
+  ],
+  "byte_confirmation": {
+    "images": {
+      "id4": {"base": "0x61c400", "path": "private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin"},
+      "id5": {"base": "0xbf1a00", "path": "private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin"}
+    },
+    "controller_tables": {
+      "output4": {"transition": "0xe3c2f0", "handlers": "0xe3a7f0", "stride": 7, "event3": [[6,-5],[3,1],[3,1],[3,1],[3,1],[3,1],[3,1]], "handler3": "0xe01bd8", "handler6": "0xe01c10", "positive_action1": "null"},
+      "continuation15": {"transition": "0xe3b0f4", "handlers": "0xe3c364", "stride": 2, "events": 13, "positive_action1": "null"},
+      "auxiliary51": {"transition": "0xe3bb64", "handlers": "0xe3b90c", "stride": 6, "events": 12, "positive_action1": "null"}
+    },
+    "inspected_instruction_extents": [
+      "id5:0xdf74ec..0xdf75c8", "id5:0xdf7ce4..0xdf7db8", "id5:0xdf9b80..0xdf9d68",
+      "id5:0xde87a0..0xde8e08", "id5:0xe0a860..0xe0abe4", "id5:0xdcb648..0xdcb99c",
+      "id5:0xdcde04..0xdce1f8", "id5:0xdcd010..0xdcd02c", "id5:0xdecac8..0xdecc58",
+      "id5:0xe27618..0xe276d0", "id5:0xdfcc8c..0xdfce44", "id5:0xdec8e0..0xdeca80",
+      "id4:0x72b210..0x72b318", "id4:0x72b680..0x72b718", "id4:0x73abec..0x73ac0c",
+      "id4:0x633390..0x6333d0", "id4:0x6c5a54..0x6c5a7c", "id4:0x6b723c..0x6b731c",
+      "id4:0x6b76e0..0x6b7790", "id4:0x72cd08..0x72cd6c", "id4:0x73c1f8..0x73c218",
+      "id4:0x6bc184..0x6bc224", "id4:0x6b6f6c..0x6b6f9c"
+    ],
+    "draft_c_corrections": [
+      "df9b80 returns the actual dispatch result; request6 returns the second coverage dispatch result, not forced zero.",
+      "dfcc8c returns the actual action result in every branch, not forced zero.",
+      "de8990 sends7302 to task99 through6c5a54; the donor service_stub name is not immediate completion.",
+      "dcd010 reports missing state by repeating091b unless9134f8 is1; it is not a fatal path.",
+      "dec988 dispatches controller51 request8 and returns response wordb490; it is not a direct cached-state read.",
+      "6b7734 invokes its callback synchronously;6b7760 and6b7778 return0 without further effects.",
+      "6b723c modes0 and4..9 invoke their callback synchronously; modes1..3 publish7228 and wait for its actual callback."
+    ]
+  },
+  "native_shared_state": {"recording": "0x01526a78", "events": "0x01545790", "states": "0x01545850", "saved13e7_header": "recording+0x3100", "saved13e7_payload": "recording+0x310c", "auxiliary": "recording+0xb488..0xb4a8"},
+  "native_dependencies": [
+    "recording_engine80:xm1_power_recording_step_request(*const u32,*mut u8)->i32",
+    "recording_engine25:xm1_power_recording_output_request(u32,u32)->i32",
+    "recording_engine25:xm1_power_recording_finalize_request(u32)->i32",
+    "capture_engine90:xm1_power_recording_capture_request(u32)->i32",
+    "resource_requested_route:xm1_power_output_route_set_requested_level(u32,u32,u32)->i32",
+    "shutdown_persistence:xm1_power_persistence_shutdown_callback()->i32",
+    "shutdown_rtos:NativeShutdownRtos",
+    "diagnostics:xm1_power_service_error(u32,i32,i32)",
+    "LensComposition task99/7302 must recognize xm1_power_recording_service_stopped_callback and invoke it on actual teardown completion.",
+    "Task98/7228 physical consumer must invoke xm1_power_recording_auxiliary_hardware_callback on the actual device completion."
+  ],
+  "callback_semantics": "The saved owned persistence callback posts93e7 only after controller15 required byte is covered by actual done bits. This is a recording request acknowledgement, not a durable append/close completion claim. No callback is emitted merely for receipt of13e7,7302 or7228.",
+  "initialization": "Native callers install the owned persistence callback in the13e7 payload and provide mapped recording/controller state, initialized RTOS queues, and initialized resource-requested-route state. Native publish entry handles only13e7. Other controller4 command events are not routed to that entry.",
+  "packet_padding": "Native notification/service/device packets initialize unused bytes. Source reads/copies uninitialized stack padding for these wrappers; no equivalence claim is made for those undefined bytes.",
+  "checks": "No builds, tests, lint, formatters, SDK, guest or camera I/O run in this assignment. Instruction/data inspection is source evidence only."
+}

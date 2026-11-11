@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "target": "Fujifilm X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "module": "capture_initialization_helpers_a.rs",
+  "scope": ["0x61d534", "0x61d544", "0x61d554", "0x63e430..0x64004c"],
+  "source_files": [
+    "app/ui/core/ui_snapshot_bodies_2.c",
+    "app/ui/record/ui_record_state_bodies.c",
+    "app/ui/record/ui_record_state_bodies_2.c",
+    "app/ui/record/ui_record_state_bodies_exact3.c",
+    "app/ui/record/ui_record_state_accessors.c",
+    "app/native_record_settings/xm1_record_settings.c",
+    "app/native_ui_commands/xm1_ui_commands.c"
+  ],
+  "byte_evidence": {
+    "image": "stream-0016025c",
+    "image_sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
+    "ranges": ["0x631a00..0x631ffc", "0x63386c..0x6348ac", "0x635aac..0x635acc", "0x636070..0x636090", "0x637294..0x6372bc", "0x63e638..0x63e688", "0x63e8fc..0x63ea2c", "0x63ead0..0x63eb5c", "0x63ef60..0x63f09c", "0x63f28c..0x63f32c", "0x63f504..0x63f690", "0x63f6e4..0x63f71c", "0x63f7e0..0x63f804", "0x63f968..0x63f9d0", "0x63fb74..0x63fcac", "0x63fdd0..0x63ff70"]
+  },
+  "behavior": [
+    "Availability range endpoints use signed comparison; endpoint states accept 1 or 2; the special value requires state 2.",
+    "Preferred values require state 2; unavailable is 0x7fffffff; list terminator is 0x7ffffffe.",
+    "Available count walks 92-byte records and stops at two, including range records without a separate range branch.",
+    "Projection rejects keys above 0x286 and output 0x7ffffffe, recording failure in 0x89edc8.",
+    "Capture setters preserve volatile write ordering, byte and halfword widths, unavailable skips and subsequent forced overrides.",
+    "Photometry face detection reads cached offset 0x148 and writes a byte at frame offset 0xd334.",
+    "Shutter candidate and self timer helpers preserve the later profile writes and repeated conversions.",
+    "0x63f6e4 passes the return of owned 0x63af44 into the cached field at offset 0xfc."
+  ],
+  "dependencies": {
+    "property_service": ["xm1_property_get", "xm1_property_set"],
+    "capture_initialization": ["f_63d564", "f_63a428", "f_63af44"],
+    "capture_initialization_conversions": ["f_643d94", "f_643dc4", "f_643dec", "f_643e58", "f_643f30", "f_644054", "f_644080", "f_6440b4", "f_6444a0", "f_644a24", "f_644bd4", "f_6460c0", "f_6461a0", "f_6462d8", "f_6464b0", "f_646608", "f_64666c", "f_6466d0", "f_646734"],
+    "mode_initialization": ["CaptureModeId::new", "CaptureModeId::raw", "query_flag"]
+  },
+  "verification": "Source and byte inspection only. No builds, tests, linters, formatters, SDK, guest or camera operations executed."
+}

@@ -1,0 +1,326 @@
+{
+  "revision": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "request_pointer": "0x93b5f8",
+  "registered_request": "0x956720",
+  "ready_callback_field": "0x956738",
+  "registration_sites": {
+    "0x6ec01c": "0x6ec1bc",
+    "0x6ec170": "0x6ec418"
+  },
+  "functions": [
+    {
+      "entry": "0x6e50ac",
+      "end": "0x6e50dc",
+      "size": 48,
+      "name": "transfer_pipeline_notify_ready",
+      "raw_sha256": "0e35587027dc9f04e5ee9974d5a28ce93b7615eb7a2fe1394be6a65e28860eda",
+      "manifest_sha256": "0e35587027dc9f04e5ee9974d5a28ce93b7615eb7a2fe1394be6a65e28860eda",
+      "direct_callees": []
+    },
+    {
+      "entry": "0x6e58d0",
+      "end": "0x6e59e8",
+      "size": 280,
+      "name": "transfer_pipeline_acquire",
+      "raw_sha256": "36c7bd03731333e5c5cdafeeab7dc40bd90683f9668471a66f6ee6a0ec92e382",
+      "manifest_sha256": "36c7bd03731333e5c5cdafeeab7dc40bd90683f9668471a66f6ee6a0ec92e382",
+      "direct_callees": [
+        {
+          "entry": "0x65722c",
+          "end": "0x657384",
+          "size": 344,
+          "name": "driver_allocate_handle",
+          "raw_sha256": "586895bacfe3ad6ed738b7bd629ca35dc07e037a21884e0f2e1f90272248fa7f",
+          "manifest_sha256": "586895bacfe3ad6ed738b7bd629ca35dc07e037a21884e0f2e1f90272248fa7f"
+        },
+        {
+          "entry": "0x6e4e44",
+          "end": "0x6e4e9c",
+          "size": 88,
+          "name": "transfer_acquire_secondary_resource",
+          "raw_sha256": "d5e2496259cc09d8fc7f8abe35e031778c076ef0cc33ccbcd052bf990f7d1468",
+          "manifest_sha256": "d5e2496259cc09d8fc7f8abe35e031778c076ef0cc33ccbcd052bf990f7d1468"
+        }
+      ]
+    },
+    {
+      "entry": "0x6ec1bc",
+      "end": "0x6ec418",
+      "size": 604,
+      "name": "FUN_006ec1bc",
+      "raw_sha256": "1d8909af5adbdf3dbeb2207e71a188dc10701f1ceb274d5162e1657636245dac",
+      "manifest_sha256": "1d8909af5adbdf3dbeb2207e71a188dc10701f1ceb274d5162e1657636245dac",
+      "direct_callees": [
+        {
+          "entry": "0x6eb368",
+          "end": "0x6eb490",
+          "size": 296,
+          "name": "FUN_006eb368",
+          "raw_sha256": "646b14f06615b3d20ae6a997287287c0a63ac0fe296b67a33d7ef55efd63a675",
+          "manifest_sha256": "646b14f06615b3d20ae6a997287287c0a63ac0fe296b67a33d7ef55efd63a675"
+        },
+        {
+          "entry": "0x6eb584",
+          "end": "0x6eb680",
+          "size": 252,
+          "name": "FUN_006eb584",
+          "raw_sha256": "0344baa6aa1e506fdeb8e6f4d78b99857c3221e3f7677f3c22480e8926f3e9be",
+          "manifest_sha256": "0344baa6aa1e506fdeb8e6f4d78b99857c3221e3f7677f3c22480e8926f3e9be"
+        },
+        {
+          "entry": "0x6eb338",
+          "end": "0x6eb368",
+          "size": 48,
+          "name": "audio_stream_packet_first_flag",
+          "raw_sha256": "191e696b2e6226c923e672d567ce0e6b40213e41d9e3912d5577da2491cbcc98",
+          "manifest_sha256": "191e696b2e6226c923e672d567ce0e6b40213e41d9e3912d5577da2491cbcc98"
+        },
+        {
+          "entry": "0x6e2b80",
+          "end": "0x6e2bf0",
+          "size": 112,
+          "name": "FUN_006e2b80",
+          "raw_sha256": "26a222e0bd3edc0a6f28742972d742f2dcb1aa69fc04f3fccd7e98cb9975f3d0",
+          "manifest_sha256": "26a222e0bd3edc0a6f28742972d742f2dcb1aa69fc04f3fccd7e98cb9975f3d0"
+        },
+        {
+          "entry": "0x6eb2d8",
+          "end": "0x6eb308",
+          "size": 48,
+          "name": "audio_stream_packet_position",
+          "raw_sha256": "15a4243aa50ced62ce2b0480ebae5c0a71792ff6febeaff17d276bd49c99e240",
+          "manifest_sha256": "15a4243aa50ced62ce2b0480ebae5c0a71792ff6febeaff17d276bd49c99e240"
+        },
+        {
+          "entry": "0x6eb308",
+          "end": "0x6eb338",
+          "size": 48,
+          "name": "audio_stream_packet_length",
+          "raw_sha256": "c0e40ff8b3d2292b498e2d0cfb48ac7b41c0d9a9e90cb4ad5c3c9fdff5d0241d",
+          "manifest_sha256": "c0e40ff8b3d2292b498e2d0cfb48ac7b41c0d9a9e90cb4ad5c3c9fdff5d0241d"
+        },
+        {
+          "entry": "0x6e59e8",
+          "end": "0x6e5d4c",
+          "size": 868,
+          "name": "FUN_006e59e8",
+          "raw_sha256": "1b19e69995d7c2f975e700d05cb9bfec894a500a191cc02d3cfac20f07567f95",
+          "manifest_sha256": "1b19e69995d7c2f975e700d05cb9bfec894a500a191cc02d3cfac20f07567f95"
+        }
+      ]
+    },
+    {
+      "entry": "0x6ec418",
+      "end": "0x6ec520",
+      "size": 264,
+      "name": "FUN_006ec418",
+      "raw_sha256": "25d84a5172e122e67da8fc8a112f2691f07f8af49666ccfe6add041f5900a7fc",
+      "manifest_sha256": "25d84a5172e122e67da8fc8a112f2691f07f8af49666ccfe6add041f5900a7fc",
+      "direct_callees": [
+        {
+          "entry": "0x6eb368",
+          "end": "0x6eb490",
+          "size": 296,
+          "name": "FUN_006eb368",
+          "raw_sha256": "646b14f06615b3d20ae6a997287287c0a63ac0fe296b67a33d7ef55efd63a675",
+          "manifest_sha256": "646b14f06615b3d20ae6a997287287c0a63ac0fe296b67a33d7ef55efd63a675"
+        },
+        {
+          "entry": "0x6eb584",
+          "end": "0x6eb680",
+          "size": 252,
+          "name": "FUN_006eb584",
+          "raw_sha256": "0344baa6aa1e506fdeb8e6f4d78b99857c3221e3f7677f3c22480e8926f3e9be",
+          "manifest_sha256": "0344baa6aa1e506fdeb8e6f4d78b99857c3221e3f7677f3c22480e8926f3e9be"
+        },
+        {
+          "entry": "0x6eb338",
+          "end": "0x6eb368",
+          "size": 48,
+          "name": "audio_stream_packet_first_flag",
+          "raw_sha256": "191e696b2e6226c923e672d567ce0e6b40213e41d9e3912d5577da2491cbcc98",
+          "manifest_sha256": "191e696b2e6226c923e672d567ce0e6b40213e41d9e3912d5577da2491cbcc98"
+        },
+        {
+          "entry": "0x6eb2d8",
+          "end": "0x6eb308",
+          "size": 48,
+          "name": "audio_stream_packet_position",
+          "raw_sha256": "15a4243aa50ced62ce2b0480ebae5c0a71792ff6febeaff17d276bd49c99e240",
+          "manifest_sha256": "15a4243aa50ced62ce2b0480ebae5c0a71792ff6febeaff17d276bd49c99e240"
+        },
+        {
+          "entry": "0x6eb308",
+          "end": "0x6eb338",
+          "size": 48,
+          "name": "audio_stream_packet_length",
+          "raw_sha256": "c0e40ff8b3d2292b498e2d0cfb48ac7b41c0d9a9e90cb4ad5c3c9fdff5d0241d",
+          "manifest_sha256": "c0e40ff8b3d2292b498e2d0cfb48ac7b41c0d9a9e90cb4ad5c3c9fdff5d0241d"
+        },
+        {
+          "entry": "0x6e59e8",
+          "end": "0x6e5d4c",
+          "size": 868,
+          "name": "FUN_006e59e8",
+          "raw_sha256": "1b19e69995d7c2f975e700d05cb9bfec894a500a191cc02d3cfac20f07567f95",
+          "manifest_sha256": "1b19e69995d7c2f975e700d05cb9bfec894a500a191cc02d3cfac20f07567f95"
+        },
+        {
+          "entry": "0x6e2b80",
+          "end": "0x6e2bf0",
+          "size": 112,
+          "name": "FUN_006e2b80",
+          "raw_sha256": "26a222e0bd3edc0a6f28742972d742f2dcb1aa69fc04f3fccd7e98cb9975f3d0",
+          "manifest_sha256": "26a222e0bd3edc0a6f28742972d742f2dcb1aa69fc04f3fccd7e98cb9975f3d0"
+        }
+      ]
+    },
+    {
+      "entry": "0x6eb368",
+      "end": "0x6eb490",
+      "size": 296,
+      "name": "FUN_006eb368",
+      "raw_sha256": "646b14f06615b3d20ae6a997287287c0a63ac0fe296b67a33d7ef55efd63a675",
+      "manifest_sha256": "646b14f06615b3d20ae6a997287287c0a63ac0fe296b67a33d7ef55efd63a675",
+      "direct_callees": []
+    },
+    {
+      "entry": "0x6eb584",
+      "end": "0x6eb680",
+      "size": 252,
+      "name": "FUN_006eb584",
+      "raw_sha256": "0344baa6aa1e506fdeb8e6f4d78b99857c3221e3f7677f3c22480e8926f3e9be",
+      "manifest_sha256": "0344baa6aa1e506fdeb8e6f4d78b99857c3221e3f7677f3c22480e8926f3e9be",
+      "direct_callees": []
+    },
+    {
+      "entry": "0x6eb338",
+      "end": "0x6eb368",
+      "size": 48,
+      "name": "audio_stream_packet_first_flag",
+      "raw_sha256": "191e696b2e6226c923e672d567ce0e6b40213e41d9e3912d5577da2491cbcc98",
+      "manifest_sha256": "191e696b2e6226c923e672d567ce0e6b40213e41d9e3912d5577da2491cbcc98",
+      "direct_callees": []
+    },
+    {
+      "entry": "0x6eb2d8",
+      "end": "0x6eb308",
+      "size": 48,
+      "name": "audio_stream_packet_position",
+      "raw_sha256": "15a4243aa50ced62ce2b0480ebae5c0a71792ff6febeaff17d276bd49c99e240",
+      "manifest_sha256": "15a4243aa50ced62ce2b0480ebae5c0a71792ff6febeaff17d276bd49c99e240",
+      "direct_callees": []
+    },
+    {
+      "entry": "0x6eb308",
+      "end": "0x6eb338",
+      "size": 48,
+      "name": "audio_stream_packet_length",
+      "raw_sha256": "c0e40ff8b3d2292b498e2d0cfb48ac7b41c0d9a9e90cb4ad5c3c9fdff5d0241d",
+      "manifest_sha256": "c0e40ff8b3d2292b498e2d0cfb48ac7b41c0d9a9e90cb4ad5c3c9fdff5d0241d",
+      "direct_callees": []
+    },
+    {
+      "entry": "0x6e59e8",
+      "end": "0x6e5d4c",
+      "size": 868,
+      "name": "FUN_006e59e8",
+      "raw_sha256": "1b19e69995d7c2f975e700d05cb9bfec894a500a191cc02d3cfac20f07567f95",
+      "manifest_sha256": "1b19e69995d7c2f975e700d05cb9bfec894a500a191cc02d3cfac20f07567f95",
+      "direct_callees": [
+        {
+          "entry": "0x6e5590",
+          "end": "0x6e58d0",
+          "size": 832,
+          "name": "FUN_006e5590",
+          "raw_sha256": "1a00633b2219e95b20b9c65d143412b4424c637cdbf754a99ecac4afc222983e",
+          "manifest_sha256": "1a00633b2219e95b20b9c65d143412b4424c637cdbf754a99ecac4afc222983e"
+        },
+        {
+          "entry": "0x6e51f0",
+          "end": "0x6e5298",
+          "size": 168,
+          "name": "FUN_006e51f0",
+          "raw_sha256": "cd4d83141a229eaab4731d7005e7d2c6378ac543c13cf71534667917cd9fbdb7",
+          "manifest_sha256": "cd4d83141a229eaab4731d7005e7d2c6378ac543c13cf71534667917cd9fbdb7"
+        },
+        {
+          "entry": "0x64dc9c",
+          "end": "0x64df64",
+          "size": 712,
+          "name": "FUN_0064dc9c",
+          "raw_sha256": "eed3a9b6c79c082b60196daaf8ad66ea2ba8937932f4a7a6a3bd171bf8af38cf",
+          "manifest_sha256": "eed3a9b6c79c082b60196daaf8ad66ea2ba8937932f4a7a6a3bd171bf8af38cf"
+        }
+      ]
+    },
+    {
+      "entry": "0x6e2b80",
+      "end": "0x6e2bf0",
+      "size": 112,
+      "name": "FUN_006e2b80",
+      "raw_sha256": "26a222e0bd3edc0a6f28742972d742f2dcb1aa69fc04f3fccd7e98cb9975f3d0",
+      "manifest_sha256": "26a222e0bd3edc0a6f28742972d742f2dcb1aa69fc04f3fccd7e98cb9975f3d0",
+      "direct_callees": [
+        {
+          "entry": "0x723cb8",
+          "end": "0x723ce8",
+          "size": 48,
+          "name": "dispatch_current_task",
+          "raw_sha256": "92681accf48089835d3c844a4fd99a7c3211ea1009cccd0f88273ce3de93a245",
+          "manifest_sha256": "92681accf48089835d3c844a4fd99a7c3211ea1009cccd0f88273ce3de93a245"
+        },
+        {
+          "entry": "0x72503c",
+          "end": "0x725214",
+          "size": 472,
+          "name": "dispatch_send_message",
+          "raw_sha256": "0c02b587b70e68d634585bde3cd9f34240350253bb3a4f22341f742ed7da8b37",
+          "manifest_sha256": "0c02b587b70e68d634585bde3cd9f34240350253bb3a4f22341f742ed7da8b37"
+        }
+      ]
+    }
+  ],
+  "closure": "Source-only installed-state implementation: audio_stream.rs owns 0x6ec1bc/0x6ec418 and message_request_send 0x6e2b80; audio_packet_ring.rs owns the original 900-slot ring; audio_stream_pipeline.rs owns 0x6e59e8/0x6e5590/0x6e51f0 plus shared physical completion and cancellation phase control; audio_stream_installed.rs implements Pipeline/PipelineLifecycle for host and ARM over original installed FFF020 handle/MMIO and resource/controller state; audio_stream_pipeline_native.rs supplies physical-effect adapters; shared audio_stream_construction.rs owns original generation-table acquisition and resource configuration, with physical adapters in audio_stream_construction_native.rs. Vendor service admission/configuration and canonical Display composition remain integration dependencies, not runtime ownership evidence.",
+  "source_evidence": {
+    "continuations": "app/drivers/audio/audio_stream_scheduling_more.c is NONMATCHING; input 0x6ec1bc..0x6ec418 and output 0x6ec418..0x6ec520 were read in id4.dis lines212852..213068. The immediate flag is state+0x98 and deferred flag state+0x9c. Input stop mode2 crosses first-packet boundaries; output never does.",
+    "ring": "app/drivers/audio/audio_stream_packets{,_more}.c and id4.dis lines212009..212197. Reserve publishes tag1 before fields and tag0 last. Full-ring reserve failure drops the packet while source position and first flag still advance.",
+    "request_send": "id4.dis lines203237..203264: request[0] indexes0x7d088c destination; request+4 low byte is embedded sender; payload16 bytes begins command/sender/destination followed by three words. Outer sender is current task.",
+    "pipeline": "app/drivers/audio/transfer_pipeline{,_more}.c, tu_006e4af8.c and id4.dis lines205697..205738,205929..206136,206207..206424. Transmit update appends length&7 bytes0x80 and adds that remainder, not rounding to8. Initial DMA start status is ignored; pending polling and second program remain unconditional after a successful first program. Initial transmit schedules ready even after start failure.",
+    "completion_lifecycle": "Host and ARM call the same stream_pipeline::complete(PipelineLifecycle,Completion) and cancel(PipelineLifecycle,EventHandle). PipelineLifecycle extends Pipeline with stop, release, finished and nested guard effects. Physical completion publishes before phase reset; cancellation publishes after phase reset. Failed transmit update keeps error4 across later stop/release failures. Source app/drivers/audio/transfer_cancel_phase.h and tu_006e4af8.c.",
+    "native_dma": "app/drivers/isp/fff020_channel_initialization.{c,h}: installed state0x918b98, handles+0x40, IRQtokens+0x60. Original generation comparisons and states are retained. Registration snapshots the selected owned receive/send handler through xm1_power_timer_irq_attach, source38.",
+    "installed_provider": "stream_installed::InstalledPipeline<ConstructionMemory,InstalledIo> is the canonical host/ARM implementation of program/start/status/close and resource start/stop/release CPU. InstalledIo extends ConstructionIo with IRQ mask, typed IRQ registration/release, cache clean, semaphore signal and canonical callback/executor effects. NativePipeline delegates to this provider. Tests exercise actual channel1 register images, controller direction gates, shared installed handles, IRQ failure partial state and drain release; no private host DMA lease substitutes for those fields.",
+    "resource": "app/drivers/audio/transfer_resource_state.c, transfer_controller{,_more}.c, tu_006e4af8_exact.c; primary construction byte decisions at id4.dis lines205371..205445, disable directions at207059..207103. Resource progress/error flags and failed constructor partial state are retained.",
+    "generation": "app/platform/osal/driver_handle_allocator.c; shared serial0x409c2804, skipzero and scan only the target handle table.",
+    "construction_api": "stream_construction::{controller_acquire,resource_acquire,resource_configure,pipeline_acquire,resource_release} run the same installed-address CPU for host and ARM. ConstructionMemory provides typed Address word/halfword/byte access; native overrides each access width with the corresponding volatile scalar operation. ConstructionIo provides nested guard and typed semaphore wait effects. Native exports keep their ABI and reside under stream_construction::native. Behavioral tests read actual shared-generation, DMA/controller state, resource flags and MMIO images, including failed-acquisition partial state.",
+    "bank_completion": "id4.dis lines210165..210182:0x6e97c0 creates a76byte caller record at r11-88 after push{r4,r11,lr}/subsp84; writes0816 and savedcontext0x8fc774, publishes through72b680, then reloads phase0x8fc778. id4.dis277385..277450 confirms full68byte suffix copied by72b210;293376..293383 confirms routing predicate0x9134f8. The native adapter reuses canonical shutdown::post_application_record/UiEvents rather than introducing another fanout engine.",
+    "bank_immediate": "id4.dis210183..210199:idle6e9808 has push{r11,lr},fp=sp+4,subsp80,recordfp-80. id4.dis210200..210240:unchanged-bank6e984c has push{r4,r11,lr},fp=sp+8,subsp84,recordfp-88. Both publish0816/context from argumentword1 with no phase restore. Typed BankNotify/BankNotifyUnchanged consume the already-owned actor bank decision and publish context0; they do not alias the original argument-reading functions.",
+    "panel_wrappers": "id4.dis lines182573..182580:6ce8a0/b0 are CPU wrappers to6d4960/78. Existing AudioAction panel dispatch remains to canonical Display leaf IDs."
+  },
+  "native_exports": {
+    "xm1_power_audio_pipeline_acquire": "(*mut u32 request,*mut u32 output)->i32; request has9words",
+    "xm1_power_audio_pipeline_submit": "(u32 event,u32 position,u32 length,u32 continuation,u32 channel_index_residue)->i32",
+    "xm1_power_audio_pipeline_update": "()->i32",
+    "xm1_power_audio_pipeline_cancel": "(u32 event)->i32",
+    "xm1_power_audio_pipeline_release": "()->i32",
+    "xm1_power_audio_resource_acquire": "(*const u32 configuration)->i32; copies6words and selects bank through installed stream configuration",
+    "xm1_power_audio_resource_configure": "()->i32; follows successful resource_acquire",
+    "xm1_power_audio_resource_release": "()->i32; primary resource only",
+    "xm1_power_audio_controller_acquire": "(u32 bank,*mut u32 output)->i32",
+    "xm1_power_audio_stream_enqueue_command": "(); reads installed stream.command",
+    "xm1_power_audio_stream_queue_initialize": "(); resets900tags then cursors",
+    "xm1_power_audio_stream_receive_complete": "(); registration-bound receive completion",
+    "xm1_power_audio_bank_complete": "(); audio_bank_residue.S bridge required in ARM native assembly sources",
+    "xm1_power_audio_bank_complete_backed": "(*mut [u8;76] record)->i32; physical caller record must remain live through publication",
+    "xm1_power_audio_bank_notify": "(u32 context); idle record frame, no bank mutation or phase restore",
+    "xm1_power_audio_bank_notify_unchanged": "(u32 context); unchanged-bank record frame, no bank mutation or phase restore",
+    "xm1_power_audio_bank_notify_backed": "(*mut [u8;76] record,u32 context)->i32; shared canonical publication only",
+    "xm1_power_audio_stream_send_complete": "(); registration-bound send completion"
+  },
+  "boundaries": {
+    "channel_index_residue": "The first-program path ignores the channel-index read status and consumes its output residue on invalid handles. The native submit ABI requires that residue explicitly; the continuation path does not consult it. No replacement zero result is synthesized at the read boundary.",
+    "bank_record_residue": "Only the first8bytes of the76byte publication record are initialized by0x6e97c0. audio_bank_residue.S retains the source frame offset and passes the complete physical record to Rust; the68byte suffix is not zero-filled.",
+    "dependencies": ["xm1_power_timer_irq_attach","xm1_power_timer_release_handle","xm1_power_dcache_clean_range","xm1_power_save_irq","xm1_power_restore_irq","xm1_power_interrupt_lock","xm1_power_interrupt_unlock","xm1_rtos_semaphore_timed_wait","xm1_rtos_semaphore_signal","xm1_power_operation_submit","xm1_power_operation_action","NativeShutdownRtos","display_scanout_panel"],
+    "verification": "Source only. Behavioral tests added in audio_stream_tests.rs and audio_stream_construction_tests.rs but not run. No builds, tests, linters, formatters, SDK, guest execution or camera I/O."
+  }
+}

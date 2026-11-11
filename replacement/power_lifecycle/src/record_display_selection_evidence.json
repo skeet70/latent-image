@@ -1,0 +1,75 @@
+{
+  "source_revision": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_firmware": "X-M1 1.50",
+  "evidence": "source-inspected; NONMATCHING C was checked against owner-supplied id4.dis/id5.dis instructions",
+  "verification": "No build, test, formatter, native runner, SDK, guest or camera execution",
+  "modules": [
+    "record_display_selection_memory",
+    "record_display_selection_saved",
+    "record_display_selection_reference",
+    "record_display_selection_initialize",
+    "record_display_selection_updates",
+    "record_display_selection_buffers",
+    "record_display_selection_completion"
+  ],
+  "exports_prefix": "xm1_power_record_helper_",
+  "owned": {
+    "f1a190": "request:u32 -> (); initializes canonical selection/job state and schedules f1d154",
+    "f1c8fc": "request:u32, record:*const u32, first:*mut i16, second:*mut i16, value:*mut u32, a:*mut u16, b:*mut u16, c:*mut u16, d:*mut u16 -> ()",
+    "f1d0f4": "request:u32, value:u32 -> ()",
+    "f1d134": "source:u32 -> (); copies 0x640c bytes to canonical saved selection",
+    "f1d154": "source:u32 -> (); completion callback, copies selection conditionally, publishes profile snapshot and Task43 event 0x90",
+    "f1d1c0": "request:u32 -> (); exact mode-7, saved-reference, restore and asynchronous update branches",
+    "f1d5d4": "reference:u32, bank:u32, first:u32, second:u32, third:u32, kind:u32, word:u32, half:i32 -> ()",
+    "f1e468": "() -> (); publishes selected grid, profile, snapshots and job notifications",
+    "f46be0": "() -> (); signals mask 2 to canonical waiting task",
+    "f46c00": "() -> (); signals mask 4 to canonical waiting task",
+    "f4725c": "first:u32, second:u32, reverse:u32 -> u32",
+    "f4727c": "() -> (); physical registration followed by infinite wait for mask 4",
+    "f472bc": "() -> (); Task50 registration followed by infinite wait for mask 2",
+    "f47468": "() -> (); resets 301 diagnostic records and trailer when enabled",
+    "f48e74": "destination:u32 -> (); exports diagnostic records and clears active exported record",
+    "f48f1c": "destination:u32 -> (); exports timing buffer when enabled",
+    "f48f54": "destination:u32 -> (); submits enabled diagnostic buffers to canonical publication service",
+    "f48fd8": "destination:u32, enabled:u32 -> (); prepares primary display-selection diagnostics",
+    "f4929c": "() -> (); original function has no observable effect, confirmed f4929c..f492ac",
+    "105386c": "() -> (); clears canonical 0x01706a34"
+  },
+  "excluded_owners": {
+    "f1fbe8": "PowerLifecycleNext.PowerRecordSelectionMode",
+    "f1fc5c": "PowerLifecycleNext.PowerRecordSelectionMode",
+    "f1d0d8": "PowerLifecycleNext.PowerRecordMachines28",
+    "f1d680": "PowerLifecycleNext.PowerRecordMachines28"
+  },
+  "mapped_state": {
+    "selection": "0x016ad740",
+    "active": "0x016ad744, 0x640c bytes",
+    "saved": "0x016a0500, 0x640c bytes",
+    "job": "0x016b3ddc",
+    "request": "0x0169d05c; actual ef9bc0 is a constant-address accessor",
+    "completion_tasks": "0x016c2214 and 0x016c2218",
+    "diagnostic_records": "pointer read from canonical 0x00f49358, 301 records of 0x6c bytes",
+    "diagnostic_index": "0x016c2228",
+    "display_initialized": "0x016c2220"
+  },
+  "boundary": {
+    "memory": "Unsafe native entrypoints require valid firmware-mapped state, native output pointers and source-specified buffer extents. Address arithmetic wraps at 32 bits.",
+    "display": "These helpers produce diagnostic selection buffers. They do not claim frame presentation or physical display readiness. Lower rendering and scanout state remain owned by GraphicsRuntime and LiveViewDisplayOwnership.",
+    "callbacks": "f1d154/f46be0/f46c00 are native static function pointers. No retained instruction pointer or interpreter dispatch is accepted. Callback providers must copy request payloads before the caller returns and drive real completion.",
+    "integration": "The integration owner registers these modules in lib.rs/BUILD. Root files are intentionally unchanged."
+  },
+  "concrete_dependencies": {
+    "configuration": "Existing diagnostics.rs xm1_power_configuration_byte, actual 69f8fc",
+    "rtos": "PowerServicesNext c9324333: xm1_power_current_task, xm1_power_set_task_flags, xm1_power_wait_current_all",
+    "task43": "PowerLifecycleNext.PowerRecordTask43: xm1_power_record_helper_ef9a94",
+    "selection_mode": "PowerLifecycleNext.PowerRecordSelectionMode: f1fc5c/f1fd40",
+    "profile_accessors": "PowerLifecycleNext.PowerRecordProfileAccessors 68fa87c7: 75060c/74e648/7503ec/750474/74e5c0/74f124/74f6fc/74f5ec/75a414",
+    "profile_shared": "PowerApplicationJoin.ProfileSharedCpu: 756840/756878, 7582c0 hidden-result pointer ABI, 7568b8/7568f8 and 756fb8..7573f4 setters",
+    "scan_publication": "PowerApplicationJoin.RecordScanPublicationCpu: f4e5dc",
+    "profile_mapping": "PowerApplicationJoin.ProfileMappingCpu: 747aac",
+    "numeric": "PowerApplicationJoin.RecordNumericCpu: fa6904/fa89fc",
+    "jobs": "PowerApplicationJoin.RecordJobCpu: f601fc/f60294/f602cc/f602dc/f6033c/f6034c/f612dc/f615bc/f616e8/f60bc8/f60e0c/f60b78/f5fba0/f5fbd4/f5fb6c",
+    "job_backend": "PowerApplicationJoin.RecordJobBackendCpu: f61b8c",
+    "task50": "PowerApplicationJoin.RecordLensScheduleCpu: 76f660; physical execution via PowerLifecycleNext.PowerCaptureBackends"
+  }
+}

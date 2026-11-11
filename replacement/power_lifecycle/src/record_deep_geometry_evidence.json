@@ -1,0 +1,161 @@
+{
+  "schema": 1,
+  "firmware": "X-M1 1.50",
+  "decomp_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "image": {
+    "base": "0x00bf1a00",
+    "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"
+  },
+  "evidence_kind": "byte-inspected",
+  "ranges": [
+    {
+      "address": "0x00eda4c4",
+      "size": 420,
+      "sha256": "4d7a3d027dd553582ccbfdae97ad668fcf9fd764f2c177e60dddbdbe7a6bd8fd"
+    },
+    {
+      "address": "0x00eda668",
+      "size": 860,
+      "sha256": "25850e6127af31a1f6fc7dc5200899994fc117a25df27d2287388632cbe4cc22"
+    },
+    {
+      "address": "0x00edea20",
+      "size": 260,
+      "sha256": "6f34df875074f9595071cf925e49ed8a140d46020eff73ad2f956dea93195aef"
+    },
+    {
+      "address": "0x00edeb24",
+      "size": 124,
+      "sha256": "22f15274e3178462db281851520f11d76502e0acedc6925757f9749c57f28f14"
+    },
+    {
+      "address": "0x00edfeb4",
+      "size": 88,
+      "sha256": "52a7144a544b0cbef04faee8188940a7c563a62cc19a6599e84472dd083df7e4"
+    },
+    {
+      "address": "0x00ee0084",
+      "size": 128,
+      "sha256": "cdbc13d28d9e95a85be3b2f8cce6218c73a51556ba4293251d8e434faa750645"
+    },
+    {
+      "address": "0x00ee0104",
+      "size": 172,
+      "sha256": "78061aaf9c24a770ddfa367043bbb0a596a98831b70b4c57e93e85d45c505660"
+    },
+    {
+      "address": "0x00ee01b0",
+      "size": 172,
+      "sha256": "91ff49e7f554660aa1c944b627acf2d393fc4e79063ce812e67eeb92cb92d3f5"
+    },
+    {
+      "address": "0x00ee7e9c",
+      "size": 60,
+      "sha256": "a5cd6fabcdd455be4a1d447adeb22261a469d4124d25f9a8f9c39f00a8bc92d1"
+    },
+    {
+      "address": "0x00ef65cc",
+      "size": 112,
+      "sha256": "5056aa553587b9bfd7b79e1b3116f00cb7ba21384eee382bee323b40b6687a63"
+    },
+    {
+      "address": "0x00edeba0",
+      "size": 800,
+      "sha256": "0a968eb0c0d8fdba7040280bc9b361129c84372a5cccbc08368486491cc6f505"
+    },
+    {
+      "address": "0x00edfa28",
+      "size": 84,
+      "sha256": "32150e936513c82ad43b0e9037d196f82ab6df3d5660fa7385ec43e0737d816f"
+    },
+    {
+      "address": "0x00edfa7c",
+      "size": 1080,
+      "sha256": "dd352da21164c6e7d4cd14dc000e413ab9df0e71f3cd67f7e6e2de10c1528665"
+    },
+    {
+      "address": "0x00edff0c",
+      "size": 292,
+      "sha256": "d2db933a8a44408bddcab655a02bf8dc8a0ebc797dd06c45777adb1df08c8c7f"
+    },
+    {
+      "address": "0x00ee0030",
+      "size": 84,
+      "sha256": "b9dd9acd27d509712124ab34ada389c43f63caedeaae935a1bbcc4382ff90586"
+    },
+    {
+      "address": "0x00ee02e4",
+      "size": 116,
+      "sha256": "0b7d5d9070f386872b0c6f3e92b5a0b96362ed6c43d3e711e25621437aebfc17"
+    },
+    {
+      "address": "0x00ee7c98",
+      "size": 516,
+      "sha256": "e055f83f9c93105a61d6cbf6f1feca0a5a5cb53617c9aba94c190737f6b9cf5f"
+    },
+    {
+      "address": "0x00ef6030",
+      "size": 332,
+      "sha256": "89847c24baf195e6aeb26f70c44bf292fddddbac6a0d4fcd5be55c8be650d453"
+    }
+  ],
+  "disassembly": {
+    "path": "private-data/analysis/x-m1-1.50/lz/id5.dis",
+    "line_ranges": [
+      [
+        755487,
+        755591
+      ],
+      [
+        755592,
+        755806
+      ],
+      [
+        759926,
+        760221
+      ],
+      [
+        760952,
+        761476
+      ],
+      [
+        761511,
+        761539
+      ],
+      [
+        769300,
+        769443
+      ],
+      [
+        783859,
+        783941
+      ],
+      [
+        784218,
+        784245
+      ]
+    ]
+  },
+  "provider_module": "record_deep_geometry",
+  "canonical_abi": "helper_<sixhex>(&mut RecordContext<M,E>, scalar u32 / GuestAddress arguments) -> Result<return,MemoryError>; E has no bounds",
+  "typed_value_entries": {
+    "transform_values": "[u32;6] -> [u32;8]",
+    "calculate_entry_report": "[u8;72], [u8;12], mutable [u8;208], fixed flags 6",
+    "calculate_extended_values": "[u8;34], [u8;10], mutable [u8;184], fixed flags 2"
+  },
+  "external_actual_cpu": [
+    "record_image_geometry_query::profiles::{helper_ef5d44,helper_ef5ab8,helper_ef5cc4,helper_ef5b5c,helper_ef5138,helper_ef5190,helper_ef5a8c}",
+    "record_configuration::{helper_69f8fc,helper_69fec8}"
+  ],
+  "findings": [
+    "eda4c4 report always copies twelve cached halfwords into words, then ten secondary-plane pairs and ten primary-plane pairs, regardless of selected flags.",
+    "eda668 skips flag64; each selected rectangle publishes only its corresponding result fields and always publishes outer/inner dimensions.",
+    "Parameter input consumes ratio halfwords at byte offsets30 and32, requiring34 bytes.",
+    "edfa7c preserves the observed minimum-height branch assigning horizontal alignment when vertical alignment exceeds height.",
+    "ee7c98 indexes ed7e08+profile*16, distinct from ef5898 profile mapping."
+  ],
+  "verification": {
+    "executed": [],
+    "reason": "Assignment forbids builds, tests, lint, format, native, SDK, guest and camera runs."
+  }
+}

@@ -1,3 +1,4 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 package(default_visibility = ["//visibility:public"])
@@ -9,10 +10,22 @@ _ARM_RECORD = "//replacement/settings_storage:record-store-guest-rlib"
 _ARM_SETTINGS = "//replacement/settings_storage:property-core"
 _ARM_DISPLAY = "//replacement/display_scanout:libdisplay_scanout_panel"
 _ARM_CALIBRATION = "//replacement/calibration_liveview:libcalibration_liveview"
+_HOST_CALIBRATION_CORE = "//replacement/calibration_core:host"
+_ARM_CALIBRATION_CORE = "//replacement/calibration_core:libxm1_calibration_core"
+
+# The Services leaf source set. The package directory also holds the application
+# sources, which services.rs does not mount.
 _SERVICES_SOURCE = glob(["src/*.rs", "src/*.S"]) + ["//replacement/application_nand:sources"]
+
 _SERVICES_HOST_EXTERNS = " --extern record_store=$(location " + _HOST_RECORD + ") --extern xm1_settings_storage_core=$(location " + _HOST_SETTINGS + ")"
 _SERVICES_ARM_DEPS = [_ARM_RECORD, _ARM_SETTINGS, _ARM_DISPLAY, _ARM_CALIBRATION]
 _SERVICES_ARM_EXTERNS = " --extern record_store=$(location " + _ARM_RECORD + ") --extern xm1_settings_storage_core=$(location " + _ARM_SETTINGS + ") --extern display_scanout_panel=$(location " + _ARM_DISPLAY + ") -L dependency=$$(dirname $(location " + _ARM_CALIBRATION + "))"
+
+_RUST_SOURCE = glob(["src/*.rs", "src/*.S"]) + ["//replacement/application_nand:sources"]
+_HOST_DEPS = [_HOST_RECORD, _HOST_SETTINGS, _HOST_CALIBRATION_CORE, ":services-host"]
+_HOST_EXTERNS = " --extern xm1_power_services=$(location :services-host) --extern xm1_calibration_core=$(location " + _HOST_CALIBRATION_CORE + ") --extern record_store=$(location " + _HOST_RECORD + ") --extern xm1_settings_storage_core=$(location " + _HOST_SETTINGS + ") -L dependency=$$(dirname $(location :services-host)) -L dependency=$$(dirname $(location " + _HOST_RECORD + ")) -L dependency=$$(dirname $(location " + _HOST_CALIBRATION_CORE + "))"
+_ARM_DEPS = [_ARM_RECORD, _ARM_SETTINGS, _ARM_DISPLAY, _ARM_CALIBRATION, _ARM_CALIBRATION_CORE, ":services-arm"]
+_ARM_EXTERNS = " --extern xm1_power_services=$(location :services-arm) --extern xm1_calibration_core=$(location " + _ARM_CALIBRATION_CORE + ") --extern record_store=$(location " + _ARM_RECORD + ") --extern xm1_settings_storage_core=$(location " + _ARM_SETTINGS + ") --extern display_scanout_panel=$(location " + _ARM_DISPLAY + ") --extern calibration_liveview=$(location " + _ARM_CALIBRATION + ") -L dependency=$$(dirname $(location :services-arm)) -L dependency=$$(dirname $(location " + _ARM_RECORD + ")) -L dependency=$$(dirname $(location " + _ARM_SETTINGS + ")) -L dependency=$$(dirname $(location " + _ARM_DISPLAY + ")) -L dependency=$$(dirname $(location " + _ARM_CALIBRATION + ")) -L dependency=$$(dirname $(location " + _ARM_CALIBRATION_CORE + "))"
 _ARM_FLAGS = " --target=armv7r-none-eabi -C panic=abort -C relocation-model=static -C target-cpu=cortex-r4f -C codegen-units=1 -C target-feature=+strict-align -C jump-tables=no -C opt-level=z"
 
 genrule(
@@ -47,3 +60,95 @@ genrule(
     outs = ["arm/libxm1_power_services.rlib"],
     cmd = "$(location " + _RUSTC + ") --edition=2021 --crate-name=xm1_power_services --crate-type=rlib" + _ARM_FLAGS + " --cfg power_native" + _SERVICES_ARM_EXTERNS + " $(location src/services.rs) -o $@",
 )
+
+genrule(
+    name = "host-core",
+    srcs = _RUST_SOURCE + _HOST_DEPS,
+    tools = [_RUSTC],
+    outs = ["host/libxm1_power_lifecycle.rlib"],
+    cmd = "$(location " + _RUSTC + ") --edition=2021 --crate-name=xm1_power_lifecycle --crate-type=rlib" + _HOST_EXTERNS + " $(location src/lib.rs) -o $@",
+)
+
+genrule(
+    name = "host-tests-binary",
+    srcs = _RUST_SOURCE + _HOST_DEPS,
+    tools = [_RUSTC],
+    outs = ["host-tests-bin"],
+    cmd = "$(location " + _RUSTC + ") --edition=2021 --test --crate-name=xm1_power_lifecycle" + _HOST_EXTERNS + " $(location src/lib.rs) -o $@",
+    executable = True,
+)
+
+sh_test(
+    name = "host-tests",
+    size = "small",
+    srcs = ["host-test.sh"],
+    args = ["$(location :host-tests-binary)"],
+    data = [":host-tests-binary"],
+)
+
+genrule(
+    name = "arm-core",
+    srcs = _RUST_SOURCE + _ARM_DEPS,
+    tools = [_RUSTC],
+    outs = ["arm/libxm1_power_lifecycle.rlib"],
+    cmd = "$(location " + _RUSTC + ") --edition=2021 --crate-name=xm1_power_lifecycle --crate-type=rlib" + _ARM_FLAGS + " --cfg power_native" + _ARM_EXTERNS + " $(location src/lib.rs) -o $@",
+)
+
+genrule(
+    name = "power-lifecycle-rust",
+    srcs = ["Root.rs", ":arm-core"] + _ARM_DEPS,
+    tools = [_RUSTC],
+    outs = ["libxm1_power_lifecycle.a"],
+    cmd = "$(location " + _RUSTC + ") --edition=2021 --crate-name=xm1_power_cpu_root --crate-type=staticlib" + _ARM_FLAGS + " --extern xm1_power_lifecycle=$(location :arm-core)" + _ARM_EXTERNS + " $(location Root.rs) -o $@",
+)
+
+genrule(
+    name = "host-executor",
+    srcs = ["HostExecutor.rs", ":host-core"] + _HOST_DEPS,
+    tools = [_RUSTC],
+    outs = ["host-executor"],
+    cmd = "$(location " + _RUSTC + ") --edition=2021 --extern xm1_power_lifecycle=$(location :host-core)" + _HOST_EXTERNS + " -L dependency=$$(dirname $(location " + _HOST_RECORD + ")) -L dependency=$$(dirname $(location :services-host)) $(location HostExecutor.rs) -o $@",
+)
+
+haskell_library(
+    name = "area2-oracle-model",
+    srcs = ["Replacement/PowerLifecycle/Area2Oracle.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-O2"],
+    deps = [
+        "//replacement/record_store:oracle-lib",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+    ],
+)
+
+haskell_binary(
+    name = "host-oracle",
+    srcs = ["OracleMain.hs"],
+    main_file = "OracleMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-O2"],
+    deps = [
+        ":area2-oracle-model",
+        "//replacement/record_store:oracle-lib",
+        "//host:base",
+        "//host:bytestring",
+        "//host:filepath",
+        "//host:process",
+    ],
+)
+
+[
+    genrule(
+        name = "host-control-" + name,
+        srcs = _SERVICES_SOURCE + [_HOST_RECORD, _HOST_SETTINGS],
+        tools = [_RUSTC],
+        outs = ["control-" + name + ".detected"],
+        cmd = "$(location " + _RUSTC + ") --edition=2021 --test --crate-name=xm1_power_services --cfg " + flag + _SERVICES_HOST_EXTERNS + " $(location src/services.rs) -o $(@D)/control-" + name + " && if $(@D)/control-" + name + "; then exit 1; else touch $@; fi",
+        testonly = True,
+    )
+    for name, flag in [
+        ("append-equal", "power_control_append_equal"),
+        ("compare-sequence", "power_control_compare_sequence"),
+    ]
+]

@@ -1,0 +1,93 @@
+{
+  "scope": "X-M1 1.50 primary capture profile transitive conversion providers outside tu_007371dc.c",
+  "status": "source-only",
+  "source_pin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_repository": "x70view",
+  "source_root": "decomp/firmwares/xm1-150/app/settings/",
+  "sources": [
+    "tu_0073958c.c:298-1020",
+    "tu_00732ba8.c:1256-1334,1432-2046",
+    "tu_00732ba8_exact2.c:5-89",
+    "tu_0072f30c.c:1967-1994",
+    "configuration_snapshot_fields.c:129-134",
+    "configuration_native_modes.c:18-28",
+    "conversion_operation_selection.c:7-203",
+    "conversion_native_predicates.c:2-23",
+    "conversion_native_normalizers.c:5-82",
+    "conversion_record_control.c:18-54",
+    "conversion_geometry_helpers.c:272-281",
+    "conversion_constant_predicates.c:23-112",
+    "conversion_count_limits.c:27-105",
+    "conversion_rectangle_defaults.c:5-11"
+  ],
+  "raw_confirmation": {
+    "path": "private-data/analysis/x-m1-1.50/lz/id4.dis",
+    "spans": [
+      "69f8fc..69f91c", "69fec8..69feec", "72d210..72d228", "72dd38..72dd80",
+      "731b90..731c14", "73395c..7339c0", "733cd8..733d00", "735b78..735c14",
+      "7362dc..7366e4", "7367ec..736d78", "736d7c..736fa8", "736fac..7371d8",
+      "7372d8..737498", "7375c0..7375e8", "737ff0..73802c", "738204..738390", "73843c..73850c"
+    ],
+    "resolved_nonmatching_behavior": [
+      "7362dc unsigned bounded jump table and option-dependent cases match the translated category map",
+      "72dd38 rejects categories 2c through 2e and 3f; categories 40 through 49 are accepted when enabled differs from one",
+      "731b90 returns one for categories 23 and 24, category2c mode1, and categories1d/1f/20 mode1 or3",
+      "7367ec returns2 for available categories3/4 with enabled1; otherwise maps the selection or returns mode!=1",
+      "736960 maps4 to5 and5 to4;7369c4 defaults to2",
+      "7372d8 accepts1 through10 and otherwise returns0;737378 accepts signed -9 through9 and otherwise returns9",
+      "73395c returns a complete table word; callers736f84 and738394 narrow it separately"
+    ]
+  },
+  "abi": {
+    "symbol_prefix": "helper_",
+    "calling_convention": "Rust generic over GuestAddressSpace and unconstrained effects E",
+    "argument_and_result_words": "RecordContext<M,E> first; u32 scalar arguments; GuestAddress pointer arguments; Result<u32,MemoryError> result",
+    "functions_by_arity": {
+      "0": ["736e3c"],
+      "1": ["73395c", "735b78", "736770", "736790", "73693c", "736960", "7369c4", "736a1c", "736a48", "736a74", "736b5c", "736d18", "736d3c", "736d5c", "736d7c", "736e54", "736eb0", "736f70", "736f84", "736f98", "736fac", "737154", "7371b0", "7372d8", "737378", "7375c0", "737ff0", "738010", "7380fc", "738204", "738480", "7384b4"],
+      "2": ["72d210", "72dd38", "731b90", "736178", "7366e8", "7368c4", "737660", "73843c"],
+      "3": ["736adc", "736bc4", "7377d0"],
+      "4": ["736694", "7367b0", "73747c", "7384d4"],
+      "5": ["7362dc", "7367ec", "73849c"]
+    },
+    "pointer_arguments": {"7368c4": [0], "73747c": [0]},
+    "residue": [
+      "7368c4 leaves r0 equal to output and leaves output unchanged for selection outside0..3",
+      "73747c leaves r0 equal to output after three narrowed halfword writes",
+      "736f70 preserves incoming r0",
+      "7377d0 and73849c return zero independently of incoming argument registers"
+    ]
+  },
+  "address_space_contract": {
+    "context": "crate::record_address_space::RecordContext<M,E>",
+    "memory": "Every configuration, numeric and selection table read uses context.memory",
+    "errors": "MemoryError propagates from reads, writes and checked pointer arithmetic",
+    "native_exports": "None in this module; integration root owns native bridges",
+    "owned_calls": "Direct generic helper calls with the same context",
+    "configuration_provider": "crate::record_configuration::helper_69f8fc(context,key), with no duplicate provider or raw configuration read in this module",
+    "table_bounds": {
+      "source": "private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin",
+      "image_base": "0061c400",
+      "817180": {"stride": 8, "sentinel_index": 13, "keys": [0,1,2,3,4,5,6,7,8,9,10,11,12,-1]},
+      "817688": {"stride": 8, "sentinel_index": 14, "keys": [0,1,2,3,4,5,6,9,11,7,8,10,12,13,-1]},
+      "8173e8": {"stride": 12, "sentinel_index": 11, "keys": [0,1,2,3,4,5,6,7,8,9,10,-1]}
+    }
+  },
+  "native_data_dependencies": [
+    {"address": "0096ca50", "meaning": "configuration byte image pointer accessed through canonical record_configuration", "users": ["735b78", "736e54"]},
+    {"address": "009134d4", "meaning": "numeric lookup sentinel value for index ffffffff", "users": ["73395c"]},
+    {"address": "00816bb8", "meaning": "numeric lookup eight-byte entries, value word at offset4", "users": ["73395c"]},
+    {"address": "00817180", "meaning": "selection/value eight-byte entries", "users": ["736a74"]},
+    {"address": "00817688", "meaning": "selection/value eight-byte entries", "users": ["736b5c"]},
+    {"address": "008173e8", "meaning": "selection/value/alternate twelve-byte entries", "users": ["736bc4"]}
+  ],
+  "data_semantics": [
+    "Native tables are read as data, with no branch to retained CPU code",
+    "Selection zero reads first table row; other selections start at second row and stop at signed negative sentinel",
+    "736a74 and736b5c return0 for missing selection;736bc4 returns6",
+    "735b78 assembles configuration halfwords little-endian and sign-extends after adding offset",
+    "Signed thirds results preserve two's-complement u32 representation",
+    "No stock callback or unresolved CPU function is used"
+  ],
+  "verification": {"builds": "not run", "tests": "not run", "formatters": "not run", "native_execution": "not run", "guest_execution": "not run"}
+}

@@ -1,0 +1,44 @@
+{
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_units": [
+    "app/drivers/lens/control/tu_0076d050.c",
+    "app/drivers/lens/control/tu_0076e008.c",
+    "app/drivers/lens/control/tu_0076f044.c"
+  ],
+  "owned_cpu": ["76dbe4", "76dc90", "76dd24", "76ddb0", "76de3c", "76dec8", "76df7c", "76e008", "76e1ac", "76e654", "76ffec", "76f394", "76f438", "76f5dc", "76f660", "76fbac", "76fc4c", "76fb54"],
+  "byte_inspection": {
+    "76dbe4": "4202, seven copied payload words, queue failure maps to 0x84",
+    "76dc90": "4203, four copied payload words, queue failure maps to 0x84",
+    "76dd24/76ddb0/76de3c/76df7c": "4204/4205/4206/4208 respectively; three payload words; queue failure maps to 0x84",
+    "76dec8": "Rejects focus status one before posting 4207 with six words",
+    "76e008": "4209 with empty payload; queue failure maps to 0x84",
+    "76e1ac": "420b, rejects unsigned direction above two; delta truncated to halfword; mode table at 81a170 contains 0,1,2",
+    "76e654": "Uses 421d only when loadtest state is nonzero, setting is 0x70 and sixth argument is ten; otherwise 4213; both paths return 0 or 0x84, unlike the NONMATCHING C normal-path return",
+    "76e5b0": "421d, six copied payload words, queue failure maps to 0x84"
+  },
+  "shared_state": {
+    "base": "00942ab0",
+    "76f438": "Under canonical interrupt lock, returns word074, copies word000 to word070, clears word074",
+    "76fc4c": "Reads word098",
+    "76fb54": "Reads words110/114/118/11c; writes halfword at output0 and words at output4/8/12; leaves output2 padding unchanged"
+  },
+  "integration": {
+    "modules": ["record_lens_schedule_native", "record_lens_schedule_state"],
+    "queue_provider": "PowerLifecycleNext.PowerCaptureBackends",
+    "post_symbol": "xm1_power_task50_post",
+    "post_contract": "Copies every payload word synchronously into owned storage before return; real task50 executor dispatches and owns callback lifetime",
+    "adjustment_provider": "PowerLifecycleNext.PowerCaptureBackends",
+    "adjustment_symbol": "xm1_power_record_helper_768b20",
+    "profile_provider": "PowerLifecycleNext.PowerRecordProfileAccessors",
+    "profile_symbols": ["xm1_power_record_helper_76d9a8", "xm1_power_record_helper_76d9c8"],
+    "channel_count_provider": "PowerApplicationJoin.ProfileDiagnosticsCpu",
+    "channel_count_symbol": "xm1_power_record_helper_747b50",
+    "loadtest_state_provider": "PowerApplicationJoin.SelectionCoreCpu",
+    "loadtest_state_symbol": "xm1_power_record_helper_742054",
+    "owned_loadtest_setting": "742064 returns 255 when 742054 is zero; otherwise reads canonical configuration byte 0x80, matching the 73ac60 -> 69f8fc path",
+    "configuration_provider": "PowerServicesNext",
+    "configuration_symbol": "xm1_power_configuration_byte",
+    "critical_region_symbols": ["xm1_power_interrupt_lock", "xm1_power_interrupt_unlock"]
+  },
+  "verification": "Source inspection only; no build, test, lint, formatter, native, SDK, guest or camera execution"
+}

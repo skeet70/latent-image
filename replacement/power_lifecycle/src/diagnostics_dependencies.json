@@ -1,0 +1,37 @@
+{
+  "pin":"55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "application_extents":[
+    {"start":"0x723398","end":"0x7233b4","name":"dispatch_error","sha256":"71c79e0240a3c9ff4dbd17c4a0e21bd6c6d8488a64c41ef6796e7c7b35357d0e"},
+    {"start":"0x723330","end":"0x723344","name":"default_error_callback","sha256":"06923057baae437a94c3b2f5904ebc40a3d725722555328069576625b3fe02c8","semantics":"No effects; five actual instructions preserve frame and return"},
+    {"start":"0x6470fc","end":"0x647380","name":"kernel_log_buffer_trace","sha256":"7b13f04cc5b0b11566567a88ea4e7236d3723a9b53e055613b276eb769ee37e5"},
+    {"start":"0x726320","end":"0x7263ec","name":"event_level_search","sha256":"c6d63138da394839acd91bc08220ef26ab3398c81fedf3593515e92668c0bd17"},
+    {"start":"0x726478","end":"0x726658","name":"service_post_packet_trace","sha256":"5ec2f25aa0bcd7ce8234391f509cdf23cd4f3882b164ea7090eebd073c8fc600"},
+    {"start":"0x726658","end":"0x7267b8","name":"stream_text_packet","sha256":"c567d25550ae9bc39712ba689664c0766fbbabf521090dca27b33a60f99b8c8f"},
+    {"start":"0x726a80","end":"0x726b30","name":"driver_error_text","sha256":"0da83fc8d26c603eb212194a3c97b32ba19d580c98d516b516e6e6b1109450f3"},
+    {"start":"0x726a38","end":"0x726a80","name":"diagnostic_check_trigger","sha256":"1d959ac047d62077344074b6615a9030a4ad9878e7e674a6669ad1c5582511c5"},
+    {"start":"0x726b30","end":"0x726b88","name":"selected_driver_error","sha256":"fcdfe1483f8feba11d5146a81161b1b9bae545a8b364dff3f7d840ce78aee618"},
+    {"start":"0x726c74","end":"0x726cf8","name":"command_diagnostic","sha256":"23ad9d06698619b0ddb0081bc770f3b3515dfbcb88343c55e33599d265730ac2"},
+    {"start":"0x72835c","end":"0x7284ec","name":"diagnostic_report_status","sha256":"9989c18feca36270d999de4a96d02d0ec03d110c28ed7acc0caf0bcd3d3afde6"},
+    {"start":"0x69f8fc","end":"0x69f920","name":"configuration_byte","sha256":"0491e27ccb707594c468745512f2212604611381f49a88242f83241025c74966"}
+  ],
+  "kernel_extents":[
+    {"start":"0x41a34","end":"0x41b8c","name":"service_event","sha256":"46b047b884cc5d65be42e6e3f5ca9b5fa9ca6ac74efacdf6c0a83e6c1ce1685b","listing":"loader-40000.dis:1656-1741"},
+    {"start":"0x41568","end":"0x415a0","name":"log_hook_dispatch","sha256":"1b20698d2a0c584e056607ca2baa801bb122180e51f4a172c5d3811c2963c90e","listing":"loader-40000.dis:1349-1362"},
+    {"start":"0x422d8","end":"0x423d4","name":"command_record","sha256":"f13e79b2180ab4cba1e5d6cece8f5a23753bf076520fda8a70136acf55f6ec51","listing":"loader-40000.dis:2209-2271"},
+    {"start":"0x41c8c","end":"0x41d94","name":"timed_pair_record","sha256":"2674c309abc5b16f2b98f2a9ef961e7e87d277d1d491cf5048d30bcf81f494ee","listing":"loader-40000.dis:1806-1871"}
+  ],
+  "calendar_extents":[
+    {"start":"0x6b1738","end":"0x6b1770","name":"calendar_copy_current","sha256":"33049a6f2a00c455188ea21fe2451eb6d2daea0a64188b2554dddd31ccddbd9e"},
+    {"start":"0x6b1770","end":"0x6b199c","name":"calendar_adjust_fields","sha256":"0af22b60faa163e7512cde66b6a58b6daf5766732f683c86dcd92d6a49560caa"},
+    {"start":"0x6b199c","end":"0x6b19cc","name":"calendar_read_selected","sha256":"0a4815c5449f3a30dafa212a0c3e23ab5b3d0115ae6489baa013265513478f4a"},
+    {"start":"0x6a7854","end":"0x6a7878","name":"profile_clock_enabled","sha256":"602c2baed6abe75d9a8bf55a034c7288e376d4f67298817891e54c93ca9d5abb"},
+    {"start":"0x6a7878","end":"0x6a78d4","name":"profile_clock_offset","sha256":"9291a7a0307b6522e0e822364ab02e06de72184732439e2eb2a81927b80b182b"}
+  ],
+  "extent_evidence":"Application/calendar starts, sizes and SHA values read using git show pin:decomp/firmwares/xm1-150/function-ranges.json; individual bytes hashed directly from canonical id4-0061c400.bin. Kernel starts and next-function boundaries grounded in complete loader-40000.dis instructions and hashed canonical loader-40000.bin.",
+  "shared_backing":{"log_control":"0x4004f25c","event_enable_bytes":"0x4004f5e4","log_ring":"0x400a0800","log_index":"0x400a081e","log_capacity":"0x400a081c","log_entries":"0x400a0834 stride16","log_task":"0x400c0800","service_stream":"0x40a5b5e0","command_state":"0x40a5b5f0 +0x70/+0x74","configuration":"0x4089ea9c","calendar_current":"0x409c34b8 six bytes","profile":"existing mirror0x409c281c","config_byte_base":"published pointer at0x96ca50"},
+  "callback_admission":{"name":"PowerLifecycleInstalledDiagnosticHandlers","error":"word4089ea8c is default723330 or root-installed72835c or owned xm1_power_diagnostic_report_status; owned installer xm1_power_install_status_handler publishes the owned address","service_post":"word4089ea94 is default723330 or root-installed726478 or owned xm1_power_owned_service_trace; owned installer xm1_power_install_service_trace publishes the owned address","kernel_trace":"word4004f15c is0 or UI-installed6470fc or owned xm1_power_owned_log_trace; owned installer xm1_power_install_log_trace publishes the owned address","enforcement":"Unrecognized addresses diverge with the address inr0. No callback address is executed as retained CPU code. Admission requires these cells have only their owned installation writes or byte-grounded canonical initial/root/UI identities."},
+  "owned_native_dependencies":["xm1_power_save_irq","xm1_power_restore_irq","xm1_power_current_task","xm1_power_interrupt_lock","xm1_power_interrupt_unlock"],
+  "calendar_semantics":"Selected reads only shared current calendar, never hardware RTC. Enabled adjustment applies actual mirrored sign/hour/quarter-hour fields, unsigned-byte arithmetic, leap year modulo4 and year0..50 rollover. Copies exactly6 bytes to the stream header.",
+  "physical_boundaries":["CP15 TPIDRURW current thread","timerMMIOfff91000/fff91004","CPSR IRQ masking"],
+  "verification":"Source-only; no builds, tests, lint, formatters or camera access."
+}

@@ -2,39 +2,11 @@ load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_test")
 
 package(default_visibility = ["//visibility:public"])
 
-# These modules use Power application-crate modules and stay out of the crate until that crate builds.
+# debug_runtime needs `xm1_power_lifecycle::record_task43_application`, which main's Power crate
+# declares only for the ARM target.
 _POWER_APPLICATION_SOURCES = [
-    "af_iris_runtime.rs",
-    "af_iris_runtime_tests.rs",
-    "af_motion_runtime.rs",
-    "af_motion_runtime_tests.rs",
-    "af_position_geometry.rs",
-    "af_position_geometry_tests.rs",
-    "audio_zoom_actor.rs",
-    "audio_zoom_actor_tests.rs",
-    "av_configuration_runtime.rs",
-    "av_configuration_runtime_tests.rs",
-    "configuration_audio_actors.rs",
-    "configuration_audio_dma.rs",
-    "configuration_audio_packets.rs",
-    "configuration_audio_pipeline.rs",
-    "configuration_audio_sound.rs",
-    "configuration_audio_storage.rs",
-    "configuration_audio_stream.rs",
-    "configuration_capture_runtime.rs",
-    "configuration_capture_runtime_tests.rs",
-    "configuration_image_service.rs",
-    "configuration_image_service_tests.rs",
-    "configuration_record_runtime.rs",
-    "configuration_record_runtime_tests.rs",
-    "configuration_runtime.rs",
-    "configuration_runtime_tests.rs",
-    "configuration_serial_actors.rs",
-    "configuration_status_actor.rs",
     "debug_runtime.rs",
     "debug_runtime_tests.rs",
-    "vendor_audio_runtime.rs",
-    "vendor_audio_runtime_tests.rs",
 ]
 
 _CORE_SOURCES = glob(["*.rs"], exclude = ["lib.rs", "model_runner.rs"] + _POWER_APPLICATION_SOURCES) + ["//replacement/application_nand:sources"]
@@ -110,14 +82,15 @@ _CRYPTO_EXTERN = {
 }
 
 _POWER_HOST = "//replacement/power_lifecycle:services-host"
+_POWER_APPLICATION_HOST = "//replacement/power_lifecycle:host-core"
 _LENS_HOST = "//replacement/lens_transport:host-core"
 _OWN_FIRST_HOST = "//replacement/rtos_own_first:host-core"
 _POWER_SETTINGS_HOST = "//replacement/settings_storage:property-core-host"
 _DISPLAY_HOST = "//replacement/display_scanout/host:display-scanout-panel"
 _LIVEVIEW_HOST = "//replacement/display_scanout/host:calibration-liveview-rlib"
-_DEPS = [":settings-core-host", _CALIBRATION_HOST, _RECORD, _VALIDATOR, _POWER_HOST, _DISPLAY_HOST, _LIVEVIEW_HOST, _LENS_HOST, _OWN_FIRST_HOST, _POWER_SETTINGS_HOST, _CRYPTO_RLIB["host"], _CRYPTO_DEPS["host"]]
+_DEPS = [":settings-core-host", _CALIBRATION_HOST, _RECORD, _VALIDATOR, _POWER_HOST, _POWER_APPLICATION_HOST, _DISPLAY_HOST, _LIVEVIEW_HOST, _LENS_HOST, _OWN_FIRST_HOST, _POWER_SETTINGS_HOST, _CRYPTO_RLIB["host"], _CRYPTO_DEPS["host"]]
 _LINK_PATHS = " ".join([" -L dependency=$$(dirname $(location " + dependency + "))" for dependency in _DEPS])
-_EXTERN = " --extern xm1_settings_storage_core=$(location :settings-core-host) --extern xm1_calibration_core=$(location " + _CALIBRATION_HOST + ") --extern record_store=$(location " + _RECORD + ") --extern area3_validator=$(location " + _VALIDATOR + ") --extern xm1_power_services=$(location " + _POWER_HOST + ") --extern display_scanout_panel=$(location " + _DISPLAY_HOST + ") --extern xm1_lens_transport=$(location " + _LENS_HOST + ") --extern xm1_rtos_own_first=$(location " + _OWN_FIRST_HOST + ")" + _CRYPTO_EXTERN["host"] + _LINK_PATHS
+_EXTERN = " --extern xm1_settings_storage_core=$(location :settings-core-host) --extern xm1_calibration_core=$(location " + _CALIBRATION_HOST + ") --extern record_store=$(location " + _RECORD + ") --extern area3_validator=$(location " + _VALIDATOR + ") --extern xm1_power_services=$(location " + _POWER_HOST + ") --extern xm1_power_lifecycle=$(location " + _POWER_APPLICATION_HOST + ") --extern display_scanout_panel=$(location " + _DISPLAY_HOST + ") --extern xm1_lens_transport=$(location " + _LENS_HOST + ") --extern xm1_rtos_own_first=$(location " + _OWN_FIRST_HOST + ")" + _CRYPTO_EXTERN["host"] + _LINK_PATHS
 
 genrule(
     name = "core-host",
@@ -130,6 +103,7 @@ genrule(
 _ARM_RECORD = "//replacement/settings_storage:record-store-guest-rlib"
 _ARM_VALIDATOR = "//replacement/settings_storage:area3-validator-arm-rlib"
 _ARM_POWER = "//replacement/power_lifecycle:services-arm"
+_ARM_POWER_APPLICATION = "//replacement/power_lifecycle:arm-core"
 _ARM_DISPLAY = "//replacement/display_scanout:libdisplay_scanout_panel"
 _ARM_LIVEVIEW = "//replacement/calibration_liveview:libcalibration_liveview"
 _ARM_LENS = "//replacement/lens_transport:libxm1_lens_transport"
@@ -145,8 +119,8 @@ genrule(
     tools = ["@lab_xm1_rust//:bin/rustc"],
 )
 
-_ARM_DEPS = [":settings-core-arm", _ARM_CALIBRATION, _ARM_RECORD, _ARM_VALIDATOR, _ARM_POWER, _ARM_DISPLAY, _ARM_LIVEVIEW, _ARM_LENS, _ARM_OWN_FIRST, _ARM_POWER_SETTINGS, _CRYPTO_RLIB["arm"], _CRYPTO_DEPS["arm"]]
-_ARM_EXTERNS = " --extern xm1_settings_storage_core=$(location :settings-core-arm) --extern xm1_calibration_core=$(location " + _ARM_CALIBRATION + ") --extern record_store=$(location " + _ARM_RECORD + ") --extern area3_validator=$(location " + _ARM_VALIDATOR + ") --extern xm1_power_services=$(location " + _ARM_POWER + ") --extern display_scanout_panel=$(location " + _ARM_DISPLAY + ") --extern xm1_lens_transport=$(location " + _ARM_LENS + ") --extern xm1_rtos_own_first=$(location " + _ARM_OWN_FIRST + ")" + _CRYPTO_EXTERN["arm"]
+_ARM_DEPS = [":settings-core-arm", _ARM_CALIBRATION, _ARM_RECORD, _ARM_VALIDATOR, _ARM_POWER, _ARM_POWER_APPLICATION, _ARM_DISPLAY, _ARM_LIVEVIEW, _ARM_LENS, _ARM_OWN_FIRST, _ARM_POWER_SETTINGS, _CRYPTO_RLIB["arm"], _CRYPTO_DEPS["arm"]]
+_ARM_EXTERNS = " --extern xm1_settings_storage_core=$(location :settings-core-arm) --extern xm1_calibration_core=$(location " + _ARM_CALIBRATION + ") --extern record_store=$(location " + _ARM_RECORD + ") --extern area3_validator=$(location " + _ARM_VALIDATOR + ") --extern xm1_power_services=$(location " + _ARM_POWER + ") --extern xm1_power_lifecycle=$(location " + _ARM_POWER_APPLICATION + ") --extern display_scanout_panel=$(location " + _ARM_DISPLAY + ") --extern xm1_lens_transport=$(location " + _ARM_LENS + ") --extern xm1_rtos_own_first=$(location " + _ARM_OWN_FIRST + ")" + _CRYPTO_EXTERN["arm"]
 _ARM_LINK_PATHS = " ".join([" -L dependency=$$(dirname $(location " + dependency + "))" for dependency in _ARM_DEPS])
 
 genrule(

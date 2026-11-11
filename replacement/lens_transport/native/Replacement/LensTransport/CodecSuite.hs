@@ -38,13 +38,20 @@ fixtures :: [Fixture]
 fixtures = zipWith (\n f -> f { ident = "codec-" ++ show n ++ "-" ++ ident f }) [0 :: Int ..] $
   [ base { ident = "command", operation = Command, input = word, sequenceNumber = seqn, queued = count }
   | word <- [0,1,0xffffffff,0x12345678,0x80008040], seqn <- [0,7], count <- [0,17,18] ] ++
-  [ base { ident = show op, operation = op, input = page, width = size, enabled = flag }
+  [ base { ident = operationLabel op, operation = op, input = page, width = size, enabled = flag }
   | op <- [ReadFrame,WriteFrame], page <- [0,0x1234,0xffff], size <- [0,1,2,31,1024,2076], flag <- [0,1] ] ++
-  [ base { ident = show op, operation = op, input = word, recoveryState = mode, busyCount = busy }
+  [ base { ident = operationLabel op, operation = op, input = word, recoveryState = mode, busyCount = busy }
   | op <- [Ack,Response], word <- [0xc33ca55a,0xa55a3cc3,0,1,0x08008054,0x08108064,0x08008040,0x08000400,0x000003d0,0x00000042,0x08018074,0x00400002], mode <- [0,1,2], busy <- [0,2,0xffffffff] ] ++
   [ base { ident = "previous-response-consumer", operation = Ack, input = word, sequenceNumber = seqn, previousResponse = previous, consumer = completion, recoveryState = mode }
   | word <- [0x08008054,0x08108064,0x0f00804c,0x0f10805c], seqn <- [0,7], previous <- [0,0xa55a3cc3,0x12345678], completion <- [Absent,Immediate,Deferred], mode <- [0,1] ]
   where base = Fixture "" Command 0 0 0 0 0 0 0 0 Absent
+
+operationLabel :: Operation -> String
+operationLabel Command = "command"
+operationLabel ReadFrame = "read-frame"
+operationLabel WriteFrame = "write-frame"
+operationLabel Ack = "ack"
+operationLabel Response = "response"
 
 symbolName :: Operation -> String
 symbolName Command = "lens_codec_command"
@@ -65,19 +72,20 @@ slice bytes address size = B.take (fromIntegral size) (B.drop (fromIntegral (add
 patch :: B.ByteString -> Int -> Word32 -> B.ByteString
 patch bytes offset value = B.take offset bytes <> word32le value <> B.drop (offset+4) bytes
 
--- Critical sections, routing and diagnostics are synthetic external interfaces.
+-- Critical sections, routing, diagnostics and the transport publication edge are synthetic
+-- external interfaces; every body is a return.
 services :: [(Word32, [Word32])]
-services = [(0x7235d8,[0xe3a00000,0xe12fff1e]),(0x7236b0,[0xe12fff1e]),(0x64982c,[0xe12fff1e]),(0x6be7c8,[0xe12fff1e]),(0x6bde9c,[0xe12fff1e])]
+services = [(0x7235d8,[0xe3a00000,0xe12fff1e]),(0x7236b0,[0xe12fff1e]),(0x64982c,[0xe12fff1e]),(0x6be7c8,[0xe12fff1e]),(0x6bde9c,[0xe12fff1e]),(0x6bf218,[0xe12fff1e])]
 
 makeCase :: B.ByteString -> E.Elf -> Role -> Fixture -> CaseSpec
 makeCase image elf role f = CaseSpec
   { caseId = ident f, caseProvenance = sourceIdentity
-  , caseExclusion = "Synthetic state, queue, payload, receive bytes and bounded caller callback consumer. Constructors stop before event3 at006bf218, before CPU engine/callevector execution. External diagnostics discarded. No physical locking, timing, IRQ, timeout, reset or teardown qualification. Writeframe uninitialized tail remains caller-owned."
+  , caseExclusion = "Synthetic state, queue, payload, receive bytes and bounded caller callback consumer. The event-3 publication edge at 0x006bf218 is a synthetic return, so no dispatcher body or handler runs. External diagnostics discarded. No physical locking, timing, IRQ, timeout, reset or teardown qualification. Writeframe uninitialized tail remains caller-owned."
   , caseEntry = guest entry, caseExit = guest stop
   , caseRegions = code ++ external ++ memory
   , caseFunctions = [(guest a,z) | (a,z) <- functions ++ [(a,fromIntegral (4 * length body)) | (a,body) <- services ++ [(0x203000,consumerBody)]]]
   , caseInitial = [(r,maybe (seed r) id (lookup r arguments)) | r <- [R0 .. R12]] ++ [(Sp,0x308000),(Lr,0x202000),(Cpsr,0x10)]
-  , caseExpectedStatus = Returned, caseExpectedRegisters = []
+  , caseExpectedStatus = Returned, caseExpectedRegisters = (Sp,0x308000) : [(r,seed r) | r <- [R4 .. R11]]
   , caseExpectedMemory = [], caseIgnoredMemory = [], caseCp14Identity = Nothing, caseKernel = Nothing
   }
   where
@@ -86,11 +94,11 @@ makeCase image elf role f = CaseSpec
     entry = if role == Stock then stockEntry (operation f) else case [E.symbolValue s | s <- E.elfSymbols elf, E.symbolName s == symbolName (operation f)] of
       [value] -> value
       _ -> error "admitted symbol disappeared"
-    stop = if parser (operation f) then 0x202000 else 0x6bf218
+    stop = 0x202000
     allocated = filter (\s -> E.sectionAllocated s && E.sectionSize s > 0) (E.elfSections elf)
     code = if role == Stock then [region ("stock-" ++ show a) a ReadExecute (slice image a z) | (a,z,_) <- extents]
       else [region ("owned-" ++ show (E.sectionAddress s)) (E.sectionAddress s) ReadExecute (B.pack [maybe (error "admitted ELF hole") id (E.byteAt elf a) | a <- [E.sectionAddress s .. E.sectionAddress s + E.sectionSize s - 1]]) | s <- allocated]
-    functions = if role == Stock then [(a,z) | (a,z,_) <- extents] else [(E.symbolValue s,E.symbolSize s) | s <- E.elfSymbols elf, E.symbolKind s == E.FunctionSymbol, E.symbolSize s > 0]
+    functions = if role == Stock then [(a,z) | (a,z,_) <- extents] else M.toList (M.fromListWith max [(E.symbolValue s,E.symbolSize s) | s <- E.elfSymbols elf, E.symbolKind s == E.FunctionSymbol, E.symbolSize s > 0])
     external = [region ("external-" ++ show a) a ReadExecute (assemble body) | (a,body) <- services] ++ [region "caller-consumer" 0x203000 ReadExecute (assemble consumerBody)]
     consumerBody = [0xe3042000,0xe3402020,0xe8820003,if consumer f == Deferred then 0xe3a00001 else 0xe3a00000,0xe12fff1e]
     state = foldl (\bytes (offset,value) -> patch bytes offset value) (B.replicate 0xa0 0)
@@ -98,7 +106,7 @@ makeCase image elf role f = CaseSpec
     queue = patch (patch (patch (B.replicate 0xac 0xa5) 0xa0 19) 0xa4 3) 0xa8 (queued f)
     payload = B.pack (take 2076 (cycle [0,255,17,128,90,1,254]))
     receive = B.reverse (word32le (input f)) <> B.replicate (0x820-4) 0xa5
-    memory = [region "state" 0x95d3c0 ReadWrite state,region "queue" 0x95b254 ReadWrite queue,region "machine" 0x955dd0 ReadWrite (word32le 6 <> B.replicate 12 0),region "tx" 0x4096d000 ReadWrite (B.replicate 0x820 0xa5),region "rx" 0x4096d820 ReadWrite receive,region "payload" 0x210000 ReadOnly payload,region "stack" 0x300000 ReadWrite (patch (B.replicate 0x10000 0xa5) 0x8000 0),region "return" 0x202000 ReadExecute (word32le 0xe7f000f0),region "publication" 0x6bf218 ReadExecute (word32le 0xe7f000f0)]
+    memory = [region "state" 0x95d3c0 ReadWrite state,region "queue" 0x95b254 ReadWrite queue,region "machine" 0x955dd0 ReadWrite (word32le 6 <> B.replicate 12 0),region "tx" 0x4096d000 ReadWrite (B.replicate 0x820 0xa5),region "rx" 0x4096d820 ReadWrite receive,region "payload" 0x210000 ReadOnly payload,region "stack" 0x300000 ReadWrite (patch (B.replicate 0x10000 0xa5) 0x8000 0),region "return" 0x202000 ReadExecute (word32le 0xe7f000f0)]
       ++ [region "consumer-output" 0x204000 ReadWrite (B.replicate 8 0xa5)]
     arguments = case operation f of
       Command -> [(R0,input f)]

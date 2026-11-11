@@ -1,4 +1,5 @@
 use crate::callback_registry::{registry as callbacks, CallbackWord};
+use crate::installed_callbacks;
 use crate::settings_shutdown_actor::{self as actor, TransferState};
 use crate::settings_shutdown_native::{xm1_power_settings_dispatch_release, xm1_power_settings_initialize, xm1_power_settings_load_cache, xm1_power_settings_window_valid};
 use crate::settings_shutdown_parser::{self as parser, CoordinatePair, MetadataDescriptor};
@@ -210,10 +211,20 @@ pub unsafe extern "C" fn xm1_power_settings_output_copy(source: *const u8) {
     if unsafe { xm1_power_semaphore_signal(57) } != 0 { halt(); }
 }
 #[no_mangle]
-pub unsafe extern "C" fn xm1_power_settings_output_post(application: *const [u8; 76]) {
-    let routing = if unsafe { word(0x9134f8) } == 1 { UiRouting::Primary } else { UiRouting::Other };
-    let mut events = UiEvents::from_runtime(routing, TaskId(unsafe { byte(0x954884) }));
-    if post_application_record(&mut NativeShutdownRtos, &mut events, unsafe { &*application }).is_err() { halt(); }
+pub unsafe extern "C" fn xm1_power_settings_output_post(record: *const u8) {
+    let status = installed_callbacks::device_notification(callbacks(), CallbackWord(unsafe { word(0x829a0c) }), record, |record| unsafe {
+        let routing = if word(0x9134f8) == 1 { UiRouting::Primary } else { UiRouting::Other };
+        let mut events = UiEvents::from_runtime(routing, TaskId(byte(0x954884)));
+        match post_application_record(&mut NativeShutdownRtos, &mut events, &*(record as *const [u8; 76])) {
+            Ok(()) => 0,
+            Err(status) => status.0,
+        }
+    });
+    match status {
+        Ok(0) => {}
+        Ok(_) => halt(),
+        Err(_) => {}
+    }
 }
 
 #[no_mangle]

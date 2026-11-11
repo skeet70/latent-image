@@ -1,0 +1,40 @@
+{
+  "schema": 1,
+  "pin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "boundaries": "git show PIN:decomp/firmwares/xm1-150/function-ranges.json",
+  "stock_bytes": "private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin",
+  "disassembly": "private-data/analysis/x-m1-1.50/lz/id4.dis:58831-59622",
+  "extents": [
+    {"start":"0x655b28","end_exclusive":"0x655c24","bytes":252,"sha256":"ebac7e8068c42bf2cc76c888ee84dc502bdea14cff60daf1720cfa748f035557"},
+    {"start":"0x655c24","end_exclusive":"0x655ccc","bytes":168,"sha256":"c9f6571db27dc32468013e75ece9ced4425f117f16c71e24ad47ec88333449d1"},
+    {"start":"0x655ccc","end_exclusive":"0x655fe8","bytes":796,"sha256":"ac7222839343cceddba3dea38d8cbb6bce425f1ecf55ef6789cdecb530321b86"},
+    {"start":"0x655fe8","end_exclusive":"0x656128","bytes":320,"sha256":"b8de509ee1420fbbdf887d9a5db4305e60bf1e0576b08cabaf4a151e7fbcd6d3"},
+    {"start":"0x656128","end_exclusive":"0x656178","bytes":80,"sha256":"be1cb653392435f5092b7abf71d397aad2de80ad09e33039f89d95a1c05d4081"},
+    {"start":"0x656178","end_exclusive":"0x6561c8","bytes":80,"sha256":"f6c89548f89559bc0a7fb43deb885a31d91621dafc1323827affb81cdb2fb01c"},
+    {"start":"0x6561c8","end_exclusive":"0x656218","bytes":80,"sha256":"802d11a1083ccf0c905f0db5095fe04e757c456a250d98e53089eda225de1052"},
+    {"start":"0x656218","end_exclusive":"0x656268","bytes":80,"sha256":"a6d8ab6cd10a3b5f912ad693e01dce21c85e996d2fee4d83ed6ad79b72208ea4"},
+    {"start":"0x656268","end_exclusive":"0x656394","bytes":300,"sha256":"70402be43c044f890ced890a6804b61111904e7576e99fa97ed2177acf31771c"},
+    {"start":"0x656394","end_exclusive":"0x656440","bytes":172,"sha256":"11fcd6a34a44ec1b13bf28be5fc831cac648626d44b3be3210671ab97e9023ca"},
+    {"start":"0x656440","end_exclusive":"0x65646c","bytes":44,"sha256":"33443edc43482692a784e0a940b0380665d724c16e2f1f8905462590c11cf724"},
+    {"start":"0x65646c","end_exclusive":"0x6565d8","bytes":364,"sha256":"bb1aafc6ae0ffe6b018b9337d39366aac98cd4aac812f3da680b40580206458d"},
+    {"start":"0x6565d8","end_exclusive":"0x6566f8","bytes":288,"sha256":"8715b0213e8dfffad68a265835c92b6e22e59d2c1bd1fc83743f90b5f7ebf789"},
+    {"start":"0x6566f8","end_exclusive":"0x656788","bytes":144,"sha256":"aca51b4aefe3132bdb4c1b7fcf1026338b60347c548d3ebb9ee35db7551d0b32"}
+  ],
+  "corrections": ["0x655e04 is a conditional branch inside configure, not a stop entry", "0x64e97c is a branch inside IRQ attachment entry0x64e918, not a cyclic software callback registration entry"],
+  "tables": {
+    "selectors": {"address":"0x7c9b44","words":[0,1,2,3]},
+    "irq_sources": {"address":"0x81c604","words":[5,6,7,8]},
+    "irq_handlers": {"address":"0x81c614","words":["0x656128","0x656178","0x6561c8","0x656218"]},
+    "registry": {"address":"0x94446c","layout":"six arrays of four u32: phase,selector,handle,IRQ token,callback,mode","handles":"0x94448c","irq_tokens":"0x94449c"},
+    "generation_counter":"0x409c2804, shared token allocator65722c; 0x94448c is the live generation handle table, not the global counter"
+  },
+  "executor": {"selector":1,"payload":[1000,1,1,"owned callback replacing0x69c304"],"reload":12000,"prescaler":0,"control":3,"source":6,"adapter":"owned replacement of0x656178","registration_owner":"PowerTaskSixCpu69c430"},
+  "dependencies": [
+    {"export":"xm1_power_timer_irq_attach","abi":"(u32 source, unsafe extern C fn() handler, *mut u32 token) -> i32","owner":"PowerTimerCharge","stock":"0x64e918"},
+    {"export":"xm1_power_timer_release_handle","abi":"(u32 token) -> i32","owner":"PowerTimerCharge","stock":"0x64eb20"},
+    {"export":"xm1_power_command_diagnostic","abi":"(u32 category,u32 code)->i32","owner":"diagnostics.rs","stock":"0x726c74","calls":"Acquire slot reservation failure: category2/code17 after interrupt unlock (655ba8..655bb8); invalid release handle: category2/code18 (655ca4..655cb4). Invalid selector returns-30 without diagnostic; configure and stop do not call diagnostics."},
+    {"exports":["xm1_power_interrupt_lock","xm1_power_interrupt_unlock"],"owner":"shared osal/native.S"}
+  ],
+  "semantics": ["Four selector channels have identity physical mapping", "Start checks phase1 and rejects zero converted reload", "Start writes counter0,reload,registers callback IRQ when nonnull,then writes control even when IRQ attachment failed", "Mode0 IRQ stops and detaches before callback; nonzero mode repeats", "Stop clears control and reload, detaches any IRQ token, clears token and sets phase1 even if detach fails", "Release clears selector,phase,handle without implicitly stopping", "Millisecond and microsecond conversions use full-width product before fractional prescaler shifts", "No stock software thunk, synthetic callback or timer completion is installed"],
+  "boundary": "Actual MMIO ticking, interrupt generation and delivery remain unproved physical behavior. No build, test, lint, formatter or camera execution performed."
+}

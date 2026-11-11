@@ -1,0 +1,35 @@
+{
+  "target": "Fujifilm X-M1 firmware 1.50",
+  "source_revision": "62876536052549cbcba1e9f6abc1437e773dba2f",
+  "input": {
+    "path": "private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin",
+    "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+    "base": "0x00bf1a00"
+  },
+  "modules": ["record_image_command_results", "record_image_command_resources"],
+  "providers": [
+    {"symbol": "record_image_command_resources::helper_103b054", "extent": ["0x0103b054", "0x0103b064"], "behavior": "Forward to full owned103eefc resource snapshot exporter."},
+    {"symbol": "record_image_command_resources::helper_103eefc", "extent": ["0x0103eefc", "0x0103f190"], "behavior": "Configurationa8:80 gates output. Export selected resource16fec34+4ea0 fields250..14bb to output+dbf58 with actual word ordering."},
+    {"symbol": "record_image_command_results::helper_1036a70", "extent": ["0x01036a70", "0x01036b4c"], "behavior": "Export 64 unsigned byte history entries as words, with start/end magic. Before wrap, unused entries are ffffffff; after wrap, rotate using the next-write cursor. Null output has no effect."},
+    {"symbol": "record_image_command_results::helper_103b044", "extent": ["0x0103b044", "0x0103b054"], "behavior": "Forward to full owned 1036a70 history exporter."},
+    {"symbol": "record_image_command_results::helper_1042e9c", "extent": ["0x01042e9c", "0x01042f28"], "behavior": "Write handle, truncated kind byte, six truncated halfwords and fourteen table bytes to preview state 01705784."},
+    {"symbol": "record_image_command_results::helper_10517f8", "extent": ["0x010517f8", "0x0105181c"], "behavior": "Return132 on null output; otherwise execute full10452e8 exporter and return0."}
+  ],
+  "transitive_cpu": [
+    {"extent": ["0x010452e8", "0x0104539c"], "behavior": "Configuration bit a8:80 gates writes. Export52 header bytes and60 ring records of68bytes starting at4171bc28, write sentinels, clean source017058e0 length4160."},
+    {"address": "0x0069f8fc", "existing_owner": "record_configuration", "implementation": "Both exporters call canonical record_configuration::helper_69f8fc(context,0xa8)."},
+    {"address": "0x00740e3c", "existing_owner": "primitives/native.S", "implementation": "Source017058e0 and length4160 are32-byte aligned and below16384, so actual wrapper delegates unchanged to42634. ImageCache is the physical cache-service boundary; root owns native binding."}
+  ],
+  "source_limits": "Capture history donor C is NONMATCHING and has an incompatible layout. Implementation follows actual X-M1 byte loads at16fec34+46a8 and cursor/wrap words+46a0/+46a4, not donor word array+298. Preview and refresh behavior likewise recovered from actual mapped bytes.",
+  "byte_evidence": {
+    "history": "id5.dis lines1081105-1081159",
+    "resource": "id5.dis lines1089588-1089752",
+    "preview": "id5.dis lines1093660-1093694",
+    "refresh": "id5.dis lines1095983-1096027 and1108595-1108603",
+    "cache_wrapper": "id4.dis lines299668-299681"
+  },
+  "execution": "Canonical helpers accept RecordContext<M,E>, M:GuestAddressSpace. Scalar accesses and block copies use the same checked address-space CPU path on host and ARM. Only10452e8/10517f8 require E:ImageCache and return canonical RecordError; physical cache-service and memory failures propagate without synthetic success. No caller pointers or callbacks are retained.",
+  "integration": "Parent owns root module declarations, BUILD integration, admitted native regions and C ABI bridges. Add record_image_command_results, record_image_command_resources and cfg(test) record_image_command_results_tests modules. Bind ImageCache::clean_cache to the canonical physical cache service. No local context factory or native pointer singleton exists.",
+  "verification": "Source inspection and input SHA-256 only. Behavioral tests added but not executed. No build, test, lint, formatter, native, SDK, guest or camera execution.",
+  "qualification": "This receipt covers only the listed result providers. It does not establish task48 queued command execution or callback completion."
+}
