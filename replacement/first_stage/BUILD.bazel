@@ -2,6 +2,8 @@ load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
 
 package(default_visibility = ["//visibility:public"])
 
+exports_files(["format.rs"])
+
 xm1_rust_staticlib(
     name = "first-stage-rust",
     src = "src.rs",

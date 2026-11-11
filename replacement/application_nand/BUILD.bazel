@@ -1,0 +1,39 @@
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "src/lib.rs",
+    "src/boot_skip.rs",
+    "src/physical.rs",
+    "src/events.rs",
+    "src/memory.rs",
+    "src/memory_tests.rs",
+])
+
+filegroup(
+    name = "sources",
+    srcs = [
+        "src/lib.rs",
+        "src/boot_skip.rs",
+        "src/physical.rs",
+        "src/events.rs",
+        "src/memory.rs",
+        "//replacement/first_stage:format.rs",
+    ],
+)
+
+genrule(
+    name = "host-tests",
+    testonly = True,
+    srcs = [
+        "src/lib.rs",
+        "src/boot_skip.rs",
+        "src/physical.rs",
+        "src/events.rs",
+        "src/memory.rs",
+        "src/memory_tests.rs",
+        "//replacement/first_stage:format.rs",
+    ],
+    outs = ["application-nand-host-tests-bin", "application-nand-host-tests.passed"],
+    tools = ["@lab_rustc//:bin/rustc", "@lab_clang//:bin/clang"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test --cfg xm1_application_nand_host_tests -C linker=$(location @lab_clang//:bin/clang) $(location src/lib.rs) -o $(@D)/application-nand-host-tests-bin && $(@D)/application-nand-host-tests-bin && touch $(@D)/application-nand-host-tests.passed",
+)
