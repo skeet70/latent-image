@@ -1693,8 +1693,14 @@ haskell_test(
         "BuildRecipeBankRamTests.hs",
         "RamPushLayout.hs",
     ],
-    args = ["$(location :build-recipe-bank)"],
-    data = [":build-recipe-bank"],
+    args = [
+        "$(location :build-recipe-bank)",
+        "$(location //menu:recipe_bank_ram_engine.ld)",
+    ],
+    data = [
+        ":build-recipe-bank",
+        "//menu:recipe_bank_ram_engine.ld",
+    ],
     ghcopts = [
         "-Wall",
         "-Werror",
@@ -1808,9 +1814,11 @@ filegroup(
     srcs = [
         "build-recipe-bank-modal-engine-ram.sh",
         "build-recipe-bank-modal-render-ram.sh",
+        "build-recipe-bank-modal-value-ram.sh",
         "build-recipe-bank-ram.sh",
         ":build-recipe-bank",
         "//menu:recipe_bank_menu_engine_allowlist_fragment.json",
+        "//menu:recipe_bank_menu_value_allowlist_fragment.json",
         "//menu:recipe_bank_modal_allowlist_fragment.json",
         "//menu:recipe_bank_ram_engine.ld",
         "//replacement/bank:bank-modal",

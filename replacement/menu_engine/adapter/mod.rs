@@ -132,9 +132,26 @@ impl EngineServices for Stock {
     fn perform(&mut self, state: &EngineState, effect: Effect) {
         write_state(state);
         match effect {
-            Effect::Notify(notify) => unsafe {
-                rb_menu_engine_call_notify(notify.kind.raw(), notify.node.get(), notify.id.get(), notify.class.get())
-            },
+            Effect::Notify(notify) => {
+                #[cfg(rb_menu_value_owned)]
+                {
+                    if notify.kind == StageKind::Pop {
+                        let restore = matches!(notify.id.get(), 0x1a | 0x1c);
+                        let ended = if restore {
+                            crate::menu_value_adapter::rb_menu_value_cancel() != 0
+                        } else {
+                            crate::menu_value_adapter::rb_menu_value_confirm() != 0
+                        };
+                        if ended {
+                            crate::menu_value_adapter::rb_menu_value_retained(if restore { 1 } else { 0 });
+                            return;
+                        }
+                    }
+                }
+                unsafe {
+                    rb_menu_engine_call_notify(notify.kind.raw(), notify.node.get(), notify.id.get(), notify.class.get())
+                }
+            }
             Effect::StoreSnapshot { depth, slot, record } => {
                 let offset = slot.get().wrapping_mul(SNAPSHOT_LEN);
                 match depth {
@@ -244,9 +261,18 @@ pub extern "C" fn rb_menu_engine_apply(kind: u32, node: u32, id: u32, extra: u32
         Err(_) => 0,
         Ok(()) => {
             let event = MenuEvent::decode(StageEvent { kind, node, id, extra }, &TREE, &state);
+            let push = matches!(&event, MenuEvent::Push { .. });
             match apply(&TREE, StaticState, event, &mut Stock) {
                 Err(_) => 0,
                 Ok(result) => {
+                    #[cfg(rb_menu_value_owned)]
+                    if push {
+                        if let Some(node) = state.node {
+                            if let Some(record) = TREE.node(node) {
+                                let _ = crate::menu_value_adapter::rb_menu_value_begin(record.class.get());
+                            }
+                        }
+                    }
                     write_state(&state);
                     match result {
                         EngineResult::Rejected => 1,

@@ -21,7 +21,7 @@ import FujiAF.SHA256 (sha256)
 import FujiAF.Rehearsal (rehearseRamAlloc, rehearseRamPush, rehearseRamFree, rehearseRamUnload)
 import FujiAF.Transport
 import qualified FujiAF.Broker as P
-import RamPushLayout (installerInstallOffset, installerRollbackOffset, installerStatusOffset, runtimeAllocationSize, runtimeAllocationSizeFor, runtimeInstallerBase, standardBankVariant, modalScopedBankVariant, lifecycleBankVariant, modalLifecycleBankVariant, modalEngineBankVariant, modalRenderBankVariant, bankVariantTag)
+import RamPushLayout (installerInstallOffset, installerRollbackOffset, installerStatusOffset, runtimeAllocationSize, runtimeAllocationSizeFor, runtimeInstallerBase, standardBankVariant, modalScopedBankVariant, lifecycleBankVariant, modalLifecycleBankVariant, modalEngineBankVariant, modalRenderBankVariant, modalValueBankVariant, bankVariantTag)
 import qualified RamPushLayout as Layout
 import qualified Replacement.GeneralHeap.Admission as Heap
 import RamPushModel
@@ -97,7 +97,7 @@ manifestDocument candidate = BL.toStrict (encode (object $
       , "rollback" .= unAddressHex (rollbackEntry entries)
       , "status" .= unAddressHex (statusEntry entries) ]
   , "publications" .= map publication (manifestPublications candidate) ]
-  ++ ["bank_variant" .= bankVariantTag modalRenderBankVariant | manifestBankVariant candidate == Just modalRenderBankVariant]))
+  ++ ["bank_variant" .= bankVariantTag variant | Just variant <- [manifestBankVariant candidate], variant `elem` [modalRenderBankVariant, modalValueBankVariant]]))
   where
     entries = manifestEntries candidate
     unAddressHex = hexWord . unAddress
@@ -232,6 +232,7 @@ main = do
         , (bankLifecyclePayload, lifecycleBankVariant, RecipeBankLifecycle, 0x1dcd8, 226, "build-recipe-bank-lifecycle-ram.sh", "bank-lifecycle.a")
         , (bankModalLifecyclePayload, modalLifecycleBankVariant, RecipeBankModalLifecycle, 0x1dcf8, 227, "build-recipe-bank-modal-lifecycle-ram.sh", "bank-modal-lifecycle.a")
         , (bankModalEnginePayload, modalEngineBankVariant, RecipeBankModal75MenuEngine, 0x2dcc0, 225, "build-recipe-bank-modal-engine-ram.sh", "bank-modal.a")
+        , (bankModalValuePayload, modalValueBankVariant, RecipeBankModal75MenuEngine, 0x33d00, 226, "build-recipe-bank-modal-value-ram.sh", "bank-modal.a")
         , (bankModalRenderPayload, modalRenderBankVariant, RecipeBankModal75MenuEngine, 0x2dcc0, 228, "build-recipe-bank-modal-render-ram.sh", "bank-modal.a") ]
   _ <- parse standard
   let renderRuntime = B.replicate 0x2dcc0 0
@@ -254,6 +255,20 @@ main = do
   makeDir renderStateDirectory
   renderStatePath <- writeStateFile renderStateDirectory renderState
   readRamPushState renderStatePath >>= check "render state retains its explicit identity and 228 publications" . (== renderState)
+  let valueRuntime = B.replicate 0x33d00 0
+      valuePublications = take 226 renderPublications
+      valueManifest = standard
+        { allocationSize = 0x33d00, runtimeBytes = valueRuntime, runtimeDigest = sha256 valueRuntime
+        , manifestPublications = valuePublications, manifestBankVariant = Just modalValueBankVariant }
+  valueParsed <- parse valueManifest
+  check "value manifest retains its explicit identity and 226 publications"
+    (manifestBankVariant valueParsed == Just modalValueBankVariant)
+  let valueState = RamPushState (manifestDigest valueParsed) (runtimeDigest valueParsed) (Address base) 0x33d00
+        (manifestEntries valueParsed) valuePublications callbackStockWord bootstrapBytes 1 (Just modalValueBankVariant)
+  let valueStateDirectory = root </> "value-state"
+  makeDir valueStateDirectory
+  valueStatePath <- writeStateFile valueStateDirectory valueState
+  readRamPushState valueStatePath >>= check "value state preserves the identity needed by unload" . (== valueState)
   let fullIdentity = [("synthetic-source-" ++ show index, replicate 64 'a') | index <- [1..68 :: Int]]
   fullIdentityManifest <- parse (standard { sourceIdentity = fullIdentity })
   check "manifest accepts the complete 68-entry source identity"

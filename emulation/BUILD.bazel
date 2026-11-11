@@ -7,6 +7,7 @@ exports_files(
     ["recovery-task-state-tests.sh"],
     visibility = [
         "//replacement/menu_engine:__pkg__",
+        "//replacement/menu_value:__pkg__",
         "//replacement/modal_runtime:__pkg__",
         "//replacement/recipe_ui:__pkg__",
         "//replacement/rtos_cyclic:__pkg__",
@@ -2606,6 +2607,25 @@ haskell_binary(
         "//host:base",
         "//host:bytestring",
         "//host:filepath",
+    ],
+)
+
+haskell_binary(
+    name = "menu-value-cases",
+    srcs = ["MenuValueCases.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-O2", "-threaded"],
+    main_file = "MenuValueCases.hs",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":native-adapter",
+        ":native-observation",
+        ":owned-case",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:filepath",
+        "//host:host-support",
     ],
 )
 

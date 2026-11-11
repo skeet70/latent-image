@@ -21,6 +21,17 @@ mod menu_engine_adapter;
 #[cfg(all(rb_menu_engine_owned, target_arch = "arm"))]
 core::arch::global_asm!(include_str!("../menu_engine/adapter/entry.S"), options(raw));
 
+#[cfg(rb_menu_value_owned)]
+#[path = "../menu_value/src/lib.rs"]
+mod menu_value;
+
+#[cfg(rb_menu_value_owned)]
+#[path = "../menu_value/adapter/mod.rs"]
+mod menu_value_adapter;
+
+#[cfg(all(rb_menu_value_owned, target_arch = "arm"))]
+core::arch::global_asm!(include_str!("../menu_value/adapter/entry.S"), options(raw));
+
 #[cfg(rb_render_owned)]
 #[path = "../menu_widgets/src/lib.rs"]
 mod menu_widgets;

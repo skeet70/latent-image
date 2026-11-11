@@ -30,6 +30,7 @@ module RamPushLayout
   , modalLifecycleBankVariant
   , modalEngineBankVariant
   , modalRenderBankVariant
+  , modalValueBankVariant
   , bankVariantTag
   , parseBankVariantTag
   , bankVariantFromIdentity
@@ -47,6 +48,7 @@ module RamPushLayout
   , runtimeAllocationSizeFor
   , safePublicationOrderForVariant
   , modalHookAddress
+  , menuValueHookAddress
   , lifecycleHookAddresses
   , modalHookWordFor
   , captureHookAddress
@@ -181,7 +183,7 @@ runtimeInstallerExtent = installerExtent publicationCount
 runtimeAllocationSize :: Word32
 runtimeAllocationSize = 0x1dc98
 
-data PublicationGroup = LifecyclePublications | Modal75Publication | MenuEnginePublication | RenderPublication
+data PublicationGroup = LifecyclePublications | Modal75Publication | MenuEnginePublication | RenderPublication | MenuValuePublication
   deriving (Eq, Ord, Show)
 
 newtype BankVariant = BankVariant [PublicationGroup]
@@ -195,8 +197,10 @@ bankVariant groups = do
     Left "duplicate publication group"
   when (RenderPublication `elem` ordered && ordered /= [Modal75Publication, MenuEnginePublication, RenderPublication]) $
     Left "the render group requires exactly modal75 and menu-engine"
-  when (MenuEnginePublication `elem` ordered && filter (/= RenderPublication) ordered /= [Modal75Publication, MenuEnginePublication]) $
+  when (MenuEnginePublication `elem` ordered && filter (\group -> group /= RenderPublication && group /= MenuValuePublication) ordered /= [Modal75Publication, MenuEnginePublication]) $
     Left "the menu-engine group requires exactly the modal75 group"
+  when (MenuValuePublication `elem` ordered && ordered /= [Modal75Publication, MenuEnginePublication, MenuValuePublication]) $
+    Left "the menu-value group requires exactly the modal75 and menu-engine groups"
   pure (BankVariant ordered)
 
 publicationGroups :: BankVariant -> [PublicationGroup]
@@ -215,6 +219,9 @@ modalEngineBankVariant = BankVariant [Modal75Publication, MenuEnginePublication]
 modalRenderBankVariant :: BankVariant
 modalRenderBankVariant = BankVariant [Modal75Publication, MenuEnginePublication, RenderPublication]
 
+modalValueBankVariant :: BankVariant
+modalValueBankVariant = BankVariant [Modal75Publication, MenuEnginePublication, MenuValuePublication]
+
 bankVariantTag :: BankVariant -> String
 bankVariantTag variant
   | variant == standardBankVariant = "standard"
@@ -224,6 +231,7 @@ bankVariantTag variant
   groupTag Modal75Publication = "modal75"
   groupTag MenuEnginePublication = "menu-engine"
   groupTag RenderPublication = "render"
+  groupTag MenuValuePublication = "menu-value"
   concatTags [] = ""
   concatTags [tag] = tag
   concatTags (tag : rest) = tag ++ "," ++ concatTags rest
@@ -233,7 +241,7 @@ parseBankVariantTag tag = case filter ((== tag) . bankVariantTag) variants of
   [variant] -> Right variant
   _ -> Left "unknown bank variant tag"
  where
-  variants = [standardBankVariant, modalScopedBankVariant, lifecycleBankVariant, modalLifecycleBankVariant, modalEngineBankVariant, modalRenderBankVariant]
+  variants = [standardBankVariant, modalScopedBankVariant, lifecycleBankVariant, modalLifecycleBankVariant, modalEngineBankVariant, modalRenderBankVariant, modalValueBankVariant]
 
 -- | Untagged schema-1 packages retain their legacy count identities.
 bankVariantFromIdentity :: Maybe String -> Int -> Either String BankVariant
@@ -258,6 +266,7 @@ publicationCountFor variant = publicationCount + sum (map groupCount (publicatio
   groupCount Modal75Publication = 1
   groupCount MenuEnginePublication = 1
   groupCount RenderPublication = 3
+  groupCount MenuValuePublication = 1
 
 publicationActivationCountFor :: BankVariant -> Int
 publicationActivationCountFor variant = publicationCountFor variant - publicationSetupCount
@@ -269,6 +278,8 @@ runtimeInstallerExtentFor variant
 
 runtimeAllocationSizeFor :: BankVariant -> Word32
 runtimeAllocationSizeFor variant
+  | hasPublicationGroup MenuValuePublication variant =
+      menuEngineRegionStartFor variant 0 + menuEngineRegionExtentFor variant
   | hasPublicationGroup MenuEnginePublication variant =
       menuEngineRegionStart 0 + menuEngineRegionExtent
   | otherwise =
@@ -447,6 +458,10 @@ modalHookAddress = PublicationAddress 0x00bfb028
 menuEngineHookAddress :: PublicationAddress
 menuEngineHookAddress = PublicationAddress 0x00bf95c8
 
+-- | The IMAGE SIZE dispatcher's jump-table word for property `0xf6`.
+menuValueHookAddress :: PublicationAddress
+menuValueHookAddress = PublicationAddress 0x00d50084
+
 -- | Tree, picker, and pane entries are the final render publications.
 renderHookAddresses :: [PublicationAddress]
 renderHookAddresses = map PublicationAddress [0x01164e1c, 0x01163f2c, 0x011662a0]
@@ -461,13 +476,15 @@ menuEngineRegionExtent = 0x10000
 
 menuEngineRegionStartFor :: BankVariant -> Word32 -> Word32
 menuEngineRegionStartFor variant base
+  | hasPublicationGroup MenuValuePublication variant = base + 0x1dd00
   | hasPublicationGroup RenderPublication variant =
       base + ((runtimeAllocationSize + runtimeInstallerExtentFor variant - runtimeInstallerExtent + 31) .&. 0xffffffe0)
   | otherwise = menuEngineRegionStart base
 
 menuEngineRegionExtentFor :: BankVariant -> Word32
-menuEngineRegionExtentFor variant =
-  menuEngineRegionStart 0 + menuEngineRegionExtent - menuEngineRegionStartFor variant 0
+menuEngineRegionExtentFor variant
+  | hasPublicationGroup MenuValuePublication variant = 0x16000
+  | otherwise = menuEngineRegionStart 0 + menuEngineRegionExtent - menuEngineRegionStartFor variant 0
 
 lifecycleHookAddresses :: [PublicationAddress]
 lifecycleHookAddresses = map PublicationAddress [0x00e99e8c, 0x00e6a754, 0x00e6bb90]
@@ -481,7 +498,9 @@ safePublicationOrderForVariant variant addresses = do
     Left "duplicate logical publication address"
   let modalSelected = hasPublicationGroup Modal75Publication variant
       engineSelected = hasPublicationGroup MenuEnginePublication variant
+      valueSelected = hasPublicationGroup MenuValuePublication variant
       finalHooks = [modalHookAddress | modalSelected] <> [menuEngineHookAddress | engineSelected]
+        <> [menuValueHookAddress | valueSelected]
         <> [hook | hasPublicationGroup RenderPublication variant, hook <- renderHookAddresses]
   when (not (null finalHooks) && drop (length addresses - length finalHooks) addresses /= finalHooks) $
     Left "scoped modal hook must occur once at the final logical index"
@@ -489,6 +508,8 @@ safePublicationOrderForVariant variant addresses = do
     Left "modal hook present without its publication group"
   when (not engineSelected && menuEngineHookAddress `elem` addresses) $
     Left "menu engine hook present without its publication group"
+  when (not valueSelected && menuValueHookAddress `elem` addresses) $
+    Left "menu value hook present without its publication group"
   let lifecycleAddresses = if hasPublicationGroup LifecyclePublications variant then lifecycleHookAddresses else []
       selectedAddresses = lifecycleAddresses <> finalHooks
   when (drop publicationCount addresses /= selectedAddresses) $

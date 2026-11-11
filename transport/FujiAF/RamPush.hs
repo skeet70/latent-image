@@ -9,7 +9,7 @@ module FujiAF.RamPush
   , callbackTablePointerAddress, callbackTableAddress, callbackStockWord
   , queryOutputAddress, configGateIndex, mailboxBytes
   , reviewedAllocationSize, installerAbiVersion, publicationCount, setupCount, activationCount
-  , PayloadKind(..), Payload(..), bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, bankModalEnginePayload, bankModalRenderPayload, classicChromePayload, classicChromeIconPayload, usbTogglePayload, afRingPayload, experimentPayload, experimentHookCapacity, payloads, payloadOfSize, payloadPublicationCount, payloadEntries
+  , PayloadKind(..), Payload(..), bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, bankModalEnginePayload, bankModalRenderPayload, bankModalValuePayload, classicChromePayload, classicChromeIconPayload, usbTogglePayload, afRingPayload, experimentPayload, experimentHookCapacity, payloads, payloadOfSize, payloadPublicationCount, payloadEntries
   , readRamPushManifest, parseRamPushManifest, readRamPushPrepublication, manifestPropertyCounts, readRamAllocState, readRetainedAllocation, readRamPushState
   , consumedMarkerPath, writeAllocStateFile, writeStateFile
   , ramAllocArguments, ramPushArguments, ramFreeArguments, ramUnloadArguments, ramRelinkArguments
@@ -257,6 +257,15 @@ bankModalRenderPayload = bankModalEnginePayload
   , payloadBankVariant = Just Layout.modalRenderBankVariant
   }
 
+-- | The scoped modal75 and menu-engine package with the owned value seam.
+bankModalValuePayload :: Payload
+bankModalValuePayload = bankModalEnginePayload
+  { payloadAllocationSize = fromIntegral (Layout.runtimeAllocationSizeFor Layout.modalValueBankVariant)
+  , payloadActivationCount = Layout.publicationActivationCountFor Layout.modalValueBankVariant
+  , payloadRelinkScript = "build-recipe-bank-modal-value-ram.sh"
+  , payloadBankVariant = Just Layout.modalValueBankVariant
+  }
+
 -- | reports/classic-chrome-patch.md section 8.2: 84 setup and 47 activation
 -- publications; menu/classic_chrome_ram.S takes 0x184 bytes at the base.
 classicChromePayload = Payload
@@ -356,7 +365,7 @@ experimentPayload name = Payload
   }
 
 payloads :: [Payload]
-payloads = [bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, bankModalEnginePayload, classicChromePayload, classicChromeIconPayload, usbTogglePayload, afRingPayload, experimentPayload ""]
+payloads = [bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, bankModalEnginePayload, bankModalValuePayload, classicChromePayload, classicChromeIconPayload, usbTogglePayload, afRingPayload, experimentPayload ""]
 
 payloadOfSize :: Int -> Maybe Payload
 payloadOfSize size = case filter ((== size) . payloadAllocationSize) payloads of
@@ -839,7 +848,7 @@ stateValue state = Object (M.fromList $
   , ("bootstrap", String (T.pack (P.hexBytes (B.unpack (stateBootstrap state)))))
   , ("nonce", String (T.pack (hexWord (stateNonce state)))) ]
   ++ [("bank_variant", String (T.pack (Layout.bankVariantTag variant)))
-     | Just variant <- [stateBankVariant state], Layout.hasPublicationGroup Layout.RenderPublication variant])
+     | Just variant <- [stateBankVariant state], any (`Layout.hasPublicationGroup` variant) [Layout.RenderPublication, Layout.MenuValuePublication]])
 
 parseHexBytes :: Value -> Int -> IO B.ByteString
 parseHexBytes value count = do

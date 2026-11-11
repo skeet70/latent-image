@@ -1,0 +1,61 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+filegroup(
+    name = "module",
+    srcs = ["src/lib.rs"],
+    visibility = [
+        "//host/firmware:__pkg__",
+        "//replacement/bank:__pkg__",
+    ],
+)
+
+filegroup(
+    name = "adapter-sources",
+    srcs = [
+        "adapter/entry.S",
+        "adapter/mod.rs",
+    ],
+    visibility = ["//replacement/bank:__pkg__"],
+)
+
+filegroup(
+    name = "value-adapter-sources",
+    srcs = [
+        "adapter/entry.S",
+        "adapter/mod.rs",
+    ],
+    visibility = [
+        "//host/firmware:__pkg__",
+        "//replacement/bank:__pkg__",
+    ],
+)
+
+genrule(
+    name = "menu-value-tests-build",
+    srcs = [
+        ":module",
+        "src/lib.rs",
+        "src/tests.rs",
+    ],
+    outs = ["menu-value-tests-bin"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location src/lib.rs) -o $@",
+    executable = True,
+    tools = ["@lab_rustc//:bin/rustc", "@lab_clang//:bin/clang"],
+)
+
+sh_test(
+    name = "menu-value-tests",
+    size = "small",
+    srcs = ["//emulation:recovery-task-state-tests.sh"],
+    args = ["$(location :menu-value-tests-build)"],
+    data = [":menu-value-tests-build"],
+)
+
+genrule(
+    name = "host-library",
+    srcs = [":module", "src/lib.rs"],
+    outs = ["libmenu_value.rlib"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --crate-name=menu_value --edition=2021 --crate-type=rlib $(location src/lib.rs) -o $@",
+    tools = ["@lab_rustc//:bin/rustc"],
+    visibility = ["//replacement/modal_runtime:__pkg__"],
+)

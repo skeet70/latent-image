@@ -246,6 +246,22 @@ main = do
         , ("a differing block read fails the pair", isLeft (comparePair [segment [B.replicate 0x430 2] []] [segment [B.replicate 0x430 3] []]))
         , ("a differing 0x1d post fails the pair", isLeft (comparePair [segment [B.replicate 0x430 2] [post 1]] [segment [B.replicate 0x430 2] [post 2]]))
         , ("a missing engine read fails the pair", isLeft (comparePair [segment [] []] [segment [] []]))
+        , ("resident value lifecycle covers every owned seam",
+            let sites = [ValueBegin, ValueApply, ValueConfirm, ValueCancel, ValueHandback]
+                hits = [Hit (ValueSite site) 0 (0,0,0,0) Nothing Nothing [] Nothing Nothing | site <- sites]
+             in checkValueLifecycle [segment [] hits] == Right ())
+        , ("a value lifecycle missing its cancellation seam refuses",
+            let sites = [ValueBegin, ValueApply, ValueConfirm, ValueHandback]
+                hits = [Hit (ValueSite site) 0 (0,0,0,0) Nothing Nothing [] Nothing Nothing | site <- sites]
+             in isLeft (checkValueLifecycle [segment [] hits]))
+        , ("stock value fallback while resident refuses even with complete owned coverage",
+            let sites = [ValueBegin, ValueApply, ValueConfirm, ValueCancel, ValueHandback, StockValueArm]
+                hits = [Hit (ValueSite site) 0 (0,0,0,0) Nothing Nothing [] Nothing Nothing | site <- sites]
+             in isLeft (checkValueLifecycle [segment [] hits]))
+        , ("stock value code after unload does not violate resident ownership",
+            let sites = [ValueBegin, ValueApply, ValueConfirm, ValueCancel, ValueHandback]
+                hit site = Hit (ValueSite site) 0 (0,0,0,0) Nothing Nothing [] Nothing Nothing
+             in checkValueLifecycle [segment [] (map hit sites), unloaded (segment [] [hit StockValueArm])] == Right ())
         ]
       failures = [label | (label, passed) <- cases, not passed]
   mapM_ (putStrLn . ("FAIL: " ++)) failures

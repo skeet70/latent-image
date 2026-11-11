@@ -1,5 +1,6 @@
 exports_files([
     "recipe_bank_menu_engine_allowlist_fragment.json",
+    "recipe_bank_menu_value_allowlist_fragment.json",
     "recipe_bank_render_allowlist_fragment.json",
     "recipe_bank_modal_allowlist_fragment.json",
     "recipe_bank_ram_engine.ld",

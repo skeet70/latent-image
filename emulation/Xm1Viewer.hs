@@ -8,7 +8,7 @@ import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), FixedSceneFr
 import qualified Emulation.ViewerRuntime as ViewerRuntime
 import FujiModPaths (fujimodRamPushBridge, fujimodRun)
 import FujiAF.RamPush (Payload)
-import Xm1RamPushE2E (AllowlistPolicy (..), AttachHold (..), BootMode (..), CardMode (..), E2ESettings (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), OverrideReason (..), PushMode (..), RelinkMode (..), SymbolRead, UiConversionProfile (..), bankD3Payload, bankModal75Payload, bankModalEnginePayload, bankModalRenderPayload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromeIconPayload, classicChromePayload, experimentPayload, loadModalOwnedPackage, parseSymbolRead, runMenuCrawlE2E, runMenuObserveE2E, runRamDiffE2E, runRamPushE2E, warmAttachCheckpoint)
+import Xm1RamPushE2E (AllowlistPolicy (..), AttachHold (..), BootMode (..), CardMode (..), E2ESettings (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), OverrideReason (..), PushMode (..), RelinkMode (..), SymbolRead, UiConversionProfile (..), bankD3Payload, bankModal75Payload, bankModalEnginePayload, bankModalRenderPayload, bankModalValuePayload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromeIconPayload, classicChromePayload, experimentPayload, loadModalOwnedPackage, parseSymbolRead, runMenuCrawlE2E, runMenuObserveE2E, runRamDiffE2E, runRamPushE2E, warmAttachCheckpoint)
 import qualified Xm1RamPushE2E as RamE2E
 import Data.List (isPrefixOf, nub)
 import Data.Maybe (isJust, isNothing)
@@ -75,6 +75,7 @@ data Options = Options
   , prelinkedModalOption :: Maybe FilePath
   , menuEngineOwnedOption :: Bool
   , renderOwnedOption :: Bool
+  , menuValueOwnedOption :: Bool
   , screenProbeOption :: Maybe ScreenProbe
   , propertyAllocationKeeperOption :: Bool
   , allocationImage4Option :: Maybe FilePath
@@ -158,6 +159,8 @@ usage = unlines
   , "                         --cfg rb_menu_engine_owned) into the 225-publication bank that"
   , "                         publishes the owned menu engine at 0xbf95c8"
   , "  --render-owned         With --menu-engine-owned: publish the three owned render seams (228 publications)"
+  , "  --menu-value-owned     With --menu-engine-owned: publish the owned value seam at 0x00d50084"
+  , "                         (226 publications); excludes --render-owned"
   , "  --ram-push-lifecycle   Select the unqualified 226-publication lifecycle variant"
   , "                         Cannot combine with the continuously guarded --ram-push-modal-scoped route"
   , "                         Requires --ram-push-e2e --fujimod --unreviewed-relink"
@@ -188,7 +191,7 @@ parseCommand args
   | "--help" `elem` args = pure Help
   | otherwise = Launch <$> go defaults args
   where
-    defaults = Options Nothing Nothing Nothing Nothing Nothing Nothing False False ReviewedRelink Nothing CheckpointedBoot Nothing RamPush Nothing BankD3Choice [] NoAttachHold DeclaredUiCpuFallback Nothing WithCard RetainedChoice (Port 0) IPv4Loopback False NoModalDiagnostic NoModalLifetimeGuard Nothing Nothing Nothing Nothing False False Nothing False Nothing Nothing Nothing False
+    defaults = Options Nothing Nothing Nothing Nothing Nothing Nothing False False ReviewedRelink Nothing CheckpointedBoot Nothing RamPush Nothing BankD3Choice [] NoAttachHold DeclaredUiCpuFallback Nothing WithCard RetainedChoice (Port 0) IPv4Loopback False NoModalDiagnostic NoModalLifetimeGuard Nothing Nothing Nothing Nothing False False False Nothing False Nothing Nothing Nothing False
     go options [] = validateModalLifetimeOptions options >> validateAllocationKeeperOptions options >> pure options
     go options ("--port" : value : rest) = do
       port <- case readMaybe value :: Maybe Integer of
@@ -328,6 +331,9 @@ parseCommand args
     go options ("--render-owned" : rest) = do
       require (not (renderOwnedOption options)) "--render-owned may appear only once"
       go options { renderOwnedOption = True } rest
+    go options ("--menu-value-owned" : rest) = do
+      require (not (menuValueOwnedOption options)) "--menu-value-owned may appear only once"
+      go options { menuValueOwnedOption = True } rest
     go _ (argument : _) = ioError (userError ("Unknown option or missing value: " ++ argument ++ "\n" ++ usage))
 
 validateAllocationKeeperOptions :: Options -> IO ()
@@ -393,6 +399,9 @@ validateModalLifetimeOptions options = do
   when (renderOwnedOption options) $
     require (menuEngineOwnedOption options && isJust (modal75ArchiveOption options))
       "--render-owned requires --menu-engine-owned and --modal75-owned-archive"
+  when (menuValueOwnedOption options) $
+    require (menuEngineOwnedOption options && not (renderOwnedOption options) && isJust (modal75ArchiveOption options))
+      "--menu-value-owned requires --menu-engine-owned and --modal75-owned-archive without --render-owned"
 
 -- | A regular file beneath workspace/private-data/.
 privateRegularInput :: Workspace -> String -> FilePath -> IO FilePath
@@ -456,6 +465,7 @@ selectedPayload :: Options -> Payload
 selectedPayload options = case ramPayloadOption options of
   BankD3Choice -> bankD3Payload
   BankModal75Choice | renderOwnedOption options -> bankModalRenderPayload
+                    | menuValueOwnedOption options -> bankModalValuePayload
                     | menuEngineOwnedOption options -> bankModalEnginePayload
                     | otherwise -> bankModal75Payload
   BankLifecycleChoice -> bankLifecyclePayload

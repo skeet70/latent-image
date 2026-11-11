@@ -235,23 +235,24 @@ const MAX_SETTINGS_RELOADS: usize = 4;
 
 /// The bank variants the guard binds (RamPushLayout `BankVariant`).
 #[derive(Clone, Copy)]
-enum GuardedVariant { Stock, Modal75, Modal75MenuEngine, Modal75MenuEngineRender }
+enum GuardedVariant { Stock, Modal75, Modal75MenuEngine, Modal75MenuEngineValue, Modal75MenuEngineRender }
 /// The groups a variant adds to the stock publication vector.
 #[derive(Clone, Copy)]
-enum PublicationGroup { Modal75, MenuEngine, Render }
+enum PublicationGroup { Modal75, MenuEngine, MenuValue, Render }
 const STOCK_PUBLICATIONS: usize = 223;
 impl PublicationGroup {
     fn publications(self) -> usize {
-        match self { PublicationGroup::Modal75 | PublicationGroup::MenuEngine => 1, PublicationGroup::Render => 3 }
+        match self { PublicationGroup::Modal75 | PublicationGroup::MenuEngine | PublicationGroup::MenuValue => 1, PublicationGroup::Render => 3 }
     }
 }
 impl GuardedVariant {
-    const ALL: [GuardedVariant; 4] = [GuardedVariant::Stock, GuardedVariant::Modal75, GuardedVariant::Modal75MenuEngine, GuardedVariant::Modal75MenuEngineRender];
+    const ALL: [GuardedVariant; 5] = [GuardedVariant::Stock, GuardedVariant::Modal75, GuardedVariant::Modal75MenuEngine, GuardedVariant::Modal75MenuEngineValue, GuardedVariant::Modal75MenuEngineRender];
     fn groups(self) -> &'static [PublicationGroup] {
         match self {
             GuardedVariant::Stock => &[],
             GuardedVariant::Modal75 => &[PublicationGroup::Modal75],
             GuardedVariant::Modal75MenuEngine => &[PublicationGroup::Modal75, PublicationGroup::MenuEngine],
+            GuardedVariant::Modal75MenuEngineValue => &[PublicationGroup::Modal75, PublicationGroup::MenuEngine, PublicationGroup::MenuValue],
             GuardedVariant::Modal75MenuEngineRender => &[PublicationGroup::Modal75, PublicationGroup::MenuEngine, PublicationGroup::Render],
         }
     }
@@ -260,6 +261,7 @@ impl GuardedVariant {
             "standard" => Some(GuardedVariant::Stock),
             "modal75" => Some(GuardedVariant::Modal75),
             "modal75,menu-engine" => Some(GuardedVariant::Modal75MenuEngine),
+            "modal75,menu-engine,menu-value" => Some(GuardedVariant::Modal75MenuEngineValue),
             "modal75,menu-engine,render" => Some(GuardedVariant::Modal75MenuEngineRender),
             _ => None,
         }

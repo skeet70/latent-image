@@ -78,8 +78,12 @@ pub struct Word { address: u32, value: u32 }
 pub struct Boundary { counts: Vec<u64>, words: Vec<Word> }
 #[derive(Serialize)]
 struct Read { address: u32, provenance: ReadProvenance, bytes: Vec<u8> }
+/// A context read row: the captured bytes, or a null record pointer at the site's declared span.
 #[derive(Serialize)]
-struct Context { sequence: usize, core: usize, pc: u32, word: u32, kind: SiteKind, entry:EntryEvidence, cpsr: u32, registers: [u32;13], sp:u32, lr:u32, counts:Vec<u64>, cursor:usize, sampled_task:TaskSample, reads:Vec<Read> }
+#[serde(untagged)]
+enum ReadRow { Captured(Read), Null }
+#[derive(Serialize)]
+struct Context { sequence: usize, core: usize, pc: u32, word: u32, kind: SiteKind, entry:EntryEvidence, cpsr: u32, registers: [u32;13], sp:u32, lr:u32, counts:Vec<u64>, cursor:usize, sampled_task:TaskSample, reads:Vec<ReadRow> }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "u32")]
@@ -357,14 +361,15 @@ impl Projection {
         let mut reads=Vec::with_capacity(site.reads.len()+site.register_reads.len());
         for (index,&[address,bytes]) in site.reads.iter().enumerate() {
             let index=ReadIndex(u16::try_from(index).map_err(|_|"AF read index exceeds bound")?);
-            reads.push(reader.read(ReadOrigin::Absolute{index},ComputedReadAddress(i64::from(address)),bytes)?);
+            reads.push(ReadRow::Captured(reader.read(ReadOrigin::Absolute{index},ComputedReadAddress(i64::from(address)),bytes)?));
         }
         for (index,spec) in site.register_reads.iter().enumerate() {
             let base=match spec.register {13=>register(13)?,14=>register(14)?,n=>registers[usize::from(n)]};
             let address=ComputedReadAddress(i64::from(base)+i64::from(spec.offset));
             let index=ReadIndex(u16::try_from(index).map_err(|_|"AF read index exceeds bound")?);
             let origin=ReadOrigin::Register{index,register:ReadRegister::try_from(spec.register)?,base:Guest(base),offset:spec.offset};
-            reads.push(reader.read(origin,address,spec.bytes)?);
+            if address.0==0 { reads.push(ReadRow::Null); continue; }
+            reads.push(ReadRow::Captured(reader.read(origin,address,spec.bytes)?));
         }
         if pc==0x0102_f1b0 {self.pairs+=1;if self.pairs>128{return Err("AF pair capacity exhausted".into());}}
         let execution=reader.execution.take().ok_or("AF execution context is absent")?;

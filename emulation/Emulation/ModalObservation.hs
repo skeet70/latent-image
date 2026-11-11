@@ -316,7 +316,7 @@ scopedPublicationCounts :: [Int]
 scopedPublicationCounts = map Layout.publicationCountFor scopedBankVariants
 
 scopedBankVariants :: [Layout.BankVariant]
-scopedBankVariants = [Layout.modalScopedBankVariant, Layout.modalEngineBankVariant, Layout.modalRenderBankVariant]
+scopedBankVariants = [Layout.modalScopedBankVariant, Layout.modalEngineBankVariant, Layout.modalRenderBankVariant, Layout.modalValueBankVariant]
 
 guardPublicationCounts :: [Int]
 guardPublicationCounts = stockPublicationCount : scopedPublicationCounts

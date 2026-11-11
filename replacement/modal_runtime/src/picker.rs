@@ -101,6 +101,10 @@ pub trait PickerServices {
     fn notify(&mut self, code: NotifyCode);
     fn read_word(&mut self, cell: WordCell) -> u32;
     fn write_word(&mut self, cell: WordCell, value: u32);
+    /// Confirms the value picker's transaction, if the value seam is linked.
+    fn value_confirm(&mut self, _node: &PickerNode) {}
+    /// Restores the value picker's captured properties, if the value seam is linked.
+    fn value_cancel(&mut self, _node: &PickerNode) {}
 }
 
 /// Stock returns the action's r0 unchanged as the dispatcher result.

@@ -400,37 +400,41 @@ afTranslation maps core low size physical = walk low
         walk next
       _ -> fail "AF mapping is absent or ambiguous"
 
-afValidateRead :: [AfMapping] -> AfCore -> Bool -> (Word32, Word32) -> Value -> Parser [[Word32]]
-afValidateRead maps core fixed (address, count) = withObject "AF read" $ \fields -> do
-  afExactFields fields ["address", "provenance", "bytes"]
-  actualAddress <- fields .: "address"
-  bytes <- fields .: "bytes" :: Parser [Word8]
-  unless (actualAddress == address && count > 0 && count <= 4096 && toInteger address + toInteger count <= 0x100000000 && length bytes == fromIntegral count)
-    (fail "AF read mask differs")
-  provenance <- fields .: "provenance" >>= afReadProvenance
-  let low = toInteger address
-      high = low + toInteger count
-      overlaps (start, end) = start < high && low < end
-  case provenance of
-    AfTcm selected bank register start end offset observed -> do
-      windows <- mapM afTcmWindow (observed !! fromEnum core)
-      unless (not fixed && selected == core && register == observed !! fromEnum core !! fromEnum bank
-          && windows !! fromEnum bank == Just (start, end) && low >= start && high <= end && offset == low - start
-          && length [() | Just window <- windows, overlaps window] == 1)
-        (fail "AF TCM provenance differs")
-      pure observed
-    AfShared physical observed -> do
-      unless (physical == address .&. 0xbfffffff && toInteger physical + toInteger count <= 0x20000000)
-        (fail "AF shared physical provenance differs")
-      windows <- mapM (mapM afTcmWindow) observed
-      forM_ [AfPrimary, AfSecondary] $ \selected -> forM_ [0, 0x40000000] $ \alias -> do
-        let start = toInteger physical + alias
-            end = start + toInteger count
-        unless (null [() | Just (base, limit) <- windows !! fromEnum selected, base < end && start < limit])
-          (fail "AF shared read overlaps TCM")
-        afTranslation maps selected start (toInteger count) (toInteger physical)
-      unless fixed (afTranslation maps core low (toInteger count) (toInteger physical))
-      pure observed
+afValidateRead :: [AfMapping] -> AfCore -> Bool -> (Word32, Word32) -> Value -> Parser (Maybe [[Word32]])
+afValidateRead maps core fixed (address, count) value
+  | value == Null = do
+      unless (not fixed && address == 0) (fail "AF null read is not a null register pointer")
+      pure Nothing
+  | otherwise = Just <$> withObject "AF read" (\fields -> do
+      afExactFields fields ["address", "provenance", "bytes"]
+      actualAddress <- fields .: "address"
+      bytes <- fields .: "bytes" :: Parser [Word8]
+      unless (actualAddress == address && count > 0 && count <= 4096 && toInteger address + toInteger count <= 0x100000000 && length bytes == fromIntegral count)
+        (fail "AF read mask differs")
+      provenance <- fields .: "provenance" >>= afReadProvenance
+      let low = toInteger address
+          high = low + toInteger count
+          overlaps (start, end) = start < high && low < end
+      case provenance of
+        AfTcm selected bank register start end offset observed -> do
+          windows <- mapM afTcmWindow (observed !! fromEnum core)
+          unless (not fixed && selected == core && register == observed !! fromEnum core !! fromEnum bank
+              && windows !! fromEnum bank == Just (start, end) && low >= start && high <= end && offset == low - start
+              && length [() | Just window <- windows, overlaps window] == 1)
+            (fail "AF TCM provenance differs")
+          pure observed
+        AfShared physical observed -> do
+          unless (physical == address .&. 0xbfffffff && toInteger physical + toInteger count <= 0x20000000)
+            (fail "AF shared physical provenance differs")
+          windows <- mapM (mapM afTcmWindow) observed
+          forM_ [AfPrimary, AfSecondary] $ \selected -> forM_ [0, 0x40000000] $ \alias -> do
+            let start = toInteger physical + alias
+                end = start + toInteger count
+            unless (null [() | Just (base, limit) <- windows !! fromEnum selected, base < end && start < limit])
+              (fail "AF shared read overlaps TCM")
+            afTranslation maps selected start (toInteger count) (toInteger physical)
+          unless fixed (afTranslation maps core low (toInteger count) (toInteger physical))
+          pure observed) value
 
 afTaskSample :: AfCore -> Value -> Parser ()
 afTaskSample selected = withObject "AF sampled task" $ \fields -> do
@@ -653,8 +657,9 @@ validateAfOwnershipReceipt (AfMappingCatalogue expectedMappings) plan@(AfOwnersh
         capturedReads <- row .: "reads" :: Parser [Value]
         unless (length capturedReads == length fixed + length specs) (fail "AF read mask is incomplete")
         observed <- zipWithM (\(isFixed, spec) -> afValidateRead maps core isFixed spec) (map ((,) True) fixed ++ map ((,) False) specs) capturedReads
-        unless (length (nub observed) <= 1) (fail "AF stopped-context TCM registers disagree")
-        case observed of
+        let matrices = [matrix | Just matrix <- observed]
+        unless (length (nub matrices) <= 1) (fail "AF stopped-context TCM registers disagree")
+        case matrices of
           [] -> pure ()
           firstObserved : _ -> do
             stoppedWindows <- mapM afTcmWindow (firstObserved !! fromEnum core)

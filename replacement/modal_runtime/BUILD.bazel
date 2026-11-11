@@ -456,6 +456,48 @@ haskell_test(
 )
 
 haskell_library(
+    name = "menu-value-table-lib",
+    srcs = ["Replacement/ModalRuntime/MenuValueTable.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        ":menu-tables-decode",
+        "//host:aeson",
+        "//host:base",
+        "//host:containers",
+    ],
+)
+
+haskell_binary(
+    name = "menu-value-table",
+    srcs = ["MenuValueTableMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":menu-tables-decode",
+        ":menu-value-table-lib",
+        ":new-file-lib",
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+    ],
+)
+
+haskell_test(
+    name = "menu-value-table-tests",
+    srcs = ["MenuValueTableTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror"],
+    deps = [
+        ":menu-tables-decode",
+        ":menu-value-table-lib",
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
+
+haskell_library(
     name = "menu-engine-tree-lib",
     srcs = ["Replacement/ModalRuntime/MenuEngineTree.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],

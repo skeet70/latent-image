@@ -578,3 +578,78 @@ fn successful_shared_reads_require_all_four_queried_tcm_registers() {
         }
     }
 }
+
+#[test]
+fn accepts_a_null_record_pointer_as_a_null_read_row() {
+    let mut receipt = capture();
+    for context in receipt["contexts"].as_array_mut().unwrap() {
+        context["sp"] = json!(4u32);
+        context["reads"][1] = Value::Null;
+    }
+    assert!(check(&receipt).is_ok());
+    let mut pointer = capture();
+    pointer["contexts"][0]["reads"][1] = Value::Null;
+    assert!(check(&pointer).is_err());
+    let mut fixed = capture();
+    fixed["contexts"][0]["sp"] = json!(4u32);
+    fixed["contexts"][0]["reads"][0] = Value::Null;
+    assert!(check(&fixed).is_err());
+}
+
+#[test]
+fn producer_records_a_null_record_pointer_as_a_null_read_row() {
+    use std::{collections::BTreeMap, sync::Arc};
+    use fujimod_emulator::{board::{bus::{Bus, Mode}, factory::{self, Graph, Processor, Ram}, memory::BusMapping}, session::Session};
+    use fujimod_emulator_cpu::{ExecutionPolicy, Model, Register, Run, arm, timeline::Ratio};
+    use fujimod_emulator_cpu_unicorn::rprofile;
+    use fujimod_emulator_exr2_plan::Resources;
+    use fujimod_xm1::af_ownership::Projection;
+    let target=0x0072_503cu32;
+    let mut expected=plan();
+    expected.sites[0].reads.clear();
+    expected.sites[0].register_reads.clear();
+    for site in &mut expected.sites { site.word=0xeaff_fffe; }
+    let site=expected.sites.iter_mut().find(|site|site.pc==target).unwrap();
+    site.register_reads=vec![fujimod_xm1::af_ownership::RegisterRead{register:1,offset:0,bytes:76}];
+    let maps=expected_mappings();
+    let graph=Graph {
+        processors:(0..2).map(|_|Processor {
+            model:Model::CortexR5F,mprofile:None,released:true,
+            rprofile:Some(rprofile::core::Options{tcm:rprofile::tcm::Options {
+                atcm:rprofile::tcm::BankOptions{bytes:0x2000,reset:0x7000_0001},..Default::default()
+            },..Default::default()}),
+            registers:vec![(Register::Pc,u64::from(target)),(Register::Pstate,0x92),
+                (arm::CORE[0],0x1122_3344),(arm::CORE[1],0),
+                (arm::CORE[13],0x1234_5678),(arm::CORE[14],0x1111_1110)],
+        }).collect(),
+        ram:vec![Ram{base:0,size:0x0200_0000}],mappings:maps.clone(),
+        dma_mappings:vec![BusMapping::ram(0,0x0200_0000)],decoders:vec![],peripherals:vec![],
+        instructions_per_tick:Ratio::new(1,1).unwrap(),
+    };
+    let mut board=graph.build(factory::Options{engine:factory::Engine::Unicorn,translation_cache_bytes:1<<20},Bus::new(Mode::Strict),None).unwrap();
+    board.set_execution_policy(ExecutionPolicy::Exact).unwrap();
+    for register in 2..13 { board.write_register(0,arm::CORE[register],register as u64).unwrap(); }
+    for site in &expected.sites { board.write_physical(u64::from(site.pc),&site.word.to_le_bytes()).unwrap(); }
+    let session=Session { definition:Value::Null,board,controls:None,contact_driver:None,resources:Resources::default(),
+        nodes:BTreeMap::new(),contacts:BTreeMap::new(),recording_frames:Default::default() };
+    use fujimod_emulator::board::observation::{PassiveRetentionStatus as Retention};
+    let mut projection=Projection::new(expected,&session,Arc::new(maps.clone())).unwrap();
+    projection.sync_retention(Retention::Unarmed);
+    projection.arm(&session,&maps).unwrap();
+    projection.sync_retention(Retention::Armed);
+    let mut point=session.board.instruction_points_begin(0,vec![u64::from(target)]).unwrap();
+    session.board.cpu(0).unwrap().run(Run{begin:u64::from(target),until:None,instructions:Some(1),watchdog_us:0}).unwrap();
+    let entry=point.event_context().unwrap();
+    projection.observe(&session,&maps,entry);
+    let receipt=serde_json::to_value(&projection).unwrap();
+    assert_eq!(receipt["status"],json!("armed"));
+    assert!(receipt["read_refusal"].is_null());
+    assert_eq!(receipt["contexts"][0]["registers"][1],json!(0));
+    assert_eq!(receipt["contexts"][0]["reads"][1],Value::Null);
+    session.board.write_register(0,arm::CORE[1],0x7000_1ffc).unwrap();
+    projection.observe(&session,&maps,entry);
+    let receipt=serde_json::to_value(&projection).unwrap();
+    assert_eq!(receipt["status"],json!("blocked"));
+    assert_eq!(receipt["read_refusal"]["address"],json!(0x7000_1ffcu32));
+    assert_eq!(receipt["read_refusal"]["bytes"],json!(76));
+}

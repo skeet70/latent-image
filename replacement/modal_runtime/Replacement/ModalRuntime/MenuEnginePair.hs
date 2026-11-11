@@ -17,6 +17,9 @@ module Replacement.ModalRuntime.MenuEnginePair
   , checkRoleReader
   , checkStackReader
   , comparePairReader
+  , ValueSite (..)
+  , checkValueLifecycle
+  , checkValueLifecycleReader
   , RtcByteIndex (..)
   , ClockEvidence (..)
   , checkConstantClockInputs
@@ -66,7 +69,10 @@ data Role = StockRole | OwnedRole deriving (Eq, Show)
 -- label is 'OtherSite'.
 data RtcByteIndex = RtcByte0 | RtcByte1 | RtcByte2 | RtcByte3 deriving (Eq, Ord, Show)
 
-data Site = StageEntry | KindSwitch | Seek | EventPost | GuardTrap | CalendarSample | RtcCounterByte RtcByteIndex | OtherSite T.Text
+data ValueSite = ValueBegin | ValueConfirm | ValueCancel | ValueApply | ValueHandback | StockValueArm
+  deriving (Eq, Ord, Show, Enum, Bounded)
+
+data Site = StageEntry | KindSwitch | Seek | EventPost | GuardTrap | CalendarSample | RtcCounterByte RtcByteIndex | ValueSite ValueSite | OtherSite T.Text
   deriving (Eq, Show)
 
 parseSite :: T.Text -> Site
@@ -81,6 +87,12 @@ parseSite label = case label of
   "rtc-counter-byte-1" -> RtcCounterByte RtcByte1
   "rtc-counter-byte-2" -> RtcCounterByte RtcByte2
   "rtc-counter-byte-3" -> RtcCounterByte RtcByte3
+  "owned-value-begin" -> ValueSite ValueBegin
+  "owned-value-confirm" -> ValueSite ValueConfirm
+  "owned-value-cancel" -> ValueSite ValueCancel
+  "owned-value-apply" -> ValueSite ValueApply
+  "owned-value-handback" -> ValueSite ValueHandback
+  "stock-value-size-arm" -> ValueSite StockValueArm
   other -> OtherSite other
 
 -- | One recorded trace hit: site, core, r0-r3, lr, sp and the site's reads at entry.
@@ -452,6 +464,33 @@ comparePair stock owned = do
         , hitSite hit == EventPost, let (r0, r1, r2, r3) = hitRegisters hit, r0 == 0x1d]
   unless (posts stock == posts owned)
     (Left ("0x1d posts differ: stock " ++ show (posts stock) ++ ", owned " ++ show (posts owned)))
+
+valueStep :: M.Map ValueSite Int -> Hit -> Either String (M.Map ValueSite Int)
+valueStep counts hit = case hitSite hit of
+  ValueSite StockValueArm -> Left "resident value transaction executed the replaced IMAGE SIZE arm"
+  ValueSite site -> Right (M.insertWith (+) site 1 counts)
+  _ -> Right counts
+
+valueComplete :: M.Map ValueSite Int -> Either String ()
+valueComplete counts = unless (all (`M.member` counts) [ValueBegin, ValueConfirm, ValueCancel, ValueApply, ValueHandback])
+  (Left "resident value lifecycle lacks begin, apply, confirm, cancel or handback execution")
+
+checkValueLifecycle :: [Observation] -> Either String ()
+checkValueLifecycle segments = foldM valueStep M.empty
+  [hit | segment <- segments, observationResidency segment == EngineResident, hit <- observationHits segment]
+  >>= valueComplete
+
+checkValueLifecycleReader :: [ObservationReader] -> IO (Either String ())
+checkValueLifecycleReader = go M.empty
+ where
+  go counts [] = pure (valueComplete counts)
+  go counts (reader : rest)
+    | readerResidency reader == EngineUnloaded = go counts rest
+    | otherwise = do
+        checked <- readerFoldHits reader valueStep counts
+        case checked of
+          Left failure -> pure (Left failure)
+          Right next -> go next rest
 
 checkRoleReader :: MenuTree -> Role -> [ObservationReader] -> IO (Either String RoleSummary)
 checkRoleReader tree role readers = go (Walk M.empty (RoleSummary M.empty 0 0) []) readers

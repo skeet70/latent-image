@@ -273,6 +273,14 @@ unsafe extern "C" {
     fn rb_lifecycle_node() -> u32;
     fn rb_lifecycle_class() -> u32;
     fn rb_lifecycle_token() -> u32;
+    fn rb_bank_key_left() -> u32;
+    fn rb_bank_key_right() -> u32;
+}
+
+#[cfg(rb_menu_value_owned)]
+unsafe extern "C" {
+    fn rb_menu_value_cancel() -> u32;
+    fn rb_menu_value_confirm() -> u32;
 }
 
 #[cfg(rb_modal75_owned)]
@@ -307,6 +315,14 @@ impl picker::PickerServices for ArmPicker {
     fn write_word(&mut self, cell: picker::WordCell, value: u32) {
         unsafe { core::ptr::write_volatile(cell.address() as *mut u32, value) }
     }
+    #[cfg(rb_menu_value_owned)]
+    fn value_confirm(&mut self, _node: &picker::PickerNode) {
+        unsafe { rb_menu_value_confirm() };
+    }
+    #[cfg(rb_menu_value_owned)]
+    fn value_cancel(&mut self, _node: &picker::PickerNode) {
+        unsafe { rb_menu_value_cancel() };
+    }
 }
 
 #[cfg(rb_modal75_owned)]
@@ -323,6 +339,18 @@ impl modal75::GenericServices for ArmServices {
     }
 }
 
+#[cfg(rb_modal75_owned)]
+#[inline(never)]
+fn stock_picker_action(target: ActionTarget) -> ActionTarget {
+    if target.word() == rb_bank_key_left as *const () as usize as u32 {
+        ActionTarget(0x00c6_f14c)
+    } else if target.word() == rb_bank_key_right as *const () as usize as u32 {
+        ActionTarget(0x00c7_0528)
+    } else {
+        target
+    }
+}
+
 /// Reads the whole cell word, for a positive high halfword the selected
 /// transition entry, and for a picker cell the open node, before the action.
 #[cfg(rb_modal75_owned)]
@@ -331,6 +359,7 @@ fn owned_plan(controller: ControllerId, captured: &Captured, cell: CellAddress, 
     if controller.word() != 75 {
         return modal75::Plan::Stock;
     }
+    let action = action.map(stock_picker_action);
     let transition = cell.high().positive_index().map(|index| captured.transition.entry(index).map_or(0, TransitionTarget::word));
     modal75::plan(
         &modal75::TABLE,

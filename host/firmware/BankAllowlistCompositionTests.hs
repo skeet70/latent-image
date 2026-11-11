@@ -86,6 +86,55 @@ main = do
   check "render composition refuses a missing engine fragment"
     (isLeft (composeBankAllowlist modalRenderBankVariant
       [(basePath, base), (modalPath, modal), (renderPath, sourceRender)]))
+  let valuePath = "menu/recipe_bank_menu_value_allowlist_fragment.json"
+      value = document [call "0x0070000c" "value"] [store "0x0095000c"]
+        [ object
+            [ "function" .= ("value_result" :: String), "access" .= ("store" :: String)
+            , "through" .= object ["argument" .= ("r0" :: String)]
+            , "reason" .= ("synthetic result buffer" :: String) ]
+        , object
+            [ "function" .= ("value_formatter" :: String), "access" .= ("branch" :: String)
+            , "through" .= object ["deref" .= object ["deref" .= object ["argument" .= ("r1" :: String)]]]
+            , "reason" .= ("synthetic formatter callback" :: String) ]
+        ]
+      valueSources = [(basePath, base), (modalPath, modal), (enginePath, document [] [] []), (valuePath, value)]
+  valuePolicy <- either fail pure (composeBankAllowlist modalValueBankVariant valueSources >>= parseAllowlist)
+  check "value composition retains exact result and formatter capabilities after modal"
+    (map stockCallAddress (stockCalls valuePolicy) == [0x00700008, 0x0070000c]
+      && map stockStoreAddress (stockStores valuePolicy) == [0x00950008, 0x0095000c]
+      && map declarationFunction (declarations valuePolicy) == ["modal", "value_result", "value_formatter"]
+      && map declarationAccess (declarations valuePolicy) == [BranchAccess, StoreAccess, BranchAccess])
+  check "value composition preserves nested callback provenance"
+    (case map declarationThrough (declarations valuePolicy) of
+      [_, Argument _, Deref (Deref (Argument _))] -> True
+      _ -> False)
+  let relative = object
+        [ "function" .= ("owned_vtable_consumer" :: String), "access" .= ("branch" :: String)
+        , "through" .= object ["cell" .= object ["allocation-offset" .= ("0x000052d4" :: String)]]
+        , "reason" .= ("synthetic exact owned allocation cell" :: String) ]
+  relativePolicy <- either fail pure (composeBankAllowlist modalScopedBankVariant
+    [(basePath, base), (modalPath, document [] [] [relative])] >>= parseAllowlist)
+  check "composition preserves typed allocation-relative provenance"
+    (map declarationThrough (declarations relativePolicy) == [Cell (AllocationCell (AllocationOffset 0x52d4))])
+  check "value selection requires its engine and value fragments"
+    (isLeft (composeBankAllowlist modalValueBankVariant
+      [(basePath, base), (modalPath, modal), (valuePath, value)])
+      && isLeft (composeBankAllowlist modalValueBankVariant (take 3 valueSources)))
+  check "engine and render selections refuse value capabilities"
+    (isLeft (composeBankAllowlist modalEngineBankVariant valueSources)
+      && isLeft (composeBankAllowlist modalRenderBankVariant
+        (take 3 valueSources ++ [(renderPath, sourceRender), (valuePath, value)])))
+  check "value selection refuses duplicate callback capabilities from the engine"
+    (isLeft (composeBankAllowlist modalValueBankVariant
+      [ (basePath, base), (modalPath, modal)
+      , (enginePath, document [] []
+          [ object
+              [ "function" .= ("value_formatter" :: String), "access" .= ("branch" :: String)
+              , "through" .= object ["deref" .= object ["deref" .= object ["argument" .= ("r1" :: String)]]]
+              , "reason" .= ("different synthetic callback description" :: String) ]
+          ])
+      , (valuePath, value)
+      ]))
   check "missing selected fragments are refused"
     (isLeft (composeBankAllowlist modalLifecycleBankVariant (take 2 sources)))
   check "reordered selected fragments are refused"

@@ -23,7 +23,7 @@ import qualified EngineStack as S
 import Emulation.ObservationStream (countObservationDrawersValue, loadReceiptObservationValues)
 import qualified RenderStack as R
 import Numeric (readHex)
-import RamPushLayout (PublicationAddress (..), menuEngineHookAddress, modalEngineBankVariant, modalRenderBankVariant, renderHookAddresses, runtimeAllocationSizeFor, safePublicationOrderForVariant)
+import RamPushLayout (BankVariant, PublicationAddress (..), menuEngineHookAddress, menuValueHookAddress, modalEngineBankVariant, modalRenderBankVariant, modalValueBankVariant, renderHookAddresses, runtimeAllocationSizeFor, safePublicationOrderForVariant)
 import Replacement.ModalRuntime.MenuEngineClass (MenuTree, menuTree)
 import Replacement.ModalRuntime.MenuEnginePair
 import Replacement.ModalRuntime.MenuEngineTree (TablesDocument, composePackage, parsePackagePlan)
@@ -107,9 +107,10 @@ runRetained config tree stockTables document stockPath ownedPath = do
     case stripPrefix "0x" baseText of
       Just digits | [(value, "")] <- readHex digits -> pure (value :: Word32)
       _ -> fail "manifest base is not hex"))
-  either fail pure (J.eitherDecodeStrict' manifestBytes >>= J.parseEither validateEngineOnlyManifest)
+  variant <- either fail pure (J.eitherDecodeStrict' manifestBytes >>= J.parseEither validateEngineManifest)
   elf <- B.readFile (ownedPath </> "relinked" </> "kernel.elf") >>= either fail pure . ELF.parseElf
-  let size = runtimeAllocationSizeFor modalEngineBankVariant
+  let size = runtimeAllocationSizeFor variant
+  valueLifecycle <- checkValue variant owned
   bound <- either fail pure (S.checkEngineStack S.taskOneBudget elf (\address -> base <= address && address - base < size))
   let margin = S.budgetStockMargin S.taskOneBudget
       required = S.reportEngine bound + S.reportModal bound + margin
@@ -166,7 +167,7 @@ runRetained config tree stockTables document stockPath ownedPath = do
                           putStrLn ("render: " ++ show (renderCoverage config) ++ " stock-stack=" ++ show stockStack
                             ++ " owned-stack=" ++ show ownedStack ++ " banks=" ++ show banks)
                           pure True
-  pure (and (results ++ stacks ++ [paired, rendered]))
+  pure (and (results ++ stacks ++ [paired, rendered, valueLifecycle]))
  where
   adapterStep () hit = if noRenderAdapter hit then Right () else Left "retained render reached an owned adapter"
 
@@ -175,15 +176,29 @@ noRenderAdapter hit = case hitSite hit of
   OtherSite label -> label `notElem` ["render-tree-adapter","render-picker-adapter","render-pane-adapter"]
   _ -> True
 
-validateEngineOnlyManifest :: J.Value -> J.Parser ()
-validateEngineOnlyManifest = J.withObject "engine-only manifest" $ \fields -> do
+checkValue :: BankVariant -> [ObservationReader] -> IO Bool
+checkValue variant segments
+  | variant /= modalValueBankVariant = pure True
+  | otherwise = do
+      checked <- checkValueLifecycleReader segments
+      case checked of
+        Left failure -> hPutStrLn stderr ("value lifecycle: " ++ failure) >> pure False
+        Right () -> putStrLn "value lifecycle: owned begin, apply, confirm, cancel and handback executed without the replaced stock arm" >> pure True
+
+validateEngineManifest :: J.Value -> J.Parser BankVariant
+validateEngineManifest = J.withObject "engine manifest" $ \fields -> do
   publications <- fields J..: "publications" >>= mapM (J.withObject "publication" $ \publication -> do
     address <- PublicationAddress <$> (publication J..: "address" >>= hexWord)
     old <- publication J..: "old" >>= hexWord
     pure (address,old))
-  _ <- either fail pure (safePublicationOrderForVariant modalEngineBankVariant (map fst publications))
-  unless (all (\(address,_) -> address `notElem` renderHookAddresses) publications) (fail "engine-only manifest publishes an owned render hook")
-  unless ([old | (address,old) <- publications, address == menuEngineHookAddress] == [0xe92d4818]) (fail "engine-only manifest lacks the stock engine entry preimage")
+  let variant = if menuValueHookAddress `elem` map fst publications then modalValueBankVariant else modalEngineBankVariant
+  _ <- either fail pure (safePublicationOrderForVariant variant (map fst publications))
+  unless (all (\(address,_) -> address `notElem` renderHookAddresses) publications) (fail "engine manifest publishes an owned render hook")
+  unless ([old | (address,old) <- publications, address == menuEngineHookAddress] == [0xe92d4818]) (fail "engine manifest lacks the stock engine entry preimage")
+  unless (variant /= modalValueBankVariant || [old | (address,old) <- publications, address == menuValueHookAddress] == [0x00d51b58]) (fail "value manifest lacks the stock IMAGE SIZE arm preimage")
+  size <- fields J..: "size"
+  unless (size == runtimeAllocationSizeFor variant) (fail "engine manifest allocation differs from its publication variant")
+  pure variant
  where
   hexWord text = case stripPrefix "0x" text of
     Just digits | length digits == 8, [(value,"")] <- readHex digits -> pure (value :: Word32)
@@ -244,7 +259,11 @@ runCheck arguments = do
       Just digits | [(value, "")] <- readHex digits -> pure (value :: Word32)
       _ -> fail "manifest base is not hex"))
   elf <- B.readFile (ownedPath </> "relinked" </> "kernel.elf") >>= either fail pure . ELF.parseElf
-  let size = runtimeAllocationSizeFor (if render == Nothing then modalEngineBankVariant else modalRenderBankVariant)
+  variant <- case render of
+    Nothing -> either fail pure (J.eitherDecodeStrict' manifestBytes >>= J.parseEither validateEngineManifest)
+    Just _ -> pure modalRenderBankVariant
+  let size = runtimeAllocationSizeFor variant
+  valueLifecycle <- checkValue variant owned
   bound <- either fail pure (S.checkEngineStack S.taskOneBudget elf (\address -> base <= address && address - base < size))
   let margin = S.budgetStockMargin S.taskOneBudget
       required = S.reportEngine bound + S.reportModal bound + margin
@@ -314,7 +333,7 @@ runCheck arguments = do
             BL.writeFile (path </> "e2e-render-stack-allocation-check.json") (J.encode (E.allocationVerdictJson verdict) <> "\n")
           BL.writeFile (ownedPath </> "render-banks.json") (J.encode banks <> "\n")
           pure True
-  unless (and (rendered : paired : results ++ stacks)) exitFailure
+  unless (and (valueLifecycle : rendered : paired : results ++ stacks)) exitFailure
 
 options :: [String] -> Either String (Maybe RenderSelection,FilePath,FilePath,FilePath,FilePath)
 options = go Nothing

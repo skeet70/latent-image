@@ -11,6 +11,7 @@ activation_count=92
 modal_link=()
 engine_link=()
 variant_link=()
+gc_link=()
 case "${RB_PUBLICATION_GROUPS:-}" in
   "") ;;
   modal75)
@@ -40,6 +41,26 @@ case "${RB_PUBLICATION_GROUPS:-}" in
     activation_count=94
     modal_link=(-Wl,--undefined=rb_modal_entry -Wl,--undefined=rb_menu_engine_entry)
     engine_link=(-Wl,-T,menu/recipe_bank_ram_engine.ld)
+    ;;
+  modal75,menu-engine,menu-value)
+    builder_mode=(--ram-push-variant modal75,menu-engine,menu-value)
+    allocation_size=0x33d00
+    publication_count=226
+    activation_count=95
+    modal_link=(-Wl,--undefined=rb_modal_entry -Wl,--undefined=rb_menu_engine_entry
+      -Wl,--undefined=rb_menu_value_size_arm -Wl,--undefined=rb_select_values -Wl,--undefined=rb_select_labels
+      -Wl,--undefined=rb_bank_present -Wl,--undefined=rb_bank_draw_root -Wl,--undefined=rb_bank_draw_selected
+      -Wl,--undefined=rb_bank_redraw_dispatch -Wl,--undefined=rb_bank_current_value_label
+      -Wl,--undefined=rb_bank_key_right -Wl,--undefined=rb_bank_key_left -Wl,--undefined=rb_bank_draw_name
+      -Wl,--undefined=rb_mode_dial_apply -Wl,--undefined=rb_mode_pair_apply
+      -Wl,--undefined=rb_stage_edit_get_arm -Wl,--undefined=rb_stage_edit_set_arm
+      -Wl,--undefined=rb_capture_develop_wait -Wl,--undefined=cc_ram_convert -Wl,--undefined=cc_ram_data)
+    engine_link=(-Wl,-T,menu/recipe_bank_ram_engine.ld)
+    variant_link=(-Wl,--defsym=RAM_PUSH_BANK_VARIANT=2 -Wl,--defsym=RAM_PUSH_MENU_VALUE=1)
+    # The manifest names these three entries; gc-sections needs them as roots
+    # because the stock hook reaches the installer by address, not relocation.
+    gc_link=(-Wl,--gc-sections -Wl,--undefined=ram_push_install
+      -Wl,--undefined=ram_push_rollback -Wl,--undefined=ram_push_status)
     ;;
   modal75,menu-engine,render)
     builder_mode=(--ram-push-variant modal75,menu-engine,render)
@@ -109,7 +130,7 @@ printf -v rb_bank_end '0x%08x' "$bank_end"
 printf -v rb_installer_start '0x%08x' "$installer_start"
 if (( ${#engine_link[@]} )); then
   engine_start=$((base_value + 0x1dcc0))
-  if [[ ${RB_PUBLICATION_GROUPS:-} == modal75,menu-engine,render ]]; then
+  if [[ ${RB_PUBLICATION_GROUPS:-} == modal75,menu-engine,render || ${RB_PUBLICATION_GROUPS:-} == modal75,menu-engine,menu-value ]]; then
     engine_start=$((base_value + 0x1dd00))
   fi
   if [[ ${RB_PROPERTY_PUBLICATION:-0} == 1 ]]; then
@@ -145,10 +166,17 @@ for src in menu/recipe_bank_arm.S menu/recipe_bank_probe.c menu/recipe_bank_hook
   esac
   objects+=("$obj")
 done
+if [[ ${RB_PUBLICATION_GROUPS:-} == modal75,menu-engine,menu-value ]]; then
+  for obj in recipe_bank_arm.o recipe_bank_probe.o recipe_bank_hook.o recipe_bank_storage.o \
+    recipe_bank_actions.o recipe_bank_edit.o recipe_bank_diagnostic.o; do
+    name=${obj%.o}
+    "$OBJCOPY" --rename-section .text=.menu_engine.text.$name "$OUT/$obj"
+  done
+fi
 if (( ${#engine_link[@]} )); then
   # The engine's sections, by their Rust paths, move to .menu_engine.* for
   # menu/recipe_bank_ram_engine.ld.
-  engine_section='^\.(text|rodata)\.(rb_menu_engine_|.*(11menu_engine(6engine|5block|5state|4tree)|19menu_engine_adapter))'
+  engine_section='^\.(text|rodata)\.(rb_menu_engine_|rb_menu_value_|.*(11menu_engine(6engine|5block|5state|4tree)|19menu_engine_adapter|10menu_value|18menu_value_adapter))'
   if [[ ${RB_PUBLICATION_GROUPS:-} == modal75,menu-engine,render ]]; then
     engine_section='^\.(text|rodata)\.(rb_menu_engine_|rb_render_|.*(11menu_engine(6engine|5block|5state|4tree)|19menu_engine_adapter|15render_commands|12menu_widgets|14render_adapter))'
   fi
@@ -173,7 +201,7 @@ NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" "${FREE[@]}" -Oz -Wall -Wextra \
 objects+=("$OUT/ram_push_installer.o")
 NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" -c menu/classic_chrome_ram.S -o "$OUT/classic_chrome_ram.o"
 objects+=("$OUT/classic_chrome_ram.o")
-NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" "${LINK[@]}" -Wl,-T,menu/recipe_bank_ram.ld \
+NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" "${LINK[@]}" "${gc_link[@]}" -Wl,-T,menu/recipe_bank_ram.ld \
   -Wl,--defsym=RAM_PUSH_BASE="$BASE" -Wl,--defsym=RAM_PUSH_BANK_END="$rb_bank_end" \
   -Wl,--defsym=RAM_PUSH_INSTALLER_START="$rb_installer_start" \
   -Wl,--defsym=RAM_PUSH_PUBLICATION_COUNT="$publication_count" "${modal_link[@]}" "${lifecycle_link[@]}" "${engine_link[@]}" "${variant_link[@]}" \

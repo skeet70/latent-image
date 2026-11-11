@@ -11,6 +11,7 @@ module BankAllowlist
   , Access (..)
   , Provenance (..)
   , Location (..)
+  , AllocationOffset (..)
   , Callee (..)
   , parseAllowlist
   , Finding (..)
@@ -39,7 +40,7 @@ import Data.Bits (complement, shiftL, shiftR, testBit, xor, (.&.), (.|.))
 import qualified Data.ByteString as B
 import Data.Char (isDigit, isHexDigit)
 import Data.Int (Int32)
-import Data.List (find, nub, sortOn)
+import Data.List (find, groupBy, nub, sortOn)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isJust, listToMaybe)
 import qualified Data.Set as S
@@ -48,7 +49,7 @@ import qualified Data.Vector as V
 import Data.Word (Word32)
 import FujiAF.JSON (decodeStrictIntegers)
 import Numeric (readHex, showHex)
-import RamPushLayout (BankVariant, PublicationGroup (MenuEnginePublication), hasPublicationGroup, bankVariantFromIdentity, bankVariantTag, modalRenderBankVariant, menuEngineRegionExtentFor, menuEngineRegionStartFor, runtimeAllocationSizeFor, runtimeBankEnd, runtimeDataBase, runtimeExecutableBase, runtimeInstallerBase)
+import RamPushLayout (BankVariant, PublicationGroup (MenuEnginePublication), hasPublicationGroup, bankVariantFromIdentity, bankVariantTag, modalRenderBankVariant, modalValueBankVariant, menuEngineRegionExtentFor, menuEngineRegionStartFor, runtimeAllocationSizeFor, runtimeBankEnd, runtimeDataBase, runtimeExecutableBase, runtimeInstallerBase)
 
 -- * Allowlist
 
@@ -84,7 +85,9 @@ data Provenance
   | Deref Provenance
   deriving (Eq, Show)
 
-data Location = BankObject String | GeneratedData | StackFrame | StockAddress Word32
+newtype AllocationOffset = AllocationOffset Word32 deriving (Eq, Show)
+
+data Location = BankObject String | GeneratedData | StackFrame | StockAddress Word32 | AllocationCell AllocationOffset
   deriving (Eq, Show)
 
 data Callee = BankFunction String | StockFunction Word32
@@ -144,7 +147,10 @@ parseAllowlist bytes = do
     "stack-frame" -> Right StackFrame
     name@('0' : 'x' : _) -> StockAddress <$> hexWord (String (T.pack name))
     name -> Right (BankObject name)
-  parseLocation _ = Left "allowlist: location must be a string"
+  parseLocation value@(Object _) = do
+    closed "allocation location" value ["allocation-offset"]
+    AllocationCell . AllocationOffset <$> (member value "allocation-offset" >>= hexWord)
+  parseLocation _ = Left "allowlist: location must be a name, address or allocation-offset object"
   calleeOf callee = either (const (BankFunction callee)) StockFunction (hexWord (String (T.pack callee)))
   parseReg ('r' : digits) | not (null digits) && all isDigit digits && read digits <= (12 :: Int) = Right (Reg (read digits))
   parseReg other = Left ("allowlist: argument register r0..r12 required, got " ++ other)
@@ -385,6 +391,7 @@ readLayout elf = do
   tag <- case [symbolValue s | s <- elfSymbols elf, symbolName s == "RAM_PUSH_BANK_VARIANT", symbolSection s == Absolute] of
     [] -> Right Nothing
     [1] -> Right (Just (bankVariantTag modalRenderBankVariant))
+    [2] -> Right (Just (bankVariantTag modalValueBankVariant))
     _ -> Left "layout: unsupported bank variant identity"
   variant <- bankVariantFromIdentity tag (fromIntegral count)
   let allocationSize = runtimeAllocationSizeFor variant
@@ -642,6 +649,9 @@ locate context address = case regionOf (contextLayout context) address of
     | region == BankCode || region == BankData
     , Just (_, _, name) <- find (\(start, end, _) -> start <= address && address < end) (namedObjects context) ->
         BankObject name
+    | let layout = contextLayout context
+    , allocationBase layout <= address && address < allocationEnd layout ->
+        AllocationCell (AllocationOffset (address - allocationBase layout))
     | otherwise -> StockAddress address
 
 readSized :: Context -> Width -> Bool -> Word32 -> Maybe Word32
@@ -1108,6 +1118,7 @@ execute context function address instruction state = case instruction of
             | value == exact 0 -> zeroArgument callee r what
             | depth == 0 && access == StoreAccess && provenPointer value -> []
             | depth == 0 && access == BranchAccess, Just targets <- enumerate value -> concatMap (targetFindings s True) targets
+            | depth > 0 && stackPointer value -> unproven access what (derefs (depth - 1) (Cell StackFrame))
             | depth > 0, Just (lo, _) <- bounds value -> unproven access what (derefs (depth - 1) (Cell (locate context lo)))
             | otherwise -> [violation UnprovenArgument (what ++ " with an unproven value" ++ describe value)]
   -- A 0 argument passes when the callee, analysed from an entry with that
@@ -1119,6 +1130,10 @@ execute context function address instruction state = case instruction of
     , all (\f -> findingVerdict f /= Violation || findingReason f == Unreached) found =
         []
     | otherwise = [violation UnprovenArgument (what ++ " with 0, and the callee analysed with that argument 0 has a violation")]
+  stackPointer value = case value of
+    StackOffset _ -> True
+    StackSpan _ _ -> True
+    _ -> False
   provenPointer value = case value of
     StackOffset _ -> True
     StackSpan _ _ -> True
@@ -1170,6 +1185,7 @@ showProvenance p = case p of
     BankObject object -> object
     GeneratedData -> "generated data"
     StackFrame -> "the stack frame"
+    AllocationCell (AllocationOffset offset) -> "allocation+" ++ hex offset
     StockAddress a -> hex a
   showCallee callee = case callee of
     BankFunction function -> function
@@ -1185,14 +1201,33 @@ checkBank allowlist elf = do
       codeRanges = (textStart layout, textEnd layout) : maybe [] pure (engineCode layout)
       inText address = any (\(start, end) -> start <= address && address < end) codeRanges
       rangeEnd address = maybe (textEnd layout) snd (find (\(start, end) -> start <= address && address < end) codeRanges)
-      named =
-        sortOn functionStart
+      namedSymbols =
+        sortOn (\f -> (functionStart f, functionEnd f, functionName f))
           [ Function (symbolName s) (symbolValue s) (symbolValue s + symbolSize s)
           | s <- symbols
           , symbolKind s == FunctionSymbol
           , symbolSize s > 0
           , inText (symbolValue s)
           ]
+      extent f = (functionStart f, functionEnd f)
+      aliasGroups = groupBy (\f g -> extent f == extent g) namedSymbols
+      -- Exact aliases share one body and the lexicographically first name.
+      named = [representative | representative : _ <- aliasGroups]
+      aliases = M.fromList [(functionName f, functionName representative) | group@(representative : _) <- aliasGroups, f <- group]
+      canonicalName name = M.findWithDefault name name aliases
+      canonicalLocation (BankObject name) = BankObject (canonicalName name)
+      canonicalLocation location = location
+      canonicalProvenance provenance = case provenance of
+        Cell location -> Cell (canonicalLocation location)
+        Index location -> Index (canonicalLocation location)
+        Result (BankFunction name) -> Result (BankFunction (canonicalName name))
+        Deref inner -> Deref (canonicalProvenance inner)
+        _ -> provenance
+      canonicalDeclaration d = d
+        { declarationFunction = canonicalName (declarationFunction d)
+        , declarationThrough = canonicalProvenance (declarationThrough d)
+        }
+      canonicalAllowlist = allowlist {declarations = map canonicalDeclaration (declarations allowlist)}
       covered a = any (\f -> functionStart f <= a && a < functionEnd f) named
       mapping = sortOn fst [(symbolValue s, symbolName s) | s <- symbols, symbolName s `elem` ["$a", "$d", "$t"], inText (symbolValue s)]
       boundaries = S.fromList (map fst mapping ++ map functionStart named ++ map snd codeRanges)
@@ -1210,13 +1245,13 @@ checkBank allowlist elf = do
       functions = sortOn functionStart (named ++ anonymous)
       code = S.fromList [a | f <- functions, a <- [functionStart f, functionStart f + 4 .. functionEnd f - 4], armWord a]
       objects =
-        [ (symbolValue s, symbolValue s + symbolSize s, symbolName s)
+        [ (symbolValue s, symbolValue s + symbolSize s, canonicalName (symbolName s))
         | s <- symbols
         , symbolKind s `elem` [ObjectSymbol, FunctionSymbol]
         , symbolSize s > 0
         , symbolValue s >= textStart layout && symbolValue s < imageEnd layout || inText (symbolValue s)
         ]
-      context = Context elf layout allowlist (M.fromList [(functionStart f, f) | f <- named]) code objects []
+      context = Context elf layout canonicalAllowlist (M.fromList [(functionStart f, f) | f <- named]) code objects []
       overlapping =
         [ Finding (functionStart g) "<layout>" Violation LayoutProblem ("function " ++ functionName g ++ " overlaps " ++ functionName f)
         | (f, g) <- zip functions (drop 1 functions)
@@ -1226,7 +1261,7 @@ checkBank allowlist elf = do
       undeclaredNames =
         [ Finding 0 (declarationFunction d) Violation UnknownDeclaredFunction "unproven declaration names no bank function"
         | d <- declarations allowlist
-        , declarationFunction d `notElem` map functionName named
+        , declarationFunction d `notElem` map functionName namedSymbols
         ]
       stockInAllocation =
         [ Finding (stockCallAddress c) "<allowlist>" Violation (TargetNotEntry (stockCallAddress c) (regionOf layout (stockCallAddress c))) ("stock call " ++ stockCallName c ++ " lies in " ++ regionName (regionOf layout (stockCallAddress c)))
@@ -1234,8 +1269,9 @@ checkBank allowlist elf = do
         , not (stockCode (regionOf layout (stockCallAddress c)))
         ]
       findings = layoutFindings elf layout ++ overlapping ++ undeclaredNames ++ stockInAllocation ++ concatMap (\(found, _, _, _) -> found) perFunction
-      used d =
-        any
+      used original =
+        let d = canonicalDeclaration original
+         in any
           (\f -> findingFunction f == declarationFunction d && findingVerdict f /= Violation && findingReason f == Unproven (declarationAccess d) (declarationThrough d))
           findings
   when (null named) (Left "bank: no function symbols in bank code")

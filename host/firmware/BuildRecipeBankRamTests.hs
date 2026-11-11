@@ -3,6 +3,7 @@ module Main where
 import Control.Monad (forM_, unless)
 import Data.Bits ((.&.))
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Char8 as BC
 import Data.Either (isLeft)
 import Data.List (sort)
 import qualified Data.List.NonEmpty as NE
@@ -21,7 +22,11 @@ check label passed = unless passed $ do
 
 main :: IO ()
 main = do
-  [builderPath] <- getArgs
+  [builderPath, engineScriptPath] <- getArgs
+  engineScript <- B.readFile engineScriptPath
+  check "the value arm's stock tails are linker-defined absolute symbols"
+    (B.isInfixOf (BC.pack "__rb_menu_value_stock_arm = 0x00d51b58;") engineScript
+      && B.isInfixOf (BC.pack "__rb_menu_value_shared_tail = 0x00d52674;") engineScript)
   forM_ [("lifecycle",0x1dcd8),("lifecycle,modal75",0x1dcf8)] $ \(groups,expected) -> do
     (builderCode, output, _) <- readProcessWithExitCode builderPath
       ["--ram-push-variant-allocation-size",groups] ""
@@ -171,6 +176,28 @@ main = do
       && runtimeAllocationSizeFor render == 0x2dcc0
       && menuEngineRegionStartFor render 0 == 0x1dd00 && menuEngineRegionExtentFor render == 0xffc0
       && all (\base -> runtimeInstallerBase base - base + runtimeInstallerExtentFor render <= menuEngineRegionStartFor render base - base) alignedBases)
+  let valueVariant = modalValueBankVariant
+      valueAddresses = testAddresses <> [modalHookAddress, menuEngineHookAddress, menuValueHookAddress]
+      valueOrder = either error id (safePublicationOrderForVariant valueVariant valueAddresses)
+      valueAddressAt index = valueAddresses !! publicationIndex index
+  check "value identity binds its own publication count"
+    (bankVariantFromIdentity (Just "modal75,menu-engine,menu-value") 226 == Right valueVariant
+      && isLeft (bankVariantFromIdentity (Just "modal75,menu-engine,menu-value") 225)
+      && isLeft (bankVariantFromIdentity (Just "modal75,menu-engine") 226)
+      && isLeft (bankVariantFromIdentity (Just "modal75,menu-engine,menu-value,render") 229)
+      && bankVariantFromIdentity Nothing 226 == Right lifecycleBankVariant)
+  check "value counts extend the engine region by its own extent"
+    (publicationCountFor valueVariant == 226 && publicationActivationCountFor valueVariant == 95
+      && runtimeAllocationSizeFor valueVariant == 0x33d00
+      && menuEngineRegionStartFor valueVariant 0 == 0x1dd00 && menuEngineRegionExtentFor valueVariant == 0x16000
+      && all (\base -> runtimeInstallerBase base - base + runtimeInstallerExtentFor valueVariant <= menuEngineRegionStartFor valueVariant base - base) alignedBases)
+  check "value order installs the value hook after the engine hook"
+    (valueOrder == order <> map PublicationIndex [223 .. 225]
+      && maybe False ((== menuValueHookAddress) . valueAddressAt . NE.last) (NE.nonEmpty valueOrder))
+  check "value order refuses a value hook without its group"
+    (isLeft (safePublicationOrderForVariant modalEngineBankVariant valueAddresses)
+      && isLeft (safePublicationOrderForVariant valueVariant
+        (testAddresses <> [modalHookAddress, menuValueHookAddress, menuEngineHookAddress])))
   propertyLayout <- either fail pure (propertyPublicationLayout render)
   smallCounts <- either fail pure (propertyPublicationCounts propertyLayout 1)
   fullCounts <- either fail pure (propertyPublicationCounts propertyLayout propertyCarrierWordBound)

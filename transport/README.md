@@ -378,6 +378,8 @@ A pass establishes the following for the bank's ELF. The analysis runs per funct
 
 Address arithmetic retains a carried root when the scalar index and root operands are commuted. This does not establish address bounds: unbounded stores and indirect transfers still require a declaration matching the exact root and dereference depth. Two unknown operands do not establish a root.
 
+Exact function aliases with the same entry and extent share one analyzed body and declaration identity; partial overlaps still refuse. A callee's depth-positive requirement on a tracked local stack pointer retains `stack-frame` provenance and still needs an explicit caller declaration. An unnamed cell inside the owned allocation uses `{"allocation-offset":"0x000052d4"}` as its location instead of a fixed stock address. Matching uses the ELF's allocation base and the exact offset, function, access and dereference depth; relocating the allocation preserves that identity, while moving the cell within the allocation requires renewed review.
+
 A pass does not establish:
 
 - Where a declared site writes or branches. Its declared reason bounds it, not the check, and a content change inside a declared function that keeps the same provenance passes.

@@ -120,7 +120,7 @@ main = do
       pure (s, o, d, RamPush variant (hexValue base) linkedDir rc0Id4 rc0Id5 rc0Plain (Just extension))
     _ ->
       H.failH
-        "usage: build-recipe-bank SPEC.json OUT.json OUT_DIR | --complete SPEC.json OUT.json OUT_DIR KERNEL_DIR BOOT_DIR D3_DIR STOCK_DAT | --ram-push-allocation-size | --ram-push-variant-allocation-size GROUPS | --ram-push BASE SPEC.json OUT.json OUT_DIR LINKED_DIR RC0_ID4 RC0_ID5 RC0_PLAIN | --ram-push-variant GROUPS BASE SPEC.json OUT.json OUT_DIR LINKED_DIR RC0_ID4 RC0_ID5 RC0_PLAIN (GROUPS: lifecycle | modal75 | lifecycle,modal75 | modal75,menu-engine | modal75,menu-engine,render)"
+        "usage: build-recipe-bank SPEC.json OUT.json OUT_DIR | --complete SPEC.json OUT.json OUT_DIR KERNEL_DIR BOOT_DIR D3_DIR STOCK_DAT | --ram-push-allocation-size | --ram-push-variant-allocation-size GROUPS | --ram-push BASE SPEC.json OUT.json OUT_DIR LINKED_DIR RC0_ID4 RC0_ID5 RC0_PLAIN | --ram-push-variant GROUPS BASE SPEC.json OUT.json OUT_DIR LINKED_DIR RC0_ID4 RC0_ID5 RC0_PLAIN (GROUPS: lifecycle | modal75 | lifecycle,modal75 | modal75,menu-engine | modal75,menu-engine,menu-value | modal75,menu-engine,render)"
   original <- H.jsonRead =<< B.readFile specPath
   spec <- case buildMode of
     PreBootstrap -> pure original
@@ -1341,6 +1341,17 @@ emitRamPush extension variant base plan specPath linkedDir rc0Id4Path rc0Id5Path
       when (any ((== "rb_menu_engine_entry") . symbolName) symbols) $
         H.failH "ram-push: unselected menu engine entry is linked"
       pure []
+  menuValuePublications <- if hasPublicationGroup MenuValuePublication variant
+    then do
+      target <- linked symbols "rb_menu_value_size_arm"
+      let stockWord = readWord rc0Id5 0x00bf1a00 0x00d50084
+      unless (stockWord == 0x00d51b58) $
+        H.failH "ram-push: stock IMAGE SIZE dispatcher word differs at 0x00d50084"
+      pure [RamPublication 0x00d50084 0x00d51b58 target]
+    else do
+      when (any ((== "rb_menu_value_size_arm") . symbolName) symbols) $
+        H.failH "ram-push: unselected menu value arm is linked"
+      pure []
   renderPublications <- if hasPublicationGroup RenderPublication variant
     then forM (zip3 renderHookAddresses ["rb_render_tree_entry", "rb_render_picker_entry", "rb_render_pane_entry"]
       ["__rb_render_tree_stock_resume", "__rb_render_picker_stock_resume", "__rb_render_pane_stock_resume"]) $ \(hook, entry, resumeSymbol) -> do
@@ -1362,7 +1373,7 @@ emitRamPush extension variant base plan specPath linkedDir rc0Id4Path rc0Id5Path
                    in RamPublication address (CC.publicationOld p) (CC.publicationNew p)
       ccSetup = map convert [p | p <- ccKept, CC.publicationPhase p == CC.Setup]
       ccActivation = map convert [p | p <- ccKept, CC.publicationPhase p == CC.Activation]
-      logical = legacyOrdered <> ccSetup <> ccActivation <> d3Activation <> extra <> [capturePublication] <> lifecycleOrdered <> modalPublications <> enginePublications <> renderPublications
+      logical = legacyOrdered <> ccSetup <> ccActivation <> d3Activation <> extra <> [capturePublication] <> lifecycleOrdered <> modalPublications <> enginePublications <> menuValuePublications <> renderPublications
   safeOrder <- either H.failH pure (safePublicationOrderForVariant variant (map (PublicationAddress . ramAddress) logical))
   let ordered = [logical !! publicationIndex index | index <- safeOrder]
       allocationEnd = toInteger base + toInteger size
@@ -1500,12 +1511,18 @@ emitRamPush extension variant base plan specPath linkedDir rc0Id4Path rc0Id5Path
             , "replacement/menu_engine/adapter/entry.S"
             , "menu/recipe_bank_ram_engine.ld"
             ]]
+          ++ [path | hasPublicationGroup MenuValuePublication variant, path <-
+            [ "replacement/menu_value/src/lib.rs"
+            , "replacement/menu_value/adapter/mod.rs"
+            , "replacement/menu_value/adapter/entry.S"
+            ]]
           ++ [path | hasPublicationGroup RenderPublication variant, path <- renderSourcePaths]
           ++ case publicationGroups variant of
             [] -> []
             [Modal75Publication] -> ["host/firmware/build-recipe-bank-modal-ram.sh"]
             [LifecyclePublications] -> ["host/firmware/build-recipe-bank-lifecycle-ram.sh"]
             [Modal75Publication, MenuEnginePublication] -> ["host/firmware/build-recipe-bank-modal-engine-ram.sh"]
+            [Modal75Publication, MenuEnginePublication, MenuValuePublication] -> ["host/firmware/build-recipe-bank-modal-value-ram.sh"]
             [Modal75Publication, MenuEnginePublication, RenderPublication] -> ["host/firmware/build-recipe-bank-modal-render-ram.sh"]
             _ -> ["host/firmware/build-recipe-bank-modal-lifecycle-ram.sh"]
           ++ [path | hasPublicationGroup LifecyclePublications variant, path <-
@@ -1525,22 +1542,27 @@ emitRamPush extension variant base plan specPath linkedDir rc0Id4Path rc0Id5Path
   individualSourceIdentity <- forM (nub sourcePaths) $ \path -> do
     digest <- H.sha256 =<< B.readFile path
     pure (path, H.s digest)
-  sourceIdentity <- if not (hasPublicationGroup RenderPublication variant)
+  let bundleSources = hasPublicationGroup RenderPublication variant || hasPublicationGroup MenuValuePublication variant
+      (bundledPaths, bundleName, bundleKey) = if hasPublicationGroup RenderPublication variant
+        then (renderSourcePaths, "render", "render_sources_sha256")
+        else (["replacement/menu_value/src/lib.rs", "replacement/menu_value/adapter/mod.rs", "replacement/menu_value/adapter/entry.S"],
+          "menu-value", "menu_value_sources_sha256")
+  sourceIdentity <- if not bundleSources
     then pure individualSourceIdentity
     else do
-      let renderIdentity = filter ((`elem` renderSourcePaths) . fst) individualSourceIdentity
-          renderDocument = encodeCanonical (H.obj renderIdentity)
-          renderIdentityPath = out ++ "/render-source-identity.json"
-      present <- doesFileExist renderIdentityPath
+      let bundledIdentity = filter ((`elem` bundledPaths) . fst) individualSourceIdentity
+          bundleDocument = encodeCanonical (H.obj bundledIdentity)
+          bundleIdentityPath = out ++ "/" ++ bundleName ++ "-source-identity.json"
+      present <- doesFileExist bundleIdentityPath
       when present $ do
-        recorded <- B.readFile renderIdentityPath
-        unless (recorded == renderDocument) $
-          H.failH "ram-push: render-source-identity.json differs from recomputed sources"
-      B.writeFile renderIdentityPath renderDocument
-      setFileMode renderIdentityPath 0o600
-      digest <- H.sha256 renderDocument
-      pure (filter ((`notElem` renderSourcePaths) . fst) individualSourceIdentity
-        ++ [("render_sources_sha256", H.s digest)])
+        recorded <- B.readFile bundleIdentityPath
+        unless (recorded == bundleDocument) $
+          H.failH ("ram-push: " ++ bundleName ++ "-source-identity.json differs from recomputed sources")
+      B.writeFile bundleIdentityPath bundleDocument
+      setFileMode bundleIdentityPath 0o600
+      digest <- H.sha256 bundleDocument
+      pure (filter ((`notElem` bundledPaths) . fst) individualSourceIdentity
+        ++ [(bundleKey, H.s digest)])
   rc0Identity <- forM
     [("recipe_bank_spec", specPath), ("rc0_image4", rc0Id4Path), ("rc0_image5", rc0Id5Path), ("rc0_plain", rc0PlainPath)] $
     \(label, path) -> do
@@ -1558,7 +1580,7 @@ emitRamPush extension variant base plan specPath linkedDir rc0Id4Path rc0Id5Path
         [ ("build-recipe-bank", H.s recipeBankBuilderDigest)
         , ("ram-push-toolchain", H.s ramPushToolchainDigest)
         ]
-  when (hasPublicationGroup RenderPublication variant
+  when (bundleSources
     && length sourceIdentity + length rc0Identity + length rustIdentity + length toolIdentity + 1 > 68) $
     H.failH "ram-push: source_identity exceeds 68 entries"
   installEntry <- linked symbols "ram_push_install"
@@ -1613,7 +1635,7 @@ emitRamPush extension variant base plan specPath linkedDir rc0Id4Path rc0Id5Path
             ]
         | (position, logicalIndex, publication) <- zip3 [0 :: Int ..] safeOrder ordered
         ])
-    ] <> [("bank_variant", H.s (bankVariantTag variant)) | hasPublicationGroup RenderPublication variant]
+    ] <> [("bank_variant", H.s (bankVariantTag variant)) | bundleSources]
       <> extensionMetadata))
   setFileMode manifestPath 0o600
   forM_ modalScope $ \scope -> do

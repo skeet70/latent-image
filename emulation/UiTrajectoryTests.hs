@@ -939,6 +939,11 @@ afReceiptControls = do
   accepts "complete shared-physical receipt" False (receipt shared)
   accepts "register-derived shared read remains physical" True (receipt shared)
   accepts "complete executing-core TCM receipt" True (receipt tcm)
+  accepts "null register pointer records a null read row" True
+    (contexts (replaceField "reads" (toJSON [Null])
+      (replaceField "registers" (toJSON (replicate 13 (0 :: Int))) (context shared))))
+  refuses "null read row requires a null pointer" True
+    (contexts (replaceField "reads" (toJSON [Null]) (context shared)))
   let armed = replaceField "retention" (object ["status" .= String "armed"])
         . replaceField "status" (String "armed") . replaceField "final" Null
         . replaceField "rows" (toJSON ([] :: [Value])) . replaceField "contexts" (toJSON ([] :: [Value]))

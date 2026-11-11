@@ -1117,3 +1117,27 @@ fn property_plan_rejects_wrong_variant_extent_delta_and_legacy_table_writes() {
         assert!(matches!(config(value), Err(LifetimeFailure::InvalidRequest)));
     }
 }
+
+fn menu_value_request() -> Value {
+    let mut value = request();
+    value["bank_variant"] = json!("modal75,menu-engine,menu-value");
+    let mut publications = value["publications"].clone();
+    for index in 0..3u32 {
+        publications.as_array_mut().unwrap().push(json!({"address": 0x0120_037c + index * 4, "old": 0, "new": 0x1000 + index}));
+    }
+    value["publications"] = publications;
+    value
+}
+
+#[test]
+fn menu_value_variant_admits_226_publications_and_unknown_tags_stay_refused() {
+    assert!(config(menu_value_request()).is_ok());
+    let mut short = menu_value_request();
+    short["publications"] = request()["publications"].clone();
+    assert!(matches!(config(short), Err(LifetimeFailure::InvalidRequest)));
+    for tag in ["menu-value", "modal75,menu-value", "modal75,menu-engine,menu-value,render"] {
+        let mut unknown = menu_value_request();
+        unknown["bank_variant"] = json!(tag);
+        assert!(matches!(config(unknown), Err(LifetimeFailure::InvalidRequest)), "{tag}");
+    }
+}

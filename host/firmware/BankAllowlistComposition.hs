@@ -22,6 +22,7 @@ bankAllowlistSourcePaths variant = "menu/recipe_bank_allowlist.json" : map fragm
   fragment Modal75Publication = "menu/recipe_bank_modal_allowlist_fragment.json"
   fragment MenuEnginePublication = "menu/recipe_bank_menu_engine_allowlist_fragment.json"
   fragment RenderPublication = "menu/recipe_bank_render_allowlist_fragment.json"
+  fragment MenuValuePublication = "menu/recipe_bank_menu_value_allowlist_fragment.json"
 
 composeBankAllowlist :: BankVariant -> [(FilePath, B.ByteString)] -> Either String B.ByteString
 composeBankAllowlist variant sources = do
@@ -83,11 +84,12 @@ provenanceValue provenance = case provenance of
   Index location -> object ["index" .= locationValue location]
   Deref inner -> object ["deref" .= provenanceValue inner]
  where
-  locationValue location = toJSON (case location of
-    BankObject name -> name
-    GeneratedData -> "generated-data"
-    StackFrame -> "stack-frame"
-    StockAddress address -> hexWord address)
+  locationValue location = case location of
+    BankObject name -> toJSON name
+    GeneratedData -> toJSON ("generated-data" :: String)
+    StackFrame -> toJSON ("stack-frame" :: String)
+    StockAddress address -> toJSON (hexWord address)
+    AllocationCell (AllocationOffset offset) -> object ["allocation-offset" .= hexWord offset]
 
 hexWord :: Word32 -> String
 hexWord word = "0x" ++ replicate (8 - length digits) '0' ++ digits

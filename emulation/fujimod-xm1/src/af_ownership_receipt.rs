@@ -93,7 +93,7 @@ struct Context {
     sequence: usize,
     entry: crate::af_ownership::EntryEvidence,
     core: Core, pc: Address, word: Word, kind: crate::af_ownership::SiteKind, cpsr: u32, registers: [u32; 13], sp: Address,
-    lr: Address, sampled_task: crate::af_ownership::TaskSample, counts: [u64; 2], cursor: usize, reads: Bounded<Read, MAX_PAIRS>,
+    lr: Address, sampled_task: crate::af_ownership::TaskSample, counts: [u64; 2], cursor: usize, reads: Bounded<Option<Read>, MAX_PAIRS>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -352,22 +352,28 @@ pub fn validate(bytes: &[u8], expected_identity: &Value, expected_plan: &crate::
         if let crate::af_ownership::TaskSample::Sampled{kernel,..}=&context.sampled_task {
             require(kernel.index()==context.core.index(),"AF sampled kernel differs from executing core")?;
         }
+        let reference = context.reads.0.iter().flatten().next().map(|read| read.provenance.observed_tcm());
         for (index, read) in context.reads.0.iter().enumerate() {
-            require(context.reads.0.first().is_none_or(|first|first.provenance.observed_tcm()==read.provenance.observed_tcm()),"AF stopped context TCM observations disagree")?;
+            let Some(read) = read else { continue };
+            require(reference.is_none_or(|reference| reference == read.provenance.observed_tcm()),"AF stopped context TCM observations disagree")?;
             validate_entry_tcm(&context.entry,read.provenance.observed_tcm()[context.core.index()])?;
             crate::af_ownership::memory::validate_provenance(read.provenance,
                 if index < site.reads.len() { crate::af_ownership::ReadPurpose::SharedPhysical } else { crate::af_ownership::ReadPurpose::ExecutingCore },
                 crate::af_ownership::ReadCore::from_index(context.core.index()).unwrap(), crate::provenance::Guest(read.address.0), read.bytes.0.len() as u32, expected_mappings)?;
         }
         for (read, &[address, bytes]) in context.reads.0.iter().zip(&site.reads) {
+            let read = read.as_ref().ok_or("AF fixed read is null")?;
             require(read.address.0 == address && read.bytes.0.len() == bytes as usize, "AF fixed read mask differs")?;
         }
         for (read, spec) in context.reads.0.iter().skip(site.reads.len()).zip(&site.register_reads) {
             let base = match spec.register { 0..=12 => context.registers[usize::from(spec.register)],
                 13 => context.sp.0, 14 => context.lr.0, _ => return Err("invalid read register".into()) };
             let address = base.checked_add_signed(spec.offset).ok_or("AF register read address overflows")?;
-            require(read.address.0 == address && read.bytes.0.len() == spec.bytes as usize
-                && u64::from(address)+u64::from(spec.bytes)<=1<<32, "AF register read mask differs")?;
+            match read {
+                None => require(address == 0, "AF null read is not a null pointer")?,
+                Some(read) => require(read.address.0 == address && read.bytes.0.len() == spec.bytes as usize
+                    && u64::from(address)+u64::from(spec.bytes)<=1<<32, "AF register read mask differs")?,
+            }
         }
         let _ = context.core;
         previous_counts = context.counts;

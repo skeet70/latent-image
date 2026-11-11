@@ -67,6 +67,133 @@ main = do
         let found = [(findingAddress f, findingReason f) | f <- violations report]
         check (label ++ ": expected " ++ show reasons ++ ", got " ++ show (map renderFinding (violations report))) (found == reasons)
 
+  let functionSymbol name = maybe (error ("no function " ++ name)) id
+        (find (\s -> symbolName s == name && symbolKind s == FunctionSymbol) (elfSymbols cleanElf))
+      alias name original = (functionSymbol original) {symbolName = name}
+      aliasSymbols =
+        [ alias "aaa_assert_alias" "rb_assert_one"
+        , alias "zzz_assert_alias" "rb_assert_one"
+        , alias "aaa_status_alias" "rb_status_record"
+        , alias "aaa_probe_alias" "rb_probe_entry"
+        ]
+      withAliases elf = elf {elfSymbols = aliasSymbols ++ elfSymbols elf}
+      checked policy elf = either fail pure (checkBank policy elf)
+      counts report = (reportFunctions report, reportInstructions report, reportProvenStores report, reportProvenBranches report)
+  baseline <- checked allowlist cleanElf
+  aliased <- checked allowlist (withAliases cleanElf)
+  check "exact aliases pass without duplicating analyzed bodies or effects"
+    (null (violations aliased) && counts aliased == counts baseline)
+  check "declarations on nonrepresentative names remain used"
+    (map renderDeclaration (reportUnused aliased) == map renderDeclaration (reportUnused baseline))
+  reordered <- checked allowlist (cleanElf {elfSymbols = elfSymbols cleanElf ++ reverse aliasSymbols})
+  check "alias representative does not depend on symbol table order"
+    (reportValue aliased == reportValue reordered)
+  let aliasPolicy = allowlist {declarations =
+        [d {declarationFunction = if declarationFunction d == "rb_assert_one" then "zzz_assert_alias" else declarationFunction d}
+        | d <- declarations allowlist]}
+  renamed <- checked aliasPolicy (withAliases cleanElf)
+  check "a declaration may name any exact alias"
+    (null (violations renamed) && length (reportUnused renamed) == length (reportUnused baseline))
+  unknownElf <- either fail pure (parseElf (fixture probeCall 0xe12fff33))
+  unknownAlias <- checked allowlist (withAliases unknownElf)
+  check "an unknown effect in an aliased body is still refused once"
+    ([(findingAddress f, findingFunction f, findingReason f) | f <- violations unknownAlias]
+      == [(probeCall, "aaa_probe_alias", Unproven BranchAccess (Argument (Reg 3)))])
+  uncheckedZero <- either fail pure (parseElf (fixture zeroTest 0xe1a00000))
+  zeroAlias <- checked aliasPolicy (withAliases uncheckedZero)
+  check "callee argument obligations survive a nonrepresentative declaration"
+    ([(findingAddress f, findingReason f) | f <- violations zeroAlias] == [(zeroCall, UnprovenArgument)])
+  forM_
+    [ ("same entry, shorter extent", (alias "overlap" "rb_status_record") {symbolSize = symbolSize (functionSymbol "rb_status_record") - 4})
+    , ("same entry, longer extent", (alias "overlap" "rb_status_record") {symbolSize = symbolSize (functionSymbol "rb_status_record") + 4})
+    , ("interior entry", (alias "overlap" "rb_status_record")
+        {symbolValue = symbolValue (functionSymbol "rb_status_record") + 4, symbolSize = symbolSize (functionSymbol "rb_status_record") - 4})
+    ] $ \(label, overlappingSymbol) -> do
+      refused <- checked allowlist (cleanElf {elfSymbols = overlappingSymbol : aliasSymbols ++ elfSymbols cleanElf})
+      check ("partial overlap refuses: " ++ label)
+        (any ((== LayoutProblem) . findingReason) (violations refused))
+  let callerStart = fst (function "rb_assert_one")
+      callerSize = snd (function "rb_assert_one") - callerStart
+      resultWords = [0xe92d4000, branchLink (callerStart + 4) (fst (function "rb_status_record")), 0xe5801000, 0xe8bd8000]
+        ++ replicate (fromIntegral (callerSize `div` 4) - 4) 0xe320f000
+      resultBytes = patchBytes cleanElf clean callerStart
+        (B.pack [fromIntegral (word `shiftR` shift) | word <- resultWords, shift <- [0,8,16,24 :: Int]])
+  resultElf <- either fail pure (parseElf resultBytes)
+  undeclaredResult <- checked aliasPolicy (withAliases resultElf)
+  check "aliased callee results still require an effect declaration"
+    (any (\f -> findingAddress f == callerStart + 8
+      && findingReason f == Unproven StoreAccess (Result (BankFunction "aaa_status_alias"))) (violations undeclaredResult))
+  forM_ ["rb_status_record", "aaa_status_alias"] $ \calleeName -> do
+    let resultPolicy = aliasPolicy {declarations = declarations aliasPolicy ++
+          [Declaration "zzz_assert_alias" StoreAccess (Result (BankFunction calleeName)) "synthetic callee result store"]}
+    resultReport <- checked resultPolicy (withAliases resultElf)
+    check ("callee result provenance resolves alias " ++ calleeName)
+      (null (violations resultReport)
+        && any (\f -> findingAddress f == callerStart + 8 && findingVerdict f /= Violation) (declared resultReport))
+  let missingPolicy = allowlist {declarations = declarations allowlist ++
+        [Declaration "not_a_function" StoreAccess (Argument (Reg 0)) "synthetic missing symbol"]}
+  missing <- checked missingPolicy (withAliases cleanElf)
+  check "aliases do not admit declarations for absent symbols"
+    (any ((== UnknownDeclaredFunction) . findingReason) (violations missing))
+
+  let indirectCallee = fst (function "rb_status_record")
+      replaceFunction :: String -> [Word32] -> B.ByteString -> B.ByteString
+      replaceFunction name instructions bytes =
+        let (start, end) = function name
+            padded = instructions ++ replicate (fromIntegral ((end - start) `div` 4) - length instructions) 0xe320f000
+         in patchBytes cleanElf bytes start (B.pack [fromIntegral (word `shiftR` shift) | word <- padded, shift <- [0,8,16,24 :: Int]])
+      indirectPolicy = allowlist {declarations = declarations allowlist ++
+        [Declaration "rb_status_record" StoreAccess (Deref (Argument (Reg 0))) "synthetic callee writes through a field of its argument"]}
+      framePolicy = indirectPolicy {declarations = declarations indirectPolicy ++
+        [Declaration "rb_assert_one" StoreAccess (Cell StackFrame) "synthetic caller supplies a pointer field from its local object"]}
+      frameProgram prefix =
+        let callSite = callerStart + fromIntegral (length prefix * 4)
+            instructions = prefix ++ [branchLink callSite indirectCallee, 0xe28dd008, 0xe8bd8010]
+            bytes = replaceFunction "rb_status_record" [0xe5901000, 0xe5812000, 0xe12fff1e]
+              (replaceFunction "rb_assert_one" instructions clean)
+         in (callSite, bytes)
+  forM_ [("exact", [0xe92d4010, 0xe24dd008, 0xe1a0000d]), ("merged", [0xe92d4010, 0xe24dd008, 0xe1a0000d, 0x128d0004])] $ \(label, prefix) -> do
+    let (callSite, bytes) = frameProgram prefix
+    refused <- run indirectPolicy bytes
+    check (label ++ " local pointer field requires an explicit caller declaration")
+      (any (\f -> findingAddress f == callSite && findingReason f == Unproven StoreAccess (Cell StackFrame)) (violations refused))
+    admitted <- run framePolicy bytes
+    check (label ++ " local pointer field uses only its declared frame provenance")
+      (any (\f -> findingAddress f == callSite && findingReason f == Unproven StoreAccess (Cell StackFrame)) (declared admitted)
+        && not (any ((== callSite) . findingAddress) (violations admitted)))
+  let (unknownCall, unknownBytes) = frameProgram [0xe92d4010, 0xe24dd008, 0xe1a00083]
+  unknownFrame <- run framePolicy unknownBytes
+  check "unknown pointers do not acquire local frame provenance"
+    (any (\f -> findingAddress f == unknownCall && findingReason f == UnprovenArgument) (violations unknownFrame))
+  forM_ [elfLow, elfHigh] $ \path -> do
+    bytes <- B.readFile path
+    image <- either fail pure (parseElf bytes)
+    let findSymbol name = maybe (error ("no symbol " ++ name)) id (find ((== name) . symbolName) (elfSymbols image))
+        caller = findSymbol "rb_assert_one"
+        callee = findSymbol "rb_status_record"
+        base = symbolValue (findSymbol "__ram_push_start")
+        pointer = base + 0x100
+        wide opcode immediate = opcode .|. ((immediate .&. 0xf000) `shiftL` 4) .|. (immediate .&. 0xfff)
+        callSite = symbolValue caller + 12
+        emit :: Symbol -> [Word32] -> B.ByteString -> B.ByteString
+        emit target instructions subject =
+          let padded = instructions ++ replicate (fromIntegral (symbolSize target `div` 4) - length instructions) 0xe320f000
+           in patchBytes image subject (symbolValue target)
+                (B.pack [fromIntegral (word `shiftR` shift) | word <- padded, shift <- [0,8,16,24 :: Int]])
+        program = emit callee [0xe5901000, 0xe5812000, 0xe12fff1e]
+          (emit caller [0xe92d4010, wide 0xe3000000 pointer, wide 0xe3400000 (pointer `shiftR` 16),
+            branchLink callSite (symbolValue callee), 0xe8bd8010] bytes)
+        relativePolicy offset = indirectPolicy {declarations = declarations indirectPolicy ++
+          [Declaration "rb_assert_one" StoreAccess (Cell (AllocationCell (AllocationOffset offset))) "synthetic allocation-relative pointer field"]}
+    relocated <- run (relativePolicy 0x100) program
+    check (path ++ " preserves an exact allocation-relative cell after relocation")
+      (any (\f -> findingAddress f == callSite && findingReason f == Unproven StoreAccess (Cell (AllocationCell (AllocationOffset 0x100)))) (declared relocated)
+        && not (any ((== callSite) . findingAddress) (violations relocated)))
+    wrongOffset <- run (relativePolicy 0x104) program
+    check (path ++ " refuses a different allocation-relative cell")
+      (any ((== callSite) . findingAddress) (violations wrongOffset))
+
+
   -- A call to a stock address the allowlist does not name.
   expect "undeclared stock call" (fixture probeCall (branchLink probeCall 0x00700000))
     [(probeCall, UndeclaredStockTarget 0x00700000)]

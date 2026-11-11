@@ -36,6 +36,8 @@ module Replacement.ModalRuntime.MenuTables
   , TableStatus (..)
   , PropertyEntry (..)
   , MenuTables (..)
+  , conversionTable
+  , imageWord
   , decodeMenuTables
   , resolveString
   , limits
@@ -298,13 +300,17 @@ decodeMenuTables image slot = MenuTables registry nodes properties
     [ NodeEntry address (M.findWithDefault [] address registered) (maybe [] S.toList (M.lookup address references)) record
     | (address, record) <- M.toList records ]
   users = M.fromListWith (flip (++)) [(PropertyId (nodePropertyOrClass record), [address]) | (address, Right record) <- M.toList records]
-  properties = [PropertyEntry property addresses (tableOf property) | (property, addresses) <- M.toList users]
-  tableOf property@(PropertyId number)
-    | property > conversionBound = BeyondConverterBound
-    | otherwise = case imageWord image (advance conversionPointers (4 * number)) of
-        Nothing -> PointerSlotUnreadable
-        Just 0 -> NullTablePointer
-        Just table -> Table (Address table) (walk image (Just (Address table)) 12 ((== [0xffff, 0xffff, 0xffff]) . recordWords) conversionRow)
+  properties = [PropertyEntry property addresses (conversionTable image property) | (property, addresses) <- M.toList users]
+
+-- | The conversion table a property pointer names.
+conversionTable :: Image -> PropertyId -> TableStatus
+conversionTable image property@(PropertyId number)
+  | property > conversionBound = BeyondConverterBound
+  | otherwise = case imageWord image (advance conversionPointers (4 * number)) of
+      Nothing -> PointerSlotUnreadable
+      Just 0 -> NullTablePointer
+      Just table -> Table (Address table) (walk image (Just (Address table)) 12 ((== [0xffff, 0xffff, 0xffff]) . recordWords) conversionRow)
+ where
   conversionRow record = case recordWords record of
     [stored, column1, effective] -> ConversionRow stored column1 effective
     _ -> ConversionRow 0 0 0
