@@ -169,6 +169,12 @@ pub mod capture_profile_secondary;
 mod capture_profile_tests;
 pub mod capture_settings_predicates;
 pub mod capture_settings_predicates_runtime;
+pub mod record_helper_rectangle_ee81bc;
+pub mod record_helper_shared_signed_75a3f0;
+pub mod record_helper_statistics_reset_eec89c;
+pub mod record_helper_profile_mode_f15f40;
+pub mod record_helper_display_state_f201dc;
+pub mod record_helper_image_command_1039b48;
 #[cfg(test)]
 mod capture_settings_predicates_tests;
 pub mod capture_task3;
