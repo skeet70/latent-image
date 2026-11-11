@@ -452,6 +452,14 @@ pub mod record_task43_selection_tail_descriptors;
 pub mod record_task43_selection_tail_parameters;
 #[cfg(target_arch = "arm")]
 pub mod record_task43_selection_timing;
+pub mod record_shared_block_halves_7574e4;
+pub mod record_profile_resource_words_74e154;
+pub mod record_power_state_block_ef788c;
+pub mod record_selection_bytes_f1aa70;
+pub mod record_calibration_pair_edb0ac;
+pub mod record_cache_span_740e0c;
+pub mod record_image_command_messages_1039638;
+pub mod record_capture_request_f23070;
 pub mod record_task43_selection_timing_state;
 pub mod record_task50;
 pub mod record_task50_native;
