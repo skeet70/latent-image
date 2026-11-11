@@ -119,6 +119,38 @@ haskell_test(
     ],
 )
 
+haskell_binary(
+    name = "run-output",
+    srcs = ["RunOutputMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//host:base",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//host:storage-budget",
+    ],
+)
+
+haskell_test(
+    name = "run-output-tests",
+    srcs = ["RunOutputTests.hs"],
+    args = ["$(rootpath :run-output)"],
+    data = [":run-output"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    tags = ["local"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//host:unix",
+    ],
+)
+
 haskell_test(
     name = "storage-maintenance-tests",
     srcs = ["StorageMaintenanceTests.hs"],

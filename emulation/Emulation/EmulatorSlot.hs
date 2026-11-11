@@ -18,9 +18,11 @@ import Data.Char (isDigit)
 import Data.List (isSuffixOf, stripPrefix)
 import qualified Emulation.HostAdmission as Host
 import Emulation.HostAdmission (MemoryMax (..), MemorySwapMax (..), ResourceClass (Emulator), ScopeName, claimScopeRecord, classConcurrency, configuredMemory, lockOwnerText, memoryMaxBytes, memorySwapMaxBytes, parseScopeName, reserveMemory, userScopeAvailable)
+import qualified FujiAF.RunOutput as Run
 import FujiAF.StorageBudget (checkStorageBudget)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, getCurrentDirectory, getHomeDirectory, listDirectory, removeFile)
-import System.Environment (getExecutablePath, lookupEnv, setEnv, unsetEnv)
+import System.Environment (getArgs, getExecutablePath, getProgName, lookupEnv, setEnv, unsetEnv)
+import System.Exit (ExitCode (..), exitWith)
 import System.FilePath ((</>))
 import System.IO (Handle, IOMode (ReadMode, WriteMode), SeekMode (AbsoluteSeek), hFlush, hPutStrLn, stderr, withBinaryFile)
 import System.IO.Error (catchIOError, isDoesNotExistError, isPermissionError)
@@ -124,6 +126,7 @@ reexecInSlot policy arguments = do
           checkStorageBudget storage
           unsetEnv "XM1_ADMISSION_SCOPE"
           setEnv slotVariable (show slot)
+          openSlotRun
           pid <- getProcessID
           setEnv "XM1_ADMISSION_OWNER" (show pid)
           setEnv "XM1_ADMISSION_CLASS" (show (executionClass policy))
@@ -152,6 +155,7 @@ reexecInSlot policy arguments = do
                 pure (acquired, pinned)
               checkStorageBudget storage
               setEnv slotVariable (show slot)
+              openSlotRun
               pid <- getProcessID
               setEnv "XM1_ADMISSION_OWNER" (show pid)
               setEnv "XM1_ADMISSION_CLASS" (show (executionClass policy))
@@ -171,6 +175,41 @@ slotDirectory = do
   directory <- (</> ".cache" </> "xm1-emulator-slots") <$> getHomeDirectory
   createDirectoryIfMissing True directory
   pure directory
+
+-- | The run lock must survive the exec into the pinned executable, and the next opener marks the
+-- run unjudged.
+openSlotRun :: IO ()
+openSlotRun = do
+  existing <- lookupEnv "XM1_RUN_DIR"
+  case existing of
+    Just _ -> pure ()
+    Nothing -> do
+      resolved <- Run.resolveTask
+      case resolved of
+        Nothing -> pure ()
+        Just task -> do
+          configured <- lookupEnv "XM1_RUN_LABEL"
+          program <- getProgName
+          arguments <- getArgs
+          let label = Run.labelFromText (maybe program id configured)
+          opened <- Run.openRun
+            Run.OpenRequest
+              { Run.openTask = task
+              , Run.openLabel = label
+              , Run.openOpener = Run.Slot
+              , Run.openCommand = program : arguments
+              }
+          case opened of
+            Run.RunOpened handle -> do
+              Run.makeRunLockInheritable handle
+              let paths = Run.runPaths handle
+              setEnv "XM1_RUN_DIR" (Run.runDirectory paths)
+              setEnv "XM1_RUN_WORK" (Run.runWork paths)
+              setEnv "XM1_RUN_RESULT" (Run.runResult paths)
+            Run.RunRefused refusal -> do
+              hPutStrLn stderr (Run.describeRefusal refusal)
+              hFlush stderr
+              exitWith (ExitFailure 75)
 
 acquire :: FilePath -> ExecutionClass -> Maybe ScopeName -> IO Slot
 acquire directory execution scope = do

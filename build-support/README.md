@@ -117,6 +117,18 @@ systemctl --user enable --now latent-image-scratch-expiry.timer
 
 Inspect `systemctl --user status latent-image-scratch-expiry.timer` for the next run and `journalctl --user -u latent-image-scratch-expiry.service` for the summary or failures. Disable future sweeps with `systemctl --user disable --now latent-image-scratch-expiry.timer`.
 
+### Run output
+
+Run output goes in `private-data/scratch/NAME/runs/STAMP-LABEL/`, where NAME is the current branch without a leading `agent/` and with any other `/` replaced by `-`, STAMP is UTC `YYYYMMDDTHHMMSSZ` and LABEL matches `[A-Za-z0-9._-]+`. A run directory holds `run.json`, the `lock` its opener holds, `work/` for intermediates and `result/` for the verdict and the facts it rests on, at most 16 MiB.
+
+`//build-support:run-output exec [--label LABEL] [--work-budget BYTES] -- COMMAND ARG...` opens a run, exports `XM1_RUN_DIR`, `XM1_RUN_WORK` and `XM1_RUN_RESULT` to COMMAND, runs it in its own process group and closes the run with its exit status. Inside an existing run it only runs COMMAND. A run that exits 0 is `"passed"` and loses `work/`; a nonzero exit is `"failed"` and keeps `work/` while it is the newest failed run of its LABEL in this task; no exit status leaves it `"unjudged"` and keeps `work/`. `run.json` records the command, commit, exit status, outcome, reason and the count, total size and SHA-256 of every regular file under `work/`, and lists the files of at least 1 MiB individually.
+
+`//build-support:run-output keep PATH...` moves intermediates that later runs reuse out of `$XM1_RUN_WORK` into `private-data/scratch/NAME/inputs/` under the same relative path. It refuses a path outside the work directory and never replaces an existing input.
+
+`XM1_RUN_WORK_MAX`, or `--work-budget`, caps one run's `work/` at 20 GiB by default; `run-output` measures it every 60 seconds and terminates the process group over the cap, closing the run `"failed"` with reason `"work-budget"` and exiting 75. `XM1_TASK_OUTPUT_MAX` caps the allocated bytes of everything under `private-data/scratch/NAME` outside open runs at 10 GiB by default; over the cap, the oldest failed `work/` is removed, oldest first, and the run is refused when that is not enough. Both variables accept the same byte counts as `XM1_STORAGE_MIN_FREE`. A refusal prints the measured bytes, the limit and the five largest children, exits 75 and creates no run directory; delete what no later run needs, move a reusable intermediate with `run-output keep`, or keep only the verdict and its digests in `result/`, then retry.
+
+An emulator slot opens a run with opener `"slot"` and LABEL from `XM1_RUN_LABEL` or the program name when `XM1_RUN_DIR` is unset and the workspace resolves. The slot process holds the lock for its lifetime, so the run stays `"unjudged"`; the sweep removes its `work/` 48 hours after close. `XM1_RUN_POLL_MICROS` overrides the work measurement interval and is meant for the tests.
+
 ### Compiler-output maintenance
 
 Build cleanup is restricted to positively identified compiler outputs under Cargo's guards; open or mapped candidates are retained. Source, application databases, generated imports, reports and input artifacts are never deletion targets, even inside a build directory.
