@@ -129,9 +129,83 @@ pub enum StartProgress { WaitTicks(SchedulerTicks), Disconnected, Ready }
 #[derive(Clone, Copy)]
 struct Debounce { previous: bool, equal_samples: u32 }
 
-pub struct UsbStart<'a> { memory: UsbMemory<'a>, debounce: Option<Debounce> }
+pub struct UsbStart<'a> { memory: UsbMemory<'a>, debounce: Option<Debounce>, control_frame: [u8; 12] }
 impl<'a> UsbStart<'a> {
-    pub fn new(memory: UsbMemory<'a>) -> Self { Self { memory, debounce: None } }
+    pub fn new(memory: UsbMemory<'a>) -> Self { Self { memory, debounce: None, control_frame: [0; 12] } }
+
+    /// 0x00d7d674: the eight-byte setup packet at 0xfff55188, read as two successive words.
+    pub fn setup_packet(&self, io: &mut impl ControllerIo) -> crate::transport_pump::SetupPacket {
+        let low = io.read32(Register::SetupPacket);
+        let high = io.read32(Register::SetupPacketHigh);
+        let mut bytes = [0; 8];
+        bytes[..4].copy_from_slice(&low.to_le_bytes());
+        bytes[4..].copy_from_slice(&high.to_le_bytes());
+        crate::transport_pump::SetupPacket::parse(bytes)
+    }
+
+    /// 0x014697b0: the control transfer block the setup branch fills.
+    pub fn control_block(&self) -> crate::transport_pump::ControlBlock {
+        use crate::transport_pump::{ControlBlock, ControlDirection, ControlKind, ControlPhase};
+        let kind = match self.memory.word(CONTROL + 0x18) { 1 => ControlKind::Class, 2 => ControlKind::Vendor, 0 => ControlKind::Standard, _ => ControlKind::Reserved };
+        let direction = match self.memory.word(CONTROL + 0x1c) { 1 => ControlDirection::In, 2 => ControlDirection::Out, _ => ControlDirection::None };
+        let phase = match self.memory.word(CONTROL + 0x20) { 1 => ControlPhase::Data, 2 => ControlPhase::Status, _ => ControlPhase::Idle };
+        ControlBlock {
+            target_length: self.memory.word(CONTROL + 4),
+            request_type: self.memory.byte(CONTROL + 8),
+            request: self.memory.byte(CONTROL + 9),
+            value: self.memory.word(CONTROL + 0xc) as u16,
+            index: self.memory.word(CONTROL + 0x10) as u16,
+            length: self.memory.word(CONTROL + 0x14) as u16,
+            kind, direction, phase,
+        }
+    }
+
+    pub fn set_control_block(&mut self, block: crate::transport_pump::ControlBlock) {
+        use crate::transport_pump::{ControlDirection, ControlKind, ControlPhase};
+        self.memory.put(CONTROL + 4, block.target_length);
+        self.memory.put_byte(CONTROL + 8, block.request_type);
+        self.memory.put_byte(CONTROL + 9, block.request);
+        self.memory.put(CONTROL + 0xc, u32::from(block.value));
+        self.memory.put(CONTROL + 0x10, u32::from(block.index));
+        self.memory.put(CONTROL + 0x14, u32::from(block.length));
+        let kind = match block.kind { ControlKind::Standard => 0, ControlKind::Class => 1, ControlKind::Vendor => 2, ControlKind::Reserved => 3 };
+        let direction = match block.direction { ControlDirection::None => 0, ControlDirection::In => 1, ControlDirection::Out => 2 };
+        let phase = match block.phase { ControlPhase::Idle => 0, ControlPhase::Data => 1, ControlPhase::Status => 2 };
+        self.memory.put(CONTROL + 0x18, kind);
+        self.memory.put(CONTROL + 0x1c, direction);
+        self.memory.put(CONTROL + 0x20, phase);
+    }
+
+    /// The twelve bytes the control data stage delivers; stock holds them at 0x01469854.
+    pub const fn control_frame(&self) -> &[u8; 12] { &self.control_frame }
+    pub fn set_control_frame(&mut self, frame: [u8; 12]) { self.control_frame = frame; }
+
+    /// 0x01469798 and 0x014697fc.
+    pub fn descriptor(&self, descriptor: crate::transport_pump::Descriptor) -> crate::transport_pump::TransferDescriptor {
+        use crate::transport_pump::Descriptor;
+        let base = match descriptor { Descriptor::Transmit => 0x3c, Descriptor::Receive => 0xa0 };
+        crate::transport_pump::TransferDescriptor {
+            state: self.memory.word(base + 0xc),
+            active: self.memory.word(base + 0x10) != 0,
+        }
+    }
+
+    pub fn set_descriptor(&mut self, descriptor: crate::transport_pump::Descriptor, value: crate::transport_pump::TransferDescriptor) {
+        use crate::transport_pump::Descriptor;
+        let base = match descriptor { Descriptor::Transmit => 0x3c, Descriptor::Receive => 0xa0 };
+        self.memory.put(base + 0xc, value.state);
+        self.memory.put(base + 0x10, u32::from(value.active));
+    }
+
+    /// 0x01469768+0x20: the controller-active word the channel events gate on.
+    pub fn controller_active(&self) -> bool { self.memory.word(CONTROLLER + 0x20) == 1 }
+    /// 0x01469768+0x18 and +0x1a: the shadow bytes the channel events set and clear.
+    pub fn set_shadow_bit(&mut self, byte: usize, bit: u8, set: bool) {
+        let offset = CONTROLLER + byte;
+        let value = self.memory.byte(offset);
+        self.memory.put_byte(offset, if set { value | (1 << bit) } else { value & !(1 << bit) });
+    }
+    pub fn shadow_byte(&self, byte: usize) -> u8 { self.memory.byte(CONTROLLER + byte) }
 
     fn clear_transfer_state(&mut self) {
         for offset in [0, 4, 8, 0x3c, 0x40, 0x44, 0x48, 0x4c, 0xa0, 0xa4, 0xa8, 0xac, 0xb0] { self.memory.put(offset, 0); }

@@ -742,6 +742,8 @@ extern "C" {
     fn xm1_power_interrupt_lock() -> u32;
     fn xm1_power_interrupt_unlock(saved: u32);
     fn xm1_rtos_own_first_slot_1618() -> u32;
+    fn xm1_rtos_own_first_slot_164() -> u32;
+    fn xm1_rtos_own_first_slot_168(saved: u32) -> u32;
     fn xm1_power_semaphore_wait(id: i32, timeout: i32) -> i32;
     fn xm1_power_semaphore_signal(id: i32) -> i32;
 }
@@ -780,11 +782,12 @@ impl NativeInterruptRouter {
         let configure: unsafe extern "C" fn(u32, *const u32) -> i32 = unsafe { KernelSlot::read(interface, 0x160).entry() };
         let enable: unsafe extern "C" fn(u32) -> i32 = unsafe { KernelSlot::read(interface, 0x158).entry() };
         let record = [0, handler, priority, polarity, 2];
-        let saved = unsafe { xm1_power_interrupt_lock() };
+        // 0x007238ac and 0x00723988 hold the local mask.
+        let saved = unsafe { xm1_rtos_own_first_slot_164() };
         unsafe {
             configure(79, record.as_ptr());
             enable(79);
-            xm1_power_interrupt_unlock(saved);
+            let _ = xm1_rtos_own_first_slot_168(saved);
         }
         Ok(())
     }

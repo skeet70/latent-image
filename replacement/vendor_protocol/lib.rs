@@ -33,6 +33,7 @@ pub mod configuration_serial_actors;
 pub mod configuration_status_actor;
 pub mod configuration_storage;
 pub mod controller;
+pub mod controller_native;
 pub mod controller_registration;
 pub mod controller_root;
 pub mod controller_rtos;

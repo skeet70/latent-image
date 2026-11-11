@@ -131,6 +131,27 @@ genrule(
     tools = ["@lab_xm1_rust//:bin/rustc", "@lab_gnutar//:bin/tar"],
 )
 
+# The bounded session control probe NativeSessionOracle.hs compares against the stock body.
+genrule(
+    name = "session-native",
+    srcs = ["lib.rs", "vendor-session-native.ld"] + _CORE_SOURCES + _ARM_DEPS + _IRQ_SOURCES + _SCHEDULER_SOURCES,
+    outs = ["session-native.elf", "session-native.bin"],
+    cmd = _UNPACK_CRYPTO["arm"] + """
+set -eu
+$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --crate-type=rlib --crate-name=xm1_vendor_protocol_session --cfg 'feature="stage"' --cfg 'feature="bound-locks"' --cfg vendor_protocol_native""" + _ARM_FLAGS + _ARM_EXTERNS + _ARM_LINK_PATHS + """ $(location lib.rs) -o $(@D)/libxm1_vendor_protocol_session.rlib
+sysroot="$$($(location @lab_xm1_rust//:bin/rustc) --print sysroot)"
+NIX_HARDENING_ENABLE= $(location @lab_clang//:bin/clang) --target=armv7r-none-eabi -march=armv7-r -marm -mfloat-abi=soft -nostdlib -static -fuse-ld=lld --ld-path=$(location @lab_lld//:bin/ld.lld) -Wl,--no-dynamic-linker -Wl,--build-id=none -Wl,--gc-sections -Wl,-T,$(location vendor-session-native.ld) -Wl,-e,vendor_session_probe $(@D)/libxm1_vendor_protocol_session.rlib "$$sysroot"/lib/rustlib/armv7r-none-eabi/lib/libcore-*.rlib "$$sysroot"/lib/rustlib/armv7r-none-eabi/lib/libcompiler_builtins-*.rlib $(location //replacement/settings_storage:record-store-guest-rlib) -o $(location session-native.elf)
+$(location @lab_llvm//:bin/llvm-objcopy) -O binary $(location session-native.elf) $(location session-native.bin)
+""",
+    tools = [
+        "@lab_xm1_rust//:bin/rustc",
+        "@lab_gnutar//:bin/tar",
+        "@lab_clang//:bin/clang",
+        "@lab_lld//:bin/ld.lld",
+        "@lab_llvm//:bin/llvm-objcopy",
+    ],
+)
+
 genrule(
     name = "model-runner",
     srcs = ["model_runner.rs", ":core-host"] + _DEPS,
@@ -149,6 +170,13 @@ genrule(
     executable = True,
 )
 sh_test(name = "tests", srcs = [":rust-test-binary"])
+
+sh_test(
+    name = "core-arm-bindings-tests",
+    srcs = ["core_arm_bindings_tests.sh"],
+    args = ["$(location @lab_llvm//:bin/llvm-nm)", "$(location :core-arm)"],
+    data = [":core-arm", "@lab_llvm//:bin/llvm-nm"],
+)
 
 haskell_test(
     name = "session-oracle-tests",

@@ -250,3 +250,30 @@ fn clearing_receive_preserves_status_suppression_and_pending_notification() {
     assert_eq!(state.bulk_in_complete(CompletionStatus::Success), CompletionAction::SendStatus([9, 1]));
     assert_eq!(state.bulk_out_complete(CompletionStatus::Success), Ok(CompletionAction::ProcessReceive { status: None }));
 }
+
+#[test]
+fn the_first_transfer_opens_both_channels_and_take_returns_each_once() {
+    let mut entries = [None; 4];
+    let mut set = SessionChannelSet::new(&mut entries, cpu::HandleSequence::new(0));
+    let mut io = Recorder::new();
+    set.open(&mut io);
+    assert_eq!(set.opened(), [true, true]);
+    assert_eq!(io.observed().len(), 2);
+    let [zero, one] = set.take();
+    assert!(zero.is_some() && one.is_some());
+    assert_eq!(set.opened(), [false, false]);
+    let [zero, one] = set.take();
+    assert!(zero.is_none() && one.is_none());
+}
+
+#[test]
+fn a_failed_second_open_keeps_the_first_lease() {
+    let mut entries = [None, Some(cpu::DriverHandle::from_raw(9).unwrap()), None, None];
+    let mut set = SessionChannelSet::new(&mut entries, cpu::HandleSequence::new(0));
+    let mut io = Recorder::new();
+    set.open(&mut io);
+    assert_eq!(set.opened(), [true, false]);
+    let [zero, one] = set.take();
+    assert!(zero.is_some());
+    assert!(one.is_none());
+}

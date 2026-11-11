@@ -13,10 +13,12 @@ use crate::{
     ptp_runtime::PtpRuntime,
     ptp_types::BatteryLevel,
     service::Service,
-    transport::{cpu, irq_control, scheduler, ChannelLease, ControllerTeardown, PublishedRegion, Register, TeardownPlatform, TeardownProgress, TransportError},
+    transport::{cpu, irq_control, scheduler, ChannelLease, ControllerTeardown, Endpoint, PublishedRegion, Register, SessionChannels,
+        SetupAction, SourceAction, TeardownPlatform, TeardownProgress, TransportError},
     transport_connection_cpu::{ActiveFileClose, CloseError, ConnectionState},
-    transport_pump::{TransportPump, UsbEvent},
-    transport_start_cpu::{bulk_packet_size, link_connected, CallbackTable, SessionMode, StartError, StartIo, StartProgress, StartRegister, StartRuntime, UsbStart},
+    transport_pump::{ControlDirection, ControlPhase, Descriptor, TransportPump, UsbEvent},
+    transport_start_cpu::{bulk_packet_size, link_connected, CallbackTable, SessionMode, StartError, StartIo,
+        StartProgress, StartRegister, StartRuntime, UsbStart},
 };
 use xm1_power_services::{
     primitives::ServiceStatus,
@@ -40,17 +42,12 @@ impl From<CloseError> for RootError { fn from(error: CloseError) -> Self { Self:
 impl From<ServiceStatus> for RootError { fn from(status: ServiceStatus) -> Self { Self::Timer(status) } }
 impl From<KernelStatus> for RootError { fn from(status: KernelStatus) -> Self { Self::Kernel(status) } }
 impl From<TransportError> for RootError { fn from(error: TransportError) -> Self { Self::Transport(error) } }
+impl From<crate::service::ServiceError> for RootError { fn from(error: crate::service::ServiceError) -> Self { Self::Runtime(RuntimeError::Service(error)) } }
 impl From<XmlError> for RootError { fn from(error: XmlError) -> Self { Self::Print(error) } }
 
 /// The mode-two software stock reaches through +0x404 and the continuation slots +0x42c..+0x468.
 pub trait ProtocolApplication: ProtocolFiles {
     fn complete(&mut self, completion: ProtocolCompletion);
-}
-
-/// The DMA channel leases of the open USB session, handed over once for its teardown.
-pub trait SessionChannels {
-    /// A channel is absent when the session never transferred on it; stock opens them at 0x00d7ca10 and 0x00d7ccec.
-    fn take(&mut self) -> [Option<ChannelLease>; 2];
 }
 
 /// Task-7 and Power services stock calls directly from the cells.
@@ -232,14 +229,146 @@ where B: Backend, K: irq_control::Backend, I: StartIo, T: cpu::DelayCounter, M: 
                 self.faults.note(result);
             }
             UsbEvent::TransferReset => self.transfer_reset(),
-            UsbEvent::BusState | UsbEvent::ControlComplete | UsbEvent::ControlPacket
-            | UsbEvent::ControlTransferZero | UsbEvent::ControlTransferOne | UsbEvent::ChannelThree
-            | UsbEvent::ChannelOneComplete | UsbEvent::ChannelTwoRequest
-            | UsbEvent::ChannelTwoTransfer | UsbEvent::ChannelOneTransfer => {
-                // The callback table at 0x01469768+0x0c and the DMA transfers at 0x01469798/0x014697fc
-                // are not implemented; `pumped` exposes these events.
-            }
+            UsbEvent::BusState => self.bus_state(),
+            UsbEvent::ControlComplete => self.control_complete(),
+            UsbEvent::ControlPacket => self.control_packet(),
+            UsbEvent::ControlTransferZero => self.control_transfer(),
+            UsbEvent::ControlTransferOne => self.control_transfer(),
+            UsbEvent::ChannelThree => self.channel_three(),
+            UsbEvent::ChannelOneComplete => self.channel_one_complete(),
+            UsbEvent::ChannelTwoRequest => self.channel_two_request(),
+            UsbEvent::ChannelTwoTransfer => self.channel_two_transfer(),
+            UsbEvent::ChannelOneTransfer => self.channel_one_transfer(),
         }
+    }
+
+    /// 0x00d7d544: reads 0xfff54018.
+    fn bus_state(&mut self) {
+        let _ = self.p.start.io.read16(Register::BusState);
+    }
+
+    /// 0x00d7d5a0: a device-to-host direction sets endpoint-control bit 2. The status
+    /// phase reaches 0x00d7e970(0) for a standard request and callback slot +8 otherwise;
+    /// neither entry has owned software.
+    fn control_complete(&mut self) {
+        if self.root.usb.control_block().direction != ControlDirection::In { return; }
+        let control = self.p.start.io.start_read16(StartRegister::EndpointControl);
+        self.p.start.io.start_write16(StartRegister::EndpointControl, control | 4);
+    }
+
+    /// 0x00d7d674: the setup packet fills the control block and the mode-3 setup entry
+    /// (0x00d7ef20, `TransportState::setup`) arms a twelve-byte receive. The phase word
+    /// 0x00d7c20c writes is two for that result and zero otherwise.
+    fn control_packet(&mut self) {
+        let packet = self.root.usb.setup_packet(&mut self.p.start.io);
+        let action = self.root.runtime.service.transport_mut().setup(packet.request_type);
+        let mut block = self.root.usb.control_block();
+        block.apply_setup(packet);
+        match action {
+            SetupAction::ReceiveControl { length } => {
+                block.target_length = length;
+                block.phase = ControlPhase::Status;
+            }
+            SetupAction::Reject => block.phase = ControlPhase::Idle,
+        }
+        self.root.usb.set_control_block(block);
+    }
+
+    /// 0x00d7d848 and 0x00d7d898 through 0x00d7cf50: the received twelve bytes reach the
+    /// completed-control-data entry 0x00d7f234, `Service::control`. The entry clears the
+    /// target length and returns the block to idle.
+    fn control_transfer(&mut self) {
+        let block = self.root.usb.control_block();
+        if block.direction == ControlDirection::Out && block.target_length != 0 {
+            let frame = *self.root.usb.control_frame();
+            let tick = self.tick();
+            let result = self.root.runtime.service.control(&frame, tick).map(|_| ());
+            self.faults.note(result);
+        }
+        let control = self.p.start.io.start_read16(StartRegister::EndpointControl);
+        self.p.start.io.start_write16(StartRegister::EndpointControl, control | 4);
+        let mut block = self.root.usb.control_block();
+        block.target_length = 0;
+        block.phase = ControlPhase::Idle;
+        self.root.usb.set_control_block(block);
+    }
+
+    /// 0x00d7d8e8: callback slot 3 through 0x00d7c6c8(0,3). Mode 3 binds no word there.
+    fn channel_three(&mut self) {}
+
+    /// 0x00d7d940: the active transmit descriptor clears, callback slot 2 is requested and
+    /// shadow byte 0x1a bit 2 clears.
+    fn channel_one_complete(&mut self) {
+        let mut descriptor = self.root.usb.descriptor(Descriptor::Transmit);
+        if !descriptor.active { return; }
+        descriptor.active = false;
+        self.root.usb.set_descriptor(Descriptor::Transmit, descriptor);
+        self.root.usb.set_shadow_bit(0x1a, 2, false);
+    }
+
+    /// 0x00d7d9d0: shadow byte 0x18 bit 3 sets and callback slot 2 is requested.
+    fn channel_two_request(&mut self) {
+        self.root.usb.set_shadow_bit(0x18, 3, true);
+    }
+
+    /// 0x00d7da3c: while the controller is active, the bulk-out source entry 0x00d7ef78
+    /// (`Service::bulk_out_source`) programs the receive, completion 1 marks the receive
+    /// descriptor and endpoint-control bit 3 clears again.
+    fn channel_two_transfer(&mut self) {
+        if !self.root.usb.controller_active() { return; }
+        self.p.channels.open(&mut self.p.start.io);
+        let control = self.p.start.io.start_read16(StartRegister::EndpointControl);
+        self.p.start.io.start_write16(StartRegister::EndpointControl, control | 8);
+        let _ = self.p.start.io.read16(Register::OutData);
+        let action = self.root.runtime.service.bulk_out_source();
+        match action {
+            Ok(SourceAction::Transfer(_)) => {
+                let mut descriptor = self.root.usb.descriptor(Descriptor::Receive);
+                descriptor.active = true;
+                descriptor.state = 3;
+                self.root.usb.set_descriptor(Descriptor::Receive, descriptor);
+            }
+            Ok(SourceAction::OutSuppressed | SourceAction::InNotReady | SourceAction::EmptyReply(_)) => {}
+            Err(error) => self.faults.note(Err::<(), _>(RootError::Runtime(RuntimeError::Service(error)))),
+        }
+        let control = self.p.start.io.start_read16(StartRegister::EndpointControl);
+        self.p.start.io.start_write16(StartRegister::EndpointControl, control & !8);
+    }
+
+    /// 0x00d7db80: with the transmit descriptor inactive, the bulk-in source entry
+    /// 0x00d7efd4 (`Service::bulk_in_source`) fills one bulk-in packet and completion 2
+    /// marks the descriptor.
+    fn channel_one_transfer(&mut self) {
+        if self.root.usb.descriptor(Descriptor::Transmit).active { return; }
+        self.p.channels.open(&mut self.p.start.io);
+        let service = &mut self.root.runtime.service;
+        let io = &mut self.p.start.io;
+        let sent = match service.bulk_in_source() {
+            Ok(crate::service::BulkIn::Read(read)) => {
+                let capacity = Endpoint::BulkIn.packet_capacity(io) as usize;
+                let length = core::cmp::min(read.bytes.len(), capacity);
+                crate::transport::write_fifo(Endpoint::BulkIn, &read.bytes[..length], io);
+                Some(length)
+            }
+            Ok(crate::service::BulkIn::EmptyReply(_)) => {
+                crate::transport::write_fifo(Endpoint::BulkIn, &[], io);
+                Some(0)
+            }
+            Ok(crate::service::BulkIn::NotReady) => None,
+            Err(error) => { self.faults.note(Err::<(), _>(RootError::Runtime(RuntimeError::Service(error)))); None }
+        };
+        if sent.is_some() {
+            let mut descriptor = self.root.usb.descriptor(Descriptor::Transmit);
+            descriptor.active = true;
+            descriptor.state = 3;
+            self.root.usb.set_descriptor(Descriptor::Transmit, descriptor);
+            self.root.usb.set_shadow_bit(0x18, 2, true);
+        }
+    }
+
+    /// The shared tick cell 0x400c0800 the open request seeds the session identifier from.
+    fn tick(&self) -> crate::session::Tick {
+        crate::session::Tick(self.p.machine.load_word(scheduler::layout::GuestAddress(0x400c_0800)))
     }
 
     /// Stock 0x00d7d360's register effects; the channel stop at 0x01469768+4/+8 has no owned provider.
@@ -256,6 +385,10 @@ where B: Backend, K: irq_control::Backend, I: StartIo, T: cpu::DelayCounter, M: 
         self.faults.note(result);
         let io = &mut self.p.start.io;
         io.write16(Register::EndpointPulse, 0xfff);
+        // 0x00d7d4e0..0x00d7d500 clears shadow bits 2, 18 and 38.
+        self.root.usb.set_shadow_bit(0x18, 2, false);
+        self.root.usb.set_shadow_bit(0x1a, 2, false);
+        self.root.usb.set_shadow_bit(0x1c, 6, false);
         let bus = io.read16(Register::BusSpeed);
         let control = io.read32(Register::OutControl);
         io.write32(Register::OutControl, (control & !0x1000) | (u32::from((bus & 0x7fff) >> 14) << 12));

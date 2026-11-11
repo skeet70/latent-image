@@ -78,9 +78,12 @@ struct Device {
     closed: Vec<Channel>,
     interrupts: Vec<Channel>,
     released: Vec<cpu::DriverHandle>,
+    fail_release: bool,
+    fail_interrupt: Option<Channel>,
+    fail_close: Option<Channel>,
 }
 impl Device {
-    fn new() -> Self { Self { zero_status: 0, one_status: 0, reset: 0x80, enabled: 7, disconnect: 8, closed: Vec::new(), interrupts: Vec::new(), released: Vec::new() } }
+    fn new() -> Self { Self { zero_status: 0, one_status: 0, reset: 0x80, enabled: 7, disconnect: 8, closed: Vec::new(), interrupts: Vec::new(), released: Vec::new(), fail_release: false, fail_interrupt: None, fail_close: None } }
 }
 impl ControllerIo for Device {
     fn read32(&mut self, register: Register) -> u32 {
@@ -95,9 +98,18 @@ impl ControllerIo for Device {
     }
 }
 impl TeardownPlatform for Device {
-    fn release_interrupt(&mut self, handle: cpu::DriverHandle) -> Result<(), TransportError> { self.released.push(handle); Ok(()) }
-    fn release_channel_interrupt(&mut self, channel: Channel) -> Result<(), TransportError> { self.interrupts.push(channel); Ok(()) }
-    fn release_channel(&mut self, channel: Channel, _: cpu::DriverHandle) -> Result<(), TransportError> { self.closed.push(channel); Ok(()) }
+    fn release_interrupt(&mut self, handle: cpu::DriverHandle) -> Result<(), TransportError> {
+        self.released.push(handle);
+        if self.fail_release { Err(TransportError::ChannelBusy) } else { Ok(()) }
+    }
+    fn release_channel_interrupt(&mut self, channel: Channel) -> Result<(), TransportError> {
+        self.interrupts.push(channel);
+        if self.fail_interrupt == Some(channel) { Err(TransportError::ChannelBusy) } else { Ok(()) }
+    }
+    fn release_channel(&mut self, channel: Channel, _: cpu::DriverHandle) -> Result<(), TransportError> {
+        self.closed.push(channel);
+        if self.fail_close == Some(channel) { Err(TransportError::ChannelBusy) } else { Ok(()) }
+    }
 }
 fn teardown() -> ControllerTeardown {
     let mut zero = DmaChannel::open(Channel::Zero);
@@ -156,25 +168,57 @@ fn a_channel_that_was_never_opened_is_neither_stopped_nor_closed() {
 }
 
 #[test]
-fn cancelled_delay_cannot_advance_reset_and_late_dma_completion_has_no_callback() {
+fn a_session_with_no_channel_leaves_every_channel_phase_out() {
+    let clock = Clock::new();
+    let mut device = Device::new();
+    let mut shutdown = ControllerTeardown::new(None, [None, None], true);
+    assert_eq!(shutdown.resume(&mut device, &clock, Domain::A), Ok(TeardownProgress::Complete));
+    assert!(device.interrupts.is_empty());
+    assert!(device.closed.is_empty());
+    assert_eq!(device.reset, 0x80);
+    assert_eq!(device.enabled, 7);
+    assert_eq!(clock.now.get(), 0);
+}
+
+#[test]
+fn a_missing_first_channel_skips_only_its_own_phases() {
+    let clock = Clock::new();
+    let mut device = Device::new();
+    let mut one = DmaChannel::open(Channel::One);
+    one.state = ChannelState::Armed;
+    let mut shutdown = ControllerTeardown::new(None, [
+        None,
+        Some(ChannelLease::new(one, cpu::DriverHandle::from_raw(2).unwrap())),
+    ], true);
+    assert_eq!(shutdown.resume(&mut device, &clock, Domain::A), Ok(TeardownProgress::Complete));
+    assert_eq!(device.interrupts, [Channel::One]);
+    assert_eq!(device.closed, [Channel::One]);
+    assert_eq!(device.reset, 0x80);
+    assert_eq!(clock.now.get(), 0);
+}
+
+#[test]
+fn a_cancelled_delay_is_recorded_and_the_reset_still_runs() {
     let clock = Clock::new();
     clock.interrupted.set(true);
     let mut device = Device::new();
     let mut shutdown = teardown();
     assert_eq!(shutdown.resume(&mut device, &clock, Domain::A), Err(TransportError::Scheduler(ServiceStatus(-49))));
-    assert_eq!(device.reset, 0x81);
-    assert_eq!(device.enabled, 7);
+    assert_eq!(device.reset, 0x80);
+    assert_eq!(device.enabled, 0);
+    assert_eq!(device.disconnect, 10);
     assert_eq!(clock.now.get(), 0);
+    assert_eq!(device.closed, [Channel::Zero, Channel::One]);
     assert_eq!(shutdown.completion_interrupt(Channel::Zero, &mut device), None);
     assert_eq!(shutdown.completion_interrupt(Channel::One, &mut device), None);
     clock.interrupted.set(false);
-    assert_eq!(shutdown.resume(&mut device, &clock, Domain::A), Ok(TeardownProgress::Complete));
-    assert_eq!(clock.now.get(), 200);
+    assert_eq!(shutdown.resume(&mut device, &clock, Domain::A), Err(TransportError::Scheduler(ServiceStatus(-49))));
+    assert_eq!(clock.now.get(), 0);
     assert_eq!(device.closed.len(), 2);
 }
 
 #[test]
-fn second_delay_cancellation_keeps_reset_deasserted_until_owned_completion() {
+fn a_second_cancelled_delay_is_recorded_after_the_first_completes() {
     let clock = Clock::new();
     clock.cancel_after.set(Some(100));
     let mut device = Device::new();
@@ -182,12 +226,12 @@ fn second_delay_cancellation_keeps_reset_deasserted_until_owned_completion() {
     assert_eq!(shutdown.resume(&mut device, &clock, Domain::A), Err(TransportError::Scheduler(ServiceStatus(-49))));
     assert_eq!(clock.now.get(), 100);
     assert_eq!(device.reset, 0x80);
-    assert_eq!(device.enabled, 7);
-    clock.cancel_after.set(None);
-    assert_eq!(shutdown.resume(&mut device, &clock, Domain::A), Ok(TeardownProgress::Complete));
-    assert_eq!(clock.now.get(), 200);
     assert_eq!(device.enabled, 0);
-    assert_eq!(device.closed.len(), 2);
+    assert_eq!(device.disconnect, 10);
+    assert_eq!(device.closed, [Channel::Zero, Channel::One]);
+    clock.cancel_after.set(None);
+    assert_eq!(shutdown.resume(&mut device, &clock, Domain::A), Err(TransportError::Scheduler(ServiceStatus(-49))));
+    assert_eq!(clock.now.get(), 100);
 }
 
 #[test]
@@ -206,16 +250,35 @@ fn timer_cancellation_preserves_registry_status_and_clears_handle_even_on_error(
 }
 
 #[test]
-fn invalid_scheduler_context_does_not_complete_either_reset_delay() {
+fn an_invalid_scheduler_context_is_recorded_and_the_reset_still_runs() {
     let clock = Clock::new();
     clock.store_word(Domain::A.words().dispatch_enabled, 0);
     let mut device = Device::new();
     let mut shutdown = teardown();
     assert_eq!(shutdown.resume(&mut device, &clock, Domain::A), Err(TransportError::Scheduler(ServiceStatus(-25))));
-    assert_eq!(device.reset, 0x81);
-    assert_eq!(device.enabled, 7);
+    assert_eq!(device.reset, 0x80);
+    assert_eq!(device.enabled, 0);
+    assert_eq!(device.disconnect, 10);
     assert_eq!(clock.now.get(), 0);
     clock.store_word(Domain::A.words().dispatch_enabled, 1);
-    assert_eq!(shutdown.resume(&mut device, &clock, Domain::A), Ok(TeardownProgress::Complete));
+    assert_eq!(shutdown.resume(&mut device, &clock, Domain::A), Err(TransportError::Scheduler(ServiceStatus(-25))));
+    assert_eq!(clock.now.get(), 0);
+}
+
+#[test]
+fn a_failed_release_keeps_advancing_the_teardown() {
+    let clock = Clock::new();
+    let mut device = Device::new();
+    device.fail_release = true;
+    device.fail_interrupt = Some(Channel::Zero);
+    device.fail_close = Some(Channel::Zero);
+    let mut shutdown = teardown();
+    assert_eq!(shutdown.resume(&mut device, &clock, Domain::A), Err(TransportError::ChannelBusy));
+    assert_eq!(device.released.len(), 1);
+    assert_eq!(device.interrupts, [Channel::Zero, Channel::One]);
+    assert_eq!(device.closed, [Channel::Zero, Channel::One]);
+    assert_eq!(device.reset, 0x80);
+    assert_eq!(device.enabled, 0);
+    assert_eq!(device.disconnect, 10);
     assert_eq!(clock.now.get(), 200);
 }

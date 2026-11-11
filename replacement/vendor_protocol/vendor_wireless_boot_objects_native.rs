@@ -5,9 +5,9 @@ use xm1_power_services::callback_registry::{CallbackFn, KernelSlot};
 
 extern "C" {
     fn xm1_power_current_task() -> u32;
-    fn xm1_power_interrupt_lock() -> u32;
-    fn xm1_power_interrupt_unlock(saved: u32);
     fn xm1_rtos_own_first_slot_1618() -> u32;
+    fn xm1_rtos_own_first_slot_164() -> u32;
+    fn xm1_rtos_own_first_slot_168(saved: u32) -> u32;
 }
 
 pub struct NativeObjectKernel { _exclusive: () }
@@ -43,8 +43,8 @@ impl ObjectKernel for NativeObjectKernel {
     fn set_cursor(&mut self, kind: Cursor, value: i32) { Self::store(Self::cursor_address(kind), value as u32); }
     fn semaphore_class(&self, slot: u16) -> u32 { Self::load(0x0093_e6f4 + (u32::from(slot) - 1) * 4) }
     fn set_semaphore_class(&mut self, slot: u16, class: u32) { Self::store(0x0093_e6f4 + (u32::from(slot) - 1) * 4, class); }
-    fn mask_interrupts(&mut self) -> u32 { unsafe { xm1_power_interrupt_lock() } }
-    fn restore_interrupts(&mut self, saved: u32) { unsafe { xm1_power_interrupt_unlock(saved) }; }
+    fn mask_interrupts(&mut self) -> u32 { unsafe { xm1_rtos_own_first_slot_164() } }
+    fn restore_interrupts(&mut self, saved: u32) { unsafe { let _ = xm1_rtos_own_first_slot_168(saved); } }
     fn create_semaphore(&mut self, id: KernelId, record: SemaphoreRecord) -> ObjectStatus {
         // The record pointer travels as one word.
         let call = Self::entry::<unsafe extern "C" fn(u32, *const u32) -> i32>(Self::root(), 0x64);

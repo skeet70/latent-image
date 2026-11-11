@@ -8,7 +8,9 @@ use crate::pictbridge_runtime::{DpsObject, Phase};
 use crate::ptp_application::{open_session, DeviceProperties};
 use crate::ptp_types::{PtpCommand, PtpOperationCode, PtpPropertyCode, PtpTransactionId};
 use crate::service::ServiceBuffers;
+use crate::session::{ReplySource, SessionId};
 use crate::transport::{Channel, ChannelLease, ControllerIo, PublishedAperture, ReceiveProgramming, Register};
+use crate::transport_pump::{ControlKind, TransferDescriptor};
 use crate::transport_start_cpu::{ClockLevel, StartRegister, UsbMemory, USB_MEMORY_BYTES};
 use irq_control::layout::GuestAddress as IrqAddress;
 use irq_control::{Bank, Handler, SavedInterrupts, Table};
@@ -47,12 +49,13 @@ impl irq_control::Backend for Interrupts {
 }
 
 #[derive(Default)]
-struct Device { words: BTreeMap<u32, u32>, link: bool, clock: Vec<ClockLevel>, interrupt_resets: u32 }
+struct Device { words: BTreeMap<u32, u32>, link: bool, clock: Vec<ClockLevel>, interrupt_resets: u32, fifo: Vec<(Register, u32)> }
 impl ControllerIo for Device {
     fn read32(&mut self, register: Register) -> u32 { *self.words.get(&register.address()).unwrap_or(&0) }
     fn read16(&mut self, register: Register) -> u16 { self.read32(register) as u16 }
     fn write32(&mut self, register: Register, value: u32) {
         if register == Register::InterruptReset { self.interrupt_resets += 1; }
+        if matches!(register, Register::Fifo(_)) { self.fifo.push((register, value)); }
         self.words.insert(register.address(), value);
     }
     fn write16(&mut self, register: Register, value: u16) { self.words.insert(register.address(), u32::from(value)); }
@@ -217,14 +220,15 @@ fn tables() -> CallbackTables {
     }
 }
 
-struct Channels { taken: u32, opened: [bool; 2] }
-impl Default for Channels { fn default() -> Self { Self { taken: 0, opened: [true, true] } } }
+struct Channels { taken: u32, opened: [bool; 2], opens: u32 }
+impl Default for Channels { fn default() -> Self { Self { taken: 0, opened: [true, true], opens: 0 } } }
 impl SessionChannels for Channels {
     fn take(&mut self) -> [Option<ChannelLease>; 2] {
         self.taken += 1;
         let [zero, one] = leases();
         [self.opened[0].then_some(zero), self.opened[1].then_some(one)]
     }
+    fn open(&mut self, _: &mut impl ControllerIo) { self.opens += 1; }
 }
 
 fn leases() -> [ChannelLease; 2] {
@@ -782,5 +786,163 @@ fn pump_transfer_reset_reinitializes_the_endpoint_registers() {
         assert_eq!(bench.start.io.read16(Register::EndpointPulse), 0xfff);
         assert_eq!(bench.start.io.read32(Register::OutControl), 0x3000);
         assert_eq!(root.runtime.controller.state(), ControllerState::ActiveVendor);
+    });
+}
+
+fn vendor_setup(root: &mut ControllerRoot<'_, Idle>, bench: &mut Bench<'_, '_>) {
+    root.usb.set_event_mask([0, 0, 0]);
+    bench.start.io.write32(Register::SetupPacket, u32::from_le_bytes([0x40, 0x01, 0x34, 0x12]));
+    bench.start.io.write32(Register::SetupPacketHigh, u32::from_le_bytes([0x78, 0x56, 0x0c, 0x00]));
+    set_pending(bench, 13);
+    bench.post(Queue36Event::TransportStatus, &[]);
+    drive(root, bench);
+    clear_pending(bench);
+}
+
+fn control_frame(root: &mut ControllerRoot<'_, Idle>, bench: &mut Bench<'_, '_>, frame: [u8; 12]) {
+    root.usb.set_control_frame(frame);
+    set_pending(bench, 0);
+    bench.post(Queue36Event::TransportStatus, &[]);
+    drive(root, bench);
+    clear_pending(bench);
+}
+
+#[test]
+fn a_vendor_setup_packet_fills_the_control_block_and_arms_the_twelve_byte_receive() {
+    with_bench(|root, bench| {
+        activate(root, bench, 3);
+        vendor_setup(root, bench);
+        let block = root.usb.control_block();
+        assert_eq!(block.request_type, 0x40);
+        assert_eq!(block.request, 0x01);
+        assert_eq!(block.value, 0x1234);
+        assert_eq!(block.index, 0x5678);
+        assert_eq!(block.length, 12);
+        assert_eq!(block.kind, ControlKind::Vendor);
+        assert_eq!(block.direction, ControlDirection::Out);
+        assert_eq!(block.phase, ControlPhase::Status);
+        assert_eq!(block.target_length, 12);
+    });
+}
+
+#[test]
+fn a_control_transfer_delivers_the_frame_to_the_session() {
+    with_bench(|root, bench| {
+        activate(root, bench, 3);
+        vendor_setup(root, bench);
+        control_frame(root, bench, [0xc0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0]);
+        let session = root.runtime.service.session();
+        assert!(session.active());
+        assert_eq!(session.id().map(SessionId::get), Some(1));
+        assert_eq!(session.available_length(), 8);
+        assert_eq!(session.reply_source(), ReplySource::Control);
+        assert_eq!(root.usb.control_block().phase, ControlPhase::Idle);
+        assert_eq!(root.usb.control_block().target_length, 0);
+        assert!(root.take_fault().is_none());
+    });
+}
+
+#[test]
+fn a_standard_setup_packet_leaves_the_session_inactive() {
+    with_bench(|root, bench| {
+        activate(root, bench, 3);
+        root.usb.set_event_mask([0, 0, 0]);
+        bench.start.io.write32(Register::SetupPacket, u32::from_le_bytes([0x00, 0x09, 0x00, 0x00]));
+        bench.start.io.write32(Register::SetupPacketHigh, u32::from_le_bytes([0x00, 0x00, 0x00, 0x00]));
+        set_pending(bench, 13);
+        bench.post(Queue36Event::TransportStatus, &[]);
+        drive(root, bench);
+        clear_pending(bench);
+        let block = root.usb.control_block();
+        assert_eq!(block.kind, ControlKind::Standard);
+        assert_eq!(block.direction, ControlDirection::None);
+        assert_eq!(block.phase, ControlPhase::Idle);
+        assert_eq!(block.target_length, 0);
+        assert!(!root.runtime.service.session().active());
+    });
+}
+
+#[test]
+fn the_bulk_in_transfer_event_writes_one_packet_of_the_reply() {
+    with_bench(|root, bench| {
+        activate(root, bench, 3);
+        vendor_setup(root, bench);
+        control_frame(root, bench, [0xc0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0]);
+        set_pending(bench, 18);
+        bench.post(Queue36Event::TransportStatus, &[]);
+        drive(root, bench);
+        assert_eq!(bench.start.io.fifo, [
+            (Register::Fifo(Endpoint::BulkIn), 1),
+            (Register::Fifo(Endpoint::BulkIn), 0x0001_0000),
+        ]);
+        assert!(!root.runtime.service.session().armed());
+        assert_eq!(bench.channels.opens, 1);
+        assert_eq!(root.usb.descriptor(Descriptor::Transmit), TransferDescriptor { state: 3, active: true });
+        assert_eq!(root.usb.shadow_byte(0x18) & 4, 4);
+        assert!(root.take_fault().is_none());
+    });
+}
+
+#[test]
+fn the_bulk_out_transfer_event_marks_the_receive_descriptor() {
+    with_bench(|root, bench| {
+        activate(root, bench, 3);
+        vendor_setup(root, bench);
+        control_frame(root, bench, [0xc0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0]);
+        vendor_setup(root, bench);
+        control_frame(root, bench, [0xd0, 0, 0, 0, 0, 0, 0, 0, 0, 32, 0, 1]);
+        assert!(root.usb.controller_active());
+        assert!(matches!(root.runtime.service.transport_mut().bulk_out_source(), Ok(SourceAction::Transfer(_))));
+        set_pending(bench, 2);
+        bench.post(Queue36Event::TransportStatus, &[]);
+        drive(root, bench);
+        assert_eq!(root.usb.descriptor(Descriptor::Receive), TransferDescriptor { state: 3, active: true });
+        assert_eq!(bench.start.io.start_read16(StartRegister::EndpointControl) & 8, 0);
+        assert!(root.take_fault().is_none());
+    });
+}
+
+#[test]
+fn channel_one_complete_and_channel_two_request_move_the_shadow_bits() {
+    with_bench(|root, bench| {
+        activate(root, bench, 3);
+        root.usb.set_event_mask([0, 0, 0]);
+        root.usb.set_descriptor(Descriptor::Transmit, TransferDescriptor { state: 3, active: true });
+        root.usb.set_shadow_bit(0x1a, 2, true);
+        set_pending(bench, 38);
+        bench.post(Queue36Event::TransportStatus, &[]);
+        drive(root, bench);
+        assert_eq!(root.usb.descriptor(Descriptor::Transmit), TransferDescriptor { state: 3, active: false });
+        assert_eq!(root.usb.shadow_byte(0x1a) & 4, 0);
+        clear_pending(bench);
+        set_pending(bench, 3);
+        bench.post(Queue36Event::TransportStatus, &[]);
+        drive(root, bench);
+        assert_eq!(root.usb.shadow_byte(0x18) & 8, 8);
+    });
+}
+
+#[test]
+fn one_pump_pass_applies_a_control_packet_transfer_and_bulk_in_sequence() {
+    with_bench(|root, bench| {
+        activate(root, bench, 3);
+        root.usb.set_event_mask([0, 0, 0]);
+        root.usb.set_control_frame([0xc0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0]);
+        bench.start.io.write32(Register::SetupPacket, u32::from_le_bytes([0x40, 0x01, 0x34, 0x12]));
+        bench.start.io.write32(Register::SetupPacketHigh, u32::from_le_bytes([0x78, 0x56, 0x0c, 0x00]));
+        set_pending(bench, 13);
+        set_pending(bench, 0);
+        set_pending(bench, 18);
+        bench.post(Queue36Event::TransportStatus, &[]);
+        drive(root, bench);
+        assert_eq!(root.pumped().events().collect::<Vec<_>>(), [
+            UsbEvent::ControlPacket, UsbEvent::ControlTransferZero, UsbEvent::ChannelOneTransfer,
+        ]);
+        assert!(root.runtime.service.session().active());
+        assert_eq!(bench.start.io.fifo, [
+            (Register::Fifo(Endpoint::BulkIn), 1),
+            (Register::Fifo(Endpoint::BulkIn), 0x0001_0000),
+        ]);
+        assert!(root.take_fault().is_none());
     });
 }

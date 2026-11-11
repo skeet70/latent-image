@@ -350,6 +350,7 @@ pub enum Register {
     ChannelControl(Channel), ChannelInitialize(Channel), ChannelFlags(Channel), ChannelReset(Channel),
     ChannelAddress(Channel), ChannelLength(Channel),
     ChannelStatus(Channel), ResetPulse, ControllerEnable, ControllerDisconnect,
+    BusState, SetupPacket, SetupPacketHigh, ReceivedLength, OutData, InStatus,
 }
 impl Register {
     pub const fn address(self) -> u32 {
@@ -375,6 +376,12 @@ impl Register {
             Self::ResetPulse => 0xfff552fc,
             Self::ControllerEnable => 0xfff54090,
             Self::ControllerDisconnect => 0xfff54008,
+            Self::BusState => 0xfff54018,
+            Self::SetupPacket => 0xfff55188,
+            Self::SetupPacketHigh => 0xfff5518c,
+            Self::ReceivedLength => 0xfff54184,
+            Self::OutData => 0xfff54194,
+            Self::InStatus => 0xfff541f4,
         }
     }
 }
@@ -546,6 +553,37 @@ impl ChannelLease {
     pub fn new(dma: DmaChannel, handle: cpu::DriverHandle) -> Self { Self { dma, handle } }
 }
 
+/// The DMA channel leases of one session. Stock opens channel zero then one at the first
+/// transfer (0x00d7ca10/24 and 0x00d7ccec/d00); teardown takes each opened lease once.
+pub trait SessionChannels {
+    fn take(&mut self) -> [Option<ChannelLease>; 2];
+    fn open(&mut self, _io: &mut impl ControllerIo) {}
+}
+
+pub struct SessionChannelSet<'a> {
+    handles: cpu::HandleTable<'a>,
+    sequence: cpu::HandleSequence,
+    leases: [Option<ChannelLease>; 2],
+}
+impl<'a> SessionChannelSet<'a> {
+    pub fn new(entries: &'a mut [Option<cpu::DriverHandle>], sequence: cpu::HandleSequence) -> Self {
+        Self { handles: cpu::HandleTable::new(entries), sequence, leases: [None, None] }
+    }
+    pub const fn opened(&self) -> [bool; 2] { [self.leases[0].is_some(), self.leases[1].is_some()] }
+}
+impl SessionChannels for SessionChannelSet<'_> {
+    fn take(&mut self) -> [Option<ChannelLease>; 2] { core::mem::replace(&mut self.leases, [None, None]) }
+    fn open(&mut self, io: &mut impl ControllerIo) {
+        for (index, channel) in [Channel::Zero, Channel::One].into_iter().enumerate() {
+            if self.leases[index].is_some() { continue; }
+            match cpu::open_channel(channel, &mut self.handles, &mut self.sequence, io) {
+                Ok((dma, handle)) => self.leases[index] = Some(ChannelLease::new(dma, handle)),
+                Err(_) => break,
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TeardownPhase {
     Interrupt, StopZero, InterruptZero, StopOne, InterruptOne,
@@ -560,11 +598,16 @@ pub struct ControllerTeardown {
     channels: [Option<ChannelLease>; 2],
     reset_already_complete: bool,
     phase: TeardownPhase,
+    first_error: Option<TransportError>,
 }
 impl ControllerTeardown {
     /// A channel is absent until its transfer opened it; stock 0x00d7c0f4 and 0x00d7bf24 return on a failed lookup.
     pub fn new(controller_irq: Option<cpu::DriverHandle>, channels: [Option<ChannelLease>; 2], reset_already_complete: bool) -> Self {
-        Self { controller_irq, channels, reset_already_complete, phase: TeardownPhase::Interrupt }
+        Self { controller_irq, channels, reset_already_complete, phase: TeardownPhase::Interrupt, first_error: None }
+    }
+
+    fn note(&mut self, result: Result<(), TransportError>) {
+        if let Err(error) = result { if self.first_error.is_none() { self.first_error = Some(error); } }
     }
 
     pub fn completion_interrupt(&mut self, channel: Channel, io: &mut impl ControllerIo) -> Option<ChannelCallback> {
@@ -600,45 +643,66 @@ impl ControllerTeardown {
             self.phase = match self.phase {
                 TeardownPhase::Interrupt => {
                     if let Some(handle) = self.controller_irq {
-                        io.release_interrupt(handle)?;
+                        let result = io.release_interrupt(handle);
                         self.controller_irq = None;
+                        self.note(result);
                     }
                     TeardownPhase::StopZero
                 }
                 TeardownPhase::StopZero | TeardownPhase::StopOne => {
                     let index = if self.phase == TeardownPhase::StopZero { 0 } else { 1 };
+                    let mut result = Ok(());
+                    let mut pending = false;
                     match self.channels[index].as_mut() {
-                        None => if index == 0 { TeardownPhase::InterruptZero } else { TeardownPhase::InterruptOne },
+                        None => {}
                         Some(lease) => {
                             let dma = &mut lease.dma;
-                            if dma.state == ChannelState::Armed { dma.begin_stop(io)?; }
-                            if dma.state == ChannelState::Stopping && dma.poll_stop(io)? == StopProgress::Pending {
-                                return Ok(TeardownProgress::Pending);
+                            if dma.state == ChannelState::Armed { result = dma.begin_stop(io); }
+                            if dma.state == ChannelState::Stopping {
+                                match dma.poll_stop(io) {
+                                    Ok(StopProgress::Pending) => pending = true,
+                                    Ok(StopProgress::Stopped) => {}
+                                    Err(error) => result = Err(error),
+                                }
                             }
-                            if index == 0 { TeardownPhase::InterruptZero } else { TeardownPhase::InterruptOne }
                         }
                     }
+                    self.note(result);
+                    if pending { return Ok(TeardownProgress::Pending); }
+                    if index == 0 { TeardownPhase::InterruptZero } else { TeardownPhase::InterruptOne }
                 }
                 TeardownPhase::InterruptZero => {
-                    if let Some(lease) = self.channels[0].as_mut() { io.release_channel_interrupt(lease.dma.channel)?; }
+                    let result = match self.channels[0].as_mut() {
+                        Some(lease) => io.release_channel_interrupt(lease.dma.channel),
+                        None => Ok(()),
+                    };
+                    self.note(result);
                     TeardownPhase::StopOne
                 }
                 TeardownPhase::InterruptOne => {
-                    if let Some(lease) = self.channels[1].as_mut() { io.release_channel_interrupt(lease.dma.channel)?; }
+                    let result = match self.channels[1].as_mut() {
+                        Some(lease) => io.release_channel_interrupt(lease.dma.channel),
+                        None => Ok(()),
+                    };
+                    self.note(result);
                     TeardownPhase::CloseZero
                 }
                 TeardownPhase::CloseZero => {
+                    let mut result = Ok(());
                     if let Some(lease) = self.channels[0].as_mut() {
-                        io.release_channel(lease.dma.channel, lease.handle)?;
-                        lease.dma.state = ChannelState::Closed;
+                        result = io.release_channel(lease.dma.channel, lease.handle);
+                        if result.is_ok() { lease.dma.state = ChannelState::Closed; }
                     }
+                    self.note(result);
                     TeardownPhase::CloseOne
                 }
                 TeardownPhase::CloseOne => {
+                    let mut result = Ok(());
                     if let Some(lease) = self.channels[1].as_mut() {
-                        io.release_channel(lease.dma.channel, lease.handle)?;
-                        lease.dma.state = ChannelState::Closed;
+                        result = io.release_channel(lease.dma.channel, lease.handle);
+                        if result.is_ok() { lease.dma.state = ChannelState::Closed; }
                     }
+                    self.note(result);
                     if self.reset_already_complete { TeardownPhase::Complete } else { TeardownPhase::AssertReset }
                 }
                 TeardownPhase::AssertReset => {
@@ -648,21 +712,26 @@ impl ControllerTeardown {
                 }
                 TeardownPhase::DelayAsserted => {
                     let status = ServiceStatus(scheduler::delay(machine, domain, scheduler::Ticks(100)));
-                    if status.0 != 0 { return Err(TransportError::Scheduler(status)); }
+                    if status.0 != 0 { self.note(Err(TransportError::Scheduler(status))); }
                     let reset = io.read16(Register::ResetPulse);
                     io.write16(Register::ResetPulse, reset & !1);
                     TeardownPhase::DelayReleased
                 }
                 TeardownPhase::DelayReleased => {
                     let status = ServiceStatus(scheduler::delay(machine, domain, scheduler::Ticks(100)));
-                    if status.0 != 0 { return Err(TransportError::Scheduler(status)); }
+                    if status.0 != 0 { self.note(Err(TransportError::Scheduler(status))); }
                     io.write16(Register::ControllerEnable, 0);
                     let disconnect = io.read16(Register::ControllerDisconnect);
                     io.write16(Register::ControllerDisconnect, disconnect | 2);
                     self.reset_already_complete = true;
                     TeardownPhase::Complete
                 }
-                TeardownPhase::Complete => return Ok(TeardownProgress::Complete),
+                TeardownPhase::Complete => {
+                    return match self.first_error {
+                        Some(error) => Err(error),
+                        None => Ok(TeardownProgress::Complete),
+                    };
+                }
             };
         }
     }

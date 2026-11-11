@@ -232,40 +232,43 @@ fn each_session_poll_reopens_its_coalesced_producer_and_a_restart_forgets_the_co
 
 const STOCK_TABLE: &str = include_str!("controller_runtime_table.fixture");
 
-struct StockCell { event: Queue36Event, state: ControllerState, handler: u32, next: Option<ControllerState> }
+struct StockCell { event: Queue36Event, state: ControllerState, tag: u8, handler: u32, next: u32 }
 
 fn stock_cells() -> Vec<StockCell> {
     let mut cells = Vec::new();
+    let mut index = 0;
     for line in STOCK_TABLE.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') { continue; }
-        let fields: Vec<&str> = line.split_whitespace().collect();
-        let [event, state, _tag, handler, next] = fields[..] else { panic!("malformed cell {line}") };
+        let bytes: Vec<u8> = line.split_whitespace().map(|byte| u8::from_str_radix(byte, 16).unwrap()).collect();
+        assert_eq!(bytes.len(), 12, "malformed row {line}");
+        let word = |at: usize| u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
         cells.push(StockCell {
-            event: Queue36Event::ALL[event.parse::<usize>().unwrap()],
-            state: ControllerState::parse(state.parse().unwrap()).unwrap(),
-            handler: u32::from_str_radix(handler, 16).unwrap(),
-            next: ControllerState::parse(u32::from_str_radix(next, 16).unwrap()).ok(),
+            event: Queue36Event::ALL[index / 12],
+            state: ControllerState::parse((index % 12) as u32).unwrap(),
+            tag: bytes[0],
+            handler: word(4),
+            next: word(8),
         });
+        index += 1;
     }
     cells
 }
 
 #[test]
-fn every_stock_cell_matches_the_operation_class_and_next_phase() {
+fn every_stock_cell_matches_the_operation_class_tag_handler_and_next_phase() {
     let cells = stock_cells();
     assert_eq!(cells.len(), Queue36Event::ALL.len() * 12);
-    for event in Queue36Event::ALL {
-        for phase in 0..12u32 {
-            let state = ControllerState::parse(phase).unwrap();
-            assert_eq!(cells.iter().filter(|cell| cell.event == event && cell.state == state).count(), 1);
-        }
-    }
+    let mut handlers = std::collections::BTreeSet::new();
     for cell in &cells {
         let cell_name = format!("{:?}/{:?}", cell.event, cell.state);
-        let operation = operation(cell.event, cell.state);
-        assert_eq!(operation == ControllerOperation::Ignore, cell.handler == 0, "{cell_name}");
-        assert_eq!(table_next_state(cell.event, cell.state), cell.next, "{cell_name}");
+        assert!(matches!(cell.tag, 0 | 3), "{cell_name}: tag {}", cell.tag);
+        assert_eq!(cell.tag == 0, cell.handler == 0, "{cell_name}");
+        assert_eq!(cell.tag == 3, cell.handler != 0, "{cell_name}");
+        assert_eq!(cell.handler & 3, 0, "{cell_name}");
+        assert_eq!(operation(cell.event, cell.state) == ControllerOperation::Ignore, cell.handler == 0, "{cell_name}");
+        assert_eq!(table_next_state(cell.event, cell.state), ControllerState::parse(cell.next).ok(), "{cell_name}");
+        if cell.handler != 0 { assert!(handlers.insert(cell.handler), "duplicate handler {:08x}", cell.handler); }
     }
-    assert_eq!(cells.iter().filter(|cell| cell.handler != 0).count(), 119);
+    assert_eq!(handlers.len(), 119);
 }

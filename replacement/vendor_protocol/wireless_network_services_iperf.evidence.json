@@ -96,12 +96,12 @@
     "root_module": "crate::vendor_wireless_network",
     "canonical_engine": "lan::LanRuntime",
     "required_modules": ["lan", "transport", "packet", "dhcp", "state", "multicast"],
-    "tcp": ["open_tcp", "open_tcp_unbound", "listen_tcp_handle", "connect_tcp_handle", "configure_tcp", "accept_tcp", "tcp_status", "send_tcp", "receive_tcp", "close_tcp", "cancel_tcp"],
+    "tcp": ["open_tcp", "open_tcp_unbound", "listen_tcp_handle", "connect_tcp_handle", "configure_tcp", "accept_tcp", "tcp_status", "send_tcp", "receive_tcp", "close_tcp", "release_tcp", "cancel_tcp"],
     "udp": ["open_udp", "open_udp_ephemeral", "join_udp_multicast", "set_udp_traffic_class", "send_udp", "receive_udp_with_mode(UdpReceiveMode::Truncate)", "close_udp"],
     "parent_pump": "Parent owns LAN receive/poll and radio frame transport. IperfPoll::Frame contains an already encoded canonical Ethernet frame in the supplied output buffer. Parent passes asynchronous canonical LAN/radio failure to network_failed(lan,error), preserving route timeout without a second ARP retry engine.",
     "buffer": "Caller lends payload storage for the runtime lifetime. Default operation requires8192 bytes, maximum parsed block requires1048576; tradeoff requires at least1470. No runtime allocation or duplicate packet/socket stack.",
     "resource_failure": "Canonical bounded socket/packet/window capacity failures remain typed failures. Socket option failures are retained separately while connection setup continues, matching the target's non-aborting option path.",
-    "retirement": "TCP graceful completion waits for Closed before releasing. Cancellation delegates real RST/handle retirement to canonical transport poll. UDP close delegates membership and port retirement to canonical LAN."
+    "retirement": "TCP graceful completion stops at TimeWait or Closed; release detaches the handle and the slot frees at the 120,000-tick expiry. Cancellation delegates real RST/handle retirement to canonical transport poll. UDP close delegates membership and port retirement to canonical LAN."
   },
   "public_api": {
     "construct": "IperfRuntime::new(payload_buffer: &mut [u8])",
