@@ -824,7 +824,7 @@ receiptInputsMatch :: Either String Value -> Bool
 receiptInputsMatch (Right value) =
   let inputs = get (get value "emulator_start") "inputs"
       parsed field = parseSha256Hex (str (get inputs field))
-  in num (get inputs "schema") == 2
+  in num (get inputs "schema") == 3
      && parsed "run_document" == Right expectedRunDocument
      && parsed "installed_dat" == Right expectedFirmware
      && parsed "adjustment_nand" == Right expectedAdjustment
