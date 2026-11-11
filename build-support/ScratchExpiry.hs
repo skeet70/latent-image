@@ -417,7 +417,7 @@ keepListAt root ref = do
       content <- gitShow root ref keepListPath
       case decodeUtf8' content of
         Left _ -> failWith ("invalid UTF-8 in " ++ keepListPath ++ " at " ++ ref)
-        Right text -> pure (forceSet (Set.fromList (mapMaybe keepListEntry (T.lines text))))
+        Right text -> pure $! forceSet (Set.fromList (mapMaybe keepListEntry (T.lines text)))
 
 keepListEntry :: Text -> Maybe RelativePath
 keepListEntry line =
@@ -447,7 +447,7 @@ citationsAt :: FilePath -> String -> IO (Set.Set RelativePath)
 citationsAt root ref = do
   (status, output, errors) <- gitBytes root ["grep", "-h", "-o", "-I", "-E", "-e", citationPattern, ref]
   case status of
-    ExitSuccess -> pure (forceSet (foldl' add Set.empty (BC.lines output)))
+    ExitSuccess -> pure $! forceSet (foldl' add Set.empty (BC.lines output))
     ExitFailure 1 -> pure Set.empty
     _ -> failWith ("git grep: " ++ firstLine errors)
  where
@@ -461,7 +461,7 @@ strongCitationsAt root ref = do
     then pure Set.empty
     else do
       content <- gitShow root ref evidencePath
-      pure (strongCitations content)
+      pure $! strongCitations content
 
 strongCitations :: B.ByteString -> Set.Set RelativePath
 strongCitations content = forceSet (foldl' add Set.empty (BC.lines content))
@@ -490,7 +490,7 @@ addedCitations :: FilePath -> String -> BranchInfo -> IO (Set.Set RelativePath)
 addedCitations root base branch = do
   (status, output, errors) <- gitBytes root ["diff", "--unified=0", "--no-color", base, branchRefName branch]
   case status of
-    ExitSuccess -> pure (forceSet (foldl' add Set.empty (B.split 10 output)))
+    ExitSuccess -> pure $! forceSet (foldl' add Set.empty (B.split 10 output))
     _ -> failWith ("git diff: " ++ firstLine errors)
  where
   add found line
@@ -501,7 +501,7 @@ addedStrongCitations :: FilePath -> String -> BranchInfo -> IO (Set.Set Relative
 addedStrongCitations root base branch = do
   (status, output, errors) <- gitBytes root ["diff", "--unified=0", "--no-color", base, branchRefName branch, "--", evidencePath]
   case status of
-    ExitSuccess -> pure (forceSet (foldl' add Set.empty (B.split 10 output)))
+    ExitSuccess -> pure $! forceSet (foldl' add Set.empty (B.split 10 output))
     _ -> failWith ("git diff: " ++ firstLine errors)
  where
   add found line
@@ -775,7 +775,7 @@ rewriteUnjudged sweep runDirectory =
   ((do
     content <- B.readFile (runDirectory </> "run.json")
     case eitherDecodeStrict' content of
-      Right (Object object') -> do
+      Right (Object object') | KM.lookup "outcome" object' == Just (String "open") -> do
         let closedAt = T.pack (formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" (posixSecondsToUTCTime (sweepNow sweep)))
             updated = Object (KM.insert "closed_at" (String closedAt) (KM.insert "outcome" (String "unjudged") object'))
         writeJsonAtomically runDirectory updated

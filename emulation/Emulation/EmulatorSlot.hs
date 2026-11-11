@@ -207,7 +207,7 @@ openSlotRun = do
               { Run.openTask = task
               , Run.openLabel = label
               , Run.openOpener = Run.Slot
-              , Run.openCommand = program : arguments
+              , Run.openCommand = programName : arguments
               , Run.openWorkBudget = budget
               }
           case opened of

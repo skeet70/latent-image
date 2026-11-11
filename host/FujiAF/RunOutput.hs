@@ -320,9 +320,15 @@ markAbandoned task = do
         state <- probeLock (directory </> "lock")
         case state of
           LockBusy -> releaseLock state
-          _ -> do
-            now <- getCurrentTime
-            writeRunJson directory (markUnjudged object' (utcIso now)) `finally` releaseLock state
+          _ ->
+            ( do
+                now <- getCurrentTime
+                current <- readRunJson directory
+                case current of
+                  Just fresh | objectText fresh "outcome" == Just "open" -> writeRunJson directory (markUnjudged fresh (utcIso now))
+                  _ -> pure ()
+            )
+              `finally` releaseLock state
       _ -> pure ()
 
 markUnjudged :: Object -> String -> Value
@@ -563,7 +569,9 @@ closeRun handle status forced = do
               Nothing -> (OutcomeUnjudged, Nothing)
   case outcome of
     OutcomePassed -> removePathForcibly (runWork (handlePaths handle))
-    OutcomeFailed -> removeOlderFailed (handleTask handle) (runDirectory (handlePaths handle)) (handleLabel handle)
+    OutcomeFailed -> case failure of
+      Just (Signal _) -> pure ()
+      _ -> removeOlderFailed (handleTask handle) (runDirectory (handlePaths handle)) (handleLabel handle)
     _ -> pure ()
   let record = closeRecord handle status outcome failure now digest
   (writeRunJson (runDirectory (handlePaths handle)) record >> pure (CloseResult outcome failure (handlePaths handle)))
