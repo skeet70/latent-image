@@ -5,3 +5,8 @@ private-data/scratch/ControllerStrategy/picker-runs/picker-15-stock
 private-data/scratch/RenderCutover/prelinked-proof
 private-data/scratch/issue117-camera-fixture/DSCF3095-DCIM.img
 private-data/scratch/xm1-decomp/index
+# Static suite-audit image inputs (emulation/suite-audit.json).
+private-data/analysis/x-m1-1.50/decode/loader-40000.bin
+private-data/analysis/x-m1-1.50/decode/loader-d0000.bin
+private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin
+private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin

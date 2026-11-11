@@ -1,0 +1,25 @@
+{
+ "schema": 1,
+ "suite": "rtos-objects-b",
+ "source": "Replacement.RtosObjects.Suite.cases",
+ "entries": [
+  {
+   "case": "family-set",
+   "entry": "0x000d80fc",
+   "extent": 608,
+   "stock": "image"
+  },
+  {
+   "case": "family-send",
+   "entry": "0x000daa04",
+   "extent": 772,
+   "stock": "image"
+  },
+  {
+   "case": "family-release",
+   "entry": "0x000d4528",
+   "extent": 204,
+   "stock": "image"
+  }
+ ]
+}

@@ -1,0 +1,31 @@
+{
+ "schema": 1,
+ "suite": "rtos-timer-b",
+ "source": "derived from the suite's case table",
+ "entries": [
+  {
+   "case": "timer-0",
+   "entry": "0x000d4a10",
+   "extent": 112,
+   "stock": "image"
+  },
+  {
+   "case": "timer-1",
+   "entry": "0x000d4c20",
+   "extent": 72,
+   "stock": "image"
+  },
+  {
+   "case": "timer-2",
+   "entry": "0x000d4c68",
+   "extent": 36,
+   "stock": "image"
+  },
+  {
+   "case": "timer-3",
+   "entry": "0x000d4d4c",
+   "extent": 416,
+   "stock": "image"
+  }
+ ]
+}

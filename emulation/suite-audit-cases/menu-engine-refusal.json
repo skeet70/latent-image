@@ -1,0 +1,19 @@
+{
+ "schema": 1,
+ "suite": "menu-engine-refusal",
+ "source": "emulation/MenuEngineRefusalCases.hs:caseEntry",
+ "entries": [
+  {
+   "case": "dispatch",
+   "entry": "0x00bfa234",
+   "extent": 1484,
+   "stock": "image"
+  },
+  {
+   "case": "switch",
+   "entry": "0x00bfab98",
+   "extent": 364,
+   "stock": "image"
+  }
+ ]
+}

@@ -679,6 +679,44 @@ Bound raw-payload reads resolve current case IDs by validated manifest position,
 
 `//emulation:native-runner-tests` runs every public fixture with a failing expectation in the middle as one batch and requires each case's report to equal its report alone, excluding `elapsed_ns` and, for a `wall_budget` case, how far it ran. Isolation controls cover a reader that sees its own seed after a writer stored over the same address, a case whose result depends on Z and three registers after a case that changed them, an exact three-instruction budget after an exhausted instruction budget, a 500,003-instruction count-down after an exhausted 1 ms deadline, and later cases passing after a failing one. Substitute runners that hang, or crash after the first frame, fail the batch at the named case; one that refuses the framing gives `invalid_batch` with no case named. The adapter's batch limits are tested at and past each limit; the artifact-bytes batch reads exactly 256 MiB of distinct declared bytes, plus a copy of one blob under another path that adds nothing, and one byte more is refused. The runner's own limits are tested through raw batch wires: 4,096 cases run and 4,097 are refused, artifacts of exactly 256 MiB are accepted and one byte more is refused, and a slice naming an artifact index equal to the artifact count is that case's `invalid_case`. The tests also cover the other framing refusals, the summary and batch schemas, equality of `loadObservedBatch` and `loadObserved` observations, and `loadObservedBatch` failing with the name of a case the adapter refused.
 
+## Static suite audit
+
+`//emulation:suite-audit` is the validity step that needs no execution. For each
+stock-against-owned comparison suite in `emulation/suite-audit.json` it reads
+the entries the image's own entry table binds, the distinct entries the suite's
+case table enters, and, when the firmware is present, whether the stock role
+maps the firmware's bytes at each entered entry. It reports the bound entries
+never entered and the entered entries whose stock bytes are not authenticated,
+and exits nonzero unless the suite declares the gap with a reason in a tracked
+file beside it. The firmware is a declared input: without it the byte
+authentication is `not run` and the entered-versus-bound result is still
+reported.
+
+```sh
+devenv shell -- host-build run //emulation:suite-audit
+# or from the workspace root:
+bazel-bin/emulation/suite-audit --manifest emulation/suite-audit.json --root . --json OUT
+```
+
+The bound side is read live where the source is machine-readable:
+`replacement/rtos_platform/carriers.json` for the RTOS family suites, the
+`family-*.ld` and `cyclic-*.ld` stage link scripts, and
+`replacement/record_store_carrier/record-store.ld`. Eight suites still carry
+declared bound snapshots (property service, IRQ control A/B, lens actor, vendor
+session, menu frame, menu value and menu-engine refusal); each names its source
+and the commit it was derived at, and the tool prints `live`,
+`snapshot-tested` or `snapshot-untested` per suite.
+
+The entered side is a checked-in snapshot of each suite's case table
+(`emulation/suite-audit-cases/*.json`), with its source path and derivation
+commit. Nothing fails yet when a snapshot and its source diverge. The per-image
+shim rows and the shared judge are to replace these snapshots; until then a
+snapshot is a declaration, not evidence that the suite still matches it.
+
+`//emulation:suite-audit-tests` covers the rule on synthetic inputs: a suite
+that enters every bound entry passes, one that misses an entry fails and names
+it, and one whose stock bytes differ from the image fails and names the entry.
+
 ## Outputs and limitations
 
 The report identifies the exact case, verified artifacts, wire and runner by SHA256. It preserves full register/final logical memory state, instruction count, monotonic elapsed nanoseconds, the engine error code, stub events and the last 64 instruction/access records. `trace_total` and `access_total` expose truncation; access values are meaningful for writes, while read hook values are unspecified. The access log holds reads, writes and faults, not fetches, and a refused access is its last entry. Expected memory spans define the entire permitted final change set; every undeclared byte must equal its initial value. A normal return alone cannot satisfy a fixture. Invalid case, runner error, expectation mismatch and external timeout all exit nonzero with diagnostics.

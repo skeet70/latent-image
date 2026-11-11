@@ -1,0 +1,73 @@
+{
+ "schema": 1,
+ "suite": "menu-frame",
+ "source": "emulation/MenuFrameCases.hs:entryOf",
+ "entries": [
+  {
+   "case": "classify",
+   "entry": "0x0061ca2c",
+   "extent": 744,
+   "stock": "image"
+  },
+  {
+   "case": "snapshot",
+   "entry": "0x0061cd14",
+   "extent": 264,
+   "stock": "image"
+  },
+  {
+   "case": "store",
+   "entry": "0x0061ceac",
+   "extent": 104,
+   "stock": "image"
+  },
+  {
+   "case": "depth",
+   "entry": "0x0061d0e4",
+   "extent": 80,
+   "stock": "image"
+  },
+  {
+   "case": "node",
+   "entry": "0x0061d154",
+   "extent": 80,
+   "stock": "image"
+  },
+  {
+   "case": "node_type",
+   "entry": "0x0061d1a4",
+   "extent": 80,
+   "stock": "image"
+  },
+  {
+   "case": "class",
+   "entry": "0x0061d1f4",
+   "extent": 80,
+   "stock": "image"
+  },
+  {
+   "case": "cursor_token",
+   "entry": "0x0061d244",
+   "extent": 80,
+   "stock": "image"
+  },
+  {
+   "case": "current_token",
+   "entry": "0x0061d294",
+   "extent": 80,
+   "stock": "image"
+  },
+  {
+   "case": "page",
+   "entry": "0x0061d2e4",
+   "extent": 80,
+   "stock": "image"
+  },
+  {
+   "case": "navigation",
+   "entry": "0x0061d334",
+   "extent": 80,
+   "stock": "image"
+  }
+ ]
+}

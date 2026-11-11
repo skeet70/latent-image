@@ -1,0 +1,13 @@
+{
+ "schema": 1,
+ "suite": "menu-value",
+ "source": "emulation/MenuValueCases.hs:scenarioCaller",
+ "entries": [
+  {
+   "case": "value-caller",
+   "entry": "0x00c2d920",
+   "extent": 256,
+   "stock": "image"
+  }
+ ]
+}

@@ -1,0 +1,49 @@
+{
+ "schema": 1,
+ "suite": "rtos-semaphore-b",
+ "source": "derived from the suite's case table",
+ "entries": [
+  {
+   "case": "sem-0",
+   "entry": "0x000dd26c",
+   "extent": 144,
+   "stock": "image"
+  },
+  {
+   "case": "sem-1",
+   "entry": "0x000dd2fc",
+   "extent": 100,
+   "stock": "image"
+  },
+  {
+   "case": "sem-2",
+   "entry": "0x000d75c4",
+   "extent": 576,
+   "stock": "image"
+  },
+  {
+   "case": "sem-3",
+   "entry": "0x000d7804",
+   "extent": 528,
+   "stock": "image"
+  },
+  {
+   "case": "sem-4",
+   "entry": "0x000d7a14",
+   "extent": 576,
+   "stock": "image"
+  },
+  {
+   "case": "sem-5",
+   "entry": "0x000d7c54",
+   "extent": 316,
+   "stock": "image"
+  },
+  {
+   "case": "sem-6",
+   "entry": "0x000d7d90",
+   "extent": 628,
+   "stock": "image"
+  }
+ ]
+}

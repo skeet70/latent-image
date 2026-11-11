@@ -1,0 +1,19 @@
+{
+ "schema": 1,
+ "suite": "rtos-task-records-a",
+ "source": "derived from the suite's case table",
+ "entries": [
+  {
+   "case": "tr-0",
+   "entry": "0x0004d094",
+   "extent": 272,
+   "stock": "image"
+  },
+  {
+   "case": "tr-1",
+   "entry": "0x0004d1a4",
+   "extent": 260,
+   "stock": "image"
+  }
+ ]
+}

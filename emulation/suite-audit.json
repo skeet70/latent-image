@@ -1,0 +1,1000 @@
+{
+ "schema": 1,
+ "suites": [
+  {
+   "name": "rtos-objects-a",
+   "note": "Event-flag/mailbox family stage; 13 family entries: the stage link script declares 14, and family_flag_set_handler is declared as a gap because the suite has no handler-form family case. The suite enters only family_set and family_send (plus the family_release helper outside this table).",
+   "bound": {
+    "kind": "linker-memory",
+    "source": "replacement/rtos_objects/stage/family-a.ld",
+    "include": [
+     "family_flag_",
+     "family_mailbox_"
+    ],
+    "exclude": [
+     "family_flag_set_handler"
+    ]
+   },
+   "cases": "emulation/suite-audit-cases/rtos-objects-a.json",
+   "image": {
+    "path": "private-data/analysis/x-m1-1.50/decode/loader-40000.bin",
+    "base": "0x40000",
+    "sha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882"
+   },
+   "gaps": "emulation/suite-audit-cases/rtos-objects-a-gaps.json",
+   "cases_source": "replacement/rtos_objects/stage/family-a.ld",
+   "cases_derived_at": "49489f81",
+   "cases_verified": false
+  },
+  {
+   "name": "rtos-objects-b",
+   "note": "Event-flag/mailbox family stage; 13 family entries: the stage link script declares 14, and family_flag_set_handler is declared as a gap because the suite has no handler-form family case. The suite enters only family_set and family_send (plus the family_release helper outside this table).",
+   "bound": {
+    "kind": "linker-memory",
+    "source": "replacement/rtos_objects/stage/family-b.ld",
+    "include": [
+     "family_flag_",
+     "family_mailbox_"
+    ],
+    "exclude": [
+     "family_flag_set_handler"
+    ]
+   },
+   "cases": "emulation/suite-audit-cases/rtos-objects-b.json",
+   "image": {
+    "path": "private-data/analysis/x-m1-1.50/decode/loader-d0000.bin",
+    "base": "0xd0000",
+    "sha256": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec"
+   },
+   "gaps": "emulation/suite-audit-cases/rtos-objects-b-gaps.json",
+   "cases_source": "replacement/rtos_objects/stage/family-b.ld",
+   "cases_derived_at": "49489f81",
+   "cases_verified": false
+  },
+  {
+   "name": "rtos-semaphore-a",
+   "note": "Semaphore family stage A; extents table.",
+   "bound": {
+    "kind": "carriers",
+    "source": "replacement/rtos_platform/carriers.json",
+    "domain": "a",
+    "groups": [
+     "semaphore"
+    ]
+   },
+   "cases": "emulation/suite-audit-cases/rtos-semaphore-a.json",
+   "image": {
+    "path": "private-data/analysis/x-m1-1.50/decode/loader-40000.bin",
+    "base": "0x40000",
+    "sha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882"
+   },
+   "cases_source": "replacement/rtos_platform/carriers.json",
+   "cases_derived_at": "49489f81",
+   "cases_verified": false
+  },
+  {
+   "name": "rtos-semaphore-b",
+   "note": "Semaphore family stage B; extents table.",
+   "bound": {
+    "kind": "carriers",
+    "source": "replacement/rtos_platform/carriers.json",
+    "domain": "b",
+    "groups": [
+     "semaphore"
+    ]
+   },
+   "cases": "emulation/suite-audit-cases/rtos-semaphore-b.json",
+   "image": {
+    "path": "private-data/analysis/x-m1-1.50/decode/loader-d0000.bin",
+    "base": "0xd0000",
+    "sha256": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec"
+   },
+   "cases_source": "replacement/rtos_platform/carriers.json",
+   "cases_derived_at": "49489f81",
+   "cases_verified": false
+  },
+  {
+   "name": "rtos-fixed-pool-a",
+   "note": "Fixed-pool family stage A; extents table.",
+   "bound": {
+    "kind": "carriers",
+    "source": "replacement/rtos_platform/carriers.json",
+    "domain": "a",
+    "groups": [
+     "fixed-pool"
+    ]
+   },
+   "cases": "emulation/suite-audit-cases/rtos-fixed-pool-a.json",
+   "image": {
+    "path": "private-data/analysis/x-m1-1.50/decode/loader-40000.bin",
+    "base": "0x40000",
+    "sha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882"
+   },
+   "cases_source": "replacement/rtos_platform/carriers.json",
+   "cases_derived_at": "49489f81",
+   "cases_verified": false
+  },
+  {
+   "name": "rtos-fixed-pool-b",
+   "note": "Fixed-pool family stage B; extents table.",
+   "bound": {
+    "kind": "carriers",
+    "source": "replacement/rtos_platform/carriers.json",
+    "domain": "b",
+    "groups": [
+     "fixed-pool"
+    ]
+   },
+   "cases": "emulation/suite-audit-cases/rtos-fixed-pool-b.json",
+   "image": {
+    "path": "private-data/analysis/x-m1-1.50/decode/loader-d0000.bin",
+    "base": "0xd0000",
+    "sha256": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec"
+   },
+   "cases_source": "replacement/rtos_platform/carriers.json",
+   "cases_derived_at": "49489f81",
+   "cases_verified": false
+  },
+  {
+   "name": "rtos-data-queue-a",
+   "note": "Data-queue family stage A; entryAddress table.",
+   "bound": {
+    "kind": "carriers",
+    "source": "replacement/rtos_platform/carriers.json",
+    "domain": "a",
+    "groups": [
+     "data-queue"
+    ]
+   },
+   "cases": "emulation/suite-audit-cases/rtos-data-queue-a.json",
+   "image": {
+    "path": "private-data/analysis/x-m1-1.50/decode/loader-40000.bin",
+    "base": "0x40000",
+    "sha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882"
+   },
+   "cases_source": "replacement/rtos_platform/carriers.json",
+   "cases_derived_at": "49489f81",
+   "cases_verified": false
+  },
+  {
+   "name": "rtos-data-queue-b",
+   "note": "Data-queue family stage B; entryAddress table.",
+   "bound": {
+    "kind": "carriers",
+    "source": "replacement/rtos_platform/carriers.json",
+    "domain": "b",
+    "groups": [
+     "data-queue"
+    ]
+   },
+   "cases": "emulation/suite-audit-cases/rtos-data-queue-b.json",
+   "image": {
+    "path": "private-data/analysis/x-m1-1.50/decode/loader-d0000.bin",
+    "base": "0xd0000",
+    "sha256": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec"
+   },
+   "cases_source": "replacement/rtos_platform/carriers.json",
+   "cases_derived_at": "49489f81",
+   "cases_verified": false
+  },
+  {
+   "name": "rtos-timer-a",
+   "note": "Timer stage A; the four stock entries the suite runs.",
+   "bound": {
+    "kind": "carriers",
+    "source": "replacement/rtos_platform/carriers.json",
+    "domain": "a",
+    "groups": [
+     "timer"
+    ]
+   },
+   "cases": "emulation/suite-audit-cases/rtos-timer-a.json",
+   "image": {
+    "path": "private-data/analysis/x-m1-1.50/decode/loader-40000.bin",
+    "base": "0x40000",
+    "sha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882"
+   },
+   "cases_source": "replacement/rtos_platform/carriers.json",
+   "cases_derived_at": "49489f81",
+   "cases_verified": false
+  },
+  {
+   "name": "rtos-timer-b",
+   "note": "Timer stage B; the four stock entries the suite runs.",
+   "bound": {
+    "kind": "carriers",
+    "source": "replacement/rtos_platform/carriers.json",
+    "domain": "b",
+    "groups": [
+     "timer"
+    ]
+   },
+   "cases": "emulation/suite-audit-cases/rtos-timer-b.json",
+   "image": {
+    "path": "private-data/analysis/x-m1-1.50/decode/loader-d0000.bin",
+    "base": "0xd0000",
+    "sha256": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec"
+   },
+   "cases_source": "replacement/rtos_platform/carriers.json",
+   "cases_derived_at": "49489f81",
+   "cases_verified": false
+  },
+  {
+   "name": "rtos-task-records-a",
+   "note": "Task-record stage A; create/delete entries.",
+   "bound": {
+    "kind": "carriers",
+    "source": "replacement/rtos_platform/carriers.json",
+    "domain": "a",
+    "groups": [
+     "task-records"
+    ]
+   },
+   "cases": "emulation/suite-audit-cases/rtos-task-records-a.json",
+   "image": {
+    "path": "private-data/analysis/x-m1-1.50/decode/loader-40000.bin",
+    "base": "0x40000",
+    "sha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882"
+   },
+   "cases_source": "replacement/rtos_platform/carriers.json",
+   "cases_derived_at": "49489f81",
+   "cases_verified": false
+  },
+  {
+   "name": "rtos-task-records-b",
+   "note": "Task-record stage B; create/delete entries.",
+   "bound": {
+    "kind": "carriers",
+    "source": "replacement/rtos_platform/carriers.json",
+    "domain": "b",
+    "groups": [
+     "task-records"
+    ]
+   },
+   "cases": "emulation/suite-audit-cases/rtos-task-records-b.json",
+   "image": {
+    "path": "private-data/analysis/x-m1-1.50/decode/loader-d0000.bin",
+    "base": "0xd0000",
+    "sha256": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec"
+   },
+   "cases_source": "replacement/rtos_platform/carriers.json",
+   "cases_derived_at": "49489f81",
+   "cases_verified": false
+  },
+  {
+   "name": "rtos-cyclic-a",
+   "note": "Cyclic family stage A; the eight entry regions.",
+   "bound": {
+    "kind": "linker-memory",
+    "source": "replacement/rtos_cyclic/cyclic-a.ld",
+    "include": [
+     "_body"
+    ]
+   },
+   "cases": "emulation/suite-audit-cases/rtos-cyclic-a.json",
+   "image": {
+    "path": "private-data/analysis/x-m1-1.50/decode/loader-40000.bin",
+    "base": "0x40000",
+    "sha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882"
+   },
+   "cases_source": "replacement/rtos_platform/carriers.json",
+   "cases_derived_at": "49489f81",
+   "cases_verified": false
+  },
+  {
+   "name": "rtos-cyclic-b",
+   "note": "Cyclic family stage B; the eight entry regions.",
+   "bound": {
+    "kind": "linker-memory",
+    "source": "replacement/rtos_cyclic/cyclic-b.ld",
+    "include": [
+     "_body"
+    ]
+   },
+   "cases": "emulation/suite-audit-cases/rtos-cyclic-b.json",
+   "image": {
+    "path": "private-data/analysis/x-m1-1.50/decode/loader-d0000.bin",
+    "base": "0xd0000",
+    "sha256": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec"
+   },
+   "cases_source": "replacement/rtos_platform/carriers.json",
+   "cases_derived_at": "49489f81",
+   "cases_verified": false
+  },
+  {
+   "name": "rtos-global-lock-a",
+   "note": "Global-lock group of the RTOS aggregate carrier A.",
+   "bound": {
+    "kind": "carriers",
+    "source": "replacement/rtos_platform/carriers.json",
+    "domain": "a",
+    "groups": [
+     "global-lock"
+    ]
+   },
+   "cases": "emulation/suite-audit-cases/rtos-global-lock-a.json",
+   "image": {
+    "path": "private-data/analysis/x-m1-1.50/decode/loader-40000.bin",
+    "base": "0x40000",
+    "sha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882"
+   },
+   "cases_source": "replacement/rtos_platform/carriers.json",
+   "cases_derived_at": "49489f81",
+   "cases_verified": false
+  },
+  {
+   "name": "rtos-global-lock-b",
+   "note": "Global-lock group of the RTOS aggregate carrier B.",
+   "bound": {
+    "kind": "carriers",
+    "source": "replacement/rtos_platform/carriers.json",
+    "domain": "b",
+    "groups": [
+     "global-lock"
+    ]
+   },
+   "cases": "emulation/suite-audit-cases/rtos-global-lock-b.json",
+   "image": {
+    "path": "private-data/analysis/x-m1-1.50/decode/loader-d0000.bin",
+    "base": "0xd0000",
+    "sha256": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec"
+   },
+   "cases_source": "replacement/rtos_platform/carriers.json",
+   "cases_derived_at": "49489f81",
+   "cases_verified": false
+  },
+  {
+   "name": "rtos-irq-control-a",
+   "note": "IRQ-control suite A; enable/disable/define entries.",
+   "bound": {
+    "kind": "declared",
+    "source": "replacement/rtos_irq_control/native/Replacement/RtosIrqControl/Suite.hs:entryFor",
+    "entries": [
+     {
+      "address": "0x00041108",
+      "size": "0x0000001c",
+      "name": "enable"
+     },
+     {
+      "address": "0x00041124",
+      "size": "0x0000001c",
+      "name": "disable"
+     },
+     {
+      "address": "0x0004d8fc",
+      "size": "0x00000080",
+      "name": "define"
+     }
+    ],
+    "derived_at": "49489f81",
+    "verified": false
+   },
+   "cases": "emulation/suite-audit-cases/rtos-irq-control-a.json",
+   "image": {
+    "path": "private-data/analysis/x-m1-1.50/decode/loader-40000.bin",
+    "base": "0x40000",
+    "sha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882"
+   },
+   "cases_source": "replacement/rtos_irq_control/native/Replacement/RtosIrqControl/Suite.hs:entryFor",
+   "cases_derived_at": "49489f81",
+   "cases_verified": false
+  },
+  {
+   "name": "rtos-irq-control-b",
+   "note": "IRQ-control suite B; enable/disable/define entries.",
+   "bound": {
+    "kind": "declared",
+    "source": "replacement/rtos_irq_control/native/Replacement/RtosIrqControl/Suite.hs:entryFor",
+    "entries": [
+     {
+      "address": "0x000d1108",
+      "size": "0x0000001c",
+      "name": "enable"
+     },
+     {
+      "address": "0x000d1124",
+      "size": "0x0000001c",
+      "name": "disable"
+     },
+     {
+      "address": "0x000dd8c0",
+      "size": "0x00000080",
+      "name": "define"
+     }
+    ],
+    "derived_at": "49489f81",
+    "verified": false
+   },
+   "cases": "emulation/suite-audit-cases/rtos-irq-control-b.json",
+   "image": {
+    "path": "private-data/analysis/x-m1-1.50/decode/loader-d0000.bin",
+    "base": "0xd0000",
+    "sha256": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec"
+   },
+   "cases_source": "replacement/rtos_irq_control/native/Replacement/RtosIrqControl/Suite.hs:entryFor",
+   "cases_derived_at": "49489f81",
+   "cases_verified": false
+  },
+  {
+   "name": "rtos-scheduler-s3a-a",
+   "note": "Scheduler S3a stage A; the seven entry regions.",
+   "bound": {
+    "kind": "carriers",
+    "source": "replacement/rtos_platform/carriers.json",
+    "domain": "a",
+    "groups": [
+     "s3a"
+    ]
+   },
+   "cases": "emulation/suite-audit-cases/rtos-scheduler-s3a-a.json",
+   "image": {
+    "path": "private-data/analysis/x-m1-1.50/decode/loader-40000.bin",
+    "base": "0x40000",
+    "sha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882"
+   },
+   "cases_source": "replacement/rtos_platform/carriers.json",
+   "cases_derived_at": "49489f81",
+   "cases_verified": false
+  },
+  {
+   "name": "rtos-scheduler-s3a-b",
+   "note": "Scheduler S3a stage B; the seven entry regions.",
+   "bound": {
+    "kind": "carriers",
+    "source": "replacement/rtos_platform/carriers.json",
+    "domain": "b",
+    "groups": [
+     "s3a"
+    ]
+   },
+   "cases": "emulation/suite-audit-cases/rtos-scheduler-s3a-b.json",
+   "image": {
+    "path": "private-data/analysis/x-m1-1.50/decode/loader-d0000.bin",
+    "base": "0xd0000",
+    "sha256": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec"
+   },
+   "cases_source": "replacement/rtos_platform/carriers.json",
+   "cases_derived_at": "49489f81",
+   "cases_verified": false
+  },
+  {
+   "name": "rtos-scheduler-s3b-a",
+   "note": "Scheduler S3b stage A; the six entry regions.",
+   "bound": {
+    "kind": "carriers",
+    "source": "replacement/rtos_platform/carriers.json",
+    "domain": "a",
+    "groups": [
+     "s3b"
+    ]
+   },
+   "cases": "emulation/suite-audit-cases/rtos-scheduler-s3b-a.json",
+   "image": {
+    "path": "private-data/analysis/x-m1-1.50/decode/loader-40000.bin",
+    "base": "0x40000",
+    "sha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882"
+   },
+   "cases_source": "replacement/rtos_platform/carriers.json",
+   "cases_derived_at": "49489f81",
+   "cases_verified": false
+  },
+  {
+   "name": "rtos-scheduler-s3b-b",
+   "note": "Scheduler S3b stage B; the six entry regions.",
+   "bound": {
+    "kind": "carriers",
+    "source": "replacement/rtos_platform/carriers.json",
+    "domain": "b",
+    "groups": [
+     "s3b"
+    ]
+   },
+   "cases": "emulation/suite-audit-cases/rtos-scheduler-s3b-b.json",
+   "image": {
+    "path": "private-data/analysis/x-m1-1.50/decode/loader-d0000.bin",
+    "base": "0xd0000",
+    "sha256": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec"
+   },
+   "cases_source": "replacement/rtos_platform/carriers.json",
+   "cases_derived_at": "49489f81",
+   "cases_verified": false
+  },
+  {
+   "name": "rtos-scheduler-s3c-a",
+   "note": "Scheduler S3c stage A; the eleven entry regions.",
+   "bound": {
+    "kind": "carriers",
+    "source": "replacement/rtos_platform/carriers.json",
+    "domain": "a",
+    "groups": [
+     "s3c"
+    ]
+   },
+   "cases": "emulation/suite-audit-cases/rtos-scheduler-s3c-a.json",
+   "image": {
+    "path": "private-data/analysis/x-m1-1.50/decode/loader-40000.bin",
+    "base": "0x40000",
+    "sha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882"
+   },
+   "cases_source": "replacement/rtos_platform/carriers.json",
+   "cases_derived_at": "49489f81",
+   "cases_verified": false
+  },
+  {
+   "name": "rtos-scheduler-s3c-b",
+   "note": "Scheduler S3c stage B; the eleven entry regions.",
+   "bound": {
+    "kind": "carriers",
+    "source": "replacement/rtos_platform/carriers.json",
+    "domain": "b",
+    "groups": [
+     "s3c"
+    ]
+   },
+   "cases": "emulation/suite-audit-cases/rtos-scheduler-s3c-b.json",
+   "image": {
+    "path": "private-data/analysis/x-m1-1.50/decode/loader-d0000.bin",
+    "base": "0xd0000",
+    "sha256": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec"
+   },
+   "cases_source": "replacement/rtos_platform/carriers.json",
+   "cases_derived_at": "49489f81",
+   "cases_verified": false
+  },
+  {
+   "name": "rtos-scheduler-s3d-a",
+   "note": "Scheduler S3d stage A; the eight veneer entries.",
+   "bound": {
+    "kind": "carriers",
+    "source": "replacement/rtos_platform/carriers.json",
+    "domain": "a",
+    "groups": [
+     "s3d"
+    ]
+   },
+   "cases": "emulation/suite-audit-cases/rtos-scheduler-s3d-a.json",
+   "image": {
+    "path": "private-data/analysis/x-m1-1.50/decode/loader-40000.bin",
+    "base": "0x40000",
+    "sha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882"
+   },
+   "cases_source": "replacement/rtos_platform/carriers.json",
+   "cases_derived_at": "49489f81",
+   "cases_verified": false
+  },
+  {
+   "name": "rtos-scheduler-s3d-b",
+   "note": "Scheduler S3d stage B; the eight veneer entries.",
+   "bound": {
+    "kind": "carriers",
+    "source": "replacement/rtos_platform/carriers.json",
+    "domain": "b",
+    "groups": [
+     "s3d"
+    ]
+   },
+   "cases": "emulation/suite-audit-cases/rtos-scheduler-s3d-b.json",
+   "image": {
+    "path": "private-data/analysis/x-m1-1.50/decode/loader-d0000.bin",
+    "base": "0xd0000",
+    "sha256": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec"
+   },
+   "cases_source": "replacement/rtos_platform/carriers.json",
+   "cases_derived_at": "49489f81",
+   "cases_verified": false
+  },
+  {
+   "name": "property-service",
+   "note": "Property service getter 0x61e110 and setter 0x624694.",
+   "bound": {
+    "kind": "declared",
+    "source": "replacement/property_service/property-service.ld",
+    "entries": [
+     {
+      "address": "0x0061e110",
+      "size": "0x00000100",
+      "name": "getter"
+     },
+     {
+      "address": "0x00624694",
+      "size": "0x00000100",
+      "name": "setter"
+     }
+    ],
+    "derived_at": "49489f81",
+    "verified": false
+   },
+   "cases": "emulation/suite-audit-cases/property-service.json",
+   "image": {
+    "path": "private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin",
+    "base": "0x61c400",
+    "sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"
+   },
+   "cases_source": "replacement/property_service/property-service.ld",
+   "cases_derived_at": "49489f81",
+   "cases_verified": false
+  },
+  {
+   "name": "record-store",
+   "note": "Record-store carrier; the nine entry veneers of record-store.ld.",
+   "bound": {
+    "kind": "linker-assert",
+    "source": "replacement/record_store_carrier/record-store.ld"
+   },
+   "cases": "emulation/suite-audit-cases/record-store.json",
+   "image": {
+    "path": "private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin",
+    "base": "0x61c400",
+    "sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"
+   },
+   "cases_source": "replacement/record_store_carrier/record-store.ld",
+   "cases_derived_at": "49489f81",
+   "cases_verified": false
+  },
+  {
+   "name": "lens-actor",
+   "note": "Task-99 actor suite; the twenty authenticated handler extents plus the receive-loop wake entry. Stock mapping is checked against the handlerExtents digests.",
+   "bound": {
+    "kind": "declared",
+    "source": "replacement/lens_transport/native/Replacement/LensTransport/ActorSuite.hs:handlerExtents",
+    "entries": [
+     {
+      "address": "0x006c1858",
+      "size": "0x00000018",
+      "name": "handler-0x006c1858"
+     },
+     {
+      "address": "0x006c1870",
+      "size": "0x000000dc",
+      "name": "handler-0x006c1870"
+     },
+     {
+      "address": "0x006c194c",
+      "size": "0x0000009c",
+      "name": "handler-0x006c194c"
+     },
+     {
+      "address": "0x006c1bcc",
+      "size": "0x000000fc",
+      "name": "handler-0x006c1bcc"
+     },
+     {
+      "address": "0x006c1cc8",
+      "size": "0x00000134",
+      "name": "handler-0x006c1cc8"
+     },
+     {
+      "address": "0x006c1e18",
+      "size": "0x000000d4",
+      "name": "handler-0x006c1e18"
+     },
+     {
+      "address": "0x006c1eec",
+      "size": "0x0000002c",
+      "name": "handler-0x006c1eec"
+     },
+     {
+      "address": "0x006c20b4",
+      "size": "0x00000050",
+      "name": "handler-0x006c20b4"
+     },
+     {
+      "address": "0x006c21d4",
+      "size": "0x00000074",
+      "name": "handler-0x006c21d4"
+     },
+     {
+      "address": "0x006c2248",
+      "size": "0x00000150",
+      "name": "handler-0x006c2248"
+     },
+     {
+      "address": "0x006c2398",
+      "size": "0x000000b4",
+      "name": "handler-0x006c2398"
+     },
+     {
+      "address": "0x006c244c",
+      "size": "0x000000a0",
+      "name": "handler-0x006c244c"
+     },
+     {
+      "address": "0x006c2668",
+      "size": "0x00000024",
+      "name": "handler-0x006c2668"
+     },
+     {
+      "address": "0x006c268c",
+      "size": "0x00000060",
+      "name": "handler-0x006c268c"
+     },
+     {
+      "address": "0x006c26ec",
+      "size": "0x0000006c",
+      "name": "handler-0x006c26ec"
+     },
+     {
+      "address": "0x006c27f8",
+      "size": "0x000000fc",
+      "name": "handler-0x006c27f8"
+     },
+     {
+      "address": "0x006c3144",
+      "size": "0x000000ac",
+      "name": "handler-0x006c3144"
+     },
+     {
+      "address": "0x006c31f0",
+      "size": "0x000003cc",
+      "name": "handler-0x006c31f0"
+     },
+     {
+      "address": "0x006c3b70",
+      "size": "0x00000cf0",
+      "name": "handler-0x006c3b70"
+     },
+     {
+      "address": "0x006c4c94",
+      "size": "0x00000ad4",
+      "name": "handler-0x006c4c94"
+     }
+    ],
+    "derived_at": "49489f81",
+    "verified": false
+   },
+   "cases": "emulation/suite-audit-cases/lens-actor.json",
+   "image": {
+    "path": "private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin",
+    "base": "0x61c400",
+    "sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"
+   },
+   "cases_source": "replacement/lens_transport/native/Replacement/LensTransport/ActorSuite.hs:handlerExtents",
+   "cases_derived_at": "49489f81",
+   "cases_verified": false
+  },
+  {
+   "name": "vendor-session",
+   "note": "Vendor session control and bulk-source CPU cases; the stock image is image 5 and the suite maps stock bytes at its two entered entries.",
+   "image": {
+    "path": "private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin",
+    "base": "0xbf1a00",
+    "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"
+   },
+   "bound": {
+    "kind": "declared",
+    "source": "replacement/vendor_protocol/NativeSessionOracle.hs:stockFunctions",
+    "entries": [
+     {
+      "address": "0x00d7efd4",
+      "size": "0x000000ec",
+      "name": "stock-0"
+     },
+     {
+      "address": "0x00d7f364",
+      "size": "0x00000020",
+      "name": "stock-1"
+     },
+     {
+      "address": "0x00d7f384",
+      "size": "0x00000030",
+      "name": "stock-2"
+     },
+     {
+      "address": "0x00d7f3b4",
+      "size": "0x00000024",
+      "name": "stock-3"
+     },
+     {
+      "address": "0x00d7f3d8",
+      "size": "0x00000034",
+      "name": "stock-4"
+     },
+     {
+      "address": "0x00d7f440",
+      "size": "0x00000028",
+      "name": "stock-5"
+     },
+     {
+      "address": "0x00d7f468",
+      "size": "0x00000028",
+      "name": "stock-6"
+     },
+     {
+      "address": "0x00d7f490",
+      "size": "0x0000009c",
+      "name": "stock-7"
+     },
+     {
+      "address": "0x00d7f52c",
+      "size": "0x00000040",
+      "name": "stock-8"
+     },
+     {
+      "address": "0x00d7f56c",
+      "size": "0x00000138",
+      "name": "stock-9"
+     },
+     {
+      "address": "0x00d7f6a4",
+      "size": "0x000000bc",
+      "name": "stock-10"
+     },
+     {
+      "address": "0x00d7f760",
+      "size": "0x000000ac",
+      "name": "stock-11"
+     },
+     {
+      "address": "0x00d7f80c",
+      "size": "0x00000098",
+      "name": "stock-12"
+     },
+     {
+      "address": "0x00d7f8a4",
+      "size": "0x0000007c",
+      "name": "stock-13"
+     },
+     {
+      "address": "0x00d7f920",
+      "size": "0x0000008c",
+      "name": "stock-14"
+     },
+     {
+      "address": "0x00d7f9ac",
+      "size": "0x000000a0",
+      "name": "stock-15"
+     },
+     {
+      "address": "0x00d7fa4c",
+      "size": "0x0000009c",
+      "name": "stock-16"
+     },
+     {
+      "address": "0x00d7fae8",
+      "size": "0x000000e4",
+      "name": "stock-17"
+     }
+    ],
+    "derived_at": "49489f81",
+    "verified": false
+   },
+   "cases": "emulation/suite-audit-cases/vendor-session.json",
+   "cases_source": "replacement/vendor_protocol/NativeSessionOracle.hs:stockFunctions",
+   "cases_derived_at": "49489f81",
+   "cases_verified": false
+  },
+  {
+   "name": "menu-frame",
+   "note": "Menu-frame original/owned pair over the three stock frame bodies and the eight snapshot accessors.",
+   "image": {
+    "path": "private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin",
+    "base": "0x61c400",
+    "sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"
+   },
+   "bound": {
+    "kind": "declared",
+    "source": "emulation/MenuFrameCases.hs:entryOf",
+    "entries": [
+     {
+      "address": "0x0061ca2c",
+      "size": "0x000002e8",
+      "name": "classify"
+     },
+     {
+      "address": "0x0061cd14",
+      "size": "0x00000108",
+      "name": "snapshot"
+     },
+     {
+      "address": "0x0061ceac",
+      "size": "0x00000068",
+      "name": "store"
+     },
+     {
+      "address": "0x0061d0e4",
+      "size": "0x00000050",
+      "name": "depth"
+     },
+     {
+      "address": "0x0061d154",
+      "size": "0x00000050",
+      "name": "node"
+     },
+     {
+      "address": "0x0061d1a4",
+      "size": "0x00000050",
+      "name": "node_type"
+     },
+     {
+      "address": "0x0061d1f4",
+      "size": "0x00000050",
+      "name": "class"
+     },
+     {
+      "address": "0x0061d244",
+      "size": "0x00000050",
+      "name": "cursor_token"
+     },
+     {
+      "address": "0x0061d294",
+      "size": "0x00000050",
+      "name": "current_token"
+     },
+     {
+      "address": "0x0061d2e4",
+      "size": "0x00000050",
+      "name": "page"
+     },
+     {
+      "address": "0x0061d334",
+      "size": "0x00000050",
+      "name": "navigation"
+     }
+    ],
+    "derived_at": "49489f81",
+    "verified": false
+   },
+   "cases": "emulation/suite-audit-cases/menu-frame.json",
+   "cases_source": "emulation/MenuFrameCases.hs:entryOf",
+   "cases_derived_at": "49489f81",
+   "cases_verified": false
+  },
+  {
+   "name": "menu-value",
+   "note": "Menu-value original/owned pairs over the twelve tokens; all cases enter the same stock caller entry 0xc2d920.",
+   "image": {
+    "path": "private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin",
+    "base": "0xbf1a00",
+    "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"
+   },
+   "bound": {
+    "kind": "declared",
+    "source": "emulation/MenuValueCases.hs:scenarioCaller",
+    "entries": [
+     {
+      "address": "0x00c2d920",
+      "size": "0x00000100",
+      "name": "value-caller"
+     }
+    ],
+    "derived_at": "49489f81",
+    "verified": false
+   },
+   "cases": "emulation/suite-audit-cases/menu-value.json",
+   "cases_source": "emulation/MenuValueCases.hs:scenarioCaller",
+   "cases_derived_at": "49489f81",
+   "cases_verified": false
+  },
+  {
+   "name": "menu-engine-refusal",
+   "note": "Menu-engine refusal probes over the stock dispatch 0xbfa234 and change-level 0xbfab98 seams.",
+   "image": {
+    "path": "private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin",
+    "base": "0xbf1a00",
+    "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"
+   },
+   "bound": {
+    "kind": "declared",
+    "source": "emulation/MenuEngineRefusalCases.hs:caseEntry",
+    "entries": [
+     {
+      "address": "0x00bfa234",
+      "size": "0x000005cc",
+      "name": "dispatch"
+     },
+     {
+      "address": "0x00bfab98",
+      "size": "0x0000016c",
+      "name": "switch"
+     }
+    ],
+    "derived_at": "49489f81",
+    "verified": false
+   },
+   "cases": "emulation/suite-audit-cases/menu-engine-refusal.json",
+   "cases_source": "emulation/MenuEngineRefusalCases.hs:caseEntry",
+   "cases_derived_at": "49489f81",
+   "cases_verified": false
+  }
+ ]
+}

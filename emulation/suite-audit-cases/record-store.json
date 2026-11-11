@@ -1,0 +1,61 @@
+{
+ "schema": 1,
+ "suite": "record-store",
+ "source": "derived from the suite's case table",
+ "entries": [
+  {
+   "case": "rs-0",
+   "entry": "0x006ac2b4",
+   "extent": 4,
+   "stock": "image"
+  },
+  {
+   "case": "rs-1",
+   "entry": "0x006ac328",
+   "extent": 4,
+   "stock": "image"
+  },
+  {
+   "case": "rs-2",
+   "entry": "0x006ac478",
+   "extent": 4,
+   "stock": "image"
+  },
+  {
+   "case": "rs-3",
+   "entry": "0x006ac4c8",
+   "extent": 4,
+   "stock": "image"
+  },
+  {
+   "case": "rs-4",
+   "entry": "0x006ac7d4",
+   "extent": 4,
+   "stock": "image"
+  },
+  {
+   "case": "rs-5",
+   "entry": "0x006ac984",
+   "extent": 4,
+   "stock": "image"
+  },
+  {
+   "case": "rs-6",
+   "entry": "0x006acab8",
+   "extent": 4,
+   "stock": "image"
+  },
+  {
+   "case": "rs-7",
+   "entry": "0x006acda0",
+   "extent": 4,
+   "stock": "image"
+  },
+  {
+   "case": "rs-8",
+   "entry": "0x006ae0fc",
+   "extent": 4,
+   "stock": "image"
+  }
+ ]
+}

@@ -1,0 +1,19 @@
+{
+ "schema": 1,
+ "suite": "vendor-session",
+ "source": "replacement/vendor_protocol/NativeSessionOracle.hs",
+ "entries": [
+  {
+   "case": "session-0",
+   "entry": "0x00d7efd4",
+   "extent": 236,
+   "stock": "image"
+  },
+  {
+   "case": "session-1",
+   "entry": "0x00d7fae8",
+   "extent": 228,
+   "stock": "image"
+  }
+ ]
+}

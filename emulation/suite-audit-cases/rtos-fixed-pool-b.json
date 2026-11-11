@@ -1,0 +1,49 @@
+{
+ "schema": 1,
+ "suite": "rtos-fixed-pool-b",
+ "source": "derived from the suite's case table",
+ "entries": [
+  {
+   "case": "fp-0",
+   "entry": "0x000dd688",
+   "extent": 204,
+   "stock": "image"
+  },
+  {
+   "case": "fp-1",
+   "entry": "0x000dd754",
+   "extent": 136,
+   "stock": "image"
+  },
+  {
+   "case": "fp-2",
+   "entry": "0x000db440",
+   "extent": 592,
+   "stock": "image"
+  },
+  {
+   "case": "fp-3",
+   "entry": "0x000db690",
+   "extent": 324,
+   "stock": "image"
+  },
+  {
+   "case": "fp-4",
+   "entry": "0x000db7d4",
+   "extent": 676,
+   "stock": "image"
+  },
+  {
+   "case": "fp-5",
+   "entry": "0x000dba78",
+   "extent": 660,
+   "stock": "image"
+  },
+  {
+   "case": "fp-6",
+   "entry": "0x000d11cc",
+   "extent": 240,
+   "stock": "image"
+  }
+ ]
+}

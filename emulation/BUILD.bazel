@@ -2168,6 +2168,73 @@ haskell_library(
 )
 
 haskell_library(
+    name = "suite-audit-lib",
+    srcs = ["Emulation/SuiteAudit.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+        "//host:scientific",
+        "//host:text",
+        "//host:vector",
+    ],
+)
+
+haskell_binary(
+    name = "suite-audit",
+    srcs = ["SuiteAuditMain.hs"],
+    args = [
+        "--manifest",
+        "$(rootpath :suite-audit-manifest)",
+        "--root",
+        ".",
+    ],
+    data = [
+        ":suite-audit-manifest",
+        ":suite-audit-cases",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":case-sha256",
+        ":suite-audit-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+    ],
+)
+
+haskell_test(
+    name = "suite-audit-tests",
+    size = "small",
+    srcs = ["SuiteAuditTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":case-sha256",
+        ":suite-audit-lib",
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
+
+filegroup(
+    name = "suite-audit-manifest",
+    srcs = ["suite-audit.json"],
+)
+
+filegroup(
+    name = "suite-audit-cases",
+    srcs = glob(["suite-audit-cases/*.json"]),
+)
+
+haskell_library(
     name = "native-observation",
     srcs = ["Emulation/NativeObservation.hs"],
     ghcopts = [
