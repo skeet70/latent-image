@@ -262,7 +262,7 @@ pub fn classify(code: CharacterCode) -> UnicodeClass {
     else if code.wrapping_add(0xfd00) <= 0x6f { (C::Basic, K::Combining) }
     else if code.wrapping_sub(0x370) <= 0x8f || code.wrapping_add(0xfc00) < 0x130 || code.wrapping_sub(0x530) <= 0x5f { (C::Basic, K::Letter) }
     else if code.wrapping_sub(0x590) <= 0x6f || code.wrapping_add(0x4e3) <= 0x32 { (C::Hebrew, K::Letter) }
-    else if code.wrapping_add(0x4b0) <= 0x2b0 || code.wrapping_add(0xfa00) <= 0xff || code.wrapping_add(0x190) <= 0x8e || code.wrapping_add(0x2000) <= 0x8e {
+    else if code.wrapping_add(0x4b0) < 0x2b0 || code.wrapping_add(0xfa00) <= 0xff || code.wrapping_add(0x190) <= 0x8e || code.wrapping_add(0x2000) <= 0x8e {
         let mark = code.wrapping_sub(0x610) <= 5 || code.wrapping_sub(0x64b) <= 0x13 || code.wrapping_sub(0x6d6) <= 6 || code.wrapping_sub(0x6df) <= 5 || code.wrapping_sub(0x6e7) <= 1 || code == 0x670 || code.wrapping_sub(0x6ea) <= 3;
         (C::Arabic, if mark { K::ArabicMark } else if code == 0x6de { K::ArabicEnd } else if code == 0x640 { K::Joiner } else { K::Letter })
     } else if code.wrapping_sub(0x900) <= 0x7f || code.wrapping_add(0x1700) <= 0xc1 { (C::Devanagari, K::Letter) }
@@ -850,11 +850,13 @@ fn shape_thai_text(text: &[u16], metrics: &mut impl ShapingMetrics, tables: &Scr
     for (index, code) in text.iter().enumerate() {
         source[index] = CharacterCode(*code);
         if thai_decomposes(&source[..=index], index, tables) {
+            if count + 2 > MAX_SHAPED_GLYPHS { return Err(FontError::InvalidSize); }
             codes[count] = CharacterCode(0xe4d); clusters[count] = CharacterCode(0xe32);
             characters[count] = CharacterIndex(index as u16); groups[count] = 2; decomposed[count] = true; count += 1;
             codes[count] = CharacterCode(0xe32); clusters[count] = CharacterCode(0xe32);
             characters[count] = CharacterIndex(index as u16); groups[count] = 2; count += 1;
         } else {
+            if count + 1 > MAX_SHAPED_GLYPHS { return Err(FontError::InvalidSize); }
             codes[count] = CharacterCode(*code); clusters[count] = CharacterCode(*code);
             characters[count] = CharacterIndex(index as u16); count += 1;
         }
@@ -1137,5 +1139,22 @@ mod tests {
         let mut metrics = Metrics { width: 4 };
         let text = [0x41u16; MAX_SHAPED_GLYPHS + 1];
         assert_eq!(shape_text(&text, DirectionHint(0x200e), &mut metrics, &ScriptTables::firmware()), Err(FontError::InvalidSize));
+    }
+
+    #[test]
+    fn thai_decomposition_beyond_capacity_is_refused() {
+        let mut metrics = Metrics { width: 4 };
+        let mut text = Vec::new();
+        for _ in 0..22 { text.push(0x0e01); text.push(0x0e33); }
+        assert_eq!(shape_text(&text, DirectionHint(0x200e), &mut metrics, &ScriptTables::firmware()), Err(FontError::InvalidSize));
+    }
+
+    #[test]
+    fn fe00_is_basic_while_its_neighbours_follow_the_stock_range() {
+        let arabic = UnicodeClass { category: UnicodeCategory::Arabic, kind: CharacterKind::Letter };
+        let basic = UnicodeClass { category: UnicodeCategory::Basic, kind: CharacterKind::Letter };
+        assert_eq!(classify(CharacterCode(0xfdff)), arabic);
+        assert_eq!(classify(CharacterCode(0xfe00)), basic);
+        assert_eq!(classify(CharacterCode(0xfe01)), basic);
     }
 }
