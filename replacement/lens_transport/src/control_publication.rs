@@ -3,9 +3,12 @@
 use crate::control_device::{CalibrationProfile,KeyPublication};
 use crate::control_types::*;
 
+// Only a completion or a waiter wake can re-enter the actor, so those wait for the published
+// state. Key releases, key publications and diagnostics are kernel calls in program order, as the
+// stock handlers make them.
 enum Effect {
     Complete {callback:CallbackToken,status:CompletionStatus,data:[u8;9],length:usize},
-    Notify(WaitTarget),KeyRelease(KeyEvent),Key(KeyPublication),Diagnostic(u32,u32),
+    Notify(WaitTarget),
 }
 pub struct ControlOutbox {effects:[Option<Effect>;40],count:usize}
 impl ControlOutbox {
@@ -18,8 +21,7 @@ impl ControlOutbox {
         for index in 0..self.count {
             match self.effects[index].take().expect("pending effect") {
                 Effect::Complete {callback,status,data,length}=>io.complete(callback,status,&data[..length]),
-                Effect::Notify(target)=>io.notify(target),Effect::KeyRelease(key)=>io.key_release(key),
-                Effect::Key(key)=>io.publish_key(key),Effect::Diagnostic(category,event)=>io.diagnostic(category,event),
+                Effect::Notify(target)=>io.notify(target),
             }
         }
         self.count=0;
@@ -35,8 +37,8 @@ impl<I:ControlIo> ControlServices for PublicationIo<'_,I> {
         self.outbox.push(Effect::Complete {callback,status,data:copied,length:data.len()});
     }
     fn notify(&mut self,target:WaitTarget) {self.outbox.push(Effect::Notify(target));}
-    fn key_release(&mut self,key:KeyEvent) {self.outbox.push(Effect::KeyRelease(key));}
-    fn diagnostic(&mut self,category:u32,event:u32) {self.outbox.push(Effect::Diagnostic(category,event));}
+    fn key_release(&mut self,key:KeyEvent) {self.io.key_release(key);}
+    fn diagnostic(&mut self,category:u32,event:u32) {self.io.diagnostic(category,event);}
     fn start_timer(&mut self,ticks:TickCount,repeating:bool,callback:ControlTimer)->TimerToken {self.io.start_timer(ticks,repeating,callback)}
     fn cancel_timer(&mut self,timer:TimerToken) {self.io.cancel_timer(timer);}
     fn set_detection_callback(&mut self,edge:DetectionEdge,enabled:bool) {self.io.set_detection_callback(edge,enabled);}
@@ -47,7 +49,7 @@ impl<I:ControlIo> ControlPower for PublicationIo<'_,I> {
     fn detection_output(&mut self,mode:DetectionMode,completion:Option<DetectionCompletion>) {self.io.detection_output(mode,completion);}
 }
 impl<I:ControlIo> ControlProfiles for PublicationIo<'_,I> {fn calibration_profiles(&self)->&[CalibrationProfile] {self.io.calibration_profiles()}}
-impl<I:ControlIo> KeyPublicationSink for PublicationIo<'_,I> {fn publish_key(&mut self,key:KeyPublication) {self.outbox.push(Effect::Key(key));}}
+impl<I:ControlIo> KeyPublicationSink for PublicationIo<'_,I> {fn publish_key(&mut self,key:KeyPublication) {self.io.publish_key(key);}}
 impl<I:ControlIo> ControlIo for PublicationIo<'_,I> {
     fn read_mmio(&mut self,address:MmioAddress)->u32 {self.io.read_mmio(address)}
     fn write_mmio(&mut self,address:MmioAddress,value:u32) {self.io.write_mmio(address,value);}

@@ -19,6 +19,8 @@ pub mod control_root;
 pub mod key_ui_native;
 #[cfg(feature = "native-codec")]
 pub mod codec_abi;
+#[cfg(all(feature = "native-actor", target_arch = "arm"))]
+pub mod actor_abi;
 #[cfg(all(feature = "firmware-abi", target_arch = "arm"))]
 pub mod wire_native;
 #[cfg(all(feature = "firmware-abi", target_arch = "arm"))]
@@ -484,6 +486,6 @@ extern crate std;
 #[cfg(test)]
 mod tests;
 
-#[cfg(all(feature = "native-codec", not(test)))]
+#[cfg(all(any(feature = "native-codec", feature = "native-actor"), not(test)))]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo<'_>) -> ! { loop { core::hint::spin_loop(); } }

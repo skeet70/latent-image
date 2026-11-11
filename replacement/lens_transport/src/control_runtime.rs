@@ -150,6 +150,11 @@ struct Published {
 pub struct ControlPublications(Shared<Published>);
 impl ControlPublications {
     pub const fn new()->Self { Self(Shared::new(Published {available:false,status:CompletionStatus::REJECTED,mode:ModeStatus::Unavailable,model:LensModelIdentifier(0),descriptor:[0;128],auxiliary_size:0,descriptor_generation:0,cache:[0;60],cache_generation:0,special_encoding:false})) }
+    /// The stock shared block at 0x0095e1d0 carries available, connected, status and public mode.
+    #[cfg(feature = "native-actor")]
+    pub fn native_snapshot(&self,actor:&ControlActor<'_>)->[u32;4] {
+        self.0.with(|state| [u32::from(state.available),u32::from(actor.connected()),state.status.0 as u32,state.mode as u32])
+    }
     pub fn publish(&self,actor:&ControlActor<'_>) {
         self.0.with(|state| {
             state.available=actor.available();state.status=actor.status();state.mode=actor.mode_status();

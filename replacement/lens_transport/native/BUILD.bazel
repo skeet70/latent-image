@@ -2,7 +2,7 @@ load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
 
 package(default_visibility = ["//visibility:public"])
 
-exports_files(["codec.ld", "control-entry.S", "control-roots.ld"])
+exports_files(["codec.ld", "actor.ld", "control-entry.S", "control-roots.ld"])
 
 _CLANG = "@lab_clang//:bin/clang"
 _JQ = "@lab_jq//:bin/jq"
@@ -87,6 +87,39 @@ haskell_binary(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":codec-suite-lib",
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+    ],
+)
+
+haskell_library(
+    name = "actor-suite-lib",
+    srcs = ["Replacement/LensTransport/ActorSuite.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:case-sha256",
+        "//emulation:native-observation",
+        "//emulation:owned-case",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:filepath",
+        "//host:host-support",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_binary(
+    name = "actor-suite",
+    srcs = ["ActorMain.hs"],
+    main_file = "ActorMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":actor-suite-lib",
         "//emulation:case-sha256",
         "//host:aeson",
         "//host:base",

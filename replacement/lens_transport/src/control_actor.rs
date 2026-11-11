@@ -96,6 +96,10 @@ impl<'a> ControlActor<'a> {
         if self.context.first_response_received { complete(callback,CompletionStatus::SUCCESS,io); }
         else { self.context.first_response_callback=callback; }
     }
+    #[cfg(feature = "native-actor")]
+    pub fn native_context(&mut self) -> &mut ControlContext<'a> { &mut self.context }
+    #[cfg(feature = "native-actor")]
+    pub fn native_device(&mut self) -> &mut ControlDevice { &mut self.device }
     pub fn dispatch(&mut self,message:ControlMessage,io:&mut impl ControlIo,queue:&mut impl ControlQueue)->Result<(),ControlError> {
         use ControlOpcode::*;
         let cache_changed=match message.payload {
@@ -237,11 +241,12 @@ pub fn set_detection_hook(enabled:bool,io:&mut impl ControlIo) { io.set_detectio
 fn reset_pins(io:&mut impl ControlIo) {
     for (address,value) in [(0xfff8900c,0xc0000000),(0xfff89084,0x10000000),(0xfff89090,0x03000000),(0xfff89080,0x10001000),(0xfff89344,0x01000000),(0xfff89350,0x00030000)] { io.write_mmio(MmioAddress(address),value); }
     io.update_mmio(MmioAddress(0xfff89358),0x30000,0);
-    for (address,value) in [(0xfff89340,0x01000100),(0xfff89344,0x00040000),(0xfff8934c,0x00300000),(0xfff89340,0x00040004),(0xfff89344,0x00200000),(0xfff8934c,0x0c000000)] { io.write_mmio(MmioAddress(address),value); }
+    for (address,value) in [(0xfff89340,0x00010001),(0xfff89344,0x00040000),(0xfff8934c,0x00300000),(0xfff89340,0x00040004),(0xfff89344,0x00200000),(0xfff8934c,0x0c000000)] { io.write_mmio(MmioAddress(address),value); }
     io.update_mmio(MmioAddress(0xfff89358),0xc00,0);
     io.write_mmio(MmioAddress(0xfff89340),0x00200020);
 }
 pub fn stop(ctx:&mut ControlContext,io:&mut impl ControlIo,queue:&mut impl ControlQueue) {
+    // 0x006c1f28 stores 0xffffff01 at the shared block's status word.
     ctx.status=CompletionStatus::REJECTED;ctx.attached=false;ctx.public_status=0;ctx.in_flight.fill(false);ctx.last_status=0xffff;
     if let Some(timer)=ctx.poll_timer.take() { io.cancel_timer(timer); }
     if let Some(timer)=ctx.initialization_timer.take() { io.cancel_timer(timer); }
@@ -249,7 +254,7 @@ pub fn stop(ctx:&mut ControlContext,io:&mut impl ControlIo,queue:&mut impl Contr
     ctx.restricted_delays=0;
     io.write_mmio(MmioAddress(0xfff89080),0x80000000);io.write_mmio(MmioAddress(0xfff89080),0x40000000);
     io.set_detection_mode(DetectionMode::Off);
-    reset_pins(io);set_detection_hook(false,io);io.set_detection_callback(DetectionEdge::Detach,false);
+    reset_pins(io);ctx.detection_enabled=false;ctx.detection_samples=0;
     io.key_release(KeyEvent(0x421));
     let _=queue.stop(DeviceCallback::Teardown);
     complete(ctx.periodic[2].callback.take(),CompletionStatus::SUCCESS,io);
@@ -258,7 +263,7 @@ pub fn stop(ctx:&mut ControlContext,io:&mut impl ControlIo,queue:&mut impl Contr
     ctx.state=ControlState::Stopping;
 }
 pub fn reset_detached(ctx:&mut ControlContext,io:&mut impl ControlIo,queue:&mut impl ControlQueue) {
-    ctx.connected=false;ctx.warm_start=false;set_detection_hook(false,io);io.set_detection_callback(DetectionEdge::Detach,false);
+    ctx.connected=false;ctx.warm_start=false;ctx.detection_enabled=false;ctx.detection_samples=0;
     io.key_release(KeyEvent(0xb8));ctx.periodic[13]=PeriodicEntry::EMPTY;ctx.periodic[11]=PeriodicEntry::EMPTY;
     if ctx.state==ControlState::Detached { io.key_release(KeyEvent(0xb9)); }
     stop(ctx,io,queue);if !ctx.gpio_preserved { io.reset_gpio(); }
@@ -305,7 +310,7 @@ pub fn begin_detection(ctx:&mut ControlContext,io:&mut impl ControlIo,queue:&mut
         io.update_mmio(MmioAddress(0xfff89358),0x30000,0);
     }
     ctx.initialization_timer=Some(io.start_timer(TickCount(5000),false,ControlTimer::InitializationTimeoutOn));
-    io.detection_output(DetectionMode::Probe,Some(DetectionCompletion::Probe));
+    io.set_detection_callback(DetectionEdge::Probe,true);
     if ctx.capability.0==0 {
         queue.submit(crate::control_device::QueuePacket::query(crate::control_device::QueueOperation::BeginDetection,DeviceCallback::Response(ResponseKind::Reply17)))?;
     }

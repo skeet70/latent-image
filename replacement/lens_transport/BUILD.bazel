@@ -56,6 +56,106 @@ xm1_rust_elf(
     testonly = True,
 )
 
+# The reply family's control: the owned wire entry with the invalid-magic gate that ignores the
+# machine words. The suite must report it different from stock.
+xm1_rust_staticlib(
+    name = "codec-defect-gate-rust",
+    src = "src/lib.rs",
+    crate_name = "xm1_lens_codec",
+    data = glob(["src/*.rs"], exclude = ["src/lib.rs"]),
+    rustc_flags = _STRICT_ALIGN + ["--cfg", "'feature=\"native-codec\"'", "--cfg", "'feature=\"defect-reply-gate\"'"],
+    testonly = True,
+)
+
+xm1_rust_elf(
+    name = "codec-defect-gate",
+    rust_staticlib = ":codec-defect-gate-rust",
+    link_script = "//replacement/lens_transport/native:codec.ld",
+    entry = "lens_codec_command",
+    extra_ldflags = [
+        "-Wl,--gc-sections",
+        "-Wl,--undefined=lens_codec_command",
+        "-Wl,--undefined=lens_codec_read",
+        "-Wl,--undefined=lens_codec_write",
+        "-Wl,--undefined=lens_codec_ack",
+        "-Wl,--undefined=lens_codec_response",
+    ],
+    testonly = True,
+)
+
+xm1_rust_staticlib(
+    name = "actor-rust",
+    src = "src/lib.rs",
+    crate_name = "xm1_lens_actor",
+    data = glob(["src/*.rs"], exclude = ["src/lib.rs"]),
+    rustc_flags = _STRICT_ALIGN + ["--cfg", "'feature=\"native-actor\"'"],
+    testonly = True,
+)
+
+xm1_rust_elf(
+    name = "actor",
+    rust_staticlib = ":actor-rust",
+    link_script = "//replacement/lens_transport/native:actor.ld",
+    entry = "lens_actor_request",
+    extra_ldflags = [
+        "-Wl,--gc-sections",
+        "-Wl,--undefined=lens_actor_request",
+        "-Wl,--undefined=lens_actor_wake",
+        "-Wl,--undefined=lens_actor_timer",
+        "-Wl,--undefined=lens_actor_device_callback",
+    ],
+    testonly = True,
+)
+
+# The suite's controls: two deliberately wrong owned variants that must be reported different.
+xm1_rust_staticlib(
+    name = "actor-defect-attach-rust",
+    src = "src/lib.rs",
+    crate_name = "xm1_lens_actor",
+    data = glob(["src/*.rs"], exclude = ["src/lib.rs"]),
+    rustc_flags = _STRICT_ALIGN + ["--cfg", "'feature=\"native-actor\"'", "--cfg", "'feature=\"defect-no-attach\"'"],
+    testonly = True,
+)
+
+xm1_rust_elf(
+    name = "actor-defect-attach",
+    rust_staticlib = ":actor-defect-attach-rust",
+    link_script = "//replacement/lens_transport/native:actor.ld",
+    entry = "lens_actor_request",
+    extra_ldflags = [
+        "-Wl,--gc-sections",
+        "-Wl,--undefined=lens_actor_request",
+        "-Wl,--undefined=lens_actor_wake",
+        "-Wl,--undefined=lens_actor_timer",
+        "-Wl,--undefined=lens_actor_device_callback",
+    ],
+    testonly = True,
+)
+
+xm1_rust_staticlib(
+    name = "actor-defect-stop-rust",
+    src = "src/lib.rs",
+    crate_name = "xm1_lens_actor",
+    data = glob(["src/*.rs"], exclude = ["src/lib.rs"]),
+    rustc_flags = _STRICT_ALIGN + ["--cfg", "'feature=\"native-actor\"'", "--cfg", "'feature=\"defect-stop-mmio\"'"],
+    testonly = True,
+)
+
+xm1_rust_elf(
+    name = "actor-defect-stop",
+    rust_staticlib = ":actor-defect-stop-rust",
+    link_script = "//replacement/lens_transport/native:actor.ld",
+    entry = "lens_actor_request",
+    extra_ldflags = [
+        "-Wl,--gc-sections",
+        "-Wl,--undefined=lens_actor_request",
+        "-Wl,--undefined=lens_actor_wake",
+        "-Wl,--undefined=lens_actor_timer",
+        "-Wl,--undefined=lens_actor_device_callback",
+    ],
+    testonly = True,
+)
+
 genrule(
     name = "host-tests-build",
     srcs = glob(["src/*.rs"]),

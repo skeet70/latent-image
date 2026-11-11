@@ -372,6 +372,7 @@ impl ControlDevice {
         if success {
             ctx.readiness.publish();
             if let WaitRegistration::Waiting(target)=ctx.wait { ctx.wait=WaitRegistration::Completed; io.notify(target); }
+            // 0x006c31b4 calls 0x006c2104(6), the Failure key at 0x006c2184, then (1), Ready.
             publish_status(ctx,DeviceStatus::Failure,io);
             publish_status(ctx,DeviceStatus::Ready,io);
             if ctx.restricted_timer.is_some() { self.continue_restricted_initialization(ctx,io,queue); }
@@ -504,11 +505,13 @@ impl ControlDevice {
             ctx.public_status=0;
             ctx.status=CompletionStatus::REJECTED;
             for (destination,source) in self.errors.iter_mut().zip(response.data) { *destination|=source; }
+            // 0x006c56b8 and 0x006c56e0 call 0x006c2104(6), the Failure key at 0x006c2184.
             if response.status==CompletionStatus(1) || (response.status==CompletionStatus(4) && response.data[6]==1) {
                 publish_status(ctx,DeviceStatus::Failure,io);
             }
+            // 0x006c56fc resets the detection GPIO.
             if response.status==CompletionStatus(4) && response.data[8]==1 {
-                if let Some(callback)=ctx.power_callback { io.complete(callback,CompletionStatus(4),&[]); }
+                io.reset_gpio();
             }
             stop(ctx,io,queue);
             return Ok(());
@@ -748,6 +751,7 @@ mod tests {
     #[derive(Default)]
     struct Output {
         messages:Vec<ControlMessage>,completions:Vec<(CallbackToken,CompletionStatus,Vec<u8>)>,keys:Vec<KeyEvent>,
+        diagnostics:Vec<(u32,u32)>,gpio_resets:usize,
         timers:Vec<(TickCount,bool,ControlTimer)>,
     }
     impl ControlServices for Output {
@@ -756,11 +760,11 @@ mod tests {
         fn complete(&mut self,callback:CallbackToken,status:CompletionStatus,data:&[u8]) { self.completions.push((callback,status,data.to_vec())); }
         fn notify(&mut self,_:WaitTarget) { panic!("unexpected notification") }
         fn key_release(&mut self,key:KeyEvent) { self.keys.push(key); }
-        fn diagnostic(&mut self,_:u32,_:u32) {}
+        fn diagnostic(&mut self,category:u32,event:u32) { self.diagnostics.push((category,event)); }
         fn start_timer(&mut self,ticks:TickCount,repeating:bool,kind:ControlTimer)->TimerToken { self.timers.push((ticks,repeating,kind)); TimerToken(self.timers.len() as u32) }
         fn cancel_timer(&mut self,_:TimerToken) {}
         fn set_detection_callback(&mut self,_:DetectionEdge,_:bool) {}
-        fn reset_gpio(&mut self) { panic!("unexpected GPIO reset") }
+        fn reset_gpio(&mut self) { self.gpio_resets+=1; }
     }
     impl ControlProfiles for Output { fn calibration_profiles(&self)->&[CalibrationProfile] { &[] } }
     impl ControlPower for Output {
@@ -845,6 +849,34 @@ mod tests {
         assert_eq!(queue.stops,1);
         assert_eq!(output.keys.iter().filter(|key|**key==KeyEvent(0xb8)).count(),1);
         assert!(readiness.is_ready());
+    }
+
+    #[test]
+    fn initialization_finished_success_publishes_failure_then_ready() {
+        let readiness=SharedReadiness::new();
+        let mut ctx=ControlContext::new(&readiness);
+        let mut device=ControlDevice::new([0;128],false);
+        let mut io=Output::default();
+        let mut queue=Packets::default();
+        device.initialization_finished(&mut ctx,true,&mut io,&mut queue).unwrap();
+        assert_eq!(io.keys,[KeyEvent(0x939),KeyEvent(0x421)]);
+        assert_eq!(io.diagnostics,[(2,0xe1)]);
+        assert_eq!(queue.stops,1);
+    }
+
+    #[test]
+    fn response_status_four_publishes_failure_and_resets_the_gpio() {
+        let readiness=SharedReadiness::new();
+        let mut ctx=ControlContext::new(&readiness);
+        let mut device=ControlDevice::new([0;128],false);
+        let mut io=Output::default();
+        let mut queue=Packets::default();
+        let mut data=[0u8;16]; data[6]=1; data[8]=1;
+        device.response(&mut ctx,ControlResponse { kind:ResponseKind::Reply01,status:CompletionStatus(4),data,page:None },&mut io,&mut queue).unwrap();
+        assert_eq!(io.keys,[KeyEvent(0x939),KeyEvent(0x421)]);
+        assert_eq!(io.gpio_resets,1);
+        assert_eq!(queue.stops,1);
+        assert_eq!(ctx.status,CompletionStatus::REJECTED);
     }
 
     #[test]

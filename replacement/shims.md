@@ -239,6 +239,7 @@ The lens transport and control actor. Its stock-ABI exports and retained task/qu
 | `xm1_lens_task99_entry` in `native/control-entry.S` | veneer or carrier at a stock address | the stock task99 entry | no | the task99 entry is owned | required |
 | retained task/queue/IRQ externs (`task_create`, `task_delete`, `activate`, `queue_create`, `queue_delete`, `send`, `send_irq`, `receive`, `delay`, `cyclic_*`, `xm1_rtos_irq_*`) | trampoline into retained stock | stock RTOS task, queue and IRQ services | no | the RTOS platform owns those services | required |
 | `Callbacks` C-ABI struct and callback registration in `src/abi.rs` | callback registry for guest words | stock callers that pass function pointers and context words | no | callers use the typed completion sink | required |
+| `lens_actor_request`, `lens_actor_wake`, `lens_actor_timer`, `lens_actor_device_callback` and the fixed stock addresses in `src/actor_abi.rs`, built only with feature `native-actor` and placed by `native/actor.ld` | stock-ABI export | the native comparison harness, not stock firmware | no | the actor is compared with stock through its owned interface in a linked image | required |
 
 ## loader_orchestration
 

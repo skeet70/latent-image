@@ -53,7 +53,10 @@ pub enum SnapshotData { TwoBytes([u8;2]),ThreeBytes([u8;3]),NineBytes([u8;9]) }
 pub struct SnapshotResult { pub status:CompletionStatus,pub data:SnapshotData }
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub struct CompletionStatus(pub i32);
-impl CompletionStatus { pub const SUCCESS:Self=Self(0); pub const REJECTED:Self=Self(-255); }
+impl CompletionStatus {
+    pub const SUCCESS:Self=Self(0);
+    pub const REJECTED:Self=Self(-255);
+}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub enum SetupMode { Primary, Secondary, Other }
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
@@ -124,7 +127,6 @@ pub struct ControlContext<'a> {
     pub restricted_timer:Option<TimerToken>,pub restricted_delays:u16,
     pub registered:bool,pub detection_enabled:bool,pub detection_samples:u32,pub warm_start:bool,pub gpio_preserved:bool,
     pub last_status:u16,
-    pub power_callback:Option<CallbackToken>,
 }
 impl<'a> ControlContext<'a> {
     pub fn new(readiness:&'a SharedReadiness)->Self { Self {
@@ -137,7 +139,6 @@ impl<'a> ControlContext<'a> {
         poll_timer:None,initialization_timer:None,detection_timer:None,registered:false,detection_enabled:false,
         restricted_timer:None,restricted_delays:0,
         detection_samples:0,warm_start:false,gpio_preserved:false,last_status:0,
-        power_callback:None,
     } }
 }
 
@@ -152,7 +153,12 @@ pub struct KeyEvent(pub u32);
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub enum ControlTimer { Poll, Detection, InitializationTimeoutOff, InitializationTimeoutOn, RestrictedWait }
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-pub enum DetectionEdge { Attach, Detach }
+pub enum DetectionEdge {
+    Attach,
+    Detach,
+    /// The mode 0x006c23d8 passes to the detection callback entry 0x006b8284.
+    Probe = 2,
+}
 
 pub trait ControlIo: ControlServices + ControlPower + ControlProfiles + KeyPublicationSink {
     fn read_mmio(&mut self,address:MmioAddress)->u32;

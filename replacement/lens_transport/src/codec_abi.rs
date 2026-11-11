@@ -102,6 +102,11 @@ pub unsafe extern "C" fn lens_codec_response() -> u32 {
     unsafe {
         let mode = recovery(load(0x9c));
         let bytes = core::slice::from_raw_parts(0x4096_d820 as *const u8, 4);
+        // The suite's deliberately wrong variant: the invalid-magic gate without the machine
+        // words at 0x00955dd4/0x00955dd8. Only the test-only `codec-defect-gate` ELF compiles this.
+        #[cfg(feature = "defect-reply-gate")]
+        let allow_invalid_magic = false;
+        #[cfg(not(feature = "defect-reply-gate"))]
         let allow_invalid_magic = machine(4) == 6 && machine(8) == 12;
         let result = classify_command(bytes, CommandWord::new(load(0x48)), CommandWord::new(load(0x40)), mode, allow_invalid_magic).unwrap_or_else(|_| unreachable!());
         store(0x4c, result.response.raw()); store(0x40, result.acknowledgement.raw()); store(0x9c, recovery_word(result.recovery));
