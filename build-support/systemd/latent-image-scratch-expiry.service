@@ -1,0 +1,21 @@
+[Unit]
+Description=Expire idle scratch and verify-candidate research output
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/latent-image/scratch-expiry.env
+ExecStart=%h/.local/libexec/latent-image/scratch-expiry --workspace %h/Code/latent-image --max-age-days 7 --apply +RTS -M512M -RTS
+UMask=0077
+MemoryMax=1G
+MemorySwapMax=0
+OOMPolicy=stop
+TimeoutStartSec=2h
+Nice=19
+IOSchedulingClass=idle
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/Code/latent-image/private-data
+RestrictSUIDSGID=true
+StandardOutput=journal
+StandardError=journal

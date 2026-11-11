@@ -1,0 +1,11 @@
+[Unit]
+Description=Expire idle scratch research output daily
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=30min
+Persistent=true
+Unit=latent-image-scratch-expiry.service
+
+[Install]
+WantedBy=timers.target
