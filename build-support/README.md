@@ -78,35 +78,32 @@ Disable OMP's clone-first worktrees with `worktree.clone = false`. Clone-first a
 devenv shell -- host-build test --jobs=2 --local_test_jobs=1 //emulation:native-sdk-tests //emulation:native-runner-tests
 ```
 
-Research output is compacted under the [evidence ledger rules](../docs/principles.md#evidence-ledger). A deletion plan names the current conclusions and failure classes preserved, the retained evidence and the exact redundant files to remove. Record path hashes and preservation checks under `private-data/scratch/reclaim/`, and recheck active runs, current baselines and unmerged work before applying it.
+### Scratch expiry
 
-### Research evidence compaction
+Output under `private-data/scratch/` and `private-data/verify-candidate/` is disposable. A direct child directory of `private-data/scratch/` is an owned task directory when its name equals the last component of an existing local branch or the basename of a registered worktree, or begins with that name followed by `-`; nothing inside an owned task directory expires and the sweep does not enter it. For everything else, a non-directory entry is expired once it is not kept and neither its mtime nor its ctime is within the last `N` days; a symlink is expired as a link and is never followed. The three keep rules are ownership by an existing branch or worktree, an entry in `build-support/scratch-keep.txt`, and an exact path cited by a tracked file at `HEAD` or at the tip of a local branch not merged into `HEAD`; a cited directory pins nothing. Removing a finished branch and its worktree is what releases that output. `private-data/verify-candidate/baselines/` is never swept, and the sweep stays on each root's filesystem. Native test caches belong in `private-data/cache/native` and are bounded by `XM1_NATIVE_CACHE_MAX`.
 
-`//build-support:research-compaction` turns an explicitly reviewed research selection into a hash-bound plan. It does not discover disposable research, infer that an uncited file is obsolete, or authorize recurring deletion. Integrate the report and ledger changes that retire the selected evidence, check current baselines and unmerged consumers, and retain reproduction inputs and unresolved counterexamples before applying a plan.
+`build-support/scratch-keep.txt` lists workspace-relative paths whose content tracked code reads as input, one per line with blank lines and `#` comments ignored. Each entry pins itself and, when it is a directory, its whole subtree, and entries are collected from `HEAD` and unmerged local branches like citations.
 
-Selection schema 1 contains `roots` with canonical absolute `path` values and explicit relative `files`, plus absolute `protected` paths and `limitations`. Each file has `path`, `reason` and a semantic `basis`. Reasons are `superseded-success-diagnostic`, `reproducible-attempt-state` or `obsolete-reuse-cache`. Protected files bind identity and SHA-256; protected directories exclude their descendants from selection and bind directory identity, not recursive contents.
+`//build-support:scratch-expiry` applies the contract. `--workspace` must be a canonical checkout whose `private-data` is a real directory, so a linked worktree is refused rather than sweeping shared data. Without `--apply` it changes nothing and reports what would go; with `--apply` it unlinks expired entries and removes directories left empty, bottom-up, never a sweep root. It prints one JSON object with file and byte counts, owned and removed directories, and failures; a failed removal exits 1 and a usage error exits 2.
 
 ```sh
-devenv shell -- host-build build --jobs=2 //build-support:research-compaction
-tool="$(realpath bazel-bin/build-support/research-compaction)"
-workspace="$(pwd -P)"
-selection="$workspace/private-data/scratch/reclaim/reviewed-selection.json"
-plan="$workspace/private-data/scratch/reclaim/reviewed-plan.json"
-"$tool" plan --workspace "$workspace" --selection "$selection" --out "$plan" +RTS -M2G -RTS
-sha256sum "$plan"
-# Review the exact plan and record its digest before apply.
-"$tool" apply --plan "$plan" --sha256 APPROVED_SHA256 +RTS -M2G -RTS
+devenv shell -- host-build build --jobs=2 //build-support:scratch-expiry
+tool="$(realpath bazel-bin/build-support/scratch-expiry)"
+"$tool" --workspace "$(pwd -P)" --max-age-days 7
+"$tool" --workspace "$(pwd -P)" --max-age-days 7 --apply
 ```
 
-Only named subtrees of the workspace's `private-data/scratch/` are eligible. The scratch root, reclaim records, analysis, firmware, provenance, sessions, read plans, Git metadata and `.dat`/`.nand`/`.img`/`.dump` files are refused. Candidates must be regular single-link files owned by the workspace owner. Planning hashes the selected files and binds ancestor identities; apply rechecks those identities, metadata and contents and skips changed, missing or in-use files. New files are outside the plan.
+The checked-in `latent-image-scratch-expiry` user service and timer run the sweep daily with jitter, a 512 MiB heap cap, `Nice=19`, idle I/O and write access limited to the checkout's `private-data`. Install the built executable at `$HOME/.local/libexec/latent-image/scratch-expiry` and an environment file at `$HOME/.config/latent-image/scratch-expiry.env` whose `PATH` contains git. Install the units from the checkout root:
 
-Apply combines ordinary process inspection and per-thread descriptor inspection before and after content validation. Ordinary invocations inspect the data owner's processes; inaccessible live userspace processes or inspector warnings refuse deletion. Unavailable kernel threads are excluded only when `/proc/PID/status` explicitly reports `Kthread: 1`. Mapped files are protected by inode across reported device aliases, including deleted mappings. Cross-filesystem inode collisions can retain extra candidates. Numeric descriptors require exact device/inode matches; a descriptor that vanishes during inspection is reconciled through its validated procfs path.
+```sh
+install -Dm0644 build-support/systemd/latent-image-scratch-expiry.service "$HOME/.config/systemd/user/latent-image-scratch-expiry.service"
+install -Dm0644 build-support/systemd/latent-image-scratch-expiry.timer "$HOME/.config/systemd/user/latent-image-scratch-expiry.timer"
+systemctl --user daemon-reload
+systemctl --user start latent-image-scratch-expiry.service
+systemctl --user enable --now latent-image-scratch-expiry.timer
+```
 
-A privileged invocation requires an explicitly reviewed immutable `/nix/store/.../bin/lsof` supplied with `--inspector`. Run the already-built executable under sudo, never Bazel. It inspects all visible userspace processes, then permanently drops supplementary groups, GID and UID to the workspace owner before creating the audit or unlinking files. Noncandidate FUSE mounts may be excluded from inspector stat calls only after comparing their device identities with every candidate device; exemptions are printed and incomplete process records still refuse deletion. Privileged inspection is a separately approved operation, not a timer policy.
-
-Selected cohorts and their ancestor namespace must remain retired and stable. Ancestor checks and unlink are not atomic, and two process snapshots do not protect against a future consumer. Other work may continue outside those cohorts; this command is not safe against concurrent replacement of selected paths.
-
-Apply creates an exclusive `PLAN.audit.jsonl` with start, removal, skip and completion events. An exception after audit creation records interruption; inspect a partial audit before preparing another reviewed plan. A completed audit verifies the protected bindings, not a recursive snapshot of protected directories. Recheck filesystem availability separately: apparent selected bytes are not a physical recovery promise on reflinked filesystems.
+Inspect `systemctl --user status latent-image-scratch-expiry.timer` for the next run and `journalctl --user -u latent-image-scratch-expiry.service` for the summary or failures. Disable future sweeps with `systemctl --user disable --now latent-image-scratch-expiry.timer`.
 
 ### Compiler-output maintenance
 
