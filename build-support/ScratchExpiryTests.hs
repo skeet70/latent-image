@@ -174,7 +174,7 @@ runTests input = do
       B.writeFile (task </> "HOLD") (holdContent 117 (addDays (-1) today))
       summary <- runTool executable workspace 7 True future
       check (summaryOwnedDirectories summary == 0) "expired HOLD owned its directory"
-      check (summaryExpiredFiles summary == 1) "file under an expired HOLD did not expire"
+      check (summaryExpiredFiles summary == 2) "an expired HOLD and the file under it did not both expire"
       gone <- doesPathExist old
       check (not gone) "file under an expired HOLD survived"
 
@@ -187,7 +187,7 @@ runTests input = do
       B.writeFile (task </> "HOLD") (holdContent 117 (addDays 25 today))
       summary <- runTool executable workspace 7 True future
       check (summaryOwnedDirectories summary == 0) "HOLD more than 30 days out owned its directory"
-      check (summaryExpiredFiles summary == 1) "file under an overlong HOLD did not expire"
+      check (summaryExpiredFiles summary == 2) "an overlong HOLD and the file under it did not both expire"
       gone <- doesPathExist old
       check (not gone) "file under an overlong HOLD survived"
 
@@ -520,6 +520,10 @@ writeRun workspace task name outcome closed = do
   B.writeFile (directory </> "result/verdict.json") "{}"
   B.writeFile (directory </> "run.json") (runJson outcome closed)
   B.writeFile (directory </> "lock") ""
+  now <- getPOSIXTime
+  let activity = workspace </> "private-data/scratch" </> task </> "activity"
+  B.writeFile activity "recent"
+  setSymbolicLinkTimesHiRes activity (now + 8 * 86400) (now + 8 * 86400)
   pure directory
 
 checkRunFilesKept :: FilePath -> IO ()

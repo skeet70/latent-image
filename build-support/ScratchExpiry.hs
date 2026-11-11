@@ -527,8 +527,9 @@ sweepScratchRoot sweep (WorkspaceRoot root) = do
                 owned <- isOwnedTask sweep absolute name
                 when owned (bumpOwnedDirectory (sweepCounts sweep))
                 sweepRuns sweep (absolute </> "runs")
-                _ <- walkDirectory sweep (deviceID rootStatus) absolute relative (if owned then Owned else Unowned) owned
-                pure ()
+                unless owned $ do
+                  _ <- walkDirectory sweep (deviceID rootStatus) absolute relative Unowned (not (isExpired sweep fileStatus))
+                  pure ()
             | otherwise -> do
                 _ <- visitEntry sweep (deviceID rootStatus) Unowned absolute relative
                 pure ()
@@ -662,12 +663,7 @@ visitEntry sweep rootDevice ownership absolutePath relative = do
     Just fileStatus
       | deviceID fileStatus /= rootDevice -> pure False
       | isDirectory fileStatus && not (isSymbolicLink fileStatus) ->
-          if isRunsDirectory relative
-            then pure False
-            else do
-              let keepDirectory = ownership == Owned || not (isExpired sweep fileStatus)
-              _ <- walkDirectory sweep rootDevice absolutePath relative ownership keepDirectory
-              pure False
+          walkDirectory sweep rootDevice absolutePath relative ownership (ownership == Owned || not (isExpired sweep fileStatus))
       | ownership == Owned -> pure False
       | otherwise -> do
           let bytes = ByteCount (fromIntegral (fileSize fileStatus))
@@ -683,11 +679,6 @@ visitEntry sweep rootDevice ownership absolutePath relative = do
                 else do
                   bump (sweepCounts sweep) RetainedBucket bytes
                   pure False
-
-isRunsDirectory :: RelativePath -> Bool
-isRunsDirectory relative = case splitDirectories (relativePathText relative) of
-  ["private-data", "scratch", _, "runs"] -> True
-  _ -> False
 
 isPinned :: Pins -> FileStatus -> RelativePath -> Bool
 isPinned (Pins citations strong keep) fileStatus relative@(RelativePath value) =

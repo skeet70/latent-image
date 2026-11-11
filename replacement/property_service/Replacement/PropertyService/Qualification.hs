@@ -242,17 +242,17 @@ resolveCacheOutput flag scratch cache path = do
     then pure (Left (flag ++ " must resolve under private-data/scratch or private-data/cache; use private-data/cache/native"))
     else do
       createDirectoryIfMissing True absolute
-      resolved <- firstRoot roots
+      resolved <- firstRoot absolute roots
       pure $ case resolved of
         Nothing -> Left (flag ++ ": " ++ absolute ++ " resolves outside private-data/scratch and private-data/cache")
         Just canonical -> Right canonical
   where
-    firstRoot [] = pure Nothing
-    firstRoot (root : rest) = do
-      outcome <- resolveWithin root absolute
+    firstRoot _ [] = pure Nothing
+    firstRoot target (root : rest) = do
+      outcome <- resolveWithin root target
       case outcome of
         Right canonical -> pure (Just canonical)
-        Left _ -> firstRoot rest
+        Left _ -> firstRoot target rest
 
 -- Typed oracle results ---------------------------------------------------------
 
@@ -764,9 +764,9 @@ setupJob options = do
     then pure (Left "--image4 is not the canonical X-M1 1.50 image4")
     else do
       scratch <- privateScratchRoot
-      cache <- privateCacheRoot
+      cacheRoot <- privateCacheRoot
       outResult <- resolveOutput "--out" scratch (optOut resolved)
-      cacheResult <- resolveCacheOutput "--cache" scratch cache (optCache resolved)
+      cacheResult <- resolveCacheOutput "--cache" scratch cacheRoot (optCache resolved)
       case (outResult, cacheResult) of
         (Left problem, _) -> pure (Left problem)
         (_, Left problem) -> pure (Left problem)

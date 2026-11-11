@@ -2,7 +2,7 @@
 # Rule 1 keeps this list shrinking: delete a line when its writer calls run-output.
 # A line ending in `# pending` marks a file another branch is adding, so a missing file is not a failure, but an existing one must name an output root.
 # Sorted in byte order; comments and blank lines are ignored.
-build-support/RunOutputTests.hs # pending
+build-support/RunOutputMain.hs
 build-support/ScratchExpiry.hs
 build-support/ScratchExpiryTests.hs
 build-support/xm1-decomp.sh
@@ -15,7 +15,7 @@ emulation/menu-engine-pair-trajectories/oracle.jq
 emulation/menu-engine-pair-trajectories/prepare-draw-route-probe.sh
 emulation/menu-engine-pair-trajectories/run-render-pairs.sh
 emulation/modal75-picker-trajectories/trajectories.jq
-host/FujiAF/RunOutput.hs # pending
+host/FujiAF/RunOutput.hs
 host/firmware/EngineStack.hs
 host/firmware/build-recipe-bank-ram.sh
 replacement/application_pump/Replacement/ApplicationPump/Staging.hs
