@@ -3,3 +3,5 @@ private-data/scratch/ControllerStrategy/engine225/controlled-rtc/trajectories
 private-data/scratch/ControllerStrategy/engine225/final-2db1e64a/inputs
 private-data/scratch/ControllerStrategy/picker-runs/picker-15-stock
 private-data/scratch/RenderCutover/prelinked-proof
+private-data/scratch/issue117-camera-fixture/DSCF3095-DCIM.img
+private-data/scratch/xm1-decomp/index
