@@ -319,7 +319,6 @@ run source builder wrapper = do
   mapM_ finish [reusedLegacy, afterLegacyReuse]
   (invalidLegacy, _, _) <- readCreateProcessWithExitCode (proc builder ["--reserve-legacy", "missing.scope"]) {env = Just environment} ""
   invalidLegacyOk <- expect "legacy reservation refuses a missing or unvalidated scope" (invalidLegacy /= ExitSuccess)
-
   (lowStorageCode, lowStorageOutput, _) <- readCreateProcessWithExitCode
     (proc source []) {env = Just (change "XM1_STORAGE_MIN_FREE" "999999999999999999999T" environment)} ""
   storageOk <- expect "insufficient disk reserve prevents admission"
@@ -488,6 +487,7 @@ start command = do
   case started of
     (Just input, Just out, _, process) -> pure (Probe input out process)
     _ -> ioError (userError "probe pipes did not open")
+
 
 probeEnvironment :: FilePath -> IO [(String, String)]
 probeEnvironment home = do

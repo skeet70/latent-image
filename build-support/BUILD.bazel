@@ -11,11 +11,8 @@ exports_files([
 
 platform(
     name = "host",
-    constraint_values = [
-        "@platforms//os:linux",
-        "@platforms//cpu:x86_64",
-        "@rules_nixpkgs_core//constraints:support_nix",
-    ],
+    constraint_values = ["@rules_nixpkgs_core//constraints:support_nix"],
+    parents = ["@local_config_platform//:host"],
     visibility = ["//visibility:public"],
 )
 
@@ -54,6 +51,7 @@ sh_binary(
     visibility = ["//visibility:public"],
 )
 
+# Inspects /proc and calls glibc's euidaccess; its tests run under unshare.
 haskell_binary(
     name = "storage-maintenance",
     srcs = ["StorageMaintenance.hs"],
@@ -64,6 +62,7 @@ haskell_binary(
         "-O2",
         "-rtsopts",
     ],
+    target_compatible_with = ["@platforms//os:linux"],
     visibility = ["//visibility:public"],
     deps = [
         "//host:aeson",

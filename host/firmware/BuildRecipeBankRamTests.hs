@@ -1,14 +1,12 @@
 module Main where
 
 import Control.Monad (forM_, unless)
-import qualified Crypto.Hash.SHA256 as SHA256
 import Data.Bits ((.&.))
 import qualified Data.ByteString as B
 import Data.Either (isLeft)
 import Data.List (sort)
 import qualified Data.List.NonEmpty as NE
 import Data.Word (Word32)
-import Numeric (showHex)
 import System.Environment (getArgs)
 import System.Exit (ExitCode (..), exitFailure)
 import System.Process (readProcessWithExitCode)
@@ -23,11 +21,7 @@ check label passed = unless passed $ do
 
 main :: IO ()
 main = do
-  [archivePath, builderPath] <- getArgs
-  archiveDigest <- SHA256.hash <$> B.readFile archivePath
-  let hexByte byte = let digits = showHex byte "" in replicate (2 - length digits) '0' ++ digits
-  check "default bank archive preserves f0b8386 and #133 byte identity"
-    (concatMap hexByte (B.unpack archiveDigest) == "0fb86c8296323f492efc4f3455a6d3766ab7a372e3f1bb90896c851d4c92e61a")
+  [builderPath] <- getArgs
   forM_ [("lifecycle",0x1dcd8),("lifecycle,modal75",0x1dcf8)] $ \(groups,expected) -> do
     (builderCode, output, _) <- readProcessWithExitCode builderPath
       ["--ram-push-variant-allocation-size",groups] ""

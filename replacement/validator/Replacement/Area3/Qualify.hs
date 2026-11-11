@@ -240,7 +240,8 @@ runResolved options = do
                   workspace <-
                     prepareWorkspace temporary (loadedValue accepted) (loadedRegions accepted) (loadedArtifacts accepted)
                   candidatePath <- canonicalizePath (optionCandidate options)
-                  candidateAttempt <- try (readRegular (8 * 1024 * 1024) candidatePath)
+                  -- Haskell executables linked on Darwin run to tens of MiB.
+                  candidateAttempt <- try (readRegular (64 * 1024 * 1024) candidatePath)
                   case candidateAttempt of
                     Left (message :: IOException) -> pure (refusedReport (show message))
                     Right candidateBytes -> do

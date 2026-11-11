@@ -15,7 +15,7 @@ import System.Environment (getArgs)
 import System.Exit (ExitCode(..))
 import System.FilePath ((</>))
 import System.Posix.Files (setFileMode)
-import System.Posix.Temp (mkdtemp)
+import FujiAF.TestScratch (scratchDirectory)
 import System.Process (readProcessWithExitCode)
 import FujiAF.AfRing
 import qualified FujiAF.Broker as P
@@ -183,7 +183,7 @@ main = do
         , AfRingManifest manifest { manifestEntries = payloadEntries bankD3Payload base }
         , AfRingState installed { stateSize = 0x1560 }
         ] $ \source -> check "invalid reader source refused" (case afRingWindow source of Left _ -> True; Right _ -> False)
-  bracket (mkdtemp "/dev/shm/fuji-af-ring-tests-XXXXXX") removeDirectoryRecursive $ \root -> do
+  bracket (scratchDirectory "fuji-af-ring-tests-XXXXXX") removeDirectoryRecursive $ \root -> do
     setFileMode root 0o700
     (api,transfers) <- peer normal
     tick <- newIORef (0 :: Word64)

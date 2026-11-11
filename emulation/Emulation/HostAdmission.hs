@@ -31,6 +31,7 @@ import Data.List (dropWhileEnd, isPrefixOf, nub, stripPrefix)
 import Data.Maybe (isNothing)
 import GHC.Clock (getMonotonicTime)
 import FujiAF.StorageBudget (StorageFailure, checkStorageBudget)
+import System.Info (os)
 import Numeric (showFFloat)
 import System.Directory (createDirectoryIfMissing, doesFileExist, findExecutable, getHomeDirectory, listDirectory, removeFile, renameFile)
 import System.Environment (getExecutablePath, lookupEnv, setEnv, unsetEnv)
@@ -402,7 +403,10 @@ admit requestedBase command rest = do
   let unit = "xm1-host-build-" ++ show pid ++ ".scope"
   if scoped
     then stopPreviousScope directory lane
-    else ioError (userError "host-build requires a systemd user scope to enforce its memory cap")
+    else if os == "linux"
+      then ioError (userError "host-build requires a systemd user scope to enforce its memory cap")
+      else let MemoryMax cap = memory
+           in hPutStrLn stderr ("No systemd user session: host build runs without the " ++ cap ++ " memory cap") >> hFlush stderr
   checkStorageBudget directory
     `catch` (\problem -> refuseAccounting (show (problem :: StorageFailure)))
     `catch` (\problem -> refuseAccounting (show (problem :: IOException)))

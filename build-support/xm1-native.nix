@@ -20,12 +20,12 @@ pkgs.rustPlatform.buildRustPackage {
       [ "hardware.py" "face_analysis_devices.py" "face_still_reconfiguration.py" ];
   };
   doCheck = true;
-  X70_UNICORN_LIBRARY = "${import ./unicorn-x70.nix { inherit pkgs; }}/lib/libunicorn.so.2";
+  X70_UNICORN_LIBRARY = (import ./unicorn-x70.nix { inherit pkgs; }).library;
   installPhase = ''
     runHook preInstall
     mkdir -p "$out/x70_native"
     cp python/x70_native/*.py python/x70_native/*.pyi python/x70_native/py.typed "$out/x70_native/"
-    cp target/${pkgs.stdenv.hostPlatform.rust.rustcTarget}/release/lib_native.so "$out/x70_native/_native.abi3.so"
+    cp target/${pkgs.stdenv.hostPlatform.rust.rustcTarget}/release/lib_native${pkgs.stdenv.hostPlatform.extensions.sharedLibrary} "$out/x70_native/_native.abi3.so"
     runHook postInstall
   '';
 }

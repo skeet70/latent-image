@@ -32,7 +32,7 @@ pub enum PoolResume {
 
 /// Slot `+0xf0`.
 #[inline(never)]
-#[link_section = ".text.fp_body_poll"]
+#[cfg_attr(target_os = "none", link_section = ".text.fp_body_poll")]
 pub fn poll<M: Machine + Locks + Irq>(
     m: &M,
     id: PoolId,
@@ -53,7 +53,7 @@ pub fn poll<M: Machine + Locks + Irq>(
 
 /// Slots `+0xec` and `+0xf4`. The output word is written only on success.
 #[inline(never)]
-#[link_section = ".text.fp_body_get"]
+#[cfg_attr(target_os = "none", link_section = ".text.fp_body_get")]
 pub fn get<M: Block>(
     m: &M,
     entry: EntryDomain,
@@ -122,7 +122,7 @@ fn dispatch_code(timeout: Timeout) -> i32 {
 
 /// Slot `+0x170`. The owned body reads the exists word, which stock omits.
 #[inline(never)]
-#[link_section = ".text.fp_body_poll_unchecked"]
+#[cfg_attr(target_os = "none", link_section = ".text.fp_body_poll_unchecked")]
 pub fn poll_unchecked<M: Machine + Locks + SaveIrq>(
     m: &M,
     id: PoolId,
@@ -148,7 +148,7 @@ pub fn poll_unchecked<M: Machine + Locks + SaveIrq>(
 
 /// The resumed caller stores the delivered block, then restores the I bit the dispatcher masked.
 #[inline(never)]
-#[link_section = ".text.fp_body_resume"]
+#[cfg_attr(target_os = "none", link_section = ".text.fp_body_resume")]
 pub fn resume<M: Machine + Irq>(m: &M, pending: Pending) -> PoolResume {
     if m.load_byte(pending.task.state()) & TaskState::WAIT.bits() != 0 {
         return PoolResume::Pending(pending);

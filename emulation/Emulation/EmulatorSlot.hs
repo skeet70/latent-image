@@ -23,10 +23,12 @@ import System.Directory (createDirectoryIfMissing, doesDirectoryExist, getCurren
 import System.Environment (getExecutablePath, lookupEnv, setEnv, unsetEnv)
 import System.FilePath ((</>))
 import System.IO (Handle, IOMode (ReadMode, WriteMode), SeekMode (AbsoluteSeek), hFlush, hPutStrLn, stderr, withBinaryFile)
-import System.IO.Error (catchIOError, isDoesNotExistError)
+import System.IO.Error (catchIOError, isDoesNotExistError, isPermissionError)
+import System.Info (os)
 import System.Posix.Files (createSymbolicLink, setFileMode)
 import System.Posix.IO (LockRequest (WriteLock), OpenFileFlags (creat), OpenMode (ReadWrite), closeFd, defaultFileFlags, openFd, setLock)
 import System.Posix.Process (executeFile, getProcessID)
+import System.Posix.Signals (nullSignal, signalProcess)
 import System.Posix.Types (ProcessID)
 import Text.Read (readMaybe)
 
@@ -101,6 +103,7 @@ reexecInSlot policy arguments = do
         ioError (userError "refusing nested verification admission")
     Nothing -> do
       directory <- slotDirectory
+      executable <- getExecutablePath
       pending <- lookupEnv "XM1_ADMISSION_SCOPE"
       case pending of
         Just unit -> do
@@ -108,8 +111,11 @@ reexecInSlot policy arguments = do
           unless (any (\line -> reverse (take (length unit) (reverse line)) == unit) (lines groups)) $
             ioError (userError "admission scope does not contain this process")
           scope <- maybe (ioError (userError "invalid admission scope")) pure (parseScopeName unit)
-          Slot slot <- acquire directory (executionClass policy) scope
-          _ <- reserveMemory (memoryMax policy) (memorySwapMax policy) scope
+          (Slot slot, pinned) <- withBinaryFile (runningImage executable) ReadMode $ \running -> do
+            acquired <- acquire directory (executionClass policy) (Just scope)
+            _ <- reserveMemory (memoryMax policy) (memorySwapMax policy) scope
+            pinned <- pinExecutable directory executable running
+            pure (acquired, pinned)
           hPutStrLn stderr ("verification admission: class=" ++ show (executionClass policy)
             ++ " memory_max_bytes=" ++ show (memoryMaxBytes (memoryMax policy))
             ++ " memory_swap_max_bytes=" ++ show (memorySwapMaxBytes (memorySwapMax policy))
@@ -121,23 +127,38 @@ reexecInSlot policy arguments = do
           pid <- getProcessID
           setEnv "XM1_ADMISSION_OWNER" (show pid)
           setEnv "XM1_ADMISSION_CLASS" (show (executionClass policy))
-          executable <- pinExecutable directory
-          executeFile executable False arguments Nothing
+          executeFile pinned False arguments Nothing
         Nothing -> do
           scoped <- userScopeAvailable
-          unless scoped (ioError (userError "verification admission requires a systemd user scope"))
-          executable <- pinExecutable directory
-          pid <- getProcessID
-          let unit = "xm1-verification-" ++ show pid ++ ".scope"
-              MemoryMax memory = memoryMax policy
-              MemorySwapMax swap = memorySwapMax policy
-          setEnv "XM1_ADMISSION_SCOPE" unit
-          executeFile "systemd-run" True
-            ([ "--user", "--scope", "--quiet", "--collect", "--unit=" ++ unit
-             , "--property=MemoryMax=" ++ memory
-             , "--property=MemorySwapMax=" ++ swap, "--property=OOMPolicy=stop"
-             ] ++ ["--property=CPUWeight=1000" | executionClass policy == NativeVerification]
-               ++ ["--", executable] ++ arguments) Nothing
+          if scoped
+            then do
+              pinned <- withBinaryFile (runningImage executable) ReadMode (pinExecutable directory executable)
+              pid <- getProcessID
+              let unit = "xm1-verification-" ++ show pid ++ ".scope"
+                  MemoryMax memory = memoryMax policy
+                  MemorySwapMax swap = memorySwapMax policy
+              setEnv "XM1_ADMISSION_SCOPE" unit
+              executeFile "systemd-run" True
+                ([ "--user", "--scope", "--quiet", "--collect", "--unit=" ++ unit
+                 , "--property=MemoryMax=" ++ memory
+                 , "--property=MemorySwapMax=" ++ swap, "--property=OOMPolicy=stop"
+                 ] ++ ["--property=CPUWeight=1000" | executionClass policy == NativeVerification]
+                   ++ ["--", pinned] ++ arguments) Nothing
+            else do
+              when (os == "linux") (ioError (userError "verification admission requires a systemd user scope"))
+              (Slot slot, pinned) <- withBinaryFile (runningImage executable) ReadMode $ \running -> do
+                acquired <- acquire directory (executionClass policy) Nothing
+                pinned <- pinExecutable directory executable running
+                pure (acquired, pinned)
+              checkStorageBudget storage
+              setEnv slotVariable (show slot)
+              pid <- getProcessID
+              setEnv "XM1_ADMISSION_OWNER" (show pid)
+              setEnv "XM1_ADMISSION_CLASS" (show (executionClass policy))
+              let MemoryMax memory = memoryMax policy
+              hPutStrLn stderr ("No systemd user session: " ++ show (executionClass policy) ++ " slot " ++ show slot ++ " runs without the " ++ memory ++ " memory cap")
+              hFlush stderr
+              executeFile pinned False arguments Nothing
 
 defaultStoragePath :: IO FilePath
 defaultStoragePath = do
@@ -151,7 +172,7 @@ slotDirectory = do
   createDirectoryIfMissing True directory
   pure directory
 
-acquire :: FilePath -> ExecutionClass -> ScopeName -> IO Slot
+acquire :: FilePath -> ExecutionClass -> Maybe ScopeName -> IO Slot
 acquire directory execution scope = do
   let maximumSlots = classConcurrency (resourceClass execution)
       prefix = if execution == FullSystem then "full-" else "native-"
@@ -170,7 +191,7 @@ acquire directory execution scope = do
         locked <- try (setLock fd (WriteLock, AbsoluteSeek, 0, 0)) :: IO (Either IOException ())
         case locked of
           Right () -> do
-            claimScopeRecord (directory </> (slotPrefix ++ show slot ++ ".scope")) scope
+            forM_ scope (claimScopeRecord (directory </> (slotPrefix ++ show slot ++ ".scope")))
             pure (Just (Slot slot))
           Left _ -> do
             owner <- lockOwnerText fd
@@ -180,22 +201,28 @@ acquire directory execution scope = do
   attempt
 
 -- | A private copy of the running executable beneath the slot directory, named
--- @pin-<pid>@ for the PID execve preserves. The bytes come from the running
--- inode through @/proc/self/exe@, so no relink of the on-disk file changes them.
-pinExecutable :: FilePath -> IO FilePath
-pinExecutable directory = do
+-- @pin-<pid>@ for the PID execve preserves, copied from RUNNING, a handle on
+-- 'runningImage'.
+pinExecutable :: FilePath -> FilePath -> Handle -> IO FilePath
+pinExecutable directory executable running = do
   sweepPinned directory
   pid <- getProcessID
-  executable <- getExecutablePath
   let pinned = directory </> ("pin-" ++ show pid)
   -- A crashed run with a reused PID can leave either path behind.
   removeIfPresent pinned
   removeIfPresent (pinned ++ ".runfiles")
-  withBinaryFile "/proc/self/exe" ReadMode $ \running ->
-    withBinaryFile pinned WriteMode $ \copy -> copyChunks running copy
+  withBinaryFile pinned WriteMode $ \copy -> copyChunks running copy
   setFileMode pinned 0o700
   linkRunfiles executable pinned
   pure pinned
+
+-- | On Linux the running inode through @/proc/self/exe@; elsewhere the
+-- executable's path, opened before the slot wait, so an unlink and relink of
+-- that path during the wait leaves the open image unchanged.
+runningImage :: FilePath -> FilePath
+runningImage executable
+  | os == "linux" = "/proc/self/exe"
+  | otherwise = executable
 
 removeIfPresent :: FilePath -> IO ()
 removeIfPresent path = removeFile path `catchIOError` \problem ->
@@ -234,10 +261,14 @@ sweepPinned directory = do
   forM_ entries $ \entry -> case pinnedPid entry of
     Nothing -> pure ()
     Just pid -> do
-      alive <- doesDirectoryExist ("/proc" </> show pid)
+      alive <- processExists pid
       unless alive $ do
         _ <- try (removeFile (directory </> entry)) :: IO (Either IOException ())
         pure ()
+
+-- | Signal 0 checks existence only; a permission refusal means the process exists.
+processExists :: ProcessID -> IO Bool
+processExists pid = (signalProcess nullSignal pid >> pure True) `catchIOError` (pure . isPermissionError)
 
 pinnedPid :: String -> Maybe ProcessID
 pinnedPid entry = do
