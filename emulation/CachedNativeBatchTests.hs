@@ -734,7 +734,7 @@ cacheEvictionTest root runner = do
     entries <- cacheEntries cache
     ensure (not firstPresent) "publishing past the budget kept the oldest entry"
     ensure
-      (length entries == 1 && takeFileName (head entries) /= takeFileName firstEntry)
+      (case entries of [entry] -> takeFileName entry /= takeFileName firstEntry; _ -> False)
       ("publishing past the budget did not keep only the newest entry: " ++ show entries)
     (again, _) <- cachedObservedBatchWithSince (MaintenanceInterval 0) WriteFailedResults cache runner firstPath
     ensure (again == BatchExecuted) "an evicted batch did not execute again"
