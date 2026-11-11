@@ -23,11 +23,14 @@ impl NativeObjectKernel {
         match kind { Cursor::Semaphore => 0x40a0_f86c, Cursor::Event => 0x40a0_fc38, Cursor::Task => 0x40a0_fc34 }
     }
     /// Kernel interface slots hold an entry with the signature `F`; they are not registry callbacks.
-    fn entry<F: CallbackFn>(base: u32, offset: u32) -> F {
+    ///
+    /// # Safety
+    /// `base + offset` must hold a kernel interface word with the signature `F`.
+    unsafe fn entry<F: CallbackFn>(base: u32, offset: u32) -> F {
         unsafe { KernelSlot::read(base, offset).entry() }
     }
     fn unary(offset: u32, id: KernelId) -> ObjectStatus {
-        let call = Self::entry::<unsafe extern "C" fn(u32) -> i32>(Self::root(), offset);
+        let call = unsafe { Self::entry::<unsafe extern "C" fn(u32) -> i32>(Self::root(), offset) };
         ObjectStatus(unsafe { call(id.wire()) })
     }
 }
@@ -47,33 +50,33 @@ impl ObjectKernel for NativeObjectKernel {
     fn restore_interrupts(&mut self, saved: u32) { unsafe { let _ = xm1_rtos_own_first_slot_168(saved); } }
     fn create_semaphore(&mut self, id: KernelId, record: SemaphoreRecord) -> ObjectStatus {
         // The record pointer travels as one word.
-        let call = Self::entry::<unsafe extern "C" fn(u32, *const u32) -> i32>(Self::root(), 0x64);
+        let call = unsafe { Self::entry::<unsafe extern "C" fn(u32, *const u32) -> i32>(Self::root(), 0x64) };
         ObjectStatus(unsafe { call(id.wire(), &record as *const SemaphoreRecord as *const u32) })
     }
     fn delete_semaphore(&mut self, id: KernelId) -> ObjectStatus { Self::unary(0x68, id) }
     fn create_event(&mut self, id: KernelId, record: EventRecord) -> ObjectStatus {
-        let call = Self::entry::<unsafe extern "C" fn(u32, *const u32) -> i32>(Self::root(), 0x80);
+        let call = unsafe { Self::entry::<unsafe extern "C" fn(u32, *const u32) -> i32>(Self::root(), 0x80) };
         ObjectStatus(unsafe { call(id.wire(), &record as *const EventRecord as *const u32) })
     }
     fn delete_event(&mut self, id: KernelId) -> ObjectStatus { Self::unary(0x84, id) }
     fn set_event(&mut self, id: KernelId, bits: u32) -> ObjectStatus {
-        let context = Self::entry::<unsafe extern "C" fn() -> u32>(Self::root(), 0x148);
+        let context = unsafe { Self::entry::<unsafe extern "C" fn() -> u32>(Self::root(), 0x148) };
         let offset = if unsafe { context() } == 1 { 0x8c } else { 0x88 };
-        let call = Self::entry::<unsafe extern "C" fn(u32, u32) -> i32>(Self::root(), offset);
+        let call = unsafe { Self::entry::<unsafe extern "C" fn(u32, u32) -> i32>(Self::root(), offset) };
         ObjectStatus(unsafe { call(id.wire(), bits) })
     }
     fn create_task(&mut self, id: KernelId, record: TaskRecord) -> ObjectStatus {
         extern "C" { fn xm1_wireless_driver_task(context: u32); fn xm1_wireless_supplicant_task(context: u32); }
         let entry = match record.kind { TaskKind::Driver => xm1_wireless_driver_task as usize as u32, TaskKind::Supplicant => xm1_wireless_supplicant_task as usize as u32 };
         let record = [2, record.context.address(), entry, record.kind.priority(), record.kind.stack_length() as u32, record.stack.address()];
-        let call = Self::entry::<unsafe extern "C" fn(u32, *const u32) -> i32>(Self::load(0x0096_bd20), 0);
+        let call = unsafe { Self::entry::<unsafe extern "C" fn(u32, *const u32) -> i32>(Self::load(0x0096_bd20), 0) };
         ObjectStatus(unsafe { call(id.wire(), record.as_ptr()) })
     }
     fn activate_task(&mut self, id: KernelId) -> ObjectStatus { Self::unary(0x0c, id) }
     fn suspend_task(&mut self, id: KernelId) -> ObjectStatus { Self::unary(0x10, id) }
     fn terminate_task(&mut self, id: KernelId) -> ObjectStatus { Self::unary(0x18, id) }
     fn delete_task(&mut self, id: KernelId) -> ObjectStatus {
-        let call = Self::entry::<unsafe extern "C" fn(u32, u32) -> i32>(Self::root(), 4);
+        let call = unsafe { Self::entry::<unsafe extern "C" fn(u32, u32) -> i32>(Self::root(), 4) };
         ObjectStatus(unsafe { call(id.wire(), 1) })
     }
 }

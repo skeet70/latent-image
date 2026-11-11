@@ -26,8 +26,10 @@ impl OwnedCompletionAddress {
     pub fn storage() -> Self { Self::from_entry(xm1_power_storage_shutdown_callback) }
     #[cfg(target_arch = "arm")]
     pub fn settings() -> Result<Self, CallbackError> { Self::register(crate::callback_registry::registry(), xm1_power_settings_shutdown_callback) }
-    #[cfg(target_arch = "arm")]
-    pub fn device() -> Self { Self::from_entry(xm1_power_device_shutdown_callback) }
+    /// The device consumer resolves the status shape.
+    pub fn device(registry: &CallbackRegistry, entry: extern "C" fn() -> i32) -> Result<Self, CallbackError> {
+        Self::register(registry, entry)
+    }
     #[cfg(target_arch = "arm")]
     pub fn task7() -> Result<Self, CallbackError> { Self::register(crate::callback_registry::registry(), xm1_power_task7_shutdown_callback) }
     #[cfg(target_arch = "arm")]
@@ -39,6 +41,12 @@ pub fn invoke_status_completion(registry: &CallbackRegistry, word: CallbackWord)
     let entry: unsafe extern "C" fn() -> i32 = registry.resolve(word)?;
     unsafe { entry() };
     Ok(())
+}
+
+/// The audio release consumer resolves the status shape.
+pub fn register_audio_completion(registry: &CallbackRegistry, entry: unsafe extern "C" fn() -> i32) -> Result<CallbackWord, CallbackError> {
+    registry.ensure(entry)?;
+    Ok(CallbackWord(entry as usize))
 }
 
 fn post_completion(rtos: &mut impl ShutdownRtos, event: u16) -> i32 {

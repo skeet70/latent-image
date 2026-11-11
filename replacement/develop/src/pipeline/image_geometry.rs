@@ -874,7 +874,7 @@ pub unsafe extern "C" fn xm1_pipeline_image_crop_interrupt() {
     unsafe { CropEngineAddress::STATE.field(96).write_word(0) };
     unsafe { xm1_develop_leave_critical(token) };
     if completed != 0 {
-        let _ = callbacks::call_no_arguments(callbacks::registry(), CallbackWord(completed));
+        let _ = callbacks::call_no_arguments(callbacks::registry(), CallbackWord(completed as usize));
     }
 }
 

@@ -18,7 +18,7 @@ mod owned_primitives {
         fn xm1_power_interrupt_unlock(token: u32);
         fn xm1_power_task_delay(ticks: u32) -> i32;
         fn xm1_power_owned_callback_register(word: u32, shape: u32) -> i32;
-        fn xm1_power_timer_irq_attach(source: u32, handler: unsafe extern "C" fn(), output: *mut u32) -> i32;
+        fn xm1_power_timer_irq_attach(source: u32, handler: u32, output: *mut u32) -> i32;
         fn xm1_power_timer_release_handle(handle: u32) -> i32;
     }
     pub(super) unsafe fn scanout_enter_critical() -> u32 { unsafe { xm1_power_interrupt_lock() } }
@@ -27,7 +27,6 @@ mod owned_primitives {
     pub(super) unsafe fn scanout_irq_configure(source: u32, handler: u32, output: *mut u32) -> i32 {
         let registered = unsafe { xm1_power_owned_callback_register(handler, crate::panel_device::COMPLETION_SHAPE) };
         if registered != 0 { return registered; }
-        let handler: unsafe extern "C" fn() = unsafe { core::mem::transmute(handler as usize) };
         unsafe { xm1_power_timer_irq_attach(source, handler, output) }
     }
     pub(super) unsafe fn scanout_irq_release(handle: u32) -> i32 { unsafe { xm1_power_timer_release_handle(handle) } }
@@ -91,7 +90,7 @@ impl commit::Registration for Registration {
         let output=(stock::runtime_base(engine)+0x14) as *mut u32;
         let result=match engine{
             Engine::Zero=>{let request=scheduler::RegistrationRequest{callback:scheduler::CallbackId::new(xm1_scanout_commit_zero as *const () as u32),retention:scheduler::Retention::PersistentActive,order:scheduler::Order(1),phase:scheduler::Phase::Zero};let mut handle=scheduler::Handle(0);let mut observer=RegistrationOutput{packet:core::ptr::null_mut(),output};scheduler::Scheduler::new(StockScheduler).register_source_observed(request,&mut handle,selected_handler,&mut Device::plain(),&mut observer).map_or_else(|error|error.stock_code(),|()|0)}
-            Engine::One=>scanout_irq_configure(14,xm1_scanout_commit_one as *const () as u32,output),
+            Engine::One=>scanout_irq_configure(14,xm1_scanout_commit_one_completion as *const () as u32,output),
         };
         state.runtime=stock::load_runtime(engine);result
     }}
@@ -121,6 +120,7 @@ pub unsafe extern "C" fn xm1_scanout_commit(e:u32)->i32{let engine=match engine(
 pub unsafe extern "C" fn xm1_scanout_commit_zero()->i32{xm1_scanout_commit(0)}
 #[no_mangle]
 pub unsafe extern "C" fn xm1_scanout_commit_one()->i32{xm1_scanout_commit(1)}
+extern "C" fn xm1_scanout_commit_one_completion(){let _=unsafe{xm1_scanout_commit(1)};}
 #[no_mangle]
 pub unsafe extern "C" fn xm1_scanout_capture(e:u32,packet:*const u32)->i32{
     let engine=match engine(e){Ok(engine)=>engine,Err(error)=>return error.stock()};let configuration=commit::CaptureConfiguration{mode:commit::CaptureMode(read_volatile(packet)),selector:commit::ConfigurationSelector(read_volatile(packet.add(1))),auxiliary:commit::ConfigurationAuxiliary(read_volatile(packet.add(2)))};let mut state=EngineState::zero();state.runtime=stock::load_runtime(engine);let first=state.runtime.capture_count==0;

@@ -146,13 +146,13 @@ pub unsafe extern "C" fn xm1_power_timer_irq_attach(source: u32, handler: u32, o
         xm1_power_command_diagnostic(2, 15);
         return -30;
     };
-    if let Err(error) = crate::charge_timers::admit_irq_handler(crate::callback_registry::CallbackWord(handler as usize)) {
-        return crate::callback_registry::refused(error);
-    }
     let Some(handler) = IrqHandler::from_abi(handler) else {
         xm1_power_command_diagnostic(2, 15);
         return -30;
     };
+    if let Err(error) = crate::charge_timers::admit_irq_handler(crate::callback_registry::CallbackWord(handler.address() as usize)) {
+        return crate::callback_registry::refused(error);
+    }
     match attach_timer_irq(&mut NativeChargeTimers, source, handler) {
         Ok(handle) => { write_volatile(output, handle.0); 0 }
         Err(status) => status.0,

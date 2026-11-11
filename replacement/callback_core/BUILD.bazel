@@ -1,0 +1,38 @@
+load("//replacement/toolchain:rust.bzl", "xm1_rust_rlib")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+package(default_visibility = ["//visibility:public"])
+
+# The shared admission table, registry and kernel-slot reader. The Power services leaf and the
+# develop unit both compile this crate; neither keeps a private copy.
+genrule(
+    name = "host",
+    srcs = ["src/lib.rs"],
+    outs = ["host/libxm1_callback_core.rlib"],
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --crate-type=rlib --crate-name=xm1_callback_core $(location src/lib.rs) -o $@",
+    tools = ["@lab_xm1_rust//:bin/rustc"],
+)
+
+xm1_rust_rlib(
+    name = "arm",
+    src = "src/lib.rs",
+    crate_name = "xm1_callback_core",
+    out = "arm/libxm1_callback_core.rlib",
+)
+
+genrule(
+    name = "host-test-binary",
+    srcs = ["src/lib.rs", "src/callback_core_tests.rs"],
+    outs = ["callback-core-host-tests-bin"],
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test --crate-name=xm1_callback_core $(location src/lib.rs) -o $@",
+    executable = True,
+    tools = ["@lab_xm1_rust//:bin/rustc"],
+)
+
+sh_test(
+    name = "host-tests",
+    size = "small",
+    srcs = ["host-test.sh"],
+    args = ["$(location :host-test-binary)"],
+    data = [":host-test-binary"],
+)

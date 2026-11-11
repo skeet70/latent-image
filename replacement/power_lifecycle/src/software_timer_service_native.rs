@@ -95,10 +95,7 @@ pub extern "C" fn xm1_power_software_timer_initialize(fallback: u32) -> i32 {
 #[no_mangle]
 pub extern "C" fn xm1_power_software_timer_service_delete() -> i32 {
     let status = unsafe { timer_abi::xm1_power_hardware_timer_stop(read(SERVICE + 12)) };
-    if status != 0 {
-        let _ = unsafe { xm1_power_command_diagnostic(2, 0x1d) };
-        return status;
-    }
+    if status != 0 { return status; }
     let status = unsafe { timer_abi::xm1_power_hardware_timer_release(read(SERVICE + 12)) };
     if status != 0 { return status; }
     if unsafe { xm1_power_queue_delete(9) } != 0 { return -255; }

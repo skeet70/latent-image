@@ -33,7 +33,7 @@ impl DetectionIo for NativeDetectionIo {
             DetectionSource::Low => low_irq,
             DetectionSource::Probe => probe_irq,
         };
-        let handler = match register_handler(handler) { Ok(handler) => handler, Err(error) => return Err(ServiceStatus(error.status())) };
+        let handler = match register_handler(handler) { Ok(handler) => handler, Err(error) => return Err(ServiceStatus(xm1_power_services::callback_registry::refused(error))) };
         let mut token = 0;
         let status = unsafe { xm1_power_timer_irq_attach(source.number(), handler.0 as u32, &mut token) };
         if status == 0 { Ok(DetectionIrqToken(token)) } else { Err(ServiceStatus(status)) }

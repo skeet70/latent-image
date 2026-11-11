@@ -36,9 +36,9 @@ sh_test(
 
 genrule(
     name = "pipeline-test-binary",
-    srcs = ["src/pipeline_tests.rs", ":module"],
+    srcs = ["src/pipeline_tests.rs", ":module", "//replacement/callback_core:host"],
     outs = ["pipeline-tests-bin"],
-    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test --crate-name=pipeline_tests $(location src/pipeline_tests.rs) -o $@",
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test --crate-name=pipeline_tests --extern xm1_callback_core=$(location //replacement/callback_core:host) -Ldependency=$$(dirname $(location //replacement/callback_core:host)) $(location src/pipeline_tests.rs) -o $@",
     tools = ["@lab_xm1_rust//:bin/rustc"],
     executable = True,
     testonly = True,
@@ -65,6 +65,7 @@ xm1_rust_staticlib(
     name = "develop-rust",
     src = "standalone.rs",
     crate_name = "xm1_develop",
+    rlib_deps = {"xm1_callback_core": "//replacement/callback_core:arm"},
     data = [
         ":module",
         "//replacement/capture:module",

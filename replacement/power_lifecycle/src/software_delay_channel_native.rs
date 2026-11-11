@@ -29,7 +29,7 @@ impl DelayChannels for NativeChannels {
     fn timer(&self) -> TimerHandle { TimerHandle(read(STATE)) }
     fn start_timer(&mut self, period: TimerPeriod) -> ServiceStatus {
         let tick: unsafe extern "C" fn() = xm1_power_software_delay_tick;
-        if let Err(error) = callbacks().ensure(tick) { return ServiceStatus(error.status()); }
+        if let Err(error) = callbacks().ensure(tick) { return ServiceStatus(crate::callback_registry::refused(error)); }
         ServiceStatus(unsafe { xm1_power_software_timer_start(period.0, 1, tick as usize as u32, STATE as *mut u32) })
     }
     fn cancel_timer(&mut self, handle: TimerHandle) { let _ = unsafe { xm1_power_software_timer_cancel(handle.0) }; }

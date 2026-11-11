@@ -114,6 +114,14 @@ fn save_request(runtime: &mut impl Runtime) {
     for offset in 0..length { runtime.write8(at(destination, offset), runtime.read8(at(source, offset))); }
 }
 
+/// Enters the saved completion word as `extern "C" fn() -> i32`, whose status stock discards.
+pub fn invoke_completion(
+    registry: &crate::callback_registry::CallbackRegistry,
+    callback: Callback,
+) -> Result<(), crate::callback_registry::CallbackError> {
+    crate::shutdown_requests::invoke_status_completion(registry, crate::callback_registry::CallbackWord(callback.0 as usize))
+}
+
 pub fn dispatch_shutdown(runtime: &mut impl Runtime, configuration: Address) -> Result<(), DispatchError> {
     if runtime.read16(CONTEXT) != 0x1a0c { return Err(DispatchError::DifferentCommand); }
     let step = ChargeStep::from_abi(runtime.read16(CHARGE_STEP)).ok_or(DispatchError::InvalidChargeStep)?;

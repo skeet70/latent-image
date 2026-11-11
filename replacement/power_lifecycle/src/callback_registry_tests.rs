@@ -18,19 +18,6 @@ fn reset() {
     ARGUMENT.store(0, Ordering::SeqCst);
 }
 
-macro_rules! distinct_callbacks {
-    ($($name:ident),* $(,)?) => {
-        $(unsafe extern "C" fn $name() {})*
-        const DISTINCT: [unsafe extern "C" fn(); 48] = [$($name),*];
-    };
-}
-distinct_callbacks!(
-    c00, c01, c02, c03, c04, c05, c06, c07, c08, c09, c10, c11, c12, c13, c14, c15,
-    c16, c17, c18, c19, c20, c21, c22, c23, c24, c25, c26, c27, c28, c29, c30, c31,
-    c32, c33, c34, c35, c36, c37, c38, c39, c40, c41, c42, c43, c44, c45, c46, c47,
-);
-unsafe extern "C" fn spare() {}
-
 #[test]
 fn registered_callback_is_called_once_with_its_argument() {
     reset();
@@ -124,34 +111,6 @@ fn ensure_is_idempotent_for_the_same_signature() {
     assert_eq!(registry.ensure(argument_callback()), Ok(()));
     assert_eq!(registry.ensure(argument_callback()), Ok(()));
     assert!(registry.resolve::<unsafe extern "C" fn(u32)>(argument_callback().word()).is_ok());
-}
-
-#[test]
-fn a_full_table_refuses_a_new_entry() {
-    let registry = CallbackRegistry::new();
-    for callback in DISTINCT { registry.ensure(callback).unwrap(); }
-    assert_eq!(registry.ensure(spare as unsafe extern "C" fn()), Err(CallbackError::Full));
-}
-
-#[test]
-fn every_enumerated_owned_word_fits_and_resolves() {
-    // The leaf, application, display, NAND and vendor crates register 39 owned words; the table
-    // holds those plus nine spare entries.
-    let registry = CallbackRegistry::new();
-    for callback in &DISTINCT[..39] {
-        registry.ensure(*callback).unwrap();
-        assert!(registry.resolve::<unsafe extern "C" fn()>(callback.word()).is_ok());
-    }
-    for callback in &DISTINCT[39..] { registry.ensure(*callback).unwrap(); }
-    assert_eq!(registry.ensure(spare as unsafe extern "C" fn()), Err(CallbackError::Full));
-}
-
-#[test]
-fn an_admitted_word_needs_no_entry() {
-    let registry = CallbackRegistry::new();
-    assert_eq!(registry.ensure(unsafe { core::mem::transmute::<usize, unsafe extern "C" fn(u32)>(0x0061_c420) }), Ok(()));
-    for callback in DISTINCT { registry.ensure(callback).unwrap(); }
-    assert_eq!(registry.ensure(spare as unsafe extern "C" fn()), Err(CallbackError::Full));
 }
 
 #[test]

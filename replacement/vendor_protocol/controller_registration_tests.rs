@@ -9,7 +9,7 @@ fn the_four_producers_register_before_the_timer_entry_resolves_them() {
     for word in PRODUCERS {
         let word = CallbackWord(word as usize);
         assert_eq!(registry().resolve::<unsafe extern "C" fn()>(word).unwrap_err().status(), -255);
-        assert_eq!(register_timer_callback(word.0 as u32), Ok(()));
+        assert_eq!(unsafe { register_timer_callback(word.0 as u32) }, Ok(()));
         assert_eq!(registry().resolve::<unsafe extern "C" fn()>(word).map(|callback| callback as usize), Ok(word.0));
     }
 }
@@ -17,5 +17,5 @@ fn the_four_producers_register_before_the_timer_entry_resolves_them() {
 #[test]
 fn a_refused_producer_word_reports_the_entry_status() {
     // 0x0094_0001 is unaligned, which the entry refuses.
-    assert_eq!(register_timer_callback(0x0094_0001), Err(ServiceStatus(-255)));
+    assert_eq!(unsafe { register_timer_callback(0x0094_0001) }, Err(ServiceStatus(-255)));
 }

@@ -28,6 +28,7 @@ These shims exist only because two owned units meet through a stock-shaped or C-
 | Property service exports | property_service → develop, power_lifecycle | `xm1_property_get` and `xm1_property_set` in `property_service/src/lib.rs` | Both callers use the typed property service in one image after stock comparison | required |
 | Record store exports | record_store → settings_storage, power_lifecycle | `record_store_*` exports in `record_store/src/lib.rs` over the guest adapter | Both clients link the owned store and both sides compare with stock in one image | required |
 | Calibration exports | calibration_liveview → power_lifecycle | `xm1_calibration_u16` and `xm1_calibration_i16` in `calibration_liveview/src/abi.rs` | Power links the calibration crate directly in one image after stock comparison | required |
+| Shared callback registry | power_lifecycle, develop → callback_core | `CallbackRegistry`, `KernelSlot` and the admitted extents in `callback_core/src/lib.rs`, re-exported with each unit's critical section | Both units link the shared crate and neither keeps a private extents table or kernel-slot reader; both sides have stock comparisons in one image | required |
 | Pipeline image exports | develop → power_lifecycle | `xm1_pipeline_image_current_task`, `xm1_pipeline_image_send_message`, `xm1_pipeline_image_receive_message` in `develop/src` | Power links the develop pipeline directly in one image after stock comparison | required |
 | Menu value transaction exports | menu_value → modal_runtime | `rb_menu_value_cancel` and `rb_menu_value_confirm` in `menu_value/src/lib.rs` | Modal dispatch calls the menu-value crate directly in one image after stock comparison | required |
 | Modal dispatch export | modal_runtime → power_lifecycle | `rb_modal_dispatch` in `modal_runtime/src/lib.rs` | Power links modal dispatch directly in one image after stock comparison | required |
@@ -102,6 +103,15 @@ The calibration cache consumer and live-view publication. Its exports sit at the
 | fixed calibration cache at `0x41acd800` and the 504-byte defaults resource | guest-memory layout view | retained calibration consumers that read the same cache | no | every cache consumer is owned | required |
 | `xm1_calibration_u16`/`xm1_calibration_i16` exports | C-ABI bridge between two owned units | power_lifecycle | yes | power links the crate directly and both sides compare with stock in one image | required |
 
+## callback_core
+
+The shared admission table, shape-typed registry and kernel-slot reader. The Power services leaf and the develop unit both compile it; the leaf re-exports it with the Power interrupt lock, develop with its own, and neither keeps a private extents table or kernel-slot reader.
+
+| Shim | Kind | Other side | Owned now | Removal condition | State |
+| --- | --- | --- | --- | --- | --- |
+| `CallbackRegistry` in `src/lib.rs` and the nine image text extents in `IMAGES`/`EXCLUDED`/`ADMITTED` | callback registry for guest words | stock image 4, 5 and 6 callback words and the owned registrants in the Power leaf, develop, display_scanout, application_nand and vendor_protocol | no | every stock callback word is replaced by an owned entry with a typed Rust signature | required |
+| `KernelSlot::read` and `kernel_slot` in `src/lib.rs` | kernel interface slot | the kernel interface block at 0x96bd20 read by the Power leaf and develop | no | the kernel interface is owned and entered through typed Rust functions | required |
+
 ## capture
 
 The develop-step completion, cancellation and scheduler-release body. It exports its boundary to develop and trampolines into retained capture services.
@@ -139,6 +149,7 @@ The development pipeline, including `font_core` and `calibration_core`. It is th
 | `xm1_property_get`/`xm1_property_set` externs | C-ABI bridge between two owned units | property_service | yes | develop links the property service directly and both sides compare with stock in one image | required |
 | `xm1_save_facade` extern | C-ABI bridge between two owned units | save | yes | develop links the save facade directly and both sides compare with stock in one image | required |
 | `rb_capture_*` externs in `src/pipeline` and `develop/src` | C-ABI bridge between two owned units | capture | yes | develop links the capture crate directly and both sides compare with stock in one image | required |
+| Shared callback registry and kernel-slot reader in `callback_core`, re-exported by `src/pipeline/callbacks.rs` | callback registry for guest words | stock callback words and the kernel interface block | no | every caller uses typed callbacks and the kernel interface is owned | required |
 | 1,610 retained `extern "C"` declarations in `src/` (image conversion, blend, finish, chroma, sensor calibration, configuration, diagnostics, tracing) | trampoline into retained stock | stock develop services and device adapters | no | the develop service, sensor/calibration and device paths are owned | required |
 | 43 `*_stock.S` files (`Buffers_stock.S`, `FontOutlineVm_stock.S`, `RedEye_stock.S`, `WarpEngine_stock.S`, and the rest) | retained stock seam in assembly | stock develop bodies kept for comparison and for callers not yet owned | no | the corresponding owned body is qualified and every caller is migrated | required |
 | `font_core` asset and glyph layout (`src/font_core`, `FontFdl_stock.S`, `FontBuiltin_stock.S`, `FontScripts_stock.S`) | guest-memory layout view | retained stock font resources and text consumers | no | owned assets and every text consumer are owned | required |
@@ -342,8 +353,8 @@ The Power Services leaf crate and the power application crate. The leaf exports 
 | 14 `.S` residue files in `src/` (`native.S`, `record_task43_*`, `capture_profile_*`, `mode_*`, `serial_write_residue.S`, and the rest) | retained stock seam in assembly | stock bodies and register/stack frames the owned code must reproduce | no | the residue is no longer needed for stock callers or ABI parity | required |
 | ~1,200 retained `extern "C"` declarations in `src/` (record bodies, audio, capture profile, serial, timers) | trampoline into retained stock | stock record, audio, capture and device services | no | those services are owned | required |
 | `record-helpers.ld` placement of the helper exports | veneer or carrier at a stock address | stock callers of the record helpers | no | owned callers link directly | required |
-| `KernelSlot`-based root service calls in `src/callback_registry.rs` and the audio modules | kernel interface slot | the stock kernel roots at `0x4004dae0`/`0x400ddaa0` | no | the RTOS platform owns the root services | required |
-| callback registries for guest words in `src/callback_registry.rs` and the audio modules | callback registry for guest words | stock callers that pass function pointers and context words | no | callers use typed callbacks | required |
+| `KernelSlot`-based root service calls in `callback_core` (re-exported by `src/callback_registry.rs`) and the audio modules | kernel interface slot | the stock kernel roots at `0x4004dae0`/`0x400ddaa0` | no | the RTOS platform owns the root services | required |
+| callback registries for guest words in `callback_core` (re-exported by `src/callback_registry.rs`) and the audio modules | callback registry for guest words | stock callers that pass function pointers and context words | no | callers use typed callbacks | required |
 
 ## primary_initializer
 

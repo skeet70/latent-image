@@ -139,6 +139,10 @@ unsafe extern "C" fn api_complete(status: i32) {
 }
 
 unsafe fn send_completion() -> i32 {
+    let complete: unsafe extern "C" fn(i32) = api_complete;
+    if let Err(error) = crate::callback_registry::registry().ensure(complete) {
+        return crate::callback_registry::refused(error);
+    }
     let callback = (api_complete as *const () as usize as u32).to_le_bytes();
     let mut rtos = NativeShutdownRtos;
     let sender = rtos.current_task();

@@ -1,179 +1,40 @@
 //! Typed admission of the code words stock keeps in interface tables and callback slots.
 //!
-//! Stock enters those words with `blx`.
+//! Stock enters those words with `blx`. The table, admitted extents, registry and kernel-slot
+//! reader are the shared `xm1_callback_core`; this module supplies the develop unit's interrupt
+//! primitive and its call helpers.
 
-use core::cell::UnsafeCell;
+pub use xm1_callback_core::{CallbackError, CallbackFn, CallbackToken, CallbackWord, CodeRegion, KernelSlot, Shape, kernel_slot};
+use xm1_callback_core::CallbackRegistry as CoreRegistry;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CallbackWord(pub u32);
+/// The develop unit's entries take the kernel interrupt lock stock uses for its own tables
+/// (`dispatch_enter_nested_critical`).
+pub struct DevelopCritical;
+#[cfg(target_arch = "arm")]
+impl xm1_callback_core::CriticalSection for DevelopCritical {
+    fn enter() -> u32 { unsafe { xm1_develop_enter_critical() } }
+    fn leave(token: u32) { unsafe { xm1_develop_leave_critical(token) } }
+}
+#[cfg(not(target_arch = "arm"))]
+impl xm1_callback_core::CriticalSection for DevelopCritical {
+    fn enter() -> u32 {
+        while HOST_LOCK.compare_exchange_weak(0, 1, core::sync::atomic::Ordering::Acquire, core::sync::atomic::Ordering::Relaxed).is_err() { core::hint::spin_loop(); }
+        0
+    }
+    fn leave(_: u32) { HOST_LOCK.store(0, core::sync::atomic::Ordering::Release); }
+}
+#[cfg(not(target_arch = "arm"))]
+static HOST_LOCK: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CallbackToken(pub u32);
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CallbackShape { None, Task, ArgumentStatus, PairStatus, WaitStatus, SignedArgument, Reclaim }
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CallbackError { Invalid, Unadmitted, Shape, Full }
-impl CallbackError {
-    /// The status an ABI entry reports when the registry refuses its word.
-    pub const fn status(self) -> i32 { -255 }
+#[cfg(target_arch = "arm")]
+unsafe extern "C" {
+    fn xm1_develop_enter_critical() -> u32;
+    fn xm1_develop_leave_critical(token: u32);
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CodeRegion { start: u32, end: u32 }
-impl CodeRegion {
-    pub const fn new(start: u32, end: u32) -> Self { Self { start, end } }
-    pub const fn contains(self, address: u32) -> bool { self.start < self.end && address >= self.start && address < self.end }
-}
+pub type CallbackRegistry = CoreRegistry<DevelopCritical>;
 
-/// # Safety
-/// `SHAPE` must name the argument and result layout of the implementing type exactly.
-pub unsafe trait CallbackFn: Copy {
-    const SHAPE: CallbackShape;
-    fn word(self) -> CallbackWord;
-    fn address(self) -> usize;
-    /// # Safety
-    /// `address` was returned by `resolve` for this shape or came from an admitted region.
-    unsafe fn from_address(address: usize) -> Self;
-}
-
-macro_rules! callback_functions {
-    ($($shape:ident => $signature:ty),* $(,)?) => {
-        $(
-            unsafe impl CallbackFn for $signature {
-                const SHAPE: CallbackShape = CallbackShape::$shape;
-                fn word(self) -> CallbackWord { CallbackWord(self as usize as u32) }
-                fn address(self) -> usize { self as usize }
-                unsafe fn from_address(address: usize) -> Self { unsafe { core::mem::transmute(address) } }
-            }
-        )*
-    };
-}
-
-callback_functions! {
-    None => unsafe extern "C" fn(),
-    Task => unsafe extern "C" fn() -> u32,
-    ArgumentStatus => unsafe extern "C" fn(u32) -> i32,
-    PairStatus => unsafe extern "C" fn(u32, u32) -> i32,
-    WaitStatus => unsafe extern "C" fn(u32, u32, u32, *mut u32, i32) -> i32,
-    SignedArgument => unsafe extern "C" fn(i32),
-    Reclaim => unsafe extern "C" fn(u32, u32, u32) -> i32,
-}
-
-/// The registry's mutable state is written under the kernel interrupt lock stock uses for
-/// its own tables (`dispatch_enter_nested_critical`) and read without one: a read on this
-/// single-core CPU cannot observe a write that the lock has masked.
-struct Shared<T> { value: UnsafeCell<T> }
-unsafe impl<T: Send> Sync for Shared<T> {}
-impl<T> Shared<T> {
-    const fn new(value: T) -> Self { Self { value: UnsafeCell::new(value) } }
-    fn read<R>(&self, operation: impl FnOnce(&T) -> R) -> R {
-        operation(unsafe { &*self.value.get() })
-    }
-    #[cfg(target_arch = "arm")]
-    fn with<R>(&self, operation: impl FnOnce(&mut T) -> R) -> R {
-        let token = unsafe { super::buffers::xm1_develop_enter_critical() };
-        let result = operation(unsafe { &mut *self.value.get() });
-        unsafe { super::buffers::xm1_develop_leave_critical(token) };
-        result
-    }
-    #[cfg(not(target_arch = "arm"))]
-    fn with<R>(&self, operation: impl FnOnce(&mut T) -> R) -> R {
-        operation(unsafe { &mut *self.value.get() })
-    }
-}
-
-const ENTRIES: usize = 64;
-const REGIONS: usize = 4;
-const FIRST_TOKEN: u32 = 0x4000_0001;
-
-#[derive(Clone, Copy)]
-struct CallbackEntry { token: CallbackToken, word: CallbackWord, address: usize, shape: CallbackShape }
-struct State { entries: [Option<CallbackEntry>; ENTRIES], regions: [Option<CodeRegion>; REGIONS], next: u32 }
-
-pub struct CallbackRegistry { state: Shared<State> }
-impl CallbackRegistry {
-    pub const fn new() -> Self {
-        Self { state: Shared::new(State { entries: [None; ENTRIES], regions: [None; REGIONS], next: FIRST_TOKEN }) }
-    }
-    const fn with_region(region: CodeRegion) -> Self {
-        let mut regions = [None; REGIONS];
-        regions[0] = Some(region);
-        Self { state: Shared::new(State { entries: [None; ENTRIES], regions, next: FIRST_TOKEN }) }
-    }
-    /// Admits a stock code region supplied by the composition.
-    pub fn admit(&self, region: CodeRegion) -> Result<(), CallbackError> {
-        if region.start >= region.end { return Err(CallbackError::Invalid); }
-        self.state.with(|state| {
-            if state.regions.iter().flatten().any(|admitted| *admitted == region) { return Ok(()); }
-            let slot = state.regions.iter().position(Option::is_none).ok_or(CallbackError::Full)?;
-            state.regions[slot] = Some(region);
-            Ok(())
-        })
-    }
-    pub fn register<F: CallbackFn>(&self, callback: F) -> Result<CallbackToken, CallbackError> {
-        let word = callback.word();
-        if word.0 == 0 { return Err(CallbackError::Invalid); }
-        self.state.with(|state| {
-            let slot = state.entries.iter().position(Option::is_none).ok_or(CallbackError::Full)?;
-            if state.next >= 0x8000_0000 { return Err(CallbackError::Full); }
-            let token = CallbackToken(state.next);
-            state.next += 1;
-            state.entries[slot] = Some(CallbackEntry { token, word, address: callback.address(), shape: F::SHAPE });
-            Ok(token)
-        })
-    }
-    pub fn ensure<F: CallbackFn>(&self, callback: F) -> Result<(), CallbackError> {
-        if self.resolve::<F>(callback.word()).is_ok() { return Ok(()); }
-        self.register(callback).map(|_| ())
-    }
-    /// Records a word the guest supplies, such as an interface-table entry, for one shape.
-    pub fn admit_word<F: CallbackFn>(&self, word: CallbackWord) -> Result<(), CallbackError> {
-        if word.0 == 0 { return Err(CallbackError::Invalid); }
-        self.state.with(|state| Self::admit_word_into::<F>(state, word))
-    }
-    fn admit_word_into<F: CallbackFn>(state: &mut State, word: CallbackWord) -> Result<(), CallbackError> {
-        if let Some(entry) = state.entries.iter().flatten().find(|entry| entry.word == word) {
-            return if entry.shape == F::SHAPE { Ok(()) } else { Err(CallbackError::Shape) };
-        }
-        let slot = state.entries.iter().position(Option::is_none).ok_or(CallbackError::Full)?;
-        if state.next >= 0x8000_0000 { return Err(CallbackError::Full); }
-        let token = CallbackToken(state.next);
-        state.next += 1;
-        state.entries[slot] = Some(CallbackEntry { token, word, address: word.0 as usize, shape: F::SHAPE });
-        Ok(())
-    }
-    pub fn release(&self, token: CallbackToken) -> bool {
-        self.state.with(|state| {
-            let slot = state.entries.iter().position(|entry| entry.is_some_and(|entry| entry.token == token));
-            slot.is_some_and(|slot| state.entries[slot].take().is_some())
-        })
-    }
-    /// Returns the entry for `word` only when an owned client registered it for this shape or the
-    /// composition admitted the region that contains it.
-    pub fn resolve<F: CallbackFn>(&self, word: CallbackWord) -> Result<F, CallbackError> {
-        if word.0 == 0 { return Err(CallbackError::Invalid); }
-        self.state.read(|state| {
-            if let Some(entry) = state.entries.iter().flatten().find(|entry| entry.word == word && entry.shape == F::SHAPE) {
-                return Ok(unsafe { F::from_address(entry.address) });
-            }
-            if state.entries.iter().flatten().any(|entry| entry.word == word) { return Err(CallbackError::Shape); }
-            if state.regions.iter().flatten().any(|region| region.contains(word.0)) {
-                return Ok(unsafe { F::from_address(word.0 as usize) });
-            }
-            Err(CallbackError::Unadmitted)
-        })
-    }
-}
-impl Default for CallbackRegistry {
-    fn default() -> Self { Self::new() }
-}
-
-/// The develop unit's own stock extents; stock installs crop and font callbacks from there.
-pub const DEVELOP_STOCK_REGION: CodeRegion = CodeRegion::new(0x00e4_0000, 0x00eb_2000);
-
-static REGISTRY: CallbackRegistry = CallbackRegistry::with_region(DEVELOP_STOCK_REGION);
+static REGISTRY: CallbackRegistry = CallbackRegistry::new();
 
 pub fn registry() -> &'static CallbackRegistry {
     &REGISTRY
@@ -183,11 +44,6 @@ pub fn call_no_arguments(registry: &CallbackRegistry, word: CallbackWord) -> Res
     let callback: unsafe extern "C" fn() = registry.resolve(word)?;
     unsafe { callback() };
     Ok(())
-}
-
-pub fn call_task(registry: &CallbackRegistry, word: CallbackWord) -> Result<u32, CallbackError> {
-    let callback: unsafe extern "C" fn() -> u32 = registry.resolve(word)?;
-    Ok(unsafe { callback() })
 }
 
 pub fn call_argument_status(registry: &CallbackRegistry, word: CallbackWord, argument: u32) -> Result<i32, CallbackError> {
@@ -216,35 +72,15 @@ pub fn call_reclaim(registry: &CallbackRegistry, word: CallbackWord, heap: u32, 
     Ok(unsafe { callback(heap, amount, attempt) })
 }
 
-/// Resolves a stock interface-table word. An unregistered word is entered directly, as stock
-/// enters it; a word registered for another shape stays refused.
+/// Resolves a word stock installs from outside this unit. A word no client registered is entered
+/// directly, as stock enters it; a word registered for another shape stays refused.
 pub fn interface_call<F: CallbackFn>(registry: &CallbackRegistry, word: CallbackWord) -> Result<F, CallbackError> {
     if word.0 == 0 { return Err(CallbackError::Invalid); }
     match registry.resolve::<F>(word) {
         Ok(callback) => Ok(callback),
-        Err(CallbackError::Unadmitted) => Ok(unsafe { F::from_address(word.0 as usize) }),
+        Err(CallbackError::Unadmitted) => Ok(unsafe { F::from_address(word.0) }),
         Err(error) => Err(error),
     }
-}
-
-pub fn call_interface_task(registry: &CallbackRegistry, word: CallbackWord) -> Result<u32, CallbackError> {
-    let callback: unsafe extern "C" fn() -> u32 = interface_call(registry, word)?;
-    Ok(unsafe { callback() })
-}
-
-pub fn call_interface_pair_status(registry: &CallbackRegistry, word: CallbackWord, first: u32, second: u32) -> Result<i32, CallbackError> {
-    let callback: unsafe extern "C" fn(u32, u32) -> i32 = interface_call(registry, word)?;
-    Ok(unsafe { callback(first, second) })
-}
-
-pub fn call_interface_wait_status(registry: &CallbackRegistry, word: CallbackWord, first: u32, second: u32, third: u32, output: *mut u32, timeout: i32) -> Result<i32, CallbackError> {
-    let callback: unsafe extern "C" fn(u32, u32, u32, *mut u32, i32) -> i32 = interface_call(registry, word)?;
-    Ok(unsafe { callback(first, second, third, output, timeout) })
-}
-
-pub fn call_interface_argument_status(registry: &CallbackRegistry, word: CallbackWord, argument: u32) -> Result<i32, CallbackError> {
-    let callback: unsafe extern "C" fn(u32) -> i32 = interface_call(registry, word)?;
-    Ok(unsafe { callback(argument) })
 }
 
 pub fn call_interface_signed_argument(registry: &CallbackRegistry, word: CallbackWord, argument: i32) -> Result<(), CallbackError> {
@@ -273,7 +109,7 @@ mod tests {
         reset();
         let registry = CallbackRegistry::new();
         registry.register(record_signed as unsafe extern "C" fn(i32)).unwrap();
-        assert_eq!(call_signed_argument(&registry, CallbackWord(record_signed as usize as u32), -17), Ok(()));
+        assert_eq!(call_signed_argument(&registry, CallbackWord(record_signed as usize), -17), Ok(()));
         assert_eq!(CALLS.load(Ordering::SeqCst), 1);
         assert_eq!(SEEN.load(Ordering::SeqCst), -17);
     }
@@ -288,18 +124,19 @@ mod tests {
     }
 
     #[test]
-    fn admitted_region_word_resolves_but_an_outside_word_does_not() {
+    fn admitted_code_word_resolves_but_a_data_run_does_not() {
         let registry = CallbackRegistry::new();
-        registry.admit(CodeRegion::new(0x00e4_0000, 0x00eb_2000)).unwrap();
-        assert_eq!(registry.admit(CodeRegion::new(0x10, 0x10)), Err(CallbackError::Invalid));
-        assert!(registry.resolve::<unsafe extern "C" fn()>(CallbackWord(0x00e4_1234)).is_ok());
-        assert_eq!(registry.resolve::<unsafe extern "C" fn()>(CallbackWord(0x00ec_0000)), Err(CallbackError::Unadmitted));
+        assert!(registry.resolve::<unsafe extern "C" fn()>(CallbackWord(0x00e4_3000)).is_ok());
+        assert_eq!(registry.resolve::<unsafe extern "C" fn()>(CallbackWord(0x00e4_1234)), Err(CallbackError::Unadmitted));
+        assert!(registry.resolve::<unsafe extern "C" fn()>(CallbackWord(0x0061_c420)).is_ok());
+        assert_eq!(registry.resolve::<unsafe extern "C" fn()>(CallbackWord(0x0107_bce0)), Err(CallbackError::Unadmitted));
+        assert_eq!(registry.resolve::<unsafe extern "C" fn()>(CallbackWord(0x0040_0000)), Err(CallbackError::Unadmitted));
     }
 
     #[test]
     fn registration_for_another_shape_is_refused() {
         let registry = CallbackRegistry::new();
-        let word = CallbackWord(record_pair as usize as u32);
+        let word = CallbackWord(record_pair as usize);
         registry.register(record_pair as unsafe extern "C" fn(u32, u32) -> i32).unwrap();
         assert_eq!(registry.resolve::<unsafe extern "C" fn()>(word), Err(CallbackError::Shape));
         assert_eq!(call_pair_status(&registry, word, 9, 0x8000_0013), Ok(7));
@@ -309,7 +146,7 @@ mod tests {
     fn guest_interface_word_is_entered_directly_and_a_registered_word_keeps_its_shape() {
         let registry = CallbackRegistry::new();
         let word = CallbackWord(0x0072_3cb8);
-        assert_eq!(interface_call::<unsafe extern "C" fn() -> u32>(&registry, word).is_ok(), true);
+        assert!(interface_call::<unsafe extern "C" fn() -> u32>(&registry, word).is_ok());
         registry.admit_word::<unsafe extern "C" fn() -> u32>(word).unwrap();
         assert_eq!(interface_call::<unsafe extern "C" fn(u32, u32) -> i32>(&registry, word), Err(CallbackError::Shape));
     }
@@ -320,6 +157,6 @@ mod tests {
         let token = registry.register(record_no_arguments as unsafe extern "C" fn()).unwrap();
         assert!(registry.release(token));
         assert!(!registry.release(token));
-        assert_eq!(registry.resolve::<unsafe extern "C" fn()>(CallbackWord(record_no_arguments as usize as u32)), Err(CallbackError::Unadmitted));
+        assert_eq!(registry.resolve::<unsafe extern "C" fn()>(CallbackWord(record_no_arguments as usize)), Err(CallbackError::Unadmitted));
     }
 }

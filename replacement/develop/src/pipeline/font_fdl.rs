@@ -492,7 +492,7 @@ unsafe fn heap_allocate(heap: FontHeap, requested: u32, zero: bool) -> Address {
             let depth = unsafe { heap.0.at(44).word() } as i32;
             if callback == 0 || depth > 2 { return Address(0); }
             unsafe { heap.0.at(44).put(depth.wrapping_add(1) as u32) };
-            let result = callbacks::call_reclaim(callbacks::registry(), CallbackWord(callback), heap.0.0, unsafe { heap.0.at(40).word() }, attempt).unwrap_or(0);
+            let result = callbacks::call_reclaim(callbacks::registry(), CallbackWord(callback as usize), heap.0.0, unsafe { heap.0.at(40).word() }, attempt).unwrap_or(0);
             unsafe { heap.0.at(44).put(heap.0.at(44).word().wrapping_sub(1)) };
             if result == 0 { return Address(0); }
             first = unsafe { heap.0.at(8).word() };

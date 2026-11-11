@@ -343,6 +343,25 @@ pub fn helper_711200<M: GuestAddressSpace, E>(context: &mut RecordContext<M, E>,
     Ok(if difference == 0 { 1 } else { 0 })
 }
 
+/// Enters a storage completion word; a refused word is reported and the caller keeps stock's
+/// result.
+pub fn invoke_callback_word(
+    registry: &crate::callback_registry::CallbackRegistry,
+    word: crate::callback_registry::CallbackWord,
+    first: u32,
+    second: Option<u32>,
+) -> i32 {
+    if word.0 == 0 { return 0; }
+    let result = match second {
+        Some(second) => registry.resolve::<unsafe extern "C" fn(u32, u32)>(word).map(|callback| unsafe { callback(first, second) }),
+        None => registry.resolve::<unsafe extern "C" fn(u32)>(word).map(|callback| unsafe { callback(first) }),
+    };
+    match result {
+        Ok(()) => 0,
+        Err(error) => crate::callback_registry::refused(error),
+    }
+}
+
 #[cfg(target_arch = "arm")]
 mod native {
     use super::*;
@@ -370,20 +389,7 @@ mod native {
         fn kernel_command(&mut self, category: u32, code: u32) { let _ = unsafe { xm1_power_command_diagnostic(category, code) }; }
         fn delay_microseconds(&mut self, duration: u32) { unsafe { xm1_power_delay_us(duration) }; }
         fn invoke_callback(&mut self, word: u32, first: u32, second: Option<u32>) {
-            use crate::callback_registry::{registry, CallbackWord};
-            if word == 0 { return; }
-            match second {
-                Some(second) => {
-                    if let Ok(callback) = registry().resolve::<unsafe extern "C" fn(u32, u32)>(CallbackWord(word as usize)) {
-                        unsafe { callback(first, second) };
-                    }
-                }
-                None => {
-                    if let Ok(callback) = registry().resolve::<unsafe extern "C" fn(u32)>(CallbackWord(word as usize)) {
-                        unsafe { callback(first) };
-                    }
-                }
-            }
+            let _ = invoke_callback_word(crate::callback_registry::registry(), crate::callback_registry::CallbackWord(word as usize), first, second);
         }
     }
 }
@@ -837,5 +843,23 @@ mod tests {
         with_memory(&mut memory, |context| assert_eq!(helper_711200(context, path), Ok(1)));
         memory.path[4] = b'F';
         with_memory(&mut memory, |context| assert_eq!(helper_711200(context, path), Ok(0)));
+    }
+
+    #[test]
+    fn a_refused_storage_completion_word_is_reported_and_the_caller_result_is_unchanged() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static PAIR: AtomicU32 = AtomicU32::new(0);
+        static SINGLE: AtomicU32 = AtomicU32::new(0);
+        unsafe extern "C" fn pair(first: u32, second: u32) { PAIR.store(first << 16 | second, Ordering::SeqCst); }
+        unsafe extern "C" fn single(first: u32) { SINGLE.store(first, Ordering::SeqCst); }
+        let registry = crate::callback_registry::CallbackRegistry::new();
+        assert_eq!(invoke_callback_word(&registry, crate::callback_registry::CallbackWord(0x0060_1000), 9, Some(0)), -255);
+        assert_eq!(invoke_callback_word(&registry, crate::callback_registry::CallbackWord(0x0060_1000), 9, None), -255);
+        registry.ensure(pair as unsafe extern "C" fn(u32, u32)).unwrap();
+        registry.ensure(single as unsafe extern "C" fn(u32)).unwrap();
+        assert_eq!(invoke_callback_word(&registry, crate::callback_registry::CallbackWord(pair as usize), 9, Some(0)), 0);
+        assert_eq!(invoke_callback_word(&registry, crate::callback_registry::CallbackWord(single as usize), 8, None), 0);
+        assert_eq!(PAIR.load(Ordering::SeqCst), 9 << 16);
+        assert_eq!(SINGLE.load(Ordering::SeqCst), 8);
     }
 }

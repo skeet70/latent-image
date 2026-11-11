@@ -29,7 +29,7 @@ mod native {
         if enabled {
             super::register(crate::callback_registry::registry(), crate::storage_shutdown_callbacks::xm1_storage_shutdown_dma)
                 .map(|_| ())
-                .map_err(|error| KernelStatus(error.status()))?;
+                .map_err(|error| KernelStatus(crate::callback_registry::refused(error)))?;
         }
         result(unsafe { xm1_power_detection_output_continuous(1, callback) })
     }

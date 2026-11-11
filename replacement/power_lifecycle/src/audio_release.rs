@@ -180,11 +180,18 @@ pub fn signal_shutdown_complete(rtos: &mut impl crate::shutdown::ShutdownRtos) -
     match rtos.set_event_flag(2, 1) { Ok(()) => ServiceStatus(0), Err(status) => ServiceStatus(status.0) }
 }
 
+/// Enters the release completion word as `extern "C" fn() -> i32`, whose status stock discards.
+pub fn invoke_completion(
+    registry: &crate::callback_registry::CallbackRegistry,
+    completion: CompletionAddress,
+) -> Result<(), crate::callback_registry::CallbackError> {
+    crate::shutdown_requests::invoke_status_completion(registry, crate::callback_registry::CallbackWord(completion.address() as usize))
+}
+
 #[cfg(target_arch = "arm")]
 pub mod native {
     use super::*;
-    use crate::callback_registry::{registry as callbacks, CallbackWord};
-    use crate::callback_slots;
+    use crate::callback_registry::registry as callbacks;
     use crate::primitives::{retire_current_task, CpuCore, NativeQueueStorage, OwnedQueueRtos, QueueDiagnostics};
     use crate::shutdown::{QueueId, RequestId, ServiceMessage, ShutdownRtos};
     use crate::shutdown_rtos::NativeShutdownRtos;
@@ -263,7 +270,7 @@ pub mod native {
     pub struct NativeAudioCallbacks;
     impl AudioCallbacks for NativeAudioCallbacks {
         fn invoke(&mut self, completion: CompletionAddress) {
-            let _ = callback_slots::call_no_arguments(callbacks(), CallbackWord(completion.address() as usize));
+            let _ = invoke_completion(callbacks(), completion);
         }
         fn retire_task41(&mut self) -> ServiceStatus {
             unsafe { retire_current_task(crate::shutdown::TaskId(41)) }

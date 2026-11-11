@@ -231,6 +231,53 @@ fn settings_producer_word_reaches_the_release_gate() {
 }
 
 #[test]
+fn device_producer_word_reaches_the_shutdown_mask() {
+    static EVENTS: std::sync::Mutex<Vec<RequestId>> = std::sync::Mutex::new(Vec::new());
+    struct Rtos;
+    impl ShutdownRtos for Rtos {
+        fn current_task(&mut self) -> TaskId { TaskId(2) }
+        fn post(&mut self, message: ServiceMessage<'_>) -> Result<(), KernelStatus> {
+            EVENTS.lock().unwrap().push(message.operation);
+            Ok(())
+        }
+        fn set_event_flag(&mut self, _: u32, _: u32) -> Result<(), KernelStatus> { Ok(()) }
+    }
+    extern "C" fn entry() -> i32 { crate::shutdown_requests::device_completion(&mut Rtos) }
+    let registry = crate::callback_registry::CallbackRegistry::new();
+    let address = OwnedCompletionAddress::device(&registry, entry).unwrap();
+    crate::shutdown_requests::invoke_status_completion(&registry, address.callback()).unwrap();
+    let source = CompletionSource::from_event(EVENTS.lock().unwrap().pop().unwrap()).unwrap();
+    assert_eq!(source, CompletionSource::Device);
+    let mut shutdown = saved_shutdown();
+    assert!(shutdown.receive_barrier_start(RequestId(0x93e7), LIVE_TRANSITION));
+    finish_with_produced_completion(&mut shutdown, source);
+    assert_eq!(shutdown.completed, 0x1ff);
+}
+
+#[test]
+fn audio_shutdown_producer_word_sets_the_release_flag_and_the_mask_completes() {
+    static FLAGS: std::sync::Mutex<Vec<(u32, u32)>> = std::sync::Mutex::new(Vec::new());
+    struct Rtos;
+    impl ShutdownRtos for Rtos {
+        fn current_task(&mut self) -> TaskId { TaskId(41) }
+        fn post(&mut self, _: ServiceMessage<'_>) -> Result<(), KernelStatus> { Ok(()) }
+        fn set_event_flag(&mut self, flag: u32, bits: u32) -> Result<(), KernelStatus> {
+            FLAGS.lock().unwrap().push((flag, bits));
+            Ok(())
+        }
+    }
+    extern "C" fn entry() -> i32 { crate::shutdown::audio_release_completion(&mut Rtos).map_or(-1, |()| 0) }
+    let registry = crate::callback_registry::CallbackRegistry::new();
+    let word = crate::shutdown_requests::register_audio_completion(&registry, entry as unsafe extern "C" fn() -> i32).unwrap();
+    crate::shutdown_requests::invoke_status_completion(&registry, word).unwrap();
+    assert_eq!(FLAGS.lock().unwrap().as_slice(), &[(2, 1)]);
+    let mut shutdown = saved_shutdown();
+    assert!(shutdown.receive_barrier_start(RequestId(0x93e7), LIVE_TRANSITION));
+    finish_with_produced_completion(&mut shutdown, CompletionSource::Device);
+    assert_eq!(shutdown.completed, 0x1ff);
+}
+
+#[test]
 fn storage_dma_producer_word_reaches_the_release_gate() {
     static CALLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     extern "C" fn entry() { CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst); }

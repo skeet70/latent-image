@@ -69,14 +69,12 @@ pub(super) unsafe fn interface(index: InterfaceIndex) -> Address32 {
 
 pub(super) unsafe fn current_interface() -> InterfaceIndex {
     let table = unsafe { interface(InterfaceIndex(0)) };
-    let entry = unsafe { table.offset(ByteOffset(0x1618)).word() };
-    InterfaceIndex(callbacks::call_interface_task(callbacks::registry(), CallbackWord(entry)).unwrap_or(0))
+    InterfaceIndex(unsafe { callbacks::kernel_slot::<unsafe extern "C" fn() -> u32>(table.0, 0x1618) }())
 }
 
 unsafe fn interface_task(index: InterfaceIndex) -> TaskId {
     let table = unsafe { interface(index) };
-    let entry = unsafe { table.offset(ByteOffset(0x16c)).word() };
-    TaskId(callbacks::call_interface_task(callbacks::registry(), CallbackWord(entry)).unwrap_or(0))
+    TaskId(unsafe { callbacks::kernel_slot::<unsafe extern "C" fn() -> u32>(table.0, 0x16c) }())
 }
 
 pub(super) unsafe fn current_task() -> TaskId {
@@ -108,7 +106,7 @@ unsafe fn record_dispatch_error(event: DispatchEvent, object: DispatchObjectId, 
     unsafe { image_planes_thread_event(event as u32, object.0, result) };
     unsafe { Address32(0x40a0_f82c).write_word(result as u32) };
     let entry = unsafe { Address32(0x4089_ea8c).word() };
-    let _ = callbacks::call_interface_signed_argument(callbacks::registry(), CallbackWord(entry), result);
+    let _ = callbacks::call_interface_signed_argument(callbacks::registry(), CallbackWord(entry as usize), result);
 }
 
 pub(super) unsafe fn configure_priority(task: TaskId, priority: TaskPriority) -> i32 {
@@ -119,8 +117,7 @@ pub(super) unsafe fn configure_priority(task: TaskId, priority: TaskPriority) ->
         task
     };
     let table = unsafe { interface(index) };
-    let entry = unsafe { table.offset(ByteOffset(0x1c)).word() };
-    let result = callbacks::call_interface_pair_status(callbacks::registry(), CallbackWord(entry), encoded_task(task), priority.0).unwrap_or_else(|error| error.status());
+    let result = unsafe { callbacks::kernel_slot::<unsafe extern "C" fn(u32, u32) -> i32>(table.0, 0x1c)(encoded_task(task), priority.0) };
     if result != 0 {
         unsafe { record_dispatch_error(DispatchEvent::Priority, DispatchObjectId(task.0), result) };
     }
@@ -141,11 +138,10 @@ pub unsafe extern "C" fn xm1_pipeline_image_configure_task(task: u32, priority: 
 pub unsafe extern "C" fn xm1_pipeline_image_wait_all(mask: u32, output: *mut u32, timeout: i32) -> i32 {
     let index = unsafe { current_interface() };
     let table = unsafe { interface(index) };
-    let entry = unsafe { table.offset(ByteOffset(0x9c)).word() };
     let first = unsafe { interface_task(index) };
     let namespace = unsafe { encoded_task(first) } & 0xffff_0000;
     let second = unsafe { interface_task(index) };
-    let result = callbacks::call_interface_wait_status(callbacks::registry(), CallbackWord(entry), namespace | (second.0 & 0xffff), mask, 1, output, timeout).unwrap_or_else(|error| error.status());
+    let result = unsafe { callbacks::kernel_slot::<unsafe extern "C" fn(u32, u32, u32, *mut u32, i32) -> i32>(table.0, 0x9c)(namespace | (second.0 & 0xffff), mask, 1, output, timeout) };
     if result != 0 && result != -50 {
         let task = unsafe { interface_task(index) };
         unsafe { record_dispatch_error(DispatchEvent::Wait, DispatchObjectId(task.0), result) };
@@ -157,13 +153,11 @@ pub unsafe extern "C" fn xm1_pipeline_image_wait_all(mask: u32, output: *mut u32
 pub unsafe extern "C" fn xm1_pipeline_image_send_notification(task: u32, value: u32) -> i32 {
     let index = unsafe { current_interface() };
     let table = unsafe { interface(index) };
-    let mode_entry = unsafe { table.offset(ByteOffset(0x148)).word() };
-    let mode = callbacks::call_interface_task(callbacks::registry(), CallbackWord(mode_entry)).unwrap_or(0);
+    let mode = unsafe { callbacks::kernel_slot::<unsafe extern "C" fn() -> u32>(table.0, 0x148) }();
     let table = unsafe { interface(index) };
-    let offset = if mode == 1 { ByteOffset(0x8c) } else { ByteOffset(0x88) };
-    let entry = unsafe { table.offset(offset).word() };
+    let offset = if mode == 1 { 0x8c } else { 0x88 };
     let task = TaskId(task);
-    let result = callbacks::call_interface_pair_status(callbacks::registry(), CallbackWord(entry), encoded_task(task), value).unwrap_or_else(|error| error.status());
+    let result = unsafe { callbacks::kernel_slot::<unsafe extern "C" fn(u32, u32) -> i32>(table.0, offset)(encoded_task(task), value) };
     if result != 0 {
         unsafe { record_dispatch_error(DispatchEvent::Notify, DispatchObjectId(task.0), result) };
     }
@@ -188,8 +182,7 @@ unsafe fn encoded_reserved(handle: ReservedHandle) -> u32 {
 pub unsafe extern "C" fn xm1_pipeline_image_wait_reserved(handle: u32, timeout: u32) -> i32 {
     let index = unsafe { current_interface() };
     let table = unsafe { interface(index) };
-    let entry = unsafe { table.offset(ByteOffset(0x7c)).word() };
-    let result = callbacks::call_interface_pair_status(callbacks::registry(), CallbackWord(entry), encoded_reserved(ReservedHandle(handle)), timeout).unwrap_or_else(|error| error.status());
+    let result = unsafe { callbacks::kernel_slot::<unsafe extern "C" fn(u32, u32) -> i32>(table.0, 0x7c)(encoded_reserved(ReservedHandle(handle)), timeout) };
     if result != 0 && result != -50 {
         unsafe { record_dispatch_error(DispatchEvent::WaitReserved, DispatchObjectId(handle), result) };
     }
@@ -200,12 +193,10 @@ pub unsafe extern "C" fn xm1_pipeline_image_wait_reserved(handle: u32, timeout: 
 pub unsafe extern "C" fn xm1_pipeline_image_signal_reserved(handle: u32) -> i32 {
     let index = unsafe { current_interface() };
     let table = unsafe { interface(index) };
-    let mode_entry = unsafe { table.offset(ByteOffset(0x148)).word() };
-    let mode = callbacks::call_interface_task(callbacks::registry(), CallbackWord(mode_entry)).unwrap_or(0);
+    let mode = unsafe { callbacks::kernel_slot::<unsafe extern "C" fn() -> u32>(table.0, 0x148) }();
     let table = unsafe { interface(index) };
-    let offset = if mode == 1 { ByteOffset(0x70) } else { ByteOffset(0x6c) };
-    let entry = unsafe { table.offset(offset).word() };
-    let result = callbacks::call_interface_argument_status(callbacks::registry(), CallbackWord(entry), encoded_reserved(ReservedHandle(handle))).unwrap_or_else(|error| error.status());
+    let offset = if mode == 1 { 0x70 } else { 0x6c };
+    let result = unsafe { callbacks::kernel_slot::<unsafe extern "C" fn(u32) -> i32>(table.0, offset)(encoded_reserved(ReservedHandle(handle))) };
     if result != 0 {
         unsafe { record_dispatch_error(DispatchEvent::SignalReserved, DispatchObjectId(handle), result) };
     }
@@ -216,11 +207,10 @@ pub unsafe extern "C" fn xm1_pipeline_image_signal_reserved(handle: u32) -> i32 
 pub unsafe extern "C" fn xm1_pipeline_image_signal_current_zero() -> i32 {
     let index = unsafe { current_interface() };
     let table = unsafe { interface(index) };
-    let entry = unsafe { table.offset(ByteOffset(0x90)).word() };
     let first = unsafe { interface_task(index) };
     let namespace = unsafe { encoded_task(first) } & 0xffff_0000;
     let second = unsafe { interface_task(index) };
-    let result = callbacks::call_interface_pair_status(callbacks::registry(), CallbackWord(entry), namespace | (second.0 & 0xffff), 0).unwrap_or_else(|error| error.status());
+    let result = unsafe { callbacks::kernel_slot::<unsafe extern "C" fn(u32, u32) -> i32>(table.0, 0x90)(namespace | (second.0 & 0xffff), 0) };
     if result != 0 {
         let task = unsafe { interface_task(index) };
         unsafe { record_dispatch_error(DispatchEvent::SignalCurrent, DispatchObjectId(task.0), result) };

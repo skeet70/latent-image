@@ -135,7 +135,7 @@
     "xm1_power_task6_entry",
     "xm1_power_task6_timer_irq",
     "xm1_power_task6_delete",
-    "xm1_power_executor_timer_start",
+    "xm1_power_executor_timer_start_callback",
     "xm1_power_executor_timer_stop",
     "xm1_power_executor_timer_start_owned",
     "xm1_power_queue_receive"

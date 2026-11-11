@@ -19,8 +19,11 @@ extern "C" {
 }
 
 /// Registers a timer producer so the Power software-timer entry resolves it.
+///
+/// # Safety
+/// `word` must be an owned entry with the `extern "C" fn()` signature the timer entry enters.
 #[cfg(any(target_arch = "arm", test))]
-pub(crate) fn register_timer_callback(word: u32) -> Result<(), ServiceStatus> {
+pub(crate) unsafe fn register_timer_callback(word: u32) -> Result<(), ServiceStatus> {
     let status = unsafe { xm1_power_owned_callback_register(word, COMPLETION_SHAPE) };
     if status == 0 { Ok(()) } else { Err(ServiceStatus(status)) }
 }
@@ -207,7 +210,7 @@ impl TimerRegistry for NativeTimerRegistry<'_> {
             TimerEvent::LongTransfer => self.entries.long_transfer,
         };
         let word = callback as usize as u32;
-        register_timer_callback(word)?;
+        unsafe { register_timer_callback(word)? };
         let mut handle = 0;
         let status = unsafe { xm1_power_software_timer_start(period.0, 1, word, &mut handle) };
         if status == 0 { Ok(RegistryHandle(handle)) } else { Err(ServiceStatus(status)) }

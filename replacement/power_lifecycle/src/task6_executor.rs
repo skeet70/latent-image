@@ -30,7 +30,7 @@ pub fn register_executor_tick(tick: unsafe extern "C" fn()) -> Result<(), Callba
     crate::callback_registry::registry().ensure(tick)
 }
 
-/// The admission `xm1_power_executor_timer_start` performs before it acquires the timer.
+/// The admission `xm1_power_executor_timer_start_callback` performs before it acquires the timer.
 pub fn admit_timer_callback(callback: CallbackWord) -> Result<(), CallbackError> {
     crate::callback_registry::registry().resolve::<unsafe extern "C" fn()>(callback).map(|_| ())
 }
@@ -89,7 +89,8 @@ pub mod native {
         if unsafe { xm1_task_release(6) } == 0 { 0 } else { -255 }
     }
     #[no_mangle]
-    pub unsafe extern "C" fn xm1_power_executor_timer_start(callback: unsafe extern "C" fn()) -> i32 {
+    /// Takes the callback in r0; stock 0x69c430 takes a selector in r0 and the callback in r1.
+    pub unsafe extern "C" fn xm1_power_executor_timer_start_callback(callback: unsafe extern "C" fn()) -> i32 {
         if let Err(error) = admit_timer_callback(CallbackWord(callback as usize)) { return crate::callback_registry::refused(error); }
         if let Err(error) = callbacks().ensure(xm1_power_task6_timer_irq as unsafe extern "C" fn()) { return crate::callback_registry::refused(error); }
         let handle = 0x95dc14 as *mut u32;
@@ -112,7 +113,7 @@ pub mod native {
     #[no_mangle]
     pub unsafe extern "C" fn xm1_power_executor_timer_start_owned() -> i32 {
         if let Err(error) = register_executor_tick(xm1_power_audio_operation_tick as unsafe extern "C" fn()) { return crate::callback_registry::refused(error); }
-        unsafe { xm1_power_executor_timer_start(xm1_power_audio_operation_tick) }
+        unsafe { xm1_power_executor_timer_start_callback(xm1_power_audio_operation_tick) }
     }
 }
 

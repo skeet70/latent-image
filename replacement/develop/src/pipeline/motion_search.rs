@@ -557,14 +557,14 @@ pub unsafe extern "C" fn xm1_pipeline_image_resample_complete() {
         release_active();
         let callback = word(RESAMPLE + 0x8c0);
         xm1_motion_unlock(lock);
-        if callback != 0 { let _ = callbacks::call_no_arguments(callbacks::registry(), CallbackWord(callback)); }
+        if callback != 0 { let _ = callbacks::call_no_arguments(callbacks::registry(), CallbackWord(callback as usize)); }
     }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn xm1_pipeline_image_resample_start(callback: u32) -> u32 {
     unsafe {
-        let _ = callbacks::registry().admit_word::<unsafe extern "C" fn()>(CallbackWord(callback));
+        let _ = callbacks::registry().admit_word::<unsafe extern "C" fn()>(CallbackWord(callback as usize));
         store(RESAMPLE + 0x8c0, callback);
         let width = word(RESAMPLE + 0x14);
         let format = word(RESAMPLE + 0x34);

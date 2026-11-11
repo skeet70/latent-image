@@ -110,7 +110,7 @@ pub fn resolve_native_callback(installed: u32) -> Result<NativeCallback, Callbac
 pub unsafe extern "C" fn xm1_power_record_application_install_callback(callback: Option<ApplicationCallback>) {
     let address = match register_native_callback(callback) {
         Ok(()) => callback.map_or(0x72b210, |callback| callback as usize as u32),
-        Err(_) => 0x72b210,
+        Err(error) => { let _ = crate::callback_registry::refused(error); 0x72b210 },
     };
     unsafe { core::ptr::write_volatile(0x829a0c as *mut u32, address) };
 }
@@ -135,7 +135,7 @@ fn put_word(address: usize, value: u32) { unsafe { core::ptr::write_volatile(add
 #[cfg(target_arch = "arm")]
 #[no_mangle]
 pub unsafe extern "C" fn xm1_power_record_helper_72b680(record: u32) -> i32 {
-    let installed = match resolve_native_callback(word(0x829a0c)) { Ok(installed) => installed, Err(error) => return error.status() };
+    let installed = match resolve_native_callback(word(0x829a0c)) { Ok(installed) => installed, Err(error) => return crate::callback_registry::refused(error) };
     if let NativeCallback::Buffered = installed {
         let saved = unsafe { xm1_power_interrupt_lock() };
         let count = word(0x9134c0);

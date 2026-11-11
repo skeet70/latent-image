@@ -1,6 +1,5 @@
 use super::*;
-use crate::callback_registry::{registry as callbacks, CallbackWord};
-use crate::callback_slots;
+use crate::callback_registry::registry as callbacks;
 use crate::shutdown::{QueueId, RequestId, ServiceMessage, ShutdownRtos};
 use crate::shutdown_receive::{ReceiveDescriptor, ReceiveTimeout};
 use crate::shutdown_rtos::NativeShutdownRtos;
@@ -32,7 +31,7 @@ impl Runtime for NativePhotoflash {
             let call: unsafe extern "C" fn(*const u32) = unsafe { core::mem::transmute(callback.0) };
             unsafe { call(argument.0 as *const u32); }
         } else {
-            let _ = callback_slots::call_no_arguments(callbacks(), CallbackWord(callback.0 as usize));
+            let _ = invoke_completion(callbacks(), callback);
         }
     }
     fn log_stop(&mut self, message: Address) { unsafe { xm1_power_append_stream_text(10, message.0); } }

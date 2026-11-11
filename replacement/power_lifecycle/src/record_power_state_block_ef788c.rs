@@ -3,7 +3,7 @@
 //! The transition body runs only from mode 1 and the request body only from
 //! mode 2 or above. The three 20-byte entries at 0x0169_c1f8 carry a state
 //! word at +8.
-use crate::record_address_space::{ByteCount, CallbackError, GuestAddress, GuestAddressSpace, MemoryError, RecordContext, RecordError};
+use crate::record_address_space::{ByteCount, GuestAddress, GuestAddressSpace, MemoryError, RecordContext, RecordError};
 use crate::record_native_exports::stock_export;
 
 pub const STATE_BLOCK: u32 = 0x0169_c1d4;
@@ -267,7 +267,7 @@ pub trait ChangeCallbacks {
 fn change<M: GuestAddressSpace, E: ChangeCallbacks>(
     context: &mut RecordContext<M, E>, word: u32, flag: u32, change: u32,
 ) -> Result<(), RecordError> {
-    if change == 20 || (change as i32) <= 0 { helper_ef9aec(context, flag, 0)?; }
+    if change == 20 || change == 21 || (change as i32) <= 0 { helper_ef9aec(context, flag, 0)?; }
     if word == 0 { return Ok(()); }
     context.effects.enter_change(word, change)
 }
@@ -284,6 +284,18 @@ pub fn helper_efbad8<M: GuestAddressSpace, E: ChangeCallbacks>(context: &mut Rec
     self::change(context, word, 41, change)
 }
 
+/// A refused word is reported; the helper returns as stock's void caller does.
+pub fn enter_change_callback(
+    registry: &crate::callback_registry::CallbackRegistry,
+    word: crate::callback_registry::CallbackWord,
+    change: u32,
+) -> i32 {
+    match registry.resolve::<unsafe extern "C" fn(u32)>(word) {
+        Ok(entry) => { unsafe { entry(change) }; 0 }
+        Err(error) => crate::callback_registry::refused(error),
+    }
+}
+
 #[cfg(target_arch = "arm")]
 #[derive(Default)]
 pub struct NativeChangeCallbacks;
@@ -291,10 +303,7 @@ pub struct NativeChangeCallbacks;
 #[cfg(target_arch = "arm")]
 impl ChangeCallbacks for NativeChangeCallbacks {
     fn enter_change(&mut self, word: u32, change: u32) -> Result<(), RecordError> {
-        let entry: unsafe extern "C" fn(u32) = crate::callback_registry::registry()
-            .resolve(crate::callback_registry::CallbackWord(word as usize))
-            .map_err(|_| RecordError::Callback(CallbackError::Unregistered))?;
-        unsafe { entry(change) };
+        let _ = enter_change_callback(crate::callback_registry::registry(), crate::callback_registry::CallbackWord(word as usize), change);
         Ok(())
     }
 }
@@ -659,6 +668,30 @@ mod tests {
             assert_eq!(context.effects.invoked, Some(0x00f0_1234 + 20));
         });
         assert_eq!(memory.flags[38], 0);
+    }
+
+    #[test]
+    fn the_change_notification_clears_the_flag_for_change_21() {
+        let mut memory = Memory::new();
+        memory.change_words[..4].copy_from_slice(&0x00f0_1234u32.to_le_bytes());
+        memory.flags[38] = 1;
+        memory.with_effects(Callbacks { invoked: None }, |context| {
+            assert_eq!(helper_efba48(context, 21), Ok(()));
+            assert_eq!(context.effects.invoked, Some(0x00f0_1234 + 21));
+        });
+        assert_eq!(memory.flags[38], 0);
+    }
+
+    #[test]
+    fn a_refused_change_word_is_reported_and_the_helper_returns() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static CALLS: AtomicU32 = AtomicU32::new(0);
+        unsafe extern "C" fn entry(_: u32) { CALLS.fetch_add(1, Ordering::SeqCst); }
+        let registry = crate::callback_registry::CallbackRegistry::new();
+        assert_eq!(enter_change_callback(&registry, crate::callback_registry::CallbackWord(0x0060_1000), 21), -255);
+        registry.ensure(entry as unsafe extern "C" fn(u32)).unwrap();
+        assert_eq!(enter_change_callback(&registry, crate::callback_registry::CallbackWord(entry as *const () as usize), 21), 0);
+        assert_eq!(CALLS.load(Ordering::SeqCst), 1);
     }
 
     #[test]

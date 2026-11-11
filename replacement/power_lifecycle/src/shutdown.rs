@@ -313,7 +313,14 @@ impl Shutdown {
         }
         let _ = unsafe { xm1_power_timers_stop() };
         let _ = crate::shutdown_pins::transfer_pipeline_noop();
-        let _ = unsafe { xm1_power_audio_release(xm1_power_audio_shutdown_callback as usize as u32) };
+        let completion = match crate::shutdown_requests::register_audio_completion(
+            crate::callback_registry::registry(),
+            xm1_power_audio_shutdown_callback,
+        ) {
+            Ok(completion) => completion,
+            Err(error) => return Err(KernelStatus(crate::callback_registry::refused(error))),
+        };
+        let _ = unsafe { xm1_power_audio_release(completion.0 as u32) };
         // 0xec674c continues without testing 0xec6748's status.
         let mut observed = 0;
         let _ = unsafe { crate::shutdown_rtos::wait_current_task(1, &mut observed) };

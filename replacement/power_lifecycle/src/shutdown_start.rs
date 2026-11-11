@@ -39,12 +39,12 @@ pub fn start_after_display(
 
 #[cfg(target_arch = "arm")]
 pub unsafe fn start_native(storage_scratch: &mut [u8; 8]) -> Result<StartupObservation, KernelStatus> {
-    let failure = |error: crate::callback_registry::CallbackError| KernelStatus(error.status());
+    let failure = |error: crate::callback_registry::CallbackError| KernelStatus(crate::callback_registry::refused(error));
     OwnedCompletionAddress::task8().map_err(failure)?;
     let callbacks = StartupCallbacks {
         display: OwnedCompletionAddress::display(),
         task7: OwnedCompletionAddress::task7().map_err(failure)?,
-        device: OwnedCompletionAddress::device(),
+        device: OwnedCompletionAddress::device(crate::callback_registry::registry(), crate::shutdown_requests::xm1_power_device_shutdown_callback).map_err(failure)?,
         settings: OwnedCompletionAddress::settings().map_err(failure)?,
         storage: OwnedCompletionAddress::storage(),
     };
