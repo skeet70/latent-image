@@ -2281,6 +2281,62 @@ haskell_test(
     ],
 )
 
+haskell_library(
+    name = "coverage-lib",
+    srcs = ["Emulation/Coverage.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+    ],
+    src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":case-sha256",
+        ":suite-audit-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:scientific",
+        "//host:text",
+        "//host:vector",
+    ],
+)
+
+haskell_binary(
+    name = "coverage",
+    srcs = ["CoverageMain.hs"],
+    main_file = "CoverageMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":coverage-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+    ],
+)
+
+haskell_test(
+    name = "coverage-tests",
+    size = "small",
+    srcs = ["CoverageTests.hs"],
+    main_file = "CoverageTests.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":case-sha256",
+        ":coverage-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+    ],
+)
+
 filegroup(
     name = "suite-audit-manifest",
     srcs = ["suite-audit.json"],

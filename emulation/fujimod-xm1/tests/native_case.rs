@@ -310,6 +310,23 @@ struct Trace {
     pc: String,
 }
 
+/// One declared function extent's executed-word and condition-outcome bitmaps.
+#[derive(Clone, Deserialize, Debug, PartialEq)]
+struct ExecutedExtent {
+    base: String,
+    bytes: String,
+    executed: String,
+    condition_passed: String,
+    condition_failed: String,
+}
+
+/// A declared function extent the case reported without bitmaps.
+#[derive(Clone, Deserialize, Debug, PartialEq)]
+struct UnobservedExtent {
+    base: String,
+    bytes: String,
+}
+
 #[derive(Deserialize, Debug, PartialEq)]
 #[serde(rename_all = "snake_case")]
 enum Kind {
@@ -414,6 +431,10 @@ struct Observation {
     memory: Vec<Memory>,
     events: Vec<Event>,
     trace: Vec<Trace>,
+    #[serde(default)]
+    executed: Vec<ExecutedExtent>,
+    #[serde(default)]
+    executed_unobserved: Vec<UnobservedExtent>,
     memory_provenance_total: String,
     memory_provenance: Vec<Row>,
     #[serde(default)]
@@ -2968,4 +2989,62 @@ fn resource8_batch_artifact_boundary_and_header_admission_are_exact() {
     artifacts.last_mut().unwrap().bytes.push(0);
     let mut output = Vec::new();
     assert!(!native_case::run_batch(&batch_wire("FUJI_NATIVE_RESOURCE8_BATCH_V1", &artifacts, &[default_body]), &mut output).unwrap());
+}
+
+#[test]
+fn executed_bitmaps_cover_a_straight_line_function() {
+    let observed = Case::new(&[ADD_R0_1, ADD_R0_1, BX_LR]).run();
+    observed.assert_returned();
+    assert_eq!(
+        observed.observation.executed,
+        [ExecutedExtent {
+            base: "0x00001000".into(),
+            bytes: "12".into(),
+            executed: "07".into(),
+            condition_passed: "07".into(),
+            condition_failed: "00".into(),
+        }]
+    );
+    assert!(observed.observation.executed_unobserved.is_empty());
+}
+
+#[test]
+fn condition_bitmaps_record_both_directions_within_one_case() {
+    // mov r1,#2; subs r1,r1,#1; bne -3; bx lr
+    let observed = Case::new(&[0xe3a0_1002, 0xe251_1001, 0x1aff_fffd, BX_LR]).run();
+    observed.assert_returned();
+    assert_eq!(observed.instructions(), 6);
+    let extent = &observed.observation.executed[0];
+    assert_eq!(extent.executed, "0f");
+    assert_eq!(extent.condition_passed, "0f");
+    assert_eq!(extent.condition_failed, "04", "the bne condition failed once");
+}
+
+#[test]
+fn bitmaps_record_nothing_outside_declared_extents() {
+    let mut case = Case::new(&[ADD_R0_1, ADD_R0_1, BX_LR]);
+    case.functions = vec![(CODE, 8), (0x1040, 4)];
+    let observed = case.run();
+    observed.assert_stopped(Status::UnknownCall, 0x1008);
+    assert_eq!(observed.trace(), [CODE, CODE + 4]);
+    assert_eq!(
+        observed.observation.executed,
+        [
+            ExecutedExtent {
+                base: "0x00001000".into(),
+                bytes: "8".into(),
+                executed: "03".into(),
+                condition_passed: "03".into(),
+                condition_failed: "00".into(),
+            },
+            ExecutedExtent {
+                base: "0x00001040".into(),
+                bytes: "4".into(),
+                executed: "00".into(),
+                condition_passed: "00".into(),
+                condition_failed: "00".into(),
+            },
+        ]
+    );
+    assert!(observed.observation.executed_unobserved.is_empty());
 }
