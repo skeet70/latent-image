@@ -14,6 +14,7 @@ sh_test(
         "//manifests:initial",
         "//replacement/startup_artifact:qualifications.json",
         "//schemas:all",
+        "output-root-allowlist.txt",
         "@lab_git//:bin/git",
         "@lab_jq//:bin/jq",
         "@lab_jsonschema//:bin/check-jsonschema",
