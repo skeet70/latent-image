@@ -69,11 +69,11 @@ main = do
   forM_ ["status ", "readback ", "stop "] $ \command ->
     check "stopped keeper refuses every command"
       (case transition E2E.KeeperStopped (command ++ sessionText) of Left _ -> True; _ -> False)
-  let digest = either error id . parseSha256Hex
-      dat = digest "cd2f3d7d187ab72151abdb325891bac5b5a3257db8640c6b0c0e836d29b37626"
-      image4 = digest "40d7fe9afdcd067a4441df8a079cef1fb4ee9e18a8240d9abd492a6db545dbdf"
-      contract = digest "1b839ebdb8f7448c211014a619bb004832b5cecc3eac673faf045f8226d841eb"
-      other = digest (replicate 64 '0')
+  let parsed = either error id . parseSha256Hex
+      dat = parsed "cd2f3d7d187ab72151abdb325891bac5b5a3257db8640c6b0c0e836d29b37626"
+      image4 = parsed "40d7fe9afdcd067a4441df8a079cef1fb4ee9e18a8240d9abd492a6db545dbdf"
+      contract = parsed "1b839ebdb8f7448c211014a619bb004832b5cecc3eac673faf045f8226d841eb"
+      other = parsed (replicate 64 '0')
   check "keeper accepts the immutable admitted source triple"
     (E2E.checkPropertyAllocationSource dat image4 contract == Right ())
   forM_ [(other,image4,contract), (dat,other,contract), (dat,image4,other)] $ \(d,i,c) ->
