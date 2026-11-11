@@ -215,6 +215,26 @@ run source builder wrapper = do
   _ <- finish nested
   nestedOk <- expect "a child cannot reuse its parent's admission marker"
     (nestedSlot /= Nothing && "probe-nested-exit ExitFailure 1" `elem` nestedLines)
+  grantChild <- spawn (change "XM1_PROBE_GRANT" "valid" environment)
+  Admission grantChildLines grantChildSlot <- admission grantChild
+  release grantChild
+  _ <- finish grantChild
+  grantOk <- expect "a child with its parent's grant runs inside the parent's slot"
+    (grantChildSlot /= Nothing && "probe-grant-exit ExitSuccess True" `elem` grantChildLines)
+  grantOther <- spawn (change "XM1_PROBE_GRANT" "other" environment)
+  Admission grantOtherLines grantOtherSlot <- admission grantOther
+  release grantOther
+  _ <- finish grantOther
+  grantOtherOk <- expect "a grant naming another process is refused"
+    (grantOtherSlot /= Nothing && "probe-grant-exit ExitFailure 1 False" `elem` grantOtherLines
+      && "probe-grant-error True" `elem` grantOtherLines)
+  grandchild <- spawn (change "XM1_PROBE_GRANT" "grandchild" environment)
+  Admission grandchildLines grandchildSlot <- admission grandchild
+  release grandchild
+  _ <- finish grandchild
+  grandchildOk <- expect "a grandchild cannot use its parent's grant"
+    (grandchildSlot /= Nothing && "probe-grant-exit ExitSuccess True" `elem` grandchildLines
+      && "probe-grandchild-line True" `elem` grandchildLines)
   (nestedBuildCode, _, _) <- readCreateProcessWithExitCode
     (proc builder ["build"]) {env = Just (change "XM1_EMULATOR_SLOT" "1" environment)} ""
   nestedBuildOk <- expect "build admission refuses to wait inside verification" (nestedBuildCode == ExitFailure 2)
@@ -421,7 +441,7 @@ run source builder wrapper = do
   _ <- finish explicitJob
   explicitLabel <- readRunLabel explicitWorkspace
   explicitLabelOk <- expect "XM1_RUN_LABEL overrides the slot's program label" (explicitLabel == Just "explicit-label")
-  pure (and [nativeCliOk, defaultFullOk, overrideCapsOk, fullOk, largeNativeOk, overlap, atomicOk, pinnedOk, exitsOk, buildOverlap, buildBudget, buildExit, smallOk, nativeLimit, nestedOk, nestedBuildOk, exitOk, crashOk, survivorOk, reusedManagedOk, legacyOk, reusedLegacyOk, invalidLegacyOk, storageOk, capOk, sessionOk, startupOk, migrationLockOk, migrationOk, unknownMigrationOk, programLabelOk, explicitLabelOk])
+  pure (and [nativeCliOk, defaultFullOk, overrideCapsOk, fullOk, largeNativeOk, overlap, atomicOk, pinnedOk, exitsOk, buildOverlap, buildBudget, buildExit, smallOk, nativeLimit, nestedOk, grantOk, grantOtherOk, grandchildOk, nestedBuildOk, exitOk, crashOk, survivorOk, reusedManagedOk, legacyOk, reusedLegacyOk, invalidLegacyOk, storageOk, capOk, sessionOk, startupOk, migrationLockOk, migrationOk, unknownMigrationOk, programLabelOk, explicitLabelOk])
 
 change :: String -> String -> [(String, String)] -> [(String, String)]
 change key value environment = (key, value) : filter ((/= key) . fst) environment
@@ -544,6 +564,6 @@ probeEnvironment home = do
   uid <- getEffectiveUserID
   let runtime = "/run/user/" ++ show uid
       keep key value environment = if any ((== key) . fst) environment then environment else (key, value) : environment
-      dropped = ["HOME", "XM1_EMULATOR_SLOT", "XM1_EMULATOR_MEMORY_MAX", "XM1_EMULATOR_SWAP_MAX", "XM1_NATIVE_MEMORY_MAX", "XM1_NATIVE_SWAP_MAX", "XM1_HOST_BUILD_MEMORY_MAX", "XM1_HOST_BUILD_SWAP_MAX", "XM1_NATIVE_SLOTS", "XM1_HOST_BUILD", "XM1_ADMISSION_SCOPE", "XM1_ADMISSION_OWNER", "XM1_STORAGE_MIN_FREE", "XM1_PROBE_CLASS", "XM1_PROBE_LEGACY", "XM1_PROBE_NESTED", "XM1_PROBE_SURVIVOR", "XM1_PROBE_EXIT", "XM1_PROBE_ALLOCATE_BYTES", "XM1_RUN_DIR", "XM1_RUN_WORK", "XM1_RUN_RESULT", "XM1_RUN_PROGRAM", "XM1_RUN_LABEL", "XM1_TASK_OUTPUT_MAX", "XM1_TASK_MEASURE_SECONDS"]
+      dropped = ["HOME", "XM1_EMULATOR_SLOT", "XM1_EMULATOR_MEMORY_MAX", "XM1_EMULATOR_SWAP_MAX", "XM1_NATIVE_MEMORY_MAX", "XM1_NATIVE_SWAP_MAX", "XM1_HOST_BUILD_MEMORY_MAX", "XM1_HOST_BUILD_SWAP_MAX", "XM1_NATIVE_SLOTS", "XM1_HOST_BUILD", "XM1_ADMISSION_SCOPE", "XM1_ADMISSION_OWNER", "XM1_ADMISSION_CLASS", "XM1_ADMISSION_INHERIT", "XM1_STORAGE_MIN_FREE", "XM1_PROBE_CLASS", "XM1_PROBE_LEGACY", "XM1_PROBE_NESTED", "XM1_PROBE_GRANT", "XM1_PROBE_SURVIVOR", "XM1_PROBE_EXIT", "XM1_PROBE_ALLOCATE_BYTES", "XM1_RUN_DIR", "XM1_RUN_WORK", "XM1_RUN_RESULT", "XM1_RUN_PROGRAM", "XM1_RUN_LABEL", "XM1_TASK_OUTPUT_MAX", "XM1_TASK_MEASURE_SECONDS"]
   pure (("HOME", home) : ("XM1_STORAGE_MIN_FREE", "1") : filter ((`notElem` dropped) . fst)
     (keep "XDG_RUNTIME_DIR" runtime (keep "DBUS_SESSION_BUS_ADDRESS" ("unix:path=" ++ runtime ++ "/bus") inherited)))
