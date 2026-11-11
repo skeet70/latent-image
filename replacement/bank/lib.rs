@@ -26,7 +26,7 @@ core::arch::global_asm!(include_str!("../menu_engine/adapter/entry.S"), options(
 mod menu_widgets;
 
 #[cfg(rb_render_owned)]
-pub(crate) use menu_widgets::render_commands;
+extern crate render_commands;
 
 #[cfg(rb_render_owned)]
 #[path = "../render_adapter/mod.rs"]

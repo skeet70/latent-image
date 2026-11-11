@@ -13,6 +13,7 @@ filegroup(
     visibility = [
         "//host/firmware:__pkg__",
         "//replacement/bank:__pkg__",
+        "//replacement/menu_widgets:__pkg__",
     ],
 )
 

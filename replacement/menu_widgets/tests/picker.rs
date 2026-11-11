@@ -1,6 +1,7 @@
 #[path = "../src/lib.rs"]
 mod widgets;
 pub use widgets::render_commands;
+pub use widgets::menu_engine;
 use render_commands::{DrawReport, FontId, NodeId, ResourceId, RowIndex};
 use widgets::value_picker::*;
 

@@ -1,10 +1,10 @@
 #![no_std]
 #![no_main]
-#[path = "../src/lib.rs"]
-mod widgets;
-pub use widgets::render_commands;
-use widgets::render_commands::{DrawReport, FontId, NodeId, ResourceId, RowIndex};
-use widgets::value_picker::*;
+extern crate render_commands;
+#[path = "../src/value_picker.rs"]
+mod value_picker;
+use render_commands::{DrawReport, FontId, NodeId, ResourceId, RowIndex};
+use value_picker::*;
 
 core::arch::global_asm!(r#"
 .syntax unified

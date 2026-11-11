@@ -23,13 +23,13 @@ pub struct RootChild {
 pub struct NestedChild { pub selection: u32, pub state: u32, pub resource_data: u32 }
 #[repr(C)]
 pub struct HookRecord(pub [u32; 13]);
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Hook { Label, Value, Nested }
 #[derive(Clone, Copy)]
 pub enum Palette { Primary(u32), Grid(u32), Components(u32, u32, u32, u32) }
 #[derive(Clone, Copy)]
 pub enum Format { Ia(bool), Brackets(bool), Text(bool) }
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TabTable { Short, Long, Extra }
 
 pub trait DrawServices {

@@ -52,6 +52,14 @@ cc_library(
 )
 """
 
+_LIBM_SOURCE_BUILD = """
+package(default_visibility = ["//visibility:public"])
+exports_files(["src/lib.rs", "LICENSE.txt"])
+filegroup(
+    name = "source",
+    srcs = glob(["src/**"]) + ["LICENSE.txt"],
+)
+"""
 _FUJIMOD_NIX_DEPS = [
     "//:devenv.lock",
     "//build-support:fujimod-classified-watch.patch",
@@ -282,6 +290,14 @@ def _lab_dependencies_impl(_ctx):
         ],
         repository = "@lab_nixpkgs",
         build_file_content = _FUJI_USB_BUILD,
+    )
+    nixpkgs_package(
+        name = "lab_libm_source",
+        nix_file = "//build-support:libm-source.nix",
+        nix_file_deps = ["//build-support:nixpkgs.nix", "//:devenv.lock"],
+        nixopts = _NIX_BUILD_CAP,
+        repository = "@lab_nixpkgs",
+        build_file_content = _LIBM_SOURCE_BUILD,
     )
     for name, attribute, binary in [
         ("lab_jsonschema", "check-jsonschema", "check-jsonschema"),

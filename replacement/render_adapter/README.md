@@ -34,6 +34,10 @@ devenv shell -- replacement/render_adapter/build.sh \
 
 The script builds the host tools through `host-build` and the pinned toolchain, generates the composed tree, builds one bank staticlib with `--cfg rb_render_owned`, relinks the explicit `modal75,menu-engine,render` variant and checks its composed allowlist. It then runs `//transport:render-manifest-admission-tests` on that manifest through the same `readRamPushManifest`/`parseRamPushManifest` admission used before installation. `RB_BAZEL_OUTPUT_BASE` selects the Bazel output base; its default is `$HOME/.cache/bazel/latent-image-RenderAdapter`. Stock input paths and hashes are enforced by the existing RAM-push builder. Nothing is installed or run in a guest.
 
+The render dependency uses unmodified MIT-licensed `libm` 0.2.16 from `@lab_libm_source`, including its `LICENSE.txt` notices. `//replacement/render_commands:libm-host` and `:libm-arm` compile its `#![no_std]` crate root directly with the pinned host and ARM Rust compilers. Neither runs Cargo or the package build script; architecture-specific and intrinsic cfgs remain unset, selecting portable generic implementations. Host widget tests use the host rlib; native widget cases and the composed render bank use the ARM rlib.
+
+Production bank and native widget roots import the canonical `//replacement/render_commands:runtime-arm` rlib. Host widget tests embed the render source under `cfg(test)` to retain its CPU test cases.
+
 The render-bank Rust compilation enables `-C target-feature=+strict-align`. Draw reports contain byte fields at unaligned offsets, including `report+0x15`.
 
 `xm1-viewer` accepts opt-in GHC RTS heap limits. `RENDER_VIEWER_GHCRTS` applies them only to the viewer launched by `run-render-pairs.sh`, leaving admission and comparison tools unchanged. These bound the host viewer, not the native emulator or their combined memory scope.

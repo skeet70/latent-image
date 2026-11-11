@@ -11,7 +11,7 @@ output_base=${RB_BAZEL_OUTPUT_BASE:-$HOME/.cache/bazel/latent-image-RenderAdapte
 bazel=(host-build --output_base="$output_base")
 "${bazel[@]}" build --jobs=2 //host/firmware:build-recipe-bank //host/firmware:check-bank-allowlist \
   //transport:render-manifest-admission-tests \
-  //replacement/modal_runtime:menu-engine-tree @lab_xm1_rust//:bin/rustc \
+  //replacement/modal_runtime:menu-engine-tree //replacement/render_commands:libm-arm //replacement/render_commands:runtime-arm @lab_xm1_rust//:bin/rustc \
   @lab_clang//:bin/clang @lab_lld//:bin/ld.lld @lab_llvm//:bin/llvm-objcopy \
   @lab_llvm//:bin/llvm-nm @lab_llvm//:bin/llvm-objdump @lab_bash//:bin/bash @lab_coreutils//:bin/sha256sum
 case "$(realpath -m -- "$out")" in
@@ -31,6 +31,9 @@ RB_MODAL75_TABLE="$PWD/$modal75" RB_MENU_ENGINE_TREE="$PWD/$out/menu-tree.rs" RB
   "${external}lab_xm1_rust/bin/rustc" --crate-name=bank --edition=2021 --crate-type=staticlib -C opt-level=z \
   --target=armv7r-none-eabi -C panic=abort -C relocation-model=static -C target-cpu=cortex-r4f -C target-feature=+strict-align -C codegen-units=1 \
   -C debuginfo=0 -C llvm-args=-min-jump-table-entries=4096 --cfg rb_modal_scoped --cfg rb_modal75_owned \
+  --extern libm="$PWD/bazel-bin/replacement/render_commands/liblibm-arm.rlib" \
+  --extern render_commands="$PWD/bazel-bin/replacement/render_commands/librender_commands.rlib" \
+  -L dependency="$PWD/bazel-bin/replacement/render_commands" \
   --cfg rb_menu_engine_owned --cfg rb_render_owned replacement/bank/lib.rs -o "$out/bank-modal75-engine-render.a"
 RB_PUBLICATION_GROUPS=modal75,menu-engine,render \
   RAM_PUSH_BUILDER="$PWD/bazel-bin/host/firmware/build-recipe-bank" \

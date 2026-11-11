@@ -4,6 +4,7 @@ load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 exports_files([
     "ghc.nix",
     "ledger-apply.sh",
+    "libm-source.nix",
     "nixpkgs.nix",
     "repositories.bzl",
     "rules-haskell-nix.patch",

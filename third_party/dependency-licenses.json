@@ -352,6 +352,15 @@
       "scope": "published version license metadata; package notices remain in dependency source"
     },
     {
+      "name": "libm",
+      "version": "0.2.16",
+      "license": "MIT",
+      "evidence": "https://static.crates.io/crates/libm/libm-0.2.16.crate",
+      "source_archive": "https://static.crates.io/crates/libm/libm-0.2.16.crate",
+      "license_member": "libm-0.2.16/LICENSE.txt",
+      "scope": "package LICENSE.txt grants MIT for libm as a whole; contributor terms also include Apache-2.0; package and per-file notices remain in the Nix-exposed dependency source"
+    },
+    {
       "name": "linux-raw-sys",
       "version": "0.12.1",
       "license": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT",

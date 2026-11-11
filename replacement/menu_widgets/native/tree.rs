@@ -1,8 +1,7 @@
 #![no_std]
 #![no_main]
 
-#[path = "../../render_commands/src/lib.rs"]
-mod render_commands;
+extern crate render_commands;
 #[path = "../src/tree_list.rs"]
 mod tree_list;
 

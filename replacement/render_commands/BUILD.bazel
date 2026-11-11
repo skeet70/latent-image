@@ -1,5 +1,37 @@
+load("//replacement/toolchain:rust.bzl", "xm1_rust_rlib")
+
 filegroup(
     name = "module",
-    srcs = ["src/lib.rs"],
+    srcs = glob(["src/*.rs"]) + ["//replacement/develop:portable-font-module"],
+    visibility = ["//visibility:public"],
+)
+
+# Bare rustc leaves libm's arch_enabled and intrinsics_enabled cfgs unset.
+genrule(
+    name = "libm-host",
+    srcs = ["@lab_libm_source//:source", "@lab_libm_source//:src/lib.rs"],
+    outs = ["liblibm-host.rlib"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --crate-name=libm --edition=2021 --crate-type=rlib -C opt-level=z -C debuginfo=0 $(location @lab_libm_source//:src/lib.rs) -o $@",
+    tools = ["@lab_rustc//:bin/rustc"],
+    visibility = ["//visibility:public"],
+)
+
+xm1_rust_rlib(
+    name = "libm-arm",
+    src = "@lab_libm_source//:src/lib.rs",
+    crate_name = "libm",
+    out = "liblibm-arm.rlib",
+    data = ["@lab_libm_source//:source"],
+    visibility = ["//visibility:public"],
+)
+
+xm1_rust_rlib(
+    name = "runtime-arm",
+    src = "src/lib.rs",
+    crate_name = "render_commands",
+    out = "librender_commands.rlib",
+    data = [":module"],
+    rlib_deps = {"libm": ":libm-arm"},
+    rustc_flags = ["-C", "target-feature=+strict-align"],
     visibility = ["//visibility:public"],
 )

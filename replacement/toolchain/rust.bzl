@@ -57,6 +57,7 @@ def xm1_rust_staticlib(
         opt_level = "z",
         rustc_flags = [],
         data = [],
+        rlib_deps = {},
         testonly = False,
         visibility = None):
     """Compiles one no_std crate root to a staticlib for armv7r-none-eabi.
@@ -75,6 +76,12 @@ def xm1_rust_staticlib(
             "-C",
             "opt-level=%s" % opt_level,
         ] + _TARGET_FLAGS + rustc_flags + [
+            "--extern=%s=$(location %s)" % (crate, label)
+            for crate, label in rlib_deps.items()
+        ] + [
+            "-Ldependency=$$(dirname $(location %s))" % label
+            for label in rlib_deps.values()
+        ] + [
             "$(location %s)" % src,
             "-o",
             "$@",
@@ -82,7 +89,7 @@ def xm1_rust_staticlib(
     )
     native.genrule(
         name = name,
-        srcs = [src] + data,
+        srcs = [src] + data + rlib_deps.values(),
         outs = [name + ".a"],
         cmd = cmd,
         message = "Cross-compiling %s for armv7r-none-eabi" % crate_name,
@@ -196,6 +203,8 @@ def xm1_rust_rlib(
         opt_level = "z",
         rustc_flags = [],
         data = [],
+        rlib_deps = {},
+        out = None,
         testonly = False,
         visibility = None):
     """Compiles one no_std crate root to an rlib for armv7r-none-eabi.
@@ -205,6 +214,8 @@ def xm1_rust_rlib(
     """
     if crate_name == None:
         crate_name = name.replace("-", "_")
+    if out == None:
+        out = name + ".rlib"
     cmd = " ".join(
         [
             "$(location %s)" % _RUSTC,
@@ -214,6 +225,12 @@ def xm1_rust_rlib(
             "-C",
             "opt-level=%s" % opt_level,
         ] + _TARGET_FLAGS + rustc_flags + [
+            "--extern=%s=$(location %s)" % (crate, label)
+            for crate, label in rlib_deps.items()
+        ] + [
+            "-Ldependency=$$(dirname $(location %s))" % label
+            for label in rlib_deps.values()
+        ] + [
             "$(location %s)" % src,
             "-o",
             "$@",
@@ -221,8 +238,8 @@ def xm1_rust_rlib(
     )
     native.genrule(
         name = name,
-        srcs = [src] + data,
-        outs = [name + ".rlib"],
+        srcs = [src] + data + rlib_deps.values(),
+        outs = [out],
         cmd = cmd,
         message = "Cross-compiling %s as an rlib" % crate_name,
         testonly = testonly,
