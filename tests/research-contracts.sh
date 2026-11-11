@@ -220,3 +220,52 @@ if (( ${#fuji_af_output_root_errors[@]} > 0 )); then
   fuji_af_output_root_failed=1
 fi
 [[ -z "$fuji_af_output_root_failed" ]] || exit 1
+
+# Every firmware unit keeps a shim table in replacement/shims.md. A unit is a directory under replacement/
+# whose BUILD.bazel declares a firmware artifact: a firmware toolchain rule, the ARM Rust compiler, or a
+# module/sources filegroup linked into one. A unit that lands without a table fails here.
+fuji_af_shim_register="$fuji_af_checkout/replacement/shims.md"
+fuji_af_shim_units=()
+while IFS= read -r fuji_af_unit_build; do
+  fuji_af_unit_dir="${fuji_af_unit_build%/BUILD.bazel}"
+  fuji_af_unit="${fuji_af_unit_dir#replacement/}"
+  if [[ "$fuji_af_unit" == */* ]]; then continue; fi
+  if ! "$fuji_af_git" -C "$fuji_af_checkout" ls-files "$fuji_af_unit_dir" | grep -qE '\.(rs|S)$'; then continue; fi
+  if grep -qE 'xm1_rust_(elf|staticlib|rlib)\(|@lab_xm1_rust|name = "(module|sources)"' \
+    "$fuji_af_checkout/$fuji_af_unit_build"; then fuji_af_shim_units+=("$fuji_af_unit"); fi
+done < <("$fuji_af_git" -C "$fuji_af_checkout" ls-files 'replacement/*/BUILD.bazel')
+
+fuji_af_shim_kinds='stock-ABI export|veneer or carrier at a stock address|trampoline into retained stock|callback registry for guest words|kernel interface slot|guest-memory layout view|retained stock seam in assembly|C-ABI bridge between two owned units'
+fuji_af_shim_errors=()
+if [[ ! -f "$fuji_af_shim_register" ]]; then
+  fuji_af_shim_errors+=("replacement/shims.md: missing")
+elif ! grep -qx '## Owned on both sides' "$fuji_af_shim_register"; then
+  fuji_af_shim_errors+=("replacement/shims.md: missing the Owned on both sides section")
+else
+  for fuji_af_unit in "${fuji_af_shim_units[@]}"; do
+    fuji_af_section="$(awk -v heading="## $fuji_af_unit" '$0 == heading { found = 1; next } /^## / { found = 0 } found' "$fuji_af_shim_register")"
+    if [[ -z "$fuji_af_section" ]]; then
+      fuji_af_shim_errors+=("replacement/shims.md: no table for $fuji_af_unit")
+      continue
+    fi
+    if ! grep -qF '| Shim | Kind | Other side | Owned now | Removal condition | State |' <<< "$fuji_af_section"; then
+      fuji_af_shim_errors+=("replacement/shims.md: $fuji_af_unit has no shim table header")
+      continue
+    fi
+    while IFS= read -r fuji_af_row; do
+      [[ "$fuji_af_row" == '| '* ]] || continue
+      if [[ "$fuji_af_row" == *'---'* ]]; then continue; fi
+      fuji_af_kind="$(awk -F'|' '{ gsub(/^[[:space:]]+|[[:space:]]+$/, "", $3); print $3 }' <<< "$fuji_af_row")"
+      if [[ "$fuji_af_kind" == 'Kind' ]]; then continue; fi
+      fuji_af_state="$(awk -F'|' '{ gsub(/^[[:space:]]+|[[:space:]]+$/, "", $7); print $7 }' <<< "$fuji_af_row")"
+      grep -qxE "$fuji_af_shim_kinds" <<< "$fuji_af_kind" ||
+        fuji_af_shim_errors+=("replacement/shims.md: $fuji_af_unit has unknown kind '$fuji_af_kind'")
+      grep -qxE 'required|condition met|removed' <<< "$fuji_af_state" ||
+        fuji_af_shim_errors+=("replacement/shims.md: $fuji_af_unit has unknown state '$fuji_af_state'")
+    done <<< "$fuji_af_section"
+  done
+fi
+if (( ${#fuji_af_shim_errors[@]} > 0 )); then
+  printf 'Shim register errors:\n%s\n' "${fuji_af_shim_errors[@]}" >&2
+  exit 1
+fi
