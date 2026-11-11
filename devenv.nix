@@ -4,6 +4,7 @@ let
   xm1Native = import ./build-support/xm1-native.nix { inherit pkgs; };
   unicornX70 = import ./build-support/unicorn-x70.nix { inherit pkgs; };
   hostBuild = import ./build-support/host-build.nix;
+  runOutput = import ./build-support/run-output.nix;
 in {
   packages = with pkgs; [
     git
@@ -12,6 +13,8 @@ in {
     bazel_7
     # Admitted Bazel commands (build-support/README.md#commands).
     hostBuild
+    # Run directories (build-support/README.md#run-output).
+    runOutput
     buildifier
     coreutils
     diffutils

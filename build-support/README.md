@@ -121,6 +121,8 @@ Inspect `systemctl --user status latent-image-scratch-expiry.timer` for the next
 
 Run output goes in `private-data/scratch/NAME/runs/STAMP-LABEL/`, where NAME is the current branch without a leading `agent/` and with any other `/` replaced by `-`, STAMP is UTC `YYYYMMDDTHHMMSSZ` and LABEL matches `[A-Za-z0-9._-]+`. A run directory holds `run.json`, the `lock` its opener holds, `work/` for intermediates and `result/` for the verdict and the facts it rests on, at most 16 MiB.
 
+devenv puts `run-output` on PATH, compiled from the sources of `//build-support:run-output` through `build-support/run-output.nix`. It takes no build lock.
+
 `//build-support:run-output exec [--label LABEL] [--work-budget BYTES] -- COMMAND ARG...` opens a run, exports `XM1_RUN_DIR`, `XM1_RUN_WORK` and `XM1_RUN_RESULT` to COMMAND, runs it in its own process group and closes the run with its exit status. It forwards SIGTERM, SIGINT and SIGHUP to that group, closes the run `"failed"` with reason `"signal"` and exits 128 plus the signal number. Inside an existing run it only runs COMMAND. A run that exits 0 is `"passed"` and loses `work/`; a nonzero exit is `"failed"` and keeps `work/` while it is the newest failed run of its LABEL in this task; no exit status leaves it `"unjudged"` and keeps `work/`. `run.json` records the command, commit, work budget, exit status, outcome, reason and the count, total size and SHA-256 of every regular file under `work/`, and lists the files of at least 1 MiB individually.
 
 `//build-support:run-output keep PATH...` moves intermediates that later runs reuse out of `$XM1_RUN_WORK` into `private-data/scratch/NAME/inputs/` under the same relative path. It refuses a path outside the work directory and never replaces an existing input.
