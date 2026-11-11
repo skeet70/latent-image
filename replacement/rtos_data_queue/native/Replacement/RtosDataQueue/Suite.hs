@@ -10,7 +10,7 @@ import qualified Data.Map.Strict as M
 import Data.List (intercalate, isPrefixOf, isSuffixOf, sortOn)
 import Data.Maybe (fromMaybe)
 import Data.Word (Word32, Word8)
-import Emulation.CachedNativeBatch (BatchReuse (..), cachedObservedBatch)
+import Emulation.CachedNativeBatch (BatchReuse (..), ResultPolicy (WriteAllResults), cachedObservedBatch, cachedObservedBatchWith)
 import Emulation.NativeCase (CaseId (..), caseIdText)
 import qualified Emulation.NativeObservation as N
 import Emulation.NativeObservation (Barrier (..), KernelObservation (..), NativeObservation (..), Ordered (..), RegionId (..), Register (..), RunnerStatus (..), Write (..), WriteValue (..), regionName, runnerStatusLabel)
@@ -1212,8 +1212,8 @@ runDomain runner cacheRoot directory facts domain aggregate stockImage ownedImag
       ownedSpecs = [(one, caseFor facts domain True aggregate timerImage ownedSymbols ownedImage stockImage one) | one <- selected]
   stockBatch <- writeBatch (directory </> "stock") (map snd stockSpecs)
   ownedBatch <- writeBatch (directory </> "owned") (map snd ownedSpecs)
-  (stockReuse, stockRaw) <- cachedObservedBatch cacheRoot runner stockBatch
-  (ownedReuse, ownedRaw) <- cachedObservedBatch cacheRoot runner ownedBatch
+  (stockReuse, stockRaw) <- cachedObservedBatchWith WriteAllResults cacheRoot runner stockBatch
+  (ownedReuse, ownedRaw) <- cachedObservedBatchWith WriteAllResults cacheRoot runner ownedBatch
   readonlyControls <- case ownedSpecs of
     [] -> pure []
     (_, template) : _ -> do

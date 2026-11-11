@@ -19,8 +19,10 @@ module Emulation.CachedNativeBatch
   , CacheOnlyRunner
   , cacheOnlyRunner
   , cachedObservedBatchOnly
+  , MaintenanceInterval (..)
   , cachedObservedBatch
   , cachedObservedBatchWith
+  , cachedObservedBatchWithSince
   , cachedObservedBatchWithBinding
   ) where
 
@@ -28,14 +30,16 @@ import qualified Codec.Compression.GZip as GZip
 import qualified Codec.Compression.Zlib.Internal as Z
 import Control.Concurrent (threadDelay)
 import Control.Exception (Exception, IOException, bracket, catch, evaluate, onException, throwIO, try)
-import Control.Monad (forM, forM_, when)
+import Control.Monad (forM, forM_, unless, when)
 import Data.Aeson (Value (..))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
 import qualified Data.ByteString.Lazy as BL
 import Data.Char (isDigit)
 import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
-import Data.List (isPrefixOf, nub)
+import Data.List (isPrefixOf, nub, sortOn)
+import Data.Maybe (catMaybes)
+import Data.Time.Clock.POSIX (POSIXTime, getPOSIXTime)
 import Foreign.C.Error (eAGAIN, eWOULDBLOCK, getErrno, throwErrno)
 import Foreign.C.Types (CInt (..))
 import GHC.Clock (getMonotonicTimeNSec)
@@ -83,19 +87,21 @@ import FujiAF.Host
   , set
   , str
   )
-import FujiAF.StorageBudget (checkStorageBudget)
+import FujiAF.StorageBudget (StorageBytes (..), checkStorageBudget, parseByteCount)
 import FujiAF.JSON (encodeCanonical)
 import System.Directory
   ( canonicalizePath
   , createDirectory
   , createDirectoryIfMissing
+  , listDirectory
   , removeDirectoryRecursive
   , renameDirectory
   )
+import System.Environment (lookupEnv)
 import System.Exit (ExitCode (..))
 import System.FilePath (addTrailingPathSeparator, takeDirectory, (</>))
-import System.IO.Error (isDoesNotExistError, tryIOError)
-import System.Posix.Files (getSymbolicLinkStatus, isDirectory, isSymbolicLink)
+import System.IO.Error (isAlreadyExistsError, isDoesNotExistError, tryIOError)
+import System.Posix.Files (fileSize, getSymbolicLinkStatus, isDirectory, isRegularFile, isSymbolicLink, modificationTimeHiRes, setFileTimesHiRes)
 import System.Posix.Process (getProcessID)
 import System.Posix.IO (FdOption (CloseOnExec), OpenFileFlags (creat), OpenMode (ReadWrite), closeFd, defaultFileFlags, openFd, setFdOption)
 import System.Posix.Types (Fd (..))
@@ -267,7 +273,7 @@ data CurrentCase = CurrentCase
   , currentReport :: Value
   }
 
-data CacheRead = CacheAbsent | CacheInvalid String | CacheHit [(CaseId, NativeObservation, CacheVerdict)]
+data CacheRead = CacheAbsent | CacheInvalid String | CacheHit Sha256 [(CaseId, NativeObservation, CacheVerdict)]
 
 data ManifestCase = ManifestCase
   { manifestCaseId :: CaseId
@@ -376,16 +382,27 @@ data CacheInspection
   | InspectionInvalid FilePath String
   | InspectionIneligible FilePath
 
+newtype MaintenanceInterval = MaintenanceInterval POSIXTime
+
+defaultMaintenanceInterval :: MaintenanceInterval
+defaultMaintenanceInterval = MaintenanceInterval 600
+
 cachedObservedBatch :: FilePath -> FilePath -> FilePath -> IO (BatchReuse, [(CaseId, NativeObservation)])
-cachedObservedBatch = cachedObservedBatchWith WriteAllResults
+cachedObservedBatch = cachedObservedBatchWith WriteFailedResults
 
 cachedObservedBatchWith :: ResultPolicy -> FilePath -> FilePath -> FilePath -> IO (BatchReuse, [(CaseId, NativeObservation)])
-cachedObservedBatchWith policy cacheRoot runner batchPath = do
-  (reuse, observed, _) <- cachedObservedBatchWithBinding policy cacheRoot runner batchPath
+cachedObservedBatchWith = cachedObservedBatchWithSince defaultMaintenanceInterval
+
+cachedObservedBatchWithSince :: MaintenanceInterval -> ResultPolicy -> FilePath -> FilePath -> FilePath -> IO (BatchReuse, [(CaseId, NativeObservation)])
+cachedObservedBatchWithSince interval policy cacheRoot runner batchPath = do
+  (reuse, observed, _) <- cachedObservedBatchWithBindingSince interval policy cacheRoot runner batchPath
   pure (reuse, observed)
 
 cachedObservedBatchWithBinding :: ResultPolicy -> FilePath -> FilePath -> FilePath -> IO (BatchReuse, [(CaseId, NativeObservation)], Maybe CacheBinding)
-cachedObservedBatchWithBinding policy cacheRoot runner batchPath = do
+cachedObservedBatchWithBinding = cachedObservedBatchWithBindingSince defaultMaintenanceInterval
+
+cachedObservedBatchWithBindingSince :: MaintenanceInterval -> ResultPolicy -> FilePath -> FilePath -> FilePath -> IO (BatchReuse, [(CaseId, NativeObservation)], Maybe CacheBinding)
+cachedObservedBatchWithBindingSince interval policy cacheRoot runner batchPath = do
   root <- canonicalRoot cacheRoot
   (batchSha256, cases) <- prepareCurrent batchPath
   identity <- runnerIdentity runner
@@ -394,6 +411,10 @@ cachedObservedBatchWithBinding policy cacheRoot runner batchPath = do
         checkStorageBudget cacheRoot
         checkStorageBudget (takeDirectory batchPath)
         createDirectoryIfMissing True cacheRoot
+        limit <-
+          if identityImmutable identity
+            then Just <$> nativeCacheBudget
+            else pure Nothing
         temporary <-
           if identityImmutable identity
             then Just <$> createAttempt root key
@@ -402,13 +423,17 @@ cachedObservedBatchWithBinding policy cacheRoot runner batchPath = do
         (observed, manifests) <-
           executeValidated policy identity batchSha256 batchPath cases temporary `onException` cleanup
         if identityImmutable identity
-          then case temporary of
-            Just directory -> do
+          then case (temporary, limit) of
+            (Just directory, Just budget) -> do
               published <-
                 publishAttempt root identity key batchSha256 directory manifests
                   `onException` cleanup
-              if published then pure () else cleanup
-            Nothing -> pure ()
+              if published
+                then
+                  (pruneCacheRoot root interval budget key `catch` \(_ :: IOException) -> pure ())
+                    `catch` \(_ :: CacheEscape) -> pure ()
+                else cleanup
+            _ -> pure ()
           else pure ()
         pure (BatchExecuted, observed)
   if not (identityImmutable identity)
@@ -417,14 +442,23 @@ cachedObservedBatchWithBinding policy cacheRoot runner batchPath = do
       pure (reuse, observed, Nothing)
     else withCacheFlight root key $ do
       cached <- readCache (PersistResults policy batchPath) root identity key cases
-      (reuse, observed) <- case cached of
-        CacheHit items -> pure (BatchReused, [(ident, observation) | (ident, observation, _) <- items])
-        CacheAbsent -> executed
+      (reuse, observed, binding) <- case cached of
+        CacheHit manifestSha items ->
+          pure
+            ( BatchReused
+            , [(ident, observation) | (ident, observation, _) <- items]
+            , Just (CacheBinding root key manifestSha (map currentId cases))
+            )
+        CacheAbsent -> do
+          (reuse, observed) <- executed
+          binding <- makeBinding root key cases
+          pure (reuse, observed, Just binding)
         CacheInvalid _reason -> do
           quarantine root key
-          executed
-      binding <- makeBinding root key cases
-      pure (reuse, observed, Just binding)
+          (reuse, observed) <- executed
+          binding <- makeBinding root key cases
+          pure (reuse, observed, Just binding)
+      pure (reuse, observed, binding)
 
 newtype CacheOnlyRunner = CacheOnlyRunner RunnerIdentity
 
@@ -442,9 +476,12 @@ cachedObservedBatchOnly policy cacheRoot (CacheOnlyRunner identity) batchPath = 
       entry = cacheRoot </> "v1" </> cacheKeyText key
   cached <- readCache (PersistResults policy batchPath) root identity key cases
   case cached of
-    CacheHit items -> do
-      binding <- makeBinding root key cases
-      pure (BatchReused, [(ident, observation) | (ident, observation, _) <- items], Just binding)
+    CacheHit manifestSha items ->
+      pure
+        ( BatchReused
+        , [(ident, observation) | (ident, observation, _) <- items]
+        , Just (CacheBinding root key manifestSha (map currentId cases))
+        )
     CacheAbsent -> failH ("cache-only runner observation missing: " ++ entry)
     CacheInvalid reason -> failH ("cache-only runner observation invalid: " ++ reason)
 
@@ -462,9 +499,14 @@ inspectCachedBatch cacheRoot runner batchPath = do
       case readResult of
         CacheAbsent -> pure (InspectionAbsent entry)
         CacheInvalid reason -> pure (InspectionInvalid entry reason)
-        CacheHit items -> do
-          binding <- makeBinding root key cases
-          pure (InspectionRawHit (cacheBindingEntry binding) binding [(ident, verdict) | (ident, _, verdict) <- items])
+        CacheHit manifestSha items ->
+          let binding = CacheBinding root key manifestSha (map currentId cases)
+           in pure
+                ( InspectionRawHit
+                    (cacheBindingEntry binding)
+                    binding
+                    [(ident, verdict) | (ident, _, verdict) <- items]
+                )
 
 data ValidationDestination
   = SkipResults
@@ -477,11 +519,25 @@ readCache destination root identity key cases = do
     Nothing -> pure CacheAbsent
     Just ownedEntry -> do
       result <- try (validateCachedWith destination identity key cases ownedEntry)
-      pure $ case result of
-        Left (problem :: IOException) -> CacheInvalid (show problem)
-        Right observed -> CacheHit observed
+      case result of
+        Left (problem :: IOException) -> pure (CacheInvalid (show problem))
+        Right (manifestSha, observed) -> do
+          case destination of
+            SkipResults -> pure ()
+            PersistResults _ _ ->
+              (touchManifest ownedEntry `catch` \(_ :: IOException) -> pure ())
+                `catch` \(_ :: CacheEscape) -> pure ()
+          pure (CacheHit manifestSha observed)
 
-validateCachedWith :: ValidationDestination -> RunnerIdentity -> CacheKey -> [CurrentCase] -> OwnedPath -> IO [(CaseId, NativeObservation, CacheVerdict)]
+touchManifest :: OwnedPath -> IO ()
+touchManifest entry = do
+  let path = ownedPath entry </> "manifest.json"
+  status <- getSymbolicLinkStatus path
+  when (isSymbolicLink status) (refuseEscape ("cache file is a symbolic link: " ++ path))
+  now <- getPOSIXTime
+  setFileTimesHiRes path now now
+
+validateCachedWith :: ValidationDestination -> RunnerIdentity -> CacheKey -> [CurrentCase] -> OwnedPath -> IO (Sha256, [(CaseId, NativeObservation, CacheVerdict)])
 validateCachedWith destination identity key cases entry = do
   encodedManifest <- readOwnedRegular entry "manifest.json" manifestLimit
   manifest <- parseManifest =<< jsonRead encodedManifest
@@ -493,7 +549,7 @@ validateCachedWith destination identity key cases entry = do
   ensure (length items == length cases) "cache manifest case count differs"
   let originalIds = map manifestCaseId items
   ensure (length (nub originalIds) == length originalIds) "cache manifest case ids duplicate"
-  forM (zip cases items) $ \(current, item) -> do
+  validated <- forM (zip cases items) $ \(current, item) -> do
     ensure
       (manifestCaseWireSha256 item == currentWireSha256 current)
       "cache manifest wire differs"
@@ -525,6 +581,7 @@ validateCachedWith destination identity key cases entry = do
       SkipResults -> pure ()
       PersistResults policy batchPath -> writeResult policy batchPath current judged
     pure (currentId current, observation, verdictFromJudged judged)
+  pure (sha256 encodedManifest, validated)
 
 readCachedPayload :: CacheBinding -> CaseId -> IO B.ByteString
 readCachedPayload binding ident = do
@@ -982,3 +1039,155 @@ quarantine root key = do
             ownedPath destinationRoot
               </> (cacheKeyText key ++ "-" ++ show pid ++ "-" ++ show stamp)
       renameDirectory (ownedPath ownedEntry) destination `catch` \(_ :: IOException) -> pure ()
+
+nativeCacheBudget :: IO StorageBytes
+nativeCacheBudget = do
+  raw <- maybe "20G" id <$> lookupEnv "XM1_NATIVE_CACHE_MAX"
+  either
+    (\input -> failH ("XM1_NATIVE_CACHE_MAX is not a positive byte count: " ++ show input))
+    pure
+    (parseByteCount raw)
+
+data CacheEntry = CacheEntry
+  { prunedName :: FilePath
+  , prunedBytes :: StorageBytes
+  , prunedModified :: POSIXTime
+  }
+
+zeroBytes :: StorageBytes
+zeroBytes = StorageBytes 0
+
+addBytes :: StorageBytes -> StorageBytes -> StorageBytes
+addBytes (StorageBytes left) (StorageBytes right) = StorageBytes (left + right)
+
+subtractBytes :: StorageBytes -> StorageBytes -> StorageBytes
+subtractBytes (StorageBytes left) (StorageBytes right) = StorageBytes (left - right)
+
+pruneCacheRoot :: CacheRoot -> MaintenanceInterval -> StorageBytes -> CacheKey -> IO ()
+pruneCacheRoot root interval budget publishedKey = do
+  version <- ownedDirectory (rootPath root) ["v1"]
+  fd@(Fd descriptor) <- openPruneLock version
+  bracket (pure fd) closeFd $ \_ -> do
+    result <- flock descriptor 6
+    if result /= 0
+      then do
+        problem <- getErrno
+        if problem == eAGAIN || problem == eWOULDBLOCK
+          then pure ()
+          else throwErrno "native cache prune flock"
+      else do
+        recent <- stampRecent version interval
+        unless recent $ do
+          entries <- prunedEntries version
+          evictEntries
+            version
+            budget
+            (foldr (addBytes . prunedBytes) zeroBytes entries)
+            [ item
+            | item <- sortOn (\entry -> (prunedModified entry, prunedName entry)) entries
+            , prunedName item /= cacheKeyText publishedKey
+            ]
+          writeStamp version
+
+openPruneLock :: OwnedPath -> IO Fd
+openPruneLock version = do
+  let path = ownedPath version </> ".prune-lock"
+  status <- tryIOError (getSymbolicLinkStatus path)
+  case status of
+    Left problem | isDoesNotExistError problem -> pure ()
+    Left problem -> throwIO problem
+    Right entry -> when (isSymbolicLink entry) (refuseEscape ("cache lock is a symbolic link: " ++ path))
+  fd <- openFd path ReadWrite defaultFileFlags {creat = Just 0o600}
+  setFdOption fd CloseOnExec True `onException` closeFd fd
+  pure fd
+
+stampRecent :: OwnedPath -> MaintenanceInterval -> IO Bool
+stampRecent version (MaintenanceInterval interval)
+  | interval <= 0 = pure False
+  | otherwise = do
+      let path = ownedPath version </> ".prune-stamp"
+      now <- getPOSIXTime
+      status <- tryIOError (getSymbolicLinkStatus path)
+      case status of
+        Left problem | isDoesNotExistError problem -> pure False
+        Left problem -> throwIO problem
+        Right entry -> do
+          when (isSymbolicLink entry) (refuseEscape ("cache file is a symbolic link: " ++ path))
+          pure (now - modificationTimeHiRes entry < interval)
+
+writeStamp :: OwnedPath -> IO ()
+writeStamp version = do
+  let path = ownedPath version </> ".prune-stamp"
+  status <- tryIOError (getSymbolicLinkStatus path)
+  case status of
+    Left problem | isDoesNotExistError problem -> pure ()
+    Left problem -> throwIO problem
+    Right entry -> when (isSymbolicLink entry) (refuseEscape ("cache file is a symbolic link: " ++ path))
+  B.writeFile path B.empty
+  now <- getPOSIXTime
+  setFileTimesHiRes path now now
+
+prunedEntries :: OwnedPath -> IO [CacheEntry]
+prunedEntries version = do
+  names <- listDirectory (ownedPath version)
+  fmap catMaybes . forM names $ \name ->
+    if name == "tmp" || name == "quarantine" || "." `isPrefixOf` name
+      then pure Nothing
+      else do
+        let path = ownedPath version </> name
+        status <- tryIOError (getSymbolicLinkStatus path)
+        case status of
+          Right entry | isDirectory entry -> do
+            manifest <- tryIOError (getSymbolicLinkStatus (path </> "manifest.json"))
+            case manifest of
+              Right found | isRegularFile found && not (isSymbolicLink found) -> do
+                bytes <- measureEntry path
+                pure (Just (CacheEntry name bytes (modificationTimeHiRes found)))
+              _ -> pure Nothing
+          _ -> pure Nothing
+
+measureEntry :: FilePath -> IO StorageBytes
+measureEntry path = do
+  status <- tryIOError (getSymbolicLinkStatus path)
+  case status of
+    Left _ -> pure zeroBytes
+    Right entry
+      | isDirectory entry -> do
+          names <- tryIOError (listDirectory path)
+          case names of
+            Left _ -> pure zeroBytes
+            Right children -> foldr addBytes zeroBytes <$> mapM (measureEntry . (path </>)) children
+      | isRegularFile entry -> pure (StorageBytes (fromIntegral (fileSize entry)))
+      | otherwise -> pure zeroBytes
+
+evictEntries :: OwnedPath -> StorageBytes -> StorageBytes -> [CacheEntry] -> IO ()
+evictEntries version budget total candidates
+  | total <= budget = pure ()
+  | otherwise = case candidates of
+      [] -> pure ()
+      candidate : rest -> do
+        moved <- moveEntryToTmp version (prunedName candidate)
+        case moved of
+          Just destination -> removeDirectoryRecursive destination `catch` \(_ :: IOException) -> pure ()
+          Nothing -> pure ()
+        let remaining = case moved of
+              Just _ -> subtractBytes total (prunedBytes candidate)
+              Nothing -> total
+        evictEntries version budget remaining rest
+
+moveEntryToTmp :: OwnedPath -> FilePath -> IO (Maybe FilePath)
+moveEntryToTmp version name = do
+  temporary <- ownedDirectory version ["tmp"]
+  pid <- getProcessID
+  stamp <- getMonotonicTimeNSec
+  let attempt index = do
+        let destination =
+              ownedPath temporary
+                </> (name ++ "-" ++ show pid ++ "-" ++ show stamp ++ "-" ++ show index)
+        result <- tryIOError (renameDirectory (ownedPath version </> name) destination)
+        case result of
+          Right () -> pure (Just destination)
+          Left problem
+            | isAlreadyExistsError problem && index < 100 -> attempt (index + 1)
+            | otherwise -> pure Nothing
+  attempt (0 :: Int)

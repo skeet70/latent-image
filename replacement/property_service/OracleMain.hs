@@ -18,7 +18,7 @@ import Data.Maybe (fromMaybe, isJust, isNothing, listToMaybe)
 import qualified Data.Set as S
 import Data.String (fromString)
 import Data.Word (Word32)
-import Emulation.CachedNativeBatch (BatchReuse (..), cachedObservedBatch)
+import Emulation.CachedNativeBatch (BatchReuse (..), ResultPolicy (WriteAllResults), cachedObservedBatchWith)
 import Emulation.NativeObservation (RunnerStatus (Returned), runnerStatusLabel)
 import Emulation.OwnedCase (CaseId (..), CaseSpec, loadObservedBatch, readWordAt, required, writeBatch)
 import Emulation.Sha256 (sha256, sha256File, sha256Hex)
@@ -94,7 +94,7 @@ runBatch cache runner directory specs = do
     Nothing -> do
       observed <- loadObservedBatch runner batchPath
       pure (BatchExecuted, observed)
-    Just cacheRoot -> cachedObservedBatch cacheRoot runner batchPath
+    Just cacheRoot -> cachedObservedBatchWith WriteAllResults cacheRoot runner batchPath
   ensure (length observed == length specs) (batchPath ++ ": observation count differs from the case count")
   rows <- forM observed $ \(CaseId label, observation) -> do
     let reportPath = directory </> label ++ ".native-result.json"
