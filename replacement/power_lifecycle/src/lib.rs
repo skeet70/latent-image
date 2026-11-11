@@ -29,6 +29,8 @@ pub use xm1_power_services::resource_registry;
 pub mod shutdown_persistence;
 pub use xm1_power_services::osal;
 pub use xm1_power_services::primitives;
+pub use xm1_power_services::callback_registry;
+pub mod callback_slots;
 pub mod power_serial;
 pub use xm1_power_services::serial_driver;
 pub use xm1_power_services::diagnostics;

@@ -1,5 +1,5 @@
 //! X-M1 1.50 recording queue and SAC/LAC dispatch, x70view 55436fc85c0560dd252b0410af6f2427fe198cd3.
-//! Native entry points require mapped recording state and pinned transition data. Command callbacks and nondefault application callbacks must be live owned native functions.
+//! Native entry points require mapped recording state and pinned transition data. Command callbacks are entered through the callback registry.
 
 #[path = "record_task43_events.rs"]
 mod events;
@@ -9,6 +9,8 @@ mod common;
 #[path = "record_task43_initialization.rs"]
 mod initialization;
 
+use crate::callback_registry::registry as callbacks;
+use crate::callback_slots;
 use core::ptr::{read_volatile, write_volatile};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -144,10 +146,7 @@ fn complete(command: u32, status: CompletionStatus) {
 pub unsafe extern "C" fn xm1_power_record_task43_complete0(status: i32) {
     let callback = word(0x169cf58);
     complete(0, CompletionStatus(status));
-    if callback != 0 {
-        let callback: unsafe extern "C" fn(i32) = unsafe { core::mem::transmute(callback as usize) };
-        unsafe { callback(status) };
-    }
+    let _ = callback_slots::call_signed_argument(callbacks(), callback, status);
 }
 
 /// # Safety
@@ -156,10 +155,7 @@ pub unsafe extern "C" fn xm1_power_record_task43_complete0(status: i32) {
 pub unsafe extern "C" fn xm1_power_record_task43_complete1(status: i32) {
     let callback = word(0x169d000);
     complete(1, CompletionStatus(status));
-    if callback != 0 {
-        let callback: unsafe extern "C" fn(i32) = unsafe { core::mem::transmute(callback as usize) };
-        unsafe { callback(status) };
-    }
+    let _ = callback_slots::call_signed_argument(callbacks(), callback, status);
 }
 
 /// # Safety
@@ -180,10 +176,7 @@ pub unsafe extern "C" fn xm1_power_record_task43_complete4(status: i32, first: u
 pub unsafe extern "C" fn xm1_power_record_task43_complete5(status: i32, value: u32) {
     let callback = word(0x169d050);
     complete(5, CompletionStatus(status));
-    if callback != 0 {
-        let callback: unsafe extern "C" fn(i32, u32) = unsafe { core::mem::transmute(callback as usize) };
-        unsafe { callback(status, value) };
-    }
+    let _ = callback_slots::call_block(callbacks(), callback, status, value);
 }
 
 fn complete_history(command: u32, storage: usize, inserted_offset: usize, status: u32, first: u32, second: u32, third: u32, fourth: u32) {

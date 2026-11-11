@@ -1,9 +1,9 @@
 //! Installed application callbacks and the default 0x72b210 queue sender.
 
+use crate::callback_registry::{registry as callbacks, CallbackError};
 use crate::shutdown::{KernelStatus, QueueId, RequestId, ServiceMessage, ShutdownRtos, TaskId, UiRouting};
-use core::sync::atomic::{AtomicUsize, Ordering};
 
-pub type ApplicationCallback = unsafe extern "C" fn(*const [u8; 76]) -> i32;
+pub type ApplicationCallback = crate::callback_slots::Application;
 
 #[derive(Clone, Copy)]
 pub enum InstalledCallback { Default, Owned(ApplicationCallback) }
@@ -67,7 +67,7 @@ pub enum ApplicationMarker { GateOccupied, EarlyBufferFull }
 impl ApplicationDispatcher {
     pub fn dispatch(&mut self, rtos: &mut impl ShutdownRtos, record: &[u8; 76], marker: impl FnOnce(ApplicationMarker)) -> Result<(), KernelStatus> {
         if let InstalledCallback::Owned(callback) = self.callback {
-            let status = unsafe { callback(record) };
+            let status = unsafe { callback(record.as_ptr()) };
             return if status == 0 { Ok(()) } else { Err(KernelStatus(status)) };
         }
         let sender = rtos.current_task();
@@ -91,24 +91,26 @@ impl ApplicationDispatcher {
     }
 }
 
-static REGISTERED_CALLBACK: AtomicUsize = AtomicUsize::new(0);
-
-pub fn register_native_callback(callback: Option<ApplicationCallback>) {
-    REGISTERED_CALLBACK.store(callback.map_or(0, |callback| callback as usize), Ordering::Release);
+pub fn register_native_callback(callback: Option<ApplicationCallback>) -> Result<(), CallbackError> {
+    match callback {
+        Some(callback) => crate::callback_slots::register_application(callbacks(), callback),
+        None => Ok(()),
+    }
 }
 
-pub fn resolve_native_callback(installed: u32) -> Option<NativeCallback> {
-    if installed == 0x72b318 { return Some(NativeCallback::Buffered); }
-    if installed == 0x72b210 { return Some(NativeCallback::Ready(InstalledCallback::Default)); }
-    let registered = REGISTERED_CALLBACK.load(Ordering::Acquire);
-    if registered == 0 || registered as u32 != installed { return None; }
-    Some(NativeCallback::Ready(InstalledCallback::Owned(unsafe { core::mem::transmute(registered) })))
+pub fn resolve_native_callback(installed: u32) -> Result<NativeCallback, CallbackError> {
+    if installed == 0x72b318 { return Ok(NativeCallback::Buffered); }
+    if installed == 0x72b210 { return Ok(NativeCallback::Ready(InstalledCallback::Default)); }
+    let callback = crate::callback_slots::resolve_application(callbacks(), installed)?;
+    Ok(NativeCallback::Ready(InstalledCallback::Owned(callback)))
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn xm1_power_record_application_install_callback(callback: Option<ApplicationCallback>) {
-    register_native_callback(callback);
-    let address = callback.map_or(0x72b210, |callback| callback as usize as u32);
+    let address = match register_native_callback(callback) {
+        Ok(()) => callback.map_or(0x72b210, |callback| callback as usize as u32),
+        Err(_) => 0x72b210,
+    };
     unsafe { core::ptr::write_volatile(0x829a0c as *mut u32, address) };
 }
 
@@ -127,7 +129,7 @@ fn put_word(address: usize, value: u32) { unsafe { core::ptr::write_volatile(add
 
 #[no_mangle]
 pub unsafe extern "C" fn xm1_power_record_helper_72b680(record: u32) -> i32 {
-    let installed = resolve_native_callback(word(0x829a0c)).expect("unregistered application callback");
+    let installed = match resolve_native_callback(word(0x829a0c)) { Ok(installed) => installed, Err(error) => return error.status() };
     if let NativeCallback::Buffered = installed {
         let saved = unsafe { xm1_power_interrupt_lock() };
         let count = word(0x9134c0);
@@ -147,7 +149,7 @@ pub unsafe extern "C" fn xm1_power_record_helper_72b680(record: u32) -> i32 {
     }
     let NativeCallback::Ready(callback) = installed else { unreachable!() };
     if let InstalledCallback::Owned(callback) = callback {
-        return unsafe { callback(record as *const [u8; 76]) };
+        return unsafe { callback(record as *const u8) };
     }
     let task = unsafe { xm1_pipeline_image_current_task() } as u8;
     let primary = word(0x9134f8) == 1;
