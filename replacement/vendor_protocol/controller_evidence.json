@@ -1,0 +1,49 @@
+{
+  "scope": "Source-only X-M1 1.50 queue-36 event-6 controller translation; no build, native execution, SDK or camera qualification",
+  "pin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "index": "private-data/scratch/xm1-decomp/index/55436fc85c0560dd252b0410af6f2427fe198cd3-a5daad359532.tsv",
+  "raw_image": "private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin",
+  "selection": {
+    "dispatcher": "0x00d80e98 maps command 0x3401 to event index 6",
+    "executor": "0x00d80dd8 reads stride 12 from 0x00d834d4 and table 0x00d834d8 through pointer 0x00d840a8; entry address is table + 12 * (event * stride + state)",
+    "event6_entries": [
+      [0, "0x00d8467c", -1], [1, "0x00d8469c", 0],
+      [2, "0x00d846c4", 0], [3, "0x00d84700", 0],
+      [4, "0x00d8472c", 7], [5, "0x00d8475c", -1],
+      [6, "0x00d84774", 7], [7, null, -1],
+      [8, "0x00d847a0", 0], [9, "0x00d847dc", 0],
+      [10, "0x00d84808", 0], [11, "0x00d84840", 0]
+    ],
+    "evidence_kind": "Actual raw-image table and A32 control flow inspected. Names did not select entries."
+  },
+  "providers": {
+    "primary_cleanup": "0x00d81cdc is the actual address of donor-named FUN_010af8b4; Power unregister_primary releases 0x0146a09c and clears primary activity",
+    "secondary_cleanup": "0x00d81e94 is the actual address of donor-named FUN_010afa6c; Power unregister_secondary handles mode 2 cancellation status -11 and registry release",
+    "transfer_cleanup": "0x00d820a8 cancels 0x0146a0b8 and 0x0146a0bc only for kind 2, then calls table 0x00d97fb0 slot 2, actual 0x00d95498; that leaf clears bytes 0x0146af98 and 0x0146af9b",
+    "file_close": "0x00d917e0 returns table 0x00d91f70; slot 3 is actual 0x00d8d5b0, a raw-inspected unranged leaf setting word 0x0146a644 to one",
+    "completion_policy": "0x00d818ac(1) clears byte 0x01469d1c",
+    "transport": "ControllerTeardown is provided by ProtocolTransportClosure, not a retained software callback",
+    "completion_consumer": "0x00ecc228 loads 0x00ecfe64 and calls 0x00d82394, which registers field +0x414. Actual 0x00ecfe64 posts queue 7 command 0x1714 and an eight-byte little-endian handle/status payload",
+    "request_consumer": "0x00ecc104, 0x00ecd1ac and 0x00ecd38c register actual 0x00ecfeb0 through 0x00d82478 with handles 3, 2 and 4. That consumer posts queue 7 command 0xb403 and an eight-byte little-endian handle/status payload",
+    "secondary_cancel_consumer": "Request 2 table 0x00ed0444 slot +0x10 is actual 0x00ed0920, which posts queue 7 command 0x171a and a four-byte signed status. Request 4 table 0x00ed0488 slot +0x10 is null. Power NativeUsbRegistrations must select the owned secondary_status_consumer for request 2 and no completion for request 4.",
+    "closed_consumer": "Power usb_release_acknowledged owns actual 0x00ecfe20, posting queue 7 command 0xb401. Status publication precedes this post."
+  },
+  "raw_identities": [
+    {"address": "0x00d80dd8", "size": 192, "sha256": "08bd9696caa9dbd1a6f9429404e137478c2e61019d58711d9790d278dcb7765c"},
+    {"address": "0x00d80e98", "size": 860, "sha256": "b9f6f8325c32c3f6d5fd4602b0f474d69bf78c35dcf6dff9fce69f88cd53cafb"},
+    {"address": "0x00d81660", "size": 380, "sha256": "686124d7440c0668e3f64711a07acd44bd6580e9962ed6b195efe27ddd3c1067"},
+    {"address": "0x00d817dc", "size": 208, "sha256": "1a7bf2ed9756e17ee511414dc10f262b2f527c7a37df920e0dbffc6ac030ad0c"},
+    {"address": "0x00d818ac", "size": 56, "sha256": "122f2323ad098d854d57c28275e374c56cb4872ebbe5014b16cb5474194ed4ce"},
+    {"address": "0x00d8d5b0", "size": 36, "sha256": "c2de57a72214d97697bb54be19e6465c2b580cf71582ff888dfc48286cc87129", "range_status": "unranged; converged leaf extent ends at 0x00d8d5d4"},
+    {"address": "0x00d95498", "size": 40, "sha256": "8a57a9aaaf67fb2d72c7c8d2ad7696cec019e85b4c0dd29829a39403d609a732"},
+    {"address": "0x00ecfe64", "size": 76, "sha256": "70b365fc070f3b5a5ffa998cb725bc4ae856725b8a5d02e7bafd1769e7b2f3b9"},
+    {"address": "0x00ecfeb0", "size": 80, "sha256": "61fa3fad5ea0c94f430f136ed0677d1d13802c80a821c61fa428390342e25a8b"},
+    {"address": "0x00ed0920", "size": 72, "sha256": "1b1a6d76e36f08232b67f740b06b87805a42d1ac95f47602f2ff82a6569ec615"}
+  ],
+  "integration": {
+    "module": "pub mod controller;",
+    "dependency": "//replacement/power_lifecycle:power-lifecycle-rust, crate xm1_power_lifecycle; transport's owned scheduler and teardown sources",
+    "service_join": "controller_root::ControllerRoot::step executes each queue-36 cell. QueueController::consume_completion and shutdown return Deferred without storing; ControllerRuntime::completion and the root queue the message in DeferredMessages. ShutdownResources carries the registration storage, registry, teardown platform, scheduler Machine, ShutdownRtos, the ProtocolFiles abort (0x00d8d5b0) and the PictBridge transfer flags.",
+    "remaining_boundary": "Service/lib/BUILD joins are integration-owner work. Queue publication is through the actual owned Power RTOS API, not installed firmware execution. Event6 debug application routing is separate from USB controller event index 6."
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "target": "Fujifilm X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_unit": "decomp/firmwares/xm1-150/app/connectivity/remote/transfer/tu_013f9414.c",
+  "qualification": "NONMATCHING source is a reading aid. Local control and configuration findings below are confirmed against raw A32 bytes.",
+  "byte_input": "private-data/analysis/x-m1-1.50/lz/plain-01100000.bin",
+  "byte_base": "0x01100000",
+  "reproduction": "arm-none-eabi-objdump -D -b binary -m arm --adjust-vma=0x01100000 --start-address=START --stop-address=STOP private-data/analysis/x-m1-1.50/lz/plain-01100000.bin",
+  "tables": [
+    {"modes": [0], "address": "0x013fd288", "slots": ["0x013fb220", "0x013f73f8", "0x013fd0dc", "0x013fd0cc", "0x013fcc8c", "0x013fbc58", null, null, "0x013fc110"]},
+    {"modes": [1, 2], "address": "0x013fa8a0", "slots": ["0x013fb220", "0x013f73f8", "0x013fa74c", "0x013fa72c", "0x013fa3b8", "0x013fa234", "0x013fa30c", "0x013fa26c", null]},
+    {"modes": [3], "address": "0x013fec34", "slots": ["0x013fb220", "0x013f73f8", "0x013fdfbc", "0x013fdfac", "0x013fdaf8", "0x013fd520", "0x013fda24", "0x013fd558", "0x013fd9fc"]},
+    {"modes": [5], "address": "0x013fd410", "slots": ["0x013fd344", "0x013fd358", "0x013fd3e0", "0x013fd36c", "0x013fd3c8", "0x013fd380", "0x013fd398", "0x013fd3b0", null]}
+  ],
+  "findings": [
+    {"range": "0x013f7e78..0x013f7f28", "behavior": "Selections 0,1,2,3 map to remote values 3,1,17,2. Selection updates current state even when the eight-entry property queue is full. Appended property code is df00."},
+    {"range": "0x013f7f28..0x013f7fec", "behavior": "Stop clears selected mode without a property event. Configure sets d220 value 1 and appends a property event; configure cancellation clears current value without appending."},
+    {"range": "0x013f7fec..0x013f8060", "behavior": "Object-count publication sets current count and appends d222 when the eight-entry queue has room."},
+    {"range": "0x013f8178..0x013f821c", "behavior": "Reset begins with d52f value 1 and a property event; completion clears current reset value without appending."},
+    {"range": "0x013fa284..0x013fa2f8", "behavior": "Mode1/2 primary reads add the command offset directly to the configured payload pointer; the stored configuration offset is not subtracted. Alternate reads use the separately configured pointer and length. Mode0/3 file reads subtract the configured file offset from the requested absolute offset."},
+    {"range": "0x013fa3b8..0x013fa5f0", "behavior": "Control configuration accepts marker byte 5a, stores name from header offset17, compacts timestamp positions 0,1,3,4,6,7,9,10,12,13,15,16 with century prefix20, binds transfer windows, selects remote configuration and publishes d220. Existing configured metadata prevents reconfiguration unless cancellation was requested."},
+    {"range": "0x013fcc8c..0x013fcf6c", "behavior": "Mode0 configuration requires marker5a and nonzero payload address or size, returning80000800 on failure; cancellation clears existing format. Completion delivers pending transfer window, bounded by requested maximum."},
+    {"range": "0x013fd344..0x013fd434", "behavior": "Mode5 initialization emits initialized success. Configure emits operation completion -255 and returns0. Other nonnull mode5 hooks perform no work; cancellation/reset return0. Start slot is null."}
+  ],
+  "owned_api": {
+    "interface": "InterfaceModes implements the nine source slots with typed InterfaceMode and InterfaceConfiguration. Null slots remain visible through InterfaceMode::supports.",
+    "configuration": "InterfaceConfiguration transfers two exclusive leases from the canonical network packet pool. Replaced, rejected and torn-down configurations release both leases. Cancellation marking preserves the old readable window until replacement.",
+    "read": "transfer_data borrows the canonical packet pool without a second buffer. Pending file reads use InterfaceDataRequest and take_data_ready. ConfigurationGeneration binds multi-packet consumers to the original source.",
+    "catalog": "Mode0 start and Mode3 initialization use interface_modes::catalog::CatalogRuntime and filesystem_catalog::Catalog with the actual SectorIo device boundary.",
+    "property": "RemoteControl owns selected mode and df00/d220/d222/d52f state plus the eight-entry source change list. The shared discovery executor owns packet parsing and protocol dispatch. RemotePropertyOperations owns descriptor values and their configuration/version providers.",
+    "completion": "InterfaceCompletion contains typed initialized/configured/reset/started results. Source mode5 configure reports -255 rather than fabricating a usable interface."
+  },
+  "verification": "Behavioral tests are added but not run. No build, lint, formatter, native runner, SDK operation or camera operation is performed."
+}

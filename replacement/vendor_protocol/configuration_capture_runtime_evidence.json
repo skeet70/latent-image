@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "status": "incomplete-cpu-closure",
+  "firmware": "Fujifilm X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "image": {
+    "base": "0x00bf1a00",
+    "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"
+  },
+  "evidence": "Authenticated image SHA-256, inspected wrapper instruction words and existing disassembly. NONMATCHING C used only as a reading aid. No execution checks performed.",
+  "implemented_scope": "Allocation-free typed capture request payload encoding and shared HOST/ARM helper_ffc1ec statistics reset are active. Native feac00/feae18/feae4c wrappers and ffc270/ffc074/ffb1d4/ffc1ec actor branch reconstruction are retained under cfg(any()) pending canonical shared RecordContext CPU cutover. No full capture actor, caller constructor, publication or cancellation closure is claimed.",
+  "shared_reset": {
+    "root": "0x00ffc1ec",
+    "api": "helper_ffc1ec<M:GuestAddressSpace,E>(context:&mut RecordContext<M,E>)->Result<(),MemoryError>",
+    "effects": "No E bound. Direct canonical record_hardware_deep_banks::helper_edae88 calls.",
+    "behavior": "Clear state0x016f814c, then publish eight statistics offsets at0x016f812c. Preserve earlier writes on memory failure.",
+    "offsets": [2128, 3152, 4176, 3152, 8592, 8596, 8600, 8604]
+  },
+  "requests": [
+    {
+      "root": "0x00feac00",
+      "end_exclusive": "0x00feac54",
+      "event": "0x3f49",
+      "payload_bytes": 176,
+      "layout": "arg1 at0; arg3 at4; arg2 at8; arg4 at12; arg5 at16; arg6 at20; 152 bytes copied from arg7 at24",
+      "source": "decomp/firmwares/xm1-150/app/capture/pipeline/tu_00fea36c.c:FUN_00feac00"
+    },
+    {
+      "root": "0x00feae18",
+      "end_exclusive": "0x00feae4c",
+      "event": "0x3f56",
+      "payload_bytes": 68,
+      "layout": "64 bytes copied from arg2 at0; arg1 at64",
+      "source": "decomp/firmwares/xm1-150/app/capture/pipeline/tu_00fea36c.c:s53c_record_start_small_request"
+    },
+    {
+      "root": "0x00feae4c",
+      "end_exclusive": "0x00feae88",
+      "event": "0x3f57",
+      "payload_bytes": 20,
+      "layout": "arg2 at0; arg3 at4; arg4 halfword at8; unspecified stock stack halfword at10; arg5 at12; arg1 at16",
+      "owned_padding_policy": "Set unspecified halfword at10 to zero.",
+      "source": "decomp/firmwares/xm1-150/app/capture/pipeline/tu_00fea36c.c:s53c_record_start_position_setup"
+    }
+  ],
+  "queue_ingress": {
+    "root": "0x00fe9580",
+    "canonical_provider": "xm1_power_record_helper_fe9580(code:u32,payload:u32,length:u32)->void",
+    "canonical_provider_source": "replacement/power_lifecycle/src/record_hardware_requests.rs at39025fdf",
+    "result_semantics": "The wrapper ignores queue send status and does not publish completion.",
+    "qualification": "This provider contract belongs to the retained native source generation, not a completed shared HOST/ARM engine.",
+    "current_task_query": "0x00723cb8",
+    "queue_send": "0x0072503c",
+    "queue_storage": "0x016f0aa4",
+    "header": "event:u16, current_task:u8, queue:u8, payload_length:u32, payload_pointer:u32"
+  },
+  "unresolved_cpu": [
+    {
+      "root": "0x00fe8ac4",
+      "callee": "0x0100297c",
+      "dispatch_table": "0x01002bf4",
+      "state": "0x016f82fc+0xb0",
+      "state_zero_event_3f49_handler": "0x01002860 via table0x01002b64",
+      "transition": "return1 sets outerstate4; return2 sets outerstate12; other returns preserve outerstate"
+    },
+    {
+      "root": "0x00fe89b4",
+      "callee": "0x00ffc270",
+      "events": ["0x3f56", "0x3f57"],
+      "handlers": ["0x00ffc074", "0x00ffb1d4"],
+      "handler_table_entries": ["0x00ffc3e4", "0x00ffc3ec"],
+      "state_storage": "0x016f80b8",
+      "machine_state": "0x016f814c",
+      "state_zero_handlers": "event0x3f55 returns2; event0x3f56 invokesffc074; event0x3f57 invokesffb1d4; default returns0.",
+      "publication": "ffc074 invokes status plus four words: frame, rectangle0 address, rectangle1 address, metadata address.",
+      "unresolved_lower_cpu": ["0x00ffb534", "0x00ffb1c0", "0x00ffb448", "0x007411c4", "0x0074140c", "0x0069f8fc", "0x0069fec8", "0x00772f28", "0x00ee8bc0", "0x00ee8b50", "0x00ee8b64", "0x00ee8b8c", "0x00ee8c04", "0x00edae88", "0x0100937c", "0x0100995c", "0x01003dd4", "0x01006efc", "0x01004124"],
+      "transition": "return1 sets outerstate4; return2 sets outerstate15; other returns preserve outerstate",
+      "other_outer_states": "0x00fe8f20 saves current request and rewrites the request header to event0x3f13."
+    },
+    {
+      "root": "0x010029bc",
+      "role": "Actual bytes call0x00ed8b2c with0x016f84f4, then0x00edbcf0. The donor descriptor-initialization label does not describe this function."
+    },
+    {
+      "roots": ["0x01001624", "0x01001ed0", "0x0100231c", "0x01002744"],
+      "source": "decomp/firmwares/xm1-150/app/capture/pipeline/tu_01000a18.c",
+      "role": "NONMATCHING capture machine CPU reaches lens, sensor, graphics and storage work. No canonical complete concrete provider identified in assigned baseline."
+    }
+  ],
+  "excluded_waivers": [
+    "No environment callback is accepted as completion of capture CPU.",
+    "0x006439ac to0x006438ec mode gates do not implement this capture task.",
+    "Payload encoding tests do not establish actor, cancellation or publication behavior."
+  ],
+  "source_tests": [
+    "capture_preserves_descriptor_and_stock_argument_order",
+    "small_request_appends_callback_after_descriptor",
+    "position_encodes_halfword_and_callback_at_distinct_offsets",
+    "insufficient_output_is_unchanged",
+    "statistics_reset_publishes_stock_offsets_and_idle_state",
+    "statistics_reset_preserves_earlier_writes_on_memory_failure"
+  ],
+  "verification": "Not run, per source-only assignment. Root module and BUILD integration are owned by the parent."
+}

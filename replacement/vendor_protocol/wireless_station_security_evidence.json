@@ -1,0 +1,23 @@
+{
+  "status": "source-inspected-and-byte-confirmed",
+  "target": "Fujifilm X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source": "decomp/firmwares/xm1-150/app/third_party/hostap/wpa_supplicant/supplicant_events.c:519-606",
+  "private_input": "private-data/analysis/x-m1-1.50/lz/plain-01100000.bin",
+  "byte_confirmations": [
+    {"extent": "0x013d203c-0x013d21d8", "claim": "Actual dispatcher event 2 calls this Michael handler. It tests nonzero last seconds and signed seconds difference <=60, sends immediate failure requests, sets active, sleeps10000us, invokes countermeasure driver wrapper, deauthenticates reason14, arms60second clear, and updates last failure seconds. The first-report branch directly invokes key_request; delayed random reporting is absent."},
+    {"extent": "0x013cee4c-0x013ceebc", "claim": "Clear callback tests active, clears it, invokes countermeasure wrapper with0, and requests immediate scan."},
+    {"extent": "0x013cda74-0x013cdad4", "claim": "Actual countermeasure wrapper tests driver vtable+0x20; absent callback returns -1."},
+    {"extent": "0x013e0cf4-0x013e0d24", "claim": "Actual RTOS driver vtable+0x20 at0x013e0d14 is zero. No hardware countermeasure callback is reachable. Unsupported is a concrete target capability result, not a substitute implementation."}
+  ],
+  "owned_api": "security::TkipCountermeasures::{new,active,reset,driver_capability,failure(MicFailure,&RtosClock,&mutRsnSupplicant),poll(&RtosClock)}; SecurityAction::{None,Report,ReportAndStart,Disconnect,Resume}; SecurityError::{Clock,Handshake}",
+  "runtime_contract": [
+    "The concrete StationRuntime drains Association::take_mic_failure. Clock is canonical crypto::random::RtosClock backed by RTOS slot100, not a selector callback or caller tick.",
+    "ReportAndStart makes active true immediately. Runtime drops EAPOL while active and transmits the owned report frame before deauthentication.",
+    "Poll emits Disconnect after10milliseconds, and Resume after60000milliseconds from that disconnect transition. Runtime performs actual association reason14 deauthentication and preserves the operation until Resume triggers scan.",
+    "New user profile or cancellation calls reset. The physical countermeasure callback remains explicitly Unsupported.",
+    "michael_failure_request consumes typed MicFailure, rejects wrong BSSID/non-TKIP key scope, builds descriptor protocol/version, independent request replay counter, request/error/pairwise flags, and confirmed-PTK MIC through canonical MD5/SHA1 engines."
+  ],
+  "tests": "Synthetic behavioral tests use the actual RtosClock/RTOS Machine boundary for timing, second-level inclusive60second threshold,10ms drain,60second blocking, cancellation reset, wrong peer, clock failure, and authenticated independent request counters.",
+  "verification": "All tests are written and unrun. No builds, tests, lint, formatting, native, SDK, guest or live operations were run. Runtime/root wiring is coordinated with StationCrypto; typed reason14 association execution is coordinated with StationAssociation."
+}

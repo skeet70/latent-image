@@ -1,5 +1,5 @@
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
-load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -7,6 +7,29 @@ exports_files([
     "check-bin-digests.sh",
     "regions.json",
 ])
+
+genrule(
+    name = "host-core",
+    srcs = [
+        "src/lib.rs",
+        "//replacement/rtos_layout:src/lib.rs",
+        "//replacement/rtos_reservation:src/lib.rs",
+    ],
+    outs = ["host/libxm1_rtos_own_first.rlib"],
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --crate-name=xm1_rtos_own_first --crate-type=rlib --cfg 'feature=\"library\"' -C metadata=library $(location src/lib.rs) -o $@",
+    tools = ["@lab_xm1_rust//:bin/rustc"],
+)
+
+xm1_rust_rlib(
+    name = "libxm1_rtos_own_first",
+    src = "src/lib.rs",
+    crate_name = "xm1_rtos_own_first",
+    data = [
+        "//replacement/rtos_layout:src/lib.rs",
+        "//replacement/rtos_reservation:src/lib.rs",
+    ],
+    rustc_flags = ["--cfg", "'feature=\"library\"'", "-C", "metadata=library"],
+)
 
 [
     xm1_rust_staticlib(

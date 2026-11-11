@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "status": "source-implementation-with-unresolved-composition",
+  "firmware": "Fujifilm X-M1 1.50",
+  "decomp_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "image": {"base": "0x00bf1a00", "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"},
+  "inspected_extents": [
+    {"address": "0x00ef8e7c", "size": 84, "sha256": "30a185251e5bc919b1bb58c73db7f6ea2c7d17d143f039fde0703b74c08c8a67"},
+    {"address": "0x00ef8ed0", "size": 68, "sha256": "d5afa83f039e6e5ad9c23c14ca851ce7d33a66ed3db7555ec495f4ab3227c12e"},
+    {"address": "0x00ef9510", "size": 76, "sha256": "f06e36f5b43d26dd185f9c53fda25a987f09cec0d1a62e616d4a53192eb570a8"},
+    {"address": "0x00ef9a94", "size": 88, "sha256": "ecfa3d1b7dd712dc210367b7275fe997a50601562332835e1eee1bdc16239a5e"},
+    {"address": "0x00ef98e4", "size": 44, "sha256": "7f8249cda9509ad9f83475f18b1dd200833239ca97fb57fdda725bf4bc85da9d"},
+    {"address": "0x00dc2ec4", "size": 164, "sha256": "6ed83ea7271886f3e789a76d6f9d36637c3c4332fc3afc29fa64af4129f0f205"},
+    {"address": "0x00dc2fdc", "size": 212, "sha256": "7da12242d2f3515533d439ca9159deee24896592ab39d7242c9359c10e8b6b6e"},
+    {"address": "0x00dc2694", "size": 64, "sha256": "81ea568c1572f4dec0fcfcb26ef3c2d1b9c05d90213b4f04559309dccc8694aa"},
+    {"address": "0x00dc26d4", "size": 68, "sha256": "c6c8983ba1b5db568d1adbc62398f4721a8ca6f5f499b549ad35d594049c1463"}
+  ],
+  "authentication": "Inspected extents were hashed directly from the owner-supplied image and matched the pinned function-ranges.json rows. NONMATCHING producer/wrapper behavior was read from the existing address-indexed disassembly, with original image identity checked.",
+  "action_mapping": [
+    {"action": 96, "root": "0x00ecccb4", "actor": "0x00dc2ec4", "key": "0x81", "enabled": "command17(5,5) then command02(2,0,0,0,0,0)", "disabled": "command17(15,0) then command03(0,2,0,0,0)"},
+    {"action": 103, "root": "0x00eccd94", "actor": "0x00dc2fdc", "sequence": "command03(3,2,0,0,0), command29(1), command02(2,0,0,0,0,0)"}
+  ],
+  "source_generations": {
+    "enabled": "dc2ec4 writes six zero words at fp-36..fp-16; ef9510 copies seven words, retaining the caller word at fp-12. EnabledCallerTail carries that seventh word without synthesizing zero.",
+    "disabled": "dc2ec4 supplies source address zero to ef9510. DisabledAddressZero carries all seven actual source words. There is no null-to-zero conversion.",
+    "selection": "74a740(0,0) returns the packed value zero; efa188(0) preserves zero. No dynamic selection provider is needed on these service paths."
+  },
+  "api": {
+    "request": "Request::{Configure(ConfigurationParameters),Restart}",
+    "source": "ConfigurationParameters::{EnabledCallerTail(u32),DisabledAddressZero([u32;7])}",
+    "read_source": "ConfigurationParameters::read(enabled:bool,&mut impl GuestAddressSpace,ConfigurationCallerFrame)->Result<ConfigurationParameters,MemoryError>, using canonical xm1_power_lifecycle::record_address_space; caller frame carries the actual source frame pointer",
+    "decode": "Request::from_queue_action(u16,&ConfigImages,ConfigurationParameters)->Result<Option<Request>,BackendError>",
+    "begin": "RecordRuntime::begin(Request)->Result<Progress,Error>",
+    "publication": "RecordRuntime::publication(CompletionStatus)->Result<Progress,Error>",
+    "native_begin": "unsafe RecordRuntime::begin_native(Request)->Result<Progress,Error>",
+    "native_poll": "unsafe RecordRuntime::poll_native()->Result<Option<ActionCompletion>,Error>",
+    "canonical_provider": "xm1_power_record_helper_ef9a94(command:u32,payload:u32,length:u32)->void"
+  },
+  "completion_graph": "Native submission serializes the actual command payload with an owned native status callback, through the canonical Task43 sender. Its canonical receiver copies to efbb20-selected storage, sets the command busy byte and executes machine0 plus the selected SAC/LAC machine graph. Task43 helpers efa258/efa2d0 deliver command02/03 completion; command17 completion is owned by PowerRecordCompletionServices. The runtime advances from genuine callback delivery only. Command29 nonzero status produces no completion, matching dc2644. Final command02/03 statuses are ignored by dc2620/dc2670; the service event, rather than record status, controls success.",
+  "source_tests": ["enabled and disabled configuration branches", "seven-word source preservation", "restart03/29/02 sequence", "command29 nonzero status remains pending", "no publication before final record completion", "busy transaction rejection", "configuration source branch validation", "canonical HostAddressSpace reads caller fp-12 and all seven words at address zero", "unmapped caller source is an error"],
+  "composition_prerequisites": [
+    "VendorConfigurationCpu must connect the action96/103 typed request and common ActionCompletion publication.",
+    "The application source boundary must provide the actual ConfigurationCallerFrame and admit its source generation or mapped-address-zero region to the canonical GuestAddressSpace; ConfigurationParameters::read performs the real source reads. Callback-valued words consumed downstream require owned registration.",
+    "PowerApplicationJoin must compose all actual Task43 machine/helper providers. The currently coordinated Task43 API is native mapped-memory only; a concrete host provider API has been requested, not replaced by a mock Environment.",
+    "The native callback mailbox is single-transaction. Native begin claims it until final completion; the runtime must not be released while waiting."
+  ],
+  "qualification": "No build, test, lint, formatter, native execution, SDK, guest, camera or USB operation was run. Source tests are authored, not exercised. This evidence does not claim full host/application CPU closure or waive unresolved providers."
+}

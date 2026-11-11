@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "firmware": "Fujifilm X-M1 1.50",
+  "decomp_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "scope": "Source-only debug application-event publication, not application processing completion or physical execution",
+  "sources": [
+    {
+      "address": "0x00ed19e4",
+      "path": "decomp/firmwares/xm1-150/app/platform/diag/execution_saved_values.c",
+      "function": "usb_debug_event_name_callback",
+      "evidence": "source-inspected",
+      "facts": ["MODE selects its argument as the event name and forces ON", "Other names combine the key and ON/OFF values", "The notification argument is zero"]
+    },
+    {
+      "address": "0x00ed1518",
+      "path": "decomp/firmwares/xm1-150/app/platform/diag/tu_00ed138c.c",
+      "function": "FUN_00ed1518",
+      "decomp_status": "NONMATCHING",
+      "evidence": "static-byte-inspected",
+      "image": "id5-00bf1a00.bin",
+      "offset": "0x2dfb18",
+      "length": 36,
+      "sha256": "eb721763cddea48c6a954629fdf824b1cd05bb458c0d844ea3e49782de6fcc4e",
+      "facts": ["The wrapper writes event and argument at the first two words of its record", "The wrapper invokes 0x0072b680", "The remaining record bytes are caller residue"]
+    },
+    {
+      "address": "0x0072b680",
+      "evidence": "static-byte-inspected",
+      "image": "id4-0061c400.bin",
+      "offset": "0x10f280",
+      "length": 28,
+      "sha256": "1f0e96d8af0b4fbe93011c611a88b8c420701605930f94f58af9f8bbc77da8b1",
+      "facts": ["The dispatcher loads its installed implementation from 0x00829a0c", "The dispatcher invokes that implementation with the record pointer"]
+    },
+    {
+      "address": "0x0072b318",
+      "evidence": "static-byte-inspected",
+      "image": "id4-0061c400.bin",
+      "offset": "0x10ef18",
+      "length": 140,
+      "sha256": "08acde2b028504e48e0f1919e96c1a861442665717f389d59bd58ce9c714c2ea",
+      "facts": ["The image initializes the installed dispatcher pointer to this boot-buffering implementation", "The implementation appends only event and argument to 76-byte record slots while the count is below 64", "Buffer overflow returns -63", "The append is protected by interrupt save and restore"]
+    },
+    {
+      "address": "0x0072b210",
+      "evidence": "static-byte-inspected",
+      "image": "id4-0061c400.bin",
+      "offset": "0x10ee10",
+      "length": 264,
+      "sha256": "a38927e81f809210bf6cad10b3805fc06d7839e9d36a72f38f7cc9d30089dac0",
+      "facts": ["The default implementation publishes operation zero and 76 record bytes", "Routing mode one sends events with mask 0x900 to queue seven and all other events to queue one", "The default implementation returns the queue publication status", "Special event 0x82e and 0x91b behavior is outside the debug event operation set"]
+    }
+  ],
+  "behavior": [
+    "The debug parser and ApplicationEvent type define the closed command operation set",
+    "Power OFF submits event 0x86 with argument zero, not a completed power shutdown",
+    "Queue failures propagate to the command executor and are not successful event completion",
+    "Only the first eight record bytes are initialized by this consumer"
+  ],
+  "provider": {
+    "module": "xm1_power_lifecycle::record_task43_application",
+    "shared_root": "ApplicationIngress::dispatch",
+    "native_root": "xm1_power_record_helper_72b680",
+    "states": ["Buffered", "Active"],
+    "contract": "The parent supplies the live shared ingress and diagnostic sink; native execution uses the installed canonical ingress directly"
+  },
+  "source_tests": ["Power OFF packet and residue", "Key families and runtime routing", "Full queue preserves the queued key", "Publication error statuses", "Invalid commands have no publication", "64 early-buffer entries and overflow -63"],
+  "verification": {
+    "performed": ["Pinned source inspection", "Pinned image instruction inspection", "Function extent SHA-256 extraction"],
+    "not_performed": ["Build", "Tests", "Formatting", "Native execution", "Camera or USB operation"]
+  }
+}

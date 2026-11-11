@@ -1,0 +1,72 @@
+{
+  "schema": "latent-image.xm1.station-association.source.v1",
+  "target": "Fujifilm X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "implementation_language": "Rust",
+  "source_units": [
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_012960a0.c",
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_012d94a4.c",
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_0129e740.c",
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_012e3ff0.c",
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_012e157c.c",
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_012e5ce0.c",
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_012f0fe8.c",
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_012f1eb4.c"
+  ],
+  "stock_input": {
+    "path": "private-data/analysis/x-m1-1.50/lz/plain-01100000.bin",
+    "base": "0x01100000",
+    "section": "overlay47",
+    "section_base": "0x011e0000",
+    "section_size": "0x26a5e0",
+    "section_sha256": "0cf67b7221c3b0755092da0ae4c6d6fb817f2b32771ee53dff691fc59b28770c"
+  },
+  "byte_inspected_extents": [
+    ["0x0129728c", "0x01297b04", "BSSID and SSID selector validation, desired-target fields, CPU message 0x15"],
+    ["0x01299080", "0x012991a8", "stop clears desired connection and enqueues CPU message 0x15"],
+    ["0x012da530", "0x012db0e8", "twelve-state root, scan/channel requests, retry delay and join state entry"],
+    ["0x012e3ef4", "0x012e3f38", "secondary-interface activation gate at adapter offset 0x1c328"],
+    ["0x012e5dec", "0x012e5f3c", "CPU dispatch table entries 0x15 and 0x16 route to 0x012db270, scan and authentication consumers are separate CPU roots"],
+    ["0x012de0e4", "0x012de188", "association request and response element callback dispatch tables"],
+    ["0x012eda08", "0x012ee95c", "authentication and association retries, TX completion, response validation and terminal join result"],
+    ["0x012f2188", "0x012f2468", "single-SSID device command 0x1e, bounded 600-byte extra elements"],
+    ["0x012f2468", "0x012f2828", "multi-SSID device command 0x04, four SSID slots, specified channel pairs and element offsets"],
+    ["0x012f402c", "0x012f45d0", "roaming decision/discovery/roam state, 5000 ms cache boundary, device command 0x30"],
+    ["0x012a1e14", "0x012a224c", "management descriptor classification assigns traffic class 4 and constructs the command wrapper"],
+    ["0x012f0c84", "0x012f0cc0", "hardware receive descriptor byte 5 bit 3 supplies the independent-BSS larger-TSF admission flag"]
+  ],
+  "reproduction": {
+    "source": "git -C /var/home/murph/Code/x70view show 55436fc85c0560dd252b0410af6f2427fe198cd3:SOURCE_UNIT",
+    "bytes": "/nix/store/ld6aihszv7hhaarrirxi3khvl5z3fifx-arm-none-eabi-binutils-2.46/bin/arm-none-eabi-objdump -D -b binary -m arm --adjust-vma=0x01100000 --start-address=START --stop-address=END /var/home/murph/Code/latent-image/private-data/analysis/x-m1-1.50/lz/plain-01100000.bin"
+  },
+  "owned_boundaries": {
+    "cpu_messages": "Selectors dispatch into owned state and action queues. CPU message IDs are never emitted as SDIO commands.",
+    "device_packets": "The engine produces stock-shaped device command header templates and owned payloads. The canonical adapter replaces device sequence and transport header fields before SDIO transmission.",
+    "management_frames": "The engine constructs authentication, shared-key challenge, association/reassociation and deauthentication management bytes. Each command carries canonical ManagementMetadata with packet kind 3, management queue 4, the actual shared peer lease index, burst and protected flags, and the source callback-presence status-report bit. Descriptor PID ownership remains in the canonical adapter.",
+    "completion": "Only a token issued for the outstanding command admits its physical completion. Timer identities contain generation and serial. Scan/channel response byte identities are checked against current outstanding operations.",
+    "publication": "Link publications are ordered after queued peer/channel effects and acknowledged independently. Management association is not upper WPA/EAPOL/key completion.",
+    "entropy": "Independent BSSID creation consumes three platform-provided u16 entropy outputs through the outstanding entropy command token. No synthetic entropy is supplied in production.",
+    "peer_pool": "Root owns one canonical PeerPool. Association::drive borrows it to reserve generation-checked records, apply local-only state transitions, begin retirement before cmd18, and release only after that cmd18 succeeds. Nonzero peer indices propagate into cmd17, BSS and management metadata.",
+    "scan_failure": "A failed outstanding physical scan command records its ScanToken separately from acknowledged ScanFinished publication.",
+    "independent_merge": "Hardware LargerTsf beacon admission is retained while an independent command is outstanding. Merge starts only when the canonical independent engine admits peer replacement."
+  },
+  "supporting_evidence": [
+    "vendor_wireless_station_driver_association_elements.evidence.json",
+    "vendor_wireless_station_driver_association_ibss.evidence.json"
+  ],
+  "behavioral_tests": {
+    "path": "vendor_wireless_station_driver_association_tests.rs",
+    "provenance": "Original synthetic 802.11 messages and device command expectations derived from the cited target stores. No proprietary frame fixtures are redistributed.",
+    "execution": "not run by assignment"
+  },
+  "qualification": {
+    "source_inspection": "performed",
+    "NONMATCHING_policy": "Draft C is a reading aid. The byte-inspected extents ground the listed recovered transitions and wire layouts.",
+    "build": "not run by assignment",
+    "tests": "not run by assignment",
+    "native": "not run by assignment",
+    "sdk": "not used",
+    "hardware": "not used",
+    "acceptance": "Source implementation and unrun behavioral tests are not runtime qualification or camera clearance. Integration-owner verification remains required."
+  }
+}

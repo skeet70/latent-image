@@ -1,0 +1,38 @@
+{
+  "target": "Fujifilm X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_repository": "x70view",
+  "source_inspected": [
+    {
+      "path": "decomp/firmwares/xm1-150/app/third_party/hostap/src/wps/wps_enrollee.c",
+      "addresses": ["0x0136d604"],
+      "facts": ["M1 emits enrollee nonce, public key and capabilities", "M3 commits both password halves", "M5 and M7 encrypt enrollee secret nonces", "station enrollee completes when WSC Done is built"]
+    },
+    {
+      "path": "decomp/firmwares/xm1-150/app/third_party/hostap/src/wps/wps_enrollee_rest.c",
+      "addresses": ["0x0136f0d4", "0x0136f5d0", "0x0136f814", "0x0136fa18", "0x013704c4"],
+      "facts": ["M2 binds enrollee nonce, registrar nonce, registrar UUID, DH public key and Authenticator", "M4 checks R-Hash1/2 and encrypted R-SNonce1", "M6 checks encrypted R-SNonce2", "M8 checks Authenticator, encrypted settings and credentials before Done", "M2D ACK does not replace M1 in the authentication transcript"],
+      "exactness": "No NONMATCHING marker in either committed enrollee translation unit; exact-C evidence under reports/xm1-decomp.md rules"
+    },
+    {
+      "path": "decomp/firmwares/xm1-150/app/connectivity/wifi/management/wireless_wps_configuration.c",
+      "facts": ["PIN placeholder 00000000 requests PIN generation", "configuration is enqueued as driver message kind 15", "completion and progress hooks are installed from configuration"]
+    },
+    {
+      "path": "decomp/firmwares/xm1-150/app/third_party/hostap/wpa_supplicant/wps_supplicant.c",
+      "facts": ["PBC and PIN arm WPS_PBC_WALK_TIME", "cancellation cancels scan or deauthenticates", "timeout reports failure and clears WPS state", "wpas_wps_ssid_bss_match concatenates WPS vendor IEs and requires active PBC registrar", "PIN selection prefers authorized MAC or active PIN registrar and allows other WPS APs after scan_runs reaches 3"]
+    }
+  ],
+  "instruction_inspected": {
+    "image": "private-data/analysis/x-m1-1.50/lz/plain-01100000.bin",
+    "vma": "0x01100000",
+    "start": "0x0136366c",
+    "stop": "0x01363a20",
+    "tool": "arm-none-eabi-objdump 2.46 -D -b binary -m arm",
+    "facts": ["0x0136369c loads expanded EAP vendor 0x372a and vendor type 1", "0x01363734 tests flags bit 2 before reading two-byte big-endian message length", "0x0136381c requires opcode 6 while waiting for fragment acknowledgement", "0x01363904 requires opcode 1 in initial state", "0x013639e4 tests more-fragments bit 1"]
+  },
+  "owned_design": ["Bounded 2048-byte protocol buffers", "480-byte outgoing fragments", "Canonical StationProfile conversion owns CPU credential derivation", "Crypto primitives delegated to concrete station crypto::wps module, not callbacks", "Independent random IV for each of the two encrypted enrollee messages", "Full 16-byte nonce checks", "Duplicate EAP identifiers replay the cached response", "Terminal completion drains Done and teardown driver effects before runtime profile application"],
+  "runtime_integration": "wireless_station_provisioning.rs in StationCrypto owns actual StationRuntime effect pump, scans, real driver acknowledgement boundaries, retained WpsCredential publication and StationProfile installation after WPS teardown",
+  "synthetic_tests": "wireless_station_wps_tests.rs constructs a registrar using concrete DH, Authenticator, password proofs and encrypted settings; no captured camera frames",
+  "verification": "Not run. Assignment prohibits builds, tests, lint, formatting, native execution and device I/O."
+}

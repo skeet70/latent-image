@@ -1,0 +1,60 @@
+{
+  "status": "source-inspected",
+  "target": "Fujifilm X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_prefix": "decomp/firmwares/xm1-150/app/third_party/hostap/src/",
+  "source_files": ["wps/wps_common.c", "wps/wps_common_rest.c", "wps/wps_attr_build_rest.c", "wps/wps_attr_process_rest.c", "crypto/dh_groups.c"],
+  "source_classification": "Selected definitions have no NONMATCHING markers in these committed translation units. File comments mentioning X70 describe donor provenance, not the target qualification. Function extents below are X-M1 rows and their hashes were independently computed from the owner-supplied plain image.",
+  "image": "private-data/analysis/x-m1-1.50/lz/plain-01100000.bin",
+  "image_base": "0x01100000",
+  "authenticated_extents": [
+    {"name":"wps_kdf","address":"0x013652c0","size":440,"sha256":"748f5102d206527e91956ded0a8432b78d7d1c1970a9113338f8fcd940b43db7"},
+    {"name":"wps_derive_keys","address":"0x01365784","size":808,"sha256":"6b6bd8f13d3e8f65138f4c774d3064cb4ccc1b5d11c1f9efcdf35561b87a743e"},
+    {"name":"wps_derive_psk","address":"0x01365aac","size":276,"sha256":"d3d6a8e002db9459cee8540c9d132907768ffb331c6193732e45cdc832ecc598"},
+    {"name":"wps_decrypt_encr_settings","address":"0x01365bc0","size":584,"sha256":"abf2dcc36fc2ebeaf36b75bede221e05d207ba7665af733b7ffc2644effb818d"},
+    {"name":"wps_pin_checksum","address":"0x01365e08","size":304,"sha256":"e99141ae04f30a18f738cf9185a20aa992ef29f68fe322f187af9bb2c9df4ee9"},
+    {"name":"wps_build_authenticator","address":"0x013692e4","size":260,"sha256":"c95b69705ae86fe4fcf3a3d417fddc1a946f7453a2c581198b37297177ff6de5"},
+    {"name":"wps_build_key_wrap_auth","address":"0x01369a24","size":152,"sha256":"e50325a48a3656156b427d5bca0bd0bff85691c03bf8ddb380b64a097fec07d6"},
+    {"name":"wps_process_key_wrap_auth","address":"0x0136a2a4","size":252,"sha256":"dc1a572654e361da3397335277ac1a1eddc1794ec5c1b32f067be4c59fa0b5e6"},
+    {"name":"dh_init","address":"0x013c07f0","size":596,"sha256":"f4f842b9dbeb5ac831cc5ec9b8211faa9d075f6c4e8e4d1d936e92ed431f5bc2"},
+    {"name":"dh_derive_shared","address":"0x013c0a44","size":328,"sha256":"3d55cf59723dcb9b41b3f7dcdb826afd78890d5969dcf70901321d76c2b24176"}
+  ],
+  "behavior": [
+    "RFC 3526 group 5, generator 2, 192-byte big-endian public and shared values.",
+    "DHKey is SHA256(shared), KDK is HMAC-SHA256(DHKey,N1||EnrolleeMAC||N2).",
+    "KDF concatenates HMAC-SHA256(KDK,BE32(counter)||Wi-Fi Easy and Secure Key Derivation||BE32(640)); AuthKey=32, KeyWrapKey=16, EMSK=32 bytes.",
+    "Authenticator and final key-wrap-authenticator are eight-byte HMAC prefixes. Key-wrap-authenticator TLV is 101e0008 and must be last.",
+    "Encrypted settings contain IV then AES-128-CBC ciphertext with PKCS padding. Output excludes the verified KWA and padding.",
+    "Password halves produce 16-byte HMAC prefixes. Commitments authenticate secret nonce, selected half, enrollee public key, registrar public key."
+  ],
+  "intentional_owned_changes": [
+    "Private candidates outside 2..p-2 or equal to subgroup order q=(p-1)/2 require a new random candidate rather than clearing their top byte. Exponent q would publish one and can produce predictable shared p-1 with a non-subgroup peer.",
+    "Public values outside 2..p-2 and shared values zero or one are rejected.",
+    "PKCS padding length must be 1..16; stock allows zero and can accept longer same-byte tails.",
+    "Authentication tags and commitments use subtle constant-time equality; padding checks inspect all sixteen final bytes.",
+    "Retained private exponents, shared-value buffers, derived key material, password halves and secret nonces are zeroized; decrypted buffers are cleared on authentication failure. Caller-owned password and successful plaintext buffers remain the caller's lifecycle responsibility. RustCrypto HMAC/SHA256 and bigint exponentiation internal temporaries and compiler-created copies are not claimed to be comprehensively scrubbed.",
+    "The caller must verify the enclosing message Authenticator before decrypting settings. Padding failure and KWA failure paths are not constant-time relative to one another."
+  ],
+  "dependencies": [
+    {"crate":"sha2","version":"0.10.9","default_features":false,"reexport":"xm1_wireless_crypto::sha2"},
+    {"crate":"hmac","version":"0.12.1","default_features":false,"reexport":"xm1_wireless_crypto::hmac"},
+    {"crate":"crypto-bigint","version":"0.5.5","default_features":false,"features":["zeroize"],"reexport":"xm1_wireless_crypto::crypto_bigint"},
+    {"crate":"zeroize","version":"1.8.2","default_features":false,"reexport":"xm1_wireless_crypto::zeroize"},
+    {"crate":"subtle","version":"2.6.1","default_features":false,"reexport":"xm1_wireless_crypto::subtle"}
+  ],
+  "integration": "Canonical wrapper crate replacement/vendor_protocol/wireless_crypto, its Cargo.lock and wireless_crypto.nix pin the dependencies. The raw-rustc/Bazel integration supplies extern xm1_wireless_crypto; this module imports its crypto crate reexports. The enclosing crypto module declares crypto::wps and owns the existing super::Aes128 primitive, new(&[u8;16]), encrypt/decrypt(&mut [u8;16]); no scalar CPU callback.",
+  "synthetic_vectors": {
+    "provenance": "Generated independently with Node node:crypto HMAC/SHA256/createCipheriv and createDiffieHellman using the canonical getDiffieHellman(modp5) prime, not by this Rust implementation. No target firmware execution.",
+    "full_width_vector": {"private_a_repeated_byte_hex":"42","private_b_repeated_byte_hex":"69","private_width_bytes":192,"authenticator_hex":"f39568e432578374","public_values":"wireless_crypto_wps_tests.rs independently_generated_full_width_group5_vector"},
+    "negative_keywrap_vectors": "wireless_crypto_wps_tests.rs rejects_independently_encrypted_bad_or_misplaced_kwa: valid PKCS padding encryptions with incorrect KWA, incorrect KWA header, and misplaced KWA",
+    "private_exponents": [2,3], "public_values": [4,8], "shared_value":64,
+    "enrollee_nonce_hex":"01010101010101010101010101010101",
+    "enrollee_mac_hex":"020000000001",
+    "registrar_nonce_hex":"02020202020202020202020202020202",
+    "authenticator_input_ascii":["previous","current"], "authenticator_hex":"4cb3943194611f6a",
+    "settings_hex":"1016000401020304", "iv_hex":"03030303030303030303030303030303",
+    "encrypted_settings_hex":"03030303030303030303030303030303c06caeee7f7ae2dd5fbf9e2c091912f2995a02f1feeac0f3a29333896e79d123",
+    "password_ascii":"12345670", "secret_nonce_hex":"04040404040404040404040404040404", "first_commitment_hex":"af4f27807c31aa4d14bbf787eb9159a1cfac5809f18c93c85e289ec30c6de8cd", "second_commitment_hex":"2d4945394969667735fb1efe5a63e26681532e8157c6f148f5613c3a32cc7abb"
+  },
+  "verification": "Behavioral Rust tests written but not run. No builds, formatters, linters, native target execution, SDK or camera operations performed."
+}

@@ -1,0 +1,47 @@
+{
+  "schema": "latent-image.source-cpu-evidence.v1",
+  "status": "source-inspected",
+  "target": "Fujifilm X-M1 1.50",
+  "source_revision": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_generation_preserved": true,
+  "implementation": ["pictbridge_runtime.rs", "pictbridge_xml.rs"],
+  "sources": [
+    {"path": "decomp/firmwares/xm1-150/app/connectivity/ptp/ptp_transfer.c", "lines": [120, 1060], "scope": "XML builders, service priority and send-result branches, status parsing, packet dispatch"},
+    {"path": ".tools/corpus/xm1-150/unassigned.asm", "lines": [4524, 4655], "scope": "d953cc guarded initialization, d954d0 date and request publication, d9559c cancellation flag, d955e4 continue flag"},
+    {"path": ".tools/corpus/xm1-150/functions/00d91d44.c", "scope": "send lock, active transfer gate, virtual-drive object selection, size publication, object-added submission"},
+    {"path": ".tools/corpus/xm1-150/functions/00d917fc.c", "scope": "six-slot virtual object table, discovery readiness, ordinal object handles"},
+    {"path": ".tools/corpus/xm1-150/functions/00d91e4c.c", "scope": "discovery readiness read"},
+    {"path": ".tools/corpus/xm1-150/functions/00d97464.c", "scope": "job/device notifications and catalog-backed file ID response"},
+    {"path": ".tools/corpus/xm1-150/functions/00d97728.c", "scope": "phase-specific printer response parsing"},
+    {"path": ".tools/corpus/xm1-150/functions/00d97bbc.c", "scope": "completion publication and return to idle"},
+    {"path": ".tools/corpus/xm1-150/functions/00d832a4.c", "scope": "print completion status and date/JPEG argument order"},
+    {"path": ".tools/corpus/xm1-150/functions/00d83348.c", "scope": "start completion conversion to zero or ffffff01"}
+  ],
+  "roots": ["d953cc", "d954d0", "d9559c", "d955e4", "d95da4"],
+  "builders": ["d95804", "d95930", "d959a8", "d95a20", "d95c40", "d95ccc", "d95d14", "d95d5c"],
+  "publication_roots": ["d832a4", "d83348", "d83370", "d83398"],
+  "design": {
+    "execution": "One no_std allocation-free CPU engine for host and ARM; no GenericVendorService, callback-shaped branch waiver, SDK, USB access, or native extern CPU dependency.",
+    "virtual_files": "DpsTransport borrows the actual six-slot DPS object store; vacant slots receive ordinal handles. PictBridge owns generated request and response bytes, including lengths. Pending object handles remain visible until transport completion clears the send lock.",
+    "catalog": "getFileID consumes owner-supplied catalog path/handle records. No synthetic metadata, dimensions, thumbnails or file contents are generated.",
+    "cancel": "Immediate cancellation is stored by d9559c. The inspected d95da4 service calls the abort builder with zero, so the outbound service request uses 90000000 for either stored style.",
+    "publication": "Typed publications carry actual parsed status and bounded vendor/product/job text. Completion is converted to the recovered zero/ffffff01 convention.",
+    "input_provenance": "Identity, catalog and received printer bytes are caller-owned. Public tests contain only authored synthetic strings. No proprietary fixtures are included."
+  },
+  "integration_contract": {
+    "module": "pub mod pictbridge_runtime;",
+    "connection": "PictBridge::initialize and reset_flags supply +408 initialization/reset. set_request, abort, continue_job and service supply the other table entries.",
+    "packet": "dispatch_packet routes HREQUEST/HRSPONSE only at the recovered phases and 65536-byte cap; select_buffer exposes DREQUEST/DRSPONSE bytes.",
+    "transport": "Bind DpsTransport's borrowed object storage to actual virtual DPS records; forward pending_object as an actual PTP object-added event and call complete_send only on the transport completion. set_transfer_active reflects the actual PTP active-transfer field, not a callback return.",
+    "readiness": "observe_host_discovery must be called on the actual host discovery object registration path.",
+    "application": "Consume take_publication immediately into the existing typed completion/publication consumers. File provider supplies catalog snapshot path/handle records; DPS virtual files do not require filesystem open/read/close."
+  },
+  "tests": {
+    "path": "pictbridge_runtime_tests.rs",
+    "fixture_provenance": "Authored synthetic DPS printer replies, identity, catalog paths and handles",
+    "coverage": ["discovery gate", "configuration XML", "date and file-type capabilities", "start permission", "file ID/date/copies XML", "999-copy clamp", "MPO XML", "abort and continue gates", "success and malformed completion", "catalog lookup and missing file result", "busy lock and explicit send completion", "job status publication", "invalid device status", "disabled session", "unknown packet path", "hex scanner"],
+    "executed": false
+  },
+  "verification": "Source-only assignment: no build, test, lint, formatter, native, SDK, camera or USB command executed. Parent owns module/build/root joins and final verification.",
+  "limits": ["Source implementation is not execution qualification or camera clearance.", "Root registration, transport/application wiring and shared filesystem catalog integration are owned by the parent and peers, not these four files.", "The parser and virtual object model replace stock pointer layouts with bounded Rust storage; no claim of malformed-input memory-corruption compatibility is made."]
+}

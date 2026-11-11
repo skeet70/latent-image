@@ -1,0 +1,77 @@
+{
+  "firmware": "Fujifilm X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_repository": "x70view",
+  "classification": "source-inspected and stock-byte-confirmed; not executed",
+  "sources": [
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/management/network_task.c",
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/management/network_control.c",
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/management/network_initialization_requests.c",
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/management/network_completion_events.c",
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/management/network_state_callbacks.c",
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/management/network_lan_request.c",
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/management/network_lan_start.c",
+    "decomp/firmwares/xm1-150/app/connectivity/remote/discovery/xm1_discovery_interface.c",
+    "decomp/firmwares/xm1-150/app/connectivity/remote/discovery/xm1_discovery_interface_exact.c",
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/network_subsystem.c"
+  ],
+  "stock_image": {
+    "input": "owner-supplied plain-01100000.bin",
+    "base": "0x01100000",
+    "section": "overlay47",
+    "section_offset": "0x000e0000",
+    "section_size": "0x0026a5e0",
+    "section_sha256": "0cf67b7221c3b0755092da0ae4c6d6fb817f2b32771ee53dff691fc59b28770c"
+  },
+  "byte_inspection": [
+    { "start": "0x013e98f8", "end_exclusive": "0x013eac1c", "purpose": "transition selection, message classification, task86 loop, all primary action handlers, transition data" },
+    { "start": "0x013eb32c", "end_exclusive": "0x013ec52c", "purpose": "stop queue guard, initialization state reset, interface selection, operation dispatch and cancellation, selected service dispatch, task87 init/deinit and LAN requests" },
+    { "start": "0x013e52f8", "end_exclusive": "0x013e53a0", "purpose": "service AP reconfiguration and disable roots" },
+    { "start": "0x013e3ca0", "end_exclusive": "0x013e3dcc", "purpose": "task87 initialization/deinitialization and radio gate dependency" },
+    { "start": "0x013fa234", "end_exclusive": "0x013fa7e0", "purpose": "mode1/2 concrete interface operations" }
+  ],
+  "dispatch": {
+    "task": 86,
+    "states": 8,
+    "message_classes": 14,
+    "class_codes": ["0x660b", "0xe60b", "0x6600", "0x6601", "0x6602", "0x6603", "0x6606", "0x660c", "0x662a", "0x660d", "0x660e", "0x6609", "0x660a", "other"],
+    "table": "0x013ea6dc..0x013eac1c",
+    "index": "message_class * 8 + state",
+    "entry_size": 12,
+    "ordering": "Execute action before publishing a nonnegative next state. All entries in this table are ordinary transitions or empty entries, not completion function pointers. Notifications retain both action-time phase and pre-transition state.",
+    "ordinary_state_changes": [
+      "initialize: 0 -> 1 only after actual socket task87 callback",
+      "deinitialize: 1 -> 0 only after actual socket task87 callback",
+      "start: 1 -> 2",
+      "stop: 6/7 -> 6 if selected service handles request; otherwise publish state3, request LAN stop, publish phase3",
+      "reset: 2/5 -> 4",
+      "start-result: 2 -> 5; 4 -> 1 with Start(-255) before Reset(0)",
+      "configuration-result: 5 -> 7; 4 requests LAN stop",
+      "interface-result: 3 -> 1 with Stop(0); 4 -> 1 with Start(-255) before Reset(0)"
+    ]
+  },
+  "completion_rules": [
+    "Task86 initialization and deinitialization wait for real task87 completion, not queue admission. Their stock wait-flag callbacks ignore callback status.",
+    "StartLan and StopLan callbacks normalize failure to -255 and enqueue task86 messages660d and660e. Their primary table handlers branch on current state, not the status word.",
+    "Operation0/3/4 completion uses Operation registration; operation1 uses OperationReset; operation2 uses OperationDone. Completion clears the active operation before notification.",
+    "Completion6609 sets the completion flag before notifying; Event660a clears it before notifying. Both act only in state7.",
+    "The state6 default handler queues Stop only when the selected service does not handle the message and the stop-command guard permits admission.",
+    "Late messages use the current source transition table. LAN callback routing does not discard an older actual callback merely because a newer operation exists."
+  ],
+  "ownership": {
+    "primary_dispatch": "vendor_wireless_service_task.rs",
+    "interface_controller": "vendor_wireless_service_task_interface.rs",
+    "interface_mode_cpu": "vendor_wireless_service_task_interface_modes*",
+    "socket_slot_service_cpu": "vendor_wireless_service_task_station* at source0x013edbcc",
+    "station_service_cpu": "vendor_wireless_service_task_ap* at source0x013ef2f0",
+    "discovery_cpu_and_exclusive_packet_pool": "vendor_wireless_service_task_discovery*",
+    "socket_task87_and_LAN_execution": "vendor_wireless_network::transport::socket_task",
+    "physical_radio_station_AP_LAN_and_filesystem": "canonical providers borrowed through concrete runtime context; no CPU callback environment"
+  },
+  "tests": {
+    "file": "vendor_wireless_service_task_tests.rs",
+    "provenance": "Synthetic message codes, payloads, registrations and queue capacities. No captured camera data.",
+    "execution": "not run; assignment prohibits build, test, lint and formatting"
+  },
+  "qualification": "Source implementation and written tests do not establish build qualification, native admission, emulator acceptance or camera behavior. Root/lib/BUILD integration belongs to the integration owner."
+}

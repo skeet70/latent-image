@@ -1,0 +1,27 @@
+{
+  "firmware": "Fujifilm X-M1 1.50",
+  "decomp_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "evidence_class": "source-inspected and instruction-inspected",
+  "module_partition": "vendor_wireless_service_task_station*",
+  "address_semantics": [
+    {"address": "0x013edbcc", "meaning": "Ten-slot selected-interface dispatcher. This address is not the lower station association state machine. Stop 0x6603 and configuration 0x660f broadcast; stop exits on first handler returning one. Other supported messages select a slot directly or by active socket lookup.", "basis": "plain-01100000.bin disassembly 0x013edbcc..0x013eddec"},
+    {"address": "0x013ee384", "meaning": "Five-state AP_SOC socket service dispatcher with table at 0x013ee430. State storage is incoming-message base plus 0x16c plus four times slot.", "basis": "plain-01100000.bin disassembly 0x013eddec..0x013ee56c"},
+    {"address": "0x013ee870", "meaning": "Three-state transfer dispatcher with table at 0x013ee924. Transfer state storage is incoming-message base plus 0x194 plus four times slot.", "basis": "plain-01100000.bin disassembly 0x013ee56c..0x013ee974"},
+    {"address": "0x013ec8fc..0x013eca04", "meaning": "Primary and secondary socket result stores, destructive takes, primary clear. Each take clears both returned words.", "basis": "plain-01100000.bin disassembly"},
+    {"address": "0x013ed0f4", "meaning": "AP lookup scans ten slots and only considers socket states above two. Station lookup returns the station slot when its socket state is above two, without comparing the supplied handle.", "basis": "plain-01100000.bin disassembly 0x013ed0f4..0x013ed1a4"},
+    {"address": "0x013ed1a4", "meaning": "First selected slot remains selected. A different slot cannot publish. Publication includes socket count, connection-enabled flag, normalized device kind, 32-byte name and six-byte address.", "basis": "plain-01100000.bin disassembly 0x013ed1a4..0x013ed2bc"},
+    {"address": "0x013ec4e0", "meaning": "Default listener request uses port 0xd9bc, slot and flags, and four source-bound completion registrations. The request enqueues task87, rather than directly opening a socket.", "basis": "plain-01100000.bin disassembly 0x013ec4e0..0x013ec53c"},
+    {"address": "0x013ec158", "meaning": "Open completion emits kind 0x6610 with normalized status 0 or -255, logical slot and socket handle.", "basis": "plain-01100000.bin disassembly 0x013ec158..0x013ec1d4"}
+  ],
+  "canonical_dependencies": {
+    "task87": "vendor_wireless_network::transport::socket_task::SocketTaskRuntime",
+    "transfer_protocol": "vendor_wireless_service_task::discovery::NetworkDiscoveryRuntime",
+    "shared_task_message": "vendor_wireless_service_task::TaskMessage"
+  },
+  "verification": "Behavioral tests are written but unrun. No build, test, lint, formatter, native runner, SDK or camera operation is performed by this assignment.",
+  "reproduction": {
+    "input": "Owner-supplied private-data/analysis/x-m1-1.50/lz/plain-01100000.bin",
+    "base": "0x01100000",
+    "tool": "arm-none-eabi-objdump -D -b binary -m arm --adjust-vma=0x01100000 --start-address=START --stop-address=STOP INPUT"
+  }
+}

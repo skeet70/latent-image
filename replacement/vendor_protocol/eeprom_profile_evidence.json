@@ -1,0 +1,38 @@
+{
+  "scope": "X-M1 1.50 task100 concrete profile/load composition",
+  "source_pin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_functions": {
+    "profile_read": "0x006ac16c selects partition metadata +0x58, subtracts0x380, adds slot*2, reads2 NAND blocks",
+    "defaults": "0x006c061c requests primary configuration0x3e0000 length0x2000 and extended0x3e2000 length0x15e00 through0x006aa1fc",
+    "canonical_load": "storage_shutdown_load::load_profile and receive_profile own descriptor matching, cache selection, fallback and receive sequencing",
+    "canonical_medium": "storage_shutdown_medium::StorageShutdownMedium owns NAND transfer/cache maintenance; storage_shutdown_defaults::read_defaults owns section offset and partial block handling",
+    "release": "Pinned exact platform/osal/service_stubs_more_exact.c defines the misleadingly named0x0095c638 wrapper as a task99 request0x7304 with callback zero; release_lens posts StartPolling rather than teardown or an empty operation",
+    "primary_boundary": "Pinned exact drivers/lens/tu_006bdacc.c0x006bf9ec waits event4 with timeout5000 without callback registration or register writes; auxiliary boundary0x006bfa80 owns callback registration and pulse cleanup"
+  },
+  "implementation": {
+    "profile_medium": "eeprom_profile_medium::ProfileMedium composes canonical NAND/default providers directly into ConfigImages writable windows without a second configuration buffer",
+    "native_medium": "NativeProfileMedium uses canonical NativeNand and NativeDefaults; actual NAND CPU bindings supplied by application_nand",
+    "slot_boundary": "ProfileSlot accepts exactly0..19",
+    "load_provider": "LensLoadSoftware and LensEepromSoftware are implemented for the same EepromTask100; actual Task99Client, StartupProjection, DetectionProvider and ProfileMedium supply CPU operations",
+    "errors": "Provider software failures are separate from recoverable receive-attempt errors; canonical software_status gates success and persistence; failed task99 reset enqueue is a software failure",
+    "diagnostics": "EepromTask100 retains typed last_load_diagnostic for callers"
+  },
+  "qualification": "Source-only. No builds, tests, lint, formatting, native execution, SDK realization, camera or USB operations. No source qualification or runtime readiness claim.",
+  "remaining_integration": [
+    "EepromTask100 generic provider state and root module/build joins owned by VendorProtocolJoin",
+    "Task99Client concrete synchronization, descriptor and finish integration owned by LensComposition",
+    "Owned StartupProjection prepare_output/publication integration",
+    "Owned detection provider DMA generation and interrupt composition",
+    "Actual tick source routing into EepromEvents timed waits",
+    "Request-boundary begin_request and task99 completion delivery into CompletionMailbox"
+  ],
+  "independent_medium_review": {
+    "verdict": "Source-only correct, no actionable blockers",
+    "coverage": "Byte-backed synthetic media honors transfer extent; tests cover slots0,3,19 and invalid20,255, nonzero default section and crossing, complete destination/outside windows, NAND initialization/configuration/read failures and default metadata/cache lock/read failures"
+  },
+  "independent_load_review": {
+    "verdict": "Source-only correct within provider scope, no remaining actionable blockers",
+    "corrections": "Primary boundary uses existing DMA registration without nested registration or pulse; successful DMA waits preserve callback ownership; recoverable receive failures are separate from software-failure status",
+    "limits": "Does not accept root event routing, startup, physical placement or runtime readiness"
+  }
+}

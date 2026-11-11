@@ -1,0 +1,51 @@
+{
+  "firmware": "Fujifilm X-M1 1.50",
+  "evidence_kind": "source-inspected and authenticated instruction inspection",
+  "x70view_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "image": {
+    "base": "0x0061c400",
+    "bytes": 2631680,
+    "sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"
+  },
+  "sources": [
+    "decomp/firmwares/xm1-150/app/drivers/lens/actuator/peripheral_sequence_recovered_hooks.c",
+    "decomp/firmwares/xm1-150/app/settings/tu_0073ed54.c",
+    "decomp/firmwares/xm1-150/app/platform/osal/tu_00744bc0.c",
+    "decomp/firmwares/xm1-150/app/platform/osal/tu_007291d8.c",
+    "decomp/firmwares/xm1-150/app/settings/tu_0072f30c.c"
+  ],
+  "functions": [
+    {"address":"0x00772e70","bytes":40,"sha256":"3ac3f50c7bf10d86c55318db58bf794ac40c54c9e2d2e9a69339e4feee35c9cb","implementation":"StartupProjection::prepare_output"},
+    {"address":"0x0072c844","bytes":16,"sha256":"dcece3b19dfd3cf29d0305fd7b19c97eeb9abf66ee6a1da3a1d81133d4b4e88d","implementation":"StartupProjection::publish_configuration"},
+    {"address":"0x007319fc","bytes":332,"sha256":"13ab4510f58c423ea22cc92b1bcfe855cec854f55c938f16dc043b7925d2cac3","implementation":"StartupCalibration::rebuild_keys"},
+    {"address":"0x00740db4","bytes":20,"sha256":"2ce71b1690bbe2537355945cf5502e69d404fe2e3f594b497788f3e79aef35d5","implementation":"StartupWorkers::prepare_registered"},
+    {"address":"0x00740dc8","bytes":52,"sha256":"58f7759344b4e14793b612a3101c2563f87688a65514e8b3ccf5fa7a14edace3","implementation":"StartupWorkers::initialize"},
+    {"address":"0x00745584","bytes":640,"sha256":"b0c4dde2f5c4b32868ef55373fde74dba1a60215f9231c663405e8fd9e9f9cff","implementation":"StartupWorkers::rebuild_registered"},
+    {"address":"0x00745804","bytes":568,"sha256":"a9b3f9be820d6d961974b61955ba90775cf693390e48ef96117cc8b01ac38e43","implementation":"StartupWorkers::rebuild_primary"},
+    {"address":"0x00745a88","bytes":704,"sha256":"c3a922801d38e9bfe4741ae3e7751b80099bb85bbff0087d26cbac54837a2628","implementation":"StartupWorkers::rebuild_secondary"}
+  ],
+  "ordered_projection": [
+    "0x74c5e8: existing StartupCalibration::prepare; argument one recomputes, argument zero reloads",
+    "0x74c5e8/0x749668: existing StartupCalibration::persist publishes recomputed sample and extrema caches",
+    "0x7700fc: existing StartupRefresh::refresh",
+    "0x7450b0: existing StartupOutputCache::rebuild, including lookup validity invalidation",
+    "0x740db4: 0x745584 then 0x6e45d0, including when mode is zero",
+    "0x740dc8: for nonzero mode only, 0x6e48c0, 0x745804, 0x745a88, 0x6e3b38(1,100,0), 0x745f7c"
+  ],
+  "instruction_resolutions": [
+    "0x740db4 is not a no-op despite its transferred interface_no_operation name.",
+    "0x745584 visits six source records in descending order 0x3420 through 0x33d0; failed geometry restarts the bank with original strength minus ten times attempt, at most five reductions.",
+    "0x745584 advances the packed output pointer by three bytes per 32-bit knot. Its NONMATCHING C omits that advancement in its write arguments.",
+    "0x745804 and 0x745a88 select bank zero except for explicit selectors one and two; retry reduction uses the original strength and 0x3e3d26, bounded by 0x3e3d27.",
+    "0x745a88 permits failed geometry on its final reduced-strength pass, retains the mutated record, and publishes gains to both 0x403f00 and 0x404500.",
+    "0x745a88 repeats a comparison nine times without advancing either source or destination; its retained directional flag is first expanded knot >= expanded knot 24.",
+    "0x7319fc clears 128 halfword keys to 0xffff, iterates inclusive channel curve bounds, admits at most 128 values, and inserts sorted unique non-sentinel values.",
+    "0x746cc8/0x746d6c with sentinel argument 0xffff read inclusive lower and upper indices at 0x3e22c8/0x3e232d plus channel."
+  ],
+  "tests": {
+    "source": "startup_projection_tests.rs",
+    "coverage": ["reload and output composition", "lazy lookup invalidation", "recompute persistence and unregistered worker outputs", "early calibration failure", "publication reflects newly loaded configuration"],
+    "executed": false
+  },
+  "limits": ["Source-only implementation and authored behavioral tests; no build, test, native, emulator, SDK or camera execution."]
+}

@@ -1,0 +1,91 @@
+{
+  "firmware": "Fujifilm X-M1 1.50",
+  "decomp_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "classification": "source-inspected and byte-confirmed static implementation, unexecuted",
+  "source": "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/",
+  "byte_input": "private-data/analysis/x-m1-1.50/lz/plain-01100000.bin",
+  "byte_base": "0x01100000",
+  "inspected_byte_ranges": [
+    ["0x012a32dc", "0x012a3c58"],
+    ["0x0129fcd8", "0x0129ff50"],
+    ["0x012aa448", "0x012aa574"],
+    ["0x012ac058", "0x012ac48c"]
+  ],
+  "local_consumers": [
+    {
+      "events": ["0x05"],
+      "source_file": "tu_0129e740.c",
+      "roots": ["0x0129fcd8", "0x0129fdf0", "0x0129fec4"],
+      "behavior": "Four-byte body carries signed signal/noise and little-endian link speed. Signal and speed caches refresh independently when invalid or unsigned elapsed ticks exceed 5000. Dispatcher tests signed signal against one armed inclusive below/above threshold, publishes the threshold value and disarms it. Command correlation remains the receive engine's responsibility."
+    },
+    {
+      "events": ["0x06", "0x0f"],
+      "source_file": "tu_012a272c.c",
+      "behavior": "Copies exactly 96 body bytes and publishes validity and receive tick before command acknowledgement. Short bodies fail without mutation."
+    },
+    {
+      "events": ["0x08"],
+      "source_file": "tu_012ae7b4.c",
+      "root": "0x012b2508",
+      "behavior": "Unmarked source definition returns immediately without reading arguments. Service outcome is a genuine inert stock leaf, not a missing implementation fallback."
+    },
+    {
+      "events": ["0x0c"],
+      "source_file": "tu_012a272c.c",
+      "behavior": "Publishes status 0x40010012 payload consisting of little-endian word 2 followed by the complete event body. Stock writes a body length then overwrites that length with the body at offset four. Replacement deliberately emits the resulting bytes, not a new length field. Publication storage is bounded to the observed RX allocation size 0x930; oversized publication fails explicitly."
+    },
+    {
+      "events": ["0x0e"],
+      "source_file": "tu_012a272c.c",
+      "behavior": "Copies body byte zero unchanged to sleepy publication; receive engine owns the subsequent physical power handshake."
+    },
+    {
+      "events": ["0x19", "0x1a", "0x1e"],
+      "source_file": "tu_012aa8f8.c",
+      "roots": ["0x012ac058", "0x012ac0fc", "0x012ac1ac", "0x012ac234"],
+      "behavior": "BSS event updates absence and free quota, requesting TX service only on absent-to-present. Peer power event updates sleep state and applies quota while sleeping; quota event applies and wakes TX only while sleeping. Quota operations 0/1 overwrite, 2 adds, 3 subtracts with byte wrapping. Non-QoS or non-UAPSD allocates all quota to field 0x1e2. QoS/UAPSD repartition uses prior nonzero delivery/nondelivery populations and reserves at most two for the previously empty queue. These hardware states are distinct from the hostap peer roster. Canonical registry lookup and lifecycle belong to the receive engine, not another peer engine in this module."
+    }
+  ],
+  "concrete_integration_dependencies": [
+    {
+      "events": ["0x07"],
+      "root": "0x012ecf10",
+      "owner": "StationAssociation",
+      "actual_cpu": "MIC/security failure indication, not disconnect",
+      "consumer": "receive_mic_failure"
+    },
+    {
+      "events": ["0x11", "0x12"],
+      "roots": ["0x012aa448", "0x012aa500", "0x012aa698", "0x012aa8f8"],
+      "owner": "ReceiveReorder and StationDriver",
+      "actual_cpu": "Local receive_block_ack wrapper resolves event body0 through the canonical PeerPool once and directly calls ReceiveReorder add/delete with the resulting generation-bound PeerLease. Unknown or retiring peers return UnknownPeer without changing sessions. Reorder engine owns actual packet FIFO and output leases; a reused peer slot cannot delete a prior generation's session.",
+      "required_state": "Add body0 firmware peer id, body2 LEu16 parameter TID bits2..5 and window bits6..15, body6 LEu16 sequence shifted4. Delete body0 firmware peer id, body1 TID. Reorder engine owns actual packet FIFO and output leases."
+    },
+    {
+      "events": ["0x15", "0x18", "0x20"],
+      "roots": ["0x012f3398", "0x012e3bbc", "0x012f45d0"],
+      "owner": "StationAssociation",
+      "actual_cpu": "Scan-result, channel-grant and roaming events respectively; 0x15 is not an HT update",
+      "consumers": ["receive_scan_event", "receive_channel_event", "receive_roaming_event"]
+    },
+    {
+      "events": ["0x17"],
+      "owner": "StationDriver",
+      "actual_cpu": "Look up TX descriptor by body0 PID, apply body1 status to its engine-issued owner token, release descriptor once; stale or cancelled generations cannot complete a new lease"
+    },
+    {
+      "events": ["0x1b", "0x1c", "0x1d"],
+      "roots": ["0x012dd334", "0x012fbcac", "0x012fc0a0", "0x012fcd98"],
+      "owner": "StationAssociation and SecondaryBss",
+      "actual_cpu": "Abort body0 selects primary or secondary BSS subject to adapter abort guard. Event0x1c is secondary BSS channel schedule update, not WPS M1-M8; dispatcher requires body0==1. Event0x1d invokes secondary management state."
+    },
+    {
+      "events": ["0x21", "0x23"],
+      "roots": ["0x012f6de8", "0x012e29e8", "0x012e0e80"],
+      "owner": "StationAssociation",
+      "actual_cpu": "Peer disconnect tears down canonical peer. Event0x23 constructs class3 rejection deauthentication reason7 from the received frame, rather than treating it as incoming deauthentication."
+    }
+  ],
+  "integration_scope": "This module implements local leaf CPU only. Nonlocal events return NotLocalEvent, never success. The receive-engine integration must directly call the listed concrete engines, own source-bound command correlation, canonical peer lookup, RX recycling and lifecycle cancellation. Those are separate assigned files, not callback escape hatches supplied here.",
+  "tests": "Synthetic behavioral tests use the public RX packet parser. Written but intentionally not run. No builds, native execution, emulator, SDK or live operations performed."
+}

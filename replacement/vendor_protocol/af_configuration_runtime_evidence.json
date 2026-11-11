@@ -1,0 +1,25 @@
+{
+  "target": "Fujifilm X-M1 1.50",
+  "source_pin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "image4_sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
+  "image5_sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+  "source_paths": [
+    "decomp/firmwares/xm1-150/app/control/af/s1/tu_00efbc6c.c",
+    "decomp/firmwares/xm1-150/app/control/af/s1/lens_record_profile_requests.c",
+    "decomp/firmwares/xm1-150/app/capture/record/record_parameter_mappings.c",
+    "decomp/firmwares/xm1-150/app/drivers/lens/control/tu_0076f044.c"
+  ],
+  "registration_only_roots": ["0x00efc2f8", "0x00efc360", "0x00efc3a4", "0x00efc3e8", "0x00efc42c", "0x00efc470", "0x00efc4b4", "0x00efc4f8"],
+  "registration_behavior": "These provisional NONMATCHING bodies literally only check busy, invoke the incoming callback(-95) when busy, or set busy=1 and save the callback. No device submission or automatic completion is inferred.",
+  "shared_storage": {"busy": "0x0169d42c", "callback": "0x0169d430"},
+  "queue50": [
+    {"root": "0x00efc790", "target": "0x0076f6d8", "opcode": "0x4218", "consumer": "af_capture_actor::LensRequestConsumer", "callback": "0x00efbcbc", "effect": "Success writes position high/low to configuration82/83; failure writes zeros. Both invoke the saved callback(0), then clear busy."},
+    {"root": "0x00efc7e0", "target": "0x0076f7c4", "opcode": "0x4219", "parameter": 0, "consumer": "af_capture_actor::LensRequestConsumer", "callback": "0x00efbca8", "effect": "Invokes finish-position(0), which invokes saved callback(0), then clears busy."},
+    {"root": "0x00efc948", "target": "0x0076f840", "opcode": "0x421a", "parameter": 0, "consumer": "af_capture_actor::LensRequestConsumer", "callback": "0x00efbc80", "effect": "Invokes saved callback(0), then clears busy."}
+  ],
+  "parameter_callbacks": {"roots": ["0x00efc998", "0x00efc9f8"], "behavior": "Null callback returns; non-null callback is invoked synchronously with0. No shared AF busy write or device operation."},
+  "lifetime": "Service timeout detaches the waiter without clearing shared busy or unregistering the saved callback. Queue98 cancellation publications still traverse the selected queue50 consumer and application callback. Registration identities increase without reuse. Busy clears only after caller acknowledges callback delivery; stale delivery and detach identifiers cannot modify later ownership.",
+  "qualification": "Source-only implementation and behavioral test source. No build, test, format, lint, native, SDK, camera, or USB execution.",
+  "remaining_cpu_roots": ["0x00efc33c", "0x00efc53c", "0x00efc5ac", "0x00efc640", "0x00efc6b8", "0x00efc708", "0x00efc73c", "0x00efc834", "0x00efc8e8"],
+  "scope": "This record does not claim full application AF closure; motion roots require the additional concrete af_motion_runtime provider. af_result observability is not an application AF substitute."
+}

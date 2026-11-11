@@ -1,0 +1,48 @@
+{
+  "status": "source-inspected",
+  "firmware": "X-M1 1.50",
+  "source_revision": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_paths": [
+    "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/scan_status_requests.c",
+    "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/scan_status_layout.h",
+    "decomp/firmwares/xm1-150/app/connectivity/ptp/ptp_transfer.h"
+  ],
+  "instruction_sources": [
+    ".tools/corpus/xm1-150/functions/00d818e4.asm",
+    ".tools/corpus/xm1-150/functions/00d81948.asm",
+    ".tools/corpus/xm1-150/functions/00d82210.asm",
+    ".tools/corpus/xm1-150/functions/00d820e4.asm",
+    ".tools/corpus/xm1-150/functions/00d81254.asm",
+    ".tools/corpus/xm1-150/functions/00d81f18.asm",
+    ".tools/corpus/xm1-150/functions/00d82178.asm",
+    ".tools/corpus/xm1-150/functions/00d821c0.asm",
+    ".tools/corpus/xm1-150/unassigned.asm:4524-4655"
+  ],
+  "semantics": {
+    "d818e4": "Mode2 phase table begin; mode3 argument table begin then end; all other modes return.",
+    "d81948": "Mode2 selects d85cf0 table, mode3 selects d7f2b0 table; other modes select address of selected-buffer cell.",
+    "d82210": "Mode2 phase reset then +408 begin/end, short timer, connection-byte publication, long timer; mode3 argument open with request argument and callback owner.",
+    "d820e4": "No active handle is a no-op. States8 through11 clear USB active then post3407. Canonical71c938 closes active handle and callback d81254 posts3408 event11 boolean failure. Active handle clears at submission and completion.",
+    "d81f18": "First state11 observation notifies -12. Ten consecutive non11 observations after connection notify -11. State11 resets absent count. Every observation clears change flags.",
+    "d82178": "Flags bit0 wins with3, otherwise bits2/3 map1, otherwise bit4 maps2, otherwise3.",
+    "d821c0": "Compare current connection byte with phase-buffer byte. On change store before phase notify(0).",
+    "d97fb0": "Actual +408 table is PictBridge transfer, not vendor control-frame Service. Slots c/10/14/18 target d95da4/d954d0/d9559c/d955e4."
+  },
+  "implemented": [
+    "Typed request-kind selection and published selected-buffer ownership.",
+    "Protocol selected begin invokes concrete PtpRuntime.initialize; changed connection byte stores into concrete PtpRuntime before notify(0).",
+    "Protocol connection begin invokes concrete PtpRuntime.reset, PictBridge.reset_flags/initialize, canonical short timer, unconditional connection-byte store, canonical long timer. Both timer calls execute even if short registration fails.",
+    "State11 connection observation and ten-tick absence state machine; notification statuses -12 and -11.",
+    "Connection byte derivation from canonical status flags.",
+    "Active-file close invokes concrete UsbStart.clear_active, FileCpu.close and queue36 publications; publication failure does not skip closing.",
+    "Completion3408 owns a 24-byte payload carrying event11 and boolean failure."
+  ],
+  "remaining_cpu": [
+    "Mode3 selected begin/end and open are Service::begin_connection (0x00d7f2cc, 0x00d7f334) and Service::open_connection (0x00d7fd64); the four argument words 0x00d7fd20 stores are bound at Service construction.",
+    "Controller integration must supply canonical PictBridge, PtpRuntime and ControllerRegistrations owners to begin_connection_protocol.",
+    "PictBridge +408 service/set-request/start/request-send d95da4/d954d0/d9559c/d955e4 and transitive DPS XML/file-send/publication CPU are not implemented here.",
+    "The selected-buffer inputs require canonical provider publication extents; this module does not infer extents from a wrapper or a donor name.",
+    "Controller must consume ConnectionNotification through the registered configuration callback owner and supply canonical current connection-status flags."
+  ],
+  "qualification": "Source-only. No build, test, lint, format, native execution, SDK, camera or USB operation performed. Donor names do not establish firmware function extents."
+}

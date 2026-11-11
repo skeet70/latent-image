@@ -1,0 +1,74 @@
+{
+  "schema": 1,
+  "status": "source-inspected",
+  "target": "Fujifilm X-M1 1.50",
+  "x70view_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_paths": [
+    "decomp/firmwares/xm1-150/app/drivers/lens/control/tu_00771488.c",
+    "decomp/firmwares/xm1-150/app/drivers/lens/control/tu_0076a000.c",
+    "decomp/firmwares/xm1-150/app/settings/tu_00746018.c",
+    "decomp/firmwares/xm1-150/app/settings/tu_00748398.c"
+  ],
+  "input": {
+    "dat_sha256": "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490",
+    "stream": ".tools/firmware/xm1-150/stream-0016025c.bin",
+    "stream_address": "0x0061c400",
+    "stream_sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
+    "range_registry": "decomp/firmwares/xm1-150/function-ranges.json"
+  },
+  "inspection": {
+    "method": "llvm-objdump -d --triple=armv7-none-eabi over the authenticated resident ELF, with body hashes independently computed from the authenticated stream",
+    "scope": "All branches reachable from actual772a8c arguments: group0, channel0, source and destination split0, optional limit export disabled, both profile banks, nominal and expanded limits, all four746054 contexts, all selection encodings and every settingbd byte",
+    "shared_numeric_provider": "xm1_calibration_core::Calibration::channel_bias and Calibration::collapse_curve_index",
+    "fixed_argument_reductions": [
+      "Actual7472ec returns zero unconditionally; it is not a numeric offset provider.",
+      "Actual74947c takes the equal-split branch at7494ac. Both747aac calls receive direction1/mode1 and leave the signed halfword unchanged.",
+      "Actual746298 maps context0 to the queried bank, context1 to row3, context2 to row5 and context3 to row4 of actual81867c."
+    ],
+    "outline_corrections": [
+      "Actual772a8c invokes both748730 midpoint queries unconditionally, at772b68 and772c00.",
+      "Actual74b05c passes only zoom, bank and split to7472ec at74b510..74b51c.",
+      "Actual74b05c preserves raw endpoints in separate halfwords before nearest-anchor distance calculations. The distance temporaries do not replace the raw endpoint values used for intersection.",
+      "Actual74b4b8..74b50c intersects adjusted limits with raw lower minus selected lower margin and raw upper plus selected upper margin.",
+      "Actual746054 gets its enable byte through6c697c at93ade8+9 and its mode through6c5f0c from the6c4bec metadata snapshot at96b37c+5; these are canonical task99 state, not calibration blob offsets."
+    ],
+    "selector_behavior": "Settinga8 bit20 clear preserves requested delta. Otherwise settingbd selects one of ten profile positions, with every unlisted byte selecting primary expanded lower, then subtracts current focus with signed-halfword wrapping.",
+    "iris_behavior": "Actual76a5ac calls746834, shifts left6 and masksffc0; the shared canonical index collapse supplies746834."
+  },
+  "authenticated_tables": [
+    {"address":"0x0081860c","size":32,"sha256":"c2f04688cdeddacce7d888cf7deef24290cabcbe42149b0a235dc15923c113a0","scope":"Four signed selection-correction key pairs"},
+    {"address":"0x0081867c","size":96,"sha256":"49d08e3a475696b2417fb05c8cef7cd388587da14c171147a588f9579f6fc199","scope":"Six profile endpoint and margin key rows used by group0"}
+  ],
+  "authenticated_bodies": [
+    {"address":"0x00772a8c","size":576,"sha256":"c5ca0d53d1ee1a598b1492d056a2e7eae5e7d8f703118df3b4b5c50380e6e193"},
+    {"address":"0x0076a704","size":48,"sha256":"4c8baf638ae54984ccc4f5d6fa86975c089b076702bf8970fd3bc7835db79591"},
+    {"address":"0x0076a5ac","size":28,"sha256":"9adc2ef902fba4f666718f89d7bb98788cc34edc3f349df74f21d625a093645b"},
+    {"address":"0x00746834","size":48,"sha256":"8cf4b7317051d06b4d21c50aabf2133aaa4a4ab2f1ae80a30bd7dc3b266b8ee8"},
+    {"address":"0x00746054","size":80,"sha256":"156cbdd49775ae27f0ce5ecb6f7870a6d934aab8fcb684132a1d95f6b6933beb"},
+    {"address":"0x00746298","size":80,"sha256":"78575546af20eb3eaeaafb6319030075a9465dab9aa6ae3c2f3df511a1f05730"},
+    {"address":"0x00746380","size":52,"sha256":"eeb9af5f4b29a385801e67405ac042bf8e8ece5e75f63dde662794b2c2a71c89"},
+    {"address":"0x0074657c","size":160,"sha256":"b2e8067f71bfe8880403ea1e9992b3b49681769358472c67b4ce9e0e5cc858f5"},
+    {"address":"0x007472ec","size":24,"sha256":"aab533f64e7d3f50628f3b74c122bcfaae90f7a06e1282e0e04e4d03d9706543"},
+    {"address":"0x00747408","size":380,"sha256":"5d08453376c1cec19cadf1a9e3b7cfd6081b46d302de81efa4fd3b4501ef67d5"},
+    {"address":"0x00747584","size":128,"sha256":"cbe11ff8f8f793c7ab4d0bd6d163abf741288f9f71d1195467a2f4180498962f"},
+    {"address":"0x00747604","size":552,"sha256":"3483bc2a3c0757d40a4088f427c2d6ef0277ec30ddf7f20647509235e2bb4365"},
+    {"address":"0x00747aac","size":76,"sha256":"076f54313e90b81e6eeb7ce9ed604fcc23249ee7c76932a6d76a97458d2696c1"},
+    {"address":"0x007482d0","size":32,"sha256":"2a4b711f76927ab738044ccc33c5b2f12ccef80154c4f1b2fd318f76359ef7a9"},
+    {"address":"0x007482f0","size":44,"sha256":"3524427860fe1fbc2c5e1c79f1eff058e9bbeea4b9e631b4e3eac0c4afc6c385"},
+    {"address":"0x0074831c","size":124,"sha256":"a62830906a279ec335efc59bf7d7b1e6dc036f33f79588bd7f1480016130156f"},
+    {"address":"0x00748398","size":920,"sha256":"c448515d10a76bc4c45f350a6c25f166125432a236d3e9b61401ec0f2c77601d"},
+    {"address":"0x00748730","size":184,"sha256":"f72e92f7766e4a1903bffff52d707709f856b0c1f027b51ab52dedead608e052"},
+    {"address":"0x0074947c","size":492,"sha256":"20988bb2ff162d61130827e41b821d3c11c294e2c62ed68e5735040869dedee0"},
+    {"address":"0x0074b05c","size":1440,"sha256":"25b64e1e21081820a01359776f32b46c54c76bd538e36dd5494029b4fa920ebf"},
+    {"address":"0x006c697c","size":40,"sha256":"ebf0c46dea7508939a150f6455c9c1b635f434e6fe7cc2a4a74c017770fcddd8"},
+    {"address":"0x006c5f0c","size":52,"sha256":"c5d6ab676913cae3471bfaec53e407753a82a52ed2e5e0bb736083d28c047476"},
+    {"address":"0x006c4bec","size":56,"sha256":"96c28179b005b7508a449ada5272029a3c704c471a433947da0f868d6e2b9cb0"}
+  ],
+  "qualification": {
+    "tests": "Committed synthetic behavioral tests; not executed",
+    "build": "Not executed",
+    "native": "Not executed",
+    "camera": "Not executed",
+    "limits": "Source reconstruction, not compiled equivalence or native qualification. Generic74b05c invocations outside the actual772a8c argument domain are not exported."
+  }
+}

@@ -1,0 +1,91 @@
+{
+  "status": "open",
+  "scope": "X-M1 1.50 USB mode-two PTP application source checkpoint, not a complete application engine",
+  "source_revision": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_evidence": [
+    {
+      "path": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/scan_command_session.c",
+      "functions": ["0x00d86748", "0x00d87094", "0x00d8ccc4", "0x00d8ce5c"],
+      "claim": "The command dispatcher selects the 0x10, 0x90 and 0x98 tables with respective inclusive low-byte limits 0x1c, 0x1d and 0x0b. Open-session validates the zero suffix before zero-session and already-open checks. Close-session checks session presence before the zero suffix."
+    },
+    {
+      "path": "decomp/firmwares/xm1-150/app/connectivity/ptp/tu_00d92120.c",
+      "blob": "70f1c5f11c9c618260504c22b944b64f5c0d35e6",
+      "functions": ["0x00d92cf0", "0x00d93264"],
+      "claim": "The local descriptor table at 0x00d935d4 contains four descriptors. These are protocol-local properties, not evidence of identity with settings property identifiers 1 through 645."
+    },
+    {
+      "path": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/tu_00d86ab0.c",
+      "blob": "c9fc2d566ae3b0cab24e22a7c4a9d0beefb8693a",
+      "functions": ["0x00d86b10", "0x00d87164", "0x00d87404", "0x00d87a74", "0x00d87f24"],
+      "claim": "The application has storage, object, capture and extended object-property branches. An operation identity is not an implemented handler."
+    }
+  ],
+  "handler_tables": {
+    "standard": "0x00d8d1c8",
+    "vendor": "0x00d8d23c",
+    "extended": "0x00d8d2b4",
+    "recovery": "Little-endian 32-bit entries read from the owner-supplied BIN5 image, load address 0x00bf1a00. The tables have 29, 30 and 12 entries respectively.",
+    "image_sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+    "valid_handlers": {
+      "0x1001": "0x00d86f6c", "0x1002": "0x00d87094", "0x1003": "0x00d8ccc4",
+      "0x1004": "0x00d8b638", "0x1005": "0x00d86dbc", "0x1006": "0x00d87a74",
+      "0x1007": "0x00d87404", "0x1008": "0x00d8c59c", "0x1009": "0x00d8bbc4",
+      "0x100a": "0x00d8c27c", "0x100b": "0x00d8bf1c", "0x100c": "0x00d8a9e8",
+      "0x100d": "0x00d89c20", "0x100f": "0x00d86b10", "0x1014": "0x00d8b34c",
+      "0x1015": "0x00d8b10c", "0x1016": "0x00d899f8", "0x101b": "0x00d8b7f4",
+      "0x900c": "0x00d8a36c", "0x900d": "0x00d89530", "0x901d": "0x00d891b4",
+      "0x9801": "0x00d87164", "0x9802": "0x00d88f98", "0x9803": "0x00d88b80",
+      "0x9805": "0x00d87f24"
+    },
+    "unsupported_entries": "Other standard slots use operation-specific unsupported handlers; remaining vendor and extended slots select 0x00d8cd5c. The Rust decoder returns None for these operation codes."
+  },
+  "device_properties": [
+    { "code": "0x5001", "type": "uint8", "writable": false, "default": 3, "range": {"minimum": 0, "maximum": 3, "step": 1}, "current_source": "0x0146aefc" },
+    { "code": "0xd303", "type": "uint8", "writable": false, "value": 1 },
+    { "code": "0xd406", "type": "PTP counted UTF-16", "writable": true, "default": "one NUL code unit", "current_source": "0x0146acf9" },
+    { "code": "0xd407", "type": "uint32", "writable": false, "value": 1 }
+  ],
+  "implemented_scope": [
+    "Closed operation decoder for every non-unsupported command-table slot",
+    "Session identifier transitions and source-ordered protocol response codes",
+    "Allocation-free four-property current-value and descriptor snapshot encoders",
+    "Typed initiator dataset length admission and battery states",
+    "Behavioral tests for session ordering, response transaction identity, property wire values, short-output atomicity and operation admission"
+  ],
+  "missing_actual_cpu": [
+    {
+      "surface": "Concrete PtpApplication dispatch and transport integration",
+      "detail": "No PtpApplication root is supplied by this checkpoint. Object enumeration, object information, whole/partial reads, thumbnail reads, upload, delete, extended properties and vendor operations are not implemented here. Operation decoding does not claim those branches are complete."
+    },
+    {
+      "surface": "Capture initiation and completion",
+      "detail": "0x00d86b10 invokes application backend slot +0x2c and expects completion argument 10. The known capture configuration facade is not proof of this provider's identity. A source-bound canonical initiation/completion/cancellation provider remains required."
+    },
+    {
+      "surface": "Object metadata",
+      "detail": "0x00d939b0 and 0x00d94554 depend on actual JPEG, RAF, movie and thumbnail parsing. The shared media_parser provider is assigned separately. Calibration metadata.rs is not a replacement for these codecs."
+    },
+    {
+      "surface": "Initiator property write",
+      "detail": "0x00d93070 copies the current initiator value and can recognize Windows/<version> greater than 5, update operation and format tables, invoke 0x00d91ec8, emit event 0x4008 and call 0x00d94714(2). A value-only setter would omit valid CPU and is deliberately absent."
+    },
+    {
+      "surface": "Session state lifetime",
+      "detail": "PtpRuntime owns the session identifier; open_session and close_session apply the session rules to it. The concrete application must also clear transfer scratch on open and execute the 0x00d8645c cleanup dependency on successful close."
+    }
+  ],
+  "canonical_provider_contracts": {
+    "file": "filesystem_file_cpu::FileCpu, FileHandle, OpenMode, SeekFrom and typed errors",
+    "catalog": "filesystem_catalog::Catalog, Entry, MediaPath, CreateKind, create/delete/io and allocation_bitmap",
+    "metadata": "media_parser::metadata and parse, MediaFormat, MediaMetadata and ThumbRange; no zero-dimension fallback",
+    "property": "Protocol-local descriptor identities have no proven direct mapping to property_service::PropertyId",
+    "wireless": "Wireless 0x013f command handlers remain distinct. Shared filesystem providers do not establish USB/network application identity."
+  },
+  "verification": {
+    "builds": "not run, assignment prohibits execution",
+    "tests": "authored, not run",
+    "native_sdk_camera_usb": "not run",
+    "qualification": "source inspection only; no completed application, parity, retirement or hardware claim"
+  }
+}

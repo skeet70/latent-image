@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "target": "Fujifilm X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "status": "source-only implementation, not execution-qualified",
+  "implementation": "filesystem_catalog.rs",
+  "tests": "filesystem_catalog_tests.rs",
+  "source_roots": [
+    {"symbol": "storage_format_fat_timestamp", "path": "decomp/firmwares/xm1-150/app/storage/service/storage_fat_timestamp_format.c", "fact": "Packed FAT time/date formats as YYYY.MM.DD HH:MM:SS. Written timestamps use subsecond zero."},
+    {"symbol": "storage_copy_open_file_details", "path": "decomp/firmwares/xm1-150/app/storage/service/storage_open_file_details.c", "fact": "Created uses create_time plus subsecond; written uses write_time with zero subsecond. Scan-record written text starts at offset 0x50 according to the NONMATCHING scan publisher in tu_0071a93c.c."},
+    {"address": "0x0071cdf0", "symbol": "storage_catalog_scan_wrapper", "path": "decomp/firmwares/xm1-150/app/storage/service/storage_catalog_scan_wrapper.c", "fact": "Four caller arguments forwarded with mode zero."},
+    {"address": "0x0071cd30", "symbol": "storage_path_pair_option", "path": "decomp/firmwares/xm1-150/app/storage/service/storage_queue_modes.c", "fact": "Path-option request uses option one and mode zero."},
+    {"address": "0x0071f708", "symbol": "storage_current_drive_wrapper", "path": "decomp/firmwares/xm1-150/app/storage/service/storage_drive_current_wrapper.c"},
+    {"symbol": "catalog_handlers", "path": "decomp/firmwares/xm1-150/app/storage/catalog/catalog_handlers.c", "facts": ["Volume formatting uses the current drive and falls back to A for a zero drive.", "Current-volume comparison compares the stored volume with the current-drive wrapper.", "Selection clearing distinguishes current and saved selections."]},
+    {"symbols": ["storage_request_path_option", "storage_request_path_pair"], "path": "decomp/firmwares/xm1-150/app/storage/service/tu_0071a93c.c", "qualification": "NONMATCHING, inference only", "facts": ["Path and pattern are copied into request storage.", "Request identifiers distinguish path-option 0x2c06 and path-pair 0x2c08."]},
+    {"symbols": ["fs_scan_fat_directory", "fs_scan_exfat_directory"], "path": "decomp/firmwares/xm1-150/app/storage/fs/fs_directory_scan_more.c", "qualification": "NONMATCHING, inference only", "facts": ["FAT scanning traverses fixed roots or cluster chains and skips deleted entries.", "The exFAT scan interprets 0x85 primary, 0xc0 stream and 0xc1 name records.", "Directory versus file filtering uses the directory attribute."]},
+    {"symbol": "fs_find_folded_pattern_difference", "path": "decomp/firmwares/xm1-150/app/storage/fs/fs_folded_pattern_compare_more.c", "qualification": "NONMATCHING, inference only", "fact": "ASCII names are compared without case and with wildcard fields."}
+  ],
+  "owned_behavior": [
+    "Caller-owned SectorIo supplies every media read and write; no host filesystem or retained firmware call is used.",
+    "FAT12 packed entries, FAT16 entries, FAT32 masked entries and exFAT full-width entries share one next-cluster function with the file engine.",
+    "The catalog yields owned typed entries including location, UTF-16 name, attributes, timestamps, first cluster, size, valid size and contiguous allocation state.",
+    "Scan owns an exclusive catalog borrow; close and cancel consume that lease.",
+    "Path resolution, directory filtering, extension scanning, stat, creation and deletion use the same sector-backed engine for USB and wireless callers.",
+    "FAT long-name entry sets and exFAT name/stream sets are emitted directly; exFAT metadata commits recompute entry-set checksums.",
+    "Allocation, FAT mutation and chain release delegate to filesystem_file_cpu, not a second allocator."
+  ],
+  "consumer_contracts": ["VendorRadioNetwork.RemoteCatalog", "VendorRadioNetwork.RemoteObjectOps", "VendorProtocolJoin.VendorPtpApplication", "VendorProtocolJoin.VendorFilesystemFileCpu"],
+  "test_scope": ["Real synthetic directory records and extension filters", "Cancelled scan permits subsequent enumeration", "Long-name create/stat/metadata/delete round trip", "exFAT 64-bit size and valid-size publication", "Wrong-drive and sector-provider failures"],
+  "verification": {"executed": [], "prohibited_by_assignment": ["build", "test", "lint", "format", "native", "SDK", "camera", "USB"]},
+  "qualification_limits": [
+    "NONMATCHING scan and queue reconstructions remain inference until independently checked against pinned bytes.",
+    "This evidence is not ARM execution evidence, physical-media evidence or camera clearance.",
+    "The integration owner registers the new modules and joins concrete consumers outside these three owned files."
+  ]
+}

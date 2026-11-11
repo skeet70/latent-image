@@ -1,0 +1,60 @@
+{
+  "status": "source-inspected",
+  "target": "Fujifilm X-M1 1.50 overlay47 station independent-BSS CPU",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_repository": "x70view",
+  "source_units": [
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_012d94a4.c",
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_012e157c.c",
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_012e3ff0.c",
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_0129a52c.c",
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_012e5ce0.c",
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_012f1eb4.c"
+  ],
+  "roots": [
+    {"address": "0x012dc300", "size": 632, "stock_sha256": "22bad5a63ef2e36d143fa90ae06d50277c1006feadafdeefa69c04a8578bfca0", "behavior": "Create independent BSS once; copy configured SSID, band/channel, interval and ATIM; initialize PHY/rates; update target BSS, beacon IEs and timing; arm 20000ms alone timer."},
+    {"address": "0x012dc578", "size": 944, "stock_sha256": "a6cfd47bbdb752c165a1a63fb3c6adb06a47dee124b24895de05c63e34ce87fc", "behavior": "Cancel alone timer; merge candidate capabilities with short-slot bit cleared; copy candidate rates, BSSID and beacon interval; configure target BSS/beacon/timing."},
+    {"address": "0x012da220", "size": 200, "stock_sha256": "6f1a182ebd9fb3cc2be6b3801ce2800e8bebb3e773d66b464679c6d120607dd6", "behavior": "Prepare independent peer record with type0x11 and state0, then enter merge processing."},
+    {"address": "0x012db92c", "size": 340, "stock_sha256": "5eb9b6f6919f894aaba14d6c968e71fe664b3db1bddd3c73f9540a573616a322", "behavior": "State9 merge switches BSS, associates peer at state2, publishes connection and enters state10; releases parent channel request."},
+    {"address": "0x012e2ef0", "size": 720, "stock_sha256": "31a18696518b13b7bf8935d06700378e1b25b60fc6993674596e329eda983dd8", "behavior": "Select PHY/basic/operational rates from target tables; generate BSSID from three low16 entropy outputs, clear multicast bit and set locally-administered bit; preserve existing generated address; build IBSS/privacy/preamble capabilities."}
+  ],
+  "byte_confirmation": {
+    "reason": "All five roots carry NONMATCHING markers at the source pin; their instruction extents were read from the target image, not accepted solely from C.",
+    "input": "owner-supplied private-data/analysis/x-m1-1.50/lz/plain-01100000.bin",
+    "image_base": "0x01100000",
+    "section_base": "0x011e0000",
+    "section_size": "0x26a5e0",
+    "section_sha256": "0cf67b7221c3b0755092da0ae4c6d6fb817f2b32771ee53dff691fc59b28770c",
+    "tool": "arm-none-eabi-objdump 2.46 -D -b binary -m arm --adjust-vma=0x01100000 --start-address=START --stop-address=END IMAGE",
+    "inspected_extents": [
+      "0x012da220..0x012da2e8", "0x012db92c..0x012dba80", "0x012dc300..0x012dc928", "0x012e2ef0..0x012e31c0",
+      "0x0129ca40..0x0129cfe8", "0x0129d1b8..0x0129d410", "0x012e1f40..0x012e2260", "0x012e58e8..0x012e5ce0", "0x012e6674..0x012e66a4", "0x012dcdb4..0x012dce40",
+      "0x0129d4e0..0x0129d650", "0x012e9290..0x012e9408", "0x012f0c84..0x012f0cc8",
+      "0x012f5930..0x012f5ac0", "0x012f72a0..0x012f7720"
+    ],
+    "distilled_device_contract": [
+      "0x16: 80-byte BSS payload with media-state1, operation-mode2, SSID-length3, SSID4, BSSID36, operational-rates44, basic-rates46, station-index48, PHY51, authentication52, encryption53, available-PHY54, local-MAC55 and radio-band/channel65/66.",
+      "0x1c: action1 uploads beacon information elements only. Header payload action0, network-index1, capabilities4, IE-length6, IEs8. Stock builder strips the 36-byte management/fixed header before upload. Action2 stops beacon transmission with a six-byte payload.",
+      "0x19: creation timing payload8, beacon-interval2 and ATIM4. 0x1a: merge timing payload12, association-id2, beacon-interval4 and ATIM6.",
+      "0x17: peer-state payload40, index0, type1, MAC2, AID8, listen-interval10, network12, PHY13, desired-rates14, operational-rates16, QoS18, UAPSD-support19, state20, MCS21/22, AMPDU23, HT-capabilities24, HT-extended26, beamforming28, antenna-selection32, opaque station3d metadata33, response-request34, UAPSD35 and service-period36.",
+      "Shared peer body serialization accepts canonical NetIndex, PeerIndex and PeerState from vendor_wireless_peers. The association parent supplies the allocated pool lease index; IBSS has no implicit peer-slot0. Secondary callers can request the raw40-byte command body below their owned transport header/sequence engine.",
+      "Source-bound peer kinds: independent0x11, secondary client0x22 (write0x012f76dc..0x012f76e0), access point0x41 and P2P access point0x42 (choice0x012f5a2c..0x012f5a58). The secondary access-point setup does not establish a0x21 peer kind.",
+      "0x18: peer removal payload8, station-index0 and MAC2.",
+      "0x1d: 16-byte radio update, also embedded at BSS payload64. Network0, band1, primary-channel2, secondary-channel3, ERP-protection4, HT-protection5, non-greenfield6, RIFS-protection7, basic-STBC8, operation-protection10, operation-information12, short-preamble13, short-slot14 and fixed0x72 at15.",
+      "0x21: EDCA payload44, four records10 bytes each: contention-min0, contention-max2, TXOP4, AIFSN6 as little-endian u16, reserved8 and admission-required9. Station network-index40, QoS41, reserved42/43. Stock untouched padding is initialized to zero.",
+      "Independent merge admission uses scan-record0x59 produced from RX descriptor byte5 bit3 at0x012f0ca4..0x012f0cc0. A different BSSID needs that physical indication; this is not a comparison against a fabricated local TSF. The association parent owns admission and physical RX metadata.",
+      "Alone timeout0x012dcdb4 releases parent channel and transitions state8 to search1. Timer scheduling and actual scanning belong to the association parent."
+    ]
+  },
+  "ownership": {
+    "engine": "vendor_wireless_station_driver_association_ibss.rs",
+    "tests": "vendor_wireless_station_driver_association_ibss_tests.rs",
+    "parent": "vendor_wireless_station_driver_association.rs",
+    "shared_engines": "Parent owns entropy acquisition, timer identities/20000ms scheduling, stale physical completion tokens, channel request/release, scan selection, HT/WMM negotiation and network publication. This engine consumes typed entropy, negotiated peer parameters and BssRadioParameters and emits concrete device packets or closed timer/publication/search effects. The same BSS/radio/timing/peer-removal/EDCA serializers are exposed to the infrastructure association parent; the canonical StationElements engine projects negotiated HT operation into BssRadioParameters.",
+    "peer_identity": "vendor_wireless_peers owns PeerIndex, NetIndex, PeerState and PeerPool. IBSS imports those types without aliases or reexports. Merge requires an explicitly supplied caller-owned peer index; successful removal clears it. ready_for_merge exposes the exact merge admission predicate, and set_peer rejects replacement throughout an in-progress merge, including gaps between physical commands. The raw peer body and framed command share one field encoder.",
+    "physical_failures": "Failed commands return the physical error, retain the first failure and expose stop-beacon/peer-removal/BSS-disconnect cleanup. Failed disconnect does not report an inactive device. No automatic command retry or fake device success is introduced.",
+    "compatibility_correction": "Stock assertion loops and fire-and-forget submission become explicit errors and completion-gated publication. Recreating a torn-down BSS retains its generated address; fresh construction requires caller-supplied entropy."
+  },
+  "synthetic_test_provenance": "Tests construct independent beacon bytes and explicit wire expectations from the distilled X-M1 layouts. No captured frame, firmware bytes or proprietary source is redistributed.",
+  "verification": "Behavioral tests written but not run. No build, formatter, lint, native runner, SDK, emulator or camera operation was performed. Source inspection and objdump reads are the evidence; runtime qualification belongs to the integration owner."
+}

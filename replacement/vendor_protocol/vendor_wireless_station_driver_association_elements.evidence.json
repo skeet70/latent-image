@@ -1,0 +1,66 @@
+{
+  "target": "Fujifilm X-M1 1.50",
+  "status": "source-inspected-and-target-byte-confirmed",
+  "source_repository": "x70view",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "sources": [
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_012d94a4.c",
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_012e5ce0.c",
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_012aa8f8.c",
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_0129a52c.c",
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_012e157c.c",
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_012eecf0.c",
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_012e3ff0.c",
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_012a272c.c"
+  ],
+  "byte_confirmation": {
+    "input": "private-data/analysis/x-m1-1.50/lz/plain-01100000.bin",
+    "base": "0x01100000",
+    "tool": "arm-none-eabi-objdump 2.46",
+    "ranges": [
+      ["0x012e7568", "0x012e822c"],
+      ["0x012e822c", "0x012e8838"],
+      ["0x012ec2ac", "0x012ecc18"],
+      ["0x012aaa60", "0x012ab610"],
+      ["0x012ab610", "0x012ab918"],
+      ["0x012a5b48", "0x012a5be0"],
+      ["0x012e9290", "0x012e9408"],
+      ["0x0129d4e0", "0x0129d5c4"],
+      ["0x012e6f9c", "0x012e72e4"],
+      ["0x012e17b4", "0x012e1a94"],
+      ["0x012f0b90", "0x012f0fe8"],
+      ["0x012e59b0", "0x012e5a60"],
+      ["0x012a6cf8", "0x012a6d0c"]
+    ],
+    "source_status": "Functions marked NONMATCHING were interpreted against actual target instructions, not accepted from draft names or types."
+  },
+  "contracts": [
+    "012e7568 gates HT capability encoding on local and peer HT flags; 012e7c04 emits 26 bytes with one-stream MCS support, configured 20/40 MHz and short-GI mask.",
+    "012ec2ac is WPA, not WMM: modes 3/4 emit the Microsoft WPA OUI, version one and one selected group/pairwise/AKM suite each.",
+    "012e763c invokes 012e7ed8 and emits Extended Capabilities element 127, length one. It is not the HT Operation element 61 builder.",
+    "012ab610 emits WMM Information only for a WMM-capable peer. UAPSD access categories reverse the intersection of delivery and trigger flags. Service-period encodings are zero, 0x20, 0x40 and 0x60.",
+    "012ec624 emits RSN for modes 6/7 and extends its body from 20 to 38 bytes when a cached PMKID exists. Raw supplicant information elements remain owned by parent 012ed91c handling.",
+    "012e822c consumes HT capabilities, HT operation, channel, ERP and overlapping-BSS scan parameters. 20 MHz clears operation secondary-channel bits. Reserved secondary-channel value two retains the previous negotiated offset. Scan interval is clamped to ten seconds and converted to milliseconds.",
+    "012ab3e8 recognizes WMM information or parameters and retains AP UAPSD advertisement bit seven. 012aad70 and 012aafdc consume response parameters, decoding AIFSN, ACM, contention exponents and little-endian TXOP. Connected-beacon parameter updates depend on the parameter-set counter.",
+    "012a5b48 initializes WMM and UAPSD gates to one. Security selection and width are explicit typed configuration, not guessed from element names.",
+    "012e9290 projects the negotiated secondary-channel, ERP, HT protection, non-greenfield, RIFS, basic-STBC, operation-information, short-preamble and short-slot fields into the retained radio command. radio_parameters returns the shared IBSS serializer type; peer capabilities initialize short-preamble support.",
+    "0129d4e0 publishes negotiated EDCA as command 0x21 Set with a 44-byte payload: four ten-byte records containing little-endian CWmin, CWmax, TXOP and AIFSN, a zero byte and ACM; byte 40 is the interface, byte 41 is QoS enabled. The shared IBSS serializer owns packet construction; parent association dispatches these effects.",
+    "012e6fac maps Supported Rates and Extended Supported Rates to the target table at 012e6f9c: 2,4,11,22,44,66,12,18,24,36,48,72,96,108,127 in half-Mbps wire units. The high bit marks basic rates; unknown optional rates are ignored and unknown basic rates reject negotiation. The first Supported Rates element shorter than 16 bytes and first Extended Rates element are selected.",
+    "012efef4 derives peer PHY flags from band, ERP presence, HT presence, operational CCK/OFDM masks and basic rate sentinel 0x4000. 012e17b4 intersects operational rates with local mask 0x3fcf and peer PHY with local flags, clearing HT unless cipher mode is 1,6 or 7. PhySet and RateMask carry these typed masks; the parent applies cipher policy before negotiation.",
+    "012e58e8 serializes negotiated PHY at command 0x17 payload byte 13, desired rates at bytes 14..16 and the peer BASIC mask at bytes 16..18. The last field is not the operational rate mask. The shared rate_masks helper supplies the same table mapping to the IBSS encoder without inventing a channel.",
+    "Parsing is bounded and transactional: truncated TLVs and invalid band/channel combinations return typed errors without replacing committed negotiation. Cancel clears per-peer negotiated state and returns a timer cancellation effect."
+  ],
+  "integration": {
+    "module": "association::elements",
+    "frame_builder": "association::frames::Packet",
+    "request_order": "append_before_security, parent raw supplicant IE, append_after_security",
+    "timer_effects": "Parent association engine consumes TimerChange and owns actual scheduler lifecycle.",
+    "peer_projection": "Parent serializes typed negotiated HT/WMM fields into the existing IBSS-owned PeerParameters command."
+  },
+  "tests": {
+    "fixture_provenance": "Synthetic IEEE 802.11 information elements constructed in Rust; no firmware bytes or captured frames are included.",
+    "file": "vendor_wireless_station_driver_association_elements_tests.rs",
+    "execution": "Not run by assignment."
+  },
+  "qualification": "No build, test, lint, formatter, native case, SDK or camera operation was performed. Static source and instruction inspection does not establish runtime qualification."
+}

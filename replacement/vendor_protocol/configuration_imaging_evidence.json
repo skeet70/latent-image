@@ -1,0 +1,57 @@
+{
+  "decomp_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "images": {
+    "stream-0016025c": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
+    "stream-002c025c": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"
+  },
+  "source": [
+    "decomp/firmwares/xm1-150/app/connectivity/ptp/adjustment_operations.c:53-149",
+    "decomp/firmwares/xm1-150/app/connectivity/ptp/adjustment_operations.h",
+    "decomp/firmwares/xm1-150/app/imaging/statistics/tu_00dbf764.c:633-643,688-710",
+    "decomp/firmwares/xm1-150/app/drivers/strobe/tu_0069dfb0.c:79-215"
+    ,"decomp/firmwares/xm1-150/app/imaging/statistics/adjustment_sample_helpers.c"
+    ,"decomp/firmwares/xm1-150/app/imaging/statistics/adjustment_samples.c"
+    ,"decomp/firmwares/xm1-150/app/settings/profile_tables.c"
+    ,"decomp/firmwares/xm1-150/app/settings/profile_geometry_scaling.c"
+    ,"decomp/firmwares/xm1-150/app/settings/profile_rectangle_geometry_queries.c"
+    ,"decomp/firmwares/xm1-150/app/settings/tu_00ef4518.c"
+    ,"decomp/firmwares/xm1-150/app/platform/osal/interface_tasks.c:53-60"
+    ,"decomp/firmwares/xm1-150/kernel0/src/cpu/cache_maintenance.c"
+  ],
+  "authenticated_original_extents": [
+    "0x0069e188..0x0069e2a0",
+    "0x0069e4a4..0x0069e640",
+    "0x00dc0dd8..0x00dc0e08",
+    "0x00dc0edc..0x00dc0f3c",
+    "0x00dc210c..0x00dc252c",
+    "0x00dc257c..0x00dc25a4",
+    "0x00dc3a80..0x00dc3b08",
+    "0x00dc0018..0x00dc02e4",
+    "0x00fe3cbc..0x00fe3d08",
+    "0x00ef5114..0x00ef592c",
+    "0x00ef6700..0x00ef673c",
+    "0x00ef6db0..0x00ef6df0",
+    "0x00eccabc..0x00eccd7c"
+  ],
+  "source_closed_queue_actions": [76, 77, 81, 82, 83, 84, 88, 91],
+  "incomplete_queue_actions": [75, 78, 79, 80, 85, 86, 87, 89, 90, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101],
+  "shared_dependencies": {
+    "configuration_actions_low": ["ActionCompletion", "ConfigurationKey"],
+    "xm1_power_lifecycle": ["charge_timers::transmit_charge", "charge_timers::ChargeTransport", "serial_driver::StatusResidue", "osal::TimerReload", "primitives::ServiceStatus"],
+    "native_owned_exports": ["xm1_power_serial_open", "xm1_power_serial_configure", "xm1_power_serial_write_with_residue", "xm1_power_serial_status", "xm1_power_serial_read", "xm1_power_serial_stop", "xm1_power_serial_close", "xm1_power_delay_us_with_residue"]
+  },
+  "packet_behavior": {
+    "keys": "Consecutive halfwords 0x81..0x8b at original0xdc2584, not selector bytes",
+    "read20": "Read9 serial bytes, publish reply1..7, zero keys8..10; reply8 is discarded",
+    "transport_errors": "Originaldc210c ignores send/read return codes and publishes service success for valid packet kinds",
+    "read_programming": "Endpoint10 mode2; configure100; drain initial available words; four200us delays; GPIOclock0x30000 and direction0x10000; transmit0xaa per reply byte; restore direction0x10001 and clock0x30001; delay40; stop and close; gate0x40000",
+    "first_receive_write_residue": "0x10000 from the immediately precedingGPIOdirection store, not the earlier timer result",
+    "completion": "Synchronous physical status reads, no CPU completion callback, cancellation or late event admission"
+  },
+  "wrapper100_correction": "Queue101 wrapper0xeccd2c reads configuration byte key0x81. Value1 writes processing state4 at0x015c20b0. Both branches then call0x00dc38d4 with keys0x81..0x85. Target69f8fc alone is not this action closure, and no debug executor is called.",
+  "statistics_checkpoint": "Queue88 dc13ec owns both actual parameter providers fe3cbc/fb1820, fixed divisor4, four-plane arithmetic and configuration word publication. Queue85 dc0f3c CPU statistics, 6x6 raster/grid math and profile-table decoders are implemented but not qualified: selected profile relative geometry nonmatching ef5d44 still needs direct original-byte confirmation, and integration has not run.",
+  "capture_layout_checkpoint": "prepare_output owns dc14bc descriptor construction for authenticated X-M1 fixed feature count1 and split flag0. Higher capture orchestration and EFbe74/efbf58/efc1f0/efc948 request constructors remain unfinished.",
+  "cache_checkpoint": "Owns740e3c alignment/alias/extent law and42634 finite line clean-invalidate loop. Whole-cache path reuses Power-owned xm1_power_dcache_clean_invalidate_all. Source only, no integration or qualification.",
+  "remaining_consumers": ["high-level capture sequence/single/average and EFbe74/efbf58 request construction", "channel action78 actor around canonical imaging_driver66, including DMA lifetime and cancellation", "queue85 original-byte relative geometry confirmation", "image service requests and orchestration0x00db3eec/0x00db3f64/0x00db42c0", "record actors0x00ef8e7c/0x00ef8ed0/0x00ef9510", "current-exposure actor0x00e66e50", "common output0x00dc38d4"],
+  "qualification": "Source checkpoint only. Parent owns module/build integration and common result publication. No build, test, lint, format, SDK, USB or camera execution performed. Full27-action acceptance remains incomplete."
+}

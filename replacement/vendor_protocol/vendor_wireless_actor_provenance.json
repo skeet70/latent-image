@@ -1,0 +1,46 @@
+{
+  "target": "Fujifilm X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "section": "overlay47",
+  "section_base": "0x011e0000",
+  "section_size": "0x26a5e0",
+  "section_sha256": "0cf67b7221c3b0755092da0ae4c6d6fb817f2b32771ee53dff691fc59b28770c",
+  "grounding": "Pinned exactness index plus authenticated original A32 bytes; NONMATCHING drafts are navigation aids only.",
+  "implemented_cpu_slices": [
+    {"entry": "0x012ae1ec", "size": 384, "sha256": "facdd6568cd7b200248272369f145b02e37f94c4512dc21469ad12135d2d4cdf", "scope": "Station address and signal projection; byte offset 10, signal offset 61, output stride 12 with untouched padding."},
+    {"entry": "0x00dbd458", "size": 400, "sha256": "8049b1135f0b4482f8fa8b70188a751ed8c7af35607e6a108401f73b85c42ee4", "scope": "Exact vendor channel-command boundary decoding, mode-before-selection guards, transmit-rate sign encoding, deferred channel validation and ordered LAN/radio intent. Concrete service execution is composed separately."},
+    {"entry": "0x012ae36c", "size": 96, "sha256": "1fdc55b4c97e2a4de5aeeefc3e87e0c8af83e5e33cecb2a244a727d58dbbd6ab", "scope": "Six-byte service address read."},
+    {"entry": "0x012ae72c", "size": 136, "sha256": "fbbc05a04cc7758d7f415f5f71f73ec146d1642ecd30b00e88c364225309885b", "scope": "Mode-before-cancellation guards and 32-byte configuration storage."},
+    {"entries": ["0x012ae6b8", "0x013d7eec"], "scope": "Synchronous scan projection through owned ProtocolWirelessNetwork parser; mode and cancellation guards, maximum 64 rows, stale count and partial flag clearing for an empty list."},
+    {"entries": ["0x012add48", "0x012ae3cc"], "scope": "Connection completion code projection and caller-readable state."},
+    {"entry": "0x012ad460", "size": 2012, "sha256": "f84897012c9545a0bcf91e35b491f6bc88279cee1bf8d255213efdab76135c9d", "scope": "Parameter ordering and packing only; mode entry and exit are not yet closed."},
+    {"entries": ["0x012997d0", "0x012938f0", "0x012a011c", "0x012a03a4", "0x012a0538", "0x012a0fb4", "0x012d9230"], "scope": "Concrete radio parameter FIFO writes, sequence allocation, class-four credit accounting, physical/logical outcome distinction."},
+    {"entries": ["0x012ac698", "0x012aca24", "0x012d8e94", "0x012d8f84", "0x012d909c"], "scope": "Physical power register handshake only; software teardown, adapter initialization, and host interrupt registration remain separate CPU work."}
+  ],
+  "remaining_cpu_frontiers": [
+    {"entries": ["0x012b17ac", "0x012af3ac", "0x012af80c"], "scope": "Finish the closed native driver entry, typed stable runtime registration, actual task/event creation and source-bound stop acknowledgement. No xm1_wireless_driver_task implementation or complete WirelessRuntime composition is present in this checkpoint."},
+    {"entries": ["0x012ae444", "0x012ae4f8", "0x012ae62c", "0x012ae7b4"], "scope": "Join the actual protocol controller to canonical station, AP, radio, WPS and service engines. The current vendor_wireless_service module implements channel-command decoding, not the complete service runtime."},
+    {"entries": ["0x01292024", "0x01292dcc"], "scope": "Complete radio boot and RTOS object ownership through canonical Power/RTOS providers, then consume the concrete download and adapter engines."},
+    {"entries": ["0x012a32dc", "0x012a3f9c", "0x012a08b8", "0x012a0fb4"], "scope": "Finish RX framing, real TX serialization/PID ownership, zero-copy aggregate packet leases, the concrete Host pump and cross-engine event routing. Preserve physical results separately from source-defined logical completion."},
+    {"entries": ["0x012e50b0", "0x012e5540", "0x012e55d0", "0x012e56c0"], "scope": "Integrate one canonical generation-bound peer pool across association, AP, secondary BSS, hardware quota and receive reorder state; finish peer teardown before releasing its lease."},
+    {"entries": ["0x012da530", "0x013dfb20", "0x012fc0a0", "0x012fcd98"], "scope": "Complete association, AP authenticator, secondary-BSS and security-countermeasure source, including shared peer/entropy/packet ownership and the actual firmware event consumers."},
+    {"entries": ["0x013e98f8", "0x013e99b8", "0x013edbcc", "0x013ef2f0"], "scope": "Complete network86/network87 task composition, concrete mode/interface state machines and source-bound socket/LAN readiness notifications. Queue admission is not completion."},
+    {"entries": ["0x013f7428", "0x013fb260", "0x013fc110"], "scope": "Complete remote protocol dispatch, non-session opcode consumers, interface catalog execution and actual canonical filesystem/media providers. No USB identity substitution or opaque protocol executor is accepted."},
+    {"entries": ["0x0071cdf0", "0x0071cd30", "0x0071f708", "0x011c26dc", "0x011c8238", "0x011cb60c", "0x011cb524", "0x011c7fd0"], "scope": "Canonical non-wireless filesystem enumeration/file I/O and JPEG/RAF/movie/thumbnail CPU providers are required by remote object/catalog consumers. Their complete runtime joins are not established here."},
+    {"entries": ["0x014055e8", "0x01405474"], "scope": "Finish reached iperf consumers and the remaining concrete TCP/socket option/task integration; preserve byte-grounded dead option and IPv6 rejection behavior rather than inventing unsupported feature paths."}
+  ],
+  "crypto_build_dependency": {
+    "crate": "wireless_crypto/Cargo.toml",
+    "lock": "wireless_crypto/Cargo.lock",
+    "derivation": "wireless_crypto.nix",
+    "rust_extern": "xm1_wireless_crypto",
+    "rlib": "lib/libxm1_wireless_crypto.rlib",
+    "transitive_rlibs": "lib/deps/*.rlib",
+    "host_selector": "host = true",
+    "arm_target": "armv7r-none-eabi",
+    "arm_cpu": "cortex-r4f",
+    "qualification": "Cargo generated the immutable source lock without compilation. Neither derivation nor its dependent runtime has been built or tested."
+  },
+  "verification": "Source inspection and overlay section identity only. No builds, tests, lint, formatter, SDK, camera or USB operations.",
+  "qualification": "Incomplete wireless actor; these slices do not close configuration queue 40 through 45 or the vendor protocol."
+}

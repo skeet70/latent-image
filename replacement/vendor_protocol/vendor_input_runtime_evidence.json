@@ -1,0 +1,45 @@
+{
+  "status": "source-investigation",
+  "decomp_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "images": {
+    "stream-0016025c": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
+    "stream-002c025c": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"
+  },
+  "actual_action15": {
+    "entry": "0x00dbb16c",
+    "extent_end": "0x00dbb258",
+    "stop": "Zero enabled word0x014e59e0, write six low-halfword accumulator bytes to caller keys1..6, signal success",
+    "restart": "Call0x00723ce8(20), clear accumulator words0x014e59e4/0x014e59e8/0x014e59ec, set enabled word0x014e59e0=1, call0x006a4340(0x00dba5c0), signal success",
+    "invalid_selector": "Signal0x80000000 and return-255",
+    "absent_calls": ["0x009423ac", "peripheral_parameter_service_boolean"],
+    "evidence": "Authenticated original A32 instructions0x00dbb16c..0x00dbb254"
+  },
+  "actual_callback": {
+    "entry": "0x00dba5c0",
+    "extent_end": "0x00dba614",
+    "behavior": "When enabled word is nonzero, add incoming r0/r1/r2 to the three wrapping accumulator words; otherwise return without mutation"
+  },
+  "actual_registration": {
+    "entry": "0x006a4340",
+    "extent_end": "0x006a4360",
+    "behavior": "Store incoming callback word to0x0089f800 and return",
+    "store_instruction": "0x006a4350:0xe5830000"
+  },
+  "actual_nearby_input_engine": {
+    "initializer": "0x006a406c..0x006a42a4",
+    "periodic_scanner": "0x006a3b4c..0x006a3f1c",
+    "initializer_effects": "Copies two-pin defaults and ADC17 threshold defaults, reads configuration threshold pairs, samples pin/ADC state, registers timer1 period2 callback6a3b4c through6b795c once, registers service event4 callback6a3f1c and event32 callback6a3ab0 through6c5b54",
+    "scanner_effects": "Two-pin transition and ADC17 stable-transition event production, activity flags and idle suppression",
+    "callback_observation": "Inspected initializer and periodic-scanner instructions do not read registered triple callback cell0x0089f800"
+  },
+  "reference_search": {
+    "raw_literals": "Aligned32-bit literal words in all mapped .bin units were scanned for pointers0x0089f7b0..0x0089f820; zero matches",
+    "constructed_addresses": "MOVW/MOVT constructed address references near the cell, immediate-offset loads/stores, register-offset loads/stores and propagated literal/immediate ADD/SUB addresses in both decoded main images identify only the store at6a4350 for exact0x0089f800",
+    "overlays": "MOVW/MOVT construction scan of overlay44, overlay46 and overlay47 finds zero constructed pointers within0x0089e800..0x008a0800",
+    "callback_identity": "Direct0x00dba5c0 literal/branch and matching MOVW#0xa5c0 plus MOVT#0xdb search identifies only action15 registration in the decoded main images; no direct call",
+    "limits": "Linear static address propagation is not a complete indirect alias analysis; dynamically supplied pointers, self-modifying code and additional boot-installed consumers are not excluded"
+  },
+  "excluded_source_aid": "Unqualified decomp/app/drivers/input/input_initialize_state.c at9423ac and key_accumulate_relative_input.c describe generic X70 source, not authenticated X-M1 action15 reachable behavior. They are not implementation authority for this target.",
+  "acceptance": "Real X-M1 triple-sample invoker remains unidentified. No input runtime is fabricated and source inspection does not qualify action15 end-to-end closure.",
+  "execution": "Image SHA256 authentication and static source/binary inspection only; no build, test, lint, formatter, native execution, SDK or camera operation"
+}

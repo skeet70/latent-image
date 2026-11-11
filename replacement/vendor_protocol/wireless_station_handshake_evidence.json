@@ -1,0 +1,57 @@
+{
+  "status": "source-inspected",
+  "target": "Fujifilm X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_repository": "x70view",
+  "sources": [
+    {
+      "path": "decomp/firmwares/xm1-150/app/third_party/hostap/src/rsn_supp/wpa_rsn_handshake.c",
+      "behavior": "Replies preserve descriptor version, protocol descriptor type, replay counter, and WPA key length. RSN replies clear key length. Message two carries the negotiated association security element."
+    },
+    {
+      "path": "decomp/firmwares/xm1-150/app/third_party/hostap/src/rsn_supp/wpa_rsn_handshake_rest.c",
+      "symbols": {
+        "wpa_supplicant_install_ptk": "0x0132a634",
+        "wpa_supplicant_install_gtk": "0x0132aad4",
+        "wpa_supplicant_process_1_of_2_wpa": "0x0132bdb8",
+        "wpa_supplicant_decrypt_key_data": "0x0132c838"
+      },
+      "behavior": "TKIP uses 32-byte installed temporal material with swapped Michael transmit/receive halves. Group lengths are WEP40 5, WEP104 13, CCMP 16, TKIP 32. WEP has no receive sequence. RSN pairwise receive sequence starts at zero; WPA uses key RSC. RSN GTK is encrypted KDE data; WPA GTK is raw RC4-drop256 or AES-wrapped material with header key index. AES key unwrap uses existing canonical crypto."
+    },
+    {
+      "path": "decomp/firmwares/xm1-150/app/third_party/hostap/src/crypto/md5.c",
+      "symbol": "hmac_md5_vector",
+      "address": "0x013bdd58",
+      "behavior": "RFC 2104 HMAC-MD5 for descriptor version 1."
+    },
+    {
+      "path": "decomp/firmwares/xm1-150/app/third_party/hostap/src/crypto/rc4.c",
+      "symbol": "rc4_skip",
+      "address": "0x013bf1a0",
+      "behavior": "RC4 permutation scheduling and skipped stream prefix. EAPOL key decryption supplies IV concatenated with KEK and skip 256."
+    }
+  ],
+  "owned_api": {
+    "supplicant": "RsnSupplicant::new(local, SelectedAccessPoint, MasterKey, nonce32); association_elements(); phase(); receive(peer, frame); begin_rekey(fresh_nonce32)",
+    "transaction": "HandshakeTransaction { reply, pairwise, group, completes }; installs use KeyMaterial::{Wep,Tkip,Ccmp}",
+    "receive_failure": "HandshakeError::disconnects() distinguishes authenticated nonce, key-length, parsed key-data and security-element failures from frame drops. RSN RX-gate decrypt errors return nonfatal Decryption; WPA group decrypt errors remain fatal KeyData. Apply this policy only to receive errors, not constructor or begin_rekey errors.",
+    "rekey": "Well-formed newer message one in Complete returns NonceRequired without mutation. StationRuntime obtains a physical random nonce, calls begin_rekey, then replays that bounded deferred frame.",
+    "legacy": "crypto::legacy::{md5(fragments), hmac_md5(key,fragments), rc4_skip(key,skip,data)}",
+    "canonical_crypto_dependency": "PairwiseKeys::temporal_tkip() returns the raw final 32 PRF bytes. Other SHA1, HMAC, PRF, constant-time authenticator comparison and AES unwrap primitives remain canonical."
+  },
+  "intentional_security_policy": [
+    "Authenticator comparison uses the canonical equal_authenticator function, not short-circuit byte equality.",
+    "Authenticated installed-frame replay counters must strictly increase; message three cannot reinstall a completed PTK.",
+    "Fresh pairwise rekey nonce comes from the concrete station runtime entropy boundary. No callback supplies cryptographic decisions.",
+    "Key Debug formatting redacts WEP, TKIP and CCMP material."
+  ],
+  "synthetic_test_provenance": [
+    "RFC 1321 MD5 vectors",
+    "RFC 2202 HMAC-MD5 vectors",
+    "RFC 6229 RC4 key 0102030405 offsets 0 and 256",
+    "Synthetic authenticator-generated WPA/TKIP exchange with WEP40, WEP104, TKIP and CCMP group keys",
+    "Synthetic RSN TKIP RC4 GTK KDE and RSN CCMP AES-wrapped GTK exchange",
+    "Authenticated nonce/security-element mismatch, wrong MIC, descriptor mismatch, peer mismatch, replay rejection and fresh nonce rekey behavior"
+  ],
+  "verification": "No builds, tests, linters, formatters, native execution, SDK operations or live camera operations were run. Behavioral tests are written but unrun. Source inspection is not runtime qualification. StationRuntime and concrete station driver integration are owned by the station peers."
+}

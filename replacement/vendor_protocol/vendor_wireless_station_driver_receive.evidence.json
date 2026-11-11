@@ -1,0 +1,45 @@
+{
+  "target": "Fujifilm X-M1 1.50 overlay47",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_units": [
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_012a272c.c",
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_012d8810.c",
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_0129e740.c",
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_0129a52c.c"
+  ],
+  "source_status": "NONMATCHING reconstructed C; facts below checked against actual instructions",
+  "image": "private-data/analysis/x-m1-1.50/lz/plain-01100000.bin",
+  "instruction_tool": "/nix/store/ld6aihszv7hhaarrirxi3khvl5z3fifx-arm-none-eabi-binutils-2.46/bin/arm-none-eabi-objdump",
+  "instruction_arguments": "-D -b binary -m arm --adjust-vma=0x01100000 --start-address=START --stop-address=END IMAGE",
+  "inspected_ranges": [
+    ["0x0129a6c8", "0x0129a708"],
+    ["0x0129aac0", "0x0129ad50"],
+    ["0x0129ad50", "0x0129b124"],
+    ["0x012a272c", "0x012a2810"],
+    ["0x012a32dc", "0x012a3c58"],
+    ["0x012a3f9c", "0x012a4504"],
+    ["0x012a45e8", "0x012a4768"],
+    ["0x012a4c60", "0x012a4ddc"],
+    ["0x012d909c", "0x012d9230"]
+  ],
+  "claims": [
+    "Receive packet length is LE16 at0; type is low2 bits of byte2. Event packets use8-byte envelope: event id4, response sequence5, body8 onward.",
+    "Data/management payload starts12+(byte4&3); byte4>>2 supplies header length. Peer/station id is byte8, signal is byte9. Status is32 bits at align4(packet_length). Each aggregate packet occupies align4(packet_length+4).",
+    "Interrupt snapshot counts are LE16 at12/14; each FIFO has16 LE16 packet lengths at16/48. Port0 reads register30, port1 register34. Capacity limit is0x9c30 and the next packet must leave remaining capacity positive.",
+    "Enhanced interrupt snapshot reads register10 length58hex. Credits are eight bytes at4. Credit presence synthesizes statusbit0; enabled mailbox words50/54 synthesize bit31. The one-pass service removes statusf0 when statuse0 is nonzero, then dispatches mask8 abnormal-status register18 read, high status bits inert consumer, mask1 credits, mask6 receive, in that order. Credits and consumed per-port counts clear before reuse.",
+    "IRQ disable writes CMD52 function1 register4 value2. Restore writes CMD52 value1 when previously disabled without a pending sleep request; a pending sleep request writes CMD53 register4 word101 when previously disabled or100 when already enabled.",
+    "The physical helper012d909c selects CMD53 function1 fixed-address FIFO and rounds transfers of at least512 bytes to512-byte blocks. Smaller reads use byte mode.",
+    "Event1 status at body1 maps0 to normal completion,1 to failure,2 to unsupported; registry lookup uses the response sequence at event byte5. Other command-response event cases invoke the source-owned completion associated with that sequence.",
+    "Events15/18/20 route scan/channel/roaming CPU respectively. Event17 body0 is the transmitted device packet id and body1 is the source-owned TX continuation status. Device packet ids are not descriptor ids.",
+    "Root012a4c60 is a firmware-ownership handshake, not packet decoding: poll function1 register4 bit100, clear firmware-owned flag on observation. A low-byte-zero iteration count writes200 to register4. Each unsuccessful poll delays1. Elapsed wrapping ticks greater than8192 or removed/stopped state terminate failure.",
+    "Root012a45e8 returns RX descriptors to backed or unbacked free queues depending on packet-buffer ownership. The owned parser provides transient borrowed views and explicit buffer release. Canonical service-host aggregate pools own non-Clone packet leases and buffer reuse; reorder retains those leases without copying payload bytes."
+  ],
+  "owned_interfaces": {
+    "physical": "ReceivePlan + ReceiveTransfer produce canonical sd_controller::Request values and retain a borrow until the closed host pump returns its physical receipt.",
+    "completion": "PendingCommands registers the actual transmitted header and typed owner, correlates parsed device response sequences, and returns a private-construction completion. Cancellation removes exactly one owner; teardown removes all owners eagerly.",
+    "gate": "OwnershipGate emits canonical register requests, source-bound delays and an owned terminal result.",
+    "interrupt": "SnapshotRead emits the actual physical88-byte request and typed ordered CPU actions. InterruptControl emits source-bound disable/restore register requests.",
+    "consumers": "Nested events and reorder engines and canonical association/secondary/adapter consumers own the event-specific continuations. No firmware code pointer crosses the boundary."
+  },
+  "verification": {"tests": "behavioral tests written, unrun", "build": "not run", "native": "not run", "live": "not run"}
+}

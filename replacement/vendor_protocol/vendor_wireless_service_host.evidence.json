@@ -1,0 +1,35 @@
+{
+  "target": "Fujifilm X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "status": "incomplete-source-implementation",
+  "implemented": [
+    "HostPump binds private monotonically allocated operation identities to concrete Runtime, RadioBoot, upper BootRuntime and aggregate receive transfers through canonical sd_controller::ControlPlane::begin and ControlledTransaction.",
+    "HostTransfer owns polling, IRQ notification collection, explicit cancellation, completion and drop cancellation. Completion releases the canonical controller lock before its correlated receipt is applied to the owned CPU consumer.",
+    "Physical host Completion, admission failure and abandoned transfer are distinct observations. Radio CMD53 physical write outcomes remain separate from source logical outcomes; register reads retain the actual pump scratch bytes. No synthetic firmware acceptance is generated.",
+    "NativeDriverSynchronization consumes initialized typed handles and directly calls canonical Power semaphore wait/signal ABI. It does not allocate semaphores or fabricate startup readiness.",
+    "ReceivePool owns externally supplied disjoint aggregate buffers. Non-Clone write and packet leases carry slot generations; a sealed ReceiveRead receipt binds publication to its physical aggregate generation. Last packet drop returns the aggregate to the fixed-capacity free queue.",
+    "Receive publication consumes the canonical validated ReceivePlan extents and Packet parser. Ethernet and management payloads are not copied; transient borrowed Frame values do not escape as ownership. PacketLease wire/payload borrows cannot outlive the owning lease.",
+    "DriverStopped is issued once after actual pump cancellation/quiescence, hardware cancellation reaping, Runtime terminal or idle phase, and adapter command and completion queue drainage. Root native task exit and kernel task deletion are separate obligations.",
+    "RadioSdioAttachment propagates canonical ClockProgress delay tokens. The native advance helper executes the actual Power task delay for the ten-tick output-enable retry."
+  ],
+  "actual_provider_dependencies": [
+    "sd_controller::ControlPlane,Host,ControlledTransaction,Mmio,OperationLock,InterruptRouter,ClockPower and ClockProgress::delay_ticks; provider chain a02b79eb,751f9566,f8245704,01af7a9e,05f035e6",
+    "vendor_wireless_lifecycle_runtime::RadioRuntime and concrete parameter/register/station/adapter action buffers",
+    "vendor_wireless_boot::RadioBoot and vendor_wireless_boot_runtime::BootRuntime, concrete request/receive/interrupt binding and typed abort_physical ingress; boot owner supplies actual initialized semaphore lifecycle",
+    "vendor_wireless_station_driver::receive::ReceivePlan,Packet and generation-safe canonical peer and reorder owners",
+    "vendor_wireless_adapter::has_pending_commands,has_pending_events,cancel and actual TX/PID serializer",
+    "canonical Power xm1_power_semaphore_wait,xm1_power_semaphore_signal,xm1_power_task_delay at the native physical RTOS boundary"
+  ],
+  "unfinished_application_cpu": [
+    {"entries": ["0x0129aac0", "0x0129ad50", "0x0129b2e0", "0x012a1760", "0x012a4768", "0x0129ab2c"], "scope": "Closed interrupt-cycle disable, 88-byte snapshot read, abnormal-status read, returned-credit application, receive-port aggregate processing and source enable/sleep ordering are not wired into HostPump. StationDriver supplies typed SnapshotRead and InterruptControl CPU; a root cycle still must consume them."},
+    {"scope": "Correlated PendingCommands completions, management/association event routing, canonical PeerLease admission and device-PID TX-done routing remain unwired to the root service event loop. The packet pool makes retained ownership safe but does not perform these CPU actions."},
+    {"scope": "Actual RandomPool entropy and native clock ingress are not integrated here. RadioTick is an explicit physical observation, not an implemented native clock bridge."},
+    {"entries": ["0x012b17ac", "0x012af3ac", "0x012af80c"], "scope": "The root-owned native xm1_wireless_driver_task, permanent typed WirelessRuntime/provider context, event wake and exit publication are absent. Pump quiescence must not be presented as native task execution, shutdown acknowledgment or kernel task deletion."},
+    {"scope": "Parent root module declarations, controller/task callsites, provider initialization, linker registration and complete source integration remain required."}
+  ],
+  "tests": {
+    "written_not_run": ["vendor_wireless_service_host_tests.rs", "vendor_wireless_service_host_pool_tests.rs"],
+    "fixtures": "Synthetic in-memory physical host, lock, cache and packet bytes. Loopback packet fixtures encode two four-byte records in a sixteen-byte aggregate; no proprietary payload is included."
+  },
+  "verification": "Source-only. No builds, tests, lint, formatters, SDK, native execution, camera, USB or radio operations. This increment does not claim complete wireless CPU closure or runtime acceptance."
+}

@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "module": "vendor_wireless_adapter::transmit",
+  "source_revision": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_repository": "/var/home/murph/Code/x70view",
+  "source_paths": ["decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_0129e740.c", "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_0129a52c.c", "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_012ae7b4.c"],
+  "stock_image": {
+    "path": "private-data/analysis/x-m1-1.50/lz/plain-01100000.bin",
+    "vma": "0x01100000",
+    "sha256": "ee211bdaad39005b4f72e3443a76ca194905381a967cab787d6a4ef14e2d889d",
+    "authentication": "NONMATCHING source cross-checked against actual ARM instructions using arm-none-eabi-objdump -D -b binary -m arm --adjust-vma=0x01100000 and explicit instruction extents. No comparison execution."
+  },
+  "instruction_extents": [
+    {"range": "0x012a08b8..0x012a0fb4", "behavior": "Aggregate descriptor serializer emits a16-byte header for every frame, copies payload once, aligns each packet to four bytes, includes descriptor priority/type/queue/BSS/station/header lengths/rate/retry/sequence/lifetime/flags, and supplies a real8-bit device PID for reporting frames. Checksum offload ORs header byte3 with3 for data when adapter capability low three bits are nonzero. Consecutive frames share the physical FIFO transfer. Management reporting leases move to the pending-device queue; non-reporting data ownership is released by concrete completion. Source ignores physical write failure."},
+    {"range": "0x012a0fb4..0x012a1644", "behavior": "Single data transmission writes total payload+16 at header0, header2=14, queue shifted left2 at3, header4=14, BSS shifted left4 OR0x40 at5, descriptor tag at10, header11=0x20. Single management serialization uses descriptor fields and stores PID at12, report/timestamp/burst at13. Configuration requests align their logical command length to four bytes and use command frame type0x40. FIFO is0x2c for class4 and0x28 otherwise."},
+    {"range": "0x0129be20..0x0129be88", "behavior": "Within the critical section, increment the byte at adapter+0x41f5, truncate to8 bits, store, return. This counter supplies actual header PIDs."},
+    {"range": "0x0129b740..0x0129b8a0", "behavior": "Detach adapter pending-device queue at+0x3228; compare frame byte+0x2c with input PID; preserve unmatched queue order and select the matching lease. Event17 parsing and concrete callback status propagation are owned by StationDriver."},
+    {"range": "0x012d9230..0x012d93c4", "behavior": "Reject length above capacity; count512-byte blocks, including a final partial block. CMD53 argument is0x90000000 OR(fifo<<9) OR0x08000000 in block mode OR the9-bit count. Uses command0x35 and returns physical outcome."},
+    {"range": "0x012ad030..0x012ad0c4", "behavior": "With driver and adapter present, store byte0x13 at adapter+0x1c96c and word0 at+0x1c978. No physical request. Canonical Protocols::reset_owner_notification publishes these typed values."}
+  ],
+  "ownership": {
+    "single_owner": "The existing Adapter frame slots, counters, descriptor pool, order, sequence and TransmitCredits remain canonical. No second transmitter or completion queue exists.",
+    "physical_borrow": "Only the primary descriptor exposes the mutable owned4096-byte FIFO buffer. Aggregate members cannot issue independent transfers. Canonical host completion releases all aggregate descriptors in enqueue order.",
+    "device_completion": "Reporting frames retain exclusive payload leases after physical completion. DevicePacketId comes from the actual emitted header byte12, not a frame identity cast. DeviceTxStatus retains the entire raw event17 status byte in the terminal owner event. Early device completion is retained until physical completion.",
+    "late_completion": "Local descriptor identities reject old physical completions. Cancelled device PIDs remain quarantined until their late device event arrives; allocator skips active and quarantined PIDs. This owned safety constraint avoids aliasing live leases at counter wrap; exhaustion leaves the descriptor queued.",
+    "bounded_aggregation": "Management and explicit AggregatedData metadata enter the aggregate CPU path. Ordinary Ethernet metadata uses the stock single-packet header path. Aggregate packing stops before a non-frame request, a different FIFO, insufficient class credit, PID exhaustion or buffer exhaustion. Remaining frames stay queued.",
+    "payload_copy": "Queued leases contain the original caller bytes. Preparation copies each selected payload directly into the sole physical FIFO buffer, without an intermediate packet copy or heap allocation.",
+    "write_failure": "PhysicalWrite::Failed is recorded but retains the ignored-result logical behavior of the stock transmit roots. A reporting management frame still requires the actual device event or cancellation."
+  },
+  "integration": {
+    "producer": "Adapter::enqueue_frame then Adapter::enqueue_transmit_frame with typed Ethernet, Management or AggregatedData metadata. enqueue_frame_descriptor now selects the actual Ethernet serializer and never emits an empty command.",
+    "host": "RadioLifecycle consumes Adapter::command()->FirmwareCommand::{identity,argument,bytes_mut} through canonical SD host and calls Adapter::finish_command. Shared sequence and credits retain the existing explicit ownership handoff.",
+    "receive": "StationDriver parses event17 body0 as DevicePacketId and body1 as DeviceTxStatus. RadioLifecycle calls Adapter::complete_device_packet; AdapterEvent::Frame returns the actual lease and raw completion status.",
+    "secondary_bss": "FirmwareRequest borrows exact80/40/4/16-byte interface/peer/flush/BSS bodies and a bounded6..608-byte beacon body produced by SecondaryBss CPU. enqueue_firmware_request maps opcodes16/17/1b/1c/1d and owns the real command header, padding, sequence, credit and physical lifetime. SecondaryBss retains the source evidence for those body serializers."
+  },
+  "tests": {"path": "vendor_wireless_adapter_transmit_tests.rs", "behavior": ["literal Ethernet and management wire headers", "payload and block padding", "real PID and raw status ownership", "early completion", "aggregation and distinct PID routing", "cancellation and late status", "bounds without physical credit consumption", "checksum capability flags", "secondary beacon physical body"], "execution": "Written but unrun. Assignment prohibits builds, tests, linters, formatters, native comparison, SDK and live operations."}
+}

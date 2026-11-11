@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "target": "Fujifilm X-M1 1.50",
+  "status": "source-generation-not-integrated",
+  "acceptance": "incomplete",
+  "source_pin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "base_commit": "6822fd41",
+  "image": {
+    "base": "0x0061c400",
+    "sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
+    "authentication": "Whole image and listed function extents were hashed against the pinned function-ranges.json before inspecting instructions. No sibling-model behavior is used."
+  },
+  "authenticated_extents": [
+    {"address": "0x0076c51c", "size": 684, "sha256": "cc979d15b2a3011fd95459996597c3a885495520ae2ecd8a4c65f974ed386dea"},
+    {"address": "0x0076c7c8", "size": 300, "sha256": "305f88253aa014ea0352c94a845993e5bcb49491d78d814757097c0f0f17f2ce"},
+    {"address": "0x0076b900", "size": 172, "sha256": "0b0adbbb4da0d2bce92e2450a8a5076ff2b9d42c75dee377aa9c2e4414a69f23"},
+    {"address": "0x00769e84", "size": 52, "sha256": "3b8de27e849aeecccc7e66a554468b5fda9511b6c6b70ac5af65d80b7cecf467"},
+    {"address": "0x006c5b54", "size": 132, "sha256": "1d3641ba515cb1098923c869b1c8c612e6459b35082b947434111ff681524e5d"},
+    {"address": "0x006c5bd8", "size": 92, "sha256": "f8e3b2b458f4965e221a535c4c75eecf5f480bc6ae835aa6cbe9e8de22f5f829"},
+    {"address": "0x0076e654", "size": 232, "sha256": "7f0810d8285b3539779da5b5eb6dbdeb7695fa08cded4cceb16f5a8722e5a427"},
+    {"address": "0x00760834", "size": 228, "sha256": "565848ba8f388d4edc7052a40eb34dabeb3ab42332a49bf6f03e7fe18af04fb4"},
+    {"address": "0x00760918", "size": 244, "sha256": "ba3d83c154ec2ed399145c1df18e6a14d10a1448e2f7ec76d82ac9c64c7f6d57"}
+  ],
+  "source_generation": {
+    "lower_movement": "76c51c uses canonical PositionGeometry and Calibration. The no-move comparison uses the shared current iris position, activity, policy byte, mode, and IRQ mode. No cached second position engine is introduced.",
+    "lower_home": "76c7c8 uses the canonical Iris actuator command and control selector 4. The application 4216 caller supplies mode zero; mode three remains distinct for the Request71 service branch.",
+    "command_encoding": "76b214 calls 7446c4 with the converted iris value as its second argument, zero third and fourth arguments, two flags derived from mode==1, and the final flag derived from policy!=1. The canonical actuator provider owns packet construction.",
+    "physical_lifetime": "Normal movement and home require command acknowledgments and a separately owned detection observation. Failure completion does not require an observation. Duplicate clients cannot replace the active request; cancellation clears ownership; stale owner publications are ignored.",
+    "fast_irq_lifetime": "The fast branch uses task99 periodic index 2 with interval argument 10 and mode mask 1, after successful command acknowledgments. It requires a CallbackRegistry-issued zero-argument completion identity. periodic_completed cancels index 2 before completing, and rejects another callback identity. OwnerToken values are not cast to timer callbacks.",
+    "publications": "The internal movement notification is 4241; the internal iris-home notification is 423f. The returned typed service effect executes ServiceOperation::report_failure through ConfigImages.",
+    "shared_state": "This generation borrows MotionContext and does not store another main task50 machine state. It does not establish the later required admitted-memory borrowed view."
+  },
+  "standard_4213_dispatch_evidence": {
+    "root": "0x0076e654",
+    "special_case": "Active Request70 with source 10 selects 421d; the ordinary request is 4213 with six payload words.",
+    "main_handlers": {"2": "0x00760834", "6": "0x00760528", "8": "0x007606a8", "9": "0x00760918", "13": "0x00760a0c"},
+    "secondary_selector": "0x00766228",
+    "secondary_table": "0x00819ee4",
+    "secondary_width": 2,
+    "implementation_claim": "The standard primary and secondary dispatch are not implemented by this source generation. Primary 760* ownership moved to RecordLensScheduleCpu during coordination."
+  },
+  "required_integration": [
+    "Replace snapshot-backed LensRequestConsumer and MotionContext native authority with one typed borrowed view over the admitted 957060 and 942ab0 regions, without copying between representations.",
+    "Construct the whole Vendor RecordContext adapter above Power and bind the same canonical AF instance to the task50 queue, precompletion, standard primary selectors, and secondary 766228 dispatch.",
+    "Register and route the real task99 timer callback through the root CallbackRegistry, preserving identity and generation across cancellation. Supplying an unregistered raw callback token is not an integration.",
+    "Apply returned internal 4241/423f publications and service effects through the actual task50 dispatcher and application callback owner."
+  ],
+  "source_tests": {
+    "file": "af_iris_runtime_tests.rs",
+    "provenance": "Synthetic typed lower-command publications, a synthetic detection register device, and canonical task99 mode completion/publication. No captured hardware fixtures.",
+    "behaviors": ["home acknowledgments plus physical observation", "duplicate admission and original client retention", "cancelled publication rejection after a later request", "fast IRQ task99 periodic scheduling and registered callback identity"],
+    "executed": false
+  },
+  "verification": {
+    "build": "not run",
+    "tests": "not run",
+    "lint": "not run",
+    "format": "not run",
+    "native": "not run",
+    "camera": "not run",
+    "qualification": "No host, ARM, full standard4213, callback-root, or camera closure is claimed."
+  }
+}

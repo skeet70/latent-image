@@ -2,12 +2,12 @@
 //! Target entries run each slot over the CPU's [`Machine`]; host tests run it over a model.
 #![cfg_attr(not(test), no_std)]
 
-#[cfg(all(target_arch = "arm", not(test)))]
+#[cfg(all(target_arch = "arm", not(test), not(feature = "library")))]
 mod entries;
 #[cfg(test)]
 mod tests;
 
-#[cfg(all(target_arch = "arm", not(any(feature = "domain-a", feature = "domain-b"))))]
+#[cfg(all(target_arch = "arm", not(feature = "library"), not(any(feature = "domain-a", feature = "domain-b"))))]
 compile_error!("select one of feature=\"domain-a\" or feature=\"domain-b\"");
 #[cfg(all(feature = "domain-a", feature = "domain-b"))]
 compile_error!("feature=\"domain-a\" and feature=\"domain-b\" are exclusive");

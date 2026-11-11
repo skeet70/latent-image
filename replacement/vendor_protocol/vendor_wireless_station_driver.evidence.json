@@ -1,0 +1,41 @@
+{
+  "target": "Fujifilm X-M1 1.50 overlay47",
+  "x70view_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "base_commit": "6822fd41",
+  "source_units": [
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_012960a0.c",
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_012b2658.c",
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_012aa8f8.c",
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_012e5ce0.c"
+  ],
+  "classification": "source-inspected with NONMATCHING behavior grounded in actual A32 instructions",
+  "image": "private-data/analysis/x-m1-1.50/lz/plain-01100000.bin",
+  "image_vma": "0x01100000",
+  "instruction_inspection": {
+    "tool": "/nix/store/ld6aihszv7hhaarrirxi3khvl5z3fifx-arm-none-eabi-binutils-2.46/bin/arm-none-eabi-objdump",
+    "arguments": "-D -b binary -m arm --adjust-vma=0x01100000 --start-address=START --stop-address=END IMAGE",
+    "ranges": [
+      ["0x01297578", "0x01298d14"],
+      ["0x012938f0", "0x01293b94"],
+      ["0x012ac530", "0x012ac5b0"],
+      ["0x012acf44", "0x012acf98"],
+      ["0x012e5dec", "0x012e5f3c"],
+      ["0x012e6b4c", "0x012e6ea8"]
+    ]
+  },
+  "claims": [
+    {"selector": "0x01297c34", "behavior": "Modes zero through three accepted; zero and three additionally require secondary-interface admission. State resets precede command0a with no body. Descriptor flags2a=1,2b=0,2c=0 select owned CPU transmit completion, not a firmware response."},
+    {"selector": "0x01297e00", "behavior": "Authentication values zero through seven accepted. WPA enterprise/personal and RSN enterprise/personal require infrastructure mode; WPA-none requires adhoc mode. Six authentication-suite enable flags select one suite for values three through seven; values zero through two select none."},
+    {"selector": "0x01298bd0", "behavior": "Encryption zero/one use cipher mask31, four mask33, six mask3b. State-only selector; cipher mask enables WEP40/WEP104 and optionally TKIP/CCMP."},
+    {"selector": "0x012982f4", "behavior": "Key lengths5,13,16,32 produce64-byte command08 body. Body offsets0..3 encode install/transmit/pairwise/authenticator,4..9 peer,11 cipher,12 key index,13 material length,16 onward material. Pairwise key requires transmit and rejects nonzero index or broadcast peer. Temporal128 cipher7 with authentication<=2, otherwise4. Temporal256 cipher2 except WPA-none CCMP truncates advertised length16 and uses cipher4."},
+    {"selector": "0x012988dc", "behavior": "Remove command08 contains zeroed64-byte body, peer at4, index12, pairwise flag2. Pairwise removal clears transmit-key-present flag."},
+    {"selectors": ["0x012938f0", "0x012ac530", "0x012acf44"], "behavior": "Key and interface descriptors select the no-response continuation: successful command-FIFO CPU processing invokes service success without waiting for an event. The FIFO writer discards the physical write result; StationDriver retains it separately. Failure/cancellation remains distinct. Driver-owned command storage is volatile-zeroed on release and drop."},
+    {"selector": "0x012e5dec", "behavior": "Message15 routes to012db270, not a physical boundary. Association child owns its CPU continuation."}
+  ],
+  "integration": {
+    "physical_fifo": "CMD53 function1 FIFO2c, byte count includes8-byte device header",
+    "shared_state": "RadioRuntime owns command credits and sequence synchronization. StationDriver exposes concrete command bytes and typed physical completion identity; no CPU address is passed to a callback.",
+    "association": "vendor_wireless_station_driver_association child owns association messages, mode admission, management frame and timer effects. Runtime routes those effects into canonical owned adapter/SDIO and RTOS providers."
+  },
+  "verification": {"behavioral_tests": "written, not run", "build": "not run", "native": "not run", "live": "not run"}
+}

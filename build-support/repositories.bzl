@@ -406,6 +406,14 @@ def _lab_dependencies_impl(_ctx):
             build_file_content = "exports_files(%r, visibility = [\"//visibility:public\"])" % binaries,
         )
 
+    # //replacement/vendor_protocol packs and unpacks the wireless crypto dependency rlibs.
+    nixpkgs_package(
+        name = "lab_gnutar",
+        attribute_path = "gnutar",
+        repository = "@lab_nixpkgs",
+        build_file_content = 'exports_files(["bin/tar"], visibility = ["//visibility:public"])',
+    )
+
     # //replacement/toolchain:rust.bzl cross-compiles no_std ARM modules with
     # this pinned rustc, its matching core and compiler_builtins.
     nixpkgs_package(
