@@ -94,6 +94,7 @@ pub trait DrawServices {
 
 fn signed_byte(value: u16) -> i32 { value as u8 as i8 as i32 }
 
+#[inline]
 pub fn tree_list<S: DrawServices>(services: &mut S, args: DrawArgs, report: &mut DrawReport) -> Result<(), ProducerError> {
     let mut snapshot = Snapshot([0; 11]);
     let mut hook = services.initialize_hook();

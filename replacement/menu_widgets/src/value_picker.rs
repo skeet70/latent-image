@@ -109,6 +109,7 @@ fn detail_draw(s: &mut impl PickerServices, font: u32, palette: u32, record: &Re
     s.font(FontId(font)); s.grid_palette(palette); s.resource(record);
 }
 
+#[inline]
 pub fn value_picker(s: &mut impl PickerServices, args: DrawArgs, report: &mut DrawReport) -> Result<(), ProducerError> {
     let mut hook = s.empty_hook();
     let saved_font = s.panel_font();
@@ -222,6 +223,7 @@ pub fn value_picker(s: &mut impl PickerServices, args: DrawArgs, report: &mut Dr
     Ok(())
 }
 
+#[inline]
 fn horizontal_details(s: &mut impl PickerServices, args: DrawArgs, snap: Snapshot, child: Child, y: u16, help_start: &mut u32) {
     let heading = s.label(args.node, snap.parent, child.id, LabelField::Heading);
     let detail = s.label(args.node, snap.parent, child.id, LabelField::Detail);

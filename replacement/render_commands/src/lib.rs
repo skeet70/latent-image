@@ -107,6 +107,7 @@ impl PanelRect {
 pub struct DrawReport(pub [u8; 0x44]);
 impl DrawReport {
     pub const fn zeroed() -> Self { Self([0; 0x44]) }
+    #[inline]
     pub fn put_word(&mut self, offset: usize, value: u32) -> Result<(), producer::ProducerError> {
         if offset > self.0.len() - 4 { return Err(producer::ProducerError::ReportRange); }
         let bytes = value.to_le_bytes();

@@ -71,6 +71,7 @@ fn word(report: &DrawReport, offset: usize) -> Option<u32> {
     Some(u32::from_le_bytes(bytes))
 }
 fn signed(value: u8) -> i32 { value as i8 as i32 }
+#[inline]
 fn hook_record(hook: &mut HookRecord, node: NodeId, child: u32, side: &[u32; 7], x: i32, y: u8, selected: bool, resource: ResourceId) {
     hook.0[0] = node.0;
     hook.0[1] = child;
@@ -85,6 +86,7 @@ fn hook_record(hook: &mut HookRecord, node: NodeId, child: u32, side: &[u32; 7],
     hook.0[12] = resource.0;
 }
 
+#[inline]
 pub fn pane_drawer<S: DrawServices>(services: &mut S, node: NodeId, mode: DrawMode) -> Result<(), ProducerError> {
     let state = services.prepare(node, mode);
     let d = &state.side;
@@ -201,6 +203,7 @@ pub fn pane_drawer<S: DrawServices>(services: &mut S, node: NodeId, mode: DrawMo
     Ok(())
 }
 
+#[inline]
 fn chrome<S: DrawServices>(services: &mut S, state: &PaneState, mode: DrawMode) -> Result<(), ProducerError> {
     let d = &state.side;
     let r = &state.report;

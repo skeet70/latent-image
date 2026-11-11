@@ -178,6 +178,7 @@ pub enum MenuEvent {
 impl MenuEvent {
     /// The page test reads the open node's rows per page; without an open node
     /// a move decodes as a row step.
+    #[inline]
     pub fn decode(raw: StageEvent, tree: &Tree, state: &EngineState) -> Self {
         let node = StageNode::new(raw.node);
         let id = StageId::new(raw.id);
@@ -726,11 +727,13 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
         self.perform(Effect::Notify(Notify { kind, node, id, class }));
     }
 
+    #[inline]
     fn availability(&mut self, class: MenuClass, token: RowToken) -> RowState {
         self.called = true;
         self.services.availability(&self.state, class, token)
     }
 
+    #[inline]
     fn initial_row(&mut self, kind: StageKind, node: StageNode, class: MenuClass) -> Option<RowToken> {
         self.called = true;
         self.services.initial_row(&self.state, kind, node, class)
@@ -750,6 +753,7 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
         Ok(VisibleOrdinal::new(self.ordinal(token, OrdinalMode::Visible)?))
     }
 
+    #[inline]
     fn kind_switch(&mut self, call: KindSwitchCall) -> EngineResult {
         self.called = true;
         self.delegated = true;
@@ -1294,6 +1298,7 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
     /// Kinds 6..`0xb`: pops, pushes and moves through `0xbfab98` and `0xbf9f44`
     /// with notification id 0, after the seek for `0xa` and `0xb`. Every node
     /// the steps can open is checked before the first call.
+    #[inline]
     fn frame_move(&mut self, kind: StageKind, node_word: StageNode, id: StageId, extra: StageExtra) -> Result<EngineResult, NotOwned> {
         Self::stage_index(node_word)?;
         self.check_cursor()?;

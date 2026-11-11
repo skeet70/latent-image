@@ -149,6 +149,7 @@ fn write_record(address: u32, record: &MenuFrameSnapshot) {
 struct Stock;
 
 impl EngineServices for Stock {
+    #[inline]
     fn perform(&mut self, state: &EngineState, effect: Effect) {
         write_state(state);
         match effect {
