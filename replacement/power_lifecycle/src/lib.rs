@@ -217,6 +217,15 @@ pub mod record_job_backend_input;
 pub mod record_job_backend_memory;
 #[cfg(target_arch = "arm")]
 pub mod record_job_backend_packet;
+pub mod record_power_control_7405dc;
+pub mod record_shared_block_756720;
+pub mod record_shared_block_757510;
+pub mod record_frontend_ef6790;
+pub mod record_frontend_ef72d4;
+pub mod record_profile_compare_f2f00c;
+pub mod record_numeric_fa7b84;
+pub mod record_scan_1004438;
+pub mod record_frontend_103af30;
 #[cfg(target_arch = "arm")]
 pub mod record_job_backend_parameters;
 pub mod record_job_memory;
