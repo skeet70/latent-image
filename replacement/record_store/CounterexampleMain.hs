@@ -15,7 +15,7 @@ import Data.List (intercalate, isPrefixOf, nub, sort, stripPrefix)
 import qualified Data.Map.Strict as M
 import Data.Maybe (listToMaybe)
 import Data.Word (Word64)
-import Emulation.CachedNativeBatch (cachedObservedBatch)
+import Emulation.CachedNativeBatch (ResultPolicy (WriteAllResults), cachedObservedBatchWith)
 import Emulation.EmulatorSlot (ExecutionClass (NativeVerification), reexecInSlot, slotPolicyForClass)
 import Emulation.NativeObservation (NativeObservation (..), RunnerStatus (..), runnerStatusLabel)
 import Emulation.OwnedCase (CaseId, CaseSpec, caseId, loadObservedBatch, writeBatch)
@@ -1305,7 +1305,7 @@ observeBatch context directory specs = do
           patchStubs directory specs
           case contextCache context of
             Nothing -> loadObservedBatch (contextRunner context) batchPath
-            Just root -> snd <$> cachedObservedBatch root (contextRunner context) batchPath
+            Just root -> snd <$> cachedObservedBatchWith WriteAllResults root (contextRunner context) batchPath
       )
   pure (either (Left . displayException) Right outcome)
 

@@ -69,7 +69,7 @@ import Data.IORef (IORef, atomicModifyIORef', modifyIORef', readIORef)
 import Data.List (isPrefixOf, nub)
 import qualified Data.Map.Strict as M
 import Data.Word (Word32, Word8)
-import Emulation.CachedNativeBatch (cachedObservedBatch)
+import Emulation.CachedNativeBatch (ResultPolicy (WriteAllResults), cachedObservedBatchWith)
 import Emulation.NativeCase (BatchEntry (..), Region (..), loadCase, readBatch)
 import Emulation.NativeObservation
 import Emulation.OwnedCase
@@ -416,7 +416,7 @@ runCasePair runner cache directory stockSpec candidateSpec0 = do
           patchStubs directory specs
           observed <- case cache of
             Nothing -> loadObservedBatch runner batchPath
-            Just root -> snd <$> cachedObservedBatch root runner batchPath
+            Just root -> snd <$> cachedObservedBatchWith WriteAllResults root runner batchPath
           let table = M.fromList [(caseIdText ident, observation) | (ident, observation) <- observed]
           case (M.lookup "stock" table, M.lookup "candidate" table) of
             (Just stock, Just candidate) -> pure (PairObserved stock candidate)

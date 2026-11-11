@@ -16,7 +16,7 @@ import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
 import Data.List (intercalate, isInfixOf, isPrefixOf, isSuffixOf)
 import qualified Data.Map.Strict as M
 import Data.Word (Word32)
-import Emulation.CachedNativeBatch (BatchReuse (..), CacheEscape, cachedObservedBatch)
+import Emulation.CachedNativeBatch (BatchReuse (..), CacheEscape, ResultPolicy (WriteAllResults), cachedObservedBatchWith)
 import Emulation.NativeCase (CaseId (..))
 import qualified Emulation.NativeObservation as N
 import Emulation.Sha256 (sha256, sha256Hex)
@@ -975,7 +975,7 @@ executeCase attempt directory caseId value regions = do
       resultPath = directory </> (caseId ++ ".native-result.json")
       observationPath = directory </> "observation.json"
   BL.writeFile batchPath (encode (object ["schema_version" .= (1 :: Int), "cases" .= [object ["id" .= caseId, "path" .= ("case.json" :: String)]]]))
-  outcome <- try (cachedObservedBatch (attemptCache attempt) (attemptRunner attempt) batchPath) :: IO (Either IOException (BatchReuse, [(CaseId, N.NativeObservation)]))
+  outcome <- try (cachedObservedBatchWith WriteAllResults (attemptCache attempt) (attemptRunner attempt) batchPath) :: IO (Either IOException (BatchReuse, [(CaseId, N.NativeObservation)]))
   case outcome of
     Left problem -> do
       removeIfPresent batchPath

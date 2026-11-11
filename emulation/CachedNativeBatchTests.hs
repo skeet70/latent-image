@@ -19,8 +19,11 @@ import Emulation.CachedNativeBatch
   , CacheEscape
   , CacheInspection (..)
   , CacheBinding
+  , MaintenanceInterval (..)
   , readCachedPayload
   , cachedObservedBatch
+  , cachedObservedBatchWith
+  , cachedObservedBatchWithSince
   , cachedObservedBatchWithBinding
   , inspectCachedBatch
   , cacheOnlyRunner
@@ -50,6 +53,7 @@ import System.Directory
   , createDirectoryIfMissing
   , doesDirectoryExist
   , doesFileExist
+  , getFileSize
   , getPermissions
   , getTemporaryDirectory
   , listDirectory
@@ -63,9 +67,14 @@ import System.FilePath ((</>), takeFileName)
 
 main :: IO ()
 main = do
-  previous <- lookupEnv "XM1_STORAGE_MIN_FREE"
-  let restore = maybe (unsetEnv "XM1_STORAGE_MIN_FREE") (setEnv "XM1_STORAGE_MIN_FREE") previous
-  bracket_ (setEnv "XM1_STORAGE_MIN_FREE" "1") restore runTests
+  previousReserve <- lookupEnv "XM1_STORAGE_MIN_FREE"
+  previousBudget <- lookupEnv "XM1_NATIVE_CACHE_MAX"
+  let restoreReserve = maybe (unsetEnv "XM1_STORAGE_MIN_FREE") (setEnv "XM1_STORAGE_MIN_FREE") previousReserve
+      restoreBudget = maybe (unsetEnv "XM1_NATIVE_CACHE_MAX") (setEnv "XM1_NATIVE_CACHE_MAX") previousBudget
+  bracket_
+    (setEnv "XM1_STORAGE_MIN_FREE" "1" >> setEnv "XM1_NATIVE_CACHE_MAX" "20G")
+    (restoreReserve >> restoreBudget)
+    runTests
 
 runTests :: IO ()
 runTests = do
@@ -88,6 +97,9 @@ runTests = do
     escapeKeyTest (root </> "escape-key") canonicalRunner
     escapeCaseTest (root </> "escape-case") canonicalRunner
     retentionTest (root </> "retention") canonicalRunner
+    defaultResultPolicyTest (root </> "default-policy") canonicalRunner
+    cacheEvictionTest (root </> "eviction") canonicalRunner
+    cacheRecencyTest (root </> "recency") canonicalRunner
     assetWireTest (root </> "assets") canonicalRunner
     consumerFrameTest (root </> "consumer-frame") canonicalRunner
     deadPrivateFrameTest (root </> "dead-private-frame") canonicalRunner
@@ -250,7 +262,7 @@ reuseTest root runner = do
       cases = specs 0xdeadbeef 0xdeadbeef 0x11223344
   batchPath <- O.writeBatch batchDirectory cases
   before <- B.readFile batchPath
-  (firstReuse, first) <- cachedObservedBatch cache runner batchPath
+  (firstReuse, first) <- cachedObservedBatchWith WriteAllResults cache runner batchPath
   after <- B.readFile batchPath
   ensure (firstReuse == BatchExecuted) ("first call did not execute: " ++ show firstReuse)
   ensure (before == after) "cachedObservedBatch modified batch.json"
@@ -258,7 +270,7 @@ reuseTest root runner = do
   ensure (all ((== N.Returned) . N.nativeStatus . snd) first) ("unexpected status: " ++ show first)
   forM_ (zip cases first) $ \(caseSpec, (_, observation)) ->
     checkResultFile batchDirectory caseSpec observation "passed"
-  (secondReuse, second) <- cachedObservedBatch cache runner batchPath
+  (secondReuse, second) <- cachedObservedBatchWith WriteAllResults cache runner batchPath
   ensure (secondReuse == BatchReused) ("second call did not reuse: " ++ show secondReuse)
   ensure (second == first) "cached observation differs from the executed observation"
 
@@ -268,16 +280,16 @@ expectedRejudgeTest root runner = do
       batchDirectory = root </> "batch"
       cases = specs 0xdeadbeef 0xdeadbeef 0x11223344
   batchPath <- O.writeBatch batchDirectory cases
-  (executed, baseline) <- cachedObservedBatch cache runner batchPath
+  (executed, baseline) <- cachedObservedBatchWith WriteAllResults cache runner batchPath
   ensure (executed == BatchExecuted) "baseline did not execute"
   let changed = specs 0xdeadbeef 0xdeadbeee 0x11223344
   _ <- O.writeBatch batchDirectory changed
-  (reused, rejudged) <- cachedObservedBatch cache runner batchPath
+  (reused, rejudged) <- cachedObservedBatchWith WriteAllResults cache runner batchPath
   ensure (reused == BatchReused) ("changed expectation did not reuse raw output: " ++ show reused)
   ensure (rejudged == baseline) "changed expectation changed the raw observation"
   checkResultFiles batchDirectory changed rejudged ["failed", "passed"]
   _ <- O.writeBatch batchDirectory cases
-  (again, restored) <- cachedObservedBatch cache runner batchPath
+  (again, restored) <- cachedObservedBatchWith WriteAllResults cache runner batchPath
   ensure (again == BatchReused) "restoring the expectation did not reuse raw output"
   ensure (restored == baseline) "restoring the expectation changed the raw observation"
   checkResultFiles batchDirectory cases restored ["passed", "passed"]
@@ -323,7 +335,7 @@ labelChangeTest root runner = do
   (reused, _) <- cachedObservedBatch cache runner batchPath
   ensure (reused == BatchReused) "unchanged labels did not reuse"
   _ <- O.writeBatch batchDirectory renamed
-  (renamedReuse, renamedObservations) <- cachedObservedBatch cache runner batchPath
+  (renamedReuse, renamedObservations) <- cachedObservedBatchWith WriteAllResults cache runner batchPath
   ensure (renamedReuse == BatchReused) ("renamed cases did not reuse: " ++ show renamedReuse)
   ensure (map fst renamedObservations == caseIds renamed) "renamed observation ids differ"
   ensure (map snd renamedObservations == map snd baseline) "renamed cases changed the raw observations"
@@ -386,7 +398,7 @@ corruptionTest root runner = do
   ensure (reused == BatchReused) "baseline did not reuse"
   entry <- singleEntry cache
   B.writeFile (entry </> "cases" </> "writer" </> "runner.json.gz") (BC.pack "{}")
-  (rawCorrupt, rawObservations) <- cachedObservedBatch cache runner batchPath
+  (rawCorrupt, rawObservations) <- cachedObservedBatchWith WriteAllResults cache runner batchPath
   ensure (rawCorrupt == BatchExecuted) ("corrupt raw output was reused: " ++ show rawCorrupt)
   ensure (rawObservations == baseline) "corrupt raw rerun produced a different observation"
   checkResultFiles batchDirectory cases rawObservations ["passed", "passed"]
@@ -674,6 +686,120 @@ retentionTest root runner = do
     exists <- doesFileExist (str report)
     ensure exists ("first failure report is missing: " ++ str report)
 
+defaultResultPolicyTest :: FilePath -> FilePath -> IO ()
+defaultResultPolicyTest root runner = do
+  let passing = root </> "passing"
+      failing = root </> "failing"
+      passingCases = specs 0xdeadbeef 0xdeadbeef 0x11223344
+      failingCases = [writerSpec 0xdeadbeef 0xdeadbeee]
+  createDirectoryIfMissing True root
+  passingPath <- O.writeBatch passing passingCases
+  (executed, defaultObservations) <- cachedObservedBatch (root </> "cache-default") runner passingPath
+  ensure (executed == BatchExecuted) "default policy baseline did not execute"
+  defaultResult <- doesFileExist (passing </> "writer.native-result.json")
+  ensure (not defaultResult) "default policy wrote a passing case result"
+  (reused, hitObservations) <- cachedObservedBatch (root </> "cache-default") runner passingPath
+  ensure (reused == BatchReused) "default policy did not reuse"
+  ensure (hitObservations == defaultObservations) "default policy hit changed the observations"
+  hitResult <- doesFileExist (passing </> "writer.native-result.json")
+  ensure (not hitResult) "default policy hit wrote a passing case result"
+  (_, allObservations) <- cachedObservedBatchWith WriteAllResults (root </> "cache-all") runner passingPath
+  ensure (allObservations == defaultObservations) "default policy changed the observations"
+  forM_ (zip passingCases allObservations) $ \(caseSpec, (_, observation)) ->
+    checkResultFile passing caseSpec observation "passed"
+  failingPath <- O.writeBatch failing failingCases
+  (failedExecuted, failedObservations) <- cachedObservedBatch (root </> "cache-failed") runner failingPath
+  ensure (failedExecuted == BatchExecuted) "failing default policy did not execute"
+  checkResultFiles failing failingCases failedObservations ["failed"]
+
+cacheEvictionTest :: FilePath -> FilePath -> IO ()
+cacheEvictionTest root runner = do
+  let cache = root </> "cache"
+      first = root </> "first"
+      second = root </> "second"
+      firstCases = specs 0xdeadbeef 0xdeadbeef 0x11223344
+      secondCases = specs 0xcafebabe 0xcafebabe 0x11223344
+  createDirectoryIfMissing True root
+  firstPath <- O.writeBatch first firstCases
+  secondPath <- O.writeBatch second secondCases
+  (firstReuse, _) <- withCacheBudget "20G" $
+    cachedObservedBatchWithSince (MaintenanceInterval 0) WriteFailedResults cache runner firstPath
+  ensure (firstReuse == BatchExecuted) "eviction baseline did not execute"
+  firstEntry <- singleEntry cache
+  firstBytes <- treeBytes firstEntry
+  withCacheBudget (show (firstBytes + 1)) $ do
+    (secondReuse, _) <- cachedObservedBatchWithSince (MaintenanceInterval 0) WriteFailedResults cache runner secondPath
+    ensure (secondReuse == BatchExecuted) "second publish did not execute"
+    firstPresent <- doesDirectoryExist firstEntry
+    entries <- cacheEntries cache
+    ensure (not firstPresent) "publishing past the budget kept the oldest entry"
+    ensure
+      (length entries == 1 && takeFileName (head entries) /= takeFileName firstEntry)
+      ("publishing past the budget did not keep only the newest entry: " ++ show entries)
+    (again, _) <- cachedObservedBatchWithSince (MaintenanceInterval 0) WriteFailedResults cache runner firstPath
+    ensure (again == BatchExecuted) "an evicted batch did not execute again"
+    republished <- doesDirectoryExist firstEntry
+    ensure republished "an evicted batch was not cached again"
+    (reused, _) <- cachedObservedBatchWithSince (MaintenanceInterval 0) WriteFailedResults cache runner firstPath
+    ensure (reused == BatchReused) "a republished batch did not reuse"
+
+cacheRecencyTest :: FilePath -> FilePath -> IO ()
+cacheRecencyTest root runner = do
+  let cache = root </> "cache"
+      first = root </> "first"
+      second = root </> "second"
+      third = root </> "third"
+      firstCases = specs 0xdeadbeef 0xdeadbeef 0x11223344
+      secondCases = specs 0xcafebabe 0xcafebabe 0x11223344
+      thirdCases = specs 0x0badf00d 0x0badf00d 0x11223344
+  createDirectoryIfMissing True root
+  firstPath <- O.writeBatch first firstCases
+  secondPath <- O.writeBatch second secondCases
+  thirdPath <- O.writeBatch third thirdCases
+  _ <- withCacheBudget "20G" $
+    cachedObservedBatchWithSince (MaintenanceInterval 0) WriteFailedResults cache runner thirdPath
+  thirdEntry <- singleEntry cache
+  thirdBytes <- treeBytes thirdEntry
+  removeDirectoryRecursive thirdEntry
+  (_, _) <- withCacheBudget "20G" $
+    cachedObservedBatchWithSince (MaintenanceInterval 0) WriteFailedResults cache runner firstPath
+  firstEntry <- singleEntry cache
+  firstBytes <- treeBytes firstEntry
+  _ <- withCacheBudget "20G" $
+    cachedObservedBatchWithSince (MaintenanceInterval 0) WriteFailedResults cache runner secondPath
+  entries <- cacheEntries cache
+  secondEntry <- case [entry | entry <- entries, takeFileName entry /= takeFileName firstEntry] of
+    [entry] -> pure entry
+    _ -> fail ("second publish did not add one entry: " ++ show entries)
+  (hit, _) <- withCacheBudget "20G" $
+    cachedObservedBatchWithSince (MaintenanceInterval 0) WriteFailedResults cache runner firstPath
+  ensure (hit == BatchReused) "recency baseline did not reuse"
+  withCacheBudget (show (firstBytes + thirdBytes + 1)) $ do
+    _ <- cachedObservedBatchWithSince (MaintenanceInterval 0) WriteFailedResults cache runner thirdPath
+    firstPresent <- doesDirectoryExist firstEntry
+    secondPresent <- doesDirectoryExist secondEntry
+    thirdPresent <- doesDirectoryExist thirdEntry
+    ensure firstPresent "a recently reused entry was evicted"
+    ensure (not secondPresent) "the older entry survived the byte budget"
+    ensure thirdPresent "the newly published entry was evicted"
+
+withCacheBudget :: String -> IO a -> IO a
+withCacheBudget value action = do
+  previous <- lookupEnv "XM1_NATIVE_CACHE_MAX"
+  let restore = maybe (unsetEnv "XM1_NATIVE_CACHE_MAX") (setEnv "XM1_NATIVE_CACHE_MAX") previous
+  bracket_ (setEnv "XM1_NATIVE_CACHE_MAX" value) restore action
+
+treeBytes :: FilePath -> IO Integer
+treeBytes path = do
+  directory <- doesDirectoryExist path
+  if directory
+    then do
+      names <- listDirectory path
+      sum <$> mapM (treeBytes . (path </>)) names
+    else do
+      size <- getFileSize path
+      pure (fromIntegral size)
+
 assetWireTest :: FilePath -> FilePath -> IO ()
 assetWireTest root runner = do
   let direct = root </> "direct"
@@ -711,7 +837,7 @@ consumerFrameTest root runner = do
       base = spec "frame" [0xe3a00001, 0xe58d0004, 0xe12fff1e] [(N.R0, 0)] [(N.R0, 1)] [(N.RegionId "stack", changedStack)]
       frameCase = base { O.caseInitial = (N.Sp, 0xb010) : filter ((/= N.Sp) . fst) (O.caseInitial base) }
   genericPath <- O.writeBatch (root </> "generic") [frameCase]
-  _ <- cachedObservedBatch cache runner genericPath
+  _ <- cachedObservedBatchWith WriteAllResults cache runner genericPath
   genericReport <- B.readFile (root </> "generic" </> "frame.native-result.json") >>= jsonRead
   ensure (get genericReport "status" == String "passed") "frame fixture does not pass generic judgement"
   jobs <- readNativeJobs Nothing
@@ -985,7 +1111,7 @@ concurrentReuseTest root runner = do
   results <- mapNativeBounded jobs (\index -> do
     let directory = root </> show index
     batch <- O.writeBatch directory cases
-    result@(_, observations) <- cachedObservedBatch cache runner batch
+    result@(_, observations) <- cachedObservedBatchWith WriteAllResults cache runner batch
     ensure (map fst observations == caseIds cases) "parallel cache result identities differ"
     forM_ (zip cases observations) $ \(caseSpec, (_, observation)) ->
       checkResultFile directory caseSpec observation "passed"
