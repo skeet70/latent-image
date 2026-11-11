@@ -145,7 +145,8 @@ freshRuntime root supplied fallback = do
     (Nothing, UniqueRuntime prefix) -> do
       pid <- getProcessID
       micros <- (round . (* 1000000) <$> getPOSIXTime) :: IO Integer
-      pure (private </> (prefix ++ "-" ++ show pid ++ "-" ++ show micros))
+      base <- runtimeRoot private
+      pure (base </> (prefix ++ "-" ++ show pid ++ "-" ++ show micros))
   require (takeFileName path `notElem` ["", ".", ".."]) "--output must name a fresh directory"
   parent <- canonicalizePath (takeDirectory path)
   require (splitDirectories private `isPrefixOf` splitDirectories parent) "--output must be beneath workspace/private-data/"
@@ -153,6 +154,17 @@ freshRuntime root supplied fallback = do
   createDirectory destination
   setFileMode destination 0o700
   pure (Runtime destination)
+
+-- | A run's work directory when the launcher runs under @run-output exec@, else
+-- @private-data@.
+runtimeRoot :: FilePath -> IO FilePath
+runtimeRoot private = do
+  work <- lookupEnv "XM1_RUN_WORK"
+  case work of
+    Just directory | not (null directory) -> do
+      present <- doesDirectoryExist directory
+      pure (if present then directory else private)
+    _ -> pure private
 
 -- | Container compatibility with the retained 1.50 layout and a bounded image-4
 -- prefix. A passing container is not evidence that its application boots.

@@ -227,7 +227,9 @@ haskell_test(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     tags = ["no-sandbox"],
     deps = [
+        "//host:aeson",
         "//host:base",
+        "//host:bytestring",
         "//host:directory",
         "//host:filepath",
         "//host:process",

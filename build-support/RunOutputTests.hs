@@ -4,17 +4,21 @@ module Main (main) where
 
 import Control.Concurrent (threadDelay)
 import Control.Exception (IOException, bracket, try)
-import Control.Monad (filterM, unless, void, when)
+import Control.Monad (filterM, unless, void)
 import Data.Aeson (FromJSON (parseJSON), eitherDecodeStrict', withObject, (.:), (.:?))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
 import Data.List (isInfixOf, sort)
 import Data.Maybe (listToMaybe)
-import System.Directory (canonicalizePath, createDirectoryIfMissing, doesDirectoryExist, doesPathExist, getTemporaryDirectory, listDirectory, removeFile, removePathForcibly)
+import Data.Time.Clock (UTCTime, diffUTCTime, getCurrentTime)
+import Data.Time.Clock.POSIX (POSIXTime)
+import Data.Time.Format (defaultTimeLocale, parseTimeM)
+import System.Directory (canonicalizePath, createDirectoryIfMissing, doesDirectoryExist, doesPathExist, getTemporaryDirectory, listDirectory, removePathForcibly)
 import System.Environment (getArgs, getEnvironment)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
-import System.Posix.Signals (sigKILL, signalProcess, signalProcessGroup)
+import System.Posix.Files (setSymbolicLinkTimesHiRes)
+import System.Posix.Signals (nullSignal, sigKILL, sigTERM, signalProcess, signalProcessGroup)
 import System.Posix.Temp (mkdtemp)
 import System.Posix.Types (ProcessID)
 import System.Process (CreateProcess (..), StdStream (NoStream), createProcess, getPid, proc, readCreateProcessWithExitCode, readProcessWithExitCode, waitForProcess)
@@ -28,6 +32,7 @@ data Record = Record
   , recordExitStatus :: Maybe Int
   , recordWorkFileCount :: Integer
   , recordWorkBytes :: Integer
+  , recordWorkBudget :: Integer
   , recordWorkSha256 :: String
   , recordClosedAt :: Maybe String
   }
@@ -41,6 +46,7 @@ instance FromJSON Record where
       <*> object' .:? "exit_status"
       <*> object' .: "work_file_count"
       <*> object' .: "work_bytes"
+      <*> object' .: "work_budget_bytes"
       <*> object' .: "work_sha256"
       <*> object' .:? "closed_at"
 
@@ -73,6 +79,7 @@ runTests input = do
       check (recordExitStatus record == Just 0) "a passed run recorded the wrong exit status"
       check (recordWorkFileCount record == 1) "a passed run recorded the wrong work file count"
       check (recordWorkBytes record == 5) "a passed run recorded the wrong work bytes"
+      check (recordWorkBudget record == 20 * 1024 ^ (3 :: Int)) "a passed run recorded the wrong work budget"
       check (length (recordWorkSha256 record) == 64) "a passed run recorded no work digest"
 
     fixture parent "failure" $ \workspace -> do
@@ -140,8 +147,7 @@ runTests input = do
       let inputs = workspace </> "private-data" </> "scratch" </> "main" </> "inputs"
       createDirectoryIfMissing True inputs
       randomFile (inputs </> "a.bin") 2
-      removeBudgetCache workspace
-      (first, _, errors) <- runTool executable workspace [("XM1_TASK_OUTPUT_MAX", "3M")] ["exec", "--label", "first", "--", "true"]
+      (first, _, errors) <- runTool executable workspace [("XM1_TASK_OUTPUT_MAX", "3M"), ("XM1_TASK_MEASURE_SECONDS", "0")] ["exec", "--label", "first", "--", "true"]
       check (first == ExitSuccess) ("the budget removal run exited " ++ show first ++ ": " ++ errors)
       oldWork <- doesPathExist (oldRun </> "work")
       check (not oldWork) "the budget did not remove the old failed work"
@@ -149,11 +155,11 @@ runTests input = do
       firstRecord <- readRecord firstRun
       check (recordOutcome firstRecord == "passed") "the run after budget removal did not pass"
       randomFile (inputs </> "b.bin") 2
-      removeBudgetCache workspace
       before <- runDirectories workspace
-      (refused, _, refusalErrors) <- runTool executable workspace [("XM1_TASK_OUTPUT_MAX", "3M")] ["exec", "--label", "second", "--", "true"]
+      let taskDirectory = workspace </> "private-data" </> "scratch" </> "main"
+      (refused, _, refusalErrors) <- runTool executable workspace [("XM1_TASK_OUTPUT_MAX", "3M"), ("XM1_TASK_MEASURE_SECONDS", "0")] ["exec", "--label", "second", "--", "true"]
       check (refused == ExitFailure 75) ("the budget refusal exited " ++ show refused)
-      check ("Keep verdicts and digests in result/" `isInfixOf` refusalErrors) "the refusal did not print the clearing sentence"
+      check (taskDirectory `isInfixOf` refusalErrors) "the refusal did not name the task directory"
       after <- runDirectories workspace
       check (after == before) "a refused open created a run directory"
 
@@ -178,12 +184,47 @@ runTests input = do
       case childPid of
         Just value -> void (try (signalProcessGroup sigKILL value) :: IO (Either IOException ()))
         Nothing -> pure ()
+      abandoned <- findRun workspace "abandoned"
+      setSymbolicLinkTimesHiRes (abandoned </> "lock") ancient ancient
+      before <- getCurrentTime
       (status, _, errors) <- execTool executable workspace [] "next" (shell "printf 'next\\n' > \"$XM1_RUN_RESULT/next.txt\"")
       check (status == ExitSuccess) ("the run after abandonment exited " ++ show status ++ ": " ++ errors)
-      abandoned <- findRun workspace "abandoned"
       record <- readRecord abandoned
       check (recordOutcome record == "unjudged") "an abandoned open run was not recorded unjudged"
-      check (recordClosedAt record /= Nothing) "an abandoned run recorded no close time"
+      closedText <- case recordClosedAt record of
+        Just value -> pure value
+        Nothing -> ioError (userError "an abandoned run recorded no close time")
+      closed <- parseClosedAt closedText
+      check (abs (diffUTCTime closed before) < 300) ("the abandoned run did not record the current close time: " ++ closedText)
+
+    fixture parent "signal" $ \workspace -> do
+      environment <- cleanEnvironment []
+      (_, _, _, process) <- createProcess
+        (proc executable ["exec", "--label", "signal", "--", "sh", "-c", "printf '%s' $$ > \"$XM1_RUN_RESULT/child.pid\"; sleep 30"])
+        {cwd = Just workspace, env = Just environment, std_out = NoStream, std_err = NoStream}
+      childFile <- waitForChild workspace 100
+      check (childFile /= Nothing) "the signal fixture did not start"
+      runPid <- getPid process
+      pid <- case runPid of
+        Nothing -> ioError (userError "cannot read the fixture process id")
+        Just value -> pure value
+      signalProcess sigTERM pid
+      finished <- timeout 15_000_000 (waitForProcess process)
+      check (finished == Just (ExitFailure 143)) ("the forwarded signal exited " ++ show finished)
+      directory <- findRun workspace "signal"
+      record <- readRecord directory
+      check (recordOutcome record == "failed") "a signalled run was not recorded failed"
+      check (recordReason record == Just "signal") "a signalled run recorded the wrong reason"
+      childPid <- case childFile of
+        Just path -> do
+          text <- readFile path
+          pure (readMaybe text :: Maybe ProcessID)
+        Nothing -> pure Nothing
+      case childPid of
+        Just value -> do
+          gone <- waitGone 50 value
+          check gone "the forwarded signal did not terminate the command"
+        Nothing -> ioError (userError "the signal fixture wrote no child pid")
 
     fixture parent "keep" $ \workspace -> do
       let inputs = workspace </> "private-data" </> "scratch" </> "main" </> "inputs"
@@ -249,6 +290,7 @@ runTests input = do
       record <- readRecord directory
       check (recordOutcome record == "failed") "the work budget did not fail the run"
       check (recordReason record == Just "work-budget") "the work budget recorded the wrong reason"
+      check (recordWorkBudget record == 65536) "the work budget recorded the wrong limit"
       work <- doesPathExist (directory </> "work" </> "big.bin")
       check work "the work budget lost the run's work"
 
@@ -292,8 +334,10 @@ cleanEnvironment overrides = do
         , "XM1_RUN_RESULT"
         , "XM1_RUN_LABEL"
         , "XM1_TASK_OUTPUT_MAX"
+        , "XM1_TASK_MEASURE_SECONDS"
         , "XM1_RUN_WORK_MAX"
         , "XM1_RUN_POLL_MICROS"
+        , "XM1_RUN_PROGRAM"
         , "XM1_EMULATOR_SLOT"
         ]
       base = filter ((`notElem` dropped) . fst) inherited
@@ -332,17 +376,27 @@ readRecord directory = do
     Left problem -> ioError (userError ("invalid run.json in " ++ directory ++ ": " ++ problem))
     Right record -> pure record
 
-removeBudgetCache :: FilePath -> IO ()
-removeBudgetCache workspace = do
-  let path = workspace </> "private-data" </> "scratch" </> "main" </> "runs" </> ".budget"
-  present <- doesPathExist path
-  when present (removeFile path)
-
 randomFile :: FilePath -> Int -> IO ()
 randomFile path megabytes = do
   (status, _, errors) <- readProcessWithExitCode "dd"
     ["if=/dev/urandom", "of=" ++ path, "bs=1048576", "count=" ++ show megabytes, "status=none"] ""
   unless (status == ExitSuccess) (ioError (userError ("dd: " ++ errors)))
+
+ancient :: POSIXTime
+ancient = 1000000000
+
+parseClosedAt :: String -> IO UTCTime
+parseClosedAt text = case parseTimeM True defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" text of
+  Just value -> pure value
+  Nothing -> ioError (userError ("invalid closed_at: " ++ text))
+
+waitGone :: Int -> ProcessID -> IO Bool
+waitGone attempts pid = do
+  status <- try (signalProcess nullSignal pid) :: IO (Either IOException ())
+  case status of
+    Left _ -> pure True
+    Right () | attempts > 0 -> threadDelay 100_000 >> waitGone (attempts - 1) pid
+    _ -> pure False
 
 waitForChild :: FilePath -> Int -> IO (Maybe FilePath)
 waitForChild workspace attempts = do

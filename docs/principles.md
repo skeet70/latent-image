@@ -62,7 +62,7 @@ Cite what a claim rests on: a result's verdict or summary with its input and out
 
 Research output is working state, not a record. [Run output](../build-support/README.md#run-output) and [scratch expiry](../build-support/README.md#scratch-expiry) enforce these rules; none needs a review or an approval.
 
-1. **Run.** Run output goes only into `private-data/scratch/NAME/runs/STAMP-LABEL/`, created by `run-output` with `work/` and `result/`. NAME is the current branch without `agent/`. Tools take their output location from `$XM1_RUN_WORK` and `$XM1_RUN_RESULT`.
+1. **Run.** Run output goes only into `private-data/scratch/NAME/runs/STAMP-LABEL/`, created by `run-output` with `work/` and `result/`. NAME is the current branch without `agent/`. Pass `$XM1_RUN_WORK` and `$XM1_RUN_RESULT` to every tool that takes an output path; a tool that chooses its own location uses them.
 2. **Result.** `result/` holds the verdict and the facts it rests on, at most 16 MiB. `run.json` records the command, commit, exit status and the digest of the work the run produced. A run passed when the command given to `run-output exec` exited 0.
 3. **Work.** `work/` is deleted when a run closes passed, and 48 hours after an unjudged run ends; a run opened by a bare emulator slot is unjudged. A failed run keeps `work/` while it is the newest failed run of its label in its task.
 4. **Inputs and caches.** Inputs are staged by clone, not copy. An intermediate that later runs reuse moves to `scratch/NAME/inputs/` with `run-output keep`. Native cache entries live only in `private-data/cache/native`, bounded by `XM1_NATIVE_CACHE_MAX`. No cache is cited.

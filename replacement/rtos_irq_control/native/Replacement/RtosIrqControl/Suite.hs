@@ -280,14 +280,14 @@ correctionChecks one spec owned =
     ++ ["R0 differs" | N.lookupRegister R0 owned /= Just (caseResult one)]
     ++ ["correction wrote the table" | filteredWrites one owned /= Right []]
 
-runSuite :: FilePath -> FilePath -> Domain -> Image -> Image -> [(Word32, Word32)] -> IO SuiteRun
-runSuite runner cacheRoot domain loader owned symbols = do
+runSuite :: FilePath -> FilePath -> FilePath -> Domain -> Image -> Image -> [(Word32, Word32)] -> IO SuiteRun
+runSuite runner cacheRoot batchRoot domain loader owned symbols = do
   let selected = cases domain
       matches = [one | one <- selected, caseKind one == Match]
       stockSpecs = [caseFor domain Stock loader owned symbols one | one <- matches]
       ownedSpecs = [caseFor domain Owned loader owned symbols one | one <- selected]
-  stockBatch <- writeBatch (cacheRoot </> "stock") stockSpecs
-  ownedBatch <- writeBatch (cacheRoot </> "owned") ownedSpecs
+  stockBatch <- writeBatch (batchRoot </> "stock") stockSpecs
+  ownedBatch <- writeBatch (batchRoot </> "owned") ownedSpecs
   (stockReuse, stockRaw) <- cachedObservedBatch cacheRoot runner stockBatch
   (ownedReuse, ownedRaw) <- cachedObservedBatch cacheRoot runner ownedBatch
   let reference = M.fromList [(caseIdText ident, observation) | (ident, observation) <- stockRaw]

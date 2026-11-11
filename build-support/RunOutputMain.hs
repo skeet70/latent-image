@@ -1,8 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
--- | Opens, closes and inspects run directories under @private-data/scratch/NAME/runs/@.
+-- | Opens and closes run directories under @private-data/scratch/NAME/runs/@ and moves reusable
+-- intermediates into @inputs/@.
 module Main (main) where
 
-import Control.Monad (forM_, when)
+import Control.Concurrent.MVar (newEmptyMVar, putMVar, tryPutMVar, tryReadMVar)
+import Control.Exception (IOException, try)
+import Control.Monad (forM_, void, when)
 import Data.Either (isLeft)
 import qualified FujiAF.RunOutput as Run
 import FujiAF.StorageBudget (StorageBytes, parseByteCount)
@@ -11,6 +14,8 @@ import System.Environment (getArgs, lookupEnv)
 import System.Exit (ExitCode (..), exitWith)
 import System.FilePath (takeFileName)
 import System.IO (hPutStrLn, stderr, stdout)
+import System.Posix.Signals (Handler (Catch), Signal, installHandler, sigHUP, sigINT, sigTERM, signalProcessGroup)
+import System.Posix.Types (ProcessID)
 import System.Process (CreateProcess (..), createProcess, getPid, proc, waitForProcess)
 import Text.Read (readMaybe)
 
@@ -79,6 +84,7 @@ runExec arguments = do
           , Run.openLabel = label
           , Run.openOpener = Run.Exec
           , Run.openCommand = program : commandArguments
+          , Run.openWorkBudget = budget
           }
       case opened of
         Run.RunRefused refusal -> hPutStrLn stderr (Run.describeRefusal refusal) >> exitWith (ExitFailure 75)
@@ -111,21 +117,48 @@ runInherited program arguments = do
   (_, _, _, process) <- createProcess (proc program arguments)
   waitForProcess process
 
+signalExitCodes :: [(Signal, Int)]
+signalExitCodes = [(sigHUP, 1), (sigINT, 2), (sigTERM, 15)]
+
+forwardSignal :: Signal -> ProcessID -> IO ()
+forwardSignal signal group = void (try (signalProcessGroup signal group) :: IO (Either IOException ()))
+
 executeInRun :: Run.RunHandle -> FilePath -> [String] -> StorageBytes -> Run.Microseconds -> IO ()
 executeInRun handle program arguments budget poll = do
   let paths = Run.runPaths handle
+  received <- newEmptyMVar
+  group <- newEmptyMVar
+  let forward signal number = Catch $ do
+        _ <- tryPutMVar received (signal, number)
+        known <- tryReadMVar group
+        case known of
+          Just groupPid -> forwardSignal signal groupPid
+          Nothing -> pure ()
+  forM_ signalExitCodes $ \(signal, number) ->
+    void (installHandler signal (forward signal number) Nothing)
   environment <- Run.runEnvironment paths
   (_, _, _, process) <- createProcess (proc program arguments) {env = Just environment, create_group = True}
   child <- getPid process
   pid <- case child of
     Nothing -> ioError (userError "run-output: cannot read the child process id")
     Just value -> pure value
+  putMVar group pid
+  already <- tryReadMVar received
+  case already of
+    Just (signal, _) -> forwardSignal signal pid
+    Nothing -> pure ()
   (status, overBudget) <- Run.awaitWithinWorkBudget (Run.runWork paths) budget poll pid process
-  result <- Run.closeRun handle (Just status) (if overBudget then Just Run.WorkBudget else Nothing)
-  case (overBudget, status, Run.closeOutcome result, Run.closeFailure result) of
-    (True, _, _, _) -> exitWith (ExitFailure 75)
-    (False, ExitSuccess, Run.OutcomeFailed, Just Run.ResultTooLarge) -> exitWith (ExitFailure 75)
-    _ -> exitWith status
+  forwarded <- tryReadMVar received
+  let forced = case forwarded of
+        Just (_, number) -> Just (Run.Signal number)
+        Nothing -> if overBudget then Just Run.WorkBudget else Nothing
+  result <- Run.closeRun handle (Just status) forced
+  case forwarded of
+    Just (_, number) -> exitWith (ExitFailure (128 + number))
+    Nothing -> case (overBudget, status, Run.closeOutcome result, Run.closeFailure result) of
+      (True, _, _, _) -> exitWith (ExitFailure 75)
+      (False, ExitSuccess, Run.OutcomeFailed, Just Run.ResultTooLarge) -> exitWith (ExitFailure 75)
+      _ -> exitWith status
 
 runKeep :: [FilePath] -> IO ()
 runKeep paths = do

@@ -2,22 +2,23 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 module Main (main) where
 
-import Control.Exception (bracket)
+import Control.Exception (bracket, finally)
 import Control.Monad (unless)
-import Data.Aeson (FromJSON (..), eitherDecodeStrict', encode, object, withObject, (.:), (.=))
+import Data.Aeson (FromJSON (..), eitherDecodeStrict', encode, object, withObject, (.:), (.:?), (.=))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
 import qualified Data.ByteString.Lazy as BL
+import Data.List (isPrefixOf)
 import Data.Time.Calendar (Day, addDays)
 import Data.Time.Clock (utctDay)
 import Data.Time.Clock.POSIX (POSIXTime, getPOSIXTime, posixSecondsToUTCTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Foreign.C.Types (CInt (..))
-import System.Directory (canonicalizePath, createDirectoryIfMissing, doesPathExist, getTemporaryDirectory, removePathForcibly)
+import System.Directory (canonicalizePath, createDirectoryIfMissing, doesPathExist, getTemporaryDirectory, listDirectory, removePathForcibly)
 import System.Environment (getArgs, getEnvironment)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>), takeDirectory)
-import System.Posix.Files (createSymbolicLink, setFileSize, setSymbolicLinkTimesHiRes)
+import System.Posix.Files (createSymbolicLink, setFileMode, setFileSize, setSymbolicLinkTimesHiRes)
 import System.Posix.IO (OpenMode (ReadWrite), closeFd, defaultFileFlags, openFd)
 import System.Posix.Temp (mkdtemp)
 import System.Posix.Types (Fd (..))
@@ -36,6 +37,7 @@ data Summary = Summary
   , summaryExpiredFiles :: Integer
   , summaryExpiredBytes :: Integer
   , summaryExpiredWorkRuns :: Integer
+  , summaryClosedAbandonedRuns :: Integer
   , summaryPinnedFiles :: Integer
   , summaryPinnedBytes :: Integer
   , summaryRetainedFiles :: Integer
@@ -55,6 +57,7 @@ instance FromJSON Summary where
       <*> summaryObject .: "expired_files"
       <*> summaryObject .: "expired_bytes"
       <*> summaryObject .: "expired_work_runs"
+      <*> summaryObject .: "closed_abandoned_runs"
       <*> summaryObject .: "pinned_files"
       <*> summaryObject .: "pinned_bytes"
       <*> summaryObject .: "retained_files"
@@ -70,12 +73,14 @@ main :: IO ()
 main = do
   arguments <- getArgs
   case arguments of
-    [input] -> runTests input
-    _ -> ioError (userError "expected the scratch-expiry executable")
+    [input] -> runTests input Nothing
+    [input, runOutput] -> runTests input (Just runOutput)
+    _ -> ioError (userError "expected the scratch-expiry executable and optionally the run-output executable")
 
-runTests :: FilePath -> IO ()
-runTests input = do
+runTests :: FilePath -> Maybe FilePath -> IO ()
+runTests input relativeRunOutput = do
   executable <- canonicalizePath input
+  maybeRunOutput <- traverse canonicalizePath relativeRunOutput
   temporary <- getTemporaryDirectory
   bracket (mkdtemp (temporary </> "scratch-expiry-")) removePathForcibly $ \parent -> do
     now <- getPOSIXTime
@@ -110,6 +115,17 @@ runTests input = do
       check (summaryRetainedFiles summary == 0) "baselines-prefixed file was counted as retained"
       present <- doesPathExist kept
       check present "baselines-prefixed file was removed"
+
+    fixture parent "noncanonical-workspace" $ \workspace -> do
+      let old = workspace </> "private-data/scratch/old.bin"
+          alias = parent </> "noncanonical-workspace-alias"
+      B.writeFile old "old"
+      age old
+      createSymbolicLink workspace alias
+      summary <- runTool executable alias 7 True future
+      check (summaryExpiredFiles summary == 1) "a non-canonical workspace was not swept"
+      gone <- doesPathExist old
+      check (not gone) "a non-canonical workspace left the file"
 
     fixture parent "branch-owned" $ \workspace -> do
       git workspace ["checkout", "-q", "-b", "agent/Foo"]
@@ -152,6 +168,33 @@ runTests input = do
       check (ownedPresent && freshPresent) "owned directory lost a file"
       check (not otherGone) "unowned directory was not swept"
 
+    fixture parent "probe-errors" $ \workspace -> do
+      let taskList = workspace </> "private-data/scratch/CannotList"
+          hidden = taskList </> "hidden"
+          oldList = taskList </> "old.bin"
+          taskStat = workspace </> "private-data/scratch/CannotStat"
+          noexec = taskStat </> "noexec"
+          oldStat = taskStat </> "old.bin"
+      createDirectoryIfMissing True hidden
+      B.writeFile oldList "old"
+      age oldList
+      createDirectoryIfMissing True noexec
+      B.writeFile (noexec </> "entry.bin") "entry"
+      B.writeFile oldStat "old"
+      age oldStat
+      setFileMode hidden 0o000
+      setFileMode noexec 0o600
+      summary <- runTool executable workspace 7 True future
+        `finally` do
+          setFileMode hidden 0o700
+          setFileMode noexec 0o700
+      check (summaryOwnedDirectories summary == 2) "unreadable probe entries did not own their directories"
+      check (summaryExpiredFiles summary == 0) "a file under an unreadable probe entry expired"
+      check (summaryFailures summary == 0) "the ownership probe reported a failure"
+      listPresent <- doesPathExist oldList
+      statPresent <- doesPathExist oldStat
+      check (listPresent && statPresent) "an unreadable probe directory lost a file"
+
     fixture parent "hold-valid" $ \workspace -> do
       let task = workspace </> "private-data/scratch/Held"
           old = task </> "old.bin"
@@ -185,11 +228,16 @@ runTests input = do
       B.writeFile old "long hold"
       age old
       B.writeFile (task </> "HOLD") (holdContent 117 (addDays 25 today))
-      summary <- runTool executable workspace 7 True future
-      check (summaryOwnedDirectories summary == 0) "HOLD more than 30 days out owned its directory"
-      check (summaryExpiredFiles summary == 2) "an overlong HOLD and the file under it did not both expire"
+      before <- runTool executable workspace 7 True future
+      check (summaryOwnedDirectories before == 1) "a clamped HOLD did not keep its directory before the clamp"
+      check (summaryExpiredFiles before == 0) "a clamped HOLD expired before the clamp"
+      present <- doesPathExist old
+      check present "a clamped HOLD lost its file before the clamp"
+      after <- runTool executable workspace 7 True (future + 23 * 86400)
+      check (summaryOwnedDirectories after == 0) "a clamped HOLD still owned its directory after the clamp"
+      check (summaryExpiredFiles after == 2) "a clamped HOLD did not expire after the clamp"
       gone <- doesPathExist old
-      check (not gone) "file under an overlong HOLD survived"
+      check (not gone) "a clamped HOLD kept its file after the clamp"
 
     fixture parent "work-unjudged" $ \workspace -> do
       before <- writeRun workspace "Task" "Before" "unjudged" (Just (future - 49 * 3600))
@@ -233,12 +281,36 @@ runTests input = do
 
     fixture parent "work-open-free" $ \workspace -> do
       run <- writeRun workspace "Task" "Free" "open" Nothing
-      setAgeSeconds (run </> "lock") (future - 49 * 3600)
-      summary <- runTool executable workspace 7 True future
-      check (summaryExpiredWorkRuns summary == 1) "free open run work was not reported"
-      gone <- doesPathExist (run </> "work")
-      check (not gone) "free open run work survived"
+      dry <- runTool executable workspace 7 False future
+      check (summaryClosedAbandonedRuns dry == 1) "a free open run was not reported in the dry run"
+      check (summaryExpiredWorkRuns dry == 0) "a free open run lost work in the dry run"
+      recordBefore <- readRunFile (run </> "run.json")
+      check (runFileOutcome recordBefore == "open") "the dry run rewrote an open run"
+      workBefore <- doesPathExist (run </> "work")
+      check workBefore "the dry run removed open work"
+      appliedRun <- runTool executable workspace 7 True future
+      check (summaryClosedAbandonedRuns appliedRun == 1) "a free open run was not closed"
+      check (summaryExpiredWorkRuns appliedRun == 0) "closing a free open run removed its work"
+      recordAfter <- readRunFile (run </> "run.json")
+      check (runFileOutcome recordAfter == "unjudged") "the closed run was not marked unjudged"
+      check (runFileClosedAt recordAfter == Just (isoTime future)) "the closed run has the wrong closed_at"
+      workAfter <- doesPathExist (run </> "work")
+      check workAfter "closing a free open run removed its work"
       checkRunFilesKept run
+      later <- runTool executable workspace 7 True (future + 49 * 3600)
+      check (summaryExpiredWorkRuns later == 1) "unjudged work from a closed run did not expire"
+      gone <- doesPathExist (run </> "work")
+      check (not gone) "unjudged work from a closed run survived"
+      checkRunFilesKept run
+
+    fixture parent "untrusted-run" $ \workspace -> do
+      schemaRun <- writeRunWithJson workspace "Task" "Schema" (runJsonWith 2 "exec" "passed" (Just future))
+      openerRun <- writeRunWithJson workspace "Task" "Opener" (runJsonWith 1 "other" "passed" (Just future))
+      summary <- runTool executable workspace 7 True future
+      check (summaryExpiredWorkRuns summary == 0) "an untrusted run was acted on"
+      schemaWork <- doesPathExist (schemaRun </> "work")
+      openerWork <- doesPathExist (openerRun </> "work")
+      check (schemaWork && openerWork) "an untrusted run lost its work"
 
     fixture parent "cited" $ \workspace -> do
       let old = workspace </> "private-data/scratch/cited.bin"
@@ -308,6 +380,32 @@ runTests input = do
       check (summaryExpiredFiles summary == 0) "file cited by a live branch expired"
       present <- doesPathExist old
       check present "file cited by a live branch was removed"
+
+    fixture parent "origin-main-pin" $ \workspace -> do
+      git workspace ["checkout", "-q", "-b", "cited"]
+      commitAt workspace (future - 10 * 86400) "notes.md" "private-data/scratch/origin.bin\n"
+      git workspace ["update-ref", "refs/remotes/origin/main", "HEAD"]
+      git workspace ["checkout", "-q", "main"]
+      let old = workspace </> "private-data/scratch/origin.bin"
+      B.writeFile old "origin"
+      age old
+      summary <- runTool executable workspace 7 True future
+      check (summaryPinnedFiles summary == 1) "origin/main citation did not pin"
+      present <- doesPathExist old
+      check present "origin/main-pinned file was removed"
+
+    fixture parent "full-ref-branch" $ \workspace -> do
+      git workspace ["checkout", "-q", "-b", "live"]
+      commitAt workspace (future - 86400) "notes.md" "private-data/scratch/live.bin\n"
+      git workspace ["tag", "live", "main"]
+      git workspace ["checkout", "-q", "main"]
+      let old = workspace </> "private-data/scratch/live.bin"
+      B.writeFile old "live"
+      age old
+      summary <- runTool executable workspace 7 True future
+      check (summaryPinnedFiles summary == 1) "a live branch citation did not pin with an ambiguous tag"
+      present <- doesPathExist old
+      check present "a live-branch-pinned file was removed"
 
     fixture parent "keep-list" $ \workspace -> do
       commit workspace "build-support/scratch-keep.txt" "# fixture\nprivate-data/scratch/kept\n"
@@ -388,6 +486,23 @@ runTests input = do
       check (scratchExists && verifyExists) "a sweep root was removed"
 
     do
+      let raw = parent </> "no-head-workspace"
+      createDirectoryIfMissing True raw
+      workspace <- canonicalizePath raw
+      git workspace ["init", "-q", "-b", "main"]
+      createDirectoryIfMissing True (workspace </> "private-data/scratch")
+      createDirectoryIfMissing True (workspace </> "private-data/verify-candidate")
+      let old = workspace </> "private-data/scratch/old.bin"
+      B.writeFile old "old"
+      age old
+      (status, output, errors) <- runRaw executable ["--workspace", workspace, "--max-age-days", "7", "--now", show future, "--apply"]
+      check (status /= ExitSuccess) "a workspace without HEAD was accepted"
+      check (null output) "HEAD failure wrote to stdout"
+      check (length (lines errors) == 1) "HEAD failure reason is not one line"
+      present <- doesPathExist old
+      check present "a workspace without HEAD removed a file"
+
+    do
       let raw = parent </> "linked-workspace"
           outside = parent </> "linked-data"
       createDirectoryIfMissing True raw
@@ -424,6 +539,7 @@ runTests input = do
       check (summaryExpiredFiles dry == 1) "count fixture expired count"
       check (summaryExpiredBytes dry == 4) "count fixture expired bytes"
       check (summaryExpiredWorkRuns dry == 0) "count fixture expired run count"
+      check (summaryClosedAbandonedRuns dry == 0) "count fixture closed run count"
       check (summaryPinnedFiles dry == 1) "count fixture pinned count"
       check (summaryPinnedBytes dry == 5) "count fixture pinned bytes"
       check (summaryRetainedFiles dry == 1) "count fixture retained count"
@@ -437,6 +553,10 @@ runTests input = do
       pinnedPresent <- doesPathExist pinned
       recentPresent <- doesPathExist recent
       check (pinnedPresent && recentPresent) "count fixture removed a retained file"
+
+    case maybeRunOutput of
+      Nothing -> pure ()
+      Just runOutput -> runOutputTest executable runOutput parent future
 
 fixture :: FilePath -> String -> (FilePath -> IO ()) -> IO ()
 fixture parent name action = do
@@ -490,14 +610,35 @@ holdContent issue untilDay = BC.pack ("issue: " ++ show issue ++ "\nuntil: " ++ 
 isoTime :: Integer -> String
 isoTime seconds = formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" (posixSecondsToUTCTime (fromIntegral seconds))
 
+data RunFile = RunFile
+  { runFileOutcome :: String
+  , runFileClosedAt :: Maybe String
+  }
+
+instance FromJSON RunFile where
+  parseJSON = withObject "run file" $ \runObject ->
+    RunFile
+      <$> runObject .: "outcome"
+      <*> runObject .:? "closed_at"
+
+readRunFile :: FilePath -> IO RunFile
+readRunFile path = do
+  content <- B.readFile path
+  case eitherDecodeStrict' content of
+    Left problem -> ioError (userError ("invalid run file: " ++ problem))
+    Right record -> pure record
+
 runJson :: String -> Maybe Integer -> B.ByteString
-runJson outcome closed = BL.toStrict (encode (object fields))
+runJson = runJsonWith 1 "exec"
+
+runJsonWith :: Int -> String -> String -> Maybe Integer -> B.ByteString
+runJsonWith schema opener outcome closed = BL.toStrict (encode (object fields))
  where
   fields =
-    [ "schema_version" .= (1 :: Int)
+    [ "schema_version" .= schema
     , "task" .= ("Task" :: String)
     , "label" .= ("Label" :: String)
-    , "opener" .= ("exec" :: String)
+    , "opener" .= opener
     , "command" .= (["true"] :: [String])
     , "commit" .= ("0000000000000000000000000000000000000000" :: String)
     , "opened_at" .= ("2026-01-01T00:00:00Z" :: String)
@@ -512,13 +653,16 @@ runJson outcome closed = BL.toStrict (encode (object fields))
     ]
 
 writeRun :: FilePath -> String -> String -> String -> Maybe Integer -> IO FilePath
-writeRun workspace task name outcome closed = do
+writeRun workspace task name outcome closed = writeRunWithJson workspace task name (runJson outcome closed)
+
+writeRunWithJson :: FilePath -> String -> String -> B.ByteString -> IO FilePath
+writeRunWithJson workspace task name record = do
   let directory = workspace </> "private-data/scratch" </> task </> "runs" </> name
   createDirectoryIfMissing True (directory </> "work")
   B.writeFile (directory </> "work/dump.bin") "work"
   createDirectoryIfMissing True (directory </> "result")
   B.writeFile (directory </> "result/verdict.json") "{}"
-  B.writeFile (directory </> "run.json") (runJson outcome closed)
+  B.writeFile (directory </> "run.json") record
   B.writeFile (directory </> "lock") ""
   now <- getPOSIXTime
   let activity = workspace </> "private-data/scratch" </> task </> "activity"
@@ -570,3 +714,32 @@ runToolWith executable workspace days hours applied nowSeconds = do
   case eitherDecodeStrict' (BC.pack output) of
     Left problem -> ioError (userError ("invalid summary: " ++ problem ++ ": " ++ output))
     Right summary -> pure summary
+
+runOutputTest :: FilePath -> FilePath -> FilePath -> Integer -> IO ()
+runOutputTest executable runOutput parent future = fixture parent "run-output" $ \workspace -> do
+  git workspace ["checkout", "-q", "-b", "agent/Task"]
+  (status, output, errors) <- runIn workspace runOutput ["exec", "--", "false"]
+  check (status == ExitFailure 1) ("run-output exec false exited " ++ show status ++ ": " ++ output ++ errors)
+  runs <- filter (not . isPrefixOf ".") <$> listDirectory (workspace </> "private-data/scratch/Task/runs")
+  run <- case runs of
+    [name] -> pure (workspace </> "private-data/scratch/Task/runs" </> name)
+    _ -> ioError (userError ("expected one run directory, found " ++ show runs))
+  recordBefore <- B.readFile (run </> "run.json")
+  summary <- runTool executable workspace 7 True (future - 8 * 86400)
+  check (summaryExpiredWorkRuns summary == 0) "the sweep removed failed run work"
+  check (summaryFailures summary == 0) "the sweep failed on the real run record"
+  work <- doesPathExist (run </> "work")
+  check work "the sweep removed failed work"
+  recordAfter <- B.readFile (run </> "run.json")
+  check (recordBefore == recordAfter) "the sweep rewrote a failed run record"
+  runJsonPresent <- doesPathExist (run </> "run.json")
+  lockPresent <- doesPathExist (run </> "lock")
+  resultPresent <- doesPathExist (run </> "result")
+  check (runJsonPresent && lockPresent && resultPresent) "run metadata was removed"
+
+runIn :: FilePath -> FilePath -> [String] -> IO (ExitCode, String, String)
+runIn directory program arguments = do
+  environment <- getEnvironment
+  let removed = ["XM1_TASK_OUTPUT_MAX", "XM1_RUN_DIR", "XM1_RUN_WORK", "XM1_RUN_RESULT", "XM1_RUN_LABEL", "XM1_RUN_WORK_MAX", "XM1_RUN_POLL_MICROS", "XM1_EMULATOR_SLOT"]
+      environment' = filter (\(name, _) -> name `notElem` removed) environment
+  readCreateProcessWithExitCode (proc program arguments) {cwd = Just directory, env = Just environment'} ""

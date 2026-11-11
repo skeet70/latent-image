@@ -27,6 +27,7 @@ module FujiAF.RunOutput
   , describeRefusal
   , runEnvironment
   , awaitWithinWorkBudget
+  , resolveWorkBudget
   , defaultTaskBudget
   , defaultWorkBudget
   , defaultPollMicroseconds
@@ -50,7 +51,7 @@ import qualified Data.Set as Set
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.Time.Clock (UTCTime, getCurrentTime)
-import Data.Time.Clock.POSIX (getPOSIXTime, posixSecondsToUTCTime)
+import Data.Time.Clock.POSIX (getPOSIXTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Foreign.C.Error (throwErrno)
 import Foreign.C.Types (CInt (..))
@@ -61,13 +62,14 @@ import System.Environment (getEnvironment, lookupEnv)
 import System.Exit (ExitCode (..))
 import System.FilePath (isAbsolute, makeRelative, splitDirectories, takeDirectory, takeFileName, (</>))
 import System.IO.Error (isAlreadyExistsError, isDoesNotExistError)
-import System.Posix.Files (FileStatus, deviceID, fileBlocks, fileID, fileSize, getSymbolicLinkStatus, isDirectory, isRegularFile, isSymbolicLink, modificationTimeHiRes)
+import System.Posix.Files (FileStatus, deviceID, fileBlocks, fileID, fileSize, getSymbolicLinkStatus, isDirectory, isRegularFile, isSymbolicLink)
 import System.Posix.IO (FdOption (CloseOnExec), OpenFileFlags (creat), OpenMode (ReadWrite), closeFd, defaultFileFlags, openFd, setFdOption)
 import System.Posix.Process (getProcessID)
 import System.Posix.Signals (sigKILL, sigTERM, signalProcessGroup)
 import System.Posix.Types (DeviceID, Fd (..), FileID, ProcessID)
 import System.Process (ProcessHandle, readProcessWithExitCode, waitForProcess)
 import System.Timeout (timeout)
+import Text.Read (readMaybe)
 
 foreign import ccall unsafe "flock" c_flock :: CInt -> CInt -> IO CInt
 
@@ -117,11 +119,12 @@ outcomeText OutcomePassed = "passed"
 outcomeText OutcomeFailed = "failed"
 outcomeText OutcomeUnjudged = "unjudged"
 
-data CloseFailure = ResultTooLarge | WorkBudget
+data CloseFailure = ResultTooLarge | WorkBudget | Signal Int
 
 failureText :: CloseFailure -> String
 failureText ResultTooLarge = "result-too-large"
 failureText WorkBudget = "work-budget"
+failureText (Signal _) = "signal"
 
 data RunPaths = RunPaths
   { runDirectory :: FilePath
@@ -143,6 +146,7 @@ data RunHandle = RunHandle
   , handleCommand :: [String]
   , handleCommit :: Maybe String
   , handleOpenedAt :: UTCTime
+  , handleWorkBudget :: StorageBytes
   , handleLock :: Fd
   }
 
@@ -154,6 +158,7 @@ data OpenRequest = OpenRequest
   , openLabel :: Label
   , openOpener :: Opener
   , openCommand :: [String]
+  , openWorkBudget :: StorageBytes
   }
 
 data OpenResult = RunOpened RunHandle | RunRefused Refusal
@@ -162,6 +167,7 @@ data Refusal = Refusal
   { refusalMeasured :: StorageBytes
   , refusalLimit :: StorageBytes
   , refusalChildren :: [(FilePath, StorageBytes)]
+  , refusalDirectory :: FilePath
   }
 
 newtype Microseconds = Microseconds Int
@@ -230,7 +236,7 @@ openRun request = do
       now <- currentEpoch
       writeBudgetCache task after now
       if after > budgetBytes limit
-        then pure (RunRefused (Refusal (StorageBytes after) limit (largestChildren children)))
+        then pure (RunRefused (Refusal (StorageBytes after) limit (largestChildren children) (taskScratch task)))
         else createRun request
     else createRun request
 
@@ -248,8 +254,8 @@ createRun request = do
       createDirectory (runResult paths)
       lock <- openLock (directory </> "lock")
       commit <- gitCommit (taskWorkspace task) `onException` closeFd lock
-      let handle = RunHandle task paths label (openOpener request) (openCommand request) commit now lock
-      writeRunJson directory (openRecord task label (openOpener request) (openCommand request) commit now)
+      let handle = RunHandle task paths label (openOpener request) (openCommand request) commit now (openWorkBudget request) lock
+      writeRunJson directory (openRecord task label (openOpener request) (openCommand request) (openWorkBudget request) commit now)
         `onException` closeFd lock
       pure (RunOpened handle))
     (removePathForcibly directory)
@@ -315,20 +321,13 @@ markAbandoned task = do
         case state of
           LockBusy -> releaseLock state
           _ -> do
-            closedAt <- lockClosedAt directory
-            writeRunJson directory (markUnjudged object' closedAt) `finally` releaseLock state
+            now <- getCurrentTime
+            writeRunJson directory (markUnjudged object' (utcIso now)) `finally` releaseLock state
       _ -> pure ()
 
 markUnjudged :: Object -> String -> Value
 markUnjudged object' closedAt =
   Object (KM.insert "closed_at" (String (T.pack closedAt)) (KM.insert "outcome" (String "unjudged") object'))
-
-lockClosedAt :: FilePath -> IO String
-lockClosedAt directory = do
-  let lock = directory </> "lock"
-  present <- entryExists lock
-  status <- getSymbolicLinkStatus (if present then lock else directory)
-  pure (utcIso (posixSecondsToUTCTime (modificationTimeHiRes status)))
 
 runDirectories :: Task -> IO [FilePath]
 runDirectories task = do
@@ -348,14 +347,24 @@ runDirectories task = do
 measureTaskBudget :: Task -> StorageBytes -> IO (Integer, [(FilePath, Integer)])
 measureTaskBudget task limit = do
   now <- currentEpoch
+  lifetime <- measureLifetime
   cached <- readBudgetCache (taskRuns task </> ".budget")
   case cached of
     Just (BudgetCache bytes measuredAt)
-      | bytes <= budgetBytes limit && now - measuredAt < budgetCacheSeconds -> pure (bytes, [])
+      | bytes <= budgetBytes limit && now - measuredAt < lifetime -> pure (bytes, [])
     _ -> do
       (bytes, children) <- measureTaskFresh task
       writeBudgetCache task bytes now
       pure (bytes, children)
+
+measureLifetime :: IO Integer
+measureLifetime = do
+  raw <- lookupEnv "XM1_TASK_MEASURE_SECONDS"
+  case raw of
+    Nothing -> pure budgetCacheSeconds
+    Just text -> case readMaybe text :: Maybe Integer of
+      Just seconds | seconds >= 0 -> pure seconds
+      _ -> ioError (userError "XM1_TASK_MEASURE_SECONDS must be a non-negative integer")
 
 measureTaskFresh :: Task -> IO (Integer, [(FilePath, Integer)])
 measureTaskFresh task = do
@@ -487,11 +496,17 @@ taskBudget = do
   raw <- maybe "10G" id <$> lookupEnv "XM1_TASK_OUTPUT_MAX"
   either (ioError . userError) pure (parseByteCount raw)
 
+-- | The per-run work limit: @XM1_RUN_WORK_MAX@, else 20 GiB.
+resolveWorkBudget :: IO StorageBytes
+resolveWorkBudget = do
+  raw <- maybe "20G" id <$> lookupEnv "XM1_RUN_WORK_MAX"
+  either (ioError . userError) pure (parseByteCount raw)
+
 budgetBytes :: StorageBytes -> Integer
 budgetBytes (StorageBytes value) = value
 
-openRecord :: Task -> Label -> Opener -> [String] -> Maybe String -> UTCTime -> Value
-openRecord task label opener command commit openedAt =
+openRecord :: Task -> Label -> Opener -> [String] -> StorageBytes -> Maybe String -> UTCTime -> Value
+openRecord task label opener command workBudget commit openedAt =
   object
     [ "schema_version" .= (1 :: Int)
     , "task" .= taskName task
@@ -499,6 +514,7 @@ openRecord task label opener command commit openedAt =
     , "opener" .= openerText opener
     , "command" .= command
     , "commit" .= commit
+    , "work_budget_bytes" .= budgetBytes workBudget
     , "opened_at" .= utcIso openedAt
     , "closed_at" .= (Nothing :: Maybe String)
     , "exit_status" .= (Nothing :: Maybe Int)
@@ -562,6 +578,7 @@ closeRecord handle status outcome failure now digest =
     , "opener" .= openerText (handleOpener handle)
     , "command" .= handleCommand handle
     , "commit" .= handleCommit handle
+    , "work_budget_bytes" .= budgetBytes (handleWorkBudget handle)
     , "opened_at" .= utcIso (handleOpenedAt handle)
     , "closed_at" .= utcIso now
     , "exit_status" .= fmap exitStatusNumber status
@@ -703,10 +720,12 @@ describeRefusal :: Refusal -> String
 describeRefusal refusal =
   intercalate
     "\n"
-    ( ("run-output: task output is over its budget: " ++ show measured ++ " bytes allocated, " ++ show limit ++ " allowed")
-        : [ "run-output: largest child " ++ name ++ ": " ++ show bytes ++ " bytes"
-          | (name, StorageBytes bytes) <- refusalChildren refusal
-          ]
+    ( [ "run-output: task directory " ++ refusalDirectory refusal ++ " is over XM1_TASK_OUTPUT_MAX="
+          ++ show limit ++ ": " ++ show measured ++ " bytes allocated"
+      ]
+        ++ [ "run-output: largest child " ++ name ++ ": " ++ show bytes ++ " bytes"
+           | (name, StorageBytes bytes) <- refusalChildren refusal
+           ]
         ++ ["Keep verdicts and digests in result/, delete what no later run needs or move it with run-output keep, then retry."]
     )
  where

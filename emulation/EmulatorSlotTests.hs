@@ -1,17 +1,20 @@
+{-# LANGUAGE OverloadedStrings #-}
 -- | Behavioral admission tests against the host user manager, without large allocations.
 module Main (main) where
 
 import Control.Concurrent (threadDelay)
 import Control.Exception (IOException, try)
-import Control.Monad (forM, unless)
+import Control.Monad (forM, forM_, unless)
+import Data.Aeson (FromJSON (parseJSON), eitherDecodeStrict', withObject, (.:))
+import qualified Data.ByteString as B
 import Data.Char (isHexDigit)
 import Data.IORef (modifyIORef, newIORef, readIORef)
 import Data.List (isInfixOf, stripPrefix)
-import Data.Maybe (fromMaybe, mapMaybe)
-import System.Directory (copyFile, createDirectoryIfMissing, findExecutable, getTemporaryDirectory, makeAbsolute, removeFile)
+import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
+import System.Directory (copyFile, createDirectoryIfMissing, doesDirectoryExist, doesFileExist, findExecutable, getTemporaryDirectory, listDirectory, makeAbsolute, removeFile)
 import System.Environment (getArgs, getEnvironment, lookupEnv)
 import System.Exit (ExitCode (..), exitFailure)
-import System.FilePath ((</>))
+import System.FilePath ((</>), takeFileName)
 import System.IO (Handle, hClose, hGetLine)
 import System.Posix.Files (setFileMode)
 import System.Posix.Process (getProcessID)
@@ -30,6 +33,10 @@ data Admission = Admission [String] (Maybe String)
   deriving (Show)
 newtype ObservedInvocation = ObservedInvocation String
   deriving (Eq, Show)
+newtype RunLabel = RunLabel String
+
+instance FromJSON RunLabel where
+  parseJSON = withObject "run" $ \object' -> RunLabel <$> object' .: "label"
 
 main :: IO ()
 main = do
@@ -395,7 +402,26 @@ run source builder wrapper = do
   (unknownMigrationCode, _, _) <- readCreateProcessWithExitCode
     (proc builder ["--migrate-build-records"]) {env = Just environment} ""
   unknownMigrationOk <- expect "unknown legacy metadata is refused rather than cleared" (unknownMigrationCode /= ExitSuccess)
-  pure (and [nativeCliOk, defaultFullOk, overrideCapsOk, fullOk, largeNativeOk, overlap, atomicOk, pinnedOk, exitsOk, buildOverlap, buildBudget, buildExit, smallOk, nativeLimit, nestedOk, nestedBuildOk, exitOk, crashOk, survivorOk, reusedManagedOk, legacyOk, reusedLegacyOk, invalidLegacyOk, storageOk, capOk, sessionOk, startupOk, migrationLockOk, migrationOk, unknownMigrationOk])
+  let labelWorkspace = root </> "run-label"
+      explicitWorkspace = root </> "run-label-explicit"
+  forM_ [labelWorkspace, explicitWorkspace] $ \directory -> do
+    createDirectoryIfMissing True directory
+    createDirectoryIfMissing True (directory </> "private-data")
+    (code, _, errors) <- readCreateProcessWithExitCode (proc "git" ["init", "-q", "-b", "main"]) {cwd = Just directory} ""
+    unless (code == ExitSuccess) (ioError (userError ("git init: " ++ errors)))
+  labelJob <- startIn source labelWorkspace environment
+  _ <- admission labelJob
+  release labelJob
+  _ <- finish labelJob
+  programLabel <- readRunLabel labelWorkspace
+  programLabelOk <- expect "a slot run is labelled with the original program name" (programLabel == Just (takeFileName source))
+  explicitJob <- startIn source explicitWorkspace (change "XM1_RUN_LABEL" "explicit-label" environment)
+  _ <- admission explicitJob
+  release explicitJob
+  _ <- finish explicitJob
+  explicitLabel <- readRunLabel explicitWorkspace
+  explicitLabelOk <- expect "XM1_RUN_LABEL overrides the slot's program label" (explicitLabel == Just "explicit-label")
+  pure (and [nativeCliOk, defaultFullOk, overrideCapsOk, fullOk, largeNativeOk, overlap, atomicOk, pinnedOk, exitsOk, buildOverlap, buildBudget, buildExit, smallOk, nativeLimit, nestedOk, nestedBuildOk, exitOk, crashOk, survivorOk, reusedManagedOk, legacyOk, reusedLegacyOk, invalidLegacyOk, storageOk, capOk, sessionOk, startupOk, migrationLockOk, migrationOk, unknownMigrationOk, programLabelOk, explicitLabelOk])
 
 change :: String -> String -> [(String, String)] -> [(String, String)]
 change key value environment = (key, value) : filter ((/= key) . fst) environment
@@ -481,6 +507,29 @@ release (Probe input _ _) = hClose input
 finish :: Probe -> IO (Maybe ExitCode)
 finish (Probe _ _ process) = timeout 15_000_000 (waitForProcess process)
 
+startIn :: FilePath -> FilePath -> [(String, String)] -> IO Probe
+startIn program directory environment = start (proc program []) {cwd = Just directory, env = Just environment}
+
+readRunLabel :: FilePath -> IO (Maybe String)
+readRunLabel workspace = do
+  let runs = workspace </> "private-data" </> "scratch" </> "main" </> "runs"
+  present <- doesDirectoryExist runs
+  if not present
+    then pure Nothing
+    else do
+      names <- listDirectory runs
+      labels <- forM names $ \name -> do
+        let record = runs </> name </> "run.json"
+        exists <- doesFileExist record
+        if not exists
+          then pure Nothing
+          else do
+            bytes <- B.readFile record
+            pure (case eitherDecodeStrict' bytes of
+              Right (RunLabel label) -> Just label
+              Left _ -> Nothing)
+      pure (listToMaybe [label | Just label <- labels])
+
 start :: CreateProcess -> IO Probe
 start command = do
   started <- createProcess command {std_in = CreatePipe, std_out = CreatePipe}
@@ -495,6 +544,6 @@ probeEnvironment home = do
   uid <- getEffectiveUserID
   let runtime = "/run/user/" ++ show uid
       keep key value environment = if any ((== key) . fst) environment then environment else (key, value) : environment
-      dropped = ["HOME", "XM1_EMULATOR_SLOT", "XM1_EMULATOR_MEMORY_MAX", "XM1_EMULATOR_SWAP_MAX", "XM1_NATIVE_MEMORY_MAX", "XM1_NATIVE_SWAP_MAX", "XM1_HOST_BUILD_MEMORY_MAX", "XM1_HOST_BUILD_SWAP_MAX", "XM1_NATIVE_SLOTS", "XM1_HOST_BUILD", "XM1_ADMISSION_SCOPE", "XM1_ADMISSION_OWNER", "XM1_STORAGE_MIN_FREE", "XM1_PROBE_CLASS", "XM1_PROBE_LEGACY", "XM1_PROBE_NESTED", "XM1_PROBE_SURVIVOR", "XM1_PROBE_EXIT", "XM1_PROBE_ALLOCATE_BYTES"]
+      dropped = ["HOME", "XM1_EMULATOR_SLOT", "XM1_EMULATOR_MEMORY_MAX", "XM1_EMULATOR_SWAP_MAX", "XM1_NATIVE_MEMORY_MAX", "XM1_NATIVE_SWAP_MAX", "XM1_HOST_BUILD_MEMORY_MAX", "XM1_HOST_BUILD_SWAP_MAX", "XM1_NATIVE_SLOTS", "XM1_HOST_BUILD", "XM1_ADMISSION_SCOPE", "XM1_ADMISSION_OWNER", "XM1_STORAGE_MIN_FREE", "XM1_PROBE_CLASS", "XM1_PROBE_LEGACY", "XM1_PROBE_NESTED", "XM1_PROBE_SURVIVOR", "XM1_PROBE_EXIT", "XM1_PROBE_ALLOCATE_BYTES", "XM1_RUN_DIR", "XM1_RUN_WORK", "XM1_RUN_RESULT", "XM1_RUN_PROGRAM", "XM1_RUN_LABEL", "XM1_TASK_OUTPUT_MAX", "XM1_TASK_MEASURE_SECONDS"]
   pure (("HOME", home) : ("XM1_STORAGE_MIN_FREE", "1") : filter ((`notElem` dropped) . fst)
     (keep "XDG_RUNTIME_DIR" runtime (keep "DBUS_SESSION_BUS_ADDRESS" ("unix:path=" ++ runtime ++ "/bus") inherited)))

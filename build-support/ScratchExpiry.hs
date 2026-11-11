@@ -2,7 +2,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 module Main (main) where
 
-import Control.Exception (IOException, bracket, catch, throwIO)
+import Control.Exception (IOException, bracket, bracketOnError, catch, finally, throwIO)
 import Control.Monad (forM_, unless, when)
 import Data.Aeson (FromJSON (..), Value (..), eitherDecodeStrict', encode, object, withObject, (.:), (.:?), (.=))
 import qualified Data.Aeson.KeyMap as KM
@@ -21,15 +21,15 @@ import qualified Data.Text as T
 import Data.Text.Encoding (decodeUtf8')
 import Data.Time.Calendar (Day)
 import Data.Time.Clock (UTCTime (..))
-import Data.Time.Clock.POSIX (POSIXTime, getPOSIXTime, utcTimeToPOSIXSeconds)
-import Data.Time.Format (defaultTimeLocale, parseTimeM)
+import Data.Time.Clock.POSIX (POSIXTime, getPOSIXTime, posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
+import Data.Time.Format (defaultTimeLocale, formatTime, parseTimeM)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Foreign.C.Types (CInt (..))
-import System.Directory (canonicalizePath, doesPathExist, removeDirectory, removeFile)
+import System.Directory (canonicalizePath, doesPathExist, removeDirectory, removeFile, renameFile)
 import System.Environment (getArgs)
 import System.Exit (ExitCode (..), exitWith)
 import System.FilePath (isAbsolute, normalise, splitDirectories, takeDirectory, (</>))
-import System.IO (hPutStrLn, stderr)
+import System.IO (hClose, hPutStrLn, openTempFile, stderr)
 import System.IO.Error (isDoesNotExistError, isPermissionError)
 import System.Posix.Directory (closeDirStream, openDirStream, readDirStreamMaybe)
 import System.Posix.Files (FileStatus, deviceID, fileMode, fileOwner, fileSize, getSymbolicLinkStatus, intersectFileModes, isDirectory, isRegularFile, isSymbolicLink, modificationTimeHiRes, nullFileMode, ownerWriteMode, setFileMode, statusChangeTimeHiRes, unionFileModes)
@@ -61,6 +61,7 @@ data Counts = Counts
   { countExpiredFiles :: !FileCount
   , countExpiredBytes :: !ByteCount
   , countExpiredWorkRuns :: !RunCount
+  , countClosedAbandonedRuns :: !RunCount
   , countPinnedFiles :: !FileCount
   , countPinnedBytes :: !ByteCount
   , countRetainedFiles :: !FileCount
@@ -71,7 +72,7 @@ data Counts = Counts
   }
 
 emptyCounts :: Counts
-emptyCounts = Counts (FileCount 0) (ByteCount 0) (RunCount 0) (FileCount 0) (ByteCount 0) (FileCount 0) (ByteCount 0) (DirectoryCount 0) (DirectoryCount 0) (FailureCount 0)
+emptyCounts = Counts (FileCount 0) (ByteCount 0) (RunCount 0) (RunCount 0) (FileCount 0) (ByteCount 0) (FileCount 0) (ByteCount 0) (DirectoryCount 0) (DirectoryCount 0) (FailureCount 0)
 
 data Sweep = Sweep
   { sweepNow :: POSIXTime
@@ -96,7 +97,8 @@ data Bucket = ExpiredBucket | PinnedBucket | RetainedBucket
 data Ownership = Owned | Unowned deriving (Eq)
 
 data BranchInfo = BranchInfo
-  { branchName :: String
+  { branchRefName :: String
+  , branchShortName :: String
   , branchCommittedAt :: Integer
   }
 
@@ -115,6 +117,10 @@ data EvidenceRecord = EvidenceRecord
 
 instance FromJSON RunRecord where
   parseJSON = withObject "run record" $ \recordObject -> do
+    schema <- recordObject .: "schema_version" :: Parser Int
+    unless (schema == 1) (fail "unsupported run schema")
+    openerText <- recordObject .: "opener" :: Parser Text
+    unless (openerText == "exec" || openerText == "slot") (fail "unknown run opener")
     outcomeText <- recordObject .: "outcome" :: Parser Text
     outcome <- case outcomeText of
       "open" -> pure OutcomeOpen
@@ -151,6 +157,9 @@ keepListPath = "build-support/scratch-keep.txt"
 
 evidencePath :: FilePath
 evidencePath = "docs/evidence.jsonl"
+
+originMainRef :: String
+originMainRef = "refs/remotes/origin/main"
 
 citationSizeLimit :: Integer
 citationSizeLimit = 16 * 1024 * 1024
@@ -268,6 +277,7 @@ printSummary applied stopped days hours counts =
             , "expired_files" .= fileCount (countExpiredFiles counts)
             , "expired_bytes" .= byteCount (countExpiredBytes counts)
             , "expired_work_runs" .= runCount (countExpiredWorkRuns counts)
+            , "closed_abandoned_runs" .= runCount (countClosedAbandonedRuns counts)
             , "pinned_files" .= fileCount (countPinnedFiles counts)
             , "pinned_bytes" .= byteCount (countPinnedBytes counts)
             , "retained_files" .= fileCount (countRetainedFiles counts)
@@ -283,11 +293,10 @@ printSummary applied stopped days hours counts =
 validateWorkspace :: FilePath -> IO WorkspaceRoot
 validateWorkspace input = do
   let normalized = normalise input
-  unless (isAbsolute normalized && normalized == input) (failWith "workspace must be a normalized absolute path")
+  unless (isAbsolute normalized) (failWith "workspace must be an absolute path")
   present <- doesPathExist normalized
   unless present (failWith "workspace does not exist")
   resolved <- canonicalizePath normalized
-  unless (resolved == normalized) (failWith "workspace path must be canonical")
   status <- getSymbolicLinkStatus resolved
   unless (isDirectory status && not (isSymbolicLink status)) (failWith "workspace must be a directory")
   repository <- doesPathExist (resolved </> ".git")
@@ -311,33 +320,45 @@ stopFilePresent root = do
 
 collectPins :: WorkspaceRoot -> POSIXTime -> AgeDays -> IO Pins
 collectPins (WorkspaceRoot root) reference days = do
-  headPresent <- hasHead root
-  if not headPresent
-    then pure (Pins Set.empty Set.empty Set.empty)
-    else do
-      grace <- graceCommit root reference days
-      live <- liveBranches root reference days
-      let historyRefs = uniqueRefs ("HEAD" : maybe [] pure grace)
-          keepRefs = uniqueRefs (historyRefs ++ map branchRef live)
-      keepEntries <- fmap Set.unions (mapM (keepListAt root) keepRefs)
-      historyCitations <- fmap Set.unions (mapM (citationsAt root) historyRefs)
-      historyStrong <- fmap Set.unions (mapM (strongCitationsAt root) historyRefs)
-      addedCitations <- fmap Set.unions (mapM (liveBranchCitations root) live)
-      addedStrong <- fmap Set.unions (mapM (liveBranchStrongCitations root) live)
-      pure
-        ( Pins
-            (Set.union historyCitations addedCitations)
-            (Set.union historyStrong addedStrong)
-            keepEntries
-        )
+  requireHead root
+  originPresent <- refExists root originMainRef
+  grace <- graceCommit root reference days
+  live <- liveBranches root reference days
+  let historyRefs = uniqueRefs (["HEAD"] ++ [originMainRef | originPresent] ++ maybe [] pure grace)
+      keepRefs = uniqueRefs (historyRefs ++ map branchRefName live)
+  keepEntries <- fmap Set.unions (mapM (keepListAt root) keepRefs)
+  historyCitations <- fmap Set.unions (mapM (citationsAt root) historyRefs)
+  historyStrong <- fmap Set.unions (mapM (strongCitationsAt root) historyRefs)
+  branchPins <- mapM (liveBranchPins root) live
+  pure
+    ( Pins
+        (Set.union historyCitations (Set.unions (map fst branchPins)))
+        (Set.union historyStrong (Set.unions (map snd branchPins)))
+        keepEntries
+    )
 
 uniqueRefs :: [String] -> [String]
 uniqueRefs = Set.toList . Set.fromList
 
-hasHead :: FilePath -> IO Bool
-hasHead root = do
-  (status, _, _) <- readProcessWithExitCode "git" ["-C", root, "rev-parse", "--verify", "--quiet", "HEAD"] ""
-  pure (status == ExitSuccess)
+forceSet :: Set.Set RelativePath -> Set.Set RelativePath
+forceSet values = Set.foldl' force () values `seq` values
+ where
+  force () (RelativePath path) = length path `seq` ()
+
+requireHead :: FilePath -> IO ()
+requireHead root = do
+  (status, _, errors) <- git root ["rev-parse", "--verify", "HEAD"]
+  case status of
+    ExitSuccess -> pure ()
+    _ -> failWith ("git rev-parse HEAD: " ++ firstLine errors)
+
+refExists :: FilePath -> String -> IO Bool
+refExists root ref = do
+  (status, _, errors) <- git root ["show-ref", "--verify", "--quiet", ref]
+  case status of
+    ExitSuccess -> pure True
+    ExitFailure 1 -> pure False
+    _ -> failWith ("git show-ref " ++ ref ++ ": " ++ firstLine errors)
 
 git :: FilePath -> [String] -> IO (ExitCode, String, String)
 git root arguments = readProcessWithExitCode "git" (["-C", root] ++ arguments) ""
@@ -355,7 +376,7 @@ collectBranchDates :: WorkspaceRoot -> IO (Map.Map String Integer)
 collectBranchDates (WorkspaceRoot root) = do
   (status, output, errors) <- git root ["for-each-ref", "--format=%(refname)%09%(committerdate:unix)", "refs/heads"]
   case status of
-    ExitSuccess -> pure (Map.fromList [(branchName branch, branchCommittedAt branch) | branch <- mapMaybe parseBranch (lines output)])
+    ExitSuccess -> pure (Map.fromList [(branchShortName branch, branchCommittedAt branch) | branch <- mapMaybe parseBranch (lines output)])
     _ -> failWith ("git for-each-ref: " ++ firstLine errors)
 
 liveBranches :: FilePath -> POSIXTime -> AgeDays -> IO [BranchInfo]
@@ -377,10 +398,7 @@ parseBranch line =
   in do
        name <- stripPrefix "refs/heads/" referenceName
        date <- readMaybe dateText :: Maybe Integer
-       pure (BranchInfo name date)
-
-branchRef :: BranchInfo -> String
-branchRef branch = "refs/heads/" ++ branchName branch
+       pure (BranchInfo referenceName name date)
 
 graceCommit :: FilePath -> POSIXTime -> AgeDays -> IO (Maybe String)
 graceCommit root reference days = do
@@ -399,7 +417,7 @@ keepListAt root ref = do
       content <- gitShow root ref keepListPath
       case decodeUtf8' content of
         Left _ -> failWith ("invalid UTF-8 in " ++ keepListPath ++ " at " ++ ref)
-        Right text -> pure (Set.fromList (mapMaybe keepListEntry (T.lines text)))
+        Right text -> pure (forceSet (Set.fromList (mapMaybe keepListEntry (T.lines text))))
 
 keepListEntry :: Text -> Maybe RelativePath
 keepListEntry line =
@@ -427,11 +445,14 @@ gitShow root ref path = do
 
 citationsAt :: FilePath -> String -> IO (Set.Set RelativePath)
 citationsAt root ref = do
-  (status, output, errors) <- git root ["grep", "-h", "-o", "-I", "-E", "-e", citationPattern, ref]
+  (status, output, errors) <- gitBytes root ["grep", "-h", "-o", "-I", "-E", "-e", citationPattern, ref]
   case status of
-    ExitSuccess -> pure (Set.fromList (map RelativePath (lines output)))
+    ExitSuccess -> pure (forceSet (foldl' add Set.empty (BC.lines output)))
     ExitFailure 1 -> pure Set.empty
     _ -> failWith ("git grep: " ++ firstLine errors)
+ where
+  add found line = Set.insert (RelativePath (BC.unpack line)) found
+
 
 strongCitationsAt :: FilePath -> String -> IO (Set.Set RelativePath)
 strongCitationsAt root ref = do
@@ -443,49 +464,51 @@ strongCitationsAt root ref = do
       pure (strongCitations content)
 
 strongCitations :: B.ByteString -> Set.Set RelativePath
-strongCitations content =
-  Set.fromList
-    [ RelativePath (T.unpack path)
-    | line <- BC.lines content
-    , Right record <- [eitherDecodeStrict' line]
-    , path <- evidencePaths record
-    ]
+strongCitations content = forceSet (foldl' add Set.empty (BC.lines content))
+ where
+  add found line = case eitherDecodeStrict' line of
+    Right record -> foldl' (\values path -> Set.insert (RelativePath (T.unpack path)) values) found (evidencePaths record)
+    Left _ -> found
 
-liveBranchCitations :: FilePath -> BranchInfo -> IO (Set.Set RelativePath)
-liveBranchCitations root branch = do
+liveBranchPins :: FilePath -> BranchInfo -> IO (Set.Set RelativePath, Set.Set RelativePath)
+liveBranchPins root branch = do
   base <- mergeBase root branch
-  added <- addedByteLines root base branch []
-  pure (Set.fromList (map RelativePath (concatMap (scanCitations . BC.unpack) added)))
-
-liveBranchStrongCitations :: FilePath -> BranchInfo -> IO (Set.Set RelativePath)
-liveBranchStrongCitations root branch = do
-  base <- mergeBase root branch
-  added <- addedByteLines root base branch [evidencePath]
-  pure
-    ( Set.fromList
-        [ RelativePath (T.unpack path)
-        | line <- added
-        , Right record <- [eitherDecodeStrict' line]
-        , path <- evidencePaths record
-        ]
-    )
+  citations <- addedCitations root base branch
+  strong <- addedStrongCitations root base branch
+  pure (citations, strong)
 
 mergeBase :: FilePath -> BranchInfo -> IO String
 mergeBase root branch = do
-  (status, output, errors) <- git root ["merge-base", "HEAD", branchName branch]
+  (status, output, errors) <- git root ["merge-base", "HEAD", branchRefName branch]
   case status of
     ExitSuccess -> case lines output of
       first : _ -> pure first
-      [] -> failWith ("git merge-base " ++ branchName branch ++ ": no merge base")
-    _ -> failWith ("git merge-base " ++ branchName branch ++ ": " ++ firstLine errors)
+      [] -> failWith ("git merge-base " ++ branchRefName branch ++ ": no merge base")
+    _ -> failWith ("git merge-base " ++ branchRefName branch ++ ": " ++ firstLine errors)
 
-addedByteLines :: FilePath -> String -> BranchInfo -> [FilePath] -> IO [B.ByteString]
-addedByteLines root base branch pathspec = do
-  let arguments = ["diff", "--unified=0", "--no-color", base, branchName branch] ++ (if null pathspec then [] else "--" : pathspec)
-  (status, output, errors) <- gitBytes root arguments
+addedCitations :: FilePath -> String -> BranchInfo -> IO (Set.Set RelativePath)
+addedCitations root base branch = do
+  (status, output, errors) <- gitBytes root ["diff", "--unified=0", "--no-color", base, branchRefName branch]
   case status of
-    ExitSuccess -> pure [B.drop 1 line | line <- B.split 10 output, isAddedLine line]
+    ExitSuccess -> pure (forceSet (foldl' add Set.empty (B.split 10 output)))
     _ -> failWith ("git diff: " ++ firstLine errors)
+ where
+  add found line
+    | isAddedLine line = foldl' (\values citation -> Set.insert (RelativePath citation) values) found (scanCitations (BC.unpack (B.drop 1 line)))
+    | otherwise = found
+
+addedStrongCitations :: FilePath -> String -> BranchInfo -> IO (Set.Set RelativePath)
+addedStrongCitations root base branch = do
+  (status, output, errors) <- gitBytes root ["diff", "--unified=0", "--no-color", base, branchRefName branch, "--", evidencePath]
+  case status of
+    ExitSuccess -> pure (forceSet (foldl' add Set.empty (B.split 10 output)))
+    _ -> failWith ("git diff: " ++ firstLine errors)
+ where
+  add found line
+    | isAddedLine line = case eitherDecodeStrict' (B.drop 1 line) of
+        Right record -> foldl' (\values path -> Set.insert (RelativePath (T.unpack path)) values) found (evidencePaths record)
+        Left _ -> found
+    | otherwise = found
 
 isAddedLine :: B.ByteString -> Bool
 isAddedLine line = B.take 1 line == B.singleton 43 && B.take 3 line /= "+++"
@@ -571,22 +594,24 @@ isOwnedTask sweep taskDirectory name = do
       if holdOwned
         then pure True
         else do
-          status <- lstatMaybe (sweepCounts sweep) taskDirectory
+          status <- probeStatus taskDirectory
           case status of
-            Just fileStatus -> recentEntryInTree sweep taskDirectory (deviceID fileStatus)
-            Nothing -> pure False
+            Left _ -> pure True
+            Right fileStatus -> recentEntryInTree sweep taskDirectory (deviceID fileStatus)
 
 recentEntryInTree :: Sweep -> FilePath -> DeviceID -> IO Bool
 recentEntryInTree sweep directory rootDevice = do
-  entries <- listEntries (sweepCounts sweep) directory
-  go entries
+  listing <- probeEntries directory
+  case listing of
+    Left _ -> pure True
+    Right entries -> go entries
  where
   go [] = pure False
   go (name : rest) = do
-    status <- lstatMaybe (sweepCounts sweep) (directory </> name)
+    status <- probeStatus (directory </> name)
     case status of
-      Nothing -> go rest
-      Just fileStatus
+      Left _ -> pure True
+      Right fileStatus
         | deviceID fileStatus /= rootDevice -> go rest
         | isDirectory fileStatus && not (isSymbolicLink fileStatus) -> do
             hit <- recentEntryInTree sweep (directory </> name) rootDevice
@@ -608,9 +633,10 @@ holdKeeps sweep path = do
 
 holdActive :: Sweep -> FileStatus -> Hold -> Bool
 holdActive sweep fileStatus (Hold _ untilDay) =
-  let untilStart = utcTimeToPOSIXSeconds (UTCTime untilDay 0)
+  let untilEnd = utcTimeToPOSIXSeconds (UTCTime untilDay 0) + 86400
       holdMtime = modificationTimeHiRes fileStatus
-  in sweepNow sweep < untilStart + 86400 && untilStart <= holdMtime + 30 * 86400
+      clampedEnd = min untilEnd (holdMtime + 30 * 86400)
+  in sweepNow sweep < clampedEnd
 
 parseHold :: B.ByteString -> Maybe Hold
 parseHold content = do
@@ -706,39 +732,67 @@ sweepRuns sweep runsDirectory = do
             record <- readRunRecord (sweepCounts sweep) (runDirectory </> "run.json")
             case record of
               Nothing -> pure ()
-              Just runRecord -> do
-                expired <- shouldExpireRun sweep runRecord runDirectory
-                when expired (expireWork sweep runDirectory)
+              Just runRecord -> case recordOutcome runRecord of
+                OutcomeOpen -> closeAbandonedRun sweep runDirectory
+                _ -> do
+                  expired <- shouldExpireRun sweep runRecord
+                  when expired (expireWork sweep runDirectory)
           _ -> pure ()
     _ -> pure ()
 
-shouldExpireRun :: Sweep -> RunRecord -> FilePath -> IO Bool
-shouldExpireRun sweep runRecord runDirectory = case recordOutcome runRecord of
+shouldExpireRun :: Sweep -> RunRecord -> IO Bool
+shouldExpireRun sweep runRecord = case recordOutcome runRecord of
   OutcomePassed -> pure True
   OutcomeFailed -> pure False
   OutcomeUnjudged -> case recordClosedAt runRecord of
     Nothing -> pure False
     Just closed -> pure (sweepNow sweep - closed > sweepWorkAge sweep)
-  OutcomeOpen -> do
-    old <- lockOld
-    if old then lockIsFree (runDirectory </> "lock") else pure False
- where
-  lockOld = do
-    status <- lstatMaybe (sweepCounts sweep) (runDirectory </> "lock")
-    pure $ case status of
-      Just fileStatus -> sweepNow sweep - modificationTimeHiRes fileStatus > sweepWorkAge sweep
-      Nothing -> False
+  OutcomeOpen -> pure False
 
-lockIsFree :: FilePath -> IO Bool
-lockIsFree path = do
+closeAbandonedRun :: Sweep -> FilePath -> IO ()
+closeAbandonedRun sweep runDirectory = do
+  closed <- withFreeLock (runDirectory </> "lock") $ if sweepApply sweep then rewriteUnjudged sweep runDirectory else pure True
+  case closed of
+    Just True -> bumpClosedAbandoned (sweepCounts sweep)
+    _ -> pure ()
+
+withFreeLock :: FilePath -> IO a -> IO (Maybe a)
+withFreeLock path action = do
   opened <- (Just <$> openFd path ReadOnly defaultFileFlags) `catch` \(_ :: IOException) -> pure Nothing
   case opened of
-    Nothing -> pure False
+    Nothing -> pure Nothing
     Just fileDescriptor -> do
       let Fd rawDescriptor = fileDescriptor
-      result <- c_flock rawDescriptor lockExclusiveNonBlocking
-      closeFd fileDescriptor
-      pure (result == 0)
+      acquired <- c_flock rawDescriptor lockExclusiveNonBlocking
+      if acquired /= 0
+        then closeFd fileDescriptor >> pure Nothing
+        else do
+          result <- action `finally` closeFd fileDescriptor
+          pure (Just result)
+
+rewriteUnjudged :: Sweep -> FilePath -> IO Bool
+rewriteUnjudged sweep runDirectory =
+  ((do
+    content <- B.readFile (runDirectory </> "run.json")
+    case eitherDecodeStrict' content of
+      Right (Object object') -> do
+        let closedAt = T.pack (formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" (posixSecondsToUTCTime (sweepNow sweep)))
+            updated = Object (KM.insert "closed_at" (String closedAt) (KM.insert "outcome" (String "unjudged") object'))
+        writeJsonAtomically runDirectory updated
+        pure True
+      _ -> pure False)
+    `catch` \(_ :: IOException) -> recordFailure (sweepCounts sweep) >> pure False)
+
+writeJsonAtomically :: FilePath -> Value -> IO ()
+writeJsonAtomically directory value =
+  bracketOnError (openTempFile directory "run.json.tmp") cleanup $ \(temporary, handle) -> do
+    BL.hPut handle (encode value)
+    hClose handle
+    renameFile temporary (directory </> "run.json")
+ where
+  cleanup (temporary, handle) = do
+    (hClose handle `catch` \(_ :: IOException) -> pure ())
+    (removeFile temporary `catch` \(_ :: IOException) -> pure ())
 
 readRunRecord :: IORef Counts -> FilePath -> IO (Maybe RunRecord)
 readRunRecord counts path = do
@@ -860,10 +914,14 @@ readBytesMaybe counts path =
 
 listEntries :: IORef Counts -> FilePath -> IO [String]
 listEntries counts directory =
-  bracket (openDirStream directory) closeDirStream collect
+  listRaw directory
     `catch` \(problem :: IOException) -> do
       unless (isDoesNotExistError problem) (recordFailure counts)
       pure []
+
+listRaw :: FilePath -> IO [String]
+listRaw directory =
+  bracket (openDirStream directory) closeDirStream collect
  where
   collect stream = go []
    where
@@ -872,6 +930,14 @@ listEntries counts directory =
       Just name
         | name == "." || name == ".." -> go names
         | otherwise -> go (name : names)
+
+probeEntries :: FilePath -> IO (Either IOException [String])
+probeEntries directory =
+  (Right <$> listRaw directory) `catch` \(problem :: IOException) -> pure (Left problem)
+
+probeStatus :: FilePath -> IO (Either IOException FileStatus)
+probeStatus path =
+  (Right <$> getSymbolicLinkStatus path) `catch` \(problem :: IOException) -> pure (Left problem)
 
 bumpOwnedDirectory :: IORef Counts -> IO ()
 bumpOwnedDirectory counts =
@@ -882,6 +948,11 @@ bumpWorkRun :: IORef Counts -> IO ()
 bumpWorkRun counts =
   modifyIORef' counts
     (\current -> current {countExpiredWorkRuns = RunCount (runCount (countExpiredWorkRuns current) + 1)})
+
+bumpClosedAbandoned :: IORef Counts -> IO ()
+bumpClosedAbandoned counts =
+  modifyIORef' counts
+    (\current -> current {countClosedAbandonedRuns = RunCount (runCount (countClosedAbandonedRuns current) + 1)})
 
 addExpiredBytes :: IORef Counts -> ByteCount -> IO ()
 addExpiredBytes counts (ByteCount bytes) =

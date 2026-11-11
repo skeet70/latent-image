@@ -102,8 +102,8 @@ haskell_binary(
 haskell_test(
     name = "scratch-expiry-tests",
     srcs = ["ScratchExpiryTests.hs"],
-    args = ["$(rootpath :scratch-expiry)"],
-    data = [":scratch-expiry"],
+    args = ["$(rootpath :scratch-expiry)", "$(rootpath :run-output)"],
+    data = [":scratch-expiry", ":run-output"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
     tags = ["local"],
     deps = [
@@ -130,6 +130,7 @@ haskell_binary(
         "//host:filepath",
         "//host:process",
         "//host:storage-budget",
+        "//host:unix",
     ],
 )
 
@@ -147,6 +148,7 @@ haskell_test(
         "//host:directory",
         "//host:filepath",
         "//host:process",
+        "//host:time",
         "//host:unix",
     ],
 )

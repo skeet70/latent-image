@@ -48,9 +48,10 @@ data SlotPolicy = SlotPolicy
 
 newtype Slot = Slot Int
 
-slotVariable, slotsVariable :: String
+slotVariable, slotsVariable, runProgramVariable :: String
 slotVariable = "XM1_EMULATOR_SLOT"
 slotsVariable = "XM1_EMULATOR_SLOTS"
+runProgramVariable = "XM1_RUN_PROGRAM"
 
 
 resourceClass :: ExecutionClass -> Host.ResourceClass
@@ -140,6 +141,8 @@ reexecInSlot policy arguments = do
               let unit = "xm1-verification-" ++ show pid ++ ".scope"
                   MemoryMax memory = memoryMax policy
                   MemorySwapMax swap = memorySwapMax policy
+              program <- getProgName
+              setEnv runProgramVariable program
               setEnv "XM1_ADMISSION_SCOPE" unit
               executeFile "systemd-run" True
                 ([ "--user", "--scope", "--quiet", "--collect", "--unit=" ++ unit
@@ -154,6 +157,8 @@ reexecInSlot policy arguments = do
                 pinned <- pinExecutable directory executable running
                 pure (acquired, pinned)
               checkStorageBudget storage
+              program <- getProgName
+              setEnv runProgramVariable program
               setEnv slotVariable (show slot)
               openSlotRun
               pid <- getProcessID
@@ -189,15 +194,21 @@ openSlotRun = do
         Nothing -> pure ()
         Just task -> do
           configured <- lookupEnv "XM1_RUN_LABEL"
+          exported <- lookupEnv runProgramVariable
           program <- getProgName
           arguments <- getArgs
-          let label = Run.labelFromText (maybe program id configured)
+          budget <- Run.resolveWorkBudget
+          let programName = case exported of
+                Just name -> name
+                Nothing -> program
+              label = Run.labelFromText (maybe programName id configured)
           opened <- Run.openRun
             Run.OpenRequest
               { Run.openTask = task
               , Run.openLabel = label
               , Run.openOpener = Run.Slot
               , Run.openCommand = program : arguments
+              , Run.openWorkBudget = budget
               }
           case opened of
             Run.RunOpened handle -> do

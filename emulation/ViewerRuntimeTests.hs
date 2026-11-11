@@ -6,11 +6,12 @@ import Control.Exception (IOException, try)
 import Control.Monad (unless, when)
 import Data.Bits ((.&.))
 import qualified Data.ByteString as B
-import Emulation.ViewerRuntime (stageFile)
-import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getTemporaryDirectory, removeDirectoryRecursive)
-import System.Environment (lookupEnv)
+import Emulation.ViewerRuntime (DefaultRuntime (..), Runtime (..), Workspace (..), freshRuntime, stageFile)
+import Data.List (isPrefixOf)
+import System.Directory (canonicalizePath, createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getTemporaryDirectory, removeDirectoryRecursive)
+import System.Environment (lookupEnv, setEnv, unsetEnv)
 import System.Exit (exitFailure)
-import System.FilePath ((</>))
+import System.FilePath ((</>), takeDirectory, takeFileName)
 import System.Posix.Files (fileMode, getFileStatus, setFileMode)
 
 check :: String -> Bool -> IO ()
@@ -48,5 +49,21 @@ main = do
     case missingResult of
       Left _ -> not absentExists
       Right _ -> False
+  let private = root </> "private-data"
+      work = private </> "scratch" </> "task" </> "runs" </> "run" </> "work"
+  createDirectoryIfMissing True work
+  setEnv "XM1_RUN_WORK" work
+  Runtime underWork <- freshRuntime (Workspace root) Nothing (UniqueRuntime "viewer-runtime-test")
+  canonicalWork <- canonicalizePath work
+  check "a run work directory holds the fresh runtime" (takeDirectory underWork == canonicalWork)
+  check "the fresh runtime keeps its unique name" ("viewer-runtime-test-" `isPrefixOf` takeFileName underWork)
+  unsetEnv "XM1_RUN_WORK"
+  Runtime defaultRuntime <- freshRuntime (Workspace root) Nothing (UniqueRuntime "viewer-runtime-test")
+  canonicalPrivate <- canonicalizePath private
+  check "without a run work directory the fresh runtime stays under private-data" (takeDirectory defaultRuntime == canonicalPrivate)
+  setEnv "XM1_RUN_WORK" (root </> "absent-work")
+  Runtime absentRuntime <- freshRuntime (Workspace root) Nothing (UniqueRuntime "viewer-runtime-test")
+  check "an absent run work directory falls back to private-data" (takeDirectory absentRuntime == canonicalPrivate)
+  unsetEnv "XM1_RUN_WORK"
   removeDirectoryRecursive root
   putStrLn "viewer-runtime staging: checks passed"

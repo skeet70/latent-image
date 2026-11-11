@@ -15,9 +15,9 @@ import FujiAF.StorageBudget (checkStorageBudget)
 import Replacement.RtosIrqControl.Suite
 import Replacement.RtosOwnFirst.Regions (Domain (..), domainLabel)
 import System.Directory (createDirectoryIfMissing, makeAbsolute)
-import System.Environment (getArgs)
+import System.Environment (getArgs, lookupEnv)
 import System.Exit (exitFailure)
-import System.FilePath (takeDirectory)
+import System.FilePath ((</>), takeDirectory)
 
 main :: IO ()
 main = do
@@ -30,6 +30,11 @@ main = do
   symbolsB <- required "--owned-b-symbols"
   cacheRoot <- maybe defaultNativeCacheRoot id <$> optional "--cache-root"
   resultsPath <- required "--results"
+  batchRoot <- do
+    work <- lookupEnv "XM1_RUN_WORK"
+    pure $ case work of
+      Just directory | not (null directory) -> directory </> "irq-control"
+      _ -> takeDirectory resultsPath </> "batches"
   loaderABytes <- B.readFile loaderA
   loaderBBytes <- B.readFile loaderB
   ownedABytes <- B.readFile ownedA
@@ -42,13 +47,14 @@ main = do
   unless (sha256Hex loaderBDigest == "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec") (failH (loaderB ++ " is not the pinned X-M1 1.50 loader"))
   checkStorageBudget (takeDirectory resultsPath)
   createDirectoryIfMissing True cacheRoot
+  createDirectoryIfMissing True batchRoot
   createDirectoryIfMissing True (takeDirectory resultsPath)
   let stockA = Image 0x40000 loaderABytes
       stockB = Image 0xd0000 loaderBBytes
       ownedAImage = Image (minimum (map fst ownedASymbols)) ownedABytes
       ownedBImage = Image (minimum (map fst ownedBSymbols)) ownedBBytes
-  runA <- runSuite runner cacheRoot DomainA stockA ownedAImage ownedASymbols
-  runB <- runSuite runner cacheRoot DomainB stockB ownedBImage ownedBSymbols
+  runA <- runSuite runner cacheRoot batchRoot DomainA stockA ownedAImage ownedASymbols
+  runB <- runSuite runner cacheRoot batchRoot DomainB stockB ownedBImage ownedBSymbols
   let runs = [runA, runB]
       failures =
         [ (domainLabel (suiteDomain run), name, message)

@@ -4,9 +4,9 @@ Description=Expire idle scratch and verify-candidate research output
 [Service]
 Type=oneshot
 EnvironmentFile=%h/.config/latent-image/scratch-expiry.env
-ExecStart=%h/.local/libexec/latent-image/scratch-expiry --workspace %h/Code/latent-image --max-age-days 7 --apply +RTS -M512M -RTS
+ExecStart=%h/.local/libexec/latent-image/scratch-expiry --workspace %h/Code/latent-image --max-age-days 7 --apply +RTS -M1G -RTS
 UMask=0077
-MemoryMax=1G
+MemoryMax=2G
 MemorySwapMax=0
 OOMPolicy=stop
 TimeoutStartSec=2h
