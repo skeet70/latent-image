@@ -54,13 +54,14 @@ pub unsafe fn receive_into(kernel: &mut impl ReceiveKernel, queue: QueueId, desc
 #[cfg(target_arch = "arm")]
 mod native {
     use super::*;
+    use crate::callback_registry::{registry as callbacks, CallbackWord};
     use crate::shutdown_rtos::NativeShutdownRtos;
-    use core::{mem::transmute, ptr::{read_volatile, write_volatile}};
+    use core::ptr::{read_volatile, write_volatile};
     extern "C" { fn xm1_power_service_error(operation: u32, id: i32, status: i32); }
     unsafe fn word(address: u32) -> u32 { unsafe { read_volatile(address as *const u32) } }
     unsafe fn root() -> u32 {
         let primary = unsafe { word(0x96bd20) };
-        let core: unsafe extern "C" fn() -> u32 = unsafe { transmute(word(primary + 0x1618) as usize) };
+        let core: unsafe extern "C" fn() -> u32 = match callbacks().resolve(CallbackWord(word(primary + 0x1618))) { Ok(entry) => entry, Err(_) => return 0 };
         unsafe { word(0x96bd20 + core() * 4) }
     }
     unsafe fn encoded(queue: QueueId) -> i32 { let slot = u32::from(queue.0); (slot | unsafe { word(0x7cad9c + (slot - 1) * 4) } << 16) as i32 }
@@ -68,7 +69,7 @@ mod native {
         type Block = u32;
         fn receive(&mut self, queue: QueueId, timeout: ReceiveTimeout) -> Result<u32, KernelStatus> {
             let mut block = 0;
-            let call: unsafe extern "C" fn(i32, *mut u32, i32) -> i32 = unsafe { transmute(word(root() + 0xc8) as usize) };
+            let call: unsafe extern "C" fn(i32, *mut u32, i32) -> i32 = match callbacks().resolve(CallbackWord(unsafe { word(root() + 0xc8) })) { Ok(entry) => entry, Err(error) => return Err(KernelStatus(error.status())) };
             let status = unsafe { call(encoded(queue), &mut block, timeout.word()) };
             if status == 0 { Ok(block) } else { Err(KernelStatus(status)) }
         }
@@ -77,7 +78,7 @@ mod native {
         } }
         unsafe fn copy_payload(&mut self, block: u32, destination: PayloadAddress, length: u32) { unsafe { core::ptr::copy_nonoverlapping((block + 12) as *const u8, destination.0 as *mut u8, length as usize) }; }
         fn release(&mut self, queue: QueueId, block: u32) {
-            let call: unsafe extern "C" fn(i32, u32) -> i32 = unsafe { transmute(word(root() + 0xf8) as usize) };
+            let call: unsafe extern "C" fn(i32, u32) -> i32 = match callbacks().resolve(CallbackWord(unsafe { word(root() + 0xf8) })) { Ok(entry) => entry, Err(_) => return };
             let _ = unsafe { call(encoded(queue), block) };
         }
         fn report(&mut self, queue: QueueId, status: KernelStatus) { unsafe {

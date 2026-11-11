@@ -1,3 +1,4 @@
+use crate::callback_registry::{registry as callbacks, CallbackWord};
 use crate::settings_shutdown_actor::{self as actor, TransferState};
 use crate::settings_shutdown_native::{xm1_power_settings_dispatch_release, xm1_power_settings_initialize, xm1_power_settings_load_cache, xm1_power_settings_window_valid};
 use crate::settings_shutdown_parser::{self as parser, CoordinatePair, MetadataDescriptor};
@@ -24,7 +25,7 @@ unsafe fn word(address: u32) -> u32 { unsafe { read_volatile(address as *const u
 unsafe fn put(address: u32, value: u32) { unsafe { write_volatile(address as *mut u32, value); } }
 unsafe fn byte(address: u32) -> u8 { unsafe { read_volatile(address as *const u8) } }
 unsafe fn callback(address: u32) {
-    if address != 0 { let call: unsafe extern "C" fn() = unsafe { core::mem::transmute(address as usize) }; unsafe { call(); } }
+    if let Ok(call) = callbacks().resolve::<unsafe extern "C" fn()>(CallbackWord(address)) { unsafe { call() }; }
 }
 fn halt() -> ! { loop { core::hint::spin_loop(); } }
 unsafe fn clear(address: u32, bytes: usize) { unsafe { core::ptr::write_bytes(address as *mut u8, 0, bytes); } }
@@ -65,7 +66,9 @@ unsafe fn start_transfer() {
         put(CONTEXT + 0x18c, 1);
         put(CONTEXT + 0x38, word(CONTEXT + 0x2c));
         put(CONTEXT + 0x3c, word(CONTEXT + 0x14));
-        let _ = xm1_power_software_timer_start(30000, 1, xm1_power_settings_timer_notify as usize as u32, (CONTEXT + 0x48) as *mut u32);
+        let notify: unsafe extern "C" fn() = xm1_power_settings_timer_notify;
+        let _ = callbacks().ensure(notify);
+        let _ = xm1_power_software_timer_start(30000, 1, notify as usize as u32, (CONTEXT + 0x48) as *mut u32);
         if word(CONTEXT + 0x34) != 0 { cached_entries(false); xm1_power_settings_output(DESCRIPTOR as *const u8); }
         put(CONTEXT, 1);
     }
@@ -133,7 +136,7 @@ unsafe fn periodic_transfer() {
     unsafe {
         let producer = word(CONTEXT + 0xdc);
         if producer == 0 { return; }
-        let producer: unsafe extern "C" fn(*mut u8, u32) = core::mem::transmute(producer as usize);
+        let Ok(producer) = callbacks().resolve::<unsafe extern "C" fn(*mut u8, u32)>(CallbackWord(producer)) else { return };
         producer((CONTEXT + 0x4c) as *mut u8, 72);
         let mode = word(CONTEXT + 0x18c);
         if xm1_power_configuration_byte(0x97d5) != 0 || mode == 2 { configured_text(); }
@@ -179,6 +182,7 @@ struct TaskDescriptor { identifier: u32, name: u32, priority: u32, stack: u32, e
 #[no_mangle]
 pub unsafe extern "C" fn xm1_power_settings_start(error_callback: Option<unsafe extern "C" fn()>) -> i32 {
     if unsafe { xm1_power_queue_create(83, &QueueConfiguration { flags: 48, message_size: 36 }) } != 0 { return -255; }
+    if let Some(callback) = error_callback { let _ = callbacks().ensure(callback); }
     unsafe { put(0x8e1f24, error_callback.map_or(0, |callback| callback as usize as u32)); }
     let descriptor = TaskDescriptor { identifier: 83, name: 0x781a38, priority: 4, stack: 3072, entry: xm1_power_settings_entry, argument: 0x8e1f24 as *const u32, reserved: MaybeUninit::uninit() };
     if unsafe { xm1_task_submit(&descriptor as *const TaskDescriptor as u32) } == 0 { 0 } else { -255 }
@@ -224,5 +228,6 @@ pub extern "C" fn xm1_power_settings_poll_request() {
 }
 #[no_mangle]
 pub unsafe extern "C" fn xm1_power_settings_set_text_producer(producer: Option<unsafe extern "C" fn(*mut u8, u32)>) {
+    if let Some(producer) = producer { let _ = callbacks().ensure(producer); }
     unsafe { put(CONTEXT + 0xdc, producer.map_or(0, |producer| producer as usize as u32)); }
 }

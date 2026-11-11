@@ -1,4 +1,5 @@
 use super::*;
+use crate::callback_registry::{registry, CallbackWord};
 use crate::shutdown::ShutdownRtos;
 use crate::shutdown_rtos::NativeShutdownRtos;
 use crate::shutdown_receive::{ReceiveDescriptor, ReceiveTimeout};
@@ -33,13 +34,14 @@ impl DeviceTimers for NativeTimers {
         (ServiceStatus(status), TimerHandle(token as u32))
     }
     fn register_software(&mut self, index: DeviceTimerIndex, period: TimerPeriod) -> (ServiceStatus, TimerHandle) {
-        software_start(period, SoftwareTimerMode::from_abi(1), TimerCallback(producers()[index.index()] as usize as u32), self.handle(index), |handle| write(STATE + 44 + index.index() as u32 * 4, handle.0))
+        let callback: unsafe extern "C" fn() = producers()[index.index()];
+        let _ = registry().ensure(callback);
+        software_start(period, SoftwareTimerMode::from_abi(1), TimerCallback(callback as usize as u32), self.handle(index), |handle| write(STATE + 44 + index.index() as u32 * 4, handle.0))
     }
     fn unregister_cyclic(&mut self, handle: TimerHandle) -> ServiceStatus { ServiceStatus(unsafe { xm1_app_unregister_callback(handle.0 as i32) }) }
     fn unregister_software(&mut self, handle: TimerHandle) -> ServiceStatus { software_cancel(handle) }
     fn invoke(&mut self, callback: TimerCallback) {
-        let call: extern "C" fn() = unsafe { core::mem::transmute(callback.0) };
-        call();
+        if let Ok(call) = registry().resolve::<unsafe extern "C" fn()>(CallbackWord(callback.0)) { unsafe { call() }; }
     }
 }
 
@@ -151,10 +153,7 @@ pub extern "C" fn xm1_power_software_timer_tick() {
         write(slot + 4, next);
         if next != 0 { continue; }
         let callback = read(slot + 16);
-        if callback != 0 {
-            let call: extern "C" fn() = unsafe { core::mem::transmute(callback) };
-            call();
-        }
+        if let Ok(call) = registry().resolve::<unsafe extern "C" fn()>(CallbackWord(callback)) { unsafe { call() }; }
         if SoftwareTimerMode::from_abi(read(slot + 12)).is_periodic() {
             write(slot + 4, read(slot + 8));
         } else {

@@ -1,9 +1,11 @@
 use super::*;
+use crate::callback_registry::{registry as callbacks, CallbackWord};
 use crate::hardware_timer_registry::HardwareTimerRequest;
 use crate::queue_construction::QueueConfiguration;
 use crate::shutdown_receive::{ReceiveDescriptor, ReceiveTimeout};
 use crate::shutdown_rtos::NativeShutdownRtos;
 use crate::task6_executor::native::TaskDescriptor;
+use crate::timer_abi;
 use core::mem::MaybeUninit;
 
 const SERVICE: u32 = 0x0096_bd40;
@@ -11,10 +13,6 @@ const ARGUMENTS: u32 = 0x0089_f770;
 fn read(at: u32) -> u32 { unsafe { core::ptr::read_volatile(at as *const u32) } }
 fn write(at: u32, value: u32) { unsafe { core::ptr::write_volatile(at as *mut u32, value) }; }
 extern "C" {
-    fn xm1_power_hardware_timer_acquire(selector: u32, handle: *mut u32) -> i32;
-    fn xm1_power_hardware_timer_start(handle: u32, request: *const HardwareTimerRequest) -> i32;
-    fn xm1_power_hardware_timer_stop(handle: u32) -> i32;
-    fn xm1_power_hardware_timer_release(handle: u32) -> i32;
     fn xm1_power_queue_create(queue: u32, configuration: *const QueueConfiguration) -> i32;
     fn xm1_power_queue_delete(queue: u32) -> i32;
     fn xm1_task_submit(descriptor: u32) -> i32;
@@ -23,10 +21,7 @@ extern "C" {
     fn xm1_power_command_diagnostic(class: u32, code: u32) -> i32;
 }
 fn invoke(address: u32) {
-    if address != 0 {
-        let callback: unsafe extern "C" fn() = unsafe { core::mem::transmute(address as usize) };
-        unsafe { callback() };
-    }
+    if let Ok(callback) = callbacks().resolve::<unsafe extern "C" fn()>(CallbackWord(address)) { unsafe { callback() }; }
 }
 struct NativeCallbacks;
 impl TimerServiceCallbacks for NativeCallbacks {
@@ -42,10 +37,10 @@ pub unsafe extern "C" fn xm1_power_software_timer_service_irq() {
 }
 
 fn start_timer(selector: u32, callback: u32, fallback: u32) -> i32 {
-    let status = unsafe { xm1_power_hardware_timer_acquire(selector, (SERVICE + 12) as *mut u32) };
+    let status = unsafe { timer_abi::xm1_power_hardware_timer_acquire(selector, (SERVICE + 12) as *mut u32) };
     if status != 0 { return status; }
     let request = HardwareTimerRequest { period: 2500, units: 1, mode: 1, callback: Some(xm1_power_software_timer_service_irq) };
-    let status = unsafe { xm1_power_hardware_timer_start(read(SERVICE + 12), &request) };
+    let status = unsafe { timer_abi::xm1_power_hardware_timer_start(read(SERVICE + 12), &request) };
     if status == 0 {
         write(SERVICE + 16, callback);
         write(SERVICE + 20, fallback);
@@ -91,7 +86,9 @@ pub unsafe extern "C" fn xm1_power_software_timer_service_start(selector: u32, p
 pub extern "C" fn xm1_power_software_timer_initialize(fallback: u32) -> i32 {
     if read(0x0095_ab1c) != 0 { return -255; }
     write(0x0095_ab1c, 1);
-    let status = unsafe { xm1_power_software_timer_service_start(2, 7, xm1_power_software_timer_tick as usize as u32, fallback) };
+    let tick: unsafe extern "C" fn() = xm1_power_software_timer_tick;
+    let _ = callbacks().ensure(tick);
+    let status = unsafe { xm1_power_software_timer_service_start(2, 7, tick as usize as u32, fallback) };
     if status == 0 { 0 } else {
         let _ = unsafe { xm1_power_command_diagnostic(2, 0x1c) };
         -32
@@ -100,9 +97,9 @@ pub extern "C" fn xm1_power_software_timer_initialize(fallback: u32) -> i32 {
 
 #[no_mangle]
 pub extern "C" fn xm1_power_software_timer_service_delete() -> i32 {
-    let status = unsafe { xm1_power_hardware_timer_stop(read(SERVICE + 12)) };
+    let status = unsafe { timer_abi::xm1_power_hardware_timer_stop(read(SERVICE + 12)) };
     if status != 0 { return status; }
-    let status = unsafe { xm1_power_hardware_timer_release(read(SERVICE + 12)) };
+    let status = unsafe { timer_abi::xm1_power_hardware_timer_release(read(SERVICE + 12)) };
     if status != 0 { return status; }
     if unsafe { xm1_power_queue_delete(9) } != 0 { return -255; }
     if unsafe { xm1_task_release(9) } == 0 { 0 } else { -255 }

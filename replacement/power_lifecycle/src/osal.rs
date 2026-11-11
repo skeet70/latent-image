@@ -74,6 +74,7 @@ fn divide(timer: &mut impl DelayTimer, dividend: u32, divisor: u32) -> u32 {
 #[cfg(target_arch = "arm")]
 mod native {
     use super::*;
+    use crate::callback_registry::{registry as callbacks, CallbackWord};
     use core::ptr::{read_volatile, write_volatile};
     extern "C" {
         fn xm1_rtos_own_first_slot_1618() -> u32;
@@ -114,7 +115,7 @@ mod native {
     }
     #[no_mangle]
     pub unsafe extern "C" fn xm1_power_semaphore_wait(id: i32, timeout: i32) -> i32 {
-        let wait: unsafe extern "C" fn(i32, i32) -> i32 = core::mem::transmute(slot(core(), 0x7c));
+        let wait: unsafe extern "C" fn(i32, i32) -> i32 = match callbacks().resolve(CallbackWord(slot(core(), 0x7c) as u32)) { Ok(entry) => entry, Err(error) => return error.status() };
         let status = wait(encoded_semaphore(id), timeout);
         if status != 0 && status != -50 { xm1_power_service_error(24, id, status); }
         status
@@ -122,16 +123,17 @@ mod native {
     #[no_mangle]
     pub unsafe extern "C" fn xm1_power_semaphore_signal(id: i32) -> i32 {
         let core = core();
-        let context: unsafe extern "C" fn() -> u32 = core::mem::transmute(slot(core, 0x148));
+        let context: unsafe extern "C" fn() -> u32 = match callbacks().resolve(CallbackWord(slot(core, 0x148) as u32)) { Ok(entry) => entry, Err(error) => return error.status() };
         let offset = if context() == 1 { 0x70 } else { 0x6c };
-        let signal: unsafe extern "C" fn(i32) -> i32 = core::mem::transmute(slot(core, offset));
+        let signal: unsafe extern "C" fn(i32) -> i32 = match callbacks().resolve(CallbackWord(slot(core, offset) as u32)) { Ok(entry) => entry, Err(error) => return error.status() };
         let status = signal(encoded_semaphore(id));
         if status != 0 { xm1_power_service_error(25, id, status); }
         status
     }
     #[no_mangle]
     pub unsafe extern "C" fn xm1_power_current_task() -> u32 {
-        let current: unsafe extern "C" fn() -> u32 = core::mem::transmute(slot(core(), 0x16c)); current()
+        let current: unsafe extern "C" fn() -> u32 = match callbacks().resolve(CallbackWord(slot(core(), 0x16c) as u32)) { Ok(entry) => entry, Err(_) => return 0 };
+        current()
     }
     #[no_mangle]
     pub extern "C" fn xm1_power_interrupt_lock() -> u32 { interrupt_lock(&mut NativeKernel).0 }

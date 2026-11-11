@@ -1,3 +1,4 @@
+use crate::callback_registry::{registry as callbacks, CallbackWord};
 use crate::settings_shutdown_actor::{self as actor, CallbackToken};
 use crate::shutdown_rtos::NativeShutdownRtos;
 use core::ptr::{read_volatile, write_volatile};
@@ -60,10 +61,7 @@ pub unsafe extern "C" fn xm1_power_settings_dispatch_release() -> i32 {
     if timer != 0 {
         unsafe { let _ = xm1_power_software_timer_cancel(timer); store(CONTEXT + 0x48, 0); }
     }
-    if callback != 0 {
-        let callback: unsafe extern "C" fn() = unsafe { core::mem::transmute(callback as usize) };
-        unsafe { callback(); }
-    }
+    if let Ok(callback) = callbacks().resolve::<unsafe extern "C" fn()>(CallbackWord(callback)) { unsafe { callback() }; }
     let current = unsafe { &*((CONTEXT + 0x194) as *const [u8; actor::RECORD_BYTES]) };
     let snapshot = unsafe { &*(SNAPSHOT as *const [u8; actor::RECORD_BYTES]) };
     let wrapper = unsafe { read_volatile(WRAPPER as *const *mut RecordWrapper) };

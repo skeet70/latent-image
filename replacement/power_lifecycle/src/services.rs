@@ -28,6 +28,8 @@ pub mod diagnostics;
 pub mod charge_timers;
 pub mod queue_construction;
 pub mod hardware_timer_registry;
+pub mod timer_abi;
+pub mod callback_registry;
 pub mod shutdown;
 pub mod shutdown_pins;
 pub mod shutdown_rtos;
