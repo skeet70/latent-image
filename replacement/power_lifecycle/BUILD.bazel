@@ -1,0 +1,49 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+package(default_visibility = ["//visibility:public"])
+
+_RUSTC = "@lab_xm1_rust//:bin/rustc"
+_HOST_RECORD = "//replacement/settings_storage:record-store-host-rlib"
+_HOST_SETTINGS = "//replacement/settings_storage:property-core-host"
+_ARM_RECORD = "//replacement/settings_storage:record-store-guest-rlib"
+_ARM_SETTINGS = "//replacement/settings_storage:property-core"
+_ARM_DISPLAY = "//replacement/display_scanout:libdisplay_scanout_panel"
+_ARM_CALIBRATION = "//replacement/calibration_liveview:libcalibration_liveview"
+_SERVICES_SOURCE = glob(["src/*.rs", "src/*.S"]) + ["//replacement/application_nand:sources"]
+_SERVICES_HOST_EXTERNS = " --extern record_store=$(location " + _HOST_RECORD + ") --extern xm1_settings_storage_core=$(location " + _HOST_SETTINGS + ")"
+_SERVICES_ARM_DEPS = [_ARM_RECORD, _ARM_SETTINGS, _ARM_DISPLAY, _ARM_CALIBRATION]
+_SERVICES_ARM_EXTERNS = " --extern record_store=$(location " + _ARM_RECORD + ") --extern xm1_settings_storage_core=$(location " + _ARM_SETTINGS + ") --extern display_scanout_panel=$(location " + _ARM_DISPLAY + ") -L dependency=$$(dirname $(location " + _ARM_CALIBRATION + "))"
+_ARM_FLAGS = " --target=armv7r-none-eabi -C panic=abort -C relocation-model=static -C target-cpu=cortex-r4f -C codegen-units=1 -C target-feature=+strict-align -C jump-tables=no -C opt-level=z"
+
+genrule(
+    name = "services-host",
+    srcs = _SERVICES_SOURCE + [_HOST_RECORD, _HOST_SETTINGS],
+    tools = [_RUSTC],
+    outs = ["host/libxm1_power_services.rlib"],
+    cmd = "$(location " + _RUSTC + ") --edition=2021 --crate-name=xm1_power_services --crate-type=rlib" + _SERVICES_HOST_EXTERNS + " $(location src/services.rs) -o $@",
+)
+
+genrule(
+    name = "services-host-test-binary",
+    srcs = _SERVICES_SOURCE + [_HOST_RECORD, _HOST_SETTINGS],
+    tools = [_RUSTC],
+    outs = ["services-host-tests-bin"],
+    cmd = "$(location " + _RUSTC + ") --edition=2021 --test --crate-name=xm1_power_services" + _SERVICES_HOST_EXTERNS + " $(location src/services.rs) -o $@",
+    executable = True,
+)
+
+sh_test(
+    name = "services-host-tests",
+    size = "small",
+    srcs = ["host-test.sh"],
+    args = ["$(location :services-host-test-binary)"],
+    data = [":services-host-test-binary"],
+)
+
+genrule(
+    name = "services-arm",
+    srcs = _SERVICES_SOURCE + _SERVICES_ARM_DEPS,
+    tools = [_RUSTC],
+    outs = ["arm/libxm1_power_services.rlib"],
+    cmd = "$(location " + _RUSTC + ") --edition=2021 --crate-name=xm1_power_services --crate-type=rlib" + _ARM_FLAGS + " --cfg power_native" + _SERVICES_ARM_EXTERNS + " $(location src/services.rs) -o $@",
+)
