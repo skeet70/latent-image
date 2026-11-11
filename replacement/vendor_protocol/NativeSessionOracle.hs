@@ -13,6 +13,7 @@ import Emulation.Sha256 (sha256, sha256Hex)
 import FujiAF.Host hiding (sha256)
 import FujiAF.JSON (encodeCanonical)
 import Numeric (showHex)
+import SessionStep (runBoundedGroup)
 import System.Directory
 import System.Environment
 import System.Exit (ExitCode(..), exitFailure)
@@ -108,7 +109,7 @@ execute runner root ident entry arguments blocks = do
  (admitted,_,wire,identity)<-Native.loadCase casePath
  runnerHash<-Native.runnerDigest runner
  executable<-canonicalizePath runner
- (timed,exit,stdout,stderr)<-runBounded 3000000 (2*1024*1024) executable [] wire
+ (timed,exit,stdout,stderr)<-runBoundedGroup 3000000 (2*1024*1024) executable [] wire
  writeNew (root</>ident<.>"wire") wire
  writeNew (root</>ident<.>"stdout") stdout
  writeNew (root</>ident<.>"stderr") stderr

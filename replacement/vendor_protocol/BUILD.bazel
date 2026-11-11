@@ -190,9 +190,9 @@ haskell_test(
 
 haskell_binary(
     name = "native-session-oracle",
-    srcs = ["NativeSessionOracle.hs"],
+    srcs = ["NativeSessionOracle.hs", "SessionStep.hs"],
     main_file = "NativeSessionOracle.hs",
-    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
     deps = [
         "//emulation:native-adapter",
         "//emulation:owned-case",
@@ -204,5 +204,28 @@ haskell_binary(
         "//host:filepath",
         "//host:host-support",
         "//host:json",
+        "//host:process",
+        "//host:unix",
+    ],
+)
+
+sh_test(
+    name = "session-oracle-threading-tests",
+    srcs = ["session_oracle_threading_tests.sh"],
+    args = ["$(location :native-session-oracle)"],
+    data = [":native-session-oracle"],
+)
+
+haskell_test(
+    name = "session-step-tests",
+    size = "small",
+    srcs = ["SessionStepTests.hs", "SessionStep.hs"],
+    main_file = "SessionStepTests.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:process",
+        "//host:unix",
     ],
 )
