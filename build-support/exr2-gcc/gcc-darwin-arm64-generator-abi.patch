@@ -1,0 +1,18 @@
+--- a/gcc/recog.h
++++ b/gcc/recog.h
+@@ -257,7 +257,15 @@
+ 
+ typedef int (*insn_operand_predicate_fn) (rtx, enum machine_mode);
+ typedef const char * (*insn_output_fn) (rtx *, rtx);
++#if defined (__APPLE__) && defined (__aarch64__) && !defined (__cplusplus)
++/* The generators have fixed rtx arguments.  Darwin/arm64 passes unnamed
++   variadic arguments on the stack, so the historical variadic cast does
++   not call them with the right ABI.  These releases build as GNU C89;
++   an unprototyped pointer preserves the fixed-argument calling convention.  */
++typedef rtx (*insn_gen_fn) ();
++#else
+ typedef rtx (*insn_gen_fn) (rtx, ...);
++#endif
+ 
+ struct insn_operand_data
+ {

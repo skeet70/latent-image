@@ -1,9 +1,8 @@
-load("@rules_cc//cc:defs.bzl", "cc_library")
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 exports_files(
-    ["FujiAF/RamPush.hs", "FujiAF/Transport.hs", "native_usb.c"],
+    ["FujiAF/RamPush.hs", "FujiAF/Transport.hs"],
     visibility = ["//visibility:public"],
 )
 
@@ -13,31 +12,6 @@ _GHCOPTS = [
     "-O2",
     "-XGHC2021",
 ]
-
-# The locked Nix libusb's store path, read from the package's store-path file so
-# the action's key follows the store path. Nothing opens it outside the live
-# camera operations.
-genrule(
-    name = "libusb-path",
-    srcs = ["@lab_libusb_runtime//:share/libusb-runtime/store-path"],
-    outs = ["libusb_path.h"],
-    cmd = "read -r runtime < $(location @lab_libusb_runtime//:share/libusb-runtime/store-path) && printf '#define FUJI_LIBUSB_PATH \"%s\"\\n' \"$$runtime\" > $@",
-)
-
-cc_library(
-    name = "native-shim",
-    srcs = [
-        "native_usb.c",
-        ":libusb-path",
-    ],
-    copts = [
-        "-Wall",
-        "-Wextra",
-        "-Werror",
-    ],
-    linkopts = ["-ldl"],
-    deps = ["@lab_libusb//:headers"],
-)
 
 haskell_library(
     name = "camera-core",
@@ -119,6 +93,20 @@ haskell_library(
     ],
 )
 
+haskell_library(
+    name = "test-scratch",
+    testonly = True,
+    srcs = ["FujiAF/TestScratch.hs"],
+    ghcopts = _GHCOPTS,
+    src_strip_prefix = ".",
+    deps = [
+        "//host:base",
+        "//host:directory",
+        "//host:filepath",
+        "//host:unix",
+    ],
+)
+
 haskell_test(
     name = "af-ring-tests",
     srcs = ["AfRingTest.hs"],
@@ -134,6 +122,7 @@ haskell_test(
     deps = [
         ":af-ring",
         ":camera-core",
+        ":test-scratch",
         "//broker:core",
         "//host:aeson",
         "//host:base",
@@ -152,15 +141,15 @@ haskell_library(
     src_strip_prefix = ".",
     deps = [
         ":camera-core",
-        ":native-shim",
+        "@lab_fuji_usb//:fuji-usb",
         "//host:base",
         "//broker:core",
     ],
 )
 
-# The one test that runs the C: repeated enumeration of the host bus, needing
-# no camera, and the shim's transfer size gate. Every other test injects its
-# own UsbApi or NativeCalls and cannot fail on the C.
+# The one test that runs the provider: repeated enumeration of the host bus,
+# needing no camera, and the provider's transfer size gate. Every other test
+# injects its own UsbApi or NativeCalls and cannot fail on the provider.
 haskell_test(
     name = "native-usb-tests",
     srcs = ["NativeUsbTest.hs"],
@@ -168,7 +157,7 @@ haskell_test(
     deps = [
         ":camera-core",
         ":native-provider",
-        ":native-shim",
+        "@lab_fuji_usb//:fuji-usb",
         "//host:base",
         "//broker:core",
     ],
@@ -244,6 +233,7 @@ haskell_test(
     ghcopts = _GHCOPTS,
     deps = [
         ":camera-core",
+        ":test-scratch",
         "//host:base",
         "//host:bytestring",
         "//broker:core",
@@ -430,6 +420,7 @@ haskell_test(
     deps = [
         ":camera-core",
         ":ram-push-model",
+        ":test-scratch",
         "//host:base",
         "//host:aeson",
         "//host:bytestring",
@@ -462,7 +453,7 @@ haskell_binary(
 )
 
 
-# Every camera operation through the native provider, with native_usb.c's
+# Every camera operation through the native provider, with the usb/ provider's
 # entry points answered by a scripted device, and through the emulator bridge
 # provider, with the bridge's JSON lines answered by the same device; the two
 # output directories must match byte for byte outside the journal clock.
@@ -475,6 +466,7 @@ haskell_test(
         ":camera-core",
         ":native-provider",
         ":ram-push-model",
+        ":test-scratch",
         "//host:base",
         "//host:bytestring",
         "//broker:core",
@@ -606,6 +598,56 @@ haskell_test(
     ],
 )
 
+# Each record's `linked` digests against the payload's linked images, which
+# need no private inputs (README.md "Linked images").
+_LINKED = [
+    ("", "ram-push-review.json", "bank", ["00c40000", "00c4fc88"]),
+    ("-cc", "ram-push-cc-review.json", "classic-chrome", ["00c20000", "00c21f88"]),
+    ("-cc-icon", "ram-push-cc-icon-review.json", "classic-chrome-icon", ["00c20000", "00c21f88"]),
+    ("-toggle", "ram-push-toggle-review.json", "usb-toggle", ["00c20000", "00c21f88"]),
+]
+
+_LINK_DIGEST_DEPS = [
+    ":ram-push-review-record",
+    "//host:base",
+    "//host:bytestring",
+    "//host:cryptohash-sha256",
+    "//host:filepath",
+]
+
+[haskell_test(
+    name = "ram-push" + prefix + "-link-digests",
+    srcs = ["RamPushLinkDigests.hs"],
+    args = ["check", "$(rootpath " + record + ")"] + [
+        "0x%s=$(rootpath //host/firmware:%s-linked-%s)" % (base, payload, base)
+        for base in bases
+    ],
+    data = [record] + ["//host/firmware:%s-linked-%s" % (payload, base) for base in bases],
+    ghcopts = _GHCOPTS,
+    deps = _LINK_DIGEST_DEPS,
+) for prefix, record, payload, bases in _LINKED]
+
+# Rewrites every record's `linked` digests from the current tree; `bazel run` only.
+haskell_binary(
+    name = "ram-push-link-repin",
+    srcs = ["RamPushLinkDigests.hs"],
+    args = ["repin"] + [
+        argument
+        for _, record, payload, bases in _LINKED
+        for argument in [record] + [
+            "0x%s=$(rootpath //host/firmware:%s-linked-%s)" % (base, payload, base)
+            for base in bases
+        ]
+    ],
+    data = [
+        "//host/firmware:%s-linked-%s" % (payload, base)
+        for _, _, payload, bases in _LINKED
+        for base in bases
+    ],
+    ghcopts = _GHCOPTS,
+    deps = _LINK_DIGEST_DEPS,
+)
+
 filegroup(
     name = "ram-push-pinned-workspace-files",
     srcs = [
@@ -706,6 +748,7 @@ haskell_test(
         "ram-push-review.json",
     ],
     ghcopts = _GHCOPTS,
+    tags = ["manual"],
     deps = _GATE_DEPS,
 )
 
@@ -755,6 +798,7 @@ haskell_test(
         "ram-push-cc-review.json",
     ],
     ghcopts = _GHCOPTS,
+    tags = ["manual"],
     deps = _GATE_DEPS,
 )
 
@@ -783,6 +827,7 @@ haskell_test(
         "ram-push-cc-icon-review.json",
     ],
     ghcopts = _GHCOPTS,
+    tags = ["manual"],
     deps = _GATE_DEPS,
 )
 
@@ -811,6 +856,7 @@ haskell_test(
         "ram-push-toggle-review.json",
     ],
     ghcopts = _GHCOPTS,
+    tags = ["manual"],
     deps = _GATE_DEPS,
 )
 
@@ -1083,10 +1129,12 @@ haskell_test(
     data = ["ram-push-review.json"],
     ghcopts = _GHCOPTS,
     main_file = "RamPushReviewedIdentityTest.hs",
-    # The private inputs are read from the checkout, which Bazel does not track.
+    # The private inputs are read from the checkout, which Bazel does not track;
+    # only the holder of those inputs runs it, in the pre-go gate.
     tags = [
         "external",
         "local",
+        "manual",
     ],
     deps = [
         ":camera-core",

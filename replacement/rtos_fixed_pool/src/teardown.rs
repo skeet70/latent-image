@@ -6,7 +6,7 @@ use crate::status::PoolStatus;
 /// Slot `+0xe8`. Stock resets the record and leaves queued waiters blocked; the owned delete
 /// releases each with -49 first, under the object lock the stock body does not take.
 #[inline(never)]
-#[link_section = ".text.fp_body_delete_pool"]
+#[cfg_attr(target_os = "none", link_section = ".text.fp_body_delete_pool")]
 pub fn delete_pool<M: Wake>(m: &M, id: PoolId, handler: bool) -> Result<(), PoolStatus> {
     let words = id.domain.words();
     let config = words.fixed_pool_config(id.slot);

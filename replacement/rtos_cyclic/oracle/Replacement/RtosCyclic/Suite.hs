@@ -802,6 +802,7 @@ caseFor facts domain role stockImage ownedInput one =
             ]
           else [(Sp, stackPointer)]
     , caseExpectedMemory = []
+    , caseIgnoredMemory = []
     , caseCp14Identity = Just (if domain == DomainA then 0x4003 else 0x4004)
     , caseKernel =
         if status == Returned

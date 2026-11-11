@@ -1233,6 +1233,7 @@ caseSpec facts executing role loader owned one
           then [(Pc, stopAddress), (Sp, arrivalSp role)]
           else (R0, expectationResult expectation) : [(register, seed register) | register <- [R4 .. R11]] ++ [(Sp, callerSp one)]
       , caseExpectedMemory = [(RegionId "caller-frame", callerBytes)]
+      , caseIgnoredMemory = []
       , caseCp14Identity = Just (if executing == DomainA then 0x4003 else 0x4004)
       , caseKernel = Just (KernelCase plainLimit (if arrival then Just (wire stopAddress) else Nothing) (Just 0x80001234) (Just 0) (Just 0) ignored contexts)
       }

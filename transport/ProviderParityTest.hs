@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 -- Each camera operation runs twice against the same scripted device: once
--- through the native provider with native_usb.c's entry points answered by the
+-- through the native provider with its entry points answered by the
 -- device, once through the emulator bridge provider with the bridge's JSON
 -- lines answered by the device. Both runs must leave the same files with the
 -- same bytes, journal clock column aside. No USB device is listed or opened.
@@ -24,7 +24,7 @@ import Foreign.Marshal.Array (peekArray, pokeArray)
 import Foreign.Storable (poke)
 import System.Directory
 import System.FilePath
-import System.Posix.Temp (mkdtemp)
+import FujiAF.TestScratch (scratchDirectory)
 import EmulatorUsb (bridgeUsbApi)
 import FujiAF.DumpRam (DumpSegment (..))
 import FujiAF.Native (NativeCalls (..), nativeApiWith)
@@ -45,7 +45,7 @@ type Device = P.Transfer -> IO (Int, [Word8])
 -- A provider standing over a device that lists as the given candidate.
 type Provider = Candidate -> Device -> IO UsbApi
 
--- native_usb.c as the device sees it: one listed device whose fields are the
+-- The native provider as the device sees it: one listed device whose fields are the
 -- candidate's, and transfers that copy the device's reply into the buffer.
 nativeProvider :: Provider
 nativeProvider candidate device = do
@@ -224,8 +224,7 @@ firstDifference native emulator
 
 main :: IO ()
 main = do
-  -- Concurrent Bazel runs share /dev/shm and every sandbox reports pid 12.
-  root <- mkdtemp "/dev/shm/fuji-af-provider-parity-XXXXXX"
+  root <- scratchDirectory "fuji-af-provider-parity-XXXXXX"
   let session = root </> "session"
       plan = ReadPlan "parity-plan" "synthetic 1.50 basis"
         [ReadWindow 0 0x000000 "config window 0", ReadWindow 1 0x000100 "product window", ReadWindow 2 0x000200 "signature window"]

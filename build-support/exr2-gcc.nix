@@ -2,14 +2,18 @@
 # matching compilers of jitl (justjake)'s x70view (decomp/tools/build_cpu.py
 # profile exr2 plus per-file "compiler: 4.4.7" annotations; recipe
 # decomp/toolchain/linux/default.nix at 6287653605).
-# x70view's three GCC patches only change Darwin/arm64 hosts and are omitted.
+# On aarch64-darwin it follows decomp/toolchain/macos/build.sh at the same pin:
+# exr2-gcc/gcc-*.patch are x70view's unmodified host patches, and clang needs
+# its GNU89 diagnostics relaxed.
 # exr2-gcc/host-qsort.c is x70view's stable host qsort.
 let
   pkgs = import ./nixpkgs.nix { config = { }; overlays = [ ]; };
   inherit (pkgs) lib;
-  stdenv = pkgs.gcc13Stdenv;
+  darwin = pkgs.stdenv.hostPlatform.isDarwin;
+  stdenv = if darwin then pkgs.stdenv else pkgs.gcc13Stdenv;
   target = "arm-linux-gnueabi";
-  hostFlags = "-O2 -std=gnu89 -fcommon -fno-strict-aliasing -fwrapv -Wno-error";
+  hostFlags = "-O2 -std=gnu89 -fcommon -fno-strict-aliasing -fwrapv -Wno-error"
+    + lib.optionalString darwin " -Wno-implicit-function-declaration -Wno-int-conversion -Wno-incompatible-function-pointer-types -Wno-deprecated-non-prototype -fbracket-depth=1024";
   hostCxxFlags = "-O2 -std=gnu++98 -fno-strict-aliasing -fwrapv -Wno-error";
   configCommit = "00b15927496058d23e6258a28d8996f87cf1f191";
   configGuess = pkgs.fetchurl {
@@ -32,7 +36,7 @@ let
     CXXFLAGS = hostCxxFlags;
     MAKEINFO = "true";
     dontUpdateAutotoolsGnuConfigScripts = true;
-    meta.platforms = [ "x86_64-linux" ];
+    meta.platforms = [ "x86_64-linux" "aarch64-darwin" ];
     postPatch = ''
       cp ${configGuess} config.guess
       cp ${configSub} config.sub
@@ -91,6 +95,13 @@ let
       inherit sha256;
     };
     buildInputs = [ pkgs.gmp pkgs.mpfr pkgs.libmpc ];
+  } // lib.optionalAttrs darwin {
+    patches = [
+      ./exr2-gcc/gcc-darwin-arm64-generator-abi.patch
+      ./exr2-gcc/gcc-darwin-arm64-host.patch
+      ./exr2-gcc/gcc-generator-callbacks.patch
+    ];
+  } // {
     configurePhase = ''
       runHook preConfigure
       ${prepareBuild (version == "4.4.7")}
@@ -118,7 +129,7 @@ let
     '';
   });
 in
-assert stdenv.hostPlatform.system == "x86_64-linux";
+assert builtins.elem stdenv.hostPlatform.system [ "x86_64-linux" "aarch64-darwin" ];
 pkgs.runCommand "exr2-gcc-4.6.4-4.4.7-binutils-2.24" { } ''
   mkdir "$out"
   ln -s ${binutils} "$out/binutils"

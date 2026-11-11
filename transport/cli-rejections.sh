@@ -257,9 +257,11 @@ test ! -e "$tmpdir/ram-relink-relative"
 if "$binary" ram-relink "$tmpdir/unresolved.json" relative-out; then exit 1; fi
 if "$binary" rehearse ram-relink "$tmpdir/unresolved.json"; then exit 1; fi
 
-# Rehearsals journal every frame with fsync; on a disk-backed temp directory
-# that alone can exceed the real-time transfer budget.
-rehearsals="$(mktemp -d /dev/shm/fuji-af-cli-rejections.XXXXXX)"
+# Rehearsals journal every frame with fsync; on a disk-backed Linux temp
+# directory that alone can exceed the real-time transfer budget.
+scratch=/dev/shm
+test -d "$scratch" || scratch="${TMPDIR:-/tmp}"
+rehearsals="$(mktemp -d "$scratch/fuji-af-cli-rejections.XXXXXX")"
 trap 'rm -rf "$rehearsals"' EXIT
 export TMPDIR="$rehearsals"
 "$binary" rehearse identify
@@ -284,4 +286,5 @@ export TMPDIR="$rehearsals"
 "$binary" rehearse probe-sd-host --repeat 3 --interval-ms 100
 "$binary" rehearse read-bulk 0x00bf1a00 0x180000
 "$binary" rehearse read-bulk 0x40bf1a00 0x1000
-if readelf -d "$binary" | sed -n "/NEEDED/p" | rg "libusb|libudev"; then exit 1; fi
+needed="$(llvm-readobj --needed-libs "$binary")"
+if rg "libusb|libudev" <<< "$needed"; then exit 1; fi

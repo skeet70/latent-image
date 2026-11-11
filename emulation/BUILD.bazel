@@ -29,6 +29,10 @@ exports_files(
     visibility = ["//replacement/startup_artifact:__pkg__"],
 )
 
+# Clears GHC's default "." search path for a Main beside Emulation/<same name>.hs:
+# on a case-insensitive filesystem "." resolves module Emulation.X to emulation/X.hs.
+_NO_DOT_SEARCH = ["-i"]
+
 # Copies a card image to a new path and writes named files into its FAT
 # partition with mtools, for --sd-card-image inputs.
 haskell_binary(
@@ -59,7 +63,12 @@ haskell_test(
     name = "card-with-files-tests",
     size = "small",
     srcs = ["CardWithFilesTests.hs"],
-    args = ["$(rootpath :card-with-files)"],
+    args = [
+        "$(rootpath :card-with-files)",
+        "$(rootpath @lab_dosfstools//:bin/mkfs.vfat)",
+        "$(rootpath @lab_mtools//:bin/mdir)",
+        "$(rootpath @lab_mtools//:bin/mtype)",
+    ],
     data = [
         ":card-with-files",
         "@lab_dosfstools//:bin/mkfs.vfat",
@@ -420,7 +429,7 @@ haskell_binary(
     srcs = ["FirstStageWitness.hs"],
     args = ["--fflzd", "$(location //lz:fflzd)"],
     data = ["//lz:fflzd"],
-    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"] + _NO_DOT_SEARCH,
     visibility = ["//visibility:public"],
     deps = [
         ":emulator-slot-lib",
@@ -887,7 +896,7 @@ haskell_test(
 haskell_binary(
     name = "peer-stage-witness",
     srcs = ["PeerStageWitness.hs"],
-    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"] + _NO_DOT_SEARCH,
     visibility = ["//visibility:public"],
     deps = [
         ":emulator-slot-lib",
@@ -3301,7 +3310,7 @@ haskell_library(
 haskell_binary(
     name = "critical-pair-witness",
     srcs = ["CriticalPairWitness.hs"],
-    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"] + _NO_DOT_SEARCH,
     visibility = ["//visibility:public"],
     deps = [
         ":critical-pair-witness-lib",
@@ -4578,7 +4587,7 @@ haskell_binary(
     name = "value-picker-cases",
     srcs = ["ValuePickerCases.hs"],
     main_file = "ValuePickerCases.hs",
-    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"] + _NO_DOT_SEARCH,
     visibility = ["//visibility:public"],
     deps = [
         ":value-picker-cases-lib",

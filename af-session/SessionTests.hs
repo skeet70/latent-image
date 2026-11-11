@@ -374,7 +374,8 @@ main = do
                      , "-vf", "drawbox=x=9:y=0:w=1:h=48:color=white:t=fill", "-q:v", "1", "-pix_fmt", "yuvj420p"] lineJpeg
     lineFormat <- imagePixelFormat ffprobe lineJpeg
     check (take 6 lineFormat == "yuvj42") ("cropping fixture is not chroma subsampled: " ++ lineFormat)
-    makeStill ffmpeg ["-f", "lavfi", "-i", "color=c=black:s=1000x700"
+    -- Drawn in RGB: ffmpeg's YUV-to-RGB conversion turns this one-pixel white line into 253 on Apple silicon.
+    makeStill ffmpeg ["-f", "lavfi", "-i", "color=c=black:s=1000x700,format=rgb24"
                      , "-vf", "drawbox=x=500:y=0:w=1:h=700:color=white:t=fill"] bigPng
     flat <- measureImage "meas-flat" ["--image", flatPng, "--roi", "0:0:64:48"]
     check (get flat "acutance" == s "0.000000") "flat acutance"

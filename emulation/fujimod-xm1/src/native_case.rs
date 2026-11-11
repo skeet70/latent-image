@@ -2422,6 +2422,11 @@ impl State {
                 return refuse(cpu);
             }
         };
+        // Unicorn on Apple silicon reports a sub-word store's whole source register; keep the stored bytes.
+        let value = match access {
+            Access::Write if (1..8).contains(&size) => value & ((1i64 << (8 * size)) - 1),
+            _ => value,
+        };
         self.log(kind, address, size, value);
         let transfer = self.instruction.transfer.take();
         match self.admit(case, need, address, size, transfer) {

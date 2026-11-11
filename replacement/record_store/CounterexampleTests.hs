@@ -483,6 +483,7 @@ runCli binary cwd buildWorkspace runfiles arguments = do
   environment <- getEnvironment
   let overrides =
         [ ("XM1_EMULATOR_SLOT", "1")
+        , ("XM1_ADMISSION_CLASS", "NativeVerification")
         , ("XM1_STORAGE_MIN_FREE", "1K")
         ]
           ++ maybe [] (\root -> [("BUILD_WORKSPACE_DIRECTORY", root)]) buildWorkspace
@@ -490,13 +491,15 @@ runCli binary cwd buildWorkspace runfiles arguments = do
       filtered =
         [ (key, value)
         | (key, value) <- environment
-        , key `notElem` ["BUILD_WORKSPACE_DIRECTORY", "RUNFILES_DIR", "XM1_EMULATOR_SLOT", "XM1_STORAGE_MIN_FREE"]
+        , key `notElem` ["BUILD_WORKSPACE_DIRECTORY", "RUNFILES_DIR", "XM1_EMULATOR_SLOT", "XM1_ADMISSION_CLASS", "XM1_ADMISSION_OWNER", "XM1_STORAGE_MIN_FREE"]
         ]
+      -- Admission accepts only the admitted process's own PID, which exec preserves.
+      admittedExec = "export XM1_ADMISSION_OWNER=$$; exec \"$0\" \"$@\""
   (timed, code, out, err) <-
     runBoundedProcess
       (ProcessTimeoutMicros 60000000)
       (OutputCapBytes (4 * 1024 * 1024))
-      (proc binary arguments) {cwd = Just cwd, env = Just (filtered ++ overrides)}
+      (proc "/bin/sh" (["-c", admittedExec, binary] ++ arguments)) {cwd = Just cwd, env = Just (filtered ++ overrides)}
       B.empty
   unless (not timed) (error ("counterexample-loop timed out: " ++ BC.unpack (B.take 400 err)))
   value <-

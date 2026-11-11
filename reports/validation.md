@@ -38,7 +38,7 @@ These remain implemented and tested, regardless of the original finding IDs:
 
 ## Reproduction and limits
 
-[Host-tool commands](review/README.md) reproduce source/export/framing and caller probes. The preserved public DAT's complete export/framing metadata and upstream Git inventories were checked through the pinned environment; those format-specific claims are in [firmware findings](firmware-extraction.md). Static native metadata uses `pkg-config`, hashes and `readelf`, without loading libusb.
+[Host-tool commands](review/README.md) reproduce source/export/framing and caller probes. The preserved public DAT's complete export/framing metadata and upstream Git inventories were checked through the pinned environment; those format-specific claims are in [firmware findings](firmware-extraction.md).
 
 Earlier runs used populated pinned Nix/Bazel dependencies with Bazel downloads disabled. They do not independently rebuild the entire toolchain or prove empty-cache acquisition. Filesystem/kernel/event-loop progress, trusted installed tools/loader/Nix store and cooperating-account assumptions remain; finite application deadlines are not hard real-time cancellation guarantees.
 

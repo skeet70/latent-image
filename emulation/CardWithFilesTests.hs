@@ -4,12 +4,12 @@
 -- to the input is refused.
 module Main (main) where
 
-import Control.Monad (filterM, unless)
+import Control.Monad (unless)
 import qualified Crypto.Hash.SHA256 as SHA256
 import qualified Data.ByteString as B
 import Data.List (isInfixOf)
-import System.Directory (createDirectory, doesFileExist, getTemporaryDirectory, makeAbsolute, removeDirectoryRecursive, removeFile)
-import System.Environment (getArgs, getExecutablePath)
+import System.Directory (createDirectory, getTemporaryDirectory, makeAbsolute, removeDirectoryRecursive, removeFile)
+import System.Environment (getArgs)
 import System.Exit (ExitCode (..), exitFailure)
 import System.FilePath ((</>))
 import System.IO (IOMode (WriteMode), hClose, hSetFileSize, openBinaryFile, openTempFile)
@@ -21,26 +21,9 @@ check label passed = unless passed (putStrLn ("FAIL: " ++ label) >> exitFailure)
 digest :: FilePath -> IO B.ByteString
 digest path = SHA256.hash <$> B.readFile path
 
--- | A Nix tool from this test's runfiles, or the name on PATH.
-toolFor :: String -> IO FilePath
-toolFor name = do
-  executable <- getExecutablePath
-  let runfiles = executable ++ ".runfiles"
-      repository = if name == "mkfs.vfat" then "lab_dosfstools" else "lab_mtools"
-      candidates =
-        [ runfiles </> repository </> "bin" </> name
-        , runfiles </> "_main" </> repository </> "bin" </> name
-        ]
-  present <- filterM doesFileExist candidates
-  pure (case present of (path : _) -> path; [] -> name)
-
 main :: IO ()
 main = do
-  [toolArg] <- getArgs
-  tool <- makeAbsolute toolArg
-  mkfs <- toolFor "mkfs.vfat"
-  mdir <- toolFor "mdir"
-  mtype <- toolFor "mtype"
+  [tool, mkfs, mdir, mtype] <- getArgs >>= mapM makeAbsolute
   temporary <- getTemporaryDirectory
   (root, handle) <- openTempFile temporary "card-with-files-test"
   hClose handle

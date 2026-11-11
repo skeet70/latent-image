@@ -22,10 +22,11 @@ factsDigest = "c758fe871befbba5fed0a0e5756cfd8d36fde35bb8f01b9f0e8798ba20a722be"
 
 record :: String
 record = concat
-  [ "{\"schema\":1,\"kind\":\"xm1-ram-push-review-record\",\"reviews\":[],\"content_checks\":[],\"pins\":["
+  [ "{\"schema\":2,\"kind\":\"xm1-ram-push-review-record\",\"reviews\":[],\"content_checks\":[],\"pins\":["
   , pin "rust_object_replacement_bank" "rust-archive" "bank-content" archiveDigest, ","
   , pin "rust_toolchain_replacement_bank" "rust-toolchain-facts" "mechanism" factsDigest
-  , "],\"publication_contract\":{\"sha256\":\"", replicate 64 'd', "\",\"status\":", unreviewed, "}}" ]
+  , "],\"publication_contract\":{\"sha256\":\"", replicate 64 'd', "\",\"status\":", unreviewed, "}"
+  , ",\"linked\":[{\"base\":\"0x00c40000\",\"sha256\":\"", replicate 64 '4', "\"},{\"base\":\"0x00c4fc88\",\"sha256\":\"", replicate 64 '5', "\"}]}" ]
   where
     unreviewed = "{\"verdict\":\"unreviewed\",\"commit\":\"" ++ replicate 40 'b' ++ "\"}"
     pin identity source component digest = "{\"identity\":\"" ++ identity ++ "\",\"source\":\"" ++ source

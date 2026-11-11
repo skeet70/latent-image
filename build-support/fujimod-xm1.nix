@@ -51,10 +51,16 @@ let
     sourceRoot = "fujimod-xm1-workspace/fujimod-xm1";
     inherit cargoLock;
     cargoVendorDir = craneLib.vendorCargoDeps { inherit cargoLock; };
-    nativeBuildInputs = [ pkgs.cmake pkgs.pkg-config pkgs.jq ];
+    # apple-cf, a macOS-only FujiMod dependency, builds its Swift bridge with
+    # SwiftPM. The bridge autolinks the SDK's Swift overlays; ld64 binds its
+    # libobjc imports only when libobjc is also linked explicitly.
+    nativeBuildInputs = [ pkgs.cmake pkgs.pkg-config pkgs.jq ]
+      ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.swift pkgs.swiftpm ];
     # nand_image.rs links zlib for retained-identical committed NAND exports.
     buildInputs = [ pkgs.zlib ];
     dontUseCmakeConfigure = true;
+  } // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
+    NIX_LDFLAGS = "-L${pkgs.apple-sdk.sdkroot}/usr/lib/swift -lobjc";
   };
   deps = craneLib.buildDepsOnly (common // {
     dummySrc = workspace (craneLib.mkDummySrc { src = crate; inherit cargoLock; });

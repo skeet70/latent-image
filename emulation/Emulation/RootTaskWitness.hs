@@ -122,7 +122,7 @@ admitInputs role source = do
   canonical <- either (const (Left SourceRejected)) Right (Artifact.canonicalSource (sourceDat source) (sourceImage source))
   let sourcePins = [(sourceA source,"21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882")
         ,(sourceB source,"8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec")
-        ,(sourceRun source,"6e6ac441c0661470b5b26abe7628f19ec118ac568967938378c88dea448835cb")
+        ,(sourceRun source,"efa32ff8d2a378ba9e098ac28015faf82856765c866d5db5b97cb1c38342deef")
         ,(sourceRom source,"4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be")]
   mapM_ (\(body,expected) -> require (hash body == W.Digest expected) SourceRejected) sourcePins
   artifact <- either (const (Left ArtifactRejected)) Right (Artifact.deriveArtifact (sourceLinked source) (sourceSymbols source))
@@ -150,7 +150,7 @@ admitInputs role source = do
   proof <- case role of
     Owned -> pure (Artifact.artifactProof artifact)
     Retained -> pure (Artifact.canonicalProof canonical)
-  let identity = Identity (W.Digest "6e6ac441c0661470b5b26abe7628f19ec118ac568967938378c88dea448835cb") updateIdentity
+  let identity = Identity (W.Digest "efa32ff8d2a378ba9e098ac28015faf82856765c866d5db5b97cb1c38342deef") updateIdentity
         (W.Digest "4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be") (hash (sourceObserver source))
         linkedIdentity symbolIdentity (hash (sourceContract source))
         [S.SourceIdentity kind (W.Address base) (B.length body) (W.Digest digest) | (kind,base,body,digest) <-

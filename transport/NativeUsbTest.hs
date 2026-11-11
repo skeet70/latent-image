@@ -1,11 +1,11 @@
 {-# LANGUAGE ForeignFunctionInterface #-}
--- The native inventory through the real libusb. fuji_usb_list keeps the
--- device list in static state, so the second call in a process is where the
--- one-call-per-process assumption showed; the synthetic tests substitute the
--- UsbApi record and never run the C, so none of them can fail on it. This
--- test enumerates the host bus and nothing else: no device is opened, claimed
--- or transferred, and no camera is required. It also calls the shim's size
--- gate directly, which needs no library.
+-- The native inventory through the real provider. fuji_usb_list keeps the
+-- device list in process state, so the second call in a process is where a
+-- one-call-per-process assumption would show; the synthetic tests substitute
+-- the UsbApi record and never run the provider, so none of them can fail on
+-- it. This test enumerates the host bus and, with no camera attached, opens,
+-- claims and transfers nothing. It also calls the provider's size gate
+-- directly, which touches no device.
 module Main where
 
 import Control.Exception (SomeException, displayException, try)
@@ -37,7 +37,7 @@ main = do
   forM_ [ (2,1,True), (2,0x100000,True), (2,0x100001,False), (2,0,False)
         , (1,292,True), (1,293,False), (1,0x100000,False), (0,12,True), (0,293,False), (0,0x100000,False) ] $ \(kind,size,admitted) -> do
     result <- sizeAdmitted kind size
-    check ("shim size gate for kind "++show kind++", "++show size++" bytes") ((result /= 0) == admitted)
+    check ("provider size gate for kind "++show kind++", "++show size++" bytes") ((result /= 0) == admitted)
   let api = nativeApi
   stage "native load and init" (usbInit api 0)
   first <- listOnce api

@@ -7,7 +7,7 @@ use layout::*;
 
 const DOMAINS: [Domain; 2] = [Domain::A, Domain::B];
 
-fn words_as_array(w: &DomainWords) -> [u32; 19] {
+fn words_as_array(w: DomainWords) -> [u32; 19] {
     [
         w.handler_context,
         w.scheduler_lock,
@@ -109,7 +109,7 @@ fn context_fields_are_the_stock_offsets() {
 
 #[test]
 fn task_records_are_the_stock_addresses() {
-    let first_and_last = |w: &DomainWords| {
+    let first_and_last = |w: DomainWords| {
         [TaskSlot::new(1).unwrap(), TaskSlot::new(60).unwrap(), TaskSlot::new(120).unwrap()].map(|s| w.task(s).0 .0)
     };
     assert_eq!(first_and_last(Domain::A.words()), [0x4005_ff0c, 0x4006_0bf4, 0x4006_1914]);

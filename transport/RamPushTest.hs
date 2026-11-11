@@ -15,7 +15,7 @@ import Numeric (showHex)
 import System.Directory
 import System.FilePath
 import System.Posix.Files (fileMode, getFileStatus, intersectFileModes, setFileMode)
-import System.Posix.Temp (mkdtemp)
+import FujiAF.TestScratch (scratchDirectory)
 import FujiAF.RamPush
 import FujiAF.SHA256 (sha256)
 import FujiAF.Rehearsal (rehearseRamAlloc, rehearseRamPush, rehearseRamFree, rehearseRamUnload)
@@ -112,8 +112,7 @@ manifestDocument candidate = BL.toStrict (encode (object $
 
 main :: IO ()
 main = do
-  -- Concurrent Bazel runs share /dev/shm and every sandbox reports pid 12.
-  root <- mkdtemp "/dev/shm/fuji-af-ram-push-tests-XXXXXX"
+  root <- scratchDirectory "fuji-af-ram-push-tests-XXXXXX"
   setFileMode root 0o700
 
   propertyLayout <- either (error . ("property layout: " ++)) pure (Layout.propertyPublicationLayout modalRenderBankVariant)

@@ -10,7 +10,6 @@ Run through the checked-in devenv/Bazel environment. These utilities inspect pin
 | X-M1 mapped-section export for the X70 emulator scratch run | `//host/firmware:export-x70-map [--expected-sha256 SHA256] DAT DECODE_ID4 DECODE_ID5 ROM FFLZD SCRATCH_SOURCE` |
 | Firmware-source inventory/checksum verification | `//reports/review:f01-source-check --fffw CHECKOUT --fujihack CHECKOUT --patcher CHECKOUT [--dat EXACT_PRIVATE_DAT] --repository REPOSITORY` |
 | Exporter FIFO boundary probe | `//reports/review:f01-firmware-probes --repository REPOSITORY` |
-| Static USB dependency metadata | `//reports/review:f02-native-metadata` (`pkg-config`, hashes and `readelf`; no library load) |
 
 ```sh
 devenv shell -- bazel test //reports/review:all //third_party:inventory-tests //host/firmware:framing-tests

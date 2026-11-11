@@ -247,10 +247,66 @@
   ],
   "cargo_packages": [
     {
+      "name": "bitflags",
+      "version": "2.13.2",
+      "license": "MIT OR Apache-2.0",
+      "evidence": "https://crates.io/api/v1/crates/bitflags/2.13.2",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "bumpalo",
+      "version": "3.20.3",
+      "license": "MIT OR Apache-2.0",
+      "evidence": "https://crates.io/api/v1/crates/bumpalo/3.20.3",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
       "name": "cfg-if",
       "version": "1.0.5",
       "license": "MIT OR Apache-2.0",
       "evidence": "https://crates.io/api/v1/crates/cfg-if/1.0.5",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "core-foundation",
+      "version": "0.10.1",
+      "license": "MIT OR Apache-2.0",
+      "evidence": "https://crates.io/api/v1/crates/core-foundation/0.10.1",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "core-foundation-sys",
+      "version": "0.8.7",
+      "license": "MIT OR Apache-2.0",
+      "evidence": "https://crates.io/api/v1/crates/core-foundation-sys/0.8.7",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "errno",
+      "version": "0.3.14",
+      "license": "MIT OR Apache-2.0",
+      "evidence": "https://crates.io/api/v1/crates/errno/0.3.14",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "futures-core",
+      "version": "0.3.34",
+      "license": "MIT OR Apache-2.0",
+      "evidence": "https://crates.io/api/v1/crates/futures-core/0.3.34",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "futures-task",
+      "version": "0.3.34",
+      "license": "MIT OR Apache-2.0",
+      "evidence": "https://crates.io/api/v1/crates/futures-task/0.3.34",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "futures-util",
+      "version": "0.3.34",
+      "license": "MIT OR Apache-2.0",
+      "evidence": "https://crates.io/api/v1/crates/futures-util/0.3.34",
       "scope": "published version license metadata; package notices remain in dependency source"
     },
     {
@@ -261,10 +317,31 @@
       "scope": "published version license metadata; package notices remain in dependency source"
     },
     {
+      "name": "io-kit-sys",
+      "version": "0.5.0",
+      "license": "MIT OR Apache-2.0",
+      "evidence": "https://crates.io/api/v1/crates/io-kit-sys/0.5.0",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "js-sys",
+      "version": "0.3.107",
+      "license": "MIT OR Apache-2.0",
+      "evidence": "https://crates.io/api/v1/crates/js-sys/0.3.107",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
       "name": "libc",
       "version": "0.2.190",
       "license": "MIT OR Apache-2.0",
       "evidence": "https://crates.io/api/v1/crates/libc/0.2.190",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "libc",
+      "version": "0.2.191",
+      "license": "MIT OR Apache-2.0",
+      "evidence": "https://crates.io/api/v1/crates/libc/0.2.191",
       "scope": "published version license metadata; package notices remain in dependency source"
     },
     {
@@ -275,10 +352,45 @@
       "scope": "published version license metadata; package notices remain in dependency source"
     },
     {
+      "name": "linux-raw-sys",
+      "version": "0.12.1",
+      "license": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT",
+      "evidence": "https://crates.io/api/v1/crates/linux-raw-sys/0.12.1",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "log",
+      "version": "0.4.35",
+      "license": "MIT OR Apache-2.0",
+      "evidence": "https://crates.io/api/v1/crates/log/0.4.35",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "mach2",
+      "version": "0.5.0",
+      "license": "BSD-2-Clause OR MIT OR Apache-2.0",
+      "evidence": "https://crates.io/api/v1/crates/mach2/0.5.0",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "nusb",
+      "version": "0.2.9",
+      "license": "Apache-2.0 OR MIT",
+      "evidence": "https://crates.io/api/v1/crates/nusb/0.2.9",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
       "name": "once_cell",
       "version": "1.21.4",
       "license": "MIT OR Apache-2.0",
       "evidence": "https://crates.io/api/v1/crates/once_cell/1.21.4",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "pin-project-lite",
+      "version": "0.2.17",
+      "license": "Apache-2.0 OR MIT",
+      "evidence": "https://crates.io/api/v1/crates/pin-project-lite/0.2.17",
       "scope": "published version license metadata; package notices remain in dependency source"
     },
     {
@@ -338,10 +450,38 @@
       "scope": "published version license metadata; package notices remain in dependency source"
     },
     {
+      "name": "rustix",
+      "version": "1.1.6",
+      "license": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT",
+      "evidence": "https://crates.io/api/v1/crates/rustix/1.1.6",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "rustversion",
+      "version": "1.0.23",
+      "license": "MIT OR Apache-2.0",
+      "evidence": "https://crates.io/api/v1/crates/rustversion/1.0.23",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "slab",
+      "version": "0.4.12",
+      "license": "MIT",
+      "evidence": "https://crates.io/api/v1/crates/slab/0.4.12",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
       "name": "syn",
       "version": "2.0.119",
       "license": "MIT OR Apache-2.0",
       "evidence": "https://crates.io/api/v1/crates/syn/2.0.119",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "syn",
+      "version": "3.0.10",
+      "license": "MIT OR Apache-2.0",
+      "evidence": "https://crates.io/api/v1/crates/syn/3.0.10",
       "scope": "published version license metadata; package notices remain in dependency source"
     },
     {
@@ -352,6 +492,13 @@
       "scope": "published version license metadata; package notices remain in dependency source"
     },
     {
+      "name": "tokio",
+      "version": "1.54.1",
+      "license": "MIT",
+      "evidence": "https://crates.io/api/v1/crates/tokio/1.54.1",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
       "name": "unicode-ident",
       "version": "1.0.26",
       "license": "(MIT OR Apache-2.0) AND Unicode-3.0",
@@ -359,10 +506,66 @@
       "scope": "published version license metadata; package notices remain in dependency source"
     },
     {
+      "name": "unicode-ident",
+      "version": "1.0.27",
+      "license": "(MIT OR Apache-2.0) AND Unicode-3.0",
+      "evidence": "https://crates.io/api/v1/crates/unicode-ident/1.0.27",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "wasm-bindgen",
+      "version": "0.2.130",
+      "license": "MIT OR Apache-2.0",
+      "evidence": "https://crates.io/api/v1/crates/wasm-bindgen/0.2.130",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "wasm-bindgen-futures",
+      "version": "0.4.80",
+      "license": "MIT OR Apache-2.0",
+      "evidence": "https://crates.io/api/v1/crates/wasm-bindgen-futures/0.4.80",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "wasm-bindgen-macro",
+      "version": "0.2.130",
+      "license": "MIT OR Apache-2.0",
+      "evidence": "https://crates.io/api/v1/crates/wasm-bindgen-macro/0.2.130",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "wasm-bindgen-macro-support",
+      "version": "0.2.130",
+      "license": "MIT OR Apache-2.0",
+      "evidence": "https://crates.io/api/v1/crates/wasm-bindgen-macro-support/0.2.130",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "wasm-bindgen-shared",
+      "version": "0.2.130",
+      "license": "MIT OR Apache-2.0",
+      "evidence": "https://crates.io/api/v1/crates/wasm-bindgen-shared/0.2.130",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "web-sys",
+      "version": "0.3.107",
+      "license": "MIT OR Apache-2.0",
+      "evidence": "https://crates.io/api/v1/crates/web-sys/0.3.107",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
       "name": "windows-link",
       "version": "0.2.1",
       "license": "MIT OR Apache-2.0",
       "evidence": "https://crates.io/api/v1/crates/windows-link/0.2.1",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "windows-sys",
+      "version": "0.61.2",
+      "license": "MIT OR Apache-2.0",
+      "evidence": "https://crates.io/api/v1/crates/windows-sys/0.61.2",
       "scope": "published version license metadata; package notices remain in dependency source"
     }
   ],

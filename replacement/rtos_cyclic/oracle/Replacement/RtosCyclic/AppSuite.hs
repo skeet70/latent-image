@@ -251,6 +251,7 @@ caseFor role stockImage ownedImage ownedFunctions one =
           : [(register, seedRegister register) | register <- [R4 .. R11]]
           ++ [(Sp, stackPointer)]
     , caseExpectedMemory = []
+    , caseIgnoredMemory = []
     , caseCp14Identity = Nothing
     , caseKernel = Nothing
     }

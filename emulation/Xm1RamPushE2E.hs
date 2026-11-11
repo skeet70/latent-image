@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), E2ESettings (..), ModalOwnedPackage (..), loadModalOwnedPackage, SymbolRead, parseSymbolRead, Payload, bankD3Payload, bankModal75Payload, bankModalEnginePayload, bankModalRenderPayload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromePayload, classicChromeIconPayload, experimentPayload, runMenuCrawlE2E, runMenuObserveE2E, runRamDiffE2E, runRamPushE2E, warmAttachCheckpoint, KeeperSessionId, keeperSessionId, KeeperState (..), KeeperAction (..), keeperTransition, checkPropertyAllocationSource, runPropertyAllocationKeeper, validateAfResetProof, validateAfResetPair, AfArchiveBinding (..), validateAfArchiveBinding) where
+module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), E2ESettings (..), ModalOwnedPackage (..), loadModalOwnedPackage, SymbolRead, parseSymbolRead, Payload, bankD3Payload, bankModal75Payload, bankModalEnginePayload, bankModalRenderPayload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromePayload, classicChromeIconPayload, experimentPayload, runMenuCrawlE2E, runMenuObserveE2E, runRamDiffE2E, runRamPushE2E, sessionBridge, warmAttachCheckpoint, KeeperSessionId, keeperSessionId, KeeperState (..), KeeperAction (..), keeperTransition, checkPropertyAllocationSource, runPropertyAllocationKeeper, validateAfResetProof, validateAfResetPair, AfArchiveBinding (..), validateAfArchiveBinding) where
 
 import Control.Applicative ((<|>))
 import Control.Exception (IOException, SomeException, bracket, catch, displayException, finally, mask, throwIO, try)
@@ -21,7 +21,7 @@ import Data.Bits (shiftL, shiftR, (.|.))
 import Data.Int (Int32)
 import Data.Word (Word32)
 import Numeric (readHex, showFFloat, showHex)
-import System.Directory (canonicalizePath, createDirectory, doesDirectoryExist, doesFileExist, getCurrentDirectory, getFileSize, listDirectory, removeDirectory, removeDirectoryRecursive, removeFile, setCurrentDirectory)
+import System.Directory (canonicalizePath, createDirectory, doesDirectoryExist, doesFileExist, getCurrentDirectory, getFileSize, getTemporaryDirectory, listDirectory, removeDirectory, removeDirectoryRecursive, removeFile, setCurrentDirectory)
 import System.Environment (getExecutablePath, lookupEnv)
 import System.FilePath (isAbsolute, replaceExtension, splitDirectories, takeDirectory, takeFileName, (</>))
 import System.IO (BufferMode (LineBuffering), IOMode (WriteMode), hClose, hFlush, hSetBuffering, hIsEOF, hGetChar, stdin, stdout, withFile)
@@ -350,12 +350,18 @@ rawWatch action = (Right <$> action) `catch` \(failure :: SomeException) -> pure
 privateDirectory :: FilePath -> IO ()
 privateDirectory path = createDirectory path >> setFileMode path 0o700
 
--- | Runs a transport session in a private directory on tmpfs (XDG_RUNTIME_DIR, else /dev/shm),
--- then copies its files into DIRECTORY, which must exist, whether or not the session succeeded.
--- The transport fsyncs every journal line, which costs tens of milliseconds a transfer on disk.
+-- | Runs a transport session in a private directory under XDG_RUNTIME_DIR, else /dev/shm, else
+-- the temporary directory, then copies its files into DIRECTORY, which must exist, whether or
+-- not the session succeeded. The transport fsyncs every journal line, which costs tens of
+-- milliseconds a transfer on a Linux disk.
 stagedSession :: FilePath -> (FilePath -> IO a) -> IO a
 stagedSession directory session = do
-  root <- maybe "/dev/shm" id <$> lookupEnv "XDG_RUNTIME_DIR"
+  runtime <- lookupEnv "XDG_RUNTIME_DIR"
+  shm <- doesDirectoryExist "/dev/shm"
+  root <- case runtime of
+    Just path -> pure path
+    Nothing | shm -> pure "/dev/shm"
+            | otherwise -> getTemporaryDirectory
   bracket (mkdtemp (root </> "xm1-e2e-session-")) removeDirectoryRecursive $ \staging -> do
     let work = staging </> "session"
     privateDirectory work

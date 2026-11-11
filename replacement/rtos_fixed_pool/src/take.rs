@@ -8,7 +8,7 @@ pub struct BlockAddress(pub GuestAddress);
 /// The allocator A `0x4b41c` / B `0xdb3dc`: pop the free list, else bump below the region end. The
 /// output is stored before the frontier advances; the caller holds the object lock.
 #[inline(never)]
-#[link_section = ".text.fp_body_take"]
+#[cfg_attr(target_os = "none", link_section = ".text.fp_body_take")]
 pub fn take<M: Machine>(m: &M, id: PoolId, out: GuestAddress) -> Option<BlockAddress> {
     let words = id.domain.words();
     let config = words.fixed_pool_config(id.slot);

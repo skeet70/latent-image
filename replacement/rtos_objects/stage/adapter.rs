@@ -1,4 +1,4 @@
-//! F2 stage adapter: the generic wake bodies over the CPU and the owned S1/S2 exports.
+//! Family stage adapter: the generic wake bodies over the CPU and the owned S1/S2 exports.
 #![cfg_attr(not(test), no_std)]
 
 #[path = "../src/lib.rs"]
@@ -10,10 +10,8 @@ pub use objects::{
     timeout, wake,
 };
 
-#[cfg(feature = "family")]
 mod abi;
 
-#[cfg(feature = "family")]
 mod family;
 
 use core::arch::asm;
@@ -21,7 +19,6 @@ use core::ptr::read_volatile;
 use objects::create::{Machine, SavedInterrupts};
 use objects::layout::{Domain, DomainId, DomainWords, GuestAddress, KernelContext, LockRecord, Task};
 use objects::locked::{ObjectGuard, ObjectLock};
-use objects::message::{MessagePriority, PriorityLimit};
 use objects::wake::{release, DispatchTarget, Release, SchedulerGuard, Selection, Wake};
 use objects::*;
 
@@ -172,10 +169,7 @@ impl Wake for Cpu {
         match DomainId::from_word(load(waiter.domain())) {
             Some(DomainId::A) => Domain::A,
             Some(DomainId::B) => Domain::B,
-            #[cfg(feature = "family")]
             _ => family::xm1_rtos_objects_fault(family::KernelFault::WaiterDomain),
-            #[cfg(not(feature = "family"))]
-            _ => panic!("waiting task has no domain tag"),
         }
     }
 
@@ -204,100 +198,11 @@ fn entry_words() -> DomainWords {
     ENTRY.words()
 }
 
-#[cfg(not(feature = "family"))]
-#[inline(always)]
-fn entry_state() -> Entry {
-    Entry {
-        handler_context: load(entry_words().handler_context),
-        irq_masked: unsafe { cpsr_masked() },
-        dispatch_enabled: 0,
-    }
-}
-
 #[inline(always)]
 unsafe fn cpsr_masked() -> bool {
     let cpsr: u32;
     unsafe { asm!("mrs {cpsr}, cpsr", cpsr = out(reg) cpsr, options(nostack)) };
     cpsr & 0x80 != 0
-}
-
-#[cfg(not(feature = "family"))]
-#[inline(always)]
-fn target(domain: Domain, class: i32) -> Result<Domain, ObjectStatus> {
-    match class {
-        0 => Ok(domain),
-        1 => Ok(Domain::A),
-        2 => Ok(Domain::B),
-        _ => Err(ObjectStatus::InvalidClass),
-    }
-}
-
-/// Slot `+0x88`, in stock admission order.
-#[cfg(not(feature = "family"))]
-#[no_mangle]
-#[inline(never)]
-#[link_section = ".text.f2_set_flag"]
-pub extern "C" fn xm1_rtos_objects_f2_set_flag(id: i32, bits: u32) -> i32 {
-    let cpu = Cpu;
-    let words = entry_words();
-    let entry = entry_state();
-    if entry.handler_context != 0 || entry.irq_masked {
-        return ObjectStatus::Context.code();
-    }
-    let domain = match target(ENTRY, id >> 16) {
-        Ok(domain) => domain,
-        Err(status) => return status.code(),
-    };
-    let slot = match resolve_flag(EntryDomain::new(ENTRY), EncodedId(id), load(words.context(domain).event_flag_count())) {
-        Ok(resolved) => resolved,
-        Err(status) => return status.code(),
-    };
-    if load(domain.words().flag_config(slot.slot).exists()) == 0 {
-        return ObjectStatus::NotCreated.code();
-    }
-    set_flag(&cpu, slot, Pattern(bits));
-    0
-}
-
-/// Slot `+0xd4`, in stock admission order: the creation record is read before the message priority.
-#[cfg(not(feature = "family"))]
-#[no_mangle]
-#[inline(never)]
-#[link_section = ".text.f2_send"]
-pub extern "C" fn xm1_rtos_objects_f2_send(id: i32, message: u32) -> i32 {
-    let cpu = Cpu;
-    let words = entry_words();
-    let entry = entry_state();
-    if entry.handler_context != 0 || entry.irq_masked {
-        return ObjectStatus::Context.code();
-    }
-    let domain = match target(ENTRY, id >> 16) {
-        Ok(domain) => domain,
-        Err(status) => return status.code(),
-    };
-    let slot = match resolve_mailbox(
-        EntryDomain::new(ENTRY),
-        EncodedId(id),
-        load(words.context(domain).mailbox_count()),
-    ) {
-        Ok(resolved) => resolved,
-        Err(status) => return status.code(),
-    };
-    let config = domain.words().mailbox_config(slot.slot);
-    if load(config.exists()) == 0 {
-        return ObjectStatus::NotCreated.code();
-    }
-    let priority = if load(config.attributes()) & 2 != 0 {
-        let raw = load(GuestAddress(message + 4));
-        match MessagePriority::new(raw, PriorityLimit(load(config.priority_limit()))) {
-            Ok(priority) => Some(priority),
-            Err(status) => return status.code(),
-        }
-    } else {
-        None
-    };
-    send(&cpu, slot, objects::layout::Message(GuestAddress(message)), priority);
-    0
 }
 
 /// The wait release at its stock entry, A `0x44568` / B `0xd4528`.

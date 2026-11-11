@@ -123,7 +123,7 @@ No memory/bootrom/simple-syslog wrapper uses `finally` around debug changes. Any
 
 ## Native runtime and kernel effects
 
-The supported native path was source-inspected and its installed runtime identified statically; no real libusb load/init/list/open occurred. [Selected native source hashes](../third_party/native-usb-source-inventory.json) retain exact inspected files. Future session approvals must bind actual runtime/dependencies, running kernel release and a concrete host/device profile; these source conclusions do not authorize live execution.
+This section audits the libusb provider that [`transport/usb`](../transport/usb/) replaced; the nusb-based provider's own paths await their audit. The libusb path was source-inspected and its installed runtime identified statically; no real libusb load/init/list/open occurred. [Selected native source hashes](../third_party/native-usb-source-inventory.json) retain exact inspected files. Future session approvals must bind actual runtime/dependencies, running kernel release and a concrete host/device profile; these source conclusions do not authorize live execution.
 
 | Component | Reviewed identity |
 | --- | --- |
@@ -162,4 +162,4 @@ Continuity depends on reviewed host policy and the operator's sleep-inhibition p
 
 The selected `idVendor`, `idProduct`, `busnum`, `devpath`, `bConfigurationValue` and `descriptors` reads were traced in [USB sysfs.c](https://github.com/OpenGamingCollective/linux/blob/151eb3adafae8820f349a4454c1f1e8d5fc991a4/drivers/usb/core/sysfs.c). They use cached fields/configuration bytes without USB transfers, device-node open or body resume; configuration reads take a mutex and may block. Attribute stores and string descriptors are excluded. [fs/sysfs/file.c](https://github.com/OpenGamingCollective/linux/blob/151eb3adafae8820f349a4454c1f1e8d5fc991a4/fs/sysfs/file.c) declares PAGE_SIZE capacity, while binary descriptors declare 18+65535. Those sizes are virtual capacities: validate regular leaves and cap actual returned bytes rather than treating st_size as observed content length.
 
-No command in this repository reads sysfs; the traced reads describe what a cached observation could cost, not a delivered collector. [Transport contracts](../transport/README.md) and [validation rules](validation.md) own the implementation, tests and operator steps.
+Outside the native provider's descriptor, configuration and driver reads for an eligible device, no command in this repository reads sysfs; the traced reads describe what a cached observation could cost, not a delivered collector. [Transport contracts](../transport/README.md) and [validation rules](validation.md) own the implementation, tests and operator steps.

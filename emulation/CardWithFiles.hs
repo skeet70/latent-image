@@ -10,7 +10,7 @@
 -- mtype, compares the bytes and lists the root with mdir.
 module Main (main) where
 
-import Control.Monad (filterM, forM_, unless, when)
+import Control.Monad (forM_, unless, when)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C8
 import qualified Data.ByteString.Lazy as BL
@@ -88,15 +88,12 @@ parseOffset text = case text of
     | toLower c >= 'a' && toLower c <= 'f' = 10 + fromEnum (toLower c) - fromEnum 'a'
     | otherwise = 0
 
+-- | NAME from this binary's runfiles under the canonical bzlmod repository name, else NAME on PATH.
 toolPath :: FilePath -> String -> IO FilePath
 toolPath executable name = do
-  let runfiles = executable ++ ".runfiles"
-      candidates =
-        [ runfiles </> "lab_mtools" </> "bin" </> name
-        , runfiles </> "_main" </> "lab_mtools" </> "bin" </> name
-        ]
-  present <- filterM doesFileExist candidates
-  pure (case present of (path : _) -> path; [] -> name)
+  let candidate = executable ++ ".runfiles" </> "_main~lab_dependencies~lab_mtools" </> "bin" </> name
+  present <- doesFileExist candidate
+  pure (if present then candidate else name)
 
 runTool :: String -> FilePath -> [String] -> IO ()
 runTool label executable arguments = do

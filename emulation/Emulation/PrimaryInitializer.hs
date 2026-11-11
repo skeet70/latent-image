@@ -112,7 +112,7 @@ parseRunInput :: B.ByteString -> Either String RunInput
 parseRunInput bytes = do
   require (not (B.null bytes) && B.length bytes <= 1024 * 1024) "primary run extent differs"
   digest <- F.parseSha256 (sha256Hex bytes)
-  canonical <- F.parseSha256 "6e6ac441c0661470b5b26abe7628f19ec118ac568967938378c88dea448835cb"
+  canonical <- F.parseSha256 "efa32ff8d2a378ba9e098ac28015faf82856765c866d5db5b97cb1c38342deef"
   require (digest == canonical) "primary requires the canonical natural-reset run"
   pure (RunInput digest)
 

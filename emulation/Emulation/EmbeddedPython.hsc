@@ -44,9 +44,16 @@ data InitConfig
 
 libpython :: DL
 libpython = unsafePerformIO $ dlopen
-  (#{const_str AFPY_DECLARED_BASE} ++ "/lib/lib" ++ #{const_str AFPY_DECLARED_ABI} ++ ".so.1.0")
+  (#{const_str AFPY_DECLARED_BASE} ++ "/lib/lib" ++ #{const_str AFPY_DECLARED_ABI} ++ librarySuffix)
   [RTLD_NOW, RTLD_GLOBAL]
 {-# NOINLINE libpython #-}
+
+librarySuffix :: String
+#if defined(__APPLE__)
+librarySuffix = ".dylib"
+#else
+librarySuffix = ".so.1.0"
+#endif
 
 symbol :: String -> FunPtr a
 symbol name = unsafePerformIO (dlsym libpython name)

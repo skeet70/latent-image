@@ -1,4 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
+/* Darwin hides O_NOFOLLOW under _POSIX_C_SOURCE alone. */
+#define _DARWIN_C_SOURCE
 /* Metadata-only H0 framing probe. No decoder, camera, network or upstream code. */
 #include <errno.h>
 #include <fcntl.h>
@@ -107,8 +109,13 @@ static void emit_buffer(const unsigned char *bytes,size_t length,const char *dig
 }
 int main(int argc,char **argv)
 {
-    struct rlimit memory={256u*1024u*1024u,256u*1024u*1024u},cpu={10,10};
-    if(setrlimit(RLIMIT_AS,&memory)||setrlimit(RLIMIT_CPU,&cpu)) reject("resource limit setup failed");
+    struct rlimit cpu={10,10};
+    if(setrlimit(RLIMIT_CPU,&cpu)) reject("resource limit setup failed");
+#ifndef __APPLE__
+    /* Darwin refuses an address-space limit this small: EINVAL up to at least 64 GiB. */
+    struct rlimit memory={256u*1024u*1024u,256u*1024u*1024u};
+    if(setrlimit(RLIMIT_AS,&memory)) reject("resource limit setup failed");
+#endif
     struct sigaction action;
     memset(&action,0,sizeof action); action.sa_handler=deadline;
     if(sigemptyset(&action.sa_mask)||sigaction(SIGALRM,&action,NULL)) reject("deadline handler setup failed");
