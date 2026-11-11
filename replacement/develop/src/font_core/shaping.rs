@@ -1,4 +1,4 @@
-use super::{AssetOffset, FontError};
+use super::FontError;
 
 macro_rules! index_type {
     ($name:ident, $word:ty) => {
@@ -12,7 +12,6 @@ index_type!(CharacterIndex, u16);
 index_type!(SourceIndex, u16);
 index_type!(GlyphIndex, u16);
 index_type!(RunIndex, u16);
-index_type!(DictionaryIndex, u16);
 index_type!(ScriptId, u32);
 index_type!(LanguageId, u32);
 index_type!(PackedCount, u16);
@@ -20,6 +19,11 @@ index_type!(JoiningClass, u32);
 index_type!(JoiningCategory, u32);
 index_type!(JoiningState, u32);
 index_type!(LayoutExtent16, u16);
+
+impl CharacterCode {
+    /// Stock keys the glyph directory by the character code itself.
+    pub const fn nominal_glyph(self) -> GlyphIndex { GlyphIndex(self.0) }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(transparent)]
@@ -61,8 +65,6 @@ impl ScriptIdentity {
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CharacterRange { pub start: CharacterIndex, pub end: CharacterIndex }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct GlyphSpan { pub first: GlyphIndex, pub last: GlyphIndex }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DetectedRun { pub range: CharacterRange, pub identity: ScriptIdentity, pub direction: TextDirection }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,15 +133,6 @@ pub struct GlyphPosition {
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(C)]
-pub struct ArabicState {
-    pub code: CharacterCode,
-    pub reserved: u16,
-    pub class: JoiningClass,
-    pub category: JoiningCategory,
-    pub state: JoiningState,
-}
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[repr(C)]
 pub struct ThaiMetrics {
     pub rise: LayoutExtent16,
     pub reserved_first: LayoutExtent16,
@@ -150,39 +143,12 @@ pub struct ThaiMetrics {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct GlyphOffset { pub x: LayoutOffset, pub y: LayoutOffset }
 
-pub struct ScriptResources<'asset> {
-    pub font: &'asset [u8],
-    pub stream: &'asset [u8],
-    pub rows: &'asset [AssetOffset],
-}
-pub(crate) trait ScriptData {
-    fn available(&self) -> bool;
-    fn row_count(&self) -> u16;
-    fn row_offset(&self, index: DictionaryIndex) -> Result<AssetOffset, FontError>;
-    fn stream_half(&self, offset: AssetOffset) -> Result<u16, FontError>;
-    fn stream_word(&self, offset: AssetOffset) -> Result<u32, FontError>;
-    fn font_half(&self, offset: AssetOffset) -> Result<u16, FontError>;
-}
-impl ScriptData for ScriptResources<'_> {
-    fn available(&self) -> bool { !self.stream.is_empty() }
-    fn row_count(&self) -> u16 { self.rows.len().min(u16::MAX as usize) as u16 }
-    fn row_offset(&self, index: DictionaryIndex) -> Result<AssetOffset, FontError> { self.rows.get(index.0 as usize).copied().ok_or(FontError::Truncated) }
-    fn stream_half(&self, offset: AssetOffset) -> Result<u16, FontError> { half(self.stream, offset) }
-    fn stream_word(&self, offset: AssetOffset) -> Result<u32, FontError> {
-        let bytes = self.stream.get(offset.get() as usize..).and_then(|bytes| bytes.get(..4)).ok_or(FontError::Truncated)?;
-        Ok(u32::from_le_bytes([bytes[0],bytes[1],bytes[2],bytes[3]]))
-    }
-    fn font_half(&self, offset: AssetOffset) -> Result<u16, FontError> { half(self.font, offset) }
-}
-fn half(bytes: &[u8], offset: AssetOffset) -> Result<u16, FontError> {
-    let bytes = bytes.get(offset.get() as usize..).and_then(|bytes| bytes.get(..2)).ok_or(FontError::Truncated)?;
-    Ok(u16::from_le_bytes([bytes[0],bytes[1]]))
-}
-fn offset(base: AssetOffset, amount: u32) -> AssetOffset { AssetOffset::new(base.get().wrapping_add(amount)) }
+/// Stock's clip rectangle for a Thai base glyph, relative to the glyph origin.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GlyphClip { pub x: LayoutOffset, pub y: LayoutOffset, pub width: LayoutOffset, pub height: LayoutOffset }
 
 pub(crate) trait ShapingStore {
     fn text_code(&self, character: CharacterIndex) -> Result<CharacterCode, FontError>;
-    fn source_code(&self, index: SourceIndex) -> Result<CharacterCode, FontError>;
     fn set_source_code(&mut self, index: SourceIndex, code: CharacterCode) -> Result<(), FontError>;
     fn glyph_code(&self, index: GlyphIndex) -> Result<CharacterCode, FontError>;
     fn set_glyph_code(&mut self, index: GlyphIndex, code: CharacterCode) -> Result<(), FontError>;
@@ -192,7 +158,6 @@ pub(crate) trait ShapingStore {
     fn position(&mut self, index: GlyphIndex) -> Result<&mut GlyphPosition, FontError>;
     fn output_code(&self, index: GlyphIndex) -> Result<CharacterCode, FontError>;
     fn set_output_code(&mut self, index: GlyphIndex, code: CharacterCode) -> Result<(), FontError>;
-    fn glyph_span(&mut self, range: CharacterRange) -> Result<Option<GlyphSpan>, FontError>;
     fn glyph_before(&mut self, end: CharacterIndex) -> Result<GlyphIndex, FontError>;
     fn range(&self) -> CharacterRange;
     fn identity(&self) -> ScriptIdentity;
@@ -204,28 +169,6 @@ pub(crate) trait ShapingStore {
     fn set_glyph_count(&mut self, count: GlyphIndex);
     fn set_advance(&mut self, advance: LayoutOffset);
     fn advance(&self) -> LayoutOffset;
-}
-
-pub(crate) trait DictionaryStore: ShapingStore {
-    type Data: ScriptData;
-    fn data(&self) -> &Self::Data;
-    fn arabic(&mut self, source: SourceIndex) -> Result<&mut ArabicState, FontError>;
-    fn arabic_capacity(&self) -> usize;
-    fn thai_metrics(&mut self) -> &mut ThaiMetrics;
-    fn cursor(&self) -> AssetOffset;
-    fn set_cursor(&mut self, cursor: AssetOffset);
-    fn dictionary_base(&self) -> AssetOffset;
-    fn set_dictionary_base(&mut self, base: AssetOffset);
-    fn dictionary_enabled(&self) -> bool;
-    fn dictionary_valid(&self) -> bool;
-    fn set_dictionary_valid(&mut self, valid: bool);
-    fn table_base(&self) -> AssetOffset;
-    fn table_count(&self) -> u16;
-    fn set_table_count(&mut self, count: u16);
-    fn table_offset(&self, index: DictionaryIndex) -> Result<AssetOffset, FontError>;
-    fn set_table_offset(&mut self, index: DictionaryIndex, value: AssetOffset) -> Result<(), FontError>;
-    fn set_selected_script(&mut self, script: ScriptId);
-    fn set_selected_language(&mut self, language: LanguageId);
 }
 
 pub trait ShapingMetrics {
@@ -634,6 +577,38 @@ pub fn compose_arabic_pair(first: CharacterCode, second: CharacterCode) -> (Char
     (CharacterCode(combined), 2)
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ArabicRow { pub character: CharacterIndex, pub code: CharacterCode }
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ArabicForm { pub code: CharacterCode, pub class: JoiningClass, pub category: JoiningCategory, pub state: JoiningState }
+
+/// One form per row, from the class table at 0x11887d8, the category table at
+/// 0x11888d8 and the transition rows at 0x1188954, in the order 0x1187ddc..
+/// 0x1187ec8 applies them. `end` is the run's exclusive end in original
+/// characters; a later row can overwrite the previous row's state.
+pub fn arabic_forms(rows: &[ArabicRow], end: CharacterIndex, tables: &ScriptTables<'_>) -> [ArabicForm; MAX_SHAPED_GLYPHS] {
+    let mut forms = [ArabicForm::default(); MAX_SHAPED_GLYPHS];
+    for index in 0..rows.len().min(MAX_SHAPED_GLYPHS) {
+        let previous = if index == 0 { JoiningState(0) } else { forms[index - 1].state };
+        let class = tables.arabic_class(rows[index].code);
+        let category = tables.arabic_category(class);
+        let transition = tables.arabic_transition(previous, category);
+        let last = rows[index].character.0 == end.0.wrapping_sub(1);
+        let mut state = if category.0 == 4 { JoiningState(0) } else { transition.state };
+        if index == 0 {
+            if last { state = JoiningState(0); }
+        } else {
+            if previous != transition.update { forms[index - 1].state = transition.update; }
+            if category.0 == 2 && last {
+                state = match state.0 { 2 => JoiningState(0), 3 => JoiningState(1), _ => state };
+            }
+        }
+        forms[index] = ArabicForm { code: rows[index].code, class, category, state };
+    }
+    forms
+}
+
 pub fn mirror_code(code: CharacterCode, tables: &ScriptTables<'_>) -> CharacterCode {
     let kind = classify(code).kind;
     let fixed = match (kind, code.0) {
@@ -703,14 +678,16 @@ pub fn thai_mark_offset(
 }
 
 /// Thai 0x0e33 decomposes after a base into the mark 0x0e4d followed by 0x0e32.
-pub fn thai_decomposes(codes: &[CharacterCode], index: usize, tables: &ScriptTables<'_>) -> bool {
-    if codes.get(index).map(|code| code.0) != Some(0xe33) || index == 0 { return false; }
+pub fn thai_decomposes(codes: &[CharacterCode], first: usize, index: usize, tables: &ScriptTables<'_>) -> bool {
+    if codes.get(index).map(|code| code.0) != Some(0xe33) || index <= first { return false; }
     let category = tables.thai_class(codes[index - 1]);
     if category == 2 { return true; }
-    category == 0x8000 && index >= 2 && tables.thai_class(codes[index - 2]) == 2
+    category == 0x8000 && index >= first + 2 && tables.thai_class(codes[index - 2]) == 2
 }
 
 pub const MAX_SHAPED_GLYPHS: usize = 64;
+/// Longest text stock shapes in one call; longer input is refused at 0x118e504.
+pub const MAX_TEXT_UNITS: usize = 50;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ShapedGlyph {
@@ -718,16 +695,22 @@ pub struct ShapedGlyph {
     pub code: CharacterCode,
     pub glyph: GlyphIndex,
     pub group: PackedCount,
+    /// Glyph origin relative to the run, with `mark.x` already applied.
     pub pen: LayoutOffset,
     pub advance: LayoutOffset,
+    /// Mark displacement; a caller that draws at `pen` must not add `mark.x` again.
     pub mark: GlyphOffset,
+    pub clip: Option<GlyphClip>,
     pub direction: TextDirection,
+    /// Selected Arabic form; zero for every other script.
+    pub joining: JoiningState,
 }
 impl ShapedGlyph {
     pub const EMPTY: Self = Self {
         character: CharacterIndex(0), code: CharacterCode(0), glyph: GlyphIndex(0), group: PackedCount(0),
         pen: LayoutOffset(0), advance: LayoutOffset(0),
-        mark: GlyphOffset { x: LayoutOffset(0), y: LayoutOffset(0) }, direction: TextDirection(0),
+        mark: GlyphOffset { x: LayoutOffset(0), y: LayoutOffset(0) }, clip: None, direction: TextDirection(0),
+        joining: JoiningState(0),
     };
 }
 
@@ -762,12 +745,15 @@ impl ShapedRun {
 
 /// Shapes the leading detected run of `text` into visual-order glyphs with pen
 /// origins relative to the run origin. Bounded by [`MAX_SHAPED_GLYPHS`]; iterate
-/// with [`detect_script_run`] for mixed text.
+/// with [`detect_script_run`] for mixed text. A version-1 font dictionary would
+/// substitute contextual forms at 0x11882e4; without one the code stays nominal
+/// and [`ShapedGlyph::joining`] names the selected form.
 pub fn shape_text(
     text: &[u16], base: DirectionHint, metrics: &mut impl ShapingMetrics, tables: &ScriptTables<'_>,
 ) -> Result<ShapedRun, FontError> {
-    if text.len() > MAX_SHAPED_GLYPHS { return Err(FontError::InvalidSize); }
+    if text.len() > MAX_TEXT_UNITS { return Err(FontError::InvalidSize); }
     let detected = detect_script_run(text, CharacterIndex(0), base);
+    let text = &text[..detected.range.end.0 as usize];
     let mode = detected.identity.algorithm();
     let mut run = ShapedRun::empty(detected.identity, mode.direction());
     match mode {
@@ -786,8 +772,8 @@ fn shape_basic_text(text: &[u16], metrics: &mut impl ShapingMetrics, run: &mut S
         let code = CharacterCode(*code);
         let advance = metrics.advance(code)?;
         run.push(ShapedGlyph {
-            character: CharacterIndex(index as u16), code, glyph: GlyphIndex(code.0), group: pack_count(1, 1),
-            pen, advance, mark: GlyphOffset::default(), direction: run.direction,
+            character: CharacterIndex(index as u16), code, glyph: code.nominal_glyph(), group: pack_count(1, 1),
+            pen, advance, mark: GlyphOffset::default(), clip: None, direction: run.direction, joining: JoiningState(0),
         })?;
         pen = pen.wrapping_add(advance);
     }
@@ -804,12 +790,13 @@ fn shape_hebrew_text(text: &[u16], metrics: &mut impl ShapingMetrics, tables: &S
         codes[index] = mirror_code(prepared, tables);
         characters[index] = CharacterIndex(index as u16);
     }
-    place_reversed(&codes[..text.len()], &characters[..text.len()], metrics, run)
+    place_reversed(&codes[..text.len()], &characters[..text.len()], &[], metrics, run)
 }
 
 fn shape_arabic_text(text: &[u16], metrics: &mut impl ShapingMetrics, tables: &ScriptTables<'_>, run: &mut ShapedRun) -> Result<(), FontError> {
     let mut codes = [CharacterCode(0); MAX_SHAPED_GLYPHS];
     let mut characters = [CharacterIndex(0); MAX_SHAPED_GLYPHS];
+    let mut rows = [ArabicRow::default(); MAX_SHAPED_GLYPHS];
     let mut count = 0usize;
     let mut character = 0usize;
     while character < text.len() {
@@ -817,21 +804,26 @@ fn shape_arabic_text(text: &[u16], metrics: &mut impl ShapingMetrics, tables: &S
         let (code, consumed) = compose_arabic_pair(CharacterCode(text[character]), CharacterCode(second));
         codes[count] = mirror_code(code, tables);
         characters[count] = CharacterIndex(character as u16);
+        rows[count] = ArabicRow { character: characters[count], code };
         count += 1;
         character += consumed as usize;
     }
-    place_reversed(&codes[..count], &characters[..count], metrics, run)
+    let forms = arabic_forms(&rows[..count], CharacterIndex(text.len() as u16), tables);
+    let mut states = [JoiningState(0); MAX_SHAPED_GLYPHS];
+    for index in 0..count { states[index] = forms[index].state; }
+    place_reversed(&codes[..count], &characters[..count], &states[..count], metrics, run)
 }
 
-fn place_reversed(codes: &[CharacterCode], characters: &[CharacterIndex], metrics: &mut impl ShapingMetrics, run: &mut ShapedRun) -> Result<(), FontError> {
+fn place_reversed(codes: &[CharacterCode], characters: &[CharacterIndex], states: &[JoiningState], metrics: &mut impl ShapingMetrics, run: &mut ShapedRun) -> Result<(), FontError> {
     let mut pen = LayoutOffset(0);
     for visual in 0..codes.len() {
         let logical = codes.len() - 1 - visual;
         let code = codes[logical];
         let advance = metrics.advance(code)?;
         run.push(ShapedGlyph {
-            character: characters[logical], code, glyph: GlyphIndex(code.0), group: pack_count(1, 1),
-            pen, advance, mark: GlyphOffset::default(), direction: run.direction,
+            character: characters[logical], code, glyph: code.nominal_glyph(), group: pack_count(1, 1),
+            pen, advance, mark: GlyphOffset::default(), clip: None, direction: run.direction,
+            joining: states.get(logical).copied().unwrap_or_default(),
         })?;
         pen = pen.wrapping_add(advance);
     }
@@ -849,7 +841,7 @@ fn shape_thai_text(text: &[u16], metrics: &mut impl ShapingMetrics, tables: &Scr
     let mut count = 0usize;
     for (index, code) in text.iter().enumerate() {
         source[index] = CharacterCode(*code);
-        if thai_decomposes(&source[..=index], index, tables) {
+        if thai_decomposes(&source[..=index], 0, index, tables) {
             if count + 2 > MAX_SHAPED_GLYPHS { return Err(FontError::InvalidSize); }
             codes[count] = CharacterCode(0xe4d); clusters[count] = CharacterCode(0xe32);
             characters[count] = CharacterIndex(index as u16); groups[count] = 2; decomposed[count] = true; count += 1;
@@ -878,9 +870,24 @@ fn shape_thai_text(text: &[u16], metrics: &mut impl ShapingMetrics, tables: &Scr
             pen = pen.wrapping_add(advance);
             (origin, GlyphOffset::default())
         };
+        let clipped = glyph + 1 < count && matches!(codes[glyph].0, 0xe0d | 0xe10)
+            && codes[glyph + 1].0.wrapping_sub(0xe38) < 3;
+        let clip = if clipped {
+            let mut padding = LayoutOffset(0);
+            metrics.stroke_padding_top(&mut padding)?;
+            let overhang = metrics.right_overhang(codes[glyph])?;
+            let height = metrics.height()?;
+            let descent = i32::from(thai.clip_descent.0);
+            Some(GlyphClip {
+                x: LayoutOffset(0),
+                y: height.wrapping_sub(padding).wrapping_sub(LayoutOffset(descent)),
+                width: LayoutOffset(overhang.0.wrapping_add(advance.0)),
+                height: LayoutOffset(descent.wrapping_add(padding.0)),
+            })
+        } else { None };
         run.push(ShapedGlyph {
-            character: characters[glyph], code: codes[glyph], glyph: GlyphIndex(codes[glyph].0), group: pack_count(1, groups[glyph]),
-            pen: origin, advance, mark, direction: run.direction,
+            character: characters[glyph], code: codes[glyph], glyph: codes[glyph].nominal_glyph(), group: pack_count(1, groups[glyph]),
+            pen: origin, advance, mark, clip, direction: run.direction, joining: JoiningState(0),
         })?;
     }
     run.advance = pen;
@@ -963,7 +970,6 @@ mod tests {
         fn text_code(&self, character: CharacterIndex) -> Result<CharacterCode, FontError> {
             Ok(CharacterCode(*self.text.get(character.0 as usize).ok_or(FontError::Truncated)?))
         }
-        fn source_code(&self, index: SourceIndex) -> Result<CharacterCode, FontError> { Ok(CharacterCode(self.sources[Self::slot(index.0)?])) }
         fn set_source_code(&mut self, index: SourceIndex, code: CharacterCode) -> Result<(), FontError> { self.sources[Self::slot(index.0)?] = code.0; Ok(()) }
         fn glyph_code(&self, index: GlyphIndex) -> Result<CharacterCode, FontError> { Ok(CharacterCode(self.glyphs[Self::slot(index.0)?])) }
         fn set_glyph_code(&mut self, index: GlyphIndex, code: CharacterCode) -> Result<(), FontError> { self.glyphs[Self::slot(index.0)?] = code.0; Ok(()) }
@@ -973,11 +979,6 @@ mod tests {
         fn position(&mut self, index: GlyphIndex) -> Result<&mut GlyphPosition, FontError> { let index = Self::slot(index.0)?; Ok(&mut self.positions[index]) }
         fn output_code(&self, index: GlyphIndex) -> Result<CharacterCode, FontError> { Ok(CharacterCode(self.outputs[Self::slot(index.0)?])) }
         fn set_output_code(&mut self, index: GlyphIndex, code: CharacterCode) -> Result<(), FontError> { self.outputs[Self::slot(index.0)?] = code.0; Ok(()) }
-        fn glyph_span(&mut self, range: CharacterRange) -> Result<Option<GlyphSpan>, FontError> {
-            let first = self.mapping(range.start)?.glyph;
-            let last = self.glyph_before(range.end)?;
-            Ok(if first.0 > last.0 { None } else { Some(GlyphSpan { first, last }) })
-        }
         fn glyph_before(&mut self, end: CharacterIndex) -> Result<GlyphIndex, FontError> {
             Ok(self.mapping(CharacterIndex(end.0.checked_sub(1).ok_or(FontError::Truncated)?))?.glyph)
         }
@@ -1103,6 +1104,20 @@ mod tests {
     }
 
     #[test]
+    fn arabic_run_selects_the_stock_joining_forms() {
+        fn forms(text: &[u16]) -> Vec<(u16, u32)> {
+            shape(text).glyphs().iter().map(|glyph| (glyph.code.0, glyph.joining.0)).collect()
+        }
+        assert_eq!(forms(&[0x628]), vec![(0x628, 0)]);
+        assert_eq!(forms(&[0x628, 0x627]), vec![(0x627, 1), (0x628, 2)]);
+        assert_eq!(forms(&[0x628, 0x627, 0x628]), vec![(0x628, 0), (0x627, 1), (0x628, 2)]);
+        assert_eq!(forms(&[0x644, 0x627]), vec![(0x627, 1), (0x644, 2)]);
+        assert_eq!(forms(&[0x628, 0x627, 0x41]), vec![(0x627, 1), (0x628, 2)]);
+        assert_eq!(forms(&[0x628, 0x628, 0x628]), vec![(0x628, 1), (0x628, 3), (0x628, 2)]);
+        assert_eq!(forms(&[0x627, 0x653]), vec![(0x622, 0)]);
+    }
+
+    #[test]
     fn arabic_joining_follows_the_class_category_and_state_rows() {
         let tables = ScriptTables::firmware();
         let beh = tables.arabic_class(CharacterCode(0x628));
@@ -1137,7 +1152,9 @@ mod tests {
     #[test]
     fn oversized_text_is_refused_rather_than_truncated() {
         let mut metrics = Metrics { width: 4 };
-        let text = [0x41u16; MAX_SHAPED_GLYPHS + 1];
+        let accepted = [0x41u16; MAX_TEXT_UNITS];
+        assert!(shape_text(&accepted, DirectionHint(0x200e), &mut metrics, &ScriptTables::firmware()).is_ok());
+        let text = [0x41u16; MAX_TEXT_UNITS + 1];
         assert_eq!(shape_text(&text, DirectionHint(0x200e), &mut metrics, &ScriptTables::firmware()), Err(FontError::InvalidSize));
     }
 

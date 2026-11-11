@@ -1,5 +1,6 @@
-//! X-M1 1.50 script tables, transcribed from overlay 44 at 0x01100000
-//! (SHA-256 2dfaa5d4bd025d68e991a329cc1377d5da16de656148dc4027d9a6bc0c349f5c).
+//! X-M1 1.50 script tables, transcribed from overlay 44 at 0x01100000. The
+//! SHA-256 2dfaa5d4bd025d68e991a329cc1377d5da16de656148dc4027d9a6bc0c349f5c is of
+//! the overlay's first 705952 bytes; the overlay file is 3538944 bytes long.
 
 use super::{CharacterCode, JoiningState, JoiningTransition, MirrorPair};
 

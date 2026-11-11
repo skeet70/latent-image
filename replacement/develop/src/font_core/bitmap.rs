@@ -245,7 +245,7 @@ fn glyph_metrics(glyph: &GlyphRecord) -> Result<GlyphMetrics,FontError> {
 pub fn right_overhang(glyph: &GlyphRecord) -> i32 { (glyph.bounds[2] as i32 + glyph.bounds[0] as i32 - glyph.advance[0] as i32).max(0) }
 pub fn secondary_extent(header: &BdfHeader) -> i32 { (header.bounds[0] as i32 + header.bounds[2] as i32 - header.advance[0] as i32).max(0) }
 
-pub struct BdfResource<'a> { bytes: &'a [u8], header: BdfHeader, first_glyph: TextOffset, glyph_count: usize }
+pub struct BdfResource<'a> { bytes: &'a [u8], header: BdfHeader, first_glyph: TextOffset, glyph_count: usize, thai: ThaiProperties }
 impl<'a> BdfResource<'a> {
     pub fn parse(bytes: &'a [u8]) -> Result<Self,FontError> {
         if !bytes.starts_with(b"STARTFONT ") { return Err(FontError::InvalidSignature); }
@@ -278,8 +278,14 @@ impl<'a> BdfResource<'a> {
             }
         }
         if i32::try_from(count).ok() != Some(header.characters) { return Err(FontError::InvalidDirectory); }
-        Ok(Self { bytes, header, first_glyph, glyph_count: count })
+        let mut thai = ThaiProperties::default();
+        properties(&mut source, &mut sink, |property| thai.set(property)).map_err(map_error)?;
+        Ok(Self { bytes, header, first_glyph, glyph_count: count, thai })
     }
+
+    /// The THAI_TOP, THAI_ABOVE, THAI_BASE, THAI_BELOW and THAI_SHIFT properties.
+    pub const fn thai_properties(&self) -> ThaiProperties { self.thai }
+    pub fn right_overhang(&self, id: GlyphId) -> Result<i32, FontError> { self.glyph_record(id).map(|glyph| right_overhang(&glyph)) }
 
     pub fn size(&self) -> FontSize { FontSize { width: PixelExtent::new(self.header.bounds[0] as u32), height: PixelExtent::new(self.header.bounds[1] as u32) } }
     pub fn baseline(&self) -> PixelOffset { PixelOffset::new(self.header.bounds[1] as i32 + self.header.bounds[3] as i32) }
@@ -369,6 +375,10 @@ impl<'a> IconResource<'a> {
 
     pub fn metrics(&self, id: GlyphId, _size: FontSize) -> Result<GlyphMetrics,FontError> { self.glyph(id).map(|(_,metrics)| metrics) }
 
+    pub fn right_overhang(&self, id: GlyphId) -> Result<i32, FontError> {
+        self.glyph(id).map(|(_, metrics)| (metrics.width.get() as i32 + metrics.bearing_x.get() - metrics.advance_x.get()).max(0))
+    }
+
     pub fn render<'m>(&'m self, id: GlyphId, config: FontConfig, decoded: &'m mut [u8]) -> Result<GlyphMask<'m>,FontError> {
         if config.writing != WritingMode::Horizontal { return Err(FontError::UnsupportedFormat); }
         let (offset,metrics) = self.glyph(id)?;
@@ -409,6 +419,21 @@ pub fn index_glyphs(source: &mut impl LineSource, mut offset: TextOffset, index:
 pub enum ThaiField { Top, Above, Base, Below, Shift }
 #[derive(Clone, Copy)]
 pub struct ThaiProperty { pub field: ThaiField, pub value: i16 }
+
+/// The five THAI_* properties, in the order stock writes them at 0x1190d18.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ThaiProperties { pub top: i16, pub above: i16, pub base: i16, pub below: i16, pub shift: i16 }
+impl ThaiProperties {
+    fn set(&mut self, property: ThaiProperty) {
+        match property.field {
+            ThaiField::Top => self.top = property.value,
+            ThaiField::Above => self.above = property.value,
+            ThaiField::Base => self.base = property.value,
+            ThaiField::Below => self.below = property.value,
+            ThaiField::Shift => self.shift = property.value,
+        }
+    }
+}
 
 pub fn thai_property(line: &[u8], name: &[u8], value_offset: usize) -> Option<ThaiProperty> {
     let field = match name { b"THAI_TOP" => ThaiField::Top, b"THAI_ABOVE" => ThaiField::Above, b"THAI_BASE" => ThaiField::Base, b"THAI_BELOW" => ThaiField::Below, b"THAI_SHIFT" => ThaiField::Shift, _ => return None };

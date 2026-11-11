@@ -1,7 +1,7 @@
 use super::{FontId, PaletteIndex, PanelPoint, PanelRect, SurfaceId};
 use super::commands::{Alpha, CatalogTextId, CustomTextId, ImageId, Colour, DrawCommand, DrawList, Rgba, ShapePaint, TextPenOp, TextRef};
 use super::font_core::{ByteStride, CoverageEncoding, FontAsset, FontConfig, FontEngine, FontError, FontWorkspace, GlyphId, GlyphMask, GlyphMetrics, PixelExtent, PixelOffset};
-use super::font_core::shaping::{detect_script_run, shape_text, CharacterCode, CharacterIndex, DirectionHint, LayoutOffset, ScriptTables, ShapingMetrics, ThaiMetrics, MAX_SHAPED_GLYPHS};
+use super::font_core::shaping::{detect_mode, detect_script_run, shape_text, CharacterCode, CharacterIndex, DirectionHint, LayoutExtent16, LayoutOffset, ScriptTables, ShapingMetrics, TextDirection, ThaiMetrics, MAX_TEXT_UNITS};
 const SCRIPT_TABLES: ScriptTables<'static> = ScriptTables::firmware();
 use super::shape_assets::{Gvff, NaturalPlacement, Paint, PaintIndex, PaintMode, Ramp, RampStop, Recolour, ShapeAsset, ShapeContent, ShapeError};
 use super::vector_raster::{self, ClipBounds, CurveAccuracy, DashBudget, SampleGrid, StrokeMetrics, StrokePrimitive, StrokeStyle, VectorError, Vertex};
@@ -121,7 +121,7 @@ impl ShapingMetrics for ShapingAdapter<'_, '_, '_, '_> {
                 let record = assets.find(AssetKind::Glyph, self.font.0, code.0 as u32).ok_or(FontError::MissingGlyph(GlyphId::new(code.0 as u32)))?;
                 i32::from(record.advance)
             }
-            FontRenderer::Engine(engine) => engine.glyph_mask(GlyphId::new(code.0 as u32))?.metrics().advance_x.get(),
+            FontRenderer::Engine(engine) => engine.advance(GlyphId::new(code.0 as u32))?.get(),
         };
         Ok(LayoutOffset(advance))
     }
@@ -131,9 +131,27 @@ impl ShapingMetrics for ShapingAdapter<'_, '_, '_, '_> {
             FontRenderer::Engine(engine) => LayoutOffset(engine.config().size.height.get() as i32),
         })
     }
-    fn right_overhang(&mut self, _: CharacterCode) -> Result<LayoutOffset, FontError> { Ok(LayoutOffset(0)) }
-    fn stroke_padding_top(&mut self, _: &mut LayoutOffset) -> Result<(), FontError> { Ok(()) }
-    fn thai_metrics(&mut self, _: &mut ThaiMetrics) -> Result<(), FontError> { Ok(()) }
+    fn right_overhang(&mut self, code: CharacterCode) -> Result<LayoutOffset, FontError> {
+        Ok(LayoutOffset(match self.renderer {
+            FontRenderer::Coverage8(_) => 0,
+            FontRenderer::Engine(engine) => engine.right_overhang(GlyphId::new(code.0 as u32))?,
+        }))
+    }
+    /// The outline, builtin and icon stroke padding at 0x1190c54, 0x1190c5c and 0x1193fd0 is zero.
+    fn stroke_padding_top(&mut self, _padding: &mut LayoutOffset) -> Result<(), FontError> { Ok(()) }
+    fn thai_metrics(&mut self, output: &mut ThaiMetrics) -> Result<(), FontError> {
+        if let FontRenderer::Engine(engine) = self.renderer {
+            let properties = engine.thai_properties();
+            *output = ThaiMetrics {
+                rise: LayoutExtent16(properties.top as u16),
+                reserved_first: LayoutExtent16(properties.above as u16),
+                reserved_second: LayoutExtent16(properties.base as u16),
+                clip_descent: LayoutExtent16(properties.below as u16),
+                left_shift: LayoutExtent16(properties.shift as u16),
+            };
+        }
+        Ok(())
+    }
 }
 impl<'pack, 'asset, 'work> RasterResources<'pack, 'asset, 'work> {
     fn font(&mut self, id: FontId) -> Result<FontRenderer<'_, 'asset, 'work>, RasterError> {
@@ -438,27 +456,27 @@ impl<'a> Surface<'a> {
             }
         };
         let mut renderer = resources.font(font)?;
-        let mut characters = text.chars().peekable();
-        let mut units = [0u16; MAX_SHAPED_GLYPHS];
+        let mut units = [0u16; MAX_TEXT_UNITS];
         let mut length = 0usize;
-        loop {
-            while length < MAX_SHAPED_GLYPHS {
-                let Some(character) = characters.peek().copied() else { break; };
-                if character as u32 > 0xffff { return Err(RasterError::UnsupportedCharacter(character)); }
-                let mut encoded = [0u16; 2];
-                let encoded = character.encode_utf16(&mut encoded);
-                if length + encoded.len() > MAX_SHAPED_GLYPHS { break; }
-                characters.next();
-                units[length..length + encoded.len()].copy_from_slice(encoded);
-                length += encoded.len();
+        for character in text.chars() {
+            if character as u32 > 0xffff { return Err(RasterError::UnsupportedCharacter(character)); }
+            let mut encoded = [0u16; 2];
+            let encoded = character.encode_utf16(&mut encoded);
+            if length + encoded.len() > MAX_TEXT_UNITS {
+                return Err(RasterError::Font { font, error: FontError::InvalidSize });
             }
+            units[length..length + encoded.len()].copy_from_slice(encoded);
+            length += encoded.len();
+        }
+        let base = detect_mode(&units[..length]).map_or(DirectionHint(0x200e), |mode| DirectionHint(u32::from(mode.direction().0)));
+        loop {
             if length == 0 { break; }
-            let run = detect_script_run(&units[..length], CharacterIndex(0), DirectionHint(0x200e));
+            let run = detect_script_run(&units[..length], CharacterIndex(0), base);
             let end = run.range.end.0 as usize;
             if end == 0 { break; }
             let shaped = {
                 let mut metrics = ShapingAdapter { renderer: &mut renderer, font };
-                shape_text(&units[..end], DirectionHint(0x200e), &mut metrics, &SCRIPT_TABLES)
+                shape_text(&units[..end], base, &mut metrics, &SCRIPT_TABLES)
             };
             let shaped = match shaped {
                 Ok(shaped) => shaped,
@@ -467,11 +485,23 @@ impl<'a> Surface<'a> {
                 }
                 Err(error) => return Err(RasterError::Font { font, error }),
             };
+            let advance = i64::from(shaped.advance().0);
+            let right_to_left = base.0 == TextDirection::RIGHT_TO_LEFT.0 as u32;
+            let origin_x = if right_to_left { pen.x.checked_sub(advance).ok_or(RasterError::TextPositionOverflow)? } else { pen.x };
             for glyph in shaped.glyphs() {
-                let origin = TextPen { x: pen.x + i64::from(glyph.pen.0) + i64::from(glyph.mark.x.0), y: pen.y + i64::from(glyph.mark.y.0) };
+                let origin = TextPen { x: origin_x + i64::from(glyph.pen.0), y: pen.y + i64::from(glyph.mark.y.0) };
                 pen.y = pen.y.checked_add(self.render_glyph(origin, font, glyph.code, colour, clip, &mut renderer)?).ok_or(RasterError::TextPositionOverflow)?;
+                if let Some(glyph_clip) = glyph.clip {
+                    let bound = |value: i64, limit: usize| value.clamp(0, limit as i64) as usize;
+                    let left = origin.x + i64::from(glyph_clip.x.0);
+                    let top = origin.y + i64::from(glyph_clip.y.0);
+                    let right = left + i64::from(glyph_clip.width.0);
+                    let bottom = top + i64::from(glyph_clip.height.0);
+                    let rectangle = Bounds { left: bound(left, self.width), top: bound(top, self.height), right: bound(right, self.width), bottom: bound(bottom, self.height) };
+                    self.clear(rectangle.intersect(clip));
+                }
             }
-            pen.x = pen.x.checked_add(i64::from(shaped.advance().0)).ok_or(RasterError::TextPositionOverflow)?;
+            pen.x = if right_to_left { origin_x } else { origin_x.checked_add(advance).ok_or(RasterError::TextPositionOverflow)? };
             units.copy_within(end..length, 0);
             length -= end;
         }
@@ -506,6 +536,12 @@ impl<'a> Surface<'a> {
     }
     fn fill(&mut self, bounds: Bounds, colour: Rgba) {
         for y in bounds.top..bounds.bottom { for x in bounds.left..bounds.right { self.blend(x, y, colour); } }
+    }
+    fn clear(&mut self, bounds: Bounds) {
+        for y in bounds.top..bounds.bottom {
+            let row = y * self.width * 4;
+            self.pixels[row + bounds.left * 4..row + bounds.right * 4].fill(0);
+        }
     }
     pub(crate) fn blend(&mut self, x: usize, y: usize, source: Rgba) {
         if source.alpha == 0 { return; }

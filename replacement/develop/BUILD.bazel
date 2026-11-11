@@ -34,6 +34,21 @@ sh_test(
     srcs = [":portable-cores-test-binary"],
 )
 
+genrule(
+    name = "pipeline-test-binary",
+    srcs = ["src/pipeline_tests.rs", ":module"],
+    outs = ["pipeline-tests-bin"],
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test --crate-name=pipeline_tests $(location src/pipeline_tests.rs) -o $@",
+    tools = ["@lab_xm1_rust//:bin/rustc"],
+    executable = True,
+    testonly = True,
+)
+
+sh_test(
+    name = "pipeline-tests",
+    srcs = [":pipeline-test-binary"],
+)
+
 # Zero-step low-memory reader of a RAM-push attach checkpoint, built against @lab_fujimod_xm1's SDK.
 sh_binary(
     name = "checkpoint-low-prefix",

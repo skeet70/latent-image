@@ -1,4 +1,5 @@
-use super::shared::{Address32, ByteOffset, FrameAddress, ObjectGroup, ObjectKind, OperationCode, ServiceCompletion, StageContext, StagePlan, StageResult};
+use super::shared::{Address32, ByteOffset, FrameAddress, ObjectGroup, ObjectKind, OperationCode, ServiceCompletion, StageContext, StageResult};
+use super::stage::StagePlan;
 use crate::develop::framework;
 
 #[derive(Clone, Copy)]

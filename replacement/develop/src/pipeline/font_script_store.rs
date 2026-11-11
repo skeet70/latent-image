@@ -2,7 +2,7 @@ use super::font_fdl::{BackendMetric, FontEngine, GlyphCode};
 use super::shared::{Address32, ByteOffset};
 use crate::develop::font_core::shaping::{
     CharacterCode, CharacterIndex, CharacterMapping, CharacterMetric, CharacterRange, GlyphIndex, GlyphPosition,
-    GlyphSpan, LanguageId, LayoutOffset, RunIndex, ScriptId, ScriptIdentity, ScriptRun, ShapingMetrics, ShapingStore,
+    LanguageId, LayoutOffset, RunIndex, ScriptId, ScriptIdentity, ScriptRun, ShapingMetrics, ShapingStore,
     SourceIndex, TextDirection, ThaiMetrics,
 };
 use crate::develop::font_core::FontError;
@@ -20,15 +20,28 @@ pub(super) struct GuestStore {
 }
 
 impl GuestStore {
+    /// # Safety
     /// The engine context and the positioned output record it points at must be
     /// live, aligned guest records for the store's lifetime.
     pub(super) unsafe fn new(engine: Address32) -> Self { Self { engine } }
 
+    /// # Safety
+    /// `offset` must address four readable bytes of the engine context.
     unsafe fn word(&self, offset: u32) -> u32 { unsafe { self.engine.offset(ByteOffset(offset)).word() } }
+    /// # Safety
+    /// `offset` must address two readable bytes of the engine context.
     unsafe fn half(&self, offset: u32) -> u16 { unsafe { self.engine.offset(ByteOffset(offset)).half() } }
+    /// # Safety
+    /// `offset` must address two writable bytes of the engine context.
     unsafe fn put_half(&self, offset: u32, value: u16) { unsafe { self.engine.offset(ByteOffset(offset)).write_half(value) } }
+    /// # Safety
+    /// `offset` must address four writable bytes of the engine context.
     unsafe fn put_word(&self, offset: u32, value: u32) { unsafe { self.engine.offset(ByteOffset(offset)).write_word(value) } }
+    /// # Safety
+    /// The engine's output word at 0x53c must hold a live positioned record.
     unsafe fn output(&self) -> Address32 { Address32(unsafe { self.word(0x53c) }) }
+    /// # Safety
+    /// `address` must point to a live, aligned `T` that outlives the borrow.
     unsafe fn record<T>(&mut self, address: Address32) -> &mut T { unsafe { &mut *(address.0 as *mut T) } }
 }
 
@@ -37,11 +50,6 @@ impl ShapingStore for GuestStore {
         let request = Address32(unsafe { self.word(0x10) });
         let text = Address32(unsafe { request.offset(ByteOffset(16)).word() });
         Ok(CharacterCode(unsafe { text.offset(ByteOffset(u32::from(character.0) * 2)).half() }))
-    }
-
-    fn source_code(&self, index: SourceIndex) -> Result<CharacterCode, FontError> {
-        let index = record_index(index.0)?;
-        Ok(CharacterCode(unsafe { self.half(0x540 + index * 2) }))
     }
 
     fn set_source_code(&mut self, index: SourceIndex, code: CharacterCode) -> Result<(), FontError> {
@@ -72,29 +80,27 @@ impl ShapingStore for GuestStore {
     }
 
     fn main_run(&mut self, index: RunIndex) -> Result<&mut ScriptRun, FontError> {
-        Ok(unsafe { self.record(self.engine.offset(ByteOffset(0xea8 + u32::from(index.0) * 36))) })
+        let index = record_index(index.0)?;
+        Ok(unsafe { self.record(self.engine.offset(ByteOffset(0xea8 + index * 36))) })
     }
 
     fn position(&mut self, index: GlyphIndex) -> Result<&mut GlyphPosition, FontError> {
+        let index = record_index(index.0)?;
         let output = unsafe { self.output() };
-        Ok(unsafe { self.record(output.offset(ByteOffset(0x68 + u32::from(index.0) * 60))) })
+        Ok(unsafe { self.record(output.offset(ByteOffset(0x68 + index * 60))) })
     }
 
     fn output_code(&self, index: GlyphIndex) -> Result<CharacterCode, FontError> {
+        let index = record_index(index.0)?;
         let output = unsafe { self.output() };
-        Ok(CharacterCode(unsafe { output.offset(ByteOffset(4 + u32::from(index.0) * 2)).half() }))
+        Ok(CharacterCode(unsafe { output.offset(ByteOffset(4 + index * 2)).half() }))
     }
 
     fn set_output_code(&mut self, index: GlyphIndex, code: CharacterCode) -> Result<(), FontError> {
+        let index = record_index(index.0)?;
         let output = unsafe { self.output() };
-        unsafe { output.offset(ByteOffset(4 + u32::from(index.0) * 2)).write_half(code.0) };
+        unsafe { output.offset(ByteOffset(4 + index * 2)).write_half(code.0) };
         Ok(())
-    }
-
-    fn glyph_span(&mut self, range: CharacterRange) -> Result<Option<GlyphSpan>, FontError> {
-        let first = self.mapping(range.start)?.glyph;
-        let last = self.glyph_before(range.end)?;
-        Ok(if first.0 > last.0 { None } else { Some(GlyphSpan { first, last }) })
     }
 
     /// For `end` 0 this is glyph code 48, the halfword before the first mapping.
@@ -135,6 +141,7 @@ pub(super) struct GuestMetrics {
 }
 
 impl GuestMetrics {
+    /// # Safety
     /// `engine` must be a live font engine context for the metrics' lifetime.
     pub(super) unsafe fn new(engine: Address32) -> Self { Self { engine } }
     fn engine(&self) -> FontEngine { FontEngine(self.engine.0) }
@@ -163,3 +170,4 @@ impl ShapingMetrics for GuestMetrics {
         Ok(())
     }
 }
+

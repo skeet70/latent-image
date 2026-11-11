@@ -1,3 +1,4 @@
+use super::callbacks::{self, CallbackWord};
 use core::ptr::{read_volatile, write_volatile};
 use super::shared::Address32;
 
@@ -431,7 +432,6 @@ unsafe extern "C" {
 #[repr(transparent)]
 #[derive(Clone, Copy)]
 struct FontHeap(Address);
-type ReclaimFontMemory = unsafe extern "C" fn(u32, u32, u32) -> i32;
 unsafe fn initialize_heap(heap: FontHeap, bytes: u32, fresh: bool, minimum: u32) -> Address {
     if heap.0.0 == 0 || bytes <= 64 { return Address(0); }
     if !fresh {
@@ -492,8 +492,7 @@ unsafe fn heap_allocate(heap: FontHeap, requested: u32, zero: bool) -> Address {
             let depth = unsafe { heap.0.at(44).word() } as i32;
             if callback == 0 || depth > 2 { return Address(0); }
             unsafe { heap.0.at(44).put(depth.wrapping_add(1) as u32) };
-            let callback: ReclaimFontMemory = unsafe { core::mem::transmute(callback as usize) };
-            let result = unsafe { callback(heap.0.0, heap.0.at(40).word(), attempt) };
+            let result = callbacks::call_reclaim(callbacks::registry(), CallbackWord(callback), heap.0.0, unsafe { heap.0.at(40).word() }, attempt).unwrap_or(0);
             unsafe { heap.0.at(44).put(heap.0.at(44).word().wrapping_sub(1)) };
             if result == 0 { return Address(0); }
             first = unsafe { heap.0.at(8).word() };

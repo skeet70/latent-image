@@ -35,6 +35,16 @@ fn codes(text: &[u16]) -> Vec<u16> {
         .collect()
 }
 
+fn forms(text: &[u16]) -> Vec<(u16, u32)> {
+    let mut metrics = Metrics { thai: ThaiMetrics::default() };
+    shape_text(text, DirectionHint(0x200e), &mut metrics, &ScriptTables::firmware())
+        .unwrap()
+        .glyphs()
+        .iter()
+        .map(|glyph| (glyph.code.0, glyph.joining.0))
+        .collect()
+}
+
 #[test]
 fn arabic_joining_run_follows_the_owned_class_category_and_transition_rows() {
     // ARABIC_CLASSES at 0x011887d8, ARABIC_CATEGORIES at 0x011888d8 and
@@ -51,6 +61,13 @@ fn arabic_joining_run_follows_the_owned_class_category_and_transition_rows() {
     assert_eq!((dual_after_dual.update, dual_after_dual.state), (JoiningState(2), JoiningState(3)));
     assert_eq!((right_after_dual.update, right_after_dual.state), (JoiningState(2), JoiningState(1)));
     assert_eq!(codes(&[0x628, 0x627]), vec![0x627, 0x628]);
+    assert_eq!(forms(&[0x628]), vec![(0x628, 0)]);
+    assert_eq!(forms(&[0x628, 0x627]), vec![(0x627, 1), (0x628, 2)]);
+    assert_eq!(forms(&[0x628, 0x627, 0x628]), vec![(0x628, 0), (0x627, 1), (0x628, 2)]);
+    assert_eq!(forms(&[0x644, 0x627]), vec![(0x627, 1), (0x644, 2)]);
+    assert_eq!(forms(&[0x628, 0x627, 0x41]), vec![(0x627, 1), (0x628, 2)]);
+    assert_eq!(forms(&[0x628, 0x628, 0x628]), vec![(0x628, 1), (0x628, 3), (0x628, 2)]);
+    assert_eq!(forms(&[0x627, 0x653]), vec![(0x622, 0)]);
 }
 
 #[test]

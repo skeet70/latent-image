@@ -1,3 +1,4 @@
+use super::callbacks::{self, CallbackWord};
 use core::ptr::{read_volatile, write_volatile};
 use super::shared::{Address32, ByteOffset};
 
@@ -628,6 +629,8 @@ unsafe fn clear_row(plane: &ImagePlane, row: u32) {
     }
 }
 
+/// # Safety
+/// `image` must point to a live, aligned `ImagePlane` whose address, stride, width and height cover the cleared rows.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xm1_pipeline_image_configure_borders(image: *const ImagePlane, top: u32, bottom: i32, left: u32, right: i32) {
     let plane = unsafe { read_volatile(image) };
@@ -871,8 +874,7 @@ pub unsafe extern "C" fn xm1_pipeline_image_crop_interrupt() {
     unsafe { CropEngineAddress::STATE.field(96).write_word(0) };
     unsafe { xm1_develop_leave_critical(token) };
     if completed != 0 {
-        let callback: unsafe extern "C" fn() = unsafe { core::mem::transmute(completed as usize) };
-        unsafe { callback() };
+        let _ = callbacks::call_no_arguments(callbacks::registry(), CallbackWord(completed));
     }
 }
 

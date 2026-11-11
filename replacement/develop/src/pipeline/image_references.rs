@@ -1,3 +1,4 @@
+use super::callbacks;
 use super::shared::{Address32, ByteOffset};
 use core::ptr::{null, read_volatile, write_volatile};
 
@@ -845,6 +846,7 @@ pub(super) unsafe extern "C" fn xm1_pipeline_image_motion_primary(job: Address32
     unsafe {
         xm1_pipeline_image_primary_motion_output(shifted, command.offset(ByteOffset(4)), config);
         xm1_pipeline_image_conversion_finish_primary(config.0 as *const u32);
+        let _ = callbacks::registry().ensure(xm1_pipeline_image_motion_conversion_complete as unsafe extern "C" fn());
         command.offset(ByteOffset(0x38)).write_word(xm1_pipeline_image_motion_conversion_complete as *const () as u32);
         xm1_pipeline_image_conversion_prepare_mode(1);
         xm1_pipeline_image_trace_begin(0x06023350);
@@ -898,6 +900,7 @@ pub(super) unsafe extern "C" fn xm1_pipeline_image_motion_secondary(job: Address
         command.offset(ByteOffset(0x30)).write_word(config.offset(ByteOffset(0xa8)).word());
         xm1_pipeline_image_secondary_motion_configuration(inputs_selected, input_count, input.offset(ByteOffset(config.offset(ByteOffset(0xa8)).word().wrapping_mul(4))), command.offset(ByteOffset(4)), outputs_selected, output_count, output, command.offset(ByteOffset(24)), config);
         xm1_pipeline_image_conversion_finish_secondary(config.0 as *const u32);
+        let _ = callbacks::registry().ensure(xm1_pipeline_image_motion_conversion_complete as unsafe extern "C" fn());
         command.offset(ByteOffset(0x38)).write_word(xm1_pipeline_image_motion_conversion_complete as *const () as u32);
         xm1_pipeline_image_conversion_prepare_mode(2);
         xm1_pipeline_image_trace_begin(0x06023350);

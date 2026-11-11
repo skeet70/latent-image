@@ -9,10 +9,20 @@ struct ScriptContext(Address32);
 
 impl ScriptContext {
     fn field(self, offset: u32) -> Address32 { self.0.offset(ByteOffset(offset)) }
+    /// # Safety
+    /// `self` must be a live font engine context; `offset` must address four readable bytes.
     unsafe fn word(self, offset: u32) -> u32 { unsafe { self.field(offset).word() } }
+    /// # Safety
+    /// `self` must be a live font engine context; `offset` must address two readable bytes.
     unsafe fn half(self, offset: u32) -> u16 { unsafe { self.field(offset).half() } }
+    /// # Safety
+    /// `self` must be a live font engine context; `offset` must address four writable bytes.
     unsafe fn put_word(self, offset: u32, value: u32) { unsafe { self.field(offset).write_word(value) }; }
+    /// # Safety
+    /// `self` must be a live font engine context; `offset` must address two writable bytes.
     unsafe fn put_half(self, offset: u32, value: u16) { unsafe { self.field(offset).write_half(value) }; }
+    /// # Safety
+    /// `self` must be a live font engine context whose stream cursor has two readable bytes.
     unsafe fn next(self) -> u16 {
         let cursor = unsafe { self.word(0x74) };
         let stream = Address32(unsafe { self.word(0x70) });
@@ -22,9 +32,13 @@ impl ScriptContext {
     }
 }
 
+/// # Safety
+/// `address` must point to two readable bytes.
 unsafe fn little_half(address: Address32) -> u16 {
     unsafe { address.byte() as u16 | (address.offset(ByteOffset(1)).byte() as u16) << 8 }
 }
+/// # Safety
+/// `address` must point to four readable bytes.
 unsafe fn little_word(address: Address32) -> u32 {
     let mut value = 0;
     for byte in 0..4 { value |= (unsafe { address.offset(ByteOffset(byte)).byte() } as u32) << (byte * 8); }
@@ -33,7 +47,7 @@ unsafe fn little_word(address: Address32) -> u32 {
 
 pub use crate::develop::font_core::shaping::{ScriptMode, UnicodeCategory, UnicodeClass};
 
-use crate::develop::font_core::shaping::{self, CharacterCode, CharacterIndex, CharacterRange, DirectionHint, JoiningCategory, JoiningClass, JoiningState, PackedCount, ScriptRun, ScriptTables};
+use crate::develop::font_core::shaping::{self, CharacterCode, CharacterIndex, CharacterRange, DirectionHint, GlyphIndex, LayoutExtent16, PackedCount, ScriptRun, ScriptTables, ThaiMetrics};
 
 #[no_mangle]
 pub extern "C" fn xm1_pipeline_image_font_glyph_cell_width(code: u16) -> i32 {
@@ -44,12 +58,16 @@ fn classify(code: u16) -> UnicodeClass {
     shaping::classify(CharacterCode(code))
 }
 
+/// # Safety
+/// `output` must be a writable, aligned `UnicodeClass`.
 #[no_mangle]
 pub unsafe extern "C" fn xm1_pipeline_image_font_classify_unicode(output: *mut UnicodeClass, code: u32) -> *mut UnicodeClass {
     unsafe { write_volatile(output, classify(code as u16)) };
     output
 }
 
+/// # Safety
+/// `output` must be a writable, aligned `UnicodeClass`.
 #[no_mangle]
 pub unsafe extern "C" fn xm1_pipeline_image_font_private_character_class(output: *mut UnicodeClass, code: u16) -> *mut UnicodeClass {
     unsafe { write_volatile(output, shaping::private_character_class(CharacterCode(code))) };
@@ -61,12 +79,16 @@ pub extern "C" fn xm1_pipeline_image_font_pack_count(count: u16, groups: u16) ->
     shaping::pack_count(count, groups).0
 }
 
+/// # Safety
+/// `count` and `groups` must be writable, aligned `u16`.
 #[no_mangle]
 pub unsafe extern "C" fn xm1_pipeline_image_font_unpack_count(packed: u16, count: *mut u16, groups: *mut u16) {
     let (characters, glyphs) = shaping::unpack_count(PackedCount(packed));
     unsafe { write_volatile(count, characters); write_volatile(groups, glyphs); }
 }
 
+/// # Safety
+/// `engine` must be a live font engine context whose stream cursor has two readable bytes.
 #[no_mangle]
 pub unsafe extern "C" fn xm1_pipeline_image_font_next_u16(engine: u32) -> u16 { unsafe { ScriptContext(Address32(engine)).next() } }
 
@@ -75,10 +97,12 @@ pub extern "C" fn xm1_pipeline_image_font_flags_for_mode(mode: i32) -> u16 {
     match mode { 2 | 6 => 0x200f, _ => 0x200e }
 }
 
+/// # Safety
+/// `text` must point to `length` readable halfwords; each non-null output must be writable and aligned.
 #[no_mangle]
 pub unsafe extern "C" fn xm1_pipeline_image_font_detect_mode(text: *const u16, length: i32, mode_out: *mut i32, language_out: *mut i32) -> u32 {
     let length = length.max(0) as usize;
-    let text = unsafe { core::slice::from_raw_parts(text, length) };
+    let text = if length == 0 || text.is_null() { &[][..] } else { unsafe { core::slice::from_raw_parts(text, length) } };
     let (mode, language, direction) = shaping::detect_mode(text)
         .map_or((0, 0, 0), |mode| (mode as i32, mode.language().0 as i32, mode.direction().0 as u32));
     if !mode_out.is_null() { unsafe { write_volatile(mode_out, mode) }; }
@@ -86,19 +110,23 @@ pub unsafe extern "C" fn xm1_pipeline_image_font_detect_mode(text: *const u16, l
     direction
 }
 
+/// # Safety
+/// `text` must point to `length` readable halfwords; each non-null output must be writable and aligned.
 #[no_mangle]
 pub unsafe extern "C" fn xm1_pipeline_image_font_detect_script_run(text: *const u16, length: u16, start: u16, end_out: *mut u16, base_direction: u32, mode_out: *mut i32, language_out: *mut i32, direction_out: *mut u16) -> i32 {
-    let text = unsafe { core::slice::from_raw_parts(text, length as usize) };
+    let text = if length == 0 || text.is_null() { &[][..] } else { unsafe { core::slice::from_raw_parts(text, length as usize) } };
     let detected = shaping::detect_script_run(text, shaping::CharacterIndex(start), DirectionHint(base_direction));
     unsafe {
-        write_volatile(end_out, detected.range.end.0);
-        write_volatile(mode_out, detected.identity.script.0 as i32);
-        write_volatile(language_out, detected.identity.language.0 as i32);
-        write_volatile(direction_out, detected.direction.0);
+        if !end_out.is_null() { write_volatile(end_out, detected.range.end.0); }
+        if !mode_out.is_null() { write_volatile(mode_out, detected.identity.script.0 as i32); }
+        if !language_out.is_null() { write_volatile(language_out, detected.identity.language.0 as i32); }
+        if !direction_out.is_null() { write_volatile(direction_out, detected.direction.0); }
     }
     (detected.range.end.0 as i32).wrapping_sub(i32::from(start))
 }
 
+/// # Safety
+/// `engine` must be a live font engine context with a readable row directory; `index_out` must be a writable, aligned `u16`.
 #[no_mangle]
 pub unsafe extern "C" fn xm1_pipeline_image_font_select_row(engine: u32, script: u32, language: u32, index_out: *mut u16) -> i32 {
     let context = ScriptContext(Address32(engine));
@@ -138,6 +166,8 @@ pub unsafe extern "C" fn xm1_pipeline_image_font_select_row(engine: u32, script:
     -1
 }
 
+/// # Safety
+/// `engine` must be a live font engine context and `run` a live `ScriptRun` when the phase renders.
 #[no_mangle]
 pub unsafe extern "C" fn xm1_pipeline_image_font_dispatch_script(engine: u32, script: u32, language: u32, phase: u32, run: u32) -> i32 {
     match (script, language, phase) {
@@ -158,24 +188,38 @@ pub unsafe extern "C" fn xm1_pipeline_image_font_dispatch_script(engine: u32, sc
 struct RunAddress(Address32);
 
 impl RunAddress {
+    /// # Safety
+    /// `self` must address a live `ScriptRun`.
     unsafe fn start(self) -> u16 { unsafe { self.0.half() } }
+    /// # Safety
+    /// `self` must address a live `ScriptRun`.
     unsafe fn end(self) -> u16 { unsafe { self.0.offset(ByteOffset(2)).half() } }
+    /// # Safety
+    /// `self` must address a live `ScriptRun` and `offset` readable bytes inside it.
     unsafe fn word(self, offset: u32) -> u32 { unsafe { self.0.offset(ByteOffset(offset)).word() } }
+    /// # Safety
+    /// `self` must address a live `ScriptRun`.
     unsafe fn finish(self, x: u32) {
         unsafe { self.0.offset(ByteOffset(28)).write_word(x); self.0.offset(ByteOffset(32)).write_word(0); }
     }
 }
 
+/// # Safety
+/// `context` must be a live font engine context whose output word holds a live positioned record.
 unsafe fn positioned_context(context: ScriptContext) -> ScriptContext {
     ScriptContext(Address32(unsafe { context.word(0x53c) }))
 }
 
+/// # Safety
+/// `context` must be a live font engine context and `run` a live `ScriptRun`.
 unsafe fn initial_pen(context: ScriptContext, run: RunAddress) -> u32 {
     let output = unsafe { positioned_context(context) };
     let x = unsafe { run.word(20) };
     if unsafe { output.half(0xc20) } == 0x200f { x.wrapping_sub(unsafe { run.word(12) }) } else { x }
 }
 
+/// # Safety
+/// `engine` must be a live font engine context.
 #[no_mangle]
 pub unsafe extern "C" fn xm1_pipeline_image_font_compose_private_run(engine: u32) {
     let mut store = unsafe { GuestStore::new(Address32(engine)) };
@@ -183,6 +227,8 @@ pub unsafe extern "C" fn xm1_pipeline_image_font_compose_private_run(engine: u32
     let _ = shaping::measure_characters(&mut store, &mut metrics, ScriptMode::Arabic);
 }
 
+/// # Safety
+/// `engine` must be a live font engine context.
 #[no_mangle]
 pub unsafe extern "C" fn xm1_pipeline_image_font_store_main_run(engine: u32) {
     let mut store = unsafe { GuestStore::new(Address32(engine)) };
@@ -190,6 +236,8 @@ pub unsafe extern "C" fn xm1_pipeline_image_font_store_main_run(engine: u32) {
     let _ = shaping::store_main_run(&mut store, &mut metrics);
 }
 
+/// # Safety
+/// `context` must be a live font engine context and `run` a live `ScriptRun`.
 unsafe fn render_glyph_span(context: ScriptContext, run: RunAddress) -> i32 {
     let first = unsafe { context.half(0x616 + (run.start() as u32) * 16) } as u32;
     let last = unsafe { context.half(0x606 + (run.end() as u32) * 16) } as u32;
@@ -223,6 +271,8 @@ unsafe fn render_glyph_span(context: ScriptContext, run: RunAddress) -> i32 {
     0
 }
 
+/// # Safety
+/// `engine` must be a live font engine context and `run` a live `ScriptRun` when the phase renders.
 #[no_mangle]
 pub unsafe extern "C" fn xm1_pipeline_image_font_shape_basic(engine: u32, run: u32) -> i32 {
     let context = ScriptContext(Address32(engine));
@@ -236,6 +286,8 @@ pub unsafe extern "C" fn xm1_pipeline_image_font_shape_basic(engine: u32, run: u
     unsafe { render_glyph_span(context, RunAddress(Address32(run))) }
 }
 
+/// # Safety
+/// `engine` must be a live font engine context and `run` a live `ScriptRun`.
 #[no_mangle]
 pub unsafe extern "C" fn xm1_pipeline_image_font_position_forward(engine: u32, run: u32) -> i32 {
     let mut store = unsafe { GuestStore::new(Address32(engine)) };
@@ -245,11 +297,15 @@ pub unsafe extern "C" fn xm1_pipeline_image_font_position_forward(engine: u32, r
     0
 }
 
+/// # Safety
+/// `engine` must be a live font engine context and `run` a live `ScriptRun`.
 #[no_mangle]
 pub unsafe extern "C" fn xm1_pipeline_image_font_position_arabic(engine: u32, run: u32) -> i32 {
     unsafe { xm1_pipeline_image_font_position_metric_span(engine, run) }
 }
 
+/// # Safety
+/// `engine` must be a live font engine context and `run` a live `ScriptRun`.
 #[no_mangle]
 pub unsafe extern "C" fn xm1_pipeline_image_font_position_metric_span(engine: u32, run: u32) -> i32 {
     let mut store = unsafe { GuestStore::new(Address32(engine)) };
@@ -259,6 +315,8 @@ pub unsafe extern "C" fn xm1_pipeline_image_font_position_metric_span(engine: u3
     0
 }
 
+/// # Safety
+/// `engine` must be a live font engine context and `run` a live `ScriptRun`.
 #[no_mangle]
 pub unsafe extern "C" fn xm1_pipeline_image_font_position_hebrew(engine: u32, run: u32) -> i32 {
     let mut store = unsafe { GuestStore::new(Address32(engine)) };
@@ -268,22 +326,13 @@ pub unsafe extern "C" fn xm1_pipeline_image_font_position_hebrew(engine: u32, ru
     0
 }
 
+/// # Safety
+/// `table` must point to `count + 1` readable, halfword-aligned entries.
 #[no_mangle]
 pub unsafe extern "C" fn xm1_pipeline_image_font_find_glyph(count: i32, table: u32, code: u16) -> i32 {
-    let mut last = count;
-    let mut first = 1i32;
-    if last <= 0 { return -1; }
-    let mut middle = last.wrapping_add(1) >> 1;
-    loop {
-        let candidate = unsafe { little_half(Address32(table.wrapping_add((middle as u32).wrapping_mul(2)))) };
-        if code < candidate { last = middle.wrapping_sub(1); }
-        else {
-            first = middle.wrapping_add(1);
-            if code == candidate { return middle; }
-        }
-        if last < first { return -1; }
-        middle = last.wrapping_add(first) / 2;
-    }
+    if count <= 0 { return -1; }
+    let table = unsafe { core::slice::from_raw_parts(table as *const u16, count as usize + 1) };
+    shaping::find_glyph(count as u16, table, CharacterCode(code)).map_or(-1, |glyph| i32::from(glyph.0))
 }
 
 #[repr(C)]
@@ -296,6 +345,8 @@ pub struct FontScriptRun {
     characters: Address32,
 }
 
+/// # Safety
+/// `engine` must be a live font engine context; `run` must be a writable, aligned `FontScriptRun` whose `characters` points to `length - 1` writable halfwords.
 #[no_mangle]
 pub unsafe extern "C" fn xm1_pipeline_image_font_read_run(engine: u32, base: u32, index: u16, run: *mut FontScriptRun) -> i32 {
     let context = ScriptContext(Address32(engine));
@@ -320,6 +371,8 @@ pub extern "C" fn xm1_pipeline_image_font_mirror_character(code: u16) -> u32 {
     shaping::mirror_character(CharacterCode(code)).0 as u32
 }
 
+/// # Safety
+/// `engine` must be a live font engine context with readable mappings for `start..end`.
 #[no_mangle]
 pub unsafe extern "C" fn xm1_pipeline_image_font_mirror_run(engine: u32, start: u16, end: u16) {
     let mut store = unsafe { GuestStore::new(Address32(engine)) };
@@ -331,35 +384,29 @@ pub unsafe extern "C" fn xm1_pipeline_image_font_mirror_run(engine: u32, start: 
 struct ArabicWorkspace(Address32);
 
 impl ArabicWorkspace {
+    /// # Safety
+    /// `self` must address the engine's Arabic workspace with a state row at `index`.
     unsafe fn state(self, index: u16) -> u32 { unsafe { self.0.offset(ByteOffset(index as u32 * 16 + 12)).word() } }
 }
 
-fn compose_arabic_pair(first: u16, second: u16) -> (u16, u16) {
-    let combined = match (first, second) {
-        (0x627, 0x653) => 0x622, (0x627, 0x654) => 0x623,
-        (0x627, 0x655) => 0x625, (0x627, 0x674) => 0x675,
-        (0x648, 0x654) => 0x624, (0x648, 0x674) => 0x676,
-        (0x64a, 0x654) => 0x626, (0x64a, 0x674) => 0x678,
-        (0x6c1, 0x654) => 0x6c2, (0x6d2, 0x654) => 0x6d3,
-        (0x6d5, 0x654) => 0x6c0, (0x6c7, 0x674) => 0x677,
-        _ => return (first, 1),
-    };
-    (combined, 2)
-}
-
+/// # Safety
+/// `engine` must be a live font engine context whose request text has a halfword at `character` and `character + 1`.
 #[no_mangle]
 pub unsafe extern "C" fn xm1_pipeline_image_font_compose_arabic_character(engine: u32, character: u32) -> i32 {
     let context = ScriptContext(Address32(engine));
     let mut character = character as u16;
     let request = Address32(unsafe { context.word(0x10) });
     let text = Address32(unsafe { request.offset(ByteOffset(16)).word() });
-    let (code, count) = unsafe { compose_arabic_pair(text.offset(ByteOffset(character as u32 * 2)).half(), text.offset(ByteOffset(character as u32 * 2 + 2)).half()) };
+    let (code, count) = shaping::compose_arabic_pair(
+        CharacterCode(unsafe { text.offset(ByteOffset(character as u32 * 2)).half() }),
+        CharacterCode(unsafe { text.offset(ByteOffset(character as u32 * 2 + 2)).half() }),
+    );
     let composed = unsafe { context.half(0x5a4) };
-    unsafe { context.put_half(0x540 + composed as u32 * 2, code) };
+    unsafe { context.put_half(0x540 + composed as u32 * 2, code.0) };
     for remaining in (1..=count).rev() {
         let record = 0x60c + character as u32 * 16;
         unsafe {
-            context.put_half(record + 6, code);
+            context.put_half(record + 6, code.0);
             context.put_half(record + 4, context.half(0x5a4));
             context.put_half(record + 8, xm1_pipeline_image_font_pack_count(remaining, 1));
         }
@@ -371,6 +418,8 @@ pub unsafe extern "C" fn xm1_pipeline_image_font_compose_arabic_character(engine
 
 fn arabic_class(code: u16) -> u32 { ScriptTables::firmware().arabic_class(CharacterCode(code)).0 }
 
+/// # Safety
+/// `engine` must be a live font engine context; `header` must be a live script dictionary, `workspace` its Arabic workspace and `glyph_out` a writable, aligned `u16`.
 #[no_mangle]
 pub unsafe extern "C" fn xm1_pipeline_image_font_find_ligature(engine: u32, character: u32, dictionary_index: u32, workspace: u32, header: u32, glyph_out: *mut u16) -> u32 {
     let context = ScriptContext(Address32(engine));
@@ -436,6 +485,8 @@ struct ScriptDictionary {
     offsets: Address32,
 }
 
+/// # Safety
+/// `context` must be a live font engine context with a readable dictionary; `dictionary` is written in full.
 unsafe fn arabic_dictionary(context: ScriptContext, dictionary: &mut ScriptDictionary) -> i32 {
     if unsafe { context.word(0x518) } == 0 { return 0; }
     let tables = unsafe { context.half(0x50c) } as u32;
@@ -454,6 +505,8 @@ unsafe fn arabic_dictionary(context: ScriptContext, dictionary: &mut ScriptDicti
     0
 }
 
+/// # Safety
+/// `engine` must be a live font engine context and `run` a live `ScriptRun` when the phase renders.
 #[no_mangle]
 pub unsafe extern "C" fn xm1_pipeline_image_font_shape_arabic(engine: u32, run: u32) -> i32 {
     let context = ScriptContext(Address32(engine));
@@ -479,35 +532,31 @@ pub unsafe extern "C" fn xm1_pipeline_image_font_shape_arabic(engine: u32, run: 
             let count = unsafe { xm1_pipeline_image_font_compose_arabic_character(engine, character) } as u32;
             character = character.wrapping_add(count) & 0xffff;
         }
-        character = first;
-        while character < unsafe { context.half(0x526) } as u32 {
+        let mut rows = [shaping::ArabicRow::default(); shaping::MAX_SHAPED_GLYPHS];
+        let mut composed = [0u16; shaping::MAX_SHAPED_GLYPHS];
+        let mut count = 0usize;
+        let mut character = first;
+        while character < end && count < shaping::MAX_SHAPED_GLYPHS {
             let mapping = 0x610 + character * 16;
-            let composed = unsafe { context.half(mapping) };
-            let code = unsafe { context.half(mapping + 2) };
-            let previous = if unsafe { context.half(0x610 + first * 16) } < composed { unsafe { workspace.0.offset(ByteOffset(composed as u32 * 16 - 4)).word() } } else { 0 };
-            let class = arabic_class(code);
-            let category = ScriptTables::firmware().arabic_category(JoiningClass(class)).0;
-            let transition = ScriptTables::firmware().arabic_transition(JoiningState(previous), JoiningCategory(category));
-            let mut state = if category == 4 { 0 } else { transition.state.0 };
-            if character == first {
-                if character == unsafe { context.half(0x526) } as u32 - 1 { state = 0; }
-            } else {
-                let updated = transition.update.0;
-                if previous != updated { unsafe { workspace.0.offset(ByteOffset(composed as u32 * 16 - 4)).write_word(updated) }; }
-                if category == 2 && character == unsafe { context.half(0x526) } as u32 - 1 {
-                    if state == 2 { state = 0; } else if state == 3 { state = 1; }
-                }
-            }
-            let row = workspace.0.offset(ByteOffset(composed as u32 * 16));
-            unsafe {
-                row.offset(ByteOffset(4)).write_word(class);
-                row.offset(ByteOffset(8)).write_word(category);
-                row.write_half(code);
-                row.offset(ByteOffset(12)).write_word(state);
-            }
+            rows[count] = shaping::ArabicRow {
+                character: CharacterIndex(character as u16),
+                code: CharacterCode(unsafe { context.half(mapping + 2) }),
+            };
+            composed[count] = unsafe { context.half(mapping) };
+            count += 1;
             let packed = unsafe { context.half(0x614 + character * 16) };
-            let count = if packed > 256 { packed & 255 } else { packed };
-            character = character.wrapping_add(count as u32) & 0xffff;
+            let cluster = if packed > 256 { packed & 255 } else { packed };
+            character = character.wrapping_add(cluster as u32) & 0xffff;
+        }
+        let forms = shaping::arabic_forms(&rows[..count], CharacterIndex(end as u16), &ScriptTables::firmware());
+        for index in 0..count {
+            let row = workspace.0.offset(ByteOffset(composed[index] as u32 * 16));
+            unsafe {
+                row.offset(ByteOffset(4)).write_word(forms[index].class.0);
+                row.offset(ByteOffset(8)).write_word(forms[index].category.0);
+                row.write_half(forms[index].code.0);
+                row.offset(ByteOffset(12)).write_word(forms[index].state.0);
+            }
         }
         character = first;
         while character < unsafe { context.half(0x526) } as u32 {
@@ -564,56 +613,41 @@ pub unsafe extern "C" fn xm1_pipeline_image_font_shape_arabic(engine: u32, run: 
     unsafe { render_glyph_span(context, RunAddress(Address32(run))) }
 }
 
-fn thai_class(code: u16) -> u16 { ScriptTables::firmware().thai_class(CharacterCode(code)) }
-
 #[repr(C)]
 pub struct GlyphOffset { x: i32, y: i32 }
 
+/// # Safety
+/// `output` must be a writable, aligned `GlyphOffset`; `metrics` must point to five Thai halfwords, `text` to the run's codes and `index` must index `text`.
 #[no_mangle]
 pub unsafe extern "C" fn xm1_pipeline_image_font_thai_mark_offsets(output: *mut GlyphOffset, metrics: u32, text: u32, start: i32, last: i32, index: i32, decomposed: i32, followed: i32) {
     let metrics = Address32(metrics);
     let text = Address32(text);
-    let code = unsafe { text.offset(ByteOffset((index as u32).wrapping_mul(2))).half() };
-    let category = thai_class(code);
-    let mut x = 0i32;
-    let mut y = 0i32;
-    let mut has_base = false;
-    if start < index {
-        let previous = index.wrapping_sub(1);
-        let previous_code = unsafe { text.offset(ByteOffset((previous as u32).wrapping_mul(2))).half() };
-        let previous_category = thai_class(previous_code);
-        let base = if previous_category == 2 { Some(previous) } else {
-            let earlier = index.wrapping_sub(2);
-            if earlier >= start && unsafe { thai_class(text.offset(ByteOffset((earlier as u32).wrapping_mul(2))).half()) } == 2 { Some(earlier) } else { None }
-        };
-        if let Some(base) = base {
-            has_base = true;
-            if base >= 0 {
-                let base_code = unsafe { text.offset(ByteOffset(base as u32 * 2)).half() };
-                if matches!(base_code, 0xe1b | 0xe1d | 0xe1f) && category & 0xbf00 != 0 { x = -(unsafe { metrics.offset(ByteOffset(8)).half() } as i32); }
-                if base == previous {
-                    if category & 0x8000 != 0 {
-                        y = unsafe { metrics.half() } as i32;
-                        if index < last && followed != 0 { y = 0; }
-                    } else if category & 0x1800 != 0 { y = unsafe { metrics.half() } as i32; }
-                } else if base == index.wrapping_sub(2) {
-                    if previous_category & 0x40c0 != 0 { y = unsafe { metrics.half() } as i32; }
-                    if decomposed != 0 && code == 0xe4d && previous_category & 0x9800 != 0 { y = unsafe { metrics.half() } as i32; }
-                }
-            }
-        }
+    let thai = ThaiMetrics {
+        rise: LayoutExtent16(unsafe { metrics.half() }),
+        reserved_first: LayoutExtent16(unsafe { metrics.offset(ByteOffset(2)).half() }),
+        reserved_second: LayoutExtent16(unsafe { metrics.offset(ByteOffset(4)).half() }),
+        clip_descent: LayoutExtent16(unsafe { metrics.offset(ByteOffset(6)).half() }),
+        left_shift: LayoutExtent16(unsafe { metrics.offset(ByteOffset(8)).half() }),
+    };
+    let index = index.max(0) as usize;
+    let count = (index + 1).min(shaping::MAX_SHAPED_GLYPHS);
+    let mut codes = [CharacterCode(0); shaping::MAX_SHAPED_GLYPHS];
+    for (offset, slot) in codes[..count].iter_mut().enumerate() {
+        *slot = CharacterCode(unsafe { text.offset(ByteOffset(offset as u32 * 2)).half() });
     }
+    let offset = shaping::thai_mark_offset(
+        &codes[..count], &thai,
+        GlyphIndex(start.max(0) as u16), GlyphIndex(last.max(0) as u16), GlyphIndex(index as u16),
+        decomposed != 0, followed != 0, &ScriptTables::firmware(),
+    );
     unsafe {
-        if has_base {
-            write_volatile(core::ptr::addr_of_mut!((*output).y), y);
-            write_volatile(core::ptr::addr_of_mut!((*output).x), x);
-        } else {
-            write_volatile(core::ptr::addr_of_mut!((*output).x), x);
-            write_volatile(core::ptr::addr_of_mut!((*output).y), y);
-        }
+        write_volatile(core::ptr::addr_of_mut!((*output).x), offset.x.0);
+        write_volatile(core::ptr::addr_of_mut!((*output).y), offset.y.0);
     }
 }
 
+/// # Safety
+/// `engine` must be a live font engine context; `mapping` must point to eight writable halfwords.
 #[no_mangle]
 pub unsafe extern "C" fn xm1_pipeline_image_font_thai_split_character(engine: u32, character: i32, mapping: *mut u16) {
     let context = ScriptContext(Address32(engine));
@@ -621,17 +655,15 @@ pub unsafe extern "C" fn xm1_pipeline_image_font_thai_split_character(engine: u3
     let text = Address32(unsafe { request.offset(ByteOffset(16)).word() });
     let code = unsafe { text.offset(ByteOffset((character as u32).wrapping_mul(2))).half() };
     unsafe { write_volatile(mapping, character as u16); write_volatile(mapping.add(1), code); }
-    let first = unsafe { context.half(0x524) } as i32;
-    let mut split = false;
-    if code == 0xe33 && first < character {
-        let previous = unsafe { text.offset(ByteOffset((character as u32).wrapping_mul(2).wrapping_sub(2))).half() };
-        let category = thai_class(previous);
-        split = category == 2;
-        if category == 0x8000 && first <= character.wrapping_sub(2) {
-            let earlier = unsafe { text.offset(ByteOffset((character as u32).wrapping_mul(2).wrapping_sub(4))).half() };
-            split = thai_class(earlier) == 2;
+    let first = unsafe { context.half(0x524) } as usize;
+    let index = character.max(0) as usize;
+    let split = if index < shaping::MAX_SHAPED_GLYPHS {
+        let mut codes = [CharacterCode(0); shaping::MAX_SHAPED_GLYPHS];
+        for (offset, slot) in codes[..=index].iter_mut().enumerate() {
+            *slot = CharacterCode(unsafe { text.offset(ByteOffset(offset as u32 * 2)).half() });
         }
-    }
+        shaping::thai_decomposes(&codes[..=index], first, index, &ScriptTables::firmware())
+    } else { false };
     let count = if split { 2 } else { 1 };
     let output_code = if split {
         let glyph = unsafe { context.half(0x60a) };
@@ -659,34 +691,20 @@ pub unsafe extern "C" fn xm1_pipeline_image_font_thai_split_character(engine: u3
     }
 }
 
-fn thai_class_index(code: u16) -> shaping::ThaiClassIndex { shaping::thai_class_index(thai_class(code)) }
-
+/// # Safety
+/// `context` must be a live font engine context with readable glyph codes.
 unsafe fn thai_combines(context: ScriptContext, first: u32, glyph: u16) -> bool {
-    let glyph = glyph as u32;
-    if glyph <= first { return false; }
-    let previous = unsafe { context.half(0x5a6 + (glyph - 1) * 2) };
-    let current = unsafe { context.half(0x5a6 + glyph * 2) };
-    let previous_class = thai_class_index(previous);
-    let current_class = thai_class_index(current);
-    let transition = ScriptTables::firmware().thai_transition(previous_class, current_class);
-    if transition != b'C' { return false; }
-    let previous_flags = thai_class(previous);
-    if previous_flags == 2 { return true; }
-    if (glyph.wrapping_sub(2) as i32) < first as i32 || previous == 0 { return false; }
-    if unsafe { thai_class(context.half(0x5a6 + (glyph - 2) * 2)) } != 2 { return false; }
-    if current == 0 { return previous_flags & 0xffc0 != 0; }
-    let current_flags = thai_class(current);
-    let top = if previous_flags & 0x140 != 0 {
-        if current_flags & 0x8800 != 0 { return true; }
-        0
-    } else {
-        let top = current_flags >> 15;
-        if previous_flags & 0x280 != 0 && top != 0 { return true; }
-        top
-    };
-    previous_flags & 0x400 != 0 && (top != 0 || current_flags & 0x1000 != 0)
+    let glyph_index = glyph as usize;
+    if glyph_index >= shaping::MAX_SHAPED_GLYPHS { return false; }
+    let mut codes = [CharacterCode(0); shaping::MAX_SHAPED_GLYPHS];
+    for (index, slot) in codes[..=glyph_index].iter_mut().enumerate() {
+        *slot = CharacterCode(unsafe { context.half(0x5a6 + index as u32 * 2) });
+    }
+    shaping::thai_combines(&codes[..=glyph_index], GlyphIndex(first as u16), GlyphIndex(glyph), &ScriptTables::firmware())
 }
 
+/// # Safety
+/// `engine` must be a live font engine context and `run` a live `ScriptRun`.
 #[no_mangle]
 pub unsafe extern "C" fn xm1_pipeline_image_font_position_thai(engine: u32, run: u32) -> i32 {
     let context = ScriptContext(Address32(engine));
@@ -772,6 +790,8 @@ pub unsafe extern "C" fn xm1_pipeline_image_font_position_thai(engine: u32, run:
     0
 }
 
+/// # Safety
+/// `engine` must be a live font engine context with readable mappings.
 #[no_mangle]
 pub unsafe extern "C" fn xm1_pipeline_image_font_measure_thai_lines(engine: u32) {
     let context = ScriptContext(Address32(engine));
@@ -807,6 +827,8 @@ pub unsafe extern "C" fn xm1_pipeline_image_font_measure_thai_lines(engine: u32)
 struct OutlineClip { kind: u32, left: i32, top: i32, width: i32, height: i32 }
 
 impl OutlineClip {
+    /// # Safety
+    /// `output` must be a live positioned record and `record` an offset inside it.
     unsafe fn from_record(output: ScriptContext, record: u32, kind: u32) -> Self {
         unsafe { Self { kind, left: output.word(record + 44) as i32, top: output.word(record + 48) as i32, width: output.word(record + 52) as i32, height: output.word(record + 56) as i32 } }
     }
@@ -819,6 +841,8 @@ struct RasterClip {
     first: OutlineClip, second: OutlineClip,
 }
 
+/// # Safety
+/// `context` must be a live font engine context and `run` a live `ScriptRun`.
 unsafe fn render_thai(context: ScriptContext, run: RunAddress) -> i32 {
     let first = unsafe { context.half(0x616 + run.start() as u32 * 16) } as u32;
     let last = unsafe { context.half(0x606 + run.end() as u32 * 16) } as u32;
@@ -864,6 +888,8 @@ unsafe fn render_thai(context: ScriptContext, run: RunAddress) -> i32 {
     0
 }
 
+/// # Safety
+/// `engine` must be a live font engine context and `run` a live `ScriptRun` when the phase renders.
 #[no_mangle]
 pub unsafe extern "C" fn xm1_pipeline_image_font_shape_thai(engine: u32, run: u32) -> i32 {
     let context = ScriptContext(Address32(engine));
@@ -888,12 +914,16 @@ pub unsafe extern "C" fn xm1_pipeline_image_font_shape_thai(engine: u32, run: u3
     unsafe { render_thai(context, RunAddress(Address32(run))) }
 }
 
+/// # Safety
+/// `engine` must be a live font engine context.
 #[no_mangle]
 pub unsafe extern "C" fn xm1_pipeline_image_font_prepare_hebrew_characters(engine: u32) {
     let mut store = unsafe { GuestStore::new(Address32(engine)) };
     let _ = shaping::prepare_hebrew_characters(&mut store);
 }
 
+/// # Safety
+/// `engine` must be a live font engine context and `run` a live `ScriptRun` when the phase renders.
 #[no_mangle]
 pub unsafe extern "C" fn xm1_pipeline_image_font_shape_hebrew(engine: u32, run: u32) -> i32 {
     let context = ScriptContext(Address32(engine));
@@ -911,3 +941,4 @@ pub unsafe extern "C" fn xm1_pipeline_image_font_shape_hebrew(engine: u32, run: 
     }
     unsafe { render_glyph_span(context, RunAddress(Address32(run))) }
 }
+

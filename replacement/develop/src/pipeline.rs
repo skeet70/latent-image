@@ -1,4 +1,5 @@
 pub(super) mod shared;
+mod callbacks;
 mod affine_math;
 mod buffers;
 mod crop_process;
@@ -57,6 +58,7 @@ mod sensor_requests;
 mod sensor_settings;
 mod sensor_snapshot_fields;
 mod sensor_template;
+mod stage;
 mod strip_planner;
 mod transforms;
 mod warp_engine;

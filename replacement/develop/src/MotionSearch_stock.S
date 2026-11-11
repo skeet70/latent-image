@@ -22,7 +22,6 @@ motion_seam xm1_motion_resource_lock, 0x00724b68
 motion_seam xm1_motion_resource_unlock, 0x00724c00
 motion_seam xm1_motion_acquire_resource, 0x00649c4c
 motion_seam xm1_motion_release_resource, 0x00649ddc
-motion_seam xm1_motion_signal, 0x00724558
 .global xm1_motion_debug
 .type xm1_motion_debug, %function
 xm1_motion_debug:

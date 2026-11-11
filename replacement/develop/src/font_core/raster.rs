@@ -974,7 +974,7 @@ impl CoverageStorage for RenderStorage<'_, '_, '_, '_> {
     fn lookup(&self, value: u8) -> Result<u8, FontError> { Ok(value) }
 }
 
-pub fn render_glyph<'pixels>(resource: &super::outline::FdlResource<'_>, glyph: GlyphId, config: FontConfig, workspace: &mut RasterWorkspace, pixels: &'pixels mut [u8]) -> Result<GlyphMask<'pixels>, FontError> {
+fn effective_size(resource: &super::outline::FdlResource<'_>, glyph: GlyphId, config: FontConfig) -> Result<FontSize, FontError> {
     let mut effective = config.size;
     if let Some(scale) = resource.glyph_scale(glyph)? {
         let denominator = i32::from(scale.get());
@@ -983,6 +983,18 @@ pub fn render_glyph<'pixels>(resource: &super::outline::FdlResource<'_>, glyph: 
         if extent < 0 { return Err(FontError::InvalidSize); }
         effective = FontSize { width: PixelExtent::new(extent as u32), height: PixelExtent::new(extent as u32) };
     }
+    Ok(effective)
+}
+
+/// The horizontal advance from the glyph directory, without executing the program.
+pub fn glyph_advance(resource: &super::outline::FdlResource<'_>, glyph: GlyphId, config: FontConfig) -> Result<PixelOffset, FontError> {
+    let effective = effective_size(resource, glyph, config)?;
+    let program = resource.glyph_program(glyph, config.writing)?;
+    Ok(RenderProfile::new(config, effective, glyph, program.metrics)?.advance)
+}
+
+pub fn render_glyph<'pixels>(resource: &super::outline::FdlResource<'_>, glyph: GlyphId, config: FontConfig, workspace: &mut RasterWorkspace, pixels: &'pixels mut [u8]) -> Result<GlyphMask<'pixels>, FontError> {
+    let effective = effective_size(resource, glyph, config)?;
     let program = resource.glyph_program(glyph, config.writing)?;
     let profile = RenderProfile::new(config, effective, glyph, program.metrics)?;
     let required = profile.stride.get().checked_mul(profile.canvas_height.get() as usize).ok_or(FontError::InvalidSize)?;

@@ -174,6 +174,35 @@ impl<'asset, 'work> FontEngine<'asset, 'work> {
         Ok(Self { asset, config, workspace })
     }
     pub const fn config(&self) -> FontConfig { self.config }
+    /// THAI_TOP, THAI_ABOVE, THAI_BASE, THAI_BELOW and THAI_SHIFT; zero for a backend that has none.
+    pub fn thai_properties(&self) -> bitmap::ThaiProperties {
+        match &self.asset.backend {
+            resource::FontBackend::Bdf(font) => font.thai_properties(),
+            _ => bitmap::ThaiProperties::default(),
+        }
+    }
+    pub fn advance(&mut self, glyph: GlyphId) -> Result<PixelOffset, FontError> {
+        let fixed = match &self.asset.backend {
+            resource::FontBackend::Bdf(font) => Some(font.metrics(glyph, self.config.size).map(|metrics| metrics.advance_x)),
+            resource::FontBackend::Icon(font) => Some(font.metrics(glyph, self.config.size).map(|metrics| metrics.advance_x)),
+            resource::FontBackend::Fdl(_) => None,
+        };
+        if let Some(advance) = fixed { return advance; }
+        match &self.asset.backend {
+            resource::FontBackend::Fdl(font) => raster::glyph_advance(font, glyph, self.config),
+            _ => Err(FontError::UnsupportedFormat),
+        }
+    }
+    pub fn right_overhang(&mut self, glyph: GlyphId) -> Result<i32, FontError> {
+        let fixed = match &self.asset.backend {
+            resource::FontBackend::Bdf(font) => Some(font.right_overhang(glyph)),
+            resource::FontBackend::Icon(font) => Some(font.right_overhang(glyph)),
+            resource::FontBackend::Fdl(_) => None,
+        };
+        if let Some(overhang) = fixed { return overhang; }
+        let metrics = self.glyph_mask(glyph)?.metrics();
+        Ok((metrics.bearing_x.get() + metrics.width.get() as i32 - metrics.advance_x.get()).max(0))
+    }
     pub fn glyph_mask(&mut self, glyph: GlyphId) -> Result<GlyphMask<'_>, FontError> {
         match (&self.asset.backend, &mut self.workspace) {
             (resource::FontBackend::Bdf(font), FontWorkspace::Bitmap { decoded }) => font.render(glyph, self.config, decoded),

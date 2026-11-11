@@ -110,17 +110,34 @@ fn unicode_text_uses_supplied_coverage_and_advance() {
 
 #[test]
 fn arabic_run_mirrors_the_private_open_bracket_through_the_firmware_pair() {
-    // MIRROR_PAIRS at 0x011805e0 pairs U+E128 with U+E129.
+    // MIRROR_PAIRS at 0x011805e0 pairs U+E128 with U+E129. The first strong
+    // character is Arabic, so the base is RTL and the run ends at the origin.
     let mut assets = header(4);
     record(&mut assets, 1, 7, 0, [0,0], 0, 0, &[100,50,25,255]);
     record(&mut assets, 3, 11, 0x627, [1,1], 1, 4, &[64]);
     record(&mut assets, 3, 11, 0xe129, [1,1], 1, 4, &[128]);
     record(&mut assets, 4, 9, 0, [0,0], 0, 0, "\u{627}\u{e128}\u{627}".as_bytes());
     let mut bytes = vec![0; BYTES];
-    render(&mut bytes, &[DrawCommand::Text { origin: point(0,0), text: TextRef::Catalog(CatalogTextId::new(9).unwrap()), font: FontId(11), colour: colour(255) }], &pack(&assets)).unwrap();
+    render(&mut bytes, &[DrawCommand::Text { origin: point(12,0), text: TextRef::Catalog(CatalogTextId::new(9).unwrap()), font: FontId(11), colour: colour(255) }], &pack(&assets)).unwrap();
     assert_eq!(pixel(&bytes,0,0), &[100,50,25,64]);
     assert_eq!(pixel(&bytes,4,0), &[100,50,25,128]);
     assert_eq!(pixel(&bytes,8,0), &[100,50,25,64]);
+}
+
+#[test]
+fn text_longer_than_the_stock_fifty_unit_window_is_refused() {
+    // 0x118e504 refuses a request whose text length exceeds 50 units with -13.
+    let mut assets = header(2);
+    record(&mut assets, 1, 7, 0, [0,0], 0, 0, &[1,2,3,255]);
+    record(&mut assets, 3, 11, 'A' as u32, [1,1], 1, 1, &[255]);
+    let mut bytes = vec![0; BYTES];
+    let refused = "A".repeat(51);
+    assert_eq!(render(&mut bytes, &[DrawCommand::Text { origin: point(0,0), text: TextRef::Inline(&refused), font: FontId(11), colour: colour(255) }], &pack(&assets)), Err(RasterError::Font { font: FontId(11), error: FontError::InvalidSize }));
+    assert!(bytes.iter().all(|byte| *byte == 0));
+    let accepted = "A".repeat(50);
+    render(&mut bytes, &[DrawCommand::Text { origin: point(0,0), text: TextRef::Inline(&accepted), font: FontId(11), colour: colour(255) }], &pack(&assets)).unwrap();
+    assert_eq!(pixel(&bytes,49,0), &[1,2,3,255]);
+    assert_eq!(pixel(&bytes,50,0), &[0,0,0,0]);
 }
 
 #[test]
@@ -639,6 +656,60 @@ fn actual_font_registry_never_falls_back_to_coverage8_for_missing_glyph() {
     let mut bytes = vec![0;BYTES];
     assert_eq!(Surface::new(SurfaceId::Osd,&mut bytes).unwrap().render(DrawList::new(SurfaceId::Osd,&commands),&mut resources),Err(RasterError::Font { font: FontId(11), error: FontError::MissingGlyph(GlyphId::new(66)) }));
     assert!(bytes.iter().all(|byte| *byte == 0));
+}
+
+#[test]
+fn right_to_left_base_places_runs_from_the_right_edge() {
+    // overlay_font_shape_text takes the base from overlay_font_detect_mode over
+    // the whole text (0x118e5b0..0x118e5c0) and lays runs out from the right.
+    let mut assets = header(3);
+    record(&mut assets, 1, 7, 0, [0,0], 0, 0, &[10,20,30,255]);
+    record(&mut assets, 3, 11, 0x41, [4,1], 4, 4, &[128,128,128,128]);
+    record(&mut assets, 3, 11, 0x5d0, [4,1], 4, 4, &[64,64,64,64]);
+    let mut bytes = vec![0; BYTES];
+    render(&mut bytes, &[DrawCommand::Text { origin: point(8,0), text: TextRef::Inline("\u{5d0}A"), font: FontId(11), colour: colour(255) }], &pack(&assets)).unwrap();
+    for x in 0..4 { assert_eq!(pixel(&bytes,x,0), &[10,20,30,128]); }
+    for x in 4..8 { assert_eq!(pixel(&bytes,x,0), &[10,20,30,64]); }
+    assert_eq!(pixel(&bytes,8,0), &[0,0,0,0]);
+}
+
+#[test]
+fn thai_mark_origin_applies_the_font_left_shift_once() {
+    // THAI_SHIFT 1 at 0x1190d18 field 4; stock computes x = pen + offset.x - mark
+    // advance once at 0x118a33c..0x118a350.
+    let bdf = b"STARTFONT 2.1\r\nFONT thai-shift\r\nSIZE 8 75 75\r\nFONTBOUNDINGBOX 1 1 0 -1\r\nSTARTPROPERTIES 2\r\nTHAI_TOP 0\r\nTHAI_SHIFT 1\r\nENDPROPERTIES\r\nCHARS 2\r\nSTARTCHAR base\r\nENCODING 3611\r\nDWIDTH 4 0\r\nBBX 1 1 0 -1\r\nBITMAP\r\n80\r\nENDCHAR\r\nSTARTCHAR mark\r\nENCODING 3656\r\nDWIDTH 2 0\r\nBBX 1 1 0 -1\r\nBITMAP\r\n80\r\nENDCHAR\r\nENDFONT\r\n";
+    let mut pack_bytes = header(1);
+    record(&mut pack_bytes, 1, 7, 0, [0,0], 0, 0, &[10,20,30,255]);
+    let pack = pack(&pack_bytes);
+    let mut decoded = [0u8; 16];
+    let mut bindings = [FontBinding::new(FontId(11), bdf, bitmap_font_config(CoverageEncoding::PackedMsb1), FontWorkspace::bitmap(&mut decoded)).unwrap()];
+    let mut resources = RasterResources::new(&pack, FontRegistry::Engines(&mut bindings), &[], None).unwrap();
+    let commands = [DrawCommand::Text { origin: point(0,0), text: TextRef::Inline("\u{0e1b}\u{0e48}"), font: FontId(11), colour: colour(255) }];
+    let mut bytes = vec![0; BYTES];
+    Surface::new(SurfaceId::Osd, &mut bytes).unwrap().render(DrawList::new(SurfaceId::Osd, &commands), &mut resources).unwrap();
+    assert_eq!(pixel(&bytes,0,0), &[10,20,30,255]);
+    assert_eq!(pixel(&bytes,1,0), &[10,20,30,255]);
+    assert_eq!(pixel(&bytes,2,0), &[0,0,0,0]);
+    assert_eq!(pixel(&bytes,4,0), &[0,0,0,0]);
+}
+
+#[test]
+fn thai_base_before_a_below_vowel_clears_the_font_clip_rectangle() {
+    // THAI_BELOW 2 is the clip descent; the clear rectangle starts at
+    // height - below and is advance + right overhang wide (0x118a33c..).
+    let bdf = b"STARTFONT 2.1\r\nFONT thai-clip\r\nSIZE 8 75 75\r\nFONTBOUNDINGBOX 3 3 0 -3\r\nSTARTPROPERTIES 2\r\nTHAI_BELOW 2\r\nTHAI_SHIFT 0\r\nENDPROPERTIES\r\nCHARS 2\r\nSTARTCHAR base\r\nENCODING 3597\r\nDWIDTH 1 0\r\nBBX 3 3 0 -3\r\nBITMAP\r\nE0\r\nE0\r\nE0\r\nENDCHAR\r\nSTARTCHAR mark\r\nENCODING 3640\r\nDWIDTH 2 0\r\nBBX 1 1 0 -1\r\nBITMAP\r\n80\r\nENDCHAR\r\nENDFONT\r\n";
+    let mut pack_bytes = header(1);
+    record(&mut pack_bytes, 1, 7, 0, [0,0], 0, 0, &[10,20,30,255]);
+    let pack = pack(&pack_bytes);
+    let mut decoded = [0u8; 16];
+    let mut bindings = [FontBinding::new(FontId(11), bdf, bitmap_font_config(CoverageEncoding::PackedMsb1), FontWorkspace::bitmap(&mut decoded)).unwrap()];
+    let mut resources = RasterResources::new(&pack, FontRegistry::Engines(&mut bindings), &[], None).unwrap();
+    let commands = [DrawCommand::Text { origin: point(0,0), text: TextRef::Inline("\u{0e0d}\u{0e38}"), font: FontId(11), colour: colour(255) }];
+    let mut bytes = vec![0; BYTES];
+    Surface::new(SurfaceId::Osd, &mut bytes).unwrap().render(DrawList::new(SurfaceId::Osd, &commands), &mut resources).unwrap();
+    for x in 0..3 { assert_eq!(pixel(&bytes,x,0), &[10,20,30,255]); }
+    for x in 0..3 { assert_eq!(pixel(&bytes,x,1), &[0,0,0,0]); }
+    assert_eq!(pixel(&bytes,3,0), &[0,0,0,0]);
 }
 
 fn gvff_rectangle_fixture() -> Vec<u8> {
