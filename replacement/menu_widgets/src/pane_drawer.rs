@@ -74,7 +74,11 @@ fn signed(value: u8) -> i32 { value as i8 as i32 }
 fn hook_record(hook: &mut HookRecord, node: NodeId, child: u32, side: &[u32; 7], x: i32, y: u8, selected: bool, resource: ResourceId) {
     hook.0[0] = node.0;
     hook.0[1] = child;
-    hook.0[3..8].copy_from_slice(&side[..5]);
+    hook.0[3] = side[0];
+    hook.0[4] = side[1];
+    hook.0[5] = side[2];
+    hook.0[6] = side[3];
+    hook.0[7] = side[4];
     hook.0[8] = x as u32;
     hook.0[9] = signed(y) as u32;
     hook.0[11] = selected as u32;
@@ -310,8 +314,8 @@ fn chrome<S: DrawServices>(services: &mut S, state: &PaneState, mode: DrawMode) 
 
 #[cfg(test)]
 mod tests {
-    use super::word;
-    use crate::render_commands::DrawReport;
+    use super::{hook_record, word, HookRecord};
+    use crate::render_commands::{DrawReport, NodeId, ResourceId};
 
     #[test]
     fn word_refuses_an_out_of_range_offset() {
@@ -319,5 +323,12 @@ mod tests {
         assert_eq!(word(&report, 0x41), None);
         assert_eq!(word(&report, usize::MAX), None);
         assert_eq!(word(&report, 0x40), Some(0));
+    }
+
+    #[test]
+    fn hook_record_writes_the_five_side_words_in_order() {
+        let mut hook = HookRecord([0xffff_ffff; 13]);
+        hook_record(&mut hook, NodeId(7), 9, &[1, 2, 3, 4, 5, 6, 7], -2, 0xfe, true, ResourceId(0x11));
+        assert_eq!(hook.0, [7, 9, 0xffff_ffff, 1, 2, 3, 4, 5, 0xffff_fffe, 0xffff_fffe, 0xffff_ffff, 1, 0x11]);
     }
 }

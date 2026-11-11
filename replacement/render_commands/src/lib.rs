@@ -110,7 +110,7 @@ impl DrawReport {
     pub fn put_word(&mut self, offset: usize, value: u32) -> Result<(), producer::ProducerError> {
         let end = offset.checked_add(4).ok_or(producer::ProducerError::ReportRange)?;
         let target = self.0.get_mut(offset..end).ok_or(producer::ProducerError::ReportRange)?;
-        target.copy_from_slice(&value.to_le_bytes());
+        for (slot, byte) in target.iter_mut().zip(value.to_le_bytes()) { *slot = byte; }
         Ok(())
     }
 }
