@@ -4,6 +4,12 @@ scanout_leave_critical = 0x007236b0;
 scanout_yield = 0x00723ce8;
 scanout_irq_configure = 0x0064e918;
 scanout_irq_release = 0x0064eb20;
+/* The completion queue's critical section and the AVout request lock are the
+   same stock save/restore primitives the standalone ABI already names. */
+xm1_power_interrupt_lock = 0x007235d8;
+xm1_power_interrupt_unlock = 0x007236b0;
+xm1_power_save_irq = 0x00042574;
+xm1_power_restore_irq = 0x0004257c;
 SECTIONS {
   . = 0x02000000;
   .text : {
@@ -37,6 +43,23 @@ SECTIONS {
     KEEP(*(.text.xm1_scanout_mode_scale))
     KEEP(*(.text.xm1_scanout_mode_window_size))
     KEEP(*(.text.xm1_scanout_mode_colour_packet))
+    KEEP(*(.text.xm1_scanout_completion_event))
+    KEEP(*(.text.xm1_scanout_completion_packet))
+    KEEP(*(.text.xm1_scanout_mode_completion))
+    KEEP(*(.text.xm1_scanout_mode_commit))
+    KEEP(*(.text.xm1_scanout_operation_acquire))
+    KEEP(*(.text.xm1_scanout_operation_lease))
+    KEEP(*(.text.xm1_scanout_panel_device_configuration))
+    KEEP(*(.text.xm1_scanout_panel_auxiliary_frontend))
+    KEEP(*(.text.xm1_scanout_panel_byte_frontend))
+    KEEP(*(.text.xm1_scanout_panel_initial_live_configuration))
+    KEEP(*(.text.xm1_scanout_panel_formatter_configure))
+    KEEP(*(.text.xm1_scanout_panel_formatter_set_enabled))
+    KEEP(*(.text.xm1_scanout_mode_select))
+    KEEP(*(.text.xm1_scanout_avout_request))
+    KEEP(*(.text.xm1_scanout_panel_device_set_transition))
+    KEEP(*(.text.xm1_scanout_timing_configuration))
+    KEEP(*(.text.xm1_scanout_timing_live))
     *(.text .text.*)
   }
   .rodata : { *(.rodata .rodata.*) }

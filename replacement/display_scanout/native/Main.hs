@@ -80,7 +80,7 @@ qbank e = 0xfff6a000+e*0x3000
 fbank e = 0xfff69000+e*0x3000
 
 regions :: [(String,Word32,Int)]
-regions = [("globals",0x916600,0x20),("scheduler",0x917c00,0x400),("timing",0x9429f0,0xc0),("runtime",0x9553c0,0x700),("mode",0x955b00,0x60),("shadow",0x96b9b0,0x360),("cache-pointer",0x96ca50,4),("cache",0x4000000,0x1100),("packet",0x200000,0x100),("journal",0x210000,0x1000)] ++ [("registers-"++show e,0xfff69000+e*0x3000,0x3000) | e <- [0,1]]
+regions = [("globals",0x916600,0x20),("scheduler",0x917c00,0x400),("timing",0x9429f0,0xc0),("runtime",0x9553c0,0x700),("mode",0x955b00,0x60),("shadow",0x96b9b0,0x360),("backend",0x96bd10,0x300),("cache-pointer",0x96ca50,4),("clock-state",0x974310,0x100),("cache",0x4000000,0x1100),("packet",0x200000,0x100),("journal",0x210000,0x1000),("avout-request",0x409c24c0,0x10)] ++ [("registers-"++show e,0xfff69000+e*0x3000,0x3000) | e <- [0,1]] ++ [("clock-device",0xfff68000,0x20),("avout-control",0xfff88040,0x10)]
 
 seed :: Memory
 seed = changes ([(0x96ca50,0x4000000),(0x210f04,0x7a11),(0x9553d8,0x51c002),(0x955430,0x51c102)]++[(0x210c00+n*16,0x200080) | n <- [1..6]]++[(0x955b00+n*4,0x4d000000+n*0x10101) | n <- [0..0x17]]) $ put 0x4001080 (B.pack [0,1,0x23,3]) $ foldr initializeInputs (foldr initialize empty regions) [0,1]
@@ -89,7 +89,12 @@ seed = changes ([(0x96ca50,0x4000000),(0x210f04,0x7a11),(0x9553d8,0x51c002),(0x9
     initializeInputs e=put (ibase e) (assemble [0xb6420000+e*0x10101+n*0x10203 | n <- [0..0x23c `div` 4-1]])
 
 data Root = Item | Range | Enable | Options | Blank | Flush | Defaults | Stage | Immediate | Reset | Wait | Formatter | Strobe | Register | IsrZero | IsrOne | Commit | CommitZero | CommitOne | Capture
-  | EngineInitialize | OperationRelease | ModeWindow | ModeBacking | ModeEnabled | ModeRange | ModeColour | ModeScale | ModeWindowSize | ModeColourPacket deriving (Eq,Show,Enum,Bounded)
+  | EngineInitialize | OperationRelease | ModeWindow | ModeBacking | ModeEnabled | ModeRange | ModeColour | ModeScale | ModeWindowSize | ModeColourPacket
+  | CompletionEvent | CompletionPacket | ModeCompletion | ModeCommit
+  | OperationAcquire | OperationLease | PanelDeviceConfiguration
+  | PanelAuxiliaryFrontend | PanelByteFrontend | PanelInitialLiveConfiguration
+  | PanelFormatterConfigure | PanelFormatterSetEnabled | ModeSelect | AvoutRequest
+  | PanelDeviceSetTransition | TimingConfiguration | TimingLive deriving (Eq,Show,Enum,Bounded)
 
 -- The panel-feature build is a second artifact; the standalone firmware ELF does not export these.
 data ElfRole = MainElf | PanelElf deriving (Eq,Show)
@@ -99,6 +104,12 @@ rootRole op = case op of
   EngineInitialize -> PanelElf; OperationRelease -> PanelElf
   ModeWindow -> PanelElf; ModeBacking -> PanelElf; ModeEnabled -> PanelElf; ModeRange -> PanelElf
   ModeColour -> PanelElf; ModeScale -> PanelElf; ModeWindowSize -> PanelElf; ModeColourPacket -> PanelElf
+  CompletionEvent -> PanelElf; CompletionPacket -> PanelElf; ModeCompletion -> PanelElf; ModeCommit -> PanelElf
+  OperationAcquire -> PanelElf; OperationLease -> PanelElf; PanelDeviceConfiguration -> PanelElf
+  PanelAuxiliaryFrontend -> PanelElf; PanelByteFrontend -> PanelElf; PanelInitialLiveConfiguration -> PanelElf
+  PanelFormatterConfigure -> PanelElf; PanelFormatterSetEnabled -> PanelElf; ModeSelect -> PanelElf
+  AvoutRequest -> PanelElf; PanelDeviceSetTransition -> PanelElf
+  TimingConfiguration -> PanelElf; TimingLive -> PanelElf
   _ -> MainElf
 
 root :: Root -> (String,Word32)
@@ -133,6 +144,23 @@ root op = case op of
   ModeScale -> ("mode_scale",0x6d0000)
   ModeWindowSize -> ("mode_window_size",0x6cfe14)
   ModeColourPacket -> ("mode_colour_packet",0x6d0244)
+  CompletionEvent -> ("completion_event",0x6c8f38)
+  CompletionPacket -> ("completion_packet",0x6c8fac)
+  ModeCompletion -> ("mode_completion",0x6cfd3c)
+  ModeCommit -> ("mode_commit",0x6cfcf4)
+  OperationAcquire -> ("operation_acquire",0x6c9214)
+  OperationLease -> ("operation_lease",0x6d16c8)
+  PanelDeviceConfiguration -> ("panel_device_configuration",0x6d42b8)
+  PanelAuxiliaryFrontend -> ("panel_auxiliary_frontend",0x6d4068)
+  PanelByteFrontend -> ("panel_byte_frontend",0x6d4050)
+  PanelInitialLiveConfiguration -> ("panel_initial_live_configuration",0x6ce460)
+  PanelFormatterConfigure -> ("panel_formatter_configure",0x6ce0d8)
+  PanelFormatterSetEnabled -> ("panel_formatter_set_enabled",0x6ce1dc)
+  ModeSelect -> ("mode_select",0x6d1520)
+  AvoutRequest -> ("avout_request",0x649ab0)
+  PanelDeviceSetTransition -> ("panel_device_set_transition",0x6d4480)
+  TimingConfiguration -> ("timing_configuration",0x6c8684)
+  TimingLive -> ("timing_live",0x6c86e8)
 
 data Scenario = Scenario
   { label :: String, operation :: Root, arguments :: [Word32], initial :: Memory
@@ -216,8 +244,12 @@ defaultsCase e flags = scenario (key "defaults" [e,flags]) Defaults [e,0x200000]
     before=byte (tbase e+0x1c) flags $ word 0x200000 old calibrationSeed
 
 -- Selector words are read from authenticated image 4, not the candidate's table.
-stageCase :: B.ByteString -> Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> Scenario
-stageCase image e mode route rate flags = scenario (key "stage" [e,mode,route,rate,flags]) Stage [e,0x200000] before after Nothing
+stageBefore :: Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> Memory
+stageBefore e mode route rate flags = byte (t+0x1c) flags $ changes ([(tbase other,0xabc00000+other) | other <- [0,1]]++[(t+a,0xfedcba98+a*0x10203) | a <- [4,8..0x54]]) $ put 0x200000 (assemble [mode,route,rate]) calibrationSeed
+  where t=tbase e
+
+stageRegisters :: B.ByteString -> Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> [Word32]
+stageRegisters image mode route rate flags old4c old50 = [control,dimensions,modePulse,modeInterval,if direct then 0 else pulse (0x828918+row*24),if direct then 0 else pairAt (0x828a18+row*16) `shiftL` 16 .|. pairAt (0x828a20+row*16),delay,output (if direct then 0x828ae8+mode*12 else 0x828c70+row*12),interval (if direct then 0x828bd0+mode*16 else 0x828a58+row*16),if direct then 0 else output (0x828d68+row*12),if direct then 0 else interval (0x828d28+row*16),(old4c .&. complement 0x1fff) .|. (adjusted-adjusted `div` 30),defaultWord flags old50,adjustment]
   where
     rom a=readWordAt image (fromIntegral (a-0x61c400))
     c a=getByte calibrationSeed (0x4000000+a)
@@ -239,10 +271,16 @@ stageCase image e mode route rate flags = scenario (key "stage" [e,mode,route,ra
     delay=if mode==1 then c 0x106d else if mode==0 || mode==2 then c 0x106c else 0
     adjustment=if direct then 0 else pairAt (0x828b60+row*24) .|. (b (0x828b68+row*24) .&. 1) `shiftL` 16 .|. ((c (rom (0x828b6c+row*24))*256+c (rom (0x828b70+row*24))) .&. 0x1ff) `shiftL` 17 .|. (b (0x828b74+row*24) .&. 1) `shiftL` 26
     adjusted=((dimensions .&. 0xfff) `div` 2-(if mode `elem` [1,4,6] then 7 else 9)) .&. 0x1fff
-    t=tbase e
-    before=byte (t+0x1c) flags $ changes ([(tbase other,0xabc00000+other) | other <- [0,1]]++[(t+a,0xfedcba98+a*0x10203) | a <- [4,8..0x54]]) $ put 0x200000 (assemble [mode,route,rate]) calibrationSeed
-    registers=[control,dimensions,modePulse,modeInterval,if direct then 0 else pulse (0x828918+row*24),if direct then 0 else pairAt (0x828a18+row*16) `shiftL` 16 .|. pairAt (0x828a20+row*16),delay,output (if direct then 0x828ae8+mode*12 else 0x828c70+row*12),interval (if direct then 0x828bd0+mode*16 else 0x828a58+row*16),if direct then 0 else output (0x828d68+row*12),if direct then 0 else interval (0x828d28+row*16),(getWord before (t+0x4c) .&. complement 0x1fff) .|. (adjusted-adjusted `div` 30),defaultWord flags (getWord before (t+0x50)),adjustment]
-    after=changes ([(tbase other,e) | other <- [0,1]]++[(t+4,mode),(t+8,route),(t+12,rate),(t+0x10,1),(0x200008,normalized)]++zip [t+0x20,t+0x24..t+0x54] registers) before
+
+stageStaged :: Word32 -> Word32 -> Word32 -> Word32 -> [Word32] -> Memory -> Memory
+stageStaged e mode route rate registers before = changes ([(tbase other,e) | other <- [0,1]]++[(t+4,mode),(t+8,route),(t+12,rate),(t+0x10,1),(0x200008,normalized)]++zip [t+0x20,t+0x24..t+0x54] registers) before
+  where t=tbase e; normalized=if rate==0 || rate==3 then 2 else rate
+
+stageCase :: B.ByteString -> Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> Scenario
+stageCase image e mode route rate flags = scenario (key "stage" [e,mode,route,rate,flags]) Stage [e,0x200000] before after Nothing
+  where
+    before=stageBefore e mode route rate flags
+    after=stageStaged e mode route rate (stageRegisters image mode route rate flags (getWord before (tbase e+0x4c)) (getWord before (tbase e+0x50))) before
 
 flushCase :: Word32 -> Word32 -> Word32 -> Bool -> Bool -> Scenario
 flushCase e dirty force equal zero = (scenario (key "flush" [e,dirty,force,if equal then 1 else 0,if zero then 1 else 0]) Flush [e] before after (Just rc)) {expectedWrites=Just writes}
@@ -418,7 +456,7 @@ captureCase e first changed failure = scenario (key (if first then "capture-rese
 
 services :: [(Word32,B.ByteString)]
 services =
-  [(0x7235d8,assemble (mov 0 0x13++[0xe12fff1e])),(0x7236b0,assemble [0xe12fff1e]),(0x723ce8,assemble (mov 12 0x211000++[0xe59c3000,0xe2833001,0xe58c3000,0xe58c0004,0xe12fff1e]))
+  [(0x7235d8,assemble (mov 12 0x211100++[0xe59c3000,0xe2833001,0xe58c3000]++mov 0 0x13++[0xe12fff1e])),(0x7236b0,assemble (mov 12 0x211104++[0xe59c3000,0xe2833001,0xe58c3000,0xe12fff1e])),(0x42574,assemble [0xe3a00013,0xe12fff1e]),(0x4257c,assemble [0xe12fff1e]),(0x723ce8,assemble (mov 12 0x211000++[0xe59c3000,0xe2833001,0xe58c3000,0xe58c0004,0xe12fff1e]))
   ,(0x69f8fc,assemble (mov 12 0x4000000++[0xe7dc0000,0xe12fff1e]))
   ,(0x64e918,assemble (mov 12 0x210100++[0xe59c3000,0xe2833001,0xe58c3000,0xe78c0103,0xe58c1304]++mov 12 0x210f00++[0xe59c3004,0xe5823000,0xe59c0000,0xe12fff1e]))
   ,(0x64eb20,assemble (mov 12 0x210200++[0xe59c3000,0xe2833001,0xe58c3000,0xe78c0103]++mov 12 0x210f08++[0xe59c0000,0xe12fff1e]))]
@@ -481,10 +519,15 @@ makeSpec role entry code functions c = CaseSpec
       ++[(0x4d978,divideBoundary) | operation c==ModeScale]
 
 regionLayout :: Scenario -> [(String,Word32,Int)]
-regionLayout c=[(name,a,if name=="cache" then 0x420000 else n) | (name,a,n) <- regions,name/="cache" || usesCalibration c,a<0xfff00000 || paired c && operation c `notElem` [Defaults,Stage]]++[("yield-receipt",0x211000,8) | operation c==Wait]
+regionLayout c=[(name,a,if name=="cache" then 0x420000 else n) | (name,a,n) <- regions,name/="cache" || usesCalibration c,a<0xfff00000 || paired c && operation c `notElem` [Defaults,Stage]]++[("yield-receipt",0x211000,8) | operation c==Wait]++[("critical",0x211100,8) | operation c `elem` [CompletionEvent,CompletionPacket,ModeCompletion,ModeCommit,AvoutRequest]]
 
 usesCalibration :: Scenario -> Bool
-usesCalibration c=paired c && operation c `elem` [Immediate,Defaults,Stage,EngineInitialize]
+usesCalibration c=paired c && (operation c `elem` [Immediate,Defaults,Stage,EngineInitialize] || (operation c==PanelDeviceConfiguration && deviceConfigurationPrograms c))
+
+deviceConfigurationPrograms :: Scenario -> Bool
+deviceConfigurationPrograms c=case arguments c of
+  d:f:s:t:_ -> d==3 && (f/=getWord (initial c) 0x96bd88 || s/=getWord (initial c) 0x96bf34 || t/=getWord (initial c) 0x96bf38)
+  _ -> False
 
 caller :: Scenario -> Word32 -> [CaseRegion] -> [(GuestAddress,Word32)] -> (Word32,[CaseRegion],[(GuestAddress,Word32)])
 caller c entry code functions
@@ -511,13 +554,19 @@ ownedScenario names c = do
   pure c {expected=foldr relocate (expected c) [0x210404,0x917eec]}
 
 needsResetReceipt :: Scenario -> Bool
-needsResetReceipt c=operation c==Capture && case arguments c of e:_ -> getByte (initial c) (rbase e+0x54)==0; _ -> False
+needsResetReceipt c=case operation c of
+  Capture -> case arguments c of e:_ -> getByte (initial c) (rbase e+0x54)==0; _ -> False
+  OperationAcquire -> case arguments c of e:_ -> initializedWithoutLease e; _ -> False
+  OperationLease -> case arguments c of v:_ -> v/=1 && initializedWithoutLease (selectedEngine (initial c)); _ -> False
+  _ -> False
+  where
+    initializedWithoutLease e=getByte (initial c) (rbase e+0x54)/=0 && getByte (initial c) (rbase e+0x55)==0
 
 mmioWrites :: NativeObservation -> Maybe [(Word32,Word32)]
 mmioWrites observation = do
   ordered <- nativeKernel observation >>= observedOrder
   fmap concat $ forM ordered $ \event -> case event of
-    OrderedWrite w (WriteValue value) | guestAddress (writeAddress w)>=0xfff69000 && guestAddress (writeAddress w)<0xfff6f000 ->
+    OrderedWrite w (WriteValue value) | (guestAddress (writeAddress w)>=0xfff69000 && guestAddress (writeAddress w)<0xfff6f000) || guestAddress (writeAddress w)==0xfff88048 ->
       if writeBytes (writeLength w)==4 then Just [(fromIntegral (guestAddress (writeAddress w)),fromIntegral value)] else Nothing
     _ -> Just []
 
@@ -706,6 +755,234 @@ releaseCase e initialized count = scenario (key "operation-release" [e,initializ
        | otherwise=negate 12
     after=if initialized==0 then before else byte (rbase e+0x55) (count-1) before
 
+-- 0x6c8f38/0x6c8fac and their mode wrappers: RAM slots behind the stock critical section.
+criticalCounts :: Word32 -> Word32 -> Memory -> Memory
+criticalCounts enters leaves = changes [(0x211100,enters),(0x211104,leaves)]
+
+completionSlot :: Word32 -> Word32 -> Word32
+completionSlot e index = rbase e+0x24+index*4
+
+packetSlot :: Word32 -> Word32 -> Word32
+packetSlot e index = rbase e+0x3c+index*4
+
+completionEventCases :: [Scenario]
+completionEventCases = concat
+  [ [completionEventCase e initialized  ev occupied deferral cbValue
+    | initialized <- [0,1], occupied <- [0,1], deferral <- [0,1], cbValue <- [0,0x230500]]
+  | e <- [0,1], ev <- [0,6] ]
+  ++ [completionEventCase e initialized ev 0 0 0x230500 | e <- [0,1], initialized <- [0,1], ev <- [7,0xffffffff]]
+
+completionEventCase :: Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> Scenario
+completionEventCase e initialized ev occupied deferral cbValue =
+  scenario (key "completion-event" [e,initialized,ev,occupied,deferral,cbValue]) CompletionEvent [e,ev,cbValue] before after (Just rc)
+  where
+    r=rbase e
+    target=completionSlot e ev
+    before=byte (r+0x54) initialized $ word (r+0x10) deferral $ word (r+0xc) 0x55
+      $ changes [(completionSlot e i, if ev<=6 && i==ev then (if occupied==1 then 0x111 else 0) else 0x900+i) | i <- [0..6]] seed
+    valid=initialized/=0 && ev<=6
+    after | not valid = before
+          | otherwise = criticalCounts 1 1 $ (if deferral==0 then word (r+0xc) 1 else id) $ (if occupied==0 then word target cbValue else id) before
+    rc | initialized==0 = negate 10 | ev>6 = negate 30 | otherwise = 0
+
+completionPacketCases :: [Scenario]
+completionPacketCases = [completionPacketCase e initialized occupiedMask deferral nullPacket | e <- [0,1], initialized <- [0,1], occupiedMask <- [0,0x05,0x21], deferral <- [0,1], nullPacket <- [False,True]]
+
+completionPacketCase :: Word32 -> Word32 -> Word32 -> Word32 -> Bool -> Scenario
+completionPacketCase e initialized occupiedMask deferral nullPacket =
+  scenario (key "completion-packet" [e,initialized,occupiedMask,deferral,if nullPacket then 1 else 0]) CompletionPacket [e,ptr] before after (Just rc)
+  where
+    r=rbase e
+    ptr=if nullPacket then 0 else 0x200000
+    values=[0x230500+fromIntegral i*0x100 | i <- [0::Int ..5]]
+    occupied i=(occupiedMask `shiftR` i) .&. 1 == 1
+    before=byte (r+0x54) initialized $ word (r+0x10) deferral $ put 0x200000 (assemble values)
+      $ changes [(packetSlot e (fromIntegral i), if occupied i then 0x700+fromIntegral i else 0) | i <- [0::Int ..5]] seed
+    filled=if nullPacket then id else \m0 -> foldl (\m i -> if occupied i then m else word (packetSlot e (fromIntegral i)) (values!!i) m) m0 [0::Int ..5]
+    after | initialized==0 = before
+          | otherwise = criticalCounts 1 1 $ (if deferral==0 then word (r+0xc) 1 else id) (filled before)
+    rc=if initialized==0 then negate 10 else 0
+
+modeWrapperCases :: [Scenario]
+modeWrapperCases = [modeWrapperCase op forced mode initialized occupied deferral | op <- [ModeCompletion,ModeCommit], forced <- [0,1], mode <- [0,1], initialized <- [0,1], occupied <- [0,1], deferral <- [0,1]]
+
+modeWrapperCase :: Root -> Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> Scenario
+modeWrapperCase op forced mode initialized occupied deferral =
+  scenario (key (if op==ModeCompletion then "mode-completion" else "mode-commit") [forced,mode,initialized,occupied,deferral]) op [0x230500] before after (Just rc)
+  where
+    before0=changes [(0x955b20,forced),(0x955b08,mode)] seed
+    e=selectedEngine before0
+    r=rbase e
+    ev=if op==ModeCompletion then 2 else 0
+    target=completionSlot e ev
+    before=byte (r+0x54) initialized $ word (r+0x10) deferral $ word (r+0xc) 0x55
+      $ changes [(completionSlot e i, if i==ev then (if occupied==1 then 0x111 else 0) else 0x900+i) | i <- [0..6]] before0
+    after | initialized==0 = before
+          | otherwise = criticalCounts 1 1 $ (if deferral==0 then word (r+0xc) 1 else id) $ (if occupied==0 then word target 0x230500 else id) before
+    rc=if initialized==0 then negate 10 else 0
+
+-- 0x6c9214/0x6d16c8: the zero-count acquire reaches reset; the reset entry is
+-- replaced by a CPU receipt so the case establishes the call and the lease
+-- update only, not reset completion.
+operationAcquireCases :: [Scenario]
+operationAcquireCases = [operationAcquireCase e initialized count | e <- [0,1], initialized <- [0,1], count <- [0,1,2,0xff]]
+
+operationAcquireCase :: Word32 -> Word32 -> Word32 -> Scenario
+operationAcquireCase e initialized count =
+  scenario (key "operation-acquire" [e,initialized,count]) OperationAcquire [e] before after (Just rc)
+  where
+    r=rbase e
+    before=byte (r+0x55) count $ byte (r+0x54) initialized seed
+    rc | initialized==0 = negate 10 | count/=0 = negate 12 | otherwise = 0
+    after | initialized==0 = before
+          | count/=0 = byte (r+0x55) (count+1) before
+          | otherwise = changes [(0x210300,1),(0x210304,e)] $ byte (r+0x55) 1 before
+
+operationLeaseCases :: [Scenario]
+operationLeaseCases = [operationLeaseCase forced mode value initialized count | (forced,mode) <- [(0,0),(0,1)], value <- [0,1,2], initialized <- [0,1], count <- [0,1,2]]
+
+operationLeaseCase :: Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> Scenario
+operationLeaseCase forced mode value initialized count =
+  scenario (key "operation-lease" [forced,mode,value,initialized,count]) OperationLease [value] before after (Just rc)
+  where
+    base=changes [(0x955b20,forced),(0x955b08,mode)] seed
+    e=selectedEngine base
+    r=rbase e
+    before=byte (r+0x55) count $ byte (r+0x54) initialized base
+    (rc,after)
+      | initialized==0 = (negate 10,before)
+      | value==1 = let next=count-1 in (if next==0 then 0 else negate 12, byte (r+0x55) next before)
+      | count/=0 = (negate 12, byte (r+0x55) (count+1) before)
+      | otherwise = (0, changes [(0x210300,1),(0x210304,e)] $ byte (r+0x55) 1 before)
+
+panelLeafCases :: String -> Root -> [Scenario]
+panelLeafCases name op = [scenario (key name [a,b]) op [a,b] seed seed (Just 0) | (a,b) <- [(0,0),(0x1234,0xabcd),(0xffff,1),(0x8000,0x7fff)]]
+
+panelAuxiliaryCases :: [Scenario]
+panelAuxiliaryCases = panelLeafCases "panel-auxiliary-frontend" PanelAuxiliaryFrontend
+
+panelByteCases :: [Scenario]
+panelByteCases = panelLeafCases "panel-byte-frontend" PanelByteFrontend
+
+-- 0x6d42b8: devices outside 2/3 store the three hardware cells; device 3 also
+-- programs the panel level from the calibration cache.  The cache is flat here
+-- so the level oracle does not restate the selector table.
+flatCalibration :: Memory
+flatCalibration = put 0x4000000 (B.replicate 0x1100 0x5a) calibrationSeed
+
+panelDeviceConfigurationCases :: [Scenario]
+panelDeviceConfigurationCases =
+  [panelDeviceConfigurationCase dev fmt sec third fmt sec third | dev <- [0,1,4,5,11], (fmt,sec,third) <- [(0x11,0x22,0x33),(0,0,0)]]
+  ++ [panelDeviceConfigurationCase 2 0x11 0x22 0x33 0x11 0x22 0x33, panelDeviceConfigurationCase 2 0x11 0x22 0x33 1 2 3]
+  ++ [panelDeviceConfigurationCase 3 0 0 0 0 0 0, panelDeviceConfigurationCase 3 0 0 0 1 2 3]
+  ++ [panelDeviceConfigurationCase 12 0 0 0 0 0 0]
+
+panelDeviceConfigurationCase :: Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> Scenario
+panelDeviceConfigurationCase dev fmt sec third oldFmt oldSec oldThird =
+  (scenario (key "panel-device-configuration" [dev,fmt,sec,third,oldFmt,oldSec,oldThird]) PanelDeviceConfiguration [dev,fmt,sec,third] before after (Just rc)) {held=isHeld}
+  where
+    before=changes [(0x96bd88,oldFmt),(0x96bf34,oldSec),(0x96bf38,oldThird),(0x96bd90,0),(0x96bd78,0),(0x96bd98,0),(0x96bf40,0),(0x96bf48,0x1111),(0x9743e8,0)] flatCalibration
+    changed=fmt/=oldFmt || sec/=oldSec || third/=oldThird
+    cells=changes [(0x96bd88,fmt),(0x96bf34,sec),(0x96bf38,third)] before
+    isHeld=dev==3 && changed && fmt==13
+    programmed=if dev==3 && changed && fmt/=13 then half 0x96bf48 (getByte flatCalibration 0x4000e06) cells else cells
+    rc=if dev>11 then negate 30 else 0
+    after | dev>11 = before | otherwise = programmed
+
+panelDeviceSetTransitionCases :: [Scenario]
+panelDeviceSetTransitionCases = [panelDeviceSetTransitionCase device value | device <- [0,11,12,0xffffffff], value <- [0,0x12345678]]
+
+panelDeviceSetTransitionCase :: Word32 -> Word32 -> Scenario
+panelDeviceSetTransitionCase device value =
+  scenario (key "panel-device-set-transition" [device,value]) PanelDeviceSetTransition [device,value] before after (Just rc)
+  where
+    before=changes [(0x96bf30,0x5a5a5a5a)] seed
+    rc=if device<=11 then 0 else negate 30
+    after=if device<=11 then word 0x96bf30 value before else before
+
+panelInitialLiveConfigurationCases :: [Scenario]
+panelInitialLiveConfigurationCases = [panelInitialLiveConfigurationCase mode selector flipValue | mode <- [0,1,2,3,4], selector <- [0,3,4], flipValue <- [0,1,2]]
+
+panelInitialLiveConfigurationCase :: Word32 -> Word32 -> Word32 -> Scenario
+panelInitialLiveConfigurationCase mode selector flipValue =
+  scenario (key "panel-initial-live-configuration" [mode,selector,flipValue]) PanelInitialLiveConfiguration [0,mode,selector,flipValue] before after (Just rc)
+  where
+    base=changes [(0x917c10+0x14,0x111),(0x917c10+0x18,0x222),(0x917c10+0x13c,0x333),(0x917c10+0x140,0x444),(0x917c10+0x144,0x555),(0x917c10+0x148,0x666),(0x917c10+0x1c,0x777),(0x917c10+0x20,0x888),(0x917c10+0x128,0x999),(0x917c10+0x130,0)] calibrationSeed
+    before=base
+    valid=mode `elem` [0,1,3] && selector<4 && flipValue<2
+    rc=if valid then 0 else negate 30
+    after | not valid = before
+          | otherwise = changes [(0x917c10+0x140,0x333),(0x917c10+0x13c,mode),(0x917c10+0x144,selector),(0x917c10+0x148,flipValue),(0x917c10+0x18,0x111),(0x917c10+0x14,mode),(0x917c10+0x1c,selector),(0x917c10+0x20,flipValue)] before
+
+panelFormatterSetEnabledCases :: [Scenario]
+panelFormatterSetEnabledCases = [panelFormatterSetEnabledCase enabled equal | enabled <- [0,1,2], equal <- [0,1]]
+
+panelFormatterSetEnabledCase :: Word32 -> Word32 -> Scenario
+panelFormatterSetEnabledCase enabled equal =
+  scenario (key "panel-formatter-set-enabled" [enabled,equal]) PanelFormatterSetEnabled [0,enabled] before after (Just rc)
+  where
+    stored=if equal==1 then enabled else 1-enabled
+    before=changes [(0x917c10+0x138,stored),(0x917c10+0x10,stored),(0x917c10+0x128,0x999),(0x917c10+0x13c,0x333)] calibrationSeed
+    rc=if enabled>1 then negate 30 else 0
+    after | enabled>1 = before
+          | equal==1 = before
+          | otherwise = changes [(0x917c10+0x138,enabled),(0x917c10+0x10,enabled)] before
+
+panelFormatterConfigureCases :: [Scenario]
+panelFormatterConfigureCases = [panelFormatterConfigureCase e | e <- [0,1]]
+
+panelFormatterConfigureCase :: Word32 -> Scenario
+panelFormatterConfigureCase e =
+  scenario (key "panel-formatter-configure" [e]) PanelFormatterConfigure [e,0x200000] before before (Just 0)
+  where
+    packet=[0x12345678,0x9abcdef0,2,0x0f0f0f0f]
+    before=put 0x200000 (assemble packet) $ changes ([(0x917c10+e*0x128+o,packet!!i) | (i,o) <- zip [0..3] [0,4,8,12]]++[(0x917c10+e*0x128+0x10,1)]) calibrationSeed
+
+-- 0x6d1520 with the forced selector: no strobe is issued, so only RAM changes.
+modeSelectCases :: [Scenario]
+modeSelectCases = [modeSelectCase value device oldFlag stored enabledFlag | value <- [0,1,2], device <- [0,1,2,12], oldFlag <- [0,1], (stored,enabledFlag) <- [(0,0),(1,1),(0,1)]]
+
+modeSelectCase :: Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> Scenario
+modeSelectCase value device oldFlag stored enabledFlag =
+  scenario (key "mode-select" [value,device,oldFlag,stored,enabledFlag]) ModeSelect [value] before after (Just rc)
+  where
+    before=changes [(0x955b20,1),(0x955b08,0),(0x96bd74,device),(0x96bd90,oldFlag),(0x917c10+0x138,stored),(0x917c10+0x10,enabledFlag),(0x9743e8,0)] seed
+    panelOk=value<=1 && device<=11
+    enableOk=value<=1
+    enableWrites=enableOk && not (stored==value && enabledFlag==value)
+    afterPanel=if panelOk then word 0x96bd90 value before else before
+    after=if enableWrites then word (0x917c10+0x138) value $ word (0x917c10+0x10) value afterPanel else afterPanel
+    panelRc :: Word32
+    panelRc=if panelOk then 0 else negate 30
+    enableRc :: Word32
+    enableRc=if enableOk then 0 else negate 30
+    rc=panelRc .|. enableRc
+
+-- 0x649ab0: the request cell is written first; the control bit-28 change runs
+-- inside the stock save/restore pair and the ready poll runs after the restore.
+avoutRequestCases :: [Scenario]
+avoutRequestCases = [avoutRequestCase resource request otherRequest control | resource <- [0,1], request <- [0,1,2], otherRequest <- [0,1], control <- [0,0x10000000]]
+
+avoutRequestCase :: Word32 -> Word32 -> Word32 -> Word32 -> Scenario
+avoutRequestCase resource request otherRequest control =
+  (scenario (key "avout-request" [resource,request,otherRequest,control]) AvoutRequest [resource,request] before after result) {held=isHeld,expectedWrites=Just writes}
+  where
+    requests=if resource==0 then [request,otherRequest] else [otherRequest,request]
+    req0=requests!!0
+    req1=requests!!1
+    anyRequest=(req0==1 || req1==1)
+    bit28=control .&. 0x10000000 /= 0
+    change=(not bit28 && anyRequest) || (bit28 && not anyRequest)
+    isHeld=change && anyRequest
+    newControl=if anyRequest then control .|. 0x10000000 else control .&. complement 0x10000000
+    before=changes [(0x409c24c4,req0),(0x409c24c8,req1),(0xfff88048,control .&. complement 0x01000000)] seed
+    writes=if change then [(0xfff88048,newControl)] else []
+    -- 0x7235d8/0x7236b0 bracket the whole request; the inner save/restore pair
+    -- at 0x42574/0x4257c is a plain boundary and is not receipted.  A held
+    -- ready poll never reaches the final unlock.
+    after=criticalCounts 1 (if isHeld then 0 else 1) $ (if change then word 0xfff88048 newControl else id) $ word (0x409c24c4+resource*4) request before
+    result=if isHeld then Nothing else Just 0
+
 -- 0x6cbb88..0x6cbf24: every input is a calibration byte from the initialized cache.
 engineCases :: [Scenario]
 engineCases = [engineCase e route mode | e <- [0,1],route <- [0..3],mode <- [0,1,2,3,5,9]]
@@ -750,7 +1027,12 @@ engineCase e route mode = scenario (key "engine-initialize" [e,route,mode]) Engi
     after=byte (base+1) ((getByte afterCopy (base+1) .&. 0xfe) .|. (if interlaced then 1 else 0)) afterCopy
 
 caseGroups :: B.ByteString -> [(String,[Scenario])]
-caseGroups image=[("shadow",shadowCases),("timing",timingCases image),("scheduler",schedulerCases),("commit",commitCases),("capture",captureCases),("boundary",boundaryCases),("mode",modeCases),("scale",modeScaleCases),("lease",leaseCases),("engine",engineCases)]
+caseGroups image=[("shadow",shadowCases),("timing",timingCases image),("scheduler",schedulerCases),("commit",commitCases),("capture",captureCases),("boundary",boundaryCases),("mode",modeCases),("scale",modeScaleCases),("lease",leaseCases),("engine",engineCases)
+  ,("completion",completionEventCases++completionPacketCases++modeWrapperCases)
+  ,("acquire",operationAcquireCases++operationLeaseCases)
+  ,("panel",panelAuxiliaryCases++panelByteCases++panelDeviceConfigurationCases++panelDeviceSetTransitionCases++panelInitialLiveConfigurationCases++panelFormatterConfigureCases++panelFormatterSetEnabledCases)
+  ,("select",modeSelectCases),("avout",avoutRequestCases)
+  ]
 
 proofLimit :: Integer
 proofLimit=256*1024*1024
@@ -792,7 +1074,11 @@ stockExtents =
   [(0x6c6eb0,0x6ce384,"d6bb1379ce0bca32e65d08ace6c291c0657d69f616c34122ad29f4eafaddbcd1")
   ,(0x6cfe14,0x6d0f28,"9aaeaa0c847ac165e6b14375d9c6a8e138bd4967b05db6ebd52e5f7bbb046f81")
   ,(0x722054,0x722218,"3830f1e4dff71c4b79ebce225a2dede0cfa9da3a203da54df030e3d10be78c51")
-  ,(0x89bcd8,0x89be8c,"ddead5f2a3ec281f83a3a1aca971cb8ad41dd2331b012996cc9ca69b83521355")]
+  ,(0x89bcd8,0x89be8c,"ddead5f2a3ec281f83a3a1aca971cb8ad41dd2331b012996cc9ca69b83521355")
+  ,(0x6ce384,0x6cfe14,"5ec85dc2e6a84a25f46fe4bfd58149f4fa5ce93f8b31c26858458540031937df")
+  ,(0x6d0f28,0x6d5000,"01b967e76682720e7bb0ef3f927ddb7d617cbc08129f09340511e487ae2499d7")
+  ,(0x649000,0x64a000,"50fbd0014645ff75b5ba20b59e61ea7603e6ced7c7a06ce20a8645d611b71ad6")
+  ,(0x64e800,0x64e918,"ee80f751db08d4393859a78351061d438e339a50153570ba9b4f02e708ff878e")]
 
 stockFunctions :: [Word32] -> [(GuestAddress,Word32)]
 stockFunctions starts=concat [spans low high | (low,high,_) <- stockExtents]
@@ -866,7 +1152,12 @@ run action runner imagePath elfPath panelElfPath out selection = do
     ownedEntry <- maybe (fail ("missing owned export xm1_scanout_"++name)) pure (M.lookup ("xm1_scanout_"++name) names)
     ownedCase <- either fail pure (ownedScenario names c)
     stockCaseCode <- either fail pure (if needsResetReceipt c then patchCode 0x6c9160 resetBoundary stockCode else Right stockCode)
-    ownedCaseCode <- either fail pure (if needsResetReceipt c then patchCode resetEntry resetBoundary ownedCode else Right ownedCode)
+    -- The panel ABI's reset export contains the inlined poll; the capture path
+    -- reaches the generic timing::reset symbol instead.
+    resetEntryFor <- if operation c `elem` [OperationAcquire,OperationLease]
+      then maybe (fail "panel xm1_scanout_reset export missing for isolated acquire receipt") pure (M.lookup "xm1_scanout_reset" names)
+      else pure resetEntry
+    ownedCaseCode <- either fail pure (if needsResetReceipt c then patchCode resetEntryFor resetBoundary ownedCode else Right ownedCode)
     let profile=if usesCalibration c then Resource8 else DefaultMemory
         (stockCall,stockCallCode,stockCallFunctions)=caller c stockEntry stockCaseCode functions
         (ownedCall,ownedCallCode,ownedCallFunctions)=caller ownedCase ownedEntry ownedCaseCode ownedFunctions
