@@ -7,6 +7,7 @@ import qualified Xm1Viewer as Viewer
 import Xm1RamPushE2E (ModalDiagnostic (..), ModalLifetimeGuard (..), ModalOwnedPackage (..), loadModalOwnedPackage)
 import qualified Xm1RamPushE2E as E2E
 import FujiAF.RamPush (payloadPublicationCount)
+import Emulation.EmulatorSlot (pinExecutable)
 import Emulation.LiveSettings (LiveSettingChange (..), liveSettingChange, liveSettings)
 import Emulation.Sha256 (parseSha256Hex, sha256, sha256Hex)
 import Data.Aeson (Value (..), object, toJSON, (.=))
@@ -18,9 +19,10 @@ import qualified Data.ByteString.Lazy as BL
 import Data.List (partition)
 import Numeric (showHex)
 import qualified Data.Text as T
-import System.Directory (createDirectoryIfMissing, getTemporaryDirectory)
-import System.Environment (lookupEnv)
+import System.Directory (createDirectoryIfMissing, doesFileExist, getTemporaryDirectory)
+import System.Environment (getExecutablePath, lookupEnv)
 import System.FilePath ((</>))
+import System.IO (IOMode (ReadMode), withBinaryFile)
 
 check :: String -> Bool -> IO ()
 check label accepted = unless accepted (ioError (userError label))
@@ -438,6 +440,16 @@ main = do
   check "the block's last byte is compared" (fmap changedSettingAddress (liveSettingChange before last') == Just 0x0096ce25)
   check "a live-settings read of another length refuses"
     (all (either (const True) (const False) . liveSettings) [B.take 449 block, block <> B.singleton 0])
+  -- The relink broker resolves the bank archive and the relinker through
+  -- getExecutablePath ++ ".runfiles"; a pin taken from a pin must keep that tree.
+  executable <- getExecutablePath
+  let pins = scratch </> "pinned-runfiles"
+  createDirectoryIfMissing True pins
+  first <- withBinaryFile executable ReadMode $ \running -> pinExecutable pins executable running
+  second <- withBinaryFile first ReadMode $ \running -> pinExecutable pins first running
+  forM_ ["bank-modal.a", "bank-lifecycle.a", "bank-modal-lifecycle.a", "bank.a", "build-facts.txt"] $ \archive ->
+    doesFileExist (second ++ ".runfiles" </> "_main" </> "replacement" </> "bank" </> archive) >>= \present ->
+      check ("the pinned runfiles carry " ++ archive) present
 
 archiveHex :: B.ByteString -> String
 archiveHex = concatMap (\byte -> let digits = showHex byte "" in replicate (2 - length digits) '0' ++ digits) . B.unpack

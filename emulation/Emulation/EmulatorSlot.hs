@@ -7,6 +7,7 @@ module Emulation.EmulatorSlot
   , slotPolicyForClass
   , slotPolicyFromEnvironment
   , reexecInSlot
+  , pinExecutable
   , insideSlot
   ) where
 
@@ -20,7 +21,7 @@ import qualified Emulation.HostAdmission as Host
 import Emulation.HostAdmission (MemoryMax (..), MemorySwapMax (..), ResourceClass (Emulator), ScopeName, claimScopeRecord, classConcurrency, configuredMemory, lockOwnerText, memoryMaxBytes, memorySwapMaxBytes, parseScopeName, reserveMemory, userScopeAvailable)
 import qualified FujiAF.RunOutput as Run
 import FujiAF.StorageBudget (checkStorageBudget)
-import System.Directory (createDirectoryIfMissing, doesDirectoryExist, getCurrentDirectory, getHomeDirectory, listDirectory, removeFile)
+import System.Directory (canonicalizePath, createDirectoryIfMissing, doesDirectoryExist, getCurrentDirectory, getHomeDirectory, listDirectory, removeFile)
 import System.Environment (getArgs, getExecutablePath, getProgName, lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (..), exitWith)
 import System.FilePath ((</>))
@@ -258,12 +259,15 @@ pinExecutable directory executable running = do
   sweepPinned directory
   pid <- getProcessID
   let pinned = directory </> ("pin-" ++ show pid)
+  -- A process admitted under a user scope pins twice at one PID: the second pin
+  -- runs from the first, so its runfiles tree is the link this call replaces.
+  runfiles <- linkedRunfiles executable
   -- A crashed run with a reused PID can leave either path behind.
   removeIfPresent pinned
   removeIfPresent (pinned ++ ".runfiles")
   withBinaryFile pinned WriteMode $ \copy -> copyChunks running copy
   setFileMode pinned 0o700
-  linkRunfiles executable pinned
+  forM_ runfiles $ \tree -> createSymbolicLink tree (pinned ++ ".runfiles")
   pure pinned
 
 -- | On Linux the running inode through @/proc/self/exe@; elsewhere the
@@ -286,13 +290,12 @@ copyChunks source target = do
 copyChunkBytes :: Int
 copyChunkBytes = 1024 * 1024
 
--- | Bazel tools locate their data at @getExecutablePath ++ ".runfiles"@; the
--- pinned copy keeps that adjacency through a link to the original tree.
-linkRunfiles :: FilePath -> FilePath -> IO ()
-linkRunfiles executable pinned = do
+-- | Bazel tools locate their data at @getExecutablePath ++ ".runfiles"@.
+linkedRunfiles :: FilePath -> IO (Maybe FilePath)
+linkedRunfiles executable = do
   let runfiles = onDiskPath executable ++ ".runfiles"
   present <- doesDirectoryExist runfiles
-  when present (createSymbolicLink runfiles (pinned ++ ".runfiles"))
+  if present then Just <$> canonicalizePath runfiles else pure Nothing
 
 -- | @readlink(2)@ of @/proc/self/exe@ reports the kernel's last path for the
 -- inode, with @ (deleted)@ appended once a relink has replaced it.
