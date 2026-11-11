@@ -20,6 +20,7 @@ pub enum CallbackShape {
     Status,
     Argument,
     ArgumentStatus,
+    Pair,
     PairStatus,
     ConfigureStatus,
     ReadStatus,
@@ -30,6 +31,8 @@ pub enum CallbackShape {
     Block,
     EventStatus,
     Producer,
+    SignedArgument,
+    BufferStatus,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -88,6 +91,7 @@ callback_functions! {
     Status => unsafe extern "C" fn() -> i32,
     Argument => unsafe extern "C" fn(u32),
     ArgumentStatus => unsafe extern "C" fn(u32) -> i32,
+    Pair => unsafe extern "C" fn(u32, u32),
     PairStatus => unsafe extern "C" fn(u32, u32) -> i32,
     ConfigureStatus => unsafe extern "C" fn(u32, *const u32) -> i32,
     ReadStatus => unsafe extern "C" fn(u32, *mut u32) -> i32,
@@ -98,6 +102,8 @@ callback_functions! {
     Block => unsafe extern "C" fn(i32, u32),
     EventStatus => unsafe extern "C" fn(i32, u32, u32, *mut u32, i32) -> i32,
     Producer => unsafe extern "C" fn(*mut u8, u32),
+    SignedArgument => unsafe extern "C" fn(i32),
+    BufferStatus => unsafe extern "C" fn(*const u8) -> i32,
 }
 
 struct IrqMask {
