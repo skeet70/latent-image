@@ -121,6 +121,7 @@ fn write_state(state: &EngineState) {
     }
 }
 
+#[inline]
 fn read_state(state: &mut EngineState) {
     if decode_into(&Live, &TREE, &RECORDS, state).is_err() {
         unsafe { rb_menu_engine_guard_failure() }
@@ -221,6 +222,7 @@ impl EngineServices for Stock {
         result_of(raw)
     }
 
+    #[inline]
     fn seek(&mut self, state: &mut EngineState, call: SeekCall) -> EngineResult {
         write_state(state);
         let raw = unsafe {

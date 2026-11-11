@@ -142,6 +142,7 @@ pub fn decode(
     decode_words(&Images(block, last_move), tree, records)
 }
 
+#[inline]
 pub fn decode_words<B: BlockWords>(block: &B, tree: &Tree, records: &RecordTable) -> Result<EngineState, DecodeError> {
     let mut state = EngineState::EMPTY;
     decode_into(block, tree, records, &mut state)?;
@@ -149,6 +150,7 @@ pub fn decode_words<B: BlockWords>(block: &B, tree: &Tree, records: &RecordTable
 }
 
 /// On an error `state` is partly written.
+#[inline]
 pub fn decode_into<B: BlockWords>(
     block: &B,
     tree: &Tree,
