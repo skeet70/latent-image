@@ -1,4 +1,4 @@
-use crate::render_commands::{DrawReport, FontId, NodeId, ResourceId};
+use crate::render_commands::{producer::ProducerError, DrawReport, FontId, NodeId, ResourceId};
 
 #[derive(Clone, Copy)]
 pub struct DrawMode(pub u32);
@@ -65,8 +65,10 @@ pub trait DrawServices {
     fn final_text(&mut self);
 }
 
-fn word(report: &DrawReport, offset: usize) -> u32 {
-    u32::from_le_bytes([report.0[offset], report.0[offset + 1], report.0[offset + 2], report.0[offset + 3]])
+fn word(report: &DrawReport, offset: usize) -> Option<u32> {
+    let end = offset.checked_add(4)?;
+    let bytes: [u8; 4] = report.0.get(offset..end)?.try_into().ok()?;
+    Some(u32::from_le_bytes(bytes))
 }
 fn signed(value: u8) -> i32 { value as i8 as i32 }
 fn hook_record(hook: &mut HookRecord, node: NodeId, child: u32, side: &[u32; 7], x: i32, y: u8, selected: bool, resource: ResourceId) {
@@ -79,14 +81,14 @@ fn hook_record(hook: &mut HookRecord, node: NodeId, child: u32, side: &[u32; 7],
     hook.0[12] = resource.0;
 }
 
-pub fn pane_drawer<S: DrawServices>(services: &mut S, node: NodeId, mode: DrawMode) {
+pub fn pane_drawer<S: DrawServices>(services: &mut S, node: NodeId, mode: DrawMode) -> Result<(), ProducerError> {
     let state = services.prepare(node, mode);
     let d = &state.side;
     let r = &state.report;
-    let root = NodeId(word(r, 4));
+    let root = NodeId(word(r, 4).ok_or(ProducerError::ReportRange)?);
     let mut hook = HookRecord([0; 13]);
     if d[1] != 3 {
-        match word(r, 0) {
+        match word(r, 0).ok_or(ProducerError::ReportRange)? {
             1 => services.font(FontId(13)),
             0 | 2 => services.font(FontId(15)),
             _ => (),
@@ -101,7 +103,7 @@ pub fn pane_drawer<S: DrawServices>(services: &mut S, node: NodeId, mode: DrawMo
             services.describe_root(root, index, &mut child);
             if child.state == 3 && !cfg!(pane_hidden_drawn) { continue; }
             if skip != 0 { skip = skip.wrapping_sub(1); continue; }
-            let selected = child.child == word(r, 0xc) && !cfg!(pane_selected_unstyled);
+            let selected = child.child == word(r, 0xc).ok_or(ProducerError::ReportRange)? && !cfg!(pane_selected_unstyled);
             let alternate = d[1] == 2 && !selected;
             let label = services.label(root, index, alternate);
             services.label_style(selected, child.state);
@@ -155,17 +157,17 @@ pub fn pane_drawer<S: DrawServices>(services: &mut S, node: NodeId, mode: DrawMo
     }
     if d[3] != 2 && !matches!(mode.0, 2 | 3) {
         services.font(FontId(11));
-        let mut skip = if cfg!(pane_scroll_ignored) { 0 } else { word(r, 0x30) as u8 };
+        let mut skip = if cfg!(pane_scroll_ignored) { 0 } else { word(r, 0x30).ok_or(ProducerError::ReportRange)? as u8 };
         let mut drawn = 0u8;
         let mut y = r.0[0x3e].wrapping_mul(2).wrapping_add(3);
-        let parent = word(r, 0x20);
+        let parent = word(r, 0x20).ok_or(ProducerError::ReportRange)?;
         let mut child = NestedChild::default();
-        for index in 0..word(r, 0x24) {
-            if drawn as u32 >= word(r, 0x2c) { break; }
+        for index in 0..word(r, 0x24).ok_or(ProducerError::ReportRange)? {
+            if drawn as u32 >= word(r, 0x2c).ok_or(ProducerError::ReportRange)? { break; }
             services.describe_nested(root, parent, index, &mut child);
             if child.state == 3 && !cfg!(pane_hidden_drawn) { continue; }
             if skip != 0 { skip = skip.wrapping_sub(1); continue; }
-            let selected = child.selection == word(r, 0x34) && !cfg!(pane_selected_unstyled);
+            let selected = child.selection == word(r, 0x34).ok_or(ProducerError::ReportRange)? && !cfg!(pane_selected_unstyled);
             let resource = services.value(root, parent, child.selection, true);
             services.nested_style(selected, child.state);
             hook_record(&mut hook, root, parent, d, 13, y, selected, resource);
@@ -183,17 +185,19 @@ pub fn pane_drawer<S: DrawServices>(services: &mut S, node: NodeId, mode: DrawMo
                     }
                     services.format(Format::Text(false));
                 }
-                services.detail(root, parent, word(r, 0x34));
-                services.footer(root, parent, word(r, 0x34));
+                let current = word(r, 0x34).ok_or(ProducerError::ReportRange)?;
+                services.detail(root, parent, current);
+                services.footer(root, parent, current);
             }
             drawn = drawn.wrapping_add(1);
             y = y.wrapping_add(2);
         }
     }
-    chrome(services, &state, mode);
+    chrome(services, &state, mode)?;
+    Ok(())
 }
 
-fn chrome<S: DrawServices>(services: &mut S, state: &PaneState, mode: DrawMode) {
+fn chrome<S: DrawServices>(services: &mut S, state: &PaneState, mode: DrawMode) -> Result<(), ProducerError> {
     let d = &state.side;
     let r = &state.report;
     if d[0] == 1 {
@@ -294,11 +298,26 @@ fn chrome<S: DrawServices>(services: &mut S, state: &PaneState, mode: DrawMode) 
         }
         services.font(saved);
     }
-    if d[3] != 2 && word(r,0x28) > word(r,0x2c) {
+    if d[3] != 2 && word(r,0x28).ok_or(ProducerError::ReportRange)? > word(r,0x2c).ok_or(ProducerError::ReportRange)? {
         services.font(FontId(13));
         services.palette(Palette::Components(116,255,0,0));
         services.grid(23,2,ResourceId(0xff000660));
         services.grid(23,17,ResourceId(0xff000617));
     }
     if matches!(d[0],0|1) || (d[0] == 3 && d[1] == 0) { services.final_text(); }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::word;
+    use crate::render_commands::DrawReport;
+
+    #[test]
+    fn word_refuses_an_out_of_range_offset() {
+        let report = DrawReport::zeroed();
+        assert_eq!(word(&report, 0x41), None);
+        assert_eq!(word(&report, usize::MAX), None);
+        assert_eq!(word(&report, 0x40), Some(0));
+    }
 }

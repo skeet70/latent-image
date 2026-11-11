@@ -200,7 +200,7 @@ impl DrawServices for StockServices {
 
 #[no_mangle]
 pub unsafe extern "C" fn tree_list_entry(node:u32,first:u32,second:u32,first_step:u32,second_step:u32,nested_first:u32,nested_second:u32,nested_first_step:u32,nested_second_step:u32,mode:u32,report:*mut DrawReport) {
-    tree_list::tree_list(&mut StockServices,DrawArgs { node:NodeId(node),first:first as u16,second:second as u16,first_step,second_step,nested:NestedGrid {first:nested_first as u16,second:nested_second as u16,first_step:nested_first_step,second_step:nested_second_step},mode:DrawMode(mode) }, unsafe { &mut *report });
+    let _ = tree_list::tree_list(&mut StockServices,DrawArgs { node:NodeId(node),first:first as u16,second:second as u16,first_step,second_step,nested:NestedGrid {first:nested_first as u16,second:nested_second as u16,first_step:nested_first_step,second_step:nested_second_step},mode:DrawMode(mode) }, unsafe { &mut *report });
 }
 
 #[panic_handler]

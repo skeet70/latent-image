@@ -25,6 +25,8 @@ pub use commands::{Alpha, CatalogTextId, Colour, CustomTextId, ImageId, StrokeWi
 pub use raster::{Surface, AssetPack, AssetProvenance, RasterError, RasterResources, FontBinding, FontRegistry, ShapeBinding, VectorWorkspace, PaintBlend, PaintCoverage};
 
 #[cfg(test)]
+mod report_tests;
+#[cfg(test)]
 mod publisher_tests;
 #[cfg(test)]
 mod context_tests;
@@ -105,12 +107,11 @@ impl PanelRect {
 pub struct DrawReport(pub [u8; 0x44]);
 impl DrawReport {
     pub const fn zeroed() -> Self { Self([0; 0x44]) }
-    pub fn put_word(&mut self, offset: usize, value: u32) {
-        let bytes = value.to_le_bytes();
-        self.0[offset] = bytes[0];
-        self.0[offset + 1] = bytes[1];
-        self.0[offset + 2] = bytes[2];
-        self.0[offset + 3] = bytes[3];
+    pub fn put_word(&mut self, offset: usize, value: u32) -> Result<(), producer::ProducerError> {
+        let end = offset.checked_add(4).ok_or(producer::ProducerError::ReportRange)?;
+        let target = self.0.get_mut(offset..end).ok_or(producer::ProducerError::ReportRange)?;
+        target.copy_from_slice(&value.to_le_bytes());
+        Ok(())
     }
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

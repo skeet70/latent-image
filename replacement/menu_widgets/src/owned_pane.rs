@@ -261,7 +261,7 @@ impl DrawServices for CpuPane<'_, '_, '_> {
 
 pub fn compose_pane_and_publish<'text>(data: &PaneData<'_, 'text>, node: NodeId, mode: DrawMode, commands: &mut [DrawCommand<'text>], assets: &mut RasterResources<'_, '_, '_>, actor: &mut TaskActor) -> Result<OutputBatch, FrameError> {
     let mut services = CpuPane { data, commands: CommandBuffer::new(commands), style: data.initial_style, error: Cell::new(None) };
-    pane_drawer::pane_drawer(&mut services, node, mode);
+    pane_drawer::pane_drawer(&mut services, node, mode)?;
     if let Some(error) = services.error.get() { return Err(FrameError::Producer(error)); }
     queue_panel(actor, assets, services.commands.draw_list())
 }
