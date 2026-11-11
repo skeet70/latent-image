@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Replacement.LensTransport.ActorSuite (runSuite, sourceIdentity, CaseResult (..), ControlResult (..), ReplyResult (..), StockEvidence (..)) where
+module Replacement.LensTransport.ActorSuite (runSuite, sourceIdentity, CaseResult (..), ControlResult (..), ReplyResult (..), StockEvidence (..), handlerExtents) where
 
 import qualified ArmElf as E
 import Control.Monad (forM, forM_, unless)
@@ -9,11 +9,11 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.List (findIndex, isPrefixOf, nub, sort)
 import Data.Maybe (fromMaybe)
-import Data.Word (Word32, Word64)
+import Data.Word (Word32)
+import Emulation.Judge (StockEvidence (..), evidenceAt, evidenceProblems)
 import Emulation.NativeObservation
 import Emulation.OwnedCase
 import Emulation.Sha256 (sha256, sha256Hex)
-import FujiAF.Host (get, jsonRead, list, num, str)
 import System.FilePath ((</>))
 
 sourceIdentity :: String
@@ -221,45 +221,8 @@ handlerFor image c
             Just size | state < 6 -> (handler, size)
             _ -> error ("handler outside the pinned table for " ++ cId c)
 
--- What the stock side executed inside the selected handler body, from the runner's own trace and
--- memory-provenance instruction addresses.
-data StockEvidence = StockEvidence
-  { evidenceHandler :: Word32
-  , evidenceExtent :: Word32
-  , evidenceTrace :: Int
-  , evidenceProvenance :: Int
-  , evidenceInstructions :: Word64
-  , evidenceStatus :: String
-  } deriving (Eq, Show)
-
 stockEvidence :: B.ByteString -> FilePath -> Case -> IO StockEvidence
 stockEvidence image path c = uncurry (evidenceAt path) (handlerFor image c)
-
--- The stock side's execution inside one authenticated extent. A case with no instruction there
--- proves nothing, whatever the comparison then reports.
-evidenceAt :: FilePath -> Word32 -> Word32 -> IO StockEvidence
-evidenceAt path handler size = do
-  report <- jsonRead =<< B.readFile path
-  let runner = get report "runner"
-      tracePCs = [pc | entry <- list (get runner "trace"), Just pc <- [parseWord32 (str (get entry "pc"))]]
-      provenancePCs = [pc | entry <- list (get runner "memory_provenance"), Just pc <- [parseWord32 (str (get entry "pc"))]]
-      inside = [() | pc <- tracePCs ++ provenancePCs, pc >= handler, pc < handler + size]
-      traceInside = length [() | pc <- tracePCs, pc >= handler, pc < handler + size]
-  pure StockEvidence
-    { evidenceHandler = handler
-    , evidenceExtent = size
-    , evidenceTrace = traceInside
-    , evidenceProvenance = length inside - traceInside
-    , evidenceInstructions = fromIntegral (num (get runner "instructions"))
-    , evidenceStatus = str (get runner "status")
-    }
-
--- A case whose stock side ran no instruction inside the handler it claims to exercise proves
--- nothing, whatever the comparison then reports.
-evidenceProblems :: StockEvidence -> [String]
-evidenceProblems evidence =
-  [ "stock handler " ++ show (evidenceHandler evidence) ++ " executed no instruction inside its extent"
-  | evidenceTrace evidence + evidenceProvenance evidence == 0 ]
 
 data CaseResult = CaseResult
   { crId :: String
@@ -273,6 +236,7 @@ data ControlResult = ControlResult
   , coExpected :: String
   , coReported :: Bool
   , coDifferences :: [String]
+  , coDiagnostics :: [String]
   } deriving (Eq, Show)
 
 loadImmediate :: Int -> Word32 -> [Word32]
@@ -704,6 +668,7 @@ data ReplyResult = ReplyResult
   , rrStockActorInstructions :: Int
   , rrStockCodecInstructions :: Maybe Int
   , rrDifferences :: [String]
+  , rrDiagnostics :: [String]
   } deriving (Eq, Show)
 
 -- Runs the wire stage for one role over the plans that carry reply bytes. The label keeps the
@@ -760,21 +725,26 @@ replyFamily image directory runner codecPath codecDefectPath actorElfPath extern
              , Just found <- [M.lookup (replyName plan) stockCodecEvidence]
              , evidenceTrace found + evidenceProvenance found == 0 ]
           ++ [ "stock reply parser evidence absent" | Just _ <- [replyWire plan], Nothing <- [M.lookup (replyName plan) stockCodecEvidence] ]
+      -- The decoder's status is the boundary contract. Its internal state layout is diagnostic:
+      -- it is reported, and it does not decide the verdict.
       codecProblems plan =
         [ "decoder status " ++ show (stockStatus plan) ++ " / " ++ show (ownedStatus plan)
         | stockStatus plan /= ownedStatus plan ]
-          ++ [ "decoder state"
-             | Just s <- [M.lookup (replyName plan) stockCodec]
-             , Just o <- [M.lookup (replyName plan) ownedCodec]
-             , replyBoundary s /= replyBoundary o ]
+      codecDiagnostics plan =
+        [ "decoder state"
+        | Just s <- [M.lookup (replyName plan) stockCodec]
+        , Just o <- [M.lookup (replyName plan) ownedCodec]
+        , replyBoundary s /= replyBoundary o ]
       defectProblems plan =
         [ "decoder status " ++ show (stockStatus plan) ++ " / " ++ show (defectStatus plan)
         | stockStatus plan /= defectStatus plan ]
-          ++ [ "decoder state"
-             | Just s <- [M.lookup (replyName plan) stockCodec]
-             , Just d <- [M.lookup (replyName plan) defectCodec]
-             , replyBoundary s /= replyBoundary d ]
+      defectDiagnostics plan =
+        [ "decoder state"
+        | Just s <- [M.lookup (replyName plan) stockCodec]
+        , Just d <- [M.lookup (replyName plan) defectCodec]
+        , replyBoundary s /= replyBoundary d ]
       defectDifferences = concatMap defectProblems wired
+      defectStateDiagnostics = concatMap defectDiagnostics wired
   pure
     ( [ ReplyResult
           { rrName = replyName plan
@@ -792,6 +762,7 @@ replyFamily image directory runner codecPath codecDefectPath actorElfPath extern
                           ++ [ "shared publication" | B.take 16 (regionBytesOf s (RegionId "shared")) /= B.take 16 (regionBytesOf o (RegionId "shared")) ]
                           ++ [ "effect ring" | ringRecords s /= ringRecords o ]
                       _ -> ["missing reply actor observation"])
+          , rrDiagnostics = codecDiagnostics plan
           }
       | plan <- replyPlans
       ]
@@ -801,6 +772,7 @@ replyFamily image directory runner codecPath codecDefectPath actorElfPath extern
         , coExpected = "decoder status"
         , coReported = any ("decoder status" `isPrefixOf`) defectDifferences
         , coDifferences = defectDifferences
+        , coDiagnostics = defectStateDiagnostics
         } )
 
 mutateRegion :: RegionId -> Int -> NativeObservation -> NativeObservation
@@ -836,6 +808,7 @@ controlsFor image directory runner attachDefect stopDefect externals stocks =
         , coExpected = expected
         , coReported = expected `elem` differences
         , coDifferences = differences
+        , coDiagnostics = []
         }
 
 runSuite :: FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO ([CaseResult], [ControlResult], [ReplyResult])

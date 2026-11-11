@@ -2224,6 +2224,63 @@ haskell_test(
     ],
 )
 
+haskell_library(
+    name = "judge-lib",
+    srcs = ["Emulation/Judge.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+    ],
+    src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":native-observation",
+        ":suite-audit-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:host-support",
+        "//host:scientific",
+        "//host:text",
+    ],
+)
+
+haskell_binary(
+    name = "judge",
+    srcs = ["JudgeMain.hs"],
+    main_file = "JudgeMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":case-sha256",
+        ":judge-lib",
+        ":suite-audit-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+    ],
+)
+
+haskell_test(
+    name = "judge-tests",
+    size = "small",
+    srcs = ["JudgeTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":judge-lib",
+        ":suite-audit-lib",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+    ],
+)
+
 filegroup(
     name = "suite-audit-manifest",
     srcs = ["suite-audit.json"],

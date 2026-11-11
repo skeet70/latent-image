@@ -717,6 +717,53 @@ snapshot is a declaration, not evidence that the suite still matches it.
 that enters every bound entry passes, one that misses an entry fails and names
 it, and one whose stock bytes differ from the image fails and names the entry.
 
+## Shared judge
+
+`//emulation:judge` turns one comparison report into a verdict. The report and
+the firmware image are its inputs; the verdict document is its output. The
+firmware is a declared input: without it the verdict is `not-run`, never a
+pass.
+
+```sh
+devenv shell -- host-build run //emulation:judge -- \
+  --report REPORT.json --image FIRMWARE.bin --suite SUITE [--out VERDICT.json]
+# or, from the workspace root, after a build:
+bazel-bin/emulation/judge --report REPORT.json --image FIRMWARE.bin \
+  --suite SUITE --manifest emulation/suite-audit.json --root . --out VERDICT.json
+```
+
+`--suite` names the suite in `emulation/suite-audit.json` and may be omitted
+when the report names it. The bound entries are read the way the static audit
+reads them, live from `replacement/rtos_platform/carriers.json` or a stage link
+script where the suite allows it. The image must be the image the suite
+declares there (image 4, image 5 or the loader); a different image is refused,
+and the report must name that image's digest among the digests it carries.
+
+A verdict of `equal` needs all four conditions, each read from the report and
+the image:
+
+1. every case names the entry it entered and records stock instructions
+   executed inside that entry's extent;
+2. a case enters every bound entry of the suite;
+3. at least one deliberately wrong owned variant was detected, with every
+   undetected one listed as a survivor;
+4. the report names the firmware digest and the owned image digest, and the
+   firmware digest is the supplied image.
+
+The report marks a comparison diagnostic with `diagnostic_differences` on its
+case or control row; the verdict lists those and they do not change it. Any
+unmet condition gives `no-verdict` with the conditions listed; otherwise a case
+difference gives `different` with the cases. Only `equal` exits zero;
+`different` exits 1, `no-verdict` 2 and `not-run` 3. The verdict document names
+the suite, the judge's version, the report digest, the firmware digest and the
+owned image digest, and lists the conditions, survivors and diagnostics.
+
+`//emulation:judge-tests` covers the rule on synthetic reports: a complete
+report is `equal`, and a report missing a case's stock evidence, missing a case
+for a bound entry, carrying no detected wrong variant, naming no firmware or
+naming another firmware gets the matching non-pass verdict with its reason. A
+diagnostic difference leaves the verdict unchanged.
+
 ## Outputs and limitations
 
 The report identifies the exact case, verified artifacts, wire and runner by SHA256. It preserves full register/final logical memory state, instruction count, monotonic elapsed nanoseconds, the engine error code, stub events and the last 64 instruction/access records. `trace_total` and `access_total` expose truncation; access values are meaningful for writes, while read hook values are unspecified. The access log holds reads, writes and faults, not fetches, and a refused access is its last entry. Expected memory spans define the entire permitted final change set; every undeclared byte must equal its initial value. A normal return alone cannot satisfy a fixture. Invalid case, runner error, expectation mismatch and external timeout all exit nonzero with diagnostics.
