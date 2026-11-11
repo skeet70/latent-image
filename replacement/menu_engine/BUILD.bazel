@@ -1,4 +1,5 @@
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_rlib")
 
 filegroup(
     name = "module",
@@ -14,6 +15,20 @@ filegroup(
         "//host/firmware:__pkg__",
         "//replacement/bank:__pkg__",
         "//replacement/menu_widgets:__pkg__",
+    ],
+)
+
+xm1_rust_rlib(
+    name = "arm",
+    src = "src/lib.rs",
+    crate_name = "menu_engine",
+    out = "libmenu_engine_arm.rlib",
+    data = [":module"],
+    visibility = [
+        "//replacement/bank:__pkg__",
+        "//replacement/modal_runtime:__pkg__",
+        "//replacement/owned_menu:__pkg__",
+        "//replacement/recipe_ui:__pkg__",
     ],
 )
 

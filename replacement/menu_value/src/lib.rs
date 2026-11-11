@@ -444,3 +444,15 @@ impl Transaction {
 
 #[cfg(test)]
 mod tests;
+
+/// The adapter's `crate::menu_value` paths resolve to this crate.
+#[cfg(rb_menu_value_owned)]
+pub use crate as menu_value;
+
+/// The guest seam at the stock commit dispatcher.
+#[cfg(rb_menu_value_owned)]
+#[path = "../adapter/mod.rs"]
+pub mod adapter;
+
+#[cfg(rb_menu_value_owned)]
+core::arch::global_asm!(include_str!("../adapter/entry.S"), options(raw));

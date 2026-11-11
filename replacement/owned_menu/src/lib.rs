@@ -90,10 +90,10 @@ pub mod frame {
     use core::mem::MaybeUninit;
     use core::ptr::{addr_of_mut, read_volatile, write_volatile};
 
-    pub use crate::menu_engine::frame::{
+    pub use menu_engine::frame::{
         FrameDepth, MenuClass, MenuFrameSnapshot, NodeId, NodeType, PageNumber, RowToken, ScrollTop, VisibleCount,
     };
-    use crate::menu_engine::frame::{
+    use menu_engine::frame::{
         self as shared, FrameCells, FrameNode, RowIndex, RowValues, RowsPerPage, SnapshotSink, SnapshotWord,
         VisibleOrdinal,
     };

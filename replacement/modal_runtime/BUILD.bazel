@@ -1,5 +1,6 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_rlib")
 
 filegroup(
     name = "module",
@@ -12,6 +13,16 @@ filegroup(
         "//host/firmware:__pkg__",
         "//replacement/bank:__pkg__",
     ],
+)
+
+xm1_rust_rlib(
+    name = "arm",
+    src = "src/arm.rs",
+    crate_name = "modal_runtime",
+    out = "libmodal_runtime.rlib",
+    data = [":module"],
+    rlib_deps = {"menu_engine": "//replacement/menu_engine:arm"},
+    visibility = ["//replacement/bank:__pkg__"],
 )
 
 filegroup(

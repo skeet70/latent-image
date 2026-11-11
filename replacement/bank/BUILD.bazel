@@ -1,17 +1,21 @@
 load("//replacement/toolchain:rust.bzl", "xm1_rust_staticlib")
 
+_RLIB_DEPS = {
+    "capture": "//replacement/capture:arm",
+    "media_permit": "//replacement/media_permit:arm",
+    "menu_engine": "//replacement/menu_engine:arm",
+    "modal_runtime": "//replacement/modal_runtime:arm",
+    "owned_menu": "//replacement/owned_menu:arm",
+    "recipe_ui": "//replacement/recipe_ui:arm",
+    "save": "//replacement/save:arm",
+    "service": "//replacement/service:arm",
+}
+
 xm1_rust_staticlib(
     name = "bank",
     src = "lib.rs",
     crate_name = "bank",
-    data = [
-        "//replacement/capture:module",
-        "//replacement/menu_engine:module",
-        "//replacement/menu_value:module",
-        "//replacement/owned_menu:module",
-        "//replacement/recipe_ui:module",
-        "//replacement/service:module",
-    ],
+    rlib_deps = _RLIB_DEPS,
     visibility = [
         "//emulation:__pkg__",
         "//host/firmware:__pkg__",
@@ -24,15 +28,7 @@ xm1_rust_staticlib(
     src = "lib.rs",
     crate_name = "bank",
     rustc_flags = ["--cfg", "rb_modal_scoped"],
-    data = [
-        "//replacement/capture:module",
-        "//replacement/modal_runtime:module",
-        "//replacement/menu_engine:module",
-        "//replacement/menu_value:module",
-        "//replacement/owned_menu:module",
-        "//replacement/recipe_ui:module",
-        "//replacement/service:module",
-    ],
+    rlib_deps = _RLIB_DEPS,
     visibility = [
         "//emulation:__pkg__",
         "//host/firmware:__pkg__",
@@ -45,17 +41,7 @@ xm1_rust_staticlib(
     src = "lib.rs",
     crate_name = "bank",
     rustc_flags = ["--cfg", "rb_lifecycle_scoped"],
-    data = [
-        "//replacement/capture:module",
-        "//replacement/media_permit:adapter",
-        "//replacement/media_permit:module",
-        "//replacement/menu_engine:module",
-        "//replacement/menu_value:module",
-        "//replacement/owned_menu:module",
-        "//replacement/recipe_ui:module",
-        "//replacement/save:module",
-        "//replacement/service:module",
-    ],
+    rlib_deps = _RLIB_DEPS,
     visibility = [
         "//emulation:__pkg__",
         "//host/firmware:__pkg__",
@@ -68,18 +54,7 @@ xm1_rust_staticlib(
     src = "lib.rs",
     crate_name = "bank",
     rustc_flags = ["--cfg", "rb_modal_scoped", "--cfg", "rb_lifecycle_scoped"],
-    data = [
-        "//replacement/capture:module",
-        "//replacement/media_permit:adapter",
-        "//replacement/media_permit:module",
-        "//replacement/modal_runtime:module",
-        "//replacement/menu_engine:module",
-        "//replacement/menu_value:module",
-        "//replacement/owned_menu:module",
-        "//replacement/recipe_ui:module",
-        "//replacement/save:module",
-        "//replacement/service:module",
-    ],
+    rlib_deps = _RLIB_DEPS,
     visibility = [
         "//emulation:__pkg__",
         "//host/firmware:__pkg__",
