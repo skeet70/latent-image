@@ -71,6 +71,14 @@ case "${RB_PUBLICATION_GROUPS:-}" in
       -Wl,--undefined=rb_render_tree_entry -Wl,--undefined=rb_render_picker_entry -Wl,--undefined=rb_render_pane_entry)
     engine_link=(-Wl,-T,menu/recipe_bank_ram_engine.ld)
     variant_link=(-Wl,--defsym=RAM_PUSH_BANK_VARIANT=1)
+    # The manifest names these three entries and the builder reads the SELECT
+    # CUSTOM SETTING arrays and the develop-wait pair; the owned code reaches
+    # none of them by relocation.
+    gc_link=(-Wl,--gc-sections -Wl,--undefined=ram_push_install
+      -Wl,--undefined=ram_push_rollback -Wl,--undefined=ram_push_status
+      -Wl,--undefined=rb_select_values -Wl,--undefined=rb_select_labels
+      -Wl,--undefined=rb_capture_develop_wait -Wl,--undefined=cc_ram_data
+      -Wl,--undefined=cc_ram_convert)
     ;;
   *) printf 'invalid RB_PUBLICATION_GROUPS selection\n' >&2; exit 1 ;;
 esac
