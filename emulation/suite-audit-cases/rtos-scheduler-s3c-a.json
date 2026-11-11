@@ -1,0 +1,73 @@
+{
+ "schema": 1,
+ "suite": "rtos-scheduler-s3c-a",
+ "source": "derived from the suite's case table",
+ "entries": [
+  {
+   "case": "s3c-0",
+   "entry": "0x000441b4",
+   "extent": 212,
+   "stock": "image"
+  },
+  {
+   "case": "s3c-1",
+   "entry": "0x00044288",
+   "extent": 144,
+   "stock": "image"
+  },
+  {
+   "case": "s3c-2",
+   "entry": "0x00045b40",
+   "extent": 404,
+   "stock": "image"
+  },
+  {
+   "case": "s3c-3",
+   "entry": "0x00045cd4",
+   "extent": 384,
+   "stock": "image"
+  },
+  {
+   "case": "s3c-4",
+   "entry": "0x00046a00",
+   "extent": 640,
+   "stock": "image"
+  },
+  {
+   "case": "s3c-5",
+   "entry": "0x00046c80",
+   "extent": 440,
+   "stock": "image"
+  },
+  {
+   "case": "s3c-6",
+   "entry": "0x00046e38",
+   "extent": 16,
+   "stock": "image"
+  },
+  {
+   "case": "s3c-7",
+   "entry": "0x00046fcc",
+   "extent": 484,
+   "stock": "image"
+  },
+  {
+   "case": "s3c-8",
+   "entry": "0x000471b0",
+   "extent": 420,
+   "stock": "image"
+  },
+  {
+   "case": "s3c-9",
+   "entry": "0x00047354",
+   "extent": 212,
+   "stock": "image"
+  },
+  {
+   "case": "s3c-10",
+   "entry": "0x00047428",
+   "extent": 280,
+   "stock": "image"
+  }
+ ]
+}

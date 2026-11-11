@@ -1,0 +1,43 @@
+{
+ "schema": 1,
+ "suite": "rtos-global-lock-a",
+ "source": "derived from the suite's case table",
+ "entries": [
+  {
+   "case": "gl-0",
+   "entry": "0x000412cc",
+   "extent": 28,
+   "stock": "image"
+  },
+  {
+   "case": "gl-1",
+   "entry": "0x000412e8",
+   "extent": 28,
+   "stock": "image"
+  },
+  {
+   "case": "gl-2",
+   "entry": "0x00041304",
+   "extent": 28,
+   "stock": "image"
+  },
+  {
+   "case": "gl-3",
+   "entry": "0x000427d4",
+   "extent": 40,
+   "stock": "image"
+  },
+  {
+   "case": "gl-4",
+   "entry": "0x000427fc",
+   "extent": 44,
+   "stock": "image"
+  },
+  {
+   "case": "gl-5",
+   "entry": "0x00042828",
+   "extent": 8,
+   "stock": "image"
+  }
+ ]
+}

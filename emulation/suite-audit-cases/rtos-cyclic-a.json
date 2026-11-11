@@ -1,0 +1,55 @@
+{
+ "schema": 1,
+ "suite": "rtos-cyclic-a",
+ "source": "derived from the suite's case table",
+ "entries": [
+  {
+   "case": "cy-0",
+   "entry": "0x0004be40",
+   "extent": 68,
+   "stock": "image"
+  },
+  {
+   "case": "cy-1",
+   "entry": "0x0004be88",
+   "extent": 40,
+   "stock": "image"
+  },
+  {
+   "case": "cy-2",
+   "entry": "0x0004beb4",
+   "extent": 136,
+   "stock": "image"
+  },
+  {
+   "case": "cy-3",
+   "entry": "0x0004bf40",
+   "extent": 140,
+   "stock": "image"
+  },
+  {
+   "case": "cy-4",
+   "entry": "0x0004bfd0",
+   "extent": 364,
+   "stock": "image"
+  },
+  {
+   "case": "cy-5",
+   "entry": "0x0004c140",
+   "extent": 332,
+   "stock": "image"
+  },
+  {
+   "case": "cy-6",
+   "entry": "0x0004d81c",
+   "extent": 140,
+   "stock": "image"
+  },
+  {
+   "case": "cy-7",
+   "entry": "0x0004d8ac",
+   "extent": 80,
+   "stock": "image"
+  }
+ ]
+}

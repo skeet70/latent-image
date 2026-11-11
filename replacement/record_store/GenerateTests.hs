@@ -10,6 +10,7 @@ import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
 import Data.List (nub, sort, takeWhile)
 import Data.Word (Word16, Word32, Word64)
+import Emulation.Sha256 (sha256, sha256Hex)
 import FujiAF.JSON (encodeCanonical)
 import Replacement.RecordStore.CaseJson (decodeCase, encodeCase)
 import Replacement.RecordStore.Cases
@@ -57,6 +58,7 @@ expectRefusal label predicate result = case result of
 main :: IO ()
 main = do
   determinismTests
+  goldenTests
   constructionTests
   coverageTests
   boundaryTests
@@ -80,6 +82,14 @@ determinismTests = do
   assert "case count above sixty-four refuses" (mkGenerationConfig (GenerationSeed 1) 65 5 == Left (InvalidCaseCount 65))
   assert "operation bound below three refuses" (mkGenerationConfig (GenerationSeed 1) 1 2 == Left (InvalidOperationBound 2))
   assert "operation bound above twelve refuses" (mkGenerationConfig (GenerationSeed 1) 1 13 == Left (InvalidOperationBound 13))
+
+-- The digest pins the exact corpus a seed and configuration produce, so a change
+-- to generation is visible even when every other property still holds.
+goldenTests :: IO ()
+goldenTests = do
+  let samples = corpus 0x1234 8 6
+      digest = sha256Hex (sha256 (B.concat (map encodeCase samples)))
+  assert ("fixed-seed corpus digest is unchanged: " ++ digest) (digest == "024dd74f47dedc1ae0bbe5b0defb093f0df3b5eafa1a99f43ef88ad4f71b0917")
 
 constructionTests :: IO ()
 constructionTests = do

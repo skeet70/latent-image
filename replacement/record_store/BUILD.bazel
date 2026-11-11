@@ -154,6 +154,7 @@ haskell_library(
     ghcopts = ["-XGHC2021", "-Wall", "-O2"],
     deps = [
         ":oracle-lib",
+        "//emulation:scenario-generation",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -172,6 +173,7 @@ haskell_library(
         ":generate",
         ":oracle-lib",
         "//emulation:native-observation",
+        "//emulation:scenario-minimization",
         "//host:base",
         "//host:bytestring",
         "//host:containers",
@@ -243,6 +245,7 @@ haskell_test(
     deps = [
         ":generate",
         ":oracle-lib",
+        "//emulation:case-sha256",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",

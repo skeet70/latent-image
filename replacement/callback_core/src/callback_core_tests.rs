@@ -8,9 +8,6 @@ impl CriticalSection for TestCritical {
 }
 type Registry = CallbackRegistry<TestCritical>;
 
-static CALLS: AtomicU32 = AtomicU32::new(0);
-unsafe extern "C" fn record_call() { CALLS.fetch_add(1, Ordering::SeqCst); }
-
 macro_rules! distinct_callbacks {
     ($($name:ident),* $(,)?) => {
         $(unsafe extern "C" fn $name() {})*
@@ -27,7 +24,8 @@ unsafe extern "C" fn spare() {}
 
 #[test]
 fn a_registered_callback_is_resolved_for_its_shape() {
-    CALLS.store(0, Ordering::SeqCst);
+    static CALLS: AtomicU32 = AtomicU32::new(0);
+    unsafe extern "C" fn record_call() { CALLS.fetch_add(1, Ordering::SeqCst); }
     let registry = Registry::new();
     registry.ensure(record_call as unsafe extern "C" fn()).unwrap();
     let callback: unsafe extern "C" fn() = registry.resolve(CallbackWord(record_call as usize)).unwrap();

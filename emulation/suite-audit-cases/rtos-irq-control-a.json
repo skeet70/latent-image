@@ -1,0 +1,25 @@
+{
+ "schema": 1,
+ "suite": "rtos-irq-control-a",
+ "source": "derived from the suite's case table",
+ "entries": [
+  {
+   "case": "irq-0",
+   "entry": "0x00041108",
+   "extent": 28,
+   "stock": "image"
+  },
+  {
+   "case": "irq-1",
+   "entry": "0x00041124",
+   "extent": 28,
+   "stock": "image"
+  },
+  {
+   "case": "irq-2",
+   "entry": "0x0004d8fc",
+   "extent": 128,
+   "stock": "image"
+  }
+ ]
+}

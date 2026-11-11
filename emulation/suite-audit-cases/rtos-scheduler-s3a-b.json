@@ -1,0 +1,49 @@
+{
+ "schema": 1,
+ "suite": "rtos-scheduler-s3a-b",
+ "source": "derived from the suite's case table",
+ "entries": [
+  {
+   "case": "s3a-0",
+   "entry": "0x000d53b0",
+   "extent": 256,
+   "stock": "image"
+  },
+  {
+   "case": "s3a-1",
+   "entry": "0x000dc24c",
+   "extent": 224,
+   "stock": "image"
+  },
+  {
+   "case": "s3a-2",
+   "entry": "0x000dc32c",
+   "extent": 200,
+   "stock": "image"
+  },
+  {
+   "case": "s3a-3",
+   "entry": "0x000dc3f4",
+   "extent": 252,
+   "stock": "image"
+  },
+  {
+   "case": "s3a-4",
+   "entry": "0x000dc4f0",
+   "extent": 240,
+   "stock": "image"
+  },
+  {
+   "case": "s3a-5",
+   "entry": "0x000dc99c",
+   "extent": 228,
+   "stock": "image"
+  },
+  {
+   "case": "s3a-6",
+   "entry": "0x000dca80",
+   "extent": 280,
+   "stock": "image"
+  }
+ ]
+}

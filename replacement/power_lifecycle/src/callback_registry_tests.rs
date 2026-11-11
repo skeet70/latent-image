@@ -1,30 +1,19 @@
 use super::*;
 use std::sync::atomic::{AtomicI64, AtomicU32, Ordering};
 
-static CALLS: AtomicU32 = AtomicU32::new(0);
-static ARGUMENT: AtomicU32 = AtomicU32::new(0);
-
-unsafe extern "C" fn record_argument(value: u32) {
-    CALLS.fetch_add(1, Ordering::SeqCst);
-    ARGUMENT.store(value, Ordering::SeqCst);
-}
-unsafe extern "C" fn record_call() { CALLS.fetch_add(1, Ordering::SeqCst); }
-
-fn argument_callback() -> unsafe extern "C" fn(u32) { record_argument }
-fn call_callback() -> unsafe extern "C" fn() { record_call }
-
-fn reset() {
-    CALLS.store(0, Ordering::SeqCst);
-    ARGUMENT.store(0, Ordering::SeqCst);
-}
-
 #[test]
 fn registered_callback_is_called_once_with_its_argument() {
-    reset();
+    static CALLS: AtomicU32 = AtomicU32::new(0);
+    static ARGUMENT: AtomicU32 = AtomicU32::new(0);
+    unsafe extern "C" fn record(value: u32) {
+        CALLS.fetch_add(1, Ordering::SeqCst);
+        ARGUMENT.store(value, Ordering::SeqCst);
+    }
     let registry = CallbackRegistry::new();
-    registry.ensure(argument_callback()).unwrap();
-    let callback: unsafe extern "C" fn(u32) = registry.resolve(CallbackWord(argument_callback().word().0 as usize)).unwrap();
-    unsafe { callback(0x1234) };
+    let callback: unsafe extern "C" fn(u32) = record;
+    registry.ensure(callback).unwrap();
+    let resolved: unsafe extern "C" fn(u32) = registry.resolve(callback.word()).unwrap();
+    unsafe { resolved(0x1234) };
     assert_eq!(CALLS.load(Ordering::SeqCst), 1);
     assert_eq!(ARGUMENT.load(Ordering::SeqCst), 0x1234);
 }
@@ -98,24 +87,32 @@ fn a_word_with_low_bits_set_is_refused() {
 
 #[test]
 fn registration_for_another_shape_is_refused() {
+    unsafe extern "C" fn record() {}
     let registry = CallbackRegistry::new();
-    let word = call_callback().word();
-    registry.ensure(call_callback()).unwrap();
-    assert_eq!(registry.resolve::<unsafe extern "C" fn(u32)>(word), Err(CallbackError::Shape));
-    assert!(registry.resolve::<unsafe extern "C" fn()>(word).is_ok());
+    let callback: unsafe extern "C" fn() = record;
+    registry.ensure(callback).unwrap();
+    assert_eq!(registry.resolve::<unsafe extern "C" fn(u32)>(callback.word()), Err(CallbackError::Shape));
+    assert!(registry.resolve::<unsafe extern "C" fn()>(callback.word()).is_ok());
 }
 
 #[test]
 fn ensure_is_idempotent_for_the_same_signature() {
+    unsafe extern "C" fn record(_: u32) {}
     let registry = CallbackRegistry::new();
-    assert_eq!(registry.ensure(argument_callback()), Ok(()));
-    assert_eq!(registry.ensure(argument_callback()), Ok(()));
-    assert!(registry.resolve::<unsafe extern "C" fn(u32)>(argument_callback().word()).is_ok());
+    let callback: unsafe extern "C" fn(u32) = record;
+    assert_eq!(registry.ensure(callback), Ok(()));
+    assert_eq!(registry.ensure(callback), Ok(()));
+    assert!(registry.resolve::<unsafe extern "C" fn(u32)>(callback.word()).is_ok());
 }
 
 #[test]
 fn a_kernel_slot_is_entered_without_registration() {
-    reset();
+    static CALLS: AtomicU32 = AtomicU32::new(0);
+    static ARGUMENT: AtomicU32 = AtomicU32::new(0);
+    unsafe extern "C" fn record_argument(value: u32) {
+        CALLS.fetch_add(1, Ordering::SeqCst);
+        ARGUMENT.store(value, Ordering::SeqCst);
+    }
     let slot = KernelSlot(CallbackWord(record_argument as *const () as usize));
     assert_eq!(CallbackRegistry::new().resolve::<unsafe extern "C" fn(u32)>(slot.word()), Err(CallbackError::Unadmitted));
     let entry: unsafe extern "C" fn(u32) = unsafe { slot.entry() };
@@ -161,8 +158,10 @@ fn one_shape_covers_every_thirteen_argument_site() {
 
 #[test]
 fn an_upstream_handler_registered_through_the_abi_entry_resolves() {
-    // The entry takes a target word; the test resolves a word it never enters.
-    let word = record_call as *const () as u32;
+    // The entry takes a target word; the test resolves a word it never enters. A fixed word
+    // outside the admitted stock extents keeps the Shape and Invalid answers independent of
+    // where the host maps this test's functions.
+    let word = 0x1000u32;
     assert_eq!(unsafe { xm1_power_owned_callback_register(word, OwnedShape::Completion as u32) }, 0);
     let entry: unsafe extern "C" fn() = registry().resolve(CallbackWord(word as usize)).unwrap();
     assert_eq!(entry as usize, word as usize);
@@ -173,7 +172,8 @@ fn an_upstream_handler_registered_through_the_abi_entry_resolves() {
 
 #[test]
 fn an_owned_handler_registered_for_its_shape_is_called() {
-    reset();
+    static CALLS: AtomicU32 = AtomicU32::new(0);
+    unsafe extern "C" fn record_call() { CALLS.fetch_add(1, Ordering::SeqCst); }
     let word = CallbackWord(record_call as *const () as usize);
     assert_eq!(unsafe { register_owned(word, OwnedShape::Completion) }, Ok(()));
     let entry: unsafe extern "C" fn() = registry().resolve(word).unwrap();

@@ -1,0 +1,73 @@
+{
+ "schema": 1,
+ "suite": "rtos-data-queue-b",
+ "source": "derived from the suite's case table",
+ "entries": [
+  {
+   "case": "dq-0",
+   "entry": "0x000dd460",
+   "extent": 164,
+   "stock": "image"
+  },
+  {
+   "case": "dq-1",
+   "entry": "0x000dd504",
+   "extent": 124,
+   "stock": "image"
+  },
+  {
+   "case": "dq-2",
+   "entry": "0x000d8fb8",
+   "extent": 784,
+   "stock": "image"
+  },
+  {
+   "case": "dq-3",
+   "entry": "0x000d92c8",
+   "extent": 544,
+   "stock": "image"
+  },
+  {
+   "case": "dq-4",
+   "entry": "0x000d94e8",
+   "extent": 496,
+   "stock": "image"
+  },
+  {
+   "case": "dq-5",
+   "entry": "0x000d96d8",
+   "extent": 980,
+   "stock": "image"
+  },
+  {
+   "case": "dq-6",
+   "entry": "0x000d9aac",
+   "extent": 576,
+   "stock": "image"
+  },
+  {
+   "case": "dq-7",
+   "entry": "0x000d9cec",
+   "extent": 512,
+   "stock": "image"
+  },
+  {
+   "case": "dq-8",
+   "entry": "0x000d9eec",
+   "extent": 964,
+   "stock": "image"
+  },
+  {
+   "case": "dq-9",
+   "entry": "0x000da2b0",
+   "extent": 636,
+   "stock": "image"
+  },
+  {
+   "case": "dq-10",
+   "entry": "0x000da52c",
+   "extent": 1104,
+   "stock": "image"
+  }
+ ]
+}

@@ -1,0 +1,173 @@
+{
+ "schema": 1,
+ "suite": "lens-actor",
+ "source": "Replacement.LensTransport.ActorSuite.handlerExtents",
+ "entries": [
+  {
+   "case": "handler-0x006c1858",
+   "entry": "0x006c1858",
+   "extent": 24,
+   "stock": {
+    "sha256": "aab533f64e7d3f50628f3b74c122bcfaae90f7a06e1282e0e04e4d03d9706543"
+   }
+  },
+  {
+   "case": "handler-0x006c1870",
+   "entry": "0x006c1870",
+   "extent": 220,
+   "stock": {
+    "sha256": "1ca0484035ad97fb8dfd500392ad0e1adc401f527f20878bb43fe7133274d689"
+   }
+  },
+  {
+   "case": "handler-0x006c194c",
+   "entry": "0x006c194c",
+   "extent": 156,
+   "stock": {
+    "sha256": "1149b5dd8052dc43441df3665e148fdb0d5e56d9e252662bcf411c3ce43697ec"
+   }
+  },
+  {
+   "case": "handler-0x006c1bcc",
+   "entry": "0x006c1bcc",
+   "extent": 252,
+   "stock": {
+    "sha256": "e040c603caa5219f12728fcebb007571e881fbec4464f0594f3bbd4f14f86f8f"
+   }
+  },
+  {
+   "case": "handler-0x006c1cc8",
+   "entry": "0x006c1cc8",
+   "extent": 308,
+   "stock": {
+    "sha256": "8998d9386d59839aece1cd61125023a740f0a2b783162a0ac62a0dc77c8de46f"
+   }
+  },
+  {
+   "case": "handler-0x006c1e18",
+   "entry": "0x006c1e18",
+   "extent": 212,
+   "stock": {
+    "sha256": "56715fb0a469ac62b440f538a2aee00b4e57f33fd2a5291985824b8b888aa111"
+   }
+  },
+  {
+   "case": "handler-0x006c1eec",
+   "entry": "0x006c1eec",
+   "extent": 44,
+   "stock": {
+    "sha256": "fd19c30ce59bfbe6935579cc395f4dd8d884724edf593862849cd8e8ad40eeb1"
+   }
+  },
+  {
+   "case": "handler-0x006c20b4",
+   "entry": "0x006c20b4",
+   "extent": 80,
+   "stock": {
+    "sha256": "024f7c45f6c87d7d742988ccfa298a8c4cc8bcf46cba9dd98adef422b82a5ca7"
+   }
+  },
+  {
+   "case": "handler-0x006c21d4",
+   "entry": "0x006c21d4",
+   "extent": 116,
+   "stock": {
+    "sha256": "227c3b4b57603bae2fd6309b985b1ac38bd75e4e18ac36429dc05ad0bb697243"
+   }
+  },
+  {
+   "case": "handler-0x006c2248",
+   "entry": "0x006c2248",
+   "extent": 336,
+   "stock": {
+    "sha256": "808f394e1140aa081300d95ba1f722ea29a4e7237e5db1089de3904e4a455376"
+   }
+  },
+  {
+   "case": "handler-0x006c2398",
+   "entry": "0x006c2398",
+   "extent": 180,
+   "stock": {
+    "sha256": "c8042ee2d69c35001b02f8f4d23230ab9705cbdf86ee3260796ad38fe599eff7"
+   }
+  },
+  {
+   "case": "handler-0x006c244c",
+   "entry": "0x006c244c",
+   "extent": 160,
+   "stock": {
+    "sha256": "a097d77a6085690a539fc164b10a3fcb4425a0b7a28dcc14f6aaf0a350346c06"
+   }
+  },
+  {
+   "case": "handler-0x006c2668",
+   "entry": "0x006c2668",
+   "extent": 36,
+   "stock": {
+    "sha256": "529a7775c2399f64944b0d7294ed1798199494f1cdd29df44caf2c6cca2590c7"
+   }
+  },
+  {
+   "case": "handler-0x006c268c",
+   "entry": "0x006c268c",
+   "extent": 96,
+   "stock": {
+    "sha256": "9abdd1fc8fa00f66df8e9bdfd1831b79022a4c91a7d77c3b1c636e6391249173"
+   }
+  },
+  {
+   "case": "handler-0x006c26ec",
+   "entry": "0x006c26ec",
+   "extent": 108,
+   "stock": {
+    "sha256": "175664bc3f38d72eed0de5e0a67a3fc08d34a5ee6b6d07ebed5388f58d1ba919"
+   }
+  },
+  {
+   "case": "handler-0x006c27f8",
+   "entry": "0x006c27f8",
+   "extent": 252,
+   "stock": {
+    "sha256": "226ad2093bb5eb16c648e59b8cab979fa0c1e4f312eb2976117438595f08c6df"
+   }
+  },
+  {
+   "case": "handler-0x006c3144",
+   "entry": "0x006c3144",
+   "extent": 172,
+   "stock": {
+    "sha256": "823a1fd6c261ac838be1ce2c618420acfeee4584e547036d419c336506083daf"
+   }
+  },
+  {
+   "case": "handler-0x006c31f0",
+   "entry": "0x006c31f0",
+   "extent": 972,
+   "stock": {
+    "sha256": "18784560fbd632c88829458f18ff9cd6bbdd4d3d824c131218c0b94b9b841936"
+   }
+  },
+  {
+   "case": "handler-0x006c3b70",
+   "entry": "0x006c3b70",
+   "extent": 3312,
+   "stock": {
+    "sha256": "4b867ecad8f6a00f9411f9fec017be21e288cee80bc3b3b94c9f751c97e6a2f0"
+   }
+  },
+  {
+   "case": "handler-0x006c4c94",
+   "entry": "0x006c4c94",
+   "extent": 2772,
+   "stock": {
+    "sha256": "4aec6f730e1e13bda6d78844b4edd9c5d10f389f77095edf30cb701476fd4eaf"
+   }
+  },
+  {
+   "case": "wake",
+   "entry": "0x006c2b54",
+   "extent": 16,
+   "stock": "image"
+  }
+ ]
+}

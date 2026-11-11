@@ -1,0 +1,19 @@
+{
+ "schema": 1,
+ "suite": "property-service",
+ "source": "derived from the suite's case table",
+ "entries": [
+  {
+   "case": "getter",
+   "entry": "0x0061e110",
+   "extent": 256,
+   "stock": "image"
+  },
+  {
+   "case": "setter",
+   "entry": "0x00624694",
+   "extent": 256,
+   "stock": "image"
+  }
+ ]
+}
