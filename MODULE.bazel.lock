@@ -1502,7 +1502,7 @@
     },
     "//replacement/rtos_timer:synthetic.bzl%synthetic_source_inputs": {
       "general": {
-        "bzlTransitiveDigest": "rJBjkHvFoLAZx850DIfiWSOAL5COd5DKk0JR2Q83DNE=",
+        "bzlTransitiveDigest": "p9BQZtd3GzD6op9Xtztg6/eLB0k+H+8DLmO+qzAAlo0=",
         "usagesDigest": "zrtiqr84oE8gQiOIVM79HfpfH5LurbKVi9Xi/MZcq9k=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
