@@ -1,0 +1,43 @@
+{
+  "target": "Fujifilm X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_unit": "decomp/firmwares/xm1-150/app/connectivity/netstack/tu_013fa7c4.c",
+  "evidence": "Instruction-inspected. NONMATCHING C is a navigation aid, not the behavior authority.",
+  "image": "private-data/analysis/x-m1-1.50/lz/plain-01100000.bin",
+  "image_base": "0x01100000",
+  "instruction_reader": "arm-none-eabi-objdump -D -b binary -m arm --adjust-vma=0x01100000 --start-address=ADDRESS --stop-address=END IMAGE",
+  "ranges": [
+    {"start": "0x013fbcd8", "end_exclusive": "0x013fbf3c", "behavior": "Primary four-digit filename parser, one-based object append, parent assignment and count limits."},
+    {"start": "0x013fc110", "end_exclusive": "0x013fcc8c", "behavior": "Primary DCIM folder scan, numbered-folder collision handling, forward folder selection, JPG/RAF/MOV scans, numeric-file collision handling, per-directory publication and 30000-object termination."},
+    {"start": "0x013fdfbc", "end_exclusive": "0x013fe140", "behavior": "Mode3 reset, actual drive selection through 0x0071f708, DCIM scan start through 0x0071cdf0."},
+    {"start": "0x013fe140", "end_exclusive": "0x013feb9c", "behavior": "Mode3 folder walk, reverse folder and file-number selection, JPG/MOV enumeration and publication."},
+    {"start": "0x013fd584", "end_exclusive": "0x013fd788", "behavior": "Mode3 temporary-record reset and four-digit file-number parsing."},
+    {"start": "0x013fda40", "end_exclusive": "0x013fdaf8", "behavior": "Mode3 file metadata extraction."},
+    {"start": "0x013fd310", "end_exclusive": "0x013fd340", "behavior": "Actual scan patterns and DCIM path templates, inspected as data."}
+  ],
+  "entry_correction": "0x013fca18 is an interior no-number MOV branch of 0x013fc904, not a function entry.",
+  "canonical_provider": {
+    "owner": "VendorProtocolJoin.VendorFilesystemCatalog",
+    "module": "crate::filesystem_catalog",
+    "operations": ["Catalog::current_drive", "Catalog::scan", "Scan::next", "Scan::close", "Scan::cancel"],
+    "media": "The provider reads FAT12/FAT16/FAT32/exFAT entries through the actual owned filesystem_runtime::SectorIo. The remote catalog does not enumerate a host directory or accept a catalog-summary callback."
+  },
+  "owned_api": {
+    "module": "crate::vendor_wireless_network::task::interface_modes::catalog",
+    "owner": "CatalogRuntime<'a>",
+    "storage": "Caller-owned object and per-directory scratch slices. Directory collision names and file-number slot indexes are bounded scan-local arrays. No allocation or full-record sorting.",
+    "calls": ["initialize_primary", "scan_primary", "initialize_mode3", "start_mode3", "objects", "object", "publication_generation", "next_handle", "remove", "insert", "cancel", "teardown"],
+    "consumers": ["InterfaceModes", "NetworkDiscoveryRuntime", "RemoteObjectOps"],
+    "publication": "One-based typed object handles retain actual typed paths, sizes, protection and timestamps. Numeric unique entries precede image overflow then MOV overflow. Primary order is ascending; mode3 numeric order is descending. Mode3 does not enumerate RAF.",
+    "streaming": "CatalogGeneration invalidates previously captured object-list snapshots on scan, insert, successful removal, cancellation or teardown.",
+    "failure": "Filesystem errors remain typed and device statuses remain available. Completed publications remain visible on later failure. Scan leases are closed on completion or cancelled on enumeration failure. Media cancellation publishes Cancelled, not success. Teardown removes visibility and scratch ownership.",
+    "redesign": "The canonical provider exposes synchronous exclusive scan leases. Stock callback continuations are expressed as direct owned control flow. Queue completion and installed interface-table state belong to InterfaceModes, not this module."
+  },
+  "tests": {
+    "file": "vendor_wireless_service_task_interface_modes_catalog_tests.rs",
+    "status": "authored-not-run",
+    "provenance": "Synthetic FAT16 sectors assembled in memory and consumed by the production sector-backed catalog parser. The fault-only SectorIo test injects the public Cancelled error.",
+    "behavior": ["primary numeric and collision publication order", "mode3 reverse ordering and RAF omission", "actual entry lookup through published paths", "handle stability after removal", "teardown visibility", "explicit output-capacity failure with partial publication", "media cancellation remains cancelled"]
+  },
+  "verification": "No build, test, lint, formatter, native, SDK or live operation was run."
+}

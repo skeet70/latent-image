@@ -1,0 +1,37 @@
+{
+  "target": "Fujifilm X-M1 1.50",
+  "status": "source-inspected",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_path": "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_012e5ce0.c",
+  "root": "0x012e9c7c",
+  "instruction_extent": "0x012e9c7c..0x012e9e7c",
+  "data_extent": "0x012e995c..0x012e9c7c",
+  "data_layout": "15 records at0x012e99e8,44 bytes each. Each record contains a country-list pointer,32-bit country count and six6-byte channel groups. Country IDs are compared as little-endian16-bit stored values. Group fields0..4 are class,band,step,first,count. The sixth group byte is unused by0x012e9e7c.",
+  "input": {
+    "path": "private-data/analysis/x-m1-1.50/lz/plain-01100000.bin",
+    "whole_image_sha256": "ee211bdaad39005b4f72e3443a76ca194905381a967cab787d6a4ef14e2d889d",
+    "vma": "0x01100000"
+  },
+  "method": "Read committed NONMATCHING C as a guide, then inspect actual stock instructions with arm-none-eabi-objdump -D -b binary -m arm --adjust-vma=0x01100000. Decode country IDs and group field facts directly from the authenticated image with little-endian DataView reads. Published Rust contains distilled country/channel facts, not proprietary C or raw image tables.",
+  "behavior": [
+    "An existing cached selection is returned before examining EEPROM mode or country.",
+    "EEPROM mode1 with index0..14 selects that exact stock profile. Invalid indices fall through to country lookup.",
+    "EEPROM mode2 selects the raw EEPROM custom-group region. The cached selection continues to reference current custom-group contents.",
+    "Other modes scan all15 country lists in order and select the first matching16-bit country ID.",
+    "An unknown country selects the last profile at0x012e9c50, whose2.4GHz group covers channels1..13 and final5GHz group begins149 with count7.",
+    "The chosen table is cached independently of the country copied into the outgoing rate command. Explicit invalidation re-enables selection, matching the invalidation at0x01299c08.",
+    "Serialization always preserves group class and band. Only bands1 and2 copy step,first,count. Unknown band bytes remain visible but their channel-range fields serialize as zero.",
+    "HardwareConfiguration now supplies RegulatoryInput parsed from raw EEPROM mode,index,custom bytes and flag bytes. It no longer accepts preselected computed groups. configure executes selection before building the rate command."
+  ],
+  "api": {
+    "RegulatoryInput::country": "Country selection with the supplied raw hardware flags.",
+    "RegulatoryInput::from_eeprom": "Parse raw mode,index,six6-byte custom records and flags into closed selection variants.",
+    "RegulatorySelector::select": "Resolve and cache the profile in owned CPU, returning borrowed selected group facts.",
+    "Adapter::invalidate_regulatory_selection": "Clear cached selection for a country/configuration update."
+  },
+  "tests": {
+    "files": ["vendor_wireless_adapter_regulatory_tests.rs", "vendor_wireless_adapter_tests.rs"],
+    "behavior": "All15 profile selections, Japanese channel14, Canadian split ranges, indexed and custom paths, invalid-index and unknown-mode/country fallback, cache retention/invalidation and outgoing command bytes.",
+    "execution": "Written and unrun by assignment. No builds, tests, linters, formatters, native comparisons, SDK or live operations."
+  }
+}

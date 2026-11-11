@@ -1,10 +1,10 @@
-use core::mem::transmute;
+use crate::callback_registry::{registry as callbacks, CallbackWord};
 use core::ptr::{read_volatile, write_volatile};
 
 unsafe fn read(at: u32) -> u32 { unsafe { read_volatile(at as *const u32) } }
 unsafe fn write(at: u32, value: u32) { unsafe { write_volatile(at as *mut u32, value) }; }
 unsafe fn core_id() -> u32 {
-    let current: unsafe extern "C" fn() -> u32 = unsafe { transmute(read(read(0x96bd20) + 0x1618) as usize) };
+    let current: unsafe extern "C" fn() -> u32 = match callbacks().resolve(CallbackWord(read(read(0x96bd20) + 0x1618))) { Ok(entry) => entry, Err(_) => return 0 };
     unsafe { current() }
 }
 unsafe fn method(core: u32, offset: u32) -> u32 { unsafe { read(read(0x96bd20 + core * 4) + offset) } }
@@ -19,8 +19,8 @@ impl SemaphoreClass {
     fn encode(self, identifier: u32) -> u32 { identifier as u16 as u32 | self.0 << 16 }
 }
 unsafe fn create(core: u32, class: SemaphoreClass, identifier: u32, creation: &SemaphoreCreation) -> i32 {
-    let call: unsafe extern "C" fn(u32, *const SemaphoreCreation) -> i32 = unsafe { transmute(method(core, 0x64) as usize) };
-    unsafe { call(class.encode(identifier), creation) }
+    let call: unsafe extern "C" fn(u32, *const u32) -> i32 = match callbacks().resolve(CallbackWord(method(core, 0x64))) { Ok(entry) => entry, Err(error) => return error.status() };
+    unsafe { call(class.encode(identifier), creation as *const SemaphoreCreation as *const u32) }
 }
 unsafe fn report(operation: u32, id: u32, status: i32) { unsafe { xm1_power_service_error(operation, id as i32, status) }; }
 
@@ -44,8 +44,8 @@ pub unsafe extern "C" fn xm1_power_semaphore_create(identifier: u32, count: u32)
         loop {
             status = unsafe { create(core, class, candidate as u32, &creation) };
             if status == 0 {
-                let mask: unsafe extern "C" fn() -> u32 = unsafe { transmute(method(core, 0x164) as usize) };
-                let restore: unsafe extern "C" fn(u32) = unsafe { transmute(method(core, 0x168) as usize) };
+                let mask: unsafe extern "C" fn() -> u32 = match callbacks().resolve(CallbackWord(method(core, 0x164))) { Ok(entry) => entry, Err(error) => return error.status() };
+                let restore: unsafe extern "C" fn(u32) = match callbacks().resolve(CallbackWord(method(core, 0x168))) { Ok(entry) => entry, Err(error) => return error.status() };
                 let saved = unsafe { mask() };
                 unsafe {
                     write(0x93e6f4 + (candidate as u32 - 1) * 4, class.0);
@@ -67,7 +67,7 @@ pub unsafe extern "C" fn xm1_power_semaphore_poll(identifier: i32) -> i32 {
     let core = unsafe { core_id() };
     let slot = identifier as u16 as u32;
     let class = if identifier <= 169 { unsafe { read(0x93e6f4u32.wrapping_add(slot.wrapping_sub(1).wrapping_mul(4))) } } else { 1 };
-    let call: unsafe extern "C" fn(u32) -> i32 = unsafe { transmute(method(core, 0x78) as usize) };
+    let call: unsafe extern "C" fn(u32) -> i32 = match callbacks().resolve(CallbackWord(method(core, 0x78))) { Ok(entry) => entry, Err(error) => return error.status() };
     let status = unsafe { call(slot | class << 16) };
     if status != 0 && status != -50 { unsafe { report(23, identifier as u32, status) }; }
     status
@@ -75,10 +75,10 @@ pub unsafe extern "C" fn xm1_power_semaphore_poll(identifier: i32) -> i32 {
 
 unsafe fn dispatch_control(offset: u32, operation: u32) -> i32 {
     let core = unsafe { core_id() };
-    let call: unsafe extern "C" fn() -> i32 = unsafe { transmute(method(core, offset) as usize) };
+    let call: unsafe extern "C" fn() -> i32 = match callbacks().resolve(CallbackWord(method(core, offset))) { Ok(entry) => entry, Err(error) => return error.status() };
     let status = unsafe { call() };
     if status != 0 {
-        let current: unsafe extern "C" fn() -> u32 = unsafe { transmute(method(core, 0x16c) as usize) };
+        let current: unsafe extern "C" fn() -> u32 = match callbacks().resolve(CallbackWord(method(core, 0x16c))) { Ok(entry) => entry, Err(error) => return error.status() };
         unsafe { report(operation, current(), status) };
     }
     status
@@ -96,11 +96,11 @@ pub unsafe extern "C" fn xm1_power_task_delay(ticks: u32) -> i32 {
     let core = unsafe { core_id() };
     let ticks = TaskDelayTicks(ticks);
     if ticks.0 == 0 {
-        let rotate: unsafe extern "C" fn(u32) -> i32 = unsafe { transmute(method(core, 0x11c) as usize) };
+        let rotate: unsafe extern "C" fn(u32) -> i32 = match callbacks().resolve(CallbackWord(method(core, 0x11c))) { Ok(entry) => entry, Err(error) => return error.status() };
         let _ = unsafe { rotate(0) };
         return 0;
     }
-    let delay: unsafe extern "C" fn(u32) -> i32 = unsafe { transmute(method(core, 0x4c) as usize) };
+    let delay: unsafe extern "C" fn(u32) -> i32 = match callbacks().resolve(CallbackWord(method(core, 0x4c))) { Ok(entry) => entry, Err(error) => return error.status() };
     let status = unsafe { delay(ticks.0) };
     if status != 0 { unsafe { report(9, ticks.0, status) }; }
     status

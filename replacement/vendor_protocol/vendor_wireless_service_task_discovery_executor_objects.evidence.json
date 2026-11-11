@@ -1,0 +1,52 @@
+{
+  "target": "Fujifilm X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "image": "plain-01100000.bin",
+  "image_base": "0x01100000",
+  "section_sha256": "0cf67b7221c3b0755092da0ae4c6d6fb817f2b32771ee53dff691fc59b28770c",
+  "evidence_kind": "instruction-inspected",
+  "handlers": {
+    "0x1006": "0x013f1db4",
+    "0x1007": "0x013f1744",
+    "0x1008": "0x013f6b54",
+    "0x1009": "0x013f58e0",
+    "0x100a": "0x013f6810",
+    "0x100b": "0x013f64b0",
+    "0x100c": "0x013f4d28",
+    "0x100d": "0x013f3f60",
+    "0x101b": "0x013f5c50"
+  },
+  "inspected_ranges": [
+    ["0x013f07a0", "0x013f09a0"],
+    ["0x013f1744", "0x013f2030"],
+    ["0x013f3f60", "0x013f7324"],
+    ["0x013f8960", "0x013f8b38"],
+    ["0x013f8e04", "0x013f9124"],
+    ["0x013f9b34", "0x013f9c1c"],
+    ["0x013fa064", "0x013fa3b8"],
+    ["0x013fa7a0", "0x013fa920"],
+    ["0x013fbf3c", "0x013fc110"],
+    ["0x013fd0cc", "0x013fd208"],
+    ["0x013fd230", "0x013fd334"]
+  ],
+  "primary_provider": {
+    "installation": "0x013fd190 loads 0x013fd2ac; 0x013fd198 calls 0x013f7330",
+    "lookup": "0x013fbbe0",
+    "read": "0x013fbf3c",
+    "write": null,
+    "delete": null,
+    "create": null,
+    "null_create_response": "0x2020",
+    "null_delete_response": "0x2002",
+    "upload_without_pending_metadata_response": "0x2015"
+  },
+  "behavior": [
+    "Storage identifiers are 0x10000001 and 0x10000002, not bare volume ordinals.",
+    "Object handles combine the low sixteen ordinal bits with the high volume bit.",
+    "Enumeration parent zero is unfiltered; parent 0xffffffff selects parent zero.",
+    "The unfiltered count checks the format halfword while handle enumeration checks the complete format word.",
+    "Partial transfer offset-plus-length uses wrapping word arithmetic before unsigned comparison.",
+    "Primary filesystem enumeration and the single-memory-object table at 0x013fa838 are separate providers."
+  ],
+  "verification": "No builds, tests, lint, formatting, native execution, SDK operations, or camera operations run."
+}

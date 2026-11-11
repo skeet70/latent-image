@@ -1,4 +1,5 @@
 use super::*;
+use crate::callback_registry::{registry as callbacks, CallbackWord};
 use core::ptr::{read_volatile, write_volatile};
 
 extern "C" {
@@ -29,8 +30,7 @@ impl Hardware for Native {
 unsafe fn registry() -> &'static mut Registry { unsafe { &mut *(0x94446c as *mut Registry) } }
 unsafe fn dispatch(channel: Channel) {
     let callback = unsafe { registry() }.interrupt(&mut Native, channel);
-    let callback: unsafe extern "C" fn() = unsafe { core::mem::transmute(callback.0) };
-    unsafe { callback(); }
+    if let Ok(callback) = callbacks().resolve::<unsafe extern "C" fn()>(CallbackWord(callback.0)) { unsafe { callback() }; }
 }
 unsafe extern "C" fn irq_zero() { unsafe { dispatch(Channel(0)); } }
 unsafe extern "C" fn irq_one() { unsafe { dispatch(Channel(1)); } }
@@ -50,6 +50,7 @@ pub unsafe extern "C" fn xm1_power_hardware_timer_acquire(selector: u32, output:
 pub unsafe extern "C" fn xm1_power_hardware_timer_start(handle: u32, request: *const HardwareTimerRequest) -> i32 {
     let request = unsafe { &*request };
     let units = match Units::parse(request.units) { Some(value) => value, None => return Error::InvalidConfiguration as i32 };
+    if let Some(callback) = request.callback { let _ = callbacks().ensure(callback); }
     let configuration = Configuration { period: Period(request.period), units, mode: Mode(request.mode), callback: request.callback.map(|value| Callback(value as usize as u32)) };
     unsafe { registry() }.start(&mut Native, Handle(handle), configuration)
 }

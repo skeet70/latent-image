@@ -1,0 +1,96 @@
+{
+  "firmware": "X-M1 1.50",
+  "decomp_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "qualification": "Source-only implementation and behavioral tests written. No build, test, lint, formatting, native execution, SDK or camera run performed.",
+  "inputs": {
+    "stock_image": "private-data/analysis/x-m1-1.50/lz/plain-01100000.bin",
+    "image_base": "0x01100000",
+    "overlay47_file_offset": "0x000e0000",
+    "overlay47_base": "0x011e0000",
+    "overlay47_size": "0x0026a5e0",
+    "overlay47_sha256": "0cf67b7221c3b0755092da0ae4c6d6fb817f2b32771ee53dff691fc59b28770c",
+    "disassembly_tool": "nix shell nixpkgs#pkgsCross.arm-embedded.buildPackages.binutils -c arm-none-eabi-objdump -D -b binary -m arm --adjust-vma=0x01100000 --start-address=START --stop-address=END IMAGE",
+    "preserved_tool_failure": "Host objdump rejected machine arm. ARM cross-binutils from nix then decoded the stock input; host objdump failure is not target evidence."
+  },
+  "source_inspected": [
+    {
+      "source": "app/connectivity/wifi/management/network_lan_start.c",
+      "facts": ["Start invokes initialization stages 0 and 1, then AP stage 2 or station stage 3 when stage equals 3; admission requires stage 4.", "AP control precedes server DHCP startup. Station hardware address copy precedes station control."]
+    },
+    {
+      "source": "app/connectivity/wifi/management/network_lan_request.c",
+      "facts": ["Default station IPv4 configuration is 192.168.0.1 with mask 255.255.0.0.", "Default address installation precedes polling operation 32, with 100-tick waits between failures.", "Station ready polls operation 640 while the command enable flag remains zero.", "Stop completes server/LAN teardown and clears WLAN control before notifying completion and publishing mode 1."]
+    },
+    {
+      "source": "app/connectivity/wifi/management/network_control.c and app/connectivity/wifi/network_subsystem.c",
+      "facts": ["Server stop precedes transport format 1, LAN stages 2,1,0, and owner notification disable.", "AP control installs 4000,20000,35000 control parameters; the network CPU does not duplicate radio control."]
+    },
+    {
+      "source": "app/connectivity/netstack/network_boot_client.c",
+      "facts": ["Client endpoint -1 does not schedule a timer; an active endpoint schedules its callback after 1000.", "Server stop cancels lease timers and server timer before freeing leases, closing socket and detaching channel slots."]
+    },
+    {
+      "source": "app/connectivity/netstack/network_link.c and network_ipv4.c",
+      "facts": ["Hardware lookup admits nonzero IPv4 and six-byte destination, then copies hardware only on successful key lookup.", "IPv4 checksum covers ten 16-bit header words with end-around carry."]
+    },
+    {
+      "source": "app/connectivity/wifi/management/network_state_callbacks.c",
+      "facts": ["The pinned file contains prototypes rather than implementations for network completion/control and socket dispatch functions. Those prototypes alone do not establish ordering or CPU behavior."]
+    }
+  ],
+  "stock_byte_observations": [
+    {"span": "0x013e3ea8-0x013e3f70", "facts": ["Calls 0x013e882c, then polls lease lookup 0x012fe7b8 with selector 0 and a 100-tick sleep each iteration.", "A lease pointer publishes its word at +12 into 0x014bf634, formats four octets and publishes address display text.", "A second 100-tick wait loop compares runtime channel word +0xb0 against the published address before return."]},
+    {"span": "0x013e882c-0x013e8898", "facts": ["This function is a readiness wait, not a DHCP start consumer: it calls 0x01301260 with operation 640 and returns on success or nonzero 0x014bf5c8."]},
+    {"span": "0x013e215c-0x013e23cc", "facts": ["Stage 0 calls 0x0128ec78 then 0x0128eec4; stage 1 calls 0x012ad0c4; stage 2 invokes 0x0131d7fc and stage 3 invokes 0x0131d574.", "A zero return from either stage 2/3 call publishes stage 4. Stage 1 loads two 13-word parameter banks from settings 0x9798..0x97b1."]},
+    {"span": "0x013e202c-0x013e2158 and 0x013e3f74-0x013e3f9c", "facts": ["Stages 2/3 call 0x0131d830 and transition 4 to 3; stage 1 calls 0x012ad1d4 and 0x012ad11c and transitions 3 to 2; stage 0 calls 0x0128efe8 when at stage 2, then 0x0128edd8 and transitions to 0.", "Full stop invokes stages 2,1,0 and finally calls 0x012ad030 with zero."]},
+    {"span": "0x0131c9d0-0x0131ca1c", "facts": ["A null channel returns 0xde. Otherwise it invokes 0x012ffd88, calls 0x01308b00 on channel+0x100 with count 1, invokes 0x0131c7dc and calls 0x01308958 on channel+0x100."]},
+    {"span": "0x0131741c-0x013175a0", "facts": ["The actual socket constructor compares family r0 with 2 at 0x01317434. A non-2 family takes the branch at 0x0131743c, records error 0xf7, null socket and result -1, and jumps to completion at 0x0131758c before allocation.", "Family 28 therefore fails even when accepted by a higher-level parser. No target IPv6 success is inferred from parser flags or protocol names."]},
+    {"span": "0x0130a8b4-0x0130aa40", "facts": ["Hardware key operation locates a route entry and rejects absent or unusable binding state before six-byte hardware copying."]}
+  ],
+  "owned_contract": {
+    "module": "vendor_wireless_network::lan",
+    "entry": "LanRuntime::start, receive, poll, stop, cancel, fail",
+    "station_admission": "Composition owner calls start only after StationRuntime reaches Completed. EAPOL remains owned by station; LAN consumes Ethernet IPv4/ARP only.",
+    "physical_output": "LanOutcome::Frame names an initialized Ethernet prefix in the caller output buffer. Composition owner submits that exact prefix through its concrete radio transport. Physical failure invokes fail before publishing service failure.",
+    "address_publication": "Lease, route and ChannelLeases primary slot zero are installed synchronously before LanState::Ready is visible. A changed lease invalidates neighbors, sockets, fragments and pending output; renewal of the same lease preserves them. DHCP expiry or NAK withdraws the address, clears those consumers, and returns to Acquiring before emitting a discover.",
+    "stop_order": "Stop server and client, clear transport and reassembly, invalidate UDP handles, discard pending packets, clear link and peer state, clear published lease, then publish Down.",
+    "dhcp": "Existing DhcpServer and LeaseSlot engine reused. New DhcpClient owns discover/offer/request/ack/nak, server and transaction admission, option overload, renew/rebind/expiry and 1000ms transmission scheduling.",
+    "packets": "Ethernet framing, ARP ownership and neighbor resolution, local-subnet/default-router routing, multicast mapping, pending packet transmission after ARP, existing UDP checksum/codec, bounded UDP socket receive/transmit queues. TCP and IPv4 reassembly are consumed from the separately owned transport module.",
+    "socket_options": "bind_udp selects the owned IPv4 interface or a multicast destination; join_udp_multicast/leave_udp_multicast manage per-socket group ownership. set_udp_traffic_class writes the IPv4 traffic byte before checksum. set_udp_multicast_interface validates the selected owned interface and supplies the multicast source address. configure_tcp forwards typed SocketConfiguration to the concrete transport owner.",
+    "udp_receive": "udp_received projects queued source/length without copying or consuming payload. receive_udp preserves the whole datagram on capacity failure. receive_udp_with_mode selects typed WholeDatagram or Truncate behavior; Truncate copies the available prefix, returns the copied length and consumes the entire datagram, including any discarded remainder.",
+    "socket_lifetime": "Task87 consumes open_tcp_unbound without fabricating a port. connect_tcp_handle and listen_tcp_handle retain that canonical handle and delegate dynamic binding to TransportRuntime. Connect emits SYN; listen creates an owned listener. On listen failure the caller retains the handle for cancellation. open_tcp selects an explicit local port. open_udp_ephemeral uses the existing UDP socket table and selects an unused dynamic port; udp_local_endpoint exposes the assigned endpoint. No task-local socket engine is introduced.",
+    "multicast": "Eight groups with bounded per-socket membership. IGMPv2 reports and leaves are emitted as ordinary routed IPv4 packets with TTL 1 and router alert; shared group membership leaves only after the final socket. General and group-specific queries queue reports, and received reports suppress pending reports. Multicast UDP is delivered only to joined sockets.",
+    "transport_module": "The LAN facade declares vendor_wireless_network_transport.rs and consumes its concrete TCP/reassembly APIs and separate evidence.",
+    "service_composition": "vendor_wireless_service owns the network86 queue/transition dispatcher, selected-interface control, radio/station setup and notification delivery. LAN does not export an opaque CPU callback for those operations. The service owns the serial transition lifecycle and pumps this runtime after station/AP setup.",
+    "dispatcher_byte_observation": "0x013e99b8..0x013e9be4 maps kinds 0x660b,0xe60b,0x6600,0x6601,0x6602,0x6603,0x6606,0x660c,0x662a,0x660d,0x660e,0x6609,0x660a to indices 0..12, or 13 otherwise, before calling 0x013e98f8 with zero. 0x013e9c0c..0x013e9c3c receives queue 0x56 and dispatches each message. 0x013ebba0..0x013ebbe0 chooses call 0x013edbcc versus 0x013ef2f0 using word +0xd4 at 0x014c1010 and forwards the incoming kind.",
+    "limits": "Eight UDP sockets, eight TCP socket slots, 2048-byte socket buffers, four 4096-byte fragment slots, sixteen neighbors, eight multicast groups and one 4096-byte pending routed packet. Capacity and backpressure are typed results; no heap, raw stock pointer, scalar CPU callback or firmware trampoline."
+  },
+  "intentional_redesign": [
+    "The stock address propagation busy-wait is replaced with one synchronous owned address/route/lease publication. No external CPU is asked to finish address installation.",
+    "The caller receives typed state and lease data rather than stock global addresses or display-string pointers.",
+    "Typed errors replace stock unbounded array and packet accesses. Socket generation checks reject handles invalidated by close, stop or address loss.",
+    "The packet, DHCP client and IGMPv2 implementations follow the owned wire/state contract. The inspected target spans establish integration and teardown dependencies, not instruction-equivalence for every option, routing decision or multicast timer.",
+    "One interface owns its connected route and default router. It does not reproduce the stock multi-channel route tree or its memory representation.",
+    "Owned ephemeral UDP ports are selected sequentially from 49152..65535 with live-port collision exclusion. This is an owned allocation policy, not a stock port-sequence equivalence claim."
+  ],
+  "behavioral_tests_written_unrun": [
+    "Full AP/server to station DHCP Ethernet exchange and coherent address publication.",
+    "Stop invalidates UDP handles, clears published lease and rejects late packets.",
+    "Unresolved UDP transmission emits ARP then sends the preserved payload after resolution.",
+    "Small socket receive output leaves the datagram queued.",
+    "DHCP renew, rebind, expiration and stopped-client late reply rejection.",
+    "Wrong transaction is ignored.",
+    "Routing uses the default router for a remote subnet and broadcast hardware for subnet broadcast.",
+    "ARP reply ownership, neighbor learning and address-change invalidation.",
+    "Station start capacity failure leaves state Down.",
+    "DHCP server restart clears the previous lease owner.",
+    "DHCP discovery timer handles millisecond wrap and stop disarms further transmissions.",
+    "Stopped AP rejects late peer completion without republishing peers.",
+    "Per-socket multicast membership gates UDP delivery and outgoing traffic class is checksummed.",
+    "Shared multicast membership emits IGMP leave only after the last socket.",
+    "Ephemeral UDP ports exclude live bindings and outgoing packets use the assigned source endpoint.",
+    "Unbound TCP retains its handle through connect, acquires a dynamic port and is invalidated by LAN stop.",
+    "Unbound TCP listeners acquire distinct ephemeral bindings without fabricating fixed local ports.",
+    "UDP readiness metadata does not consume payload; truncating 1470 bytes into a 52-byte receive buffer returns 52 and discards the remainder."
+  ]
+}

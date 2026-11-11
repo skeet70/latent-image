@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "pamK4pjiZpfPi6OquxUL6TsjINGB/STLM80YdVoR+sM=",
+        "bzlTransitiveDigest": "tg+PheFvEBWlyeGHssJ3DaTBoVZpnSMEYRS4q+TCE1Q=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -1591,6 +1591,23 @@
               "repository": "@@_main~lab_dependencies~lab_nixpkgs//:lab_nixpkgs",
               "repositories": {},
               "build_file_content": "exports_files([\"bin/sha256sum\", \"bin/sort\"], visibility = [\"//visibility:public\"])",
+              "nixopts": [],
+              "quiet": false,
+              "fail_not_supported": true
+            }
+          },
+          "lab_gnutar": {
+            "bzlFile": "@@rules_nixpkgs_core~//:nixpkgs.bzl",
+            "ruleClassName": "_nixpkgs_package",
+            "attributes": {
+              "unmangled_name": "lab_gnutar",
+              "attribute_path": "gnutar",
+              "nix_file_deps": {},
+              "nix_file_content": "",
+              "nix_license_path": "",
+              "repository": "@@_main~lab_dependencies~lab_nixpkgs//:lab_nixpkgs",
+              "repositories": {},
+              "build_file_content": "exports_files([\"bin/tar\"], visibility = [\"//visibility:public\"])",
               "nixopts": [],
               "quiet": false,
               "fail_not_supported": true

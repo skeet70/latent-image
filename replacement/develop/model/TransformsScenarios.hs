@@ -45,20 +45,22 @@ transformsScenarios bytes resolve = concatMap (\pub -> zipWith number [0 :: Int 
         guarded = address `elem` [0xe96978,0xe96a74,0xe96bf0,0xe96d28,0xe96e9c,0xe96fe4,0xe972f4,0xe973f4,0xe97558,0xe97690,0xe977c0,0xe97a88]
         skip = StageScenario (StageCaseName "inactive") pub (context:args) (common++inactive) [word (state+0x38) (plan operation!!4)] (Just 0) [] []
         invalid = StageScenario (StageCaseName "invalid-pass") pub [context,0xffffffff] common [word (state+0x38) 0] (Just 3) [] []
-        primary = head (cases pub)
+        primary = case cases pub of (firstCase:_) -> firstCase; [] -> error "a transform publication has no cases"
         transitions = [primary { stageCaseName = StageCaseName "begin-transition", stageInitial = stageInitial primary ++ [word (context+0x44) mode], stageFinal = [], stageReturn = Just 5, stageCodePointers = [], stageCalls = take 3 (beginCalls (plan operation)) } | mode <- [0..2], let table = readWord bytes (0xea2548+mode*8+4), table /= 0, operation `elem` tableOperations table 0]
      in (if guarded then [skip] else []) ++ (if address `elem` [0xe97e94,0xe9837c] then [invalid] else []) ++ transitions
   tableOperations table index
     | index > 256 = error "unterminated transition table"
     | readWord bytes (table+index*12) == 0x80 = []
     | otherwise = readWord bytes (table+index*12) : tableOperations table (index+1)
-  plan operation = head [[readWord bytes (0xea6738+i*52+j*4) | j <- [0..12]] | i <- [0..126], readWord bytes (0xea6738+i*52) == operation, readWord bytes (0xea6738+i*52+28) == 13]
+  plan operation = case [[readWord bytes (0xea6738+i*52+j*4) | j <- [0..12]] | i <- [0..126], readWord bytes (0xea6738+i*52) == operation, readWord bytes (0xea6738+i*52+28) == 13] of
+    (planWords:_) -> planWords
+    [] -> error "stock plan not found"
   common = base ++ [word (context+20) previous,word (context+24) 0x1234,word (state+0x3098) saved,word (state+0x3228) (saved+0x200),word (state+0x4ac) 1,word (state+0x2794) 1,word (state+0x3218) 1,word (state+0x5cc) 4,word (state+0x1604) 3,word (state+0x5d0) 3,word (state+0x1680) 1,word (saved+0xcc) 2,word (saved+0x310) 0,word (saved+0x314) 0,word (saved+0x30c) 0,wordsAt saved image,wordsAt objectAddress image,word marker 0] ++ [wordsAt (state+offset) image | offset <- [0x184,0x1a0,0x210,0x22c,0x248,0x264,0x280,0x2b8,0x2f0,0x30bc]] ++ [wordsAt (0x15b0cd8+i*28) image | i <- [0..5]] ++ [wordsAt (previous+0x184) image]
   make pub label operation args initial final status calls =
     let p = plan operation
      in StageScenario (StageCaseName (label ++ "-" ++ show (addressWord (stageStockEntry pub)))) pub (context:args) (common++initial) (word (state+0x38) (if status == 1 then p!!4 else p!!3):final) (Just 0) [] (beginCalls p ++ calls ++ completeCalls p status)
   obj group kind = call 0xe44dbc [state+0x7c,group,kind] objectAddress
-  debug kind offset number = call 0xe53ed4 [state,kind,state+offset,number] 0
+  debug kind offset wordValue = call 0xe53ed4 [state,kind,state+offset,wordValue] 0
   cfg key value = call 0x69f8fc [key] value
   pair = [cfg 0x9f13 0,cfg 0x9f12 32]
   service address args status inputs outputs = ScriptCall (Address address) (zip [N.R0,N.R1,N.R2,N.R3] args) [(N.R0,status)] inputs outputs
@@ -90,7 +92,7 @@ transformsScenarios bytes resolve = concatMap (\pub -> zipWith number [0 :: Int 
       active pub 0x51 [1] [] [wordsAt (state+0x30f8) [2,0x9c0f80,0x60,0x80,0x20,8,0x123400]] 1 ([obj 0x26 0,service 0xe4fd5c [state] 1 [] [effect]]++pair++pair)]
     0xe986a4 -> [active pub operation [pass] [] [wordsAt (state+offset) changed,word (state+0x1d30) 2] status [obj 0x49 kind,service 0xe58e10 [state] status [dataAt N.R1 image] [dataAt N.R1 changed,effect]] | (pass,operation,kind,offset) <- [(1,0x4a,5,0x1a0),(0,0x4b,6,0x184)],status <- [0,1]] ++ [bypass pub 0x4a [1] [] [wordsAt (state+0x1a0) image,word (state+0x1d30) 2] [obj 0x49 5]]
     0xe98808 -> [active pub 0x49 [] [] [wordsAt (state+0x184) changed] status [obj 0x47 0,imageCall 0xe58cb8 [state] N.R1 status] | status <- [0,1]] ++ [bypass pub 0x49 [] [] [] [obj 0x47 0]]
-    0xe988dc -> [active pub 0x48 [] [] [wordsAt (state+0x184) changed,word (saved+0xcc) 3] status [obj 0x48 0,service 0xe5c50c [state,saved+0x5c,state+0x184,saved+0x78] status [] [Indirect N.SP 0 (B.concat (map wordBytes changed)),effect]] | status <- [0,1]] ++ [bypass pub 0x48 [] [] [wordsAt (state+0x184) image,word (saved+0xcc) 3] [obj 0x48 0]]
+    0xe988dc -> [active pub 0x48 [] [] [wordsAt (state+0x184) changed,word (saved+0xcc) 3] status [obj 0x48 0,service 0xe5c50c [state,saved+0x5c,state+0x184,saved+0x78] status [] [Indirect N.Sp 0 (B.concat (map wordBytes changed)),effect]] | status <- [0,1]] ++ [bypass pub 0x48 [] [] [wordsAt (state+0x184) image,word (saved+0xcc) 3] [obj 0x48 0]]
     _ -> error "unmapped transform publication"
   bypass pub operation args initial final calls = make pub "bypass" operation args (initial++[word (state+0x27cc) 1]) final 1 calls
   chromaCase pub mode pass operation first second =

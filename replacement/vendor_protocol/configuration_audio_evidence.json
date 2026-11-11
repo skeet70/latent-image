@@ -1,0 +1,49 @@
+{
+  "revision": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "status": "source-composition-unverified",
+  "runtime_composition": "vendor_audio_runtime_evidence.json",
+  "images": [
+    {"base": "0x0061c400", "sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"},
+    {"base": "0x00bf1a00", "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"}
+  ],
+  "action_targets": {
+    "22": "0x00dbc054",
+    "23": "0x00dbc1bc",
+    "24": "0x00dbc260",
+    "25": "0x00dbc41c",
+    "26": "0x00dbc614",
+    "27": "0x00dbc858",
+    "28": "0x00dbc8b4",
+    "29": "0x00dbc8d8",
+    "32": "0x00dbcc48",
+    "33": "0x00dbccf0",
+    "34": "0x00dbcd4c"
+  },
+  "owned_cpu": [
+    {"entries": ["0x00dbc614", "0x006ce7e4", "0x006ce7fc", "0x006ce814"], "implementation": "configuration_audio_actors::action26_hdmi", "evidence": "Exact service_media_commands.c:38-104 and authenticated instruction inspection of all three argument-discarding return-zero callees; shared service_result delivery remains separate."},
+    {"entries": ["0x00dbc41c"], "implementation": "configuration_audio_actors::RecordedPcm::prepare_playback", "evidence": "NONMATCHING source used only as reading aid. Actual instructions dbc438..dbc4d8 establish unconditional copy, channel selector, halfword silencing at offsets 0 or 2 with stride4 and 48000 frames per recorded second."},
+    {"entries": ["0x00dbc260", "0x00dbc41c", "0x00dbb5f4"], "implementation": "configuration_audio_actors::ServicePcmWindow", "evidence": "Actual instructions dbc340..dbc3ec, dbc538..dbc5e4 and dbb5f4..dbb618 establish 192000-byte units, two outstanding units, unconditional wrapping completion increments and equality completion waits. This owns the producer window, not stream execution."},
+    {"entries": ["0x006eb368", "0x006eb490", "0x006eb584", "0x006eb680"], "implementation": "configuration_audio_actors::packets::ServicePacketQueue", "evidence": "The vendor storage adapter implements canonical Power packet_ring::RingMemory. Reservation, splitting, queue search and release execute the shared Power packet-ring CPU."},
+    {"entries": ["0x00dbcc48"], "implementation": "configuration_audio_actors::consume_storage_snapshot", "evidence": "Actual instructions dbcc64..dbccec establish whole-word zero check, low-byte bit priority1,6,8,16, publication values8,32,16,4 and failure publication zero. The storage snapshot producer7101e4 remains unowned."}
+  ],
+  "additional_source_layers": [
+    {"module": "configuration_audio_dma.rs", "scope": "Preserved superseded source generation; not declared by configuration_audio_actors. Runtime uses canonical Power installed DMA state and IRQ registration."},
+    {"module": "configuration_audio_pipeline.rs", "scope": "Preserved superseded source generation; not declared by configuration_audio_actors. Runtime uses canonical Power Pipeline/PipelineLifecycle CPU for submit, completion, cancellation and drain."},
+    {"module": "configuration_audio_stream.rs", "scope": "Preserved superseded source generation; not declared by configuration_audio_actors. Runtime consumes canonical Power stream continuations and actual registry messages."},
+    {"module": "configuration_audio_sound.rs", "scope": "Action22 sample mapping, ROM catalog, 16-slot queue and paired/end handling. vendor_audio_runtime consumes clips through the canonical codec/pipeline and continues paired ends on the same stream."},
+    {"module": "configuration_audio_storage.rs", "scope": "Action28 concrete ConfigurationStorage read, overlays and key sampling. Action29 ARM shared ApplicationNand profile write41/count33, cache maintenance, live828574 gate and result-byte publication. Canonical host logical-profile write binding is still required."}
+  ],
+  "remaining_unowned_cpu": [
+    "22/24/25 parent dispatcher joins NativeVendorAudio polling, actual queue payload consumption, shared codec timer and ProtocolResultPublication; see vendor_audio_runtime_evidence.json",
+    "23 PlaybackConsumer display mode changes and actual display completion route6d1690/6d15d4/dbb61c",
+    "24 parent composes canonical AV bank selection before begin_capture using the same codec_domain",
+    "27 download querydb8ab0 and channel timer setup/stop6a4d84/6a4c94",
+    "28 parent action integration with ConfigurationStorage and live configuration image",
+    "29 canonical ApplicationNand host logical-profile write binding; physical MemoryNand alone does not implement it",
+    "32 FilesystemCpu producer7101e4 composition with consume_storage_snapshot",
+    "33 FilesystemCpu actual format transaction, drive resolution and ProtocolResultPublication event4 wait",
+    "34 PlaybackConsumer display setup and actual display consumers",
+    "Shared ProtocolResultPublication service_result/scan_send_event4 integration and all runtime qualification"
+  ],
+  "verification": "No builds, tests, linters, formatters, SDK, camera or USB operations executed. Source tests added only."
+}

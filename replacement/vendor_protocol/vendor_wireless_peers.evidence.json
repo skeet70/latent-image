@@ -1,0 +1,34 @@
+{
+  "firmware": "X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_path": "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_012e3ff0.c",
+  "implementation": "vendor_wireless_peers.rs",
+  "tests": {"path": "vendor_wireless_peers_tests.rs", "execution": "not run"},
+  "evidence": [
+    {"addresses": ["0x012e5038", "0x012e50b0"], "classification": "bytes-inspected", "finding": "Twenty adapter-global records at adapter+0x4b0, stride0x244. Allocation scans indices0..19 and selects first unused flag+9, clears the record, assigns index+8 and network+0x1c. Initializes17 sequence slots to0xffff, five queue heads, five pending queue records, and flags+0x15f/+0x160 to1."},
+    {"addresses": ["0x012e5540", "0x012e55d0"], "classification": "bytes-inspected", "finding": "Index lookup checks0..19 and used flag. Address lookup scans used records matching network byte+0x1c and all six MAC bytes+0xa."},
+    {"addresses": ["0x012e56c0"], "classification": "bytes-inspected", "finding": "States0/1/2 are stored at+0x1d. Requested1 from previous!=2 and requested0 from previous1 update only local state. Other paths publish cmd0x17. Entering2 calls0x012f38e4 and requests completion when prior state differs; leaving2 clears actual hardware queues through0x012a6018. Network1 additionally invokes0x012fce8c when its interface mode is2."},
+    {"addresses": ["0x012e5858"], "classification": "bytes-inspected", "finding": "Device activation completion locates returned index byte6, requires allocated record state2, and compares six returned MAC bytes before calling0x012a5f80. Physical transport acknowledgement alone is not activation."},
+    {"addresses": ["0x012f77d0"], "classification": "bytes-inspected", "finding": "Secondary session reset clears two halfwords+0x44/+0x46 and three bytes+0x74/+0x15d/+0x64 while retaining allocation, capabilities and MAC. Canonical clear_secondary_session mutates the stored session directly."},
+    {"addresses": ["0x012e53a8", "0x012e54a0", "0x012e5c14"], "classification": "source-inspected-and-bytes-inspected", "finding": "Release cancels record timer+0x4c, clears+0x15d/+0x64, frees auxiliary allocation+0x164, clears hardware queues, optionally submits removal0x18, then clears used flag. Network release visits all20 records with matching network. Remove payload is8 bytes: index byte0, MAC bytes2..8; byte1 has no defined stock initialization."}
+  ],
+  "inspection": {
+    "tool": "/nix/store/ld6aihszv7hhaarrirxi3khvl5z3fifx-arm-none-eabi-binutils-2.46/bin/arm-none-eabi-objdump",
+    "arguments": "-D -b binary -m arm --adjust-vma=0x01100000 --start-address=0x012e5038 --stop-address=0x012e5ce0",
+    "additional_extent": "--start-address=0x012f77d0 --stop-address=0x012f7870",
+    "input": "private-data/analysis/x-m1-1.50/lz/plain-01100000.bin",
+    "scope": "All NONMATCHING target functions confirmed against actual ARM instructions; no compilation or target execution. Exact C release functions also read at committed source ref."
+  },
+  "owned_design": [
+    "Single concrete PeerPool is owned by the radio root and borrowed by AP, STA, P2P and RX consumers. No role-specific physical allocator.",
+    "Generational leases reject deferred completion after slot reuse. Retiring records remain reserved until concrete owner cancels timers/reorder queues, submits source removal, and consumes release.",
+    "PHY, HT, capability, signal quality, dBm and authorization are separate typed values; none are inferred from MAC or slot index.",
+    "Peer device0x17/0x18 serialization remains the StationIbss provider. PeerTransition is consumed by association/secondary engines, not a second serializer.",
+    "HardwarePeerPower is the actual ReceiveEvents-owned state embedded in each allocated canonical record. ReorderEngine retains canonical PeerLease keys and root teardown drains concrete packet publications before reuse."
+  ],
+  "limits": [
+    "NetIndex roles0/1/2 and semantic state names are interface types, not proof supplied by function names.",
+    "Integration owner wires root declarations and runs checks. This worktree changes only vendor_wireless_peers-prefixed files.",
+    "No builds, tests, lint, format, native execution, SDK operations or live camera operations were run."
+  ]
+}

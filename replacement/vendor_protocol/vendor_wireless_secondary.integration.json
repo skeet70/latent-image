@@ -1,0 +1,36 @@
+{
+  "module": "vendor_wireless_secondary",
+  "source": "replacement/vendor_protocol/vendor_wireless_secondary.rs",
+  "children": ["vendor_wireless_secondary_runtime.rs", "vendor_wireless_secondary_wire.rs"],
+  "tests": ["vendor_wireless_secondary_tests.rs"],
+  "evidence": "vendor_wireless_secondary.evidence.json",
+  "root_exports": ["pub mod vendor_wireless_secondary"],
+  "build_sources": [
+    "vendor_protocol/vendor_wireless_secondary.rs",
+    "vendor_protocol/vendor_wireless_secondary_runtime.rs",
+    "vendor_protocol/vendor_wireless_secondary_wire.rs",
+    "vendor_protocol/vendor_wireless_secondary_tests.rs"
+  ],
+  "providers": [
+    {"module": "vendor_wireless_adapter", "commit": "eeca1180", "api": "FirmwareRequest, Adapter::enqueue_firmware_request; prerequisites0001ef82,6d66e015 are managed by RadioAdapter"},
+    {"module": "vendor_wireless_peers", "commits": ["c6b78a3c", "6dfb2bae"], "api": "PeerPool, PeerLease, NetIndex, PeerState, iter, set_state, clear_secondary_session, release"},
+    {"module": "vendor_wireless_station_driver::association::ibss", "commit": "12c506dc", "api": "PeerParameters,peer_record_body; integrate through StationAssociation provider chain"},
+    {"module": "vendor_wireless_station_driver::receive", "api": "FirmwareEvent,FirmwareEventKind,Packet::parse"},
+    {"module": "vendor_wireless_station_driver::receive::reorder", "api": "ReorderEngine<P,N>::teardown_peer(PeerLease,DeleteMode::Cancel); RootRuntime drains pop_ready"},
+    {"module": "vendor_wireless_access_point::beacon", "api": "The shared AP template producer supplies actual configured beacon IE bytes. BeaconElements is a bounded borrowed IE view, not a replacement authenticator or template engine."}
+  ],
+  "runtime_api": {
+    "constructor": "SecondaryRuntime::new(BssContext,BssParameters,Capability,InterfaceParameters,initialPeerProjection,Option<PeerLease>)",
+    "rx": "receive(&FirmwareEvent,&PeerPool,AbortAdmission)->Result<bool,Error>; body starts directly after canonical8-byte event header",
+    "abort_admission": "Allowed when actual adapterdef1==0; Suppressed otherwise. Primary body0 abort stays with primary association.",
+    "service": "prepare(BeaconElements,&mutPeerPool,&mutReorderEngine<P,N>,Option<&ibss::PeerParameters>,rates:&[u8])->Result<(),Error>",
+    "egress": "command()->Option<canonical FirmwareRequest>; enqueue through the existing Adapter and retain its DescriptorId in the root physical pump",
+    "completion": "finish_command(Result<(),DeviceFailure>,&mutPeerPool) only after corresponding physical DescriptorId completion; no completion on enqueue",
+    "failure": "A failure remains visible in cpu.failure and hides egress. retry() clears failure and re-exposes exactly the retained packet. No automatic retry.",
+    "publication": "take_notification()->Option<DisconnectPublication> reason4; route to the existing service publication consumer",
+    "peer_changes": "peer_changed(&PeerPool) recomputes secondary AP protection against canonical allocated peers",
+    "teardown": "Associated->disconnected cancels shared reorder queues before peer state CMD17; then CMD16 and CMD1b. PeerLease stays reserved until final physical flush, preventing stale index reuse. Root/HT projections and coexistence timer ownership clear on final completion."
+  },
+  "test_execution": "unrun by assignment",
+  "integration_checks": "Main integration owner should build the vendor protocol targets and execute the wireless receive, association, adapter, reorder, AP and secondary behavioral suites once the root registrations and service routing land."
+}

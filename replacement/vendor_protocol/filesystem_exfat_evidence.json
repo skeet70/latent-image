@@ -1,0 +1,65 @@
+{
+  "source_index_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "target": "Fujifilm X-M1 1.50",
+  "scope": "Original source-only exFAT format CPU; no runtime, hardware, native or full-system qualification",
+  "image4": {
+    "base": "0x0061c400",
+    "bytes": 2631680,
+    "sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
+    "private_input": "private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin"
+  },
+  "source_navigation": {
+    "draft": "decomp/app/storage/fs/fs_exfat_format.c",
+    "mapping": "decomp/firmwares/xm1-150/mod-symbols.tsv:fs_format_exfat",
+    "actual_extent": ["0x0070acd4", "0x0070b9ec"],
+    "draft_status": "NONMATCHING; algorithm and source input addresses inspected directly in authenticated image4 A32 instructions"
+  },
+  "private_tables": [
+    {
+      "purpose": "Compressed upcase bytes",
+      "address": "0x00812e2c",
+      "bytes": 5836,
+      "rolling_checksum": "0xe619d30d",
+      "address_materialization": ["0x0070b6c4", "0x0070b7f8"]
+    },
+    {
+      "purpose": "OEM parameters",
+      "address": "0x00814548",
+      "bytes": 16,
+      "rolling_checksum": "0xd3e40108",
+      "address_materialization": "0x0070b380"
+    }
+  ],
+  "publication_boundary": "No firmware table bytes are published. ExfatTables borrows the caller's owner-supplied image. The caller authenticates SHA-256 before from_image4; the constructor independently checks exact image length and table rolling fingerprints, which are not cryptographic authentication. The unsafe mapped constructor requires authenticated immutable readable X-M1 spans for its returned lifetime.",
+  "public_interface": {
+    "entry": "format_exfat(io: &mut impl filesystem_runtime::SectorIo, volume: &mut filesystem_format::VolumeDescriptor, layout: filesystem_format::Layout, control: &filesystem_format::FormatControl, tables: ExfatTables<'_>) -> Result<(), filesystem_format::FormatError>",
+    "mounted_scan": "scan_free(io: &mut impl SectorIo, volume: &mut VolumeDescriptor, control: &FormatControl) -> Result<(), FormatError>; read-only root-directory traversal to the active bitmap entry, FAT-chain traversal of noncontiguous bitmap clusters, trailing invalid bitmap bits excluded, capacity publication only on complete successful scan. Requires mounted Layout root, FAT and cluster geometry.",
+    "provider": "SectorIo read/write use filesystem_format::Sector and consecutive full-sector byte slices; sector_bytes must be 512; flush must report actual provider completion.",
+    "integration": "Filesystem runtime selects Layout and passes mandatory ExfatTables only for ExFat. SD/FTL routing remains in the canonical SectorIo implementation.",
+    "publication": "Volume layout, next-free cluster, free count, metadata status and write state are published only after all writes, canonical flush and actual allocation-bitmap readback scan succeed. Partial medium writes survive errors; no rollback or fabricated success."
+  },
+  "derived_behavior": [
+    "Zero inclusive range 0 through partition + 2*fat_pages + 3*cluster_pages - 1 before MBR and BPB writes.",
+    "Write boot sectors at partition and partition+12; eight signed extended boot sectors per copy; OEM sector at offsets 9 and 21; zero reserved sectors 10 and 22; repeated rotate-right/add checksum words at offsets 11 and 23.",
+    "Boot checksum excludes byte offsets 106, 107 and 112. The all-zero reserved sector does not change the checksum after 512 rotations.",
+    "Initialize FAT entries 0..4 to fffffff8, ffffffff, ffffffff, ffffffff, ffffffff.",
+    "Bitmap zeroing rounds the truncated clusters/8 byte count into sectors; root directory reports rounded-up bitmap byte length.",
+    "Stream exactly 0x16cc source upcase bytes with zero padding; checksum covers only the unpadded source bytes.",
+    "Root first byte is 3, not a substituted 0x83 volume-label entry; bitmap and upcase entries begin at offsets 32 and 64.",
+    "Root data location follows bitmap and upcase allocation; initial bitmap marks all system clusters allocated.",
+    "Retained Layout descriptor addresses preserve actual u16 partition truncation, including 65536 becoming zero in descriptor-derived FAT/data addresses; on-disk BPB partition remains full-width."
+  ],
+  "intentional_replacement_rules": [
+    "Reject non-exFAT layouts, non-512-byte providers and unsupported cluster geometry before writes.",
+    "Propagate provider write, flush and readback failures as Write, Flush and Scan; cancellation is checked before each I/O step.",
+    "Use actual bitmap readback for free-space publication instead of proprietary mapping-workspace and cluster-scan CPU calls.",
+    "Mounted bitmap scanning uses a constant-space cycle-detecting FAT cursor; invalid clusters, short chains, cycles, missing active bitmap and undersized bitmap data fail without capacity publication. Root and bitmap placement are read from mounted metadata, not formatter constants."
+  ],
+  "source_tests": {
+    "file": "filesystem_exfat_tests.rs",
+    "provenance": "Synthetic upcase and OEM arrays authored in tests; no firmware bytes or captured tables",
+    "behaviors": ["redundant BPB and checksum", "FAT system entries", "upcase streaming and padding", "root entries", "allocated bitmap and free-space publication", "write/flush/scan failures preserve descriptor", "cancellation", "missing and unrecognized private source rejection", "fragmented mounted root and bitmap chains", "inactive bitmap entry exclusion", "partial final bitmap byte", "read-only mounted capacity refresh", "invalid cyclic and short bitmap chains"],
+    "executed": false
+  },
+  "verification": "Owner-supplied image SHA-256 observed; source and actual formatter instructions inspected. No builds, tests, formatting, lint, native, SDK, USB or camera operations executed."
+}

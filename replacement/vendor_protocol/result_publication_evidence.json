@@ -1,0 +1,31 @@
+{
+  "target": "X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "index": "55436fc85c0560dd252b0410af6f2427fe198cd3-a5daad359532.tsv",
+  "whole_unit_admitted": false,
+  "functions": [
+    {"address": "0x00dba464", "size": 40, "sha256": "73dfce68aa4260b90b047fc9bc17fa4ed2b6abe64137d772f10b827bffd879c1", "source": "app/connectivity/ptp/service_update_commands.c:99-103", "index_status": "exact", "behavior": "Request global route slot 2 level 8, then post scan event 4 with caller flags."},
+    {"address": "0x00d82798", "size": 80, "sha256": "2b6a26727dc3481e51ce5a7c16e56d739d3c88176f24c65a401d1976e577e96f", "source": "app/connectivity/ptp/vendor/scan_status_requests.c:287-295", "index_status": "exact", "behavior": "Post opcode 0x3408 to task 0x24 with 24-byte payload: event 4 followed by caller flags. Remaining words are unconsumed stock stack residue; replacement initializes them to zero."},
+    {"address": "0x0064982c", "size": 348, "sha256": "d428828e43ef089efd3f23b76104f4ace47e5a1cb2cf250e4e83257eeaa6333c", "source": "app/drivers/isp/routes/output_route_initialization.c:172-200", "index_status": "exact", "behavior": "Validate slot <=18 and level <=8. Store shared requested slot, resolve maximum of all 19 requests and minimum, clamp to maximum. Apply shared channel requests selector 0 and 0x101 at slot 0. Ignore both application statuses. Third argument is unused."}
+  ],
+  "authenticated_images": [
+    {"base": "0x0061c400", "sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"},
+    {"base": "0x00bf1a00", "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"}
+  ],
+  "dependencies": {
+    "configuration_actions_low": "ActionCompletion, ActionNotification, CpuReturn, ResultFlags from ba98de03",
+    "controller": "QueueController::consume_completion and ControllerMessage::parse from c164eaa9",
+    "power": "Unfrozen xm1_power_lifecycle source: resource_route::set_request, shutdown::ShutdownRtos and ServiceMessage; new resource_requested_route module must be declared in that shared crate. Existing channel resolver and MMIO apply are not duplicated.",
+    "critical": "xm1_power_interrupt_lock() -> u32; xm1_power_interrupt_unlock(u32)"
+  },
+  "integration": [
+    "Declare result_publication in vendor crate and include result_publication_tests.rs and evidence in owner build graph.",
+    "Declare resource_requested_route in the shared Power crate and include its source in the frozen Power build graph.",
+    "Initialize the actual shared route constructor before constructing NativeRequestedRoute.",
+    "Dispatch every ActionCompletion through publish_completion. ServiceResult is not transport completion until this consumer posts the controller message.",
+    "Feed actual queued 0x3408 messages into ControllerMessage::parse and QueueController::consume_completion. Apply returned command readiness in service.",
+    "Action 3 ScanEvent4 bypasses route mutation. None preserves silence. Both preserve their original CpuReturn on successful publication.",
+    "Freeze and initialize shared Power dependency before native admission. No native entry, build, test, lint, format, SDK, camera or USB verification was run."
+  ],
+  "tests": "Source-only tests exercise queue wire output, actual controller parsing/consumption, failure publication, deferred ordering, stopped late completion, and queue failure. Native route MMIO and full pending-command reply integration remain unexercised."
+}

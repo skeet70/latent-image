@@ -199,7 +199,7 @@ genrule(
     tools = ["@lab_rustc//:bin/rustc"],
 )
 
-exports_files(["regions-s3d.json", "s3d-a.ld", "s3d-b.ld"])
+exports_files(["regions-s3d.json", "s3d-a.ld", "s3d-b.ld", "src/s3d_cpu.rs"])
 
 [
     xm1_rust_elf(

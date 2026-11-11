@@ -1,0 +1,72 @@
+{
+  "firmware": "X-M1 1.50",
+  "decomp_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "qualification": "source-only; not built, tested, linted, formatted or runtime-qualified",
+  "implemented": {
+    "consumer": "0x013d7eec",
+    "extent_bytes": 1120,
+    "stock_sha256": "c72a10678a630cac776720e93cc878478cffc4a83a08ad7b88932fcf118f3bc7",
+    "index_status": "exact",
+    "source": "app/connectivity/wifi/management/wireless_scan_results.c:16-76",
+    "scope": "Validated BSS conversion and synchronous bounded collection of up to 64 service scan rows, including WPA/RSN security parsing and WPS presence. No heap allocation, stock pointers or proprietary CPU calls.",
+    "shared_security_api": "parse_security_elements(&[u8]) returns typed SecurityElements { wpa, rsn, wpa_group, rsn_group, wps } or ScanError::TruncatedElements. GroupCipher distinguishes Unspecified, Wep40, Wep104, Tkip and Ccmp independently from the pairwise cipher. SecurityElements::legacy_privacy(Capabilities) retains WPA/RSN presence gating even when a security body is malformed. The API exposes ScanRow's observation/parser engine without requiring dummy BSS metadata. New public-parser and mixed-group/pairwise behavioral tests remain unrun.",
+    "group_cipher_bytes": ["0x013329fc..0x01332a04 initializes the RSN group selector at output+8 to16. 0x01332b2c..0x01332b3c replaces it with the decoded explicit group selector when four bytes remain.", "0x013332dc..0x013332e4 initializes the WPA group selector at output+8 to8.", "0x013326f0..0x013328dc maps RSN OUI selectors1,2,4,5 to masks2,8,16,4 respectively; unknown suites return0. The group cipher is not inferred from pairwise selection."],
+    "raw_observations": [
+      "0x013d7f84-0x013d7f94 computes 4 + limit*64, limit capped at 63.",
+      "0x013d7ff0-0x013d7ff8 compares count > limit, not count >= limit. The owned collector consequently admits up to 64 rows. Empty-input count preservation belongs to the actor compatibility edge.",
+      "0x013d8020-0x013d80a8 establishes flags, address, SSID, SSID length, frequency and signed signal output offsets.",
+      "0x013d8100-0x013d822c gives personal precedence over enterprise and CCMP precedence over TKIP.",
+      "0x013d825c-0x013d82d4 establishes privacy gating and infrastructure precedence over independent mode.",
+      "0x01330ca0 dispatches to 0x013329bc for RSN and 0x0133329c for WPA.",
+      "0x013329bc-0x01332f74 confirms RSN defaults, count validation, PMKID underflow rejection and ignored trailing bytes. No management cipher branch is emitted."
+    ],
+    "intentional_boundary_changes": [
+      "SSID length above 32 and truncated element lists return typed errors before conversion."
+    ]
+  },
+  "additional_implemented": {
+    "peer_roster": {
+      "root": "0x013e1dd8",
+      "size": 520,
+      "sha256": "4cf38baa3e95ade8f511ce1373edaf8c24bfe9bda87f4e2de725931f1c3a8a7b",
+      "behavior": "Ten-address roster, duplicate suppression, insertion/removal, peer count, 12-byte notifications kind 0x6705/0x6706 to destination 0x57.",
+      "intentional_changes": "Full roster and unknown disconnect return typed errors instead of count divergence or out-of-bounds writes."
+    },
+    "channel_lease_lookup": {
+      "roots": ["0x012fe7b8", "0x012fe6e8", "0x01303f3c"],
+      "behavior": "Primary then secondary table lookup, bound-state admission and provisional primary lease admission requiring both channel and entry flags.",
+      "abi_correction": "The exact C declaration calls 0x012fe7b8 copy_network_node_pair and returns void. Actual instructions return the lease pointer. No stock structure is reproduced in the Rust implementation."
+    },
+    "dhcp": {
+      "roots": ["0x0131b750", "0x0131b93c", "0x0131be84"],
+      "behavior": "Validated BOOTP/DHCP options, overloaded fields, Discover/Request/Decline/Release/Inform lease ownership, five-second offer expiration, finite/infinite lease expiration, reply payload construction and destination selection.",
+      "reply_layout": "548-byte body with observed option padding and server/mask/router/DNS fields; infinite configured lease advertises 10000 seconds.",
+      "intentional_changes": "Typed truncation and length errors replace unchecked reads. Client identifier echo includes all identifier bytes rather than the stock two-byte-short copy.",
+      "qualification_limit": "The new owned DHCP state machine is not an instruction-equivalence claim for the NONMATCHING 0x0131be84 draft. Raw admission and reply construction were inspected; full state-path qualification remains open."
+    },
+    "ipv4_udp": {
+      "behavior": "Allocation-free IPv4 UDP parsing and encoding, header validation, UDP pseudo-header checksum, odd-length and cross-chunk checksum handling.",
+      "checksum_root": "0x01313184",
+      "qualification_limit": "The preserved UDP parser rejects fragmented input. The composed LAN runtime consumes the owned transport reassembler before this parser; see vendor_wireless_network_lan.evidence.json and transport evidence."
+    }
+  },
+  "open_cpu_frontier": [
+    {"caller": "0x013d7eb0", "consumer": "x70_driver_apply_network", "operation": "Queue kind 12 and store scan completion notification; CPU consumer is not implemented here."},
+    {"caller": "0x013d84bc", "consumer": "FUN_01e43d64", "operation": "Network selection CPU mailbox and association path, not a physical radio boundary."},
+    {"caller": "0x013d834c", "consumer": "FUN_01e43d64(NULL,0)", "operation": "Disconnect when supplicant state exceeds 5."},
+    {"caller": "0x013d8760", "consumer": "0x013de1ac,0x013e0b18,wpas_wps_cancel", "operation": "Kind 16 is CancelWps. The pinned source/byte trace follows the table at 0x013d8d98..0x013d8e20 to 0x013e0b18 and wpas_wps_cancel. Service ApplyConfiguration selector != 0 cancels WPS."},
+    {"caller": "0x013d866c", "consumer": "0x013de0ac", "operation": "WPS configuration, queue kind 15, hostap processing and generated PIN path."},
+    {"caller": "0x013e52f8", "consumer": "0x013e1170,0x013e3ca0,0x013e40cc", "operation": "LAN CPU composition now uses owned LanRuntime. Radio initialization/AP control remain in the radio/station partition; see vendor_wireless_network_lan.evidence.json."},
+    {"caller": "0x013e3e3c", "consumer": "0x013e215c", "operation": "Owned LAN has explicit station/AP/static mode admission. Parent composes concrete radio/station setup before LAN start."},
+    {"caller": "0x013e3ea8", "consumer": "0x013e882c,0x012fe7b8,0x013e164c", "operation": "Raw instructions establish readiness wait, lease lookup and address propagation. 0x013e882c is not DHCP start. Owned LAN publishes address, route and lease synchronously."},
+    {"caller": "0x013e3f74", "consumer": "0x013e202c", "operation": "Owned LAN stop clears server/client, transport, reassembly, sockets, pending output and address state before publishing Down. Parent subsequently tears down radio/service."},
+    {"caller": "0x013e5330", "consumer": "0x013e3d7c", "operation": "Configuration bank reads and physical radio parameter installation belong to radio lifecycle, not the network packet CPU."},
+    {"caller": "0x013e5340", "consumer": "DHCP stop, transport format,0x013e3f74", "operation": "Owned server stop clears lease state; LanRuntime stop composes full owned network teardown. Parent owns physical format/radio teardown."},
+    {"caller": "0x013e5370", "consumer": "0x013e1dd8", "operation": "Peer roster CPU behavior implemented; notification enqueue and full integration remain open."}
+  ],
+  "physical_frontier": {
+    "assert": "0x013e3bec writes 0x02000200 to 0xfff89100, then sleeps 50 ticks",
+    "clear": "0x013e3c10 writes 0x02000000 to 0xfff89100"
+  },
+  "remaining_acceptance": "Source-only LAN and network CPU composition is implemented in vendor_wireless_network_lan.rs with exact source/byte scope and intentional redesign in its evidence. Transport closure has separate transport evidence. Parent owns radio/station/service composition and source review. All behavioral tests remain unrun."
+}

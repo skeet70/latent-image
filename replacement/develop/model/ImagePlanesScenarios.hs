@@ -132,8 +132,8 @@ signalCurrentCalls task result =
   ++ (if result /= 0 then call 0x8f0104 [] task:dispatchErrorCalls 0x14 task result else [])
 
 fillEffects :: Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> [Patch]
-fillEffects address width stride lines value =
-  [wordsAt (address+row*(stride-(width .&. 3))) (replicate (fromIntegral (width `div` 4)) value) | row <- take (fromIntegral lines) [0..]]
+fillEffects address width stride lineCount value =
+  [wordsAt (address+row*(stride-(width .&. 3))) (replicate (fromIntegral (width `div` 4)) value) | row <- take (fromIntegral lineCount) [0..]]
 
 debugDisabledInitial :: B.ByteString -> Word32 -> [Word32] -> [Patch]
 debugDisabledInitial image configuration kinds =
@@ -154,14 +154,14 @@ imagePlanesScenarios image _ = constantCases ++ tripletCases ++ fillCases ++ row
       [Patch (Address (state+offset)) values | offset <- if bank == 0 then [0x2224,0x2230] else [0x71c]] (Just 1) []
     | bank <- [0,1,0xffffffff], let values = B.pack [1,2,0xff,0x7f,0,0x80]]
   fillCases =
-    [make ("image-fill-"++show pattern++"-"++show width++"-"++show lines++"-cancel-"++show cancelled)
+    [make ("image-fill-"++show pattern++"-"++show width++"-"++show lineCount++"-cancel-"++show cancelled)
       0xe8ef98 "fill_pattern" [params+0x100,params,pattern,0x76543210,0x45,6]
-      (priorityInitial 0x45 ++ [wordsAt params [0,params+0x400,0,stride,width,lines,0],Patch (Address (params+0x100)) (B.singleton cancelled),Patch (Address (params+0x400)) (B.replicate 256 0xa5)])
-      (if cancelled == 1 || lines == 0 then [Patch (Address (params+0x400)) (B.replicate 256 0xa5)] else fillEffects (params+0x400) width stride lines value)
-      (Just (if cancelled == 1 && lines /= 0 then 1 else 0))
+      (priorityInitial 0x45 ++ [wordsAt params [0,params+0x400,0,stride,width,lineCount,0],Patch (Address (params+0x100)) (B.singleton cancelled),Patch (Address (params+0x400)) (B.replicate 256 0xa5)])
+      (if cancelled == 1 || lineCount == 0 then [Patch (Address (params+0x400)) (B.replicate 256 0xa5)] else fillEffects (params+0x400) width stride lineCount value)
+      (Just (if cancelled == 1 && lineCount /= 0 then 1 else 0))
       (priorityCalls 0x45 12 ++ priorityCalls 0x45 6)
     | (pattern,value) <- [(0,0x80800000),(1,0x8080fefe),(2,0x80808080),(3,0xff554c4c),(4,0x162c9595),(5,0x6bff1d1d),(6,0x76543210),(99,0x80800000)]
-    , width <- [0,4,31,32,36], lines <- [0,1,3], cancelled <- [0,1,2], let stride = width+8]
+    , width <- [0,4,31,32,36], lineCount <- [0,1,3], cancelled <- [0,1,2], let stride = width+8]
   rowCases =
     [make ("image-copy-rows-"++show rows) 0xe4fa90 "copy_rows" [0,params,params+0x40,0]
       [wordsAt params [0,params+0x100,0,12,7,rows,0],wordsAt (params+0x40) [0,params+0x200,0,16,3,1,0],Patch (Address (params+0x100)) (B.pack [0..63]),Patch (Address (params+0x200)) (B.replicate 64 0xff)]

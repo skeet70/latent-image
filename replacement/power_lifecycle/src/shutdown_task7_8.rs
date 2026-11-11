@@ -83,6 +83,7 @@ pub fn consume_task8_shutdown(
 #[cfg(target_arch = "arm")]
 mod native {
     use super::*;
+    use crate::callback_registry::{registry as callbacks, CallbackWord};
     use core::ptr::{read_volatile, write_volatile};
 
     extern "C" {
@@ -103,8 +104,7 @@ mod native {
         fn clear_readiness(&mut self) { unsafe { write_volatile(0x409c34c4 as *mut u32, 0) }; }
         fn completion(&mut self) -> Task8CompletionWord { Task8CompletionWord(unsafe { read_volatile(0x409c34b0 as *const u32) }) }
         fn invoke_completion(&mut self, completion: Task8CompletionWord) {
-            let callback: unsafe extern "C" fn() = unsafe { core::mem::transmute(completion.0 as usize) };
-            unsafe { callback() };
+            if let Ok(callback) = callbacks().resolve::<unsafe extern "C" fn()>(CallbackWord(completion.0)) { unsafe { callback() }; }
         }
         fn stop_task8(&mut self) -> ServiceStatus {
             unsafe { crate::primitives::retire_current_task(TaskId(8)) }
@@ -132,10 +132,7 @@ mod native {
 
     unsafe fn notify_error() {
         let address = unsafe { read_volatile(0x409c34c8 as *const u32) };
-        if address != 0 {
-            let callback: unsafe extern "C" fn() = unsafe { core::mem::transmute(address as usize) };
-            unsafe { callback() };
-        }
+        if let Ok(callback) = callbacks().resolve::<unsafe extern "C" fn()>(CallbackWord(address)) { unsafe { callback() }; }
     }
 
     pub unsafe fn consume_task7_shutdown(
@@ -162,8 +159,7 @@ mod native {
             unsafe { write_volatile(0x15c20ba as *mut u16, 3) };
             if state != 2 { return Task7Dispatch::OtherUsbRoute; }
             let completion = unsafe { read_volatile(0x15c2120 as *const u32) };
-            if completion != 0 {
-                let callback: unsafe extern "C" fn() = unsafe { core::mem::transmute(completion as usize) };
+            if let Ok(callback) = callbacks().resolve::<unsafe extern "C" fn()>(CallbackWord(completion)) {
                 unsafe {
                     callback();
                     write_volatile(0x15c2120 as *mut u32, 0);

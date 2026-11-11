@@ -1,0 +1,35 @@
+{
+  "target": "Fujifilm X-M1 1.50 remote receive-catalog session operations",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_files": [
+    "decomp/firmwares/xm1-150/app/connectivity/remote/core/network_command.c",
+    "decomp/firmwares/xm1-150/app/connectivity/netstack/network_receive_catalog_reset.c"
+  ],
+  "evidence_kind": "instruction-inspected",
+  "image": "private-data/analysis/x-m1-1.50/lz/plain-01100000.bin",
+  "image_base": "0x01100000",
+  "inspection_command": "arm-none-eabi-objdump -D -b binary -m arm --adjust-vma=0x01100000 --start-address=START --stop-address=STOP IMAGE",
+  "instruction_ranges": [
+    {"start": "0x013f07a0", "stop": "0x013f0878", "claim": "Storage identifiers admit zero and all-ones special values or 0x10000001/2; storage-info rejects zero separately. Media readiness is signed nonnegative status for low-halfword indices, with special identifiers bypassing lookup."},
+    {"start": "0x013f0900", "stop": "0x013f0964", "claim": "Unused parameter words through the fifth must be zero, independently of declared parameter count."},
+    {"start": "0x013f099c", "stop": "0x013f0a00", "claim": "Data-stage preparation retains operation and transaction, initializes empty transfer fields."},
+    {"start": "0x013f0b9c", "stop": "0x013f0bf8", "claim": "Responses retain transaction, clear parameter count and all five parameter values."},
+    {"start": "0x013f1074", "stop": "0x013f1224", "claim": "1005 precedence: unopened session, invalid storage, unavailable storage, unused parameters. Command stage prepares data even for errors; subsequent stage returns saved response."},
+    {"start": "0x013f1224", "stop": "0x013f12ac", "claim": "1003 checks open session before unused parameters, clears session only on success, emits response directly."},
+    {"start": "0x013f12ac", "stop": "0x013f13d4", "claim": "1001 requires no session; nonzero unused words produce 0x2006, device producer is optional, subsequent stage emits saved response."},
+    {"start": "0x013f13d4", "stop": "0x013f14a4", "claim": "1002 precedence: unused parameters, zero session identifier, already-open session; success stores identifier and clears 20-byte response scratch plus 16-byte transfer bookkeeping."},
+    {"start": "0x013f5724", "stop": "0x013f58dc", "claim": "1004 checks session before unused parameters and emits count plus little-endian storage words. Readable index1 encodes storage ID0x10000001."},
+    {"start": "0x013fa13c", "stop": "0x013fa180", "claim": "Installed receive catalog exposes exactly one storage; index1 media status3, every other index negative."},
+    {"start": "0x013fa74c", "stop": "0x013fa7c4", "claim": "Receive catalog reset installs operations table0x013fa838 and selects receive channel1."},
+    {"start": "0x013fa838", "stop": "0x013fa858", "claim": "Installed device-info and storage-info callbacks are null. Storage count13fa13c, media status13fa154, allocator13fa064. Empty remote datasets must not be replaced with USB identity."},
+    {"start": "0x013fbb6c", "stop": "0x013fbbb0", "claim": "Primary interface count returns1; index1 status3 and every other index negative, identical session/storage behavior to the receive catalog."},
+    {"start": "0x013fd2ac", "stop": "0x013fd2cc", "claim": "Primary interface device-info and storage-info callbacks are also null; count13fbb6c, media13fbb84, allocator13fa064."},
+    {"start": "0x013fb8b8", "stop": "0x013fba98", "claim": "Publication distinguishes data versus response by retained operation/response code, not saved eventual response status; data header carries operation and transaction even when dataset is empty."}
+  ],
+  "ownership": "RemoteSessionOperations owns saved command-stage response and transaction. Shared PtpState owns the wire session identifier; shared executor owns transport lifecycle and notification publication. These five handlers contain no notification emission.",
+  "limits": [
+    "Primary table0x013fd2ac and receive-catalog table0x013fa838 have identical behavior for these five operations. Arbitrary replacement operation tables are outside this implementation.",
+    "The stock storage-list memcpy length includes four bytes beyond the declared list destination; the implementation emits only the declared eight-byte wire dataset and does not reproduce the out-of-bounds copy.",
+    "No build, test, formatter, native execution, SDK execution, or live-camera operation was run."
+  ]
+}

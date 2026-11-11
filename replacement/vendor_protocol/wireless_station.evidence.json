@@ -1,0 +1,50 @@
+{
+  "status": "open",
+  "target": "Fujifilm X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "scope": "Owned profile parsing, station request transactions, direct canonical station-driver and scan execution, WPS enrollee composition, key installation continuation, canonical RTOS clock/random pool, and shared cryptographic primitives. This is a source-only integration increment, not complete wireless CPU closure.",
+  "exact_source": [
+    {"address": "0x013d7eb0", "path": "app/connectivity/wifi/supplicant_rtos_notify.c", "fact": "Apply-network dispatches the queued scan consumer only when supplicant exists."},
+    {"address": "0x013d834c", "path": "app/connectivity/wifi/supplicant_rtos_notify.c", "fact": "Clear-connected requests disconnect only when supplicant state exceeds five."},
+    {"address": "0x013d84bc", "path": "app/connectivity/wifi/supplicant_rtos_notify.c", "fact": "Network selection dispatches the actual station request consumer."},
+    {"address": "0x013ddf5c", "path": "app/connectivity/wifi/management/wireless_station_request.c", "fact": "Station join and leave use distinct queue kinds thirteen and fourteen."},
+    {"address": "0x013e0254", "path": "app/connectivity/wifi/management/wireless_join.c", "fact": "Join removes the old profile and configures open/static WEP or personal WPA credentials. WEP accepts five/thirteen ASCII or ten/twenty-six hexadecimal bytes; sixty-four hexadecimal bytes encode a raw master key, otherwise personal passphrases derive a master key."},
+    {"address": "0x013dc0f0", "path": "app/connectivity/wifi/management/wireless_association.c", "fact": "Association preparation sets privacy from WEP, WPS, or the selected pairwise cipher."},
+    {"address": "0x013dc2dc", "path": "app/connectivity/wifi/management/wireless_association.c", "fact": "Association maps authentication, WPA version, pairwise/group selectors and key-management selectors before executing the lower driver CPU."},
+    {"address": "0x013d9edc", "path": "app/connectivity/wifi/management/wireless_key_installation.c", "fact": "Remove and add key paths differ. Stock suppresses an add-key error for a nonbroadcast peer; the owned transaction preserves actual driver failure instead."},
+    {"address": "0x013de0ac", "path": "app/connectivity/wifi/management/wireless_wps_configuration.c", "fact": "WPS configuration uses queue kind fifteen and separate progress/completion endpoints."},
+    {"address": "0x013e0974", "path": "app/connectivity/wifi/management/wireless_wps_station.c", "fact": "Station WPS dispatches PBC or bounded PIN configuration; broadcast BSSID means unspecified peer."},
+    {"addresses": ["0x013c6354", "0x013c650c"], "path": "app/third_party/hostap/src/crypto/sha1_pbkdf2.c", "fact": "Personal master-key derivation uses PBKDF2-HMAC-SHA1, 4096 iterations and thirty-two output bytes."},
+    {"address": "0x013bcb54", "path": "app/third_party/hostap/src/crypto/aes_unwrap.c", "fact": "RFC 3394 unwrap verifies the eight-byte integrity register."},
+    {"addresses": ["0x01326930", "0x01326998"], "paths": ["app/third_party/hostap/port/wpa_rtos_utils.c", "app/connectivity/wifi/wpa_platform.c"], "fact": "The RTOS random-byte source reads the low byte of a fresh system-time word for each output byte. It is not a hardware random-number generator."},
+    {"addresses": ["0x013c0dd8", "0x013c100c", "0x013c124c", "0x013c13e4"], "path": "app/third_party/hostap/src/crypto/random.c", "fact": "Random generation XORs the tick bytes with sixteen-byte extractions from the thirty-two-word HMAC-SHA1 pool. The non-Linux pool-ready branch returns one without an entropy-strength test."}
+  ],
+  "byte_observations": [
+    {"extent": "0x013d8d98..0x013d8e20", "fact": "The actual mailbox table maps kind sixteen to 0x013e0b18, whose exact consumer calls wpas_wps_cancel. The inferred add_default_network name at 0x013d8760 does not establish creation of a default profile."},
+    {"extent": "0x012d5de4..0x012d6168", "fact": "The NONMATCHING lower add-key function zeroes sixty-four bytes, writes total length at zero, key flags at four, key length at eight, peer at twelve and material at thirty-two. Non-AP thirty-two-byte material swaps its final two eight-byte halves before invoking the owned selector. The sequence pointer is not copied into this request."},
+    {"extent": "0x012d6168..0x012d62c4", "fact": "The NONMATCHING lower remove-key function builds a sixteen-byte request containing length, index and optional peer, then selects the mode-specific consumer."},
+    {"extent": "0x0132ceb8..0x0132d5f8", "fact": "The actual EAPOL receive extent was inspected as ARM instructions; the pinned C index has only an excluded header definition for this entry, so it is not claimed as exact C evidence."}
+  ],
+  "reproduction": {
+    "image": "Owner-supplied X-M1 1.50 overlay image mapped at 0x01100000",
+    "overlay47_section_sha256": "0cf67b7221c3b0755092da0ae4c6d6fb817f2b32771ee53dff691fc59b28770c",
+    "disassembly": "arm-none-eabi-objdump -D -b binary -m arm --adjust-vma=0x01100000 --start-address=START --stop-address=STOP IMAGE",
+    "table_read": "arm-none-eabi-objdump -s -b binary -m arm --adjust-vma=0x01100000 --start-address=0x013d8d98 --stop-address=0x013d8e20 IMAGE"
+  },
+  "owned_contract": {
+    "entry": "wireless_association::station::StationRuntime",
+    "execution": "drive executes the concrete canonical StationDriver, including source-bound scan tokens and identified control completion. drive_with_clock additionally invokes the actual canonical RTOS slot_100 CPU and owned random pool. No production caller-supplied random-byte completion exists.",
+    "completion": "StationCompletion identity is private and is published after actual transaction continuations, not queue acceptance. Cancellation retains the in-flight barrier before removal and disconnect.",
+    "shutdown": "finish_shutdown produces a non-Clone private-identity SupplicantStopped receipt only after disconnected/cancelled completion, no pending/queued work, no installed keys, and no active supplicant/WPS state; it erases owned profiles and disables new submissions.",
+    "crypto": "AES uses the shared xm1_wireless_crypto RustCrypto aes provider rather than secret-indexed tables. Shared providers are xm1_wireless_crypto and xm1_rtos_own_first. Handshake and WPS engine families are separate canonical source commits integrated by the parent."
+  },
+  "remaining_cpu": [
+    "Wire the canonical wireless_station_security.rs Michael-failure machine into runtime event draining, active EAPOL gating, reason-fourteen deauthentication and sixty-second resumption.",
+    "Wire upper supplicant authentication deadlines, ten seconds for personal authentication and seventy seconds for WPS after first EAPOL, to the actual clock/provider.",
+    "Complete association/EAPOL ordering protection when an indication or received frame precedes the pending driver continuation.",
+    "Compose the stopped receipt with RadioBoot's actual RTOS exit-semaphore, event/task deletion and stop acknowledgement lifecycle.",
+    "Root actor, canonical radio/adapter/clock providers, build graph and native entry composition remain integration-owner work."
+  ],
+  "security_limit": "The source-bound tick/pool generator is not evidence of cryptographic entropy strength. No radio TRNG, host random source or environment callback is substituted for it.",
+  "verification": "Pinned source/index and stated instruction extents were inspected. Behavioral tests were written but not run. No builds, tests, lint, formatter, native execution, SDK, camera, USB or radio operations were performed."
+}

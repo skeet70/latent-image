@@ -31,14 +31,14 @@ motionSearchScenarios _ resolve = costCases ++ localCases ++ findCases ++ refine
   result = 0x009c4240
   vectors = 0x009c4260
   region = [wordsAt sourceRegion [source,128,64,4],wordsAt targetRegion [target,128,64,4]]
-  ramp base offset = Patch (Address base) (B.pack [fromIntegral ((column `div` 4)*2 + offset) | _row <- [0..31 :: Int], column <- [0..127 :: Int]])
-  constant base value = Patch (Address base) (B.replicate 4096 value)
-  state at width height sx sy maximum =
-    [wordsAt at [64,4,0,0,width,height,17,1,sourceRegion,targetRegion,0,0,0,0,0,maximum,sx,sy,0]]
+  ramp patchAddress offset = Patch (Address patchAddress) (B.pack [fromIntegral ((column `div` 4)*2 + offset) | _row <- [0..31 :: Int], column <- [0..127 :: Int]])
+  constant patchAddress value = Patch (Address patchAddress) (B.replicate 4096 value)
+  motionState at width height sx sy maximumCost =
+    [wordsAt at [64,4,0,0,width,height,17,1,sourceRegion,targetRegion,0,0,0,0,0,maximumCost,sx,sy,0]]
   scenario name address arguments initial final returned calls = StageScenario (StageCaseName name) (publication address) arguments initial final returned [] calls
   costCases =
     [scenario ("motion-cost-" ++ name) 0xdac1a8 [threshold,0,0,stateAddress]
-      (region ++ state stateAddress width height sx sy 100 ++ [constant source a,constant target b,word threshold limit])
+      (region ++ motionState stateAddress width height sx sy 100 ++ [constant source a,constant target b,word threshold limit])
       [word (stateAddress+56) 1,word 0x014e2a80 0] (Just expected) []
     | (name,width,height,sx,sy,a,b,limit,expected) <-
       [("match",16,12,2,2,17,17,0x7fffffff,0)
@@ -48,36 +48,36 @@ motionSearchScenarios _ resolve = costCases ++ localCases ++ findCases ++ refine
       ,("negative-height",16,0xffffffff,2,2,20,10,100,0)]]
   localCases =
     [scenario "motion-local-nontrivial-match" 0xdac32c [point,threshold,stateAddress]
-      (region ++ state stateAddress 4 2 2 2 100 ++ [ramp source 0,ramp target 8,wordsAt point [0,0],word threshold 32,wordsAt 0x014e2a80 (replicate 100 0)])
+      (region ++ motionState stateAddress 4 2 2 2 100 ++ [ramp source 0,ramp target 8,wordsAt point [0,0],word threshold 32,wordsAt 0x014e2a80 (replicate 100 0)])
       [wordsAt point [8,0],word threshold 0,word (stateAddress+56) 3,wordsAt 0x014e2a80 [4,8,12]] Nothing []
     ,scenario "motion-local-accelerated-descent" 0xdac32c [point,threshold,stateAddress]
-      (region ++ state stateAddress 4 2 2 2 100 ++ [word (stateAddress+24) 61,ramp source 0,ramp target 40,wordsAt point [0,0],word threshold 160,wordsAt 0x014e2a80 (replicate 100 0)])
+      (region ++ motionState stateAddress 4 2 2 2 100 ++ [word (stateAddress+24) 61,ramp source 0,ramp target 40,wordsAt point [0,0],word threshold 160,wordsAt 0x014e2a80 (replicate 100 0)])
       [wordsAt point [40,0],word threshold 0,word (stateAddress+56) 8,wordsAt 0x014e2a80 [4,8,12,36,60,40,44,32]] Nothing []
     ,scenario "motion-local-tie-keeps-center" 0xdac32c [point,threshold,stateAddress]
-      (region ++ state stateAddress 4 2 2 2 100 ++ [constant source 37,constant target 37,wordsAt point [0,0],word threshold 0,wordsAt 0x014e2a80 (replicate 100 0)])
+      (region ++ motionState stateAddress 4 2 2 2 100 ++ [constant source 37,constant target 37,wordsAt point [0,0],word threshold 0,wordsAt 0x014e2a80 (replicate 100 0)])
       [wordsAt point [0,0],word threshold 0,word (stateAddress+56) 1,word 0x014e2a80 4] Nothing []
     ,scenario "motion-local-boundary-no-evaluation" 0xdac32c [point,threshold,stateAddress]
-      (region ++ state stateAddress 4 2 2 2 100 ++ [word (stateAddress+24) 1,wordsAt point [0,0],word threshold 9])
+      (region ++ motionState stateAddress 4 2 2 2 100 ++ [word (stateAddress+24) 1,wordsAt point [0,0],word threshold 9])
       [wordsAt point [0,0],word threshold 9,word (stateAddress+56) 0] Nothing []]
   findCalls = [call 0x69f8fc [key] value | (key,value) <- [(0x9f8b,0),(0x9f07,8),(0x9f09,0),(0x9f08,4),(0x9f0a,1)]]
   findCases =
     [scenario "motion-find-shifted-ramp" 0xdac8f8 [sourceRegion,targetRegion,0,result,0]
-      (region ++ state 0x014e2a34 4 2 2 2 100 ++ [ramp source 0,ramp target 8,wordsAt 0x014e2a28 [0,0]])
+      (region ++ motionState 0x014e2a34 4 2 2 2 100 ++ [ramp source 0,ramp target 8,wordsAt 0x014e2a28 [0,0]])
       [wordsAt result [32,0,5],wordsAt 0x014e2a28 [32,0],word 0x014e29d8 0] (Just 0) findCalls
     ,scenario "motion-find-exhausted-budget" 0xdac8f8 [sourceRegion,targetRegion,0,result,0]
-      (region ++ state 0x014e2a34 4 2 2 2 0 ++ [wordsAt 0x014e2a28 [0,0]])
+      (region ++ motionState 0x014e2a34 4 2 2 2 0 ++ [wordsAt 0x014e2a28 [0,0]])
       [wordsAt result [0,0,0],wordsAt 0x014e2a28 [0,0]] (Just 536870880) findCalls
     ,scenario "motion-find-alternate-variant" 0xdac8f8 [sourceRegion,targetRegion,0,result,7]
-      (region ++ state 0x014e2a34 4 2 2 2 1 ++ [constant source 31,constant target 31,wordsAt 0x014e2a28 [0,0]])
+      (region ++ motionState 0x014e2a34 4 2 2 2 1 ++ [constant source 31,constant target 31,wordsAt 0x014e2a28 [0,0]])
       [wordsAt result [0,0,1],word 0x014e29d8 7] (Just 0)
       [call 0x69f8fc [key] value | (key,value) <- [(0x9fee,0),(0x9fe0,0),(0x9fe2,0),(0x9fe1,1),(0x9fe3,1)]]]
   refineCalls = [call 0x69f8fc [key] value | (key,value) <- [(0x9f8b,0),(0x9f0d,0),(0x9f0e,1),(0x9f0d,0),(0x9f0b,0),(0x9f0c,1),(0x9f0b,0)]]
   refineCases =
     [scenario "motion-refine-preserves-skipped-vector-word" 0xdad060 [sourceRegion,targetRegion,result,vectors]
-      (region ++ state 0x014e29dc 16 12 8 6 1 ++ [constant source 20,constant target 10,wordsAt 0x014e2a28 [0,0],word 0x014e29d8 0,wordsAt vectors [91,92,0xa5b6c7d8,94]])
+      (region ++ motionState 0x014e29dc 16 12 8 6 1 ++ [constant source 20,constant target 10,wordsAt 0x014e2a28 [0,0],word 0x014e29d8 0,wordsAt vectors [91,92,0xa5b6c7d8,94]])
       [wordsAt result [0,0],wordsAt vectors [0,0,0xa5b6c7d8,1]] (Just 1280) refineCalls
     ,scenario "motion-refine-shifted-ramp" 0xdad060 [sourceRegion,targetRegion,result,vectors]
-      (region ++ state 0x014e29dc 16 12 8 6 100 ++ [ramp source 0,ramp target 8,wordsAt 0x014e2a28 [0,0],word 0x014e29d8 0,wordsAt vectors [91,92,0x13579bdf,94]])
+      (region ++ motionState 0x014e29dc 16 12 8 6 100 ++ [ramp source 0,ramp target 8,wordsAt 0x014e2a28 [0,0],word 0x014e29d8 0,wordsAt vectors [91,92,0x13579bdf,94]])
       [wordsAt result [8,0],wordsAt vectors [8,0,0x13579bdf,5],wordsAt 0x014e2a28 [8,0]] (Just 0)
       [call 0x69f8fc [key] value | (key,value) <- [(0x9f8b,0),(0x9f0d,0),(0x9f0e,1),(0x9f0d,0),(0x9f0b,8),(0x9f0c,4),(0x9f0b,8),(0x9f0c,4),(0x9f0b,8),(0x9f0c,4),(0x9f0b,8)]]]
   hardwareCases = [hardware "error-retains-threshold" 0xffffffff 100 100,hardware "cost-stops-at-threshold" 7 10 14]
@@ -89,7 +89,7 @@ motionSearchScenarios _ resolve = costCases ++ localCases ++ findCases ++ refine
           ,Call (Address 0x7243a8) [(N.R0,0x30),(N.R2,0xffffffff)] [(N.R0,0)] []
           ,call 0x7235d8 [] 0,call 0x7236b0 [0] 0,call 0x64eb20 [0] 0]
      in (scenario ("motion-hardware-" ++ name) 0xdac07c [threshold,4,0,stateAddress]
-          (state stateAddress 4 2 1 1 100 ++ [word (stateAddress+72) 1,word threshold limit,word 0xfff200a0 status,word 0xfff20004 0,wordsAt 0x014ce72c (replicate 561 0)])
+          (motionState stateAddress 4 2 1 1 100 ++ [word (stateAddress+72) 1,word threshold limit,word 0xfff200a0 status,word 0xfff20004 0,wordsAt 0x014ce72c (replicate 561 0)])
           [word 0x014e2a30 0,word 0x014ce730 0] (Just expected)
           (concat (replicate count invoke) ++ [call 0x69f8fc [0x9f6f] 0]))
           {stageCodePointers = [(Address 0xda9e44,completion),(Address 0xdac040,publication 0xdac040)]}

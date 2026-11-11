@@ -1,0 +1,206 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_test")
+
+package(default_visibility = ["//visibility:public"])
+
+# These modules use Power application-crate modules and stay out of the crate until that crate builds.
+_POWER_APPLICATION_SOURCES = [
+    "af_iris_runtime.rs",
+    "af_iris_runtime_tests.rs",
+    "af_motion_runtime.rs",
+    "af_motion_runtime_tests.rs",
+    "af_position_geometry.rs",
+    "af_position_geometry_tests.rs",
+    "audio_zoom_actor.rs",
+    "audio_zoom_actor_tests.rs",
+    "av_configuration_runtime.rs",
+    "av_configuration_runtime_tests.rs",
+    "configuration_audio_actors.rs",
+    "configuration_audio_dma.rs",
+    "configuration_audio_packets.rs",
+    "configuration_audio_pipeline.rs",
+    "configuration_audio_sound.rs",
+    "configuration_audio_storage.rs",
+    "configuration_audio_stream.rs",
+    "configuration_capture_runtime.rs",
+    "configuration_capture_runtime_tests.rs",
+    "configuration_image_service.rs",
+    "configuration_image_service_tests.rs",
+    "configuration_record_runtime.rs",
+    "configuration_record_runtime_tests.rs",
+    "configuration_runtime.rs",
+    "configuration_runtime_tests.rs",
+    "configuration_serial_actors.rs",
+    "configuration_status_actor.rs",
+    "debug_runtime.rs",
+    "debug_runtime_tests.rs",
+    "vendor_audio_runtime.rs",
+    "vendor_audio_runtime_tests.rs",
+]
+
+_CORE_SOURCES = glob(["*.rs"], exclude = ["lib.rs", "model_runner.rs"] + _POWER_APPLICATION_SOURCES) + ["//replacement/application_nand:sources"]
+_SETTINGS_SOURCES = [
+    "//replacement/settings_storage:src/" + name + ".rs"
+    for name in ["lib", "projection", "field", "defaults", "default_bytes", "memory", "mirror", "custom"]
+] + [
+    "//replacement/property_service:src/table.rs",
+    "//replacement/property_service:src/property_table.rs",
+]
+
+_RECORD = "//replacement/settings_storage:record-store-host-rlib"
+_VALIDATOR = "//replacement/settings_storage:area3-validator-host-rlib"
+
+_IRQ_SOURCES = ["//replacement/rtos_irq_control:src/lib.rs", "//replacement/rtos_irq_control:src/tests.rs", "//replacement/rtos_layout:src/lib.rs", "//replacement/rtos_reservation:src/lib.rs"]
+_SCHEDULER_SOURCES = [
+    "//replacement/rtos_scheduler:src/s3d.rs",
+    "//replacement/rtos_scheduler:src/s3d_cpu.rs",
+    "//replacement/rtos_scheduler:src/s3d_tests.rs",
+    "//replacement/rtos_scheduler:src/timeout.rs",
+]
+
+_CALIBRATION_HOST = "//replacement/calibration_core:host"
+_ARM_CALIBRATION = "//replacement/calibration_core:libxm1_calibration_core"
+
+# The Power Services leaf links main's property flavour beside this one, which carries `custom`.
+genrule(
+    name = "settings-core-host",
+    srcs = _SETTINGS_SOURCES + [_RECORD, _VALIDATOR],
+    outs = ["host/libxm1_settings_storage_core.rlib"],
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --crate-type=rlib --crate-name=xm1_settings_storage_core -C metadata=vendor --cfg settings_storage_library --extern record_store=$(location " + _RECORD + ") --extern area3_validator=$(location " + _VALIDATOR + ") $(location //replacement/settings_storage:src/lib.rs) -o $@",
+    tools = ["@lab_xm1_rust//:bin/rustc"],
+)
+
+_WIRELESS_CRYPTO_INPUTS = [
+    "wireless_crypto.nix",
+    "wireless_crypto/Cargo.lock",
+    "wireless_crypto/Cargo.toml",
+    "wireless_crypto/src/lib.rs",
+    "//:devenv.lock",
+    "//build-support:nixpkgs.nix",
+    "//replacement/toolchain:xm1-rust.nix",
+]
+
+# The dependency archive holds the hashed rlibs that libxm1_wireless_crypto.rlib names in its metadata.
+[
+    genrule(
+        name = "wireless-crypto-" + platform,
+        srcs = _WIRELESS_CRYPTO_INPUTS,
+        outs = [platform + "/libxm1_wireless_crypto.rlib", platform + "/wireless-crypto-deps.tar"],
+        cmd = """
+set -eu
+output=$$(nix-build --no-out-link --max-jobs 1 --cores 2 --arg host %s $(location wireless_crypto.nix))
+cp "$$output/lib/libxm1_wireless_crypto.rlib" "$(location %s/libxm1_wireless_crypto.rlib)"
+$(location @lab_gnutar//:bin/tar) -C "$$output/lib/deps" --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner --mode=u+w -cf "$(location %s/wireless-crypto-deps.tar)" .
+""" % (host, platform, platform),
+        tools = ["@lab_gnutar//:bin/tar"],
+        local = True,
+        tags = ["manual"],
+    )
+    for platform, host in [("host", "true"), ("arm", "false")]
+]
+
+_CRYPTO_RLIB = {platform: ":" + platform + "/libxm1_wireless_crypto.rlib" for platform in ["host", "arm"]}
+_CRYPTO_DEPS = {platform: ":" + platform + "/wireless-crypto-deps.tar" for platform in ["host", "arm"]}
+_UNPACK_CRYPTO = {
+    platform: "set -eu; crypto=$$(mktemp -d); trap 'rm -rf \"$$crypto\"' EXIT; $(location @lab_gnutar//:bin/tar) -xf $(location " + _CRYPTO_DEPS[platform] + ") -C \"$$crypto\"; "
+    for platform in ["host", "arm"]
+}
+_CRYPTO_EXTERN = {
+    platform: " --extern xm1_wireless_crypto=$(location " + _CRYPTO_RLIB[platform] + ") -L dependency=\"$$crypto\""
+    for platform in ["host", "arm"]
+}
+
+_POWER_HOST = "//replacement/power_lifecycle:services-host"
+_LENS_HOST = "//replacement/lens_transport:host-core"
+_OWN_FIRST_HOST = "//replacement/rtos_own_first:host-core"
+_POWER_SETTINGS_HOST = "//replacement/settings_storage:property-core-host"
+_DISPLAY_HOST = "//replacement/display_scanout/host:display-scanout-panel"
+_LIVEVIEW_HOST = "//replacement/display_scanout/host:calibration-liveview-rlib"
+_DEPS = [":settings-core-host", _CALIBRATION_HOST, _RECORD, _VALIDATOR, _POWER_HOST, _DISPLAY_HOST, _LIVEVIEW_HOST, _LENS_HOST, _OWN_FIRST_HOST, _POWER_SETTINGS_HOST, _CRYPTO_RLIB["host"], _CRYPTO_DEPS["host"]]
+_LINK_PATHS = " ".join([" -L dependency=$$(dirname $(location " + dependency + "))" for dependency in _DEPS])
+_EXTERN = " --extern xm1_settings_storage_core=$(location :settings-core-host) --extern xm1_calibration_core=$(location " + _CALIBRATION_HOST + ") --extern record_store=$(location " + _RECORD + ") --extern area3_validator=$(location " + _VALIDATOR + ") --extern xm1_power_services=$(location " + _POWER_HOST + ") --extern display_scanout_panel=$(location " + _DISPLAY_HOST + ") --extern xm1_lens_transport=$(location " + _LENS_HOST + ") --extern xm1_rtos_own_first=$(location " + _OWN_FIRST_HOST + ")" + _CRYPTO_EXTERN["host"] + _LINK_PATHS
+
+genrule(
+    name = "core-host",
+    srcs = ["lib.rs"] + _CORE_SOURCES + _DEPS + _IRQ_SOURCES + _SCHEDULER_SOURCES,
+    outs = ["host/libxm1_vendor_protocol.rlib"],
+    cmd = _UNPACK_CRYPTO["host"] + "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --crate-type=rlib --crate-name=xm1_vendor_protocol --cfg 'feature=\"stage\"'" + _EXTERN + " $(location lib.rs) -o $@",
+    tools = ["@lab_xm1_rust//:bin/rustc", "@lab_gnutar//:bin/tar"],
+)
+
+_ARM_RECORD = "//replacement/settings_storage:record-store-guest-rlib"
+_ARM_VALIDATOR = "//replacement/settings_storage:area3-validator-arm-rlib"
+_ARM_POWER = "//replacement/power_lifecycle:services-arm"
+_ARM_DISPLAY = "//replacement/display_scanout:libdisplay_scanout_panel"
+_ARM_LIVEVIEW = "//replacement/calibration_liveview:libcalibration_liveview"
+_ARM_LENS = "//replacement/lens_transport:libxm1_lens_transport"
+_ARM_OWN_FIRST = "//replacement/rtos_own_first:libxm1_rtos_own_first"
+_ARM_POWER_SETTINGS = "//replacement/settings_storage:property-core"
+_ARM_FLAGS = " --target=armv7r-none-eabi -C panic=abort -C relocation-model=static -C target-cpu=cortex-r4f -C codegen-units=1 -C target-feature=+strict-align -C jump-tables=no -C opt-level=z"
+
+genrule(
+    name = "settings-core-arm",
+    srcs = _SETTINGS_SOURCES + [_ARM_RECORD, _ARM_VALIDATOR],
+    outs = ["arm/libxm1_settings_storage_core.rlib"],
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --crate-type=rlib --crate-name=xm1_settings_storage_core -C metadata=vendor --cfg settings_storage_library" + _ARM_FLAGS + " --extern record_store=$(location " + _ARM_RECORD + ") --extern area3_validator=$(location " + _ARM_VALIDATOR + ") $(location //replacement/settings_storage:src/lib.rs) -o $@",
+    tools = ["@lab_xm1_rust//:bin/rustc"],
+)
+
+_ARM_DEPS = [":settings-core-arm", _ARM_CALIBRATION, _ARM_RECORD, _ARM_VALIDATOR, _ARM_POWER, _ARM_DISPLAY, _ARM_LIVEVIEW, _ARM_LENS, _ARM_OWN_FIRST, _ARM_POWER_SETTINGS, _CRYPTO_RLIB["arm"], _CRYPTO_DEPS["arm"]]
+_ARM_EXTERNS = " --extern xm1_settings_storage_core=$(location :settings-core-arm) --extern xm1_calibration_core=$(location " + _ARM_CALIBRATION + ") --extern record_store=$(location " + _ARM_RECORD + ") --extern area3_validator=$(location " + _ARM_VALIDATOR + ") --extern xm1_power_services=$(location " + _ARM_POWER + ") --extern display_scanout_panel=$(location " + _ARM_DISPLAY + ") --extern xm1_lens_transport=$(location " + _ARM_LENS + ") --extern xm1_rtos_own_first=$(location " + _ARM_OWN_FIRST + ")" + _CRYPTO_EXTERN["arm"]
+_ARM_LINK_PATHS = " ".join([" -L dependency=$$(dirname $(location " + dependency + "))" for dependency in _ARM_DEPS])
+
+genrule(
+    name = "core-arm",
+    srcs = ["lib.rs"] + _CORE_SOURCES + _ARM_DEPS + _IRQ_SOURCES + _SCHEDULER_SOURCES,
+    outs = ["arm/libxm1_vendor_protocol.rlib"],
+    cmd = _UNPACK_CRYPTO["arm"] + "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --crate-type=rlib --crate-name=xm1_vendor_protocol --cfg 'feature=\"stage\"'" + _ARM_FLAGS + _ARM_EXTERNS + _ARM_LINK_PATHS + " $(location lib.rs) -o $@",
+    tools = ["@lab_xm1_rust//:bin/rustc", "@lab_gnutar//:bin/tar"],
+)
+
+genrule(
+    name = "model-runner",
+    srcs = ["model_runner.rs", ":core-host"] + _DEPS,
+    outs = ["vendor-protocol-model"],
+    cmd = _UNPACK_CRYPTO["host"] + "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --crate-name=vendor_protocol_model -C linker=$(location @lab_clang//:bin/clang) --extern xm1_vendor_protocol=$(location :core-host) -L dependency=$$(dirname $(location :core-host))" + _EXTERN + " $(location model_runner.rs) -o $@",
+    tools = ["@lab_xm1_rust//:bin/rustc", "@lab_gnutar//:bin/tar", "@lab_clang//:bin/clang"],
+    executable = True,
+)
+
+genrule(
+    name = "rust-test-binary",
+    srcs = ["lib.rs"] + _CORE_SOURCES + _DEPS + _IRQ_SOURCES + _SCHEDULER_SOURCES,
+    outs = ["vendor-protocol-tests-bin"],
+    cmd = _UNPACK_CRYPTO["host"] + "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test --crate-name=vendor_protocol_tests --cfg 'feature=\"stage\"' -C linker=$(location @lab_clang//:bin/clang)" + _EXTERN + " $(location lib.rs) -o $@",
+    tools = ["@lab_xm1_rust//:bin/rustc", "@lab_gnutar//:bin/tar", "@lab_clang//:bin/clang"],
+    executable = True,
+)
+sh_test(name = "tests", srcs = [":rust-test-binary"])
+
+haskell_test(
+    name = "session-oracle-tests",
+    srcs = ["SessionOracle.hs"],
+    main_file = "SessionOracle.hs",
+    args = ["$(rootpath :model-runner)"],
+    data = [":model-runner"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = ["//host:base", "//host:process"],
+)
+
+haskell_binary(
+    name = "native-session-oracle",
+    srcs = ["NativeSessionOracle.hs"],
+    main_file = "NativeSessionOracle.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:native-adapter",
+        "//emulation:owned-case",
+        "//emulation:case-sha256",
+        "//host:base",
+        "//host:aeson",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+    ],
+)

@@ -158,7 +158,7 @@ outputsScenarios image resolve = invalidCases ++ disabledCases ++ plannedCases +
          abort other = other
          external = take 3 (beginCalls p) ++ if phase == 0 then [abort prepare] else [prepare,abort open,objectCall operation 3 (p!!5)]
       in make 0xe9c274 ("levels-cancelled-after-object-phase-"++show phase) [context] [] [] (Just 6) external
-      | phase <- [0,1], let operation = 4] ++
+      | phase <- ([0,1] :: [Word32]), let operation = 4] ++
     [let p = planFor 4
          cancelledCallback = Call (Address callback) [(N.R0,context),(N.R1,p!!1),(N.R2,0),(N.R3,callback)] [(N.R0,0)] [word (context+0x48) 0]
          beginning = take 5 (beginCalls p) ++ [cancelledCallback,call 0xeb0cbc [p!!6] 0]

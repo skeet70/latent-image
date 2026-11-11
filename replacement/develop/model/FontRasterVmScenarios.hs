@@ -28,8 +28,8 @@ publication address = case filter ((== Address address) . stageStockEntry) fontR
 fontRasterVmScenarios :: B.ByteString -> (StagePublication -> Address) -> [StageScenario]
 fontRasterVmScenarios _ _ = readerCases ++ runCases ++ spanCases ++ edgeCases ++ curveCases ++ programCases ++ bitmapCases ++ genuineCases
  where
-  context = 0x009c0000
-  vm = context + 0xb8
+  vmContext = 0x009c0000
+  vm = vmContext + 0xb8
   table = 0x009d0000
   workspace = 0x009d1000
   heads = workspace
@@ -43,18 +43,18 @@ fontRasterVmScenarios _ _ = readerCases ++ runCases ++ spanCases ++ edgeCases ++
   shorts at values = bytes at (concatMap (\value -> [fromIntegral value,fromIntegral (value `div` 256)]) (values :: [Int]))
   scenario name address arguments initial final returned = StageScenario (StageCaseName name) (publication address) arguments initial final returned [] []
   readerCases =
-    [scenario "raster-byte-cursor-and-budget" 0x119f60c [context]
-      [word (context+0x48) dataAddress,wordsAt (context+0xf4) [3,2],bytes dataAddress [10,20,37,40]]
-      [wordsAt (context+0xf4) [2,3]] (Just 37)
-    ,scenario "raster-short-little-endian" 0x119f644 [context]
-      [word (context+0x48) dataAddress,wordsAt (context+0xf4) [3,1],bytes dataAddress [99,0x23,0x81,77]]
-      [wordsAt (context+0xf4) [1,3]] (Just 0xffff8123)
-    ,scenario "raster-stream-secondary" 0x119f68c [context,2]
-      [word (context+0x48) dataAddress,wordsAt (context+0xa0) [9,7,0,1,4,1],bytes dataAddress [99,0x12,0x34,77]]
-      [wordsAt (context+0xa0) [9,7],wordsAt (context+0xb0) [2,3]] (Just 0x3412)
-    ,scenario "raster-zero-count-still-reads-preceding-byte" 0x119f68c [context,0]
-      [word (context+0x48) dataAddress,wordsAt (context+0xa0) [9,2,0,0],bytes dataAddress [99,0x76,0x54]]
-      [wordsAt (context+0xa0) [9,2]] (Just 0x76)]
+    [scenario "raster-byte-cursor-and-budget" 0x119f60c [vmContext]
+      [word (vmContext+0x48) dataAddress,wordsAt (vmContext+0xf4) [3,2],bytes dataAddress [10,20,37,40]]
+      [wordsAt (vmContext+0xf4) [2,3]] (Just 37)
+    ,scenario "raster-short-little-endian" 0x119f644 [vmContext]
+      [word (vmContext+0x48) dataAddress,wordsAt (vmContext+0xf4) [3,1],bytes dataAddress [99,0x23,0x81,77]]
+      [wordsAt (vmContext+0xf4) [1,3]] (Just 0xffff8123)
+    ,scenario "raster-stream-secondary" 0x119f68c [vmContext,2]
+      [word (vmContext+0x48) dataAddress,wordsAt (vmContext+0xa0) [9,7,0,1,4,1],bytes dataAddress [99,0x12,0x34,77]]
+      [wordsAt (vmContext+0xa0) [9,7],wordsAt (vmContext+0xb0) [2,3]] (Just 0x3412)
+    ,scenario "raster-zero-count-still-reads-preceding-byte" 0x119f68c [vmContext,0]
+      [word (vmContext+0x48) dataAddress,wordsAt (vmContext+0xa0) [9,2,0,0],bytes dataAddress [99,0x76,0x54]]
+      [wordsAt (vmContext+0xa0) [9,2]] (Just 0x76)]
   runTable used capacity firstNode lastNode =
     [wordsAt table [0,nodes,40],shorts (table+12) [-1,1,3],wordsAt (table+20) [heads,tails]
     ,shorts (table+28) [capacity,used,65535],shorts heads [65535,firstNode,65535],shorts tails [65535,lastNode,65535]]
@@ -135,40 +135,40 @@ fontRasterVmScenarios _ _ = readerCases ++ runCases ++ spanCases ++ edgeCases ++
       [shorts output [3,5,7,7,11,9],word (vm+0x8060) (output+12)] Nothing]
   rectangle = [0x90,0x01,0,0,0xff,0,0x94,0x23,0,0xff,0xff,0xff,0x71,0]
   programBase program =
-    [zero context 0x9000,word (context+0x48) dataAddress,word (context+0xc0) context
-    ,wordsAt (context+0x10c) [8,8],wordsAt (context+0x120) [output,1]
-    ,wordsAt (context+0x12c) [32767,32767,0,0],wordsAt (context+0xa0) [fromIntegral (length program),0]
+    [zero vmContext 0x9000,word (vmContext+0x48) dataAddress,word (vmContext+0xc0) vmContext
+    ,wordsAt (vmContext+0x10c) [8,8],wordsAt (vmContext+0x120) [output,1]
+    ,wordsAt (vmContext+0x12c) [32767,32767,0,0],wordsAt (vmContext+0xa0) [fromIntegral (length program),0]
     ,bytes dataAddress program,zero output 8]
   programCases =
-    [scenario "raster-program-inline-real-rectangle-vm-and-flush" 0x11a05b0 [context,0,0]
+    [scenario "raster-program-inline-real-rectangle-vm-and-flush" 0x11a05b0 [vmContext,0,0]
       (programBase ([0xfa,0,14,0] ++ rectangle))
-      [bytes output (replicate 8 0xff),wordsAt (context+0x12c) [0,0,7,7],word (context+0xa0) 0,word (context+0xac) 0] (Just 0)
-    ,scenario "raster-program-ordinary-glyph-directory-and-vm" 0x11a05b0 [context,0,0]
-      (programBase [0] ++ [word (context+0x4c) 1,word (context+0x58) 0x10,word (context+0x5c) 0x40
+      [bytes output (replicate 8 0xff),wordsAt (vmContext+0x12c) [0,0,7,7],word (vmContext+0xa0) 0,word (vmContext+0xac) 0] (Just 0)
+    ,scenario "raster-program-ordinary-glyph-directory-and-vm" 0x11a05b0 [vmContext,0,0]
+      (programBase [0] ++ [word (vmContext+0x4c) 1,word (vmContext+0x58) 0x10,word (vmContext+0x5c) 0x40
       ,bytes (dataAddress+0x10) [0,0,16,0],bytes (dataAddress+0x40) ([0,0] ++ rectangle)])
-      [bytes output (replicate 8 0xff),word (context+0xa0) 0] (Just 0)
-    ,scenario "raster-program-recursive-component-real-vm" 0x11a05b0 [context,0,0]
-      (programBase [0xfc,0,0,0] ++ [word (context+0x50) 1,word (context+0x60) 0x10,word (context+0x64) 0x40
+      [bytes output (replicate 8 0xff),word (vmContext+0xa0) 0] (Just 0)
+    ,scenario "raster-program-recursive-component-real-vm" 0x11a05b0 [vmContext,0,0]
+      (programBase [0xfc,0,0,0] ++ [word (vmContext+0x50) 1,word (vmContext+0x60) 0x10,word (vmContext+0x64) 0x40
       ,bytes (dataAddress+0x10) [0,0,0,22,0,0],bytes (dataAddress+0x40) ([0,0,255,255,0xfa,0,14,0] ++ rectangle)])
-      [bytes output (replicate 8 0xff),word (context+0xa0) 0,word (context+0xb0) 0,word (context+0xac) 0] (Just 0)
-    ,scenario "raster-program-owned-vm-invalid-opcode-error" 0x11a05b0 [context,0,0]
+      [bytes output (replicate 8 0xff),word (vmContext+0xa0) 0,word (vmContext+0xb0) 0,word (vmContext+0xac) 0] (Just 0)
+    ,scenario "raster-program-owned-vm-invalid-opcode-error" 0x11a05b0 [vmContext,0,0]
       (programBase [0xfa,0,2,0,1,0])
-      [bytes output (replicate 8 0),word (context+0xa0) 0,word (context+0xac) 0] (Just 0xfffffff9)
-    ,scenario "raster-program-empty-primary-clears-secondary-selector" 0x11a05b0 [context,0,0]
-      [zero context 0x9000,word (context+0xac) 1]
-      [word (context+0xac) 0] (Just 0)]
+      [bytes output (replicate 8 0),word (vmContext+0xa0) 0,word (vmContext+0xac) 0] (Just 0xfffffff9)
+    ,scenario "raster-program-empty-primary-clears-secondary-selector" 0x11a05b0 [vmContext,0,0]
+      [zero vmContext 0x9000,word (vmContext+0xac) 1]
+      [word (vmContext+0xac) 0] (Just 0)]
   config = 0x009d2000
   request = 0x009d2100
   bitmapBase format width height orientation program =
-    [zero context 0x9000,zero config 0x48,wordsAt config [orientation,width,height,0,0,0,0,0,0,format]
-    ,word (config+0x3c) dataAddress,wordsAt (config+0x40) [context,0x9000]
-    ,wordsAt context [orientation,width,height],word (context+0x24) format,word (context+0x44) 0x9000
-    ,bytes (config+0x28) (16:[0..15]),bytes (context+0x140) (16:[0..15])
-    ,word (context+0x48) dataAddress,word (context+0x54) 1,word (context+0x6c) 0x20
-    ,wordsAt (context+0x10c) [width * factor,height * factor]
+    [zero vmContext 0x9000,zero config 0x48,wordsAt config [orientation,width,height,0,0,0,0,0,0,format]
+    ,word (config+0x3c) dataAddress,wordsAt (config+0x40) [vmContext,0x9000]
+    ,wordsAt vmContext [orientation,width,height],word (vmContext+0x24) format,word (vmContext+0x44) 0x9000
+    ,bytes (config+0x28) (16:[0..15]),bytes (vmContext+0x140) (16:[0..15])
+    ,word (vmContext+0x48) dataAddress,word (vmContext+0x54) 1,word (vmContext+0x6c) 0x20
+    ,wordsAt (vmContext+0x10c) [width * factor,height * factor]
     ,wordsAt request [0,0,0,91,92,if format == 0 then (width+7) `div` 8 else width,output,93,0]
     ,bytes dataAddress [0,0,0,fromIntegral (length program),0,0],bytes (dataAddress+0x20) program
-    ,word (context+0x83b8) 40,shorts (context+0x83cc) [4,2]
+    ,word (vmContext+0x83b8) 40,shorts (vmContext+0x83cc) [4,2]
     ,zero output (fromIntegral (width * height))]
    where factor = case format of { 0 -> 1; 1 -> 4; _ -> 16 }
   bitmapCases =
@@ -185,7 +185,7 @@ fontRasterVmScenarios _ _ = readerCases ++ runCases ++ spanCases ++ edgeCases ++
       (bitmapBase 1 8 8 1 ([0xfa,0,14,0] ++ rectangle))
       [bytes output (replicate 64 15),wordsAt (request+4) [0,0,9,8],word (request+28) 0x852c] (Just 0)
     ,scenario "raster-bitmap-underline-is-observable-without-glyph-edges" 0x11a0fa4 [config,request]
-      (bitmapBase 0 8 8 0 [0xfd,0,0] ++ [word (config+28) 1,word (context+28) 1])
+      (bitmapBase 0 8 8 0 [0xfd,0,0] ++ [word (config+28) 1,word (vmContext+28) 1])
       [bytes output [0,0,0,0,0,0,0,255],wordsAt (request+4) [0,7,8,1],word (request+28) 0x8408] (Just 0)
     ,scenario "raster-bitmap-owned-vm-error-retains-empty-output" 0x11a0fa4 [config,request]
       (bitmapBase 0 8 8 0 [0xfa,0,2,0,1,0])

@@ -1,0 +1,36 @@
+{
+  "id": "vendor-wireless-secondary-xm1-150",
+  "status": "established",
+  "evidence_class": "static-inference",
+  "firmware": "Fujifilm X-M1 1.50",
+  "decomp_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "image": "private-data/analysis/x-m1-1.50/lz/plain-01100000.bin",
+  "overlay47_sha256": "0cf67b7221c3b0755092da0ae4c6d6fb817f2b32771ee53dff691fc59b28770c",
+  "derivation": "Read committed x70view translation units and disassemble the actual overlay with arm-none-eabi-objdump -D -b binary -m arm --adjust-vma=0x01100000. NONMATCHING C and donor names are not treated as target behavior.",
+  "roots": [
+    {"address": "0x012fc0a0", "end": "0x012fc2fc", "rx_event": "0x1c", "claim": "BSS1 schedule header bytes3,4..5,6,7; count<=8; each 16-byte row copies flags/count and three full little-endian words. Aggregate flags OR header flags with every row flag. Then rebuild the BSS beacon. The draft C incorrectly suggests a byte load for the second row word; actual 0x012fc228 is a full word load."},
+    {"address": "0x012fcd98", "end": "0x012fce8c", "rx_event": "0x1d", "claim": "The direct body begins with BSS index1 and has six bytes. Mode2 stores bytes1..5 into BSS fields0x100,0x104,0x108,0x10c,0x1a7 before the peer fold. Other modes leave state unchanged."},
+    {"address": "0x012fce8c", "end": "0x012fd20c", "claim": "Active mode2 folds allocated associated BSS1 peers. PHY mask0x1a controls nonERP, PHY0x10 and HTbit1 select protection0/2/3, HTbit4 controls nongreenfield, capability0x20/0x400 reduce preamble/slot, HT0x4000 and BSS flags0x1a6/0x1a7 suppress secondary-offset publication. A changed projection enqueues CMD1d before beacon CMD1c; the RX root forces beacon refresh even if unchanged."},
+    {"address": "0x012fbcac", "end": "0x012fbd70", "rx_event": "0x1b body0=1", "claim": "Requires mode0. Connection state0 publishes disconnect reason4, then tears down the selected peer if present. The shared RX dispatcher owns adapterdef1==0 admission."}
+  ],
+  "reachable_helpers": [
+    {"address": "0x012e9290", "end": "0x012e94f8", "claim": "Sixteen-byte BSS body for CMD1d, including trailing0x72. Band/channel/configured offset precede peer projection, HT words, advertised offset/preamble/slot."},
+    {"address": "0x0129d1b8", "end": "0x0129d420", "claim": "CMD1c update mode1, BSS1, capability u16 at body4, IE length u16 at body6, IE bytes at body8. Reject IE lengths greater than600. Adapter owns command header and sequence."},
+    {"address": "0x012e20b0", "end": "0x012e2260", "claim": "Uses the existing beacon descriptor when present; builds ordinary SSID/rate/channel/TIM elements and invokes the ordered element producers at0x012e16c4 before CMD1c. The clean CPU reuses the AP-produced element stream and projects dynamic ERP/HT/OBSS fields into it rather than invoking stock callbacks."},
+    {"address": "0x012e7a1c", "end": "0x012e822c", "claim": "ERP uses root byte1, nonERP and short preamble. HT operation advertises channel, effective secondary offset, protection with root byte2==1 precedence except legacy protection3, nongreenfield bit2, HT info3, then sixteen zero basic-MCS bytes."},
+    {"address": "0x012fc4a8", "end": "0x012fc6f8", "claim": "BSS1 HT mode2 on band1 with configured secondary offset appends OBSS element74 with seven u16 parameters20,10,300,200,20,5,25."},
+    {"address": "0x012d5aa0", "end": "0x012d5b68", "claim": "The null-profile abort branch calls the disconnect publication path with reason4 and no optional body."},
+    {"address": "0x012f6de8", "end": "0x012f6efc", "claim": "The reached arg2=0 branch transitions the peer to state0, clears secondary session fields, sets disconnected BSS state1, enqueues changed interface CMD16, then nonAP CMD1b and HT reset."},
+    {"address": "0x012e56c0", "end": "0x012e5c14", "claim": "Associated peer downgrade cancels its hardware receive/reorder queues. Authenticated->disconnected is local-only; other reached transitions publish shared CMD17 body40. Canonical PeerPool and Association IBSS provider own these shared operations."},
+    {"address": "0x0129ca40", "end": "0x0129cdb4", "claim": "Changed interface publication serializes80 bytes for CMD16, preserving the selected peer index and embedding the BSS16-byte body at offset64."},
+    {"address": "0x0129cfe8", "end": "0x0129d084", "claim": "CMD1b carries a four-byte BSS1 body."},
+    {"address": "0x012e9794", "end": "0x012e995c", "claim": "Resets HT/root projections and clears coexistence channel lists, cancels the coexistence timer at BSS0x18c, and clears20/40MHz flags. The runtime clears its timer ownership and root after successful flush completion."}
+  ],
+  "redesign": [
+    "Physical command bodies are retained across errors. No implicit resend or success is synthesized. Explicit retry re-exposes the same immutable body.",
+    "The shared peer generation is retained through teardown and released only after the final physical flush completion.",
+    "The source halt preconditions become typed parse/admission errors; unknown body extents are not read.",
+    "AP security, rates and vendor element production stay with the canonical AP and association providers. This module owns secondary projection, not a second authenticator, peer allocator or transport."
+  ],
+  "verification": {"tests_written": "vendor_wireless_secondary_tests.rs", "execution": "unrun by assignment", "hardware": "not accessed"}
+}

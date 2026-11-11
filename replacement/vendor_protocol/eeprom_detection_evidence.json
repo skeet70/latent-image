@@ -1,0 +1,68 @@
+{
+  "scope": "X-M1 1.50 shared owned detection-output provider for task100, actuators and task99, source-only",
+  "status": "source-inspected",
+  "base": "6822fd41",
+  "canonical_core": {
+    "module": "xm1_power_lifecycle::software_timer_service",
+    "initial_commit": "81aa2a43",
+    "typed_status_and_publication_commit": "ba0b12b0",
+    "functions": ["initialize_detection_output", "set_detection_mode", "detection_output", "continuous_detection_output", "detection_interrupt"],
+    "boundary": "DetectionOutputBackend with ServiceStatus failures; owned fields are read and written through the canonical DetectionField enum; physical source numbers come from DetectionMode::irq_source"
+  },
+  "provenance": {
+    "repository": "x70view by jitl (justjake)",
+    "commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+    "source": "decomp/firmwares/xm1-150/app/platform/osal/tu_006b7a8c.c",
+    "source_class": "NONMATCHING functions, canonical implementation records byte confirmation",
+    "canonical_evidence": "replacement/power_lifecycle/src/software_timer_service_evidence.json#detection_output",
+    "byte_confirmation": "Canonical evidence identifies id4.dis:159594-159825 for mode and callback functions, id4.dis:160483-160496 for clock initialization",
+    "functions_inspected": ["service_stub_noop_0095c430", "FUN_006b8284", "service_stub_complete0_0095c470", "FUN_006b84b8", "FUN_006b84fc", "FUN_006b8538", "FUN_006b8f78"]
+  },
+  "implementation": {
+    "provider": "eeprom_detection.rs",
+    "native": "eeprom_detection_native.rs",
+    "tests": "eeprom_detection_tests.rs",
+    "owned_fields": ["phase", "callback", "IRQ handle", "mode", "clock-enabled flag", "initialization state", "active typed callback generation", "attached source", "closed Eeprom/Actuator/Task99 callback owner"],
+    "initialization": "DetectionState::new starts uninitialized; initialize invokes the canonical initializer before admitting registration",
+    "callback": "Canonical DetectionCallback is a typed callback generation, never a code address. Closed recipient routing selects EepromEvents DMA signal, actual ActuatorEvents atomic mailbox, or actual task99 ControlSender queue posting",
+    "irq_sources": {"high": "0x74", "low": "0x75", "probe": "0x76"},
+    "physical_boundary": ["xm1_power_interrupt_lock", "xm1_power_interrupt_unlock", "xm1_power_timer_irq_attach", "xm1_power_timer_release_handle"],
+    "register_boundary": "DetectionRegister and LensDmaRegister select volatile physical MMIO only; no retained 0x91a548 state reads or writes",
+    "native_ownership": "NativeDetectionContext owns one state, IO, EepromEvents, ActuatorEvents and Task99DetectionEvents. bind accepts a permanent shared reference, initializes canonical fields under the IRQ lock, and installs one AtomicPtr context. Fixed owned handlers select the stored owner and dispatch into this context; no mutable singleton reference or stock callback address is retained",
+    "borrow_boundary": "Provider holds shared references, enters the physical critical section before borrowing owned state, drops the mutable state borrow before event delivery, and leaves the outer critical section after delivery",
+    "failure_cleanup": "Cancellation clears only the caller's event recipient. A stale recipient cannot detach another owner's active IRQ. Failed release restores the owned handle for cleanup retry. Failed attachment clears the active generation and unregisters canonical callback state",
+    "task99_power": "Task99DetectionPower implements actual ControlPower mode and callback registration through the same canonical provider. Callback IDs use the closed 0x30000000..0x3fffffff namespace and are never reused",
+    "task99_delivery": "Task99DetectionEvents binds an actual permanent ControlSender. Off completion posts Poll/DeviceCompletion DetectionOff; On and Probe post DetectionOn, with SUCCESS and sixteen zero bytes. It does not post Ready or BeginDetection directly",
+    "task99_failures": "ControlSender posting failures remain observable through events.take_failure as ControlError. Canonical and registration failures remain observable through power.take_failure as ServiceStatus"
+  },
+  "integration": {
+    "module_declaration": "pub mod eeprom_detection;",
+    "provider_constructor": "DetectionProvider::new(&RefCell<DetectionState>, &B, &EepromEvents), B: DetectionIo",
+    "native_constructor": "NativeDetectionContext::new(EepromEvents), followed by bind on a static context. Existing EEPROM provider/events accessors remain unchanged; actuator_provider/actuator_events and task99_provider/task99_power/task99_events share that same context",
+    "dma_registration": "Caller reserves the unique EepromEvents DMA callback before register_dma_callback(Some(callback)); canonical continuous low detection owns the physical attachment",
+    "dma_cancellation": "Provider cancel and registration of None call EepromEvents::cancel_dma and unregister the canonical callback. Future cancellation must invoke provider.cancel even if event cancellation already occurred",
+    "actuator_registration": "DetectionProvider::for_actuator(state,io,ActuatorEvents) uses the concrete lens_actuator_cpu mailbox, whose implementation is supplied by actuator commit 5f8abe30",
+    "task99_registration": "Bind task99_events to the actual permanent ControlSender, then pass task99_power to the owned task99 ControlDevice. Every registration first cancels the previous task99 registration and then arms its next typed callback",
+    "startup_caller": "Actual 6b8f78 startup must call canonical provider initialization or native context.bind, not retain the old physical-clock-only helper. LensComposition owns this caller integration",
+    "event_synchronization": "Every ARM EepromEvents RefCell access must be protected by the same physical IRQ lock; parent provider owns this protection",
+    "irq_kernel": "Root supplies owned IRQ exports backed by the shared charge_timers handle registry and rtos_irq_control executor, not retained firmware entrypoints",
+    "statuses": "Result APIs use xm1_power_lifecycle::primitives::ServiceStatus"
+  },
+  "behavioral_tests_authored": [
+    "Uninitialized provider neither attaches nor completes",
+    "Initializer programs both clocks and low DMA waits for a qualified IRQ",
+    "Input transition during qualification does not complete DMA",
+    "Cancellation and rearm reject stale typed callback generations and wrong sources",
+    "One-shot high and probe modes attach the appropriate physical source",
+    "Attachment failures preserve status and invalidate the callback",
+    "Detachment failures suppress callbacks and retain cleanup capability",
+    "DMA register writes reach the physical IO boundary",
+    "Shared actuator and EEPROM owners route physical callbacks separately, including colliding numeric IDs",
+    "Stale actuator or EEPROM cancellation preserves the other owner's active physical registration",
+    "Canonical set_mode cancellation and enabled-mode immediate completion remain observable",
+    "Task99 physical callbacks post the actual internal DeviceCompletion message before actor transitions",
+    "Task99 cancellation rejects old generations and cannot detach active actuator registration",
+    "Task99 queue failures remain observable without synthesizing an actor transition"
+  ],
+  "verification": "No builds, tests, lint, formatting, native execution, SDK execution or camera operations performed. Authored tests are unexecuted. No runtime qualification or camera readiness is claimed."
+}

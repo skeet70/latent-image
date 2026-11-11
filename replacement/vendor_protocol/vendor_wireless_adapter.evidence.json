@@ -1,0 +1,50 @@
+{
+  "target": "Fujifilm X-M1 1.50",
+  "status": "source-inspected",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_repository": "x70view",
+  "source_prefix": "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/",
+  "input": {
+    "path": "private-data/analysis/x-m1-1.50/lz/plain-01100000.bin",
+    "whole_image_sha256": "ee211bdaad39005b4f72e3443a76ca194905381a967cab787d6a4ef14e2d889d",
+    "vma": "0x01100000",
+    "overlay47_offset": "0xe0000",
+    "overlay47_size": "0x26a5e0",
+    "overlay47_sha256_from_authenticated_source_mapping": "0cf67b7221c3b0755092da0ae4c6d6fb817f2b32771ee53dff691fc59b28770c"
+  },
+  "method": "Committed C is a reading aid. NONMATCHING root behavior and cited helper behavior are confirmed with arm-none-eabi-objdump -D -b binary -m arm --adjust-vma=0x01100000 against the owner-supplied image. No proprietary C or instruction sequences are copied into owned sources.",
+  "roots": [
+    { "address": "0x012a1644", "source": "tu_0129e740.c", "behavior": "Detach pending transmission queues, then drain deferred management frames. The latter require frame kind3 and a completion target, publish status1, then release ownership." },
+    { "address": "0x012b0e18", "source": "tu_012ae7b4.c", "behavior": "Detach the descriptor queue under the critical section; cancel kind2 descriptors and restore all other kinds in their original relative order." },
+    { "address": "0x012b1488", "source": "tu_012ae7b4.c", "behavior": "Filter kind3 descriptors, invoke concrete frame cancellation with status0x20, decrement the adapter pending count and release frame and descriptor storage. Preserve other descriptor kinds." },
+    { "address": "0x012b1f4c", "source": "tu_012ae7b4.c", "behavior": "Drain queued caller frames FIFO with status0x10003. Release slot before owner notification and decrement the correct owner counter." },
+    { "address": "0x0129d760", "source": "tu_0129a52c.c", "behavior": "Cancel the background timer, clear pending power transition, cancel four station-control timers, clear the canonical station-order queue, release the primary management template, invalidate scan visibility, clear aggregation and per-station counters and cancel each of three station timers." },
+    { "address": "0x0129d6f8", "source": "tu_0129a52c.c", "behavior": "The null-configuration path registers station timers, rebuilds a64-entry scan free pool, initializes primary station defaults and management template, clears pending power transition and registers background timing. The original assert-only0x0129d694 has no additional effect for a valid owned adapter." },
+    { "address": "0x01295e04", "source": "tu_01291f6c.c", "behavior": "Reject either hardware minor revision>=0x108. Major revision1 suppresses calibration upload. Otherwise an enabled calibration produces opcode0x28 and40 bytes. Publish the feature conjunction, emit opcode0x31 and144 bytes, publish country, emit the56-byte rate command0x13, then optional four-byte antenna command0x36." },
+    { "address": "0x01294ca4", "source": "tu_01291f6c.c", "behavior": "Accept nonzero unicast MAC or retain an invalid address when requested. Otherwise construct00:08:22 plus three little-endian timestamp bytes. Encode capability masks into the12-byte body of opcode0xc1 and publish address after the physical transfer completion." }
+  ],
+  "additional_instruction_extents_read": [
+    "0x0129d644..0x0129d7b8", "0x012d95f4..0x012d9cb0", "0x012eedfc..0x012ef0cc", "0x012f3cf8..0x012f40c8", "0x012e97f4..0x012e995c", "0x012e9e7c..0x012ea0d4", "0x01293af8..0x01293c4c", "0x0129998c..0x01299b48", "0x012a63f8..0x012a66d4", "0x012a67b8..0x012a6800", "0x012acd6c..0x012acf44"
+  ],
+  "owned_design": {
+    "frame_storage": "Exclusive borrowed payload leases move into bounded ownership slots and return only in terminal events. Payload bytes copy once into the owned physical FIFO buffer when the transfer is prepared; no heap allocation.",
+    "ordering": "101 pending queues:20 stations x5 classes, then one unclassified queue. FIFO within each queue. Cancellation events retain completion order across frame and request pools.",
+    "release": "Terminal completion decrements ownership counters before publication. A completed slot remains reserved until the event transfers its lease back to the caller. Descriptor storage releases once. has_pending_events remains true until all terminal frame and request effects have been consumed, including after command cancellation.",
+    "late_completion": "Monotonically increasing frame and descriptor identities reject stale local completions. Actual8-bit device PIDs map to canonical frame leases. Cancelled PIDs remain quarantined until their device completion arrives. Shutdown cancels physical descriptors and prevents subsequent address publication.",
+    "transport": "FirmwareCommand exposes CMD53 argument and a mutable borrow of the actual serialized FIFO frame. RadioLifecycle supplies canonical sd_controller::Host execution. Logical write completion retains the stock ignored-write-result behavior and records the physical outcome separately.",
+    "sharing": "CommandSequence and TransmitCredits reuse the canonical radio primitives. Runtime must transfer sequence and credit ownership when switching between adapter commands and radio parameter commands.",
+    "protocol_storage": "Source-owned timer generations, fixed64-entry scan storage, fixed station state, canonical StationOrderQueue and primary management-template ownership. Names of protocol fields are inferred; stock offsets are not an owned ABI.",
+    "configuration_boundary": "HardwareConfiguration accepts typed hardware revisions, EEPROM bytes and regulatory selector inputs. The owned regulatory selector performs all15 country-table lookups, indexed override and custom EEPROM-group selection, fallback and cached selection. No preselected computed rate groups or environment CPU callback are accepted. The otherwise uninitialized fourth antenna byte is deterministic zero in the owned protocol."
+  },
+  "integration": {
+    "module": "vendor_wireless_adapter",
+    "owner": "RadioLifecycle consumes Adapter<'a,F,D>, command(), finish_command(), configure(), configure_address(), root-specific cancel methods, stop_protocols() and reset_protocols().",
+    "external_partition": "Association message dispatch, station authentication, WPA/WPS and crypto remain with the concrete station engine. Root/lib/BUILD integration is owned by the integration agent."
+  },
+  "tests": {
+    "path": "vendor_wireless_adapter_tests.rs",
+    "provenance": "All packet bytes, addresses, revision inputs, timers and scan entries are synthetic.",
+    "execution": "Unrun by assignment. No build, formatter, linter, native comparison, SDK or camera operation was performed."
+  },
+  "qualification": "This is source-owned behavior and source evidence, not native equivalence or hardware acceptance. The scan record exposed at this boundary retains address and SSID only; full BSS payload parsing belongs to the station/network engines. Regulatory selection CPU and target-specific channel facts are documented in vendor_wireless_adapter_regulatory.evidence.json."
+}

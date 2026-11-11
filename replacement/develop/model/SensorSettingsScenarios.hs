@@ -4,7 +4,6 @@ module SensorSettingsScenarios where
 import Data.Bits
 import qualified Data.ByteString as B
 import Data.Int (Int32)
-import Data.List (foldl')
 import Data.Word
 import PipelineModel
 import Scenarios (Address(..), Call, Patch(..), readWord, word, wordBytes, wordsAt)

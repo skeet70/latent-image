@@ -1,0 +1,35 @@
+{
+  "status": "source-implemented-unexecuted",
+  "source_pin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "target": "Fujifilm X-M1 1.50",
+  "modules": ["filesystem_format.rs", "filesystem_runtime.rs", "filesystem_service.rs", "filesystem_capacity.rs", "sd_controller.rs", "nand_event_mode.rs"],
+  "filesystem": {
+    "source": ["app/storage/fs/fs_format_start.c", "app/storage/fs/fs_format_zero_range_more.c", "app/storage/fs/fs_device_summary_read.c", "app/storage/fs/tu_00707644.c", "app/storage/service/storage_format_execute.c"],
+    "entries": ["0x0070acd4", "0x0070b9ec", "0x0070c1d4", "0x0070c86c", "0x0070e328", "0x00705fa0", "0x00702c18", "0x00705138", "0x00709d28", "0x007101e4", "0x0071d450"],
+    "owned_effects": ["partition and BPB writes", "FAT12/FAT16 duplicate allocation tables", "FAT32 boot and FSInfo primary/backup sectors", "reserved and root-directory zero ranges", "readback allocation scan", "dirty-state and free-space snapshot publication", "cancellation checkpoints before every format write and scan step"],
+    "host_medium": "HostVolume borrows the caller-owned whole-sector image and performs checked reads and writes without allocation.",
+    "dependencies": ["filesystem_ftl.rs canonical application_nand physical provider", "filesystem_exfat.rs owner-supplied authenticated upcase and OEM tables"],
+    "publication": "FilesystemRuntime owns FilesystemService and its VolumeDescriptor; query selectors retain existing exact output lengths. Device summary retains device format classification and power-of-two rounded capacity.",
+    "native_provider": "NativeFilesystemRuntime adopts internal device B from ptr[0x008fc87c]+0xa4, composes configured canonical physical NAND with FilesystemFtl and FtlGeometry::from_mapped_xm1, and publishes descriptor fields plus storage device-summary regions at ptr[0x00910204]+0x16bd8. Format cancellation uses the aligned word at 0x0096cfe8. Canonical lifecycle configuration remains a prerequisite."
+  },
+  "sdio": {
+    "mmio": "0xfff51000",
+    "source_extents_inspected_from_image": ["0x0128f1a8..0x0128f2e8", "0x0128f7f8..0x0128fa4c", "0x0128fc2c..0x0128fd9c", "0x01290a7c..0x01290c84", "0x0129168c..0x012919e8", "0x0072ae44..0x0072af74", "0x00729504..0x00729658"],
+    "owned_effects": ["typed clock selection 0..11 and divider programming", "hardware-stable and output-enable polling", "canonical resource 33 registration and selector 0x70a/slot28 routing", "clock-source bit20 at 0xfff88028", "transfer-unit and enable register updates", "IRQ79 route removal/installation through owned platform interface", "admission and canonical semaphore serialization", "shared transfer and idle IRQ handling", "cancellation drain before host reuse"],
+    "native_provider": "NativeSdController adopts exact initialized overlay47 publications under exclusive ownership and binds NativeMmio, NativeClockPower, NativeInterruptRouter and NativeOperationLock.",
+    "host_boundary": "The same control CPU accepts actual Mmio, ClockPower, InterruptRouter and OperationLock leaves. There is no invented shared guestbus or shadow resource registry; host physical-MMIO execution is not claimed.",
+    "not_filesystem_media": true
+  },
+  "nand_event": {
+    "action": 37,
+    "entry": "0x00dbcf80",
+    "destination": "0x4b2ece00",
+    "maximum_destination_end_inclusive": "0x4b3f4dff",
+    "blocks": 8,
+    "provider": "canonical application_nand native configure/read_physical/shutdown and memory::MemoryNand::read_with_spare",
+    "status": "native and host source routing implemented",
+    "host_destination": "NandEventDestination validates address 0x4b2ece00 and caller-owned writable extent. Data-only writes 0x100000 bytes; interleaved writes through 0x108000 with only the first 16 of each 64-byte spare field modified.",
+    "host_dependency": "canonical ApplicationNandCpu memory.rs generation providing MemoryNand, BlockFailures and ImageProvenance"
+  },
+  "verification": "Behavioral test source added. No build, test, lint, formatter, native/SDK execution, camera or USB operation was run. NONMATCHING reconstructions do not establish machine-code equivalence."
+}

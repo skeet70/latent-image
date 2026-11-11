@@ -1,4 +1,5 @@
 use super::*;
+use crate::callback_registry::registry as callbacks;
 const STATE: u32 = 0x0095_4de4;
 fn read(at: u32) -> u32 { unsafe { core::ptr::read_volatile(at as *const u32) } }
 fn write(at: u32, value: u32) { unsafe { core::ptr::write_volatile(at as *mut u32, value) }; }
@@ -27,7 +28,9 @@ impl DelayChannels for NativeChannels {
     fn unlock_tasks(&mut self) { let _ = unsafe { xm1_power_task_unlock() }; }
     fn timer(&self) -> TimerHandle { TimerHandle(read(STATE)) }
     fn start_timer(&mut self, period: TimerPeriod) -> ServiceStatus {
-        ServiceStatus(unsafe { xm1_power_software_timer_start(period.0, 1, xm1_power_software_delay_tick as usize as u32, STATE as *mut u32) })
+        let tick: unsafe extern "C" fn() = xm1_power_software_delay_tick;
+        let _ = callbacks().ensure(tick);
+        ServiceStatus(unsafe { xm1_power_software_timer_start(period.0, 1, tick as usize as u32, STATE as *mut u32) })
     }
     fn cancel_timer(&mut self, handle: TimerHandle) { let _ = unsafe { xm1_power_software_timer_cancel(handle.0) }; }
     fn set_timer(&mut self, handle: TimerHandle) { write(STATE, handle.0); }

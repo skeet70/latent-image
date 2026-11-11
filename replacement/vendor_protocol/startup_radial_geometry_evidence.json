@@ -1,0 +1,47 @@
+{
+  "status": "source-inspected",
+  "target": "Fujifilm X-M1 1.50",
+  "x70view_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "input": {
+    "path": "private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin",
+    "load_address": "0x0061c400",
+    "sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"
+  },
+  "source": [
+    "decomp/firmwares/xm1-150/app/platform/osal/tu_00744bc0.c",
+    "decomp/firmwares/xm1-150/app/imaging/engine/image_geometry_helpers_more.c",
+    "decomp/firmwares/xm1-150/app/imaging/engine/image_geometry_helpers.c",
+    "decomp/firmwares/xm1-150/mod-symbols.tsv"
+  ],
+  "authenticated_ranges": [
+    {"start": "0x006e310c", "end_exclusive": "0x006e3b0c", "sha256": "5a90e76f0a95022f6611fc5a4e6f718f2e7c11346847e817b7f85cba3dd2a9e3"},
+    {"start": "0x00745210", "end_exclusive": "0x007454bc", "sha256": "c99c6b2533c52bc3e8c1d1d8c6ebaf6837990948a5a5832bb03247cba271a85f"},
+    {"start": "0x00745510", "end_exclusive": "0x00745584", "sha256": "61b0b710f729c1248d2d93bb3d199b95f347f432122c197e58a3ae02e2fb1602"},
+    {"start": "0x00745a3c", "end_exclusive": "0x00745a88", "sha256": "d278cc29a181a1c7af92b04ca461a125d85faca89b2c51010bdd1d35455c0c94"},
+    {"start": "0x00829bd4", "end_exclusive": "0x00829cb0", "sha256": "112302ef389f49c83818ef724e99f7fbccd7b9f0f337730de20fcd7797bbb20a"}
+  ],
+  "implementation": {
+    "module": "startup_radial_geometry.rs",
+    "primary": "Scale zero plus eight signed halfwords using unsigned strength, expand 31 knots, validate channels zero through six with short-circuit failure.",
+    "secondary": "The same scale and expansion, validating only channel six.",
+    "geometry": "Peak selection, twenty integer square-root iterations, base coefficient, cubic reciprocal gain, axis coefficient, reciprocal and iterative grid cost classification execute as owned numeric CPU.",
+    "retained_result": "31 u32 knots followed by eight halfwords corresponding to offsets 0x7c through 0x8a; caller-owned state persists across attempts until clear().",
+    "configuration": "Encoded configuration byte 0x18f45 controls radial interpolation in addition to the coefficient-exceeds-unity condition.",
+    "donor_corrections": [
+      "Actual 0x6e3598,0x6e35a0,0x6e35b4 and 0x6e36e8,0x6e36f0,0x6e3704 use 32-bit MUL before right shift; only the fourth cubic product uses UMULL. The NONMATCHING donor uses 64-bit products for all four.",
+      "Actual 0x745238 uses a byte at channel descriptor stride 20, then halfword and byte fields at geometry descriptor stride 10. Donor pointer casts do not describe this layout.",
+      "0x6e345c reads X-M1 configuration key 0x18f45, not the sibling source key 0x1b82b.",
+      "0x6e3b04 returns with no meaningful integer result. Callers inspect the output resolution halfword."
+    ],
+    "failure_contract": "Missing configuration returns Capacity; zero divisors or an interpolation span outside the owned 31 knots return Range. Firmware validity rejection returns Ok(false). No backend or environment callback implements numeric work."
+  },
+  "tests": {
+    "file": "startup_radial_geometry_tests.rs",
+    "provenance": "Synthetic neutral curves, one-unit fixed-point transitions, signed sample bits at zero strength, missing configuration, retained grid metadata and explicit clear behavior.",
+    "executed": false
+  },
+  "limits": [
+    "Source inspection and authenticated byte disassembly only; no build, tests, lint, native execution, SDK execution or camera I/O performed.",
+    "Projection integration and module registration are owned by the startup projection integration partition."
+  ]
+}

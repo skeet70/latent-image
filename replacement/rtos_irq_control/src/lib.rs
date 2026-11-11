@@ -379,7 +379,7 @@ fn read_definition<B: Backend>(m: &B, packet: GuestAddress) -> Option<Registrati
 }
 
 #[inline(always)]
-fn configure<B: Backend>(m: &B, table: Table, line: InterruptLine, registration: Registration) {
+pub fn configure<B: Backend>(m: &B, table: Table, line: InterruptLine, registration: Registration) {
     let saved = m.mask_irq();
     table.store_entry(m, line, registration);
     m.restore_irq(saved);

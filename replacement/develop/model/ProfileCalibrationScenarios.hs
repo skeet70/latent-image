@@ -26,7 +26,6 @@ module ProfileCalibrationScenarios
 import Data.Bits
 import qualified Data.ByteString as B
 import Data.Int (Int16, Int32)
-import Data.List (foldl')
 import Data.Word (Word8, Word16, Word32)
 import PipelineModel
 import Scenarios (Address (..), Patch (..), call, word, wordsAt)
@@ -76,9 +75,10 @@ calibrationValuesPatch :: Address -> CalibrationValues -> Patch
 calibrationValuesPatch (Address address) = halves address . values
 
 calibrateProfileValues :: ProfileFactors -> CalibrationValues -> CalibrationValues
-calibrateProfileValues factors input = triplet (head source : zipWith convert (tail source) combined)
+calibrateProfileValues factors input = triplet (first : zipWith convert rest combined)
   where
-    source = values input
+    CalibrationValues first second third = input
+    rest = [second,third]
     combined = zipWith3 (\a b c -> fromInteger ((toInteger a*toInteger b*toInteger c) `div` 1048576) :: Word16)
       (pair (deltaFactors factors)) (pair (splitFactors factors)) (pair (selectedFactors factors))
     convert value factor = fromInteger ((toInteger value*toInteger factor+512) `div` 1024)
@@ -116,8 +116,9 @@ clampProfileValues mode parameters input = case mode of
       | otherwise = (rescaled lane (lower !! lane) source,mask .|. flag mode lane)
     (raised,raisedFlags) = foldl' raise (original,0) [0..2]
     (limited,limitedFlags)
-      | raisedFlags /= 0 && head raised > primaryCeiling parameters = (rescaled 0 (primaryCeiling parameters) raised,raisedFlags .|. flag mode 3)
+      | raisedFlags /= 0 && firstRaised > primaryCeiling parameters = (rescaled 0 (primaryCeiling parameters) raised,raisedFlags .|. flag mode 3)
       | otherwise = (raised,raisedFlags)
+    firstRaised = case raised of (value:_) -> value; [] -> 0
     repaired = [if raisedFlags /= 0 && lane > 0 then max value (lower !! lane) else value | (lane,value) <- zip [0..] limited]
     loweredFlags = limitedFlags .|. foldl' (.|.) 0 [flag mode (lane+3) | lane <- [1,2], raisedFlags /= 0, limited !! lane < lower !! lane]
     capped = zipWith min repaired upper
@@ -207,7 +208,7 @@ streamProgramEffects request coefficients
     destination = rawDestination .&. 0xbfffffff
     extent = if streamEntries request >= 0x40000 then 0x3ffe0 else streamEntries request
     alignment = if streamFormat request == 0 then 15 else 3
-    invalid value = sum [value `shiftR` shift .&. 63 | shift <- [0,7,14,21]] `notElem` [0,32]
+    invalid value = sum [value `shiftR` offset .&. 63 | offset <- [0,7,14,21]] `notElem` [0,32]
 
 data StreamFaultScenario = StreamFaultScenario
   { streamFaultScenario :: StageScenario
@@ -340,12 +341,13 @@ profileCalibrationScenarios image5 _resolve = factorCases ++ clampCases ++ geome
       | rawCount <- [0,1,2,31,32,255], index <- [0,1,2,30,31,32,33,61,62,0xffffffff], collapsed <- [False,True]]
     roundAway value = let (quotient,remainder)=value `quotRem` 10 in quotient + if remainder >= 5 then 1 else if remainder <= -5 then -1 else 0 :: Int32
     mappedCases =
-      [let exponent=fromIntegral (mapped :: Int16)/2000 :: Float
-           tenths=truncate ((2**exponent)*1000) :: Word32
+      [let power=fromIntegral (mapped :: Int16)/2000 :: Float
+           tenths=truncate ((2**power)*1000) :: Word32
            expected=fromIntegral (roundAway (fromIntegral tenths)) :: Word16
        in make ("mapped-power-"++show mapped) 0x74695c "transform_mapped_word" [0,0]
          [cfgHalf 0x3f2400 (fromIntegral mapped)] [] (Just (fromIntegral expected))
       | mapped <- [-32768,-32000,-4000,-2000,-1000,-1,0,1,33,999,1000,1001,2000,3000,4000,16000,32000,32767]]
+    channelConfiguration :: Word16 -> Int16 -> Word16 -> [Patch]
     channelConfiguration scale origin spacing = [cfgByte 0x3e0f80 1,cfgByte 0x1fc 0,cfgHalf 0x3e2640 scale,cfgHalf 0x3e0317 17,cfgHalf 0x3e0572 (fromIntegral origin),cfgHalf 0x3e2643 spacing] ++
       [cfgHalf (0x3f1b00+index*2) (100+fromIntegral index*100) | index <- [0..10]]
     channelCases =
@@ -377,24 +379,24 @@ profileCalibrationScenarios image5 _resolve = factorCases ++ clampCases ++ geome
       | format <- [0,1]] ++
       [make "pfp-pair-packed-bits" 0x699df4 "pfp_set_pair" [input] (driverInitial++[word input 0xffffffff]) [word 0xfff1a014 0x13ff13ff] Nothing] ++
       [make "pfp-coefficient-lanes" 0x699bec "pfp_set_coefficients" [input] (driverInitial++[wordsAt input weights]) [wordsAt 0xfff1a030 (map (.&. 0xf7efdfbf) weights)] Nothing] ++
-      [let request=streamRequest entries
-           programmed=case streamProgramEffects request weights of Right result -> result; Left _ -> error "source-backed PFP fixture is invalid"
+      [let parameters=streamRequest entries
+           programmed=case streamProgramEffects parameters weights of Right result -> result; Left _ -> error "source-backed PFP fixture is invalid"
            remaining=if entries >= 0x40000 then entries-0x3ffe0 else 0
            next=if remaining == 0 then 0 else 0x1020ff78
        in make ("pfp-program-entries-"++show entries) 0xda9cd4 "calibration_stream_write_parameters" [input+0x400]
-         (driverInitial++[wordsAt input weights,wordsAt (input+0x400) (streamParameterWords request),wordsAt 0x14ce6f8 (1:replicate 12 0)])
-         (programmed++[wordsAt 0x14ce6f8 ([2,0]++streamParameterWords request++[0,0,remaining,next])]) (Just 0)
+         (driverInitial++[wordsAt input weights,wordsAt (input+0x400) (streamParameterWords parameters),wordsAt 0x14ce6f8 (1:replicate 12 0)])
+         (programmed++[wordsAt 0x14ce6f8 ([2,0]++streamParameterWords parameters++[0,0,remaining,next])]) (Just 0)
       | entries <- [0,1,0x3ffff,0x40000,0x40001]] ++
       [make "pfp-completion-no-callback" 0xda9da0 "calibration_stream_complete" []
         [wordsAt 0x89f75c [1,1,0,0],wordsAt 0x14ce6f8 [3,0,0,0,0,0,1,0,0,0,1,0,0],word 0xfff1a018 1]
         [word 0x14ce6f8 4,word 0xfff1a01c 31,wordsAt 0x89f75c [1,1,0,0]] Nothing] ++
-      [let request=(streamRequest 33) {streamDestination=Address 0x1020ff78}
+      [let tailParameters=(streamRequest 33) {streamDestination=Address 0x1020ff78}
        in (make "pfp-completion-republishes-tail" 0xda9da0 "calibration_stream_complete" []
           [wordsAt 0x89f75c [1,1,0,0],wordsAt input weights,
            wordsAt 0x14ce6f8 ([3,1]++streamParameterWords (streamRequest 0x40001)++[0,1,33,0x1020ff78]),word 0xfff1a018 1,word 0xfff1a020 31]
           [wordsAt 0xfff1a000 [0x10001,0x10000000,32,0x1020ff78,33,0x13ff13ff],
            wordsAt 0xfff1a030 (map (.&. 0xf7efdfbf) weights),word 0xfff1a01c 31,word 0xfff1a020 31,wordsAt 0x89f75c [1,1,0,0],
-           wordsAt 0x14ce6f8 ([2,1]++streamParameterWords request++[0,1,0,0])] Nothing)
+           wordsAt 0x14ce6f8 ([2,1]++streamParameterWords tailParameters++[0,1,0,0])] Nothing)
           {stageCalls=[call 0x42634 [0,0] 0]}]
 
 profileCalibrationFaultScenarios :: [StreamFaultScenario]

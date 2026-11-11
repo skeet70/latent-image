@@ -8,12 +8,11 @@ module ImageGeometryScenarios
 import Data.Bits
 import qualified Data.ByteString as B
 import Data.Int (Int32)
-import Data.List (foldl', nub)
+import Data.List (nub)
 import qualified Data.Map.Strict as M
 import Data.Word
 import PipelineModel
 import Scenarios (Address(..), Patch(..), Call, word, wordsAt, readWord, call, state, params)
-import BuffersScenarios (Plane(..), planeWords, planePatch)
 import ImagePlanesScenarios (priorityInitial, currentTaskCalls, priorityCalls, debugDisabledInitial)
 import qualified CropProcessScenarios as C
 import qualified CropEngineScenarios as E
@@ -40,16 +39,17 @@ prepareBorder configuration source scratch destination = [first,second]
   second=step (cropOutput first) destination
 
 transformPlanes :: (Word32 -> Word32) -> [Plane] -> Plane -> [CropInvocation]
-transformPlanes configuration planes intermediate = go 0 (head planes)
+transformPlanes configuration planes@(firstPlane:_) intermediate = go 0 firstPlane
  where
   controls=[if configuration 0x49c4 == 1 then 1 else 0]++map configuration [0x49c5..0x49cb]
   parameters transform width=[0,0,transform,(width+31) .&. complement 31,0,0]++controls
   go index input
    | index == 3 = let aligned=input { planeWidth=planeWidth input .&. complement 15,planeHeight=planeHeight input .&. complement 1 }; output=(planes!!3) { planeWidth=planeWidth aligned,planeHeight=planeHeight aligned } in [CropInvocation (parameters 1 (planeWidth output)) aligned output]
    | otherwise = let aligned=input { planeWidth=planeWidth input .&. complement 31,planeHeight=planeHeight input .&. complement 1 }; output=(if index == 2 then intermediate else planes!!(index+1)) { planeWidth=planeWidth aligned `div` 2,planeHeight=planeHeight aligned `div` 2 }; invocation=CropInvocation (parameters 0 (planeWidth output)) aligned output in invocation:go (index+1) output
+transformPlanes _ [] _ = error "transform planes are empty"
 
 reducePlanes :: B.ByteString -> (Word32 -> Word32) -> Word32 -> Bool -> [Plane] -> [(GeometryPadding,CropInvocation)]
-reducePlanes image configuration kind alternate planes = go 0 (head planes) (tail planes)
+reducePlanes image configuration kind alternate (firstPlane:restPlanes) = go 0 firstPlane restPlanes
  where
   bank=(case kind of 26 -> 2; 29 -> 4; _ -> 0)+(if alternate then 1 else 0)
   keys=[readWord image (0xe5fb70+bank*36+index*4) | index <- [0..8]]
@@ -68,13 +68,15 @@ reducePlanes image configuration kind alternate planes = go 0 (head planes) (tai
        first=if byteInput then [0,0,0,0,0,0] else [(configuration (keys!!0) `shiftR` 3) .&. 1,configuration (keys!!1),(configuration (keys!!0) `shiftR` 1) .&. 1]++map ((4*) . configuration . (keys!!)) [2..4]
        request=[if byteInput then 1 else 0,1,0,(width+31) .&. complement 31]++first++map (configuration . (keys!!)) [5..8]
    in (GeometryPadding byteInput input right bottom,CropInvocation request padded output):go (index+1) output rest
+reducePlanes _ _ _ _ [] = error "reduce planes are empty"
 
 reductionReady :: (Word32 -> Word32) -> Word32 -> Word32 -> [Maybe Plane] -> Bool
 reductionReady configuration kind flags planes =
   case key of
    Nothing -> False
-   Just k -> fromIntegral (length planes)-1 >= configuration k && all valid planes && maybe False ((==0) . (.&.16) . planeFlags) (head planes)
+   Just k -> fromIntegral (length planes)-1 >= configuration k && all valid planes && maybe False ((==0) . (.&.16) . planeFlags) firstPlane
  where
+  firstPlane = case planes of (plane:_) -> plane; [] -> Nothing
   key=case kind of 25 -> Just 0x472f; 1 | flags .&. 0x400 /=0 -> Just 0x472f; 26 -> Just 0x493f; 29 -> Just 0x9fc5; _ -> Nothing
   valid=maybe False ((/=0) . planeAddress)
 
@@ -157,8 +159,10 @@ padBytes input left right top bottom memory = sides rightStart right (\m a -> by
 radialCorrection :: Bool -> Word32 -> [Word32] -> Pixels -> Pixels
 radialCorrection packed address strengths memory=foldl' correct memory [(x,y,c) | y <- [5..12],x <- [1..16],c <- [0..2]]
  where
+  correct :: Pixels -> (Int,Int,Int) -> Pixels
   correct pixels (x,y,c)=let dx=x-4; dy=(y-4)*2; denominator=dx*dx+dy*dy; strength=fromIntegral (strengths!!c)::Int; correction=144*strength `div` denominator-13*strength; column=y+c*4; a=address+fromIntegral (x*128+column*2) in if correction<=0 then pixels else if packed then updatePacked pixels x column correction else writeHalf a (fromIntegral (max 0 (fromIntegral (half pixels a)-4*correction))) pixels
-  updatePacked pixels x y correction=let bitOffset=x*12; a=address+fromIntegral (y*128+bitOffset `div` 8); bitShift=bitOffset `mod` 8; value=foldl' (\n i -> n .|. (fromIntegral (byte pixels (a+i)) `shiftL` fromIntegral (8*i))) (0::Word32) [0..2]; old=(value `shiftR` bitShift) .&. 0xfff; result=fromIntegral (max 0 (fromIntegral old-correction)); combined=(value .&. complement (0xfff `shiftL` bitShift)) .|. (result `shiftL` bitShift) in foldl' (\out i -> M.insert (a+i) (fromIntegral (combined `shiftR` fromIntegral (8*i)))) pixels [0..2]
+  updatePacked :: Pixels -> Int -> Int -> Int -> Pixels
+  updatePacked pixels x y correction=let bitOffset=x*12; a=address+fromIntegral (y*128+bitOffset `div` 8); bitShift=bitOffset `mod` 8; value=foldl' (\n i -> n .|. (fromIntegral (byte pixels (a+i)) `shiftL` fromIntegral (8*i))) (0::Word32) [0..2]; old=(value `shiftR` bitShift) .&. 0xfff; result=fromIntegral (max 0 (fromIntegral old-correction)); combined=(value .&. complement (0xfff `shiftL` bitShift)) .|. (result `shiftL` bitShift) in foldl' (\out i -> M.insert (a+i) (fromIntegral (combined `shiftR` fromIntegral (8*i))) out) pixels [0..2]
 
 between :: Word32 -> Word32 -> [Word32]
 between start stop=if start<stop then [start..stop-1] else []
@@ -174,7 +178,7 @@ configureBorders plane top bottom left right memory = foldl' middle cleared (bet
   middle m row
    | planeFlags plane .&. 0x10010 == 16 = clearPacked m row
    | otherwise = let factor=if planeFlags plane .&. 0x10000/=0 then 1 else 2; bytes=left*factor; first=width-right*factor; aligned=(first+7) .&. complement 7; remaining=max aligned (width .&. complement 7); locations=groups row 0 (bytes `div` 8)++[address+row*stride+b | b <- between (bytes .&. complement 7) bytes]++[address+row*stride+b | b <- between first aligned]++groups row (aligned `div` 8) (width `div` 8)++[address+row*stride+b | b <- between remaining width] in clear locations m
-  clearPacked m row=foldl' (\out pixel -> let bitOffset=pixel*12; a=address+row*(stride .&. complement 3)+bitOffset `div` 8; offset=fromIntegral (bitOffset `mod` 8); value=foldl' (\v b -> v .|. (fromIntegral (byte out (a+b)) `shiftL` fromIntegral (8*b))) (0::Word32) [0..2]; result=value .&. complement (0xfff `shiftL` offset) in foldl' (\out' b -> M.insert (a+b) (fromIntegral (result `shiftR` fromIntegral (8*b)))) out [0..2]) m (indices left++between (width*2 `div` 3-right) (width*2 `div` 3))
+  clearPacked m row=foldl' (\out pixel -> let bitOffset=pixel*12; a=address+row*(stride .&. complement 3)+bitOffset `div` 8; offset=fromIntegral (bitOffset `mod` 8); value=foldl' (\v b -> v .|. (fromIntegral (byte out (a+b)) `shiftL` fromIntegral (8*b))) (0::Word32) [0..2]; result=value .&. complement (0xfff `shiftL` offset) in foldl' (\out' b -> M.insert (a+b) (fromIntegral (result `shiftR` fromIntegral (8*b))) out') out [0..2]) m (indices left++between (width*2 `div` 3-right) (width*2 `div` 3))
 
 imageGeometryScenarios :: B.ByteString -> (StagePublication -> Address) -> [StageScenario]
 imageGeometryScenarios image resolve = radialCases ++ rowCases ++ paddingCases ++ readyCases ++ viewCases ++ flagCases ++ borderCases ++ levelCases ++ singleReduction ++ packedCases ++ prepareCases ++ transformCases ++ reductionCases ++ E.cropEngineScenarios image resolve

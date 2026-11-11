@@ -95,6 +95,7 @@ xm1_rust_staticlib(
         crate_name = "xm1_rtos_scheduler_s3d",
         data = [
             "//replacement/rtos_scheduler:src/s3d.rs",
+            "//replacement/rtos_scheduler:src/s3d_cpu.rs",
             "//replacement/rtos_scheduler:src/timeout.rs",
             "//replacement/rtos_layout:src/lib.rs",
             "//replacement/rtos_reservation:src/lib.rs",

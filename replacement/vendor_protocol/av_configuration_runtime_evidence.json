@@ -1,0 +1,59 @@
+{
+  "target": "Fujifilm X-M1 1.50",
+  "source_pin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "evidence": "source-inspected and authenticated ARM disassembly",
+  "scope": "The action-24 request called AV configuration in the service source is audio task 41 bank selection, not display, graphics or recordcontrol mode switching.",
+  "sources": [
+    "app/connectivity/ptp/tu_00db5d58.c:service_media_audio_capture",
+    "app/drivers/display/tu_00db4bec.c:FUN_00db5698",
+    "app/drivers/audio/tu_006e4af8.c:FUN_006e4c64",
+    "app/drivers/audio/audio_zoom_requests.c:audio_zoom_queue_command_3914",
+    "app/drivers/audio/audio_clock.c:audio_zoom_dispatch_event",
+    "app/drivers/audio/tu_006e745c.c:FUN_006e9808,FUN_006e984c,FUN_006e97c0",
+    "app/drivers/audio/tu_006e9e24.c:FUN_006e9e24"
+  ],
+  "authenticated_extents": [
+    { "address": "0x00db5698", "size": 40, "sha256": "3e2fda665bb139f2fb75e472b0708924d54ac0ce124be5f48bae32ceb69de5cc" },
+    { "address": "0x006e4c64", "size": 16, "sha256": "db72a87f8c403fdeac1636fba2db001be6268604caed22e35d4a0ae6122d3e8c" },
+    { "address": "0x006ea330", "size": 88, "sha256": "b255d623c26c1453f85d1897f5134b23c13347658b711f14b4cf3f49eb2a836d" },
+    { "address": "0x006e9808", "size": 68, "sha256": "43dc934804dc46763b41547c89118ff3d4279be2c6a7e4ef8de5293c7761d029" },
+    { "address": "0x006e984c", "size": 164, "sha256": "f5193a95ce2eb56c802e0f78020ae48a5099ddff0855f1653ce6c8e6f70c058b" },
+    { "address": "0x006e97c0", "size": 72, "sha256": "a14762807b818ab17595e2fee5c171da32da5329cf5d18122f1d952d77fa8d26" }
+  ],
+  "request": {
+    "action": 24,
+    "service_pair": "Configuration selector zero yields [0x81,0]; every nonzero byte yields [0x80,0].",
+    "db5698": "Compares first word to 0x80, passes the resulting boolean and unchanged second word to 0x006e4c64.",
+    "queue": { "command": "0x3914", "recipient": 41, "payload_bytes": 8, "sender": "actual current task" },
+    "owned_cutover": "AvConfigurationRuntime calls the existing AudioZoomActor SelectBank request directly. It does not retain a second task-41 engine or transport queue. One service action owns at most one deferred bank request."
+  },
+  "dispatch": {
+    "table": "0x008292b0 + 20*13*4, indexed by phase-1",
+    "phases_2_4_8": "0x006e9808 stores bank at 0x008fc768 and publishes event 0x0816 with request word 1 immediately.",
+    "phases_5_11": "0x006e984c publishes immediately for the current bank. A changed bank selects root 0x007d1d58 for alternate or 0x007d1538 for primary, stores the bank and context, saves the phase and enters phase 13.",
+    "phase_12": "0x006e9390 rejects; the canonical actor exposes Released and returns NotInitialized.",
+    "phase_0": "The request wrappers do not check phase before queue publication. The worker dispatch rejects phase zero through its phase-minus-one range check. Native bank admission exposes this cold state as Released rather than deferring forever.",
+    "remaining_valid_phases": "Phases 1, 3, 6, 7, 9, 10 and 13 dispatch 0x006e9e24 and defer queue 2. The owned service request remains queued until canonical actor admission becomes available; resume performs admission without ticking the executor."
+  },
+  "completion": {
+    "stock": "0x006e97c0 posts event 0x0816 with context at 0x008fc774 and restores phase from 0x008fc778.",
+    "actual_publication_owner": "Power audio callbacks own terminal 0x006e97c0 through AudioAction::BankComplete6e97c0 and the audio_bank_residue.S bridge. Its backed Rust provider uses shutdown::post_application_record with NativeShutdownRtos, UiEvents from runtime 0x009134f8 and the full 76-byte record, then reloads and restores the saved phase. No AV acknowledgement callback is installed.",
+    "immediate_publication_owner": "Canonical Power AudioAction::BankNotify and BankNotifyUnchanged preserve the authenticated immediate-path frame suffixes through audio_bank_residue.S and publish 0x0816/context zero without changing phase. AudioZoomActor invokes the corresponding owned action before reporting immediate completion.",
+    "owned_observation": "AvConfigurationRuntime polls only the matching canonical AudioZoomActor request generation. Immediate selection or completed canonical executor work yields Completion::Complete. Cancellation, timeout and failure remain distinct terminal outcomes.",
+    "service_wait": "service_update_wait_pending accepts 0x0816, 0x0901 and 0x090a, ignores selected other events, and returns -255 on wait failure or other 0x09xx events. The bank provider's actual success is 0x0816; unrelated events do not complete the owned request generation.",
+    "audio_admission": "Only Completion::Complete admits the parent's NativeVendorAudio::begin_capture. A mode request failure rejects action 24 without writing its result configuration key. Duration validation and actual capture execution belong to the audio owner."
+  },
+  "canonical_cpu_providers": {
+    "audio_zoom_actor": "Bank phase admission, native worker bank fields, immediate/current-bank completion, executor root selection, generation identity and terminal results.",
+    "power_audio_release": "Executor scheduling, timer-driven actions, codec/resource programming, cancellation, actual terminal notification and phase restoration.",
+    "power_application_fanout": "Canonical application record construction, actual sender selection and queue-1/queue-7 routing.",
+    "vendor_audio_cpu": "Exclusive NativeVendorAudio codec_domain plus actual capture resources, codec setup and DMA.",
+    "vendor_protocol_join": "Action-24 configuration reads, AV resume and capture admission under the same audio domain lock, final service result publication, module and build registration."
+  },
+  "cancellation": "Queued requests are removed before admission. Admitted requests cancel their exact canonical executor generation. A cancelled result remains terminal and cannot later become successful.",
+  "tests": {
+    "fixture": "Synthetic executor memory uses a two-tick OutputOff node. It exercises provider-visible admission and effect timing without copying firmware or pretending to validate stock codec programs.",
+    "behaviors": ["all 256 selector bytes", "idle immediate selection", "active same-bank immediate selection", "active changed-bank waits for an actual executor effect", "poll does not advance the shared executor", "busy duplicate request rejection", "phase-deferred admission", "cancelled deferred request never admits", "cancelled active request cannot execute late", "deadline across tick wrap", "released worker rejection", "terminal driver failure"]
+  },
+  "verification": "Source-only. Pinned function extents were matched to the owner-supplied images and bank handlers were disassembled. No build, test, linter, formatter, native execution, SDK, camera or USB operation was run. Integration owner verifies the combined source cutover."
+}

@@ -1,0 +1,29 @@
+{
+  "status": "source-only",
+  "decomp_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "implementation": "configuration_runtime.rs",
+  "composition": {
+    "14": "SerialConfiguration drives I2cActor through RegisterIo, IRQ admission and poll completion",
+    "16": "DiagnosticActor register programming, canonical LensQueueRuntime requests and correlated publication",
+    "17": "StatusActor canonical queue request and configuration output publication",
+    "64,66,67,74": "MiddlePropertyActions canonical queue requests and continuation publications",
+    "71,73": "Synchronous configuration record-parameter completion",
+    "high_lens": "LensActions and TransferQuery use canonical LensQueueRuntime and CallbackState",
+    "immediate": "Existing imaging and high immediate action completion values"
+  },
+  "integration": {
+    "parent_module": "pub mod configuration_runtime;",
+    "existing_root_modules": ["configuration_actions_low", "configuration_actions_middle", "configuration_actions_high", "configuration_actions_imaging", "configuration_serial_actors", "configuration_i2c_actor", "configuration_diagnostic_actor", "configuration_diagnostic_registers", "configuration_status_actor", "lens_queue_runtime"],
+    "dependencies": ["xm1_lens_transport", "xm1_power_lifecycle"],
+    "publication_owner": "Parent must deliver returned ActionCompletion through its canonical result-publication path",
+    "scheduler": "Parent invokes begin, interrupt, poll and publication with the same physical providers and canonical queue"
+  },
+  "source_tests": "configuration_runtime_tests.rs exercises queued property rejection and output publication, admission serialization, and synchronous record parameter output",
+  "unresolved_prerequisites": [
+    "Actual action15 registers callback through6a4340; real triple-sample invoker remains unidentified. Generic X70 input_initialize_state and peripheral_parameter_service_boolean are not called by authenticated X-M1 action15. See vendor_input_runtime_evidence.json",
+    "Canonical af_configuration_runtime now owns shared applicationAF registration lifetime and selected queue50 requests; ConfigurationRuntime integration with the remaining motion/capture provider is pending",
+    "Obsolete DormantLensCallbacks and its cancellation APIs were removed; canonical AF detach_waiter preserves stock busy state",
+    "Capture, playback and remaining imaging orchestration retain their existing source qualification limits"
+  ],
+  "verification": "No builds, tests, linters, formatters, native runs, SDK commands or camera operations executed"
+}

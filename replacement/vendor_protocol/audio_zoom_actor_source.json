@@ -1,0 +1,47 @@
+{
+  "source_revision": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "image": {
+    "base": "0x0061c400",
+    "sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"
+  },
+  "source_index": "55436fc85c0560dd252b0410af6f2427fe198cd3-a5daad359532.tsv",
+  "exact_sources": [
+    "app/drivers/audio/audio_zoom_api.c",
+    "app/drivers/audio/audio_zoom_requests.c",
+    "app/drivers/audio/audio_zoom_operations.c",
+    "app/drivers/audio/audio_zoom_events.c"
+  ],
+  "authenticated_nonmatching_extents": [
+    { "address": "0x006e4b14", "size": 44, "sha256": "448e8bf7e8c7db30483088287530ddeba8795b1ec0899086edea47f452b14881", "fact": "Nonzero phase admits the unchanged input request arguments to queue_command_3903." },
+    { "address": "0x006e9c14", "fact": "Input start stores mode and rate at worker offsets 0x186c and 0x1870; bank selects roots 0x7d1b58 or 0x7d1c90." },
+    { "address": "0x006e9c84", "fact": "Output stop selects roots by channel and mode without overwriting worker format fields." },
+    { "address": "0x006e9d20", "fact": "Output start stores gain, mode, rate and channel fields and selects the channel/mode operation root." },
+    { "address": "0x006e9b8c", "fact": "Input transition schedules root 0x7d1e80." },
+    { "address": "0x006e9808", "fact": "Idle bank selection stores8fc768 and publishes0816/context0 with the fp-80 caller record." },
+    { "address": "0x006e984c", "fact": "Active unchanged bank publishes0816 with fp-88 caller record. Changed bank saves8fc774/8fc778, entersphase13 and schedules7d1d58/7d1538." },
+    { "address": "0x006e97c0", "fact": "Canonical Power BankComplete publishes0816 using8fc774, then reloads and restores8fc778." },
+    { "address": "0x006e9af4", "fact": "Input stop completion390a inphase10 resetsgain0/mode0/rate4/channels2 and schedules7d15b0. Its3907 terminal6e9634 publishesphase8 after completion;7d1e80 alone is not a completed input stop." }
+  ],
+  "owned_dependencies": [
+    "xm1_power_lifecycle::audio_release::executor::{schedule,cancel,tick,ExecutorMemory,ExecutorIo}",
+    "xm1_power_lifecycle::audio_release::callbacks::native::invoke",
+    "xm1_power_lifecycle::audio_release::{write_codec,run_release_action}"
+  ],
+  "native_integration": {
+    "module": "audio_zoom_actor.rs",
+    "worker": "InstalledWorker<M: ConstructionMemory>; native::worker binds canonical NativeMemory to the same worker CPU",
+    "timer": "Canonical Power owns executor ticking exactly once per physical tick. Vendor runtime calls AudioZoomActor::observe under the shared audio lock without ticking the executor again.",
+    "notifications": "Executor I/O owns Notify actions, PostFinished and bank publication actions. Idle and unchanged bank selection use BankNotify/BankNotifyUnchanged; changed-bank roots terminate through BankComplete. The ARM artifact includes canonical audio_bank_residue.S.",
+    "completion": "A successful executor generation retires after its final action. Input stop schedules and retires the second7d15b0 generation before completing. InstalledWorker publishes the authenticated request and terminal phases on host and ARM.",
+    "scope": "Codec request ownership. FFF020 DMA programming, stream setup and stream command state machine belong to the stream owner."
+  },
+  "behavioral_tests": [
+    "Initialization admission and capture start/stop physical-boundary effects",
+    "Playback zero gain and concurrent request rejection",
+    "Cancellation and stale request isolation",
+    "Wrapping-clock timeout without success",
+    "Timer admission and codec action failure propagation",
+    "Idle bank selection publishes without starting an executor timer",
+    "Observe-only polling does not advance shared codec operations"
+  ]
+}

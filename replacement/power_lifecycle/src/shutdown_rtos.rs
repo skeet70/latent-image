@@ -14,9 +14,10 @@ pub use native::install_lens_queue_ingress;
 #[cfg(target_arch = "arm")]
 mod native {
     use super::{IngressInstalled, LensQueueIngress};
+    use crate::callback_registry::{registry as callbacks, CallbackWord};
     use crate::shutdown::{KernelStatus, QueueId, ServiceMessage, ShutdownRtos, TaskId};
     use core::cell::UnsafeCell;
-    use core::mem::{transmute, MaybeUninit};
+    use core::mem::MaybeUninit;
     use core::ptr::{copy_nonoverlapping, read_volatile, write_volatile};
     use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -45,10 +46,10 @@ mod native {
     }
 
     unsafe fn word(address: u32) -> u32 { unsafe { read_volatile(address as *const u32) } }
-    unsafe fn interface() -> u32 {
+    unsafe fn interface() -> Result<u32, crate::callback_registry::CallbackError> {
         let primary = unsafe { word(0x96bd20) };
-        let core: unsafe extern "C" fn() -> u32 = unsafe { transmute(word(primary + 0x1618) as usize) };
-        unsafe { word(0x96bd20 + core() * 4) }
+        let core: unsafe extern "C" fn() -> u32 = callbacks().resolve(CallbackWord(unsafe { word(primary + 0x1618) }))?;
+        Ok(unsafe { word(0x96bd20 + core() * 4) })
     }
     unsafe fn encoded(index: u32) -> i32 {
         (index | unsafe { word(0x7cad9c + (index - 1) * 4) } << 16) as i32
@@ -67,11 +68,11 @@ mod native {
     }
 
     fn post_to(queue: u32, message: ServiceMessage<'_>) -> Result<(), KernelStatus> {
-        let interface = unsafe { interface() };
         let fail = |error: i32| {
             unsafe { xm1_power_service_error(0x1c, queue as i32, error) };
             KernelStatus(error)
         };
+        let interface = match unsafe { interface() } { Ok(interface) => interface, Err(error) => return Err(fail(error.status())) };
         if queue == 0 { return Err(fail(-18)); }
         if let Some(ingress) = lens_ingress() {
             if let Ok(id) = u8::try_from(queue) {
@@ -90,9 +91,7 @@ mod native {
         unsafe { xm1_power_service_post_trace(&header as *const ServiceDescriptor as u32) };
         let id = unsafe { encoded(queue) };
         let mut block = MaybeUninit::<u32>::uninit();
-        let allocate: unsafe extern "C" fn(i32, u32) -> i32 = unsafe {
-            transmute(word(interface + 0x170) as usize)
-        };
+        let allocate: unsafe extern "C" fn(i32, u32) -> i32 = match callbacks().resolve(CallbackWord(unsafe { word(interface + 0x170) })) { Ok(entry) => entry, Err(error) => return Err(fail(error.status())) };
         let result = unsafe { allocate(id, block.as_mut_ptr() as u32) };
         if result != 0 { return Err(fail(if result == -50 { -62 } else { result })); }
         let block = unsafe { block.assume_init() };
@@ -103,19 +102,13 @@ mod native {
             write_volatile((block + 8) as *mut u32, message.payload.len() as u32);
             copy_nonoverlapping(message.payload.as_ptr(), (block + 12) as *mut u8, message.payload.len());
         }
-        let context: unsafe extern "C" fn() -> u32 = unsafe {
-            transmute(word(interface + 0x148) as usize)
-        };
+        let context: unsafe extern "C" fn() -> u32 = match callbacks().resolve(CallbackWord(unsafe { word(interface + 0x148) })) { Ok(entry) => entry, Err(error) => return Err(fail(error.status())) };
         let offset = if unsafe { context() } == 1 { 0xb0 } else { 0xac };
-        let send: unsafe extern "C" fn(i32, u32) -> i32 = unsafe {
-            transmute(word(interface + offset) as usize)
-        };
+        let send: unsafe extern "C" fn(i32, u32) -> i32 = match callbacks().resolve(CallbackWord(unsafe { word(interface + offset) })) { Ok(entry) => entry, Err(error) => return Err(fail(error.status())) };
         let result = unsafe { send(id, block) };
         if result != 0 {
             unsafe { xm1_power_service_event(0x1c, queue as i32, result) };
-            let release: unsafe extern "C" fn(i32, u32) = unsafe {
-                transmute(word(interface + 0xf8) as usize)
-            };
+            let release: unsafe extern "C" fn(i32, u32) = match callbacks().resolve(CallbackWord(unsafe { word(interface + 0xf8) })) { Ok(entry) => entry, Err(error) => return Err(fail(error.status())) };
             unsafe { release(id, block) };
             unsafe { xm1_power_record_service_error(result) };
             return Err(KernelStatus(result));
@@ -147,14 +140,10 @@ mod native {
             post_to(u32::from(message.destination.0), message)
         }
         fn set_event_flag(&mut self, flag: u32, bits: u32) -> Result<(), KernelStatus> {
-            let interface = unsafe { interface() };
-            let context: unsafe extern "C" fn() -> u32 = unsafe {
-                transmute(word(interface + 0x148) as usize)
-            };
+            let interface = match unsafe { interface() } { Ok(interface) => interface, Err(error) => return status(error.status()) };
+            let context: unsafe extern "C" fn() -> u32 = match callbacks().resolve(CallbackWord(unsafe { word(interface + 0x148) })) { Ok(entry) => entry, Err(error) => return status(error.status()) };
             let offset = if unsafe { context() } == 1 { 0x8c } else { 0x88 };
-            let set: unsafe extern "C" fn(i32, u32) -> i32 = unsafe {
-                transmute(word(interface + offset) as usize)
-            };
+            let set: unsafe extern "C" fn(i32, u32) -> i32 = match callbacks().resolve(CallbackWord(unsafe { word(interface + offset) })) { Ok(entry) => entry, Err(error) => return status(error.status()) };
             let id = unsafe { encoded(flag & 0xffff) };
             let result = unsafe { set(id, bits) };
             if result != 0 { unsafe { xm1_power_service_error(0x13, flag as i32, result) }; }
@@ -172,15 +161,11 @@ mod native {
         fn diagnostic(&self) -> u32 { match self { Self::Any => 0x12, Self::All => 0x11 } }
     }
     unsafe fn wait_current(bits: u32, observed: *mut u32, timeout: i32, mode: CurrentWait) -> i32 {
-        let interface = unsafe { interface() };
-        let current: unsafe extern "C" fn() -> u32 = unsafe {
-            transmute(word(interface + 0x16c) as usize)
-        };
+        let interface = match unsafe { interface() } { Ok(interface) => interface, Err(error) => return error.status() };
+        let current: unsafe extern "C" fn() -> u32 = match callbacks().resolve(CallbackWord(unsafe { word(interface + 0x16c) })) { Ok(entry) => entry, Err(error) => return error.status() };
         let task = unsafe { current() };
         let id = unsafe { encoded(task & 0xffff) };
-        let wait: unsafe extern "C" fn(i32, u32, u32, *mut u32, i32) -> i32 = unsafe {
-            transmute(word(interface + 0x9c) as usize)
-        };
+        let wait: unsafe extern "C" fn(i32, u32, u32, *mut u32, i32) -> i32 = match callbacks().resolve(CallbackWord(unsafe { word(interface + 0x9c) })) { Ok(entry) => entry, Err(error) => return error.status() };
         let result = unsafe { wait(id, bits, mode.mode(), observed, timeout) };
         if result != 0 && result != -50 {
             unsafe { xm1_power_service_error(mode.diagnostic(), current() as i32, result) };
@@ -198,16 +183,15 @@ mod native {
 
     #[no_mangle]
     pub unsafe extern "C" fn xm1_power_read_interface_word_174(output: *mut u32) {
-        unsafe { write_volatile(output, word(word(interface() + 0x174))) };
+        if let Ok(interface) = unsafe { interface() } { unsafe { write_volatile(output, word(word(interface + 0x174))) }; }
     }
 
     #[no_mangle]
     pub unsafe extern "C" fn xm1_power_clear_current_flags() -> i32 {
         let task = unsafe { xm1_power_current_task() };
         let id = unsafe { encoded(task & 0xffff) };
-        let clear: unsafe extern "C" fn(i32, u32) -> i32 = unsafe {
-            transmute(word(interface() + 0x90) as usize)
-        };
+        let interface = match unsafe { interface() } { Ok(interface) => interface, Err(error) => return error.status() };
+        let clear: unsafe extern "C" fn(i32, u32) -> i32 = match callbacks().resolve(CallbackWord(unsafe { word(interface + 0x90) })) { Ok(entry) => entry, Err(error) => return error.status() };
         let result = unsafe { clear(id, 0) };
         if result != 0 {
             unsafe { xm1_power_service_error(0x14, xm1_power_current_task() as i32, result) };

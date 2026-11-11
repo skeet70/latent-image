@@ -1,0 +1,55 @@
+{
+  "target": "Fujifilm X-M1 1.50",
+  "source_pin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "input_authentication": {
+    "image4": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
+    "image5": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+    "method": "SHA-256 of inspected owner-supplied decompressed images"
+  },
+  "actual_application_branches": [
+    {"root": "0x00efc53c", "call_at": "0x00efc5a0", "target": "0x0076f8d0", "request": "0x421c", "mode": 1},
+    {"root": "0x00efc5ac", "call_at": "0x00efc634", "target": "0x0076e2d0", "request": "0x421c", "mode": 0},
+    {"root": "0x00efc640", "call_at": "0x00efc6ac", "target": "0x0076f910", "request": "0x421c", "mode": 2},
+    {"root": "0x00efc6b8", "call_at": "0x00efc700", "target": "0x0076e128", "request": "0x4215"},
+    {"root": "0x00efc73c", "call_at": "0x00efc788", "target": "0x0076f660", "request": "0x4217"},
+    {"root": "0x00efc834", "call_at": "0x00efc8dc", "target": "0x0076e654", "request": "0x4213 or conditional0x421d"},
+    {"root": "0x00efc8e8", "call_at": "0x00efc940", "target": "0x0076db18", "request": "0x4216"}
+  ],
+  "donor_name_corrections": {
+    "FUN_00a093e8": "actual0x0076e654 task50 iris request, not an application capture provider",
+    "FUN_00a0a504": "actual0x0076f660 task50 signed position query, not a capture callback provider",
+    "device_control_position_in_efc708": "actual0x0076a270"
+  },
+  "task50": {
+    "table": "0x00819834",
+    "actions": "0x00819444",
+    "state_width": 16,
+    "movement_selector": 29,
+    "movement_ready_root": "0x00760db0",
+    "movement_dispatch": "0x0076d170",
+    "movement_modes": ["0x0076b564", "0x0076ca68", "0x0076c8f4"],
+    "focus_home_selector": 23,
+    "focus_home_root": "0x00760d18 ->0x0076ceb4 ->0x0076cd7c",
+    "iris_home_selector": 24,
+    "query_selector": 25,
+    "completion_root": "0x007611e0",
+    "ownership": "LensRequestConsumer owns the single machine state. Motion transitions require no selected request pending and an exact expected state. No second machine-state snapshot is adopted by FocusMotionRuntime."
+  },
+  "focus_hardware": {
+    "preparation": "Actual0x00744810 control request and real physical completion hook through canonical LensActuatorCpu/DetectionProvider",
+    "rate": "0x00744864 via0x0076b03c; rate limited to0x1fff",
+    "percentage": "0x007449f8 via0x0076b0b0; percentage limited to100",
+    "scaled_rate": "0x00744590 via0x0076b0e0; unsigned register-shift semantics and signed16 negative saturation to0x7fff; kind0xd maps mode0",
+    "home": "0x007444f0",
+    "query": "0x00744388 selector0, false, true; signed-32768 sentinel does not replace current focus",
+    "completion": "Successful command acknowledgments do not complete a movement. Both preparation and command results are retained and the physical detection event must arrive. Source failure branches still invoke the application callback with0."
+  },
+  "shared_dependencies": {
+    "actuator": "lens_actuator_cpu.rs, original commit5f8abe30",
+    "geometry": "af_position_geometry.rs owned by the canonical position-geometry provider",
+    "iris": "af_iris_runtime.rs owns standard4213 and lower iris software reused by4216/421d",
+    "native": "Power canonical task50 owner must bind the same0x00942ab0 context and execute task-loop prepublication synchronization; this module creates no native global or shadow memory"
+  },
+  "integration_status": "FocusMotionRuntime and shared context source are provided. ApplicationAfRuntime has not yet been wired to FocusMotionRuntime, iris, or geometry. Service mode classification requires canonical loadtest_current_state plus configuration byte80. Actual application roots outside the selected three queue50 requests remain unclosed until that integration lands.",
+  "qualification": "Source inspection, authenticated branch/table decoding, and behavioral test source only. No builds, tests, linters, formatters, native execution, SDK, guest, camera, or USB operations."
+}

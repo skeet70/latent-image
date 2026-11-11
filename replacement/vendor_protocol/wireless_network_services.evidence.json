@@ -1,0 +1,29 @@
+{
+  "status": "source-inspected",
+  "target": "Fujifilm X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_paths": ["decomp/firmwares/xm1-150/app/connectivity/ptp/service_network_commands.c", "decomp/firmwares/xm1-150/app/connectivity/ptp/service_network_handlers.c", "decomp/firmwares/xm1-150/app/connectivity/remote/selftest/network_test.c", "decomp/firmwares/xm1-150/app/connectivity/remote/selftest/network_test_defaults.c", "decomp/firmwares/xm1-150/app/connectivity/remote/selftest/network_test_results.h"],
+  "definitions_missing_from_c_confirmed_from_stock_bytes": {
+    "00dbd124": "Scan callback clears pending state, publishes callback status and result count, displays first result SSID.",
+    "00dbd1fc": "Connection callback cycles decimal indicator, displays connected only for zero, writes low status byte to station key 2.",
+    "00dbd2ac": "WPS callback copies SSID to config 0x3d40 and credential bytes starting result offset41 to config 0x3d62 only for status zero. Status1 displays timeout, status2 and3 display failure. Writes status to WPS key7 without signaling protocol completion.",
+    "00dbd5e8": "Reconfigure constructs44byte network request, forwards13e52f8, queries MAC through12ae36c and publishes6bytes only on successful query. Final service signal zero.",
+    "00dbd7b8": "Strength query searches12byte AP peer rows by6byte MAC. Publishes strength at row offset6, or zero if absent. Signals zero.",
+    "00dbd8bc": "WPS command selects start/stop, writes255 before asynchronous result, waits for connection callback and performs LAN address wait.",
+    "00dbdc7c": "Station command selects stop/connect/scan, writes255 before asynchronous callback, preserves completion result bytes separately from protocol result.",
+    "00dbdfbc": "Readscan copies exactly selected SSID length bytes to supplied config keys, leaves tail unchanged and signals zero.",
+    "00dbe0d0": "Iperf command reads at most80 config bytes from0x3dab, invokes014055e8, publishes low8 return byte and always signals zero.",
+    "0140580c": "Remote selftest creates TCP connection to192.168.0.251:8080, with10second connection readiness deadline.",
+    "01405d00": "Read-page consumer requests three pages with opcode0x40 and big-endian32bit index, copying480bytes per reply from offset20.",
+    "01405de8": "Transfer consumer sets mode1, issues begin0x50 and describe0x51 with12byte size description, reads negotiated16bit big-endian block size at reply18, sends padded blocks0x52 prefixed big-endian32bit index, finalizes0x53 and polls0xb0. Status0xa3/0xa4 closes and reconnects after1000milliseconds, with60polls total. Returned duration at reply16 is big-endian32bit multiplied by100. Error path requests mode0. Status0 and1 are accepted.",
+    "014061b0": "Reset opens the connection even when cached mode already zero; mode changes use opcode0xb3 and native little-endian32bit payload.",
+    "01406204": "Identity query uses opcode0xc1, extracts low nibble of big-endian32bit reply12 and maps values above10 to0.",
+    "014062d0": "Status query uses opcode0xc3 and publishes reply byte12 independently of transport result.",
+    "01405a14": "Remote selftest request has16byte overhead: dollar marker, opcode, big-endian total16bit length, big-endian32bit seed, big-endian16bit argument, zero16bit reserved, payload, one's complement16bit sum of preceding bytes, CR LF. Max total2048. Response accumulates TCP reads using length at offsets2..4, capacity from caller, and returns byte12 as status. Each read readiness deadline10seconds."
+  },
+  "canonical_owners": {"station": "wireless_association::station::StationRuntime", "lan": "vendor_wireless_network::lan::LanRuntime", "ap_signal": "vendor_wireless_access_point::AccessPoint::peer_signal", "reconfigure": "vendor_wireless_service_task", "iperf": "wireless_network_services_iperf", "remote": "wireless_network_services::remote::RemoteTest"},
+  "composition": "ServiceOutput is a concrete bounded queue of typed configuration writes, protocol result signals, and graphics effects. The actual controller consumes these through its owned settings/result/graphics providers. It is not a CPU callback boundary. NetworkSelftest consumes canonical LAN sockets; parent pumps LAN and radio.",
+  "fixture_provenance": "Behavioral tests use synthetic SSIDs, credentials, MAC addresses, and hand-derived fixed framed request vectors. No proprietary firmware data is redistributed.",
+  "verification": "Tests written, not run. No build, lint, format, SDK, native, live radio, camera, or USB execution.",
+  "limits": ["Physical RF behavior and timing remain unqualified.", "Stock bytes are owner-supplied private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin base0x00bf1a00 and plain-01100000.bin base0x01100000.", "The source C headers contain donor names and prototypes that do not establish the missing X-M1 definitions."]
+}

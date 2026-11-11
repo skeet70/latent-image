@@ -388,7 +388,7 @@ The same patch defines opt-in `Board::instruction_points_begin_mutable(core, add
 
 The same patch adds `Board::mutation_journal_begin(limit)` and `mutation_journal_end`, which record every CPU and board mutation transaction (at most 4,096 rows, refusing when exceeded) while admitting it: offering core, mutation, PC and CPSR at dispatch, instruction count, and the writer the guard would derive (PC minus 4 for an A32 guest TCM write, the selecting store for a decoder commit). A journal and a guard cannot be active together.
 
-`E-COMPOSITE-GUARD-SDK-HOST-150` records the passing default SDK, default adapter and scoped package checks of the single owned-PC policy, with the two failed default SDK builds whose fixes were test-only. The per-piece partitions and declared mutations above replace that policy and are armed by `//emulation:composed-startup`; their requalification is pending.
+`E-TRACE-POINTS-OPT-IN-HOST-150` records the passing default SDK, default adapter and scoped package checks of the single owned-PC policy. The per-piece partitions and declared mutations above replace that policy and are armed by `//emulation:composed-startup`; their requalification is pending.
 
 `fujimod-fetch-attribution.patch` adds the opt-in `Board::memory_watch_begin_with_fetch_attribution(classes, FetchAttribution::new(sources, fetch_ranges)?, limit, maps, views)` API. `CpuDataAttribution::Writes` and `ReadsAndWrites` select which monitored CPU data rows require attribution. `fetch_ranges` contains physical instruction-fetch spans with `CPU_FETCH` kinds, independent of the data-address classes. The constructor normalizes at most64 spans; the watch supports at most two processors.
 

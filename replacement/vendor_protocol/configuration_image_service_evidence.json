@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "target": "Fujifilm X-M1 1.50",
+  "source_revision": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "status": "open",
+  "qualification": "source-inspected common-output CPU composed with canonical shared request CPU; whole image service CPU closure is not established",
+  "source_image": {
+    "base": "0x00bf1a00",
+    "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+    "authentication": "sha256sum of owner-supplied image5 bytes and llvm-objcopy .text from the inspected id5.elf both match reports/xm1-decomp.md section mapping",
+    "inspection": "llvm-objdump -D --triple=armv7r-none-eabi on existing id5.elf whose .text VMA is zero; subtract 0x00bf1a00 from each stock address"
+  },
+  "roots": [
+    {
+      "address": "0x00db3eec",
+      "source": "decomp/firmwares/xm1-150/app/playback/engine/tu_00db2f14.c:FUN_00db3eec",
+      "source_status": "NONMATCHING",
+      "bytes_inspected": ["0x00db3eec", "0x00db3f64"],
+      "facts": ["copies configuration +0x148 to +0x144 before dispatch", "task3 command0x200 has 20 payload bytes", "payload words are input0,input1,input2,input4,input3"]
+    },
+    {
+      "address": "0x00db3f64",
+      "source": "decomp/firmwares/xm1-150/app/playback/engine/tu_00db2f14.c:FUN_00db3f64",
+      "source_status": "NONMATCHING",
+      "bytes_inspected": ["0x00db3f64", "0x00db3fd0"],
+      "facts": ["task3 command0x201 preserves all five input words in 20 payload bytes"]
+    },
+    {
+      "address": "0x00db42c0",
+      "source": "decomp/firmwares/xm1-150/app/imaging/pipeline/image_service_packet_handlers.c:image_service_send_020b",
+      "bytes_inspected": ["0x00db42c0", "0x00db4324"],
+      "facts": ["task3 command0x20b preserves four input words in 16 payload bytes"]
+    },
+    {
+      "address": "0x00e66e50",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e65518.c:FUN_00e66e50",
+      "source_status": "NONMATCHING",
+      "bytes_inspected": ["0x00e66e50", "0x00e66ec0"],
+      "facts": ["clears record state bytes0x1f44 and0x1f45", "command0x1338 payload is 12 bytes", "middle payload word is written with strh only; upper halfword remains stack residue", "destination is returned by record_current_trace_task, not fixed task3"]
+    },
+    {
+      "address": "0x00dc38d4",
+      "source": "decomp/firmwares/xm1-150/app/connectivity/ptp/adjustment_start_request.c:adjustment_start_request",
+      "source_status": "NONMATCHING",
+      "bytes_inspected": ["0x00dc38d4", "0x00dc3a3c"],
+      "facts": ["state0 publishes active==1 to the fifth configuration key", "state1 clamps seconds greater than60 to0 and rejects zero duration", "period is minutes*60+seconds", "copies1000 default configuration bytes and sets kind0x2c", "mode greater than6 selects mode0; selected words replace offsets0x54,0x5c,0x60", "submits configuration then waits, begins output then waits, cancels and waits on begin rejection", "only -255 is a wait rejection", "successful begin sends output0x20b without waiting before setting active1 and signaling success", "other states signal success without starting output"]
+    }
+  ],
+  "reachable_request_cpu": [
+    {"address": "0x00db4024", "bytes_inspected": ["0x00db4024", "0x00db409c"], "facts": ["mirrors +0x148 to+0x144 then copies1000 bytes to0x014e2dc8 before task3 command0x20c"]},
+    {"address": "0x00dc31a8", "bytes_inspected": ["0x00dc31a8", "0x00dc31dc"], "facts": ["begin output sends task3 command0x204 with words0x9f,0,0,0"]},
+    {"address": "0x00dc31dc", "bytes_inspected": ["0x00dc31dc", "0x00dc3208"], "facts": ["cancel sends task3 command0x205 with words0,0x15 and an unwritten third stack word"]},
+    {"address": "0x00dc3364", "bytes_inspected": ["0x00dc3364", "0x00dc3398"], "facts": ["publishes task3 command0x20b with words0x9f,0,0,0"]},
+    {"address": "0x00dc3398", "bytes_inspected": ["0x00dc3398", "0x00dc33c0"], "facts": ["submits configuration pointer and zero via0x00db4024"]}
+  ],
+  "task3_routing": {
+    "entry": "0x00e00a80",
+    "bytes_inspected": [["0x00e00a80", "0x00e00af8"], ["0x00df7cd8", "0x00df7dd8"]],
+    "facts": ["receives queue3 into0x01526a78", "filter0x00e66770 returning1 skips processing", "copies accepted payload bytes to0x01526a84", "calls0x00df7db8 after receive, including receive error", "0x00df7db8 wraps selector0x00df7cd8 with0x00e40424 and0x00e40438", "0x0200 selects controller4 event0 if configuration+0x108 equals1, otherwise event1", "0x13e8 selects event2,0x13e7 event3,0x13e9 event4; all other identifiers select event5", "stores event halfword to0x01545798 then invokes0x00df74ec with controller4"],
+    "limit": "routing bytes establish the dispatcher boundary, not the controller4 transition-table CPU closure"
+  },
+  "wait_publications": {
+    "entry": "0x00dba380",
+    "bytes_inspected": [["0x00dba334", "0x00dba438"]],
+    "facts": ["consumes queue7 notifications without correlating their payload values", "0x0816,0x0901,0x090a complete successfully", "0x091c,0x091d,0x0932,0x0933,0x0934 are ignored", "other0x09xx notifications reject with-255", "non0x09xx notifications other than0x0816 are ignored, including0x0837 and0x0838", "nonzero receive status rejects with-255", "0x00dba334 returns receive status unchanged after copying low halfwords from0x014e5978 words0and4"],
+    "source_correction": "NONMATCHING tu_00db5d58.c claims0x00dba334 returns0; actual bytes preserve receive result inr0",
+    "implementation_owner": "canonical Power task3 provider; no duplicate wait implementation in Vendor"
+  },
+  "exposure_completion": {
+    "action": "0x00dc2f68",
+    "callback": "0x00dc25f4",
+    "bytes_inspected": [["0x00dc2f68", "0x00dc2fdc"], ["0x00dc25f4", "0x00dc2620"]],
+    "facts": ["zero configuration value rejects immediately", "nonzero value invokes0x00e66e50 with callback0x00dc25f4,configuration value,zero", "waits device event0x10, not queue7", "callback ignores statuses other than0xfe", "status0xfe signals task7 event0x10 and publishes failure if signaling fails", "action publishes success on zero event-wait status, otherwise rejection"],
+    "limit": "submit_exposure acknowledges request submission only; it does not consume queue7 or claim exposure action completion. Typed callback registration, retained generation and actual event0x10 wait must be joined to the record current consumer."
+  },
+  "tests": {
+    "file": "configuration_image_service_tests.rs",
+    "provenance": "synthetic constants, admitted HostAddressSpace regions and an RTOS endpoint fixture; no proprietary resource contents or replacement task3 transition-engine fixture",
+    "executed": false,
+    "behaviors": ["canonical request wire fields", "canonical exposure flag clearing and unwritten stack halfword", "canonical guest configuration mirror and snapshot", "active query exact equality", "mode clamp and sixty-second inclusive bound", "non-minus255 wait success", "cancel wait before failure", "invalid zero duration", "configuration rejection and busy protection", "unrecognized state preserves output", "active flag remains clear until output publication", "ignored0x838 does not complete or advance common output", "shared-context image/exposure requests and canonical notification classification"]
+  },
+  "unresolved_cpu": [
+    {"commands": ["0x200", "0x201", "0x204", "0x205", "0x20b", "0x20c"], "consumer": "task3 capture/record state machines", "source_leads": ["capture/reccont/tu_00df7460.c", "capture/reccont/tu_00e016fc.c", "capture/reccont/tu_00dcba28.c", "capture/reccont/tu_00dcc01c.c", "capture/reccont/tu_00dd5d8c.c", "capture/reccont/tu_00de4168.c"], "limit": "shared canonical request CPU is composed, but Task3Queues must bind actual controller4 transition CPU and real RTOS queues; request construction and injected notification fixtures do not retire that CPU"},
+    {"command": "0x1338", "consumer": "record current exposure state machine", "limit": "canonical shared request CPU owns dynamic destination and guest flag clearing; actual consumer, typed callback registration with retained generation, device event0x10 completion and root queue binding remain integration prerequisites"}
+  ],
+  "composition": {
+    "shared_cpu_provider": "xm1_power_lifecycle::capture_task3::{Task3Runtime,Request,Task3Queues}",
+    "context": "xm1_power_lifecycle::record_address_space::RecordContext<M,E>; M:GuestAddressSpace, E:Task3Queues",
+    "host_memory_provider": "canonical HostAddressSpace with root-admitted regions",
+    "arm_memory_provider": "canonical NativeAddressSpace with root-admitted regions",
+    "queue_binding": "root must bind genuine canonical RTOS queue effects and actual task3/record current consumers; no complete implementation claim is delegated to the effect trait",
+    "snapshot": "root supplies admitted1000-byte guest snapshot address to pinned Task3Runtime::new; Vendor retains no host-pointer-to-guest casts",
+    "api": {
+      "constructor": "ImageServiceRuntime::new(Pin<&mut Task3Runtime>,active:i32,period_seconds:u32)",
+      "actions": ["begin_image(&mut RecordContext<M,E>,ImageRequest)", "submit_exposure(&mut RecordContext<M,E>,ExposureRequest,StackResidue)", "begin_common(&mut RecordContext<M,E>,CommonOutputKeys,&mut ConfigImages,&OutputConfiguration,&[OutputMode;7],&mut OutputConfiguration,StackResidue)", "poll(&mut RecordContext<M,E>)"],
+      "result": "image/common actions return Result<Progress::{Waiting,Completed(ActionCompletion)},ServiceError>; submit_exposure returns Result<(),ServiceError> without a completion claim",
+      "errors": "canonical memory errors propagate; dc38d4 enqueue statuses remain ignored before its source-mandated wait"
+    },
+    "callback_waivers": [],
+    "environment_waivers": [],
+    "canonical_layout": "configuration_actions_imaging::capture_layout; no duplicate output geometry or calibration implementation added",
+    "graphics": "GraphicsRuntime confirms render task73 is not an image task3 provider",
+    "root_registration": "delegated to VendorProtocolJoin; only the three assigned new files are owned"
+  },
+  "checks_run": [],
+  "limits": ["No build, test, lint, formatting, native execution, SDK execution, camera access or USB access performed", "Source models are not accepted whole image/exposure/common-output actions until actual consumers are composed"]
+}

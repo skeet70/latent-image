@@ -1,0 +1,26 @@
+load("//replacement/toolchain:rust.bzl", "xm1_rust_rlib")
+
+package(default_visibility = ["//visibility:public"])
+
+_SOURCES = [
+    "//replacement/develop:src/calibration_core.rs",
+    "//replacement/develop:src/calibration_core/configuration.rs",
+    "//replacement/develop:src/calibration_core/mapped.rs",
+    "//replacement/develop:src/calibration_core/curves.rs",
+    "//replacement/develop:src/calibration_core/math.rs",
+]
+
+genrule(
+    name = "host",
+    srcs = ["lib.rs"] + _SOURCES,
+    outs = ["host/libxm1_calibration_core.rlib"],
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --crate-type=rlib --crate-name=xm1_calibration_core $(location lib.rs) -o $@",
+    tools = ["@lab_xm1_rust//:bin/rustc"],
+)
+
+xm1_rust_rlib(
+    name = "libxm1_calibration_core",
+    src = "lib.rs",
+    crate_name = "xm1_calibration_core",
+    data = _SOURCES,
+)

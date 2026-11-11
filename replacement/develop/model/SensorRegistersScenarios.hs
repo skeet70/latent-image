@@ -1,9 +1,8 @@
 {-# LANGUAGE GHC2021 #-}
 module SensorRegistersScenarios where
-import Data.Bits
+import Data.Bits hiding (shift)
 import qualified Data.ByteString as B
 import Data.Int (Int16,Int8)
-import Data.List (foldl')
 import Data.Word
 import PipelineModel
 import Scenarios (Address(..),Patch(..),word,wordBytes,wordsAt)
@@ -31,15 +30,25 @@ registerFields packet bytes=case packet of
  PrimaryTablePacket -> [u 0 0 1 0 1]++concat [[h 4 (fromIntegral n*16) 11 (2+n*2) 1024,h 8 (fromIntegral n*16) 14 (6+n*2) 16383,h 12 (fromIntegral n*16) 10 (10+n*2) 1023]|n<-[0..1]]++[raw 16 0 8 (fromIntegral (min 0 (fromIntegral (v 14)::Int8)))]++[b (17+n) (15+n)|n<-[0..2]]++[b 20 18,h 24 0 10 20 1023,b 28 22,raw 28 8 8 (min 128 (v 23)),raw 28 16 10 (fromIntegral (max (-512) (min 128 (fromIntegral (fromIntegral (packetHalf bytes 24)::Int16)::Integer))))]++concat [[s (32+bank*164+n*4) 16 11 (26+bank*164+n*4),s (32+bank*164+n*4) 0 11 (28+bank*164+n*4)]|bank<-[0..19],n<-[0..40]]
  SnapshotPacket -> snapshotFields bytes
  where
+  raw :: Word32 -> Int -> Int -> Word32 -> RegisterField
   raw=RegisterField
+  v :: Word32 -> Word32
   v offset=fromIntegral (B.index bytes (fromIntegral offset))
-  u destination shift width source maximum=raw destination shift width (min maximum (v source))
-  h destination shift width source maximum=raw destination shift width (min maximum (packetHalf bytes source))
+  u :: Word32 -> Int -> Int -> Word32 -> Word32 -> RegisterField
+  u destination bitShift width source limit=raw destination bitShift width (min limit (v source))
+  h :: Word32 -> Int -> Int -> Word32 -> Word32 -> RegisterField
+  h destination bitShift width source limit=raw destination bitShift width (min limit (packetHalf bytes source))
+  b :: Word32 -> Word32 -> RegisterField
   b destination source=raw (destination .&. complement 3) (fromIntegral (destination .&. 3)*8) 8 (v source)
+  rh :: Word32 -> Word32 -> RegisterField
   rh destination source=raw (destination .&. complement 3) (fromIntegral (destination .&. 3)*8) 16 (packetHalf bytes source)
+  s :: Word32 -> Int -> Int -> Word32 -> RegisterField
   s destination shift width source=raw destination shift width (fromIntegral (signedLimit width (fromIntegral (fromIntegral (packetHalf bytes source)::Int16))))
+  sh :: Word32 -> Int -> Word32 -> RegisterField
   sh destination width source=s (destination .&. complement 3) (fromIntegral (destination .&. 3)*8) width source
+  signedByte :: Word32 -> Int -> Int -> Word32 -> RegisterField
   signedByte destination shift width source=raw destination shift width (fromIntegral (signedLimit width (fromIntegral (fromIntegral (v source)::Int8))))
+  sb :: Word32 -> Int -> Int -> Word32 -> RegisterField
   sb destination shift width source=signedByte (destination .&. complement 3) (fromIntegral (destination .&. 3)*8+shift) width source
 
 signedLimit :: Int -> Integer -> Integer
@@ -117,11 +126,19 @@ snapshotFields bytes=
  [u (360+n `div` 4*4) (fromIntegral (n `mod` 4)*8) 5 (342+n) 31|n<-[0..5]]++
  [b 368 348,u 368 16 6 349 63,raw 372 0 8 (min 128 (v 350)),raw 372 8 8 (min 128 (v 351)),b 374 352,b 376 353,u 376 16 4 354 15,u 376 24 4 355 15]++[b (380+n) (356+n)|n<-[0..2]]
  where
+  raw :: Word32 -> Int -> Int -> Word32 -> RegisterField
   raw=RegisterField
+  v :: Word32 -> Word32
   v offset=fromIntegral (B.index bytes (fromIntegral offset))
-  u destination shift width source maximum=raw destination shift width (min maximum (v source))
-  h destination shift width source maximum=raw destination shift width (min maximum (packetHalf bytes source))
+  u :: Word32 -> Int -> Int -> Word32 -> Word32 -> RegisterField
+  u destination bitShift width source limit=raw destination bitShift width (min limit (v source))
+  h :: Word32 -> Int -> Int -> Word32 -> Word32 -> RegisterField
+  h destination bitShift width source limit=raw destination bitShift width (min limit (packetHalf bytes source))
+  b :: Word32 -> Word32 -> RegisterField
   b destination source=raw (destination .&. complement 3) (fromIntegral (destination .&. 3)*8) 8 (v source)
+  rh :: Word32 -> Word32 -> RegisterField
   rh destination source=raw (destination .&. complement 3) (fromIntegral (destination .&. 3)*8) 16 (packetHalf bytes source)
+  s :: Word32 -> Int -> Int -> Word32 -> RegisterField
   s destination shift width source=raw destination shift width (fromIntegral (signedLimit width (fromIntegral (fromIntegral (packetHalf bytes source)::Int16))))
+  sb :: Word32 -> Int -> Int -> Word32 -> RegisterField
   sb destination shift width source=raw destination shift width (fromIntegral (signedLimit width (fromIntegral (fromIntegral (v source)::Int8))))

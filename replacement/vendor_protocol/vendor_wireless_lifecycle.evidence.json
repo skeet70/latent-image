@@ -1,0 +1,46 @@
+{
+  "target": "Fujifilm X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "status": "source-inspected",
+  "grounding": "Authenticated original overlay47 A32 instructions. NONMATCHING C is navigation only; committed object files for NONMATCHING functions are not original instruction evidence.",
+  "section_sha256": "0cf67b7221c3b0755092da0ae4c6d6fb817f2b32771ee53dff691fc59b28770c",
+  "source_paths": [
+    "app/connectivity/wifi/wlan/tu_012ae7b4.c",
+    "app/connectivity/wifi/wlan/tu_012aa8f8.c",
+    "app/connectivity/wifi/wlan/tu_01291f6c.c",
+    "app/connectivity/wifi/wlan/tu_012d8810.c",
+    "app/connectivity/wifi/controller_operations.c",
+    "app/native_overlay47/ov47_tu_0128d5f8.c"
+  ],
+  "instruction_extents": [
+    {"entry": "0x012b0bb8", "size": 608, "sha256": "093f54fb163ca5536daf4bc41efb9054db0799e59723b622940d7ca7dec19ed9"},
+    {"entry": "0x012ac698", "size": 908, "sha256": "3ed85bd424509c948caedfd7213f220ff42d5de059baab7657727aa420f4dfb2"},
+    {"entry": "0x012aca24", "size": 840, "sha256": "f4a202e424e6ff5acdccfab36290fca4fd99a4f227e4b4883511fca6a51d7e1b"},
+    {"entry": "0x012946c8", "size": 532, "sha256": "49f0de2ba672ac6098ed68bbbe40072e0da4a8ee0fc386eba8ed3ec26e0e7b3b"},
+    {"entry": "0x01292024", "size": 3496, "sha256": "26899081d66797a016a274d68286316462e798515a6b453f06c3299133db8391", "owned_subrange": ["0x0129213c", "0x0129261c"]},
+    {"entry": "0x012d88d0", "size": 788, "sha256": "cfbb7c3f0f39b7f00c1e4620b2cd1feacb130a31a2c8810ad649389382e80430"},
+    {"entry": "0x012d8cdc", "size": 284, "sha256": "38a098b61a31896f62912f6b9805933a760c587a369fa47b85cb7f69742b232c"},
+    {"entry": "0x01291884", "size": 100, "sha256": "e5436c740328d621b52c797f42c087612424d1209a33279dbef566f8970af715"},
+    {"entry": "0x012918e8", "size": 100, "sha256": "fb15f4df41c7f6c4fd0a3fc93f706912f18687087e3c41949f01bb9a0c7ae82b"}
+  ],
+  "contracts": [
+    "Serialized concrete parameter, station and register-handshake execution uses global then adapter semaphore acquisitions, each with 2000-tick admission timeout. Stop guard follows global acquisition. Failure releases only acquired semaphores; completion is readable after release.",
+    "Original request ABI stores arg5 at descriptor+8, arg6 at+c, arg7 at+2c, arg8 at+10, arg9 at+24. The NONMATCHING C temporaries do not recover these values.",
+    "Radio-test flag at adapter+41f7 is set before teardown after request admission, not after handshake. Cancellation retains that flag. Service-mode publication is separate.",
+    "Radio mode composition consumes canonical Adapter teardown, protocol reset, address configuration and hardware configuration CPU. Reinitialization completion waits until queued and transferring configuration/address descriptors drain.",
+    "One transmitter owns command sequence and credits at a time. Runtime moves canonical credit state and sequence between adapter and parameter/station engine; station dispatch consumes class-four credit once per physical command identity.",
+    "CMD53 wrapper errors are logically swallowed by both 01291884 and 012918e8. Physical host Completion remains separately observable. Control register writes with bit zero set install the wireless interrupt route through canonical ControlPlane.",
+    "Attachment selects mode4, enables function bit1 through CMD52 address2, enables host transfer, selects bus-width bit1 at address7, sets function block length512 through addresses110/111, programs host unit512 and selects mode10. Interrupt registration is a separate operation through address4 and canonical host routing.",
+    "Device firmware remains borrowed opaque data. Download uses reset writes8000/0 at8c, initial delay120, bounded 512-delay readiness loops, length>>6 at90, start1 at8c, enable1 at88, destination at84, chunks of2048, completion bit8000 and final disable0 at88.",
+    "Firmware chunk framing preserves caller scratch padding. A chunk-ready cancellation or timeout still performs the FIFO write before returning failure. Physical write status does not replace this logical result.",
+    "Rejected channel configuration retains ordered partial effects: mode entry first, Configured Operation0 before rejection, DirectTransmit rejection before any parameter, DirectReceive ignores unused channel."
+  ],
+  "provider_dependencies": [
+    "vendor_wireless_adapter: actual frame/descriptor/timer/reorder/station/configuration CPU, owned RadioAdapter",
+    "vendor_wireless_station_driver: actual typed station selector and receive CPU, owned StationDriver",
+    "sd_controller: canonical Host, ControlPlane, native ClockPower/InterruptRouter/OperationLock, provider commit a02b79eb",
+    "vendor_wireless_boot: application pre-download and post-download CPU surrounding the owned opaque device download"
+  ],
+  "verification": "Behavioral tests written but not run. Source bytes and extent identities inspected. No builds, tests, lint, formatting, SDK, camera, USB or radio operations.",
+  "qualification": "Source-owned Rust contracts require parent root declarations, build integration and provider composition. No runtime acceptance is claimed. FirmwareDownload completes device transfer only, not application initialization."
+}

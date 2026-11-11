@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "target": "Fujifilm X-M1 1.50",
+  "status": "source-implemented-unverified",
+  "source_repository": "x70view",
+  "source_revision": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "implementation": "replacement/vendor_protocol/filesystem_file_cpu.rs",
+  "tests": "replacement/vendor_protocol/filesystem_file_cpu_tests.rs",
+  "boundary": {
+    "storage": "filesystem_runtime::SectorIo; caller-owned HostVolume images and canonical SD/FTL implementations use the same file engine",
+    "directory": "filesystem_catalog::Entry, next_cluster, cluster_sector and commit_file",
+    "allocation": "one set_fat_entry/allocate_cluster/release_chain implementation shared with catalog creation and deletion",
+    "handles": "sixteen bounded live slots, nonzero generated FileHandle, stale-handle rejection, conflicting writers refused",
+    "close": "close invalidates a valid handle on both completion and failure; CloseCompletion carries the successful status; FileError::status supplies failure status",
+    "publication": "caller consumes completion and owns callback/event delivery; caller invokes FilesystemRuntime::refresh_after_file_change on the same live SectorIo after metadata publication",
+    "cancellation": "cancel(handle) marks a pending file; independent caller-owned FileCancellation supports cancellation during read_controlled/write_controlled; close remains available after cancellation"
+  },
+  "source_roots": [
+    {
+      "source": "decomp/firmwares/xm1-150/app/storage/fs/fs_open_file_metadata_query.c",
+      "contract": "invalid handle13, open-file name/attributes/timestamps and current writer length; metadata() borrows the canonical Entry and stat() returns cursor/size"
+    },
+    {
+      "address": "0x006feeec",
+      "source": "decomp/firmwares/xm1-150/app/storage/fs/fs_file_bytes_read_more.c",
+      "instruction_evidence": ".tools/corpus/xm1-150/functions/006feeec.asm",
+      "contract": "empty transfer35, invalid handle13, write-only36, EOF37, bounded reads, failed reads restore position, cancellation22"
+    },
+    {
+      "address": "0x006ff000",
+      "source": "decomp/firmwares/xm1-150/app/storage/fs/fs_file_bytes_write.c",
+      "instruction_evidence": ".tools/corpus/xm1-150/functions/006ff000.asm",
+      "contract": "read-only mode36, capacity32, partial completed bytes survive write errors, cancellation22, allocation publication38"
+    },
+    {
+      "address": "0x006ff138",
+      "source": "decomp/firmwares/xm1-150/app/storage/fs/fs_file_position_seek_more.c",
+      "contract": "start/current/end seek, positive end-relative and out-of-file seeks refused31"
+    },
+    {
+      "address": "0x006ffdcc",
+      "source": "decomp/firmwares/xm1-150/app/storage/fs/tu_006feeec.c:529-642",
+      "instruction_evidence": ".tools/corpus/xm1-150/functions/006ffdcc.asm",
+      "contract": "flush before metadata, optional final length/timestamp, slot release after close failure, flush failure39"
+    },
+    {
+      "address": "0x00701634",
+      "source": "decomp/firmwares/xm1-150/app/storage/fs/tu_006feeec.c:960-1208",
+      "contract": "read/write/append, readonly17, write truncation, append starts at end; source s mode is mapped by callers to canonical uncached Write"
+    },
+    {
+      "source": "decomp/firmwares/xm1-150/app/storage/fs/fs_file_chunk_read_more.c",
+      "contract": "fragmented FAT chains, partial-sector cache, direct full-sector reads, exfat contiguous allocation"
+    },
+    {
+      "source": "decomp/firmwares/xm1-150/app/storage/fs/fs_file_chunk_write_more.c",
+      "contract": "partial-sector preservation, allocated chains, exfat bitmap updates, completed-byte accounting"
+    },
+    {
+      "source": "decomp/firmwares/xm1-150/app/storage/fs/fs_file_allocation_capacity_more.c",
+      "contract": "preflight capacity before data changes and 32-bit file-position bounds"
+    },
+    {
+      "source": "decomp/firmwares/xm1-150/app/storage/fs/fs_fat_entries_more.c",
+      "contract": "FAT12 packed entries including sector-crossing pairs, FAT16/FAT32/exfat entries, mirrored FAT mutations"
+    },
+    {
+      "source": "decomp/firmwares/xm1-150/app/storage/service/storage_file_requests.c:66-103",
+      "contract": "caller-owned handle mapping removal, callback publication, close versus flush and device-summary refresh"
+    }
+  ],
+  "implemented_branches": [
+    "FAT12/FAT16/FAT32 fragmented file chains and exfat chained/contiguous files",
+    "512-byte and 2048-byte sectors",
+    "read/write/append permissions, medium write state and protected files",
+    "short reads, EOF, zero transfer, relative seeks and range refusal",
+    "sector cache and read-modify-write preserving unaffected bytes",
+    "allocation capacity preflight, zeroed new clusters, mirrored FAT mutation, packed neighboring-entry preservation",
+    "exfat bitmap allocation/release, materialization of contiguous files before chain extension",
+    "exfat valid-data-length zero reads and initialization before append",
+    "partial-write outcomes, cancellation, explicit flush, close metadata publication and optional truncation/timestamp",
+    "closed handle rejection, bounded slot exhaustion and conflicting open refusal"
+  ],
+  "intended_corrections": [
+    "Freshly allocated sectors are zeroed before linking to prevent disclosure of previously freed file bytes.",
+    "FAT32 reserved high-nibble bits are preserved when updating a packed allocation entry.",
+    "A failed read restores its logical cursor and invalidates cached traversal and data-sector state.",
+    "Exfat reads beyond valid data length return zero rather than stale sector contents."
+  ],
+  "synthetic_test_provenance": "Tests construct independent FAT directory records, fragmented allocation chains, exfat primary/stream/name sets, bitmap bytes and data sectors in caller-owned byte images. They inspect public reads and reopened catalog metadata rather than private file state. Fault and cancellation SectorIo wrappers inject observable medium failures around the real HostVolume provider.",
+  "verification": {
+    "builds_run": false,
+    "tests_run": false,
+    "formatters_run": false,
+    "native_runs": false,
+    "camera_or_usb_io": false,
+    "reason": "Assignment requires source-only work and delegates verification to integration owner."
+  },
+  "qualification_limits": [
+    "NONMATCHING decompilation remains source-inspection evidence, not a binary-equivalence claim; selected wrapper error/lifetime branches were cross-read with original instruction listings.",
+    "Compilation and behavioral tests have not been exercised.",
+    "ARM SD/FTL, asynchronous actor publication and integrated wireless/USB caller scenarios require integration qualification.",
+    "The provider does not claim power-loss atomicity for multi-sector FAT, bitmap or directory updates.",
+    "Timestamp acquisition is caller-owned; close_with_options accepts the parsed FAT timestamp.",
+    "No proprietary bytes, camera images, SDK fixtures or host filesystem shortcut are included."
+  ]
+}

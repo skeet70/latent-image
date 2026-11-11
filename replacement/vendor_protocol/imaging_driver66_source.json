@@ -1,0 +1,44 @@
+{
+  "firmware": "Fujifilm X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_units": [
+    "app/drivers/isp/s53c_route_bodies.c",
+    "app/drivers/isp/s53c_route_bodies_2.c",
+    "app/drivers/isp/s53c_route_registers.c",
+    "app/capture/record/channel_transfer.c",
+    "app/capture/record/channel_command_transfer_protocol.c"
+  ],
+  "driver_definition_status": "nonmatching; behavior derived from authenticated image4 instructions, not names or draft C alone",
+  "image4_sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
+  "roots": {
+    "0x0065df68": "acquire input owner token; sequence 1 through 4096",
+    "0x0065e0c8": "release matching input owner token",
+    "0x00661650": "write command start bit",
+    "0x006616f4": "clear command start bit",
+    "0x00661798": "configure command routing and dimensions",
+    "0x00661d70": "read six result bytes little endian",
+    "0x00661e78": "read command busy bit zero",
+    "0x00662f10": "allocate transfer channel handle",
+    "0x00662fcc": "release transfer channel handle",
+    "0x00663040": "start transfer; channels zero and one use polling, not timer callback",
+    "0x00663204": "stop transfer and wait for physical busy register to clear",
+    "0x00663394": "program transfer flags, mode, format, address and offset",
+    "0x00664580": "acknowledge transfer interrupt bits",
+    "0x00664760": "program transfer interrupt enables",
+    "0x00664a4c": "program transfer start and stop control",
+    "0x00664b74": "wait for physical transfer busy register to become zero"
+  },
+  "owned_scope": {
+    "command_channels": [0, 1],
+    "transmit_channels": [0, 1],
+    "mmio_domain": "0xfff10000..0xfff10400",
+    "completion_boundary": "MMIO command busy bit and transfer busy word",
+    "serialization": "exclusive Driver ownership; physical admission requires serialized IRQ and task entry",
+    "dma_lifetime": "physical admission requires stable mapped coherent buffers through physical quiescence",
+    "release": "running and stopping handles remain owned until physical quiescence",
+    "timeout": "cancels command and begins transfer stop, returns Timeout without claiming completion",
+    "late_interrupt": "acknowledges hardware bits, reads current busy, never changes software transfer lifecycle",
+    "power": "no Power service call occurs in these roots; powered-domain admission is required",
+    "allocation": "none"
+  }
+}

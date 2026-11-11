@@ -1,0 +1,69 @@
+{
+  "status": "source-implemented-unexecuted",
+  "scope": "X-M1 1.50 USB initialize, link debounce and register start, session reset/mode, callback publication and IRQ rearm CPU",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_repository": "x70view",
+  "images": [
+    {"base": "0x0061c400", "sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"},
+    {"base": "0x00bf1a00", "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"}
+  ],
+  "roots": [
+    {"address": "0x00d7b2bc", "size": 368, "sha256": "2244628819a5384d205db0c77a542009222792f2d9f4ea8ba097c43bc7fb9af3", "evidence": "NONMATCHING C plus inspected authenticated image A32 instructions", "implementation": "UsbStart::initialize"},
+    {"address": "0x00d7b42c", "size": 816, "sha256": "6261a488e6a8a9c1efe209be3335782aa4c26a63fc3ebe3d1cf68c06b0f4f722", "evidence": "NONMATCHING C plus inspected authenticated image A32 instructions", "implementation": "UsbStart::begin_start/poll_start/start"},
+    {"address": "0x00d7e8b4", "size": 60, "sha256": "fa564e11133eafbe766627326ab9dd2b1b38f9195c3480fd04ff25961f188411", "evidence": "inspected authenticated image A32 instructions", "implementation": "UsbStart::reset_session"},
+    {"address": "0x00d7e8f0", "size": 32, "sha256": "09909895a12173e0bcacb9afd98582ad521f0d12cbdc8a806a1ecb5dfeeb6c47", "evidence": "pinned service_usb_control.c and inspected authenticated image A32 instructions", "implementation": "UsbStart::set_session"},
+    {"address": "0x00d7b7c4", "size": 108, "sha256": "20264df5ab494a7b5ba0af3f8b6bbfef301077aba739c3e4d3014d5f25c2bf2a", "evidence": "pinned service_usb_reset.c and inspected authenticated image A32 instructions", "implementation": "UsbStart::bind_callbacks", "correction": "Publishes eight-word callback table address at controller+12 and unmasks events. Does not allocate a buffer."},
+    {"address": "0x00d7b830", "size": 140, "sha256": "97e026288c94c98cd0e5e1bc691d306df8884d7ec9c2244f7acf9a26a9e219f4", "evidence": "NONMATCHING C plus inspected authenticated image A32 instructions", "implementation": "UsbStart::finalize"},
+    {"address": "0x00d7ae94", "size": 252, "sha256": "389b72fe51bee1bab179f853b57c3dc3e90ef983354d49bed62c8f571e23b814", "evidence": "pinned service_usb_reset.c and inspected authenticated image A32 instructions", "implementation": "shared transfer reset inside initialize/begin_start"},
+    {"address": "0x00d7b98c", "size": 32, "evidence": "inspected authenticated image A32 instructions", "implementation": "link_connected"},
+    {"address": "0x00d7b9ac", "size": 56, "evidence": "inspected authenticated image A32 instructions", "implementation": "bus_status_bit14"},
+    {"address": "0x00d7b8bc", "size": 36, "evidence": "inspected authenticated image A32 instructions", "implementation": "UsbStart::clear_active"}
+  ],
+  "register_findings": {
+    "initialize_word_writes": ["fff55100=1", "fff55104=001ecbc7"],
+    "initialize_halfword_writes": ["fff54090=1", "fff540ac=3fff", "fff54094|=00c0", "fff54098|=0001"],
+    "repeat_initialize": "When initialization count is nonzero, set then clear bit16 of fff55108 with150 delay units between writes.",
+    "no_link_initialize": "Set fff54008 bit1 and controller+28=1, then request idle clock level.",
+    "debounce": "Start previous=false,count=0. Equal samples increment count; accept at100. First rising sample changes previous to true and resets count. Falling sample after rising disconnects immediately. Delay10 scheduler ticks between samples.",
+    "connected_reset": "If controller+28==1, set fff55108 bit16, perform20 delays of250 units, clear bit16 under canonical Power nested interrupt lock, clear controller+28.",
+    "pending_acknowledgement": "Read three halfwords atfff5402c/30/34 and write their complements atfff54054/58/5c. NONMATCHING draft's shifted combination is not used.",
+    "connected_programming": "Restore three halfword masks atfff54040/44/48; wordfff5512c=81810303; wordfff55114=101; delay1; separate halfword read-modify-writes setfff54004 bits2 then3; halfwordsfff54068=010d,6c=2083,70=0,80=0fff; register actual IRQ; setfff54090 bits1,2 only after registration succeeds.",
+    "clear_state_masks": ["dfe8", "7ffb", "afbd"],
+    "session_reset_preservation": "Reset bytes+4,+5,+20,+21 and words+8,+12,+16. Preserve mode word+0 and reserved bytes+6,+7,+22,+23."
+  },
+  "canonical_dependencies": {
+    "resource_route": "xm1_power_resource_route_request(0x70b,30,11 or0), canonical Power resource_route.rs implementing6499d0/64a0bc/64a224; stock ignores request status. Constructor completion and mapped route RAM/source table/clock MMIO are mandatory preconditions.",
+    "resource_registry_distinction": "6499d0 is a route vote, not resource_registry acquire/release. DriverHandle and RegistryHandle remain distinct.",
+    "controller_irq": "64e918 source15 maps via image4 table entry7c91d8 to line84, priority13, mode1. Uses transport::cpu::IrqContext handles/sequence/sources and transport::irq_control configure/enable, not a parallel registry. Physical handler is supplied as typed irq_control::Handler.",
+    "irq_release": "transport::cpu::release_interrupt_handle implements the retained software handle/IRQ teardown used by finalize.",
+    "delay": "transport::cpu::spin_delay with DelayCounter physical timer boundary; full start uses transport::scheduler::delay and the shared retained scheduler Machine/domain.",
+    "dma": "TransferBuffer owns or maps actual PublishedAperture storage. Channel allocation, arm, DMA receive programming, cache operations, stop and teardown remain transport::cpu::open_channel/ChannelRuntime and transport::DmaChannel/ControllerTeardown. These roots contain no buffer allocator call; none is invented."
+  },
+  "integration_contract": {
+    "module": "Expose transport_start_cpu as a sibling of transport in vendor_protocol lib.rs; include all three new files in the existing build graph.",
+    "irq_test_constructor": "Parent-owned transport_cpu::PublishedInterruptHandlers::from_handlers(zero:Handler,one:Handler)->Self exposes typed guest handler publication for host fixtures.",
+    "memory": "UsbMemory::owned accepts an exclusive204-byte host aperture; unsafe UsbMemory::native maps0146975c..01469828. All mutations access backing bytes, not a detached shadow model. TransferBuffer::owned/native reuse retained PublishedAperture.",
+    "start_runtime": "StartRuntime holds io:I,irq:&mut transport::cpu::IrqContext<B>,timer:T,handler:irq_control::Handler. MappedUsbIo is a concrete volatile MMIO provider. Generic StartIo/Backend/DelayCounter seams represent physical registers, IRQ instructions and timer counters only.",
+    "connection_vote": "transport_start_cpu::vote_connection(io:&mut impl StartIo,connected:bool)->transport::ServiceStatus calls StartIo::request_clock; MappedUsbIo forwards to the canonical Power route provider with selector70b, slot30, level11 or0. Controller owner uses it for actual d814f4 publication.",
+    "status_queries": "link_connected(io:&mut impl StartIo)->bool reads fff55104 bit31. bus_status_bit14(io:&mut impl StartIo)->bool reads fff5409c halfword bit14 only when connected.",
+    "synchronous_start": "UsbStart::start(runtime,machine,transport::scheduler::layout::Domain) executes begin/debounce/register programming with actual shared scheduler delay. Returns Ready or Disconnected; poll_start is also available for an owned scheduler continuation.",
+    "disconnected_join": "Controller owner must consume StartProgress::Disconnected using its concrete d814f4(0) body: update controller1469cd0+3c0; on bit0 change clear+3d0, request idle route vote, and publish queue36 event340a. This publication is not a physical callback and is not waived as environment work.",
+    "session_join": "Connection owner calls reset_session/set_session(SessionMode::from_abi(raw))/clear_active directly. Parent owns existing Service and operation-table bridges.",
+    "shutdown_join": "Pass controller_irq() and retained channel leases to ControllerTeardown. No new transport stop implementation is introduced."
+  },
+  "source_tests": [
+    "Session reset preserves mode, reserved bytes and unrelated USB state",
+    "Callback publication writes guest address and actual register masks",
+    "Disconnected and falling-link paths do not enable IRQ or endpoints",
+    "Stable link produces required halfword/word register values and canonical IRQ84 registration",
+    "Clear-active plus finalize replaces the actual IRQ lease and republishes masks",
+    "Bus status bit14 is gated by the connected link bit",
+    "Host-owned transfer bytes are read by retained EndpointTransfer FIFO programming"
+  ],
+  "verification": {
+    "performed": ["Source inspection of pinned committed C", "A32 disassembly of the six roots and reachable reset/active/IRQ/resource/publication helpers", "Image SHA-256 authentication against pinned source extent records", "IRQ tuple data read from authenticated image4"],
+    "not_performed": ["build", "tests", "lint", "format", "native execution", "SDK execution", "camera", "USB"],
+    "claim_limit": "Source implementation and integration contracts only. Tests are provided but not executed. Integration, independent review and runtime qualification belong to the parent. No hardware boundary is counted as verified by a shadow register fixture."
+  },
+  "unchanged_evidence_labels": ["d7ef20", "d7ef78", "d7efd4"]
+}

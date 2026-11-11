@@ -1,0 +1,86 @@
+{
+  "target": "Fujifilm X-M1 1.50",
+  "status": "source-implemented-unverified",
+  "source_revision": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "firmware": {
+    "path": "private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin",
+    "load_address": "0x0061c400",
+    "bytes": 2631680,
+    "sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"
+  },
+  "selected_root": {
+    "route_table": "0x00814730..0x00814740",
+    "route_bytes": "43010000080000004201010007000000",
+    "route_sha256": "ee0187b15d930d7374541552d13be4a7a71899608ceec45bd6365217470c46cf",
+    "routes": [
+      { "drive": "C", "device": 0, "route_kind": 8, "volume_kind": 7, "nand_kind": 6, "backend": "SD controller" },
+      { "drive": "B", "device": 1, "route_kind": 7, "volume_kind": 6, "nand_kind": 5, "backend": "general mapped NAND" }
+    ],
+    "chain": [
+      "storage_initialize_device_kind at 0x0071fc0c reads the two eight-byte route records and maps route kind 7 to volume kind 6",
+      "fs_set_volume_device_kind at 0x00709eec maps volume kind 6 to NAND kind 5",
+      "nand_set_device_kind at 0x006f4d00 stores the kind in saved context",
+      "FUN_006f4d24 selects FUN_006f6a80 for kind 5, FUN_006faa38 for kind 6, FUN_006f6be8 only for kind 1",
+      "FUN_006f6a80 builds one map with physical base 0x13a, physical count 0x246, logical count 0x232, handle 1",
+      "nand_read_blocks at 0x006fa278 and nand_write_blocks at 0x006f98c0 select mapped request wrappers for kind 5"
+    ],
+    "geometry": {
+      "physical_base": 314,
+      "physical_blocks": 582,
+      "logical_blocks": 562,
+      "page_bytes": 2048,
+      "pages_per_block": 64,
+      "sector_bytes": 2048,
+      "sectors": 35968,
+      "geometry_record_address": "0x00829818",
+      "geometry_record_prefix": "000840040800200000080000"
+    },
+    "legacy_group_engine": "tu_006f5b18.c contains the separate kind-1 mapping-group implementation. Neither authenticated active route selects kind 1. Its source is preserved, not counted as implemented or substituted for the selected kind-5 map. The selected kind-5 initializer in the same TU is implemented by from_mapped_xm1."
+  },
+  "sources": [
+    "decomp/firmwares/xm1-150/app/storage/ftl/tu_006f5b18.c",
+    "decomp/firmwares/xm1-150/app/storage/ftl/tu_006fbac4.c",
+    "decomp/firmwares/xm1-150/app/storage/ftl/tu_00720104.c",
+    "decomp/firmwares/xm1-150/app/storage/ftl/nand_block_mapping.c",
+    "decomp/firmwares/xm1-150/app/storage/ftl/nand_block_mapping_more.c",
+    "decomp/firmwares/xm1-150/app/storage/ftl/nand_block_maps_build.c",
+    "decomp/firmwares/xm1-150/app/drivers/nand/tu_006f4d24.c",
+    "decomp/firmwares/xm1-150/app/drivers/nand/tu_006f7474.c",
+    "decomp/firmwares/xm1-150/app/drivers/nand/nand_request_wrappers.c",
+    "decomp/firmwares/xm1-150/app/storage/service/storage_initialize_device_kind.c",
+    "decomp/firmwares/xm1-150/app/storage/fs/fs_volume_device_kind_set.c"
+  ],
+  "byte_ranges": [
+    { "symbol": "route selector", "start": "0x0071fc0c", "end_exclusive": "0x0071fcbc", "sha256": "18c4af5b636c3fdcf46ee34e1055d771a8e13dfbf8ea25de23e5d416dfde6f7d" },
+    { "symbol": "volume selector", "start": "0x00709eec", "end_exclusive": "0x00709f4c", "sha256": "74ccef164bf757e258860de6b45dd461ffc1da7dbaf03bef001656e5b0b7da46" },
+    { "symbol": "backend selector", "start": "0x006f4d24", "end_exclusive": "0x006f4e18", "sha256": "9860099a7c480df62b90b52c35103cde10f09e8489de619b4afa5fb087fc7d9d" },
+    { "symbol": "mapped initializer", "start": "0x006f6a80", "end_exclusive": "0x006f6be8", "sha256": "fd4c6de0bf3b1528f544e36ad95db6cd65a6b80f1b8a4066fc68b86e5bc112be" },
+    { "symbol": "parity", "start": "0x006ee5d0", "end_exclusive": "0x006ee648", "sha256": "e6315de99b340b7e49da15245dbba6cab05cc5f3a66e1ea6258c3e5a980c1dcd" },
+    { "symbol": "tag setup", "start": "0x006ef084", "end_exclusive": "0x006ef1dc", "sha256": "b2e0957a36c92cec100f94595b331794a9e35862ce83b70b8d2444a26afcaa22" },
+    { "symbol": "spare classification", "start": "0x006fbd2c", "end_exclusive": "0x006fbd88", "sha256": "96ceb00ed3f5b57b3e12b0845bd9ae147139ac34d6686dc958048910b52a8a5a" },
+    { "symbol": "free block allocation", "start": "0x006fd06c", "end_exclusive": "0x006fd12c", "sha256": "f90a9a675b69f295ab1db27c90b897962395f060fa0fbaabb20bdeb5f19e77ca" },
+    { "symbol": "mapped write", "start": "0x006fdf00", "end_exclusive": "0x006fe9b0", "sha256": "47b38cd08c513f4b18e7aafecba2d14685e4df6528b85f533fc785cc9cb3628e" },
+    { "symbol": "mapping tag decode", "start": "0x006fe9b0", "end_exclusive": "0x006fea48", "sha256": "51dfe40f690b8542e01f592ce75a4d85a2584e56f669ad8356aa7deb53b3223e" },
+    { "symbol": "block map scan", "start": "0x006fea48", "end_exclusive": "0x006fed00", "sha256": "c4af378a29bcc0241748f4f903de8dc460cc14fd61cab1bcfda54b70ec9fd5b0" },
+    { "symbol": "mapping cache unit", "start": "0x00720104", "end_exclusive": "0x00720d08", "sha256": "b7adfb81eab37daf750e4c40158da1af745283d3e69e5bad32c44c6c257b2daa" }
+  ],
+  "nonmatching_resolution": [
+    "Target instruction inspection confirms four-word erased spare test, bad marker bytes 4 and 5, big-endian duplicated tag, even parity, logical decode mask 0xf7ff, and programmed tag flag 0x1000.",
+    "Target scan accepts first and last equal logical tags only when the logical entry is not assigned. Later duplicates and inconsistent tags are erased; erase failure retires the physical block.",
+    "Target allocator stops when used bad blocks exhaust physical minus logical reserve; free bitmap search starts at cursor rounded down to eight blocks.",
+    "Target mapped write selects a free candidate, preserves unaffected pages, retires program-failed candidates and retries allocation, then erases or retires the previous mapping before publishing the replacement.",
+    "Cache ownership is redesigned as caller-owned full-block slots. Hits promote metadata without copying cached data, dirty eviction writes through the same general map engine, and successful flush clears dirty state only after physical effects complete. Dirty slots survive same-medium remounts without an implicit write after cancellation. No disk layout, generation field, profile map, identity map or retained CPU callback is introduced."
+  ],
+  "medium_ownership": {
+    "application": "Canonical application_nand::physical::PhysicalNand raw page/spare/block methods under its existing ownership guard; configuration is a caller prerequisite.",
+    "image": "Canonical application_nand::memory::MemoryNand adopts caller-owned data, spare, typed failure/cancellation plans, image provenance and mandatory explicit HostConfiguration. Every engine fixture covers G1StrictRejectBeforeMutation and LegacyAndCommitFailedStatus. Cache identity includes configuration and provenance; dirty cache cannot cross either boundary. The FTL uses the same map/cache/read/write/flush engine for both concrete media.",
+    "qualification": "Canonical host device laws are source-only. G1 rejects illegal zero-to-one programs before whole-page/OOB mutation; Legacy AND-commits then returns failed status. Injected 1024-byte program prefixes and cancellation are synthetic under both configurations, not pinned-G1 or physical facts. Neither law establishes ARM controller, IRQ, persistence, emulator, SDK or camera behavior.",
+    "strict_retirement_boundary": "The actual retirement CPU loop ignores ProgramFailed from each erased-data/bad-spare page program. Source fixtures preserve its returned status and complete data/OOB under both laws. Strict rejection can leave a programmed page's original OOB unmarked despite a successful retirement return. This is an unexecuted source-level compatibility boundary, not a resolved G1/full-FTL gate; Legacy coverage cannot discharge it."
+  },
+  "verification": {
+    "builds_tests_linters_formatters_native_sdk_camera_usb": "not run",
+    "source_tests": "Authored against both explicit canonical MemoryNand laws: authenticated geometry, OOB byte protocol, nonidentity map reads, unmapped erased reads, duplicate/torn map reclamation, dirty eviction/remount preservation, failed-program rollover with preserved failed generation, reserve exhaustion, previous-block erase failure, range atomicity, 2048-byte cross-block sectors, cancellation, explicit retry, dirty cross-law rejection and returned retirement status with complete data/OOB.",
+    "engine_execution": "unverified; source tests were not run and require separate host execution admission and independent source review",
+    "integration": "filesystem_runtime owns SectorIo composition; parent owns canonical application_nand source import and BUILD publication"
+  }
+}

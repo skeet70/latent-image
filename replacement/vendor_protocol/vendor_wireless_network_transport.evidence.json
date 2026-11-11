@@ -1,0 +1,131 @@
+{
+  "schema": 1,
+  "scope": "Source-owned bounded WLAN TCP/socket and IPv4 reassembly CPU, with network-layer integration owned by vendor_wireless_network",
+  "target": "Fujifilm X-M1 1.50",
+  "decomp_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "base_commit": "6822fd41",
+  "implementation": [
+    "vendor_wireless_network_transport.rs",
+    "vendor_wireless_network_transport_fragments.rs",
+    "vendor_wireless_network_transport_tests.rs"
+  ],
+  "source_inspected": [
+    {
+      "path": "decomp/firmwares/xm1-150/app/connectivity/netstack/network_connection.c",
+      "facts": [
+        "read_network_connection_all accumulates partial receives until the requested size, EOF, or an error",
+        "read_network_connection_nonblocking selects receive mode 0x80",
+        "create_network_listening_socket creates and binds before listener preparation, publishing failure before returning",
+        "configure_network_connection_options distinguishes no-delay, maximum-segment, send-buffer, and receive-buffer options",
+        "dispose_network_connection releases attachment records, buffers, address state, and socket-family storage"
+      ]
+    },
+    {
+      "path": "decomp/firmwares/xm1-150/app/connectivity/netstack/network_connection_clock.c",
+      "facts": ["The retained connection clock converts source ticks at 2500 microseconds per tick"]
+    },
+    {
+      "path": "decomp/firmwares/xm1-150/app/connectivity/netstack/network_connection_timing.c",
+      "facts": ["A zero interval disables the duration threshold; otherwise interval times duration is compared with accumulated elapsed time"]
+    },
+    {
+      "path": "decomp/firmwares/xm1-150/app/connectivity/netstack/network_socket_api.c",
+      "facts": [
+        "Socket completion publishes an error before decrementing the acquired socket reference",
+        "Peer and local address results are distinct endpoint projections",
+        "Socket wait mode uses flag 0x80 and rejects values other than zero and one"
+      ]
+    },
+    {
+      "path": "decomp/firmwares/xm1-150/app/connectivity/netstack/network_transport.c",
+      "facts": [
+        "consume_network_fragment advances sequence by the consumed byte count",
+        "send_network_transport_fragment_end counts SYN and FIN independently in sequence space and emits reset/ack flags 0x14",
+        "Completion and retry callbacks retain socket ownership until callback teardown"
+      ]
+    },
+    {
+      "path": "decomp/firmwares/xm1-150/app/connectivity/netstack/network_fragments.c",
+      "facts": [
+        "Discarding an eligible timed-out entry restores the IPv4 header before emitting control kind 11, code 1",
+        "Tail trimming releases the remaining packet chain"
+      ]
+    }
+  ],
+  "authenticated_target_bytes": {
+    "input": "Owner-supplied plain image plain-01100000.bin, mapped at 0x01100000",
+    "overlay47_offset": "0x000e0000",
+    "overlay47_size": "0x0026a5e0",
+    "overlay47_sha256_observed": "0cf67b7221c3b0755092da0ae4c6d6fb817f2b32771ee53dff691fc59b28770c",
+    "authentication": "dd bs=1 skip=917504 count=2532832 status=none | sha256sum; observed digest equals the pinned function-ranges stock_sha256",
+    "disassembler": "nix shell nixpkgs#binutils-unwrapped-all-targets -c objdump -D -b binary -m arm --adjust-vma=0x01100000 --start-address=START --stop-address=END INPUT",
+    "extents": [
+      {
+        "address": "0x01307c7c",
+        "size": 1536,
+        "pinned_sha256": "fd0327d8ec26f81dd07063dba4844bf00c3eea5b20f66c721fea95cc6dba67f7",
+        "disassembly_read_through": "0x01308274",
+        "facts": [
+          "01307d34..01307d6c compares identification, protocol, destination address, and source address",
+          "01307f98..01307fb8 decodes the fragment offset in eight-byte units and stores start/end positions",
+          "01308020..01308074 trims incoming overlap against the preceding fragment",
+          "01308094..0130813c trims or removes covered successor fragments",
+          "01308160..01308198 requires contiguous coverage from zero and a final fragment before completion",
+          "01308210..0130821c clears fragment-position flags after assembly"
+        ]
+      },
+      {
+        "address": "0x0130fc64",
+        "size": 168,
+        "pinned_sha256": "7bc3fc09d5ca243a696b68085b41fa3174c8c6df86ca3e0cacc81eb77d199644",
+        "facts": [
+          "0130fc70..0130fca0 derives a retry interval from timing state and an indexed backoff table, using multiplier 64 after its first six entries",
+          "0130fca4..0130fcf8 clamps retry timing and checks a configured retry threshold before restarting the timer"
+        ]
+      },
+      {
+        "address": "0x01310634",
+        "size": 148,
+        "pinned_sha256": "d71a3bdbe488d9b92814e6341c0d1fd956dd0156b846625ddfd43dbfc70cee91",
+        "facts": [
+          "01310654..01310678 rejects stale timer identity, inactive timers, and cleared retry ownership flags",
+          "0131067c..013106b8 runs retry handling, then either dispatches the pending event or publishes timeout 0x104"
+        ]
+      }
+    ]
+  },
+  "replacement_contract": {
+    "allocation": "None; socket count, receive/send storage, fragment count, and assembly payload capacity are const-generic caller-selected bounds",
+    "wire_boundary": "Validated IPv4 packets enter receive_ipv4; concrete serialized IPv4 TCP/ICMP packets leave through caller-owned output buffers. No retained stock CPU callback is invoked",
+    "clock": "TransportTick is wrapping milliseconds; the embedding scheduler converts its physical tick source at the boundary",
+    "socket_identity": "SocketHandle includes an allocation generation; clear invalidates handles and wipes live socket buffers",
+    "sequence_seed": "Both active and passive opens require caller-supplied TcpSequence; passive child sequences consume and advance the listener seed",
+    "ordered_state": "Active/passive and simultaneous-open handshakes, cumulative/partial acknowledgment, sequence wrap, receive-window flow control, duplicate trimming, zero-window probes, retransmit, graceful FIN/ACK, simultaneous close, time-wait, reset, cancel, timeout and handle teardown are implemented in Rust",
+    "retry_policy": "One bounded outstanding segment per socket, at most six transmissions with 1/2/4/8/16/32 second delays; 120-second time-wait. This is replacement policy, not a claim that target defaults have those values",
+    "receive_storage": "Receive bytes use fixed circular storage; partial acknowledgments advance a transmit slice without shifting remaining payload",
+    "reassembly": "Keyed by both IPv4 addresses, protocol and identification; out-of-order fragments, predecessor-preserving/successor-replacing overlap, last-fragment length, finite capacity, malformed ranges, output capacity, expiry and ICMP reassembly timeout are explicit",
+    "integration": "The LAN owner must drain expire_ipv4 and poll, route emitted IPv4 packets through Ethernet/ARP, retain emitted frames until physical transmission completes, and call clear on link/address loss",
+    "physical_failures": "A packet-return outcome is serialization, not proof of physical transmission; the LAN runtime owns physical send failure publication and teardown"
+  },
+  "tests": {
+    "provenance": "Synthetic endpoints and payloads constructed by public socket APIs and the existing public UDP encoder; no captured camera traffic or proprietary packet fixtures",
+    "written_unrun": [
+      "Active/passive handshake, stream transfer, acknowledgment and bidirectional EOF across sequence wrap",
+      "Simultaneous active open completes and transfers stream bytes",
+      "Lost data acknowledgment causes retransmit without duplicate application delivery; cancellation resets the peer",
+      "Short output is retryable and checksum corruption publishes no stream data",
+      "Retry exhaustion publishes timeout; teardown invalidates stale handles",
+      "A lost receive-window update recovers by probe and stream reads cross the circular-buffer boundary",
+      "Out-of-order IPv4 fragments reassemble to a valid original UDP datagram",
+      "Overlaps preserve the predecessor; wrapping fragment expiry cannot mix datagrams",
+      "Expired first fragments produce a valid IPv4 ICMP time-exceeded code-1 packet"
+    ],
+    "verification": "No build, test, lint, formatter, SDK, native execution, emulation, or live camera operation was run"
+  },
+  "qualification_limits": [
+    "The pinned C files contain declarations rather than definitions for the main TCP transition and IPv4 assembly routines. Assembly and retry facts above come from authenticated X-M1 A32 bytes, not donor code or NONMATCHING bodies",
+    "This source increment is not stock-CPU equivalence evidence or runtime acceptance",
+    "Retained socket options, timestamp/window-scale/SACK negotiation, urgent-data presentation, adaptive RTT/congestion-control defaults and connection benchmark framing are not exposed as replacement APIs; the concrete stream uses the base TCP wire protocol and a bounded single-segment transmission window",
+    "No missing physical target prerequisite is claimed: source-only integration, independent review and execution qualification remain the integration owner's work"
+  ]
+}

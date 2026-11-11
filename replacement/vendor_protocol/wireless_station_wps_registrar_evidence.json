@@ -1,0 +1,33 @@
+{
+  "target": "Fujifilm X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_repository": "x70view",
+  "source_path": "decomp/firmwares/xm1-150/app/third_party/hostap/src/wps/wps_registrar.c",
+  "source_scope": "The committed unit contains registrar types and declarations, PIN locking and expiration contracts, PBC session tracking and walk-time contract. Missing registrar message definitions are not treated as exact C evidence.",
+  "ap_entry_source": "supplicant_ap_control.c:161-162 passes timeout0 to hostapd_wps_add_pin; wps_hostapd.c:458-480 forwards timeout; supplicant_ap_control.c:428-429 configures WPS state2 and ap_setup_locked2.",
+  "instructions": {
+    "image": "private-data/analysis/x-m1-1.50/lz/plain-01100000.bin",
+    "vma": "0x01100000",
+    "tool": "arm-none-eabi-objdump 2.46 -D -b binary -m arm",
+    "ranges_inspected": [["0x013767d8", "0x01376cb0"], ["0x01377e74", "0x01378d50"], ["0x01379458", "0x01379a40"], ["0x01373cb0", "0x01373fa0"], ["0x01379a94", "0x01379b10"]],
+    "facts": [
+      "PIN add helper0x01373cb0 branches around PIN_EXPIRES when timeout is0 at0x01373da0..0x01373de4, but unconditionally arms120s selected-registrar expiry at0x01373ea8..0x01373ebc",
+      "Selected-registrar expiry0x01379a94 clears selected_registrar and pbc fields at0x01379ac8/0x01379ad4 and does not remove the authorized PIN or active protocol session",
+      "M4 builder at 0x013767d8 emits message type8, builds R hashes and R-SNonce1 encrypted settings, then authenticates and selects receive-state17 at 0x01376964",
+      "M6 builder at 0x0137697c emits type10, builds R-SNonce2 encrypted settings, authenticates and selects receive-state19 at 0x01376adc",
+      "M8 builder at 0x01376af4 emits type12, builds credentials or AP settings, adds KWA and encrypted settings, authenticates and selects Done receive-state21 at 0x01376ca8",
+      "M1 receive checks state13 at 0x01377ea0 and dispatches attribute-processing helpers before progressing",
+      "M3 calls registrar nonce helper 0x01376ef8 at 0x01378468, Authenticator helper 0x0136a178 at 0x0137848c, then E-Hash1/2 helpers 0x01377098 and 0x01377118 before selecting send-state16",
+      "M5 calls nonce helper at 0x013785f4 and Authenticator helper at 0x01378618 before decrypt helper0x01365bc0 at 0x01378658; KWA helper0x0136a2a4 and E-SNonce1 helper0x01377198 precede state progress",
+      "M7 calls nonce helper at 0x01378b40 and Authenticator helper at 0x01378b64 before decrypt helper0x01365bc0 at 0x01378ba4",
+      "Done receive checks state21 at 0x01379484, parses TLVs, requires message type15 at 0x01379524 and checks both nonces before success notification at 0x013798e8",
+      "Opcode dispatch at 0x01379938 maps WSC message, ACK, NACK and Done; Done validation enters0x01379458 from0x013799f4"
+    ],
+    "name_scope": "Helper semantic names are inferred from committed symbol mappings and corresponding owned enrollee evidence; control flow and literal message/state values are instruction-inspected."
+  },
+  "owned_cpu": ["EAP server identity/start and request identifier sequencing", "EAP-WSC fragment emission, reassembly and fragment acknowledgements", "PIN and PBC M1-M8 registrar negotiation", "Concrete DH1536, HMAC, password commitments and authenticated AES settings through station crypto::wps", "Original AP credentials encoded only after E-SNonce2 proof", "Registered outcome only after nonce-bound WSC Done", "Selected-registrar advertisement enable/disable, real entropy requests, timeout, cached request retry, cancellation and disconnect effects"],
+  "canonical_integration": "AP integration contract: hold a concrete Registrar instance; fulfill RegistrarEffect::Entropy through owned station crypto::random::RandomPool::generate and RtosClock samples; drain transmit, selected-registrar, timer and disconnect effects before publishing terminal outcomes. No hardware-TRNG or cryptographic CPU callback is required. The stock clock-byte/pool generator does not establish cryptographic entropy strength.",
+  "teardown_boundary": "Registrar::is_drained reports no queued engine effects. AP separately tracks issued physical effects and their acknowledgements before StopBss.",
+  "synthetic_tests": "wireless_station_wps_registrar_tests.rs drives actual enrollee and registrar engines through PIN and PBC exchanges and checks wrong-PIN rejection, timeout, cancellation, initial configured/setup-locked advertisement, retained PIN authorization after advertisement expiry and exact request retransmission. Test frames and credentials are synthetic.",
+  "verification": "Not run. No build, test, formatter, lint, native execution or device I/O is authorized by this assignment."
+}

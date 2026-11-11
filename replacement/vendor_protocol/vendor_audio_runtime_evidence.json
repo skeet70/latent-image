@@ -1,0 +1,57 @@
+{
+  "source_revision": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "status": "source-composition-unverified",
+  "images": [
+    {"base": "0x0061c400", "sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"},
+    {"base": "0x00bf1a00", "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"}
+  ],
+  "providers": {
+    "codec": "xm1_power_lifecycle::audio_release::{executor,callbacks}; audio_zoom_actor::{AudioZoomActor,WorkerFields}",
+    "packets": "xm1_power_lifecycle::audio_release::packet_ring; configuration_audio_packets::ServicePacketQueue implements canonical RingMemory",
+    "pipeline": "xm1_power_lifecycle::audio_release::stream_pipeline::{submit,complete,cancel,Pipeline,PipelineLifecycle}; one shared host/ARM phase engine",
+    "irq": "Canonical Power FFF020 registration-bound receive/send handlers, physical IRQ38 and timer handle registry",
+    "acquisition": "xm1_power_lifecycle::audio_release::stream_construction::{resource_acquire,resource_configure,pipeline_acquire,resource_release}; vendor_audio_runtime::{prepare_transfer,register_stream} use ConstructionMemory/ConstructionIo on host and ARM",
+    "configuration_read": "configuration_storage::ConfigurationStorage<F>::read_configuration",
+    "configuration_write": "Canonical ApplicationNand profile map through xm1_app_nand_write_blocks, first41/count33"
+  },
+  "native_state": {
+    "codec_worker": "0x8faef0..0x8fc77c",
+    "stream": "0x9566b0",
+    "request": "0x9566c0",
+    "transfer_request": "0x956720",
+    "pipeline": "0x93b5f8",
+    "dma": "0x918b98",
+    "packet_ring": "0x966998",
+    "configuration": "0x14e5af8",
+    "recording_seconds": "0x42e40000",
+    "recording_pcm": "0x42e40010",
+    "playback_pcm": "0x43014c10"
+  },
+  "publications": {
+    "stream": "Owned registry slot at worker0, request kind19, exact16-byte messages2e05/2e06/2e07. NativeVendorAudio::consume_message validates slot and dispatches CPU directly; no retained handler call.",
+    "bank_selection": "Idle and unchanged active selections use canonical BankNotify/BankNotifyUnchanged actions. Changed active selection schedules7d1d58/7d1538 and terminal6e97c0. All publish0816 via canonical full76-byte application-record producer bridges.",
+    "service": "Parent consumes Progress::Complete and delivers its canonical ProtocolResultPublication. Result keys are written after physical drain and codec stop. Action22 publishes immediately and sound execution continues under runtime polling.",
+    "capture_av": "Parent first composes av_configuration_runtime over the same codec_domain, then invokes begin_capture. AV failure does not overwrite capture result key. Duration rejection writes result byte1."
+  },
+  "source_scope": [
+    "Service capture/playback producers dbc260/dbc41c and completion worddbb5f4: two outstanding192000-byte units, maximum10seconds, unconditional playback copy before channel validation.",
+    "Stream setup6eb10c/6ebe78: request packing, controller acquisition/configuration, codec mode/rate, canonical pipeline acquisition.",
+    "Sound consumer6ec86c and completion6ecab4: clipmode7/trackmode4, packing0/1, primary and end segments, paired stop notification and same-stream end continuation.",
+    "Message request6e27ac/6e274c registration: original32-byte request layout, registry96e04c, entries95761c, codes7d20f8. Root owns queue worker dispatch; no retained handler table is installed.",
+    "Storage28 copies through canonical configuration storage and applies source overlays; storage29 writes canonical NAND logical profile41/count33 and publishes status byte."
+  ],
+  "preserved_generations": "configuration_audio_dma.rs, configuration_audio_pipeline.rs and configuration_audio_stream.rs remain preserved source generations but are removed from configuration_audio_actors module declarations. New runtime uses only canonical Power engines.",
+  "integration": {
+    "module": "pub mod vendor_audio_runtime;",
+    "dependency": "xm1_power_lifecycle host and ARM providers, including canonical audio_bank_residue.S in the ARM artifact; canonical ApplicationNand source provider at the parent crate root",
+    "dispatcher": ["NativeVendorAudio::action22", "NativeVendorAudio::begin_capture", "NativeVendorAudio::action25", "NativeVendorAudio::poll", "NativeVendorAudio::consume_message", "NativeVendorAudio::codec_domain", "configuration_audio_actors::storage::action28_copy", "configuration_audio_actors::storage::native::action29_flush"],
+    "serialization": "One audio-domain owner, canonical executor timer tick exactly once per physical tick, runtime observe-only polling, all original queue payloads offered to consume_message before other registry dispatch."
+  },
+  "external_prerequisites": [
+    "Canonical ApplicationNand logical-profile algorithms currently bind Controller MMIO. BootMediaLoader.ApplicationNandCpu confirms no host logical-profile write API exists yet; physical MemoryNand alone does not close action29.",
+    "PowerAudio owns the actual shared InstalledPipeline and host codec-action law. Test implementations of Pipeline or ExecutorIo are not counted as those CPU providers.",
+    "The parent root integrates actual queue receive/dispatch, AV configuration admission, service-result publication and the Power ARM producer bridges."
+  ],
+  "provenance": "No proprietary PCM or sound table samples are copied into the repository. ROM catalog views use owner-supplied installed images. Behavioral fixtures use synthetic bytes and synthetic codec operation nodes, not captured firmware tables.",
+  "verification": "Source tests authored only. No build, test, lint, formatter, SDK, native execution, camera or USB operation performed. Source composition does not establish runtime qualification."
+}

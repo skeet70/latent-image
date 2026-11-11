@@ -5,7 +5,6 @@ import Data.Array (Array, (!), (//), listArray)
 import Data.Bits
 import qualified Data.ByteString as B
 import Data.Int (Int16,Int32)
-import Data.List (foldl')
 import qualified Data.Map.Strict as M
 import Data.Word
 import PipelineModel
@@ -97,7 +96,9 @@ sampleYuv image source angle scale centerX centerY width height = raster width h
     fy=(yq*1024 `quot` 16)-sourceY*1024
     sourceX=if kind==0 then xq `quot` 16 else xq `quot` 32
     fx=if kind==0 then xq*1024 `quot` 16-sourceX*1024 else (xq*1024 `quot` 16-sourceX*2048) `quot` 2
+    sample :: Int -> Int -> Int32
     sample dy dx=i32 (pixel source (fromIntegral ((sourceY+i32 dy)*i32 (rasterWidth source `shiftR` 1)+(if kind==0 then (sourceX+i32 dx) `shiftR` 1 else sourceX+i32 dx))*4+(if kind==0 then fromIntegral ((sourceX+i32 dx) .&. 1) else kind+1)))
+    horizontal :: Int -> Int32
     horizontal dy=(1024-fx)*sample dy 0+fx*sample dy 1
     upper=horizontal 0
     lower=horizontal 1
@@ -119,7 +120,8 @@ binaryMask image = raster width height
   width=rasterWidth image
   height=rasterHeight image
   threshold=maskThreshold image
-  radius row column=(row-(height-1) `quot` 2)^2+(column-(width-1) `quot` 2)^2
+  radius :: Int -> Int -> Int
+  radius row column=(row-(height-1) `quot` 2)^(2::Int)+(column-(width-1) `quot` 2)^(2::Int)
 
 fillMaskRows :: Raster -> Raster
 fillMaskRows image = raster width height (concat [snd (foldl' (step row) (False,[]) [0..width-1]) | row<-[0..height-1]])
@@ -172,7 +174,7 @@ within (a,b) (c,d) = c-1<=a && a<=d+1 && c-1<=b && b<=d+1
 fillForkGaps :: Raster -> Raster
 fillForkGaps image = replacePixels image (concatMap gaps (M.elems records))
  where
-  records=foldl' process M.empty [8..55]
+  records=foldl' process (M.empty :: M.Map Int (M.Map Int Int)) [8..55::Int]
   get record offset=M.findWithDefault 0 offset record
   put offset value=M.insert offset value
   pair record offset=(get record offset,get record (offset+1))
@@ -192,8 +194,9 @@ fillForkGaps image = replacePixels image (concatMap gaps (M.elems records))
       state=get record 0
       overlaps=filter (touching (pair record 3)) runs
       (next,updates) | state==1=(put 0 2 record,[])
-                     | state==2 && length overlaps>1=(put 0 3 (put 1 row (put 2 1 (setPair 7 (head overlaps) (setPair 9 (fst (overlaps!!1),snd (last overlaps)) record)))),[])
-                     | state==2=(put 0 0 record,[])
+                     | state==2=case overlaps of
+                         firstOverlap:secondOverlap:_ -> (put 0 3 (put 1 row (put 2 1 (setPair 7 firstOverlap (setPair 9 (fst secondOverlap,snd (last overlaps)) record)))),[])
+                         _ -> (put 0 0 record,[])
                      | state/=3=(record,[])
                      | otherwise=advanceFork allRecords' index record
     advanceFork allRecords' index record
@@ -202,15 +205,15 @@ fillForkGaps image = replacePixels image (concatMap gaps (M.elems records))
           next:_ -> next
           [] -> (put 0 0 scanned,[])
      where
-      (matches,scanned,lastLength)=foldl' follow (0,record,get record 2) (zip [0..] runs)
+      (matches,scanned,lastLength)=foldl' follow (0::Int,record,get record 2) (zip [0..] runs)
       follow (count,record',_) (runIndex,run)
-        | within (pair record' (base+4)) run=(count,put 0 5 record',len)
-        | count==0=case filter (touching (pair record' (base+3))) (drop runIndex runs) of
+        | within (pair record' (stepBase+4)) run=(count,put 0 5 record',len)
+        | count==0=case filter (touching (pair record' (stepBase+3))) (drop runIndex runs) of
             [] -> (0,record',len)
-            candidates -> (1,setPair (base+7) (last candidates) record',len)
-        | touching (pair record' (base+5)) run=(count+1,put 2 (len+1) (setPair (base+9) run record'),len)
+            candidates -> (1,setPair (stepBase+7) (last candidates) record',len)
+        | touching (pair record' (stepBase+5)) run=(count+1,put 2 (len+1) (setPair (stepBase+9) run record'),len)
         | otherwise=(count,record',len)
-       where len=get record' 2; base=4*len
+       where len=get record' 2; stepBase=4*len
       base=4*lastLength
       canMerge other | matches==1=pair scanned (base+5)==pair other (4*get other 2+3)
                      | otherwise=touching (pair scanned (base+3)) (pair other (4*get other 2+5))
@@ -284,6 +287,7 @@ retainCenter settings initial = loop 0 0 initial
     | pixel source offset/=0=current
     | otherwise=(if linked adjacent offset current then copySource source offset current else current) {runActive=False}
   scanReverseRow source scan row=foldl' (scanLinear source width) (scan {runSource=row*width,runDestination=row*width}) [row*width..(row+1)*width-1]
+  loop :: Int -> Int -> Raster -> Raster
   loop iteration oldSeed source
     | centerFound final || iteration==9=centerOutput final
     | otherwise=loop (iteration+1) (seedLeft final) (replacePixels source [(offset,0) | offset<-[0..width*height-1],pixel (centerOutput final) offset/=0])
@@ -303,7 +307,7 @@ basisMask settings color = morphology Dilate Cross (retainCenter settings (fillF
   inner=fromIntegral (configuration settings 9)
   outer=fromIntegral (configuration settings 0+configuration settings 2*256)
   binary=raster width height [if ((pixel color (row*width+column)>=threshold || radius<=inner) && radius<=outer) then 255 else 0
-    | row<-[0..height-1],column<-[0..width-1],let radius=(row-(height-1) `quot` 2)^2+(column-(width-1) `quot` 2)^2]
+    | row<-[0..height-1],column<-[0..width-1],let radius=(row-(height-1) `quot` 2)^(2::Int)+(column-(width-1) `quot` 2)^(2::Int)]
 
 refineMask :: Raster -> Raster
 refineMask color = iterate pairDilate core !! (depth+3)
@@ -333,7 +337,7 @@ filterMask settings distance basis mask
     | otherwise=fromIntegral (max 0 (min 255 ((factor*i32 (pixel mask offset)) `shiftR` 8)))
    where
     offset=row*width+column
-    radius=(((i32 column-centerX)^2+(i32 row-centerY)^2)*10000) `quot` distance
+    radius=(((i32 column-centerX)^(2::Int)+(i32 row-centerY)^(2::Int))*10000) `quot` distance
     factor=if radius>inner then (outer-radius)*gain `quot` 119 else gain
 
 maskGains :: [Word8] -> Raster -> Raster -> Maybe [Int32]
@@ -369,24 +373,26 @@ redeyeMaskPublications = [StagePublication (Address address) (StageSymbol ("xm1_
 redeyeMaskScenarios :: B.ByteString -> (StagePublication -> Address) -> [StageScenario]
 redeyeMaskScenarios image _resolve = morphologyCases ++ scoreCases ++ intervalCases ++ samplingCases ++ maskCases ++ trigCases ++ closureCases ++ rootCases
  where
-  publication address=head [value | value<-redeyeMaskPublications,stageStockEntry value==Address address]
+  publication address=case [value | value<-redeyeMaskPublications,stageStockEntry value==Address address] of
+    (value:_) -> value
+    [] -> error "no redeye mask publication at this address"
   scenario address name arguments initial final result=StageScenario (StageCaseName ("redeye-mask/"++name)) (publication address) arguments initial final result [] []
   descriptor=0x960000
   workDescriptor=0x960020
   input=0x970000
   output=0x980000
   bytes image'=bytePatch input (pixels image')
-  seed=raster 7 7 [if row==3 && column==3 then 0x5a else 0 | row<-[0..6],column<-[0..6]]
-  dense=raster 7 7 [if row==3 && column==3 then 0x3c else 0xff | row<-[0..6],column<-[0..6]]
+  seed=raster 7 7 [if row==3 && column==3 then 0x5a else 0 | row<-[0..6::Int],column<-[0..6::Int]]
+  dense=raster 7 7 [if row==3 && column==3 then 0x3c else 0xff | row<-[0..6::Int],column<-[0..6::Int]]
   morphologyCases=[scenario address (name++suffix) [descriptor,workDescriptor]
-    (maskImageInitial descriptor input 7 7 (pixels source)++maskImageInitial workDescriptor output 7 7 (replicate 49 0xa5)) [bytes (morphology operation shape source)] Nothing
-    | (address,name,operation,shape)<-[(0x1083a2c,"dilate-square",Dilate,Square),(0x1083b60,"erode-square",Erode,Square),(0x1083c94,"dilate-cross",Dilate,Cross),(0x1083dc0,"erode-cross",Erode,Cross)],(suffix,source)<-[("-nonzero",seed),("-dense",dense)]]
+    (maskImageInitial descriptor input 7 7 (pixels sourceRaster)++maskImageInitial workDescriptor output 7 7 (replicate 49 0xa5)) [bytes (morphology operation shape sourceRaster)] Nothing
+    | (address,name,operation,shape)<-[(0x1083a2c,"dilate-square",Dilate,Square),(0x1083b60,"erode-square",Erode,Square),(0x1083c94,"dilate-cross",Dilate,Cross),(0x1083dc0,"erode-cross",Erode,Cross)],(suffix,sourceRaster)<-[("-nonzero",seed),("-dense",dense)]]
   scoreCases=[scenario 0x1083954 "chroma-score-clamp-and-parity" [descriptor,workDescriptor]
     (maskImageInitial descriptor input 4 1 [0,255,0,255,255,0,255,0]++maskImageInitial workDescriptor output 4 1 (replicate 4 0xa5))
     [bytePatch output [255,198,0,56]] Nothing]
   intervalCases=[scenario address ("interval-"++show address++"-"++show arguments) arguments [] [] (Just expected)
     | (address,arguments,expected)<-[(0x1083eec,[2,4,5,8],1),(0x1083eec,[2,4,6,8],0),(0x1083f3c,[4,8,5,7],1),(0x1083f3c,[3,8,5,7],0)]]
-  source=raster 8 8 (concat [[fromIntegral (row*20+column),fromIntegral (row*20+column+1),100,200] | row<-[0..7],column<-[0,2,4,6]])
+  source=raster 8 8 (concat [[fromIntegral (row*20+column),fromIntegral (row*20+column+1),100,200] | row<-[0..7::Int],column<-[0,2,4,6]])
   samplingCases=[scenario 0x1072ff0 "sample-scaled-fractional-nonzero" [input,8,8,1024,52,52,4,4,output]
     [bytePatch input (pixelsPacked source),bytePatch output (replicate 32 0xa5)] [bytePatch output (pixelsPacked (sampleYuv image source 0 1024 52 52 4 4))] Nothing,
     scenario 0x1072ff0 "sample-scaled-outside" [input,8,8,1024,0xfffffff0,0xfffffff0,2,2,output]
@@ -412,9 +418,9 @@ redeyeMaskScenarios image _resolve = morphologyCases ++ scoreCases ++ intervalCa
   basisAddress=0x9f0000
   maskAddress=0xa00000
   flags=[100,2,0,3,255,255,255,2,0,25]
-  fork=raster 64 64 [if (row==9 && column>=24 && column<=40) || (row==10 && (column>=24 && column<=28 || column>=36 && column<=40)) || (row==11 && column>=24 && column<=40) then 255 else 0 | row<-[0..63],column<-[0..63]]
+  fork=raster 64 64 [if (row==9 && column>=24 && column<=40) || (row==10 && (column>=24 && column<=28 || column>=36 && column<=40)) || (row==11 && column>=24 && column<=40) then 255 else 0 | row<-[0..63::Int],column<-[0..63::Int]]
   forkExpected=replacePixels fork [(10*64+column,255) | column<-[29..35]]
-  circle=raster 64 64 [if (row-31)^2+(column-31)^2<=100 then 255 else 0 | row<-[0..63],column<-[0..63]]
+  circle=raster 64 64 [if (row-31)^(2::Int)+(column-31)^(2::Int)<=100 then 255 else 0 | row<-[0..63::Int],column<-[0..63::Int]]
   closureCases=
     [scenario 0x1083f88 "fork-split-rejoin-fills-nonzero-gap" [descriptor,workDescriptor,componentWorkspace]
       (maskImageInitial descriptor input 64 64 (pixels fork)++maskImageInitial workDescriptor output 64 64 (replicate 4096 0xa5)++[bytePatch componentWorkspace (replicate 1950 0xa5)])
@@ -435,8 +441,8 @@ redeyeMaskScenarios image _resolve = morphologyCases ++ scoreCases ++ intervalCa
       (maskImageInitial descriptor input 64 64 (replicate 4096 255)++maskImageInitial workDescriptor output 64 64 (replicate 4096 0xa5)++maskConfigurationInitial flags)
       [bytePatch input (replicate 4096 0)] Nothing,
      scenario 0x10852cc "binary-mask-histogram-and-forced-center" [descriptor,workDescriptor,contextAddress+60,contextAddress+44,contextAddress+28,contextAddress+76,contextAddress+0x84c]
-      (maskImageInitial descriptor input 64 64 (replicate 4096 0xa5)++maskImageInitial workDescriptor output 64 64 [fromIntegral (column*4) | _row<-[0..63],column<-[0..63]]++maskConfigurationInitial flags++workspace)
-      [bytes (binaryMask (raster 64 64 [fromIntegral (column*4) | _row<-[0..63],column<-[0..63]]))] Nothing,
+      (maskImageInitial descriptor input 64 64 (replicate 4096 0xa5)++maskImageInitial workDescriptor output 64 64 [fromIntegral (column*4) | _row<-[0..63::Int],column<-[0..63::Int]]++maskConfigurationInitial flags++workspace)
+      [bytes (binaryMask (raster 64 64 [fromIntegral (column*4) | _row<-[0..63::Int],column<-[0..63::Int]]))] Nothing,
      scenario 0x10856dc "refine-nonzero-binary-mask" [descriptor,workDescriptor,contextAddress+28,contextAddress+44,contextAddress+60,contextAddress+76,contextAddress+0x84c]
       (maskImageInitial descriptor input 64 64 (replicate 4096 0xa5)++maskImageInitial workDescriptor output 64 64 (replicate 4096 200)++maskConfigurationInitial flags++workspace)
       [bytes (refineMask (raster 64 64 (replicate 4096 200)))] Nothing,

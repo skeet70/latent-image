@@ -1,0 +1,36 @@
+{
+  "status": "source-inspected",
+  "firmware": "X-M1 1.50",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_paths": [
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_012a272c.c",
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_012a6800.c",
+    "decomp/firmwares/xm1-150/app/connectivity/wifi/wlan/tu_012aa8f8.c"
+  ],
+  "classification": "NONMATCHING C used as a reading aid; control flow and constants confirmed against owner-supplied X-M1 instruction bytes",
+  "byte_input": "private-data/analysis/x-m1-1.50/lz/plain-01100000.bin",
+  "byte_tool": "arm-none-eabi-objdump -D -b binary -m arm --adjust-vma=0x01100000",
+  "inspected_ranges": ["0x012a303c..0x012a31cc", "0x012a9080..0x012aaa60"],
+  "facts": [
+    {"entry": "0x012a303c", "fact": "Calls descriptor and station admission before invoking 0x012a9080 at 0x012a3188; the returned packet list is consumed by disposition. Admission and Ethernet routing remain StationDriver-owned."},
+    {"entry": "0x012a9080", "fact": "Descriptor byte5 bit1 selects reorder; signed descriptor halfword6 selects advance handling. Descriptor halfword6 low12 is sequence, bits12..14 are TID, and byte8 is peer. Non-reorder classification remains StationDriver-owned."},
+    {"entry": "0x012a93a0", "fact": "Per-peer/TID lookup; missing queue, duplicate, and stale-after-first packets receive discard disposition. First in-window packet rebases the initial sequence. Ahead packets advance the window and publish evicted packets before contiguous successors."},
+    {"entry": "0x012a9944", "fact": "Advance-indication packet itself receives discard disposition; the queue start advances to its sequence only when ahead, then publishes older and contiguous buffered packets."},
+    {"entries": ["0x012a9b9c", "0x012a9e00", "0x012aa1c0", "0x012aa3d4"], "fact": "Sequence-ordered packet ownership transfer, duplicate rejection, modulo4096 arithmetic, and strict half-space ordering with distance2048 excluded."},
+    {"entry": "0x012a9ee4", "fact": "Hole timeout is 1000 wrapping clock ticks. One expired hole is skipped per release pass, contiguous successors publish, and a remaining hole restarts timing."},
+    {"entry": "0x012aa448", "fact": "Add event resolves peer byte0, extracts TID from parameter halfword2 bits2..5, negotiated window from bits6..15, and sequence from halfword6 shifted4."},
+    {"entry": "0x012aa500", "fact": "Delete event resolves peer byte0 and TID byte1, then deletes with publication enabled."},
+    {"entry": "0x012aa698", "fact": "Eight shared sessions, peer indices0..19, replacement flushes previous queue, negotiated window is increased by four, initial first-packet flag is set, and hole timer clears. Bytes at 0x012aa808 confirm the fifth argument, omitted by the draft decomp local variable, supplies the window."},
+    {"entry": "0x012aa8f8", "fact": "Delete detaches the complete queue, either publishes packets or returns their ownership for cancellation, clears session activity and peer/TID linkage, and decrements active session count."}
+  ],
+  "owned_api": {
+    "engine": "ReorderEngine<P, N>; P is RadioLifecycle's canonical non-Clone PacketLease retaining aggregate storage until final release. The engine imposes no Clone or Copy bound and has no dependency on the Copy parser Frame.",
+    "negotiation": "add(PeerLease, Tid, SequenceNumber, BlockAckWindow), delete(PeerLease, Tid, DeleteMode). Canonical vendor_wireless_peers::PeerLease carries both hardware index and generation; no index-only queue owner remains.",
+    "datapath": "ReorderDescriptor::parse(original_wire) reads byte5, control halfword6 and peer byte8. push_descriptor(descriptor, PeerLease, packet, ReorderTick) binds that validated descriptor to the canonical packet lease. Signed control bit15 routes BAR discard before queue advancement; byte5 bit1 selects reorder versus immediate delivery; descriptor/lease index mismatch discards. Root resolves PeerLease once at admission. Typed push/advance and expire remain available for direct CPU operations.",
+    "publication": "pop_ready returns the same packet lease and Deliver, Discard or Cancel; FIFO publication order is maintained independently of session membership",
+    "failure": "Session exhaustion is explicit. Packet capacity exhaustion returns the untouched input lease. No payload cloning, heap allocation or callback is used.",
+    "teardown": "teardown_peer(PeerLease, mode) and teardown(mode) detach session queues, cancel their timers and publish their leases with the selected disposition. Root begins canonical peer retirement, cancels and drains reorder leases, then releases the peer slot. Stale-generation push/delete cannot affect a new-generation queue."
+  },
+  "tests": "vendor_wireless_station_driver_receive_reorder_tests.rs; synthetic non-Clone leases, wrapping sequence/ticks, duplicates, holes, window eviction, BA advance, replacement, session/packet exhaustion, cancellation and validated boundaries. Descriptor-driven tests assert TID/sequence/BAR decoding, passthrough/invalid-peer dispositions and original storage pointer preservation. Canonical PeerPool release/reuse test checks generation isolation.",
+  "verification": "Tests written but not executed. No build, test, lint, formatter, native, SDK or live operation was run. The engine registers its behavioral test module. StationDriver owns the receive::reorder declaration and direct consumer integration; ReceiveEvents owns direct negotiation calls. Integration owner must verify the joined consumers."
+}

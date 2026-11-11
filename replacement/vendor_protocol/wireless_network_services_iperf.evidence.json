@@ -1,0 +1,121 @@
+{
+  "schema": 1,
+  "target": "Fujifilm X-M1 1.50",
+  "scope": "Source-owned iperf CPU consumed through wireless_network_services::iperf; no physical network operations",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_repository": "x70view",
+  "source_paths": [
+    "decomp/firmwares/xm1-150/app/connectivity/remote/catalog/tu_013fd9fc.c",
+    "decomp/firmwares/xm1-150/app/connectivity/remote/transfer/tu_013f9414.c",
+    "decomp/firmwares/xm1-150/app/connectivity/netstack/tu_01401a94.c",
+    "decomp/firmwares/xm1-150/app/connectivity/netstack/network_connection.c",
+    "decomp/firmwares/xm1-150/app/connectivity/netstack/network_connection_bodies.h",
+    "decomp/firmwares/xm1-150/app/connectivity/remote/selftest/network_test_defaults.c",
+    "decomp/firmwares/xm1-150/app/connectivity/remote/selftest/network_test_client_socket.c",
+    "decomp/firmwares/xm1-150/app/connectivity/remote/selftest/network_test_deadlines.c",
+    "decomp/firmwares/xm1-150/app/storage/service/tu_0072129c.c"
+  ],
+  "nonmatching_policy": "Mechanical draft C is a reading aid. Target-specific conclusions below use original X-M1 image disassembly, including tokenizer reachability that contradicts the larger parser switch.",
+  "image": {
+    "path": "private-data/analysis/x-m1-1.50/lz/plain-01100000.bin",
+    "base": "0x01100000",
+    "overlay47_base": "0x011e0000",
+    "overlay47_size": "0x26a5e0",
+    "overlay47_sha256": "0cf67b7221c3b0755092da0ae4c6d6fb817f2b32771ee53dff691fc59b28770c",
+    "byte_reader": "arm-none-eabi-objdump -D -b binary -m arm --adjust-vma=0x01100000 --start-address=START --stop-address=END INPUT"
+  },
+  "entry": ["0x00dbe0d0", "0x014055e8", "0x0140079c", "0x013ffb10", "0x01405474"],
+  "byte_grounded_findings": [
+    {
+      "range": ["0x013ff93c", "0x014002bc"],
+      "finding": "Tokenizer recognizes exactly B,S,b,c,d,l,n,p,r,s,t,u,w. Its jump-table bounds exclude ASCII 6; M,N,P,R,T,V,f,i,m,v also dispatch to continued scanning. Their apparent parser cases are unreachable from this service command. Arguments begin only after the first literal space; a second space terminates an empty argument. The owned parser preserves these boundaries and the order-dependent server/client-only checks."
+    },
+    {
+      "range": ["0x0140079c", "0x014008a8"],
+      "finding": "Defaults are port5001, ten-second duration, TCP, block8192, rate1048576, one attachment, no report interval, zero byte limit and socket window. Selecting UDP sets block1470."
+    },
+    {
+      "range": ["0x014015d4", "0x01401758"],
+      "finding": "Description is six network-order words: tradeoff flag0x80000000, attachment count, port, block size, UDP rate or TCP window, negative duration in hundredths."
+    },
+    {
+      "range": ["0x01402160", "0x0140229c"],
+      "finding": "Contexts share the connection socket. TCP client sends the24-byte description before payload. UDP client uses the direct connected datagram path."
+    },
+    {
+      "range": ["0x0140229c", "0x01402758"],
+      "finding": "UDP has signed network-order sequence and seconds/microseconds timestamps. Description is installed after the12-byte datagram header. Final negative sequence is retried up to ten times with250000us waits; any received extent of at least52 bytes clears pending completion. Bound mode sends one-byte state14 instead of the datagram result handshake."
+    },
+    {
+      "range": ["0x01401a94", "0x01402160"],
+      "finding": "Server report carries flags,64-bit received bytes, whole-second duration, loss, out-of-order count, highest positive sequence and whole-second jitter. The report uses the negative highest positive sequence. Server sends one report, waits250000us for a further datagram, then returns without a second report transmission. Tradeoff is inferred from the final client description."
+    },
+    {
+      "range": ["0x01402ffc", "0x014033a0"],
+      "finding": "Receiver tracks sequence gaps and out-of-order datagrams, including the terminal negative sequence. Jitter uses one-sixteenth smoothing. Sender waits on its pacing deadline, computes block_size*8000000/rate microseconds and restarts the deadline after emission."
+    },
+    {
+      "range": ["0x014035ac", "0x01403634"],
+      "finding": "UDP initialization creates the first pacing deadline before the first payload emission."
+    },
+    {
+      "range": ["0x014033a0", "0x014034ac"],
+      "finding": "UDP server receives one datagram to select and connect the peer before constructing transfer accounting. That binding datagram is not counted as received test payload."
+    },
+    {
+      "range": ["0x014038a8", "0x014039dc"],
+      "finding": "Reached -B selects multicast membership with interface zero; -S selects IP traffic class. Option return values do not abort connection setup. The -T interface selector branch exists but is unreachable from this tokenizer."
+    },
+    {
+      "range": ["0x01403b88", "0x01403d50"],
+      "finding": "Nonnull -B binds INADDR_ANY at the configured port, not the supplied group address. Connection setup applies TCP options and IP options before connect."
+    },
+    {
+      "range": ["0x01405474", "0x014056b4"],
+      "finding": "Runner always returns zero after recording client/server failure. Wrapper returns-255 for allocation/parser failure; otherwise it disposes and returns zero. UDP tradeoff swaps roles; server-to-client turnaround waits500ms. Owned result keeps typed failure separately from this service return."
+    },
+    {
+      "range": ["0x01315350", "0x0131557c"],
+      "finding": "Target numeric IPv4 parser accepts four decimal octets with at most three digits each and returns the caller-provided default for invalid text. The iperf caller selects default0xffffffff."
+    },
+    {
+      "range": ["0x0131741c", "0x013175a0"],
+      "finding": "Native socket constructor admits family2 only. Any other family selects error0xf7 and descriptor-1 before allocation. This independently excludes an invented IPv6 success path; the service tokenizer also cannot select its dead family28 parser case."
+    }
+  ],
+  "owned_surfaces": [
+    "Option scanning, ordered role validation and limits",
+    "TCP description and payload streaming",
+    "UDP description, sequence, timestamp and final datagram framing",
+    "Pacing, byte/duration termination and progress accounting",
+    "Loss, out-of-order, jitter and peer report parsing",
+    "Report retry, failure, cancellation and teardown",
+    "UDP tradeoff role transition and500ms turnaround"
+  ],
+  "dependency_contract": {
+    "root_module": "crate::vendor_wireless_network",
+    "canonical_engine": "lan::LanRuntime",
+    "required_modules": ["lan", "transport", "packet", "dhcp", "state", "multicast"],
+    "tcp": ["open_tcp", "open_tcp_unbound", "listen_tcp_handle", "connect_tcp_handle", "configure_tcp", "accept_tcp", "tcp_status", "send_tcp", "receive_tcp", "close_tcp", "cancel_tcp"],
+    "udp": ["open_udp", "open_udp_ephemeral", "join_udp_multicast", "set_udp_traffic_class", "send_udp", "receive_udp_with_mode(UdpReceiveMode::Truncate)", "close_udp"],
+    "parent_pump": "Parent owns LAN receive/poll and radio frame transport. IperfPoll::Frame contains an already encoded canonical Ethernet frame in the supplied output buffer. Parent passes asynchronous canonical LAN/radio failure to network_failed(lan,error), preserving route timeout without a second ARP retry engine.",
+    "buffer": "Caller lends payload storage for the runtime lifetime. Default operation requires8192 bytes, maximum parsed block requires1048576; tradeoff requires at least1470. No runtime allocation or duplicate packet/socket stack.",
+    "resource_failure": "Canonical bounded socket/packet/window capacity failures remain typed failures. Socket option failures are retained separately while connection setup continues, matching the target's non-aborting option path.",
+    "retirement": "TCP graceful completion waits for Closed before releasing. Cancellation delegates real RST/handle retirement to canonical transport poll. UDP close delegates membership and port retirement to canonical LAN."
+  },
+  "public_api": {
+    "construct": "IperfRuntime::new(payload_buffer: &mut [u8])",
+    "start": "start(command: &[u8], now: dhcp::Milliseconds) -> Result<(), IperfError>",
+    "poll": "poll(lan: &mut LanRuntime, now: dhcp::Milliseconds, ethernet_output: &mut [u8]) -> Result<IperfPoll, IperfError>",
+    "cancel": "cancel(lan: &mut LanRuntime) -> IperfResult",
+    "network_failure": "network_failed(lan: &mut LanRuntime, error: LanError) -> IperfResult",
+    "observation": ["options()", "progress()", "result()", "IperfResult::status()"],
+    "completion": "Parent calls NetworkServices complete_iperf(result.status(), command_key, sink); original00dbe0d0 consumes only low8 status and signals zero. No summary display callback is introduced."
+  },
+  "qualification": {
+    "tests": "wireless_network_services_iperf_tests.rs",
+    "test_provenance": "Synthetic commands and protocol bytes derived from the cited X-M1 control flow; paired endpoints use actual canonical LanRuntime with synthetic Ethernet exchange, not a fake iperf executor.",
+    "coverage": ["defaults", "tokenizer dead cases and literal spaces", "role ordering", "limits and scales", "numeric conversion and raw port width", "wire descriptions", "datagram and report decoding", "paired TCP data and FIN", "paired UDP data and result exchange", "pacing and traffic class", "multicast membership", "parser versus runner return", "cancellation and socket capacity reuse", "missing-report timeout"],
+    "execution": "Not run by assignment. No build, test, lint, formatter, native, SDK, emulator or live network operation was performed."
+  }
+}

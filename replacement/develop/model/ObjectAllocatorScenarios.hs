@@ -6,8 +6,8 @@ import qualified Data.ByteString as B
 import Data.Word
 import PipelineModel
 import Scenarios (Address(..), Patch(..), Call(..), word, wordsAt, params)
-import BuffersScenarios (criticalInitial,criticalCalls,criticalEnterCalls,criticalLeaveCalls)
-import ImagePlanesScenarios (currentTaskCalls,reservedInitial,reservedWaitCalls,reservedSignalCalls,notificationCalls,waitCalls,signalCurrentCalls)
+import BuffersScenarios (criticalInitial,criticalCalls)
+import ImagePlanesScenarios (currentTaskCalls,reservedInitial,reservedWaitCalls,reservedSignalCalls,notificationCalls,waitCalls)
 import qualified Emulation.NativeObservation as N
 import DiagnosticLoggingScenarios (textDisabledInitial)
 
@@ -70,12 +70,12 @@ objectAllocatorScenarios _ _ = priorityCases++overlapCases++rangeCases++waiterCa
    [make ("priority-"++show i) 0xe45330 [i] [word 0x15480d4 3,wordsAt (0xe49320+3*28) [0,1,2,4,5,6,3]] [] (Just ([0,1,2,4,5,6,3]!!fromIntegral i)) [] | i<-[0..6]]++
    [make ("priority-index-"++show op) 0xe45364 [op] [word 0x15480d4 3,wordsAt (0xe49320+3*28) [0,1,2,4,5,6,3]] [] (Just result) [] | (op,result)<-[(0,0),(1,1),(5,4),(3,6),(99,0)]]
   overlapCases=
-   [let candidate=Range 7 start length stride lines
+   [let candidate=Range 7 start rangeLength stride rangeLines
         other=Range format 0x40001040 64 0 0
         result=rangeAvailable candidate owner [(9,other)]
-     in make ("overlap-"++show (start,length,stride,lines,format,owner)) 0xe463f4 [params,owner]
+     in make ("overlap-"++show (start,rangeLength,stride,rangeLines,format,owner)) 0xe463f4 [params,owner]
        (base++[wordsAt params (rangeWords candidate),wordsAt 0x154ad2c ([9,20,0,1]++rangeWords other),half (0x154ad2c+44) 0]) [] (Just (if result then 1 else 0)) criticalCalls
-   | (start,length,stride,lines)<-[(0x40001000,64,0,0),(0x40001001,64,0,0),(0x40001080,16,0,0),(0x40001000,1,32,3),(0x1000,128,0,0)],format<-[7,8],owner<-[0,9]]
+   | (start,rangeLength,stride,rangeLines)<-[(0x40001000,64,0,0),(0x40001001,64,0,0),(0x40001080,16,0,0),(0x40001000,1,32,3),(0x1000,128,0,0)],format<-[7,8],owner<-[0,9]]
   rangeCases=
    [let occupied=[testBit mask (7-i) | i<-[0..3]]
         count=allocationBlocks size 64
@@ -118,7 +118,7 @@ objectAllocatorScenarios _ _ = priorityCases++overlapCases++rangeCases++waiterCa
       (base++descriptors++reservedInitial 1++[descriptor 2 1 4 0,bitmap 2 mask,half params 0])
       [bitmap 2 (mask .|. (0x80 `shiftR` fromIntegral selected)),half params (fromIntegral (selected+1))] (Just 0)
       (reservedWaitCalls 1 0xffffffff 0++criticalCalls)
-   | mask<-[0,0x80,0xc0],let selected=case mask of 0->0;0x80->1;_->2]
+   | mask<-[0,0x80,0xc0],let selected=(case mask of 0->0;0x80->1;_->2)::Int]
   releaseCases=
    [make ("release-reference-"++show refs) 0xe459e0 [20,2,64]
       (base++descriptors++reservedInitial 1++[descriptor 20 1 4 1,bitmap 20 0x40,half (reference 1 2) refs])

@@ -1,0 +1,41 @@
+{
+  "status": "partial-source-implementation",
+  "target": "Fujifilm X-M1 1.50",
+  "source_repository": "x70view",
+  "source_revision": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "implementation": ["ptp_runtime.rs", "ptp_types.rs"],
+  "tests": "ptp_runtime_tests.rs",
+  "verification": "Not run under delegated no-build/test/lint/format/native instructions",
+  "sources": [
+    {"path": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/scan_transport.c", "functions": ["scan_transport_initialize", "scan_transport_reset_reply", "scan_decode_wire_packet", "scan_transport_control_request", "scan_transport_poll_reply", "scan_submit_transport_data"]},
+    {"path": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/scan_transport.h", "claim": "12-byte little-endian container header; command/data token and separate endpoint packet size"},
+    {"path": "decomp/firmwares/xm1-150/app/storage/catalog/file_scan.c", "function": "ptp_file_get_callbacks", "address": "0x00d917e0"},
+    {"path": "decomp/firmwares/xm1-150/app/ui/core/ui_settings_usb_scan_api.c", "function": "ptp_file_callbacks_handler_1", "address": "0x00d8ce38"}
+  ],
+  "byte_inspection": {
+    "image": "owner-supplied decoded id5-00bf1a00.bin",
+    "load_address": "0x00bf1a00",
+    "table": "0x00d91f70",
+    "slots": {"0x00": "0x00d85d0c", "0x04": "0x00d8ce38", "0x08": "0x00d90968", "0x0c": "0x00d8d5b0", "0x10": null, "0x14": null, "0x18": "0x00d8db38", "0x1c": "0x00d8db1c"},
+    "functions": [
+      {"address": "0x00d85c18", "claim": "Cancel setup type21/value0/index0/length6; completion compares payload transaction, matching return660 resets reply/completion and application exchange without closing session"},
+      {"address": "0x00d859d8", "claim": "Status buffer initially twelve zero bytes; status halfword at2; endpoint combinations yield4/8/12-byte records; active endpoint cases clamp to requested length"},
+      {"address": "0x00d85f3c", "claim": "Command sets status2019 and dispatches phase1; data dispatches phase2; invalid kind sets2002 and marks reply/data phase2"},
+      {"address": "0x00d8ce38", "claim": "Full reset clears application session then exchange and completion state"},
+      {"address": "0x00d8d5b0", "claim": "Catalog abort stores1 to146a644, not a transport IRQ callback"},
+      {"address": "0x00d8db38", "claim": "Calls d8d118 with event4006, parameter0 and no completion callback"},
+      {"address": "0x00d8d118", "claim": "Event requires nonzero session, has one parameter and is encoded by d86160"},
+      {"address": "0x00d86704", "claim": "Event transactionFFFFFFFF; session comes from current application state"},
+      {"address": "0x00d8db1c", "claim": "Returns connection-byte buffer146aefc"}
+    ]
+  },
+  "owned_behaviors": ["container and response wire encoding", "command/data transaction discrimination", "status record endpoint branches", "cancel token matching and transfer invalidation", "connection event bytes and session gate", "reply/data completion status transitions", "d854f8/d8586c multi-packet header continuation offset and payload buffer reuse"],
+  "safety_changes": ["Reject malformed container lengths and more than five command parameters instead of reproducing out-of-bounds stock reads/writes", "Opaque transfer generations prevent a canceled transfer completion from mutating its successor"],
+  "remaining_acceptance_blockers": [
+    "Concrete PtpApplication provider and all application opcode branches are not available; runtime does not substitute an application trait or stock function pointer",
+    "Canonical catalog initialize/abort methods must own d90968/d8d5b0 reachable state and outstanding filesystem lease",
+    "LowerUSB register programming, IRQ delivery and caller-owned DMA buffer lifetime are not integrated by these four files",
+    "Concrete root phase/application orchestration and streaming descriptor dispatch remain unimplemented"
+  ],
+  "qualification": "This evidence does not accept complete mode2 PTP CPU, end-to-end USB transport, or camera behavior. Mode3 Service is not used as evidence for mode2."
+}

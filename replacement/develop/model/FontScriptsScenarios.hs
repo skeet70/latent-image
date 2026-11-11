@@ -131,9 +131,9 @@ fontScriptsScenarios image _resolve = classCases ++ privateCases ++ cellCases ++
       [half (output+2) 0xfefb,word (output+4) 3,half (output+8) 3,halves text [0x627,0x628]] (Just 0)]
   thaiResources = [resource image 0x118a98c 224]
   thaiOffsetCases =
-    [make ("font-thai-offset-" ++ label) 0x1188cd8 "thai_mark_offsets" [output,request,text,0,last,index,decomposed,followed]
+    [make ("font-thai-offset-" ++ label) 0x1188cd8 "thai_mark_offsets" [output,request,text,0,lastIndex,index,decomposed,followed]
       (zeroState ++ thaiResources ++ [halves request [7,0,0,0,4],halves text codes]) [wordsAt output [x,y]] Nothing
-    | (label,codes,last,index,decomposed,followed,x,y) <-
+    | (label,codes,lastIndex,index,decomposed,followed,x,y) <-
       [("first-mark",[0xe48],0,0,0,0,0,0),("upper-vowel",[0xe1b,0xe34],1,1,0,0,0xfffffffc,0)
       ,("tone",[0xe1b,0xe48],1,1,0,0,0xfffffffc,7),("followed-tone",[0xe1b,0xe48,0xe4d],2,1,0,1,0xfffffffc,0)
       ,("nikhahit",[0xe01,0xe4d],1,1,0,0,0,7),("second-mark",[0xe1b,0xe34,0xe48],2,2,0,0,0xfffffffc,0)

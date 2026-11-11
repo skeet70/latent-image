@@ -1,0 +1,61 @@
+{
+  "scope": "source-only X-M1 1.50 updater UART channel zero",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_status": "NONMATCHING C used only for locating functions; behavior read from authenticated machine instructions",
+  "image": "image4 base 0x0061c400",
+  "authenticated_extent": {
+    "start": "0x0065bb8c",
+    "end_exclusive": "0x0065df68",
+    "sha256": "44cfb18741cae88c5ab78b55deacc26f4000dc8c41e7c0f03322ffc933494914",
+    "elf_correspondence": "Disassembly ELF PT_LOAD slice equals authenticated raw image slice"
+  },
+  "functions": {
+    "0x0065bb8c": "open",
+    "0x0065c2ec": "close",
+    "0x0065c500": "start reception",
+    "0x0065c6d0": "stop reception",
+    "0x0065c8f8": "transmit bytes and wait for line-status bits 5 and 6",
+    "0x0065ca0c": "set baud",
+    "0x0065caac": "replace receive buffer descriptor",
+    "0x0065cbd8": "GPIO C0/C1 programming",
+    "0x0065d8bc": "divisor 1500000 / baud, range 23..1500000",
+    "0x0065daf8": "FIFO reset programming",
+    "0x0065db98": "receive FIFO drain, overwrite oldest, line error counters"
+  },
+  "registers": {
+    "uart": "0xfffaa000",
+    "uart_configuration_width": "halfword",
+    "uart_data_width": "byte",
+    "pin_configuration": ["0xfffb2004", "0xfffb2010", "0xfffb2014"],
+    "gpio_port_c": "0xfff89300",
+    "clock_gate": "0xfff8802c bit 0",
+    "physical_interrupt": 107,
+    "interrupt_priority": 13,
+    "interrupt_mode": 1
+  },
+  "caller": {
+    "address": "0x00dc929c",
+    "configuration": 0,
+    "initial_baud": 19200,
+    "receive_capacity": 100,
+    "receive_buffer": "0x014e9b08",
+    "write_pointer_cell": "0x014e9ca8",
+    "read_pointer_cell": "0x014e9b6c"
+  },
+  "owned_design": {
+    "ring": "100-byte owned backing, one empty slot, oldest byte discarded on write/read cursor collision",
+    "read_position": "Typed ring index exposed for the transaction actor's legacy adjacent-pointer checksum view",
+    "native_dispatch": "NativePort installs its own receive ISR; all foreground access and ISR mutation serialize under core IRQ/FIQ masks",
+    "native_ownership": "Exclusive UART0, GPIO C0/C1, clock bit zero and IRQ107; singleton bound to one core",
+    "host_boundary": "Allocation-free physical register/FIFO emulator, explicit external transmit completion",
+    "cancellation": "Cancellation never retracts an already-issued byte; subsequent write waits for its physical completion",
+    "checksums": "UART does not implement protocol checksums; updater transaction actor owns framing and response validation"
+  },
+  "integration": {
+    "owner": "VendorProtocolNext",
+    "module_and_build_declarations": "Integration owner adds declarations; this checkpoint changes only unique modules",
+    "transaction_consumer": "ProtocolBackendClosure owns dc929c transaction and checksum consumers",
+    "remaining_unowned_cpu": "No shared ownership inventory changed by this checkpoint"
+  },
+  "qualification": "No builds, tests, lint, format, SDK, camera or USB runs performed"
+}

@@ -1,0 +1,95 @@
+{
+  "status": "source-inspected",
+  "target": "Fujifilm X-M1 1.50",
+  "source_pin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "authenticated_input": {
+    "path": "private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin",
+    "base": "0x0061c400",
+    "sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
+    "authentication": "sha256sum observed during source inspection"
+  },
+  "sources": [
+    "decomp/firmwares/xm1-150/app/platform/osal/tu_00743dc8.c",
+    "decomp/firmwares/xm1-150/app/platform/osal/tu_00744bc0.c",
+    "decomp/firmwares/xm1-150/app/platform/osal/tu_006b9dc8.c",
+    "decomp/firmwares/xm1-150/app/platform/osal/tu_006bb9e8.c",
+    "decomp/firmwares/xm1-150/app/platform/osal/tu_006c5a54.c"
+  ],
+  "byte_inspected_extents": [
+    ["0x00743de8", "0x00744cb4"],
+    ["0x006bad28", "0x006bb1c8"],
+    ["0x006bbe60", "0x006bd2a8"],
+    ["0x006c5a54", "0x006c5b54"]
+  ],
+  "implementation": "lens_actuator_cpu.rs",
+  "behavioral_tests": "lens_actuator_cpu_tests.rs",
+  "queue98_adapters": [
+    {"root": "0x00744388", "request": "QuerySigned", "operation": "0x720d"},
+    {"root": "0x007443e4", "request": "QueryUnsigned", "operation": "0x720e"},
+    {"root": "0x00744440", "request": "QueryBytes", "operation": "0x7210"},
+    {"root": "0x0074449c", "request": "Initialize", "operation": "0x7218"},
+    {"root": "0x007444f0", "request": "Home", "operation": "0x721a"},
+    {"root": "0x00744514", "request": "FocusMaximum", "operation": "0x721d"},
+    {"root": "0x00744590", "request": "Focus", "operation": "0x721d"},
+    {"root": "0x0074460c", "request": "FocusPosition", "operation": "0x721e"},
+    {"root": "0x00744654", "request": "FocusEnabled", "operation": "0x721f"},
+    {"root": "0x007446a0", "request": "Iris", "operation": "0x7221"},
+    {"root": "0x007446c4", "request": "IrisMove", "operation": "0x7222"},
+    {"root": "0x00744738", "request": "AuxiliaryHome", "operation": "0x7224"},
+    {"root": "0x00744770", "request": "AuxiliaryPosition", "operation": "0x7226"},
+    {"root": "0x007447bc", "request": "AuxiliaryFlags", "operation": "0x7227"},
+    {"root": "0x00744810", "request": "Control", "operation": "0x722b"},
+    {"root": "0x00744864", "request": "PositionRate", "operation": "0x7241"},
+    {"root": "0x007448d0", "request": "QueryFlags", "operation": "0x7212"},
+    {"root": "0x0074493c", "request": "QueryPosition", "operation": "0x723a"},
+    {"root": "0x00744960", "request": "PositionEnabled", "operation": "0x7240"},
+    {"root": "0x007449ac", "request": "PercentageEnabled", "operation": "0x7246"},
+    {"root": "0x007449f8", "request": "PositionPercentage", "operation": "0x7242"},
+    {"root": "0x00744a6c", "request": "AuxiliaryMode", "operation": "0x722d"}
+  ],
+  "preserved_branches": [
+    "744864 sends position in command5440 and the low13 rate bits plus three independent flag bits in command5480.",
+    "7449f8 sends an unsigned byte in54c0 and the full unsigned position halfword in5500.",
+    "744590 preserves both explicit drive and absolute target; only744514 uses the7fff drive sentinel.",
+    "6bc8d8 uses decimal firmware version below200 versus at least200; old modes0..2 occupy bits14..15 and larger old modes encode0, newer modes occupy bits4..7.",
+    "Boolean request fields represent the low bit consumed by firmware producers, not nonzero normalization at the producer boundary.",
+    "Status adapter743de8 normalizes every nonzero driver status to failed while retaining the exact typed status in publication.",
+    "Query signed halfwords preserve sign, query flags reorder third/first/second, flagged byte and position payloads retain their flags.",
+    "Per-operation callback registrations persist and a later owner registration receives older completions in the same active slot, matching actual mutable callback slots.",
+    "Reset744ab4 clears registrations without cancelling the queue. New registrations use fresh canonical callback IDs; pre-reset publications cannot target the new lifetime.",
+    "Physical observer registration uses the canonical detection provider and its real IRQ completion mailbox, independently of queue command acknowledgement.",
+    "744a5c calls6c5aa4 and posts7304; its decompiler service-stub name is not used as a no-op waiver.",
+    "744be0 returns the canonical cached two-byte status;6c4bec reports successful cache publication without an availability rejection."
+  ],
+  "canonical_dependencies": {
+    "queue98": "lens_queue_runtime::LensQueueRuntime and its packets/replies modules",
+    "physical_detection": "eeprom_detection::DetectionProvider::for_actuator sharing the canonical DetectionState and IRQ owner",
+    "task99": "xm1_lens_transport::control_runtime::Task99Client",
+    "firmware_version": "Task99Client::firmware_version and control_types::FirmwareVersion",
+    "poll_interval": "CalibrationPollInterval supplied from canonical calibration halfword3e15aa; no calibration math is duplicated"
+  },
+  "task99_adapters": {
+    "0x00744a4c": "synchronize",
+    "0x00744a5c": "release",
+    "0x00744ae8": "not_suspended",
+    "0x00744b00": "inactive",
+    "0x00744b20": "start_position_poll with periodic index6, mode2 and ticks1/400",
+    "0x00744b64": "stop_position_poll",
+    "0x00744b84": "start_calibration_poll with index31, mode3 and canonical calibrated interval",
+    "0x00744bc0": "stop_calibration_poll",
+    "0x00744be0": "cached_byte_status",
+    "0x00744c48": "request_three_byte_snapshot",
+    "0x00744c6c": "request_nine_byte_snapshot or missing_flags awaiting canonical completion and converting7442f8 fields7/0/4",
+    "0x00744c90": "request_two_byte_snapshot"
+  },
+  "intentional_empty_stock_root": "0x0074475c returns without changing state; no replacement operation is required",
+  "verification": {
+    "build": "not-run",
+    "tests": "source-only, not-run",
+    "lint": "not-run",
+    "format": "not-run",
+    "native_execution": "not-run",
+    "camera_or_usb": "not-accessed"
+  },
+  "qualification": "Source implementation and authored behavioral tests do not establish runtime, ARM equivalence, firmware-wide CPU closure or camera acceptance. Parent owns lib/BUILD registration and concrete AF runtime/root composition."
+}

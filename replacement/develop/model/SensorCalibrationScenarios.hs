@@ -100,19 +100,19 @@ selectionCases :: [StageScenario]
 selectionCases =
   [make ("selection-"++show (mode,channel,temperature)) 0xda0c58 [mode,channel,fromIntegral temperature,output,output+1,output+2]
     (config thresholds) (calibrationSelectionEffects output (output+1) (output+2) expected) Nothing
-  | (mode,channel,temperature,expected) <- [(0,0,-1,CalibrationSelection 0 0 0),(10,20,100,CalibrationSelection 0 0 0),(11,21,101,CalibrationSelection 1 1 1),(140,100,200,CalibrationSelection 13 4 1),(141,101,201,CalibrationSelection 14 5 2)]] ++
+  | (mode,channel,temperature,expected) <- ([(0,0,-1,CalibrationSelection 0 0 0),(10,20,100,CalibrationSelection 0 0 0),(11,21,101,CalibrationSelection 1 1 1),(140,100,200,CalibrationSelection 13 4 1),(141,101,201,CalibrationSelection 14 5 2)] :: [(Word32,Word32,Int32,CalibrationSelection)])] ++
   [make "selection-aliased-bins" 0xda0c58 [11,0,150,output,output,output+1]
     (config (thresholds++configurationHalf 0x3e3120 200)) [byteAt output 0,byteAt (output+1) 0] Nothing]
  where
   thresholds = [(0x3e3100+index,fromIntegral ((index+1)*10)) | index <- [0..13]] ++ [(0x3e310e+index,fromIntegral ((index+1)*20)) | index <- [0..4]] ++ concat [configurationHalf (0x3e3120+index*4) 100 ++ configurationHalf (0x3e3122+index*4) 200 | index <- [0..14]]
 
 correctionCases :: [StageScenario]
-correctionCases = [make ("correction-key-"++show step) 0xda0ed4 [fromIntegral step] [] [] (Just key) | (step,key) <- [(-6,0),(-5,0x4653),(-4,0x461b),(-3,0x45e3),(-2,0x45ab),(-1,0x4573),(0,0),(1,0x453b),(2,0x4503),(3,0x44cb),(4,0x4493),(5,0x445b),(6,0)]]
+correctionCases = [make ("correction-key-"++show step) 0xda0ed4 [fromIntegral step] [] [] (Just key) | (step,key) <- ([(-6,0),(-5,0x4653),(-4,0x461b),(-3,0x45e3),(-2,0x45ab),(-1,0x4573),(0,0),(1,0x453b),(2,0x4503),(3,0x44cb),(4,0x4493),(5,0x445b),(6,0)] :: [(Int32,Word32)])]
 
 interpolationCases :: [StageScenario]
 interpolationCases =
-  [make ("sample-"++show (alternate,level)) 0xda0818 [alternate,0,0,level,1] (config samples) [] (Just (fromIntegral expected)) | (alternate,level,expected) <- [(0,0,-250),(0,1,26),(0,2,300),(1,0,-400),(1,1,-200),(1,2,0)]] ++
-  [make ("interpolation-"++show (alternate,position)) 0xda08a8 [alternate,0,0,position,1] (config samples) [] (Just (fromIntegral expected)) | (alternate,position,expected) <- [(0,0,-250),(0,5,-112),(0,10,26),(0,15,163),(0,20,300),(1,5,-300),(1,15,-100)]] ++
+  [make ("sample-"++show (alternate,level)) 0xda0818 [alternate,0,0,level,1] (config samples) [] (Just (fromIntegral expected)) | (alternate,level,expected) <- ([(0,0,-250),(0,1,26),(0,2,300),(1,0,-400),(1,1,-200),(1,2,0)] :: [(Word32,Word32,Int32)])] ++
+  [make ("interpolation-"++show (alternate,position)) 0xda08a8 [alternate,0,0,position,1] (config samples) [] (Just (fromIntegral expected)) | (alternate,position,expected) <- ([(0,0,-250),(0,5,-112),(0,10,26),(0,15,163),(0,20,300),(1,5,-300),(1,15,-100)] :: [(Word32,Word32,Int32)])] ++
   [make ("interpolated-selection-"++show temperature) 0xda0f78 [5,5,temperature,output,output+1,output+2]
     (config ([(0x3e4300+index,fromIntegral (index*10)) | index <- [0..14]]++[(0x3e430f+index,fromIntegral (index*10)) | index <- [0..14]]++concat [configurationHalf (0x3e4324+index*2) value | (index,value) <- zip [0..] [100,200,300]]))
     [Patch (Address output) (B.pack [1,1,expected])] Nothing | (temperature,expected) <- [(0,0),(100,0),(150,5),(200,10),(250,15),(300,20)]]
@@ -215,7 +215,7 @@ witnessConfiguration witness = case witness of
   IdentityCorrection -> [(0xc0,2),(0x3e0009,1),(0x3004,8),(0x3005,8)]++[(0x31d80+index,1) | index <- [0..63]]
   OversizedExponent -> witnessConfiguration WeightedExposure++[(0x3004,32)]
  where
-  lookupConfiguration exponent primary secondary = [(0xc0,2),(0x3e0009,1),(0x3004,exponent),(0x3005,exponent)]++[(0x31d80+index,1) | index <- [0..63]]++[(0x1ed80+index,8) | index <- [0..63]]++[(0x1edc0+index,248) | index <- [0..63]]++[(0x22d80+component*64+cell,primary) | component <- [0..17],cell <- [0..63]]++[(0x23200+component*64+cell,secondary) | component <- [0..11],cell <- [0..63]]
+  lookupConfiguration exponentBits primary secondary = [(0xc0,2),(0x3e0009,1),(0x3004,exponentBits),(0x3005,exponentBits)]++[(0x31d80+index,1) | index <- [0..63]]++[(0x1ed80+index,8) | index <- [0..63]]++[(0x1edc0+index,248) | index <- [0..63]]++[(0x22d80+component*64+cell,primary) | component <- [0..17],cell <- [0..63]]++[(0x23200+component*64+cell,secondary) | component <- [0..11],cell <- [0..63]]
 
 recordBytes :: Bool -> Bool -> [Word16] -> B.ByteString
 recordBytes primary full curve = B.pack [if primary then 1 else 0,1]<>B.concat (map halfBytes [0,0,0,0])<>B.pack [if full then 5 else 0,if full then 7 else 0]<>B.concat (map halfBytes [if primary then 32 else 0,if full then 17 else 0,if full then 19 else 0])<>B.pack [if full then 1 else 0,0]<>B.concat (map halfBytes curve)<>

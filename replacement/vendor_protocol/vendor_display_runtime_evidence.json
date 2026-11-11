@@ -1,0 +1,30 @@
+{
+  "status": "source-only-leaf-ownership",
+  "decomp_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "authenticated_image": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
+  "implementation": "vendor_display_runtime.rs",
+  "owned_entries": {
+    "6ce910": "SelectionState::selected_source preserves source only for nonzero bridge mode",
+    "6ce930": "SelectionState::select owns previous-primary preservation, zero-primary normalization of previous value, configuration-type3 preservation, field updates, bridge previous value, source selection and unconditional hardware-selector zero",
+    "6cfbe8": "SelectionState::snapshot returns all seven caller-visible selection fields",
+    "6cf4e4_comparison": "SelectionState::unchanged owns exact seven-field fast-path comparison with normalized source",
+    "6d1134": "set_mode and set_mode_native normalize the actual mode selector then reuse the canonical panel_device::set_timing CPU and actual xm1_scanout_panel_device_set_timing export",
+    "6d1690_6ce6cc_6d2e24": "current_output reads the borrowed canonical PanelState target and applies the authenticated0x22a8/0x1154 target masks",
+    "6d15d4_classification": "OutputMode::immediate identifies modes1/3; original7cedf0 table has identity command values0/1/2/3"
+  },
+  "canonical_provider_coordination": {
+    "panel_output": "LiveViewDisplayOwnership confirms actual6ce54c panel consumer and physical programming are owned by canonical panel::xm1_scanout_panel_command",
+    "configuration_controller": "LiveViewDisplayOwnership confirms6cf4e4,6cfbe8,6d1134,6d1690/6ce6cc are not provided by its frozen canonical crate",
+    "ownership": "Parent explicitly assigned new vendor_display_runtime files; no canonical display crate files modified"
+  },
+  "remaining_actual_cpu": [
+    "Full6cf4e4 reset/reconfiguration orchestration and actual lower programming providers",
+    "Playback23 dbc1bc and dbb61c/dbb6ac continuation, original output restore and final service completion",
+    "Playback34 dbcd4c task3 requests, display setup and remaining route orchestration"
+  ],
+  "integration": {
+    "parent_module": "pub mod vendor_display_runtime;",
+    "dependencies": "//replacement/display_scanout:libdisplay_scanout_panel, crate display_scanout_panel; parent must supply host counterpart of the same canonical crate. Full controller also consumes canonical codec actor"
+  },
+  "verification": "Behavioral source tests added. No builds, tests, linters, formatters, SDK, native or camera execution performed. These leaves do not establish whole playback closure."
+}

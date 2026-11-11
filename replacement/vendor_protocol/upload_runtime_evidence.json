@@ -1,0 +1,41 @@
+{
+  "status": "source-only",
+  "scope": "X-M1 1.50 nonwireless dc929c upload CPU composition",
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_file": "decomp/firmwares/xm1-150/app/storage/service/tu_00dc9124.c",
+  "source_status": "NONMATCHING; machine instructions are the behavior authority",
+  "authenticated_extents": [
+    {
+      "image": "image5, base 0x00bf1a00",
+      "start": "0x00dc929c",
+      "end_exclusive": "0x00dca080",
+      "sha256": "f2d6894ff785fe011487e58783d1f1486e29cb537f96f082da1d63a0cc9a5335",
+      "confirmation": "Owner-supplied raw image extent was hashed during this source-only assignment; equals the pinned mod-symbols extent hash. Existing id5.dis instructions were inspected. No firmware execution."
+    },
+    {
+      "image": "image4, base 0x0061c400",
+      "start": "0x006ba648",
+      "end_exclusive": "0x006ba6d4",
+      "sha256": "055a86acf92b33c26daeac246ce877d60cbde9677ac4675ceaab48e808b0b667",
+      "confirmation": "Owner-supplied raw image extent was hashed; id4.dis confirms queue98 request7202, callback at payload0, one command with idff. This is not task99 synchronization."
+    }
+  ],
+  "behavior": {
+    "admission": "dc92b0..dc93ac: configuration fallback unless header5c is1; peripheral bounds and complemented additive payload checksum precede transport selection",
+    "serial": "Retained serial_program CPU now awaits physical UART write_poll completions and cooperative tick deadlines. It remains the framing, response, erase, two-section programming and GPIO restoration owner.",
+    "serial_finalization": "dc9da8..dc9e40: queue98 initialize,3000 ticks, three sequential queue98 request7202 command3fc0 completions,1000 ticks, power registerfff89084=10000000. Completion status and callback source are preserved.",
+    "packet": "dc9e44..dc9f38: canonical Task99Client setupPrimary, actual completion, up to500 readiness checks separated by10 ticks, finish; actual descriptor cache supplies retained PeripheralUpdater. Its image/section/block CPU drives canonical LensQueueRuntime and qualified GPIO completion.",
+    "configuration": "ConfigurationStorage::upload_fallback validates and calls the actual ConfigurationFlash persistence engine; successful upload consumes workspace. No fabricated persistence result.",
+    "native_detection": "GpioCompletion uses canonical PowerServices detection_set_mode and detection_output_continuous exports; no upload-local interrupt filter, IRQ registration CPU or detection state engine.",
+    "host_detection": "HostSignals implements only physical detection fields/registers/IRQ resources. It invokes canonical initialize_detection_output, set_detection_mode, continuous_detection_output and detection_interrupt; injected ten-sample input is qualified by that shared CPU. IRQ tokens reject disarmed and prior-owner interrupts.",
+    "publication": "Root publication router offers canonical queue98 publications to UploadPublications::publish. Only the exact currently allocated callback can publish once. Unknown, duplicate and stale publications are rejected without satisfying another waiter.",
+    "cancellation": "UploadControl accepts only the running unique upload token. Explicit cancellation and future drop release the retained UART operation, restore pins/power, cancel queue98, finish task99 and clear pending publication ownership. Issued UART bytes are not retracted."
+  },
+  "integration": {
+    "module": "pub mod upload_runtime",
+    "dependencies": ["canonical xm1_lens_transport::control_runtime::Task99Client", "canonical LensQueueRuntime behind RefCell", "PowerServices376acba3 plus mandatory bd8cda66 atomic detection registration", "queue98 startup initializes canonical detection once", "actual ConfigurationStorage provider", "retained updater UART host or NativePort"],
+    "publication_router": "Run the canonical queue98 wire/timer event pump; route each popped Publication to task99/task100/upload ownership handlers. UploadPublications never drains canonical queue98 itself.",
+    "entry": "UploadRuntime::new(queue,lens,publications,serial,storage,clock).run(workspace,total_size,gpio,PassLimit,ControlOwner,UploadControl)",
+    "qualification": "Source tests added only. No build, test, lint, formatter, native case, SDK, camera or USB execution. Root/module/build/backend integration belongs to VendorProtocolJoin."
+  }
+}

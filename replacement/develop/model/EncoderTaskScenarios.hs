@@ -68,11 +68,11 @@ descriptorEffects image source rawMode encoding initialize thumbnail primary sec
    _ -> []
 
 powerScale :: Int32 -> Int32 -> Word32
-powerScale base exponent=fromIntegral (max 3 (((sumTerms `shiftR` 13)+8192) `shiftR` 3))
+powerScale inputBase exponentBits=fromIntegral (max 3 (((sumTerms `shiftR` 13)+8192) `shiftR` 3))
  where
   wrap n=fromIntegral (fromIntegral n :: Word64) :: Int64
-  x=fromIntegral base*8-8192 :: Integer
-  e=fromIntegral exponent*8 :: Integer
+  x=fromIntegral inputBase*8-8192 :: Integer
+  e=fromIntegral exponentBits*8 :: Integer
   powers=take 6 (iterate (\n -> fromIntegral (wrap (n*x)) `shiftR` 13) x)
   coefficients=scanl next e [2..6]
   next previous degree=fromIntegral (wrap (previous*(e-(degree-1)*8192)) `quot` fromIntegral degree) `shiftR` 13
@@ -130,7 +130,7 @@ encoderTaskScenarios _ resolve = registryCases++metadataCases++descriptorCases++
         ([wordsAt params [limits,geometry,0x11dc39c]]++[word (limits+16) 153600 | not cached]) (Just 0) [] []
    | kind<-[0,1,2,3,4],slot<-[0,1],cached<-[False,True]]
   mathCases=
-   [make ("power-scale-"++show (base,exponent)) 0xd98a80 [fromIntegral base,fromIntegral exponent] [] [] (Just (powerScale base exponent)) [] [] | base<-[0,512,1024,1536,2848],exponent<-[0,512,1024,1536,2048]]++
+   [make ("power-scale-"++show (inputBase,exponentBits)) 0xd98a80 [fromIntegral inputBase,fromIntegral exponentBits] [] [] (Just (powerScale inputBase exponentBits)) [] [] | inputBase<-[0,512,1024,1536,2848],exponentBits<-[0,512,1024,1536,2048]]++
    [make ("request-first-quality-"++show value) 0x11dac34 [params,0,0,0,1] [word params value] [] (Just value) [] [] | value<-[1,10,40,0xffffffff]]
   producerCases=
    [make ("request-send-"++show code) 0x6e2b80 [request,fromIntegral code,17,29,0xffffffff]

@@ -22,9 +22,9 @@ redEyeDetectorPublications = [publication entry suffix | (entry,suffix) <-
    (0x10754c0,"filter_candidates"),(0x108678c,"gradient_angle"),(0x1086904,"angle_sine"),(0x1086c40,"angle_cosine")]]
 
 slice :: B.ByteString -> Word32 -> Word32 -> Word32 -> Patch
-slice image base start size
-  | start < base || fromIntegral (start-base+size) > B.length image = error "red-eye original image extent is missing"
-  | otherwise = Patch (Address start) (B.take (fromIntegral size) (B.drop (fromIntegral (start-base)) image))
+slice image imageBase start size
+  | start < imageBase || fromIntegral (start-imageBase+size) > B.length image = error "red-eye original image extent is missing"
+  | otherwise = Patch (Address start) (B.take (fromIntegral size) (B.drop (fromIntegral (start-imageBase)) image))
 
 redEyeDetectorInitial :: B.ByteString -> [Patch]
 redEyeDetectorInitial image =
@@ -144,7 +144,7 @@ redEyeDetectorScenarios image = localCases ++ featureCases ++ detectorCases ++ r
     [make ("sine-quarter-turn-"++show angle) 0x1086904 "angle_sine" [fromIntegral angle] [] [] (Just result)
       | (angle,result) <- [(0,0),(2048,4096),(4096,0),(-2048,0xfffff000),(10240,4096)] :: [(Int32,Word32)]] ++
     [make "cosine-zero" 0x1086c40 "angle_cosine" [0] [] [] (Just 4096)]
-  slopePixels descending = table pixels (B.concat [B.pack [fromIntegral (if descending then 220-x*4 else 32+x*4),fromIntegral (if descending then 216-x*4 else 36+x*4),73,181] | _y <- [0..15 :: Int],x <- [0,2..14]])
+  slopePixels descending = table pixels (B.concat [B.pack [fromIntegral (if descending then 220-x*4 else 32+x*4),fromIntegral (if descending then 216-x*4 else 36+x*4),73,181] | _y <- [0..15 :: Int],x <- ([0,2..14] :: [Int])])
   gradientCases =
     [make "gradient-nonzero-inward" 0x1075500 "gradient" [pixels,16,16,7,7,0,0] [slopePixels True] [] (Just 255),
      make "gradient-nonzero-outward" 0x1075500 "gradient" [pixels,16,16,7,7,0,0] [slopePixels False] [] (Just 0),

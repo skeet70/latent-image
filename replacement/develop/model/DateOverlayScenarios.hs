@@ -10,12 +10,12 @@ module DateOverlayScenarios
   , dateTextExamples
   ) where
 
-import Data.Bits ((.&.), shiftL)
+import Data.Bits ((.&.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import Data.Word (Word16, Word32)
 import PipelineModel
-import Scenarios
+import Scenarios hiding (call)
 import qualified Emulation.NativeObservation as N
 import ImagePlanesScenarios (priorityInitial, priorityCalls, currentTaskCalls, notificationCalls)
 import DebugStorageScenarios (QueueMode (..), queueInitial, queueCalls, queuePartialCalls, queueBuffer)
@@ -99,9 +99,9 @@ packedStampEffects destination rotation =
 dateOverlayScenarios :: B.ByteString -> (StagePublication -> Address) -> [StageScenario]
 dateOverlayScenarios _ _ = disabledCases ++ packedCases ++ applyCases ++ measureInvalidCases ++ publishInvalidCases ++ notificationCases ++ delayCases ++ queueCases ++ fontCases ++ fontStateCases ++ glyphCases ++ fontDiagnosticCases
  where
-  state = 0x9a0000
+  stateAddress = 0x9a0000
   plane = 0x9a2000
-  params = 0x9a3000
+  paramsAddress = 0x9a3000
   pixels = 0x9a4000
   destination = 0x9a5000
   fontObject = 0x9a7000
@@ -114,14 +114,14 @@ dateOverlayScenarios _ _ = disabledCases ++ packedCases ++ applyCases ++ measure
   make name entry suffix arguments initial final result calls = StageScenario
     (StageCaseName name) (publication entry suffix) arguments initial final result [] calls
   disabledCases =
-    [make ("date-overlay-disabled-" ++ show secondary) 0xe51490 "transform_output" [state,plane,0,pixels]
-      [word (state+0x614) 0,word (state+0x61c) secondary,word (state+0x1604) 0,word (state+0x4f0) 0,wordsAt plane [0,destination,16,8,8,2,0]]
+    [make ("date-overlay-disabled-" ++ show secondary) 0xe51490 "transform_output" [stateAddress,plane,0,pixels]
+      [word (stateAddress+0x614) 0,word (stateAddress+0x61c) secondary,word (stateAddress+0x1604) 0,word (stateAddress+0x4f0) 0,wordsAt plane [0,destination,16,8,8,2,0]]
       [] (Just 1) (dateOverlayDisabledCalls ++ if secondary == 0 then [] else dateOverlayDisabledCalls)
     | secondary <- [0,1]]
   packedCases =
     [make ("date-packed-bgra-primary-colors-rotation-" ++ show rotation ++ "-cache-status-" ++ show status)
-      0x6e1884 "stamp_packed" [params]
-      [wordsAt params [pixels,destination,2,2,2,2,2,2,0,0,0,0,128,rotation]
+      0x6e1884 "stamp_packed" [paramsAddress]
+      [wordsAt paramsAddress [pixels,destination,2,2,2,2,2,2,0,0,0,0,128,rotation]
       ,Patch (Address pixels) (B.pack [255,0,0,255,255,0,255,0,255,255,0,0,255,255,255,255])
       ,wordsAt destination [0x11111111,0x22222222]
       ,word (0x7d02ec+rotation*4) sine,word (0x7cfd4c+rotation*4) cosine]
@@ -129,18 +129,18 @@ dateOverlayScenarios _ _ = disabledCases ++ packedCases ++ applyCases ++ measure
       [call 0x42634 [pixels,16] 0,call 0x4263c [destination,16] status]
     | (rotation,sine,cosine) <- [(0,0,1024),(90,1024,0),(180,0,0xfffffc00),(270,0xfffffc00,0)]
     , status <- [0,7]]
-    ++ [make ("date-packed-transparent-" ++ show alpha) 0x6e1884 "stamp_packed" [params]
-      [wordsAt params [pixels,destination,2,1,2,1,2,2,0,0,0,0,128,0]
+    ++ [make ("date-packed-transparent-" ++ show alpha) 0x6e1884 "stamp_packed" [paramsAddress]
+      [wordsAt paramsAddress [pixels,destination,2,1,2,1,2,2,0,0,0,0,128,0]
       ,Patch (Address pixels) (B.pack [alpha,0,0,255,alpha,0,0,255])
       ,word destination 0x80800000,word 0x7d02ec 0,word 0x7cfd4c 1024]
       [word destination expected,wordsAt 0x95e1f8 [0,1024],word 0x9621f8 0] (Just 0)
       [call 0x42634 [pixels,8] 0,call 0x4263c [destination,8] 0]
     | (alpha,expected) <- [(0,0x80800000),(128,0xbf692626),(255,0xff554c4c)]]
   applyCases =
-    [make ("date-apply-stamp-orientation-" ++ show orientation) 0xe510b8 "apply_stamp" [plane,orientation,0,0,params]
+    [make ("date-apply-stamp-orientation-" ++ show orientation) 0xe510b8 "apply_stamp" [plane,orientation,0,0,paramsAddress]
       (priorityInitial 0x45 ++
       [word 0x96ca50 0x9a6000,Patch (Address (0x9a6000+0x2dc)) (B.singleton 50)
-      ,wordsAt plane [0,destination,32,8,8,4,0],wordsAt params [pixels,1,0x40004,0x20002]
+      ,wordsAt plane [0,destination,32,8,8,4,0],wordsAt paramsAddress [pixels,1,0x40004,0x20002]
       ,Patch (Address pixels) (B.pack [255,0,0,255,255,0,255,0,255,255,0,0,255,255,255,255])
       ,Patch (Address destination) (B.replicate 32 0xa5)
       ,word (0x7d02ec+rotation*4) sine,word (0x7cfd4c+rotation*4) cosine])
@@ -157,9 +157,9 @@ dateOverlayScenarios _ _ = disabledCases ++ packedCases ++ applyCases ++ measure
       ,(3,180,0,0xfffffc00,0,2,0,2,0,0x76bf1dff,0x8a404c95)
       ,(4,90,1024,0,0,2,2,4,16,0xb5aa4c1d,0x4b5695ff)]]
   measureInvalidCases =
-    [make ("date-measure-invalid-" ++ show first ++ "-" ++ show buffer) 0x1113a9c "measure_text" [params,params+0x40]
-      [wordsAt params [3,3,1,first,0,buffer,0],wordsAt (params+0x40) [0xa5,0xb6,0xc7]]
-      [wordsAt (params+0x40) [0xa5,0xb6,0xc7]] Nothing []
+    [make ("date-measure-invalid-" ++ show first ++ "-" ++ show buffer) 0x1113a9c "measure_text" [paramsAddress,paramsAddress+0x40]
+      [wordsAt paramsAddress [3,3,1,first,0,buffer,0],wordsAt (paramsAddress+0x40) [0xa5,0xb6,0xc7]]
+      [wordsAt (paramsAddress+0x40) [0xa5,0xb6,0xc7]] Nothing []
     | (first,buffer) <- [(0,pixels),(pixels,0)]]
   publishInvalidCases =
     [make ("date-publish-invalid-" ++ show width ++ "-" ++ show height) 0x11631f0 "publish_text" []
@@ -179,19 +179,19 @@ dateOverlayScenarios _ _ = disabledCases ++ packedCases ++ applyCases ++ measure
        ++ if ticks /= 0 && status /= 0 then [call 0x41a34 [9,ticks,status] 0,ScriptCall (Address 0x8f010c) [(N.R0,status)] [(N.R0,0)] [Absolute (word 0x40a0f82c status)] []] else [])
     | ticks <- [0,5,100], status <- [0,0xfffffff9]]
   queueCases =
-    [make ("date-post-sequence-" ++ show sequence ++ "-previous-" ++ show previous) 0xdb6804 "date_post" [0x9000,0,0,sequence]
+    [make ("date-post-sequence-" ++ show sequenceIndex ++ "-previous-" ++ show previous) 0xdb6804 "date_post" [0x9000,0,0,sequenceIndex]
       (queueInitial 0x21 ++ [word 0x14e32b8 0,word 0x14e32bc previous])
-      [word 0x14e32b8 (0x90000000 + if sequence == 1 then 0x9000 else 0),Patch (Address 0x14e32bc) (B.singleton (fromIntegral (if sequence == 0 then previous else next)))]
+      [word 0x14e32b8 (0x90000000 + if sequenceIndex == 1 then 0x9000 else 0),Patch (Address 0x14e32bc) (B.singleton (fromIntegral (if sequenceIndex == 0 then previous else next)))]
       Nothing (currentTaskCalls 0x45 ++ queueCalls 0x21 0x3100 0x45 0x21 (B.concat (map wordBytes [0x9000+next*65536,0,0])) QueueNormal 0)
-    | sequence <- [0,1,2],previous <- [0,254,255]
-    , let next = case sequence of { 1 -> if previous == 255 then 1 else previous+1; 2 -> previous; _ -> 0 }]
+    | sequenceIndex <- [0,1,2],previous <- [0,254,255]
+    , let next = case sequenceIndex of { 1 -> if previous == 255 then 1 else previous+1; 2 -> previous; _ -> 0 }]
     ++ [make "date-post-duplicate-pending" 0xdb6804 "date_post" [0x9000,0,0,1]
       [word 0x14e32b8 0x12349000,word 0x14e32bc 5,Patch (Address 0x14e3338) (B.singleton 4)]
       [word 0x14e32b8 0x12349000,word 0x14e32bc 5] Nothing []]
   fontCases =
-    [make "date-font-configure-owned-state" 0x117e9c4 "font_configure" [params]
+    [make "date-font-configure-owned-state" 0x117e9c4 "font_configure" [paramsAddress]
       (fontInitial 12800 ++ [word 0x1665a3c fontObject,word (0x1665a38+0xf0) 0
-        ,wordsAt params [6,8,1,1,0x11223344,0,0x99000000,0,0,0,0,0,0]])
+        ,wordsAt paramsAddress [6,8,1,1,0x11223344,0,0x99000000,0,0,0,0,0,0]])
       [word (fontObject+0x14) 6,word (fontObject+0x18) 8,word (fontObject+0x1c) 1,word (fontObject+0x20) 1
       ,word (fontObject+0x24) 0,word (fontObject+0x40) 1,word (fontObject+0x5c) 0x200f
       ,word (fontBackend+0xff4) 4,word (fontBackend+0x103c) 6,word (fontBackend+0x1040) 8
@@ -205,11 +205,11 @@ dateOverlayScenarios _ _ = disabledCases ++ packedCases ++ applyCases ++ measure
       (Just (if width == 10 then 0 else 0xfffffff1)) [] | width <- [10,11]]
     ++ [make "date-font-option-unknown" 0x1180c18 "font_set_option" [fontObject,48,1] (fontInitial 116) [] (Just 0xfffffffc) []
        ,make "date-font-option-null" 0x1180c18 "font_set_option" [0,1,10] [] [] (Just 0xfffffffe) []
-       ,make "date-font-empty-metrics" 0x117e8e0 "font_metrics" [params,params+0x40]
-         [word params 0,wordsAt (params+0x40) [17,19,23],word 0x1665a3c 0]
-         [wordsAt (params+0x40) [17,19,23]] (Just 1) []
-       ,make "date-font-empty-raster" 0x117e734 "font_rasterize" [params,0,0]
-         [word params 0,word 0x1665a3c 1] [] (Just 1) []]
+       ,make "date-font-empty-metrics" 0x117e8e0 "font_metrics" [paramsAddress,paramsAddress+0x40]
+         [word paramsAddress 0,wordsAt (paramsAddress+0x40) [17,19,23],word 0x1665a3c 0]
+         [wordsAt (paramsAddress+0x40) [17,19,23]] (Just 1) []
+       ,make "date-font-empty-raster" 0x117e734 "font_rasterize" [paramsAddress,0,0]
+         [word paramsAddress 0,word 0x1665a3c 1] [] (Just 1) []]
   fontStateCases =
     [make ("date-font-auto-weight-" ++ show size) 0x1180c18 "font_set_option" [fontObject,3,2]
       (fontInitial 12800 ++ [word (fontObject+20) size,word (fontObject+24) size])
@@ -246,27 +246,27 @@ dateOverlayScenarios _ _ = disabledCases ++ packedCases ++ applyCases ++ measure
       (fontInitial 116 ++ [word (fontBackend+0xff4) mode,word (fontBackend+0x106c) 3])
       [word (fontBackend+0x106c) expected] Nothing []
     | (mode,expected) <- [(2,256),(7,512),(5,3)]]
-    ++ [make ("date-font-query-invalid-" ++ show object ++ "-" ++ show count) 0x117f368 "font_query" [object,params,count,0,0,0]
+    ++ [make ("date-font-query-invalid-" ++ show object ++ "-" ++ show count) 0x117f368 "font_query" [object,paramsAddress,count,0,0,0]
       [] [] (Just result) []
     | (object,count,result) <- [(0,1,0xfffffffe),(fontObject,0,0xfffffff7),(fontObject,0xffffffff,0xfffffff7)]]
   glyphCases =
-    [make ("date-text-coverage-pass-" ++ show passes ++ "-left-" ++ show left) 0x117f948 "blend_glyph" [2,left,top,0,0,params,params+0x40]
-      [wordsAt params [4,1,4,0,1,0,0xff204080,0x00102030,4,pixels]
-      ,wordsAt (params+0x40) [destination,fontBackend,passes,0,0],word (fontBackend+0x10d4) 4
+    [make ("date-text-coverage-pass-" ++ show passes ++ "-left-" ++ show left) 0x117f948 "blend_glyph" [2,left,top,0,0,paramsAddress,paramsAddress+0x40]
+      [wordsAt paramsAddress [4,1,4,0,1,0,0xff204080,0x00102030,4,pixels]
+      ,wordsAt (paramsAddress+0x40) [destination,fontBackend,passes,0,0],word (fontBackend+0x10d4) 4
       ,Patch (Address pixels) (B.pack [0,1,8,15]),Patch (Address destination) (B.replicate 64 0xa5)
       ,word 0x166703c 0,word 0x1667044 0]
-      ([word (params+0x48) (passes+1),word 0x166703c 0x00102030,word 0x1667044 0xff204080]
+      ([word (paramsAddress+0x48) (passes+1),word 0x166703c 0x00102030,word 0x1667044 0xff204080]
        ++ [word (destination+(top*4+left)*4) (if passes == 0 then 0x30201000 else 0xa5a5a5a5)]
        ++ [word (destination+(top*4+left+1)*4) 0x3522110f
           ,word (destination+(top*4+left+2)*4) 0x5830187f]
        ++ [word (destination+12) 0x804020ff | left == 0])
       (Just 0) []
     | passes <- [0,1],(left,top) <- [(0,0),(1,1)]]
-    ++ [make "date-text-negative-channel-interpolation" 0x117f948 "blend_glyph" [2,0,0,0,0,params,params+0x40]
-      [wordsAt params [4,1,4,0,1,0,0x00010203,0xff102030,4,pixels]
-      ,wordsAt (params+0x40) [destination,fontBackend,0,0,0],word (fontBackend+0x10d4) 4
+    ++ [make "date-text-negative-channel-interpolation" 0x117f948 "blend_glyph" [2,0,0,0,0,paramsAddress,paramsAddress+0x40]
+      [wordsAt paramsAddress [4,1,4,0,1,0,0x00010203,0xff102030,4,pixels]
+      ,wordsAt (paramsAddress+0x40) [destination,fontBackend,0,0,0],word (fontBackend+0x10d4) 4
       ,Patch (Address pixels) (B.pack [0,1,8,15]),word 0x166703c 0,word 0x1667044 0]
-      [wordsAt destination [0x302010ff,0x2d1e0fef,0x1911087f,0x03020100],word (params+0x48) 1]
+      [wordsAt destination [0x302010ff,0x2d1e0fef,0x1911087f,0x03020100],word (paramsAddress+0x48) 1]
       (Just 0) []]
   diagnosticCalendar = CalendarFields 26 11 10 12 34 56
   diagnosticBuffer = 0x9c8000
@@ -285,8 +285,8 @@ dateOverlayScenarios _ _ = disabledCases ++ packedCases ++ applyCases ++ measure
   diagnosticCriticalCalls = criticalEnterCalls ++ criticalLeaveCalls
   fontDiagnosticCases = historyCases ++ uiHistoryCases ++ diagnosticInitializerCases ++ diagnosticRouterCases ++ diagnosticDropCases ++ diagnosticProducerCases
   historyCases =
-    [make ("font-history-capacity-" ++ show count) 0x72b318 "font_notification_history" [params]
-      (criticalInitial ++ textDisabledInitial ++ [word 0x9134c0 count,wordsAt params [0x91b,0x123]
+    [make ("font-history-capacity-" ++ show count) 0x72b318 "font_notification_history" [paramsAddress]
+      (criticalInitial ++ textDisabledInitial ++ [word 0x9134c0 count,wordsAt paramsAddress [0x91b,0x123]
       ,Patch (Address (0x9121c0+slot*76)) (B.replicate 76 0xc3)])
       (if count < 64 then [word 0x9134c0 (count+1),wordsAt (0x9121c0+slot*76) [0x91b,0x123]
         ,Patch (Address (0x9121c8+slot*76)) (B.replicate 68 0xc3)]
@@ -294,8 +294,8 @@ dateOverlayScenarios _ _ = disabledCases ++ packedCases ++ applyCases ++ measure
       (Just (if count < 64 then 0 else 0xffffffc1))
       (criticalEnterCalls ++ (if count < 64 then [] else currentTaskCalls 0x45) ++ criticalLeaveCalls)
     | count <- [0,63,64,0xffffffff], let slot = min count 63]
-    ++ [make "font-history-overflow-real-stream-log" 0x72b318 "font_notification_history" [params]
-      (diagnosticLogInitial ++ [word 0x9134c0 64,wordsAt params [0x91b,0x123]])
+    ++ [make "font-history-overflow-real-stream-log" 0x72b318 "font_notification_history" [paramsAddress]
+      (diagnosticLogInitial ++ [word 0x9134c0 64,wordsAt paramsAddress [0x91b,0x123]])
       (word 0x9134c0 64 : diagnosticLogEffects (C.pack "ERR_EVENT_FULL")) (Just 0xffffffc1)
       (criticalEnterCalls ++ currentTaskCalls 0x45 ++ textCalls ++ criticalLeaveCalls)]
   uiHistoryCases =
@@ -303,27 +303,27 @@ dateOverlayScenarios _ _ = disabledCases ++ packedCases ++ applyCases ++ measure
       (criticalInitial ++ diagnosticHistoryInitial ++ [diagnosticSnapshotInitial])
       (Patch (Address 0x95482c) diagnosticCleared : diagnosticHistoryEffects 0x42) Nothing
       (currentTaskCalls 0x45 ++ diagnosticCriticalCalls)
-    ,make "font-ui-snapshot-real-stream-log-history" 0x6333d0 "ui_font_notification" [params,0x42]
-      (diagnosticLogInitial ++ diagnosticHistoryInitial ++ [diagnosticSnapshotInitial,Patch (Address params) diagnosticSnapshot])
+    ,make "font-ui-snapshot-real-stream-log-history" 0x6333d0 "ui_font_notification" [paramsAddress,0x42]
+      (diagnosticLogInitial ++ diagnosticHistoryInitial ++ [diagnosticSnapshotInitial,Patch (Address paramsAddress) diagnosticSnapshot])
       (Patch (Address 0x95482c) diagnosticSnapshotFinal : diagnosticHistoryEffects 0x42 ++ diagnosticLogEffects (C.pack "snapshot")) Nothing
       (currentTaskCalls 0x45 ++ textCalls ++ currentTaskCalls 0x45 ++ diagnosticCriticalCalls)
-    ,make "font-error-bounded-padding-real-log-history" 0x117e62c "font_error" [params]
+    ,make "font-error-bounded-padding-real-log-history" 0x117e62c "font_error" [paramsAddress]
       (diagnosticLogInitial ++ diagnosticHistoryInitial ++ [diagnosticSnapshotInitial
-      ,Patch (Address 0x16659dc) (B.replicate 92 0xa5),Patch (Address params) (C.pack "bad font" <> B.singleton 0)])
+      ,Patch (Address 0x16659dc) (B.replicate 92 0xa5),Patch (Address paramsAddress) (C.pack "bad font" <> B.singleton 0)])
       ([Patch (Address 0x16659dc) diagnosticError,Patch (Address 0x95482c) diagnosticErrorFinal]
         ++ diagnosticHistoryEffects 0 ++ diagnosticLogEffects (C.pack "bad font")) Nothing
       (currentTaskCalls 0x45 ++ textCalls ++ currentTaskCalls 0x45 ++ diagnosticCriticalCalls)
-    ,make "font-error-exact29-truncation-retains-record-tail" 0x117e62c "font_error" [params]
+    ,make "font-error-exact29-truncation-retains-record-tail" 0x117e62c "font_error" [paramsAddress]
       (diagnosticLogInitial ++ diagnosticHistoryInitial ++ [diagnosticSnapshotInitial
       ,Patch (Address 0x16659dc) (B.replicate 92 0xa5)
-      ,Patch (Address params) (C.pack "012345678901234567890123456789-unread" <> B.singleton 0)])
+      ,Patch (Address paramsAddress) (C.pack "012345678901234567890123456789-unread" <> B.singleton 0)])
       ([Patch (Address 0x16659dc) (C.pack "01234567890123456789012345678" <> B.replicate 63 0xa5)
        ,Patch (Address 0x95482c) (C.pack "01234567890123456789012345678" <> B.replicate 59 0xa5 <> B.pack [0x45,0xa5,0xa5,0xa5])]
         ++ diagnosticHistoryEffects 0
         ++ diagnosticLogEffects (C.pack "01234567890123456789012345678" <> B.replicate 3 0xa5)) Nothing
       (currentTaskCalls 0x45 ++ textCalls ++ currentTaskCalls 0x45 ++ diagnosticCriticalCalls)
-    ,make "font-notify-current-task-low-byte-real-log" 0x632fc0 "ui_font_notify_current_task" [params]
-      (diagnosticLogInitial ++ [Patch (Address params) (C.pack "snapshot" <> B.singleton 0)])
+    ,make "font-notify-current-task-low-byte-real-log" 0x632fc0 "ui_font_notify_current_task" [paramsAddress]
+      (diagnosticLogInitial ++ [Patch (Address paramsAddress) (C.pack "snapshot" <> B.singleton 0)])
       (diagnosticLogEffects (C.pack "snapshot")) Nothing (currentTaskCalls 0x12345 ++ textCalls)
     ,make "font-notify-disabled-log-does-not-read-null" 0x632fc0 "ui_font_notify_current_task" [0]
       textDisabledInitial [] Nothing (currentTaskCalls 0x45)]
@@ -334,8 +334,8 @@ dateOverlayScenarios _ _ = disabledCases ++ packedCases ++ applyCases ++ measure
       (if initial == 0xaabbcc00 then currentTaskCalls 0x12345 else [])
     | initial <- [0xaabbcc00,0xaabbcc99]]
   diagnosticRouterCases =
-    [make ("font-router-" ++ suffix ++ "-" ++ show (event,loadtest,status,initialTask)) entry suffix [params]
-      (queueInitial channel ++ [word 0x829a0c 0x72b210,Patch (Address params) packet,word 0x9134f8 loadtest
+    [make ("font-router-" ++ suffix ++ "-" ++ show (event,loadtest,status,initialTask)) entry suffix [paramsAddress]
+      (queueInitial channel ++ [word 0x829a0c 0x72b210,Patch (Address paramsAddress) packet,word 0x9134f8 loadtest
       ,word 0x954884 (0xaabbcc00+initialTask),word 0x9121bc counter,word 0x9134c4 counter])
       ([word 0x9121bc nextCounter,word 0x954884 (0xaabbcc00+finalTask)]
         ++ if status == 0 then [] else [word 0x40a0f82c status]) (Just status)
@@ -352,8 +352,8 @@ dateOverlayScenarios _ _ = disabledCases ++ packedCases ++ applyCases ++ measure
           nextCounter = if event == 0x82e && channel == 1 then 0 else counter
           finalTask = if event == 0x91b && initialTask == 0 then 0x45 else initialTask]
   diagnosticDropCases =
-    [make ("font-router-update-counter-drop-" ++ suffix) entry suffix [params]
-      (priorityInitial 0x45 ++ [word 0x829a0c 0x72b210,wordsAt params [0x82e,0x123],word 0x9134f8 0
+    [make ("font-router-update-counter-drop-" ++ suffix) entry suffix [paramsAddress]
+      (priorityInitial 0x45 ++ [word 0x829a0c 0x72b210,wordsAt paramsAddress [0x82e,0x123],word 0x9134f8 0
       ,word 0x9121bc 3,word 0x9134c4 4,word 0x954884 0xaabbcc00])
       [word 0x9121bc 3,word 0x954884 0xaabbcc00] (Just 0)
       (currentTaskCalls 0x45 ++ [call 0x42188 [0x782048] 0])
@@ -369,12 +369,3 @@ dateOverlayScenarios _ _ = disabledCases ++ packedCases ++ applyCases ++ measure
 
 call :: Word32 -> [Word32] -> Word32 -> Call
 call address arguments result = ScriptCall (Address address) (zip [N.R0,N.R1,N.R2,N.R3] arguments) [(N.R0,result)] [] []
-
-word :: Word32 -> Word32 -> Patch
-word address value = Patch (Address address) (wordBytes value)
-
-wordsAt :: Word32 -> [Word32] -> Patch
-wordsAt address values = Patch (Address address) (B.concat (map wordBytes values))
-
-wordBytes :: Word32 -> B.ByteString
-wordBytes value = B.pack [fromIntegral ((value `div` (1 `shiftL` shift)) .&. 255) | shift <- [0,8,16,24]]
