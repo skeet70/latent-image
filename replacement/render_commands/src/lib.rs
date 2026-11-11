@@ -108,9 +108,12 @@ pub struct DrawReport(pub [u8; 0x44]);
 impl DrawReport {
     pub const fn zeroed() -> Self { Self([0; 0x44]) }
     pub fn put_word(&mut self, offset: usize, value: u32) -> Result<(), producer::ProducerError> {
-        let end = offset.checked_add(4).ok_or(producer::ProducerError::ReportRange)?;
-        let target = self.0.get_mut(offset..end).ok_or(producer::ProducerError::ReportRange)?;
-        for (slot, byte) in target.iter_mut().zip(value.to_le_bytes()) { *slot = byte; }
+        if offset > self.0.len() - 4 { return Err(producer::ProducerError::ReportRange); }
+        let bytes = value.to_le_bytes();
+        self.0[offset] = bytes[0];
+        self.0[offset + 1] = bytes[1];
+        self.0[offset + 2] = bytes[2];
+        self.0[offset + 3] = bytes[3];
         Ok(())
     }
 }
