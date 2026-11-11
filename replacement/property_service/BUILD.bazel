@@ -276,6 +276,7 @@ haskell_library(
     src_strip_prefix = ".",
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
+        "//emulation:cached-native-batch",
         "//emulation:case-sha256",
         "//emulation:fujimod-native-paths",
         "//host:aeson",
@@ -356,6 +357,7 @@ haskell_test(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":qualification",
+        "//emulation:cached-native-batch",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",

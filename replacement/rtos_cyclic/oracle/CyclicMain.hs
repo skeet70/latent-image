@@ -3,8 +3,8 @@
 -- | Cyclic lifecycle and admission controls through the cached native batch.
 -- Aggregate mode takes --aggregate-{a,b}-{bin,symbols,placements} and
 -- --aggregate-carriers. Standalone cyclic/timer flags are ignored in that mode.
--- Both modes require --runner, --layout, --loader-{a,b}, --cache-root and --results.
--- Repeated flags use their last value.
+-- Both modes require --runner, --layout, --loader-{a,b} and --results; --cache-root
+-- defaults to the shared private-data/cache/native. Repeated flags use their last value.
 module Main (main) where
 
 import Control.Monad (forM_, unless)
@@ -12,6 +12,7 @@ import Data.Aeson (object, (.=), encode)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.List (tails)
+import Emulation.CachedNativeBatch (defaultNativeCacheRoot)
 import Emulation.Sha256 (sha256File, sha256Hex)
 import FujiAF.Host (failH)
 import FujiAF.StorageBudget (checkStorageBudget)
@@ -38,7 +39,7 @@ main = do
   loaderA <- required "--loader-a"
   loaderB <- required "--loader-b"
   aggregatePaths <- mapM optional ["--aggregate-a-bin", "--aggregate-a-symbols", "--aggregate-a-placements", "--aggregate-b-bin", "--aggregate-b-symbols", "--aggregate-b-placements", "--aggregate-carriers"]
-  cacheRoot <- required "--cache-root"
+  cacheRoot <- maybe defaultNativeCacheRoot id <$> optional "--cache-root"
   resultsPath <- required "--results"
   facts <- either failH pure . parseFacts =<< B.readFile layoutPath
   loaderABytes <- B.readFile loaderA

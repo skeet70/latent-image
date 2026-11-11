@@ -116,6 +116,7 @@ haskell_binary(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":irq-suite",
+        "//emulation:cached-native-batch",
         "//emulation:case-sha256",
         "//emulation:native-observation",
         "//host:aeson",

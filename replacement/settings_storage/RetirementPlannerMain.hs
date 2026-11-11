@@ -8,7 +8,7 @@ import Data.Aeson (Value (..), object, (.=))
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import Emulation.CachedNativeBatch (CacheBinding, cacheBindingEntry, cacheBindingManifestSha256, CacheInspection (..), inspectCachedBatch, readCachedPayload)
+import Emulation.CachedNativeBatch (CacheBinding, cacheBindingEntry, cacheBindingManifestSha256, CacheInspection (..), defaultNativeCacheRoot, inspectCachedBatch, readCachedPayload)
 import Emulation.NativeCase (CaseId (..), caseIdText)
 import Emulation.PrimaryInitializerSource (ByteCount (..))
 import Emulation.OwnedCase (CaseSpec (..), writeBatch)
@@ -38,7 +38,8 @@ main = do
   plain <- required args "--plain" >>= readRegular 0x800000
   image2 <- required args "--image2" >>= readRegular 0x800000
   oldRoot <- required args "--old-root" >>= canonicalizePath
-  cacheRoot <- required args "--cache"
+  cacheRoot <- maybe defaultNativeCacheRoot id <$> optional args "--cache"
+  createDirectoryIfMissing True cacheRoot
   runner <- required args "--runner"
   output <- required args "--out" >>= makeAbsolute
   sourceCommit <- required args "--source-commit"

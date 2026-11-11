@@ -4,6 +4,7 @@ module SuiteMain (runMain) where
 import Control.Monad (forM_, unless)
 import Data.Aeson (encode, object, (.=))
 import qualified Data.ByteString.Lazy as B
+import Emulation.CachedNativeBatch (defaultNativeCacheRoot)
 import FujiAF.StorageBudget (checkStorageBudget)
 import FujiModNativePaths (fujimodNativeCase)
 import Replacement.AfResult.PoolSuite
@@ -22,7 +23,7 @@ runMain mode = do
   image <- required args "--image5"
   oldElf <- required args "--old-owned-elf"
   elf <- required args "--owned-elf"
-  cache <- required args "--cache-root"
+  cache <- maybe defaultNativeCacheRoot id <$> optional args "--cache-root"
   directory <- required args "--output"
   results <- required args "--results"
   checkStorageBudget directory
@@ -48,3 +49,8 @@ required :: [String] -> String -> IO FilePath
 required args flag = case dropWhile (/= flag) args of
   _ : value : _ -> pure value
   _ -> fail (flag ++ " requires a value")
+
+optional :: [String] -> String -> IO (Maybe FilePath)
+optional args flag = case dropWhile (/= flag) args of
+  _ : value : _ -> pure (Just value)
+  _ -> pure Nothing

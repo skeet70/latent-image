@@ -11,6 +11,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
 import Data.Either (isLeft)
 import qualified Data.Map.Strict as M
+import Emulation.CachedNativeBatch (defaultNativeCacheRoot)
 import FujiAF.Host (get, runBounded, str, withTemporary)
 import Replacement.PropertyService.Qualification
 import System.Directory (createDirectoryIfMissing, createDirectoryLink, doesFileExist, doesPathExist, makeAbsolute, withCurrentDirectory)
@@ -97,7 +98,9 @@ optionsTest :: IO ()
 optionsTest =
   case parseOptions provided of
     Left problem -> check ("options parse: " ++ problem) False
-    Right options -> check "a repeated --defect name keeps the later binary" (optDefects options == [("drop_provisional", "second.bin", "second.symbols")])
+    Right options -> do
+      check "a repeated --defect name keeps the later binary" (optDefects options == [("drop_provisional", "second.bin", "second.symbols")])
+      check "the cache root defaults to the shared cache" (optCache options == defaultNativeCacheRoot)
   where
     provided =
       required
@@ -105,7 +108,7 @@ optionsTest =
     required =
       [ "--dat", "dat", "--image4", "image4", "--loader-a", "loader-a", "--loader-b", "loader-b"
       , "--image5", "image5", "--plain", "plain", "--image2", "image2", "--linked", "linked"
-      , "--symbols", "symbols", "--out", "out", "--cache", "cache", "--runner", "runner", "--emulator-slot", "slot"
+      , "--symbols", "symbols", "--out", "out", "--runner", "runner", "--emulator-slot", "slot"
       , "--oracle", "oracle", "--stage", "stage", "--stage-encoder", "encoder"
       , "--stage-rebuild", "rebuild", "--stage-decoder", "decoder"
       ]
@@ -128,6 +131,10 @@ pathTests root = do
   check "a sibling path is refused" (isLeft outsideResult)
   check "a dot-dot path that leaves the root is refused" (isLeft traversalResult)
   check "a symlink that resolves outside the root is refused" (isLeft linkResult)
+  let cache = base </> "private-data" </> "cache"
+  createDirectoryIfMissing True cache
+  cacheResult <- resolveCacheOutput "--cache" scratch cache (cache </> "native")
+  check "a cache path under private-data/cache/native is accepted" (either (const False) (const True) cacheResult)
 
 driverRefusal :: FilePath -> FilePath -> IO ()
 driverRefusal binary root = do

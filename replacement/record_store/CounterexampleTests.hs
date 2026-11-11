@@ -309,6 +309,13 @@ cliTests binary = withTemporary "record-counterexample-cli" $ \workspace -> do
   afterCache <- snapshot private
   assert "cache refusal writes nothing" (beforeCache == afterCache)
 
+  let sharedCacheOut = "private-data/scratch/shared-cache"
+  beforeShared <- snapshot private
+  sharedCache <- runCli binary workspace Nothing Nothing (fixtureArguments fixtures sharedCacheOut (Just "private-data/cache/native"))
+  assertRun "shared cache admission" sharedCache 2 "prerequisite"
+  afterShared <- snapshot private
+  assert "shared cache admission writes nothing before the stock prerequisite" (beforeShared == afterShared)
+
   beforeTraversal <- snapshot private
   traversal <- runCli binary workspace Nothing Nothing (fixtureArguments fixtures "private-data/scratch/traversal" (Just "private-data/scratch/../escape-cache"))
   assertRun "cache traversal" traversal 2 "invalid"

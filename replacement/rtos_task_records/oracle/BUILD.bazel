@@ -81,6 +81,7 @@ haskell_binary(
     ghcopts = _GHCOPTS,
     deps = [
         ":task-records-oracle-lib",
+        "//emulation:cached-native-batch",
         "//emulation:case-sha256",
         "//host:aeson",
         "//host:base",

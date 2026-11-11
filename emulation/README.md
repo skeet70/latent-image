@@ -572,7 +572,7 @@ A conditional instruction's not-executed edge continues after the run of consecu
 
 The media effect mutant returns with the wrong bitmap bit, the ABI mutant returns with only r4 corrupted, and both are refused. Candidate message cases declare only the resolver entry word at `0x00e77168`; the direct retired-body probe stops as `unknown_call` at `0x00e7716c` with zero memory provenance, before the poisoned word executes. A32 SDIV at the candidate entry stops as `unsupported_instruction`, preserving every supplied register and complete mapped memory with zero provenance.
 
-The supported media qualification command builds the current candidate, the defect candidate, the seven retained service models, the pinned native runner and the emulator-slot wrapper from the Bazel graph, admits every consumer input, then runs the selected original/candidate pairs and all four controls. The default is the full 20-pair set; `--scenario NAME` narrows it for routine native work. The stock ELF defaults to `private-data/analysis/x-m1-1.50/lz/id5.elf`; `--stock-elf`, `--build-root` and `--runner` override the resolved paths. `--cache DIR` keeps the shared native-observation cache across attempts. `--candidate defect` selects the declared defect as the production candidate for a labeled known-control run; the default is `--candidate current`.
+The supported media qualification command builds the current candidate, the defect candidate, the seven retained service models, the pinned native runner and the emulator-slot wrapper from the Bazel graph, admits every consumer input, then runs the selected original/candidate pairs and all four controls. The default is the full 20-pair set; `--scenario NAME` narrows it for routine native work. The stock ELF defaults to `private-data/analysis/x-m1-1.50/lz/id5.elf`; `--stock-elf`, `--build-root` and `--runner` override the resolved paths. The native-observation cache root defaults to the shared bounded `private-data/cache/native`; `--cache DIR` overrides it. `--candidate defect` selects the declared defect as the production candidate for a labeled known-control run; the default is `--candidate current`.
 
 Use the worker's normal `BAZEL_OUTPUT_BASE` and a fresh `RUN_ID` for each attempt. Output directories must be new.
 
@@ -580,13 +580,11 @@ Use the worker's normal `BAZEL_OUTPUT_BASE` and a fresh `RUN_ID` for each attemp
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
 devenv shell -- env XM1_EMULATOR_SLOTS=1 host-build --output_base="$BAZEL_OUTPUT_BASE" run --jobs=2 \
   //replacement/media_permit:media-permit-qualification -- \
-  --out "private-data/scratch/RewriteAutomation/media-full-$RUN_ID" \
-  --cache private-data/scratch/RewriteAutomation/media-cache
+  --out "private-data/scratch/RewriteAutomation/media-full-$RUN_ID"
 
 devenv shell -- env XM1_EMULATOR_SLOTS=1 host-build --output_base="$BAZEL_OUTPUT_BASE" run --jobs=2 \
   //replacement/media_permit:media-permit-qualification -- \
   --out "private-data/scratch/RewriteAutomation/media-kind1-$RUN_ID" \
-  --cache private-data/scratch/RewriteAutomation/media-cache \
   --scenario kind1-subframes
 ```
 
@@ -596,7 +594,7 @@ Before any guest execution the command admits the 17 declared inputs, the pinned
 
 Each case is a one-case native batch through `Emulation.CachedNativeBatch`, keyed by the expectation-free execution wire plus the canonical runner path and digest. The stock side is candidate-independent, so a candidate revision reuses the stock observations. The generic native-case expected-memory judgment may be `failed` for a complete media observation; the media effect, ABI and write-provenance comparison is re-applied to every read, so a reused observation is not a pass. `results.json` records `candidate`, `subset`, `execution.executed`, `execution.reused`, `execution.failed`, and the per-case `execution` and `artifact`. Each case directory retains `case.json`, every non-empty region, and one `observation.json`, which is the complete raw runner response; the cache retains its own `runner.json`, `exit` and `provenance.json`. No `runner.stdout` or generic `.native-result.json` duplicate is retained for a complete observation. An incomplete or invalid native response retains the existing failed `CaseReport` as `<case-id>.native-result.json` beside `diagnostic.txt`, and no cache entry is published for it.
 
-Replay is the same command with a new `--out` and the same `--cache`: the case verdicts and `observation.json` bytes are unchanged while `execution.reused` covers every invocation. Changing an execution input invalidates only the affected wires; for example, a changed candidate bin executes the candidate, forbidden-body and both boundary controls while the stock side and the defect control reuse. A changed expectation or role with an identical wire rejudges without execution: when the candidate bytes equal the defect bytes, the media candidate role and the defect control share one wire and one `observation.json`, but the candidate role fails the current media comparison while the defect control remains refused. `//emulation:cached-native-batch-tests` exercises the generic changed-expectation rejudge and wire-change invalidation of the same cache API.
+Replay is the same command with a new `--out`; the shared cache is the default, so the case verdicts and `observation.json` bytes are unchanged while `execution.reused` covers every invocation. Changing an execution input invalidates only the affected wires; for example, a changed candidate bin executes the candidate, forbidden-body and both boundary controls while the stock side and the defect control reuse. A changed expectation or role with an identical wire rejudges without execution: when the candidate bytes equal the defect bytes, the media candidate role and the defect control share one wire and one `observation.json`, but the candidate role fails the current media comparison while the defect control remains refused. `//emulation:cached-native-batch-tests` exercises the generic changed-expectation rejudge and wire-change invalidation of the same cache API.
 
 An actionable control failure uses the existing defect image without editing sources or preparing a scratch build root. `--candidate defect` selects the already-declared known defect as the production candidate; the default `--candidate current` is unchanged. The mode is labeled `"candidate": "known-defect"` in `results.json` and in the terminal line, keeps every source, model and extent check, and leaves the independent defect control in place. The exact invocation is:
 
@@ -604,7 +602,6 @@ An actionable control failure uses the existing defect image without editing sou
 devenv shell -- env XM1_EMULATOR_SLOTS=1 host-build --output_base="$BAZEL_OUTPUT_BASE" run --jobs=2 \
   //replacement/media_permit:media-permit-qualification -- \
   --out "private-data/scratch/RewriteAutomation/media-control-$RUN_ID" \
-  --cache private-data/scratch/RewriteAutomation/media-cache \
   --scenario kind0-zero --candidate defect
 ```
 

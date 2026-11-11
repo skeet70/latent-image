@@ -9,6 +9,7 @@ import Data.Aeson (object, (.=), encode)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.Word (Word32)
+import Emulation.CachedNativeBatch (defaultNativeCacheRoot)
 import FujiAF.Host (failH)
 import FujiAF.StorageBudget (checkStorageBudget)
 import FujiModNativePaths (fujimodNativeCase)
@@ -29,7 +30,7 @@ main = do
     [] -> pure fujimodNativeCase
     [_] -> failH "--runner needs a value"
     _ : value : _ -> makeAbsolute value
-  cacheRoot <- required "--cache-root"
+  cacheRoot <- maybe defaultNativeCacheRoot id <$> optional "--cache-root"
   layoutPath <- required "--layout"
   loaderA <- required "--loader-a"
   loaderB <- required "--loader-b"
@@ -86,6 +87,13 @@ required flag = do
   case [value | (key,value) <- zip arguments (drop 1 arguments), key == flag] of
     [] -> failH (flag ++ " is required and needs a value")
     values -> pure (last values)
+
+optional :: String -> IO (Maybe FilePath)
+optional flag = do
+  arguments <- getArgs
+  case [value | (key,value) <- zip arguments (drop 1 arguments), key == flag] of
+    [] -> pure Nothing
+    values -> pure (Just (last values))
 
 aggregateInputs :: [String] -> IO (Maybe (Payload, Payload))
 aggregateInputs arguments

@@ -19,7 +19,7 @@ import Data.Maybe (listToMaybe, catMaybes)
 import Data.IORef (newIORef, readIORef, writeIORef)
 import qualified Data.Map.Strict as M
 import Data.Word (Word32)
-import Emulation.CachedNativeBatch (BatchReuse(..), CacheBinding, cacheBindingEntry, cacheBindingManifestSha256, cacheOnlyRunner)
+import Emulation.CachedNativeBatch (BatchReuse(..), CacheBinding, cacheBindingEntry, cacheBindingManifestSha256, cacheOnlyRunner, defaultNativeCacheRoot)
 import Emulation.NativeObservation
 import qualified Emulation.NativeEvidence as E
 import Emulation.OwnedCase
@@ -43,7 +43,7 @@ import StorageRun (NativeCache, NativeBatchFailure(..), openNativeCache, cacheJo
 import System.Directory (canonicalizePath, createDirectoryIfMissing, doesFileExist, doesPathExist, getCurrentDirectory, makeAbsolute)
 import System.Environment (getArgs, getExecutablePath, lookupEnv)
 import System.Exit (ExitCode(..), exitFailure)
-import System.FilePath ((</>))
+import System.FilePath (isAbsolute, takeDirectory, (</>))
 import System.IO.Error (ioeGetFileName)
 import System.Process (readProcessWithExitCode)
 import Text.Read (readMaybe)
@@ -910,13 +910,30 @@ resolveScratchPath path = do
   workspace <- lookupEnv "BUILD_WORKSPACE_DIRECTORY" >>= maybe getCurrentDirectory pure
   root <- canonicalizePath (workspace </> "private-data/scratch")
   resolved <- makeAbsolute path >>= canonicalizePath
-  ensure ((root ++ "/") `isPrefixOf` resolved) "qualification --out and --cache must be under private-data/scratch"
+  ensure ((root ++ "/") `isPrefixOf` resolved) "qualification --out must be under private-data/scratch"
+  pure resolved
+
+resolveCachePath :: FilePath -> IO FilePath
+resolveCachePath path = do
+  workspace <- lookupEnv "BUILD_WORKSPACE_DIRECTORY" >>= maybe getCurrentDirectory pure
+  createDirectoryIfMissing True (workspace </> "private-data/cache")
+  scratch <- canonicalizePath (workspace </> "private-data/scratch")
+  cache <- canonicalizePath (workspace </> "private-data/cache")
+  let under root candidate = (root ++ "/") `isPrefixOf` candidate
+  absolute <- makeAbsolute (if isAbsolute path then path else workspace </> path)
+  parent <- canonicalizePath (takeDirectory absolute)
+  ensure (under scratch parent || under cache parent)
+    "qualification --cache must be under private-data/scratch or private-data/cache"
+  createDirectoryIfMissing True absolute
+  resolved <- canonicalizePath absolute
+  ensure (under scratch resolved || under cache resolved)
+    "qualification --cache must be under private-data/scratch or private-data/cache"
   pure resolved
 
 prepareAttempt :: [String] -> IO (FilePath,NativeCache)
 prepareAttempt args = do
   output <- required args "--out" >>= resolveScratchPath
-  cacheRoot <- required args "--cache" >>= resolveScratchPath
+  cacheRoot <- maybe (resolveCachePath defaultNativeCacheRoot) resolveCachePath (optionalArgument "--cache" args)
   checkStorageBudget output
   exists <- doesPathExist output
   ensure (not exists) "custom oracle output already exists"

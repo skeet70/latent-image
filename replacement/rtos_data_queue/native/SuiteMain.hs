@@ -10,6 +10,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.Word (Word32)
 import Data.List (isPrefixOf)
+import Emulation.CachedNativeBatch (defaultNativeCacheRoot)
 import Emulation.NativeObservation (parseWord32)
 import Emulation.Sha256 (sha256File, sha256Hex)
 import FujiAF.Host (failH)
@@ -28,7 +29,7 @@ import System.FilePath ((</>), takeDirectory)
 main :: IO ()
 main = do
   runner <- required "--runner" >>= makeAbsolute
-  cacheRoot <- required "--cache-root"
+  cacheRoot <- maybe defaultNativeCacheRoot id <$> optional "--cache-root"
   layoutPath <- required "--layout"
   loaderA <- required "--loader-a"
   loaderB <- required "--loader-b"

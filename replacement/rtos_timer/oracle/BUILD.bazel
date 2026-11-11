@@ -94,6 +94,7 @@ haskell_binary(
     ghcopts = _GHCOPTS,
     deps = [
         ":timer-oracle-lib",
+        "//emulation:cached-native-batch",
         "//emulation:case-sha256",
         "//host:aeson",
         "//host:base",

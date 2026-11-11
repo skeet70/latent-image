@@ -11,7 +11,7 @@ import qualified Data.ByteString as B
 import Data.List (find, isPrefixOf, sortOn)
 import qualified Data.Map.Strict as M
 import Data.Word (Word32)
-import Emulation.CachedNativeBatch (cachedObservedBatch)
+import Emulation.CachedNativeBatch (cachedObservedBatch, defaultNativeCacheRoot)
 import Emulation.NativeObservation
 import Emulation.OwnedCase
 import Emulation.Sha256 (sha256File, sha256Hex)
@@ -1027,7 +1027,7 @@ main = do
     else do
       carriers <- argument "--aggregate-carriers"
       Just <$> (either (fail . show) pure . Union.parseUnion =<< B.readFile carriers)
-  cacheRoot <- argument "--cache-root"
+  cacheRoot <- maybe defaultNativeCacheRoot id <$> optionalArgument "--cache-root"
   results <- argument "--results"
   loaderABytes <- B.readFile loaderA
   loaderBBytes <- B.readFile loaderB

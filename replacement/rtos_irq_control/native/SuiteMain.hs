@@ -6,6 +6,7 @@ import Control.Monad (forM_, unless)
 import Data.Aeson (object, (.=), encode)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
+import Emulation.CachedNativeBatch (defaultNativeCacheRoot)
 import qualified Emulation.NativeObservation as N
 import Emulation.Sha256 (sha256File, sha256Hex)
 import Data.Word (Word32)
@@ -27,7 +28,7 @@ main = do
   ownedB <- required "--owned-b-bin"
   symbolsA <- required "--owned-a-symbols"
   symbolsB <- required "--owned-b-symbols"
-  cacheRoot <- required "--cache-root"
+  cacheRoot <- maybe defaultNativeCacheRoot id <$> optional "--cache-root"
   resultsPath <- required "--results"
   loaderABytes <- B.readFile loaderA
   loaderBBytes <- B.readFile loaderB
@@ -104,3 +105,11 @@ required flag = do
     [] -> failH (flag ++ " is required")
     [_] -> failH (flag ++ " needs a value")
     _ : value : _ -> pure value
+
+optional :: String -> IO (Maybe FilePath)
+optional flag = do
+  arguments <- getArgs
+  case dropWhile (/= flag) arguments of
+    [] -> pure Nothing
+    [_] -> failH (flag ++ " needs a value")
+    _ : value : _ -> pure (Just value)

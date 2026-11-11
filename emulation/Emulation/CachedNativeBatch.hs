@@ -6,7 +6,8 @@
 -- runner path. A committed entry binds raw runner JSON, its recorded exit and the run's provenance;
 -- the current case expectation is re-judged on every read.
 module Emulation.CachedNativeBatch
-  ( BatchReuse (..)
+  ( defaultNativeCacheRoot
+  , BatchReuse (..)
   , CacheEscape
   , ResultPolicy (..)
   , CacheBinding
@@ -107,6 +108,10 @@ import System.Posix.IO (FdOption (CloseOnExec), OpenFileFlags (creat), OpenMode 
 import System.Posix.Types (Fd (..))
 
 foreign import ccall unsafe "flock" flock :: CInt -> CInt -> IO CInt
+
+-- | Relative to the workspace root.
+defaultNativeCacheRoot :: FilePath
+defaultNativeCacheRoot = "private-data/cache/native"
 
 withCacheFlight :: CacheRoot -> CacheKey -> IO a -> IO a
 withCacheFlight root key action = do

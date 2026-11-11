@@ -30,6 +30,7 @@ haskell_library(
         ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
         deps = [
             ":pool-suite-lib",
+            "//emulation:cached-native-batch",
             "//emulation:fujimod-native-paths",
             "//host:aeson",
             "//host:base",
